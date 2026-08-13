@@ -5790,31 +5790,311 @@ function composeReadinessSubstep(context = {}) {
   };
 }
 
+/**
+ * Canonical columns for the manual-send export / operator review sheet.
+ * Listed before create when the operator asks to confirm fields first.
+ */
+const MANUAL_SEND_EXPORT_REVIEW_FIELDS = [
+  'business name',
+  'contact name, if available',
+  'contact role, if available',
+  'email address',
+  'town',
+  'approved subject',
+  'first-touch email',
+  'Follow-up 1',
+  'Follow-up 2',
+  'personalization notes',
+  'status',
+  'follow-up due dates',
+  'reply status',
+  'owner',
+];
+
+const MANUAL_SEND_EXPORT_ACTION =
+  'prepare a manual-send export for operator review';
+const MANUAL_SEND_EXPORT_ACTION_ID =
+  'prepare_manual_send_export_for_operator_review';
+
+/**
+ * True when the operator asks to confirm export/review-sheet fields
+ * before Max prepares the manual-send export.
+ */
+function looksLikeExportFieldConfirmationRequest(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (
+    /\b(?:confirm|list|show|what(?:\s+are)?|which)\b[\s\S]{0,80}\b(?:exact\s+)?fields?\b[\s\S]{0,80}\b(?:export|review\s+sheet)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bbefore\s+preparing\b[\s\S]{0,120}\b(?:confirm|list|show)\b[\s\S]{0,80}\bfields?\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bfields?\s+(?:that\s+will\s+be\s+)?included\s+in\s+the\s+(?:export|review\s+sheet)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Detect which execute action the operator is confirming.
+ */
+function resolveExecuteActionFromContext(context = {}) {
+  const explicitId = String(
+    context.executeActionId || context.actionId || ''
+  ).trim();
+  if (explicitId === MANUAL_SEND_EXPORT_ACTION_ID) {
+    return {
+      id: MANUAL_SEND_EXPORT_ACTION_ID,
+      label: MANUAL_SEND_EXPORT_ACTION,
+    };
+  }
+
+  const text = [
+    context.action,
+    context.executeAction,
+    context.operatorMessage,
+    context.text,
+    context.userMessage,
+  ]
+    .filter(Boolean)
+    .map((v) => String(v))
+    .join('\n');
+
+  if (
+    /\bmanual-?send\s+export\b|\bmanual\s+send\s+export\b|\bexport\/review\s+sheet\b/i.test(
+      text
+    ) ||
+    (/\bexport\b/i.test(text) &&
+      !/\bcrm\s+drafts?\b/i.test(text) &&
+      !/\bqueue(?:d)?\s+sends?\b/i.test(text))
+  ) {
+    return {
+      id: MANUAL_SEND_EXPORT_ACTION_ID,
+      label: MANUAL_SEND_EXPORT_ACTION,
+    };
+  }
+  if (
+    explicitId === 'create_crm_drafts' ||
+    /\bcrm\s+drafts?\b/i.test(text)
+  ) {
+    return { id: 'create_crm_drafts', label: 'create CRM drafts' };
+  }
+  if (
+    explicitId === 'queue_or_send_outreach' ||
+    /\bqueue\s+sends?\b|\bqueued\s+sends?\b/i.test(text)
+  ) {
+    return {
+      id: 'queue_or_send_outreach',
+      label: 'queue or send outreach',
+    };
+  }
+
+  const fallback = context.action || context.executeAction || 'execute action';
+  return { id: null, label: String(fallback) };
+}
+
+function formatConfirmedSenderAccountLine(sender = {}, fallback) {
+  const name = sender.senderName || sender.name || null;
+  const email = sender.senderEmail || sender.email || null;
+  if (name && email) return `${name} <${email}>`;
+  if (email) return email;
+  if (name) return name;
+  return fallback || 'configured campaign sender (not yet confirmed)';
+}
+
+function formatManualSendExportEffects() {
+  return {
+    allowed:
+      'prepare the manual-send export/review sheet only',
+    disallowed:
+      'send emails, create CRM drafts, queue sends, write to CRM, or change accounts/settings',
+    externalEffectsLine:
+      'Preparing the manual-send export/review sheet only. Not allowed: email sends, CRM drafts, queued sends, CRM writes, or account/settings changes.',
+    prose:
+      'This action would only prepare the manual-send export/review sheet. It would not send emails, create CRM drafts, queue sends, write to CRM, or change accounts/settings.',
+  };
+}
+
+function composeManualSendExportFieldConfirmation(context = {}, resolved = {}) {
+  const fields =
+    Array.isArray(context.exportFields) && context.exportFields.length
+      ? context.exportFields
+      : MANUAL_SEND_EXPORT_REVIEW_FIELDS.slice();
+  const senderLine =
+    resolved.senderLine ||
+    formatConfirmedSenderAccountLine(resolved.sender, null);
+  const replyInbox =
+    (resolved.reply &&
+      (resolved.reply.replyInbox || resolved.reply.reply_inbox)) ||
+    null;
+  const replyMatches =
+    resolved.reply && resolved.reply.replyToMatchesSender === true;
+  const effects = formatManualSendExportEffects();
+
+  const lines = [
+    'Before I prepare the manual-send export, here are the fields I would include:',
+    ...fields.map((f) => `- ${f}`),
+    '',
+    'Sender:',
+    `- ${senderLine || 'configured campaign sender (not yet confirmed)'}`,
+    '',
+    'Reply handling:',
+  ];
+
+  if (replyInbox) {
+    lines.push(`- replies go to ${replyInbox}`);
+  } else {
+    lines.push('- reply inbox: not yet confirmed');
+  }
+  if (replyMatches) {
+    lines.push('- reply-to matches sender');
+  } else if (resolved.reply && resolved.reply.replyToMatchesSender === false) {
+    lines.push('- reply-to does not match sender');
+  } else {
+    lines.push('- reply-to match: not yet confirmed');
+  }
+
+  lines.push('');
+  lines.push(effects.prose);
+  lines.push('');
+  lines.push(
+    'Do you explicitly approve creating the manual-send export/review sheet now?'
+  );
+
+  return {
+    mode: CONVERSATION_MODES.EXECUTION_CONFIRMATION,
+    responseMode: toResponseMode(CONVERSATION_MODES.EXECUTION_CONFIRMATION),
+    message: lines.join('\n').trim(),
+    includeRendererSections: false,
+    includeExpandedSafety: true,
+    requiresExplicitApproval: true,
+    executionPending: true,
+    executeActionId: MANUAL_SEND_EXPORT_ACTION_ID,
+    confirmFieldsFirst: true,
+    exportFields: fields.slice(),
+    sendsMade: false,
+    crmWritesMade: false,
+    exportMade: false,
+    accountChangesMade: false,
+  };
+}
+
 function composeExecutionConfirmation(context = {}) {
-  const action = context.action || context.executeAction || 'execute action';
+  const operatorText =
+    context.operatorMessage || context.text || context.userMessage || '';
+  const resolvedAction = resolveExecuteActionFromContext(context);
+  const action = resolvedAction.label;
+  const actionId = resolvedAction.id;
+
+  const canonical = getCanonicalReadinessState(context);
+  const senderFields = canonical.senderIdentity || {};
+  const replyFields = canonical.replyHandling || {};
+  const senderConfirmed =
+    canonical.senderIdentityConfirmed === true &&
+    senderIdentityFieldsComplete(senderFields);
+  const replyConfirmed =
+    canonical.replyInboxConfirmed === true &&
+    replyHandlingFieldsComplete(replyFields);
+
+  const senderLine =
+    context.sender ||
+    context.account ||
+    (senderConfirmed
+      ? formatConfirmedSenderAccountLine(senderFields)
+      : formatConfirmedSenderAccountLine(
+          senderFields,
+          'configured campaign sender (not yet confirmed)'
+        ));
+
+  const confirmFieldsFirst =
+    context.confirmFieldsFirst === true ||
+    looksLikeExportFieldConfirmationRequest(operatorText);
+
+  if (actionId === MANUAL_SEND_EXPORT_ACTION_ID && confirmFieldsFirst) {
+    return composeManualSendExportFieldConfirmation(context, {
+      sender: senderFields,
+      reply: replyConfirmed
+        ? replyFields
+        : {
+            ...replyFields,
+            // Prefer confirmed fields even when the flag lagged; field
+            // completeness still gates the reply lines above.
+          },
+      senderLine,
+    });
+  }
+
   const records =
     context.recordsAffected ||
     context.recordSummary ||
     'the selected campaign records';
-  const sender = context.sender || context.account || 'the configured sender/account';
+
+  const manualEffects =
+    actionId === MANUAL_SEND_EXPORT_ACTION_ID
+      ? formatManualSendExportEffects()
+      : null;
   const effects =
     context.externalEffects ||
-    'This can send, export, or write externally and may be irreversible.';
+    (manualEffects
+      ? manualEffects.externalEffectsLine
+      : 'This can send, export, or write externally and may be irreversible.');
 
   const lines = [
     'Execution confirmation — nothing has run yet.',
     '',
     `Exact action: ${action}`,
     `Records affected: ${records}`,
-    `Sender / account: ${sender}`,
-    `External effects: ${effects}`,
-    '',
+    `Sender / account: ${senderLine}`,
+  ];
+
+  if (actionId === MANUAL_SEND_EXPORT_ACTION_ID) {
+    lines.push('Reply handling:');
+    if (replyFields.replyInbox) {
+      lines.push(`- replies go to ${replyFields.replyInbox}`);
+    } else {
+      lines.push('- reply inbox: not yet confirmed');
+    }
+    if (replyFields.replyToMatchesSender === true) {
+      lines.push('- reply-to matches sender');
+    } else if (replyFields.replyToMatchesSender === false) {
+      lines.push('- reply-to does not match sender');
+    } else {
+      lines.push('- reply-to match: not yet confirmed');
+    }
+  }
+
+  lines.push(`External effects: ${effects}`);
+
+  if (manualEffects) {
+    lines.push(
+      `Not allowed: ${manualEffects.disallowed}.`
+    );
+  }
+
+  lines.push('');
+  lines.push(
     expandedSafetyBlock({
       header: 'Still locked until you explicitly approve:',
-    }),
-    '',
-    'Do you explicitly approve this execute action?',
-  ];
+    })
+  );
+  lines.push('');
+  lines.push(
+    actionId === MANUAL_SEND_EXPORT_ACTION_ID
+      ? 'Do you explicitly approve creating the manual-send export/review sheet now?'
+      : 'Do you explicitly approve this execute action?'
+  );
 
   if (context.holdGuidance) {
     lines.push('');
@@ -5828,6 +6108,9 @@ function composeExecutionConfirmation(context = {}) {
     includeRendererSections: false,
     includeExpandedSafety: true,
     requiresExplicitApproval: true,
+    executionPending: true,
+    executeActionId: actionId,
+    confirmFieldsFirst: false,
     sendsMade: false,
     crmWritesMade: false,
     exportMade: false,
@@ -6300,6 +6583,12 @@ module.exports = {
   composeReadinessSubstep,
   composeReadinessFieldCorrection,
   composeExecutionConfirmation,
+  composeManualSendExportFieldConfirmation,
+  looksLikeExportFieldConfirmationRequest,
+  resolveExecuteActionFromContext,
+  MANUAL_SEND_EXPORT_REVIEW_FIELDS,
+  MANUAL_SEND_EXPORT_ACTION,
+  MANUAL_SEND_EXPORT_ACTION_ID,
   composeClarificationNeeded,
   extractOperatorReadinessChecklist,
   mergeOperatorReadinessChecklist,

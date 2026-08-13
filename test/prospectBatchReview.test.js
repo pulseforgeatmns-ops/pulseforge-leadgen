@@ -3483,7 +3483,10 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.responseMode, 'execution_confirmation');
     assert.equal(reply.conversationMode, 'execution_confirmation');
     assert.match(reply.message, /Exact action/i);
-    assert.match(reply.message, /explicitly approve this execute action/i);
+    assert.match(
+      reply.message,
+      /explicitly approve creating the manual-send export\/review sheet now/i
+    );
     assert.equal(reply.sendsMade, false);
     assert.equal(reply.exportMade, false);
     assert.equal(reply.crmWritesMade, false);
@@ -3491,6 +3494,211 @@ describe('Review artifact chain — Copy Plan → Draft Preview → Launch Gate'
     assert.equal(reply.launched, false);
     assert.doesNotMatch(reply.message, /Recommended decision/i);
     assert.doesNotMatch(reply.message, /Primary actions/i);
+  });
+
+  it('confirmed readiness + field-confirm ask lists export fields without unconfirmed sender or CRM draft effects', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const confirmedSlots = {
+      ...sessionState.slots,
+      outreachCopyPlanApproved: true,
+      copyPlanApproved: true,
+      outreachDraftPreviewApproved: true,
+      draftPreviewApproved: true,
+      outreachLaunchGateGenerated: true,
+      outreachLaunchGateApproved: true,
+      launchGateApproved: true,
+      launchReady: true,
+      senderIdentityConfirmed: true,
+      senderName: 'Jacob Maynard',
+      senderEmail: 'jacob@goanchorcleaning.com',
+      senderSignature: 'Jacob Maynard, Anchor Cleaning',
+      replyInboxConfirmed: true,
+      replyHandlingConfirmed: true,
+      replyInbox: 'jacob@goanchorcleaning.com',
+      replyToMatchesSender: true,
+      replyMonitoringOwner: 'Jacob Maynard',
+      operationalPathChosen: true,
+      operationalPathId: 'manual_send_export',
+      operationalPathLabel: 'manual send export for operator review',
+      followUpTrackingConfirmed: true,
+      followUpTrackingLocation: 'the manual-send export/review sheet',
+      replyMonitoringBatch1Confirmed: true,
+      batch1ResultsReviewed: true,
+      broaderRolloutBlocked: true,
+    };
+
+    const reply = buildCampaignPlanningReply(
+      [
+        'I explicitly approve the next execute action: prepare the manual-send export for operator review.',
+        'Before preparing it, confirm the exact fields that will be included in the export/review sheet.',
+      ].join('\n'),
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        slots: confirmedSlots,
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'execution_confirmation');
+    assert.equal(reply.conversationMode, 'execution_confirmation');
+    assert.equal(reply.confirmFieldsFirst, true);
+    assert.equal(
+      reply.executeActionId,
+      'prepare_manual_send_export_for_operator_review'
+    );
+    assert.match(
+      reply.message,
+      /Before I prepare the manual-send export, here are the fields I would include:/i
+    );
+    assert.match(reply.message, /- business name/);
+    assert.match(reply.message, /- approved subject/);
+    assert.match(reply.message, /- first-touch email/);
+    assert.match(reply.message, /- Follow-up 1/);
+    assert.match(reply.message, /- Follow-up 2/);
+    assert.match(reply.message, /- personalization notes/);
+    assert.match(reply.message, /- owner/);
+    assert.match(
+      reply.message,
+      /Jacob Maynard <jacob@goanchorcleaning\.com>/
+    );
+    assert.match(reply.message, /replies go to jacob@goanchorcleaning\.com/);
+    assert.match(reply.message, /reply-to matches sender/);
+    assert.match(
+      reply.message,
+      /only prepare the manual-send export\/review sheet/i
+    );
+    assert.match(
+      reply.message,
+      /would not send emails, create CRM drafts, queue sends, write to CRM, or change accounts\/settings/i
+    );
+    assert.match(
+      reply.message,
+      /Do you explicitly approve creating the manual-send export\/review sheet now\?/i
+    );
+    assert.doesNotMatch(reply.message, /not yet confirmed/i);
+    assert.doesNotMatch(
+      reply.message,
+      /May create an export file, CRM drafts, or queued sends/i
+    );
+    assert.ok(
+      reply.message.indexOf('here are the fields I would include') <
+        reply.message.indexOf(
+          'Do you explicitly approve creating the manual-send export'
+        )
+    );
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
+    assert.equal(reply.accountChangesMade, false);
+    assert.equal(reply.launched, false);
+  });
+
+  it('manual-send export execute confirmation uses confirmed sender and disallows CRM drafts/queued sends', () => {
+    const { review, ctx, strategy, plan, sessionState } = chainFixtures();
+    const approvedPlan = approveOutreachCopyPlan(plan);
+    const draft = approveOutreachDraftPreview(
+      buildOutreachDraftPreview(approvedPlan, strategy, review, ctx, {})
+    );
+    const gate = approveOutreachLaunchGate(
+      buildOutreachLaunchGate(
+        draft,
+        approvedPlan,
+        strategy,
+        review,
+        ctx,
+        {}
+      )
+    );
+
+    const reply = buildCampaignPlanningReply(
+      'Prepare a manual-send export for operator review',
+      {
+        ...sessionState,
+        step: 'outreach_launch_gate',
+        outreachCopyPlan: approvedPlan,
+        outreachDraftPreview: draft,
+        outreachLaunchGate: gate,
+        launchGateApproved: true,
+        slots: {
+          ...sessionState.slots,
+          outreachCopyPlanApproved: true,
+          copyPlanApproved: true,
+          outreachDraftPreviewApproved: true,
+          draftPreviewApproved: true,
+          outreachLaunchGateGenerated: true,
+          outreachLaunchGateApproved: true,
+          launchGateApproved: true,
+          launchReady: true,
+          senderIdentityConfirmed: true,
+          senderName: 'Jacob Maynard',
+          senderEmail: 'jacob@goanchorcleaning.com',
+          senderSignature: 'Jacob Maynard, Anchor Cleaning',
+          replyInboxConfirmed: true,
+          replyHandlingConfirmed: true,
+          replyInbox: 'jacob@goanchorcleaning.com',
+          replyToMatchesSender: true,
+          replyMonitoringOwner: 'Jacob Maynard',
+          operationalPathChosen: true,
+          operationalPathId: 'manual_send_export',
+          operationalPathLabel: 'manual send export for operator review',
+        },
+      },
+      ctx,
+      {
+        priorProspectBatchReview: review,
+        priorOutreachStrategyPreview: strategy,
+        priorOutreachCopyPlan: approvedPlan,
+        priorOutreachDraftPreview: draft,
+        priorOutreachLaunchGate: gate,
+      }
+    );
+
+    assert.equal(reply.responseMode, 'execution_confirmation');
+    assert.match(
+      reply.message,
+      /Sender \/ account:\s*Jacob Maynard <jacob@goanchorcleaning\.com>/
+    );
+    assert.doesNotMatch(reply.message, /not yet confirmed/i);
+    assert.match(reply.message, /replies go to jacob@goanchorcleaning\.com/);
+    assert.match(
+      reply.message,
+      /Preparing the manual-send export\/review sheet only/i
+    );
+    assert.match(reply.message, /Not allowed:.*CRM drafts.*queued sends/i);
+    assert.doesNotMatch(
+      reply.message,
+      /May create an export file, CRM drafts, or queued sends/i
+    );
+    assert.equal(reply.exportMade, false);
+    assert.equal(reply.sendsMade, false);
+    assert.equal(reply.crmWritesMade, false);
   });
 
   it('post-approval readiness ask is operator_readiness_check, not execution', () => {
