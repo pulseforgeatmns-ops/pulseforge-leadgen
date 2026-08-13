@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Paige Outcome Learning Loop ([SPEC-093](docs/specs/SPEC-093_Paige_Outcome_Learning_Loop.md))
+  - Deterministic evaluation of SPEC-092 outcomes → durable `content_learnings` (status, observation vs generalization confidence)
+  - Single-post safeguard: breakout evidence creates `signal`, not `supported`
+  - Attribution-aware reasoning; no universal content score; no content cloning
+  - Structured Paige recommendations with experiment preserve/vary + evidence path
+  - APIs: `/api/content-learning/evaluate/:id`, `/api/content-learnings*`, `/api/paige/content-recommendation`
+  - Operator panels on `/content-outcomes` + CLI `npm run content:learning`
+  - Migration: `migrations/2026-08-13-paige-outcome-learning.sql`
 - Content Outcome Intelligence ([SPEC-092](docs/specs/SPEC-092_Content_Outcome_Intelligence.md)) — product brief used “SPEC-085”
   - Durable publications, immutable performance snapshots, business outcomes, qualitative signals
   - APIs: `/api/content-publications*`, `/api/content-outcomes*`
