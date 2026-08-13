@@ -85,6 +85,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-091](SPEC-091_Prospect_List_Build_Proposal.md) | Prospect List Build Proposal & Artifact Progression | Implemented (v1) | v0.1 |
 | [SPEC-092](SPEC-092_Content_Outcome_Intelligence.md) | Content Outcome Intelligence | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-093](SPEC-093_Paige_Outcome_Learning_Loop.md) | Paige Outcome Learning Loop | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-094](SPEC-094_Max_to_Paige_Campaign_Content_Delegation.md) | Max to Paige Campaign Content Delegation | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

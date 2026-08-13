@@ -14,6 +14,9 @@ const {
   buildMarketIntelligenceContext,
 } = require('./MarketIntelligenceContext');
 const {
+  maybeHandlePaigeCampaignContentDelegation,
+} = require('./PaigeCampaignDelegationContext');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
@@ -124,6 +127,8 @@ class WorkspaceEngine {
    * @param {boolean} [options.missionsEnabled]
    * @param {boolean} [options.resolverEnabled] - SPEC-039
    * @param {object} [options.marketIntelligenceService] - SPEC-066 read-only adapter dependency
+   * @param {object} [options.paigeCampaignDelegationService] - SPEC-094 Paige delegation
+   * @param {object} [options.paigeLearningOpts] - SPEC-094 contentLearning store opts (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -144,6 +149,9 @@ class WorkspaceEngine {
         ? options.resolverEnabled !== false
         : activeMissionResolverEnabled();
     this._marketIntelligenceService = options.marketIntelligenceService || null;
+    this._paigeCampaignDelegationService =
+      options.paigeCampaignDelegationService || null;
+    this._paigeLearningOpts = options.paigeLearningOpts || null;
   }
 
   /** @returns {SessionStore} */
@@ -308,6 +316,79 @@ class WorkspaceEngine {
           domain: EXECUTION_DOMAINS.WORKSPACE,
           routeKind: ROUTE_KINDS.INTELLIGENCE,
           reason: activeContinuation.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
+
+    // SPEC-094 — Max → Paige campaign content delegation (read-only advisory).
+    // Runs before mission create so launch/content asks stay conversational.
+    const paigeDelegation = await maybeHandlePaigeCampaignContentDelegation({
+      question,
+      session,
+      context: rawContext || session.context,
+      delegationService: this._paigeCampaignDelegationService || undefined,
+      learningOpts: this._paigeLearningOpts || undefined,
+    });
+    if (paigeDelegation) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+        session.context.paigeRecommendation = paigeDelegation.recommendation;
+      }
+
+      const structuredPaige = paigeDelegation.structured;
+      const routePaige = {
+        kind: ROUTE_KINDS.INTELLIGENCE,
+        missionType: null,
+        reason: paigeDelegation.reason,
+        missionIntent: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      };
+      const presentedPaige = await this._presentation.present(structuredPaige);
+      const prosePaige = presentedPaige.prose;
+
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: prosePaige,
+        structured: structuredPaige,
+      });
+
+      return {
+        sessionId: session.id,
+        prose: prosePaige,
+        structured: structuredPaige,
+        metadata: presentedPaige.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredPaige,
+          session,
+          question,
+        }),
+        recommendedActions: structuredPaige.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedPaige.presentation,
+        route: routePaige.kind,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        paigeRecommendation: paigeDelegation.recommendation,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: paigeDelegation.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: paigeDelegation.reason,
           missionType: null,
           missionId: null,
         },
