@@ -73,6 +73,39 @@ function normalizeContext(raw) {
     normalized.activeWorkContext = raw.activeWorkContext;
   }
 
+  // SPEC-094 — preserve durable campaign/objective context for Paige delegation.
+  // Never invent these; only pass through when the caller supplied them.
+  const passthroughKeys = [
+    'campaignId',
+    'campaign_id',
+    'interviewId',
+    'interview_id',
+    'missionId',
+    'mission_id',
+    'clientId',
+    'client_id',
+    'objective',
+    'learningObjective',
+    'learning_objective',
+    'topic',
+    'audience',
+    'channel',
+    'campaignPlanning',
+    'campaign_planning',
+    'campaignMemory',
+    'campaign_memory',
+    'firstCampaignPlanPreview',
+    'first_campaign_plan_preview',
+    'outreachStrategyPreview',
+    'outreach_strategy_preview',
+    'mission',
+  ];
+  for (const key of passthroughKeys) {
+    if (raw[key] !== undefined) {
+      normalized[key] = raw[key];
+    }
+  }
+
   return normalized;
 }
 

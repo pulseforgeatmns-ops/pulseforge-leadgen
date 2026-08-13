@@ -52,10 +52,14 @@ const {
 const {
   getServiceModeOperatorLoop,
 } = require('./ServiceModeOperatorLoopContext');
+const {
+  maybeHandlePaigeCampaignContentDelegation,
+} = require('./PaigeCampaignDelegationContext');
 
 module.exports = {
   getProspectOperatingBrief,
   getServiceModeOperatorLoop,
+  maybeHandlePaigeCampaignContentDelegation,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

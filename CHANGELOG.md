@@ -6,6 +6,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max → Paige Campaign Content Delegation ([SPEC-094](docs/specs/SPEC-094_Max_to_Paige_Campaign_Content_Delegation.md))
+  - Thin Max adapter (`services/maxPaigeCampaignDelegation.js`) calls SPEC-093 `generateContentRecommendation()`
+  - Workspace routing hook for launch runway / LinkedIn / thought leadership / ask Paige when campaign context exists
+  - Max remains operator-facing; Paige recommendation is review-first (no publish/send/CRM/Buffer)
+  - Evidence IDs + uncertainty preserved; tenant isolation enforced
 - Paige Outcome Learning Loop ([SPEC-093](docs/specs/SPEC-093_Paige_Outcome_Learning_Loop.md))
   - Deterministic evaluation of SPEC-092 outcomes → durable `content_learnings` (status, observation vs generalization confidence)
   - Single-post safeguard: breakout evidence creates `signal`, not `supported`
