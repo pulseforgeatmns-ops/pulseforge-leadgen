@@ -51,6 +51,7 @@
     "relationship:intel:readiness": "node scripts/relationshipIntelReadiness.js",
     "client:intel:interview": "node scripts/clientIntelInterview.js",
     "prospect:brief": "node scripts/prospectOperatingBrief.js",
+    "content:outcome": "node scripts/contentOutcome.js",
     "operator:service-loop": "node scripts/serviceModeOperatorLoop.js",
     "scout:places:diagnostic": "node scripts/diagnoseScoutPlaces.js",
     "gmail:token": "node getGmailToken.js",
