@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Content Outcome Intelligence ([SPEC-092](docs/specs/SPEC-092_Content_Outcome_Intelligence.md)) — product brief used “SPEC-085”
+  - Durable publications, immutable performance snapshots, business outcomes, qualitative signals
+  - APIs: `/api/content-publications*`, `/api/content-outcomes*`
+  - Operator capture UI at `/content-outcomes` + CLI `npm run content:outcome`
+  - Intelligence payload for Max consumers; no LinkedIn API; no Paige strategy mutation
+  - Migration: `migrations/2026-08-13-content-outcome-intelligence.sql`
 - Prospect List Build Proposal & artifact progression ([SPEC-091](docs/specs/SPEC-091_Prospect_List_Build_Proposal.md))
   - `approval_plus_next_request` advances past approved Prospect List Criteria Preview
   - “Approved. Before we build anything…” produces Prospect List Build Proposal (planning-only)
