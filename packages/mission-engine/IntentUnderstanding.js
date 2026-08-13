@@ -213,8 +213,11 @@ function scoreIntentCandidates(lower, sourceText, extracted) {
   }
 
   // --- Campaign creation (build/create/launch) ---
+  // Allow a short noun phrase between the verb and "campaign"
+  // (e.g. "launch a commercial cleaning campaign targeting…").
+  // Status questions about existing objectives are handled pre-routing by SPEC-095.
   if (
-    /\b(build|create|launch|prepare|new)\s+(a\s+)?(q\d\s+)?(outreach\s+)?campaign\b/.test(
+    /\b(build|create|launch|prepare|new)\s+(a\s+)?((?:[\w-]+\s+){0,5})?(q\d\s+)?(outreach\s+)?campaign\b/.test(
       lower
     )
   ) {

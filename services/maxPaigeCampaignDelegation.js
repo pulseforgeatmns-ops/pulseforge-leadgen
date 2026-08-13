@@ -151,6 +151,26 @@ function hasCampaignObjectiveContext(context = {}, operatorMessage = '') {
   if (asText(context.interviewId) || asText(context.interview_id)) return true;
   if (asText(context.missionId) || asText(context.mission_id)) return true;
   if (asText(context.objective)) return true;
+  if (asText(context.objectiveId) || asText(context.objective_id)) return true;
+
+  // SPEC-095 — recovered durable operator/client objectives
+  if (context.resolvedObjective && typeof context.resolvedObjective === 'object') {
+    if (
+      asText(context.resolvedObjective.objectiveText) ||
+      asText(context.resolvedObjective.title) ||
+      asText(context.resolvedObjective.id)
+    ) {
+      return true;
+    }
+  }
+  if (
+    Array.isArray(context.activeObjectives) &&
+    context.activeObjectives.some(
+      (o) => o && (asText(o.objectiveText) || asText(o.title) || asText(o.id))
+    )
+  ) {
+    return true;
+  }
 
   const planning = context.campaignPlanning || context.campaign_planning;
   if (planning && typeof planning === 'object') {
@@ -211,7 +231,16 @@ function hasCampaignObjectiveContext(context = {}, operatorMessage = '') {
  */
 function shouldDelegateToPaige(question, context = {}) {
   if (looksLikeGenericPipelineQuestion(question)) return false;
-  if (!looksLikePaigeCampaignContentRequest(question)) return false;
+
+  const contentAsk =
+    looksLikePaigeCampaignContentRequest(question) ||
+    // SPEC-095 — content ask with recovered durable objective (e.g. "publish next for the launch")
+    (context.resolvedObjective &&
+      /\b(publish|post|content|linkedin|paige|experiment|recommend)\b/i.test(
+        String(question || '')
+      ));
+
+  if (!contentAsk) return false;
   return hasCampaignObjectiveContext(context, question);
 }
 
@@ -261,6 +290,14 @@ function pickLearningObjective(context, operatorMessage) {
 }
 
 function pickObjective(context, operatorMessage) {
+  // SPEC-095 — prefer recovered durable objective text
+  if (context.resolvedObjective && typeof context.resolvedObjective === 'object') {
+    const fromResolved =
+      asText(context.resolvedObjective.objectiveText) ||
+      asText(context.resolvedObjective.objective_text);
+    if (fromResolved) return fromResolved;
+  }
+
   const explicit = asText(context.objective);
   if (explicit) return explicit;
 
@@ -328,6 +365,9 @@ function pickCampaignId(context) {
 }
 
 function pickSource(context) {
+  if (context.resolvedObjective || context.objectiveId) {
+    return 'operator_objective';
+  }
   if (context.campaignPlanning || context.firstCampaignPlanPreview) {
     return 'client_intelligence_campaign';
   }
@@ -370,6 +410,7 @@ function resolveCampaignContentContext(input = {}) {
   const topic = pickTopic(context, operatorMessage);
   const audience = pickAudience(context);
 
+  const resolved = context.resolvedObjective;
   const campaignContext = {
     campaignId,
     interviewId: asText(context.interviewId || context.interview_id),
@@ -378,6 +419,13 @@ function resolveCampaignContentContext(input = {}) {
         context.mission_id ||
         (context.mission && context.mission.id)
     ),
+    objectiveId: asText(
+      (resolved && resolved.id) || context.objectiveId || context.objective_id
+    ),
+    objectiveTitle: asText(resolved && resolved.title),
+    currentPhase: asText(resolved && resolved.currentPhase),
+    timeHorizon: asText(resolved && resolved.timeHorizon),
+    objectiveScope: asText(resolved && resolved.scope),
     hasCampaignPlanning: Boolean(context.campaignPlanning || context.campaign_planning),
     hasCampaignMemory: Boolean(context.campaignMemory || context.campaign_memory),
     hasFirstCampaignPlanPreview: Boolean(
@@ -386,6 +434,7 @@ function resolveCampaignContentContext(input = {}) {
     hasOutreachStrategyPreview: Boolean(
       context.outreachStrategyPreview || context.outreach_strategy_preview
     ),
+    hasResolvedOperatorObjective: Boolean(resolved && resolved.id),
   };
 
   return {
@@ -400,6 +449,8 @@ function resolveCampaignContentContext(input = {}) {
     channel,
     campaignContext,
     operatorMessage,
+    currentPhase: campaignContext.currentPhase,
+    resolvedObjective: resolved || null,
   };
 }
 
