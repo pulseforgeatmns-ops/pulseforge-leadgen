@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Record Content Outcome · Pulseforge</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #0f1419;
+      --bg1: #171d25;
+      --bg2: #1e2630;
+      --line: rgba(255,255,255,0.08);
+      --text: #e8edf2;
+      --muted: #8b98a8;
+      --accent: #3d9cf0;
+      --ok: #3ecf8e;
+      --warn: #e6b84d;
+      --danger: #e85d5d;
+      --radius: 10px;
+      --font: 'DM Sans', system-ui, sans-serif;
+      --mono: 'IBM Plex Mono', ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font);
+      color: var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(61,156,240,0.16), transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, rgba(62,207,142,0.08), transparent 50%),
+        linear-gradient(180deg, var(--bg0), #0b0f13 80%);
+    }
+    header {
+      padding: 1.25rem 1.5rem;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0.2rem 0 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    header a {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 0.85rem;
+    }
+    main {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 1.25rem 1.25rem 3rem;
+    }
+    .panel {
+      background: color-mix(in srgb, var(--bg1) 92%, transparent);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    .panel h2 {
+      margin: 0 0 0.85rem;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+    @media (max-width: 640px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    label.full { grid-column: 1 / -1; }
+    input, select, textarea {
+      font: inherit;
+      color: var(--text);
+      background: var(--bg2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.55rem 0.65rem;
+    }
+    textarea { min-height: 72px; resize: vertical; }
+    input:focus, select:focus, textarea:focus {
+      outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+      border-color: transparent;
+    }
+    .hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin: 0 0 0.75rem;
+    }
+    .row-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.85rem;
+    }
+    button {
+      font: inherit;
+      font-weight: 600;
+      border: 0;
+      border-radius: 8px;
+      padding: 0.55rem 0.9rem;
+      cursor: pointer;
+      background: var(--accent);
+      color: #061018;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      margin-top: 0.75rem;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--danger); }
+    .chip-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+    .chip {
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 0.65rem;
+      background: rgba(0,0,0,0.15);
+    }
+    .chip .remove {
+      margin-top: 0.4rem;
+      font-size: 0.72rem;
+      padding: 0.25rem 0.5rem;
+    }
+    .ref {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--warn);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Record Content Outcome</h1>
+      <p>Capture what happened after a Paige / LinkedIn post — under 60 seconds.</p>
+    </div>
+    <a href="/dashboard">← Dashboard</a>
+  </header>
+  <main>
+    <div class="panel">
+      <h2>Publication</h2>
+      <p class="hint">Select an existing publication or create one from a Paige artifact / manual post key.</p>
+      <div class="grid">
+        <label>
+          Client ID
+          <input id="clientId" type="number" min="1" value="1" />
+        </label>
+        <label>
+          Existing publication ID
+          <input id="publicationId" type="text" placeholder="Leave blank to create" />
+        </label>
+        <label>
+          Content artifact ID
+          <input id="artifactId" type="text" placeholder="pending_comments id or manual key" />
+        </label>
+        <label>
+          Channel
+          <select id="channel"><option value="linkedin">linkedin</option></select>
+        </label>
+        <label>
+          Objective
+          <select id="objective"><option value="">—</option></select>
+        </label>
+        <label>
+          Published at
+          <input id="publishedAt" type="datetime-local" />
+        </label>
+        <label>
+          Topic
+          <input id="topic" type="text" />
+        </label>
+        <label>
+          Format
+          <input id="format" type="text" placeholder="text / carousel / ..." />
+        </label>
+        <label class="full">
+          Thesis
+          <input id="thesis" type="text" />
+        </label>
+        <label class="full">
+          External URL
+          <input id="externalUrl" type="url" placeholder="https://www.linkedin.com/..." />
+        </label>
+        <label class="full">
+          Intended audience (comma-separated)
+          <input id="audience" type="text" placeholder="builders, SMB operators" />
+        </label>
+      </div>
+      <div class="row-actions">
+        <button type="button" id="btnCreatePub">Create / use publication</button>
+        <button type="button" class="secondary" id="btnLoadPub">Load history</button>
+      </div>
+      <div class="status" id="pubStatus"></div>
+      <div class="ref" id="activePub"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Performance snapshot</h2>
+      <p class="hint">All metrics optional. Snapshots are immutable — add another later for velocity.</p>
+      <div class="grid">
+        <label>Observed at<input id="perfObservedAt" type="datetime-local" /></label>
+        <label>Impressions<input id="impressions" type="number" min="0" /></label>
+        <label>Reactions<input id="reactions" type="number" min="0" /></label>
+        <label>Comments<input id="comments" type="number" min="0" /></label>
+        <label>Reposts<input id="reposts" type="number" min="0" /></label>
+        <label>Followers gained<input id="followersGained" type="number" min="0" /></label>
+        <label>Profile views<input id="profileViews" type="number" min="0" /></label>
+        <label>Members reached<input id="membersReached" type="number" min="0" /></label>
+      </div>
+      <div class="row-actions">
+        <button type="button" id="btnPerf">Save snapshot</button>
+      </div>
+      <div class="status" id="perfStatus"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Business outcomes</h2>
+      <div id="outcomeList" class="chip-list"></div>
+      <div class="row-actions">
+        <button type="button" class="secondary" id="btnAddOutcome">+ Add outcome</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Qualitative observations</h2>
+      <div id="signalList" class="chip-list"></div>
+      <div class="row-actions">
+        <button type="button" class="secondary" id="btnAddSignal">+ Add signal</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Save</h2>
+      <p class="hint">Saves pending business outcomes and qualitative signals for the active publication.</p>
+      <div class="row-actions">
+        <button type="button" id="btnSaveAll">Save outcomes &amp; signals</button>
+      </div>
+      <div class="status" id="saveStatus"></div>
+    </div>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let meta = { objectives: [], businessOutcomeTypes: [], attributionLevels: [], signalTypes: [] };
+    let activePublicationId = null;
+    const pendingOutcomes = [];
+    const pendingSignals = [];
+
+    function localNowInput() {
+      const d = new Date();
+      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+      return d.toISOString().slice(0, 16);
+    }
+
+    function setStatus(el, msg, ok) {
+      el.textContent = msg || '';
+      el.className = 'status' + (ok === true ? ' ok' : ok === false ? ' err' : '');
+    }
+
+    async function api(method, url, body) {
+      const res = await fetch(url, {
+        method,
+        credentials: 'include',
+        headers: body ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) {}
+      if (!res.ok) {
+        const msg = (json && (json.message || json.error)) || text || res.statusText;
+        throw new Error(msg);
+      }
+      return json;
+    }
+
+    function fillSelect(el, values, blank) {
+      el.innerHTML = blank ? '<option value="">—</option>' : '';
+      for (const v of values) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        el.appendChild(opt);
+      }
+    }
+
+    function renderPending() {
+      const oHost = $('outcomeList');
+      const sHost = $('signalList');
+      oHost.innerHTML = '';
+      sHost.innerHTML = '';
+      pendingOutcomes.forEach((item, idx) => {
+        const div = document.createElement('div');
+        div.className = 'chip';
+        div.innerHTML = `
+          <div class="grid">
+            <label>Type<select data-o-type></select></label>
+            <label>Attribution<select data-o-attr></select></label>
+            <label class="full">Description<textarea data-o-desc></textarea></label>
+          </div>`;
+        const typeSel = div.querySelector('[data-o-type]');
+        const attrSel = div.querySelector('[data-o-attr]');
+        fillSelect(typeSel, meta.businessOutcomeTypes || [], false);
+        fillSelect(attrSel, meta.attributionLevels || [], false);
+        typeSel.value = item.outcomeType || meta.businessOutcomeTypes[0];
+        attrSel.value = item.attribution || 'possible';
+        div.querySelector('[data-o-desc]').value = item.description || '';
+        typeSel.onchange = () => { item.outcomeType = typeSel.value; };
+        attrSel.onchange = () => { item.attribution = attrSel.value; };
+        div.querySelector('[data-o-desc]').oninput = (e) => { item.description = e.target.value; };
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'secondary remove';
+        rm.textContent = 'Remove';
+        rm.onclick = () => { pendingOutcomes.splice(idx, 1); renderPending(); };
+        div.appendChild(rm);
+        oHost.appendChild(div);
+      });
+      pendingSignals.forEach((item, idx) => {
+        const div = document.createElement('div');
+        div.className = 'chip';
+        div.innerHTML = `
+          <div class="grid">
+            <label>Signal type<select data-s-type></select></label>
+            <label class="full">Observation<textarea data-s-desc></textarea></label>
+          </div>`;
+        const typeSel = div.querySelector('[data-s-type]');
+        fillSelect(typeSel, meta.signalTypes || [], false);
+        typeSel.value = item.signalType || meta.signalTypes[0];
+        div.querySelector('[data-s-desc]').value = item.description || '';
+        typeSel.onchange = () => { item.signalType = typeSel.value; };
+        div.querySelector('[data-s-desc]').oninput = (e) => { item.description = e.target.value; };
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'secondary remove';
+        rm.textContent = 'Remove';
+        rm.onclick = () => { pendingSignals.splice(idx, 1); renderPending(); };
+        div.appendChild(rm);
+        sHost.appendChild(div);
+      });
+    }
+
+    function setActive(id) {
+      activePublicationId = id;
+      $('publicationId').value = id || '';
+      $('activePub').textContent = id ? `Active publication: ${id}` : '';
+    }
+
+    async function ensurePublication() {
+      const existing = $('publicationId').value.trim();
+      if (existing) {
+        setActive(existing);
+        return existing;
+      }
+      const clientId = Number($('clientId').value);
+      const artifactId = $('artifactId').value.trim();
+      if (!artifactId) throw new Error('content artifact id required to create a publication');
+      const body = {
+        clientId,
+        contentArtifactId: artifactId,
+        channel: $('channel').value || 'linkedin',
+        objective: $('objective').value || null,
+        topic: $('topic').value || null,
+        thesis: $('thesis').value || null,
+        format: $('format').value || null,
+        externalUrl: $('externalUrl').value || null,
+        intendedAudience: $('audience').value || null,
+        publishedAt: $('publishedAt').value ? new Date($('publishedAt').value).toISOString() : new Date().toISOString(),
+      };
+      const created = await api('POST', '/api/content-publications', body);
+      setActive(created.id);
+      return created.id;
+    }
+
+    $('btnCreatePub').onclick = async () => {
+      try {
+        const id = await ensurePublication();
+        setStatus($('pubStatus'), `Ready: ${id}`, true);
+      } catch (err) {
+        setStatus($('pubStatus'), err.message, false);
+      }
+    };
+
+    $('btnLoadPub').onclick = async () => {
+      try {
+        const id = $('publicationId').value.trim();
+        if (!id) throw new Error('publication id required');
+        const clientId = Number($('clientId').value);
+        const full = await api('GET', `/api/content-publications/${encodeURIComponent(id)}?client_id=${clientId}`);
+        setActive(full.publication.id);
+        $('artifactId').value = full.publication.contentArtifactId || '';
+        $('channel').value = full.publication.channel || 'linkedin';
+        $('objective').value = full.publication.objective || '';
+        $('topic').value = full.publication.topic || '';
+        $('thesis').value = full.publication.thesis || '';
+        $('format').value = full.publication.format || '';
+        $('externalUrl').value = full.publication.externalUrl || '';
+        $('audience').value = (full.publication.intendedAudience || []).join(', ');
+        const latest = (full.performanceSnapshots || []).slice(-1)[0];
+        setStatus(
+          $('pubStatus'),
+          `Loaded · ${full.performanceSnapshots.length} snapshots · ${full.businessOutcomes.length} outcomes · ${full.qualitativeSignals.length} signals` +
+            (latest ? `\nLatest impressions: ${latest.impressions ?? '—'}` : ''),
+          true
+        );
+      } catch (err) {
+        setStatus($('pubStatus'), err.message, false);
+      }
+    };
+
+    $('btnPerf').onclick = async () => {
+      try {
+        const id = await ensurePublication();
+        const clientId = Number($('clientId').value);
+        const body = {
+          clientId,
+          observedAt: $('perfObservedAt').value
+            ? new Date($('perfObservedAt').value).toISOString()
+            : new Date().toISOString(),
+        };
+        const fields = [
+          ['impressions', 'impressions'],
+          ['reactions', 'reactions'],
+          ['comments', 'comments'],
+          ['reposts', 'reposts'],
+          ['followersGained', 'followersGained'],
+          ['profileViews', 'profileViewsAttributed'],
+          ['membersReached', 'membersReached'],
+        ];
+        for (const [domId, key] of fields) {
+          const v = $(domId).value;
+          if (v !== '') body[key] = Number(v);
+        }
+        const snap = await api('POST', `/api/content-publications/${encodeURIComponent(id)}/performance`, body);
+        setStatus($('perfStatus'), `Snapshot saved ${snap.id}`, true);
+      } catch (err) {
+        setStatus($('perfStatus'), err.message, false);
+      }
+    };
+
+    $('btnAddOutcome').onclick = () => {
+      pendingOutcomes.push({
+        outcomeType: (meta.businessOutcomeTypes || ['other'])[0],
+        attribution: 'possible',
+        description: '',
+      });
+      renderPending();
+    };
+
+    $('btnAddSignal').onclick = () => {
+      pendingSignals.push({
+        signalType: (meta.signalTypes || ['other'])[0],
+        description: '',
+      });
+      renderPending();
+    };
+
+    $('btnSaveAll').onclick = async () => {
+      try {
+        const id = await ensurePublication();
+        const clientId = Number($('clientId').value);
+        let savedO = 0;
+        let savedS = 0;
+        for (const item of pendingOutcomes) {
+          if (!item.outcomeType) continue;
+          await api('POST', `/api/content-publications/${encodeURIComponent(id)}/outcomes`, {
+            clientId,
+            outcomeType: item.outcomeType,
+            attribution: item.attribution || 'unknown',
+            description: item.description || null,
+          });
+          savedO += 1;
+        }
+        for (const item of pendingSignals) {
+          if (!item.description || !item.description.trim()) continue;
+          await api('POST', `/api/content-publications/${encodeURIComponent(id)}/signals`, {
+            clientId,
+            signalType: item.signalType,
+            description: item.description,
+          });
+          savedS += 1;
+        }
+        pendingOutcomes.length = 0;
+        pendingSignals.length = 0;
+        renderPending();
+        setStatus($('saveStatus'), `Saved ${savedO} outcomes, ${savedS} signals`, true);
+      } catch (err) {
+        setStatus($('saveStatus'), err.message, false);
+      }
+    };
+
+    (async function init() {
+      $('publishedAt').value = localNowInput();
+      $('perfObservedAt').value = localNowInput();
+      try {
+        meta = await api('GET', '/api/content-outcomes/meta');
+        fillSelect($('objective'), meta.objectives || [], true);
+        fillSelect($('channel'), meta.channels || ['linkedin'], false);
+        $('channel').value = 'linkedin';
+      } catch (err) {
+        setStatus($('pubStatus'), err.message, false);
+      }
+    })();
+  </script>
+</body>
+</html>
