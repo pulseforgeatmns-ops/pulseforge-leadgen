@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulseforge — Content Outcomes</title>
+  <link rel="icon" href="/favicon.ico">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <style>
+    :root {
+      --co-bg: #0e1319;
+      --co-panel: #151c25;
+      --co-border: #2a3544;
+      --co-text: #e8eef5;
+      --co-muted: #8b9bb0;
+      --co-accent: #3d9cfd;
+      --co-ok: #3ecf8e;
+      --co-warn: #e6b84d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background:
+        radial-gradient(800px 420px at 10% -10%, rgba(42, 72, 110, 0.28), transparent 55%),
+        var(--co-bg);
+      color: var(--co-text);
+      min-height: 100vh;
+    }
+    header {
+      display: flex;
+      align-items: baseline;
+      gap: 1rem;
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--co-border);
+    }
+    header h1 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+    header p { margin: 0; color: var(--co-muted); font-size: 0.85rem; }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 1.25rem 1.5rem 2.5rem;
+      display: grid;
+      gap: 1.25rem;
+    }
+    section {
+      background: var(--co-panel);
+      border: 1px solid var(--co-border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem 1.15rem;
+    }
+    section h2 {
+      margin: 0 0 0.75rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .hint { color: var(--co-muted); font-size: 0.8rem; margin: -0.35rem 0 0.85rem; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.65rem 0.85rem;
+    }
+    @media (max-width: 700px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-size: 0.75rem;
+      color: var(--co-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    input, select, textarea {
+      font: inherit;
+      color: var(--co-text);
+      background: #0c1118;
+      border: 1px solid var(--co-border);
+      border-radius: 6px;
+      padding: 0.45rem 0.55rem;
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 0.9rem;
+    }
+    textarea { min-height: 72px; resize: vertical; }
+    .actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.85rem;
+    }
+    button {
+      font: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border: 0;
+      border-radius: 6px;
+      padding: 0.5rem 0.9rem;
+      cursor: pointer;
+      background: var(--co-accent);
+      color: #041018;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--co-text);
+      border: 1px solid var(--co-border);
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: var(--co-muted);
+      white-space: pre-wrap;
+      margin-top: 0.75rem;
+    }
+    #status.ok { color: var(--co-ok); }
+    #status.err { color: #e57373; }
+    .list {
+      display: grid;
+      gap: 0.55rem;
+      margin-top: 0.5rem;
+    }
+    .card {
+      border: 1px solid var(--co-border);
+      border-radius: 8px;
+      padding: 0.65rem 0.75rem;
+      cursor: pointer;
+      background: #101823;
+    }
+    .card:hover { border-color: var(--co-accent); }
+    .card.active { border-color: var(--co-accent); background: rgba(61,156,253,0.08); }
+    .card strong { display: block; font-size: 0.9rem; }
+    .card span { color: var(--co-muted); font-size: 0.78rem; }
+    .full { grid-column: 1 / -1; }
+    .row-inline { display: flex; gap: 0.5rem; align-items: end; }
+    .row-inline > * { flex: 1; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Content Outcomes</h1>
+    <p>Record what happened after publication. Attention is not the outcome.</p>
+  </header>
+  <main>
+    <section>
+      <h2>1. Publication</h2>
+      <p class="hint">Select an existing publication or create one from a Paige/manual post (&lt;60s path).</p>
+      <div class="grid">
+        <label class="full">Existing publication
+          <select id="publicationSelect"><option value="">— create new —</option></select>
+        </label>
+        <label>Title
+          <input id="title" placeholder="Breakout / software should learn you" />
+        </label>
+        <label>Channel
+          <select id="channel"><option value="linkedin">linkedin</option></select>
+        </label>
+        <label>Objective
+          <select id="objective"></select>
+        </label>
+        <label>Topic
+          <input id="topic" placeholder="software should learn you" />
+        </label>
+        <label>Format
+          <input id="format" placeholder="text / story / claim" />
+        </label>
+        <label>Audience (comma-separated)
+          <input id="audience" placeholder="builders, SMB operators" />
+        </label>
+        <label>External URL
+          <input id="externalUrl" placeholder="https://www.linkedin.com/..." />
+        </label>
+        <label>Published at
+          <input id="publishedAt" type="datetime-local" />
+        </label>
+        <label class="full">Body / snippet (optional)
+          <textarea id="body" placeholder="Optional content snapshot for backfill"></textarea>
+        </label>
+        <label>Pending comment id (Paige)
+          <input id="pendingCommentId" placeholder="optional" />
+        </label>
+        <label>Thesis (optional)
+          <input id="thesis" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnPublish" type="button">Save publication</button>
+        <button id="btnRefresh" class="secondary" type="button">Refresh list</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. Performance snapshot</h2>
+      <p class="hint">Immutable observations. Add another later (24h / 72h / 7d). All metrics optional.</p>
+      <div class="grid">
+        <label>Observed at
+          <input id="perfObservedAt" type="datetime-local" />
+        </label>
+        <label>Impressions
+          <input id="impressions" type="number" min="0" />
+        </label>
+        <label>Members reached
+          <input id="membersReached" type="number" min="0" />
+        </label>
+        <label>Reactions
+          <input id="reactions" type="number" min="0" />
+        </label>
+        <label>Comments
+          <input id="comments" type="number" min="0" />
+        </label>
+        <label>Reposts
+          <input id="reposts" type="number" min="0" />
+        </label>
+        <label>Followers gained
+          <input id="followersGained" type="number" min="0" />
+        </label>
+        <label>Profile views
+          <input id="profileViews" type="number" min="0" />
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnPerf" type="button">Add snapshot</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. Business outcome</h2>
+      <div class="grid">
+        <label>Type
+          <select id="outcomeType"></select>
+        </label>
+        <label>Attribution
+          <select id="attribution">
+            <option value="direct">direct</option>
+            <option value="likely">likely</option>
+            <option value="possible">possible</option>
+            <option value="unknown" selected>unknown</option>
+          </select>
+        </label>
+        <label>Occurred at
+          <input id="outcomeAt" type="datetime-local" />
+        </label>
+        <label>Person / company id (optional)
+          <input id="entityId" placeholder="person_id or company_id" />
+        </label>
+        <label class="full">Description
+          <textarea id="outcomeDesc" placeholder="Muhammad explicitly messaged after seeing the post"></textarea>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnOutcome" type="button">Add outcome</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>4. Qualitative signal</h2>
+      <div class="grid">
+        <label>Type
+          <select id="signalType"></select>
+        </label>
+        <label>Observed at
+          <input id="signalAt" type="datetime-local" />
+        </label>
+        <label class="full">Observation
+          <textarea id="signalDesc" placeholder="Several commenters repeated the phrase 'software should learn you.'"></textarea>
+        </label>
+      </div>
+      <div class="actions">
+        <button id="btnSignal" type="button">Add signal</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>History</h2>
+      <div id="history" class="list"></div>
+      <div id="status"></div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      publicationId: null,
+      meta: null,
+      list: [],
+    };
+
+    function $(id) { return document.getElementById(id); }
+
+    function clientQuery() {
+      const params = new URLSearchParams(window.location.search);
+      const clientId = params.get('client_id');
+      return clientId ? `?client_id=${encodeURIComponent(clientId)}` : '';
+    }
+
+    function withClient(path) {
+      const q = clientQuery();
+      if (!q) return path;
+      return path.includes('?') ? `${path}&${q.slice(1)}` : `${path}${q}`;
+    }
+
+    async function api(method, path, body) {
+      const res = await fetch(withClient(path), {
+        method,
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'application/json',
+          ...(body == null ? {} : { 'Content-Type': 'application/json' }),
+        },
+        body: body == null ? undefined : JSON.stringify(body),
+      });
+      const text = await res.text();
+      let json = null;
+      try { json = text ? JSON.parse(text) : null; } catch (_) {}
+      if (!res.ok) {
+        const msg = (json && (json.message || json.error)) || text || res.statusText;
+        throw new Error(msg);
+      }
+      return json;
+    }
+
+    function setStatus(msg, kind) {
+      const el = $('status');
+      el.textContent = msg || '';
+      el.className = kind || '';
+    }
+
+    function fillSelect(el, values, includeBlank) {
+      el.innerHTML = '';
+      if (includeBlank) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '—';
+        el.appendChild(opt);
+      }
+      for (const v of values) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        el.appendChild(opt);
+      }
+    }
+
+    function localInputNow(el) {
+      if (!el.value) {
+        const d = new Date();
+        d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+        el.value = d.toISOString().slice(0, 16);
+      }
+    }
+
+    function toIso(localValue) {
+      if (!localValue) return undefined;
+      const d = new Date(localValue);
+      return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
+    }
+
+    function currentPublicationId() {
+      return state.publicationId || $('publicationSelect').value || null;
+    }
+
+    function renderList() {
+      const sel = $('publicationSelect');
+      const current = currentPublicationId();
+      sel.innerHTML = '<option value="">— create new —</option>';
+      for (const item of state.list) {
+        const p = item.publication;
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        const label = [
+          p.topic || item.content_artifact?.title || 'Untitled',
+          p.objective || '',
+          p.published_at ? new Date(p.published_at).toLocaleDateString() : '',
+        ].filter(Boolean).join(' · ');
+        opt.textContent = label;
+        sel.appendChild(opt);
+      }
+      if (current) sel.value = current;
+
+      const hist = $('history');
+      hist.innerHTML = '';
+      for (const item of state.list.slice(0, 12)) {
+        const p = item.publication;
+        const card = document.createElement('div');
+        card.className = 'card' + (p.id === current ? ' active' : '');
+        card.innerHTML = `<strong>${escapeHtml(p.topic || item.content_artifact?.title || p.id)}</strong>
+          <span>${escapeHtml(p.objective || '—')} · ${item.performance_snapshots?.length || 0} snaps · ${item.business_outcomes?.length || 0} outcomes · ${item.qualitative_signals?.length || 0} signals</span>`;
+        card.onclick = () => {
+          state.publicationId = p.id;
+          $('publicationSelect').value = p.id;
+          renderList();
+          loadDetail(p.id);
+        };
+        hist.appendChild(card);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    async function loadMeta() {
+      state.meta = await api('GET', '/api/v1/content-outcomes/meta');
+      fillSelect($('objective'), state.meta.OBJECTIVES, true);
+      fillSelect($('outcomeType'), state.meta.BUSINESS_OUTCOME_TYPES, false);
+      fillSelect($('signalType'), state.meta.SIGNAL_TYPES, false);
+    }
+
+    async function refreshList() {
+      const data = await api('GET', '/api/content-outcomes?limit=30');
+      state.list = data.items || [];
+      renderList();
+      const cmp = data.comparison;
+      if (cmp) {
+        setStatus(
+          `Compare: ${cmp.total_publications} pubs · median impressions ${cmp.median_impressions ?? '—'} · avg comments ${cmp.average_comments != null ? cmp.average_comments.toFixed(1) : '—'} · meetings ${cmp.total_meetings} · partner convos ${cmp.total_partner_conversations}`,
+          'ok'
+        );
+      }
+    }
+
+    async function loadDetail(id) {
+      if (!id) return;
+      const full = await api('GET', `/api/content-publications/${id}/outcomes`);
+      const p = full.publication;
+      $('title').value = full.content_artifact?.title || '';
+      $('topic').value = p.topic || '';
+      $('objective').value = p.objective || '';
+      $('format').value = p.format || '';
+      $('externalUrl').value = p.external_url || '';
+      $('thesis').value = p.thesis || '';
+      $('body').value = full.content_artifact?.body || '';
+      $('audience').value = (p.intended_audience || []).join(', ');
+      setStatus(`Loaded ${id}\n` + (full.timeline || []).map(e => `${e.at} · ${e.kind}: ${e.summary}`).join('\n'), 'ok');
+    }
+
+    $('btnRefresh').onclick = () => refreshList().catch(err => setStatus(err.message, 'err'));
+
+    $('publicationSelect').onchange = () => {
+      state.publicationId = $('publicationSelect').value || null;
+      if (state.publicationId) loadDetail(state.publicationId).catch(err => setStatus(err.message, 'err'));
+      renderList();
+    };
+
+    $('btnPublish').onclick = async () => {
+      try {
+        setStatus('Saving publication…');
+        const body = {
+          title: $('title').value || undefined,
+          body: $('body').value || undefined,
+          channel: $('channel').value,
+          objective: $('objective').value || undefined,
+          topic: $('topic').value || undefined,
+          thesis: $('thesis').value || undefined,
+          format: $('format').value || undefined,
+          intended_audience: $('audience').value || undefined,
+          external_url: $('externalUrl').value || undefined,
+          published_at: toIso($('publishedAt').value),
+          pending_comment_id: $('pendingCommentId').value || undefined,
+        };
+        const result = await api('POST', '/api/content-publications', body);
+        state.publicationId = result.publication.id;
+        setStatus(`Publication saved: ${result.publication.id}`, 'ok');
+        await refreshList();
+      } catch (err) {
+        setStatus(err.message, 'err');
+      }
+    };
+
+    $('btnPerf').onclick = async () => {
+      try {
+        const id = currentPublicationId();
+        if (!id) throw new Error('Select or create a publication first');
+        const snapshot = await api('POST', `/api/content-publications/${id}/performance`, {
+          observed_at: toIso($('perfObservedAt').value),
+          impressions: $('impressions').value || undefined,
+          members_reached: $('membersReached').value || undefined,
+          reactions: $('reactions').value || undefined,
+          comments: $('comments').value || undefined,
+          reposts: $('reposts').value || undefined,
+          followers_gained: $('followersGained').value || undefined,
+          profile_views_attributed: $('profileViews').value || undefined,
+        });
+        setStatus(`Snapshot saved: ${snapshot.id}`, 'ok');
+        await refreshList();
+      } catch (err) {
+        setStatus(err.message, 'err');
+      }
+    };
+
+    $('btnOutcome').onclick = async () => {
+      try {
+        const id = currentPublicationId();
+        if (!id) throw new Error('Select or create a publication first');
+        const entity = $('entityId').value.trim();
+        const payload = {
+          outcome_type: $('outcomeType').value,
+          attribution: $('attribution').value,
+          occurred_at: toIso($('outcomeAt').value),
+          description: $('outcomeDesc').value || undefined,
+        };
+        if (entity) {
+          if (entity.includes('-') || entity.length > 20) payload.person_id = entity;
+          else payload.company_id = entity;
+        }
+        const outcome = await api('POST', `/api/content-publications/${id}/outcomes`, payload);
+        setStatus(`Outcome saved: ${outcome.outcome_type} (${outcome.attribution})`, 'ok');
+        $('outcomeDesc').value = '';
+        await refreshList();
+      } catch (err) {
+        setStatus(err.message, 'err');
+      }
+    };
+
+    $('btnSignal').onclick = async () => {
+      try {
+        const id = currentPublicationId();
+        if (!id) throw new Error('Select or create a publication first');
+        const signal = await api('POST', `/api/content-publications/${id}/signals`, {
+          signal_type: $('signalType').value,
+          description: $('signalDesc').value,
+          observed_at: toIso($('signalAt').value),
+        });
+        setStatus(`Signal saved: ${signal.signal_type}`, 'ok');
+        $('signalDesc').value = '';
+        await refreshList();
+      } catch (err) {
+        setStatus(err.message, 'err');
+      }
+    };
+
+    (async function init() {
+      localInputNow($('publishedAt'));
+      localInputNow($('perfObservedAt'));
+      localInputNow($('outcomeAt'));
+      localInputNow($('signalAt'));
+      try {
+        await loadMeta();
+        await refreshList();
+      } catch (err) {
+        setStatus(err.message, 'err');
+      }
+    })();
+  </script>
+</body>
+</html>

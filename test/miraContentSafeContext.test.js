@@ -33,6 +33,9 @@ function contentSafeQuery(sql, params) {
       first_hour_active: true,
     }] });
   }
+  if (/FROM content_publications/i.test(sql)) {
+    return Promise.resolve({ rows: [] });
+  }
   throw new Error(`Unexpected content-safe query: ${sql.slice(0, 80)}`);
 }
 
@@ -60,6 +63,7 @@ test('content-safe Mira context is client-scoped and omits sensitive collections
     engagement_rate: 4.25,
     first_hour_active: true,
   }]);
+  assert.deepEqual(context.content_outcomes, []);
   assert.match(context.recent_activity_summaries.join('\n'), /Manchester/);
 
   const serialized = JSON.stringify(context);
@@ -112,6 +116,7 @@ test('content-safe Mira context reads exact client-scoped anchor text', async ()
     }
     if (/GROUP BY \(ran_at AT TIME ZONE/i.test(sql)) return { rows: [] };
     if (/FROM linkedin_post_stats/i.test(sql)) return { rows: [] };
+    if (/FROM content_publications/i.test(sql)) return { rows: [] };
     throw new Error(`Unexpected anchor query: ${sql.slice(0, 80)}`);
   };
 

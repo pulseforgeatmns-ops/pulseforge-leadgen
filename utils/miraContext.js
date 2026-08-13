@@ -231,7 +231,7 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
     }
   };
 
-  const [clientRows, metricRows, trendRows, linkedinPostStats, anchor] = await Promise.all([
+  const [clientRows, metricRows, trendRows, linkedinPostStats, contentOutcomeRows, anchor] = await Promise.all([
     safeRows(`
       SELECT id, COALESCE(NULLIF(business_name, ''), name) AS name, city, state
       FROM clients
@@ -300,6 +300,20 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
       ORDER BY posted_at DESC
       LIMIT 20
     `, [clientId]),
+    optionalRows(`
+      SELECT p.id AS publication_id, p.channel, p.objective, p.topic, p.format,
+             p.published_at, p.external_url,
+             (SELECT COUNT(*)::int FROM content_business_outcomes o
+               WHERE o.publication_id = p.id AND o.client_id = p.client_id) AS business_outcome_count,
+             (SELECT COUNT(*)::int FROM content_performance_snapshots s
+               WHERE s.publication_id = p.id AND s.client_id = p.client_id) AS snapshot_count,
+             (SELECT COUNT(*)::int FROM content_qualitative_signals q
+               WHERE q.publication_id = p.id AND q.client_id = p.client_id) AS signal_count
+      FROM content_publications p
+      WHERE p.client_id = $1
+      ORDER BY p.published_at DESC
+      LIMIT 10
+    `, [clientId]),
     getCurrentAnchor({ query }, clientId).catch(err => {
       errors.push(err.message);
       console.error('[mira_context] anchor failed:', err.message);
@@ -324,6 +338,20 @@ async function buildContentSafeClientContext(clientId, { query, channel, errors 
     },
     recent_activity_summaries: buildActivitySummaries(metrics, client),
     client_health: contentSafeHealth(metrics, trendRows),
+    // SPEC-092 Content Outcome Intelligence — read-only evidence for Max/Mira.
+    // No strategy mutation. Tables may be absent until migration runs.
+    content_outcomes: (contentOutcomeRows || []).map(row => ({
+      publication_id: row.publication_id,
+      channel: row.channel,
+      objective: row.objective,
+      topic: row.topic,
+      format: row.format,
+      published_at: row.published_at,
+      external_url: row.external_url,
+      business_outcome_count: number(row.business_outcome_count),
+      snapshot_count: number(row.snapshot_count),
+      signal_count: number(row.signal_count),
+    })),
     linkedin_post_stats: linkedinPostStats.map(row => ({
       posted_at: row.posted_at,
       format: row.format,
