@@ -269,6 +269,46 @@ async function ensureClientArchitecture() {
     WHERE id = 10
   `);
 
+  // ── AS Cleaning Co. (Aji pilot client — SPEC-096) ──────────────────────
+  // Distinct from Anchor Cleaning (client_id=10). Never reuse Anchor's id,
+  // scoring_profile, or prospect pool. CIE onboarding + Max continuity only
+  // until broader agent enablement is intentional.
+  await pool.query(`
+    INSERT INTO clients (
+      id, name, slug, business_name, vertical, city, state,
+      service_area, verticals, target_clients,
+      sender_name, active
+    ) VALUES (
+      11,
+      'AS Cleaning Co.',
+      'as-cleaning',
+      'AS Cleaning Co.',
+      'cleaning',
+      'Manchester',
+      'NH',
+      ARRAY['Manchester'],
+      ARRAY['cleaning'],
+      'Residential and light commercial cleaning customers in the Greater Manchester NH area',
+      'Aji',
+      true
+    )
+    ON CONFLICT (id) DO NOTHING
+  `);
+  await pool.query(`
+    UPDATE clients
+    SET
+      name = 'AS Cleaning Co.',
+      slug = 'as-cleaning',
+      business_name = COALESCE(NULLIF(business_name, ''), 'AS Cleaning Co.'),
+      active = true,
+      enabled_agents = CASE
+        WHEN enabled_agents IS NULL OR CARDINALITY(enabled_agents) = 0
+          THEN ARRAY['max']
+        ELSE enabled_agents
+      END
+    WHERE id = 11
+  `);
+
   await pool.query(`SELECT setval(pg_get_serial_sequence('clients', 'id'), GREATEST((SELECT MAX(id) FROM clients), 1))`);
 
   await pool.query(`

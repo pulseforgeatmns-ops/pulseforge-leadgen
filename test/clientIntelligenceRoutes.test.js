@@ -119,7 +119,7 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /I'd like to refine this/);
     assert.match(uiSource, /Let's keep talking/);
     assert.match(uiSource, /earned your trust/);
-    assert.match(uiSource, /foundation Pulseforge will use/);
+    assert.match(uiSource, /foundation Max will use|foundation Pulseforge will use/);
     assert.match(uiSource, /Return to Dashboard/);
     assert.match(uiSource, /Resume Growth Plan/);
     assert.match(uiSource, /growth_workspace|Growth Workspace/);
@@ -130,6 +130,8 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /Initial Growth Direction/);
     assert.match(uiSource, /assessment-stars/);
     assert.match(uiSource, /2500/);
+    assert.match(uiSource, /\/api\/v1\/client-intel\/onboarding/);
+    assert.match(uiSource, /isClientRole/);
   });
 
   it('handles blueprint approval post-state without stuck loading or red APPROVED error', () => {

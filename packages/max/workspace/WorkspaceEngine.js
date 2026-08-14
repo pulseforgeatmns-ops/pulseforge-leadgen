@@ -21,6 +21,9 @@ const {
   synthesizeObjectivePaigeResponse,
 } = require('./OperatorObjectiveContext');
 const {
+  maybeHandleClientIntelligenceTurn,
+} = require('./ClientIntelligenceContext');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
@@ -139,6 +142,8 @@ class WorkspaceEngine {
    * @param {object} [options.paigeLearningOpts] - SPEC-094 contentLearning store opts (tests)
    * @param {object} [options.operatorObjectiveService] - SPEC-095 objective service
    * @param {object} [options.operatorObjectiveOpts] - SPEC-095 store opts (tests)
+   * @param {object} [options.clientIntelligenceService] - SPEC-098 CIE service
+   * @param {object} [options.clientIntelligenceOpts] - SPEC-098 CIE store opts (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -164,6 +169,8 @@ class WorkspaceEngine {
     this._paigeLearningOpts = options.paigeLearningOpts || null;
     this._operatorObjectiveService = options.operatorObjectiveService || null;
     this._operatorObjectiveOpts = options.operatorObjectiveOpts || null;
+    this._clientIntelligenceService = options.clientIntelligenceService || null;
+    this._clientIntelligenceOpts = options.clientIntelligenceOpts || null;
   }
 
   /** @returns {SessionStore} */
@@ -262,6 +269,83 @@ class WorkspaceEngine {
       role: 'operator',
       text: question,
     });
+
+    // SPEC-098 — approved client intelligence before intent routing.
+    // Reconstruct durable Blueprint/Playbook context for the authenticated tenant.
+    // Never invents client facts; never grants execution authority.
+    const cieTurn = await maybeHandleClientIntelligenceTurn({
+      question,
+      session,
+      context: rawContext || session.context,
+      cieService: this._clientIntelligenceService || undefined,
+      cieOpts: this._clientIntelligenceOpts || undefined,
+    });
+    if (cieTurn && cieTurn.handled) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+        if (cieTurn.attachment) {
+          Object.assign(session.context, cieTurn.attachment);
+        }
+      }
+
+      const structuredCie = cieTurn.structured;
+      const routeCie = {
+        kind: ROUTE_KINDS.INTELLIGENCE,
+        missionType: null,
+        reason: cieTurn.reason,
+        missionIntent: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      };
+      const presentedCie = await this._presentation.present(structuredCie);
+      const proseCie = presentedCie.prose || cieTurn.prose;
+
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseCie,
+        structured: structuredCie,
+      });
+
+      return {
+        sessionId: session.id,
+        prose: proseCie,
+        structured: structuredCie,
+        metadata: presentedCie.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredCie,
+          session,
+          question,
+        }),
+        recommendedActions: structuredCie.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedCie.presentation,
+        route: routeCie.kind,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        clientIntelligence:
+          (cieTurn.attachment && cieTurn.attachment.clientIntelligence) || null,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: cieTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: cieTurn.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
 
     // Early desk-context continuation — before domain routing, General
     // Conversation, policy fallback, mission resolver, or mission create/resume.

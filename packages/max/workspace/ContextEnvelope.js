@@ -105,6 +105,9 @@ function normalizeContext(raw) {
     'activeObjectives',
     'resolvedObjective',
     'objectiveResolution',
+    // SPEC-098 — approved Client Intelligence (carrier only; loaded elsewhere)
+    'clientIntelligence',
+    'businessBlueprint',
   ];
   for (const key of passthroughKeys) {
     if (raw[key] !== undefined) {

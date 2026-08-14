@@ -7,6 +7,8 @@
  * SPEC-087 — Growth Infrastructure Readiness start/message.
  * SPEC-088 — Growth Work Continuation (Growth Plan resume + task complete).
  * SPEC-089 — First Campaign Planning Conversation start/message.
+ * SPEC-096 — CIE client-scope authorization (session client is authoritative).
+ * SPEC-097 — Onboarding recovery from durable CIE state.
  *
  * POST /api/v1/clients/:id/interview/start
  * POST /api/v1/interview/:id/message
@@ -15,6 +17,7 @@
  * GET  /api/v1/interview/:id/blueprint
  * POST /api/v1/blueprint/:id/revise
  * POST /api/v1/blueprint/:id/approve
+ * GET  /api/v1/client-intel/onboarding
  * POST /api/v1/interview/:id/growth/start
  * POST /api/v1/interview/:id/growth/message
  * POST /api/v1/interview/:id/readiness/start
@@ -38,6 +41,13 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const {
+  isClientRole,
+  isInternalOperator,
+  resolveCieClientId,
+  assertCieClientAccess,
+  assertRequestedClientMatches,
+} = require('../utils/cieAuth');
+const {
   ClientIntelligenceError,
   startClientInterview,
   postInterviewMessage,
@@ -45,9 +55,12 @@ const {
   getInterview,
   getInterviewBlueprint,
   getClientBlueprint,
+  getApprovedClientBlueprint,
+  getBlueprintRecord,
   listApprovedBlueprintSessions,
   getResumePayload,
   loadAnchorSampleBlueprint,
+  resolveClientOnboardingState,
   reviseBlueprint,
   approveBlueprint,
   startGrowthConversation,
@@ -70,6 +83,7 @@ const {
 } = require('../services/scoutPlacesDiagnostic');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
+const requireInternal = [requireAuth, requireRole('admin', 'manager')];
 
 function noStore(res) {
   res.set('Cache-Control', 'no-store');
@@ -97,17 +111,65 @@ function parseBool(value, fallback) {
   return fallback;
 }
 
+async function loadInterviewScoped(req, sessionId) {
+  const detail = await getInterview(sessionId);
+  assertCieClientAccess(req, detail.clientId);
+  return detail;
+}
+
+async function loadBlueprintScoped(req, blueprintId) {
+  const bp = await getBlueprintRecord(blueprintId);
+  assertCieClientAccess(req, bp.clientId);
+  return bp;
+}
+
 router.get('/client-intel', requireOperator, (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'client-intel.html'));
 });
 
+/**
+ * SPEC-097 — recover onboarding from authenticated client identity.
+ * No interview ID required from the client.
+ */
+router.get('/api/v1/client-intel/onboarding', requireOperator, async (req, res) => {
+  try {
+    const clientId = resolveCieClientId(
+      req,
+      isClientRole(req) ? null : req.query.clientId || req.query.client_id
+    );
+    if (isClientRole(req)) {
+      assertRequestedClientMatches(
+        req,
+        req.query.clientId || req.query.client_id
+      );
+    }
+    const result = await resolveClientOnboardingState(clientId);
+    noStore(res);
+    return res.json(result);
+  } catch (err) {
+    return sendError(res, err);
+  }
+});
+
 router.get('/api/v1/client-intel/sessions', requireOperator, async (req, res) => {
   try {
+    if (isClientRole(req)) {
+      assertRequestedClientMatches(req, req.query.clientId || req.query.client_id);
+    }
+    const clientId = resolveCieClientId(
+      req,
+      isClientRole(req) ? null : req.query.clientId
+    );
     const result = await listApprovedBlueprintSessions({
-      clientId: req.query.clientId,
-      includeSamples: parseBool(req.query.includeSamples, true),
-      samplesOnly: parseBool(req.query.samplesOnly, false),
+      clientId,
+      includeSamples: isClientRole(req)
+        ? false
+        : parseBool(req.query.includeSamples, true),
+      samplesOnly: isClientRole(req)
+        ? false
+        : parseBool(req.query.samplesOnly, false),
       limit: req.query.limit,
+      requireClientId: isClientRole(req),
     });
     noStore(res);
     return res.json(result);
@@ -121,8 +183,10 @@ router.get(
   requireOperator,
   async (req, res) => {
     try {
+      await loadInterviewScoped(req, req.params.id);
       const action = String((req.query && req.query.action) || 'continue');
       const result = await getResumePayload(req.params.id, { action });
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
     } catch (err) {
@@ -133,7 +197,7 @@ router.get(
 
 router.post(
   '/api/v1/client-intel/fixtures/anchor-blueprint',
-  requireOperator,
+  requireInternal,
   async (req, res) => {
     try {
       const body = req.body || {};
@@ -153,14 +217,24 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
+      assertRequestedClientMatches(req, req.params.id);
       const body = req.body || {};
+      if (isClientRole(req)) {
+        assertRequestedClientMatches(req, body.clientId || body.client_id);
+      }
+      const clientId = resolveCieClientId(req, req.params.id);
+      // Client role cannot forceNew through body override games — only internal.
+      const forceNew =
+        isInternalOperator(req) && Boolean(body.forceNew || body.force_new);
       const result = await startClientInterview({
-        clientId: req.params.id,
-        notes: body.notes,
+        clientId,
+        notes: isClientRole(req) ? undefined : body.notes,
         source: body.source || 'api',
+        forceNew,
       });
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
-      return res.status(201).json(result);
+      return res.status(result.resumedExisting ? 200 : 201).json(result);
     } catch (err) {
       return sendError(res, err);
     }
@@ -169,6 +243,7 @@ router.post(
 
 router.post('/api/v1/interview/:id/message', requireOperator, async (req, res) => {
   try {
+    await loadInterviewScoped(req, req.params.id);
     const message = req.body && req.body.message;
     if (message == null || String(message).trim() === '') {
       return res.status(400).json({
@@ -177,6 +252,7 @@ router.post('/api/v1/interview/:id/message', requireOperator, async (req, res) =
       });
     }
     const result = await postInterviewMessage(req.params.id, message);
+    assertCieClientAccess(req, result.clientId);
     noStore(res);
     return res.json(result);
   } catch (err) {
@@ -186,7 +262,9 @@ router.post('/api/v1/interview/:id/message', requireOperator, async (req, res) =
 
 router.post('/api/v1/interview/:id/resume', requireOperator, async (req, res) => {
   try {
+    await loadInterviewScoped(req, req.params.id);
     const result = await resumeInterview(req.params.id);
+    assertCieClientAccess(req, result.clientId);
     noStore(res);
     return res.json(result);
   } catch (err) {
@@ -196,7 +274,7 @@ router.post('/api/v1/interview/:id/resume', requireOperator, async (req, res) =>
 
 router.get('/api/v1/interview/:id', requireOperator, async (req, res) => {
   try {
-    const result = await getInterview(req.params.id);
+    const result = await loadInterviewScoped(req, req.params.id);
     noStore(res);
     return res.json(result);
   } catch (err) {
@@ -206,7 +284,11 @@ router.get('/api/v1/interview/:id', requireOperator, async (req, res) => {
 
 router.get('/api/v1/interview/:id/blueprint', requireOperator, async (req, res) => {
   try {
+    await loadInterviewScoped(req, req.params.id);
     const result = await getInterviewBlueprint(req.params.id);
+    if (result && result.clientId != null) {
+      assertCieClientAccess(req, result.clientId);
+    }
     noStore(res);
     return res.json(result);
   } catch (err) {
@@ -216,8 +298,10 @@ router.get('/api/v1/interview/:id/blueprint', requireOperator, async (req, res) 
 
 router.post('/api/v1/blueprint/:id/revise', requireOperator, async (req, res) => {
   try {
+    await loadBlueprintScoped(req, req.params.id);
     const body = req.body || {};
     const result = await reviseBlueprint(req.params.id, body.sections || body);
+    assertCieClientAccess(req, result.clientId || (result.blueprint && result.blueprint.clientId));
     noStore(res);
     return res.json(result);
   } catch (err) {
@@ -227,7 +311,12 @@ router.post('/api/v1/blueprint/:id/revise', requireOperator, async (req, res) =>
 
 router.post('/api/v1/blueprint/:id/approve', requireOperator, async (req, res) => {
   try {
+    await loadBlueprintScoped(req, req.params.id);
     const result = await approveBlueprint(req.params.id);
+    assertCieClientAccess(
+      req,
+      result.clientId || (result.blueprint && result.blueprint.clientId)
+    );
     noStore(res);
     return res.json(result);
   } catch (err) {
@@ -240,7 +329,9 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
+      await loadInterviewScoped(req, req.params.id);
       const result = await startGrowthConversation(req.params.id);
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
     } catch (err) {
@@ -254,6 +345,7 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
+      await loadInterviewScoped(req, req.params.id);
       const message = req.body && req.body.message;
       if (message == null || String(message).trim() === '') {
         return res.status(400).json({
@@ -262,6 +354,7 @@ router.post(
         });
       }
       const result = await postGrowthMessage(req.params.id, message);
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
     } catch (err) {
@@ -275,7 +368,9 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
+      await loadInterviewScoped(req, req.params.id);
       const result = await startInfrastructureReadinessConversation(req.params.id);
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
     } catch (err) {
@@ -289,6 +384,7 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
+      await loadInterviewScoped(req, req.params.id);
       const message = req.body && req.body.message;
       if (message == null || String(message).trim() === '') {
         return res.status(400).json({
@@ -297,6 +393,7 @@ router.post(
         });
       }
       const result = await postInfrastructureReadinessMessage(req.params.id, message);
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
     } catch (err) {
@@ -310,7 +407,9 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
+      await loadInterviewScoped(req, req.params.id);
       const result = await startCampaignPlanningConversation(req.params.id);
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
     } catch (err) {
@@ -324,6 +423,7 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
+      await loadInterviewScoped(req, req.params.id);
       const message = req.body && req.body.message;
       if (message == null || String(message).trim() === '') {
         return res.status(400).json({
@@ -332,6 +432,7 @@ router.post(
         });
       }
       const result = await postCampaignPlanningMessage(req.params.id, message);
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
     } catch (err) {
@@ -345,11 +446,13 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
+      await loadInterviewScoped(req, req.params.id);
       const body = req.body || {};
       const result = await completeGrowthPlanTask(req.params.id, req.params.taskId, {
         note: body.note,
         source: body.source || 'operator',
       });
+      assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
     } catch (err) {
@@ -360,7 +463,15 @@ router.post(
 
 router.get('/api/v1/clients/:id/blueprint', requireOperator, async (req, res) => {
   try {
-    const result = await getClientBlueprint(req.params.id);
+    assertRequestedClientMatches(req, req.params.id);
+    const clientId = resolveCieClientId(req, req.params.id);
+    const approvedOnly = parseBool(req.query.approvedOnly, isClientRole(req));
+    const result = approvedOnly
+      ? await getApprovedClientBlueprint(clientId)
+      : await getClientBlueprint(clientId);
+    if (result && result.clientId != null) {
+      assertCieClientAccess(req, result.clientId);
+    }
     noStore(res);
     return res.json(result);
   } catch (err) {
@@ -374,7 +485,7 @@ router.get('/api/v1/clients/:id/blueprint', requireOperator, async (req, res) =>
  */
 router.get(
   '/api/v1/scout/places-diagnostic',
-  requireOperator,
+  requireInternal,
   async (req, res) => {
     try {
       const comparePlacesNew = parseBool(
@@ -406,7 +517,7 @@ router.get(
  */
 router.get(
   '/api/v1/scout/work-requests/:id',
-  requireOperator,
+  requireInternal,
   async (req, res) => {
     try {
       const record = defaultScoutWorkRequestStore.getByWorkRequestId(
@@ -435,7 +546,7 @@ router.get(
 
 router.get(
   '/api/v1/scout/handoffs/:handoffId',
-  requireOperator,
+  requireInternal,
   async (req, res) => {
     try {
       const record = defaultScoutWorkRequestStore.getByHandoffId(
@@ -468,7 +579,7 @@ router.get(
  */
 router.post(
   '/api/v1/scout/work-requests/:id/execute',
-  requireOperator,
+  requireInternal,
   async (req, res) => {
     try {
       const result = await executeScoutWorkRequest({
@@ -495,7 +606,7 @@ router.post(
  */
 router.post(
   '/api/v1/scout/work-requests/:id/approve-results',
-  requireOperator,
+  requireInternal,
   async (req, res) => {
     try {
       const record = defaultScoutWorkRequestStore.getByWorkRequestId(
