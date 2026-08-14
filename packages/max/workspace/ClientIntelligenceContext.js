@@ -31,21 +31,45 @@ function sectionSummary(sections, key) {
   return s.summary != null ? String(s.summary).trim() : '';
 }
 
+/**
+ * SPEC-099 — strip literal uncertainty phrases so Max never treats them as facts.
+ */
+function sanitizeFactSummary(text) {
+  const s = String(text || '').trim();
+  if (!s) return '';
+  if (/\bi don'?t know\b|\bnot sure yet\b|\bhaven'?t figured\b/i.test(s)) {
+    return '';
+  }
+  if (/^ideal customers are\s+(i don'?t know|not sure|unknown)\b/i.test(s)) {
+    return '';
+  }
+  return s;
+}
+
 function normalizeBlueprintSummary(blueprint) {
   if (!blueprint || typeof blueprint !== 'object') return null;
   const sections = blueprint.sections || {};
-  const identity = sectionSummary(sections, 'identity');
-  const services = sectionSummary(sections, 'services');
-  const idealCustomers = sectionSummary(sections, 'idealCustomers');
-  const avoidCustomers = sectionSummary(sections, 'avoidCustomers');
-  const targetMarkets = sectionSummary(sections, 'targetMarkets');
-  const competitiveAdvantages = sectionSummary(
-    sections,
-    'competitiveAdvantages'
+  const identity = sanitizeFactSummary(sectionSummary(sections, 'identity'));
+  const services = sanitizeFactSummary(sectionSummary(sections, 'services'));
+  const idealCustomers = sanitizeFactSummary(
+    sectionSummary(sections, 'idealCustomers')
   );
-  const brandVoice = sectionSummary(sections, 'brandVoice');
-  const campaignGoals = sectionSummary(sections, 'campaignGoals');
-  const successMetrics = sectionSummary(sections, 'successMetrics');
+  const avoidCustomers = sanitizeFactSummary(
+    sectionSummary(sections, 'avoidCustomers')
+  );
+  const targetMarkets = sanitizeFactSummary(
+    sectionSummary(sections, 'targetMarkets')
+  );
+  const competitiveAdvantages = sanitizeFactSummary(
+    sectionSummary(sections, 'competitiveAdvantages')
+  );
+  const brandVoice = sanitizeFactSummary(sectionSummary(sections, 'brandVoice'));
+  const campaignGoals = sanitizeFactSummary(
+    sectionSummary(sections, 'campaignGoals')
+  );
+  const successMetrics = sanitizeFactSummary(
+    sectionSummary(sections, 'successMetrics')
+  );
 
   const unknowns = [];
   for (const [key, label] of [
@@ -55,7 +79,19 @@ function normalizeBlueprintSummary(blueprint) {
     ['targetMarkets', 'where you operate'],
     ['campaignGoals', 'what you want next'],
   ]) {
-    if (!sectionSummary(sections, key)) unknowns.push(label);
+    if (!sanitizeFactSummary(sectionSummary(sections, key))) unknowns.push(label);
+  }
+  // Surface explicit section unknowns (e.g. unresolved commercial ICP) ahead of soft gaps.
+  for (const key of Object.keys(sections || {})) {
+    const section = sections[key];
+    for (const u of (section && section.unknowns) || []) {
+      const label = String(u || '').trim();
+      if (!label) continue;
+      if (!unknowns.some((x) => x.toLowerCase() === label.toLowerCase())) {
+        if (/commercial customer segment/i.test(label)) unknowns.unshift(label);
+        else unknowns.push(label);
+      }
+    }
   }
 
   const confidence = blueprint.confidenceSummary || null;
@@ -498,4 +534,6 @@ module.exports = {
   looksLikeFocusAsk,
   formatUnderstandingAnswer,
   formatMissingAnswer,
+  formatUnknownsAnswer,
+  sanitizeFactSummary,
 };
