@@ -3487,9 +3487,7 @@
       if (els.workspaceTabs) els.workspaceTabs.hidden = true;
       if (els.savedSessions) els.savedSessions.classList.remove('workspace-left-nav');
       if (state.isClientRole) {
-        const company =
-          (window.PulseforgeShell && window.PulseforgeShell.tenantName) ||
-          'your business';
+        const company = clientCompanyLabel();
         addBubble(
           'assistant',
           "Welcome.\n\nBefore Max can give you useful guidance, he needs to understand your business.\n\nThis conversation helps Max learn who you serve, what you offer, where you're trying to go, and what still needs to be understood.\n\nWhen you're ready, start with Max."
@@ -3524,12 +3522,18 @@
       return (els.clientId && els.clientId.value.trim()) || '1';
     }
 
+    function clientCompanyLabel() {
+      return (
+        state.clientDisplayName ||
+        (window.PulseforgeShell && window.PulseforgeShell.tenantName) ||
+        'your business'
+      );
+    }
+
     function applyClientRoleUi() {
       if (!state.isClientRole) return;
       document.body.classList.add('client-role');
-      const company =
-        (window.PulseforgeShell && window.PulseforgeShell.tenantName) ||
-        'your business';
+      const company = clientCompanyLabel();
       const pageTitle = document.getElementById('ciePageTitle');
       const pageSub = document.getElementById('ciePageSub');
       if (pageTitle) pageTitle.textContent = 'My Business';
@@ -3556,9 +3560,7 @@
 
     function applyClientPhaseCopy(phase) {
       if (!state.isClientRole) return;
-      const company =
-        (window.PulseforgeShell && window.PulseforgeShell.tenantName) ||
-        'your business';
+      const company = clientCompanyLabel();
       if (phase === 'welcome') {
         els.sidePanelTitle.textContent = 'My Business';
         els.sidePanelSub.textContent = 'Help Max understand ' + company + '.';
@@ -3595,6 +3597,8 @@
             : data.active_client_id != null
               ? Number(data.active_client_id)
               : null;
+        state.clientDisplayName =
+          (data.client && (data.client.display_name || data.client.name)) || null;
         applyClientRoleUi();
       } catch (_) {
         /* keep operator defaults */

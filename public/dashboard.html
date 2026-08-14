@@ -3988,6 +3988,7 @@ let _statsCache = null, _activityCache = null;
 let _statsCacheTime = 0, _activityCacheTime = 0;
 let _liveRings = {}, _currentDetailKey = null;
 let _currentUserRole = null;
+let _clientWorkspaceName = null;
 let _prospectCountData = null;
 let _pipelineProspectStages = [];
 const PROSPECT_PIPELINE_STAGES = ['cold', 'contacted', 'warm', 'booked', 'closed'];
@@ -4037,6 +4038,7 @@ function applyClientHomeSurface() {
 }
 
 function clientWorkspaceLabel() {
+  if (_clientWorkspaceName) return _clientWorkspaceName;
   const shell = window.PulseforgeShell;
   return (
     shell?.tenantName ||
@@ -4419,6 +4421,8 @@ fetch('/api/me', { credentials: 'include' })
     const user = data?.user;
     const role = user?.role;
     _currentUserRole = role;
+    _clientWorkspaceName =
+      data?.client?.display_name || data?.client?.name || null;
     const isOperator = ['admin', 'manager'].includes(role);
     const isViewer = ['viewer', 'client'].includes(role);
     if (role === 'admin') document.getElementById('usersTab').style.display = 'block';
@@ -4435,6 +4439,15 @@ fetch('/api/me', { credentials: 'include' })
     loadAgentVisibility();
   })
   .catch(() => {});
+
+document.addEventListener('pulseforge:shell-ready', (event) => {
+  if (_currentUserRole !== 'client') return;
+  const name = event?.detail?.tenantName;
+  if (name) {
+    _clientWorkspaceName = name;
+    loadClientHomeOnboarding();
+  }
+});
 
 (function setupMobileNav() {
   const sidebar = document.getElementById('sidebar');
