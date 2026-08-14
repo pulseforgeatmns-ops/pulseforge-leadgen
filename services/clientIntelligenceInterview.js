@@ -4494,14 +4494,193 @@ function mapNotesToSections(notes) {
   return extractNotesIntoSections(notes).assigned;
 }
 
+const ACTIVE_INTERVIEW_STATUSES = Object.freeze([
+  'NEW',
+  'DISCOVERY',
+  'CLARIFICATION',
+  'VALIDATION',
+  'BLUEPRINT_GENERATION',
+  'CLIENT_REVIEW',
+]);
+
+/**
+ * Find the most recent non-sample session for a client (any status).
+ */
+async function listClientSessions(store, clientId, { limit = 40 } = {}) {
+  const rows = await store.listSessions({
+    clientId: asClientId(clientId),
+    limit: Math.max(1, Math.min(200, Number(limit) || 40)),
+  });
+  return (rows || []).filter((row) => !sessionIsSample(row));
+}
+
+/**
+ * Active (incomplete) interview for ordinary client return — not samples.
+ */
+async function findActiveInterviewForClient(clientId, opts = {}) {
+  const store = await resolveStore(opts);
+  const rows = await listClientSessions(store, clientId, { limit: 40 });
+  return (
+    rows.find((row) => ACTIVE_INTERVIEW_STATUSES.includes(row.status)) || null
+  );
+}
+
+/**
+ * SPEC-097 — Resolve durable onboarding state for an authenticated client.
+ * Database sessions/blueprints remain authoritative; no parallel persistence.
+ */
+async function resolveClientOnboardingState(clientId, opts = {}) {
+  const store = await resolveStore(opts);
+  const id = asClientId(clientId);
+  const rows = await listClientSessions(store, id, { limit: 40 });
+
+  const active = rows.find((row) =>
+    ACTIVE_INTERVIEW_STATUSES.includes(row.status)
+  );
+  const approved = rows.find((row) => row.status === 'APPROVED');
+
+  if (!active && !approved) {
+    return {
+      ok: true,
+      clientId: id,
+      onboardingState: 'none',
+      interviewId: null,
+      status: null,
+      resumeTarget: null,
+      message: 'No existing onboarding state — begin interview when ready.',
+      recovered: false,
+    };
+  }
+
+  if (active) {
+    const detail = await getInterview(active.id, opts);
+    const onboardingState =
+      active.status === 'CLIENT_REVIEW'
+        ? 'blueprint_review'
+        : active.status === 'BLUEPRINT_GENERATION'
+          ? 'blueprint_review'
+          : 'interview_in_progress';
+    return {
+      ok: true,
+      clientId: id,
+      onboardingState,
+      interviewId: active.id,
+      status: active.status,
+      resumeTarget: detail.resumeTarget || null,
+      resumePhase: detail.resumePhase || null,
+      recovered: true,
+      resumedExisting: true,
+      ...detail,
+      message:
+        onboardingState === 'blueprint_review'
+          ? 'Recovered pending Blueprint review for this client.'
+          : 'Recovered active interview for this client.',
+    };
+  }
+
+  const detail = await getInterview(approved.id, opts);
+  const resumeTarget = detail.resumeTarget || 'initial_growth_direction';
+  const onboardingState =
+    resumeTarget === 'growth_complete' ? 'completed' : 'blueprint_approved';
+  return {
+    ok: true,
+    clientId: id,
+    onboardingState,
+    interviewId: approved.id,
+    status: approved.status,
+    resumeTarget,
+    resumePhase: detail.resumePhase || null,
+    recovered: true,
+    resumedExisting: true,
+    ...detail,
+    message:
+      onboardingState === 'completed'
+        ? 'Blueprint approved and Growth Plan complete — Max is the next primary interface.'
+        : 'Recovered approved Blueprint — strategy/execution remains review-controlled.',
+  };
+}
+
+/**
+ * Most recently approved Blueprint for a client (no pending/draft fallback).
+ */
+async function getApprovedClientBlueprint(clientId, opts = {}) {
+  const store = await resolveStore(opts);
+  const id = asClientId(clientId);
+  const approved = await store.listBlueprintsForClient(id, {
+    status: 'approved',
+  });
+  if (!approved || !approved[0]) {
+    throw new ClientIntelligenceError(
+      'not_found',
+      'No approved blueprint for client',
+      404
+    );
+  }
+  return publicBlueprint(approved[0]);
+}
+
+/**
+ * Load a blueprint by id for ownership checks (SPEC-096).
+ */
+async function getBlueprintRecord(blueprintId, opts = {}) {
+  const store = await resolveStore(opts);
+  const bp = await store.getBlueprint(blueprintId);
+  if (!bp) {
+    throw new ClientIntelligenceError('not_found', 'Blueprint not found', 404);
+  }
+  return publicBlueprint(bp);
+}
+
 /**
  * Start interview for a client.
- * @param {{ clientId: number|string, notes?: string, source?: string }} input
+ * SPEC-097: reuses an active non-sample interview unless forceNew or notes mode.
+ * @param {{ clientId: number|string, notes?: string, source?: string, forceNew?: boolean }} input
  */
 async function startClientInterview(input = {}, opts = {}) {
   const store = await resolveStore(opts);
   const clientId = asClientId(input.clientId);
   const notes = asText(input.notes);
+  const forceNew = Boolean(input.forceNew || opts.forceNew);
+
+  // Ordinary reopen / double-click / refresh must not spawn duplicate actives.
+  if (!forceNew && !notes) {
+    const existing = await findActiveInterviewForClient(clientId, opts);
+    if (existing) {
+      const detail = await getInterview(existing.id, opts);
+      const q = currentQuestion(existing.interview_state);
+      return withExperienceFields(existing, {
+        interviewId: existing.id,
+        ...publicSession(existing),
+        ...detail,
+        mode: 'interactive',
+        nextAction:
+          existing.status === 'CLIENT_REVIEW'
+            ? 'COMPLETE'
+            : q
+              ? 'ASK'
+              : detail.nextAction || 'ASK',
+        question: q
+          ? {
+              id: q.question.id,
+              prompt: q.question.prompt,
+              stage: q.question.stage,
+              section: q.question.section,
+              goal: q.question.goal,
+              askedBecause: q.question.askedBecause,
+            }
+          : detail.question || null,
+        message:
+          existing.status === 'CLIENT_REVIEW'
+            ? 'Recovered pending Blueprint review — no new interview started.'
+            : (q && q.question && q.question.prompt) ||
+              detail.message ||
+              'Resumed your existing interview.',
+        resumedExisting: true,
+        recovered: true,
+      });
+    }
+  }
+
   const state = initialInterviewState({ notes });
   const session = await store.insertSession({
     id: newId(),
@@ -5482,6 +5661,14 @@ async function listApprovedBlueprintSessions(opts = {}) {
     opts.clientId != null && opts.clientId !== ''
       ? asClientId(opts.clientId)
       : null;
+  // When a clientId is required (client-role callers), never omit the filter.
+  if (opts.requireClientId && clientId == null) {
+    throw new ClientIntelligenceError(
+      'invalid_client_id',
+      'client id is required',
+      400
+    );
+  }
   const includeSamples =
     opts.includeSamples == null ? true : Boolean(opts.includeSamples);
   const samplesOnly = Boolean(opts.samplesOnly);
@@ -7759,12 +7946,17 @@ module.exports = {
   hasSpecificitySignals,
   looksAmbiguous,
   assertTransition,
+  ACTIVE_INTERVIEW_STATUSES,
   startClientInterview,
+  findActiveInterviewForClient,
+  resolveClientOnboardingState,
   postInterviewMessage,
   resumeInterview,
   getInterview,
   getInterviewBlueprint,
   getClientBlueprint,
+  getApprovedClientBlueprint,
+  getBlueprintRecord,
   listApprovedBlueprintSessions,
   getResumePayload,
   loadAnchorSampleBlueprint,

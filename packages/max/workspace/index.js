@@ -60,6 +60,11 @@ const {
   attachActiveObjectiveContext,
   synthesizeObjectivePaigeResponse,
 } = require('./OperatorObjectiveContext');
+const {
+  maybeHandleClientIntelligenceTurn,
+  attachClientIntelligenceContext,
+  loadApprovedClientIntelligence,
+} = require('./ClientIntelligenceContext');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -68,6 +73,9 @@ module.exports = {
   maybeHandleOperatorObjectiveTurn,
   attachActiveObjectiveContext,
   synthesizeObjectivePaigeResponse,
+  maybeHandleClientIntelligenceTurn,
+  attachClientIntelligenceContext,
+  loadApprovedClientIntelligence,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

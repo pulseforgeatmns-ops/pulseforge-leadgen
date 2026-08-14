@@ -1030,7 +1030,8 @@
         </div>
       </div>
       <div class="controls soft" id="operatorControls">
-        <label>Client ID <input id="clientId" value="1" inputmode="numeric"></label>
+        <label id="clientIdLabel">Client ID <input id="clientId" value="1" inputmode="numeric"></label>
+        <p id="clientScopeLabel" class="sub" hidden></p>
         <button type="button" id="startBtn">Begin</button>
         <button type="button" id="notesBtn" class="secondary">Start from notes</button>
         <button type="button" id="newInterviewBtn" class="secondary" hidden>Start New Interview</button>
@@ -1160,10 +1161,15 @@
       savedSessions: [],
       fixturesAllowed: false,
       taskGuidanceOpen: false,
+      authRole: null,
+      authClientId: null,
+      isClientRole: false,
     };
 
     const els = {
       clientId: document.getElementById('clientId'),
+      clientIdLabel: document.getElementById('clientIdLabel'),
+      clientScopeLabel: document.getElementById('clientScopeLabel'),
       chatLog: document.getElementById('chatLog'),
       messageInput: document.getElementById('messageInput'),
       sendBtn: document.getElementById('sendBtn'),
@@ -2245,18 +2251,19 @@
       els.sidePanel.innerHTML =
         '<div class="completion-card" id="approvalSuccess">' +
           '<h3>Blueprint approved</h3>' +
-          '<p>This Business Blueprint is now the foundation Pulseforge will use to understand your business.</p>' +
+          '<p>Pulseforge has learned your business. This approved Blueprint is the foundation Max will use going forward.</p>' +
           '<ul class="completion-checks">' +
             '<li>Version ' + escapeHtml(String(version)) + ' approved</li>' +
             '<li>Client Playbook ready · ' + playbookLabel + '</li>' +
-            '<li>Awaiting operator review</li>' +
+            '<li>Strategy and execution stay review-controlled</li>' +
+            '<li>Max is your next primary interface</li>' +
           '</ul>' +
           renderGrowthDirection(gd) +
         '</div>';
       els.sidePanelTitle.textContent = gd ? 'Initial Growth Direction' : 'Client Playbook';
       els.sidePanelSub.textContent = gd
         ? 'Blueprint approved · directional first-focus preview'
-        : 'Blueprint approved. Client Playbook is ready.';
+        : 'Blueprint approved. Ask Max — you do not need to restate onboarding.';
       els.blueprintActions.hidden = true;
       els.approveBtn.disabled = true;
       els.approveBtn.textContent = 'Blueprint approved';
@@ -2854,20 +2861,26 @@
 
     async function loadSavedSessions() {
       try {
-        const clientId = (els.clientId && els.clientId.value.trim()) || '';
-        const qs = new URLSearchParams({ includeSamples: '1', limit: '20' });
+        const clientId = resolvedClientId();
+        const qs = new URLSearchParams({
+          includeSamples: state.isClientRole ? '0' : '1',
+          limit: '20',
+        });
         if (clientId) qs.set('clientId', clientId);
         const data = await api('GET', '/api/v1/client-intel/sessions?' + qs.toString());
-        state.fixturesAllowed = Boolean(data && data.fixturesAllowed);
+        state.fixturesAllowed = Boolean(data && data.fixturesAllowed) && !state.isClientRole;
         if (els.loadAnchorFixtureBtn) {
           els.loadAnchorFixtureBtn.hidden =
-            state.phase !== 'welcome' || !state.fixturesAllowed;
+            state.isClientRole ||
+            state.phase !== 'welcome' ||
+            !state.fixturesAllowed;
         }
         renderSavedSessions((data && data.sessions) || []);
       } catch (_) {
-        state.fixturesAllowed = true;
+        state.fixturesAllowed = !state.isClientRole;
         if (els.loadAnchorFixtureBtn) {
-          els.loadAnchorFixtureBtn.hidden = state.phase !== 'welcome';
+          els.loadAnchorFixtureBtn.hidden =
+            state.isClientRole || state.phase !== 'welcome';
         }
         renderSavedSessions([]);
       }
@@ -3451,18 +3464,113 @@
 
     function startNewInterviewFlow() {
       showWelcome();
-      els.clientId.focus();
+      if (!state.isClientRole && els.clientId) els.clientId.focus();
       addBubble('meta', 'Start a new interview when ready — existing approved Blueprints stay saved.');
+    }
+
+    function resolvedClientId() {
+      if (state.isClientRole && state.authClientId) {
+        return String(state.authClientId);
+      }
+      return (els.clientId && els.clientId.value.trim()) || '1';
+    }
+
+    function applyClientRoleUi() {
+      if (!state.isClientRole) return;
+      if (els.clientIdLabel) els.clientIdLabel.hidden = true;
+      if (els.clientId) {
+        els.clientId.value = String(state.authClientId || '');
+        els.clientId.disabled = true;
+        els.clientId.readOnly = true;
+      }
+      if (els.clientScopeLabel) {
+        els.clientScopeLabel.hidden = false;
+        els.clientScopeLabel.textContent =
+          'Signed in for your business — client scope is fixed by your account.';
+      }
+      if (els.notesBtn) els.notesBtn.hidden = true;
+      if (els.loadAnchorFixtureBtn) els.loadAnchorFixtureBtn.hidden = true;
+      if (els.newInterviewBtn) els.newInterviewBtn.hidden = true;
+    }
+
+    async function loadAuthContext() {
+      try {
+        const res = await fetch('/api/me', {
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const user = data.user || {};
+        state.authRole = user.role || null;
+        state.isClientRole = user.role === 'client';
+        state.authClientId =
+          user.client_id != null
+            ? Number(user.client_id)
+            : data.active_client_id != null
+              ? Number(data.active_client_id)
+              : null;
+        applyClientRoleUi();
+      } catch (_) {
+        /* keep operator defaults */
+      }
+    }
+
+    async function recoverOnboardingState() {
+      const data = await api('GET', '/api/v1/client-intel/onboarding');
+      if (!data || data.onboardingState === 'none') {
+        showWelcome();
+        return data;
+      }
+      if (data.clientId != null && els.clientId && !state.isClientRole) {
+        els.clientId.value = String(data.clientId);
+      }
+      if (
+        data.onboardingState === 'interview_in_progress' ||
+        data.onboardingState === 'blueprint_review'
+      ) {
+        if (data.status === 'CLIENT_REVIEW' || data.onboardingState === 'blueprint_review') {
+          applyResumeState(data, 'continue');
+        } else {
+          setPhase('discovery');
+          els.chatLog.innerHTML = '';
+          state.stickToBottom = true;
+          applyDiscoveryPayload(data, { skipMessage: true });
+          if (data.turns && Array.isArray(data.turns)) {
+            for (const turn of data.turns) {
+              if (turn.speaker === 'assistant' || turn.speaker === 'client') {
+                addBubble(
+                  turn.speaker === 'assistant' ? 'assistant' : 'client',
+                  turn.message
+                );
+              }
+            }
+          } else if (data.message) {
+            addBubble('assistant', data.message);
+          }
+          setComposerEnabled(true);
+        }
+        addBubble('meta', data.message || 'Recovered your saved onboarding progress.');
+        return data;
+      }
+      applyResumeState(data, 'continue');
+      addBubble('meta', data.message || 'Recovered your approved Blueprint.');
+      return data;
     }
 
     els.startBtn.addEventListener('click', async () => {
       try {
-        const clientId = els.clientId.value.trim() || '1';
+        const clientId = resolvedClientId();
         els.chatLog.innerHTML = '';
         state.stickToBottom = true;
         if (els.savedSessions) els.savedSessions.hidden = true;
         setPhase('discovery');
         const data = await api('POST', '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start', {});
+        if (data && data.resumedExisting && (data.status === 'CLIENT_REVIEW' || data.onboardingState === 'blueprint_review')) {
+          applyResumeState(data, 'continue');
+          addBubble('meta', data.message || 'Resumed your existing onboarding.');
+          return;
+        }
         applyDiscoveryPayload(data);
         setComposerEnabled(true);
       } catch (err) {
@@ -3472,10 +3580,11 @@
     });
 
     els.notesBtn.addEventListener('click', async () => {
+      if (state.isClientRole) return;
       try {
         const notes = prompt('Paste business notes:');
         if (!notes) return;
-        const clientId = els.clientId.value.trim() || '1';
+        const clientId = resolvedClientId();
         els.chatLog.innerHTML = '';
         state.stickToBottom = true;
         addBubble('client', notes);
@@ -4080,11 +4189,15 @@
     }
 
     async function bootFromQuery() {
+      await loadAuthContext();
       const params = new URLSearchParams(window.location.search || '');
       const interviewId = params.get('interviewId') || params.get('sessionId');
       const action = params.get('action') || 'continue';
       const clientId = params.get('clientId');
-      if (clientId && els.clientId) els.clientId.value = clientId;
+      // Client role ignores URL clientId overrides (SPEC-096).
+      if (clientId && els.clientId && !state.isClientRole) {
+        els.clientId.value = clientId;
+      }
 
       if (action === 'new' && !interviewId) {
         showWelcome();
@@ -4100,7 +4213,14 @@
           showError(err.message);
         }
       }
-      showWelcome();
+
+      // SPEC-097 — reconnect to durable CIE state without requiring an interview ID.
+      try {
+        await recoverOnboardingState();
+      } catch (err) {
+        showError(err.message);
+        showWelcome();
+      }
     }
 
     window.addEventListener('resize', () => {
