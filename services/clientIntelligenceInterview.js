@@ -5021,6 +5021,31 @@ const ACTIVE_INTERVIEW_STATUSES = Object.freeze([
 ]);
 
 /**
+ * SPEC-099 — Historical / abandoned onboarding marked via interview_state
+ * (no schema migration). Superseded sessions must not win recovery.
+ */
+function sessionIsSuperseded(session) {
+  const state = (session && session.interview_state) || {};
+  return Boolean(
+    state.supersededAt ||
+      state.superseded_at ||
+      state.abandonedAt ||
+      state.abandoned_at ||
+      state.lifecycle === 'superseded' ||
+      state.lifecycle === 'abandoned'
+  );
+}
+
+function isRecoverableActiveInterview(session) {
+  return Boolean(
+    session &&
+      ACTIVE_INTERVIEW_STATUSES.includes(session.status) &&
+      !sessionIsSample(session) &&
+      !sessionIsSuperseded(session)
+  );
+}
+
+/**
  * Find the most recent non-sample session for a client (any status).
  */
 async function listClientSessions(store, clientId, { limit = 40 } = {}) {
@@ -5033,28 +5058,88 @@ async function listClientSessions(store, clientId, { limit = 40 } = {}) {
 
 /**
  * Active (incomplete) interview for ordinary client return — not samples.
+ * SPEC-099: excludes superseded/abandoned onboarding.
  */
 async function findActiveInterviewForClient(clientId, opts = {}) {
   const store = await resolveStore(opts);
   const rows = await listClientSessions(store, clientId, { limit: 40 });
-  return (
-    rows.find((row) => ACTIVE_INTERVIEW_STATUSES.includes(row.status)) || null
-  );
+  return rows.find((row) => isRecoverableActiveInterview(row)) || null;
+}
+
+/**
+ * Mark draft/in_review blueprints for a session as superseded.
+ * Never touches approved blueprints (SPEC-099 / SPEC-098).
+ */
+async function supersedeUnapprovedBlueprintsForSession(store, session) {
+  if (!session) return [];
+  const clientId = asClientId(session.client_id);
+  const all = await store.listBlueprintsForClient(clientId);
+  const touched = [];
+  for (const bp of all || []) {
+    if (String(bp.session_id) !== String(session.id)) continue;
+    const status = String(bp.status || '').toLowerCase();
+    if (status === 'approved' || status === 'superseded') continue;
+    if (status !== 'draft' && status !== 'in_review') continue;
+    const updated = await store.updateBlueprint(bp.id, bp.version, {
+      status: 'superseded',
+    });
+    if (updated) touched.push(updated);
+  }
+  return touched;
+}
+
+/**
+ * SPEC-099 — Abandon current unapproved onboarding so it cannot hijack recovery.
+ * Preserves historical rows; marks lifecycle superseded in interview_state.
+ */
+async function supersedeUnapprovedOnboardingForClient(
+  clientId,
+  { supersededBy = null, reason = 'explicit_restart' } = {},
+  opts = {}
+) {
+  const store = await resolveStore(opts);
+  const id = asClientId(clientId);
+  const rows = await listClientSessions(store, id, { limit: 40 });
+  const actives = rows.filter((row) => isRecoverableActiveInterview(row));
+  const superseded = [];
+  const at = nowIso();
+
+  for (const session of actives) {
+    await supersedeUnapprovedBlueprintsForSession(store, session);
+    const nextState = {
+      ...(session.interview_state || {}),
+      lifecycle: 'superseded',
+      supersededAt: at,
+      supersededReason: reason,
+      ...(supersededBy ? { supersededBy: String(supersededBy) } : {}),
+    };
+    const updated = await store.updateSession(session.id, {
+      interview_state: nextState,
+      // Keep prior status for audit; recovery uses lifecycle flag.
+      summary: session.summary
+        ? `${session.summary} (superseded)`
+        : 'Superseded by explicit interview restart',
+    });
+    superseded.push(updated || { ...session, interview_state: nextState });
+  }
+
+  return { supersededSessions: superseded, count: superseded.length };
 }
 
 /**
  * SPEC-097 — Resolve durable onboarding state for an authenticated client.
  * Database sessions/blueprints remain authoritative; no parallel persistence.
+ * SPEC-099 — prefers current (non-superseded) interview over historical drafts.
  */
 async function resolveClientOnboardingState(clientId, opts = {}) {
   const store = await resolveStore(opts);
   const id = asClientId(clientId);
   const rows = await listClientSessions(store, id, { limit: 40 });
 
-  const active = rows.find((row) =>
-    ACTIVE_INTERVIEW_STATUSES.includes(row.status)
+  const active = rows.find((row) => isRecoverableActiveInterview(row));
+  const approved = rows.find(
+    (row) => row.status === 'APPROVED' && !sessionIsSuperseded(row)
   );
-  const approved = rows.find((row) => row.status === 'APPROVED');
 
   if (!active && !approved) {
     return {
@@ -5151,16 +5236,42 @@ async function getBlueprintRecord(blueprintId, opts = {}) {
 /**
  * Start interview for a client.
  * SPEC-097: reuses an active non-sample interview unless forceNew or notes mode.
- * @param {{ clientId: number|string, notes?: string, source?: string, forceNew?: boolean }} input
+ * SPEC-099: explicit restart supersedes unfinished unapproved onboarding first.
+ * @param {{ clientId: number|string, notes?: string, source?: string, forceNew?: boolean, restart?: boolean }} input
  */
 async function startClientInterview(input = {}, opts = {}) {
   const store = await resolveStore(opts);
   const clientId = asClientId(input.clientId);
   const notes = asText(input.notes);
   const forceNew = Boolean(input.forceNew || opts.forceNew);
+  const restart = Boolean(input.restart || opts.restart);
+
+  // SPEC-099 — EXPLICIT_RESTART is distinct from ordinary START_OR_RESUME.
+  if (restart) {
+    const rows = await listClientSessions(store, clientId, { limit: 40 });
+    const actives = rows.filter((row) => isRecoverableActiveInterview(row));
+    const approved = rows.find(
+      (row) => row.status === 'APPROVED' && !sessionIsSuperseded(row)
+    );
+    if (!actives.length && approved) {
+      throw new ClientIntelligenceError(
+        'approved_blueprint_protected',
+        'An approved Blueprint already exists. Start New Interview will not discard approved understanding — revise the Blueprint instead.',
+        409
+      );
+    }
+    if (actives.length) {
+      await supersedeUnapprovedOnboardingForClient(
+        clientId,
+        { reason: 'explicit_restart' },
+        opts
+      );
+    }
+  }
 
   // Ordinary reopen / double-click / refresh must not spawn duplicate actives.
-  if (!forceNew && !notes) {
+  // Explicit restart and forceNew skip reuse so a fresh interview is created.
+  if (!restart && !forceNew && !notes) {
     const existing = await findActiveInterviewForClient(clientId, opts);
     if (existing) {
       const detail = await getInterview(existing.id, opts);
@@ -5213,6 +5324,24 @@ async function startClientInterview(input = {}, opts = {}) {
 
   advanceStatus(session, 'DISCOVERY');
   session.status = 'DISCOVERY';
+
+  if (restart) {
+    // Stamp the new interview id onto just-superseded rows for auditability.
+    const prior = await listClientSessions(store, clientId, { limit: 40 });
+    for (const row of prior) {
+      if (String(row.id) === String(session.id)) continue;
+      if (!sessionIsSuperseded(row)) continue;
+      const st = row.interview_state || {};
+      if (st.supersededBy) continue;
+      if (st.supersededReason !== 'explicit_restart') continue;
+      await store.updateSession(row.id, {
+        interview_state: {
+          ...st,
+          supersededBy: String(session.id),
+        },
+      });
+    }
+  }
 
   if (notes) {
     const { assigned: mapped, guidance } = extractNotesIntoSections(notes);
@@ -5302,6 +5431,9 @@ async function startClientInterview(input = {}, opts = {}) {
     message: q.question.prompt,
     turnId: assistantTurn.id,
     blueprint: null,
+    restarted: Boolean(restart),
+    resumedExisting: false,
+    recovered: false,
   });
 }
 
@@ -6680,7 +6812,11 @@ async function getClientBlueprint(clientId, opts = {}) {
   const approved = await store.listBlueprintsForClient(id, { status: 'approved' });
   if (approved[0]) return publicBlueprint(approved[0]);
   const any = await store.listBlueprintsForClient(id);
-  if (any[0]) return publicBlueprint(any[0]);
+  // SPEC-099 — superseded drafts must not become "current" client blueprint.
+  const current = (any || []).find(
+    (bp) => String(bp.status || '').toLowerCase() !== 'superseded'
+  );
+  if (current) return publicBlueprint(current);
   throw new ClientIntelligenceError('not_found', 'No blueprint for client', 404);
 }
 
@@ -8588,6 +8724,9 @@ module.exports = {
   startClientInterview,
   findActiveInterviewForClient,
   resolveClientOnboardingState,
+  sessionIsSuperseded,
+  isRecoverableActiveInterview,
+  supersedeUnapprovedOnboardingForClient,
   postInterviewMessage,
   resumeInterview,
   getInterview,

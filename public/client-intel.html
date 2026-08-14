@@ -1192,6 +1192,8 @@
       authClientId: null,
       clientDisplayName: null,
       isClientRole: false,
+      onboardingState: 'none',
+      hasUnapprovedOnboarding: false,
     };
 
     const els = {
@@ -2401,6 +2403,37 @@
       }
     }
 
+    function hasApprovedUnderstanding() {
+      const bp = state.blueprint;
+      return !!(
+        state.sessionStatus === 'APPROVED' ||
+        (bp && String(bp.status || '').toLowerCase() === 'approved')
+      );
+    }
+
+    function syncStartNewInterviewButton() {
+      if (!els.newInterviewBtn) return;
+      // SPEC-099 — show when unfinished unapproved onboarding can be abandoned.
+      // Hide once an approved Blueprint is the authoritative understanding.
+      if (hasApprovedUnderstanding() && !state.hasUnapprovedOnboarding) {
+        els.newInterviewBtn.hidden = true;
+        return;
+      }
+      const show =
+        state.hasUnapprovedOnboarding ||
+        state.phase === 'welcome' ||
+        state.phase === 'blueprint' ||
+        state.phase === 'executive_summary' ||
+        state.phase === 'growth_workspace' ||
+        state.onboardingState === 'blueprint_review' ||
+        state.onboardingState === 'interview_in_progress';
+      els.newInterviewBtn.hidden = !show;
+      // Keep the control reachable outside welcome (operatorControls is welcome-only).
+      if (show && els.operatorControls && state.phase !== 'welcome') {
+        els.newInterviewBtn.hidden = false;
+      }
+    }
+
     function setPhase(phase) {
       state.phase = phase;
       els.execActions.hidden = phase !== 'executive_summary';
@@ -2414,8 +2447,22 @@
         els.savedSessions.hidden = !showNav;
         els.savedSessions.classList.toggle('workspace-left-nav', phase === 'growth_workspace');
       }
-      if (els.newInterviewBtn) {
-        els.newInterviewBtn.hidden = phase !== 'welcome';
+      syncStartNewInterviewButton();
+      // When restart CTA must show outside welcome, keep only that control visible.
+      if (
+        els.operatorControls &&
+        phase !== 'welcome' &&
+        els.newInterviewBtn &&
+        !els.newInterviewBtn.hidden
+      ) {
+        els.operatorControls.hidden = false;
+        if (els.clientIdLabel) els.clientIdLabel.hidden = true;
+        if (els.startBtn) els.startBtn.hidden = true;
+        if (els.notesBtn) els.notesBtn.hidden = true;
+        if (els.loadAnchorFixtureBtn) els.loadAnchorFixtureBtn.hidden = true;
+        if (els.clientScopeLabel && state.isClientRole) {
+          els.clientScopeLabel.hidden = false;
+        }
       }
       if (els.loadAnchorFixtureBtn) {
         els.loadAnchorFixtureBtn.hidden =
@@ -2433,6 +2480,9 @@
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Conversation';
         if (els.workspaceTabs) els.workspaceTabs.hidden = true;
+        if (els.startBtn) els.startBtn.hidden = false;
+        if (els.notesBtn) els.notesBtn.hidden = Boolean(state.isClientRole);
+        if (els.clientIdLabel) els.clientIdLabel.hidden = Boolean(state.isClientRole);
         applyClientPhaseCopy(phase);
       } else if (phase === 'discovery') {
         setComposerEnabled(true);
@@ -2740,7 +2790,12 @@
             '<button type="button" class="secondary" data-action="view" data-session-id="' +
               escapeHtml(id) +
             '">View Blueprint</button>' +
-            (primary
+            (primary &&
+            !(
+              s.status === 'APPROVED' ||
+              (s.blueprintStatus &&
+                String(s.blueprintStatus).toLowerCase() === 'approved')
+            )
               ? '<button type="button" class="secondary" data-action="new">Start New Interview</button>'
               : '') +
           '</div>' +
@@ -3510,10 +3565,66 @@
       loadSavedSessions();
     }
 
-    function startNewInterviewFlow() {
-      showWelcome();
-      if (!state.isClientRole && els.clientId) els.clientId.focus();
-      addBubble('meta', 'Start a new interview when ready — existing approved Blueprints stay saved.');
+    async function startNewInterviewFlow() {
+      // SPEC-099 — explicit restart, not welcome-screen theater.
+      if (hasApprovedUnderstanding() && !state.hasUnapprovedOnboarding) {
+        showError(
+          'Your approved business understanding stays in place. To change it, revise the Blueprint instead of starting a new interview.'
+        );
+        return;
+      }
+
+      const hasUnfinished =
+        state.hasUnapprovedOnboarding ||
+        (state.interviewId &&
+          state.sessionStatus &&
+          state.sessionStatus !== 'APPROVED' &&
+          ['NEW', 'DISCOVERY', 'CLARIFICATION', 'VALIDATION', 'BLUEPRINT_GENERATION', 'CLIENT_REVIEW'].indexOf(
+            state.sessionStatus
+          ) >= 0) ||
+        state.onboardingState === 'blueprint_review' ||
+        state.onboardingState === 'interview_in_progress' ||
+        (state.blueprint &&
+          ['draft', 'in_review'].indexOf(
+            String(state.blueprint.status || '').toLowerCase()
+          ) >= 0);
+
+      if (hasUnfinished) {
+        const ok = window.confirm(
+          'Start a new interview?\n\n' +
+            'Your current unfinished interview and pending Blueprint will be replaced by a new onboarding conversation. ' +
+            'Your previously approved business understanding, if any, will remain intact until a new Blueprint is approved.'
+        );
+        if (!ok) return;
+      }
+
+      try {
+        const clientId = resolvedClientId();
+        els.chatLog.innerHTML = '';
+        state.stickToBottom = true;
+        if (els.savedSessions) els.savedSessions.hidden = true;
+        setPhase('discovery');
+        const data = await api(
+          'POST',
+          '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start',
+          { restart: true }
+        );
+        state.hasUnapprovedOnboarding = true;
+        state.onboardingState = 'interview_in_progress';
+        state.blueprint = null;
+        applyDiscoveryPayload(data);
+        setComposerEnabled(true);
+        addBubble(
+          'meta',
+          'Started a new interview. Previous unfinished onboarding was replaced.'
+        );
+        syncStartNewInterviewButton();
+      } catch (err) {
+        showError(err.message);
+        if (/approved_blueprint_protected/i.test(String(err.message || ''))) {
+          return;
+        }
+      }
     }
 
     function resolvedClientId() {
@@ -3555,7 +3666,8 @@
       }
       if (els.notesBtn) els.notesBtn.hidden = true;
       if (els.loadAnchorFixtureBtn) els.loadAnchorFixtureBtn.hidden = true;
-      if (els.newInterviewBtn) els.newInterviewBtn.hidden = true;
+      // SPEC-099 — clients may restart unapproved onboarding; visibility is synced from state.
+      syncStartNewInterviewButton();
       if (els.startBtn) els.startBtn.textContent = 'Start with Max';
     }
 
@@ -3609,9 +3721,16 @@
     async function recoverOnboardingState() {
       const data = await api('GET', '/api/v1/client-intel/onboarding');
       if (!data || data.onboardingState === 'none') {
+        state.onboardingState = 'none';
+        state.hasUnapprovedOnboarding = false;
         showWelcome();
+        syncStartNewInterviewButton();
         return data;
       }
+      state.onboardingState = data.onboardingState || 'none';
+      state.hasUnapprovedOnboarding =
+        data.onboardingState === 'interview_in_progress' ||
+        data.onboardingState === 'blueprint_review';
       if (data.clientId != null && els.clientId && !state.isClientRole) {
         els.clientId.value = String(data.clientId);
       }
@@ -3644,10 +3763,12 @@
           setComposerEnabled(true);
         }
         addBubble('meta', data.message || 'Recovered your saved onboarding progress.');
+        syncStartNewInterviewButton();
         return data;
       }
       applyResumeState(data, 'continue');
       addBubble('meta', data.message || 'Recovered your approved Blueprint.');
+      syncStartNewInterviewButton();
       return data;
     }
 

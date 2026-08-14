@@ -9,6 +9,7 @@
  * SPEC-089 — First Campaign Planning Conversation start/message.
  * SPEC-096 — CIE client-scope authorization (session client is authoritative).
  * SPEC-097 — Onboarding recovery from durable CIE state.
+ * SPEC-099 — Explicit interview restart supersedes unfinished unapproved onboarding.
  *
  * POST /api/v1/clients/:id/interview/start
  * POST /api/v1/interview/:id/message
@@ -223,7 +224,12 @@ router.post(
         assertRequestedClientMatches(req, body.clientId || body.client_id);
       }
       const clientId = resolveCieClientId(req, req.params.id);
-      // Client role cannot forceNew through body override games — only internal.
+      // SPEC-099 — explicit restart is allowed for the authenticated client scope.
+      // Do not infer restart from a bare start call (preserves SPEC-097 resume).
+      const restart = Boolean(
+        body.restart || body.restartInterview || body.explicit_restart
+      );
+      // forceNew remains internal-only (fixtures / operator tooling).
       const forceNew =
         isInternalOperator(req) && Boolean(body.forceNew || body.force_new);
       const result = await startClientInterview({
@@ -231,6 +237,7 @@ router.post(
         notes: isClientRole(req) ? undefined : body.notes,
         source: body.source || 'api',
         forceNew,
+        restart,
       });
       assertCieClientAccess(req, result.clientId);
       noStore(res);

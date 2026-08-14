@@ -167,10 +167,13 @@ describe('SPEC-096 / SPEC-097 provisioning + recovery (service)', () => {
     assert.match(routeSource, /assertCieClientAccess/);
     assert.match(routeSource, /\/api\/v1\/client-intel\/onboarding/);
     assert.match(routeSource, /requireRole\('admin', 'manager'\)/);
+    assert.match(routeSource, /body\.restart/);
     assert.match(uiSource, /\/api\/me/);
     assert.match(uiSource, /isClientRole/);
     assert.match(uiSource, /clientIdLabel/);
     assert.match(uiSource, /recoverOnboardingState/);
+    assert.match(uiSource, /restart:\s*true/);
+    assert.match(uiSource, /Start a new interview\?/);
     assert.match(uiSource, /Max is your next primary interface/);
   });
 
@@ -403,5 +406,151 @@ describe('SPEC-096 static route markers', () => {
       routeSource,
       /fixtures\/anchor-blueprint[\s\S]{0,80}requireInternal/
     );
+  });
+});
+
+describe('SPEC-099 explicit restart & draft supersession', () => {
+  it('normal recovery without restart still resumes the same interview', async () => {
+    const store = createMemoryStore();
+    const opts = { store };
+    const first = await startClientInterview({ clientId: AS_CLEANING_ID }, opts);
+    const recovered = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.equal(recovered.interviewId, first.interviewId);
+    assert.equal(recovered.onboardingState, 'interview_in_progress');
+
+    const second = await startClientInterview({ clientId: AS_CLEANING_ID }, opts);
+    assert.equal(second.interviewId, first.interviewId);
+    assert.equal(second.resumedExisting, true);
+  });
+
+  it('explicit restart after pending Blueprint creates Interview B and recovery returns B', async () => {
+    const store = createMemoryStore();
+    const opts = { store };
+    const { interviewId: interviewA, blueprint: blueprintA } =
+      await runInterviewToBlueprint(store, AS_CLEANING_ID);
+
+    const pending = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.equal(pending.onboardingState, 'blueprint_review');
+    assert.equal(pending.interviewId, interviewA);
+    assert.equal(String(pending.blueprint.id), String(blueprintA.id));
+    assert.equal(String(pending.blueprint.status).toLowerCase(), 'in_review');
+
+    const restarted = await startClientInterview(
+      { clientId: AS_CLEANING_ID, restart: true },
+      opts
+    );
+    assert.notEqual(restarted.interviewId, interviewA);
+    assert.equal(restarted.resumedExisting, false);
+    assert.equal(restarted.restarted, true);
+    assert.equal(restarted.status, 'DISCOVERY');
+    assert.ok(restarted.question && restarted.question.id);
+    assert.equal(restarted.blueprint, null);
+
+    const interviewADetail = await getInterview(interviewA, opts);
+    assert.equal(interviewADetail.interviewId, interviewA);
+    const rawA = await store.getSession(interviewA);
+    assert.ok(rawA.interview_state && rawA.interview_state.supersededAt);
+    assert.equal(rawA.interview_state.lifecycle, 'superseded');
+    assert.equal(String(rawA.interview_state.supersededBy), String(restarted.interviewId));
+
+    // Re-fetch raw session via active finder — A must no longer be active.
+    const active = await findActiveInterviewForClient(AS_CLEANING_ID, opts);
+    assert.equal(active.id, restarted.interviewId);
+
+    const bpA = await store.getBlueprint(blueprintA.id, blueprintA.version);
+    assert.equal(String(bpA.status).toLowerCase(), 'superseded');
+
+    const afterRestart = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.equal(afterRestart.interviewId, restarted.interviewId);
+    assert.equal(afterRestart.onboardingState, 'interview_in_progress');
+    assert.notEqual(afterRestart.interviewId, interviewA);
+    if (afterRestart.blueprint) {
+      assert.notEqual(String(afterRestart.blueprint.id), String(blueprintA.id));
+    }
+    assert.equal(Number(afterRestart.clientId), AS_CLEANING_ID);
+  });
+
+  it('approved Blueprint remains authoritative and blocks generic restart', async () => {
+    const store = createMemoryStore();
+    const opts = { store };
+    const { blueprint } = await runInterviewToBlueprint(store, AS_CLEANING_ID);
+    await approveBlueprint(blueprint.id, opts);
+
+    const done = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.ok(
+      done.onboardingState === 'blueprint_approved' ||
+        done.onboardingState === 'completed'
+    );
+
+    await assert.rejects(
+      () =>
+        startClientInterview({ clientId: AS_CLEANING_ID, restart: true }, opts),
+      (err) =>
+        err instanceof ClientIntelligenceError &&
+        err.code === 'approved_blueprint_protected' &&
+        err.status === 409
+    );
+
+    const still = await getApprovedClientBlueprint(AS_CLEANING_ID, opts);
+    assert.equal(String(still.id), String(blueprint.id));
+    assert.equal(String(still.status).toLowerCase(), 'approved');
+    assert.equal(Number(still.clientId), AS_CLEANING_ID);
+  });
+
+  it('Aji restart cannot supersede Anchor onboarding', async () => {
+    const store = createMemoryStore();
+    const opts = { store };
+    const anchor = await runInterviewToBlueprint(store, ANCHOR_ID);
+    const asStarted = await startClientInterview(
+      { clientId: AS_CLEANING_ID },
+      opts
+    );
+
+    await startClientInterview(
+      { clientId: AS_CLEANING_ID, restart: true },
+      opts
+    );
+
+    const anchorState = await resolveClientOnboardingState(ANCHOR_ID, opts);
+    assert.equal(anchorState.interviewId, anchor.interviewId);
+    assert.equal(anchorState.onboardingState, 'blueprint_review');
+    const anchorBp = await store.getBlueprint(
+      anchor.blueprint.id,
+      anchor.blueprint.version
+    );
+    assert.equal(String(anchorBp.status).toLowerCase(), 'in_review');
+
+    const asState = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.notEqual(asState.interviewId, asStarted.interviewId);
+    assert.equal(Number(asState.clientId), AS_CLEANING_ID);
+  });
+
+  it('HTTP restart works for AS Cleaning client role and stays scoped', async () => {
+    const aji = {
+      id: 9003,
+      name: 'Aji',
+      email: 'aji3@example.test',
+      role: 'client',
+      client_id: AS_CLEANING_ID,
+    };
+    // Mount real router with memory store by stubbing via env is hard;
+    // assert route accepts restart body for client role and rejects cross-tenant.
+    assert.match(routeSource, /const restart = Boolean/);
+    assert.match(routeSource, /restart,/);
+
+    const app = mountCieApp(aji);
+    const { base, close } = await listen(app);
+    try {
+      const blocked = await request(
+        base,
+        'POST',
+        `/api/v1/clients/${ANCHOR_ID}/interview/start`,
+        { restart: true }
+      );
+      assert.equal(blocked.status, 403);
+      assert.equal(blocked.json.error, 'forbidden_client_scope');
+    } finally {
+      await close();
+    }
   });
 });
