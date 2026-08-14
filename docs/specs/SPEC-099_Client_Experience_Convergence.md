@@ -21,7 +21,7 @@ Mental model:
 3. **Operator surfaces hidden on client Home** — Agent roster, Deploy All, activity panel, client switcher, Anchor sample CTAs. UI hiding is presentation only; SPEC-096 server auth remains authoritative.
 4. **Onboarding Home states** — none → Start with Max; in progress / review → Continue with Max (SPEC-097); approved → Ask Max + My Business.
 5. **CIE as My Business** — client-facing copy + Max Intelligence Workspace visual tokens (cream / navy / gold / Newsreader).
-6. **Max composer layout** — single conversation scroll; header + composer remain accessible (no clipped dock scroll region).
+6. **Max composer layout** — root cause was `.mx-panel` using default `content-box` with `height: 100%` + padding (panel taller than viewport, composer clipped). Fix: `box-sizing: border-box`, flex column with conversation as sole `flex: 1 1 0%` scroll region, non-scrolling composer dock, suggestions clipped (no second scrollbar). Guarded by `test/maxComposerViewport.test.js` + Puppeteer `test/maxComposerViewport.layout.test.js`.
 7. **Client Max language** — presentation boundary softens SPEC-*/CIE/ContextEnvelope/Mission Plan IR jargon without removing evidence/confidence vocabulary.
 
 ## Tests

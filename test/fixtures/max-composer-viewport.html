@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Max Composer Viewport Fixture</title>
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/shared/shell.css">
+  <link rel="stylesheet" href="/command-deck/command-deck.css">
+  <style>
+    /* Isolate layout: no shell chrome, fixture page itself must not scroll the modal away */
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #ddd;
+    }
+  </style>
+</head>
+<body>
+  <div
+    id="maxWorkspace"
+    class="mx-workspace"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="mxTitle"
+  >
+    <div class="mx-backdrop"></div>
+    <div class="mx-panel">
+      <header class="mx-header">
+        <div>
+          <p class="mx-eyebrow">Intelligence Workspace</p>
+          <h2 id="mxTitle" class="mx-title">Max</h2>
+          <p id="mxContextLabel" class="mx-context-label">AS Cleaning · test fixture</p>
+        </div>
+        <button type="button" class="mx-close" aria-label="Close Max">Close</button>
+      </header>
+
+      <div id="mxThread" class="mx-thread" aria-live="polite"></div>
+
+      <div class="mx-composer-dock">
+        <div id="mxSuggestions" class="mx-suggestions" aria-label="Suggested investigations"></div>
+        <form id="mxAskForm" class="mx-ask-form" autocomplete="off">
+          <label class="pf-sr-only" for="mxAskInput">Ask Max</label>
+          <textarea
+            id="mxAskInput"
+            class="mx-ask-input"
+            rows="1"
+            maxlength="100000"
+            placeholder="Ask Max…"
+          ></textarea>
+          <button type="submit" class="mx-ask-submit" id="mxAskSend">Send</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.__populateMaxStressFixture = function populateMaxStressFixture() {
+      const thread = document.getElementById('mxThread');
+      const suggestions = document.getElementById('mxSuggestions');
+      const longBody = Array.from({ length: 24 }, (_, i) =>
+        'Paragraph ' + (i + 1) + '. Max reconstructs the approved understanding of the business, ' +
+        'including customers, services, geography, constraints, and open questions that still need evidence.'
+      ).join('\n\n');
+
+      thread.innerHTML = `
+        <article class="mx-msg is-operator">
+          <p class="mx-msg-role">You</p>
+          <p class="mx-msg-body">What do you understand about my business?</p>
+        </article>
+        <article class="mx-msg">
+          <p class="mx-msg-role">Max</p>
+          <p class="mx-msg-body">${longBody.replace(/</g, '&lt;')}</p>
+          <details class="mx-evidence" open>
+            <summary>Evidence</summary>
+            <div class="mx-evidence-body">
+              <div class="mx-evidence-group">
+                <h4>Sources</h4>
+                <ul>
+                  <li>Approved Blueprint · identity</li>
+                  <li>Approved Blueprint · ideal customers</li>
+                  <li>Approved Blueprint · target markets</li>
+                  <li>Interview turn 3 · services</li>
+                  <li>Interview turn 7 · brand voice</li>
+                </ul>
+              </div>
+            </div>
+          </details>
+          <details class="mx-meta" open>
+            <summary>Confidence &amp; uncertainty</summary>
+            <div class="mx-meta-body">
+              Confidence is moderate on geography. Uncertainty remains around pricing bands and crew capacity.
+            </div>
+          </details>
+        </article>
+      `;
+
+      const chips = [
+        'Who are our best-fit customers?',
+        'What should we focus on first?',
+        'Where is the understanding still weak?',
+        'Summarize constraints',
+        'What opportunities look strongest?',
+        'How should we talk about the brand?',
+        'What evidence supports the ICP?',
+        'What is still unknown?',
+      ];
+      suggestions.innerHTML = chips
+        .map((s) => `<button type="button" class="mx-chip">${s}</button>`)
+        .join('');
+
+      thread.scrollTop = thread.scrollHeight;
+    };
+
+    // Open immediately for the layout harness
+    document.getElementById('maxWorkspace').hidden = false;
+    window.__populateMaxStressFixture();
+  </script>
+</body>
+</html>

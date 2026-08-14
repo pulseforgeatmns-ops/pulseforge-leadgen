@@ -105,9 +105,9 @@
       .replace(/'/g, '&#39;');
   }
 
-  /** Auto-grow Max composer (~1 line → ~220px, then internal scroll). */
+  /** Auto-grow Max composer (~1 line → ~88px, then internal scroll). */
   const MX_ASK_MIN_PX = 42;
-  const MX_ASK_MAX_PX = 220;
+  const MX_ASK_MAX_PX = 88;
   const CD_ASK_MIN_PX = 40;
   const CD_ASK_MAX_PX = 220;
 
