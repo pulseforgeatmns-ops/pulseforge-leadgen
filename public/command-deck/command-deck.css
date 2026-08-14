@@ -591,7 +591,7 @@ body.theme-dark .cd-ask-form {
   }
 }
 
-/* ── Max Intelligence Workspace (SPEC-009) ── */
+/* ── Max Intelligence Workspace (SPEC-009 / SPEC-099 composer viewport) ── */
 .mx-workspace {
   position: fixed;
   inset: 0;
@@ -599,6 +599,8 @@ body.theme-dark .cd-ask-form {
   display: flex;
   align-items: stretch;
   justify-content: center;
+  /* Modal fills the visible viewport via inset; never spill past it */
+  overflow: hidden;
 }
 .mx-workspace[hidden] {
   display: none !important;
@@ -613,11 +615,14 @@ body.theme-dark .cd-ask-form {
 .mx-panel {
   position: relative;
   z-index: 1;
+  /* content-box + height:100% + padding was taller than the viewport and
+     clipped the composer below the fold. Border-box keeps the panel inside. */
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   width: min(100%, 720px);
   height: 100%;
-  max-height: 100dvh;
+  max-height: 100%;
   margin: 0 auto;
   min-height: 0;
   overflow: hidden;
@@ -630,6 +635,9 @@ body.theme-dark .cd-ask-form {
     1.5rem
     max(1rem, env(safe-area-inset-bottom))
     1.5rem;
+}
+.mx-panel > * {
+  box-sizing: border-box;
 }
 body.theme-dark .mx-panel {
   background: linear-gradient(180deg, var(--pf-bg-card), var(--pf-bg));
@@ -657,7 +665,7 @@ body.theme-dark .mx-panel {
   gap: 1rem;
   padding-bottom: 1rem;
   border-bottom: 1px solid var(--pf-border);
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 .mx-eyebrow {
   margin: 0 0 0.25rem;
@@ -706,12 +714,14 @@ body.theme-dark .mx-panel {
   background: color-mix(in srgb, var(--pf-gold) 8%, transparent);
   font-size: 0.88rem;
   color: var(--pf-text-dim);
-  flex-shrink: 0;
+  flex: 0 0 auto;
 }
 
+/* Sole primary scroll region — consumes remaining flexible height */
 .mx-thread {
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   margin: 1rem 0 0;
   padding-right: 0.25rem;
@@ -721,9 +731,8 @@ body.theme-dark .mx-panel {
   scroll-behavior: smooth;
 }
 
-/* SPEC-099 — one scroll region (conversation). Header + composer stay fixed.
-   Do not give the composer dock its own constrained overflow — that clipped
-   the input below the modal viewport when suggestions + long replies stacked. */
+/* Composer region: fixed/non-scrolling. Must never create a second
+   vertical scrollbar or push the input below the modal viewport. */
 .mx-composer-dock {
   flex: 0 0 auto;
   display: flex;
@@ -734,19 +743,23 @@ body.theme-dark .mx-panel {
   border-top: 1px solid var(--pf-border);
   background: inherit;
   z-index: 2;
-  overflow: visible;
+  overflow: hidden;
   max-height: none;
+  min-height: 0;
 }
 
+/* Wrap within a bounded band; clip excess — no scrollbar */
 .mx-suggestions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
-  /* Suggestions may scroll internally; composer form below always remains visible */
-  max-height: min(4.5rem, 12vh);
-  overflow-y: auto;
-  flex-shrink: 1;
+  max-height: 4.75rem;
+  overflow: hidden;
+  flex: 0 1 auto;
   min-height: 0;
+}
+.mx-suggestions:empty {
+  display: none;
 }
 
 .mx-msg {
@@ -912,17 +925,18 @@ body.theme-dark .mx-panel {
   display: flex;
   align-items: flex-end;
   gap: 0.55rem;
-  flex-shrink: 0;
-  /* Always keep send + input in the visible dock */
+  flex: 0 0 auto;
   position: relative;
   z-index: 1;
+  /* Input + send stay fully visible; never scroll away with suggestions */
+  min-height: 2.6rem;
 }
 .mx-ask-input {
   flex: 1;
   min-width: 0;
   min-height: 2.6rem;
-  /* Grow within a modest band; thread scrolls — not the whole dock */
-  max-height: min(8rem, 18vh);
+  /* Keep growth modest so header+composer always fit inside the panel */
+  max-height: min(5.5rem, 14vh);
   height: 2.6rem;
   box-sizing: border-box;
   border: 1px solid var(--pf-border);
