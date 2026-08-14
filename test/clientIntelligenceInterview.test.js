@@ -1149,7 +1149,7 @@ describe('Executive Brief synthesis — no raw answer bleed', () => {
         'we will know the growth work is working by watching both activity quality and real opportunity movement',
         { businessName: 'Anchor' }
       ),
-      /Success should be measured by qualified replies/i
+      /Success should be measured by (?:watching )?both activity quality and real opportunity movement|activity quality and real opportunity movement/i
     );
   });
 

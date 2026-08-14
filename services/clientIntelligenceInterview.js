@@ -79,6 +79,8 @@ const {
   synthesizeBusinessLanguage,
   reasoningAck,
   planReasoningTurn,
+  looksLikeVagueAnswer,
+  looksLikeExplicitUnknownAnswer,
 } = require('./clientIntelligenceReasoning');
 
 const SESSION_STATUSES = Object.freeze([
@@ -485,10 +487,77 @@ function advanceStatus(session, to) {
   return session;
 }
 
+/**
+ * SPEC-099 — explicit operator unknown (must never become a factual Blueprint value).
+ * Broader than answerLooksEmpty: catches "I don't know yet", typos like "yeet", etc.
+ */
+function looksLikeExplicitUnknown(text) {
+  const s = String(text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return true;
+  if (
+    /^(n\/?a|none|no|nothing|nope|nil|unknown|not sure|unsure|idk|tbd|-)$/i.test(s)
+  ) {
+    return true;
+  }
+  // "I don't know" / "I don't know yet" / typo "yeet" / "I really don't know"
+  if (
+    /^(i\s+)?(really\s+)?(do\s+not|don't|dont)\s+know(\s+(yet|yeet|right\s+now|at\s+the\s+moment))?$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^(we\s+)?(do\s+not|don't|dont)\s+know(\s+(yet|yeet|right\s+now))?$/i.test(s)) {
+    return true;
+  }
+  // "I'm not sure" / "I'm really not sure" / "not sure yet"
+  if (
+    /^(i('?m|\s+am)\s+)?(really\s+)?(not\s+sure|unsure|no\s+idea)(\s+yet)?$/i.test(s)
+  ) {
+    return true;
+  }
+  if (/^(we\s+are\s+)?(not\s+sure|unsure)(\s+yet)?$/i.test(s)) return true;
+  if (
+    /^(i\s+|we\s+)?(haven't|have\s+not|couldn't|could\s+not)\s+(figured|worked)\s+(that|it|this)\s+out(\s+yet)?$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^(i\s+)?couldn't\s+tell\s+you$/i.test(s)) return true;
+  if (/^(we\s+)?(haven't|have\s+not)\s+decided(\s+yet)?$/i.test(s)) return true;
+  if (/^(still\s+)?(figuring|working)\s+(that|it)\s+out$/i.test(s)) return true;
+  return false;
+}
+
+/**
+ * Literal uncertainty phrases that must not appear as Blueprint field values
+ * even when embedded in longer free-form answers.
+ */
+function isLiteralUncertaintyPhrase(text) {
+  const s = String(text || '').trim();
+  if (!s) return true;
+  if (looksLikeExplicitUnknown(s)) return true;
+  // Short phrases that are only uncertainty, not mixed with substance.
+  if (s.split(/\s+/).length <= 8 && looksLikeExplicitUnknown(s.replace(/^well,?\s+/i, ''))) {
+    return true;
+  }
+  return /^(i\s+don'?t\s+know|not\s+sure|haven'?t\s+figured|no\s+idea)\b/i.test(s) &&
+    !/\b(but|except|other than|except for)\b/i.test(s) &&
+    s.split(/\s+/).length <= 10;
+}
+
 function answerLooksEmpty(text) {
   const s = String(text || '').trim().toLowerCase();
   if (!s) return true;
-  return /^(n\/?a|none|no|nothing|nope|nil|unknown|not sure|-)$/i.test(s);
+  if (/^(n\/?a|none|no|nothing|nope|nil|unknown|not sure|-)$/i.test(s)) return true;
+  // SPEC-099: explicit unknowns are empty of factual content.
+  return looksLikeExplicitUnknown(text);
 }
 
 /**
@@ -1289,7 +1358,7 @@ function titleCaseWords(text) {
 }
 
 const PLACE_NAME_RE =
-  /\b(bedford|hooksett|londonderry|auburn|goffstown|manchester|charleston|nashville)\b/gi;
+  /\b(bedford|hooksett|londonderry|auburn|goffstown|manchester|charleston|nashville|toronto)\b/gi;
 
 /**
  * Normalize a business phrase for Brief rendering (lists, services, segments, places).
@@ -1314,8 +1383,12 @@ function normalizeBusinessPhrase(phrase) {
     .replace(/\bmove[\s-]?in\/?outs?\s+cleans?\b/gi, 'move-in/move-out cleaning')
     .replace(/\bmove[\s-]?in\/out\s+cleans?\b/gi, 'move-in/move-out cleaning')
     .replace(/\bmove in\/out cleans?\b/gi, 'move-in/move-out cleaning')
+    .replace(/\bmove[\s-]?in\s*\/\s*(?:move[\s-]?)?outs?\b/gi, 'move-in/move-out cleaning')
+    .replace(/\bresidential\s+standards?(?:\s+cleans?|\s+cleaning)?\b/gi, 'residential standard cleaning')
+    .replace(/\brecurring\s+standards?(?:\s+cleans?|\s+cleaning)?\b/gi, 'recurring standard cleaning')
     .replace(/\bstandard homes?\b/gi, 'standard home cleaning')
     .replace(/\bstandard offices?\b/gi, 'standard office cleaning')
+    .replace(/\boffice\s+(?:cleans?|cleaning)\b/gi, 'office cleaning')
     .replace(/\brecurring cleans?\b/gi, 'recurring cleaning')
     .replace(/\bdeep cleans?\b/gi, 'deep cleans')
     .replace(/\bhigh[\s-]?traffic buildings?\b/gi, 'high-traffic buildings')
@@ -1325,6 +1398,7 @@ function normalizeBusinessPhrase(phrase) {
     .replace(/\bprofessional offices?\b/gi, 'professional offices')
     .replace(/\bdaycares?\b/gi, 'daycares')
     .replace(/\bgreater\s+manchester(?:\s+area)?\b/gi, 'Greater Manchester')
+    .replace(/\bgreater\s+toronto(?:\s+area)?\b/gi, 'Greater Toronto Area')
     .replace(PLACE_NAME_RE, (m) => titleCaseWords(m))
     .replace(/\s{2,}/g, ' ')
     .trim();
@@ -1359,15 +1433,47 @@ function stripBusinessNameLeadIn(text) {
 
 /** Known cleaning service entity patterns → canonical labels. */
 const SERVICE_ENTITY_PATTERNS = Object.freeze([
+  [/residential\s+standard(?:s|\s+cleans?|\s+cleaning)?/gi, 'residential standard cleaning'],
+  [/recurring\s+standard(?:s|\s+cleans?|\s+cleaning)?/gi, 'recurring standard cleaning'],
   [/standard\s+home(?:\s+cleaning)?/gi, 'standard home cleaning'],
   [/standard\s+office(?:\s+cleaning)?/gi, 'standard office cleaning'],
+  [/(?<!standard\s)\boffice\s+(?:cleans?|cleaning)\b/gi, 'office cleaning'],
   [/deep\s+cleans?/gi, 'deep cleans'],
   [/move[\s-]?in\s*\/\s*move[\s-]?out\s+(?:cleans?|cleaning)/gi, 'move-in/move-out cleaning'],
   [/move[\s-]?in\/(?:move[\s-]?)?outs?\s+(?:cleans?|cleaning)/gi, 'move-in/move-out cleaning'],
+  [/move[\s-]?in\s*\/\s*(?:move[\s-]?)?outs?\b/gi, 'move-in/move-out cleaning'],
   [/recurring\s+(?:cleans?|cleaning)(?!\s+commercial)/gi, 'recurring cleaning'],
   [/short[\s-]?term\s+rental\s+turnovers?/gi, 'short-term rental turnovers'],
   [/short[\s-]?term\s+rental\s+companies/gi, 'short-term rental companies'],
 ]);
+
+/**
+ * True when a free-form list part is already represented by a canonical service label.
+ */
+function servicePartCoveredByCanonical(part, canonicals) {
+  const p = String(part || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!p) return true;
+  for (const c of canonicals || []) {
+    const canon = String(c || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9/]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!canon) continue;
+    if (p === canon) return true;
+    // Alias forms: "residential standard" ↔ "residential standard cleaning"
+    const pCore = p.replace(/\s+cleaning$/i, '').replace(/\s+cleans$/i, '');
+    const cCore = canon.replace(/\s+cleaning$/i, '').replace(/\s+cleans$/i, '');
+    if (pCore && cCore && (pCore === cCore || canon.includes(pCore) || p.includes(cCore))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Known ICP segment patterns → canonical labels. */
 const CUSTOMER_SEGMENT_PATTERNS = Object.freeze([
@@ -1408,6 +1514,7 @@ function dedupeNormalizedList(items) {
 /**
  * Extract canonical service entities from free-form prose.
  * Never returns "Anchor Cleaning provides…" style lead-ins.
+ * SPEC-099: never collapse a multi-value operator answer to a single matched entity.
  */
 function extractServiceList(text) {
   const raw = String(text || '').trim();
@@ -1420,16 +1527,17 @@ function extractServiceList(text) {
       if (!found.some((f) => f.toLowerCase() === canon.toLowerCase())) found.push(canon);
     }
   }
-  if (found.length) return dedupeNormalizedList(found);
 
-  // Fallback: strip lead-ins / growth sentences, then list-split safely.
+  // Always list-split so unmatched siblings survive when some patterns match.
   let body = stripBusinessNameLeadIn(raw);
   body = body
     .split(/(?<=[.!?])\s+/)
     .filter((sentence) => !/\bgrowth focus\b|\bweekly or multiple\b/i.test(sentence))
     .join(' ');
   // Protect move-in/move-out before splitting.
-  body = body.replace(/move-in\/move-out/gi, 'move-in-MOVEOUT');
+  body = body
+    .replace(/move-in\/move-out/gi, 'move-in-MOVEOUT')
+    .replace(/move\s+in\s*\/\s*(?:move\s+)?out/gi, 'move-in-MOVEOUT');
   const parts = String(body || '')
     .split(/\s*(?:,|;|\band\b|\n)\s*/i)
     .map((p) => p.replace(/move-in-MOVEOUT/gi, 'move-in/move-out').trim())
@@ -1440,8 +1548,19 @@ function extractServiceList(text) {
       )
     )
     .filter((p) => p && !/^(?:anchor(?:\s+cleaning)?|provides?|offers?)\b/i.test(p))
-    .filter((p) => p.split(/\s+/).length <= 8);
-  return dedupeNormalizedList(parts);
+    .filter((p) => p.split(/\s+/).length <= 8)
+    .filter((p) => !isLiteralUncertaintyPhrase(p));
+
+  if (!found.length && !parts.length) return [];
+  if (!found.length) return dedupeNormalizedList(parts);
+
+  const merged = [...found];
+  for (const part of parts) {
+    if (servicePartCoveredByCanonical(part, found)) continue;
+    if (merged.some((m) => m.toLowerCase() === part.toLowerCase())) continue;
+    merged.push(part);
+  }
+  return dedupeNormalizedList(merged);
 }
 
 /**
@@ -1642,10 +1761,14 @@ function uniquePush(list, items) {
 function extractPlaces(text) {
   const s = String(text || '');
   const places = [];
+  if (/greater\s+toronto(?:\s+area)?|\bGTA\b/i.test(s)) {
+    places.push('Greater Toronto Area');
+  }
   if (/greater\s+manchester/i.test(s)) places.push('Greater Manchester');
   for (const m of s.matchAll(PLACE_NAME_RE)) {
     const place = titleCaseWords(m[0]);
     if (place.toLowerCase() === 'manchester' && /greater\s+manchester/i.test(s)) continue;
+    if (place.toLowerCase() === 'toronto' && /greater\s+toronto|GTA/i.test(s)) continue;
     if (!places.some((p) => p.toLowerCase() === place.toLowerCase())) places.push(place);
   }
   return places;
@@ -1653,11 +1776,16 @@ function extractPlaces(text) {
 
 /**
  * Ingest a direct answer into normalized evidence for a Blueprint section.
+ * SPEC-099: explicit unknowns never become factual values; prior known facts survive.
  */
 function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
   const next = cloneNormalizedFacts(facts);
   const cleaned = cleanRawAnswer(sectionKey, stripInterviewQuestionEcho(rawAnswer));
   if (!cleaned) return next;
+  // Explicit unknowns leave the section unset rather than storing uncertainty phrases.
+  if (looksLikeExplicitUnknown(cleaned) || isLiteralUncertaintyPhrase(cleaned)) {
+    return next;
+  }
 
   switch (sectionKey) {
     case 'identity': {
@@ -1706,7 +1834,12 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
     }
     case 'services': {
       const items = extractServiceList(cleaned);
-      next.services = uniquePush([], items.length ? items : splitListItems(cleaned));
+      next.services = uniquePush(
+        [],
+        (items.length ? items : splitListItems(cleaned)).filter(
+          (item) => item && !isLiteralUncertaintyPhrase(item)
+        )
+      );
       const focuses = extractGrowthFocusItems(String(rawAnswer || cleaned));
       if (focuses.length) {
         next.growth_focus = focuses.join('; ');
@@ -1721,10 +1854,11 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
         [],
         segments.length ? segments : splitListItems(stripBusinessNameLeadIn(cleaned))
       );
-      // Drop accidental trait / preamble bleed from the segment list.
+      // Drop accidental trait / preamble bleed / uncertainty phrases from the segment list.
       next.ideal_customers = next.ideal_customers.filter(
         (item) =>
           !isValueTraitPhrase(item) &&
+          !isLiteralUncertaintyPhrase(item) &&
           !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
           !/^(?:anchor(?:\s+cleaning)?|most wants)\b/i.test(item)
       );
@@ -1735,7 +1869,16 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
       break;
     }
     case 'avoidCustomers': {
-      next.disqualified_customers = uniquePush([], splitListItems(cleaned));
+      next.disqualified_customers = uniquePush(
+        [],
+        splitListItems(cleaned)
+          .map((item) =>
+            String(item || '')
+              .replace(/^(?:no|not|avoid|excluding)\s+/i, '')
+              .trim()
+          )
+          .filter((item) => item && !isLiteralUncertaintyPhrase(item))
+      );
       break;
     }
     case 'targetMarkets': {
@@ -1744,27 +1887,36 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
       if (/residential/i.test(cleaned) && !next.vertical_focus) {
         next.vertical_focus = 'residential';
       }
-      if (!next.geography.length) {
+      if (!next.geography.length && !isLiteralUncertaintyPhrase(cleaned)) {
         next.geography = uniquePush([], [normalizeBusinessPhrase(cleaned)]);
       }
       break;
     }
     case 'competitiveAdvantages': {
-      next.differentiation = synthesizeDifferentiationSnippet(cleaned);
+      if (!isLiteralUncertaintyPhrase(cleaned)) {
+        next.differentiation = synthesizeDifferentiationSnippet(cleaned);
+      }
       break;
     }
     case 'brandVoice': {
-      next.brand_voice = normalizeBrandVoiceTone(cleaned);
+      if (!isLiteralUncertaintyPhrase(cleaned)) {
+        next.brand_voice = normalizeBrandVoiceTone(cleaned);
+      }
       break;
     }
     case 'campaignGoals': {
-      next.ninety_day_outcomes = normalizeBusinessPhrase(cleaned);
+      if (!isLiteralUncertaintyPhrase(cleaned)) {
+        next.ninety_day_outcomes = normalizeBusinessPhrase(cleaned);
+      }
       if (/commercial/i.test(cleaned)) next.growth_focus = next.growth_focus || 'commercial cleaning';
       break;
     }
     case 'successMetrics': {
-      next.success_metrics = uniquePush([], splitListItems(cleaned));
-      if (!next.success_metrics.length) {
+      next.success_metrics = uniquePush(
+        [],
+        splitListItems(cleaned).filter((item) => !isLiteralUncertaintyPhrase(item))
+      );
+      if (!next.success_metrics.length && !isLiteralUncertaintyPhrase(cleaned)) {
         next.success_metrics = [normalizeBusinessPhrase(cleaned)];
       }
       break;
@@ -1783,7 +1935,7 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
   const next = cloneNormalizedFacts(facts);
   const section = correction.section;
   const substance = normalizeBusinessPhrase(correction.substance || '');
-  if (!section || !substance) return next;
+  if (!section || !substance || isLiteralUncertaintyPhrase(substance)) return next;
 
   switch (section) {
     case 'services': {
@@ -1806,6 +1958,7 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       next.ideal_customers = next.ideal_customers.filter(
         (item) =>
           !isValueTraitPhrase(item) &&
+          !isLiteralUncertaintyPhrase(item) &&
           !/as part of (?:my|our|the)\s+ideal customer/i.test(item)
       );
       next.ideal_customer_traits = uniquePush(
@@ -1952,12 +2105,26 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
 
   sections.idealCustomers = {
     ...(prior.idealCustomers || emptySection()),
-    summary: f.ideal_customers.length
-      ? [
-          ensurePeriod(`Ideal customers are ${f.ideal_customers.join(', ')}`),
+    summary: (() => {
+      const cleanIdeal = (f.ideal_customers || []).filter(
+        (item) => item && !isLiteralUncertaintyPhrase(item) && !isValueTraitPhrase(item)
+      );
+      if (cleanIdeal.length) {
+        return [
+          ensurePeriod(`Ideal customers are ${cleanIdeal.join(', ')}`),
           'This ICP picture prioritizes fit over volume.',
-        ].join(' ')
-      : prior.idealCustomers?.summary || '',
+        ].join(' ');
+      }
+      const priorSummary = String(prior.idealCustomers?.summary || '').trim();
+      if (
+        priorSummary &&
+        !isLiteralUncertaintyPhrase(priorSummary) &&
+        !/\bi don'?t know\b|\bnot sure\b|\bhaven'?t figured\b/i.test(priorSummary)
+      ) {
+        return priorSummary;
+      }
+      return '';
+    })(),
   };
 
   sections.avoidCustomers = {
@@ -2026,11 +2193,30 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   // Preserve confidence / evidenceIds / unknowns from prior when present.
   for (const key of BLUEPRINT_SECTIONS) {
     const p = prior[key] || emptySection();
+    const hasSummary =
+      Boolean(String(sections[key].summary || '').trim()) &&
+      !answerLooksEmpty(sections[key].summary) &&
+      !/\bi don'?t know\b|\bnot sure yet\b/i.test(String(sections[key].summary || ''));
+    const unknowns = hasSummary
+      ? []
+      : [...(p.unknowns || [])];
+    if (!hasSummary && key === 'idealCustomers') {
+      const commercialPref =
+        /commercial/i.test(String(f.growth_focus || '')) ||
+        /commercial/i.test(String(f.vertical_focus || '')) ||
+        /prefer commercial/i.test(String(f.business_description || ''));
+      const icpUnknown = commercialPref
+        ? 'Which commercial customer segments are the strongest fit'
+        : 'Missing clear answer for idealCustomers';
+      if (!unknowns.some((u) => /commercial customer segment|ideal customer/i.test(String(u)))) {
+        unknowns.unshift(icpUnknown);
+      }
+    }
     sections[key] = {
-      summary: sections[key].summary || '',
-      confidence: p.confidence || (sections[key].summary ? EXPLICIT_CONFIDENCE : 0),
+      summary: hasSummary ? sections[key].summary : '',
+      confidence: p.confidence || (hasSummary ? EXPLICIT_CONFIDENCE : UNKNOWN_CONFIDENCE),
       evidenceIds: [...(p.evidenceIds || [])],
-      unknowns: sections[key].summary ? [] : [...(p.unknowns || [])],
+      unknowns,
     };
   }
   return sections;
@@ -2234,6 +2420,9 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
     }
     case 'ideal': {
       const who = midSentence(substance);
+      if (!who || isLiteralUncertaintyPhrase(who) || /\bi don'?t know\b/i.test(who)) {
+        return '';
+      }
       return `Ideal customers include ${who}`;
     }
     case 'avoid': {
@@ -2330,17 +2519,12 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
       return `${possessive} near-term priority is ${outcome}`;
     }
     case 'metrics': {
+      // SPEC-099: never invent metrics the operator did not state.
       let signals = substance
         .replace(/^both\s+activity quality and real opportunity movement\b/i, '')
         .trim();
-      if (
-        /qualified|walkthrough|estimate|opportunit|repl(?:y|ies)|booked|pipeline|activity quality|opportunity movement/i.test(
-          substance
-        )
-      ) {
-        return 'Success should be measured by qualified replies, booked conversations, walkthroughs, estimate requests, and evidence that the right commercial segments are responding';
-      }
       signals = midSentence(signals || substance);
+      if (!signals || isLiteralUncertaintyPhrase(signals)) return '';
       return `Success should be measured by ${signals}`;
     }
     default:
@@ -2688,6 +2872,9 @@ function humanizeUnknownLabel(raw) {
   if (/^Capacity$/i.test(text) || /^capacity$/i.test(text)) {
     return 'capacity and delivery constraints';
   }
+  if (/which commercial customer segments/i.test(text)) {
+    return 'which commercial customer segments are the strongest fit';
+  }
   const missing = text.match(/^Missing clear answer for\s+(.+)$/i);
   if (missing) {
     const key = missing[1].trim();
@@ -2778,23 +2965,50 @@ function composeWhoYouAre(identity, services, opts = {}) {
 
 function composeWhoYouServe(ideal, avoid, markets, opts = {}) {
   const businessName = opts.businessName || '';
+  const facts = opts.normalizedFacts || null;
   const idealS = normalizeClaim('ideal', ideal, { businessName });
   const avoidS = normalizeClaim('avoid', avoid, { businessName });
   const marketS = normalizeClaim('markets', markets, { businessName });
   const sentences = [];
-  if (idealS) sentences.push(idealS);
+
+  const cleanIdeal = ((facts && facts.ideal_customers) || []).filter(
+    (item) => item && !isLiteralUncertaintyPhrase(item)
+  );
+  const prefersCommercial =
+    /commercial/i.test(String((facts && facts.growth_focus) || '')) ||
+    /commercial/i.test(String((facts && facts.vertical_focus) || '')) ||
+    /prefer commercial/i.test(String((facts && facts.business_description) || ''));
+
+  if (cleanIdeal.length && idealS && !/\bi don'?t know\b/i.test(idealS)) {
+    sentences.push(idealS);
+  } else if (prefersCommercial) {
+    const subject = businessSubject(businessName || 'The business');
+    sentences.push(
+      `${subject} prefers commercial work while continuing to serve residential customers`
+    );
+    sentences.push(
+      'Specific priority commercial segments have not yet been established'
+    );
+  } else if (idealS && !/\bi don'?t know\b/i.test(idealS)) {
+    sentences.push(idealS);
+  }
+
   if (avoidS) sentences.push(avoidS);
   if (marketS) sentences.push(marketS);
 
-  if (sentences.length >= 2) {
+  if (sentences.length >= 2 && cleanIdeal.length) {
     sentences.push(
       'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
+    );
+  } else if (sentences.length >= 1 && prefersCommercial && !cleanIdeal.length) {
+    sentences.push(
+      'Commercial preference is clear; naming the priority segments would sharpen every commercial decision that follows.'
     );
   } else if (sentences.length === 1) {
     sentences.push(
       'Sharpening who is a strong fit — and who is not — will keep commercial effort concentrated where it compounds.'
     );
-  } else {
+  } else if (!sentences.length) {
     sentences.push('The ideal customer and market focus are not yet fully drawn.');
     sentences.push(
       'Defining who belongs in the book of business — and who does not — will sharpen every commercial decision that follows.'
@@ -2850,8 +3064,33 @@ function composeWhereHeaded(goals, opts = {}) {
 
 function composeWhatSuccess(metrics, opts = {}) {
   const businessName = opts.businessName || '';
+  const facts = opts.normalizedFacts || null;
+  const operatorMetrics = ((facts && facts.success_metrics) || [])
+    .map((m) => String(m || '').trim())
+    .filter((m) => m && !isLiteralUncertaintyPhrase(m));
+
+  if (operatorMetrics.length) {
+    const list = operatorMetrics.map((m) => m.replace(/^#\s*of\s+/i, 'Number of '));
+    const parts = [
+      `${businessSubject(businessName || 'The business')} currently wants to judge progress using: ${list.join('; ')}`,
+      'Those are operator-stated commercial signals — not vanity activity.',
+    ];
+    // Max suggestions stay attributed; never silently merge into operator criteria.
+    const maxSuggestions = [
+      'qualified replies',
+      'booked conversations',
+      'estimate requests',
+    ].filter((s) => !list.some((m) => m.toLowerCase().includes(s.split(' ')[0])));
+    if (maxSuggestions.length) {
+      parts.push(
+        `Max may also want to explore: ${maxSuggestions.join(', ')}`
+      );
+    }
+    return joinPolished(parts);
+  }
+
   const metric = normalizeClaim('metrics', metrics, { businessName });
-  if (metric) {
+  if (metric && !/\bqualified replies, booked conversations\b/i.test(metric)) {
     return joinPolished([
       metric,
       'Those are commercial signals, not vanity activity — they tell the truth about whether the work is creating value.',
@@ -2899,10 +3138,43 @@ function collectUnknownLabels(sections) {
 
 /**
  * SPEC-085 — always identify meaningful unknowns. Never return "nothing outstanding."
+ * SPEC-099: explicit interview unknowns (e.g. unresolved ICP) rank ahead of generic fillers.
  */
-function composeLearnMoreItems(unknownLabels) {
+function composeLearnMoreItems(unknownLabels, opts = {}) {
+  const facts = opts.normalizedFacts || null;
   const cleaned = [...new Set((unknownLabels || []).map(humanizeUnknownLabel).filter(Boolean))];
-  const items = cleaned.map((label) => titleCasePhrase(label));
+  // Keep question-form unknowns readable; title-case only short topic labels.
+  const items = cleaned.map((label) =>
+    /\?$/.test(label) || /^(which|who|what|how|where)\b/i.test(label)
+      ? capitalizeSentence(label.replace(/\?$/, '') + (/\?$/.test(label) ? '?' : ''))
+      : titleCasePhrase(label)
+  );
+
+  const prefersCommercial =
+    /commercial/i.test(String((facts && facts.growth_focus) || '')) ||
+    /commercial/i.test(String((facts && facts.vertical_focus) || ''));
+  const hasNamedIdeal = ((facts && facts.ideal_customers) || []).some(
+    (item) => item && !isLiteralUncertaintyPhrase(item)
+  );
+  const geo = ((facts && facts.geography) || []).join(', ') || 'the target geography';
+
+  if (prefersCommercial && !hasNamedIdeal) {
+    const icpNeed = `Which commercial customer segments are the strongest fit for ${
+      (facts && facts.business_name) || 'the business'
+    } within ${geo}?`;
+    const already = items.some((item) => /commercial customer segment/i.test(item));
+    if (!already) items.unshift(icpNeed);
+    else {
+      const idx = items.findIndex((item) => /commercial customer segment|ideal customer/i.test(item));
+      if (idx > 0) {
+        const [row] = items.splice(idx, 1);
+        items.unshift(icpNeed);
+      } else if (idx === 0) {
+        items[0] = icpNeed;
+      }
+    }
+  }
+
   for (const fallback of DEFAULT_LEARN_MORE_TOPICS) {
     if (items.length >= 4) break;
     if (!items.some((item) => item.toLowerCase() === fallback.toLowerCase())) {
@@ -2967,12 +3239,28 @@ function composeObservations(sections, normalizedFacts = null) {
   }
 
   if ((facts.ideal_customers || []).length && (facts.disqualified_customers || []).length) {
-    observations.push(
-      'Commercial focus is unusually clear: both the relationships worth pursuing and the ones to decline are named explicitly.'
+    const namedIdeal = (facts.ideal_customers || []).filter(
+      (item) => item && !isLiteralUncertaintyPhrase(item)
     );
-  } else if ((facts.ideal_customers || []).length) {
+    if (namedIdeal.length) {
+      observations.push(
+        'Commercial focus is unusually clear: both the relationships worth pursuing and the ones to decline are named explicitly.'
+      );
+    } else if (/commercial/i.test(String(facts.growth_focus || ''))) {
+      observations.push(
+        'Commercial work is preferred and decline criteria are named, but priority commercial segments remain unresolved.'
+      );
+    }
+  } else if ((facts.ideal_customers || []).filter((i) => i && !isLiteralUncertaintyPhrase(i)).length) {
     observations.push(
-      `Ideal-customer focus on ${facts.ideal_customers.slice(0, 3).join(', ')} gives outreach a disciplined starting point.`
+      `Ideal-customer focus on ${facts.ideal_customers
+        .filter((i) => i && !isLiteralUncertaintyPhrase(i))
+        .slice(0, 3)
+        .join(', ')} gives outreach a disciplined starting point.`
+    );
+  } else if (/commercial/i.test(String(facts.growth_focus || ''))) {
+    observations.push(
+      'Commercial work is preferred, but the priority commercial segments have not yet been established.'
     );
   }
 
@@ -3062,9 +3350,11 @@ function averageConfidence(values) {
 /**
  * Assessment scores derive only from observed section confidence.
  * Explanations always reference evidence patterns — never fabricated.
+ * SPEC-099: confidence explanations may only cite evidence that actually exists.
  */
-function composeAssessment(sections) {
+function composeAssessment(sections, opts = {}) {
   const s = (key) => (sections && sections[key]) || emptySection();
+  const facts = opts.normalizedFacts || null;
 
   const clarityParts = [sectionConfidence(s('identity')), sectionConfidence(s('services'))];
   const focusParts = [
@@ -3094,6 +3384,36 @@ function composeAssessment(sections) {
   const goalClaim = coreClaim(s('campaignGoals').summary);
   const metricClaim = coreClaim(s('successMetrics').summary);
 
+  const namedIdeal = ((facts && facts.ideal_customers) || []).filter(
+    (item) => item && !isLiteralUncertaintyPhrase(item)
+  );
+  const hasNamedIdeal =
+    namedIdeal.length > 0 &&
+    Boolean(idealClaim) &&
+    !/\bi don'?t know\b|\bnot sure\b/i.test(String(idealClaim));
+  const prefersCommercial =
+    /commercial/i.test(String((facts && facts.growth_focus) || '')) ||
+    /commercial/i.test(String((facts && facts.vertical_focus) || '')) ||
+    /prefer commercial|commercial/i.test(String((facts && facts.business_description) || ''));
+  const hasAvoid = Boolean(avoidClaim) || ((facts && facts.disqualified_customers) || []).length > 0;
+  const hasGeo = ((facts && facts.geography) || []).length > 0 || Boolean(coreClaim(s('targetMarkets').summary));
+
+  let marketFocusExplanation;
+  if (hasNamedIdeal && hasAvoid) {
+    marketFocusExplanation =
+      'Supported by both a named ideal customer and explicit constraints on who not to serve.';
+  } else if (prefersCommercial && (hasAvoid || hasGeo) && !hasNamedIdeal) {
+    const geoBit = ((facts && facts.geography) || []).join(', ') || 'the stated geography';
+    marketFocusExplanation = `We know the business prefers commercial work${
+      hasAvoid ? ', generally avoids certain segments' : ''
+    }, and is focused on ${geoBit}. The specific commercial segments to prioritize remain unresolved.`;
+  } else if (hasNamedIdeal || hasGeo) {
+    marketFocusExplanation =
+      'Supported by customer or market focus signals, with room to sharpen the full beachhead.';
+  } else {
+    marketFocusExplanation = 'Customer and market focus still need more specific evidence.';
+  }
+
   const ratings = [
     {
       label: 'Business Clarity',
@@ -3105,12 +3425,7 @@ function composeAssessment(sections) {
     {
       label: 'Market Focus',
       stars: starsFromConfidence(focus),
-      explanation:
-        idealClaim && avoidClaim
-          ? 'Supported by both a named ideal customer and explicit constraints on who not to serve.'
-          : idealClaim || coreClaim(s('targetMarkets').summary)
-            ? 'Supported by customer or market focus signals, with room to sharpen the full beachhead.'
-            : 'Customer and market focus still need more specific evidence.',
+      explanation: marketFocusExplanation,
     },
     {
       label: 'Differentiation',
@@ -3226,9 +3541,9 @@ function buildExecutiveSummary(sections, opts = {}) {
   );
   const briefOpts = { businessName, normalizedFacts };
   const unknownLabels = collectUnknownLabels(clean);
-  const learnMoreItems = composeLearnMoreItems(unknownLabels);
+  const learnMoreItems = composeLearnMoreItems(unknownLabels, { normalizedFacts });
   const observations = composeObservations(clean, normalizedFacts);
-  const assessment = composeAssessment(clean);
+  const assessment = composeAssessment(clean, { normalizedFacts });
   const conversations = composeConversationStarters(clean, learnMoreItems);
 
   // Prefer direct normalized list rendering for key prose sections when available.
@@ -3256,6 +3571,7 @@ function buildExecutiveSummary(sections, opts = {}) {
       (item) =>
         item &&
         !isValueTraitPhrase(item) &&
+        !isLiteralUncertaintyPhrase(item) &&
         !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
         !/^(?:anchor(?:\s+cleaning)?\s+)?most wants\b/i.test(item)
     );
@@ -3272,7 +3588,7 @@ function buildExecutiveSummary(sections, opts = {}) {
       }
       whoYouAre = joinPolished(whoYouAreParts);
     }
-    if (cleanIdeal.length || f.geography.length) {
+    if (cleanIdeal.length || f.geography.length || /commercial/i.test(String(f.growth_focus || ''))) {
       const sentences = [];
       if (cleanIdeal.length) {
         const shortName = String(businessName || 'Anchor').replace(/\s+Cleaning$/i, '') || 'Anchor';
@@ -3290,6 +3606,13 @@ function buildExecutiveSummary(sections, opts = {}) {
             needsRecurring ? ' that need dependable recurring cleaning' : ''
           }`
         );
+      } else if (/commercial/i.test(String(f.growth_focus || f.vertical_focus || ''))) {
+        sentences.push(
+          `${businessSubject(businessName || 'The business')} prefers commercial work while continuing to serve residential customers`
+        );
+        sentences.push(
+          'Specific priority commercial segments have not yet been established'
+        );
       }
       if (f.disqualified_customers.length) {
         sentences.push(
@@ -3302,13 +3625,18 @@ function buildExecutiveSummary(sections, opts = {}) {
         );
       }
       if (f.geography.length) {
-        const towns = f.geography.filter((g) => !/^Greater Manchester$/i.test(g));
+        const towns = f.geography.filter((g) => !/^Greater (?:Manchester|Toronto Area)$/i.test(g));
         const hasGM = f.geography.some((g) => /Greater Manchester/i.test(g));
+        const hasGTA = f.geography.some((g) => /Greater Toronto|GTA/i.test(g));
         if (hasGM) {
           sentences.push(
             `${businessSubject(businessName || 'Anchor', { possessive: true })} near-term geography is the Greater Manchester area${
               towns.length ? `, including ${towns.join(', ')}` : ''
             }`
+          );
+        } else if (hasGTA) {
+          sentences.push(
+            `${businessSubject(businessName || 'the business', { possessive: true })} near-term geography centers on the Greater Toronto Area`
           );
         } else {
           sentences.push(
@@ -3316,7 +3644,7 @@ function buildExecutiveSummary(sections, opts = {}) {
           );
         }
       }
-      if (sentences.length >= 2) {
+      if (sentences.length >= 2 && cleanIdeal.length) {
         sentences.push(
           'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
         );
@@ -3456,18 +3784,206 @@ function shouldReflect(stepIndex) {
   return answered > 0 && answered % REFLECTION_EVERY_N === 0;
 }
 
+/**
+ * SPEC-099 — whether existing interview evidence can help the operator reason
+ * through an explicit unknown for this section.
+ */
+function hasRelevantUncertaintyContext(state, sectionKey) {
+  const facts = (state && state.normalizedFacts) || emptyNormalizedFacts();
+  const sections = (state && state.sectionState) || emptySections();
+  switch (sectionKey) {
+    case 'idealCustomers':
+      return Boolean(
+        /commercial|residential/i.test(String(facts.growth_focus || '')) ||
+          /commercial|residential/i.test(String(facts.vertical_focus || '')) ||
+          /commercial|residential/i.test(String(facts.business_description || '')) ||
+          (facts.disqualified_customers || []).length ||
+          (facts.geography || []).length ||
+          (facts.services || []).length ||
+          String((sections.avoidCustomers && sections.avoidCustomers.summary) || '').trim()
+      );
+    case 'services':
+      return Boolean(facts.business_description || facts.growth_focus);
+    case 'targetMarkets':
+      return Boolean(
+        (facts.ideal_customers || []).length ||
+          facts.growth_focus ||
+          (facts.services || []).length
+      );
+    case 'campaignGoals':
+    case 'successMetrics':
+      return Boolean(facts.growth_focus || facts.ninety_day_outcomes || (facts.services || []).length);
+    default:
+      return Boolean(
+        facts.business_name ||
+          facts.business_description ||
+          (facts.services || []).length ||
+          facts.growth_focus
+      );
+  }
+}
+
+/**
+ * SPEC-099 — one contextual reasoning/probing turn for meaningful uncertainty.
+ * Deterministic template; LLM may later polish phrasing.
+ */
+function buildUncertaintyReasoningProbe(state, sectionKey, businessName = null) {
+  const facts = (state && state.normalizedFacts) || emptyNormalizedFacts();
+  const name =
+    sanitizeBusinessName(businessName || facts.business_name || '') || 'the business';
+  const shortName = String(name).replace(/\s+Cleaning$/i, '') || name;
+  const geo = (facts.geography || []).join(', ');
+  const avoids = (facts.disqualified_customers || []).slice(0, 2).join('; ');
+  const prefersCommercial =
+    /commercial/i.test(String(facts.growth_focus || '')) ||
+    /commercial/i.test(String(facts.vertical_focus || '')) ||
+    /prefer commercial/i.test(String(facts.business_description || ''));
+
+  if (sectionKey === 'idealCustomers') {
+    const bits = [];
+    bits.push("That's something we can work through.");
+    if (prefersCommercial) {
+      bits.push(
+        `You've already told me you'd prefer to grow the commercial side${
+          /residential/i.test(String(facts.vertical_focus || facts.business_description || ''))
+            ? ' while still serving residential'
+            : ''
+        }.`
+      );
+    }
+    if (avoids) {
+      bits.push(`You've also flagged constraints around ${avoids}.`);
+    }
+    if (geo) {
+      bits.push(`Geography is centered on ${geo}.`);
+    }
+    bits.push("We don't need to force an ideal customer yet.");
+    bits.push(
+      `Are there commercial customers you've particularly enjoyed working with before, or should we evaluate potential segments for ${shortName} based on recurring revenue, cleaning frequency, ease of servicing, and likelihood of getting a walkthrough?`
+    );
+    return bits.join(' ');
+  }
+
+  return (
+    buildProbingFollowUp(
+      { section: sectionKey },
+      { reason: 'explicit_unknown' },
+      name
+    ) ||
+    `That's okay — we can leave that open for now, or reason from what we already know about ${shortName}. What feels closest?`
+  );
+}
+
+/**
+ * Accept an explicit unknown: persist unknown evidence, preserve prior known facts, advance.
+ */
+function prefersCommercialAck(state, sectionKey) {
+  const facts = (state && state.normalizedFacts) || emptyNormalizedFacts();
+  const prefersCommercial =
+    /commercial/i.test(String(facts.growth_focus || '')) ||
+    /commercial/i.test(String(facts.vertical_focus || '')) ||
+    /prefer commercial/i.test(String(facts.business_description || ''));
+  if (sectionKey === 'idealCustomers' && prefersCommercial) {
+    return "That's okay. We'll leave that open for now. We know you prefer commercial work, but we haven't established which commercial segments are the best fit yet. That's something we can investigate rather than guess.";
+  }
+  return "That's okay. We'll leave that open for now and keep moving.";
+}
+
+async function acceptExplicitUnknown(store, session, state, q, clientTurn, text) {
+  const sectionKey = q.question.section;
+  const { evidenceRow } = await applySectionUpdate(
+    store,
+    session,
+    sectionKey,
+    '',
+    'INFERRED',
+    clientTurn.id
+  );
+  // Prefer a precise unknown label for idealCustomers when commercial preference exists.
+  const facts = session.interview_state.normalizedFacts || state.normalizedFacts || emptyNormalizedFacts();
+  const sectionState = session.interview_state.sectionState || state.sectionState;
+  const section = sectionState[sectionKey] || emptySection();
+  const unknowns = [...(section.unknowns || [])];
+  if (sectionKey === 'idealCustomers') {
+    const prefersCommercial =
+      /commercial/i.test(String(facts.growth_focus || '')) ||
+      /commercial/i.test(String(facts.vertical_focus || ''));
+    const label = prefersCommercial
+      ? 'Which commercial customer segments are the strongest fit'
+      : 'Missing clear answer for idealCustomers';
+    if (!unknowns.some((u) => /commercial customer segment|idealCustomers|ideal customer/i.test(String(u)))) {
+      unknowns.unshift(label);
+    }
+  }
+  sectionState[sectionKey] = {
+    ...section,
+    // Do not invent a summary from the unknown phrase.
+    summary:
+      section.summary &&
+      !answerLooksEmpty(section.summary) &&
+      !/\bi don'?t know\b/i.test(section.summary)
+        ? section.summary
+        : '',
+    confidence: section.summary && !answerLooksEmpty(section.summary)
+      ? section.confidence || UNKNOWN_CONFIDENCE
+      : UNKNOWN_CONFIDENCE,
+    unknowns,
+  };
+
+  let reasoningMemory = ensureReasoningMemory(session.interview_state || state);
+  reasoningMemory = addQuestionDebt(reasoningMemory, {
+    questionId: q.question.id,
+    section: sectionKey,
+    reason: 'explicit_unknown',
+  });
+  reasoningMemory = setActiveProbe(reasoningMemory, null);
+
+  state.sectionState = sectionState;
+  state.normalizedFacts = facts;
+  state.reasoningMemory = reasoningMemory;
+  state.answers = { ...(state.answers || {}), [q.question.id]: '' };
+  state.stepIndex = (Number(state.stepIndex) || 0) + 1;
+  if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
+  state.supplementalContext = [
+    ...(state.supplementalContext || []),
+    {
+      at: nowIso(),
+      text,
+      domain: null,
+      kind: MESSAGE_TYPES.INSUFFICIENT_ANSWER,
+      activeQuestionId: q.question.id,
+      confirmed: false,
+      acceptedUnknown: true,
+      section: sectionKey,
+    },
+  ];
+  session.interview_state = state;
+
+  await store.updateTurn(clientTurn.id, {
+    derived_evidence: evidenceRow ? [evidenceRow.id] : [],
+  });
+
+  return { advanced: true, evidenceRow };
+}
+
 function buildReflection(sectionState, answeredCount) {
   const priorityKeys = ['identity', 'services', 'idealCustomers', 'campaignGoals'];
+  const usable = (section) => {
+    const summary = String((section && section.summary) || '').trim();
+    if (!summary || answerLooksEmpty(summary)) return false;
+    if (/\bi don'?t know\b|\bnot sure yet\b/i.test(summary)) return false;
+    return true;
+  };
   const filled = priorityKeys
     .map((key) => {
       const section = sectionState && sectionState[key];
-      if (!section || !String(section.summary || '').trim()) return null;
+      if (!usable(section)) return null;
       return { key, summary: section.summary };
     })
     .filter(Boolean);
   const fallback = BLUEPRINT_SECTIONS.map((key) => {
     const section = sectionState && sectionState[key];
-    if (!section || !String(section.summary || '').trim()) return null;
+    if (!usable(section)) return null;
     return { key, summary: section.summary };
   }).filter(Boolean);
   const source = filled.length ? filled : fallback;
@@ -3488,6 +4004,7 @@ function buildReflection(sectionState, answeredCount) {
   };
   const snippets = source.slice(0, 4).map((row) => {
     const title = directionTitles[row.key] || SECTION_TITLES[row.key] || row.key;
+    // Prefer full service list first sentence; never reduce multi-value services to one token.
     return `${title}: ${firstSentence(row.summary)}`;
   });
   return `${opener}…\n\n${snippets.join('\n')}`;
@@ -4965,23 +5482,143 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         },
       ];
     } else if (messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER) {
-      probePrompt =
-        planned.probe ||
-        buildProbingFollowUp(
-          q.question,
-          planned.sufficiency || { reason: 'vague' },
+      const sufficiencyReason =
+        (planned.sufficiency && planned.sufficiency.reason) ||
+        (looksLikeExplicitUnknown(text) ? 'explicit_unknown' : 'vague');
+      const isExplicitUnknown =
+        sufficiencyReason === 'explicit_unknown' || looksLikeExplicitUnknown(text);
+      const priorProbe =
+        reasoningMemory.activeProbe &&
+        reasoningMemory.activeProbe.questionId === q.question.id
+          ? reasoningMemory.activeProbe
+          : null;
+      const priorDebt = (reasoningMemory.questionDebt || []).find(
+        (d) => d.questionId === q.question.id
+      );
+      const alreadyProbed = Boolean(priorProbe || priorDebt);
+      const priorWasUncertaintyReasoning =
+        (priorProbe && priorProbe.reason === 'explicit_unknown') ||
+        (priorDebt && priorDebt.reason === 'explicit_unknown');
+      const canReason =
+        isExplicitUnknown &&
+        !alreadyProbed &&
+        hasRelevantUncertaintyContext(state, q.question.section);
+
+      // Bounded probing: after one uncertainty-reasoning probe, accept unresolved state.
+      const shouldAcceptUnknown =
+        (isExplicitUnknown &&
+          (alreadyProbed || !hasRelevantUncertaintyContext(state, q.question.section))) ||
+        (alreadyProbed && priorWasUncertaintyReasoning && !planned.sufficiency?.sufficient);
+
+      if (shouldAcceptUnknown) {
+        // Second unknown (or no useful context): accept uncertainty and continue.
+        const accepted = await acceptExplicitUnknown(
+          store,
+          session,
+          state,
+          q,
+          clientTurn,
+          text
+        );
+        Object.assign(state, session.interview_state || state);
+        reasoningMemory = ensureReasoningMemory(state);
+        state.reasoningMemory = reasoningMemory;
+        advancedAfterSkip = Boolean(accepted && accepted.advanced);
+        probePrompt = null;
+
+        const nextQ = currentQuestion(state);
+        const acceptAck = prefersCommercialAck(state, q.question.section);
+        ackSubstance = acceptAck;
+
+        await store.updateSession(session.id, {
+          status: 'DISCOVERY',
+          current_stage: nextQ ? nextQ.question.stage : session.current_stage,
+          interview_state: state,
+        });
+
+        if (state.done) {
+          const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
+          return withExperienceFields(await store.getSession(session.id), {
+            interviewId: session.id,
+            ...publicSession(await store.getSession(session.id)),
+            nextAction: 'GENERATE_BLUEPRINT',
+            messageType,
+            question: null,
+            message: `${acceptAck}\n\nDraft Business Blueprint is ready for review.`,
+            blueprint: publicBlueprint(blueprint),
+            reflection: null,
+            reasoningMemory,
+            acceptedUnknown: true,
+          });
+        }
+
+        const nextPrompt = nextQ ? nextQ.question.prompt : null;
+        const assistantMessage = nextPrompt ? `${acceptAck}\n\n${nextPrompt}` : acceptAck;
+        await store.insertTurn({
+          id: newId(),
+          session_id: session.id,
+          speaker: 'assistant',
+          message: assistantMessage,
+          goal: nextQ ? nextQ.question.goal : q.question.goal,
+          asked_because:
+            'Accepted explicit unknown after bounded uncertainty reasoning; preserved unresolved state and continued.',
+          derived_evidence: [],
+          created_at: new Date(),
+        });
+
+        return withExperienceFields(await store.getSession(session.id), {
+          interviewId: session.id,
+          ...publicSession(await store.getSession(session.id)),
+          nextAction: 'ASK',
+          messageType,
+          question: nextQ
+            ? {
+                id: nextQ.question.id,
+                prompt: nextQ.question.prompt,
+                stage: nextQ.question.stage,
+                section: nextQ.question.section,
+                goal: nextQ.question.goal,
+                askedBecause: nextQ.question.askedBecause,
+              }
+            : null,
+          message: assistantMessage,
+          reflection: null,
+          evidence: null,
+          contradiction: false,
+          blueprint: null,
+          supplementalContext: state.supplementalContext || [],
+          reasoningMemory,
+          acceptedUnknown: true,
+          probe: null,
+        });
+      }
+
+      if (canReason) {
+        probePrompt = buildUncertaintyReasoningProbe(
+          state,
+          q.question.section,
           businessNameHint
         );
+      } else {
+        probePrompt =
+          planned.probe ||
+          buildProbingFollowUp(
+            q.question,
+            planned.sufficiency || { reason: sufficiencyReason },
+            businessNameHint
+          );
+      }
       reasoningMemory = setActiveProbe(reasoningMemory, {
         questionId: q.question.id,
         section: q.question.section,
         prompt: probePrompt,
-        reason: (planned.sufficiency && planned.sufficiency.reason) || 'vague',
+        reason: sufficiencyReason,
+        attemptCount: 1,
       });
       reasoningMemory = addQuestionDebt(reasoningMemory, {
         questionId: q.question.id,
         section: q.question.section,
-        reason: (planned.sufficiency && planned.sufficiency.reason) || 'vague',
+        reason: sufficiencyReason,
       });
       state.reasoningMemory = reasoningMemory;
       state.supplementalContext = [
@@ -4994,6 +5631,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           activeQuestionId: q.question.id,
           confirmed: false,
           probe: probePrompt,
+          uncertaintyReasoning: Boolean(canReason),
         },
       ];
     } else if (messageType === MESSAGE_TYPES.SKIP) {
@@ -7975,6 +8613,10 @@ module.exports = {
   repairInitialGrowthDirection,
   detectContradiction,
   answerLooksEmpty,
+  looksLikeExplicitUnknown,
+  isLiteralUncertaintyPhrase,
+  hasRelevantUncertaintyContext,
+  buildUncertaintyReasoningProbe,
   classifyUserResponse,
   classifyInterviewMessage,
   looksLikeRefinementFeedback,
@@ -8028,4 +8670,6 @@ module.exports = {
   synthesizeBusinessLanguage,
   assessAnswerSufficiency,
   buildProbingFollowUp,
+  looksLikeVagueAnswer,
+  looksLikeExplicitUnknownAnswer,
 };

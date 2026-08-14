@@ -210,6 +210,10 @@ const VAGUE_ONLY_RE =
 const VAGUE_MARKERS_RE =
   /\b(maybe|perhaps|not sure|unsure|kind of|sort of|various|etc\.?|something like|i think|probably|roughly|around|whatever|idk|tbd|the usual|stuff|things)\b/i;
 
+/** SPEC-099 — explicit "I don't know" / "not sure yet" style unknowns. */
+const EXPLICIT_UNKNOWN_RE =
+  /^\s*(?:i\s+)?(?:really\s+)?(?:do\s+not|don't|dont)\s+know(?:\s+(?:yet|yeet|right\s+now|at\s+the\s+moment))?\s*[.!?]*$/i;
+
 const CLARIFICATION_REQUEST_RE =
   /^(what|why|how|when|where|who|can you|could you|would you|do you|are you|is that|should i|what do you mean|can you clarify|explain)\b/i;
 
@@ -1486,9 +1490,41 @@ function looksLikeClarificationRequest(text) {
   return false;
 }
 
+function looksLikeExplicitUnknownAnswer(text) {
+  const s = String(text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return true;
+  if (EXPLICIT_UNKNOWN_RE.test(String(text || '').trim())) return true;
+  if (/^(we\s+)?(do\s+not|don't|dont)\s+know(\s+(yet|yeet|right\s+now))?$/i.test(s)) return true;
+  if (
+    /^(i('?m|\s+am)\s+)?(really\s+)?(not\s+sure|unsure|no\s+idea|unknown|idk|tbd)(\s+yet)?$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^(we\s+are\s+)?(not\s+sure|unsure)(\s+yet)?$/i.test(s)) return true;
+  if (
+    /^(i\s+|we\s+)?(haven't|have\s+not|couldn't|could\s+not)\s+(figured|worked)\s+(that|it|this)\s+out(\s+yet)?$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^(i\s+)?couldn't\s+tell\s+you$/i.test(s)) return true;
+  if (/^(we\s+)?(haven't|have\s+not)\s+decided(\s+yet)?$/i.test(s)) return true;
+  if (/^(still\s+)?(figuring|working)\s+(that|it)\s+out$/i.test(s)) return true;
+  return false;
+}
+
 function looksLikeVagueAnswer(text) {
   const s = String(text || '').trim();
   if (!s) return true;
+  if (looksLikeExplicitUnknownAnswer(s)) return true;
   if (VAGUE_ONLY_RE.test(s)) return true;
   // Hedged short answers ("maybe some stuff") — not concrete nouns like "Homeowners".
   if (wordCount(s) < MIN_PROBE_WORD_COUNT && VAGUE_MARKERS_RE.test(s)) return true;
@@ -1572,6 +1608,9 @@ function assessAnswerSufficiency(text, activeQuestion = null, opts = {}) {
   if (!raw) {
     return { sufficient: false, reason: 'empty', shouldProbe: true };
   }
+  if (looksLikeExplicitUnknownAnswer(raw)) {
+    return { sufficient: false, reason: 'explicit_unknown', shouldProbe: true };
+  }
   if (looksLikeVagueAnswer(raw)) {
     return { sufficient: false, reason: 'vague', shouldProbe: true };
   }
@@ -1632,6 +1671,9 @@ function buildProbingFollowUp(activeQuestion, assessment = {}, businessName = nu
 
   if (reason === 'contradiction') {
     return `That seems to conflict with what we captured earlier. ${base}`;
+  }
+  if (reason === 'explicit_unknown') {
+    return `That's okay — we can leave it open, or reason from what we already know. ${base}`;
   }
   if (reason === 'thin_important' || reason === 'hedged') {
     return `That's helpful direction — I need one more concrete detail before we move on. ${base}`;
@@ -1781,6 +1823,7 @@ function setActiveProbe(memory, probe) {
         section: probe.section || null,
         prompt: probe.prompt || '',
         reason: probe.reason || 'vague',
+        attemptCount: Number(probe.attemptCount) || 1,
         at: nowIso(),
       }
     : null;
@@ -3603,6 +3646,7 @@ module.exports = {
   looksLikeSkip,
   looksLikeClarificationRequest,
   looksLikeVagueAnswer,
+  looksLikeExplicitUnknownAnswer,
   humanArtifactLabel,
   humanSectionLabel,
 };
