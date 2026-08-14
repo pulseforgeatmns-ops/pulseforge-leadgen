@@ -156,8 +156,11 @@ describe('SPEC-099 Executive Brief + Blueprint grounding (AS Cleaning)', () => {
     assert.match(byId.whoYouAre.body, /deep cleans/i);
     assert.match(byId.whoYouAre.body, /move-in\/move-out/i);
 
-    assert.match(byId.whoYouServe.body, /prefer(?:s)? commercial/i);
-    assert.match(byId.whoYouServe.body, /not yet been established/i);
+    assert.match(byId.whoYouServe.body, /prefer(?:s)? commercial|has not chosen a primary commercial/i);
+    assert.match(
+      byId.whoYouServe.body,
+      /not yet been established|has not chosen|open decision|remain(?:s)? an open/i
+    );
     assert.match(byId.whoYouServe.body, /Greater Toronto Area/i);
     assert.match(byId.whoYouServe.body, /restaurant/i);
     assert.equal(/\bideal customers include\b/i.test(byId.whoYouServe.body), false);
@@ -192,7 +195,7 @@ describe('SPEC-099 Executive Brief + Blueprint grounding (AS Cleaning)', () => {
 });
 
 describe('SPEC-099 bounded uncertainty probing in interview', () => {
-  it('probes once on unknown ICP using context, then accepts a second unknown and continues', async () => {
+  it('probes twice on unknown ICP using context, then accepts a third unknown and continues', async () => {
     const { opts, store } = withStore();
     const started = await startClientInterview({ clientId: 1099 }, opts);
 
@@ -207,7 +210,8 @@ describe('SPEC-099 bounded uncertainty probing in interview', () => {
     assert.equal(firstUnknown.messageType, 'insufficient_answer');
     assert.equal(firstUnknown.nextAction, 'PROBE');
     assert.equal(firstUnknown.question.id, 'ideal_customers');
-    assert.match(firstUnknown.message, /work through|commercial|segment|walkthrough/i);
+    assert.equal(firstUnknown.answerDisposition, 'ANSWER_UNCERTAIN');
+    assert.match(firstUnknown.message, /commercial|segment|property managers|offices|walkthrough|prioritize/i);
     assert.equal(/\bi don'?t know yet\b/i.test(firstUnknown.message), false);
 
     let session = await store.getSession(started.interviewId);
@@ -215,6 +219,7 @@ describe('SPEC-099 bounded uncertainty probing in interview', () => {
     assert.deepEqual(session.interview_state.normalizedFacts.ideal_customers || [], []);
     assert.match(String(session.interview_state.normalizedFacts.growth_focus || ''), /commercial/i);
     assert.ok(session.interview_state.reasoningMemory.activeProbe);
+    assert.equal(session.interview_state.reasoningMemory.activeProbe.attemptCount, 1);
     assert.ok(
       hasRelevantUncertaintyContext(session.interview_state, 'idealCustomers')
     );
@@ -228,10 +233,23 @@ describe('SPEC-099 bounded uncertainty probing in interview', () => {
       AS_CLEANING_ANSWERS.idealCustomerAgain,
       opts
     );
-    assert.equal(secondUnknown.acceptedUnknown, true);
-    assert.equal(secondUnknown.nextAction, 'ASK');
-    assert.notEqual(secondUnknown.question.id, 'ideal_customers');
-    assert.match(secondUnknown.message, /leave that open|prefer commercial|investigate/i);
+    assert.equal(secondUnknown.messageType, 'insufficient_answer');
+    assert.equal(secondUnknown.nextAction, 'PROBE');
+    assert.equal(secondUnknown.question.id, 'ideal_customers');
+    session = await store.getSession(started.interviewId);
+    assert.equal(session.interview_state.stepIndex, 2);
+    assert.equal(session.interview_state.reasoningMemory.activeProbe.attemptCount, 2);
+    assert.deepEqual(session.interview_state.normalizedFacts.ideal_customers || [], []);
+
+    const thirdUnknown = await postInterviewMessage(
+      started.interviewId,
+      "Still not sure.",
+      opts
+    );
+    assert.equal(thirdUnknown.acceptedUnknown, true);
+    assert.equal(thirdUnknown.nextAction, 'ASK');
+    assert.notEqual(thirdUnknown.question.id, 'ideal_customers');
+    assert.match(thirdUnknown.message, /leave that open|prefer commercial|investigate|unresolved/i);
 
     session = await store.getSession(started.interviewId);
     assert.equal(session.interview_state.stepIndex > 2, true);
@@ -251,9 +269,10 @@ describe('SPEC-099 bounded uncertainty probing in interview', () => {
     await postInterviewMessage(started.interviewId, AS_CLEANING_ANSWERS.identity, opts);
     await postInterviewMessage(started.interviewId, AS_CLEANING_ANSWERS.services, opts);
 
-    // Unknown → probe → second unknown → continue
+    // Unknown → probe 1 → probe 2 → third unknown → continue
     await postInterviewMessage(started.interviewId, AS_CLEANING_ANSWERS.idealCustomer, opts);
     await postInterviewMessage(started.interviewId, AS_CLEANING_ANSWERS.idealCustomerAgain, opts);
+    await postInterviewMessage(started.interviewId, "Still not sure.", opts);
 
     await postInterviewMessage(started.interviewId, AS_CLEANING_ANSWERS.avoid, opts);
     await postInterviewMessage(started.interviewId, AS_CLEANING_ANSWERS.geography, opts);
@@ -286,7 +305,7 @@ describe('SPEC-099 bounded uncertainty probing in interview', () => {
     const brief = done.executiveSummary;
     assert.ok(brief);
     const whoServe = brief.sections.find((s) => s.id === 'whoYouServe');
-    assert.match(whoServe.body, /prefer(?:s)? commercial/i);
+    assert.match(whoServe.body, /prefer(?:s)? commercial|has not chosen a primary commercial/i);
     assert.equal(/\bi don'?t know\b/i.test(whoServe.body), false);
     assert.equal(/ideal customers include/i.test(whoServe.body), false);
 
