@@ -62,6 +62,12 @@
   border: 1px solid rgba(154, 123, 45, 0.45); border-radius: 999px;
 }
 .pf-shell-nav .pf-nav-who { color: var(--pf-nav-muted); padding: 6px 4px; white-space: nowrap; }
+/* SPEC-099 — client workspace identity (company, not person) */
+.pf-shell-nav .pf-nav-who.pf-nav-workspace {
+  color: var(--pf-gold);
+  font-weight: 600;
+  letter-spacing: 1.2px;
+}
 .pf-shell-nav .pf-nav-theme {
   min-width: 36px; min-height: 36px; border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.22); background: transparent;

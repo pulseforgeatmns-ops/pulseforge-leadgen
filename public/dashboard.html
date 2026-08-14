@@ -1402,6 +1402,114 @@ body.light-mode .ask-max-answer { color: var(--text-primary); }
   margin-top: 0.55rem;
 }
 
+/* SPEC-099 — client Home onboarding / approved experience */
+.client-home-panel {
+  margin: 0 0 1.5rem;
+  padding: 1.75rem 1.5rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(165deg, color-mix(in srgb, var(--bg-card) 92%, #fff), var(--bg-card));
+}
+.client-home-panel[hidden] { display: none !important; }
+.client-home-eyebrow {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 0.55rem;
+}
+.client-home-title {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 1.55rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--white);
+  margin-bottom: 0.65rem;
+  line-height: 1.25;
+}
+.client-home-body {
+  color: var(--gray-light);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  max-width: 36rem;
+  margin-bottom: 1.25rem;
+}
+.client-home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+.client-home-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0.65rem 1.15rem;
+  border-radius: 999px;
+  background: var(--pf-navy, #10203c);
+  color: #fffdf5;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+}
+.client-home-cta:hover { filter: brightness(1.08); color: #fffdf5; }
+.client-home-secondary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0.55rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--gray-light);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+.client-home-secondary:hover { border-color: var(--gold); color: var(--gold); }
+.client-home-meta {
+  margin-top: 1.35rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 0.85rem;
+}
+.client-home-card-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gray);
+  margin-bottom: 0.25rem;
+}
+.client-home-card-value {
+  color: var(--white);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+body.client-role .right-panel,
+body.client-role .agents-area > .area-header,
+body.client-role .agents-area > .section-divider,
+body.client-role .agents-area > .agents-grid,
+body.client-role .max-brief-banner,
+body.client-role .ask-max-panel,
+body.client-role .sys-status,
+body.client-role #cieSessionsPanel {
+  display: none !important;
+}
+body.client-role .main {
+  grid-template-columns: 1fr;
+}
+body.client-role .stat-row { display: none; }
+
 /* ACTIONS AREA */
 .actions-area { display: none; overflow-y: auto; height: 100%; padding: 1.5rem 2rem; }
 .actions-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; margin-top: 1rem; }
@@ -2715,6 +2823,21 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   <!-- AGENTS AREA -->
   <div class="agents-area">
 
+    <!-- SPEC-099 — client Home (onboarding / Max / My Business) -->
+    <div class="client-home-panel" id="clientHomePanel" hidden>
+      <div class="client-home-eyebrow" id="clientHomeEyebrow">Welcome to Pulseforge</div>
+      <div class="client-home-title" id="clientHomeTitle">Max needs to understand your business</div>
+      <div class="client-home-body" id="clientHomeBody">
+        Before Max can give you useful guidance, he needs to understand who you serve,
+        what you offer, where you're trying to go, and what still needs to be understood.
+      </div>
+      <div class="client-home-actions" id="clientHomeActions">
+        <a class="client-home-cta" id="clientHomeCta" href="/client-intel">Start with Max</a>
+        <a class="client-home-secondary" id="clientHomeSecondary" href="/client-intel" hidden>My Business</a>
+      </div>
+      <div class="client-home-meta" id="clientHomeMeta" hidden></div>
+    </div>
+
     <!-- MAX BRIEF BANNER -->
     <div class="max-brief-banner" id="maxBriefBanner">
       <div class="max-brief-banner-header" onclick="toggleMaxBrief()">
@@ -3865,6 +3988,7 @@ let _statsCache = null, _activityCache = null;
 let _statsCacheTime = 0, _activityCacheTime = 0;
 let _liveRings = {}, _currentDetailKey = null;
 let _currentUserRole = null;
+let _clientWorkspaceName = null;
 let _prospectCountData = null;
 let _pipelineProspectStages = [];
 const PROSPECT_PIPELINE_STAGES = ['cold', 'contacted', 'warm', 'booked', 'closed'];
@@ -3898,6 +4022,119 @@ function applyViewerPermissions() {
   document.querySelector('.agents-area .area-actions')?.remove();
   const rosterSub = document.getElementById('agentRosterSub');
   if (rosterSub) rosterSub.textContent = 'Read-only roster · click any agent to view details';
+  if (_currentUserRole === 'client') applyClientHomeSurface();
+}
+
+/** SPEC-099 — hide operator machinery; surface Max onboarding / My Business. */
+function applyClientHomeSurface() {
+  document.body.classList.add('client-role');
+  const greetingSub = document.querySelector('.greeting-sub');
+  if (greetingSub) greetingSub.textContent = 'Your business workspace';
+  // Activity / agent roster / deploy controls are CSS-hidden for client-role.
+  // Do not treat UI hiding as authorization — server routes remain authoritative.
+  const panel = document.getElementById('clientHomePanel');
+  if (panel) panel.hidden = false;
+  loadClientHomeOnboarding();
+}
+
+function clientWorkspaceLabel() {
+  if (_clientWorkspaceName) return _clientWorkspaceName;
+  const shell = window.PulseforgeShell;
+  return (
+    shell?.tenantName ||
+    shell?.context?.client?.display_name ||
+    shell?.context?.client?.name ||
+    'your business'
+  );
+}
+
+async function loadClientHomeOnboarding() {
+  const titleEl = document.getElementById('clientHomeTitle');
+  const bodyEl = document.getElementById('clientHomeBody');
+  const ctaEl = document.getElementById('clientHomeCta');
+  const secondaryEl = document.getElementById('clientHomeSecondary');
+  const metaEl = document.getElementById('clientHomeMeta');
+  const eyebrowEl = document.getElementById('clientHomeEyebrow');
+  if (!titleEl || !ctaEl) return;
+
+  const company = clientWorkspaceLabel();
+  let onboarding = null;
+  try {
+    const res = await fetch('/api/v1/client-intel/onboarding', {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (res.ok) onboarding = await res.json();
+  } catch (_err) {
+    onboarding = null;
+  }
+
+  const state = onboarding?.onboardingState || 'none';
+  const interviewId = onboarding?.interviewId || null;
+
+  if (state === 'none') {
+    if (eyebrowEl) eyebrowEl.textContent = 'Welcome to Pulseforge';
+    titleEl.textContent = "Max doesn't know your business yet";
+    if (bodyEl) {
+      bodyEl.textContent =
+        'Before Max can give you useful guidance, he needs to understand your business. ' +
+        'This conversation helps Max learn who you serve, what you offer, where you\'re trying to go, ' +
+        'and what still needs to be understood.';
+    }
+    ctaEl.textContent = 'Start with Max';
+    ctaEl.href = '/client-intel';
+    if (secondaryEl) secondaryEl.hidden = true;
+    if (metaEl) metaEl.hidden = true;
+    return;
+  }
+
+  if (state === 'interview_in_progress' || state === 'blueprint_review') {
+    if (eyebrowEl) eyebrowEl.textContent = company;
+    titleEl.textContent =
+      state === 'blueprint_review'
+        ? "Here's what Max understands so far"
+        : 'Continue helping Max understand your business';
+    if (bodyEl) {
+      bodyEl.textContent =
+        state === 'blueprint_review'
+          ? 'Review Max\'s understanding, correct anything that\'s off, then approve when it feels right.'
+          : 'Your conversation with Max is saved. Pick up where you left off — you won\'t start over.';
+    }
+    ctaEl.textContent = 'Continue with Max';
+    ctaEl.href = interviewId
+      ? '/client-intel?interviewId=' + encodeURIComponent(interviewId) + '&action=continue'
+      : '/client-intel';
+    if (secondaryEl) {
+      secondaryEl.hidden = false;
+      secondaryEl.textContent = 'My Business';
+      secondaryEl.href = '/client-intel';
+    }
+    if (metaEl) metaEl.hidden = true;
+    return;
+  }
+
+  // Approved / completed — normal client Home
+  if (eyebrowEl) eyebrowEl.textContent = company;
+  titleEl.textContent = 'Max understands your business.';
+  if (bodyEl) {
+    bodyEl.textContent =
+      'Ask Max for guidance, or open My Business to inspect the durable understanding anytime.';
+  }
+  ctaEl.textContent = 'Ask Max';
+  ctaEl.href = '/command-deck';
+  if (secondaryEl) {
+    secondaryEl.hidden = false;
+    secondaryEl.textContent = 'My Business';
+    secondaryEl.href = '/client-intel';
+  }
+  if (metaEl) {
+    metaEl.hidden = false;
+    metaEl.innerHTML =
+      '<div><div class="client-home-card-label">My Business</div>' +
+      '<div class="client-home-card-value">Approved understanding available</div></div>' +
+      '<div><div class="client-home-card-label">Current intelligence</div>' +
+      '<div class="client-home-card-value">No prospects yet. Max will surface opportunities as your strategy develops.</div></div>';
+  }
 }
 
 // Theme handling moved to the shared shell (/shared/shell.js), which applies
@@ -4184,6 +4421,8 @@ fetch('/api/me', { credentials: 'include' })
     const user = data?.user;
     const role = user?.role;
     _currentUserRole = role;
+    _clientWorkspaceName =
+      data?.client?.display_name || data?.client?.name || null;
     const isOperator = ['admin', 'manager'].includes(role);
     const isViewer = ['viewer', 'client'].includes(role);
     if (role === 'admin') document.getElementById('usersTab').style.display = 'block';
@@ -4191,10 +4430,24 @@ fetch('/api/me', { credentials: 'include' })
     if (pipelineTab) pipelineTab.style.display = (isOperator || isViewer) ? '' : 'none';
     const switcher = document.querySelector('.client-switcher');
     if (switcher && !isOperator) switcher.remove();
+    // Client role: Home is primary; hide operator Activity sidebar tab.
+    // (UI hiding is presentation only — server auth remains authoritative.)
+    if (role === 'client') {
+      document.querySelector('.nav-tab[data-tab="activity"]')?.remove();
+    }
     applyViewerPermissions();
     loadAgentVisibility();
   })
   .catch(() => {});
+
+document.addEventListener('pulseforge:shell-ready', (event) => {
+  if (_currentUserRole !== 'client') return;
+  const name = event?.detail?.tenantName;
+  if (name) {
+    _clientWorkspaceName = name;
+    loadClientHomeOnboarding();
+  }
+});
 
 (function setupMobileNav() {
   const sidebar = document.getElementById('sidebar');
@@ -7292,17 +7545,22 @@ async function loadCieSessions() {
       sub.textContent = sessions.length
         ? 'Current Growth Plan ready to resume' +
           (sessions.length > 1 ? ' · ' + (sessions.length - 1) + ' previous plan' + (sessions.length === 2 ? '' : 's') : '')
-        : 'No Growth Plans yet — start an interview or load the Anchor sample in Client Intel';
+        : _currentUserRole === 'client'
+          ? 'No Growth Plans yet — start with Max in My Business'
+          : 'No Growth Plans yet — start an interview in Client Intel';
     }
     if (!sessions.length) {
       let empty =
-        '<div class="no-data-note">No Growth Plans yet. ' +
-        '<a href="/client-intel">Start a Client Intelligence interview</a>';
-      if (fixturesAllowed) {
+        _currentUserRole === 'client'
+          ? '<div class="no-data-note">Max doesn\'t know your business yet. ' +
+            '<a href="/client-intel">Start with Max</a> to share how your company works.</div>'
+          : '<div class="no-data-note">No Growth Plans yet. ' +
+            '<a href="/client-intel">Start a Client Intelligence interview</a>';
+      if (_currentUserRole !== 'client' && fixturesAllowed) {
         empty +=
           ' or open Client Intel and choose <strong>Load Anchor sample Blueprint</strong>.';
       }
-      empty += '</div>';
+      if (_currentUserRole !== 'client') empty += '</div>';
       list.innerHTML = empty;
       return;
     }

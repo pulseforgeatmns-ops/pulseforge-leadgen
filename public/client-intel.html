@@ -3,27 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pulseforge — Client Intelligence</title>
+  <title>Pulseforge — My Business</title>
   <link rel="icon" href="/favicon.ico">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/shared/shell.css">
   <style>
+    /* SPEC-099 — CIE visual convergence with Max Intelligence Workspace.
+       Reuse Phase B tokens: cream surface, navy type, muted gold, Max serif. */
     :root {
-      --cie-bg: #0c1016;
-      --cie-panel: #141b24;
-      --cie-panel-elevated: #1a2330;
-      --cie-border: #2a3544;
-      --cie-border-soft: rgba(42, 53, 68, 0.65);
-      --cie-text: #e8eef5;
-      --cie-muted: #8b9bb0;
-      --cie-accent: #3d9cfd;
-      --cie-accent-soft: rgba(61, 156, 253, 0.14);
-      --cie-ok: #3ecf8e;
-      --cie-warn: #e6b84d;
-      --cie-bad: #e57373;
-      --cie-assistant: #1e2836;
-      --cie-client: #1a3348;
+      --cie-bg: var(--pf-bg);
+      --cie-panel: var(--pf-bg-card);
+      --cie-panel-elevated: var(--pf-bg-raised);
+      --cie-border: var(--pf-border);
+      --cie-border-soft: var(--pf-border);
+      --cie-text: var(--pf-text);
+      --cie-muted: var(--pf-text-muted);
+      --cie-accent: var(--pf-gold);
+      --cie-accent-soft: var(--pf-gold-glow);
+      --cie-ok: var(--pf-green);
+      --cie-warn: var(--pf-amber);
+      --cie-bad: var(--pf-red);
+      --cie-assistant: color-mix(in srgb, var(--pf-bg-card) 88%, var(--pf-navy));
+      --cie-client: color-mix(in srgb, var(--pf-bg-raised) 70%, #fff);
       --cie-header-h: 3.5rem;
+      --cie-serif: 'Newsreader', Georgia, serif;
     }
     * { box-sizing: border-box; }
     html, body {
@@ -32,16 +36,17 @@
       overflow: hidden;
     }
     body {
-      font-family: 'DM Sans', system-ui, sans-serif;
+      font-family: var(--pf-font-body);
       background:
-        radial-gradient(900px 480px at 8% -8%, rgba(42, 72, 110, 0.35), transparent 60%),
-        radial-gradient(700px 400px at 92% 0%, rgba(30, 58, 90, 0.22), transparent 55%),
+        radial-gradient(900px 480px at 8% -8%, color-mix(in srgb, var(--pf-gold) 12%, transparent), transparent 60%),
+        radial-gradient(700px 400px at 92% 0%, color-mix(in srgb, var(--pf-navy) 8%, transparent), transparent 55%),
         var(--cie-bg);
       color: var(--cie-text);
       display: flex;
       flex-direction: column;
     }
-    header {
+    body > .pf-shell-nav { flex: 0 0 auto; }
+    header.cie-page-header {
       flex: 0 0 auto;
       height: var(--cie-header-h);
       padding: 0 1.5rem;
@@ -49,17 +54,22 @@
       display: flex;
       gap: 1rem;
       align-items: center;
+      background: color-mix(in srgb, var(--pf-bg-card) 90%, transparent);
     }
-    header h1 {
+    header.cie-page-header h1 {
       margin: 0;
-      font-size: 1.1rem;
-      font-weight: 600;
-      letter-spacing: 0.02em;
+      font-family: var(--cie-serif);
+      font-size: 1.35rem;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      color: var(--pf-navy);
     }
-    header p {
+    header.cie-page-header p {
       margin: 0;
       color: var(--cie-muted);
       font-size: 0.85rem;
+      font-family: var(--pf-font-mono);
+      letter-spacing: 0.04em;
     }
     .workspace {
       flex: 1 1 auto;
@@ -71,8 +81,8 @@
       max-width: 1280px;
       width: 100%;
       margin: 0 auto;
-      height: calc(100vh - var(--cie-header-h));
-      max-height: calc(100vh - var(--cie-header-h));
+      height: calc(100vh - var(--cie-header-h) - 48px);
+      max-height: calc(100vh - var(--cie-header-h) - 48px);
     }
     @media (max-width: 900px) {
       html, body { overflow: auto; height: auto; }
@@ -88,12 +98,13 @@
     .panel {
       background: var(--cie-panel);
       border: 1px solid var(--cie-border);
-      border-radius: 14px;
+      border-radius: var(--pf-radius-lg);
       display: flex;
       flex-direction: column;
       min-height: 0;
       height: 100%;
       overflow: hidden;
+      box-shadow: var(--pf-shadow);
     }
     .panel-head {
       flex: 0 0 auto;
@@ -102,9 +113,11 @@
     }
     .panel-head h2 {
       margin: 0;
-      font-size: 0.95rem;
-      font-weight: 600;
-      letter-spacing: 0.01em;
+      font-family: var(--cie-serif);
+      font-size: 1.05rem;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      color: var(--pf-navy);
     }
     .panel-head .sub {
       margin: 0.35rem 0 0;
@@ -123,13 +136,13 @@
     }
     .progress-label strong { color: var(--cie-text); font-weight: 500; }
     .progress-pct {
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--pf-font-mono);
       color: var(--cie-accent);
     }
     .progress-track {
       height: 0.4rem;
       border-radius: 999px;
-      background: #0f1419;
+      background: var(--cie-panel-elevated);
       border: 1px solid var(--cie-border-soft);
       overflow: hidden;
     }
@@ -137,7 +150,7 @@
       height: 100%;
       width: 0%;
       border-radius: inherit;
-      background: linear-gradient(90deg, #2f7fd6, var(--cie-accent));
+      background: linear-gradient(90deg, var(--pf-gold-strong), var(--cie-accent));
       transition: width 280ms ease;
     }
     .controls {
@@ -155,21 +168,26 @@
     }
     input, textarea, button { font: inherit; }
     input, textarea {
-      background: #0f1419;
+      background: color-mix(in srgb, var(--pf-bg-card) 88%, transparent);
       border: 1px solid var(--cie-border);
       color: var(--cie-text);
-      border-radius: 10px;
+      border-radius: 12px;
       padding: 0.55rem 0.7rem;
     }
     input { width: 5.5rem; }
     button {
-      background: var(--cie-accent);
-      color: #041018;
+      background: var(--pf-navy);
+      color: var(--pf-nav-text);
       border: none;
-      border-radius: 10px;
+      border-radius: 999px;
       padding: 0.55rem 0.95rem;
+      font-family: var(--pf-font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
       font-weight: 600;
       cursor: pointer;
+      min-height: 40px;
     }
     button.secondary {
       background: transparent;
@@ -203,18 +221,22 @@
       background: var(--cie-assistant);
       border: 1px solid var(--cie-border-soft);
       border-bottom-left-radius: 6px;
+      font-family: var(--cie-serif);
+      font-size: 1.02rem;
+      line-height: 1.55;
+      color: var(--pf-navy);
     }
     .bubble.client {
       align-self: flex-end;
       background: var(--cie-client);
-      border: 1px solid rgba(61, 156, 253, 0.22);
+      border: 1px solid color-mix(in srgb, var(--pf-gold) 28%, var(--cie-border));
       border-bottom-right-radius: 6px;
     }
     .bubble.reflection {
       align-self: flex-start;
       background: var(--cie-accent-soft);
-      border: 1px solid rgba(61, 156, 253, 0.28);
-      color: #d7e8fb;
+      border: 1px solid color-mix(in srgb, var(--pf-gold) 35%, var(--cie-border));
+      color: var(--pf-navy);
       font-style: italic;
       border-bottom-left-radius: 6px;
     }
@@ -222,6 +244,8 @@
       align-self: center;
       color: var(--cie-muted);
       font-size: 0.8rem;
+      font-family: var(--pf-font-mono);
+      letter-spacing: 0.04em;
       background: transparent;
       border: none;
       padding: 0.35rem 0.5rem;
@@ -230,9 +254,10 @@
     .bubble.trust {
       align-self: flex-start;
       max-width: 94%;
-      background: linear-gradient(160deg, rgba(61, 156, 253, 0.16), rgba(30, 40, 54, 0.9));
-      border: 1px solid rgba(61, 156, 253, 0.35);
-      font-size: 1.02rem;
+      background: linear-gradient(160deg, var(--cie-accent-soft), var(--cie-panel));
+      border: 1px solid color-mix(in srgb, var(--pf-gold) 40%, var(--cie-border));
+      font-family: var(--cie-serif);
+      font-size: 1.05rem;
       line-height: 1.65;
     }
     .composer {
@@ -274,7 +299,7 @@
       padding: 0.85rem 0.95rem;
       border-radius: 12px;
       border: 1px solid var(--cie-border-soft);
-      background: rgba(15, 20, 25, 0.55);
+      background: color-mix(in srgb, var(--pf-bg-raised) 55%, transparent);
     }
     .understanding-row-top {
       display: flex;
@@ -291,7 +316,7 @@
       color: var(--cie-ok);
     }
     .conf-pct {
-      font-family: 'JetBrains Mono', monospace;
+      font-family: var(--pf-font-mono);
       font-size: 0.82rem;
     }
     .conf-pct.bad { color: var(--cie-bad); }
@@ -301,7 +326,7 @@
       margin-top: 0.55rem;
       height: 0.28rem;
       border-radius: 999px;
-      background: #0f1419;
+      background: var(--cie-panel-elevated);
       overflow: hidden;
     }
     .conf-bar > span {
@@ -327,9 +352,9 @@
       z-index: 5;
       padding: 0.7rem 0.8rem;
       border-radius: 10px;
-      background: #0f1620;
+      background: var(--cie-panel);
       border: 1px solid var(--cie-border);
-      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+      box-shadow: var(--pf-shadow);
       font-size: 0.78rem;
       line-height: 1.45;
       color: var(--cie-text);
@@ -347,7 +372,8 @@
       margin: 0 0 0.55rem;
       font-size: 0.78rem;
       font-weight: 600;
-      letter-spacing: 0.04em;
+      font-family: var(--pf-font-mono);
+      letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--cie-muted);
     }
@@ -1010,9 +1036,9 @@
   </style>
 </head>
 <body>
-  <header>
-    <h1>Client Intelligence</h1>
-    <p>A conversation with Max about how your business works</p>
+  <header class="cie-page-header">
+    <h1 id="ciePageTitle">Client Intelligence</h1>
+    <p id="ciePageSub">A conversation with Max about how your business works</p>
   </header>
 
   <div class="workspace">
@@ -1089,6 +1115,7 @@
   </div>
   <div class="error" id="errorBox" hidden></div>
 
+  <script src="/shared/shell.js"></script>
   <script src="/shared/growth-workspace-panel.js"></script>
   <script src="/shared/operator-review-digest.js"></script>
   <script>
@@ -1163,6 +1190,7 @@
       taskGuidanceOpen: false,
       authRole: null,
       authClientId: null,
+      clientDisplayName: null,
       isClientRole: false,
     };
 
@@ -2405,18 +2433,23 @@
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Conversation';
         if (els.workspaceTabs) els.workspaceTabs.hidden = true;
+        applyClientPhaseCopy(phase);
       } else if (phase === 'discovery') {
         setComposerEnabled(true);
-        els.chatPanelTitle.textContent = 'Discovery';
+        els.chatPanelTitle.textContent = state.isClientRole ? 'Talking with Max' : 'Discovery';
+        applyClientPhaseCopy(phase);
       } else if (phase === 'understanding_load' || phase === 'trust_bridge') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Understanding';
+        applyClientPhaseCopy(phase);
       } else if (phase === 'executive_summary') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Understanding';
+        applyClientPhaseCopy(phase);
       } else if (phase === 'blueprint') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Business Blueprint';
+        applyClientPhaseCopy(phase);
       } else if (phase === 'playbook_prep') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Preparing Playbook';
@@ -2425,6 +2458,7 @@
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Complete';
         els.blueprintActions.hidden = true;
+        applyClientPhaseCopy(phase);
       } else if (phase === 'growth_workspace') {
         setComposerEnabled(false);
         els.chatPanelTitle.textContent = 'Growth Workspace';
@@ -2437,6 +2471,7 @@
           els.savedSessions.hidden = false;
           els.savedSessions.classList.add('workspace-left-nav');
         }
+        applyClientPhaseCopy(phase);
       } else if (phase === 'growth') {
         setComposerEnabled(true);
         els.chatPanelTitle.textContent = 'Growth Conversation';
@@ -3452,11 +3487,24 @@
       state.growthPlan = null;
       if (els.workspaceTabs) els.workspaceTabs.hidden = true;
       if (els.savedSessions) els.savedSessions.classList.remove('workspace-left-nav');
-      addBubble(
-        'assistant',
-        "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become.\n\nIf you already have a Growth Plan, resume from the current plan below — you will not re-answer the interview."
-      );
-      els.sidePanel.innerHTML = '<p class="blueprint-empty">When you\'re ready, begin the conversation or resume an approved Blueprint.</p>';
+      if (state.isClientRole) {
+        const company = clientCompanyLabel();
+        addBubble(
+          'assistant',
+          "Welcome.\n\nBefore Max can give you useful guidance, he needs to understand your business.\n\nThis conversation helps Max learn who you serve, what you offer, where you're trying to go, and what still needs to be understood.\n\nWhen you're ready, start with Max."
+        );
+        els.sidePanel.innerHTML =
+          '<p class="blueprint-empty">Help Max understand ' +
+          escapeHtml(company) +
+          '. Your answers become Pulseforge\'s durable understanding of your company.</p>';
+        if (els.startBtn) els.startBtn.textContent = 'Start with Max';
+      } else {
+        addBubble(
+          'assistant',
+          "Welcome.\n\nBefore Pulseforge recommends anything, I'd like to understand how your business works.\n\nThe better I understand your business, the better every future recommendation will become.\n\nIf you already have a Growth Plan, resume from the current plan below — you will not re-answer the interview."
+        );
+        els.sidePanel.innerHTML = '<p class="blueprint-empty">When you\'re ready, begin the conversation or resume an approved Blueprint.</p>';
+      }
       els.sessionStatus.textContent = 'Welcome';
       renderProgress(null);
       loadSavedSessions();
@@ -3475,8 +3523,25 @@
       return (els.clientId && els.clientId.value.trim()) || '1';
     }
 
+    function clientCompanyLabel() {
+      return (
+        state.clientDisplayName ||
+        (window.PulseforgeShell && window.PulseforgeShell.tenantName) ||
+        'your business'
+      );
+    }
+
     function applyClientRoleUi() {
       if (!state.isClientRole) return;
+      document.body.classList.add('client-role');
+      const company = clientCompanyLabel();
+      const pageTitle = document.getElementById('ciePageTitle');
+      const pageSub = document.getElementById('ciePageSub');
+      if (pageTitle) pageTitle.textContent = 'My Business';
+      if (pageSub) {
+        pageSub.textContent = "Pulseforge's durable understanding of " + company;
+      }
+      document.title = 'Pulseforge — My Business';
       if (els.clientIdLabel) els.clientIdLabel.hidden = true;
       if (els.clientId) {
         els.clientId.value = String(state.authClientId || '');
@@ -3491,6 +3556,29 @@
       if (els.notesBtn) els.notesBtn.hidden = true;
       if (els.loadAnchorFixtureBtn) els.loadAnchorFixtureBtn.hidden = true;
       if (els.newInterviewBtn) els.newInterviewBtn.hidden = true;
+      if (els.startBtn) els.startBtn.textContent = 'Start with Max';
+    }
+
+    function applyClientPhaseCopy(phase) {
+      if (!state.isClientRole) return;
+      const company = clientCompanyLabel();
+      if (phase === 'welcome') {
+        els.sidePanelTitle.textContent = 'My Business';
+        els.sidePanelSub.textContent = 'Help Max understand ' + company + '.';
+      } else if (
+        phase === 'executive_summary' ||
+        phase === 'blueprint' ||
+        phase === 'understanding_load' ||
+        phase === 'trust_bridge'
+      ) {
+        els.sidePanelTitle.textContent = 'My Business';
+        els.sidePanelSub.textContent =
+          "Here's what Max understands about " + company + '.';
+      } else if (phase === 'complete' || phase === 'growth_workspace') {
+        els.sidePanelTitle.textContent = "Max's understanding of " + company;
+        els.sidePanelSub.textContent =
+          'Approved business understanding — return here anytime to inspect it.';
+      }
     }
 
     async function loadAuthContext() {
@@ -3510,6 +3598,8 @@
             : data.active_client_id != null
               ? Number(data.active_client_id)
               : null;
+        state.clientDisplayName =
+          (data.client && (data.client.display_name || data.client.name)) || null;
         applyClientRoleUi();
       } catch (_) {
         /* keep operator defaults */
@@ -3529,6 +3619,9 @@
         data.onboardingState === 'interview_in_progress' ||
         data.onboardingState === 'blueprint_review'
       ) {
+        if (els.startBtn && state.isClientRole) {
+          els.startBtn.textContent = 'Continue with Max';
+        }
         if (data.status === 'CLIENT_REVIEW' || data.onboardingState === 'blueprint_review') {
           applyResumeState(data, 'continue');
         } else {

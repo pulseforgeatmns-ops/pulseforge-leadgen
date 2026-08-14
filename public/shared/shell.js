@@ -7,12 +7,16 @@
 //
 // Role visibility mirrors (never weakens) server authorization: hiding a link
 // is presentation only; every route keeps its own requireAuth/requireRole.
+//
+// SPEC-099 — for client-role users, identity shows the business workspace name
+// (from /api/me.client), and nav labels use MAX / MY BUSINESS.
 
 (function () {
   const THEME_KEY = 'pulseforge-theme';
 
   // Primary navigation. `roles` controls visibility; hrefs may vary per role
   // so each role lands on the surface it is authorized to see.
+  // `clientLabel` overrides the label for client-role users only (presentation).
   const NAV_ITEMS = [
     {
       id: 'home', label: 'Home',
@@ -20,12 +24,12 @@
       href: { default: '/dashboard', setter: '/setter#view=home', sales: '/setter#view=home', closer: '/closer' },
     },
     {
-      id: 'command-deck', label: 'Command Deck',
+      id: 'command-deck', label: 'Command Deck', clientLabel: 'Max',
       roles: ['admin', 'manager', 'viewer', 'client'],
       href: { default: '/command-deck' },
     },
     {
-      id: 'client-intel', label: 'Client Intel',
+      id: 'client-intel', label: 'Client Intel', clientLabel: 'My Business',
       roles: ['admin', 'manager', 'client'],
       href: { default: '/client-intel' },
     },
@@ -73,6 +77,11 @@
 
   function hrefFor(item, role) {
     return (role && item.href[role]) || item.href.default;
+  }
+
+  function labelFor(item, role) {
+    if (role === 'client' && item.clientLabel) return item.clientLabel;
+    return item.label;
   }
 
   function currentSurface() {
@@ -137,6 +146,12 @@
 
   async function fetchTenantName(context) {
     const role = context?.user?.role;
+    // Client identity comes from /api/me.client (authoritative). Do not call
+    // /api/clients — clients cannot list tenants, and must not influence display
+    // via URL/query client id.
+    if (role === 'client') {
+      return context?.client?.display_name || context?.client?.name || null;
+    }
     if (!['admin', 'manager'].includes(role)) return null;
     try {
       const response = await fetch('/api/clients', { credentials: 'same-origin' });
@@ -169,7 +184,7 @@
       const link = document.createElement('a');
       link.className = 'pf-nav-link';
       link.href = hrefFor(item, role);
-      link.textContent = item.label;
+      link.textContent = labelFor(item, role);
       link.dataset.pfNav = item.id;
       if (surface === item.id) link.setAttribute('aria-current', 'page');
       links.appendChild(link);
@@ -178,20 +193,33 @@
 
     const group = document.createElement('div');
     group.className = 'pf-nav-group';
-    if (tenantName) {
-      const tenant = document.createElement('span');
-      tenant.className = 'pf-nav-tenant';
-      tenant.textContent = tenantName;
-      tenant.title = 'Active client';
-      group.appendChild(tenant);
-    }
-    if (context?.user?.name) {
+
+    // SPEC-099 — client users: upper-right identity is the business workspace.
+    // Admin/manager: keep gold tenant pill + personal who.
+    if (role === 'client' && tenantName) {
       const who = document.createElement('span');
-      who.className = 'pf-nav-who';
-      who.textContent = context.user.name;
-      who.title = context.user.role ? `Signed in · ${context.user.role}` : 'Signed in';
+      who.className = 'pf-nav-who pf-nav-workspace';
+      who.textContent = tenantName;
+      who.title = 'Your business workspace';
+      who.dataset.pfWorkspace = '1';
       group.appendChild(who);
+    } else {
+      if (tenantName) {
+        const tenant = document.createElement('span');
+        tenant.className = 'pf-nav-tenant';
+        tenant.textContent = tenantName;
+        tenant.title = 'Active client';
+        group.appendChild(tenant);
+      }
+      if (context?.user?.name) {
+        const who = document.createElement('span');
+        who.className = 'pf-nav-who';
+        who.textContent = context.user.name;
+        who.title = context.user.role ? `Signed in · ${context.user.role}` : 'Signed in';
+        group.appendChild(who);
+      }
     }
+
     const themeBtn = document.createElement('button');
     themeBtn.type = 'button';
     themeBtn.id = 'pfThemeToggle';
