@@ -721,6 +721,9 @@ body.theme-dark .mx-panel {
   scroll-behavior: smooth;
 }
 
+/* SPEC-099 — one scroll region (conversation). Header + composer stay fixed.
+   Do not give the composer dock its own constrained overflow — that clipped
+   the input below the modal viewport when suggestions + long replies stacked. */
 .mx-composer-dock {
   flex: 0 0 auto;
   display: flex;
@@ -731,18 +734,19 @@ body.theme-dark .mx-panel {
   border-top: 1px solid var(--pf-border);
   background: inherit;
   z-index: 2;
-  /* Keep send + textarea reachable on short laptop viewports */
-  max-height: min(42vh, 22rem);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
+  max-height: none;
 }
 
 .mx-suggestions {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
-  max-height: 4.5rem;
+  /* Suggestions may scroll internally; composer form below always remains visible */
+  max-height: min(4.5rem, 12vh);
   overflow-y: auto;
+  flex-shrink: 1;
+  min-height: 0;
 }
 
 .mx-msg {
@@ -909,13 +913,16 @@ body.theme-dark .mx-panel {
   align-items: flex-end;
   gap: 0.55rem;
   flex-shrink: 0;
+  /* Always keep send + input in the visible dock */
+  position: relative;
+  z-index: 1;
 }
 .mx-ask-input {
   flex: 1;
   min-width: 0;
   min-height: 2.6rem;
-  /* 180–240px band; also cap by viewport so modal bottom never clips */
-  max-height: min(13.75rem, 28vh);
+  /* Grow within a modest band; thread scrolls — not the whole dock */
+  max-height: min(8rem, 18vh);
   height: 2.6rem;
   box-sizing: border-box;
   border: 1px solid var(--pf-border);

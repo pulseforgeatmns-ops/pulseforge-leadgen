@@ -18,6 +18,7 @@ const {
   normalizeClientId,
 } = require('../utils/clientContext');
 const { getMaxRuntime } = require('../utils/maxRuntime');
+const { presentMaxResultForClient } = require('../utils/clientFacingPresentation');
 
 const requireDashboardRead = [
   requireAuth,
@@ -64,7 +65,10 @@ router.post(
       }
 
       const max = await getWorkspaceRuntime();
-      const result = max.openWorkspace(envelope);
+      let result = max.openWorkspace(envelope);
+      if (isClientRole(req)) {
+        result = presentMaxResultForClient(result);
+      }
       res.set('Cache-Control', 'no-store');
       return res.json(result);
     } catch (err) {
@@ -121,11 +125,14 @@ router.post(
       }
 
       const max = await getWorkspaceRuntime();
-      const result = await max.askWorkspace({
+      let result = await max.askWorkspace({
         sessionId: req.body?.sessionId || null,
         question,
         context,
       });
+      if (isClientRole(req)) {
+        result = presentMaxResultForClient(result);
+      }
 
       res.set('Cache-Control', 'no-store');
       return res.json(result);
@@ -171,6 +178,14 @@ function resolveTenantId(req) {
     }
   }
   return getRequestClientId(req);
+}
+
+function isClientRole(req) {
+  const role =
+    (req.user && req.user.role) ||
+    (req.session && req.session.user && req.session.user.role) ||
+    null;
+  return role === 'client';
 }
 
 module.exports = router;

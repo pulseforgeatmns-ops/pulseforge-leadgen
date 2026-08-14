@@ -2481,7 +2481,7 @@
       </dl>
       ${
         advantages.length
-          ? `<p class="msn-objective-meta"><strong>Anchor advantages:</strong> ${escapeHtml(
+          ? `<p class="msn-objective-meta"><strong>Advantages:</strong> ${escapeHtml(
               advantages.join(' · ')
             )}</p>`
           : ''
@@ -4399,6 +4399,26 @@
     });
     investigation.init();
   }
+
+  function applyClientCommandDeckPresentation() {
+    const role = window.PulseforgeShell?.context?.user?.role;
+    if (role !== 'client') return;
+    document.body.classList.add('client-role');
+    const eyebrow = document.querySelector('.cd-eyebrow');
+    if (eyebrow) eyebrow.textContent = 'Max';
+    document.title = 'Pulseforge — Max';
+    const askInput = document.getElementById('cdAskInput');
+    if (askInput) {
+      askInput.placeholder = 'Ask Max about your business…';
+    }
+    const mxInput = document.getElementById('mxAskInput');
+    if (mxInput) {
+      mxInput.placeholder = 'Ask Max…';
+    }
+  }
+
+  document.addEventListener('pulseforge:shell-ready', applyClientCommandDeckPresentation);
+  if (window.PulseforgeShell) applyClientCommandDeckPresentation();
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => loadDeck());

@@ -3,7 +3,8 @@ const crypto = require('crypto');
 const router = express.Router();
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
-const { ensureClientArchitecture, getActiveClients, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
+const { ensureClientArchitecture, getActiveClients, getClientConfig, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
+const { workspaceDisplayName } = require('../utils/clientFacingPresentation');
 const { featuresFromFlag } = require('../utils/pipelineExperience');
 const { ensureCloserSchema } = require('../utils/closerSchema');
 const { buildMiraContext } = require('../utils/miraContext');
@@ -206,8 +207,38 @@ router.get('/api/emmett/autorun', async (req, res) => {
   }
 });
 
-router.get('/api/me', sessionAuth, (req, res) => {
-  res.json({ user: req.user, active_client_id: getRequestClientId(req) || req.session?.active_client_id || 1 });
+router.get('/api/me', sessionAuth, async (req, res) => {
+  const role = req.user?.role || null;
+  // SPEC-099 / SPEC-096 — client identity is authoritative from session user.client_id.
+  // Never honor query/body client_id for client-role workspace display.
+  const activeClientId =
+    role === 'client'
+      ? getRequestClientId(req)
+      : getRequestClientId(req) || req.session?.active_client_id || 1;
+
+  let client = null;
+  if (activeClientId != null) {
+    try {
+      const row = await getClientConfig(activeClientId);
+      if (row) {
+        client = {
+          id: Number(row.id),
+          name: row.name || null,
+          business_name: row.business_name || row.name || null,
+          display_name: workspaceDisplayName(row),
+          slug: row.slug || null,
+        };
+      }
+    } catch (_err) {
+      client = null;
+    }
+  }
+
+  res.json({
+    user: req.user,
+    active_client_id: activeClientId,
+    client,
+  });
 });
 
 router.get('/api/clients', requireOperator, async (req, res) => {
