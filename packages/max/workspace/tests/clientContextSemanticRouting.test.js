@@ -379,6 +379,38 @@ describe('SPEC-103B semantic classifier (no phrase allowlist)', () => {
     assert.ok(scored.score >= 3.5);
   });
 
+  it('approved Blueprint defaults interrogative wording into CIE without phrase hits', () => {
+    const {
+      shouldClaimClientIntelligenceTurn,
+      isClearlyNonBusinessUtterance,
+    } = require('../ClientIntelligenceContext');
+    // Unseen paraphrase — no product vocabulary required.
+    assert.equal(
+      shouldClaimClientIntelligenceTurn(
+        'What would make the beachhead wobble first?',
+        null,
+        { approvedBlueprint: true }
+      ),
+      true
+    );
+    assert.equal(
+      isClearlyNonBusinessUtterance('What time is it?'),
+      true
+    );
+    assert.equal(
+      shouldClaimClientIntelligenceTurn('What time is it?', null, {
+        approvedBlueprint: true,
+      }),
+      false
+    );
+    assert.equal(
+      shouldClaimClientIntelligenceTurn('hello', null, {
+        approvedBlueprint: true,
+      }),
+      false
+    );
+  });
+
   it('adversarial matrix classifies by meaning (≥30 utterances)', () => {
     assert.ok(ADVERSARIAL_MATRIX.length >= 30);
 
@@ -461,6 +493,33 @@ describe('SPEC-103B semantic classifier (no phrase allowlist)', () => {
 });
 
 describe('SPEC-103B end-to-end routing', () => {
+  it('unseen paraphrase still routes with approved Blueprint (no phrase hit required)', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What would make the beachhead wobble first?',
+    });
+    assert.match(
+      String(result.domainDecision && result.domainDecision.reason),
+      /client_intelligence/
+    );
+    assert.doesNotMatch(
+      result.prose,
+      /Switching from Workspace to General Conversation|detailed_answer|today's briefing/i
+    );
+    assert.match(result.prose, /property|facility|commercial|Toronto|GTA|Blueprint/i);
+  });
+
   it('gap question routes to client-context unknowns, not briefing', async () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);

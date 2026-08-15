@@ -1120,6 +1120,9 @@ function scoreClientBusinessSemantics(question, session) {
   const shortAdvisoryFragment =
     tokens.length <= 4 && features.advisory >= 1 && conceptScore >= 1.0;
 
+  // Score-based business signal (used without Blueprint, and for mode hints).
+  // With an approved Blueprint, maybeHandle uses inverted defaulting instead —
+  // this score is NOT the sole entry gate (SPEC-103B §4 / §12).
   const isClientBusiness =
     !features.unrelated &&
     !features.execution &&
@@ -1131,6 +1134,7 @@ function scoreClientBusinessSemantics(question, session) {
       score >= 3.5 ||
       (features.discourse >= 2 && conceptScore >= 1.2) ||
       (features.advisory >= 2 && conceptScore >= 1.2) ||
+      (features.advisory >= 1 && features.discourse >= 2) ||
       (strongFamily && features.advisory >= 1) ||
       shortAdvisoryFragment);
 
@@ -1142,6 +1146,57 @@ function scoreClientBusinessSemantics(question, session) {
     features,
     isClientBusiness,
   };
+}
+
+/**
+ * SPEC-103B — clearly non-business utterances must not be forced into Blueprint
+ * reasoning even when an approved Blueprint exists.
+ */
+function isClearlyNonBusinessUtterance(question, session) {
+  const scored = scoreClientBusinessSemantics(question, session);
+  if (scored.features.unrelated) return true;
+  const q = scored.q;
+  if (
+    /^(hi|hello|hey|yo|thanks|thank you|ty|thx|cool|great|nice|good morning|good afternoon|good evening)[!.,]*$/.test(
+      q
+    )
+  ) {
+    return true;
+  }
+  if (/\b(tell|say)\b.{0,12}\b(joke|poem|riddle)\b/.test(q)) return true;
+  return false;
+}
+
+/**
+ * SPEC-103B inverted claim: with approved Blueprint, unrecognized client
+ * wording that looks like a question/advisory turn stays in CIE by default.
+ * Concept scores select mode; they do not exclusively gate entry.
+ */
+function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
+  if (isClientContextExecutionRequest(question)) return false;
+  if (isOperationalDeskOrMissionRequest(question)) return false;
+  if (isAmbiguousExecutionAdjacentRequest(question)) return true;
+  if (isClearlyNonBusinessUtterance(question, session)) return false;
+
+  const scored = scoreClientBusinessSemantics(question, session);
+  if (scored.features.unrelated) return false;
+
+  if (opts.approvedBlueprint) {
+    if (scored.features.understanding) return true;
+    if (scored.features.evidence) return true;
+    if (scored.features.followUp) return true;
+    if (scored.features.referentAmbiguous) return true;
+    if (scored.isClientBusiness) return true;
+    // Default for unseen paraphrases: interrogative / advisory shape.
+    if (scored.features.advisory >= 1) return true;
+    // Short continuations after a CIE turn.
+    if (hasPriorClientReasoning(session) && scored.tokens.length <= 8) {
+      return true;
+    }
+    return false;
+  }
+
+  return looksLikeClientIntelligenceAsk(question, session);
 }
 
 function looksLikeBusinessUnderstandingAsk(question) {
@@ -1880,7 +1935,14 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     };
   }
 
-  if (!looksLikeClientIntelligenceAsk(question, session)) {
+  // SPEC-103B — with approved Blueprint, client-business is the default claim;
+  // general conversation is the fallback for clearly non-business turns only.
+  const approvedBlueprint = Boolean(summary && summary.approved);
+  if (
+    !shouldClaimClientIntelligenceTurn(question, session, {
+      approvedBlueprint,
+    })
+  ) {
     return {
       handled: false,
       summary,
@@ -1890,7 +1952,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
   }
 
   // Ambiguous referent with no durable conversational anchor — clarify naturally.
-  if (looksLikeAmbiguousBusinessReferent(question, session) && summary && summary.approved) {
+  if (looksLikeAmbiguousBusinessReferent(question, session) && approvedBlueprint) {
     const prose =
       'I can help with that. Are you asking about the commercial targeting direction ' +
       'from your approved Blueprint, or something else in the current conversation?';
@@ -1917,7 +1979,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     };
   }
 
-  if (!summary || !summary.approved) {
+  if (!approvedBlueprint) {
     const prose = formatMissingAnswer();
     const structured = workspaceStructured(
       prose,
@@ -1995,13 +2057,9 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     prose = formatUnderstandingAnswer(summary);
     reason = 'client_intelligence_understanding';
     turnKind = 'understanding';
-  } else if (
-    isClientContextReasoningRequest(question) ||
-    isClientContextReasoningFollowUp(question, session) ||
-    looksLikeFocusAsk(question) ||
-    looksLikeTargetingAsk(question) ||
-    looksLikeUnknownsAsk(question)
-  ) {
+  } else {
+    // SPEC-103B — once claimed under approved Blueprint, synthesize by mode.
+    // Do not require a second phrase-family match to keep the turn.
     if (!hasUsefulClientContext(summary)) {
       prose =
         'Your approved Blueprint is on file but too thin to support a useful recommendation yet. ' +
@@ -2033,11 +2091,6 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
         reason = 'client_intelligence_reasoning';
       }
     }
-  } else {
-    // Should not reach — looksLikeClientIntelligenceAsk already gated.
-    prose = formatFocusAnswer(summary, attachment);
-    reason = 'client_intelligence_focus';
-    turnKind = 'focus';
   }
 
   const structured = workspaceStructured(prose, [], {
@@ -2104,6 +2157,8 @@ module.exports = {
   isAmbiguousExecutionAdjacentRequest,
   isClientContextReasoningFollowUp,
   looksLikeAmbiguousBusinessReferent,
+  isClearlyNonBusinessUtterance,
+  shouldClaimClientIntelligenceTurn,
   isOperationalDeskOrMissionRequest,
   normalizeClientUtterance,
   scoreClientBusinessSemantics,
