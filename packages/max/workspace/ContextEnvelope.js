@@ -110,6 +110,8 @@ function normalizeContext(raw) {
     'businessBlueprint',
     // SPEC-103 — short-lived session cue for advisory follow-ups (Why?)
     'lastClientIntelligenceTurn',
+    // SPEC-103C — active conversational reasoning thread (session only)
+    'activeClientReasoning',
   ];
   for (const key of passthroughKeys) {
     if (raw[key] !== undefined) {

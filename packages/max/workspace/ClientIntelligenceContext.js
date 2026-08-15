@@ -7,6 +7,7 @@
  * SPEC-103B — Semantic client-business routing (general conversation is fallback).
  * SPEC-103B PATCH — Specificity escalation: explicit requests to decompose an active
  *   recommendation/plan must descend one abstraction level, not re-run gap reasoning.
+ * SPEC-103C — Active conversational reasoning continuity (session-scoped).
  *
  * Runs early in ask() so durable CIE context influences interpretation.
  * Context only — never executes Missions or mutates CRM/outreach state.
@@ -16,6 +17,14 @@
 
 const cie = require('../clientIntelligence');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const {
+  buildDecomposePlanSteps,
+  classifyActiveThoughtFollowUp,
+  composeActiveThoughtResponse,
+  updateActiveReasoningFromTurn,
+  formatPlanEvidenceContinuation,
+  getActiveClientReasoning,
+} = require('./ActiveClientReasoning');
 
 const ACTIVE_ONBOARDING_STATUSES = new Set([
   'NEW',
@@ -1623,29 +1632,8 @@ function formatUnknownsAnswer(summary) {
  */
 function formatDecomposeAnswer(summary, opts = {}) {
   const prior = opts.prior || null;
-  const focus =
-    (prior && prior.recommendationFocus) ||
-    summary.idealCustomers ||
-    summary.campaignGoals ||
-    'the active plan';
-  const audience = summary.idealCustomers || 'your target accounts';
-  const market = summary.geography || summary.targetMarkets || null;
-  const where = market ? ` in ${market}` : '';
-  const outcome =
-    summary.successMetrics ||
-    summary.campaignGoals ||
-    'walkthroughs and recurring revenue';
-
-  const steps = [
-    `Define qualification criteria for ${audience}${where} — geography, building type, and decision-maker role.`,
-    `Build a short account set that fits those criteria (roughly 15–25 targets, not a city-wide list).`,
-    `Identify the decision-maker at each account (owner, property manager, or facility manager).`,
-    `Verify contact paths — email and phone where available; record gaps instead of guessing.`,
-    `Draft a concise outreach message tied to walkthrough outcomes, not a broad pitch blast.`,
-    `Review the list and messages before any send — advisory only until you authorize execution.`,
-    `Run a controlled outreach batch and log conversations → walkthroughs → ${midSentencePhrase(outcome)}.`,
-    `Measure results after one cycle; widen or revise the motion only with evidence.`,
-  ];
+  const built = buildDecomposePlanSteps(summary, { prior });
+  const { focus, steps } = built;
 
   const paragraphs = [];
   paragraphs.push(
@@ -1658,7 +1646,7 @@ function formatDecomposeAnswer(summary, opts = {}) {
       `This is advisory decomposition, not authorization to send outreach.`
   );
 
-  return paragraphs.join('\n\n');
+  return { prose: paragraphs.join('\n\n'), planSteps: steps, focus, recommendation: built.recommendation };
 }
 
 function hasUsefulClientContext(summary) {
@@ -1800,7 +1788,21 @@ function formatApproachAnswer(summary, bits = {}) {
  * SPEC-103A — inserts semantic values only (never nested Blueprint explanations).
  */
 function composeClientContextReasoning(summary, question, opts = {}) {
-  const mode = opts.mode || inferReasoningMode(question, opts.session);
+  const session = opts.session || null;
+
+  // SPEC-103C — resolve follow-ups against active reasoning before fresh classification.
+  const activeFollowUp = classifyActiveThoughtFollowUp(question, session);
+  if (activeFollowUp && activeFollowUp.op !== 'subject_change') {
+    const activeResponse = composeActiveThoughtResponse(
+      summary,
+      question,
+      opts,
+      activeFollowUp
+    );
+    if (activeResponse) return activeResponse;
+  }
+
+  const mode = opts.mode || inferReasoningMode(question, session);
   const prior =
     (opts.session &&
       opts.session.context &&
@@ -1833,12 +1835,15 @@ function composeClientContextReasoning(summary, question, opts = {}) {
   if (mode === 'decompose') {
     const activeFocus =
       (prior && prior.recommendationFocus) || icp || goals || 'the active plan';
+    const decomposed = formatDecomposeAnswer(summary, { prior });
     return {
-      prose: formatDecomposeAnswer(summary, { prior }),
+      prose: decomposed.prose,
       kind: 'decompose',
       confidenceLabel: 'moderate',
       confidence: 0.76,
       recommendationFocus: activeFocus,
+      planSteps: decomposed.planSteps,
+      recommendation: decomposed.recommendation,
     };
   }
 
@@ -2091,7 +2096,7 @@ function formatFocusAnswer(summary, attachment) {
   return composed.prose;
 }
 
-function recordLastCieTurn(session, turn) {
+function recordLastCieTurn(session, turn, summary, prose) {
   if (!session || !session.context || typeof session.context !== 'object') return;
   session.context.lastClientIntelligenceTurn = {
     kind: turn.kind || 'reasoning',
@@ -2100,6 +2105,17 @@ function recordLastCieTurn(session, turn) {
     question: turn.question || null,
     at: new Date().toISOString(),
   };
+  updateActiveReasoningFromTurn(
+    session,
+    {
+      ...turn,
+      kind: turn.kind || turn.turnKind || 'reasoning',
+      planSteps: turn.planSteps || null,
+      conversationalFocusIndex: turn.conversationalFocusIndex,
+    },
+    summary,
+    prose
+  );
 }
 
 /**
@@ -2156,7 +2172,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       reason: 'client_intelligence_execution_clarify',
       recommendationFocus: focus,
       question,
-    });
+    }, summary, prose);
     return {
       reason: 'client_intelligence_execution_clarify',
       handled: true,
@@ -2212,7 +2228,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       kind: 'clarification',
       reason: 'client_intelligence_referent_clarify',
       question,
-    });
+    }, summary, prose);
     return {
       reason: 'client_intelligence_referent_clarify',
       handled: true,
@@ -2252,7 +2268,11 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
 
   // Evidence-dependent: Blueprint alone cannot invent live signals.
   if (isEvidenceDependentClientRequest(question)) {
-    const prose = formatEvidenceDependentGapAnswer(summary);
+    const active = getActiveClientReasoning(session);
+    const prose =
+      active && active.planSteps && active.planSteps.length
+        ? formatPlanEvidenceContinuation(active)
+        : formatEvidenceDependentGapAnswer(summary);
     const structured = workspaceStructured(prose, [], {
       blueprintId: summary.blueprintId,
       evidenceCount: 1,
@@ -2279,7 +2299,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       kind: 'evidence_gap',
       reason: 'client_intelligence_evidence_dependent',
       question,
-    });
+    }, summary, prose);
     return {
       reason: 'client_intelligence_evidence_dependent',
       handled: true,
@@ -2297,6 +2317,9 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
   let recommendationFocus = null;
   let confidence = 0.88;
   let confidenceLabel = null;
+
+  let planSteps = null;
+  let conversationalFocusIndex = null;
 
   if (looksLikeBusinessUnderstandingAsk(question)) {
     prose = formatUnderstandingAnswer(summary);
@@ -2320,6 +2343,8 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       prose = composed.prose;
       turnKind = composed.kind || 'reasoning';
       recommendationFocus = composed.recommendationFocus || null;
+      planSteps = composed.planSteps || null;
+      conversationalFocusIndex = composed.conversationalFocusIndex;
       confidence = composed.confidence != null ? composed.confidence : 0.74;
       confidenceLabel = composed.confidenceLabel || 'moderate';
       if (turnKind === 'understanding') {
@@ -2332,6 +2357,20 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
         reason = 'client_intelligence_reasoning_follow_up';
       } else if (turnKind === 'decompose') {
         reason = 'client_intelligence_decompose';
+      } else if (
+        turnKind === 'plan_select' ||
+        turnKind === 'plan_advance' ||
+        turnKind === 'plan_deepen'
+      ) {
+        reason = 'client_intelligence_plan_continuity';
+      } else if (turnKind === 'plan_critique') {
+        reason = 'client_intelligence_plan_critique';
+      } else if (turnKind === 'plan_capability') {
+        reason = 'client_intelligence_plan_capability';
+      } else if (turnKind === 'plan_operator') {
+        reason = 'client_intelligence_plan_operator';
+      } else if (turnKind === 'plan_recover') {
+        reason = 'client_intelligence_plan_recover';
       } else if (turnKind === 'challenge') {
         reason = 'client_intelligence_reasoning_challenge';
       } else if (turnKind === 'approach') {
@@ -2376,7 +2415,9 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     reason,
     recommendationFocus,
     question,
-  });
+    planSteps,
+    conversationalFocusIndex,
+  }, summary, prose);
 
   return {
     reason,

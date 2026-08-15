@@ -1086,8 +1086,16 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
     });
 
     for (const utterance of SPECIFICITY_UTTERANCES) {
+      const isolated = engine.open({
+        tenantId: String(AS_CLEANING_ID),
+        page: 'command-deck',
+      });
+      await engine.ask({
+        sessionId: isolated.sessionId,
+        question: 'What should we focus on first?',
+      });
       const result = await engine.ask({
-        sessionId: opened.sessionId,
+        sessionId: isolated.sessionId,
         question: utterance,
       });
       assert.match(
