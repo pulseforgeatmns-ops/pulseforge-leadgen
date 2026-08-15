@@ -4,6 +4,7 @@
  * SPEC-098 — Max Workspace thin adapter for approved Client Intelligence.
  * SPEC-103 — Client-context business reasoning from approved understanding.
  * SPEC-103A — Semantic context for reasoning (not nested Blueprint prose).
+ * SPEC-103B — Semantic client-business routing (general conversation is fallback).
  *
  * Runs early in ask() so durable CIE context influences interpretation.
  * Context only — never executes Missions or mutates CRM/outreach state.
@@ -602,10 +603,371 @@ function workspaceStructured(answer, reasoning, extras = {}) {
   });
 }
 
-function looksLikeBusinessUnderstandingAsk(question) {
-  const q = String(question || '').trim().toLowerCase();
-  if (!q) return false;
-  return (
+/**
+ * SPEC-103B — normalize client chat text before semantic scoring.
+ * Handles curly apostrophes, light typo collapse, and casing — not phrase traps.
+ */
+const COMMON_UTTERANCE_LEXICON = Object.freeze([
+  'are',
+  'here',
+  'there',
+  'where',
+  'what',
+  'when',
+  'why',
+  'who',
+  'how',
+  'we',
+  'you',
+  'our',
+  'my',
+  'us',
+  'me',
+  'that',
+  'this',
+  'those',
+  'them',
+  'then',
+  'than',
+  'with',
+  'from',
+  'into',
+  'about',
+  'after',
+  'before',
+  'missing',
+  'know',
+  'known',
+  'focus',
+  'risk',
+  'holes',
+  'hole',
+  'gaps',
+  'gap',
+  'weak',
+  'worry',
+  'concern',
+  'business',
+  'company',
+  'strategy',
+  'next',
+  'first',
+  'start',
+  'learn',
+  'sure',
+  'anything',
+  'should',
+  'would',
+  'could',
+  'dont',
+  "don't",
+  'yet',
+  'still',
+  'need',
+  'needs',
+  'money',
+  'else',
+  'now',
+  'okay',
+  'alright',
+]);
+
+function editDistanceOne(a, b) {
+  if (a === b) return true;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  if (la === lb) {
+    let diffs = 0;
+    for (let i = 0; i < la; i += 1) {
+      if (a[i] !== b[i]) {
+        diffs += 1;
+        if (diffs > 1) return false;
+      }
+    }
+    return diffs === 1;
+  }
+  const shorter = la < lb ? a : b;
+  const longer = la < lb ? b : a;
+  let i = 0;
+  let j = 0;
+  let skipped = false;
+  while (i < shorter.length && j < longer.length) {
+    if (shorter[i] === longer[j]) {
+      i += 1;
+      j += 1;
+    } else if (!skipped) {
+      skipped = true;
+      j += 1;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+function looksTypoLike(token) {
+  return /(.)\1/.test(token) || token.length >= 6;
+}
+
+function repairUtteranceToken(token) {
+  if (!token || token.length < 3) return token;
+  if (COMMON_UTTERANCE_LEXICON.includes(token)) return token;
+  // Only fuzzy-repair tokens that look typo-ish (doubled letters / long junk).
+  // Prevents "that"→"what" style damage on clean closed-class words.
+  if (!looksTypoLike(token)) return token;
+  for (const word of COMMON_UTTERANCE_LEXICON) {
+    if (editDistanceOne(token, word)) return word;
+  }
+  let current = token;
+  for (let guard = 0; guard < 4; guard += 1) {
+    let next = null;
+    for (let i = 0; i < current.length - 1; i += 1) {
+      if (current[i] === current[i + 1]) {
+        next = `${current.slice(0, i)}${current.slice(i + 1)}`;
+        break;
+      }
+    }
+    if (!next || next === current) break;
+    current = next;
+    if (COMMON_UTTERANCE_LEXICON.includes(current)) return current;
+    for (const word of COMMON_UTTERANCE_LEXICON) {
+      if (editDistanceOne(current, word)) return word;
+    }
+  }
+  return token;
+}
+
+function normalizeClientUtterance(question) {
+  const base = String(question || '')
+    .normalize('NFKC')
+    .replace(/[\u2018\u2019\u2032\u00B4]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .toLowerCase()
+    // Triple+ repeats → double (misssing → missing) without erasing real doubles.
+    .replace(/([a-z])\1{2,}/g, '$1$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!base) return base;
+  return base
+    .split(' ')
+    .map((tok) => {
+      const m = tok.match(/^([^a-z0-9']*)([a-z0-9']+)([^a-z0-9']*)$/);
+      if (!m) return repairUtteranceToken(tok);
+      return `${m[1]}${repairUtteranceToken(m[2])}${m[3]}`;
+    })
+    .join(' ');
+}
+
+function tokenizeClientUtterance(normalized) {
+  return String(normalized || '')
+    .replace(/[^a-z0-9'\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function lightStem(token) {
+  let t = String(token || '');
+  if (t.length <= 3) return t;
+  t = t.replace(/'s$/, '');
+  if (t.endsWith('ies') && t.length > 4) return `${t.slice(0, -3)}y`;
+  if (t.endsWith('ing') && t.length > 5) return t.slice(0, -3);
+  if (t.endsWith('ed') && t.length > 4) return t.slice(0, -2);
+  if (t.endsWith('es') && t.length > 4) return t.slice(0, -2);
+  if (t.endsWith('s') && t.length > 3 && !t.endsWith('ss')) return t.slice(0, -1);
+  return t;
+}
+
+/**
+ * Concept families as scoring features (stems/prefixes), not allowlisted phrases.
+ * Unseen paraphrases generalize by hitting shared stems + discourse frames.
+ */
+const CLIENT_BUSINESS_CONCEPTS = Object.freeze({
+  gap: [
+    'unknown',
+    'unclear',
+    'unsure',
+    'uncertain',
+    'missing',
+    'miss',
+    'gap',
+    'hole',
+    'overlook',
+    'assum',
+    'learn',
+    'figur',
+    'investig',
+    'evidenc',
+    'blind',
+  ],
+  priority: [
+    'focus',
+    'priorit',
+    'next',
+    'start',
+    'first',
+    'now',
+    'begin',
+    'direction',
+    'move',
+  ],
+  risk: [
+    'risk',
+    'weak',
+    'worr',
+    'concern',
+    'fail',
+    'avoid',
+    'hole',
+    'threat',
+    'expos',
+  ],
+  strategy: [
+    'strateg',
+    'approach',
+    'position',
+    'growth',
+    'acqui',
+    'target',
+    'opportunit',
+    'tradeoff',
+    'decision',
+    'experiment',
+    'campaign',
+    'segment',
+    'audience',
+    'customer',
+    'service',
+    'metric',
+    'goal',
+    'constraint',
+    'commercial',
+    'residential',
+    'pipeline',
+    'walkthrough',
+  ],
+  owner: [
+    'business',
+    'company',
+    'thinking',
+    'recommend',
+    'suggest',
+    'advice',
+  ],
+});
+
+function conceptFamilyHits(tokens, family) {
+  const stems = tokens.map(lightStem);
+  const joined = stems.join(' ');
+  let hits = 0;
+  for (const prefix of CLIENT_BUSINESS_CONCEPTS[family] || []) {
+    if (stems.some((s) => s.startsWith(prefix) || prefix.startsWith(s))) {
+      hits += 1;
+      continue;
+    }
+    if (joined.includes(prefix)) hits += 1;
+  }
+  return hits;
+}
+
+function hasPriorClientReasoning(session) {
+  const prior =
+    (session &&
+      session.context &&
+      session.context.lastClientIntelligenceTurn) ||
+    null;
+  if (!prior || !prior.kind) return false;
+  return [
+    'reasoning',
+    'focus',
+    'targeting',
+    'opportunity',
+    'unknowns',
+    'follow_up',
+    'clarification',
+    'context',
+    'understanding',
+    'evidence_gap',
+  ].includes(String(prior.kind));
+}
+
+/**
+ * SPEC-103B primary classifier — semantic multi-feature score.
+ * Returns structured intent for routing; not a phrase matcher.
+ */
+function scoreClientBusinessSemantics(question, session) {
+  const q = normalizeClientUtterance(question);
+  const tokens = tokenizeClientUtterance(q);
+  const tokenSet = new Set(tokens);
+  const features = {
+    unrelated: false,
+    execution: false,
+    executionAdjacent: false,
+    evidence: false,
+    understanding: false,
+    followUp: false,
+    referentAmbiguous: false,
+    gap: 0,
+    priority: 0,
+    risk: 0,
+    strategy: 0,
+    owner: 0,
+    discourse: 0,
+    advisory: 0,
+  };
+
+  if (!q) {
+    return { q, tokens, score: 0, mode: null, features, isClientBusiness: false };
+  }
+
+  // Non-business vetoes — do not force Blueprint reasoning.
+  if (
+    /\bwhat time is it\b/.test(q) ||
+    /\b(weather|temperature)\b/.test(q) ||
+    /^\s*what('s| is)\s+\d+\s*(times|x|\*|plus|\+|minus|-)\s*\d+/.test(q) ||
+    /\b\d+\s*(times|x|\*)\s*\d+\b/.test(q)
+  ) {
+    features.unrelated = true;
+    return { q, tokens, score: 0, mode: null, features, isClientBusiness: false };
+  }
+
+  if (isClientContextExecutionRequest(q)) {
+    features.execution = true;
+    return { q, tokens, score: 0, mode: null, features, isClientBusiness: false };
+  }
+
+  // Ambiguous agreement / consequential action — fail closed, do not advise-as-execute.
+  if (
+    /\b(let'?s|lets)\s+(go after|hit|launch|start|run|send|do)\b/.test(q) ||
+    /\b(alright|all right|ok(ay)?),?\s+(let'?s|lets)\b/.test(q) ||
+    /\bgo after (them|it|that|those)\b/.test(q)
+  ) {
+    features.executionAdjacent = true;
+  }
+
+  // Evidence-dependent frame: live/current specific actors or need — not ideal ICP advice.
+  const asksLiveActors =
+    /\b(which|who)\b/.test(q) &&
+    /\b(companies|prospects|accounts|businesses|managers)\b/.test(q) &&
+    !/\bshould we (target|pursue|reach)\b/.test(q);
+  const asksCurrentNeed =
+    (/\b(actually|currently|right now|this (week|month)|monday|around here)\b/.test(
+      q
+    ) &&
+      /\b(need|buy|call|companies|prospects|who|which)\b/.test(q)) ||
+    /\bmost likely to need (us|our)\b/.test(q) ||
+    /\bwho (around here )?(needs|need) (us|our|cleaning)\b/.test(q) ||
+    /\bwho actually needs\b/.test(q);
+  const asksSignals =
+    /\bbuying signals?\b/.test(q) ||
+    /\bshowing (buying |purchase )?signals?\b/.test(q) ||
+    /\bwho is (expanding|hiring|buying|looking)\b/.test(q) ||
+    /\bwhat changed in (our |the )?market\b/.test(q);
+  if (asksLiveActors || asksCurrentNeed || asksSignals) {
+    features.evidence = true;
+  }
+
+  if (
     /what do you (know|understand) about (my |our )?business/.test(q) ||
     /what have you learned about (my |our )?business/.test(q) ||
     /tell me what you (know|understand)/.test(q) ||
@@ -613,82 +975,269 @@ function looksLikeBusinessUnderstandingAsk(question) {
     /who (am i|are we)( to you)?\b/.test(q) ||
     /what services do we offer/.test(q) ||
     /who are (my |our )?(ideal )?customers/.test(q)
-  );
-}
+  ) {
+    features.understanding = true;
+  }
 
-function looksLikeTargetingAsk(question) {
-  const q = String(question || '').trim().toLowerCase();
-  return (
-    /who should we target/.test(q) ||
-    /who (do|should) we (pursue|target|go after)/.test(q) ||
-    /who should (i|we) (reach|contact|pursue|target)/.test(q) ||
-    /ideal customer/.test(q) ||
-    /first (segment|audience|target)/.test(q)
-  );
-}
+  features.gap = conceptFamilyHits(tokens, 'gap');
+  features.priority = conceptFamilyHits(tokens, 'priority');
+  features.risk = conceptFamilyHits(tokens, 'risk');
+  features.strategy = conceptFamilyHits(tokens, 'strategy');
+  features.owner = conceptFamilyHits(tokens, 'owner');
 
-function looksLikeUnknownsAsk(question) {
-  const q = String(question || '').trim().toLowerCase();
-  return (
-    /biggest unknowns?/.test(q) ||
-    /what (do|don't|dont) (we|you) (still )?know/.test(q) ||
-    /what don'?t (we|you) know/.test(q) ||
-    /known unknowns?/.test(q) ||
-    /what('s| is) (still )?unclear/.test(q) ||
-    /what are we missing/.test(q) ||
-    /what (do|don't|dont) we know yet/.test(q)
-  );
-}
-
-/**
- * Legacy focus detector (SPEC-098). Kept for continuity; SPEC-103 expands
- * via isClientContextReasoningRequest rather than phrase-specific traps.
- */
-function looksLikeFocusAsk(question) {
-  const q = String(question || '').trim().toLowerCase();
-  return (
-    /what should we (focus on|do) (this week|next|first)/.test(q) ||
-    /what should we focus on\b/.test(q) ||
-    /what should we do next/.test(q) ||
-    /what should (i|we) do (this week|next|first)/.test(q) ||
-    /focus (for |this )?week/.test(q) ||
-    /priority (this week|next|first)/.test(q) ||
-    /where should we start/.test(q) ||
-    /what would you priorit/.test(q)
-  );
-}
-
-/**
- * SPEC-103 — questions that need live market/prospect evidence, not Blueprint alone.
- * Conceptual: named entities, buying signals, current market ranking.
- */
-function isEvidenceDependentClientRequest(question) {
-  const q = String(question || '').trim().toLowerCase();
-  if (!q) return false;
+  // Discourse: inclusive client voice / owner perspective / Max judgment.
+  if (/\b(we|us|our|my)\b/.test(q)) features.discourse += 2;
+  if (/\b(business|company|customers?|clients?|market|strategy)\b/.test(q)) {
+    features.discourse += 2;
+  }
   if (
-    /buying signals?/.test(q) ||
-    /showing (buying |purchase )?signals?/.test(q) ||
-    /which (companies|prospects|property managers|facility managers|accounts)/.test(
+    /\bif (this|that|it) (was|were) your (company|business)\b/.test(q) ||
+    /\bif you were (me|us|in my (shoes|position))\b/.test(q) ||
+    /\bwhat would you (do|think|be thinking|want|figure|learn|start)\b/.test(q) ||
+    /\bhow('s| is) (this|it|that) looking\b/.test(q) ||
+    /\bhow do you feel\b/.test(q) ||
+    /\bwhat worries you\b/.test(q) ||
+    /\bchange your mind\b/.test(q)
+  ) {
+    features.discourse += 3;
+    features.owner += 1;
+  }
+
+  // Advisory / interrogative structure (not a required keyword).
+  if (
+    /^(what|where|who|how|why|anything|do you|would you|okay|ok|alright)\b/.test(
       q
     ) ||
-    /who is (expanding|hiring|buying|looking)/.test(q) ||
-    /most likely to need (us|our)/.test(q) ||
-    /what changed in (our |the )?market/.test(q) ||
-    /right now\b/.test(q) &&
-      /(which|who|companies|prospects|signals|ranking|hottest)/.test(q)
+    /\?$/.test(String(question || '').trim())
+  ) {
+    features.advisory += 2;
+  }
+  if (
+    tokenSet.has('should') ||
+    tokenSet.has('would') ||
+    tokenSet.has('could') ||
+    tokenSet.has('least')
+  ) {
+    features.advisory += 1;
+  }
+
+  // Gap/epistemic frames beyond stem hits (negation + know/learn/sure).
+  if (
+    (/\b(don'?t|dont|do not|least|still)\b/.test(q) &&
+      /\b(know|sure|clear|learn|understand)\b/.test(q)) ||
+    /\b(missing|overlooking|assumptions?|gaps?|holes?|uncertaint)/.test(q) ||
+    /\bbefore we (spend|put|invest|pay)\b/.test(q)
+  ) {
+    features.gap += 2;
+  }
+
+  // Priority / next-action frames.
+  if (
+    /\b(now what|what now|from here|where would you (go|start)|what should we)\b/.test(
+      q
+    ) ||
+    /\b(focus|start|next|first)\b/.test(q)
+  ) {
+    features.priority += 2;
+  }
+
+  // Comparative / negation strategy frames.
+  if (
+    /\binstead of\b/.test(q) ||
+    /\bwhy (commercial|residential)\b/.test(q) ||
+    /\bwhat shouldn'?t we\b/.test(q) ||
+    /\bwhat would make (this|it) fail\b/.test(q)
+  ) {
+    features.strategy += 2;
+    features.risk += 1;
+  }
+
+  const prior = hasPriorClientReasoning(session);
+  if (prior) {
+    features.discourse += 1;
+    if (
+      /^(why\??|why that\??|why not\??|why instead\??|and why\??|tell me why\??)$/.test(
+        q
+      ) ||
+      /^(why that|why this|why those|why instead)\b/.test(q) ||
+      /\bwhy (that|this|those|commercial|residential)\b/.test(q) ||
+      (/^(what about|how about)\b/.test(q) &&
+        /\b(commercial|residential|that|this|them|it)\b/.test(q)) ||
+      /^(anything else|and\??|what else|ok(ay)?\.? what now|so what now)\??$/.test(
+        q
+      ) ||
+      (/^(anything|what) (else|next)\??$/.test(q))
+    ) {
+      features.followUp = true;
+    }
+    if (
+      /\bhow('s| is) (this|it|that) looking\b/.test(q) ||
+      /\bhow do you feel\b/.test(q) ||
+      /^(thoughts|and)\??$/.test(q)
+    ) {
+      features.followUp = true;
+    }
+  } else if (
+    /\bhow('s| is) (this|it|that) looking\b/.test(q) ||
+    /\bhow do you feel( about (it|this|that))?\b/.test(q)
+  ) {
+    // No conversational referent yet — clarify rather than invent a topic.
+    features.referentAmbiguous = true;
+  }
+
+  const conceptScore =
+    features.gap * 1.4 +
+    features.priority * 1.2 +
+    features.risk * 1.2 +
+    features.strategy * 1.0 +
+    features.owner * 0.8;
+  const score =
+    conceptScore + features.discourse + features.advisory + (features.followUp ? 4 : 0);
+
+  let mode = 'focus';
+  const ranked = [
+    ['unknowns', features.gap],
+    ['risk', features.risk],
+    ['opportunity', features.strategy > 0 && /\bopportunit/.test(q) ? features.strategy + 2 : 0],
+    ['targeting', /\b(target|who should|audience|segment|go after)\b/.test(q) ? 3 : 0],
+    ['approach', /\b(approach|from here|if you were|your (company|business)|thinking)\b/.test(q) ? 3 : 0],
+    ['campaign_advisory', /\bcampaign\b/.test(q) && /\b(recommend|suggest)\b/.test(q) ? 4 : 0],
+    ['week', /\bthis week\b/.test(q) ? 3 : 0],
+    ['priority', features.priority],
+  ].sort((a, b) => b[1] - a[1]);
+  if (features.understanding) mode = 'understanding';
+  else if (features.followUp) mode = 'follow_up';
+  else if (features.evidence) mode = 'evidence';
+  else if (ranked[0] && ranked[0][1] > 0) {
+    mode = ranked[0][0] === 'priority' ? 'focus' : ranked[0][0];
+  }
+
+  const strongFamily =
+    features.gap >= 2 ||
+    features.priority >= 2 ||
+    features.risk >= 1 ||
+    features.strategy >= 2;
+  const shortAdvisoryFragment =
+    tokens.length <= 4 && features.advisory >= 1 && conceptScore >= 1.0;
+
+  // Score-based business signal (used without Blueprint, and for mode hints).
+  // With an approved Blueprint, maybeHandle uses inverted defaulting instead —
+  // this score is NOT the sole entry gate (SPEC-103B §4 / §12).
+  const isClientBusiness =
+    !features.unrelated &&
+    !features.execution &&
+    !features.referentAmbiguous &&
+    (features.understanding ||
+      features.followUp ||
+      features.evidence ||
+      features.executionAdjacent ||
+      score >= 3.5 ||
+      (features.discourse >= 2 && conceptScore >= 1.2) ||
+      (features.advisory >= 2 && conceptScore >= 1.2) ||
+      (features.advisory >= 1 && features.discourse >= 2) ||
+      (strongFamily && features.advisory >= 1) ||
+      shortAdvisoryFragment);
+
+  return {
+    q,
+    tokens,
+    score,
+    mode,
+    features,
+    isClientBusiness,
+  };
+}
+
+/**
+ * SPEC-103B — clearly non-business utterances must not be forced into Blueprint
+ * reasoning even when an approved Blueprint exists.
+ */
+function isClearlyNonBusinessUtterance(question, session) {
+  const scored = scoreClientBusinessSemantics(question, session);
+  if (scored.features.unrelated) return true;
+  const q = scored.q;
+  if (
+    /^(hi|hello|hey|yo|thanks|thank you|ty|thx|cool|great|nice|good morning|good afternoon|good evening)[!.,]*$/.test(
+      q
+    )
   ) {
     return true;
   }
+  if (/\b(tell|say)\b.{0,12}\b(joke|poem|riddle)\b/.test(q)) return true;
   return false;
 }
 
 /**
- * SPEC-103 — advisory strategy questions grounded in approved client understanding.
- * Conceptual families (priority, opportunity, risk, approach, weekly action) —
- * not a long phrase-specific trap list. Must not steal desk/canary/mission turns.
+ * SPEC-103B inverted claim: with approved Blueprint, unrecognized client
+ * wording that looks like a question/advisory turn stays in CIE by default.
+ * Concept scores select mode; they do not exclusively gate entry.
  */
+function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
+  if (isClientContextExecutionRequest(question)) return false;
+  if (isOperationalDeskOrMissionRequest(question)) return false;
+  if (isAmbiguousExecutionAdjacentRequest(question)) return true;
+  if (isClearlyNonBusinessUtterance(question, session)) return false;
+
+  const scored = scoreClientBusinessSemantics(question, session);
+  if (scored.features.unrelated) return false;
+
+  if (opts.approvedBlueprint) {
+    if (scored.features.understanding) return true;
+    if (scored.features.evidence) return true;
+    if (scored.features.followUp) return true;
+    if (scored.features.referentAmbiguous) return true;
+    if (scored.isClientBusiness) return true;
+    // Default for unseen paraphrases: interrogative / advisory shape.
+    if (scored.features.advisory >= 1) return true;
+    // Short continuations after a CIE turn.
+    if (hasPriorClientReasoning(session) && scored.tokens.length <= 8) {
+      return true;
+    }
+    return false;
+  }
+
+  return looksLikeClientIntelligenceAsk(question, session);
+}
+
+function looksLikeBusinessUnderstandingAsk(question) {
+  return scoreClientBusinessSemantics(question).features.understanding;
+}
+
+function looksLikeTargetingAsk(question) {
+  const scored = scoreClientBusinessSemantics(question);
+  return scored.mode === 'targeting' && scored.isClientBusiness;
+}
+
+function looksLikeUnknownsAsk(question) {
+  const scored = scoreClientBusinessSemantics(question);
+  return (
+    scored.isClientBusiness &&
+    (scored.mode === 'unknowns' || scored.features.gap >= 2)
+  );
+}
+
+/** Legacy focus detector — now semantic priority/next-action scope. */
+function looksLikeFocusAsk(question) {
+  const scored = scoreClientBusinessSemantics(question);
+  return (
+    scored.isClientBusiness &&
+    (scored.mode === 'focus' ||
+      scored.mode === 'week' ||
+      scored.mode === 'approach' ||
+      scored.features.priority >= 2)
+  );
+}
+
+/**
+ * SPEC-103/103B — live market/prospect evidence, not Blueprint alone.
+ * Semantic current-need / named-actor frames (not phrase allowlists).
+ */
+function isEvidenceDependentClientRequest(question) {
+  return scoreClientBusinessSemantics(question).features.evidence === true;
+}
+
 function isOperationalDeskOrMissionRequest(question) {
-  const q = String(question || '').trim().toLowerCase();
+  const q = normalizeClientUtterance(question);
   if (!q) return false;
   return (
     /\b(canary|fillable\s+(?:verification\s+)?table|verification\s+work\s+order|preparation[-\s]*only)\b/.test(
@@ -706,61 +1255,23 @@ function isOperationalDeskOrMissionRequest(question) {
   );
 }
 
-function isClientContextReasoningRequest(question) {
-  const q = String(question || '').trim().toLowerCase();
-  if (!q) return false;
-  if (isEvidenceDependentClientRequest(q)) return false;
-  if (isOperationalDeskOrMissionRequest(q)) return false;
-  if (looksLikeBusinessUnderstandingAsk(q)) return false;
-
-  // Priority / next-action family — require advisory framing, not "…batch first…"
-  const priorityFamily =
-    /\bwhat should (we|i) (focus on|do|priorit)/.test(q) ||
-    /\bwhat should we focus on\b/.test(q) ||
-    /\bfocus on first\b/.test(q) ||
-    /\bwhere should we start\b/.test(q) ||
-    /\bwhat would you priorit/.test(q) ||
-    /\bpriorit(y|ies|ize)\b.{0,24}\b(this week|next|first)\b/.test(q) ||
-    /\b(this week|next)\b.{0,24}\bpriorit/.test(q);
-
-  const opportunityFamily =
-    /\b(biggest opportunity|main opportunity)\b/.test(q) ||
-    /\bwhat.*(opportunity|opportunities)\b/.test(q) ||
-    /\bwhere (should|would) we grow\b/.test(q);
-
-  const riskFamily =
-    /\b(biggest risks?|what should we avoid|what would you avoid)\b/.test(q) ||
-    (/\brisks?\b/.test(q) &&
-      /\b(what|biggest|our|main)\b/.test(q) &&
-      !/\b(mission|canary|mail|launch)\b/.test(q));
-
-  const approachFamily =
-    /\b(how would you approach|what would you test first|does (our |the )?current strategy|make sense)\b/.test(
-      q
-    ) || /\bapproach growth from here\b/.test(q);
-
-  const advisoryCampaign =
-    /\bwhat campaign would you (recommend|suggest)\b/.test(q) ||
-    /\bwhat would you recommend\b/.test(q);
-
-  // Do NOT claim bare "Why …?" here — that steals Workspace explain intents
-  // (e.g. "Why is Marlowe #1?"). Follow-ups use isClientContextReasoningFollowUp.
-
-  return (
-    looksLikeFocusAsk(q) ||
-    looksLikeTargetingAsk(q) ||
-    looksLikeUnknownsAsk(q) ||
-    priorityFamily ||
-    opportunityFamily ||
-    riskFamily ||
-    approachFamily ||
-    advisoryCampaign
-  );
+/**
+ * SPEC-103B — advisory client-business reasoning via semantic scope.
+ * General conversation is the fallback, not the default escape hatch.
+ */
+function isClientContextReasoningRequest(question, session) {
+  const scored = scoreClientBusinessSemantics(question, session);
+  if (!scored.isClientBusiness) return false;
+  if (scored.features.evidence) return false;
+  if (scored.features.understanding) return false;
+  if (scored.features.execution || scored.features.executionAdjacent) return false;
+  if (isOperationalDeskOrMissionRequest(scored.q)) return false;
+  return true;
 }
 
 /** Explicit execution intent — must not be answered as advisory advice. */
 function isClientContextExecutionRequest(question) {
-  const q = String(question || '').trim().toLowerCase();
+  const q = normalizeClientUtterance(question);
   if (!q) return false;
   if (
     /^(ok(ay)?|yes|sure|sounds good|go ahead|do it|proceed)\.?$/.test(q)
@@ -780,46 +1291,34 @@ function isClientContextExecutionRequest(question) {
   );
 }
 
+/** Ambiguous strategy-agreement vs execution — clarify, never execute. */
+function isAmbiguousExecutionAdjacentRequest(question) {
+  return scoreClientBusinessSemantics(question).features.executionAdjacent === true;
+}
+
 function isClientContextReasoningFollowUp(question, session) {
-  const q = String(question || '').trim().toLowerCase();
-  if (!q) return false;
-  const prior =
-    (session &&
-      session.context &&
-      session.context.lastClientIntelligenceTurn) ||
-    null;
-  if (!prior || !prior.kind) return false;
-  const reasoningKinds = new Set([
-    'reasoning',
-    'focus',
-    'targeting',
-    'opportunity',
-    'unknowns',
-    'follow_up',
-  ]);
-  if (!reasoningKinds.has(String(prior.kind))) return false;
-  // Short why-follow-ups, or why-that / instead-of after a CIE recommendation.
-  if (/^(why\??|why that\??|why not\??|why instead\??|and why\??|tell me why\??)$/.test(q)) {
-    return true;
-  }
-  return (
-    /^(why that|why this|why those|why instead)\b/.test(q) ||
-    /\bwhy (that|this|those|commercial|residential)\b/.test(q) ||
-    (/\binstead of\b/.test(q) && /^(why|and)\b/.test(q))
-  );
+  const scored = scoreClientBusinessSemantics(question, session);
+  return scored.features.followUp === true;
+}
+
+function looksLikeAmbiguousBusinessReferent(question, session) {
+  const scored = scoreClientBusinessSemantics(question, session);
+  return scored.features.referentAmbiguous === true;
 }
 
 function looksLikeClientIntelligenceAsk(question, session) {
   if (isClientContextExecutionRequest(question)) return false;
   if (isOperationalDeskOrMissionRequest(question)) return false;
+  if (isAmbiguousExecutionAdjacentRequest(question)) return true;
+  const scored = scoreClientBusinessSemantics(question, session);
+  if (scored.features.unrelated) return false;
   return (
-    looksLikeBusinessUnderstandingAsk(question) ||
-    looksLikeTargetingAsk(question) ||
-    looksLikeUnknownsAsk(question) ||
-    looksLikeFocusAsk(question) ||
-    isClientContextReasoningRequest(question) ||
-    isEvidenceDependentClientRequest(question) ||
-    isClientContextReasoningFollowUp(question, session)
+    scored.features.understanding ||
+    scored.features.evidence ||
+    scored.features.followUp ||
+    scored.features.referentAmbiguous ||
+    scored.isClientBusiness ||
+    isClientContextReasoningRequest(question, session)
   );
 }
 
@@ -956,31 +1455,75 @@ function formatTargetingAnswer(summary) {
 }
 
 function formatUnknownsAnswer(summary) {
-  const lines = [];
-  if (summary.unknowns && summary.unknowns.length) {
-    lines.push('From your approved Blueprint, these remain unresolved:');
-    for (const u of summary.unknowns) lines.push(`• ${u}`);
+  const icp = summary.idealCustomers || null;
+  const market = summary.geography || summary.targetMarkets || null;
+  const goals = summary.campaignGoals || null;
+  const metrics = summary.successMetrics || null;
+  const knownBits = [];
+  if (summary.identity || summary.businessName) {
+    knownBits.push(presentText(summary.identity || summary.businessName));
   }
-  const soft = [];
-  if (!summary.avoidCustomers) soft.push('who to avoid');
-  if (!summary.successMetrics) soft.push('success metrics');
-  if (!summary.competitiveAdvantages) soft.push('differentiation');
-  if (!summary.idealCustomers) soft.push('ideal customer / ICP');
-  if (soft.length && !(summary.unknowns && summary.unknowns.length)) {
-    lines.push('These sections are still thin or missing:');
-    for (const u of soft) lines.push(`• ${u}`);
-  }
-  lines.push('');
-  lines.push(
-    'Separately, I do not yet have enough campaign or market evidence to rank live opportunities. ' +
-      'I will keep Blueprint unknowns as unknowns rather than inventing answers.'
+  if (icp) knownBits.push(`ideal customers center on ${icp}`);
+  if (market) knownBits.push(`geography is anchored to ${market}`);
+  if (goals) knownBits.push(`near-term goal is ${goals}`);
+  if (metrics) knownBits.push(`success is judged by ${metrics}`);
+
+  const paragraphs = [];
+  paragraphs.push(
+    'We have enough clarity to begin, but there are still several things I would not claim to know yet.'
   );
-  if (!lines.length) {
-    return (
-      'The approved Blueprint covers the core sections. Remaining uncertainty is operational or evidence-based — not invented business facts.'
+
+  if (knownBits.length) {
+    paragraphs.push(
+      `KNOWN from your approved Blueprint: ${knownBits.slice(0, 3).join('; ')}.`
     );
   }
-  return lines.join('\n');
+
+  const inferenceBits = [];
+  if (icp) {
+    inferenceBits.push(
+      `starting with ${icp}${market ? ` in ${market}` : ''} is a reasonable first motion`
+    );
+  } else {
+    inferenceBits.push(
+      'a tighter commercial acquisition motion is the right shape of first experiment'
+    );
+  }
+  paragraphs.push(
+    `INFERENCE (Max reasoning, not new fact): ${inferenceBits.join('; ')}. ` +
+      'That is directional guidance from approved understanding — not observed performance.'
+  );
+
+  const unknownBits = [];
+  if (market) {
+    unknownBits.push(
+      `which part of the ${market} commercial market will respond best`
+    );
+  } else {
+    unknownBits.push('which part of the commercial market will respond best');
+  }
+  if (icp && /property|facility/i.test(icp)) {
+    unknownBits.push(
+      'whether property managers will outperform facility managers'
+    );
+  } else {
+    unknownBits.push('which decision-maker segment will outperform the others');
+  }
+  unknownBits.push(
+    'which acquisition motion will produce the strongest recurring contracts'
+  );
+  for (const u of summary.unknowns || []) {
+    if (u) unknownBits.push(presentText(u));
+  }
+  paragraphs.push(`UNKNOWN: ${unknownBits.slice(0, 4).join('; ')}.`);
+
+  paragraphs.push(
+    'EVIDENCE NEEDED: we do not yet have enough campaign evidence to know expected walkthrough rate, close rate, or acquisition cost. ' +
+      "Those are not reasons to wait — they are the things the first acquisition experiment should help us learn. " +
+      'I will not invent live companies, signals, or performance claims.'
+  );
+
+  return paragraphs.join('\n\n');
 }
 
 function hasUsefulClientContext(summary) {
@@ -1030,27 +1573,17 @@ function pickRelevantFacts(summary, mode) {
 }
 
 function inferReasoningMode(question, session) {
-  const q = String(question || '').trim().toLowerCase();
-  if (isClientContextReasoningFollowUp(q, session)) return 'follow_up';
-  if (looksLikeUnknownsAsk(q)) return 'unknowns';
-  if (looksLikeTargetingAsk(q)) return 'targeting';
-  if (
-    /\b(this week|do this week|what should i do)\b/.test(q) &&
-    !/\bfocus on first\b/.test(q)
-  ) {
-    return 'week';
+  const scored = scoreClientBusinessSemantics(question, session);
+  if (scored.features.followUp) return 'follow_up';
+  if (scored.mode === 'unknowns' || scored.features.gap >= 2) return 'unknowns';
+  if (scored.mode === 'targeting') return 'targeting';
+  if (scored.mode === 'week') return 'week';
+  if (scored.mode === 'opportunity' || /\bopportunit/.test(scored.q)) {
+    return 'opportunity';
   }
-  if (/\b(opportunity|opportunities|grow)\b/.test(q)) return 'opportunity';
-  if (/\b(risk|avoid)\b/.test(q)) return 'risk';
-  if (
-    /\bcampaign would you (recommend|suggest)\b/.test(q) ||
-    /\bwhat would you recommend\b/.test(q)
-  ) {
-    return 'campaign_advisory';
-  }
-  if (/\b(test first|approach|strategy make sense|from here)\b/.test(q)) {
-    return 'approach';
-  }
+  if (scored.mode === 'risk' || scored.features.risk >= 2) return 'risk';
+  if (scored.mode === 'campaign_advisory') return 'campaign_advisory';
+  if (scored.mode === 'approach' || scored.features.owner >= 2) return 'approach';
   return 'focus';
 }
 
@@ -1114,6 +1647,32 @@ function composeClientContextReasoning(summary, question, opts = {}) {
       icp ||
       goals ||
       'that direction';
+    const qNorm = normalizeClientUtterance(question);
+    if (/^(anything else|what else|and\??)\??$/.test(qNorm)) {
+      return {
+        prose:
+          `Beyond ${focusBit}, I would also watch for early response evidence — ` +
+          `which conversations turn into walkthroughs — before widening the audience. ` +
+          `That is still advisory reasoning from your approved Blueprint, not live campaign proof.`,
+        kind: 'follow_up',
+        confidenceLabel: 'moderate',
+        confidence: 0.7,
+        recommendationFocus: focusBit,
+      };
+    }
+    if (/\bresidential\b/.test(qNorm) && /\b(commercial|why|instead|about)\b/.test(qNorm)) {
+      return {
+        prose:
+          `I am prioritizing commercial over residential because your approved Blueprint prefers commercial work` +
+          (icp ? ` and names ${icp} as the decision-makers to reach` : '') +
+          `. Residential is not forbidden — it is simply not the first beachhead I would prove. ` +
+          `If residential starts producing stronger walkthroughs or recurring revenue, we should revise with evidence.`,
+        kind: 'follow_up',
+        confidenceLabel: 'moderate',
+        confidence: 0.72,
+        recommendationFocus: focusBit,
+      };
+    }
     const whyParts = [];
     whyParts.push(
       `I'd start with ${focusBit} because it follows what you've already approved about the business.`
@@ -1325,6 +1884,46 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     };
   }
 
+  // Ambiguous agreement vs execution — clarify; never treat as authorization.
+  if (isAmbiguousExecutionAdjacentRequest(question)) {
+    const focus =
+      (session &&
+        session.context &&
+        session.context.lastClientIntelligenceTurn &&
+        session.context.lastClientIntelligenceTurn.recommendationFocus) ||
+      (summary && summary.idealCustomers) ||
+      'that audience';
+    const prose =
+      `I hear you leaning toward going after ${focus}. ` +
+      `Before anything runs, I need to know whether you want strategy agreement only, ` +
+      `or to open a reviewable execution path (campaign / outreach). ` +
+      `I will not launch or send anything from this message alone.`;
+    const structured = workspaceStructured(prose, [], {
+      unavailable: ['execution_authorization'],
+      clientFacingReasoning: [],
+      internalReasoning: [
+        'Execution-adjacent language — fail closed and clarify (SPEC-103B).',
+      ],
+      confidence: 0.9,
+    });
+    recordLastCieTurn(session, {
+      kind: 'clarification',
+      reason: 'client_intelligence_execution_clarify',
+      recommendationFocus: focus,
+      question,
+    });
+    return {
+      reason: 'client_intelligence_execution_clarify',
+      handled: true,
+      prose,
+      structured,
+      summary,
+      attachment,
+      turnKind: 'clarification',
+      recommendationFocus: focus,
+    };
+  }
+
   // Never intercept canary / desk / mission operational turns.
   if (isOperationalDeskOrMissionRequest(question)) {
     return {
@@ -1336,7 +1935,14 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     };
   }
 
-  if (!looksLikeClientIntelligenceAsk(question, session)) {
+  // SPEC-103B — with approved Blueprint, client-business is the default claim;
+  // general conversation is the fallback for clearly non-business turns only.
+  const approvedBlueprint = Boolean(summary && summary.approved);
+  if (
+    !shouldClaimClientIntelligenceTurn(question, session, {
+      approvedBlueprint,
+    })
+  ) {
     return {
       handled: false,
       summary,
@@ -1345,7 +1951,35 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     };
   }
 
-  if (!summary || !summary.approved) {
+  // Ambiguous referent with no durable conversational anchor — clarify naturally.
+  if (looksLikeAmbiguousBusinessReferent(question, session) && approvedBlueprint) {
+    const prose =
+      'I can help with that. Are you asking about the commercial targeting direction ' +
+      'from your approved Blueprint, or something else in the current conversation?';
+    const structured = workspaceStructured(prose, [], {
+      clientFacingReasoning: [],
+      internalReasoning: [
+        'Ambiguous business referent without prior CIE turn — clarify (SPEC-103B).',
+      ],
+      confidence: 0.85,
+    });
+    recordLastCieTurn(session, {
+      kind: 'clarification',
+      reason: 'client_intelligence_referent_clarify',
+      question,
+    });
+    return {
+      reason: 'client_intelligence_referent_clarify',
+      handled: true,
+      prose,
+      structured,
+      summary,
+      attachment,
+      turnKind: 'clarification',
+    };
+  }
+
+  if (!approvedBlueprint) {
     const prose = formatMissingAnswer();
     const structured = workspaceStructured(
       prose,
@@ -1423,13 +2057,9 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     prose = formatUnderstandingAnswer(summary);
     reason = 'client_intelligence_understanding';
     turnKind = 'understanding';
-  } else if (
-    isClientContextReasoningRequest(question) ||
-    isClientContextReasoningFollowUp(question, session) ||
-    looksLikeFocusAsk(question) ||
-    looksLikeTargetingAsk(question) ||
-    looksLikeUnknownsAsk(question)
-  ) {
+  } else {
+    // SPEC-103B — once claimed under approved Blueprint, synthesize by mode.
+    // Do not require a second phrase-family match to keep the turn.
     if (!hasUsefulClientContext(summary)) {
       prose =
         'Your approved Blueprint is on file but too thin to support a useful recommendation yet. ' +
@@ -1461,11 +2091,6 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
         reason = 'client_intelligence_reasoning';
       }
     }
-  } else {
-    // Should not reach — looksLikeClientIntelligenceAsk already gated.
-    prose = formatFocusAnswer(summary, attachment);
-    reason = 'client_intelligence_focus';
-    turnKind = 'focus';
   }
 
   const structured = workspaceStructured(prose, [], {
@@ -1529,8 +2154,14 @@ module.exports = {
   isClientContextReasoningRequest,
   isEvidenceDependentClientRequest,
   isClientContextExecutionRequest,
+  isAmbiguousExecutionAdjacentRequest,
   isClientContextReasoningFollowUp,
+  looksLikeAmbiguousBusinessReferent,
+  isClearlyNonBusinessUtterance,
+  shouldClaimClientIntelligenceTurn,
   isOperationalDeskOrMissionRequest,
+  normalizeClientUtterance,
+  scoreClientBusinessSemantics,
   composeClientContextReasoning,
   formatUnderstandingAnswer,
   formatMissingAnswer,
