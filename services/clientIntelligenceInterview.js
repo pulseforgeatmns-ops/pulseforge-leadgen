@@ -7862,6 +7862,7 @@ async function approveBlueprint(blueprintId, opts = {}) {
       blueprintVersion: approved.version,
       playbookId: handoff.playbook.id,
       playbookVersion: handoff.playbook.version,
+      approvedAt: session.completed_at.toISOString(),
       initialGrowthDirection,
       growthConversation: null,
       infrastructureReadiness: null,

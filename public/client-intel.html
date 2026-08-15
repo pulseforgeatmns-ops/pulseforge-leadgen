@@ -1572,13 +1572,22 @@
     }
 
     function isBlueprintApproved(bp) {
-      return !!(bp && (bp.status === 'approved' || state.sessionStatus === 'APPROVED'));
+      // Document status is authoritative — never infer approval from UI phase.
+      return !!(bp && String(bp.status || '').toLowerCase() === 'approved');
+    }
+
+    function blueprintStatusLabel(bp) {
+      const status = String((bp && bp.status) || '').toLowerCase();
+      if (status === 'approved') return 'Approved';
+      if (status === 'in_review' || status === 'draft') return 'Awaiting approval';
+      if (status === 'superseded') return 'Superseded';
+      return status ? status.replace(/_/g, ' ') : 'Unknown';
     }
 
     function setApproveButtonState(bp, { editable } = { editable: true }) {
       const approved = isBlueprintApproved(bp);
       if (approved) {
-        els.blueprintActions.hidden = false;
+        els.blueprintActions.hidden = true;
         els.reviseBtn.disabled = true;
         els.approveBtn.disabled = true;
         els.approveBtn.textContent = 'Blueprint approved';
@@ -1591,6 +1600,11 @@
       els.approveBtn.textContent = state.approveInFlight ? 'Approving…' : 'Approve Blueprint';
     }
 
+    /**
+     * Render the durable Business Blueprint document in the right panel.
+     * Always shows structured sections — never replaces content with an
+     * approval-ceremony card. View Blueprint + BLUEPRINT tab share this path.
+     */
     function renderBlueprint(bp, { editable } = { editable: true }) {
       state.blueprint = bp;
       if (!bp) {
@@ -1600,26 +1614,31 @@
         els.approveBtn.textContent = 'Approve Blueprint';
         return;
       }
-      if (isBlueprintApproved(bp) && state.phase === 'complete') {
-        renderCompletion({
-          blueprint: bp,
-          playbook: state.pendingCompletion && state.pendingCompletion.playbook,
-          initialGrowthDirection:
-            state.initialGrowthDirection ||
-            (state.pendingCompletion && state.pendingCompletion.initialGrowthDirection) ||
-            null,
-        });
-        return;
-      }
+      const approved = isBlueprintApproved(bp);
+      const canEdit = Boolean(editable) && !approved;
       const sections = bp.sections || {};
       const order = Object.keys(SECTION_TITLES);
       const keys = order.filter((k) => sections[k]).concat(
         Object.keys(sections).filter((k) => !SECTION_TITLES[k])
       );
-      const created = bp.createdAt || bp.updatedAt || '';
-      const metaLine = 'Version ' + escapeHtml(String(bp.version || '1')) +
-        (created ? ' · ' + escapeHtml(new Date(created).toLocaleString()) : '');
-      const html = '<p class="blueprint-empty">' + metaLine + '</p>' + keys.map((key) => {
+      const statusLabel = blueprintStatusLabel(bp);
+      const headerHtml =
+        '<header class="blueprint-doc-header" data-blueprint-id="' +
+        escapeHtml(String(bp.id || '')) +
+        '" data-blueprint-version="' +
+        escapeHtml(String(bp.version || '')) +
+        '" data-blueprint-status="' +
+        escapeHtml(String(bp.status || '')) +
+        '">' +
+        '<p class="growth-kicker">Business Blueprint</p>' +
+        '<p class="blueprint-empty" style="margin:0">' +
+          'Version ' +
+          escapeHtml(String(bp.version || '1')) +
+          ' · ' +
+          escapeHtml(statusLabel) +
+        '</p>' +
+        '</header>';
+      const bodyHtml = keys.map((key) => {
         const s = sections[key] || {};
         const conf = Number(s.confidence || 0);
         const pct = Math.round(conf * 100);
@@ -1642,24 +1661,57 @@
             (unknowns.length
               ? '<div class="unknowns">Unknowns: ' + escapeHtml(unknowns.join('; ')) + '</div>'
               : '') +
-            (editable && !isBlueprintApproved(bp)
+            (canEdit
               ? '<textarea data-key="' + escapeHtml(key) + '">' + escapeHtml(summary) + '</textarea>'
               : '') +
           '</article>'
         );
       }).join('');
-      els.sidePanel.innerHTML = html;
+      els.sidePanel.innerHTML =
+        '<div class="blueprint-document" data-role="blueprint-document">' +
+        headerHtml +
+        (bodyHtml || '<p class="blueprint-empty">No Blueprint sections yet.</p>') +
+        '</div>';
       els.sidePanelTitle.textContent = 'Business Blueprint';
-      els.sidePanelSub.textContent = editable && !isBlueprintApproved(bp)
+      els.sidePanelSub.textContent = canEdit
         ? 'Editable artifact of Max\'s understanding. Adjust anything that needs sharpening.'
-        : 'Approved foundation for future recommendations.';
-      setApproveButtonState(bp, { editable: editable && !isBlueprintApproved(bp) });
-      if (isBlueprintApproved(bp)) {
-        els.blueprintActions.hidden = true;
-      }
+        : approved
+          ? 'Approved foundation for future recommendations.'
+          : 'Current Business Blueprint for this client.';
+      setApproveButtonState(bp, { editable: canEdit });
       els.blueprintStatus.textContent =
-        bp.status + ' · v' + bp.version +
-        (bp.playbookId ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion : '');
+        statusLabel +
+        ' · v' +
+        bp.version +
+        (bp.playbookId
+          ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion
+          : '');
+    }
+
+    /**
+     * Single entry for View Blueprint action and BLUEPRINT tab.
+     * Does not mutate approval state (GET / view only).
+     */
+    function showCurrentBlueprintView({ editable } = {}) {
+      const bp = state.blueprint;
+      state.workspaceTab = 'blueprint';
+      const serverApproved =
+        isBlueprintApproved(bp) ||
+        String(state.sessionStatus || '').toUpperCase() === 'APPROVED';
+      if (serverApproved) {
+        if (state.phase !== 'growth_workspace') {
+          setPhase('growth_workspace');
+          renderWorkspaceLeftNav();
+        }
+        if (els.workspaceTabs) els.workspaceTabs.hidden = false;
+        setWorkspaceTab('blueprint');
+      } else {
+        setPhase('blueprint');
+        renderBlueprint(bp, {
+          editable: editable == null ? true : Boolean(editable),
+        });
+      }
+      return bp;
     }
 
     function renderGrowthDirection(gd) {
@@ -2439,18 +2491,26 @@
         null;
       if (gd) state.initialGrowthDirection = gd;
       const version = (bp && bp.version) || '1';
-      const playbookLabel = playbook && playbook.id
-        ? escapeHtml(String(playbook.id)) + (playbook.version ? '@' + escapeHtml(String(playbook.version)) : '')
-        : 'Draft Client Playbook';
+      const playbookReady = !!(playbook && playbook.id);
+      const playbookLabel = playbookReady
+        ? escapeHtml(String(playbook.id)) +
+          (playbook.version ? '@' + escapeHtml(String(playbook.version)) : '')
+        : null;
+      const checks =
+        '<li>Version ' +
+        escapeHtml(String(version)) +
+        ' approved</li>' +
+        (playbookReady
+          ? '<li>Client Playbook ready · ' + playbookLabel + '</li>'
+          : '<li>Client Playbook handoff pending</li>') +
+        '<li>Strategy and execution stay review-controlled</li>' +
+        '<li>Max is your next primary interface</li>';
       els.sidePanel.innerHTML =
         '<div class="completion-card" id="approvalSuccess">' +
           '<h3>Blueprint approved</h3>' +
           '<p>Pulseforge has learned your business. This approved Blueprint is the foundation Max will use going forward.</p>' +
           '<ul class="completion-checks">' +
-            '<li>Version ' + escapeHtml(String(version)) + ' approved</li>' +
-            '<li>Client Playbook ready · ' + playbookLabel + '</li>' +
-            '<li>Strategy and execution stay review-controlled</li>' +
-            '<li>Max is your next primary interface</li>' +
+            checks +
           '</ul>' +
           renderGrowthDirection(gd) +
         '</div>';
@@ -2462,31 +2522,48 @@
       els.approveBtn.disabled = true;
       els.approveBtn.textContent = 'Blueprint approved';
       els.reviseBtn.disabled = true;
-      els.blueprintStatus.textContent = 'APPROVED · Client Playbook ready';
+      els.blueprintStatus.textContent = playbookReady
+        ? 'APPROVED · Client Playbook ready'
+        : 'APPROVED';
     }
 
     function applyApprovedState(result, { alreadyApproved } = {}) {
+      // Only called after an explicit approve response (or idempotent re-approve).
+      // Never use this path for View Blueprint / recovery / GET.
       state.sessionStatus = 'APPROVED';
       state.approveInFlight = false;
       state.pendingCompletion = result || state.pendingCompletion;
       if (result && result.blueprint) {
         state.blueprint = result.blueprint;
-      } else if (state.blueprint) {
-        state.blueprint = { ...state.blueprint, status: 'approved' };
+      } else if (state.blueprint && isBlueprintApproved(state.blueprint)) {
+        state.blueprint = { ...state.blueprint };
       }
       if (result && result.initialGrowthDirection) {
         state.initialGrowthDirection = result.initialGrowthDirection;
       }
       showError('');
       setPhase('complete');
+      const playbook =
+        (state.pendingCompletion && state.pendingCompletion.playbook) ||
+        (result && result.playbook) ||
+        null;
       if (alreadyApproved) {
-        addBubble('meta', 'Blueprint already approved. Client Playbook is ready.');
+        addBubble(
+          'meta',
+          playbook && playbook.id
+            ? 'Blueprint already approved. Client Playbook is ready.'
+            : 'Blueprint already approved.'
+        );
       }
       renderCompletion(state.pendingCompletion || {
         blueprint: state.blueprint,
+        playbook,
         initialGrowthDirection: state.initialGrowthDirection,
       });
-      els.sessionStatus.textContent = 'APPROVED · Client Playbook ready';
+      els.sessionStatus.textContent =
+        playbook && playbook.id
+          ? 'APPROVED · Client Playbook ready'
+          : 'APPROVED';
     }
 
     function setComposerEnabled(on) {
@@ -3380,13 +3457,15 @@
       }
       if (tab === 'blueprint') {
         if (state.blueprint) {
-          renderBlueprint(state.blueprint, { editable: false });
+          renderBlueprint(state.blueprint, {
+            editable: !isBlueprintApproved(state.blueprint),
+          });
         } else {
           els.sidePanel.innerHTML =
-            '<p class="blueprint-empty">Approved Blueprint unavailable.</p>';
+            '<p class="blueprint-empty">Blueprint unavailable.</p>';
+          els.sidePanelTitle.textContent = 'Business Blueprint';
+          els.sidePanelSub.textContent = 'No Blueprint loaded for this session';
         }
-        els.sidePanelTitle.textContent = 'Business Blueprint';
-        els.sidePanelSub.textContent = 'Approved foundation for this Growth Plan';
         return;
       }
       if (tab === 'history') {
@@ -3628,29 +3707,60 @@
       }
 
       if (mode === 'view') {
-        setPhase('complete');
-        applyApprovedState(
-          {
-            blueprint: state.blueprint,
-            initialGrowthDirection: state.initialGrowthDirection,
-            playbook: data.playbook || null,
-          },
-          { alreadyApproved: true }
-        );
-        if (state.blueprint) {
-          renderBlueprint(state.blueprint, { editable: false });
-        }
+        // View Blueprint: activate BLUEPRINT tab + render durable document.
+        // Must never call approve endpoints or mark locally approved.
+        showCurrentBlueprintView({
+          editable: !isBlueprintApproved(state.blueprint),
+        });
+        const approved = isBlueprintApproved(state.blueprint);
         els.sessionStatus.textContent =
-          'Session ' + state.interviewId + ' · Viewing approved Blueprint';
+          'Session ' +
+          state.interviewId +
+          (approved ? ' · Viewing Blueprint' : ' · Blueprint review');
         addBubble(
           'assistant',
-          'Here is the approved Business Blueprint. Resume Growth Plan whenever you are ready — you will not need to re-answer the interview.'
+          approved
+            ? 'Here is the Business Blueprint. Resume Growth Plan whenever you are ready — you will not need to re-answer the interview.'
+            : 'Here is the Business Blueprint awaiting approval. Review the sections, then approve when it feels right.'
         );
         if (els.growthBtn) els.growthBtn.textContent = 'Resume Growth Plan';
         return;
       }
 
-      // SPEC-088: Continue/Resume always enters Growth Workspace (or completion).
+      // Unapproved onboarding must resume into review / interview — never Growth Workspace.
+      if (target === 'blueprint_review') {
+        setPhase('blueprint');
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, { editable: true });
+        }
+        els.sessionStatus.textContent =
+          'Session ' + state.interviewId + ' · Blueprint review';
+        addBubble(
+          'assistant',
+          'Your Business Blueprint is ready for review. Edit anything that needs sharpening, then approve when it feels right.'
+        );
+        return;
+      }
+      if (target === 'interview') {
+        setPhase('discovery');
+        applyDiscoveryPayload(data, { skipMessage: true });
+        if (data.turns && Array.isArray(data.turns)) {
+          for (const turn of data.turns) {
+            if (turn.speaker === 'assistant' || turn.speaker === 'client') {
+              addBubble(
+                turn.speaker === 'assistant' ? 'assistant' : 'client',
+                turn.message
+              );
+            }
+          }
+        } else if (data.message) {
+          addBubble('assistant', data.message);
+        }
+        setComposerEnabled(true);
+        return;
+      }
+
+      // SPEC-088: Continue/Resume for approved sessions enters Growth Workspace.
       // Readiness Report is a tab — never the intermediate destination.
       if (
         target === 'growth_workspace' ||
@@ -3664,7 +3774,16 @@
         return;
       }
 
-      openGrowthWorkspace(data, { autoOpenTask: mode === 'continue' });
+      // Unknown targets: only open Growth Workspace when Blueprint is approved.
+      if (
+        String(state.sessionStatus || '').toUpperCase() === 'APPROVED' ||
+        isBlueprintApproved(state.blueprint)
+      ) {
+        openGrowthWorkspace(data, { autoOpenTask: mode === 'continue' });
+        return;
+      }
+      setPhase('blueprint');
+      if (state.blueprint) renderBlueprint(state.blueprint, { editable: true });
     }
 
     async function resumeSession(sessionId, action) {
