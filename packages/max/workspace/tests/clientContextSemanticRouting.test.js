@@ -21,6 +21,7 @@ const {
   scoreClientBusinessSemantics,
   normalizeClientUtterance,
   looksLikeBusinessUnderstandingAsk,
+  looksLikeSpecificityAsk,
 } = require('../ClientIntelligenceContext');
 const {
   createMemoryStore,
@@ -950,5 +951,158 @@ describe('SPEC-103B end-to-end routing', () => {
       owner.prose,
       /From here, I'd approach growth by proving one acquisition motion/i
     );
+  });
+});
+
+describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
+  const SPECIFICITY_UTTERANCES = [
+    'Be specific.',
+    'Give me the exact steps.',
+    'What do I actually do Monday?',
+    'Okay, then what do I do?',
+    'Be specific. Give me the exact steps you think I should take.',
+    'Walk me through the concrete actions.',
+    'How do I actually start on this?',
+  ];
+
+  it('classifier prefers decompose over gap/unknowns with prior plan in session', () => {
+    const session = priorSession('reasoning', 'property and facility managers');
+    for (const utterance of SPECIFICITY_UTTERANCES) {
+      const scored = scoreClientBusinessSemantics(utterance, session);
+      assert.equal(
+        scored.features.decompose,
+        true,
+        `expected decompose for ${utterance}`
+      );
+      assert.equal(scored.mode, 'decompose', `mode for ${utterance}`);
+      assert.ok(
+        scored.features.gap < 2 || scored.mode === 'decompose',
+        `gap must not beat decompose for ${utterance}`
+      );
+      assert.equal(looksLikeSpecificityAsk(utterance, session), true);
+    }
+  });
+
+  it('decompose requires prior recommendation/plan referent', () => {
+    for (const utterance of SPECIFICITY_UTTERANCES) {
+      const scored = scoreClientBusinessSemantics(utterance, null);
+      assert.equal(
+        scored.features.decompose,
+        false,
+        `no decompose without prior for ${utterance}`
+      );
+    }
+  });
+
+  it('full acceptance sequence: recommendation → rationale → gaps → falsification → plan → specificity', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: true,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+
+    const recommendation = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What should we focus on first?',
+    });
+    assert.match(recommendation.prose, /I'd start by proving|repeatable commercial/i);
+
+    const rationale = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Why that?',
+    });
+    assert.match(
+      String(rationale.domainDecision && rationale.domainDecision.reason),
+      /follow_up/
+    );
+
+    const gaps = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "What don't we know yet?",
+    });
+    assert.match(gaps.prose, /KNOWN|UNKNOWN|EVIDENCE NEEDED/i);
+
+    const falsification = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What would make you change your mind about that?',
+    });
+    assert.match(falsification.prose, /change my mind|evidence|weaken/i);
+
+    const plan = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Where would you go from here?',
+    });
+    assert.match(plan.prose, /from here|approach|operator|next/i);
+
+    const specific = await engine.ask({
+      sessionId: opened.sessionId,
+      question:
+        'Be specific. Give me the exact steps you think I should take.',
+    });
+
+    assert.match(
+      String(specific.domainDecision && specific.domainDecision.reason),
+      /client_intelligence_decompose/
+    );
+    assert.doesNotMatch(
+      specific.prose,
+      /KNOWN from your approved Blueprint/i,
+      'must not repeat gap essay'
+    );
+    assert.match(specific.prose, /Breaking down the active direction/i);
+    assert.match(specific.prose, /1\. Define qualification criteria/i);
+    assert.match(specific.prose, /BOUNDARY:|do not yet have live market|not invent/i);
+    assert.notEqual(specific.prose, gaps.prose);
+    assert.notEqual(specific.prose, recommendation.prose);
+    assert.ok(
+      specific.prose.length > recommendation.prose.length * 0.8,
+      'response should be materially more concrete'
+    );
+    assert.equal(specific.mission, null);
+    assert.doesNotMatch(specific.prose, /Anchor Cleaning|Manchester/i);
+  });
+
+  it('semantic paraphrases decompose without repeating KNOWN/UNKNOWN blocks', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: true,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What should we focus on first?',
+    });
+
+    for (const utterance of SPECIFICITY_UTTERANCES) {
+      const result = await engine.ask({
+        sessionId: opened.sessionId,
+        question: utterance,
+      });
+      assert.match(
+        String(result.domainDecision && result.domainDecision.reason),
+        /client_intelligence_decompose/,
+        utterance
+      );
+      assert.doesNotMatch(
+        result.prose,
+        /KNOWN from your approved Blueprint/i,
+        utterance
+      );
+      assert.match(result.prose, /^\d+\./m, utterance);
+      assert.match(result.prose, /BOUNDARY|not invent|not authorization/i, utterance);
+      assert.equal(result.mission, null, utterance);
+    }
   });
 });
