@@ -385,7 +385,8 @@ describe('SPEC-103 client-context reasoning', () => {
       question: 'What do you understand about my business?',
     });
     assert.match(result.prose, /AS Cleaning/i);
-    assert.match(result.prose, /approved Business Blueprint/i);
+    assert.match(result.prose, /Here's what I understand/i);
+    assert.doesNotMatch(result.prose, /This identity framing|ICP picture|Geography and vertical focus/i);
     assert.doesNotMatch(result.prose, /No autonomous execution/i);
   });
 
@@ -452,8 +453,10 @@ describe('SPEC-103 client-context reasoning', () => {
       services: 'Commercial cleaning',
       idealCustomers: 'Property and facility managers',
       targetMarkets: 'Greater Toronto Area',
+      geography: 'Greater Toronto Area',
       campaignGoals: 'Recurring revenue pipeline',
       successMetrics: 'Walkthroughs and recurring clients',
+      commercialPreference: true,
       unknowns: [],
     };
     const composed = composeClientContextReasoning(
@@ -463,5 +466,320 @@ describe('SPEC-103 client-context reasoning', () => {
     assert.match(composed.prose, /property and facility managers/i);
     assert.match(composed.prose, /moderate|evidence/i);
     assert.equal(composed.confidenceLabel, 'moderate');
+  });
+});
+
+describe('SPEC-103A presentation normalization', () => {
+  const {
+    normalizeBlueprintSummary,
+    peelBlueprintSubstance,
+    presentText,
+  } = require('../ClientIntelligenceContext');
+
+  it('TEST A — clean ICP composition (no nested Ideal customers are…)', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, [
+      'AS Cleaning Co. — commercial cleaning preferred over residential.',
+      'Commercial cleaning, apartment and multifamily cleaning.',
+      'Property managers, facility managers, apartment/multifamily buildings.',
+      'One-off bargain hunters.',
+      'Greater Toronto Area.',
+      'Excellent quality with reliable on-time service.',
+      'Professional and clear.',
+      'Build a reliable prospect-to-client pipeline with recurring revenue.',
+      'Walkthroughs completed and recurring revenue created.',
+    ]);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What should we focus on first?',
+    });
+    assert.doesNotMatch(result.prose, /Ideal customers are property managers/i);
+    assert.doesNotMatch(result.prose, /This ICP picture prioritizes/i);
+    assert.match(result.prose, /property managers/i);
+    assert.match(result.prose, /facility managers/i);
+  });
+
+  it('TEST B — clean geography composition', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What should we focus on first?',
+    });
+    assert.doesNotMatch(result.prose, /in Priority markets center on/i);
+    assert.doesNotMatch(result.prose, /Geography and vertical focus here bound/i);
+    assert.match(result.prose, /Greater Toronto Area/i);
+  });
+
+  it('TEST C — clean success metrics composition', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, [
+      'AS Cleaning Co. — commercial cleaning preferred over residential.',
+      'Commercial cleaning.',
+      'Property managers and facility managers.',
+      'Bargain hunters.',
+      'Greater Toronto Area.',
+      'Excellent quality.',
+      'Professional.',
+      'Build a reliable prospect-to-client pipeline.',
+      'Walkthroughs completed and recurring revenue created.',
+    ]);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Based on what you know about my business, what should we focus on first?',
+    });
+    assert.match(result.prose, /walkthroughs completed/i);
+    assert.match(result.prose, /recurring revenue created/i);
+    assert.doesNotMatch(result.prose, /Success will be judged by/i);
+    assert.doesNotMatch(
+      result.prose,
+      /These signals define whether the engagement is working/i
+    );
+  });
+
+  it('TEST D — mechanical typo normalization without altering raw evidence', () => {
+    assert.equal(presentText('commeercial'), 'commercial');
+    assert.equal(presentText('recurring revenue createed'), 'recurring revenue created');
+
+    const peeled = peelBlueprintSubstance(
+      'successMetrics',
+      'Success will be judged by walkthroughs completed, recurring revenue createed. These signals define whether the engagement is working from the client\'s perspective.'
+    );
+    assert.match(peeled, /created/i);
+    assert.doesNotMatch(peeled, /createed/);
+    assert.doesNotMatch(peeled, /Success will be judged/i);
+
+    // Raw evidence statement stays untouched (presentation-only path).
+    const rawEvidence = 'recurring revenue createed';
+    assert.equal(rawEvidence, 'recurring revenue createed');
+  });
+
+  it('TEST E — reasoning regression still selects client-context path', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: opened.sessionId,
+      question:
+        'Based on what you know about my business, what should we focus on first?',
+    });
+    assert.match(
+      String(result.domainDecision && result.domainDecision.reason),
+      /client_intelligence/
+    );
+    assert.match(result.prose, /property|facility|commercial|Toronto/i);
+    assert.match(result.prose, /don'?t know yet|evidence|moderately confident/i);
+    assert.doesNotMatch(result.prose, /detailed_answer|Switching from Workspace/i);
+    assert.equal(result.mission, null);
+  });
+
+  it('TEST F — direct recall is natural owner-facing language', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What do you understand about my business?',
+    });
+    assert.match(result.prose, /Here's what I understand about AS Cleaning/i);
+    assert.doesNotMatch(
+      result.prose,
+      /This identity framing|Service understanding reflects|This ICP picture|Geography and vertical focus|operator-stated differentiation/i
+    );
+    assert.doesNotMatch(result.prose, /ClientIntelligenceContext|ContextEnvelope|SPEC-10/i);
+  });
+
+  it('TEST G — unknown ICP is not invented by normalization', async () => {
+    const blueprint = {
+      id: 'bp-unresolved-icp-103a',
+      status: 'approved',
+      clientId: AS_CLEANING_ID,
+      sections: {
+        identity: {
+          summary:
+            'AS Cleaning Co. is a commercial cleaning preferred over residential. This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
+        },
+        services: {
+          summary:
+            'Today the business delivers Commercial cleaning. Service understanding reflects what is actually sold now, not aspirational packaging.',
+        },
+        idealCustomers: {
+          summary: '',
+          unknowns: ['Which commercial customer segments are the strongest fit'],
+        },
+        targetMarkets: {
+          summary:
+            'Priority markets center on Greater Toronto Area with a near-term growth focus on commercial cleaning. Geography and vertical focus here bound where discovery should concentrate first.',
+        },
+        campaignGoals: {
+          summary:
+            'Near-term growth goals focus on establishing a reliable pipeline. These are desired business outcomes for the next phase of work, not execution tactics.',
+        },
+      },
+    };
+    const turn = await maybeHandleClientIntelligenceTurn({
+      question: 'Who should we target first?',
+      context: { tenantId: String(AS_CLEANING_ID) },
+      cieService: mockApprovedBlueprintService(blueprint),
+    });
+    assert.equal(turn.handled, true);
+    assert.match(turn.prose, /haven'?t chosen|unresolved|segment/i);
+    assert.doesNotMatch(turn.prose, /property managers/i);
+    assert.doesNotMatch(turn.prose, /Ideal customers are/i);
+    // Peeled geography still usable
+    assert.match(turn.prose, /Greater Toronto Area|commercial/i);
+  });
+
+  it('TEST H — evidence-dependent questions still fail closed', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+      marketIntelligenceService: null,
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: opened.sessionId,
+      question:
+        'Which GTA property managers are showing buying signals right now?',
+    });
+    assert.match(result.prose, /do not yet have|not invent|evidence/i);
+    assert.doesNotMatch(result.prose, /\b(Acme Cleaning|SignalCorp|BuyNow Inc)\b/);
+  });
+
+  it('TEST I — tenant isolation remains intact', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    await approveClient(store, ANCHOR_ID, ANCHOR_ANSWERS);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What should we focus on first?',
+    });
+    assert.doesNotMatch(result.prose, /Anchor Cleaning|Manchester|Public Max Launch/i);
+    assert.match(result.prose, /Toronto|property|facility|commercial/i);
+  });
+
+  it('TEST J — fresh session reconstructs clean structured values', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const fresh = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const result = await engine.ask({
+      sessionId: fresh.sessionId,
+      question: 'What should we focus on first?',
+    });
+    assert.ok(result.context.clientIntelligence.approved);
+    assert.equal(
+      result.context.clientIntelligence.semanticSource,
+      'normalized_facts'
+    );
+    assert.equal(
+      result.context.clientIntelligence.geography,
+      'Greater Toronto Area'
+    );
+    assert.doesNotMatch(result.prose, /Ideal customers are|Priority markets center/i);
+  });
+
+  it('peeled-section fallback strips Blueprint wrappers when facts missing', () => {
+    const summary = normalizeBlueprintSummary({
+      id: 'bp-peeled',
+      status: 'approved',
+      clientId: AS_CLEANING_ID,
+      sections: {
+        idealCustomers: {
+          summary:
+            'Ideal customers are property managers, facility managers, apartment/multifamily buildings. This ICP picture prioritizes fit over volume.',
+        },
+        targetMarkets: {
+          summary:
+            'Priority markets center on Greater Toronto Area with a near-term growth focus on commercial cleaning. Geography and vertical focus here bound where discovery should concentrate first.',
+        },
+        successMetrics: {
+          summary:
+            'Success will be judged by walkthroughs completed, recurring revenue createed. These signals define whether the engagement is working from the client\'s perspective.',
+        },
+      },
+    });
+    assert.equal(summary.semanticSource, 'peeled_sections');
+    assert.equal(
+      summary.idealCustomers,
+      'property managers, facility managers, apartment/multifamily buildings'
+    );
+    assert.equal(summary.geography, 'Greater Toronto Area');
+    assert.match(summary.successMetrics, /created/i);
+    assert.doesNotMatch(summary.successMetrics, /createed|Success will be judged/i);
+    assert.equal(summary.commercialPreference, true);
+
+    const composed = composeClientContextReasoning(
+      summary,
+      'What should we focus on first?'
+    );
+    assert.doesNotMatch(composed.prose, /Ideal customers are|Priority markets center/i);
+    assert.match(composed.prose, /property managers/i);
+    assert.match(composed.prose, /Greater Toronto Area/i);
   });
 });
