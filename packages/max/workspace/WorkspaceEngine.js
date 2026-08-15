@@ -270,9 +270,10 @@ class WorkspaceEngine {
       text: question,
     });
 
-    // SPEC-098 — approved client intelligence before intent routing.
+    // SPEC-098 / SPEC-103 — approved client intelligence before intent routing.
     // Reconstruct durable Blueprint/Playbook context for the authenticated tenant.
-    // Never invents client facts; never grants execution authority.
+    // Handles recall + bounded business reasoning; never invents client facts;
+    // never grants execution authority; never creates Missions from advice.
     const cieTurn = await maybeHandleClientIntelligenceTurn({
       question,
       session,
@@ -287,6 +288,15 @@ class WorkspaceEngine {
         session.context._answerCorpus = 'workspace';
         if (cieTurn.attachment) {
           Object.assign(session.context, cieTurn.attachment);
+        }
+        // Keep last CIE turn for multi-turn "Why?" continuity (session only).
+        if (session.context.lastClientIntelligenceTurn == null && cieTurn.turnKind) {
+          session.context.lastClientIntelligenceTurn = {
+            kind: cieTurn.turnKind,
+            reason: cieTurn.reason,
+            recommendationFocus: cieTurn.recommendationFocus || null,
+            question,
+          };
         }
       }
 
