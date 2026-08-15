@@ -2,6 +2,7 @@
 
 /**
  * SPEC-103C — Session-scoped active conversational reasoning continuity.
+ * SPEC-103D — Advisory-to-preparation handoff (plan acceptance ≠ execution).
  *
  * Preserves the active recommendation/plan across natural follow-ups within
  * a Workspace session. Not durable memory — tenant + session scoped only.
@@ -33,6 +34,7 @@ const ACTIVE_THOUGHT_OP_STEMS = Object.freeze({
   explain: ['why'],
   falsify: ['change', 'mind', 'falsif', 'revise', 'reconsider'],
   compare: ['instead', 'rather', 'versus'],
+  accept: ['happy', 'accept', 'agreed', 'good', 'great', 'forward', 'ready', 'move'],
 });
 
 function normalizeClientUtterance(question) {
@@ -262,6 +264,151 @@ function classifyActiveThoughtFollowUp(question, session) {
     result.stepIndex = 0;
   }
   return result;
+}
+
+/**
+ * SPEC-103D — distinguish plan acceptance / preparation from external execution.
+ * Evaluated with active conversational state — not phrase-only matching.
+ */
+function classifyAdvisoryHandoffIntent(question, session) {
+  const active = getActiveClientReasoning(session);
+  if (!active) return null;
+
+  const q = normalizeClientUtterance(question);
+  const tokens = tokenize(q);
+  const hasPlan = Array.isArray(active.planSteps) && active.planSteps.length > 0;
+
+  if (
+    active.executionReviewPending &&
+    tokens.length <= 6 &&
+    /\b(go ahead|yes|sure|do it|proceed|send)\b/.test(q)
+  ) {
+    return { kind: 'external_execution', confidence: 0.9 };
+  }
+
+  if (hasPlan) {
+    let score = stemHits(tokens, ACTIVE_THOUGHT_OP_STEMS.accept);
+    if (/\b(happy with|good with|like that|move forward|ready to)\b/.test(q)) {
+      score += 2;
+    }
+    if (/\b(plan|approach|steps|direction)\b/.test(q)) score += 1;
+    if (
+      /\blet'?s (do|start|go|move)\b/.test(q) &&
+      !/\b(send|launch|mail|publish|contact|outreach|emails?)\b/.test(q)
+    ) {
+      score += 2;
+    }
+    if (/\bsounds good\b/.test(q) && /\b(start|go|do|move)\b/.test(q)) score += 2;
+    if (score >= 3) {
+      return { kind: 'plan_acceptance', confidence: Math.min(0.95, score / 6) };
+    }
+  }
+
+  const prepContext =
+    active.planAccepted === true ||
+    active.preparationProposed === true ||
+    active.lastProposedAction === 'preparation';
+  if (
+    prepContext &&
+    tokens.length <= 5 &&
+    /\b(go ahead|yes|yep|sure|do it|proceed|start)\b/.test(q) &&
+    !/\b(send|launch|mail|publish|contact|outreach|emails?)\b/.test(q)
+  ) {
+    return { kind: 'preparation_authorize', confidence: 0.88 };
+  }
+
+  return null;
+}
+
+function formatQualificationCriteriaDraft(summary) {
+  const audience = summary.idealCustomers || 'property and facility managers';
+  const market = summary.geography || summary.targetMarkets || 'your service area';
+  const lines = [
+    `Geography: ${market}`,
+    `Decision-maker: property manager or facility manager (from your approved ICP: ${audience})`,
+    'Property type: apartment/multifamily or another recurring commercial facility',
+    'Need: recurring cleaning rather than primarily one-time work',
+    'Fit: a property where reliable service and consistency matter',
+  ];
+  return lines.map((l) => `• ${l}`).join('\n');
+}
+
+function formatPlanAcceptancePreparation(summary, active) {
+  const steps = active.planSteps || [];
+  const step1 = steps[0] || 'Define qualification criteria for the initial account set.';
+  const audience = summary.idealCustomers || 'your target accounts';
+  const market = summary.geography || summary.targetMarkets || null;
+  const where = market ? ` in ${market}` : '';
+
+  const paragraphs = [];
+  paragraphs.push(
+    `Good. The first step is ${String(step1).replace(/^\d+\.\s*/, '').charAt(0).toLowerCase()}${String(step1).replace(/^\d+\.\s*/, '').slice(1)}`
+  );
+  paragraphs.push(
+    `I can prepare that with you now. Once we've agreed on the criteria, the next step is building the first 15–25 target accounts for ${audience}${where}.`
+  );
+  paragraphs.push(
+    `Here's a starting draft for the qualification criteria:\n\n${formatQualificationCriteriaDraft(summary)}`
+  );
+  paragraphs.push(
+    `Before we lock that in: should the first test stay strictly with apartment/multifamily properties, or do you want facility managers from other commercial buildings included too?`
+  );
+  paragraphs.push(`Nothing will be sent or launched without your approval.`);
+  return paragraphs.join('\n\n');
+}
+
+function formatPreparationContinue(summary, active) {
+  const criteria = formatQualificationCriteriaDraft(summary);
+  const steps = active.planSteps || [];
+  const step2 = steps[1] || 'Build a short account set.';
+
+  return (
+    `Good. Here's the qualification criteria I'd use for the first account set:\n\n${criteria}\n\n` +
+    `Once you confirm those boundaries, ${String(step2).replace(/^\d+\.\s*/, '').charAt(0).toLowerCase()}${String(step2).replace(/^\d+\.\s*/, '').slice(1)} ` +
+    `Pulseforge has prospecting capability in the product, but I can't initiate Scout discovery directly from this workspace conversation yet — ` +
+    `so we'll need to compile or import that list through the paths available to you, or wire Scout when it's callable here.\n\n` +
+    `Nothing will be sent or launched without your approval.`
+  );
+}
+
+function composeAdvisoryHandoffResponse(summary, session, handoff) {
+  const active = getActiveClientReasoning(session);
+  if (!active || !handoff) return null;
+
+  if (handoff.kind === 'external_execution') {
+    return null;
+  }
+
+  if (handoff.kind === 'plan_acceptance') {
+    return {
+      prose: formatPlanAcceptancePreparation(summary, active),
+      kind: 'plan_preparation',
+      confidenceLabel: 'moderate',
+      confidence: 0.8,
+      recommendationFocus: active.recommendationFocus || active.focus || null,
+      conversationalFocusIndex: 0,
+      planSteps: active.planSteps,
+      planAccepted: true,
+      preparationProposed: true,
+      lastProposedAction: 'preparation',
+    };
+  }
+
+  if (handoff.kind === 'preparation_authorize') {
+    return {
+      prose: formatPreparationContinue(summary, active),
+      kind: 'plan_preparation',
+      confidenceLabel: 'moderate',
+      confidence: 0.82,
+      recommendationFocus: active.recommendationFocus || active.focus || null,
+      conversationalFocusIndex: 0,
+      planSteps: active.planSteps,
+      preparationProposed: true,
+      lastProposedAction: 'preparation',
+    };
+  }
+
+  return null;
 }
 
 function resolveTenantCapabilities(session, summary) {
@@ -557,6 +704,14 @@ function updateActiveReasoningFromTurn(session, turn, summary, prose) {
     kind === 'plan_continuity'
   ) {
     next.kind = 'plan';
+  } else if (kind === 'plan_preparation') {
+    next.planAccepted = turn.planAccepted === true || prior.planAccepted === true;
+    next.preparationProposed = true;
+    next.lastProposedAction = 'preparation';
+    if (turn.conversationalFocusIndex != null) {
+      next.conversationalFocusIndex = turn.conversationalFocusIndex;
+    }
+    next.kind = 'plan';
   } else if (
     ['reasoning', 'focus', 'opportunity', 'approach', 'targeting'].includes(kind)
   ) {
@@ -580,7 +735,9 @@ module.exports = {
   setActiveClientReasoning,
   buildDecomposePlanSteps,
   classifyActiveThoughtFollowUp,
+  classifyAdvisoryHandoffIntent,
   composeActiveThoughtResponse,
+  composeAdvisoryHandoffResponse,
   updateActiveReasoningFromTurn,
   resolveTenantCapabilities,
   formatPlanEvidenceContinuation,
