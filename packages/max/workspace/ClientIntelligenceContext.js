@@ -5,6 +5,8 @@
  * SPEC-103 — Client-context business reasoning from approved understanding.
  * SPEC-103A — Semantic context for reasoning (not nested Blueprint prose).
  * SPEC-103B — Semantic client-business routing (general conversation is fallback).
+ * SPEC-103B PATCH — Specificity escalation: explicit requests to decompose an active
+ *   recommendation/plan must descend one abstraction level, not re-run gap reasoning.
  *
  * Runs early in ask() so durable CIE context influences interpretation.
  * Context only — never executes Missions or mutates CRM/outreach state.
@@ -854,6 +856,23 @@ const CLIENT_BUSINESS_CONCEPTS = Object.freeze({
     'suggest',
     'advice',
   ],
+  specificity: [
+    'specific',
+    'concret',
+    'exact',
+    'precis',
+    'detail',
+    'granular',
+    'step',
+    'action',
+    'checklist',
+    'breakdown',
+    'decompos',
+    'operational',
+    'monday',
+    'tomorrow',
+    'walkthrough',
+  ],
 });
 
 function conceptFamilyHits(tokens, family) {
@@ -861,7 +880,14 @@ function conceptFamilyHits(tokens, family) {
   const joined = stems.join(' ');
   let hits = 0;
   for (const prefix of CLIENT_BUSINESS_CONCEPTS[family] || []) {
-    if (stems.some((s) => s.startsWith(prefix) || prefix.startsWith(s))) {
+    if (
+      stems.some((s) => {
+        if (s.startsWith(prefix)) return true;
+        // Short tokens must not match long investigative stems (e.g. i → investig).
+        if (s.length >= 3 && prefix.startsWith(s)) return true;
+        return false;
+      })
+    ) {
       hits += 1;
       continue;
     }
@@ -890,6 +916,7 @@ function hasPriorClientReasoning(session) {
     'context',
     'understanding',
     'evidence_gap',
+    'decompose',
   ].includes(String(prior.kind));
 }
 
@@ -918,6 +945,8 @@ function scoreClientBusinessSemantics(question, session) {
     owner: 0,
     discourse: 0,
     advisory: 0,
+    specificity: 0,
+    decompose: false,
   };
 
   if (!q) {
@@ -988,6 +1017,7 @@ function scoreClientBusinessSemantics(question, session) {
   features.risk = conceptFamilyHits(tokens, 'risk');
   features.strategy = conceptFamilyHits(tokens, 'strategy');
   features.owner = conceptFamilyHits(tokens, 'owner');
+  features.specificity = conceptFamilyHits(tokens, 'specificity');
 
   // Discourse: inclusive client voice / owner perspective / Max judgment.
   if (/\b(we|us|our|my)\b/.test(q)) features.discourse += 2;
@@ -1076,6 +1106,27 @@ function scoreClientBusinessSemantics(question, session) {
 
   const prior = hasPriorClientReasoning(session);
   const tokenJoin = tokens.join(' ');
+  // SPEC-103B PATCH — operator asks to decompose an active plan/recommendation.
+  const asksForConcreteSteps =
+    /\b(then )?what do i do\b/.test(q) ||
+    /\bwhat do i (actually )?do\b/.test(q) ||
+    /\bwhat should i do\b/.test(q) ||
+    /\bhow do i (actually )?(do|start|proceed)\b/.test(q) ||
+    (features.specificity >= 1 &&
+      (/\b(step|steps|action|actions|task|tasks|move|moves)\b/.test(q) ||
+        /\bwhat (do|should) (i|we)\b/.test(q) ||
+        /\bhow do (i|we)\b/.test(q) ||
+        /\bgive me\b.{0,24}\b(step|action|plan|detail)\b/.test(q) ||
+        /\b(be|get|need|want)\b.{0,20}\b(specific|concrete|exact|detailed|granular)\b/.test(
+          q
+        ) ||
+        /\bwalk me through\b/.test(q) ||
+        (/\b(monday|tomorrow|today|this week)\b/.test(q) &&
+          /\b(do|start|take|action|call|reach)\b/.test(q))));
+  if (prior && asksForConcreteSteps) {
+    features.decompose = true;
+    features.specificity += 2;
+  }
   if (prior) {
     features.discourse += 1;
     if (
@@ -1122,6 +1173,7 @@ function scoreClientBusinessSemantics(question, session) {
 
   let mode = 'focus';
   const ranked = [
+    ['decompose', features.decompose ? features.specificity + 4 : 0],
     ['unknowns', features.gap],
     ['risk', features.risk],
     ['opportunity', features.strategy > 0 && /\bopportunit/.test(q) ? features.strategy + 2 : 0],
@@ -1132,6 +1184,7 @@ function scoreClientBusinessSemantics(question, session) {
     ['priority', features.priority],
   ].sort((a, b) => b[1] - a[1]);
   if (features.understanding) mode = 'understanding';
+  else if (features.decompose) mode = 'decompose';
   else if (features.followUp) mode = 'follow_up';
   else if (features.challenge) mode = 'challenge';
   else if (features.evidence) mode = 'evidence';
@@ -1158,6 +1211,7 @@ function scoreClientBusinessSemantics(question, session) {
     (features.understanding ||
       features.followUp ||
       features.challenge ||
+      features.decompose ||
       features.ownerPerspective ||
       features.evidence ||
       features.executionAdjacent ||
@@ -1215,6 +1269,7 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
     if (scored.features.understanding) return true;
     if (scored.features.evidence) return true;
     if (scored.features.followUp) return true;
+    if (scored.features.decompose) return true;
     if (scored.features.challenge) return true;
     if (scored.features.ownerPerspective) return true;
     if (scored.features.referentAmbiguous) return true;
@@ -1349,6 +1404,7 @@ function looksLikeClientIntelligenceAsk(question, session) {
     scored.features.understanding ||
     scored.features.evidence ||
     scored.features.followUp ||
+    scored.features.decompose ||
     scored.features.challenge ||
     scored.features.ownerPerspective ||
     scored.features.referentAmbiguous ||
@@ -1561,6 +1617,50 @@ function formatUnknownsAnswer(summary) {
   return paragraphs.join('\n\n');
 }
 
+/**
+ * SPEC-103B PATCH — decompose active recommendation/plan into operator steps.
+ * Evidence limits constrain steps; they do not replace decomposition.
+ */
+function formatDecomposeAnswer(summary, opts = {}) {
+  const prior = opts.prior || null;
+  const focus =
+    (prior && prior.recommendationFocus) ||
+    summary.idealCustomers ||
+    summary.campaignGoals ||
+    'the active plan';
+  const audience = summary.idealCustomers || 'your target accounts';
+  const market = summary.geography || summary.targetMarkets || null;
+  const where = market ? ` in ${market}` : '';
+  const outcome =
+    summary.successMetrics ||
+    summary.campaignGoals ||
+    'walkthroughs and recurring revenue';
+
+  const steps = [
+    `Define qualification criteria for ${audience}${where} — geography, building type, and decision-maker role.`,
+    `Build a short account set that fits those criteria (roughly 15–25 targets, not a city-wide list).`,
+    `Identify the decision-maker at each account (owner, property manager, or facility manager).`,
+    `Verify contact paths — email and phone where available; record gaps instead of guessing.`,
+    `Draft a concise outreach message tied to walkthrough outcomes, not a broad pitch blast.`,
+    `Review the list and messages before any send — advisory only until you authorize execution.`,
+    `Run a controlled outreach batch and log conversations → walkthroughs → ${midSentencePhrase(outcome)}.`,
+    `Measure results after one cycle; widen or revise the motion only with evidence.`,
+  ];
+
+  const paragraphs = [];
+  paragraphs.push(
+    `Breaking down the active direction (${focus}) into operator steps:`
+  );
+  paragraphs.push(steps.map((s, i) => `${i + 1}. ${s}`).join('\n'));
+  paragraphs.push(
+    `BOUNDARY: I do not yet have live market or prospect evidence to name exact companies or a Monday call list. ` +
+      `Those names come after you build the account set or once Market Intelligence is available — I will not invent them. ` +
+      `This is advisory decomposition, not authorization to send outreach.`
+  );
+
+  return paragraphs.join('\n\n');
+}
+
 function hasUsefulClientContext(summary) {
   if (!summary || !summary.approved) return false;
   return Boolean(
@@ -1607,8 +1707,14 @@ function pickRelevantFacts(summary, mode) {
   return facts;
 }
 
+function looksLikeSpecificityAsk(question, session) {
+  const scored = scoreClientBusinessSemantics(question, session);
+  return scored.features.decompose === true;
+}
+
 function inferReasoningMode(question, session) {
   const scored = scoreClientBusinessSemantics(question, session);
+  if (scored.features.decompose) return 'decompose';
   if (scored.features.followUp) return 'follow_up';
   if (scored.mode === 'challenge' || scored.features.challenge) return 'challenge';
   if (scored.mode === 'unknowns' || scored.features.gap >= 2) return 'unknowns';
@@ -1723,6 +1829,18 @@ function composeClientContextReasoning(summary, question, opts = {}) {
         String(u)
       )
     );
+
+  if (mode === 'decompose') {
+    const activeFocus =
+      (prior && prior.recommendationFocus) || icp || goals || 'the active plan';
+    return {
+      prose: formatDecomposeAnswer(summary, { prior }),
+      kind: 'decompose',
+      confidenceLabel: 'moderate',
+      confidence: 0.76,
+      recommendationFocus: activeFocus,
+    };
+  }
 
   if (mode === 'unknowns') {
     return {
@@ -2212,6 +2330,8 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
         reason = 'client_intelligence_unknowns';
       } else if (turnKind === 'follow_up') {
         reason = 'client_intelligence_reasoning_follow_up';
+      } else if (turnKind === 'decompose') {
+        reason = 'client_intelligence_decompose';
       } else if (turnKind === 'challenge') {
         reason = 'client_intelligence_reasoning_challenge';
       } else if (turnKind === 'approach') {
@@ -2282,6 +2402,7 @@ module.exports = {
   looksLikeTargetingAsk,
   looksLikeUnknownsAsk,
   looksLikeFocusAsk,
+  looksLikeSpecificityAsk,
   isClientContextReasoningRequest,
   isEvidenceDependentClientRequest,
   isClientContextExecutionRequest,
@@ -2297,6 +2418,7 @@ module.exports = {
   formatUnderstandingAnswer,
   formatMissingAnswer,
   formatUnknownsAnswer,
+  formatDecomposeAnswer,
   formatTargetingAnswer,
   formatEvidenceDependentGapAnswer,
   sanitizeFactSummary,
