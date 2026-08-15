@@ -108,6 +108,8 @@ function normalizeContext(raw) {
     // SPEC-098 — approved Client Intelligence (carrier only; loaded elsewhere)
     'clientIntelligence',
     'businessBlueprint',
+    // SPEC-103 — short-lived session cue for advisory follow-ups (Why?)
+    'lastClientIntelligenceTurn',
   ];
   for (const key of passthroughKeys) {
     if (raw[key] !== undefined) {
