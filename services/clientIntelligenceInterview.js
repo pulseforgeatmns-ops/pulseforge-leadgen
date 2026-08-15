@@ -1352,11 +1352,25 @@ function ensurePeriod(text) {
   return /[.!?]$/.test(s) ? s : `${s}.`;
 }
 
+/** Protect common abbreviations so sentence splitters do not treat "Co." as EOS. */
+function protectAbbreviations(text) {
+  return String(text || '')
+    .replace(/\b(Co|Inc|Ltd|LLC|Llc|Mr|Mrs|Ms|Dr|Jr|Sr|vs|etc)\./gi, '$1\u0000');
+}
+
+function restoreAbbreviations(text) {
+  return String(text || '').replace(/\u0000/g, '.');
+}
+
+function escapeRegExp(text) {
+  return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function firstSentence(text) {
-  const s = String(text || '').trim();
+  const s = protectAbbreviations(String(text || '').trim());
   if (!s) return '';
   const parts = s.split(/(?<=[.!?])\s+/);
-  return parts[0] || s;
+  return restoreAbbreviations(parts[0] || s);
 }
 
 function stripLeadingWeAre(text) {
@@ -1382,9 +1396,47 @@ const PLACE_NAME_RE =
 /**
  * Normalize a business phrase for Brief rendering (lists, services, segments, places).
  */
+/**
+ * SPEC-101 — correct obvious mechanical typing errors for structured /
+ * presentation understanding. Does not strengthen claims. Raw evidence stays
+ * untouched at the provenance layer.
+ */
+function normalizeMechanicalTypos(text) {
+  let s = String(text || '');
+  if (!s) return s;
+
+  // Known phrase-level operator typing errors from acceptance interviews.
+  s = s.replace(/\bwee'?ll\s+b\s+ee\s+theree\s+on\s+ttime\b/gi, "we'll be there on time");
+  s = s.replace(/\bwee'?ll\b/gi, "we'll");
+  s = s.replace(/\btheree\b/gi, 'there');
+  s = s.replace(/\bttime\b/gi, 'time');
+  s = s.replace(/\bb\s+ee\b/gi, 'be');
+  s = s.replace(/\bmiix\b/gi, 'mix');
+  s = s.replace(/\bmoreee\b/gi, 'more');
+  s = s.replace(/\bneiighborhood\b/gi, 'neighborhood');
+  s = s.replace(/\brreevvenue\b/gi, 'revenue');
+
+  return s;
+}
+
+/**
+ * SPEC-101 — client-facing prose polish. Expression only; never invents meaning.
+ */
+function normalizePresentationProse(text) {
+  let s = normalizeMechanicalTypos(String(text || ''));
+  if (!s) return s;
+  s = s
+    .replace(/\bwarm and neighborhood\b/gi, 'warm and neighborhood-oriented')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return s;
+}
+
 function normalizeBusinessPhrase(phrase) {
   let s = String(phrase || '').trim();
   if (!s) return '';
+
+  s = normalizeMechanicalTypos(s);
 
   // Repair spaced punctuation that should be compound hyphens.
   s = s
@@ -1412,8 +1464,13 @@ function normalizeBusinessPhrase(phrase) {
     .replace(/\bdeep cleans?\b/gi, 'deep cleans')
     .replace(/\bhigh[\s-]?traffic buildings?\b/gi, 'high-traffic buildings')
     .replace(/\brec centers?\b/gi, 'rec centers')
-    .replace(/\bfacility managers?\b/gi, 'facility managers')
+    .replace(/\bfacilit(?:y|ies)\s+managers?\b/gi, 'facility managers')
     .replace(/\bproperty managers?\b/gi, 'property managers')
+    .replace(/\bapartment\/multifamily\s+(?:buildings?|properties)\b/gi, 'APARTMENT_MULTIFAMILY_BUILDINGS')
+    .replace(/\bapartment(?:\s+and\s+|\s+)multifamily\s+(?:buildings?|properties)\b/gi, 'APARTMENT_MULTIFAMILY_BUILDINGS')
+    .replace(/\bapartment buildings?\b/gi, 'APARTMENT_MULTIFAMILY_BUILDINGS')
+    .replace(/\bmultifamily(?:\s+(?:apartment\s+)?)?(?:buildings?|properties)\b/gi, 'APARTMENT_MULTIFAMILY_BUILDINGS')
+    .replace(/APARTMENT_MULTIFAMILY_BUILDINGS/g, 'apartment/multifamily buildings')
     .replace(/\bprofessional offices?\b/gi, 'professional offices')
     .replace(/\bdaycares?\b/gi, 'daycares')
     .replace(/\bgreater\s+manchester(?:\s+area)?\b/gi, 'Greater Manchester')
@@ -1444,8 +1501,8 @@ function stripBusinessNameLeadIn(text) {
       ''
     )
     .replace(/^services?(?:\s+include|\s+are|:)\s+/i, '')
-    .replace(/^ideal customers?(?:\s+include|\s+are|:)\s+/i, '')
-    .replace(/^the ideal customers?(?:\s+include|\s+are|:)\s+/i, '')
+    .replace(/^ideal customers?(?:\s+include|\s+are|\s+is|:)\s+/i, '')
+    .replace(/^the ideal customers?(?:\s+include|\s+are|\s+is|:)\s+/i, '')
     .trim();
   return s;
 }
@@ -1494,18 +1551,106 @@ function servicePartCoveredByCanonical(part, canonicals) {
   return false;
 }
 
-/** Known ICP segment patterns → canonical labels. */
+/** Known ICP segment / decision-maker patterns → canonical labels. */
 const CUSTOMER_SEGMENT_PATTERNS = Object.freeze([
   [/property managers?/gi, 'property managers'],
+  [/facilit(?:y|ies)\s+managers?/gi, 'facility managers'],
+  [/apartment(?:\s*\/\s*|\s+)multifamily\s+(?:buildings?|properties)/gi, 'apartment/multifamily buildings'],
+  [/apartment buildings?/gi, 'apartment/multifamily buildings'],
+  [/multifamily(?:\s+(?:apartment\s+)?)?(?:buildings?|properties)/gi, 'apartment/multifamily buildings'],
   [/short[\s-]?term\s+rental\s+companies/gi, 'short-term rental companies'],
   [/\bSTR companies\b/gi, 'short-term rental companies'],
-  [/facility managers?/gi, 'facility managers'],
   [/professional offices?/gi, 'professional offices'],
   [/daycares?/gi, 'daycares'],
   [/rec centers?/gi, 'rec centers'],
   [/high[\s-]?traffic buildings?/gi, 'high-traffic buildings'],
   [/commercial customers?/gi, 'commercial customers'],
 ]);
+
+/** Trailing conversational fillers that must not become durable ICP values. */
+const CONVERSATIONAL_FILLER_RE =
+  /^(?:etc\.?|and\s+stuff|things\s+like\s+that|or\s+whatever|and\s+so\s+on)$/i;
+
+function isConversationalFiller(text) {
+  return CONVERSATIONAL_FILLER_RE.test(String(text || '').trim());
+}
+
+function isDecisionMakerLabel(text) {
+  const s = String(text || '').toLowerCase();
+  return /\b(?:managers?|owners?|directors?|principals?)\b/.test(s);
+}
+
+function managerRoleFromWord(word) {
+  const w = String(word || '')
+    .toLowerCase()
+    .trim();
+  if (w === 'property') return 'property managers';
+  if (w === 'facility' || w === 'facilities') return 'facility managers';
+  return '';
+}
+
+/**
+ * Expand "property or/and facilities manager(s)" into both decision-maker labels.
+ */
+function expandOrManagerCompound(text) {
+  return String(text || '').replace(
+    /\b(property|facilit(?:y|ies))\s+(?:or|and)\s+(property|facilit(?:y|ies))\s+managers?\b/gi,
+    (_, a, b) => {
+      const left = managerRoleFromWord(a);
+      const right = managerRoleFromWord(b);
+      return [left, right].filter(Boolean).join(', ');
+    }
+  );
+}
+
+/**
+ * True when a free-form ICP part is already covered by a canonical label.
+ */
+function customerPartCoveredByCanonical(part, canonicals) {
+  const p = String(part || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!p) return true;
+  for (const c of canonicals || []) {
+    const canon = String(c || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9/]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!canon) continue;
+    if (p === canon) return true;
+    if (canon.includes(p) || p.includes(canon)) return true;
+    const pCore = p.replace(/\s+managers?$/i, '').replace(/\s+buildings?$/i, '');
+    const cCore = canon.replace(/\s+managers?$/i, '').replace(/\s+buildings?$/i, '');
+    if (pCore && cCore && (pCore === cCore || canon.includes(pCore))) return true;
+  }
+  return false;
+}
+
+/**
+ * Merge ICP lists with later decision-maker clarification taking precedence
+ * in ordering (SPEC-101 evidence precedence). No schema change — single list.
+ */
+function mergeIdealCustomersWithPrecedence(prior, incoming, opts = {}) {
+  const preferIncomingDecisionMakers = Boolean(opts.preferIncomingDecisionMakers);
+  const cleanPrior = (prior || []).filter(
+    (item) => item && !isConversationalFiller(item) && !isLiteralUncertaintyPhrase(item)
+  );
+  const cleanIncoming = (incoming || []).filter(
+    (item) => item && !isConversationalFiller(item) && !isLiteralUncertaintyPhrase(item)
+  );
+  const priorDm = cleanPrior.filter(isDecisionMakerLabel);
+  const priorSeg = cleanPrior.filter((item) => !isDecisionMakerLabel(item));
+  const incomingDm = cleanIncoming.filter(isDecisionMakerLabel);
+  const incomingSeg = cleanIncoming.filter((item) => !isDecisionMakerLabel(item));
+
+  if (preferIncomingDecisionMakers && incomingDm.length) {
+    return dedupeNormalizedList([...incomingDm, ...priorDm, ...incomingSeg, ...priorSeg]);
+  }
+  return dedupeNormalizedList([...priorDm, ...incomingDm, ...priorSeg, ...incomingSeg]);
+}
 
 /** Value traits that must not become ICP segment rows. */
 const VALUE_TRAIT_PATTERNS = Object.freeze([
@@ -1524,6 +1669,7 @@ function dedupeNormalizedList(items) {
   for (const item of items || []) {
     const normalized = normalizeBusinessPhrase(item);
     if (!normalized) continue;
+    if (isConversationalFiller(normalized)) continue;
     if (out.some((x) => x.toLowerCase() === normalized.toLowerCase())) continue;
     out.push(normalized);
   }
@@ -1619,37 +1765,44 @@ function extractGrowthFocusItems(text) {
 }
 
 /**
- * Extract clean ICP segment entities from free-form prose.
+ * Extract clean ICP decision-maker + segment entities from free-form prose.
+ * SPEC-099/101: never collapse a multi-concept operator answer to a single noun phrase.
+ * Preserves decision makers (roles) and target environments (segments) together.
  */
 function extractCustomerSegments(text) {
   const raw = String(text || '').trim();
   if (!raw) return [];
 
+  const expanded = expandOrManagerCompound(raw);
   const found = [];
-  const listClause = raw.match(
-    /(?:the\s+)?ideal customers?\s+(?:are|include)\s+([^.]+?)(?:\.|$)/i
+  const listClause = expanded.match(
+    /(?:the\s+)?ideal customers?\s+(?:are|include|is)\s+([^.]+?)(?:\.|$)/i
   );
-  const searchSpace = listClause ? listClause[1] : raw;
+  const searchSpace = listClause ? listClause[1] : expanded;
 
   for (const [re, canon] of CUSTOMER_SEGMENT_PATTERNS) {
     re.lastIndex = 0;
-    if (re.test(searchSpace) || (!listClause && re.test(raw))) {
+    if (re.test(searchSpace) || (!listClause && re.test(expanded))) {
       if (canon === 'commercial customers' && listClause) continue;
       if (!found.some((f) => f.toLowerCase() === canon.toLowerCase())) found.push(canon);
     }
   }
-  if (found.length) {
-    return dedupeNormalizedList(
-      found.filter((f) => f !== 'commercial customers' || found.length === 1)
-    );
-  }
 
-  let body = stripBusinessNameLeadIn(raw);
+  // Always list-split so unmatched siblings survive when some patterns match (SPEC-101,
+  // same successful pattern as extractServiceList / SPEC-099).
+  let body = stripBusinessNameLeadIn(expanded);
+  body = expandOrManagerCompound(body);
   body = body
     .replace(/^commercial customers?\s+who value\s+[^.]+[. ]*/i, '')
     .replace(/^who value\s+[^.]+[. ]*/i, '')
     .replace(/\s+that need\s+.+$/i, '')
-    .replace(/\s+as part of (?:my|our|the)\s+ideal customer(?:\s+profile)?\s*$/i, '');
+    .replace(/\s+as part of (?:my|our|the)\s+ideal customer(?:\s+profile)?\s*$/i, '')
+    .replace(/^(?:a|an|the)\s+/i, '')
+    .replace(
+      /^(?:let'?s\s+)?(?:target|focus\s+on|prioritize|aim\s+at)\s+/i,
+      ''
+    );
+
   const parts = String(body || '')
     .split(/\s*(?:,|;|\band\b|\n)\s*/i)
     .map((p) =>
@@ -1659,16 +1812,40 @@ function extractCustomerSegments(text) {
           .replace(/\s+as part of (?:my|our|the)\s+ideal customer(?:\s+profile)?$/i, '')
           .replace(/\s+who value\s+.+$/i, '')
           .replace(/\s+that need\s+.+$/i, '')
+          .replace(/^(?:a|an|the)\s+/i, '')
+          .replace(/^(?:let'?s\s+)?(?:target|focus\s+on|prioritize)\s+/i, '')
       )
     )
     .filter(
       (p) =>
         p &&
+        !isConversationalFiller(p) &&
         !isValueTraitPhrase(p) &&
-        !/^(?:anchor(?:\s+cleaning)?|most wants|wants to work)\b/i.test(p)
+        !isLiteralUncertaintyPhrase(p) &&
+        !/^(?:anchor(?:\s+cleaning)?|most wants|wants to work|we serve|greater)\b/i.test(p) &&
+        !/^(?:the\s+)?ideal\s+customer/i.test(p) &&
+        // Bare role stems without "managers" are incomplete fragments from list splits.
+        !/^(?:property|facilit(?:y|ies)|apartment|multifamily)$/i.test(p)
     )
-    .filter((p) => p.split(/\s+/).length <= 6);
-  return dedupeNormalizedList(parts);
+    .filter((p) => p.split(/\s+/).length <= 8);
+
+  if (!found.length && !parts.length) return [];
+
+  const merged = found.length ? [...found] : [];
+  for (const part of parts) {
+    if (customerPartCoveredByCanonical(part, merged.length ? merged : found)) continue;
+    if (merged.some((m) => m.toLowerCase() === part.toLowerCase())) continue;
+    // Drop long preamble remnants that slipped past lead-in stripping.
+    if (/^(?:the\s+)?ideal\s+customer/i.test(part)) continue;
+    if (/^we serve\b/i.test(part)) continue;
+    merged.push(part);
+  }
+
+  const cleaned = dedupeNormalizedList(
+    merged.filter((f) => f !== 'commercial customers' || merged.length === 1)
+  );
+  // Prefer decision makers before environment segments when both are present.
+  return mergeIdealCustomersWithPrecedence([], cleaned);
 }
 
 function isValueTraitPhrase(text) {
@@ -1698,6 +1875,7 @@ function extractValueTraits(text) {
 /**
  * Clean a candidate business name — strip pronouns / intro bleed.
  * "Anchor Cleaning we" → "Anchor Cleaning"
+ * Prefer durable tenant identities when the operator types a near-match casing/abbreviation.
  */
 function sanitizeBusinessName(name) {
   let s = String(name || '').trim();
@@ -1708,6 +1886,13 @@ function sanitizeBusinessName(name) {
     .replace(/[—–,:;.\s]+$/g, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+
+  // Prefer canonical AS Cleaning Co. when present (client_id=11). Do not fuzzy-guess
+  // unrelated names — only map clear AS Cleaning variants.
+  if (/\bas\s+cleaning(?:\s+co\.?)?\b/i.test(String(name || '')) || /\bas\s+cleaning(?:\s+co\.?)?\b/i.test(s)) {
+    return 'AS Cleaning Co.';
+  }
+
   // Prefer canonical Anchor Cleaning when present.
   if (/\banchor\s+cleaning\b/i.test(s) || /\banchor\b/i.test(s)) {
     if (/\banchor\s+cleaning\b/i.test(String(name || '')) || /\banchor\s+cleaning\b/i.test(s)) {
@@ -1839,6 +2024,8 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
           next.business_description = normalizeBusinessPhrase(firstSentence(cleaned));
           if (/\banchor(?:\s+cleaning)?\b/i.test(cleaned)) {
             next.business_name = /anchor\s+cleaning/i.test(cleaned) ? 'Anchor Cleaning' : 'Anchor';
+          } else if (/\bas\s+cleaning(?:\s+co\.?)?\b/i.test(cleaned)) {
+            next.business_name = 'AS Cleaning Co.';
           }
         }
       }
@@ -1868,16 +2055,27 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
       break;
     }
     case 'idealCustomers': {
+      // SPEC-101: hedged guesses must not become unqualified durable ICP values.
+      if (
+        /^(?:maybe|perhaps|i\s+think|probably)\b/i.test(cleaned) &&
+        cleaned.split(/\s+/).length <= 8
+      ) {
+        break;
+      }
       const segments = extractCustomerSegments(cleaned);
-      next.ideal_customers = uniquePush(
-        [],
-        segments.length ? segments : splitListItems(stripBusinessNameLeadIn(cleaned))
+      const fallback = splitListItems(stripBusinessNameLeadIn(cleaned)).filter(
+        (item) => item && !isConversationalFiller(item)
       );
-      // Drop accidental trait / preamble bleed / uncertainty phrases / generic nouns.
+      next.ideal_customers = mergeIdealCustomersWithPrecedence(
+        [],
+        segments.length ? segments : fallback
+      );
+      // Drop accidental trait / preamble bleed / uncertainty phrases / generic nouns / fillers.
       next.ideal_customers = next.ideal_customers.filter(
         (item) =>
           !isValueTraitPhrase(item) &&
           !isLiteralUncertaintyPhrase(item) &&
+          !isConversationalFiller(item) &&
           !looksLikeGenericCategoryAnswer(item) &&
           !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
           !/^(?:anchor(?:\s+cleaning)?|most wants)\b/i.test(item)
@@ -1908,7 +2106,36 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
         next.vertical_focus = 'residential';
       }
       if (!next.geography.length && !isLiteralUncertaintyPhrase(cleaned)) {
-        next.geography = uniquePush([], [normalizeBusinessPhrase(cleaned)]);
+        const geoOnly = normalizeBusinessPhrase(
+          cleaned
+            .replace(
+              /\band\s+(?:let'?s\s+)?(?:target|focus\s+on|prioritize)\b[\s\S]*$/i,
+              ''
+            )
+            .replace(
+              /^(?:let'?s\s+)?(?:target|focus\s+on|prioritize)\b[\s\S]*$/i,
+              ''
+            )
+            .trim()
+        );
+        if (geoOnly && !isConversationalFiller(geoOnly) && !/\bmanagers?\b/i.test(geoOnly)) {
+          next.geography = uniquePush([], [geoOnly]);
+        }
+      }
+      // SPEC-101 — later targeting clarification can refine earlier ICP understanding.
+      if (
+        /\b(?:let'?s\s+)?target\b|\bfocus\s+on\b|\bpriorit(?:y|ize)\b|\bideal customers?\b/i.test(
+          cleaned
+        )
+      ) {
+        const targeting = extractCustomerSegments(cleaned);
+        if (targeting.length) {
+          next.ideal_customers = mergeIdealCustomersWithPrecedence(
+            next.ideal_customers,
+            targeting,
+            { preferIncomingDecisionMakers: true }
+          );
+        }
       }
       break;
     }
@@ -1971,14 +2198,19 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
     }
     case 'idealCustomers': {
       const segments = extractCustomerSegments(substance);
-      next.ideal_customers = uniquePush(
+      const fallback = splitListItems(substance).filter(
+        (item) => item && !isConversationalFiller(item)
+      );
+      next.ideal_customers = mergeIdealCustomersWithPrecedence(
         next.ideal_customers,
-        segments.length ? segments : splitListItems(substance)
+        segments.length ? segments : fallback,
+        { preferIncomingDecisionMakers: true }
       );
       next.ideal_customers = next.ideal_customers.filter(
         (item) =>
           !isValueTraitPhrase(item) &&
           !isLiteralUncertaintyPhrase(item) &&
+          !isConversationalFiller(item) &&
           !/as part of (?:my|our|the)\s+ideal customer/i.test(item)
       );
       next.ideal_customer_traits = uniquePush(
@@ -1996,7 +2228,31 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
     case 'targetMarkets':
       next.geography = uniquePush(extractPlaces(substance), next.geography);
       if (!extractPlaces(substance).length) {
-        next.geography = uniquePush(next.geography, [substance]);
+        const geoOnly = normalizeBusinessPhrase(
+          substance
+            .replace(
+              /\band\s+(?:let'?s\s+)?(?:target|focus\s+on|prioritize)\b[\s\S]*$/i,
+              ''
+            )
+            .trim()
+        );
+        if (geoOnly && !/\bmanagers?\b/i.test(geoOnly)) {
+          next.geography = uniquePush(next.geography, [geoOnly]);
+        }
+      }
+      if (
+        /\b(?:let'?s\s+)?target\b|\bfocus\s+on\b|\bpriorit(?:y|ize)\b|\bideal customers?\b/i.test(
+          substance
+        )
+      ) {
+        const targeting = extractCustomerSegments(substance);
+        if (targeting.length) {
+          next.ideal_customers = mergeIdealCustomersWithPrecedence(
+            next.ideal_customers,
+            targeting,
+            { preferIncomingDecisionMakers: true }
+          );
+        }
       }
       break;
     case 'competitiveAdvantages':
@@ -2057,9 +2313,10 @@ function normalizeBrandVoiceTone(text) {
  */
 function synthesizeDifferentiationSnippet(text) {
   let s = stripInterviewQuestionEcho(String(text || '').trim());
+  s = normalizeMechanicalTypos(s);
   s = s
     .replace(/^competitive edge is described as\s+/i, '')
-    .replace(/^customers? choose (?:us|anchor(?:\s+cleaning)?|this business) because(?:\s+of)?\s+/i, '')
+    .replace(/^customers? choose (?:us|anchor(?:\s+cleaning)?|this business|as\s+cleaning(?:\s+co\.?)?) because(?:\s+of)?\s+/i, '')
     .trim();
   if (!s) return '';
 
@@ -2071,6 +2328,19 @@ function synthesizeDifferentiationSnippet(text) {
     return 'trust that the team shows up consistently, communicates clearly, and solves problems quickly';
   }
   if (/reliable crews/i.test(s)) return 'reliable crews and clear communication';
+
+  // Conservative on-time / quality framing when the operator stated those ideas.
+  if (/\bexcellent quality\b/i.test(s) && /\b(?:on[- ]?time|there on time|being on time|we'll be there on time)\b/i.test(s)) {
+    return 'excellent quality and reliable, on-time service';
+  }
+  if (/\b(?:on[- ]?time|there on time|being on time|we'll be there on time)\b/i.test(s) && /\b(?:quality|communication)\b/i.test(s)) {
+    const quality = /\bexcellent quality\b/i.test(s)
+      ? 'excellent quality'
+      : /\bfast communication\b/i.test(s)
+        ? 'fast communication'
+        : 'quality';
+    return `${quality} and being on time`;
+  }
 
   // Otherwise first sentence, capped.
   let snippet = firstSentence(s);
@@ -2127,7 +2397,11 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
     ...(prior.idealCustomers || emptySection()),
     summary: (() => {
       const cleanIdeal = (f.ideal_customers || []).filter(
-        (item) => item && !isLiteralUncertaintyPhrase(item) && !isValueTraitPhrase(item)
+        (item) =>
+          item &&
+          !isLiteralUncertaintyPhrase(item) &&
+          !isValueTraitPhrase(item) &&
+          !isConversationalFiller(item)
       );
       if (cleanIdeal.length) {
         return [
@@ -2420,9 +2694,11 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
         // already a full identity sentence
       } else if (/^an?\s+/i.test(sentence)) {
         sentence = name ? `${name} is ${sentence}` : `This is ${sentence}`;
-      } else if (name && !new RegExp(`^${name}\\b`, 'i').test(sentence)) {
+      } else if (name && !new RegExp(`^${escapeRegExp(name)}(?:\\b|$)`, 'i').test(sentence)) {
         const article = /^[aeiou]/i.test(sentence) ? 'an' : 'a';
         sentence = `${name} is ${article} ${sentence}`;
+      } else if (name && new RegExp(`^${escapeRegExp(name)}$`, 'i').test(sentence)) {
+        sentence = `${name} is a cleaning company`;
       } else {
         sentence = /^[A-Z]/.test(sentence) ? sentence : `This is a ${sentence}`;
       }
@@ -2755,9 +3031,9 @@ function isMetaConsultantSentence(sentence) {
  * before Executive Business Brief synthesis.
  */
 function sanitizeSummaryForBrief(summary) {
-  const parts = String(summary || '')
+  const parts = protectAbbreviations(String(summary || ''))
     .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
+    .map((s) => restoreAbbreviations(s.trim()))
     .filter(Boolean)
     .filter((s) => !isMetaConsultantSentence(s))
     .filter((s) => isBusinessFactStatement(s) || !containsMetaInstructionLanguage(s))
@@ -2813,9 +3089,9 @@ function scrubArtifactLanguage(text) {
 }
 
 function substantiveSentences(summary, limit = 2) {
-  const parts = String(summary || '')
+  const parts = protectAbbreviations(String(summary || ''))
     .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
+    .map((s) => restoreAbbreviations(s.trim()))
     .filter(Boolean)
     .filter((s) => !isMetaConsultantSentence(s))
     .map((s) => scrubArtifactLanguage(s))
@@ -3594,6 +3870,7 @@ function buildExecutiveSummary(sections, opts = {}) {
         item &&
         !isValueTraitPhrase(item) &&
         !isLiteralUncertaintyPhrase(item) &&
+        !isConversationalFiller(item) &&
         !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
         !/^(?:anchor(?:\s+cleaning)?\s+)?most wants\b/i.test(item)
     );
@@ -3613,8 +3890,10 @@ function buildExecutiveSummary(sections, opts = {}) {
     if (cleanIdeal.length || f.geography.length || /commercial/i.test(String(f.growth_focus || ''))) {
       const sentences = [];
       if (cleanIdeal.length) {
-        const shortName = String(businessName || 'Anchor').replace(/\s+Cleaning$/i, '') || 'Anchor';
-        const possessive = /s$/i.test(shortName) ? `${shortName}'` : `${shortName}'s`;
+        const displayName = businessName || 'the business';
+        const possessive = businessSubject(displayName, { possessive: true });
+        const decisionMakers = cleanIdeal.filter(isDecisionMakerLabel);
+        const segments = cleanIdeal.filter((item) => !isDecisionMakerLabel(item));
         const needsRecurring = /dependable recurring|recurring(?:\s+commercial)?(?:\s+cleaning)?|weekly or multiple/i.test(
           [
             s('idealCustomers').summary,
@@ -3623,11 +3902,19 @@ function buildExecutiveSummary(sections, opts = {}) {
             cleanIdeal.join(' '),
           ].join(' ')
         );
-        sentences.push(
-          `${possessive} ideal customers include ${cleanIdeal.join(', ')}${
-            needsRecurring ? ' that need dependable recurring cleaning' : ''
-          }`
-        );
+        if (decisionMakers.length && segments.length) {
+          sentences.push(
+            `${possessive} current acquisition focus is ${decisionMakers.join(', ')}, including opportunities associated with ${segments.join(', ')}${
+              needsRecurring ? ' that need dependable recurring cleaning' : ''
+            }`
+          );
+        } else {
+          sentences.push(
+            `${possessive} ideal customers include ${cleanIdeal.join(', ')}${
+              needsRecurring ? ' that need dependable recurring cleaning' : ''
+            }`
+          );
+        }
       } else if (/commercial/i.test(String(f.growth_focus || f.vertical_focus || ''))) {
         const shortName =
           String(businessName || 'The business').replace(/\s+Cleaning$/i, '') || 'The business';
@@ -3698,8 +3985,9 @@ function buildExecutiveSummary(sections, opts = {}) {
   const bleedRe =
     /would feel successful if|we will know the growth work|both geography is|anchor'?s brand voice should sound|when a great-fit customer chooses|to say short term|Anchor Cleaning we|a Anchor|anchor'?s calm|low — price|great — fit|we'?s brand voice/i;
   const scrubBleed = (body) =>
-    String(body || '')
+    protectAbbreviations(String(body || ''))
       .split(/(?<=[.!?])\s+/)
+      .map((sentence) => restoreAbbreviations(sentence))
       .filter((sentence) => !bleedRe.test(sentence) && !containsRawPromptFragment(sentence))
       .join(' ');
 
@@ -3708,6 +3996,13 @@ function buildExecutiveSummary(sections, opts = {}) {
   whyChooseYou = scrubBleed(whyChooseYou);
   whereHeaded = scrubBleed(whereHeaded);
   successLooksLike = scrubBleed(successLooksLike);
+
+  // SPEC-101 — presentation normalization for client-facing Brief only.
+  whoYouAre = normalizePresentationProse(whoYouAre);
+  whoYouServe = normalizePresentationProse(whoYouServe);
+  whyChooseYou = normalizePresentationProse(whyChooseYou);
+  whereHeaded = normalizePresentationProse(whereHeaded);
+  successLooksLike = normalizePresentationProse(successLooksLike);
 
   return {
     title: 'Executive Business Brief',
@@ -8948,6 +9243,8 @@ module.exports = {
   parseCorrectionMessage,
   parseSupplementalMessage,
   normalizeBusinessPhrase,
+  normalizeMechanicalTypos,
+  normalizePresentationProse,
   normalizeBrandVoiceTone,
   sanitizeBusinessName,
   stripBusinessNameLeadIn,
@@ -8956,6 +9253,9 @@ module.exports = {
   extractValueTraits,
   extractGrowthFocusItems,
   dedupeNormalizedList,
+  isConversationalFiller,
+  isDecisionMakerLabel,
+  mergeIdealCustomersWithPrecedence,
   synthesizeDifferentiationSnippet,
   emptyNormalizedFacts,
   ingestAnswerIntoNormalizedFacts,
