@@ -31,6 +31,7 @@
  * GET  /api/v1/scout/handoffs/:handoffId — read by handoffId (SPEC-077)
  * GET  /api/v1/scout/places-diagnostic — safe Places connectivity probe (Scout path)
  * GET  /api/v1/clients/:id/blueprint
+ * GET  /api/v1/clients/:id/cie-lifecycle-audit — read-only interview/Blueprint audit
  * GET  /api/v1/client-intel/sessions
  * GET  /api/v1/client-intel/sessions/:id/resume
  * POST /api/v1/client-intel/fixtures/anchor-blueprint
