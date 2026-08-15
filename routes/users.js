@@ -95,7 +95,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
       <input id="password" type="password" minlength="8" placeholder="Password" required>
       <button class="toggle-password" type="button" data-toggle-password="password" aria-label="Show password">Show</button>
     </div>
-	    <select id="role"><option value="client">Client</option><option value="viewer">Viewer (Internal)</option><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
+	    <select id="role"><option value="client">Client</option><option value="viewer">Viewer (Internal)</option><option value="ao">AO (Field)</option><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
     <select id="clientId"><option value="">No client</option></select>
     <button class="primary" type="submit">Add User</button>
   </form>
@@ -118,7 +118,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   </form>
 </div>
 <script>
-	const roles = ['admin','manager','viewer','client','setter','closer','sales'];
+	const roles = ['admin','manager','viewer','client','ao','setter','closer','sales'];
 const msg = document.getElementById('msg');
 let resetUserId = null;
 let clients = [];
@@ -252,6 +252,7 @@ router.post('/api/users', ...adminOnly, async (req, res) => {
   if (!name || !email || !password || !validateRole(role)) return res.status(400).json({ error: 'Invalid user' });
   if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   if (role === 'client' && !clientId) return res.status(400).json({ error: 'Client role requires a client' });
+  if (role === 'ao' && !clientId) return res.status(400).json({ error: 'AO role requires a client' });
   if (clientId && !(await validateClientId(clientId))) return res.status(400).json({ error: 'Invalid client' });
   const hash = await bcrypt.hash(password, 12);
   try {
@@ -297,6 +298,15 @@ router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
       if (req.body.client_id === undefined) {
         const existing = await pool.query('SELECT client_id FROM users WHERE id = $1', [id]);
         if (!existing.rows[0]?.client_id) return res.status(400).json({ error: 'Client role requires a client' });
+      }
+    }
+    if (req.body.role === 'ao') {
+      if (req.body.client_id !== undefined && !normalizeClientId(req.body.client_id)) {
+        return res.status(400).json({ error: 'AO role requires a client' });
+      }
+      if (req.body.client_id === undefined) {
+        const existing = await pool.query('SELECT client_id FROM users WHERE id = $1', [id]);
+        if (!existing.rows[0]?.client_id) return res.status(400).json({ error: 'AO role requires a client' });
       }
     }
     if (req.body.active !== undefined) {
