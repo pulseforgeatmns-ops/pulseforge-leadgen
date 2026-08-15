@@ -49,6 +49,12 @@
   let livePollTimer = null;
   /** @type {boolean} */
   let livePollInFlight = false;
+  /** SPEC-102 — prevent duplicate Max Workspace asks during reveal. */
+  /** @type {boolean} */
+  let workspaceAskInFlight = false;
+  /** SPEC-102 — stick-to-bottom follower for progressive reveal. */
+  /** @type {ReturnType<typeof window.MaxInteractionCadence.createScrollFollow>|null} */
+  let mxScrollFollow = null;
   /** SPEC-047 session-local review interaction state (presentation only). */
   /** @type {object|null} */
   let msnReviewSession = null;
@@ -81,7 +87,39 @@
   };
 
   function prefersReducedMotion() {
+    if (window.MaxInteractionCadence && typeof window.MaxInteractionCadence.prefersReducedMotion === 'function') {
+      return window.MaxInteractionCadence.prefersReducedMotion();
+    }
     return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function ensureMxScrollFollow() {
+    if (mxScrollFollow || !els.mxThread) return mxScrollFollow;
+    if (window.MaxInteractionCadence && typeof window.MaxInteractionCadence.createScrollFollow === 'function') {
+      mxScrollFollow = window.MaxInteractionCadence.createScrollFollow(els.mxThread, {
+        threshold: 80,
+      });
+    } else {
+      mxScrollFollow = {
+        follow() {
+          if (els.mxThread) els.mxThread.scrollTop = els.mxThread.scrollHeight;
+        },
+        forceStick() {
+          if (els.mxThread) els.mxThread.scrollTop = els.mxThread.scrollHeight;
+        },
+        isSticking: () => true,
+        setStick() {},
+        nearBottom: () => true,
+        detach() {},
+      };
+    }
+    return mxScrollFollow;
+  }
+
+  function scrollMxThread() {
+    const follow = ensureMxScrollFollow();
+    if (follow) follow.follow();
+    else if (els.mxThread) els.mxThread.scrollTop = els.mxThread.scrollHeight;
   }
 
   function announce(message) {
@@ -3699,7 +3737,7 @@
       <p class="mx-msg-body">${escapeHtml(text)}</p>
     `;
     els.mxThread.appendChild(div);
-    els.mxThread.scrollTop = els.mxThread.scrollHeight;
+    scrollMxThread();
   }
 
   function appendMaxOpening(text) {
@@ -3730,32 +3768,105 @@
     els.mxThread.appendChild(div);
     bindAttachmentCards(div);
     bindExpandableOperatorBodies(div);
-    els.mxThread.scrollTop = els.mxThread.scrollHeight;
+    ensureMxScrollFollow()?.forceStick?.();
+    scrollMxThread();
   }
 
-  function appendMaxResponse(result) {
+  /**
+   * SPEC-102 — progressive Max Workspace response.
+   * Prose reveals first; evidence/meta/actions appear after completion.
+   */
+  async function appendMaxResponse(result, presentation) {
     if (!els.mxThread) return;
+    const Cadence = window.MaxInteractionCadence;
     const structured = result.structured || {};
     const metadata = result.metadata || structured.metadata || {};
+    const prose = String(result.prose || '');
+    const meta = presentation || {};
     const div = document.createElement('div');
     div.className = 'mx-msg';
+    div.setAttribute('aria-busy', 'true');
+    div.setAttribute('data-max-reveal', '1');
 
-    const evidenceHtml = renderEvidencePanel(structured);
-    const metaHtml = renderMetadataStrip(metadata);
-    const actionsHtml = renderRecommendedActions(
-      result.recommendedActions || structured.recommendedActions || []
-    );
+    const body = document.createElement('p');
+    body.className = 'mx-msg-body';
+    const sr = document.createElement('span');
+    sr.className = 'pf-sr-only';
+    sr.textContent = prose;
+    const visual = document.createElement('span');
+    visual.setAttribute('aria-hidden', 'true');
+    visual.textContent = '';
+    body.appendChild(sr);
+    body.appendChild(visual);
 
-    div.innerHTML = `
-      <p class="mx-msg-role">Max</p>
-      <p class="mx-msg-body">${escapeHtml(result.prose || '')}</p>
-      ${evidenceHtml}
-      ${metaHtml}
-      ${actionsHtml}
-    `;
+    const role = document.createElement('p');
+    role.className = 'mx-msg-role';
+    role.textContent = 'Max';
+
+    const supporting = document.createElement('div');
+    supporting.className = 'mx-msg-supporting';
+    supporting.hidden = true;
+
+    div.appendChild(role);
+    div.appendChild(body);
+    div.appendChild(supporting);
     els.mxThread.appendChild(div);
-    bindWorkspaceActions(div);
-    els.mxThread.scrollTop = els.mxThread.scrollHeight;
+    scrollMxThread();
+
+    const finishSupporting = () => {
+      const evidenceHtml = renderEvidencePanel(structured);
+      const metaHtml = renderMetadataStrip(metadata);
+      const actionsHtml = renderRecommendedActions(
+        result.recommendedActions || structured.recommendedActions || []
+      );
+      supporting.innerHTML = `${evidenceHtml}${metaHtml}${actionsHtml}`;
+      supporting.hidden = false;
+      supporting.classList.add('is-visible');
+      bindWorkspaceActions(div);
+      div.removeAttribute('aria-busy');
+      div.removeAttribute('data-max-reveal');
+      scrollMxThread();
+    };
+
+    if (!Cadence || !prose) {
+      if (typeof meta.clearThinking === 'function') meta.clearThinking();
+      body.textContent = prose;
+      finishSupporting();
+      return div;
+    }
+
+    const hasEvidencePath =
+      (structured.supportingEvidence && structured.supportingEvidence.length > 0) ||
+      (structured.contradictingEvidence && structured.contradictingEvidence.length > 0) ||
+      Boolean(metadata.evidenceCount);
+
+    await Cadence.presentCompletedResponse({
+      startedAtMs: meta.startedAtMs,
+      prose,
+      operatorText: meta.operatorText,
+      provisionalWeight: meta.provisionalWeight,
+      surface: 'workspace',
+      route: result.route,
+      synthesis: Boolean(
+        result.route === 'mission' ||
+          (result.recommendedActions && result.recommendedActions.length > 1)
+      ),
+      recommendation: Boolean(
+        result.recommendedActions && result.recommendedActions.length
+      ),
+      hasEvidencePath,
+      reducedMotion: prefersReducedMotion(),
+      clearThinking: meta.clearThinking,
+      setText: (partial) => {
+        visual.textContent = partial;
+        scrollMxThread();
+      },
+      onComplete: async () => {
+        body.textContent = prose;
+        finishSupporting();
+      },
+    });
+    return div;
   }
 
   function renderEvidencePanel(structured) {
@@ -3950,6 +4061,8 @@
   async function askWorkspace(question) {
     const q = String(question || '').trim();
     if (!q) return;
+    if (workspaceAskInFlight) return;
+    workspaceAskInFlight = true;
     console.info('[mission-objective-len]', {
       stage: 'frontend',
       chars: q.length,
@@ -3959,7 +4072,40 @@
     appendOperatorMessage(q);
     resetAskInput();
 
+    const Cadence = window.MaxInteractionCadence;
+    const startedAtMs = Date.now();
+    const provisionalWeight = Cadence
+      ? Cadence.classifyInteractionWeight({
+          surface: 'workspace',
+          operatorText: q,
+        })
+      : 'standard';
+    const provisionalProfile = Cadence
+      ? Cadence.buildInteractionProfile(provisionalWeight, {
+          reducedMotion: prefersReducedMotion(),
+        })
+      : { thinkingAppearMs: 300, thinkingLabel: 'Considering your question…' };
+
+    const thinking = Cadence
+      ? Cadence.scheduleThinking({
+          delayMs: provisionalProfile.thinkingAppearMs,
+          label: provisionalProfile.thinkingLabel,
+          mount: (label) => {
+            if (!els.mxThread) return null;
+            const el =
+              Cadence.createThinkingElement(document, label, 'mx-thinking') ||
+              document.createElement('div');
+            if (!el.className) el.className = 'mx-thinking';
+            el.textContent = label;
+            els.mxThread.appendChild(el);
+            scrollMxThread();
+            return el;
+          },
+        })
+      : { clear() {} };
+
     try {
+      // Real work begins immediately — presentation delay is applied after response.
       const result = await apiRequest('/api/v1/max/workspace/ask', {
         method: 'POST',
         body: {
@@ -3982,7 +4128,12 @@
         els.mxSwitch.hidden = false;
         els.mxSwitch.textContent = result.contextSwitch;
       }
-      appendMaxResponse(result);
+      await appendMaxResponse(result, {
+        startedAtMs,
+        provisionalWeight,
+        operatorText: q,
+        clearThinking: () => thinking.clear(),
+      });
       if (
         result.mission &&
         result.mission.operatorProspectList &&
@@ -4005,18 +4156,20 @@
         `;
         els.mxThread?.appendChild(note);
         bindAttachmentCards(note);
-        if (els.mxThread) els.mxThread.scrollTop = els.mxThread.scrollHeight;
+        scrollMxThread();
       }
       renderSuggestions(result.suggestions || []);
       if (result.route === 'mission' || (result.mission && result.mission.id)) {
         loadDeck({ force: true });
       }
     } catch (err) {
+      thinking.clear();
       console.error('[max-workspace] ask', err);
       appendSystemMessage(
         'I could not complete that investigation. ' + (err.message || 'Try again.')
       );
     } finally {
+      workspaceAskInFlight = false;
       if (els.mxAskSend) els.mxAskSend.disabled = false;
       els.mxAskInput?.focus();
     }
