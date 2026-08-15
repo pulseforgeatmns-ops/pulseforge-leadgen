@@ -54,9 +54,12 @@ const {
 const {
   MESSAGE_CLASSES,
   ARTIFACT_KINDS,
+  ANSWER_DISPOSITIONS,
+  MAX_PROBE_ATTEMPTS,
   emptyReasoningMemory,
   ensureReasoningMemory,
   classifyReasoningMessage,
+  classifyAnswerDisposition,
   assessAnswerSufficiency,
   buildProbingFollowUp,
   inferCrossSectionTarget,
@@ -80,7 +83,10 @@ const {
   reasoningAck,
   planReasoningTurn,
   looksLikeVagueAnswer,
+  looksLikeGenericCategoryAnswer,
   looksLikeExplicitUnknownAnswer,
+  looksLikeExplicitDeferral,
+  looksLikeSkip,
 } = require('./clientIntelligenceReasoning');
 
 const SESSION_STATUSES = Object.freeze([
@@ -488,10 +494,12 @@ function advanceStatus(session, to) {
 }
 
 /**
- * SPEC-099 — explicit operator unknown (must never become a factual Blueprint value).
+ * SPEC-099/100 — explicit operator unknown (must never become a factual Blueprint value).
  * Broader than answerLooksEmpty: catches "I don't know yet", typos like "yeet", etc.
+ * Distinct from explicit deferral ("skip for now" / "leave it open").
  */
 function looksLikeExplicitUnknown(text) {
+  if (looksLikeExplicitDeferral(text)) return false;
   const s = String(text || '')
     .trim()
     .toLowerCase()
@@ -515,13 +523,14 @@ function looksLikeExplicitUnknown(text) {
   if (/^(we\s+)?(do\s+not|don't|dont)\s+know(\s+(yet|yeet|right\s+now))?$/i.test(s)) {
     return true;
   }
-  // "I'm not sure" / "I'm really not sure" / "not sure yet"
+  // "I'm not sure" / "I'm really not sure" / "not sure yet" / "still not sure"
   if (
     /^(i('?m|\s+am)\s+)?(really\s+)?(not\s+sure|unsure|no\s+idea)(\s+yet)?$/i.test(s)
   ) {
     return true;
   }
   if (/^(we\s+are\s+)?(not\s+sure|unsure)(\s+yet)?$/i.test(s)) return true;
+  if (/^(still\s+)?(not\s+sure|unsure)(\s+yet)?$/i.test(s)) return true;
   if (
     /^(i\s+|we\s+)?(haven't|have\s+not|couldn't|could\s+not)\s+(figured|worked)\s+(that|it|this)\s+out(\s+yet)?$/i.test(
       s
@@ -531,7 +540,17 @@ function looksLikeExplicitUnknown(text) {
   }
   if (/^(i\s+)?couldn't\s+tell\s+you$/i.test(s)) return true;
   if (/^(we\s+)?(haven't|have\s+not)\s+decided(\s+yet)?$/i.test(s)) return true;
+  if (/^(we'?re|we\s+are)\s+still\s+deciding$/i.test(s)) return true;
   if (/^(still\s+)?(figuring|working)\s+(that|it)\s+out$/i.test(s)) return true;
+  if (
+    /^(i\s+)?(don'?t|dont|do\s+not)\s+really\s+know(\s+who\s+the\s+best\s+customer\s+is)?(\s+yet)?$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^maybe\??$/i.test(s)) return true;
+  if (looksLikeExplicitUnknownAnswer(text)) return true;
   return false;
 }
 
@@ -1854,11 +1873,12 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
         [],
         segments.length ? segments : splitListItems(stripBusinessNameLeadIn(cleaned))
       );
-      // Drop accidental trait / preamble bleed / uncertainty phrases from the segment list.
+      // Drop accidental trait / preamble bleed / uncertainty phrases / generic nouns.
       next.ideal_customers = next.ideal_customers.filter(
         (item) =>
           !isValueTraitPhrase(item) &&
           !isLiteralUncertaintyPhrase(item) &&
+          !looksLikeGenericCategoryAnswer(item) &&
           !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
           !/^(?:anchor(?:\s+cleaning)?|most wants)\b/i.test(item)
       );
@@ -3399,19 +3419,21 @@ function composeAssessment(sections, opts = {}) {
   const hasGeo = ((facts && facts.geography) || []).length > 0 || Boolean(coreClaim(s('targetMarkets').summary));
 
   let marketFocusExplanation;
+  let marketFocusStars = starsFromConfidence(focus);
   if (hasNamedIdeal && hasAvoid) {
     marketFocusExplanation =
       'Supported by both a named ideal customer and explicit constraints on who not to serve.';
   } else if (prefersCommercial && (hasAvoid || hasGeo) && !hasNamedIdeal) {
     const geoBit = ((facts && facts.geography) || []).join(', ') || 'the stated geography';
-    marketFocusExplanation = `We know the business prefers commercial work${
-      hasAvoid ? ', generally avoids certain segments' : ''
-    }, and is focused on ${geoBit}. The specific commercial segments to prioritize remain unresolved.`;
+    marketFocusExplanation = `Commercial preference and geography (${geoBit}) are established, but the primary customer segment is still unresolved.`;
+    // SPEC-100 — unresolved ideal customer must limit Market Focus confidence.
+    marketFocusStars = Math.min(marketFocusStars, 2);
   } else if (hasNamedIdeal || hasGeo) {
     marketFocusExplanation =
       'Supported by customer or market focus signals, with room to sharpen the full beachhead.';
   } else {
     marketFocusExplanation = 'Customer and market focus still need more specific evidence.';
+    if (!hasNamedIdeal) marketFocusStars = Math.min(marketFocusStars, 2);
   }
 
   const ratings = [
@@ -3424,7 +3446,7 @@ function composeAssessment(sections, opts = {}) {
     },
     {
       label: 'Market Focus',
-      stars: starsFromConfidence(focus),
+      stars: marketFocusStars,
       explanation: marketFocusExplanation,
     },
     {
@@ -3607,11 +3629,14 @@ function buildExecutiveSummary(sections, opts = {}) {
           }`
         );
       } else if (/commercial/i.test(String(f.growth_focus || f.vertical_focus || ''))) {
+        const shortName =
+          String(businessName || 'The business').replace(/\s+Cleaning$/i, '') || 'The business';
+        // Keep to two sentences so geography / avoid still fit joinPolished's 4-sentence budget.
         sentences.push(
-          `${businessSubject(businessName || 'The business')} prefers commercial work while continuing to serve residential customers`
+          `${shortName} has not chosen a primary commercial customer segment yet`
         );
         sentences.push(
-          'Specific priority commercial segments have not yet been established'
+          `${businessSubject(businessName || 'The business')} prefers commercial work while continuing to serve residential customers, but the ideal segment remains an open decision`
         );
       }
       if (f.disqualified_customers.length) {
@@ -3824,31 +3849,46 @@ function hasRelevantUncertaintyContext(state, sectionKey) {
 }
 
 /**
- * SPEC-099 — one contextual reasoning/probing turn for meaningful uncertainty.
+ * SPEC-099/100 — contextual collaborative reasoning for meaningful uncertainty.
  * Deterministic template; LLM may later polish phrasing.
+ * Hypotheses are framed as options — never written as operator evidence.
+ *
+ * @param {object} state
+ * @param {string} sectionKey
+ * @param {string|null} businessName
+ * @param {{ attemptCount?: number }} [opts]
  */
-function buildUncertaintyReasoningProbe(state, sectionKey, businessName = null) {
+function buildUncertaintyReasoningProbe(state, sectionKey, businessName = null, opts = {}) {
   const facts = (state && state.normalizedFacts) || emptyNormalizedFacts();
   const name =
     sanitizeBusinessName(businessName || facts.business_name || '') || 'the business';
   const shortName = String(name).replace(/\s+Cleaning$/i, '') || name;
   const geo = (facts.geography || []).join(', ');
   const avoids = (facts.disqualified_customers || []).slice(0, 2).join('; ');
+  const services = (facts.services || []).slice(0, 4);
   const prefersCommercial =
     /commercial/i.test(String(facts.growth_focus || '')) ||
     /commercial/i.test(String(facts.vertical_focus || '')) ||
     /prefer commercial/i.test(String(facts.business_description || ''));
+  const attempt = Math.max(1, Number(opts.attemptCount) || 1);
 
   if (sectionKey === 'idealCustomers') {
     const bits = [];
-    bits.push("That's something we can work through.");
+    bits.push("That's completely fine. We don't need to force an answer yet.");
     if (prefersCommercial) {
+      const serviceBit = services.length
+        ? ` and your current services include ${services.slice(0, 3).join(', ')}`
+        : '';
       bits.push(
-        `You've already told me you'd prefer to grow the commercial side${
+        `You've told me you prefer commercial work${
           /residential/i.test(String(facts.vertical_focus || facts.business_description || ''))
-            ? ' while still serving residential'
+            ? ' alongside residential'
             : ''
-        }.`
+        }${serviceBit}. So I'd narrow this down by asking what kind of commercial relationship you actually want.`
+      );
+    } else if (services.length) {
+      bits.push(
+        `You've already described services like ${services.slice(0, 3).join(', ')}. We can use that as a starting point.`
       );
     }
     if (avoids) {
@@ -3857,10 +3897,16 @@ function buildUncertaintyReasoningProbe(state, sectionKey, businessName = null) 
     if (geo) {
       bits.push(`Geography is centered on ${geo}.`);
     }
-    bits.push("We don't need to force an ideal customer yet.");
-    bits.push(
-      `Are there commercial customers you've particularly enjoyed working with before, or should we evaluate potential segments for ${shortName} based on recurring revenue, cleaning frequency, ease of servicing, and likelihood of getting a walkthrough?`
-    );
+
+    if (attempt >= 2) {
+      bits.push(
+        `Still open is fine. Based on what we know so far, would it help to decide from experience instead — which past commercial jobs felt easiest to win and retain, or should we leave the ideal customer unresolved for now and revisit once we have more evidence?`
+      );
+    } else {
+      bits.push(
+        `Would you rather prioritize:\n• smaller offices where the owner or office manager can make a decision quickly,\n• recurring facilities that may be larger but have a longer sales process,\n• property managers who could potentially send multiple locations,\n• or are you still open enough that we should test several segments before choosing?`
+      );
+    }
     return bits.join(' ');
   }
 
@@ -5276,6 +5322,14 @@ async function startClientInterview(input = {}, opts = {}) {
     if (existing) {
       const detail = await getInterview(existing.id, opts);
       const q = currentQuestion(existing.interview_state);
+      const memory = ensureReasoningMemory(existing.interview_state || {});
+      const activeProbe =
+        memory.activeProbe &&
+        q &&
+        memory.activeProbe.questionId === q.question.id
+          ? memory.activeProbe
+          : null;
+      const probePrompt = activeProbe && activeProbe.prompt ? activeProbe.prompt : null;
       return withExperienceFields(existing, {
         interviewId: existing.id,
         ...publicSession(existing),
@@ -5284,13 +5338,15 @@ async function startClientInterview(input = {}, opts = {}) {
         nextAction:
           existing.status === 'CLIENT_REVIEW'
             ? 'COMPLETE'
-            : q
-              ? 'ASK'
-              : detail.nextAction || 'ASK',
+            : probePrompt
+              ? 'PROBE'
+              : q
+                ? 'ASK'
+                : detail.nextAction || 'ASK',
         question: q
           ? {
               id: q.question.id,
-              prompt: q.question.prompt,
+              prompt: probePrompt || q.question.prompt,
               stage: q.question.stage,
               section: q.question.section,
               goal: q.question.goal,
@@ -5300,9 +5356,12 @@ async function startClientInterview(input = {}, opts = {}) {
         message:
           existing.status === 'CLIENT_REVIEW'
             ? 'Recovered pending Blueprint review — no new interview started.'
-            : (q && q.question && q.question.prompt) ||
+            : probePrompt ||
+              (q && q.question && q.question.prompt) ||
               detail.message ||
               'Resumed your existing interview.',
+        probe: probePrompt || null,
+        reasoningMemory: memory,
         resumedExisting: true,
         recovered: true,
       });
@@ -5614,11 +5673,24 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         },
       ];
     } else if (messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER) {
+      const dispositionInfo = classifyAnswerDisposition(text, q.question, {
+        hasSpecificity: hasSpecificitySignals(text),
+      });
       const sufficiencyReason =
         (planned.sufficiency && planned.sufficiency.reason) ||
+        dispositionInfo.reason ||
         (looksLikeExplicitUnknown(text) ? 'explicit_unknown' : 'vague');
       const isExplicitUnknown =
-        sufficiencyReason === 'explicit_unknown' || looksLikeExplicitUnknown(text);
+        dispositionInfo.disposition === ANSWER_DISPOSITIONS.UNCERTAIN ||
+        sufficiencyReason === 'explicit_unknown' ||
+        looksLikeExplicitUnknown(text);
+      const needsSpecificity =
+        dispositionInfo.disposition === ANSWER_DISPOSITIONS.NEEDS_SPECIFICITY ||
+        sufficiencyReason === 'needs_specificity' ||
+        sufficiencyReason === 'vague' ||
+        sufficiencyReason === 'hedged' ||
+        sufficiencyReason === 'thin_important' ||
+        looksLikeGenericCategoryAnswer(text);
       const priorProbe =
         reasoningMemory.activeProbe &&
         reasoningMemory.activeProbe.questionId === q.question.id
@@ -5627,23 +5699,41 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       const priorDebt = (reasoningMemory.questionDebt || []).find(
         (d) => d.questionId === q.question.id
       );
-      const alreadyProbed = Boolean(priorProbe || priorDebt);
+      const probeAttempts = Math.max(
+        0,
+        Number(priorProbe && priorProbe.attemptCount) || 0,
+        priorDebt ? 1 : 0
+      );
       const priorWasUncertaintyReasoning =
-        (priorProbe && priorProbe.reason === 'explicit_unknown') ||
-        (priorDebt && priorDebt.reason === 'explicit_unknown');
+        (priorProbe &&
+          (priorProbe.reason === 'explicit_unknown' ||
+            priorProbe.reason === 'uncertain')) ||
+        (priorDebt &&
+          (priorDebt.reason === 'explicit_unknown' || priorDebt.reason === 'uncertain'));
       const canReason =
         isExplicitUnknown &&
-        !alreadyProbed &&
+        probeAttempts < MAX_PROBE_ATTEMPTS &&
         hasRelevantUncertaintyContext(state, q.question.section);
 
-      // Bounded probing: after one uncertainty-reasoning probe, accept unresolved state.
+      // SPEC-100 — bounded probing: up to MAX_PROBE_ATTEMPTS collaborative turns,
+      // then preserve UNKNOWN and continue. Never store uncertainty phrases as facts.
       const shouldAcceptUnknown =
+        dispositionInfo.disposition === ANSWER_DISPOSITIONS.DEFERRED ||
         (isExplicitUnknown &&
-          (alreadyProbed || !hasRelevantUncertaintyContext(state, q.question.section))) ||
-        (alreadyProbed && priorWasUncertaintyReasoning && !planned.sufficiency?.sufficient);
+          (probeAttempts >= MAX_PROBE_ATTEMPTS ||
+            !hasRelevantUncertaintyContext(state, q.question.section))) ||
+        (needsSpecificity &&
+          probeAttempts >= MAX_PROBE_ATTEMPTS &&
+          (q.question.section === 'idealCustomers' ||
+            q.question.section === 'targetMarkets')) ||
+        (probeAttempts >= MAX_PROBE_ATTEMPTS &&
+          priorWasUncertaintyReasoning &&
+          !planned.sufficiency?.sufficient);
+
+      state.lastAnswerDisposition = dispositionInfo.disposition;
 
       if (shouldAcceptUnknown) {
-        // Second unknown (or no useful context): accept uncertainty and continue.
+        // Bounded unresolved / deferred: accept uncertainty and continue.
         const accepted = await acceptExplicitUnknown(
           store,
           session,
@@ -5659,7 +5749,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         probePrompt = null;
 
         const nextQ = currentQuestion(state);
-        const acceptAck = prefersCommercialAck(state, q.question.section);
+        const acceptAck =
+          dispositionInfo.disposition === ANSWER_DISPOSITIONS.DEFERRED
+            ? "We can leave that open for now. I'll treat it as unresolved rather than guessing, and we can come back to it once we have more evidence."
+            : prefersCommercialAck(state, q.question.section);
         ackSubstance = acceptAck;
 
         await store.updateSession(session.id, {
@@ -5675,6 +5768,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
             ...publicSession(await store.getSession(session.id)),
             nextAction: 'GENERATE_BLUEPRINT',
             messageType,
+            answerDisposition: dispositionInfo.disposition,
             question: null,
             message: `${acceptAck}\n\nDraft Business Blueprint is ready for review.`,
             blueprint: publicBlueprint(blueprint),
@@ -5693,7 +5787,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           message: assistantMessage,
           goal: nextQ ? nextQ.question.goal : q.question.goal,
           asked_because:
-            'Accepted explicit unknown after bounded uncertainty reasoning; preserved unresolved state and continued.',
+            'Accepted unresolved answer after bounded collaborative reasoning; preserved unknown and continued.',
           derived_evidence: [],
           created_at: new Date(),
         });
@@ -5703,6 +5797,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           ...publicSession(await store.getSession(session.id)),
           nextAction: 'ASK',
           messageType,
+          answerDisposition: dispositionInfo.disposition,
           question: nextQ
             ? {
                 id: nextQ.question.id,
@@ -5725,12 +5820,22 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         });
       }
 
+      const nextAttempt = probeAttempts + 1;
       if (canReason) {
         probePrompt = buildUncertaintyReasoningProbe(
           state,
           q.question.section,
-          businessNameHint
+          businessNameHint,
+          { attemptCount: nextAttempt }
         );
+      } else if (needsSpecificity) {
+        probePrompt =
+          planned.probe ||
+          buildProbingFollowUp(
+            q.question,
+            { reason: sufficiencyReason === 'vague' ? 'needs_specificity' : sufficiencyReason },
+            businessNameHint
+          );
       } else {
         probePrompt =
           planned.probe ||
@@ -5744,13 +5849,18 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         questionId: q.question.id,
         section: q.question.section,
         prompt: probePrompt,
-        reason: sufficiencyReason,
-        attemptCount: 1,
+        reason: isExplicitUnknown
+          ? 'explicit_unknown'
+          : sufficiencyReason || 'vague',
+        attemptCount: nextAttempt,
+        disposition: dispositionInfo.disposition,
       });
       reasoningMemory = addQuestionDebt(reasoningMemory, {
         questionId: q.question.id,
         section: q.question.section,
-        reason: sufficiencyReason,
+        reason: isExplicitUnknown
+          ? 'explicit_unknown'
+          : sufficiencyReason || 'vague',
       });
       state.reasoningMemory = reasoningMemory;
       state.supplementalContext = [
@@ -5764,20 +5874,32 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           confirmed: false,
           probe: probePrompt,
           uncertaintyReasoning: Boolean(canReason),
+          disposition: dispositionInfo.disposition,
+          // Operator uncertainty is recorded as context only — never as section evidence.
+          operatorEvidence: false,
         },
       ];
     } else if (messageType === MESSAGE_TYPES.SKIP) {
+      state.lastAnswerDisposition = ANSWER_DISPOSITIONS.DEFERRED;
+      // SPEC-100 — explicit deferral preserves UNKNOWN via the same path as bounded uncertainty.
+      const accepted = await acceptExplicitUnknown(
+        store,
+        session,
+        state,
+        q,
+        clientTurn,
+        text
+      );
+      Object.assign(state, session.interview_state || state);
+      reasoningMemory = ensureReasoningMemory(state);
       reasoningMemory = addQuestionDebt(reasoningMemory, {
         questionId: q.question.id,
         section: q.question.section,
-        reason: 'skipped',
+        reason: 'deferred',
       });
       reasoningMemory = setActiveProbe(reasoningMemory, null);
       state.reasoningMemory = reasoningMemory;
-      state.answers = { ...(state.answers || {}), [q.question.id]: '' };
-      state.stepIndex = (Number(state.stepIndex) || 0) + 1;
-      if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
-      advancedAfterSkip = true;
+      advancedAfterSkip = Boolean(accepted && accepted.advanced);
       state.supplementalContext = [
         ...(state.supplementalContext || []),
         {
@@ -5787,6 +5909,8 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           kind: MESSAGE_TYPES.SKIP,
           activeQuestionId: q.question.id,
           confirmed: false,
+          acceptedUnknown: true,
+          disposition: ANSWER_DISPOSITIONS.DEFERRED,
         },
       ];
     } else if (messageType === MESSAGE_TYPES.APPROVAL) {
@@ -6046,9 +6170,21 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     if (messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER) {
       ack = probePrompt;
     } else if (messageType === MESSAGE_TYPES.SKIP) {
-      ack = reasoningAck(MESSAGE_TYPES.SKIP, {
-        reopenPrompt: activeForAck ? activeForAck.prompt : null,
-      });
+      const deferAck =
+        "We can leave that open for now. I'll treat it as unresolved rather than guessing, and we can come back to it once we have more evidence.";
+      ack = advancedAfterSkip
+        ? reasoningAck(MESSAGE_TYPES.SKIP, {
+            reopenPrompt: activeForAck ? activeForAck.prompt : null,
+            deferAck,
+          }) ||
+          (activeForAck ? `${deferAck}\n\n${activeForAck.prompt}` : deferAck)
+        : deferAck;
+      // Prefer plain deferral language over generic skip ack when we preserved unknown.
+      if (advancedAfterSkip && activeForAck) {
+        ack = `${deferAck}\n\n${activeForAck.prompt}`;
+      } else if (advancedAfterSkip) {
+        ack = deferAck;
+      }
     } else {
       ack = conversationalAck(messageType, text, correctionDomain, {
         activeQuestion: q.question,
@@ -6096,6 +6232,13 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           ? 'PROBE'
           : 'ASK',
       messageType,
+      answerDisposition:
+        state.lastAnswerDisposition ||
+        (messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+          ? ANSWER_DISPOSITIONS.NEEDS_SPECIFICITY
+          : messageType === MESSAGE_TYPES.SKIP
+            ? ANSWER_DISPOSITIONS.DEFERRED
+            : null),
       question: activeForAck
         ? {
             id: activeForAck.id,
@@ -6117,6 +6260,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       supplementalContext: state.supplementalContext || [],
       reasoningMemory,
       probe: messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER ? probePrompt : null,
+      acceptedUnknown: messageType === MESSAGE_TYPES.SKIP ? true : undefined,
     });
   }
 
@@ -6134,6 +6278,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   });
 
   // Only record business answers against the question bank — refinement stays in revisionGuidance.
+  const acceptedDisposition = contradiction
+    ? ANSWER_DISPOSITIONS.CONTRADICTORY
+    : ANSWER_DISPOSITIONS.ACCEPTED;
+  state.lastAnswerDisposition = acceptedDisposition;
   if (!skippedAsGuidance) {
     state.answers = { ...(state.answers || {}), [q.question.id]: text };
     const synthesized = synthesizeBusinessLanguage(text, {
@@ -6150,6 +6298,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   } else {
     state.answers = { ...(state.answers || {}) };
   }
+  // SPEC-100 — only advance after accepted (or partial) operator evidence.
   state.stepIndex = (Number(state.stepIndex) || 0) + 1;
   if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
   reasoningMemory = syncConfidenceFromSections(
@@ -6181,6 +6330,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'GENERATE_BLUEPRINT',
+      answerDisposition: acceptedDisposition,
       question: null,
       message: 'Draft Business Blueprint is ready for review.',
       evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
@@ -6232,6 +6382,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     ...publicSession(await store.getSession(session.id)),
     nextAction: contradiction ? 'CLARIFY' : 'ASK',
     messageType: MESSAGE_TYPES.DIRECT_ANSWER,
+    answerDisposition: acceptedDisposition,
     question: {
       id: nextQ.question.id,
       prompt: nextQ.question.prompt,
@@ -6737,6 +6888,14 @@ async function getInterview(sessionId, opts = {}) {
     );
   }
   const q = currentQuestion(session.interview_state);
+  const memory = ensureReasoningMemory(session.interview_state || {});
+  const activeProbe =
+    memory.activeProbe &&
+    q &&
+    memory.activeProbe.questionId === q.question.id
+      ? memory.activeProbe
+      : null;
+  const probePrompt = activeProbe && activeProbe.prompt ? activeProbe.prompt : null;
   const initialGrowthDirection =
     session.status === 'APPROVED'
       ? resolveInitialGrowthDirection(blueprint, session.interview_state)
@@ -6784,13 +6943,16 @@ async function getInterview(sessionId, opts = {}) {
     question: q
       ? {
           id: q.question.id,
-          prompt: q.question.prompt,
+          prompt: probePrompt || q.question.prompt,
           stage: q.question.stage,
           section: q.question.section,
           goal: q.question.goal,
           askedBecause: q.question.askedBecause,
         }
       : null,
+    nextAction: probePrompt ? 'PROBE' : undefined,
+    probe: probePrompt || null,
+    reasoningMemory: memory,
     sectionState: (session.interview_state && session.interview_state.sectionState) || {},
   });
 }
@@ -8696,6 +8858,8 @@ module.exports = {
   EVIDENCE_TYPES,
   NEXT_ACTIONS,
   ANSWER_KINDS,
+  ANSWER_DISPOSITIONS,
+  MAX_PROBE_ATTEMPTS,
   MESSAGE_TYPES,
   MESSAGE_CLASSES,
   ARTIFACT_KINDS,
@@ -8757,6 +8921,7 @@ module.exports = {
   hasRelevantUncertaintyContext,
   buildUncertaintyReasoningProbe,
   classifyUserResponse,
+  classifyAnswerDisposition,
   classifyInterviewMessage,
   looksLikeRefinementFeedback,
   looksLikeCorrection,

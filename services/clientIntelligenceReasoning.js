@@ -115,6 +115,21 @@ const CRITERIA_REPLAY_QUESTION_RE =
 
 const MIN_ARTIFACT_SECTION_CONFIDENCE = 0.45;
 const MIN_PROBE_WORD_COUNT = 4;
+/** SPEC-100 — max collaborative reasoning / specificity probes per question. */
+const MAX_PROBE_ATTEMPTS = 2;
+
+/**
+ * SPEC-100 — answer disposition before step advancement.
+ * Maps to COMMIT AND ADVANCE vs REASON/PROBE AND STAY.
+ */
+const ANSWER_DISPOSITIONS = Object.freeze({
+  ACCEPTED: 'ANSWER_ACCEPTED',
+  PARTIAL: 'ANSWER_PARTIAL',
+  NEEDS_SPECIFICITY: 'ANSWER_NEEDS_SPECIFICITY',
+  UNCERTAIN: 'ANSWER_UNCERTAIN',
+  CONTRADICTORY: 'ANSWER_CONTRADICTORY',
+  DEFERRED: 'ANSWER_DEFERRED',
+});
 
 const APPROVAL_RE =
   /^\s*(?:yes[,.]?\s+)?(?:looks?\s+good|lgtm|approved?|approve(?:\s+it)?|ship\s+it|go\s+ahead|proceed|sounds?\s+good|that\s+works|perfect|confirmed?|i\s+approve)\s*[.!]*$/i;
@@ -202,15 +217,26 @@ const EXPLICIT_REPLAY_RE =
   /\b(?:show|view|see|open|pull\s+up|regenerate|revise|replay|again)\b/i;
 
 const SKIP_RE =
-  /^\s*(?:skip(?:\s+(?:this|it|for\s+now))?|pass|next(?:\s+question)?|n\/?a|not\s+applicable|come\s+back\s+later|no\s+answer|i'?ll\s+skip)\s*[.!]*$/i;
+  /^\s*(?:skip(?:\s+(?:this|it))?(?:\s+for\s+now)?|pass|next(?:\s+question)?|n\/?a|not\s+applicable|come\s+back\s+later|no\s+answer|i'?ll\s+skip)\s*[.!]*$/i;
+
+/** SPEC-100 — operator explicitly defers; preserve UNKNOWN and advance. */
+const DEFERRAL_RE =
+  /^\s*(?:let'?s\s+(?:leave\s+(?:it|that)\s+open|come\s+back(?:\s+to\s+(?:that|it|this))?|skip(?:\s+(?:this|it))?(?:\s+for\s+now)?|move\s+on)|come\s+back(?:\s+to\s+(?:that|it|this))?(?:\s+later)?|we\s+need\s+(?:more\s+)?data\s+before\s+deciding|i\s+genuinely\s+(?:do\s+not|don'?t|dont)\s+know(?:\s+yet)?|leave\s+(?:it|that)\s+open(?:\s+for\s+now)?)\s*[.!?]*$/i;
 
 const VAGUE_ONLY_RE =
-  /^\s*(?:stuff|things|various|etc\.?|the\s+usual|same\s+as\s+(?:usual|always)|idk|tbd|whatever|normal|standard|good|fine|ok|okay|sure|yeah|yep|maybe|not\s+sure|unsure|kind\s+of|sort\s+of|something\s+like\s+that)\s*[.!?]*$/i;
+  /^\s*(?:stuff|things|various|etc\.?|the\s+usual|same\s+as\s+(?:usual|always)|idk|tbd|whatever|normal|standard|good|fine|ok|okay|sure|yeah|yep|maybe|not\s+sure|unsure|kind\s+of|sort\s+of|something\s+like\s+that|businesses?|customers?|clients?|people|companies|organizations?|everyone|anyone)\s*[.!?]*$/i;
 
 const VAGUE_MARKERS_RE =
   /\b(maybe|perhaps|not sure|unsure|kind of|sort of|various|etc\.?|something like|i think|probably|roughly|around|whatever|idk|tbd|the usual|stuff|things)\b/i;
 
-/** SPEC-099 — explicit "I don't know" / "not sure yet" style unknowns. */
+/**
+ * SPEC-100 — overly generic category nouns that exist as answers but lack
+ * useful specificity for beachhead questions (ideal customer, markets, etc.).
+ */
+const GENERIC_CATEGORY_ONLY_RE =
+  /^\s*(?:businesses?|customers?|clients?|people|companies|organizations?|everyone|anyone|commercial|residential)\s*[.!?]*$/i;
+
+/** SPEC-099/100 — explicit "I don't know" / "not sure yet" style unknowns. */
 const EXPLICIT_UNKNOWN_RE =
   /^\s*(?:i\s+)?(?:really\s+)?(?:do\s+not|don't|dont)\s+know(?:\s+(?:yet|yeet|right\s+now|at\s+the\s+moment))?\s*[.!?]*$/i;
 
@@ -1477,7 +1503,30 @@ function looksLikeExplicitReplayRequest(text) {
 }
 
 function looksLikeSkip(text) {
-  return SKIP_RE.test(String(text || '').trim());
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (SKIP_RE.test(s)) return true;
+  return looksLikeExplicitDeferral(s);
+}
+
+/**
+ * SPEC-100 — operator asks to leave the field unresolved and move on.
+ * Distinct from open uncertainty (which triggers collaborative reasoning).
+ */
+function looksLikeExplicitDeferral(text) {
+  const s = String(text || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return false;
+  if (DEFERRAL_RE.test(String(text || '').trim())) return true;
+  if (/^skip(?:\s+(?:this|it))?(?:\s+for\s+now)?$/i.test(s)) return true;
+  if (/^let'?s\s+(?:leave\s+(?:it|that)\s+open|come\s+back|move\s+on)/i.test(s)) return true;
+  if (/^we\s+need\s+(?:more\s+)?data\s+before\s+deciding$/i.test(s)) return true;
+  if (/^i\s+genuinely\s+(?:do\s+not|don'?t|dont)\s+know(?:\s+yet)?$/i.test(s)) return true;
+  return false;
 }
 
 function looksLikeClarificationRequest(text) {
@@ -1498,6 +1547,8 @@ function looksLikeExplicitUnknownAnswer(text) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return true;
+  // Deferral phrases are handled separately — do not treat as open uncertainty.
+  if (looksLikeExplicitDeferral(text)) return false;
   if (EXPLICIT_UNKNOWN_RE.test(String(text || '').trim())) return true;
   if (/^(we\s+)?(do\s+not|don't|dont)\s+know(\s+(yet|yeet|right\s+now))?$/i.test(s)) return true;
   if (
@@ -1508,6 +1559,7 @@ function looksLikeExplicitUnknownAnswer(text) {
     return true;
   }
   if (/^(we\s+are\s+)?(not\s+sure|unsure)(\s+yet)?$/i.test(s)) return true;
+  if (/^(still\s+)?(not\s+sure|unsure)(\s+yet)?$/i.test(s)) return true;
   if (
     /^(i\s+|we\s+)?(haven't|have\s+not|couldn't|could\s+not)\s+(figured|worked)\s+(that|it|this)\s+out(\s+yet)?$/i.test(
       s
@@ -1517,15 +1569,32 @@ function looksLikeExplicitUnknownAnswer(text) {
   }
   if (/^(i\s+)?couldn't\s+tell\s+you$/i.test(s)) return true;
   if (/^(we\s+)?(haven't|have\s+not)\s+decided(\s+yet)?$/i.test(s)) return true;
+  if (/^(we'?re|we\s+are)\s+still\s+deciding$/i.test(s)) return true;
   if (/^(still\s+)?(figuring|working)\s+(that|it)\s+out$/i.test(s)) return true;
+  if (
+    /^(i\s+)?(don'?t|dont|do\s+not)\s+really\s+know(\s+who\s+the\s+best\s+customer\s+is)?(\s+yet)?$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^maybe\??$/i.test(s)) return true;
   return false;
+}
+
+function looksLikeGenericCategoryAnswer(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  return GENERIC_CATEGORY_ONLY_RE.test(s);
 }
 
 function looksLikeVagueAnswer(text) {
   const s = String(text || '').trim();
   if (!s) return true;
+  if (looksLikeExplicitDeferral(s)) return false;
   if (looksLikeExplicitUnknownAnswer(s)) return true;
   if (VAGUE_ONLY_RE.test(s)) return true;
+  if (looksLikeGenericCategoryAnswer(s)) return true;
   // Hedged short answers ("maybe some stuff") — not concrete nouns like "Homeowners".
   if (wordCount(s) < MIN_PROBE_WORD_COUNT && VAGUE_MARKERS_RE.test(s)) return true;
   if (
@@ -1608,8 +1677,14 @@ function assessAnswerSufficiency(text, activeQuestion = null, opts = {}) {
   if (!raw) {
     return { sufficient: false, reason: 'empty', shouldProbe: true };
   }
+  if (looksLikeExplicitDeferral(raw)) {
+    return { sufficient: false, reason: 'deferred', shouldProbe: false };
+  }
   if (looksLikeExplicitUnknownAnswer(raw)) {
     return { sufficient: false, reason: 'explicit_unknown', shouldProbe: true };
+  }
+  if (looksLikeGenericCategoryAnswer(raw)) {
+    return { sufficient: false, reason: 'needs_specificity', shouldProbe: true };
   }
   if (looksLikeVagueAnswer(raw)) {
     return { sufficient: false, reason: 'vague', shouldProbe: true };
@@ -1644,6 +1719,83 @@ function assessAnswerSufficiency(text, activeQuestion = null, opts = {}) {
 }
 
 /**
+ * SPEC-100 — classify answer disposition for the active interview question.
+ * Pure helper; does not mutate state.
+ *
+ * @returns {{ disposition: string, reason: string|null, shouldAdvance: boolean, shouldProbe: boolean }}
+ */
+function classifyAnswerDisposition(text, activeQuestion = null, opts = {}) {
+  const raw = String(text || '').trim();
+  if (looksLikeExplicitDeferral(raw) || looksLikeSkip(raw)) {
+    return {
+      disposition: ANSWER_DISPOSITIONS.DEFERRED,
+      reason: 'deferred',
+      shouldAdvance: true,
+      shouldProbe: false,
+    };
+  }
+  if (opts.contradiction) {
+    return {
+      disposition: ANSWER_DISPOSITIONS.CONTRADICTORY,
+      reason: 'contradiction',
+      shouldAdvance: false,
+      shouldProbe: true,
+    };
+  }
+  const sufficiency = assessAnswerSufficiency(raw, activeQuestion, opts);
+  if (sufficiency.reason === 'explicit_unknown' || sufficiency.reason === 'empty') {
+    return {
+      disposition: ANSWER_DISPOSITIONS.UNCERTAIN,
+      reason: sufficiency.reason || 'explicit_unknown',
+      shouldAdvance: false,
+      shouldProbe: true,
+    };
+  }
+  if (
+    sufficiency.reason === 'needs_specificity' ||
+    sufficiency.reason === 'vague' ||
+    sufficiency.reason === 'hedged' ||
+    sufficiency.reason === 'thin_important'
+  ) {
+    return {
+      disposition: ANSWER_DISPOSITIONS.NEEDS_SPECIFICITY,
+      reason: sufficiency.reason,
+      shouldAdvance: false,
+      shouldProbe: true,
+    };
+  }
+  if (sufficiency.sufficient) {
+    // Light partial: mixed preference language without a sharp beachhead.
+    const section = activeQuestion && activeQuestion.section;
+    if (
+      section === 'idealCustomers' &&
+      /\bbut\b|\balso\b|\bmixed\b|\bboth\b/i.test(raw) &&
+      wordCount(raw) < 18 &&
+      !opts.hasSpecificity
+    ) {
+      return {
+        disposition: ANSWER_DISPOSITIONS.PARTIAL,
+        reason: 'partial',
+        shouldAdvance: true,
+        shouldProbe: false,
+      };
+    }
+    return {
+      disposition: ANSWER_DISPOSITIONS.ACCEPTED,
+      reason: null,
+      shouldAdvance: true,
+      shouldProbe: false,
+    };
+  }
+  return {
+    disposition: ANSWER_DISPOSITIONS.NEEDS_SPECIFICITY,
+    reason: sufficiency.reason || 'vague',
+    shouldAdvance: false,
+    shouldProbe: true,
+  };
+}
+
+/**
  * Build one focused probing follow-up for the active question.
  */
 function buildProbingFollowUp(activeQuestion, assessment = {}, businessName = null) {
@@ -1674,6 +1826,12 @@ function buildProbingFollowUp(activeQuestion, assessment = {}, businessName = nu
   }
   if (reason === 'explicit_unknown') {
     return `That's okay — we can leave it open, or reason from what we already know. ${base}`;
+  }
+  if (reason === 'needs_specificity') {
+    if (section === 'idealCustomers') {
+      return `What kinds of businesses have been the best fit so far — for example a role, industry, or size of account?`;
+    }
+    return `That's a useful starting point — I need a more specific segment or example before we lock it in. ${base}`;
   }
   if (reason === 'thin_important' || reason === 'hedged') {
     return `That's helpful direction — I need one more concrete detail before we move on. ${base}`;
@@ -3568,9 +3726,12 @@ module.exports = {
   ARTIFACT_REQUIRED_SECTIONS,
   PROSPECT_ACQUISITION_INTENTS,
   MIN_ARTIFACT_SECTION_CONFIDENCE,
+  MAX_PROBE_ATTEMPTS,
+  ANSWER_DISPOSITIONS,
   emptyReasoningMemory,
   ensureReasoningMemory,
   classifyReasoningMessage,
+  classifyAnswerDisposition,
   assessAnswerSufficiency,
   buildProbingFollowUp,
   inferCrossSectionTarget,
@@ -3644,8 +3805,10 @@ module.exports = {
   looksLikeArtifactRequest,
   looksLikeExplicitReplayRequest,
   looksLikeSkip,
+  looksLikeExplicitDeferral,
   looksLikeClarificationRequest,
   looksLikeVagueAnswer,
+  looksLikeGenericCategoryAnswer,
   looksLikeExplicitUnknownAnswer,
   humanArtifactLabel,
   humanSectionLabel,
