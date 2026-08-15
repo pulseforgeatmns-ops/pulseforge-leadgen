@@ -1419,6 +1419,9 @@ function normalizeMechanicalTypos(text) {
   s = s.replace(/\bcreateed\b/gi, 'created');
   s = s.replace(/\bgenerateed\b/gi, 'generated');
   s = s.replace(/\bestablishhed\b/gi, 'established');
+  // Common operator spelling of "commercial" from acceptance interviews.
+  s = s.replace(/\bcommeercial\b/gi, 'commercial');
+  s = s.replace(/\bcommerical\b/gi, 'commercial');
 
   return s;
 }
@@ -5868,7 +5871,25 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
       404
     );
   }
-  return publicBlueprint(approved[0]);
+  const bp = publicBlueprint(approved[0]);
+  // SPEC-103A — attach structured normalizedFacts for Max semantic reasoning.
+  // Section summaries remain precomposed Blueprint prose; Max must not nest them.
+  try {
+    const sessionId = bp.sessionId || approved[0].session_id;
+    if (sessionId) {
+      const session = await store.getSession(sessionId);
+      const facts =
+        session &&
+        session.interview_state &&
+        session.interview_state.normalizedFacts;
+      if (facts && typeof facts === 'object') {
+        bp.normalizedFacts = cloneNormalizedFacts(facts);
+      }
+    }
+  } catch (_) {
+    /* fail soft — Max falls back to peeled section substance */
+  }
+  return bp;
 }
 
 /**

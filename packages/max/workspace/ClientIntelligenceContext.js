@@ -3,6 +3,7 @@
 /**
  * SPEC-098 — Max Workspace thin adapter for approved Client Intelligence.
  * SPEC-103 — Client-context business reasoning from approved understanding.
+ * SPEC-103A — Semantic context for reasoning (not nested Blueprint prose).
  *
  * Runs early in ask() so durable CIE context influences interpretation.
  * Context only — never executes Missions or mutates CRM/outreach state.
@@ -22,8 +23,63 @@ const ACTIVE_ONBOARDING_STATUSES = new Set([
   'CLIENT_REVIEW',
 ]);
 
+/** Known Blueprint section wrapper prefixes — strip when peeling summaries. */
+const BLUEPRINT_WRAPPER_PREFIXES = [
+  /^Today the business delivers\s+/i,
+  /^Ideal customers are\s+/i,
+  /^Ideal customers include\s+/i,
+  /^The business prefers to avoid\s+/i,
+  /^Priority markets center on\s+/i,
+  /^Geographic focus centers on\s+/i,
+  /^Competitive edge is described as\s+/i,
+  /^Brand voice should read as\s+/i,
+  /^Near-term growth goals focus on\s+/i,
+  /^Success will be judged by\s+/i,
+  /^Progress will be judged by\s+/i,
+  /^The business is understood as\s+/i,
+];
+
+/** Second-sentence Blueprint architecture narration — never feed to Max prose. */
+const BLUEPRINT_NARRATION_RE =
+  /\b(This identity framing|Service understanding reflects|This ICP picture|Geography and vertical focus|These constraints protect|operator-stated differentiation|Tone guidance constrains|These are desired business outcomes|These signals define whether)/i;
+
 function defaultCieService() {
   return cie;
+}
+
+function presentText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  if (typeof cie.normalizeMechanicalTypos === 'function') {
+    return cie.normalizeMechanicalTypos(raw).replace(/\s{2,}/g, ' ').trim();
+  }
+  return raw
+    .replace(/\bcreateed\b/gi, 'created')
+    .replace(/\bcommeercial\b/gi, 'commercial')
+    .replace(/\bcommerical\b/gi, 'commercial')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function midSentencePhrase(text) {
+  const s = presentText(text);
+  if (!s) return '';
+  if (/^[A-Z]{2,}(?:\b|[0-9])/.test(s)) return s;
+  if (/^Greater\s+/i.test(s)) return s;
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
+function joinNatural(items) {
+  const list = (items || [])
+    .map((item) => presentText(String(item || '').replace(/[.]+$/, '')))
+    .filter(Boolean);
+  if (!list.length) return '';
+  if (typeof cie.formatDecisionMakerProse === 'function' && list.length <= 3) {
+    return cie.formatDecisionMakerProse(list);
+  }
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(', ')}, and ${list[list.length - 1]}`;
 }
 
 function sectionSummary(sections, key) {
@@ -48,31 +104,223 @@ function sanitizeFactSummary(text) {
   return s;
 }
 
-function normalizeBlueprintSummary(blueprint) {
-  if (!blueprint || typeof blueprint !== 'object') return null;
-  const sections = blueprint.sections || {};
-  const identity = sanitizeFactSummary(sectionSummary(sections, 'identity'));
-  const services = sanitizeFactSummary(sectionSummary(sections, 'services'));
-  const idealCustomers = sanitizeFactSummary(
+/**
+ * Peel precomposed Blueprint prose down to semantic substance.
+ * Compatibility fallback only when normalizedFacts are unavailable.
+ */
+function peelBlueprintSubstance(sectionKey, summary) {
+  let s = sanitizeFactSummary(summary);
+  if (!s) return '';
+
+  // Keep the first non-narration sentence.
+  const sentences = s
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .filter((part) => !BLUEPRINT_NARRATION_RE.test(part));
+  s = sentences[0] || '';
+  if (!s) return '';
+
+  for (const re of BLUEPRINT_WRAPPER_PREFIXES) {
+    s = s.replace(re, '');
+  }
+
+  // Geography: drop growth-focus clause — that is preference, not place.
+  if (sectionKey === 'targetMarkets') {
+    s = s.replace(/\s+with a near-term growth focus on\s+.+$/i, '');
+  }
+
+  // Identity: keep name + short description without framing wrappers.
+  if (sectionKey === 'identity') {
+    s = s.replace(/\s+This identity framing[\s\S]*$/i, '');
+  }
+
+  s = presentText(s.replace(/[.!?]+$/, '').trim());
+  return sanitizeFactSummary(s);
+}
+
+function splitListSubstance(text) {
+  const s = presentText(text);
+  if (!s) return [];
+  return s
+    .split(/\s*,\s*|\s+and\s+/i)
+    .map((part) => presentText(part.replace(/[.]+$/, '')))
+    .filter(Boolean);
+}
+
+function goalPhraseFromFacts(facts) {
+  const raw =
+    (facts && (facts.ninety_day_outcomes || facts.growth_focus)) || '';
+  if (!raw) return '';
+  if (typeof cie.normalizeGoalOutcomePhrase === 'function') {
+    return presentText(cie.normalizeGoalOutcomePhrase(raw));
+  }
+  return presentText(raw);
+}
+
+/**
+ * Build Max reasoning/recall context from structured normalizedFacts.
+ * These are semantic values — not rendered Blueprint explanations.
+ */
+function semanticFieldsFromNormalizedFacts(facts) {
+  if (!facts || typeof facts !== 'object') return null;
+
+  const businessName = presentText(facts.business_name || '') || null;
+  const description = presentText(
+    String(facts.business_description || '').replace(/[.]+$/, '')
+  );
+  const identity = businessName
+    ? description
+      ? `${businessName} — ${description}`
+      : businessName
+    : description || '';
+
+  const serviceList = (facts.services || [])
+    .map((item) => presentText(item))
+    .filter(Boolean);
+  const idealList = (facts.ideal_customers || [])
+    .map((item) => presentText(item))
+    .filter(Boolean);
+  const avoidList = (facts.disqualified_customers || [])
+    .map((item) => presentText(String(item || '').replace(/[.]+$/, '')))
+    .filter(Boolean);
+  const geoList = (facts.geography || [])
+    .map((item) => presentText(item))
+    .filter(Boolean);
+  const metricList = (facts.success_metrics || [])
+    .map((item) => presentText(String(item || '').replace(/[.]+$/, '')))
+    .filter(Boolean);
+
+  const growthFocus = presentText(facts.growth_focus || '');
+  const verticalFocus = presentText(facts.vertical_focus || '');
+  const commercialPreference = Boolean(
+    /commercial/i.test(growthFocus) ||
+      /commercial/i.test(verticalFocus) ||
+      /prefer commercial|commercial/i.test(description)
+  );
+
+  const differentiation = presentText(
+    String(facts.differentiation || '').replace(/[.]+$/, '')
+  );
+  const brandVoice = presentText(
+    String(facts.brand_voice || '').replace(/[.]+$/, '')
+  );
+
+  return {
+    businessName,
+    identity: sanitizeFactSummary(identity),
+    services: sanitizeFactSummary(joinNatural(serviceList)),
+    serviceList,
+    idealCustomers: sanitizeFactSummary(joinNatural(idealList)),
+    idealCustomerList: idealList,
+    avoidCustomers: sanitizeFactSummary(joinNatural(avoidList)),
+    targetMarkets: sanitizeFactSummary(joinNatural(geoList)),
+    geography: sanitizeFactSummary(joinNatural(geoList)),
+    growthFocus: sanitizeFactSummary(growthFocus),
+    commercialPreference,
+    competitiveAdvantages: sanitizeFactSummary(differentiation),
+    brandVoice: sanitizeFactSummary(brandVoice),
+    campaignGoals: sanitizeFactSummary(goalPhraseFromFacts(facts)),
+    successMetrics: sanitizeFactSummary(joinNatural(metricList)),
+    successMetricList: metricList,
+    semanticSource: 'normalized_facts',
+  };
+}
+
+/**
+ * Compatibility fallback: peel section.summary wrappers into substance.
+ * Used only when historical Blueprints lack normalizedFacts.
+ */
+function semanticFieldsFromSections(sections) {
+  const identity = peelBlueprintSubstance(
+    'identity',
+    sectionSummary(sections, 'identity')
+  );
+  const services = peelBlueprintSubstance(
+    'services',
+    sectionSummary(sections, 'services')
+  );
+  const idealCustomers = peelBlueprintSubstance(
+    'idealCustomers',
     sectionSummary(sections, 'idealCustomers')
   );
-  const avoidCustomers = sanitizeFactSummary(
+  const avoidCustomers = peelBlueprintSubstance(
+    'avoidCustomers',
     sectionSummary(sections, 'avoidCustomers')
   );
-  const targetMarkets = sanitizeFactSummary(
+  const targetMarkets = peelBlueprintSubstance(
+    'targetMarkets',
     sectionSummary(sections, 'targetMarkets')
   );
-  const competitiveAdvantages = sanitizeFactSummary(
+  const competitiveAdvantages = peelBlueprintSubstance(
+    'competitiveAdvantages',
     sectionSummary(sections, 'competitiveAdvantages')
   );
-  const brandVoice = sanitizeFactSummary(sectionSummary(sections, 'brandVoice'));
-  const campaignGoals = sanitizeFactSummary(
+  const brandVoice = peelBlueprintSubstance(
+    'brandVoice',
+    sectionSummary(sections, 'brandVoice')
+  );
+  let campaignGoals = peelBlueprintSubstance(
+    'campaignGoals',
     sectionSummary(sections, 'campaignGoals')
   );
-  const successMetrics = sanitizeFactSummary(
+  if (campaignGoals && typeof cie.normalizeGoalOutcomePhrase === 'function') {
+    campaignGoals = presentText(cie.normalizeGoalOutcomePhrase(campaignGoals));
+  }
+  const successMetrics = peelBlueprintSubstance(
+    'successMetrics',
     sectionSummary(sections, 'successMetrics')
   );
 
+  const marketsRaw = sectionSummary(sections, 'targetMarkets');
+  const growthFocusMatch = String(marketsRaw || '').match(
+    /near-term growth focus on\s+(.+?)(?:\.|$)/i
+  );
+  const growthFocus = growthFocusMatch
+    ? presentText(growthFocusMatch[1])
+    : '';
+  const commercialPreference = Boolean(
+    /commercial/i.test(growthFocus) ||
+      /commercial/i.test(identity) ||
+      /commercial/i.test(services) ||
+      /commercial/i.test(campaignGoals)
+  );
+
+  let businessName = null;
+  if (identity) {
+    const dashParts = identity.split(/\s+[—–]\s+/);
+    if (dashParts.length > 1) {
+      businessName = presentText(dashParts[0]);
+    } else {
+      const named = identity.match(
+        /^([A-Z][\w&'.]*(?:\s+[A-Z][\w&'.]*){0,5})\b/
+      );
+      if (named) businessName = presentText(named[1]);
+    }
+  }
+
+  return {
+    businessName,
+    identity,
+    services,
+    serviceList: splitListSubstance(services),
+    idealCustomers,
+    idealCustomerList: splitListSubstance(idealCustomers),
+    avoidCustomers,
+    targetMarkets,
+    geography: targetMarkets,
+    growthFocus,
+    commercialPreference,
+    competitiveAdvantages,
+    brandVoice,
+    campaignGoals,
+    successMetrics,
+    successMetricList: splitListSubstance(successMetrics),
+    semanticSource: 'peeled_sections',
+  };
+}
+
+function collectUnknowns(sections, semantic) {
   const unknowns = [];
   for (const [key, label] of [
     ['identity', 'who you are'],
@@ -81,9 +329,14 @@ function normalizeBlueprintSummary(blueprint) {
     ['targetMarkets', 'where you operate'],
     ['campaignGoals', 'what you want next'],
   ]) {
-    if (!sanitizeFactSummary(sectionSummary(sections, key))) unknowns.push(label);
+    const hasSemantic =
+      (key === 'identity' && semantic.identity) ||
+      (key === 'services' && semantic.services) ||
+      (key === 'idealCustomers' && semantic.idealCustomers) ||
+      (key === 'targetMarkets' && semantic.targetMarkets) ||
+      (key === 'campaignGoals' && semantic.campaignGoals);
+    if (!hasSemantic) unknowns.push(label);
   }
-  // Surface explicit section unknowns (e.g. unresolved commercial ICP) ahead of soft gaps.
   for (const key of Object.keys(sections || {})) {
     const section = sections[key];
     for (const u of (section && section.unknowns) || []) {
@@ -95,7 +348,21 @@ function normalizeBlueprintSummary(blueprint) {
       }
     }
   }
+  return unknowns;
+}
 
+function normalizeBlueprintSummary(blueprint) {
+  if (!blueprint || typeof blueprint !== 'object') return null;
+  const sections = blueprint.sections || {};
+  const facts =
+    blueprint.normalizedFacts ||
+    blueprint.normalized_facts ||
+    null;
+  const semantic =
+    semanticFieldsFromNormalizedFacts(facts) ||
+    semanticFieldsFromSections(sections);
+
+  const unknowns = collectUnknowns(sections, semantic);
   const confidence = blueprint.confidenceSummary || null;
 
   return {
@@ -105,15 +372,23 @@ function normalizeBlueprintSummary(blueprint) {
     version: blueprint.version || null,
     status: blueprint.status || null,
     approved: String(blueprint.status || '').toLowerCase() === 'approved',
-    identity,
-    services,
-    idealCustomers,
-    avoidCustomers,
-    targetMarkets,
-    competitiveAdvantages,
-    brandVoice,
-    campaignGoals,
-    successMetrics,
+    businessName: semantic.businessName || null,
+    identity: semantic.identity,
+    services: semantic.services,
+    serviceList: semantic.serviceList || [],
+    idealCustomers: semantic.idealCustomers,
+    idealCustomerList: semantic.idealCustomerList || [],
+    avoidCustomers: semantic.avoidCustomers,
+    targetMarkets: semantic.targetMarkets,
+    geography: semantic.geography || semantic.targetMarkets,
+    growthFocus: semantic.growthFocus || '',
+    commercialPreference: Boolean(semantic.commercialPreference),
+    competitiveAdvantages: semantic.competitiveAdvantages,
+    brandVoice: semantic.brandVoice,
+    campaignGoals: semantic.campaignGoals,
+    successMetrics: semantic.successMetrics,
+    successMetricList: semantic.successMetricList || [],
+    semanticSource: semantic.semanticSource || null,
     unknowns,
     confidence,
     playbookId: blueprint.playbookId || blueprint.playbook_id || null,
@@ -193,6 +468,28 @@ async function loadApprovedClientIntelligence(input = {}) {
     String(blueprint.status || '').toLowerCase() !== 'approved'
   ) {
     blueprint = null;
+  }
+
+  // SPEC-103A — ensure structured facts are available for semantic reasoning.
+  if (
+    blueprint &&
+    !blueprint.normalizedFacts &&
+    !blueprint.normalized_facts
+  ) {
+    try {
+      const sessionId = blueprint.sessionId || blueprint.session_id;
+      const store = input.cieOpts && input.cieOpts.store;
+      if (sessionId && store && typeof store.getSession === 'function') {
+        const session = await store.getSession(sessionId);
+        const facts =
+          session &&
+          session.interview_state &&
+          session.interview_state.normalizedFacts;
+        if (facts) blueprint.normalizedFacts = facts;
+      }
+    } catch (_) {
+      /* fail soft — peel fallback */
+    }
   }
 
   const summary = normalizeBlueprintSummary(blueprint);
@@ -527,28 +824,80 @@ function looksLikeClientIntelligenceAsk(question, session) {
 }
 
 function formatUnderstandingAnswer(summary) {
-  const parts = [];
-  if (summary.identity) parts.push(summary.identity);
-  if (summary.services) parts.push(`You offer: ${summary.services}`);
+  const name = summary.businessName || 'your business';
+  const bullets = [];
+
+  if (summary.commercialPreference) {
+    bullets.push(
+      'You currently serve both residential and commercial clients, but want to focus more heavily on commercial work.'
+    );
+  } else if (summary.identity) {
+    bullets.push(presentText(summary.identity));
+  }
+
+  if (summary.services) {
+    bullets.push(`Your services include ${presentText(summary.services)}.`);
+  }
+
   if (summary.idealCustomers) {
-    parts.push(`Ideal customers: ${summary.idealCustomers}`);
+    bullets.push(
+      `Your current commercial focus is ${presentText(summary.idealCustomers)}.`
+    );
   }
-  if (summary.targetMarkets) parts.push(`Markets: ${summary.targetMarkets}`);
+
+  if (summary.targetMarkets || summary.geography) {
+    const geo = presentText(summary.geography || summary.targetMarkets);
+    bullets.push(
+      /^the\s+/i.test(geo) ? `You serve ${geo}.` : `You serve the ${geo}.`
+    );
+  }
+
   if (summary.competitiveAdvantages) {
-    parts.push(`Differentiation: ${summary.competitiveAdvantages}`);
+    bullets.push(
+      `You compete on ${presentText(summary.competitiveAdvantages)}.`
+    );
   }
-  if (summary.campaignGoals) parts.push(`Goals: ${summary.campaignGoals}`);
-  if (!parts.length) {
+
+  if (summary.campaignGoals) {
+    const goal = presentText(summary.campaignGoals);
+    if (/pipeline|prospect|recurring/i.test(goal)) {
+      bullets.push(
+        'Your near-term goal is to build a reliable pipeline that turns prospects into recurring clients.'
+      );
+    } else if (/^(build|establish|create|grow|run)\b/i.test(goal)) {
+      bullets.push(
+        `Your near-term goal is to ${goal.charAt(0).toLowerCase()}${goal.slice(1)}.`
+      );
+    } else {
+      bullets.push(`Your near-term goal is ${goal}.`);
+    }
+  }
+
+  if (summary.successMetrics) {
+    bullets.push(
+      `You're watching ${presentText(summary.successMetrics)} as the clearest signs that it's working.`
+    );
+  }
+
+  if (!bullets.length) {
     return (
-      'I have an approved Business Blueprint on file, but the section summaries are thin. ' +
+      'I have an approved Business Blueprint on file, but the section details are thin. ' +
       'We should refine a few details before treating more of your business as established fact.'
     );
   }
-  return (
-    `Here is what I understand from your approved Business Blueprint:\n\n` +
-    parts.map((p) => `• ${p}`).join('\n') +
-    `\n\nThis is durable understanding from your approved Blueprint — not this chat session.`
-  );
+
+  let out =
+    `Here's what I understand about ${name}:\n\n` +
+    bullets.map((p) => `• ${p}`).join('\n');
+
+  const unresolved = (summary.unknowns || []).filter(Boolean);
+  if (unresolved.length) {
+    out +=
+      `\n\nStill unresolved:\n` +
+      unresolved.map((u) => `• ${presentText(u)}`).join('\n');
+  }
+
+  return out;
 }
 
 function formatMissingAnswer() {
@@ -570,10 +919,12 @@ function formatTargetingAnswer(summary) {
     );
 
   if (unresolvedIcp && !summary.idealCustomers) {
-    const geo = summary.targetMarkets
-      ? ` in ${summary.targetMarkets}`
+    const geo = summary.targetMarkets || summary.geography
+      ? ` in ${summary.targetMarkets || summary.geography}`
       : '';
-    const pref = summary.services || summary.campaignGoals || '';
+    const pref = summary.commercialPreference
+      ? 'commercial preference'
+      : summary.campaignGoals || '';
     let out =
       `You've established direction${geo ? geo : ''}` +
       (pref ? ` (${pref})` : '') +
@@ -587,8 +938,8 @@ function formatTargetingAnswer(summary) {
 
   if (summary.idealCustomers) {
     let out = `Based on your approved business direction, I'd start with ${summary.idealCustomers}.`;
-    if (summary.targetMarkets) {
-      out += ` Geography: ${summary.targetMarkets}.`;
+    if (summary.targetMarkets || summary.geography) {
+      out += ` Geography: ${summary.geography || summary.targetMarkets}.`;
     }
     if (summary.avoidCustomers) {
       out += ` Avoid: ${summary.avoidCustomers}.`;
@@ -706,6 +1057,7 @@ function inferReasoningMode(question, session) {
 /**
  * SPEC-103 — synthesize a bounded recommendation from approved client facts.
  * Level 1 (Blueprint) → Level 3 (Max inference). Does not invent Level 2 evidence.
+ * SPEC-103A — inserts semantic values only (never nested Blueprint explanations).
  */
 function composeClientContextReasoning(summary, question, opts = {}) {
   const mode = opts.mode || inferReasoningMode(question, opts.session);
@@ -716,12 +1068,20 @@ function composeClientContextReasoning(summary, question, opts = {}) {
     null;
   const facts = pickRelevantFacts(summary, mode === 'follow_up' ? 'focus' : mode);
   const icp = summary.idealCustomers || null;
-  const market = summary.targetMarkets || null;
+  const market = summary.geography || summary.targetMarkets || null;
   const goals = summary.campaignGoals || null;
   const metrics = summary.successMetrics || null;
   const services = summary.services || null;
   const avoid = summary.avoidCustomers || null;
   const unknowns = summary.unknowns || [];
+  const commercialPreference = Boolean(
+    summary.commercialPreference ||
+      /commercial/i.test(
+        [summary.growthFocus, services, goals, summary.competitiveAdvantages]
+          .filter(Boolean)
+          .join(' ')
+      )
+  );
   const unresolvedIcp =
     !icp ||
     unknowns.some((u) =>
@@ -759,7 +1119,7 @@ function composeClientContextReasoning(summary, question, opts = {}) {
       `I'd start with ${focusBit} because it follows what you've already approved about the business.`
     );
     if (icp) whyParts.push(`Your approved ICP points to ${icp}.`);
-    if (services && /commercial/i.test(services + ' ' + (goals || ''))) {
+    if (commercialPreference) {
       whyParts.push(
         'That aligns with a commercial preference rather than spreading effort across residential by default.'
       );
@@ -824,16 +1184,15 @@ function composeClientContextReasoning(summary, question, opts = {}) {
     metrics ||
     goals ||
     'walkthroughs and recurring revenue';
-  const commercialCue = /commercial|property|facility|multifamily|apartment/i.test(
-    [icp, services, goals, summary.competitiveAdvantages]
-      .filter(Boolean)
-      .join(' ')
-  );
+  const motion =
+    commercialPreference
+      ? 'repeatable commercial acquisition motion'
+      : 'repeatable acquisition motion';
 
   const paragraphs = [];
   if (mode === 'opportunity') {
     paragraphs.push(
-      `Your biggest near-term opportunity looks like proving a repeatable acquisition motion around ${audience}${where}.`
+      `Your biggest near-term opportunity looks like proving a ${motion} around ${audience}${where}.`
     );
   } else if (mode === 'week') {
     paragraphs.push(
@@ -849,17 +1208,23 @@ function composeClientContextReasoning(summary, question, opts = {}) {
     );
   } else {
     paragraphs.push(
-      `I'd start by proving a repeatable acquisition motion around ${audience}${where}.`
+      `I'd start by proving a ${motion} around ${audience}${where}.`
     );
   }
 
   const clarityBits = [];
-  if (commercialCue) clarityBits.push('you prefer commercial work');
+  if (commercialPreference) clarityBits.push('you prefer commercial work');
   if (icp) clarityBits.push('you already identified the decision-makers you want to reach');
-  if (goals || metrics) clarityBits.push('recurring revenue / walkthrough outcomes are what matter');
+  if (goals || metrics) {
+    clarityBits.push(
+      metrics
+        ? `${midSentencePhrase(metrics)} are the outcomes that matter`
+        : 'recurring revenue / walkthrough outcomes are what matter'
+    );
+  }
   if (clarityBits.length) {
     paragraphs.push(
-      `You already have enough clarity to narrow the first experiment: ${clarityBits.join(', ')}.`
+      `You already have enough clarity to run that first experiment: ${clarityBits.join(', ')}.`
     );
   }
 
@@ -869,14 +1234,17 @@ function composeClientContextReasoning(summary, question, opts = {}) {
   );
 
   paragraphs.push(
-    `I'd start with a qualified group of ${audience}, measure whether that creates progress toward ${outcome}, ` +
-      `then track how many become recurring clients. ` +
-      `That gives a useful first loop: qualified prospects → conversations → walkthroughs → recurring revenue.`
+    `I'd start with a qualified group of ${audience}, measure how conversations turn into walkthroughs, ` +
+      `then track how those convert toward ${midSentencePhrase(outcome)}. ` +
+      `That gives us our first learning loop: qualified prospects → conversations → walkthroughs → recurring revenue.`
   );
 
+  const segmentUncertainty = market
+    ? `which specific ${market} segment will perform best`
+    : 'which specific segment will perform best';
   paragraphs.push(
-    `My confidence is moderate because this direction follows your approved business priorities, ` +
-      `but we don't have enough campaign or market evidence yet to know whether this segment will outperform alternatives. ` +
+    `I'm moderately confident in the direction because it follows your approved business priorities. ` +
+      `I'm less confident about ${segmentUncertainty} because we don't have enough campaign or market evidence yet. ` +
       `This is advisory guidance — not authorization to launch.`
   );
 
@@ -894,7 +1262,10 @@ function formatEvidenceDependentGapAnswer(summary) {
   const audience = summary && summary.idealCustomers
     ? summary.idealCustomers
     : 'your target audience';
-  const market = summary && summary.targetMarkets ? summary.targetMarkets : 'your market';
+  const market =
+    summary && (summary.geography || summary.targetMarkets)
+      ? summary.geography || summary.targetMarkets
+      : 'your market';
   return (
     `I can use your approved Blueprint to say who you want to reach (${audience} in ${market}), ` +
     `but I do not yet have enough live market or prospect evidence to rank specific companies or buying signals right now. ` +
@@ -1168,4 +1539,7 @@ module.exports = {
   formatEvidenceDependentGapAnswer,
   sanitizeFactSummary,
   hasUsefulClientContext,
+  peelBlueprintSubstance,
+  semanticFieldsFromNormalizedFacts,
+  presentText,
 };
