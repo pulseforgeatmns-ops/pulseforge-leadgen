@@ -8,6 +8,7 @@
  * SPEC-103B PATCH — Specificity escalation: explicit requests to decompose an active
  *   recommendation/plan must descend one abstraction level, not re-run gap reasoning.
  * SPEC-103C — Active conversational reasoning continuity (session-scoped).
+ * SPEC-103D — Plan acceptance → safe preparation (not execution clarify).
  *
  * Runs early in ask() so durable CIE context influences interpretation.
  * Context only — never executes Missions or mutates CRM/outreach state.
@@ -24,6 +25,8 @@ const {
   updateActiveReasoningFromTurn,
   formatPlanEvidenceContinuation,
   getActiveClientReasoning,
+  classifyAdvisoryHandoffIntent,
+  composeAdvisoryHandoffResponse,
 } = require('./ActiveClientReasoning');
 
 const ACTIVE_ONBOARDING_STATUSES = new Set([
@@ -1393,6 +1396,21 @@ function isAmbiguousExecutionAdjacentRequest(question) {
   return scoreClientBusinessSemantics(question).features.executionAdjacent === true;
 }
 
+/**
+ * SPEC-103D — plan acceptance/preparation must not fall into generic execution clarify.
+ */
+function shouldUseExecutionClarification(question, session) {
+  if (!isAmbiguousExecutionAdjacentRequest(question)) return false;
+  const handoff = classifyAdvisoryHandoffIntent(question, session);
+  if (
+    handoff &&
+    (handoff.kind === 'plan_acceptance' || handoff.kind === 'preparation_authorize')
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function isClientContextReasoningFollowUp(question, session) {
   const scored = scoreClientBusinessSemantics(question, session);
   return scored.features.followUp === true;
@@ -2145,8 +2163,60 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     };
   }
 
+  // SPEC-103D — plan acceptance → safe preparation (before execution clarify).
+  const handoffIntent = classifyAdvisoryHandoffIntent(question, session);
+  if (
+    handoffIntent &&
+    (handoffIntent.kind === 'plan_acceptance' ||
+      handoffIntent.kind === 'preparation_authorize') &&
+    summary &&
+    summary.approved
+  ) {
+    const handoff = composeAdvisoryHandoffResponse(summary, session, handoffIntent);
+    if (handoff) {
+      const structured = workspaceStructured(handoff.prose, [], {
+        blueprintId: summary.blueprintId,
+        evidenceCount: 1,
+        confidence: handoff.confidence,
+        recommendationConfidence: handoff.confidenceLabel,
+        evidenceBasis: 'approved_client_understanding',
+        clientFacingReasoning: [],
+        internalReasoning: [
+          'SPEC-103D — operator accepted active plan; continue safe preparation at step 1.',
+          'No external execution from plan acceptance (SPEC-103).',
+        ],
+      });
+      recordLastCieTurn(
+        session,
+        {
+          kind: handoff.kind,
+          reason: 'client_intelligence_plan_preparation',
+          recommendationFocus: handoff.recommendationFocus,
+          question,
+          planSteps: handoff.planSteps,
+          conversationalFocusIndex: handoff.conversationalFocusIndex,
+          planAccepted: handoff.planAccepted,
+          preparationProposed: handoff.preparationProposed,
+          lastProposedAction: handoff.lastProposedAction,
+        },
+        summary,
+        handoff.prose
+      );
+      return {
+        reason: 'client_intelligence_plan_preparation',
+        handled: true,
+        prose: handoff.prose,
+        structured,
+        summary,
+        attachment,
+        turnKind: handoff.kind,
+        recommendationFocus: handoff.recommendationFocus,
+      };
+    }
+  }
+
   // Ambiguous agreement vs execution — clarify; never treat as authorization.
-  if (isAmbiguousExecutionAdjacentRequest(question)) {
+  if (shouldUseExecutionClarification(question, session)) {
     const focus =
       (session &&
         session.context &&
@@ -2371,6 +2441,8 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
         reason = 'client_intelligence_plan_operator';
       } else if (turnKind === 'plan_recover') {
         reason = 'client_intelligence_plan_recover';
+      } else if (turnKind === 'plan_preparation') {
+        reason = 'client_intelligence_plan_preparation';
       } else if (turnKind === 'challenge') {
         reason = 'client_intelligence_reasoning_challenge';
       } else if (turnKind === 'approach') {
@@ -2448,6 +2520,7 @@ module.exports = {
   isEvidenceDependentClientRequest,
   isClientContextExecutionRequest,
   isAmbiguousExecutionAdjacentRequest,
+  shouldUseExecutionClarification,
   isClientContextReasoningFollowUp,
   looksLikeAmbiguousBusinessReferent,
   isClearlyNonBusinessUtterance,

@@ -283,7 +283,7 @@ describe('SPEC-103C active reasoning continuity', () => {
     assert.doesNotMatch(companies.prose, /Acme|Corp\.|Inc\./);
   });
 
-  it('TEST Q — agreement resolves plan without unauthorized execution', async () => {
+  it('TEST Q — plan acceptance enters preparation without execution clarify', async () => {
     const store = createMemoryStore();
     await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
     const engine = await openEngine(store);
@@ -297,7 +297,14 @@ describe('SPEC-103C active reasoning continuity', () => {
       sessionId: opened.sessionId,
       question: "Okay, I'm happy with that plan. Let's do it.",
     });
-    assert.match(agree.prose, /will not launch|reviewable|strategy agreement|authorize/i);
+    assert.match(
+      String(agree.domainDecision && agree.domainDecision.reason),
+      /plan_preparation/
+    );
+    assert.match(agree.prose, /Good\.|first step|qualification criteria/i);
+    assert.match(agree.prose, /Nothing will be sent or launched without your approval/i);
+    assert.doesNotMatch(agree.prose, /strategy agreement only|reviewable execution path/i);
+    assert.doesNotMatch(agree.prose, /I hear you leaning toward/i);
     assert.equal(agree.mission, null);
   });
 
@@ -398,6 +405,207 @@ describe('SPEC-103C active reasoning continuity', () => {
     assert.equal(
       classifyActiveThoughtFollowUp('What could go wrong?', session).op,
       'critique'
+    );
+  });
+});
+
+describe('SPEC-103D advisory-to-preparation handoff', () => {
+  it('TEST A — plan acceptance begins Step 1 preparation', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Be specific. Give me the exact steps.',
+    });
+    const accept = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "I'm happy with that plan. Let's do it.",
+    });
+    assert.match(String(accept.domainDecision && accept.domainDecision.reason), /plan_preparation/);
+    assert.match(accept.prose, /qualification criteria|first step/i);
+    assert.doesNotMatch(accept.prose, /strategy agreement only/i);
+    assert.equal(accept.mission, null);
+  });
+
+  it('TEST B — Sounds good lets start variant', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Be specific. Give me the exact steps.',
+    });
+    const accept = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "Sounds good. Let's start.",
+    });
+    assert.match(String(accept.domainDecision && accept.domainDecision.reason), /plan_preparation/);
+    assert.match(accept.prose, /Good\.|qualification criteria/i);
+  });
+
+  it('TEST C — Go ahead after preparation proposal drafts criteria', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Be specific. Give me the exact steps.',
+    });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: "Okay, I'm happy with that plan. Let's do it.",
+    });
+    const go = await engine.ask({ sessionId: opened.sessionId, question: 'Go ahead.' });
+    assert.match(String(go.domainDecision && go.domainDecision.reason), /plan_preparation/);
+    assert.match(go.prose, /qualification criteria|Geography:/i);
+    assert.doesNotMatch(go.prose, /strategy agreement only/i);
+    assert.equal(go.mission, null);
+  });
+
+  it('TEST D — explicit send leaves execution policy path', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Be specific. Give me the exact steps.',
+    });
+    const send = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Send those emails.',
+    });
+    assert.doesNotMatch(
+      String(send.domainDecision && send.domainDecision.reason),
+      /plan_preparation/
+    );
+  });
+
+  it('TEST E — contextual go ahead classification', () => {
+    const { classifyAdvisoryHandoffIntent } = require('../ActiveClientReasoning');
+    const prepSession = {
+      context: {
+        activeClientReasoning: {
+          planSteps: ['a', 'b'],
+          planAccepted: true,
+          preparationProposed: true,
+        },
+      },
+    };
+    const execSession = {
+      context: {
+        activeClientReasoning: {
+          planSteps: ['a', 'b'],
+          executionReviewPending: true,
+        },
+      },
+    };
+    assert.equal(
+      classifyAdvisoryHandoffIntent('Go ahead.', prepSession).kind,
+      'preparation_authorize'
+    );
+    assert.equal(
+      classifyAdvisoryHandoffIntent('Go ahead.', execSession).kind,
+      'external_execution'
+    );
+  });
+
+  it('TEST F — progression after acceptance without false completion', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Be specific. Give me the exact steps.',
+    });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: "I'm happy with that plan. Let's do it.",
+    });
+    const next = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "What's next after that?",
+    });
+    assert.match(next.prose, /Step 2|After step|account set/i);
+    assert.doesNotMatch(next.prose, /I'd start by proving a repeatable commercial acquisition motion/i);
+  });
+
+  it('TEST G — Scout limitation stated naturally at account-set step', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Be specific. Give me the exact steps.',
+    });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: "I'm happy with that plan. Let's do it.",
+    });
+    const go = await engine.ask({ sessionId: opened.sessionId, question: 'Go ahead.' });
+    assert.match(go.prose, /can't initiate Scout|Scout discovery|not callable/i);
+  });
+
+  it('TEST H — no Mission from plan acceptance alone', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Be specific. Give me the exact steps.',
+    });
+    const accept = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "Okay, let's do it.",
+    });
+    assert.equal(accept.mission, null);
+  });
+
+  it('TEST I — tenant isolation on preparation handoff', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Be specific. Give me the exact steps.',
+    });
+    const accept = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "I'm happy with that plan. Let's do it.",
+    });
+    assert.doesNotMatch(accept.prose, /Anchor Cleaning|Manchester/i);
+    assert.match(accept.prose, /Toronto|GTA|property|facility/i);
+  });
+
+  it('TEST J/L — execution-adjacent without plan still clarifies', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, AS_CLEANING_COMMERCIAL);
+    const engine = await openEngine(store);
+    const opened = engine.open({ tenantId: String(AS_CLEANING_ID), page: 'command-deck' });
+    await engine.ask({ sessionId: opened.sessionId, question: 'What should we focus on first?' });
+    const go = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "Alright, let's go after them.",
+    });
+    assert.match(
+      String(go.domainDecision && go.domainDecision.reason),
+      /execution_clarify/
     );
   });
 });
