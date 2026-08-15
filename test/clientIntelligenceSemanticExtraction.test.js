@@ -103,8 +103,10 @@ describe('SPEC-101 later clarification precedence', () => {
     const whoYouServe = brief.sections.find((s) => s.id === 'whoYouServe').body;
     assert.match(whoYouServe, /property managers/i);
     assert.match(whoYouServe, /facilit(?:y|ies)\s+managers/i);
+    assert.match(whoYouServe, /particularly those responsible for/i);
     assert.equal(/^[^]*ideal customers include apartment/i.test(whoYouServe), false);
     assert.equal(/apartment buildings,\s*etc/i.test(whoYouServe), false);
+    assert.equal(/including opportunities associated with/i.test(whoYouServe), false);
   });
 });
 
