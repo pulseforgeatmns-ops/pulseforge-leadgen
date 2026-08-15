@@ -25,6 +25,7 @@ const {
   getResumePayload,
   resolveClientOnboardingState,
   getApprovedClientBlueprint,
+  getClientBlueprint,
   getBlueprintRecord,
   ClientIntelligenceError,
 } = require('../services/clientIntelligenceInterview');
@@ -334,7 +335,7 @@ describe('H — Tenant isolation (SPEC-096)', () => {
   });
 });
 
-describe('I — Superseded Blueprint cannot become current', () => {
+describe('I — Active Blueprint resolution prefers current in_review over superseded', () => {
   it('superseded Blueprint is skipped by getClientBlueprint current selection', async () => {
     const store = createMemoryStore();
     const first = await runInterviewToBlueprint(store, AS_CLEANING_ID);
@@ -374,6 +375,144 @@ describe('I — Superseded Blueprint cannot become current', () => {
     assert.equal(recovered.interviewId, restarted.interviewId);
     assert.equal(recovered.blueprint.id, turn.blueprint.id);
     assert.notEqual(recovered.blueprint.id, first.blueprint.id);
+
+    const current = await getClientBlueprint(AS_CLEANING_ID, first.opts);
+    assert.equal(current.id, turn.blueprint.id);
+    assert.equal(String(current.status).toLowerCase(), 'in_review');
+  });
+
+  it('Interview A → supersede → Interview B: recovery/View/tab resolve B; A stays historical', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+
+    // Interview A → Blueprint A in_review
+    const first = await runInterviewToBlueprint(store, AS_CLEANING_ID);
+    const interviewA = first.interviewId;
+    const blueprintA = first.blueprint;
+    assert.equal(String(blueprintA.status).toLowerCase(), 'in_review');
+
+    // Restart → A superseded
+    const restarted = await startClientInterview(
+      { clientId: AS_CLEANING_ID, restart: true },
+      opts
+    );
+    assert.notEqual(restarted.interviewId, interviewA);
+    const rawA = await store.getSession(interviewA);
+    assert.equal(rawA.interview_state.lifecycle, 'superseded');
+    const bpAAfter = await store.getBlueprint(blueprintA.id, blueprintA.version);
+    assert.equal(String(bpAAfter.status).toLowerCase(), 'superseded');
+
+    // Interview B → Blueprint B in_review
+    let turnB = restarted;
+    for (const answer of AS_ANSWERS) {
+      turnB = await postInterviewMessage(restarted.interviewId, answer, opts);
+    }
+    const blueprintB = turnB.blueprint;
+    assert.ok(blueprintB);
+    assert.notEqual(blueprintB.id, blueprintA.id);
+    assert.equal(String(blueprintB.status).toLowerCase(), 'in_review');
+
+    // Recovery resolves B
+    const recovered = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.equal(recovered.interviewId, restarted.interviewId);
+    assert.equal(recovered.onboardingState, 'blueprint_review');
+    assert.equal(recovered.blueprint.id, blueprintB.id);
+    assert.equal(String(recovered.blueprint.status).toLowerCase(), 'in_review');
+    assert.notEqual(recovered.resumeTarget, 'blueprint_historical');
+
+    // View Blueprint (resume view) resolves B
+    const viewed = await getResumePayload(recovered.interviewId, {
+      ...opts,
+      action: 'view',
+    });
+    assert.equal(viewed.blueprint.id, blueprintB.id);
+    assert.equal(String(viewed.blueprint.status).toLowerCase(), 'in_review');
+
+    // Client current Blueprint endpoint / BLUEPRINT tab source resolves B
+    const current = await getClientBlueprint(AS_CLEANING_ID, opts);
+    assert.equal(current.id, blueprintB.id);
+    assert.equal(String(current.status).toLowerCase(), 'in_review');
+
+    // B can be explicitly approved; Playbook handoff once
+    const approved = await approveBlueprint(blueprintB.id, opts);
+    assert.equal(approved.status, 'APPROVED');
+    assert.equal(approved.alreadyApproved, false);
+    assert.equal(String(approved.blueprint.status).toLowerCase(), 'approved');
+    assert.ok(approved.playbook && approved.playbook.id);
+    const playbookId = approved.playbook.id;
+
+    const again = await approveBlueprint(blueprintB.id, opts);
+    assert.equal(again.alreadyApproved, true);
+    assert.equal(again.playbook && again.playbook.id, playbookId);
+
+    // A remains superseded; History can still expose A
+    const histA = await getInterview(interviewA, opts);
+    assert.equal(String(histA.blueprint.status).toLowerCase(), 'superseded');
+    assert.equal(histA.resumeTarget, 'blueprint_historical');
+    const histView = await getResumePayload(interviewA, {
+      ...opts,
+      action: 'view',
+    });
+    assert.equal(histView.blueprint.id, blueprintA.id);
+    assert.equal(String(histView.blueprint.status).toLowerCase(), 'superseded');
+
+    // Superseded A is not approvable
+    await assert.rejects(
+      () => approveBlueprint(blueprintA.id, opts),
+      (err) =>
+        err instanceof ClientIntelligenceError && err.code === 'invalid_status'
+    );
+
+    // Fresh Max continuity uses only the approved current Blueprint
+    const continuity = await getApprovedClientBlueprint(AS_CLEANING_ID, opts);
+    assert.equal(continuity.id, blueprintB.id);
+    assert.equal(String(continuity.status).toLowerCase(), 'approved');
+    assert.notEqual(continuity.id, blueprintA.id);
+
+    // Tenant isolation remains intact — Anchor untouched
+    const anchor = await runInterviewToBlueprint(store, ANCHOR_ID);
+    const asCurrent = await getClientBlueprint(AS_CLEANING_ID, opts);
+    assert.equal(Number(asCurrent.clientId), AS_CLEANING_ID);
+    assert.equal(asCurrent.id, blueprintB.id);
+    assert.equal(Number(anchor.blueprint.clientId), ANCHOR_ID);
+    assert.notEqual(anchor.blueprint.id, blueprintB.id);
+  });
+
+  it('orphan superseded Blueprint session cannot hijack recovery over newer in_review', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+
+    const first = await runInterviewToBlueprint(store, AS_CLEANING_ID);
+    // Partial supersession: Blueprint A marked superseded but session lifecycle missed.
+    await store.updateBlueprint(first.blueprint.id, first.blueprint.version, {
+      status: 'superseded',
+    });
+
+    const second = await startClientInterview(
+      { clientId: AS_CLEANING_ID, forceNew: true },
+      opts
+    );
+    let turnB = second;
+    for (const answer of AS_ANSWERS) {
+      turnB = await postInterviewMessage(second.interviewId, answer, opts);
+    }
+    assert.equal(String(turnB.blueprint.status).toLowerCase(), 'in_review');
+
+    // Touch Interview A so it would sort first if orphan sessions were recoverable.
+    const rawA = await store.getSession(first.interviewId);
+    await store.updateSession(first.interviewId, {
+      interview_state: { ...(rawA.interview_state || {}) },
+      summary: (rawA.summary || '') + ' touched',
+    });
+
+    const recovered = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.equal(recovered.interviewId, second.interviewId);
+    assert.equal(recovered.blueprint.id, turnB.blueprint.id);
+    assert.equal(String(recovered.blueprint.status).toLowerCase(), 'in_review');
+    assert.notEqual(recovered.blueprint.id, first.blueprint.id);
+
+    const current = await getClientBlueprint(AS_CLEANING_ID, opts);
+    assert.equal(current.id, turnB.blueprint.id);
   });
 });
 
@@ -387,5 +526,14 @@ describe('Approval route remains POST-only', () => {
       routeSource,
       /router\.get\(\s*'\/api\/v1\/blueprint\/:id\/approve'/
     );
+  });
+});
+
+describe('UI status consistency markers', () => {
+  it('gates ready-for-review copy and approve controls on durable status', () => {
+    assert.match(uiSource, /isBlueprintAwaitingApproval/);
+    assert.match(uiSource, /blueprint_historical/);
+    assert.match(uiSource, /historical superseded Blueprint/);
+    assert.match(uiSource, /status === 'superseded'/);
   });
 });

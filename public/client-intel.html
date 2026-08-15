@@ -1576,8 +1576,17 @@
       return !!(bp && String(bp.status || '').toLowerCase() === 'approved');
     }
 
+    function blueprintStatusOf(bp) {
+      return String((bp && bp.status) || '').toLowerCase();
+    }
+
+    function isBlueprintAwaitingApproval(bp) {
+      const status = blueprintStatusOf(bp);
+      return status === 'in_review' || status === 'draft';
+    }
+
     function blueprintStatusLabel(bp) {
-      const status = String((bp && bp.status) || '').toLowerCase();
+      const status = blueprintStatusOf(bp);
       if (status === 'approved') return 'Approved';
       if (status === 'in_review' || status === 'draft') return 'Awaiting approval';
       if (status === 'superseded') return 'Superseded';
@@ -1586,6 +1595,7 @@
 
     function setApproveButtonState(bp, { editable } = { editable: true }) {
       const approved = isBlueprintApproved(bp);
+      const status = blueprintStatusOf(bp);
       if (approved) {
         els.blueprintActions.hidden = true;
         els.reviseBtn.disabled = true;
@@ -1593,8 +1603,16 @@
         els.approveBtn.textContent = 'Blueprint approved';
         return;
       }
-      const canEdit = editable && bp && (bp.status === 'draft' || bp.status === 'in_review');
-      els.blueprintActions.hidden = !editable;
+      // Superseded / historical rows are never approvable and must not look current.
+      if (status === 'superseded' || !bp) {
+        els.blueprintActions.hidden = true;
+        els.reviseBtn.disabled = true;
+        els.approveBtn.disabled = true;
+        els.approveBtn.textContent = 'Approve Blueprint';
+        return;
+      }
+      const canEdit = editable && isBlueprintAwaitingApproval(bp);
+      els.blueprintActions.hidden = !editable || !canEdit;
       els.reviseBtn.disabled = !canEdit || state.approveInFlight;
       els.approveBtn.disabled = !canEdit || state.approveInFlight;
       els.approveBtn.textContent = state.approveInFlight ? 'Approving…' : 'Approve Blueprint';
@@ -1698,6 +1716,9 @@
       const serverApproved =
         isBlueprintApproved(bp) ||
         String(state.sessionStatus || '').toUpperCase() === 'APPROVED';
+      const awaiting = isBlueprintAwaitingApproval(bp);
+      const canEdit =
+        editable == null ? awaiting : Boolean(editable) && awaiting;
       if (serverApproved) {
         if (state.phase !== 'growth_workspace') {
           setPhase('growth_workspace');
@@ -1707,9 +1728,7 @@
         setWorkspaceTab('blueprint');
       } else {
         setPhase('blueprint');
-        renderBlueprint(bp, {
-          editable: editable == null ? true : Boolean(editable),
-        });
+        renderBlueprint(bp, { editable: canEdit });
       }
       return bp;
     }
@@ -3458,7 +3477,7 @@
       if (tab === 'blueprint') {
         if (state.blueprint) {
           renderBlueprint(state.blueprint, {
-            editable: !isBlueprintApproved(state.blueprint),
+            editable: isBlueprintAwaitingApproval(state.blueprint),
           });
         } else {
           els.sidePanel.innerHTML =
@@ -3709,35 +3728,64 @@
       if (mode === 'view') {
         // View Blueprint: activate BLUEPRINT tab + render durable document.
         // Must never call approve endpoints or mark locally approved.
+        // Controls/copy follow durable Blueprint status (never superseded-as-current).
+        const bpStatus = blueprintStatusOf(state.blueprint);
         showCurrentBlueprintView({
-          editable: !isBlueprintApproved(state.blueprint),
+          editable: isBlueprintAwaitingApproval(state.blueprint),
         });
         const approved = isBlueprintApproved(state.blueprint);
         els.sessionStatus.textContent =
           'Session ' +
           state.interviewId +
-          (approved ? ' · Viewing Blueprint' : ' · Blueprint review');
-        addBubble(
-          'assistant',
-          approved
-            ? 'Here is the Business Blueprint. Resume Growth Plan whenever you are ready — you will not need to re-answer the interview.'
-            : 'Here is the Business Blueprint awaiting approval. Review the sections, then approve when it feels right.'
-        );
+          (approved
+            ? ' · Viewing Blueprint'
+            : bpStatus === 'superseded'
+              ? ' · Historical Blueprint'
+              : ' · Blueprint review');
+        if (bpStatus === 'superseded') {
+          addBubble(
+            'assistant',
+            'This is a historical superseded Blueprint. It is kept for History and is not the current Blueprint for review or approval.'
+          );
+        } else {
+          addBubble(
+            'assistant',
+            approved
+              ? 'Here is the Business Blueprint. Resume Growth Plan whenever you are ready — you will not need to re-answer the interview.'
+              : 'Here is the Business Blueprint awaiting approval. Review the sections, then approve when it feels right.'
+          );
+        }
         if (els.growthBtn) els.growthBtn.textContent = 'Resume Growth Plan';
         return;
       }
 
       // Unapproved onboarding must resume into review / interview — never Growth Workspace.
       if (target === 'blueprint_review') {
+        const awaiting = isBlueprintAwaitingApproval(state.blueprint);
         setPhase('blueprint');
         if (state.blueprint) {
-          renderBlueprint(state.blueprint, { editable: true });
+          renderBlueprint(state.blueprint, { editable: awaiting });
         }
         els.sessionStatus.textContent =
           'Session ' + state.interviewId + ' · Blueprint review';
         addBubble(
           'assistant',
-          'Your Business Blueprint is ready for review. Edit anything that needs sharpening, then approve when it feels right.'
+          awaiting
+            ? 'Your Business Blueprint is ready for review. Edit anything that needs sharpening, then approve when it feels right.'
+            : 'This Blueprint is not awaiting approval. Open the current Blueprint to continue.'
+        );
+        return;
+      }
+      if (target === 'blueprint_historical') {
+        setPhase('blueprint');
+        if (state.blueprint) {
+          renderBlueprint(state.blueprint, { editable: false });
+        }
+        els.sessionStatus.textContent =
+          'Session ' + state.interviewId + ' · Historical Blueprint';
+        addBubble(
+          'assistant',
+          'This Blueprint was superseded by a newer interview. It remains available in History and cannot be approved.'
         );
         return;
       }
@@ -4492,11 +4540,16 @@
 
     els.accurateBtn.addEventListener('click', () => {
       setPhase('blueprint');
+      const awaiting = isBlueprintAwaitingApproval(state.blueprint);
       addBubble(
         'assistant',
-        "Here's your Business Blueprint — the living record of what I understand about your business. Edit anything that needs sharpening, then approve when it feels right."
+        awaiting
+          ? "Here's your Business Blueprint — the living record of what I understand about your business. Edit anything that needs sharpening, then approve when it feels right."
+          : blueprintStatusOf(state.blueprint) === 'superseded'
+            ? 'This Blueprint was superseded. It is historical only and cannot be approved.'
+            : "Here's your Business Blueprint."
       );
-      renderBlueprint(state.blueprint, { editable: true });
+      renderBlueprint(state.blueprint, { editable: awaiting });
       els.sessionStatus.textContent =
         'Session ' + state.interviewId + ' · Business Blueprint';
     });
@@ -4544,6 +4597,17 @@
           applyApprovedState(state.pendingCompletion || { blueprint: state.blueprint }, {
             alreadyApproved: true,
           });
+          return;
+        }
+
+        // Never attempt approval on superseded / non-review Blueprints.
+        if (!isBlueprintAwaitingApproval(state.blueprint)) {
+          showError(
+            blueprintStatusOf(state.blueprint) === 'superseded'
+              ? 'This Blueprint was superseded and cannot be approved. Open the current Blueprint instead.'
+              : 'This Blueprint is not awaiting approval.'
+          );
+          setApproveButtonState(state.blueprint, { editable: false });
           return;
         }
 
