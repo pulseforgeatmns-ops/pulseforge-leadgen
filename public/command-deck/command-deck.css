@@ -787,6 +787,45 @@ body.theme-dark .mx-panel {
   font-size: 0.95rem;
   color: var(--pf-text-dim);
 }
+.mx-thinking {
+  max-width: 100%;
+  margin: 0.15rem 0 0.35rem;
+  font-family: var(--cd-font-editorial);
+  font-size: 0.95rem;
+  font-style: italic;
+  color: var(--pf-text-muted);
+  opacity: 0.9;
+}
+.mx-thinking::before {
+  content: '';
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: var(--pf-gold, #9a7b2d);
+  vertical-align: middle;
+  opacity: 0.75;
+}
+.mx-msg-supporting {
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.mx-msg-supporting.is-visible {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .mx-thinking {
+    font-style: normal;
+  }
+  .mx-msg-supporting {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
 .mx-expandable {
   display: grid;
   gap: 0.2rem;

@@ -260,6 +260,33 @@
       font-size: 1.05rem;
       line-height: 1.65;
     }
+    .bubble.thinking {
+      align-self: flex-start;
+      background: transparent;
+      border: none;
+      color: var(--cie-muted);
+      font-family: var(--cie-serif);
+      font-size: 0.95rem;
+      font-style: italic;
+      padding: 0.35rem 0.15rem;
+      max-width: 94%;
+      opacity: 0.85;
+    }
+    .bubble.thinking[data-max-thinking="1"]::before {
+      content: '';
+      display: inline-block;
+      width: 0.45rem;
+      height: 0.45rem;
+      margin-right: 0.45rem;
+      border-radius: 50%;
+      background: var(--cie-accent);
+      vertical-align: middle;
+      opacity: 0.7;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #chatLog { scroll-behavior: auto; }
+      .bubble.thinking { font-style: normal; }
+    }
     .composer {
       flex: 0 0 auto;
       display: flex;
@@ -1118,11 +1145,14 @@
   <script src="/shared/shell.js"></script>
   <script src="/shared/growth-workspace-panel.js"></script>
   <script src="/shared/operator-review-digest.js"></script>
+  <script src="/shared/maxInteractionCadence.js"></script>
   <script>
     const GrowthWorkspacePanel =
       (typeof window !== 'undefined' && window.PulseforgeGrowthWorkspacePanel) || {};
     const OperatorReviewDigest =
       (typeof window !== 'undefined' && window.PulseforgeOperatorReviewDigest) || {};
+    const MaxCadence =
+      (typeof window !== 'undefined' && window.MaxInteractionCadence) || null;
 
     const SECTION_TITLES = {
       identity: 'Identity',
@@ -1166,6 +1196,8 @@
       stickToBottom: true,
       pendingCompletion: null,
       approveInFlight: false,
+      turnInFlight: false,
+      revealAbort: null,
       initialGrowthDirection: null,
       growthConversationActive: false,
       readinessConversationActive: false,
@@ -1271,6 +1303,138 @@
       els.chatLog.appendChild(div);
       maybeScrollChat();
       return div;
+    }
+
+    function resolveClientDisplayName() {
+      return (
+        state.clientDisplayName ||
+        (state.blueprint && state.blueprint.businessName) ||
+        (state.growthPlan && state.growthPlan.businessName) ||
+        (state.executiveSummary && state.executiveSummary.businessName) ||
+        null
+      );
+    }
+
+    function mountThinkingBubble(label) {
+      if (!MaxCadence) {
+        return addBubble('thinking', label || 'Considering your question…');
+      }
+      const el = MaxCadence.createThinkingElement(
+        document,
+        label || 'Considering your question…',
+        'bubble thinking'
+      );
+      els.chatLog.appendChild(el);
+      maybeScrollChat();
+      return el;
+    }
+
+    /**
+     * SPEC-102 — reveal Max prose with cadence; actions deferred via onComplete.
+     */
+    async function presentCieAssistantMessage(text, meta) {
+      const full = String(text || '');
+      if (!full) return null;
+      const options = meta || {};
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble assistant';
+      bubble.setAttribute('aria-busy', 'true');
+      bubble.setAttribute('data-max-reveal', '1');
+
+      const sr = document.createElement('span');
+      sr.className = 'pf-sr-only';
+      sr.textContent = full;
+      const visual = document.createElement('span');
+      visual.setAttribute('aria-hidden', 'true');
+      visual.textContent = '';
+      bubble.appendChild(sr);
+      bubble.appendChild(visual);
+      els.chatLog.appendChild(bubble);
+      maybeScrollChat();
+
+      if (!MaxCadence) {
+        bubble.textContent = full;
+        bubble.removeAttribute('aria-busy');
+        if (typeof options.clearThinking === 'function') options.clearThinking();
+        if (typeof options.onComplete === 'function') await options.onComplete();
+        return bubble;
+      }
+
+      const reduced = MaxCadence.prefersReducedMotion();
+      await MaxCadence.presentCompletedResponse({
+        startedAtMs: options.startedAtMs,
+        prose: full,
+        operatorText: options.operatorText,
+        answerDisposition: options.answerDisposition,
+        nextAction: options.nextAction,
+        provisionalWeight: options.provisionalWeight,
+        surface: 'cie',
+        phase: state.phase,
+        clientName: resolveClientDisplayName(),
+        hasEvidencePath: Boolean(options.hasEvidencePath),
+        synthesis: Boolean(options.synthesis),
+        reducedMotion: reduced,
+        jitterSeed: options.jitterSeed,
+        labelSeed: options.labelSeed,
+        clearThinking: options.clearThinking,
+        setText: (partial) => {
+          visual.textContent = partial;
+          maybeScrollChat();
+        },
+        onComplete: async () => {
+          bubble.textContent = full;
+          bubble.removeAttribute('aria-busy');
+          bubble.removeAttribute('data-max-reveal');
+          maybeScrollChat();
+          if (typeof options.onComplete === 'function') await options.onComplete();
+        },
+      });
+      return bubble;
+    }
+
+    async function runCieTurn(operatorText, requestFactory, afterData) {
+      const startedAtMs = Date.now();
+      const provisionalWeight = MaxCadence
+        ? MaxCadence.classifyInteractionWeight({
+            surface: 'cie',
+            phase: state.phase,
+            operatorText,
+          })
+        : 'standard';
+      const provisionalProfile = MaxCadence
+        ? MaxCadence.buildInteractionProfile(provisionalWeight, {
+            reducedMotion: MaxCadence.prefersReducedMotion(),
+            clientName: resolveClientDisplayName(),
+          })
+        : { thinkingAppearMs: 300, thinkingLabel: 'Considering your question…' };
+
+      const thinking = MaxCadence
+        ? MaxCadence.scheduleThinking({
+            delayMs: provisionalProfile.thinkingAppearMs,
+            label: provisionalProfile.thinkingLabel,
+            mount: mountThinkingBubble,
+          })
+        : {
+            clear: () => {},
+            getElement: () => null,
+          };
+
+      try {
+        const data = await requestFactory();
+        if (typeof afterData === 'function') {
+          return await afterData(data, {
+            startedAtMs,
+            provisionalWeight,
+            clearThinking: () => thinking.clear(),
+            operatorText,
+          });
+        }
+        thinking.clear();
+        return data;
+      } catch (err) {
+        thinking.clear();
+        throw err;
+      }
     }
 
     function escapeHtml(value) {
@@ -3813,24 +3977,41 @@
       try {
         const text = els.messageInput.value.trim();
         if (!text || !state.interviewId) return;
+        if (state.turnInFlight) return;
+        state.turnInFlight = true;
         addBubble('client', text);
         els.messageInput.value = '';
         els.sendBtn.disabled = true;
 
         if (state.phase === 'readiness' || state.readinessConversationActive) {
-          const data = await api(
-            'POST',
-            '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/readiness/message',
-            { message: text }
+          await runCieTurn(
+            text,
+            () =>
+              api(
+                'POST',
+                '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/readiness/message',
+                { message: text }
+              ),
+            async (data, turn) => {
+              if (data && data.growthInfrastructureReadinessReport) {
+                state.growthInfrastructureReadinessReport = data.growthInfrastructureReadinessReport;
+                els.sidePanel.innerHTML = renderReadinessReport(data.growthInfrastructureReadinessReport);
+                els.sidePanelTitle.textContent = 'Growth Infrastructure Readiness Report';
+                els.sidePanelSub.textContent = 'Assessment only — setup sequence before campaigns';
+              }
+              if (data && data.message) {
+                await presentCieAssistantMessage(data.message, {
+                  startedAtMs: turn.startedAtMs,
+                  provisionalWeight: turn.provisionalWeight,
+                  operatorText: text,
+                  clearThinking: turn.clearThinking,
+                });
+              } else {
+                turn.clearThinking();
+              }
+              setComposerEnabled(true);
+            }
           );
-          if (data && data.growthInfrastructureReadinessReport) {
-            state.growthInfrastructureReadinessReport = data.growthInfrastructureReadinessReport;
-            els.sidePanel.innerHTML = renderReadinessReport(data.growthInfrastructureReadinessReport);
-            els.sidePanelTitle.textContent = 'Growth Infrastructure Readiness Report';
-            els.sidePanelSub.textContent = 'Assessment only — setup sequence before campaigns';
-          }
-          if (data && data.message) addBubble('assistant', data.message);
-          setComposerEnabled(true);
           return;
         }
 
@@ -3838,123 +4019,178 @@
           state.phase === 'campaign_planning' ||
           state.campaignPlanningConversationActive
         ) {
-          const data = await api(
-            'POST',
-            '/api/v1/interview/' +
-              encodeURIComponent(state.interviewId) +
-              '/campaign/message',
-            { message: text }
+          await runCieTurn(
+            text,
+            () =>
+              api(
+                'POST',
+                '/api/v1/interview/' +
+                  encodeURIComponent(state.interviewId) +
+                  '/campaign/message',
+                { message: text }
+              ),
+            async (data, turn) => {
+              if (data && data.firstCampaignPlanPreview) {
+                state.firstCampaignPlanPreview = data.firstCampaignPlanPreview;
+              }
+              if (data && data.prospectListCriteriaPreview) {
+                state.prospectListCriteriaPreview = data.prospectListCriteriaPreview;
+              }
+              if (data && data.prospectListBuildProposal) {
+                state.prospectListBuildProposal = data.prospectListBuildProposal;
+              }
+              if (data && data.scoutHandoffBrief) {
+                state.scoutHandoffBrief = data.scoutHandoffBrief;
+              }
+              if (data && data.scoutHandoff) {
+                state.scoutHandoff = data.scoutHandoff;
+              }
+              if (data && data.scoutWorkRequest) {
+                state.scoutWorkRequest = data.scoutWorkRequest;
+              }
+              if (data && data.scoutCandidateBatch) {
+                state.scoutCandidateBatch = data.scoutCandidateBatch;
+              }
+              if (data && data.prospectBatchReview) {
+                state.prospectBatchReview = data.prospectBatchReview;
+              }
+              if (data && data.outreachStrategyPreview) {
+                state.outreachStrategyPreview = data.outreachStrategyPreview;
+              }
+              if (data && data.outreachCopyPlan) {
+                state.outreachCopyPlan = data.outreachCopyPlan;
+              }
+              if (data && data.outreachCopyPlan) {
+                els.sidePanelTitle.textContent = 'Outreach Copy Plan';
+                els.sidePanelSub.textContent =
+                  'Copy plan only — no final outreach copy, sends, or CRM writes';
+              } else if (data && data.prospectBatchReview) {
+                els.sidePanel.innerHTML = renderProspectBatchReview(
+                  data.prospectBatchReview
+                );
+                bindProspectBatchReviewActions(els.sidePanel);
+                els.sidePanelTitle.textContent = 'Prospect Batch Review';
+                els.sidePanelSub.textContent =
+                  data.prospectBatchReview.batch1Approved
+                    ? 'Batch 1 approved — next: Outreach Strategy Preview'
+                    : 'Operator digest first — full evidence under View evidence';
+              } else if (data && data.scoutHandoffBrief) {
+                els.sidePanel.innerHTML = renderScoutHandoffBrief(
+                  data.scoutHandoffBrief
+                );
+                els.sidePanelTitle.textContent = 'Scout Handoff';
+                els.sidePanelSub.textContent =
+                  data.scoutHandoffBrief.uiStatus ||
+                  (data.scoutHandoff && data.scoutHandoff.uiStatus) ||
+                  'Brief created';
+              } else if (data && data.prospectListBuildProposal) {
+                els.sidePanel.innerHTML = renderProspectListBuildProposal(
+                  data.prospectListBuildProposal
+                );
+                els.sidePanelTitle.textContent = 'Prospect List Build Proposal';
+                els.sidePanelSub.textContent =
+                  'Approach only — no prospect list built yet';
+              } else if (data && data.prospectListCriteriaPreview) {
+                els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
+                  data.prospectListCriteriaPreview
+                );
+                els.sidePanelTitle.textContent = 'Prospect List Criteria Preview';
+                els.sidePanelSub.textContent =
+                  'Criteria only — no prospect list built yet';
+              } else if (data && data.firstCampaignPlanPreview) {
+                els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
+                  data.firstCampaignPlanPreview
+                );
+                els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
+                els.sidePanelSub.textContent = 'Review before any list, copy, or launch';
+              }
+              if (data && data.message) {
+                await presentCieAssistantMessage(data.message, {
+                  startedAtMs: turn.startedAtMs,
+                  provisionalWeight: turn.provisionalWeight,
+                  operatorText: text,
+                  clearThinking: turn.clearThinking,
+                  hasEvidencePath: Boolean(
+                    data.prospectBatchReview || data.scoutHandoffBrief
+                  ),
+                });
+              } else {
+                turn.clearThinking();
+              }
+              setComposerEnabled(true);
+            }
           );
-          if (data && data.firstCampaignPlanPreview) {
-            state.firstCampaignPlanPreview = data.firstCampaignPlanPreview;
-          }
-          if (data && data.prospectListCriteriaPreview) {
-            state.prospectListCriteriaPreview = data.prospectListCriteriaPreview;
-          }
-          if (data && data.prospectListBuildProposal) {
-            state.prospectListBuildProposal = data.prospectListBuildProposal;
-          }
-          if (data && data.scoutHandoffBrief) {
-            state.scoutHandoffBrief = data.scoutHandoffBrief;
-          }
-          if (data && data.scoutHandoff) {
-            state.scoutHandoff = data.scoutHandoff;
-          }
-          if (data && data.scoutWorkRequest) {
-            state.scoutWorkRequest = data.scoutWorkRequest;
-          }
-          if (data && data.scoutCandidateBatch) {
-            state.scoutCandidateBatch = data.scoutCandidateBatch;
-          }
-          if (data && data.prospectBatchReview) {
-            state.prospectBatchReview = data.prospectBatchReview;
-          }
-          if (data && data.outreachStrategyPreview) {
-            state.outreachStrategyPreview = data.outreachStrategyPreview;
-          }
-          if (data && data.outreachCopyPlan) {
-            state.outreachCopyPlan = data.outreachCopyPlan;
-          }
-          if (data && data.outreachCopyPlan) {
-            els.sidePanelTitle.textContent = 'Outreach Copy Plan';
-            els.sidePanelSub.textContent =
-              'Copy plan only — no final outreach copy, sends, or CRM writes';
-          } else if (data && data.prospectBatchReview) {
-            els.sidePanel.innerHTML = renderProspectBatchReview(
-              data.prospectBatchReview
-            );
-            bindProspectBatchReviewActions(els.sidePanel);
-            els.sidePanelTitle.textContent = 'Prospect Batch Review';
-            els.sidePanelSub.textContent =
-              data.prospectBatchReview.batch1Approved
-                ? 'Batch 1 approved — next: Outreach Strategy Preview'
-                : 'Operator digest first — full evidence under View evidence';
-          } else if (data && data.scoutHandoffBrief) {
-            els.sidePanel.innerHTML = renderScoutHandoffBrief(
-              data.scoutHandoffBrief
-            );
-            els.sidePanelTitle.textContent = 'Scout Handoff';
-            els.sidePanelSub.textContent =
-              data.scoutHandoffBrief.uiStatus ||
-              (data.scoutHandoff && data.scoutHandoff.uiStatus) ||
-              'Brief created';
-          } else if (data && data.prospectListBuildProposal) {
-            els.sidePanel.innerHTML = renderProspectListBuildProposal(
-              data.prospectListBuildProposal
-            );
-            els.sidePanelTitle.textContent = 'Prospect List Build Proposal';
-            els.sidePanelSub.textContent =
-              'Approach only — no prospect list built yet';
-          } else if (data && data.prospectListCriteriaPreview) {
-            els.sidePanel.innerHTML = renderProspectListCriteriaPreview(
-              data.prospectListCriteriaPreview
-            );
-            els.sidePanelTitle.textContent = 'Prospect List Criteria Preview';
-            els.sidePanelSub.textContent =
-              'Criteria only — no prospect list built yet';
-          } else if (data && data.firstCampaignPlanPreview) {
-            els.sidePanel.innerHTML = renderFirstCampaignPlanPreview(
-              data.firstCampaignPlanPreview
-            );
-            els.sidePanelTitle.textContent = 'First Campaign Plan Preview';
-            els.sidePanelSub.textContent = 'Review before any list, copy, or launch';
-          }
-          if (data && data.message) addBubble('assistant', data.message);
-          setComposerEnabled(true);
           return;
         }
 
         if (state.phase === 'growth' || state.growthConversationActive) {
-          const data = await api(
-            'POST',
-            '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/message',
-            { message: text }
+          await runCieTurn(
+            text,
+            () =>
+              api(
+                'POST',
+                '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/growth/message',
+                { message: text }
+              ),
+            async (data, turn) => {
+              if (data && data.initialGrowthDirection) {
+                state.initialGrowthDirection = data.initialGrowthDirection;
+              }
+              const shouldShowGrowthActions =
+                Boolean(data && data.firstGrowthPlanPreview) ||
+                Boolean(data && data.suggestedActions && data.suggestedActions.length);
+              if (data && data.firstGrowthPlanPreview) {
+                state.firstGrowthPlanPreview = data.firstGrowthPlanPreview;
+              }
+              if (data && data.message) {
+                await presentCieAssistantMessage(data.message, {
+                  startedAtMs: turn.startedAtMs,
+                  provisionalWeight: turn.provisionalWeight,
+                  operatorText: text,
+                  clearThinking: turn.clearThinking,
+                  onComplete: () => {
+                    if (shouldShowGrowthActions) setGrowthPreviewActionsVisible(true);
+                  },
+                });
+              } else {
+                turn.clearThinking();
+                if (shouldShowGrowthActions) setGrowthPreviewActionsVisible(true);
+              }
+              setComposerEnabled(true);
+            }
           );
-          if (data && data.initialGrowthDirection) {
-            state.initialGrowthDirection = data.initialGrowthDirection;
-          }
-          if (data && data.firstGrowthPlanPreview) {
-            state.firstGrowthPlanPreview = data.firstGrowthPlanPreview;
-            setGrowthPreviewActionsVisible(true);
-          } else if (data && data.suggestedActions && data.suggestedActions.length) {
-            setGrowthPreviewActionsVisible(true);
-          }
-          if (data && data.message) addBubble('assistant', data.message);
-          setComposerEnabled(true);
           return;
         }
 
-        const pending = api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/message', {
-          message: text,
-        });
-        const data = await pending;
-        if (data.blueprint || data.nextAction === 'GENERATE_BLUEPRINT' || data.nextAction === 'COMPLETE') {
-          if (data.reflection) addBubble('reflection', data.reflection);
-          await enterUnderstandingFlow(data);
-          return;
-        }
-        applyDiscoveryPayload(data);
-        setComposerEnabled(true);
+        await runCieTurn(
+          text,
+          () =>
+            api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/message', {
+              message: text,
+            }),
+          async (data, turn) => {
+            if (data.blueprint || data.nextAction === 'GENERATE_BLUEPRINT' || data.nextAction === 'COMPLETE') {
+              turn.clearThinking();
+              if (data.reflection) addBubble('reflection', data.reflection);
+              await enterUnderstandingFlow(data);
+              return;
+            }
+            applyDiscoveryPayload(data, { skipMessage: true });
+            if (data.message) {
+              await presentCieAssistantMessage(data.message, {
+                startedAtMs: turn.startedAtMs,
+                provisionalWeight: turn.provisionalWeight,
+                operatorText: text,
+                answerDisposition: data.answerDisposition,
+                nextAction: data.nextAction,
+                clearThinking: turn.clearThinking,
+              });
+            } else {
+              turn.clearThinking();
+            }
+            setComposerEnabled(true);
+          }
+        );
       } catch (err) {
         showError(err.message);
         setComposerEnabled(
@@ -3963,6 +4199,8 @@
             state.phase === 'readiness' ||
             state.phase === 'campaign_planning'
         );
+      } finally {
+        state.turnInFlight = false;
       }
     }
 
