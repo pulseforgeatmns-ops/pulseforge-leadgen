@@ -5542,6 +5542,34 @@ function sessionIsSuperseded(session) {
   );
 }
 
+function blueprintStatusOf(bp) {
+  return String((bp && bp.status) || '').toLowerCase();
+}
+
+function isActiveBlueprintStatus(status) {
+  const s = String(status || '').toLowerCase();
+  return s === 'in_review' || s === 'draft';
+}
+
+/**
+ * Linked Blueprint for a session (by interview_state pointers), or null.
+ */
+async function loadSessionBlueprint(store, session) {
+  if (!store || !session) return null;
+  const state = session.interview_state || {};
+  if (!state.blueprintId) return null;
+  return store.getBlueprint(state.blueprintId, state.blueprintVersion);
+}
+
+/**
+ * Sessions whose Blueprint was superseded (even if lifecycle flags were missed)
+ * must not win ordinary current-state recovery.
+ */
+async function sessionHasSupersededBlueprint(store, session) {
+  const bp = await loadSessionBlueprint(store, session);
+  return Boolean(bp && blueprintStatusOf(bp) === 'superseded');
+}
+
 function isRecoverableActiveInterview(session) {
   return Boolean(
     session &&
@@ -5565,11 +5593,18 @@ async function listClientSessions(store, clientId, { limit = 40 } = {}) {
 /**
  * Active (incomplete) interview for ordinary client return — not samples.
  * SPEC-099: excludes superseded/abandoned onboarding.
+ * Active-version resolution: also skips sessions whose linked Blueprint is
+ * already superseded (orphan / partial-supersession safety).
  */
 async function findActiveInterviewForClient(clientId, opts = {}) {
   const store = await resolveStore(opts);
   const rows = await listClientSessions(store, clientId, { limit: 40 });
-  return rows.find((row) => isRecoverableActiveInterview(row)) || null;
+  for (const row of rows) {
+    if (!isRecoverableActiveInterview(row)) continue;
+    if (await sessionHasSupersededBlueprint(store, row)) continue;
+    return row;
+  }
+  return null;
 }
 
 /**
@@ -5636,13 +5671,15 @@ async function supersedeUnapprovedOnboardingForClient(
  * SPEC-097 — Resolve durable onboarding state for an authenticated client.
  * Database sessions/blueprints remain authoritative; no parallel persistence.
  * SPEC-099 — prefers current (non-superseded) interview over historical drafts.
+ * Active Blueprint resolution — never recovers a session whose Blueprint is
+ * already superseded; prefer the latest recoverable interview / approved path.
  */
 async function resolveClientOnboardingState(clientId, opts = {}) {
   const store = await resolveStore(opts);
   const id = asClientId(clientId);
   const rows = await listClientSessions(store, id, { limit: 40 });
 
-  const active = rows.find((row) => isRecoverableActiveInterview(row));
+  const active = await findActiveInterviewForClient(id, opts);
   const approved = rows.find(
     (row) => row.status === 'APPROVED' && !sessionIsSuperseded(row)
   );
@@ -6891,7 +6928,13 @@ function extractSessionBusinessName(session, blueprint) {
  */
 function resolveResumeTarget(session, blueprint) {
   if (session && session.status !== 'APPROVED') {
-    if (session.status === 'CLIENT_REVIEW') return 'blueprint_review';
+    if (session.status === 'CLIENT_REVIEW') {
+      // Superseded Blueprints are historical — not current review targets.
+      if (blueprintStatusOf(blueprint) === 'superseded') {
+        return 'blueprint_historical';
+      }
+      return 'blueprint_review';
+    }
     if (
       ['DISCOVERY', 'CLARIFICATION', 'VALIDATION', 'BLUEPRINT_GENERATION', 'NEW'].includes(
         session.status
@@ -6930,6 +6973,7 @@ function resumePhaseForTarget(target) {
     case 'growth_conversation':
       return 'growth';
     case 'blueprint_review':
+    case 'blueprint_historical':
       return 'blueprint';
     case 'interview':
       return 'discovery';
@@ -7428,17 +7472,32 @@ async function getInterviewBlueprint(sessionId, opts = {}) {
   return detail.blueprint;
 }
 
+/**
+ * Resolve the authoritative *current* Blueprint for a client.
+ * Prefer: latest approved → in_review/draft for the active interview →
+ * latest non-superseded in_review/draft. Never returns superseded rows.
+ */
 async function getClientBlueprint(clientId, opts = {}) {
   const store = await resolveStore(opts);
   const id = asClientId(clientId);
+
   const approved = await store.listBlueprintsForClient(id, { status: 'approved' });
   if (approved[0]) return publicBlueprint(approved[0]);
+
+  // Prefer the Blueprint belonging to the recoverable active interview.
+  const active = await findActiveInterviewForClient(id, opts);
+  if (active) {
+    const linked = await loadSessionBlueprint(store, active);
+    if (linked && isActiveBlueprintStatus(linked.status)) {
+      return publicBlueprint(linked);
+    }
+  }
+
   const any = await store.listBlueprintsForClient(id);
-  // SPEC-099 — superseded drafts must not become "current" client blueprint.
-  const current = (any || []).find(
-    (bp) => String(bp.status || '').toLowerCase() !== 'superseded'
-  );
+  // Newest first (store sorts created_at DESC). Skip superseded entirely.
+  const current = (any || []).find((bp) => isActiveBlueprintStatus(bp.status));
   if (current) return publicBlueprint(current);
+
   throw new ClientIntelligenceError('not_found', 'No blueprint for client', 404);
 }
 
