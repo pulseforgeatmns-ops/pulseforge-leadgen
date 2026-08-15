@@ -128,6 +128,15 @@ const ADVERSARIAL_MATRIX = [
     session: priorSession(),
   },
   {
+    utterance: 'why>?',
+    intent: 'follow_up',
+    route: 'client_context_follow_up',
+    context: 'prior_cie_turn+blueprint',
+    execution: 'no',
+    epistemic: 'explain_prior_recommendation',
+    session: priorSession(),
+  },
+  {
     utterance: 'Anything else?',
     intent: 'follow_up',
     route: 'client_context_follow_up',
@@ -163,6 +172,14 @@ const ADVERSARIAL_MATRIX = [
   },
   {
     utterance: 'If this was your company what would you be thinking about?',
+    intent: 'owner_perspective',
+    route: 'client_context_reasoning',
+    context: 'approved_blueprint',
+    execution: 'no',
+    epistemic: 'bounded_inference',
+  },
+  {
+    utterance: 'ok so if this was your business what would you actually do next?',
     intent: 'owner_perspective',
     route: 'client_context_reasoning',
     context: 'approved_blueprint',
@@ -331,6 +348,14 @@ const ADVERSARIAL_MATRIX = [
     epistemic: 'evidence_needed',
   },
   {
+    utterance: 'What would make you change your mind about that?',
+    intent: 'assumption_challenge',
+    route: 'client_context_reasoning',
+    context: 'approved_blueprint',
+    execution: 'no',
+    epistemic: 'evidence_needed',
+  },
+  {
     utterance: 'Anything here concern you?',
     intent: 'risk',
     route: 'client_context_reasoning',
@@ -409,6 +434,29 @@ describe('SPEC-103B semantic classifier (no phrase allowlist)', () => {
       }),
       false
     );
+  });
+
+  it('noisy why / change-your-mind / owner-next are distinct modes', () => {
+    const session = priorSession();
+    const why = scoreClientBusinessSemantics('why>?', session);
+    assert.equal(why.features.followUp, true, 'why>? should be a follow-up');
+    assert.equal(why.mode, 'follow_up');
+
+    const mind = scoreClientBusinessSemantics(
+      'What would make you change your mind about that?',
+      session
+    );
+    assert.equal(mind.features.challenge, true);
+    assert.equal(mind.mode, 'challenge');
+    assert.equal(mind.features.followUp, false);
+
+    const owner = scoreClientBusinessSemantics(
+      'ok so if this was your business what would you actually do next?',
+      session
+    );
+    assert.equal(owner.features.ownerPerspective, true);
+    assert.equal(owner.mode, 'approach');
+    assert.notEqual(owner.mode, 'focus');
   });
 
   it('adversarial matrix classifies by meaning (≥30 utterances)', () => {
@@ -803,6 +851,104 @@ describe('SPEC-103B end-to-end routing', () => {
     assert.match(
       result.prose,
       /Toronto|GTA|property|facility|commercial/i
+    );
+  });
+
+  it('AS Cleaning conversation: follow-ups do not repeat the first-focus essay', async () => {
+    const store = createMemoryStore();
+    await approveClient(store, AS_CLEANING_ID, [
+      'AS Cleaning Co. — commercial cleaning preferred over residential.',
+      'Commercial cleaning, apartment and multifamily cleaning, facility cleaning.',
+      'Property managers, facility managers, and apartment/multifamily buildings.',
+      'One-off bargain hunters and lowest-price residential tire-kickers.',
+      'Greater Toronto Area.',
+      'Excellent quality with reliable on-time service.',
+      'Professional and clear.',
+      'Build a reliable prospect-to-client pipeline with recurring revenue.',
+      'Walkthroughs completed and recurring revenue created.',
+    ]);
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: true,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+
+    const understanding = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What do you understand about my business?',
+    });
+    assert.match(understanding.prose, /Here's what I understand about AS Cleaning/i);
+
+    const focus = await engine.ask({
+      sessionId: opened.sessionId,
+      question:
+        'Based on what you know about my business, what should we focus on first?',
+    });
+    assert.match(focus.prose, /I'd start by proving a repeatable commercial acquisition motion/i);
+
+    const why = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'why>?',
+    });
+    assert.match(
+      String(why.domainDecision && why.domainDecision.reason),
+      /follow_up/
+    );
+    assert.notEqual(why.prose, focus.prose);
+    assert.match(why.prose, /because|approved/i);
+    assert.doesNotMatch(
+      why.prose,
+      /I'd start by proving a repeatable commercial acquisition motion/i
+    );
+
+    const overlooking = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "Anything we're overlooking?",
+    });
+    assert.match(overlooking.prose, /KNOWN|UNKNOWN|EVIDENCE NEEDED/i);
+    assert.notEqual(overlooking.prose, focus.prose);
+
+    const mind = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What would make you change your mind about that?',
+    });
+    assert.notEqual(mind.prose, focus.prose);
+    assert.match(mind.prose, /change my mind|weaken|evidence/i);
+    assert.doesNotMatch(
+      mind.prose,
+      /I'd start by proving a repeatable commercial acquisition motion/i
+    );
+
+    const companies = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Which actual companies should I call Monday?',
+    });
+    assert.match(companies.prose, /do not yet have|not invent|evidence/i);
+
+    const go = await engine.ask({
+      sessionId: opened.sessionId,
+      question: "Alright, let's go after them.",
+    });
+    assert.match(go.prose, /will not launch|strategy agreement/i);
+
+    const owner = await engine.ask({
+      sessionId: opened.sessionId,
+      question:
+        'ok so if this was your business what would you actually do next?',
+    });
+    assert.notEqual(owner.prose, focus.prose);
+    assert.match(owner.prose, /If this were my business|operator loop|not launch/i);
+    assert.doesNotMatch(
+      owner.prose,
+      /I'd start by proving a repeatable commercial acquisition motion/i
+    );
+    assert.doesNotMatch(
+      owner.prose,
+      /From here, I'd approach growth by proving one acquisition motion/i
     );
   });
 });

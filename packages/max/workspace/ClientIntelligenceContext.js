@@ -884,6 +884,8 @@ function hasPriorClientReasoning(session) {
     'opportunity',
     'unknowns',
     'follow_up',
+    'challenge',
+    'approach',
     'clarification',
     'context',
     'understanding',
@@ -906,6 +908,8 @@ function scoreClientBusinessSemantics(question, session) {
     evidence: false,
     understanding: false,
     followUp: false,
+    challenge: false,
+    ownerPerspective: false,
     referentAmbiguous: false,
     gap: 0,
     priority: 0,
@@ -990,14 +994,32 @@ function scoreClientBusinessSemantics(question, session) {
   if (/\b(business|company|customers?|clients?|market|strategy)\b/.test(q)) {
     features.discourse += 2;
   }
-  if (
+  const ownerPerspective =
     /\bif (this|that|it) (was|were) your (company|business)\b/.test(q) ||
     /\bif you were (me|us|in my (shoes|position))\b/.test(q) ||
-    /\bwhat would you (do|think|be thinking|want|figure|learn|start)\b/.test(q) ||
+    /\bwhat would you\b.{0,24}\b(do|think|be thinking|want|figure|learn|start)\b/.test(
+      q
+    );
+  const challenge =
+    /\bchange your mind\b/.test(q) ||
+    /\b(convince|persuade) you\b/.test(q) ||
+    /\bwhat would (make|lead|cause) you (to )?(revise|reconsider|update|drop)\b/.test(
+      q
+    ) ||
+    /\bwhat would falsify\b/.test(q);
+  if (ownerPerspective) {
+    features.discourse += 3;
+    features.owner += 1;
+    features.ownerPerspective = true;
+  }
+  if (challenge) {
+    features.discourse += 3;
+    features.challenge = true;
+  }
+  if (
     /\bhow('s| is) (this|it|that) looking\b/.test(q) ||
     /\bhow do you feel\b/.test(q) ||
-    /\bwhat worries you\b/.test(q) ||
-    /\bchange your mind\b/.test(q)
+    /\bwhat worries you\b/.test(q)
   ) {
     features.discourse += 3;
     features.owner += 1;
@@ -1053,27 +1075,27 @@ function scoreClientBusinessSemantics(question, session) {
   }
 
   const prior = hasPriorClientReasoning(session);
+  const tokenJoin = tokens.join(' ');
   if (prior) {
     features.discourse += 1;
     if (
-      /^(why\??|why that\??|why not\??|why instead\??|and why\??|tell me why\??)$/.test(
-        q
-      ) ||
+      /^(and )?why( that| this| those| not| instead| though)?$/.test(tokenJoin) ||
+      /^tell me why$/.test(tokenJoin) ||
       /^(why that|why this|why those|why instead)\b/.test(q) ||
       /\bwhy (that|this|those|commercial|residential)\b/.test(q) ||
       (/^(what about|how about)\b/.test(q) &&
         /\b(commercial|residential|that|this|them|it)\b/.test(q)) ||
-      /^(anything else|and\??|what else|ok(ay)?\.? what now|so what now)\??$/.test(
-        q
+      /^(anything else|and|what else|ok(ay)? what now|so what now)$/.test(
+        tokenJoin
       ) ||
-      (/^(anything|what) (else|next)\??$/.test(q))
+      /^(anything|what) (else|next)$/.test(tokenJoin)
     ) {
       features.followUp = true;
     }
     if (
       /\bhow('s| is) (this|it|that) looking\b/.test(q) ||
       /\bhow do you feel\b/.test(q) ||
-      /^(thoughts|and)\??$/.test(q)
+      /^(thoughts|and)$/.test(tokenJoin)
     ) {
       features.followUp = true;
     }
@@ -1092,7 +1114,11 @@ function scoreClientBusinessSemantics(question, session) {
     features.strategy * 1.0 +
     features.owner * 0.8;
   const score =
-    conceptScore + features.discourse + features.advisory + (features.followUp ? 4 : 0);
+    conceptScore +
+    features.discourse +
+    features.advisory +
+    (features.followUp ? 4 : 0) +
+    (features.challenge ? 4 : 0);
 
   let mode = 'focus';
   const ranked = [
@@ -1107,7 +1133,9 @@ function scoreClientBusinessSemantics(question, session) {
   ].sort((a, b) => b[1] - a[1]);
   if (features.understanding) mode = 'understanding';
   else if (features.followUp) mode = 'follow_up';
+  else if (features.challenge) mode = 'challenge';
   else if (features.evidence) mode = 'evidence';
+  else if (features.ownerPerspective) mode = 'approach';
   else if (ranked[0] && ranked[0][1] > 0) {
     mode = ranked[0][0] === 'priority' ? 'focus' : ranked[0][0];
   }
@@ -1129,6 +1157,8 @@ function scoreClientBusinessSemantics(question, session) {
     !features.referentAmbiguous &&
     (features.understanding ||
       features.followUp ||
+      features.challenge ||
+      features.ownerPerspective ||
       features.evidence ||
       features.executionAdjacent ||
       score >= 3.5 ||
@@ -1185,6 +1215,8 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
     if (scored.features.understanding) return true;
     if (scored.features.evidence) return true;
     if (scored.features.followUp) return true;
+    if (scored.features.challenge) return true;
+    if (scored.features.ownerPerspective) return true;
     if (scored.features.referentAmbiguous) return true;
     if (scored.isClientBusiness) return true;
     // Default for unseen paraphrases: interrogative / advisory shape.
@@ -1221,9 +1253,10 @@ function looksLikeFocusAsk(question) {
   const scored = scoreClientBusinessSemantics(question);
   return (
     scored.isClientBusiness &&
+    !scored.features.challenge &&
+    !scored.features.ownerPerspective &&
     (scored.mode === 'focus' ||
       scored.mode === 'week' ||
-      scored.mode === 'approach' ||
       scored.features.priority >= 2)
   );
 }
@@ -1316,6 +1349,8 @@ function looksLikeClientIntelligenceAsk(question, session) {
     scored.features.understanding ||
     scored.features.evidence ||
     scored.features.followUp ||
+    scored.features.challenge ||
+    scored.features.ownerPerspective ||
     scored.features.referentAmbiguous ||
     scored.isClientBusiness ||
     isClientContextReasoningRequest(question, session)
@@ -1575,6 +1610,7 @@ function pickRelevantFacts(summary, mode) {
 function inferReasoningMode(question, session) {
   const scored = scoreClientBusinessSemantics(question, session);
   if (scored.features.followUp) return 'follow_up';
+  if (scored.mode === 'challenge' || scored.features.challenge) return 'challenge';
   if (scored.mode === 'unknowns' || scored.features.gap >= 2) return 'unknowns';
   if (scored.mode === 'targeting') return 'targeting';
   if (scored.mode === 'week') return 'week';
@@ -1583,8 +1619,73 @@ function inferReasoningMode(question, session) {
   }
   if (scored.mode === 'risk' || scored.features.risk >= 2) return 'risk';
   if (scored.mode === 'campaign_advisory') return 'campaign_advisory';
-  if (scored.mode === 'approach' || scored.features.owner >= 2) return 'approach';
+  if (
+    scored.mode === 'approach' ||
+    scored.features.ownerPerspective ||
+    scored.features.owner >= 2
+  ) {
+    return 'approach';
+  }
   return 'focus';
+}
+
+function formatChallengeAnswer(summary, bits = {}) {
+  const audience = bits.icp || summary.idealCustomers || 'the approved beachhead';
+  const market = bits.market || summary.geography || summary.targetMarkets || null;
+  const where = market ? ` in ${market}` : '';
+  const outcome =
+    summary.successMetrics ||
+    summary.campaignGoals ||
+    'walkthroughs and recurring revenue';
+  const commercial = Boolean(
+    bits.commercialPreference || summary.commercialPreference
+  );
+  const parts = [];
+  parts.push(
+    `I would change my mind if live evidence contradicted this direction — not because a new assumption sounded better.`
+  );
+  const weaken = [
+    `conversations with ${audience}${where} failed to turn into walkthroughs`,
+  ];
+  if (commercial) {
+    weaken.push(
+      'residential work started creating stronger recurring revenue than commercial'
+    );
+  }
+  if (market) {
+    weaken.push(
+      `a different ${market} segment clearly outperformed this ICP`
+    );
+  } else {
+    weaken.push('a different segment clearly outperformed this ICP');
+  }
+  parts.push(`The recommendation would weaken if ${weaken.join(', or if ')}.`);
+  parts.push(
+    `We do not have that campaign or market evidence yet. Until a small learning loop produces it — judged by ${midSentencePhrase(outcome)} — I will not swap the direction on intuition alone. This is still advisory, not a launch.`
+  );
+  return parts.join(' ');
+}
+
+function formatApproachAnswer(summary, bits = {}) {
+  const audience = bits.icp || summary.idealCustomers || 'your approved ideal customers';
+  const market = bits.market || summary.geography || summary.targetMarkets || null;
+  const where = market ? ` in ${market}` : '';
+  const outcome =
+    bits.metrics ||
+    summary.successMetrics ||
+    summary.campaignGoals ||
+    'walkthroughs and recurring revenue';
+  const parts = [];
+  parts.push(
+    `If this were my business, I would not launch a broad campaign next. I would treat the next move as a small operator loop, not a city-wide push.`
+  );
+  parts.push(
+    `I would hold the approved beachhead — ${audience}${where} — pull a qualified handful of those accounts, and start conversations aimed at walkthroughs. I still will not invent a named Monday call list without live market or prospect evidence.`
+  );
+  parts.push(
+    `Then I would watch one conversion path: conversations → walkthroughs → ${midSentencePhrase(outcome)}. I would widen only after that loop produces evidence. That is what I would actually do next as the operator — advisory guidance, not authorization to send outreach.`
+  );
+  return parts.join(' ');
 }
 
 /**
@@ -1629,6 +1730,22 @@ function composeClientContextReasoning(summary, question, opts = {}) {
       kind: 'unknowns',
       confidenceLabel: 'high',
       confidence: 0.9,
+    };
+  }
+
+  if (mode === 'challenge') {
+    return {
+      prose: formatChallengeAnswer(summary, {
+        icp,
+        market,
+        metrics,
+        commercialPreference,
+      }),
+      kind: 'challenge',
+      confidenceLabel: 'moderate',
+      confidence: 0.7,
+      recommendationFocus:
+        (prior && prior.recommendationFocus) || icp || null,
     };
   }
 
@@ -1721,7 +1838,21 @@ function composeClientContextReasoning(summary, question, opts = {}) {
     };
   }
 
-  // Default synthesis: focus / opportunity / week / approach / campaign advisory
+  if (mode === 'approach') {
+    return {
+      prose: formatApproachAnswer(summary, {
+        icp,
+        market,
+        metrics,
+      }),
+      kind: 'approach',
+      confidenceLabel: 'moderate',
+      confidence: 0.72,
+      recommendationFocus: icp || null,
+    };
+  }
+
+  // Default synthesis: focus / opportunity / week / campaign advisory
   if (unresolvedIcp && !icp) {
     const geo = market ? ` in ${market}` : '';
     return {
@@ -1760,10 +1891,6 @@ function composeClientContextReasoning(summary, question, opts = {}) {
   } else if (mode === 'campaign_advisory') {
     paragraphs.push(
       `I'd recommend a focused first campaign toward ${audience}${where}, designed as a learning loop rather than a broad blast.`
-    );
-  } else if (mode === 'approach') {
-    paragraphs.push(
-      `From here, I'd approach growth by proving one acquisition motion around ${audience}${where} before expanding.`
     );
   } else {
     paragraphs.push(
@@ -2085,6 +2212,10 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
         reason = 'client_intelligence_unknowns';
       } else if (turnKind === 'follow_up') {
         reason = 'client_intelligence_reasoning_follow_up';
+      } else if (turnKind === 'challenge') {
+        reason = 'client_intelligence_reasoning_challenge';
+      } else if (turnKind === 'approach') {
+        reason = 'client_intelligence_reasoning';
       } else if (turnKind === 'opportunity') {
         reason = 'client_intelligence_opportunity';
       } else {

@@ -366,6 +366,20 @@ describe('SPEC-103 client-context reasoning', () => {
     );
     assert.match(follow.prose, /because|approved|ICP|commercial|property|facility/i);
     assert.doesNotMatch(follow.prose, /detailed_answer/i);
+
+    const noisyWhy = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'why>?',
+    });
+    assert.match(
+      String(noisyWhy.domainDecision && noisyWhy.domainDecision.reason),
+      /follow_up/
+    );
+    assert.notEqual(noisyWhy.prose, first.prose);
+    assert.doesNotMatch(
+      noisyWhy.prose,
+      /I'd start by proving a repeatable commercial acquisition motion/i
+    );
   });
 
   it('TEST J — recall regression still works', async () => {
