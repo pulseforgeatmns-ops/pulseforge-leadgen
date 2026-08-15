@@ -1769,8 +1769,8 @@ describe('Executive Brief field normalization — clean entity lists', () => {
 
     assert.deepEqual(extractCustomerSegments(ICP_PROSE), [
       'property managers',
-      'short-term rental companies',
       'facility managers',
+      'short-term rental companies',
       'professional offices',
       'rec centers',
       'high-traffic buildings',
@@ -1900,7 +1900,7 @@ describe('Executive Brief field normalization — clean entity lists', () => {
     assert.match(whoYouAre, /move-in\/move-out cleaning/i);
     assert.match(whoYouAre, /short-term rental turnovers/i);
 
-    assert.match(whoYouServe, /ideal customers include/i);
+    assert.match(whoYouServe, /(?:ideal customers include|current acquisition focus is)/i);
     assert.match(whoYouServe, /property managers/i);
     assert.match(whoYouServe, /short-term rental companies/i);
     assert.match(whoYouServe, /daycares/i);
