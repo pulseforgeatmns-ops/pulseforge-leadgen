@@ -58,6 +58,7 @@ const {
   getClientBlueprint,
   getApprovedClientBlueprint,
   getBlueprintRecord,
+  auditClientBlueprintLifecycle,
   listApprovedBlueprintSessions,
   getResumePayload,
   loadAnchorSampleBlueprint,
@@ -485,6 +486,26 @@ router.get('/api/v1/clients/:id/blueprint', requireOperator, async (req, res) =>
     return sendError(res, err);
   }
 });
+
+/**
+ * Read-only CIE lifecycle audit (admin/manager). No mutations.
+ * Inspects interviews + Blueprints for a client to diagnose post-restart state.
+ */
+router.get(
+  '/api/v1/clients/:id/cie-lifecycle-audit',
+  requireInternal,
+  async (req, res) => {
+    try {
+      assertRequestedClientMatches(req, req.params.id);
+      const clientId = resolveCieClientId(req, req.params.id);
+      const report = await auditClientBlueprintLifecycle(clientId);
+      noStore(res);
+      return res.json(report);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
 
 /**
  * Safe Scout Places diagnostic — same legacy Text Search path as sourcing.

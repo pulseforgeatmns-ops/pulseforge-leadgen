@@ -27,6 +27,7 @@ const {
   getApprovedClientBlueprint,
   getClientBlueprint,
   getBlueprintRecord,
+  auditClientBlueprintLifecycle,
   ClientIntelligenceError,
 } = require('../services/clientIntelligenceInterview');
 const {
@@ -510,6 +511,135 @@ describe('I — Active Blueprint resolution prefers current in_review over super
     assert.equal(recovered.blueprint.id, turnB.blueprint.id);
     assert.equal(String(recovered.blueprint.status).toLowerCase(), 'in_review');
     assert.notEqual(recovered.blueprint.id, first.blueprint.id);
+
+    const current = await getClientBlueprint(AS_CLEANING_ID, opts);
+    assert.equal(current.id, turnB.blueprint.id);
+  });
+});
+
+describe('J — Post-restart Brief → Blueprint B lifecycle', () => {
+  it('full sequence: A → restart → B Brief → recovery → approve B once; A historical only', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+
+    const first = await runInterviewToBlueprint(store, AS_CLEANING_ID);
+    const interviewA = first.interviewId;
+    const blueprintA = first.blueprint;
+
+    const restarted = await startClientInterview(
+      { clientId: AS_CLEANING_ID, restart: true },
+      opts
+    );
+    assert.notEqual(restarted.interviewId, interviewA);
+
+    let turnB = restarted;
+    for (const answer of AS_ANSWERS) {
+      turnB = await postInterviewMessage(restarted.interviewId, answer, opts);
+    }
+    assert.ok(turnB.blueprint, 'Interview B must create Blueprint B');
+    assert.ok(
+      turnB.executiveSummary,
+      'Interview B completion must generate Executive Business Brief'
+    );
+    assert.equal(String(turnB.blueprint.status).toLowerCase(), 'in_review');
+    assert.equal(turnB.status, 'CLIENT_REVIEW');
+    assert.notEqual(turnB.blueprint.id, blueprintA.id);
+
+    const bpA = await store.getBlueprint(blueprintA.id, blueprintA.version);
+    assert.equal(String(bpA.status).toLowerCase(), 'superseded');
+
+    const recovered = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.equal(recovered.interviewId, restarted.interviewId);
+    assert.equal(recovered.onboardingState, 'blueprint_review');
+    assert.equal(recovered.blueprint.id, turnB.blueprint.id);
+    assert.equal(String(recovered.blueprint.status).toLowerCase(), 'in_review');
+    assert.equal(recovered.resumeTarget, 'blueprint_review');
+
+    const viewed = await getResumePayload(recovered.interviewId, {
+      ...opts,
+      action: 'view',
+    });
+    assert.equal(viewed.blueprint.id, turnB.blueprint.id);
+    assert.equal(String(viewed.blueprint.status).toLowerCase(), 'in_review');
+
+    const tabSource = await getClientBlueprint(AS_CLEANING_ID, opts);
+    assert.equal(tabSource.id, turnB.blueprint.id);
+    assert.equal(String(tabSource.status).toLowerCase(), 'in_review');
+
+    const approved = await approveBlueprint(turnB.blueprint.id, opts);
+    assert.equal(approved.alreadyApproved, false);
+    assert.equal(String(approved.blueprint.status).toLowerCase(), 'approved');
+    assert.ok(approved.playbook && approved.playbook.id);
+    const playbookId = approved.playbook.id;
+
+    const again = await approveBlueprint(turnB.blueprint.id, opts);
+    assert.equal(again.alreadyApproved, true);
+    assert.equal(again.playbook && again.playbook.id, playbookId);
+
+    const histA = await getInterview(interviewA, opts);
+    assert.equal(String(histA.blueprint.status).toLowerCase(), 'superseded');
+    assert.equal(histA.resumeTarget, 'blueprint_historical');
+
+    await assert.rejects(
+      () => approveBlueprint(blueprintA.id, opts),
+      (err) =>
+        err instanceof ClientIntelligenceError && err.code === 'invalid_status'
+    );
+
+    const continuity = await getApprovedClientBlueprint(AS_CLEANING_ID, opts);
+    assert.equal(continuity.id, turnB.blueprint.id);
+    assert.equal(String(continuity.status).toLowerCase(), 'approved');
+
+    const audit = await auditClientBlueprintLifecycle(AS_CLEANING_ID, opts);
+    assert.equal(audit.clientId, AS_CLEANING_ID);
+    assert.ok(audit.blueprints.some((b) => b.id === blueprintA.id && b.status === 'superseded'));
+    assert.ok(
+      audit.blueprints.some(
+        (b) => b.id === turnB.blueprint.id && b.status === 'approved'
+      )
+    );
+  });
+
+  it('stale pointer to superseded A does not hide Interview B in_review Blueprint', async () => {
+    const store = createMemoryStore();
+    const opts = { store, useMemoryPlaybookStore: true };
+
+    const first = await runInterviewToBlueprint(store, AS_CLEANING_ID);
+    const restarted = await startClientInterview(
+      { clientId: AS_CLEANING_ID, restart: true },
+      opts
+    );
+    let turnB = restarted;
+    for (const answer of AS_ANSWERS) {
+      turnB = await postInterviewMessage(restarted.interviewId, answer, opts);
+    }
+    assert.ok(turnB.blueprint);
+    assert.ok(turnB.executiveSummary);
+
+    // Corrupt Interview B pointer to superseded Blueprint A.
+    const rawB = await store.getSession(restarted.interviewId);
+    await store.updateSession(restarted.interviewId, {
+      interview_state: {
+        ...(rawB.interview_state || {}),
+        blueprintId: first.blueprint.id,
+        blueprintVersion: first.blueprint.version,
+      },
+    });
+
+    const recovered = await resolveClientOnboardingState(AS_CLEANING_ID, opts);
+    assert.equal(recovered.interviewId, restarted.interviewId);
+    assert.equal(recovered.blueprint.id, turnB.blueprint.id);
+    assert.equal(String(recovered.blueprint.status).toLowerCase(), 'in_review');
+
+    const detail = await getInterview(restarted.interviewId, opts);
+    assert.equal(detail.blueprint.id, turnB.blueprint.id);
+    assert.equal(String(detail.blueprint.status).toLowerCase(), 'in_review');
+
+    const healed = await store.getSession(restarted.interviewId);
+    assert.equal(
+      String(healed.interview_state.blueprintId),
+      String(turnB.blueprint.id)
+    );
 
     const current = await getClientBlueprint(AS_CLEANING_ID, opts);
     assert.equal(current.id, turnB.blueprint.id);
