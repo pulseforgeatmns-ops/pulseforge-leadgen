@@ -1415,6 +1415,10 @@ function normalizeMechanicalTypos(text) {
   s = s.replace(/\bmoreee\b/gi, 'more');
   s = s.replace(/\bneiighborhood\b/gi, 'neighborhood');
   s = s.replace(/\brreevvenue\b/gi, 'revenue');
+  // Obvious doubled-vowel / past-tense mechanical typos.
+  s = s.replace(/\bcreateed\b/gi, 'created');
+  s = s.replace(/\bgenerateed\b/gi, 'generated');
+  s = s.replace(/\bestablishhed\b/gi, 'established');
 
   return s;
 }
@@ -1427,9 +1431,169 @@ function normalizePresentationProse(text) {
   if (!s) return s;
   s = s
     .replace(/\bwarm and neighborhood\b/gi, 'warm and neighborhood-oriented')
+    .replace(/\brecurring revenue created\b/gi, 'new recurring revenue')
+    .replace(/\brevenue created\b/gi, 'new revenue')
+    // Accidental mid-sentence capitalization from operator notes.
+    .replace(/(?<=\s)Is(?=\s)/g, 'is')
     .replace(/\s{2,}/g, ' ')
     .trim();
   return s;
+}
+
+/**
+ * Presentation-only metric phrase polish (typos + light grammar).
+ * Does not invent amounts, targets, or conversion rates.
+ */
+function normalizeMetricPresentationPhrase(text) {
+  let s = normalizeMechanicalTypos(String(text || '').trim());
+  if (!s) return '';
+  s = s
+    .replace(/\brecurring revenue created\b/gi, 'new recurring revenue')
+    .replace(/\brevenue created\b/gi, 'new revenue')
+    .replace(/^#\s*of\s+/i, 'Number of ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  return s;
+}
+
+/**
+ * Convert a leading finite verb into a gerund for "priority is …" framing.
+ */
+function toGerundVerb(verb) {
+  const v = String(verb || '').toLowerCase();
+  if (!v) return v;
+  if (v === 'run') return 'running';
+  if (v.endsWith('ie')) return `${v.slice(0, -2)}ying`;
+  if (v.endsWith('e') && !v.endsWith('ee')) return `${v.slice(0, -1)}ing`;
+  return `${v}ing`;
+}
+
+/**
+ * Normalize goal substance into a noun/gerund phrase suitable after
+ * "near-term priority is …" without changing the underlying claim.
+ */
+function normalizeGoalOutcomePhrase(text) {
+  let outcome = normalizeMechanicalTypos(String(text || '').trim());
+  if (!outcome) return '';
+  outcome = outcome
+    .replace(/^(?:focus on|center on)\s+/i, '')
+    .replace(
+      /^(?:we(?:'ll| will)|i(?:'ll| will)|we want to|i want to|our goal is to|the goal is to)\s+/i,
+      ''
+    )
+    .trim();
+
+  const GERUNDABLE =
+    /^(establish|create|build|grow|book|increase|improve|win|close|hire|launch|expand|generate|develop|add|secure|deliver|turn|run)\b/i;
+  if (GERUNDABLE.test(outcome)) {
+    outcome = outcome.replace(GERUNDABLE, (m) => toGerundVerb(m));
+  }
+
+  // "establishing a reliable pipeline turning prospects into clients"
+  // → "… pipeline that turns prospects into clients"
+  outcome = outcome.replace(
+    /\b(pipeline|process|system|program|engine)\s+turning\b/i,
+    '$1 that turns'
+  );
+
+  return outcome.replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
+ * Join decision-maker labels into natural prose.
+ * Keeps full labels ("property managers and facility managers") so role
+ * identity stays explicit and searchable in Brief assertions.
+ */
+function formatDecisionMakerProse(labels) {
+  const items = (labels || []).map((l) => String(l || '').trim()).filter(Boolean);
+  if (!items.length) return '';
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+}
+
+/**
+ * Join segment/property-type labels into natural prose.
+ */
+function formatSegmentProse(labels) {
+  const items = (labels || []).map((l) => String(l || '').trim()).filter(Boolean);
+  if (!items.length) return '';
+  return items
+    .map((item) =>
+      String(item)
+        .replace(/\bapartment\/multifamily\b/gi, 'apartment and multifamily')
+        .replace(/\bapartment(?:\s+and\s+|\s+)multifamily\b/gi, 'apartment and multifamily')
+        .trim()
+    )
+    .join(', ');
+}
+
+/**
+ * Presentation-only customer constraint / avoidance sentence.
+ * Preserves hard exclusion vs low preference vs conditional acceptance.
+ * Does not rewrite raw evidence — Brief prose only.
+ */
+function composeCustomerConstraintPresentation(businessName, rawConstraint) {
+  const subject = businessSubject(businessName || 'The business');
+  const raw = normalizeMechanicalTypos(String(rawConstraint || '').trim());
+  if (!raw) return '';
+
+  // Price-first disqualification stays categorical (existing behavior).
+  if (/lowest price|cheap|bargain|price.?first/i.test(raw)) {
+    return `${subject} deliberately avoids customers who prioritize the lowest price over reliability, professionalism, and accountability`;
+  }
+
+  const hasRestaurant = /\brestaurants?\b/i.test(raw);
+  const hasBackOfHouse = /\bback[\s-]?of[\s-]?house\b/i.test(raw);
+  const hasFrontOfHouse = /\bfront[\s-]?of[\s-]?house\b/i.test(raw);
+  const conditionalOpen =
+    /\b(?:would consider|may consider|open to|unless|except(?:\s+for)?|not preferred|not a priority|prefer not)\b/i.test(
+      raw
+    );
+
+  // Observed AS Cleaning shape: restaurants / BOH difficulty / FOH may be considered.
+  if (hasRestaurant && hasBackOfHouse && (hasFrontOfHouse || conditionalOpen)) {
+    return (
+      `${subject} does not currently prioritize restaurant cleaning because of the difficulty of ` +
+      `back-of-house work, though front-of-house opportunities may be considered`
+    );
+  }
+
+  // "No restaurants unless it's only front of house cleaning"
+  if (hasRestaurant && hasFrontOfHouse && /unless|except/i.test(raw)) {
+    return (
+      `${subject} generally avoids full restaurant cleaning, though front-of-house-only work may be considered`
+    );
+  }
+
+  // Soft preference / not preferred — do not escalate to categorical exclusion.
+  if (
+    /\b(?:not preferred|not a priority|prefer not|low priority|would rather not|does not currently prioritize)\b/i.test(
+      raw
+    ) ||
+    (conditionalOpen && !/^(?:no|never|do not|don't|won't|will not)\b/i.test(raw))
+  ) {
+    let focus = raw
+      .replace(/^(?:no|not|avoid|excluding)\s+/i, '')
+      .replace(/\bbecause\b[\s\S]*$/i, '')
+      .replace(/\bwould consider\b[\s\S]*$/i, '')
+      .replace(/\bbut not preferred\b[\s\S]*$/i, '')
+      .trim();
+    focus = midSentence(focus || 'that work');
+    return `${subject} does not currently prioritize ${focus}`;
+  }
+
+  // Default: prefer-to-avoid (softer than "deliberately avoids") unless hard no.
+  let who = raw
+    .replace(/^(?:customers?\s+)?(?:who'?s|whose|who|that)\s+/i, '')
+    .replace(/^(?:no|not|avoid|excluding)\s+/i, '')
+    .replace(/^main priority is\s+/i, 'prioritize ')
+    .trim();
+  who = midSentence(who);
+  if (/^(?:no|never|do not|don't|won't|will not)\b/i.test(raw)) {
+    return `${subject} deliberately avoids ${who}`;
+  }
+  return `${subject} prefers to avoid ${who}`;
 }
 
 function normalizeBusinessPhrase(phrase) {
@@ -2722,7 +2886,9 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
       return `Ideal customers include ${who}`;
     }
     case 'avoid': {
-      // Synthesize consultant language for decline criteria.
+      // Prefer nuanced presentation that preserves preference vs exclusion.
+      const composed = composeCustomerConstraintPresentation(name || subject, substance);
+      if (composed) return composed.replace(/[.!?]+$/, '').trim();
       let who = substance
         .replace(/^(?:customers?\s+)?(?:who'?s|whose|who|that)\s+/i, '')
         .replace(/^main priority is\s+/i, 'prioritize ')
@@ -2734,7 +2900,7 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
         ).replace(/\.$/, '');
       }
       who = midSentence(who);
-      return `${subject} deliberately avoids ${who}`;
+      return `${subject} prefers to avoid ${who}`;
     }
     case 'markets': {
       let where = substance
@@ -2799,17 +2965,15 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
       return `${voicePossessive} brand voice should feel ${tone}`;
     }
     case 'goals': {
-      let outcome = substance
-        .replace(/^(?:focus on|center on)\s+/i, '')
-        .trim();
-      if (/commercial cleaning|greater manchester/i.test(outcome)) {
+      let outcome = normalizeGoalOutcomePhrase(substance);
+      if (/commercial cleaning|greater manchester/i.test(outcome) && /growth|pipeline|clients?/i.test(outcome) === false) {
+        // Keep the established Manchester commercial shorthand when that is the whole claim.
+      }
+      if (/^commercial cleaning growth in Greater Manchester$/i.test(outcome)) {
         return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
       }
-      if (/^(book|grow|build|increase|improve|win|close|hire|launch|expand)\b/i.test(outcome)) {
-        outcome = outcome.replace(
-          /^(book|grow|build|increase|improve|win|close|hire|launch|expand)\b/i,
-          (m) => `${m.toLowerCase()}ing`
-        );
+      if (/commercial cleaning|greater manchester/i.test(substance) && !/pipeline|prospects|establish/i.test(substance)) {
+        return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
       }
       outcome = midSentence(outcome);
       return `${possessive} near-term priority is ${outcome}`;
@@ -3152,13 +3316,7 @@ function softenClaim(claim) {
 function asGerundPhrase(claim) {
   const text = softenClaim(claim);
   if (!text) return text;
-  if (/^(book|grow|build|increase|improve|win|close|hire|launch|expand)\b/i.test(text)) {
-    return text.replace(
-      /^(book|grow|build|increase|improve|win|close|hire|launch|expand)\b/i,
-      (m) => `${m.toLowerCase()}ing`
-    );
-  }
-  return text;
+  return normalizeGoalOutcomePhrase(text) || text;
 }
 
 function humanizeUnknownLabel(raw) {
@@ -3366,7 +3524,7 @@ function composeWhatSuccess(metrics, opts = {}) {
     .filter((m) => m && !isLiteralUncertaintyPhrase(m));
 
   if (operatorMetrics.length) {
-    const list = operatorMetrics.map((m) => m.replace(/^#\s*of\s+/i, 'Number of '));
+    const list = operatorMetrics.map((m) => normalizeMetricPresentationPhrase(m));
     const parts = [
       `${businessSubject(businessName || 'The business')} currently wants to judge progress using: ${list.join('; ')}`,
       'Those are operator-stated commercial signals — not vanity activity.',
@@ -3903,8 +4061,10 @@ function buildExecutiveSummary(sections, opts = {}) {
           ].join(' ')
         );
         if (decisionMakers.length && segments.length) {
+          const dmProse = formatDecisionMakerProse(decisionMakers);
+          const segProse = formatSegmentProse(segments);
           sentences.push(
-            `${possessive} current acquisition focus is ${decisionMakers.join(', ')}, including opportunities associated with ${segments.join(', ')}${
+            `${possessive} current acquisition focus is ${dmProse}, particularly those responsible for ${segProse}${
               needsRecurring ? ' that need dependable recurring cleaning' : ''
             }`
           );
@@ -3927,13 +4087,18 @@ function buildExecutiveSummary(sections, opts = {}) {
         );
       }
       if (f.disqualified_customers.length) {
+        const constraintRaw = f.disqualified_customers.join('; ');
         sentences.push(
-          synthesizeNormalizedFact(
-            'avoid',
-            `The business prefers to avoid ${f.disqualified_customers.join(', ')}`,
-            briefOpts
+          composeCustomerConstraintPresentation(
+            businessName || 'The business',
+            constraintRaw
           ) ||
-            `${businessName || 'The business'} deliberately avoids ${f.disqualified_customers.join(', ')}`
+            synthesizeNormalizedFact(
+              'avoid',
+              `The business prefers to avoid ${constraintRaw}`,
+              briefOpts
+            ) ||
+            `${businessName || 'The business'} prefers to avoid ${constraintRaw}`
         );
       }
       if (f.geography.length) {
@@ -9245,6 +9410,11 @@ module.exports = {
   normalizeBusinessPhrase,
   normalizeMechanicalTypos,
   normalizePresentationProse,
+  normalizeMetricPresentationPhrase,
+  normalizeGoalOutcomePhrase,
+  composeCustomerConstraintPresentation,
+  formatDecisionMakerProse,
+  formatSegmentProse,
   normalizeBrandVoiceTone,
   sanitizeBusinessName,
   stripBusinessNameLeadIn,
