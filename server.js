@@ -40,6 +40,7 @@ const { ensureScoutLockTable } = require('./utils/scoutLock');
 const { ensureCallDispositionSchema } = require('./calBatchAgent');
 const { ensureMiraSchema } = require('./utils/miraSchema');
 const { ensureLifecycleSchema } = require('./utils/lifecycleSchema');
+const { ensureAoFieldSchema } = require('./utils/aoFieldSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
@@ -67,6 +68,7 @@ ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
+ensureAoFieldSchema().catch(err => console.error('[ao] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
@@ -125,6 +127,12 @@ app.use((req, res, next) => {
     return requireAuth(req, res, err => {
       if (err) return next(err);
       return requireRole('sales')(req, res, next);
+    });
+  }
+  if (req.path === '/public/ao-dashboard.html' || req.path === '/ao-dashboard.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'ao')(req, res, next);
     });
   }
   return next();
@@ -208,6 +216,7 @@ app.use('/api/setter', require('./routes/setter'));
 app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
 app.use('/sales', require('./routes/sales'));
+app.use('/ao', require('./routes/ao'));
 // Public marketing funnel — no session auth (see routes/scorecard.js)
 app.use('/', require('./routes/scorecard'));
 
@@ -354,6 +363,7 @@ app.post('/login', async (req, res) => {
     if (user.role === 'setter') return res.redirect('/setter');
     if (user.role === 'closer') return res.redirect('/closer');
     if (user.role === 'sales') return res.redirect('/sales');
+    if (user.role === 'ao') return res.redirect('/ao');
     return res.redirect('/dashboard');
   }
 
