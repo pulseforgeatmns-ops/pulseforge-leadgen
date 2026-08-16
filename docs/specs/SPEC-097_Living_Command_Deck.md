@@ -45,6 +45,17 @@ Spatial overview → domain drawer → mission/workspace/detail surfaces.
 - Reduced motion: ordering, labels, illumination without animation
 - Mobile: prioritized card/list representation (< 640px)
 
+## SPEC-097C — Max Presence Refinement
+
+Max is intelligence, not a domain card. The spatial algorithm and domain positions are unchanged.
+
+- **Geometry:** restrained horizontal capsule (~190–210 × 120–135, `aspect-ratio: 200 / 128`)
+- **Perimeter:** thin gold edge on Max; soft elliptical illumination outside; no second ring or rectangular glow
+- **Surface:** typography fills the capsule; no icons, avatars, gradients, or widget chrome
+- **Field:** low-opacity elliptical ambient field with extremely slow breathing
+- **Motion:** field intensifies only when Max's judgment changes (~1000ms); rest state has no traveling pulses
+- **Reduced motion:** field and judgment animations remain disabled
+
 ## Deferred (Phase 3)
 - Operator reprioritization through Max with visible spatial response
 - Durable cross-session conversation selector (workspace sessions remain in-process)

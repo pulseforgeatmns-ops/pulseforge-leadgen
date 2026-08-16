@@ -118,12 +118,10 @@ describe('SPEC-097A Intelligence Field UI contracts', () => {
 });
 
 describe('SPEC-097B Spatial Composition Polish', () => {
-  it('builds Max halo from oval rings rather than a rectangular inset glow', () => {
-    assert.match(html, /cd-max-halo-ring-inner/);
-    assert.match(html, /cd-max-halo-ring-mid/);
-    assert.match(html, /cd-max-halo-ring-outer/);
-    assert.match(css, /\.cd-max-halo-ring\s*\{[^}]*border-radius:\s*50%/s);
-    assert.match(css, /radial-gradient\(\s*ellipse at 50% 50%/);
+  it('keeps Max illumination elliptical and free of a rectangular inset glow', () => {
+    assert.match(html, /cd-max-illumination/);
+    assert.match(html, /cd-max-bloom/);
+    assert.match(css, /radial-gradient\(\s*ellipse/);
     assert.doesNotMatch(css, /\.cd-spatial-max-halo\s*\{[^}]*inset:\s*-18px/s);
     assert.doesNotMatch(css, /\.cd-spatial-max-halo\s*\{[^}]*radial-gradient\(\s*circle/s);
   });
@@ -159,17 +157,70 @@ describe('SPEC-097B Spatial Composition Polish', () => {
     assert.match(spatialJs, /cd-spatial-node-placing/);
   });
 
-  it('pulses a restrained Max-to-domain signal for sustained urgent state', () => {
-    assert.match(spatialJs, /SIGNAL_MS = 8000/);
-    assert.match(spatialJs, /function syncSignalLoop/);
-    assert.match(spatialJs, /function travelSignal/);
-    assert.match(spatialJs, /function pulseMaxHalo/);
+  it('responds to Max judgment rather than looping rest-state signals', () => {
+    assert.match(spatialJs, /JUDGMENT_MS = 1000/);
+    assert.match(spatialJs, /function respondToJudgment/);
+    assert.match(spatialJs, /function emphasizeConnection/);
+    assert.match(spatialJs, /function maybeRespondToJudgment/);
     assert.match(css, /cd-max-signaling/);
+    assert.match(css, /cd-field-responding/);
+    assert.match(css, /cd-intel-conn-judgment/);
+    assert.doesNotMatch(spatialJs, /SIGNAL_MS/);
+    assert.doesNotMatch(spatialJs, /function travelSignal/);
+    assert.doesNotMatch(spatialJs, /function syncSignalLoop/);
   });
 
-  it('keeps halo and signal static under reduced motion', () => {
+  it('keeps halo and field static under reduced motion', () => {
     assert.match(css, /prefers-reduced-motion: reduce/);
-    assert.match(css, /cd-max-halo-ring-outer/);
-    assert.match(spatialJs, /if \(reducedMotion\(\) \|\| listView\) return/);
+    assert.match(css, /cd-max-illumination/);
+    assert.match(spatialJs, /if \(reducedMotion\(\)\)/);
+    assert.match(spatialJs, /if \(listView\) return/);
+  });
+});
+
+describe('SPEC-097C Max Presence Refinement', () => {
+  it('uses a restrained horizontal Max capsule instead of a tall oval', () => {
+    assert.match(css, /\.cd-spatial-max\s*\{[^}]*width:\s*clamp\(190px/s);
+    assert.match(css, /\.cd-spatial-max-core\s*\{[^}]*aspect-ratio:\s*200\s*\/\s*128/s);
+    assert.match(css, /\.cd-spatial-max-core\s*\{[^}]*border-radius:\s*50%/s);
+    assert.doesNotMatch(css, /\.cd-spatial-max-core\s*\{[^}]*aspect-ratio:\s*5\s*\/\s*6/s);
+    assert.doesNotMatch(css, /\.cd-spatial-max\s*\{[^}]*width:\s*min\(148px/s);
+  });
+
+  it('gives Max a thin gold perimeter and diffuse illumination without a second ring', () => {
+    assert.match(css, /\.cd-spatial-max-core\s*\{[^}]*border:\s*1px solid/s);
+    assert.match(html, /cd-max-illumination/);
+    assert.match(html, /cd-max-bloom/);
+    assert.doesNotMatch(html, /cd-max-halo-ring/);
+    assert.doesNotMatch(css, /cd-max-halo-ring/);
+    assert.doesNotMatch(css, /\.cd-spatial-max-core\s*\{[^}]*border:\s*1\.5px/s);
+    assert.doesNotMatch(css, /\.cd-spatial-max-halo\s*\{[^}]*inset:/s);
+  });
+
+  it('does not style Max as a domain card', () => {
+    const coreMatch = css.match(/\.cd-spatial-max-core\s*\{[^}]+\}/s);
+    assert.ok(coreMatch);
+    assert.doesNotMatch(coreMatch[0], /backdrop-filter/);
+    assert.doesNotMatch(coreMatch[0], /var\(--pf-bg-card\)/);
+    assert.match(coreMatch[0], /background:\s*var\(--pf-bg\)/);
+    assert.match(css, /\.cd-spatial-node\s*\{[^}]*border-radius:\s*10px/s);
+  });
+
+  it('keeps the ambient field elliptical, slow, and judgment-timed', () => {
+    assert.match(css, /\.cd-intel-field-waves\s*\{[^}]*aspect-ratio:\s*200\s*\/\s*128/s);
+    assert.match(css, /cd-intel-breathe 22s/);
+    assert.match(css, /cd-max-field-breathe 18s/);
+    assert.match(css, /--cd-judgment-ms:\s*1000ms/);
+    assert.match(css, /cd-field-intensify/);
+    assert.doesNotMatch(css, /cd-intel-signal-travel/);
+  });
+
+  it('preserves 097B spatial band architecture', () => {
+    assert.match(spatialJs, /monitored:\s*280/);
+    assert.match(spatialJs, /normal:\s*235/);
+    assert.match(spatialJs, /elevated:\s*178/);
+    assert.match(spatialJs, /urgent:\s*142/);
+    assert.match(spatialJs, /function synthesizeMaxCopy/);
+    assert.match(spatialJs, /Watching \$\{areaCount\}/);
   });
 });
