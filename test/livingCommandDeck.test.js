@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * SPEC-097 / SPEC-097A / SPEC-097B / SPEC-097C Living Command Deck — UI contract regression tests.
+ * SPEC-097 / SPEC-097A / SPEC-097B / SPEC-097C / SPEC-097D Living Command Deck — UI contract regression tests.
  */
 
 const { describe, it } = require('node:test');
@@ -130,7 +130,7 @@ describe('SPEC-097B Spatial Composition Polish', () => {
     assert.match(spatialJs, /monitored:\s*280/);
     assert.match(spatialJs, /normal:\s*235/);
     assert.match(spatialJs, /elevated:\s*178/);
-    assert.match(spatialJs, /urgent:\s*142/);
+    assert.match(spatialJs, /urgent:\s*116/);
     assert.match(spatialJs, /computeFieldLayout/);
     assert.match(spatialJs, /PROTECTED_GAP_PX/);
     assert.match(css, /--cd-orbit-radius:\s*min\(48vw, 360px\)/);
@@ -219,8 +219,67 @@ describe('SPEC-097C Max Presence Refinement', () => {
     assert.match(spatialJs, /monitored:\s*280/);
     assert.match(spatialJs, /normal:\s*235/);
     assert.match(spatialJs, /elevated:\s*178/);
-    assert.match(spatialJs, /urgent:\s*142/);
+    assert.match(spatialJs, /urgent:\s*116/);
     assert.match(spatialJs, /function synthesizeMaxCopy/);
     assert.match(spatialJs, /Watching \$\{areaCount\}/);
+  });
+});
+
+describe('SPEC-097D Final Spatial Calibration', () => {
+  it('strengthens Max presence through contrast, not size', () => {
+    assert.match(css, /\.cd-spatial-max\s*\{[^}]*width:\s*clamp\(190px/s);
+    assert.match(css, /\.cd-spatial-max-core\s*\{[^}]*aspect-ratio:\s*200\s*\/\s*128/s);
+    assert.match(css, /\.cd-spatial-max-core\s*\{[^}]*border:\s*1px solid color-mix\(in srgb, var\(--pf-gold\) 58%/s);
+    assert.match(css, /\.cd-spatial-max-label\s*\{[^}]*font-weight:\s*500/s);
+    assert.match(css, /\.cd-spatial-max-headline\s*\{[^}]*font-weight:\s*500/s);
+    assert.match(css, /rgba\(201, 162, 39, 0\.18\)/);
+    assert.doesNotMatch(css, /\.cd-spatial-max\s*\{[^}]*width:\s*clamp\(220px/s);
+    assert.doesNotMatch(css, /\.cd-spatial-max-core\s*\{[^}]*border:\s*1\.5px/s);
+  });
+
+  it('makes Max→domain connections priority-aware and perceptible at rest', () => {
+    assert.match(css, /\.cd-intel-conn-monitored/);
+    assert.match(css, /\.cd-intel-conn-normal/);
+    assert.match(css, /\.cd-intel-conn-elevated/);
+    assert.match(css, /\.cd-intel-conn-urgent/);
+    assert.match(spatialJs, /cd-intel-conn-\$\{priority\}/);
+    assert.match(css, /stroke:\s*rgba\(154, 123, 45, 0\.12\)/);
+    assert.match(css, /stroke:\s*rgba\(201, 162, 39, 0\.42\)/);
+  });
+
+  it('pulls the urgent band 20–30px closer to Max without changing band order', () => {
+    assert.match(spatialJs, /monitored:\s*280/);
+    assert.match(spatialJs, /normal:\s*235/);
+    assert.match(spatialJs, /elevated:\s*178/);
+    assert.match(spatialJs, /urgent:\s*116/);
+    assert.match(css, /--cd-band-urgent:\s*116px/);
+    assert.match(spatialJs, /minUrgent = Math\.min\(/);
+    assert.doesNotMatch(spatialJs, /urgent:\s*142/);
+    assert.doesNotMatch(css, /--cd-band-urgent:\s*142px/);
+  });
+
+  it('exposes a controlled priority-transition preview with Max-originated motion', () => {
+    assert.match(spatialJs, /function previewPriorityTransition/);
+    assert.match(spatialJs, /function scheduleCalibrationPreview/);
+    assert.match(spatialJs, /calibrateTransition/);
+    assert.match(spatialJs, /respondToJudgment/);
+    assert.match(spatialJs, /BY MAX/);
+    assert.match(spatialJs, /window\.SpatialDeck = \{[\s\S]*previewPriorityTransition/);
+  });
+
+  it('keeps judgment motion in the 700–1200ms band with ease-in-out, not spring', () => {
+    assert.match(css, /--cd-intel-transition:\s*900ms/);
+    assert.match(css, /--cd-judgment-ms:\s*1000ms/);
+    assert.match(css, /--cd-intel-ease:\s*cubic-bezier\(0\.4, 0, 0\.2, 1\)/);
+    assert.match(spatialJs, /JUDGMENT_MS = 1000/);
+    assert.match(spatialJs, /ELEVATION_MS = 900/);
+    assert.doesNotMatch(css, /--cd-intel-ease:\s*cubic-bezier\(0\.22, 1, 0\.36, 1\)/);
+  });
+
+  it('preserves reduced-motion support for the same state change', () => {
+    assert.match(css, /prefers-reduced-motion: reduce/);
+    assert.match(spatialJs, /if \(reducedMotion\(\)\)/);
+    assert.match(spatialJs, /options\.immediate \|\| reducedMotion\(\)/);
+    assert.match(css, /cd-spatial-node-elevating \.cd-spatial-node-badge/);
   });
 });
