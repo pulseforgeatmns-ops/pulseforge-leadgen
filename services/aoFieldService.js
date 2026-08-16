@@ -1,6 +1,7 @@
 const axios = require('axios');
 const pool = require('../db');
 const { buildSuggestedMessage, buildDirectMailOpening, normalizeNextAction, parseContactRole, formatDecisionMakerStatus } = require('../utils/aoMessageTemplates');
+const { normalizeDueDate } = require('../utils/aoQueueFormat');
 
 function mapLead(row) {
   return {
@@ -36,7 +37,7 @@ function mapTask(row) {
     lead_id: row.lead_id,
     contact_id: row.contact_id,
     ao_owner_id: row.ao_owner_id,
-    due_date: row.due_date,
+    due_date: normalizeDueDate(row.due_date),
     status: row.status,
     priority: row.priority,
     next_action: row.next_action,

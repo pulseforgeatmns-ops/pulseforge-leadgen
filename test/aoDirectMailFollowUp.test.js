@@ -51,6 +51,18 @@ test('aoFieldService exports direct mail helper names', () => {
   assert.match(source, /endOfBusinessWeekISO/);
 });
 
+test('formatDueDateLabel handles DATE-only and ISO timestamp values', () => {
+  const { formatDueDateLabel, normalizeDueDate } = require('../utils/aoQueueFormat');
+  assert.equal(normalizeDueDate('2026-08-21'), '2026-08-21');
+  assert.equal(normalizeDueDate('2026-08-21T00:00:00.000Z'), '2026-08-21');
+  assert.equal(normalizeDueDate(new Date('2026-08-21T12:00:00.000Z')), '2026-08-21');
+  const label = formatDueDateLabel('2026-08-21T00:00:00.000Z');
+  assert.notEqual(label, '');
+  assert.notEqual(label, 'Invalid Date');
+  assert.match(label, /Aug/i);
+  assert.match(label, /21/);
+});
+
 test('aoFieldSchema defines warm priority and direct_mail_follow_up mode', () => {
   const fs = require('fs');
   const source = fs.readFileSync(require.resolve('../utils/aoFieldSchema.js'), 'utf8');
