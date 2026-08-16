@@ -6,8 +6,12 @@
  */
 
 const { evaluateSpecialistResult } = require('../specialistDelegation/Evaluator');
-const { asText, clone, isTimely } = require('./Types');
+const { asText, clone, isTimely, COVERAGE_BANDS } = require('./Types');
 const { deriveStateFromEvaluation } = require('./AcquisitionState');
+const {
+  investigationFromResult,
+  coverageBand,
+} = require('./InvestigationProvenance');
 
 function opportunitiesFromResult(result) {
   if (!result) return [];
@@ -97,6 +101,14 @@ function evaluateScoutResult(input = {}) {
 
   const opportunities = opportunitiesFromResult(result);
   const claims = classifyClaims(result, opportunities);
+  const investigation = investigationFromResult(result);
+  const coverageConfidence =
+    investigation && investigation.coverageConfidence != null
+      ? Number(investigation.coverageConfidence)
+      : result.payload && result.payload.coverageConfidence != null
+        ? Number(result.payload.coverageConfidence)
+        : null;
+  const coverage = coverageConfidence != null ? coverageBand(coverageConfidence) : COVERAGE_BANDS.WEAK;
   const timely = opportunities.filter((o) =>
     (o.signals || []).some(
       (s) =>
@@ -134,6 +146,17 @@ function evaluateScoutResult(input = {}) {
       }
     : null;
 
+  const marketAbsenceJustified =
+    opportunities.length === 0 && coverage === COVERAGE_BANDS.STRONG;
+  const comparativeClaimJustified =
+    opportunities.length > 0 && coverage === COVERAGE_BANDS.STRONG;
+  const conclusionTrust =
+    coverage === COVERAGE_BANDS.STRONG
+      ? 'high'
+      : coverage === COVERAGE_BANDS.MODERATE
+        ? 'moderate'
+        : 'low';
+
   const explanation = buildMaxExplanation({
     delegation,
     result,
@@ -141,6 +164,11 @@ function evaluateScoutResult(input = {}) {
     timely,
     opportunities,
     claims,
+    investigation,
+    coverage,
+    coverageConfidence,
+    marketAbsenceJustified,
+    comparativeClaimJustified,
   });
 
   const evaluation = {
@@ -153,6 +181,11 @@ function evaluateScoutResult(input = {}) {
     unresolvedClaims: claims.unresolvedClaims,
     acceptedAsGroundTruth: false,
     explanation,
+    coverageConfidence,
+    coverageBand: coverage,
+    conclusionTrust,
+    marketAbsenceJustified,
+    comparativeClaimJustified,
     payload: {
       ...(base.payload || {}),
       materiality,
@@ -162,6 +195,12 @@ function evaluateScoutResult(input = {}) {
       opportunityCount: opportunities.length,
       timelyCount: timely.length,
       newTimelyCount: newTimely.length,
+      coverageConfidence,
+      coverageBand: coverage,
+      conclusionTrust,
+      marketAbsenceJustified,
+      comparativeClaimJustified,
+      investigation,
     },
   };
 
@@ -169,23 +208,59 @@ function evaluateScoutResult(input = {}) {
 }
 
 function buildMaxExplanation(input) {
-  const { delegation, result, materiality, timely, opportunities, claims } = input;
+  const {
+    delegation,
+    result,
+    materiality,
+    timely,
+    opportunities,
+    claims,
+    investigation,
+    coverage,
+    marketAbsenceJustified,
+    comparativeClaimJustified,
+  } = input;
   const unknownLine =
     (claims.unresolvedClaims[0] && claims.unresolvedClaims[0].text) ||
     (result.uncertainties && result.uncertainties[0]) ||
     null;
+  const funnel = investigation && investigation.coverage ? investigation.coverage : null;
+  const evaluated = funnel ? funnel.candidatesEvaluated : null;
+  const basicFit = funnel ? funnel.basicFitCount : null;
 
   if (result.status === 'failed' || result.status === 'blocked') {
+    const preserved = funnel
+      ? ` Scout had already discovered ${funnel.candidatesDiscovered} and evaluated ${funnel.candidatesEvaluated} before the failure.`
+      : ' Collected evidence was preserved.';
     return (
       `I could not treat this Scout run as a change in Acquisition. ` +
-      `${result.summary || ''} Collected evidence was preserved.`
+      `${result.summary || ''}${preserved}`
     );
   }
 
-  if (materiality === 'immaterial' && opportunities.length === 0) {
+  if (opportunities.length === 0) {
+    if (coverage === COVERAGE_BANDS.STRONG || marketAbsenceJustified) {
+      return (
+        `Scout investigated the current target segment thoroughly and didn't find any opportunities ` +
+        `with enough current evidence for me to recommend pursuing.` +
+        (evaluated != null
+          ? ` He evaluated ${evaluated} business${evaluated === 1 ? '' : 'es'} across the current commercial acquisition criteria.`
+          : '') +
+        (basicFit
+          ? ` ${basicFit} had reasonable business fit, but none had enough current timing evidence to qualify as a supported near-term opportunity.`
+          : '') +
+        ` I'm reasonably confident there isn't an obvious near-term pocket of demand under those criteria. ` +
+        `I don't have enough evidence to elevate Acquisition.`
+      );
+    }
     return (
-      `Scout completed "${delegation.objective}" and found no sufficiently supported opportunities. ` +
-      `That is useful intelligence. I am not elevating Acquisition.`
+      `Scout didn't find a sufficiently supported opportunity, but I don't consider that strong evidence that none exist. ` +
+      (evaluated != null
+        ? `He evaluated ${evaluated} compan${evaluated === 1 ? 'y' : 'ies'}. `
+        : '') +
+      `Coverage was ${coverage || 'limited'}, particularly around current timing signals, ` +
+      `so I'd treat this as an incomplete investigation rather than a negative market conclusion. ` +
+      `I am not elevating Acquisition.`
     );
   }
 
@@ -198,11 +273,16 @@ function buildMaxExplanation(input) {
     );
   }
 
+  const completeness = comparativeClaimJustified
+    ? ` Coverage was strong enough that these are a meaningful read of the current search space.`
+    : ` These appear promising, but the investigation was not broad enough for me to claim they are the best or only opportunities in the market.`;
+
   return (
     `I elevated Acquisition because Scout identified ${opportunities.length} ` +
     `compan${opportunities.length === 1 ? 'y' : 'ies'} matching the current objective. ` +
     `${timely.length} show recent portfolio-growth or expansion signals. ` +
     `That materially improved the near-term opportunity set.` +
+    completeness +
     (unknownLine
       ? ` ${unknownLine}`
       : ` We still don't have direct evidence that any are currently replacing a cleaning vendor.`)

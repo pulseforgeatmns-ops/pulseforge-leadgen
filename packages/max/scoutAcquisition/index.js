@@ -15,6 +15,7 @@ const {
   looksLikeAcquisitionQuestion,
   looksLikeExplainPriority,
   looksLikeFollowUp,
+  looksLikeInvestigationInspection,
   looksLikeFindMoreLike,
 } = require('./NeedAssessment');
 const { retrieveExistingIntelligence, loadRepository } = require('./ExistingIntelligence');
@@ -38,7 +39,14 @@ const {
 const {
   formatAcquisitionExplanation,
   formatOpportunityAnswer,
+  formatInvestigationAnswer,
 } = require('./Explainability');
+const {
+  investigationFromResult,
+  classifyInspectionPresentation,
+  toBusinessEvidenceRefs,
+  buildSystemProvenance,
+} = require('./InvestigationProvenance');
 const specialistDelegation = require('../specialistDelegation');
 
 function defaultDelegationService(opts = {}) {
@@ -163,16 +171,27 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
     };
   }
 
-  if (!need.needed && (need.kind === 'followup' || need.kind === 'reuse')) {
+  if (!need.needed && (need.kind === 'followup' || need.kind === 'reuse' || need.kind === 'inspect')) {
     const opportunities =
       (priorState && priorState.opportunities) ||
       opportunitiesFromResult(need.reuse) ||
       [];
-    const prose = looksLikeFollowUp(input.question)
-      ? formatOpportunityAnswer({ question: input.question, opportunities })
-      : (need.reuse && need.reuse.summary) ||
-        (priorState && priorState.summary) ||
-        'Current acquisition intelligence is already sufficient.';
+    const investigation =
+      (priorState && priorState.investigation) ||
+      investigationFromResult(need.reuse);
+    const prose = looksLikeInvestigationInspection(input.question)
+      ? formatInvestigationAnswer({
+          question: input.question,
+          investigation,
+          state: priorState,
+          result: need.reuse,
+          evaluation: priorState,
+        })
+      : looksLikeFollowUp(input.question)
+        ? formatOpportunityAnswer({ question: input.question, opportunities })
+        : (need.reuse && need.reuse.summary) ||
+          (priorState && priorState.summary) ||
+          'Current acquisition intelligence is already sufficient.';
     return {
       delegated: false,
       kind: need.kind,
@@ -180,6 +199,7 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
       prose,
       state: priorState,
       reuse: need.reuse,
+      investigation,
       outboundInvoked: [],
     };
   }
@@ -269,8 +289,12 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
     });
     if (evaluation.materialChange) {
       state = await aoStore.put(next);
-    } else if (!priorState) {
-      state = await aoStore.put({ ...next, priorityImpact: null, materiality: evaluation.materiality });
+    } else {
+      state = await aoStore.put({
+        ...next,
+        priorityImpact: priorState ? priorState.priorityImpact : null,
+        materiality: evaluation.materiality,
+      });
     }
   }
 
@@ -304,6 +328,7 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
     priorityApply,
     prose: explained.narrative,
     trail: explained,
+    investigation: result.payload && result.payload.investigation,
     outboundInvoked: (result.payload && result.payload.outboundInvoked) || [],
     bounded,
   };
@@ -317,6 +342,7 @@ module.exports = {
   looksLikeAcquisitionQuestion,
   looksLikeExplainPriority,
   looksLikeFollowUp,
+  looksLikeInvestigationInspection,
   looksLikeFindMoreLike,
   retrieveExistingIntelligence,
   loadRepository,
@@ -333,5 +359,10 @@ module.exports = {
   shouldApplyPriority,
   formatAcquisitionExplanation,
   formatOpportunityAnswer,
+  formatInvestigationAnswer,
+  investigationFromResult,
+  classifyInspectionPresentation,
+  toBusinessEvidenceRefs,
+  buildSystemProvenance,
   runAcquisitionIntelligenceLoop,
 };

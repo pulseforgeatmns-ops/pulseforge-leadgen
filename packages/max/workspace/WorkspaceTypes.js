@@ -250,6 +250,21 @@ function buildResponseMetadata(partial = {}) {
   if (partial.prospectCount != null && Number.isFinite(Number(partial.prospectCount))) {
     meta.prospectCount = Number(partial.prospectCount);
   }
+  if (partial.investigation && typeof partial.investigation === 'object') {
+    meta.investigation = partial.investigation;
+  }
+  if (Array.isArray(partial.provenance)) {
+    meta.provenance = partial.provenance;
+  }
+  if (partial.coverageConfidence != null && Number.isFinite(Number(partial.coverageConfidence))) {
+    meta.coverageConfidence = Number(partial.coverageConfidence);
+  }
+  if (partial.coverageBand != null) meta.coverageBand = String(partial.coverageBand);
+  if (partial.delegationId != null) meta.delegationId = String(partial.delegationId);
+  if (partial.resultId != null) meta.resultId = String(partial.resultId);
+  if (partial.evaluationId != null) meta.evaluationId = String(partial.evaluationId);
+  if (partial.scoutDelegated === true) meta.scoutDelegated = true;
+  if (partial.acquisitionLoop === true) meta.acquisitionLoop = true;
   return meta;
 }
 
@@ -297,6 +312,11 @@ function buildStructuredResponse(input = {}) {
     relatedEntities: Array.isArray(input.relatedEntities)
       ? input.relatedEntities.map(normalizeEntityRef)
       : [],
+    investigation:
+      input.investigation && typeof input.investigation === 'object'
+        ? input.investigation
+        : null,
+    provenance: Array.isArray(input.provenance) ? input.provenance.slice() : [],
     metadata,
   };
 }
@@ -307,8 +327,9 @@ function normalizeEvidenceRef(ref) {
   }
   return {
     id: String(ref.id || 'unknown'),
-    summary: String(ref.summary || ref.statement || ref.title || ''),
+    summary: String(ref.summary || ref.label || ref.statement || ref.title || ''),
     sourceType: ref.sourceType != null ? String(ref.sourceType) : null,
+    sourceKind: ref.sourceKind != null ? String(ref.sourceKind) : null,
     kind: ref.kind != null ? String(ref.kind) : null,
     confidence:
       ref.confidence == null || !Number.isFinite(Number(ref.confidence))

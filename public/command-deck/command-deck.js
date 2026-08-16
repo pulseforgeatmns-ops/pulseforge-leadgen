@@ -4205,26 +4205,103 @@
     return div;
   }
 
+  function isSystemProvenanceLabel(value) {
+    const id = String(value || '').trim().toLowerCase();
+    if (!id) return false;
+    return (
+      /^(scout_acquisition|spec[_-]?\d+[a-z]?|specialist_delegation)$/.test(id) ||
+      /^(scout_|specialist_|capability_|delegation_|evaluation_|result_)/.test(id)
+    );
+  }
+
+  function isBusinessEvidenceItem(item) {
+    if (!item || typeof item !== 'object') return false;
+    if (isSystemProvenanceLabel(item.id) || isSystemProvenanceLabel(item.summary)) {
+      return false;
+    }
+    const sourceKind = String(item.sourceKind || item.sourceType || '').toLowerCase();
+    if (sourceKind === 'system' || sourceKind === 'provenance' || sourceKind === 'capability') {
+      return false;
+    }
+    return true;
+  }
+
   function renderEvidencePanel(structured) {
-    const supporting = structured.supportingEvidence || [];
-    const contradicting = structured.contradictingEvidence || [];
-    const contributors = structured.confidenceContributors || [];
+    const supporting = (structured.supportingEvidence || []).filter(isBusinessEvidenceItem);
+    const contradicting = (structured.contradictingEvidence || []).filter(
+      isBusinessEvidenceItem
+    );
+    const contributors = (structured.confidenceContributors || []).filter(
+      (c) => !isSystemProvenanceLabel(c)
+    );
+    const systemContributors = (structured.confidenceContributors || []).filter(
+      isSystemProvenanceLabel
+    );
     const timeline = structured.timelineReferences || [];
     const related = structured.relatedEntities || [];
-    const total =
-      supporting.length +
-      contradicting.length +
-      contributors.length +
-      timeline.length +
-      related.length;
-    if (!total) return '';
+    const investigation =
+      structured.investigation ||
+      (structured.metadata && structured.metadata.investigation) ||
+      null;
+    const provenance = (structured.provenance || []).slice();
+    for (const item of systemContributors) {
+      if (!provenance.some((p) => (p && p.id) === item || p === item)) {
+        provenance.push({ id: item, kind: 'system', label: item });
+      }
+    }
+    const evidenceCount = supporting.length + contradicting.length;
+    const summaryParts = [];
+    if (evidenceCount) summaryParts.push(`Evidence · ${evidenceCount}`);
+    if (investigation) summaryParts.push('Investigation');
+    if (provenance.length) summaryParts.push('Provenance');
+    if (contributors.length) summaryParts.push(`Confidence · ${contributors.length}`);
+    if (timeline.length || related.length) {
+      summaryParts.push(
+        `${timeline.length + related.length} reference${
+          timeline.length + related.length === 1 ? '' : 's'
+        }`
+      );
+    }
+    if (!summaryParts.length) return '';
+
+    const coverage = investigation && investigation.coverage;
+    const investigationHtml = investigation
+      ? `<div class="mx-evidence-group"><h4>Investigation</h4><ul>
+          <li>Scope: ${escapeHtml(
+            (investigation.scope &&
+              (investigation.scope.geography ||
+                (investigation.scope.investigatedGeography || []).join(', '))) ||
+              'uncovered'
+          )}</li>
+          <li>Evaluated: ${escapeHtml(
+            String(coverage ? coverage.candidatesEvaluated : 0)
+          )} of ${escapeHtml(String(coverage ? coverage.candidatesDiscovered : 0))} discovered</li>
+          <li>Supported opportunities: ${escapeHtml(
+            String(coverage ? coverage.supportedOpportunityCount : 0)
+          )}</li>
+          <li>Coverage: ${escapeHtml(
+            String(investigation.coverageBand || '')
+          )} (${escapeHtml(String(investigation.coverageConfidence != null ? investigation.coverageConfidence : ''))})</li>
+        </ul></div>`
+      : '';
+    const provenanceHtml = provenance.length
+      ? `<div class="mx-evidence-group"><h4>Provenance</h4><ul>${provenance
+          .map((item) => {
+            const label =
+              (item && (item.label || item.summary || item.id)) || String(item);
+            return `<li>${escapeHtml(label)}</li>`;
+          })
+          .join('')}</ul></div>`
+      : '';
 
     return `
       <details class="mx-evidence">
-        <summary>Evidence · ${total} references</summary>
+        <summary>${escapeHtml(summaryParts.join(' · '))}</summary>
         <div class="mx-evidence-body">
           ${evidenceGroup('Supporting evidence', supporting)}
           ${evidenceGroup('Contradicting evidence', contradicting)}
+          ${investigationHtml}
+          ${provenanceHtml}
           ${
             contributors.length
               ? `<div class="mx-evidence-group"><h4>Confidence contributors</h4><ul>${contributors
