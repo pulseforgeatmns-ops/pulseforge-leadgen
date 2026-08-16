@@ -781,6 +781,7 @@ body {
       <button class="ao-filter" data-filter="overdue">Overdue</button>
       <button class="ao-filter" data-filter="week">This Week</button>
       <button class="ao-filter" data-filter="direct_mail">Direct Mail</button>
+      <button class="ao-filter" data-filter="phone">Phone</button>
       <button class="ao-filter" data-filter="high">High Priority</button>
       <button class="ao-filter" data-filter="waiting">Waiting on Jake</button>
     </div>
@@ -932,6 +933,14 @@ body {
   </div>
 </div>
 
+<div class="ao-modal-overlay" id="callModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="callModalTitle">
+    <h3 id="callModalTitle">Call Instead</h3>
+    <div id="callModalBody"></div>
+    <div class="ao-modal-actions" id="callModalActions"></div>
+  </div>
+</div>
+
 <script>
 const chat = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
@@ -944,6 +953,7 @@ let routeSortMode = localStorage.getItem('ao_route_sort') || 'closest_first';
 let routeStartType = localStorage.getItem('ao_route_start') || 'current_location';
 let navAppPreference = localStorage.getItem('ao_nav_app') || 'google_maps';
 let pendingNavigate = null;
+let callModalState = null;
 
 function saveRoutePreferences() {
   localStorage.setItem('ao_route_sort', routeSortMode);
@@ -1056,6 +1066,157 @@ async function loadMetrics() {
   return m;
 }
 
+async function startPhoneFollowUp(taskId) {
+  clearChat();
+  activeMode = 'phone_follow_up';
+  visitJustCompleted = false;
+  messageInput.placeholder = 'Reply to Max…';
+  switchTab('max');
+  addMsg('Starting phone follow-up log…', 'system');
+  try {
+    const result = await api('/api/max/start', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'phone_follow_up', task_id: taskId }),
+    });
+    chat.lastChild.remove();
+    addMsg(result.reply, 'max');
+    sessionId = result.session_id || null;
+  } catch (err) {
+    chat.lastChild.remove();
+    addMsg(err.message, 'system');
+  }
+}
+
+function hideCallModal() {
+  document.getElementById('callModal').classList.remove('open');
+  callModalState = null;
+}
+
+function renderCallModal() {
+  const body = document.getElementById('callModalBody');
+  const actions = document.getElementById('callModalActions');
+  if (!callModalState) return;
+
+  const { business_name, contact_phone, has_phone, task_id, tel_url } = callModalState;
+  document.getElementById('callModalTitle').textContent = has_phone
+    ? `Call ${business_name}`
+    : 'Phone needed';
+
+  if (!has_phone) {
+    body.innerHTML = `
+      <p style="font-size:0.9rem;line-height:1.45;margin-bottom:10px">No phone number saved. Add one or escalate to Jake?</p>
+      <input class="ao-addr-input" id="callPhoneInput" type="tel" placeholder="Phone number…">
+    `;
+    actions.innerHTML = `
+      <button type="button" class="ao-modal-cancel" id="callModalClose">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="callSavePhone">Save & Continue</button>
+      <button type="button" class="ao-modal-cancel" style="color:var(--pf-red)" id="callEscalateNoPhone">Escalate to Jake</button>
+    `;
+    return;
+  }
+
+  body.innerHTML = `
+    <p style="font-size:0.9rem;line-height:1.45;margin-bottom:8px">${escapeHtml(business_name)}</p>
+    <p style="font-family:var(--pf-font-mono);font-size:0.85rem;color:var(--pf-gold-strong)">${escapeHtml(contact_phone)}</p>
+  `;
+  actions.innerHTML = `
+    <a class="ao-modal-confirm" href="${escapeHtml(tel_url)}" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Call Now</a>
+    <button type="button" class="ao-modal-confirm" id="callLogWithMax">Log Call With Max</button>
+    <button type="button" class="ao-modal-cancel" id="callMoveLater">Move Later</button>
+    <button type="button" class="ao-modal-cancel" style="color:var(--pf-red)" id="callEscalate">Escalate</button>
+  `;
+}
+
+async function openCallInstead(taskId) {
+  try {
+    const result = await api('/api/tasks/' + taskId + '/call-instead', { method: 'POST', body: JSON.stringify({}) });
+    callModalState = {
+      task_id: taskId,
+      business_name: result.business_name,
+      contact_phone: result.contact_phone,
+      has_phone: result.has_phone,
+      tel_url: result.tel_url,
+    };
+    if (result.route) {
+      activeRoute = result.route;
+      renderRouteView();
+    } else {
+      loadActiveRoute();
+    }
+    loadQueue();
+    renderCallModal();
+    document.getElementById('callModal').classList.add('open');
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+document.getElementById('callModal').addEventListener('click', e => {
+  if (e.target.id === 'callModal') hideCallModal();
+});
+
+document.getElementById('callModal').addEventListener('click', async e => {
+  if (!callModalState) return;
+  const taskId = callModalState.task_id;
+
+  if (e.target.id === 'callModalClose') {
+    hideCallModal();
+    return;
+  }
+
+  try {
+    if (e.target.id === 'callSavePhone') {
+      const phone = document.getElementById('callPhoneInput').value.trim();
+      if (!phone) {
+        alert('Enter a phone number or escalate to Jake.');
+        return;
+      }
+      const result = await api('/api/tasks/' + taskId + '/call-instead', {
+        method: 'POST',
+        body: JSON.stringify({ phone }),
+      });
+      callModalState = {
+        ...callModalState,
+        contact_phone: result.contact_phone,
+        has_phone: result.has_phone,
+        tel_url: result.tel_url,
+      };
+      renderCallModal();
+      return;
+    }
+
+    if (e.target.id === 'callLogWithMax') {
+      hideCallModal();
+      await startPhoneFollowUp(taskId);
+      return;
+    }
+
+    if (e.target.id === 'callMoveLater') {
+      const d = new Date();
+      d.setDate(d.getDate() + 2);
+      await api('/api/tasks/' + taskId, {
+        method: 'PATCH',
+        body: JSON.stringify({ due_date: d.toISOString().slice(0, 10) }),
+      });
+      hideCallModal();
+      loadQueue();
+      return;
+    }
+
+    if (e.target.id === 'callEscalate' || e.target.id === 'callEscalateNoPhone') {
+      await api('/api/tasks/' + taskId + '/escalate', {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'high_interest', summary: 'AO escalated from Call Instead' }),
+      });
+      hideCallModal();
+      loadQueue();
+      loadMetrics();
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
 async function startRouteFollowUp(taskId, isDirectMail) {
   clearChat();
   activeMode = isDirectMail ? 'direct_mail_follow_up' : 'route_follow_up';
@@ -1153,12 +1314,27 @@ function taskCard(task) {
   const addrLine = task.address
     ? `<div class="ao-task-meta">${escapeHtml(task.address)}</div>`
     : `<div class="ao-task-meta" style="color:var(--pf-amber);font-style:italic">Address needed</div>`;
-  const logBtn = isDirectMail
-    ? `<button class="primary" data-log-follow-up="${task.id}">Log with Max</button>`
+  const isPhoneFollowUp = task.next_action === 'phone_follow_up';
+  const phoneBadge = isPhoneFollowUp
+    ? `<div class="ao-task-badge" style="color:var(--pf-violet);background:rgba(109,91,208,0.12);border-color:rgba(109,91,208,0.35)">Phone Follow-up</div>`
     : '';
+  const logBtn = isPhoneFollowUp
+    ? `<button class="primary" data-log-phone="${task.id}">Log Call With Max</button>`
+    : isDirectMail
+      ? `<button class="primary" data-log-follow-up="${task.id}">Log with Max</button>`
+      : '';
+  const callInsteadBtn = !isPhoneFollowUp && (isDirectMail || task.next_action === 'in_person_revisit')
+    ? `<button data-call-instead="${task.id}">Call Instead</button>`
+    : '';
+  const callNowBtn = isPhoneFollowUp && task.contact_phone
+    ? `<a class="btn-link" href="tel:${String(task.contact_phone).replace(/[^\d+]/g, '')}" style="display:flex;align-items:center;justify-content:center;text-decoration:none">Call Now</a>`
+    : isPhoneFollowUp
+      ? `<button data-call-instead="${task.id}">Add Phone</button>`
+      : '';
   return `
     <article class="${cls.join(' ')}" data-task-id="${task.id}" data-lead-id="${task.lead_id || ''}">
       ${badge}
+      ${phoneBadge}
       <div class="ao-task-head">
         <div class="ao-task-name">${escapeHtml(task.business_name || 'Unknown')}</div>
         <div class="ao-task-due">${due}</div>
@@ -1167,8 +1343,10 @@ function taskCard(task) {
       <div class="ao-task-meta">${escapeHtml(task.contact_name || 'No contact')} · ${escapeHtml(task.next_action || 'Follow up')}</div>
       ${task.suggested_message ? `<div class="ao-task-msg">"${escapeHtml(task.suggested_message)}"</div>` : ''}
       <div class="ao-task-actions">
+        ${callNowBtn}
         ${logBtn}
-        <button${isDirectMail ? '' : ' class="primary"'} data-done="${task.id}">Done</button>
+        ${callInsteadBtn}
+        <button${isDirectMail || isPhoneFollowUp ? '' : ' class="primary"'} data-done="${task.id}">Done</button>
         <button data-reschedule="${task.id}">+2 Days</button>
         <button class="danger" data-escalate="${task.id}">Escalate</button>
       </div>
@@ -1201,7 +1379,8 @@ function stopCard(stop, isCurrent) {
       <div class="ao-stop-opening">"${escapeHtml(stop.opening)}"</div>
       <div class="ao-stop-actions">
         ${navBtn}
-        <button class="primary" data-route-log="${stop.task_id}" data-direct-mail="${isDirectMail ? '1' : '0'}">Log with Max</button>
+        <button data-route-log="${stop.task_id}" data-direct-mail="${isDirectMail ? '1' : '0'}" class="primary">Log with Max</button>
+        <button data-call-instead="${stop.task_id}">Call Instead</button>
         <button data-route-done="${stop.id}">Done</button>
         <button data-route-skip="${stop.id}">Skip</button>
         <button data-route-later="${stop.id}">Move Later</button>
@@ -1436,6 +1615,7 @@ document.getElementById('endRouteBtn').addEventListener('click', async () => {
 document.getElementById('routeList').addEventListener('click', async e => {
   const navigateBtn = e.target.closest('[data-navigate]');
   const logTaskId = e.target.dataset.routeLog;
+  const callInsteadTask = e.target.dataset.callInstead;
   const doneStop = e.target.dataset.routeDone;
   const skipStop = e.target.dataset.routeSkip;
   const laterStop = e.target.dataset.routeLater;
@@ -1459,6 +1639,10 @@ document.getElementById('routeList').addEventListener('click', async e => {
     if (logTaskId) {
       const isDm = e.target.dataset.directMail === '1';
       await startRouteFollowUp(logTaskId, isDm);
+      return;
+    }
+    if (callInsteadTask) {
+      await openCallInstead(callInsteadTask);
       return;
     }
     if (doneStop) await handleRouteStopAction(doneStop, 'done');
@@ -1487,12 +1671,22 @@ document.getElementById('queueFilters').addEventListener('click', e => {
 
 document.getElementById('queueList').addEventListener('click', async e => {
   const logFollowUpId = e.target.dataset.logFollowUp;
+  const logPhoneId = e.target.dataset.logPhone;
+  const callInsteadId = e.target.dataset.callInstead;
   const doneId = e.target.dataset.done;
   const rescheduleId = e.target.dataset.reschedule;
   const escalateId = e.target.dataset.escalate;
   try {
     if (logFollowUpId) {
       await startDirectMailFollowUp(logFollowUpId);
+      return;
+    }
+    if (logPhoneId) {
+      await startPhoneFollowUp(logPhoneId);
+      return;
+    }
+    if (callInsteadId) {
+      await openCallInstead(callInsteadId);
       return;
     }
     if (doneId) {

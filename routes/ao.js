@@ -8,6 +8,7 @@ const { TEMPLATES } = require('../utils/aoMessageTemplates');
 const aoField = require('../services/aoFieldService');
 const aoMax = require('../services/aoMaxFlow');
 const aoRoute = require('../services/aoRouteService');
+const { buildTelUrl } = require('../utils/aoRoutePlanner');
 
 const router = express.Router();
 
@@ -205,6 +206,28 @@ router.post('/api/routes/:id/cancel', requireAoWrite, wrapAoHandler(async (req, 
   const route = await aoRoute.cancelRoute(req.params.id, aoOwnerId, req.user.name);
   if (!route) return res.status(404).json({ error: 'Route not found' });
   res.json(route);
+}));
+
+router.post('/api/tasks/:id/call-instead', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { phone } = req.body || {};
+  const result = await aoField.convertToPhoneFollowUp(req.params.id, aoOwnerId, { phone });
+  if (!result) return res.status(404).json({ error: 'Task not found' });
+
+  const route = await aoRoute.getActiveRoute({
+    aoOwnerId,
+    clientId: aoClientId(req),
+    aoName: req.user.name,
+  });
+
+  res.json({
+    ...result,
+    tel_url: buildTelUrl(result.contact_phone),
+    route,
+    message: result.has_phone
+      ? null
+      : 'No phone number saved. Add one or escalate to Jake?',
+  });
 }));
 
 router.post('/api/tasks/:id/escalate', requireAoWrite, wrapAoHandler(async (req, res) => {

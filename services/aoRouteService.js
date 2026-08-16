@@ -1,5 +1,5 @@
 const pool = require('../db');
-const { listQueue } = require('./aoFieldService');
+const { listQueue, getNextPhoneFollowUp } = require('./aoFieldService');
 const {
   isUsableAddress,
   geocodeAddress,
@@ -7,10 +7,29 @@ const {
   sortStopsByMode,
   enrichStopRow,
   buildNextStopDebrief,
+  buildPhoneFollowUpDebrief,
   ANCHOR_OFFICE_DEFAULT,
 } = require('../utils/aoRoutePlanner');
 
 const ANCHOR_OFFICE_ADDRESS = process.env.AO_ANCHOR_OFFICE_ADDRESS || ANCHOR_OFFICE_DEFAULT;
+
+async function buildNextWorkDebrief({ aoOwnerId, clientId, aoName }) {
+  const route = await getActiveRoute({ aoOwnerId, clientId, aoName });
+  if (route?.current_stop) {
+    return buildNextStopDebrief(route.current_stop, aoName);
+  }
+
+  const phoneTask = await getNextPhoneFollowUp({ aoOwnerId, clientId });
+  if (phoneTask) {
+    return buildPhoneFollowUpDebrief(enrichStopRow({
+      ...phoneTask,
+      stop_id: phoneTask.id,
+      stop_status: 'pending',
+    }, aoName), aoName);
+  }
+
+  return '\n\nYou\'re done with this route. Nice work. Check your queue or start another route.';
+}
 
 async function cancelActiveRoutes(aoOwnerId, clientId, db = pool) {
   await db.query(`
@@ -22,7 +41,8 @@ async function cancelActiveRoutes(aoOwnerId, clientId, db = pool) {
 
 async function listQueueTasksWithDetails({ aoOwnerId, clientId, filter }) {
   const params = [aoOwnerId, clientId];
-  let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'`;
+  let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'
+    AND COALESCE(t.next_action, '') != 'phone_follow_up'`;
 
   const today = new Date().toISOString().slice(0, 10);
   if (filter === 'today') {
@@ -470,6 +490,7 @@ module.exports = {
   cancelRoute,
   updateLeadAddress,
   advanceRouteAfterVisit,
+  buildNextWorkDebrief,
   geocodeStartPoint,
   cancelActiveRoutes,
 };
