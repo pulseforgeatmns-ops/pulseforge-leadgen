@@ -1,11 +1,12 @@
 'use strict';
 
 /**
- * SPEC-097 / SPEC-097A / SPEC-097B / SPEC-097C Living Command Deck — spatial intelligence field renderer.
+ * SPEC-097 / SPEC-097A / SPEC-097B / SPEC-097C / SPEC-097D Living Command Deck.
  * Render-only consumer of model.spatialOverview from CommandDeckModel.
  * Motion communicates intelligence state — it does not decorate the interface.
  * SPEC-097B: presentation-only spatial composition (orbit, halo, protected zone).
  * SPEC-097C: Max is intelligence, not a card — restrained presence + judgment-only motion.
+ * SPEC-097D: final spatial calibration — Max contrast, connection intensity, urgent proximity.
  */
 
 (function () {
@@ -33,16 +34,17 @@
   const ELEVATION_MS = 900;
   const SETTLE_MS = 1100;
   const JUDGMENT_MS = 1000;
+  const CALIBRATE_SETTLE_MS = 1400;
   const HALO_EXTENT_PX = 8;
-  const PROTECTED_GAP_PX = 18;
+  const PROTECTED_GAP_PX = 12;
   const NODE_ESTIMATE = Object.freeze({ w: 132, h: 72 });
 
-  /** Desktop center-to-center band targets (SPEC-097B). Scaled to viewport. */
+  /** Desktop center-to-center band targets. Urgent is 24px closer than 097B (SPEC-097D). */
   const BAND_DESKTOP = Object.freeze({
     monitored: 280,
     normal: 235,
     elevated: 178,
-    urgent: 142,
+    urgent: 116,
   });
 
   /** @type {object|null} */
@@ -59,6 +61,10 @@
   let judgmentTimer = null;
   /** @type {string|null} */
   let lastMaxSignature = null;
+  /** @type {{ domainId: string, newState: string, from: string }|null} */
+  let pendingCalibration = null;
+  /** @type {number|null} */
+  let calibrationTimer = null;
 
   const handlers = {
     onDiscussMax: null,
@@ -150,7 +156,10 @@
     const usable = Math.min(halfW, halfH) - nodeClear;
     const scale = Math.min(1, Math.max(0.58, usable / desktop.monitored));
 
-    const minUrgent = Math.max(
+    // Floor the urgent band on the tighter (vertical) clearance so a bottom/top
+    // urgent domain can occupy the urgent band. Horizontal slots still clamp in
+    // offsetForDomain via the larger protectedRx.
+    const minUrgent = Math.min(
       protectedRx + NODE_ESTIMATE.w / 2 + gap,
       protectedRy + NODE_ESTIMATE.h / 2 + gap
     );
@@ -315,6 +324,7 @@
     renderRecentConversations();
     syncViewVisibility();
     maybeRespondToJudgment(overview);
+    scheduleCalibrationPreview();
 
     if (window.matchMedia('(max-width: 640px)').matches) {
       setListView(true, { silent: true });
@@ -498,8 +508,10 @@
       path.setAttribute('id', `cd-conn-${domain.id}`);
       path.classList.add('cd-intel-conn');
 
-      if (domain.priority === 'urgent') path.classList.add('cd-intel-conn-urgent');
-      else if (domain.priority === 'elevated') path.classList.add('cd-intel-conn-elevated');
+      const priority = domain.priority || 'normal';
+      if (PRIORITY_RANK[priority] != null) {
+        path.classList.add(`cd-intel-conn-${priority}`);
+      }
 
       const isActive =
         domain.priority === 'urgent' ||
@@ -593,6 +605,86 @@
       if (elevated) respondToJudgment(elevated.id);
     }
     lastMaxSignature = sig;
+  }
+
+  function readCalibrationRequest() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const raw =
+        params.get('calibrateTransition') ||
+        (params.get('calibrate') === '1' ? 'acquisition:elevated' : '');
+      if (!raw) return null;
+      const [domainId, newState] = raw.split(':');
+      return {
+        domainId: domainId || 'acquisition',
+        newState: newState || 'elevated',
+        from: 'normal',
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function scheduleCalibrationPreview() {
+    if (!pendingCalibration || listView) return;
+    const request = pendingCalibration;
+    pendingCalibration = null;
+    if (calibrationTimer) window.clearTimeout(calibrationTimer);
+    const delay = reducedMotion() ? 0 : CALIBRATE_SETTLE_MS;
+    calibrationTimer = window.setTimeout(() => {
+      calibrationTimer = null;
+      previewPriorityTransition(request.domainId, request.newState, {
+        from: request.from,
+      });
+    }, delay);
+  }
+
+  /**
+   * Development/testing hook — force a controlled priority-band change so the
+   * full Max-originated spatial sequence can be validated (SPEC-097D).
+   * Query: ?calibrate=1 or ?calibrateTransition=acquisition:elevated
+   */
+  function previewPriorityTransition(domainId, newState, options = {}) {
+    if (!activeOverview || !els.deck) return false;
+    const from = options.from || 'normal';
+    const to = newState || 'elevated';
+    if (PRIORITY_RANK[from] == null || PRIORITY_RANK[to] == null) return false;
+    if (!findDomain(domainId)) return false;
+
+    const apply = (priority, transition) => {
+      const domains = (activeOverview.domains || []).map((d) => {
+        if (d.id !== domainId) return d;
+        return {
+          ...d,
+          priority,
+          previousPriority: transition ? transition.previousState : null,
+          intelligence: {
+            ...(d.intelligence || {}),
+            active: Boolean(transition && isElevationTransition(transition)),
+          },
+          transition,
+        };
+      });
+      return render({
+        ...activeOverview,
+        domains,
+        generatedAt: new Date().toISOString(),
+      });
+    };
+
+    apply(from, null);
+    const stepDelay = options.immediate || reducedMotion() ? 0 : 80;
+    window.setTimeout(() => {
+      apply(to, {
+        previousState: from,
+        newState: to,
+        changedAt: new Date().toISOString(),
+        reason: 'Calibration preview — Max revised this domain’s priority.',
+        evidenceRefs: [],
+      });
+    }, stepDelay);
+
+    return true;
   }
 
   function renderListFallback(items) {
@@ -996,6 +1088,11 @@
       window.clearTimeout(judgmentTimer);
       judgmentTimer = null;
     }
+    if (calibrationTimer) {
+      window.clearTimeout(calibrationTimer);
+      calibrationTimer = null;
+    }
+    pendingCalibration = null;
     activeOverview = null;
     activeDomainId = null;
     lastMaxSignature = null;
@@ -1025,6 +1122,7 @@
     restoreViewPreference();
     setupIntelFieldPause();
     setupResizeHandler();
+    pendingCalibration = readCalibrationRequest();
 
     if (els.viewToggle) {
       els.viewToggle.addEventListener('click', () => setListView(!listView));
@@ -1065,6 +1163,7 @@
     recordConversation,
     setListView,
     findDomain,
+    previewPriorityTransition,
     getActiveDomainId: () => activeDomainId,
   };
 })();

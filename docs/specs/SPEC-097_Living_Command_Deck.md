@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Implemented (Phase 1–2 foundation) |
+| **Status** | Implemented (Phase 1–2 foundation; visual language frozen after SPEC-097D) |
 | **Scope** | Command Deck UX/UI evolution |
 | **Primary interface** | Max |
 | **Related** | [SPEC-006](SPEC-006_Command_Deck.md), [SPEC-008](SPEC-008_Command_Deck_UI.md), [SPEC-096 Max Specialist Direction](SPEC-096_Max_Specialist_Direction_and_Operator_Rationale.md) |
@@ -55,6 +55,16 @@ Max is intelligence, not a domain card. The spatial algorithm and domain positio
 - **Field:** low-opacity elliptical ambient field with extremely slow breathing
 - **Motion:** field intensifies only when Max's judgment changes (~1000ms); rest state has no traveling pulses
 - **Reduced motion:** field and judgment animations remain disabled
+
+## SPEC-097D — Final Spatial Calibration
+
+Calibration only. The spatial model is unchanged: Max is the intelligence; domains are areas of awareness; distance is attention; judgment changes reorganize the field.
+
+- **Max presence:** same capsule geometry and position; ~5–8% stronger hierarchy via perimeter contrast, MAX/status weight, and slightly more defined adjacent illumination. Container is not enlarged.
+- **Connections:** resting traces are perceptible; opacity/intensity follows priority (`monitored` → `urgent`) in gold. No per-priority color system.
+- **Urgent proximity:** urgent band `116px` (24px closer than 097B's `142px`). Per-slot protection still prevents horizontal overlap; the urgent floor no longer inherits the wider horizontal clearance, so Campaigns can sit in Max's immediate attention.
+- **Transition validation:** `SpatialDeck.previewPriorityTransition` plus `?calibrate=1` / `?calibrateTransition=acquisition:elevated` force a controlled band change. Sequence: field intensifies → Max pulse → connection strengthens → domain travels → priority treatment / Elevated by Max → rest. Total perceptible motion ~900–1000ms, ease-in-out, no spring.
+- **Visual freeze:** further Command Deck visual work should be driven by new intelligence requirements or operator evidence, not aesthetic experimentation.
 
 ## Deferred (Phase 3)
 - Operator reprioritization through Max with visible spatial response

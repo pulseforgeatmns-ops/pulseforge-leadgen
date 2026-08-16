@@ -2438,7 +2438,7 @@ body.theme-dark .mx-ask-submit {
   }
 }
 
-/* ── SPEC-097 / SPEC-097A / SPEC-097B / SPEC-097C Living Command Deck ───── */
+/* ── SPEC-097 / SPEC-097A / SPEC-097B / SPEC-097C / SPEC-097D Living Command Deck ───── */
 
 @property --cd-node-x {
   syntax: '<length>';
@@ -2457,15 +2457,16 @@ body.theme-dark .mx-ask-submit {
 }
 
 :root {
-  --cd-intel-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Smooth accel/decel — no overshoot or spring (SPEC-097D). */
+  --cd-intel-ease: cubic-bezier(0.4, 0, 0.2, 1);
   --cd-intel-transition: 900ms;
   --cd-judgment-ms: 1000ms;
   --cd-orbit-radius: min(48vw, 360px);
   --cd-band-monitored: 280px;
   --cd-band-normal: 235px;
   --cd-band-elevated: 178px;
-  --cd-band-urgent: 142px;
-  --cd-protected-gap: 18px;
+  --cd-band-urgent: 116px;
+  --cd-protected-gap: 12px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2621,26 +2622,40 @@ body.cd-intel-paused .cd-max-bloom {
 
 .cd-intel-conn {
   fill: none;
-  stroke: rgba(154, 123, 45, 0.07);
-  stroke-width: 0.8;
+  stroke: rgba(154, 123, 45, 0.16);
+  stroke-width: 0.9;
   stroke-linecap: round;
   transition: stroke 680ms var(--cd-intel-ease), stroke-width 680ms var(--cd-intel-ease);
 }
 
-.cd-intel-conn.cd-intel-conn-elevated {
-  stroke: rgba(201, 162, 39, 0.16);
-  stroke-width: 0.95;
+.cd-intel-conn.cd-intel-conn-monitored {
+  stroke: rgba(154, 123, 45, 0.12);
+  stroke-width: 0.85;
 }
 
-.cd-intel-conn.cd-intel-conn-urgent,
+.cd-intel-conn.cd-intel-conn-normal {
+  stroke: rgba(154, 123, 45, 0.2);
+  stroke-width: 0.9;
+}
+
+.cd-intel-conn.cd-intel-conn-elevated {
+  stroke: rgba(201, 162, 39, 0.3);
+  stroke-width: 1;
+}
+
 .cd-intel-conn.cd-intel-conn-active {
-  stroke: rgba(201, 162, 39, 0.28);
-  stroke-width: 1.05;
+  stroke: rgba(201, 162, 39, 0.38);
+  stroke-width: 1.1;
+}
+
+.cd-intel-conn.cd-intel-conn-urgent {
+  stroke: rgba(201, 162, 39, 0.42);
+  stroke-width: 1.15;
 }
 
 .cd-intel-conn.cd-intel-conn-judgment {
-  stroke: rgba(201, 162, 39, 0.42);
-  stroke-width: 1.2;
+  stroke: rgba(201, 162, 39, 0.55);
+  stroke-width: 1.25;
   transition-duration: var(--cd-judgment-ms);
 }
 
@@ -2695,16 +2710,16 @@ body.cd-intel-paused .cd-max-bloom {
   box-shadow: none;
 }
 
-/* Soft bleed just outside Max — center-weighted so no second border reads */
+/* Soft bleed just outside Max — slightly more defined adjacent, same extent */
 .cd-max-illumination {
   width: 172%;
   height: 172%;
   background: radial-gradient(
     ellipse 46% 50% at 50% 50%,
-    rgba(201, 162, 39, 0.15) 0%,
-    rgba(201, 162, 39, 0.07) 36%,
-    rgba(201, 162, 39, 0.025) 58%,
-    transparent 78%
+    rgba(201, 162, 39, 0.18) 0%,
+    rgba(201, 162, 39, 0.085) 34%,
+    rgba(201, 162, 39, 0.028) 56%,
+    transparent 76%
   );
 }
 
@@ -2766,14 +2781,14 @@ body.cd-intel-paused .cd-max-bloom {
   padding: 1.05rem 1.45rem 1.1rem;
   border-radius: 50%;
   background: var(--pf-bg);
-  border: 1px solid color-mix(in srgb, var(--pf-gold) 48%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pf-gold) 58%, transparent);
   box-shadow: none;
   overflow: hidden;
 }
 
 body.theme-dark .cd-spatial-max-core {
   background: #070d18;
-  border-color: color-mix(in srgb, var(--pf-gold) 40%, transparent);
+  border-color: color-mix(in srgb, var(--pf-gold) 50%, transparent);
   box-shadow: none;
 }
 
@@ -2781,6 +2796,7 @@ body.theme-dark .cd-spatial-max-core {
   margin: 0;
   font-family: var(--pf-font-mono);
   font-size: 0.58rem;
+  font-weight: 500;
   letter-spacing: 0.26em;
   text-transform: uppercase;
   color: var(--pf-gold);
@@ -2790,6 +2806,7 @@ body.theme-dark .cd-spatial-max-core {
   margin: 0;
   font-family: var(--cd-font-editorial);
   font-size: clamp(0.92rem, 1.7vw, 1.05rem);
+  font-weight: 500;
   line-height: 1.25;
   color: var(--pf-text);
   display: -webkit-box;
@@ -3265,7 +3282,7 @@ body.theme-dark .cd-spatial-node.cd-priority-urgent {
     --cd-band-monitored: 220px;
     --cd-band-normal: 185px;
     --cd-band-elevated: 148px;
-    --cd-band-urgent: 122px;
+    --cd-band-urgent: 98px;
   }
   .cd-spatial-canvas {
     min-height: clamp(420px, 62vh, 580px);
