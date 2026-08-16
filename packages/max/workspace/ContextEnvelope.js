@@ -114,6 +114,15 @@ function normalizeContext(raw) {
     'activeClientReasoning',
     // SPEC-098 — specialist delegation evaluation (carrier only)
     'lastSpecialistEvaluation',
+    // SPEC-100 — Scout acquisition intelligence loop
+    'domainId',
+    'acquisitionLoop',
+    'lastScoutEvaluation',
+    'acquisitionIntelligence',
+    'businessContext',
+    'targetContext',
+    'approvedUnderstanding',
+    'operatorDirection',
     // SPEC-096 — specialist direction context
     'action',
     'discussRecommendation',

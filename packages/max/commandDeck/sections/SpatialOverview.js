@@ -58,6 +58,8 @@ async function composeSpatialOverview(input = {}) {
     activeObjectives: input.activeObjectives || [],
     operatorBrief: input.operatorBrief || model.operatorBrief || null,
     hlaDomain,
+    acquisitionIntelligence:
+      input.acquisitionIntelligence || model.acquisitionIntelligence || null,
   });
 
   const reconcile = input.reconcilePriority || defaultReconcile;

@@ -430,6 +430,17 @@ describe('SPEC-098 specialist delegation contract', () => {
       listed.find((e) => e.specialist === 'test_intelligence').callable,
       true
     );
-    assert.equal(listed.find((e) => e.specialist === 'scout').callable, false);
+    assert.equal(
+      listed.find(
+        (e) => e.specialist === 'scout' && e.capability === 'prospect_intelligence'
+      ).callable,
+      false
+    );
+    assert.equal(
+      listed.find(
+        (e) => e.specialist === 'scout' && e.capability === 'acquisition_intelligence'
+      ).callable,
+      true
+    );
   });
 });

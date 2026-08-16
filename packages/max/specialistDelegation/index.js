@@ -17,6 +17,7 @@ const {
   nowIso,
   asText,
   clone,
+  isPlainObject,
   normalizeEvidenceRefs,
   normalizeConstraints,
   normalizeExpectedReturn,
@@ -39,6 +40,7 @@ const {
 const { newId, createMemoryStore, createPostgresStore, resolveStore } = require('./Store');
 const { runTestIntelligence, isTestIntelligence, CONTRACT_OBJECTIVE, DEFAULT_EVIDENCE } =
   require('./TestIntelligenceAdapter');
+const { runScoutAcquisitionIntelligence } = require('../scoutAcquisition/ScoutAdapter');
 const {
   evaluateSpecialistResult,
   formatOperatorExplanation,
@@ -48,6 +50,7 @@ const { buildProvenanceChain, formatProvenanceNarrative } = require('./Provenanc
 
 const ADAPTERS = Object.freeze({
   test_intelligence: runTestIntelligence,
+  scout: runScoutAcquisitionIntelligence,
 });
 
 function toPublicDelegation(row) {
@@ -299,6 +302,7 @@ async function executeDelegation(input = {}, opts = {}) {
   try {
     raw = adapter(delegation, {
       mode: opts.fixtureMode || delegation._fixtureMode || input.fixtureMode,
+      ...(opts.adapterOpts || {}),
     });
     if (raw && typeof raw.then === 'function') raw = await raw;
   } catch (err) {
@@ -352,6 +356,7 @@ async function executeDelegation(input = {}, opts = {}) {
     errors: Array.isArray(raw.errors) ? raw.errors : [],
     startedAt: raw.startedAt || nowIso(),
     completedAt: raw.completedAt || nowIso(),
+    payload: isPlainObject(raw.payload) ? clone(raw.payload) : {},
   };
 
   const terminal = RESULT_STATUSES.includes(result.status) ? result.status : 'failed';

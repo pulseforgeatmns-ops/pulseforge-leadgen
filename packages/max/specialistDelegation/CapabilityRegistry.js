@@ -20,12 +20,21 @@ const DEFAULT_CAPABILITIES = Object.freeze([
   },
   {
     specialist: 'scout',
+    capability: 'acquisition_intelligence',
+    authoritySupported: Object.freeze(['observe', 'recommend']),
+    callable: true,
+    adapter: 'scout',
+    description:
+      'Scout acquisition intelligence for Max (SPEC-100). Observe/recommend only.',
+  },
+  {
+    specialist: 'scout',
     capability: 'prospect_intelligence',
     authoritySupported: Object.freeze(['observe', 'recommend']),
     callable: false,
     adapter: null,
     description:
-      'Scout prospect intelligence. Adapter deferred (Scout wiring is not SPEC-098).',
+      'Legacy Scout prospect intelligence entry. Use acquisition_intelligence.',
   },
   {
     specialist: 'paige',

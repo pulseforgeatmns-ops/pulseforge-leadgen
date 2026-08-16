@@ -26,6 +26,10 @@ const {
 } = require('../services/commandDeckPriority');
 const { createPostgresStore } = require('../services/specialistDirection');
 const { getActiveObjectives } = require('../services/operatorObjectives');
+const {
+  createPostgresAcquisitionState,
+  toCommandDeckSignal,
+} = require('../services/scoutAcquisitionIntelligence');
 
 const requireDashboardRead = [
   requireAuth,
@@ -161,6 +165,7 @@ async function buildSpatialContext(clientId, req, operatorBrief = null) {
   let pendingRecommendations = [];
   let activeObjectives = [];
   let storedPriorities = new Map();
+  let acquisitionIntelligence = null;
 
   try {
     const store = createPostgresStore();
@@ -202,6 +207,14 @@ async function buildSpatialContext(clientId, req, operatorBrief = null) {
     console.warn('[command-deck] spatial priority load failed:', err.message);
   }
 
+  try {
+    const aoStore = createPostgresAcquisitionState();
+    const aoState = await aoStore.get(tenantId);
+    acquisitionIntelligence = toCommandDeckSignal(aoState);
+  } catch (err) {
+    console.warn('[command-deck] acquisition intelligence load failed:', err.message);
+  }
+
   const lastVisitAt =
     (req.session && req.session.commandDeckLastVisit) || null;
 
@@ -225,6 +238,7 @@ async function buildSpatialContext(clientId, req, operatorBrief = null) {
     lastVisitAt,
     operatorBrief,
     reconcilePriority,
+    acquisitionIntelligence,
   };
 }
 

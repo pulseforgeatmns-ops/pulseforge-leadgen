@@ -211,6 +211,14 @@ function normalizeBusinessContext(value) {
     'offer',
     'historicalLearning',
     'notes',
+    'serviceGeography',
+    'commercialCapability',
+    'preferredSegments',
+    'acquisitionDirection',
+    'exclusions',
+    'offerContext',
+    'approvedUnderstanding',
+    'campaignLearnings',
   ];
   const out = {};
   for (const key of allowed) {
@@ -238,6 +246,17 @@ function normalizeTargetContext(value) {
   return {
     entities,
     notes: asText(value.notes),
+    geography: asText(value.geography),
+    segments: Array.isArray(value.segments)
+      ? value.segments.map(asText).filter(Boolean)
+      : [],
+    businessType: asText(value.businessType),
+    desiredSignals: Array.isArray(value.desiredSignals)
+      ? value.desiredSignals.map(asText).filter(Boolean)
+      : [],
+    priorDelegationId: asText(value.priorDelegationId),
+    priorResultId: asText(value.priorResultId),
+    seedCompanyId: asText(value.seedCompanyId),
   };
 }
 

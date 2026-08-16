@@ -5016,6 +5016,7 @@
           page: 'command-deck',
           context: `domain_${payload.domainId}`,
           domainId: payload.domainId,
+          action: 'discuss_with_max',
           prompt: null,
         }),
       onOpenMission: (missionId) => openMissionWorkspace(missionId),

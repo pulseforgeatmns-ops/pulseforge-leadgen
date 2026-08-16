@@ -131,6 +131,7 @@ function suggestPriorityChange(delegation, result, evaluationHints) {
   const objective = String(delegation.objective || '').toLowerCase();
   const looksAcquisition =
     delegation.capability === 'acquisition_assessment' ||
+    delegation.capability === 'acquisition_intelligence' ||
     delegation.specialist === 'scout' ||
     /\bacquisition\b|\bopportunit/.test(objective);
 

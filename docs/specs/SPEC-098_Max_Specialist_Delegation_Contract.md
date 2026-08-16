@@ -125,7 +125,8 @@ Canonical levels: `observe` · `recommend` · `draft` · `execute_after_approval
 | Specialist | Capability | Authority | Callable |
 |---|---|---|---|
 | `test_intelligence` | `acquisition_assessment` | observe | yes |
-| `scout` | `prospect_intelligence` | observe, recommend | no (adapter deferred) |
+| `scout` | `acquisition_intelligence` | observe, recommend | yes (SPEC-100) |
+| `scout` | `prospect_intelligence` | observe, recommend | no (legacy) |
 | `paige` | `content_strategy` | observe, recommend, draft | no (SPEC-094 remains) |
 
 Penny, Emmett, Sam, and Cal are not registered until they are callable.
@@ -161,6 +162,5 @@ Penny, Emmett, Sam, and Cal are not registered until they are callable.
 
 ## Future Work
 
-- SPEC-099-class Scout adapter over this contract
 - Incremental adapters for Paige, Penny, Emmett, Sam, Cal
 - Optional Max apply of suggested Command Deck priority via existing `commandDeckPriority`
