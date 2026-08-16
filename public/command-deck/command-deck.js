@@ -1595,7 +1595,7 @@
   }
 
   function clearSections() {
-    document.body.classList.remove('cd-operator-mode');
+    document.body.classList.remove('cd-operator-mode', 'cd-living-deck');
     if (window.SpatialDeck) window.SpatialDeck.clear();
     for (const key of [
       'morning',
