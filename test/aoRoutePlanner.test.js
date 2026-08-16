@@ -8,6 +8,8 @@ const {
   sortStopsByMode,
   greedyNearestNeighbor,
   buildMapsNavigateUrl,
+  buildNavigateUrl,
+  buildNavigateUrls,
   buildStopBrief,
   buildNextStopDebrief,
   formatSourceBadge,
@@ -58,6 +60,23 @@ test('buildMapsNavigateUrl encodes destination', () => {
   const url = buildMapsNavigateUrl('123 Main St, Manchester NH');
   assert.match(url, /destination=123/);
   assert.match(url, /google\.com\/maps/);
+});
+
+test('buildNavigateUrl supports Waze and Apple Maps', () => {
+  const addr = '123 Main St, Manchester NH';
+  assert.match(buildNavigateUrl(addr, 'waze'), /waze\.com\/ul\?q=/);
+  assert.match(buildNavigateUrl(addr, 'apple_maps'), /maps\.apple\.com\/\?daddr=/);
+});
+
+test('buildNavigateUrls returns all providers when address is usable', () => {
+  const urls = buildNavigateUrls('123 Main St, Manchester NH');
+  assert.ok(urls.google_maps);
+  assert.ok(urls.waze);
+  assert.ok(urls.apple_maps);
+});
+
+test('buildNavigateUrls returns null for missing address', () => {
+  assert.equal(buildNavigateUrls('TBD'), null);
 });
 
 test('formatSourceBadge for direct mail includes campaign', () => {
