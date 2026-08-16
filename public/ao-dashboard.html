@@ -350,6 +350,93 @@ body {
   letter-spacing: 1px;
   text-transform: uppercase;
 }
+
+/* Script */
+.ao-script {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 12px 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.ao-script-card {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: var(--pf-shadow);
+}
+.ao-script-title {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--pf-gold-strong);
+  margin-bottom: 10px;
+}
+.ao-script-quote {
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--pf-text);
+  border-left: 3px solid var(--pf-gold);
+  padding-left: 12px;
+}
+.ao-script-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ao-script-list li {
+  font-size: 0.88rem;
+  line-height: 1.4;
+  padding-left: 16px;
+  position: relative;
+}
+.ao-script-list li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--pf-gold);
+  font-weight: 700;
+}
+.ao-objection {
+  margin-bottom: 14px;
+}
+.ao-objection:last-child { margin-bottom: 0; }
+.ao-objection-trigger {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--pf-navy);
+  margin-bottom: 6px;
+}
+.ao-objection-response {
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--pf-text);
+  padding-left: 12px;
+  border-left: 2px solid var(--pf-border);
+}
+.ao-script-footer {
+  flex-shrink: 0;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  background: var(--pf-bg-card);
+  border-top: 1px solid var(--pf-border);
+}
+.ao-script-log-btn {
+  width: 100%;
+  min-height: var(--pf-touch-target);
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+  border: 1px solid var(--pf-gold);
+  border-radius: var(--pf-radius);
+  font-family: var(--pf-font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ao-script-log-btn:active { background: var(--pf-gold-glow); }
 </style>
 </head>
 <body>
@@ -373,6 +460,7 @@ body {
   <div class="ao-tabs">
     <button class="ao-tab active" data-tab="max">Max</button>
     <button class="ao-tab" data-tab="queue">Queue</button>
+    <button class="ao-tab" data-tab="script">Script</button>
   </div>
 
   <section class="ao-panel active" id="panel-max">
@@ -400,6 +488,84 @@ body {
     </div>
     <div class="ao-queue-list" id="queueList"></div>
   </section>
+
+  <section class="ao-panel" id="panel-script">
+    <div class="ao-script" id="scriptScroll">
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Opening</h2>
+        <p class="ao-script-quote">Hey, I'm with Anchor Cleaning. We're local and help businesses keep their spaces consistently clean. Quick question: who usually handles your cleaning or facilities vendors?</p>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Qualifying Questions</h2>
+        <ul class="ao-script-list">
+          <li>Are you using an outside cleaner now?</li>
+          <li>How often is the space cleaned?</li>
+          <li>Any issues with consistency, communication, quality, or scheduling?</li>
+          <li>Who usually handles vendor decisions?</li>
+        </ul>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Walkthrough Ask</h2>
+        <p class="ao-script-quote">Would it be worth having Jake stop by for a quick walkthrough and give you a second option?</p>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Common Objections</h2>
+        <div class="ao-objection">
+          <div class="ao-objection-trigger">"We already have someone."</div>
+          <div class="ao-objection-response">Totally. A lot of the businesses we talk to already have a cleaner. Is the current service consistent?</div>
+        </div>
+        <div class="ao-objection">
+          <div class="ao-objection-trigger">"Not interested."</div>
+          <div class="ao-objection-response">No problem. Is there a better person to leave this with in case cleaning ever becomes an issue?</div>
+        </div>
+        <div class="ao-objection">
+          <div class="ao-objection-trigger">"Send info."</div>
+          <div class="ao-objection-response">Absolutely. Who should I send it to, and would a quick walkthrough be useful or too early?</div>
+        </div>
+        <div class="ao-objection">
+          <div class="ao-objection-trigger">"We're all set."</div>
+          <div class="ao-objection-response">Glad to hear it. If anything changes, who would be the best person to check back with?</div>
+        </div>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">What To Listen For</h2>
+        <ul class="ao-script-list">
+          <li>Inconsistent cleaner</li>
+          <li>Missed details</li>
+          <li>Poor communication</li>
+          <li>Complaints from staff/customers</li>
+          <li>No clear schedule</li>
+          <li>Price shopping</li>
+          <li>Multiple locations</li>
+          <li>Upcoming change, renovation, new tenant, or new manager</li>
+        </ul>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">What Not To Do</h2>
+        <ul class="ao-script-list">
+          <li>Don't quote prices</li>
+          <li>Don't promise availability</li>
+          <li>Don't criticize their current cleaner</li>
+          <li>Don't push if they clearly say no</li>
+          <li>Don't guess on insurance or contracts</li>
+          <li>Route serious questions to Jake</li>
+        </ul>
+      </article>
+
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">After The Visit</h2>
+        <p class="ao-script-quote">Open Max, tap Log Visit, and tell Max what happened.</p>
+      </article>
+    </div>
+    <div class="ao-script-footer">
+      <button type="button" class="ao-script-log-btn" id="scriptLogVisit">Log Visit</button>
+    </div>
+  </section>
 </div>
 
 <script>
@@ -414,6 +580,16 @@ function scrollChatToBottom() {
   requestAnimationFrame(() => {
     chat.scrollTop = chat.scrollHeight;
   });
+}
+
+function switchTab(tabName) {
+  document.querySelectorAll('.ao-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === tabName);
+  });
+  document.querySelectorAll('.ao-panel').forEach(p => {
+    p.classList.toggle('active', p.id === 'panel-' + tabName);
+  });
+  if (tabName === 'queue') loadQueue();
 }
 
 async function api(path, options = {}) {
@@ -481,8 +657,7 @@ async function startMode(mode) {
     addMsg(result.reply, 'max');
     sessionId = result.session_id || null;
     if (result.show_queue) {
-      document.querySelector('[data-tab="queue"]').click();
-      loadQueue();
+      switchTab('queue');
     }
   } catch (err) {
     chat.lastChild.remove();
@@ -575,13 +750,13 @@ document.getElementById('composeForm').addEventListener('submit', e => {
 });
 
 document.querySelectorAll('.ao-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.ao-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.ao-panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
-    if (tab.dataset.tab === 'queue') loadQueue();
-  });
+  tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+});
+
+document.getElementById('scriptLogVisit').addEventListener('click', () => {
+  switchTab('max');
+  if (activeMode === 'log_visit' && sessionId) return;
+  startMode('log_visit');
 });
 
 document.getElementById('queueFilters').addEventListener('click', e => {
