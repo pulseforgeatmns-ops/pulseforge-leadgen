@@ -115,6 +115,9 @@ function suggestTemplate({
   if (attributionSource === 'direct_mail_campaign' || nextAction === 'in_person_revisit') {
     return TEMPLATES.direct_mail_revisit;
   }
+  if (nextAction === 'phone_follow_up') {
+    return TEMPLATES.follow_up_after_visit;
+  }
   const note = String(visitNote || '').toLowerCase();
   const next = String(nextAction || '').toLowerCase();
   const blob = `${note} ${next} ${String(contactTitle || '').toLowerCase()}`;

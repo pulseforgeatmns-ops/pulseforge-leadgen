@@ -20,15 +20,17 @@ const {
 } = require('../utils/aoVisitFlow');
 const { DIRECT_MAIL_FOLLOW_UP_STEPS } = require('../utils/aoDirectMailFlow');
 const { ROUTE_FOLLOW_UP_STEPS } = require('../utils/aoRouteFollowUpFlow');
+const { PHONE_FOLLOW_UP_STEPS } = require('../utils/aoPhoneFollowUpFlow');
 const {
   createVisitRecord,
   completeDirectMailFollowUp,
   completeRouteFollowUp,
+  completePhoneFollowUp,
   getTaskForFollowUp,
   notifyJakeEscalation,
   depositEscalationAction,
 } = require('./aoFieldService');
-const { advanceRouteAfterVisit } = require('./aoRouteService');
+const { advanceRouteAfterVisit, buildNextWorkDebrief } = require('./aoRouteService');
 
 const LOG_VISIT_STEPS = [
   { key: 'business_name', question: 'What business did you visit?' },
@@ -130,6 +132,7 @@ function getSteps(mode) {
   if (mode === 'daily_debrief') return DEBRIEF_STEPS;
   if (mode === 'direct_mail_follow_up') return DIRECT_MAIL_FOLLOW_UP_STEPS;
   if (mode === 'route_follow_up') return ROUTE_FOLLOW_UP_STEPS;
+  if (mode === 'phone_follow_up') return PHONE_FOLLOW_UP_STEPS;
   if (mode === 'ask_for_help') return [{ key: 'question', question: 'What do you need help with?' }];
   if (mode === 'book_walkthrough') {
     return [
@@ -231,6 +234,47 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
     };
   }
 
+  if (mode === 'phone_follow_up') {
+    if (!taskId) {
+      return { error: 'task_id required for phone follow-up', status: 400 };
+    }
+    const task = await getTaskForFollowUp(taskId, aoOwnerId);
+    if (!task) return { error: 'Follow-up task not found', status: 404 };
+    if (task.next_action !== 'phone_follow_up') {
+      return { error: 'This task is not a phone follow-up', status: 400 };
+    }
+
+    const session = await createSession({
+      aoOwnerId,
+      clientId,
+      mode,
+      initialPayload: {
+        task_id: taskId,
+        lead_id: task.lead_id,
+        business_name: task.business_name,
+        contact_phone: task.contact_phone,
+        campaign_name: task.campaign_name,
+      },
+    });
+    const steps = getSteps(mode);
+    const phoneLine = task.contact_phone ? `Phone: ${task.contact_phone}` : 'No phone on file — log what you learn.';
+    return {
+      session_id: session.id,
+      mode,
+      task_id: taskId,
+      business_name: task.business_name,
+      step: 0,
+      total_steps: steps.length,
+      reply: [
+        `Phone follow-up — ${task.business_name}${task.campaign_name ? ` (${task.campaign_name})` : ''}.`,
+        phoneLine,
+        '',
+        steps[0].question,
+      ].join('\n'),
+      completed: false,
+    };
+  }
+
   const session = await createSession({ aoOwnerId, clientId, mode });
   const steps = getSteps(mode);
   const greeting = mode === 'log_visit'
@@ -269,6 +313,30 @@ function extractPreferredTiming(payload) {
   const answers = payload.probe_answers || {};
   return answers.probe_walkthrough_timing
     || (String(payload.notes || '').trim() || null);
+}
+
+async function appendNextWorkDebrief({ reply, aoOwnerId, clientId, aoName, taskId, skipRouteAdvance = false }) {
+  let routeAdvance = null;
+  if (taskId && !skipRouteAdvance) {
+    routeAdvance = await advanceRouteAfterVisit({
+      aoOwnerId,
+      taskId,
+      aoName,
+    }).catch(err => {
+      console.error('[ao] route advance failed:', err.message);
+      return null;
+    });
+  }
+
+  const nextDebrief = routeAdvance?.next_stop
+    ? routeAdvance.next_stop_debrief
+    : await buildNextWorkDebrief({ aoOwnerId, clientId, aoName });
+
+  return {
+    reply: nextDebrief && nextDebrief.startsWith('\n') ? reply + nextDebrief : `${reply}${nextDebrief || ''}`,
+    route: routeAdvance?.route || null,
+    next_stop: routeAdvance?.next_stop || null,
+  };
 }
 
 async function finalizeVisitSession({
@@ -362,29 +430,21 @@ async function finalizeVisitSession({
     escalated: Boolean(result.escalation),
   });
 
-  let routeAdvance = null;
-  if (payload.task_id) {
-    routeAdvance = await advanceRouteAfterVisit({
-      aoOwnerId,
-      taskId: payload.task_id,
-      aoName,
-    }).catch(err => {
-      console.error('[ao] route advance failed:', err.message);
-      return null;
-    });
-  }
+  const debrief = payload.task_id
+    ? await appendNextWorkDebrief({ reply, aoOwnerId, clientId, aoName, taskId: payload.task_id })
+    : { reply: reply + await buildNextWorkDebrief({ aoOwnerId, clientId, aoName }), route: null, next_stop: null };
 
   return {
     session_id: sessionId,
     mode: session.mode,
     completed: true,
-    reply: routeAdvance?.next_stop_debrief ? reply + routeAdvance.next_stop_debrief : reply,
+    reply: debrief.reply,
     lead: result.lead,
     task: result.task,
     escalated: Boolean(result.escalation),
     next_action_owner: nextActionOwner,
-    route: routeAdvance?.route || null,
-    next_stop: routeAdvance?.next_stop || null,
+    route: debrief.route,
+    next_stop: debrief.next_stop,
   };
 }
 
@@ -446,28 +506,20 @@ async function finalizeDirectMailSession({
     escalated: Boolean(result.escalation),
   });
 
-  let routeAdvance = null;
-  if (payload.task_id) {
-    routeAdvance = await advanceRouteAfterVisit({
-      aoOwnerId,
-      taskId: payload.task_id,
-      aoName,
-    }).catch(err => {
-      console.error('[ao] route advance failed:', err.message);
-      return null;
-    });
-  }
+  const debrief = payload.task_id
+    ? await appendNextWorkDebrief({ reply, aoOwnerId, clientId, aoName, taskId: payload.task_id })
+    : { reply: reply + await buildNextWorkDebrief({ aoOwnerId, clientId, aoName }), route: null, next_stop: null };
 
   return {
     session_id: sessionId,
     mode: session.mode,
     completed: true,
-    reply: routeAdvance?.next_stop_debrief ? reply + routeAdvance.next_stop_debrief : reply,
+    reply: debrief.reply,
     lead: result.lead,
     task: result.task,
     escalated: Boolean(result.escalation),
-    route: routeAdvance?.route || null,
-    next_stop: routeAdvance?.next_stop || null,
+    route: debrief.route,
+    next_stop: debrief.next_stop,
   };
 }
 
@@ -528,28 +580,91 @@ async function finalizeRouteFollowUpSession({
     escalated: Boolean(result.escalation),
   });
 
-  let routeAdvance = null;
-  if (payload.task_id) {
-    routeAdvance = await advanceRouteAfterVisit({
-      aoOwnerId,
-      taskId: payload.task_id,
-      aoName,
-    }).catch(err => {
-      console.error('[ao] route advance failed:', err.message);
-      return null;
-    });
-  }
+  const debrief = payload.task_id
+    ? await appendNextWorkDebrief({ reply, aoOwnerId, clientId, aoName, taskId: payload.task_id })
+    : { reply: reply + await buildNextWorkDebrief({ aoOwnerId, clientId, aoName }), route: null, next_stop: null };
 
   return {
     session_id: sessionId,
     mode: session.mode,
     completed: true,
-    reply: routeAdvance?.next_stop_debrief ? reply + routeAdvance.next_stop_debrief : reply,
+    reply: debrief.reply,
     lead: result.lead,
     task: result.task,
     escalated: Boolean(result.escalation),
-    route: routeAdvance?.route || null,
-    next_stop: routeAdvance?.next_stop || null,
+    route: debrief.route,
+    next_stop: debrief.next_stop,
+  };
+}
+
+async function finalizePhoneFollowUpSession({
+  session,
+  payload,
+  sessionId,
+  aoOwnerId,
+  clientId,
+  aoName,
+}) {
+  const nextAction = normalizeNextAction(payload.next_step || payload.call_summary || 'Follow up');
+  const interestLevel = parseInterestLevel(
+    /yes|interested|walkthrough|quote/i.test(String(payload.walkthrough_interest || '')) ? 'high'
+      : /not a fit|no fit|hard no/i.test(String(payload.next_step || '')) ? 'low'
+        : 'medium',
+  );
+
+  const result = await completePhoneFollowUp(payload.task_id, aoOwnerId, {
+    clientId,
+    aoName,
+    answers: payload,
+    visitNote: payload.call_summary,
+    nextAction,
+    interestLevel,
+    contactName: payload.contact_reached,
+    contactRole: parseContactRole(payload.reached_decision_maker),
+  });
+
+  if (!result) return { error: 'Follow-up task not found', status: 404 };
+
+  if (result.escalation) {
+    await depositEscalationAction(result.escalation, result.lead, clientId, {
+      probeAnswers: payload,
+      nextAction,
+      interestLevel,
+      aoName,
+      contactRole: parseContactRole(payload.reached_decision_maker),
+      decisionMakerStatus: formatDecisionMakerStatus({
+        contactRole: parseContactRole(payload.reached_decision_maker),
+      }),
+    });
+    await notifyJakeEscalation(result.escalation, result.lead, aoName).catch(err => {
+      console.error('[ao] Jake notification failed:', err.message);
+    });
+  }
+
+  const completionType = resolveCompletionType({
+    nextActionOwner: result.nextActionOwner,
+    escalated: Boolean(result.escalation),
+    status: result.lead.status,
+  });
+
+  const reply = buildCompletionReply({
+    businessName: result.lead.business_name,
+    completionType,
+    escalated: Boolean(result.escalation),
+  });
+
+  const workDebrief = await buildNextWorkDebrief({ aoOwnerId, clientId, aoName });
+
+  return {
+    session_id: sessionId,
+    mode: session.mode,
+    completed: true,
+    reply: reply + workDebrief,
+    lead: result.lead,
+    task: result.task,
+    escalated: Boolean(result.escalation),
+    route: null,
+    next_stop: null,
   };
 }
 
@@ -708,6 +823,10 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
     return finalizeRouteFollowUpSession({ session, payload, sessionId, aoOwnerId, clientId, aoName });
   }
 
+  if (session.mode === 'phone_follow_up') {
+    return finalizePhoneFollowUpSession({ session, payload, sessionId, aoOwnerId, clientId, aoName });
+  }
+
   if (session.mode === 'daily_debrief') {
     const strong = String(payload.strong_opportunities || '').trim();
     const walkthroughs = String(payload.walkthrough_requests || '').trim();
@@ -738,9 +857,11 @@ module.exports = {
   LOG_VISIT_STEPS,
   DIRECT_MAIL_FOLLOW_UP_STEPS,
   ROUTE_FOLLOW_UP_STEPS,
+  PHONE_FOLLOW_UP_STEPS,
   startMode,
   respondToSession,
   detectEscalation,
   finalizeDirectMailSession,
   finalizeRouteFollowUpSession,
+  finalizePhoneFollowUpSession,
 };

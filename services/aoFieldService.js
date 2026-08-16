@@ -48,6 +48,7 @@ function mapTask(row) {
     completed_at: row.completed_at,
     business_name: row.business_name,
     contact_name: row.contact_name,
+    contact_phone: row.contact_phone || null,
     address: row.address || null,
     interest_level: row.interest_level,
     attribution_source: row.attribution_source || null,
@@ -85,10 +86,13 @@ async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
     where += ` AND l.attribution_source = 'direct_mail_campaign'`;
   } else if (filter === 'waiting') {
     where += ` AND t.waiting_on_jake = true`;
+  } else if (filter === 'phone') {
+    where += ` AND t.next_action = 'phone_follow_up'`;
   }
 
   const { rows } = await pool.query(`
-    SELECT t.*, l.business_name, l.address, l.interest_level, l.attribution_source, l.campaign_name, c.contact_name
+    SELECT t.*, l.business_name, l.address, l.interest_level, l.attribution_source, l.campaign_name,
+      c.contact_name, c.phone AS contact_phone
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
     LEFT JOIN ao_contacts c ON c.id = t.contact_id
@@ -839,6 +843,234 @@ async function updateEscalation(escalationId, { status }) {
   return rows[0] || null;
 }
 
+async function getNextPhoneFollowUp({ aoOwnerId, clientId }) {
+  const { rows } = await pool.query(`
+    SELECT t.*, l.business_name, l.address, l.attribution_source, l.campaign_name,
+      l.original_visit_note, c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email
+    FROM ao_follow_up_tasks t
+    JOIN ao_leads l ON l.id = t.lead_id
+    LEFT JOIN ao_contacts c ON c.id = t.contact_id
+    WHERE t.ao_owner_id = $1 AND l.client_id = $2
+      AND t.status = 'open' AND t.next_action = 'phone_follow_up'
+    ORDER BY t.priority DESC, t.due_date ASC, t.created_at ASC
+    LIMIT 1
+  `, [aoOwnerId, clientId]);
+  return rows[0] || null;
+}
+
+function formatPhoneConversionNote() {
+  const stamp = new Date().toISOString().replace('T', ' ').slice(0, 16);
+  return `[${stamp}] AO converted from in-person revisit to phone follow-up.`;
+}
+
+async function convertToPhoneFollowUp(taskId, aoOwnerId, { phone = null } = {}) {
+  const taskRow = await getTaskForFollowUp(taskId, aoOwnerId);
+  if (!taskRow) return null;
+
+  const alreadyPhone = taskRow.next_action === 'phone_follow_up';
+  const conversionNote = alreadyPhone ? null : formatPhoneConversionNote();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let contactPhone = taskRow.contact_phone || null;
+    if (phone) {
+      const trimmedPhone = String(phone).trim();
+      if (taskRow.contact_id) {
+        await client.query(`
+          UPDATE ao_contacts SET phone = $2, updated_at = NOW() WHERE id = $1
+        `, [taskRow.contact_id, trimmedPhone]);
+      } else {
+        const { rows: contactRows } = await client.query(`
+          INSERT INTO ao_contacts (lead_id, contact_name, phone, is_decision_maker)
+          VALUES ($1, $2, $3, false)
+          RETURNING id, phone
+        `, [taskRow.lead_id, taskRow.contact_name || 'Unknown contact', trimmedPhone]);
+        await client.query(`
+          UPDATE ao_follow_up_tasks SET contact_id = $2 WHERE id = $1
+        `, [taskId, contactRows[0].id]);
+        taskRow.contact_id = contactRows[0].id;
+      }
+      contactPhone = trimmedPhone;
+    }
+
+    let task = taskRow;
+    if (!alreadyPhone) {
+      const summary = [taskRow.last_interaction_summary, conversionNote].filter(Boolean).join('\n');
+      const { rows: taskRows } = await client.query(`
+        UPDATE ao_follow_up_tasks
+        SET next_action = 'phone_follow_up',
+            last_interaction_summary = $3
+        WHERE id = $1 AND ao_owner_id = $2
+        RETURNING *
+      `, [taskId, aoOwnerId, summary]);
+      task = taskRows[0];
+      if (!task) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+
+      await client.query(`
+        UPDATE ao_route_stops
+        SET status = 'skipped', completed_at = NOW()
+        WHERE task_id = $1
+          AND status = 'pending'
+          AND route_id IN (SELECT id FROM ao_routes WHERE ao_owner_id = $2 AND status = 'active')
+      `, [taskId, aoOwnerId]);
+
+      await client.query(`
+        UPDATE ao_routes SET status = 'completed', completed_at = NOW()
+        WHERE ao_owner_id = $1
+          AND status = 'active'
+          AND NOT EXISTS (
+            SELECT 1 FROM ao_route_stops
+            WHERE route_id = ao_routes.id AND status = 'pending'
+          )
+      `, [aoOwnerId]);
+    }
+
+    await client.query('COMMIT');
+
+    return {
+      task: mapTask({
+        ...task,
+        business_name: taskRow.business_name,
+        contact_name: taskRow.contact_name,
+        contact_phone: contactPhone,
+        attribution_source: taskRow.attribution_source,
+        campaign_name: taskRow.campaign_name,
+        address: taskRow.address,
+      }),
+      lead_id: taskRow.lead_id,
+      business_name: taskRow.business_name,
+      contact_phone: contactPhone,
+      has_phone: Boolean(contactPhone),
+      conversion_note: conversionNote,
+      already_converted: alreadyPhone,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function completePhoneFollowUp(taskId, aoOwnerId, {
+  clientId,
+  aoName,
+  answers = {},
+  visitNote,
+  nextAction,
+  interestLevel,
+  contactName,
+  contactRole,
+}) {
+  const taskRow = await getTaskForFollowUp(taskId, aoOwnerId);
+  if (!taskRow) return null;
+  if (taskRow.next_action !== 'phone_follow_up') {
+    throw new Error('Task is not a phone follow-up');
+  }
+
+  const normalizedNextAction = normalizeNextAction(nextAction || answers.next_step || 'Follow up');
+  const nextActionOwner = resolveNextActionOwner(normalizedNextAction, answers);
+  const probeAnswers = { ...answers };
+  const summary = [
+    visitNote || null,
+    answers.contact_reached ? `Reached: ${answers.contact_reached}` : null,
+    answers.reached_decision_maker ? `Decision-maker: ${answers.reached_decision_maker}` : null,
+    answers.call_summary ? `Said: ${answers.call_summary}` : null,
+    answers.mailer_received ? `Mailer received: ${answers.mailer_received}` : null,
+    answers.walkthrough_interest ? `Walkthrough interest: ${answers.walkthrough_interest}` : null,
+    answers.next_step ? `Next step: ${answers.next_step}` : null,
+  ].filter(Boolean).join('\n');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let contactId = taskRow.contact_id;
+    const resolvedContactName = contactName || answers.contact_reached;
+    if (resolvedContactName) {
+      const role = parseContactRole(contactRole || answers.reached_decision_maker);
+      if (contactId) {
+        await client.query(`
+          UPDATE ao_contacts
+          SET contact_name = $2, is_decision_maker = $3, updated_at = NOW()
+          WHERE id = $1
+        `, [contactId, resolvedContactName, role === 'decision_maker']);
+      } else {
+        const { rows: contactRows } = await client.query(`
+          INSERT INTO ao_contacts (lead_id, contact_name, phone, is_decision_maker)
+          VALUES ($1,$2,$3,$4)
+          RETURNING id
+        `, [taskRow.lead_id, resolvedContactName, taskRow.contact_phone || null, role === 'decision_maker']);
+        contactId = contactRows[0].id;
+      }
+    }
+
+    const leadStatus = /not a fit|do not contact|hard no/i.test(normalizedNextAction)
+      ? 'not_a_fit'
+      : /walkthrough|tour|quote/i.test(normalizedNextAction)
+        || /yes|interested|walkthrough|quote/i.test(String(answers.walkthrough_interest || ''))
+        ? 'walkthrough_requested'
+        : 'needs_follow_up';
+
+    await client.query(`
+      UPDATE ao_leads
+      SET status = $2,
+          interest_level = COALESCE($3, interest_level),
+          original_visit_note = COALESCE($4, original_visit_note),
+          probe_answers = $5,
+          last_contact_date = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+    `, [
+      taskRow.lead_id,
+      leadStatus,
+      interestLevel || null,
+      summary || null,
+      Object.keys(probeAnswers).length ? JSON.stringify(probeAnswers) : null,
+    ]);
+
+    await client.query(`
+      UPDATE ao_follow_up_tasks
+      SET status = 'done', completed_at = NOW(), last_interaction_summary = $2
+      WHERE id = $1
+    `, [taskId, summary || visitNote || 'Phone follow-up logged']);
+
+    let escalation = null;
+    const escalate = nextActionOwner === 'jake' || nextActionOwner === 'walkthrough'
+      || /jake|walkthrough|owner should|admin should/i.test(normalizedNextAction)
+      || /yes|interested|walkthrough|quote/i.test(String(answers.walkthrough_interest || ''));
+    if (escalate) {
+      const reason = nextActionOwner === 'walkthrough' ? 'walkthrough_request' : 'high_interest';
+      const { rows: escRows } = await client.query(`
+        INSERT INTO ao_escalations (lead_id, contact_id, ao_owner_id, reason, summary, probe_answers)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING *
+      `, [taskRow.lead_id, contactId, aoOwnerId, reason, summary, JSON.stringify(probeAnswers)]);
+      escalation = escRows[0];
+    }
+
+    await client.query('COMMIT');
+    return {
+      task: mapTask({ ...taskRow, status: 'done' }),
+      lead: mapLead({ ...taskRow, id: taskRow.lead_id, status: leadStatus }),
+      escalation,
+      summary,
+      aoName,
+      clientId,
+      nextActionOwner,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function notifyJakeEscalation(escalation, lead, aoName) {
   if (!process.env.BREVO_API_KEY) return false;
   const toEmail = process.env.JAKE_EMAIL || process.env.ADMIN_EMAIL || 'jacob@gopulseforge.com';
@@ -908,6 +1140,10 @@ module.exports = {
   createDirectMailFollowUpLead,
   completeDirectMailFollowUp,
   completeRouteFollowUp,
+  completePhoneFollowUp,
+  convertToPhoneFollowUp,
+  getNextPhoneFollowUp,
+  formatPhoneConversionNote,
   getTaskForFollowUp,
   findDirectMailLead,
   resolveAoOwnerByName,

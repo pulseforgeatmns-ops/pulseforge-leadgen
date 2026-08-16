@@ -232,8 +232,53 @@ function buildNextStopDebrief(nextStop, aoName) {
     '',
     `Opening: '${opening}'`,
     '',
-    'Actions: Navigate / Log This Visit / Skip / Move Later',
+    'Actions: Navigate / Log This Visit / Call Instead / Skip / Move Later',
   ].join('\n');
+}
+
+function normalizePhoneForTel(phone) {
+  const raw = String(phone || '').trim();
+  if (!raw) return null;
+  const digits = raw.replace(/[^\d+]/g, '');
+  if (digits.replace(/\D/g, '').length < 7) return null;
+  return digits.startsWith('+') ? digits : digits.replace(/\D/g, '');
+}
+
+function buildTelUrl(phone) {
+  const normalized = normalizePhoneForTel(phone);
+  if (!normalized) return null;
+  return `tel:${normalized}`;
+}
+
+function buildPhoneFollowUpDebrief(task, aoName) {
+  if (!task) return '';
+
+  const opening = buildSuggestedOpening(task);
+  const brief = buildStopBrief(task);
+  const contact = formatContactLine(task);
+  const phone = task.contact_phone || null;
+  const telUrl = buildTelUrl(phone);
+
+  return [
+    '',
+    `Your next phone follow-up is ${task.business_name}.`,
+    '',
+    phone ? `Phone: ${phone}` : 'Phone: not saved yet',
+    '',
+    `Contact: ${contact}`,
+    '',
+    `Brief: ${brief}`,
+    '',
+    `Opening: '${opening}'`,
+    '',
+    telUrl
+      ? 'Actions: Call Now / Log Call With Max / Move Later / Escalate'
+      : 'Actions: Log Call With Max / Move Later / Escalate',
+  ].join('\n');
+}
+
+function buildWorkCompleteDebrief() {
+  return '\n\nYou\'re done with this route. Nice work. Check your queue or start another route.';
 }
 
 function enrichStopRow(row, aoName) {
@@ -288,5 +333,9 @@ module.exports = {
   buildStopBrief,
   buildSuggestedOpening,
   buildNextStopDebrief,
+  normalizePhoneForTel,
+  buildTelUrl,
+  buildPhoneFollowUpDebrief,
+  buildWorkCompleteDebrief,
   enrichStopRow,
 };
