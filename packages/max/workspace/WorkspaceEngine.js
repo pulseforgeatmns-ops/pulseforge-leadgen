@@ -149,6 +149,8 @@ class WorkspaceEngine {
    * @param {object} [options.specialistDirectionOpts] - SPEC-096 store opts (tests)
    * @param {object} [options.clientIntelligenceService] - SPEC-098 CIE service
    * @param {object} [options.clientIntelligenceOpts] - SPEC-098 CIE store opts (tests)
+   * @param {object} [options.specialistDelegationService] - SPEC-098 specialist delegation
+   * @param {object} [options.specialistDelegationOpts] - SPEC-098 delegation store opts (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -178,6 +180,8 @@ class WorkspaceEngine {
     this._specialistDirectionOpts = options.specialistDirectionOpts || null;
     this._clientIntelligenceService = options.clientIntelligenceService || null;
     this._clientIntelligenceOpts = options.clientIntelligenceOpts || null;
+    this._specialistDelegationService = options.specialistDelegationService || null;
+    this._specialistDelegationOpts = options.specialistDelegationOpts || null;
   }
 
   /** @returns {SessionStore} */

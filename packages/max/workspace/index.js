@@ -65,6 +65,12 @@ const {
   attachClientIntelligenceContext,
   loadApprovedClientIntelligence,
 } = require('./ClientIntelligenceContext');
+const {
+  createBoundedDelegation,
+  executeBoundedDelegation,
+  consumeSpecialistResult,
+  explainSpecialistTrail,
+} = require('./SpecialistDelegationContext');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -76,6 +82,10 @@ module.exports = {
   maybeHandleClientIntelligenceTurn,
   attachClientIntelligenceContext,
   loadApprovedClientIntelligence,
+  createBoundedDelegation,
+  executeBoundedDelegation,
+  consumeSpecialistResult,
+  explainSpecialistTrail,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

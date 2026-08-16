@@ -121,6 +121,12 @@ const {
   isMissionDomain,
 } = require('./workspace');
 const {
+  createSpecialistDelegationService,
+  createMemoryStore: createSpecialistDelegationMemoryStore,
+  CONTRACT_OBJECTIVE,
+  AUTHORITY_LEVELS,
+} = require('./specialistDelegation');
+const {
   IntelligenceComposer,
   createIntelligenceComposer,
   RelatedIntelligenceBuilder,
@@ -492,6 +498,10 @@ module.exports = {
   CommandDeckComposer,
   WorkspaceEngine,
   createWorkspaceEngine,
+  createSpecialistDelegationService,
+  createSpecialistDelegationMemoryStore,
+  CONTRACT_OBJECTIVE,
+  AUTHORITY_LEVELS,
   PAGE_TYPES,
   SessionStore,
   PresentationEngine,

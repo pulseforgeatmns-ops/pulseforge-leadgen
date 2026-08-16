@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Specialist Delegation Contract ([SPEC-098](docs/specs/SPEC-098_Max_Specialist_Delegation_Contract.md))
+  - Canonical `SpecialistDelegation` / `SpecialistResult` language for Max → specialist → Max
+  - Durable `specialist_delegations`, `specialist_results`, `specialist_evaluations`
+  - Explicit authority + policy supremacy (fail closed; no silent downgrade)
+  - Lightweight capability registry (`test_intelligence` callable; Scout/Paige declared, unwired)
+  - Max evaluates results as evidence, not ground truth; specialists cannot mutate Command Deck priority
+  - Operator direction remains authoritative; no automatic specialist recursion
+  - Migration: `migrations/2026-08-16-specialist-delegation.sql`
 - Max Specialist Direction & Operator Rationale ([SPEC-096](docs/specs/SPEC-096_Max_Specialist_Direction_and_Operator_Rationale.md))
   - Operator discusses Paige recommendations with Max (Accept / Discuss with Max)
   - Durable `content_recommendations` + `specialist_directions` persistence
