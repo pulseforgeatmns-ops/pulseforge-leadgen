@@ -10,6 +10,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/shared/tokens.css">
 <link rel="stylesheet" href="/shared/shell.css">
+<script src="/shared/aoQueueFormat.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
@@ -750,7 +751,7 @@ function taskCard(task) {
   if (task.priority === 'high') cls.push('high');
   if (task.priority === 'warm') cls.push('warm');
   if (task.waiting_on_jake) cls.push('waiting');
-  const due = task.due_date ? new Date(task.due_date + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+  const due = AoQueueFormat.formatDueDateLabel(task.due_date);
   const isDirectMail = task.attribution_source === 'direct_mail_campaign';
   const badge = isDirectMail
     ? `<div class="ao-task-badge">Direct Mail${task.campaign_name ? ' · ' + escapeHtml(task.campaign_name) : ''}</div>`
