@@ -15,11 +15,15 @@
 
   <main id="command-deck-main" class="cd-main" aria-label="Command Deck">
     <header class="cd-masthead" aria-label="Briefing masthead">
-      <p class="cd-eyebrow">Command Deck</p>
-      <p class="cd-timestamp" id="cdTimestamp" aria-live="polite"></p>
+      <div class="cd-field-header">
+        <p class="cd-field-label" id="cdFieldLabel">Max</p>
+        <p class="cd-field-state" id="cdFieldState" aria-live="polite">
+          <span id="cdStatus" class="cd-status-inline" role="status"></span>
+          <span class="cd-field-sep" aria-hidden="true">·</span>
+          <time id="cdTimestamp"></time>
+        </p>
+      </div>
     </header>
-
-    <div id="cdStatus" class="cd-status" role="status" aria-live="polite"></div>
     <div id="cdLiveNotify" class="cd-live-notify" hidden role="status" aria-live="polite"></div>
     <div id="cdUnseenBanner" class="cd-unseen-banner" hidden role="status" aria-live="polite"></div>
     <div id="cdError" class="cd-error" hidden></div>
@@ -31,12 +35,19 @@
           View as list
         </button>
       </div>
-      <div id="cdSpatialCanvas" class="cd-spatial-canvas" role="group" aria-label="Max operating domains">
+      <div id="cdSpatialCanvas" class="cd-spatial-canvas" role="group" aria-label="Max intelligence field">
+        <div class="cd-intel-field" aria-hidden="true">
+          <div class="cd-intel-field-waves"></div>
+        </div>
+        <svg class="cd-intel-connections" id="cdIntelConnections" aria-hidden="true" focusable="false"></svg>
         <div class="cd-spatial-orbit" id="cdSpatialOrbit">
           <article class="cd-spatial-max" id="cdSpatialMax" aria-label="Max intelligence anchor">
-            <p class="cd-spatial-max-label">Max</p>
-            <p class="cd-spatial-max-headline" id="cdSpatialMaxHeadline"></p>
-            <p class="cd-spatial-max-subline" id="cdSpatialMaxSubline"></p>
+            <div class="cd-spatial-max-halo" aria-hidden="true"></div>
+            <div class="cd-spatial-max-core">
+              <p class="cd-spatial-max-label">Max</p>
+              <p class="cd-spatial-max-headline" id="cdSpatialMaxHeadline"></p>
+              <p class="cd-spatial-max-subline" id="cdSpatialMaxSubline"></p>
+            </div>
           </article>
         </div>
       </div>

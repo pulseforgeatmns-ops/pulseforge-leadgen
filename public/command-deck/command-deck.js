@@ -1595,7 +1595,7 @@
   }
 
   function clearSections() {
-    document.body.classList.remove('cd-operator-mode');
+    document.body.classList.remove('cd-operator-mode', 'cd-living-deck');
     if (window.SpatialDeck) window.SpatialDeck.clear();
     for (const key of [
       'morning',
@@ -4587,6 +4587,15 @@
     if (els.operations) els.operations.hidden = true;
     if (els.secondary) els.secondary.hidden = true;
     if (els.queue) els.queue.hidden = true;
+    if (els.operatorLayout) els.operatorLayout.hidden = true;
+    if (els.aoDrillDown) els.aoDrillDown.hidden = true;
+
+    const generatedAt =
+      (model.spatialOverview && model.spatialOverview.generatedAt) ||
+      (model.meta && model.meta.generatedAt);
+    if (els.timestamp) {
+      els.timestamp.textContent = formatDisplayTime(generatedAt);
+    }
     return true;
   }
 
@@ -4631,11 +4640,17 @@
     const fromCache = Boolean(options.fromCache);
     const evolved = Boolean(options.evolved);
     setStatus(
-      fromCache
-        ? 'Showing last successful briefing'
-        : evolved
-          ? 'Intelligence evolved'
-          : 'Briefing ready'
+      spatialMode
+        ? fromCache
+          ? 'Cached briefing'
+          : evolved
+            ? 'Intelligence evolved'
+            : 'Briefing current'
+        : fromCache
+          ? 'Showing last successful briefing'
+          : evolved
+            ? 'Intelligence evolved'
+            : 'Briefing ready'
     );
     announce(
       fromCache
