@@ -15,6 +15,7 @@ const { composeWatchAlerts } = require('./sections/WatchAlerts');
 const { composeMarketTrends } = require('./sections/MarketTrends');
 const { composePriorityQueue } = require('./sections/PriorityQueue');
 const { composeOperations } = require('./sections/Operations');
+const { composeSpatialOverview } = require('./sections/SpatialOverview');
 
 /**
  * Command Deck Composer — presenter for the intelligence stack.
@@ -67,6 +68,7 @@ class CommandDeckComposer {
    * @param {number} [input.watchAlertLimit]
    * @param {number} [input.marketTrendLimit]
    * @param {object[]} [input.missions] - mission cards for Operations (SPEC-022)
+   * @param {object} [input.spatialContext] - Living Command Deck context (SPEC-097)
    * @param {string} [input.operator]
    * @returns {Promise<object>} CommandDeckModel
    */
@@ -221,6 +223,13 @@ class CommandDeckComposer {
         missionCount: (operations.missions || []).length,
       },
     };
+
+    if (input.spatialContext) {
+      model.spatialOverview = await composeSpatialOverview({
+        model,
+        ...input.spatialContext,
+      });
+    }
 
     return deepFreeze(model);
   }

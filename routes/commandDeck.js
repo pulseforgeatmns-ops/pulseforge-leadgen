@@ -20,6 +20,12 @@ const {
 } = require('../utils/clientContext');
 const { getMaxRuntime } = require('../utils/maxRuntime');
 const { buildOperatorBrief } = require('../services/commandDeckOperatorBrief');
+const {
+  loadPriorities,
+  reconcileDomainPriority,
+} = require('../services/commandDeckPriority');
+const { createPostgresStore } = require('../services/specialistDirection');
+const { getActiveObjectives } = require('../services/operatorObjectives');
 
 const requireDashboardRead = [
   requireAuth,
@@ -77,6 +83,13 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
       }
     }
 
+    let operatorBrief = null;
+    try {
+      operatorBrief = await buildOperatorBrief(clientId);
+    } catch (err) {
+      console.warn('[command-deck] operator brief prefetch failed:', err.message);
+    }
+
     const model = await max.compose({
       tenantId: String(clientId),
       period,
@@ -84,10 +97,10 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
       operator:
         (req.session && req.session.user && req.session.user.email) || null,
       missions,
+      spatialContext: await buildSpatialContext(clientId, req, operatorBrief),
     });
 
     try {
-      const operatorBrief = await buildOperatorBrief(clientId);
       if (operatorBrief) {
         model.operatorBrief = operatorBrief;
         // Surface AO intelligence as the Command Deck brief (replaces empty market-intel state)
@@ -136,6 +149,83 @@ function normalizePeriod(value) {
   const v = String(value || 'daily').toLowerCase();
   if (v === 'weekly' || v === 'monthly' || v === 'daily') return v;
   return 'daily';
+}
+
+/**
+ * Build Living Command Deck spatial context from durable stores.
+ * @param {number|string} clientId
+ * @param {import('express').Request} req
+ */
+async function buildSpatialContext(clientId, req, operatorBrief = null) {
+  const tenantId = String(clientId);
+  let pendingRecommendations = [];
+  let activeObjectives = [];
+  let storedPriorities = new Map();
+
+  try {
+    const store = createPostgresStore();
+    const recs = await store.listRecommendations({
+      tenantId,
+      status: 'pending',
+      limit: 5,
+    });
+    const refined = await store.listRecommendations({
+      tenantId,
+      status: 'refined',
+      limit: 5,
+    });
+    pendingRecommendations = [...recs, ...refined].map((r) => ({
+      id: r.id,
+      title: r.title || r.summary,
+      summary: r.summary,
+      status: r.status,
+      channel: r.channel || (r.metadata && r.metadata.channel) || null,
+      requiresOperatorDecision: r.status === 'pending' || r.status === 'refined',
+    }));
+  } catch (err) {
+    console.warn('[command-deck] spatial content recs failed:', err.message);
+  }
+
+  try {
+    activeObjectives = await getActiveObjectives({
+      tenantId,
+      clientId: Number(clientId),
+      limit: 10,
+    });
+  } catch (err) {
+    console.warn('[command-deck] spatial objectives failed:', err.message);
+  }
+
+  try {
+    storedPriorities = await loadPriorities(tenantId);
+  } catch (err) {
+    console.warn('[command-deck] spatial priority load failed:', err.message);
+  }
+
+  const lastVisitAt =
+    (req.session && req.session.commandDeckLastVisit) || null;
+
+  req.session.commandDeckLastVisit = new Date().toISOString();
+
+  async function reconcilePriority(input) {
+    return reconcileDomainPriority({
+      tenantId,
+      domainId: input.domainId,
+      computedPriority: input.computed,
+      reason: input.reason,
+      evidenceRefs: input.evidenceRefs,
+      stored: storedPriorities,
+    });
+  }
+
+  return {
+    pendingRecommendations,
+    activeObjectives,
+    storedPriorities,
+    lastVisitAt,
+    operatorBrief,
+    reconcilePriority,
+  };
 }
 
 module.exports = router;
