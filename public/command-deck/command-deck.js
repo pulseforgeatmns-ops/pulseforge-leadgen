@@ -68,6 +68,13 @@
     hla: document.getElementById('cdHighestLeverage'),
     operatorLayout: document.getElementById('cdOperatorLayout'),
     commandRail: document.getElementById('cdCommandRail'),
+    todayChanges: document.getElementById('cdTodayChanges'),
+    needsJake: document.getElementById('cdNeedsJake'),
+    mikeNext: document.getElementById('cdMikeNext'),
+    aoDrillDown: document.getElementById('cdAoDrillDown'),
+    drillEscalations: document.getElementById('cd-escalations'),
+    drillCampaign: document.getElementById('cd-campaign'),
+    drillPromo: document.getElementById('cd-promo'),
     jake: document.getElementById('cdJakeActions'),
     mike: document.getElementById('cdMikeActions'),
     actionCards: document.getElementById('cdActionCards'),
@@ -1585,13 +1592,47 @@
   }
 
   function clearSections() {
-    for (const key of ['morning', 'hla', 'operatorLayout', 'commandRail', 'jake', 'mike', 'actionCards', 'operations', 'secondary', 'queue']) {
+    document.body.classList.remove('cd-operator-mode');
+    for (const key of [
+      'morning',
+      'hla',
+      'operatorLayout',
+      'commandRail',
+      'todayChanges',
+      'needsJake',
+      'mikeNext',
+      'aoDrillDown',
+      'drillEscalations',
+      'drillCampaign',
+      'drillPromo',
+      'jake',
+      'mike',
+      'actionCards',
+      'operations',
+      'secondary',
+      'queue',
+    ]) {
       const el = els[key];
       if (!el) continue;
       el.hidden = true;
       el.classList.remove('is-revealed');
-      if (key !== 'operatorLayout') el.innerHTML = '';
+      if (!['operatorLayout', 'aoDrillDown'].includes(key)) el.innerHTML = '';
     }
+  }
+
+  function renderBriefList(items, emptyMessage) {
+    if (!items || !items.length) {
+      return `<p class="cd-brief-empty">${escapeHtml(emptyMessage)}</p>`;
+    }
+    return `<ul class="cd-brief-list">${items.map((item) => {
+      const primary = typeof item === 'string' ? item : item.action;
+      const detail = typeof item === 'string' ? null : item.detail;
+      const href = typeof item === 'string' ? null : item.href;
+      const body = href
+        ? `<a class="cd-brief-link" href="${escapeHtml(href)}">${escapeHtml(primary)}</a>`
+        : `<span class="cd-brief-primary">${escapeHtml(primary)}</span>`;
+      return `<li class="cd-brief-item">${body}${detail ? `<span class="cd-brief-detail">${escapeHtml(detail)}</span>` : ''}</li>`;
+    }).join('')}</ul>`;
   }
 
   function showError(options = {}) {
@@ -1671,7 +1712,7 @@
       <div class="cd-rail-stat-row"><span>Phone-first</span><span>${escapeHtml(String(campaign.phone_first ?? '—'))}</span></div>
       <div class="cd-rail-stat-row"><span>Meaningful convos</span><span>${escapeHtml(String(campaign.meaningful_conversations ?? '—'))}</span></div>
       <div class="cd-rail-actions">
-        <a class="cd-rail-btn" href="${escapeHtml(campaign.details_href || '/max-briefing#campaign')}">View Campaign Details</a>
+        <a class="cd-rail-btn" href="${escapeHtml(campaign.details_href || '#cd-campaign')}">View Campaign Details</a>
       </div>
     `;
 
@@ -1679,7 +1720,9 @@
       if (action.kind === 'copy') {
         return `<button type="button" class="cd-rail-btn" data-rail-copy-instructions>${escapeHtml(action.label)}</button>`;
       }
-      return `<a class="cd-rail-btn" href="${escapeHtml(action.href || '#')}">${escapeHtml(action.label)}</a>`;
+      const href = action.href || '#';
+      const isHash = href.startsWith('#');
+      return `<a class="cd-rail-btn${action.id === 'ao_route' ? ' cd-rail-btn-primary' : ''}" href="${escapeHtml(href)}"${isHash ? ' data-rail-anchor' : ''}>${escapeHtml(action.label)}</a>`;
     }).join('');
 
     els.commandRail.innerHTML = `
@@ -1727,6 +1770,19 @@
         }
       });
     });
+    els.commandRail.querySelectorAll('[data-rail-anchor]').forEach((link) => {
+      link.addEventListener('click', (event) => {
+        const href = link.getAttribute('href');
+        if (!href || !href.startsWith('#')) return;
+        event.preventDefault();
+        const target = document.querySelector(href);
+        if (target) {
+          target.hidden = false;
+          if (els.aoDrillDown) els.aoDrillDown.hidden = false;
+          target.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+        }
+      });
+    });
     els.commandRail.querySelector('[data-rail-copy-instructions]')?.addEventListener('click', async () => {
       const text = ob.mikeInstructions || '';
       try {
@@ -1739,10 +1795,85 @@
     });
   }
 
+  function renderOperatorDrillDown(ob) {
+    const drill = ob.drillDown || {};
+    const escalations = drill.escalations || [];
+    const campaign = drill.campaign || ob.commandRail?.campaign001 || {};
+    const promo = drill.promoCandidates || [];
+    const openEscalations = escalations.filter((e) =>
+      ['new', 'seen', 'in_progress'].includes(e.status)
+    );
+
+    if (els.drillEscalations) {
+      const rows = openEscalations.length
+        ? openEscalations.map((e) => `
+          <article class="cd-drill-row">
+            <h3 class="cd-drill-row-title">${escapeHtml(e.business_name)}</h3>
+            <p class="cd-drill-row-meta">${escapeHtml([e.contact_name, e.reason, e.recommended_action].filter(Boolean).join(' · '))}</p>
+            <div class="cd-rail-actions">
+              ${e.phone ? `<a class="cd-rail-btn cd-rail-btn-primary" href="tel:${escapeHtml(e.phone)}">Call</a>` : ''}
+              <a class="cd-rail-btn" href="${escapeHtml(e.admin_visit_url || `/admin/field-visits/?lead=${e.lead_id}`)}">View visit</a>
+            </div>
+          </article>
+        `).join('')
+        : '<p class="cd-brief-empty">No open escalations right now.</p>';
+      els.drillEscalations.innerHTML = `
+        <p class="cd-kicker" id="cdEscalationsHeading">Escalations</p>
+        <div class="cd-drill-body">${rows}</div>
+      `;
+      els.drillEscalations.hidden = false;
+    }
+
+    if (els.drillCampaign) {
+      els.drillCampaign.innerHTML = `
+        <p class="cd-kicker" id="cdCampaignHeading">Campaign 001</p>
+        <div class="cd-drill-body">
+          <div class="cd-rail-stat-row"><span>Total targets</span><span>${escapeHtml(String(campaign.target_total ?? campaign.total ?? '—'))}</span></div>
+          <div class="cd-rail-stat-row"><span>Visited</span><span>${escapeHtml(String(campaign.visited ?? '—'))}</span></div>
+          <div class="cd-rail-stat-row"><span>Remaining</span><span>${escapeHtml(String(campaign.remaining_route_queue ?? campaign.remaining ?? '—'))}</span></div>
+          <div class="cd-rail-stat-row"><span>Walk-ins</span><span>${escapeHtml(String(campaign.walk_in_queue ?? campaign.walk_ins ?? '—'))}</span></div>
+          <div class="cd-rail-stat-row"><span>Phone-first</span><span>${escapeHtml(String(campaign.phone_first_queue ?? campaign.phone_first ?? '—'))}</span></div>
+          <div class="cd-rail-stat-row"><span>Meaningful convos</span><span>${escapeHtml(String(campaign.meaningful_conversations ?? '—'))}</span></div>
+          <div class="cd-rail-actions" style="margin-top:0.65rem">
+            <a class="cd-rail-btn cd-rail-btn-primary" href="/ao">Open Mike Route</a>
+            <a class="cd-rail-btn" href="/admin/field-visits">View Field Visits</a>
+          </div>
+        </div>
+      `;
+      els.drillCampaign.hidden = false;
+    }
+
+    if (els.drillPromo) {
+      const rows = promo.length
+        ? promo.map((p) => `
+          <article class="cd-drill-row">
+            <h3 class="cd-drill-row-title">${escapeHtml(p.business_name)}</h3>
+            <p class="cd-drill-row-meta">${escapeHtml((p.reasons || []).join(' · ') || 'Ready for CRM promotion')}</p>
+            <div class="cd-rail-actions">
+              <a class="cd-rail-btn" href="/admin/field-visits/?lead=${escapeHtml(p.lead_id)}">Review lead</a>
+            </div>
+          </article>
+        `).join('')
+        : '<p class="cd-brief-empty">No CRM promotion candidates yet.</p>';
+      els.drillPromo.innerHTML = `
+        <p class="cd-kicker" id="cdPromoHeading">CRM Promotion Candidates</p>
+        <div class="cd-drill-body">${rows}</div>
+      `;
+      els.drillPromo.hidden = promo.length === 0;
+    }
+
+    if (els.aoDrillDown) {
+      const anyVisible = [els.drillEscalations, els.drillCampaign, els.drillPromo]
+        .some((el) => el && !el.hidden);
+      els.aoDrillDown.hidden = !anyVisible;
+    }
+  }
+
   function renderOperatorBrief(model) {
     const ob = model.operatorBrief;
     if (!ob) return false;
 
+    document.body.classList.add('cd-operator-mode');
     els.timestamp.textContent = formatDisplayTime(ob.generatedAt || (model.meta && model.meta.generatedAt));
 
     if (els.operatorLayout) els.operatorLayout.hidden = false;
@@ -1763,7 +1894,29 @@
     `;
     els.hla.hidden = false;
 
+    const todayItems = ob.todayChanges || [];
+    els.todayChanges.innerHTML = `
+      <p class="cd-kicker" id="cdTodayHeading">What Changed Today</p>
+      ${todayItems.length
+        ? `<ul class="cd-brief-list">${todayItems.map((line) => `<li class="cd-brief-item"><span class="cd-brief-primary">${escapeHtml(line)}</span></li>`).join('')}</ul>`
+        : '<p class="cd-brief-empty">No field activity logged yet today.</p>'}
+    `;
+    els.todayChanges.hidden = false;
+
+    els.needsJake.innerHTML = `
+      <p class="cd-kicker" id="cdNeedsJakeHeading">What Needs Jake</p>
+      ${renderBriefList(ob.jakeActions || [], 'No Jake actions pending — monitor the route and warm opportunities.')}
+    `;
+    els.needsJake.hidden = false;
+
+    els.mikeNext.innerHTML = `
+      <p class="cd-kicker" id="cdMikeNextHeading">What Mike / AO Should Do Next</p>
+      ${renderBriefList(ob.mikeActions || [], 'Mike should start the Campaign 001 route.')}
+    `;
+    els.mikeNext.hidden = false;
+
     renderCommandRail(ob);
+    renderOperatorDrillDown(ob);
 
     return true;
   }
@@ -1871,13 +2024,15 @@
     bindCardActions(els.hla);
   }
 
-  function renderOperations(model) {
+  function renderOperations(model, options = {}) {
     if (!els.operations) return;
     const ops = model.operations;
     if (!ops) {
       els.operations.hidden = true;
       return;
     }
+
+    els.operations.classList.toggle('cd-operations-secondary', Boolean(options.secondary));
 
     const missions = Array.isArray(ops.missions) ? ops.missions : [];
     const summary = ops.summary || {};
@@ -1937,7 +2092,7 @@
         )}</p>`;
 
     els.operations.innerHTML = `
-      <p class="cd-kicker" id="cdOpsHeading">Operations</p>
+      <p class="cd-kicker" id="cdOpsHeading">${options.secondary ? 'Operations Feed' : 'Operations'}</p>
       ${
         summaryBits.length
           ? `<p class="cd-ops-summary">${escapeHtml(summaryBits.join(' · '))}</p>`
@@ -4330,11 +4485,18 @@
     const stages = [
       els.morning,
       els.hla,
+      els.todayChanges,
+      els.needsJake,
+      els.mikeNext,
       els.commandRail,
+      els.aoDrillDown,
+      els.drillEscalations,
+      els.drillCampaign,
+      els.drillPromo,
+      els.operations,
       els.jake,
       els.mike,
       els.actionCards,
-      els.operations,
       els.secondary,
       els.queue,
     ].filter((el) => el && !el.hidden);
@@ -4365,11 +4527,13 @@
       applyPresentationLayout(model);
       renderMorningBrief(model);
       renderHighestLeverage(model);
+      renderOperations(model);
+    } else {
+      renderOperations(model, { secondary: true });
     }
 
     // Legacy intelligence sections stay hidden in operator mode
     if (!operatorMode) {
-      renderOperations(model);
       renderSecondary(model);
       renderPriorityQueue(model);
     }
@@ -4579,9 +4743,11 @@
       renderSecondary(model);
       renderPriorityQueue(model);
       appendEvolutionFootnotes(model);
+    } else {
+      renderOperations(model, { secondary: true });
     }
 
-    [els.morning, els.hla, els.commandRail, els.jake, els.mike, els.actionCards, els.secondary, els.queue].forEach((el) => {
+    [els.morning, els.hla, els.todayChanges, els.needsJake, els.mikeNext, els.commandRail, els.aoDrillDown, els.operations, els.jake, els.mike, els.actionCards, els.secondary, els.queue].forEach((el) => {
       if (!el || el.hidden) return;
       el.classList.add('is-revealed', 'cd-evolved');
       if (!prefersReducedMotion()) {
