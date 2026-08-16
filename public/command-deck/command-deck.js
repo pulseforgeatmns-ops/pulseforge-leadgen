@@ -83,6 +83,7 @@
     operations: document.getElementById('cdOperations'),
     secondary: document.getElementById('cdSecondary'),
     queue: document.getElementById('cdPriorityQueue'),
+    spatialDeck: document.getElementById('cdSpatialDeck'),
     askForm: document.getElementById('cdAskForm'),
     askInput: document.getElementById('cdAskInput'),
     workspace: document.getElementById('maxWorkspace'),
@@ -1595,6 +1596,7 @@
 
   function clearSections() {
     document.body.classList.remove('cd-operator-mode');
+    if (window.SpatialDeck) window.SpatialDeck.clear();
     for (const key of [
       'morning',
       'hla',
@@ -2535,6 +2537,17 @@
           type: 'watch_alert',
           name: String((payload && payload.title) || 'Watch alert'),
         };
+      } else if (payload && payload.domainId) {
+        const domain =
+          model.spatialOverview &&
+          (model.spatialOverview.domains || []).find(
+            (d) => d.id === payload.domainId
+          );
+        selectedEntity = {
+          id: String(payload.domainId),
+          type: 'domain',
+          name: (domain && domain.label) || String(payload.domainId),
+        };
       }
     }
 
@@ -2543,6 +2556,7 @@
       tenantId: String(tenantIdFromModel(model) || 'unknown'),
       companyId: companyId ? String(companyId) : null,
       recommendationId: recommendationId ? String(recommendationId) : null,
+      domainId: payload && payload.domainId ? String(payload.domainId) : null,
       action: (payload && payload.action) || null,
       discussRecommendation: Boolean(payload && payload.discussRecommendation),
       visibleCards: buildVisibleCards(model),
@@ -4530,6 +4544,7 @@
 
   function stagedReveal() {
     const stages = [
+      els.spatialDeck,
       els.morning,
       els.hla,
       els.todayChanges,
@@ -4560,6 +4575,21 @@
     });
   }
 
+  function renderSpatialOverview(model) {
+    if (!window.SpatialDeck || !model.spatialOverview) return false;
+    const rendered = window.SpatialDeck.render(model.spatialOverview);
+    if (!rendered) return false;
+
+    document.body.classList.add('cd-living-deck');
+    // Legacy vertical sections remain in DOM for list/detail fallback but stay hidden.
+    if (els.morning) els.morning.hidden = true;
+    if (els.hla) els.hla.hidden = true;
+    if (els.operations) els.operations.hidden = true;
+    if (els.secondary) els.secondary.hidden = true;
+    if (els.queue) els.queue.hidden = true;
+    return true;
+  }
+
   function renderModel(model, options = {}) {
     currentModel = model;
     if (model && model.live && model.live.cursor) {
@@ -4568,19 +4598,23 @@
     clearSections();
     hideError();
 
-    const operatorMode = renderOperatorBrief(model);
+    const operatorMode = Boolean(model.operatorBrief);
+    if (operatorMode && !model.spatialOverview) {
+      renderOperatorBrief(model);
+    }
+    const spatialMode = renderSpatialOverview(model);
 
-    if (!operatorMode) {
+    if (!operatorMode && !spatialMode) {
       applyPresentationLayout(model);
       renderMorningBrief(model);
       renderHighestLeverage(model);
       renderOperations(model);
-    } else {
+    } else if (operatorMode && !spatialMode) {
       renderOperations(model, { secondary: true });
     }
 
-    // Legacy intelligence sections stay hidden in operator mode
-    if (!operatorMode) {
+    // Legacy intelligence sections stay hidden in operator/spatial mode
+    if (!operatorMode && !spatialMode) {
       renderSecondary(model);
       renderPriorityQueue(model);
     }
@@ -4588,6 +4622,10 @@
     stagedReveal();
     if (!operatorMode) {
       appendEvolutionFootnotes(model);
+    }
+
+    if (spatialMode && els.spatialDeck) {
+      els.spatialDeck.classList.add('is-revealed');
     }
 
     const fromCache = Boolean(options.fromCache);
@@ -4783,18 +4821,23 @@
     const wasHla = els.hla ? els.hla.innerHTML : '';
     clearSections();
     hideError();
-    const operatorMode = renderOperatorBrief(model);
-    if (!operatorMode) {
+    const operatorMode = Boolean(model.operatorBrief);
+    const spatialMode = model.spatialOverview && window.SpatialDeck
+      ? window.SpatialDeck.render(model.spatialOverview)
+      : false;
+    if (!operatorMode && !spatialMode) {
       renderMorningBrief(model);
       renderHighestLeverage(model);
       renderSecondary(model);
       renderPriorityQueue(model);
       appendEvolutionFootnotes(model);
-    } else {
+    } else if (operatorMode) {
       renderOperations(model, { secondary: true });
+    } else if (spatialMode && model.spatialOverview) {
+      window.SpatialDeck.render(model.spatialOverview);
     }
 
-    [els.morning, els.hla, els.todayChanges, els.needsJake, els.mikeNext, els.commandRail, els.aoDrillDown, els.operations, els.jake, els.mike, els.actionCards, els.secondary, els.queue].forEach((el) => {
+    [els.spatialDeck, els.morning, els.hla, els.todayChanges, els.needsJake, els.mikeNext, els.commandRail, els.aoDrillDown, els.operations, els.jake, els.mike, els.actionCards, els.secondary, els.queue].forEach((el) => {
       if (!el || el.hidden) return;
       el.classList.add('is-revealed', 'cd-evolved');
       if (!prefersReducedMotion()) {
@@ -4948,6 +4991,28 @@
 
   document.addEventListener('pulseforge:shell-ready', applyClientCommandDeckPresentation);
   if (window.PulseforgeShell) applyClientCommandDeckPresentation();
+
+  if (window.SpatialDeck) {
+    window.SpatialDeck.init({
+      escapeHtml,
+      prefersReducedMotion,
+      onDiscussMax: (payload) =>
+        openWorkspaceFromAction({
+          page: 'command-deck',
+          context: `domain_${payload.domainId}`,
+          domainId: payload.domainId,
+          prompt: null,
+        }),
+      onOpenMission: (missionId) => openMissionWorkspace(missionId),
+      onReviewRecommendation: (recommendationId) =>
+        openWorkspaceFromAction({
+          page: 'command-deck',
+          context: 'content_recommendation',
+          recommendationId,
+        }),
+      onAskMax: (payload) => openWorkspaceFromAction(payload || {}),
+    });
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => loadDeck());

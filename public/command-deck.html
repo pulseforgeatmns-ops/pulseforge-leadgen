@@ -21,7 +21,27 @@
 
     <div id="cdStatus" class="cd-status" role="status" aria-live="polite"></div>
     <div id="cdLiveNotify" class="cd-live-notify" hidden role="status" aria-live="polite"></div>
+    <div id="cdUnseenBanner" class="cd-unseen-banner" hidden role="status" aria-live="polite"></div>
     <div id="cdError" class="cd-error" hidden></div>
+
+    <!-- SPEC-097 Living Command Deck — spatial intelligence surface -->
+    <section id="cdSpatialDeck" class="cd-spatial-deck" aria-label="Living Command Deck" hidden>
+      <div class="cd-spatial-toolbar">
+        <button type="button" id="cdViewToggle" class="cd-view-toggle" aria-pressed="false">
+          View as list
+        </button>
+      </div>
+      <div id="cdSpatialCanvas" class="cd-spatial-canvas" role="group" aria-label="Max operating domains">
+        <div class="cd-spatial-orbit" id="cdSpatialOrbit">
+          <article class="cd-spatial-max" id="cdSpatialMax" aria-label="Max intelligence anchor">
+            <p class="cd-spatial-max-label">Max</p>
+            <p class="cd-spatial-max-headline" id="cdSpatialMaxHeadline"></p>
+            <p class="cd-spatial-max-subline" id="cdSpatialMaxSubline"></p>
+          </article>
+        </div>
+      </div>
+      <div id="cdSpatialList" class="cd-spatial-list" hidden aria-label="Domain list view"></div>
+    </section>
 
     <div id="cdOperatorLayout" class="cd-operator-layout" hidden>
       <div class="cd-operator-main">
@@ -64,6 +84,11 @@
   </div>
 
   <div class="cd-ask-bar" role="region" aria-label="Ask Max">
+    <div class="cd-ask-context">
+      <select id="cdRecentConversations" class="cd-recent-select" aria-label="Recent conversations" hidden>
+        <option value="">Recent ▾</option>
+      </select>
+    </div>
     <form id="cdAskForm" class="cd-ask-form" autocomplete="off">
       <label class="pf-sr-only" for="cdAskInput">Ask Max about today's briefing</label>
       <span class="cd-ask-mark" aria-hidden="true"></span>
@@ -144,11 +169,42 @@
     </div>
   </div>
 
+  <!-- Domain drawer — progressive disclosure (SPEC-097) -->
+  <div id="cdDomainDrawer" class="cd-domain-drawer" hidden role="dialog" aria-modal="true" aria-labelledby="cdDomainDrawerTitle">
+    <div class="cd-domain-backdrop" data-cd-domain-close></div>
+    <div class="cd-domain-panel">
+      <header class="cd-domain-header">
+        <div>
+          <p class="cd-domain-eyebrow" id="cdDomainDrawerEyebrow">Domain</p>
+          <h2 id="cdDomainDrawerTitle" class="cd-domain-title">Domain</h2>
+        </div>
+        <button type="button" class="cd-domain-close" data-cd-domain-close aria-label="Close domain">Close</button>
+      </header>
+      <div id="cdDomainDrawerBody" class="cd-domain-body"></div>
+      <footer class="cd-domain-footer">
+        <button type="button" class="cd-btn cd-btn-primary" id="cdDomainDiscussMax">Discuss with Max</button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Priority explanation overlay -->
+  <div id="cdPriorityExplain" class="cd-priority-explain" hidden role="dialog" aria-modal="true" aria-labelledby="cdPriorityExplainTitle">
+    <div class="cd-domain-backdrop" data-cd-explain-close></div>
+    <div class="cd-priority-panel">
+      <header class="cd-domain-header">
+        <h2 id="cdPriorityExplainTitle" class="cd-domain-title">Why this moved</h2>
+        <button type="button" class="cd-domain-close" data-cd-explain-close aria-label="Close explanation">Close</button>
+      </header>
+      <div id="cdPriorityExplainBody" class="cd-domain-body"></div>
+    </div>
+  </div>
+
   <script src="/shared/accessibility.js"></script>
   <script src="/shared/api-client.js"></script>
   <script src="/shared/shell.js"></script>
   <script src="/shared/maxInteractionCadence.js"></script>
   <script src="/command-deck/investigation.js"></script>
+  <script src="/command-deck/spatial-deck.js"></script>
   <script src="/command-deck/command-deck.js"></script>
 </body>
 </html>
