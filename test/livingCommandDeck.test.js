@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * SPEC-097 Living Command Deck — UI contract regression tests.
+ * SPEC-097 / SPEC-097A Living Command Deck — UI contract regression tests.
  */
 
 const { describe, it } = require('node:test');
@@ -55,5 +55,64 @@ describe('SPEC-097 Living Command Deck UI contracts', () => {
   it('mobile fallback hides spatial canvas under narrow viewport', () => {
     assert.match(css, /@media \(max-width: 640px\)/);
     assert.match(css, /\.cd-spatial-canvas/);
+  });
+});
+
+describe('SPEC-097A Intelligence Field UI contracts', () => {
+  it('includes intelligence field layers — background waves and connection SVG', () => {
+    assert.match(html, /cd-intel-field/);
+    assert.match(html, /id="cdIntelConnections"/);
+    assert.match(html, /cd-spatial-max-halo/);
+    assert.match(html, /cd-spatial-max-core/);
+  });
+
+  it('uses compact field header instead of Command Deck masthead', () => {
+    assert.match(html, /cd-field-header/);
+    assert.match(html, /id="cdFieldLabel"/);
+    assert.match(html, /id="cdFieldState"/);
+    assert.doesNotMatch(html, /Command Deck<\/p>/);
+  });
+
+  it('mutually excludes spatial canvas and list view via CSS', () => {
+    assert.match(css, /\.cd-spatial-deck:not\(\.cd-spatial-list-mode\) \.cd-spatial-list/);
+    assert.match(css, /\.cd-spatial-deck\.cd-spatial-list-mode \.cd-spatial-canvas/);
+  });
+
+  it('defines priority band visual treatments and Max anchor styles', () => {
+    assert.match(css, /\.cd-priority-urgent/);
+    assert.match(css, /\.cd-priority-elevated/);
+    assert.match(css, /\.cd-priority-monitored/);
+    assert.match(css, /\.cd-spatial-max-core/);
+    assert.match(css, /\.cd-intel-conn/);
+  });
+
+  it('renders intelligence connections and elevation signal travel in spatial-deck.js', () => {
+    assert.match(spatialJs, /renderConnections/);
+    assert.match(spatialJs, /cd-intel-conn/);
+    assert.match(spatialJs, /cd-spatial-node-elevating/);
+    assert.match(spatialJs, /cd-spatial-node-settling/);
+    assert.match(spatialJs, /cd-intel-paused/);
+  });
+
+  it('supports domain focus and contextual Ask Max placeholder', () => {
+    assert.match(spatialJs, /setDomainFocus/);
+    assert.match(spatialJs, /cd-spatial-node-focused/);
+    assert.match(spatialJs, /Ask Max about \$\{domain\.label\}/);
+    assert.match(css, /cd-domain-open/);
+  });
+
+  it('exposes screen-reader priority semantics on domain nodes', () => {
+    assert.match(spatialJs, /buildNodeAriaLabel/);
+    assert.match(spatialJs, /cd-spatial-node-priority/);
+    assert.match(spatialJs, /New intelligence/);
+  });
+
+  it('uses Briefing current status copy in spatial mode', () => {
+    assert.match(deckJs, /Briefing current/);
+  });
+
+  it('does not render duplicate domain list below spatial canvas in spatial mode', () => {
+    assert.match(spatialJs, /syncViewVisibility/);
+    assert.match(spatialJs, /els\.canvas\.hidden = listView/);
   });
 });

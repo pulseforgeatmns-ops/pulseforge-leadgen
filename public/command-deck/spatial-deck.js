@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * SPEC-097 Living Command Deck — spatial domain renderer.
+ * SPEC-097 / SPEC-097A Living Command Deck — spatial intelligence field renderer.
  * Render-only consumer of model.spatialOverview from CommandDeckModel.
+ * Motion communicates intelligence state — it does not decorate the interface.
  */
 
 (function () {
@@ -13,6 +14,13 @@
     urgent: 'Urgent',
   });
 
+  const PRIORITY_RANK = Object.freeze({
+    monitored: 0,
+    normal: 1,
+    elevated: 2,
+    urgent: 3,
+  });
+
   const SLOT_POSITIONS = Object.freeze({
     top: { tx: 0, ty: -1 },
     left: { tx: -1, ty: 0 },
@@ -20,12 +28,17 @@
     bottom: { tx: 0, ty: 1 },
   });
 
+  const ELEVATION_MS = 900;
+  const SETTLE_MS = 1100;
+
   /** @type {object|null} */
   let activeOverview = null;
   /** @type {string|null} */
   let activeDomainId = null;
   /** @type {boolean} */
   let listView = false;
+  /** @type {Map<string, HTMLElement>} */
+  let nodeByDomain = new Map();
 
   const handlers = {
     onDiscussMax: null,
@@ -41,6 +54,8 @@
   function bindElements() {
     els.deck = document.getElementById('cdSpatialDeck');
     els.orbit = document.getElementById('cdSpatialOrbit');
+    els.canvas = document.getElementById('cdSpatialCanvas');
+    els.connections = document.getElementById('cdIntelConnections');
     els.maxHeadline = document.getElementById('cdSpatialMaxHeadline');
     els.maxSubline = document.getElementById('cdSpatialMaxSubline');
     els.list = document.getElementById('cdSpatialList');
@@ -69,7 +84,30 @@
 
   function orbitRadius() {
     if (window.matchMedia('(max-width: 640px)').matches) return 0;
-    return 148;
+    const root = getComputedStyle(document.documentElement);
+    const val = root.getPropertyValue('--cd-orbit-radius').trim();
+    if (val.endsWith('px')) return Number.parseFloat(val) || 240;
+    // min(42vw, 240px) — approximate from viewport
+    return Math.min(window.innerWidth * 0.42, 240);
+  }
+
+  function scaleForPriority(priority) {
+    const map = { urgent: 1.12, elevated: 1.06, normal: 1, monitored: 0.88 };
+    return map[priority] || 1;
+  }
+
+  function isElevationTransition(transition) {
+    if (!transition) return false;
+    const prev = PRIORITY_RANK[transition.previousState] ?? 1;
+    const next = PRIORITY_RANK[transition.newState] ?? 1;
+    return next > prev;
+  }
+
+  function isDeElevationTransition(transition) {
+    if (!transition) return false;
+    const prev = PRIORITY_RANK[transition.previousState] ?? 1;
+    const next = PRIORITY_RANK[transition.newState] ?? 1;
+    return next < prev;
   }
 
   /**
@@ -84,10 +122,12 @@
 
     renderMaxAnchor(overview.maxAnchor);
     renderDomains(overview.domains || []);
+    renderConnections(overview.domains || []);
     renderListFallback(overview.listFallback || overview.domains || []);
     renderUnseenBanner(overview.unseenChanges || []);
-    updateAskPlaceholder(overview.maxAnchor);
+    updateAskPlaceholder(overview.maxAnchor, activeDomainId);
     renderRecentConversations();
+    syncViewVisibility();
 
     if (window.matchMedia('(max-width: 640px)').matches) {
       setListView(true, { silent: true });
@@ -107,10 +147,33 @@
     }
   }
 
-  function updateAskPlaceholder(anchor) {
-    if (els.askInput && anchor && anchor.askPlaceholder) {
-      els.askInput.placeholder = anchor.askPlaceholder;
+  function updateAskPlaceholder(anchor, domainId) {
+    if (!els.askInput) return;
+    const domain = domainId ? findDomain(domainId) : null;
+    if (domain) {
+      els.askInput.placeholder = `Ask Max about ${domain.label}…`;
+      return;
     }
+    if (anchor && anchor.askPlaceholder) {
+      els.askInput.placeholder = anchor.askPlaceholder;
+      return;
+    }
+    els.askInput.placeholder = 'Ask Max…';
+  }
+
+  function buildNodeAriaLabel(domain) {
+    const parts = [
+      domain.label,
+      PRIORITY_LABELS[domain.priority] || domain.priority,
+      domain.summary && domain.summary.compressed,
+    ].filter(Boolean);
+    if (domain.transition) {
+      parts.push(`Priority changed to ${PRIORITY_LABELS[domain.transition.newState] || domain.transition.newState}`);
+    }
+    if (domain.intelligence && domain.intelligence.active) {
+      parts.push('New intelligence');
+    }
+    return parts.join('. ');
   }
 
   function renderDomains(domains) {
@@ -118,6 +181,7 @@
 
     const existing = els.orbit.querySelectorAll('.cd-spatial-node');
     existing.forEach((n) => n.remove());
+    nodeByDomain = new Map();
 
     const radius = orbitRadius();
     for (const domain of domains) {
@@ -125,7 +189,7 @@
       node.type = 'button';
       node.className = buildNodeClasses(domain);
       node.dataset.domainId = domain.id;
-      node.setAttribute('aria-label', `${domain.label}, ${PRIORITY_LABELS[domain.priority] || domain.priority}`);
+      node.setAttribute('aria-label', buildNodeAriaLabel(domain));
 
       const pos = domain.position || {};
       const slot = SLOT_POSITIONS[pos.slot] || SLOT_POSITIONS.top;
@@ -138,26 +202,41 @@
       node.style.setProperty('--cd-node-y', `${y}px`);
       node.style.setProperty('--cd-node-scale', scaleForPriority(domain.priority));
 
+      const priorityLabel = PRIORITY_LABELS[domain.priority] || domain.priority;
+      const showPriorityLabel =
+        domain.priority === 'urgent' ||
+        domain.priority === 'elevated' ||
+        domain.priority === 'monitored';
+
       node.innerHTML = `
         <span class="cd-spatial-node-label">${esc(domain.label)}</span>
+        ${showPriorityLabel ? `<span class="cd-spatial-node-priority">${esc(priorityLabel)}</span>` : ''}
         <span class="cd-spatial-node-summary">${esc(domain.summary && domain.summary.compressed)}</span>
-        ${domain.transition ? `<span class="cd-spatial-node-badge">↑ ${esc(PRIORITY_LABELS[domain.transition.newState] || domain.transition.newState).toUpperCase()} BY MAX</span>` : ''}
+        ${domain.transition && isElevationTransition(domain.transition)
+          ? `<span class="cd-spatial-node-badge">↑ ${esc(PRIORITY_LABELS[domain.transition.newState] || domain.transition.newState).toUpperCase()} BY MAX</span>`
+          : ''}
         ${domain.intelligence && domain.intelligence.active ? '<span class="cd-spatial-node-glow" aria-hidden="true"></span>' : ''}
       `;
 
-      if (domain.transition && !reducedMotion()) {
-        node.classList.add('cd-spatial-node-animating');
-        window.setTimeout(() => node.classList.remove('cd-spatial-node-animating'), 4200);
-      }
+      applyTransitionAnimation(node, domain);
 
       node.addEventListener('click', () => openDomainDrawer(domain.id));
       els.orbit.appendChild(node);
+      nodeByDomain.set(domain.id, node);
     }
   }
 
-  function scaleForPriority(priority) {
-    const map = { urgent: 1.08, elevated: 1.04, normal: 1, monitored: 0.94 };
-    return map[priority] || 1;
+  function applyTransitionAnimation(node, domain) {
+    if (reducedMotion() || !domain.transition) return;
+
+    if (isElevationTransition(domain.transition)) {
+      node.classList.add('cd-spatial-node-elevating');
+      window.setTimeout(() => node.classList.remove('cd-spatial-node-elevating'), ELEVATION_MS + 200);
+      triggerConnectionSignal(domain.id);
+    } else if (isDeElevationTransition(domain.transition)) {
+      node.classList.add('cd-spatial-node-settling');
+      window.setTimeout(() => node.classList.remove('cd-spatial-node-settling'), SETTLE_MS + 200);
+    }
   }
 
   function buildNodeClasses(domain) {
@@ -166,7 +245,72 @@
       classes.push('cd-intelligence-active');
     }
     if (domain.priority === 'monitored') classes.push('cd-spatial-node-muted');
+    if (activeDomainId === domain.id) classes.push('cd-spatial-node-focused');
     return classes.join(' ');
+  }
+
+  function renderConnections(domains) {
+    if (!els.connections || !els.orbit) return;
+
+    const svg = els.connections;
+    svg.innerHTML = '';
+
+    const orbitRect = els.orbit.getBoundingClientRect();
+    if (!orbitRect.width) return;
+
+    svg.setAttribute('viewBox', `0 0 ${orbitRect.width} ${orbitRect.height}`);
+    svg.setAttribute('width', orbitRect.width);
+    svg.setAttribute('height', orbitRect.height);
+
+    const cx = orbitRect.width / 2;
+    const cy = orbitRect.height / 2;
+    const radius = orbitRadius();
+
+    for (const domain of domains) {
+      const pos = domain.position || {};
+      const slot = SLOT_POSITIONS[pos.slot] || SLOT_POSITIONS.top;
+      const dist = Number(pos.distance) || 0.68;
+      const offset = radius * dist;
+      const nx = cx + slot.tx * offset;
+      const ny = cy + slot.ty * offset;
+
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const d = `M ${cx} ${cy} Q ${(cx + nx) / 2} ${(cy + ny) / 2} ${nx} ${ny}`;
+      path.setAttribute('d', d);
+      path.setAttribute('id', `cd-conn-${domain.id}`);
+      path.classList.add('cd-intel-conn');
+
+      const isActive =
+        domain.priority === 'urgent' ||
+        domain.priority === 'elevated' ||
+        (domain.transition && isElevationTransition(domain.transition)) ||
+        (domain.intelligence && domain.intelligence.active) ||
+        activeDomainId === domain.id;
+
+      if (isActive) path.classList.add('cd-intel-conn-active');
+
+      svg.appendChild(path);
+
+      if (domain.transition && isElevationTransition(domain.transition) && !reducedMotion()) {
+        const signal = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        signal.setAttribute('r', '3');
+        signal.classList.add('cd-intel-conn-signal');
+        signal.style.offsetPath = `path('${d}')`;
+        signal.style.offsetRotate = '0deg';
+        path.parentNode.appendChild(signal);
+        requestAnimationFrame(() => signal.classList.add('cd-intel-signal-travel'));
+      }
+    }
+  }
+
+  function triggerConnectionSignal(domainId) {
+    if (!els.connections || reducedMotion()) return;
+    const path = els.connections.querySelector(`#cd-conn-${domainId}`);
+    if (!path) return;
+    path.classList.add('cd-intel-conn-active');
+    window.setTimeout(() => {
+      if (activeDomainId !== domainId) path.classList.remove('cd-intel-conn-active');
+    }, ELEVATION_MS + 400);
   }
 
   function renderListFallback(items) {
@@ -174,8 +318,11 @@
     els.list.innerHTML = items
       .map((item) => {
         const priority = PRIORITY_LABELS[item.priority] || item.priority;
+        const changed = item.transition
+          ? ` · Changed to ${PRIORITY_LABELS[item.transition.newState] || item.transition.newState}`
+          : '';
         return `
-          <button type="button" class="cd-spatial-list-item cd-priority-${esc(item.priority)}" data-domain-id="${esc(item.id)}">
+          <button type="button" class="cd-spatial-list-item cd-priority-${esc(item.priority)}" data-domain-id="${esc(item.id)}" aria-label="${esc(item.label)}, ${esc(priority)}${changed}">
             <span class="cd-spatial-list-label">${esc(item.label)}</span>
             <span class="cd-spatial-list-priority">${esc(priority)}</span>
             <span class="cd-spatial-list-summary">${esc(item.summary)}</span>
@@ -214,10 +361,19 @@
     return (activeOverview.domains || []).find((d) => d.id === domainId) || null;
   }
 
+  function setDomainFocus(domainId) {
+    nodeByDomain.forEach((node, id) => {
+      node.classList.toggle('cd-spatial-node-focused', id === domainId);
+    });
+    if (activeOverview) renderConnections(activeOverview.domains || []);
+  }
+
   function openDomainDrawer(domainId) {
     const domain = findDomain(domainId);
     if (!domain || !els.drawer) return;
     activeDomainId = domainId;
+    setDomainFocus(domainId);
+    updateAskPlaceholder(activeOverview && activeOverview.maxAnchor, domainId);
 
     if (els.drawerTitle) els.drawerTitle.textContent = domain.label;
     if (els.drawerEyebrow) {
@@ -236,6 +392,8 @@
     els.drawer.hidden = true;
     activeDomainId = null;
     document.body.classList.remove('cd-domain-open');
+    setDomainFocus(null);
+    updateAskPlaceholder(activeOverview && activeOverview.maxAnchor, null);
   }
 
   function bindDrawerActions(domain) {
@@ -442,13 +600,16 @@
     }).format(d);
   }
 
+  function syncViewVisibility() {
+    if (!els.deck) return;
+    if (els.list) els.list.hidden = !listView;
+    if (els.canvas) els.canvas.hidden = listView;
+  }
+
   function setListView(enabled, options = {}) {
     listView = Boolean(enabled);
     if (els.deck) els.deck.classList.toggle('cd-spatial-list-mode', listView);
-    if (els.list) els.list.hidden = !listView;
-    if (els.orbit && els.orbit.parentElement) {
-      els.orbit.parentElement.hidden = listView;
-    }
+    syncViewVisibility();
     if (els.viewToggle) {
       els.viewToggle.textContent = listView ? 'View spatially' : 'View as list';
       els.viewToggle.setAttribute('aria-pressed', listView ? 'true' : 'false');
@@ -459,6 +620,9 @@
       } catch (_) {
         /* ignore */
       }
+    }
+    if (!listView && activeOverview) {
+      renderConnections(activeOverview.domains || []);
     }
   }
 
@@ -515,6 +679,31 @@
     renderRecentConversations();
   }
 
+  function setupIntelFieldPause() {
+    const pause = () => document.body.classList.add('cd-intel-paused');
+    const resume = () => document.body.classList.remove('cd-intel-paused');
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) pause();
+      else resume();
+    });
+
+    if (reducedMotion()) pause();
+  }
+
+  function setupResizeHandler() {
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+      if (resizeTimer) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        if (activeOverview && !listView) {
+          renderDomains(activeOverview.domains || []);
+          renderConnections(activeOverview.domains || []);
+        }
+      }, 120);
+    });
+  }
+
   function hide() {
     if (els.deck) els.deck.hidden = true;
   }
@@ -523,14 +712,17 @@
     hide();
     activeOverview = null;
     activeDomainId = null;
+    nodeByDomain = new Map();
     if (els.orbit) {
       els.orbit.querySelectorAll('.cd-spatial-node').forEach((n) => n.remove());
     }
+    if (els.connections) els.connections.innerHTML = '';
     if (els.list) els.list.innerHTML = '';
     if (els.unseenBanner) {
       els.unseenBanner.hidden = true;
       els.unseenBanner.innerHTML = '';
     }
+    document.body.classList.remove('cd-domain-open', 'cd-intel-paused');
   }
 
   function init(options = {}) {
@@ -543,6 +735,8 @@
     handlers.prefersReducedMotion = options.prefersReducedMotion || null;
 
     restoreViewPreference();
+    setupIntelFieldPause();
+    setupResizeHandler();
 
     if (els.viewToggle) {
       els.viewToggle.addEventListener('click', () => setListView(!listView));
