@@ -274,7 +274,21 @@ body {
   box-shadow: var(--pf-shadow);
 }
 .ao-task.high { border-left: 3px solid var(--pf-amber); }
+.ao-task.warm { border-left: 3px solid #e07a5f; }
 .ao-task.waiting { border-left: 3px solid var(--pf-violet); }
+.ao-task-badge {
+  display: inline-block;
+  font-family: var(--pf-font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #e07a5f;
+  background: rgba(224, 122, 95, 0.12);
+  border: 1px solid rgba(224, 122, 95, 0.35);
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-bottom: 6px;
+}
 .ao-task-head {
   display: flex;
   justify-content: space-between;
@@ -381,6 +395,12 @@ body {
   border-left: 3px solid var(--pf-gold);
   padding-left: 12px;
 }
+.ao-script-note {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--pf-text-muted);
+  line-height: 1.4;
+}
 .ao-script-list {
   list-style: none;
   display: flex;
@@ -483,6 +503,7 @@ body {
       <button class="ao-filter active" data-filter="today">Today</button>
       <button class="ao-filter" data-filter="overdue">Overdue</button>
       <button class="ao-filter" data-filter="week">This Week</button>
+      <button class="ao-filter" data-filter="direct_mail">Direct Mail</button>
       <button class="ao-filter" data-filter="high">High Priority</button>
       <button class="ao-filter" data-filter="waiting">Waiting on Jake</button>
     </div>
@@ -491,6 +512,12 @@ body {
 
   <section class="ao-panel" id="panel-script">
     <div class="ao-script" id="scriptScroll">
+      <article class="ao-script-card">
+        <h2 class="ao-script-title">Direct Mail Follow-Up Opening</h2>
+        <p class="ao-script-quote">Hey, I'm Mike with Anchor Cleaning. We recently sent some info over about commercial cleaning. I'm just stopping by to make sure it got to the right person. Who usually handles cleaning or facility vendors here?</p>
+        <p class="ao-script-note">Use this for Campaign 001 queue items — then tap the task in Queue and log the visit with Max.</p>
+      </article>
+
       <article class="ao-script-card">
         <h2 class="ao-script-title">Opening</h2>
         <p class="ao-script-quote">Hey, I'm with Anchor Cleaning. We're local and help businesses keep their spaces consistently clean. Quick question: who usually handles your cleaning or facilities vendors?</p>
@@ -645,6 +672,27 @@ async function loadMetrics() {
   return m;
 }
 
+async function startDirectMailFollowUp(taskId) {
+  clearChat();
+  activeMode = 'direct_mail_follow_up';
+  visitJustCompleted = false;
+  messageInput.placeholder = 'Reply to Max…';
+  switchTab('max');
+  addMsg('Starting direct mail follow-up…', 'system');
+  try {
+    const result = await api('/api/max/start', {
+      method: 'POST',
+      body: JSON.stringify({ mode: 'direct_mail_follow_up', task_id: taskId }),
+    });
+    chat.lastChild.remove();
+    addMsg(result.reply, 'max');
+    sessionId = result.session_id || null;
+  } catch (err) {
+    chat.lastChild.remove();
+    addMsg(err.message, 'system');
+  }
+}
+
 async function startMode(mode) {
   clearChat();
   activeMode = mode;
@@ -700,10 +748,19 @@ async function sendMessage(text) {
 function taskCard(task) {
   const cls = ['ao-task'];
   if (task.priority === 'high') cls.push('high');
+  if (task.priority === 'warm') cls.push('warm');
   if (task.waiting_on_jake) cls.push('waiting');
   const due = task.due_date ? new Date(task.due_date + 'T12:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+  const isDirectMail = task.attribution_source === 'direct_mail_campaign';
+  const badge = isDirectMail
+    ? `<div class="ao-task-badge">Direct Mail${task.campaign_name ? ' · ' + escapeHtml(task.campaign_name) : ''}</div>`
+    : '';
+  const logBtn = isDirectMail
+    ? `<button class="primary" data-log-follow-up="${task.id}">Log with Max</button>`
+    : '';
   return `
     <article class="${cls.join(' ')}">
+      ${badge}
       <div class="ao-task-head">
         <div class="ao-task-name">${escapeHtml(task.business_name || 'Unknown')}</div>
         <div class="ao-task-due">${due}</div>
@@ -711,7 +768,8 @@ function taskCard(task) {
       <div class="ao-task-meta">${escapeHtml(task.contact_name || 'No contact')} · ${escapeHtml(task.next_action || 'Follow up')}</div>
       ${task.suggested_message ? `<div class="ao-task-msg">"${escapeHtml(task.suggested_message)}"</div>` : ''}
       <div class="ao-task-actions">
-        <button class="primary" data-done="${task.id}">Done</button>
+        ${logBtn}
+        <button${isDirectMail ? '' : ' class="primary"'} data-done="${task.id}">Done</button>
         <button data-reschedule="${task.id}">+2 Days</button>
         <button class="danger" data-escalate="${task.id}">Escalate</button>
       </div>
@@ -769,10 +827,15 @@ document.getElementById('queueFilters').addEventListener('click', e => {
 });
 
 document.getElementById('queueList').addEventListener('click', async e => {
+  const logFollowUpId = e.target.dataset.logFollowUp;
   const doneId = e.target.dataset.done;
   const rescheduleId = e.target.dataset.reschedule;
   const escalateId = e.target.dataset.escalate;
   try {
+    if (logFollowUpId) {
+      await startDirectMailFollowUp(logFollowUpId);
+      return;
+    }
     if (doneId) {
       await api('/api/tasks/' + doneId, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
     }

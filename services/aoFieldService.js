@@ -1,6 +1,6 @@
 const axios = require('axios');
 const pool = require('../db');
-const { buildSuggestedMessage, normalizeNextAction, parseContactRole, formatDecisionMakerStatus } = require('../utils/aoMessageTemplates');
+const { buildSuggestedMessage, buildDirectMailOpening, normalizeNextAction, parseContactRole, formatDecisionMakerStatus } = require('../utils/aoMessageTemplates');
 
 function mapLead(row) {
   return {
@@ -16,6 +16,7 @@ function mapLead(row) {
     next_follow_up_date: row.next_follow_up_date,
     next_follow_up_owner_id: row.next_follow_up_owner_id,
     attribution_source: row.attribution_source,
+    campaign_name: row.campaign_name || null,
     commission_eligible: row.commission_eligible,
     original_visit_note: row.original_visit_note,
     probe_answers: row.probe_answers || null,
@@ -47,6 +48,8 @@ function mapTask(row) {
     business_name: row.business_name,
     contact_name: row.contact_name,
     interest_level: row.interest_level,
+    attribution_source: row.attribution_source || null,
+    campaign_name: row.campaign_name || null,
   };
 }
 
@@ -75,13 +78,15 @@ async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
     params.push(today, weekEnd.toISOString().slice(0, 10));
     where += ` AND t.due_date BETWEEN $${params.length - 1} AND $${params.length}`;
   } else if (filter === 'high') {
-    where += ` AND t.priority = 'high'`;
+    where += ` AND t.priority IN ('high', 'warm')`;
+  } else if (filter === 'direct_mail') {
+    where += ` AND l.attribution_source = 'direct_mail_campaign'`;
   } else if (filter === 'waiting') {
     where += ` AND t.waiting_on_jake = true`;
   }
 
   const { rows } = await pool.query(`
-    SELECT t.*, l.business_name, l.interest_level, c.contact_name
+    SELECT t.*, l.business_name, l.interest_level, l.attribution_source, l.campaign_name, c.contact_name
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
     LEFT JOIN ao_contacts c ON c.id = t.contact_id
@@ -332,6 +337,225 @@ async function escalateTask(taskId, aoOwnerId, { reason, summary }) {
   }
 }
 
+function endOfBusinessWeekISO(from = new Date()) {
+  const d = new Date(from);
+  const day = d.getDay();
+  let add = 5 - day;
+  if (add < 0) add += 7;
+  d.setDate(d.getDate() + add);
+  return d.toISOString().slice(0, 10);
+}
+
+async function findDirectMailLead(clientId, businessName) {
+  const { rows } = await pool.query(`
+    SELECT id, business_name FROM ao_leads
+    WHERE client_id = $1
+      AND attribution_source = 'direct_mail_campaign'
+      AND lower(regexp_replace(business_name, '[^a-z0-9]', '', 'g'))
+        = lower(regexp_replace($2, '[^a-z0-9]', '', 'g'))
+    LIMIT 1
+  `, [clientId, businessName]);
+  return rows[0] || null;
+}
+
+async function getTaskForFollowUp(taskId, aoOwnerId) {
+  const { rows } = await pool.query(`
+    SELECT t.*, l.business_name, l.address, l.business_type, l.status AS lead_status,
+      l.attribution_source, l.campaign_name, l.original_visit_note, l.interest_level,
+      c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email
+    FROM ao_follow_up_tasks t
+    JOIN ao_leads l ON l.id = t.lead_id
+    LEFT JOIN ao_contacts c ON c.id = t.contact_id
+    WHERE t.id = $1 AND t.ao_owner_id = $2 AND t.status = 'open'
+    LIMIT 1
+  `, [taskId, aoOwnerId]);
+  return rows[0] || null;
+}
+
+async function createDirectMailFollowUpLead({
+  clientId,
+  aoOwnerId,
+  aoName,
+  businessName,
+  address = null,
+  businessType = null,
+  campaignName = 'Campaign 001',
+  note = 'Received direct mail before AO visit',
+  dueDate = null,
+}) {
+  const existing = await findDirectMailLead(clientId, businessName);
+  if (existing) {
+    return { skipped: true, reason: 'already_exists', lead: existing };
+  }
+
+  const taskDue = dueDate || endOfBusinessWeekISO();
+  const opening = buildDirectMailOpening(aoName);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: leadRows } = await client.query(`
+      INSERT INTO ao_leads (
+        client_id, business_name, address, business_type, status, interest_level,
+        ao_owner_id, attribution_source, campaign_name, original_visit_note,
+        next_follow_up_date, next_follow_up_owner_id, last_contact_date
+      ) VALUES ($1,$2,$3,$4,'needs_follow_up','medium',$5,'direct_mail_campaign',$6,$7,$8,$5,NOW())
+      RETURNING *
+    `, [
+      clientId, businessName, address, businessType,
+      aoOwnerId, campaignName, note, taskDue,
+    ]);
+    const lead = leadRows[0];
+
+    const { rows: taskRows } = await client.query(`
+      INSERT INTO ao_follow_up_tasks (
+        lead_id, ao_owner_id, due_date, priority, next_action,
+        last_interaction_summary, suggested_message
+      ) VALUES ($1,$2,$3,'warm','in_person_revisit',$4,$5)
+      RETURNING *
+    `, [lead.id, aoOwnerId, taskDue, note, opening]);
+
+    await client.query('COMMIT');
+    return {
+      skipped: false,
+      lead: mapLead(lead),
+      task: mapTask({ ...taskRows[0], business_name: businessName, attribution_source: 'direct_mail_campaign', campaign_name: campaignName }),
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function completeDirectMailFollowUp(taskId, aoOwnerId, {
+  clientId,
+  aoName,
+  answers = {},
+  visitNote,
+  nextAction,
+  interestLevel,
+  contactName,
+  contactTitle,
+  contactRole,
+}) {
+  const taskRow = await getTaskForFollowUp(taskId, aoOwnerId);
+  if (!taskRow) return null;
+  if (taskRow.attribution_source !== 'direct_mail_campaign') {
+    throw new Error('Task is not a direct mail follow-up');
+  }
+
+  const normalizedNextAction = normalizeNextAction(nextAction || answers.next_step || 'Follow up');
+  const probeAnswers = { ...answers };
+  const summary = [
+    visitNote || null,
+    answers.mailer_remembered ? `Mailer remembered: ${answers.mailer_remembered}` : null,
+    answers.cleaning_decision_maker ? `Cleaning decision-maker: ${answers.cleaning_decision_maker}` : null,
+    answers.reached_decision_maker ? `Reached decision-maker: ${answers.reached_decision_maker}` : null,
+    answers.outside_cleaner ? `Outside cleaner: ${answers.outside_cleaner}` : null,
+    answers.cleaner_issues ? `Cleaner issues: ${answers.cleaner_issues}` : null,
+    answers.walkthrough_interest ? `Walkthrough interest: ${answers.walkthrough_interest}` : null,
+    answers.next_step ? `Next step: ${answers.next_step}` : null,
+  ].filter(Boolean).join('\n');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let contactId = taskRow.contact_id;
+    if (contactName) {
+      const role = parseContactRole(contactRole);
+      if (contactId) {
+        await client.query(`
+          UPDATE ao_contacts
+          SET contact_name = $2, contact_title = COALESCE($3, contact_title),
+              is_decision_maker = $4, updated_at = NOW()
+          WHERE id = $1
+        `, [contactId, contactName, contactTitle || null, role === 'decision_maker']);
+      } else {
+        const { rows: contactRows } = await client.query(`
+          INSERT INTO ao_contacts (lead_id, contact_name, contact_title, is_decision_maker)
+          VALUES ($1,$2,$3,$4)
+          RETURNING id
+        `, [taskRow.lead_id, contactName, contactTitle || null, role === 'decision_maker']);
+        contactId = contactRows[0].id;
+      }
+    }
+
+    const leadStatus = /not a fit|not a fit|do not contact|hard no/i.test(normalizedNextAction)
+      ? 'not_a_fit'
+      : /walkthrough|tour/i.test(normalizedNextAction) || /yes|interested|walkthrough/i.test(String(answers.walkthrough_interest || ''))
+        ? 'walkthrough_requested'
+        : 'needs_follow_up';
+
+    await client.query(`
+      UPDATE ao_leads
+      SET status = $2,
+          interest_level = COALESCE($3, interest_level),
+          original_visit_note = COALESCE($4, original_visit_note),
+          probe_answers = $5,
+          last_contact_date = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+    `, [
+      taskRow.lead_id,
+      leadStatus,
+      interestLevel || null,
+      summary || null,
+      Object.keys(probeAnswers).length ? JSON.stringify(probeAnswers) : null,
+    ]);
+
+    await client.query(`
+      UPDATE ao_follow_up_tasks
+      SET status = 'done', completed_at = NOW(), last_interaction_summary = $2
+      WHERE id = $1
+    `, [taskId, summary || visitNote || 'Direct mail follow-up logged']);
+
+    let escalation = null;
+    const escalate = /jake|walkthrough|owner should|admin should/i.test(normalizedNextAction)
+      || /yes|interested|walkthrough/i.test(String(answers.walkthrough_interest || ''));
+    if (escalate) {
+      const reason = /walkthrough|tour/i.test(normalizedNextAction) ? 'walkthrough_request' : 'high_interest';
+      const { rows: escRows } = await client.query(`
+        INSERT INTO ao_escalations (lead_id, contact_id, ao_owner_id, reason, summary, probe_answers)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING *
+      `, [taskRow.lead_id, contactId, aoOwnerId, reason, summary, JSON.stringify(probeAnswers)]);
+      escalation = escRows[0];
+    }
+
+    await client.query('COMMIT');
+    return {
+      task: mapTask({ ...taskRow, status: 'done' }),
+      lead: mapLead({ ...taskRow, id: taskRow.lead_id, status: leadStatus }),
+      escalation,
+      summary,
+      aoName,
+      clientId,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function resolveAoOwnerByName(namePattern, clientId) {
+  const { rows } = await pool.query(`
+    SELECT id, name, email, client_id, role
+    FROM users
+    WHERE client_id = $1
+      AND role = 'ao'
+      AND active = true
+      AND name ILIKE $2
+    ORDER BY id ASC
+    LIMIT 1
+  `, [clientId, namePattern]);
+  return rows[0] || null;
+}
+
 function mapAdminVisit(row) {
   return {
     id: row.id,
@@ -343,6 +567,7 @@ function mapAdminVisit(row) {
     ao_owner_id: row.ao_owner_id,
     ao_name: row.ao_name,
     attribution_source: row.attribution_source,
+    campaign_name: row.campaign_name || null,
     commission_eligible: row.commission_eligible,
     original_visit_note: row.original_visit_note,
     probe_answers: row.probe_answers || null,
@@ -570,6 +795,12 @@ module.exports = {
   listQueue,
   getLeadDetail,
   createVisitRecord,
+  createDirectMailFollowUpLead,
+  completeDirectMailFollowUp,
+  getTaskForFollowUp,
+  findDirectMailLead,
+  resolveAoOwnerByName,
+  endOfBusinessWeekISO,
   updateTask,
   escalateTask,
   listEscalations,

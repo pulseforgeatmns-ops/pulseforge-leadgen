@@ -20,9 +20,10 @@ const LEAD_STATUSES = [
 
 const INTEREST_LEVELS = ['low', 'medium', 'high'];
 const TASK_STATUSES = ['open', 'done', 'rescheduled', 'escalated', 'cancelled'];
-const TASK_PRIORITIES = ['normal', 'high'];
+const TASK_PRIORITIES = ['normal', 'high', 'warm'];
+const ATTRIBUTION_SOURCES = ['ao_field_visit', 'direct_mail_campaign'];
 const ESCALATION_STATUSES = ['new', 'seen', 'in_progress', 'resolved'];
-const MAX_MODES = ['log_visit', 'follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help'];
+const MAX_MODES = ['log_visit', 'follow_up', 'direct_mail_follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help'];
 
 async function ensureAoFieldSchemaOnce() {
   await ensureClientArchitecture();
@@ -133,6 +134,25 @@ async function ensureAoFieldSchemaOnce() {
     ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS probe_answers JSONB
   `);
   await pool.query(`
+    ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS campaign_name TEXT
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_follow_up_tasks DROP CONSTRAINT IF EXISTS ao_follow_up_tasks_priority_check
+  `);
+  await pool.query(`
+    ALTER TABLE ao_follow_up_tasks ADD CONSTRAINT ao_follow_up_tasks_priority_check
+      CHECK (priority IN ('normal', 'high', 'warm'))
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_max_sessions DROP CONSTRAINT IF EXISTS ao_max_sessions_mode_check
+  `);
+  await pool.query(`
+    ALTER TABLE ao_max_sessions ADD CONSTRAINT ao_max_sessions_mode_check
+      CHECK (mode IN (${MAX_MODES.map(m => `'${m}'`).join(', ')}))
+  `);
+  await pool.query(`
     ALTER TABLE ao_escalations ADD COLUMN IF NOT EXISTS probe_answers JSONB
   `);
 
@@ -141,6 +161,8 @@ async function ensureAoFieldSchemaOnce() {
     CREATE INDEX IF NOT EXISTS idx_ao_leads_next_follow_up ON ao_leads(next_follow_up_date);
     CREATE INDEX IF NOT EXISTS idx_ao_tasks_owner_due ON ao_follow_up_tasks(ao_owner_id, due_date, status);
     CREATE INDEX IF NOT EXISTS idx_ao_escalations_status ON ao_escalations(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ao_leads_campaign ON ao_leads(client_id, campaign_name)
+      WHERE campaign_name IS NOT NULL;
   `);
 }
 
@@ -159,6 +181,7 @@ module.exports = {
   INTEREST_LEVELS,
   TASK_STATUSES,
   TASK_PRIORITIES,
+  ATTRIBUTION_SOURCES,
   ESCALATION_STATUSES,
   MAX_MODES,
   ensureAoFieldSchema,
