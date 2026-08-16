@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Scout Acquisition Discovery Foundation ([SPEC-100A](docs/specs/SPEC-100A_Scout_Acquisition_Discovery_Foundation.md))
+  - Scout constructs a real candidate universe from Max's bounded acquisition objective
+  - Retrieve-before-discover, adapter-based public/business discovery, entity resolution
+  - Basic fit is kept separate from timing/intent; strong-fit companies are not discarded
+  - Zero evaluated candidates is `blocked`/`partial`, not a completed market-negative result
+  - SPEC-099A funnel (`discovered` / `resolved` / `evaluated` / `fit` / `signals` / `supported`) is populated from actual execution
 - Max Specialist Delegation Contract ([SPEC-098](docs/specs/SPEC-098_Max_Specialist_Delegation_Contract.md))
   - Canonical `SpecialistDelegation` / `SpecialistResult` language for Max → specialist → Max
   - Durable `specialist_delegations`, `specialist_results`, `specialist_evaluations`

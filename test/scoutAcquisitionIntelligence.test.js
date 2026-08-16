@@ -485,14 +485,42 @@ describe('SPEC-100 Max ↔ Scout acquisition intelligence loop', () => {
     assert.ok(result.result.uncertainties.some((u) => /decision-maker enrichment failed/i.test(u)));
   });
 
-  it('treats zero supported opportunities as valid completed intelligence', async () => {
+  it('treats zero supported opportunities as valid completed intelligence when candidates were evaluated', async () => {
+    const result = await runAcquisitionIntelligenceLoop(
+      anchorInput({ applyPriority: false }),
+      loopOpts(store, aoStore, {
+        companies: [
+          {
+            id: 'co-fit-only',
+            tenantId: ANCHOR_TENANT_ID,
+            name: 'Elm Street Property Management',
+            industry: 'property_management',
+            location: 'Manchester, NH',
+            icpScore: 74,
+          },
+        ],
+        people: [],
+      })
+    );
+    assert.equal(result.result.status, 'completed');
+    assert.match(result.result.summary, /no sufficiently supported opportunities|meet the target profile/i);
+    assert.equal(result.result.artifactRefs.length, 0);
+    assert.ok((result.result.payload.fitCandidates || []).length >= 1);
+    assert.equal(result.evaluation.materialChange, false);
+  });
+
+  it('does not treat zero candidates evaluated as a completed market investigation', async () => {
     const result = await runAcquisitionIntelligenceLoop(
       anchorInput({ applyPriority: false }),
       loopOpts(store, aoStore, { companies: [], people: [] })
     );
-    assert.equal(result.result.status, 'completed');
-    assert.match(result.result.summary, /no sufficiently supported opportunities/i);
-    assert.equal(result.result.artifactRefs.length, 0);
+    assert.ok(['blocked', 'partial'].includes(result.result.status));
+    assert.equal(result.result.payload.investigation.coverage.candidatesEvaluated, 0);
+    assert.match(
+      result.result.summary,
+      /discovery|coverage insufficient|provider unavailable/i
+    );
+    assert.equal(result.evaluation.marketAbsenceJustified, false);
     assert.equal(result.evaluation.materialChange, false);
   });
 
@@ -514,10 +542,10 @@ describe('SPEC-100 Max ↔ Scout acquisition intelligence loop', () => {
     );
     assert.equal(result.result.payload.broadened, false);
     assert.equal(result.result.artifactRefs.length, 0);
-    assert.match(result.result.summary, /no sufficiently supported opportunities/i);
+    assert.doesNotMatch(JSON.stringify(result.result.payload.searchDefinition || {}), /all New Hampshire/i);
     assert.match(
-      JSON.stringify(result.result.observations),
-      /expanding geography or segment/i
+      `${result.result.summary} ${JSON.stringify(result.result.observations)} ${JSON.stringify(result.result.recommendedNextAction)}`,
+      /expand|broaden|discovery|coverage/i
     );
   });
 

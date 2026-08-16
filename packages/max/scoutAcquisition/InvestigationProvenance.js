@@ -38,6 +38,7 @@ const TIMING_SIGNAL_TYPES = Object.freeze([
 const SYSTEM_PROVENANCE_IDS = Object.freeze([
   'scout_acquisition',
   'spec_100',
+  'spec_100a',
   'spec_099',
   'spec_099a',
   'spec_098',
@@ -462,6 +463,11 @@ function buildInvestigation(input = {}) {
   const freshness = buildEvidenceWindow(input);
   const coverage = {
     candidatesDiscovered: Number(input.candidatesDiscovered || 0),
+    candidatesResolved: Number(
+      input.candidatesResolved != null
+        ? input.candidatesResolved
+        : input.candidatesEvaluated || evaluatedCompanies.length || 0
+    ),
     candidatesEvaluated: Number(input.candidatesEvaluated || evaluatedCompanies.length || 0),
     basicFitCount: Number(input.basicFitCount || 0),
     signalBearingCount: Number(input.signalBearingCount || 0),
@@ -592,6 +598,7 @@ function buildSystemProvenance(input = {}) {
   const items = [
     { id: 'scout_acquisition', kind: 'capability', label: 'Scout acquisition intelligence' },
     { id: 'spec_100', kind: 'spec', label: 'SPEC-100 Max ↔ Scout acquisition loop' },
+    { id: 'spec_100a', kind: 'spec', label: 'SPEC-100A Scout acquisition discovery foundation' },
     { id: 'spec_099a', kind: 'spec', label: 'SPEC-099A investigation provenance' },
   ];
   if (input.delegationId) {

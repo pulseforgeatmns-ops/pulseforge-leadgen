@@ -100,6 +100,11 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
       people: input.people,
       loadCompanies: input.loadCompanies,
       discover: input.discover,
+      discoveryAdapters: input.discoveryAdapters,
+      discoveryStore: input.discoveryStore,
+      persistCompanies: input.persistCompanies,
+      enrichPeople: input.enrichPeople,
+      enablePlaces: input.enablePlaces,
       priorityApplier: input.priorityApplier,
       freshnessMs: input.freshnessMs,
     }

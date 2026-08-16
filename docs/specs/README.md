@@ -90,6 +90,8 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-096](SPEC-096_Max_Specialist_Direction_and_Operator_Rationale.md) | Max Specialist Direction & Operator Rationale | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-098](SPEC-098_Max_Specialist_Delegation_Contract.md) | Max Specialist Delegation Contract | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-100](SPEC-100_Max_Scout_Acquisition_Intelligence_Loop.md) | Max ↔ Scout Acquisition Intelligence Loop | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-099A](SPEC-099A_Scout_Investigation_Provenance.md) | Scout Investigation Provenance & Coverage Intelligence | Implemented | v0.1 |
+| [SPEC-100A](SPEC-100A_Scout_Acquisition_Discovery_Foundation.md) | Scout Acquisition Discovery Foundation | Implemented (v1) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

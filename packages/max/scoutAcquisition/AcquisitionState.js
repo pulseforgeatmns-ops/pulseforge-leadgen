@@ -30,6 +30,9 @@ function createMemoryAcquisitionState(snapshot = null) {
         summary: asText(row.summary) || 'Pipeline steady',
         opportunityCount: Number(row.opportunityCount || 0),
         timelyCount: Number(row.timelyCount || 0),
+        fitCount: Number(row.fitCount || 0),
+        signalBearingCount: Number(row.signalBearingCount || 0),
+        watchCount: Number(row.watchCount || 0),
         segmentHighlights: Array.isArray(row.segmentHighlights)
           ? row.segmentHighlights.slice()
           : [],
@@ -68,10 +71,14 @@ function createMemoryAcquisitionState(snapshot = null) {
 function buildAcquisitionSummary(input = {}) {
   const timely = Number(input.timelyCount || 0);
   const total = Number(input.opportunityCount || 0);
+  const fitCount = Number(input.fitCount || 0);
   const highlights = Array.isArray(input.segmentHighlights)
     ? input.segmentHighlights.filter(Boolean)
     : [];
-  if (!total) return 'Pipeline steady';
+  if (!total && !fitCount) return 'Pipeline steady';
+  if (!total && fitCount) {
+    return `${fitCount} target-fit compan${fitCount === 1 ? 'y' : 'ies'}; current vendor timing unknown`;
+  }
   const lines = [];
   if (timely) {
     lines.push(
@@ -94,6 +101,15 @@ function deriveStateFromEvaluation(input = {}) {
     : ((result.payload && result.payload.opportunities) ||
         (result.artifactRefs || []).filter((a) => a && a.kind === 'acquisition_opportunity'));
   const timely = opportunities.filter((o) => Number(o.timing || 0) >= 0.6);
+  const fitCandidates =
+    (result.payload && Array.isArray(result.payload.fitCandidates) && result.payload.fitCandidates) ||
+    [];
+  const watchCandidates =
+    (result.payload && Array.isArray(result.payload.watchCandidates) && result.payload.watchCandidates) ||
+    [];
+  const investigation = (evaluation.payload && evaluation.payload.investigation) ||
+    (result.payload && result.payload.investigation) ||
+    null;
   const segments = new Set();
   for (const opp of opportunities) {
     for (const signal of opp.signals || []) {
@@ -102,12 +118,18 @@ function deriveStateFromEvaluation(input = {}) {
       }
     }
   }
+  if (investigation && investigation.scope && Array.isArray(investigation.scope.segments)) {
+    for (const seg of investigation.scope.segments) {
+      if (/property/i.test(String(seg))) segments.add('property management');
+    }
+  }
   const materiality =
     evaluation.materiality ||
     (evaluation.materialChange ? 'material' : 'immaterial');
   const summary = buildAcquisitionSummary({
     opportunityCount: opportunities.length,
     timelyCount: timely.length,
+    fitCount: fitCandidates.length,
     segmentHighlights: [...segments],
   });
 
@@ -116,6 +138,10 @@ function deriveStateFromEvaluation(input = {}) {
     summary,
     opportunityCount: opportunities.length,
     timelyCount: timely.length,
+    fitCount: fitCandidates.length,
+    signalBearingCount:
+      (investigation && investigation.coverage && investigation.coverage.signalBearingCount) || 0,
+    watchCount: watchCandidates.length,
     segmentHighlights: [...segments],
     unknowns: result.uncertainties || [],
     acceptedClaims: evaluation.acceptedClaims || [],

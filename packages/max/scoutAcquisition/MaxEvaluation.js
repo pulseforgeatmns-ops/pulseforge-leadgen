@@ -146,8 +146,14 @@ function evaluateScoutResult(input = {}) {
       }
     : null;
 
+  const evaluatedCount =
+    investigation && investigation.coverage
+      ? Number(investigation.coverage.candidatesEvaluated || 0)
+      : opportunities.length;
   const marketAbsenceJustified =
-    opportunities.length === 0 && coverage === COVERAGE_BANDS.STRONG;
+    opportunities.length === 0 &&
+    evaluatedCount > 0 &&
+    coverage === COVERAGE_BANDS.STRONG;
   const comparativeClaimJustified =
     opportunities.length > 0 && coverage === COVERAGE_BANDS.STRONG;
   const conclusionTrust =
@@ -229,6 +235,14 @@ function buildMaxExplanation(input) {
   const basicFit = funnel ? funnel.basicFitCount : null;
 
   if (result.status === 'failed' || result.status === 'blocked') {
+    if (evaluated === 0) {
+      return (
+        `Scout could not construct a candidate universe for this investigation. ` +
+        `${result.summary || 'Candidate discovery provider unavailable.'} ` +
+        `Zero companies evaluated is a discovery limitation, not evidence that no market opportunity exists. ` +
+        `I am not elevating Acquisition.`
+      );
+    }
     const preserved = funnel
       ? ` Scout had already discovered ${funnel.candidatesDiscovered} and evaluated ${funnel.candidatesEvaluated} before the failure.`
       : ' Collected evidence was preserved.';
@@ -239,6 +253,13 @@ function buildMaxExplanation(input) {
   }
 
   if (opportunities.length === 0) {
+    if (evaluated === 0) {
+      return (
+        `Scout could not construct a candidate universe for this investigation. ` +
+        `Zero companies evaluated is a discovery limitation, not evidence that no market opportunity exists. ` +
+        `I am not elevating Acquisition.`
+      );
+    }
     if (coverage === COVERAGE_BANDS.STRONG || marketAbsenceJustified) {
       return (
         `Scout investigated the current target segment thoroughly and didn't find any opportunities ` +
@@ -247,7 +268,7 @@ function buildMaxExplanation(input) {
           ? ` He evaluated ${evaluated} business${evaluated === 1 ? '' : 'es'} across the current commercial acquisition criteria.`
           : '') +
         (basicFit
-          ? ` ${basicFit} had reasonable business fit, but none had enough current timing evidence to qualify as a supported near-term opportunity.`
+          ? ` ${basicFit} companies meet the target profile, but none had enough current timing evidence to qualify as a supported near-term opportunity. Current vendor timing is unknown.`
           : '') +
         ` I'm reasonably confident there isn't an obvious near-term pocket of demand under those criteria. ` +
         `I don't have enough evidence to elevate Acquisition.`
@@ -257,6 +278,9 @@ function buildMaxExplanation(input) {
       `Scout didn't find a sufficiently supported opportunity, but I don't consider that strong evidence that none exist. ` +
       (evaluated != null
         ? `He evaluated ${evaluated} compan${evaluated === 1 ? 'y' : 'ies'}. `
+        : '') +
+      (basicFit
+        ? `${basicFit} meet the target profile; current vendor timing is unknown. `
         : '') +
       `Coverage was ${coverage || 'limited'}, particularly around current timing signals, ` +
       `so I'd treat this as an incomplete investigation rather than a negative market conclusion. ` +
