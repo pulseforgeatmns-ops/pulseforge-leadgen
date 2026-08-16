@@ -65,8 +65,15 @@ button.danger { color:var(--red); border-color:rgba(255,59,92,0.25); }
 button.good { color:var(--green); border-color:rgba(0,230,118,0.25); }
 .modal-backdrop { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:1rem; background:rgba(4,8,16,0.72); z-index:20; }
 .modal-backdrop.open { display:flex; }
-.modal { width:min(380px, 100%); background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; box-shadow:0 24px 80px rgba(0,0,0,0.45); }
+.modal { width:min(420px, 100%); background:var(--bg1); border:1px solid var(--border); border-radius:10px; padding:1rem; box-shadow:0 24px 80px rgba(0,0,0,0.45); }
 .modal-title { font-family:'JetBrains Mono',monospace; color:var(--white); font-size:0.72rem; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:0.75rem; }
+.modal-field { margin-bottom:0.65rem; }
+.modal-field label { display:block; font-family:'JetBrains Mono',monospace; font-size:0.55rem; letter-spacing:1px; text-transform:uppercase; color:var(--gray-light); margin-bottom:0.3rem; }
+.modal-field select, .modal-field input[type="text"], .modal-field input[type="email"] { width:100%; }
+.modal-check { display:flex; align-items:center; gap:0.5rem; font-size:0.78rem; color:rgba(255,255,255,0.76); margin-top:0.25rem; }
+.modal-check input { width:auto; }
+.modal-warn { color:var(--gray-light); font-size:0.72rem; line-height:1.4; margin:0.5rem 0 0; padding:0.55rem 0.65rem; border-radius:6px; background:rgba(255,59,92,0.08); border:1px solid rgba(255,59,92,0.18); display:none; }
+.modal-warn.show { display:block; }
 .modal-actions { display:flex; justify-content:flex-end; gap:0.5rem; margin-top:0.85rem; }
 table { width:100%; border-collapse:collapse; }
 th { font-family:'JetBrains Mono',monospace; font-size:0.58rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--gray); padding:0.75rem 1rem; text-align:left; border-bottom:1px solid var(--border); }
@@ -117,10 +124,40 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
     </div>
   </form>
 </div>
+<div class="modal-backdrop" id="editModal" aria-hidden="true">
+  <form class="modal" id="editForm">
+    <div class="modal-title">Edit User</div>
+    <div class="modal-field">
+      <label for="editName">Name</label>
+      <input id="editName" type="text" required>
+    </div>
+    <div class="modal-field">
+      <label for="editEmail">Email</label>
+      <input id="editEmail" type="email" required>
+    </div>
+    <div class="modal-field">
+      <label for="editRole">Role</label>
+      <select id="editRole"></select>
+    </div>
+    <div class="modal-field">
+      <label for="editClientId">Client</label>
+      <select id="editClientId"></select>
+    </div>
+    <div class="modal-field">
+      <label class="modal-check"><input id="editActive" type="checkbox"> Active</label>
+    </div>
+    <div class="modal-warn" id="editAccessWarn">Changing role or client may change this user's access.</div>
+    <div class="modal-actions">
+      <button type="button" id="cancelEdit">Cancel</button>
+      <button class="primary" type="submit">Save Changes</button>
+    </div>
+  </form>
+</div>
 <script>
 	const roles = ['admin','manager','viewer','client','ao','setter','closer','sales'];
 const msg = document.getElementById('msg');
 let resetUserId = null;
+let editUser = null;
 let clients = [];
 function say(text) { msg.textContent = text; setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 3500); }
 async function api(path, options = {}) {
@@ -131,6 +168,9 @@ async function api(path, options = {}) {
 }
 function date(v) { return v ? new Date(v).toLocaleString() : '-'; }
 function roleLabel(role) { return role === 'viewer' ? 'viewer (internal)' : role; }
+function roleOptions(selected) {
+  return roles.map(r => \`<option value="\${r}" \${r === selected ? 'selected' : ''}>\${roleLabel(r)}</option>\`).join('');
+}
 function clientOptions(selected) {
   return '<option value="">No client</option>' + clients.map(c => \`<option value="\${c.id}" \${Number(c.id) === Number(selected) ? 'selected' : ''}>\${c.name}</option>\`).join('');
 }
@@ -145,17 +185,46 @@ async function load() {
     <tr>
       <td>\${u.name}</td>
       <td>\${u.email}</td>
-      <td><select data-role="\${u.id}">\${roles.map(r => \`<option value="\${r}" \${r === u.role ? 'selected' : ''}>\${roleLabel(r)}</option>\`).join('')}</select></td>
+      <td><select data-role="\${u.id}">\${roleOptions(u.role)}</select></td>
       <td><select data-client="\${u.id}">\${clientOptions(u.client_id)}</select></td>
       <td><span class="badge \${u.active ? 'active' : 'inactive'}">\${u.active ? 'active' : 'inactive'}</span></td>
       <td>\${date(u.last_login_at)}</td>
       <td><div class="actions">
+        <button data-edit="\${u.id}">Edit</button>
         <button class="\${u.active ? 'danger' : 'good'}" data-active="\${u.id}" data-value="\${!u.active}">\${u.active ? 'Deactivate' : 'Reactivate'}</button>
         <button data-reset="\${u.id}">Reset Password</button>
         <button class="danger" data-delete="\${u.id}">Delete</button>
       </div></td>
     </tr>
   \`).join('');
+  window.__users = users;
+}
+function updateEditAccessWarn() {
+  if (!editUser) return;
+  const roleChanged = document.getElementById('editRole').value !== editUser.role;
+  const clientChanged = String(document.getElementById('editClientId').value || '') !== String(editUser.client_id || '');
+  document.getElementById('editAccessWarn').classList.toggle('show', roleChanged || clientChanged);
+}
+function closeEditModal() {
+  editUser = null;
+  document.getElementById('editForm').reset();
+  document.getElementById('editAccessWarn').classList.remove('show');
+  document.getElementById('editModal').classList.remove('open');
+  document.getElementById('editModal').setAttribute('aria-hidden', 'true');
+}
+function openEditModal(id) {
+  const user = (window.__users || []).find(u => String(u.id) === String(id));
+  if (!user) return;
+  editUser = { ...user };
+  document.getElementById('editName').value = user.name;
+  document.getElementById('editEmail').value = user.email;
+  document.getElementById('editRole').innerHTML = roleOptions(user.role);
+  document.getElementById('editClientId').innerHTML = clientOptions(user.client_id);
+  document.getElementById('editActive').checked = Boolean(user.active);
+  updateEditAccessWarn();
+  document.getElementById('editModal').classList.add('open');
+  document.getElementById('editModal').setAttribute('aria-hidden', 'false');
+  document.getElementById('editName').focus();
 }
 document.getElementById('addForm').addEventListener('submit', async e => {
   e.preventDefault();
@@ -207,6 +276,39 @@ document.getElementById('resetForm').addEventListener('submit', async e => {
     closeResetModal(); say('Password reset');
   } catch (err) { say(err.message); }
 });
+document.getElementById('cancelEdit').addEventListener('click', closeEditModal);
+document.getElementById('editModal').addEventListener('click', e => { if (e.target.id === 'editModal') closeEditModal(); });
+document.getElementById('editRole').addEventListener('change', updateEditAccessWarn);
+document.getElementById('editClientId').addEventListener('change', updateEditAccessWarn);
+document.getElementById('editForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (!editUser) return;
+  const payload = {
+    name: document.getElementById('editName').value.trim(),
+    email: document.getElementById('editEmail').value.trim(),
+    role: document.getElementById('editRole').value,
+    client_id: document.getElementById('editClientId').value,
+    active: document.getElementById('editActive').checked
+  };
+  if (!payload.name) { say('Name is required'); return; }
+  if (!payload.email) { say('Email is required'); return; }
+  const roleChanged = payload.role !== editUser.role;
+  const clientChanged = String(payload.client_id || '') !== String(editUser.client_id || '');
+  if (roleChanged || clientChanged) {
+    const ok = confirm("Changing role or client may change this user's access. Continue?");
+    if (!ok) return;
+  }
+  try {
+    const updated = await api('/api/users/' + editUser.id, { method:'PATCH', body:JSON.stringify(payload) });
+    closeEditModal();
+    if (updated.email && updated.email !== editUser.email) {
+      say('Email updated. The user should log in with the new email next time.');
+    } else {
+      say('User updated.');
+    }
+    load();
+  } catch (err) { say(err.message); }
+});
 document.addEventListener('change', async e => {
   const id = e.target.dataset.role;
   const clientId = e.target.dataset.client;
@@ -219,7 +321,9 @@ document.addEventListener('click', async e => {
   const activeId = e.target.dataset.active;
   const resetId = e.target.dataset.reset;
   const deleteId = e.target.dataset.delete;
+  const editId = e.target.dataset.edit;
   try {
+    if (editId) openEditModal(editId);
     if (activeId) { await api('/api/users/' + activeId, { method:'PATCH', body:JSON.stringify({ active:e.target.dataset.value === 'true' }) }); say('Status updated'); load(); }
     if (resetId) {
       openResetModal(resetId);
@@ -272,48 +376,69 @@ router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
   try {
     await initAuth();
     const id = Number(req.params.id);
+    const { rows: existingRows } = await pool.query(
+      'SELECT id, name, email, role, client_id, active FROM users WHERE id = $1',
+      [id]
+    );
+    if (!existingRows.length) return res.status(404).json({ error: 'User not found' });
+    const existing = existingRows[0];
+
     const updates = [];
     const values = [];
+
+    if (req.body.name !== undefined) {
+      const name = String(req.body.name).trim();
+      if (!name) return res.status(400).json({ error: 'Name is required' });
+      values.push(name);
+      updates.push(`name = $${values.length}`);
+    }
+
+    if (req.body.email !== undefined) {
+      const email = String(req.body.email).toLowerCase().trim();
+      if (!email) return res.status(400).json({ error: 'Email is required' });
+      const { rowCount: conflict } = await pool.query(
+        'SELECT 1 FROM users WHERE LOWER(email) = $1 AND id <> $2 LIMIT 1',
+        [email, id]
+      );
+      if (conflict) return res.status(409).json({ error: 'That email belongs to another user.' });
+      values.push(email);
+      updates.push(`email = $${values.length}`);
+    }
+
+    const nextRole = req.body.role !== undefined ? req.body.role : existing.role;
     if (req.body.role !== undefined) {
       if (!validateRole(req.body.role)) return res.status(400).json({ error: 'Invalid role' });
       values.push(req.body.role);
       updates.push(`role = $${values.length}`);
     }
+
+    const nextClientId = req.body.client_id !== undefined
+      ? normalizeClientId(req.body.client_id)
+      : existing.client_id;
+
     if (req.body.client_id !== undefined) {
-      const clientId = normalizeClientId(req.body.client_id);
-      if (clientId && !(await validateClientId(clientId))) return res.status(400).json({ error: 'Invalid client' });
-      values.push(clientId);
+      if (nextClientId && !(await validateClientId(nextClientId))) {
+        return res.status(400).json({ error: 'Invalid client' });
+      }
+      values.push(nextClientId);
       updates.push(`client_id = $${values.length}`);
     }
-    if (req.body.client_id !== undefined && req.body.role === undefined) {
-      const existing = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
-      if (existing.rows[0]?.role === 'client' && !normalizeClientId(req.body.client_id)) {
-        return res.status(400).json({ error: 'Client role requires a client' });
-      }
+
+    if (nextRole === 'client' && !nextClientId) {
+      return res.status(400).json({ error: 'Client role requires a client' });
     }
-    if (req.body.role === 'client') {
-      if (req.body.client_id !== undefined && !normalizeClientId(req.body.client_id)) {
-        return res.status(400).json({ error: 'Client role requires a client' });
-      }
-      if (req.body.client_id === undefined) {
-        const existing = await pool.query('SELECT client_id FROM users WHERE id = $1', [id]);
-        if (!existing.rows[0]?.client_id) return res.status(400).json({ error: 'Client role requires a client' });
-      }
+    if (nextRole === 'ao' && !nextClientId) {
+      return res.status(400).json({ error: 'AO role requires a client' });
     }
-    if (req.body.role === 'ao') {
-      if (req.body.client_id !== undefined && !normalizeClientId(req.body.client_id)) {
-        return res.status(400).json({ error: 'AO role requires a client' });
-      }
-      if (req.body.client_id === undefined) {
-        const existing = await pool.query('SELECT client_id FROM users WHERE id = $1', [id]);
-        if (!existing.rows[0]?.client_id) return res.status(400).json({ error: 'AO role requires a client' });
-      }
-    }
+
     if (req.body.active !== undefined) {
-      if (id === req.user.id && req.body.active === false) return res.status(400).json({ error: 'Cannot deactivate your own account' });
+      if (id === req.user.id && req.body.active === false) {
+        return res.status(400).json({ error: 'Cannot deactivate your own account' });
+      }
       values.push(Boolean(req.body.active));
       updates.push(`active = $${values.length}`);
     }
+
     if (!updates.length) return res.status(400).json({ error: 'No updates provided' });
     values.push(id);
     const { rows } = await pool.query(`
@@ -324,6 +449,9 @@ router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
     res.json(publicUser(rows[0]));
   } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'That email belongs to another user.' });
+    }
     console.error('[users] PATCH error:', err.code, err.message);
     res.status(500).json({ error: err.message || 'Failed to update user' });
   }
