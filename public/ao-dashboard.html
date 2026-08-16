@@ -126,11 +126,12 @@ body {
 .ao-chat {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: 12px 12px calc(96px + env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 10px;
   -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
 }
 .ao-msg {
   max-width: 88%;
@@ -201,6 +202,9 @@ body {
   background: var(--pf-bg-card);
   border-top: 1px solid var(--pf-border);
   flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
 }
 .ao-compose input {
   flex: 1;
@@ -404,6 +408,13 @@ const messageInput = document.getElementById('messageInput');
 let sessionId = null;
 let activeMode = null;
 let queueFilter = 'today';
+let visitJustCompleted = false;
+
+function scrollChatToBottom() {
+  requestAnimationFrame(() => {
+    chat.scrollTop = chat.scrollHeight;
+  });
+}
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -424,18 +435,29 @@ function addMsg(text, role) {
   el.className = 'ao-msg ' + role;
   el.textContent = text;
   chat.appendChild(el);
-  chat.scrollTop = chat.scrollHeight;
+  scrollChatToBottom();
 }
 
 function clearChat() {
   chat.innerHTML = '';
   sessionId = null;
   activeMode = null;
+  visitJustCompleted = false;
+}
+
+function setGreeting(profile) {
+  const el = document.getElementById('aoGreeting');
+  if (profile?.role === 'ao' && profile?.name) {
+    el.textContent = `Hey ${profile.name.split(' ')[0]} · Field Mode`;
+  } else {
+    el.textContent = 'Field Mode';
+  }
 }
 
 async function loadProfile() {
   const profile = await api('/api/profile');
-  document.getElementById('aoGreeting').textContent = profile.name ? `Hey ${profile.name.split(' ')[0]}` : 'Field follow-up';
+  setGreeting(profile);
+  return profile;
 }
 
 async function loadMetrics() {
@@ -450,6 +472,8 @@ async function loadMetrics() {
 async function startMode(mode) {
   clearChat();
   activeMode = mode;
+  visitJustCompleted = false;
+  messageInput.placeholder = 'Reply to Max…';
   addMsg('Starting…', 'system');
   try {
     const result = await api('/api/max/start', { method: 'POST', body: JSON.stringify({ mode }) });
@@ -472,7 +496,11 @@ async function sendMessage(text) {
   messageInput.value = '';
 
   if (!sessionId) {
-    addMsg('Pick a mode above to start talking with Max.', 'system');
+    if (visitJustCompleted) {
+      addMsg('Log another visit or open Queue to follow up.', 'system');
+    } else {
+      addMsg('Pick a mode above to start talking with Max.', 'system');
+    }
     return;
   }
 
@@ -484,6 +512,8 @@ async function sendMessage(text) {
     addMsg(result.reply, 'max');
     if (result.completed) {
       sessionId = null;
+      visitJustCompleted = true;
+      messageInput.placeholder = 'Tap a mode above for another visit…';
       loadMetrics();
       loadQueue();
     }
