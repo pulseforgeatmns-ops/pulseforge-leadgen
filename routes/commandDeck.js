@@ -90,6 +90,21 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
       const operatorBrief = await buildOperatorBrief(clientId);
       if (operatorBrief) {
         model.operatorBrief = operatorBrief;
+        // Surface AO intelligence as the Command Deck brief (replaces empty market-intel state)
+        model.morningBrief = {
+          headline: operatorBrief.highestLeverage?.title || 'Operator brief ready',
+          summary: operatorBrief.narrative,
+          generatedAt: operatorBrief.generatedAt,
+          marketContext: 'ao_field',
+        };
+        if (operatorBrief.highestLeverage) {
+          model.highestLeverageAction = {
+            recommendation: {
+              recommendedAction: operatorBrief.highestLeverage.title,
+              companyName: null,
+            },
+          };
+        }
       }
     } catch (err) {
       console.warn('[command-deck] operator brief failed:', err.message);

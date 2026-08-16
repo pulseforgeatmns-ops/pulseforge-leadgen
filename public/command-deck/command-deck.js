@@ -1676,26 +1676,12 @@
     els.actionCards.innerHTML = `
       <p class="cd-kicker" id="cdCardsHeading">Execute</p>
       <div class="cd-quick-actions">
-        ${(ob.actionCards || []).map((card) => {
-          if (card.kind === 'copy') {
-            return `<button type="button" class="cd-quick-action" data-cd-copy-mike>${escapeHtml(card.label)}</button>`;
-          }
-          return `<a class="cd-quick-action" href="${escapeHtml(card.href || '#')}">${escapeHtml(card.label)}</a>`;
-        }).join('')}
+        ${(ob.actionCards || []).map((card) =>
+          `<a class="cd-quick-action" href="${escapeHtml(card.href || '#')}">${escapeHtml(card.label)}</a>`
+        ).join('')}
       </div>
     `;
     els.actionCards.hidden = false;
-
-    els.actionCards.querySelector('[data-cd-copy-mike]')?.addEventListener('click', async () => {
-      const text = ob.mikeInstructions || '';
-      try {
-        await navigator.clipboard.writeText(text);
-        setStatus('Mike instructions copied');
-        window.setTimeout(() => setStatus('Briefing ready'), 2000);
-      } catch {
-        setStatus('Could not copy — check browser permissions');
-      }
-    });
 
     return true;
   }

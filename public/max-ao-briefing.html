@@ -14,11 +14,12 @@
   <main id="mabMain" class="mab-main" aria-label="Max AO Briefing">
     <header class="mab-header">
       <div>
-        <p class="mab-eyebrow">Max v1 · Operator Briefing</p>
-        <h1 class="mab-title">AO Command Brief</h1>
+        <p class="mab-eyebrow">AO Details · Drill-down</p>
+        <h1 class="mab-title">Campaign & Field Intelligence</h1>
         <p id="mabTimestamp" class="mab-ts"></p>
       </div>
       <div class="mab-header-actions">
+        <a class="mab-btn" href="/command-deck">← Command Deck</a>
         <label class="mab-client-label" for="mabClientSelect">Client</label>
         <select id="mabClientSelect" class="mab-select" aria-label="Active client"></select>
         <button type="button" id="mabRefresh" class="mab-btn">Refresh</button>
@@ -39,7 +40,7 @@
         <div id="mabToday" class="mab-stats"></div>
       </section>
 
-      <section class="mab-panel" aria-labelledby="mabCampaignHeading">
+      <section class="mab-panel" id="campaign" aria-labelledby="mabCampaignHeading">
         <h2 id="mabCampaignHeading" class="mab-section-title">Campaign 001</h2>
         <div id="mabCampaign" class="mab-stats"></div>
       </section>
@@ -81,7 +82,7 @@
       </section>
     </div>
 
-    <section class="mab-panel mab-panel-wide" aria-labelledby="mabPromoHeading">
+    <section class="mab-panel mab-panel-wide" id="promo" aria-labelledby="mabPromoHeading">
       <h2 id="mabPromoHeading" class="mab-section-title">CRM Promotion Candidates</h2>
       <div id="mabPromo" class="mab-list"></div>
     </section>
