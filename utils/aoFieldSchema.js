@@ -1,5 +1,8 @@
 const pool = require('../db');
-const { ensureUsersTable, ROLES } = require('../middleware/auth');
+const { ensureUsersTable } = require('../middleware/auth');
+const { ensureClientArchitecture } = require('./clientContext');
+
+let schemaInitPromise;
 
 const LEAD_STATUSES = [
   'new_visit',
@@ -21,34 +24,9 @@ const TASK_PRIORITIES = ['normal', 'high'];
 const ESCALATION_STATUSES = ['new', 'seen', 'in_progress', 'resolved'];
 const MAX_MODES = ['log_visit', 'follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help'];
 
-const ROLE_CHECK = ROLES.map(role => `'${role}'`).join(', ');
-
-async function ensureAoRoleConstraint() {
-  await pool.query('SELECT pg_advisory_lock(91720260518)');
-  try {
-    const { rows: existing } = await pool.query(`
-      SELECT con.conname
-      FROM pg_constraint con
-      JOIN pg_class cls ON cls.oid = con.conrelid
-      WHERE cls.relname = 'users'
-        AND con.contype = 'c'
-        AND pg_get_constraintdef(con.oid) ILIKE '%role%'
-    `);
-    for (const row of existing) {
-      await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS "${row.conname}"`);
-    }
-    await pool.query(`
-      ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN (${ROLE_CHECK}))
-    `);
-  } finally {
-    await pool.query('SELECT pg_advisory_unlock(91720260518)');
-  }
-}
-
-async function ensureAoFieldSchema() {
+async function ensureAoFieldSchemaOnce() {
+  await ensureClientArchitecture();
   await ensureUsersTable();
-  await ensureAoRoleConstraint();
 
   await pool.query(`
     ALTER TABLE users
@@ -155,6 +133,16 @@ async function ensureAoFieldSchema() {
     CREATE INDEX IF NOT EXISTS idx_ao_tasks_owner_due ON ao_follow_up_tasks(ao_owner_id, due_date, status);
     CREATE INDEX IF NOT EXISTS idx_ao_escalations_status ON ao_escalations(status, created_at DESC);
   `);
+}
+
+async function ensureAoFieldSchema() {
+  if (!schemaInitPromise) {
+    schemaInitPromise = ensureAoFieldSchemaOnce().catch(err => {
+      schemaInitPromise = null;
+      throw err;
+    });
+  }
+  return schemaInitPromise;
 }
 
 module.exports = {

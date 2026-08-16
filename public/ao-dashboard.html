@@ -406,13 +406,16 @@ let activeMode = null;
 let queueFilter = 'today';
 
 async function api(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const res = await fetch('/ao' + path, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     ...options,
+    headers,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || 'Request failed');
+  if (res.status === 401) throw new Error('Session expired — log in again');
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
 
@@ -441,6 +444,7 @@ async function loadMetrics() {
   document.getElementById('mDue').textContent = m.due_today ?? '0';
   document.getElementById('mOverdue').textContent = m.overdue ?? '0';
   document.getElementById('mEsc').textContent = m.pending_escalations ?? '0';
+  return m;
 }
 
 async function startMode(mode) {
@@ -588,10 +592,24 @@ document.getElementById('queueList').addEventListener('click', async e => {
   }
 });
 
-Promise.all([loadProfile(), loadMetrics()]).catch(err => {
-  addMsg('Could not connect — try logging in again.', 'system');
-  console.error(err);
-});
+async function bootDashboard() {
+  try {
+    await loadProfile();
+  } catch (err) {
+    console.error('[ao] profile load failed:', err);
+    addMsg(`Profile error: ${err.message}`, 'system');
+  }
+  try {
+    const m = await loadMetrics();
+    if (m?.client_missing) {
+      addMsg('Your account needs a client assigned (client_id 10). Ask admin to update /admin/users.', 'system');
+    }
+  } catch (err) {
+    console.error('[ao] metrics load failed:', err);
+    addMsg(`Metrics error: ${err.message}`, 'system');
+  }
+}
+bootDashboard();
 
 addMsg('Pick a mode above to get started. I remember every visit.', 'max');
 </script>

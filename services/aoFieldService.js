@@ -52,7 +52,7 @@ function mapTask(row) {
 async function getAoProfile(userId) {
   const { rows } = await pool.query(`
     SELECT id, name, email, phone, role, territory, manager_id, daily_goal, weekly_goal, client_id, active
-    FROM users WHERE id = $1 AND role = 'ao' LIMIT 1
+    FROM users WHERE id = $1 LIMIT 1
   `, [userId]);
   return rows[0] || null;
 }
