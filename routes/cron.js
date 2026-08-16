@@ -125,6 +125,26 @@ function runCronAgent(agent, res, query = {}) {
   }
 }
 
+async function handleSeedDirectMailAoCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const apply = ['1', 'true', 'yes'].includes(String(req.query.apply || req.body?.apply || '').toLowerCase());
+  try {
+    const { run, APPLY_CONFIRMATION } = require('../scripts/seedAnchorDirectMailAoQueue');
+    if (apply) {
+      const output = await run({ apply: true });
+      return res.json(output);
+    }
+    const dryRun = await run({ apply: false });
+    return res.json({ ...dryRun, apply_hint: `POST with apply=true and confirm=${APPLY_CONFIRMATION} via CLI` });
+  } catch (err) {
+    console.error('[cron] seed-direct-mail-ao error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 async function handleScoutExpansionCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
@@ -396,6 +416,8 @@ router.post('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
 router.get('/cron/scout-places-diagnostic', handleScoutPlacesDiagnostic);
 router.post('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
 router.get('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
+router.post('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
+router.get('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {
@@ -424,5 +446,6 @@ router.get('/cron/:agent', async (req, res) => {
 
 module.exports = router;
 module.exports.handleScoutPlacesDiagnostic = handleScoutPlacesDiagnostic;
+module.exports.handleSeedDirectMailAoCron = handleSeedDirectMailAoCron;
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
