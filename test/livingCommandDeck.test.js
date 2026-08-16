@@ -116,3 +116,60 @@ describe('SPEC-097A Intelligence Field UI contracts', () => {
     assert.match(spatialJs, /els\.canvas\.hidden = listView/);
   });
 });
+
+describe('SPEC-097B Spatial Composition Polish', () => {
+  it('builds Max halo from oval rings rather than a rectangular inset glow', () => {
+    assert.match(html, /cd-max-halo-ring-inner/);
+    assert.match(html, /cd-max-halo-ring-mid/);
+    assert.match(html, /cd-max-halo-ring-outer/);
+    assert.match(css, /\.cd-max-halo-ring\s*\{[^}]*border-radius:\s*50%/s);
+    assert.match(css, /radial-gradient\(\s*ellipse at 50% 50%/);
+    assert.doesNotMatch(css, /\.cd-spatial-max-halo\s*\{[^}]*inset:\s*-18px/s);
+    assert.doesNotMatch(css, /\.cd-spatial-max-halo\s*\{[^}]*radial-gradient\(\s*circle/s);
+  });
+
+  it('expands priority bands and keeps monitored > normal > elevated > urgent', () => {
+    assert.match(spatialJs, /monitored:\s*280/);
+    assert.match(spatialJs, /normal:\s*235/);
+    assert.match(spatialJs, /elevated:\s*178/);
+    assert.match(spatialJs, /urgent:\s*142/);
+    assert.match(spatialJs, /computeFieldLayout/);
+    assert.match(spatialJs, /PROTECTED_GAP_PX/);
+    assert.match(css, /--cd-orbit-radius:\s*min\(48vw, 360px\)/);
+  });
+
+  it('synthesizes Max aggregate state instead of repeating domain counts', () => {
+    assert.match(spatialJs, /function synthesizeMaxCopy/);
+    assert.match(spatialJs, /Watching \$\{areaCount\}/);
+    assert.match(spatialJs, /needs your attention/);
+    assert.match(spatialJs, /function nodeSummaryText/);
+    assert.match(spatialJs, /historical\|contained/);
+  });
+
+  it('terminates connections at Max halo and domain node edges', () => {
+    assert.match(spatialJs, /function ellipseEdge/);
+    assert.match(spatialJs, /function rectEdge/);
+    assert.match(spatialJs, /HALO_EXTENT_PX/);
+  });
+
+  it('reuses domain nodes so priority travel can animate along the expanded orbit', () => {
+    assert.match(spatialJs, /@property --cd-node-x|--cd-node-x/);
+    assert.match(css, /@property --cd-node-x/);
+    assert.match(spatialJs, /nodeByDomain\.get\(domain\.id\)/);
+    assert.match(spatialJs, /cd-spatial-node-placing/);
+  });
+
+  it('pulses a restrained Max-to-domain signal for sustained urgent state', () => {
+    assert.match(spatialJs, /SIGNAL_MS = 8000/);
+    assert.match(spatialJs, /function syncSignalLoop/);
+    assert.match(spatialJs, /function travelSignal/);
+    assert.match(spatialJs, /function pulseMaxHalo/);
+    assert.match(css, /cd-max-signaling/);
+  });
+
+  it('keeps halo and signal static under reduced motion', () => {
+    assert.match(css, /prefers-reduced-motion: reduce/);
+    assert.match(css, /cd-max-halo-ring-outer/);
+    assert.match(spatialJs, /if \(reducedMotion\(\) \|\| listView\) return/);
+  });
+});

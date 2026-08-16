@@ -2438,12 +2438,33 @@ body.theme-dark .mx-ask-submit {
   }
 }
 
-/* ── SPEC-097 / SPEC-097A Living Command Deck ───────────────── */
+/* ── SPEC-097 / SPEC-097A / SPEC-097B Living Command Deck ───── */
+
+@property --cd-node-x {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --cd-node-y {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+@property --cd-node-scale {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
 
 :root {
   --cd-intel-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --cd-intel-transition: 900ms;
-  --cd-orbit-radius: min(42vw, 240px);
+  --cd-orbit-radius: min(48vw, 360px);
+  --cd-band-monitored: 280px;
+  --cd-band-normal: 235px;
+  --cd-band-elevated: 178px;
+  --cd-band-urgent: 142px;
+  --cd-protected-gap: 18px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2453,7 +2474,7 @@ body.theme-dark .mx-ask-submit {
 }
 
 body.cd-living-deck {
-  --cd-max: min(100% - 2.5rem, 1080px);
+  --cd-max: min(100% - 2rem, 1240px);
 }
 
 body.cd-living-deck.cd-domain-open .cd-spatial-node:not(.cd-spatial-node-focused) {
@@ -2497,10 +2518,10 @@ body.cd-living-deck.cd-domain-open .cd-spatial-max {
   border-color: var(--pf-gold);
 }
 
-/* Intelligence field canvas */
+/* Intelligence field canvas — use the available viewport */
 .cd-spatial-canvas {
   position: relative;
-  min-height: clamp(420px, 68vh, 680px);
+  min-height: clamp(520px, 74vh, 780px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2508,26 +2529,27 @@ body.cd-living-deck.cd-domain-open .cd-spatial-max {
   border-radius: var(--pf-radius-lg);
 }
 
-/* Atmospheric background — felt before noticed */
+/* Atmospheric background — felt before noticed; oval like Max */
 .cd-intel-field {
   position: absolute;
   inset: 0;
   pointer-events: none;
   overflow: hidden;
   border-radius: inherit;
+  z-index: 0;
 }
 
 .cd-intel-field-waves {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 140%;
-  height: 140%;
+  width: 150%;
+  height: 160%;
   transform: translate(-50%, -50%);
   background:
-    radial-gradient(circle at 50% 50%, rgba(154, 123, 45, 0.04) 0%, transparent 42%),
-    radial-gradient(circle at 50% 50%, rgba(154, 123, 45, 0.025) 0%, transparent 58%);
-  animation: cd-intel-breathe 14s ease-in-out infinite;
+    radial-gradient(ellipse 38% 46% at 50% 50%, rgba(154, 123, 45, 0.045) 0%, transparent 72%),
+    radial-gradient(ellipse 56% 66% at 50% 50%, rgba(154, 123, 45, 0.022) 0%, transparent 78%);
+  animation: cd-intel-breathe 16s ease-in-out infinite;
 }
 
 .cd-intel-field-waves::before,
@@ -2537,64 +2559,71 @@ body.cd-living-deck.cd-domain-open .cd-spatial-max {
   left: 50%;
   top: 50%;
   border-radius: 50%;
-  border: 1px solid rgba(154, 123, 45, 0.06);
+  border: 1px solid rgba(154, 123, 45, 0.055);
   transform: translate(-50%, -50%);
 }
 
 .cd-intel-field-waves::before {
-  width: 55%;
-  height: 55%;
-  animation: cd-intel-ring 18s ease-in-out infinite;
+  width: 42%;
+  height: 50%;
+  animation: cd-intel-ring 20s ease-in-out infinite;
 }
 
 .cd-intel-field-waves::after {
-  width: 78%;
-  height: 78%;
-  animation: cd-intel-ring 22s ease-in-out infinite reverse;
+  width: 64%;
+  height: 76%;
+  animation: cd-intel-ring 24s ease-in-out infinite reverse;
 }
 
 @keyframes cd-intel-breathe {
-  0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(1); }
-  50% { opacity: 0.85; transform: translate(-50%, -50%) scale(1.02); }
+  0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 0.78; transform: translate(-50%, -50%) scale(1.015); }
 }
 
 @keyframes cd-intel-ring {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 0.65; }
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.55; }
 }
 
 body.cd-intel-paused .cd-intel-field-waves,
 body.cd-intel-paused .cd-intel-field-waves::before,
 body.cd-intel-paused .cd-intel-field-waves::after,
-body.cd-intel-paused .cd-spatial-max-halo {
+body.cd-intel-paused .cd-spatial-max-halo,
+body.cd-intel-paused .cd-max-halo-ring {
   animation-play-state: paused;
 }
 
-/* Connection lines SVG layer */
+/* Connection lines SVG layer — sized to the orbit, not stretched across the canvas */
 .cd-intel-connections {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  inset: auto;
   pointer-events: none;
-  z-index: 0;
+  z-index: 1;
 }
 
 .cd-intel-conn {
   fill: none;
-  stroke: rgba(154, 123, 45, 0.08);
-  stroke-width: 1;
-  transition: stroke 680ms var(--cd-intel-ease), stroke-opacity 680ms var(--cd-intel-ease);
+  stroke: rgba(154, 123, 45, 0.045);
+  stroke-width: 0.85;
+  stroke-linecap: round;
+  transition: stroke 680ms var(--cd-intel-ease), stroke-width 680ms var(--cd-intel-ease);
 }
 
+.cd-intel-conn.cd-intel-conn-elevated {
+  stroke: rgba(201, 162, 39, 0.18);
+  stroke-width: 1;
+}
+
+.cd-intel-conn.cd-intel-conn-urgent,
 .cd-intel-conn.cd-intel-conn-active {
-  stroke: rgba(154, 123, 45, 0.32);
-  stroke-width: 1.25;
+  stroke: rgba(201, 162, 39, 0.34);
+  stroke-width: 1.15;
 }
 
 .cd-intel-conn-signal {
-  fill: rgba(201, 162, 39, 0.75);
+  fill: rgba(201, 162, 39, 0.7);
   opacity: 0;
+  filter: blur(0.4px);
 }
 
 .cd-intel-conn-signal.cd-intel-signal-travel {
@@ -2610,13 +2639,13 @@ body.cd-intel-paused .cd-spatial-max-halo {
 
 .cd-spatial-orbit {
   position: relative;
-  width: min(100%, 720px);
-  height: min(72vw, 560px);
-  min-height: 380px;
-  z-index: 1;
+  width: min(100%, 960px);
+  height: min(84vw, 700px);
+  min-height: 500px;
+  z-index: 2;
 }
 
-/* Max intelligence anchor — compact origin, not a dashboard card */
+/* Max intelligence anchor — compact oval origin of the field */
 .cd-spatial-max {
   position: absolute;
   left: 50%;
@@ -2625,40 +2654,133 @@ body.cd-intel-paused .cd-spatial-max-halo {
   width: min(148px, 28vw);
   z-index: 3;
   text-align: center;
+  background: none;
+  box-shadow: none;
+  filter: none;
+  overflow: visible;
 }
 
 .cd-spatial-max-halo {
   position: absolute;
-  inset: -18px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(201, 162, 39, 0.12) 0%, transparent 68%);
-  animation: cd-max-halo-breathe 6s ease-in-out infinite;
+  left: 50%;
+  top: 50%;
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%);
   pointer-events: none;
+  z-index: 0;
+  background: none;
+  box-shadow: none;
+  border-radius: 50%;
+}
+
+.cd-max-halo-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background-color: transparent;
+}
+
+.cd-max-halo-ring-inner {
+  width: 118%;
+  height: 118%;
+  background: radial-gradient(
+    ellipse at 50% 50%,
+    transparent 56%,
+    rgba(201, 162, 39, 0.2) 70%,
+    transparent 86%
+  );
+}
+
+.cd-max-halo-ring-mid {
+  width: 168%;
+  height: 168%;
+  background: radial-gradient(
+    ellipse at 50% 50%,
+    rgba(201, 162, 39, 0.11) 0%,
+    rgba(201, 162, 39, 0.05) 38%,
+    transparent 72%
+  );
+}
+
+.cd-max-halo-ring-outer {
+  width: 230%;
+  height: 230%;
+  background: radial-gradient(
+    ellipse at 50% 50%,
+    rgba(201, 162, 39, 0.06) 0%,
+    rgba(201, 162, 39, 0.025) 40%,
+    transparent 70%
+  );
+  animation: cd-max-halo-breathe 7s ease-in-out infinite;
 }
 
 @keyframes cd-max-halo-breathe {
-  0%, 100% { opacity: 0.55; transform: scale(0.96); }
-  50% { opacity: 0.9; transform: scale(1.04); }
+  0%, 100% {
+    opacity: 0.42;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    opacity: 0.72;
+    transform: translate(-50%, -50%) scale(1.045);
+  }
+}
+
+.cd-spatial-max.cd-max-signaling .cd-max-halo-ring-inner {
+  background: radial-gradient(
+    ellipse at 50% 50%,
+    transparent 52%,
+    rgba(201, 162, 39, 0.32) 68%,
+    transparent 86%
+  );
+}
+
+.cd-spatial-max.cd-max-signaling .cd-max-halo-ring-mid {
+  animation: cd-max-halo-pulse 1.7s ease-out;
+}
+
+.cd-spatial-max.cd-max-signaling .cd-max-halo-ring-outer {
+  animation: cd-max-halo-pulse-outer 1.7s ease-out;
+}
+
+@keyframes cd-max-halo-pulse {
+  0% { opacity: 0.5; transform: translate(-50%, -50%) scale(1); }
+  32% { opacity: 0.95; transform: translate(-50%, -50%) scale(1.07); }
+  100% { opacity: 0.55; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes cd-max-halo-pulse-outer {
+  0% { opacity: 0.42; transform: translate(-50%, -50%) scale(1); }
+  32% { opacity: 0.85; transform: translate(-50%, -50%) scale(1.08); }
+  100% { opacity: 0.5; transform: translate(-50%, -50%) scale(1); }
 }
 
 .cd-spatial-max-core {
   position: relative;
-  padding: 1rem 0.85rem;
+  z-index: 1;
+  width: 100%;
+  aspect-ratio: 5 / 6;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.85rem 0.7rem;
   border-radius: 50%;
   background: color-mix(in srgb, var(--pf-bg-card) 88%, transparent);
   border: 1.5px solid rgba(201, 162, 39, 0.38);
-  box-shadow:
-    0 0 0 1px rgba(201, 162, 39, 0.08),
-    0 4px 24px rgba(15, 23, 42, 0.05);
+  box-shadow: none;
   backdrop-filter: blur(6px);
+  overflow: hidden;
 }
 
 body.theme-dark .cd-spatial-max-core {
   background: color-mix(in srgb, rgba(15, 23, 42, 0.92) 90%, transparent);
   border-color: rgba(201, 162, 39, 0.32);
-  box-shadow:
-    0 0 0 1px rgba(201, 162, 39, 0.12),
-    0 8px 32px rgba(0, 0, 0, 0.28);
+  box-shadow: none;
 }
 
 .cd-spatial-max-label {
@@ -2693,32 +2815,41 @@ body.theme-dark .cd-spatial-max-core {
   overflow: hidden;
 }
 
-/* Domain nodes — intelligence nodes, not dashboard cards */
+/* Domain nodes — lightweight intelligence nodes, not dashboard cards */
 .cd-spatial-node {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(calc(-50% + var(--cd-node-x, 0px)), calc(-50% + var(--cd-node-y, 0px))) scale(var(--cd-node-scale, 1));
-  width: min(152px, 34vw);
-  padding: 0.7rem 0.8rem;
+  width: min(132px, 30vw);
+  padding: 0.48rem 0.58rem 0.5rem;
   text-align: left;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--pf-bg-card) 92%, transparent);
-  border: 1px solid var(--pf-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--pf-bg-card) 68%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pf-border) 55%, transparent);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.035);
   cursor: pointer;
   transition:
     transform var(--cd-intel-transition) var(--cd-intel-ease),
+    --cd-node-x var(--cd-intel-transition) var(--cd-intel-ease),
+    --cd-node-y var(--cd-intel-transition) var(--cd-intel-ease),
+    --cd-node-scale var(--cd-intel-transition) var(--cd-intel-ease),
     box-shadow 680ms var(--cd-intel-ease),
     border-color 680ms var(--cd-intel-ease),
+    background 680ms var(--cd-intel-ease),
     opacity 480ms ease;
   z-index: 2;
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(5px);
 }
 
 .cd-spatial-node:hover,
 .cd-spatial-node:focus-visible {
   border-color: rgba(201, 162, 39, 0.45);
   outline: none;
+}
+
+.cd-spatial-node-placing {
+  transition: none !important;
 }
 
 .cd-spatial-node.cd-spatial-node-focused {
@@ -2732,35 +2863,43 @@ body.theme-dark .cd-spatial-max-core {
 
 /* Priority bands — spatial hierarchy through scale, illumination, distance */
 .cd-spatial-node.cd-priority-monitored {
-  opacity: 0.68;
-  border-color: color-mix(in srgb, var(--pf-border) 80%, transparent);
+  opacity: 0.58;
+  border-color: color-mix(in srgb, var(--pf-border) 45%, transparent);
   box-shadow: none;
+  background: color-mix(in srgb, var(--pf-bg-card) 52%, transparent);
 }
 
 .cd-spatial-node.cd-priority-normal {
-  border-color: var(--pf-border);
+  opacity: 0.86;
+  border-color: color-mix(in srgb, var(--pf-border) 50%, transparent);
+  background: color-mix(in srgb, var(--pf-bg-card) 64%, transparent);
 }
 
 .cd-spatial-node.cd-priority-elevated {
+  opacity: 1;
   border-color: rgba(201, 162, 39, 0.42);
+  background: color-mix(in srgb, var(--pf-bg-card) 78%, transparent);
   box-shadow:
-    0 0 0 1px rgba(201, 162, 39, 0.1),
-    0 6px 20px rgba(15, 23, 42, 0.06);
+    0 0 0 1px rgba(201, 162, 39, 0.08),
+    0 6px 18px rgba(15, 23, 42, 0.05);
 }
 
 .cd-spatial-node.cd-priority-urgent {
+  opacity: 1;
+  padding: 0.52rem 0.62rem 0.55rem;
   border-color: rgba(201, 162, 39, 0.58);
+  background: color-mix(in srgb, var(--pf-bg-card) 84%, transparent);
   box-shadow:
-    0 0 0 1px rgba(201, 162, 39, 0.2),
-    0 0 28px rgba(201, 162, 39, 0.1),
-    0 12px 36px rgba(15, 23, 42, 0.1);
+    0 0 0 1px rgba(201, 162, 39, 0.16),
+    0 0 24px rgba(201, 162, 39, 0.08),
+    0 10px 28px rgba(15, 23, 42, 0.08);
 }
 
 body.theme-dark .cd-spatial-node.cd-priority-urgent {
   box-shadow:
-    inset 0 0 0 1px rgba(201, 162, 39, 0.28),
-    0 0 32px rgba(201, 162, 39, 0.12),
-    0 12px 40px rgba(0, 0, 0, 0.25);
+    inset 0 0 0 1px rgba(201, 162, 39, 0.22),
+    0 0 28px rgba(201, 162, 39, 0.1),
+    0 10px 32px rgba(0, 0, 0, 0.22);
 }
 
 .cd-spatial-node.cd-intelligence-active {
@@ -2788,28 +2927,28 @@ body.theme-dark .cd-spatial-node.cd-priority-urgent {
 .cd-spatial-node-label {
   display: block;
   font-family: var(--pf-font-mono);
-  font-size: 0.54rem;
+  font-size: 0.5rem;
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--pf-text-muted);
-  margin-bottom: 0.28rem;
+  margin-bottom: 0.18rem;
 }
 
 .cd-spatial-node-priority {
   display: block;
   font-family: var(--pf-font-mono);
-  font-size: 0.48rem;
+  font-size: 0.46rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--pf-gold);
-  margin-bottom: 0.2rem;
+  margin-bottom: 0.14rem;
   opacity: 0.85;
 }
 
 .cd-spatial-node-summary {
   display: block;
-  font-size: 0.74rem;
-  line-height: 1.38;
+  font-size: 0.7rem;
+  line-height: 1.32;
   color: var(--pf-text);
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -2819,9 +2958,9 @@ body.theme-dark .cd-spatial-node.cd-priority-urgent {
 
 .cd-spatial-node-badge {
   display: block;
-  margin-top: 0.38rem;
+  margin-top: 0.28rem;
   font-family: var(--pf-font-mono);
-  font-size: 0.48rem;
+  font-size: 0.46rem;
   letter-spacing: 0.1em;
   color: var(--pf-gold);
 }
@@ -3128,10 +3267,19 @@ body.theme-dark .cd-spatial-node.cd-priority-urgent {
 
 @media (max-width: 900px) {
   :root {
-    --cd-orbit-radius: min(38vw, 200px);
+    --cd-orbit-radius: min(42vw, 280px);
+    --cd-band-monitored: 220px;
+    --cd-band-normal: 185px;
+    --cd-band-elevated: 148px;
+    --cd-band-urgent: 122px;
   }
   .cd-spatial-canvas {
-    min-height: clamp(360px, 58vh, 520px);
+    min-height: clamp(420px, 62vh, 580px);
+  }
+  .cd-spatial-orbit {
+    width: min(100%, 720px);
+    height: min(78vw, 560px);
+    min-height: 420px;
   }
 }
 
@@ -3143,6 +3291,10 @@ body.theme-dark .cd-spatial-node.cd-priority-urgent {
   .cd-intel-field-waves::before,
   .cd-intel-field-waves::after,
   .cd-spatial-max-halo,
+  .cd-max-halo-ring,
+  .cd-max-halo-ring-outer,
+  .cd-spatial-max.cd-max-signaling .cd-max-halo-ring-mid,
+  .cd-spatial-max.cd-max-signaling .cd-max-halo-ring-outer,
   .cd-spatial-node-glow,
   .cd-intel-conn-signal.cd-intel-signal-travel {
     animation: none !important;
