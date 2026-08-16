@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * SPEC-097 / SPEC-097A Living Command Deck — UI contract regression tests.
+ * SPEC-097 / SPEC-097A / SPEC-097B / SPEC-097C Living Command Deck — UI contract regression tests.
  */
 
 const { describe, it } = require('node:test');
