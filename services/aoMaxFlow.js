@@ -26,6 +26,7 @@ const {
   notifyJakeEscalation,
   depositEscalationAction,
 } = require('./aoFieldService');
+const { advanceRouteAfterVisit } = require('./aoRouteService');
 
 const LOG_VISIT_STEPS = [
   { key: 'business_name', question: 'What business did you visit?' },
@@ -322,15 +323,29 @@ async function finalizeVisitSession({
     escalated: Boolean(result.escalation),
   });
 
+  let routeAdvance = null;
+  if (payload.task_id) {
+    routeAdvance = await advanceRouteAfterVisit({
+      aoOwnerId,
+      taskId: payload.task_id,
+      aoName,
+    }).catch(err => {
+      console.error('[ao] route advance failed:', err.message);
+      return null;
+    });
+  }
+
   return {
     session_id: sessionId,
     mode: session.mode,
     completed: true,
-    reply,
+    reply: routeAdvance?.next_stop_debrief ? reply + routeAdvance.next_stop_debrief : reply,
     lead: result.lead,
     task: result.task,
     escalated: Boolean(result.escalation),
     next_action_owner: nextActionOwner,
+    route: routeAdvance?.route || null,
+    next_stop: routeAdvance?.next_stop || null,
   };
 }
 
@@ -392,14 +407,28 @@ async function finalizeDirectMailSession({
     escalated: Boolean(result.escalation),
   });
 
+  let routeAdvance = null;
+  if (payload.task_id) {
+    routeAdvance = await advanceRouteAfterVisit({
+      aoOwnerId,
+      taskId: payload.task_id,
+      aoName,
+    }).catch(err => {
+      console.error('[ao] route advance failed:', err.message);
+      return null;
+    });
+  }
+
   return {
     session_id: sessionId,
     mode: session.mode,
     completed: true,
-    reply,
+    reply: routeAdvance?.next_stop_debrief ? reply + routeAdvance.next_stop_debrief : reply,
     lead: result.lead,
     task: result.task,
     escalated: Boolean(result.escalation),
+    route: routeAdvance?.route || null,
+    next_stop: routeAdvance?.next_stop || null,
   };
 }
 

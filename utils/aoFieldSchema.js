@@ -24,6 +24,10 @@ const TASK_PRIORITIES = ['normal', 'high', 'warm'];
 const ATTRIBUTION_SOURCES = ['ao_field_visit', 'direct_mail_campaign'];
 const ESCALATION_STATUSES = ['new', 'seen', 'in_progress', 'resolved'];
 const MAX_MODES = ['log_visit', 'follow_up', 'direct_mail_follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help'];
+const ROUTE_SORT_MODES = ['farthest_first', 'closest_first', 'shortest_route', 'manual'];
+const ROUTE_START_POINT_TYPES = ['current_location', 'anchor_office', 'custom'];
+const ROUTE_STATUSES = ['active', 'completed', 'cancelled'];
+const ROUTE_STOP_STATUSES = ['pending', 'done', 'skipped', 'moved_later'];
 
 async function ensureAoFieldSchemaOnce() {
   await ensureClientArchitecture();
@@ -157,12 +161,54 @@ async function ensureAoFieldSchemaOnce() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS ao_routes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      ao_owner_id INTEGER NOT NULL REFERENCES users(id),
+      queue_filter TEXT NOT NULL DEFAULT 'today',
+      sort_mode TEXT NOT NULL DEFAULT 'closest_first'
+        CHECK (sort_mode IN (${ROUTE_SORT_MODES.map(s => `'${s}'`).join(', ')})),
+      start_point_type TEXT NOT NULL DEFAULT 'current_location'
+        CHECK (start_point_type IN (${ROUTE_START_POINT_TYPES.map(s => `'${s}'`).join(', ')})),
+      start_lat NUMERIC,
+      start_lng NUMERIC,
+      start_address TEXT,
+      status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN (${ROUTE_STATUSES.map(s => `'${s}'`).join(', ')})),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ao_route_stops (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      route_id UUID NOT NULL REFERENCES ao_routes(id) ON DELETE CASCADE,
+      task_id UUID NOT NULL REFERENCES ao_follow_up_tasks(id),
+      lead_id UUID NOT NULL REFERENCES ao_leads(id),
+      sequence INTEGER NOT NULL,
+      address TEXT,
+      lat NUMERIC,
+      lng NUMERIC,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN (${ROUTE_STOP_STATUSES.map(s => `'${s}'`).join(', ')})),
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_ao_leads_owner ON ao_leads(ao_owner_id, client_id);
     CREATE INDEX IF NOT EXISTS idx_ao_leads_next_follow_up ON ao_leads(next_follow_up_date);
     CREATE INDEX IF NOT EXISTS idx_ao_tasks_owner_due ON ao_follow_up_tasks(ao_owner_id, due_date, status);
     CREATE INDEX IF NOT EXISTS idx_ao_escalations_status ON ao_escalations(status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_ao_leads_campaign ON ao_leads(client_id, campaign_name)
       WHERE campaign_name IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_ao_routes_owner_active
+      ON ao_routes(ao_owner_id, client_id, status)
+      WHERE status = 'active';
+    CREATE INDEX IF NOT EXISTS idx_ao_route_stops_route_seq
+      ON ao_route_stops(route_id, sequence);
   `);
 }
 
@@ -184,5 +230,9 @@ module.exports = {
   ATTRIBUTION_SOURCES,
   ESCALATION_STATUSES,
   MAX_MODES,
+  ROUTE_SORT_MODES,
+  ROUTE_START_POINT_TYPES,
+  ROUTE_STATUSES,
+  ROUTE_STOP_STATUSES,
   ensureAoFieldSchema,
 };

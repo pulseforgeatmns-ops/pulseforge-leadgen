@@ -7,6 +7,7 @@ const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const { TEMPLATES } = require('../utils/aoMessageTemplates');
 const aoField = require('../services/aoFieldService');
 const aoMax = require('../services/aoMaxFlow');
+const aoRoute = require('../services/aoRouteService');
 
 const router = express.Router();
 
@@ -121,6 +122,15 @@ router.get('/api/leads/:id', requireAoRead, wrapAoHandler(async (req, res) => {
   res.json(lead);
 }));
 
+router.patch('/api/leads/:id/address', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { address } = req.body || {};
+  const updated = await aoRoute.updateLeadAddress({ leadId: req.params.id, aoOwnerId, address });
+  if (updated?.status) return res.status(updated.status).json({ error: updated.error });
+  if (!updated) return res.status(404).json({ error: 'Lead not found' });
+  res.json(updated);
+}));
+
 router.patch('/api/tasks/:id', requireAoWrite, wrapAoHandler(async (req, res) => {
   if (req.user.role !== 'ao' && req.user.role !== 'admin' && req.user.role !== 'manager') {
     return res.status(403).json({ error: 'Forbidden' });
@@ -129,6 +139,72 @@ router.patch('/api/tasks/:id', requireAoWrite, wrapAoHandler(async (req, res) =>
   const task = await aoField.updateTask(req.params.id, aoOwnerId, req.body || {});
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
+}));
+
+router.get('/api/routes/active', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const route = await aoRoute.getActiveRoute({ aoOwnerId, clientId, aoName: req.user.name });
+  res.json({ route });
+}));
+
+router.post('/api/routes/start', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    filter = 'today',
+    sort_mode: sortMode = 'closest_first',
+    start_point_type: startPointType = 'current_location',
+    start_lat: startLat,
+    start_lng: startLng,
+    start_address: startAddress,
+    manual_task_order: manualTaskOrder,
+  } = req.body || {};
+
+  const result = await aoRoute.createRoute({
+    aoOwnerId,
+    clientId,
+    aoName: req.user.name,
+    filter,
+    sortMode,
+    startPointType,
+    startLat,
+    startLng,
+    startAddress,
+    manualTaskOrder,
+  });
+  if (result.status) return res.status(result.status).json(result);
+  res.json(result);
+}));
+
+router.get('/api/routes/:id', requireAoRead, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const route = await aoRoute.getRouteById(req.params.id, aoOwnerId, req.user.name);
+  if (!route) return res.status(404).json({ error: 'Route not found' });
+  res.json(route);
+}));
+
+router.patch('/api/routes/stops/:id', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { status } = req.body || {};
+  const result = await aoRoute.updateStopStatus({
+    stopId: req.params.id,
+    aoOwnerId,
+    status,
+    aoName: req.user.name,
+  });
+  if (result?.status) return res.status(result.status).json({ error: result.error });
+  if (!result) return res.status(404).json({ error: 'Stop not found' });
+  res.json(result);
+}));
+
+router.post('/api/routes/:id/cancel', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const route = await aoRoute.cancelRoute(req.params.id, aoOwnerId, req.user.name);
+  if (!route) return res.status(404).json({ error: 'Route not found' });
+  res.json(route);
 }));
 
 router.post('/api/tasks/:id/escalate', requireAoWrite, wrapAoHandler(async (req, res) => {
