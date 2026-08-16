@@ -305,6 +305,141 @@ async function escalateTask(taskId, aoOwnerId, { reason, summary }) {
   }
 }
 
+function mapAdminVisit(row) {
+  return {
+    id: row.id,
+    business_name: row.business_name,
+    address: row.address,
+    business_type: row.business_type,
+    status: row.status,
+    interest_level: row.interest_level,
+    ao_owner_id: row.ao_owner_id,
+    ao_name: row.ao_name,
+    attribution_source: row.attribution_source,
+    commission_eligible: row.commission_eligible,
+    original_visit_note: row.original_visit_note,
+    first_contact_date: row.first_contact_date,
+    last_contact_date: row.last_contact_date,
+    next_follow_up_date: row.next_follow_up_date,
+    created_at: row.created_at,
+    contact_name: row.contact_name,
+    contact_title: row.contact_title,
+    contact_phone: row.contact_phone,
+    contact_email: row.contact_email,
+    is_decision_maker: row.is_decision_maker,
+    task_id: row.task_id,
+    task_status: row.task_status,
+    task_priority: row.task_priority,
+    next_action: row.next_action,
+    suggested_message: row.suggested_message,
+    waiting_on_jake: row.waiting_on_jake,
+    task_due_date: row.task_due_date,
+    escalation_id: row.escalation_id,
+    escalation_reason: row.escalation_reason,
+    escalation_status: row.escalation_status,
+    escalation_summary: row.escalation_summary,
+    escalated_at: row.escalated_at,
+  };
+}
+
+async function listAdminVisits({ clientId, escalatedOnly = false }) {
+  const params = [clientId];
+  let where = 'l.client_id = $1';
+  if (escalatedOnly) {
+    where += ` AND e.id IS NOT NULL`;
+  }
+  const { rows } = await pool.query(`
+    SELECT
+      l.*,
+      u.name AS ao_name,
+      c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email,
+      c.is_decision_maker,
+      t.id AS task_id, t.status AS task_status, t.priority AS task_priority,
+      t.next_action, t.suggested_message, t.waiting_on_jake, t.due_date AS task_due_date,
+      e.id AS escalation_id, e.reason AS escalation_reason, e.status AS escalation_status,
+      e.summary AS escalation_summary, e.created_at AS escalated_at
+    FROM ao_leads l
+    JOIN users u ON u.id = l.ao_owner_id
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_contacts
+      WHERE lead_id = l.id
+      ORDER BY is_decision_maker DESC, created_at ASC
+      LIMIT 1
+    ) c ON true
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_follow_up_tasks
+      WHERE lead_id = l.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) t ON true
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_escalations
+      WHERE lead_id = l.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) e ON true
+    WHERE ${where}
+    ORDER BY l.created_at DESC
+    LIMIT 200
+  `, params);
+  return rows.map(mapAdminVisit);
+}
+
+async function getAdminVisit(leadId, clientId) {
+  const { rows } = await pool.query(`
+    SELECT
+      l.*,
+      u.name AS ao_name,
+      c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email,
+      c.is_decision_maker,
+      t.id AS task_id, t.status AS task_status, t.priority AS task_priority,
+      t.next_action, t.suggested_message, t.waiting_on_jake, t.due_date AS task_due_date,
+      e.id AS escalation_id, e.reason AS escalation_reason, e.status AS escalation_status,
+      e.summary AS escalation_summary, e.created_at AS escalated_at
+    FROM ao_leads l
+    JOIN users u ON u.id = l.ao_owner_id
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_contacts
+      WHERE lead_id = l.id
+      ORDER BY is_decision_maker DESC, created_at ASC
+      LIMIT 1
+    ) c ON true
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_follow_up_tasks
+      WHERE lead_id = l.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) t ON true
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_escalations
+      WHERE lead_id = l.id
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) e ON true
+    WHERE l.id = $1 AND l.client_id = $2
+    LIMIT 1
+  `, [leadId, clientId]);
+  if (!rows.length) return null;
+
+  const visit = mapAdminVisit(rows[0]);
+  const { rows: contacts } = await pool.query(`
+    SELECT * FROM ao_contacts WHERE lead_id = $1 ORDER BY is_decision_maker DESC, created_at ASC
+  `, [leadId]);
+  const { rows: tasks } = await pool.query(`
+    SELECT * FROM ao_follow_up_tasks WHERE lead_id = $1 ORDER BY created_at DESC
+  `, [leadId]);
+  const { rows: escalations } = await pool.query(`
+    SELECT * FROM ao_escalations WHERE lead_id = $1 ORDER BY created_at DESC
+  `, [leadId]);
+
+  return {
+    ...visit,
+    contacts,
+    tasks: tasks.map(mapTask),
+    escalations,
+  };
+}
+
 async function listEscalations({ clientId, status }) {
   const params = [clientId];
   let where = 'l.client_id = $1';
@@ -354,7 +489,7 @@ async function notifyJakeEscalation(escalation, lead, aoName) {
       '',
       escalation.summary,
       '',
-      `Review in dashboard: ${process.env.APP_URL || 'https://gopulseforge.com'}/dashboard`,
+      `Review field visits: ${process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app'}/admin/field-visits`,
     ].filter(Boolean).join('\n'),
   }, {
     headers: {
@@ -376,6 +511,7 @@ async function depositEscalationAction(escalation, lead, clientId) {
       escalation_id: escalation.id,
       lead_id: lead.id,
       reason: escalation.reason,
+      admin_url: '/admin/field-visits',
     }),
     clientId,
   ]);
@@ -394,4 +530,6 @@ module.exports = {
   updateEscalation,
   notifyJakeEscalation,
   depositEscalationAction,
+  listAdminVisits,
+  getAdminVisit,
 };

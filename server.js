@@ -135,6 +135,12 @@ app.use((req, res, next) => {
       return requireRole('admin', 'manager', 'ao')(req, res, next);
     });
   }
+  if (req.path === '/public/admin-field-visits.html' || req.path === '/admin-field-visits.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager')(req, res, next);
+    });
+  }
   return next();
 });
 // Phase A2 shared frontend foundation (tokens, shell, workspace modules)
@@ -217,6 +223,7 @@ app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
 app.use('/sales', require('./routes/sales'));
 app.use('/ao', require('./routes/ao'));
+app.use('/admin/field-visits', require('./routes/aoAdmin'));
 // Public marketing funnel — no session auth (see routes/scorecard.js)
 app.use('/', require('./routes/scorecard'));
 

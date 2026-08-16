@@ -7923,12 +7923,18 @@ async function loadActions() {
         if (mins < 1440) return `${Math.round(mins/60)}h ago`;
         return `${Math.round(mins/1440)}d ago`;
       })();
+      const isAoEscalation = a.action_type === 'ao_escalation';
+      let payload = {};
+      try { payload = typeof a.payload === 'string' ? JSON.parse(a.payload || '{}') : (a.payload || {}); } catch (_) {}
+      const visitHref = isAoEscalation && payload.lead_id
+        ? `/admin/field-visits#${encodeURIComponent(payload.lead_id)}`
+        : (payload.admin_url || '/admin/field-visits');
       return `<div class="action-card${isUrgent ? ' urgent' : ''}" id="ac-${a.id}" data-title="${_esc(a.title)}" data-description="${_esc(a.description)}">
         <div class="action-card-type">${typeLabel}</div>
         <div class="action-card-title">${_esc(a.title)}</div>
         <div class="action-card-desc">${_esc(a.description)}</div>
         <div class="action-card-footer">
-          <button type="button" class="action-btn-exec" onclick="execAction('${a.id}')">Execute</button>
+          ${isAoEscalation ? `<a class="action-btn-exec" href="${visitHref}" style="text-decoration:none;display:inline-flex;align-items:center;">View visit</a>` : `<button type="button" class="action-btn-exec" onclick="execAction('${a.id}')">Execute</button>`}
           <button type="button" class="action-btn-dismiss" onclick="dismissAction('${a.id}')">Dismiss</button>
         </div>
         <div class="action-max-response" id="ac-response-${a.id}"></div>
