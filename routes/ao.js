@@ -164,7 +164,7 @@ router.post('/api/max/start', requireAoWrite, refreshAoSession, wrapAoHandler(as
   const clientId = requireAoClient(req, res);
   if (!clientId) return;
   const aoOwnerId = effectiveAoOwnerId(req);
-  const { mode } = req.body || {};
+  const { mode, task_id: taskId } = req.body || {};
   if (!mode) return res.status(400).json({ error: 'mode required' });
 
   const result = await aoMax.startMode({
@@ -172,7 +172,9 @@ router.post('/api/max/start', requireAoWrite, refreshAoSession, wrapAoHandler(as
     clientId,
     mode,
     aoName: req.user.name,
+    taskId,
   });
+  if (result.status) return res.status(result.status).json({ error: result.error });
   res.json(result);
 }));
 

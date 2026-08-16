@@ -1,0 +1,30 @@
+'use strict';
+
+module.exports = Object.freeze({
+  CLIENT_ID: 10,
+  CAMPAIGN_NAME: 'Campaign 001',
+  DEFAULT_NOTE: 'Received direct mail before AO visit',
+  MIKE_NAME_PATTERN: '%Mike%',
+  DIRECT_MAIL_TARGETS: Object.freeze([
+    { business_name: 'Gamache Properties', business_type: 'property_management' },
+    { business_name: 'Elm Grove Companies', business_type: 'property_management' },
+    { business_name: 'Mill City Property Management', business_type: 'property_management' },
+    { business_name: 'Gray Property Group', business_type: 'property_management' },
+    { business_name: 'WBC Estates & WBC Office Suites', business_type: 'property_management' },
+    { business_name: 'Nixon Peabody LLP - Manchester Office', business_type: 'law_firm' },
+    { business_name: 'Devine Millimet', business_type: 'law_firm' },
+    { business_name: 'McLane Middleton', business_type: 'law_firm' },
+    { business_name: 'Bernstein Shur - Manchester Office', business_type: 'law_firm' },
+    { business_name: 'Backus, Meyer & Branch, LLP', business_type: 'law_firm' },
+    { business_name: 'Liguori Accounting', business_type: 'accounting' },
+    { business_name: 'Drouin Associates LLC', business_type: 'accounting' },
+    { business_name: 'William P. Connor CPA LLC', business_type: 'accounting' },
+    { business_name: 'UHY Advisors - Manchester', business_type: 'accounting' },
+    { business_name: 'Wheeler, Ring, Dolan & Dupuis, P.C.', business_type: 'accounting' },
+    { business_name: 'Lodgism', business_type: 'short_term_rental' },
+    { business_name: 'ManagedBNB', business_type: 'short_term_rental' },
+    { business_name: 'Granite House 1880 LLC', business_type: 'short_term_rental' },
+    { business_name: 'Home Team Luxury Rentals', business_type: 'short_term_rental' },
+    { business_name: 'Lot 202 LLC', business_type: 'short_term_rental' },
+  ]),
+});

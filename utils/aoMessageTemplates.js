@@ -49,6 +49,11 @@ const TEMPLATES = Object.freeze({
     label: 'Jake follow-up',
     body: 'Hi {{contact_name}}, great connecting at {{business_name}} today. Jake from our team will reach out shortly to answer your questions and talk next steps.',
   },
+  direct_mail_revisit: {
+    id: 'direct_mail_revisit',
+    label: 'Direct mail in-person revisit',
+    body: 'Hey, I\'m {{ao_name}} with Anchor Cleaning. We recently sent some info over about commercial cleaning. I\'m just stopping by to make sure it got to the right person. Who usually handles cleaning or facility vendors here?',
+  },
 });
 
 const ESCALATION_REASONS = Object.freeze([
@@ -91,6 +96,11 @@ function parseContactRole(value) {
   return 'unknown';
 }
 
+function buildDirectMailOpening(aoName) {
+  return renderTemplate('direct_mail_revisit', { ao_name: aoName || 'Mike', contact_name: '', business_name: '' })
+    || `Hey, I'm ${aoName || 'Mike'} with Anchor Cleaning. We recently sent some info over about commercial cleaning. I'm just stopping by to make sure it got to the right person. Who usually handles cleaning or facility vendors here?`;
+}
+
 function suggestTemplate({
   interestLevel,
   status,
@@ -100,7 +110,11 @@ function suggestTemplate({
   contactTitle,
   contactRole,
   escalationReason,
+  attributionSource,
 }) {
+  if (attributionSource === 'direct_mail_campaign' || nextAction === 'in_person_revisit') {
+    return TEMPLATES.direct_mail_revisit;
+  }
   const note = String(visitNote || '').toLowerCase();
   const next = String(nextAction || '').toLowerCase();
   const blob = `${note} ${next} ${String(contactTitle || '').toLowerCase()}`;
@@ -439,6 +453,7 @@ module.exports = {
   renderTemplate,
   suggestTemplate,
   buildSuggestedMessage,
+  buildDirectMailOpening,
   sanitizeUserFacingText,
   normalizeNextAction,
   parseContactRole,

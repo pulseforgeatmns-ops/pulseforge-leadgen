@@ -2,6 +2,7 @@ const pool = require('../db');
 const {
   safeGuidance,
   buildCompletionReply,
+  buildDirectMailOpening,
   parseContactRole,
   normalizeNextAction,
   parseInterestLevel,
@@ -17,8 +18,11 @@ const {
   advanceAfterBaseStep,
   processVisitNoteAnswer,
 } = require('../utils/aoVisitFlow');
+const { DIRECT_MAIL_FOLLOW_UP_STEPS } = require('../utils/aoDirectMailFlow');
 const {
   createVisitRecord,
+  completeDirectMailFollowUp,
+  getTaskForFollowUp,
   notifyJakeEscalation,
   depositEscalationAction,
 } = require('./aoFieldService');
@@ -100,12 +104,12 @@ function detectEscalation(payload, nextActionOwner) {
   return { escalate: false, guidance: guidance.guidance, contactRole };
 }
 
-async function createSession({ aoOwnerId, clientId, mode }) {
+async function createSession({ aoOwnerId, clientId, mode, initialPayload = {} }) {
   const { rows } = await pool.query(`
     INSERT INTO ao_max_sessions (ao_owner_id, client_id, mode, step_index, payload)
-    VALUES ($1, $2, $3, 0, '{}'::jsonb)
+    VALUES ($1, $2, $3, 0, $4::jsonb)
     RETURNING *
-  `, [aoOwnerId, clientId, mode]);
+  `, [aoOwnerId, clientId, mode, JSON.stringify(initialPayload)]);
   return rows[0];
 }
 
@@ -121,6 +125,7 @@ async function getSession(sessionId, aoOwnerId) {
 function getSteps(mode) {
   if (mode === 'log_visit') return LOG_VISIT_STEPS;
   if (mode === 'daily_debrief') return DEBRIEF_STEPS;
+  if (mode === 'direct_mail_follow_up') return DIRECT_MAIL_FOLLOW_UP_STEPS;
   if (mode === 'ask_for_help') return [{ key: 'question', question: 'What do you need help with?' }];
   if (mode === 'book_walkthrough') {
     return [
@@ -134,13 +139,55 @@ function getSteps(mode) {
   return [];
 }
 
-async function startMode({ aoOwnerId, clientId, mode, aoName }) {
+async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
   if (mode === 'follow_up') {
     return {
       completed: false,
-      reply: 'Open your follow-up queue below — tap any task to mark done, reschedule, or escalate to Jake.',
+      reply: 'Open your follow-up queue below — tap any direct mail task to log the visit with Max.',
       mode,
       show_queue: true,
+    };
+  }
+
+  if (mode === 'direct_mail_follow_up') {
+    if (!taskId) {
+      return { error: 'task_id required for direct mail follow-up', status: 400 };
+    }
+    const task = await getTaskForFollowUp(taskId, aoOwnerId);
+    if (!task) return { error: 'Follow-up task not found', status: 404 };
+    if (task.attribution_source !== 'direct_mail_campaign') {
+      return { error: 'This task is not a direct mail follow-up', status: 400 };
+    }
+
+    const session = await createSession({
+      aoOwnerId,
+      clientId,
+      mode,
+      initialPayload: {
+        task_id: taskId,
+        lead_id: task.lead_id,
+        business_name: task.business_name,
+        campaign_name: task.campaign_name,
+      },
+    });
+    const opening = buildDirectMailOpening(aoName);
+    const steps = getSteps(mode);
+    return {
+      session_id: session.id,
+      mode,
+      task_id: taskId,
+      business_name: task.business_name,
+      step: 0,
+      total_steps: steps.length,
+      reply: [
+        `Direct mail follow-up — ${task.business_name}${task.campaign_name ? ` (${task.campaign_name})` : ''}.`,
+        '',
+        `Opening to use in person:`,
+        `"${opening}"`,
+        '',
+        steps[0].question,
+      ].join('\n'),
+      completed: false,
     };
   }
 
@@ -284,6 +331,75 @@ async function finalizeVisitSession({
     task: result.task,
     escalated: Boolean(result.escalation),
     next_action_owner: nextActionOwner,
+  };
+}
+
+async function finalizeDirectMailSession({
+  session,
+  payload,
+  sessionId,
+  aoOwnerId,
+  clientId,
+  aoName,
+}) {
+  const nextAction = normalizeNextAction(payload.next_step || payload.visit_note || 'Follow up');
+  const nextActionOwner = resolveNextActionOwner(nextAction, payload);
+  const interestLevel = parseInterestLevel(
+    /yes|interested|walkthrough/i.test(String(payload.walkthrough_interest || '')) ? 'high'
+      : /not a fit|no fit|hard no/i.test(String(payload.next_step || '')) ? 'low'
+        : 'medium',
+  );
+
+  const result = await completeDirectMailFollowUp(payload.task_id, aoOwnerId, {
+    clientId,
+    aoName,
+    answers: payload,
+    visitNote: payload.visit_note,
+    nextAction,
+    interestLevel,
+    contactName: payload.cleaning_decision_maker,
+    contactRole: parseContactRole(payload.reached_decision_maker),
+  });
+
+  if (!result) return { error: 'Follow-up task not found', status: 404 };
+
+  if (result.escalation) {
+    await depositEscalationAction(result.escalation, result.lead, clientId, {
+      probeAnswers: payload,
+      nextAction,
+      interestLevel,
+      aoName,
+      contactRole: parseContactRole(payload.reached_decision_maker),
+      decisionMakerStatus: formatDecisionMakerStatus({
+        contactRole: parseContactRole(payload.reached_decision_maker),
+      }),
+    });
+    await notifyJakeEscalation(result.escalation, result.lead, aoName).catch(err => {
+      console.error('[ao] Jake notification failed:', err.message);
+    });
+  }
+
+  const completionType = resolveCompletionType({
+    nextActionOwner,
+    escalated: Boolean(result.escalation),
+    status: result.lead.status,
+  });
+
+  const reply = buildCompletionReply({
+    businessName: result.lead.business_name,
+    completionType,
+    preferredTiming: payload.walkthrough_interest,
+    escalated: Boolean(result.escalation),
+  });
+
+  return {
+    session_id: sessionId,
+    mode: session.mode,
+    completed: true,
+    reply,
+    lead: result.lead,
+    task: result.task,
+    escalated: Boolean(result.escalation),
   };
 }
 
@@ -434,6 +550,10 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
     return finalizeVisitSession({ session, payload, sessionId, aoOwnerId, clientId, aoName });
   }
 
+  if (session.mode === 'direct_mail_follow_up') {
+    return finalizeDirectMailSession({ session, payload, sessionId, aoOwnerId, clientId, aoName });
+  }
+
   if (session.mode === 'daily_debrief') {
     const strong = String(payload.strong_opportunities || '').trim();
     const walkthroughs = String(payload.walkthrough_requests || '').trim();
@@ -462,7 +582,9 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
 
 module.exports = {
   LOG_VISIT_STEPS,
+  DIRECT_MAIL_FOLLOW_UP_STEPS,
   startMode,
   respondToSession,
   detectEscalation,
+  finalizeDirectMailSession,
 };
