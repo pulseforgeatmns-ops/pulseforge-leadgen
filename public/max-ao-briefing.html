@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pulseforge — Max AO Briefing</title>
+  <link rel="icon" href="/favicon.ico">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/shared/shell.css">
+  <link rel="stylesheet" href="/max-briefing/max-ao-briefing.css">
+</head>
+<body>
+  <main id="mabMain" class="mab-main" aria-label="Max AO Briefing">
+    <header class="mab-header">
+      <div>
+        <p class="mab-eyebrow">Max v1 · Operator Briefing</p>
+        <h1 class="mab-title">AO Command Brief</h1>
+        <p id="mabTimestamp" class="mab-ts"></p>
+      </div>
+      <div class="mab-header-actions">
+        <label class="mab-client-label" for="mabClientSelect">Client</label>
+        <select id="mabClientSelect" class="mab-select" aria-label="Active client"></select>
+        <button type="button" id="mabRefresh" class="mab-btn">Refresh</button>
+      </div>
+    </header>
+
+    <div id="mabStatus" class="mab-status" role="status" aria-live="polite"></div>
+    <div id="mabError" class="mab-error" hidden></div>
+
+    <section id="mabDigest" class="mab-digest" aria-labelledby="mabDigestHeading">
+      <h2 id="mabDigestHeading" class="mab-section-title">Daily Digest</h2>
+      <p id="mabDigestText" class="mab-digest-text"></p>
+    </section>
+
+    <div class="mab-grid">
+      <section class="mab-panel" aria-labelledby="mabTodayHeading">
+        <h2 id="mabTodayHeading" class="mab-section-title">Today</h2>
+        <div id="mabToday" class="mab-stats"></div>
+      </section>
+
+      <section class="mab-panel" aria-labelledby="mabCampaignHeading">
+        <h2 id="mabCampaignHeading" class="mab-section-title">Campaign 001</h2>
+        <div id="mabCampaign" class="mab-stats"></div>
+      </section>
+    </div>
+
+    <section class="mab-panel mab-panel-wide" aria-labelledby="mabEscHeading">
+      <div class="mab-panel-head">
+        <h2 id="mabEscHeading" class="mab-section-title">Escalation Inbox</h2>
+        <select id="mabEscFilter" class="mab-select mab-select-sm" aria-label="Filter escalations">
+          <option value="open">Open</option>
+          <option value="new">New only</option>
+          <option value="all">All</option>
+        </select>
+      </div>
+      <div id="mabEscalations" class="mab-table-wrap"></div>
+    </section>
+
+    <div class="mab-grid">
+      <section class="mab-panel" aria-labelledby="mabWarmHeading">
+        <h2 id="mabWarmHeading" class="mab-section-title">Warm Opportunities</h2>
+        <div id="mabWarm" class="mab-list"></div>
+      </section>
+
+      <section class="mab-panel" aria-labelledby="mabIntelHeading">
+        <h2 id="mabIntelHeading" class="mab-section-title">Field Intelligence</h2>
+        <div id="mabIntel" class="mab-list"></div>
+      </section>
+    </div>
+
+    <div class="mab-grid">
+      <section class="mab-panel" aria-labelledby="mabJakeHeading">
+        <h2 id="mabJakeHeading" class="mab-section-title">Jake — Next Actions</h2>
+        <div id="mabJakeActions" class="mab-list"></div>
+      </section>
+
+      <section class="mab-panel" aria-labelledby="mabMikeHeading">
+        <h2 id="mabMikeHeading" class="mab-section-title">Mike — Next Actions</h2>
+        <div id="mabMikeActions" class="mab-list"></div>
+      </section>
+    </div>
+
+    <section class="mab-panel mab-panel-wide" aria-labelledby="mabPromoHeading">
+      <h2 id="mabPromoHeading" class="mab-section-title">CRM Promotion Candidates</h2>
+      <div id="mabPromo" class="mab-list"></div>
+    </section>
+
+    <section class="mab-ask" aria-labelledby="mabAskHeading">
+      <h2 id="mabAskHeading" class="mab-section-title">Ask Max</h2>
+      <div id="mabAskHistory" class="mab-ask-history"></div>
+      <form id="mabAskForm" class="mab-ask-form">
+        <input id="mabAskInput" class="mab-ask-input" type="text" placeholder="What needs my attention today for Anchor?" maxlength="2000" />
+        <button type="submit" class="mab-btn mab-btn-primary">Ask</button>
+      </form>
+      <div class="mab-suggestions">
+        <button type="button" class="mab-chip" data-q="What happened today?">What happened today?</button>
+        <button type="button" class="mab-chip" data-q="Who do I need to call?">Who do I need to call?</button>
+        <button type="button" class="mab-chip" data-q="Which AO leads are hottest?">Hottest leads</button>
+        <button type="button" class="mab-chip" data-q="What objections came up?">Objections</button>
+        <button type="button" class="mab-chip" data-q="Which Campaign 001 targets still need a visit?">Remaining visits</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/shared/accessibility.js"></script>
+  <script src="/shared/api-client.js"></script>
+  <script src="/shared/shell.js"></script>
+  <script src="/max-briefing/max-ao-briefing.js"></script>
+</body>
+</html>

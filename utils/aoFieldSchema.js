@@ -16,13 +16,14 @@ const LEAD_STATUSES = [
   'closed_lost',
   'not_a_fit',
   'do_not_contact',
+  'converted_to_crm',
 ];
 
 const INTEREST_LEVELS = ['low', 'medium', 'high'];
 const TASK_STATUSES = ['open', 'done', 'rescheduled', 'escalated', 'cancelled'];
 const TASK_PRIORITIES = ['normal', 'high', 'warm'];
 const ATTRIBUTION_SOURCES = ['ao_field_visit', 'direct_mail_campaign'];
-const ESCALATION_STATUSES = ['new', 'seen', 'in_progress', 'resolved'];
+const ESCALATION_STATUSES = ['new', 'seen', 'in_progress', 'resolved', 'ignored'];
 const MAX_MODES = ['log_visit', 'follow_up', 'direct_mail_follow_up', 'route_follow_up', 'phone_follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help'];
 const ROUTE_SORT_MODES = ['farthest_first', 'closest_first', 'shortest_route', 'manual'];
 const ROUTE_START_POINT_TYPES = ['current_location', 'anchor_office', 'custom'];
@@ -139,6 +140,25 @@ async function ensureAoFieldSchemaOnce() {
   `);
   await pool.query(`
     ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS campaign_name TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS crm_prospect_id INTEGER REFERENCES prospects(id)
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_leads DROP CONSTRAINT IF EXISTS ao_leads_status_check
+  `);
+  await pool.query(`
+    ALTER TABLE ao_leads ADD CONSTRAINT ao_leads_status_check
+      CHECK (status IN (${LEAD_STATUSES.map(s => `'${s}'`).join(', ')}))
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_escalations DROP CONSTRAINT IF EXISTS ao_escalations_status_check
+  `);
+  await pool.query(`
+    ALTER TABLE ao_escalations ADD CONSTRAINT ao_escalations_status_check
+      CHECK (status IN (${ESCALATION_STATUSES.map(s => `'${s}'`).join(', ')}))
   `);
 
   await pool.query(`

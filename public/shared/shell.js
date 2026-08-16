@@ -29,6 +29,11 @@
       href: { default: '/command-deck' },
     },
     {
+      id: 'max-briefing', label: 'AO Briefing',
+      roles: ['admin', 'manager'],
+      href: { default: '/max-briefing' },
+    },
+    {
       id: 'client-intel', label: 'Client Intel', clientLabel: 'My Business',
       roles: ['admin', 'manager', 'client'],
       href: { default: '/client-intel' },
@@ -90,6 +95,7 @@
       if ((window.location.hash || '') === '#operations') return 'operations';
       return 'command-deck';
     }
+    if (path.startsWith('/max-briefing')) return 'max-briefing';
     if (path.startsWith('/client-intel')) return 'client-intel';
     if (path.startsWith('/setter')) return 'calls';
     if (path.startsWith('/closer')) return 'customers';

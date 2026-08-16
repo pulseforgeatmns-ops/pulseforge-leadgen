@@ -6,6 +6,10 @@ const { getRequestClientId } = require('../utils/clientContext');
 const { routeIntent, ROUTE_KINDS, activeMissionResolverEnabled } = require('../packages/mission-engine');
 const { getMissionEngine, missionEnabled } = require('../utils/missionRuntime');
 
+function shouldRouteAoQuestion(question) {
+  return /\b(ao|anchor|mike|field visit|campaign 001|direct mail|walkthrough|escalation|ao lead|who do i need to call|what happened today|what needs my attention|hottest ao|current cleaner|objection|promot.*crm)\b/i.test(question);
+}
+
 const router = express.Router();
 const requireDashboardAuth = [sessionAuth, requireRole('admin', 'manager')];
 const anthropic = new Anthropic();
@@ -268,6 +272,18 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
           });
         }
       }
+    }
+
+    if (shouldRouteAoQuestion(question)) {
+      const aoBriefing = require('../services/aoBriefingService');
+      const aoResult = await aoBriefing.answerAoQuestion(clientId, question);
+      return res.json({
+        answer: aoResult.answer,
+        route: 'ao_briefing',
+        sources: aoResult.sources || ['ao_briefing'],
+        note: aoResult.note || null,
+        context_generated_at: new Date().toISOString(),
+      });
     }
 
     if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured' });
