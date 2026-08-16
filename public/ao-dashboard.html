@@ -657,8 +657,7 @@ async function startMode(mode) {
     addMsg(result.reply, 'max');
     sessionId = result.session_id || null;
     if (result.show_queue) {
-      document.querySelector('[data-tab="queue"]').click();
-      loadQueue();
+      switchTab('queue');
     }
   } catch (err) {
     chat.lastChild.remove();
