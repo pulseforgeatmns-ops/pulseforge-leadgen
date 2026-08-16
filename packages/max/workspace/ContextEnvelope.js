@@ -112,6 +112,8 @@ function normalizeContext(raw) {
     'lastClientIntelligenceTurn',
     // SPEC-103C — active conversational reasoning thread (session only)
     'activeClientReasoning',
+    // SPEC-098 — specialist delegation evaluation (carrier only)
+    'lastSpecialistEvaluation',
     // SPEC-096 — specialist direction context
     'action',
     'discussRecommendation',
