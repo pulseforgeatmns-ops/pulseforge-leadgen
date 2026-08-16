@@ -18,17 +18,19 @@ function buildActionCards({ openEscalations, promoCount }) {
     {
       id: 'escalations',
       label: openEscalations ? `View Escalations (${openEscalations})` : 'View Escalations',
-      href: '/max-briefing#escalations',
+      href: '#cd-escalations',
       kind: 'link',
     },
     { id: 'field_visits', label: 'View Field Visits', href: '/admin/field-visits', kind: 'link' },
-    { id: 'campaign', label: 'View Campaign 001', href: '/max-briefing#campaign', kind: 'link' },
-    {
-      id: 'promo',
-      label: promoCount ? `Promote CRM Candidates (${promoCount})` : 'Promote CRM Candidates',
-      href: '/max-briefing#promo',
-      kind: 'link',
-    },
+    { id: 'campaign', label: 'View Campaign 001', href: '#cd-campaign', kind: 'link' },
+    ...(promoCount
+      ? [{
+        id: 'promo',
+        label: `Promote CRM Candidates (${promoCount})`,
+        href: '#cd-promo',
+        kind: 'link',
+      }]
+      : []),
   ];
 }
 
@@ -43,6 +45,49 @@ function buildMikeInstructions({ mikeActions, campaign, narrative }) {
     narrative,
   ];
   return lines.filter(Boolean).join('\n');
+}
+
+function buildTodayChanges({ visitsToday = 0, campaign = {}, openEscalations = 0, paragraphs = [] } = {}) {
+  if (Array.isArray(paragraphs) && paragraphs.length) {
+    return paragraphs.slice(0, 5);
+  }
+  const targetTotal = campaign.target_total || DIRECT_MAIL_TARGETS.length;
+  const changes = [];
+  if (visitsToday > 0) {
+    changes.push(`Mike logged ${visitsToday} field visit${visitsToday === 1 ? '' : 's'} today.`);
+  } else {
+    changes.push('No field visits logged today yet.');
+  }
+  if (targetTotal) {
+    changes.push(`${targetTotal} Campaign 001 targets queued in AO.`);
+  }
+  if (openEscalations > 0) {
+    changes.push(`${openEscalations} open escalation${openEscalations === 1 ? '' : 's'} need Jake.`);
+  }
+  return changes.slice(0, 5);
+}
+
+function buildCommandRailQuickActions({ openEscalationCount = 0, promoCount = 0 } = {}) {
+  const actions = [
+    { id: 'ao_route', label: 'Open Mike Route', href: '/ao', kind: 'link' },
+    {
+      id: 'escalations',
+      label: openEscalationCount ? `View Escalations (${openEscalationCount})` : 'View Escalations',
+      href: '#cd-escalations',
+      kind: 'link',
+    },
+    { id: 'field_visits', label: 'View Field Visits', href: '/admin/field-visits', kind: 'link' },
+    { id: 'campaign', label: 'View Campaign 001', href: '#cd-campaign', kind: 'link' },
+  ];
+  if (promoCount > 0) {
+    actions.push({
+      id: 'promo',
+      label: `Promote CRM Candidates (${promoCount})`,
+      href: '#cd-promo',
+      kind: 'link',
+    });
+  }
+  return actions;
 }
 
 function buildCommandRail({
@@ -101,25 +146,13 @@ function buildCommandRail({
     phone_first: phoneFirst,
     meaningful_conversations: campaign.meaningful_conversations || 0,
     walkthrough_requests: campaign.walkthrough_requests || 0,
-    details_href: '/max-briefing#campaign',
+    details_href: '#cd-campaign',
   };
 
-  const quickActions = [
-    {
-      id: 'escalations',
-      label: openEscalations.length ? `View Escalations (${openEscalations.length})` : 'View Escalations',
-      href: '/max-briefing#escalations',
-      kind: 'link',
-    },
-    { id: 'field_visits', label: 'View Field Visits', href: '/admin/field-visits', kind: 'link' },
-    {
-      id: 'promo',
-      label: promoCount ? `Promote CRM Candidates (${promoCount})` : 'Promote CRM Candidates',
-      href: '/max-briefing#promo',
-      kind: 'link',
-    },
-    { id: 'copy_instructions', label: 'Copy Mike Instructions', kind: 'copy' },
-  ];
+  const quickActions = buildCommandRailQuickActions({
+    openEscalationCount: openEscalations.length,
+    promoCount,
+  });
 
   return { needsJake, mikeAo, campaign001, quickActions };
 }
@@ -154,6 +187,15 @@ function buildDayZeroOperatorBrief() {
     meaningful_conversations: 0,
     walkthrough_requests: 0,
   };
+  const todayChanges = buildTodayChanges({
+    visitsToday: 0,
+    campaign,
+    openEscalations: 0,
+    paragraphs: [
+      `${targetTotal} Campaign 001 targets queued in AO.`,
+      'No field visits logged today yet.',
+    ],
+  });
   const commandRail = buildCommandRail({
     escalations: [],
     campaign,
@@ -165,11 +207,13 @@ function buildDayZeroOperatorBrief() {
   return {
     narrative,
     highestLeverage,
+    todayChanges,
     jakeActions,
     mikeActions,
     actionCards: buildActionCards({ openEscalations: 0, promoCount: 0 }),
     mikeInstructions: buildMikeInstructions({ mikeActions, campaign, narrative }),
     commandRail,
+    drillDown: { escalations: [], campaign, promoCandidates: [] },
     generatedAt: new Date().toISOString(),
     campaign_name: CAMPAIGN_NAME,
     mode: 'ao_operator',
@@ -182,6 +226,8 @@ module.exports = {
   formatActionItem,
   buildActionCards,
   buildMikeInstructions,
+  buildTodayChanges,
+  buildCommandRailQuickActions,
   buildCommandRail,
   buildDayZeroOperatorBrief,
 };

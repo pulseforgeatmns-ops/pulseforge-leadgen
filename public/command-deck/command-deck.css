@@ -8,6 +8,7 @@
   /* Reserved bottom space; JS updates as the Ask Max composer grows. */
   --cd-ask-height: 72px;
   --cd-max: 920px;
+  --cd-operator-max: 1180px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -54,6 +55,10 @@ body.theme-dark.cd-page {
   width: min(100% - 2.5rem, var(--cd-max));
   margin: 0 auto;
   padding: 1.75rem 0 2rem;
+}
+
+body.cd-operator-mode .cd-main {
+  width: min(100% - 2.5rem, var(--cd-operator-max));
 }
 
 .cd-masthead {
@@ -210,7 +215,123 @@ body.theme-dark.cd-page {
   grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
   gap: 1.5rem;
   align-items: start;
-  margin-bottom: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.cd-operator-main .cd-section {
+  margin-bottom: 1.35rem;
+}
+
+.cd-brief-block .cd-kicker,
+.cd-morning .cd-kicker,
+.cd-hla .cd-kicker {
+  margin-bottom: 0.35rem;
+}
+
+.cd-brief-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.cd-brief-item {
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.cd-brief-primary {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.cd-brief-detail {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: var(--pf-text-muted);
+}
+
+.cd-brief-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.cd-brief-link:hover {
+  color: var(--pf-gold, #c9a227);
+}
+
+.cd-brief-empty {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  color: var(--pf-text-muted);
+  line-height: 1.45;
+}
+
+.cd-ao-drilldown {
+  margin: 0.5rem 0 1.5rem;
+  display: grid;
+  gap: 1rem;
+}
+
+.cd-ao-drilldown[hidden] {
+  display: none !important;
+}
+
+.cd-drill-section {
+  margin-bottom: 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.015);
+  scroll-margin-top: 1rem;
+}
+
+.cd-drill-section[hidden] {
+  display: none !important;
+}
+
+.cd-drill-body {
+  margin-top: 0.35rem;
+}
+
+.cd-drill-row + .cd-drill-row {
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cd-drill-row-title {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.cd-drill-row-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.76rem;
+  color: var(--pf-text-muted);
+  line-height: 1.4;
+}
+
+.cd-operations.cd-operations-secondary {
+  margin-top: 0.5rem;
+  margin-bottom: 1.5rem;
+  opacity: 0.72;
+}
+
+.cd-operations.cd-operations-secondary .cd-kicker {
+  color: var(--pf-text-muted);
+}
+
+.cd-operations.cd-operations-secondary .cd-ops-card {
+  border-color: rgba(255, 255, 255, 0.05);
 }
 
 .cd-operator-main {

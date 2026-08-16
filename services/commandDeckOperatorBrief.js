@@ -8,6 +8,7 @@ const {
   formatActionItem,
   buildActionCards,
   buildMikeInstructions,
+  buildTodayChanges,
   buildCommandRail,
   buildDayZeroOperatorBrief,
 } = require('../utils/aoCommandDeckBrief');
@@ -112,6 +113,22 @@ async function buildOperatorBrief(clientId) {
   }
 
   const openEscalations = today.open_escalations || 0;
+  const todayChanges = (visitsToday === 0 && (campaign.seeded_in_ao > 0 || targetTotal > 0))
+    ? buildTodayChanges({
+      visitsToday: 0,
+      campaign,
+      openEscalations,
+      paragraphs: [
+        `${targetTotal} Campaign 001 targets queued in AO.`,
+        'No field visits logged today yet.',
+      ],
+    })
+    : buildTodayChanges({
+      visitsToday,
+      campaign,
+      openEscalations,
+      paragraphs: briefing.daily_digest?.paragraphs || [],
+    });
   const commandRail = buildCommandRail({
     escalations: briefing.needs_jake || [],
     campaign,
@@ -124,11 +141,17 @@ async function buildOperatorBrief(clientId) {
   return {
     narrative,
     highestLeverage,
+    todayChanges,
     jakeActions,
     mikeActions,
     actionCards: buildActionCards({ openEscalations, promoCount }),
     mikeInstructions: buildMikeInstructions({ mikeActions, campaign, narrative }),
     commandRail,
+    drillDown: {
+      escalations: briefing.needs_jake || [],
+      campaign,
+      promoCandidates: briefing.promotion_candidates || [],
+    },
     generatedAt: briefing.generated_at || new Date().toISOString(),
     campaign_name: CAMPAIGN_NAME,
     mode: 'ao_operator',
