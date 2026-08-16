@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Specialist Direction & Operator Rationale ([SPEC-096](docs/specs/SPEC-096_Max_Specialist_Direction_and_Operator_Rationale.md))
+  - Operator discusses Paige recommendations with Max (Accept / Discuss with Max)
+  - Durable `content_recommendations` + `specialist_directions` persistence
+  - Max interprets natural-language feedback into direction + rationale + scope
+  - Paige refinement via `refineContentRecommendation()` preserving SPEC-092/093 evidence
+  - Operator-sourced learnings in `content_learnings` (`learningSource: operator_direction`)
+  - Fresh-session direction recovery; tenant isolation; fail-closed refinement
+  - Migration: `migrations/2026-08-16-specialist-direction.sql`
 - Max Durable Operator Objectives & Pre-Routing Context Resolution ([SPEC-095](docs/specs/SPEC-095_Max_Durable_Operator_Objectives.md))
   - Durable `operator_objectives` (operator/client scope) outside SessionStore
   - Pre-routing retrieval + deterministic reference resolution (fail closed on ambiguity)

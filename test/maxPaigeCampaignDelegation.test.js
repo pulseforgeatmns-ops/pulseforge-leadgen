@@ -182,8 +182,8 @@ describe('SPEC-094 maxPaigeCampaignDelegation', () => {
     assert.match(prose, /L1/);
     assert.match(prose, /P1/);
     assert.match(prose, /Uncertainty/i);
-    assert.match(prose, /accept direction/i);
-    assert.match(prose, /hold/i);
+    assert.match(prose, /Accept/i);
+    assert.match(prose, /Discuss with Max/i);
     assert.match(prose, /Nothing will be published/i);
     assert.doesNotMatch(prose, /\b(has been published|publishing now|sent via Buffer|wrote to CRM)\b/i);
   });
@@ -223,7 +223,7 @@ describe('SPEC-094 maxPaigeCampaignDelegation', () => {
     assert.equal(structured.metadata.autonomousPublish, false);
     assert.equal(structured.metadata.reviewFirst, true);
     for (const action of structured.recommendedActions) {
-      assert.equal(action.type, 'review');
+      assert.ok(['accept_recommendation', 'discuss_with_max'].includes(action.type));
       assert.equal(action.payload.autonomousPublish, false);
       assert.doesNotMatch(action.id, /publish|send|buffer|crm/i);
     }

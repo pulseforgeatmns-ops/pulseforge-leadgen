@@ -1593,6 +1593,243 @@ function createLinkedMemoryStores() {
   return { outcomeStore, learningStore };
 }
 
+/**
+ * SPEC-096 — Refine a content recommendation under operator direction.
+ * Preserves original evidence; recomputes direction under updated constraints.
+ */
+async function refineContentRecommendation(context = {}, opts = {}) {
+  const clientId = asClientId(
+    context.tenantId ?? context.clientId ?? context.client_id
+  );
+  if (clientId == null) {
+    throw new ContentLearningError('client_id_required', 'tenantId / client_id required');
+  }
+
+  const recommendation = context.recommendation || {};
+  const direction = context.direction || {};
+  const originalPayload =
+    recommendation.payload && typeof recommendation.payload === 'object'
+      ? recommendation.payload
+      : recommendation;
+
+  const supportingLearningIds = uniqueIds(
+    recommendation.supportingLearningIds ||
+      originalPayload.supportingLearningIds ||
+      originalPayload.supporting_learning_ids ||
+      []
+  );
+  const supportingPublicationIds = uniqueIds(
+    recommendation.supportingPublicationIds ||
+      originalPayload.supportingPublicationIds ||
+      originalPayload.supporting_publication_ids ||
+      []
+  );
+
+  const learnings = supportingLearningIds.length
+    ? await Promise.all(
+        supportingLearningIds.map(async (id) => {
+          try {
+            return await getContentLearning(id, { ...opts, clientId });
+          } catch (_err) {
+            return null;
+          }
+        })
+      ).then((rows) => rows.filter(Boolean))
+    : await getRelevantContentLearnings(
+        {
+          tenantId: clientId,
+          objective: context.objective,
+          channel: context.channel || recommendation.channel || 'linkedin',
+          campaignId: context.campaignId || recommendation.campaignId,
+          limit: 8,
+        },
+        opts
+      );
+
+  const applicableDirections = context.applicableDirections || [];
+  const preserve = direction.acceptedElements?.length
+    ? direction.acceptedElements.slice()
+    : originalPayload.experiment?.preserve ||
+      ['operator-centered framing', 'strong declarative thesis', 'AI / business-software subject'];
+
+  const vary = direction.changedElements?.length
+    ? direction.changedElements.slice()
+    : originalPayload.experiment?.vary || ['specific argument'];
+
+  const updatedDir = asText(direction.updatedDirection) || '';
+  const norm = updatedDir.toLowerCase();
+
+  let nextArgument;
+  if (/\bsmb|small business|accessible|operator first\b/.test(norm)) {
+    nextArgument =
+      "Small business owners shouldn't have to become AI experts to benefit from AI.";
+  } else if (/\boperating problem|reduce technical|accessible\b/.test(norm)) {
+    nextArgument =
+      'Running a business is hard enough — AI should reduce operator burden, not add another system to master.';
+  } else if (updatedDir) {
+    nextArgument = updatedDir.replace(/^shift the argument toward /i, '').trim();
+    if (nextArgument.length > 120) {
+      nextArgument =
+        'Test an operator-first AI thesis that speaks to business owners, not builders.';
+    }
+  } else {
+    nextArgument =
+      'Test an operator-first AI thesis that speaks to business owners, not builders.';
+  }
+
+  const experiment = {
+    hypothesis:
+      originalPayload.experiment?.hypothesis ||
+      'Operator-centered arguments accessible to SMB audiences can produce qualified discovery without abandoning the AI thesis.',
+    objective:
+      context.objective ||
+      recommendation.objective ||
+      originalPayload.objective ||
+      'category_creation',
+    preserve,
+    vary,
+    nextArgument,
+    expected_signal: originalPayload.experiment?.expected_signal ||
+      originalPayload.experiment?.expectedSignal || [
+        'qualified SMB operator engagement',
+        'out-of-network discovery',
+      ],
+    failure_signal: originalPayload.experiment?.failure_signal ||
+      originalPayload.experiment?.failureSignal || [
+        'audience remains overwhelmingly technical builders',
+      ],
+    supporting_learning_ids: supportingLearningIds,
+  };
+
+  const reasonParts = [
+    'Revised under operator direction while preserving original evidence.',
+  ];
+  if (direction.rationale) {
+    reasonParts.push(`Operator rationale: ${direction.rationale}`);
+  }
+  if (learnings.length) {
+    reasonParts.push(
+      `Original evidence from ${learnings.length} learning(s) remains unchanged.`
+    );
+  }
+  if (applicableDirections.length) {
+    reasonParts.push(
+      `${applicableDirections.length} prior operator direction(s) applied to this scope.`
+    );
+  }
+
+  const avgGen =
+    learnings.length === 0
+      ? 0.2
+      : learnings.reduce((s, l) => s + (l.generalizationConfidence || 0), 0) /
+        learnings.length;
+
+  return {
+    kind: 'content_recommendation',
+    objective: context.objective || recommendation.objective || originalPayload.objective,
+    recommended_direction: nextArgument,
+    reason: reasonParts.join(' '),
+    supporting_learning_ids: supportingLearningIds,
+    supporting_publication_ids: supportingPublicationIds,
+    confidence: round4(Math.max(0.2, Math.min(0.65, avgGen + 0.1))),
+    uncertainties: [
+      ...(originalPayload.uncertainties || []),
+      'Refined recommendation has not yet been tested in market.',
+      direction.scope === 'experiment_campaign'
+        ? 'Scope is campaign-specific — not a universal rule against prior evidence.'
+        : 'Scope is recommendation-specific.',
+    ],
+    experiment,
+    alternatives: originalPayload.alternatives || [],
+    learnings: learnings.map((l) => ({
+      id: l.id,
+      learningType: l.learningType,
+      status: l.status,
+      statement: l.statement,
+      observationConfidence: l.observationConfidence,
+      generalizationConfidence: l.generalizationConfidence,
+      learningSource: l.scope?.learningSource || 'observed_outcome',
+    })),
+    campaignId: asText(context.campaignId || recommendation.campaignId),
+    operatorAuthority: true,
+    autonomousPublish: false,
+    autonomousStrategyMutation: false,
+    refinedFromRecommendationId: recommendation.id || null,
+    directionId: direction.id || null,
+    generated_at: nowIso(),
+  };
+}
+
+/**
+ * SPEC-096 — Persist operator-sourced learning (distinct from outcome-derived).
+ */
+async function createOperatorDirectionLearning(input = {}, opts = {}) {
+  const clientId = asClientId(
+    input.tenantId ?? input.clientId ?? input.client_id
+  );
+  if (clientId == null) {
+    throw new ContentLearningError('client_id_required', 'tenantId / client_id required');
+  }
+
+  const direction = input.direction || {};
+  const learningStore = resolveLearningStore(opts);
+  const scopeLabel = direction.scope || 'experiment_campaign';
+  const campaignId = asText(input.campaignId || direction.sourceCampaignId);
+
+  const statement =
+    scopeLabel === 'durable_preference'
+      ? direction.updatedDirection ||
+        'Operator prefers accessible operator-first framing over technical terminology.'
+      : `Within ${campaignId ? `campaign ${campaignId}` : 'the current objective'}, prioritize arguments accessible to SMB operators when choosing between otherwise viable experiments. Technical engagement remains valuable but should not dominate audience composition.`;
+
+  const fingerprint = `operator_direction:${scopeLabel}:${campaignId || 'global'}:${normalizeTopic(statement)}`;
+  const existing = await learningStore.getByFingerprint(clientId, fingerprint);
+  const now = nowIso();
+
+  const row = {
+    id: existing?.id || crypto.randomUUID(),
+    clientId,
+    tenantId: tenantForClient(clientId),
+    fingerprint,
+    learningType: 'audience_response',
+    statement,
+    scope: {
+      learningSource: 'operator_direction',
+      directionId: direction.id || null,
+      scope: scopeLabel,
+      campaignId: campaignId || null,
+      rationale: direction.rationale || '',
+      updatedDirection: direction.updatedDirection || null,
+      acceptedElements: direction.acceptedElements || [],
+      changedElements: direction.changedElements || [],
+    },
+    objective: asText(input.objective) || null,
+    topic: normalizeTopic(direction.updatedDirection),
+    format: null,
+    audienceType: 'smb_operator',
+    channel: asText(input.channel) || 'linkedin',
+    confidence: round4(0.85),
+    observationConfidence: round4(0.95),
+    generalizationConfidence:
+      scopeLabel === 'durable_preference' ? round4(0.7) : round4(0.45),
+    sampleSize: 0,
+    supportingPublicationIds: [],
+    contradictingPublicationIds: [],
+    evidenceSummary: `Operator direction (${direction.id || 'unknown'}): ${direction.rationale || direction.operatorMessage || ''}`,
+    uncertaintySummary:
+      scopeLabel === 'experiment_campaign'
+        ? 'Campaign-scoped operator judgment — does not override observed market evidence.'
+        : 'Durable operator preference — apply when context matches.',
+    status: 'emerging',
+    firstObservedAt: existing?.firstObservedAt || now,
+    lastEvaluatedAt: now,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+
+  return learningStore.upsertLearning(row);
+}
+
 module.exports = {
   LEARNING_TYPES,
   LEARNING_STATUSES,
@@ -1616,6 +1853,8 @@ module.exports = {
   getContentLearning,
   getRelevantContentLearnings,
   generateContentRecommendation,
+  refineContentRecommendation,
+  createOperatorDirectionLearning,
   recomputeContentLearnings,
   extractOutOfNetworkPct,
   classifyAudience,

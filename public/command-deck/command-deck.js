@@ -13,6 +13,8 @@
   const LIVE_POLL_MS = 45000;
   const ACTION_TYPES = Object.freeze({
     REVIEW_RECOMMENDATION: 'review_recommendation',
+    ACCEPT_RECOMMENDATION: 'accept_recommendation',
+    DISCUSS_WITH_MAX: 'discuss_with_max',
     ASK_MAX: 'ask_max',
     OPEN_COMPANY: 'open_company',
     OPEN_MISSION: 'open_mission',
@@ -2334,6 +2336,23 @@
       openWorkspaceFromAction(payload);
       return;
     }
+    if (type === ACTION_TYPES.ACCEPT_RECOMMENDATION) {
+      openWorkspaceFromAction({
+        ...payload,
+        action: 'accept_recommendation',
+        prompt: 'Accept this direction.',
+      });
+      return;
+    }
+    if (type === ACTION_TYPES.DISCUSS_WITH_MAX) {
+      openWorkspaceFromAction({
+        ...payload,
+        action: 'discuss_with_max',
+        discussRecommendation: true,
+        prompt: '',
+      });
+      return;
+    }
     if (type === ACTION_TYPES.REVIEW_RECOMMENDATION) {
       const recommendationId = payload && payload.recommendationId;
       if (recommendationId && investigation) {
@@ -2524,6 +2543,8 @@
       tenantId: String(tenantIdFromModel(model) || 'unknown'),
       companyId: companyId ? String(companyId) : null,
       recommendationId: recommendationId ? String(recommendationId) : null,
+      action: (payload && payload.action) || null,
+      discussRecommendation: Boolean(payload && payload.discussRecommendation),
       visibleCards: buildVisibleCards(model),
       briefing,
       selectedEntity,
@@ -4316,6 +4337,32 @@
         const type = btn.getAttribute('data-mx-action-type');
         if (type === ACTION_TYPES.ASK_MAX && payload.prompt) {
           askWorkspace(payload.prompt);
+          return;
+        }
+        if (type === ACTION_TYPES.ACCEPT_RECOMMENDATION) {
+          if (workspaceContext) {
+            workspaceContext = {
+              ...workspaceContext,
+              action: 'accept_recommendation',
+              recommendationId: payload.recommendationId || workspaceContext.recommendationId,
+            };
+          }
+          askWorkspace('Accept this direction.');
+          return;
+        }
+        if (type === ACTION_TYPES.DISCUSS_WITH_MAX) {
+          if (workspaceContext) {
+            workspaceContext = {
+              ...workspaceContext,
+              action: 'discuss_with_max',
+              discussRecommendation: true,
+              recommendationId: payload.recommendationId || workspaceContext.recommendationId,
+            };
+          }
+          askWorkspace(
+            payload.prompt ||
+              "I'd like to discuss Paige's recommendation."
+          );
           return;
         }
         handleAction(type, payload);

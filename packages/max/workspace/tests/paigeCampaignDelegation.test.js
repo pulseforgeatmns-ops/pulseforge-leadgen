@@ -72,7 +72,7 @@ describe('SPEC-094 Paige campaign content workspace routing', () => {
     assert.equal(result.paigeRecommendation.autonomousPublish, false);
     assert.equal(result.mission, null);
     for (const action of result.recommendedActions || []) {
-      assert.equal(action.type, 'review');
+      assert.ok(['accept_recommendation', 'discuss_with_max'].includes(action.type));
       assert.doesNotMatch(String(action.id), /publish|send|buffer|crm/i);
     }
   });
