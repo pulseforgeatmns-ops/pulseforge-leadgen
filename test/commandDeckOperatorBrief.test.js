@@ -8,17 +8,15 @@ test('buildDayZeroOperatorBrief provides Campaign 001 day-zero narrative', () =>
   const brief = buildDayZeroOperatorBrief();
   assert.match(brief.narrative, /Campaign 001 targets queued/);
   assert.match(brief.narrative, /Manchester direct-mail route/);
-  assert.equal(brief.jakeActions.length, 1);
-  assert.equal(brief.mikeActions.length, 1);
-  assert.equal(brief.actionCards.length, 5);
-  assert.equal(brief.actionCards[0].label, "Open Mike's Route");
-  assert.match(brief.actionCards[1].href, /escalations/);
+  assert.ok(brief.commandRail);
+  assert.equal(brief.commandRail.needsJake.length, 0);
+  assert.ok(brief.commandRail.mikeAo);
+  assert.equal(brief.commandRail.campaign001.total, 20);
 });
 
-test('buildDayZeroOperatorBrief action cards exclude primary AO Briefing nav', () => {
+test('buildDayZeroOperatorBrief command rail has quick actions', () => {
   const brief = buildDayZeroOperatorBrief();
-  const labels = brief.actionCards.map((c) => c.label);
-  assert.ok(!labels.some((l) => /open ao briefing/i.test(l)));
-  assert.ok(labels.some((l) => /Campaign 001/.test(l)));
-  assert.ok(labels.some((l) => /Promote CRM/.test(l)));
+  const labels = brief.commandRail.quickActions.map((c) => c.label);
+  assert.ok(labels.some((l) => /Copy Mike Instructions/.test(l)));
+  assert.ok(labels.some((l) => /View Field Visits/.test(l)));
 });

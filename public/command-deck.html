@@ -23,8 +23,14 @@
     <div id="cdLiveNotify" class="cd-live-notify" hidden role="status" aria-live="polite"></div>
     <div id="cdError" class="cd-error" hidden></div>
 
-    <section id="cdMorningBrief" class="cd-section cd-morning" aria-labelledby="cdMorningHeading" data-stage="morning" hidden></section>
-    <section id="cdHighestLeverage" class="cd-section cd-hla" aria-labelledby="cdHlaHeading" data-stage="hla" hidden></section>
+    <div id="cdOperatorLayout" class="cd-operator-layout" hidden>
+      <div class="cd-operator-main">
+        <section id="cdMorningBrief" class="cd-section cd-morning" aria-labelledby="cdMorningHeading" data-stage="morning" hidden></section>
+        <section id="cdHighestLeverage" class="cd-section cd-hla" aria-labelledby="cdHlaHeading" data-stage="hla" hidden></section>
+      </div>
+      <aside id="cdCommandRail" class="cd-command-rail" aria-label="Operator action rail" data-stage="rail" hidden></aside>
+    </div>
+
     <section id="cdJakeActions" class="cd-section cd-action-list" aria-labelledby="cdJakeHeading" data-stage="jake" hidden></section>
     <section id="cdMikeActions" class="cd-section cd-action-list" aria-labelledby="cdMikeHeading" data-stage="mike" hidden></section>
     <section id="cdActionCards" class="cd-section cd-action-cards" aria-labelledby="cdCardsHeading" data-stage="cards" hidden></section>
