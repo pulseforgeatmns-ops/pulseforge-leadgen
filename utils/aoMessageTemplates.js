@@ -221,27 +221,172 @@ function safeGuidance(topic) {
   };
 }
 
+const OWNER_ESCALATION_PATTERN = /\b(jake|admin|owner|pulseforge|anchor)\b.*\b(call|follow|reach|contact|handle|take over|take it)\b|\b(needs jake|needs owner|escalate|jake should|admin should|owner should|someone from anchor)\b/i;
+
 function normalizeNextAction(nextAction) {
   const raw = sanitizeUserFacingText(nextAction);
-  if (/pulseforge|admin should|owner follow-up needed/i.test(String(nextAction || ''))) {
+  const original = String(nextAction || '');
+  if (OWNER_ESCALATION_PATTERN.test(original) || /pulseforge|admin should|owner follow-up needed/i.test(original)) {
     if (/call/.test(raw)) return 'Jake should call';
-    return 'Owner follow-up needed';
+    if (/walkthrough|tour/.test(raw)) return 'Book walkthrough';
+    return 'Jake should follow up';
   }
   return raw || 'Follow up';
 }
 
-function buildCompletionReply({ businessName, escalated, suggestedMessage, loggedOnly = false }) {
-  const lines = [`Logged ${businessName}.`];
-  if (suggestedMessage) {
-    lines.push(`\nSuggested follow-up:\n"${suggestedMessage}"`);
+function parseInterestLevel(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v.startsWith('h')) return 'high';
+  if (v.startsWith('l')) return 'low';
+  return 'medium';
+}
+
+function isOwnerEscalation(nextAction) {
+  const text = String(nextAction || '');
+  return OWNER_ESCALATION_PATTERN.test(text)
+    || /\bpulseforge admin\b/i.test(text)
+    || /\bowner follow[- ]?up needed\b/i.test(text);
+}
+
+function resolveNextActionOwner(nextAction, payload = {}) {
+  const next = String(nextAction || '').toLowerCase();
+  const visitNote = String(payload.visit_note || '').toLowerCase();
+  const interest = parseInterestLevel(payload.interest_level);
+
+  if (/not a fit|no fit|do not contact|hard no|wrong fit|mark.*not a fit/.test(next)
+    || (interest === 'low' && /not a fit|hard no|do not contact|wrong fit/.test(visitNote))) {
+    return 'not_a_fit';
   }
-  if (escalated) {
-    lines.push('\nLogged and escalated. Jake will follow up.');
-  } else if (!loggedOnly) {
-    lines.push('\nYou\'re all set.');
+  if (/no follow[- ]?up|nothing needed|none needed|all set|no action|n\/a\b|nothing else/.test(next)) {
+    return 'none';
   }
-  lines.push('\nLog another visit or check your queue.');
-  return sanitizeUserFacingText(lines.join(''));
+  if (/walkthrough|tour|site visit|see the space|book a walk/.test(next)
+    || /walkthrough|tour/.test(visitNote)) {
+    return 'walkthrough';
+  }
+  if (isOwnerEscalation(nextAction)) {
+    return 'jake';
+  }
+  return 'ao';
+}
+
+function selectVisitProbes(payload = {}, { phase = 'after_visit_note', maxTotal = 2, existingKeys = [] } = {}) {
+  const visitNote = String(payload.visit_note || '').toLowerCase();
+  const interest = parseInterestLevel(payload.interest_level);
+  const contactRole = parseContactRole(payload.contact_role);
+  const candidates = [];
+
+  if (contactRole === 'gatekeeper') {
+    candidates.push({ key: 'probe_gatekeeper_dm', question: 'Did they mention who actually handles cleaning decisions?', priority: 10 });
+    candidates.push({ key: 'probe_gatekeeper_availability', question: 'Did you learn when that person is usually available?', priority: 9 });
+    candidates.push({ key: 'probe_gatekeeper_handoff', question: 'Did you ask the best way to get info to the decision-maker?', priority: 8 });
+  }
+
+  if (/inconsistent|unhappy|not happy|missed visit|poor quality|current cleaner|current vendor|vendor issue/.test(visitNote)) {
+    candidates.push({ key: 'probe_cleaner_type', question: 'What kind of inconsistency — missed visits, quality, communication, timing, or something else?', priority: 10 });
+    candidates.push({ key: 'probe_cleaner_switch', question: 'Did they seem frustrated enough to consider switching, or just mildly annoyed?', priority: 9 });
+  }
+
+  if (/send info|more info|brochure|email info|overview|information/.test(visitNote)) {
+    candidates.push({ key: 'probe_info_requested', question: 'What info did they ask for specifically?', priority: 10 });
+    candidates.push({ key: 'probe_info_channel', question: 'Did they want Jake to call, email, or stop by?', priority: 8 });
+  }
+
+  if (phase === 'after_interest_level' && payload.interest_level) {
+    if (interest === 'medium') {
+      candidates.push({ key: 'probe_medium_why', question: 'What made it medium instead of high?', priority: 10 });
+      candidates.push({ key: 'probe_medium_walkthrough', question: 'What would need to happen to turn this into a walkthrough?', priority: 9 });
+    }
+    if (interest === 'low') {
+      candidates.push({ key: 'probe_low_reason', question: 'Was it a hard no, bad timing, or just not the right person?', priority: 10 });
+      candidates.push({ key: 'probe_low_revisit', question: 'Should we revisit later or mark this as not a fit?', priority: 9 });
+    }
+  }
+
+  if (phase === 'after_interest_level' && isOwnerEscalation(payload.next_action)) {
+    candidates.push({ key: 'probe_jake_context', question: 'What should Jake know before reaching out?', priority: 11 });
+    candidates.push({ key: 'probe_jake_avoid', question: 'Is there anything Jake should avoid saying?', priority: 8 });
+    candidates.push({ key: 'probe_jake_channel', question: 'Is a call, email, or in-person revisit best?', priority: 7 });
+  }
+
+  if (/walkthrough|tour/.test(visitNote) || resolveNextActionOwner(payload.next_action, payload) === 'walkthrough') {
+    candidates.push({ key: 'probe_walkthrough_timing', question: 'Did they mention preferred days or times?', priority: 11 });
+    candidates.push({ key: 'probe_walkthrough_attendees', question: 'Who needs to be present for the walkthrough?', priority: 9 });
+    candidates.push({ key: 'probe_walkthrough_areas', question: 'Are there any specific problem areas Jake should ask to see?', priority: 8 });
+  }
+
+  const remaining = Math.max(0, maxTotal - existingKeys.length);
+  return candidates
+    .filter(c => !existingKeys.includes(c.key))
+    .sort((a, b) => b.priority - a.priority)
+    .slice(0, remaining)
+    .map(({ key, question }) => ({ key, question }));
+}
+
+function formatProbeAnswers(probeAnswers = {}) {
+  return Object.entries(probeAnswers)
+    .filter(([, answer]) => String(answer || '').trim())
+    .map(([key, answer]) => {
+      const label = key.replace(/^probe_/, '').replace(/_/g, ' ');
+      return `${label}: ${answer}`;
+    })
+    .join('\n');
+}
+
+function resolveCompletionType({ nextActionOwner, escalated, status }) {
+  if (nextActionOwner === 'not_a_fit' || status === 'not_a_fit') return 'not_a_fit';
+  if (nextActionOwner === 'none') return 'no_follow_up';
+  if (nextActionOwner === 'walkthrough' || status === 'walkthrough_requested') return 'walkthrough';
+  if (nextActionOwner === 'jake' || escalated) return 'jake_escalation';
+  return 'ao_follow_up';
+}
+
+function buildCompletionReply({
+  businessName,
+  completionType,
+  suggestedMessage,
+  preferredTiming,
+  // legacy params
+  escalated,
+  loggedOnly = false,
+}) {
+  const type = completionType || (escalated ? 'jake_escalation' : 'ao_follow_up');
+  const name = businessName || 'that visit';
+
+  switch (type) {
+    case 'ao_follow_up':
+      return sanitizeUserFacingText([
+        `Got it — logged ${name}. Here's a suggested follow-up you can send:`,
+        suggestedMessage ? `"${suggestedMessage}"` : null,
+        suggestedMessage ? 'I added it to your queue.' : 'I added it to your queue.',
+        '\nLog another visit or check your queue.',
+      ].filter(Boolean).join('\n'));
+
+    case 'jake_escalation':
+      return sanitizeUserFacingText([
+        `Got it — logged ${name} and escalated it to Jake. Jake will follow up. You're all set.`,
+        '\nLog another visit or check your queue.',
+      ].join(''));
+
+    case 'walkthrough': {
+      const lines = [
+        `Got it — logged ${name} and escalated the walkthrough request to Jake. Jake will handle next steps.`,
+      ];
+      if (preferredTiming) lines.push(`Preferred timing: ${preferredTiming}.`);
+      lines.push('\nLog another visit or check your queue.');
+      return sanitizeUserFacingText(lines.join('\n'));
+    }
+
+    case 'no_follow_up':
+      return sanitizeUserFacingText(`Got it — logged ${name}. No follow-up needed.`);
+
+    case 'not_a_fit':
+      return sanitizeUserFacingText(`Got it — logged ${name} as not a fit.`);
+
+    default:
+      if (loggedOnly) return sanitizeUserFacingText(`Got it — logged ${name}.`);
+      return sanitizeUserFacingText(`Got it — logged ${name}.\n\nLog another visit or check your queue.`);
+  }
 }
 
 module.exports = {
@@ -253,6 +398,12 @@ module.exports = {
   sanitizeUserFacingText,
   normalizeNextAction,
   parseContactRole,
+  parseInterestLevel,
+  isOwnerEscalation,
+  resolveNextActionOwner,
+  selectVisitProbes,
+  formatProbeAnswers,
+  resolveCompletionType,
   shouldEscalate,
   safeGuidance,
   buildCompletionReply,

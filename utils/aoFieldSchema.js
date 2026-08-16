@@ -57,6 +57,7 @@ async function ensureAoFieldSchemaOnce() {
       attribution_window_days INTEGER NOT NULL DEFAULT 180,
       commission_eligible BOOLEAN NOT NULL DEFAULT true,
       original_visit_note TEXT,
+      probe_answers JSONB,
       closed_revenue_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -105,6 +106,7 @@ async function ensureAoFieldSchemaOnce() {
       ao_owner_id INTEGER NOT NULL REFERENCES users(id),
       reason TEXT NOT NULL,
       summary TEXT NOT NULL,
+      probe_answers JSONB,
       status TEXT NOT NULL DEFAULT 'new'
         CHECK (status IN (${ESCALATION_STATUSES.map(s => `'${s}'`).join(', ')})),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -125,6 +127,13 @@ async function ensureAoFieldSchemaOnce() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS probe_answers JSONB
+  `);
+  await pool.query(`
+    ALTER TABLE ao_escalations ADD COLUMN IF NOT EXISTS probe_answers JSONB
   `);
 
   await pool.query(`

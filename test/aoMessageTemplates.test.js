@@ -48,16 +48,17 @@ test('buildSuggestedMessage falls back to gatekeeper template', () => {
   assert.match(msg, /whoever manages your office cleaning/i);
 });
 
-test('buildCompletionReply includes clear done state', () => {
+test('buildCompletionReply includes clear done state for Jake escalation', () => {
   const reply = buildCompletionReply({
     businessName: 'Test Dental Office',
-    escalated: true,
+    completionType: 'jake_escalation',
     suggestedMessage: 'Hi Sarah...',
   });
-  assert.match(reply, /Logged Test Dental Office/);
-  assert.match(reply, /Logged and escalated/);
+  assert.match(reply, /logged Test Dental Office/i);
+  assert.match(reply, /escalated it to Jake/i);
   assert.match(reply, /Log another visit or check your queue/);
   assert.doesNotMatch(reply, /Pulseforge admin/i);
+  assert.doesNotMatch(reply, /Hi Sarah/);
 });
 
 test('sanitizeUserFacingText cleans admin phrasing', () => {
