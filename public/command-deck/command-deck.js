@@ -66,6 +66,9 @@
     timestamp: document.getElementById('cdTimestamp'),
     morning: document.getElementById('cdMorningBrief'),
     hla: document.getElementById('cdHighestLeverage'),
+    jake: document.getElementById('cdJakeActions'),
+    mike: document.getElementById('cdMikeActions'),
+    actionCards: document.getElementById('cdActionCards'),
     operations: document.getElementById('cdOperations'),
     secondary: document.getElementById('cdSecondary'),
     queue: document.getElementById('cdPriorityQueue'),
@@ -1580,7 +1583,7 @@
   }
 
   function clearSections() {
-    for (const key of ['morning', 'hla', 'operations', 'secondary', 'queue']) {
+    for (const key of ['morning', 'hla', 'jake', 'mike', 'actionCards', 'operations', 'secondary', 'queue']) {
       const el = els[key];
       if (!el) continue;
       el.hidden = true;
@@ -1620,6 +1623,81 @@
   function hideError() {
     els.error.hidden = true;
     els.error.innerHTML = '';
+  }
+
+  function renderOperatorBrief(model) {
+    const ob = model.operatorBrief;
+    if (!ob) return false;
+
+    els.timestamp.textContent = formatDisplayTime(ob.generatedAt || (model.meta && model.meta.generatedAt));
+
+    els.morning.innerHTML = `
+      <p class="cd-kicker" id="cdMorningHeading">Max Brief</p>
+      <p class="cd-operator-narrative">${escapeHtml(ob.narrative || '')}</p>
+    `;
+    els.morning.hidden = false;
+
+    const hla = ob.highestLeverage || {};
+    els.hla.innerHTML = `
+      <p class="cd-kicker" id="cdHlaHeading">Highest-Leverage Action</p>
+      <article class="cd-hla-card cd-hla-card-simple" aria-labelledby="cdHlaTitle">
+        <h2 class="cd-hla-title" id="cdHlaTitle">${escapeHtml(hla.title || 'Review field activity')}</h2>
+        ${hla.detail ? `<p class="cd-hla-summary">${escapeHtml(hla.detail)}</p>` : ''}
+      </article>
+    `;
+    els.hla.hidden = false;
+
+    els.jake.innerHTML = `
+      <p class="cd-kicker" id="cdJakeHeading">Jake — Next Actions</p>
+      <ul class="cd-action-list-items">
+        ${(ob.jakeActions || []).map((item) => `
+          <li class="cd-action-list-item">
+            <span class="cd-action-list-primary">${escapeHtml(item.action)}</span>
+            ${item.detail ? `<span class="cd-action-list-detail">${escapeHtml(item.detail)}</span>` : ''}
+          </li>
+        `).join('')}
+      </ul>
+    `;
+    els.jake.hidden = false;
+
+    els.mike.innerHTML = `
+      <p class="cd-kicker" id="cdMikeHeading">Mike — Next Actions</p>
+      <ul class="cd-action-list-items">
+        ${(ob.mikeActions || []).map((item) => `
+          <li class="cd-action-list-item">
+            <span class="cd-action-list-primary">${escapeHtml(item.action)}</span>
+            ${item.detail ? `<span class="cd-action-list-detail">${escapeHtml(item.detail)}</span>` : ''}
+          </li>
+        `).join('')}
+      </ul>
+    `;
+    els.mike.hidden = false;
+
+    els.actionCards.innerHTML = `
+      <p class="cd-kicker" id="cdCardsHeading">Execute</p>
+      <div class="cd-quick-actions">
+        ${(ob.actionCards || []).map((card) => {
+          if (card.kind === 'copy') {
+            return `<button type="button" class="cd-quick-action" data-cd-copy-mike>${escapeHtml(card.label)}</button>`;
+          }
+          return `<a class="cd-quick-action" href="${escapeHtml(card.href || '#')}">${escapeHtml(card.label)}</a>`;
+        }).join('')}
+      </div>
+    `;
+    els.actionCards.hidden = false;
+
+    els.actionCards.querySelector('[data-cd-copy-mike]')?.addEventListener('click', async () => {
+      const text = ob.mikeInstructions || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus('Mike instructions copied');
+        window.setTimeout(() => setStatus('Briefing ready'), 2000);
+      } catch {
+        setStatus('Could not copy — check browser permissions');
+      }
+    });
+
+    return true;
   }
 
   function renderMorningBrief(model) {
@@ -4184,6 +4262,9 @@
     const stages = [
       els.morning,
       els.hla,
+      els.jake,
+      els.mike,
+      els.actionCards,
       els.operations,
       els.secondary,
       els.queue,
@@ -4209,14 +4290,25 @@
     clearSections();
     hideError();
 
-    applyPresentationLayout(model);
-    renderMorningBrief(model);
-    renderHighestLeverage(model);
-    renderOperations(model);
-    renderSecondary(model);
-    renderPriorityQueue(model);
+    const operatorMode = renderOperatorBrief(model);
+
+    if (!operatorMode) {
+      applyPresentationLayout(model);
+      renderMorningBrief(model);
+      renderHighestLeverage(model);
+    }
+
+    // Legacy intelligence sections stay hidden in operator mode
+    if (!operatorMode) {
+      renderOperations(model);
+      renderSecondary(model);
+      renderPriorityQueue(model);
+    }
+
     stagedReveal();
-    appendEvolutionFootnotes(model);
+    if (!operatorMode) {
+      appendEvolutionFootnotes(model);
+    }
 
     const fromCache = Boolean(options.fromCache);
     const evolved = Boolean(options.evolved);
@@ -4225,16 +4317,16 @@
         ? 'Showing last successful briefing'
         : evolved
           ? 'Intelligence evolved'
-          : model.meta && model.meta.withinTarget === false
-            ? 'Briefing ready'
-            : 'Briefing assembled'
+          : 'Briefing ready'
     );
     announce(
       fromCache
         ? 'Showing last successful briefing.'
         : evolved
           ? 'Intelligence updated quietly.'
-          : (model.morningBrief && model.morningBrief.headline) || 'Command Deck ready.'
+          : operatorMode
+            ? (model.operatorBrief && model.operatorBrief.narrative) || 'Command Deck ready.'
+            : (model.morningBrief && model.morningBrief.headline) || 'Command Deck ready.'
     );
     ensureLivePoll();
   }
@@ -4408,17 +4500,19 @@
 
   function evolveRender(model) {
     currentModel = model;
-    // Mark previous cards, then re-render with evolve class (fade-in new)
     const wasHla = els.hla ? els.hla.innerHTML : '';
     clearSections();
     hideError();
-    renderMorningBrief(model);
-    renderHighestLeverage(model);
-    renderSecondary(model);
-    renderPriorityQueue(model);
-    appendEvolutionFootnotes(model);
+    const operatorMode = renderOperatorBrief(model);
+    if (!operatorMode) {
+      renderMorningBrief(model);
+      renderHighestLeverage(model);
+      renderSecondary(model);
+      renderPriorityQueue(model);
+      appendEvolutionFootnotes(model);
+    }
 
-    [els.morning, els.hla, els.secondary, els.queue].forEach((el) => {
+    [els.morning, els.hla, els.jake, els.mike, els.actionCards, els.secondary, els.queue].forEach((el) => {
       if (!el || el.hidden) return;
       el.classList.add('is-revealed', 'cd-evolved');
       if (!prefersReducedMotion()) {

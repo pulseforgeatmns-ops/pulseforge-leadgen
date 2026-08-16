@@ -123,9 +123,80 @@ body.theme-dark.cd-page {
   opacity: 1;
   transform: none;
 }
-.cd-section[hidden] {
-  display: none !important;
+/* Operator briefing — simplified Command Deck (Max v1 AO) */
+.cd-operator-narrative {
+  margin: 0.5rem 0 0;
+  font-family: var(--cd-font-editorial);
+  font-size: clamp(1.15rem, 2.2vw, 1.45rem);
+  line-height: 1.55;
+  color: var(--pf-text);
+  max-width: 42rem;
 }
+
+.cd-hla-card-simple {
+  border-left: 3px solid var(--pf-gold, #c9a227);
+  padding-left: 1rem;
+}
+
+.cd-action-list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.cd-action-list-item {
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--pf-radius-md, 8px);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.cd-action-list-primary {
+  display: block;
+  font-weight: 500;
+  font-size: 0.92rem;
+}
+
+.cd-action-list-detail {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.8rem;
+  color: var(--pf-text-muted);
+}
+
+.cd-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.cd-quick-action {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cd-quick-action:hover {
+  background: rgba(201, 162, 39, 0.12);
+  border-color: rgba(201, 162, 39, 0.35);
+}
+
+.cd-action-cards {
+  margin-bottom: 1.5rem;
+}
+
 
 /* SPEC-012 adaptive presentation — quieter / stronger, never hidden */
 .cd-section.cd-dominance-high.is-revealed,

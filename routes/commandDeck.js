@@ -19,6 +19,7 @@ const {
   normalizeClientId,
 } = require('../utils/clientContext');
 const { getMaxRuntime } = require('../utils/maxRuntime');
+const { buildOperatorBrief } = require('../services/commandDeckOperatorBrief');
 
 const requireDashboardRead = [
   requireAuth,
@@ -84,6 +85,15 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
         (req.session && req.session.user && req.session.user.email) || null,
       missions,
     });
+
+    try {
+      const operatorBrief = await buildOperatorBrief(clientId);
+      if (operatorBrief) {
+        model.operatorBrief = operatorBrief;
+      }
+    } catch (err) {
+      console.warn('[command-deck] operator brief failed:', err.message);
+    }
 
     res.set('Cache-Control', 'no-store');
     return res.json(model);
