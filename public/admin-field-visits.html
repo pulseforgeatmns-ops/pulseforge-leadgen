@@ -202,6 +202,12 @@ body {
 let currentFilter = 'all';
 let visits = [];
 
+function formatDecisionMakerLabel(v) {
+  if (v.is_decision_maker) return 'Decision-maker';
+  if (/gate|front desk|reception|assistant|secretary/i.test(String(v.contact_title || ''))) return 'Gatekeeper';
+  return 'Unknown';
+}
+
 function formatProbeAnswersHtml(probeAnswers) {
   if (!probeAnswers || typeof probeAnswers !== 'object') return '';
   const entries = Object.entries(probeAnswers).filter(([, v]) => String(v || '').trim());
@@ -277,6 +283,7 @@ async function openVisit(id) {
       <div class="detail-row"><span>Address</span><span>${esc(v.address || '—')}</span></div>
       <div class="detail-row"><span>Type</span><span>${esc(v.business_type || '—')}</span></div>
       <div class="detail-row"><span>Contact</span><span>${esc(v.contact_name || '—')}${v.contact_title ? ' · ' + esc(v.contact_title) : ''}</span></div>
+      <div class="detail-row"><span>Decision-maker</span><span>${esc(formatDecisionMakerLabel(v))}</span></div>
       <div class="detail-row"><span>Phone</span><span>${esc(v.contact_phone || '—')}</span></div>
       <div class="detail-row"><span>Email</span><span>${esc(v.contact_email || '—')}</span></div>
       <div class="detail-row"><span>Interest</span><span>${esc(v.interest_level)}</span></div>

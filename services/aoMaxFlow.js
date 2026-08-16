@@ -8,12 +8,14 @@ const {
   resolveNextActionOwner,
   formatProbeAnswers,
   resolveCompletionType,
+  formatDecisionMakerStatus,
 } = require('../utils/aoMessageTemplates');
 const {
   initProbeState,
   currentProbe,
   startProbeModeIfNeeded,
   advanceAfterBaseStep,
+  processVisitNoteAnswer,
 } = require('../utils/aoVisitFlow');
 const {
   createVisitRecord,
@@ -248,6 +250,11 @@ async function finalizeVisitSession({
       nextAction: normalizedNextAction,
       interestLevel,
       aoName,
+      contactRole,
+      decisionMakerStatus: formatDecisionMakerStatus({
+        contactRole,
+        contactTitle: payload.contact_title,
+      }),
     });
     await notifyJakeEscalation(result.escalation, result.lead, aoName).catch(err => {
       console.error('[ao] Jake notification failed:', err.message);
@@ -349,11 +356,33 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
   const step = steps[stepIndex];
   if (!step) return { error: 'Invalid session step', status: 400 };
 
-  payload = { ...payload, [step.key]: message };
-  stepIndex += 1;
+  let completedStepKey = step.key;
+
+  if (session.mode === 'log_visit' && step.key === 'visit_note') {
+    const visitNoteResult = processVisitNoteAnswer(payload, message);
+    payload = visitNoteResult.payload;
+
+    if (!visitNoteResult.completed) {
+      await persistSessionProgress(sessionId, { stepIndex, payload });
+      return {
+        session_id: sessionId,
+        mode: session.mode,
+        step: stepIndex,
+        total_steps: steps.length,
+        reply: visitNoteResult.clarifyQuestion,
+        completed: false,
+        clarifying: true,
+      };
+    }
+
+    stepIndex += 1;
+  } else {
+    payload = { ...payload, [step.key]: message };
+    stepIndex += 1;
+  }
 
   if (session.mode === 'log_visit' && stepIndex <= steps.length) {
-    const { state, nextProbe } = advanceAfterBaseStep(payload, step.key);
+    const { state, nextProbe } = advanceAfterBaseStep(payload, completedStepKey);
     payload = { ...payload, ...state };
 
     if (nextProbe) {
@@ -383,7 +412,7 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
   }
 
   if (session.mode === 'log_visit') {
-    const { state, nextProbe } = advanceAfterBaseStep(payload, step.key);
+    const { state, nextProbe } = advanceAfterBaseStep(payload, completedStepKey);
     payload = { ...payload, ...state };
     if (nextProbe) {
       await persistSessionProgress(sessionId, { stepIndex, payload });
