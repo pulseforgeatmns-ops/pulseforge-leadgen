@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — AO Field Visits</title>
+<link rel="icon" href="/favicon.ico">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared/tokens.css">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  font-family: var(--pf-font-body);
+  min-height: 100vh;
+  padding: 1.25rem;
+}
+.top {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap;
+}
+.title {
+  font-family: var(--pf-font-display);
+  font-size: 1.8rem; letter-spacing: 3px;
+}
+.sub {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--pf-text-muted); margin-top: 4px;
+}
+.nav a {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--pf-gold-strong); text-decoration: none; margin-left: 12px;
+}
+.filters {
+  display: flex; gap: 8px; margin-bottom: 1rem; flex-wrap: wrap;
+}
+.filter-btn {
+  border: 1px solid var(--pf-border);
+  background: var(--pf-bg-card);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: var(--pf-text-dim);
+}
+.filter-btn.active {
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+  border-color: var(--pf-gold);
+}
+.note {
+  background: var(--pf-violet-glow);
+  border: 1px solid rgba(109,91,208,0.25);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.85rem;
+  color: var(--pf-text-dim);
+  margin-bottom: 1rem;
+  line-height: 1.45;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 900px) {
+  .grid { grid-template-columns: 1fr 1fr; }
+}
+.card {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 14px;
+  box-shadow: var(--pf-shadow);
+  cursor: pointer;
+}
+.card.escalated { border-left: 3px solid var(--pf-amber); }
+.card-head {
+  display: flex; justify-content: space-between; gap: 8px; align-items: flex-start;
+  margin-bottom: 8px;
+}
+.card-name { font-weight: 600; font-size: 1rem; color: var(--pf-navy); }
+.badge {
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--pf-border);
+  white-space: nowrap;
+}
+.badge.high { color: var(--pf-amber); border-color: rgba(160,94,3,0.35); }
+.badge.esc { color: var(--pf-red); border-color: rgba(179,38,30,0.35); }
+.meta { font-size: 0.82rem; color: var(--pf-text-dim); line-height: 1.45; }
+.note-block {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  background: var(--pf-bg-raised);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--pf-text);
+}
+.empty {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--pf-text-muted);
+}
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(16,32,60,0.45);
+  display: none; align-items: center; justify-content: center;
+  padding: 1rem; z-index: 1000;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  width: min(640px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 1rem;
+}
+.modal h2 {
+  font-family: var(--pf-font-display);
+  letter-spacing: 2px;
+  margin-bottom: 0.75rem;
+}
+.detail-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  font-size: 0.85rem;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--pf-border);
+}
+.detail-row span:first-child {
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+.modal-actions {
+  display: flex; gap: 8px; margin-top: 1rem; flex-wrap: wrap;
+}
+.modal-actions button {
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.modal-actions button.primary {
+  background: var(--pf-gold-glow);
+  border-color: var(--pf-gold);
+  color: var(--pf-gold-strong);
+}
+</style>
+</head>
+<body>
+<div class="top">
+  <div>
+    <div class="title">AO FIELD VISITS</div>
+    <div class="sub" id="clientLabel">Loading client…</div>
+  </div>
+  <div class="nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/admin/users">Users</a>
+    <a href="/logout">Logout</a>
+  </div>
+</div>
+
+<div class="note">
+  AO field visits are stored in dedicated tables (<code>ao_leads</code>, <code>ao_contacts</code>,
+  <code>ao_follow_up_tasks</code>, <code>ao_escalations</code>) — not the Scout <code>prospects</code> or
+  <code>companies</code> pipeline. Escalations also appear in Dashboard → Actions when client 10 is selected.
+</div>
+
+<div class="filters">
+  <button class="filter-btn active" data-filter="all">All visits</button>
+  <button class="filter-btn" data-filter="escalated">Escalated only</button>
+</div>
+
+<div class="grid" id="visitGrid"><div class="empty">Loading…</div></div>
+
+<div class="modal-backdrop" id="modal">
+  <div class="modal" id="modalBody"></div>
+</div>
+
+<script>
+let currentFilter = 'all';
+let visits = [];
+
+function esc(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function fmtDate(v) {
+  if (!v) return '—';
+  return new Date(v).toLocaleString();
+}
+
+async function api(path, options = {}) {
+  const res = await fetch('/admin/field-visits' + path, { credentials: 'same-origin', ...options });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+function card(v) {
+  const escalated = Boolean(v.escalation_id);
+  return `
+    <article class="card${escalated ? ' escalated' : ''}" data-id="${v.id}">
+      <div class="card-head">
+        <div class="card-name">${esc(v.business_name)}</div>
+        <div>
+          ${v.interest_level === 'high' ? '<span class="badge high">High interest</span> ' : ''}
+          ${escalated ? '<span class="badge esc">Escalated</span>' : ''}
+        </div>
+      </div>
+      <div class="meta">
+        ${esc(v.address || 'No address')}<br>
+        ${esc(v.contact_name || 'No contact')}${v.contact_title ? ' · ' + esc(v.contact_title) : ''}<br>
+        AO: ${esc(v.ao_name)} · ${fmtDate(v.created_at)}
+      </div>
+      ${v.original_visit_note ? `<div class="note-block">${esc(v.original_visit_note)}</div>` : ''}
+    </article>
+  `;
+}
+
+async function loadVisits() {
+  const grid = document.getElementById('visitGrid');
+  grid.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const qs = currentFilter === 'escalated' ? '?escalated=1' : '';
+    const data = await api('/api/visits' + qs);
+    visits = data.visits || [];
+    document.getElementById('clientLabel').textContent = `Client ${data.client_id} · ${visits.length} visit${visits.length === 1 ? '' : 's'}`;
+    if (!visits.length) {
+      grid.innerHTML = '<div class="empty">No AO field visits yet.</div>';
+      return;
+    }
+    grid.innerHTML = visits.map(card).join('');
+  } catch (err) {
+    grid.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+async function openVisit(id) {
+  try {
+    const v = await api('/api/visits/' + encodeURIComponent(id));
+    const modal = document.getElementById('modal');
+    const body = document.getElementById('modalBody');
+    body.innerHTML = `
+      <h2>${esc(v.business_name)}</h2>
+      <div class="detail-row"><span>Address</span><span>${esc(v.address || '—')}</span></div>
+      <div class="detail-row"><span>Type</span><span>${esc(v.business_type || '—')}</span></div>
+      <div class="detail-row"><span>Contact</span><span>${esc(v.contact_name || '—')}${v.contact_title ? ' · ' + esc(v.contact_title) : ''}</span></div>
+      <div class="detail-row"><span>Phone</span><span>${esc(v.contact_phone || '—')}</span></div>
+      <div class="detail-row"><span>Email</span><span>${esc(v.contact_email || '—')}</span></div>
+      <div class="detail-row"><span>Interest</span><span>${esc(v.interest_level)}</span></div>
+      <div class="detail-row"><span>Status</span><span>${esc(v.status)}</span></div>
+      <div class="detail-row"><span>AO</span><span>${esc(v.ao_name)}</span></div>
+      <div class="detail-row"><span>Attribution</span><span>${esc(v.attribution_source)} · commission ${v.commission_eligible ? 'eligible' : 'no'}</span></div>
+      <div class="detail-row"><span>Visit note</span><span>${esc(v.original_visit_note || '—')}</span></div>
+      <div class="detail-row"><span>Next action</span><span>${esc(v.next_action || '—')}</span></div>
+      <div class="detail-row"><span>Task</span><span>${esc(v.task_status || '—')}${v.waiting_on_jake ? ' · waiting on Jake' : ''}</span></div>
+      ${v.escalation_id ? `
+        <div class="detail-row"><span>Escalation</span><span>${esc(v.escalation_reason)} · ${esc(v.escalation_status)}<br>${esc(v.escalation_summary || '')}</span></div>
+      ` : ''}
+      ${v.suggested_message ? `<div class="note-block">Suggested message: "${esc(v.suggested_message)}"</div>` : ''}
+      <div class="modal-actions">
+        ${v.escalation_id && v.escalation_status !== 'resolved' ? `
+          <button class="primary" data-mark-seen="${v.escalation_id}">Mark seen</button>
+          <button class="primary" data-resolve="${v.escalation_id}">Resolve</button>
+        ` : ''}
+        <button type="button" id="closeModal">Close</button>
+      </div>
+    `;
+    modal.classList.add('open');
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+document.getElementById('visitGrid').addEventListener('click', e => {
+  const cardEl = e.target.closest('[data-id]');
+  if (cardEl) openVisit(cardEl.dataset.id);
+});
+
+document.querySelector('.filters').addEventListener('click', e => {
+  const btn = e.target.closest('[data-filter]');
+  if (!btn) return;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentFilter = btn.dataset.filter;
+  loadVisits();
+});
+
+document.getElementById('modal').addEventListener('click', async e => {
+  if (e.target.id === 'modal' || e.target.id === 'closeModal') {
+    document.getElementById('modal').classList.remove('open');
+    return;
+  }
+  const seenId = e.target.dataset.markSeen;
+  const resolveId = e.target.dataset.resolve;
+  try {
+    if (seenId) {
+      await api('/api/escalations/' + seenId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'seen' }),
+      });
+    }
+    if (resolveId) {
+      await api('/api/escalations/' + resolveId, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'resolved' }),
+      });
+    }
+    if (seenId || resolveId) {
+      document.getElementById('modal').classList.remove('open');
+      loadVisits();
+    }
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+loadVisits();
+</script>
+</body>
+</html>
