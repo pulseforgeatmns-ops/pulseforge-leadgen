@@ -57,6 +57,7 @@ initAuth().catch(err => console.error('[auth] init error:', err.message));
 ensureClientArchitecture()
   .then(() => ensureEmmettAutosendSchema())
   .then(enforceMiraClientState)
+  .then(() => ensureAoFieldSchema())
   .catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
@@ -68,7 +69,6 @@ ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
-ensureAoFieldSchema().catch(err => console.error('[ao] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();

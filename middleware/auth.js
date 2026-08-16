@@ -6,7 +6,12 @@ const ROLE_CHECK = ROLES.map(role => `'${role}'`).join(', ');
 let initPromise;
 
 function isApiRequest(req) {
-  return req.path.startsWith('/api/') || req.originalUrl.startsWith('/api/') || req.get('accept')?.includes('application/json');
+  return Boolean(
+    req.path.startsWith('/api/')
+    || req.originalUrl.startsWith('/api/')
+    || req.originalUrl.includes('/api/')
+    || req.get('accept')?.includes('application/json')
+  );
 }
 
 async function ensureUsersTable() {
