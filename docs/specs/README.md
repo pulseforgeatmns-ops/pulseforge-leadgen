@@ -89,6 +89,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-095](SPEC-095_Max_Durable_Operator_Objectives.md) | Max Durable Operator Objectives & Pre-Routing Context Resolution | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-096](SPEC-096_Max_Specialist_Direction_and_Operator_Rationale.md) | Max Specialist Direction & Operator Rationale | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-098](SPEC-098_Max_Specialist_Delegation_Contract.md) | Max Specialist Delegation Contract | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-100](SPEC-100_Max_Scout_Acquisition_Intelligence_Loop.md) | Max ↔ Scout Acquisition Intelligence Loop | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |
 

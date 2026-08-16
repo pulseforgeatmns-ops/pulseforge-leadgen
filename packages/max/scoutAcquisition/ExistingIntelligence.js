@@ -1,0 +1,195 @@
+'use strict';
+
+/**
+ * SPEC-100 — retrieve existing tenant-scoped acquisition intelligence
+ * before performing new discovery.
+ */
+
+const { asText, clone, isPlainObject, normalizeSignal } = require('./Types');
+
+function tokenize(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length > 1);
+}
+
+function matchesGeography(location, geography) {
+  if (!geography) return true;
+  const loc = String(location || '').toLowerCase();
+  if (!loc) return false;
+  const tokens = tokenize(geography).filter(
+    (t) => !['nh', 'tn', 'wv', 'area', 'greater'].includes(t)
+  );
+  if (!tokens.length) return loc.includes(String(geography).toLowerCase());
+  return tokens.some((t) => loc.includes(t));
+}
+
+function matchesSegment(record, segments) {
+  if (!segments || !segments.length) return true;
+  const hay = [
+    record.industry,
+    record.vertical,
+    record.segment,
+    record.category,
+    record.name,
+  ]
+    .map((v) => String(v || '').toLowerCase().replace(/[_-]+/g, ' '))
+    .join(' ');
+  return segments.some((seg) => {
+    const needle = String(seg || '')
+      .toLowerCase()
+      .replace(/[_-]+/g, ' ')
+      .trim();
+    if (!needle) return false;
+    const compact = needle.replace(/\s+/g, '');
+    return (
+      hay.includes(needle) ||
+      hay.replace(/\s+/g, '').includes(compact) ||
+      (needle.includes('property') && hay.includes('property'))
+    );
+  });
+}
+
+function normalizeCompany(raw, tenantId) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = asText(raw.id || raw.companyId);
+  if (!id) return null;
+  const owner = asText(raw.tenantId || raw.client_id || raw.clientId);
+  if (owner && tenantId && String(owner) !== String(tenantId)) return null;
+  return {
+    id,
+    tenantId: owner || tenantId,
+    name: asText(raw.name || raw.companyName) || id,
+    industry: asText(raw.industry || raw.vertical || raw.segment),
+    location: asText(raw.location || raw.geography || raw.city),
+    website: asText(raw.website),
+    icpScore: raw.icp_score != null ? Number(raw.icp_score) : raw.icpScore,
+    people: Array.isArray(raw.people) ? raw.people : [],
+    signals: Array.isArray(raw.signals) ? raw.signals : [],
+    evidence: Array.isArray(raw.evidence) ? raw.evidence : [],
+    updatedAt: asText(raw.updatedAt || raw.updated_at || raw.observedAt),
+  };
+}
+
+function normalizePerson(raw, tenantId) {
+  if (!raw || typeof raw !== 'object') return null;
+  const id = asText(raw.id || raw.personId || raw.prospectId);
+  if (!id) return null;
+  const owner = asText(raw.tenantId || raw.client_id || raw.clientId);
+  if (owner && tenantId && String(owner) !== String(tenantId)) return null;
+  const name =
+    asText(raw.name) ||
+    [raw.first_name, raw.last_name].filter(Boolean).join(' ').trim() ||
+    id;
+  return {
+    id,
+    tenantId: owner || tenantId,
+    companyId: asText(raw.companyId || raw.company_id),
+    name,
+    jobTitle: asText(raw.job_title || raw.jobTitle || raw.title),
+    decisionMaker: raw.decision_maker === true || raw.decisionMaker === true,
+    observedAt: asText(raw.updatedAt || raw.updated_at || raw.observedAt),
+  };
+}
+
+function attachPeople(companies, people) {
+  const byCompany = new Map();
+  for (const person of people) {
+    if (!person.companyId) continue;
+    if (!byCompany.has(person.companyId)) byCompany.set(person.companyId, []);
+    byCompany.get(person.companyId).push(person);
+  }
+  return companies.map((c) => ({
+    ...c,
+    people: c.people.length ? c.people : byCompany.get(c.id) || [],
+  }));
+}
+
+/**
+ * Filter a tenant-scoped company/person repository to the delegated criteria.
+ * Does not broaden geography or segment when results are sparse.
+ *
+ * @param {object} input
+ * @returns {object}
+ */
+function retrieveExistingIntelligence(input = {}) {
+  const tenantId = asText(input.authorizedTenantId || input.tenantId);
+  const target = isPlainObject(input.targetContext) ? input.targetContext : {};
+  const business = isPlainObject(input.businessContext) ? input.businessContext : {};
+  const geography = asText(target.geography || business.serviceGeography);
+  const segments = Array.isArray(target.segments)
+    ? target.segments
+    : Array.isArray(business.preferredSegments)
+      ? business.preferredSegments
+      : [];
+  const exclusions = Array.isArray(business.exclusions) ? business.exclusions : [];
+
+  const rawCompanies = Array.isArray(input.companies) ? input.companies : [];
+  const rawPeople = Array.isArray(input.people) ? input.people : [];
+
+  const companies = rawCompanies
+    .map((c) => normalizeCompany(c, tenantId))
+    .filter(Boolean)
+    .filter((c) => matchesGeography(c.location, geography))
+    .filter((c) => matchesSegment(c, segments))
+    .filter((c) => !exclusions.length || !matchesSegment(c, exclusions));
+
+  const people = rawPeople
+    .map((p) => normalizePerson(p, tenantId))
+    .filter(Boolean)
+    .filter((p) => !tenantId || String(p.tenantId) === String(tenantId));
+
+  const matched = attachPeople(companies, people);
+  const rejected = rawCompanies.length - matched.length;
+
+  return {
+    tenantId,
+    companies: matched.map(clone),
+    retrievedBeforeInvestigate: true,
+    criteria: {
+      geography,
+      segments: segments.slice(),
+      exclusions: exclusions.slice(),
+    },
+    counts: {
+      considered: rawCompanies.length,
+      matched: matched.length,
+      rejected: Math.max(0, rejected),
+    },
+    sufficient: matched.length > 0 && input.requireFresh !== true,
+  };
+}
+
+async function loadRepository(input = {}) {
+  if (typeof input.loadCompanies === 'function') {
+    const loaded = await input.loadCompanies({
+      tenantId: input.authorizedTenantId || input.tenantId,
+      targetContext: input.targetContext,
+      businessContext: input.businessContext,
+    });
+    const companies = Array.isArray(loaded)
+      ? loaded
+      : (loaded && loaded.companies) || [];
+    const people = Array.isArray(loaded && loaded.people) ? loaded.people : input.people || [];
+    return retrieveExistingIntelligence({ ...input, companies, people });
+  }
+  return retrieveExistingIntelligence(input);
+}
+
+function signalLabel(signal) {
+  const key = normalizeSignal(signal && (signal.type || signal.kind || signal));
+  return key || null;
+}
+
+module.exports = {
+  retrieveExistingIntelligence,
+  loadRepository,
+  matchesGeography,
+  matchesSegment,
+  normalizeCompany,
+  normalizePerson,
+  signalLabel,
+};

@@ -78,6 +78,7 @@ function collectDomainSignals(input = {}) {
     : [];
   const operatorBrief = input.operatorBrief || null;
   const hlaDomain = input.hlaDomain || null;
+  const acquisitionIntelligence = input.acquisitionIntelligence || null;
 
   const missionSummary = summarizeMissions(missions);
 
@@ -87,6 +88,13 @@ function collectDomainSignals(input = {}) {
   if (operatorBrief) acquisitionCandidates.push(PRIORITY_STATES.ELEVATED);
   if (hlaDomain === DOMAIN_IDS.ACQUISITION) {
     acquisitionCandidates.push(PRIORITY_STATES.URGENT);
+  }
+  if (
+    acquisitionIntelligence &&
+    acquisitionIntelligence.priorityImpact &&
+    PRIORITY_RANK[acquisitionIntelligence.priorityImpact.to] != null
+  ) {
+    acquisitionCandidates.push(acquisitionIntelligence.priorityImpact.to);
   }
 
   const contentPending = pendingRecommendations.filter(
@@ -139,6 +147,7 @@ function collectDomainSignals(input = {}) {
       operatorBrief,
       priorityItems: priorityQueue.slice(0, 8),
       watchAlerts: watchAlerts.slice(0, 6),
+      acquisitionIntelligence,
     },
     content: {
       priority: contentCandidates.length
@@ -231,6 +240,18 @@ function buildElevationReason(domainId, signals) {
   }
 
   if (domainId === DOMAIN_IDS.ACQUISITION) {
+    if (signals.acquisitionIntelligence && signals.acquisitionIntelligence.summary) {
+      return {
+        reason: signals.acquisitionIntelligence.summary,
+        evidenceRefs: [
+          {
+            kind: 'specialist_result',
+            id: signals.acquisitionIntelligence.resultId || 'scout-ao',
+            label: 'Scout acquisition intelligence',
+          },
+        ],
+      };
+    }
     if (signals.operatorBrief) {
       return {
         reason:
@@ -314,6 +335,17 @@ function inferHlaDomain(model) {
  */
 function buildDomainSummary(domainId, signals) {
   if (domainId === DOMAIN_IDS.ACQUISITION) {
+    const intel = signals.acquisitionIntelligence;
+    if (intel && intel.summary) {
+      const lines = String(intel.summary)
+        .split(/[.]+\s*/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      return {
+        lines: lines.length ? lines : [intel.summary],
+        compressed: intel.summary,
+      };
+    }
     const lines = [];
     if (signals.aoIntelligence) {
       lines.push('AO Intelligence');
@@ -445,7 +477,7 @@ function buildDomainDrawer(domainId, signals) {
 
   if (domainId === DOMAIN_IDS.ACQUISITION) {
     return {
-      aoIntelligence: signals.aoIntelligence,
+      aoIntelligence: signals.aoIntelligence || Boolean(signals.acquisitionIntelligence),
       priorityItems: (signals.priorityItems || []).map((p) => ({
         id: p.recommendationId || p.id,
         title: p.companyName || p.title || 'Priority',

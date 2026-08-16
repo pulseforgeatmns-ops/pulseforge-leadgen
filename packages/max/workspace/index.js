@@ -71,6 +71,10 @@ const {
   consumeSpecialistResult,
   explainSpecialistTrail,
 } = require('./SpecialistDelegationContext');
+const {
+  maybeHandleScoutAcquisitionTurn,
+  shouldHandleScoutAcquisition,
+} = require('./ScoutAcquisitionContext');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -86,6 +90,8 @@ module.exports = {
   executeBoundedDelegation,
   consumeSpecialistResult,
   explainSpecialistTrail,
+  maybeHandleScoutAcquisitionTurn,
+  shouldHandleScoutAcquisition,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

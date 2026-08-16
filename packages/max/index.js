@@ -127,6 +127,11 @@ const {
   AUTHORITY_LEVELS,
 } = require('./specialistDelegation');
 const {
+  runAcquisitionIntelligenceLoop,
+  createMemoryAcquisitionState,
+  createPostgresAcquisitionState,
+} = require('./scoutAcquisition');
+const {
   IntelligenceComposer,
   createIntelligenceComposer,
   RelatedIntelligenceBuilder,
@@ -502,6 +507,9 @@ module.exports = {
   createSpecialistDelegationMemoryStore,
   CONTRACT_OBJECTIVE,
   AUTHORITY_LEVELS,
+  runAcquisitionIntelligenceLoop,
+  createMemoryAcquisitionState,
+  createPostgresAcquisitionState,
   PAGE_TYPES,
   SessionStore,
   PresentationEngine,

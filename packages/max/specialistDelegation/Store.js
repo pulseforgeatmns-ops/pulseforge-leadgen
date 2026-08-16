@@ -58,6 +58,9 @@ function createMemoryStore(snapshot = null) {
       if (filter.specialist) {
         list = list.filter((r) => r.specialist === filter.specialist);
       }
+      if (filter.capability) {
+        list = list.filter((r) => r.capability === filter.capability);
+      }
       if (filter.status) {
         list = list.filter((r) => r.status === filter.status);
       }
@@ -185,6 +188,7 @@ function mapResultRow(row) {
     actionsTaken: row.actions_taken || [],
     evidenceRefs: row.evidence_refs || [],
     artifactRefs: row.artifact_refs || [],
+    payload: row.payload || {},
     confidence: row.confidence == null ? null : Number(row.confidence),
     uncertainties: row.uncertainties || [],
     recommendedNextAction: row.recommended_next_action || null,
@@ -302,6 +306,10 @@ function createPostgresStore(pool) {
       if (filter.specialist) {
         params.push(filter.specialist);
         clauses.push(`specialist = $${params.length}`);
+      }
+      if (filter.capability) {
+        params.push(filter.capability);
+        clauses.push(`capability = $${params.length}`);
       }
       if (filter.status) {
         params.push(filter.status);

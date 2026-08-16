@@ -27,6 +27,9 @@ const {
   maybeHandleClientIntelligenceTurn,
 } = require('./ClientIntelligenceContext');
 const {
+  maybeHandleScoutAcquisitionTurn,
+} = require('./ScoutAcquisitionContext');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
@@ -151,6 +154,7 @@ class WorkspaceEngine {
    * @param {object} [options.clientIntelligenceOpts] - SPEC-098 CIE store opts (tests)
    * @param {object} [options.specialistDelegationService] - SPEC-098 specialist delegation
    * @param {object} [options.specialistDelegationOpts] - SPEC-098 delegation store opts (tests)
+   * @param {object} [options.scoutAcquisitionOpts] - SPEC-100 Scout loop opts (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -182,6 +186,7 @@ class WorkspaceEngine {
     this._clientIntelligenceOpts = options.clientIntelligenceOpts || null;
     this._specialistDelegationService = options.specialistDelegationService || null;
     this._specialistDelegationOpts = options.specialistDelegationOpts || null;
+    this._scoutAcquisitionOpts = options.scoutAcquisitionOpts || null;
   }
 
   /** @returns {SessionStore} */
@@ -280,6 +285,81 @@ class WorkspaceEngine {
       role: 'operator',
       text: question,
     });
+
+    // SPEC-100 — Max ↔ Scout acquisition intelligence (before CIE so
+    // market-opportunity questions are not swallowed as Blueprint chat).
+    const scoutTurn = await maybeHandleScoutAcquisitionTurn({
+      question,
+      session,
+      context: rawContext || session.context,
+      action: rawContext?.action || null,
+      delegationService: this._specialistDelegationService || undefined,
+      delegationOpts: this._specialistDelegationOpts || undefined,
+      ...(this._scoutAcquisitionOpts || {}),
+    });
+    if (scoutTurn) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+        session.context.acquisitionLoop = true;
+      }
+
+      const structuredScout = scoutTurn.structured;
+      const routeScout = {
+        kind: ROUTE_KINDS.INTELLIGENCE,
+        missionType: null,
+        reason: scoutTurn.reason,
+        missionIntent: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      };
+      const presentedScout = await this._presentation.present(structuredScout);
+      const proseScout = presentedScout.prose || scoutTurn.prose;
+
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseScout,
+        structured: structuredScout,
+      });
+
+      return {
+        sessionId: session.id,
+        prose: proseScout,
+        structured: structuredScout,
+        metadata: presentedScout.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredScout,
+          session,
+          question,
+        }),
+        recommendedActions: structuredScout.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedScout.presentation,
+        route: routeScout.kind,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        scoutLoop: scoutTurn.loop || null,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: scoutTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: scoutTurn.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
 
     // SPEC-098 / SPEC-103 — approved client intelligence before intent routing.
     // Reconstruct durable Blueprint/Playbook context for the authenticated tenant.
