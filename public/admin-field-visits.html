@@ -202,6 +202,16 @@ body {
 let currentFilter = 'all';
 let visits = [];
 
+function formatProbeAnswersHtml(probeAnswers) {
+  if (!probeAnswers || typeof probeAnswers !== 'object') return '';
+  const entries = Object.entries(probeAnswers).filter(([, v]) => String(v || '').trim());
+  if (!entries.length) return '';
+  return entries.map(([key, answer]) => {
+    const label = key.replace(/^probe_/, '').replace(/_/g, ' ');
+    return `<div class="detail-row"><span>${esc(label)}</span><span>${esc(answer)}</span></div>`;
+  }).join('');
+}
+
 function esc(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
@@ -275,6 +285,7 @@ async function openVisit(id) {
       <div class="detail-row"><span>Attribution</span><span>${esc(v.attribution_source)} · commission ${v.commission_eligible ? 'eligible' : 'no'}</span></div>
       <div class="detail-row"><span>Visit note</span><span>${esc(v.original_visit_note || '—')}</span></div>
       <div class="detail-row"><span>Next action</span><span>${esc(v.next_action || '—')}</span></div>
+      ${formatProbeAnswersHtml(v.probe_answers || v.escalation_probe_answers)}
       <div class="detail-row"><span>Task</span><span>${esc(v.task_status || '—')}${v.waiting_on_jake ? ' · waiting on Jake' : ''}</span></div>
       ${v.escalation_id ? `
         <div class="detail-row"><span>Escalation</span><span>${esc(v.escalation_reason)} · ${esc(v.escalation_status)}<br>${esc(v.escalation_summary || '')}</span></div>

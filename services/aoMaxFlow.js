@@ -1,5 +1,20 @@
 const pool = require('../db');
-const { safeGuidance, buildCompletionReply, parseContactRole, normalizeNextAction } = require('../utils/aoMessageTemplates');
+const {
+  safeGuidance,
+  buildCompletionReply,
+  parseContactRole,
+  normalizeNextAction,
+  parseInterestLevel,
+  resolveNextActionOwner,
+  formatProbeAnswers,
+  resolveCompletionType,
+} = require('../utils/aoMessageTemplates');
+const {
+  initProbeState,
+  currentProbe,
+  startProbeModeIfNeeded,
+  advanceAfterBaseStep,
+} = require('../utils/aoVisitFlow');
 const {
   createVisitRecord,
   notifyJakeEscalation,
@@ -34,13 +49,6 @@ function normalizeNone(value) {
   return v;
 }
 
-function parseInterest(value) {
-  const v = String(value || '').trim().toLowerCase();
-  if (v.startsWith('h')) return 'high';
-  if (v.startsWith('l')) return 'low';
-  return 'medium';
-}
-
 function inferDueDate(nextAction) {
   const text = String(nextAction || '').toLowerCase();
   const date = new Date();
@@ -56,15 +64,17 @@ function inferDueDate(nextAction) {
   return date.toISOString().slice(0, 10);
 }
 
-function inferStatus(payload) {
-  if (/walkthrough/.test(String(payload.next_action || '').toLowerCase())) return 'walkthrough_requested';
+function inferStatus(payload, nextActionOwner) {
+  if (nextActionOwner === 'not_a_fit') return 'not_a_fit';
+  if (nextActionOwner === 'walkthrough') return 'walkthrough_requested';
   if (/manager|owner|decision|not there|absent/.test(String(payload.visit_note || '').toLowerCase())) {
     return 'decision_maker_absent';
   }
+  if (nextActionOwner === 'none') return 'new_visit';
   return 'needs_follow_up';
 }
 
-function detectEscalation(payload) {
+function detectEscalation(payload, nextActionOwner) {
   const contactRole = parseContactRole(payload.contact_role);
   const blob = [
     payload.visit_note,
@@ -72,12 +82,18 @@ function detectEscalation(payload) {
     payload.interest_level === 'high' ? 'high interest' : '',
   ].filter(Boolean).join(' ');
   const guidance = safeGuidance(blob);
+
+  if (nextActionOwner === 'jake' || nextActionOwner === 'walkthrough') {
+    return {
+      escalate: true,
+      reason: nextActionOwner === 'walkthrough' ? 'walkthrough_request' : (guidance.reason || 'high_interest'),
+      guidance: guidance.guidance || 'Jake will follow up.',
+      contactRole,
+    };
+  }
   if (guidance.escalate) return { ...guidance, contactRole };
   if (payload.interest_level === 'high' && contactRole === 'decision_maker') {
     return { escalate: true, reason: 'high_interest', guidance: 'Strong lead — Jake should follow up.', contactRole };
-  }
-  if (parseInterest(payload.interest_level) === 'high') {
-    return { escalate: true, reason: 'high_interest', guidance: guidance.guidance, contactRole };
   }
   return { escalate: false, guidance: guidance.guidance, contactRole };
 }
@@ -146,23 +162,136 @@ async function startMode({ aoOwnerId, clientId, mode, aoName }) {
   };
 }
 
+async function persistSessionProgress(sessionId, { stepIndex, payload }) {
+  await pool.query(`
+    UPDATE ao_max_sessions SET step_index = $2, payload = $3, updated_at = NOW()
+    WHERE id = $1
+  `, [sessionId, stepIndex, payload]);
+}
+
+async function completeSession(sessionId, { stepIndex, payload }) {
+  await pool.query(`
+    UPDATE ao_max_sessions SET step_index = $2, payload = $3, completed = true, updated_at = NOW()
+    WHERE id = $1
+  `, [sessionId, stepIndex, payload]);
+}
+
+function extractPreferredTiming(payload) {
+  const answers = payload.probe_answers || {};
+  return answers.probe_walkthrough_timing
+    || (String(payload.notes || '').trim() || null);
+}
+
+async function finalizeVisitSession({
+  session,
+  payload,
+  sessionId,
+  aoOwnerId,
+  clientId,
+  aoName,
+}) {
+  const interestLevel = parseInterestLevel(payload.interest_level || 'high');
+  const normalizedNextAction = normalizeNextAction(
+    payload.next_action || (session.mode === 'book_walkthrough' ? 'Book walkthrough' : 'Follow up'),
+  );
+  const nextActionOwner = session.mode === 'book_walkthrough'
+    ? 'walkthrough'
+    : resolveNextActionOwner(normalizedNextAction, payload);
+
+  const escalationInfo = session.mode === 'book_walkthrough'
+    ? { escalate: true, reason: 'walkthrough_request', guidance: 'Jake will coordinate the walkthrough.' }
+    : detectEscalation({ ...payload, interest_level: interestLevel, next_action: normalizedNextAction }, nextActionOwner);
+
+  const contactRole = parseContactRole(payload.contact_role);
+  const status = session.mode === 'book_walkthrough'
+    ? 'walkthrough_requested'
+    : inferStatus(payload, nextActionOwner);
+  const probeAnswers = payload.probe_answers || {};
+  const probeSummary = formatProbeAnswers(probeAnswers);
+  const escalationSummary = [
+    payload.visit_note || payload.notes,
+    probeSummary || null,
+    escalationInfo.reason ? `Reason: ${escalationInfo.reason}` : null,
+    payload.next_action ? `Next step: ${normalizedNextAction}` : null,
+  ].filter(Boolean).join('\n');
+
+  const result = await createVisitRecord({
+    clientId,
+    aoOwnerId,
+    aoName,
+    businessName: payload.business_name,
+    address: payload.address,
+    businessType: payload.business_type || null,
+    contactName: payload.contact_name,
+    contactTitle: payload.contact_title,
+    phone: normalizeNone(payload.contact_phone),
+    email: normalizeNone(payload.contact_email),
+    contactRole,
+    isDecisionMaker: contactRole === 'decision_maker',
+    visitNote: payload.visit_note || payload.notes,
+    interestLevel,
+    nextAction: normalizedNextAction,
+    nextActionOwner,
+    dueDate: inferDueDate(normalizedNextAction || payload.notes),
+    status,
+    escalate: escalationInfo.escalate,
+    escalationReason: escalationInfo.reason,
+    escalationSummary,
+    probeAnswers,
+    skipTask: nextActionOwner === 'none' || nextActionOwner === 'not_a_fit',
+  });
+
+  if (result.escalation) {
+    await depositEscalationAction(result.escalation, result.lead, clientId, {
+      probeAnswers,
+      suggestedMessage: result.task?.suggested_message,
+      nextAction: normalizedNextAction,
+      interestLevel,
+      aoName,
+    });
+    await notifyJakeEscalation(result.escalation, result.lead, aoName).catch(err => {
+      console.error('[ao] Jake notification failed:', err.message);
+    });
+  }
+
+  const completionType = resolveCompletionType({
+    nextActionOwner,
+    escalated: Boolean(result.escalation),
+    status,
+  });
+
+  const reply = buildCompletionReply({
+    businessName: result.lead.business_name,
+    completionType,
+    suggestedMessage: result.task?.suggested_message,
+    preferredTiming: extractPreferredTiming(payload),
+    escalated: Boolean(result.escalation),
+  });
+
+  return {
+    session_id: sessionId,
+    mode: session.mode,
+    completed: true,
+    reply,
+    lead: result.lead,
+    task: result.task,
+    escalated: Boolean(result.escalation),
+    next_action_owner: nextActionOwner,
+  };
+}
+
 async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, message }) {
   const session = await getSession(sessionId, aoOwnerId);
   if (!session) return { error: 'Session not found or already completed', status: 404 };
 
   const steps = getSteps(session.mode);
-  const step = steps[session.step_index];
-  if (!step) return { error: 'Invalid session step', status: 400 };
-
-  const payload = { ...(session.payload || {}), [step.key]: message };
-  const nextIndex = session.step_index + 1;
+  let payload = { ...(session.payload || {}) };
+  let stepIndex = session.step_index;
+  let probeState = initProbeState(payload);
 
   if (session.mode === 'ask_for_help') {
     const guidance = safeGuidance(message);
-    await pool.query(`
-      UPDATE ao_max_sessions SET completed = true, payload = $2, updated_at = NOW()
-      WHERE id = $1
-    `, [sessionId, payload]);
+    await completeSession(sessionId, { stepIndex: stepIndex + 1, payload: { ...payload, question: message } });
     return {
       session_id: sessionId,
       mode: session.mode,
@@ -173,85 +302,107 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
     };
   }
 
-  if (nextIndex < steps.length) {
-    await pool.query(`
-      UPDATE ao_max_sessions SET step_index = $2, payload = $3, updated_at = NOW()
-      WHERE id = $1
-    `, [sessionId, nextIndex, payload]);
+  if (session.mode === 'log_visit' && probeState.in_probe_mode) {
+    const probe = currentProbe(probeState);
+    if (probe) {
+      probeState.probe_answers = {
+        ...probeState.probe_answers,
+        [probe.key]: message,
+      };
+      probeState.probe_index += 1;
+      payload = { ...payload, ...probeState };
+
+      const nextProbe = startProbeModeIfNeeded(probeState);
+      payload = { ...payload, ...probeState };
+
+      if (nextProbe) {
+        await persistSessionProgress(sessionId, { stepIndex, payload });
+        return {
+          session_id: sessionId,
+          mode: session.mode,
+          step: stepIndex,
+          total_steps: steps.length,
+          reply: nextProbe.question,
+          completed: false,
+          probing: true,
+        };
+      }
+
+      payload.in_probe_mode = false;
+      if (stepIndex < steps.length) {
+        await persistSessionProgress(sessionId, { stepIndex, payload });
+        return {
+          session_id: sessionId,
+          mode: session.mode,
+          step: stepIndex,
+          total_steps: steps.length,
+          reply: steps[stepIndex].question,
+          completed: false,
+        };
+      }
+
+      await completeSession(sessionId, { stepIndex, payload });
+      return finalizeVisitSession({ session, payload, sessionId, aoOwnerId, clientId, aoName });
+    }
+  }
+
+  const step = steps[stepIndex];
+  if (!step) return { error: 'Invalid session step', status: 400 };
+
+  payload = { ...payload, [step.key]: message };
+  stepIndex += 1;
+
+  if (session.mode === 'log_visit' && stepIndex <= steps.length) {
+    const { state, nextProbe } = advanceAfterBaseStep(payload, step.key);
+    payload = { ...payload, ...state };
+
+    if (nextProbe) {
+      await persistSessionProgress(sessionId, { stepIndex, payload });
+      return {
+        session_id: sessionId,
+        mode: session.mode,
+        step: stepIndex,
+        total_steps: steps.length,
+        reply: nextProbe.question,
+        completed: false,
+        probing: true,
+      };
+    }
+  }
+
+  if (stepIndex < steps.length) {
+    await persistSessionProgress(sessionId, { stepIndex, payload });
     return {
       session_id: sessionId,
       mode: session.mode,
-      step: nextIndex,
+      step: stepIndex,
       total_steps: steps.length,
-      reply: steps[nextIndex].question,
+      reply: steps[stepIndex].question,
       completed: false,
     };
   }
 
-  await pool.query(`
-    UPDATE ao_max_sessions SET step_index = $2, payload = $3, completed = true, updated_at = NOW()
-    WHERE id = $1
-  `, [sessionId, nextIndex, payload]);
+  if (session.mode === 'log_visit') {
+    const { state, nextProbe } = advanceAfterBaseStep(payload, step.key);
+    payload = { ...payload, ...state };
+    if (nextProbe) {
+      await persistSessionProgress(sessionId, { stepIndex, payload });
+      return {
+        session_id: sessionId,
+        mode: session.mode,
+        step: stepIndex,
+        total_steps: steps.length,
+        reply: nextProbe.question,
+        completed: false,
+        probing: true,
+      };
+    }
+  }
+
+  await completeSession(sessionId, { stepIndex, payload });
 
   if (session.mode === 'log_visit' || session.mode === 'book_walkthrough') {
-    const interestLevel = parseInterest(payload.interest_level || 'high');
-    const escalationInfo = session.mode === 'book_walkthrough'
-      ? { escalate: true, reason: 'walkthrough_request', guidance: 'Jake will coordinate the walkthrough.' }
-      : detectEscalation({ ...payload, interest_level: interestLevel });
-
-    const contactRole = parseContactRole(payload.contact_role);
-    const normalizedNextAction = normalizeNextAction(
-      payload.next_action || (session.mode === 'book_walkthrough' ? 'Book walkthrough' : 'Follow up'),
-    );
-
-    const result = await createVisitRecord({
-      clientId,
-      aoOwnerId,
-      aoName,
-      businessName: payload.business_name,
-      address: payload.address,
-      businessType: payload.business_type || null,
-      contactName: payload.contact_name,
-      contactTitle: payload.contact_title,
-      phone: normalizeNone(payload.contact_phone),
-      email: normalizeNone(payload.contact_email),
-      contactRole,
-      isDecisionMaker: contactRole === 'decision_maker',
-      visitNote: payload.visit_note || payload.notes,
-      interestLevel,
-      nextAction: normalizedNextAction,
-      dueDate: inferDueDate(normalizedNextAction || payload.notes),
-      status: session.mode === 'book_walkthrough' ? 'walkthrough_requested' : inferStatus(payload),
-      escalate: escalationInfo.escalate,
-      escalationReason: escalationInfo.reason,
-      escalationSummary: [
-        payload.visit_note || payload.notes,
-        escalationInfo.reason ? `Reason: ${escalationInfo.reason}` : null,
-      ].filter(Boolean).join('\n'),
-    });
-
-    if (result.escalation) {
-      await depositEscalationAction(result.escalation, result.lead, clientId);
-      await notifyJakeEscalation(result.escalation, result.lead, aoName).catch(err => {
-        console.error('[ao] Jake notification failed:', err.message);
-      });
-    }
-
-    const reply = buildCompletionReply({
-      businessName: result.lead.business_name,
-      escalated: Boolean(result.escalation),
-      suggestedMessage: result.task.suggested_message,
-    });
-
-    return {
-      session_id: sessionId,
-      mode: session.mode,
-      completed: true,
-      reply,
-      lead: result.lead,
-      task: result.task,
-      escalated: Boolean(result.escalation),
-    };
+    return finalizeVisitSession({ session, payload, sessionId, aoOwnerId, clientId, aoName });
   }
 
   if (session.mode === 'daily_debrief') {
@@ -284,4 +435,5 @@ module.exports = {
   LOG_VISIT_STEPS,
   startMode,
   respondToSession,
+  detectEscalation,
 };

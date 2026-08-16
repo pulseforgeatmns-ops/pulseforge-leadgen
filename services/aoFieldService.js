@@ -18,6 +18,7 @@ function mapLead(row) {
     attribution_source: row.attribution_source,
     commission_eligible: row.commission_eligible,
     original_visit_note: row.original_visit_note,
+    probe_answers: row.probe_answers || null,
     created_at: row.created_at,
     updated_at: row.updated_at,
     contact_name: row.contact_name || null,
@@ -128,28 +129,36 @@ async function createVisitRecord({
   visitNote,
   interestLevel,
   nextAction,
+  nextActionOwner,
   dueDate,
   status,
   escalate,
   escalationReason,
   escalationSummary,
+  probeAnswers,
+  skipTask = false,
 }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const leadStatus = status || (interestLevel === 'high' ? 'needs_follow_up' : 'new_visit');
+    const ownerIsJake = nextActionOwner === 'jake' || nextActionOwner === 'walkthrough';
+    const followUpOwnerId = ownerIsJake ? null : aoOwnerId;
+
     const { rows: leadRows } = await client.query(`
       INSERT INTO ao_leads (
         client_id, business_name, address, business_type, status, interest_level,
         ao_owner_id, original_visit_note, next_follow_up_date, next_follow_up_owner_id,
-        last_contact_date
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$7,NOW())
+        last_contact_date, probe_answers
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),$11)
       RETURNING *
     `, [
       clientId, businessName, address || null, businessType || null,
       leadStatus, interestLevel || 'medium', aoOwnerId, visitNote || null,
-      dueDate || null,
+      skipTask ? null : (dueDate || null),
+      followUpOwnerId,
+      probeAnswers && Object.keys(probeAnswers).length ? JSON.stringify(probeAnswers) : null,
     ]);
     const lead = leadRows[0];
 
@@ -179,32 +188,41 @@ async function createVisitRecord({
       escalationReason,
     });
 
-    const taskDue = dueDate || new Date().toISOString().slice(0, 10);
-    const waitingOnJake = Boolean(escalate);
-    const { rows: taskRows } = await client.query(`
-      INSERT INTO ao_follow_up_tasks (
-        lead_id, contact_id, ao_owner_id, due_date, priority, next_action,
-        last_interaction_summary, suggested_message, waiting_on_jake
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-      RETURNING *
-    `, [
-      lead.id,
-      contact?.id || null,
-      aoOwnerId,
-      taskDue,
-      interestLevel === 'high' || role === 'decision_maker' ? 'high' : 'normal',
-      normalizedNextAction,
-      visitNote || null,
-      suggestedMessage,
-      waitingOnJake,
-    ]);
-    const task = taskRows[0];
+    let task = null;
+    if (!skipTask) {
+      const taskDue = dueDate || new Date().toISOString().slice(0, 10);
+      const waitingOnJake = Boolean(escalate) || ownerIsJake;
+      const { rows: taskRows } = await client.query(`
+        INSERT INTO ao_follow_up_tasks (
+          lead_id, contact_id, ao_owner_id, due_date, priority, next_action,
+          last_interaction_summary, suggested_message, waiting_on_jake
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        RETURNING *
+      `, [
+        lead.id,
+        contact?.id || null,
+        aoOwnerId,
+        taskDue,
+        interestLevel === 'high' || role === 'decision_maker' ? 'high' : 'normal',
+        normalizedNextAction,
+        visitNote || null,
+        suggestedMessage,
+        waitingOnJake,
+      ]);
+      task = taskRows[0];
+    } else {
+      task = {
+        suggested_message: suggestedMessage,
+        status: 'cancelled',
+        waiting_on_jake: false,
+      };
+    }
 
     let escalation = null;
     if (escalate) {
       const { rows: escRows } = await client.query(`
-        INSERT INTO ao_escalations (lead_id, contact_id, ao_owner_id, reason, summary)
-        VALUES ($1,$2,$3,$4,$5)
+        INSERT INTO ao_escalations (lead_id, contact_id, ao_owner_id, reason, summary, probe_answers)
+        VALUES ($1,$2,$3,$4,$5,$6)
         RETURNING *
       `, [
         lead.id,
@@ -212,12 +230,15 @@ async function createVisitRecord({
         aoOwnerId,
         escalationReason || 'high_interest',
         escalationSummary || visitNote || `Escalation for ${businessName}`,
+        probeAnswers && Object.keys(probeAnswers).length ? JSON.stringify(probeAnswers) : null,
       ]);
       escalation = escRows[0];
-      await client.query(`
-        UPDATE ao_follow_up_tasks SET status = 'escalated' WHERE id = $1
-      `, [task.id]);
-      task.status = 'escalated';
+      if (task?.id) {
+        await client.query(`
+          UPDATE ao_follow_up_tasks SET status = 'escalated' WHERE id = $1
+        `, [task.id]);
+        task.status = 'escalated';
+      }
     }
 
     await client.query('COMMIT');
@@ -324,6 +345,7 @@ function mapAdminVisit(row) {
     attribution_source: row.attribution_source,
     commission_eligible: row.commission_eligible,
     original_visit_note: row.original_visit_note,
+    probe_answers: row.probe_answers || null,
     first_contact_date: row.first_contact_date,
     last_contact_date: row.last_contact_date,
     next_follow_up_date: row.next_follow_up_date,
@@ -344,6 +366,7 @@ function mapAdminVisit(row) {
     escalation_reason: row.escalation_reason,
     escalation_status: row.escalation_status,
     escalation_summary: row.escalation_summary,
+    escalation_probe_answers: row.escalation_probe_answers || null,
     escalated_at: row.escalated_at,
   };
 }
@@ -363,7 +386,8 @@ async function listAdminVisits({ clientId, escalatedOnly = false }) {
       t.id AS task_id, t.status AS task_status, t.priority AS task_priority,
       t.next_action, t.suggested_message, t.waiting_on_jake, t.due_date AS task_due_date,
       e.id AS escalation_id, e.reason AS escalation_reason, e.status AS escalation_status,
-      e.summary AS escalation_summary, e.created_at AS escalated_at
+      e.summary AS escalation_summary, e.probe_answers AS escalation_probe_answers,
+      e.created_at AS escalated_at
     FROM ao_leads l
     JOIN users u ON u.id = l.ao_owner_id
     LEFT JOIN LATERAL (
@@ -401,7 +425,8 @@ async function getAdminVisit(leadId, clientId) {
       t.id AS task_id, t.status AS task_status, t.priority AS task_priority,
       t.next_action, t.suggested_message, t.waiting_on_jake, t.due_date AS task_due_date,
       e.id AS escalation_id, e.reason AS escalation_reason, e.status AS escalation_status,
-      e.summary AS escalation_summary, e.created_at AS escalated_at
+      e.summary AS escalation_summary, e.probe_answers AS escalation_probe_answers,
+      e.created_at AS escalated_at
     FROM ao_leads l
     JOIN users u ON u.id = l.ao_owner_id
     LEFT JOIN LATERAL (
@@ -506,7 +531,8 @@ async function notifyJakeEscalation(escalation, lead, aoName) {
   return true;
 }
 
-async function depositEscalationAction(escalation, lead, clientId) {
+async function depositEscalationAction(escalation, lead, clientId, extras = {}) {
+  const probeAnswers = extras.probeAnswers || escalation.probe_answers || null;
   await pool.query(`
     INSERT INTO agent_actions (created_by, action_type, title, description, payload, status, client_id)
     VALUES ('ao_field', 'ao_escalation', $1, $2, $3, 'pending', $4)
@@ -517,6 +543,14 @@ async function depositEscalationAction(escalation, lead, clientId) {
       escalation_id: escalation.id,
       lead_id: lead.id,
       reason: escalation.reason,
+      business_name: lead.business_name,
+      contact_name: lead.contact_name || null,
+      visit_note: lead.original_visit_note || null,
+      interest_level: lead.interest_level || null,
+      ao_name: extras.aoName || null,
+      next_action: extras.nextAction || null,
+      suggested_message: extras.suggestedMessage || null,
+      probe_answers: probeAnswers,
       admin_url: '/admin/field-visits',
     }),
     clientId,
