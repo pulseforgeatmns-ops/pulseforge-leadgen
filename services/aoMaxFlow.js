@@ -1,5 +1,5 @@
 const pool = require('../db');
-const { safeGuidance, shouldEscalate } = require('../utils/aoMessageTemplates');
+const { safeGuidance, buildCompletionReply, parseContactRole, normalizeNextAction } = require('../utils/aoMessageTemplates');
 const {
   createVisitRecord,
   notifyJakeEscalation,
@@ -12,6 +12,7 @@ const LOG_VISIT_STEPS = [
   { key: 'business_type', question: 'What type of business is it?' },
   { key: 'contact_name', question: 'Who did you talk to?' },
   { key: 'contact_title', question: "What's their role?" },
+  { key: 'contact_role', question: 'Are they the decision-maker, a gatekeeper, or unknown?' },
   { key: 'contact_phone', question: 'Did you get a phone number? (or say "none")' },
   { key: 'contact_email', question: 'Did you get an email? (or say "none")' },
   { key: 'visit_note', question: 'What happened on the visit?' },
@@ -64,17 +65,21 @@ function inferStatus(payload) {
 }
 
 function detectEscalation(payload) {
+  const contactRole = parseContactRole(payload.contact_role);
   const blob = [
     payload.visit_note,
     payload.next_action,
     payload.interest_level === 'high' ? 'high interest' : '',
   ].filter(Boolean).join(' ');
   const guidance = safeGuidance(blob);
-  if (guidance.escalate) return guidance;
-  if (payload.interest_level === 'high') {
-    return { escalate: true, reason: 'high_interest', guidance: guidance.guidance };
+  if (guidance.escalate) return { ...guidance, contactRole };
+  if (payload.interest_level === 'high' && contactRole === 'decision_maker') {
+    return { escalate: true, reason: 'high_interest', guidance: 'Strong lead — Jake should follow up.', contactRole };
   }
-  return { escalate: false, guidance: guidance.guidance };
+  if (parseInterest(payload.interest_level) === 'high') {
+    return { escalate: true, reason: 'high_interest', guidance: guidance.guidance, contactRole };
+  }
+  return { escalate: false, guidance: guidance.guidance, contactRole };
 }
 
 async function createSession({ aoOwnerId, clientId, mode }) {
@@ -124,7 +129,7 @@ async function startMode({ aoOwnerId, clientId, mode, aoName }) {
   const session = await createSession({ aoOwnerId, clientId, mode });
   const steps = getSteps(mode);
   const greeting = mode === 'log_visit'
-    ? `Hey ${aoName || 'there'} — let's log that visit.`
+    ? 'Let\'s log that visit.'
     : mode === 'daily_debrief'
       ? 'End-of-day debrief time.'
       : mode === 'book_walkthrough'
@@ -194,6 +199,11 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
       ? { escalate: true, reason: 'walkthrough_request', guidance: 'Jake will coordinate the walkthrough.' }
       : detectEscalation({ ...payload, interest_level: interestLevel });
 
+    const contactRole = parseContactRole(payload.contact_role);
+    const normalizedNextAction = normalizeNextAction(
+      payload.next_action || (session.mode === 'book_walkthrough' ? 'Book walkthrough' : 'Follow up'),
+    );
+
     const result = await createVisitRecord({
       clientId,
       aoOwnerId,
@@ -205,11 +215,12 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
       contactTitle: payload.contact_title,
       phone: normalizeNone(payload.contact_phone),
       email: normalizeNone(payload.contact_email),
-      isDecisionMaker: !/assistant|reception|front desk/i.test(String(payload.contact_title || '')),
+      contactRole,
+      isDecisionMaker: contactRole === 'decision_maker',
       visitNote: payload.visit_note || payload.notes,
       interestLevel,
-      nextAction: payload.next_action || (session.mode === 'book_walkthrough' ? 'Book walkthrough' : 'Follow up'),
-      dueDate: inferDueDate(payload.next_action || payload.notes),
+      nextAction: normalizedNextAction,
+      dueDate: inferDueDate(normalizedNextAction || payload.notes),
       status: session.mode === 'book_walkthrough' ? 'walkthrough_requested' : inferStatus(payload),
       escalate: escalationInfo.escalate,
       escalationReason: escalationInfo.reason,
@@ -226,17 +237,17 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
       });
     }
 
-    const lines = [
-      `Got it — logged ${result.lead.business_name}.`,
-      result.task.suggested_message ? `\nSuggested message:\n"${result.task.suggested_message}"` : null,
-      result.escalation ? '\nEscalated to Jake — he\'ll follow up.' : `\n${escalationInfo.guidance}`,
-    ].filter(Boolean);
+    const reply = buildCompletionReply({
+      businessName: result.lead.business_name,
+      escalated: Boolean(result.escalation),
+      suggestedMessage: result.task.suggested_message,
+    });
 
     return {
       session_id: sessionId,
       mode: session.mode,
       completed: true,
-      reply: lines.join('\n'),
+      reply,
       lead: result.lead,
       task: result.task,
       escalated: Boolean(result.escalation),

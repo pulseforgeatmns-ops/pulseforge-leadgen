@@ -1,6 +1,6 @@
 const axios = require('axios');
 const pool = require('../db');
-const { suggestTemplate, renderTemplate } = require('../utils/aoMessageTemplates');
+const { buildSuggestedMessage, normalizeNextAction, parseContactRole } = require('../utils/aoMessageTemplates');
 
 function mapLead(row) {
   return {
@@ -123,6 +123,7 @@ async function createVisitRecord({
   contactTitle,
   phone,
   email,
+  contactRole,
   isDecisionMaker,
   visitNote,
   interestLevel,
@@ -152,25 +153,30 @@ async function createVisitRecord({
     ]);
     const lead = leadRows[0];
 
+    const role = contactRole || (isDecisionMaker ? 'decision_maker' : 'unknown');
+    const normalizedNextAction = normalizeNextAction(nextAction);
+
     let contact = null;
     if (contactName) {
       const { rows: contactRows } = await client.query(`
         INSERT INTO ao_contacts (lead_id, contact_name, contact_title, phone, email, is_decision_maker)
         VALUES ($1,$2,$3,$4,$5,$6)
         RETURNING *
-      `, [lead.id, contactName, contactTitle || null, phone || null, email || null, Boolean(isDecisionMaker)]);
+      `, [lead.id, contactName, contactTitle || null, phone || null, email || null, role === 'decision_maker']);
       contact = contactRows[0];
     }
 
-    const template = suggestTemplate({
-      interestLevel: lead.interest_level,
-      status: lead.status,
-      nextAction,
-    });
-    const suggestedMessage = renderTemplate(template.id, {
-      contact_name: contactName || 'there',
-      business_name: businessName,
-      ao_name: aoName || 'your Anchor rep',
+    const suggestedMessage = buildSuggestedMessage({
+      contactName,
+      businessName,
+      aoName,
+      visitNote,
+      contactTitle,
+      contactRole: role,
+      interestLevel: interestLevel || 'medium',
+      nextAction: normalizedNextAction,
+      status: leadStatus,
+      escalationReason,
     });
 
     const taskDue = dueDate || new Date().toISOString().slice(0, 10);
@@ -186,8 +192,8 @@ async function createVisitRecord({
       contact?.id || null,
       aoOwnerId,
       taskDue,
-      interestLevel === 'high' ? 'high' : 'normal',
-      nextAction || 'Follow up',
+      interestLevel === 'high' || role === 'decision_maker' ? 'high' : 'normal',
+      normalizedNextAction,
       visitNote || null,
       suggestedMessage,
       waitingOnJake,
