@@ -6,6 +6,8 @@ const {
   selectVisitProbes,
   resolveNextActionOwner,
   isOwnerEscalation,
+  isAoOwnedFollowUp,
+  isWeakVisitNote,
   buildCompletionReply,
   resolveCompletionType,
   parseInterestLevel,
@@ -13,6 +15,7 @@ const {
 const {
   initProbeState,
   advanceAfterBaseStep,
+  processVisitNoteAnswer,
 } = require('../utils/aoVisitFlow');
 
 test('parseInterestLevel normalizes interest answers', () => {
@@ -35,6 +38,32 @@ test('resolveNextActionOwner routes ownership correctly', () => {
   assert.equal(resolveNextActionOwner('No follow-up needed', {}), 'none');
   assert.equal(resolveNextActionOwner('Mark as not a fit', {}), 'not_a_fit');
   assert.equal(resolveNextActionOwner('Call back tomorrow', {}), 'ao');
+  assert.equal(resolveNextActionOwner('I should follow up', {}), 'ao');
+  assert.equal(resolveNextActionOwner("I'll check back", {}), 'ao');
+  assert.equal(resolveNextActionOwner('AO should follow up', {}), 'ao');
+});
+
+test('isWeakVisitNote detects action-only visit answers', () => {
+  assert.equal(isWeakVisitNote('Jake should call'), true);
+  assert.equal(isWeakVisitNote('Follow up later'), true);
+  assert.equal(isWeakVisitNote('Send info'), true);
+  assert.equal(isWeakVisitNote('They mentioned the current cleaner is inconsistent'), false);
+});
+
+test('processVisitNoteAnswer asks for clarification on weak answers', () => {
+  const first = processVisitNoteAnswer({}, 'Jake should call');
+  assert.equal(first.completed, false);
+  assert.match(first.clarifyQuestion, /what did they actually say/i);
+
+  const second = processVisitNoteAnswer(first.payload, 'They are unhappy with missed visits');
+  assert.equal(second.completed, true);
+  assert.match(second.payload.visit_note, /missed visits/i);
+});
+
+test('processVisitNoteAnswer does not re-clarify after one pass', () => {
+  const clarified = processVisitNoteAnswer({ _visit_note_clarified: true }, 'Follow up');
+  assert.equal(clarified.completed, true);
+  assert.equal(clarified.payload.visit_note, 'Follow up');
 });
 
 test('selectVisitProbes picks gatekeeper probe after visit note', () => {
@@ -111,7 +140,16 @@ test('buildCompletionReply handles walkthrough escalation', () => {
 
 test('buildCompletionReply handles not a fit and no follow-up', () => {
   assert.match(buildCompletionReply({ businessName: 'X', completionType: 'not_a_fit' }), /not a fit/);
+  assert.match(buildCompletionReply({ businessName: 'X', completionType: 'not_a_fit' }), /Log another visit or check your queue/);
   assert.match(buildCompletionReply({ businessName: 'X', completionType: 'no_follow_up' }), /No follow-up needed/);
+  assert.match(buildCompletionReply({ businessName: 'X', completionType: 'no_follow_up' }), /Log another visit or check your queue/);
+});
+
+test('isAoOwnedFollowUp recognizes AO-owned phrasing', () => {
+  assert.equal(isAoOwnedFollowUp('I should follow up'), true);
+  assert.equal(isAoOwnedFollowUp("I'll stop back next week"), true);
+  assert.equal(isAoOwnedFollowUp('Rep should follow up'), true);
+  assert.equal(isAoOwnedFollowUp('Jake should call'), false);
 });
 
 test('resolveCompletionType maps owners to completion types', () => {

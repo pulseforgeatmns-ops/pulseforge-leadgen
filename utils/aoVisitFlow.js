@@ -1,4 +1,4 @@
-const { selectVisitProbes } = require('./aoMessageTemplates');
+const { selectVisitProbes, needsVisitNoteClarification, VISIT_NOTE_CLARIFY_QUESTION } = require('./aoMessageTemplates');
 
 const MAX_PROBES = 2;
 
@@ -64,6 +64,40 @@ function advanceAfterBaseStep(payload, stepKey) {
   return { state, nextProbe };
 }
 
+function processVisitNoteAnswer(payload, message) {
+  if (payload._awaiting_visit_clarification) {
+    return {
+      payload: {
+        ...payload,
+        visit_note: String(message || '').trim(),
+        _awaiting_visit_clarification: false,
+        _visit_note_clarified: true,
+      },
+      completed: true,
+    };
+  }
+
+  if (needsVisitNoteClarification(payload, message)) {
+    return {
+      payload: {
+        ...payload,
+        _awaiting_visit_clarification: true,
+        _visit_note_clarified: true,
+      },
+      completed: false,
+      clarifyQuestion: VISIT_NOTE_CLARIFY_QUESTION,
+    };
+  }
+
+  return {
+    payload: {
+      ...payload,
+      visit_note: String(message || '').trim(),
+    },
+    completed: true,
+  };
+}
+
 module.exports = {
   MAX_PROBES,
   initProbeState,
@@ -71,4 +105,5 @@ module.exports = {
   currentProbe,
   startProbeModeIfNeeded,
   advanceAfterBaseStep,
+  processVisitNoteAnswer,
 };

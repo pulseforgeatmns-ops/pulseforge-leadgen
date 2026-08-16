@@ -1,6 +1,6 @@
 const axios = require('axios');
 const pool = require('../db');
-const { buildSuggestedMessage, normalizeNextAction, parseContactRole } = require('../utils/aoMessageTemplates');
+const { buildSuggestedMessage, normalizeNextAction, parseContactRole, formatDecisionMakerStatus } = require('../utils/aoMessageTemplates');
 
 function mapLead(row) {
   return {
@@ -549,6 +549,12 @@ async function depositEscalationAction(escalation, lead, clientId, extras = {}) 
       interest_level: lead.interest_level || null,
       ao_name: extras.aoName || null,
       next_action: extras.nextAction || null,
+      decision_maker_status: extras.decisionMakerStatus
+        || formatDecisionMakerStatus({
+          contactRole: extras.contactRole,
+          isDecisionMaker: lead.is_decision_maker,
+          contactTitle: lead.contact_title,
+        }),
       suggested_message: extras.suggestedMessage || null,
       probe_answers: probeAnswers,
       admin_url: '/admin/field-visits',

@@ -223,6 +223,41 @@ function safeGuidance(topic) {
 
 const OWNER_ESCALATION_PATTERN = /\b(jake|admin|owner|pulseforge|anchor)\b.*\b(call|follow|reach|contact|handle|take over|take it)\b|\b(needs jake|needs owner|escalate|jake should|admin should|owner should|someone from anchor)\b/i;
 
+const AO_OWNED_FOLLOWUP_PATTERN = /\b(i should|i'll|ill |i will|ao should|rep should)\b.*\b(follow up|follow-up|call|stop back|check back|revisit)\b/i;
+
+const WEAK_VISIT_NOTE_RE = /^(i should follow up|jake should follow up|jake should call|admin should call|owner should follow up|follow up later|call back|send info|they need a call|need to revisit|follow up|follow-up|check back|need a call|revisit later|call them back|need to follow up)[.!?\s]*$/i;
+
+const VISIT_NOTE_CLARIFY_QUESTION = 'What did they actually say, or what did you learn on the visit?';
+
+function isWeakVisitNote(text) {
+  const v = String(text || '').trim();
+  if (!v) return true;
+  if (WEAK_VISIT_NOTE_RE.test(v)) return true;
+  const words = v.split(/\s+/);
+  if (words.length <= 4
+    && /^(follow|call|send|revisit|check|escalate|jake|admin|info)/i.test(v)
+    && !/\b(said|mentioned|told|because|unhappy|interested|cleaner|manager|owner|frustrated|walkthrough)\b/i.test(v)) {
+    return true;
+  }
+  return false;
+}
+
+function needsVisitNoteClarification(payload, message) {
+  return !payload._visit_note_clarified && isWeakVisitNote(message);
+}
+
+function isAoOwnedFollowUp(nextAction) {
+  return AO_OWNED_FOLLOWUP_PATTERN.test(String(nextAction || ''));
+}
+
+function formatDecisionMakerStatus({ contactRole, isDecisionMaker, contactTitle } = {}) {
+  const role = contactRole || (isDecisionMaker ? 'decision_maker' : null);
+  if (role === 'decision_maker' || isDecisionMaker) return 'Decision-maker';
+  if (role === 'gatekeeper') return 'Gatekeeper';
+  if (/gate|front desk|reception|assistant|secretary/i.test(String(contactTitle || ''))) return 'Gatekeeper';
+  return 'Unknown';
+}
+
 function normalizeNextAction(nextAction) {
   const raw = sanitizeUserFacingText(nextAction);
   const original = String(nextAction || '');
@@ -266,6 +301,9 @@ function resolveNextActionOwner(nextAction, payload = {}) {
   }
   if (isOwnerEscalation(nextAction)) {
     return 'jake';
+  }
+  if (isAoOwnedFollowUp(nextAction)) {
+    return 'ao';
   }
   return 'ao';
 }
@@ -378,10 +416,16 @@ function buildCompletionReply({
     }
 
     case 'no_follow_up':
-      return sanitizeUserFacingText(`Got it — logged ${name}. No follow-up needed.`);
+      return sanitizeUserFacingText([
+        `Got it — logged ${name}. No follow-up needed.`,
+        '\nLog another visit or check your queue.',
+      ].join(''));
 
     case 'not_a_fit':
-      return sanitizeUserFacingText(`Got it — logged ${name} as not a fit.`);
+      return sanitizeUserFacingText([
+        `Got it — logged ${name} as not a fit.`,
+        '\nLog another visit or check your queue.',
+      ].join(''));
 
     default:
       if (loggedOnly) return sanitizeUserFacingText(`Got it — logged ${name}.`);
@@ -400,6 +444,11 @@ module.exports = {
   parseContactRole,
   parseInterestLevel,
   isOwnerEscalation,
+  isAoOwnedFollowUp,
+  isWeakVisitNote,
+  needsVisitNoteClarification,
+  VISIT_NOTE_CLARIFY_QUESTION,
+  formatDecisionMakerStatus,
   resolveNextActionOwner,
   selectVisitProbes,
   formatProbeAnswers,
