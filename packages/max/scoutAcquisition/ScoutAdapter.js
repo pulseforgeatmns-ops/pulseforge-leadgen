@@ -16,8 +16,17 @@ const {
   SCOUT_SPECIALIST,
   SCOUT_CAPABILITY,
   FORBIDDEN_OUTBOUND,
+  SOURCE_TYPES,
+  REJECTION_REASONS,
 } = require('./Types');
 const { retrieveExistingIntelligence, loadRepository } = require('./ExistingIntelligence');
+const {
+  qualifyCandidate,
+  incrementReason,
+  rejectionSummaryFromMap,
+  buildInvestigation,
+  uniqueLocations,
+} = require('./InvestigationProvenance');
 
 const OUTBOUND_RE = new RegExp(
   `\\b(${FORBIDDEN_OUTBOUND.join('|')}|send|enroll|publish|twilio|brevo|bland)\\b`,
@@ -226,7 +235,7 @@ function classifySignals(company) {
   };
 }
 
-function summarizeOpportunities(opportunities, criteria) {
+function summarizeOpportunities(opportunities, criteria, investigation) {
   const timelyGrowth = opportunities.filter((o) =>
     o.signals.some(
       (s) =>
@@ -240,6 +249,10 @@ function summarizeOpportunities(opportunities, criteria) {
   const hiring = opportunities.filter((o) =>
     o.signals.some((s) => s.type === 'hiring' && isTimely(s.observedAt))
   );
+  const evaluated =
+    investigation && investigation.coverage
+      ? investigation.coverage.candidatesEvaluated
+      : null;
 
   if (!opportunities.length) {
     return {
@@ -253,13 +266,15 @@ function summarizeOpportunities(opportunities, criteria) {
         },
       ],
       uncertainties: [
-        'Zero results are intelligence — criteria were not weakened to manufacture prospects.',
+        evaluated != null
+          ? `Zero supported opportunities after evaluating ${evaluated} candidate${evaluated === 1 ? '' : 's'} — criteria were not weakened to manufacture prospects.`
+          : 'Zero results are intelligence — criteria were not weakened to manufacture prospects.',
       ],
       recommendedNextAction: {
         type: 'review',
         text: 'Decide whether to broaden geography or segment. Scout will not do that automatically.',
       },
-      confidence: 0.7,
+      confidence: evaluated != null && evaluated >= 12 ? 0.88 : 0.7,
     };
   }
 
@@ -337,13 +352,99 @@ function toArtifact(opportunity) {
  * @param {object} [opts]
  * @returns {Promise<object>}
  */
+function requestedScopeFrom(delegation, criteria) {
+  const target = (delegation && delegation.targetContext) || {};
+  const business = (delegation && delegation.businessContext) || {};
+  return {
+    geography:
+      asText(target.geography) ||
+      asText(business.serviceGeography) ||
+      (criteria && criteria.geography) ||
+      null,
+    segments: Array.isArray(target.segments)
+      ? target.segments
+      : (criteria && criteria.segments) || [],
+    desiredSignals: Array.isArray(target.desiredSignals) ? target.desiredSignals : [],
+    targetCriteria: {
+      geography:
+        asText(target.geography) ||
+        asText(business.serviceGeography) ||
+        (criteria && criteria.geography) ||
+        null,
+      segments: Array.isArray(target.segments)
+        ? target.segments.slice()
+        : ((criteria && criteria.segments) || []).slice(),
+      businessType: asText(target.businessType) || asText(business.commercialCapability),
+    },
+  };
+}
+
+function collectObservedAt(classifiedList) {
+  const values = [];
+  for (const row of classifiedList || []) {
+    for (const signal of row.signals || []) {
+      if (signal.observedAt) values.push(signal.observedAt);
+    }
+    for (const ev of row.evidenceRefs || []) {
+      const observedAt = ev.snapshot && ev.snapshot.observedAt;
+      if (observedAt) values.push(observedAt);
+    }
+  }
+  return values;
+}
+
+function emptyInvestigationResult(input) {
+  const completedAt = nowIso();
+  const requested = requestedScopeFrom(input.delegation, input.criteria);
+  const investigation = buildInvestigation({
+    requestedGeography: requested.geography,
+    requestedSegments: requested.segments,
+    desiredSignals: requested.desiredSignals,
+    targetCriteria: requested.targetCriteria,
+    evaluatedCompanies: input.evaluatedCompanies || [],
+    investigatedGeographyList: uniqueLocations(input.evaluatedCompanies || []),
+    candidatesDiscovered: input.candidatesDiscovered || 0,
+    candidatesEvaluated: input.candidatesEvaluated || 0,
+    basicFitCount: 0,
+    signalBearingCount: 0,
+    supportedOpportunityCount: 0,
+    unresolvedCount: input.unresolvedCount || 0,
+    sourceTypesChecked: input.sourceTypesChecked || [],
+    sourceTypesUnavailable: input.sourceTypesUnavailable || [],
+    enrichmentAttempted: input.enrichmentAttempted === true,
+    enrichmentFailureRate: input.enrichmentFailureRate || 0,
+    timelyEvidenceCount: 0,
+    providerFailed: input.providerFailed === true,
+    rejectionReasonCounts: input.rejectionReasonCounts || {},
+    startedAt: input.startedAt,
+    completedAt,
+    extraLimitations: input.extraLimitations,
+  });
+  return {
+    investigation,
+    completedAt,
+  };
+}
+
 async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
   assertIntelligenceOnly(delegation);
   const startedAt = nowIso();
   const tenantId = asText(delegation.tenantId);
   const mode = asText(opts.mode || delegation._fixtureMode) || 'completed';
+  const sourceTypesChecked = [];
+  const sourceTypesUnavailable = [];
+  const rejectionReasonCounts = {};
 
   if (mode === 'provider_failure') {
+    sourceTypesUnavailable.push(SOURCE_TYPES.PUBLIC_BUSINESS_DATA);
+    const packed = emptyInvestigationResult({
+      delegation,
+      startedAt,
+      candidatesDiscovered: 0,
+      sourceTypesUnavailable,
+      providerFailed: true,
+      extraLimitations: ['Discovery provider failed before opportunities could be confirmed.'],
+    });
     return {
       status: 'blocked',
       summary: 'Discovery provider failed before opportunities could be confirmed.',
@@ -357,8 +458,14 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       policyEvents: [],
       errors: [{ code: 'provider_error', message: 'Discovery provider failed.' }],
       startedAt,
-      completedAt: nowIso(),
-      payload: { opportunities: [], broadened: false, outboundInvoked: [] },
+      completedAt: packed.completedAt,
+      payload: {
+        opportunities: [],
+        broadened: false,
+        outboundInvoked: [],
+        investigation: packed.investigation,
+        coverageConfidence: packed.investigation.coverageConfidence,
+      },
     };
   }
 
@@ -373,7 +480,16 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       people: opts.people,
       loadCompanies: opts.loadCompanies,
     });
+    sourceTypesChecked.push(SOURCE_TYPES.EXISTING_PF);
   } catch (err) {
+    sourceTypesUnavailable.push(SOURCE_TYPES.EXISTING_PF);
+    const packed = emptyInvestigationResult({
+      delegation,
+      startedAt,
+      sourceTypesUnavailable,
+      providerFailed: true,
+      extraLimitations: [err.message || 'Repository unavailable.'],
+    });
     return {
       status: 'blocked',
       summary: 'Could not retrieve existing acquisition intelligence.',
@@ -387,16 +503,27 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       policyEvents: [],
       errors: [{ code: 'repository_error', message: err.message || String(err) }],
       startedAt,
-      completedAt: nowIso(),
-      payload: { opportunities: [], broadened: false, outboundInvoked: [] },
+      completedAt: packed.completedAt,
+      payload: {
+        opportunities: [],
+        broadened: false,
+        outboundInvoked: [],
+        investigation: packed.investigation,
+        coverageConfidence: packed.investigation.coverageConfidence,
+      },
     };
   }
 
   const criteria = existing.criteria;
   let companies = existing.companies.slice();
+  let discoveredCount = (existing.discoveredCompanies || existing.companies || []).length;
+  for (const row of existing.rejectedCandidates || []) {
+    incrementReason(rejectionReasonCounts, row.reason);
+  }
   const actionsTaken = [
     { text: 'Retrieved existing tenant-scoped company and prospect intelligence.' },
   ];
+  let discoveryFailed = false;
 
   if (!companies.length && typeof opts.discover === 'function') {
     try {
@@ -418,10 +545,28 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         people: (discovered && discovered.people) || [],
       });
       companies = merged.companies;
+      discoveredCount = (merged.discoveredCompanies || discoveredCompanies).length;
+      for (const row of merged.rejectedCandidates || []) {
+        incrementReason(rejectionReasonCounts, row.reason);
+      }
+      sourceTypesChecked.push(SOURCE_TYPES.PUBLIC_BUSINESS_DATA);
       actionsTaken.push({
         text: 'Existing intelligence was empty; ran bounded discovery under the delegated criteria.',
       });
     } catch (err) {
+      discoveryFailed = true;
+      sourceTypesUnavailable.push(SOURCE_TYPES.PUBLIC_BUSINESS_DATA);
+      const packed = emptyInvestigationResult({
+        delegation,
+        criteria,
+        startedAt,
+        candidatesDiscovered: discoveredCount,
+        sourceTypesChecked,
+        sourceTypesUnavailable,
+        providerFailed: true,
+        rejectionReasonCounts,
+        extraLimitations: ['Discovery provider failed. No opportunities were fabricated.'],
+      });
       return {
         status: 'blocked',
         summary: 'Discovery provider failed.',
@@ -435,16 +580,27 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         policyEvents: [],
         errors: [{ code: 'provider_error', message: err.message || String(err) }],
         startedAt,
-        completedAt: nowIso(),
-        payload: { opportunities: [], broadened: false, outboundInvoked: [], criteria },
+        completedAt: packed.completedAt,
+        payload: {
+          opportunities: [],
+          broadened: false,
+          outboundInvoked: [],
+          criteria,
+          investigation: packed.investigation,
+          coverageConfidence: packed.investigation.coverageConfidence,
+        },
       };
     }
   }
 
-  const opportunities = companies.map(classifySignals);
+  const classified = companies.map(classifySignals);
   const enrichmentFailed = mode === 'enrichment_failure' || opts.enrichmentFailed === true;
+  let unresolvedCount = 0;
   if (enrichmentFailed) {
-    for (const opp of opportunities) {
+    unresolvedCount = classified.length;
+    sourceTypesUnavailable.push(SOURCE_TYPES.ENRICHMENT_PROVIDER);
+    for (const opp of classified) {
+      incrementReason(rejectionReasonCounts, REJECTION_REASONS.UNRESOLVED);
       opp.unknowns.push(
         normalizeClaim(
           {
@@ -459,10 +615,72 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     actionsTaken.push({ text: 'Attempted decision-maker enrichment; provider unavailable.' });
   }
 
-  const rollup = summarizeOpportunities(opportunities, criteria);
+  if (classified.some((row) => row.evidenceRefs.some((ev) => ev.snapshot && ev.snapshot.source === 'company_website') || (companies.find((c) => c.id === row.companyId) || {}).website)) {
+    sourceTypesChecked.push(SOURCE_TYPES.COMPANY_WEBSITES);
+  }
+
+  const now = opts.now != null ? Number(opts.now) : Date.now();
+  const supported = [];
+  const nearThreshold = [];
+  let basicFitCount = 0;
+  let signalBearingCount = 0;
+  let timelyEvidenceCount = 0;
+
+  classified.forEach((row, index) => {
+    const company = companies[index];
+    const qualification = qualifyCandidate(row, company, now);
+    if (qualification.basicFit) basicFitCount += 1;
+    if (qualification.signalBearing) signalBearingCount += 1;
+    if ((row.signals || []).some((s) => isTimely(s.observedAt, now))) timelyEvidenceCount += 1;
+    if (qualification.supported) {
+      supported.push(row);
+      return;
+    }
+    incrementReason(rejectionReasonCounts, qualification.reason);
+    if (qualification.nearThreshold) {
+      nearThreshold.push({
+        company,
+        basicFit: qualification.basicFit,
+        fitStrong: Number(row.fit || 0) >= 0.7,
+        signal: qualification.signal,
+        rejectedBecause: qualification.rejectedBecause,
+        reason: qualification.reason,
+      });
+    }
+  });
+
+  const requested = requestedScopeFrom(delegation, criteria);
+  const completedAt = nowIso();
+  const investigation = buildInvestigation({
+    requestedGeography: requested.geography,
+    requestedSegments: requested.segments,
+    desiredSignals: requested.desiredSignals,
+    targetCriteria: requested.targetCriteria,
+    evaluatedCompanies: companies,
+    investigatedGeographyList: uniqueLocations(companies),
+    candidatesDiscovered: discoveredCount,
+    candidatesEvaluated: classified.length,
+    basicFitCount,
+    signalBearingCount,
+    supportedOpportunityCount: supported.length,
+    unresolvedCount,
+    sourceTypesChecked,
+    sourceTypesUnavailable,
+    enrichmentAttempted: enrichmentFailed,
+    enrichmentFailureRate: enrichmentFailed && classified.length ? 1 : 0,
+    timelyEvidenceCount,
+    providerFailed: discoveryFailed,
+    rejectionReasonCounts,
+    nearThreshold,
+    startedAt,
+    completedAt,
+    observedAtValues: collectObservedAt(classified),
+  });
+
+  const rollup = summarizeOpportunities(supported, criteria, investigation);
   const evidenceRefs = [];
   const seen = new Set();
-  for (const opp of opportunities) {
+  for (const opp of supported) {
     for (const ev of opp.evidenceRefs) {
       if (!ev.id || seen.has(ev.id)) continue;
       seen.add(ev.id);
@@ -480,15 +698,15 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     summary: rollup.summary,
     observations: [
       ...rollup.observations,
-      ...opportunities.flatMap((o) => o.observations),
+      ...supported.flatMap((o) => o.observations),
     ],
     actionsTaken,
     evidenceRefs,
-    artifactRefs: opportunities.map(toArtifact),
+    artifactRefs: supported.map(toArtifact),
     confidence: rollup.confidence,
     uncertainties: [
       ...rollup.uncertainties,
-      ...opportunities.flatMap((o) => o.unknowns.map((u) => u.text)),
+      ...classified.flatMap((o) => o.unknowns.map((u) => u.text)),
     ].filter(Boolean),
     recommendedNextAction: rollup.recommendedNextAction,
     policyEvents: [],
@@ -496,15 +714,23 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       ? [{ code: 'enrichment_unavailable', message: 'Enrichment provider unavailable.' }]
       : [],
     startedAt,
-    completedAt: nowIso(),
+    completedAt,
     payload: {
-      opportunities,
+      opportunities: supported,
+      evaluatedCandidates: classified.map((row) => ({
+        companyId: row.companyId,
+        name: row.name,
+        fit: row.fit,
+        timing: row.timing,
+      })),
       criteria,
       retrievedBeforeInvestigate: true,
       broadened: false,
       outboundInvoked: [],
       specialist: SCOUT_SPECIALIST,
       capability: SCOUT_CAPABILITY,
+      investigation,
+      coverageConfidence: investigation.coverageConfidence,
     },
   };
 }

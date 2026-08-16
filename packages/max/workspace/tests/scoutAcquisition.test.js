@@ -129,6 +129,21 @@ describe('SPEC-100 Max workspace Scout acquisition loop', () => {
     assert.match(follow.prose, /Granite State|Queen City/i);
   });
 
+  it('answers coverage questions from durable investigation provenance', async () => {
+    await handle(ANCHOR_QUESTION);
+    const inspect = await handle('How thorough was the search?', {
+      action: 'discuss_with_max',
+    });
+    assert.ok(inspect);
+    assert.equal(inspect.loop.delegated, false);
+    assert.match(inspect.prose, /evaluated|coverage/i);
+    assert.ok(inspect.structured.investigation || session.context.lastScoutInvestigation);
+    assert.equal(
+      inspect.structured.confidenceContributors.includes('scout_acquisition'),
+      false
+    );
+  });
+
   it('does not claim CIE strategy questions', () => {
     assert.equal(
       shouldHandleScoutAcquisition({

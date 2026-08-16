@@ -45,6 +45,12 @@ function createMemoryAcquisitionState(snapshot = null) {
         resultId: asText(row.resultId),
         delegationId: asText(row.delegationId),
         opportunities: Array.isArray(row.opportunities) ? clone(row.opportunities) : [],
+        investigation: row.investigation ? clone(row.investigation) : null,
+        coverageConfidence:
+          row.coverageConfidence != null ? Number(row.coverageConfidence) : null,
+        coverageBand: asText(row.coverageBand),
+        conclusionTrust: asText(row.conclusionTrust),
+        marketAbsenceJustified: row.marketAbsenceJustified === true,
         updatedAt: row.updatedAt || nowIso(),
       };
       rows.set(tenantId, next);
@@ -122,6 +128,17 @@ function deriveStateFromEvaluation(input = {}) {
     resultId: evaluation.resultId || result.id,
     delegationId: evaluation.delegationId || result.delegationId,
     opportunities,
+    investigation:
+      (evaluation.payload && evaluation.payload.investigation) ||
+      (result.payload && result.payload.investigation) ||
+      null,
+    coverageConfidence:
+      evaluation.coverageConfidence != null
+        ? evaluation.coverageConfidence
+        : result.payload && result.payload.coverageConfidence,
+    coverageBand: evaluation.coverageBand || null,
+    conclusionTrust: evaluation.conclusionTrust || null,
+    marketAbsenceJustified: evaluation.marketAbsenceJustified === true,
     updatedAt: nowIso(),
   };
 }
@@ -148,8 +165,21 @@ function createPostgresAcquisitionState(pool) {
         result_id TEXT,
         delegation_id TEXT,
         opportunities JSONB NOT NULL DEFAULT '[]'::jsonb,
+        investigation JSONB,
+        coverage_confidence DOUBLE PRECISION,
+        coverage_band TEXT,
+        conclusion_trust TEXT,
+        market_absence_justified BOOLEAN NOT NULL DEFAULT FALSE,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
+    `);
+    await db.query(`
+      ALTER TABLE acquisition_intelligence_state
+        ADD COLUMN IF NOT EXISTS investigation JSONB,
+        ADD COLUMN IF NOT EXISTS coverage_confidence DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS coverage_band TEXT,
+        ADD COLUMN IF NOT EXISTS conclusion_trust TEXT,
+        ADD COLUMN IF NOT EXISTS market_absence_justified BOOLEAN NOT NULL DEFAULT FALSE
     `);
     ensured = true;
   }
@@ -172,6 +202,12 @@ function createPostgresAcquisitionState(pool) {
       resultId: row.result_id,
       delegationId: row.delegation_id,
       opportunities: row.opportunities || [],
+      investigation: row.investigation || null,
+      coverageConfidence:
+        row.coverage_confidence != null ? Number(row.coverage_confidence) : null,
+      coverageBand: row.coverage_band || null,
+      conclusionTrust: row.conclusion_trust || null,
+      marketAbsenceJustified: row.market_absence_justified === true,
       updatedAt:
         row.updated_at instanceof Date
           ? row.updated_at.toISOString()
@@ -197,10 +233,11 @@ function createPostgresAcquisitionState(pool) {
           tenant_id, summary, opportunity_count, timely_count, segment_highlights,
           unknowns, accepted_claims, rejected_claims, unresolved_claims,
           materiality, priority_impact, evaluation_id, result_id, delegation_id,
-          opportunities, updated_at
+          opportunities, investigation, coverage_confidence, coverage_band,
+          conclusion_trust, market_absence_justified, updated_at
         ) VALUES (
           $1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,
-          $10,$11::jsonb,$12,$13,$14,$15::jsonb,NOW()
+          $10,$11::jsonb,$12,$13,$14,$15::jsonb,$16::jsonb,$17,$18,$19,$20,NOW()
         )
         ON CONFLICT (tenant_id) DO UPDATE SET
           summary = EXCLUDED.summary,
@@ -217,6 +254,11 @@ function createPostgresAcquisitionState(pool) {
           result_id = EXCLUDED.result_id,
           delegation_id = EXCLUDED.delegation_id,
           opportunities = EXCLUDED.opportunities,
+          investigation = EXCLUDED.investigation,
+          coverage_confidence = EXCLUDED.coverage_confidence,
+          coverage_band = EXCLUDED.coverage_band,
+          conclusion_trust = EXCLUDED.conclusion_trust,
+          market_absence_justified = EXCLUDED.market_absence_justified,
           updated_at = NOW()
         RETURNING *`,
         [
@@ -235,6 +277,11 @@ function createPostgresAcquisitionState(pool) {
           row.resultId || null,
           row.delegationId || null,
           JSON.stringify(row.opportunities || []),
+          JSON.stringify(row.investigation || null),
+          row.coverageConfidence != null ? Number(row.coverageConfidence) : null,
+          row.coverageBand || null,
+          row.conclusionTrust || null,
+          row.marketAbsenceJustified === true,
         ]
       );
       return mapRow(result.rows[0]);

@@ -138,6 +138,13 @@ function anchorCompanies(tenantId = ANCHOR_TENANT_ID) {
       industry: 'property_management',
       location: 'Manchester, NH',
       icpScore: 64,
+      signals: [
+        {
+          type: 'operational_change',
+          observedAt: '2026-07-25T00:00:00.000Z',
+          label: 'Opened a new operations desk downtown.',
+        },
+      ],
     },
     {
       id: 'co-stale',
@@ -461,7 +468,10 @@ describe('SPEC-100 Max ↔ Scout acquisition intelligence loop', () => {
     assert.equal(result.evaluation.materialChange, false);
     assert.equal(result.evaluation.suggestedPriorityChange, null);
     assert.equal(priorityCalls.length, 0);
-    assert.match(result.prose, /nothing material changed/i);
+    assert.match(
+      result.prose,
+      /incomplete investigation|don't consider that strong evidence|nothing material changed/i
+    );
   });
 
   it('preserves collected intelligence on partial enrichment failure', async () => {

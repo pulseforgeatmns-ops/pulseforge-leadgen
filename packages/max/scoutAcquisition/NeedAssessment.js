@@ -22,6 +22,9 @@ const EXPLAIN_RE =
 const FOLLOWUP_RE =
   /\b(which (?:four|\d+)|why is (?:this|that)(?: one)? strongest|what don'?t we know|find more like|pursue these before|number (?:two|2)|more like)\b/i;
 
+const INSPECTION_RE =
+  /\b(what did scout(?: actually)? investigate|how thorough|why did (?:he|scout) find nothing|how many compan(?:y|ies)|what eliminated|where was (?:scout'?s? )?coverage weak|do you trust|what would you investigate next|how (?:complete|deep) was (?:the|this) (?:search|investigation))\b/i;
+
 function looksLikeAcquisitionQuestion(question, context = {}) {
   const q = String(question || '').trim();
   if (!q) return false;
@@ -31,7 +34,12 @@ function looksLikeAcquisitionQuestion(question, context = {}) {
     return true;
   }
   if (context.acquisitionLoop || context.lastScoutEvaluation) return true;
-  if (EXPLAIN_RE.test(q) || FOLLOWUP_RE.test(q) || ACQUISITION_NEED_RE.test(q)) {
+  if (
+    EXPLAIN_RE.test(q) ||
+    FOLLOWUP_RE.test(q) ||
+    INSPECTION_RE.test(q) ||
+    ACQUISITION_NEED_RE.test(q)
+  ) {
     return true;
   }
   return false;
@@ -42,7 +50,11 @@ function looksLikeExplainPriority(question) {
 }
 
 function looksLikeFollowUp(question) {
-  return FOLLOWUP_RE.test(String(question || ''));
+  return FOLLOWUP_RE.test(String(question || '')) || looksLikeInvestigationInspection(question);
+}
+
+function looksLikeInvestigationInspection(question) {
+  return INSPECTION_RE.test(String(question || ''));
 }
 
 function looksLikeFindMoreLike(question) {
@@ -92,6 +104,20 @@ function assessScoutNeed(input = {}) {
       reuse: existing,
       kind: 'explain',
     };
+  }
+
+  if (looksLikeInvestigationInspection(question)) {
+    const latestWithInvestigation = recent.find(
+      (row) => row && row.payload && row.payload.investigation
+    );
+    if (latestWithInvestigation || existing) {
+      return {
+        needed: false,
+        reason: 'Operator asked how thoroughly Scout investigated — answer from durable investigation provenance.',
+        reuse: latestWithInvestigation || existing,
+        kind: 'inspect',
+      };
+    }
   }
 
   if (looksLikeFollowUp(question) && !looksLikeFindMoreLike(question) && existing) {
@@ -165,9 +191,11 @@ module.exports = {
   ACQUISITION_NEED_RE,
   EXPLAIN_RE,
   FOLLOWUP_RE,
+  INSPECTION_RE,
   looksLikeAcquisitionQuestion,
   looksLikeExplainPriority,
   looksLikeFollowUp,
+  looksLikeInvestigationInspection,
   looksLikeFindMoreLike,
   objectivesSimilar,
   assessScoutNeed,

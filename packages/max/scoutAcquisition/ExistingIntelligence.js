@@ -5,7 +5,8 @@
  * before performing new discovery.
  */
 
-const { asText, clone, isPlainObject, normalizeSignal } = require('./Types');
+const { asText, clone, isPlainObject, normalizeSignal, REJECTION_REASONS } = require('./Types');
+const { parseGeographyList } = require('./InvestigationProvenance');
 
 function tokenize(value) {
   return String(value || '')
@@ -20,11 +21,15 @@ function matchesGeography(location, geography) {
   if (!geography) return true;
   const loc = String(location || '').toLowerCase();
   if (!loc) return false;
-  const tokens = tokenize(geography).filter(
-    (t) => !['nh', 'tn', 'wv', 'area', 'greater'].includes(t)
-  );
-  if (!tokens.length) return loc.includes(String(geography).toLowerCase());
-  return tokens.some((t) => loc.includes(t));
+  const parts = parseGeographyList(geography);
+  const haystacks = parts.length ? parts : [geography];
+  return haystacks.some((part) => {
+    const tokens = tokenize(part).filter(
+      (t) => !['nh', 'tn', 'wv', 'area', 'greater', 'and'].includes(t)
+    );
+    if (!tokens.length) return loc.includes(String(part).toLowerCase());
+    return tokens.some((t) => loc.includes(t));
+  });
 }
 
 function matchesSegment(record, segments) {
@@ -130,24 +135,53 @@ function retrieveExistingIntelligence(input = {}) {
   const rawCompanies = Array.isArray(input.companies) ? input.companies : [];
   const rawPeople = Array.isArray(input.people) ? input.people : [];
 
-  const companies = rawCompanies
+  const tenantCompanies = rawCompanies
     .map((c) => normalizeCompany(c, tenantId))
-    .filter(Boolean)
-    .filter((c) => matchesGeography(c.location, geography))
-    .filter((c) => matchesSegment(c, segments))
-    .filter((c) => !exclusions.length || !matchesSegment(c, exclusions));
+    .filter(Boolean);
+
+  const rejectedCandidates = [];
+  const inScope = [];
+  for (const company of tenantCompanies) {
+    if (!matchesGeography(company.location, geography)) {
+      rejectedCandidates.push({
+        company,
+        reason: REJECTION_REASONS.OUTSIDE_GEOGRAPHY,
+      });
+      continue;
+    }
+    if (exclusions.length && matchesSegment(company, exclusions)) {
+      rejectedCandidates.push({
+        company,
+        reason: REJECTION_REASONS.EXCLUDED_SEGMENT,
+      });
+      continue;
+    }
+    if (!matchesSegment(company, segments)) {
+      rejectedCandidates.push({
+        company,
+        reason: REJECTION_REASONS.INSUFFICIENT_BUSINESS_FIT,
+      });
+      continue;
+    }
+    inScope.push(company);
+  }
 
   const people = rawPeople
     .map((p) => normalizePerson(p, tenantId))
     .filter(Boolean)
     .filter((p) => !tenantId || String(p.tenantId) === String(tenantId));
 
-  const matched = attachPeople(companies, people);
-  const rejected = rawCompanies.length - matched.length;
+  const matched = attachPeople(inScope, people);
+  const rejected = tenantCompanies.length - matched.length;
 
   return {
     tenantId,
     companies: matched.map(clone),
+    discoveredCompanies: tenantCompanies.map(clone),
+    rejectedCandidates: rejectedCandidates.map((row) => ({
+      company: clone(row.company),
+      reason: row.reason,
+    })),
     retrievedBeforeInvestigate: true,
     criteria: {
       geography,
@@ -155,7 +189,7 @@ function retrieveExistingIntelligence(input = {}) {
       exclusions: exclusions.slice(),
     },
     counts: {
-      considered: rawCompanies.length,
+      considered: tenantCompanies.length,
       matched: matched.length,
       rejected: Math.max(0, rejected),
     },

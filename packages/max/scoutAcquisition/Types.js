@@ -47,6 +47,47 @@ const FORBIDDEN_OUTBOUND = Object.freeze([
   'outreach',
 ]);
 
+const SOURCE_TYPES = Object.freeze({
+  EXISTING_PF: 'existing_pf_company_intelligence',
+  COMPANY_WEBSITES: 'company_websites',
+  PUBLIC_BUSINESS_DATA: 'public_business_data',
+  ENRICHMENT_PROVIDER: 'enrichment_provider',
+  LINKEDIN: 'linkedin_social_intelligence',
+  FACEBOOK: 'facebook_social_intelligence',
+  INSTAGRAM: 'instagram_social_intelligence',
+});
+
+const CORE_SOURCE_TYPES = Object.freeze([
+  SOURCE_TYPES.EXISTING_PF,
+  SOURCE_TYPES.COMPANY_WEBSITES,
+  SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
+  SOURCE_TYPES.ENRICHMENT_PROVIDER,
+]);
+
+const SOCIAL_SOURCE_TYPES = Object.freeze([
+  SOURCE_TYPES.LINKEDIN,
+  SOURCE_TYPES.FACEBOOK,
+  SOURCE_TYPES.INSTAGRAM,
+]);
+
+const PERCEPTION_CHANNELS = Object.freeze(['linkedin', 'facebook', 'instagram']);
+
+const REJECTION_REASONS = Object.freeze({
+  INSUFFICIENT_BUSINESS_FIT: 'insufficient_business_fit',
+  STALE_EVIDENCE: 'stale_evidence',
+  NO_TIMING_SIGNAL: 'no_timing_signal',
+  INSUFFICIENT_SOURCE_SUPPORT: 'insufficient_source_support',
+  OUTSIDE_GEOGRAPHY: 'outside_geography',
+  EXCLUDED_SEGMENT: 'excluded_segment',
+  UNRESOLVED: 'unresolved',
+});
+
+const COVERAGE_BANDS = Object.freeze({
+  WEAK: 'weak',
+  MODERATE: 'moderate',
+  STRONG: 'strong',
+});
+
 function asText(value) {
   if (value == null) return null;
   const s = String(value).trim();
@@ -122,6 +163,12 @@ module.exports = {
   DEFAULT_FRESHNESS_MS,
   TIMELY_SIGNAL_MS,
   FORBIDDEN_OUTBOUND,
+  SOURCE_TYPES,
+  CORE_SOURCE_TYPES,
+  SOCIAL_SOURCE_TYPES,
+  PERCEPTION_CHANNELS,
+  REJECTION_REASONS,
+  COVERAGE_BANDS,
   asText,
   clone,
   isPlainObject,

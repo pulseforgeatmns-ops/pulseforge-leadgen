@@ -7,6 +7,11 @@
 
 const scoutAcquisition = require('../../../services/scoutAcquisitionIntelligence');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const {
+  toBusinessEvidenceRefs,
+  buildSystemProvenance,
+  investigationFromResult,
+} = require('../scoutAcquisition/InvestigationProvenance');
 
 function defaultLoop(input = {}) {
   return input.runLoop || scoutAcquisition.runAcquisitionIntelligenceLoop;
@@ -122,11 +127,31 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
         timelyCount: result.state.timelyCount,
       };
     }
+    if (result.investigation || (result.state && result.state.investigation)) {
+      session.context.lastScoutInvestigation =
+        result.investigation || result.state.investigation;
+    }
   }
 
   const prose =
     result.prose ||
     'I checked current acquisition intelligence before deciding whether Scout needed to investigate.';
+
+  const investigation =
+    result.investigation ||
+    investigationFromResult(result.result) ||
+    (result.state && result.state.investigation) ||
+    null;
+  const businessEvidence = toBusinessEvidenceRefs(
+    (result.result && result.result.evidenceRefs) ||
+      (result.trail && result.trail.chain && result.trail.chain.evidence) ||
+      []
+  );
+  const provenance = buildSystemProvenance({
+    delegationId: result.delegation && result.delegation.id,
+    resultId: result.result && result.result.id,
+    evaluationId: result.evaluation && result.evaluation.id,
+  });
 
   const structured = buildStructuredResponse({
     answer: prose,
@@ -138,11 +163,11 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
       result.evaluation
         ? `Max evaluation materiality: ${result.evaluation.materiality}.`
         : null,
+      investigation
+        ? `Investigation coverage: ${investigation.coverageBand} (${investigation.coverageConfidence}).`
+        : null,
     ].filter(Boolean),
-    supportingEvidence:
-      (result.result && result.result.evidenceRefs) ||
-      (result.trail && result.trail.chain && result.trail.chain.evidence) ||
-      [],
+    supportingEvidence: businessEvidence,
     contradictingEvidence: [],
     confidence:
       result.evaluation && result.result && result.result.confidence != null
@@ -152,9 +177,11 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
     recommendedActions: [
       { id: 'acknowledge', type: 'review', label: 'Continue' },
     ],
-    confidenceContributors: ['scout_acquisition', 'spec_100'],
+    confidenceContributors: [],
     timelineReferences: [],
     relatedEntities: [],
+    investigation,
+    provenance,
     metadata: {
       sourcesUsed: {
         briefing: false,
@@ -163,16 +190,20 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
         policy: true,
         knowledge: false,
       },
-      evidenceCount:
-        (result.result && result.result.evidenceRefs && result.result.evidenceRefs.length) ||
-        0,
+      evidenceCount: businessEvidence.length,
       asOf: new Date().toISOString(),
-      unavailable: [],
+      unavailable:
+        (investigation &&
+          investigation.sources &&
+          investigation.sources.sourceTypesUnavailable) ||
+        [],
       delegationId: result.delegation && result.delegation.id,
       resultId: result.result && result.result.id,
       evaluationId: result.evaluation && result.evaluation.id,
       scoutDelegated: result.delegated === true,
       acquisitionLoop: true,
+      coverageConfidence: investigation && investigation.coverageConfidence,
+      coverageBand: investigation && investigation.coverageBand,
     },
   });
 
