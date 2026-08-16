@@ -340,6 +340,9 @@ document.getElementById('modal').addEventListener('click', async e => {
 });
 
 loadVisits();
+if (location.hash && location.hash.length > 1) {
+  openVisit(decodeURIComponent(location.hash.slice(1)));
+}
 </script>
 </body>
 </html>
