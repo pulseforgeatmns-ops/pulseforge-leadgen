@@ -1,9 +1,10 @@
 'use strict';
 
 /**
- * SPEC-097 / SPEC-097A Living Command Deck — spatial intelligence field renderer.
+ * SPEC-097 / SPEC-097A / SPEC-097B Living Command Deck — spatial intelligence field renderer.
  * Render-only consumer of model.spatialOverview from CommandDeckModel.
  * Motion communicates intelligence state — it does not decorate the interface.
+ * SPEC-097B: presentation-only spatial composition (orbit, halo, protected zone).
  */
 
 (function () {
@@ -30,6 +31,18 @@
 
   const ELEVATION_MS = 900;
   const SETTLE_MS = 1100;
+  const SIGNAL_MS = 8000;
+  const HALO_EXTENT_PX = 26;
+  const PROTECTED_GAP_PX = 18;
+  const NODE_ESTIMATE = Object.freeze({ w: 132, h: 72 });
+
+  /** Desktop center-to-center band targets (SPEC-097B). Scaled to viewport. */
+  const BAND_DESKTOP = Object.freeze({
+    monitored: 280,
+    normal: 235,
+    elevated: 178,
+    urgent: 142,
+  });
 
   /** @type {object|null} */
   let activeOverview = null;
@@ -39,6 +52,14 @@
   let listView = false;
   /** @type {Map<string, HTMLElement>} */
   let nodeByDomain = new Map();
+  /** @type {number|null} */
+  let signalTimer = null;
+  /** @type {number} */
+  let signalCursor = 0;
+  /** @type {Set<string>} */
+  let signaledTransitions = new Set();
+  /** @type {string|null} */
+  let lastMaxSignature = null;
 
   const handlers = {
     onDiscussMax: null,
@@ -83,17 +104,178 @@
   }
 
   function orbitRadius() {
-    if (window.matchMedia('(max-width: 640px)').matches) return 0;
-    const root = getComputedStyle(document.documentElement);
-    const val = root.getPropertyValue('--cd-orbit-radius').trim();
-    if (val.endsWith('px')) return Number.parseFloat(val) || 240;
-    // min(42vw, 240px) — approximate from viewport
-    return Math.min(window.innerWidth * 0.42, 240);
+    const layout = computeFieldLayout();
+    return layout && layout.bands ? layout.bands.normal : BAND_DESKTOP.normal;
   }
 
   function scaleForPriority(priority) {
-    const map = { urgent: 1.12, elevated: 1.06, normal: 1, monitored: 0.88 };
+    const map = { urgent: 1.08, elevated: 1.04, normal: 1, monitored: 0.9 };
     return map[priority] || 1;
+  }
+
+  function readCssLength(name, fallback) {
+    const root = getComputedStyle(document.documentElement);
+    const val = root.getPropertyValue(name).trim();
+    if (val.endsWith('px')) {
+      const n = Number.parseFloat(val);
+      if (Number.isFinite(n)) return n;
+    }
+    return fallback;
+  }
+
+  /**
+   * Viewport-aware priority bands with a protected Max zone.
+   * Invariant: monitored > normal > elevated > urgent > protected halo + gap.
+   */
+  function computeFieldLayout() {
+    const orbit = els.orbit ? els.orbit.getBoundingClientRect() : { width: 960, height: 700 };
+    const maxEl = document.getElementById('cdSpatialMax');
+    const maxRect = maxEl
+      ? maxEl.getBoundingClientRect()
+      : { width: 148, height: 178 };
+
+    const halfW = Math.max(orbit.width / 2, 1);
+    const halfH = Math.max(orbit.height / 2, 1);
+    const protectedRx = maxRect.width / 2 + HALO_EXTENT_PX;
+    const protectedRy = maxRect.height / 2 + HALO_EXTENT_PX;
+    const gap = readCssLength('--cd-protected-gap', PROTECTED_GAP_PX);
+
+    const desktop = {
+      monitored: readCssLength('--cd-band-monitored', BAND_DESKTOP.monitored),
+      normal: readCssLength('--cd-band-normal', BAND_DESKTOP.normal),
+      elevated: readCssLength('--cd-band-elevated', BAND_DESKTOP.elevated),
+      urgent: readCssLength('--cd-band-urgent', BAND_DESKTOP.urgent),
+    };
+
+    const nodeClear = Math.max(NODE_ESTIMATE.w, NODE_ESTIMATE.h) / 2 + 10;
+    const usable = Math.min(halfW, halfH) - nodeClear;
+    const scale = Math.min(1, Math.max(0.58, usable / desktop.monitored));
+
+    const minUrgent = Math.max(
+      protectedRx + NODE_ESTIMATE.w / 2 + gap,
+      protectedRy + NODE_ESTIMATE.h / 2 + gap
+    );
+
+    const bands = {
+      urgent: Math.max(desktop.urgent * scale, minUrgent),
+      elevated: desktop.elevated * scale,
+      normal: desktop.normal * scale,
+      monitored: desktop.monitored * scale,
+    };
+
+    const bandGap = Math.max(24 * scale, 18);
+    bands.elevated = Math.max(bands.elevated, bands.urgent + bandGap);
+    bands.normal = Math.max(bands.normal, bands.elevated + bandGap * 1.15);
+    bands.monitored = Math.max(bands.monitored, bands.normal + bandGap);
+
+    const maxFit = Math.min(halfW, halfH) - nodeClear;
+    if (bands.monitored > maxFit && maxFit > bands.urgent + bandGap * 3) {
+      const extra = bands.monitored - bands.urgent;
+      const fitExtra = maxFit - bands.urgent;
+      const s = fitExtra / extra;
+      bands.elevated = bands.urgent + (bands.elevated - bands.urgent) * s;
+      bands.normal = bands.urgent + (bands.normal - bands.urgent) * s;
+      bands.monitored = bands.urgent + (bands.monitored - bands.urgent) * s;
+    }
+
+    return {
+      halfW,
+      halfH,
+      protectedRx,
+      protectedRy,
+      gap,
+      bands,
+      scale,
+      maxRect,
+      orbit,
+    };
+  }
+
+  function offsetForDomain(domain, layout, nodeRect) {
+    const pos = domain.position || {};
+    const slot = SLOT_POSITIONS[pos.slot] || SLOT_POSITIONS.top;
+    const priority = domain.priority || 'normal';
+    let dist = layout.bands[priority] || layout.bands.normal;
+
+    const nw = (nodeRect && nodeRect.width) || NODE_ESTIMATE.w;
+    const nh = (nodeRect && nodeRect.height) || NODE_ESTIMATE.h;
+    const prot =
+      slot.tx !== 0
+        ? layout.protectedRx + nw / 2 + layout.gap
+        : layout.protectedRy + nh / 2 + layout.gap;
+    dist = Math.max(dist, prot);
+
+    const maxDist =
+      slot.tx !== 0 ? layout.halfW - nw / 2 - 8 : layout.halfH - nh / 2 - 8;
+    if (maxDist > prot) dist = Math.min(dist, maxDist);
+
+    return { x: slot.tx * dist, y: slot.ty * dist, dist };
+  }
+
+  /**
+   * Max communicates aggregate intelligence state — never domain activity counts.
+   */
+  function synthesizeMaxCopy(overview) {
+    const domains = (overview && overview.domains) || [];
+    const areaCount = domains.length;
+    const attention = domains.filter(
+      (d) => d.priority === 'urgent' || d.priority === 'elevated'
+    );
+    const n = attention.length;
+
+    let headline;
+    let subline;
+
+    if (n === 0) {
+      headline = 'Briefing current';
+      subline = areaCount
+        ? `Watching ${areaCount} area${areaCount === 1 ? '' : 's'}`
+        : '';
+    } else {
+      headline = areaCount
+        ? `Watching ${areaCount} area${areaCount === 1 ? '' : 's'}`
+        : 'Briefing current';
+      subline =
+        n === 1 ? '1 area needs your attention' : `${n} areas need your attention`;
+    }
+
+    return { headline, subline };
+  }
+
+  function nodeSummaryText(domain) {
+    const lines = (domain.summary && domain.summary.lines) || [];
+    const compressed = (domain.summary && domain.summary.compressed) || '';
+    const compact = compressed
+      .split(' · ')
+      .filter((part) => part && !/historical|contained/i.test(part))
+      .slice(0, 2)
+      .join(' · ');
+
+    if (domain.priority === 'normal' || domain.priority === 'monitored') {
+      return (lines[0] || compact || compressed).trim();
+    }
+    return (compact || lines[0] || compressed).trim();
+  }
+
+  function ellipseEdge(cx, cy, rx, ry, tx, ty) {
+    const dx = tx - cx;
+    const dy = ty - cy;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = dx / len;
+    const ny = dy / len;
+    const denom = Math.sqrt((nx * nx) / (rx * rx) + (ny * ny) / (ry * ry)) || 1;
+    const t = 1 / denom;
+    return { x: cx + nx * t, y: cy + ny * t };
+  }
+
+  function rectEdge(cx, cy, halfW, halfH, fromX, fromY) {
+    const dx = cx - fromX;
+    const dy = cy - fromY;
+    if (dx === 0 && dy === 0) return { x: cx, y: cy };
+    const px = dx === 0 ? Infinity : halfW / Math.abs(dx);
+    const py = dy === 0 ? Infinity : halfH / Math.abs(dy);
+    const t = Math.min(px, py);
+    return { x: cx - dx * t, y: cy - dy * t };
   }
 
   function isElevationTransition(transition) {
@@ -120,14 +302,21 @@
     activeOverview = overview;
     els.deck.hidden = false;
 
-    renderMaxAnchor(overview.maxAnchor);
+    renderMaxAnchor(overview);
     renderDomains(overview.domains || []);
     renderConnections(overview.domains || []);
+    requestAnimationFrame(() => {
+      if (activeOverview === overview && !listView) {
+        renderConnections(overview.domains || []);
+      }
+    });
     renderListFallback(overview.listFallback || overview.domains || []);
     renderUnseenBanner(overview.unseenChanges || []);
     updateAskPlaceholder(overview.maxAnchor, activeDomainId);
     renderRecentConversations();
     syncViewVisibility();
+    syncSignalLoop(overview.domains || []);
+    maybePulseMax(overview);
 
     if (window.matchMedia('(max-width: 640px)').matches) {
       setListView(true, { silent: true });
@@ -136,14 +325,14 @@
     return true;
   }
 
-  function renderMaxAnchor(anchor) {
-    if (!anchor) return;
+  function renderMaxAnchor(overview) {
+    const copy = synthesizeMaxCopy(overview);
     if (els.maxHeadline) {
-      els.maxHeadline.textContent = anchor.headline || 'Max';
+      els.maxHeadline.textContent = copy.headline || 'Max';
     }
     if (els.maxSubline) {
-      els.maxSubline.textContent = anchor.subline || '';
-      els.maxSubline.hidden = !anchor.subline;
+      els.maxSubline.textContent = copy.subline || '';
+      els.maxSubline.hidden = !copy.subline;
     }
   }
 
@@ -179,28 +368,30 @@
   function renderDomains(domains) {
     if (!els.orbit) return;
 
-    const existing = els.orbit.querySelectorAll('.cd-spatial-node');
-    existing.forEach((n) => n.remove());
-    nodeByDomain = new Map();
+    const layout = computeFieldLayout();
+    const seen = new Set();
 
-    const radius = orbitRadius();
     for (const domain of domains) {
-      const node = document.createElement('button');
-      node.type = 'button';
-      node.className = buildNodeClasses(domain);
-      node.dataset.domainId = domain.id;
+      seen.add(domain.id);
+      let node = nodeByDomain.get(domain.id);
+      const isNew = !node;
+      if (!node) {
+        node = document.createElement('button');
+        node.type = 'button';
+        node.dataset.domainId = domain.id;
+        node.addEventListener('click', () => openDomainDrawer(domain.id));
+        els.orbit.appendChild(node);
+        nodeByDomain.set(domain.id, node);
+      }
+
+      node.className = buildNodeClasses(domain) + (isNew ? ' cd-spatial-node-placing' : '');
       node.setAttribute('aria-label', buildNodeAriaLabel(domain));
 
-      const pos = domain.position || {};
-      const slot = SLOT_POSITIONS[pos.slot] || SLOT_POSITIONS.top;
-      const dist = Number(pos.distance) || 0.68;
-      const offset = radius * dist;
-      const x = slot.tx * offset;
-      const y = slot.ty * offset;
-
-      node.style.setProperty('--cd-node-x', `${x}px`);
-      node.style.setProperty('--cd-node-y', `${y}px`);
-      node.style.setProperty('--cd-node-scale', scaleForPriority(domain.priority));
+      const measured = isNew ? null : node.getBoundingClientRect();
+      const offset = offsetForDomain(domain, layout, measured);
+      node.style.setProperty('--cd-node-x', `${offset.x}px`);
+      node.style.setProperty('--cd-node-y', `${offset.y}px`);
+      node.style.setProperty('--cd-node-scale', String(scaleForPriority(domain.priority)));
 
       const priorityLabel = PRIORITY_LABELS[domain.priority] || domain.priority;
       const showPriorityLabel =
@@ -211,7 +402,7 @@
       node.innerHTML = `
         <span class="cd-spatial-node-label">${esc(domain.label)}</span>
         ${showPriorityLabel ? `<span class="cd-spatial-node-priority">${esc(priorityLabel)}</span>` : ''}
-        <span class="cd-spatial-node-summary">${esc(domain.summary && domain.summary.compressed)}</span>
+        <span class="cd-spatial-node-summary">${esc(nodeSummaryText(domain))}</span>
         ${domain.transition && isElevationTransition(domain.transition)
           ? `<span class="cd-spatial-node-badge">↑ ${esc(PRIORITY_LABELS[domain.transition.newState] || domain.transition.newState).toUpperCase()} BY MAX</span>`
           : ''}
@@ -219,20 +410,37 @@
       `;
 
       applyTransitionAnimation(node, domain);
+      if (isNew) {
+        requestAnimationFrame(() => node.classList.remove('cd-spatial-node-placing'));
+      }
+    }
 
-      node.addEventListener('click', () => openDomainDrawer(domain.id));
-      els.orbit.appendChild(node);
-      nodeByDomain.set(domain.id, node);
+    nodeByDomain.forEach((node, id) => {
+      if (seen.has(id)) return;
+      node.remove();
+      nodeByDomain.delete(id);
+    });
+
+    // Second pass: enforce protected zone with measured node geometry.
+    const refined = computeFieldLayout();
+    for (const domain of domains) {
+      const node = nodeByDomain.get(domain.id);
+      if (!node) continue;
+      const offset = offsetForDomain(domain, refined, node.getBoundingClientRect());
+      node.style.setProperty('--cd-node-x', `${offset.x}px`);
+      node.style.setProperty('--cd-node-y', `${offset.y}px`);
     }
   }
 
   function applyTransitionAnimation(node, domain) {
     if (reducedMotion() || !domain.transition) return;
+    const sig = `${domain.transition.previousState}:${domain.transition.newState}:${domain.transition.changedAt || ''}`;
+    if (node.dataset.transitionSig === sig) return;
+    node.dataset.transitionSig = sig;
 
     if (isElevationTransition(domain.transition)) {
       node.classList.add('cd-spatial-node-elevating');
       window.setTimeout(() => node.classList.remove('cd-spatial-node-elevating'), ELEVATION_MS + 200);
-      triggerConnectionSignal(domain.id);
     } else if (isDeElevationTransition(domain.transition)) {
       node.classList.add('cd-spatial-node-settling');
       window.setTimeout(() => node.classList.remove('cd-spatial-node-settling'), SETTLE_MS + 200);
@@ -255,34 +463,48 @@
     const svg = els.connections;
     svg.innerHTML = '';
 
+    const canvasRect = els.canvas
+      ? els.canvas.getBoundingClientRect()
+      : els.orbit.getBoundingClientRect();
     const orbitRect = els.orbit.getBoundingClientRect();
     if (!orbitRect.width) return;
 
     svg.setAttribute('viewBox', `0 0 ${orbitRect.width} ${orbitRect.height}`);
-    svg.setAttribute('width', orbitRect.width);
-    svg.setAttribute('height', orbitRect.height);
+    svg.setAttribute('width', String(orbitRect.width));
+    svg.setAttribute('height', String(orbitRect.height));
+    svg.style.left = `${orbitRect.left - canvasRect.left}px`;
+    svg.style.top = `${orbitRect.top - canvasRect.top}px`;
+    svg.style.width = `${orbitRect.width}px`;
+    svg.style.height = `${orbitRect.height}px`;
 
-    const cx = orbitRect.width / 2;
-    const cy = orbitRect.height / 2;
-    const radius = orbitRadius();
+    const maxEl = document.getElementById('cdSpatialMax');
+    const maxRect = maxEl ? maxEl.getBoundingClientRect() : orbitRect;
+    const cx = maxRect.left + maxRect.width / 2 - orbitRect.left;
+    const cy = maxRect.top + maxRect.height / 2 - orbitRect.top;
+    const haloRx = maxRect.width / 2 + HALO_EXTENT_PX;
+    const haloRy = maxRect.height / 2 + HALO_EXTENT_PX;
 
     for (const domain of domains) {
-      const pos = domain.position || {};
-      const slot = SLOT_POSITIONS[pos.slot] || SLOT_POSITIONS.top;
-      const dist = Number(pos.distance) || 0.68;
-      const offset = radius * dist;
-      const nx = cx + slot.tx * offset;
-      const ny = cy + slot.ty * offset;
+      const node = nodeByDomain.get(domain.id);
+      if (!node) continue;
+      const nr = node.getBoundingClientRect();
+      const nx = nr.left + nr.width / 2 - orbitRect.left;
+      const ny = nr.top + nr.height / 2 - orbitRect.top;
+
+      const start = ellipseEdge(cx, cy, haloRx, haloRy, nx, ny);
+      const end = rectEdge(nx, ny, nr.width / 2, nr.height / 2, cx, cy);
 
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      const d = `M ${cx} ${cy} Q ${(cx + nx) / 2} ${(cy + ny) / 2} ${nx} ${ny}`;
+      const d = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} L ${end.x.toFixed(1)} ${end.y.toFixed(1)}`;
       path.setAttribute('d', d);
       path.setAttribute('id', `cd-conn-${domain.id}`);
       path.classList.add('cd-intel-conn');
 
+      if (domain.priority === 'urgent') path.classList.add('cd-intel-conn-urgent');
+      else if (domain.priority === 'elevated') path.classList.add('cd-intel-conn-elevated');
+
       const isActive =
         domain.priority === 'urgent' ||
-        domain.priority === 'elevated' ||
         (domain.transition && isElevationTransition(domain.transition)) ||
         (domain.intelligence && domain.intelligence.active) ||
         activeDomainId === domain.id;
@@ -292,25 +514,103 @@
       svg.appendChild(path);
 
       if (domain.transition && isElevationTransition(domain.transition) && !reducedMotion()) {
-        const signal = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        signal.setAttribute('r', '3');
-        signal.classList.add('cd-intel-conn-signal');
-        signal.style.offsetPath = `path('${d}')`;
-        signal.style.offsetRotate = '0deg';
-        path.parentNode.appendChild(signal);
-        requestAnimationFrame(() => signal.classList.add('cd-intel-signal-travel'));
+        const key = `${domain.id}:${domain.transition.previousState}:${domain.transition.newState}:${domain.transition.changedAt || ''}`;
+        if (!signaledTransitions.has(key)) {
+          signaledTransitions.add(key);
+          spawnSignalOnPath(path, d);
+        }
       }
     }
   }
 
-  function triggerConnectionSignal(domainId) {
+  function spawnSignalOnPath(path, d) {
+    if (!path || !path.parentNode || reducedMotion()) return;
+    const signal = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    signal.setAttribute('r', '2.6');
+    signal.classList.add('cd-intel-conn-signal');
+    signal.style.offsetPath = `path('${d}')`;
+    signal.style.offsetRotate = '0deg';
+    path.parentNode.appendChild(signal);
+    requestAnimationFrame(() => signal.classList.add('cd-intel-signal-travel'));
+    window.setTimeout(() => signal.remove(), ELEVATION_MS + 80);
+  }
+
+  function travelSignal(domainId) {
     if (!els.connections || reducedMotion()) return;
     const path = els.connections.querySelector(`#cd-conn-${domainId}`);
     if (!path) return;
     path.classList.add('cd-intel-conn-active');
+    spawnSignalOnPath(path, path.getAttribute('d'));
     window.setTimeout(() => {
-      if (activeDomainId !== domainId) path.classList.remove('cd-intel-conn-active');
+      if (activeDomainId !== domainId) {
+        const domain = findDomain(domainId);
+        if (!domain || domain.priority !== 'urgent') {
+          path.classList.remove('cd-intel-conn-active');
+        }
+      }
     }, ELEVATION_MS + 400);
+  }
+
+  function pulseMaxHalo() {
+    const max = document.getElementById('cdSpatialMax');
+    if (!max || reducedMotion()) return;
+    max.classList.remove('cd-max-signaling');
+    void max.offsetWidth;
+    max.classList.add('cd-max-signaling');
+    window.setTimeout(() => max.classList.remove('cd-max-signaling'), 1800);
+  }
+
+  function intelligenceSignature(overview) {
+    const domains = (overview && overview.domains) || [];
+    return domains
+      .map((d) => {
+        const t = d.transition
+          ? `${d.transition.previousState}:${d.transition.newState}:${d.transition.changedAt || ''}`
+          : '';
+        const intel = d.intelligence && d.intelligence.active ? '1' : '0';
+        return `${d.id}:${d.priority}:${intel}:${t}`;
+      })
+      .join('|');
+  }
+
+  function maybePulseMax(overview) {
+    const sig = intelligenceSignature(overview);
+    if (lastMaxSignature && sig !== lastMaxSignature) {
+      const elevatedNow = (overview.domains || []).some(
+        (d) =>
+          (d.transition && isElevationTransition(d.transition)) ||
+          (d.intelligence && d.intelligence.active)
+      );
+      if (elevatedNow) pulseMaxHalo();
+    }
+    lastMaxSignature = sig;
+  }
+
+  function stopSignalLoop() {
+    if (signalTimer) {
+      window.clearInterval(signalTimer);
+      signalTimer = null;
+    }
+  }
+
+  function syncSignalLoop(domains) {
+    stopSignalLoop();
+    if (reducedMotion() || listView) return;
+    const urgentIds = (domains || [])
+      .filter((d) => d.priority === 'urgent')
+      .map((d) => d.id);
+    if (!urgentIds.length) return;
+
+    signalTimer = window.setInterval(() => {
+      if (document.hidden || reducedMotion() || listView) return;
+      const id = urgentIds[signalCursor % urgentIds.length];
+      signalCursor += 1;
+      travelSignal(id);
+    }, SIGNAL_MS);
+  }
+
+  function triggerConnectionSignal(domainId) {
+    travelSignal(domainId);
   }
 
   function renderListFallback(items) {
@@ -623,6 +923,9 @@
     }
     if (!listView && activeOverview) {
       renderConnections(activeOverview.domains || []);
+      syncSignalLoop(activeOverview.domains || []);
+    } else {
+      stopSignalLoop();
     }
   }
 
@@ -684,8 +987,13 @@
     const resume = () => document.body.classList.remove('cd-intel-paused');
 
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) pause();
-      else resume();
+      if (document.hidden) {
+        pause();
+        stopSignalLoop();
+      } else {
+        resume();
+        if (activeOverview && !listView) syncSignalLoop(activeOverview.domains || []);
+      }
     });
 
     if (reducedMotion()) pause();
@@ -710,8 +1018,11 @@
 
   function clear() {
     hide();
+    stopSignalLoop();
     activeOverview = null;
     activeDomainId = null;
+    lastMaxSignature = null;
+    signaledTransitions = new Set();
     nodeByDomain = new Map();
     if (els.orbit) {
       els.orbit.querySelectorAll('.cd-spatial-node').forEach((n) => n.remove());
