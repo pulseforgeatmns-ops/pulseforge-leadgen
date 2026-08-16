@@ -458,6 +458,281 @@ body {
   cursor: pointer;
 }
 .ao-script-log-btn:active { background: var(--pf-gold-glow); }
+
+/* Route planner */
+.ao-queue-toolbar {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 8px;
+  flex-shrink: 0;
+}
+.ao-start-route {
+  flex: 1;
+  min-height: 40px;
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+  border: 1px solid var(--pf-gold);
+  border-radius: var(--pf-radius);
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ao-start-route:active { background: var(--pf-gold-glow); }
+
+.ao-route-header {
+  padding: 10px 12px;
+  background: var(--pf-bg-raised);
+  border-bottom: 1px solid var(--pf-border);
+  flex-shrink: 0;
+}
+.ao-route-title {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--pf-gold-strong);
+  margin-bottom: 4px;
+}
+.ao-route-meta {
+  font-size: 0.78rem;
+  color: var(--pf-text-muted);
+}
+.ao-route-end {
+  margin-top: 8px;
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  border-radius: 6px;
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+
+.ao-stop {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 12px;
+  margin-bottom: 10px;
+  box-shadow: var(--pf-shadow);
+}
+.ao-stop.current {
+  border-color: var(--pf-gold);
+  box-shadow: 0 0 0 1px var(--pf-gold-glow);
+}
+.ao-stop-num {
+  font-family: var(--pf-font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+  margin-bottom: 4px;
+}
+.ao-stop-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--pf-navy);
+  margin-bottom: 4px;
+}
+.ao-stop-addr {
+  font-size: 0.82rem;
+  color: var(--pf-text-dim);
+  margin-bottom: 6px;
+}
+.ao-stop-addr.missing { color: var(--pf-amber); font-style: italic; }
+.ao-stop-contact {
+  font-size: 0.8rem;
+  color: var(--pf-text-dim);
+  margin-bottom: 6px;
+}
+.ao-stop-brief {
+  font-size: 0.82rem;
+  color: var(--pf-text);
+  background: var(--pf-violet-glow);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.ao-stop-opening {
+  font-size: 0.78rem;
+  color: var(--pf-text-muted);
+  font-style: italic;
+  margin-bottom: 10px;
+  line-height: 1.35;
+}
+.ao-stop-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ao-stop-actions button {
+  flex: 1;
+  min-width: 72px;
+  min-height: 36px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+.ao-stop-actions button.primary {
+  background: var(--pf-gold-glow);
+  border-color: var(--pf-gold);
+  color: var(--pf-gold-strong);
+}
+.ao-stop-actions button.danger {
+  border-color: rgba(179,38,30,0.35);
+  color: var(--pf-red);
+}
+.ao-stop-actions a.btn-link {
+  flex: 1;
+  min-width: 72px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  text-decoration: none;
+}
+
+.ao-needs-addr {
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+  border-radius: var(--pf-radius-lg);
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.ao-needs-addr-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--pf-amber);
+  margin-bottom: 6px;
+}
+.ao-addr-input {
+  width: 100%;
+  border: 1px solid var(--pf-border);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 0.9rem;
+  font-family: var(--pf-font-body);
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  margin-bottom: 8px;
+}
+.ao-addr-save {
+  width: 100%;
+  min-height: 36px;
+  background: var(--pf-gold-glow);
+  border: 1px solid var(--pf-gold);
+  border-radius: 6px;
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--pf-gold-strong);
+  cursor: pointer;
+}
+
+.ao-modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 100;
+  align-items: flex-end;
+  justify-content: center;
+}
+.ao-modal-overlay.open { display: flex; }
+.ao-modal {
+  background: var(--pf-bg-card);
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
+  width: 100%;
+  max-width: 480px;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  border-top: 2px solid var(--pf-gold);
+}
+.ao-modal h3 {
+  font-family: var(--pf-font-display);
+  font-size: 1.2rem;
+  letter-spacing: 2px;
+  color: var(--pf-navy);
+  margin-bottom: 12px;
+}
+.ao-modal-section {
+  margin-bottom: 14px;
+}
+.ao-modal-label {
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+  margin-bottom: 6px;
+}
+.ao-modal-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ao-modal-opt {
+  border: 1px solid var(--pf-border);
+  background: var(--pf-bg);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
+  color: var(--pf-text);
+}
+.ao-modal-opt.selected {
+  border-color: var(--pf-gold);
+  background: var(--pf-gold-glow);
+}
+.ao-modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.ao-modal-actions button {
+  flex: 1;
+  min-height: var(--pf-touch-target);
+  border-radius: var(--pf-radius);
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.ao-modal-cancel {
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  color: var(--pf-text-dim);
+}
+.ao-modal-confirm {
+  border: 1px solid var(--pf-gold);
+  background: var(--pf-nav-bg);
+  color: var(--pf-gold);
+}
 </style>
 </head>
 <body>
@@ -508,7 +783,16 @@ body {
       <button class="ao-filter" data-filter="high">High Priority</button>
       <button class="ao-filter" data-filter="waiting">Waiting on Jake</button>
     </div>
+    <div class="ao-queue-toolbar" id="queueToolbar">
+      <button type="button" class="ao-start-route" id="startRouteBtn">Start Route</button>
+    </div>
+    <div class="ao-route-header" id="routeHeader" style="display:none">
+      <div class="ao-route-title" id="routeTitle">Active Route</div>
+      <div class="ao-route-meta" id="routeMeta"></div>
+      <button type="button" class="ao-route-end" id="endRouteBtn">End Route</button>
+    </div>
     <div class="ao-queue-list" id="queueList"></div>
+    <div class="ao-queue-list" id="routeList" style="display:none"></div>
   </section>
 
   <section class="ao-panel" id="panel-script">
@@ -596,6 +880,34 @@ body {
   </section>
 </div>
 
+<div class="ao-modal-overlay" id="routeModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="routeModalTitle">
+    <h3 id="routeModalTitle">Plan Route</h3>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Route order</div>
+      <div class="ao-modal-options" id="sortOptions">
+        <button type="button" class="ao-modal-opt" data-sort="farthest_first">Farthest first, work back</button>
+        <button type="button" class="ao-modal-opt selected" data-sort="closest_first">Closest first</button>
+        <button type="button" class="ao-modal-opt" data-sort="shortest_route">Shortest route</button>
+        <button type="button" class="ao-modal-opt" data-sort="manual">Manual order (queue sequence)</button>
+      </div>
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Starting point</div>
+      <div class="ao-modal-options" id="startOptions">
+        <button type="button" class="ao-modal-opt selected" data-start="current_location">Current location</button>
+        <button type="button" class="ao-modal-opt" data-start="anchor_office">Anchor office</button>
+        <button type="button" class="ao-modal-opt" data-start="custom">Custom address</button>
+      </div>
+      <input class="ao-addr-input" id="customStartAddress" type="text" placeholder="Custom start address…" style="display:none;margin-top:8px">
+    </div>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="routeModalCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="routeModalConfirm">Create Route</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const chat = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
@@ -603,6 +915,9 @@ let sessionId = null;
 let activeMode = null;
 let queueFilter = 'today';
 let visitJustCompleted = false;
+let activeRoute = null;
+let routeSortMode = 'closest_first';
+let routeStartType = 'current_location';
 
 function scrollChatToBottom() {
   requestAnimationFrame(() => {
@@ -617,7 +932,10 @@ function switchTab(tabName) {
   document.querySelectorAll('.ao-panel').forEach(p => {
     p.classList.toggle('active', p.id === 'panel-' + tabName);
   });
-  if (tabName === 'queue') loadQueue();
+  if (tabName === 'queue') {
+    loadQueue();
+    loadActiveRoute();
+  }
 }
 
 async function api(path, options = {}) {
@@ -740,6 +1058,12 @@ async function sendMessage(text) {
       messageInput.placeholder = 'Tap a mode above for another visit…';
       loadMetrics();
       loadQueue();
+      if (result.route) {
+        activeRoute = result.route;
+        renderRouteView();
+      } else {
+        loadActiveRoute();
+      }
     }
   } catch (err) {
     addMsg(err.message, 'system');
@@ -756,16 +1080,20 @@ function taskCard(task) {
   const badge = isDirectMail
     ? `<div class="ao-task-badge">Direct Mail${task.campaign_name ? ' · ' + escapeHtml(task.campaign_name) : ''}</div>`
     : '';
+  const addrLine = task.address
+    ? `<div class="ao-task-meta">${escapeHtml(task.address)}</div>`
+    : `<div class="ao-task-meta" style="color:var(--pf-amber);font-style:italic">Address needed</div>`;
   const logBtn = isDirectMail
     ? `<button class="primary" data-log-follow-up="${task.id}">Log with Max</button>`
     : '';
   return `
-    <article class="${cls.join(' ')}">
+    <article class="${cls.join(' ')}" data-task-id="${task.id}" data-lead-id="${task.lead_id || ''}">
       ${badge}
       <div class="ao-task-head">
         <div class="ao-task-name">${escapeHtml(task.business_name || 'Unknown')}</div>
         <div class="ao-task-due">${due}</div>
       </div>
+      ${addrLine}
       <div class="ao-task-meta">${escapeHtml(task.contact_name || 'No contact')} · ${escapeHtml(task.next_action || 'Follow up')}</div>
       ${task.suggested_message ? `<div class="ao-task-msg">"${escapeHtml(task.suggested_message)}"</div>` : ''}
       <div class="ao-task-actions">
@@ -776,6 +1104,168 @@ function taskCard(task) {
       </div>
     </article>
   `;
+}
+
+function stopCard(stop, isCurrent) {
+  const cls = ['ao-stop'];
+  if (isCurrent) cls.push('current');
+  const due = AoQueueFormat.formatDueDateLabel(stop.due_date);
+  const badge = stop.source_badge
+    ? `<div class="ao-task-badge">${escapeHtml(stop.source_badge)}</div>`
+    : '';
+  const addrClass = stop.address_usable ? 'ao-stop-addr' : 'ao-stop-addr missing';
+  const addrText = stop.address_usable ? escapeHtml(stop.address) : 'Address needed';
+  const isDirectMail = stop.attribution_source === 'direct_mail_campaign';
+  const navBtn = stop.navigate_url
+    ? `<a class="btn-link" href="${escapeHtml(stop.navigate_url)}" target="_blank" rel="noopener">Navigate</a>`
+    : `<button disabled>Navigate</button>`;
+  return `
+    <article class="${cls.join(' ')}" data-stop-id="${stop.id}" data-task-id="${stop.task_id}">
+      <div class="ao-stop-num">Stop ${stop.sequence}${isCurrent ? ' · Up next' : ''}</div>
+      ${badge}
+      <div class="ao-stop-name">${escapeHtml(stop.business_name)}</div>
+      <div class="${addrClass}">${addrText}</div>
+      <div class="ao-stop-contact">${escapeHtml(stop.contact_line || 'No contact yet')}</div>
+      <div class="ao-stop-meta ao-task-due" style="margin-bottom:6px">${due}</div>
+      <div class="ao-stop-brief">${escapeHtml(stop.brief)}</div>
+      <div class="ao-stop-opening">"${escapeHtml(stop.opening)}"</div>
+      <div class="ao-stop-actions">
+        ${navBtn}
+        <button class="primary" data-route-log="${stop.task_id}" data-direct-mail="${isDirectMail ? '1' : '0'}">Log with Max</button>
+        <button data-route-done="${stop.id}">Done</button>
+        <button data-route-skip="${stop.id}">Skip</button>
+        <button data-route-later="${stop.id}">Move Later</button>
+        <button class="danger" data-route-escalate="${stop.task_id}">Escalate</button>
+      </div>
+    </article>
+  `;
+}
+
+function needsAddressCard(item) {
+  return `
+    <div class="ao-needs-addr" data-lead-id="${item.lead_id}">
+      <div class="ao-needs-addr-title">${escapeHtml(item.business_name)} — Address needed</div>
+      <input class="ao-addr-input" type="text" placeholder="Enter business address…" data-addr-input="${item.lead_id}">
+      <button type="button" class="ao-addr-save" data-addr-save="${item.lead_id}">Save Address</button>
+    </div>
+  `;
+}
+
+function showRouteModal() {
+  document.getElementById('routeModal').classList.add('open');
+}
+
+function hideRouteModal() {
+  document.getElementById('routeModal').classList.remove('open');
+}
+
+function getGeolocation() {
+  return new Promise(resolve => {
+    if (!navigator.geolocation) return resolve(null);
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+    );
+  });
+}
+
+async function startRoute() {
+  hideRouteModal();
+  const list = document.getElementById('routeList');
+  list.innerHTML = '<div class="ao-empty">Building route…</div>';
+
+  const body = {
+    filter: queueFilter,
+    sort_mode: routeSortMode,
+    start_point_type: routeStartType,
+  };
+
+  if (routeStartType === 'custom') {
+    body.start_address = document.getElementById('customStartAddress').value.trim();
+    if (!body.start_address) {
+      alert('Enter a custom start address');
+      showRouteModal();
+      return;
+    }
+  } else if (routeStartType === 'current_location') {
+    const loc = await getGeolocation();
+    if (loc) {
+      body.start_lat = loc.lat;
+      body.start_lng = loc.lng;
+    }
+  }
+
+  try {
+    const result = await api('/api/routes/start', { method: 'POST', body: JSON.stringify(body) });
+    activeRoute = result.route;
+    renderRouteView(result.needs_address || []);
+    if (result.skipped_no_address) {
+      addMsg(`${result.skipped_no_address} stop(s) skipped — add addresses below the route.`, 'system');
+    }
+  } catch (err) {
+    alert(err.message);
+    loadQueue();
+  }
+}
+
+function renderRouteView(needsAddress = []) {
+  const hasRoute = activeRoute && activeRoute.status === 'active' && activeRoute.stops?.length;
+  document.getElementById('routeHeader').style.display = hasRoute ? 'block' : 'none';
+  document.getElementById('queueList').style.display = hasRoute ? 'none' : 'block';
+  document.getElementById('routeList').style.display = hasRoute ? 'block' : 'none';
+  document.getElementById('startRouteBtn').style.display = hasRoute ? 'none' : 'block';
+
+  if (!hasRoute) {
+    document.getElementById('routeList').innerHTML = '';
+    return;
+  }
+
+  const pending = activeRoute.stops.filter(s => s.status === 'pending');
+  const currentId = pending[0]?.id;
+  document.getElementById('routeTitle').textContent = `Route · ${pending.length} stop${pending.length === 1 ? '' : 's'} left`;
+  document.getElementById('routeMeta').textContent = `${activeRoute.sort_mode.replace(/_/g, ' ')} · ${activeRoute.queue_filter.replace(/_/g, ' ')}`;
+
+  let html = activeRoute.stops
+    .filter(s => s.status === 'pending')
+    .map(s => stopCard(s, s.id === currentId))
+    .join('');
+
+  const needs = needsAddress.length ? needsAddress : (activeRoute.needs_address || []);
+  if (needs.length) {
+    html += '<div class="ao-empty" style="padding:16px 0 8px;font-size:0.78rem">Needs address before adding to route:</div>';
+    html += needs.map(needsAddressCard).join('');
+  }
+
+  if (!html) {
+    html = '<div class="ao-empty">Route complete — nice work.</div>';
+  }
+
+  document.getElementById('routeList').innerHTML = html;
+}
+
+async function loadActiveRoute() {
+  try {
+    const data = await api('/api/routes/active');
+    activeRoute = data.route;
+    renderRouteView();
+  } catch (err) {
+    console.error('[ao] active route load failed:', err);
+  }
+}
+
+async function handleRouteStopAction(stopId, status) {
+  const result = await api('/api/routes/stops/' + stopId, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+  activeRoute = result.route;
+  renderRouteView();
+  loadMetrics();
+  if (result.next_stop_debrief && status === 'done') {
+    switchTab('max');
+    addMsg(result.next_stop_debrief, 'max');
+  }
 }
 
 function escapeHtml(s) {
@@ -816,6 +1306,84 @@ document.getElementById('scriptLogVisit').addEventListener('click', () => {
   switchTab('max');
   if (activeMode === 'log_visit' && sessionId) return;
   startMode('log_visit');
+});
+
+document.getElementById('startRouteBtn').addEventListener('click', showRouteModal);
+
+document.getElementById('routeModalCancel').addEventListener('click', hideRouteModal);
+
+document.getElementById('routeModalConfirm').addEventListener('click', startRoute);
+
+document.getElementById('sortOptions').addEventListener('click', e => {
+  const opt = e.target.closest('[data-sort]');
+  if (!opt) return;
+  document.querySelectorAll('#sortOptions .ao-modal-opt').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  routeSortMode = opt.dataset.sort;
+});
+
+document.getElementById('startOptions').addEventListener('click', e => {
+  const opt = e.target.closest('[data-start]');
+  if (!opt) return;
+  document.querySelectorAll('#startOptions .ao-modal-opt').forEach(o => o.classList.remove('selected'));
+  opt.classList.add('selected');
+  routeStartType = opt.dataset.start;
+  document.getElementById('customStartAddress').style.display = routeStartType === 'custom' ? 'block' : 'none';
+});
+
+document.getElementById('endRouteBtn').addEventListener('click', async () => {
+  if (!activeRoute?.id) return;
+  try {
+    await api('/api/routes/' + activeRoute.id + '/cancel', { method: 'POST' });
+    activeRoute = null;
+    renderRouteView();
+    loadQueue();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+document.getElementById('routeList').addEventListener('click', async e => {
+  const logTaskId = e.target.dataset.routeLog;
+  const doneStop = e.target.dataset.routeDone;
+  const skipStop = e.target.dataset.routeSkip;
+  const laterStop = e.target.dataset.routeLater;
+  const escalateTask = e.target.dataset.routeEscalate;
+  const saveAddr = e.target.dataset.addrSave;
+
+  try {
+    if (saveAddr) {
+      const input = document.querySelector(`[data-addr-input="${saveAddr}"]`);
+      await api('/api/leads/' + saveAddr + '/address', {
+        method: 'PATCH',
+        body: JSON.stringify({ address: input.value.trim() }),
+      });
+      loadQueue();
+      return;
+    }
+    if (logTaskId) {
+      const isDm = e.target.dataset.directMail === '1';
+      if (isDm) {
+        await startDirectMailFollowUp(logTaskId);
+      } else {
+        switchTab('max');
+        await startMode('log_visit');
+      }
+      return;
+    }
+    if (doneStop) await handleRouteStopAction(doneStop, 'done');
+    if (skipStop) await handleRouteStopAction(skipStop, 'skipped');
+    if (laterStop) await handleRouteStopAction(laterStop, 'moved_later');
+    if (escalateTask) {
+      await api('/api/tasks/' + escalateTask + '/escalate', {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'high_interest', summary: 'AO escalated from route' }),
+      });
+      loadMetrics();
+    }
+  } catch (err) {
+    alert(err.message);
+  }
 });
 
 document.getElementById('queueFilters').addEventListener('click', e => {
@@ -877,6 +1445,7 @@ async function bootDashboard() {
     console.error('[ao] metrics load failed:', err);
     addMsg(`Metrics error: ${err.message}`, 'system');
   }
+  loadActiveRoute();
 }
 bootDashboard();
 

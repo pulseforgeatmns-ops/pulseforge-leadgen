@@ -48,6 +48,7 @@ function mapTask(row) {
     completed_at: row.completed_at,
     business_name: row.business_name,
     contact_name: row.contact_name,
+    address: row.address || null,
     interest_level: row.interest_level,
     attribution_source: row.attribution_source || null,
     campaign_name: row.campaign_name || null,
@@ -87,7 +88,7 @@ async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
   }
 
   const { rows } = await pool.query(`
-    SELECT t.*, l.business_name, l.interest_level, l.attribution_source, l.campaign_name, c.contact_name
+    SELECT t.*, l.business_name, l.address, l.interest_level, l.attribution_source, l.campaign_name, c.contact_name
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
     LEFT JOIN ao_contacts c ON c.id = t.contact_id
