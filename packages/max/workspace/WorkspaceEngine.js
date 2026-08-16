@@ -17,6 +17,9 @@ const {
   maybeHandlePaigeCampaignContentDelegation,
 } = require('./PaigeCampaignDelegationContext');
 const {
+  maybeHandleSpecialistDirectionTurn,
+} = require('./SpecialistDirectionContext');
+const {
   maybeHandleOperatorObjectiveTurn,
   synthesizeObjectivePaigeResponse,
 } = require('./OperatorObjectiveContext');
@@ -142,6 +145,8 @@ class WorkspaceEngine {
    * @param {object} [options.paigeLearningOpts] - SPEC-094 contentLearning store opts (tests)
    * @param {object} [options.operatorObjectiveService] - SPEC-095 objective service
    * @param {object} [options.operatorObjectiveOpts] - SPEC-095 store opts (tests)
+   * @param {object} [options.specialistDirectionService] - SPEC-096 direction service
+   * @param {object} [options.specialistDirectionOpts] - SPEC-096 store opts (tests)
    * @param {object} [options.clientIntelligenceService] - SPEC-098 CIE service
    * @param {object} [options.clientIntelligenceOpts] - SPEC-098 CIE store opts (tests)
    */
@@ -169,6 +174,8 @@ class WorkspaceEngine {
     this._paigeLearningOpts = options.paigeLearningOpts || null;
     this._operatorObjectiveService = options.operatorObjectiveService || null;
     this._operatorObjectiveOpts = options.operatorObjectiveOpts || null;
+    this._specialistDirectionService = options.specialistDirectionService || null;
+    this._specialistDirectionOpts = options.specialistDirectionOpts || null;
     this._clientIntelligenceService = options.clientIntelligenceService || null;
     this._clientIntelligenceOpts = options.clientIntelligenceOpts || null;
   }
@@ -518,6 +525,90 @@ class WorkspaceEngine {
       objectiveTurn && objectiveTurn.suppressMission
     );
 
+    // SPEC-096 — operator direction on specialist recommendations (before new Paige asks).
+    const directionTurn = await maybeHandleSpecialistDirectionTurn({
+      question,
+      session,
+      context: rawContext || session.context,
+      action: rawContext?.action || null,
+      recommendationId: rawContext?.recommendationId || null,
+      directionService: this._specialistDirectionService || undefined,
+      directionOpts: this._specialistDirectionOpts || undefined,
+    });
+    if (directionTurn) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+        if (directionTurn.recommendationId) {
+          session.context.recommendationId = directionTurn.recommendationId;
+          session.context.pendingRecommendationId = directionTurn.recommendationId;
+        }
+        if (directionTurn.refinedRecommendation) {
+          session.context.paigeRecommendation = directionTurn.refinedRecommendation;
+        }
+        if (directionTurn.discussMode) {
+          session.context.discussRecommendation = true;
+        }
+      }
+
+      const structuredDir = directionTurn.structured;
+      const routeDir = {
+        kind: ROUTE_KINDS.INTELLIGENCE,
+        missionType: null,
+        reason: directionTurn.reason,
+        missionIntent: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+      };
+      const presentedDir = await this._presentation.present(structuredDir);
+      const proseDir = presentedDir.prose || directionTurn.prose;
+
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseDir,
+        structured: structuredDir,
+      });
+
+      return {
+        sessionId: session.id,
+        prose: proseDir,
+        structured: structuredDir,
+        metadata: presentedDir.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredDir,
+          session,
+          question,
+        }),
+        recommendedActions: structuredDir.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedDir.presentation,
+        route: routeDir.kind,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        specialistDirection: directionTurn.direction || null,
+        recommendationId: directionTurn.recommendationId || null,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: directionTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: directionTurn.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
+
     // SPEC-094 — Max → Paige campaign content delegation (read-only advisory).
     // Runs before mission create so launch/content asks stay conversational.
     // SPEC-095: recovered objective context is already on session.context.
@@ -534,6 +625,10 @@ class WorkspaceEngine {
         session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
         session.context._answerCorpus = 'workspace';
         session.context.paigeRecommendation = paigeDelegation.recommendation;
+        if (paigeDelegation.recommendationId) {
+          session.context.recommendationId = paigeDelegation.recommendationId;
+          session.context.pendingRecommendationId = paigeDelegation.recommendationId;
+        }
       }
 
       const structuredPaige = paigeDelegation.structured;

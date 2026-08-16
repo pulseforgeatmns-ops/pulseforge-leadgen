@@ -112,6 +112,11 @@ function normalizeContext(raw) {
     'lastClientIntelligenceTurn',
     // SPEC-103C — active conversational reasoning thread (session only)
     'activeClientReasoning',
+    // SPEC-096 — specialist direction context
+    'action',
+    'discussRecommendation',
+    'pendingRecommendationId',
+    'paigeRecommendation',
   ];
   for (const key of passthroughKeys) {
     if (raw[key] !== undefined) {

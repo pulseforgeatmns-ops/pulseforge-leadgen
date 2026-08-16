@@ -13,6 +13,9 @@ const {
   generateContentRecommendation,
   ContentLearningError,
 } = require('./contentLearning');
+const {
+  persistContentRecommendation,
+} = require('./specialistDirection');
 
 const KIND = 'paige_campaign_content_recommendation';
 const SOURCE = 'spec_093_content_learning';
@@ -20,23 +23,13 @@ const SOURCE = 'spec_093_content_learning';
 const NEXT_OPTIONS = Object.freeze([
   {
     id: 'accept_direction',
-    type: 'review',
-    label: 'Accept this direction',
+    type: 'accept_recommendation',
+    label: 'Accept',
   },
   {
-    id: 'revise_direction',
-    type: 'review',
-    label: 'Revise this direction',
-  },
-  {
-    id: 'ask_another_experiment',
-    type: 'review',
-    label: 'Ask for another experiment',
-  },
-  {
-    id: 'hold',
-    type: 'review',
-    label: 'Hold — do not proceed yet',
+    id: 'discuss_with_max',
+    type: 'discuss_with_max',
+    label: 'Discuss with Max',
   },
 ]);
 
@@ -625,7 +618,7 @@ function formatMaxPaigeCampaignRecommendation(payload) {
   }
 
   parts.push(
-    'Next options (review-first): accept direction; revise direction; ask for another experiment; hold.'
+    'Next options (review-first): Accept, or Discuss with Max to refine direction.'
   );
   parts.push(
     'Nothing will be published, sent, written to CRM, or pushed to Buffer until you decide.'
@@ -640,8 +633,9 @@ function formatMaxPaigeCampaignRecommendation(payload) {
  * @param {object} payload
  * @returns {object}
  */
-function composeMaxPaigeCampaignStructuredResponse(payload) {
+function composeMaxPaigeCampaignStructuredResponse(payload, recommendationId = null) {
   const answer = formatMaxPaigeCampaignRecommendation(payload);
+  const recId = recommendationId || payload.recommendationId || null;
   const supportingEvidence = (payload.supportingLearningIds || []).map((id) => ({
     id: String(id),
     summary: `SPEC-093 content learning ${id}`,
@@ -674,6 +668,7 @@ function composeMaxPaigeCampaignStructuredResponse(payload) {
       label: o.label,
       payload: {
         kind: KIND,
+        recommendationId: recId,
         campaignId: payload.campaignId,
         reviewFirst: true,
         autonomousPublish: false,
@@ -701,6 +696,7 @@ function composeMaxPaigeCampaignStructuredResponse(payload) {
       executionDomain: 'workspace',
       surface: 'paige_campaign_content_delegation',
       paigeCampaignRecommendation: true,
+      recommendationId: recId,
       autonomousPublish: false,
       reviewFirst: true,
     },
@@ -767,7 +763,36 @@ async function delegateCampaignContentRecommendation(input = {}, opts = {}) {
   const recommendation = normalizePaigeRecommendation(raw, request);
   assertRecommendationIsAdvisoryOnly(recommendation);
 
-  const structured = composeMaxPaigeCampaignStructuredResponse(recommendation);
+  // SPEC-096 — persist recommendation for operator direction loop
+  let persisted = null;
+  try {
+    persisted = await persistContentRecommendation(
+      {
+        tenantId: request.tenantId,
+        clientId: request.clientId,
+        specialist: 'paige',
+        kind: KIND,
+        campaignId: request.campaignId,
+        objectiveId: request.campaignContext?.objectiveId || null,
+        objective: request.objective,
+        channel: request.channel,
+        recommendedDirection: recommendation.recommendedDirection,
+        reason: recommendation.reason,
+        confidence: recommendation.confidence,
+        recommendation,
+        source: SOURCE,
+      },
+      opts.directionOpts || opts
+    );
+    recommendation.recommendationId = persisted.id;
+  } catch (_err) {
+    // Persistence failure must not block advisory presentation
+  }
+
+  const structured = composeMaxPaigeCampaignStructuredResponse(
+    recommendation,
+    persisted?.id || null
+  );
   const prose = formatMaxPaigeCampaignRecommendation(recommendation);
 
   return {
@@ -775,6 +800,7 @@ async function delegateCampaignContentRecommendation(input = {}, opts = {}) {
     skipped: false,
     request,
     recommendation,
+    recommendationId: persisted?.id || null,
     structured,
     prose,
     source: SOURCE,

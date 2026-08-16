@@ -62,7 +62,10 @@ async function maybeHandlePaigeCampaignContentDelegation(input = {}) {
       tenantId: context.tenantId,
       clientId: context.clientId || context.tenantId,
     },
-    input.learningOpts || {}
+    {
+      ...(input.learningOpts || {}),
+      directionOpts: input.directionOpts || {},
+    }
   );
 
   if (!result || !result.ok || result.skipped) {
@@ -73,6 +76,7 @@ async function maybeHandlePaigeCampaignContentDelegation(input = {}) {
     reason: 'paige_campaign_content_delegation',
     structured: result.structured,
     recommendation: result.recommendation,
+    recommendationId: result.recommendationId || null,
     request: result.request,
     prose: result.prose,
   };
