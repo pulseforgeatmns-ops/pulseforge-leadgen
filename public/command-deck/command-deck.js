@@ -66,6 +66,8 @@
     timestamp: document.getElementById('cdTimestamp'),
     morning: document.getElementById('cdMorningBrief'),
     hla: document.getElementById('cdHighestLeverage'),
+    operatorLayout: document.getElementById('cdOperatorLayout'),
+    commandRail: document.getElementById('cdCommandRail'),
     jake: document.getElementById('cdJakeActions'),
     mike: document.getElementById('cdMikeActions'),
     actionCards: document.getElementById('cdActionCards'),
@@ -1583,12 +1585,12 @@
   }
 
   function clearSections() {
-    for (const key of ['morning', 'hla', 'jake', 'mike', 'actionCards', 'operations', 'secondary', 'queue']) {
+    for (const key of ['morning', 'hla', 'operatorLayout', 'commandRail', 'jake', 'mike', 'actionCards', 'operations', 'secondary', 'queue']) {
       const el = els[key];
       if (!el) continue;
       el.hidden = true;
       el.classList.remove('is-revealed');
-      el.innerHTML = '';
+      if (key !== 'operatorLayout') el.innerHTML = '';
     }
   }
 
@@ -1625,11 +1627,125 @@
     els.error.innerHTML = '';
   }
 
+  function renderCommandRail(ob) {
+    const rail = ob.commandRail || {};
+    const needsJake = rail.needsJake || [];
+    const mike = rail.mikeAo || {};
+    const campaign = rail.campaign001 || {};
+    const quick = rail.quickActions || [];
+
+    const needsHtml = needsJake.length
+      ? needsJake.map((item) => `
+        <div class="cd-rail-item" data-escalation-id="${escapeHtml(item.id)}">
+          <div class="cd-rail-item-title">${escapeHtml(item.business_name)}</div>
+          <div class="cd-rail-item-meta">
+            ${item.contact_name ? `${escapeHtml(item.contact_name)} · ` : ''}
+            ${escapeHtml(item.reason || item.recommended_action || 'Follow-up needed')}
+            ${item.is_walkthrough ? ' · Walkthrough' : ''}
+          </div>
+          <div class="cd-rail-actions">
+            ${item.phone ? `<a class="cd-rail-btn cd-rail-btn-primary" href="tel:${escapeHtml(item.phone)}">Call</a>` : ''}
+            <a class="cd-rail-btn" href="${escapeHtml(item.admin_visit_url || '/admin/field-visits')}">View</a>
+            <button type="button" class="cd-rail-btn" data-rail-resolve="${escapeHtml(item.id)}">Resolve</button>
+          </div>
+        </div>
+      `).join('')
+      : '<p class="cd-rail-empty">No open escalations. Monitor the route — Jake actions appear here when Mike escalates.</p>';
+
+    const mikeHtml = `
+      <div class="cd-rail-stat-row"><span>Status</span><span>${escapeHtml(mike.status || '—')}</span></div>
+      <div class="cd-rail-stat-row"><span>Route</span><span>${escapeHtml(mike.route_progress || '—')}</span></div>
+      <div class="cd-rail-stat-row"><span>Remaining</span><span>${escapeHtml(String(mike.remaining ?? '—'))}</span></div>
+      <div class="cd-rail-item-meta" style="margin-top:0.45rem">${escapeHtml(mike.next_action || '')}${mike.next_detail ? ` — ${escapeHtml(mike.next_detail)}` : ''}</div>
+      <div class="cd-rail-actions">
+        <a class="cd-rail-btn cd-rail-btn-primary" href="/ao">Open Mike Route</a>
+        <a class="cd-rail-btn" href="/ao?filter=direct_mail">View Queue</a>
+      </div>
+    `;
+
+    const campaignHtml = `
+      <div class="cd-rail-stat-row"><span>Total targets</span><span>${escapeHtml(String(campaign.total ?? '—'))}</span></div>
+      <div class="cd-rail-stat-row"><span>Visited</span><span>${escapeHtml(String(campaign.visited ?? '—'))}</span></div>
+      <div class="cd-rail-stat-row"><span>Remaining</span><span>${escapeHtml(String(campaign.remaining ?? '—'))}</span></div>
+      <div class="cd-rail-stat-row"><span>Walk-ins</span><span>${escapeHtml(String(campaign.walk_ins ?? '—'))}</span></div>
+      <div class="cd-rail-stat-row"><span>Phone-first</span><span>${escapeHtml(String(campaign.phone_first ?? '—'))}</span></div>
+      <div class="cd-rail-stat-row"><span>Meaningful convos</span><span>${escapeHtml(String(campaign.meaningful_conversations ?? '—'))}</span></div>
+      <div class="cd-rail-actions">
+        <a class="cd-rail-btn" href="${escapeHtml(campaign.details_href || '/max-briefing#campaign')}">View Campaign Details</a>
+      </div>
+    `;
+
+    const quickHtml = quick.map((action) => {
+      if (action.kind === 'copy') {
+        return `<button type="button" class="cd-rail-btn" data-rail-copy-instructions>${escapeHtml(action.label)}</button>`;
+      }
+      return `<a class="cd-rail-btn" href="${escapeHtml(action.href || '#')}">${escapeHtml(action.label)}</a>`;
+    }).join('');
+
+    els.commandRail.innerHTML = `
+      <div class="cd-rail-block">
+        <h2 class="cd-rail-title">Needs Jake</h2>
+        ${needsHtml}
+      </div>
+      <div class="cd-rail-block">
+        <h2 class="cd-rail-title">Mike / AO</h2>
+        ${mikeHtml}
+      </div>
+      <div class="cd-rail-block">
+        <h2 class="cd-rail-title">Campaign 001</h2>
+        ${campaignHtml}
+      </div>
+      <div class="cd-rail-block">
+        <h2 class="cd-rail-title">Quick Actions</h2>
+        <div class="cd-rail-actions">${quickHtml}</div>
+      </div>
+    `;
+    els.commandRail.hidden = false;
+    bindCommandRailActions(ob);
+  }
+
+  async function bindCommandRailActions(ob) {
+    if (!els.commandRail) return;
+    els.commandRail.querySelectorAll('[data-rail-resolve]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-rail-resolve');
+        if (!id) return;
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/v1/max/ao-escalations/${id}`, {
+            method: 'PATCH',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ status: 'resolved' }),
+          });
+          if (!res.ok) throw new Error('Resolve failed');
+          await loadDeck({ force: true });
+        } catch (err) {
+          console.error('[command-deck] resolve', err);
+          setStatus('Could not resolve escalation');
+          btn.disabled = false;
+        }
+      });
+    });
+    els.commandRail.querySelector('[data-rail-copy-instructions]')?.addEventListener('click', async () => {
+      const text = ob.mikeInstructions || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus('Mike instructions copied');
+        window.setTimeout(() => setStatus('Briefing ready'), 2000);
+      } catch {
+        setStatus('Could not copy — check browser permissions');
+      }
+    });
+  }
+
   function renderOperatorBrief(model) {
     const ob = model.operatorBrief;
     if (!ob) return false;
 
     els.timestamp.textContent = formatDisplayTime(ob.generatedAt || (model.meta && model.meta.generatedAt));
+
+    if (els.operatorLayout) els.operatorLayout.hidden = false;
 
     els.morning.innerHTML = `
       <p class="cd-kicker" id="cdMorningHeading">Max Brief</p>
@@ -1647,41 +1763,7 @@
     `;
     els.hla.hidden = false;
 
-    els.jake.innerHTML = `
-      <p class="cd-kicker" id="cdJakeHeading">Jake — Next Actions</p>
-      <ul class="cd-action-list-items">
-        ${(ob.jakeActions || []).map((item) => `
-          <li class="cd-action-list-item">
-            <span class="cd-action-list-primary">${escapeHtml(item.action)}</span>
-            ${item.detail ? `<span class="cd-action-list-detail">${escapeHtml(item.detail)}</span>` : ''}
-          </li>
-        `).join('')}
-      </ul>
-    `;
-    els.jake.hidden = false;
-
-    els.mike.innerHTML = `
-      <p class="cd-kicker" id="cdMikeHeading">Mike — Next Actions</p>
-      <ul class="cd-action-list-items">
-        ${(ob.mikeActions || []).map((item) => `
-          <li class="cd-action-list-item">
-            <span class="cd-action-list-primary">${escapeHtml(item.action)}</span>
-            ${item.detail ? `<span class="cd-action-list-detail">${escapeHtml(item.detail)}</span>` : ''}
-          </li>
-        `).join('')}
-      </ul>
-    `;
-    els.mike.hidden = false;
-
-    els.actionCards.innerHTML = `
-      <p class="cd-kicker" id="cdCardsHeading">Execute</p>
-      <div class="cd-quick-actions">
-        ${(ob.actionCards || []).map((card) =>
-          `<a class="cd-quick-action" href="${escapeHtml(card.href || '#')}">${escapeHtml(card.label)}</a>`
-        ).join('')}
-      </div>
-    `;
-    els.actionCards.hidden = false;
+    renderCommandRail(ob);
 
     return true;
   }
@@ -4248,6 +4330,7 @@
     const stages = [
       els.morning,
       els.hla,
+      els.commandRail,
       els.jake,
       els.mike,
       els.actionCards,
@@ -4498,7 +4581,7 @@
       appendEvolutionFootnotes(model);
     }
 
-    [els.morning, els.hla, els.jake, els.mike, els.actionCards, els.secondary, els.queue].forEach((el) => {
+    [els.morning, els.hla, els.commandRail, els.jake, els.mike, els.actionCards, els.secondary, els.queue].forEach((el) => {
       if (!el || el.hidden) return;
       el.classList.add('is-revealed', 'cd-evolved');
       if (!prefersReducedMotion()) {

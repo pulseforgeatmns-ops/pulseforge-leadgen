@@ -244,6 +244,10 @@ async function getCampaign001Progress(clientId) {
     walkthrough_requests: walkthroughs,
     disqualified,
     remaining_route_queue: remainingQueue,
+    walk_in_queue: leads.filter(l =>
+      l.open_next_action === 'in_person_revisit' || l.operational_state === 'not_started'
+    ).length,
+    phone_first_queue: leads.filter(l => l.open_next_action === 'phone_follow_up').length,
     outcome_counts: outcomeCounts,
   };
 }

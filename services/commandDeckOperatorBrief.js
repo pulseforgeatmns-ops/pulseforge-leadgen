@@ -8,6 +8,7 @@ const {
   formatActionItem,
   buildActionCards,
   buildMikeInstructions,
+  buildCommandRail,
   buildDayZeroOperatorBrief,
 } = require('../utils/aoCommandDeckBrief');
 const { CLIENT_ID: ANCHOR_CLIENT_ID } = require('../scripts/data/anchorDirectMailTargets');
@@ -111,6 +112,14 @@ async function buildOperatorBrief(clientId) {
   }
 
   const openEscalations = today.open_escalations || 0;
+  const commandRail = buildCommandRail({
+    escalations: briefing.needs_jake || [],
+    campaign,
+    today,
+    mikeActions,
+    promoCount,
+    visitsToday,
+  });
 
   return {
     narrative,
@@ -119,6 +128,7 @@ async function buildOperatorBrief(clientId) {
     mikeActions,
     actionCards: buildActionCards({ openEscalations, promoCount }),
     mikeInstructions: buildMikeInstructions({ mikeActions, campaign, narrative }),
+    commandRail,
     generatedAt: briefing.generated_at || new Date().toISOString(),
     campaign_name: CAMPAIGN_NAME,
     mode: 'ao_operator',
