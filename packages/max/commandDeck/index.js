@@ -43,6 +43,7 @@ const {
   formatMovement,
 } = require('./sections/PriorityQueue');
 const { composeOperations } = require('./sections/Operations');
+const { composeSpatialOverview } = require('./sections/SpatialOverview');
 
 module.exports = {
   CommandDeckComposer,
@@ -72,4 +73,5 @@ module.exports = {
   composePriorityQueue,
   formatMovement,
   composeOperations,
+  composeSpatialOverview,
 };
