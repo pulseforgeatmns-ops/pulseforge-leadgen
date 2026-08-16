@@ -19,9 +19,11 @@ const {
   processVisitNoteAnswer,
 } = require('../utils/aoVisitFlow');
 const { DIRECT_MAIL_FOLLOW_UP_STEPS } = require('../utils/aoDirectMailFlow');
+const { ROUTE_FOLLOW_UP_STEPS } = require('../utils/aoRouteFollowUpFlow');
 const {
   createVisitRecord,
   completeDirectMailFollowUp,
+  completeRouteFollowUp,
   getTaskForFollowUp,
   notifyJakeEscalation,
   depositEscalationAction,
@@ -127,6 +129,7 @@ function getSteps(mode) {
   if (mode === 'log_visit') return LOG_VISIT_STEPS;
   if (mode === 'daily_debrief') return DEBRIEF_STEPS;
   if (mode === 'direct_mail_follow_up') return DIRECT_MAIL_FOLLOW_UP_STEPS;
+  if (mode === 'route_follow_up') return ROUTE_FOLLOW_UP_STEPS;
   if (mode === 'ask_for_help') return [{ key: 'question', question: 'What do you need help with?' }];
   if (mode === 'book_walkthrough') {
     return [
@@ -188,6 +191,42 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
         '',
         steps[0].question,
       ].join('\n'),
+      completed: false,
+    };
+  }
+
+  if (mode === 'route_follow_up') {
+    if (!taskId) {
+      return { error: 'task_id required for route follow-up', status: 400 };
+    }
+    const task = await getTaskForFollowUp(taskId, aoOwnerId);
+    if (!task) return { error: 'Follow-up task not found', status: 404 };
+
+    const session = await createSession({
+      aoOwnerId,
+      clientId,
+      mode,
+      initialPayload: {
+        task_id: taskId,
+        lead_id: task.lead_id,
+        business_name: task.business_name,
+        address: task.address,
+      },
+    });
+    const steps = getSteps(mode);
+    return {
+      session_id: session.id,
+      mode,
+      task_id: taskId,
+      business_name: task.business_name,
+      step: 0,
+      total_steps: steps.length,
+      reply: [
+        `Route stop — ${task.business_name}.`,
+        task.address ? `Address: ${task.address}` : null,
+        '',
+        steps[0].question,
+      ].filter(Boolean).join('\n'),
       completed: false,
     };
   }
@@ -432,6 +471,88 @@ async function finalizeDirectMailSession({
   };
 }
 
+async function finalizeRouteFollowUpSession({
+  session,
+  payload,
+  sessionId,
+  aoOwnerId,
+  clientId,
+  aoName,
+}) {
+  const nextAction = normalizeNextAction(payload.next_step || payload.visit_note || 'Follow up');
+  const nextActionOwner = resolveNextActionOwner(nextAction, payload);
+  const interestLevel = parseInterestLevel(
+    /high|interested|walkthrough/i.test(String(payload.next_step || '')) ? 'high'
+      : /not a fit|no fit|hard no/i.test(String(payload.next_step || '')) ? 'low'
+        : 'medium',
+  );
+
+  const result = await completeRouteFollowUp(payload.task_id, aoOwnerId, {
+    clientId,
+    aoName,
+    answers: payload,
+    visitNote: payload.visit_note,
+    nextAction,
+    interestLevel,
+    contactName: payload.contact_name,
+    contactRole: parseContactRole(payload.contact_role),
+  });
+
+  if (!result) return { error: 'Follow-up task not found', status: 404 };
+
+  if (result.escalation) {
+    await depositEscalationAction(result.escalation, result.lead, clientId, {
+      probeAnswers: payload,
+      nextAction,
+      interestLevel,
+      aoName,
+      contactRole: parseContactRole(payload.contact_role),
+      decisionMakerStatus: formatDecisionMakerStatus({
+        contactRole: parseContactRole(payload.contact_role),
+      }),
+    });
+    await notifyJakeEscalation(result.escalation, result.lead, aoName).catch(err => {
+      console.error('[ao] Jake notification failed:', err.message);
+    });
+  }
+
+  const completionType = resolveCompletionType({
+    nextActionOwner: result.nextActionOwner,
+    escalated: Boolean(result.escalation),
+    status: result.lead.status,
+  });
+
+  const reply = buildCompletionReply({
+    businessName: result.lead.business_name,
+    completionType,
+    escalated: Boolean(result.escalation),
+  });
+
+  let routeAdvance = null;
+  if (payload.task_id) {
+    routeAdvance = await advanceRouteAfterVisit({
+      aoOwnerId,
+      taskId: payload.task_id,
+      aoName,
+    }).catch(err => {
+      console.error('[ao] route advance failed:', err.message);
+      return null;
+    });
+  }
+
+  return {
+    session_id: sessionId,
+    mode: session.mode,
+    completed: true,
+    reply: routeAdvance?.next_stop_debrief ? reply + routeAdvance.next_stop_debrief : reply,
+    lead: result.lead,
+    task: result.task,
+    escalated: Boolean(result.escalation),
+    route: routeAdvance?.route || null,
+    next_stop: routeAdvance?.next_stop || null,
+  };
+}
+
 async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, message }) {
   const session = await getSession(sessionId, aoOwnerId);
   if (!session) return { error: 'Session not found or already completed', status: 404 };
@@ -583,6 +704,10 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
     return finalizeDirectMailSession({ session, payload, sessionId, aoOwnerId, clientId, aoName });
   }
 
+  if (session.mode === 'route_follow_up') {
+    return finalizeRouteFollowUpSession({ session, payload, sessionId, aoOwnerId, clientId, aoName });
+  }
+
   if (session.mode === 'daily_debrief') {
     const strong = String(payload.strong_opportunities || '').trim();
     const walkthroughs = String(payload.walkthrough_requests || '').trim();
@@ -612,8 +737,10 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
 module.exports = {
   LOG_VISIT_STEPS,
   DIRECT_MAIL_FOLLOW_UP_STEPS,
+  ROUTE_FOLLOW_UP_STEPS,
   startMode,
   respondToSession,
   detectEscalation,
   finalizeDirectMailSession,
+  finalizeRouteFollowUpSession,
 };

@@ -1,6 +1,6 @@
 const axios = require('axios');
 const pool = require('../db');
-const { buildSuggestedMessage, buildDirectMailOpening, normalizeNextAction, parseContactRole, formatDecisionMakerStatus } = require('../utils/aoMessageTemplates');
+const { buildSuggestedMessage, buildDirectMailOpening, normalizeNextAction, parseContactRole, formatDecisionMakerStatus, resolveNextActionOwner } = require('../utils/aoMessageTemplates');
 const { normalizeDueDate } = require('../utils/aoQueueFormat');
 
 function mapLead(row) {
@@ -544,6 +544,114 @@ async function completeDirectMailFollowUp(taskId, aoOwnerId, {
   }
 }
 
+async function completeRouteFollowUp(taskId, aoOwnerId, {
+  clientId,
+  aoName,
+  answers = {},
+  visitNote,
+  nextAction,
+  interestLevel,
+  contactName,
+  contactTitle,
+  contactRole,
+}) {
+  const taskRow = await getTaskForFollowUp(taskId, aoOwnerId);
+  if (!taskRow) return null;
+
+  const normalizedNextAction = normalizeNextAction(nextAction || answers.next_step || 'Follow up');
+  const nextActionOwner = resolveNextActionOwner(normalizedNextAction, answers);
+  const probeAnswers = { ...answers };
+  const summary = [
+    visitNote || null,
+    answers.contact_name ? `Contact: ${answers.contact_name}` : null,
+    answers.contact_role ? `Role: ${answers.contact_role}` : null,
+    answers.next_step ? `Next step: ${answers.next_step}` : null,
+  ].filter(Boolean).join('\n');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    let contactId = taskRow.contact_id;
+    if (contactName) {
+      const role = parseContactRole(contactRole || answers.contact_role);
+      if (contactId) {
+        await client.query(`
+          UPDATE ao_contacts
+          SET contact_name = $2, contact_title = COALESCE($3, contact_title),
+              is_decision_maker = $4, updated_at = NOW()
+          WHERE id = $1
+        `, [contactId, contactName, contactTitle || null, role === 'decision_maker']);
+      } else {
+        const { rows: contactRows } = await client.query(`
+          INSERT INTO ao_contacts (lead_id, contact_name, contact_title, is_decision_maker)
+          VALUES ($1,$2,$3,$4)
+          RETURNING id
+        `, [taskRow.lead_id, contactName, contactTitle || null, role === 'decision_maker']);
+        contactId = contactRows[0].id;
+      }
+    }
+
+    const leadStatus = /not a fit|do not contact|hard no/i.test(normalizedNextAction)
+      ? 'not_a_fit'
+      : /walkthrough|tour/i.test(normalizedNextAction)
+        ? 'walkthrough_requested'
+        : 'needs_follow_up';
+
+    await client.query(`
+      UPDATE ao_leads
+      SET status = $2,
+          interest_level = COALESCE($3, interest_level),
+          original_visit_note = COALESCE($4, original_visit_note),
+          probe_answers = $5,
+          last_contact_date = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+    `, [
+      taskRow.lead_id,
+      leadStatus,
+      interestLevel || null,
+      summary || null,
+      Object.keys(probeAnswers).length ? JSON.stringify(probeAnswers) : null,
+    ]);
+
+    await client.query(`
+      UPDATE ao_follow_up_tasks
+      SET status = 'done', completed_at = NOW(), last_interaction_summary = $2
+      WHERE id = $1
+    `, [taskId, summary || visitNote || 'Route follow-up logged']);
+
+    let escalation = null;
+    const escalate = nextActionOwner === 'jake' || nextActionOwner === 'walkthrough'
+      || /jake|walkthrough|owner should|admin should/i.test(normalizedNextAction);
+    if (escalate) {
+      const reason = nextActionOwner === 'walkthrough' ? 'walkthrough_request' : 'high_interest';
+      const { rows: escRows } = await client.query(`
+        INSERT INTO ao_escalations (lead_id, contact_id, ao_owner_id, reason, summary, probe_answers)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        RETURNING *
+      `, [taskRow.lead_id, contactId, aoOwnerId, reason, summary, JSON.stringify(probeAnswers)]);
+      escalation = escRows[0];
+    }
+
+    await client.query('COMMIT');
+    return {
+      task: mapTask({ ...taskRow, status: 'done' }),
+      lead: mapLead({ ...taskRow, id: taskRow.lead_id, status: leadStatus }),
+      escalation,
+      summary,
+      aoName,
+      clientId,
+      nextActionOwner,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function resolveAoOwnerByName(namePattern, clientId) {
   const { rows } = await pool.query(`
     SELECT id, name, email, client_id, role
@@ -799,6 +907,7 @@ module.exports = {
   createVisitRecord,
   createDirectMailFollowUpLead,
   completeDirectMailFollowUp,
+  completeRouteFollowUp,
   getTaskForFollowUp,
   findDirectMailLead,
   resolveAoOwnerByName,

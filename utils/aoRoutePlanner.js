@@ -141,9 +141,28 @@ function greedyNearestNeighbor(stops, startPoint) {
   return ordered;
 }
 
-function buildMapsNavigateUrl(address) {
-  const q = encodeURIComponent(String(address || '').trim());
+const NAV_APPS = Object.freeze(['google_maps', 'waze', 'apple_maps', 'ask_every_time']);
+
+function buildNavigateUrl(address, app = 'google_maps') {
+  const text = String(address || '').trim();
+  if (!isUsableAddress(text)) return null;
+  const q = encodeURIComponent(text);
+  if (app === 'waze') return `https://waze.com/ul?q=${q}&navigate=yes`;
+  if (app === 'apple_maps') return `http://maps.apple.com/?daddr=${q}`;
   return `https://www.google.com/maps/dir/?api=1&destination=${q}`;
+}
+
+function buildNavigateUrls(address) {
+  if (!isUsableAddress(address)) return null;
+  return {
+    google_maps: buildNavigateUrl(address, 'google_maps'),
+    waze: buildNavigateUrl(address, 'waze'),
+    apple_maps: buildNavigateUrl(address, 'apple_maps'),
+  };
+}
+
+function buildMapsNavigateUrl(address) {
+  return buildNavigateUrl(address, 'google_maps');
 }
 
 function formatSourceBadge(attributionSource, campaignName) {
@@ -248,18 +267,22 @@ function enrichStopRow(row, aoName) {
     brief: buildStopBrief(row),
     opening: buildSuggestedOpening({ ...row, aoName }),
     navigate_url: isUsableAddress(address) ? buildMapsNavigateUrl(address) : null,
+    navigate_urls: buildNavigateUrls(address),
   };
 }
 
 module.exports = {
   ANCHOR_OFFICE_DEFAULT,
   ANCHOR_OFFICE_COORDS,
+  NAV_APPS,
   isUsableAddress,
   haversineKm,
   geocodeAddress,
   resolveStartPoint,
   sortStopsByMode,
   greedyNearestNeighbor,
+  buildNavigateUrl,
+  buildNavigateUrls,
   buildMapsNavigateUrl,
   formatSourceBadge,
   buildStopBrief,
