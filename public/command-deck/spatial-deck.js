@@ -1,10 +1,11 @@
 'use strict';
 
 /**
- * SPEC-097 / SPEC-097A / SPEC-097B Living Command Deck — spatial intelligence field renderer.
+ * SPEC-097 / SPEC-097A / SPEC-097B / SPEC-097C Living Command Deck — spatial intelligence field renderer.
  * Render-only consumer of model.spatialOverview from CommandDeckModel.
  * Motion communicates intelligence state — it does not decorate the interface.
  * SPEC-097B: presentation-only spatial composition (orbit, halo, protected zone).
+ * SPEC-097C: Max is intelligence, not a card — restrained presence + judgment-only motion.
  */
 
 (function () {
@@ -31,8 +32,8 @@
 
   const ELEVATION_MS = 900;
   const SETTLE_MS = 1100;
-  const SIGNAL_MS = 8000;
-  const HALO_EXTENT_PX = 26;
+  const JUDGMENT_MS = 1000;
+  const HALO_EXTENT_PX = 8;
   const PROTECTED_GAP_PX = 18;
   const NODE_ESTIMATE = Object.freeze({ w: 132, h: 72 });
 
@@ -52,12 +53,10 @@
   let listView = false;
   /** @type {Map<string, HTMLElement>} */
   let nodeByDomain = new Map();
-  /** @type {number|null} */
-  let signalTimer = null;
-  /** @type {number} */
-  let signalCursor = 0;
   /** @type {Set<string>} */
   let signaledTransitions = new Set();
+  /** @type {number|null} */
+  let judgmentTimer = null;
   /** @type {string|null} */
   let lastMaxSignature = null;
 
@@ -132,7 +131,7 @@
     const maxEl = document.getElementById('cdSpatialMax');
     const maxRect = maxEl
       ? maxEl.getBoundingClientRect()
-      : { width: 148, height: 178 };
+      : { width: 200, height: 128 };
 
     const halfW = Math.max(orbit.width / 2, 1);
     const halfH = Math.max(orbit.height / 2, 1);
@@ -315,8 +314,7 @@
     updateAskPlaceholder(overview.maxAnchor, activeDomainId);
     renderRecentConversations();
     syncViewVisibility();
-    syncSignalLoop(overview.domains || []);
-    maybePulseMax(overview);
+    maybeRespondToJudgment(overview);
 
     if (window.matchMedia('(max-width: 640px)').matches) {
       setListView(true, { silent: true });
@@ -517,47 +515,58 @@
         const key = `${domain.id}:${domain.transition.previousState}:${domain.transition.newState}:${domain.transition.changedAt || ''}`;
         if (!signaledTransitions.has(key)) {
           signaledTransitions.add(key);
-          spawnSignalOnPath(path, d);
+          emphasizeConnection(domain.id);
         }
       }
     }
   }
 
-  function spawnSignalOnPath(path, d) {
-    if (!path || !path.parentNode || reducedMotion()) return;
-    const signal = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    signal.setAttribute('r', '2.6');
-    signal.classList.add('cd-intel-conn-signal');
-    signal.style.offsetPath = `path('${d}')`;
-    signal.style.offsetRotate = '0deg';
-    path.parentNode.appendChild(signal);
-    requestAnimationFrame(() => signal.classList.add('cd-intel-signal-travel'));
-    window.setTimeout(() => signal.remove(), ELEVATION_MS + 80);
-  }
-
-  function travelSignal(domainId) {
-    if (!els.connections || reducedMotion()) return;
+  function emphasizeConnection(domainId) {
+    if (!els.connections || !domainId) return;
     const path = els.connections.querySelector(`#cd-conn-${domainId}`);
     if (!path) return;
-    path.classList.add('cd-intel-conn-active');
-    spawnSignalOnPath(path, path.getAttribute('d'));
+    path.classList.add('cd-intel-conn-judgment');
     window.setTimeout(() => {
+      if (!path.isConnected) return;
+      path.classList.remove('cd-intel-conn-judgment');
       if (activeDomainId !== domainId) {
         const domain = findDomain(domainId);
         if (!domain || domain.priority !== 'urgent') {
           path.classList.remove('cd-intel-conn-active');
         }
       }
-    }, ELEVATION_MS + 400);
+    }, JUDGMENT_MS);
   }
 
-  function pulseMaxHalo() {
+  function respondToJudgment(domainId) {
+    if (listView) return;
     const max = document.getElementById('cdSpatialMax');
-    if (!max || reducedMotion()) return;
+    const canvas = els.canvas;
+    if (!max) return;
+
+    if (judgmentTimer) {
+      window.clearTimeout(judgmentTimer);
+      judgmentTimer = null;
+    }
+
     max.classList.remove('cd-max-signaling');
+    if (canvas) canvas.classList.remove('cd-field-responding');
     void max.offsetWidth;
+
+    if (reducedMotion()) {
+      emphasizeConnection(domainId);
+      return;
+    }
+
     max.classList.add('cd-max-signaling');
-    window.setTimeout(() => max.classList.remove('cd-max-signaling'), 1800);
+    if (canvas) canvas.classList.add('cd-field-responding');
+    emphasizeConnection(domainId);
+
+    judgmentTimer = window.setTimeout(() => {
+      max.classList.remove('cd-max-signaling');
+      if (canvas) canvas.classList.remove('cd-field-responding');
+      judgmentTimer = null;
+    }, JUDGMENT_MS);
   }
 
   function intelligenceSignature(overview) {
@@ -573,44 +582,17 @@
       .join('|');
   }
 
-  function maybePulseMax(overview) {
+  function maybeRespondToJudgment(overview) {
     const sig = intelligenceSignature(overview);
     if (lastMaxSignature && sig !== lastMaxSignature) {
-      const elevatedNow = (overview.domains || []).some(
+      const elevated = (overview.domains || []).find(
         (d) =>
           (d.transition && isElevationTransition(d.transition)) ||
           (d.intelligence && d.intelligence.active)
       );
-      if (elevatedNow) pulseMaxHalo();
+      if (elevated) respondToJudgment(elevated.id);
     }
     lastMaxSignature = sig;
-  }
-
-  function stopSignalLoop() {
-    if (signalTimer) {
-      window.clearInterval(signalTimer);
-      signalTimer = null;
-    }
-  }
-
-  function syncSignalLoop(domains) {
-    stopSignalLoop();
-    if (reducedMotion() || listView) return;
-    const urgentIds = (domains || [])
-      .filter((d) => d.priority === 'urgent')
-      .map((d) => d.id);
-    if (!urgentIds.length) return;
-
-    signalTimer = window.setInterval(() => {
-      if (document.hidden || reducedMotion() || listView) return;
-      const id = urgentIds[signalCursor % urgentIds.length];
-      signalCursor += 1;
-      travelSignal(id);
-    }, SIGNAL_MS);
-  }
-
-  function triggerConnectionSignal(domainId) {
-    travelSignal(domainId);
   }
 
   function renderListFallback(items) {
@@ -923,9 +905,6 @@
     }
     if (!listView && activeOverview) {
       renderConnections(activeOverview.domains || []);
-      syncSignalLoop(activeOverview.domains || []);
-    } else {
-      stopSignalLoop();
     }
   }
 
@@ -987,13 +966,8 @@
     const resume = () => document.body.classList.remove('cd-intel-paused');
 
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        pause();
-        stopSignalLoop();
-      } else {
-        resume();
-        if (activeOverview && !listView) syncSignalLoop(activeOverview.domains || []);
-      }
+      if (document.hidden) pause();
+      else resume();
     });
 
     if (reducedMotion()) pause();
@@ -1018,7 +992,10 @@
 
   function clear() {
     hide();
-    stopSignalLoop();
+    if (judgmentTimer) {
+      window.clearTimeout(judgmentTimer);
+      judgmentTimer = null;
+    }
     activeOverview = null;
     activeDomainId = null;
     lastMaxSignature = null;
