@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * SPEC-102 / SPEC-103 — retrieve durable knowledge before any specialist routing.
+ * SPEC-102 / SPEC-103 / SPEC-105 — retrieve durable knowledge before any
+ * specialist routing.
  *
  * Memory → reasoning → specialist → execution.
  * Retrieval / explanation / reflection never invoke a specialist.
@@ -9,6 +10,8 @@
  *
  * SPEC-103 adds the canonical durable load path: Blueprint → Playbook →
  * Knowledge Graph → Mission/Objectives → Campaign Context → Workspace.
+ * SPEC-105 adds operating-evidence retrieval (AO, prospects, Scout state,
+ * missions, activity, outcomes) before Blueprint advisory reasoning.
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
@@ -28,6 +31,14 @@ const {
   SERVICE_AREA_RE,
   ENTITY_KNOW_RE,
 } = require('./BusinessUnderstandingRetrieval');
+const {
+  isOperatingGroundedRecommendation,
+  shouldRetrieveOperatingEvidence,
+  isInventoryOnlyRequest,
+  loadOperatingEvidence,
+  composeOperatingEvidenceAnswer,
+  operatingStructured,
+} = require('./OperatingEvidenceRetrieval');
 
 const INDUSTRY_RE =
   /\b(what industries|which industries|who do we (?:target|serve)|ideal customers)\b/i;
@@ -44,9 +55,11 @@ function isHardRetrievalQuestion(question, mode) {
   if (INDUSTRY_RE.test(question)) return true;
   if (HISTORY_RE.test(question)) return true;
   if (ELEVATION_RE.test(question)) return true;
+  if (shouldRetrieveOperatingEvidence(question)) return true;
   if (mode && mode.kind === COGNITIVE_MODES.REFLECTION) return true;
   if (mode && mode.kind === COGNITIVE_MODES.EXPLANATION) return true;
   if (mode && mode.via === 'retrieval') return true;
+  if (mode && mode.via === 'operating_evidence') return true;
   return false;
 }
 
@@ -226,6 +239,64 @@ function workspaceStructured(answer, extras = {}) {
  * @param {object} input
  * @returns {Promise<object|null>}
  */
+async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
+  const inventoryOnly = isInventoryOnlyRequest(question);
+  const recommend =
+    isOperatingGroundedRecommendation(question) && !inventoryOnly;
+  const bundle = await loadOperatingEvidence(input);
+  const understanding = await inspectRetrievalSources(input);
+  const composed = composeOperatingEvidenceAnswer(question, bundle, {
+    inventoryOnly,
+    recommend,
+    businessUnderstanding: understanding,
+  });
+
+  if (input.session && input.session.context && typeof input.session.context === 'object') {
+    input.session.context.lastCognitiveMode = mode.kind;
+    input.session.context.lastRetrievalSources = composed.used || [];
+    input.session.context.lastOperatingEvidence = {
+      tenantId: bundle.tenantId || null,
+      itemCount: Array.isArray(bundle.items) ? bundle.items.length : 0,
+      launchedScout: false,
+    };
+  }
+
+  const structured = operatingStructured(composed.prose, {
+    used: composed.used,
+    items: composed.items || bundle.items || [],
+    cognitiveMode: mode.kind,
+    recommend: composed.recommend,
+    mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
+    unavailable: itemsByUnavailable(bundle.items),
+    reasoning: [
+      `Classified operator intent as ${mode.kind}.`,
+      'Retrieved existing PulseForge operating evidence before Blueprint advisory reasoning.',
+      composed.recommend
+        ? 'Recommendation is grounded in retrieved operating evidence, not Blueprint-only advice.'
+        : 'Inventory requested — no new acquisition recommendation before evidence review.',
+    ],
+  });
+
+  return {
+    reason: 'operating_evidence_retrieval',
+    structured,
+    prose: composed.prose,
+    mode,
+    sourcesUsed: composed.used || [],
+    knowledgeState: composed.knowledgeState,
+    delegated: false,
+    launchedScout: false,
+    operatingEvidence: bundle,
+  };
+}
+
+function itemsByUnavailable(items) {
+  return (items || [])
+    .filter((item) => item && item.epistemic === 'unavailable')
+    .map((item) => item.sourceKind || item.provenance)
+    .filter(Boolean);
+}
+
 async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
   const question = String(input.question || '').trim();
   if (!question) return null;
@@ -236,6 +307,10 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
       session: input.session,
       context: input.context,
     });
+
+  if (shouldRetrieveOperatingEvidence(question)) {
+    return maybeHandleOperatingEvidenceTurn(input, question, mode);
+  }
 
   const hardRetrieval = isHardRetrievalQuestion(question, mode);
   if (!forbidsSpecialistDelegation(mode) && !hardRetrieval) return null;
@@ -306,6 +381,7 @@ module.exports = {
   maybeHandleRetrievalBeforeDelegationTurn,
   inspectRetrievalSources,
   composeRetrievalAnswer,
+  isHardRetrievalQuestion,
   SERVICE_AREA_RE,
   ENTITY_KNOW_RE,
 };

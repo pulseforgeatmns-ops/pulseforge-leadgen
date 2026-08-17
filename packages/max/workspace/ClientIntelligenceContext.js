@@ -28,6 +28,9 @@ const {
   classifyAdvisoryHandoffIntent,
   composeAdvisoryHandoffResponse,
 } = require('./ActiveClientReasoning');
+const {
+  shouldRetrieveOperatingEvidence,
+} = require('./OperatingEvidenceRetrieval');
 
 const ACTIVE_ONBOARDING_STATUSES = new Set([
   'NEW',
@@ -1270,6 +1273,7 @@ function isClearlyNonBusinessUtterance(question, session) {
  * Concept scores select mode; they do not exclusively gate entry.
  */
 function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
+  if (shouldRetrieveOperatingEvidence(question)) return false;
   if (isClientContextExecutionRequest(question)) return false;
   if (isOperationalDeskOrMissionRequest(question)) return false;
   if (isAmbiguousExecutionAdjacentRequest(question)) return true;
@@ -2152,6 +2156,17 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
   const pre = await attachClientIntelligenceContext(input);
   const summary = pre.summary;
   const attachment = pre.attachment;
+
+  // Operating-state questions depend on recorded activity CIE does not contain.
+  if (shouldRetrieveOperatingEvidence(question)) {
+    return {
+      handled: false,
+      summary,
+      attachment,
+      clientId: pre.clientId,
+      skipReason: 'operating_evidence',
+    };
+  }
 
   // Never intercept explicit execution — Missions / review path owns it.
   if (isClientContextExecutionRequest(question)) {

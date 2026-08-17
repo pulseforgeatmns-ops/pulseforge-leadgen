@@ -165,6 +165,7 @@ class WorkspaceEngine {
    * @param {object} [options.specialistDelegationService] - SPEC-098 specialist delegation
    * @param {object} [options.specialistDelegationOpts] - SPEC-098 delegation store opts (tests)
    * @param {object} [options.scoutAcquisitionOpts] - SPEC-100 Scout loop opts (tests)
+   * @param {object} [options.operatingEvidenceOpts] - SPEC-105 operating evidence loaders (tests)
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
    */
   constructor(options = {}) {
@@ -199,6 +200,7 @@ class WorkspaceEngine {
     this._specialistDelegationOpts = options.specialistDelegationOpts || null;
     this._scoutAcquisitionOpts = options.scoutAcquisitionOpts || null;
     this._operatorContextOpts = options.operatorContextOpts || null;
+    this._operatingEvidenceOpts = options.operatingEvidenceOpts || null;
     this._loadOperatorContext =
       options.loadOperatorContext != null
         ? options.loadOperatorContext !== false
@@ -405,8 +407,9 @@ class WorkspaceEngine {
       };
     }
 
-    // SPEC-102 — retrieve durable knowledge before any specialist path.
-    // Retrieval / explanation / reflection never invoke Scout or another specialist.
+    // SPEC-102 / SPEC-103 / SPEC-105 — retrieve durable knowledge before any
+    // specialist path. Operating-evidence questions inspect AO/prospects/Scout
+    // state/missions/activity first. Retrieval never invokes Scout.
     const cognitive = classifyCognitiveMode(question, {
       session,
       context: rawContext || session.context,
@@ -418,6 +421,8 @@ class WorkspaceEngine {
       cognitive,
       cieService: this._clientIntelligenceService || undefined,
       cieOpts: this._clientIntelligenceOpts || undefined,
+      operatingEvidenceOpts: this._operatingEvidenceOpts || undefined,
+      ...(this._scoutAcquisitionOpts || {}),
     });
     if (retrievalTurn) {
       session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;

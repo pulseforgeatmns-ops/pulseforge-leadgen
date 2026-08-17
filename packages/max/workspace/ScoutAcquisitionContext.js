@@ -41,6 +41,12 @@ function resolveTenantId(input = {}) {
 function shouldHandleScoutAcquisition(input = {}) {
   const question = String(input.question || '').trim();
   if (!question) return false;
+  try {
+    const operating = require('./OperatingEvidenceRetrieval');
+    if (operating.shouldRetrieveOperatingEvidence(question)) return false;
+  } catch (_) {
+    /* classifier unavailable — fall through */
+  }
   const context = {
     ...(input.session && input.session.context),
     ...(input.context || {}),
@@ -62,6 +68,10 @@ function shouldHandleScoutAcquisition(input = {}) {
     }) &&
     !reusePriorWork
   ) {
+    return false;
+  }
+  const enabled = context.enabledAgents || context.enabled_agents;
+  if (Array.isArray(enabled) && !enabled.map(String).includes('scout')) {
     return false;
   }
   return scoutAcquisition.looksLikeAcquisitionQuestion(question, context);

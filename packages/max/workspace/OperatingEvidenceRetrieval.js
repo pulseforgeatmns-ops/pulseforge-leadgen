@@ -1,0 +1,1161 @@
+'use strict';
+
+/**
+ * SPEC-105 — operating-evidence retrieval over existing PulseForge stores.
+ *
+ * Thin composition only. Does not persist new operating events.
+ * Distinguishes business understanding (CIE) from recorded activity.
+ */
+
+const { buildStructuredResponse } = require('./WorkspaceTypes');
+
+const EPISTEMIC = Object.freeze({
+  VERIFIED: 'verified',
+  INFERRED: 'inferred',
+  NOT_RECORDED: 'not_recorded',
+  UNAVAILABLE: 'unavailable',
+});
+
+const CAMPAIGN_LAYER = Object.freeze({
+  INTENT: 'intent',
+  EXECUTION: 'execution',
+  OBSERVATION: 'observation',
+  OUTCOME: 'outcome',
+  LEARNING: 'learning',
+});
+
+const PROVENANCE = Object.freeze({
+  AO: 'Campaign 001 AO records',
+  SCOUT: 'Scout acquisition state',
+  PROSPECTS: 'prospect repository',
+  MISSION: 'mission',
+  OBJECTIVE: 'operator objective',
+  ACTIVITY: 'activity log',
+  TOUCHPOINT: 'touchpoint',
+  OUTCOME: 'revenue outcome',
+  BLUEPRINT: 'approved Blueprint',
+});
+
+const MAIL_EXECUTION_KEYS = Object.freeze([
+  'mailed_at',
+  'mail_sent_at',
+  'physical_mail_sent',
+  'mail_executed_at',
+  'postage_confirmed_at',
+  'direct_mail_sent_at',
+]);
+
+function present(text) {
+  return String(text || '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function resolveTenantId(input = {}) {
+  const session = input.session || {};
+  const sessionCtx =
+    session.context && typeof session.context === 'object' ? session.context : {};
+  const envelope =
+    input.context && typeof input.context === 'object' ? input.context : {};
+  return String(
+    input.authorizedTenantId ||
+      input.tenantId ||
+      envelope.tenantId ||
+      sessionCtx.tenantId ||
+      envelope.clientId ||
+      sessionCtx.clientId ||
+      input.clientId ||
+      ''
+  ).trim();
+}
+
+function resolveClientId(input = {}) {
+  const session = input.session || {};
+  const sessionCtx =
+    session.context && typeof session.context === 'object' ? session.context : {};
+  const envelope =
+    input.context && typeof input.context === 'object' ? input.context : {};
+  const raw =
+    input.clientId ??
+    envelope.clientId ??
+    envelope.client_id ??
+    sessionCtx.clientId ??
+    sessionCtx.client_id ??
+    resolveTenantId(input);
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+const BUSINESS_UNDERSTANDING_RE =
+  /\b(who are (?:our|my|the) ideal customers|where do we operate|what services do we (?:provide|offer)|what are our (?:stated )?business goals|who do we serve|what do we sell)\b/i;
+
+const ENTITY_UNDERSTANDING_RE =
+  /\bwhat do you (?:currently )?(?:know|understand|remember) about\b/i;
+
+const LIVE_MARKET_SIGNAL_RE =
+  /\b(showing (?:buying |purchase )?signals?|who (?:around here )?(?:needs|is expanding)|buying signals? right now)\b/i;
+
+const EXISTING_KNOWLEDGE_INVESTIGATE_RE =
+  /\binvestigate\b[\s\S]{0,160}\b(already (?:knows?|recorded|tried|have)|what (?:pulseforge|we|you) already|existing (?:evidence|activity|records?|pipeline))\b/i;
+
+const INVENTORY_INTENT_RE = new RegExp(
+  [
+    String.raw`\bevidence[- ]based inventory\b`,
+    String.raw`\binventory (?:our|the|of)\b`,
+    String.raw`\bwhat evidence (?:do we|have we|is)\b`,
+    String.raw`\bshow me (?:our|the) existing\b`,
+    String.raw`\btell me what (?:we'?ve|you'?ve|pulseforge) already\b`,
+    String.raw`\bfirst investigate what (?:pulseforge|we|you) already\b`,
+    String.raw`\bwhat (?:pulseforge|we|you) already (?:knows?|have|recorded)\b`,
+    String.raw`\bwhat does pulseforge already know\b`,
+    String.raw`\bwhat (?:campaigns?|acquisition activity|outreach) (?:have we|is already|has (?:already )?(?:happened|occurred|been))\b`,
+    String.raw`\bwhat happened with (?:campaign|our)\b`,
+    String.raw`\bwhat campaigns have we run\b`,
+    String.raw`\bwhat (?:prospects|leads) do we already have\b`,
+    String.raw`\bwhat has happened so far\b`,
+    String.raw`\bwhat have we already tried\b`,
+    String.raw`\bbefore recommending anything\b`,
+    String.raw`\bdon'?t recommend a new\b`,
+  ].join('|'),
+  'i'
+);
+
+const OPERATING_OBJECT_RE = new RegExp(
+  [
+    String.raw`\bcampaigns?\b`,
+    String.raw`\bcampaign 001\b`,
+    String.raw`\bao leads?\b`,
+    String.raw`\bacquisition activity\b`,
+    String.raw`\boutreach\b`,
+    String.raw`\bprospects?\b`,
+    String.raw`\bpipeline\b`,
+    String.raw`\bwalkthroughs?\b`,
+    String.raw`\btouchpoints?\b`,
+    String.raw`\bleads?\b`,
+    String.raw`\bmissions?\b`,
+    String.raw`\bsetter\b`,
+    String.raw`\boutcomes?\b`,
+    String.raw`\boperating evidence\b`,
+  ].join('|'),
+  'i'
+);
+
+const EXISTING_STATE_RE = new RegExp(
+  [
+    String.raw`\balready\b`,
+    String.raw`\bexisting\b`,
+    String.raw`\brecorded\b`,
+    String.raw`\bhappened\b`,
+    String.raw`\btried\b`,
+    String.raw`\binventory\b`,
+    String.raw`\bso far\b`,
+    String.raw`\bpast and current\b`,
+    String.raw`\bhave we run\b`,
+    String.raw`\bhave we tried\b`,
+    String.raw`\balready have\b`,
+    String.raw`\balready recorded\b`,
+    String.raw`\balready know`,
+    String.raw`\bcurrently happening\b`,
+  ].join('|'),
+  'i'
+);
+
+const DEFER_RECOMMEND_RE =
+  /\b(don'?t recommend|before recommending|before we (?:start|begin) (?:a )?new|not recommend a new)\b/i;
+
+const GROUNDED_RECOMMENDATION_RE = new RegExp(
+  [
+    String.raw`\bbased on what (?:we'?ve|you'?ve|pulseforge) already (?:tried|verified|recorded|knows?)\b`,
+    String.raw`\bgiven what (?:we'?ve|you'?ve|pulseforge) already (?:tried|verified|can actually verify)\b`,
+    String.raw`\bgiven what we'?ve already tried\b`,
+    String.raw`\bwhat pulseforge can actually verify\b`,
+    String.raw`\balready tried\b.{0,80}\bwhat should (?:i|we)\b`,
+    String.raw`\bwhat should (?:i|we) .{0,60}(?:already tried|can actually verify)\b`,
+  ].join('|'),
+  'i'
+);
+
+const NEW_INVESTIGATION_RE = new RegExp(
+  [
+    String.raw`\bfind (?:\d+\s+)?(?:additional|more)\s+(?:property managers|prospects|leads|companies|opportunit)`,
+    String.raw`\bfind (?:more )?(?:commercial |current )?(?:cleaning )?(?:\w+\s+){0,4}opportunit`,
+    String.raw`\blook(?:ing)? for (?:commercial|more|expansion|dentists?|property|competitors?|prospects?|leads?|signals?)`,
+    String.raw`\bresearch (?:competitors?|the market|expansion|property|dentists?|prospects?)`,
+  ].join('|'),
+  'i'
+);
+
+function isBusinessUnderstandingQuestion(question) {
+  const q = String(question || '');
+  if (BUSINESS_UNDERSTANDING_RE.test(q)) return true;
+  if (ENTITY_UNDERSTANDING_RE.test(q) && !OPERATING_OBJECT_RE.test(q)) return true;
+  return false;
+}
+
+function isExistingKnowledgeInvestigate(question) {
+  return EXISTING_KNOWLEDGE_INVESTIGATE_RE.test(String(question || ''));
+}
+
+function isNewInvestigationRequest(question) {
+  const q = String(question || '');
+  if (isExistingKnowledgeInvestigate(q)) return false;
+  return NEW_INVESTIGATION_RE.test(q);
+}
+
+function isInventoryOnlyRequest(question) {
+  const q = String(question || '');
+  if (DEFER_RECOMMEND_RE.test(q)) return true;
+  if (/\binventory\b/i.test(q)) return true;
+  if (/\btell me what you can verify\b/i.test(q)) return true;
+  if (/\bfirst investigate what (?:pulseforge|we|you) already\b/i.test(q)) return true;
+  if (/\bbefore recommending anything\b/i.test(q)) return true;
+  return false;
+}
+
+function isOperatingEvidenceQuestion(question) {
+  const q = String(question || '').trim();
+  if (!q) return false;
+  if (isBusinessUnderstandingQuestion(q)) return false;
+  if (isNewInvestigationRequest(q)) return false;
+  if (LIVE_MARKET_SIGNAL_RE.test(q) && !EXISTING_STATE_RE.test(q) && !INVENTORY_INTENT_RE.test(q)) {
+    return false;
+  }
+  if (INVENTORY_INTENT_RE.test(q)) return true;
+  if (isExistingKnowledgeInvestigate(q)) return true;
+  if (DEFER_RECOMMEND_RE.test(q) && OPERATING_OBJECT_RE.test(q)) return true;
+  if (/\bcampaign 001\b/i.test(q) && EXISTING_STATE_RE.test(q)) return true;
+  if (OPERATING_OBJECT_RE.test(q) && EXISTING_STATE_RE.test(q)) return true;
+  return false;
+}
+
+function isOperatingGroundedRecommendation(question) {
+  const q = String(question || '').trim();
+  if (!q) return false;
+  if (isInventoryOnlyRequest(q)) return false;
+  if (isNewInvestigationRequest(q)) return false;
+  if (isBusinessUnderstandingQuestion(q)) return false;
+  if (
+    GROUNDED_RECOMMENDATION_RE.test(q) &&
+    (OPERATING_OBJECT_RE.test(q) ||
+      EXISTING_STATE_RE.test(q) ||
+      /\balready tried\b/i.test(q) ||
+      /\bcan actually verify\b/i.test(q))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function shouldRetrieveOperatingEvidence(question) {
+  return (
+    isOperatingEvidenceQuestion(question) ||
+    isOperatingGroundedRecommendation(question)
+  );
+}
+
+function evidenceItem(input = {}) {
+  return {
+    epistemic: input.epistemic || EPISTEMIC.NOT_RECORDED,
+    layer: input.layer || null,
+    claim: present(input.claim),
+    provenance: present(input.provenance) || PROVENANCE.AO,
+    sourceKind: input.sourceKind || null,
+    debugSource: input.debugSource || null,
+    counts: input.counts || null,
+    records: Array.isArray(input.records) ? input.records : [],
+  };
+}
+
+function hasDurableMailExecution(leads = [], extras = {}) {
+  if (extras.mailExecuted === true) return true;
+  const rows = Array.isArray(leads) ? leads : [];
+  return rows.some((lead) => {
+    if (!lead || typeof lead !== 'object') return false;
+    for (const key of MAIL_EXECUTION_KEYS) {
+      if (lead[key]) return true;
+    }
+    const status = String(lead.mail_status || lead.execution_status || '').toLowerCase();
+    return status === 'mailed' || status === 'sent' || status === 'executed';
+  });
+}
+
+function hasYelpEvidence(bundle = {}) {
+  if (bundle.yelp && (bundle.yelp.recorded === true || (bundle.yelp.events || []).length)) {
+    return true;
+  }
+  const activity = (bundle.activity && bundle.activity.rows) || [];
+  return activity.some((row) => /yelp/i.test(String(row.channel || row.source || row.action_type || '')));
+}
+
+function scopedRows(rows, clientId, tenantId) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (clientId == null && !tenantId) return [];
+  return list.filter((row) => {
+    if (!row || typeof row !== 'object') return false;
+    const owner =
+      row.client_id != null
+        ? row.client_id
+        : row.clientId != null
+          ? row.clientId
+          : row.tenantId != null
+            ? row.tenantId
+            : row.tenant_id;
+    if (owner == null) return false;
+    if (clientId != null && Number(owner) === Number(clientId)) return true;
+    if (tenantId && String(owner) === String(tenantId)) return true;
+    return false;
+  });
+}
+
+async function safeLoad(loader, fallback) {
+  if (typeof loader !== 'function') return fallback;
+  try {
+    const result = await loader();
+    return result == null ? fallback : result;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function defaultPool(input = {}) {
+  if (input.pool) return input.pool;
+  try {
+    return require('../../../db');
+  } catch (_) {
+    return null;
+  }
+}
+
+async function defaultLoadCampaignAo(input = {}) {
+  const clientId = resolveClientId(input);
+  if (clientId == null) {
+    return { available: false, reason: 'missing_tenant' };
+  }
+  try {
+    const ao = input.aoBriefingService || require('../../../services/aoBriefingService');
+    const [progress, leads] = await Promise.all([
+      ao.getCampaign001Progress(clientId),
+      typeof ao.fetchEnrichedLeads === 'function'
+        ? ao.fetchEnrichedLeads(clientId)
+        : Promise.resolve([]),
+    ]);
+    return {
+      available: true,
+      progress: progress || null,
+      leads: Array.isArray(leads) ? leads : [],
+      campaignName:
+        (progress && progress.campaign_name) || ao.CAMPAIGN_001 || 'Campaign 001',
+    };
+  } catch (_) {
+    return { available: false, reason: 'ao_store_unavailable' };
+  }
+}
+
+async function defaultLoadProspects(input = {}) {
+  const clientId = resolveClientId(input);
+  if (clientId == null) {
+    return { available: false, reason: 'missing_tenant' };
+  }
+  const pool = defaultPool(input);
+  if (!pool || typeof pool.query !== 'function') {
+    return { available: false, reason: 'prospect_store_unavailable' };
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE COALESCE(icp_score, 0) >= 70)::int AS qualified,
+         COUNT(*) FILTER (WHERE status = 'cold')::int AS cold,
+         COUNT(*) FILTER (WHERE status = 'warm')::int AS warm,
+         COUNT(*) FILTER (WHERE COALESCE(is_hot, false) = true)::int AS hot,
+         COUNT(*) FILTER (WHERE COALESCE(setter_visible, false) = true)::int AS setter_visible,
+         COUNT(*) FILTER (WHERE setter_status = 'booked')::int AS booked,
+         COUNT(*) FILTER (WHERE setter_status = 'closed')::int AS closed
+       FROM prospects
+       WHERE client_id = $1`,
+      [clientId]
+    );
+    const segments = await pool.query(
+      `SELECT COALESCE(NULLIF(vertical, ''), 'unspecified') AS vertical, COUNT(*)::int AS count
+       FROM prospects
+       WHERE client_id = $1
+       GROUP BY 1
+       ORDER BY count DESC
+       LIMIT 8`,
+      [clientId]
+    );
+    return {
+      available: true,
+      counts: rows[0] || {},
+      segments: segments.rows || [],
+    };
+  } catch (_) {
+    return { available: false, reason: 'prospect_store_unavailable' };
+  }
+}
+
+async function defaultLoadScout(input = {}) {
+  const tenantId = resolveTenantId(input);
+  if (!tenantId) return { available: false, reason: 'missing_tenant' };
+  try {
+    const existing = require('../scoutAcquisition/ExistingIntelligence');
+    const {
+      createMemoryAcquisitionState,
+      createPostgresAcquisitionState,
+    } = require('../scoutAcquisition/AcquisitionState');
+    const intelligence = await existing.loadRepository({
+      authorizedTenantId: tenantId,
+      tenantId,
+      companies: input.companies,
+      people: input.people,
+      loadCompanies: input.loadCompanies,
+      defaultLoadFromDb: input.defaultLoadFromDb,
+    });
+    let aoStore = input.aoStore;
+    if (!aoStore) {
+      if (process.env.DATABASE_URL) {
+        try {
+          aoStore = createPostgresAcquisitionState(defaultPool(input));
+        } catch (_) {
+          aoStore = createMemoryAcquisitionState();
+        }
+      } else {
+        aoStore = createMemoryAcquisitionState();
+      }
+    }
+    const state = typeof aoStore.get === 'function' ? await aoStore.get(tenantId) : null;
+    return {
+      available: true,
+      intelligence,
+      state,
+      launchedNewWork: false,
+    };
+  } catch (_) {
+    return { available: false, reason: 'scout_store_unavailable', launchedNewWork: false };
+  }
+}
+
+async function defaultLoadMissions(input = {}) {
+  const tenantId = resolveTenantId(input);
+  const clientId = resolveClientId(input);
+  if (!tenantId) return { available: false, reason: 'missing_tenant', rows: [] };
+  if (typeof input.listMissions === 'function') {
+    const rows = await input.listMissions({ tenantId, clientId, limit: 25 });
+    return { available: true, rows: Array.isArray(rows) ? rows : [] };
+  }
+  if (input.missionEngine && typeof input.missionEngine.list === 'function') {
+    const rows = await input.missionEngine.list({ tenantId, clientId, limit: 25 });
+    return { available: true, rows: Array.isArray(rows) ? rows : [] };
+  }
+  const pool = defaultPool(input);
+  if (!pool || typeof pool.query !== 'function') {
+    return { available: false, reason: 'mission_store_unavailable', rows: [] };
+  }
+  try {
+    const params = [String(tenantId)];
+    let sql = `SELECT id, tenant_id, client_id, type, status, objective_text, title,
+                      created_at, updated_at, completed_at
+               FROM missions WHERE tenant_id = $1`;
+    if (clientId != null) {
+      params.push(clientId);
+      sql += ` AND client_id = $${params.length}`;
+    }
+    sql += ' ORDER BY updated_at DESC LIMIT 25';
+    const { rows } = await pool.query(sql, params);
+    return {
+      available: true,
+      rows: (rows || []).map((row) => ({
+        id: row.id,
+        tenantId: row.tenant_id,
+        clientId: row.client_id != null ? Number(row.client_id) : null,
+        type: row.type,
+        status: row.status,
+        title: row.title,
+        objectiveText: row.objective_text,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        completedAt: row.completed_at,
+      })),
+    };
+  } catch (_) {
+    return { available: false, reason: 'mission_store_unavailable', rows: [] };
+  }
+}
+
+async function defaultLoadObjectives(input = {}) {
+  const tenantId = resolveTenantId(input);
+  const clientId = resolveClientId(input);
+  if (!tenantId) return { available: false, reason: 'missing_tenant', rows: [] };
+  try {
+    const service = input.objectiveService || require('../../../services/operatorObjectives');
+    const rows = await service.getActiveObjectives(
+      { tenantId, clientId, limit: 25 },
+      input.objectiveOpts || {}
+    );
+    return { available: true, rows: Array.isArray(rows) ? rows : [] };
+  } catch (_) {
+    return { available: false, reason: 'objective_store_unavailable', rows: [] };
+  }
+}
+
+async function defaultLoadActivity(input = {}) {
+  const clientId = resolveClientId(input);
+  if (clientId == null) return { available: false, reason: 'missing_tenant', rows: [] };
+  const pool = defaultPool(input);
+  if (!pool || typeof pool.query !== 'function') {
+    return { available: false, reason: 'activity_store_unavailable', rows: [] };
+  }
+  try {
+    const touchpoints = await pool.query(
+      `SELECT t.id, t.client_id, t.channel, t.action_type, t.outcome, t.created_at
+       FROM touchpoints t
+       WHERE t.client_id = $1
+       ORDER BY t.created_at DESC
+       LIMIT 25`,
+      [clientId]
+    );
+    let activityRows = [];
+    try {
+      const activity = await pool.query(
+        `SELECT al.id, al.client_id, al.action_type, al.notes, al.created_at
+         FROM activity_log al
+         WHERE al.client_id = $1
+         ORDER BY al.created_at DESC
+         LIMIT 25`,
+        [clientId]
+      );
+      activityRows = activity.rows || [];
+    } catch (_) {
+      activityRows = [];
+    }
+    return {
+      available: true,
+      touchpoints: touchpoints.rows || [],
+      activity: activityRows,
+    };
+  } catch (_) {
+    return { available: false, reason: 'activity_store_unavailable', rows: [] };
+  }
+}
+
+async function defaultLoadOutcomes(input = {}) {
+  const clientId = resolveClientId(input);
+  if (clientId == null) return { available: false, reason: 'missing_tenant' };
+  const pool = defaultPool(input);
+  if (!pool || typeof pool.query !== 'function') {
+    return { available: false, reason: 'outcome_store_unavailable' };
+  }
+  const out = {
+    available: true,
+    jobs: 0,
+    payments: 0,
+    revenue: null,
+  };
+  try {
+    const jobs = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM jobs WHERE client_id = $1`,
+      [clientId]
+    );
+    out.jobs = jobs.rows[0] ? Number(jobs.rows[0].count) : 0;
+  } catch (_) {
+    /* table may not exist */
+  }
+  try {
+    const payments = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM payments WHERE client_id = $1`,
+      [clientId]
+    );
+    out.payments = payments.rows[0] ? Number(payments.rows[0].count) : 0;
+  } catch (_) {
+    /* table may not exist */
+  }
+  return out;
+}
+
+/**
+ * Load tenant-scoped operating evidence from existing stores.
+ * Never launches Scout. Fails closed without tenant context.
+ *
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function loadOperatingEvidence(input = {}) {
+  const tenantId = resolveTenantId(input);
+  const clientId = resolveClientId(input);
+  if (!tenantId || clientId == null) {
+    return {
+      ok: false,
+      failClosed: true,
+      reason: 'missing_tenant',
+      tenantId: tenantId || null,
+      clientId,
+      items: [],
+      campaign: null,
+      prospects: null,
+      scout: null,
+      missions: [],
+      objectives: [],
+      activity: null,
+      outcomes: null,
+    };
+  }
+
+  const opts = input.operatingEvidenceOpts || {};
+  const loadCampaignAo = opts.loadCampaignAo || input.loadCampaignAo || defaultLoadCampaignAo;
+  const loadProspects = opts.loadProspects || input.loadProspects || defaultLoadProspects;
+  const loadScout = opts.loadScout || input.loadScout || defaultLoadScout;
+  const loadMissions = opts.loadMissions || input.loadMissions || defaultLoadMissions;
+  const loadObjectives = opts.loadObjectives || input.loadObjectives || defaultLoadObjectives;
+  const loadActivity = opts.loadActivity || input.loadActivity || defaultLoadActivity;
+  const loadOutcomes = opts.loadOutcomes || input.loadOutcomes || defaultLoadOutcomes;
+
+  const loaderInput = {
+    ...input,
+    ...opts,
+    tenantId,
+    clientId,
+    authorizedTenantId: tenantId,
+  };
+
+  const [campaign, prospects, scout, missions, objectives, activity, outcomes] =
+    await Promise.all([
+      safeLoad(() => loadCampaignAo(loaderInput), { available: false, reason: 'ao_store_unavailable' }),
+      safeLoad(() => loadProspects(loaderInput), { available: false, reason: 'prospect_store_unavailable' }),
+      safeLoad(() => loadScout(loaderInput), { available: false, reason: 'scout_store_unavailable', launchedNewWork: false }),
+      safeLoad(() => loadMissions(loaderInput), { available: false, rows: [] }),
+      safeLoad(() => loadObjectives(loaderInput), { available: false, rows: [] }),
+      safeLoad(() => loadActivity(loaderInput), { available: false, touchpoints: [], activity: [] }),
+      safeLoad(() => loadOutcomes(loaderInput), { available: false }),
+    ]);
+
+  const scopedLeads = scopedRows(campaign.leads, clientId, tenantId);
+  const scopedMissions = scopedRows(missions.rows, clientId, tenantId);
+  const scopedObjectives = scopedRows(objectives.rows, clientId, tenantId);
+  const scopedTouchpoints = scopedRows(activity.touchpoints, clientId, tenantId);
+  const scopedActivity = scopedRows(activity.activity, clientId, tenantId);
+
+  const items = [];
+  const campaignName = (campaign.progress && campaign.progress.campaign_name) || campaign.campaignName || 'Campaign 001';
+
+  if (campaign.available === false) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.UNAVAILABLE,
+        layer: CAMPAIGN_LAYER.INTENT,
+        claim: 'Campaign / AO records could not be read for this tenant.',
+        provenance: PROVENANCE.AO,
+        sourceKind: 'ao',
+        debugSource: campaign.reason || 'ao_store_unavailable',
+      })
+    );
+  } else if (campaign.progress) {
+    const p = campaign.progress;
+    const seeded = Number(p.seeded_in_ao || scopedLeads.length || 0);
+    items.push(
+      evidenceItem({
+        epistemic: seeded > 0 ? EPISTEMIC.VERIFIED : EPISTEMIC.NOT_RECORDED,
+        layer: CAMPAIGN_LAYER.INTENT,
+        claim:
+          seeded > 0
+            ? `${campaignName} has ${seeded} AO lead${seeded === 1 ? '' : 's'} attributed in PulseForge.`
+            : `No AO leads are currently attributed to ${campaignName} for this tenant.`,
+        provenance: PROVENANCE.AO,
+        sourceKind: 'ao',
+        debugSource: 'ao_leads',
+        counts: {
+          seeded,
+          targetTotal: Number(p.target_total || 0),
+          visited: Number(p.visited || 0),
+          walkthroughRequests: Number(p.walkthrough_requests || 0),
+          escalations: Number(p.escalations || 0),
+          remaining: Number(p.remaining_route_queue || 0),
+        },
+      })
+    );
+
+    if (Number(p.visited || 0) > 0) {
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.VERIFIED,
+          layer: CAMPAIGN_LAYER.OBSERVATION,
+          claim: `${Number(p.visited)} AO lead${Number(p.visited) === 1 ? '' : 's'} have an operational state other than not-started.`,
+          provenance: PROVENANCE.AO,
+          sourceKind: 'ao',
+          debugSource: 'ao_leads.operational_state',
+        })
+      );
+    }
+
+    if (Number(p.walkthrough_requests || 0) > 0) {
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.VERIFIED,
+          layer: CAMPAIGN_LAYER.OBSERVATION,
+          claim: `${Number(p.walkthrough_requests)} walkthrough-request state${Number(p.walkthrough_requests) === 1 ? '' : 's'} recorded in AO.`,
+          provenance: PROVENANCE.AO,
+          sourceKind: 'ao',
+          debugSource: 'ao_leads.walkthrough_requested',
+        })
+      );
+    } else {
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.NOT_RECORDED,
+          layer: CAMPAIGN_LAYER.OUTCOME,
+          claim: 'No walkthrough-request operational states are recorded in AO for this tenant.',
+          provenance: PROVENANCE.AO,
+          sourceKind: 'ao',
+        })
+      );
+    }
+
+    const mailExecuted = hasDurableMailExecution(scopedLeads, campaign);
+    items.push(
+      evidenceItem({
+        epistemic: mailExecuted ? EPISTEMIC.VERIFIED : EPISTEMIC.NOT_RECORDED,
+        layer: mailExecuted ? CAMPAIGN_LAYER.EXECUTION : CAMPAIGN_LAYER.INTENT,
+        claim: mailExecuted
+          ? `Durable evidence confirms ${campaignName} physical mail execution.`
+          : `I don't currently have a durable record confirming that ${campaignName} was physically mailed.`,
+        provenance: PROVENANCE.AO,
+        sourceKind: 'ao',
+        debugSource: mailExecuted ? 'ao_leads.mail_execution' : 'ao_leads.seed_or_intent',
+      })
+    );
+
+    if (seeded > 0 && !mailExecuted) {
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.INFERRED,
+          layer: CAMPAIGN_LAYER.INTENT,
+          claim: `AO follow-up records suggest these prospects were intended for ${campaignName} outreach. That is intent, not proof of external execution.`,
+          provenance: PROVENANCE.AO,
+          sourceKind: 'ao',
+        })
+      );
+    }
+  }
+
+  if (prospects.available === false) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.UNAVAILABLE,
+        claim: 'Prospect repository could not be read for this tenant.',
+        provenance: PROVENANCE.PROSPECTS,
+        sourceKind: 'prospects',
+        debugSource: prospects.reason,
+      })
+    );
+  } else {
+    const total = Number((prospects.counts && prospects.counts.total) || 0);
+    const qualified = Number((prospects.counts && prospects.counts.qualified) || 0);
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.VERIFIED,
+        claim:
+          total > 0
+            ? `Prospect repository has ${total} existing prospect${total === 1 ? '' : 's'}${qualified ? `, ${qualified} at or above qualification threshold` : ''}.`
+            : 'No prospects are currently recorded for this tenant.',
+        provenance: PROVENANCE.PROSPECTS,
+        sourceKind: 'prospects',
+        counts: prospects.counts || { total: 0 },
+      })
+    );
+  }
+
+  if (scout.available === false) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.UNAVAILABLE,
+        claim: 'Existing Scout acquisition state could not be read.',
+        provenance: PROVENANCE.SCOUT,
+        sourceKind: 'scout',
+      })
+    );
+  } else {
+    const intel = scout.intelligence || {};
+    const matched = Number((intel.counts && intel.counts.matched) || (intel.companies || []).length || 0);
+    const state = scout.state;
+    if (matched > 0 || (state && Number(state.opportunityCount || 0) > 0)) {
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.VERIFIED,
+          claim: `Existing Scout intelligence has ${matched || Number(state.opportunityCount || 0)} in-scope compan${(matched || Number(state.opportunityCount || 0)) === 1 ? 'y' : 'ies'} on file. This is retrieved state, not a new investigation.`,
+          provenance: PROVENANCE.SCOUT,
+          sourceKind: 'scout',
+          counts: intel.counts || { matched },
+        })
+      );
+    } else {
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.NOT_RECORDED,
+          claim: 'No existing Scout acquisition intelligence is on file for this tenant.',
+          provenance: PROVENANCE.SCOUT,
+          sourceKind: 'scout',
+        })
+      );
+    }
+  }
+
+  if (missions.available === false) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.UNAVAILABLE,
+        claim: 'Mission records could not be read for this tenant.',
+        provenance: PROVENANCE.MISSION,
+        sourceKind: 'mission',
+      })
+    );
+  } else if (scopedMissions.length) {
+    const titles = scopedMissions
+      .slice(0, 5)
+      .map((m) => present(m.title || m.objectiveText || 'Mission'))
+      .filter(Boolean);
+    const titleBit = titles.length ? ` including ${titles.join('; ')}` : '';
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.VERIFIED,
+        layer: CAMPAIGN_LAYER.INTENT,
+        claim: `${scopedMissions.length} mission${scopedMissions.length === 1 ? '' : 's'} on file${titleBit}. Mission status is planned or tracked work — not proof that an external action occurred.`,
+        provenance: PROVENANCE.MISSION,
+        sourceKind: 'mission',
+        records: scopedMissions.slice(0, 8).map((m) => ({
+          id: m.id,
+          title: m.title || m.objectiveText || 'Mission',
+          status: m.status,
+          createdAt: m.createdAt || m.created_at || null,
+        })),
+      })
+    );
+  } else {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.NOT_RECORDED,
+        claim: 'No missions are currently recorded for this tenant.',
+        provenance: PROVENANCE.MISSION,
+        sourceKind: 'mission',
+      })
+    );
+  }
+
+  if (objectives.available !== false && scopedObjectives.length) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.VERIFIED,
+        layer: CAMPAIGN_LAYER.INTENT,
+        claim: `${scopedObjectives.length} active operator objective${scopedObjectives.length === 1 ? '' : 's'} describe${scopedObjectives.length === 1 ? 's' : ''} desired state. Objectives are not evidence that activity occurred.`,
+        provenance: PROVENANCE.OBJECTIVE,
+        sourceKind: 'objective',
+        records: scopedObjectives.slice(0, 5).map((o) => ({
+          id: o.id,
+          title: o.title || o.objectiveText || o.objective,
+          status: o.status,
+        })),
+      })
+    );
+  }
+
+  const activityCount = scopedTouchpoints.length + scopedActivity.length;
+  if (activity.available === false) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.UNAVAILABLE,
+        claim: 'Activity and touchpoint records could not be read for this tenant.',
+        provenance: PROVENANCE.ACTIVITY,
+        sourceKind: 'activity',
+      })
+    );
+  } else if (activityCount > 0) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.VERIFIED,
+        layer: CAMPAIGN_LAYER.OBSERVATION,
+        claim: `${scopedTouchpoints.length} recent touchpoint${scopedTouchpoints.length === 1 ? '' : 's'} and ${scopedActivity.length} setter/activity event${scopedActivity.length === 1 ? '' : 's'} recorded for this tenant.`,
+        provenance: scopedTouchpoints.length ? PROVENANCE.TOUCHPOINT : PROVENANCE.ACTIVITY,
+        sourceKind: 'activity',
+      })
+    );
+  } else {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.NOT_RECORDED,
+        claim: 'No recent tenant-scoped touchpoints or setter activity events are recorded.',
+        provenance: PROVENANCE.ACTIVITY,
+        sourceKind: 'activity',
+      })
+    );
+  }
+
+  if (!hasYelpEvidence({ activity: { rows: scopedActivity }, yelp: input.yelp })) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.NOT_RECORDED,
+        claim: 'No durable Yelp activity is recorded for this tenant.',
+        provenance: PROVENANCE.ACTIVITY,
+        sourceKind: 'yelp',
+      })
+    );
+  }
+
+  const crmPromoted = scopedLeads.filter(
+    (l) => l.operational_state === 'converted_to_crm' || l.crm_prospect_id
+  ).length;
+  const jobs = Number((outcomes && outcomes.jobs) || 0);
+  const payments = Number((outcomes && outcomes.payments) || 0);
+  if (crmPromoted || jobs || payments) {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.VERIFIED,
+        layer: CAMPAIGN_LAYER.OUTCOME,
+        claim: [
+          crmPromoted ? `${crmPromoted} AO lead${crmPromoted === 1 ? '' : 's'} promoted into CRM` : null,
+          jobs ? `${jobs} job${jobs === 1 ? '' : 's'} recorded` : null,
+          payments ? `${payments} payment${payments === 1 ? '' : 's'} recorded` : null,
+        ]
+          .filter(Boolean)
+          .join('; ') + '.',
+        provenance: PROVENANCE.OUTCOME,
+        sourceKind: 'outcome',
+      })
+    );
+  } else {
+    items.push(
+      evidenceItem({
+        epistemic: EPISTEMIC.NOT_RECORDED,
+        layer: CAMPAIGN_LAYER.OUTCOME,
+        claim: 'No durable conversion, job, or payment outcomes are recorded for this tenant.',
+        provenance: PROVENANCE.OUTCOME,
+        sourceKind: 'outcome',
+      })
+    );
+  }
+
+  return {
+    ok: true,
+    failClosed: false,
+    tenantId,
+    clientId,
+    launchedScout: false,
+    campaign: {
+      ...campaign,
+      leads: scopedLeads,
+      mailExecuted: hasDurableMailExecution(scopedLeads, campaign),
+    },
+    prospects,
+    scout: { ...scout, launchedNewWork: false },
+    missions: scopedMissions,
+    objectives: scopedObjectives,
+    activity: {
+      ...activity,
+      touchpoints: scopedTouchpoints,
+      activity: scopedActivity,
+    },
+    outcomes,
+    items,
+  };
+}
+
+function itemsByEpistemic(items, epistemic) {
+  return (items || []).filter((item) => item.epistemic === epistemic);
+}
+
+function formatVerifiedSection(items) {
+  const verified = itemsByEpistemic(items, EPISTEMIC.VERIFIED);
+  if (!verified.length) {
+    return 'I queried the operating stores PulseForge can currently read for this tenant and did not find durable verified activity beyond empty or unavailable records.';
+  }
+  return verified
+    .map((item) => `- ${item.claim} Verified from ${item.provenance}.`)
+    .join('\n');
+}
+
+function formatInferredSection(items) {
+  const inferred = itemsByEpistemic(items, EPISTEMIC.INFERRED);
+  if (!inferred.length) return '';
+  return inferred.map((item) => `- ${item.claim}`).join('\n');
+}
+
+function formatNotRecordedSection(items) {
+  const missing = itemsByEpistemic(items, EPISTEMIC.NOT_RECORDED);
+  if (!missing.length) return 'I am not currently flagging additional missing operating facts beyond the verified set above.';
+  return missing.map((item) => `- ${item.claim}`).join('\n');
+}
+
+function formatUnavailableSection(items) {
+  const rows = itemsByEpistemic(items, EPISTEMIC.UNAVAILABLE);
+  if (!rows.length) return '';
+  return rows
+    .map((item) => `- ${item.claim}${item.debugSource ? ` Source: ${item.provenance}.` : ` Source: ${item.provenance}.`}`)
+    .join('\n');
+}
+
+function composeRecommendationFromEvidence(bundle, understanding = null) {
+  const verified = itemsByEpistemic(bundle.items, EPISTEMIC.VERIFIED);
+  const campaign = bundle.campaign && bundle.campaign.progress;
+  const seeded = campaign ? Number(campaign.seeded_in_ao || 0) : 0;
+  const walkthroughs = campaign ? Number(campaign.walkthrough_requests || 0) : 0;
+  const prospects = Number((bundle.prospects && bundle.prospects.counts && bundle.prospects.counts.total) || 0);
+  const lines = [];
+  if (seeded > 0) {
+    lines.push(
+      `Campaign 001 already has ${seeded} attributed AO lead${seeded === 1 ? '' : 's'}. The next useful move is to work recorded follow-up and walkthrough-request states rather than launching a new acquisition motion from Blueprint assumptions.`
+    );
+  }
+  if (walkthroughs > 0) {
+    lines.push(
+      `${walkthroughs} walkthrough-request state${walkthroughs === 1 ? '' : 's'} are already recorded — convert or close those before seeding a new experiment.`
+    );
+  }
+  if (prospects > 0) {
+    lines.push(
+      `${prospects} prospect${prospects === 1 ? '' : 's'} already exist in the repository. Reuse that list before asking Scout to find more.`
+    );
+  }
+  if (!bundle.campaign || bundle.campaign.mailExecuted !== true) {
+    lines.push(
+      'I still cannot verify physical mail execution. Treat Campaign 001 as planned/observed operating state until durable execution evidence exists.'
+    );
+  }
+  if (!lines.length) {
+    lines.push(
+      'Recorded operating evidence is thin. Any next step should first make existing activity inspectable — not assume a blank slate from the Blueprint.'
+    );
+  }
+  const name =
+    understanding &&
+    understanding.contract &&
+    understanding.contract.companyName
+      ? understanding.contract.companyName
+      : '';
+  const prefix = name
+    ? `Given ${name}'s recorded operating evidence — not just approved business understanding — `
+    : 'Given what PulseForge can actually verify — not just approved business understanding — ';
+  return prefix + lines.join(' ');
+}
+
+function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
+  if (!bundle || bundle.failClosed) {
+    return {
+      prose:
+        'I cannot retrieve operating evidence without a tenant context. I will not inspect another client or invent activity.',
+      used: [],
+      knowledgeState: 'missing_tenant',
+      recommend: false,
+      launchedScout: false,
+    };
+  }
+
+  const inventoryOnly = extras.inventoryOnly != null ? extras.inventoryOnly : isInventoryOnlyRequest(question);
+  const recommend = extras.recommend === true && !inventoryOnly;
+  const verified = formatVerifiedSection(bundle.items);
+  const inferred = formatInferredSection(bundle.items);
+  const missing = formatNotRecordedSection(bundle.items);
+  const unavailable = formatUnavailableSection(bundle.items);
+
+  const parts = [
+    'What I can verify',
+    verified,
+    inferred
+      ? 'What that tells me\n' +
+        inferred +
+        '\nI am labeling interpretation separately from verified fact. Mission intent and AO seed notes are not proof of external execution.'
+      : 'What that tells me\nRecorded operating state is listed above. I will not treat campaign intent, target lists, or mission artifacts as proof that Campaign 001 was mailed.',
+    'What I cannot verify',
+    missing + (unavailable ? '\n' + unavailable : ''),
+    'What I would need to investigate',
+    'I do not need Scout to rediscover prospects or campaigns already in PulseForge. New specialist work is only warranted if you want additional accounts that are not already recorded.',
+  ];
+
+  if (recommend) {
+    parts.push('Recommendation');
+    parts.push(composeRecommendationFromEvidence(bundle, extras.businessUnderstanding || null));
+  }
+
+  const used = [];
+  if (bundle.campaign && bundle.campaign.available !== false) used.push('campaignAo');
+  if (bundle.prospects && bundle.prospects.available !== false) used.push('prospects');
+  if (bundle.scout && bundle.scout.available !== false) used.push('scoutState');
+  if ((bundle.missions || []).length) used.push('missions');
+  if ((bundle.objectives || []).length) used.push('objectives');
+  if (bundle.activity && bundle.activity.available !== false) used.push('activity');
+  used.push('operatingEvidence');
+
+  return {
+    prose: parts.filter(Boolean).join('\n\n'),
+    used,
+    knowledgeState: 'operating_evidence',
+    recommend,
+    launchedScout: false,
+    items: bundle.items,
+  };
+}
+
+function operatingStructured(answer, extras = {}) {
+  const evidence = Array.isArray(extras.items)
+    ? extras.items
+        .filter((item) => item.epistemic === EPISTEMIC.VERIFIED || item.epistemic === EPISTEMIC.INFERRED)
+        .map((item, idx) => ({
+          id: `op-ev-${idx + 1}`,
+          label: item.provenance,
+          detail: item.claim,
+          epistemic: item.epistemic,
+          layer: item.layer,
+        }))
+    : [];
+  return buildStructuredResponse({
+    answer,
+    reasoning: extras.reasoning || [
+      'Retrieved existing PulseForge operating evidence before recommending or delegating.',
+    ],
+    supportingEvidence: evidence,
+    contradictingEvidence: [],
+    confidence: extras.confidence != null ? extras.confidence : 0.86,
+    nextInvestigations: extras.recommend
+      ? []
+      : ['Ask for a recommendation only after reviewing this inventory.'],
+    recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
+    confidenceContributors: ['operating_evidence_retrieval', 'spec_105'],
+    timelineReferences: [],
+    relatedEntities: [],
+    metadata: {
+      sourcesUsed: {
+        briefing: Boolean(extras.used && extras.used.includes('campaignAo')),
+        reasoning: Boolean(extras.recommend),
+        memory: true,
+        policy: true,
+        knowledge: Boolean(extras.used && extras.used.includes('blueprint')),
+      },
+      evidenceCount: evidence.length,
+      asOf: new Date().toISOString(),
+      unavailable: extras.unavailable || [],
+      cognitiveMode: extras.cognitiveMode || 'retrieval',
+      retrievalBeforeDelegation: true,
+      operatingEvidenceRetrieval: true,
+      specialistDelegated: false,
+      scoutDelegated: false,
+      campaignMailExecuted: extras.mailExecuted === true,
+    },
+  });
+}
+
+module.exports = {
+  EPISTEMIC,
+  CAMPAIGN_LAYER,
+  PROVENANCE,
+  isOperatingEvidenceQuestion,
+  isOperatingGroundedRecommendation,
+  shouldRetrieveOperatingEvidence,
+  isInventoryOnlyRequest,
+  isExistingKnowledgeInvestigate,
+  isNewInvestigationRequest,
+  isBusinessUnderstandingQuestion,
+  loadOperatingEvidence,
+  composeOperatingEvidenceAnswer,
+  composeRecommendationFromEvidence,
+  operatingStructured,
+  resolveTenantId,
+  resolveClientId,
+  hasDurableMailExecution,
+  scopedRows,
+};
