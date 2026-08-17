@@ -3,11 +3,11 @@
 /**
  * SPEC-096 — CIE authorization helpers.
  * For client-role users, authenticated session client_id is authoritative.
+ * For admin/manager operators, session.active_client_id is authoritative.
  * Opaque interview/blueprint IDs are not authorization.
  */
 
 const {
-  getRequestClientId,
   normalizeClientId,
 } = require('./clientContext');
 const {
@@ -28,11 +28,11 @@ function isInternalOperator(req) {
 }
 
 /**
- * Resolve the CIE client scope for this request.
+ * Resolve the canonical CIE tenant for this request.
+ * Session/active-client context is authoritative — CIE never defaults to client 1.
  * @param {object} req
- * @param {string|number|null} [requestedId] - route/query/body hint (ignored for client role)
  */
-function resolveCieClientId(req, requestedId) {
+function resolveCieCanonicalClientId(req) {
   if (isClientRole(req)) {
     const raw = userFrom(req)?.client_id;
     const id = parseInt(raw, 10);
@@ -46,20 +46,61 @@ function resolveCieClientId(req, requestedId) {
     return id;
   }
 
-  if (requestedId != null && String(requestedId).trim() !== '') {
-    return normalizeClientId(requestedId);
+  const user = userFrom(req);
+  if (user?.client_id != null && String(user.client_id).trim() !== '') {
+    const bound = parseInt(user.client_id, 10);
+    if (Number.isFinite(bound) && bound > 0) {
+      return bound;
+    }
   }
 
-  return getRequestClientId(req);
+  const sessionRaw = req?.session?.active_client_id;
+  if (sessionRaw != null && String(sessionRaw).trim() !== '') {
+    const sessionId = parseInt(sessionRaw, 10);
+    if (Number.isFinite(sessionId) && sessionId > 0) {
+      return sessionId;
+    }
+  }
+
+  throw new ClientIntelligenceError(
+    'tenant_context_required',
+    'Active client context is required for CIE operations',
+    400
+  );
 }
 
 /**
- * Fail closed when a client-role user targets another client's resource.
- * Admin/manager retain cross-client access for intentional operator workflows.
+ * Resolve the CIE client scope for this request.
+ * @param {object} req
+ * @param {string|number|null} [requestedId] - route/query/body hint (must match canonical)
+ */
+function resolveCieClientId(req, requestedId) {
+  const canonical = resolveCieCanonicalClientId(req);
+
+  // Client-role override rejection is handled by assertRequestedClientMatches.
+  if (isClientRole(req)) {
+    return canonical;
+  }
+
+  if (requestedId != null && String(requestedId).trim() !== '') {
+    const requested = normalizeClientId(requestedId);
+    if (Number(requested) !== Number(canonical)) {
+      throw new ClientIntelligenceError(
+        'tenant_mismatch',
+        'Requested client does not match active tenant context',
+        403
+      );
+    }
+  }
+
+  return canonical;
+}
+
+/**
+ * Fail closed when a resource belongs to a different tenant than the request context.
  */
 function assertCieClientAccess(req, resourceClientId) {
-  if (!isClientRole(req)) return;
-  const allowed = resolveCieClientId(req);
+  const allowed = resolveCieCanonicalClientId(req);
   const resource = Number(resourceClientId);
   if (!Number.isFinite(resource) || resource !== Number(allowed)) {
     throw new ClientIntelligenceError(
@@ -76,7 +117,7 @@ function assertCieClientAccess(req, resourceClientId) {
 function assertRequestedClientMatches(req, requestedId) {
   if (!isClientRole(req)) return;
   if (requestedId == null || String(requestedId).trim() === '') return;
-  const allowed = resolveCieClientId(req);
+  const allowed = resolveCieCanonicalClientId(req);
   const requested = Number(requestedId);
   if (!Number.isFinite(requested) || requested !== Number(allowed)) {
     throw new ClientIntelligenceError(
@@ -90,6 +131,7 @@ function assertRequestedClientMatches(req, requestedId) {
 module.exports = {
   isClientRole,
   isInternalOperator,
+  resolveCieCanonicalClientId,
   resolveCieClientId,
   assertCieClientAccess,
   assertRequestedClientMatches,
