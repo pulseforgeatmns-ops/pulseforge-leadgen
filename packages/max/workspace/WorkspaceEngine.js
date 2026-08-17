@@ -33,6 +33,12 @@ const {
   maybeHandleSpecialistInterrogationTurn,
 } = require('./SpecialistInterrogationContext');
 const {
+  maybeHandleRetrievalBeforeDelegationTurn,
+} = require('./RetrievalBeforeDelegationContext');
+const {
+  classifyCognitiveMode,
+} = require('../specialistDelegation/CognitiveMode');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
@@ -351,8 +357,81 @@ class WorkspaceEngine {
       };
     }
 
+    // SPEC-102 — retrieve durable knowledge before any specialist path.
+    // Retrieval / explanation / reflection never invoke Scout or another specialist.
+    const cognitive = classifyCognitiveMode(question, {
+      session,
+      context: rawContext || session.context,
+    });
+    const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn({
+      question,
+      session,
+      context: rawContext || session.context,
+      cognitive,
+      cieService: this._clientIntelligenceService || undefined,
+      cieOpts: this._clientIntelligenceOpts || undefined,
+    });
+    if (retrievalTurn) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+      }
+      const structuredRetrieve = retrievalTurn.structured;
+      const presentedRetrieve = await this._presentation.present(structuredRetrieve);
+      const proseRetrieve = presentedRetrieve.prose || retrievalTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseRetrieve,
+        structured: structuredRetrieve,
+      });
+      return {
+        sessionId: session.id,
+        prose: proseRetrieve,
+        structured: structuredRetrieve,
+        metadata: presentedRetrieve.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredRetrieve,
+          session,
+          question,
+        }),
+        recommendedActions: structuredRetrieve.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedRetrieve.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        retrieval: {
+          mode: retrievalTurn.mode,
+          sourcesUsed: retrievalTurn.sourcesUsed,
+          delegated: false,
+        },
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: retrievalTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: retrievalTurn.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
+
     // SPEC-100 — Max ↔ Scout acquisition intelligence (before CIE so
     // market-opportunity questions are not swallowed as Blueprint chat).
+    // SPEC-102 already answered retrieval/explanation/reflection above.
+    // Scout's own entry gate refuses those modes for new delegations.
     const scoutTurn = await maybeHandleScoutAcquisitionTurn({
       question,
       session,

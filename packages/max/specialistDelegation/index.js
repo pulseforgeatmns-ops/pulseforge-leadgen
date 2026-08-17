@@ -69,6 +69,20 @@ const {
   INTENT,
 } = require('./InterrogationIntent');
 const { answerFromTrace, limitationAnswer } = require('./InterrogationAnswer');
+const {
+  COGNITIVE_MODES,
+  NEVER_DELEGATE_MODES,
+  classifyCognitiveMode,
+  forbidsSpecialistDelegation,
+  looksLikeInvestigation,
+} = require('./CognitiveMode');
+const {
+  UNKNOWN_ANSWER,
+  mayCreateDelegation,
+  mayEnterSpecialistPath,
+  meetsInvestigationThreshold,
+  shouldInvokeSpecialist,
+} = require('./RetrievalGate');
 
 const ADAPTERS = Object.freeze({
   test_intelligence: runTestIntelligence,
@@ -713,6 +727,16 @@ function createSpecialistDelegationService(options = {}) {
     inspectionSummary,
     INTENT,
     FAILURE_BOUNDARIES,
+    COGNITIVE_MODES,
+    NEVER_DELEGATE_MODES,
+    classifyCognitiveMode,
+    forbidsSpecialistDelegation,
+    looksLikeInvestigation,
+    UNKNOWN_ANSWER,
+    mayCreateDelegation,
+    mayEnterSpecialistPath,
+    meetsInvestigationThreshold,
+    shouldInvokeSpecialist,
   };
 }
 
@@ -760,6 +784,16 @@ module.exports = {
   INTENT,
   answerFromTrace,
   limitationAnswer,
+  COGNITIVE_MODES,
+  NEVER_DELEGATE_MODES,
+  classifyCognitiveMode,
+  forbidsSpecialistDelegation,
+  looksLikeInvestigation,
+  UNKNOWN_ANSWER,
+  mayCreateDelegation,
+  mayEnterSpecialistPath,
+  meetsInvestigationThreshold,
+  shouldInvokeSpecialist,
   evaluateSpecialistResult,
   formatOperatorExplanation,
   normalizeOperatorDirection,

@@ -265,6 +265,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.evaluationId != null) meta.evaluationId = String(partial.evaluationId);
   if (partial.scoutDelegated === true) meta.scoutDelegated = true;
   if (partial.acquisitionLoop === true) meta.acquisitionLoop = true;
+  if (partial.retrievalBeforeDelegation === true) meta.retrievalBeforeDelegation = true;
+  if (partial.cognitiveMode != null) meta.cognitiveMode = String(partial.cognitiveMode);
+  if (partial.specialistDelegated === false) meta.specialistDelegated = false;
   return meta;
 }
 

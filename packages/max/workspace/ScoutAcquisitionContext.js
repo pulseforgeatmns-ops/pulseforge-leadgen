@@ -6,6 +6,8 @@
  */
 
 const scoutAcquisition = require('../../../services/scoutAcquisitionIntelligence');
+const { classifyCognitiveMode } = require('../specialistDelegation/CognitiveMode');
+const { mayEnterSpecialistPath } = require('../specialistDelegation/RetrievalGate');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const {
   toBusinessEvidenceRefs,
@@ -44,6 +46,24 @@ function shouldHandleScoutAcquisition(input = {}) {
     ...(input.context || {}),
     action: input.action || (input.context && input.context.action),
   };
+  const mode = classifyCognitiveMode(question, {
+    session: input.session,
+    context,
+  });
+  const reusePriorWork =
+    scoutAcquisition.looksLikeFollowUp(question) ||
+    scoutAcquisition.looksLikeExplainPriority(question) ||
+    scoutAcquisition.looksLikeInvestigationInspection(question);
+  if (
+    !mayEnterSpecialistPath(mode, {
+      question,
+      session: input.session,
+      context,
+    }) &&
+    !reusePriorWork
+  ) {
+    return false;
+  }
   return scoutAcquisition.looksLikeAcquisitionQuestion(question, context);
 }
 
@@ -111,7 +131,9 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
     }
   );
 
-  if (!result || result.kind === 'unrelated') return null;
+  if (!result || result.kind === 'unrelated' || result.kind === 'retrieve') {
+    return null;
+  }
 
   if (session && session.context && typeof session.context === 'object') {
     session.context.acquisitionLoop = true;
