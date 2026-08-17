@@ -88,6 +88,35 @@ const COVERAGE_BANDS = Object.freeze({
   STRONG: 'strong',
 });
 
+const OPPORTUNITY_CLASSES = Object.freeze({
+  SUPPORTED: 'supported',
+  FIT: 'fit',
+  WATCH: 'watch',
+  REJECTED: 'rejected',
+});
+
+const FIT_LEVELS = Object.freeze({
+  STRONG: 'strong',
+  MODERATE: 'moderate',
+  WEAK: 'weak',
+  REJECTED: 'rejected',
+});
+
+const INTENT_STATES = Object.freeze({
+  UNKNOWN: 'unknown',
+  TIMED: 'timed',
+  NONE: 'none',
+});
+
+const DEFAULT_COMMERCIAL_CLEANING_SEGMENTS = Object.freeze([
+  'property_management',
+  'office',
+  'daycare',
+  'community_facility',
+]);
+
+const REFRESH_MS = 30 * 24 * 60 * 60 * 1000;
+
 function asText(value) {
   if (value == null) return null;
   const s = String(value).trim();
@@ -169,6 +198,11 @@ module.exports = {
   PERCEPTION_CHANNELS,
   REJECTION_REASONS,
   COVERAGE_BANDS,
+  OPPORTUNITY_CLASSES,
+  FIT_LEVELS,
+  INTENT_STATES,
+  DEFAULT_COMMERCIAL_CLEANING_SEGMENTS,
+  REFRESH_MS,
   asText,
   clone,
   isPlainObject,

@@ -19,6 +19,11 @@ const {
   looksLikeFindMoreLike,
 } = require('./NeedAssessment');
 const { retrieveExistingIntelligence, loadRepository } = require('./ExistingIntelligence');
+const { buildAcquisitionSearchDefinition } = require('./SearchDefinition');
+const { constructCandidateUniverse, createMemoryDiscoveryStore } = require('./CandidateUniverse');
+const { evaluateBasicFit } = require('./FitEvaluation');
+const { resolveCandidate, resolveCandidateUniverse } = require('./EntityResolution');
+const { discoverCandidates, defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
 const {
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
@@ -260,6 +265,12 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
         people: opts.people,
         loadCompanies: opts.loadCompanies,
         discover: opts.discover,
+        discoveryAdapters: opts.discoveryAdapters,
+        discoveryStore: opts.discoveryStore,
+        persistCompanies: opts.persistCompanies,
+        enrichPeople: opts.enrichPeople,
+        enablePlaces: opts.enablePlaces,
+        placesProvider: opts.placesProvider,
         mode: input.fixtureMode,
       },
     }
@@ -346,6 +357,14 @@ module.exports = {
   looksLikeFindMoreLike,
   retrieveExistingIntelligence,
   loadRepository,
+  buildAcquisitionSearchDefinition,
+  constructCandidateUniverse,
+  createMemoryDiscoveryStore,
+  evaluateBasicFit,
+  resolveCandidate,
+  resolveCandidateUniverse,
+  discoverCandidates,
+  defaultDiscoveryAdapters,
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
   createMemoryAcquisitionState,

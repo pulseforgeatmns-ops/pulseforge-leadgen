@@ -197,6 +197,60 @@ function retrieveExistingIntelligence(input = {}) {
   };
 }
 
+async function loadTenantRepository({ tenantId } = {}) {
+  const id = asText(tenantId);
+  if (!id || !process.env.DATABASE_URL) return { companies: [], people: [] };
+  let db;
+  try {
+    db = require('../../../db');
+  } catch {
+    return { companies: [], people: [] };
+  }
+  if (!db || typeof db.query !== 'function') return { companies: [], people: [] };
+  try {
+    const companies = await db.query(
+      `SELECT id, client_id, name, industry, location, website, icp_score, created_at
+       FROM companies
+       WHERE client_id = $1
+       ORDER BY id ASC
+       LIMIT 500`,
+      [id]
+    );
+    const prospects = await db.query(
+      `SELECT id, client_id, company_id, first_name, last_name, job_title, updated_at
+       FROM prospects
+       WHERE client_id = $1
+         AND COALESCE(do_not_contact, false) = false
+       ORDER BY id ASC
+       LIMIT 500`,
+      [id]
+    );
+    return {
+      companies: (companies.rows || []).map((row) => ({
+        id: String(row.id),
+        tenantId: String(row.client_id),
+        name: row.name,
+        industry: row.industry,
+        location: row.location,
+        website: row.website,
+        icpScore: row.icp_score,
+        updatedAt: row.created_at,
+        source: 'existing_pf',
+      })),
+      people: (prospects.rows || []).map((row) => ({
+        id: String(row.id),
+        tenantId: String(row.client_id),
+        companyId: row.company_id != null ? String(row.company_id) : null,
+        name: [row.first_name, row.last_name].filter(Boolean).join(' ').trim() || String(row.id),
+        jobTitle: row.job_title,
+        observedAt: row.updated_at,
+      })),
+    };
+  } catch {
+    return { companies: [], people: [] };
+  }
+}
+
 async function loadRepository(input = {}) {
   if (typeof input.loadCompanies === 'function') {
     const loaded = await input.loadCompanies({
@@ -210,6 +264,18 @@ async function loadRepository(input = {}) {
     const people = Array.isArray(loaded && loaded.people) ? loaded.people : input.people || [];
     return retrieveExistingIntelligence({ ...input, companies, people });
   }
+  if (input.companies === undefined && input.defaultLoadFromDb !== false) {
+    const loaded = await loadTenantRepository({
+      tenantId: input.authorizedTenantId || input.tenantId,
+    });
+    if ((loaded.companies && loaded.companies.length) || (loaded.people && loaded.people.length)) {
+      return retrieveExistingIntelligence({
+        ...input,
+        companies: loaded.companies,
+        people: loaded.people,
+      });
+    }
+  }
   return retrieveExistingIntelligence(input);
 }
 
@@ -221,6 +287,7 @@ function signalLabel(signal) {
 module.exports = {
   retrieveExistingIntelligence,
   loadRepository,
+  loadTenantRepository,
   matchesGeography,
   matchesSegment,
   normalizeCompany,
