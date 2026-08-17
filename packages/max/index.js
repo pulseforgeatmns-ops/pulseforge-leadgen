@@ -229,6 +229,14 @@ function createMaxReasoningRuntime(options = {}) {
     model: options.workspaceModel,
     missionEngine: options.missionEngine || null,
     missionsEnabled: options.missionsEnabled,
+    operatingUpdateOpts: {
+      knowledge,
+      ...(options.operatingUpdateOpts || {}),
+    },
+    operatingEvidenceOpts: {
+      knowledge,
+      ...(options.operatingEvidenceOpts || {}),
+    },
   });
   const intelligence = createIntelligenceComposer({
     knowledge,

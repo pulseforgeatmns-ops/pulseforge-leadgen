@@ -30,6 +30,7 @@ const REBUILD_TRIGGERS = Object.freeze({
   MANUAL: 'manual_rebuild',
   SESSION_STALE: 'session_stale',
   INITIAL: 'initial_build',
+  OPERATING_EVIDENCE_RECORDED: 'operating_evidence_recorded',
 });
 
 const ACTIVE_MISSION_STATUSES = new Set([

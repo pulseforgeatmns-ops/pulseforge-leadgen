@@ -131,6 +131,15 @@ function onJobWon(clientId, metadata = {}, opts = {}) {
   });
 }
 
+function onOperatingEvidenceRecorded(clientId, metadata = {}, opts = {}) {
+  scheduleOperatorContextRebuild({
+    clientId,
+    trigger: REBUILD_TRIGGERS.OPERATING_EVIDENCE_RECORDED,
+    metadata,
+    opts,
+  });
+}
+
 module.exports = {
   scheduleOperatorContextRebuild,
   onBlueprintApproved,
@@ -143,5 +152,6 @@ module.exports = {
   onOperatorObjectiveChanged,
   onWalkthroughBooked,
   onJobWon,
+  onOperatingEvidenceRecorded,
   REBUILD_TRIGGERS,
 };

@@ -615,10 +615,12 @@ describe('SPEC-105 regression', () => {
     const retrieveAt = engineSrc.indexOf(
       'const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn'
     );
+    const updateAt = engineSrc.indexOf('await maybeHandleOperatorOperatingUpdate');
     const scoutAt = engineSrc.indexOf('await maybeHandleScoutAcquisitionTurn');
     const cieAt = engineSrc.indexOf('await maybeHandleClientIntelligenceTurn');
     assert.ok(retrieveAt > 0);
-    assert.ok(scoutAt > retrieveAt);
+    assert.ok(updateAt > retrieveAt);
+    assert.ok(scoutAt > updateAt);
     assert.ok(cieAt > scoutAt);
     assert.match(engineSrc, /operatingEvidenceOpts/);
   });

@@ -14,6 +14,10 @@ const EPISTEMIC = Object.freeze({
   INFERRED: 'inferred',
   NOT_RECORDED: 'not_recorded',
   UNAVAILABLE: 'unavailable',
+  OPERATOR_ATTESTED: 'operator_attested',
+  SYSTEM_OBSERVED: 'system_observed',
+  PLANNED: 'planned',
+  EXPECTED: 'expected',
 });
 
 const CAMPAIGN_LAYER = Object.freeze({
@@ -34,6 +38,7 @@ const PROVENANCE = Object.freeze({
   TOUCHPOINT: 'touchpoint',
   OUTCOME: 'revenue outcome',
   BLUEPRINT: 'approved Blueprint',
+  OPERATOR: 'operator report',
 });
 
 const MAIL_EXECUTION_KEYS = Object.freeze([
@@ -175,6 +180,18 @@ const GROUNDED_RECOMMENDATION_RE = new RegExp(
   'i'
 );
 
+const OPERATING_STATUS_QUESTION_RE = new RegExp(
+  [
+    String.raw`^(?:(?:max|please),?\s+)?(?:was|were|did|has|have|when)\b.{0,120}\b(?:mailed|mail(?:ed)?|sent|follow[- ]up|begin|begun|started)\b`,
+    String.raw`\bwhen (?:was|were|did)\b.{0,80}\b(?:mailed|mail|sent|campaign)\b`,
+    String.raw`\bwhat(?:'s| is) the current state of\b`,
+    String.raw`\bcurrent state of campaign\b`,
+    String.raw`^(?:(?:max|please),?\s+)?did (?:mike'?s? )?follow[- ]up\b`,
+    String.raw`^(?:(?:max|please),?\s+)?was campaign \d+ mailed\b`,
+  ].join('|'),
+  'i'
+);
+
 const NEW_INVESTIGATION_RE = new RegExp(
   [
     String.raw`\bfind (?:\d+\s+)?(?:additional|more)\s+(?:property managers|prospects|leads|companies|opportunit)`,
@@ -225,6 +242,7 @@ function isOperatingEvidenceQuestion(question) {
   if (DEFER_RECOMMEND_RE.test(q) && OPERATING_OBJECT_RE.test(q)) return true;
   if (/\bcampaign 001\b/i.test(q) && EXISTING_STATE_RE.test(q)) return true;
   if (OPERATING_OBJECT_RE.test(q) && EXISTING_STATE_RE.test(q)) return true;
+  if (OPERATING_STATUS_QUESTION_RE.test(q)) return true;
   return false;
 }
 
@@ -538,6 +556,75 @@ async function defaultLoadActivity(input = {}) {
   }
 }
 
+async function defaultLoadOperatorAttested(input = {}) {
+  const tenantId = resolveTenantId(input);
+  if (!tenantId) return { available: false, reason: 'missing_tenant', claims: [], evidence: [] };
+  let knowledge = input.knowledge || (input.operatingEvidenceOpts && input.operatingEvidenceOpts.knowledge);
+  if (!knowledge && typeof input.loadKnowledge === 'function') {
+    knowledge = await input.loadKnowledge(input);
+  }
+  if (!knowledge && input.useKnowledgeBoot === true) {
+    try {
+      const { getKnowledgeBoot } = require('../../../utils/knowledgeRuntime');
+      const boot = await getKnowledgeBoot();
+      knowledge = boot && boot.knowledge;
+    } catch (_) {
+      knowledge = null;
+    }
+  }
+  if (!knowledge || typeof knowledge.findClaims !== 'function') {
+    return { available: false, reason: 'knowledge_unavailable', claims: [], evidence: [] };
+  }
+  try {
+    const claims = await knowledge.findClaims({ tenantId, limit: 100 });
+    const operating = (claims || []).filter((claim) => claim.metadata && claim.metadata.operatingUpdate);
+    let evidence = [];
+    if (typeof knowledge.findEvidence === 'function') {
+      const rows = await knowledge.findEvidence({ tenantId, sourceType: 'operator_report', limit: 100 });
+      evidence = rows || [];
+    }
+    return {
+      available: true,
+      claims: operating,
+      evidence,
+      knowledge,
+    };
+  } catch (_) {
+    return { available: false, reason: 'knowledge_unavailable', claims: [], evidence: [] };
+  }
+}
+
+function operatorMailState(operatorAttested = {}) {
+  const claims = Array.isArray(operatorAttested.claims) ? operatorAttested.claims : [];
+  const mail = claims.filter((c) => c.metadata && c.metadata.predicate === 'physical_mail_execution');
+  const active = mail.filter((c) => String(c.status || '').toLowerCase() === 'active');
+  const superseded = mail.filter((c) => String(c.status || '').toLowerCase() !== 'active');
+  const current = active[0] || null;
+  return {
+    current,
+    superseded,
+    occurredAt: current && current.metadata ? current.metadata.occurredAt : null,
+    statement: current ? current.statement : null,
+  };
+}
+
+function operatorFollowUpState(operatorAttested = {}) {
+  const claims = Array.isArray(operatorAttested.claims) ? operatorAttested.claims : [];
+  const rows = claims.filter((c) => c.metadata && c.metadata.predicate === 'campaign_follow_up_expected');
+  const active = rows.filter((c) => String(c.status || '').toLowerCase() === 'active');
+  const current = active[0] || null;
+  const executed = rows.some((c) => {
+    const value = String((c.metadata && c.metadata.value) || '').toLowerCase();
+    return value === 'completed' || value === 'executed';
+  });
+  return {
+    current,
+    expectedAt: current && current.metadata ? current.metadata.expectedAt : null,
+    executed,
+    temporalClass: current && current.metadata ? current.metadata.temporalClass : 'expected',
+  };
+}
+
 async function defaultLoadOutcomes(input = {}) {
   const clientId = resolveClientId(input);
   if (clientId == null) return { available: false, reason: 'missing_tenant' };
@@ -608,6 +695,8 @@ async function loadOperatingEvidence(input = {}) {
   const loadObjectives = opts.loadObjectives || input.loadObjectives || defaultLoadObjectives;
   const loadActivity = opts.loadActivity || input.loadActivity || defaultLoadActivity;
   const loadOutcomes = opts.loadOutcomes || input.loadOutcomes || defaultLoadOutcomes;
+  const loadOperatorAttested =
+    opts.loadOperatorAttested || input.loadOperatorAttested || defaultLoadOperatorAttested;
 
   const loaderInput = {
     ...input,
@@ -617,7 +706,7 @@ async function loadOperatingEvidence(input = {}) {
     authorizedTenantId: tenantId,
   };
 
-  const [campaign, prospects, scout, missions, objectives, activity, outcomes] =
+  const [campaign, prospects, scout, missions, objectives, activity, outcomes, operatorAttested] =
     await Promise.all([
       safeLoad(() => loadCampaignAo(loaderInput), { available: false, reason: 'ao_store_unavailable' }),
       safeLoad(() => loadProspects(loaderInput), { available: false, reason: 'prospect_store_unavailable' }),
@@ -626,6 +715,10 @@ async function loadOperatingEvidence(input = {}) {
       safeLoad(() => loadObjectives(loaderInput), { available: false, rows: [] }),
       safeLoad(() => loadActivity(loaderInput), { available: false, touchpoints: [], activity: [] }),
       safeLoad(() => loadOutcomes(loaderInput), { available: false }),
+      safeLoad(
+        () => loadOperatorAttested(loaderInput),
+        { available: false, claims: [], evidence: [] }
+      ),
     ]);
 
   const scopedLeads = scopedRows(campaign.leads, clientId, tenantId);
@@ -710,20 +803,69 @@ async function loadOperatingEvidence(input = {}) {
     }
 
     const mailExecuted = hasDurableMailExecution(scopedLeads, campaign);
-    items.push(
-      evidenceItem({
-        epistemic: mailExecuted ? EPISTEMIC.VERIFIED : EPISTEMIC.NOT_RECORDED,
-        layer: mailExecuted ? CAMPAIGN_LAYER.EXECUTION : CAMPAIGN_LAYER.INTENT,
-        claim: mailExecuted
-          ? `Durable evidence confirms ${campaignName} physical mail execution.`
-          : `I don't currently have a durable record confirming that ${campaignName} was physically mailed.`,
-        provenance: PROVENANCE.AO,
-        sourceKind: 'ao',
-        debugSource: mailExecuted ? 'ao_leads.mail_execution' : 'ao_leads.seed_or_intent',
-      })
-    );
+    const operatorMail = operatorMailState(operatorAttested);
+    const operatorMailDate = operatorMail.occurredAt;
+    const systemMailDate =
+      campaign.mailExecutedAt ||
+      campaign.mailed_at ||
+      (mailExecuted && campaign.systemMailDate) ||
+      null;
+    if (mailExecuted && operatorMail.current && operatorMailDate && systemMailDate && operatorMailDate !== systemMailDate) {
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.INFERRED,
+          layer: CAMPAIGN_LAYER.EXECUTION,
+          claim: `Your operating update says ${campaignName} was mailed ${operatorMailDate}, while system evidence records ${systemMailDate}. I have conflicting evidence and won't collapse the two without resolution.`,
+          provenance: `${PROVENANCE.OPERATOR}; ${PROVENANCE.AO}`,
+          sourceKind: 'conflict',
+          debugSource: 'operator_vs_system_mail',
+        })
+      );
+    } else if (mailExecuted && operatorMail.current) {
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.VERIFIED,
+          layer: CAMPAIGN_LAYER.EXECUTION,
+          claim: `${campaignName} was mailed ${operatorMailDate || 'on the recorded date'}. This is supported by both operator attestation and system evidence.`,
+          provenance: `${PROVENANCE.OPERATOR}; ${PROVENANCE.AO}`,
+          sourceKind: 'ao',
+          debugSource: 'operator_and_system_mail',
+        })
+      );
+    } else if (operatorMail.current) {
+      const history =
+        operatorMail.superseded.length > 0
+          ? ` An earlier operator report listed ${operatorMail.superseded
+              .map((c) => c.metadata && c.metadata.occurredAt)
+              .filter(Boolean)
+              .join(', ')} and was later corrected.`
+          : '';
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.OPERATOR_ATTESTED,
+          layer: CAMPAIGN_LAYER.EXECUTION,
+          claim: `${campaignName} was operator-reported as physically mailed on ${operatorMailDate}.${history}`,
+          provenance: PROVENANCE.OPERATOR,
+          sourceKind: 'operator_report',
+          debugSource: 'operator_attested_mail',
+        })
+      );
+    } else {
+      items.push(
+        evidenceItem({
+          epistemic: mailExecuted ? EPISTEMIC.VERIFIED : EPISTEMIC.NOT_RECORDED,
+          layer: mailExecuted ? CAMPAIGN_LAYER.EXECUTION : CAMPAIGN_LAYER.INTENT,
+          claim: mailExecuted
+            ? `Durable evidence confirms ${campaignName} physical mail execution.`
+            : `I don't currently have a durable record confirming that ${campaignName} was physically mailed.`,
+          provenance: PROVENANCE.AO,
+          sourceKind: 'ao',
+          debugSource: mailExecuted ? 'ao_leads.mail_execution' : 'ao_leads.seed_or_intent',
+        })
+      );
+    }
 
-    if (seeded > 0 && !mailExecuted) {
+    if (seeded > 0 && !mailExecuted && !operatorMail.current) {
       items.push(
         evidenceItem({
           epistemic: EPISTEMIC.INFERRED,
@@ -734,6 +876,66 @@ async function loadOperatingEvidence(input = {}) {
         })
       );
     }
+  } else {
+    const operatorMail = operatorMailState(operatorAttested);
+    if (operatorMail.current) {
+      const history =
+        operatorMail.superseded.length > 0
+          ? ` An earlier operator report listed ${operatorMail.superseded
+              .map((c) => c.metadata && c.metadata.occurredAt)
+              .filter(Boolean)
+              .join(', ')} and was later corrected.`
+          : '';
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.OPERATOR_ATTESTED,
+          layer: CAMPAIGN_LAYER.EXECUTION,
+          claim: `${campaignName} was operator-reported as physically mailed on ${operatorMail.occurredAt}.${history}`,
+          provenance: PROVENANCE.OPERATOR,
+          sourceKind: 'operator_report',
+          debugSource: 'operator_attested_mail',
+        })
+      );
+    }
+  }
+
+  if (!(items || []).some((item) => item.debugSource === 'operator_attested_mail' || item.debugSource === 'operator_and_system_mail' || item.debugSource === 'operator_vs_system_mail')) {
+    const operatorMail = operatorMailState(operatorAttested);
+    if (operatorMail.current) {
+      const history =
+        operatorMail.superseded.length > 0
+          ? ` An earlier operator report listed ${operatorMail.superseded
+              .map((c) => c.metadata && c.metadata.occurredAt)
+              .filter(Boolean)
+              .join(', ')} and was later corrected.`
+          : '';
+      items.push(
+        evidenceItem({
+          epistemic: EPISTEMIC.OPERATOR_ATTESTED,
+          layer: CAMPAIGN_LAYER.EXECUTION,
+          claim: `${campaignName} was operator-reported as physically mailed on ${operatorMail.occurredAt}.${history}`,
+          provenance: PROVENANCE.OPERATOR,
+          sourceKind: 'operator_report',
+          debugSource: 'operator_attested_mail',
+        })
+      );
+    }
+  }
+
+  const followUp = operatorFollowUpState(operatorAttested);
+  if (followUp.current) {
+    items.push(
+      evidenceItem({
+        epistemic: followUp.executed ? EPISTEMIC.VERIFIED : EPISTEMIC.EXPECTED,
+        layer: followUp.executed ? CAMPAIGN_LAYER.EXECUTION : CAMPAIGN_LAYER.INTENT,
+        claim: followUp.executed
+          ? `Follow-up on ${campaignName} has recorded execution evidence.`
+          : `Follow-up on ${campaignName} leads was operator-reported as expected to begin ${followUp.expectedAt}. That is not recorded execution.`,
+        provenance: PROVENANCE.OPERATOR,
+        sourceKind: 'operator_report',
+        debugSource: 'operator_attested_follow_up',
+      })
+    );
   }
 
   if (prospects.available === false) {
@@ -952,6 +1154,11 @@ async function loadOperatingEvidence(input = {}) {
       activity: scopedActivity,
     },
     outcomes,
+    operatorAttested: {
+      ...operatorAttested,
+      mail: operatorMailState(operatorAttested),
+      followUp: operatorFollowUpState(operatorAttested),
+    },
     items,
   };
 }
@@ -988,6 +1195,71 @@ function formatUnavailableSection(items) {
   return rows
     .map((item) => `- ${item.claim}${item.debugSource ? ` Source: ${item.provenance}.` : ` Source: ${item.provenance}.`}`)
     .join('\n');
+}
+
+function formatOperatorAttestedSection(items) {
+  const rows = (items || []).filter(
+    (item) =>
+      item.epistemic === EPISTEMIC.OPERATOR_ATTESTED ||
+      item.epistemic === EPISTEMIC.EXPECTED ||
+      item.epistemic === EPISTEMIC.PLANNED
+  );
+  if (!rows.length) return '';
+  return rows
+    .map((item) => {
+      const label =
+        item.epistemic === EPISTEMIC.EXPECTED || item.epistemic === EPISTEMIC.PLANNED
+          ? 'PLANNED / EXPECTED'
+          : 'OPERATOR ATTESTED';
+      return `- ${item.claim} ${label} from ${item.provenance}.`;
+    })
+    .join('\n');
+}
+
+function isMailStatusQuestion(question) {
+  return /\b(was|when was|when were).{0,80}\b(mailed|mail|sent)\b/i.test(String(question || ''));
+}
+
+function isFollowUpBeganQuestion(question) {
+  return /\b(did|has|have).{0,80}\bfollow[- ]up\b.{0,40}\b(begin|begun|started|happen)/i.test(
+    String(question || '')
+  ) || /\bdid follow[- ]up begin\b/i.test(String(question || ''));
+}
+
+function composeFocusedOperatingAnswer(question, bundle) {
+  const mail = bundle.operatorAttested && bundle.operatorAttested.mail;
+  const followUp = bundle.operatorAttested && bundle.operatorAttested.followUp;
+  const conflict = (bundle.items || []).find((item) => item.sourceKind === 'conflict');
+
+  if (isFollowUpBeganQuestion(question)) {
+    if (followUp && followUp.executed) {
+      return `Recorded execution evidence shows follow-up on Campaign 001 began.`;
+    }
+    if (followUp && followUp.expectedAt) {
+      return `Follow-up was expected to begin ${followUp.expectedAt}, but I don't have recorded execution confirming that it actually began.`;
+    }
+    return `I don't have recorded execution confirming that follow-up actually began.`;
+  }
+
+  if (isMailStatusQuestion(question)) {
+    if (conflict) return conflict.claim;
+    if (mail && mail.current) {
+      const history =
+        mail.superseded && mail.superseded.length
+          ? ` An earlier operator report listed ${mail.superseded
+              .map((c) => c.metadata && c.metadata.occurredAt)
+              .filter(Boolean)
+              .join(', ')} and was later corrected.`
+          : '';
+      return `Campaign 001 was operator-reported as mailed ${mail.occurredAt}.${history}`;
+    }
+    if (bundle.campaign && bundle.campaign.mailExecuted) {
+      return `System evidence records that Campaign 001 was mailed.`;
+    }
+    return `I don't currently have a durable record confirming that Campaign 001 was physically mailed.`;
+  }
+
+  return null;
 }
 
 function composeRecommendationFromEvidence(bundle, understanding = null) {
@@ -1048,14 +1320,32 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
 
   const inventoryOnly = extras.inventoryOnly != null ? extras.inventoryOnly : isInventoryOnlyRequest(question);
   const recommend = extras.recommend === true && !inventoryOnly;
+  const focused = composeFocusedOperatingAnswer(question, bundle);
   const verified = formatVerifiedSection(bundle.items);
   const inferred = formatInferredSection(bundle.items);
+  const operatorReported = formatOperatorAttestedSection(bundle.items);
   const missing = formatNotRecordedSection(bundle.items);
   const unavailable = formatUnavailableSection(bundle.items);
+
+  if (focused) {
+    const used = ['operatingEvidence'];
+    if (bundle.operatorAttested && bundle.operatorAttested.available !== false) {
+      used.push('operatorAttested');
+    }
+    return {
+      prose: focused,
+      used,
+      knowledgeState: 'operating_evidence',
+      recommend: false,
+      launchedScout: false,
+      items: bundle.items,
+    };
+  }
 
   const parts = [
     'What I can verify',
     verified,
+    operatorReported ? 'What the operator reported\n' + operatorReported : '',
     inferred
       ? 'What that tells me\n' +
         inferred +
@@ -1079,6 +1369,7 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
   if ((bundle.missions || []).length) used.push('missions');
   if ((bundle.objectives || []).length) used.push('objectives');
   if (bundle.activity && bundle.activity.available !== false) used.push('activity');
+  if (bundle.operatorAttested && bundle.operatorAttested.available !== false) used.push('operatorAttested');
   used.push('operatingEvidence');
 
   return {
@@ -1094,7 +1385,13 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
 function operatingStructured(answer, extras = {}) {
   const evidence = Array.isArray(extras.items)
     ? extras.items
-        .filter((item) => item.epistemic === EPISTEMIC.VERIFIED || item.epistemic === EPISTEMIC.INFERRED)
+        .filter((item) =>
+          item.epistemic === EPISTEMIC.VERIFIED ||
+          item.epistemic === EPISTEMIC.INFERRED ||
+          item.epistemic === EPISTEMIC.OPERATOR_ATTESTED ||
+          item.epistemic === EPISTEMIC.EXPECTED ||
+          item.epistemic === EPISTEMIC.PLANNED
+        )
         .map((item, idx) => ({
           id: `op-ev-${idx + 1}`,
           label: item.provenance,

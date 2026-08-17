@@ -92,6 +92,10 @@ const {
   isOperatingEvidenceQuestion,
   shouldRetrieveOperatingEvidence,
 } = require('./OperatingEvidenceRetrieval');
+const {
+  maybeHandleOperatorOperatingUpdate,
+  isOperatorOperatingUpdate,
+} = require('./OperatorOperatingUpdate');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -118,6 +122,8 @@ module.exports = {
   loadOperatingEvidence,
   isOperatingEvidenceQuestion,
   shouldRetrieveOperatingEvidence,
+  maybeHandleOperatorOperatingUpdate,
+  isOperatorOperatingUpdate,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,
