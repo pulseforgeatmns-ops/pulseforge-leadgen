@@ -87,6 +87,11 @@ const {
   KNOWLEDGE_STATES,
 } = require('./BusinessUnderstandingRetrieval');
 const { loadOperatorContextForSession } = require('./OperatorContextLoader');
+const {
+  loadOperatingEvidence,
+  isOperatingEvidenceQuestion,
+  shouldRetrieveOperatingEvidence,
+} = require('./OperatingEvidenceRetrieval');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -110,6 +115,9 @@ module.exports = {
   buildBusinessUnderstandingContract,
   KNOWLEDGE_STATES,
   loadOperatorContextForSession,
+  loadOperatingEvidence,
+  isOperatingEvidenceQuestion,
+  shouldRetrieveOperatingEvidence,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

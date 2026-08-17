@@ -95,6 +95,8 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-101](SPEC-101_Max_Specialist_Result_Interrogation.md) | Max Specialist Result Interrogation & Cognitive Trace | Implemented (v1) | v0.1 |
 | [SPEC-102](SPEC-102_Max_Retrieval_Before_Delegation.md) | Max Retrieval Before Delegation | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-103](SPEC-103_Durable_Business_Understanding_Retrieval.md) | Durable Business Understanding Retrieval | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-104](SPEC-104_Persistent_Operator_Context.md) | Persistent Operator Context | Implemented (v1) | v0.1 |
+| [SPEC-105](SPEC-105_Max_Operating_Evidence_Retrieval.md) | Max Operating Evidence Retrieval | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-102F](SPEC-102F_Max_Development_Framework.md) | Max Development Framework | Foundation (v1 thin slice) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |

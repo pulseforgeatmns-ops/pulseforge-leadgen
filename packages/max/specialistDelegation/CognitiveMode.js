@@ -33,6 +33,7 @@ const EXECUTION_RE =
 
 const INVESTIGATION_RE = new RegExp(
   [
+    String.raw`\bfind (?:\d+\s+)?(?:additional|more)\s+(?:property managers|prospects|leads|companies|opportunit)`,
     String.raw`\bfind (?:more )?(?:commercial |current )?(?:cleaning )?(?:\w+\s+){0,4}opportunit`,
     String.raw`\bfind more like\b`,
     String.raw`\blook(?:ing)? for (?:commercial|more|expansion|dentists?|property|competitors?|prospects?|leads?|signals?)`,
@@ -74,6 +75,12 @@ const RETRIEVAL_RE = new RegExp(
     String.raw`\bsummarize\b`,
     String.raw`\bcompare\b`,
     String.raw`\bwhen (?:did|was|were)\b`,
+    String.raw`\bwhat campaigns have we run\b`,
+    String.raw`\bwhat evidence do we already have\b`,
+    String.raw`\bwhat acquisition activity\b`,
+    String.raw`\bwhat (?:prospects|leads) do we already have\b`,
+    String.raw`\bwhat has happened so far\b`,
+    String.raw`\bwhat have we already tried\b`,
   ].join('|'),
   'i'
 );
@@ -100,8 +107,22 @@ function hasRecentSpecialistWork(input = {}) {
   );
 }
 
+function looksLikeExistingEvidenceRetrieval(question) {
+  try {
+    const operating = require('../workspace/OperatingEvidenceRetrieval');
+    return (
+      operating.isExistingKnowledgeInvestigate(question) ||
+      operating.isOperatingEvidenceQuestion(question)
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
 function looksLikeInvestigation(question) {
-  return INVESTIGATION_RE.test(String(question || ''));
+  const q = String(question || '');
+  if (looksLikeExistingEvidenceRetrieval(q)) return false;
+  return INVESTIGATION_RE.test(q);
 }
 
 function looksLikeExecution(question) {
@@ -148,6 +169,14 @@ function classifyCognitiveMode(question, input = {}) {
     return {
       kind: COGNITIVE_MODES.EXECUTION,
       via: 'execution_verb',
+      explicitInvestigation: false,
+    };
+  }
+
+  if (looksLikeExistingEvidenceRetrieval(q)) {
+    return {
+      kind: COGNITIVE_MODES.RETRIEVAL,
+      via: 'operating_evidence',
       explicitInvestigation: false,
     };
   }
@@ -241,6 +270,7 @@ module.exports = {
   looksLikeReflection,
   looksLikeExplanation,
   looksLikeRetrieval,
+  looksLikeExistingEvidenceRetrieval,
   hasRecentSpecialistWork,
   forbidsSpecialistDelegation,
 };
