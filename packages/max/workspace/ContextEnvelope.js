@@ -128,6 +128,10 @@ function normalizeContext(raw) {
     'discussRecommendation',
     'pendingRecommendationId',
     'paigeRecommendation',
+    // SPEC-104 — persistent operator context (carrier only; loaded at open)
+    'operatorContext',
+    'sessionBrief',
+    'reviewedBeforeArrival',
   ];
   for (const key of passthroughKeys) {
     if (raw[key] !== undefined) {

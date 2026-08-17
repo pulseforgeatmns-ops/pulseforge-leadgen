@@ -86,6 +86,7 @@ const {
   buildBusinessUnderstandingContract,
   KNOWLEDGE_STATES,
 } = require('./BusinessUnderstandingRetrieval');
+const { loadOperatorContextForSession } = require('./OperatorContextLoader');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -108,6 +109,7 @@ module.exports = {
   loadDurableBusinessUnderstanding,
   buildBusinessUnderstandingContract,
   KNOWLEDGE_STATES,
+  loadOperatorContextForSession,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

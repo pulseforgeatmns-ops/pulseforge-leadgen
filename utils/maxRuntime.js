@@ -55,6 +55,23 @@ function getMaxRuntime(options = {}) {
           max.workspace._missionsEnabled = missionEnabled();
         }
       }
+
+      if (max.workspace) {
+        max.workspace._loadOperatorContext = true;
+        if (!max.workspace._operatorContextOpts) {
+          try {
+            const pool = options.pool || require('../db');
+            max.workspace._operatorContextOpts = {
+              pool,
+              missionEngine: missionEngine || null,
+            };
+          } catch (_) {
+            max.workspace._operatorContextOpts = {
+              missionEngine: missionEngine || null,
+            };
+          }
+        }
+      }
       return max;
     })();
   }

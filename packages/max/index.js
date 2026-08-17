@@ -257,8 +257,11 @@ function createMaxReasoningRuntime(options = {}) {
     return decorated;
   }
 
-  function openWorkspace(context, openOptions) {
-    const opened = workspace.open(context, openOptions);
+  async function openWorkspace(context, openOptions) {
+    const opened = await workspace.open(context, {
+      ...(openOptions || {}),
+      loadOperatorContext: true,
+    });
     const session = workspace.sessions.get(opened.sessionId);
     if (session) {
       session.liveCursor = live.store.cursor();
@@ -299,6 +302,9 @@ function createMaxReasoningRuntime(options = {}) {
       ...opened,
       suggestions,
       awareness,
+      reviewedBeforeArrival: opened.reviewedBeforeArrival,
+      sessionBrief: opened.sessionBrief,
+      operatorContext: opened.operatorContext,
     };
   }
 

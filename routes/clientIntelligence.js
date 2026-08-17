@@ -326,6 +326,15 @@ router.post('/api/v1/blueprint/:id/approve', requireOperator, async (req, res) =
       req,
       result.clientId || (result.blueprint && result.blueprint.clientId)
     );
+    const clientId =
+      result.clientId || (result.blueprint && result.blueprint.clientId);
+    if (clientId != null) {
+      const { onBlueprintApproved } = require('../services/operatorContextEvents');
+      onBlueprintApproved(clientId, {
+        blueprintId: result.blueprint && result.blueprint.id,
+        blueprintVersion: result.blueprint && result.blueprint.version,
+      });
+    }
     noStore(res);
     return res.json(result);
   } catch (err) {
