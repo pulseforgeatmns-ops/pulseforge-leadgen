@@ -35,6 +35,9 @@ const {
 const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
+const {
+  maybeHandleOperatorOperatingUpdate,
+} = require('./OperatorOperatingUpdate');
 const { loadOperatorContextForSession } = require('./OperatorContextLoader');
 const {
   classifyCognitiveMode,
@@ -166,6 +169,7 @@ class WorkspaceEngine {
    * @param {object} [options.specialistDelegationOpts] - SPEC-098 delegation store opts (tests)
    * @param {object} [options.scoutAcquisitionOpts] - SPEC-100 Scout loop opts (tests)
    * @param {object} [options.operatingEvidenceOpts] - SPEC-105 operating evidence loaders (tests)
+   * @param {object} [options.operatingUpdateOpts] - SPEC-106 operator-reported evidence (tests)
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
    */
   constructor(options = {}) {
@@ -201,6 +205,7 @@ class WorkspaceEngine {
     this._scoutAcquisitionOpts = options.scoutAcquisitionOpts || null;
     this._operatorContextOpts = options.operatorContextOpts || null;
     this._operatingEvidenceOpts = options.operatingEvidenceOpts || null;
+    this._operatingUpdateOpts = options.operatingUpdateOpts || null;
     this._loadOperatorContext =
       options.loadOperatorContext != null
         ? options.loadOperatorContext !== false
@@ -421,7 +426,17 @@ class WorkspaceEngine {
       cognitive,
       cieService: this._clientIntelligenceService || undefined,
       cieOpts: this._clientIntelligenceOpts || undefined,
-      operatingEvidenceOpts: this._operatingEvidenceOpts || undefined,
+      operatingEvidenceOpts: {
+        ...(this._operatingEvidenceOpts || {}),
+        knowledge:
+          (this._operatingEvidenceOpts && this._operatingEvidenceOpts.knowledge) ||
+          (this._operatingUpdateOpts && this._operatingUpdateOpts.knowledge) ||
+          undefined,
+      },
+      knowledge:
+        (this._operatingUpdateOpts && this._operatingUpdateOpts.knowledge) ||
+        (this._operatingEvidenceOpts && this._operatingEvidenceOpts.knowledge) ||
+        undefined,
       ...(this._scoutAcquisitionOpts || {}),
     });
     if (retrievalTurn) {
@@ -475,6 +490,76 @@ class WorkspaceEngine {
           domain: EXECUTION_DOMAINS.WORKSPACE,
           routeKind: ROUTE_KINDS.INTELLIGENCE,
           reason: retrievalTurn.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
+
+    // SPEC-106 — operator-reported operating evidence. Declarative updates
+    // are recognized after retrieval and before CIE/Scout so Max can accept
+    // attested changes to operating reality without treating chat as memory.
+    const operatingUpdateTurn = await maybeHandleOperatorOperatingUpdate({
+      question,
+      session,
+      context: rawContext || session.context,
+      operatingUpdateOpts: this._operatingUpdateOpts || undefined,
+      operatingEvidenceOpts: this._operatingEvidenceOpts || undefined,
+      knowledge:
+        (this._operatingUpdateOpts && this._operatingUpdateOpts.knowledge) ||
+        undefined,
+    });
+    if (operatingUpdateTurn) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+      }
+      const structuredUpdate = operatingUpdateTurn.structured;
+      const presentedUpdate = await this._presentation.present(structuredUpdate);
+      const proseUpdate = presentedUpdate.prose || operatingUpdateTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseUpdate,
+        structured: structuredUpdate,
+      });
+      return {
+        sessionId: session.id,
+        prose: proseUpdate,
+        structured: structuredUpdate,
+        metadata: presentedUpdate.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredUpdate,
+          session,
+          question,
+        }),
+        recommendedActions: structuredUpdate.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedUpdate.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        operatingUpdate: {
+          turnType: operatingUpdateTurn.turnType,
+          assertions: operatingUpdateTurn.assertions,
+          results: operatingUpdateTurn.results,
+        },
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: operatingUpdateTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: operatingUpdateTurn.reason,
           missionType: null,
           missionId: null,
         },

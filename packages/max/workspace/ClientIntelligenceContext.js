@@ -31,6 +31,7 @@ const {
 const {
   shouldRetrieveOperatingEvidence,
 } = require('./OperatingEvidenceRetrieval');
+const { isOperatorOperatingUpdate } = require('./OperatorOperatingUpdate');
 
 const ACTIVE_ONBOARDING_STATUSES = new Set([
   'NEW',
@@ -1274,6 +1275,7 @@ function isClearlyNonBusinessUtterance(question, session) {
  */
 function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
   if (shouldRetrieveOperatingEvidence(question)) return false;
+  if (isOperatorOperatingUpdate(question)) return false;
   if (isClientContextExecutionRequest(question)) return false;
   if (isOperationalDeskOrMissionRequest(question)) return false;
   if (isAmbiguousExecutionAdjacentRequest(question)) return true;
@@ -2165,6 +2167,17 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       attachment,
       clientId: pre.clientId,
       skipReason: 'operating_evidence',
+    };
+  }
+
+  // SPEC-106 — operator-reported operating updates are not Blueprint claims.
+  if (isOperatorOperatingUpdate(question)) {
+    return {
+      handled: false,
+      summary,
+      attachment,
+      clientId: pre.clientId,
+      skipReason: 'operating_update',
     };
   }
 
