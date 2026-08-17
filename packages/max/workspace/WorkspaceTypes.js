@@ -316,6 +316,10 @@ function buildStructuredResponse(input = {}) {
       input.investigation && typeof input.investigation === 'object'
         ? input.investigation
         : null,
+    inspection:
+      input.inspection && typeof input.inspection === 'object'
+        ? input.inspection
+        : null,
     provenance: Array.isArray(input.provenance) ? input.provenance.slice() : [],
     metadata,
   };

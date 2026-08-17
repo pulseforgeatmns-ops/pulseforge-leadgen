@@ -155,6 +155,8 @@ function mapDelegationRow(row) {
     objective: row.objective,
     reason: row.reason,
     businessContext: row.business_context || {},
+    availableContext:
+      (row.business_context && row.business_context.maxAvailableContext) || null,
     targetContext: row.target_context || null,
     evidenceRefs: row.evidence_refs || [],
     constraints: row.constraints || {},
@@ -329,10 +331,10 @@ function createPostgresStore(pool) {
           id, delegation_id, tenant_id, specialist, capability, status,
           summary, observations, actions_taken, evidence_refs, artifact_refs,
           confidence, uncertainties, recommended_next_action, policy_events,
-          errors, started_at, completed_at
+          errors, started_at, completed_at, payload
         ) VALUES (
           $1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,
-          $12,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17,$18
+          $12,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17,$18,$19::jsonb
         ) RETURNING *`,
         [
           row.id,
@@ -353,6 +355,7 @@ function createPostgresStore(pool) {
           JSON.stringify(row.errors || []),
           row.startedAt,
           row.completedAt,
+          JSON.stringify(row.payload || {}),
         ]
       );
       return mapResultRow(result.rows[0]);

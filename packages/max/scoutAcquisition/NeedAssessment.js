@@ -14,7 +14,7 @@ const {
 const { criteriaFingerprint } = require('./BoundedContext');
 
 const ACQUISITION_NEED_RE =
-  /\b(where should we (?:be )?look|find more(?:\s+\w+){0,6}\s+(?:worth pursuing|like|opportunit)|looking for (?:commercial|more)|stronger opportunit|enough evidence to prioritize|what(?:'s| has) changed in (?:our )?(?:target )?market|where should we look)\b/i;
+  /\b(where should we (?:be )?look|find more(?:\s+\w+){0,6}\s+(?:worth pursuing|like|opportunit)|find commercial(?:[ -]cleaning)? opportunit|looking for (?:commercial|more)|stronger opportunit|enough evidence to prioritize|what(?:'s| has) changed in (?:our )?(?:target )?market|where should we look)\b/i;
 
 const EXPLAIN_RE =
   /\bwhy did (?:the )?acquisition (?:move|elevate|change|go up)|why is acquisition elevated|why did acquisition move\b/i;
@@ -23,7 +23,7 @@ const FOLLOWUP_RE =
   /\b(which (?:four|\d+)|why is (?:this|that)(?: one)? strongest|what don'?t we know|find more like|pursue these before|number (?:two|2)|more like)\b/i;
 
 const INSPECTION_RE =
-  /\b(what did scout(?: actually)? investigate|how thorough|why did (?:he|scout) find nothing|how many compan(?:y|ies)|what eliminated|where was (?:scout'?s? )?coverage weak|do you trust|what would you investigate next|how (?:complete|deep) was (?:the|this) (?:search|investigation))\b/i;
+  /\b(what did scout(?: actually)? investigate|how thorough|why did (?:he|scout) find nothing|how many compan(?:y|ies)|what eliminated|where was (?:scout'?s? )?coverage weak|do you trust|what would you investigate next|how (?:complete|deep) was (?:the|this) (?:search|investigation)|why couldn'?t (?:scout|he)|what geographic information|what did you give (?:him|scout)|why (?:didn'?t|did) you elevate|why weren'?t (?:those|these) evaluated)\b/i;
 
 function looksLikeAcquisitionQuestion(question, context = {}) {
   const q = String(question || '').trim();
@@ -110,14 +110,12 @@ function assessScoutNeed(input = {}) {
     const latestWithInvestigation = recent.find(
       (row) => row && row.payload && row.payload.investigation
     );
-    if (latestWithInvestigation || existing) {
-      return {
-        needed: false,
-        reason: 'Operator asked how thoroughly Scout investigated — answer from durable investigation provenance.',
-        reuse: latestWithInvestigation || existing,
-        kind: 'inspect',
-      };
-    }
+    return {
+      needed: false,
+      reason: 'Operator asked about prior specialist work — inspect the cognitive trace, do not rerun.',
+      reuse: latestWithInvestigation || existing,
+      kind: 'inspect',
+    };
   }
 
   if (looksLikeFollowUp(question) && !looksLikeFindMoreLike(question) && existing) {

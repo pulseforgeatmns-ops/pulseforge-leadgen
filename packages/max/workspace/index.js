@@ -75,6 +75,9 @@ const {
   maybeHandleScoutAcquisitionTurn,
   shouldHandleScoutAcquisition,
 } = require('./ScoutAcquisitionContext');
+const {
+  maybeHandleSpecialistInterrogationTurn,
+} = require('./SpecialistInterrogationContext');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -92,6 +95,7 @@ module.exports = {
   explainSpecialistTrail,
   maybeHandleScoutAcquisitionTurn,
   shouldHandleScoutAcquisition,
+  maybeHandleSpecialistInterrogationTurn,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

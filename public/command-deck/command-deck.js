@@ -4243,6 +4243,10 @@
       structured.investigation ||
       (structured.metadata && structured.metadata.investigation) ||
       null;
+    const inspection =
+      structured.inspection ||
+      (structured.metadata && structured.metadata.inspection) ||
+      null;
     const provenance = (structured.provenance || []).slice();
     for (const item of systemContributors) {
       if (!provenance.some((p) => (p && p.id) === item || p === item)) {
@@ -4253,6 +4257,7 @@
     const summaryParts = [];
     if (evidenceCount) summaryParts.push(`Evidence · ${evidenceCount}`);
     if (investigation) summaryParts.push('Investigation');
+    if (inspection) summaryParts.push('Inspection');
     if (provenance.length) summaryParts.push('Provenance');
     if (contributors.length) summaryParts.push(`Confidence · ${contributors.length}`);
     if (timeline.length || related.length) {
@@ -4265,6 +4270,21 @@
     if (!summaryParts.length) return '';
 
     const coverage = investigation && investigation.coverage;
+    const inspectionHtml = inspection
+      ? `<div class="mx-evidence-group"><h4>Inspection</h4><ul>
+          <li>Asked of ${escapeHtml(inspection.specialist || 'specialist')}: ${escapeHtml(
+            inspection.askedOf || 'the current investigation'
+          )}</li>
+          <li>Context supplied — geography: ${escapeHtml(
+            (inspection.contextSupplied && inspection.contextSupplied.geography) || 'missing'
+          )}</li>
+          <li>Execution: ${escapeHtml(inspection.execution || 'not recorded')}</li>
+          <li>Failure: ${escapeHtml(
+            inspection.failure ? String(inspection.failure).replace(/_/g, ' ') : 'none recorded'
+          )}</li>
+          <li>Max judgment: ${escapeHtml(inspection.maxJudgment || 'not recorded')}</li>
+        </ul></div>`
+      : '';
     const investigationHtml = investigation
       ? `<div class="mx-evidence-group"><h4>Investigation</h4><ul>
           <li>Scope: ${escapeHtml(
@@ -4300,6 +4320,7 @@
         <div class="mx-evidence-body">
           ${evidenceGroup('Supporting evidence', supporting)}
           ${evidenceGroup('Contradicting evidence', contradicting)}
+          ${inspectionHtml}
           ${investigationHtml}
           ${provenanceHtml}
           ${

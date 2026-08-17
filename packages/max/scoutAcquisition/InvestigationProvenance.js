@@ -42,6 +42,7 @@ const SYSTEM_PROVENANCE_IDS = Object.freeze([
   'spec_099',
   'spec_099a',
   'spec_098',
+  'spec_101',
   'specialist_delegation',
 ]);
 
@@ -600,6 +601,7 @@ function buildSystemProvenance(input = {}) {
     { id: 'spec_100', kind: 'spec', label: 'SPEC-100 Max ↔ Scout acquisition loop' },
     { id: 'spec_100a', kind: 'spec', label: 'SPEC-100A Scout acquisition discovery foundation' },
     { id: 'spec_099a', kind: 'spec', label: 'SPEC-099A investigation provenance' },
+    { id: 'spec_101', kind: 'spec', label: 'SPEC-101 specialist result interrogation' },
   ];
   if (input.delegationId) {
     items.push({

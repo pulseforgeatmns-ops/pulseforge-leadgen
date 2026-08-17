@@ -219,6 +219,7 @@ function normalizeBusinessContext(value) {
     'offerContext',
     'approvedUnderstanding',
     'campaignLearnings',
+    'maxAvailableContext',
   ];
   const out = {};
   for (const key of allowed) {
