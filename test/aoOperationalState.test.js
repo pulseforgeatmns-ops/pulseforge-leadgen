@@ -69,7 +69,7 @@ test('deriveOperationalState maps direct mail seed to not_started', () => {
 
 test('deriveOperationalState maps disqualified statuses', () => {
   assert.equal(deriveOperationalState(baseLead({ status: 'not_a_fit' })), 'disqualified');
-  assert.equal(deriveOperationalState(baseLead({ crm_prospect_id: 42, status: 'converted_to_crm' })), 'converted_to_crm');
+  assert.equal(deriveOperationalState(baseLead({ crm_prospect_id: '00000000-0000-0000-0000-000000000042', status: 'converted_to_crm' })), 'converted_to_crm');
 });
 
 test('recommendCrmPromotion requires buying signals', () => {
