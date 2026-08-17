@@ -26,6 +26,15 @@ const { applyManualLifecycleOverride } = require('../utils/maxManualOverride');
 const { notSyntheticSql } = require('../utils/callDispositions');
 const { transitionProspectLifecycle } = require('../services/lifecycleService');
 const { SETTER_QUEUE_DISPLAY_THRESHOLD } = require('../utils/qualificationThreshold');
+const {
+  isAgentEnabledForClient,
+  logBlockedDispatch,
+  BLOCK_REASON,
+} = require('../utils/agentDispatchPolicy');
+const {
+  assertAuthorizedClientSwitch,
+  filterClientsForUser,
+} = require('../utils/tenantAuthorization');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -243,11 +252,12 @@ router.get('/api/me', sessionAuth, async (req, res) => {
 
 router.get('/api/clients', requireOperator, async (req, res) => {
   try {
-    const clients = await getActiveClients();
+    const allClients = await getActiveClients();
+    const clients = filterClientsForUser(allClients, req.user);
     const activeClientId = normalizeClientId(req.session.active_client_id || 1);
     const active = clients.find(c => Number(c.id) === Number(activeClientId)) || null;
     res.json({
-      active_client_id: activeClientId,
+      active_client_id: active ? activeClientId : (clients[0]?.id ?? activeClientId),
       clients,
       // Canonical tenant-feature snapshot for the active client. Dashboard
       // Pipeline hydration must use this (or /setter/api/features) — never a
@@ -262,7 +272,14 @@ router.get('/api/clients', requireOperator, async (req, res) => {
 router.post('/api/clients/active', requireOperator, async (req, res) => {
   const clientId = normalizeClientId(req.body.client_id || req.query.client_id);
   try {
-    const clients = await getActiveClients();
+    const auth = assertAuthorizedClientSwitch(req.user, clientId);
+    if (!auth.ok) {
+      return res.status(auth.status).json({
+        error: auth.error,
+        message: auth.message || 'Tenant switch not authorized',
+      });
+    }
+    const clients = filterClientsForUser(await getActiveClients(), req.user);
     const active = clients.find(c => Number(c.id) === Number(clientId));
     if (!active) {
       return res.status(404).json({ error: 'Client not found' });
@@ -2876,6 +2893,25 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
     paige_reflection: '../agents/reflection/run',
   };
   if (!agentModules[agent]) return res.status(400).json({ error: 'Unknown agent' });
+
+  const dispatchGate = await isAgentEnabledForClient(clientId, agent);
+  if (!dispatchGate.allowed) {
+    await ensureAgentLogStatusSchema();
+    await logBlockedDispatch({
+      agentName: agent,
+      clientId,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      channel: 'dashboard',
+      payload: { triggered_by: 'dashboard' },
+    });
+    return res.status(403).json({
+      error: dispatchGate.reason || BLOCK_REASON,
+      message: `${agent} is not enabled for this client`,
+      agent,
+      client_id: clientId,
+    });
+  }
+
   await ensureAgentLogStatusSchema();
   const triggerLog = await pool.query(
     `INSERT INTO agent_log (agent_name, action, payload, status, ran_at, client_id)
