@@ -141,8 +141,40 @@ async function ensureAoFieldSchemaOnce() {
   await pool.query(`
     ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS campaign_name TEXT
   `);
+  // prospects.id is UUID — INTEGER FK fails at deploy with "cannot be implemented".
   await pool.query(`
-    ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS crm_prospect_id INTEGER REFERENCES prospects(id)
+    ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS crm_prospect_id UUID
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'ao_leads'
+          AND column_name = 'crm_prospect_id'
+          AND udt_name = 'int4'
+      ) THEN
+        ALTER TABLE ao_leads DROP COLUMN crm_prospect_id;
+        ALTER TABLE ao_leads ADD COLUMN crm_prospect_id UUID;
+      END IF;
+    END $$;
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'ao_leads_crm_prospect_id_fkey'
+          AND conrelid = 'ao_leads'::regclass
+      ) THEN
+        ALTER TABLE ao_leads
+          ADD CONSTRAINT ao_leads_crm_prospect_id_fkey
+          FOREIGN KEY (crm_prospect_id) REFERENCES prospects(id);
+      END IF;
+    END $$;
   `);
 
   await pool.query(`

@@ -1,5 +1,19 @@
 -- Max v1 AO briefing: CRM promotion link + escalation ignored status + converted lead state
-ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS crm_prospect_id INTEGER REFERENCES prospects(id);
+ALTER TABLE ao_leads ADD COLUMN IF NOT EXISTS crm_prospect_id UUID;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'ao_leads_crm_prospect_id_fkey'
+      AND conrelid = 'ao_leads'::regclass
+  ) THEN
+    ALTER TABLE ao_leads
+      ADD CONSTRAINT ao_leads_crm_prospect_id_fkey
+      FOREIGN KEY (crm_prospect_id) REFERENCES prospects(id);
+  END IF;
+END $$;
 
 ALTER TABLE ao_leads DROP CONSTRAINT IF EXISTS ao_leads_status_check;
 ALTER TABLE ao_leads ADD CONSTRAINT ao_leads_status_check
