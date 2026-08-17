@@ -11,6 +11,8 @@
 
 > **Numbering note:** The product brief called this SPEC-101. Repository SPEC-101 is [Max Specialist Result Interrogation](SPEC-101_Max_Specialist_Result_Interrogation.md). This retrieval-before-delegation layer is **SPEC-102**.
 
+> **Training framework:** This spec graduates the **Retrieve Before Delegation** competency under [SPEC-102F Max Development Framework](SPEC-102F_Max_Development_Framework.md).
+
 ## Objective
 
 Teach Max a fundamental management behavior: **do not delegate work you can already answer.**

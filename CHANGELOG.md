@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Development Framework ([SPEC-102F](docs/specs/SPEC-102F_Max_Development_Framework.md))
+  - Competency lifecycle (not started → training → practicing → graduated → regression)
+  - Operator training loop: real work → observe → review → principle → implement → retest → graduate
+  - Durable competency registry linking SPEC-098 / SPEC-099A / SPEC-101 / SPEC-102 to regression tests
+  - Training record + exercise schema; performance review dimensions; real-work-first priority
+  - `node scripts/maxTrainingRecord.js` renders inspectable training history (PulseForge-internal)
+- Max Retrieval Before Delegation ([SPEC-102](docs/specs/SPEC-102_Max_Retrieval_Before_Delegation.md))
+  - Cognitive-mode classification before specialist routing
+  - Retrieval gate: answer from durable knowledge before delegating to Scout/Paige
+  - Session stickiness no longer auto-delegates retrieval/explanation/reflection questions
 - Max Specialist Result Interrogation & Cognitive Trace ([SPEC-101](docs/specs/SPEC-101_Max_Specialist_Result_Interrogation.md))
   - Specialist results become inspectable cognitive history instead of terminal replies
   - Available / supplied / consumed context layers diagnose the correct failure boundary

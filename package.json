@@ -39,6 +39,8 @@
     "max:readiness": "node scripts/maxReadinessReport.js",
     "max:readiness:configure": "node scripts/configureMaxReadiness.js",
     "max:readiness:check": "node scripts/maxReadinessReport.js --check",
+    "max:training": "node scripts/maxTrainingRecord.js",
+    "max:training:check": "node scripts/maxTrainingRecord.js --check",
     "anchor:phone-setter:preflight": "node scripts/preflightAnchorPhoneSetter.js",
     "anchor:verified-queue:dry-run": "node scripts/importAnchorVerifiedQueue.js",
     "anchor:verified-queue:apply": "node scripts/importAnchorVerifiedQueue.js --apply --confirm=client_10-anchor-verified-queue-2026-07-18",
