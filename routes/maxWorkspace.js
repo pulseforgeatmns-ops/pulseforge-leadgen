@@ -65,7 +65,7 @@ router.post(
       }
 
       const max = await getWorkspaceRuntime();
-      let result = max.openWorkspace(envelope);
+      let result = await max.openWorkspace(envelope);
       if (isClientRole(req)) {
         result = presentMaxResultForClient(result);
       }

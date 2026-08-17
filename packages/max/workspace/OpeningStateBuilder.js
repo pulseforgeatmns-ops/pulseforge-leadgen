@@ -16,6 +16,24 @@ function buildOpeningState(context, options = {}) {
     Number.isFinite(options.hour) ? options.hour : new Date().getHours();
   const greeting = hour < 12 ? 'Good morning.' : hour < 17 ? 'Good afternoon.' : 'Good evening.';
 
+  // SPEC-104 — operator context brief takes precedence on command-deck open
+  if (
+    context.page === PAGE_TYPES.COMMAND_DECK &&
+    context.sessionBrief &&
+    context.sessionBrief.reviewedBeforeArrival &&
+    context.sessionBrief.fullText
+  ) {
+    const brief = context.sessionBrief;
+    return {
+      greeting: brief.greeting || greeting,
+      body: Array.isArray(brief.body) ? brief.body : [String(brief.body || '')],
+      prompt: brief.prompt || 'What would you like to investigate?',
+      fullText: brief.fullText,
+      reviewedBeforeArrival: true,
+      recommendations: brief.recommendations || [],
+    };
+  }
+
   if (context.page === PAGE_TYPES.COMPANY) {
     return companyOpening(context, greeting);
   }

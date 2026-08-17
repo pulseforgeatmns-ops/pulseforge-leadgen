@@ -2672,13 +2672,19 @@
       workspaceSessionId = opened.sessionId;
       workspaceContext = opened.context || context;
       setContextLabel(workspaceContext);
-      if (opened.awareness && opened.awareness.headline) {
+      if (opened.reviewedBeforeArrival && els.mxSwitch) {
+        els.mxSwitch.hidden = false;
+        els.mxSwitch.textContent = 'Reviewed before you arrived';
+      } else if (opened.awareness && opened.awareness.headline) {
         if (els.mxSwitch) {
           els.mxSwitch.hidden = false;
           els.mxSwitch.textContent = opened.awareness.headline;
         }
       }
-      appendMaxOpening(opened.opening && opened.opening.fullText);
+      appendMaxOpening(opened.opening && opened.opening.fullText, {
+        reviewedBeforeArrival: opened.reviewedBeforeArrival,
+        sessionBrief: opened.sessionBrief,
+      });
       renderSuggestions(opened.suggestions || []);
       if (options.initialQuestion) {
         await askWorkspace(options.initialQuestion);
@@ -4064,19 +4070,31 @@
     announce('Mission workspace closed.');
   }
 
-  function appendSystemMessage(text) {
+  function appendSystemMessage(text, meta = {}) {
     if (!els.mxThread) return;
     const div = document.createElement('div');
-    div.className = 'mx-msg';
+    div.className = meta.className || 'mx-msg';
+    const badge =
+      meta.badge != null
+        ? `<p class="mx-msg-badge">${escapeHtml(meta.badge)}</p>`
+        : '';
     div.innerHTML = `
       <p class="mx-msg-role">Max</p>
+      ${badge}
       <p class="mx-msg-body">${escapeHtml(text)}</p>
     `;
     els.mxThread.appendChild(div);
     scrollMxThread();
   }
 
-  function appendMaxOpening(text) {
+  function appendMaxOpening(text, meta = {}) {
+    if (meta.reviewedBeforeArrival) {
+      appendSystemMessage(text || 'What would you like to investigate?', {
+        className: 'mx-msg is-max-reviewed',
+        badge: 'Reviewed before you arrived',
+      });
+      return;
+    }
     appendSystemMessage(text || 'What would you like to investigate?');
   }
 

@@ -384,6 +384,23 @@ function resolveStore(opts = {}) {
   return createMemoryStore();
 }
 
+function scheduleOperatorContextRebuildForObjective(objective) {
+  if (!objective) return;
+  const clientId =
+    objective.clientId != null
+      ? objective.clientId
+      : Number.isFinite(Number(objective.tenantId))
+        ? Number(objective.tenantId)
+        : null;
+  if (clientId == null) return;
+  try {
+    const { onOperatorObjectiveChanged } = require('./operatorContextEvents');
+    onOperatorObjectiveChanged(clientId, { objectiveId: objective.id });
+  } catch (_) {
+    /* fail soft */
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* CRUD                                                                        */
 /* -------------------------------------------------------------------------- */
@@ -446,6 +463,7 @@ async function createOperatorObjective(input = {}, opts = {}) {
 
   const store = resolveStore(opts);
   const saved = await store.insert(row);
+  scheduleOperatorContextRebuildForObjective(saved);
   return toPublicObjective(saved);
 }
 
@@ -495,6 +513,7 @@ async function updateOperatorObjective(id, patch = {}, opts = {}) {
   next.updatedAt = nowIso();
 
   const saved = await store.update(next);
+  scheduleOperatorContextRebuildForObjective(saved);
   return toPublicObjective(saved);
 }
 

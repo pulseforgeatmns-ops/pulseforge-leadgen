@@ -35,6 +35,7 @@ const {
 const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
+const { loadOperatorContextForSession } = require('./OperatorContextLoader');
 const {
   classifyCognitiveMode,
 } = require('../specialistDelegation/CognitiveMode');
@@ -164,6 +165,7 @@ class WorkspaceEngine {
    * @param {object} [options.specialistDelegationService] - SPEC-098 specialist delegation
    * @param {object} [options.specialistDelegationOpts] - SPEC-098 delegation store opts (tests)
    * @param {object} [options.scoutAcquisitionOpts] - SPEC-100 Scout loop opts (tests)
+   * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -196,6 +198,11 @@ class WorkspaceEngine {
     this._specialistDelegationService = options.specialistDelegationService || null;
     this._specialistDelegationOpts = options.specialistDelegationOpts || null;
     this._scoutAcquisitionOpts = options.scoutAcquisitionOpts || null;
+    this._operatorContextOpts = options.operatorContextOpts || null;
+    this._loadOperatorContext =
+      options.loadOperatorContext != null
+        ? options.loadOperatorContext !== false
+        : options.operatorContextOpts != null;
   }
 
   /** @returns {SessionStore} */
@@ -205,10 +212,46 @@ class WorkspaceEngine {
 
   /**
    * Open a workspace session from an explicit context envelope.
+   * Sync when operator context is not loaded; returns a Promise when loading context.
+   *
    * @param {object} rawContext
-   * @param {{ hour?: number, executionDomain?: string }} [options]
+   * @param {{ hour?: number, executionDomain?: string, loadOperatorContext?: boolean }} [options]
    */
   open(rawContext, options = {}) {
+    const shouldLoad =
+      (options.loadOperatorContext === true || this._loadOperatorContext) &&
+      rawContext &&
+      !rawContext.operatorContext &&
+      !rawContext.sessionBrief &&
+      rawContext.tenantId != null &&
+      String(rawContext.tenantId).trim() !== '';
+
+    if (shouldLoad) {
+      return this._openWithOperatorContext(rawContext, options);
+    }
+    return this._finalizeOpen(rawContext, options);
+  }
+
+  async _openWithOperatorContext(rawContext, options = {}) {
+    const enriched = { ...(rawContext || {}) };
+    try {
+      const attachment = await loadOperatorContextForSession({
+        tenantId: String(enriched.tenantId),
+        clientId:
+          enriched.clientId ??
+          enriched.client_id ??
+          enriched.tenantId,
+        options: { hour: options.hour },
+        operatorContextOpts: this._operatorContextOpts || undefined,
+      });
+      Object.assign(enriched, attachment);
+    } catch (_) {
+      /* fail soft — generic opening still works */
+    }
+    return this._finalizeOpen(enriched, options);
+  }
+
+  _finalizeOpen(rawContext, options = {}) {
     const context = normalizeContext(rawContext);
     const session = this._sessions.create(context);
     if (options.executionDomain) {
@@ -244,6 +287,9 @@ class WorkspaceEngine {
       context,
       contextSwitch: null,
       executionDomain: session.executionDomain,
+      reviewedBeforeArrival: Boolean(opening.reviewedBeforeArrival),
+      sessionBrief: context.sessionBrief || null,
+      operatorContext: context.operatorContext || null,
     };
   }
 
@@ -273,7 +319,9 @@ class WorkspaceEngine {
       if (!rawContext) {
         throw new Error('sessionId or context is required');
       }
-      const opened = this.open(rawContext);
+      const opened = await this.open(rawContext, {
+      loadOperatorContext: false,
+    });
       session = this._sessions.get(opened.sessionId);
     } else if (rawContext) {
       // Envelope updates supply evidence — they do not select the domain.
