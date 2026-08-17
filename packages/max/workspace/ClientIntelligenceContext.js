@@ -473,7 +473,8 @@ async function loadApprovedClientIntelligence(input = {}) {
         }
       }
     }
-  } catch (_) {
+  } catch (err) {
+    if (input.propagateLoadErrors) throw err;
     blueprint = null;
   }
 

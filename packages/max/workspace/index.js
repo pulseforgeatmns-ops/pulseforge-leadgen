@@ -81,6 +81,11 @@ const {
 const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
+const {
+  loadDurableBusinessUnderstanding,
+  buildBusinessUnderstandingContract,
+  KNOWLEDGE_STATES,
+} = require('./BusinessUnderstandingRetrieval');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -100,6 +105,9 @@ module.exports = {
   shouldHandleScoutAcquisition,
   maybeHandleSpecialistInterrogationTurn,
   maybeHandleRetrievalBeforeDelegationTurn,
+  loadDurableBusinessUnderstanding,
+  buildBusinessUnderstandingContract,
+  KNOWLEDGE_STATES,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

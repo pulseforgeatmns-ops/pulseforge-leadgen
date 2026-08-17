@@ -136,6 +136,10 @@ Scout / Paige    CIE / reasoning / mission
 
 ## Future Work
 
-- Richer knowledge-graph inspection when that store exists
+- Richer knowledge-graph inspection when that store exists (partial — SPEC-103 loads session KG stub; full KnowledgeService query remains)
 - Recommendation evidence scoring beyond explicit investigation verbs
 - Operator-facing copy refinements after live Anchor diagnosis
+
+## Related
+
+- [SPEC-103 — Durable Business Understanding Retrieval](SPEC-103_Durable_Business_Understanding_Retrieval.md) — canonical Blueprint load path for retrieval compose
