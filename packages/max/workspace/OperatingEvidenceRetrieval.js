@@ -8,6 +8,10 @@
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const {
+  composeEvidenceGroundedRecommendation,
+  normalizeCapabilityPolicy,
+} = require('./OperatingStateRecommendation');
 
 const EPISTEMIC = Object.freeze({
   VERIFIED: 'verified',
@@ -161,6 +165,8 @@ const EXISTING_STATE_RE = new RegExp(
     String.raw`\balready recorded\b`,
     String.raw`\balready know`,
     String.raw`\bcurrently happening\b`,
+    String.raw`\balready in motion\b`,
+    String.raw`\bin motion\b`,
   ].join('|'),
   'i'
 );
@@ -171,14 +177,33 @@ const DEFER_RECOMMEND_RE =
 const GROUNDED_RECOMMENDATION_RE = new RegExp(
   [
     String.raw`\bbased on what (?:we'?ve|you'?ve|pulseforge) already (?:tried|verified|recorded|knows?)\b`,
-    String.raw`\bgiven what (?:we'?ve|you'?ve|pulseforge) already (?:tried|verified|can actually verify)\b`,
+    String.raw`\bgiven what (?:we'?ve|you'?ve|pulseforge) already (?:tried|verified|can actually verify|knows?)\b`,
+    String.raw`\bgiven that update\b`,
+    String.raw`\bgiven what(?:'s| is) already in motion\b`,
+    String.raw`\bgiven the (?:campaign evidence|current state)\b`,
     String.raw`\bgiven what we'?ve already tried\b`,
-    String.raw`\bwhat pulseforge can actually verify\b`,
+    String.raw`\bwhat pulseforge (?:already )?(?:knows?|can actually verify)\b`,
     String.raw`\balready tried\b.{0,80}\bwhat should (?:i|we)\b`,
     String.raw`\bwhat should (?:i|we) .{0,60}(?:already tried|can actually verify)\b`,
+    String.raw`\bcurrent acquisition activity\b`,
+    String.raw`\bcampaign evidence\b`,
+    String.raw`\balready in motion\b`,
   ].join('|'),
   'i'
 );
+
+const CURRENT_STATE_RECOMMENDATION_RE = new RegExp(
+  [
+    String.raw`\bwhat should (?:i|we) (?:focus|prioritize|do next)\b`,
+    String.raw`\bwhere is the (?:highest[- ]leverage|highest leverage)\b`,
+    String.raw`\bwhat is (?:our|the|my) next (?:move|focus|step|priority)\b`,
+    String.raw`^(?:(?:max|please),?\s+)?what should (?:i|we)(?:\s+next)?\s*\??$`,
+  ].join('|'),
+  'i'
+);
+
+const BUSINESS_FRAMED_RECOMMENDATION_RE =
+  /\bwhat you know about (?:my |our |the )?business\b|\bbased on (?:approved )?business (?:understanding|priorities|blueprint)\b|\babout my business\b/i;
 
 const OPERATING_STATUS_QUESTION_RE = new RegExp(
   [
@@ -246,19 +271,38 @@ function isOperatingEvidenceQuestion(question) {
   return false;
 }
 
+function isBusinessFramedRecommendation(question) {
+  return BUSINESS_FRAMED_RECOMMENDATION_RE.test(String(question || ''));
+}
+
+function hasOperatingGrounding(question) {
+  const q = String(question || '');
+  if (GROUNDED_RECOMMENDATION_RE.test(q)) return true;
+  if (EXISTING_STATE_RE.test(q)) return true;
+  if (/\bcampaign 001\b/i.test(q)) return true;
+  if (/\bgiven (?:that|what|the)\b/i.test(q) && OPERATING_OBJECT_RE.test(q)) return true;
+  if (/\bbased on\b/i.test(q) && OPERATING_OBJECT_RE.test(q) && !isBusinessFramedRecommendation(q)) {
+    return true;
+  }
+  return false;
+}
+
+function isBareCurrentStateRecommendation(question) {
+  const q = String(question || '').trim();
+  if (!CURRENT_STATE_RECOMMENDATION_RE.test(q)) return false;
+  if (isBusinessFramedRecommendation(q)) return false;
+  if (isBusinessUnderstandingQuestion(q)) return false;
+  return true;
+}
+
 function isOperatingGroundedRecommendation(question) {
   const q = String(question || '').trim();
   if (!q) return false;
   if (isInventoryOnlyRequest(q)) return false;
   if (isNewInvestigationRequest(q)) return false;
   if (isBusinessUnderstandingQuestion(q)) return false;
-  if (
-    GROUNDED_RECOMMENDATION_RE.test(q) &&
-    (OPERATING_OBJECT_RE.test(q) ||
-      EXISTING_STATE_RE.test(q) ||
-      /\balready tried\b/i.test(q) ||
-      /\bcan actually verify\b/i.test(q))
-  ) {
+  if (isBusinessFramedRecommendation(q)) return false;
+  if (hasOperatingGrounding(q) && (GROUNDED_RECOMMENDATION_RE.test(q) || CURRENT_STATE_RECOMMENDATION_RE.test(q))) {
     return true;
   }
   return false;
@@ -269,6 +313,12 @@ function shouldRetrieveOperatingEvidence(question) {
     isOperatingEvidenceQuestion(question) ||
     isOperatingGroundedRecommendation(question)
   );
+}
+
+function bundleHasUsableOperatingSignal(bundle) {
+  if (!bundle || bundle.failClosed) return false;
+  const { assembleOperatingState } = require('./OperatingStateRecommendation');
+  return assembleOperatingState(bundle).hasAnyOperatingSignal === true;
 }
 
 function evidenceItem(input = {}) {
@@ -625,6 +675,74 @@ function operatorFollowUpState(operatorAttested = {}) {
   };
 }
 
+async function defaultLoadCapabilityPolicy(input = {}) {
+  const opts = input.operatingEvidenceOpts || {};
+  const injected =
+    opts.capability ||
+    input.capability ||
+    input.capabilityPolicy ||
+    null;
+  if (injected && typeof injected === 'object') {
+    return { available: injected.available !== false, ...injected };
+  }
+
+  const session = input.session || {};
+  const sessionCtx =
+    session.context && typeof session.context === 'object' ? session.context : {};
+  const envelope =
+    input.context && typeof input.context === 'object' ? input.context : {};
+  const enabled = firstDefined(
+    envelope.enabled_agents,
+    envelope.enabledAgents,
+    sessionCtx.enabled_agents,
+    sessionCtx.enabledAgents
+  );
+  const autosend = firstDefined(
+    envelope.autosend_enabled,
+    envelope.autosendEnabled,
+    sessionCtx.autosend_enabled,
+    sessionCtx.autosendEnabled
+  );
+  const readiness = firstDefined(envelope.readiness, sessionCtx.readiness, {});
+  const emailMotionActive = firstDefined(
+    envelope.emailMotionActive,
+    sessionCtx.emailMotionActive,
+    false
+  );
+
+  if (Array.isArray(enabled) || autosend != null) {
+    return {
+      available: true,
+      enabled_agents: enabled,
+      autosend_enabled: autosend,
+      readiness,
+      emailMotionActive: emailMotionActive === true,
+    };
+  }
+
+  const clientId = resolveClientId(input);
+  if (clientId == null) return { available: false, reason: 'missing_tenant' };
+  try {
+    const { getClientConfig } = require('../../../utils/clientContext');
+    const row = await getClientConfig(clientId);
+    if (!row) return { available: false, reason: 'client_unavailable' };
+    return {
+      available: true,
+      enabled_agents: row.enabled_agents,
+      autosend_enabled: row.autosend_enabled,
+    };
+  } catch (_) {
+    return { available: false, reason: 'capability_store_unavailable' };
+  }
+}
+
+function firstDefined(...values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+}
+
 async function defaultLoadOutcomes(input = {}) {
   const clientId = resolveClientId(input);
   if (clientId == null) return { available: false, reason: 'missing_tenant' };
@@ -684,6 +802,7 @@ async function loadOperatingEvidence(input = {}) {
       objectives: [],
       activity: null,
       outcomes: null,
+      capability: { available: false, reason: 'missing_tenant' },
     };
   }
 
@@ -697,6 +816,8 @@ async function loadOperatingEvidence(input = {}) {
   const loadOutcomes = opts.loadOutcomes || input.loadOutcomes || defaultLoadOutcomes;
   const loadOperatorAttested =
     opts.loadOperatorAttested || input.loadOperatorAttested || defaultLoadOperatorAttested;
+  const loadCapability =
+    opts.loadCapability || input.loadCapability || defaultLoadCapabilityPolicy;
 
   const loaderInput = {
     ...input,
@@ -706,7 +827,7 @@ async function loadOperatingEvidence(input = {}) {
     authorizedTenantId: tenantId,
   };
 
-  const [campaign, prospects, scout, missions, objectives, activity, outcomes, operatorAttested] =
+  const [campaign, prospects, scout, missions, objectives, activity, outcomes, operatorAttested, capability] =
     await Promise.all([
       safeLoad(() => loadCampaignAo(loaderInput), { available: false, reason: 'ao_store_unavailable' }),
       safeLoad(() => loadProspects(loaderInput), { available: false, reason: 'prospect_store_unavailable' }),
@@ -718,6 +839,10 @@ async function loadOperatingEvidence(input = {}) {
       safeLoad(
         () => loadOperatorAttested(loaderInput),
         { available: false, claims: [], evidence: [] }
+      ),
+      safeLoad(
+        () => loadCapability(loaderInput),
+        { available: false, reason: 'capability_store_unavailable' }
       ),
     ]);
 
@@ -1159,6 +1284,7 @@ async function loadOperatingEvidence(input = {}) {
       mail: operatorMailState(operatorAttested),
       followUp: operatorFollowUpState(operatorAttested),
     },
+    capability: normalizeCapabilityPolicy(capability),
     items,
   };
 }
@@ -1262,48 +1388,13 @@ function composeFocusedOperatingAnswer(question, bundle) {
   return null;
 }
 
-function composeRecommendationFromEvidence(bundle, understanding = null) {
-  const verified = itemsByEpistemic(bundle.items, EPISTEMIC.VERIFIED);
-  const campaign = bundle.campaign && bundle.campaign.progress;
-  const seeded = campaign ? Number(campaign.seeded_in_ao || 0) : 0;
-  const walkthroughs = campaign ? Number(campaign.walkthrough_requests || 0) : 0;
-  const prospects = Number((bundle.prospects && bundle.prospects.counts && bundle.prospects.counts.total) || 0);
-  const lines = [];
-  if (seeded > 0) {
-    lines.push(
-      `Campaign 001 already has ${seeded} attributed AO lead${seeded === 1 ? '' : 's'}. The next useful move is to work recorded follow-up and walkthrough-request states rather than launching a new acquisition motion from Blueprint assumptions.`
-    );
-  }
-  if (walkthroughs > 0) {
-    lines.push(
-      `${walkthroughs} walkthrough-request state${walkthroughs === 1 ? '' : 's'} are already recorded — convert or close those before seeding a new experiment.`
-    );
-  }
-  if (prospects > 0) {
-    lines.push(
-      `${prospects} prospect${prospects === 1 ? '' : 's'} already exist in the repository. Reuse that list before asking Scout to find more.`
-    );
-  }
-  if (!bundle.campaign || bundle.campaign.mailExecuted !== true) {
-    lines.push(
-      'I still cannot verify physical mail execution. Treat Campaign 001 as planned/observed operating state until durable execution evidence exists.'
-    );
-  }
-  if (!lines.length) {
-    lines.push(
-      'Recorded operating evidence is thin. Any next step should first make existing activity inspectable — not assume a blank slate from the Blueprint.'
-    );
-  }
-  const name =
-    understanding &&
-    understanding.contract &&
-    understanding.contract.companyName
-      ? understanding.contract.companyName
-      : '';
-  const prefix = name
-    ? `Given ${name}'s recorded operating evidence — not just approved business understanding — `
-    : 'Given what PulseForge can actually verify — not just approved business understanding — ';
-  return prefix + lines.join(' ');
+function composeRecommendationFromEvidence(bundle, understanding = null, extras = {}) {
+  const composed = composeEvidenceGroundedRecommendation(bundle, {
+    businessUnderstanding: understanding,
+    now: extras.now,
+    capability: extras.capability || (bundle && bundle.capability),
+  });
+  return composed.prose;
 }
 
 function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
@@ -1320,7 +1411,7 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
 
   const inventoryOnly = extras.inventoryOnly != null ? extras.inventoryOnly : isInventoryOnlyRequest(question);
   const recommend = extras.recommend === true && !inventoryOnly;
-  const focused = composeFocusedOperatingAnswer(question, bundle);
+  const focused = recommend ? null : composeFocusedOperatingAnswer(question, bundle);
   const verified = formatVerifiedSection(bundle.items);
   const inferred = formatInferredSection(bundle.items);
   const operatorReported = formatOperatorAttestedSection(bundle.items);
@@ -1339,6 +1430,34 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
       recommend: false,
       launchedScout: false,
       items: bundle.items,
+    };
+  }
+
+  if (recommend) {
+    const grounded = composeEvidenceGroundedRecommendation(bundle, {
+      businessUnderstanding: extras.businessUnderstanding || null,
+      now: extras.now,
+      capability: extras.capability || bundle.capability,
+    });
+    const used = [];
+    if (bundle.campaign && bundle.campaign.available !== false) used.push('campaignAo');
+    if (bundle.prospects && bundle.prospects.available !== false) used.push('prospects');
+    if (bundle.scout && bundle.scout.available !== false) used.push('scoutState');
+    if ((bundle.missions || []).length) used.push('missions');
+    if ((bundle.objectives || []).length) used.push('objectives');
+    if (bundle.activity && bundle.activity.available !== false) used.push('activity');
+    if (bundle.operatorAttested && bundle.operatorAttested.available !== false) used.push('operatorAttested');
+    if (bundle.capability && bundle.capability.known) used.push('capabilityPolicy');
+    used.push('operatingEvidence');
+    return {
+      prose: grounded.prose,
+      used,
+      knowledgeState: 'operating_evidence',
+      recommend: true,
+      launchedScout: false,
+      executed: false,
+      items: bundle.items,
+      decision: grounded.decision,
     };
   }
 
@@ -1412,7 +1531,9 @@ function operatingStructured(answer, extras = {}) {
       ? []
       : ['Ask for a recommendation only after reviewing this inventory.'],
     recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
-    confidenceContributors: ['operating_evidence_retrieval', 'spec_105'],
+    confidenceContributors: extras.recommend
+      ? ['operating_evidence_retrieval', 'spec_105', 'spec_107']
+      : ['operating_evidence_retrieval', 'spec_105'],
     timelineReferences: [],
     relatedEntities: [],
     metadata: {
@@ -1429,6 +1550,8 @@ function operatingStructured(answer, extras = {}) {
       cognitiveMode: extras.cognitiveMode || 'retrieval',
       retrievalBeforeDelegation: true,
       operatingEvidenceRetrieval: true,
+      evidenceGroundedRecommendation: extras.recommend === true,
+      executed: false,
       specialistDelegated: false,
       scoutDelegated: false,
       campaignMailExecuted: extras.mailExecuted === true,
@@ -1442,7 +1565,10 @@ module.exports = {
   PROVENANCE,
   isOperatingEvidenceQuestion,
   isOperatingGroundedRecommendation,
+  isBareCurrentStateRecommendation,
+  hasOperatingGrounding,
   shouldRetrieveOperatingEvidence,
+  bundleHasUsableOperatingSignal,
   isInventoryOnlyRequest,
   isExistingKnowledgeInvestigate,
   isNewInvestigationRequest,

@@ -1,9 +1,11 @@
 # SPEC — Current Max Workstream
 
-**Active:** [SPEC-106 — Operator-Reported Operating Evidence](SPEC-106_Operator_Reported_Operating_Evidence.md)
+**Active:** [SPEC-107 — Evidence-Grounded Recommendation Orchestration](SPEC-107_Evidence_Grounded_Recommendation_Orchestration.md)
 
-PulseForge does not treat conversational history as operating memory. Operator-reported business events become durable only when recognized, semantically classified, provenance-preserved, policy-permitted, and written to an appropriate canonical operating/evidence store.
+SPEC-107 establishes the orchestration contract:
 
-`operator_attested ≠ system_observed ≠ inferred`
+`retrieve → reason → recommend`
 
-See the numbered spec for architecture, persistence policy, Pilot acceptance, and tests.
+for recommendation requests that require durable operating evidence.
+
+It does not authorize execution. SPEC-105 still owns operating-evidence retrieval and epistemic classification. SPEC-106 still owns operator-attested persistence. CIE remains authoritative for durable business understanding and must not swallow an evidence-grounded recommendation after that evidence has been retrieved.

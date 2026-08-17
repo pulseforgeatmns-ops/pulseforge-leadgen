@@ -456,10 +456,14 @@ describe('SPEC-105 delegation', () => {
       operatingEvidenceOpts: loaders.opts,
     });
     assert.ok(turn);
-    assert.match(turn.prose, /What I can verify/i);
-    assert.match(turn.prose, /Recommendation/i);
-    assert.match(turn.prose, /Campaign 001 already has 20 attributed AO lead/i);
+    assert.equal(classifyCognitiveMode(PILOT_RECOMMEND).kind, COGNITIVE_MODES.RECOMMENDATION);
+    assert.match(turn.prose, /RECOMMENDATION/i);
+    assert.match(turn.prose, /Campaign 001/i);
+    assert.match(turn.prose, /20 AO lead/i);
+    assert.doesNotMatch(turn.prose, /Ask for a recommendation only after reviewing this inventory/i);
     assert.doesNotMatch(turn.prose, /I would treat the next move as a small operator loop, not a city-wide push/i);
+    assert.equal(turn.structured.metadata.evidenceGroundedRecommendation, true);
+    assert.equal(turn.structured.metadata.executed, false);
   });
 
   it('specialist delegation remains subject to enabled_agents policy', () => {
