@@ -1,11 +1,14 @@
 'use strict';
 
 /**
- * SPEC-102 — retrieve durable knowledge before any specialist routing.
+ * SPEC-102 / SPEC-103 — retrieve durable knowledge before any specialist routing.
  *
  * Memory → reasoning → specialist → execution.
  * Retrieval / explanation / reflection never invoke a specialist.
  * Unknown is a successful epistemic response.
+ *
+ * SPEC-103 adds the canonical durable load path: Blueprint → Playbook →
+ * Knowledge Graph → Mission/Objectives → Campaign Context → Workspace.
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
@@ -15,12 +18,16 @@ const {
   forbidsSpecialistDelegation,
 } = require('../specialistDelegation/CognitiveMode');
 const { UNKNOWN_ANSWER } = require('../specialistDelegation/RetrievalGate');
-
-const SERVICE_AREA_RE =
-  /\b(service area|geography|market area|territory|where (?:do|are) we (?:serve|operate|work))\b/i;
-
-const ENTITY_KNOW_RE =
-  /\bwhat do you (?:currently )?(?:know|understand|remember) about\b/i;
+const {
+  KNOWLEDGE_STATES,
+  loadDurableBusinessUnderstanding,
+  composeDurableRetrievalAnswer,
+  bundleToLegacySources,
+  sourceOrderUsed,
+  formatUnknownAnswer,
+  SERVICE_AREA_RE,
+  ENTITY_KNOW_RE,
+} = require('./BusinessUnderstandingRetrieval');
 
 const INDUSTRY_RE =
   /\b(what industries|which industries|who do we (?:target|serve)|ideal customers)\b/i;
@@ -49,129 +56,48 @@ function present(text) {
     .trim();
 }
 
-function entityNameFromQuestion(question) {
-  const q = String(question || '');
-  const m = q.match(
-    /\b(?:know|understand|remember) about\s+(.+?)\??\s*$/i
-  );
-  if (!m) return '';
-  return present(m[1]).replace(/[.]+$/, '');
-}
-
 function namesMatch(asked, known) {
   const a = present(asked).toLowerCase();
   const b = present(known).toLowerCase();
   if (!a || !b) return false;
   if (a === b) return true;
   const aTokens = a.split(/\s+/).filter((t) => t.length > 2);
-  const bTokens = b.split(/\s+/).filter((t) => t.length > 2);
   if (!aTokens.length) return false;
-  return aTokens.every((t) => bTokens.includes(t) || b.includes(t));
+  return aTokens.every((t) => b.includes(t));
 }
 
+/**
+ * Inspect durable retrieval sources — loads from persistent stores when
+ * session context is empty (SPEC-103).
+ *
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
 async function inspectRetrievalSources(input = {}) {
+  const bundle = await loadDurableBusinessUnderstanding(input);
+  const legacy = bundleToLegacySources(bundle);
+
   const session = input.session || {};
   const sessionCtx =
     session.context && typeof session.context === 'object' ? session.context : {};
   const envelope =
     input.context && typeof input.context === 'object' ? input.context : {};
 
-  const cie = sessionCtx.clientIntelligence || envelope.clientIntelligence || null;
-  const summary = cie && (cie.approved === true || cie.identity || cie.businessName || cie.geography)
-    ? cie
-    : null;
+  legacy.lastSpecialist =
+    (sessionCtx.lastSpecialistEvaluation &&
+      sessionCtx.lastSpecialistEvaluation.specialist) ||
+    (sessionCtx.lastScoutEvaluation ? 'scout' : null);
 
-  const serviceArea =
-    sessionCtx.serviceArea ||
-    sessionCtx.geography ||
-    (summary && (summary.geography || summary.targetMarkets)) ||
-    (cie && (cie.geography || cie.targetMarkets)) ||
-    (envelope.businessContext && envelope.businessContext.serviceGeography) ||
-    (envelope.targetContext && envelope.targetContext.geography) ||
-    null;
+  legacy.knowledgeState = bundle.knowledgeState;
+  legacy.blueprintSource = bundle.blueprintSource;
+  legacy.contract = bundle.contract;
+  legacy._bundle = bundle;
 
-  return {
-    blueprint: summary,
-    playbook: sessionCtx.playbook || envelope.playbook || (summary && summary.playbook) || null,
-    knowledgeGraph: sessionCtx.knowledgeGraph || envelope.knowledgeGraph || null,
-    missionState: sessionCtx.activeMission || sessionCtx.mission || envelope.mission || null,
-    previousInvestigations:
-      sessionCtx.lastScoutInvestigation ||
-      sessionCtx.lastCognitiveTraceId ||
-      envelope.lastScoutInvestigation ||
-      null,
-    briefing: sessionCtx.briefing || envelope.briefing || null,
-    conversation: Array.isArray(session.messages) ? session.messages.slice(-8) : [],
-    serviceArea: serviceArea ? present(serviceArea) : null,
-    businessName: present(
-      (summary && (summary.businessName || summary.identity)) ||
-        (cie && (cie.businessName || cie.identity)) ||
-        ''
-    ),
-    identity: present((summary && summary.identity) || (cie && cie.identity) || ''),
-    industries: present(
-      (summary && summary.idealCustomers) || (cie && cie.idealCustomers) || ''
-    ),
-    unknowns: (summary && summary.unknowns) || (cie && cie.unknowns) || [],
-    evaluation: sessionCtx.lastScoutEvaluation || envelope.lastScoutEvaluation || null,
-    investigation:
-      sessionCtx.lastScoutInvestigation || envelope.lastScoutInvestigation || null,
-    lastSpecialist:
-      (sessionCtx.lastSpecialistEvaluation &&
-        sessionCtx.lastSpecialistEvaluation.specialist) ||
-      (sessionCtx.lastScoutEvaluation ? 'scout' : null),
-  };
+  return legacy;
 }
 
-function sourceOrderUsed(sources, used) {
-  const order = [
-    'blueprint',
-    'playbook',
-    'knowledgeGraph',
-    'missionState',
-    'previousInvestigations',
-    'briefing',
-    'conversation',
-  ];
-  return order.filter((key) => used.includes(key) && sources[key]);
-}
-
-function composeRetrievalAnswer(question, mode, sources) {
+function composeInvestigationRetrieval(question, mode, sources) {
   const used = [];
-
-  if (SERVICE_AREA_RE.test(question) && sources.serviceArea) {
-    used.push('blueprint');
-    return {
-      prose: `I currently understand our service area as ${sources.serviceArea}. That's durable business knowledge — I don't need a specialist to recall it.`,
-      used,
-    };
-  }
-
-  if (ENTITY_KNOW_RE.test(question)) {
-    const asked = entityNameFromQuestion(question);
-    if (asked && sources.businessName && namesMatch(asked, sources.businessName)) {
-      used.push('blueprint');
-      const bits = [
-        sources.identity || sources.businessName,
-        sources.serviceArea ? `Service area: ${sources.serviceArea}` : null,
-        sources.industries ? `We target ${sources.industries}` : null,
-      ].filter(Boolean);
-      return {
-        prose: bits.length
-          ? `Here's what I already know about ${sources.businessName}: ${bits.join('. ')}.`
-          : `I know ${sources.businessName} from our approved business understanding.`,
-        used,
-      };
-    }
-  }
-
-  if (INDUSTRY_RE.test(question) && sources.industries) {
-    used.push('blueprint');
-    return {
-      prose: `From our approved understanding, we target ${sources.industries}.`,
-      used,
-    };
-  }
 
   if (HISTORY_RE.test(question) && sources.investigation) {
     used.push('previousInvestigations');
@@ -184,6 +110,7 @@ function composeRetrievalAnswer(question, mode, sources) {
         ? `The most recent investigation coverage was ${coverage}. I can inspect that work — I won't rerun a specialist to narrate it.`
         : 'I have a prior investigation on file. I can inspect that work rather than starting a new one.',
       used,
+      knowledgeState: sources.knowledgeState,
     };
   }
 
@@ -191,42 +118,72 @@ function composeRetrievalAnswer(question, mode, sources) {
     used.push('previousInvestigations');
     if (sources.evaluation.materialChange === true) {
       return {
-        prose: 'I elevated Acquisition because the last evaluation found a material change in opportunity.',
+        prose:
+          'I elevated Acquisition because the last evaluation found a material change in opportunity.',
         used,
+        knowledgeState: sources.knowledgeState,
       };
     }
     return {
-      prose: "I didn't elevate Acquisition because the last evaluation was not material enough to change Command Deck priority.",
+      prose:
+        "I didn't elevate Acquisition because the last evaluation was not material enough to change Command Deck priority.",
       used,
+      knowledgeState: sources.knowledgeState,
+    };
+  }
+
+  if (mode.kind === COGNITIVE_MODES.EXPLANATION && !sources.evaluation) {
+    return {
+      prose: formatUnknownAnswer(sources.knowledgeState || KNOWLEDGE_STATES.NEVER_LEARNED),
+      used,
+      knowledgeState: sources.knowledgeState,
+    };
+  }
+
+  return null;
+}
+
+function entityNameFromWhoIs(question) {
+  const m = String(question || '').match(/\bwho is\s+(.+?)\??\s*$/i);
+  return m ? present(m[1]).replace(/[.]+$/, '') : '';
+}
+
+function isUnrelatedEntityQuestion(question, sources) {
+  if (!/\bwho is\b/i.test(String(question || ''))) return false;
+  const asked = entityNameFromWhoIs(question);
+  if (!asked) return false;
+  if (sources.businessName && namesMatch(asked, sources.businessName)) return false;
+  if (sources.identity && namesMatch(asked, sources.identity)) return false;
+  return true;
+}
+
+function composeRetrievalAnswer(question, mode, sources) {
+  const investigationAnswer = composeInvestigationRetrieval(question, mode, sources);
+  if (investigationAnswer) return investigationAnswer;
+
+  const bundle = sources._bundle || {};
+  const durable = composeDurableRetrievalAnswer(question, mode, bundle);
+  if (durable.prose !== formatUnknownAnswer(bundle.knowledgeState)) {
+    return durable;
+  }
+
+  if (isUnrelatedEntityQuestion(question, sources)) {
+    return {
+      prose: UNKNOWN_ANSWER,
+      used: [],
+      knowledgeState: sources.knowledgeState,
     };
   }
 
   if (mode.kind === COGNITIVE_MODES.REFLECTION) {
-    const unknowns = Array.isArray(sources.unknowns)
-      ? sources.unknowns.filter(Boolean)
-      : [];
-    if (unknowns.length) {
-      used.push('blueprint');
-      return {
-        prose: `I'm uncertain about: ${unknowns.slice(0, 3).join('; ')}.`,
-        used,
-      };
-    }
-    if (sources.evaluation && Array.isArray(sources.evaluation.uncertainties) && sources.evaluation.uncertainties.length) {
-      used.push('previousInvestigations');
-      return {
-        prose: `From the last evaluation, I'm uncertain about: ${sources.evaluation.uncertainties.slice(0, 3).join('; ')}.`,
-        used,
-      };
-    }
-    return { prose: UNKNOWN_ANSWER, used };
+    return durable;
   }
 
-  if (mode.kind === COGNITIVE_MODES.EXPLANATION && !sources.evaluation) {
-    return { prose: UNKNOWN_ANSWER, used };
-  }
-
-  return { prose: UNKNOWN_ANSWER, used };
+  return {
+    prose: formatUnknownAnswer(sources.knowledgeState || KNOWLEDGE_STATES.NEVER_LEARNED),
+    used: durable.used || [],
+    knowledgeState: sources.knowledgeState || KNOWLEDGE_STATES.NEVER_LEARNED,
+  };
 }
 
 function workspaceStructured(answer, extras = {}) {
@@ -240,7 +197,7 @@ function workspaceStructured(answer, extras = {}) {
     confidence: extras.confidence != null ? extras.confidence : 0.84,
     nextInvestigations: [],
     recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
-    confidenceContributors: ['retrieval_before_delegation', 'spec_102'],
+    confidenceContributors: ['retrieval_before_delegation', 'spec_102', 'spec_103'],
     timelineReferences: [],
     relatedEntities: extras.relatedEntities || [],
     metadata: {
@@ -256,6 +213,9 @@ function workspaceStructured(answer, extras = {}) {
       unavailable: extras.unavailable || [],
       cognitiveMode: extras.cognitiveMode || null,
       retrievalBeforeDelegation: true,
+      businessUnderstandingRetrieval: true,
+      knowledgeState: extras.knowledgeState || null,
+      blueprintSource: extras.blueprintSource || null,
       specialistDelegated: false,
       scoutDelegated: false,
     },
@@ -277,34 +237,58 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
       context: input.context,
     });
 
-  if (!forbidsSpecialistDelegation(mode)) return null;
+  const hardRetrieval = isHardRetrievalQuestion(question, mode);
+  if (!forbidsSpecialistDelegation(mode) && !hardRetrieval) return null;
 
   const sources = await inspectRetrievalSources(input);
   const composed = composeRetrievalAnswer(question, mode, sources);
+  const unknownProse = formatUnknownAnswer(
+    sources.knowledgeState || KNOWLEDGE_STATES.NEVER_LEARNED
+  );
+
+  if (
+    composed.prose === unknownProse &&
+    composed.prose !== UNKNOWN_ANSWER &&
+    !isHardRetrievalQuestion(question, mode)
+  ) {
+    return null;
+  }
+
   if (
     composed.prose === UNKNOWN_ANSWER &&
     !isHardRetrievalQuestion(question, mode)
   ) {
     return null;
   }
-  const used = sourceOrderUsed(sources, composed.used || []);
+
+  const used = sourceOrderUsed(composed.used || []);
 
   if (input.session && input.session.context && typeof input.session.context === 'object') {
     input.session.context.lastCognitiveMode = mode.kind;
     input.session.context.lastRetrievalSources = used;
+    input.session.context.lastKnowledgeState = composed.knowledgeState || sources.knowledgeState;
   }
+
+  const isUnknown =
+    composed.prose === unknownProse || composed.prose === UNKNOWN_ANSWER;
 
   const structured = workspaceStructured(composed.prose, {
     used,
     cognitiveMode: mode.kind,
+    knowledgeState: composed.knowledgeState || sources.knowledgeState,
+    blueprintSource: sources.blueprintSource,
     reasoning: [
       `Classified operator intent as ${mode.kind}.`,
-      composed.prose === UNKNOWN_ANSWER
-        ? 'Durable knowledge did not answer this. Unknown is acceptable — I will not invent work for a specialist.'
-        : 'Retrieved from durable knowledge instead of delegating.',
+      isUnknown
+        ? sources.knowledgeState === KNOWLEDGE_STATES.RETRIEVAL_FAILURE
+          ? 'Approved understanding exists but retrieval failed — architectural failure, not a knowledge gap.'
+          : sources.knowledgeState === KNOWLEDGE_STATES.NEVER_LEARNED
+            ? 'No approved business understanding on file. Unknown is acceptable — I will not invent work for a specialist.'
+            : 'Durable knowledge did not answer this. Unknown is acceptable — I will not invent work for a specialist.'
+        : 'Retrieved from durable business understanding instead of delegating.',
     ],
     evidenceCount: used.length,
-    unavailable: composed.prose === UNKNOWN_ANSWER ? ['durable_knowledge'] : [],
+    unavailable: isUnknown ? ['durable_knowledge'] : [],
   });
 
   return {
@@ -313,6 +297,7 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
     prose: composed.prose,
     mode,
     sourcesUsed: used,
+    knowledgeState: composed.knowledgeState || sources.knowledgeState,
     delegated: false,
   };
 }

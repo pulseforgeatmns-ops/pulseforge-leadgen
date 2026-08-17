@@ -67,6 +67,52 @@ When Max behaves incorrectly:
 
 Failures are curriculum. Do not hide failures. Do not patch prompts. Do not optimize demos.
 
+## Apprenticeship Doctrine
+
+Every failure is first **classified** before it is fixed. Do not immediately write a spec. Determine which category the failure belongs to.
+
+### 1. Behavioral Failure
+
+Max possessed the necessary information but behaved incorrectly.
+
+**Response:** Train Max.
+
+Examples: delegated too early, repeated a previous answer, failed to explain reasoning, confused confidence with coverage.
+
+**Result:** Behavioral specification (e.g. SPEC-101, SPEC-102).
+
+### 2. Knowledge Failure
+
+Max behaved correctly but lacked required information — or could not retrieve durable knowledge.
+
+**Response:** Improve retrieval or memory architecture.
+
+Examples: service area unavailable, Business Blueprint not retrieved, Playbook inaccessible.
+
+**Result:** Memory/retrieval specification (e.g. SPEC-103).
+
+### 3. Capability Failure
+
+Max required work that no current specialist could perform.
+
+**Response:** Expand specialist capability.
+
+Examples: Scout cannot build a candidate universe, Penny lacks campaign analysis, Cal lacks transcript support.
+
+**Result:** Capability specification.
+
+```text
+Failure observed
+      │
+      ▼
+Classify: Behavioral | Knowledge | Capability
+      │
+      ▼
+Smallest durable fix in the correct layer
+```
+
+The Anchor Cleaning retrieval failure (SPEC-103) is the canonical **Knowledge Failure**: SPEC-101 behavior was correct; the Blueprint was never loaded.
+
 ## Operator Training Loop
 
 ```text
