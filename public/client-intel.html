@@ -1083,7 +1083,7 @@
         </div>
       </div>
       <div class="controls soft" id="operatorControls">
-        <label id="clientIdLabel">Client ID <input id="clientId" value="1" inputmode="numeric"></label>
+        <label id="clientIdLabel">Client ID <input id="clientId" value="" inputmode="numeric" placeholder="from tenant selector"></label>
         <p id="clientScopeLabel" class="sub" hidden></p>
         <button type="button" id="startBtn">Begin</button>
         <button type="button" id="notesBtn" class="secondary">Start from notes</button>
@@ -1222,10 +1222,12 @@
       taskGuidanceOpen: false,
       authRole: null,
       authClientId: null,
+      activeClientId: null,
       clientDisplayName: null,
       isClientRole: false,
       onboardingState: 'none',
       hasUnapprovedOnboarding: false,
+      interviewStartInFlight: false,
     };
 
     const els = {
@@ -3935,11 +3937,8 @@
         state.stickToBottom = true;
         if (els.savedSessions) els.savedSessions.hidden = true;
         setPhase('discovery');
-        const data = await api(
-          'POST',
-          '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start',
-          { restart: true }
-        );
+        const data = await postInterviewStart(clientId, { restart: true });
+        if (!data) return;
         state.hasUnapprovedOnboarding = true;
         state.onboardingState = 'interview_in_progress';
         state.blueprint = null;
@@ -3958,11 +3957,51 @@
       }
     }
 
+    function syncActiveTenantFromContext(activeClientId, tenantName) {
+      if (activeClientId == null || !Number.isFinite(Number(activeClientId))) return;
+      state.activeClientId = Number(activeClientId);
+      if (tenantName) state.clientDisplayName = tenantName;
+      if (els.clientId && !state.isClientRole) {
+        els.clientId.value = String(state.activeClientId);
+      }
+    }
+
     function resolvedClientId() {
       if (state.isClientRole && state.authClientId) {
         return String(state.authClientId);
       }
-      return (els.clientId && els.clientId.value.trim()) || '1';
+      if (state.activeClientId != null && Number.isFinite(Number(state.activeClientId))) {
+        return String(state.activeClientId);
+      }
+      const shellId =
+        window.PulseforgeShell && window.PulseforgeShell.activeClientId != null
+          ? Number(window.PulseforgeShell.activeClientId)
+          : null;
+      if (shellId != null && Number.isFinite(shellId)) {
+        return String(shellId);
+      }
+      if (els.clientId && els.clientId.value.trim()) {
+        return els.clientId.value.trim();
+      }
+      throw new Error(
+        'No active client selected. Choose a tenant from the navigation bar before starting Client Intelligence.'
+      );
+    }
+
+    async function postInterviewStart(clientId, body) {
+      if (state.interviewStartInFlight) {
+        return null;
+      }
+      state.interviewStartInFlight = true;
+      try {
+        return await api(
+          'POST',
+          '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start',
+          body || {}
+        );
+      } finally {
+        state.interviewStartInFlight = false;
+      }
     }
 
     function clientCompanyLabel() {
@@ -4041,8 +4080,14 @@
             : data.active_client_id != null
               ? Number(data.active_client_id)
               : null;
+        syncActiveTenantFromContext(
+          data.active_client_id != null ? Number(data.active_client_id) : state.authClientId,
+          data.client && (data.client.display_name || data.client.name)
+        );
         state.clientDisplayName =
-          (data.client && (data.client.display_name || data.client.name)) || null;
+          (data.client && (data.client.display_name || data.client.name)) ||
+          state.clientDisplayName ||
+          null;
         applyClientRoleUi();
       } catch (_) {
         /* keep operator defaults */
@@ -4062,8 +4107,8 @@
       state.hasUnapprovedOnboarding =
         data.onboardingState === 'interview_in_progress' ||
         data.onboardingState === 'blueprint_review';
-      if (data.clientId != null && els.clientId && !state.isClientRole) {
-        els.clientId.value = String(data.clientId);
+      if (data.clientId != null && !state.isClientRole) {
+        syncActiveTenantFromContext(Number(data.clientId));
       }
       if (
         data.onboardingState === 'interview_in_progress' ||
@@ -4110,7 +4155,8 @@
         state.stickToBottom = true;
         if (els.savedSessions) els.savedSessions.hidden = true;
         setPhase('discovery');
-        const data = await api('POST', '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start', {});
+        const data = await postInterviewStart(clientId, {});
+        if (!data) return;
         if (data && data.resumedExisting && (data.status === 'CLIENT_REVIEW' || data.onboardingState === 'blueprint_review')) {
           applyResumeState(data, 'continue');
           addBubble('meta', data.message || 'Resumed your existing onboarding.');
@@ -4133,7 +4179,8 @@
         els.chatLog.innerHTML = '';
         state.stickToBottom = true;
         addBubble('client', notes);
-        const data = await api('POST', '/api/v1/clients/' + encodeURIComponent(clientId) + '/interview/start', { notes });
+        const data = await postInterviewStart(clientId, { notes });
+        if (!data) return;
         await enterUnderstandingFlow(data);
       } catch (err) {
         showError(err.message);
@@ -4830,9 +4877,14 @@
       const action = params.get('action') || 'continue';
       const clientId = params.get('clientId');
       // Client role ignores URL clientId overrides (SPEC-096).
-      if (clientId && els.clientId && !state.isClientRole) {
-        els.clientId.value = clientId;
+      if (clientId && !state.isClientRole) {
+        syncActiveTenantFromContext(Number(clientId));
       }
+
+      document.addEventListener('pulseforge:tenant-changed', (event) => {
+        const detail = (event && event.detail) || {};
+        syncActiveTenantFromContext(detail.active_client_id, detail.tenantName);
+      });
 
       if (action === 'new' && !interviewId) {
         showWelcome();

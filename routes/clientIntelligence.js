@@ -161,7 +161,9 @@ router.get('/api/v1/client-intel/sessions', requireOperator, async (req, res) =>
     }
     const clientId = resolveCieClientId(
       req,
-      isClientRole(req) ? null : req.query.clientId
+      isClientRole(req)
+        ? null
+        : req.query.clientId || req.query.client_id
     );
     const result = await listApprovedBlueprintSessions({
       clientId,

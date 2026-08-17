@@ -32,6 +32,7 @@ const {
 } = require('../services/clientIntelligenceInterview');
 const {
   resolveCieClientId,
+  resolveCieCanonicalClientId,
   assertCieClientAccess,
   assertRequestedClientMatches,
   isClientRole,
@@ -141,13 +142,35 @@ describe('SPEC-096 CIE auth helpers', () => {
     assert.doesNotThrow(() => assertCieClientAccess(req, AS_CLEANING_ID));
   });
 
-  it('admin may use requested client id', () => {
+  it('admin requested client must match session active_client_id', () => {
     const req = {
       user: { role: 'admin', client_id: null },
       session: { active_client_id: 1 },
     };
-    assert.equal(resolveCieClientId(req, ANCHOR_ID), ANCHOR_ID);
-    assert.doesNotThrow(() => assertCieClientAccess(req, AS_CLEANING_ID));
+    assert.equal(resolveCieClientId(req, 1), 1);
+    assert.throws(
+      () => resolveCieClientId(req, ANCHOR_ID),
+      (err) =>
+        err instanceof ClientIntelligenceError && err.code === 'tenant_mismatch'
+    );
+    assert.throws(
+      () => assertCieClientAccess(req, AS_CLEANING_ID),
+      (err) => err instanceof ClientIntelligenceError && err.status === 403
+    );
+    assert.doesNotThrow(() => assertCieClientAccess(req, 1));
+  });
+
+  it('admin without active tenant fails closed for CIE', () => {
+    const req = {
+      user: { role: 'admin', client_id: null },
+      session: {},
+    };
+    assert.throws(
+      () => resolveCieCanonicalClientId(req),
+      (err) =>
+        err instanceof ClientIntelligenceError &&
+        err.code === 'tenant_context_required'
+    );
   });
 });
 
