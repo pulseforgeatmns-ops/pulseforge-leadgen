@@ -170,6 +170,7 @@ Unknown remains valid. Do not fabricate vendor timing.
 
 - [SPEC-099A](SPEC-099A_Scout_Investigation_Provenance.md) — investigation provenance and coverage confidence (implemented)
 - [SPEC-100A](SPEC-100A_Scout_Acquisition_Discovery_Foundation.md) — Scout candidate-universe discovery (implemented)
+- [SPEC-101](SPEC-101_Max_Specialist_Result_Interrogation.md) — specialist result interrogation and cognitive trace (implemented)
 - Run the complete Anchor loop several times before wiring specialist #2 (stop-and-learn gate)
 - Incremental adapters for Paige, Penny, Emmett, Sam, Cal
 - Optional live Places discovery behind the same intelligence-only adapter

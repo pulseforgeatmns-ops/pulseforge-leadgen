@@ -115,6 +115,7 @@ Freshness: `discoveredAt`, `lastEvaluatedAt`, `evidenceObservedAt`.
 
 - `test/scoutAcquisitionDiscovery.test.js` — discovery foundation
 - Existing SPEC-100 / SPEC-099A loop regressions remain green
+- [SPEC-101](SPEC-101_Max_Specialist_Result_Interrogation.md) inspects the discovery/search-definition failure without rerunning Scout
 
 ## Acceptance Criteria
 

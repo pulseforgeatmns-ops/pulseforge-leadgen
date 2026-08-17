@@ -41,7 +41,7 @@ function runTestIntelligence(delegation, opts = {}) {
   const startedAt = nowIso();
 
   if (mode === 'blocked') {
-    return {
+    return withConsumed({
       status: 'blocked',
       summary: 'Cannot assess Acquisition — no configured intelligence source.',
       observations: [],
@@ -65,13 +65,13 @@ function runTestIntelligence(delegation, opts = {}) {
       ],
       startedAt,
       completedAt: nowIso(),
-    };
+    }, delegation);
   }
 
   const gathered = normalizeEvidenceRefs(opts.evidenceRefs || DEFAULT_EVIDENCE);
 
   if (mode === 'partial') {
-    return {
+    return withConsumed({
       status: 'partial',
       summary: 'Two relevant opportunities detected before enrichment failed.',
       observations: [
@@ -104,11 +104,11 @@ function runTestIntelligence(delegation, opts = {}) {
       ],
       startedAt,
       completedAt: nowIso(),
-    };
+    }, delegation);
   }
 
   if (mode === 'failed') {
-    return {
+    return withConsumed({
       status: 'failed',
       summary: 'Assessment failed after partial evidence was gathered.',
       observations: [
@@ -129,10 +129,10 @@ function runTestIntelligence(delegation, opts = {}) {
       ],
       startedAt,
       completedAt: nowIso(),
-    };
+    }, delegation);
   }
 
-  return {
+  return withConsumed({
     status: 'completed',
     summary: 'Three relevant opportunities detected.',
     observations: [
@@ -162,6 +162,30 @@ function runTestIntelligence(delegation, opts = {}) {
     startedAt,
     completedAt: nowIso(),
     _contractObjective: CONTRACT_OBJECTIVE,
+  }, delegation);
+}
+
+function consumedContextFromDelegation(delegation) {
+  const target = (delegation && delegation.targetContext) || {};
+  const business = (delegation && delegation.businessContext) || {};
+  const geography = target.geography || business.serviceGeography || null;
+  return {
+    geography,
+    geographyResolved: Boolean(geography),
+    segments: Array.isArray(target.segments) ? target.segments.slice() : [],
+    businessNeed: target.businessType || business.commercialCapability || null,
+    valid: true,
+    invalidReason: null,
+  };
+}
+
+function withConsumed(result, delegation) {
+  return {
+    ...result,
+    payload: {
+      ...(result.payload || {}),
+      consumedContext: consumedContextFromDelegation(delegation),
+    },
   };
 }
 

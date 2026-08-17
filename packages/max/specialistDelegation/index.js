@@ -47,6 +47,28 @@ const {
   normalizeOperatorDirection,
 } = require('./Evaluator');
 const { buildProvenanceChain, formatProvenanceNarrative } = require('./Provenance');
+const {
+  composeCognitiveTrace,
+  classifyFailureBoundary,
+  inspectionSummary,
+  FAILURE_BOUNDARIES,
+  EVIDENCE_LAYERS,
+} = require('./CognitiveTrace');
+const {
+  captureAvailableContext,
+  projectAvailableContext,
+  projectSuppliedContext,
+  projectConsumedContext,
+} = require('./ContextLayers');
+const {
+  classifyOperatorIntent,
+  resolveRecentReferent,
+  looksLikeInterrogation,
+  looksLikeNewInvestigation,
+  formatDisambiguation,
+  INTENT,
+} = require('./InterrogationIntent');
+const { answerFromTrace, limitationAnswer } = require('./InterrogationAnswer');
 
 const ADAPTERS = Object.freeze({
   test_intelligence: runTestIntelligence,
@@ -55,7 +77,15 @@ const ADAPTERS = Object.freeze({
 
 function toPublicDelegation(row) {
   if (!row) return null;
-  return clone(row);
+  const out = clone(row);
+  if (
+    !out.availableContext &&
+    out.businessContext &&
+    out.businessContext.maxAvailableContext
+  ) {
+    out.availableContext = clone(out.businessContext.maxAvailableContext);
+  }
+  return out;
 }
 
 function toPublicResult(row) {
@@ -92,6 +122,14 @@ function buildDelegationRecord(authorizedTenantId, input) {
   }
 
   const now = nowIso();
+  const availableContext =
+    input.availableContext && typeof input.availableContext === 'object'
+      ? input.availableContext
+      : null;
+  const businessContext = normalizeBusinessContext({
+    ...(input.businessContext || {}),
+    ...(availableContext ? { maxAvailableContext: availableContext } : {}),
+  });
   return {
     id: asText(input.id) || newId(),
     tenantId,
@@ -99,7 +137,8 @@ function buildDelegationRecord(authorizedTenantId, input) {
     capability,
     objective,
     reason,
-    businessContext: normalizeBusinessContext(input.businessContext),
+    availableContext,
+    businessContext,
     targetContext: normalizeTargetContext(input.targetContext),
     evidenceRefs: normalizeEvidenceRefs(input.evidenceRefs),
     constraints: normalizeConstraints(input.constraints),
@@ -566,6 +605,78 @@ async function traceProvenance(input = {}, opts = {}) {
   };
 }
 
+/**
+ * Compose inspectable cognitive traces from persisted delegations/results/evaluations.
+ * Tenant-scoped. Does not invent missing work.
+ */
+async function listRecentCognitiveTraces(filter = {}, opts = {}) {
+  const store = resolveStore(opts);
+  const tenantId = assertAuthorizedTenant(
+    filter.authorizedTenantId || opts.authorizedTenantId || filter.tenantId
+  );
+  const delegations = await store.listDelegations({
+    tenantId,
+    specialist: filter.specialist,
+    capability: filter.capability,
+    limit: filter.limit != null ? filter.limit : 12,
+  });
+  const traces = [];
+  for (const row of delegations) {
+    const delegation = toPublicDelegation(row);
+    const result = toPublicResult(await store.getResultByDelegation(delegation.id, tenantId));
+    let evaluation = null;
+    if (typeof store.listEvaluations === 'function') {
+      const list = await store.listEvaluations({
+        tenantId,
+        delegationId: delegation.id,
+        resultId: result && result.id,
+      });
+      evaluation = list[0] || null;
+    }
+    traces.push(
+      composeCognitiveTrace({
+        tenantId,
+        sessionId: filter.sessionId,
+        operatorObjective: delegation.objective,
+        operatorQuestion: filter.operatorQuestion,
+        availableContext: delegation.availableContext,
+        delegation,
+        result,
+        evaluation,
+      })
+    );
+  }
+  return traces;
+}
+
+async function retrieveCognitiveTrace(input = {}, opts = {}) {
+  const store = resolveStore(opts);
+  const tenantId = assertAuthorizedTenant(
+    input.authorizedTenantId || opts.authorizedTenantId || input.tenantId
+  );
+  const traces = await listRecentCognitiveTraces(
+    {
+      authorizedTenantId: tenantId,
+      tenantId,
+      specialist: input.specialist,
+      capability: input.capability,
+      sessionId: input.sessionId,
+      operatorQuestion: input.question,
+      limit: input.limit != null ? input.limit : 12,
+    },
+    { ...opts, store }
+  );
+  return resolveRecentReferent({
+    traces,
+    question: input.question,
+    specialist: input.specialist,
+    domain: input.domain,
+    objective: input.objective,
+    recentSpecialist: input.recentSpecialist,
+    conversationMentions: input.conversationMentions,
+  });
+}
+
 function createSpecialistDelegationService(options = {}) {
   const store = options.store || createMemoryStore();
   const registry = options.registry || createDefaultCapabilityRegistry();
@@ -587,6 +698,21 @@ function createSpecialistDelegationService(options = {}) {
     getEvaluation: (id, opts) => getEvaluation(id, { ...base, ...opts }),
     listDelegations: (filter, opts) => listDelegations(filter, { ...base, ...opts }),
     traceProvenance: (input, opts) => traceProvenance(input, { ...base, ...opts }),
+    listRecentCognitiveTraces: (filter, opts) =>
+      listRecentCognitiveTraces(filter, { ...base, ...opts }),
+    retrieveCognitiveTrace: (input, opts) =>
+      retrieveCognitiveTrace(input, { ...base, ...opts }),
+    composeCognitiveTrace,
+    classifyOperatorIntent,
+    resolveRecentReferent,
+    looksLikeInterrogation,
+    looksLikeNewInvestigation,
+    formatDisambiguation,
+    answerFromTrace,
+    limitationAnswer,
+    inspectionSummary,
+    INTENT,
+    FAILURE_BOUNDARIES,
   };
 }
 
@@ -615,6 +741,25 @@ module.exports = {
   getEvaluation,
   listDelegations,
   traceProvenance,
+  listRecentCognitiveTraces,
+  retrieveCognitiveTrace,
+  composeCognitiveTrace,
+  classifyFailureBoundary,
+  inspectionSummary,
+  FAILURE_BOUNDARIES,
+  EVIDENCE_LAYERS,
+  captureAvailableContext,
+  projectAvailableContext,
+  projectSuppliedContext,
+  projectConsumedContext,
+  classifyOperatorIntent,
+  resolveRecentReferent,
+  looksLikeInterrogation,
+  looksLikeNewInvestigation,
+  formatDisambiguation,
+  INTENT,
+  answerFromTrace,
+  limitationAnswer,
   evaluateSpecialistResult,
   formatOperatorExplanation,
   normalizeOperatorDirection,

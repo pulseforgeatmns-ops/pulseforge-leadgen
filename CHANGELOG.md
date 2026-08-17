@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Specialist Result Interrogation & Cognitive Trace ([SPEC-101](docs/specs/SPEC-101_Max_Specialist_Result_Interrogation.md))
+  - Specialist results become inspectable cognitive history instead of terminal replies
+  - Available / supplied / consumed context layers diagnose the correct failure boundary
+  - Follow-up interrogation is retrieved before domain routing and does not rerun the specialist
+  - Max can explain his own evaluation; unknown cause stays unknown
+  - Generic contract for Scout now and future specialists; migration persists result payload
 - Scout Acquisition Discovery Foundation ([SPEC-100A](docs/specs/SPEC-100A_Scout_Acquisition_Discovery_Foundation.md))
   - Scout constructs a real candidate universe from Max's bounded acquisition objective
   - Retrieve-before-discover, adapter-based public/business discovery, entity resolution

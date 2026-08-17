@@ -404,6 +404,35 @@ function toArtifact(opportunity) {
  * @param {object} [opts]
  * @returns {Promise<object>}
  */
+function buildConsumedContext(searchDefinition, extras = {}) {
+  if (!searchDefinition) {
+    return {
+      geography: null,
+      geographyResolved: false,
+      segments: [],
+      businessNeed: null,
+      valid: false,
+      invalidReason: extras.invalidReason || null,
+      interpreted: null,
+    };
+  }
+  const geo = searchDefinition.geography;
+  return {
+    geography: geo && geo.label ? geo.label : null,
+    geographyResolved: Boolean(geo && geo.label),
+    segments: Array.isArray(searchDefinition.segments) ? searchDefinition.segments.slice() : [],
+    businessNeed: searchDefinition.businessNeed || null,
+    valid: searchDefinition.valid === true,
+    invalidReason: searchDefinition.invalidReason || extras.invalidReason || null,
+    interpreted: geo
+      ? {
+          cities: geo.cities || [],
+          state: geo.state || null,
+        }
+      : null,
+  };
+}
+
 function requestedScopeFrom(delegation, criteria) {
   const target = (delegation && delegation.targetContext) || {};
   const business = (delegation && delegation.businessContext) || {};
@@ -518,6 +547,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         outboundInvoked: [],
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
+        consumedContext: buildConsumedContext(null, {
+          invalidReason: 'Discovery provider failed before opportunities could be confirmed.',
+        }),
       },
     };
   }
@@ -561,6 +593,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         outboundInvoked: [],
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
+        consumedContext: buildConsumedContext(searchDefinition),
       },
     };
   }
@@ -607,6 +640,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         outboundInvoked: [],
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
+        consumedContext: buildConsumedContext(searchDefinition),
       },
     };
   }
@@ -671,6 +705,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         criteria: existing.criteria,
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
+        consumedContext: buildConsumedContext(searchDefinition),
       },
     };
   }
@@ -725,6 +760,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         criteria,
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
+        consumedContext: buildConsumedContext(searchDefinition),
       },
     };
   }
@@ -956,6 +992,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       capability: SCOUT_CAPABILITY,
       investigation,
       coverageConfidence: investigation.coverageConfidence,
+      consumedContext: buildConsumedContext(searchDefinition),
     },
   };
 }
@@ -967,6 +1004,7 @@ function isScoutAcquisition(specialist, capability) {
 module.exports = {
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
+  buildConsumedContext,
   classifySignals,
   summarizeOpportunities,
   assertIntelligenceOnly,

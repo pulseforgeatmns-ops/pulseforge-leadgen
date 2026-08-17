@@ -12,6 +12,7 @@ const {
   buildSystemProvenance,
   investigationFromResult,
 } = require('../scoutAcquisition/InvestigationProvenance');
+const { inspectionSummary } = require('../specialistDelegation/CognitiveTrace');
 
 function defaultLoop(input = {}) {
   return input.runLoop || scoutAcquisition.runAcquisitionIntelligenceLoop;
@@ -164,10 +165,14 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
       result.need && result.need.reason,
       result.delegated
         ? 'Delegated a bounded Scout acquisition_intelligence investigation.'
-        : 'Answered from existing durable acquisition intelligence.',
-      result.evaluation
-        ? `Max evaluation materiality: ${result.evaluation.materiality}.`
-        : null,
+        : result.kind === 'interrogate'
+          ? 'Inspected the existing specialist cognitive trace.'
+          : 'Answered from existing durable acquisition intelligence.',
+      result.kind === 'interrogate'
+        ? null
+        : result.evaluation
+          ? `Max evaluation materiality: ${result.evaluation.materiality}.`
+          : null,
       investigation
         ? `Investigation coverage: ${investigation.coverageBand} (${investigation.coverageConfidence}).`
         : null,
@@ -187,6 +192,7 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
     relatedEntities: [],
     investigation,
     provenance,
+    inspection: result.trace ? inspectionSummary(result.trace) : null,
     metadata: {
       sourcesUsed: {
         briefing: false,

@@ -30,6 +30,9 @@ const {
   maybeHandleScoutAcquisitionTurn,
 } = require('./ScoutAcquisitionContext');
 const {
+  maybeHandleSpecialistInterrogationTurn,
+} = require('./SpecialistInterrogationContext');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
@@ -285,6 +288,68 @@ class WorkspaceEngine {
       role: 'operator',
       text: question,
     });
+
+    // SPEC-101 — interrogate recent specialist work before domain routing.
+    // A follow-up about existing work must not replay or rerun the specialist.
+    const interrogationTurn = await maybeHandleSpecialistInterrogationTurn({
+      question,
+      session,
+      context: rawContext || session.context,
+      delegationService: this._specialistDelegationService || undefined,
+      delegationOpts: this._specialistDelegationOpts || undefined,
+    });
+    if (interrogationTurn) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+      }
+      const structuredInterrogate = interrogationTurn.structured;
+      const presentedInterrogate = await this._presentation.present(structuredInterrogate);
+      const proseInterrogate = presentedInterrogate.prose || interrogationTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseInterrogate,
+        structured: structuredInterrogate,
+      });
+      return {
+        sessionId: session.id,
+        prose: proseInterrogate,
+        structured: structuredInterrogate,
+        metadata: presentedInterrogate.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredInterrogate,
+          session,
+          question,
+        }),
+        recommendedActions: structuredInterrogate.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedInterrogate.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        interrogation: interrogationTurn.interrogation || null,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: interrogationTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: interrogationTurn.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
 
     // SPEC-100 — Max ↔ Scout acquisition intelligence (before CIE so
     // market-opportunity questions are not swallowed as Blueprint chat).

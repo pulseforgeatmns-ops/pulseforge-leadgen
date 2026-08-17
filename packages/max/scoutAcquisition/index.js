@@ -53,6 +53,15 @@ const {
   buildSystemProvenance,
 } = require('./InvestigationProvenance');
 const specialistDelegation = require('../specialistDelegation');
+const { captureAvailableContext } = require('../specialistDelegation/ContextLayers');
+const {
+  classifyOperatorIntent,
+  resolveRecentReferent,
+  formatDisambiguation,
+  INTENT,
+} = require('../specialistDelegation/InterrogationIntent');
+const { answerFromTrace } = require('../specialistDelegation/InterrogationAnswer');
+const { composeCognitiveTrace } = require('../specialistDelegation/CognitiveTrace');
 
 function defaultDelegationService(opts = {}) {
   if (opts.delegationService) return opts.delegationService;
@@ -131,6 +140,121 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
         criteriaFingerprint: criteriaFingerprint(row.targetContext, row.businessContext),
       });
     }
+  }
+
+  const availableContext = captureAvailableContext({
+    authorizedTenantId: tenantId,
+    tenantId,
+    question: input.question,
+    objective: input.objective,
+    businessContext: input.businessContext,
+    targetContext: input.targetContext,
+    approvedUnderstanding: input.approvedUnderstanding,
+    context: input.context,
+    sessionContext: input.context,
+    envelope: input.context,
+  });
+
+  const recentTraces = [];
+  for (const row of recentDelegations) {
+    const result = recentResults.find((r) => r.delegationId === row.id) || null;
+    const evaluations =
+      delegationService.store && typeof delegationService.store.listEvaluations === 'function'
+        ? await delegationService.store.listEvaluations({
+            tenantId,
+            delegationId: row.id,
+            resultId: result && result.id,
+          })
+        : [];
+    recentTraces.push(
+      composeCognitiveTrace({
+        tenantId,
+        operatorObjective: row.objective,
+        operatorQuestion: input.question,
+        availableContext:
+          row.availableContext ||
+          (row.businessContext && row.businessContext.maxAvailableContext) ||
+          null,
+        delegation: row,
+        result,
+        evaluation: evaluations[0] || null,
+      })
+    );
+  }
+
+  const interrogationIntent = classifyOperatorIntent(input.question, recentTraces);
+  const legacyInspection =
+    looksLikeInvestigationInspection(input.question) &&
+    !/geograph|what did you give|elevate|prospect list|detected two|service area/i.test(
+      String(input.question || '')
+    );
+  if (
+    !legacyInspection &&
+    !looksLikeExplainPriority(input.question) &&
+    (interrogationIntent.kind === INTENT.INTERROGATE ||
+      interrogationIntent.kind === INTENT.CONTEXT_INSPECTION)
+  ) {
+    const resolved = resolveRecentReferent({
+      traces: recentTraces,
+      question: input.question,
+      specialist: interrogationIntent.specialist || Types.SCOUT_SPECIALIST,
+      domain: (input.context && input.context.domainId) || 'acquisition',
+      objective: input.objective,
+      recentSpecialist: Types.SCOUT_SPECIALIST,
+    });
+    if (resolved.status === 'ambiguous') {
+      return {
+        delegated: false,
+        kind: 'interrogate',
+        need: { needed: false, kind: 'interrogate', reason: 'Ambiguous specialist referent.' },
+        prose: formatDisambiguation(resolved.candidates),
+        traces: recentTraces,
+        outboundInvoked: [],
+        availableContext,
+      };
+    }
+    if (resolved.status === 'resolved' && resolved.trace) {
+      const answered = answerFromTrace({
+        trace: resolved.trace,
+        question: input.question,
+        intent: interrogationIntent,
+        currentServiceArea: availableContext.serviceArea,
+        detectedCompanyCount:
+          (input.context &&
+            (input.context.detectedCompanyCount ||
+              input.context.prospectCount ||
+              (input.context.operatorProspectList &&
+                input.context.operatorProspectList.prospectCount))) ||
+          null,
+      });
+      return {
+        delegated: false,
+        kind: 'interrogate',
+        need: {
+          needed: false,
+          kind: 'interrogate',
+          reason: 'Operator interrogated recent specialist work — answered from cognitive trace.',
+        },
+        prose: answered.prose,
+        trace: resolved.trace,
+        investigation: resolved.trace.investigation,
+        evaluation: resolved.trace.maxEvaluation,
+        state: priorState,
+        outboundInvoked: [],
+        availableContext,
+        interrogation: answered,
+      };
+    }
+    return {
+      delegated: false,
+      kind: 'interrogate',
+      need: { needed: false, kind: 'interrogate', reason: 'No inspectable specialist trace.' },
+      prose:
+        'I can see the question is about prior specialist work, but I don\'t have an inspectable trace for it. I won\'t invent an explanation or rerun the investigation just to narrate the last result.',
+      traces: recentTraces,
+      outboundInvoked: [],
+      availableContext,
+    };
   }
 
   const need = assessScoutNeed({
@@ -247,6 +371,7 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
       },
       businessContext: bounded.businessContext,
       targetContext: bounded.targetContext,
+      availableContext,
       evidenceRefs: input.evidenceRefs || [],
       constraints: {
         geography: bounded.targetContext.geography,
@@ -342,6 +467,7 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
     investigation: result.payload && result.payload.investigation,
     outboundInvoked: (result.payload && result.payload.outboundInvoked) || [],
     bounded,
+    availableContext,
   };
 }
 
