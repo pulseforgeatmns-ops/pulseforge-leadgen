@@ -124,10 +124,12 @@ describe('SPEC-101 Max workspace specialist interrogation', () => {
     const interrogateAt = engineSrc.indexOf(
       'const interrogationTurn = await maybeHandleSpecialistInterrogationTurn'
     );
-    const scoutAt = engineSrc.indexOf(
-      'const scoutTurn = await maybeHandleScoutAcquisitionTurn'
+    const retrieveAt = engineSrc.indexOf(
+      'const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn'
     );
+    const scoutAt = engineSrc.indexOf('await maybeHandleScoutAcquisitionTurn');
     assert.ok(interrogateAt > 0);
-    assert.ok(scoutAt > interrogateAt);
+    assert.ok(retrieveAt > interrogateAt);
+    assert.ok(scoutAt > retrieveAt);
   });
 });

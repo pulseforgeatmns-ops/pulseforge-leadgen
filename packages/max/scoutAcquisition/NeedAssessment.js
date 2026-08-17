@@ -12,6 +12,10 @@ const {
   SCOUT_CAPABILITY,
 } = require('./Types');
 const { criteriaFingerprint } = require('./BoundedContext');
+const {
+  classifyCognitiveMode,
+} = require('../specialistDelegation/CognitiveMode');
+const { mayCreateDelegation } = require('../specialistDelegation/RetrievalGate');
 
 const ACQUISITION_NEED_RE =
   /\b(where should we (?:be )?look|find more(?:\s+\w+){0,6}\s+(?:worth pursuing|like|opportunit)|find commercial(?:[ -]cleaning)? opportunit|looking for (?:commercial|more)|stronger opportunit|enough evidence to prioritize|what(?:'s| has) changed in (?:our )?(?:target )?market|where should we look)\b/i;
@@ -28,12 +32,32 @@ const INSPECTION_RE =
 function looksLikeAcquisitionQuestion(question, context = {}) {
   const q = String(question || '').trim();
   if (!q) return false;
+  const mode = classifyCognitiveMode(q, { context });
+  if (mode.kind === 'investigation' || mode.explicitInvestigation) {
+    return true;
+  }
+  if (!mayCreateDelegation(mode, { question: q, context })) {
+    if (
+      !looksLikeFollowUp(q) &&
+      !looksLikeExplainPriority(q) &&
+      !looksLikeInvestigationInspection(q)
+    ) {
+      return false;
+    }
+  }
   const domainId = String(context.domainId || context.domain || '').toLowerCase();
   const action = String(context.action || '').toLowerCase();
   if (domainId === 'acquisition' && (action === 'discuss_with_max' || action === 'explain_elevation')) {
     return true;
   }
-  if (context.acquisitionLoop || context.lastScoutEvaluation) return true;
+  if (context.acquisitionLoop || context.lastScoutEvaluation) {
+    return (
+      looksLikeFollowUp(q) ||
+      looksLikeExplainPriority(q) ||
+      looksLikeInvestigationInspection(q) ||
+      ACQUISITION_NEED_RE.test(q)
+    );
+  }
   if (
     EXPLAIN_RE.test(q) ||
     FOLLOWUP_RE.test(q) ||
@@ -91,6 +115,39 @@ function objectivesSimilar(a, b) {
 function assessScoutNeed(input = {}) {
   const question = String(input.question || '');
   const existing = input.existingIntelligence || null;
+  const mode = classifyCognitiveMode(question, { context: input.context });
+  if (!mayCreateDelegation(mode, { question, context: input.context, force: input.force })) {
+    if (looksLikeExplainPriority(question)) {
+      return {
+        needed: false,
+        reason: 'Operator asked why Acquisition moved — explain existing evaluation.',
+        reuse: existing,
+        kind: 'explain',
+      };
+    }
+    if (looksLikeInvestigationInspection(question)) {
+      return {
+        needed: false,
+        reason: 'Operator asked about prior specialist work — inspect the cognitive trace, do not rerun.',
+        reuse: existing,
+        kind: 'inspect',
+      };
+    }
+    if (looksLikeFollowUp(question) && existing) {
+      return {
+        needed: false,
+        reason: 'Follow-up can be answered from accepted acquisition intelligence.',
+        reuse: existing,
+        kind: 'followup',
+      };
+    }
+    return {
+      needed: false,
+      reason: 'Retrieval or reasoning can answer this — specialist delegation is not warranted.',
+      reuse: existing,
+      kind: 'unrelated',
+    };
+  }
   const recent = Array.isArray(input.recentResults) ? input.recentResults : [];
   const freshnessMs = input.freshnessMs != null ? Number(input.freshnessMs) : DEFAULT_FRESHNESS_MS;
   const now = input.now != null ? Number(input.now) : Date.now();

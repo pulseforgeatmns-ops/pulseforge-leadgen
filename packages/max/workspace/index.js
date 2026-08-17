@@ -78,6 +78,9 @@ const {
 const {
   maybeHandleSpecialistInterrogationTurn,
 } = require('./SpecialistInterrogationContext');
+const {
+  maybeHandleRetrievalBeforeDelegationTurn,
+} = require('./RetrievalBeforeDelegationContext');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -96,6 +99,7 @@ module.exports = {
   maybeHandleScoutAcquisitionTurn,
   shouldHandleScoutAcquisition,
   maybeHandleSpecialistInterrogationTurn,
+  maybeHandleRetrievalBeforeDelegationTurn,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

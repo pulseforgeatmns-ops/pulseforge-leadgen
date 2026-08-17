@@ -16,6 +16,10 @@ const {
 const {
   persistContentRecommendation,
 } = require('./specialistDirection');
+const {
+  classifyCognitiveMode,
+  forbidsSpecialistDelegation,
+} = require('../packages/max/specialistDelegation/CognitiveMode');
 
 const KIND = 'paige_campaign_content_recommendation';
 const SOURCE = 'spec_093_content_learning';
@@ -223,6 +227,8 @@ function hasCampaignObjectiveContext(context = {}, operatorMessage = '') {
  * @returns {boolean}
  */
 function shouldDelegateToPaige(question, context = {}) {
+  const mode = classifyCognitiveMode(question, { context });
+  if (forbidsSpecialistDelegation(mode)) return false;
   if (looksLikeGenericPipelineQuestion(question)) return false;
 
   const contentAsk =
