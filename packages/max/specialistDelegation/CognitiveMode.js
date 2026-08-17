@@ -51,7 +51,7 @@ const PLANNING_RE =
   /\b(help me build|create a (?:rollout )?plan|build campaign|rollout plan|create a campaign)\b/i;
 
 const RECOMMENDATION_RE =
-  /\b(what should we(?: do| focus| target| pursue)?|should we (?:target|pursue|go after|look at)|what(?:'s| is) next|what do you recommend)\b/i;
+  /\b(what should (?:we|i)(?: do| focus| prioritize| target| pursue)?|should (?:we|i) (?:target|pursue|go after|look at|focus|do next)|what(?:'s| is) next|what do you recommend|where is the (?:highest[- ]leverage|highest leverage)|what is (?:our|the|my) next (?:move|focus|step|priority))\b/i;
 
 const REFLECTION_RE =
   /\b(do you trust|what worries you|where are you uncertain|what are you (?:uncertain|unsure|worried)|what don'?t you (?:currently )?know|where are you unsure)\b/i;
@@ -149,102 +149,82 @@ function looksLikeRetrieval(question) {
   return RETRIEVAL_RE.test(String(question || ''));
 }
 
+function modeResult(kind, via, extras = {}) {
+  return {
+    kind,
+    via,
+    explicitInvestigation: extras.explicitInvestigation === true,
+    requiresOperatingRetrieval: extras.requiresOperatingRetrieval === true,
+  };
+}
+
 /**
  * Classify the operator's primary cognitive mode.
+ * Recommendation and operating retrieval are not mutually exclusive:
+ * a turn may have primaryIntent=recommendation with a retrieval requirement.
  * @param {string} question
  * @param {object} [input]
- * @returns {{ kind: string, via: string, explicitInvestigation: boolean }}
+ * @returns {{ kind: string, via: string, explicitInvestigation: boolean, requiresOperatingRetrieval: boolean }}
  */
 function classifyCognitiveMode(question, input = {}) {
   const q = String(question || '').trim();
   if (!q) {
-    return {
-      kind: COGNITIVE_MODES.RETRIEVAL,
-      via: 'empty',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'empty');
   }
 
   if (looksLikeExecution(q)) {
-    return {
-      kind: COGNITIVE_MODES.EXECUTION,
-      via: 'execution_verb',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.EXECUTION, 'execution_verb');
   }
 
-  if (looksLikeExistingEvidenceRetrieval(q)) {
-    return {
-      kind: COGNITIVE_MODES.RETRIEVAL,
-      via: 'operating_evidence',
-      explicitInvestigation: false,
-    };
+  const operatingRetrieval = looksLikeExistingEvidenceRetrieval(q);
+  const recommendation = looksLikeRecommendation(q);
+
+  if (operatingRetrieval && recommendation) {
+    return modeResult(COGNITIVE_MODES.RECOMMENDATION, 'recommendation', {
+      requiresOperatingRetrieval: true,
+    });
+  }
+
+  if (operatingRetrieval) {
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'operating_evidence', {
+      requiresOperatingRetrieval: true,
+    });
   }
 
   if (looksLikeInvestigation(q)) {
-    return {
-      kind: COGNITIVE_MODES.INVESTIGATION,
-      via: 'investigation_verb',
+    return modeResult(COGNITIVE_MODES.INVESTIGATION, 'investigation_verb', {
       explicitInvestigation: true,
-    };
+    });
   }
 
   if (looksLikePlanning(q)) {
-    return {
-      kind: COGNITIVE_MODES.PLANNING,
-      via: 'planning',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.PLANNING, 'planning');
   }
 
-  if (looksLikeRecommendation(q)) {
-    return {
-      kind: COGNITIVE_MODES.RECOMMENDATION,
-      via: 'recommendation',
-      explicitInvestigation: false,
-    };
+  if (recommendation) {
+    return modeResult(COGNITIVE_MODES.RECOMMENDATION, 'recommendation');
   }
 
   if (looksLikeReflection(q)) {
-    return {
-      kind: COGNITIVE_MODES.REFLECTION,
-      via: 'reflection',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.REFLECTION, 'reflection');
   }
 
   if (looksLikeExplanation(q)) {
-    return {
-      kind: COGNITIVE_MODES.EXPLANATION,
-      via: 'explanation',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.EXPLANATION, 'explanation');
   }
 
   if (looksLikeRetrieval(q)) {
-    return {
-      kind: COGNITIVE_MODES.RETRIEVAL,
-      via: 'retrieval',
-      explicitInvestigation: false,
-    };
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'retrieval');
   }
 
   if (hasRecentSpecialistWork(input)) {
     const tokenCount = q.split(/\s+/).filter(Boolean).length;
     if (WH_RETRIEVAL_PREFIX_RE.test(q) || tokenCount <= 4) {
-      return {
-        kind: COGNITIVE_MODES.RETRIEVAL,
-        via: 'conversation_continuity',
-        explicitInvestigation: false,
-      };
+      return modeResult(COGNITIVE_MODES.RETRIEVAL, 'conversation_continuity');
     }
   }
 
-  return {
-    kind: COGNITIVE_MODES.UNCLASSIFIED,
-    via: 'unclassified',
-    explicitInvestigation: false,
-  };
+  return modeResult(COGNITIVE_MODES.UNCLASSIFIED, 'unclassified');
 }
 
 function forbidsSpecialistDelegation(mode) {

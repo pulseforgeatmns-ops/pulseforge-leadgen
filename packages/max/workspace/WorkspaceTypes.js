@@ -269,6 +269,11 @@ function buildResponseMetadata(partial = {}) {
   if (partial.cognitiveMode != null) meta.cognitiveMode = String(partial.cognitiveMode);
   if (partial.specialistDelegated === false) meta.specialistDelegated = false;
   if (partial.operatingEvidenceRetrieval === true) meta.operatingEvidenceRetrieval = true;
+  if (partial.evidenceGroundedRecommendation === true) {
+    meta.evidenceGroundedRecommendation = true;
+  }
+  if (partial.executed === false) meta.executed = false;
+  if (partial.executed === true) meta.executed = true;
   return meta;
 }
 

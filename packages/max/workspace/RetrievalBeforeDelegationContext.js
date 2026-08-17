@@ -33,11 +33,14 @@ const {
 } = require('./BusinessUnderstandingRetrieval');
 const {
   isOperatingGroundedRecommendation,
+  isBareCurrentStateRecommendation,
+  hasOperatingGrounding,
   shouldRetrieveOperatingEvidence,
   isInventoryOnlyRequest,
   loadOperatingEvidence,
   composeOperatingEvidenceAnswer,
   operatingStructured,
+  bundleHasUsableOperatingSignal,
 } = require('./OperatingEvidenceRetrieval');
 
 const INDUSTRY_RE =
@@ -242,13 +245,24 @@ function workspaceStructured(answer, extras = {}) {
 async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
   const inventoryOnly = isInventoryOnlyRequest(question);
   const recommend =
-    isOperatingGroundedRecommendation(question) && !inventoryOnly;
+    !inventoryOnly &&
+    (isOperatingGroundedRecommendation(question) ||
+      (mode && mode.kind === COGNITIVE_MODES.RECOMMENDATION));
+  const bareOnly =
+    recommend &&
+    isBareCurrentStateRecommendation(question) &&
+    !hasOperatingGrounding(question);
   const bundle = await loadOperatingEvidence(input);
+  if (bareOnly && !bundleHasUsableOperatingSignal(bundle)) {
+    return null;
+  }
   const understanding = await inspectRetrievalSources(input);
   const composed = composeOperatingEvidenceAnswer(question, bundle, {
     inventoryOnly,
     recommend,
     businessUnderstanding: understanding,
+    now: input.now,
+    capability: bundle.capability,
   });
 
   if (input.session && input.session.context && typeof input.session.context === 'object') {
@@ -270,9 +284,11 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     unavailable: itemsByUnavailable(bundle.items),
     reasoning: [
       `Classified operator intent as ${mode.kind}.`,
-      'Retrieved existing PulseForge operating evidence before Blueprint advisory reasoning.',
       composed.recommend
-        ? 'Recommendation is grounded in retrieved operating evidence, not Blueprint-only advice.'
+        ? 'Retrieved operating evidence as a prerequisite, then reasoned to a recommendation.'
+        : 'Retrieved existing PulseForge operating evidence before Blueprint advisory reasoning.',
+      composed.recommend
+        ? 'Recommendation is grounded in retrieved operating evidence, capability state, and policy — not Blueprint-only advice. No action was executed.'
         : 'Inventory requested — no new acquisition recommendation before evidence review.',
     ],
   });
@@ -308,7 +324,11 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
       context: input.context,
     });
 
-  if (shouldRetrieveOperatingEvidence(question)) {
+  if (
+    shouldRetrieveOperatingEvidence(question) ||
+    (mode.kind === COGNITIVE_MODES.RECOMMENDATION &&
+      isBareCurrentStateRecommendation(question))
+  ) {
     return maybeHandleOperatingEvidenceTurn(input, question, mode);
   }
 
