@@ -61,6 +61,20 @@
   color: var(--pf-gold); padding: 6px 8px; white-space: nowrap;
   border: 1px solid rgba(154, 123, 45, 0.45); border-radius: 999px;
 }
+.pf-shell-nav .pf-nav-tenant-wrap {
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+}
+.pf-shell-nav .pf-nav-tenant-select {
+  min-height: 32px; max-width: 220px;
+  padding: 4px 8px; border-radius: 999px;
+  border: 1px solid rgba(154, 123, 45, 0.55);
+  background: rgba(0, 0, 0, 0.25); color: var(--pf-nav-text);
+  font-family: var(--pf-font-mono); font-size: 0.62rem;
+  letter-spacing: 0.8px; text-transform: none;
+}
+.pf-shell-nav .pf-nav-tenant-select:focus-visible {
+  outline: 2px solid var(--pf-gold); outline-offset: 2px;
+}
 .pf-shell-nav .pf-nav-who { color: var(--pf-nav-muted); padding: 6px 4px; white-space: nowrap; }
 /* SPEC-099 — client workspace identity (company, not person) */
 .pf-shell-nav .pf-nav-who.pf-nav-workspace {

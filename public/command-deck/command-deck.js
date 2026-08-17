@@ -5120,7 +5120,26 @@
     }
   }
 
+  function invalidateWorkspaceForTenantChange() {
+    workspaceSessionId = null;
+    workspaceContext = null;
+    if (els.workspace && !els.workspace.hidden) {
+      closeWorkspace();
+    }
+  }
+
+  async function onTenantChanged() {
+    invalidateWorkspaceForTenantChange();
+    try {
+      await loadDeck();
+    } catch (err) {
+      console.error('[command-deck] tenant reload failed:', err);
+    }
+  }
+
   document.addEventListener('pulseforge:shell-ready', applyClientCommandDeckPresentation);
+  document.addEventListener('pulseforge:tenant-changed', applyClientCommandDeckPresentation);
+  document.addEventListener('pulseforge:tenant-changed', onTenantChanged);
   if (window.PulseforgeShell) applyClientCommandDeckPresentation();
 
   if (window.SpatialDeck) {

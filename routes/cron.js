@@ -3,6 +3,11 @@ const Anthropic = require('@anthropic-ai/sdk');
 const router = express.Router();
 const pool = require('../db');
 const { normalizeClientId } = require('../utils/clientContext');
+const {
+  isAgentEnabledForClient,
+  logBlockedDispatch,
+  BLOCK_REASON,
+} = require('../utils/agentDispatchPolicy');
 const { runScoutExpansionCron } = require('../scoutExpansion');
 const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
 const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
@@ -52,9 +57,28 @@ const CRON_MODULES = {
   paige_reflection: '../agents/reflection/run',
 };
 
-function runCronAgent(agent, res, query = {}) {
+async function runCronAgent(agent, res, query = {}) {
   if (!CRON_MODULES[agent]) return res.status(400).json({ error: `Unknown agent: ${agent}` });
   const clientId = normalizeClientId(query.client_id || query.clientId);
+
+  const dispatchGate = await isAgentEnabledForClient(clientId, agent);
+  if (!dispatchGate.allowed) {
+    await logBlockedDispatch({
+      agentName: agent,
+      clientId,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      channel: 'cron',
+      payload: { triggered_by: 'cron' },
+    });
+    return res.json({
+      success: false,
+      skipped: true,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      agent,
+      client_id: clientId,
+    });
+  }
+
   res.json({ success: true, agent, client_id: clientId });
   try {
     delete require.cache[require.resolve(CRON_MODULES[agent])];
@@ -429,7 +453,7 @@ router.post('/cron/:agent', async (req, res) => {
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  runCronAgent(agent, res, { ...req.query, ...(req.body || {}) });
+  await runCronAgent(agent, res, { ...req.query, ...(req.body || {}) });
 });
 
 router.get('/cron/:agent', async (req, res) => {
@@ -441,7 +465,7 @@ router.get('/cron/:agent', async (req, res) => {
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  runCronAgent(agent, res, req.query);
+  await runCronAgent(agent, res, req.query);
 });
 
 module.exports = router;

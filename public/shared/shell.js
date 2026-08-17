@@ -145,28 +145,105 @@
     }
   }
 
-  async function fetchTenantName(context) {
+  async function fetchTenantContext(context) {
     const role = context?.user?.role;
     // Client identity comes from /api/me.client (authoritative). Do not call
     // /api/clients — clients cannot list tenants, and must not influence display
     // via URL/query client id.
     if (role === 'client') {
-      return context?.client?.display_name || context?.client?.name || null;
+      return {
+        tenantName:
+          context?.client?.display_name || context?.client?.name || null,
+        activeClientId: context?.active_client_id ?? null,
+        clients: [],
+        canSwitch: false,
+      };
     }
-    if (!['admin', 'manager'].includes(role)) return null;
+    if (!['admin', 'manager'].includes(role)) {
+      return {
+        tenantName: context?.client?.display_name || context?.client?.name || null,
+        activeClientId: context?.active_client_id ?? null,
+        clients: [],
+        canSwitch: false,
+      };
+    }
     try {
       const response = await fetch('/api/clients', { credentials: 'same-origin' });
-      if (!response.ok) return null;
+      if (!response.ok) {
+        return {
+          tenantName: null,
+          activeClientId: context?.active_client_id ?? null,
+          clients: [],
+          canSwitch: false,
+        };
+      }
       const data = await response.json();
-      const active = (data.clients || []).find(c => Number(c.id) === Number(data.active_client_id));
-      return active ? active.name : null;
+      const activeId = Number(data.active_client_id);
+      const active = (data.clients || []).find(c => Number(c.id) === activeId);
+      return {
+        tenantName: active ? active.name : null,
+        activeClientId: activeId,
+        clients: data.clients || [],
+        canSwitch: true,
+      };
     } catch (_err) {
-      return null;
+      return {
+        tenantName: null,
+        activeClientId: context?.active_client_id ?? null,
+        clients: [],
+        canSwitch: false,
+      };
     }
   }
 
-  function buildNav(context, tenantName) {
+  async function switchActiveTenant(clientId) {
+    const response = await fetch('/api/clients/active', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.message || payload.error || 'Tenant switch failed');
+    }
+    return response.json();
+  }
+
+  function updateTenantDisplay(tenantName, activeClientId) {
+    const tenantEl = document.querySelector('.pf-nav-tenant');
+    const selectEl = document.getElementById('pfTenantSelect');
+    if (tenantEl && tenantName) tenantEl.textContent = tenantName;
+    if (selectEl && activeClientId != null) {
+      selectEl.value = String(activeClientId);
+    }
+  }
+
+  async function handleTenantSwitch(clientId, context, tenantState) {
+    await switchActiveTenant(clientId);
+    const nextId = Number(clientId);
+    const active = (tenantState.clients || []).find(c => Number(c.id) === nextId);
+    tenantState.activeClientId = nextId;
+    tenantState.tenantName = active ? active.name : tenantState.tenantName;
+    if (context) context.active_client_id = nextId;
+    updateTenantDisplay(tenantState.tenantName, nextId);
+    window.PulseforgeShell = {
+      ...window.PulseforgeShell,
+      context,
+      tenantName: tenantState.tenantName,
+      activeClientId: nextId,
+    };
+    document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed', {
+      detail: {
+        active_client_id: nextId,
+        tenantName: tenantState.tenantName,
+      },
+    }));
+  }
+
+  function buildNav(context, tenantState) {
     const role = context?.user?.role || null;
+    const tenantName = tenantState?.tenantName || null;
     const surface = currentSurface();
     const nav = document.createElement('nav');
     nav.className = 'pf-shell-nav';
@@ -205,7 +282,47 @@
       who.dataset.pfWorkspace = '1';
       group.appendChild(who);
     } else {
-      if (tenantName) {
+      if (tenantState?.canSwitch && (tenantState.clients || []).length > 0) {
+        const tenantWrap = document.createElement('div');
+        tenantWrap.className = 'pf-nav-tenant-wrap';
+
+        const tenant = document.createElement('span');
+        tenant.className = 'pf-nav-tenant';
+        tenant.textContent = tenantName || 'Select client';
+        tenant.title = 'Active business workspace';
+        tenantWrap.appendChild(tenant);
+
+        const select = document.createElement('select');
+        select.id = 'pfTenantSelect';
+        select.className = 'pf-nav-tenant-select';
+        select.setAttribute('aria-label', 'Active business workspace');
+        for (const client of tenantState.clients) {
+          const option = document.createElement('option');
+          option.value = String(client.id);
+          option.textContent = client.name;
+          if (Number(client.id) === Number(tenantState.activeClientId)) {
+            option.selected = true;
+          }
+          select.appendChild(option);
+        }
+        select.addEventListener('change', async () => {
+          const previous = String(tenantState.activeClientId ?? '');
+          const next = select.value;
+          if (next === previous) return;
+          select.disabled = true;
+          try {
+            await handleTenantSwitch(next, context, tenantState);
+          } catch (err) {
+            console.error('[shell] tenant switch failed:', err);
+            select.value = previous;
+            window.alert(err.message || 'Could not switch workspace');
+          } finally {
+            select.disabled = false;
+          }
+        });
+        tenantWrap.appendChild(select);
+        group.appendChild(tenantWrap);
+      } else if (tenantName) {
         const tenant = document.createElement('span');
         tenant.className = 'pf-nav-tenant';
         tenant.textContent = tenantName;
@@ -268,14 +385,27 @@
   async function init() {
     applyTheme(readTheme());
     const context = await fetchContext();
-    const tenantName = await fetchTenantName(context);
-    const nav = buildNav(context, tenantName);
+    const tenantState = await fetchTenantContext(context);
+    const nav = buildNav(context, tenantState);
     document.body.prepend(nav);
     applyTheme(readTheme());
     activateHashTab();
     window.addEventListener('hashchange', () => { activateHashTab(); refreshCurrent(); });
-    window.PulseforgeShell = { context, tenantName, toggleTheme, applyTheme, readTheme };
-    document.dispatchEvent(new CustomEvent('pulseforge:shell-ready', { detail: { context, tenantName } }));
+    window.PulseforgeShell = {
+      context,
+      tenantName: tenantState.tenantName,
+      activeClientId: tenantState.activeClientId,
+      toggleTheme,
+      applyTheme,
+      readTheme,
+    };
+    document.dispatchEvent(new CustomEvent('pulseforge:shell-ready', {
+      detail: {
+        context,
+        tenantName: tenantState.tenantName,
+        activeClientId: tenantState.activeClientId,
+      },
+    }));
   }
 
   if (document.readyState !== 'loading') init();
