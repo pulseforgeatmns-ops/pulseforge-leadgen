@@ -5,7 +5,7 @@
  * AIM is not operating fact. Qualifications are derived scores.
  */
 
-const { clone, asText, nowIso } = require('./types');
+const { clone, asText, nowIso, isRuntimeAim } = require('./types');
 const { FEDIR_CLIENT_KEY, buildFedirAim } = require('./seeds/fedir');
 
 function createMemoryAimStore(opts = {}) {
@@ -28,6 +28,11 @@ function createMemoryAimStore(opts = {}) {
     const key = asText(clientKey);
     const found = models.get(key);
     return found ? clone(found) : null;
+  }
+
+  function getPublishedAim(clientKey) {
+    const aim = getAim(clientKey);
+    return isRuntimeAim(aim) ? aim : null;
   }
 
   function listAims() {
@@ -75,6 +80,7 @@ function createMemoryAimStore(opts = {}) {
   return {
     putAim,
     getAim,
+    getPublishedAim,
     listAims,
     putQualification,
     listQualifications,

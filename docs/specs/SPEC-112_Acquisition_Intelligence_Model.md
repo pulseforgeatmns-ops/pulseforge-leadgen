@@ -256,3 +256,4 @@ Additive `aim_*` tables. Rollback drops those tables. Existing Scout/Paige paths
 - Sales Intelligence consuming AIM pain scores
 - Additional pain categories only when Fedir's ontology proves insufficient
 - Durable AIM versions after client edits
+- ~~Compiler from unstructured market documents~~ — SPEC-113

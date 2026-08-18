@@ -27,6 +27,7 @@ const { discoverCandidates, defaultDiscoveryAdapters } = require('./DiscoveryAda
 const {
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
+  resolveAim,
 } = require('./ScoutAdapter');
 const {
   createMemoryAcquisitionState,
@@ -498,6 +499,7 @@ module.exports = {
   defaultDiscoveryAdapters,
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
+  resolveAim,
   createMemoryAcquisitionState,
   createPostgresAcquisitionState,
   buildAcquisitionSummary,
