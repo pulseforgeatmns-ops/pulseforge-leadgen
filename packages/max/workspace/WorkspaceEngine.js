@@ -43,6 +43,12 @@ const {
   classifyCognitiveMode,
 } = require('../specialistDelegation/CognitiveMode');
 const {
+  CONTRACT_IDS,
+  selectResponseContract,
+  composeAccordingToContract,
+  attachContractMetadata,
+} = require('./ResponseContract');
+const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
@@ -412,18 +418,23 @@ class WorkspaceEngine {
       };
     }
 
-    // SPEC-102 / SPEC-103 / SPEC-105 — retrieve durable knowledge before any
-    // specialist path. Operating-evidence questions inspect AO/prospects/Scout
-    // state/missions/activity first. Retrieval never invokes Scout.
+    // SPEC-102 / SPEC-103 / SPEC-105 / SPEC-109 — classify intent, select the
+    // response contract, then retrieve before any specialist path.
     const cognitive = classifyCognitiveMode(question, {
       session,
       context: rawContext || session.context,
     });
+    const responseContract = selectResponseContract(question, cognitive);
+    if (session.context && typeof session.context === 'object' && responseContract) {
+      session.context.responseContract = responseContract;
+      session.context.lastResponseContract = responseContract.id;
+    }
     const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn({
       question,
       session,
       context: rawContext || session.context,
       cognitive,
+      responseContract,
       cieService: this._clientIntelligenceService || undefined,
       cieOpts: this._clientIntelligenceOpts || undefined,
       operatingEvidenceOpts: {
@@ -575,6 +586,7 @@ class WorkspaceEngine {
       session,
       context: rawContext || session.context,
       action: rawContext?.action || null,
+      responseContract,
       delegationService: this._specialistDelegationService || undefined,
       delegationOpts: this._specialistDelegationOpts || undefined,
       ...(this._scoutAcquisitionOpts || {}),
@@ -637,6 +649,92 @@ class WorkspaceEngine {
           domain: EXECUTION_DOMAINS.WORKSPACE,
           routeKind: ROUTE_KINDS.INTELLIGENCE,
           reason: scoutTurn.reason,
+          missionType: null,
+          missionId: null,
+        },
+      };
+    }
+
+    if (responseContract && responseContract.id === CONTRACT_IDS.INVESTIGATION) {
+      const known =
+        (session.context && session.context.investigationKnown) ||
+        'No prior investigation result is on file.';
+      const investigationProse = composeAccordingToContract(responseContract, {
+        known,
+        needSpecialist:
+          'Yes. This is new external discovery work. I will not answer it from Blueprint memory or an ungrounded prior recommendation.',
+        expectedOutputs:
+          'A bounded specialist investigation: candidate companies, coverage, and fit. Not a strategy recommendation.',
+      });
+      const structuredInvestigate = attachContractMetadata(
+        buildStructuredResponse({
+          answer: investigationProse,
+          reasoning: [
+            `Classified operator intent as ${cognitive.kind}.`,
+            'Selected Investigation response contract before specialist delegation.',
+            'Known operating/durable state was inspected first. Unsupported memory is not an investigation result.',
+          ],
+          supportingEvidence: [],
+          contradictingEvidence: [],
+          confidence: 0.7,
+          nextInvestigations: [],
+          recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
+          confidenceContributors: ['spec_109', 'investigation_contract'],
+          timelineReferences: [],
+          relatedEntities: [],
+          metadata: {
+            sourcesUsed: { briefing: false, reasoning: true, memory: true, policy: true, knowledge: true },
+            evidenceCount: 0,
+            asOf: new Date().toISOString(),
+            unavailable: [],
+            cognitiveMode: cognitive.kind,
+            responseContract: responseContract.id,
+            intentBoundResponse: true,
+            specialistDelegated: false,
+            scoutDelegated: false,
+          },
+        }),
+        responseContract
+      );
+      const presentedInvestigate = await this._presentation.present(structuredInvestigate);
+      const proseInvestigate = presentedInvestigate.prose || investigationProse;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseInvestigate,
+        structured: structuredInvestigate,
+      });
+      return {
+        sessionId: session.id,
+        prose: proseInvestigate,
+        structured: structuredInvestigate,
+        metadata: presentedInvestigate.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredInvestigate,
+          session,
+          question,
+        }),
+        recommendedActions: structuredInvestigate.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedInvestigate.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission: null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: 'intent_bound_investigation',
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: 'intent_bound_investigation',
           missionType: null,
           missionId: null,
         },

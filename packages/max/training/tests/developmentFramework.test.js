@@ -66,6 +66,14 @@ describe('SPEC-102F Max Development Framework', () => {
     }
   });
 
+  test('intent_bound_response_selection is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('intent_bound_response_selection');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-109'));
+    assert.match(competency.exercises[0].generalLesson, /response structure/i);
+    assert.match(competency.exercises[0].transferTest, /How is Anchor Cleaning doing/i);
+  });
+
   test('claim_grounding is a graduated Pilot 0 competency', () => {
     const competency = training.getCompetency('claim_grounding');
     assert.equal(competency.stage, training.STAGES.GRADUATED);

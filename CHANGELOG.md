@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Intent-Bound Response Selection ([SPEC-109](docs/specs/SPEC-109_Intent_Bound_Response_Selection.md), [ADR-046](docs/adr/ADR-046_Intent_Determines_Response_Structure.md))
+  - Response contract registry: Retrieval, Summary, Recommendation, Challenge, Investigation
+  - Contract selected after intent classification and before retrieval or specialist delegation
+  - Retrieval answers verified state; summaries separate state / goals / unknowns; recommendations stay primary only when asked
+  - Competency `intent_bound_response_selection` graduated 2026-08-18
+
 - Anchor Cleaning public terminology: **facilities assessment** replaces walkthrough on the website, form, success message, lead emails, and CRM-visible action titles (backend routes/events unchanged)
 
 - Anchor Cleaning ads-ready homepage + walkthrough intake

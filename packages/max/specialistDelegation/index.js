@@ -75,6 +75,8 @@ const {
   classifyCognitiveMode,
   forbidsSpecialistDelegation,
   looksLikeInvestigation,
+  looksLikeSummary,
+  looksLikeCompletedRetrieval,
 } = require('./CognitiveMode');
 const {
   UNKNOWN_ANSWER,
@@ -732,6 +734,8 @@ function createSpecialistDelegationService(options = {}) {
     classifyCognitiveMode,
     forbidsSpecialistDelegation,
     looksLikeInvestigation,
+    looksLikeSummary,
+    looksLikeCompletedRetrieval,
     UNKNOWN_ANSWER,
     mayCreateDelegation,
     mayEnterSpecialistPath,
@@ -789,6 +793,8 @@ module.exports = {
   classifyCognitiveMode,
   forbidsSpecialistDelegation,
   looksLikeInvestigation,
+  looksLikeSummary,
+  looksLikeCompletedRetrieval,
   UNKNOWN_ANSWER,
   mayCreateDelegation,
   mayEnterSpecialistPath,

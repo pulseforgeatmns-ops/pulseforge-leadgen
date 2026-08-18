@@ -81,6 +81,32 @@ const RETRIEVAL_RE = new RegExp(
     String.raw`\bwhat (?:prospects|leads) do we already have\b`,
     String.raw`\bwhat has happened so far\b`,
     String.raw`\bwhat have we already tried\b`,
+    String.raw`\bwhat have we (?:completed|done|finished|accomplished)(?: recently)?\b`,
+    String.raw`\brecently completed\b`,
+    String.raw`\bwhat outreach has (?:already )?(?:been )?sent\b`,
+    String.raw`\bwhat (?:emails?|mail|outreach) (?:has|have) (?:already )?(?:been )?(?:sent|mailed)\b`,
+  ].join('|'),
+  'i'
+);
+
+const SUMMARY_RE = new RegExp(
+  [
+    String.raw`\bhow(?:'s| is)\b.{0,80}\bdoing\b`,
+    String.raw`\bhow are we doing\b`,
+    String.raw`\bhow is (?:the )?(?:business|company|client|pipeline)\b`,
+    String.raw`\bstatus (?:update|of)\b.{0,40}\b(?:anchor|campaign|pipeline|business)\b`,
+  ].join('|'),
+  'i'
+);
+
+const COMPLETED_RETRIEVAL_RE = new RegExp(
+  [
+    String.raw`\bwhat have we (?:completed|done|finished|accomplished)(?: recently)?\b`,
+    String.raw`\bwhat(?:'s| is) (?:already )?(?:been )?(?:completed|done|finished) recently\b`,
+    String.raw`\brecently completed\b`,
+    String.raw`\bwhat outreach has (?:already )?(?:been )?sent\b`,
+    String.raw`\bwhat (?:has|have) already been sent\b`,
+    String.raw`\bwhat (?:emails?|mail|outreach) (?:has|have) (?:already )?(?:been )?(?:sent|mailed)\b`,
   ].join('|'),
   'i'
 );
@@ -157,7 +183,21 @@ function looksLikeExplanation(question) {
 }
 
 function looksLikeRetrieval(question) {
-  return RETRIEVAL_RE.test(String(question || ''));
+  const q = String(question || '');
+  return RETRIEVAL_RE.test(q) || COMPLETED_RETRIEVAL_RE.test(q);
+}
+
+function looksLikeCompletedRetrieval(question) {
+  return COMPLETED_RETRIEVAL_RE.test(String(question || ''));
+}
+
+function looksLikeSummary(question) {
+  const q = String(question || '');
+  if (!q.trim()) return false;
+  if (looksLikeRecommendation(q)) return false;
+  if (looksLikeClaimChallenge(q)) return false;
+  if (looksLikeInvestigation(q)) return false;
+  return SUMMARY_RE.test(q);
 }
 
 function modeResult(kind, via, extras = {}) {
@@ -231,7 +271,15 @@ function classifyCognitiveMode(question, input = {}) {
   }
 
   if (looksLikeRetrieval(q)) {
-    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'retrieval');
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'retrieval', {
+      requiresOperatingRetrieval: looksLikeCompletedRetrieval(q) || looksLikeExistingEvidenceRetrieval(q),
+    });
+  }
+
+  if (looksLikeSummary(q)) {
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'summary', {
+      requiresOperatingRetrieval: true,
+    });
   }
 
   if (hasRecentSpecialistWork(input)) {
@@ -259,6 +307,8 @@ module.exports = {
   REFLECTION_RE,
   EXPLANATION_RE,
   RETRIEVAL_RE,
+  SUMMARY_RE,
+  COMPLETED_RETRIEVAL_RE,
   classifyCognitiveMode,
   looksLikeInvestigation,
   looksLikeExecution,
@@ -267,6 +317,8 @@ module.exports = {
   looksLikeReflection,
   looksLikeExplanation,
   looksLikeRetrieval,
+  looksLikeSummary,
+  looksLikeCompletedRetrieval,
   looksLikeExistingEvidenceRetrieval,
   looksLikeClaimChallenge,
   hasRecentSpecialistWork,
