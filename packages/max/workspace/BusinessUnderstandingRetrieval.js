@@ -111,6 +111,7 @@ function buildBusinessUnderstandingContract(summary, playbook = null, objectives
     targetGeography: present(summary.geography || summary.targetMarkets),
     valueProposition: present(summary.competitiveAdvantages),
     businessGoals: present(summary.campaignGoals),
+    successMetrics: present(summary.successMetrics),
     currentPriorities,
     constraints: present(summary.avoidCustomers),
     unknowns: Array.isArray(summary.unknowns) ? summary.unknowns.filter(Boolean) : [],
@@ -459,7 +460,13 @@ function composeDurableRetrievalAnswer(question, mode, bundle = {}) {
     }
   }
 
-  if (summary && summary.approved && contract) {
+  if (
+    summary &&
+    summary.approved &&
+    contract &&
+    mode &&
+    (mode.via === 'unknown_intent_fallback' || mode.via === 'planning_to_retrieval')
+  ) {
     used.push('blueprint');
     const bits = [];
     if (contract.companyName) bits.push(contract.companyName);

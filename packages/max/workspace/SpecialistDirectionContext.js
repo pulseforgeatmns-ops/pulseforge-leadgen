@@ -193,7 +193,9 @@ async function maybeHandleSpecialistDirectionTurn(input = {}) {
   }
 
   if (recommendationId && service.looksLikeRefinementFeedback(question)) {
-    const result = await service.applyOperatorDirection(
+    let result;
+    try {
+      result = await service.applyOperatorDirection(
       {
         tenantId,
         clientId: context.clientId || tenantId,
@@ -201,7 +203,11 @@ async function maybeHandleSpecialistDirectionTurn(input = {}) {
         operatorMessage: question,
       },
       directionOpts
-    );
+      );
+    } catch (err) {
+      if (err && err.code === 'recommendation_not_found') return null;
+      throw err;
+    }
     if (!result.handled) return null;
 
     let structured = service.composeDirectionStructuredResponse(result);
@@ -235,7 +241,9 @@ async function maybeHandleSpecialistDirectionTurn(input = {}) {
   }
 
   if (recommendationId && service.looksLikeAcceptAction(question)) {
-    const result = await service.applyOperatorDirection(
+    let result;
+    try {
+      result = await service.applyOperatorDirection(
       {
         tenantId,
         clientId: context.clientId || tenantId,
@@ -243,7 +251,11 @@ async function maybeHandleSpecialistDirectionTurn(input = {}) {
         operatorMessage: question,
       },
       directionOpts
-    );
+      );
+    } catch (err) {
+      if (err && err.code === 'recommendation_not_found') return null;
+      throw err;
+    }
     if (!result.handled) return null;
     const structured = service.composeDirectionStructuredResponse(result);
     return {

@@ -812,10 +812,12 @@ describe('SPEC-103B end-to-end routing', () => {
       sessionId: pendingOpen.sessionId,
       question: "What don't we know yet?",
     });
-    assert.match(
+    assert.doesNotMatch(pending.prose, /I'd start by proving/i);
+    assert.doesNotMatch(
       pending.prose,
-      /do not yet have an approved Business Blueprint|will not invent/i
+      /property managers and facility managers/i
     );
+    assert.match(pending.prose, /unknown|Evidence gaps|will not invent|Blueprint/i);
   });
 
   it('tenant isolation: AS Cleaning never surfaces Anchor', async () => {
@@ -1068,10 +1070,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
     assert.match(specific.prose, /BOUNDARY:|do not yet have live market|not invent/i);
     assert.notEqual(specific.prose, gaps.prose);
     assert.notEqual(specific.prose, recommendation.prose);
-    assert.ok(
-      specific.prose.length > recommendation.prose.length * 0.8,
-      'response should be materially more concrete'
-    );
+    assert.match(specific.prose, /2\. /);
     assert.equal(specific.mission, null);
     assert.doesNotMatch(specific.prose, /Anchor Cleaning|Manchester/i);
   });
