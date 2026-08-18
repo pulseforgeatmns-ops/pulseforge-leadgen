@@ -212,6 +212,7 @@ app.use('/', require('./routes/serviceModeOperatorLoop'));
 app.use('/', require('./routes/intelligenceSeedLibraries'));
 app.use('/', require('./routes/acquisitionIntelligenceModel'));
 app.use('/', require('./routes/acquisitionIntelligenceCompiler'));
+app.use('/', require('./routes/tenantWorkspace'));
 app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));

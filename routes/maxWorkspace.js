@@ -14,11 +14,15 @@ const Anthropic = require('@anthropic-ai/sdk');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const {
-  getRequestClientId,
   normalizeClientId,
 } = require('../utils/clientContext');
 const { getMaxRuntime } = require('../utils/maxRuntime');
 const { presentMaxResultForClient } = require('../utils/clientFacingPresentation');
+const {
+  resolveActiveTenantId,
+  NO_ACTIVE_CLIENT,
+} = require('../packages/max/workspace/TenantContextResolver');
+const { getTenantWorkspace } = require('../services/tenantWorkspace');
 
 const requireDashboardRead = [
   requireAuth,
@@ -44,8 +48,8 @@ router.post(
       const tenantId = resolveTenantId(req);
       if (tenantId == null) {
         return res.status(400).json({
-          error: 'client_id required',
-          message: 'Max workspace requires an active client context',
+          error: 'no_active_client',
+          message: NO_ACTIVE_CLIENT,
         });
       }
 
@@ -53,6 +57,14 @@ router.post(
         ...(req.body || {}),
         tenantId: String(tenantId),
       };
+      try {
+        const snapshot = await getTenantWorkspace({ clientId: tenantId });
+        envelope.tenantWorkspace = snapshot.status;
+        envelope.tenant = snapshot.client;
+        envelope.tenantName = snapshot.client && snapshot.client.name;
+      } catch (_err) {
+        /* workspace snapshot is additive */
+      }
       if (
         req.body &&
         req.body.tenantId != null &&
@@ -94,8 +106,8 @@ router.post(
       const tenantId = resolveTenantId(req);
       if (tenantId == null) {
         return res.status(400).json({
-          error: 'client_id required',
-          message: 'Max workspace requires an active client context',
+          error: 'no_active_client',
+          message: NO_ACTIVE_CLIENT,
         });
       }
 
@@ -180,6 +192,10 @@ async function getWorkspaceRuntime() {
 }
 
 function resolveTenantId(req) {
+  const active = resolveActiveTenantId(req);
+  if (active != null) return active;
+  // Query/body client_id is allowed only when the session already has no
+  // tenant — still fail closed rather than defaulting to Pulseforge (id=1).
   if (req.query.client_id != null && req.query.client_id !== '') {
     const role =
       (req.session && req.session.user && req.session.user.role) || null;
@@ -194,7 +210,7 @@ function resolveTenantId(req) {
       return normalizeClientId(req.body.client_id);
     }
   }
-  return getRequestClientId(req);
+  return null;
 }
 
 function isClientRole(req) {

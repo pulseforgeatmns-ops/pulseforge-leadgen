@@ -15,6 +15,12 @@ const {
 } = require('./ContextEnvelope');
 const { buildOpeningState } = require('./OpeningStateBuilder');
 const {
+  resolveActiveTenantId,
+  resolveMaxPromptContext,
+  buildTenantGreeting,
+  NO_ACTIVE_CLIENT,
+} = require('./TenantContextResolver');
+const {
   buildSuggestions,
   buildActiveWorkSuggestions,
   isActiveDeskWorkflow,
@@ -162,6 +168,10 @@ module.exports = {
   contextFingerprint,
   contextFocusLabel,
   buildOpeningState,
+  resolveActiveTenantId,
+  resolveMaxPromptContext,
+  buildTenantGreeting,
+  NO_ACTIVE_CLIENT,
   buildSuggestions,
   buildActiveWorkSuggestions,
   isActiveDeskWorkflow,

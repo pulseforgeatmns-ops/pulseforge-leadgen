@@ -321,6 +321,14 @@
           }
         });
         tenantWrap.appendChild(select);
+
+        const createLink = document.createElement('a');
+        createLink.className = 'pf-nav-link pf-nav-create-client';
+        createLink.href = '/admin/clients';
+        createLink.textContent = 'New client';
+        createLink.title = 'Create and provision a tenant workspace';
+        tenantWrap.appendChild(createLink);
+
         group.appendChild(tenantWrap);
       } else if (tenantName) {
         const tenant = document.createElement('span');

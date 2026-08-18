@@ -35,6 +35,7 @@ const {
   assertAuthorizedClientSwitch,
   filterClientsForUser,
 } = require('../utils/tenantAuthorization');
+const { getTenantWorkspace } = require('../services/tenantWorkspace');
 
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
@@ -285,10 +286,19 @@ router.post('/api/clients/active', requireOperator, async (req, res) => {
       return res.status(404).json({ error: 'Client not found' });
     }
     req.session.active_client_id = clientId;
+    let workspace = null;
+    try {
+      workspace = await getTenantWorkspace({ pool, clientId });
+    } catch (_err) {
+      workspace = null;
+    }
     res.json({
       ok: true,
       active_client_id: clientId,
       features: featuresFromFlag(clientId, active.setter_pipeline_v2_enabled === true),
+      client: workspace && workspace.client ? workspace.client : { id: clientId, name: active.name },
+      status: workspace && workspace.status ? workspace.status : null,
+      greeting: workspace && workspace.greeting ? workspace.greeting : null,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
