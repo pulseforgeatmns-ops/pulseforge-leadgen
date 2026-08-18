@@ -99,6 +99,7 @@ const {
 const ResponseContract = require('./ResponseContract');
 const BusinessIntelligence = require('./BusinessIntelligence');
 const OperatorIntentRegistry = require('./OperatorIntentRegistry');
+const ReasoningPipeline = require('./ReasoningPipeline');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -152,6 +153,10 @@ module.exports = {
   looksLikeUnknownAnalysis: OperatorIntentRegistry.looksLikeUnknownAnalysis,
   looksLikeRisk: OperatorIntentRegistry.looksLikeRisk,
   looksLikeProgress: OperatorIntentRegistry.looksLikeProgress,
+  bindGovernedReasoning: ReasoningPipeline.bindGovernedReasoning,
+  attachPipelineLog: ReasoningPipeline.attachPipelineLog,
+  COMPOSER_ID: ReasoningPipeline.COMPOSER_ID,
+  PIPELINE_ID: ReasoningPipeline.PIPELINE_ID,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

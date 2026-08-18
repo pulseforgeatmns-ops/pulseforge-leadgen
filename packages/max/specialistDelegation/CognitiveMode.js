@@ -60,6 +60,7 @@ const INVESTIGATION_RE = new RegExp(
     String.raw`\blook(?:ing)? for (?:commercial|more|expansion|dentists?|property|competitors?|prospects?|leads?|signals?)`,
     String.raw`\blook for expansion\b`,
     String.raw`(?:^|[.!?]\s+)(?:(?:max|please),?\s+)?investigate\b`,
+    String.raw`\bshould (?:scout|we) investigate\b`,
     String.raw`\bresearch (?:competitors?|the market|expansion|property|dentists?|prospects?)`,
     String.raw`\bsearch (?:for|again)\b`,
     String.raw`\brun (?:another|a new) (?:search|investigation)\b`,
@@ -72,7 +73,7 @@ const PLANNING_RE =
   /\b(help me build|create a (?:rollout )?plan|build campaign|rollout plan|create a campaign)\b/i;
 
 const RECOMMENDATION_RE =
-  /\b(what should (?:we|i)(?: do| focus| prioritize| target| pursue)?|should (?:we|i) (?:target|pursue|go after|look at|focus|do next)|what(?:'s| is) next|what do you recommend|where is the (?:highest[- ]leverage|highest leverage)|what is (?:our|the|my) next (?:move|focus|step|priority))\b/i;
+  /\b(what should (?:we|i)(?: do| focus| prioritize| target| pursue)?|should (?:we|i) (?:target|pursue|go after|look at|focus|do next)|what(?:'s| is) next|what do you recommend|where is the (?:highest[- ]leverage|highest leverage)|what is (?:our|the|my) next (?:move|focus|step|priority)|biggest opportunity|what would you (?:actually )?do next|if this (?:was|were) your business)\b/i;
 
 const REFLECTION_RE =
   /\b(do you trust|what worries you|where are you uncertain|what are you (?:uncertain|unsure|worried)|what don'?t you (?:currently )?know|where are you unsure)\b/i;
@@ -86,6 +87,7 @@ const RETRIEVAL_RE = new RegExp(
     String.raw`\bwhat (?:is|are|was|were) (?:our|the|my|your)\b`,
     String.raw`\bwho is\b`,
     String.raw`\bwho are (?:our|the|my|your)\b`,
+    String.raw`\bwho should (?:we|i) target\b`,
     String.raw`\bideal customers?\b`,
     String.raw`\btarget customers?\b`,
     String.raw`\bbusiness priorities\b`,
@@ -152,6 +154,22 @@ function hasRecentSpecialistWork(input = {}) {
       envelope.lastSpecialistEvaluation ||
       envelope.acquisitionLoop
   );
+}
+
+function looksLikeBareWhy(question) {
+  return /^(?:(?:max|please),?\s+)?why(?:\s*(?:that|this|>|\?|!|\.)*)?$/i.test(
+    String(question || '').trim()
+  );
+}
+
+function hasLastRecommendation(input = {}) {
+  const session = input.session || null;
+  const ctx =
+    (session && session.context && typeof session.context === 'object'
+      ? session.context
+      : {}) || {};
+  const envelope = input.context && typeof input.context === 'object' ? input.context : {};
+  return Boolean(ctx.lastRecommendation || envelope.lastRecommendation);
 }
 
 function looksLikeClaimChallenge(question) {
@@ -271,6 +289,14 @@ function classifyCognitiveMode(question, input = {}) {
     });
   }
 
+  if (looksLikeBareWhy(q) && hasLastRecommendation(input)) {
+    return modeResult(COGNITIVE_MODES.EXPLANATION, 'recommendation_follow_up', {
+      requiresOperatingRetrieval: true,
+      intent: OPERATOR_INTENTS.RETRIEVAL,
+      analysisMode: OPERATOR_INTENTS.RETRIEVAL,
+    });
+  }
+
   const analysis = classifyNewAnalysisMode(q);
   if (analysis) {
     const kind =
@@ -290,6 +316,21 @@ function classifyCognitiveMode(question, input = {}) {
 
   const operatingRetrieval = looksLikeExistingEvidenceRetrieval(q);
   const recommendation = looksLikeRecommendation(q);
+
+  // ICP / targeting questions retrieve approved Blueprint evidence.
+  // They are not Blueprint Advisory recommendations.
+  if (
+    looksLikeRetrieval(q) &&
+    /\bwho should (?:we|i) target\b|\bideal customers?\b|\btarget customers?\b|\bwhat industries\b/i.test(
+      q
+    )
+  ) {
+    return modeResult(COGNITIVE_MODES.RETRIEVAL, 'retrieval', {
+      requiresOperatingRetrieval: false,
+      intent: OPERATOR_INTENTS.RETRIEVAL,
+      analysisMode: OPERATOR_INTENTS.RETRIEVAL,
+    });
+  }
 
   if (operatingRetrieval && recommendation) {
     return modeResult(COGNITIVE_MODES.RECOMMENDATION, 'recommendation', {
@@ -383,6 +424,8 @@ module.exports = {
   looksLikeCompletedRetrieval,
   looksLikeExistingEvidenceRetrieval,
   looksLikeClaimChallenge,
+  looksLikeBareWhy,
+  hasLastRecommendation,
   looksLikeDiagnosis,
   looksLikeUnknownAnalysis,
   looksLikeRisk,

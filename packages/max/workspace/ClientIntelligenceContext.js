@@ -934,6 +934,14 @@ function hasPriorClientReasoning(session) {
     'understanding',
     'evidence_gap',
     'decompose',
+    'plan_select',
+    'plan_advance',
+    'plan_deepen',
+    'plan_recover',
+    'plan_critique',
+    'plan_capability',
+    'plan_operator',
+    'plan_continuity',
   ].includes(String(prior.kind));
 }
 
@@ -1291,31 +1299,30 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
   if (isOperatorOperatingUpdate(question)) return false;
   if (isClientContextExecutionRequest(question)) return false;
   if (isOperationalDeskOrMissionRequest(question)) return false;
+  try {
+    const {
+      classifyCognitiveMode,
+      COGNITIVE_MODES,
+    } = require('../specialistDelegation/CognitiveMode');
+    const mode = classifyCognitiveMode(question, { session });
+    if (
+      mode &&
+      mode.kind &&
+      mode.kind !== COGNITIVE_MODES.UNCLASSIFIED &&
+      mode.kind !== COGNITIVE_MODES.EXECUTION
+    ) {
+      return false;
+    }
+  } catch (_) {
+    /* classifier unavailable */
+  }
+  if (sessionContract) return false;
   if (isAmbiguousExecutionAdjacentRequest(question)) return true;
   if (isClearlyNonBusinessUtterance(question, session)) return false;
 
-  const scored = scoreClientBusinessSemantics(question, session);
-  if (scored.features.unrelated) return false;
-
-  if (opts.approvedBlueprint) {
-    if (scored.features.understanding) return true;
-    if (scored.features.evidence) return true;
-    if (scored.features.followUp) return true;
-    if (scored.features.decompose) return true;
-    if (scored.features.challenge) return true;
-    if (scored.features.ownerPerspective) return true;
-    if (scored.features.referentAmbiguous) return true;
-    if (scored.isClientBusiness) return true;
-    // Default for unseen paraphrases: interrogative / advisory shape.
-    if (scored.features.advisory >= 1) return true;
-    // Short continuations after a CIE turn.
-    if (hasPriorClientReasoning(session) && scored.tokens.length <= 8) {
-      return true;
-    }
-    return false;
-  }
-
-  return looksLikeClientIntelligenceAsk(question, session);
+  // AUDIT-001 — CIE may attach Blueprint as evidence. It must not claim
+  // operator-facing reasoning, including unseen advisory paraphrases.
+  return false;
 }
 
 function looksLikeBusinessUnderstandingAsk(question) {
@@ -1574,7 +1581,7 @@ function formatTargetingAnswer(summary) {
   }
 
   if (summary.idealCustomers) {
-    let out = `Based on your approved business direction, I'd start with ${summary.idealCustomers}.`;
+    let out = `According to the approved Blueprint, ideal customers are ${summary.idealCustomers}.`;
     if (summary.targetMarkets || summary.geography) {
       out += ` Geography: ${summary.geography || summary.targetMarkets}.`;
     }
@@ -2308,240 +2315,15 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
     };
   }
 
-  // SPEC-103B — with approved Blueprint, client-business is the default claim;
-  // general conversation is the fallback for clearly non-business turns only.
-  const approvedBlueprint = Boolean(summary && summary.approved);
-  if (
-    !shouldClaimClientIntelligenceTurn(question, session, {
-      approvedBlueprint,
-    })
-  ) {
-    return {
-      handled: false,
-      summary,
-      attachment,
-      clientId: pre.clientId,
-    };
-  }
-
-  // Ambiguous referent with no durable conversational anchor — clarify naturally.
-  if (looksLikeAmbiguousBusinessReferent(question, session) && approvedBlueprint) {
-    const prose =
-      'I can help with that. Are you asking about the commercial targeting direction ' +
-      'from your approved Blueprint, or something else in the current conversation?';
-    const structured = workspaceStructured(prose, [], {
-      clientFacingReasoning: [],
-      internalReasoning: [
-        'Ambiguous business referent without prior CIE turn — clarify (SPEC-103B).',
-      ],
-      confidence: 0.85,
-    });
-    recordLastCieTurn(session, {
-      kind: 'clarification',
-      reason: 'client_intelligence_referent_clarify',
-      question,
-    }, summary, prose);
-    return {
-      reason: 'client_intelligence_referent_clarify',
-      handled: true,
-      prose,
-      structured,
-      summary,
-      attachment,
-      turnKind: 'clarification',
-    };
-  }
-
-  if (!approvedBlueprint) {
-    const prose = formatMissingAnswer();
-    const structured = workspaceStructured(
-      prose,
-      [],
-      {
-        unavailable: ['approved_blueprint'],
-        clientFacingReasoning: [],
-        internalReasoning: [
-          'No approved Business Blueprint for this authenticated client.',
-          'Fail closed — do not invent client facts (SPEC-098/103).',
-        ],
-        confidence: 0.95,
-      }
-    );
-    return {
-      reason: 'client_intelligence_missing',
-      handled: true,
-      prose,
-      structured,
-      summary: null,
-      attachment,
-      turnKind: 'missing',
-    };
-  }
-
-  // Evidence-dependent: Blueprint alone cannot invent live signals.
-  if (isEvidenceDependentClientRequest(question)) {
-    const active = getActiveClientReasoning(session);
-    const prose =
-      active && active.planSteps && active.planSteps.length
-        ? formatPlanEvidenceContinuation(active)
-        : formatEvidenceDependentGapAnswer(summary);
-    const structured = workspaceStructured(prose, [], {
-      blueprintId: summary.blueprintId,
-      evidenceCount: 1,
-      unavailable: ['market_intelligence', 'live_buying_signals'],
-      evidenceBasis: 'approved_client_understanding_insufficient_for_request',
-      recommendationConfidence: 'n/a',
-      confidence: 0.9,
-      clientFacingReasoning: [],
-      internalReasoning: [
-        'Evidence-dependent question; approved Blueprint cannot supply live company/signal ranking.',
-      ],
-      supportingEvidence: [
-        {
-          id: summary.blueprintId || 'blueprint',
-          label: 'Approved Business Blueprint',
-          detail: summary.identity || 'Approved client understanding',
-        },
-      ],
-      nextInvestigations: [
-        'When Market Intelligence is available, ask which accounts show buying signals.',
-      ],
-    });
-    recordLastCieTurn(session, {
-      kind: 'evidence_gap',
-      reason: 'client_intelligence_evidence_dependent',
-      question,
-    }, summary, prose);
-    return {
-      reason: 'client_intelligence_evidence_dependent',
-      handled: true,
-      prose,
-      structured,
-      summary,
-      attachment,
-      turnKind: 'evidence_gap',
-    };
-  }
-
-  let prose;
-  let reason = 'client_intelligence_context';
-  let turnKind = 'context';
-  let recommendationFocus = null;
-  let confidence = 0.88;
-  let confidenceLabel = null;
-
-  let planSteps = null;
-  let conversationalFocusIndex = null;
-
-  if (looksLikeBusinessUnderstandingAsk(question)) {
-    prose = formatUnderstandingAnswer(summary);
-    reason = 'client_intelligence_understanding';
-    turnKind = 'understanding';
-  } else {
-    // SPEC-103B — once claimed under approved Blueprint, synthesize by mode.
-    // Do not require a second phrase-family match to keep the turn.
-    if (!hasUsefulClientContext(summary)) {
-      prose =
-        'Your approved Blueprint is on file but too thin to support a useful recommendation yet. ' +
-        'I would refine the core sections before prioritizing next moves.';
-      reason = 'client_intelligence_reasoning_thin';
-      turnKind = 'reasoning';
-      confidence = 0.5;
-      confidenceLabel = 'low';
-    } else {
-      const composed = composeClientContextReasoning(summary, question, {
-        session,
-      });
-      prose = composed.prose;
-      turnKind = composed.kind || 'reasoning';
-      recommendationFocus = composed.recommendationFocus || null;
-      planSteps = composed.planSteps || null;
-      conversationalFocusIndex = composed.conversationalFocusIndex;
-      confidence = composed.confidence != null ? composed.confidence : 0.74;
-      confidenceLabel = composed.confidenceLabel || 'moderate';
-      if (turnKind === 'understanding') {
-        reason = 'client_intelligence_understanding';
-      } else if (turnKind === 'targeting') {
-        reason = 'client_intelligence_targeting';
-      } else if (turnKind === 'unknowns') {
-        reason = 'client_intelligence_unknowns';
-      } else if (turnKind === 'follow_up') {
-        reason = 'client_intelligence_reasoning_follow_up';
-      } else if (turnKind === 'decompose') {
-        reason = 'client_intelligence_decompose';
-      } else if (
-        turnKind === 'plan_select' ||
-        turnKind === 'plan_advance' ||
-        turnKind === 'plan_deepen'
-      ) {
-        reason = 'client_intelligence_plan_continuity';
-      } else if (turnKind === 'plan_critique') {
-        reason = 'client_intelligence_plan_critique';
-      } else if (turnKind === 'plan_capability') {
-        reason = 'client_intelligence_plan_capability';
-      } else if (turnKind === 'plan_operator') {
-        reason = 'client_intelligence_plan_operator';
-      } else if (turnKind === 'plan_recover') {
-        reason = 'client_intelligence_plan_recover';
-      } else if (turnKind === 'plan_preparation') {
-        reason = 'client_intelligence_plan_preparation';
-      } else if (turnKind === 'challenge') {
-        reason = 'client_intelligence_reasoning_challenge';
-      } else if (turnKind === 'approach') {
-        reason = 'client_intelligence_reasoning';
-      } else if (turnKind === 'opportunity') {
-        reason = 'client_intelligence_opportunity';
-      } else {
-        reason = 'client_intelligence_reasoning';
-      }
-    }
-  }
-
-  const structured = workspaceStructured(prose, [], {
-    blueprintId: summary.blueprintId,
-    evidenceCount: 1,
-    confidence,
-    recommendationConfidence: confidenceLabel,
-    evidenceBasis: 'approved_client_understanding',
-    clientFacingReasoning: [],
-    internalReasoning: [
-      'Answer grounded in the most recently approved Business Blueprint.',
-      'Level 3 Max inference — not newly established client fact.',
-      'No autonomous execution from advisory reasoning (SPEC-103).',
-    ],
-    supportingEvidence: [
-      {
-        id: summary.blueprintId || 'blueprint',
-        label: 'Approved Business Blueprint',
-        detail: summary.identity || 'Approved client understanding',
-      },
-    ],
-    nextInvestigations:
-      turnKind === 'understanding'
-        ? ['What should we focus on first?']
-        : turnKind === 'evidence_gap'
-          ? []
-          : ['What do we still not know?', 'Why that direction?'],
-  });
-
-  recordLastCieTurn(session, {
-    kind: turnKind,
-    reason,
-    recommendationFocus,
-    question,
-    planSteps,
-    conversationalFocusIndex,
-  }, summary, prose);
-
+  // AUDIT-001 — Blueprints are evidence. CIE does not compose operator-facing
+  // advisory, campaign strategy, or acquisition recommendations. Those turns
+  // belong to the governed reasoning pipeline (Max as sole orchestrator).
   return {
-    reason,
-    handled: true,
-    prose,
-    structured,
+    handled: false,
     summary,
     attachment,
-    turnKind,
-    recommendationFocus,
+    clientId: pre.clientId,
+    skipReason: 'governed_pipeline',
   };
 }
 
@@ -2582,4 +2364,6 @@ module.exports = {
   peelBlueprintSubstance,
   semanticFieldsFromNormalizedFacts,
   presentText,
+  recordLastCieTurn,
+  syncGovernedReasoningTurn: recordLastCieTurn,
 };
