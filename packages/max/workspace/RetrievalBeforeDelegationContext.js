@@ -42,6 +42,19 @@ const {
   operatingStructured,
   bundleHasUsableOperatingSignal,
 } = require('./OperatingEvidenceRetrieval');
+const {
+  composeEvidenceGroundedRecommendation,
+  assembleOperatingState,
+} = require('./OperatingStateRecommendation');
+const {
+  isClaimChallenge,
+  isOperatorClaimCorrection,
+  lastRecommendationFrom,
+  retractedIdsFrom,
+  handleClaimChallenge,
+  recordWorkingModel,
+  recommendationRecord,
+} = require('./RecommendationClaimChallenge');
 
 const INDUSTRY_RE =
   /\b(what industries|which industries|who do we (?:target|serve)|ideal customers)\b/i;
@@ -58,6 +71,7 @@ function isHardRetrievalQuestion(question, mode) {
   if (INDUSTRY_RE.test(question)) return true;
   if (HISTORY_RE.test(question)) return true;
   if (ELEVATION_RE.test(question)) return true;
+  if (isClaimChallenge(question) || isOperatorClaimCorrection(question)) return true;
   if (shouldRetrieveOperatingEvidence(question)) return true;
   if (mode && mode.kind === COGNITIVE_MODES.REFLECTION) return true;
   if (mode && mode.kind === COGNITIVE_MODES.EXPLANATION) return true;
@@ -257,22 +271,33 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     return null;
   }
   const understanding = await inspectRetrievalSources(input);
+  const sessionCtx =
+    input.session && input.session.context && typeof input.session.context === 'object'
+      ? input.session.context
+      : null;
   const composed = composeOperatingEvidenceAnswer(question, bundle, {
     inventoryOnly,
     recommend,
     businessUnderstanding: understanding,
     now: input.now,
     capability: bundle.capability,
+    retractedPremises: retractedIdsFrom(input),
+    operatorDeniedEmailActive: Boolean(sessionCtx && sessionCtx.operatorDeniedEmailActive),
   });
 
-  if (input.session && input.session.context && typeof input.session.context === 'object') {
-    input.session.context.lastCognitiveMode = mode.kind;
-    input.session.context.lastRetrievalSources = composed.used || [];
-    input.session.context.lastOperatingEvidence = {
+  if (sessionCtx) {
+    sessionCtx.lastCognitiveMode = mode.kind;
+    sessionCtx.lastRetrievalSources = composed.used || [];
+    sessionCtx.lastOperatingEvidence = {
       tenantId: bundle.tenantId || null,
       itemCount: Array.isArray(bundle.items) ? bundle.items.length : 0,
       launchedScout: false,
     };
+    if (composed.recommend) {
+      recordWorkingModel(sessionCtx, {
+        lastRecommendation: recommendationRecord(composed),
+      });
+    }
   }
 
   const structured = operatingStructured(composed.prose, {
@@ -306,6 +331,116 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
   };
 }
 
+async function maybeHandleClaimChallengeTurn(input, question, mode) {
+  const correction = isOperatorClaimCorrection(question);
+  const bundle = await loadOperatingEvidence(input);
+  const understanding = await inspectRetrievalSources(input);
+  const sessionCtx =
+    input.session && input.session.context && typeof input.session.context === 'object'
+      ? input.session.context
+      : null;
+  const lastRecommendation = lastRecommendationFrom(input);
+  const retracted = retractedIdsFrom(input);
+  const extras = {
+    businessUnderstanding: understanding,
+    now: input.now,
+    capability: bundle.capability,
+    retractedPremises: retracted,
+    operatorDeniedEmailActive: Boolean(sessionCtx && sessionCtx.operatorDeniedEmailActive) || correction,
+  };
+
+  if (correction && !retracted.includes('email_motion')) {
+    extras.retractedPremises = [...retracted, 'email_motion'];
+  }
+
+  const state = assembleOperatingState(bundle, extras);
+  const preview = handleClaimChallenge({
+    question,
+    state,
+    lastRecommendation,
+    correction,
+    revised: null,
+  });
+  const shouldRevise = preview.evaluation.verdict === 'retract' || correction;
+  const revised = shouldRevise
+    ? composeEvidenceGroundedRecommendation(bundle, extras)
+    : null;
+  const handled = handleClaimChallenge({
+    question,
+    state,
+    lastRecommendation,
+    correction,
+    revised,
+  });
+
+  if (sessionCtx) {
+    const nextRetracted = [...extras.retractedPremises];
+    if (handled.evaluation.verdict === 'retract' && handled.claim && handled.claim.id) {
+      if (!nextRetracted.includes(handled.claim.id)) nextRetracted.push(handled.claim.id);
+    }
+    recordWorkingModel(sessionCtx, {
+      lastRecommendation: revised ? recommendationRecord(revised) : lastRecommendation,
+      retractedPremises: nextRetracted,
+      operatorDeniedEmailActive: extras.operatorDeniedEmailActive,
+    });
+    sessionCtx.lastCognitiveMode = mode.kind;
+    sessionCtx.lastRetrievalSources = ['operatingEvidence'];
+  }
+
+  const structured = operatingStructured(handled.prose, {
+    used: ['operatingEvidence'],
+    items: relevantChallengeItems(bundle, handled.claim),
+    cognitiveMode: mode.kind,
+    recommend: false,
+    claimChallenge: true,
+    claimVerdict: handled.evaluation.verdict,
+    mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
+    unavailable: itemsByUnavailable(bundle.items),
+    reasoning: [
+      `Classified operator intent as claim challenge (${mode.kind}).`,
+      'Retrieved evidence relevant to the challenged claim instead of restating the full operating inventory.',
+      handled.evaluation.verdict === 'retract'
+        ? 'The challenged operating-state premise was unsupported. It was retracted and is not persisted as operating fact.'
+        : handled.evaluation.verdict === 'qualified'
+          ? 'The challenged claim was qualified: planned or expected is not completed execution.'
+          : 'The challenged claim was confirmed from retrieved evidence, not from the prior wording alone.',
+      'No action was executed.',
+    ],
+  });
+
+  return {
+    reason: 'recommendation_claim_challenge',
+    structured,
+    prose: handled.prose,
+    mode,
+    sourcesUsed: ['operatingEvidence'],
+    knowledgeState: 'operating_evidence',
+    delegated: false,
+    launchedScout: false,
+    operatingEvidence: bundle,
+    claimChallenge: true,
+    claimVerdict: handled.evaluation.verdict,
+    executed: false,
+  };
+}
+
+function relevantChallengeItems(bundle, claim) {
+  const items = Array.isArray(bundle.items) ? bundle.items : [];
+  const topic = claim && claim.topic;
+  if (topic === 'mail') {
+    return items.filter((item) => /mail|operator/i.test(String((item && (item.claim || item.provenance)) || '')));
+  }
+  if (topic === 'follow_up') {
+    return items.filter((item) => /follow/i.test(String((item && item.claim) || '')));
+  }
+  if (topic === 'email_motion') {
+    return items.filter((item) =>
+      /email|emmett|touchpoint|activity|mission/i.test(String((item && (item.claim || item.provenance || item.sourceKind)) || ''))
+    );
+  }
+  return items.slice(0, 3);
+}
+
 function itemsByUnavailable(items) {
   return (items || [])
     .filter((item) => item && item.epistemic === 'unavailable')
@@ -323,6 +458,10 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
       session: input.session,
       context: input.context,
     });
+
+  if (isClaimChallenge(question) || isOperatorClaimCorrection(question)) {
+    return maybeHandleClaimChallengeTurn(input, question, mode);
+  }
 
   if (
     shouldRetrieveOperatingEvidence(question) ||

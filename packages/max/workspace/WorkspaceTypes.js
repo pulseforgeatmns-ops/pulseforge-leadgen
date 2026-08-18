@@ -272,6 +272,8 @@ function buildResponseMetadata(partial = {}) {
   if (partial.evidenceGroundedRecommendation === true) {
     meta.evidenceGroundedRecommendation = true;
   }
+  if (partial.claimChallenge === true) meta.claimChallenge = true;
+  if (partial.claimVerdict != null) meta.claimVerdict = String(partial.claimVerdict);
   if (partial.executed === false) meta.executed = false;
   if (partial.executed === true) meta.executed = true;
   return meta;

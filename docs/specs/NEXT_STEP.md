@@ -1,6 +1,6 @@
 # NEXT STEP
 
-SPEC-107 is implemented: recommendation requests that require operating evidence now retrieve that evidence and reason over it instead of returning inventory.
+SPEC-107A is implemented: Max grounds recommendation premises, answers targeted claim challenges, and retracts unsupported operating-state claims instead of dumping inventory.
 
 Recommended next work, in order:
 
@@ -11,3 +11,4 @@ Recommended next work, in order:
 
 Do not treat SessionStore transcripts as operating memory.
 Do not convert SPEC-107 recommendations into missions or agent enablement automatically.
+Do not persist retracted Max-generated premises as SPEC-106 operating facts.

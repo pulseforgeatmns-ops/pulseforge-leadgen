@@ -281,6 +281,14 @@ function isCorrectionMessage(text) {
 function isOperatorOperatingUpdate(question) {
   const q = present(question);
   if (!q) return false;
+  try {
+    const challenge = require('./RecommendationClaimChallenge');
+    if (challenge.isClaimChallenge(q) || challenge.isOperatorClaimCorrection(q)) {
+      return false;
+    }
+  } catch (_) {
+    // keep SPEC-106 classification if challenge helper is unavailable
+  }
   if (isOperatingEvidenceQuestion(q)) return false;
   if (isOperatingGroundedRecommendation(q)) return false;
   if (isNewInvestigationRequest(q)) return false;
