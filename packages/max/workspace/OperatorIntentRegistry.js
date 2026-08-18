@@ -61,6 +61,8 @@ const UNKNOWN_ANALYSIS_RE = new RegExp(
     String.raw`\bwhat don'?t (?:we|you|i) (?:currently )?(?:yet )?know\b`,
     String.raw`\bwhat (?:do we|do you) not (?:yet )?know\b`,
     String.raw`\bwhat(?:'s| is) missing\b`,
+    String.raw`\b(?:anything|what) (?:we'?re |are we |am i )?overlooking\b`,
+    String.raw`\bwhat would make you change your mind\b`,
     String.raw`\bwhat assumptions remain\b`,
     String.raw`\bwhat (?:unknowns?|uncertaint(?:y|ies)) (?:still )?(?:remain|matter)\b`,
     String.raw`\bwhat are we (?:still )?(?:missing|uncertain about)\b`,

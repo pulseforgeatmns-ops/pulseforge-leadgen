@@ -862,6 +862,32 @@ function suggestedInvestigationsFromUnknowns(objects) {
   return suggestions.join('\n');
 }
 
+function blueprintUnknownsFromExtras(extras = {}) {
+  const understanding = extras.businessUnderstanding || extras.understanding || {};
+  const summary = understanding.blueprint || understanding.summary || understanding;
+  const lines = [];
+  const push = (value) => {
+    const text = present(value);
+    if (text) lines.push(text);
+  };
+  if (Array.isArray(understanding.unknowns)) {
+    understanding.unknowns.forEach(push);
+  }
+  if (summary && Array.isArray(summary.unknowns)) {
+    summary.unknowns.forEach(push);
+  }
+  if (summary && summary.idealCustomers) {
+    push(
+      `Whether ${summary.idealCustomers} will outperform alternatives is not yet evidenced.`
+    );
+  } else if (understanding.industries) {
+    push(
+      `Whether ${understanding.industries} will outperform alternatives is not yet evidenced.`
+    );
+  }
+  return [...new Set(lines)];
+}
+
 function analysisSectionsFromIntelligence(synthesis, extras = {}) {
   const objects = (synthesis && synthesis.objects) || [];
   const primary = (synthesis && synthesis.primary) || objects[0] || null;
@@ -877,6 +903,11 @@ function analysisSectionsFromIntelligence(synthesis, extras = {}) {
     .map(present)
     .filter(Boolean)
     .filter((line, idx, arr) => arr.indexOf(line) === idx);
+  const blueprintUnknowns = blueprintUnknownsFromExtras(extras);
+  const mergedUnknowns = [...unknowns];
+  for (const line of blueprintUnknowns) {
+    if (!mergedUnknowns.includes(line)) mergedUnknowns.push(line);
+  }
   const remaining = objects
     .filter((obj) => obj.id === 'progress_against_goals' || obj.id === 'goal_versus_observed')
     .flatMap((obj) => obj.unknowns || [])
@@ -889,7 +920,7 @@ function analysisSectionsFromIntelligence(synthesis, extras = {}) {
     operatorImpact: impact,
     unknowns:
       extras.unknownList ||
-      [findings, unknowns.length ? unknowns.map((u) => `- ${u}`).join('\n') : '']
+      [findings, mergedUnknowns.length ? mergedUnknowns.map((u) => `- ${u}`).join('\n') : '']
         .filter(Boolean)
         .join('\n'),
     evidenceGaps: extras.evidenceGaps || claimLines(objects),

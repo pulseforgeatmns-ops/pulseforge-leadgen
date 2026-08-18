@@ -130,9 +130,24 @@ describe('SPEC-098 ClientIntelligenceContext', () => {
       context: { tenantId: String(AS_CLEANING_ID) },
       cieOpts: { store },
     });
-    assert.equal(turn.handled, true);
-    assert.match(turn.prose, /do not yet have an approved Business Blueprint/i);
-    assert.match(turn.prose, /client-intel/i);
+    assert.equal(turn.handled, false);
+    assert.equal(turn.skipReason, 'governed_pipeline');
+
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: { store },
+    });
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const missing = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'What do you understand about my business?',
+    });
+    assert.match(missing.prose, /do not yet have an approved Business Blueprint/i);
+    assert.match(missing.prose, /client-intel|onboarding|will not invent/i);
   });
 
   it('fresh Max session answers from approved AS Cleaning context', async () => {

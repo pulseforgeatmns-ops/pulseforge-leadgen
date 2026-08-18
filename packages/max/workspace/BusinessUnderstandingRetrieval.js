@@ -34,7 +34,7 @@ const BUSINESS_KNOW_RE =
   /\bwhat do you (?:currently )?(?:know|understand|remember) about (?:my|our) business\b/i;
 
 const INDUSTRY_RE =
-  /\b(what industries|which industries|who (?:are|do) we (?:target|serve)|ideal customers?|target customers?|target markets?)\b/i;
+  /\b(what industries|which industries|who (?:are|do|should) we (?:target|serve|pursue)|ideal customers?|target customers?|target markets?)\b/i;
 
 const PRIORITIES_RE =
   /\b(current (?:business )?priorit(?:y|ies)|business priorities|what (?:are|should) we focus|near[- ]term focus)\b/i;
@@ -280,8 +280,9 @@ function groundingPrefix(summary) {
 function formatNeverLearnedAnswer() {
   return (
     "I don't currently know enough about your business to answer that confidently. " +
+    'I do not yet have an approved Business Blueprint. ' +
     'Complete Client Intelligence onboarding and approve your Business Blueprint ' +
-    'so I can remember what you teach me.'
+    'so I can remember what you teach me. I will not invent facts about your business in the meantime.'
   );
 }
 
@@ -371,7 +372,7 @@ function composeDurableRetrievalAnswer(question, mode, bundle = {}) {
     }
   }
 
-  if (INDUSTRY_RE.test(question) && contract.targetCustomers) {
+  if (INDUSTRY_RE.test(question)) {
     used.push('blueprint');
     const targeting = formatTargetingAnswer(summary);
     return {
@@ -456,6 +457,23 @@ function composeDurableRetrievalAnswer(question, mode, bundle = {}) {
         knowledgeState,
       };
     }
+  }
+
+  if (summary && summary.approved && contract) {
+    used.push('blueprint');
+    const bits = [];
+    if (contract.companyName) bits.push(contract.companyName);
+    if (contract.targetCustomers) bits.push(`ideal customers: ${contract.targetCustomers}`);
+    if (contract.targetGeography) bits.push(`geography: ${contract.targetGeography}`);
+    if (contract.businessGoals) bits.push(`goals: ${contract.businessGoals}`);
+    return {
+      prose:
+        `${groundingPrefix(summary)}, here is the approved Blueprint evidence I can retrieve: ` +
+        `${bits.join('; ') || 'identity, services, and stated goals'}. ` +
+        `I will not invent a recommendation from this paraphrase. Unknown analytical intent stays on retrieval.`,
+      used,
+      knowledgeState,
+    };
   }
 
   return {

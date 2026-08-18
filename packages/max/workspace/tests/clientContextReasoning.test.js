@@ -27,6 +27,9 @@ const {
 const AS_CLEANING_ID = 11;
 const ANCHOR_ID = 10;
 
+const GOVERNED_REASON_RE =
+  /operating_evidence|intent_bound|governed|retrieval_before|client_intelligence_execution_clarify|client_intelligence_plan/;
+
 /** Commercial GTA-style AS Cleaning answers (matches production Blueprint shape). */
 const AS_CLEANING_COMMERCIAL = [
   'AS Cleaning Co. — commercial cleaning preferred over residential.',
@@ -141,7 +144,7 @@ describe('SPEC-103 client-context reasoning', () => {
     assert.equal(result.executionDomain, 'workspace');
     assert.match(
       String(result.domainDecision && result.domainDecision.reason),
-      /client_intelligence/
+      GOVERNED_REASON_RE
     );
     assert.doesNotMatch(result.prose, /Switching from Workspace to General Conversation/i);
     assert.doesNotMatch(result.prose, /Unavailable in current context: detailed_answer/i);
@@ -215,12 +218,19 @@ describe('SPEC-103 client-context reasoning', () => {
         successMetrics: { summary: 'Walkthroughs and recurring clients' },
       },
     };
-    const turn = await maybeHandleClientIntelligenceTurn({
-      question: 'Who should we target first?',
-      context: { tenantId: String(AS_CLEANING_ID) },
-      cieService: mockApprovedBlueprintService(blueprint),
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceService: mockApprovedBlueprintService(blueprint),
     });
-    assert.equal(turn.handled, true);
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const turn = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Who should we target first?',
+    });
     assert.match(turn.prose, /haven'?t chosen|unresolved|segment|not invent/i);
     assert.doesNotMatch(turn.prose, /prioritize: property managers/i);
   });
@@ -293,7 +303,7 @@ describe('SPEC-103 client-context reasoning', () => {
     });
     assert.match(
       String(advisory.domainDecision && advisory.domainDecision.reason),
-      /client_intelligence/
+      GOVERNED_REASON_RE
     );
     assert.equal(advisory.mission, null);
     assert.match(advisory.prose, /recommend|campaign|advisory|not authorization|learning loop/i);
@@ -362,7 +372,7 @@ describe('SPEC-103 client-context reasoning', () => {
     });
     assert.match(
       String(follow.domainDecision && follow.domainDecision.reason),
-      /client_intelligence/
+      /follow_up|governed|operating_evidence/
     );
     assert.match(follow.prose, /because|approved|ICP|commercial|property|facility/i);
     assert.doesNotMatch(follow.prose, /detailed_answer/i);
@@ -614,7 +624,7 @@ describe('SPEC-103A presentation normalization', () => {
     });
     assert.match(
       String(result.domainDecision && result.domainDecision.reason),
-      /client_intelligence/
+      GOVERNED_REASON_RE
     );
     assert.match(result.prose, /property|facility|commercial|Toronto/i);
     assert.match(result.prose, /don'?t know yet|evidence|moderately confident/i);
@@ -674,12 +684,19 @@ describe('SPEC-103A presentation normalization', () => {
         },
       },
     };
-    const turn = await maybeHandleClientIntelligenceTurn({
-      question: 'Who should we target first?',
-      context: { tenantId: String(AS_CLEANING_ID) },
-      cieService: mockApprovedBlueprintService(blueprint),
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceService: mockApprovedBlueprintService(blueprint),
     });
-    assert.equal(turn.handled, true);
+    const opened = engine.open({
+      tenantId: String(AS_CLEANING_ID),
+      page: 'command-deck',
+    });
+    const turn = await engine.ask({
+      sessionId: opened.sessionId,
+      question: 'Who should we target first?',
+    });
     assert.match(turn.prose, /haven'?t chosen|unresolved|segment/i);
     assert.doesNotMatch(turn.prose, /property managers/i);
     assert.doesNotMatch(turn.prose, /Ideal customers are/i);
