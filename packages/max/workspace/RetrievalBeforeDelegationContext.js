@@ -347,20 +347,23 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
       recommend: composed.recommend,
       mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
       unavailable: itemsByUnavailable(bundle.items),
+      businessIntelligence: composed.businessIntelligence || null,
       reasoning: [
         `Classified operator intent as ${mode.kind}.`,
         contract ? `Selected ${contract.label} response contract before retrieval.` : null,
+        'Synthesized business intelligence from grounded operating evidence before presenting inventory.',
         composed.recommend
-          ? 'Retrieved operating evidence as a prerequisite, then reasoned to a recommendation.'
+          ? 'Retrieved operating evidence as a prerequisite, then reasoned to a recommendation from synthesized findings.'
           : 'Retrieved existing PulseForge operating evidence before Blueprint advisory reasoning.',
         composed.recommend
-          ? 'Recommendation is grounded in retrieved operating evidence, capability state, and policy — not Blueprint-only advice. No action was executed.'
+          ? 'Recommendation is grounded in synthesized findings and retrieved operating evidence, capability state, and policy — not Blueprint-only advice. No action was executed.'
           : contract && contract.id === CONTRACT_IDS.SUMMARY
-            ? 'Summary requested — observed state, goals, and unknowns come first. Any recommendation is optional and last.'
-            : 'Inventory requested — no unsolicited strategy or acquisition recommendation.',
+            ? 'Summary requested — business intelligence first, then observed state, goals, unknowns, and evidence. Any recommendation is optional and last.'
+            : 'Inventory requested — business intelligence summarizes verified state before evidence. No unsolicited strategy.',
       ].filter(Boolean),
     }),
-    contract
+    contract,
+    { businessIntelligence: composed.businessIntelligence || null }
   );
 
   return {

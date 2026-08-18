@@ -97,6 +97,7 @@ const {
   isOperatorOperatingUpdate,
 } = require('./OperatorOperatingUpdate');
 const ResponseContract = require('./ResponseContract');
+const BusinessIntelligence = require('./BusinessIntelligence');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -134,6 +135,11 @@ module.exports = {
   RecommendationContract: ResponseContract.RecommendationContract,
   ChallengeContract: ResponseContract.ChallengeContract,
   InvestigationContract: ResponseContract.InvestigationContract,
+  synthesizeBusinessIntelligence: BusinessIntelligence.synthesizeBusinessIntelligence,
+  serializeBusinessIntelligence: BusinessIntelligence.serializeBusinessIntelligence,
+  isChannelEffectivenessQuestion: BusinessIntelligence.isChannelEffectivenessQuestion,
+  CATEGORIES: BusinessIntelligence.CATEGORIES,
+  CONFIDENCE: BusinessIntelligence.CONFIDENCE,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

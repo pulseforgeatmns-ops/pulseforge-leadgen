@@ -7,6 +7,10 @@
  * reasoning, or specialist delegation. Evidence fills content. Reasoning may
  * produce a recommendation only when the selected contract allows it.
  *
+ * SPEC-110 adds Business Intelligence as a required first section on
+ * retrieval, summary, and recommendation contracts. Intelligence is a
+ * first-class object; evidence remains attributable and listed after.
+ *
  * Advice is not a universal response type.
  */
 
@@ -28,6 +32,7 @@ const CONTRACT_IDS = Object.freeze({
 });
 
 const SECTION = Object.freeze({
+  BUSINESS_INTELLIGENCE: 'business_intelligence',
   VERIFIED_STATE: 'verified_state',
   UNKNOWNS: 'unknowns',
   EVIDENCE: 'evidence',
@@ -67,7 +72,7 @@ function freezeContract(contract) {
 const RetrievalContract = freezeContract({
   id: CONTRACT_IDS.RETRIEVAL,
   label: 'Retrieval',
-  required: [SECTION.VERIFIED_STATE, SECTION.UNKNOWNS],
+  required: [SECTION.BUSINESS_INTELLIGENCE, SECTION.VERIFIED_STATE, SECTION.UNKNOWNS],
   optional: [SECTION.EVIDENCE],
   forbidden: [SECTION.UNSOLICITED_STRATEGY, SECTION.ACQUISITION_RECOMMENDATION],
   permitsRecommendation: false,
@@ -79,8 +84,8 @@ const RetrievalContract = freezeContract({
 const SummaryContract = freezeContract({
   id: CONTRACT_IDS.SUMMARY,
   label: 'Summary',
-  required: [SECTION.OBSERVED_STATE, SECTION.GOALS, SECTION.UNKNOWNS],
-  optional: [SECTION.RECOMMENDATION],
+  required: [SECTION.BUSINESS_INTELLIGENCE, SECTION.OBSERVED_STATE, SECTION.GOALS, SECTION.UNKNOWNS],
+  optional: [SECTION.RECOMMENDATION, SECTION.EVIDENCE],
   forbidden: [],
   permitsRecommendation: true,
   recommendationPrimary: false,
@@ -92,6 +97,7 @@ const RecommendationContract = freezeContract({
   id: CONTRACT_IDS.RECOMMENDATION,
   label: 'Recommendation',
   required: [
+    SECTION.BUSINESS_INTELLIGENCE,
     SECTION.CURRENT_STATE,
     SECTION.REASONING,
     SECTION.RECOMMENDATION,
@@ -282,6 +288,7 @@ function composeRetrievalProse(sections = {}, extras = {}) {
   const verifiedTitle = extras.completedRecently ? 'Recently completed' : 'What I can verify';
   const unknownTitle = extras.completedRecently ? 'Unknown' : 'What I cannot verify';
   const parts = [
+    heading('Business Intelligence', sections.businessIntelligence),
     heading(verifiedTitle, sections.verifiedState || sections.observedState),
     heading(unknownTitle, sections.unknowns),
   ];
@@ -299,6 +306,7 @@ function composeRetrievalProse(sections = {}, extras = {}) {
 
 function composeSummaryProse(sections = {}, extras = {}) {
   const parts = [
+    heading('Business Intelligence', sections.businessIntelligence),
     heading('Observed operating state', sections.observedState || sections.verifiedState),
     heading('Goals', sections.goals),
     heading('Unknowns', sections.unknowns),
@@ -306,26 +314,42 @@ function composeSummaryProse(sections = {}, extras = {}) {
   if (mayIncludeRecommendation(SummaryContract, { ...extras, includeOptionalRecommendation: true }) && sections.recommendation) {
     parts.push(heading('Recommendation', sections.recommendation));
   }
+  if (sections.evidence) {
+    parts.push(heading('Evidence', sections.evidence));
+  }
   return joinSections(parts);
 }
 
 function composeRecommendationProse(sections = {}, extras = {}) {
   const rec = present(sections.recommendation);
-  const parts = extras.recommendationPrimary === false
-    ? [
-        heading('Current state', sections.currentState),
-        heading('Reasoning', sections.reasoning),
-        heading('Recommendation', rec),
-        heading('Confidence', sections.confidence),
-        heading('Evidence', sections.evidence),
-      ]
-    : [
-        heading('Recommendation', rec),
-        heading('Current state', sections.currentState),
-        heading('Reasoning', sections.reasoning),
-        heading('Confidence', sections.confidence),
-        heading('Evidence', sections.evidence),
-      ];
+  const recLooksComplete = /^RECOMMENDATION\b/i.test(rec);
+  const parts = [heading('Business Intelligence', sections.businessIntelligence)];
+  if (recLooksComplete) {
+    parts.push(rec);
+    if (sections.currentState && !/\bCurrent state\b|WHAT'S ALREADY IN MOTION/i.test(rec)) {
+      parts.push(heading('Current state', sections.currentState));
+    }
+    if (sections.confidence && !/\bConfidence\b/i.test(rec)) {
+      parts.push(heading('Confidence', sections.confidence));
+    }
+  } else if (extras.recommendationPrimary === false) {
+    parts.push(
+      heading('Current state', sections.currentState),
+      heading('Reasoning', sections.reasoning),
+      heading('Recommendation', rec),
+      heading('Confidence', sections.confidence)
+    );
+  } else {
+    parts.push(
+      heading('Recommendation', rec),
+      heading('Current state', sections.currentState),
+      heading('Reasoning', sections.reasoning),
+      heading('Confidence', sections.confidence)
+    );
+  }
+  if (sections.evidence && !/\nEvidence\n/i.test(rec)) {
+    parts.push(heading('Supporting Evidence', sections.evidence));
+  }
   return joinSections(parts);
 }
 
@@ -369,13 +393,16 @@ function composeAccordingToContract(contract, sections = {}, extras = {}) {
   return enforceContract(prose, contract, extras);
 }
 
-function attachContractMetadata(structured, contract) {
+function attachContractMetadata(structured, contract, extras = {}) {
   if (!structured || !contract) return structured;
   const metadata = structured.metadata && typeof structured.metadata === 'object'
     ? structured.metadata
     : {};
   metadata.responseContract = contract.id;
   metadata.intentBoundResponse = true;
+  if (extras.businessIntelligence) {
+    metadata.businessIntelligence = extras.businessIntelligence;
+  }
   structured.metadata = metadata;
   return structured;
 }
