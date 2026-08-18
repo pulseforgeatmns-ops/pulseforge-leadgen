@@ -1283,6 +1283,11 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
     // continue CIE classification if challenge helper is unavailable
   }
   if (shouldRetrieveOperatingEvidence(question)) return false;
+  const sessionContract =
+    opts.responseContract ||
+    (session && session.context && session.context.responseContract) ||
+    null;
+  if (sessionContract && sessionContract.forbidsCieClaim) return false;
   if (isOperatorOperatingUpdate(question)) return false;
   if (isClientContextExecutionRequest(question)) return false;
   if (isOperationalDeskOrMissionRequest(question)) return false;

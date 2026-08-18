@@ -47,6 +47,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-042](ADR-042_Diagnostic_Capabilities_Explain_Blocked_Execution.md) | Diagnostic Capabilities Explain Blocked Execution | Accepted |
 | [ADR-044](ADR-044_Prospect_Acquisition_Independence.md) | Prospect Acquisition Independence | Accepted |
 | [ADR-045](ADR-045_Evidence_Before_Reasoning.md) | Evidence Before Reasoning | Accepted |
+| [ADR-046](ADR-046_Intent_Determines_Response_Structure.md) | Intent Determines Response Structure | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

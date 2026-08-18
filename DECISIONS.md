@@ -45,6 +45,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-042](docs/adr/ADR-042_Diagnostic_Capabilities_Explain_Blocked_Execution.md) | Diagnostic Capabilities Explain Blocked Execution | Accepted | Diagnostic capabilities explain blocked execution instead of silent failure |
 | [ADR-044](docs/adr/ADR-044_Prospect_Acquisition_Independence.md) | Prospect Acquisition Independence | Accepted | Campaigns operate on ProspectLists; Discovery is one acquisition strategy among many |
 | [ADR-045](docs/adr/ADR-045_Evidence_Before_Reasoning.md) | Evidence Before Reasoning | Accepted | Domains collect evidence and do not recommend; reasoning engines consume evidence; facts persist, conclusions are ephemeral |
+| [ADR-046](docs/adr/ADR-046_Intent_Determines_Response_Structure.md) | Intent Determines Response Structure | Accepted | Operator intent selects a response contract before retrieval or delegation; advice is not a universal response type |
 
 ## How to add a decision
 

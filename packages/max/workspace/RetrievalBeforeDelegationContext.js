@@ -55,6 +55,14 @@ const {
   recordWorkingModel,
   recommendationRecord,
 } = require('./RecommendationClaimChallenge');
+const {
+  CONTRACT_IDS,
+  selectResponseContract,
+  composeAccordingToContract,
+  attachContractMetadata,
+  looksLikeSummary,
+  looksLikeCompletedRetrieval,
+} = require('./ResponseContract');
 
 const INDUSTRY_RE =
   /\b(what industries|which industries|who do we (?:target|serve)|ideal customers)\b/i;
@@ -65,7 +73,27 @@ const HISTORY_RE =
 const ELEVATION_RE =
   /\bwhy (?:didn'?t|did) you elevate\b/i;
 
+const DESK_WORKFLOW_RE =
+  /\b(canary|fillable\s+(?:verification\s+)?table|verification\s+work\s+order|preparation[-\s]*only|packet\s+review|call\s+script)\b/i;
+
+function isOperatorDeskWorkflowQuestion(question) {
+  const q = String(question || '');
+  if (!q.trim()) return false;
+  try {
+    const active = require('./ActiveWorkContext');
+    if (active.isCanarySummaryJudgmentRequest(q)) return true;
+    if (active.isFillableTableRequest(q)) return true;
+    if (active.isPacketReviewRequest(q)) return true;
+    if (active.isCallScriptReviewRequest(q)) return true;
+    if (active.isFocusedCanaryWorkOrderRequest(q)) return true;
+  } catch (_) {
+    /* ActiveWorkContext unavailable — fall through to lexical cues */
+  }
+  return DESK_WORKFLOW_RE.test(q);
+}
+
 function isHardRetrievalQuestion(question, mode) {
+  if (isOperatorDeskWorkflowQuestion(question)) return false;
   if (SERVICE_AREA_RE.test(question)) return true;
   if (ENTITY_KNOW_RE.test(question)) return true;
   if (INDUSTRY_RE.test(question)) return true;
@@ -73,9 +101,11 @@ function isHardRetrievalQuestion(question, mode) {
   if (ELEVATION_RE.test(question)) return true;
   if (isClaimChallenge(question) || isOperatorClaimCorrection(question)) return true;
   if (shouldRetrieveOperatingEvidence(question)) return true;
+  if (looksLikeSummary(question) || looksLikeCompletedRetrieval(question)) return true;
   if (mode && mode.kind === COGNITIVE_MODES.REFLECTION) return true;
   if (mode && mode.kind === COGNITIVE_MODES.EXPLANATION) return true;
   if (mode && mode.via === 'retrieval') return true;
+  if (mode && mode.via === 'summary') return true;
   if (mode && mode.via === 'operating_evidence') return true;
   return false;
 }
@@ -248,6 +278,8 @@ function workspaceStructured(answer, extras = {}) {
       blueprintSource: extras.blueprintSource || null,
       specialistDelegated: false,
       scoutDelegated: false,
+      responseContract: extras.responseContract || null,
+      intentBoundResponse: Boolean(extras.responseContract),
     },
   });
 }
@@ -257,11 +289,16 @@ function workspaceStructured(answer, extras = {}) {
  * @returns {Promise<object|null>}
  */
 async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
+  const contract =
+    input.responseContract ||
+    selectResponseContract(question, mode);
   const inventoryOnly = isInventoryOnlyRequest(question);
   const recommend =
     !inventoryOnly &&
-    (isOperatingGroundedRecommendation(question) ||
-      (mode && mode.kind === COGNITIVE_MODES.RECOMMENDATION));
+    ((contract && contract.id === CONTRACT_IDS.RECOMMENDATION) ||
+      (!contract &&
+        (isOperatingGroundedRecommendation(question) ||
+          (mode && mode.kind === COGNITIVE_MODES.RECOMMENDATION))));
   const bareOnly =
     recommend &&
     isBareCurrentStateRecommendation(question) &&
@@ -283,11 +320,13 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     capability: bundle.capability,
     retractedPremises: retractedIdsFrom(input),
     operatorDeniedEmailActive: Boolean(sessionCtx && sessionCtx.operatorDeniedEmailActive),
+    contract,
   });
 
   if (sessionCtx) {
     sessionCtx.lastCognitiveMode = mode.kind;
     sessionCtx.lastRetrievalSources = composed.used || [];
+    sessionCtx.lastResponseContract = contract && contract.id;
     sessionCtx.lastOperatingEvidence = {
       tenantId: bundle.tenantId || null,
       itemCount: Array.isArray(bundle.items) ? bundle.items.length : 0,
@@ -300,26 +339,35 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     }
   }
 
-  const structured = operatingStructured(composed.prose, {
-    used: composed.used,
-    items: composed.items || bundle.items || [],
-    cognitiveMode: mode.kind,
-    recommend: composed.recommend,
-    mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
-    unavailable: itemsByUnavailable(bundle.items),
-    reasoning: [
-      `Classified operator intent as ${mode.kind}.`,
-      composed.recommend
-        ? 'Retrieved operating evidence as a prerequisite, then reasoned to a recommendation.'
-        : 'Retrieved existing PulseForge operating evidence before Blueprint advisory reasoning.',
-      composed.recommend
-        ? 'Recommendation is grounded in retrieved operating evidence, capability state, and policy — not Blueprint-only advice. No action was executed.'
-        : 'Inventory requested — no new acquisition recommendation before evidence review.',
-    ],
-  });
+  const structured = attachContractMetadata(
+    operatingStructured(composed.prose, {
+      used: composed.used,
+      items: composed.items || bundle.items || [],
+      cognitiveMode: mode.kind,
+      recommend: composed.recommend,
+      mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
+      unavailable: itemsByUnavailable(bundle.items),
+      reasoning: [
+        `Classified operator intent as ${mode.kind}.`,
+        contract ? `Selected ${contract.label} response contract before retrieval.` : null,
+        composed.recommend
+          ? 'Retrieved operating evidence as a prerequisite, then reasoned to a recommendation.'
+          : 'Retrieved existing PulseForge operating evidence before Blueprint advisory reasoning.',
+        composed.recommend
+          ? 'Recommendation is grounded in retrieved operating evidence, capability state, and policy — not Blueprint-only advice. No action was executed.'
+          : contract && contract.id === CONTRACT_IDS.SUMMARY
+            ? 'Summary requested — observed state, goals, and unknowns come first. Any recommendation is optional and last.'
+            : 'Inventory requested — no unsolicited strategy or acquisition recommendation.',
+      ].filter(Boolean),
+    }),
+    contract
+  );
 
   return {
-    reason: 'operating_evidence_retrieval',
+    reason:
+      contract && contract.id === CONTRACT_IDS.SUMMARY
+        ? 'intent_bound_summary'
+        : 'operating_evidence_retrieval',
     structured,
     prose: composed.prose,
     mode,
@@ -328,6 +376,7 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     delegated: false,
     launchedScout: false,
     operatingEvidence: bundle,
+    responseContract: contract,
   };
 }
 
@@ -381,6 +430,25 @@ async function maybeHandleClaimChallengeTurn(input, question, mode) {
     revised,
   });
 
+  const contract =
+    input.responseContract ||
+    selectResponseContract(question, mode);
+  const claimText =
+    (handled.claim && (handled.claim.text || handled.claim.claim)) ||
+    'the prior operating-state statement';
+  const challengeProse = composeAccordingToContract(contract, {
+    claimIdentified: `The challenged claim was: ${claimText}`,
+    evidenceReviewed:
+      (handled.evaluation && handled.evaluation.detail) ||
+      'Retrieved claim-relevant operating evidence rather than restating the full inventory.',
+    revision: handled.prose,
+    updatedRecommendation: revised
+      ? `REVISED RECOMMENDATION\n${revised.prose}`
+      : handled.evaluation && handled.evaluation.verdict === 'confirm'
+        ? 'No updated recommendation. The challenged claim remains supported by retrieved evidence.'
+        : 'No updated recommendation was required after this challenge.',
+  });
+
   if (sessionCtx) {
     const nextRetracted = [...extras.retractedPremises];
     if (handled.evaluation.verdict === 'retract' && handled.claim && handled.claim.id) {
@@ -393,33 +461,38 @@ async function maybeHandleClaimChallengeTurn(input, question, mode) {
     });
     sessionCtx.lastCognitiveMode = mode.kind;
     sessionCtx.lastRetrievalSources = ['operatingEvidence'];
+    sessionCtx.lastResponseContract = contract && contract.id;
   }
 
-  const structured = operatingStructured(handled.prose, {
-    used: ['operatingEvidence'],
-    items: relevantChallengeItems(bundle, handled.claim),
-    cognitiveMode: mode.kind,
-    recommend: false,
-    claimChallenge: true,
-    claimVerdict: handled.evaluation.verdict,
-    mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
-    unavailable: itemsByUnavailable(bundle.items),
-    reasoning: [
-      `Classified operator intent as claim challenge (${mode.kind}).`,
-      'Retrieved evidence relevant to the challenged claim instead of restating the full operating inventory.',
-      handled.evaluation.verdict === 'retract'
-        ? 'The challenged operating-state premise was unsupported. It was retracted, the recommendation was rebuilt from supported claims only, and nothing was persisted as operating fact.'
-        : handled.evaluation.verdict === 'qualified'
-          ? 'The challenged claim was qualified: planned, inventory, or objectives are not observed execution.'
-          : 'The challenged claim was confirmed from retrieved evidence, not from the prior wording alone.',
-      'No action was executed.',
-    ],
-  });
+  const structured = attachContractMetadata(
+    operatingStructured(challengeProse, {
+      used: ['operatingEvidence'],
+      items: relevantChallengeItems(bundle, handled.claim),
+      cognitiveMode: mode.kind,
+      recommend: false,
+      claimChallenge: true,
+      claimVerdict: handled.evaluation.verdict,
+      mailExecuted: Boolean(bundle.campaign && bundle.campaign.mailExecuted),
+      unavailable: itemsByUnavailable(bundle.items),
+      reasoning: [
+        `Classified operator intent as claim challenge (${mode.kind}).`,
+        'Selected Challenge response contract before retrieval.',
+        'Retrieved evidence relevant to the challenged claim instead of restating the full operating inventory.',
+        handled.evaluation.verdict === 'retract'
+          ? 'The challenged operating-state premise was unsupported. It was retracted, the recommendation was rebuilt from supported claims only, and nothing was persisted as operating fact.'
+          : handled.evaluation.verdict === 'qualified'
+            ? 'The challenged claim was qualified: planned, inventory, or objectives are not observed execution.'
+            : 'The challenged claim was confirmed from retrieved evidence, not from the prior wording alone.',
+        'No action was executed.',
+      ],
+    }),
+    contract
+  );
 
   return {
     reason: 'recommendation_claim_challenge',
     structured,
-    prose: handled.prose,
+    prose: challengeProse,
     mode,
     sourcesUsed: ['operatingEvidence'],
     knowledgeState: 'operating_evidence',
@@ -429,6 +502,7 @@ async function maybeHandleClaimChallengeTurn(input, question, mode) {
     claimChallenge: true,
     claimVerdict: handled.evaluation.verdict,
     executed: false,
+    responseContract: contract,
   };
 }
 
@@ -476,17 +550,61 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
       session: input.session,
       context: input.context,
     });
+  const contract =
+    input.responseContract ||
+    selectResponseContract(question, mode);
+
+  if (input.session && input.session.context && typeof input.session.context === 'object') {
+    input.session.context.lastResponseContract = contract && contract.id;
+    input.session.context.responseContract = contract || input.session.context.responseContract;
+  }
+
+  if (isOperatorDeskWorkflowQuestion(question)) {
+    return null;
+  }
+
+  if (contract && contract.id === CONTRACT_IDS.INVESTIGATION) {
+    const sources = await inspectRetrievalSources(input);
+    let bundle = null;
+    try {
+      bundle = await loadOperatingEvidence(input);
+    } catch (_) {
+      bundle = null;
+    }
+    const knownBits = [];
+    if (sources.businessName || sources.identity) {
+      knownBits.push(sources.businessName || sources.identity);
+    }
+    if (bundle && Array.isArray(bundle.items)) {
+      for (const item of bundle.items.slice(0, 4)) {
+        if (item && item.claim) knownBits.push(item.claim);
+      }
+    }
+    if (input.session && input.session.context && typeof input.session.context === 'object') {
+      input.session.context.investigationKnown =
+        knownBits.filter(Boolean).join('\n') ||
+        'No durable investigation result is on file for this question.';
+      input.session.context.lastCognitiveMode = mode.kind;
+    }
+    return null;
+  }
 
   if (isClaimChallenge(question) || isOperatorClaimCorrection(question)) {
-    return maybeHandleClaimChallengeTurn(input, question, mode);
+    return maybeHandleClaimChallengeTurn({ ...input, responseContract: contract }, question, mode);
   }
 
   if (
     shouldRetrieveOperatingEvidence(question) ||
+    looksLikeSummary(question) ||
+    looksLikeCompletedRetrieval(question) ||
     (mode.kind === COGNITIVE_MODES.RECOMMENDATION &&
       isBareCurrentStateRecommendation(question))
   ) {
-    return maybeHandleOperatingEvidenceTurn(input, question, mode);
+    return maybeHandleOperatingEvidenceTurn(
+      { ...input, responseContract: contract },
+      question,
+      mode
+    );
   }
 
   const hardRetrieval = isHardRetrievalQuestion(question, mode);
@@ -519,29 +637,35 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
     input.session.context.lastCognitiveMode = mode.kind;
     input.session.context.lastRetrievalSources = used;
     input.session.context.lastKnowledgeState = composed.knowledgeState || sources.knowledgeState;
+    input.session.context.lastResponseContract = contract && contract.id;
   }
 
   const isUnknown =
     composed.prose === unknownProse || composed.prose === UNKNOWN_ANSWER;
 
-  const structured = workspaceStructured(composed.prose, {
-    used,
-    cognitiveMode: mode.kind,
-    knowledgeState: composed.knowledgeState || sources.knowledgeState,
-    blueprintSource: sources.blueprintSource,
-    reasoning: [
-      `Classified operator intent as ${mode.kind}.`,
-      isUnknown
-        ? sources.knowledgeState === KNOWLEDGE_STATES.RETRIEVAL_FAILURE
-          ? 'Approved understanding exists but retrieval failed — architectural failure, not a knowledge gap.'
-          : sources.knowledgeState === KNOWLEDGE_STATES.NEVER_LEARNED
-            ? 'No approved business understanding on file. Unknown is acceptable — I will not invent work for a specialist.'
-            : 'Durable knowledge did not answer this. Unknown is acceptable — I will not invent work for a specialist.'
-        : 'Retrieved from durable business understanding instead of delegating.',
-    ],
-    evidenceCount: used.length,
-    unavailable: isUnknown ? ['durable_knowledge'] : [],
-  });
+  const structured = attachContractMetadata(
+    workspaceStructured(composed.prose, {
+      used,
+      cognitiveMode: mode.kind,
+      knowledgeState: composed.knowledgeState || sources.knowledgeState,
+      blueprintSource: sources.blueprintSource,
+      responseContract: contract && contract.id,
+      reasoning: [
+        `Classified operator intent as ${mode.kind}.`,
+        contract ? `Selected ${contract.label} response contract before retrieval.` : null,
+        isUnknown
+          ? sources.knowledgeState === KNOWLEDGE_STATES.RETRIEVAL_FAILURE
+            ? 'Approved understanding exists but retrieval failed — architectural failure, not a knowledge gap.'
+            : sources.knowledgeState === KNOWLEDGE_STATES.NEVER_LEARNED
+              ? 'No approved business understanding on file. Unknown is acceptable — I will not invent work for a specialist.'
+              : 'Durable knowledge did not answer this. Unknown is acceptable — I will not invent work for a specialist.'
+          : 'Retrieved from durable business understanding instead of delegating.',
+      ].filter(Boolean),
+      evidenceCount: used.length,
+      unavailable: isUnknown ? ['durable_knowledge'] : [],
+    }),
+    contract
+  );
 
   return {
     reason: 'retrieval_before_delegation',
@@ -551,6 +675,7 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
     sourcesUsed: used,
     knowledgeState: composed.knowledgeState || sources.knowledgeState,
     delegated: false,
+    responseContract: contract,
   };
 }
 
@@ -559,6 +684,7 @@ module.exports = {
   inspectRetrievalSources,
   composeRetrievalAnswer,
   isHardRetrievalQuestion,
+  isOperatorDeskWorkflowQuestion,
   SERVICE_AREA_RE,
   ENTITY_KNOW_RE,
 };

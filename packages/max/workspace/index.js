@@ -96,6 +96,7 @@ const {
   maybeHandleOperatorOperatingUpdate,
   isOperatorOperatingUpdate,
 } = require('./OperatorOperatingUpdate');
+const ResponseContract = require('./ResponseContract');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -124,6 +125,15 @@ module.exports = {
   shouldRetrieveOperatingEvidence,
   maybeHandleOperatorOperatingUpdate,
   isOperatorOperatingUpdate,
+  selectResponseContract: ResponseContract.selectResponseContract,
+  listResponseContracts: ResponseContract.listResponseContracts,
+  getResponseContract: ResponseContract.getResponseContract,
+  CONTRACT_IDS: ResponseContract.CONTRACT_IDS,
+  RetrievalContract: ResponseContract.RetrievalContract,
+  SummaryContract: ResponseContract.SummaryContract,
+  RecommendationContract: ResponseContract.RecommendationContract,
+  ChallengeContract: ResponseContract.ChallengeContract,
+  InvestigationContract: ResponseContract.InvestigationContract,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,
