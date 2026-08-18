@@ -139,7 +139,7 @@ const RecommendationContract = freezeContract({
   forbidden: [],
   permitsRecommendation: true,
   recommendationPrimary: true,
-  forbidsCieClaim: false,
+  forbidsCieClaim: true,
   forbidsSpecialistDelegation: false,
 });
 
@@ -342,7 +342,13 @@ function selectResponseContract(question, mode) {
     return RetrievalContract;
   }
 
-  return null;
+  if (classified.kind === COGNITIVE_MODES.EXECUTION) {
+    return null;
+  }
+
+  // AUDIT-001 — unknown / planning intent fails toward Retrieval, never
+  // Recommendation or a Blueprint Advisory fallback.
+  return RetrievalContract;
 }
 
 function mayIncludeRecommendation(contract, extras = {}) {

@@ -344,6 +344,10 @@ function assembleOperatingState(bundle = {}, extras = {}) {
       { matched: scoutMatched, available: bundle.scout ? bundle.scout.available !== false : false }
     ),
     businessName: contract.companyName || '',
+    targetCustomers: present(contract.targetCustomers || ''),
+    targetGeography: present(contract.targetGeography || contract.serviceArea || ''),
+    businessGoals: present(contract.businessGoals || ''),
+    successMetrics: present(contract.successMetrics || ''),
     commercialPreference: Boolean(
       contract.commercialPreference ||
         (understanding && understanding.commercialPreference)
@@ -404,6 +408,21 @@ function applyWorkingModelCorrections(state, extras = {}) {
 
 function factLines(state) {
   const lines = [];
+  if (state.targetCustomers) {
+    lines.push(
+      `GOAL (approved Blueprint — desired state, not observed operating state): reach ${state.targetCustomers}${
+        state.targetGeography ? ` in ${state.targetGeography}` : ''
+      }.`
+    );
+  }
+  if (state.businessGoals) {
+    lines.push(`GOAL (approved Blueprint): ${state.businessGoals}.`);
+  }
+  if (state.successMetrics) {
+    lines.push(
+      `GOAL (approved Blueprint — success metric, not observed outcome): ${state.successMetrics}.`
+    );
+  }
   if (state.aoLeads > 0) {
     lines.push(
       `FACT: ${state.campaignName} has ${state.aoLeads} AO lead${state.aoLeads === 1 ? '' : 's'} attributed in PulseForge.`

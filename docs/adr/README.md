@@ -51,6 +51,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-047](ADR-047_Intelligence_Before_Evidence.md) | Intelligence Before Evidence | Accepted |
 | [ADR-048](ADR-048_Intent_Selects_Analysis_Mode.md) | Intent Selects Analysis Mode | Accepted |
 | [ADR-049](ADR-049_Understand_Market_Before_Selling.md) | Understand the Market Before Selling Into It | Accepted |
+| [ADR-050](ADR-050_Single_Governed_Reasoning_Pipeline.md) | Single Governed Reasoning Pipeline | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

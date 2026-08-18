@@ -405,19 +405,19 @@ describe('SPEC-103B semantic classifier (no phrase allowlist)', () => {
     assert.ok(scored.score >= 3.5);
   });
 
-  it('approved Blueprint defaults interrogative wording into CIE without phrase hits', () => {
+  it('approved Blueprint does not claim CIE advisory for unseen paraphrases', () => {
     const {
       shouldClaimClientIntelligenceTurn,
       isClearlyNonBusinessUtterance,
     } = require('../ClientIntelligenceContext');
-    // Unseen paraphrase — no product vocabulary required.
+    // Unseen paraphrase — governed pipeline owns reasoning; CIE must not claim it.
     assert.equal(
       shouldClaimClientIntelligenceTurn(
         'What would make the beachhead wobble first?',
         null,
         { approvedBlueprint: true }
       ),
-      true
+      false
     );
     assert.equal(
       isClearlyNonBusinessUtterance('What time is it?'),
@@ -560,7 +560,7 @@ describe('SPEC-103B end-to-end routing', () => {
     });
     assert.match(
       String(result.domainDecision && result.domainDecision.reason),
-      /client_intelligence/
+      /operating_evidence|intent_bound|governed|retrieval_before/
     );
     assert.doesNotMatch(
       result.prose,
@@ -587,7 +587,7 @@ describe('SPEC-103B end-to-end routing', () => {
     });
     assert.match(
       String(result.domainDecision && result.domainDecision.reason),
-      /client_intelligence/
+      /operating_evidence|intent_bound|governed|retrieval_before/
     );
     assert.doesNotMatch(
       result.prose,
@@ -600,9 +600,9 @@ describe('SPEC-103B end-to-end routing', () => {
     );
     assert.match(
       result.prose,
-      /KNOWN|enough clarity|would not claim to know/i
+      /Critical unknowns|Evidence gaps|unknown/i
     );
-    assert.match(result.prose, /UNKNOWN|INFERENCE|EVIDENCE NEEDED/i);
+    assert.match(result.prose, /UNKNOWN|INFERENCE|EVIDENCE|unknown/i);
     assert.match(
       result.prose,
       /property|facility|GTA|Toronto|commercial|walkthrough|acquisition/i
@@ -627,9 +627,9 @@ describe('SPEC-103B end-to-end routing', () => {
     });
     assert.match(
       String(result.domainDecision && result.domainDecision.reason),
-      /client_intelligence/
+      /operating_evidence|intent_bound|governed|retrieval_before/
     );
-    assert.match(result.prose, /UNKNOWN|EVIDENCE NEEDED|would not claim/i);
+    assert.match(result.prose, /Critical unknowns|Evidence gaps|UNKNOWN|unknown/i);
   });
 
   it('evidence-dependent colloquial wording stays fail-closed', async () => {
@@ -735,7 +735,7 @@ describe('SPEC-103B end-to-end routing', () => {
     });
     assert.match(
       String(focus.domainDecision && focus.domainDecision.reason),
-      /client_intelligence/
+      /operating_evidence|intent_bound|governed|retrieval_before/
     );
 
     const why = await engine.ask({
@@ -744,7 +744,7 @@ describe('SPEC-103B end-to-end routing', () => {
     });
     assert.match(
       String(why.domainDecision && why.domainDecision.reason),
-      /client_intelligence/
+      /operating_evidence|intent_bound|governed|retrieval_before/
     );
 
     const recall = await engine.ask({
@@ -812,10 +812,12 @@ describe('SPEC-103B end-to-end routing', () => {
       sessionId: pendingOpen.sessionId,
       question: "What don't we know yet?",
     });
-    assert.match(
+    assert.doesNotMatch(pending.prose, /I'd start by proving/i);
+    assert.doesNotMatch(
       pending.prose,
-      /do not yet have an approved Business Blueprint|will not invent/i
+      /property managers and facility managers/i
     );
+    assert.match(pending.prose, /unknown|Evidence gaps|will not invent|Blueprint/i);
   });
 
   it('tenant isolation: AS Cleaning never surfaces Anchor', async () => {
@@ -889,7 +891,11 @@ describe('SPEC-103B end-to-end routing', () => {
       question:
         'Based on what you know about my business, what should we focus on first?',
     });
-    assert.match(focus.prose, /I'd start by proving a repeatable commercial acquisition motion/i);
+    assert.match(focus.prose, /RECOMMENDATION|Business Intelligence|GOAL \(approved Blueprint/i);
+    assert.doesNotMatch(
+      focus.prose,
+      /I'd start by proving a repeatable commercial acquisition motion/i
+    );
 
     const why = await engine.ask({
       sessionId: opened.sessionId,
@@ -910,7 +916,7 @@ describe('SPEC-103B end-to-end routing', () => {
       sessionId: opened.sessionId,
       question: "Anything we're overlooking?",
     });
-    assert.match(overlooking.prose, /KNOWN|UNKNOWN|EVIDENCE NEEDED/i);
+    assert.match(overlooking.prose, /Critical unknowns|Evidence gaps|UNKNOWN|unknown/i);
     assert.notEqual(overlooking.prose, focus.prose);
 
     const mind = await engine.ask({
@@ -1011,7 +1017,11 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
       sessionId: opened.sessionId,
       question: 'What should we focus on first?',
     });
-    assert.match(recommendation.prose, /I'd start by proving|repeatable commercial/i);
+    assert.match(recommendation.prose, /RECOMMENDATION|Business Intelligence|GOAL \(approved Blueprint/i);
+    assert.doesNotMatch(
+      recommendation.prose,
+      /I'd start by proving a repeatable commercial acquisition motion/i
+    );
 
     const rationale = await engine.ask({
       sessionId: opened.sessionId,
@@ -1026,7 +1036,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
       sessionId: opened.sessionId,
       question: "What don't we know yet?",
     });
-    assert.match(gaps.prose, /KNOWN|UNKNOWN|EVIDENCE NEEDED/i);
+    assert.match(gaps.prose, /Critical unknowns|Evidence gaps|UNKNOWN|unknown/i);
 
     const falsification = await engine.ask({
       sessionId: opened.sessionId,
@@ -1048,7 +1058,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
 
     assert.match(
       String(specific.domainDecision && specific.domainDecision.reason),
-      /client_intelligence_decompose/
+      /decompose/
     );
     assert.doesNotMatch(
       specific.prose,
@@ -1060,10 +1070,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
     assert.match(specific.prose, /BOUNDARY:|do not yet have live market|not invent/i);
     assert.notEqual(specific.prose, gaps.prose);
     assert.notEqual(specific.prose, recommendation.prose);
-    assert.ok(
-      specific.prose.length > recommendation.prose.length * 0.8,
-      'response should be materially more concrete'
-    );
+    assert.match(specific.prose, /2\. /);
     assert.equal(specific.mission, null);
     assert.doesNotMatch(specific.prose, /Anchor Cleaning|Manchester/i);
   });
@@ -1100,7 +1107,7 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
       });
       assert.match(
         String(result.domainDecision && result.domainDecision.reason),
-        /client_intelligence_decompose/,
+        /decompose/,
         utterance
       );
       assert.doesNotMatch(

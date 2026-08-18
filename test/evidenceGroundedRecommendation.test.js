@@ -51,13 +51,13 @@ describe('SPEC-107 shared classification', () => {
     }
   });
 
-  it('still allows CIE to claim business-understanding focus questions', () => {
+  it('routes business-understanding focus questions through the governed pipeline, not CIE advisory', () => {
     const question = 'Based on what you know about my business, what should we focus on first?';
     assert.equal(isOperatingGroundedRecommendation(question), false);
     assert.equal(shouldRetrieveOperatingEvidence(question), false);
     assert.equal(
       shouldClaimClientIntelligenceTurn(question, null, { approvedBlueprint: true }),
-      true
+      false
     );
   });
 });

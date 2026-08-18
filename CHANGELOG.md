@@ -6,6 +6,15 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Reasoning Pipeline Conformance ([SPEC-113](docs/specs/SPEC-113_Reasoning_Pipeline_Conformance.md), [ADR-050](docs/adr/ADR-050_Single_Governed_Reasoning_Pipeline.md))
+  - Single operator-facing pipeline: intent → analysis mode → response contract → retrieval → grounding → business intelligence → composition
+  - `ReasoningPipeline.bindGovernedReasoning` is the WorkspaceEngine.ask entry bind
+  - Client Intelligence still supplies Blueprint evidence and handles execution-clarify / plan workflow; it no longer writes advisory essays
+  - Specialists remain providers; Retrieval yields Paige / operator-objective content asks
+  - Unknown intent fails toward Retrieval, never Recommendation or Blueprint Advisory, and does not capture desk, mission, or planning chatter
+  - Competency `reasoning_pipeline_conformance` graduated 2026-08-18
+  - Numbering: PR #329 originally reserved SPEC-112 / ADR-049; repository SPEC-112 / ADR-049 remain Acquisition Intelligence Model
+
 - Acquisition Intelligence Model ([SPEC-112](docs/specs/SPEC-112_Acquisition_Intelligence_Model.md), [ADR-049](docs/adr/ADR-049_Understand_Market_Before_Selling.md))
   - First-class AIM: mission, reasoning-based ICP, desired transformation, pain ontology, knowledge capture, messaging intelligence
   - Fedir seed: founder-led → business-machine; People / Growth / Finance pains with observable signals

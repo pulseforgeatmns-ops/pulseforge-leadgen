@@ -25,6 +25,7 @@ const {
 } = require('./OperatorObjectiveContext');
 const {
   maybeHandleClientIntelligenceTurn,
+  syncGovernedReasoningTurn,
 } = require('./ClientIntelligenceContext');
 const {
   maybeHandleScoutAcquisitionTurn,
@@ -40,14 +41,14 @@ const {
 } = require('./OperatorOperatingUpdate');
 const { loadOperatorContextForSession } = require('./OperatorContextLoader');
 const {
-  classifyCognitiveMode,
-} = require('../specialistDelegation/CognitiveMode');
-const {
   CONTRACT_IDS,
-  selectResponseContract,
   composeAccordingToContract,
   attachContractMetadata,
 } = require('./ResponseContract');
+const {
+  bindGovernedReasoning,
+  attachPipelineLog,
+} = require('./ReasoningPipeline');
 const {
   composeMissionResponse,
   composeActiveMissionResponse,
@@ -418,18 +419,21 @@ class WorkspaceEngine {
       };
     }
 
-    // SPEC-102 / SPEC-103 / SPEC-105 / SPEC-109 / SPEC-110 / SPEC-111 —
-    // classify intent and analysis mode, select the response contract,
-    // retrieve and ground evidence, then synthesize business intelligence
-    // before any specialist path.
-    const cognitive = classifyCognitiveMode(question, {
+    // SPEC-102 / SPEC-103 / SPEC-105 / SPEC-109 / SPEC-110 / SPEC-111 /
+    // SPEC-113 — single governed reasoning pipeline. Classify intent and
+    // analysis mode, select the response contract, retrieve and ground
+    // evidence, then synthesize business intelligence. Blueprint Advisory
+    // is not an operator-facing responder.
+    const bound = bindGovernedReasoning(question, {
       session,
       context: rawContext || session.context,
     });
-    const responseContract = selectResponseContract(question, cognitive);
+    const cognitive = bound.analysis;
+    const responseContract = bound.contract;
     if (session.context && typeof session.context === 'object' && responseContract) {
       session.context.responseContract = responseContract;
       session.context.lastResponseContract = responseContract.id;
+      session.context.reasoningPipeline = bound.pipelineId;
     }
     const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn({
       question,
@@ -457,6 +461,41 @@ class WorkspaceEngine {
       if (session.context && typeof session.context === 'object') {
         session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
         session.context._answerCorpus = 'workspace';
+        if (retrievalTurn.structured && retrievalTurn.structured.metadata) {
+          session.context.lastPipelineLog = retrievalTurn.structured.metadata.pipelineLog || null;
+        }
+      }
+      if (retrievalTurn.structured && bound) {
+        retrievalTurn.structured = attachPipelineLog(retrievalTurn.structured, bound);
+      }
+      const recLike = Boolean(
+        retrievalTurn.turnKind ||
+          (retrievalTurn.mode && retrievalTurn.mode.kind === 'recommendation') ||
+          /governed_plan_|governed_recommendation_follow_up/.test(
+            String(retrievalTurn.reason || '')
+          )
+      );
+      if (recLike) {
+        syncGovernedReasoningTurn(
+          session,
+          {
+            kind:
+              retrievalTurn.turnKind ||
+              (retrievalTurn.mode && retrievalTurn.mode.kind === 'recommendation'
+                ? 'reasoning'
+                : 'follow_up'),
+            reason: retrievalTurn.reason,
+            recommendationFocus:
+              retrievalTurn.recommendationFocus ||
+              (session.context &&
+                session.context.clientIntelligence &&
+                session.context.clientIntelligence.idealCustomers) ||
+              null,
+            question,
+          },
+          (session.context && session.context.clientIntelligence) || null,
+          retrievalTurn.prose
+        );
       }
       const structuredRetrieve = retrievalTurn.structured;
       const presentedRetrieve = await this._presentation.present(structuredRetrieve);
@@ -668,7 +707,8 @@ class WorkspaceEngine {
         expectedOutputs:
           'A bounded specialist investigation: candidate companies, coverage, and fit. Not a strategy recommendation.',
       });
-      const structuredInvestigate = attachContractMetadata(
+      const structuredInvestigate = attachPipelineLog(
+        attachContractMetadata(
         buildStructuredResponse({
           answer: investigationProse,
           reasoning: [
@@ -697,6 +737,8 @@ class WorkspaceEngine {
           },
         }),
         responseContract
+      ),
+        bound
       );
       const presentedInvestigate = await this._presentation.present(structuredInvestigate);
       const proseInvestigate = presentedInvestigate.prose || investigationProse;
@@ -743,10 +785,9 @@ class WorkspaceEngine {
       };
     }
 
-    // SPEC-098 / SPEC-103 — approved client intelligence before intent routing.
-    // Reconstruct durable Blueprint/Playbook context for the authenticated tenant.
-    // Handles recall + bounded business reasoning; never invents client facts;
-    // never grants execution authority; never creates Missions from advice.
+    // SPEC-098 / SPEC-103D / AUDIT-001 — CIE attaches Blueprint evidence and
+    // handles execution-clarify / plan-preparation workflow only. Advisory
+    // composition belongs to the governed reasoning pipeline.
     const cieTurn = await maybeHandleClientIntelligenceTurn({
       question,
       session,
@@ -773,7 +814,10 @@ class WorkspaceEngine {
         }
       }
 
-      const structuredCie = cieTurn.structured;
+      const structuredCie =
+        cieTurn.structured && bound
+          ? attachPipelineLog(cieTurn.structured, bound)
+          : cieTurn.structured;
       const routeCie = {
         kind: ROUTE_KINDS.INTELLIGENCE,
         missionType: null,

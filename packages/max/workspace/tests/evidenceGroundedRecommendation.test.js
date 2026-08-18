@@ -199,7 +199,7 @@ describe('SPEC-107 classification', () => {
     assert.equal(shouldRetrieveOperatingEvidence(CIE_FOCUS), false);
     assert.equal(
       shouldClaimClientIntelligenceTurn(CIE_FOCUS, null, { approvedBlueprint: true }),
-      true
+      false
     );
   });
 
@@ -208,13 +208,13 @@ describe('SPEC-107 classification', () => {
     assert.equal(isOperatingGroundedRecommendation('What campaign would you recommend?'), false);
   });
 
-  it('leaves bare focus questions available to CIE when no operating signal exists', () => {
+  it('routes bare focus questions through the governed pipeline, not CIE advisory', () => {
     assert.equal(isOperatingGroundedRecommendation('What should we focus on first?'), false);
     assert.equal(shouldRetrieveOperatingEvidence('What should we focus on first?'), false);
     assert.equal(classifyCognitiveMode('What should we focus on first?').kind, COGNITIVE_MODES.RECOMMENDATION);
     assert.equal(
       shouldClaimClientIntelligenceTurn('What should we focus on first?', null, { approvedBlueprint: true }),
-      true
+      false
     );
   });
 });

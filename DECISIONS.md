@@ -49,6 +49,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-047](docs/adr/ADR-047_Intelligence_Before_Evidence.md) | Intelligence Before Evidence | Accepted | Max synthesizes first-class business intelligence from grounded claims before presenting evidence; insufficient evidence is Unknown |
 | [ADR-048](docs/adr/ADR-048_Intent_Selects_Analysis_Mode.md) | Intent Selects Analysis Mode | Accepted | Operator intent selects an explicit analysis mode before reasoning; diagnosis, unknown analysis, risk, and progress are first-class |
 | [ADR-049](docs/adr/ADR-049_Understand_Market_Before_Selling.md) | Understand the Market Before Selling Into It | Accepted | AIM holds client market understanding before Scout acquires; Scout reasons over pain ontology; Paige never starts from zero when qualification exists |
+| [ADR-050](docs/adr/ADR-050_Single_Governed_Reasoning_Pipeline.md) | Single Governed Reasoning Pipeline | Accepted | Every operator reasoning turn binds intent → analysis mode → response contract before retrieval; Blueprints are evidence; specialists are providers |
 
 ## How to add a decision
 

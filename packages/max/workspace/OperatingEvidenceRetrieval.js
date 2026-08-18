@@ -1560,7 +1560,7 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
   });
   const biProse = synthesis.prose;
   const biMeta = serializeBusinessIntelligence(synthesis);
-  const analysisSections = analysisSectionsFromIntelligence(synthesis);
+  const analysisSections = analysisSectionsFromIntelligence(synthesis, extras);
   const focused = recommend ? null : composeFocusedOperatingAnswer(question, bundle);
   const verified = formatVerifiedSection(bundle.items);
   const inferred = formatInferredSection(bundle.items);
