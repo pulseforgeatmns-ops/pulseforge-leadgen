@@ -104,6 +104,15 @@ function isHardRetrievalQuestion(question, mode) {
   if (looksLikeSummary(question) || looksLikeCompletedRetrieval(question)) return true;
   if (mode && mode.kind === COGNITIVE_MODES.REFLECTION) return true;
   if (mode && mode.kind === COGNITIVE_MODES.EXPLANATION) return true;
+  if (
+    mode &&
+    (mode.kind === COGNITIVE_MODES.DIAGNOSIS ||
+      mode.kind === COGNITIVE_MODES.UNKNOWN_ANALYSIS ||
+      mode.kind === COGNITIVE_MODES.RISK ||
+      mode.kind === COGNITIVE_MODES.PROGRESS)
+  ) {
+    return true;
+  }
   if (mode && mode.via === 'retrieval') return true;
   if (mode && mode.via === 'summary') return true;
   if (mode && mode.via === 'operating_evidence') return true;
@@ -359,6 +368,14 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
           ? 'Recommendation is grounded in synthesized findings and retrieved operating evidence, capability state, and policy — not Blueprint-only advice. No action was executed.'
           : contract && contract.id === CONTRACT_IDS.SUMMARY
             ? 'Summary requested — business intelligence first, then observed state, goals, unknowns, and evidence. Any recommendation is optional and last.'
+            : contract && contract.id === CONTRACT_IDS.DIAGNOSIS
+              ? 'Diagnosis requested — identify the limiting constraint from bottlenecks, readiness, and momentum. Explain why, not what to do.'
+              : contract && contract.id === CONTRACT_IDS.UNKNOWN_ANALYSIS
+                ? 'Unknown analysis requested — surface evidence gaps without speculation or acquisition rumors.'
+                : contract && contract.id === CONTRACT_IDS.RISK
+                  ? 'Risk assessment requested — grounded operational risks only.'
+                  : contract && contract.id === CONTRACT_IDS.PROGRESS
+                    ? 'Progress review requested — measure movement against stated goals.'
             : 'Inventory requested — business intelligence summarizes verified state before evidence. No unsolicited strategy.',
       ].filter(Boolean),
     }),
@@ -370,6 +387,14 @@ async function maybeHandleOperatingEvidenceTurn(input, question, mode) {
     reason:
       contract && contract.id === CONTRACT_IDS.SUMMARY
         ? 'intent_bound_summary'
+        : contract && contract.id === CONTRACT_IDS.DIAGNOSIS
+          ? 'intent_bound_diagnosis'
+          : contract && contract.id === CONTRACT_IDS.UNKNOWN_ANALYSIS
+            ? 'intent_bound_unknown_analysis'
+            : contract && contract.id === CONTRACT_IDS.RISK
+              ? 'intent_bound_risk'
+              : contract && contract.id === CONTRACT_IDS.PROGRESS
+                ? 'intent_bound_progress'
         : 'operating_evidence_retrieval',
     structured,
     prose: composed.prose,

@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Operator Intent Taxonomy ([SPEC-111](docs/specs/SPEC-111_Operator_Intent_Taxonomy.md), [ADR-048](docs/adr/ADR-048_Intent_Selects_Analysis_Mode.md))
+  - Explicit intent registry: Retrieval, Summary, Recommendation, Diagnosis, Unknown Analysis, Risk, Progress, Challenge, Investigation
+  - Diagnosis, unknown analysis, risk, and progress select their own response contracts before reasoning
+  - Business Intelligence objects are reused as inputs; no duplicated reasoning
+  - Competency `operator_intent_taxonomy` graduated 2026-08-18
+
 - Max Business Intelligence Synthesis ([SPEC-110](docs/specs/SPEC-110_Business_Intelligence_Synthesis.md), [ADR-047](docs/adr/ADR-047_Intelligence_Before_Evidence.md))
   - First-class intelligence objects (`finding`, `category`, `confidence`, `supporting_claims`, `operator_impact`)
   - Retrieval, summary, and recommendation contracts lead with synthesized conclusions, then attributable evidence

@@ -53,6 +53,14 @@ const COMPLETED_RETRIEVAL_RE =
 const FOCUS_RE =
   /\bwhere should (?:i|we) focus(?: next)?\b|\bwhat should (?:i|we) do next\b/i;
 
+const {
+  OPERATOR_INTENTS,
+  looksLikeDiagnosis,
+  looksLikeUnknownAnalysis,
+  looksLikeRisk,
+  looksLikeProgress,
+} = require('./OperatorIntentRegistry');
+
 function present(text) {
   return String(text || '')
     .replace(/\s{2,}/g, ' ')
@@ -461,6 +469,156 @@ function maybeVerifiedOutreach(state, items, question) {
   return obj ? [obj] : [];
 }
 
+function maybeUnprovenMotionRisk(state, items) {
+  if (!hasVerifiedOutreach(state, items) || !conversionsMissing(state)) return [];
+  const supporting = [
+    ...itemsByKind(items, ['campaign', 'ao', 'activity', 'outcome'])
+      .map(claimFromItem)
+      .filter(Boolean),
+  ];
+  if (!supporting.length) {
+    supporting.push(
+      fallbackMissingClaim(
+        'No durable conversion, job, or payment outcomes are recorded for this tenant.',
+        'outcome'
+      )
+    );
+  }
+  const obj = intelligenceObject({
+    id: 'unproven_motion_risk',
+    finding:
+      'The recorded motion has not yet produced conversions, so operational effectiveness remains unproven.',
+    category: CATEGORIES.RISK,
+    confidence: CONFIDENCE.MODERATE,
+    supportingClaims: supporting,
+    unknowns: ['Whether mailed or recorded outreach converts into walkthroughs or clients'],
+    operatorImpact: 'Do not treat recorded activity as proof the motion is working.',
+  });
+  return obj ? [obj] : [];
+}
+
+function maybeCriticalUnknowns(state, items) {
+  const objects = [];
+  const conversionClaims = itemsByKind(items, ['outcome']).map(claimFromItem).filter(Boolean);
+  const conversion = intelligenceObject({
+    id: 'unknown_conversions',
+    finding: 'Conversions are not yet recorded.',
+    category: CATEGORIES.UNKNOWN,
+    confidence: CONFIDENCE.UNKNOWN,
+    supportingClaims: conversionClaims.length
+      ? conversionClaims
+      : [fallbackMissingClaim('No durable conversion, job, or payment outcomes are recorded for this tenant.', 'outcome')],
+    unknowns: ['Conversion rate', 'Whether outreach produced recurring clients'],
+    operatorImpact: 'Cannot determine acquisition effectiveness without conversion evidence.',
+  });
+  if (conversion && conversionsMissing(state)) objects.push(conversion);
+
+  const walkthroughCount = Number(state.walkthroughs || 0);
+  const walkthroughItems = (items || []).filter((item) => /walkthrough/i.test(blob(item)));
+  const walkthroughClaims = walkthroughItems.map(claimFromItem).filter(Boolean);
+  if (walkthroughCount <= 0) {
+    const walkthrough = intelligenceObject({
+      id: 'unknown_walkthroughs',
+      finding: 'Walkthroughs are not yet recorded.',
+      category: CATEGORIES.UNKNOWN,
+      confidence: CONFIDENCE.UNKNOWN,
+      supportingClaims: walkthroughClaims.length
+        ? walkthroughClaims
+        : [fallbackMissingClaim('No walkthrough-request operational states are recorded in AO for this tenant.', 'campaign')],
+      unknowns: ['Whether any account requested a walkthrough'],
+      operatorImpact: 'Pipeline movement cannot be confirmed from inventory counts.',
+    });
+    if (walkthrough) objects.push(walkthrough);
+  }
+
+  const yelpItems = (items || []).filter((item) => /yelp/i.test(blob(item)));
+  const yelpRecorded = yelpItems.some(isRecordedClaim);
+  const yelp = intelligenceObject({
+    id: 'unknown_yelp_performance',
+    finding: 'Yelp performance cannot be determined from recorded evidence.',
+    category: CATEGORIES.UNKNOWN,
+    confidence: CONFIDENCE.UNKNOWN,
+    supportingClaims: yelpItems.map(claimFromItem).filter(Boolean).length
+      ? yelpItems.map(claimFromItem).filter(Boolean)
+      : [fallbackMissingClaim('No durable Yelp activity is recorded for this tenant.', 'yelp')],
+    unknowns: ['Yelp Ads effectiveness'],
+    operatorImpact: 'Do not treat unrecorded channel performance as a known.',
+  });
+  if (yelp && !yelpRecorded) objects.push(yelp);
+
+  const campaignItems = itemsByKind(items, ['campaign', 'ao']);
+  const campaignExecutionUnknown = conversionsMissing(state);
+  if (campaignExecutionUnknown) {
+    const campaign = intelligenceObject({
+      id: 'unknown_campaign_execution_results',
+      finding: 'Campaign execution results are not yet known.',
+      category: CATEGORIES.UNKNOWN,
+      confidence: CONFIDENCE.UNKNOWN,
+      supportingClaims: campaignItems.map(claimFromItem).filter(Boolean).length
+        ? campaignItems.map(claimFromItem).filter(Boolean)
+        : [fallbackMissingClaim('Campaign execution has not produced recorded conversion results.', 'campaign')],
+      unknowns: ['Whether Campaign 001 produced conversations or clients'],
+      operatorImpact: 'Treat mailed or prepared campaign work as activity, not as proven execution outcomes.',
+    });
+    if (campaign) objects.push(campaign);
+  }
+  return objects;
+}
+
+function maybeProgressAgainstGoals(state, extras, items) {
+  const understanding = extras.businessUnderstanding || extras.understanding || null;
+  const contract = (understanding && understanding.contract) || {};
+  const goals = present(
+    contract.businessGoals ||
+      (understanding && understanding.summary && understanding.summary.goals) ||
+      ''
+  );
+  const objectiveTexts = (state.objectives || [])
+    .map((row) => present(row && (row.title || row.objectiveText || row.statement)))
+    .filter(Boolean);
+  const goalText = goals || objectiveTexts[0] || 'stated acquisition goals';
+  const completedBits = [];
+  if (state.mailExecuted || state.mailAttestedAt) {
+    completedBits.push(present(state.campaignName) || 'Campaign 001');
+  }
+  if (Number(state.aoLeads || 0) > 0) {
+    completedBits.push(`${Number(state.aoLeads)} AO leads seeded`);
+  }
+  if (blueprintApproved(extras)) {
+    completedBits.push('approved Blueprint');
+  }
+  const remaining = [];
+  if (conversionsMissing(state)) remaining.push('conversions against the stated goal');
+  if (!Number(state.walkthroughs || 0)) {
+    remaining.push('walkthroughs');
+  }
+  const supporting = [
+    {
+      text: `Stated goal: ${goalText}`,
+      epistemic: 'verified',
+      provenance: objectiveTexts.length ? 'operator objective' : 'approved Blueprint',
+      sourceKind: 'objective',
+    },
+    ...itemsByKind(items, ['campaign', 'ao', 'outcome']).map(claimFromItem).filter(Boolean),
+  ];
+  if (!supporting.length) return [];
+  const finding = completedBits.length
+    ? `Progress against goals: ${completedBits.join(', ')} are recorded; the stated goal is not yet demonstrated by conversions.`
+    : `Observed operating state does not yet demonstrate progress against ${goalText}.`;
+  const obj = intelligenceObject({
+    id: 'progress_against_goals',
+    finding,
+    category: conversionsPresent(state) ? CATEGORIES.MOMENTUM : CATEGORIES.UNKNOWN,
+    confidence: conversionsPresent(state) ? CONFIDENCE.MODERATE : CONFIDENCE.UNKNOWN,
+    supportingClaims: supporting,
+    unknowns: remaining,
+    operatorImpact: remaining.length
+      ? `Remaining work: ${remaining.join(', ')}.`
+      : 'Protect demonstrated progress rather than restarting discovery.',
+  });
+  return obj ? [obj] : [];
+}
+
 function maybeGoalGap(state, extras) {
   const understanding = extras.businessUnderstanding || extras.understanding || null;
   const contract = (understanding && understanding.contract) || {};
@@ -510,8 +668,36 @@ function dedupeObjects(objects) {
   return out;
 }
 
-function selectForQuestion(objects, question) {
+function selectForQuestion(objects, question, analysisMode) {
   const list = objects.slice();
+  const mode = analysisMode || null;
+  if (mode === OPERATOR_INTENTS.DIAGNOSIS || looksLikeDiagnosis(question)) {
+    const preferred = list.filter((obj) =>
+      obj.category === CATEGORIES.BOTTLENECK ||
+      obj.category === CATEGORIES.READINESS ||
+      obj.category === CATEGORIES.MOMENTUM
+    );
+    const execution = preferred.filter((obj) => obj.id === 'execution_bottleneck');
+    const rest = preferred.filter((obj) => obj.id !== 'execution_bottleneck');
+    return execution.length || preferred.length ? [...execution, ...rest] : list;
+  }
+  if (mode === OPERATOR_INTENTS.UNKNOWN_ANALYSIS || looksLikeUnknownAnalysis(question)) {
+    const unknowns = list.filter((obj) => obj.category === CATEGORIES.UNKNOWN);
+    return unknowns.length ? unknowns : list;
+  }
+  if (mode === OPERATOR_INTENTS.RISK || looksLikeRisk(question)) {
+    const risks = list.filter((obj) => obj.category === CATEGORIES.RISK);
+    return risks.length ? risks : list;
+  }
+  if (mode === OPERATOR_INTENTS.PROGRESS || looksLikeProgress(question)) {
+    const progress = list.filter(
+      (obj) =>
+        obj.id === 'progress_against_goals' ||
+        obj.category === CATEGORIES.MOMENTUM ||
+        obj.id === 'goal_versus_observed'
+    );
+    return progress.length ? progress : list;
+  }
   if (isChannelEffectivenessQuestion(question)) {
     return list.filter(
       (obj) => obj.category === CATEGORIES.UNKNOWN && /effectiveness/i.test(obj.id)
@@ -591,11 +777,14 @@ function synthesizeBusinessIntelligence(input = {}) {
       ...maybeSupplyBottleneck(state, items),
       ...maybeReadiness(state, items, extras),
       ...maybeFreshnessRisk(state, items),
+      ...maybeUnprovenMotionRisk(state, items),
+      ...maybeCriticalUnknowns(state, items),
+      ...maybeProgressAgainstGoals(state, extras, items),
       ...(execution.length ? [] : maybeGoalGap(state, extras)),
     ].filter(Boolean)
   );
 
-  const selected = selectForQuestion(objects, question);
+  const selected = selectForQuestion(objects, question, input.analysisMode);
   if (!selected.length) {
     const inspect = intelligenceObject({
       id: 'operating_picture_unknown',
@@ -650,6 +839,70 @@ function serializeBusinessIntelligence(synthesis) {
   };
 }
 
+function claimLines(objects) {
+  const lines = [];
+  for (const obj of objects || []) {
+    for (const claim of obj.supporting_claims || []) {
+      const text = present(claim.text || claim.claim);
+      if (text) lines.push(`- ${text}`);
+    }
+  }
+  return [...new Set(lines)].join('\n');
+}
+
+function suggestedInvestigationsFromUnknowns(objects) {
+  const suggestions = [];
+  const blob = (objects || []).map((obj) => `${obj.id} ${obj.finding} ${(obj.unknowns || []).join(' ')}`).join(' ');
+  if (/conversion/i.test(blob)) suggestions.push('Record conversion, job, or payment outcomes for the current motion.');
+  if (/walkthrough/i.test(blob)) suggestions.push('Confirm whether any walkthroughs were requested or completed.');
+  if (/yelp/i.test(blob)) suggestions.push('Attribute Yelp performance only if channel activity is recorded.');
+  if (/campaign execution|Campaign 001/i.test(blob)) {
+    suggestions.push('Measure Campaign 001 execution results against recorded activity, not rumors.');
+  }
+  return suggestions.join('\n');
+}
+
+function analysisSectionsFromIntelligence(synthesis, extras = {}) {
+  const objects = (synthesis && synthesis.objects) || [];
+  const primary = (synthesis && synthesis.primary) || objects[0] || null;
+  const confidence = primary ? present(primary.confidence) : 'unknown';
+  const impact = objects
+    .map((obj) => present(obj.operator_impact))
+    .filter(Boolean)
+    .filter((line, idx, arr) => arr.indexOf(line) === idx)
+    .join('\n');
+  const findings = objects.map((obj) => present(obj.finding)).filter(Boolean).join('\n');
+  const unknowns = objects
+    .flatMap((obj) => obj.unknowns || [])
+    .map(present)
+    .filter(Boolean)
+    .filter((line, idx, arr) => arr.indexOf(line) === idx);
+  const remaining = objects
+    .filter((obj) => obj.id === 'progress_against_goals' || obj.id === 'goal_versus_observed')
+    .flatMap((obj) => obj.unknowns || [])
+    .map(present)
+    .filter(Boolean);
+  return {
+    bottleneck: primary && primary.finding ? present(primary.finding) : findings,
+    confidence,
+    evidence: claimLines(objects),
+    operatorImpact: impact,
+    unknowns:
+      extras.unknownList ||
+      [findings, unknowns.length ? unknowns.map((u) => `- ${u}`).join('\n') : '']
+        .filter(Boolean)
+        .join('\n'),
+    evidenceGaps: extras.evidenceGaps || claimLines(objects),
+    suggestedInvestigations: suggestedInvestigationsFromUnknowns(objects),
+    risks: findings,
+    potentialImpact: impact,
+    progress: findings,
+    remainingWork: remaining.length
+      ? remaining.map((line) => `- ${line}`).join('\n')
+      : impact || 'Remaining work is not yet demonstrated against stated goals.',
+  };
+}
+
 module.exports = {
   CATEGORIES,
   CONFIDENCE,
@@ -663,4 +916,6 @@ module.exports = {
   synthesizeBusinessIntelligence,
   formatIntelligenceProse,
   serializeBusinessIntelligence,
+  analysisSectionsFromIntelligence,
+  suggestedInvestigationsFromUnknowns,
 };

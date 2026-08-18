@@ -1,12 +1,25 @@
 'use strict';
 
 /**
- * SPEC-102 — operator cognitive-mode classification.
+ * SPEC-102 / SPEC-111 — operator cognitive-mode classification.
  *
  * Every question belongs primarily to one mode. Classification happens
  * before any specialist routing. Investigation verbs are not inferred
  * from topic words like "cleaning" or a prior Scout turn.
+ *
+ * SPEC-111 expands analytical modes: diagnosis, unknown analysis, risk,
+ * and progress are classified before recommendation or specialist paths.
  */
+
+const {
+  OPERATOR_INTENTS,
+  classifyNewAnalysisMode,
+  intentFromCognitiveMode,
+  looksLikeDiagnosis,
+  looksLikeUnknownAnalysis,
+  looksLikeRisk,
+  looksLikeProgress,
+} = require('../workspace/OperatorIntentRegistry');
 
 const COGNITIVE_MODES = Object.freeze({
   RETRIEVAL: 'retrieval',
@@ -16,6 +29,10 @@ const COGNITIVE_MODES = Object.freeze({
   RECOMMENDATION: 'recommendation',
   PLANNING: 'planning',
   EXECUTION: 'execution',
+  DIAGNOSIS: 'diagnosis',
+  UNKNOWN_ANALYSIS: 'unknown_analysis',
+  RISK: 'risk',
+  PROGRESS: 'progress',
   UNCLASSIFIED: 'unclassified',
 });
 
@@ -23,6 +40,10 @@ const NEVER_DELEGATE_MODES = Object.freeze([
   COGNITIVE_MODES.RETRIEVAL,
   COGNITIVE_MODES.EXPLANATION,
   COGNITIVE_MODES.REFLECTION,
+  COGNITIVE_MODES.DIAGNOSIS,
+  COGNITIVE_MODES.UNKNOWN_ANALYSIS,
+  COGNITIVE_MODES.RISK,
+  COGNITIVE_MODES.PROGRESS,
 ]);
 
 const SPECIALIST_NAMES =
@@ -201,12 +222,27 @@ function looksLikeSummary(question) {
 }
 
 function modeResult(kind, via, extras = {}) {
-  return {
+  const result = {
     kind,
     via,
     explicitInvestigation: extras.explicitInvestigation === true,
     requiresOperatingRetrieval: extras.requiresOperatingRetrieval === true,
   };
+  const intent =
+    extras.intent ||
+    intentFromCognitiveMode(result) ||
+    (kind === COGNITIVE_MODES.DIAGNOSIS
+      ? OPERATOR_INTENTS.DIAGNOSIS
+      : kind === COGNITIVE_MODES.UNKNOWN_ANALYSIS
+        ? OPERATOR_INTENTS.UNKNOWN_ANALYSIS
+        : kind === COGNITIVE_MODES.RISK
+          ? OPERATOR_INTENTS.RISK
+          : kind === COGNITIVE_MODES.PROGRESS
+            ? OPERATOR_INTENTS.PROGRESS
+            : null);
+  result.intent = intent || null;
+  result.analysisMode = extras.analysisMode || intent || null;
+  return result;
 }
 
 /**
@@ -230,6 +266,25 @@ function classifyCognitiveMode(question, input = {}) {
   if (looksLikeClaimChallenge(q)) {
     return modeResult(COGNITIVE_MODES.EXPLANATION, 'claim_challenge', {
       requiresOperatingRetrieval: true,
+      intent: OPERATOR_INTENTS.CHALLENGE,
+      analysisMode: OPERATOR_INTENTS.CHALLENGE,
+    });
+  }
+
+  const analysis = classifyNewAnalysisMode(q);
+  if (analysis) {
+    const kind =
+      analysis.intent === OPERATOR_INTENTS.DIAGNOSIS
+        ? COGNITIVE_MODES.DIAGNOSIS
+        : analysis.intent === OPERATOR_INTENTS.UNKNOWN_ANALYSIS
+          ? COGNITIVE_MODES.UNKNOWN_ANALYSIS
+          : analysis.intent === OPERATOR_INTENTS.RISK
+            ? COGNITIVE_MODES.RISK
+            : COGNITIVE_MODES.PROGRESS;
+    return modeResult(kind, analysis.via, {
+      requiresOperatingRetrieval: true,
+      intent: analysis.intent,
+      analysisMode: analysis.analysisMode,
     });
   }
 
@@ -251,6 +306,8 @@ function classifyCognitiveMode(question, input = {}) {
   if (looksLikeInvestigation(q)) {
     return modeResult(COGNITIVE_MODES.INVESTIGATION, 'investigation_verb', {
       explicitInvestigation: true,
+      intent: OPERATOR_INTENTS.INVESTIGATION,
+      analysisMode: OPERATOR_INTENTS.INVESTIGATION,
     });
   }
 
@@ -259,7 +316,10 @@ function classifyCognitiveMode(question, input = {}) {
   }
 
   if (recommendation) {
-    return modeResult(COGNITIVE_MODES.RECOMMENDATION, 'recommendation');
+    return modeResult(COGNITIVE_MODES.RECOMMENDATION, 'recommendation', {
+      intent: OPERATOR_INTENTS.RECOMMENDATION,
+      analysisMode: OPERATOR_INTENTS.RECOMMENDATION,
+    });
   }
 
   if (looksLikeReflection(q)) {
@@ -279,6 +339,8 @@ function classifyCognitiveMode(question, input = {}) {
   if (looksLikeSummary(q)) {
     return modeResult(COGNITIVE_MODES.RETRIEVAL, 'summary', {
       requiresOperatingRetrieval: true,
+      intent: OPERATOR_INTENTS.SUMMARY,
+      analysisMode: OPERATOR_INTENTS.SUMMARY,
     });
   }
 
@@ -321,6 +383,10 @@ module.exports = {
   looksLikeCompletedRetrieval,
   looksLikeExistingEvidenceRetrieval,
   looksLikeClaimChallenge,
+  looksLikeDiagnosis,
+  looksLikeUnknownAnalysis,
+  looksLikeRisk,
+  looksLikeProgress,
   hasRecentSpecialistWork,
   forbidsSpecialistDelegation,
 };
