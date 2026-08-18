@@ -1274,6 +1274,14 @@ function isClearlyNonBusinessUtterance(question, session) {
  * Concept scores select mode; they do not exclusively gate entry.
  */
 function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
+  try {
+    const challenge = require('./RecommendationClaimChallenge');
+    if (challenge.isClaimChallenge(question) || challenge.isOperatorClaimCorrection(question)) {
+      return false;
+    }
+  } catch (_) {
+    // continue CIE classification if challenge helper is unavailable
+  }
   if (shouldRetrieveOperatingEvidence(question)) return false;
   if (isOperatorOperatingUpdate(question)) return false;
   if (isClientContextExecutionRequest(question)) return false;

@@ -1,11 +1,11 @@
 # SPEC — Current Max Workstream
 
-**Active:** [SPEC-107 — Evidence-Grounded Recommendation Orchestration](SPEC-107_Evidence_Grounded_Recommendation_Orchestration.md)
+**Active:** [SPEC-107A — Recommendation Claim Grounding & Challenge](SPEC-107A_Recommendation_Claim_Grounding.md)
 
-SPEC-107 establishes the orchestration contract:
+SPEC-107A closes the epistemic-grounding gap after SPEC-107:
 
-`retrieve → reason → recommend`
+`retrieve → reason → recommend → challenge → confirm / retract → revise`
 
-for recommendation requests that require durable operating evidence.
+Material operating-state premises must be grounded in retrieved evidence or labeled as inference. Targeted claim challenges retrieve claim-relevant evidence instead of restating the operating inventory.
 
-It does not authorize execution. SPEC-105 still owns operating-evidence retrieval and epistemic classification. SPEC-106 still owns operator-attested persistence. CIE remains authoritative for durable business understanding and must not swallow an evidence-grounded recommendation after that evidence has been retrieved.
+SPEC-105 still owns operating-evidence retrieval. SPEC-106 still owns operator-attested persistence. Max-generated statements are not evidence and are not written into operator memory.
