@@ -419,7 +419,7 @@ describe('SPEC-107A safety', () => {
       { now: NOW }
     );
     const emailPremise = composed.premises.find((p) => p.topic === 'email_motion');
-    assert.equal(emailPremise.support, 'unknown');
+    assert.equal(emailPremise.support, 'unsupported');
     assert.doesNotMatch(composed.prose, /outbound email motion is already active/i);
   });
 

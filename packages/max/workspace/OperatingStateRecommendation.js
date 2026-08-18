@@ -1,14 +1,23 @@
 'use strict';
 
 /**
- * SPEC-107 — evidence-grounded recommendation composition.
+ * SPEC-107 / SPEC-108 — evidence-grounded recommendation composition.
  *
  * Consumes a SPEC-105 operating-evidence bundle (plus optional Blueprint
  * understanding and capability/policy state) and reasons to a bounded
- * advisory recommendation. Does not execute, persist, or enable agents.
+ * advisory recommendation. Operating-state claims are evaluated against
+ * evidence (SPEC-108 claim grounding) before the recommendation is built.
+ * Does not execute, persist, or enable agents.
  *
  * Retrieve → reason → recommend. Not a new recommendation engine.
  */
+
+const {
+  SUPPORT,
+  TOPICS,
+  evaluateAllOperatingStateClaims,
+  applyClaimEvaluations,
+} = require('./ClaimGrounding');
 
 const CAPABILITY_STATUS = Object.freeze({
   AVAILABLE: 'available',
@@ -339,7 +348,11 @@ function assembleOperatingState(bundle = {}, extras = {}) {
       contract.commercialPreference ||
         (understanding && understanding.commercialPreference)
     ),
+    activity: bundle.activity || {},
     items: bundle.items || [],
+    outreachBegun: false,
+    commercialExpansionObserved: false,
+    forceFirstOutreach: false,
     hasAnyOperatingSignal: Boolean(
       aoLeads ||
         totalProspects ||
@@ -368,6 +381,23 @@ function applyWorkingModelCorrections(state, extras = {}) {
       denied: true,
     };
     state.emailMotionActive = false;
+  }
+  if (retracted.includes('follow_up') || retracted.includes('follow_up_completed')) {
+    if (state.followUp && state.followUp.kind === 'completed') {
+      state.followUp = {
+        ...state.followUp,
+        kind: state.followUp.expectedAt ? 'planned' : 'planned',
+        executed: false,
+        retractedCompleted: true,
+      };
+    }
+  }
+  if (retracted.includes('outreach_begun')) {
+    state.outreachBegun = false;
+    state.forceFirstOutreach = true;
+  }
+  if (retracted.includes('commercial_expansion')) {
+    state.commercialExpansionObserved = false;
   }
   return state;
 }
@@ -423,7 +453,7 @@ function alreadyInMotionLines(state) {
   const lines = [];
   if (state.followUp.kind === 'planned_future') {
     lines.push(
-      `${state.campaignName} AO follow-up is already scheduled for ${formatDay(state.followUp.expectedAt)} and has an owner. Do not treat that as a newly discovered initiative.`
+      `${state.campaignName} AO follow-up is already scheduled for ${formatDay(state.followUp.expectedAt)} and has an owner. I know a follow-up has been scheduled. I do not currently have evidence that it has occurred.`
     );
   } else if (state.followUp.kind === 'planned_due') {
     lines.push(
@@ -489,7 +519,7 @@ function recommendEvaluateOutbound(state, email) {
     bottleneck: 'outbound_capacity',
     focus: `Evaluate and prepare controlled ${label} activation as the next acquisition-capacity decision.`,
     inference:
-      'Prospect supply is probably not the immediate bottleneck, and human AO follow-up is already in motion or scheduled. The missing motion is a controlled outbound email channel — not another discovery pass.',
+      'Prospect supply is probably not the immediate bottleneck. AO follow-up is scheduled; that is not recorded execution. The missing motion is a controlled outbound email channel — not another discovery pass.',
     learn: 'Whether a bounded email motion can work the existing qualified inventory without duplicating AO follow-up, and what readiness remains before any send.',
     email,
   };
@@ -558,11 +588,26 @@ function recommendInspect(state) {
   };
 }
 
+function recommendFirstOutreach(state) {
+  return {
+    bottleneck: 'first_outreach',
+    focus: 'Begin first outreach against existing inventory. Prospect discovery is not execution.',
+    inference:
+      'Inventory records that accounts exist. That does not mean outreach has begun. Treat discovery as supply, then start a bounded first outreach motion.',
+    learn: 'Whether a first outbound motion produces conversations from inventory that has not been worked.',
+    email: primaryEmailCapability(state.capability),
+  };
+}
+
 function reasonOverOperatingState(state) {
   const email = primaryEmailCapability(state.capability);
 
   if (!state.hasAnyOperatingSignal) {
     return recommendInspect(state);
+  }
+
+  if (state.forceFirstOutreach && state.supply !== 'thin') {
+    return recommendFirstOutreach(state);
   }
 
   if (state.supply === 'thin') {
@@ -647,70 +692,38 @@ function formatRecommendationProse(decision, state) {
 }
 
 function composeEvidenceGroundedRecommendation(bundle, extras = {}) {
-  const state = assembleOperatingState(bundle, extras);
+  const assembled = assembleOperatingState(bundle, extras);
+  const claimEvaluations = evaluateAllOperatingStateClaims(assembled);
+  const state = applyClaimEvaluations(assembled, claimEvaluations);
   const decision = reasonOverOperatingState(state);
-  const premises = collectPremises(state, decision);
+  const premises = collectPremises(state, decision, claimEvaluations);
   return {
     prose: formatRecommendationProse(decision, state),
     state,
     decision,
     premises,
+    claimEvaluations,
     lastClaim: pickLastClaim(premises),
     executed: false,
     recommend: true,
   };
 }
 
-function collectPremises(state, decision) {
-  const premises = [];
-  const email = state.emailMotion || { kind: 'not_recorded', current: false };
-  premises.push({
-    id: 'email_motion',
-    topic: 'email_motion',
-    text: email.current
-      ? 'An outbound email motion is already active.'
-      : email.kind === 'historical'
-        ? 'Historical email activity exists; current outbound email execution is not verified.'
-        : email.kind === 'planned'
-          ? 'An email campaign exists as planned or intended work, not current execution.'
-          : email.kind === 'disabled'
-            ? 'Emmett exists but is disabled for this tenant.'
-            : 'A currently active outbound email motion is not verified.',
-    kind: email.current ? 'observed' : email.kind === 'disabled' ? 'exists_disabled' : email.kind,
-    support: email.current ? 'supported' : 'unknown',
-    status: email.current ? 'supported' : 'unknown',
-    epistemic: email.current ? 'observed' : email.kind === 'disabled' ? 'exists_disabled' : email.kind,
-    evidence: email,
-  });
-  if (state.mailAttestedAt || state.mailExecuted) {
-    premises.push({
-      id: 'mail',
-      topic: 'mail',
-      text: state.mailAttestedAt
-        ? `${state.campaignName} was operator-reported as mailed ${formatDay(state.mailAttestedAt)}.`
-        : `${state.campaignName} was mailed.`,
-      kind: state.mailAttestedAt ? 'operator_attested' : 'verified',
-      support: 'supported',
-      status: 'supported',
-      epistemic: state.mailAttestedAt ? 'operator_attested' : 'verified',
-      evidence: { occurredAt: state.mailAttestedAt, mailExecuted: state.mailExecuted },
-    });
-  }
-  if (state.followUp && state.followUp.kind !== 'none') {
-    premises.push({
-      id: 'follow_up',
-      topic: 'follow_up',
-      text:
-        state.followUp.kind === 'completed'
-          ? `${state.campaignName} follow-up has recorded execution.`
-          : `${state.campaignName} follow-up is planned and owned; completion is not yet recorded.`,
-      kind: state.followUp.kind === 'completed' ? 'verified' : 'planned',
-      support: 'supported',
-      status: 'supported',
-      epistemic: state.followUp.kind === 'completed' ? 'verified' : 'planned',
-      evidence: state.followUp,
-    });
-  }
+function collectPremises(state, decision, claimEvaluations) {
+  const evaluated = Array.isArray(claimEvaluations) && claimEvaluations.length
+    ? claimEvaluations
+    : evaluateAllOperatingStateClaims(state);
+  const premises = evaluated.map((row) => ({
+    id: row.id,
+    topic: row.topic,
+    text: row.text,
+    kind: row.kind,
+    support: row.support,
+    status: row.support,
+    epistemic: row.epistemic,
+    evidence: row.evaluation && row.evaluation.evidence,
+    evaluation: row.evaluation,
+  }));
   if (decision) {
     premises.push({
       id: 'next_constraint',
@@ -728,13 +741,20 @@ function collectPremises(state, decision) {
 
 function pickLastClaim(premises) {
   const list = Array.isArray(premises) ? premises : [];
-  const email = list.find((p) => p.topic === 'email_motion' && p.support === 'supported');
+  const supportedOperating = list.find(
+    (p) =>
+      p.topic !== 'next_constraint' &&
+      p.support === SUPPORT.SUPPORTED &&
+      (p.topic === TOPICS.MAIL || p.topic === TOPICS.CAMPAIGN_COMPLETED || p.topic === TOPICS.EMAIL_MOTION)
+  );
+  if (supportedOperating) return supportedOperating;
+  const email = list.find((p) => p.topic === TOPICS.EMAIL_MOTION && p.support === SUPPORT.SUPPORTED);
   if (email) return email;
-  const mail = list.find((p) => p.topic === 'mail');
+  const mail = list.find((p) => p.topic === TOPICS.MAIL);
   if (mail) return mail;
-  const follow = list.find((p) => p.topic === 'follow_up');
+  const follow = list.find((p) => p.topic === TOPICS.FOLLOW_UP);
   if (follow) return follow;
-  return list.find((p) => p.topic === 'email_motion') || list[0] || null;
+  return list.find((p) => p.topic && p.topic !== 'next_constraint') || list[0] || null;
 }
 
 module.exports = {
@@ -751,4 +771,5 @@ module.exports = {
   collectPremises,
   pickLastClaim,
   hasEmailMotion,
+  evaluateAllOperatingStateClaims,
 };
