@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * PILOT-0 AUDIT-001 — shared classification layer.
+ * SPEC-113 / PILOT-0 AUDIT-001 — shared classification layer.
  */
 
 const { describe, it } = require('node:test');
@@ -46,6 +46,6 @@ describe('AUDIT-001 competency registry', () => {
     const competency = training.getCompetency('reasoning_pipeline_conformance');
     assert.ok(competency);
     assert.equal(competency.stage, training.STAGES.GRADUATED);
-    assert.ok(competency.specRefs.includes('SPEC-112'));
+    assert.ok(competency.specRefs.includes('SPEC-113'));
   });
 });

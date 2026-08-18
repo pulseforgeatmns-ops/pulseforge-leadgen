@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * PILOT-0 AUDIT-001 — reasoning pipeline conformance.
+ * SPEC-113 / PILOT-0 AUDIT-001 — reasoning pipeline conformance.
  */
 
 const { describe, it } = require('node:test');
@@ -263,12 +263,12 @@ describe('AUDIT-001 registry and spec', () => {
     const competency = training.getCompetency('reasoning_pipeline_conformance');
     assert.ok(competency);
     assert.equal(competency.stage, training.STAGES.GRADUATED);
-    assert.ok(competency.specRefs.includes('SPEC-112'));
+    assert.ok(competency.specRefs.includes('SPEC-113'));
   });
 
-  it('keeps SPEC-112 and ADR-049 on disk', () => {
-    const spec = path.join(__dirname, '../../../../docs/specs/SPEC-112_Reasoning_Pipeline_Conformance.md');
-    const adr = path.join(__dirname, '../../../../docs/adr/ADR-049_Single_Governed_Reasoning_Pipeline.md');
+  it('keeps SPEC-113 and ADR-050 on disk', () => {
+    const spec = path.join(__dirname, '../../../../docs/specs/SPEC-113_Reasoning_Pipeline_Conformance.md');
+    const adr = path.join(__dirname, '../../../../docs/adr/ADR-050_Single_Governed_Reasoning_Pipeline.md');
     assert.equal(fs.existsSync(spec), true);
     assert.equal(fs.existsSync(adr), true);
   });

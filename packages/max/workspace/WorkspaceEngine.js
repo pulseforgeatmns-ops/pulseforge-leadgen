@@ -420,7 +420,7 @@ class WorkspaceEngine {
     }
 
     // SPEC-102 / SPEC-103 / SPEC-105 / SPEC-109 / SPEC-110 / SPEC-111 /
-    // AUDIT-001 — single governed reasoning pipeline. Classify intent and
+    // SPEC-113 — single governed reasoning pipeline. Classify intent and
     // analysis mode, select the response contract, retrieve and ground
     // evidence, then synthesize business intelligence. Blueprint Advisory
     // is not an operator-facing responder.

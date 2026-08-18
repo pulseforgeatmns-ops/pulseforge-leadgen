@@ -6,4 +6,4 @@ Max has one operator reasoning pipeline. Intent selects analysis mode. Analysis 
 
 SPEC-112 still teaches Scout a market before acquisition. Fedir's AIM is the first seed. SPEC-111 still classifies diagnosis, unknown analysis, risk, and progress. SPEC-110 still synthesizes intelligence before evidence. SPEC-109 still selects the response contract from operator intent. SPEC-108 still requires supported operating-state claims.
 
-**Next:** durable assimilation of verified operator corrections (Max knowledge layer). Live Fedir 50-prospect campaign is operational, not this spec.
+**Next:** durable assimilation of verified operator corrections (Max knowledge layer). Live Fedir 50-prospect campaign is operational, not this spec. Do not weaken SPEC-113 while introducing persistent knowledge.

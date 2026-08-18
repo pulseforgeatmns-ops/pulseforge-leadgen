@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * PILOT-0 AUDIT-001 — single governed operator reasoning pipeline.
+ * SPEC-113 / PILOT-0 AUDIT-001 — single governed operator reasoning pipeline.
  *
  * Operator Request
  *   → Intent Classification

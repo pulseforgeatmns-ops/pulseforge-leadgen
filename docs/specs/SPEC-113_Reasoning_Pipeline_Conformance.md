@@ -1,4 +1,4 @@
-# SPEC-112 — Reasoning Pipeline Conformance
+# SPEC-113 — Reasoning Pipeline Conformance
 
 | Field | Value |
 |---|---|
@@ -8,7 +8,9 @@
 | **Owner** | Max Core Reasoning |
 | **Created** | 2026-08-18 |
 | **Depends on** | [SPEC-111](SPEC-111_Operator_Intent_Taxonomy.md), [SPEC-110](SPEC-110_Business_Intelligence_Synthesis.md), [SPEC-109](SPEC-109_Intent_Bound_Response_Selection.md), [SPEC-108](SPEC-108_Claim_Grounding_Competency_Graduation.md), [SPEC-107](SPEC-107_Evidence_Grounded_Recommendation_Orchestration.md), [SPEC-105](SPEC-105_Max_Operating_Evidence_Retrieval.md) |
-| **ADR** | [ADR-049 Single Governed Reasoning Pipeline](../adr/ADR-049_Single_Governed_Reasoning_Pipeline.md) |
+| **ADR** | [ADR-050 Single Governed Reasoning Pipeline](../adr/ADR-050_Single_Governed_Reasoning_Pipeline.md) |
+
+Repository SPEC-112 / ADR-049 remain Acquisition Intelligence Model. This pipeline work is numbered **SPEC-113**.
 
 ## Objective
 

@@ -191,6 +191,7 @@ None. Classification and composition only.
 
 ## Future Work
 
+- Closed by [SPEC-113](SPEC-113_Reasoning_Pipeline_Conformance.md): Blueprint Advisory is no longer an operator-facing responder.
 - Comparison as a first-class mode if operator questions need explicit A-vs-B structure
 - Workspace UI rendering of diagnosis / unknown / risk / progress headings
 - Rex / briefing consumers selecting objects by analysis mode

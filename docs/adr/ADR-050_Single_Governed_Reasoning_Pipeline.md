@@ -1,10 +1,10 @@
-# ADR-049 — Single Governed Reasoning Pipeline
+# ADR-050 — Single Governed Reasoning Pipeline
 
 | Field | Value |
 |---|---|
 | **Status** | Accepted |
 | **Date** | 2026-08-18 |
-| **Spec** | [SPEC-112](../specs/SPEC-112_Reasoning_Pipeline_Conformance.md) |
+| **Spec** | [SPEC-113](../specs/SPEC-113_Reasoning_Pipeline_Conformance.md) |
 | **Related** | [ADR-048](ADR-048_Intent_Selects_Analysis_Mode.md), [ADR-046](ADR-046_Intent_Determines_Response_Structure.md), [ADR-047](ADR-047_Intelligence_Before_Evidence.md), [ADR-045](ADR-045_Evidence_Before_Reasoning.md) |
 
 ## Context
@@ -36,5 +36,5 @@ Two pipelines cannot be the product. Advice from a Blueprint is not the same com
 
 ### Follow-ups
 
-- [x] SPEC-112 implementation
+- [x] SPEC-113 implementation
 - [ ] Surface pipeline log in workspace UI for operator debugging
