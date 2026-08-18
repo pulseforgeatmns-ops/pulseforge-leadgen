@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Anchor Cleaning ads-ready homepage + walkthrough intake
+  - Source page at `sites/anchor-cleaning/index.html` (copy to the GitHub Pages repo to ship)
+  - Visible `tel:+16034202430` Call/Text path, search-literal commercial-cleaning copy, and a short walkthrough form
+  - `POST /api/public/walkthrough` writes `agent_actions` for `client_id=10`
+  - Page emits `walkthrough_form_submit`, `phone_click`, and `email_click` for GA4 / Google Ads once IDs are pasted in
+
 - Max Development Framework ([SPEC-102F](docs/specs/SPEC-102F_Max_Development_Framework.md))
   - Competency lifecycle (not started → training → practicing → graduated → regression)
   - Operator training loop: real work → observe → review → principle → implement → retest → graduate
