@@ -210,6 +210,7 @@ app.use('/', require('./routes/clientIntelligence'));
 app.use('/', require('./routes/prospectOperatingBrief'));
 app.use('/', require('./routes/serviceModeOperatorLoop'));
 app.use('/', require('./routes/intelligenceSeedLibraries'));
+app.use('/', require('./routes/acquisitionIntelligenceModel'));
 app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));

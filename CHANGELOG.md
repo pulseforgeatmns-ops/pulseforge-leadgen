@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Acquisition Intelligence Model ([SPEC-112](docs/specs/SPEC-112_Acquisition_Intelligence_Model.md), [ADR-049](docs/adr/ADR-049_Understand_Market_Before_Selling.md))
+  - First-class AIM: mission, reasoning-based ICP, desired transformation, pain ontology, knowledge capture, messaging intelligence
+  - Fedir seed: founder-led → business-machine; People / Growth / Finance pains with observable signals
+  - Six-dimension qualification (ICP Fit, Pain Match, Evidence Quality, Buying Readiness, Confidence, Recommendation)
+  - Scout reasons over AIM when present; commercial-cleaning fit unchanged when AIM is absent
+  - Paige `aim_briefing` (likely pain, language, proof-or-unknown, CTA)
+  - Pilot status reports technical vs business milestones without inventing 50 prospects
+  - Competency `acquisition_intelligence_model` graduated 2026-08-18
+  - Numbering: the product brief called this SPEC-110; repository SPEC-110 remains Business Intelligence Synthesis
+
 - Max Operator Intent Taxonomy ([SPEC-111](docs/specs/SPEC-111_Operator_Intent_Taxonomy.md), [ADR-048](docs/adr/ADR-048_Intent_Selects_Analysis_Mode.md))
   - Explicit intent registry: Retrieval, Summary, Recommendation, Diagnosis, Unknown Analysis, Risk, Progress, Challenge, Investigation
   - Diagnosis, unknown analysis, risk, and progress select their own response contracts before reasoning

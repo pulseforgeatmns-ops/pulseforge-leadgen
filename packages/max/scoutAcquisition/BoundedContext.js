@@ -20,6 +20,8 @@ const BUSINESS_KEYS = Object.freeze([
   'targetMarket',
   'offer',
   'notes',
+  'aimClientKey',
+  'clientKey',
 ]);
 
 function asStringList(value) {

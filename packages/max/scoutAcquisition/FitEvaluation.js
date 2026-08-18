@@ -20,6 +20,7 @@ const {
 } = require('./Types');
 const { matchesGeography, matchesSegment } = require('./ExistingIntelligence');
 const { qualifyCandidate } = require('./InvestigationProvenance');
+const { evaluateIcpFit, qualifyProspect } = require('../../aim');
 
 const FACILITY_PATTERNS = [
   /\b(propert(?:y|ies)|portfolio|multifamily|managed (?:units|doors|buildings)|facilities|office park|campus)\b/i,
@@ -62,10 +63,50 @@ function facilityEvidence(candidate) {
 
 /**
  * Explainable basic-fit decision. Never writes buying intent from ICP/fit.
- *
- * @returns {object}
+ * SPEC-112: when an AIM is present, Scout reasons over that market model
+ * instead of the commercial-cleaning facility heuristic.
  */
+function evaluateAimBasicFit(candidate, aim) {
+  const icp = evaluateIcpFit(aim.icp, candidate);
+  if (icp.excluded) {
+    return {
+      level: FIT_LEVELS.REJECTED,
+      score: Number(icp.score.toFixed(2)),
+      basicFit: false,
+      reasons: icp.reasons,
+      intent: INTENT_STATES.UNKNOWN,
+      reasonCode: REJECTION_REASONS.EXCLUDED_SEGMENT,
+    };
+  }
+  const score = icp.score;
+  const level =
+    score >= 0.72 ? FIT_LEVELS.STRONG : score >= 0.5 ? FIT_LEVELS.MODERATE : FIT_LEVELS.WEAK;
+  if (!level || level === FIT_LEVELS.WEAK) {
+    return {
+      level: score < 0.35 ? FIT_LEVELS.REJECTED : FIT_LEVELS.WEAK,
+      score: Number(score.toFixed(2)),
+      basicFit: false,
+      reasons: icp.reasons.length
+        ? icp.reasons
+        : [`${candidate.name} does not yet resemble the AIM ICP.`],
+      intent: INTENT_STATES.UNKNOWN,
+      reasonCode: REJECTION_REASONS.INSUFFICIENT_BUSINESS_FIT,
+    };
+  }
+  return {
+    level,
+    score: Number(score.toFixed(2)),
+    basicFit: true,
+    reasons: icp.reasons,
+    intent: INTENT_STATES.UNKNOWN,
+    reasonCode: null,
+  };
+}
+
 function evaluateBasicFit(candidate, searchDefinition = {}) {
+  if (searchDefinition && searchDefinition.aim) {
+    return evaluateAimBasicFit(candidate, searchDefinition.aim);
+  }
   const reasons = [];
   const geography = searchDefinition.geography && searchDefinition.geography.label;
   const segments = searchDefinition.segments || [];
@@ -283,12 +324,22 @@ function attachFitToClassified(classified, candidate, searchDefinition, now = Da
   const evidence = collectBasicEvidence(candidate);
   const next = {
     ...classified,
+    observations: Array.isArray(classified.observations) ? classified.observations : [],
+    unknowns: Array.isArray(classified.unknowns) ? classified.unknowns : [],
+    signals: Array.isArray(classified.signals) ? classified.signals : [],
     fit: fit.score,
     fitLevel: fit.level,
     fitReasons: fit.reasons,
     intent: fit.intent,
     evidenceRefs: [...(classified.evidenceRefs || []), ...evidence],
   };
+  if (searchDefinition && searchDefinition.aim) {
+    next.aimQualification = qualifyProspect(searchDefinition.aim, {
+      ...candidate,
+      signals: next.signals || candidate.signals,
+      observations: next.observations || candidate.observations,
+    });
+  }
   if (fit.basicFit && !next.observations.some((o) => /basic fit|target profile/i.test(o.text || ''))) {
     next.observations = [
       ...next.observations,
@@ -388,6 +439,7 @@ async function enrichPeopleSafe(candidate, enrichPeople) {
 
 module.exports = {
   evaluateBasicFit,
+  evaluateAimBasicFit,
   collectBasicEvidence,
   classifyOpportunity,
   attachFitToClassified,

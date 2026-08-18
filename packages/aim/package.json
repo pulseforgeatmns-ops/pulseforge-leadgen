@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/aim",
+  "version": "0.1.0",
+  "description": "Acquisition Intelligence Model — understand a market before selling into it (SPEC-112 / ADR-049)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}
