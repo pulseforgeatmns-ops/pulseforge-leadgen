@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Acquisition Intelligence Compiler ([SPEC-113](docs/specs/SPEC-113_Acquisition_Intelligence_Compiler.md), [ADR-050](docs/adr/ADR-050_Compile_Market_Knowledge_Before_Runtime.md))
+  - Ingest market documents into a draft Acquisition Intelligence Workspace
+  - Extract sourced concepts (mission, ICP, pain, signals, language) — not summaries
+  - Construct a reasoning graph (supported_by / observed_through / excludes)
+  - Operator review: accept / edit / merge / remove; nothing publishes automatically
+  - Published AIM is the only Scout runtime knowledge; draft AIM and document bodies are not search inputs
+  - Compiler cannot execute outreach
+  - Competency `acquisition_intelligence_compiler` graduated 2026-08-18
+  - Numbering: the product brief called this SPEC-111; repository SPEC-111 remains Operator Intent Taxonomy
+
 - Acquisition Intelligence Model ([SPEC-112](docs/specs/SPEC-112_Acquisition_Intelligence_Model.md), [ADR-049](docs/adr/ADR-049_Understand_Market_Before_Selling.md))
   - First-class AIM: mission, reasoning-based ICP, desired transformation, pain ontology, knowledge capture, messaging intelligence
   - Fedir seed: founder-led → business-machine; People / Growth / Finance pains with observable signals

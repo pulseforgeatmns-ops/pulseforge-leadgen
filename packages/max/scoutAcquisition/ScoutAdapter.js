@@ -30,6 +30,7 @@ const { constructCandidateUniverse } = require('./CandidateUniverse');
 const { attachFitToClassified, enrichPeopleSafe } = require('./FitEvaluation');
 const { defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
 const { OPPORTUNITY_CLASSES } = require('./Types');
+const { isRuntimeAim } = require('../../aim');
 
 const OUTBOUND_RE = new RegExp(
   `\\b(${FORBIDDEN_OUTBOUND.join('|')}|send|enroll|publish|twilio|brevo|bland)\\b`,
@@ -509,14 +510,18 @@ function emptyInvestigationResult(input) {
 }
 
 function resolveAim(opts = {}, delegation = {}) {
-  if (opts.aim) return opts.aim;
+  if (opts.aim) return isRuntimeAim(opts.aim) ? opts.aim : null;
   const ctx = (delegation && delegation.businessContext) || {};
-  if (ctx.aim) return ctx.aim;
+  if (ctx.aim) return isRuntimeAim(ctx.aim) ? ctx.aim : null;
   const key = asText(opts.aimClientKey || ctx.aimClientKey || ctx.clientKey);
   if (!key) return null;
   const store = opts.aimStore;
+  if (store && typeof store.getPublishedAim === 'function') {
+    return store.getPublishedAim(key);
+  }
   if (store && typeof store.getAim === 'function') {
-    return store.getAim(key);
+    const loaded = store.getAim(key);
+    return isRuntimeAim(loaded) ? loaded : null;
   }
   return null;
 }

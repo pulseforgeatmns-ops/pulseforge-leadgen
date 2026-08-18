@@ -14,6 +14,7 @@ const {
 } = require('./Types');
 const { parseGeographyList } = require('./InvestigationProvenance');
 const { MANCHESTER_GEO, seedDiscoveryProfiles } = require('../../capabilities/discovery/seedProfiles');
+const { isRuntimeAim } = require('../../aim');
 
 const BUSINESS_NEED_ALIASES = Object.freeze({
   commercial_cleaning: 'commercial_cleaning',
@@ -181,7 +182,8 @@ function buildAcquisitionSearchDefinition(input = {}) {
   const desiredSignals = Array.isArray(target.desiredSignals)
     ? target.desiredSignals.map(asText).filter(Boolean)
     : [];
-  const aim = input.aim || business.aim || null;
+  const rawAim = input.aim || business.aim || null;
+  const aim = isRuntimeAim(rawAim) ? rawAim : null;
   const populationStatement = buildPopulationStatement({
     businessNeed,
     geography,

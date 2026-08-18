@@ -26,6 +26,15 @@ function getAim(clientKey, opts = {}) {
   return getAimStore(opts).getAim(clientKey || FEDIR_CLIENT_KEY);
 }
 
+function getPublishedAim(clientKey, opts = {}) {
+  const store = getAimStore(opts);
+  if (typeof store.getPublishedAim === 'function') {
+    return store.getPublishedAim(clientKey || FEDIR_CLIENT_KEY);
+  }
+  const aim = store.getAim(clientKey || FEDIR_CLIENT_KEY);
+  return aim && (aim.status === 'complete' || aim.status === 'published') ? aim : null;
+}
+
 function listAims(opts = {}) {
   return getAimStore(opts).listAims();
 }
@@ -62,6 +71,7 @@ module.exports = {
   FEDIR_CLIENT_KEY,
   getAimStore,
   getAim,
+  getPublishedAim,
   listAims,
   qualify,
   pilotStatus,

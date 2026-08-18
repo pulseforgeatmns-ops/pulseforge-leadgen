@@ -8,8 +8,15 @@
 const AIM_STATUS = Object.freeze({
   DRAFT: 'draft',
   COMPLETE: 'complete',
+  PUBLISHED: 'published',
   SUPERSEDED: 'superseded',
 });
+
+const RUNTIME_AIM_STATUSES = Object.freeze(['complete', 'published']);
+
+function isRuntimeAim(aim) {
+  return Boolean(aim && RUNTIME_AIM_STATUSES.includes(aim.status));
+}
 
 const SCORE_DIMENSIONS = Object.freeze([
   'icpFit',
@@ -88,6 +95,8 @@ function haystack(parts) {
 
 module.exports = {
   AIM_STATUS,
+  RUNTIME_AIM_STATUSES,
+  isRuntimeAim,
   SCORE_DIMENSIONS,
   RECOMMENDATIONS,
   PAIN_CATEGORIES,
