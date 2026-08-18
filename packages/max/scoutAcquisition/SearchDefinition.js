@@ -99,6 +99,13 @@ function geographyFromLabel(label, profile) {
 }
 
 function buildPopulationStatement(input = {}) {
+  if (input.aim && input.aim.mission && input.aim.mission.transformation) {
+    const icp = input.aim.icp && input.aim.icp.company && input.aim.icp.company.reasoning;
+    return (
+      `Organizations that resemble this AIM ICP — ${input.aim.mission.transformation}` +
+      (icp ? ` ICP reasoning: ${icp}` : '')
+    );
+  }
   const need = input.businessNeed || 'the delegated service';
   const geo = (input.geography && input.geography.label) || 'the approved service geography';
   const segments = input.segments || [];
@@ -174,16 +181,22 @@ function buildAcquisitionSearchDefinition(input = {}) {
   const desiredSignals = Array.isArray(target.desiredSignals)
     ? target.desiredSignals.map(asText).filter(Boolean)
     : [];
+  const aim = input.aim || business.aim || null;
   const populationStatement = buildPopulationStatement({
     businessNeed,
     geography,
     segments,
+    aim,
   });
-  const invalidReason = !geography || !geography.label
-    ? 'Geography could not be resolved.'
-    : !businessNeed && !segments.length
-      ? 'Acquisition target definition is incomplete.'
-      : null;
+  const invalidReason = aim
+    ? !(aim.mission && aim.mission.known && aim.painOntology)
+      ? 'AIM is incomplete — Scout will not search a market it does not understand.'
+      : null
+    : !geography || !geography.label
+      ? 'Geography could not be resolved.'
+      : !businessNeed && !segments.length
+        ? 'Acquisition target definition is incomplete.'
+        : null;
 
   return {
     tenantId,
@@ -200,6 +213,8 @@ function buildAcquisitionSearchDefinition(input = {}) {
     expansionRequiresAuthority: true,
     valid: !invalidReason,
     invalidReason,
+    aim: aim || null,
+    aimClientKey: aim ? aim.clientKey : asText(business.aimClientKey || business.clientKey) || null,
   };
 }
 

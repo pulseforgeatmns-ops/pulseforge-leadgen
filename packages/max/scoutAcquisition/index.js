@@ -21,7 +21,7 @@ const {
 const { retrieveExistingIntelligence, loadRepository } = require('./ExistingIntelligence');
 const { buildAcquisitionSearchDefinition } = require('./SearchDefinition');
 const { constructCandidateUniverse, createMemoryDiscoveryStore } = require('./CandidateUniverse');
-const { evaluateBasicFit } = require('./FitEvaluation');
+const { evaluateBasicFit, evaluateAimBasicFit, attachFitToClassified } = require('./FitEvaluation');
 const { resolveCandidate, resolveCandidateUniverse } = require('./EntityResolution');
 const { discoverCandidates, defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
 const {
@@ -397,6 +397,9 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
         enablePlaces: opts.enablePlaces,
         placesProvider: opts.placesProvider,
         mode: input.fixtureMode,
+        aim: opts.aim || input.aim,
+        aimStore: opts.aimStore,
+        aimClientKey: opts.aimClientKey || input.aimClientKey,
       },
     }
   );
@@ -487,6 +490,8 @@ module.exports = {
   constructCandidateUniverse,
   createMemoryDiscoveryStore,
   evaluateBasicFit,
+  evaluateAimBasicFit,
+  attachFitToClassified,
   resolveCandidate,
   resolveCandidateUniverse,
   discoverCandidates,

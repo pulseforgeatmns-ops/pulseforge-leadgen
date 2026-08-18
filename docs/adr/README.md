@@ -50,6 +50,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-046](ADR-046_Intent_Determines_Response_Structure.md) | Intent Determines Response Structure | Accepted |
 | [ADR-047](ADR-047_Intelligence_Before_Evidence.md) | Intelligence Before Evidence | Accepted |
 | [ADR-048](ADR-048_Intent_Selects_Analysis_Mode.md) | Intent Selects Analysis Mode | Accepted |
+| [ADR-049](ADR-049_Understand_Market_Before_Selling.md) | Understand the Market Before Selling Into It | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

@@ -508,6 +508,19 @@ function emptyInvestigationResult(input) {
   };
 }
 
+function resolveAim(opts = {}, delegation = {}) {
+  if (opts.aim) return opts.aim;
+  const ctx = (delegation && delegation.businessContext) || {};
+  if (ctx.aim) return ctx.aim;
+  const key = asText(opts.aimClientKey || ctx.aimClientKey || ctx.clientKey);
+  if (!key) return null;
+  const store = opts.aimStore;
+  if (store && typeof store.getAim === 'function') {
+    return store.getAim(key);
+  }
+  return null;
+}
+
 async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
   assertIntelligenceOnly(delegation);
   const startedAt = nowIso();
@@ -562,6 +575,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     businessContext: delegation.businessContext,
     operatorDirection:
       delegation.businessContext && delegation.businessContext.operatorDirection,
+    aim: resolveAim(opts, delegation),
   });
   if (!searchDefinition.valid) {
     const packed = emptyInvestigationResult({
@@ -1004,6 +1018,7 @@ function isScoutAcquisition(specialist, capability) {
 module.exports = {
   runScoutAcquisitionIntelligence,
   isScoutAcquisition,
+  resolveAim,
   buildConsumedContext,
   classifySignals,
   summarizeOpportunities,
