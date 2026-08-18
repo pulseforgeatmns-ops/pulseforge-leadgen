@@ -6,6 +6,8 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Anchor Cleaning public terminology: **facilities assessment** replaces walkthrough on the website, form, success message, lead emails, and CRM-visible action titles (backend routes/events unchanged)
+
 - Anchor Cleaning ads-ready homepage + walkthrough intake
   - Source page at `sites/anchor-cleaning/index.html` (copy to the GitHub Pages repo to ship)
   - Visible `tel:+16034202430` Call/Text path, search-literal commercial-cleaning copy, and a short walkthrough form

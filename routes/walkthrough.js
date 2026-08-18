@@ -10,7 +10,7 @@ const { captureWalkthroughLead } = require('../lib/walkthroughCapture');
 const router = express.Router();
 
 const SUCCESS_MESSAGE =
-  "Thanks. I'll reach out to set up a quick walkthrough and give you a clear monthly quote.";
+  "Thanks. I'll reach out to set up a quick facilities assessment and give you a clear monthly quote.";
 
 const rateBuckets = new Map();
 const RATE_WINDOW_MS = 60 * 60 * 1000;
