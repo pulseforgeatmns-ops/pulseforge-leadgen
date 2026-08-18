@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Max Business Intelligence Synthesis ([SPEC-110](docs/specs/SPEC-110_Business_Intelligence_Synthesis.md), [ADR-047](docs/adr/ADR-047_Intelligence_Before_Evidence.md))
+  - First-class intelligence objects (`finding`, `category`, `confidence`, `supporting_claims`, `operator_impact`)
+  - Retrieval, summary, and recommendation contracts lead with synthesized conclusions, then attributable evidence
+  - Channel-effectiveness questions fail closed as Unknown rather than speculation
+  - Competency `business_intelligence_synthesis` graduated 2026-08-18
+
 - Max Intent-Bound Response Selection ([SPEC-109](docs/specs/SPEC-109_Intent_Bound_Response_Selection.md), [ADR-046](docs/adr/ADR-046_Intent_Determines_Response_Structure.md))
   - Response contract registry: Retrieval, Summary, Recommendation, Challenge, Investigation
   - Contract selected after intent classification and before retrieval or specialist delegation

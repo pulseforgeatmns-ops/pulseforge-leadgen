@@ -128,3 +128,4 @@ Exact integration extends:
 
 - Presentation-layer formatting of contract sections in the Workspace UI
 - Additional contracts (planning, execution confirmation) if those intents need the same split
+- SPEC-110 adds a required Business Intelligence section in front of Retrieval, Summary, and Recommendation evidence without changing contract selection

@@ -99,6 +99,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-105](SPEC-105_Max_Operating_Evidence_Retrieval.md) | Max Operating Evidence Retrieval | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-106](SPEC-106_Operator_Reported_Operating_Evidence.md) | Operator-Reported Operating Evidence | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-109](SPEC-109_Intent_Bound_Response_Selection.md) | Intent-Bound Response Selection | Implemented (v1) | v0.1 |
+| [SPEC-110](SPEC-110_Business_Intelligence_Synthesis.md) | Business Intelligence Synthesis | Implemented (v1) | v0.1 |
 | [SPEC-102F](SPEC-102F_Max_Development_Framework.md) | Max Development Framework | Foundation (v1 thin slice) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |

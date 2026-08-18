@@ -46,6 +46,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-044](docs/adr/ADR-044_Prospect_Acquisition_Independence.md) | Prospect Acquisition Independence | Accepted | Campaigns operate on ProspectLists; Discovery is one acquisition strategy among many |
 | [ADR-045](docs/adr/ADR-045_Evidence_Before_Reasoning.md) | Evidence Before Reasoning | Accepted | Domains collect evidence and do not recommend; reasoning engines consume evidence; facts persist, conclusions are ephemeral |
 | [ADR-046](docs/adr/ADR-046_Intent_Determines_Response_Structure.md) | Intent Determines Response Structure | Accepted | Operator intent selects a response contract before retrieval or delegation; advice is not a universal response type |
+| [ADR-047](docs/adr/ADR-047_Intelligence_Before_Evidence.md) | Intelligence Before Evidence | Accepted | Max synthesizes first-class business intelligence from grounded claims before presenting evidence; insufficient evidence is Unknown |
 
 ## How to add a decision
 
