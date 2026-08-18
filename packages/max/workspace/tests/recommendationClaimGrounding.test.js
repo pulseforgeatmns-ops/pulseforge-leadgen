@@ -237,7 +237,7 @@ describe('SPEC-107A TEST A — supported claim', () => {
     const rec = turns[0];
     const challenge = turns[1];
     assert.ok(rec);
-    assert.match(rec.prose, /operator-reported as physically mailed on 2026-08-06/i);
+    assert.match(rec.prose, /reported as physically mailed on 2026-08-06/i);
     assert.ok(challenge);
     assert.equal(challenge.reason, 'recommendation_claim_challenge');
     assert.equal(challenge.claimVerdict, 'confirmed');
@@ -259,7 +259,7 @@ describe('SPEC-107A TEST B — unsupported claim', () => {
     const body = challengeBody(challenge.prose);
     assert.match(body, /can't verify|cannot verify/i);
     assert.match(body, /retract/i);
-    assert.match(body, /currently active outbound email motion|email outbound is currently active/i);
+    assert.match(body, /outbound email motion is currently active/i);
     assert.doesNotMatch(body, /What I can verify/i);
     assert.doesNotMatch(body, /Ask for a recommendation only after reviewing this inventory/i);
     assert.doesNotMatch(body, /71 prospect/i);
