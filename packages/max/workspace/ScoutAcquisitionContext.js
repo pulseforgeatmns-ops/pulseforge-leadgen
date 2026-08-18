@@ -201,6 +201,7 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
     (session && session.context && session.context.investigationKnown) ||
     (result.need && result.need.reason) ||
     'Existing acquisition intelligence was inspected before deciding whether Scout needed new work.';
+  const { attachPipelineLog } = require('./ReasoningPipeline');
   const contract =
     input.responseContract ||
     (session && session.context && session.context.responseContract) ||
@@ -223,7 +224,8 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
       .join('\n\n');
   }
 
-  const structured = attachContractMetadata(
+  const structured = attachPipelineLog(
+    attachContractMetadata(
     buildStructuredResponse({
     answer: prose,
     reasoning: [
@@ -283,6 +285,8 @@ async function maybeHandleScoutAcquisitionTurn(input = {}) {
     },
   }),
     contract
+  ),
+    { analysis: { intent: 'investigation', analysisMode: 'investigation', kind: 'investigation' }, contract }
   );
 
   return {
