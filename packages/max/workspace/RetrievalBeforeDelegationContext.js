@@ -361,6 +361,14 @@ async function maybeHandleClaimChallengeTurn(input, question, mode) {
     correction,
     revised: null,
   });
+  if (
+    preview.evaluation.verdict === 'retract' &&
+    preview.claim &&
+    preview.claim.id &&
+    !extras.retractedPremises.includes(preview.claim.id)
+  ) {
+    extras.retractedPremises = [...extras.retractedPremises, preview.claim.id];
+  }
   const shouldRevise = preview.evaluation.verdict === 'retract' || correction;
   const revised = shouldRevise
     ? composeEvidenceGroundedRecommendation(bundle, extras)
@@ -400,9 +408,9 @@ async function maybeHandleClaimChallengeTurn(input, question, mode) {
       `Classified operator intent as claim challenge (${mode.kind}).`,
       'Retrieved evidence relevant to the challenged claim instead of restating the full operating inventory.',
       handled.evaluation.verdict === 'retract'
-        ? 'The challenged operating-state premise was unsupported. It was retracted and is not persisted as operating fact.'
+        ? 'The challenged operating-state premise was unsupported. It was retracted, the recommendation was rebuilt from supported claims only, and nothing was persisted as operating fact.'
         : handled.evaluation.verdict === 'qualified'
-          ? 'The challenged claim was qualified: planned or expected is not completed execution.'
+          ? 'The challenged claim was qualified: planned, inventory, or objectives are not observed execution.'
           : 'The challenged claim was confirmed from retrieved evidence, not from the prior wording alone.',
       'No action was executed.',
     ],
@@ -427,8 +435,8 @@ async function maybeHandleClaimChallengeTurn(input, question, mode) {
 function relevantChallengeItems(bundle, claim) {
   const items = Array.isArray(bundle.items) ? bundle.items : [];
   const topic = claim && claim.topic;
-  if (topic === 'mail') {
-    return items.filter((item) => /mail|operator/i.test(String((item && (item.claim || item.provenance)) || '')));
+  if (topic === 'mail' || topic === 'campaign_completed') {
+    return items.filter((item) => /mail|operator|deliver/i.test(String((item && (item.claim || item.provenance)) || '')));
   }
   if (topic === 'follow_up') {
     return items.filter((item) => /follow/i.test(String((item && item.claim) || '')));
@@ -436,6 +444,16 @@ function relevantChallengeItems(bundle, claim) {
   if (topic === 'email_motion') {
     return items.filter((item) =>
       /email|emmett|touchpoint|activity|mission/i.test(String((item && (item.claim || item.provenance || item.sourceKind)) || ''))
+    );
+  }
+  if (topic === 'outreach_begun' || topic === 'inventory') {
+    return items.filter((item) =>
+      /prospect|scout|inventory|outreach/i.test(String((item && (item.claim || item.provenance || item.sourceKind)) || ''))
+    );
+  }
+  if (topic === 'commercial_expansion' || topic === 'objective') {
+    return items.filter((item) =>
+      /objective|goal|blueprint|commercial/i.test(String((item && (item.claim || item.provenance || item.sourceKind)) || ''))
     );
   }
   return items.slice(0, 3);

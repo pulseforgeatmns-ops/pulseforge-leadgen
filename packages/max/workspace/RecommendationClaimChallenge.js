@@ -1,11 +1,22 @@
 'use strict';
 
 /**
- * SPEC-107A — targeted claim challenge, retraction, and working-model correction.
+ * SPEC-107A / SPEC-108 — targeted claim challenge, retraction, and
+ * working-model correction.
  *
- * Does not persist Max-generated statements as operating facts.
- * Does not create a new memory store. Session working model only.
+ * Challenge handling is domain-general: identify the operating-state
+ * claim, evaluate it against retrieved evidence, then confirm, qualify,
+ * retract, or revise. Does not persist Max-generated statements as
+ * operating facts. Session working model only.
  */
+
+const {
+  TOPICS,
+  evaluateOperatingStateClaim,
+  identifyClaimTopic,
+  assertedTextForTopic,
+  formatChallengeResponse,
+} = require('./ClaimGrounding');
 
 const CLAIM_CHALLENGE_RE = new RegExp(
   [
@@ -17,7 +28,9 @@ const CLAIM_CHALLENGE_RE = new RegExp(
     String.raw`\byou said\b.{0,120}\bwhat evidence\b`,
     String.raw`\bwhy do you (?:think|believe|say)\b`,
     String.raw`\bthat(?:'s| is) not right\b`,
-    String.raw`\bthat(?:'s| is) (?:wrong|incorrect|unsupported)\b`,
+    String.raw`\bthat(?:'s| is) (?:wrong|incorrect|unsupported|not true)\b`,
+    String.raw`\bthat isn'?t true\b`,
+    String.raw`\bthat isn'?t (?:right|correct|accurate)\b`,
   ].join('|'),
   'i'
 );
@@ -80,16 +93,16 @@ function retractedIdsFrom(input = {}) {
 
 function defaultEmailClaim() {
   return {
-    id: 'email_motion',
-    topic: 'email_motion',
+    id: TOPICS.EMAIL_MOTION,
+    topic: TOPICS.EMAIL_MOTION,
     text: 'An outbound email motion is already active.',
     kind: 'inferred',
-    support: 'unknown',
+    support: 'unsupported',
   };
 }
 
 function looksLikeAssertedActiveEmail(premise) {
-  if (!premise || premise.topic !== 'email_motion') return false;
+  if (!premise || premise.topic !== TOPICS.EMAIL_MOTION) return false;
   const text = String(premise.text || premise.claim || '');
   if (/cannot verify|not verify|do not establish|not currently active|not verified|disabled|planned or intended/i.test(text)) {
     return false;
@@ -100,33 +113,30 @@ function looksLikeAssertedActiveEmail(premise) {
   );
 }
 
-function identifyChallengedClaim(question, lastRecommendation = null) {
-  const q = present(question).toLowerCase();
-  const premises = (lastRecommendation && lastRecommendation.premises) || [];
+function premiseForTopic(premises, topic) {
+  return (premises || []).find((p) => p && p.topic === topic);
+}
 
-  if (/email|outbound|emmett|autosend|sending/i.test(q)) {
-    const found = premises.find((p) => p.topic === 'email_motion');
-    if (/already active|currently active|is active|is running|is executing/i.test(q)) {
+function identifyChallengedClaim(question, lastRecommendation = null) {
+  const premises = (lastRecommendation && lastRecommendation.premises) || [];
+  const topic = identifyClaimTopic(question);
+  const asserted = assertedTextForTopic(topic, question);
+
+  if (topic) {
+    const found = premiseForTopic(premises, topic);
+    if (found) {
       return {
-        ...(found || defaultEmailClaim()),
-        text: 'An outbound email motion is already active.',
-        kind: (found && found.kind) || 'inferred',
-        support: (found && found.support) || 'unknown',
+        ...found,
+        text: asserted || found.text || found.claim,
       };
     }
-    return found || defaultEmailClaim();
-  }
-  if (/mail(?:ed)?|august|postage/i.test(q) && !/email/i.test(q)) {
-    return (
-      premises.find((p) => p.topic === 'mail') || {
-        id: 'mail',
-        topic: 'mail',
-        text: 'Campaign 001 was mailed.',
-      }
-    );
-  }
-  if (/follow[- ]up/i.test(q)) {
-    return premises.find((p) => p.topic === 'follow_up') || { id: 'follow_up', topic: 'follow_up' };
+    return {
+      id: topic,
+      topic,
+      text: asserted || (topic === TOPICS.EMAIL_MOTION ? defaultEmailClaim().text : topic),
+      kind: 'inferred',
+      support: 'unsupported',
+    };
   }
 
   if (lastRecommendation && lastRecommendation.lastClaim) {
@@ -137,148 +147,12 @@ function identifyChallengedClaim(question, lastRecommendation = null) {
   return premises.find((p) => p.topic && p.topic !== 'next_constraint') || premises[0] || defaultEmailClaim();
 }
 
-function evaluateEmailClaim(state) {
-  const motion = state.emailMotion || {};
-  if (motion.kind === 'active' && motion.current === true) {
-    return {
-      supported: true,
-      verdict: 'confirmed',
-      epistemic: 'verified',
-      detail:
-        'Current execution evidence records an outbound email motion in progress. That is distinct from historical sends or a planned mission.',
-    };
-  }
-  if (motion.kind === 'historical') {
-    return {
-      supported: false,
-      verdict: 'retract',
-      epistemic: 'verified',
-      detail:
-        'Historical email touchpoints exist, but they do not establish that email outbound is currently active.',
-    };
-  }
-  if (motion.kind === 'planned') {
-    return {
-      supported: false,
-      verdict: 'retract',
-      epistemic: 'verified',
-      detail:
-        'An email-related mission is on file as planned/intent work. A mission is not execution.',
-    };
-  }
-  if (motion.kind === 'disabled') {
-    return {
-      supported: false,
-      verdict: 'retract',
-      epistemic: 'verified',
-      detail:
-        'Emmett exists but is disabled for this tenant. Disabled is not active.',
-    };
-  }
-  return {
-    supported: false,
-    verdict: 'retract',
-    epistemic: 'not_recorded',
-    detail:
-      'The evidence I retrieved establishes prospect inventory and historical activity, but neither proves current email execution.',
-  };
-}
-
-function evaluateMailClaim(state) {
-  if (state.mailAttestedAt) {
-    return {
-      supported: true,
-      verdict: 'confirmed',
-      epistemic: 'operator_attested',
-      detail: `${state.campaignName} was operator-reported as physically mailed on ${state.mailAttestedAt}. Provenance: operator report (SPEC-106). That is operator-attested, not independently system-observed.`,
-    };
-  }
-  if (state.mailExecuted) {
-    return {
-      supported: true,
-      verdict: 'confirmed',
-      epistemic: 'verified',
-      detail: `System-verified evidence records that ${state.campaignName} was mailed.`,
-    };
-  }
-  return {
-    supported: false,
-    verdict: 'retract',
-    epistemic: 'not_recorded',
-    detail: `I cannot verify that ${state.campaignName} was mailed.`,
-  };
-}
-
-function evaluateFollowUpClaim(state) {
-  const follow = state.followUp || {};
-  if (follow.kind === 'completed') {
-    return {
-      supported: true,
-      verdict: 'confirmed',
-      epistemic: 'verified',
-      detail: `Follow-up on ${state.campaignName} has recorded execution evidence.`,
-    };
-  }
-  if (follow.expectedAt) {
-    return {
-      supported: true,
-      verdict: 'qualified',
-      epistemic: 'planned',
-      detail: `Follow-up was planned/expected ${follow.expectedAt}. That is not recorded execution.`,
-    };
-  }
-  return {
-    supported: false,
-    verdict: 'retract',
-    epistemic: 'not_recorded',
-    detail: 'I cannot verify that follow-up is underway.',
-  };
-}
-
 function evaluateClaim(claim, state) {
-  const topic = claim && claim.topic;
-  if (topic === 'mail') return evaluateMailClaim(state);
-  if (topic === 'follow_up') return evaluateFollowUpClaim(state);
-  return evaluateEmailClaim(state);
+  return evaluateOperatingStateClaim(claim, state);
 }
 
 function composeChallengeAnswer({ claim, evaluation, revised, correction }) {
-  const claimText = present(claim && claim.text) || 'that statement';
-  const parts = [];
-
-  if (correction) {
-    parts.push(
-      'I accept that as an operator-attested correction of my working model. I will not continue asserting that outbound email is currently active. This does not invent a new durable operating event.'
-    );
-  }
-
-  if (evaluation.verdict === 'confirmed') {
-    parts.push(`The challenged claim was: ${claimText}`);
-    parts.push(evaluation.detail);
-    parts.push('I am confirming that claim from retrieved evidence, not from my prior wording.');
-  } else if (evaluation.verdict === 'qualified') {
-    parts.push(`The challenged claim was: ${claimText}`);
-    parts.push(evaluation.detail);
-    parts.push('I am qualifying that claim: planned/expected is not completed execution.');
-  } else {
-    parts.push(`The challenged claim was: ${claimText}`);
-    if (/email|outbound/i.test(claimText) && (claim && claim.topic === 'email_motion')) {
-      parts.push(
-        `I can't verify that an outbound email motion is currently active. ${evaluation.detail} I retract that statement.`
-      );
-    } else {
-      parts.push(`I can't verify that claim. ${evaluation.detail}`);
-      parts.push('I retract that statement.');
-    }
-  }
-
-  if (revised && evaluation.verdict === 'retract') {
-    parts.push('');
-    parts.push('REVISED RECOMMENDATION');
-    parts.push(revised.prose);
-  }
-
-  return parts.join('\n');
+  return formatChallengeResponse({ claim, evaluation, revised, correction });
 }
 
 function recordWorkingModel(sessionCtx, extras = {}) {

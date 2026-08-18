@@ -66,6 +66,14 @@ describe('SPEC-102F Max Development Framework', () => {
     }
   });
 
+  test('claim_grounding is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('claim_grounding');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-108'));
+    assert.match(competency.exercises[0].generalLesson, /supported operating-state claims/i);
+    assert.match(competency.exercises[0].transferTest, /has outreach begun/i);
+  });
+
   test('retrieve_before_delegation exercise includes transfer test', () => {
     const competency = training.getCompetency('retrieve_before_delegation');
     const exercise = competency.exercises[0];
