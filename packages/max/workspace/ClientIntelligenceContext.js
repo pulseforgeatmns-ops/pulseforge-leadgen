@@ -1374,6 +1374,7 @@ function isOperationalDeskOrMissionRequest(question) {
       q
     ) ||
     /\bbuild\s+campaign\b/.test(q) ||
+    /\bexecution audit\b/.test(q) ||
     /\bmonitor\b/.test(q) ||
     /\bcommand\s+deck\b/.test(q) ||
     /\bpacket\s+review\b/.test(q) ||

@@ -40,7 +40,7 @@ describe('SPEC-105 operating evidence classification', () => {
     }
   });
 
-  it('keeps business-understanding questions on the CIE/SPEC-103 path', () => {
+  it('does not treat business-understanding questions as operating evidence or CIE advisory', () => {
     assert.equal(
       isOperatingEvidenceQuestion('What do you currently understand about Anchor Cleaning?'),
       false
@@ -50,7 +50,7 @@ describe('SPEC-105 operating evidence classification', () => {
       shouldClaimClientIntelligenceTurn('Who are our ideal customers?', null, {
         approvedBlueprint: true,
       }),
-      true
+      false
     );
   });
 

@@ -61,17 +61,18 @@ function isExecutionKind(kind) {
 }
 
 /**
- * Unknown / planning / unclassified intent fails toward Retrieval.
- * Execution is not a reasoning contract.
+ * Unknown client-business intent fails toward Retrieval.
+ * Planning, execution, mission, and non-business chatter are not reasoning
+ * contracts — they must not be captured by the retrieval fallback.
  */
-function resolveAnalysisMode(cognitive, question) {
+function resolveAnalysisMode(cognitive, question, session) {
   const raw =
     cognitive && typeof cognitive === 'object'
       ? cognitive
       : classifyCognitiveMode(question);
   const kind = raw.kind || COGNITIVE_MODES.UNCLASSIFIED;
 
-  if (isExecutionKind(kind)) {
+  if (isExecutionKind(kind) || kind === COGNITIVE_MODES.PLANNING) {
     return {
       ...raw,
       kind,
@@ -82,15 +83,43 @@ function resolveAnalysisMode(cognitive, question) {
     };
   }
 
-  if (
-    kind === COGNITIVE_MODES.UNCLASSIFIED ||
-    kind === COGNITIVE_MODES.PLANNING
-  ) {
+  if (kind === COGNITIVE_MODES.UNCLASSIFIED) {
+    let clientReasoning = false;
+    let workspaceWorkflow = false;
+    try {
+      const cie = require('./ClientIntelligenceContext');
+      clientReasoning = cie.isClientContextReasoningRequest(question, session);
+      workspaceWorkflow = cie.isOperationalDeskOrMissionRequest(question);
+    } catch (_) {
+      clientReasoning = false;
+    }
+    try {
+      const objectives = require('../../../services/operatorObjectives');
+      if (
+        objectives.detectObjectiveEstablishment(question) ||
+        objectives.looksLikeObjectiveStatusRequest(question) ||
+        objectives.looksLikeObjectiveContentRequest(question)
+      ) {
+        workspaceWorkflow = true;
+      }
+    } catch (_) {
+      /* objective detectors unavailable */
+    }
+    if (!clientReasoning || workspaceWorkflow) {
+      return {
+        ...raw,
+        kind,
+        intent: raw.intent || null,
+        analysisMode: raw.analysisMode || null,
+        fallbackUsed: false,
+        governed: false,
+      };
+    }
     const intent = OPERATOR_INTENTS.RETRIEVAL;
     return {
       ...raw,
       kind: COGNITIVE_MODES.RETRIEVAL,
-      via: raw.via === 'planning' ? 'planning_to_retrieval' : 'unknown_intent_fallback',
+      via: 'unknown_intent_fallback',
       intent,
       analysisMode: intent,
       requiresOperatingRetrieval: true,
@@ -138,7 +167,7 @@ function bindGovernedReasoning(question, input = {}) {
       session: input.session,
       context: input.context,
     });
-  const analysis = resolveAnalysisMode(cognitive, question);
+  const analysis = resolveAnalysisMode(cognitive, question, input.session);
   const contract = resolveResponseContract(question, analysis);
   const session = input.session || null;
   if (session && session.context && typeof session.context === 'object' && contract) {

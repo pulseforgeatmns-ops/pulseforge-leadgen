@@ -135,13 +135,20 @@ describe('AUDIT-001 analysis mode table', () => {
   }
 
   it('unknown intent fails toward Retrieval, never Recommendation', () => {
-    const bound = bindGovernedReasoning('hmm interesting', {
+    const bound = bindGovernedReasoning('What would make the beachhead wobble first?', {
       session: { context: sessionContext() },
     });
     assert.equal(bound.analysis.kind, COGNITIVE_MODES.RETRIEVAL);
     assert.equal(bound.analysis.fallbackUsed, true);
     assert.equal(bound.contract.id, CONTRACT_IDS.RETRIEVAL);
     assert.notEqual(bound.contract.id, CONTRACT_IDS.RECOMMENDATION);
+
+    const chatter = bindGovernedReasoning('hmm interesting');
+    assert.notEqual(chatter.analysis.kind, COGNITIVE_MODES.RECOMMENDATION);
+    assert.notEqual(
+      chatter.contract && chatter.contract.id,
+      CONTRACT_IDS.RECOMMENDATION
+    );
   });
 });
 
@@ -162,6 +169,22 @@ describe('AUDIT-001 no Blueprint Advisory responder', () => {
       }
     });
   }
+
+  it('yields Paige/objective content asks instead of composing a governed recommendation', async () => {
+    const context = sessionContext();
+    const question = 'What should we publish next for the launch?';
+    const bound = bindGovernedReasoning(question, { session: { context } });
+    const turn = await maybeHandleRetrievalBeforeDelegationTurn({
+      question,
+      session: { id: 'audit-001-paige', context },
+      context,
+      cognitive: bound.analysis,
+      responseContract: bound.contract,
+      operatingEvidenceOpts: operatingOpts(),
+    });
+    assert.equal(turn, null);
+    assert.doesNotMatch(question, BLUEPRINT_ADVISORY_RE);
+  });
 
   it('business-framed next-action does not invoke Blueprint Advisory', async () => {
     const context = sessionContext();

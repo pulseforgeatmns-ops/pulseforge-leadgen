@@ -383,7 +383,18 @@ async function maybeHandlePlanProviderTurn(input, question, mode, contract) {
     null;
   if (!summary || !summary.approved) return null;
 
-  const composed = cie.composeClientContextReasoning(summary, question, { session });
+  const composeSession = ownerFollow
+    ? {
+        context: {
+          lastClientIntelligenceTurn: session.context.lastClientIntelligenceTurn,
+          clientIntelligence: session.context.clientIntelligence,
+        },
+      }
+    : session;
+  const composed = cie.composeClientContextReasoning(summary, question, {
+    session: composeSession,
+    mode: ownerFollow ? 'approach' : undefined,
+  });
   if (!composed || !composed.prose) return null;
   if (ADVISORY_ESSAY_RE.test(composed.prose)) return null;
   if (composed.kind && !PLAN_PROVIDER_KINDS.has(composed.kind)) return null;
@@ -826,8 +837,9 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
       context: input.context,
     });
   const contract =
-    input.responseContract ||
-    selectResponseContract(question, mode);
+    input.responseContract === undefined
+      ? selectResponseContract(question, mode)
+      : input.responseContract;
 
   if (input.session && input.session.context && typeof input.session.context === 'object') {
     input.session.context.lastResponseContract = contract && contract.id;
@@ -847,8 +859,66 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
     return null;
   }
 
-  if (mode && mode.kind === COGNITIVE_MODES.EXECUTION) {
+  try {
+    const cie = require('./ClientIntelligenceContext');
+    if (cie.shouldUseExecutionClarification(question, input.session)) {
+      return null;
+    }
+    if (cie.isClientContextExecutionRequest(question)) {
+      return null;
+    }
+    if (cie.isOperationalDeskOrMissionRequest(question)) {
+      return null;
+    }
+  } catch (_) {
+    /* CIE workflow detectors unavailable */
+  }
+  try {
+    const { classifyAdvisoryHandoffIntent } = require('./ActiveClientReasoning');
+    if (classifyAdvisoryHandoffIntent(question, input.session)) {
+      return null;
+    }
+  } catch (_) {
+    /* handoff classifier unavailable */
+  }
+
+  if (mode && (mode.kind === COGNITIVE_MODES.EXECUTION || mode.kind === COGNITIVE_MODES.PLANNING)) {
     return null;
+  }
+
+  try {
+    const { isOperatorOperatingUpdate } = require('./OperatorOperatingUpdate');
+    if (isOperatorOperatingUpdate(question)) {
+      return null;
+    }
+  } catch (_) {
+    /* operating-update detector unavailable */
+  }
+
+  // SPEC-095 — objective recovery and Paige content routing happen after
+  // retrieval. Yield so recovered launch/campaign context can attach.
+  // Do not compose a governed recommendation for specialist content asks.
+  try {
+    const objectives = require('../../../services/operatorObjectives');
+    if (
+      typeof objectives.looksLikeObjectiveContentRequest === 'function' &&
+      objectives.looksLikeObjectiveContentRequest(question)
+    ) {
+      return null;
+    }
+  } catch (_) {
+    /* objective content detector unavailable */
+  }
+  try {
+    const delegation = require('../../../services/maxPaigeCampaignDelegation');
+    if (
+      typeof delegation.shouldDelegateToPaige === 'function' &&
+      delegation.shouldDelegateToPaige(question, input.context || {})
+    ) {
+      return null;
+    }
+  } catch (_) {
+    /* Paige detector unavailable */
   }
 
   if (contract && contract.id === CONTRACT_IDS.INVESTIGATION) {
@@ -905,6 +975,48 @@ async function maybeHandleRetrievalBeforeDelegationTurn(input = {}) {
     contract
   );
   if (planTurn) return planTurn;
+
+  try {
+    const cie = require('./ClientIntelligenceContext');
+    if (
+      cie.isEvidenceDependentClientRequest(question) &&
+      !shouldRetrieveOperatingEvidence(question)
+    ) {
+      const sources = await inspectRetrievalSources(input);
+      const summary = (sources && sources.blueprint) || {};
+      const prose = cie.formatEvidenceDependentGapAnswer(summary);
+      const structured = attachPipelineLog(
+        attachContractMetadata(
+          workspaceStructured(prose, {
+            used: summary && summary.approved ? ['blueprint'] : [],
+            cognitiveMode: mode && mode.kind,
+            responseContract: contract && contract.id,
+            reasoning: [
+              `Classified operator intent as ${mode && mode.kind}.`,
+              'Evidence-dependent question — Blueprint names the desired audience. Live market or prospect evidence is missing. I will not invent companies or buying signals.',
+            ],
+            evidenceCount: summary && summary.approved ? 1 : 0,
+            unavailable: ['live_buying_signals', 'market_intelligence'],
+          }),
+          contract
+        ),
+        { analysis: mode, contract }
+      );
+      return {
+        reason: 'governed_evidence_gap',
+        structured,
+        prose,
+        mode,
+        sourcesUsed: summary && summary.approved ? ['blueprint'] : [],
+        knowledgeState: sources && sources.knowledgeState,
+        delegated: false,
+        launchedScout: false,
+        responseContract: contract,
+      };
+    }
+  } catch (_) {
+    /* evidence-gap provider unavailable */
+  }
 
   const analytical =
     mode &&

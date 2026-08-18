@@ -347,6 +347,7 @@ function assembleOperatingState(bundle = {}, extras = {}) {
     targetCustomers: present(contract.targetCustomers || ''),
     targetGeography: present(contract.targetGeography || contract.serviceArea || ''),
     businessGoals: present(contract.businessGoals || ''),
+    successMetrics: present(contract.successMetrics || ''),
     commercialPreference: Boolean(
       contract.commercialPreference ||
         (understanding && understanding.commercialPreference)
@@ -416,6 +417,11 @@ function factLines(state) {
   }
   if (state.businessGoals) {
     lines.push(`GOAL (approved Blueprint): ${state.businessGoals}.`);
+  }
+  if (state.successMetrics) {
+    lines.push(
+      `GOAL (approved Blueprint — success metric, not observed outcome): ${state.successMetrics}.`
+    );
   }
   if (state.aoLeads > 0) {
     lines.push(

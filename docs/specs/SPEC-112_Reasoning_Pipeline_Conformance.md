@@ -99,7 +99,9 @@ No prompt may invoke Blueprint Advisory directly.
 3. CIE advisory synthesis is a provider, not an operator-facing responder
 4. Retrieval no longer returns null for classified recommendations so CIE cannot intercept
 5. Plan continuity (decompose, step select/advance) uses ActiveClientReasoning as evidence inside the same pipeline
-6. Competency `reasoning_pipeline_conformance`
+6. Retrieval yields Paige / operator-objective content asks so specialists remain providers, not competing composers
+7. Unknown-intent Retrieval fallback is limited to client-business reasoning (not desk, mission, or planning chatter)
+8. Competency `reasoning_pipeline_conformance`
 
 ## Out of Scope
 
