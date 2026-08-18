@@ -111,6 +111,7 @@ describe('walkthrough capture', () => {
       assert.equal(stored.client_id, ANCHOR_CLIENT_ID);
       assert.equal(insert.params[0], 'website');
       assert.equal(insert.params[1], ACTION_TYPE);
+      assert.equal(insert.params[2], 'Facilities assessment request — Riverside Law');
       assert.equal(insert.params[5], 10);
       const payload = JSON.parse(insert.params[4]);
       assert.equal(payload.source, 'website_walkthrough');
@@ -151,7 +152,7 @@ describe('walkthrough public route', () => {
     assert.equal(res.status, 201);
     assert.equal(res.json.ok, true);
     assert.equal(res.json.submission_id, 8801);
-    assert.match(res.json.message, /clear monthly quote/i);
+    assert.match(res.json.message, /facilities assessment/i);
   });
 
   it('returns field errors without internals', async () => {
@@ -176,7 +177,7 @@ describe('Anchor homepage ads contract', () => {
 
   it('uses the Search-ready title, description, and headline', () => {
     assert.match(html, /<title>Commercial Office Cleaning in Manchester, NH \| Anchor Cleaning<\/title>/);
-    assert.match(html, /content="Anchor Cleaning provides recurring commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH\. Request a walkthrough\."/);
+    assert.match(html, /content="Anchor Cleaning provides recurring commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH\. Request a facilities assessment\."/);
     assert.match(html, /<h1[^>]*>A standing service for offices that/);
     assert.match(html, /Commercial office cleaning in Greater Manchester, NH/);
     assert.match(html, /Commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH\./);
@@ -189,8 +190,13 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, /Greater Manchester, New Hampshire .*commercial office cleaning &amp; janitorial service/);
   });
 
-  it('includes the walkthrough form, trust line, and conversion events', () => {
-    assert.match(html, /Walk me through your space\. Ten minutes\./);
+  it('includes the facilities assessment form, trust line, and conversion events', () => {
+    assert.match(html, /Schedule a facilities assessment\. Ten minutes\./);
+    assert.match(html, /Tell me a little about your facility and we'll set a quick assessment\./);
+    assert.match(html, /Request a facilities assessment/);
+    assert.doesNotMatch(html, />\s*Request a walkthrough\s*</);
+    assert.doesNotMatch(html, /Walk me through your space/);
+    assert.doesNotMatch(html, /quick walkthrough/i);
     assert.match(html, /name="name"/);
     assert.match(html, /name="business_name"/);
     assert.match(html, /name="phone"/);
@@ -207,6 +213,6 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, /phone_click/);
     assert.match(html, /email_click/);
     assert.match(html, /\/api\/public\/walkthrough/);
-    assert.match(html, /Thanks\. I'll reach out to set up a quick walkthrough and give you a clear monthly quote\./);
+    assert.match(html, /Thanks\. I'll reach out to set up a quick facilities assessment and give you a clear monthly quote\./);
   });
 });

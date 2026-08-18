@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Commercial Office Cleaning in Manchester, NH | Anchor Cleaning</title>
-<meta name="description" content="Anchor Cleaning provides recurring commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH. Request a walkthrough.">
+<meta name="description" content="Anchor Cleaning provides recurring commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH. Request a facilities assessment.">
 <link rel="canonical" href="https://goanchorcleaning.com/">
 <meta property="og:title" content="Commercial Office Cleaning in Manchester, NH | Anchor Cleaning">
 <meta property="og:description" content="Recurring commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH.">
@@ -141,7 +141,7 @@
       <div class="mast-meta">
         <span class="dateline">Standing service &middot; by arrangement<span class="desk"> <span class="mast-sep" aria-hidden="true">|</span></span></span>
         <a class="mast-phone js-phone" href="tel:+16034202430">Call/Text: (603) 420-2430</a>
-        <a href="#contact" class="mast-cta">Request a walkthrough</a>
+        <a href="#contact" class="mast-cta">Request a facilities assessment</a>
       </div>
     </div>
   </div>
@@ -156,7 +156,7 @@
       <div class="sig rv">The pitch isn't a sparkle. It's that you stop thinking about it. <b>You arrive, it's done, and it's done the same way it was last time.</b></div>
     </div>
     <div class="hero-ctas rv">
-      <a class="btn-primary" href="#contact">Request a walkthrough</a>
+      <a class="btn-primary" href="#contact">Request a facilities assessment</a>
       <a class="btn-phone js-phone" href="tel:+16034202430">Call/Text (603) 420-2430</a>
     </div>
   </section>
@@ -217,8 +217,8 @@
 <div class="doc railed">
   <section class="close node" id="contact" data-tick="Next">
     <div class="lbl rv">Get started</div>
-    <h2 class="rv">Walk me through your space. Ten minutes.</h2>
-    <p class="rv">Tell me a little about your office and we'll set a quick walkthrough. You'll get a clear flat monthly quote, no surprises, and no long contract to begin.</p>
+    <h2 class="rv">Schedule a facilities assessment. Ten minutes.</h2>
+    <p class="rv">Tell me a little about your facility and we'll set a quick assessment. You'll get a clear flat monthly quote, no surprises, and no long contract to begin.</p>
     <div class="trust rv" aria-label="Service notes">
       <span>Insured service</span><span class="dot" aria-hidden="true">·</span>
       <span>Recurring office cleaning</span><span class="dot" aria-hidden="true">·</span>
@@ -256,11 +256,11 @@
       <label class="hp" aria-hidden="true">Company website
         <input type="text" name="company_website" tabindex="-1" autocomplete="off">
       </label>
-      <button type="submit">Request a walkthrough</button>
+      <button type="submit">Request a facilities assessment</button>
       <div class="form-status" id="form-status" role="status"></div>
     </form>
     <div class="contacts rv">
-      <a class="em js-email" href="mailto:jacob@goanchorcleaning.com?subject=Walkthrough%20request%20%E2%80%94%20office%20cleaning">jacob@goanchorcleaning.com</a>
+      <a class="em js-email" href="mailto:jacob@goanchorcleaning.com?subject=Facilities%20assessment%20request%20%E2%80%94%20office%20cleaning">jacob@goanchorcleaning.com</a>
       <a class="em js-phone" href="tel:+16034202430">(603) 420-2430</a>
     </div>
     <div class="sub rv">Greater Manchester, New Hampshire &middot; commercial office cleaning &amp; janitorial service</div>
@@ -330,7 +330,7 @@
   var form = document.getElementById('walkthrough-form');
   var statusEl = document.getElementById('form-status');
   var ENDPOINT = 'https://pulseforge-leadgen-production.up.railway.app/api/public/walkthrough';
-  var SUCCESS = "Thanks. I'll reach out to set up a quick walkthrough and give you a clear monthly quote.";
+  var SUCCESS = "Thanks. I'll reach out to set up a quick facilities assessment and give you a clear monthly quote.";
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
@@ -369,7 +369,7 @@
       statusEl.className = 'form-status ok';
       statusEl.textContent = (json && json.message) || SUCCESS;
     }).catch(function () {
-      var subject = encodeURIComponent('Walkthrough request — office cleaning');
+      var subject = encodeURIComponent('Facilities assessment request — office cleaning');
       var body = encodeURIComponent(
         'Name: ' + data.name + '\nBusiness: ' + data.business_name +
         '\nPhone: ' + data.phone + '\nEmail: ' + data.email +

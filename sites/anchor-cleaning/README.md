@@ -10,9 +10,9 @@ Copy `index.html` over the Pages repo `index.html` and merge to `main`. Do not a
 
 Public number: `(603) 420-2430` → `tel:+16034202430`
 
-## Walkthrough form
+## Facilities assessment form
 
-The form POSTs to `POST /api/public/walkthrough` on the Pulseforge app. Submissions write an `agent_actions` row for `client_id=10` and email Jacob when Brevo is configured.
+The form POSTs to `POST /api/public/walkthrough` on the Pulseforge app. Submissions write an `agent_actions` row for `client_id=10` and email Jacob when Brevo is configured. Public copy uses **facilities assessment**; backend route and analytics event names are unchanged.
 
 If the API is unreachable, the page falls back to a prefilled mailto.
 
