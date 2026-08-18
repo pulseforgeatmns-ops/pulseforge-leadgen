@@ -254,9 +254,21 @@ function isInventoryOnlyRequest(question) {
   return false;
 }
 
+function isClaimChallengeQuestion(question) {
+  try {
+    const challenge = require('./RecommendationClaimChallenge');
+    return (
+      challenge.isClaimChallenge(question) || challenge.isOperatorClaimCorrection(question)
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
 function isOperatingEvidenceQuestion(question) {
   const q = String(question || '').trim();
   if (!q) return false;
+  if (isClaimChallengeQuestion(q)) return false;
   if (isBusinessUnderstandingQuestion(q)) return false;
   if (isNewInvestigationRequest(q)) return false;
   if (LIVE_MARKET_SIGNAL_RE.test(q) && !EXISTING_STATE_RE.test(q) && !INVENTORY_INTENT_RE.test(q)) {
@@ -1438,6 +1450,8 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
       businessUnderstanding: extras.businessUnderstanding || null,
       now: extras.now,
       capability: extras.capability || bundle.capability,
+      retractedPremises: extras.retractedPremises,
+      operatorDeniedEmailActive: extras.operatorDeniedEmailActive,
     });
     const used = [];
     if (bundle.campaign && bundle.campaign.available !== false) used.push('campaignAo');
@@ -1458,6 +1472,9 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
       executed: false,
       items: bundle.items,
       decision: grounded.decision,
+      premises: grounded.premises,
+      lastClaim: grounded.lastClaim,
+      state: grounded.state,
     };
   }
 
@@ -1527,13 +1544,15 @@ function operatingStructured(answer, extras = {}) {
     supportingEvidence: evidence,
     contradictingEvidence: [],
     confidence: extras.confidence != null ? extras.confidence : 0.86,
-    nextInvestigations: extras.recommend
+    nextInvestigations: extras.recommend || extras.claimChallenge
       ? []
       : ['Ask for a recommendation only after reviewing this inventory.'],
     recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
-    confidenceContributors: extras.recommend
-      ? ['operating_evidence_retrieval', 'spec_105', 'spec_107']
-      : ['operating_evidence_retrieval', 'spec_105'],
+    confidenceContributors: extras.claimChallenge
+      ? ['operating_evidence_retrieval', 'spec_105', 'spec_107a']
+      : extras.recommend
+        ? ['operating_evidence_retrieval', 'spec_105', 'spec_107']
+        : ['operating_evidence_retrieval', 'spec_105'],
     timelineReferences: [],
     relatedEntities: [],
     metadata: {
@@ -1551,6 +1570,8 @@ function operatingStructured(answer, extras = {}) {
       retrievalBeforeDelegation: true,
       operatingEvidenceRetrieval: true,
       evidenceGroundedRecommendation: extras.recommend === true,
+      claimChallenge: extras.claimChallenge === true,
+      claimVerdict: extras.claimVerdict || null,
       executed: false,
       specialistDelegated: false,
       scoutDelegated: false,

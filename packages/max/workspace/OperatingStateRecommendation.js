@@ -166,15 +166,103 @@ function followUpTemporal(followUp = {}, now) {
   return { kind: 'planned_due', expectedAt: followUp.expectedAt, executed: false };
 }
 
-function hasEmailMotion(bundle = {}, capability = {}) {
-  if (bundle.emailMotionActive === true) return true;
-  if (capability.emailMotionActive === true) return true;
+const EMAIL_CURRENT_STATUS = new Set([
+  'active',
+  'in_progress',
+  'sending',
+  'executing',
+  'current',
+]);
+
+function isEmailChannelRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  const channel = String(row.channel || row.action_type || row.source || row.agent_name || '');
+  return /email|emmett|brevo/i.test(channel);
+}
+
+function isCurrentEmailRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  if (row.current === true || row.is_current === true || row.emailMotionCurrent === true) {
+    return true;
+  }
+  const status = String(row.status || row.execution_status || row.operational_state || '').toLowerCase();
+  return EMAIL_CURRENT_STATUS.has(status);
+}
+
+function emailMissions(bundle = {}) {
+  return (Array.isArray(bundle.missions) ? bundle.missions : []).filter((mission) =>
+    /email|emmett|outbound/i.test(String((mission && (mission.title || mission.objectiveText)) || ''))
+  );
+}
+
+/**
+ * Historical email activity is not current execution.
+ * Missions are planned/intent, not active outbound.
+ */
+function assessEmailMotion(bundle = {}, capability = {}) {
+  if (bundle.emailMotionActive === true || capability.emailMotionActive === true) {
+    return {
+      kind: 'active',
+      epistemic: 'verified',
+      current: true,
+      historicalCount: 0,
+      reason: 'current_execution_flag',
+    };
+  }
   const touchpoints = (bundle.activity && bundle.activity.touchpoints) || [];
   const activity = (bundle.activity && bundle.activity.activity) || [];
-  return [...touchpoints, ...activity].some((row) => {
-    const channel = String((row && (row.channel || row.action_type || row.source)) || '');
-    return /email|emmett|brevo/i.test(channel);
-  });
+  const emailRows = [...touchpoints, ...activity].filter(isEmailChannelRow);
+  const currentRows = emailRows.filter(isCurrentEmailRow);
+  if (currentRows.length) {
+    return {
+      kind: 'active',
+      epistemic: 'verified',
+      current: true,
+      historicalCount: emailRows.length - currentRows.length,
+      reason: 'current_execution_rows',
+    };
+  }
+  if (emailRows.length) {
+    return {
+      kind: 'historical',
+      epistemic: 'verified',
+      current: false,
+      historicalCount: emailRows.length,
+      reason: 'historical_touchpoints',
+    };
+  }
+  const planned = emailMissions(bundle);
+  if (planned.length) {
+    return {
+      kind: 'planned',
+      epistemic: 'verified',
+      current: false,
+      historicalCount: 0,
+      missions: planned,
+      reason: 'mission_intent',
+    };
+  }
+  const email = primaryEmailCapability(normalizeCapabilityPolicy(capability));
+  if (email.status === CAPABILITY_STATUS.DISABLED) {
+    return {
+      kind: 'disabled',
+      epistemic: 'verified',
+      current: false,
+      historicalCount: 0,
+      reason: 'capability_disabled',
+    };
+  }
+  return {
+    kind: 'not_recorded',
+    epistemic: 'not_recorded',
+    current: false,
+    historicalCount: 0,
+    reason: 'no_current_execution',
+  };
+}
+
+function hasEmailMotion(bundle = {}, capability = {}) {
+  return assessEmailMotion(bundle, capability).current === true;
 }
 
 function primaryEmailCapability(capability) {
@@ -219,7 +307,7 @@ function assembleOperatingState(bundle = {}, extras = {}) {
   const jobs = Number((bundle.outcomes && bundle.outcomes.jobs) || 0);
   const payments = Number((bundle.outcomes && bundle.outcomes.payments) || 0);
 
-  return {
+  const state = {
     now,
     campaignName: progress.campaign_name || campaign.campaignName || 'Campaign 001',
     aoLeads,
@@ -239,6 +327,7 @@ function assembleOperatingState(bundle = {}, extras = {}) {
     missions: Array.isArray(bundle.missions) ? bundle.missions : [],
     objectives: Array.isArray(bundle.objectives) ? bundle.objectives : [],
     outcomes: { jobs, payments, walkthroughs },
+    emailMotion: assessEmailMotion(bundle, capability),
     emailMotionActive: hasEmailMotion(bundle, capability),
     capability,
     supply: classifySupply(
@@ -262,6 +351,25 @@ function assembleOperatingState(bundle = {}, extras = {}) {
         payments
     ),
   };
+  return applyWorkingModelCorrections(state, extras);
+}
+
+function applyWorkingModelCorrections(state, extras = {}) {
+  const retracted = Array.isArray(extras.retractedPremises)
+    ? extras.retractedPremises.map(String)
+    : [];
+  if (extras.operatorDeniedEmailActive === true || retracted.includes('email_motion')) {
+    state.emailMotion = {
+      kind: 'not_recorded',
+      epistemic: 'operator_attested',
+      current: false,
+      historicalCount: (state.emailMotion && state.emailMotion.historicalCount) || 0,
+      reason: 'operator_denied_current_email',
+      denied: true,
+    };
+    state.emailMotionActive = false;
+  }
+  return state;
 }
 
 function factLines(state) {
@@ -326,8 +434,18 @@ function alreadyInMotionLines(state) {
   } else if (state.followUp.kind === 'planned') {
     lines.push(`${state.campaignName} follow-up is planned but not recorded as completed.`);
   }
-  if (state.emailMotionActive) {
-    lines.push('An outbound email motion is already active.');
+  if (state.emailMotion && state.emailMotion.kind === 'active' && state.emailMotion.current === true) {
+    lines.push('An outbound email motion is already active. That is current execution evidence, not historical sends.');
+  } else if (state.emailMotion && state.emailMotion.kind === 'historical') {
+    lines.push(
+      `Historical email touchpoints exist (${state.emailMotion.historicalCount}), but they do not establish that email outbound is currently active.`
+    );
+  } else if (state.emailMotion && state.emailMotion.kind === 'planned') {
+    lines.push(
+      'An email-related mission is on file as planned/intent work. A mission is not recorded execution.'
+    );
+  } else if (state.emailMotion && state.emailMotion.kind === 'disabled') {
+    lines.push('Emmett exists but is disabled for this tenant. Disabled is not active.');
   }
   if (state.missions.length) {
     const titles = state.missions
@@ -335,9 +453,9 @@ function alreadyInMotionLines(state) {
       .map((m) => present(m.title || m.objectiveText || 'mission'))
       .filter(Boolean);
     lines.push(
-      `${state.missions.length} mission${state.missions.length === 1 ? '' : 's'} already on file${
+      `${state.missions.length} mission${state.missions.length === 1 ? '' : 's'} on file as planned or tracked work${
         titles.length ? ` (${titles.join('; ')})` : ''
-      }.`
+      } — not proof of external execution.`
     );
   }
   if (!lines.length) {
@@ -412,7 +530,7 @@ function recommendNextConstraint(state) {
     bottleneck: 'outcomes',
     focus: 'Measure conversion from work already in motion — walkthrough requests, dispositions, and closed-loop outcomes — rather than activating another channel.',
     inference:
-      'Prospect supply looks adequate and both AO and email motions are already active. Adding activation work would duplicate capacity that already exists.',
+      'Prospect supply looks adequate and a current outbound email motion is executing. Adding activation work would duplicate capacity that already exists.',
     learn: 'Which in-motion step is failing to produce walkthroughs or converted accounts.',
     email: primaryEmailCapability(state.capability),
   };
@@ -531,13 +649,92 @@ function formatRecommendationProse(decision, state) {
 function composeEvidenceGroundedRecommendation(bundle, extras = {}) {
   const state = assembleOperatingState(bundle, extras);
   const decision = reasonOverOperatingState(state);
+  const premises = collectPremises(state, decision);
   return {
     prose: formatRecommendationProse(decision, state),
     state,
     decision,
+    premises,
+    lastClaim: pickLastClaim(premises),
     executed: false,
     recommend: true,
   };
+}
+
+function collectPremises(state, decision) {
+  const premises = [];
+  const email = state.emailMotion || { kind: 'not_recorded', current: false };
+  premises.push({
+    id: 'email_motion',
+    topic: 'email_motion',
+    text: email.current
+      ? 'An outbound email motion is already active.'
+      : email.kind === 'historical'
+        ? 'Historical email activity exists; current outbound email execution is not verified.'
+        : email.kind === 'planned'
+          ? 'An email campaign exists as planned or intended work, not current execution.'
+          : email.kind === 'disabled'
+            ? 'Emmett exists but is disabled for this tenant.'
+            : 'A currently active outbound email motion is not verified.',
+    kind: email.current ? 'observed' : email.kind === 'disabled' ? 'exists_disabled' : email.kind,
+    support: email.current ? 'supported' : 'unknown',
+    status: email.current ? 'supported' : 'unknown',
+    epistemic: email.current ? 'observed' : email.kind === 'disabled' ? 'exists_disabled' : email.kind,
+    evidence: email,
+  });
+  if (state.mailAttestedAt || state.mailExecuted) {
+    premises.push({
+      id: 'mail',
+      topic: 'mail',
+      text: state.mailAttestedAt
+        ? `${state.campaignName} was operator-reported as mailed ${formatDay(state.mailAttestedAt)}.`
+        : `${state.campaignName} was mailed.`,
+      kind: state.mailAttestedAt ? 'operator_attested' : 'verified',
+      support: 'supported',
+      status: 'supported',
+      epistemic: state.mailAttestedAt ? 'operator_attested' : 'verified',
+      evidence: { occurredAt: state.mailAttestedAt, mailExecuted: state.mailExecuted },
+    });
+  }
+  if (state.followUp && state.followUp.kind !== 'none') {
+    premises.push({
+      id: 'follow_up',
+      topic: 'follow_up',
+      text:
+        state.followUp.kind === 'completed'
+          ? `${state.campaignName} follow-up has recorded execution.`
+          : `${state.campaignName} follow-up is planned and owned; completion is not yet recorded.`,
+      kind: state.followUp.kind === 'completed' ? 'verified' : 'planned',
+      support: 'supported',
+      status: 'supported',
+      epistemic: state.followUp.kind === 'completed' ? 'verified' : 'planned',
+      evidence: state.followUp,
+    });
+  }
+  if (decision) {
+    premises.push({
+      id: 'next_constraint',
+      topic: 'next_constraint',
+      text: decision.focus || decision.recommendation,
+      kind: 'inferred',
+      support: 'inferred',
+      status: 'inferred',
+      epistemic: 'inferred',
+      evidence: [],
+    });
+  }
+  return premises;
+}
+
+function pickLastClaim(premises) {
+  const list = Array.isArray(premises) ? premises : [];
+  const email = list.find((p) => p.topic === 'email_motion' && p.support === 'supported');
+  if (email) return email;
+  const mail = list.find((p) => p.topic === 'mail');
+  if (mail) return mail;
+  const follow = list.find((p) => p.topic === 'follow_up');
+  if (follow) return follow;
+  return list.find((p) => p.topic === 'email_motion') || list[0] || null;
 }
 
 module.exports = {
@@ -549,5 +746,9 @@ module.exports = {
   composeEvidenceGroundedRecommendation,
   classifySupply,
   followUpTemporal,
+  assessEmailMotion,
+  applyWorkingModelCorrections,
+  collectPremises,
+  pickLastClaim,
   hasEmailMotion,
 };

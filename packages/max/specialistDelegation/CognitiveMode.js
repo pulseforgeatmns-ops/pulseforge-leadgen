@@ -107,6 +107,17 @@ function hasRecentSpecialistWork(input = {}) {
   );
 }
 
+function looksLikeClaimChallenge(question) {
+  try {
+    const challenge = require('../workspace/RecommendationClaimChallenge');
+    return (
+      challenge.isClaimChallenge(question) || challenge.isOperatorClaimCorrection(question)
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
 function looksLikeExistingEvidenceRetrieval(question) {
   try {
     const operating = require('../workspace/OperatingEvidenceRetrieval');
@@ -174,6 +185,12 @@ function classifyCognitiveMode(question, input = {}) {
 
   if (looksLikeExecution(q)) {
     return modeResult(COGNITIVE_MODES.EXECUTION, 'execution_verb');
+  }
+
+  if (looksLikeClaimChallenge(q)) {
+    return modeResult(COGNITIVE_MODES.EXPLANATION, 'claim_challenge', {
+      requiresOperatingRetrieval: true,
+    });
   }
 
   const operatingRetrieval = looksLikeExistingEvidenceRetrieval(q);
@@ -251,6 +268,7 @@ module.exports = {
   looksLikeExplanation,
   looksLikeRetrieval,
   looksLikeExistingEvidenceRetrieval,
+  looksLikeClaimChallenge,
   hasRecentSpecialistWork,
   forbidsSpecialistDelegation,
 };
