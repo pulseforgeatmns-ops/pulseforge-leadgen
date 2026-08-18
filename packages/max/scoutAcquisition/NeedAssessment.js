@@ -24,7 +24,7 @@ const EXPLAIN_RE =
   /\bwhy did (?:the )?acquisition (?:move|elevate|change|go up)|why is acquisition elevated|why did acquisition move\b/i;
 
 const FOLLOWUP_RE =
-  /\b(which (?:four|\d+)|why is (?:this|that)(?: one)? strongest|what don'?t we know|find more like|pursue these before|number (?:two|2)|more like)\b/i;
+  /\b(which (?:four|\d+)|why is (?:this|that)(?: one)? strongest|what don'?t we know about (?:these|those|them|this|that|the (?:four|\d+|candidates?|companies|opportunit))|find more like|pursue these before|number (?:two|2)|more like)\b/i;
 
 const INSPECTION_RE =
   /\b(what did scout(?: actually)? investigate|how thorough|why did (?:he|scout) find nothing|how many compan(?:y|ies)|what eliminated|where was (?:scout'?s? )?coverage weak|do you trust|what would you investigate next|how (?:complete|deep) was (?:the|this) (?:search|investigation)|why couldn'?t (?:scout|he)|what geographic information|what did you give (?:him|scout)|why (?:didn'?t|did) you elevate|why weren'?t (?:those|these) evaluated)\b/i;

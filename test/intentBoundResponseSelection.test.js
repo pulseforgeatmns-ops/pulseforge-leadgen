@@ -36,7 +36,7 @@ describe('SPEC-109 shared classification', () => {
       assert.equal(mode.kind, kind, question);
       assert.equal(contract.id, contractId, question);
     }
-    assert.equal(listResponseContracts().length, 5);
+    assert.equal(listResponseContracts().length, 9);
   });
 
   it('does not send retrieval or summary to CIE or specialists', () => {

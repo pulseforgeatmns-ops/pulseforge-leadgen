@@ -1,15 +1,19 @@
 'use strict';
 
 /**
- * SPEC-109 — Intent-bound response contracts.
+ * SPEC-109 / SPEC-111 — Intent-bound response contracts.
  *
- * Operator intent selects the response structure before retrieval, grounding,
- * reasoning, or specialist delegation. Evidence fills content. Reasoning may
- * produce a recommendation only when the selected contract allows it.
+ * Operator intent selects the analysis mode, which selects the response
+ * structure, before retrieval, grounding, reasoning, or specialist
+ * delegation. Evidence fills content. Reasoning may produce a
+ * recommendation only when the selected contract allows it.
  *
  * SPEC-110 adds Business Intelligence as a required first section on
  * retrieval, summary, and recommendation contracts. Intelligence is a
  * first-class object; evidence remains attributable and listed after.
+ *
+ * SPEC-111 adds Diagnosis, Unknown Analysis, Risk, and Progress contracts.
+ * Those consume existing BI objects instead of duplicating reasoning.
  *
  * Advice is not a universal response type.
  */
@@ -22,11 +26,22 @@ const {
   looksLikeSummary,
   looksLikeCompletedRetrieval,
 } = require('../specialistDelegation/CognitiveMode');
+const {
+  OPERATOR_INTENTS,
+  looksLikeDiagnosis,
+  looksLikeUnknownAnalysis,
+  looksLikeRisk,
+  looksLikeProgress,
+} = require('./OperatorIntentRegistry');
 
 const CONTRACT_IDS = Object.freeze({
   RETRIEVAL: 'retrieval',
   SUMMARY: 'summary',
   RECOMMENDATION: 'recommendation',
+  DIAGNOSIS: 'diagnosis',
+  UNKNOWN_ANALYSIS: 'unknown_analysis',
+  RISK: 'risk',
+  PROGRESS: 'progress',
   CHALLENGE: 'challenge',
   INVESTIGATION: 'investigation',
 });
@@ -52,6 +67,16 @@ const SECTION = Object.freeze({
   UNSOLICITED_STRATEGY: 'unsolicited_strategy',
   ACQUISITION_RECOMMENDATION: 'acquisition_recommendation',
   UNSUPPORTED_MEMORY_ANSWER: 'unsupported_memory_answer',
+  GENERIC_BLUEPRINT_STRATEGY: 'generic_blueprint_strategy',
+  SPECULATION: 'speculation',
+  BOTTLENECK: 'bottleneck',
+  OPERATOR_IMPACT: 'operator_impact',
+  EVIDENCE_GAPS: 'evidence_gaps',
+  SUGGESTED_INVESTIGATIONS: 'suggested_investigations',
+  RISKS: 'risks',
+  POTENTIAL_IMPACT: 'potential_impact',
+  PROGRESS: 'progress',
+  REMAINING_WORK: 'remaining_work',
 });
 
 const UNSOLICITED_STRATEGY_RE =
@@ -59,6 +84,12 @@ const UNSOLICITED_STRATEGY_RE =
 
 const ACQUISITION_RECOMMENDATION_RE =
   /\bI(?:'d| would) recommend (?:a focused first campaign|proving a repeatable(?: commercial)? acquisition motion)/i;
+
+const GENERIC_BLUEPRINT_STRATEGY_RE =
+  /\bI(?:'d| would) (?:recommend|start by) (?:proving|building) (?:a focused first campaign|a repeatable(?: commercial)? acquisition)/i;
+
+const SPECULATION_RE =
+  /\b(probably working|likely converting|acquisition rumors?|I believe the market|should be performing|must be converting)\b/i;
 
 function freezeContract(contract) {
   return Object.freeze({
@@ -141,10 +172,66 @@ const InvestigationContract = freezeContract({
   forbidsSpecialistDelegation: false,
 });
 
+const DiagnosisContract = freezeContract({
+  id: CONTRACT_IDS.DIAGNOSIS,
+  label: 'Diagnosis',
+  required: [SECTION.BOTTLENECK, SECTION.CONFIDENCE, SECTION.EVIDENCE],
+  optional: [SECTION.RECOMMENDATION, SECTION.OPERATOR_IMPACT],
+  forbidden: [SECTION.GENERIC_BLUEPRINT_STRATEGY, SECTION.UNSOLICITED_STRATEGY],
+  permitsRecommendation: true,
+  recommendationPrimary: false,
+  forbidsCieClaim: true,
+  forbidsSpecialistDelegation: true,
+  consumesIntelligence: Object.freeze(['bottleneck', 'readiness', 'momentum']),
+});
+
+const UnknownAnalysisContract = freezeContract({
+  id: CONTRACT_IDS.UNKNOWN_ANALYSIS,
+  label: 'Unknown Analysis',
+  required: [SECTION.UNKNOWNS, SECTION.OPERATOR_IMPACT, SECTION.EVIDENCE_GAPS],
+  optional: [SECTION.SUGGESTED_INVESTIGATIONS],
+  forbidden: [SECTION.SPECULATION, SECTION.UNSOLICITED_STRATEGY, SECTION.ACQUISITION_RECOMMENDATION],
+  permitsRecommendation: false,
+  recommendationPrimary: false,
+  forbidsCieClaim: true,
+  forbidsSpecialistDelegation: true,
+  consumesIntelligence: Object.freeze(['unknown']),
+});
+
+const RiskContract = freezeContract({
+  id: CONTRACT_IDS.RISK,
+  label: 'Risk Assessment',
+  required: [SECTION.RISKS, SECTION.EVIDENCE, SECTION.CONFIDENCE, SECTION.POTENTIAL_IMPACT],
+  optional: [],
+  forbidden: [SECTION.SPECULATION, SECTION.GENERIC_BLUEPRINT_STRATEGY],
+  permitsRecommendation: false,
+  recommendationPrimary: false,
+  forbidsCieClaim: true,
+  forbidsSpecialistDelegation: true,
+  consumesIntelligence: Object.freeze(['risk']),
+});
+
+const ProgressContract = freezeContract({
+  id: CONTRACT_IDS.PROGRESS,
+  label: 'Progress Review',
+  required: [SECTION.PROGRESS, SECTION.REMAINING_WORK, SECTION.CONFIDENCE],
+  optional: [SECTION.EVIDENCE],
+  forbidden: [SECTION.GENERIC_BLUEPRINT_STRATEGY],
+  permitsRecommendation: false,
+  recommendationPrimary: false,
+  forbidsCieClaim: true,
+  forbidsSpecialistDelegation: true,
+  consumesIntelligence: Object.freeze(['momentum', 'readiness', 'unknown']),
+});
+
 const CONTRACTS = Object.freeze({
   [CONTRACT_IDS.RETRIEVAL]: RetrievalContract,
   [CONTRACT_IDS.SUMMARY]: SummaryContract,
   [CONTRACT_IDS.RECOMMENDATION]: RecommendationContract,
+  [CONTRACT_IDS.DIAGNOSIS]: DiagnosisContract,
+  [CONTRACT_IDS.UNKNOWN_ANALYSIS]: UnknownAnalysisContract,
+  [CONTRACT_IDS.RISK]: RiskContract,
+  [CONTRACT_IDS.PROGRESS]: ProgressContract,
   [CONTRACT_IDS.CHALLENGE]: ChallengeContract,
   [CONTRACT_IDS.INVESTIGATION]: InvestigationContract,
 });
@@ -164,6 +251,10 @@ function listResponseContracts() {
     RetrievalContract,
     SummaryContract,
     RecommendationContract,
+    DiagnosisContract,
+    UnknownAnalysisContract,
+    RiskContract,
+    ProgressContract,
     ChallengeContract,
     InvestigationContract,
   ];
@@ -190,15 +281,51 @@ function selectResponseContract(question, mode) {
     return ChallengeContract;
   }
 
-  if (classified.kind === COGNITIVE_MODES.INVESTIGATION || looksLikeInvestigation(q)) {
+  if (
+    classified.kind === COGNITIVE_MODES.INVESTIGATION ||
+    classified.intent === OPERATOR_INTENTS.INVESTIGATION ||
+    looksLikeInvestigation(q)
+  ) {
     return InvestigationContract;
+  }
+
+  if (
+    classified.kind === COGNITIVE_MODES.DIAGNOSIS ||
+    classified.intent === OPERATOR_INTENTS.DIAGNOSIS ||
+    looksLikeDiagnosis(q)
+  ) {
+    return DiagnosisContract;
+  }
+
+  if (
+    classified.kind === COGNITIVE_MODES.UNKNOWN_ANALYSIS ||
+    classified.intent === OPERATOR_INTENTS.UNKNOWN_ANALYSIS ||
+    looksLikeUnknownAnalysis(q)
+  ) {
+    return UnknownAnalysisContract;
+  }
+
+  if (
+    classified.kind === COGNITIVE_MODES.RISK ||
+    classified.intent === OPERATOR_INTENTS.RISK ||
+    looksLikeRisk(q)
+  ) {
+    return RiskContract;
+  }
+
+  if (
+    classified.kind === COGNITIVE_MODES.PROGRESS ||
+    classified.intent === OPERATOR_INTENTS.PROGRESS ||
+    looksLikeProgress(q)
+  ) {
+    return ProgressContract;
   }
 
   if (classified.kind === COGNITIVE_MODES.RECOMMENDATION || classified.via === 'recommendation') {
     return RecommendationContract;
   }
 
-  if (classified.via === 'summary' || looksLikeSummary(q)) {
+  if (classified.via === 'summary' || classified.intent === OPERATOR_INTENTS.SUMMARY || looksLikeSummary(q)) {
     return SummaryContract;
   }
 
@@ -271,6 +398,15 @@ function containsForbidden(prose, contract) {
     !/\bNeed specialist\??:/i.test(prose)
   ) {
     hits.push(SECTION.UNSUPPORTED_MEMORY_ANSWER);
+  }
+  if (
+    forbidden.includes(SECTION.GENERIC_BLUEPRINT_STRATEGY) &&
+    GENERIC_BLUEPRINT_STRATEGY_RE.test(prose)
+  ) {
+    hits.push(SECTION.GENERIC_BLUEPRINT_STRATEGY);
+  }
+  if (forbidden.includes(SECTION.SPECULATION) && SPECULATION_RE.test(prose)) {
+    hits.push(SECTION.SPECULATION);
   }
   return hits;
 }
@@ -370,6 +506,46 @@ function composeInvestigationProse(sections = {}) {
   ]);
 }
 
+function composeDiagnosisProse(sections = {}, extras = {}) {
+  const parts = [
+    heading('Current bottleneck', sections.bottleneck),
+    heading('Supporting evidence', sections.evidence),
+    heading('Confidence', sections.confidence),
+    heading('Operator impact', sections.operatorImpact || sections.impact),
+  ];
+  if (mayIncludeRecommendation(DiagnosisContract, extras) && sections.recommendation) {
+    parts.push(heading('Recommendation', sections.recommendation));
+  }
+  return joinSections(parts);
+}
+
+function composeUnknownAnalysisProse(sections = {}) {
+  return joinSections([
+    heading('Critical unknowns', sections.unknowns || sections.criticalUnknowns),
+    heading('Evidence gaps', sections.evidenceGaps),
+    heading('Why they matter', sections.operatorImpact || sections.impact),
+    heading('Suggested investigations', sections.suggestedInvestigations),
+  ]);
+}
+
+function composeRiskProse(sections = {}) {
+  return joinSections([
+    heading('Risks', sections.risks),
+    heading('Evidence', sections.evidence),
+    heading('Confidence', sections.confidence),
+    heading('Potential impact', sections.potentialImpact || sections.operatorImpact || sections.impact),
+  ]);
+}
+
+function composeProgressProse(sections = {}) {
+  return joinSections([
+    heading('Progress', sections.progress),
+    heading('Remaining work', sections.remainingWork),
+    heading('Confidence', sections.confidence),
+    sections.evidence ? heading('Evidence', sections.evidence) : '',
+  ]);
+}
+
 /**
  * Compose operator-facing prose from a selected contract and filled sections.
  * Answer first. Advise second — and only when permitted.
@@ -383,6 +559,14 @@ function composeAccordingToContract(contract, sections = {}, extras = {}) {
     prose = composeSummaryProse(sections, extras);
   } else if (contract.id === CONTRACT_IDS.RECOMMENDATION) {
     prose = composeRecommendationProse(sections, extras);
+  } else if (contract.id === CONTRACT_IDS.DIAGNOSIS) {
+    prose = composeDiagnosisProse(sections, extras);
+  } else if (contract.id === CONTRACT_IDS.UNKNOWN_ANALYSIS) {
+    prose = composeUnknownAnalysisProse(sections);
+  } else if (contract.id === CONTRACT_IDS.RISK) {
+    prose = composeRiskProse(sections);
+  } else if (contract.id === CONTRACT_IDS.PROGRESS) {
+    prose = composeProgressProse(sections);
   } else if (contract.id === CONTRACT_IDS.CHALLENGE) {
     prose = composeChallengeProse(sections);
   } else if (contract.id === CONTRACT_IDS.INVESTIGATION) {
@@ -400,6 +584,12 @@ function attachContractMetadata(structured, contract, extras = {}) {
     : {};
   metadata.responseContract = contract.id;
   metadata.intentBoundResponse = true;
+  if (extras.analysisMode) {
+    metadata.analysisMode = extras.analysisMode;
+  }
+  if (extras.intent) {
+    metadata.operatorIntent = extras.intent;
+  }
   if (extras.businessIntelligence) {
     metadata.businessIntelligence = extras.businessIntelligence;
   }
@@ -414,6 +604,10 @@ module.exports = {
   RetrievalContract,
   SummaryContract,
   RecommendationContract,
+  DiagnosisContract,
+  UnknownAnalysisContract,
+  RiskContract,
+  ProgressContract,
   ChallengeContract,
   InvestigationContract,
   looksLikeSummary,
@@ -426,6 +620,10 @@ module.exports = {
   composeRetrievalProse,
   composeSummaryProse,
   composeRecommendationProse,
+  composeDiagnosisProse,
+  composeUnknownAnalysisProse,
+  composeRiskProse,
+  composeProgressProse,
   composeChallengeProse,
   composeInvestigationProse,
   enforceContract,

@@ -98,6 +98,7 @@ const {
 } = require('./OperatorOperatingUpdate');
 const ResponseContract = require('./ResponseContract');
 const BusinessIntelligence = require('./BusinessIntelligence');
+const OperatorIntentRegistry = require('./OperatorIntentRegistry');
 
 module.exports = {
   getProspectOperatingBrief,
@@ -133,6 +134,10 @@ module.exports = {
   RetrievalContract: ResponseContract.RetrievalContract,
   SummaryContract: ResponseContract.SummaryContract,
   RecommendationContract: ResponseContract.RecommendationContract,
+  DiagnosisContract: ResponseContract.DiagnosisContract,
+  UnknownAnalysisContract: ResponseContract.UnknownAnalysisContract,
+  RiskContract: ResponseContract.RiskContract,
+  ProgressContract: ResponseContract.ProgressContract,
   ChallengeContract: ResponseContract.ChallengeContract,
   InvestigationContract: ResponseContract.InvestigationContract,
   synthesizeBusinessIntelligence: BusinessIntelligence.synthesizeBusinessIntelligence,
@@ -140,6 +145,13 @@ module.exports = {
   isChannelEffectivenessQuestion: BusinessIntelligence.isChannelEffectivenessQuestion,
   CATEGORIES: BusinessIntelligence.CATEGORIES,
   CONFIDENCE: BusinessIntelligence.CONFIDENCE,
+  OPERATOR_INTENTS: OperatorIntentRegistry.OPERATOR_INTENTS,
+  ANALYSIS_MODES: OperatorIntentRegistry.ANALYSIS_MODES,
+  classifyNewAnalysisMode: OperatorIntentRegistry.classifyNewAnalysisMode,
+  looksLikeDiagnosis: OperatorIntentRegistry.looksLikeDiagnosis,
+  looksLikeUnknownAnalysis: OperatorIntentRegistry.looksLikeUnknownAnalysis,
+  looksLikeRisk: OperatorIntentRegistry.looksLikeRisk,
+  looksLikeProgress: OperatorIntentRegistry.looksLikeProgress,
   PAGE_TYPES,
   PAGE_TYPE_SET,
   SOURCE_KEYS,

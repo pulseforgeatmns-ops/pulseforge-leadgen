@@ -90,6 +90,14 @@ describe('SPEC-102F Max Development Framework', () => {
     assert.match(competency.exercises[0].transferTest, /Are Yelp Ads working/i);
   });
 
+  test('operator_intent_taxonomy is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('operator_intent_taxonomy');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-111'));
+    assert.match(competency.exercises[0].generalLesson, /Intent determines analysis/i);
+    assert.match(competency.exercises[0].transferTest, /What don't we know yet that matters/i);
+  });
+
   test('retrieve_before_delegation exercise includes transfer test', () => {
     const competency = training.getCompetency('retrieve_before_delegation');
     const exercise = competency.exercises[0];

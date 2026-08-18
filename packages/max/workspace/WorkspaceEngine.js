@@ -418,9 +418,10 @@ class WorkspaceEngine {
       };
     }
 
-    // SPEC-102 / SPEC-103 / SPEC-105 / SPEC-109 / SPEC-110 — classify intent,
-    // select the response contract, retrieve and ground evidence, then
-    // synthesize business intelligence before any specialist path.
+    // SPEC-102 / SPEC-103 / SPEC-105 / SPEC-109 / SPEC-110 / SPEC-111 —
+    // classify intent and analysis mode, select the response contract,
+    // retrieve and ground evidence, then synthesize business intelligence
+    // before any specialist path.
     const cognitive = classifyCognitiveMode(question, {
       session,
       context: rawContext || session.context,

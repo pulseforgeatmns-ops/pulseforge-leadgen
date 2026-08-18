@@ -341,6 +341,14 @@ function shouldRetrieveOperatingEvidence(question) {
     if (cognitive.looksLikeSummary(question) || cognitive.looksLikeCompletedRetrieval(question)) {
       return true;
     }
+    if (
+      cognitive.looksLikeDiagnosis(question) ||
+      cognitive.looksLikeUnknownAnalysis(question) ||
+      cognitive.looksLikeRisk(question) ||
+      cognitive.looksLikeProgress(question)
+    ) {
+      return true;
+    }
   } catch (_) {
     /* classifier unavailable */
   }
@@ -1538,17 +1546,21 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
     synthesizeBusinessIntelligence,
     serializeBusinessIntelligence,
     isChannelEffectivenessQuestion,
+    analysisSectionsFromIntelligence,
   } = require('./BusinessIntelligence');
   const contract = extras.contract || null;
   const inventoryOnly = extras.inventoryOnly != null ? extras.inventoryOnly : isInventoryOnlyRequest(question);
   const recommend = extras.recommend === true && !inventoryOnly;
+  const analysisMode = (contract && contract.id) || extras.analysisMode || null;
   const synthesis = synthesizeBusinessIntelligence({
     bundle,
     question,
     extras,
+    analysisMode,
   });
   const biProse = synthesis.prose;
   const biMeta = serializeBusinessIntelligence(synthesis);
+  const analysisSections = analysisSectionsFromIntelligence(synthesis);
   const focused = recommend ? null : composeFocusedOperatingAnswer(question, bundle);
   const verified = formatVerifiedSection(bundle.items);
   const inferred = formatInferredSection(bundle.items);
@@ -1557,7 +1569,19 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
   const unavailable = formatUnavailableSection(bundle.items);
   const evidence = evidenceBullets(bundle);
 
-  if (isChannelEffectivenessQuestion(question) && !(contract && contract.id === CONTRACT_IDS.SUMMARY)) {
+  const ANALYTICAL_CONTRACTS = new Set([
+    CONTRACT_IDS.DIAGNOSIS,
+    CONTRACT_IDS.UNKNOWN_ANALYSIS,
+    CONTRACT_IDS.RISK,
+    CONTRACT_IDS.PROGRESS,
+  ]);
+  const isAnalytical = Boolean(contract && ANALYTICAL_CONTRACTS.has(contract.id));
+
+  if (
+    isChannelEffectivenessQuestion(question) &&
+    !(contract && contract.id === CONTRACT_IDS.SUMMARY) &&
+    !isAnalytical
+  ) {
     const used = ['operatingEvidence'];
     const channelItems = (bundle.items || []).filter((item) =>
       /yelp|google ads|facebook ads|\bads?\b/i.test(
@@ -1589,7 +1613,7 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
     };
   }
 
-  if (focused && !(contract && contract.id === CONTRACT_IDS.SUMMARY)) {
+  if (focused && !(contract && contract.id === CONTRACT_IDS.SUMMARY) && !isAnalytical) {
     const used = ['operatingEvidence'];
     if (bundle.operatorAttested && bundle.operatorAttested.available !== false) {
       used.push('operatorAttested');
@@ -1620,7 +1644,7 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
     };
   }
 
-  if (recommend) {
+  if (recommend && !isAnalytical) {
     const grounded = composeEvidenceGroundedRecommendation(bundle, {
       businessUnderstanding: extras.businessUnderstanding || null,
       now: extras.now,
@@ -1688,6 +1712,82 @@ function composeOperatingEvidenceAnswer(question, bundle, extras = {}) {
   if (bundle.activity && bundle.activity.available !== false) used.push('activity');
   if (bundle.operatorAttested && bundle.operatorAttested.available !== false) used.push('operatorAttested');
   used.push('operatingEvidence');
+
+  if (contract && contract.id === CONTRACT_IDS.DIAGNOSIS) {
+    return {
+      prose: composeAccordingToContract(
+        contract,
+        {
+          bottleneck: analysisSections.bottleneck,
+          evidence: analysisSections.evidence || evidence,
+          confidence: analysisSections.confidence,
+          operatorImpact: analysisSections.operatorImpact,
+        },
+        { includeOptionalRecommendation: false }
+      ),
+      used,
+      knowledgeState: 'operating_evidence',
+      recommend: false,
+      launchedScout: false,
+      items: bundle.items,
+      contract: contract.id,
+      businessIntelligence: biMeta,
+    };
+  }
+
+  if (contract && contract.id === CONTRACT_IDS.UNKNOWN_ANALYSIS) {
+    return {
+      prose: composeAccordingToContract(contract, {
+        unknowns: analysisSections.unknowns,
+        evidenceGaps: analysisSections.evidenceGaps || missing,
+        operatorImpact: analysisSections.operatorImpact,
+        suggestedInvestigations: analysisSections.suggestedInvestigations,
+      }),
+      used,
+      knowledgeState: 'operating_evidence',
+      recommend: false,
+      launchedScout: false,
+      items: bundle.items,
+      contract: contract.id,
+      businessIntelligence: biMeta,
+    };
+  }
+
+  if (contract && contract.id === CONTRACT_IDS.RISK) {
+    return {
+      prose: composeAccordingToContract(contract, {
+        risks: analysisSections.risks,
+        evidence: analysisSections.evidence || evidence,
+        confidence: analysisSections.confidence,
+        potentialImpact: analysisSections.potentialImpact,
+      }),
+      used,
+      knowledgeState: 'operating_evidence',
+      recommend: false,
+      launchedScout: false,
+      items: bundle.items,
+      contract: contract.id,
+      businessIntelligence: biMeta,
+    };
+  }
+
+  if (contract && contract.id === CONTRACT_IDS.PROGRESS) {
+    return {
+      prose: composeAccordingToContract(contract, {
+        progress: analysisSections.progress,
+        remainingWork: analysisSections.remainingWork,
+        confidence: analysisSections.confidence,
+        evidence,
+      }),
+      used,
+      knowledgeState: 'operating_evidence',
+      recommend: false,
+      launchedScout: false,
+      items: bundle.items,
+      contract: contract.id,
+      businessIntelligence: biMeta,
+    };
+  }
 
   if (contract && contract.id === CONTRACT_IDS.SUMMARY) {
     const observed = [
