@@ -33,8 +33,8 @@ const {
   maybeHandleSpecialistInterrogationTurn,
 } = require('./SpecialistInterrogationContext');
 const {
-  maybeHandleAcquisitionMissionTurn,
-} = require('./AcquisitionMissionTurn');
+  maybeHandleWorkspaceMissionInspection,
+} = require('./WorkspaceMissionInspection');
 const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
@@ -364,6 +364,77 @@ class WorkspaceEngine {
       text: question,
     });
 
+    // AUDIT-005 / SPEC-122 — Mission Inspection is a Workspace routing concern.
+    // Runs before mission-first, intent classification, response contracts, and retrieval.
+    const workspaceMissionInspectionTurn = await maybeHandleWorkspaceMissionInspection({
+      question,
+      session,
+      context: rawContext || session.context,
+      acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
+      acquisitionMissionService: this._acquisitionMissionService || undefined,
+      persist: this._acquisitionMissionEngine ? false : undefined,
+    });
+    if (workspaceMissionInspectionTurn) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+      }
+      const structuredMission = workspaceMissionInspectionTurn.structured;
+      const presentedMission = await this._presentation.present(structuredMission);
+      const proseMission = presentedMission.prose || workspaceMissionInspectionTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseMission,
+        structured: structuredMission,
+      });
+      return {
+        sessionId: session.id,
+        prose: proseMission,
+        structured: structuredMission,
+        metadata: presentedMission.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredMission,
+          session,
+          question,
+        }),
+        recommendedActions: structuredMission.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedMission.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission:
+          workspaceMissionInspectionTurn.answered &&
+          workspaceMissionInspectionTurn.answered.mission ||
+          null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        interrogation: null,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: workspaceMissionInspectionTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: workspaceMissionInspectionTurn.reason,
+          missionType: 'acquisition_mission',
+          missionId:
+            workspaceMissionInspectionTurn.answered &&
+            workspaceMissionInspectionTurn.answered.mission
+              ? workspaceMissionInspectionTurn.answered.mission.id
+              : null,
+        },
+        ownershipTrace: workspaceMissionInspectionTurn.ownershipTrace || null,
+      };
+    }
+
     // SPEC-119 — Mission-first routing before cognitive/domain classifiers.
     // Active Mission continuation owns the turn; legacy routing must not reclaim it.
     const missionFirstTurn = await maybeHandleMissionFirstTurn({
@@ -448,69 +519,6 @@ class WorkspaceEngine {
           reason: interrogationTurn.reason,
           missionType: null,
           missionId: null,
-        },
-      };
-    }
-
-    const acquisitionMissionTurn = await maybeHandleAcquisitionMissionTurn({
-      question,
-      session,
-      context: rawContext || session.context,
-      acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
-      acquisitionMissionService: this._acquisitionMissionService || undefined,
-      persist: this._acquisitionMissionEngine ? false : undefined,
-    });
-    if (acquisitionMissionTurn) {
-      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-      if (session.context && typeof session.context === 'object') {
-        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
-        session.context._answerCorpus = 'workspace';
-      }
-      const structuredMission = acquisitionMissionTurn.structured;
-      const presentedMission = await this._presentation.present(structuredMission);
-      const proseMission = presentedMission.prose || acquisitionMissionTurn.prose;
-      this._sessions.appendMessage(session.id, {
-        role: 'max',
-        text: proseMission,
-        structured: structuredMission,
-      });
-      return {
-        sessionId: session.id,
-        prose: proseMission,
-        structured: structuredMission,
-        metadata: presentedMission.metadata,
-        suggestions: resolveResultSuggestions({
-          structured: structuredMission,
-          session,
-          question,
-        }),
-        recommendedActions: structuredMission.recommendedActions,
-        contextSwitch: envelopeSwitch,
-        domainSwitch: null,
-        context: session.context,
-        presentation: presentedMission.presentation,
-        route: ROUTE_KINDS.INTELLIGENCE,
-        mission: acquisitionMissionTurn.answered && acquisitionMissionTurn.answered.mission || null,
-        resolution: null,
-        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
-        interrogation: null,
-        domainDecision: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          reason: acquisitionMissionTurn.reason,
-          missionType: null,
-          missionIntent: null,
-          confidence: 1,
-          previousDomain: session.previousExecutionDomain || null,
-          domainSwitched: false,
-        },
-        executionContext: {
-          domain: EXECUTION_DOMAINS.WORKSPACE,
-          routeKind: ROUTE_KINDS.INTELLIGENCE,
-          reason: acquisitionMissionTurn.reason,
-          missionType: 'acquisition_mission',
-          missionId: acquisitionMissionTurn.answered && acquisitionMissionTurn.answered.mission
-            ? acquisitionMissionTurn.answered.mission.id
-            : null,
         },
       };
     }
