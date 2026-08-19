@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/acquisition-mission",
+  "version": "0.1.0",
+  "description": "Acquisition Mission Orchestration — Max manages missions, not agents (SPEC-118 / ADR-055)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}

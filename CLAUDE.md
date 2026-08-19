@@ -32,6 +32,8 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `utils/clientContext.js` | `getClientConfig(clientId)` loads full client config from `clients`; also owns idempotent client architecture migration/backfill helpers. Called by agents/routes to scope behavior and queries. |
 | `utils/closerSchema.js` | Idempotent closer-role migration helper: users role constraint, prospect closer fields, and `commissions` table. |
 | `utils/emailPerformance.js` | Email performance tracking. `ensureEmailPerformanceTable()` startup migration + `recordSend` / `recordEvent` upserts keyed on client_id/vertical/sequence/step/subject_line. Emmett calls `recordSend` after each send; `routes/webhooks.js` calls `recordEvent` on open/click/bounce. Powers Max's weekly EMAIL PERFORMANCE digest section. |
+| `packages/acquisition-mission` | SPEC-118 Acquisition Mission engine — durable mission object, contracts, workspace, timeline, health, learning. |
+| `routes/acquisitionMissions.js` | `/acquisition-missions` workspace and `/api/v1/amo/*` inspect/create/progress/ask APIs. |
 
 ---
 
@@ -107,6 +109,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Closer dashboard**: `GET /closer` → authenticated closer UI (pipeline, commission tracker, metrics strip). `requireRole('admin', 'manager', 'closer')` — in `routes/closer.js`
 - **Setter API (read-only)**: `GET /api/setter/metrics`, `GET /api/setter/feed` — consumed by Max for pipeline monitoring. No write access. `PATCH /api/setter/leads/:id/notes`, `PATCH /api/setter/leads/:id/callback`, `PATCH /api/setter/leads/:id/hot`, `POST /api/setter/leads/:id/quick-log-call`, `POST /api/setter/leads/:id/enrich-phone`, `GET /api/setter/stats/today` — in `routes/setter.js`
 - **Brevo warm signal**: Brevo POSTs email events here → Riley logs touchpoints and upgrades cold→warm automatically — in `routes/webhooks.js`
+- **Acquisition missions**: `GET /acquisition-missions`, `GET/POST /api/v1/amo/missions`, `POST /api/v1/amo/ask` — durable acquisition mission workspace (SPEC-118) — in `routes/acquisitionMissions.js`
 
 ---
 
@@ -224,3 +227,4 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **MSHI notes** — no website yet (`clients.website = 'PENDING_BUILD'`). No Facebook page yet; Faye and Paige social posting are disabled for MSHI until Brad/Dustin create the Facebook Business Page, add jacob@gopulseforge.com as editor, and `clients.facebook_url` is updated. Riley does not monitor the MSHI inbox; reply triage is manual until forwarding to jacob@gopulseforge.com or a second Gmail OAuth is configured. Max briefing sends to mshomeinnovations@gmail.com at 8:00 AM EST daily.
 - **MSHI website to-do** — separate build task. Follow the Whittaker pattern: GitHub Pages deploy, services for siding/decks/windows/interior renovation/emergency repair, lead form to mshomeinnovations@gmail.com, prominent GBP link, visible license WV065578, before/after gallery, and service area list/map for Kanawha, Putnam, and Cabell Counties.
 - **Setter → closer handoff (added May 2026)** — when William marks a prospect as `booked`, the system auto-assigns `closer_id`, writes `booked_at`, creates an `agent_actions` row of type `closer_handoff`, and emails Levi with prospect details and setter notes. Commission tracking lives in the `commissions` table. Rate: 15% MRR. Closer role has access to `/closer` only.
+- **Acquisition missions (SPEC-118, added Aug 2026)** — Max manages missions, not agents. Every outbound campaign is a durable Acquisition Mission (`packages/acquisition-mission`). Scout/Max/Paige/Emmett attach contributions under contract when `missionId` is present. Do not merge with SPEC-022 generic missions; optional `orchestrationMissionId` may bind them. Human approval still gates Execute.

@@ -33,6 +33,9 @@ const {
   maybeHandleSpecialistInterrogationTurn,
 } = require('./SpecialistInterrogationContext');
 const {
+  maybeHandleAcquisitionMissionTurn,
+} = require('./AcquisitionMissionTurn');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
 const {
@@ -177,6 +180,8 @@ class WorkspaceEngine {
    * @param {object} [options.operatingEvidenceOpts] - SPEC-105 operating evidence loaders (tests)
    * @param {object} [options.operatingUpdateOpts] - SPEC-106 operator-reported evidence (tests)
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
+   * @param {object} [options.acquisitionMissionEngine] - SPEC-118 acquisition mission engine
+   * @param {object} [options.acquisitionMissionService] - SPEC-118 service facade (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -212,6 +217,8 @@ class WorkspaceEngine {
     this._operatorContextOpts = options.operatorContextOpts || null;
     this._operatingEvidenceOpts = options.operatingEvidenceOpts || null;
     this._operatingUpdateOpts = options.operatingUpdateOpts || null;
+    this._acquisitionMissionEngine = options.acquisitionMissionEngine || null;
+    this._acquisitionMissionService = options.acquisitionMissionService || null;
     this._loadOperatorContext =
       options.loadOperatorContext != null
         ? options.loadOperatorContext !== false
@@ -414,6 +421,69 @@ class WorkspaceEngine {
           reason: interrogationTurn.reason,
           missionType: null,
           missionId: null,
+        },
+      };
+    }
+
+    const acquisitionMissionTurn = await maybeHandleAcquisitionMissionTurn({
+      question,
+      session,
+      context: rawContext || session.context,
+      acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
+      acquisitionMissionService: this._acquisitionMissionService || undefined,
+      persist: this._acquisitionMissionEngine ? false : undefined,
+    });
+    if (acquisitionMissionTurn) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+      }
+      const structuredMission = acquisitionMissionTurn.structured;
+      const presentedMission = await this._presentation.present(structuredMission);
+      const proseMission = presentedMission.prose || acquisitionMissionTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseMission,
+        structured: structuredMission,
+      });
+      return {
+        sessionId: session.id,
+        prose: proseMission,
+        structured: structuredMission,
+        metadata: presentedMission.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredMission,
+          session,
+          question,
+        }),
+        recommendedActions: structuredMission.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedMission.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission: acquisitionMissionTurn.answered && acquisitionMissionTurn.answered.mission || null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        interrogation: null,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: acquisitionMissionTurn.reason,
+          missionType: null,
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: acquisitionMissionTurn.reason,
+          missionType: 'acquisition_mission',
+          missionId: acquisitionMissionTurn.answered && acquisitionMissionTurn.answered.mission
+            ? acquisitionMissionTurn.answered.mission.id
+            : null,
         },
       };
     }

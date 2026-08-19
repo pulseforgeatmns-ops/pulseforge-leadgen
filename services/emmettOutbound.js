@@ -61,6 +61,14 @@ async function planDay(input = {}, opts = {}) {
   const instance = await hydrateTenant(input.tenantId || input.clientId, opts);
   const day = instance.planDay(input);
   await rememberPlan(day.plan, opts);
+  if (input.missionId || opts.missionId) {
+    try {
+      const { attachEmmettCapacity } = require('./acquisitionMission');
+      await attachEmmettCapacity(input, day, opts);
+    } catch (_err) {
+      // Mission attach must not block outbound planning
+    }
+  }
   return day;
 }
 

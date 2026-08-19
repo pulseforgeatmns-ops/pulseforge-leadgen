@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Acquisition Mission Orchestration ([SPEC-118](docs/specs/SPEC-118_Acquisition_Mission_Orchestration.md), [ADR-055](docs/adr/ADR-055_Max_Manages_Missions.md))
+  - Max manages missions, not agents; capabilities contribute evidence and execution
+  - Durable Acquisition Mission object with Discover → Understand → Plan → Prepare → Ready → Execute → Observe → Learn → Improve
+  - Capability contracts: Scout never messages; Max never writes copy; Paige never chooses recipients; Emmett never changes campaign messaging
+  - Shared mission context follows every capability
+  - Inspectable workspace, chronological timeline, mission health, and explicit blockers
+  - Segment learning and evidence-backed "why is this mission here?" — never invented, never auto-applied
+  - Operator workspace at `/acquisition-missions`; Scout / Paige / Emmett attach when `missionId` is present
+  - Competency `acquisition_mission_orchestration` graduated 2026-08-19
+
 - Emmett Outbound Infrastructure Intelligence ([SPEC-117](docs/specs/SPEC-117_Emmett_Outbound_Infrastructure_Intelligence.md), [ADR-054](docs/adr/ADR-054_Reputation_Is_Capital.md))
   - Emmett is not a copywriter, BDR, or sales strategist — it protects outbound reputation capital
   - Explainable Inbox Health 0–100 (SPF, DKIM, DMARC, warmup, bounce/reply/open, age, blacklist, velocity, consistency, overrides)
