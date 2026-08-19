@@ -328,7 +328,9 @@ describe('SPEC-099 bounded uncertainty probing in interview', () => {
     const understanding = formatUnderstandingAnswer(continuity);
     assert.equal(/\bi don'?t know\b/i.test(understanding), false);
     const unknownsAnswer = formatUnknownsAnswer(continuity);
-    assert.match(unknownsAnswer, /unknown/i);
+    assert.match(unknownsAnswer, /Mission Updated/i);
+    assert.match(unknownsAnswer, /Current Understanding/i);
+    assert.doesNotMatch(unknownsAnswer, /KNOWN from your approved Blueprint/i);
   });
 });
 

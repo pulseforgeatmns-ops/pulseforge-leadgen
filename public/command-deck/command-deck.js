@@ -4126,6 +4126,67 @@
     scrollMxThread();
   }
 
+  const REASONING_MARKER = '▼ Show reasoning';
+  const REASONING_EXPANDED_MARKER = '▲ Hide reasoning';
+
+  function stripReasoningMarker(prose) {
+    const text = String(prose || '');
+    return text
+      .replace(new RegExp(`\\n?${REASONING_EXPANDED_MARKER}[\\s\\S]*$`), '')
+      .replace(new RegExp(`\\n?${REASONING_MARKER}\\s*$`), '')
+      .trim();
+  }
+
+  function renderReasoningDisclosure(reasoningEvidence) {
+    if (!reasoningEvidence || typeof reasoningEvidence !== 'object') return '';
+    const sections = [];
+    if (Array.isArray(reasoningEvidence.known) && reasoningEvidence.known.length) {
+      sections.push(
+        `<div class="mx-reasoning-group"><h4>Known</h4><ul>${reasoningEvidence.known
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></div>`
+      );
+    }
+    if (Array.isArray(reasoningEvidence.inference) && reasoningEvidence.inference.length) {
+      sections.push(
+        `<div class="mx-reasoning-group"><h4>Inference</h4><ul>${reasoningEvidence.inference
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></div>`
+      );
+    }
+    if (Array.isArray(reasoningEvidence.unknown) && reasoningEvidence.unknown.length) {
+      sections.push(
+        `<div class="mx-reasoning-group"><h4>Unknown</h4><ul>${reasoningEvidence.unknown
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></div>`
+      );
+    }
+    if (
+      Array.isArray(reasoningEvidence.evidenceNeeded) &&
+      reasoningEvidence.evidenceNeeded.length
+    ) {
+      sections.push(
+        `<div class="mx-reasoning-group"><h4>Evidence Needed</h4><ul>${reasoningEvidence.evidenceNeeded
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></div>`
+      );
+    }
+    if (reasoningEvidence.confidence != null) {
+      sections.push(
+        `<div class="mx-reasoning-confidence">Confidence: ${escapeHtml(
+          Number(reasoningEvidence.confidence).toFixed(2)
+        )}</div>`
+      );
+    }
+    if (!sections.length) return '';
+    return `
+      <details class="mx-reasoning-disclosure">
+        <summary>${escapeHtml(REASONING_MARKER)}</summary>
+        <div class="mx-reasoning-body">${sections.join('')}</div>
+      </details>
+    `;
+  }
+
   /**
    * SPEC-102 — progressive Max Workspace response.
    * Prose reveals first; evidence/meta/actions appear after completion.
@@ -4135,7 +4196,8 @@
     const Cadence = window.MaxInteractionCadence;
     const structured = result.structured || {};
     const metadata = result.metadata || structured.metadata || {};
-    const prose = String(result.prose || '');
+    const rawProse = String(result.prose || '');
+    const prose = stripReasoningMarker(rawProse);
     const meta = presentation || {};
     const div = document.createElement('div');
     div.className = 'mx-msg';
@@ -4168,12 +4230,16 @@
     scrollMxThread();
 
     const finishSupporting = () => {
+      const reasoningHtml =
+        metadata.showReasoningDisclosure === true
+          ? renderReasoningDisclosure(metadata.reasoningEvidence)
+          : '';
       const evidenceHtml = renderEvidencePanel(structured);
       const metaHtml = renderMetadataStrip(metadata);
       const actionsHtml = renderRecommendedActions(
         result.recommendedActions || structured.recommendedActions || []
       );
-      supporting.innerHTML = `${evidenceHtml}${metaHtml}${actionsHtml}`;
+      supporting.innerHTML = `${reasoningHtml}${evidenceHtml}${metaHtml}${actionsHtml}`;
       supporting.hidden = false;
       supporting.classList.add('is-visible');
       bindWorkspaceActions(div);

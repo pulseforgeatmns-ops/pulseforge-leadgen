@@ -596,6 +596,18 @@ function workspaceStructured(answer, reasoning, extras = {}) {
   if (extras.internalReasoning) {
     metadata.internalReasoning = extras.internalReasoning;
   }
+  if (extras.missionCommunication === true) {
+    metadata.missionCommunication = true;
+  }
+  if (extras.missionCommunicationPayload) {
+    metadata.missionCommunicationPayload = extras.missionCommunicationPayload;
+  }
+  if (extras.reasoningEvidence) {
+    metadata.reasoningEvidence = extras.reasoningEvidence;
+  }
+  if (extras.showReasoningDisclosure === true) {
+    metadata.showReasoningDisclosure = true;
+  }
   return buildStructuredResponse({
     answer,
     reasoning: extras.clientFacingReasoning != null
@@ -1592,76 +1604,23 @@ function formatTargetingAnswer(summary) {
   );
 }
 
-function formatUnknownsAnswer(summary) {
-  const icp = summary.idealCustomers || null;
-  const market = summary.geography || summary.targetMarkets || null;
-  const goals = summary.campaignGoals || null;
-  const metrics = summary.successMetrics || null;
-  const knownBits = [];
-  if (summary.identity || summary.businessName) {
-    knownBits.push(presentText(summary.identity || summary.businessName));
-  }
-  if (icp) knownBits.push(`ideal customers center on ${icp}`);
-  if (market) knownBits.push(`geography is anchored to ${market}`);
-  if (goals) knownBits.push(`near-term goal is ${goals}`);
-  if (metrics) knownBits.push(`success is judged by ${metrics}`);
-
-  const paragraphs = [];
-  paragraphs.push(
-    'We have enough clarity to begin, but there are still several things I would not claim to know yet.'
-  );
-
-  if (knownBits.length) {
-    paragraphs.push(
-      `KNOWN from your approved Blueprint: ${knownBits.slice(0, 3).join('; ')}.`
-    );
-  }
-
-  const inferenceBits = [];
-  if (icp) {
-    inferenceBits.push(
-      `starting with ${icp}${market ? ` in ${market}` : ''} is a reasonable first motion`
-    );
-  } else {
-    inferenceBits.push(
-      'a tighter commercial acquisition motion is the right shape of first experiment'
-    );
-  }
-  paragraphs.push(
-    `INFERENCE (Max reasoning, not new fact): ${inferenceBits.join('; ')}. ` +
-      'That is directional guidance from approved understanding — not observed performance.'
-  );
-
-  const unknownBits = [];
-  if (market) {
-    unknownBits.push(
-      `which part of the ${market} commercial market will respond best`
-    );
-  } else {
-    unknownBits.push('which part of the commercial market will respond best');
-  }
-  if (icp && /property|facility/i.test(icp)) {
-    unknownBits.push(
-      'whether property managers will outperform facility managers'
-    );
-  } else {
-    unknownBits.push('which decision-maker segment will outperform the others');
-  }
-  unknownBits.push(
-    'which acquisition motion will produce the strongest recurring contracts'
-  );
-  for (const u of summary.unknowns || []) {
-    if (u) unknownBits.push(presentText(u));
-  }
-  paragraphs.push(`UNKNOWN: ${unknownBits.slice(0, 4).join('; ')}.`);
-
-  paragraphs.push(
-    'EVIDENCE NEEDED: we do not yet have enough campaign evidence to know expected walkthrough rate, close rate, or acquisition cost. ' +
-      "Those are not reasons to wait — they are the things the first acquisition experiment should help us learn. " +
-      'I will not invent live companies, signals, or performance claims.'
-  );
-
-  return paragraphs.join('\n\n');
+function formatUnknownsAnswer(summary, opts = {}) {
+  const {
+    buildUnknownsMissionCommunication,
+    formatMissionProse,
+    looksLikeReasoningRequest,
+  } = require('./MissionCommunication');
+  const comm = buildUnknownsMissionCommunication(summary, {
+    presentText,
+    explicitReasoningRequest:
+      opts.explicitReasoningRequest === true ||
+      looksLikeReasoningRequest(opts.question),
+  });
+  return formatMissionProse(comm, {
+    explicitReasoningRequest:
+      opts.explicitReasoningRequest === true ||
+      looksLikeReasoningRequest(opts.question),
+  });
 }
 
 /**
@@ -1886,11 +1845,24 @@ function composeClientContextReasoning(summary, question, opts = {}) {
   }
 
   if (mode === 'unknowns') {
+    const {
+      buildUnknownsMissionCommunication,
+      formatMissionProse,
+      looksLikeReasoningRequest,
+    } = require('./MissionCommunication');
+    const explicitReasoning = looksLikeReasoningRequest(question);
+    const missionCommunication = buildUnknownsMissionCommunication(summary, {
+      presentText,
+      explicitReasoningRequest: explicitReasoning,
+    });
     return {
-      prose: formatUnknownsAnswer(summary),
+      prose: formatMissionProse(missionCommunication, {
+        explicitReasoningRequest: explicitReasoning,
+      }),
       kind: 'unknowns',
       confidenceLabel: 'high',
       confidence: 0.9,
+      missionCommunication,
     };
   }
 
@@ -2432,6 +2404,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
 
   let planSteps = null;
   let conversationalFocusIndex = null;
+  let missionCommunicationPayload = null;
 
   if (looksLikeBusinessUnderstandingAsk(question)) {
     prose = formatUnderstandingAnswer(summary);
@@ -2459,6 +2432,9 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
       conversationalFocusIndex = composed.conversationalFocusIndex;
       confidence = composed.confidence != null ? composed.confidence : 0.74;
       confidenceLabel = composed.confidenceLabel || 'moderate';
+      if (composed.missionCommunication) {
+        missionCommunicationPayload = composed.missionCommunication;
+      }
       if (turnKind === 'understanding') {
         reason = 'client_intelligence_understanding';
       } else if (turnKind === 'targeting') {
@@ -2522,6 +2498,16 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
         : turnKind === 'evidence_gap'
           ? []
           : ['What do we still not know?', 'Why that direction?'],
+    ...(missionCommunicationPayload
+      ? {
+          missionCommunication: true,
+          missionCommunicationPayload,
+          reasoningEvidence: missionCommunicationPayload.reasoningEvidence,
+          showReasoningDisclosure: Boolean(
+            missionCommunicationPayload.reasoningEvidence
+          ),
+        }
+      : {}),
   });
 
   recordLastCieTurn(session, {

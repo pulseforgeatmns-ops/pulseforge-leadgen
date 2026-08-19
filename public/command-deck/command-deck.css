@@ -1280,6 +1280,45 @@ body.theme-dark .mx-panel {
   line-height: 1.45;
 }
 
+.mx-reasoning-disclosure {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--pf-border);
+  padding-top: 0.55rem;
+}
+.mx-reasoning-disclosure > summary {
+  cursor: pointer;
+  font-family: var(--pf-font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  color: var(--pf-text-muted);
+  list-style: none;
+}
+.mx-reasoning-disclosure > summary::-webkit-details-marker { display: none; }
+.mx-reasoning-body {
+  margin-top: 0.55rem;
+  display: grid;
+  gap: 0.65rem;
+}
+.mx-reasoning-group h4 {
+  margin: 0 0 0.25rem;
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+.mx-reasoning-group ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+  color: var(--pf-text-dim);
+  line-height: 1.45;
+}
+.mx-reasoning-confidence {
+  font-size: 0.75rem;
+  color: var(--pf-text-muted);
+}
+
 .mx-meta {
   margin-top: 0.65rem;
   border-top: 1px solid var(--pf-border);

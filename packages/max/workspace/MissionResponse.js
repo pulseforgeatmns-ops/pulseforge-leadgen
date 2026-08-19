@@ -6,6 +6,12 @@
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const {
+  buildEngineMissionCommunication,
+  formatMissionProse,
+  applyMissionCommunication,
+  buildReasoningEvidence,
+} = require('./MissionCommunication');
 
 /**
  * @param {object} input
@@ -16,66 +22,26 @@ const { buildStructuredResponse } = require('./WorkspaceTypes');
 function composeMissionResponse(input) {
   const mission = input.mission;
   const card = input.card || null;
-  const title = mission.title || 'Mission';
-  const stage =
-    (mission.progress && mission.progress.currentStage) || mission.status;
-  const percent =
-    mission.progress && mission.progress.percent != null
-      ? mission.progress.percent
-      : 0;
-  const counts = mission.progress && mission.progress.counts;
 
-  const countLine = counts
-    ? `${counts.completed} / ${counts.total}`
-    : `${mission.progress?.completedSteps || 0} / ${mission.progress?.totalSteps || 0} steps`;
-
-  const answer = [
-    `Mission created: ${title}.`,
-    mission.discoveryProfile
-      ? [
-          mission.discoveryProfile.message ||
-            `Using Discovery Profile: ${mission.discoveryProfile.name}.`,
-          mission.discoveryProfile.reason
-            ? `Reason: ${mission.discoveryProfile.reason}.`
-            : null,
-          mission.discoveryProfile.confidence != null
-            ? `Confidence: ${Number(mission.discoveryProfile.confidence).toFixed(2)}.`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(' ')
-      : null,
-    mission.operatorProspectList && mission.operatorProspectList.injected
-      ? `Operator ProspectList imported (${mission.operatorProspectList.prospectCount} prospects). Discovery marked Satisfied (Operator Supplied); continuing at Business Intelligence.`
-      : null,
-    mission.operatorProspectList &&
-    mission.operatorProspectList.promptImport &&
-    !mission.operatorProspectList.injected
-      ? `Detected a prospect list in your prompt (${mission.operatorProspectList.prospectCount || 'partial'} rows). Open Mission Workspace to Import Prospect List, or retry after fixing Company Name on each row.`
-      : null,
-    `Status: ${formatStatus(mission.status)}.`,
-    `Current stage: ${stage} (${percent}%, ${countLine}).`,
-    Array.isArray(mission.blockingIssues) && mission.blockingIssues.length
-      ? `Blocked: ${mission.blockingIssues.join(' ')}`
-      : null,
-    mission.stageReview && mission.stageReview.blockingIssues
-      ? `Blocked: ${mission.stageReview.blockingIssues.join(' ')}`
-      : null,
-    mission.status === 'waiting' &&
-    ((mission.stageReview &&
-      mission.stageReview.capabilityId === 'prospect_discovery') ||
-      (Array.isArray(mission.blockingIssues) && mission.blockingIssues.length) ||
-      (mission.deliverables && mission.deliverables.pendingOperatorImport))
-      ? 'You can Retry Discovery, Import a Prospect List, or Cancel from Mission Workspace.'
-      : null,
-    mission.status === 'review_required'
-      ? 'Results are ready for your review. No outbound actions were taken.'
-      : mission.status === 'waiting'
-        ? 'Mission is paused for operator review.'
-        : 'Progress will appear in Operations on the Command Deck.',
-  ]
-    .filter(Boolean)
-    .join(' ');
+  const missionComm = buildEngineMissionCommunication(mission, {
+    created: true,
+    reasoningLines: buildMissionReasoningLines(input, mission),
+    includeReasoning: false,
+  });
+  missionComm.reasoningEvidence = buildReasoningEvidence({
+    known: [`Mission type: ${mission.type || 'acquisition'}.`],
+    inference: buildMissionReasoningLines(input, mission),
+    unknown: [
+      ...(Array.isArray(mission.blockingIssues) ? mission.blockingIssues : []),
+      ...(mission.stageReview && Array.isArray(mission.stageReview.blockingIssues)
+        ? mission.stageReview.blockingIssues
+        : []),
+    ].map(String),
+    evidenceNeeded: [],
+    confidence: mission.confidence != null ? Number(mission.confidence) : 0.8,
+  });
+  missionComm.includeReasoningMarker = true;
+  const answer = formatMissionProse(missionComm);
 
   const recommendedExtras = [];
   if (
@@ -91,54 +57,51 @@ function composeMissionResponse(input) {
     });
   }
 
-  return buildMissionStructured({
+  const base = buildMissionStructured({
     answer,
     mission,
     card,
-    reasoning: [
-      input.executionDomain === 'mission_diagnostics'
-        ? 'Routed as Mission Diagnostics through Intent Understanding → Mission Engine.'
-        : 'Routed as a business objective through the Mission Engine (not Market Intelligence).',
-      `Mission type: ${mission.type}.`,
-      input.executionDomain
-        ? `Execution domain: ${input.executionDomain}.`
-        : null,
-      mission.discoveryProfile
-        ? `Discovery Profile: ${mission.discoveryProfile.name} v${mission.discoveryProfile.version}.`
-        : null,
-      mission.operatorProspectList && mission.operatorProspectList.injected
-        ? `Operator Artifact Injection: ${mission.operatorProspectList.prospectCount} prospects via ${mission.operatorProspectList.source}.`
-        : null,
-      mission.plan && mission.plan.reasoning && mission.plan.reasoning.summary
-        ? `Planner: ${mission.plan.reasoning.summary}.`
-        : null,
-      mission.plan && mission.plan.explanation && mission.plan.explanation.pipeline
-        ? `Execution graph: ${mission.plan.explanation.pipeline}.`
-        : `Plan: ${((mission.plan && mission.plan.steps) || [])
-            .map((s) => s.name || s.capabilityId)
-            .join(' → ') || 'n/a'}.`,
-      mission.plan &&
-      mission.plan.explanation &&
-      mission.plan.explanation.answers &&
-      mission.plan.explanation.answers.whyReviewRequired &&
-      mission.plan.explanation.answers.whyReviewRequired.included
-        ? `Review required: ${mission.plan.explanation.answers.whyReviewRequired.reason}.`
-        : null,
-    ].filter(Boolean),
+    reasoning: [],
     recommendedExtras,
     metadataExtras: input.executionDomain
       ? { executionDomain: input.executionDomain, surface: 'mission_workspace' }
       : { surface: 'mission_workspace' },
   });
+
+  return applyMissionCommunication(base, missionComm);
 }
 
-/**
- * SPEC-039 — response for resume / modify / diagnose (no new Mission).
- * @param {object} input
- * @param {object} input.resolution - ActiveMissionResolver.resolve result
- * @param {object} [input.card]
- * @param {string} input.question
- */
+function buildMissionReasoningLines(input, mission) {
+  return [
+    input.executionDomain === 'mission_diagnostics'
+      ? 'Routed as Mission Diagnostics through Intent Understanding → Mission Engine.'
+      : 'Routed as a business objective through the Mission Engine (not Market Intelligence).',
+    `Mission type: ${mission.type}.`,
+    input.executionDomain ? `Execution domain: ${input.executionDomain}.` : null,
+    mission.discoveryProfile
+      ? `Discovery Profile: ${mission.discoveryProfile.name} v${mission.discoveryProfile.version}.`
+      : null,
+    mission.operatorProspectList && mission.operatorProspectList.injected
+      ? `Operator Artifact Injection: ${mission.operatorProspectList.prospectCount} prospects via ${mission.operatorProspectList.source}.`
+      : null,
+    mission.plan && mission.plan.reasoning && mission.plan.reasoning.summary
+      ? `Planner: ${mission.plan.reasoning.summary}.`
+      : null,
+    mission.plan && mission.plan.explanation && mission.plan.explanation.pipeline
+      ? `Execution graph: ${mission.plan.explanation.pipeline}.`
+      : `Plan: ${((mission.plan && mission.plan.steps) || [])
+          .map((s) => s.name || s.capabilityId)
+          .join(' → ') || 'n/a'}.`,
+    mission.plan &&
+    mission.plan.explanation &&
+    mission.plan.explanation.answers &&
+    mission.plan.explanation.answers.whyReviewRequired &&
+    mission.plan.explanation.answers.whyReviewRequired.included
+      ? `Review required: ${mission.plan.explanation.answers.whyReviewRequired.reason}.`
+      : null,
+  ].filter(Boolean);
+}
+
 function composeActiveMissionResponse(input) {
   const resolution = input.resolution;
   const mission = resolution.mission;
@@ -146,99 +109,95 @@ function composeActiveMissionResponse(input) {
   const title = mission.title || 'Mission';
   const action = resolution.action;
 
-  let answer;
-  let reasoning;
+  let headline = 'Mission Updated';
+  let nextStep = 'Continue in Mission Workspace.';
+  let operatorDecision = null;
+  const reasoningLines = [
+    `Active Mission Resolver — ${action}.`,
+    `Mission: ${title} (${mission.id}).`,
+    `Classification: ${resolution.classification}.`,
+    `Resolution path: ${resolution.resolutionPath}.`,
+  ];
 
   if (action === 'diagnosed' && resolution.diagnosis) {
-    answer = resolution.diagnosis.summary;
-    reasoning = [
-      'Active Mission Resolver — diagnose (IntentRouter not used).',
-      `Mission: ${title} (${mission.id}).`,
-      `Classification: ${resolution.classification}.`,
-      resolution.diagnosis.lastFail
-        ? `Last step_fail: ${resolution.diagnosis.lastFail.capabilityId}.`
-        : 'No step_fail events.',
-    ];
+    headline = 'Mission Blocked';
+    nextStep = resolution.diagnosis.summary;
+    if (resolution.diagnosis.lastFail) {
+      reasoningLines.push(
+        `Last step_fail: ${resolution.diagnosis.lastFail.capabilityId}.`
+      );
+    }
   } else if (action === 'modified' && resolution.modification) {
-    answer = [
-      `Mission updated: ${title}.`,
-      resolution.modification.summary,
-      `Status: ${formatStatus(mission.status)}.`,
-      mission.status === 'review_required'
-        ? 'Results are ready for your review. No outbound actions were taken.'
-        : null,
-    ]
-      .filter(Boolean)
-      .join(' ');
-    reasoning = [
-      'Active Mission Resolver — modify (same Mission, stale capabilities rerun).',
-      `Mission: ${title} (${mission.id}).`,
-      `Classification: ${resolution.classification}.`,
-    ];
+    headline = 'Mission Updated';
+    nextStep = resolution.modification.summary;
+    if (mission.status === 'review_required') {
+      operatorDecision = 'Review and approve results?';
+    }
   } else if (action === 'blocked') {
-    const stage =
-      (mission.progress && mission.progress.currentStage) || mission.status;
-    answer = [
-      `Mission: ${title}.`,
-      stage ? `Current stage: ${stage}.` : null,
-      'Unable to continue.',
-      resolution.reason ? `Reason: ${resolution.reason}.` : null,
-      'Mission remains active. No progress lost.',
-    ]
-      .filter(Boolean)
-      .join(' ');
-    reasoning = [
-      'Mission Engine owns this turn — general reasoning was not used.',
-      `Mission: ${title} (${mission.id}).`,
-      `Resolution path: ${resolution.resolutionPath}.`,
-    ];
+    headline = 'Mission Blocked';
+    nextStep = resolution.reason
+      ? `${resolution.reason}. Mission remains active. No progress lost.`
+      : 'Unable to continue. Mission remains active. No progress lost.';
+    operatorDecision = 'Resolve blocker to continue?';
   } else if (action === 'clarified') {
-    answer = [
-      'Got it. I will not resume Direct Mail Execution from that correction.',
-      'You are asking for a preparation/review-only canary, not an execution run.',
-      'To continue, I need either an attached prospect list or permission to use the existing campaign prospects.',
-      'Once I have that, I should return ready/blocked status, missing fields, packet contents, letters, notes, scorecard covers, follow-up notes, next actions, and tracking fields before anything is approved or mailed.',
-    ].join(' ');
-    reasoning = [
-      'The operator explicitly constrained this as preparation/review only.',
-      'The active execution Mission was not resumed.',
-    ];
+    const base = buildMissionStructured({
+      answer: [
+        'Got it. I will not resume Direct Mail Execution from that correction.',
+        'You are asking for a preparation/review-only canary, not an execution run.',
+        'To continue, I need either an attached prospect list or permission to use the existing campaign prospects.',
+        'Once I have that, I should return ready/blocked status, missing fields, packet contents, letters, notes, scorecard covers, follow-up notes, next actions, and tracking fields before anything is approved or mailed.',
+      ].join(' '),
+      mission,
+      card,
+      reasoning: [
+        'The operator explicitly constrained this as preparation/review only.',
+        'The active execution Mission was not resumed.',
+      ],
+      metadataExtras: {
+        activeMissionAction: action,
+        classification: resolution.classification,
+        resolutionPath: resolution.resolutionPath,
+        ...(input.executionDomain
+          ? {
+              executionDomain: input.executionDomain,
+              surface: 'mission_workspace',
+            }
+          : { surface: 'mission_workspace' }),
+      },
+    });
+    return base;
   } else {
-    const stage =
-      (mission.progress && mission.progress.currentStage) || mission.status;
-    answer = [
-      `Resumed Mission: ${title}.`,
-      `Status: ${formatStatus(mission.status)}.`,
-      `Current stage: ${stage}.`,
-      Array.isArray(mission.blockingIssues) && mission.blockingIssues.length
-        ? `Blocked: ${mission.blockingIssues.join(' ')}`
-        : null,
-      mission.stageReview &&
-      Array.isArray(mission.stageReview.blockingIssues) &&
-      mission.stageReview.blockingIssues.length
-        ? `Blocked: ${mission.stageReview.blockingIssues.join(' ')}`
-        : null,
-      mission.status === 'review_required'
-        ? 'Results are ready for your review. No outbound actions were taken.'
-        : mission.status === 'waiting'
-          ? 'Mission is paused — ask why it failed or run again.'
-          : 'Continuing with the active Mission (no new Mission created).',
-    ]
-      .filter(Boolean)
-      .join(' ');
-    reasoning = [
-      'Active Mission Resolver — resume (IntentRouter not used).',
-      `Mission: ${title} (${mission.id}).`,
-      `Classification: ${resolution.classification}.`,
-      `Resolution path: ${resolution.resolutionPath}.`,
-    ];
+    headline = 'Mission Updated';
+    if (mission.status === 'review_required') {
+      nextStep = 'Results are ready for your review. No outbound actions were taken.';
+      operatorDecision = 'Review and approve results?';
+    } else if (mission.status === 'waiting') {
+      nextStep = 'Mission is paused — ask why it failed or run again.';
+      operatorDecision = 'Retry, import a prospect list, or cancel?';
+    } else {
+      nextStep = 'Continuing with the active Mission (no new Mission created).';
+    }
   }
 
-  return buildMissionStructured({
+  const missionComm = buildEngineMissionCommunication(mission, {
+    created: false,
+    reasoningLines,
+    includeReasoning: false,
+  });
+  missionComm.headline = headline;
+  missionComm.nextStep = nextStep;
+  missionComm.operatorDecision = operatorDecision;
+  if (action === 'blocked' || (Array.isArray(mission.blockingIssues) && mission.blockingIssues.length)) {
+    missionComm.health = 'Blocked';
+    missionComm.waitingOn = 'Operator approval';
+  }
+
+  const answer = formatMissionProse(missionComm);
+  const base = buildMissionStructured({
     answer,
     mission,
     card,
-    reasoning,
+    reasoning: [],
     metadataExtras: {
       activeMissionAction: action,
       classification: resolution.classification,
@@ -251,6 +210,7 @@ function composeActiveMissionResponse(input) {
         : { surface: 'mission_workspace' }),
     },
   });
+  return applyMissionCommunication(base, missionComm);
 }
 
 function buildMissionStructured(input) {

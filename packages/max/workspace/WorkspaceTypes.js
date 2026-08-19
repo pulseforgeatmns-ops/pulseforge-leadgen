@@ -275,7 +275,17 @@ function buildResponseMetadata(partial = {}) {
   if (partial.claimChallenge === true) meta.claimChallenge = true;
   if (partial.claimVerdict != null) meta.claimVerdict = String(partial.claimVerdict);
   if (partial.executed === false) meta.executed = false;
-  if (partial.executed === true) meta.executed = true;
+  if (partial.acquisitionMission === true) meta.acquisitionMission = true;
+  if (partial.missionCommunication === true) meta.missionCommunication = true;
+  if (partial.missionCommunicationPayload != null) {
+    meta.missionCommunicationPayload = partial.missionCommunicationPayload;
+  }
+  if (partial.reasoningEvidence != null) {
+    meta.reasoningEvidence = partial.reasoningEvidence;
+  }
+  if (partial.showReasoningDisclosure === true) {
+    meta.showReasoningDisclosure = true;
+  }
   return meta;
 }
 
