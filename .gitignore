@@ -22,3 +22,4 @@ packages/kalshi-research/*.db
 packages/kalshi-research/.env
 packages/kalshi-research/*.key
 .pytest_cache/
+ci-stage-timings.jsonl
