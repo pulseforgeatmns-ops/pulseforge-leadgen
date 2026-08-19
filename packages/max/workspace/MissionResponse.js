@@ -175,6 +175,23 @@ function composeActiveMissionResponse(input) {
       `Mission: ${title} (${mission.id}).`,
       `Classification: ${resolution.classification}.`,
     ];
+  } else if (action === 'blocked') {
+    const stage =
+      (mission.progress && mission.progress.currentStage) || mission.status;
+    answer = [
+      `Mission: ${title}.`,
+      stage ? `Current stage: ${stage}.` : null,
+      'Unable to continue.',
+      resolution.reason ? `Reason: ${resolution.reason}.` : null,
+      'Mission remains active. No progress lost.',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    reasoning = [
+      'Mission Engine owns this turn — general reasoning was not used.',
+      `Mission: ${title} (${mission.id}).`,
+      `Resolution path: ${resolution.resolutionPath}.`,
+    ];
   } else if (action === 'clarified') {
     answer = [
       'Got it. I will not resume Direct Mail Execution from that correction.',
