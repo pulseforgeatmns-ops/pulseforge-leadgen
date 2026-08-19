@@ -26,6 +26,9 @@ const {
   ensureTenantWorkspaceSchema,
 } = require('../services/tenantWorkspace');
 const {
+  listCanonicalBusinessVerticals,
+} = require('../utils/canonicalVerticals');
+const {
   resolveActiveTenantId,
   resolveMaxPromptContext,
   NO_ACTIVE_CLIENT,
@@ -50,6 +53,15 @@ function sendTenantError(res, err) {
 
 router.get('/admin/clients', requireOperator, (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'admin-clients.html'));
+});
+
+router.get('/api/canonical-verticals', (req, res) => {
+  noStore(res);
+  return res.json({
+    ok: true,
+    spec: 'PEC-116',
+    verticals: listCanonicalBusinessVerticals(),
+  });
 });
 
 router.post('/api/clients', requireOperator, async (req, res) => {

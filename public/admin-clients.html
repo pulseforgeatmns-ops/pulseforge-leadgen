@@ -56,8 +56,11 @@
         <input id="email" name="email" type="email" required placeholder="founders@example.com">
         <div class="row2">
           <div>
-            <label for="industry">Industry *</label>
-            <input id="industry" name="industry" required placeholder="Founder-led agencies">
+            <label for="businessVertical">Business Vertical *</label>
+            <select id="businessVertical" name="businessVertical" required>
+              <option value="">Select a business vertical…</option>
+            </select>
+            <p class="hint" style="margin-top:0.35rem;margin-bottom:0;">What this business sells. ICP is captured later in Client Intelligence.</p>
           </div>
           <div>
             <label for="country">Country *</label>
@@ -192,9 +195,27 @@
     }));
   }
 
+  function renderVerticalOptions(verticals) {
+    const select = document.getElementById('businessVertical');
+    const options = (verticals || []).map(function(v) {
+      return '<option value="' + v.value + '">' + v.label + '</option>';
+    }).join('');
+    select.innerHTML = '<option value="">Select a business vertical…</option>' + options;
+  }
+
+  async function loadVerticalOptions() {
+    const data = await api('/api/canonical-verticals');
+    renderVerticalOptions(data.verticals || []);
+  }
+
   document.getElementById('createForm').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const btn = document.getElementById('createBtn');
+    const verticalSelect = document.getElementById('businessVertical');
+    if (!verticalSelect.value) {
+      setMsg('Choose a business vertical before creating the tenant.', 'err');
+      return;
+    }
     btn.disabled = true;
     setMsg('Provisioning workspace…');
     try {
@@ -202,7 +223,7 @@
         companyName: document.getElementById('companyName').value,
         primaryContact: document.getElementById('primaryContact').value,
         email: document.getElementById('email').value,
-        industry: document.getElementById('industry').value,
+        vertical: verticalSelect.value,
         country: document.getElementById('country').value,
         timezone: document.getElementById('timezone').value,
         website: document.getElementById('website').value,
@@ -235,7 +256,8 @@
     if (id) activate(id).catch((err) => setMsg(err.message, 'err'));
   });
 
-  loadClients()
+  loadVerticalOptions()
+    .then(function() { return loadClients(); })
     .then((data) => loadWorkspace(data.active_client_id))
     .catch((err) => setMsg(err.message, 'err'));
 </script>

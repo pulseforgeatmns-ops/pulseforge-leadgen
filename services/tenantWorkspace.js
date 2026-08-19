@@ -17,12 +17,18 @@ const {
   deriveWorkspaceLifecycle,
   publicLifecycle,
 } = require('./workspaceLifecycle');
+const {
+  assertCanonicalBusinessVertical,
+  mapVerticalConstraintError,
+  labelForBusinessVertical,
+  ensureCanonicalVerticalConstraint,
+} = require('../utils/canonicalVerticals');
 
 const REQUIRED_FIELDS = [
   'companyName',
   'primaryContact',
   'email',
-  'industry',
+  'vertical',
   'country',
   'timezone',
 ];
@@ -75,11 +81,12 @@ function initialWorkspaceStatus() {
 }
 
 function validateCreateClientInput(raw = {}) {
+  const verticalRaw = raw.vertical || raw.industry;
   const input = {
     companyName: asText(raw.companyName || raw.company_name || raw.name, 200),
     primaryContact: asText(raw.primaryContact || raw.primary_contact, 200),
     email: asText(raw.email, 200).toLowerCase(),
-    industry: asText(raw.industry || raw.vertical, 120),
+    vertical: asText(verticalRaw, 120),
     country: asText(raw.country, 80),
     timezone: asText(raw.timezone || raw.time_zone, 80),
     website: asText(raw.website, 300) || null,
@@ -103,6 +110,7 @@ function validateCreateClientInput(raw = {}) {
     err.status = 400;
     throw err;
   }
+  input.vertical = assertCanonicalBusinessVertical(input.vertical);
   return input;
 }
 
@@ -200,9 +208,9 @@ function createPostgresTenantStore(pool) {
            country, timezone, website, logo_url, phone, notes, team_size,
            sender_name, max_email, enabled_agents, active
          ) VALUES (
-           $1, $2, $1, $3, $4, $5, $5,
-           $6, $7, $8, $9, $10, $11, $12,
-           $3, $4, $13, true
+           $1, $2, $1, $3, $4, $5, $6,
+           $7, $8, $9, $10, $11, $12, $13,
+           $3, $4, $14, true
          )
          RETURNING *`,
         [
@@ -211,6 +219,7 @@ function createPostgresTenantStore(pool) {
           row.primary_contact,
           row.email,
           row.industry,
+          row.vertical || row.industry,
           row.country,
           row.timezone,
           row.website,
@@ -426,6 +435,7 @@ async function getPublishedAimForTenant({ pool, store, clientId, aimLookup }) {
 }
 
 async function ensureTenantWorkspaceSchema(pool = defaultPool) {
+  await ensureCanonicalVerticalConstraint(pool);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS primary_contact TEXT`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS industry TEXT`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS country TEXT`);
@@ -476,44 +486,50 @@ async function createAndProvisionTenant({
   let client;
   const assignedId =
     typeof mem.nextClientId === 'function' ? await mem.nextClientId() : null;
-  if (assignedId != null) {
-    client = await mem.insertClient({
-      id: assignedId,
-      name: fields.companyName,
-      slug,
-      business_name: fields.companyName,
-      primary_contact: fields.primaryContact,
-      email: fields.email,
-      industry: fields.industry,
-      vertical: fields.industry,
-      country: fields.country,
-      timezone: fields.timezone,
-      website: fields.website,
-      logo_url: fields.logoUrl,
-      phone: fields.phone,
-      notes: fields.notes,
-      team_size: fields.teamSize,
-      sender_name: fields.primaryContact,
-      max_email: fields.email,
-      enabled_agents: NEW_TENANT_AGENTS,
-      active: true,
-    });
-  } else {
-    client = await mem.insertClient({
-      name: fields.companyName,
-      slug,
-      primary_contact: fields.primaryContact,
-      email: fields.email,
-      industry: fields.industry,
-      country: fields.country,
-      timezone: fields.timezone,
-      website: fields.website,
-      logo_url: fields.logoUrl,
-      phone: fields.phone,
-      notes: fields.notes,
-      team_size: fields.teamSize,
-      enabled_agents: NEW_TENANT_AGENTS,
-    });
+  const verticalLabel = labelForBusinessVertical(fields.vertical);
+  try {
+    if (assignedId != null) {
+      client = await mem.insertClient({
+        id: assignedId,
+        name: fields.companyName,
+        slug,
+        business_name: fields.companyName,
+        primary_contact: fields.primaryContact,
+        email: fields.email,
+        industry: verticalLabel || fields.vertical,
+        vertical: fields.vertical,
+        country: fields.country,
+        timezone: fields.timezone,
+        website: fields.website,
+        logo_url: fields.logoUrl,
+        phone: fields.phone,
+        notes: fields.notes,
+        team_size: fields.teamSize,
+        sender_name: fields.primaryContact,
+        max_email: fields.email,
+        enabled_agents: NEW_TENANT_AGENTS,
+        active: true,
+      });
+    } else {
+      client = await mem.insertClient({
+        name: fields.companyName,
+        slug,
+        primary_contact: fields.primaryContact,
+        email: fields.email,
+        industry: verticalLabel || fields.vertical,
+        vertical: fields.vertical,
+        country: fields.country,
+        timezone: fields.timezone,
+        website: fields.website,
+        logo_url: fields.logoUrl,
+        phone: fields.phone,
+        notes: fields.notes,
+        team_size: fields.teamSize,
+        enabled_agents: NEW_TENANT_AGENTS,
+      });
+    }
+  } catch (err) {
+    throw mapVerticalConstraintError(err);
   }
 
   const ns = namespacesFor(client.id, slug);
@@ -547,7 +563,9 @@ function publicTenant(client) {
     business_name: client.business_name || client.name,
     primary_contact: client.primary_contact || null,
     email: client.email || null,
-    industry: client.industry || client.vertical || null,
+    vertical: client.vertical || null,
+    vertical_label: labelForBusinessVertical(client.vertical) || client.industry || null,
+    industry: client.industry || labelForBusinessVertical(client.vertical) || client.vertical || null,
     country: client.country || null,
     timezone: client.timezone || null,
     website: client.website || null,

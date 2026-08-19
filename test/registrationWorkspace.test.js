@@ -37,7 +37,7 @@ const SIGNUP = {
   password: 'secure-pass-1',
   phone: '+1-555-0100',
   companyName: 'North Star Studio',
-  industry: 'Founder-led agencies',
+  vertical: 'business_coaching',
   country: 'United States',
   timezone: 'America/New_York',
   website: 'https://northstar.example',
@@ -82,10 +82,10 @@ describe('SPEC-115 validation', () => {
     );
   });
 
-  it('requires workspace company, industry, country, and timezone', () => {
+  it('requires workspace company, vertical, country, and timezone', () => {
     assert.throws(
       () => validateWorkspaceInput({ companyName: 'North Star' }),
-      (err) => err.code === 'registration_validation' && err.missing.includes('industry')
+      (err) => err.code === 'registration_validation' && err.missing.includes('vertical')
     );
   });
 });

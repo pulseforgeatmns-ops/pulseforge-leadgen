@@ -57,8 +57,10 @@ button:disabled { opacity:0.5; cursor:not-allowed; }
       <p class="hint">PulseForge is built around the business. Intelligence starts empty. Max will ask you to teach it.</p>
       <label for="companyName">Company name *</label>
       <input id="companyName" name="companyName" required maxlength="200">
-      <label for="industry">Industry *</label>
-      <input id="industry" name="industry" required maxlength="120" placeholder="Cleaning, agencies, home services…">
+      <label for="businessVertical">Business vertical *</label>
+      <select id="businessVertical" name="businessVertical" required>
+        <option value="">Select a business vertical…</option>
+      </select>
       <div class="row">
         <div>
           <label for="country">Country *</label>
@@ -100,6 +102,20 @@ function showError(text) {
   msg.innerHTML = text ? '<div class="error">' + text + '</div>' : '';
 }
 
+async function loadVerticalOptions() {
+  const res = await fetch('/api/canonical-verticals', { headers: { Accept: 'application/json' } });
+  const data = await res.json();
+  const select = document.getElementById('businessVertical');
+  const options = (data.verticals || []).map(function(v) {
+    return '<option value="' + v.value + '">' + v.label + '</option>';
+  }).join('');
+  select.innerHTML = '<option value="">Select a business vertical…</option>' + options;
+}
+
+loadVerticalOptions().catch(function() {
+  showError('Could not load business vertical options.');
+});
+
 document.getElementById('toWorkspace').addEventListener('click', function() {
   const name = document.getElementById('name');
   const email = document.getElementById('email');
@@ -124,13 +140,19 @@ form.addEventListener('submit', async function(e) {
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
   showError('');
+  const verticalSelect = document.getElementById('businessVertical');
+  if (!verticalSelect.value) {
+    showError('Choose a business vertical before creating your workspace.');
+    btn.disabled = false;
+    return;
+  }
   const payload = {
     name: document.getElementById('name').value,
     email: document.getElementById('email').value,
     password: document.getElementById('password').value,
     phone: document.getElementById('phone').value,
     companyName: document.getElementById('companyName').value,
-    industry: document.getElementById('industry').value,
+    vertical: verticalSelect.value,
     country: document.getElementById('country').value,
     timezone: document.getElementById('timezone').value,
     website: document.getElementById('website').value,

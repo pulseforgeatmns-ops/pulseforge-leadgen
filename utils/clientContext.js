@@ -1,4 +1,5 @@
 const pool = require('../db');
+const { ensureCanonicalVerticalConstraint } = require('./canonicalVerticals');
 
 const DEFAULT_CLIENT_ID = 1;
 
@@ -111,6 +112,8 @@ async function ensureClientArchitecture() {
   for (const [column, type] of CLIENT_COLUMNS) {
     await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS ${column} ${type}`);
   }
+
+  await ensureCanonicalVerticalConstraint(pool);
 
   await pool.query(`
     UPDATE clients

@@ -19,11 +19,12 @@ const {
   publicTenant,
   publicWorkspace,
 } = require('./tenantWorkspace');
+const { assertCanonicalBusinessVertical } = require('../utils/canonicalVerticals');
 const { LIFECYCLE, publicLifecycle } = require('./workspaceLifecycle');
 const { buildRegistrationGreeting } = require('../packages/max/workspace/TenantContextResolver');
 
 const ACCOUNT_REQUIRED = ['name', 'email', 'password'];
-const WORKSPACE_REQUIRED = ['companyName', 'industry', 'country', 'timezone'];
+const WORKSPACE_REQUIRED = ['companyName', 'vertical', 'country', 'timezone'];
 const TOKEN_TTL_MS = 48 * 60 * 60 * 1000;
 const MIN_PASSWORD = 8;
 
@@ -71,7 +72,7 @@ function validateAccountInput(raw = {}) {
 function validateWorkspaceInput(raw = {}) {
   const input = {
     companyName: asText(raw.companyName || raw.company_name || raw.workspaceName, 200),
-    industry: asText(raw.industry || raw.vertical, 120),
+    vertical: asText(raw.vertical || raw.industry, 120),
     country: asText(raw.country, 80),
     timezone: asText(raw.timezone || raw.time_zone, 80),
     website: asText(raw.website, 300) || null,
@@ -81,6 +82,14 @@ function validateWorkspaceInput(raw = {}) {
   const missing = WORKSPACE_REQUIRED.filter((key) => !input[key]);
   if (missing.length) {
     throw validationError(`Missing required workspace fields: ${missing.join(', ')}`, missing);
+  }
+  try {
+    input.vertical = assertCanonicalBusinessVertical(input.vertical);
+  } catch (err) {
+    if (err.code === 'tenant_validation') {
+      throw validationError(err.message);
+    }
+    throw err;
   }
   return input;
 }
@@ -350,7 +359,7 @@ async function registerCustomer({
       companyName: workspaceFields.companyName,
       primaryContact: account.name,
       email: account.email,
-      industry: workspaceFields.industry,
+      vertical: workspaceFields.vertical,
       country: workspaceFields.country,
       timezone: workspaceFields.timezone,
       website: workspaceFields.website,
