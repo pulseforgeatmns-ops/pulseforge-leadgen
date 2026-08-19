@@ -1,18 +1,14 @@
 'use strict';
 
 /**
- * AUDIT-003 — ScoutDiscoveryExecutor owns the Discovery stage (prospect_discovery).
- * AUDIT-006 — Emits discovery strategy, evidence sources, outcomes, and mission updates.
- * Delegates to MissionExecutor / prospect_discovery capability — never advisory prose.
+ * AUDIT-003 — ScoutDiscoveryExecutor owns the Discovery stage.
+ * SPEC-123 — Delegates to Scout.discover() — the canonical Discovery contract.
+ * Operators never see implementation paths (prospect_discovery, acquisition intelligence).
  */
 
-const { BUILTIN_IDS } = require('../../capabilities/types');
-const { MISSION_STATUS, REVIEW_ACTIONS } = require('../types');
-const ScoutDiscoveryAudit = require('../ScoutDiscoveryAudit');
-const {
-  buildDiscoveryExecutionReport,
-  emitDiscoveryAuditEvents,
-} = require('../discoveryExecutionReport');
+const { MISSION_STATUS } = require('../types');
+const { Scout } = require('../../scout');
+const { buildScoutDispatchPayload } = require('./ScoutDiscoveryExecutor.helpers');
 
 const EXECUTOR_ID = 'ScoutDiscoveryExecutor';
 
@@ -22,136 +18,48 @@ const EXECUTOR_ID = 'ScoutDiscoveryExecutor';
  * @param {import('../MissionEngine').MissionEngine} input.missionEngine
  * @param {string} [input.operatorId]
  * @param {string} [input.message]
+ * @param {object} [input.opts]
  * @returns {Promise<object>}
  */
 async function executeScoutDiscovery(input) {
-  const { mission, missionEngine, operatorId, message } = input;
+  const { mission, missionEngine, operatorId, message, opts = {} } = input;
   if (!mission || !missionEngine) {
     throw new Error('ScoutDiscoveryExecutor requires mission and missionEngine');
   }
 
-  const missionId = mission.id;
-  const steps = (mission.plan && mission.plan.steps) || [];
-  const discoveryIdx = steps.findIndex(
-    (s) =>
-      s.stageId === 'prospect_discovery' ||
-      s.capabilityId === BUILTIN_IDS.PROSPECT_DISCOVERY ||
-      s.capabilityId === 'prospect_discovery'
-  );
-
   const payload = buildScoutDispatchPayload(mission, message);
 
-  if (
+  const discoveryResult = await Scout.discover({
+    mission,
+    missionEngine,
+    scoutPayload: payload,
+    operatorId,
+    message,
+    opts,
+  });
+
+  const outcome =
     mission.status === MISSION_STATUS.PLANNING ||
     mission.status === MISSION_STATUS.REQUESTED
-  ) {
-    const updated = await missionEngine.executor.execute(missionId);
-    const discoveryReport = recordDiscoveryExecution(updated, payload);
-    return {
-      executorId: EXECUTOR_ID,
-      success: true,
-      outcome: 'executed',
-      mission: updated,
-      scoutPayload: payload,
-      discoveryReport,
-      invocation: { attempted: true, skipped: false },
-    };
-  }
-
-  if (discoveryIdx >= 0) {
-    const resetSteps = steps.map((s, idx) => {
-      if (idx > discoveryIdx) {
-        return { ...s, status: 'queued', error: undefined };
-      }
-      if (idx === discoveryIdx) {
-        return { ...s, status: 'queued', error: undefined };
-      }
-      return s.status === 'completed'
-        ? s
-        : { ...s, status: 'completed', error: undefined };
-    });
-
-    await missionEngine.store.update({
-      id: missionId,
-      status: MISSION_STATUS.EXECUTING,
-      plan: { ...mission.plan, steps: resetSteps },
-      review: null,
-    });
-
-    const updated = await missionEngine.executor.execute(missionId);
-    const discoveryReport = recordDiscoveryExecution(updated, payload);
-    return {
-      executorId: EXECUTOR_ID,
-      success: true,
-      outcome: 'discovery_re_executed',
-      mission: updated,
-      scoutPayload: payload,
-      discoveryReport,
-      invocation: { attempted: true, skipped: false },
-    };
-  }
-
-  const updated = await missionEngine.review({
-    missionId,
-    action: REVIEW_ACTIONS.RUN_AGAIN,
-    actor: operatorId || null,
-  });
+      ? 'executed'
+      : discoveryResult.phases.some(
+            (p) =>
+              p.phase === 'external_discovery' &&
+              p.result &&
+              p.result.executed === true
+          )
+        ? 'discovery_re_executed'
+        : 'executed';
 
   return {
     executorId: EXECUTOR_ID,
     success: true,
-    outcome: 'run_again',
-    mission: updated,
+    outcome,
+    mission: discoveryResult.mission,
     scoutPayload: payload,
+    discoveryReport: discoveryResult.discoveryReport,
+    discoveryResult,
     invocation: { attempted: true, skipped: false },
-  };
-}
-
-/**
- * @param {object} mission
- * @param {string} [message]
- */
-/**
- * @param {object} mission
- * @param {object} scoutPayload
- * @returns {object}
- */
-function recordDiscoveryExecution(mission, scoutPayload) {
-  const report = buildDiscoveryExecutionReport(mission, scoutPayload);
-  report.missionStatus = mission.status;
-  emitDiscoveryAuditEvents(report, ScoutDiscoveryAudit);
-  ScoutDiscoveryAudit.logMissionDiscoveryResponse({
-    missionId: report.missionId,
-    discoveryStrategy: report.discoveryStrategy,
-    evidenceSources: report.evidenceSources,
-    outcome: report.outcome,
-    blockReason: report.blockReason,
-    operatorResponseKind: 'mission_execution_outcome',
-  });
-  return report;
-}
-
-function buildScoutDispatchPayload(mission, message) {
-  const plan =
-    (mission.plan && mission.plan.missionPlan) || mission.missionPlan || null;
-  return {
-    missionId: mission.id,
-    objective:
-      (plan && plan.objective) ||
-      mission.objectiveText ||
-      mission.title ||
-      null,
-    targetSegment:
-      (plan && plan.subject) ||
-      (mission.constraints && mission.constraints.vertical) ||
-      null,
-    geography:
-      (mission.constraints && mission.constraints.locationHint) ||
-      (plan && plan.geography) ||
-      null,
-    constraints: mission.constraints || {},
-    approvalState: message && /\bapprov(ed|al)\b/i.test(message) ? 'approved' : 'pending',
-    operatorMessage: message || null,
   };
 }
 
@@ -159,5 +67,4 @@ module.exports = {
   EXECUTOR_ID,
   executeScoutDiscovery,
   buildScoutDispatchPayload,
-  recordDiscoveryExecution,
 };

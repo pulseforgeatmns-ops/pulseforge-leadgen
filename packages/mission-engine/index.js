@@ -164,6 +164,7 @@ const ScoutDiscoveryAudit = require('./ScoutDiscoveryAudit');
 const DiscoveryExecutionReport = require('./discoveryExecutionReport');
 const StageExecutorRegistry = require('./stageExecutors/StageExecutorRegistry');
 const ScoutDiscoveryExecutor = require('./stageExecutors/ScoutDiscoveryExecutor');
+const ScoutDiscoveryExecutorHelpers = require('./stageExecutors/ScoutDiscoveryExecutor.helpers');
 const RecommendationEngineExecutor = require('./stageExecutors/RecommendationEngineExecutor');
 
 module.exports = {
@@ -304,5 +305,6 @@ module.exports = {
   ...DiscoveryExecutionReport,
   ...StageExecutorRegistry,
   ...ScoutDiscoveryExecutor,
+  ...ScoutDiscoveryExecutorHelpers,
   ...RecommendationEngineExecutor,
 };
