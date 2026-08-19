@@ -28,6 +28,12 @@ const {
   NO_WORKSPACE,
 } = require('../packages/max/workspace/TenantContextResolver');
 const { getTenantWorkspace } = require('../services/tenantWorkspace');
+const {
+  publicOnboardingState,
+  buildOnboardingGreeting,
+  firstName,
+  BEGIN_CLIENT_INTELLIGENCE,
+} = require('../services/pilotOnboarding');
 
 const router = express.Router();
 const requireWorkspaceReader = [
@@ -156,25 +162,37 @@ router.get('/api/v1/workspace/me', requireWorkspaceReader, async (req, res) => {
         : null,
       requireWorkspace: user?.role === 'client',
     });
+    const gates = publicOnboardingState({
+      tenantId: clientId,
+      hasTenant: true,
+      passwordChangeRequired: Boolean(user && user.password_change_required),
+      clientIntelligence: snapshot.status.clientIntelligence,
+      aim: snapshot.status.aim,
+    });
+    const greetingName = firstName((user && user.name) || (snapshot.client && snapshot.client.name));
+    const greeting = snapshot.status.needsOnboarding
+      ? buildOnboardingGreeting(greetingName)
+      : snapshot.greeting;
     noStore(res);
     return res.json({
       ok: true,
       spec: 'SPEC-115',
       active_client_id: clientId,
-      greeting: snapshot.greeting,
+      greeting,
       status: snapshot.status,
       lifecycle: snapshot.lifecycle,
+      gates,
       runtime: {
         workspace: 'Provisioned',
         blueprint: snapshot.status.clientIntelligence.status,
-        aim: snapshot.status.aim.status,
+        aim: gates.aim.label,
         prospects: snapshot.status.prospects.count,
         campaigns: snapshot.status.campaigns.count,
         knowledge: snapshot.status.knowledge.count,
         outcomes: snapshot.status.outcomes.count,
       },
-      cta: {
-        label: 'Begin Client Intelligence',
+      cta: gates.cta || {
+        label: BEGIN_CLIENT_INTELLIGENCE,
         href: '/client-intel',
       },
       ...context,

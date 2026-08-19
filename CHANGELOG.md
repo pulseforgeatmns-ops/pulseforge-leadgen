@@ -6,6 +6,17 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Pilot 0 Self-Service Client Onboarding ([SPEC-115](docs/specs/SPEC-115_Client_Registration_and_Workspace_Provisioning.md), [ADR-052](docs/adr/ADR-052_Workspace_First_Registration.md))
+  - Admin provisions tenant + client user + temporary password in `/admin/clients` and `/admin/users` — no SQL
+  - First login forces a password change (`password_change_required`); workspace is blocked until it succeeds
+  - Guided workspace: Client Intelligence → Blueprint → AIM upload/compile/review/publish → Ask Max → Run Scout
+  - Max answers acquisition questions only after Blueprint approved **and** AIM published
+  - AIM status: No Documents / Ready To Compile / Draft / Published (`/aim`)
+  - Scout writes tenant-scoped prospects (`client_id`); outreach stays gated
+  - Explicit failure copy for no tenant, no Blueprint, no AIM, and password change required
+  - Competency `pilot_0_client_onboarding` graduated 2026-08-19
+  - Public self-service signup and email verification remain out of scope for Pilot 0
+
 - Client Registration & Workspace Provisioning ([SPEC-115](docs/specs/SPEC-115_Client_Registration_and_Workspace_Provisioning.md), [ADR-052](docs/adr/ADR-052_Workspace_First_Registration.md))
   - Public `/signup`: account + workspace, no developer SQL or admin tools
   - Workspace is created first; the user is bound as `role=client`

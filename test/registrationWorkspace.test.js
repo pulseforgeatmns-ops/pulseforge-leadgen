@@ -213,15 +213,14 @@ describe('SPEC-115 lifecycle', () => {
 });
 
 describe('SPEC-115 public surfaces', () => {
-  it('exposes signup, verify, and Begin Client Intelligence without SQL', () => {
+  it('keeps registration APIs but Pilot 0 login is admin-provisioned', () => {
     const signup = fs.readFileSync(path.join(__dirname, '../public/signup.html'), 'utf8');
     const dashboard = fs.readFileSync(path.join(__dirname, '../public/dashboard.html'), 'utf8');
     const login = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
     const routes = fs.readFileSync(path.join(__dirname, '../routes/registration.js'), 'utf8');
     assert.match(signup, /Create your workspace/);
     assert.match(signup, /\/api\/register/);
-    assert.match(login, /\/signup/);
-    assert.match(login, /error=unverified/);
+    assert.doesNotMatch(login, /href="\/signup"/);
     assert.match(login, /role === 'client'/);
     assert.match(dashboard, /Begin Client Intelligence/);
     assert.match(dashboard, /\/api\/v1\/workspace\/me/);

@@ -1,4 +1,4 @@
-# SPEC-115 — Client Registration & Workspace Provisioning
+# SPEC-115 — Pilot 0 Self-Service Client Onboarding
 
 | Field | Value |
 |---|---|
@@ -7,204 +7,312 @@
 | **Priority** | Critical |
 | **Owner** | Pulseforge |
 | **Created** | 2026-08-19 |
-| **Depends on** | [SPEC-114](SPEC-114_Client_Tenant_Creation.md), [SPEC-083](SPEC-083_Client_Intelligence_Engine.md), [SPEC-112](SPEC-112_Acquisition_Intelligence_Model.md), [SPEC-104](SPEC-104_Persistent_Operator_Context.md) |
-| **ADR** | [ADR-052 Workspace-First Registration](../adr/ADR-052_Workspace_First_Registration.md) |
-| **Pilot 1** | A stranger creates an account, provisions a workspace, and reaches Max — no SQL |
+| **Depends on** | [SPEC-114](SPEC-114_Client_Tenant_Creation.md), [SPEC-113](SPEC-113_Acquisition_Intelligence_Compiler.md), [SPEC-083](SPEC-083_Client_Intelligence_Engine.md), [SPEC-112](SPEC-112_Acquisition_Intelligence_Model.md) |
+| **ADR** | [ADR-052 Pilot 0 Principle](../adr/ADR-052_Workspace_First_Registration.md) |
+| **Pilot 0** | Admin provisions a client in the product. The client logs in, changes the temporary password, and reaches Max → Scout without SQL. |
+
+> **Supersedes** the earlier SPEC-115 draft that described public self-service signup and email verification. Those flows remain in the codebase as unused product surface. They are **explicitly out of scope** for Pilot 0.
 
 ## Objective
 
-Allow a brand-new customer to create an account, provision a secure isolated workspace, and begin onboarding without developer intervention.
+Allow a real client to go from invited user → operational PulseForge workspace without developer intervention.
 
-Registration is not simply account creation. Registration is the beginning of the Client Intelligence lifecycle. Every successful registration ends with a new operator speaking to Max inside an isolated workspace.
+Pilot 0 is not validating features. It is validating whether PulseForge can onboard a customer without engineering support.
+
+**Developer intervention is a product bug.**
+
+If an engineer must edit SQL, activate a tenant manually, publish data manually, or modify records — that becomes a product requirement.
 
 ## Vision References
 
-- [ADR-052](../adr/ADR-052_Workspace_First_Registration.md)
-- [ADR-051](../adr/ADR-051_Provision_Tenant_Before_Intelligence.md)
+- [ADR-052 Pilot 0 Principle](../adr/ADR-052_Workspace_First_Registration.md)
+- [ADR-051 Provision Tenant Before Intelligence](../adr/ADR-051_Provision_Tenant_Before_Intelligence.md)
 - [SPEC-114 Client Tenant Creation](SPEC-114_Client_Tenant_Creation.md)
+- [SPEC-113 Acquisition Intelligence Compiler](SPEC-113_Acquisition_Intelligence_Compiler.md)
 - [SPEC-083 Client Intelligence Engine](SPEC-083_Client_Intelligence_Engine.md)
-- Product Constitution — tenancy and privacy
 
 ## Problem
 
-SPEC-114 lets an operator create a tenant. A brand-new customer still cannot:
+SPEC-114 lets an operator create a tenant. SPEC-113 compiles an AIM. CIE produces a Blueprint. A brand-new customer still cannot complete the journey without an engineer:
 
 ```text
-Developer → SQL → User → Tenant → Login
+Developer → SQL → User → Temporary password in Postgres → Login → Manual AIM publish
 ```
 
 Required:
 
 ```text
-Sign Up → Verify Identity → Create Workspace → Provision Intelligence → Welcome by Max → Begin Client Intelligence
+Admin → Create Tenant → Create User → Assign User → Temporary Password
+  → Client Login → Force Password Change → Client Intelligence → Approve Blueprint
+  → Upload AIM Documents → Compile AIM → Review AIM → Publish AIM
+  → Ask Max → Run Scout → Review Prospects → Approve Outreach
 ```
 
-Developer intervention is never required.
+No SQL. No code. No Postgres.
 
 ## Philosophy
 
-PulseForge is built around businesses, not users. The first thing created is a workspace. Users belong to workspaces — not the other way around.
+Developer intervention is a product bug.
 
-Max owns onboarding. No checklist. No wizard. The first interaction is Max.
+During Pilot 0, every manual engineering action required to onboard or operate a client must be treated as a missing product capability. The objective is not merely to validate PulseForge's intelligence, but to validate that the platform itself can onboard, teach, and operate for a real customer through its own interfaces.
 
-Every workspace begins empty. Max never pretends to know the business.
+## Success Definition
+
+A new client should complete this workflow:
+
+```text
+Admin
+↓
+Create Tenant
+↓
+Create User
+↓
+Assign User
+↓
+Temporary Password
+↓
+Client Login
+↓
+Force Password Change
+↓
+Client Intelligence
+↓
+Approve Blueprint
+↓
+Upload AIM Documents
+↓
+Compile AIM
+↓
+Review AIM
+↓
+Publish AIM
+↓
+Ask Max
+↓
+Run Scout
+↓
+Review Prospects
+↓
+Approve Outreach
+```
 
 ## Scope (v1 thin slice)
 
-1. Public sign-up: name, email, password (optional phone)
-2. Email verification before the session is established
-3. Workspace creation: company name, industry, country, time zone (optional website, logo URL, team size)
-4. Workspace is created first; the user is then bound to that workspace as `role=client`
-5. Automatic provision of empty intelligence namespaces (Blueprint, AIM, Knowledge, Missions, Prospects, Campaigns, Outcomes, Memory)
-6. Login lands on the dashboard inside that workspace
-7. Max greets with the Client Intelligence opening — one button: **Begin Client Intelligence**
-8. After login, resolve User → Workspace → Active Workspace → Blueprint → Published AIM → Reasoning Context
-9. Fail closed if the user has no workspace
-10. Explicit workspace lifecycle from Registered through Learning
-11. Existing operator-created tenants (SPEC-114) stay unchanged
+### Phase 1 — Authentication
 
-## Out of Scope
+Authenticate users.
 
-- Team invites / role assignment (same workspace, no duplicated intelligence — Future Work)
-- Logo file upload (v1 stores a URL)
-- Replacing CIE, AIM, or AIC
-- Copying Pulseforge / Anchor / MSHI / Fedir seed intelligence
-- Outreach, Scout, or campaign execution at registration
-- Changing login defaults for operator roles (admin/manager still default `active_client_id = 1` when unbound)
+Do **NOT** implement self-service registration.
+Do **NOT** require email verification.
 
-## Registration Flow
+**Admin creates**
 
-### Step 1 — Create Account
+- tenant
+- client user
+- temporary password
 
-Required: Name · Email · Password
+**Client login:** Email · Password
 
-Optional: Phone
-
-### Step 2 — Create Workspace
-
-Required: Company Name · Industry · Country · Time Zone
-
-Optional: Website · Logo · Team Size
-
-### Step 3 — Provision Workspace
-
-Automatically create empty:
-
-Workspace · Business Blueprint · Acquisition Intelligence · Knowledge · Missions · Prospects · Campaigns · Outcomes · Memory
-
-### Step 4 — Verify + Login
-
-Verify the email. The user lands inside the dashboard of their workspace.
-
-### Step 5 — Max Greeting
+**First login** — instead of entering the workspace:
 
 ```text
 Welcome to PulseForge.
-Before I can help you grow your business, I need to understand it.
-Everything I recommend will be grounded in what you teach me.
-Let's begin with Client Intelligence.
+
+Before we begin,
+please choose a new password.
 ```
 
-One button: **Begin Client Intelligence**
+Required: new password.
 
-## Runtime State (immediately after registration)
+After success:
 
-| Surface | Status |
+```text
+Password Updated
+
+Continue →
+```
+
+Flag: `password_change_required = false`
+
+### Phase 2 — Workspace Entry
+
+If Client Intelligence is incomplete, Max should not pretend to know the business.
+
+Workspace greeting:
+
+```text
+Welcome, Fedir.
+
+Let's begin by understanding your business.
+
+The first step is completing Client Intelligence.
+
+Everything I learn from you
+becomes the foundation for
+prospecting, reasoning,
+and recommendations.
+```
+
+Only CTA: **Begin Client Intelligence**
+
+### Phase 3 — Client Intelligence
+
+Operator completes interview. Blueprint generated. Review. Approve.
+
+No AIM. No Scout. No Outreach. Until approval.
+
+### Phase 4 — AIM
+
+Workspace shows Acquisition Intelligence Model status:
+
+- ○ No Documents
+- ○ Ready To Compile
+- ○ Draft
+- ○ Published
+
+Workflow: Upload → Compile → Review → Approve → Publish
+
+### Phase 5 — Max Unlock
+
+Only after **Blueprint Approved** AND **Published AIM** should Max answer acquisition questions.
+
+Otherwise:
+
+```text
+I don't know enough yet.
+
+Complete Client Intelligence
+and publish your Acquisition
+Intelligence Model first.
+```
+
+### Phase 6 — Scout
+
+Now discovery begins.
+
+Example: *Find founders struggling with founder dependency.*
+
+Scout → Discovery → Evidence → Ranking → Review
+
+Prospects are tenant-scoped. Never borrowed from another workspace.
+
+### Phase 7 — Outreach
+
+Only unlock when:
+
+- ✓ AIM Published
+- ✓ Prospect Approved
+- ✓ Domain Healthy
+- ✓ Sending Capacity Available
+- ✓ Campaign Approved
+
+Emmett governs deliverability. Paige produces messaging. Max orchestrates.
+
+Until those gates pass, the workspace states the missing requirement instead of silently failing.
+
+## Failure States
+
+Instead of silent failures.
+
+| State | Message |
 |---|---|
-| Workspace | Provisioned |
-| Business Blueprint | Not Started |
-| AIM | No Published AIM |
-| Prospects | 0 |
-| Campaigns | 0 |
-| Knowledge | 0 |
-| Outcomes | 0 |
+| No Tenant | No active workspace. Select or activate a tenant. |
+| No Blueprint | Client Intelligence has not been completed. |
+| No AIM | Your Acquisition Intelligence Model has not been published. |
+| Password Change Required | Password must be updated before continuing. |
 
-Nothing fake. Everything earned.
+## Out of Scope
 
-## Authentication
+- Email verification
+- Self-service signup
+- MFA
+- Billing
+- Teams
+- Multiple users
+- Invite coworkers
+- OAuth
+- SSO
+- Notifications
 
-```text
-User → Workspace → Active Workspace → Blueprint → Published AIM → Reasoning Context
+## Dependencies
 
-No workspace → Fail Closed
-```
+- SPEC-114 tenant provision (`/admin/clients`, `POST /api/clients`)
+- SPEC-083 Client Intelligence (`/client-intel`)
+- SPEC-113 AIC compile / review / publish
+- SPEC-112 published AIM as Scout runtime knowledge
+- `users` table (admin create / assign / temporary password)
 
-A client-role user is locked to `users.client_id`. Login never defaults that user to Pulseforge (`client_id = 1`).
-
-## Workspace Lifecycle
-
-```text
-Registered
-  → Provisioned
-  → Client Intelligence In Progress
-  → Blueprint Approved
-  → AIM In Progress
-  → AIM Published
-  → Prospecting Active
-  → Campaign Active
-  → Learning
-```
-
-Lifecycle is explicit and derived from earned artifacts. Registration writes `provisioned`. Later stages advance only when real Blueprint / AIM / prospect / campaign / outcome records exist.
-
-## Team Growth (Future)
+## Architecture
 
 ```text
-Invite User → Assign Role → Grant Permissions → Same Workspace
+Admin UI
+  → tenants (SPEC-114)
+  → users (temporary password + password_change_required)
+
+Client session
+  → password_change_required? → /change-password
+  → workspace/me → lifecycle + AIM status + unlock gates
+  → CIE until Blueprint approved
+  → AIM workspace until Published
+  → Max (acquisition answers)
+  → Scout (tenant-scoped prospects)
+  → Outreach (gated)
 ```
 
-No duplicated intelligence.
-
-## Max Onboarding Journey
-
-```text
-Welcome → Client Intelligence → Approve Blueprint → Upload Market Knowledge
-  → Compile AIM → Approve AIM → Publish AIM → Prospect Discovery
-  → Campaign Creation → Learning
-```
-
-One continuous experience. This spec only owns Welcome → Begin Client Intelligence.
+Max, Scout, and Outreach fail closed with the explicit messages above. They do not invent a business, borrow another tenant's AIM, or send without campaign approval.
 
 ## Data Model
 
-- `users` gains `phone`, `email_verified`, `email_verified_at`
-- `account_verification_tokens` holds hashed one-time verify tokens
-- `clients.team_size` is optional workspace metadata
-- `tenant_workspaces` gains `origin`, `lifecycle`, `campaign_namespace`, `memory_namespace`
+`users` gains:
 
-Existing operator tenants backfill `origin = operator` and `lifecycle = provisioned`. Existing users backfill `email_verified = true` so the current team is not locked out.
+- `password_change_required BOOLEAN NOT NULL DEFAULT FALSE`
+
+Admin-created and password-reset users start with `password_change_required = true`. Existing operators backfill `false` so the current team is not locked out.
+
+AIC workspaces persist in `aic_workspaces` (payload JSONB) so compile / review / publish survives a process restart. Published AIMs write to `aim_models` with `client_id` set to the tenant — Scout loads only that row.
+
+## Implementation Plan
+
+1. Forced password change on first login
+2. Guided workspace greeting (CIE-only CTA)
+3. Gate Scout / Outreach / Max acquisition until Blueprint + published AIM
+4. Client-accessible AIM workspace (upload → compile → review → publish)
+5. Persist published AIM to `aim_models` with `client_id`
+6. Tenant-scoped Scout review list
+7. Explicit outreach unlock checklist
+
+## Migration Strategy
+
+Idempotent `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_change_required`. Existing rows stay `false`. AIC / AIM tables already exist from SPEC-113.
+
+## Testing
+
+- Admin create user sets `password_change_required`
+- First login cannot enter the workspace until password change
+- Greeting copy + single CIE CTA
+- Max locked without Blueprint + published AIM
+- AIM status progression
+- Scout writes `client_id` and does not leak cross-tenant
+- Failure messages are explicit
+- Admin UI and client UI contain no SQL
 
 ## Acceptance Criteria
 
-- [x] Completely new customer can register without SQL
-- [x] Account verification is required before the session
-- [x] Workspace is created before the user is bound
-- [x] User can login and reach the dashboard
-- [x] User can speak with Max
-- [x] One button begins Client Intelligence
-- [x] Runtime state starts empty (no fake Blueprint / AIM / prospects)
-- [x] No workspace fails closed
-- [x] No developer intervention or admin tools required
-
-## Pilot 1 Success
-
-Someone who has never seen PulseForge can:
-
-1. Create an account
-2. Create their workspace
-3. Reach Max
-4. Complete Client Intelligence
-5. Publish their first Blueprint
-6. Build and publish an AIM
-7. Ask: *"Max, who should I talk to first?"*
-
-…without a single developer touching Postgres.
-
-Steps 4–7 reuse SPEC-083 / SPEC-113. This spec proves steps 1–3 and the empty foundation for the rest.
+- [x] A developer provisions a brand-new client using only the admin UI
+- [x] The client logs in successfully with a temporary password
+- [x] The client is required to create a new password
+- [x] The client lands in a guided onboarding workspace
+- [x] Completes Client Intelligence (existing CIE)
+- [x] Approves their Blueprint (existing CIE)
+- [x] Uploads AIM source documents
+- [x] Compiles, reviews, and publishes an AIM
+- [x] Asks Max an acquisition question (unlocked only after Blueprint + published AIM)
+- [x] Scout returns tenant-scoped prospects
+- [x] No SQL queries, manual database edits, or developer intervention are required anywhere in the flow
 
 ## Future Work
 
-- Invite user → assign role → same workspace
-- Logo upload storage
-- SMS / extra identity factors
-- Stop defaulting unbound operator sessions to Pulseforge once every operator always selects a tenant
+- Email verification and self-service signup (explicitly deferred)
+- Team invites into the same workspace
+- Domain health / sending-capacity product surfaces beyond the unlock checklist
+- MFA, billing, OAuth, SSO, notifications

@@ -104,6 +104,37 @@
   </div>
 
   <section class="panel" style="margin-top:1rem;">
+    <h2>Client user</h2>
+    <p class="hint">Assign a client-role user and a temporary password. They must choose a new password on first login. No SQL.</p>
+    <form id="userForm">
+      <div class="row2">
+        <div>
+          <label for="userName">Name *</label>
+          <input id="userName" required placeholder="Fedir">
+        </div>
+        <div>
+          <label for="userEmail">Email *</label>
+          <input id="userEmail" type="email" required placeholder="founders@example.com">
+        </div>
+      </div>
+      <div class="row2">
+        <div>
+          <label for="userPassword">Temporary password *</label>
+          <input id="userPassword" type="password" minlength="8" required>
+        </div>
+        <div>
+          <label for="userClientId">Assign tenant *</label>
+          <select id="userClientId" required></select>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="submit" id="userBtn">Create user</button>
+        <a class="hint" href="/admin/users" style="align-self:center;">Open user management</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" style="margin-top:1rem;">
     <h2>Tenants</h2>
     <table>
       <thead>
@@ -168,6 +199,12 @@
       (Number(c.id) === Number(data.active_client_id) ? ' selected' : '') +
       '>' + (c.name || ('Client ' + c.id)) + '</option>'
     ).join('');
+    const userClient = document.getElementById('userClientId');
+    if (userClient) {
+      userClient.innerHTML = clients.map((c) =>
+        '<option value="' + c.id + '">' + (c.name || ('Client ' + c.id)) + '</option>'
+      ).join('');
+    }
     clientRows.innerHTML = clients.map((c) =>
       '<tr><td>' + c.id + '</td><td>' + (c.name || '') + '</td><td>' + (c.slug || '') +
       '</td><td><button type="button" class="secondary" data-activate="' + c.id + '">Activate</button></td></tr>'
@@ -232,10 +269,39 @@
         notes: document.getElementById('notes').value,
       };
       const created = await api('/api/clients', { method: 'POST', body: JSON.stringify(body) });
-      setMsg('Created ' + created.client.name + ' (id ' + created.client.id + '). Activate it to work in that tenant.', 'ok');
+      setMsg('Created ' + created.client.name + ' (id ' + created.client.id + '). Next: create a client user with a temporary password.', 'ok');
       renderStatus(created);
       await loadClients();
       activateSelect.value = String(created.client.id);
+      const userClient = document.getElementById('userClientId');
+      if (userClient) userClient.value = String(created.client.id);
+      document.getElementById('userName').value = document.getElementById('primaryContact').value;
+      document.getElementById('userEmail').value = document.getElementById('email').value;
+    } catch (err) {
+      setMsg(err.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('userForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = document.getElementById('userBtn');
+    btn.disabled = true;
+    setMsg('Creating client user…');
+    try {
+      const created = await api('/api/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: document.getElementById('userName').value,
+          email: document.getElementById('userEmail').value,
+          password: document.getElementById('userPassword').value,
+          role: 'client',
+          client_id: Number(document.getElementById('userClientId').value),
+        }),
+      });
+      setMsg('Created user ' + created.email + '. Temporary password must be changed on first login.', 'ok');
+      document.getElementById('userPassword').value = '';
     } catch (err) {
       setMsg(err.message, 'err');
     } finally {

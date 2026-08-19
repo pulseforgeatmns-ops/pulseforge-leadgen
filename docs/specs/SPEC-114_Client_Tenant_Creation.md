@@ -116,12 +116,22 @@ The operator selects **Current Active Client**. Every Max request then executes 
 
 ## Tenant Dashboard greeting
 
+Pilot 0 greeting is owned by [SPEC-115](SPEC-115_Client_Registration_and_Workspace_Provisioning.md):
+
 ```text
 Welcome, Fedir.
+
 Let's begin by understanding your business.
-The first step is completing Client Intelligence so I can understand your company.
-After that we'll build your Acquisition Intelligence Model and begin prospect discovery.
+
+The first step is completing Client Intelligence.
+
+Everything I learn from you
+becomes the foundation for
+prospecting, reasoning,
+and recommendations.
 ```
+
+Only CTA: **Begin Client Intelligence**
 
 ## Max Context Resolution
 
@@ -172,5 +182,5 @@ If any step requires a manual SQL write, that step is the next product gap.
 ## Future Work
 
 - Bind compiled AIM `client_key` to `tenant_workspaces.aim_namespace` automatically on AIC publish
-- Client-role users creating their own tenant — implemented in [SPEC-115](SPEC-115_Client_Registration_and_Workspace_Provisioning.md)
+- Client-role users creating their own tenant — deferred; Pilot 0 is admin-provisioned ([SPEC-115](SPEC-115_Client_Registration_and_Workspace_Provisioning.md))
 - Logo upload storage (v1 stores a URL)

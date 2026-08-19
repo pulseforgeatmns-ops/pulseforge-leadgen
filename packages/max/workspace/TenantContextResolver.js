@@ -7,6 +7,11 @@
  * No tenant → fail closed: "No active client selected."
  */
 
+const {
+  buildOnboardingGreeting,
+  BEGIN_CLIENT_INTELLIGENCE,
+} = require('../../../services/pilotOnboarding');
+
 const NO_ACTIVE_CLIENT = 'No active client selected.';
 const NO_WORKSPACE = 'No workspace provisioned.';
 const REGISTRATION_GREETING = [
@@ -15,7 +20,6 @@ const REGISTRATION_GREETING = [
   'Everything I recommend will be grounded in what you teach me.',
   "Let's begin with Client Intelligence.",
 ];
-const BEGIN_CLIENT_INTELLIGENCE = 'Begin Client Intelligence';
 
 function asPositiveId(value) {
   if (value == null || value === '') return null;
@@ -116,21 +120,7 @@ function resolveMaxPromptContext(input = {}) {
 }
 
 function buildTenantGreeting(tenantName) {
-  const name = String(tenantName || '').trim() || 'there';
-  const greeting = `Welcome, ${name}.`;
-  const body = [
-    "Let's begin by understanding your business.",
-    'The first step is completing Client Intelligence so I can understand your company.',
-    "After that we'll build your Acquisition Intelligence Model and begin prospect discovery.",
-  ];
-  const prompt = 'Shall we start Client Intelligence?';
-  return {
-    greeting,
-    body,
-    prompt,
-    cta: BEGIN_CLIENT_INTELLIGENCE,
-    fullText: [greeting, '', ...body, '', prompt].join('\n'),
-  };
+  return buildOnboardingGreeting(tenantName);
 }
 
 function buildRegistrationGreeting() {

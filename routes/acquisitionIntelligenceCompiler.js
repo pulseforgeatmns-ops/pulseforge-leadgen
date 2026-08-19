@@ -23,15 +23,48 @@ const {
   compileWorkspace,
   reviewConcept,
   approveWorkspace,
-  publishWorkspace,
+  publishAndPersist,
   getWorkspace,
   listWorkspaces,
+  rememberWorkspace,
+  hydrateWorkspace,
+  hydrateClientWorkspaces,
 } = require('../services/acquisitionIntelligenceCompiler');
+const {
+  resolveActiveTenantId,
+} = require('../packages/max/workspace/TenantContextResolver');
+const { deriveAimStatus } = require('../services/pilotOnboarding');
 
-const requireAdmin = [requireAuth, requireRole('admin', 'manager')];
+const requireActor = [requireAuth, requireRole('admin', 'manager', 'client')];
 
 function noStore(res) {
   res.set('Cache-Control', 'no-store');
+}
+
+function actorClientId(req) {
+  const user = req.user || (req.session && req.session.user);
+  if (user && user.role === 'client') {
+    const id = Number(user.client_id);
+    return Number.isInteger(id) && id > 0 ? id : null;
+  }
+  return resolveActiveTenantId(req);
+}
+
+function assertWorkspaceTenant(req, workspace) {
+  const user = req.user || (req.session && req.session.user);
+  if (!user || user.role !== 'client' || !workspace) return;
+  const owner = Number(workspace.clientId || workspace.client_id);
+  if (owner !== Number(user.client_id)) {
+    const err = new Error('AIC workspace belongs to another tenant.');
+    err.code = 'aic_forbidden';
+    throw err;
+  }
+}
+
+async function persist(workspace) {
+  if (!workspace) return workspace;
+  await rememberWorkspace(workspace);
+  return workspace;
 }
 
 function fail(res, err, fallbackCode, fallbackStatus = 500) {
@@ -49,8 +82,9 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
           code === 'aic_unknown_review_action' ||
           code === 'aic_no_outreach' ||
           code === 'aic_nothing_to_publish' ||
-          code === 'aic_merge_ids_required'
-        ? 400
+          code === 'aic_merge_ids_required' ||
+          code === 'aic_forbidden'
+        ? code === 'aic_forbidden' ? 403 : 400
         : fallbackStatus;
   return res.status(status).json({
     error: code,
@@ -58,14 +92,21 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
   });
 }
 
-router.post('/api/v1/aic/workspaces', requireAdmin, (req, res) => {
+router.post('/api/v1/aic/workspaces', requireActor, async (req, res) => {
   try {
-    const workspace = createWorkspace(req.body || {});
+    const clientId = actorClientId(req);
+    const body = { ...(req.body || {}), clientId: req.body?.clientId || clientId };
+    if (req.user && req.user.role === 'client') {
+      body.clientId = clientId;
+    }
+    const workspace = createWorkspace(body);
+    await persist(workspace);
     noStore(res);
     return res.status(201).json({
       kind: 'aic_workspace',
       spec: 'SPEC-113',
       isOperatingFact: false,
+      aimStatus: publicAimStatus(workspace),
       workspace,
     });
   } catch (err) {
@@ -74,20 +115,64 @@ router.post('/api/v1/aic/workspaces', requireAdmin, (req, res) => {
   }
 });
 
-router.get('/api/v1/aic/workspaces', requireAdmin, (req, res) => {
+router.get('/api/v1/aic/me', requireActor, async (req, res) => {
   try {
+    const clientId = actorClientId(req);
+    if (clientId == null) {
+      return res.status(400).json({
+        error: 'no_tenant',
+        message: 'No active workspace.\n\nSelect or activate\na tenant.',
+      });
+    }
+    const hydrated = await hydrateClientWorkspaces(clientId);
+    let workspace = hydrated[0] || listWorkspaces().find((w) => Number(w.clientId || w.client_id) === Number(clientId));
+    if (!workspace) {
+      const user = req.user || (req.session && req.session.user);
+      workspace = createWorkspace({
+        clientId,
+        clientKey: `tenant-${clientId}`,
+        clientName: (req.body && req.body.clientName) || `tenant-${clientId}`,
+      });
+      workspace.clientId = clientId;
+      await persist(workspace);
+    }
+    noStore(res);
+    const user = req.user || (req.session && req.session.user);
+    return res.json({
+      kind: 'aic_workspace',
+      spec: 'SPEC-115',
+      aimStatus: publicAimStatus(workspace),
+      workspace,
+      user: user ? { id: user.id, role: user.role, client_id: user.client_id } : null,
+    });
+  } catch (err) {
+    console.error('[aic] me', err);
+    return fail(res, err, 'aic_me_failed');
+  }
+});
+
+router.get('/api/v1/aic/workspaces', requireActor, async (req, res) => {
+  try {
+    const clientId = actorClientId(req);
+    if (clientId != null) await hydrateClientWorkspaces(clientId);
+    let rows = listWorkspaces(req.query.clientKey || req.query.client_key);
+    if (req.user && req.user.role === 'client') {
+      rows = rows.filter((w) => Number(w.clientId || w.client_id) === Number(req.user.client_id));
+    }
     noStore(res);
     return res.json({
       kind: 'aic_workspace_list',
       spec: 'SPEC-113',
-      workspaces: listWorkspaces(req.query.clientKey || req.query.client_key).map((w) => ({
+      workspaces: rows.map((w) => ({
         id: w.id,
         clientKey: w.clientKey,
         clientName: w.clientName,
+        clientId: w.clientId || w.client_id,
         status: w.status,
         documentCount: (w.documents || []).length,
         conceptCount: (w.concepts || []).length,
         aimId: w.aimId,
+        aimStatus: publicAimStatus(w),
       })),
     });
   } catch (err) {
@@ -96,15 +181,17 @@ router.get('/api/v1/aic/workspaces', requireAdmin, (req, res) => {
   }
 });
 
-router.get('/api/v1/aic/workspaces/:id', requireAdmin, (req, res) => {
+router.get('/api/v1/aic/workspaces/:id', requireActor, async (req, res) => {
   try {
-    const workspace = getWorkspace(req.params.id);
+    const workspace = (await hydrateWorkspace(req.params.id)) || getWorkspace(req.params.id);
     if (!workspace) return res.status(404).json({ error: 'aic_not_found' });
+    assertWorkspaceTenant(req, workspace);
     noStore(res);
     return res.json({
       kind: 'aic_workspace',
       spec: 'SPEC-113',
       isOperatingFact: false,
+      aimStatus: publicAimStatus(workspace),
       workspace,
     });
   } catch (err) {
@@ -113,14 +200,19 @@ router.get('/api/v1/aic/workspaces/:id', requireAdmin, (req, res) => {
   }
 });
 
-router.post('/api/v1/aic/workspaces/:id/documents', requireAdmin, (req, res) => {
+router.post('/api/v1/aic/workspaces/:id/documents', requireActor, async (req, res) => {
   try {
+    await hydrateWorkspace(req.params.id);
+    const existing = getWorkspace(req.params.id);
+    assertWorkspaceTenant(req, existing);
     const docs = req.body && req.body.documents ? req.body.documents : [req.body];
     const workspace = addDocuments(req.params.id, docs);
+    await persist(workspace);
     noStore(res);
     return res.json({
       kind: 'aic_workspace',
       spec: 'SPEC-113',
+      aimStatus: publicAimStatus(workspace),
       workspace,
     });
   } catch (err) {
@@ -129,13 +221,17 @@ router.post('/api/v1/aic/workspaces/:id/documents', requireAdmin, (req, res) => 
   }
 });
 
-router.post('/api/v1/aic/workspaces/:id/compile', requireAdmin, (req, res) => {
+router.post('/api/v1/aic/workspaces/:id/compile', requireActor, async (req, res) => {
   try {
+    await hydrateWorkspace(req.params.id);
+    assertWorkspaceTenant(req, getWorkspace(req.params.id));
     const workspace = compileWorkspace(req.params.id);
+    await persist(workspace);
     noStore(res);
     return res.json({
       kind: 'aic_workspace',
       spec: 'SPEC-113',
+      aimStatus: publicAimStatus(workspace),
       workspace,
     });
   } catch (err) {
@@ -144,20 +240,24 @@ router.post('/api/v1/aic/workspaces/:id/compile', requireAdmin, (req, res) => {
   }
 });
 
-router.post('/api/v1/aic/concepts/:id/review', requireAdmin, (req, res) => {
+router.post('/api/v1/aic/concepts/:id/review', requireActor, async (req, res) => {
   try {
     const conceptId = req.params.id;
     const workspaceId = req.body && req.body.workspaceId;
     if (!workspaceId) {
       return res.status(400).json({ error: 'aic_workspace_required' });
     }
+    await hydrateWorkspace(workspaceId);
+    assertWorkspaceTenant(req, getWorkspace(workspaceId));
     const workspace = reviewConcept(workspaceId, conceptId, req.body || {}, {
       operator: req.session && req.session.user && req.session.user.email,
     });
+    await persist(workspace);
     noStore(res);
     return res.json({
       kind: 'aic_workspace',
       spec: 'SPEC-113',
+      aimStatus: publicAimStatus(workspace),
       workspace,
     });
   } catch (err) {
@@ -166,17 +266,21 @@ router.post('/api/v1/aic/concepts/:id/review', requireAdmin, (req, res) => {
   }
 });
 
-router.post('/api/v1/aic/workspaces/:id/approve', requireAdmin, (req, res) => {
+router.post('/api/v1/aic/workspaces/:id/approve', requireActor, async (req, res) => {
   try {
+    await hydrateWorkspace(req.params.id);
+    assertWorkspaceTenant(req, getWorkspace(req.params.id));
     const workspace = approveWorkspace(req.params.id, {
       operator: (req.body && req.body.operator) ||
         (req.session && req.session.user && req.session.user.email),
       acceptRemaining: req.body && req.body.acceptRemaining,
     });
+    await persist(workspace);
     noStore(res);
     return res.json({
       kind: 'aic_workspace',
       spec: 'SPEC-113',
+      aimStatus: publicAimStatus(workspace),
       workspace,
     });
   } catch (err) {
@@ -185,14 +289,20 @@ router.post('/api/v1/aic/workspaces/:id/approve', requireAdmin, (req, res) => {
   }
 });
 
-router.post('/api/v1/aic/workspaces/:id/publish', requireAdmin, (req, res) => {
+router.post('/api/v1/aic/workspaces/:id/publish', requireActor, async (req, res) => {
   try {
-    const result = publishWorkspace(req.params.id);
+    await hydrateWorkspace(req.params.id);
+    const existing = getWorkspace(req.params.id);
+    assertWorkspaceTenant(req, existing);
+    const result = await publishAndPersist(req.params.id, {
+      clientId: existing && (existing.clientId || existing.client_id || actorClientId(req)),
+    });
     noStore(res);
     return res.json({
       kind: 'aic_published_aim',
       spec: 'SPEC-113',
       isOperatingFact: false,
+      aimStatus: publicAimStatus(result.workspace),
       workspace: result.workspace,
       aim: result.aim,
     });
@@ -202,10 +312,11 @@ router.post('/api/v1/aic/workspaces/:id/publish', requireAdmin, (req, res) => {
   }
 });
 
-router.get('/api/v1/aic/workspaces/:id/aim', requireAdmin, (req, res) => {
+router.get('/api/v1/aic/workspaces/:id/aim', requireActor, async (req, res) => {
   try {
-    const workspace = getWorkspace(req.params.id);
+    const workspace = (await hydrateWorkspace(req.params.id)) || getWorkspace(req.params.id);
     if (!workspace) return res.status(404).json({ error: 'aic_not_found' });
+    assertWorkspaceTenant(req, workspace);
     if (!workspace.publishedAim) {
       return res.status(404).json({ error: 'aic_aim_not_published' });
     }
@@ -221,5 +332,14 @@ router.get('/api/v1/aic/workspaces/:id/aim', requireAdmin, (req, res) => {
     return fail(res, err, 'aic_aim_failed');
   }
 });
+
+function publicAimStatus(workspace) {
+  return deriveAimStatus({
+    published: workspace && workspace.status === 'published',
+    status: workspace && workspace.status,
+    documentCount: workspace && workspace.documents ? workspace.documents.length : 0,
+    compiled: workspace && ['in_review', 'approved', 'published'].includes(workspace.status),
+  });
+}
 
 module.exports = router;

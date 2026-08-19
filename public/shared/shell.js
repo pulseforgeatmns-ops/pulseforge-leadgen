@@ -34,6 +34,11 @@
       href: { default: '/client-intel' },
     },
     {
+      id: 'aim', label: 'AIM', clientLabel: 'AIM',
+      roles: ['admin', 'manager', 'client'],
+      href: { default: '/aim' },
+    },
+    {
       id: 'pipeline', label: 'Pipeline',
       roles: ['admin', 'manager', 'viewer', 'client', 'setter', 'sales'],
       href: { default: '/dashboard#pf-tab=pipeline', setter: '/setter#view=pipeline', sales: '/setter#view=pipeline' },
@@ -92,6 +97,7 @@
     }
     if (path.startsWith('/max-briefing')) return 'command-deck';
     if (path.startsWith('/client-intel')) return 'client-intel';
+    if (path.startsWith('/aim')) return 'aim';
     if (path.startsWith('/setter')) return 'calls';
     if (path.startsWith('/closer')) return 'customers';
     if (path.startsWith('/dashboard')) {
