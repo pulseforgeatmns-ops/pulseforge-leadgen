@@ -106,6 +106,17 @@ const {
   PIPELINE_MISSION_INSPECTION,
 } = require('./WorkspaceMissionInspection');
 const {
+  maybeHandleAcquisitionOwnershipTurn,
+  detectAcquisitionObjective,
+  missionOwnsAcquisitionRequest,
+  buildClientIntelligenceMissionEvidence,
+} = require('./AcquisitionOwnership');
+const {
+  listAcquisitionOwnershipAuditLog,
+  clearAcquisitionOwnershipAuditLog,
+  createAcquisitionOwnershipAudit,
+} = require('./audit/AcquisitionOwnershipAudit');
+const {
   listWorkspaceMissionInspectionAuditLog,
   clearWorkspaceMissionInspectionAuditLog,
   buildOwnershipTrace,
@@ -150,6 +161,13 @@ module.exports = {
   shouldHandleScoutAcquisition,
   maybeHandleSpecialistInterrogationTurn,
   maybeHandleAcquisitionMissionTurn,
+  maybeHandleAcquisitionOwnershipTurn,
+  detectAcquisitionObjective,
+  missionOwnsAcquisitionRequest,
+  buildClientIntelligenceMissionEvidence,
+  listAcquisitionOwnershipAuditLog,
+  clearAcquisitionOwnershipAuditLog,
+  createAcquisitionOwnershipAudit,
   maybeHandleWorkspaceMissionInspection,
   PIPELINE_MISSION_INSPECTION,
   listWorkspaceMissionInspectionAuditLog,

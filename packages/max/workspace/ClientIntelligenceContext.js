@@ -32,6 +32,7 @@ const {
   shouldRetrieveOperatingEvidence,
 } = require('./OperatingEvidenceRetrieval');
 const { isOperatorOperatingUpdate } = require('./OperatorOperatingUpdate');
+const { detectAcquisitionObjective } = require('./AcquisitionObjectiveDetection');
 
 const ACTIVE_ONBOARDING_STATUSES = new Set([
   'NEW',
@@ -1294,6 +1295,8 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
   } catch (_) {
     // continue CIE classification if challenge helper is unavailable
   }
+  // SPEC-124 — acquisition objectives belong to Mission Engine, not CIE essays.
+  if (detectAcquisitionObjective(question)) return false;
   if (shouldRetrieveOperatingEvidence(question)) return false;
   const sessionContract =
     opts.responseContract ||
@@ -2143,6 +2146,17 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
   const pre = await attachClientIntelligenceContext(input);
   const summary = pre.summary;
   const attachment = pre.attachment;
+
+  // SPEC-124 — Mission Engine owns acquisition objectives.
+  if (detectAcquisitionObjective(question)) {
+    return {
+      handled: false,
+      summary,
+      attachment,
+      clientId: pre.clientId,
+      skipReason: 'acquisition_objective_owned_by_mission',
+    };
+  }
 
   // Operating-state questions depend on recorded activity CIE does not contain.
   if (shouldRetrieveOperatingEvidence(question)) {

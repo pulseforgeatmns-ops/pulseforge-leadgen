@@ -36,6 +36,9 @@ const {
   maybeHandleWorkspaceMissionInspection,
 } = require('./WorkspaceMissionInspection');
 const {
+  maybeHandleAcquisitionOwnershipTurn,
+} = require('./AcquisitionOwnership');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
 const {
@@ -432,6 +435,82 @@ class WorkspaceEngine {
               : null,
         },
         ownershipTrace: workspaceMissionInspectionTurn.ownershipTrace || null,
+      };
+    }
+
+    // SPEC-124 — Acquisition objectives belong to the Mission Engine.
+    // Client Intelligence may attach blueprint evidence; it never owns the response.
+    const acquisitionOwnershipTurn = await maybeHandleAcquisitionOwnershipTurn({
+      question,
+      session,
+      context: rawContext || session.context,
+      acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
+      acquisitionMissionService: this._acquisitionMissionService || undefined,
+      cieService: this._clientIntelligenceService || undefined,
+      cieOpts: this._clientIntelligenceOpts || undefined,
+      persist: this._acquisitionMissionEngine ? false : undefined,
+    });
+    if (acquisitionOwnershipTurn) {
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'workspace';
+        session.context.acquisitionOwner = 'MissionEngine';
+        if (acquisitionOwnershipTurn.mission) {
+          session.context.missionId = acquisitionOwnershipTurn.mission.id;
+          session.context.acquisitionMissionId = acquisitionOwnershipTurn.mission.id;
+        }
+      }
+      const structuredOwnership = acquisitionOwnershipTurn.structured;
+      const presentedOwnership = await this._presentation.present(structuredOwnership);
+      const proseOwnership =
+        presentedOwnership.prose || acquisitionOwnershipTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseOwnership,
+        structured: structuredOwnership,
+      });
+      return {
+        sessionId: session.id,
+        prose: proseOwnership,
+        structured: structuredOwnership,
+        metadata: presentedOwnership.metadata,
+        suggestions: resolveResultSuggestions({
+          structured: structuredOwnership,
+          session,
+          question,
+        }),
+        recommendedActions: structuredOwnership.recommendedActions,
+        contextSwitch: envelopeSwitch,
+        domainSwitch: null,
+        context: session.context,
+        presentation: presentedOwnership.presentation,
+        route: ROUTE_KINDS.INTELLIGENCE,
+        mission: acquisitionOwnershipTurn.mission || null,
+        resolution: null,
+        executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+        interrogation: null,
+        domainDecision: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          reason: acquisitionOwnershipTurn.reason,
+          missionType: 'acquisition_mission',
+          missionIntent: null,
+          confidence: 1,
+          previousDomain: session.previousExecutionDomain || null,
+          domainSwitched: false,
+        },
+        executionContext: {
+          domain: EXECUTION_DOMAINS.WORKSPACE,
+          routeKind: ROUTE_KINDS.INTELLIGENCE,
+          reason: acquisitionOwnershipTurn.reason,
+          missionType: 'acquisition_mission',
+          missionId:
+            acquisitionOwnershipTurn.mission &&
+            acquisitionOwnershipTurn.mission.id
+              ? acquisitionOwnershipTurn.mission.id
+              : null,
+        },
+        ownershipTrace: acquisitionOwnershipTurn.ownershipTrace || null,
       };
     }
 
