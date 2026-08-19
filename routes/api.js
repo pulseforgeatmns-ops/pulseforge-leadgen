@@ -1047,7 +1047,9 @@ router.put('/api/prospects/:id', requireOperator, async (req, res) => {
   } catch (err) {
     try { await client.query('ROLLBACK'); } catch (_rollbackErr) {}
     if (err.code === '23514' && /vertical_canonical_chk/.test(err.constraint || '')) {
-      return res.status(400).json({ error: 'Vertical must use lowercase snake_case.' });
+      const { mapVerticalConstraintError } = require('../utils/canonicalVerticals');
+      const mapped = mapVerticalConstraintError(err);
+      return res.status(mapped.status).json({ error: mapped.message });
     }
     res.status(500).json({ error: err.message });
   } finally {

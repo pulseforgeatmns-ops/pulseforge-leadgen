@@ -34,7 +34,7 @@ const FEDIR_INPUT = {
   companyName: 'Fedir',
   primaryContact: 'Fedir',
   email: 'hello@fedir.example',
-  industry: 'Founder-led agencies',
+  vertical: 'business_coaching',
   country: 'United States',
   timezone: 'America/New_York',
 };
@@ -75,6 +75,7 @@ describe('SPEC-114 create + provision', () => {
     const result = await createAndProvisionTenant({ store, input: fedirInput() });
     assert.equal(result.client.name, 'Fedir');
     assert.equal(result.client.slug, 'fedir');
+    assert.equal(result.client.vertical, 'business_coaching');
     assert.equal(result.provisioned, true);
     assert.ok(result.workspace.knowledge_namespace.includes(`tenant:${result.client.id}:knowledge`));
     assert.ok(result.workspace.aim_namespace.includes(`tenant:${result.client.id}:aim:fedir`));
