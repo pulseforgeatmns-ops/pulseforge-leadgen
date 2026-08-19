@@ -2,11 +2,17 @@
 
 /**
  * AUDIT-003 — ScoutDiscoveryExecutor owns the Discovery stage (prospect_discovery).
+ * AUDIT-006 — Emits discovery strategy, evidence sources, outcomes, and mission updates.
  * Delegates to MissionExecutor / prospect_discovery capability — never advisory prose.
  */
 
 const { BUILTIN_IDS } = require('../../capabilities/types');
 const { MISSION_STATUS, REVIEW_ACTIONS } = require('../types');
+const ScoutDiscoveryAudit = require('../ScoutDiscoveryAudit');
+const {
+  buildDiscoveryExecutionReport,
+  emitDiscoveryAuditEvents,
+} = require('../discoveryExecutionReport');
 
 const EXECUTOR_ID = 'ScoutDiscoveryExecutor';
 
@@ -40,12 +46,14 @@ async function executeScoutDiscovery(input) {
     mission.status === MISSION_STATUS.REQUESTED
   ) {
     const updated = await missionEngine.executor.execute(missionId);
+    const discoveryReport = recordDiscoveryExecution(updated, payload);
     return {
       executorId: EXECUTOR_ID,
       success: true,
       outcome: 'executed',
       mission: updated,
       scoutPayload: payload,
+      discoveryReport,
       invocation: { attempted: true, skipped: false },
     };
   }
@@ -71,12 +79,14 @@ async function executeScoutDiscovery(input) {
     });
 
     const updated = await missionEngine.executor.execute(missionId);
+    const discoveryReport = recordDiscoveryExecution(updated, payload);
     return {
       executorId: EXECUTOR_ID,
       success: true,
       outcome: 'discovery_re_executed',
       mission: updated,
       scoutPayload: payload,
+      discoveryReport,
       invocation: { attempted: true, skipped: false },
     };
   }
@@ -101,6 +111,26 @@ async function executeScoutDiscovery(input) {
  * @param {object} mission
  * @param {string} [message]
  */
+/**
+ * @param {object} mission
+ * @param {object} scoutPayload
+ * @returns {object}
+ */
+function recordDiscoveryExecution(mission, scoutPayload) {
+  const report = buildDiscoveryExecutionReport(mission, scoutPayload);
+  report.missionStatus = mission.status;
+  emitDiscoveryAuditEvents(report, ScoutDiscoveryAudit);
+  ScoutDiscoveryAudit.logMissionDiscoveryResponse({
+    missionId: report.missionId,
+    discoveryStrategy: report.discoveryStrategy,
+    evidenceSources: report.evidenceSources,
+    outcome: report.outcome,
+    blockReason: report.blockReason,
+    operatorResponseKind: 'mission_execution_outcome',
+  });
+  return report;
+}
+
 function buildScoutDispatchPayload(mission, message) {
   const plan =
     (mission.plan && mission.plan.missionPlan) || mission.missionPlan || null;
@@ -129,4 +159,5 @@ module.exports = {
   EXECUTOR_ID,
   executeScoutDiscovery,
   buildScoutDispatchPayload,
+  recordDiscoveryExecution,
 };

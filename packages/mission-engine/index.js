@@ -160,6 +160,8 @@ const {
   createStageExecutionOrchestrator,
 } = require('./StageExecutionOrchestrator');
 const MissionStageAudit = require('./MissionStageAudit');
+const ScoutDiscoveryAudit = require('./ScoutDiscoveryAudit');
+const DiscoveryExecutionReport = require('./discoveryExecutionReport');
 const StageExecutorRegistry = require('./stageExecutors/StageExecutorRegistry');
 const ScoutDiscoveryExecutor = require('./stageExecutors/ScoutDiscoveryExecutor');
 const RecommendationEngineExecutor = require('./stageExecutors/RecommendationEngineExecutor');
@@ -297,6 +299,9 @@ module.exports = {
   executeCurrentStage,
   createStageExecutionOrchestrator,
   ...MissionStageAudit,
+  // AUDIT-006 — scout discovery execution audit
+  ...ScoutDiscoveryAudit,
+  ...DiscoveryExecutionReport,
   ...StageExecutorRegistry,
   ...ScoutDiscoveryExecutor,
   ...RecommendationEngineExecutor,

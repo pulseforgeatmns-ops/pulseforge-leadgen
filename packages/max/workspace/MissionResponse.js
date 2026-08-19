@@ -12,6 +12,7 @@ const {
   applyMissionCommunication,
   buildReasoningEvidence,
 } = require('./MissionCommunication');
+const { formatDiscoveryOperatorResponse } = require('../../mission-engine/discoveryExecutionReport');
 
 /**
  * @param {object} input
@@ -112,6 +113,7 @@ function composeActiveMissionResponse(input) {
   let headline = 'Mission Updated';
   let nextStep = 'Continue in Mission Workspace.';
   let operatorDecision = null;
+  let missionCommHealth = null;
   const reasoningLines = [
     `Active Mission Resolver — ${action}.`,
     `Mission: ${title} (${mission.id}).`,
@@ -132,19 +134,41 @@ function composeActiveMissionResponse(input) {
     const exec = resolution.stageExecution;
     const stageName =
       (exec.stage && (exec.stage.stageName || exec.stage.stageId)) || 'Discovery';
-    nextStep = `Scout discovery executed for stage ${stageName}.`;
-    if (mission.status === 'review_required') {
-      operatorDecision = 'Awaiting Prioritization Approval';
-    } else if (mission.status === 'executing') {
-      nextStep = `Discovery in progress (${stageName}).`;
+    const discoveryReport =
+      exec.result && exec.result.discoveryReport ? exec.result.discoveryReport : null;
+
+    if (discoveryReport) {
+      nextStep = formatDiscoveryOperatorResponse(discoveryReport);
+      reasoningLines.push(
+        `Stage executor: ${exec.executorId || 'none'}.`,
+        `Selection: ${exec.selectionReason}.`,
+        `Discovery strategy: ${discoveryReport.discoveryStrategy}.`,
+        `Discovery outcome: ${discoveryReport.outcome}.`,
+        discoveryReport.blockReason
+          ? `Block reason: ${discoveryReport.blockReason}.`
+          : null,
+        `External discovery attempted: ${discoveryReport.externalDiscoveryAttempted ? 'yes' : 'no'}.`,
+        `Prospects verified: ${discoveryReport.prospectCount}.`
+      );
+      if (discoveryReport.outcome === 'DISCOVERY_BLOCKED') {
+        headline = 'Mission Updated';
+        missionCommHealth = 'Blocked';
+      }
+    } else {
+      nextStep = `Scout discovery executed for stage ${stageName}.`;
+      if (mission.status === 'review_required') {
+        operatorDecision = 'Awaiting Prioritization Approval';
+      } else if (mission.status === 'executing') {
+        nextStep = `Discovery in progress (${stageName}).`;
+      }
+      reasoningLines.push(
+        `Stage executor: ${exec.executorId || 'none'}.`,
+        `Selection: ${exec.selectionReason}.`,
+        exec.result && exec.result.scoutPayload
+          ? `Scout dispatch: mission ${exec.result.scoutPayload.missionId}.`
+          : null
+      );
     }
-    reasoningLines.push(
-      `Stage executor: ${exec.executorId || 'none'}.`,
-      `Selection: ${exec.selectionReason}.`,
-      exec.result && exec.result.scoutPayload
-        ? `Scout dispatch: mission ${exec.result.scoutPayload.missionId}.`
-        : null
-    );
   } else if (action === 'stage_fallback' && resolution.stageExecution) {
     headline = 'Advisory Response';
     nextStep =
@@ -212,8 +236,12 @@ function composeActiveMissionResponse(input) {
   missionComm.headline = headline;
   missionComm.nextStep = nextStep;
   missionComm.operatorDecision = operatorDecision;
-  if (action === 'blocked' || (Array.isArray(mission.blockingIssues) && mission.blockingIssues.length)) {
-    missionComm.health = 'Blocked';
+  if (
+    missionCommHealth ||
+    action === 'blocked' ||
+    (Array.isArray(mission.blockingIssues) && mission.blockingIssues.length)
+  ) {
+    missionComm.health = missionCommHealth || 'Blocked';
     missionComm.waitingOn = 'Operator approval';
   }
 
