@@ -85,6 +85,10 @@ const {
   maybeHandleSpecialistInterrogationTurn,
 } = require('./SpecialistInterrogationContext');
 const {
+  maybeHandleAcquisitionMissionTurn,
+  looksLikeAcquisitionMissionQuestion,
+} = require('./AcquisitionMissionTurn');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
 const {
@@ -123,6 +127,8 @@ module.exports = {
   maybeHandleScoutAcquisitionTurn,
   shouldHandleScoutAcquisition,
   maybeHandleSpecialistInterrogationTurn,
+  maybeHandleAcquisitionMissionTurn,
+  looksLikeAcquisitionMissionQuestion,
   maybeHandleRetrievalBeforeDelegationTurn,
   loadDurableBusinessUnderstanding,
   buildBusinessUnderstandingContract,

@@ -141,6 +141,13 @@ describe('SPEC-102F Max Development Framework', () => {
     assert.match(competency.exercises[0].transferTest, /blacklist/i);
   });
 
+  test('acquisition_mission_orchestration is a graduated competency', () => {
+    const competency = training.getCompetency('acquisition_mission_orchestration');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-118'));
+    assert.match(competency.exercises[0].generalLesson, /Max doesn't manage agents/i);
+  });
+
   test('retrieve_before_delegation exercise includes transfer test', () => {
     const competency = training.getCompetency('retrieve_before_delegation');
     const exercise = competency.exercises[0];

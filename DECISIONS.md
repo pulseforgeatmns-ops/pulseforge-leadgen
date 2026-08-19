@@ -52,6 +52,8 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-051](docs/adr/ADR-051_Provision_Tenant_Before_Intelligence.md) | Provision Tenant Before Intelligence | Accepted | A tenant is provisioned before intelligence begins; every workspace starts empty; missing tenant fails closed |
 | [ADR-052](docs/adr/ADR-052_Workspace_First_Registration.md) | Workspace-First Registration | Accepted | Customers register without SQL; the workspace is created first; users belong to workspaces; Max owns the first conversation |
 | [ADR-053](docs/adr/ADR-053_Business_Success_Is_Operator_Defined.md) | Business Success Is Operator-Defined | Accepted | Max recommends explainable metrics; the operator-approved scorecard is the canonical definition of success; drafts never report |
+| [ADR-054](docs/adr/ADR-054_Reputation_Is_Capital.md) | Reputation Is Capital | Accepted | Emmett protects outbound reputation; capacity is reasoned; the Safe Send Governor evaluates every send; Max cannot override Pause/Emergency silently |
+| [ADR-055](docs/adr/ADR-055_Max_Manages_Missions.md) | Max Manages Missions, Not Agents | Accepted | Every outbound campaign is a durable Acquisition Mission; Max orchestrates lifecycle; specialists contribute under contract |
 
 ## How to add a decision
 

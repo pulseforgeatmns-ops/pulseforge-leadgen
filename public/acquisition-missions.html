@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Acquisition Missions</title>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<script src="/shared/shell.js" defer></script>
+<style>
+  body { margin: 0; background: var(--pf-bg, #040810); color: var(--pf-text, #e8f0fe); font-family: 'DM Sans', sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+  h1 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.8rem; margin: 0 0 0.35rem; }
+  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 1.25rem; }
+  .panel { background: #070d1a; border: 1px solid rgba(96,48,177,0.18); border-radius: 10px; padding: 1.1rem; margin-bottom: 1rem; }
+  h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+  p { margin: 0.25rem 0; color: #9bb0d0; font-size: 0.9rem; line-height: 1.45; }
+  .meta { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; color: #6b7fa0; }
+  .bar { font-family: 'JetBrains Mono', monospace; letter-spacing: 2px; color: #c4b5fd; margin: 0.35rem 0; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; }
+  .stat { background: rgba(255,255,255,0.03); border-radius: 8px; padding: 0.75rem; }
+  .stat strong { display: block; font-size: 1.15rem; }
+  .pill { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1px; text-transform: uppercase; padding: 0.25rem 0.5rem; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); color: #c4b5fd; margin-right: 0.35rem; }
+  .pill.ok { color: #00e676; border-color: rgba(0,230,118,0.35); }
+  .pill.warn { color: #fbbf24; border-color: rgba(251,191,36,0.35); }
+  .pill.danger { color: #ff7a93; border-color: rgba(255,59,92,0.4); }
+  ul { margin: 0.4rem 0 0; padding-left: 1.1rem; color: #9bb0d0; }
+  button { font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1px; text-transform: uppercase; border-radius: 6px; padding: 0.55rem 0.7rem; cursor: pointer; border: 1px solid rgba(139,92,246,0.35); background: rgba(96,48,177,0.2); color: #8b5cf6; }
+  button.secondary { background: transparent; color: #6b7fa0; border-color: rgba(255,255,255,0.12); }
+  .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.7rem; }
+  label { font-size: 0.82rem; color: #9bb0d0; display: block; margin: 0.35rem 0 0.15rem; }
+  input, textarea { width: 100%; box-sizing: border-box; background: #040810; color: #e8f0fe; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 0.45rem 0.55rem; font-family: inherit; }
+  .msg { min-height: 1.2rem; font-size: 0.82rem; color: #6b7fa0; }
+  .msg.err { color: #ff3b5c; }
+  .msg.ok { color: #00e676; }
+  .mission-row { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0.55rem 0; cursor: pointer; }
+  .mission-row:hover { color: #fff; }
+  .timeline { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #9bb0d0; }
+  .timeline div { padding: 0.2rem 0; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Acquisition Missions</h1>
+  <p class="sub">SPEC-118 · Max manages missions · Capabilities contribute · Nothing is hidden</p>
+  <p class="msg" id="msg"></p>
+  <section class="panel" id="listPanel"></section>
+  <section class="panel" id="workspacePanel"></section>
+  <section class="panel" id="healthPanel"></section>
+  <section class="panel" id="blockerPanel"></section>
+  <section class="panel" id="timelinePanel"></section>
+  <section class="panel" id="whyPanel"></section>
+  <section class="panel" id="createPanel">
+    <h2>Create mission</h2>
+    <label>Objective</label>
+    <textarea id="objective" rows="2" placeholder="Acquire commercial cleaning customers in Manchester."></textarea>
+    <label>Target segment</label>
+    <input id="segment" placeholder="Law Firms">
+    <label>Campaign</label>
+    <input id="campaign" placeholder="Fall Outreach">
+    <div class="actions">
+      <button id="createBtn">Create</button>
+      <button class="secondary" id="advanceBtn">Advance stage</button>
+    </div>
+  </section>
+</div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const msg = $('msg');
+  let missions = [];
+  let selected = null;
+  let snapshot = null;
+
+  function setMsg(text, kind) {
+    msg.textContent = text || '';
+    msg.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  async function api(url, opts) {
+    const res = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || body.error || 'Request failed');
+    return body;
+  }
+
+  function pill(label, kind) {
+    return '<span class="pill ' + (kind || '') + '">' + label + '</span>';
+  }
+
+  function specialistKind(state) {
+    if (state === 'complete' || state === 'approved') return 'ok';
+    if (state === 'generating' || state === 'approval_required') return 'warn';
+    return '';
+  }
+
+  function renderList() {
+    if (!missions.length) {
+      $('listPanel').innerHTML = '<h2>Missions</h2><p>No acquisition missions yet. Max creates them. You can start one below.</p>';
+      return;
+    }
+    $('listPanel').innerHTML = '<h2>Missions</h2>' + missions.map((row) =>
+      '<div class="mission-row" data-id="' + row.id + '">' +
+        '<strong>' + (row.title || row.id) + '</strong> ' +
+        pill(row.status, row.stage === 'prepare' ? 'warn' : 'ok') +
+        '<div class="meta">' + row.id + ' · ' + (row.targetSegment || '') + ' · ' + (row.campaign || '') + '</div>' +
+      '</div>'
+    ).join('');
+    $('listPanel').querySelectorAll('.mission-row').forEach((el) => {
+      el.addEventListener('click', () => loadOne(el.getAttribute('data-id')));
+    });
+  }
+
+  function renderSnapshot() {
+    if (!snapshot) return;
+    const ws = snapshot.workspace || {};
+    const health = snapshot.health || {};
+    const blocker = snapshot.blocker;
+    const why = snapshot.why || {};
+    $('workspacePanel').innerHTML =
+      '<h2>Workspace</h2>' +
+      '<p class="meta">Status</p><p><strong>' + (ws.status || '') + '</strong></p>' +
+      '<div class="bar">' + (ws.bar || '') + ' ' + (ws.progressPercent || 0) + '%</div>' +
+      (ws.specialists || []).map((row) => pill((row.id + ': ' + row.label), specialistKind(row.state))).join(' ');
+    const healthKind = health.label === 'healthy' ? 'ok' : health.label === 'paused' ? 'danger' : 'warn';
+    $('healthPanel').innerHTML =
+      '<h2>Mission Health</h2>' +
+      pill(health.status || '—', healthKind) +
+      '<div class="grid" style="margin-top:0.75rem">' +
+        '<div class="stat"><span class="meta">Confidence</span><strong>' + (health.confidence == null ? '—' : health.confidence) + '</strong></div>' +
+        '<div class="stat"><span class="meta">Current blocker</span><strong>' + (health.currentBlocker || 'None') + '</strong></div>' +
+        '<div class="stat"><span class="meta">Risk</span><strong>' + (health.risk || '—') + '</strong></div>' +
+        '<div class="stat"><span class="meta">Capacity remaining</span><strong>' + (health.capacityRemaining == null ? '—' : health.capacityRemaining) + '</strong></div>' +
+        '<div class="stat"><span class="meta">Replies</span><strong>' + (health.replies || 0) + '</strong></div>' +
+        '<div class="stat"><span class="meta">Meetings</span><strong>' + (health.meetings || 0) + '</strong></div>' +
+      '</div>' +
+      (health.learning ? '<p style="margin-top:0.6rem">' + health.learning + '</p>' : '');
+    $('blockerPanel').innerHTML = '<h2>Blockers</h2>' + (blocker
+      ? '<p>' + pill(blocker.label, blocker.kind && blocker.kind.indexOf('paused') === 0 ? 'danger' : 'warn') + '</p><p>' + (blocker.reason || '') + '</p>'
+      : '<p>No silent waits. This mission can proceed.</p>');
+    $('timelinePanel').innerHTML = '<h2>Timeline</h2><div class="timeline">' +
+      (snapshot.timeline || []).map((row) => '<div>' + (row.clock || '') + ' &nbsp; ' + (row.label || '') + '</div>').join('') +
+      '</div>';
+    $('whyPanel').innerHTML = '<h2>Why is this mission here?</h2>' +
+      (why.reasons || []).map((row) => '<p>' + row + '</p>').join('') +
+      '<p class="meta">Confidence ' + (why.confidence == null ? '—' : why.confidence) + ' · evidence, not opinion</p>';
+  }
+
+  async function loadList() {
+    const body = await api('/api/v1/amo/missions');
+    missions = body.missions || [];
+    renderList();
+    if (!selected && missions[0]) await loadOne(missions[0].id);
+  }
+
+  async function loadOne(id) {
+    selected = id;
+    snapshot = await api('/api/v1/amo/missions/' + encodeURIComponent(id));
+    renderSnapshot();
+    setMsg('Inspecting ' + id, 'ok');
+  }
+
+  $('createBtn').addEventListener('click', async () => {
+    try {
+      setMsg('Creating…');
+      const body = await api('/api/v1/amo/missions', {
+        method: 'POST',
+        body: JSON.stringify({
+          objective: $('objective').value,
+          targetSegment: $('segment').value,
+          campaign: $('campaign').value,
+          priority: 'high',
+        }),
+      });
+      await loadList();
+      await loadOne(body.mission.id);
+      setMsg('Mission created', 'ok');
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  });
+
+  $('advanceBtn').addEventListener('click', async () => {
+    if (!selected) return setMsg('Select a mission first', 'err');
+    try {
+      await api('/api/v1/amo/missions/' + encodeURIComponent(selected) + '/progress', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      await loadOne(selected);
+      setMsg('Stage advanced', 'ok');
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  });
+
+  loadList().catch((err) => setMsg(err.message, 'err'));
+})();
+</script>
+</body>
+</html>
