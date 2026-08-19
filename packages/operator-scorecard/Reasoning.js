@@ -47,7 +47,9 @@ function collectObjectives(input = {}) {
     input.normalizedFacts && (input.normalizedFacts.ninety_day_outcomes || input.normalizedFacts.growth_focus)
   );
   const goal = asText(input.businessGoal);
-  const merged = [...fromList, ...fromRows, fromBlueprint, ...fromFacts, goal].filter(Boolean);
+  const merged = [...fromList, ...fromRows, ...fromBlueprint, ...fromFacts, goal]
+    .map(asText)
+    .filter(Boolean);
   const seen = new Set();
   return merged.filter((item) => {
     const key = item.toLowerCase();
