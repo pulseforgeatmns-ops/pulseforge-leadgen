@@ -41,6 +41,16 @@ const DIAGNOSE = [
   /\bdebug\b/i,
 ];
 
+const EXECUTE_STAGE = [
+  /\bapprov(ed|al)\b.*\bbegin\b/i,
+  /\bbegin\s+scout\s+discover(y|ing)?\b/i,
+  /\bexecute\s+(the\s+)?(discovery|scout)\b/i,
+  /\bstart\s+scout\s+discover(y|ing)?\b/i,
+  /\brun\s+scout\s+discover(y|ing)?\b/i,
+  /\bexecute\s+stage\b/i,
+  /\bapproved\.?\s*begin\b/i,
+];
+
 const MODIFY = [
   /\buse\s+[a-z]/i,
   /\binstead\s+of\b/i,
@@ -134,6 +144,12 @@ function classifyMessage(message, activeMission = null) {
   for (const re of DIAGNOSE) {
     if (re.test(lower)) {
       return { classification: MESSAGE_CLASS.DIAGNOSE, reason: 'diagnose_pattern' };
+    }
+  }
+
+  for (const re of EXECUTE_STAGE) {
+    if (re.test(lower)) {
+      return { classification: MESSAGE_CLASS.EXECUTE_STAGE, reason: 'execute_stage_pattern' };
     }
   }
 

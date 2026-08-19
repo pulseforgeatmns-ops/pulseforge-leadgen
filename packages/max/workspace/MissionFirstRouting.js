@@ -91,6 +91,9 @@ function evaluateMissionContinuation(question, activeMission) {
   let confidence;
 
   switch (classification) {
+    case MESSAGE_CLASS.EXECUTE_STAGE:
+      confidence = 0.96;
+      break;
     case MESSAGE_CLASS.RESUME:
       confidence = reason === 'default_resume_active' ? 0.78 : 0.95;
       break;
