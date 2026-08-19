@@ -6,6 +6,18 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Emmett Outbound Infrastructure Intelligence ([SPEC-117](docs/specs/SPEC-117_Emmett_Outbound_Infrastructure_Intelligence.md), [ADR-054](docs/adr/ADR-054_Reputation_Is_Capital.md))
+  - Emmett is not a copywriter, BDR, or sales strategist — it protects outbound reputation capital
+  - Explainable Inbox Health 0–100 (SPF, DKIM, DMARC, warmup, bounce/reply/open, age, blacklist, velocity, consistency, overrides)
+  - Capacity Intelligence reasons a daily volume (spec example: 22 at confidence 0.84) instead of `gmail = 50`
+  - Safe Send Governor: Proceed / Slow / Pause / Emergency before every send
+  - Max cannot override Pause or Emergency silently; operator acknowledgement is required
+  - Today's queue ranks Max priority, buying-signal freshness, expected response, capacity, and campaign diversity
+  - Operator dashboard at `/emmett-outbound`; human approval of today's plan is mandatory before send
+  - Outcomes (delivery, open, reply, bounce, unsubscribe, spam, meeting, opportunity, revenue) route to Paige, Scout, Max, and Emmett without auto-mutating campaigns
+  - Competency `emmett_outbound_infrastructure` graduated 2026-08-19
+  - Numbering: the product brief called this SPEC-110; repository SPEC-110 remains Business Intelligence Synthesis
+
 - Operator Scorecard Intelligence ([SPEC-116](docs/specs/SPEC-116_Operator_Scorecard_Intelligence.md), [ADR-053](docs/adr/ADR-053_Business_Success_Is_Operator_Defined.md))
   - Max reasons from Blueprint, AIM, stage, revenue model, and operator objectives before recommending metrics
   - Every recommendation includes reason, business outcome, confidence, leading/lagging, and category

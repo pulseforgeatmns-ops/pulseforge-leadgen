@@ -133,6 +133,14 @@ describe('SPEC-102F Max Development Framework', () => {
     assert.match(competency.exercises[0].generalLesson, /compiled, then approved, then published/i);
   });
 
+  test('emmett_outbound_infrastructure is a graduated Pilot 0 competency', () => {
+    const competency = training.getCompetency('emmett_outbound_infrastructure');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-117'));
+    assert.match(competency.exercises[0].generalLesson, /Reputation is capital/i);
+    assert.match(competency.exercises[0].transferTest, /blacklist/i);
+  });
+
   test('retrieve_before_delegation exercise includes transfer test', () => {
     const competency = training.getCompetency('retrieve_before_delegation');
     const exercise = competency.exercises[0];

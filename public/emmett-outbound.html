@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Emmett Outbound</title>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<script src="/shared/shell.js" defer></script>
+<style>
+  body { margin: 0; background: var(--pf-bg, #040810); color: var(--pf-text, #e8f0fe); font-family: 'DM Sans', sans-serif; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+  h1 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.8rem; margin: 0 0 0.35rem; }
+  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 1.25rem; }
+  .panel { background: #070d1a; border: 1px solid rgba(96,48,177,0.18); border-radius: 10px; padding: 1.1rem; margin-bottom: 1rem; }
+  h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+  p { margin: 0.25rem 0; color: #9bb0d0; font-size: 0.9rem; line-height: 1.45; }
+  .meta { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; color: #6b7fa0; }
+  .score { font-family: 'Bebas Neue', sans-serif; font-size: 3rem; letter-spacing: 2px; margin: 0.2rem 0; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.75rem; }
+  .stat { background: rgba(255,255,255,0.03); border-radius: 8px; padding: 0.75rem; }
+  .stat strong { display: block; font-size: 1.4rem; }
+  .pill { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1px; text-transform: uppercase; padding: 0.25rem 0.5rem; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); color: #c4b5fd; margin-right: 0.35rem; }
+  .pill.warn { color: #fbbf24; border-color: rgba(251,191,36,0.35); }
+  .pill.danger { color: #ff7a93; border-color: rgba(255,59,92,0.4); }
+  .pill.ok { color: #00e676; border-color: rgba(0,230,118,0.35); }
+  ul { margin: 0.4rem 0 0; padding-left: 1.1rem; color: #9bb0d0; }
+  button { font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1px; text-transform: uppercase; border-radius: 6px; padding: 0.55rem 0.7rem; cursor: pointer; border: 1px solid rgba(139,92,246,0.35); background: rgba(96,48,177,0.2); color: #8b5cf6; }
+  button.secondary { background: transparent; color: #6b7fa0; border-color: rgba(255,255,255,0.12); }
+  .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.7rem; align-items: center; }
+  label { font-size: 0.82rem; color: #9bb0d0; }
+  .msg { min-height: 1.2rem; font-size: 0.82rem; color: #6b7fa0; }
+  .msg.err { color: #ff3b5c; }
+  .msg.ok { color: #00e676; }
+  .queue-item { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0.55rem 0; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Emmett Outbound</h1>
+  <p class="sub">SPEC-117 · Reputation is capital · Emmett protects it · You approve before send</p>
+  <p class="msg" id="msg"></p>
+  <section class="panel" id="healthPanel"></section>
+  <section class="panel" id="capacityPanel"></section>
+  <section class="panel" id="governorPanel"></section>
+  <section class="panel" id="queuePanel"></section>
+  <section class="panel" id="suggestPanel"></section>
+</div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const msg = $('msg');
+  let data = null;
+
+  function setMsg(text, kind) {
+    msg.textContent = text || '';
+    msg.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  async function api(url, opts) {
+    const res = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || body.error || 'Request failed');
+    return body;
+  }
+
+  function pill(label, kind) {
+    return '<span class="pill ' + (kind || '') + '">' + label + '</span>';
+  }
+
+  function render() {
+    const dash = data.dashboard || {};
+    const health = dash.inbox || data.health || {};
+    const cap = dash.capacity || data.capacity || {};
+    const gov = dash.governor || data.governor || {};
+    const queue = dash.queue || data.queue || {};
+    const healthKind = health.label === 'healthy' ? 'ok' : health.label === 'critical' ? 'danger' : 'warn';
+    $('healthPanel').innerHTML =
+      '<h2>Inbox Health</h2>' +
+      pill(health.label || 'unknown', healthKind) +
+      '<div class="score">' + (health.score == null ? '—' : health.score) + '</div>' +
+      '<p class="meta">Never just a number. Reasons below.</p>' +
+      '<ul>' + (health.reasons || []).map((r) => '<li>' + r + '</li>').join('') + '</ul>';
+    $('capacityPanel').innerHTML =
+      '<h2>Today\'s Capacity</h2>' +
+      '<div class="grid">' +
+        '<div class="stat"><span class="meta">Recommended</span><strong>' + (cap.recommended || 0) + '</strong></div>' +
+        '<div class="stat"><span class="meta">Scheduled</span><strong>' + (cap.scheduled || 0) + '</strong></div>' +
+        '<div class="stat"><span class="meta">Remaining</span><strong>' + (cap.remaining || 0) + '</strong></div>' +
+      '</div>' +
+      '<p>' + (cap.statement || '') + '</p>' +
+      '<p class="meta">Confidence ' + Math.round((cap.confidence || 0) * 100) + '% · Ceiling is not the recommendation</p>' +
+      '<ul>' + (cap.factors || []).map((f) => '<li>' + f + '</li>').join('') + '</ul>';
+    const govKind = gov.outcome === 'proceed' ? 'ok' : gov.outcome === 'emergency' ? 'danger' : 'warn';
+    $('governorPanel').innerHTML =
+      '<h2>Safe Send Governor</h2>' +
+      pill(gov.outcome || 'unknown', govKind) +
+      '<p>' + (gov.reason || '') + '</p>' +
+      '<p class="meta">' + (dash.approved ? 'Today\'s plan is approved' : 'Human approval required before send') + '</p>' +
+      '<div class="actions">' +
+        '<label><input type="checkbox" id="legacy"> Allow existing sequence copy until Paige is live</label>' +
+        '<button type="button" id="approveBtn">Approve today\'s queue</button>' +
+        '<button type="button" class="secondary" id="ackBtn">Acknowledge halt</button>' +
+      '</div>';
+    const items = (queue.items || []).slice(0, 18);
+    $('queuePanel').innerHTML =
+      '<h2>Today\'s Queue</h2>' +
+      '<p>' + (queue.statement || '') + '</p>' +
+      items.map((item) =>
+        '<div class="queue-item"><strong>' + (item.position || '') + '. ' + (item.email || '') + '</strong>' +
+        '<div class="meta">' + (item.vertical || '') + ' · priority ' + (item.maxPriority || 0) + ' · ' + (item.sendable ? 'sendable' : 'needs Paige copy') + '</div></div>'
+      ).join('') || '<p>No prospects in today\'s recommended set.</p>';
+    const suggestions = dash.suggestions || [];
+    const warnings = dash.warnings || [];
+    $('suggestPanel').innerHTML =
+      '<h2>Warnings & suggestions</h2>' +
+      warnings.map((w) => '<p><strong>' + w.title + '</strong> — ' + w.body + '</p>').join('') +
+      suggestions.map((s) => '<p><strong>' + s.title + '</strong> — ' + s.body + '</p>').join('');
+    $('approveBtn').onclick = approve;
+    $('ackBtn').onclick = acknowledge;
+  }
+
+  async function load() {
+    data = await api('/api/v1/eoi/dashboard');
+    render();
+  }
+
+  async function approve() {
+    try {
+      const body = {
+        allowLegacySequences: $('legacy').checked,
+      };
+      await api('/api/v1/eoi/plans/' + data.plan.id + '/approve', { method: 'POST', body: JSON.stringify(body) });
+      setMsg('Today\'s queue is approved. Emmett may send up to the recommended capacity.', 'ok');
+      await load();
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  }
+
+  async function acknowledge() {
+    try {
+      await api('/api/v1/eoi/plans/' + data.plan.id + '/acknowledge', {
+        method: 'POST',
+        body: JSON.stringify({ note: 'Operator acknowledged governor halt' }),
+      });
+      setMsg('Halt acknowledged. Approval is still required before sending resumes.', 'ok');
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  }
+
+  load().catch((err) => setMsg(err.message, 'err'));
+})();
+</script>
+</body>
+</html>

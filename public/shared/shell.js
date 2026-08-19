@@ -44,6 +44,11 @@
       href: { default: '/operator-scorecard' },
     },
     {
+      id: 'emmett-outbound', label: 'Outbound', clientLabel: 'Outbound',
+      roles: ['admin', 'manager', 'client'],
+      href: { default: '/emmett-outbound' },
+    },
+    {
       id: 'pipeline', label: 'Pipeline',
       roles: ['admin', 'manager', 'viewer', 'client', 'setter', 'sales'],
       href: { default: '/dashboard#pf-tab=pipeline', setter: '/setter#view=pipeline', sales: '/setter#view=pipeline' },
@@ -104,6 +109,7 @@
     if (path.startsWith('/client-intel')) return 'client-intel';
     if (path.startsWith('/aim')) return 'aim';
     if (path.startsWith('/operator-scorecard')) return 'scorecard';
+    if (path.startsWith('/emmett-outbound')) return 'emmett-outbound';
     if (path.startsWith('/setter')) return 'calls';
     if (path.startsWith('/closer')) return 'customers';
     if (path.startsWith('/dashboard')) {

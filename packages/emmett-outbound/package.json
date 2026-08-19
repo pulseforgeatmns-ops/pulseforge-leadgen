@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/emmett-outbound",
+  "version": "0.1.0",
+  "description": "Emmett Outbound Infrastructure Intelligence — reputation is capital (SPEC-117 / ADR-054)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}

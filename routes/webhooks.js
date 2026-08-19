@@ -781,6 +781,12 @@ function acceptBrevoWebhook(req, res) {
       }
       await safeIngestBrevoSignal(result, payload);
       await processBrevoEventSideEffects(result, payload);
+      try {
+        const { ingestBrevoResult } = require('../services/emmettOutbound');
+        await ingestBrevoResult(result);
+      } catch (learnErr) {
+        console.error('[Brevo] SPEC-117 outcome routing failed:', learnErr.message);
+      }
       console.log(`[Brevo] Received ${eventType || result.event_type} for ${email || result.recipient_email}`);
     } catch (err) {
       console.error('[Brevo] Webhook persistence error:', err.message);
