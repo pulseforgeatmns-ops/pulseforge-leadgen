@@ -114,7 +114,7 @@ jobs:
         if: always()
         env:
           CI_WORKFLOW_CONCLUSION: ${{ job.status }}
-          CI_CANCELLED: ${{ cancelled() }}
+          CI_CANCELLED: ${{ job.status == 'cancelled' }}
           CI_ENVIRONMENT_HEALTHY: ${{ steps.environment.outputs.environment-healthy != 'false' }}
         run: |
           end=$(date +%s)
