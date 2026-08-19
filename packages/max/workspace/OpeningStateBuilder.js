@@ -2,7 +2,7 @@
 
 const { PAGE_TYPES } = require('./WorkspaceTypes');
 const { contextFocusLabel } = require('./ContextEnvelope');
-const { buildTenantGreeting } = require('./TenantContextResolver');
+const { greetingForWorkspace } = require('./TenantContextResolver');
 
 /**
  * Deterministic opening message from MaxContext.
@@ -17,15 +17,16 @@ function buildOpeningState(context, options = {}) {
     Number.isFinite(options.hour) ? options.hour : new Date().getHours();
   const greeting = hour < 12 ? 'Good morning.' : hour < 17 ? 'Good afternoon.' : 'Good evening.';
 
-  // SPEC-114 — empty tenant workspace opens with the onboarding greeting.
+  // SPEC-114 / SPEC-115 — empty workspace opens with the onboarding greeting.
   if (context.tenantWorkspace && context.tenantWorkspace.needsOnboarding) {
     const name =
       (context.tenant && context.tenant.name) ||
       context.tenantName ||
       (context.tenantWorkspace.client && context.tenantWorkspace.client.name) ||
       'there';
+    const workspace = context.workspace || context.tenantWorkspace.workspace || context.tenantWorkspace;
     return {
-      ...buildTenantGreeting(name),
+      ...greetingForWorkspace(workspace, name),
       onboarding: true,
     };
   }

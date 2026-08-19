@@ -29,6 +29,10 @@ async function ensureUsersTable() {
     )
   `);
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS client_id INTEGER');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ');
+  await pool.query('UPDATE users SET email_verified = TRUE WHERE email_verified IS NULL');
   await pool.query('SELECT pg_advisory_lock(91720260517)');
   try {
     const { rows: existing } = await pool.query(`

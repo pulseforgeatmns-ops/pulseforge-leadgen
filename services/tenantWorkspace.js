@@ -8,7 +8,15 @@
  */
 
 const defaultPool = require('../db');
-const { buildTenantGreeting } = require('../packages/max/workspace/TenantContextResolver');
+const {
+  buildTenantGreeting,
+  greetingForWorkspace,
+} = require('../packages/max/workspace/TenantContextResolver');
+const {
+  LIFECYCLE,
+  deriveWorkspaceLifecycle,
+  publicLifecycle,
+} = require('./workspaceLifecycle');
 
 const REQUIRED_FIELDS = [
   'companyName',
@@ -47,17 +55,21 @@ function namespacesFor(clientId, tenantKey) {
     prospect_namespace: `tenant:${clientId}:prospect`,
     outcome_namespace: `tenant:${clientId}:outcome`,
     aim_namespace: `tenant:${clientId}:aim:${key}`,
+    campaign_namespace: `tenant:${clientId}:campaign`,
+    memory_namespace: `tenant:${clientId}:memory`,
   };
 }
 
 function initialWorkspaceStatus() {
   return {
-    clientIntelligence: { status: CLIENT_INTEL_NOT_STARTED, present: false },
-    aim: { status: AIM_NONE, present: false, published: false },
+    clientIntelligence: { status: CLIENT_INTEL_NOT_STARTED, present: false, approved: false },
+    aim: { status: AIM_NONE, present: false, published: false, inProgress: false },
     missions: { status: EMPTY, count: 0 },
     prospects: { status: EMPTY, count: 0 },
+    campaigns: { status: EMPTY, count: 0 },
     outcomes: { status: EMPTY, count: 0 },
     knowledge: { status: EMPTY, count: 0 },
+    memory: { status: EMPTY, count: 0 },
     needsOnboarding: true,
   };
 }
@@ -74,6 +86,7 @@ function validateCreateClientInput(raw = {}) {
     logoUrl: asText(raw.logoUrl || raw.logo_url || raw.logo, 500) || null,
     phone: asText(raw.phone, 40) || null,
     notes: asText(raw.notes, 4000) || null,
+    teamSize: asText(raw.teamSize || raw.team_size, 80) || null,
   };
 
   const missing = REQUIRED_FIELDS.filter((key) => !input[key]);
@@ -103,6 +116,8 @@ function createMemoryTenantStore(seed = []) {
     prospects: new Map(),
     outcomes: new Map(),
     aim: new Map(),
+    campaigns: new Map(),
+    memory: new Map(),
     blueprints: new Map(),
   };
 
@@ -138,7 +153,7 @@ function createMemoryTenantStore(seed = []) {
     },
     async insertWorkspace(row) {
       workspaces.set(Number(row.client_id), { ...row });
-      for (const key of ['knowledge', 'missions', 'prospects', 'outcomes', 'aim']) {
+      for (const key of ['knowledge', 'missions', 'prospects', 'outcomes', 'aim', 'campaigns', 'memory']) {
         namespaces[key].set(Number(row.client_id), []);
       }
       namespaces.blueprints.set(Number(row.client_id), []);
@@ -182,12 +197,12 @@ function createPostgresTenantStore(pool) {
       const result = await pool.query(
         `INSERT INTO clients (
            name, slug, business_name, primary_contact, email, industry, vertical,
-           country, timezone, website, logo_url, phone, notes,
+           country, timezone, website, logo_url, phone, notes, team_size,
            sender_name, max_email, enabled_agents, active
          ) VALUES (
            $1, $2, $1, $3, $4, $5, $5,
-           $6, $7, $8, $9, $10, $11,
-           $3, $4, $12, true
+           $6, $7, $8, $9, $10, $11, $12,
+           $3, $4, $13, true
          )
          RETURNING *`,
         [
@@ -202,6 +217,7 @@ function createPostgresTenantStore(pool) {
           row.logo_url,
           row.phone,
           row.notes,
+          row.team_size || null,
           row.enabled_agents,
         ]
       );
@@ -220,8 +236,9 @@ function createPostgresTenantStore(pool) {
         `INSERT INTO tenant_workspaces (
            client_id, tenant_key, knowledge_namespace, mission_namespace,
            prospect_namespace, outcome_namespace, aim_namespace,
+           campaign_namespace, memory_namespace, origin, lifecycle,
            platform_knowledge_isolated, created_by
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, $12)
          RETURNING *`,
         [
           row.client_id,
@@ -231,6 +248,10 @@ function createPostgresTenantStore(pool) {
           row.prospect_namespace,
           row.outcome_namespace,
           row.aim_namespace,
+          row.campaign_namespace,
+          row.memory_namespace,
+          row.origin || 'operator',
+          row.lifecycle || LIFECYCLE.PROVISIONED,
           row.created_by,
         ]
       );
@@ -258,7 +279,17 @@ async function countOrZero(pool, sql, params) {
 
 async function loadLiveCounts(pool, clientId) {
   const id = Number(clientId);
-  const [prospects, missions, outcomes, knowledge, blueprints, aims] = await Promise.all([
+  const [
+    prospects,
+    missions,
+    outcomes,
+    knowledge,
+    blueprints,
+    approvedBlueprints,
+    aims,
+    draftAims,
+    campaigns,
+  ] = await Promise.all([
     countOrZero(pool, 'SELECT COUNT(*)::int AS count FROM prospects WHERE client_id = $1', [id]),
     countOrZero(
       pool,
@@ -286,35 +317,74 @@ async function loadLiveCounts(pool, clientId) {
     ),
     countOrZero(
       pool,
+      `SELECT COUNT(*)::int AS count FROM cie_business_blueprints
+       WHERE client_id = $1 AND status = 'approved'`,
+      [id]
+    ),
+    countOrZero(
+      pool,
       `SELECT COUNT(*)::int AS count FROM aim_models
        WHERE client_id = $1 AND status IN ('published', 'complete')`,
       [id]
     ),
+    countOrZero(
+      pool,
+      `SELECT COUNT(*)::int AS count FROM aim_models
+       WHERE client_id = $1 AND status IN ('draft', 'review', 'in_progress')`,
+      [id]
+    ),
+    countOrZero(pool, 'SELECT COUNT(*)::int AS count FROM campaigns WHERE client_id = $1', [id]),
   ]);
-  return { prospects, missions, outcomes, knowledge, blueprints, aims };
+  return {
+    prospects,
+    missions,
+    outcomes,
+    knowledge,
+    blueprints,
+    approvedBlueprints,
+    aims,
+    draftAims,
+    campaigns,
+    memory: 0,
+  };
 }
 
 function statusFromCounts(counts, extras = {}) {
-  const blueprintPresent = Number(counts.blueprints || 0) > 0 || extras.blueprintPresent === true;
-  const aimPresent = Number(counts.aims || 0) > 0 || extras.aimPresent === true;
+  const blueprintApproved =
+    Number(counts.approvedBlueprints || 0) > 0 || extras.blueprintApproved === true;
+  const blueprintPresent =
+    Number(counts.blueprints || 0) > 0 || extras.blueprintPresent === true || blueprintApproved;
+  const aimPublished = Number(counts.aims || 0) > 0 || extras.aimPresent === true;
+  const aimInProgress = Number(counts.draftAims || 0) > 0 || extras.aimInProgress === true;
+  const aimPresent = aimPublished || aimInProgress;
   const missions = Number(counts.missions || 0);
   const prospects = Number(counts.prospects || 0);
+  const campaigns = Number(counts.campaigns || 0);
   const outcomes = Number(counts.outcomes || 0);
   const knowledge = Number(counts.knowledge || 0);
+  const memory = Number(counts.memory || 0);
   return {
     clientIntelligence: {
-      status: blueprintPresent ? 'In Progress' : CLIENT_INTEL_NOT_STARTED,
+      status: blueprintApproved
+        ? 'Approved'
+        : blueprintPresent
+          ? 'In Progress'
+          : CLIENT_INTEL_NOT_STARTED,
       present: blueprintPresent,
+      approved: blueprintApproved,
     },
     aim: {
-      status: aimPresent ? 'Published AIM' : AIM_NONE,
+      status: aimPublished ? 'Published AIM' : aimInProgress ? 'In Progress' : AIM_NONE,
       present: aimPresent,
-      published: aimPresent,
+      published: aimPublished,
+      inProgress: aimInProgress && !aimPublished,
     },
     missions: { status: missions > 0 ? 'Present' : EMPTY, count: missions },
     prospects: { status: prospects > 0 ? 'Present' : EMPTY, count: prospects },
+    campaigns: { status: campaigns > 0 ? 'Present' : EMPTY, count: campaigns },
     outcomes: { status: outcomes > 0 ? 'Present' : EMPTY, count: outcomes },
     knowledge: { status: knowledge > 0 ? 'Present' : EMPTY, count: knowledge },
+    memory: { status: memory > 0 ? 'Present' : EMPTY, count: memory },
     needsOnboarding: !blueprintPresent && !aimPresent && missions === 0 && prospects === 0,
   };
 }
@@ -362,6 +432,7 @@ async function ensureTenantWorkspaceSchema(pool = defaultPool) {
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS timezone TEXT`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS logo_url TEXT`);
   await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS notes TEXT`);
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS team_size TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tenant_workspaces (
       client_id INTEGER PRIMARY KEY REFERENCES clients(id),
@@ -377,9 +448,20 @@ async function ensureTenantWorkspaceSchema(pool = defaultPool) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE tenant_workspaces ADD COLUMN IF NOT EXISTS origin TEXT`);
+  await pool.query(`ALTER TABLE tenant_workspaces ADD COLUMN IF NOT EXISTS lifecycle TEXT`);
+  await pool.query(`ALTER TABLE tenant_workspaces ADD COLUMN IF NOT EXISTS campaign_namespace TEXT`);
+  await pool.query(`ALTER TABLE tenant_workspaces ADD COLUMN IF NOT EXISTS memory_namespace TEXT`);
 }
 
-async function createAndProvisionTenant({ pool = defaultPool, store, input, actor } = {}) {
+async function createAndProvisionTenant({
+  pool = defaultPool,
+  store,
+  input,
+  actor,
+  origin = 'operator',
+  lifecycle = LIFECYCLE.PROVISIONED,
+} = {}) {
   const fields = validateCreateClientInput(input);
   if (!store && pool) {
     await ensureTenantWorkspaceSchema(pool);
@@ -388,6 +470,8 @@ async function createAndProvisionTenant({ pool = defaultPool, store, input, acto
   const baseSlug = slugify(fields.companyName);
   const slug = await uniqueSlug(mem, baseSlug);
   const createdBy = actor?.id != null ? Number(actor.id) : null;
+  const workspaceOrigin = origin === 'self_service' ? 'self_service' : 'operator';
+  const workspaceLifecycle = lifecycle || LIFECYCLE.PROVISIONED;
 
   let client;
   const assignedId =
@@ -408,6 +492,7 @@ async function createAndProvisionTenant({ pool = defaultPool, store, input, acto
       logo_url: fields.logoUrl,
       phone: fields.phone,
       notes: fields.notes,
+      team_size: fields.teamSize,
       sender_name: fields.primaryContact,
       max_email: fields.email,
       enabled_agents: NEW_TENANT_AGENTS,
@@ -426,6 +511,7 @@ async function createAndProvisionTenant({ pool = defaultPool, store, input, acto
       logo_url: fields.logoUrl,
       phone: fields.phone,
       notes: fields.notes,
+      team_size: fields.teamSize,
       enabled_agents: NEW_TENANT_AGENTS,
     });
   }
@@ -435,15 +521,19 @@ async function createAndProvisionTenant({ pool = defaultPool, store, input, acto
     client_id: client.id,
     tenant_key: slug,
     ...ns,
+    origin: workspaceOrigin,
+    lifecycle: workspaceLifecycle,
     created_by: createdBy,
   });
 
   const status = initialWorkspaceStatus();
+  const publicWs = publicWorkspace(workspace);
   return {
     client: publicTenant(client),
-    workspace: publicWorkspace(workspace),
+    workspace: publicWs,
     status,
-    greeting: buildTenantGreeting(client.name),
+    lifecycle: publicLifecycle(workspaceLifecycle),
+    greeting: greetingForWorkspace(publicWs, client.name),
     provisioned: true,
   };
 }
@@ -464,6 +554,7 @@ function publicTenant(client) {
     logo_url: client.logo_url || null,
     phone: client.phone || null,
     notes: client.notes || null,
+    team_size: client.team_size || null,
     enabled_agents: client.enabled_agents || NEW_TENANT_AGENTS,
     active: client.active !== false,
   };
@@ -479,6 +570,10 @@ function publicWorkspace(row) {
     prospect_namespace: row.prospect_namespace,
     outcome_namespace: row.outcome_namespace,
     aim_namespace: row.aim_namespace,
+    campaign_namespace: row.campaign_namespace || `tenant:${row.client_id}:campaign`,
+    memory_namespace: row.memory_namespace || `tenant:${row.client_id}:memory`,
+    origin: row.origin || 'operator',
+    lifecycle: row.lifecycle || LIFECYCLE.PROVISIONED,
     platform_knowledge_isolated: row.platform_knowledge_isolated !== false,
     provisioned_at: row.provisioned_at || row.created_at || null,
   };
@@ -533,16 +628,26 @@ async function getTenantWorkspace({
     outcomes: 0,
     knowledge: 0,
     blueprints: 0,
+    approvedBlueprints: 0,
     aims: 0,
+    draftAims: 0,
+    campaigns: 0,
+    memory: 0,
   };
   if (store && typeof store.listNamespace === 'function') {
+    const aims = store.listNamespace('aim', id);
+    const blueprints = store.listNamespace('blueprints', id);
     counts = {
       prospects: store.listNamespace('prospects', id).length,
       missions: store.listNamespace('missions', id).length,
       outcomes: store.listNamespace('outcomes', id).length,
       knowledge: store.listNamespace('knowledge', id).length,
-      blueprints: store.listNamespace('blueprints', id).length,
-      aims: store.listNamespace('aim', id).length,
+      blueprints: blueprints.length,
+      approvedBlueprints: blueprints.filter((b) => b && b.status === 'approved').length,
+      aims: aims.filter((a) => a && (a.status === 'published' || a.status === 'complete')).length,
+      draftAims: aims.filter((a) => a && a.status !== 'published' && a.status !== 'complete').length,
+      campaigns: store.listNamespace('campaigns', id).length,
+      memory: store.listNamespace('memory', id).length,
     };
   } else if (pool) {
     counts = await loadLiveCounts(pool, id);
@@ -557,12 +662,16 @@ async function getTenantWorkspace({
   if (publishedAim) counts.aims = Math.max(counts.aims, 1);
 
   const status = statusFromCounts(counts, { aimPresent: Boolean(publishedAim) });
+  const publicWs = publicWorkspace(workspace);
+  const lifecycleStage = deriveWorkspaceLifecycle(status, publicWs?.lifecycle);
+  if (publicWs) publicWs.lifecycle = lifecycleStage;
   return {
     client: publicTenant(client),
-    workspace: publicWorkspace(workspace),
+    workspace: publicWs,
     status,
+    lifecycle: publicLifecycle(lifecycleStage),
     greeting: status.needsOnboarding
-      ? buildTenantGreeting(client.name)
+      ? greetingForWorkspace(publicWs, client.name)
       : null,
     publishedAim: publishedAim
       ? { id: publishedAim.id, status: publishedAim.status, client_id: publishedAim.client_id }
@@ -615,5 +724,7 @@ module.exports = {
   publicTenant,
   publicWorkspace,
   buildTenantGreeting,
+  greetingForWorkspace,
   assertSameNamespace,
+  statusFromCounts,
 };

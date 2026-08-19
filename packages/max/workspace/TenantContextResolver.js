@@ -8,6 +8,14 @@
  */
 
 const NO_ACTIVE_CLIENT = 'No active client selected.';
+const NO_WORKSPACE = 'No workspace provisioned.';
+const REGISTRATION_GREETING = [
+  'Welcome to PulseForge.',
+  'Before I can help you grow your business, I need to understand it.',
+  'Everything I recommend will be grounded in what you teach me.',
+  "Let's begin with Client Intelligence.",
+];
+const BEGIN_CLIENT_INTELLIGENCE = 'Begin Client Intelligence';
 
 function asPositiveId(value) {
   if (value == null || value === '') return null;
@@ -33,10 +41,11 @@ function resolveActiveTenantId(req) {
 function failClosed(extra = {}) {
   return {
     ok: false,
-    error: 'no_active_client',
-    message: NO_ACTIVE_CLIENT,
+    error: extra.error || 'no_active_client',
+    message: extra.message || NO_ACTIVE_CLIENT,
     tenant: null,
     tenantId: null,
+    workspace: null,
     blueprint: null,
     publishedAim: null,
     knowledge: null,
@@ -46,35 +55,56 @@ function failClosed(extra = {}) {
   };
 }
 
+function failClosedNoWorkspace(extra = {}) {
+  return failClosed({
+    error: 'no_workspace',
+    message: NO_WORKSPACE,
+    ...extra,
+  });
+}
+
 /**
  * Build the Max prompt context for an activated tenant.
  * Missing tenant fails closed. Missing intelligence stays empty — never borrowed.
  */
 function resolveMaxPromptContext(input = {}) {
+  const user = input.user || null;
   const tenant = input.tenant || null;
-  const tenantId = tenant?.id ?? input.tenantId ?? input.activeTenantId ?? null;
+  const workspace = input.workspace || null;
+  const tenantId = tenant?.id ?? input.tenantId ?? input.activeTenantId ?? workspace?.client_id ?? null;
+
+  if (user?.role === 'client' && (tenantId == null || tenantId === '' || !workspace)) {
+    return failClosedNoWorkspace();
+  }
   if (tenantId == null || tenantId === '') {
     return failClosed();
+  }
+  if (input.requireWorkspace && !workspace) {
+    return failClosedNoWorkspace();
   }
 
   const blueprint = input.blueprint || null;
   const publishedAim = input.publishedAim || null;
   const knowledge = Array.isArray(input.knowledge) ? input.knowledge : (input.knowledge || []);
   const mission = input.mission || null;
-  const workspace = input.workspace || null;
 
   return {
     ok: true,
     error: null,
     message: null,
+    user: user
+      ? { id: user.id, role: user.role, client_id: user.client_id || null }
+      : null,
     tenantId: String(tenantId),
     tenant,
+    workspace,
     blueprint,
     publishedAim,
     knowledge,
     mission,
-    workspace,
     reasoning: {
+      hasUser: Boolean(user),
+      hasWorkspace: Boolean(workspace),
       hasTenant: true,
       hasBlueprint: Boolean(blueprint),
       hasPublishedAim: Boolean(publishedAim),
@@ -98,14 +128,38 @@ function buildTenantGreeting(tenantName) {
     greeting,
     body,
     prompt,
+    cta: BEGIN_CLIENT_INTELLIGENCE,
     fullText: [greeting, '', ...body, '', prompt].join('\n'),
   };
 }
 
+function buildRegistrationGreeting() {
+  const [greeting, ...body] = REGISTRATION_GREETING;
+  return {
+    greeting,
+    body,
+    prompt: BEGIN_CLIENT_INTELLIGENCE,
+    cta: BEGIN_CLIENT_INTELLIGENCE,
+    fullText: REGISTRATION_GREETING.join('\n'),
+  };
+}
+
+function greetingForWorkspace(workspace, tenantName) {
+  if (workspace && workspace.origin === 'self_service') {
+    return buildRegistrationGreeting();
+  }
+  return buildTenantGreeting(tenantName);
+}
+
 module.exports = {
   NO_ACTIVE_CLIENT,
+  NO_WORKSPACE,
+  BEGIN_CLIENT_INTELLIGENCE,
   resolveActiveTenantId,
   resolveMaxPromptContext,
   buildTenantGreeting,
+  buildRegistrationGreeting,
+  greetingForWorkspace,
   failClosed,
+  failClosedNoWorkspace,
 };

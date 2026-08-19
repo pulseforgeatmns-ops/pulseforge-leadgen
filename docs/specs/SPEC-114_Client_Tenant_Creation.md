@@ -172,5 +172,5 @@ If any step requires a manual SQL write, that step is the next product gap.
 ## Future Work
 
 - Bind compiled AIM `client_key` to `tenant_workspaces.aim_namespace` automatically on AIC publish
-- Client-role users creating their own tenant (v1 is operator-only)
+- Client-role users creating their own tenant — implemented in [SPEC-115](SPEC-115_Client_Registration_and_Workspace_Provisioning.md)
 - Logo upload storage (v1 stores a URL)

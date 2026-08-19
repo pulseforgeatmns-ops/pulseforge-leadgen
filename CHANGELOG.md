@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Client Registration & Workspace Provisioning ([SPEC-115](docs/specs/SPEC-115_Client_Registration_and_Workspace_Provisioning.md), [ADR-052](docs/adr/ADR-052_Workspace_First_Registration.md))
+  - Public `/signup`: account + workspace, no developer SQL or admin tools
+  - Workspace is created first; the user is bound as `role=client`
+  - Email verification required before the session
+  - Empty intelligence foundation: Blueprint, AIM, Knowledge, Missions, Prospects, Campaigns, Outcomes, Memory
+  - Login lands on the dashboard; Max greets with Client Intelligence and **Begin Client Intelligence**
+  - Client-role login never defaults to Pulseforge; no workspace fails closed
+  - Explicit workspace lifecycle: Registered → Provisioned → … → Learning
+  - Competency `client_registration_workspace` graduated 2026-08-19
+
 - Client Tenant Creation & Activation ([SPEC-114](docs/specs/SPEC-114_Client_Tenant_Creation.md), [ADR-051](docs/adr/ADR-051_Provision_Tenant_Before_Intelligence.md))
   - Operator creates a client from required/optional fields — no developer SQL
   - Automatic provision of isolated knowledge, mission, prospect, outcome, and AIM namespaces
