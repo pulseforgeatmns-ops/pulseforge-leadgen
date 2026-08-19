@@ -360,6 +360,91 @@ describe('SPEC-118 learning and explainability', () => {
     const answered = amoEngine.answerOperator('How is outreach?', { tenantId: '10' });
     assert.equal(answered.kind, 'health');
     assert.match(answered.prose, /Mission Health/);
+    assert.match(answered.prose, /Derived From/);
+    assert.equal(answered.inspection.property, 'health');
+    assert.equal(answered.inspection.pipeline, 'MissionInspection');
+  });
+});
+
+describe('SPEC-122 mission inspection', () => {
+  it('explains progress from mission state without durable knowledge', () => {
+    const amoEngine = engine();
+    const mission = lawFirmMission(amoEngine);
+    const snapshot = toPrepare(amoEngine, mission.id);
+    const answered = amoEngine.answerOperator('What is the 68% progress based on?', {
+      tenantId: '10',
+      missionId: mission.id,
+      silentInspection: true,
+    });
+    assert.equal(answered.kind, 'inspection');
+    assert.equal(answered.inspection.property, 'progress');
+    assert.equal(answered.inspection.resolved, true);
+    assert.match(answered.prose, /Mission Progress/);
+    assert.match(answered.prose, /68/);
+    assert.match(answered.prose, /Derived From/);
+    assert.match(answered.prose, /planning requirements satisfied/);
+    assert.equal(snapshot.workspace.progressPercent, 68);
+    assert.ok(answered.missionContext);
+    assert.equal(answered.missionContext.progress, 68);
+  });
+
+  it('explains confidence with inspectable derivation', () => {
+    const amoEngine = engine();
+    const mission = lawFirmMission(amoEngine, { confidence: 0.84 });
+    const answered = amoEngine.answerOperator('Why is confidence 0.84?', {
+      tenantId: '10',
+      missionId: mission.id,
+      silentInspection: true,
+    });
+    assert.equal(answered.kind, 'inspection');
+    assert.equal(answered.inspection.property, 'confidence');
+    assert.match(answered.prose, /Confidence/);
+    assert.match(answered.prose, /0\.84/);
+    assert.match(answered.prose, /Target definition/);
+    assert.match(answered.prose, /No campaign results yet/);
+  });
+
+  it('answers waiting questions from mission blockers', () => {
+    const amoEngine = engine();
+    const mission = lawFirmMission(amoEngine);
+    toPrepare(amoEngine, mission.id);
+    const answered = amoEngine.answerOperator('What are we waiting for?', {
+      tenantId: '10',
+      missionId: mission.id,
+      silentInspection: true,
+    });
+    assert.equal(answered.kind, 'inspection');
+    assert.equal(answered.inspection.property, 'waiting');
+    assert.match(answered.prose, /Waiting On/);
+  });
+
+  it('builds a structured mission context object', () => {
+    const amoEngine = engine();
+    const mission = lawFirmMission(amoEngine);
+    toPrepare(amoEngine, mission.id);
+    const snapshot = amoEngine.inspect(mission.id);
+    const context = amo.buildMissionContext(snapshot);
+    assert.equal(context.spec, 'SPEC-122');
+    assert.equal(context.progress, 68);
+    assert.ok(context.progressBasis);
+    assert.ok(context.confidenceBasis);
+    assert.ok(context.currentExecutor);
+    assert.ok(context.nextExecutor);
+  });
+
+  it('emits MISSION_INSPECTION observability events', () => {
+    const amoEngine = engine();
+    lawFirmMission(amoEngine);
+    const events = [];
+    amoEngine.answerOperator('Mission progress?', {
+      tenantId: '10',
+      silentInspection: true,
+      inspectionLogger: (payload) => events.push(payload),
+    });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event, 'MISSION_INSPECTION');
+    assert.equal(events[0].resolved, true);
+    assert.ok(events[0].property);
   });
 });
 

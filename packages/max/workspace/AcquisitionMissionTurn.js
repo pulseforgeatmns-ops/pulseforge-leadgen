@@ -3,6 +3,7 @@
 /**
  * SPEC-118 — Max answers mission questions from evidence, not opinion.
  * SPEC-121 — Mission-oriented communication with progressive reasoning disclosure.
+ * SPEC-122 — Mission inspection precedes durable knowledge retrieval.
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
@@ -12,6 +13,10 @@ const {
   applyMissionCommunication,
   looksLikeReasoningRequest,
 } = require('./MissionCommunication');
+const {
+  referencesMissionState,
+  classifyInspectionQuestion,
+} = require('../../acquisition-mission/Inspection');
 
 function looksLikeAcquisitionMissionQuestion(question) {
   const q = String(question || '').trim();
@@ -19,6 +24,11 @@ function looksLikeAcquisitionMissionQuestion(question) {
   return /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace|where are we\b|mission progress|mission status/i.test(
     q
   );
+}
+
+function shouldInspectActiveMission(question, hasActiveMission) {
+  if (!hasActiveMission) return looksLikeAcquisitionMissionQuestion(question);
+  return Boolean(classifyInspectionQuestion(question));
 }
 
 function resolveTenantId(input = {}) {
@@ -37,8 +47,6 @@ function resolveTenantId(input = {}) {
 
 async function maybeHandleAcquisitionMissionTurn(input = {}) {
   const question = String(input.question || '').trim();
-  if (!looksLikeAcquisitionMissionQuestion(question)) return null;
-
   const tenantId = resolveTenantId(input);
   if (!tenantId) return null;
 
@@ -53,6 +61,11 @@ async function maybeHandleAcquisitionMissionTurn(input = {}) {
   if (!service || typeof service.answerOperator !== 'function') return null;
 
   const engine = input.acquisitionMissionEngine || (service.getEngine && service.getEngine());
+  const missions = engine && typeof engine.list === 'function' ? engine.list(tenantId) : [];
+  const hasActiveMission = missions.length > 0;
+
+  if (!shouldInspectActiveMission(question, hasActiveMission)) return null;
+
   const missionId =
     (input.context && (input.context.missionId || input.context.acquisitionMissionId)) ||
     (input.session && input.session.context && input.session.context.missionId) ||
@@ -64,22 +77,30 @@ async function maybeHandleAcquisitionMissionTurn(input = {}) {
     { engine, persist: input.persist }
   );
   if (!answered) return null;
+  if (answered.kind === 'inspection_fallback') return null;
 
   const explicitReasoning = looksLikeReasoningRequest(question);
+  const inspectionProperty =
+    answered.inspection && answered.inspection.property
+      ? answered.inspection.property
+      : classifyInspectionQuestion(question);
+
   const missionComm = buildAcquisitionMissionCommunication(
     {
       mission: answered.mission,
-      workspace: answered.structured,
+      workspace: answered.kind === 'workspace' ? answered.structured : answered.missionContext,
       blocker: answered.kind === 'blocker' ? answered.structured : null,
       health: answered.kind === 'health' ? answered.structured : null,
       why: answered.kind === 'explain' ? answered.structured : null,
+      inspection: answered.kind === 'inspection' ? answered.structured : null,
+      missionContext: answered.missionContext || null,
     },
     {
       kind: answered.kind,
       includeReasoning: explicitReasoning,
     }
   );
-  const prose = formatMissionProse(missionComm, {
+  const prose = answered.prose || formatMissionProse(missionComm, {
     explicitReasoningRequest: explicitReasoning,
   });
 
@@ -91,7 +112,9 @@ async function maybeHandleAcquisitionMissionTurn(input = {}) {
     confidence:
       answered.structured && answered.structured.confidence != null
         ? answered.structured.confidence
-        : (answered.mission && answered.mission.confidence) || 0.7,
+        : (answered.mission && answered.mission.confidence) ||
+          (answered.missionContext && answered.missionContext.confidence) ||
+          0.7,
     nextInvestigations: [],
     recommendedActions: [{ id: 'inspect_mission', type: 'review', label: 'Open mission workspace' }],
     confidenceContributors: [],
@@ -102,15 +125,20 @@ async function maybeHandleAcquisitionMissionTurn(input = {}) {
     metadata: {
       sourcesUsed: {
         briefing: false,
-        reasoning: true,
-        memory: true,
-        policy: true,
+        reasoning: false,
+        memory: false,
+        policy: false,
         knowledge: false,
+        missionState: true,
       },
       evidenceCount: 0,
       asOf: new Date().toISOString(),
       unavailable: [],
       acquisitionMission: true,
+      missionInspection: true,
+      inspectionProperty,
+      inspectionPipeline:
+        (answered.inspection && answered.inspection.pipeline) || 'MissionInspection',
       invented: answered.invented === true,
     },
   });
@@ -120,7 +148,7 @@ async function maybeHandleAcquisitionMissionTurn(input = {}) {
   });
 
   return {
-    reason: 'acquisition_mission_evidence',
+    reason: 'mission_inspection',
     structured,
     prose,
     answered,
@@ -129,5 +157,7 @@ async function maybeHandleAcquisitionMissionTurn(input = {}) {
 
 module.exports = {
   looksLikeAcquisitionMissionQuestion,
+  referencesMissionState,
+  shouldInspectActiveMission,
   maybeHandleAcquisitionMissionTurn,
 };

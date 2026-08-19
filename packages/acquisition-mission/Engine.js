@@ -38,6 +38,11 @@ const { recordSegmentOutcome, summarizeLearning, formatLearning } = require('./L
 const { explainWhy, formatExplain } = require('./Explain');
 const { createObservation, formatMemory } = require('./Memory');
 const { createMemoryAmoStore } = require('./Store');
+const {
+  INSPECTION_PROPERTIES,
+  inspectQuestion,
+  formatInspection,
+} = require('./Inspection');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -382,37 +387,106 @@ function createAcquisitionMissionEngine(opts = {}) {
       };
     }
     const snapshot = inspect(mission.id, { tenantId, ...input });
-    const q = String(question || '').toLowerCase();
-    if (/why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this/.test(q)) {
+    const inspection = inspectQuestion(question, snapshot, {
+      logger: input.inspectionLogger,
+      silent: input.silentInspection === true,
+    });
+
+    if (inspection && inspection.resolved) {
+      if (inspection.kind === 'explain') {
+        return {
+          kind: 'explain',
+          prose: formatExplain(snapshot.why),
+          structured: snapshot.why,
+          mission,
+          missionContext: inspection.missionContext,
+          inspection: {
+            property: inspection.property,
+            pipeline: inspection.pipeline,
+            resolved: true,
+          },
+          invented: false,
+        };
+      }
+      if (inspection.kind === 'workspace') {
+        return {
+          kind: 'workspace',
+          prose: formatWorkspace(snapshot.workspace),
+          structured: snapshot.workspace,
+          mission,
+          missionContext: inspection.missionContext,
+          inspection: {
+            property: inspection.property,
+            pipeline: inspection.pipeline,
+            resolved: true,
+          },
+          invented: false,
+        };
+      }
+      if (inspection.property === INSPECTION_PROPERTIES.HEALTH) {
+        const healthExplain = inspection.structured;
+        return {
+          kind: 'health',
+          prose: `${formatHealth(snapshot.health)}\n\n${formatInspection(healthExplain)}`.trim(),
+          structured: { ...snapshot.health, derivation: healthExplain },
+          mission,
+          missionContext: inspection.missionContext,
+          inspection: {
+            property: inspection.property,
+            pipeline: inspection.pipeline,
+            resolved: true,
+          },
+          invented: false,
+        };
+      }
+      if (inspection.property === INSPECTION_PROPERTIES.BLOCKER) {
+        const blockerExplain = inspection.structured;
+        const blocker = snapshot.blocker;
+        return {
+          kind: 'blocker',
+          prose: blockerExplain.prose || formatInspection(blockerExplain),
+          structured: blocker ? { ...blocker, derivation: blockerExplain } : blockerExplain,
+          mission,
+          missionContext: inspection.missionContext,
+          inspection: {
+            property: inspection.property,
+            pipeline: inspection.pipeline,
+            resolved: true,
+          },
+          invented: false,
+        };
+      }
       return {
-        kind: 'explain',
-        prose: formatExplain(snapshot.why),
-        structured: snapshot.why,
+        kind: 'inspection',
+        prose: inspection.prose,
+        structured: inspection.structured,
         mission,
+        missionContext: inspection.missionContext,
+        inspection: {
+          property: inspection.property,
+          pipeline: inspection.pipeline,
+          resolved: true,
+        },
         invented: false,
       };
     }
-    if (/how is outreach|mission health|how is (?:the )?mission/.test(q)) {
+
+    if (inspection && inspection.kind === 'fallback') {
       return {
-        kind: 'health',
-        prose: formatHealth(snapshot.health),
-        structured: snapshot.health,
+        kind: 'inspection_fallback',
+        prose: null,
+        structured: inspection.missionContext,
         mission,
+        inspection: {
+          property: null,
+          pipeline: inspection.pipeline,
+          resolved: false,
+          reason: inspection.reason,
+        },
         invented: false,
       };
     }
-    if (/what(?:'s| is) blocking|blocker|why (?:aren'?t|isn'?t) (?:we|this) (?:moving|progressing)/.test(q)) {
-      const blocker = snapshot.blocker;
-      return {
-        kind: 'blocker',
-        prose: blocker
-          ? `Current blocker\n\n${blocker.label}\n\n${blocker.reason}`
-          : 'No blocker. The mission can proceed.',
-        structured: blocker,
-        mission,
-        invented: false,
-      };
-    }
+
     return {
       kind: 'workspace',
       prose: formatWorkspace(snapshot.workspace),
