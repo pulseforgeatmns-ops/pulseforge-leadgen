@@ -2,14 +2,23 @@
 
 /**
  * SPEC-118 — Max answers mission questions from evidence, not opinion.
+ * SPEC-121 — Mission-oriented communication with progressive reasoning disclosure.
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const {
+  buildAcquisitionMissionCommunication,
+  formatMissionProse,
+  applyMissionCommunication,
+  looksLikeReasoningRequest,
+} = require('./MissionCommunication');
 
 function looksLikeAcquisitionMissionQuestion(question) {
   const q = String(question || '').trim();
   if (!q) return false;
-  return /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace/i.test(q);
+  return /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace|where are we\b|mission progress|mission status/i.test(
+    q
+  );
 }
 
 function resolveTenantId(input = {}) {
@@ -56,21 +65,40 @@ async function maybeHandleAcquisitionMissionTurn(input = {}) {
   );
   if (!answered) return null;
 
-  const structured = buildStructuredResponse({
-    answer: answered.prose,
-    reasoning: ['Answered from acquisition mission evidence.', 'Max manages missions, not agents.'],
+  const explicitReasoning = looksLikeReasoningRequest(question);
+  const missionComm = buildAcquisitionMissionCommunication(
+    {
+      mission: answered.mission,
+      workspace: answered.structured,
+      blocker: answered.kind === 'blocker' ? answered.structured : null,
+      health: answered.kind === 'health' ? answered.structured : null,
+      why: answered.kind === 'explain' ? answered.structured : null,
+    },
+    {
+      kind: answered.kind,
+      includeReasoning: explicitReasoning,
+    }
+  );
+  const prose = formatMissionProse(missionComm, {
+    explicitReasoningRequest: explicitReasoning,
+  });
+
+  const base = buildStructuredResponse({
+    answer: prose,
+    reasoning: [],
     supportingEvidence: [],
     contradictingEvidence: [],
-    confidence: answered.structured && answered.structured.confidence != null
-      ? answered.structured.confidence
-      : (answered.mission && answered.mission.confidence) || 0.7,
+    confidence:
+      answered.structured && answered.structured.confidence != null
+        ? answered.structured.confidence
+        : (answered.mission && answered.mission.confidence) || 0.7,
     nextInvestigations: [],
     recommendedActions: [{ id: 'inspect_mission', type: 'review', label: 'Open mission workspace' }],
     confidenceContributors: [],
     timelineReferences: [],
-      relatedEntities: answered.mission
-        ? [{ id: answered.mission.id, type: 'acquisition_mission', name: answered.mission.title }]
-        : [],
+    relatedEntities: answered.mission
+      ? [{ id: answered.mission.id, type: 'acquisition_mission', name: answered.mission.title }]
+      : [],
     metadata: {
       sourcesUsed: {
         briefing: false,
@@ -87,10 +115,14 @@ async function maybeHandleAcquisitionMissionTurn(input = {}) {
     },
   });
 
+  const structured = applyMissionCommunication(base, missionComm, {
+    includeReasoningInStructured: explicitReasoning,
+  });
+
   return {
     reason: 'acquisition_mission_evidence',
     structured,
-    prose: answered.prose,
+    prose,
     answered,
   };
 }

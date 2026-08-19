@@ -8,6 +8,30 @@
 
 const DEFAULT_MODEL = process.env.MAX_WORKSPACE_MODEL || process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-6';
 
+const MISSION_PRESENTATION_SYSTEM = `You are Max, the Pulseforge intelligence advisor.
+You are a PRESENTATION ENGINE only (ADR-005).
+You receive a verified Structured Response Object with mission-oriented communication (SPEC-121).
+
+Rules:
+- Lead with mission state: what is happening, current stage, and what the operator should do next.
+- Do not expose internal reasoning labels (Known, Inference, Unknown, Evidence Needed) unless metadata.showReasoningExpanded is true.
+- Do not invent entities, scores, evidence, confidence, or policy outcomes.
+- Preserve the mission structure: Mission → Status → Stage → Progress → Next Step → Operator Decision.
+- If metadata.showReasoningDisclosure is true, end with "▼ Show reasoning" — do not expand reasoning inline.
+- Keep a calm, operational tone. No fluff.`;
+
+const DEFAULT_PRESENTATION_SYSTEM = `You are Max, the Pulseforge intelligence advisor.
+You are a PRESENTATION ENGINE only (ADR-005).
+You receive a verified Structured Response Object.
+Rules:
+- Communicate only what is in the object.
+- Do not invent entities, scores, evidence, confidence, or policy outcomes.
+- Do not calculate, rank, or infer new business intelligence.
+- If metadata.unavailable lists gaps, say so plainly.
+- Preserve meaning exactly.
+- Structure the reply as: direct answer, then brief reasoning, then invite next investigation.
+- Keep a calm, advisor tone. No fluff.`;
+
 class PresentationEngine {
   /**
    * @param {object} [options]
@@ -33,6 +57,20 @@ class PresentationEngine {
     const metadata = structured.metadata || {};
     let prose;
     let presentation = 'fallback';
+
+    // SPEC-121 — mission communication is already operator-formatted.
+    if (metadata.missionCommunication === true) {
+      prose = formatDeterministicProse(structured);
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'mission_communication',
+        },
+        presentation: 'mission_communication',
+      };
+    }
 
     // Strict output-shape / packet-review artifact mode: answer is already the
     // operator artifact — do not append Reasoning / Unavailable / Next, and do
@@ -104,20 +142,15 @@ class PresentationEngine {
   }
 
   async _presentWithClaude(structured) {
+    const metadata = structured.metadata || {};
+    const system =
+      metadata.missionCommunication === true
+        ? MISSION_PRESENTATION_SYSTEM
+        : DEFAULT_PRESENTATION_SYSTEM;
     const message = await this._anthropic.messages.create({
       model: this._model,
       max_tokens: 900,
-      system: `You are Max, the Pulseforge intelligence advisor.
-You are a PRESENTATION ENGINE only (ADR-005).
-You receive a verified Structured Response Object.
-Rules:
-- Communicate only what is in the object.
-- Do not invent entities, scores, evidence, confidence, or policy outcomes.
-- Do not calculate, rank, or infer new business intelligence.
-- If metadata.unavailable lists gaps, say so plainly.
-- Preserve meaning exactly.
-- Structure the reply as: direct answer, then brief reasoning, then invite next investigation.
-- Keep a calm, advisor tone. No fluff.`,
+      system,
       messages: [
         {
           role: 'user',
@@ -145,7 +178,8 @@ Rules:
  */
 function formatDeterministicProse(structured) {
   const metadata = (structured && structured.metadata) || {};
-  const strictShape = metadata.strictOutputShape === true;
+  const strictShape =
+    metadata.strictOutputShape === true || metadata.missionCommunication === true;
 
   if (strictShape) {
     return structured.answer ? String(structured.answer).trim() : '';

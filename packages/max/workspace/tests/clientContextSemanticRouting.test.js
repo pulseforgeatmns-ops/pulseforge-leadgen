@@ -600,12 +600,15 @@ describe('SPEC-103B end-to-end routing', () => {
     );
     assert.match(
       result.prose,
-      /KNOWN|enough clarity|would not claim to know/i
+      /Mission Updated|Current Understanding|Next Step|Operator Decision/i
     );
-    assert.match(result.prose, /UNKNOWN|INFERENCE|EVIDENCE NEEDED/i);
+    assert.doesNotMatch(result.prose, /KNOWN from your approved Blueprint/i);
+    assert.doesNotMatch(result.prose, /^INFERENCE \(Max reasoning/i);
+    assert.doesNotMatch(result.prose, /^UNKNOWN:/m);
+    assert.doesNotMatch(result.prose, /^EVIDENCE NEEDED:/m);
     assert.match(
       result.prose,
-      /property|facility|GTA|Toronto|commercial|walkthrough|acquisition/i
+      /property|facility|GTA|Toronto|commercial|walkthrough|acquisition|Discovery/i
     );
   });
 
@@ -629,7 +632,8 @@ describe('SPEC-103B end-to-end routing', () => {
       String(result.domainDecision && result.domainDecision.reason),
       /client_intelligence/
     );
-    assert.match(result.prose, /UNKNOWN|EVIDENCE NEEDED|would not claim/i);
+    assert.match(result.prose, /Mission Updated|Current Understanding|Next Step/i);
+    assert.doesNotMatch(result.prose, /KNOWN from your approved Blueprint/i);
   });
 
   it('evidence-dependent colloquial wording stays fail-closed', async () => {
@@ -910,7 +914,8 @@ describe('SPEC-103B end-to-end routing', () => {
       sessionId: opened.sessionId,
       question: "Anything we're overlooking?",
     });
-    assert.match(overlooking.prose, /KNOWN|UNKNOWN|EVIDENCE NEEDED/i);
+    assert.match(overlooking.prose, /Mission Updated|Current Understanding|Next Step/i);
+    assert.doesNotMatch(overlooking.prose, /KNOWN from your approved Blueprint/i);
     assert.notEqual(overlooking.prose, focus.prose);
 
     const mind = await engine.ask({
@@ -1026,7 +1031,8 @@ describe('SPEC-103B specificity escalation (SPEC-103B PATCH)', () => {
       sessionId: opened.sessionId,
       question: "What don't we know yet?",
     });
-    assert.match(gaps.prose, /KNOWN|UNKNOWN|EVIDENCE NEEDED/i);
+    assert.match(gaps.prose, /Mission Updated|Current Understanding|Next Step/i);
+    assert.doesNotMatch(gaps.prose, /KNOWN from your approved Blueprint/i);
 
     const falsification = await engine.ask({
       sessionId: opened.sessionId,
