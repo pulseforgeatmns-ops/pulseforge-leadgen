@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Acquisition Intelligence Model</title>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<script src="/shared/shell.js" defer></script>
+<style>
+  body { margin: 0; background: var(--pf-bg, #040810); color: var(--pf-text, #e8f0fe); font-family: 'DM Sans', sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+  h1 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.8rem; margin: 0 0 0.35rem; }
+  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 1.25rem; }
+  .panel { background: #070d1a; border: 1px solid rgba(96,48,177,0.18); border-radius: 10px; padding: 1.1rem; margin-bottom: 1rem; }
+  .status { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 0.75rem 0 1rem; }
+  .pill { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; padding: 0.4rem 0.65rem; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); color: #6b7fa0; }
+  .pill.on { border-color: rgba(139,92,246,0.55); color: #c4b5fd; background: rgba(96,48,177,0.18); }
+  label { display: block; font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; letter-spacing: 1px; text-transform: uppercase; color: #6b7fa0; margin: 0.55rem 0 0.25rem; }
+  input, textarea, select { width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.65rem 0.7rem; color: #e8f0fe; outline: none; font-family: inherit; }
+  textarea { min-height: 140px; resize: vertical; }
+  button { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; border-radius: 6px; padding: 0.7rem 0.9rem; cursor: pointer; border: 1px solid rgba(139,92,246,0.35); background: rgba(96,48,177,0.2); color: #8b5cf6; }
+  button.secondary { background: transparent; color: #6b7fa0; border-color: rgba(255,255,255,0.12); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .actions { display: flex; gap: 0.5rem; margin-top: 0.85rem; flex-wrap: wrap; }
+  .msg { min-height: 1.2rem; font-size: 0.82rem; color: #6b7fa0; }
+  .msg.err { color: #ff3b5c; }
+  .msg.ok { color: #00e676; }
+  .concept { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0.55rem 0; font-size: 0.86rem; }
+  .concept span { display: block; color: #6b7fa0; font-size: 0.72rem; margin-top: 0.2rem; }
+  .lock { white-space: pre-wrap; line-height: 1.5; color: #c4b5fd; }
+  .prospect { padding: 0.5rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Acquisition Intelligence Model</h1>
+  <p class="sub">SPEC-115 · Upload · Compile · Review · Approve · Publish</p>
+  <p class="msg" id="msg"></p>
+  <div class="status" id="statusPills"></div>
+
+  <section class="panel" id="uploadPanel">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">Upload source documents</h2>
+    <label for="docTitle">Title</label>
+    <input id="docTitle" placeholder="Pain research, interview notes, landing page…">
+    <label for="docKind">Kind</label>
+    <select id="docKind">
+      <option value="pain_research">Pain research</option>
+      <option value="customer_interview">Customer interview</option>
+      <option value="landing_page">Landing page</option>
+      <option value="icp_notes">ICP notes</option>
+      <option value="other">Other</option>
+    </select>
+    <label for="docBody">Document text</label>
+    <textarea id="docBody" placeholder="Paste market knowledge. The compiler extracts concepts — it does not invent them."></textarea>
+    <div class="actions">
+      <button type="button" id="uploadBtn">Upload</button>
+      <button type="button" class="secondary" id="compileBtn">Compile</button>
+    </div>
+  </section>
+
+  <section class="panel" id="reviewPanel" hidden>
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">Review concepts</h2>
+    <div id="concepts"></div>
+    <div class="actions">
+      <button type="button" id="approveBtn">Approve remaining</button>
+      <button type="button" id="publishBtn">Publish AIM</button>
+    </div>
+  </section>
+
+  <section class="panel" id="nextPanel" hidden>
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">Published</h2>
+    <p>Max can now answer acquisition questions. Scout can discover tenant-scoped prospects.</p>
+    <div class="actions">
+      <a href="/command-deck"><button type="button">Ask Max</button></a>
+      <button type="button" id="scoutBtn">Run Scout</button>
+      <a href="/dashboard#pf-tab=pipeline"><button type="button" class="secondary">Review Prospects</button></a>
+    </div>
+    <div id="prospects"></div>
+  </section>
+</div>
+<script>
+  const msg = document.getElementById('msg');
+  const pills = document.getElementById('statusPills');
+  const STATUSES = [
+    ['no_documents', 'No Documents'],
+    ['ready_to_compile', 'Ready To Compile'],
+    ['draft', 'Draft'],
+    ['published', 'Published'],
+  ];
+  let workspace = null;
+
+  function setMsg(text, kind) {
+    msg.textContent = text || '';
+    msg.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  async function api(url, opts) {
+    const res = await fetch(url, {
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(opts && opts.headers || {}) },
+      ...opts,
+    });
+    const data = await res.json().catch(function() { return {}; });
+    if (!res.ok) throw new Error(data.message || data.error || ('Request failed ' + res.status));
+    return data;
+  }
+
+  function renderStatus(key) {
+    pills.innerHTML = STATUSES.map(function(row) {
+      return '<span class="pill' + (row[0] === key ? ' on' : '') + '">' + row[1] + '</span>';
+    }).join('');
+  }
+
+  function renderConcepts(ws) {
+    const el = document.getElementById('concepts');
+    const list = (ws && ws.concepts) || [];
+    document.getElementById('reviewPanel').hidden = list.length === 0 && !(ws && ws.status === 'published');
+    el.innerHTML = list.map(function(c) {
+      return '<div class="concept"><strong>' + (c.type || '') + '</strong> — ' + (c.label || '') +
+        '<span>' + (c.statement || '') + ' · ' + (c.status || '') + '</span></div>';
+    }).join('') || '<p class="msg">No concepts yet. Compile after uploading documents.</p>';
+  }
+
+  async function load() {
+    const data = await api('/api/v1/aic/me');
+    workspace = data.workspace;
+    renderStatus(data.aimStatus || 'no_documents');
+    renderConcepts(workspace);
+    document.getElementById('nextPanel').hidden = data.aimStatus !== 'published';
+    if (data.aimStatus === 'published') loadProspects();
+  }
+
+  async function loadProspects() {
+    try {
+      const data = await api('/api/v1/onboarding/prospects');
+      const el = document.getElementById('prospects');
+      if (!data.prospects || !data.prospects.length) {
+        el.innerHTML = '<p class="msg">No tenant-scoped prospects yet.</p>';
+        return;
+      }
+      el.innerHTML = data.prospects.map(function(p) {
+        return '<div class="prospect"><strong>' + (p.first_name || '') + ' ' + (p.last_name || '') +
+          '</strong> · ' + (p.job_title || '') + '</div>';
+      }).join('');
+    } catch (_err) { /* empty */ }
+  }
+
+  document.getElementById('uploadBtn').addEventListener('click', async function() {
+    try {
+      if (!workspace) await load();
+      await api('/api/v1/aic/workspaces/' + workspace.id + '/documents', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: document.getElementById('docTitle').value,
+          kind: document.getElementById('docKind').value,
+          body: document.getElementById('docBody').value,
+        }),
+      });
+      setMsg('Document uploaded.', 'ok');
+      document.getElementById('docBody').value = '';
+      await load();
+    } catch (err) { setMsg(err.message, 'err'); }
+  });
+
+  document.getElementById('compileBtn').addEventListener('click', async function() {
+    try {
+      await api('/api/v1/aic/workspaces/' + workspace.id + '/compile', { method: 'POST', body: '{}' });
+      setMsg('Compiled. Review every concept before publish.', 'ok');
+      await load();
+    } catch (err) { setMsg(err.message, 'err'); }
+  });
+
+  document.getElementById('approveBtn').addEventListener('click', async function() {
+    try {
+      await api('/api/v1/aic/workspaces/' + workspace.id + '/approve', {
+        method: 'POST',
+        body: JSON.stringify({ acceptRemaining: true }),
+      });
+      setMsg('Approved. Ready to publish.', 'ok');
+      await load();
+    } catch (err) { setMsg(err.message, 'err'); }
+  });
+
+  document.getElementById('publishBtn').addEventListener('click', async function() {
+    try {
+      await api('/api/v1/aic/workspaces/' + workspace.id + '/publish', { method: 'POST', body: '{}' });
+      setMsg('AIM published for this workspace.', 'ok');
+      await load();
+    } catch (err) { setMsg(err.message, 'err'); }
+  });
+
+  document.getElementById('scoutBtn').addEventListener('click', async function() {
+    try {
+      const result = await api('/api/v1/onboarding/scout', {
+        method: 'POST',
+        body: JSON.stringify({ question: 'Find founders struggling with founder dependency.' }),
+      });
+      setMsg('Scout returned ' + result.count + ' tenant-scoped prospect(s).', 'ok');
+      await loadProspects();
+    } catch (err) { setMsg(err.message, 'err'); }
+  });
+
+  load().catch(function(err) { setMsg(err.message, 'err'); });
+</script>
+</body>
+</html>

@@ -16,6 +16,7 @@ function publicUser(row) {
     active: row.active,
     created_at: row.created_at,
     last_login_at: row.last_login_at,
+    password_change_required: Boolean(row.password_change_required),
   };
 }
 
@@ -93,13 +94,13 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   <a href="/dashboard">Back to dashboard</a>
 </div>
 <div class="msg" id="msg"></div>
-<div class="note">Use Client for external tenant read-only access. Viewer is internal/admin-shared and is not tenant-locked.</div>
+<div class="note">Use Client for external tenant access. Assign a tenant and a temporary password — the client must choose a new password on first login. Viewer is internal/admin-shared and is not tenant-locked.</div>
 <section class="panel">
   <form class="form" id="addForm">
     <input id="name" placeholder="Name" required>
     <input id="email" type="email" placeholder="Email" required>
     <div class="password-field">
-      <input id="password" type="password" minlength="8" placeholder="Password" required>
+      <input id="password" type="password" minlength="8" placeholder="Temporary password" required>
       <button class="toggle-password" type="button" data-toggle-password="password" aria-label="Show password">Show</button>
     </div>
 	    <select id="role"><option value="client">Client</option><option value="viewer">Viewer (Internal)</option><option value="ao">AO (Field)</option><option value="setter">Setter</option><option value="closer">Closer</option><option value="sales">Sales</option><option value="manager">Manager</option><option value="admin">Admin</option></select>
@@ -113,9 +114,9 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
 </section>
 <div class="modal-backdrop" id="resetModal" aria-hidden="true">
   <form class="modal" id="resetForm">
-    <div class="modal-title">Reset Password</div>
+    <div class="modal-title">Temporary Password</div>
     <div class="password-field">
-      <input id="resetPassword" type="password" minlength="8" placeholder="New password" required>
+      <input id="resetPassword" type="password" minlength="8" placeholder="Temporary password" required>
       <button class="toggle-password" type="button" data-toggle-password="resetPassword" aria-label="Show password">Show</button>
     </div>
     <div class="modal-actions">
@@ -341,7 +342,7 @@ router.get('/api/users', ...adminOnly, async (req, res) => {
   await initAuth();
   const { rows } = await pool.query(`
     SELECT u.id, u.name, u.email, u.role, u.client_id, c.name AS client_name,
-      u.active, u.created_at, u.last_login_at
+      u.active, u.created_at, u.last_login_at, u.password_change_required
     FROM users u
     LEFT JOIN clients c ON c.id = u.client_id
     ORDER BY u.created_at DESC
@@ -361,9 +362,9 @@ router.post('/api/users', ...adminOnly, async (req, res) => {
   const hash = await bcrypt.hash(password, 12);
   try {
     const { rows } = await pool.query(`
-      INSERT INTO users (name, email, password_hash, role, client_id)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id, name, email, role, client_id, active, created_at, last_login_at
+      INSERT INTO users (name, email, password_hash, role, client_id, email_verified, password_change_required)
+      VALUES ($1, $2, $3, $4, $5, TRUE, TRUE)
+      RETURNING id, name, email, role, client_id, active, created_at, last_login_at, password_change_required
     `, [name.trim(), email.toLowerCase().trim(), hash, role, clientId]);
     res.status(201).json(publicUser(rows[0]));
   } catch (err) {
@@ -444,7 +445,7 @@ router.patch('/api/users/:id', ...adminOnly, async (req, res) => {
     const { rows } = await pool.query(`
       UPDATE users SET ${updates.join(', ')}
       WHERE id = $${values.length}
-      RETURNING id, name, email, role, client_id, active, created_at, last_login_at
+      RETURNING id, name, email, role, client_id, active, created_at, last_login_at, password_change_required
     `, values);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
     res.json(publicUser(rows[0]));
@@ -462,7 +463,10 @@ router.post('/api/users/:id/reset-password', ...adminOnly, async (req, res) => {
   const { password } = req.body;
   if (!password || String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
   const hash = await bcrypt.hash(password, 12);
-  const { rowCount } = await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, req.params.id]);
+  const { rowCount } = await pool.query(
+    'UPDATE users SET password_hash = $1, password_change_required = TRUE WHERE id = $2',
+    [hash, req.params.id]
+  );
   if (!rowCount) return res.status(404).json({ error: 'User not found' });
   res.json({ success: true });
 });

@@ -23,6 +23,10 @@ const {
   NO_ACTIVE_CLIENT,
 } = require('../packages/max/workspace/TenantContextResolver');
 const { getTenantWorkspace } = require('../services/tenantWorkspace');
+const {
+  maxAcquisitionReply,
+} = require('../services/pilotOnboarding');
+const { loadPublishedAimForClient } = require('../services/aicPersistence');
 
 const requireDashboardRead = [
   requireAuth,
@@ -115,6 +119,31 @@ router.post(
       if (!question) {
         return res.status(400).json({ error: 'Question is required' });
       }
+
+      if (isClientRole(req)) {
+        const snapshot = await getTenantWorkspace({ clientId: tenantId }).catch(() => null);
+        const publishedAim = (snapshot && snapshot.publishedAim)
+          || await loadPublishedAimForClient(tenantId).catch(() => null);
+        const lock = maxAcquisitionReply({
+          tenantId,
+          hasTenant: true,
+          passwordChangeRequired: Boolean(req.user && req.user.password_change_required),
+          clientIntelligence: snapshot && snapshot.status && snapshot.status.clientIntelligence,
+          aim: publishedAim || (snapshot && snapshot.status && snapshot.status.aim) || {},
+        });
+        if (lock) {
+          res.set('Cache-Control', 'no-store');
+          return res.json({
+            ok: false,
+            spec: 'SPEC-115',
+            error: lock.code,
+            message: lock.message,
+            reply: lock.message,
+            answer: lock.message,
+          });
+        }
+      }
+
       console.info('[mission-objective-len]', {
         stage: 'api',
         chars: question.length,

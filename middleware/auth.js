@@ -32,6 +32,7 @@ async function ensureUsersTable() {
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN');
   await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS password_change_required BOOLEAN NOT NULL DEFAULT FALSE');
   await pool.query('UPDATE users SET email_verified = TRUE WHERE email_verified IS NULL');
   await pool.query('SELECT pg_advisory_lock(91720260517)');
   try {
@@ -82,9 +83,42 @@ function initAuth() {
   return initPromise;
 }
 
+const PASSWORD_CHANGE_PATHS = new Set([
+  '/change-password',
+  '/api/me/password',
+  '/logout',
+  '/api/me',
+]);
+
+function requestPath(req) {
+  return String(req.path || req.originalUrl || '').split('?')[0];
+}
+
+function isPasswordChangeExempt(req) {
+  return PASSWORD_CHANGE_PATHS.has(requestPath(req));
+}
+
+function passwordChangeRequired(user) {
+  return Boolean(user && user.password_change_required);
+}
+
+function sendPasswordChangeRequired(req, res) {
+  const { FAILURE } = require('../services/pilotOnboarding');
+  if (isApiRequest(req)) {
+    return res.status(403).json({
+      error: FAILURE.PASSWORD_CHANGE_REQUIRED.code,
+      message: FAILURE.PASSWORD_CHANGE_REQUIRED.message,
+    });
+  }
+  return res.redirect('/change-password');
+}
+
 function requireAuth(req, res, next) {
   if (req.session?.user) {
     req.user = req.session.user;
+    if (passwordChangeRequired(req.user) && !isPasswordChangeExempt(req)) {
+      return sendPasswordChangeRequired(req, res);
+    }
     return next();
   }
 
@@ -123,4 +157,7 @@ module.exports = {
   initAuth,
   requireAuth,
   requireRole,
+  isPasswordChangeExempt,
+  passwordChangeRequired,
+  sendPasswordChangeRequired,
 };

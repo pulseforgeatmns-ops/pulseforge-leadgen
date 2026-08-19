@@ -4122,15 +4122,17 @@ async function loadClientHomeOnboarding() {
 
   const state = onboarding?.onboardingState || 'none';
   const interviewId = onboarding?.interviewId || null;
+  const gates = workspaceMe && workspaceMe.gates;
+  const greeting = workspaceMe && workspaceMe.greeting;
 
   if (state === 'none') {
     if (eyebrowEl) eyebrowEl.textContent = 'Welcome to PulseForge';
-    titleEl.textContent = 'Welcome to PulseForge.';
+    titleEl.textContent = (greeting && greeting.greeting) || ('Welcome, ' + company + '.');
     if (bodyEl) {
-      bodyEl.textContent =
-        'Before I can help you grow your business, I need to understand it. ' +
-        'Everything I recommend will be grounded in what you teach me. ' +
-        "Let's begin with Client Intelligence.";
+      bodyEl.textContent = greeting && greeting.fullText
+        ? greeting.body.join('\n\n')
+        : "Let's begin by understanding your business.\n\nThe first step is completing Client Intelligence.\n\nEverything I learn from you becomes the foundation for prospecting, reasoning, and recommendations.";
+      bodyEl.style.whiteSpace = 'pre-wrap';
     }
     ctaEl.textContent = 'Begin Client Intelligence';
     ctaEl.href = '/client-intel';
@@ -4164,27 +4166,48 @@ async function loadClientHomeOnboarding() {
     return;
   }
 
-  // Approved / completed — normal client Home
+  // Approved / completed — AIM, then Max, then Scout. Never skip AIM.
   if (eyebrowEl) eyebrowEl.textContent = company;
+  if (gates && !gates.maxUnlocked) {
+    titleEl.textContent = 'Publish your Acquisition Intelligence Model';
+    if (bodyEl) {
+      bodyEl.textContent =
+        'Client Intelligence is approved. Upload market documents, compile, review, and publish an AIM before Max answers acquisition questions.';
+    }
+    ctaEl.textContent = 'Open Acquisition Intelligence';
+    ctaEl.href = '/aim';
+    if (secondaryEl) {
+      secondaryEl.hidden = false;
+      secondaryEl.textContent = 'My Business';
+      secondaryEl.href = '/client-intel';
+    }
+    if (metaEl) {
+      metaEl.hidden = false;
+      metaEl.innerHTML =
+        '<div><div class="client-home-card-label">AIM</div>' +
+        '<div class="client-home-card-value">' + ((gates.aim && gates.aim.label) || 'No Documents') + '</div></div>';
+    }
+    return;
+  }
   titleEl.textContent = 'Max understands your business.';
   if (bodyEl) {
     bodyEl.textContent =
-      'Ask Max for guidance, or open My Business to inspect the durable understanding anytime.';
+      'Ask Max for guidance, run Scout for tenant-scoped prospects, or open My Business anytime.';
   }
   ctaEl.textContent = 'Ask Max';
   ctaEl.href = '/command-deck';
   if (secondaryEl) {
     secondaryEl.hidden = false;
-    secondaryEl.textContent = 'My Business';
-    secondaryEl.href = '/client-intel';
+    secondaryEl.textContent = 'Run Scout';
+    secondaryEl.href = '/aim';
   }
   if (metaEl) {
     metaEl.hidden = false;
     metaEl.innerHTML =
       '<div><div class="client-home-card-label">My Business</div>' +
       '<div class="client-home-card-value">Approved understanding available</div></div>' +
-      '<div><div class="client-home-card-label">Current intelligence</div>' +
-      '<div class="client-home-card-value">No prospects yet. Max will surface opportunities as your strategy develops.</div></div>';
+      '<div><div class="client-home-card-label">AIM</div>' +
+      '<div class="client-home-card-value">Published</div></div>';
   }
 }
 

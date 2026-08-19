@@ -214,6 +214,7 @@ app.use('/', require('./routes/acquisitionIntelligenceModel'));
 app.use('/', require('./routes/acquisitionIntelligenceCompiler'));
 app.use('/', require('./routes/tenantWorkspace'));
 app.use('/', require('./routes/registration'));
+app.use('/', require('./routes/pilotOnboarding'));
 app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));
@@ -326,7 +327,8 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
   ${req.query.error === 'unverified' ? '<div class="error">Verify your email before signing in</div>' : ''}
   ${req.query.error === 'no_workspace' ? '<div class="error">No workspace provisioned</div>' : ''}
   ${req.query.error === 'verify' ? '<div class="error">Verification link is invalid or expired</div>' : ''}
-  ${req.query.error && !['unverified','no_workspace','verify'].includes(String(req.query.error)) ? '<div class="error">Invalid credentials — try again</div>' : ''}
+  ${req.query.error === 'password' ? '<div class="error">Password must be updated before continuing</div>' : ''}
+  ${req.query.error && !['unverified','no_workspace','verify','password'].includes(String(req.query.error)) ? '<div class="error">Invalid credentials — try again</div>' : ''}
   <form method="POST" action="/login">
     <label>Email</label>
     <input type="email" name="email" placeholder="you@pulseforge.com" autofocus>
@@ -337,7 +339,6 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
     </div>
     <button type="submit">Access System →</button>
   </form>
-  <a class="signup-link" href="/signup">New here? Create your workspace</a>
   <div class="version">Pulseforge v0.6.0 · Phase 6</div>
 </div>
 <script>
@@ -363,7 +364,7 @@ app.post('/login', async (req, res) => {
 
   if (userCount > 0) {
     const { rows } = await pool.query(`
-      SELECT id, name, email, password_hash, role, active, client_id, email_verified
+      SELECT id, name, email, password_hash, role, active, client_id, email_verified, password_change_required
       FROM users
       WHERE LOWER(email) = LOWER($1)
       LIMIT 1
@@ -381,6 +382,7 @@ app.post('/login', async (req, res) => {
       role: user.role,
       client_id: user.client_id || null,
       email_verified: user.email_verified !== false,
+      password_change_required: Boolean(user.password_change_required),
     };
     req.session.authenticated = true;
     // Client-role users are locked to their workspace. Never default them to Pulseforge.
@@ -388,6 +390,7 @@ app.post('/login', async (req, res) => {
       ? Number(user.client_id)
       : (user.client_id || 1);
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    if (user.password_change_required) return res.redirect('/change-password');
     if (user.role === 'setter') return res.redirect('/setter');
     if (user.role === 'closer') return res.redirect('/closer');
     if (user.role === 'sales') return res.redirect('/sales');

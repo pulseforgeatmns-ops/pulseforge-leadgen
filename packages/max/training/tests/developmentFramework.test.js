@@ -112,6 +112,13 @@ describe('SPEC-102F Max Development Framework', () => {
     assert.match(competency.exercises[0].generalLesson, /provisioned before intelligence/i);
   });
 
+  test('pilot_0_client_onboarding is a graduated competency', () => {
+    const competency = training.getCompetency('pilot_0_client_onboarding');
+    assert.equal(competency.stage, training.STAGES.GRADUATED);
+    assert.ok(competency.specRefs.includes('SPEC-115'));
+    assert.match(competency.exercises[0].generalLesson, /developer intervention is a product bug/i);
+  });
+
   test('client_registration_workspace is a graduated competency', () => {
     const competency = training.getCompetency('client_registration_workspace');
     assert.equal(competency.stage, training.STAGES.GRADUATED);

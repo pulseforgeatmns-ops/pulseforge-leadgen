@@ -224,7 +224,8 @@ describe('SPEC-114 Max greeting', () => {
     assert.equal(greeting.greeting, 'Welcome, Fedir.');
     assert.match(greeting.fullText, /understanding your business/);
     assert.match(greeting.fullText, /Client Intelligence/);
-    assert.match(greeting.fullText, /Acquisition Intelligence Model/);
+    assert.match(greeting.fullText, /prospecting, reasoning/);
+    assert.doesNotMatch(greeting.fullText, /Shall we start/);
   });
 
   it('OpeningStateBuilder uses the onboarding greeting for an empty workspace', () => {

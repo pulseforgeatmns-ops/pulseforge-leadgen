@@ -1,4 +1,4 @@
-# ADR-052 — Workspace-First Registration
+# ADR-052 — Pilot 0 Principle
 
 | Field | Value |
 |---|---|
@@ -9,33 +9,43 @@
 
 ## Context
 
-SPEC-114 / ADR-051 made tenant creation a product action for operators. A stranger still cannot start. The first customer experience is still "ask a developer to INSERT a user and a client."
+SPEC-114 / ADR-051 made tenant creation a product action for operators. SPEC-113 compiles market documents into a published AIM. A real customer still cannot complete onboarding without an engineer: inserting a user row, hashing a password in Postgres, activating a tenant by hand, or publishing AIM records outside the product.
 
-PulseForge is a business intelligence product. If registration creates a user and later maybe a tenant, Max has no workspace to speak into, and login defaults that user toward Pulseforge (`client_id = 1`). That leaks platform intelligence and feels unfinished.
+Pilot 0 is not a feature checklist. It is a test of whether PulseForge can onboard a customer through its own interfaces.
+
+The earlier ADR-052 draft ("workspace-first public registration") described self-service signup and email verification. Those are **out of scope** for Pilot 0. Admin provisions the tenant and the first user. The client authenticates and is forced to replace the temporary password.
 
 ## Decision
 
-1. **The workspace is created first.** Account fields identify the first operator. Workspace fields identify the business. Provisioning creates the tenant and empty intelligence namespaces, then the user row is bound with `role=client` and `users.client_id = workspace`.
-2. **Identity is verified before the session.** Email verification is required. An unverified password is not a login.
-3. **Client-role login fail-closes without a workspace.** It never defaults `active_client_id` to Pulseforge.
-4. **Max owns the first conversation.** After login the dashboard opens with the Client Intelligence greeting and one button. No wizard. No checklist. No invented Blueprint or AIM.
-5. **Lifecycle is explicit.** Every workspace records `registered → provisioned → … → learning`. Registration writes `provisioned`. Later stages are earned from real artifacts.
-6. **Operator create (SPEC-114) remains.** Self-service registration is `origin=self_service`. Admin-created tenants stay `origin=operator` and keep the SPEC-114 greeting.
+**Developer intervention is a product bug.**
+
+During Pilot 0, every manual engineering action required to onboard or operate a client must be treated as a missing product capability. The objective is not merely to validate PulseForge's intelligence, but to validate that the platform itself can onboard, teach, and operate for a real customer through its own interfaces. Each intervention becomes a roadmap item until the entire onboarding journey is self-service.
+
+Concretely:
+
+1. **Admin provisions in the product.** Create tenant, create user, assign the user to the tenant, set a temporary password. No SQL.
+2. **First login forces a password change.** `password_change_required` blocks the workspace until the client chooses a new password.
+3. **Max does not pretend.** Until Client Intelligence is complete, the only CTA is Begin Client Intelligence.
+4. **Intelligence is earned.** No AIM, Scout, or Outreach until the Blueprint is approved. Max answers acquisition questions only after Blueprint Approved **and** Published AIM.
+5. **Failures are explicit.** No tenant, no Blueprint, no AIM, and password-change-required each have a product message. Silent failure is a bug.
+6. **Self-service signup, email verification, MFA, billing, teams, OAuth, and SSO stay out of scope.**
 
 ## Consequences
 
 ### Positive
 
-- Pilot 1 customers start without SQL or admin tools
-- Max context has a workspace before any recommendation
-- New workspaces cannot inherit Pulseforge intelligence by a login default
+- Pilot 0 customers start without a developer touching Postgres
+- Missing steps become product requirements instead of runbooks
+- Max, Scout, and Outreach cannot run on an empty or foreign tenant
 
 ### Negative / tradeoffs
 
-- Email delivery depends on the transactional mailer (Brevo). Without it, the verify URL is logged for operators — the account still cannot sign in until the token is used.
-- Operator roles still default unbound sessions to `client_id = 1` for backward compatibility.
+- An operator must still create the first user (no public registration)
+- Temporary passwords are set in the admin UI and must be communicated out of band
+- Unverified email is accepted for Pilot 0
 
 ### Follow-ups
 
 - [ ] Team invites into the same workspace
-- [ ] Stop defaulting unbound operator sessions to Pulseforge
+- [ ] Domain health and sending-capacity as first-class product surfaces
+- [ ] Public registration only after Pilot 0 proves admin-provisioned onboarding
