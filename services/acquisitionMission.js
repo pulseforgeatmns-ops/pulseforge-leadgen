@@ -15,6 +15,11 @@ const {
   persistLearning,
   loadTenantMissions,
 } = require('./acquisitionMissionPersistence');
+const {
+  observeCreated,
+  observeTransition,
+  observeResult,
+} = require('../packages/max/workspace/MissionContinuationAudit');
 
 let engine = null;
 
@@ -104,6 +109,12 @@ async function createMission(input = {}, opts = {}) {
   const mission = instance.create(input);
   await rememberMission(mission, opts);
   await persistSideEffects(mission.id, opts);
+  observeCreated(mission, {
+    persisted: opts.persist !== false,
+    operator: input.owner || input.createdBy || null,
+    workspace: input.tenantId || input.clientId || null,
+    log: opts.auditLog || null,
+  });
   return mission;
 }
 
@@ -126,8 +137,20 @@ async function contribute(missionId, input, opts = {}) {
 
 async function progressMission(missionId, actor, progressOpts = {}, opts = {}) {
   if (opts.tenantId) await hydrateTenant(opts.tenantId, opts);
+  const before = getEngine(opts).get(missionId, opts.tenantId);
+  const previousStage = before && before.stage;
   const mission = getEngine(opts).progress(missionId, actor, { ...progressOpts, tenantId: opts.tenantId });
   await persistSideEffects(missionId, opts);
+  observeTransition({
+    missionId,
+    workspace: (mission && mission.tenantId) || opts.tenantId || null,
+    previousStage,
+    nextStage: mission && mission.stage,
+    stage: mission && mission.stage,
+    reason: progressOpts.reason || (actor && (actor.role || actor)) || 'max',
+    outcome: 'transitioned',
+    log: opts.auditLog || null,
+  });
   return mission;
 }
 
@@ -146,7 +169,6 @@ async function attachScoutDiscovery(input = {}, result = {}, opts = {}) {
   if (tenantId) await hydrateTenant(tenantId, opts);
   const missionId = input.missionId || opts.missionId
     || (opts.attachToActive ? (activeMissionFor(tenantId, opts) || {}).id : null);
-  if (!missionId) return null;
   const payload = result && result.payload ? result.payload : result;
   const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
   const companies = payload.companies || opportunities.map((row) => ({
@@ -156,8 +178,23 @@ async function attachScoutDiscovery(input = {}, result = {}, opts = {}) {
   const prospects = payload.prospects || payload.people || (payload.personIds || []).map((id) => ({ id }));
   const buyingSignals = payload.buyingSignals || payload.signals || opportunities.flatMap((row) => row.signals || []);
   const evidence = payload.evidence || payload.evidenceRefs || opportunities.flatMap((row) => row.evidenceRefs || []);
+  const prospectCount = Array.isArray(prospects) ? prospects.length : 0;
+  const companyCount = Array.isArray(companies) ? companies.length : 0;
+  if (!missionId) {
+    observeResult({
+      missionId: null,
+      workspace: tenantId || null,
+      capability: 'scout',
+      attached: false,
+      prospectCount: prospectCount || companyCount,
+      confidence: payload.confidence || result.confidence || null,
+      evidence: evidence || null,
+      log: opts.auditLog || null,
+    });
+    return null;
+  }
   try {
-    return await contribute(missionId, {
+    const attached = await contribute(missionId, {
       specialist: 'scout',
       kind: 'discovery',
       payload: {
@@ -170,8 +207,28 @@ async function attachScoutDiscovery(input = {}, result = {}, opts = {}) {
         qualifiedCount: payload.qualifiedCount || companies.length || opportunities.length,
       },
     }, { ...opts, tenantId });
+    observeResult({
+      missionId,
+      workspace: tenantId || null,
+      stage: attached && attached.mission && attached.mission.stage,
+      capability: 'scout',
+      attached: true,
+      prospectCount: payload.qualifiedCount || prospectCount || companyCount,
+      confidence: payload.confidence || result.confidence || null,
+      evidence: evidence || null,
+      log: opts.auditLog || null,
+    });
+    return attached;
   } catch (err) {
     console.error('[amo] attach scout:', err.message);
+    observeResult({
+      missionId,
+      workspace: tenantId || null,
+      capability: 'scout',
+      attached: false,
+      prospectCount: prospectCount || companyCount,
+      log: opts.auditLog || null,
+    });
     return null;
   }
 }

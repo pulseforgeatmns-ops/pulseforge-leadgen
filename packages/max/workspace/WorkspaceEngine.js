@@ -36,6 +36,10 @@ const {
   maybeHandleAcquisitionMissionTurn,
 } = require('./AcquisitionMissionTurn');
 const {
+  evaluateWorkspaceMissionContinuation,
+  attachAskObservation,
+} = require('./MissionContinuationAudit');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
 const {
@@ -182,6 +186,7 @@ class WorkspaceEngine {
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
    * @param {object} [options.acquisitionMissionEngine] - SPEC-118 acquisition mission engine
    * @param {object} [options.acquisitionMissionService] - SPEC-118 service facade (tests)
+   * @param {object} [options.missionAuditLog] - AUDIT-002 record sink (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -219,6 +224,7 @@ class WorkspaceEngine {
     this._operatingUpdateOpts = options.operatingUpdateOpts || null;
     this._acquisitionMissionEngine = options.acquisitionMissionEngine || null;
     this._acquisitionMissionService = options.acquisitionMissionService || null;
+    this._missionAuditLog = options.missionAuditLog || null;
     this._loadOperatorContext =
       options.loadOperatorContext != null
         ? options.loadOperatorContext !== false
@@ -363,6 +369,26 @@ class WorkspaceEngine {
       text: question,
     });
 
+    // AUDIT-002 — load active Mission and evaluate continuation before the
+    // general reasoning pipeline. Observational only: does not divert routing.
+    const missionAuditEval = await evaluateWorkspaceMissionContinuation({
+      question,
+      session,
+      context: rawContext || session.context,
+      acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
+      acquisitionMissionService: this._acquisitionMissionService || undefined,
+      resolver:
+        this._resolverEnabled && this._missionEngine
+          ? this._missionEngine.activeMissionResolver
+          : undefined,
+      persist: this._acquisitionMissionEngine ? false : undefined,
+      log: this._missionAuditLog || undefined,
+    });
+    if (session.context && typeof session.context === 'object' && missionAuditEval) {
+      session.context.missionContinuation = missionAuditEval.snapshot;
+    }
+    const finishAsk = (result) => attachAskObservation(missionAuditEval, result);
+
     // SPEC-101 — interrogate recent specialist work before domain routing.
     // A follow-up about existing work must not replay or rerun the specialist.
     const interrogationTurn = await maybeHandleSpecialistInterrogationTurn({
@@ -386,7 +412,7 @@ class WorkspaceEngine {
         text: proseInterrogate,
         structured: structuredInterrogate,
       });
-      return {
+      return finishAsk({
         sessionId: session.id,
         prose: proseInterrogate,
         structured: structuredInterrogate,
@@ -422,7 +448,7 @@ class WorkspaceEngine {
           missionType: null,
           missionId: null,
         },
-      };
+      });
     }
 
     const acquisitionMissionTurn = await maybeHandleAcquisitionMissionTurn({
@@ -447,7 +473,7 @@ class WorkspaceEngine {
         text: proseMission,
         structured: structuredMission,
       });
-      return {
+      return finishAsk({
         sessionId: session.id,
         prose: proseMission,
         structured: structuredMission,
@@ -485,7 +511,7 @@ class WorkspaceEngine {
             ? acquisitionMissionTurn.answered.mission.id
             : null,
         },
-      };
+      });
     }
 
     // SPEC-102 / SPEC-103 / SPEC-105 / SPEC-109 / SPEC-110 / SPEC-111 —
@@ -536,7 +562,7 @@ class WorkspaceEngine {
         text: proseRetrieve,
         structured: structuredRetrieve,
       });
-      return {
+      return finishAsk({
         sessionId: session.id,
         prose: proseRetrieve,
         structured: structuredRetrieve,
@@ -576,7 +602,7 @@ class WorkspaceEngine {
           missionType: null,
           missionId: null,
         },
-      };
+      });
     }
 
     // SPEC-106 — operator-reported operating evidence. Declarative updates
@@ -688,7 +714,7 @@ class WorkspaceEngine {
         structured: structuredScout,
       });
 
-      return {
+      return finishAsk({
         sessionId: session.id,
         prose: proseScout,
         structured: structuredScout,
@@ -724,7 +750,7 @@ class WorkspaceEngine {
           missionType: null,
           missionId: null,
         },
-      };
+      });
     }
 
     if (responseContract && responseContract.id === CONTRACT_IDS.INVESTIGATION) {
@@ -860,7 +886,7 @@ class WorkspaceEngine {
         structured: structuredCie,
       });
 
-      return {
+      return finishAsk({
         sessionId: session.id,
         prose: proseCie,
         structured: structuredCie,
@@ -897,7 +923,7 @@ class WorkspaceEngine {
           missionType: null,
           missionId: null,
         },
-      };
+      });
     }
 
     // Early desk-context continuation — before domain routing, General
@@ -1483,7 +1509,7 @@ class WorkspaceEngine {
 
     const context = (domainAttach && domainAttach.context) || session.context;
 
-    return {
+    return finishAsk({
       sessionId: session.id,
       prose,
       structured,
@@ -1507,7 +1533,7 @@ class WorkspaceEngine {
       domainDecision,
       executionContext:
         (domainAttach && domainAttach.executionContext) || null,
-    };
+    });
   }
 
   /**
