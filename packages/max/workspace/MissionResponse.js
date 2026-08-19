@@ -127,6 +127,31 @@ function composeActiveMissionResponse(input) {
         `Last step_fail: ${resolution.diagnosis.lastFail.capabilityId}.`
       );
     }
+  } else if (action === 'executed' && resolution.stageExecution) {
+    headline = 'Mission Updated';
+    const exec = resolution.stageExecution;
+    const stageName =
+      (exec.stage && (exec.stage.stageName || exec.stage.stageId)) || 'Discovery';
+    nextStep = `Scout discovery executed for stage ${stageName}.`;
+    if (mission.status === 'review_required') {
+      operatorDecision = 'Awaiting Prioritization Approval';
+    } else if (mission.status === 'executing') {
+      nextStep = `Discovery in progress (${stageName}).`;
+    }
+    reasoningLines.push(
+      `Stage executor: ${exec.executorId || 'none'}.`,
+      `Selection: ${exec.selectionReason}.`,
+      exec.result && exec.result.scoutPayload
+        ? `Scout dispatch: mission ${exec.result.scoutPayload.missionId}.`
+        : null
+    );
+  } else if (action === 'stage_fallback' && resolution.stageExecution) {
+    headline = 'Advisory Response';
+    nextStep =
+      (resolution.stageExecution.result &&
+        resolution.stageExecution.result.summary) ||
+      'No stage executor registered — advisory fallback.';
+    reasoningLines.push('MISSION_EXECUTOR_FALLBACK — RecommendationEngine selected.');
   } else if (action === 'modified' && resolution.modification) {
     headline = 'Mission Updated';
     nextStep = resolution.modification.summary;

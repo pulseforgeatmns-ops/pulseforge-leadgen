@@ -64,6 +64,9 @@ const AUDIT_KINDS = Object.freeze({
   /** SPEC-043 Operator Artifact Injection */
   ARTIFACT_INJECTED: 'artifact_injected',
   STAGE_SATISFIED: 'stage_satisfied',
+  /** AUDIT-003 — stage executor audit trail */
+  STAGE_EXECUTED: 'stage_executed',
+  STAGE_EXECUTOR_FALLBACK: 'stage_executor_fallback',
 });
 
 /** SPEC-040 — stage business outcomes */
@@ -83,6 +86,8 @@ const MESSAGE_CLASS = Object.freeze({
   DIAGNOSE: 'diagnose',
   NEW_MISSION: 'new_mission',
   CLARIFY: 'clarify',
+  /** AUDIT-003 — operator approved stage execution (e.g. Begin Scout discovery) */
+  EXECUTE_STAGE: 'execute_stage',
 });
 
 /** SPEC-039 — how resolveActiveMission decided */
@@ -93,6 +98,7 @@ const RESOLUTION_PATHS = Object.freeze({
   MODIFY: 'modify_active',
   DIAGNOSE: 'diagnose_active',
   CLARIFY: 'clarify',
+  EXECUTE_STAGE: 'execute_stage',
   DISABLED: 'resolver_disabled',
 });
 

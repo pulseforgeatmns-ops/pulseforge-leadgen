@@ -154,6 +154,15 @@ const {
   containsOperatorInstructionLeak,
   resolveExecutionRequest,
 } = require('./MissionPlan');
+const {
+  resolveCurrentStage,
+  executeCurrentStage,
+  createStageExecutionOrchestrator,
+} = require('./StageExecutionOrchestrator');
+const MissionStageAudit = require('./MissionStageAudit');
+const StageExecutorRegistry = require('./stageExecutors/StageExecutorRegistry');
+const ScoutDiscoveryExecutor = require('./stageExecutors/ScoutDiscoveryExecutor');
+const RecommendationEngineExecutor = require('./stageExecutors/RecommendationEngineExecutor');
 
 module.exports = {
   MISSION_STATUS,
@@ -283,4 +292,12 @@ module.exports = {
   planEvidence,
   acquisitionStages,
   requiredEvidenceForIntent,
+  // AUDIT-003 — stage execution audit
+  resolveCurrentStage,
+  executeCurrentStage,
+  createStageExecutionOrchestrator,
+  ...MissionStageAudit,
+  ...StageExecutorRegistry,
+  ...ScoutDiscoveryExecutor,
+  ...RecommendationEngineExecutor,
 };
