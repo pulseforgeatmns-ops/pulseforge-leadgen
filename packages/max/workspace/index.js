@@ -102,6 +102,15 @@ const {
   shouldInspectActiveMission,
 } = require('./AcquisitionMissionTurn');
 const {
+  maybeHandleWorkspaceMissionInspection,
+  PIPELINE_MISSION_INSPECTION,
+} = require('./WorkspaceMissionInspection');
+const {
+  listWorkspaceMissionInspectionAuditLog,
+  clearWorkspaceMissionInspectionAuditLog,
+  buildOwnershipTrace,
+} = require('./audit/WorkspaceMissionInspectionAudit');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
 const {
@@ -141,6 +150,11 @@ module.exports = {
   shouldHandleScoutAcquisition,
   maybeHandleSpecialistInterrogationTurn,
   maybeHandleAcquisitionMissionTurn,
+  maybeHandleWorkspaceMissionInspection,
+  PIPELINE_MISSION_INSPECTION,
+  listWorkspaceMissionInspectionAuditLog,
+  clearWorkspaceMissionInspectionAuditLog,
+  buildOwnershipTrace,
   looksLikeAcquisitionMissionQuestion,
   referencesMissionState,
   shouldInspectActiveMission,
