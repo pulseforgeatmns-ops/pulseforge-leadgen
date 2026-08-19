@@ -9,6 +9,7 @@ const { BRIEFING_SECTIONS } = require('../BriefingTypes');
 function applyBriefingTemplate(sections) {
   const briefing = {
     summary: sections.summary,
+    scorecard: sections.scorecard,
     priorities: sections.priorities,
     changes: sections.changes,
     watchAlerts: sections.watchAlerts,

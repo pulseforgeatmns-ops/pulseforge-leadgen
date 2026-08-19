@@ -6,7 +6,17 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
-- Pilot 0 Self-Service Client Onboarding ([SPEC-115](docs/specs/SPEC-115_Client_Registration_and_Workspace_Provisioning.md), [ADR-052](docs/adr/ADR-052_Workspace_First_Registration.md))
+- Operator Scorecard Intelligence ([SPEC-116](docs/specs/SPEC-116_Operator_Scorecard_Intelligence.md), [ADR-053](docs/adr/ADR-053_Business_Success_Is_Operator_Defined.md))
+  - Max reasons from Blueprint, AIM, stage, revenue model, and operator objectives before recommending metrics
+  - Every recommendation includes reason, business outcome, confidence, leading/lagging, and category
+  - Operators accept, modify, remove, reorder, or add metrics; removal can include an optional reason
+  - Feedback becomes tenant-scoped Operator Intelligence and adjusts future drafts
+  - Only the approved scorecard is runtime truth; drafts never report
+  - Executive Business Brief replaces **Success Looks Like** with Recommended / Approved / Under Review
+  - Daily Briefings and Max digest consume the approved scorecard as the definition of success
+  - Max recommends scorecard evolution as the business stage changes — nothing auto-applies
+  - Competency `operator_scorecard_intelligence` graduated 2026-08-19
+
   - Admin provisions tenant + client user + temporary password in `/admin/clients` and `/admin/users` — no SQL
   - First login forces a password change (`password_change_required`); workspace is blocked until it succeeds
   - Guided workspace: Client Intelligence → Blueprint → AIM upload/compile/review/publish → Ask Max → Run Scout

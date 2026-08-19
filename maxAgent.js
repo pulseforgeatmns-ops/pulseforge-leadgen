@@ -11,6 +11,7 @@ const { ensureHealthSchema, upsertDailyHealth } = require('./utils/healthSchema'
 const { sendMiraTelegramMessage } = require('./utils/miraCorrections');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { formatShadowDigest, getShadowDigestData } = require('./utils/maxOrchestrationAnalytics');
+const { getRuntime, digestCopy } = require('./services/operatorScorecard');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
@@ -49,6 +50,15 @@ function makeRunId() {
 function captureSendError(err) {
   if (!err) return null;
   return err.response?.data || err.message;
+}
+
+async function approvedScorecardDigest() {
+  try {
+    const runtime = await getRuntime(String(CLIENT_ID || ''));
+    return digestCopy(runtime);
+  } catch (_err) {
+    return 'No operator-approved scorecard. Do not treat Max draft recommendations as the definition of success.';
+  }
 }
 
 async function reportMaxRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
@@ -894,7 +904,7 @@ function extractTextFromMessage(message) {
 // LLM fallback and as the MSHI deterministic path. Same shape as the LLM
 // output (ACTIONS EXECUTED / EXCEPTIONS / PIPELINE SNAPSHOT / RECOMMENDATION)
 // so the dashboard format never regresses to the old verbose template.
-function buildDeterministicDigest(snapshot, autoExec) {
+function buildDeterministicDigest(snapshot, autoExec, scorecardText) {
   const autoExecLine = formatAutoExecSummary(autoExec);
   const closer = snapshot.closerMetrics || {};
   const callStats = snapshot.callDispositionStats || {};
@@ -981,12 +991,16 @@ MRR closed this month: $${Number(closer.mrr_this_month || 0).toLocaleString()}
 Pending approvals: ${pending}
 Total prospects: ${totalProspects}${recommendation ? `\n\n${recommendation}` : ''}
 
+SUCCESS SCORECARD
+${scorecardText || 'No operator-approved scorecard. Do not treat Max draft recommendations as the definition of success.'}
+
 — Pulseforge`;
 }
 
-async function generateInsightsViaLLM(snapshot, autoExec) {
+async function generateInsightsViaLLM(snapshot, autoExec, scorecardText) {
   const autoExecLine = formatAutoExecSummary(autoExec);
   const dataString = JSON.stringify(digestSnapshotWithMarketLabels(snapshot), null, 2);
+  const scorecardBlock = scorecardText || 'No operator-approved scorecard. Do not treat Max draft recommendations as the definition of success.';
 
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
@@ -1003,6 +1017,8 @@ Second brain snapshot (the ONLY source for prospect references):
 
 ${dataString}
 
+${scorecardBlock}
+
 Generate a tight, streamlined digest with EXACTLY these four sections, in order:
 
 1. ACTIONS EXECUTED — One short paragraph restating the auto-executed actions above in a manager's voice.
@@ -1014,6 +1030,7 @@ Style rules:
 - Plain text. No markdown. No headers beyond the four labels above.
 - DO NOT include: click rate commentary, generic content quality observations, routine bounce mentions, untouched prospect lists, copy performance.
 - When naming a prospect, copy company_name_with_market verbatim from the snapshot, e.g. "TT Hair Salon (Manchester NH)". Never invent a business name.
+- Use the operator-approved scorecard above as the definition of business success. Do not treat draft or unapproved Max recommendations as success metrics.
 - Keep total length under 200 words.`
     }]
   });
@@ -1026,10 +1043,12 @@ Style rules:
 async function generateInsights(snapshot, autoExec) {
   console.log(`[Max] generateInsights called for client_id=${CLIENT_ID} (autoExec keys: ${autoExec ? Object.keys(autoExec).join(',') : 'none'})`);
 
+  const scorecardText = await approvedScorecardDigest();
+
   // MSHI is always deterministic (no LLM cost or latency for a 2-line update).
   if (CLIENT_ID === 2) {
     console.log('[Max] MSHI client — using deterministic digest path.');
-    return buildDeterministicDigest(snapshot, autoExec);
+    return buildDeterministicDigest(snapshot, autoExec, scorecardText);
   }
 
   // For Pulseforge clients we prefer the LLM-shaped digest, but fall back to
@@ -1037,7 +1056,7 @@ async function generateInsights(snapshot, autoExec) {
   // every dashboard trigger writes a fresh daily_digest row instead of
   // silently leaving the previous day's brief in place.
   try {
-    return await generateInsightsViaLLM(snapshot, autoExec);
+    return await generateInsightsViaLLM(snapshot, autoExec, scorecardText);
   } catch (err) {
     console.error(`[Max] LLM digest failed (${err.message}) — falling back to deterministic template.`);
     // 'failed' — this row only fires when the LLM threw, so it should surface
@@ -1046,7 +1065,7 @@ async function generateInsights(snapshot, autoExec) {
       reason: err.message,
       stack: (err.stack || '').slice(0, 1500),
     }, 'failed').catch(() => {});
-    return buildDeterministicDigest(snapshot, autoExec);
+    return buildDeterministicDigest(snapshot, autoExec, scorecardText);
   }
 }
 

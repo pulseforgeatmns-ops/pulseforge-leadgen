@@ -40,7 +40,7 @@ Without that depth, clients can feel "summarized" rather than understood, and Ma
   2. Who You Serve
   3. Why Customers Choose You
   4. Where You're Headed
-  5. Success Looks Like
+  5. Recommended / Approved / Under Review Operator Scorecard (SPEC-116; formerly Success Looks Like)
   6. Initial Observations (max five; evidence-connected; not recommendations)
   7. Max's Initial Assessment (star ratings + confidence %; explanations reference evidence)
   8. Areas I'd Like To Learn More (always identify meaningful unknowns)
@@ -52,7 +52,7 @@ Without that depth, clients can feel "summarized" rather than understood, and Ma
 ## Out of Scope
 
 - Editable Brief
-- Recommendations / tactics / campaign strategy
+- Recommendations / tactics / campaign strategy (SPEC-116 Operator Scorecard is the successor to Success Looks Like)
 - Blueprint content changes beyond what Brief synthesis consumes
 - Voice interview
 - Growth Planning destination (post-approval focus selection is [SPEC-086](SPEC-086_Growth_Conversation.md))

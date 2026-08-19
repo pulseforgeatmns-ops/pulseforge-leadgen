@@ -113,6 +113,7 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /progress-fill/);
     assert.match(uiSource, /Executive Business Brief/);
     assert.match(uiSource, /Prepared by Max/);
+    assert.match(uiSource, /kind === 'scorecard'/);
     assert.match(uiSource, /Connecting themes/);
     assert.match(uiSource, /PREMIUM_LOAD_MS\s*=\s*3000/);
     assert.match(uiSource, /Yes, this reflects my business/);

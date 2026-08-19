@@ -166,12 +166,12 @@ describe('SPEC-099 Executive Brief + Blueprint grounding (AS Cleaning)', () => {
     assert.equal(/\bideal customers include\b/i.test(byId.whoYouServe.body), false);
     assert.equal(/\bi don'?t know\b/i.test(byId.whoYouServe.body), false);
 
-    assert.match(byId.successLooksLike.body, /walkthroughs attended/i);
-    assert.match(byId.successLooksLike.body, /conversion rate/i);
-    assert.match(byId.successLooksLike.body, /Max may also want to explore/i);
+    assert.match(JSON.stringify(byId.recommendedScorecard), /walkthroughs attended/i);
+    assert.match(JSON.stringify(byId.recommendedScorecard), /conversion rate/i);
+    assert.match(JSON.stringify(byId.recommendedScorecard), /Max may also want to explore/i);
     assert.equal(
       /Success should be measured by qualified replies, booked conversations/i.test(
-        byId.successLooksLike.body
+        JSON.stringify(byId.recommendedScorecard)
       ),
       false
     );
