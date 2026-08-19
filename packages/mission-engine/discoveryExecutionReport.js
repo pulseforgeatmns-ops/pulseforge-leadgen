@@ -77,9 +77,10 @@ function findDiscoveryStepResult(mission) {
 /**
  * @param {object} mission
  * @param {object} [scoutPayload]
+ * @param {object} [scoutDiscoveryMeta] - SPEC-123 unified discovery metadata
  * @returns {object}
  */
-function buildDiscoveryExecutionReport(mission, scoutPayload = null) {
+function buildDiscoveryExecutionReport(mission, scoutPayload = null, scoutDiscoveryMeta = null) {
   const step = findDiscoveryStepResult(mission);
   const runResult = step && step.result ? step.result : null;
   const outputs = runResult && runResult.outputs ? runResult.outputs : {};
@@ -127,6 +128,32 @@ function buildDiscoveryExecutionReport(mission, scoutPayload = null) {
     /CRM|existing CRM/i.test(String(w))
   );
 
+  const existingConsulted = Boolean(
+    scoutDiscoveryMeta &&
+      scoutDiscoveryMeta.existingIntelligence &&
+      scoutDiscoveryMeta.existingIntelligence.consulted
+  );
+  const existingCompanyCount =
+    (scoutDiscoveryMeta &&
+      scoutDiscoveryMeta.existingIntelligence &&
+      scoutDiscoveryMeta.existingIntelligence.companyCount) ||
+    0;
+  const existingProspectCount =
+    (scoutDiscoveryMeta &&
+      scoutDiscoveryMeta.existingIntelligence &&
+      scoutDiscoveryMeta.existingIntelligence.prospectCount) ||
+    0;
+  const externalSkipped = Boolean(
+    scoutDiscoveryMeta &&
+      scoutDiscoveryMeta.phases &&
+      scoutDiscoveryMeta.phases.some(
+        (p) =>
+          p.phase === 'external_discovery' &&
+          p.result &&
+          p.result.skipped === true
+      )
+  );
+
   const evidenceSources = [
     sourceRow(EVIDENCE_SOURCE_IDS.DISCOVERY_PROFILE, {
       attempted: true,
@@ -134,17 +161,33 @@ function buildDiscoveryExecutionReport(mission, scoutPayload = null) {
       unavailable: profileBlocked,
       skipped: false,
     }),
+    sourceRow(EVIDENCE_SOURCE_IDS.COMPANY_STORE, {
+      attempted: existingConsulted,
+      succeeded: existingConsulted && existingCompanyCount > 0,
+      unavailable: Boolean(
+        scoutDiscoveryMeta &&
+          scoutDiscoveryMeta.existingIntelligence &&
+          scoutDiscoveryMeta.existingIntelligence.error
+      ),
+      skipped: !existingConsulted,
+    }),
+    sourceRow(EVIDENCE_SOURCE_IDS.PROSPECT_STORE, {
+      attempted: existingConsulted,
+      succeeded: existingConsulted && existingProspectCount > 0,
+      unavailable: false,
+      skipped: !existingConsulted,
+    }),
     sourceRow(EVIDENCE_SOURCE_IDS.EXTERNAL_SEARCH, {
-      attempted: externalAttempted,
-      succeeded: externalAttempted && prospectCount > 0,
+      attempted: externalAttempted && !externalSkipped,
+      succeeded: externalAttempted && !externalSkipped && prospectCount > 0,
       unavailable: externalUnavailable,
-      skipped: profileBlocked,
+      skipped: profileBlocked || externalSkipped,
     }),
     sourceRow(EVIDENCE_SOURCE_IDS.CRM_LOOKUP, {
-      attempted: crmDedupeAttempted,
-      succeeded: crmDedupeAttempted,
+      attempted: crmDedupeAttempted || existingConsulted,
+      succeeded: crmDedupeAttempted || (existingConsulted && existingCompanyCount > 0),
       unavailable: false,
-      skipped: !crmDedupeAttempted,
+      skipped: !crmDedupeAttempted && !existingConsulted,
     }),
     sourceRow(EVIDENCE_SOURCE_IDS.MARKET_INTELLIGENCE, {
       attempted: false,
@@ -152,23 +195,20 @@ function buildDiscoveryExecutionReport(mission, scoutPayload = null) {
       unavailable: false,
       skipped: true,
     }),
-    sourceRow(EVIDENCE_SOURCE_IDS.COMPANY_STORE, {
-      attempted: false,
-      succeeded: false,
+    sourceRow(EVIDENCE_SOURCE_IDS.PREVIOUS_CAMPAIGNS, {
+      attempted: existingConsulted,
+      succeeded: existingConsulted && existingCompanyCount > 0,
       unavailable: false,
-      skipped: true,
-    }),
-    sourceRow(EVIDENCE_SOURCE_IDS.PROSPECT_STORE, {
-      attempted: false,
-      succeeded: false,
-      unavailable: false,
-      skipped: true,
+      skipped: !existingConsulted,
     }),
   ];
 
-  const discoveryStrategy = profileBlocked
-    ? DISCOVERY_STRATEGIES.NO_STRATEGY_SELECTED
-    : DISCOVERY_STRATEGIES.EXTERNAL_DISCOVERY;
+  const discoveryStrategy = resolveDiscoveryStrategy({
+    profileBlocked,
+    scoutDiscoveryMeta,
+    existingConsulted,
+    externalSkipped,
+  });
 
   const { outcome, blockReason } = mapDiscoveryOutcome({
     stageOutcome,
@@ -211,12 +251,46 @@ function buildDiscoveryExecutionReport(mission, scoutPayload = null) {
     blockReason,
     stageOutcome,
     prospectCount,
-    externalDiscoveryAttempted: externalAttempted,
-    storedIntelligenceOnly: false,
-    capabilityPath: 'prospect_discovery',
-    scoutAcquisitionPathInvoked: false,
+    externalDiscoveryAttempted: externalAttempted && !externalSkipped,
+    storedIntelligenceOnly:
+      discoveryStrategy === DISCOVERY_STRATEGIES.STORED_MARKET_INTELLIGENCE ||
+      (externalSkipped && existingCompanyCount > 0),
+    capabilityPath:
+      (scoutDiscoveryMeta && scoutDiscoveryMeta.capabilityPath) || 'scout.discover',
+    scoutAcquisitionPathInvoked: Boolean(
+      scoutDiscoveryMeta && scoutDiscoveryMeta.scoutAcquisitionPathInvoked
+    ),
+    gapAnalysis: scoutDiscoveryMeta && scoutDiscoveryMeta.gapAnalysis,
+    existingIntelligence:
+      scoutDiscoveryMeta && scoutDiscoveryMeta.existingIntelligence,
     nextRecommendation: buildNextRecommendation(outcome, blockReason, discoveryStrategy),
   };
+}
+
+/**
+ * Resolve discovery strategy — prefer SPEC-123 unified strategy when available.
+ * @param {object} input
+ * @returns {string}
+ */
+function resolveDiscoveryStrategy(input) {
+  if (input.profileBlocked) {
+    return DISCOVERY_STRATEGIES.NO_STRATEGY_SELECTED;
+  }
+  if (input.scoutDiscoveryMeta && input.scoutDiscoveryMeta.strategy) {
+    const unified = input.scoutDiscoveryMeta.strategy;
+    if (unified === 'Hybrid') return DISCOVERY_STRATEGIES.HYBRID;
+    if (unified === 'Retrieve Only') return DISCOVERY_STRATEGIES.STORED_MARKET_INTELLIGENCE;
+    if (unified === 'External Heavy') return DISCOVERY_STRATEGIES.EXTERNAL_DISCOVERY;
+    if (unified === 'Verification Only') return DISCOVERY_STRATEGIES.HYBRID;
+    return unified;
+  }
+  if (input.existingConsulted && !input.externalSkipped) {
+    return DISCOVERY_STRATEGIES.HYBRID;
+  }
+  if (input.externalSkipped && input.existingConsulted) {
+    return DISCOVERY_STRATEGIES.STORED_MARKET_INTELLIGENCE;
+  }
+  return DISCOVERY_STRATEGIES.EXTERNAL_DISCOVERY;
 }
 
 function sourceRow(source, state) {
@@ -347,7 +421,7 @@ function formatDiscoveryOperatorResponse(report) {
   }
   lines.push(
     '',
-    `Scout executed successfully via ${report.capabilityPath} (${report.discoveryStrategy}).` +
+    `Scout Discovery completed (${report.discoveryStrategy}).` +
       (report.prospectCount > 0
         ? ` Found ${report.prospectCount} verified prospect(s).`
         : ' No verified prospects were returned.')
