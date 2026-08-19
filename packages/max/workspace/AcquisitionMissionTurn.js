@@ -21,17 +21,14 @@ const {
 function looksLikeAcquisitionMissionQuestion(question) {
   const q = String(question || '').trim();
   if (!q) return false;
-  return (
-    referencesMissionState(q) ||
-    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace|where are we\b|mission progress|mission status/i.test(
-      q
-    )
+  return /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace|where are we\b|mission progress|mission status/i.test(
+    q
   );
 }
 
 function shouldInspectActiveMission(question, hasActiveMission) {
   if (!hasActiveMission) return looksLikeAcquisitionMissionQuestion(question);
-  return referencesMissionState(question) || Boolean(classifyInspectionQuestion(question));
+  return Boolean(classifyInspectionQuestion(question));
 }
 
 function resolveTenantId(input = {}) {

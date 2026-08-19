@@ -47,17 +47,18 @@ function referencesMissionState(question) {
   const q = String(question || '').trim().toLowerCase();
   if (!q) return false;
   return (
-    /\bprogress\b|\d+\s*%|\bpercent\b/.test(q) ||
+    /\b(?:why|what).*\b(?:progress|mission progress)\b/.test(q) ||
+    /\bprogress\b.*\bbased\b|\bwhat is the \d+\s*%/.test(q) ||
+    /\d+\s*%\s*(?:progress|complete|done)\b/.test(q) ||
     /\b(?:why|what).*\b(?:stage|phase|discovery|planning|preparing|executing)\b/.test(q) ||
-    /\b(?:why|what).*\bwait(?:ing)?\b|\bwaiting\s+(?:on|for)\b/.test(q) ||
-    /\bconfidence\b|\b0\.\d+\b/.test(q) ||
-    /\b(?:why|how).*\bhealth\b|\bhealth\b.*\b(?:why|healthy|blocked)\b/.test(q) ||
-    /\bblock(?:er|ing|ed)\b|\bwhat(?:'s| is) blocking\b/.test(q) ||
-    /\bwhat changed\b|\bwhat(?:'s| has) changed\b|\brecent(?:ly)?\b.*\bchang/.test(q) ||
+    /\b(?:why|what).*\bwait(?:ing)?\b|\bwaiting\s+(?:on|for)\b|\bwhat are we waiting\b/.test(q) ||
+    /\b(?:why|how).*\bconfidence\b|\bconfidence\b.*\b(?:why|based|from)\b/.test(q) ||
+    /\b(?:why|how).*\b(?:mission )?health\b|\bmission health\b|\bhow is outreach\b/.test(q) ||
+    /\bwhat(?:'s| is) blocking\b|\bblocker\b|\bwhy (?:aren'?t|isn'?t) (?:we|this mission|the mission) (?:moving|progressing)\b/.test(q) ||
+    /\bwhat changed\b|\bwhat(?:'s| has) changed\b/.test(q) ||
     /\bwhat happens next\b|\bnext step\b|\bwhat(?:'s| is) next\b/.test(q) ||
-    /\bwhy this recommendation\b|\brecommendation\b/.test(q) ||
-    /\bwhy is this mission\b|\bmission\b/.test(q) ||
-    /\bhow is outreach\b|\bmission workspace\b|\bwhere are we\b/.test(q)
+    /\bwhy this recommendation\b/.test(q) ||
+    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status/.test(q)
   );
 }
 
