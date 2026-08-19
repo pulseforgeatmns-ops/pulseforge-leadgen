@@ -1475,6 +1475,27 @@ body.light-mode .ask-max-answer { color: var(--text-primary); }
   text-decoration: none;
 }
 .client-home-secondary:hover { border-color: var(--gold); color: var(--gold); }
+.client-home-runtime {
+  margin-top: 1.2rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.55rem;
+}
+.client-home-runtime-item {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+}
+.client-home-runtime-item span {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.52rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gray);
+  margin-bottom: 0.2rem;
+}
 .client-home-meta {
   margin-top: 1.35rem;
   padding-top: 1rem;
@@ -2832,9 +2853,10 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
         what you offer, where you're trying to go, and what still needs to be understood.
       </div>
       <div class="client-home-actions" id="clientHomeActions">
-        <a class="client-home-cta" id="clientHomeCta" href="/client-intel">Start with Max</a>
+        <a class="client-home-cta" id="clientHomeCta" href="/client-intel">Begin Client Intelligence</a>
         <a class="client-home-secondary" id="clientHomeSecondary" href="/client-intel" hidden>My Business</a>
       </div>
+      <div class="client-home-runtime" id="clientHomeRuntime" hidden></div>
       <div class="client-home-meta" id="clientHomeMeta" hidden></div>
     </div>
 
@@ -4048,6 +4070,24 @@ function clientWorkspaceLabel() {
   );
 }
 
+function renderClientRuntime(runtime) {
+  const el = document.getElementById('clientHomeRuntime');
+  if (!el || !runtime) return;
+  const rows = [
+    ['Workspace', runtime.workspace || 'Provisioned'],
+    ['Business Blueprint', runtime.blueprint || 'Not Started'],
+    ['AIM', runtime.aim || 'No Published AIM'],
+    ['Prospects', String(runtime.prospects ?? 0)],
+    ['Campaigns', String(runtime.campaigns ?? 0)],
+    ['Knowledge', String(runtime.knowledge ?? 0)],
+    ['Outcomes', String(runtime.outcomes ?? 0)],
+  ];
+  el.hidden = false;
+  el.innerHTML = rows.map(function(row) {
+    return '<div class="client-home-runtime-item"><span>' + row[0] + '</span>' + row[1] + '</div>';
+  }).join('');
+}
+
 async function loadClientHomeOnboarding() {
   const titleEl = document.getElementById('clientHomeTitle');
   const bodyEl = document.getElementById('clientHomeBody');
@@ -4059,6 +4099,7 @@ async function loadClientHomeOnboarding() {
 
   const company = clientWorkspaceLabel();
   let onboarding = null;
+  let workspaceMe = null;
   try {
     const res = await fetch('/api/v1/client-intel/onboarding', {
       credentials: 'include',
@@ -4068,20 +4109,30 @@ async function loadClientHomeOnboarding() {
   } catch (_err) {
     onboarding = null;
   }
+  try {
+    const wsRes = await fetch('/api/v1/workspace/me', {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (wsRes.ok) workspaceMe = await wsRes.json();
+  } catch (_err) {
+    workspaceMe = null;
+  }
+  if (workspaceMe && workspaceMe.runtime) renderClientRuntime(workspaceMe.runtime);
 
   const state = onboarding?.onboardingState || 'none';
   const interviewId = onboarding?.interviewId || null;
 
   if (state === 'none') {
-    if (eyebrowEl) eyebrowEl.textContent = 'Welcome to Pulseforge';
-    titleEl.textContent = "Max doesn't know your business yet";
+    if (eyebrowEl) eyebrowEl.textContent = 'Welcome to PulseForge';
+    titleEl.textContent = 'Welcome to PulseForge.';
     if (bodyEl) {
       bodyEl.textContent =
-        'Before Max can give you useful guidance, he needs to understand your business. ' +
-        'This conversation helps Max learn who you serve, what you offer, where you\'re trying to go, ' +
-        'and what still needs to be understood.';
+        'Before I can help you grow your business, I need to understand it. ' +
+        'Everything I recommend will be grounded in what you teach me. ' +
+        "Let's begin with Client Intelligence.";
     }
-    ctaEl.textContent = 'Start with Max';
+    ctaEl.textContent = 'Begin Client Intelligence';
     ctaEl.href = '/client-intel';
     if (secondaryEl) secondaryEl.hidden = true;
     if (metaEl) metaEl.hidden = true;

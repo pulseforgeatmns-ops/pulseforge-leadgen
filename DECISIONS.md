@@ -49,6 +49,8 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-047](docs/adr/ADR-047_Intelligence_Before_Evidence.md) | Intelligence Before Evidence | Accepted | Max synthesizes first-class business intelligence from grounded claims before presenting evidence; insufficient evidence is Unknown |
 | [ADR-048](docs/adr/ADR-048_Intent_Selects_Analysis_Mode.md) | Intent Selects Analysis Mode | Accepted | Operator intent selects an explicit analysis mode before reasoning; diagnosis, unknown analysis, risk, and progress are first-class |
 | [ADR-050](docs/adr/ADR-050_Compile_Market_Knowledge_Before_Runtime.md) | Compile Market Knowledge Before Runtime | Accepted | Market documents compile into an approved AIM; Scout loads only published AIMs; the compiler never executes outreach |
+| [ADR-051](docs/adr/ADR-051_Provision_Tenant_Before_Intelligence.md) | Provision Tenant Before Intelligence | Accepted | A tenant is provisioned before intelligence begins; every workspace starts empty; missing tenant fails closed |
+| [ADR-052](docs/adr/ADR-052_Workspace_First_Registration.md) | Workspace-First Registration | Accepted | Customers register without SQL; the workspace is created first; users belong to workspaces; Max owns the first conversation |
 
 ## How to add a decision
 

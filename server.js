@@ -213,6 +213,7 @@ app.use('/', require('./routes/intelligenceSeedLibraries'));
 app.use('/', require('./routes/acquisitionIntelligenceModel'));
 app.use('/', require('./routes/acquisitionIntelligenceCompiler'));
 app.use('/', require('./routes/tenantWorkspace'));
+app.use('/', require('./routes/registration'));
 app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));
@@ -312,13 +313,20 @@ input:focus { border-color:#8b5cf6; background:rgba(139,92,246,0.05); }
 button { width:100%; background:#8b5cf6; border:none; border-radius:6px; padding:0.85rem; color:#040810; font-family:'JetBrains Mono',monospace; font-size:0.75rem; font-weight:500; letter-spacing:2px; text-transform:uppercase; cursor:pointer; transition:all 0.2s; }
 button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
 .version { font-family:'JetBrains Mono',monospace; font-size:0.55rem; color:#3a4a6a; text-align:center; margin-top:1.5rem; letter-spacing:1px; }
+.ok { background:rgba(0,230,118,0.08); border:1px solid rgba(0,230,118,0.25); color:#00e676; font-family:'JetBrains Mono',monospace; font-size:0.7rem; padding:0.6rem 0.75rem; border-radius:6px; margin-bottom:1rem; letter-spacing:1px; }
+.signup-link { display:block; text-align:center; margin-top:1.1rem; color:#8b5cf6; font-family:'JetBrains Mono',monospace; font-size:0.62rem; letter-spacing:1px; text-decoration:none; text-transform:uppercase; }
+.signup-link:hover { color:#c4b5fd; }
 </style>
 </head>
 <body>
 <div class="login-box">
   <div class="logo"><div class="logo-dot"></div>PULSEFORGE</div>
   <div class="subtitle">Command Center · Restricted Access</div>
-  ${req.query.error ? '<div class="error">Invalid credentials — try again</div>' : ''}
+  ${req.query.verified ? '<div class="ok">Email verified — sign in to open your workspace</div>' : ''}
+  ${req.query.error === 'unverified' ? '<div class="error">Verify your email before signing in</div>' : ''}
+  ${req.query.error === 'no_workspace' ? '<div class="error">No workspace provisioned</div>' : ''}
+  ${req.query.error === 'verify' ? '<div class="error">Verification link is invalid or expired</div>' : ''}
+  ${req.query.error && !['unverified','no_workspace','verify'].includes(String(req.query.error)) ? '<div class="error">Invalid credentials — try again</div>' : ''}
   <form method="POST" action="/login">
     <label>Email</label>
     <input type="email" name="email" placeholder="you@pulseforge.com" autofocus>
@@ -329,6 +337,7 @@ button:hover { background:#7c3aed; box-shadow:0 0 20px rgba(139,92,246,0.4); }
     </div>
     <button type="submit">Access System →</button>
   </form>
+  <a class="signup-link" href="/signup">New here? Create your workspace</a>
   <div class="version">Pulseforge v0.6.0 · Phase 6</div>
 </div>
 <script>
@@ -354,7 +363,7 @@ app.post('/login', async (req, res) => {
 
   if (userCount > 0) {
     const { rows } = await pool.query(`
-      SELECT id, name, email, password_hash, role, active, client_id
+      SELECT id, name, email, password_hash, role, active, client_id, email_verified
       FROM users
       WHERE LOWER(email) = LOWER($1)
       LIMIT 1
@@ -362,6 +371,8 @@ app.post('/login', async (req, res) => {
     const user = rows[0];
     const ok = user && user.active && await bcrypt.compare(password || '', user.password_hash);
     if (!ok) return res.redirect('/login?error=1');
+    if (user.email_verified === false) return res.redirect('/login?error=unverified');
+    if (user.role === 'client' && !user.client_id) return res.redirect('/login?error=no_workspace');
 
     req.session.user = {
       id: user.id,
@@ -369,9 +380,13 @@ app.post('/login', async (req, res) => {
       email: user.email,
       role: user.role,
       client_id: user.client_id || null,
+      email_verified: user.email_verified !== false,
     };
     req.session.authenticated = true;
-    req.session.active_client_id = user.client_id || 1;
+    // Client-role users are locked to their workspace. Never default them to Pulseforge.
+    req.session.active_client_id = user.role === 'client'
+      ? Number(user.client_id)
+      : (user.client_id || 1);
     await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
     if (user.role === 'setter') return res.redirect('/setter');
     if (user.role === 'closer') return res.redirect('/closer');

@@ -104,6 +104,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 | [SPEC-112](SPEC-112_Acquisition_Intelligence_Model.md) | Acquisition Intelligence Model (AIM) | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-113](SPEC-113_Acquisition_Intelligence_Compiler.md) | Acquisition Intelligence Compiler (AIC) | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-114](SPEC-114_Client_Tenant_Creation.md) | Client Tenant Creation & Activation | Implemented (v1 thin slice) | v0.1 |
+| [SPEC-115](SPEC-115_Client_Registration_and_Workspace_Provisioning.md) | Client Registration & Workspace Provisioning | Implemented (v1 thin slice) | v0.1 |
 | [SPEC-102F](SPEC-102F_Max_Development_Framework.md) | Max Development Framework | Foundation (v1 thin slice) | v0.1 |
 | [SPEC-006](SPEC-006_Command_Deck.md) | Pulseforge Command Deck | Approved | v1.0.0 |
 | [SPEC-001_Business_Knowledge_Graph.md](SPEC-001_Business_Knowledge_Graph.md) | Business Knowledge Graph (remaining production ingest) | Draft | — |

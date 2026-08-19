@@ -51,6 +51,8 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-047](ADR-047_Intelligence_Before_Evidence.md) | Intelligence Before Evidence | Accepted |
 | [ADR-048](ADR-048_Intent_Selects_Analysis_Mode.md) | Intent Selects Analysis Mode | Accepted |
 | [ADR-050](ADR-050_Compile_Market_Knowledge_Before_Runtime.md) | Compile Market Knowledge Before Runtime | Accepted |
+| [ADR-051](ADR-051_Provision_Tenant_Before_Intelligence.md) | Provision Tenant Before Intelligence | Accepted |
+| [ADR-052](ADR-052_Workspace_First_Registration.md) | Workspace-First Registration | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

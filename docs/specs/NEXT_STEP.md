@@ -1,5 +1,7 @@
 # NEXT STEP
 
+SPEC-115 is implemented (v1 thin slice): a new customer registers, verifies email, and lands in an isolated empty workspace with Max. No SQL. No admin tools. Client-role login fail-closes without a workspace.
+
 SPEC-114 is implemented (v1 thin slice): an operator creates a tenant in the product, PulseForge provisions an empty isolated workspace, and Max fail-closes without an active tenant. The Fedir AIM seed is not a live tenant — create Fedir through `/admin/clients`.
 
 SPEC-113 is implemented (v1 thin slice): market documents compile into an approved Acquisition Intelligence Model. Scout loads only published AIMs. The compiler never executes outreach.
@@ -10,13 +12,14 @@ SPEC-111 remains implemented: Max classifies operator intent into an explicit an
 
 Recommended next work, in order:
 
-1. **Pilot 0 through the product** — Create Fedir, activate Fedir, run Client Intelligence, compile and publish an AIM, then ask Max to find founders struggling with founder dependency. If any step needs SQL, that is the next product gap.
-2. **Durable assimilation of verified operator corrections** — persist *verified* working-model corrections after claim grounding, without treating Max-generated statements as operating fact. This is the next knowledge-layer milestone; do not start it by weakening SPEC-108, SPEC-109, SPEC-110, SPEC-111, SPEC-112, SPEC-113, or SPEC-114.
-3. **Fedir live pilot (operational)** — 50 qualified prospects and outreach begin. The AIM engine already reports this honestly as unmet.
-4. **CIE typo-repair cleanup** — `app` → `gap` still inflates `unknowns` on CIE-claimed turns. This is no longer a Pilot blocker. Fix it as a narrow CIE semantic-contamination patch.
-5. **Event C confirmation UX** — SPEC-106 v1 fail-closes on silent AO cohort mutation. If operators confirm follow-up scheduling, write `ao_follow_up_tasks` / `next_follow_up_date` behind an explicit confirmation turn.
-6. **Event B durability (P2 only)** — persist AO training/readiness only if Pilot usage shows a semantically correct store.
-7. **Contradiction presentation** — operator-attested vs system-observed mail dates already fail open as conflict. Surface that distinction in existing provenance UI when those components can represent it cleanly.
+1. **Pilot 1 through registration** — A stranger signs up at `/signup`, verifies, reaches Max, completes Client Intelligence, publishes a Blueprint and AIM, then asks *"Max, who should I talk to first?"* If any step needs SQL, that is the next product gap.
+2. **Pilot 0 through the product** — Create Fedir, activate Fedir, run Client Intelligence, compile and publish an AIM, then ask Max to find founders struggling with founder dependency. If any step needs SQL, that is the next product gap.
+3. **Durable assimilation of verified operator corrections** — persist *verified* working-model corrections after claim grounding, without treating Max-generated statements as operating fact. This is the next knowledge-layer milestone; do not start it by weakening SPEC-108, SPEC-109, SPEC-110, SPEC-111, SPEC-112, SPEC-113, SPEC-114, or SPEC-115.
+4. **Fedir live pilot (operational)** — 50 qualified prospects and outreach begin. The AIM engine already reports this honestly as unmet.
+5. **CIE typo-repair cleanup** — `app` → `gap` still inflates `unknowns` on CIE-claimed turns. This is no longer a Pilot blocker. Fix it as a narrow CIE semantic-contamination patch.
+6. **Event C confirmation UX** — SPEC-106 v1 fail-closes on silent AO cohort mutation. If operators confirm follow-up scheduling, write `ao_follow_up_tasks` / `next_follow_up_date` behind an explicit confirmation turn.
+7. **Event B durability (P2 only)** — persist AO training/readiness only if Pilot usage shows a semantically correct store.
+8. **Contradiction presentation** — operator-attested vs system-observed mail dates already fail open as conflict. Surface that distinction in existing provenance UI when those components can represent it cleanly.
 
 Do not treat SessionStore transcripts as operating memory.
 Do not convert SPEC-107 recommendations into missions or agent enablement automatically.
