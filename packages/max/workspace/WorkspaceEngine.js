@@ -55,6 +55,7 @@ const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
+const { maybeHandleMissionFirstTurn } = require('./MissionFirstRouting');
 const { PresentationEngine } = require('./PresentationEngine');
 const {
   selectExecutionDomain,
@@ -362,6 +363,32 @@ class WorkspaceEngine {
       role: 'operator',
       text: question,
     });
+
+    // SPEC-119 — Mission-first routing before cognitive/domain classifiers.
+    // Active Mission continuation owns the turn; legacy routing must not reclaim it.
+    const missionFirstTurn = await maybeHandleMissionFirstTurn({
+      question,
+      session,
+      missionEngine: this._missionEngine,
+      missionsEnabled: this._missionsEnabled,
+      resolverEnabled: this._resolverEnabled,
+      rawContext,
+      envelopeSwitch,
+      presentation: this._presentation,
+      sessions: this._sessions,
+    });
+    if (missionFirstTurn) {
+      return {
+        ...missionFirstTurn,
+        suggestions: resolveResultSuggestions({
+          structured: missionFirstTurn.structured,
+          session,
+          question,
+        }),
+        recommendedActions: missionFirstTurn.structured.recommendedActions,
+        interrogation: null,
+      };
+    }
 
     // SPEC-101 — interrogate recent specialist work before domain routing.
     // A follow-up about existing work must not replay or rerun the specialist.

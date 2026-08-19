@@ -36,6 +36,17 @@ const {
   composeActiveMissionResponse,
 } = require('./MissionResponse');
 const {
+  maybeHandleMissionFirstTurn,
+  evaluateMissionContinuation,
+  evaluateMissionEscape,
+  logMissionRouting,
+  logMissionRoutingOverride,
+  listMissionRoutingLog,
+  clearMissionRoutingLog,
+  PIPELINES,
+  CONTINUATION_THRESHOLD,
+} = require('./MissionFirstRouting');
+const {
   PresentationEngine,
   formatDeterministicProse,
 } = require('./PresentationEngine');
@@ -190,6 +201,15 @@ module.exports = {
   classifyIntent,
   composeMissionResponse,
   composeActiveMissionResponse,
+  maybeHandleMissionFirstTurn,
+  evaluateMissionContinuation,
+  evaluateMissionEscape,
+  logMissionRouting,
+  logMissionRoutingOverride,
+  listMissionRoutingLog,
+  clearMissionRoutingLog,
+  PIPELINES,
+  CONTINUATION_THRESHOLD,
   PresentationEngine,
   formatDeterministicProse,
   WorkspaceEngine,

@@ -4761,6 +4761,220 @@ describe('Active work context continuation before domain routing', () => {
   });
 });
 
+describe('SPEC-119 Mission-First Routing Architecture', () => {
+  const {
+    evaluateMissionContinuation,
+    evaluateMissionEscape,
+    clearMissionRoutingLog,
+    listMissionRoutingLog,
+    PIPELINES,
+    CONTINUATION_THRESHOLD,
+  } = require('../MissionFirstRouting');
+  const { MESSAGE_CLASS } = require('../../../mission-engine');
+
+  it('continuation evaluation assigns high confidence to status/progress cues', () => {
+    const active = {
+      id: 'msn_481',
+      title: 'Commercial STR Outreach',
+      objectiveText: 'Commercial STR Outreach',
+      status: 'executing',
+      progress: { currentStage: 'Discovery' },
+    };
+    const result = evaluateMissionContinuation('Show progress', active);
+    assert.equal(result.classification, MESSAGE_CLASS.RESUME);
+    assert.ok(result.confidence >= CONTINUATION_THRESHOLD);
+    assert.equal(result.continues, true);
+  });
+
+  it('explicit escape releases mission ownership intent', () => {
+    const escaped = evaluateMissionEscape("Let's talk about pricing.");
+    assert.equal(escaped.explicit, true);
+    const embeddings = evaluateMissionEscape('Explain embeddings.');
+    assert.equal(embeddings.explicit, true);
+  });
+
+  it('Show progress with active mission routes to Mission Engine, not General Conversation', async () => {
+    clearMissionRoutingLog();
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      resolverEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: 'Build Campaign 001 for Anchor Cleaning.',
+      context: { tenantId: '10', page: 'command-deck' },
+    });
+    assert.equal(first.route, 'mission');
+    assert.ok(first.mission);
+
+    const second = await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Show progress',
+    });
+
+    assert.equal(second.route, 'mission');
+    assert.equal(second.mission.id, first.mission.id);
+    assert.equal(second.resolution.action, 'resumed');
+    assert.doesNotMatch(
+      second.prose || second.structured.answer,
+      /General Conversation/i
+    );
+    assert.match(
+      second.prose || second.structured.answer,
+      /Resumed Mission|Campaign 001/i
+    );
+    assert.ok(second.missionRouting);
+    assert.equal(second.missionRouting.selectedPipeline, PIPELINES.MISSION_ENGINE);
+    assert.ok(second.missionRouting.continuationConfidence >= CONTINUATION_THRESHOLD);
+
+    const logs = listMissionRoutingLog();
+    assert.ok(logs.some((e) => e.event === 'MISSION_ROUTING_OVERRIDE'));
+    assert.ok(
+      logs.some(
+        (e) =>
+          e.event === 'MISSION_ROUTING_OVERRIDE' &&
+          e.previousPipeline === PIPELINES.GENERAL &&
+          e.newPipeline === PIPELINES.MISSION_ENGINE
+      )
+    );
+  });
+
+  it('continue/status follow-ups never reconstruct business context from scratch', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      resolverEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: 'Build Campaign 001 for Anchor Cleaning.',
+      context: { tenantId: '10', page: 'command-deck' },
+    });
+
+    const second = await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'What is the status?',
+    });
+
+    assert.equal(second.route, 'mission');
+    assert.equal(second.mission.id, first.mission.id);
+    assert.doesNotMatch(
+      second.prose || second.structured.answer,
+      /investigate today's briefing/i
+    );
+    const list = await missionEngine.list({ tenantId: '10' });
+    assert.equal(list.length, 1);
+  });
+
+  it('diagnose follow-up stays on Mission Engine via mission-first routing', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      resolverEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: 'Build Campaign 001 for Anchor Cleaning.',
+      context: { tenantId: '10', page: 'command-deck' },
+    });
+
+    const second = await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'Investigate why Campaign Review failed',
+    });
+
+    assert.equal(second.route, 'mission');
+    assert.equal(second.mission.id, first.mission.id);
+    assert.equal(second.resolution.action, 'diagnosed');
+    assert.match(
+      second.prose || second.structured.answer,
+      /Diagnosing active Mission/i
+    );
+  });
+
+  it('explicit escape clears active mission and allows general conversation', async () => {
+    clearMissionRoutingLog();
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      resolverEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: 'Build Campaign 001 for Anchor Cleaning.',
+      context: { tenantId: '10', page: 'command-deck' },
+    });
+    const sessionId = first.sessionId;
+
+    const second = await workspace.ask({
+      sessionId,
+      question: "Let's talk about pricing.",
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        briefing: { headline: 'Brief', summary: 'Summary' },
+      },
+    });
+
+    assert.equal(second.route, 'intelligence');
+    assert.equal(second.mission, null);
+
+    const resolver = missionEngine.activeMissionResolver;
+    const active = await resolver.resolveActiveMission(sessionId);
+    assert.equal(active, null);
+
+    const escapeLog = listMissionRoutingLog().find(
+      (e) => e.event === 'MISSION_ROUTING' && e.routingReason && e.routingReason.includes('explicit_escape')
+    );
+    assert.ok(escapeLog);
+    assert.equal(escapeLog.selectedPipeline, PIPELINES.GENERAL);
+  });
+
+  it('Morning Brief context does not block mission continuation routing', async () => {
+    const missionEngine = testMissionEngine();
+    const workspace = createWorkspaceEngine({
+      missionEngine,
+      missionsEnabled: true,
+      resolverEnabled: true,
+      disableLlm: true,
+    });
+
+    const first = await workspace.ask({
+      question: 'Build Campaign 001 for Anchor Cleaning.',
+      context: { tenantId: '10', page: 'command-deck' },
+    });
+
+    const second = await workspace.ask({
+      sessionId: first.sessionId,
+      question: 'continue',
+      context: {
+        tenantId: '10',
+        page: 'command-deck',
+        briefing: {
+          headline: 'Quiet morning',
+          summary: 'No major movement overnight.',
+        },
+      },
+    });
+
+    assert.equal(second.route, 'mission');
+    assert.equal(second.mission.id, first.mission.id);
+    assert.doesNotMatch(
+      second.prose || second.structured.answer,
+      /Quiet morning/i
+    );
+  });
+});
+
 describe('SPEC-022 Command Deck Operations section', () => {
   it('compose includes operations with mission cards', async () => {
     const { createMaxReasoningRuntime } = require('../../index');
