@@ -19,6 +19,7 @@ const { explainWhy, formatExplain, collectEvidence } = require('./Explain');
 const { createObservation, formatMemory } = require('./Memory');
 const { createMemoryAmoStore } = require('./Store');
 const { createAcquisitionMissionEngine } = require('./Engine');
+const inspection = require('./Inspection');
 
 module.exports = {
   ...types,
@@ -52,4 +53,5 @@ module.exports = {
   formatMemory,
   createMemoryAmoStore,
   createAcquisitionMissionEngine,
+  ...inspection,
 };

@@ -13,6 +13,8 @@ const training = require('../packages/max/training');
 const amo = require('../packages/acquisition-mission');
 const {
   maybeHandleAcquisitionMissionTurn,
+  referencesMissionState,
+  shouldInspectActiveMission,
 } = require('../packages/max/workspace/AcquisitionMissionTurn');
 const {
   resetEngine,
@@ -148,8 +150,65 @@ describe('SPEC-118 Max Ask', () => {
     assert.ok(turn);
     assert.match(turn.prose, /Mission exists because/);
     assert.match(turn.prose, /61 qualified/);
-    assert.equal(turn.reason, 'acquisition_mission_evidence');
+    assert.equal(turn.reason, 'mission_inspection');
     assert.equal(turn.answered.invented, false);
+    assert.equal(turn.structured.metadata.missionInspection, true);
+    assert.deepEqual(turn.structured.metadata.unavailable, []);
+    assert.equal(turn.structured.metadata.sourcesUsed.knowledge, false);
+    assert.equal(turn.structured.metadata.sourcesUsed.missionState, true);
+  });
+
+  it('routes progress inspection before durable retrieval when a mission is active', async () => {
+    const amoEngine = getEngine();
+    const mission = amoEngine.create({
+      tenantId: '10',
+      objective: 'Acquire commercial cleaning customers in Manchester.',
+      targetSegment: 'Commercial Law Firms',
+      campaign: 'Fall Outreach',
+      confidence: 0.84,
+    });
+    amoEngine.contribute(mission.id, {
+      specialist: 'scout',
+      payload: {
+        companies: Array.from({ length: 61 }, (_, i) => ({ id: i + 1 })),
+        evidence: ['places'],
+        qualifiedCount: 61,
+      },
+    });
+    amoEngine.contribute(mission.id, {
+      specialist: 'max',
+      payload: {
+        priorities: ['law firms'],
+        objectiveReason: 'Commercial revenue remains primary objective.',
+        recommendations: ['prioritize ops hires'],
+      },
+    });
+    amoEngine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.UNDERSTAND });
+    amoEngine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.PLAN });
+    amoEngine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.PREPARE });
+
+    assert.ok(referencesMissionState('What is the 68% progress based on?'));
+    assert.ok(
+      shouldInspectActiveMission('What is the 68% progress based on?', true)
+    );
+
+    const turn = await maybeHandleAcquisitionMissionTurn({
+      question: 'What is the 68% progress based on?',
+      context: { tenantId: '10', missionId: mission.id },
+      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionService: {
+        answerOperator: (question, input) => amoEngine.answerOperator(question, input),
+        getEngine: () => amoEngine,
+      },
+      persist: false,
+    });
+    assert.ok(turn);
+    assert.equal(turn.reason, 'mission_inspection');
+    assert.equal(turn.answered.kind, 'inspection');
+    assert.match(turn.prose, /Mission Progress/);
+    assert.match(turn.prose, /Derived From/);
+    assert.equal(turn.structured.metadata.missionInspection, true);
+    assert.deepEqual(turn.structured.metadata.unavailable, []);
   });
 });
 

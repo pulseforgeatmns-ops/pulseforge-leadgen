@@ -500,9 +500,12 @@ function buildAcquisitionMissionCommunication(snapshot, opts = {}) {
   const mission = snapshot.mission || {};
   const blocker = snapshot.blocker || null;
   const health = snapshot.health || null;
+  const inspection = snapshot.inspection || null;
+  const missionContext = snapshot.missionContext || null;
 
   let headline = 'Mission Updated';
   if (opts.kind === 'explain') headline = 'Mission Reason';
+  else if (opts.kind === 'inspection') headline = (inspection && inspection.headline) || 'Mission Inspection';
   else if (blocker) headline = 'Mission Blocked';
   else if (workspace.status === 'complete') headline = 'Mission Complete';
 
@@ -526,16 +529,24 @@ function buildAcquisitionMissionCommunication(snapshot, opts = {}) {
     headline,
     mission: workspace.title || mission.title || 'Acquisition Mission',
     objective: mission.objective || null,
-    status: workspace.status || mission.status || null,
-    stage: workspace.stage || mission.stage || null,
-    progress: workspace.progressPercent != null ? workspace.progressPercent : null,
-    health: health && health.label ? health.label : blocker ? 'Blocked' : 'Healthy',
-    waitingOn: blocker ? 'Operator approval' : null,
+    status: workspace.status || mission.status || (missionContext && missionContext.stageLabel) || null,
+    stage: workspace.stage || mission.stage || (missionContext && missionContext.stage) || null,
+    progress:
+      workspace.progressPercent != null
+        ? workspace.progressPercent
+        : (missionContext && missionContext.progress != null ? missionContext.progress : null),
+    health: health && health.label ? health.label : (missionContext && missionContext.health) || (blocker ? 'Blocked' : 'Healthy'),
+    waitingOn:
+      (missionContext && missionContext.waitingOn) ||
+      (blocker ? blocker.label || 'Operator approval' : null),
+    confidence:
+      (missionContext && missionContext.confidence != null ? missionContext.confidence : null) ||
+      (mission.confidence != null ? Number(mission.confidence) : null),
     currentUnderstanding,
     nextStep,
     operatorDecision: blocker ? 'Resolve blocker to continue?' : null,
-    evidenceStatus: '✓ Grounded',
-    sources: ['Mission History', 'Scout', 'Blueprint'].filter(Boolean),
+    evidenceStatus: '✓ Mission State',
+    sources: ['Mission State'],
     reasoningEvidence: opts.includeReasoning && snapshot.why
       ? buildReasoningEvidence({
           known: (snapshot.why.grounded || []).map(String),

@@ -21,11 +21,12 @@ const SOURCE_KEYS = Object.freeze([
   'memory',
   'policy',
   'knowledge',
+  'missionState',
 ]);
 
 /**
  * Empty sourcesUsed map (all false).
- * @returns {{ briefing: boolean, reasoning: boolean, memory: boolean, policy: boolean, knowledge: boolean }}
+ * @returns {{ briefing: boolean, reasoning: boolean, memory: boolean, policy: boolean, knowledge: boolean, missionState: boolean }}
  */
 function emptySourcesUsed() {
   return {
@@ -34,6 +35,7 @@ function emptySourcesUsed() {
     memory: false,
     policy: false,
     knowledge: false,
+    missionState: false,
   };
 }
 
@@ -276,6 +278,15 @@ function buildResponseMetadata(partial = {}) {
   if (partial.claimVerdict != null) meta.claimVerdict = String(partial.claimVerdict);
   if (partial.executed === false) meta.executed = false;
   if (partial.acquisitionMission === true) meta.acquisitionMission = true;
+  if (partial.missionInspection === true) meta.missionInspection = true;
+  if (partial.inspectionProperty != null) {
+    meta.inspectionProperty = String(partial.inspectionProperty);
+  }
+  if (partial.inspectionPipeline != null) {
+    meta.inspectionPipeline = String(partial.inspectionPipeline);
+  }
+  if (partial.invented === true) meta.invented = true;
+  if (partial.invented === false) meta.invented = false;
   if (partial.missionCommunication === true) meta.missionCommunication = true;
   if (partial.missionCommunicationPayload != null) {
     meta.missionCommunicationPayload = partial.missionCommunicationPayload;
