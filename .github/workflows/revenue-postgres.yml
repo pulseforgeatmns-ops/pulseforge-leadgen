@@ -5,26 +5,120 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+env:
+  CI_STAGE_FILE: ci-stage-timings.jsonl
+
 jobs:
   revenue-postgresql-required:
+    name: revenue-postgresql-required
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
+      - name: Initialize CI observability
+        run: |
+          : > "$CI_STAGE_FILE"
+          echo "CI_ENVIRONMENT_HEALTHY=true" >> "$GITHUB_ENV"
+          echo "CI_BUILD_FAILED=false" >> "$GITHUB_ENV"
+          echo "CI_TEST_FAILED=false" >> "$GITHUB_ENV"
+          echo "CI_FAILED_STAGE=" >> "$GITHUB_ENV"
+          echo "CI_FAILED_STEP=" >> "$GITHUB_ENV"
+          echo "CI_CANCELLED=false" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - name: Install PostgreSQL binaries
-        run: sudo apt-get update && sudo apt-get install -y postgresql
-      - name: Add PostgreSQL binaries to PATH
-        run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
-      - run: npm ci
-      - name: Disposable PostgreSQL harness concurrency stress
+
+      # ── Stage 1: Environment ──────────────────────────────────────────────
+      - name: Environment — PostgreSQL and runner validation
+        id: environment
+        uses: ./.github/actions/setup-postgres-environment
+        with:
+          stage-file: ${{ env.CI_STAGE_FILE }}
+
+      - name: Mark environment failure
+        if: failure() && steps.environment.conclusion == 'failure'
+        run: |
+          echo "CI_ENVIRONMENT_HEALTHY=false" >> "$GITHUB_ENV"
+          echo "CI_FAILED_STAGE=environment" >> "$GITHUB_ENV"
+          echo "CI_FAILED_STEP=Environment — PostgreSQL and runner validation" >> "$GITHUB_ENV"
+
+      # ── Stage 2: Build ────────────────────────────────────────────────────
+      - name: Record build stage start
+        run: echo "CI_STAGE_START_build=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Build — install dependencies
+        id: build
+        run: npm ci
+
+      - name: Record build stage duration
+        if: always()
+        run: |
+          end=$(date +%s)
+          start="${CI_STAGE_START_build:-$end}"
+          duration=$((end - start))
+          node .github/scripts/ci-record-stage.js build "$duration" "$(node -e "console.log(JSON.stringify({cacheHit: process.env.npm_config_cache ? true : false}))")"
+
+      - name: Mark build failure
+        if: failure() && steps.build.conclusion == 'failure'
+        run: |
+          echo "CI_BUILD_FAILED=true" >> "$GITHUB_ENV"
+          echo "CI_FAILED_STAGE=build" >> "$GITHUB_ENV"
+          echo "CI_FAILED_STEP=Build — install dependencies" >> "$GITHUB_ENV"
+
+      # ── Stage 3: Test ─────────────────────────────────────────────────────
+      - name: Record test stage start
+        run: echo "CI_STAGE_START_test=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Test — disposable PostgreSQL harness concurrency stress
         run: npm run test:postgres:harness
-      - name: Disposable PostgreSQL revenue lifecycle
+
+      - name: Test — disposable PostgreSQL revenue lifecycle
         run: npm run test:revenue:postgres
-      - name: Revenue Phase 1.6B controls, failure injection, and offline finalizer
+
+      - name: Test — revenue Phase 1.6B controls and failure injection
         run: npm run test:revenue:phase16b
-      - name: Disposable PostgreSQL Anchor Phone Setter rehearsal
+
+      - name: Test — Anchor Phone Setter disposable PostgreSQL rehearsal
         run: npm run test:anchor-phone-setter:postgres
+
+      - name: Test — mission routing workspace regression suite
+        run: npm run test:ci:application
+
+      - name: Record test stage duration
+        if: always()
+        run: |
+          end=$(date +%s)
+          start="${CI_STAGE_START_test:-$end}"
+          duration=$((end - start))
+          node .github/scripts/ci-record-stage.js test "$duration"
+
+      - name: Mark test failure
+        if: failure() && env.CI_FAILED_STAGE == ''
+        run: |
+          echo "CI_TEST_FAILED=true" >> "$GITHUB_ENV"
+          echo "CI_FAILED_STAGE=test" >> "$GITHUB_ENV"
+          echo "CI_FAILED_STEP=Application/integration test stage" >> "$GITHUB_ENV"
+
+      # ── Stage 4: Deployment Gate (evaluation only — no setup) ─────────────
+      - name: Record deployment gate start
+        if: always()
+        run: echo "CI_STAGE_START_gate=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Deployment gate — classify outcome and emit observability
+        if: always()
+        env:
+          CI_WORKFLOW_CONCLUSION: ${{ job.status }}
+          CI_CANCELLED: ${{ cancelled() }}
+          CI_ENVIRONMENT_HEALTHY: ${{ steps.environment.outputs.environment-healthy != 'false' }}
+        run: |
+          end=$(date +%s)
+          start="${CI_STAGE_START_gate:-$end}"
+          duration=$((end - start))
+          node .github/scripts/ci-record-stage.js deployment-gate "$duration"
+          node .github/scripts/ci-deployment-gate.js
