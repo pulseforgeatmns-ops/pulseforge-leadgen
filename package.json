@@ -24,7 +24,7 @@
     "test:aic": "node --test packages/aic/tests/*.test.js test/acquisitionIntelligenceCompiler.test.js",
     "test:osi": "node --test packages/operator-scorecard/tests/*.test.js test/operatorScorecard.test.js",
     "test:eoi": "node --test packages/emmett-outbound/tests/*.test.js test/emmettOutbound.test.js",
-    "test:amo": "node --test packages/acquisition-mission/tests/*.test.js test/acquisitionMission.test.js",
+    "test:amo": "node --test packages/acquisition-mission/tests/*.test.js test/acquisitionMission.test.js packages/max/workspace/tests/missionContinuationAudit.test.js",
     "test:tenant": "node --test test/tenantWorkspace.test.js test/registrationWorkspace.test.js packages/max/workspace/tests/tenantContext.test.js",
     "aic:compile": "node scripts/aicCompile.js",
     "test:capabilities": "node --test packages/capabilities/tests/*.test.js",

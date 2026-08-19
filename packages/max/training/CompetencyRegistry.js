@@ -435,6 +435,7 @@ const COMPETENCIES = Object.freeze([
     regressionTests: [
       'packages/acquisition-mission/tests/amo.test.js',
       'test/acquisitionMission.test.js',
+      'packages/max/workspace/tests/missionContinuationAudit.test.js',
     ],
     exercises: [{
       id: 'max_manages_missions',
