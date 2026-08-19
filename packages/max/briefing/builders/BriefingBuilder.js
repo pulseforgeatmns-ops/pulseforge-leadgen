@@ -16,6 +16,7 @@ const {
 } = require('../presentation/PresentationAdapter');
 const { BRIEFING_PERIODS } = require('../BriefingTypes');
 const { NODE_TYPES } = require('../../../knowledge');
+const { buildDailyBriefingScorecardSection } = require('../../../operator-scorecard');
 
 /**
  * Briefing Builder — single entry point for operational briefings.
@@ -100,6 +101,7 @@ class BriefingBuilder {
     }
 
     const summary = buildExecutiveSummary({ contexts, window });
+    const scorecard = buildDailyBriefingScorecardSection(input.operatorScorecard || null);
     const priorities = buildPriorityQueue(contexts, {
       prioritizer: this._prioritizer,
       limit: input.priorityLimit,
@@ -128,6 +130,7 @@ class BriefingBuilder {
 
     const briefing = applyBriefingTemplate({
       summary,
+      scorecard,
       priorities,
       changes,
       watchAlerts,

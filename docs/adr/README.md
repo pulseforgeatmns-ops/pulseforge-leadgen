@@ -53,6 +53,7 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-050](ADR-050_Compile_Market_Knowledge_Before_Runtime.md) | Compile Market Knowledge Before Runtime | Accepted |
 | [ADR-051](ADR-051_Provision_Tenant_Before_Intelligence.md) | Provision Tenant Before Intelligence | Accepted |
 | [ADR-052](ADR-052_Workspace_First_Registration.md) | Workspace-First Registration | Accepted |
+| [ADR-053](ADR-053_Business_Success_Is_Operator_Defined.md) | Business Success Is Operator-Defined | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

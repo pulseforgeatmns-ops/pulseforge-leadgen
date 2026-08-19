@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Operator Scorecard</title>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<script src="/shared/shell.js" defer></script>
+<style>
+  body { margin: 0; background: var(--pf-bg, #040810); color: var(--pf-text, #e8f0fe); font-family: 'DM Sans', sans-serif; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+  h1 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.8rem; margin: 0 0 0.35rem; }
+  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 1.25rem; }
+  .panel { background: #070d1a; border: 1px solid rgba(96,48,177,0.18); border-radius: 10px; padding: 1.1rem; margin-bottom: 1rem; }
+  .metric { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0.75rem 0; }
+  .metric h3 { margin: 0 0 0.25rem; font-size: 1rem; }
+  .metric p { margin: 0.2rem 0; color: #9bb0d0; font-size: 0.86rem; line-height: 1.45; }
+  .meta { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; color: #6b7fa0; }
+  .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.55rem; }
+  button { font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1px; text-transform: uppercase; border-radius: 6px; padding: 0.55rem 0.7rem; cursor: pointer; border: 1px solid rgba(139,92,246,0.35); background: rgba(96,48,177,0.2); color: #8b5cf6; }
+  button.secondary { background: transparent; color: #6b7fa0; border-color: rgba(255,255,255,0.12); }
+  button.danger { border-color: rgba(255,59,92,0.4); color: #ff7a93; background: transparent; }
+  input, textarea { width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.55rem 0.65rem; color: #e8f0fe; outline: none; font-family: inherit; }
+  .msg { min-height: 1.2rem; font-size: 0.82rem; color: #6b7fa0; }
+  .msg.err { color: #ff3b5c; }
+  .msg.ok { color: #00e676; }
+  .pill { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1px; text-transform: uppercase; padding: 0.25rem 0.5rem; border-radius: 999px; border: 1px solid rgba(255,255,255,0.12); color: #c4b5fd; margin-right: 0.35rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Operator Scorecard</h1>
+  <p class="sub">SPEC-116 · Max recommends · You approve · Drafts never report</p>
+  <p class="msg" id="msg"></p>
+  <section class="panel" id="statusPanel"></section>
+  <section class="panel">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">Recommended metrics</h2>
+    <div id="metrics"></div>
+    <div class="actions">
+      <button type="button" id="approveBtn">Approve scorecard</button>
+    </div>
+  </section>
+  <section class="panel">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">Add a metric</h2>
+    <input id="newName" placeholder="Metric name, e.g. Referral Partners Created">
+    <div class="actions">
+      <button type="button" id="addBtn">Add</button>
+    </div>
+  </section>
+  <section class="panel" id="promptPanel" hidden>
+    <h2 style="margin:0 0 0.5rem;font-size:1rem;">Optional feedback</h2>
+    <p id="promptText"></p>
+    <textarea id="reason" placeholder="Providing a reason is optional."></textarea>
+    <div class="actions">
+      <button type="button" id="reasonBtn">Save reason</button>
+      <button type="button" class="secondary" id="skipReasonBtn">Skip</button>
+    </div>
+  </section>
+</div>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const msg = $('msg');
+  let scorecard = null;
+  let pendingRemoval = null;
+
+  function setMsg(text, kind) {
+    msg.textContent = text || '';
+    msg.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  async function api(url, opts) {
+    const res = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || data.error || 'Request failed');
+    return data;
+  }
+
+  function render() {
+    const draft = scorecard;
+    const status = $('statusPanel');
+    if (!draft) {
+      status.innerHTML = '<p>No scorecard yet.</p>';
+      return;
+    }
+    status.innerHTML =
+      '<span class="pill">' + (draft.status || 'draft') + '</span>' +
+      '<span class="pill">' + (draft.profile || '').replace(/_/g, ' ') + '</span>' +
+      '<span class="pill">' + (draft.businessStage || '').replace(/_/g, ' ') + '</span>' +
+      '<p>' + (draft.businessGoal || '') + '</p>' +
+      '<p class="meta">Drafts are not used for reporting. Approve to make this the definition of success.</p>';
+    const metrics = (draft.metrics || []).filter((m) => m.status !== 'removed');
+    $('metrics').innerHTML = metrics.map((m) =>
+      '<article class="metric" data-id="' + m.id + '">' +
+        '<h3>' + m.name + '</h3>' +
+        '<div class="meta">' + m.category + ' · ' + m.indicator + ' · ' + Math.round((m.confidence || 0) * 100) + '% · ' + (m.status || '') + '</div>' +
+        '<p>' + (m.reason || '') + '</p>' +
+        '<p>Supports ' + (m.businessOutcome || '') + '</p>' +
+        '<div class="actions">' +
+          '<button type="button" data-act="accept">Accept</button>' +
+          '<button type="button" class="secondary" data-act="modify">Modify</button>' +
+          '<button type="button" class="danger" data-act="remove">Remove</button>' +
+        '</div>' +
+      '</article>'
+    ).join('');
+  }
+
+  async function load() {
+    const data = await api('/api/v1/osi/scorecards');
+    scorecard = data.draft || data.approved;
+    render();
+  }
+
+  async function act(metricId, action, extra) {
+    const data = await api('/api/v1/osi/scorecards/' + scorecard.id + '/metrics/' + metricId + '/review', {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({ action: action }, extra || {})),
+    });
+    scorecard = data.scorecard;
+    if (data.prompt) {
+      pendingRemoval = data.metric;
+      $('promptText').textContent = data.prompt;
+      $('promptPanel').hidden = false;
+    }
+    render();
+    setMsg('Updated.', 'ok');
+  }
+
+  $('metrics').addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn) return;
+    const article = ev.target.closest('.metric');
+    const id = article && article.getAttribute('data-id');
+    const action = btn.getAttribute('data-act');
+    try {
+      if (action === 'modify') {
+        const name = window.prompt('Metric name');
+        if (!name) return;
+        await act(id, 'modify', { name: name });
+        return;
+      }
+      await act(id, action);
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  });
+
+  $('addBtn').addEventListener('click', async () => {
+    try {
+      const name = $('newName').value.trim();
+      if (!name) return;
+      const data = await api('/api/v1/osi/scorecards/' + scorecard.id + '/metrics', {
+        method: 'POST',
+        body: JSON.stringify({ name: name }),
+      });
+      scorecard = data.scorecard;
+      $('newName').value = '';
+      render();
+      setMsg('Metric added.', 'ok');
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  });
+
+  $('approveBtn').addEventListener('click', async () => {
+    try {
+      const data = await api('/api/v1/osi/scorecards/' + scorecard.id + '/approve', { method: 'POST', body: '{}' });
+      scorecard = data.scorecard;
+      render();
+      setMsg('Approved. This scorecard now defines business success.', 'ok');
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  });
+
+  $('reasonBtn').addEventListener('click', async () => {
+    try {
+      if (!pendingRemoval) return;
+      await api('/api/v1/osi/scorecards/' + scorecard.id + '/feedback', {
+        method: 'POST',
+        body: JSON.stringify({ metricId: pendingRemoval.id, reason: $('reason').value }),
+      });
+      $('promptPanel').hidden = true;
+      pendingRemoval = null;
+      setMsg('Feedback saved as operator intelligence.', 'ok');
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  });
+  $('skipReasonBtn').addEventListener('click', () => {
+    $('promptPanel').hidden = true;
+    pendingRemoval = null;
+  });
+
+  load().catch((err) => setMsg(err.message, 'err'));
+})();
+</script>
+</body>
+</html>

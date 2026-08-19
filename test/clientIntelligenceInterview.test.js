@@ -131,7 +131,7 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.equal(turn.executiveSummary.title, 'Executive Business Brief');
     assert.equal(turn.executiveSummary.subtitle, 'Prepared by Max');
     assert.equal(turn.executiveSummary.tagline, 'A working picture for leadership review');
-    assert.equal(turn.executiveSummary.sections.length, 9);
+    assert.equal(turn.executiveSummary.sections.length, 11);
     for (const key of BLUEPRINT_SECTIONS) {
       assert.ok(turn.blueprint.sections[key]);
       assert.ok(Array.isArray(turn.blueprint.sections[key].evidenceIds));
@@ -419,13 +419,15 @@ describe('confidence rules', () => {
     assert.equal(summary.title, 'Executive Business Brief');
     assert.equal(summary.subtitle, 'Prepared by Max');
     assert.equal(summary.tagline, 'A working picture for leadership review');
-    assert.equal(summary.sections.length, 9);
+    assert.equal(summary.sections.length, 11);
     const byId = Object.fromEntries(summary.sections.map((s) => [s.id, s]));
     assert.equal(byId.whoYouAre.title, 'Who You Are');
     assert.equal(byId.whoYouServe.title, 'Who You Serve');
     assert.equal(byId.whyChooseYou.title, 'Why Customers Choose You');
     assert.equal(byId.whereHeaded.title, "Where You're Headed");
-    assert.equal(byId.successLooksLike.title, 'Success Looks Like');
+    assert.equal(byId.recommendedScorecard.title, 'Recommended Operator Scorecard');
+    assert.equal(byId.approvedScorecard.title, 'Operator Approved Scorecard');
+    assert.equal(byId.metricsUnderReview.title, 'Metrics Under Review');
     assert.equal(byId.observations.title, 'Initial Observations');
     assert.equal(byId.assessment.title, "Max's Initial Assessment");
     assert.equal(byId.learnMore.title, "Areas I'd Like To Learn More");
@@ -433,7 +435,7 @@ describe('confidence rules', () => {
 
     const banned =
       /\n|•|Blueprint|operator-stated|ICP|Unknown:|Missing clear answer|Generated from|evidenceId|sectionKey|CIE-v|prompt artifact/i;
-    for (const section of [byId.whoYouAre, byId.whoYouServe, byId.whyChooseYou, byId.whereHeaded, byId.successLooksLike]) {
+    for (const section of [byId.whoYouAre, byId.whoYouServe, byId.whyChooseYou, byId.whereHeaded]) {
       const sentences = section.body.split(/(?<=[.!?])\s+/).filter(Boolean);
       assert.ok(sentences.length >= 2 && sentences.length <= 4, `${section.id}: ${sentences.length}`);
       assert.equal(banned.test(section.body), false, section.body);
@@ -660,8 +662,8 @@ describe('Executive Brief refinement / evidence separation', () => {
     assert.match(byId.whyChooseYou.body, /calm|professional|reliable|direct/i);
     assert.match(byId.whereHeaded.body, /commercial cleaning|Greater Manchester/i);
     assert.match(
-      byId.successLooksLike.body,
-      /qualified conversations|walkthroughs|estimate|commercial opportunities/i
+      JSON.stringify(byId.recommendedScorecard),
+      /qualified conversations|walkthroughs|estimate|commercial opportunities|qualified prospects/i
     );
 
     // Polished synthesis — not Mad-Lib raw concatenation templates
@@ -1243,10 +1245,10 @@ describe('Executive Brief synthesis — no raw answer bleed', () => {
     assert.match(byId.whereHeaded.body, /commercial cleaning|Greater Manchester|near-term priority/i);
     assert.equal(/Near-term growth priorities center on over the next/i.test(byId.whereHeaded.body), false);
     assert.match(
-      byId.successLooksLike.body,
-      /Success should be measured by|qualified replies|walkthroughs|estimate/i
+      JSON.stringify(byId.recommendedScorecard),
+      /Success should be measured by|qualified replies|walkthroughs|estimate|Qualified Prospects/i
     );
-    assert.equal(/Success will be judged by we will know/i.test(byId.successLooksLike.body), false);
+    assert.equal(/Success will be judged by we will know/i.test(JSON.stringify(byId.recommendedScorecard)), false);
     assert.equal(/i don't want to work with/i.test(byId.whoYouServe.body), false);
   });
 });

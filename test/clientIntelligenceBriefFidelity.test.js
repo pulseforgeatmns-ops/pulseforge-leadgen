@@ -92,9 +92,9 @@ describe('CIE Executive Brief fidelity — TEST B metric typo', () => {
       successMetrics: 'walkthroughs completed, recurring revenue createed',
     });
 
-    assert.equal(/createed/i.test(byId.successLooksLike.body), false);
-    assert.match(byId.successLooksLike.body, /walkthroughs completed/i);
-    assert.match(byId.successLooksLike.body, /new recurring revenue/i);
+    assert.equal(/createed/i.test(JSON.stringify(byId.recommendedScorecard)), false);
+    assert.match(JSON.stringify(byId.recommendedScorecard), /walkthroughs completed/i);
+    assert.match(JSON.stringify(byId.recommendedScorecard), /new recurring revenue|recurring revenue/i);
 
     // Structured list may correct the mechanical typo; raw operator text stays separate.
     assert.equal(

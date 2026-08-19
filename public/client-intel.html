@@ -1538,10 +1538,40 @@
             : '') +
           (section.body ? '<p style="margin-top:0.65rem">' + escapeHtml(section.body) + '</p>' : '');
       } else if (kind === 'list') {
-        inner =
+          inner =
           (section.body ? '<p>' + escapeHtml(section.body) + '</p>' : '') +
           '<ul class="exec-list">' +
-            (section.items || []).map((item) => '<li>' + escapeHtml(item) + '</li>').join('') +
+            (section.items || []).map((item) => {
+              if (item && typeof item === 'object') {
+                return '<li><strong>' + escapeHtml(item.name || item.label || '') + '</strong>' +
+                  (item.reason ? ' — ' + escapeHtml(item.reason) : '') +
+                  (item.businessOutcome ? ' Supports ' + escapeHtml(item.businessOutcome) + '.' : '') +
+                  (item.confidencePercent != null ? ' Confidence ' + escapeHtml(String(item.confidencePercent)) + '%.' : '') +
+                  '</li>';
+              }
+              return '<li>' + escapeHtml(item) + '</li>';
+            }).join('') +
+          '</ul>';
+      } else if (kind === 'scorecard') {
+        inner =
+          (section.body ? '<p>' + escapeHtml(section.body) + '</p>' : '') +
+          '<ul class="exec-list scorecard-list">' +
+            (section.items || []).map((item) => {
+              if (!item || typeof item !== 'object') {
+                return '<li>' + escapeHtml(item) + '</li>';
+              }
+              return '<li class="scorecard-metric">' +
+                '<strong>' + escapeHtml(item.name || '') + '</strong>' +
+                (item.reason ? '<div>' + escapeHtml(item.reason) + '</div>' : '') +
+                (item.businessOutcome ? '<div>Supports ' + escapeHtml(item.businessOutcome) + '</div>' : '') +
+                '<div class="assessment-explain">' +
+                  escapeHtml(
+                    [item.category, item.indicator, item.confidencePercent != null ? item.confidencePercent + '%' : '']
+                      .filter(Boolean)
+                      .join(' · ')
+                  ) +
+                '</div></li>';
+            }).join('') +
           '</ul>';
       } else {
         inner = '<p>' + escapeHtml(section.body || '') + '</p>';

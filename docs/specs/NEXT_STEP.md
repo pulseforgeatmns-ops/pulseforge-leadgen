@@ -1,5 +1,7 @@
 # NEXT STEP
 
+SPEC-116 is implemented (v1 thin slice): Operator Scorecard Intelligence. Max reasons from business objectives and recommends explainable metrics. Operators accept, modify, remove, reorder, or add. Only the approved scorecard is the definition of success. Drafts never report. Executive Business Briefs distinguish Recommended / Approved / Under Review. Daily briefings consume the approved scorecard.
+
 SPEC-115 is implemented (v1 thin slice): Pilot 0 admin-provisioned onboarding. Create tenant + client user + temporary password in the admin UI. The client changes password, completes Client Intelligence, publishes an AIM, asks Max, and Scout returns tenant-scoped prospects. No SQL. Public signup and email verification are out of scope.
 
 SPEC-114 is implemented (v1 thin slice): an operator creates a tenant in the product, PulseForge provisions an empty isolated workspace, and Max fail-closes without an active tenant. The Fedir AIM seed is not a live tenant — create Fedir through `/admin/clients`.
@@ -13,7 +15,8 @@ SPEC-111 remains implemented: Max classifies operator intent into an explicit an
 Recommended next work, in order:
 
 1. **Pilot 0 through the product** — Create tenant, create client user with a temporary password, force password change, complete Client Intelligence, compile and publish an AIM, ask Max, run Scout. If any step needs SQL, that is the next product gap (ADR-052).
-2. **Durable assimilation of verified operator corrections** — persist *verified* working-model corrections after claim grounding, without treating Max-generated statements as operating fact. This is the next knowledge-layer milestone; do not start it by weakening SPEC-108, SPEC-109, SPEC-110, SPEC-111, SPEC-112, SPEC-113, SPEC-114, or SPEC-115.
+2. **Wire Scout and campaign evaluation to the approved scorecard** — SPEC-116 exports runtime helpers; consumers beyond Brief and Daily Briefing land in a later slice.
+3. **Durable assimilation of verified operator corrections** — persist *verified* working-model corrections after claim grounding, without treating Max-generated statements as operating fact. This is the next knowledge-layer milestone; do not start it by weakening SPEC-108, SPEC-109, SPEC-110, SPEC-111, SPEC-112, SPEC-113, SPEC-114, SPEC-115, or SPEC-116.
 3. **Fedir live pilot (operational)** — 50 qualified prospects and outreach begin. The AIM engine already reports this honestly as unmet.
 5. **CIE typo-repair cleanup** — `app` → `gap` still inflates `unknowns` on CIE-claimed turns. This is no longer a Pilot blocker. Fix it as a narrow CIE semantic-contamination patch.
 6. **Event C confirmation UX** — SPEC-106 v1 fail-closes on silent AO cohort mutation. If operators confirm follow-up scheduling, write `ao_follow_up_tasks` / `next_follow_up_date` behind an explicit confirmation turn.

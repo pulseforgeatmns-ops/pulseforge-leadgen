@@ -51,6 +51,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-050](docs/adr/ADR-050_Compile_Market_Knowledge_Before_Runtime.md) | Compile Market Knowledge Before Runtime | Accepted | Market documents compile into an approved AIM; Scout loads only published AIMs; the compiler never executes outreach |
 | [ADR-051](docs/adr/ADR-051_Provision_Tenant_Before_Intelligence.md) | Provision Tenant Before Intelligence | Accepted | A tenant is provisioned before intelligence begins; every workspace starts empty; missing tenant fails closed |
 | [ADR-052](docs/adr/ADR-052_Workspace_First_Registration.md) | Workspace-First Registration | Accepted | Customers register without SQL; the workspace is created first; users belong to workspaces; Max owns the first conversation |
+| [ADR-053](docs/adr/ADR-053_Business_Success_Is_Operator_Defined.md) | Business Success Is Operator-Defined | Accepted | Max recommends explainable metrics; the operator-approved scorecard is the canonical definition of success; drafts never report |
 
 ## How to add a decision
 

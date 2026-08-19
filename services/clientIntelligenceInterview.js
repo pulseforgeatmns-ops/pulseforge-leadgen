@@ -39,6 +39,10 @@ const {
   cloneAnchorNormalizedFacts,
 } = require('./clientIntelligenceFixtures');
 const {
+  generateDraftScorecard,
+  buildBriefScorecardSections,
+} = require('../packages/operator-scorecard');
+const {
   buildGrowthPlan,
   resolveGrowthPlanResumeTarget,
   applyTaskCompletion,
@@ -3978,11 +3982,52 @@ function composeConversationStarters(sections, learnMoreItems) {
 }
 
 /**
+ * SPEC-116 — scorecard sections for the Executive Business Brief.
+ * Replaces "Success Looks Like". Distinguishes Max recommendations from
+ * operator-approved metrics. Drafts are never presented as approved truth.
+ */
+function buildOperatorScorecardBriefSections(sections, opts = {}) {
+  if (opts.operatorScorecard) {
+    return buildBriefScorecardSections(opts.operatorScorecard);
+  }
+  const facts = opts.normalizedFacts || null;
+  const goalFromFacts = facts && (facts.ninety_day_outcomes || facts.growth_focus);
+  const businessGoal =
+    opts.businessGoal ||
+    (Array.isArray(goalFromFacts) ? goalFromFacts.join('; ') : goalFromFacts) ||
+    (sections && sections.campaignGoals && sections.campaignGoals.summary) ||
+    'Establish a repeatable acquisition process.';
+  try {
+    const draft = generateDraftScorecard({
+      tenantId: opts.tenantId || (opts.clientId != null ? String(opts.clientId) : 'brief'),
+      clientId: opts.clientId || null,
+      businessName: opts.businessName,
+      businessGoal,
+      blueprint: { sections },
+      normalizedFacts: facts,
+      objectives: facts && facts.ninety_day_outcomes,
+      operatorMetrics: facts && facts.success_metrics,
+      aim: opts.aim || null,
+      outcomes: opts.outcomes || null,
+      learning: opts.scorecardLearning || null,
+    });
+    return buildBriefScorecardSections(draft);
+  } catch (_err) {
+    return buildBriefScorecardSections({
+      status: 'draft',
+      metrics: [],
+      reasoning: { extraExplore: ['qualified replies', 'booked conversations', 'estimate requests'] },
+    });
+  }
+}
+
+/**
  * SPEC-085 — Executive Business Brief.
  * CEO-facing synthesis from a senior consultant. Never concatenates raw
  * interview wording or exposes implementation metadata.
  * Only business interview answers become evidence; refinement instructions
  * are sanitized out before render.
+ * SPEC-116 replaces Success Looks Like with operator scorecard sections.
  */
 function buildExecutiveSummary(sections, opts = {}) {
   const normalizedFacts =
@@ -4172,6 +4217,12 @@ function buildExecutiveSummary(sections, opts = {}) {
   whereHeaded = normalizePresentationProse(whereHeaded);
   successLooksLike = normalizePresentationProse(successLooksLike);
 
+  const scorecardSections = buildOperatorScorecardBriefSections(clean, {
+    ...opts,
+    businessName,
+    normalizedFacts,
+  });
+
   return {
     title: 'Executive Business Brief',
     subtitle: 'Prepared by Max',
@@ -4201,12 +4252,7 @@ function buildExecutiveSummary(sections, opts = {}) {
         kind: 'prose',
         body: whereHeaded,
       },
-      {
-        id: 'successLooksLike',
-        title: 'Success Looks Like',
-        kind: 'prose',
-        body: successLooksLike,
-      },
+      ...scorecardSections,
       {
         id: 'observations',
         title: 'Initial Observations',
@@ -4262,6 +4308,8 @@ function withExperienceFields(session, payload = {}) {
     out.executiveSummary = buildExecutiveSummary(payload.blueprint.sections, {
       normalizedFacts,
       interviewState: session && session.interview_state,
+      clientId: session && (session.client_id || session.clientId),
+      tenantId: session && (session.client_id || session.clientId),
     });
   }
   return out;
