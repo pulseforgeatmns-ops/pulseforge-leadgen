@@ -6,6 +6,17 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Client Tenant Creation & Activation ([SPEC-114](docs/specs/SPEC-114_Client_Tenant_Creation.md), [ADR-051](docs/adr/ADR-051_Provision_Tenant_Before_Intelligence.md))
+  - Operator creates a client from required/optional fields — no developer SQL
+  - Automatic provision of isolated knowledge, mission, prospect, outcome, and AIM namespaces
+  - Empty initial workspace: Client Intelligence Not Started, no published AIM
+  - Activate tenant; Max executes inside that `tenant_id`
+  - Fail closed when no tenant is selected: `No active client selected.`
+  - Max onboarding greeting on a new tenant dashboard
+  - `/admin/clients` + New client control in the shell
+  - Competency `client_tenant_creation` graduated 2026-08-18
+  - Numbering: the product brief called this SPEC-112; repository SPEC-112 remains Acquisition Intelligence Model
+
 - Acquisition Intelligence Compiler ([SPEC-113](docs/specs/SPEC-113_Acquisition_Intelligence_Compiler.md), [ADR-050](docs/adr/ADR-050_Compile_Market_Knowledge_Before_Runtime.md))
   - Ingest market documents into a draft Acquisition Intelligence Workspace
   - Extract sourced concepts (mission, ICP, pain, signals, language) — not summaries

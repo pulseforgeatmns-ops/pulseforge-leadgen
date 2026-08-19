@@ -45,5 +45,6 @@ The product brief called this SPEC-110. Repository SPEC-110 is Business Intellig
 - [x] Scout attaches AIM qualification when an AIM is present
 - [x] Paige consumes AIM briefing when qualification is present
 - [x] SPEC-113 compiler from market documents (ADR-050)
-- [ ] Live Fedir client row + 50-prospect pilot (operational, not this ADR)
+- [x] Live Fedir client row is created through SPEC-114 `/admin/clients` (not a seed INSERT)
+- [ ] 50-prospect pilot (operational, not this ADR)
 - [ ] Operator UI for editing AIM knowledge

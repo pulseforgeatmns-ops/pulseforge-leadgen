@@ -75,6 +75,12 @@
 .pf-shell-nav .pf-nav-tenant-select:focus-visible {
   outline: 2px solid var(--pf-gold); outline-offset: 2px;
 }
+.pf-shell-nav .pf-nav-create-client {
+  color: var(--pf-gold); text-decoration: none;
+  padding: 6px 10px; border-radius: 999px;
+  border: 1px solid rgba(154, 123, 45, 0.45);
+  min-height: 32px; display: inline-flex; align-items: center;
+}
 .pf-shell-nav .pf-nav-who { color: var(--pf-nav-muted); padding: 6px 4px; white-space: nowrap; }
 /* SPEC-099 — client workspace identity (company, not person) */
 .pf-shell-nav .pf-nav-who.pf-nav-workspace {

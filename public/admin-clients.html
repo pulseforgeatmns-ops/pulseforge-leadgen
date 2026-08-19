@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Create Client</title>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<script src="/shared/shell.js" defer></script>
+<style>
+  body { margin: 0; background: var(--pf-bg, #040810); color: var(--pf-text, #e8f0fe); font-family: 'DM Sans', sans-serif; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+  h1 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.8rem; margin: 0 0 0.35rem; }
+  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 1.25rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: #070d1a; border: 1px solid rgba(96,48,177,0.18); border-radius: 10px; padding: 1rem; }
+  .panel h2 { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; letter-spacing: 1.4px; text-transform: uppercase; margin: 0 0 0.85rem; color: #8b5cf6; }
+  label { display: block; font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; letter-spacing: 1px; text-transform: uppercase; color: #6b7fa0; margin: 0.55rem 0 0.25rem; }
+  input, textarea, select { width: 100%; box-sizing: border-box; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 0.65rem 0.7rem; color: #e8f0fe; outline: none; font-family: inherit; }
+  textarea { min-height: 72px; resize: vertical; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; }
+  button { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; border-radius: 6px; padding: 0.7rem 0.9rem; cursor: pointer; border: 1px solid rgba(139,92,246,0.35); background: rgba(96,48,177,0.2); color: #8b5cf6; }
+  button.secondary { background: transparent; color: #6b7fa0; border-color: rgba(255,255,255,0.12); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .actions { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+  .msg { min-height: 1.2rem; font-size: 0.82rem; color: #6b7fa0; margin: 0.4rem 0 0.8rem; }
+  .msg.err { color: #ff3b5c; }
+  .msg.ok { color: #00e676; }
+  .status-list { list-style: none; padding: 0; margin: 0; }
+  .status-list li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.45rem 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.86rem; }
+  .status-list span { color: #6b7fa0; font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; }
+  .greeting { white-space: pre-wrap; line-height: 1.5; background: rgba(139,92,246,0.08); border: 1px solid rgba(139,92,246,0.25); border-radius: 8px; padding: 0.9rem; margin-top: 0.75rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+  th { font-family: 'JetBrains Mono', monospace; font-size: 0.55rem; letter-spacing: 1.2px; text-transform: uppercase; color: #3a4a6a; text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid rgba(96,48,177,0.18); }
+  td { padding: 0.5rem 0.35rem; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .hint { color: #6b7fa0; font-size: 0.75rem; line-height: 1.45; margin-bottom: 0.75rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Create Client</h1>
+  <p class="sub">SPEC-114 · Tenant provision · No database work</p>
+  <p class="msg" id="msg"></p>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>New tenant</h2>
+      <p class="hint">Required fields provision an isolated workspace. Client Intelligence and AIM start empty. Nothing is copied from another tenant.</p>
+      <form id="createForm">
+        <label for="companyName">Company Name *</label>
+        <input id="companyName" name="companyName" required maxlength="200" placeholder="Fedir">
+        <label for="primaryContact">Primary Contact *</label>
+        <input id="primaryContact" name="primaryContact" required maxlength="200" placeholder="Founder name">
+        <label for="email">Email *</label>
+        <input id="email" name="email" type="email" required placeholder="founders@example.com">
+        <div class="row2">
+          <div>
+            <label for="industry">Industry *</label>
+            <input id="industry" name="industry" required placeholder="Founder-led agencies">
+          </div>
+          <div>
+            <label for="country">Country *</label>
+            <input id="country" name="country" required placeholder="United States">
+          </div>
+        </div>
+        <label for="timezone">Time Zone *</label>
+        <input id="timezone" name="timezone" required placeholder="America/New_York">
+        <div class="row2">
+          <div>
+            <label for="website">Website</label>
+            <input id="website" name="website" placeholder="https://">
+          </div>
+          <div>
+            <label for="phone">Phone</label>
+            <input id="phone" name="phone" placeholder="+1 …">
+          </div>
+        </div>
+        <label for="logoUrl">Logo URL</label>
+        <input id="logoUrl" name="logoUrl" placeholder="https://">
+        <label for="notes">Notes</label>
+        <textarea id="notes" name="notes" placeholder="Operator notes — not copied into intelligence"></textarea>
+        <div class="actions">
+          <button type="submit" id="createBtn">Create tenant</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel">
+      <h2>Active workspace</h2>
+      <p class="hint">Activate a tenant so every Max request executes inside that workspace.</p>
+      <label for="activateSelect">Current Active Client</label>
+      <select id="activateSelect"></select>
+      <div class="actions">
+        <button type="button" id="activateBtn">Activate</button>
+        <button type="button" class="secondary" id="refreshBtn">Refresh</button>
+      </div>
+      <ul class="status-list" id="statusList"></ul>
+      <div class="greeting" id="greeting" hidden></div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:1rem;">
+    <h2>Tenants</h2>
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Name</th><th>Slug</th><th></th></tr>
+      </thead>
+      <tbody id="clientRows"></tbody>
+    </table>
+  </section>
+</div>
+<script>
+  const msg = document.getElementById('msg');
+  const statusList = document.getElementById('statusList');
+  const greetingEl = document.getElementById('greeting');
+  const activateSelect = document.getElementById('activateSelect');
+  const clientRows = document.getElementById('clientRows');
+
+  function setMsg(text, kind) {
+    msg.textContent = text || '';
+    msg.className = 'msg' + (kind ? ' ' + kind : '');
+  }
+
+  async function api(url, opts) {
+    const res = await fetch(url, {
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', ...(opts && opts.headers || {}) },
+      ...opts,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || data.error || ('Request failed ' + res.status));
+    }
+    return data;
+  }
+
+  function renderStatus(snapshot) {
+    const status = snapshot.status || {};
+    const rows = [
+      ['Client Intelligence', status.clientIntelligence && status.clientIntelligence.status],
+      ['AIM', status.aim && status.aim.status],
+      ['Missions', status.missions && status.missions.status],
+      ['Prospects', status.prospects && status.prospects.status],
+      ['Outcomes', status.outcomes && status.outcomes.status],
+      ['Knowledge', status.knowledge && status.knowledge.status],
+    ];
+    statusList.innerHTML = rows.map(([k, v]) =>
+      '<li><strong>' + k + '</strong><span>' + (v || '—') + '</span></li>'
+    ).join('');
+    if (snapshot.greeting && snapshot.greeting.fullText) {
+      greetingEl.hidden = false;
+      greetingEl.textContent = snapshot.greeting.fullText;
+    } else {
+      greetingEl.hidden = true;
+      greetingEl.textContent = '';
+    }
+  }
+
+  async function loadClients() {
+    const data = await api('/api/clients');
+    const clients = data.clients || [];
+    activateSelect.innerHTML = clients.map((c) =>
+      '<option value="' + c.id + '"' +
+      (Number(c.id) === Number(data.active_client_id) ? ' selected' : '') +
+      '>' + (c.name || ('Client ' + c.id)) + '</option>'
+    ).join('');
+    clientRows.innerHTML = clients.map((c) =>
+      '<tr><td>' + c.id + '</td><td>' + (c.name || '') + '</td><td>' + (c.slug || '') +
+      '</td><td><button type="button" class="secondary" data-activate="' + c.id + '">Activate</button></td></tr>'
+    ).join('');
+    return data;
+  }
+
+  async function loadWorkspace(clientId) {
+    if (!clientId) return;
+    const snapshot = await api('/api/clients/' + clientId + '/workspace');
+    renderStatus(snapshot);
+    return snapshot;
+  }
+
+  async function activate(clientId) {
+    const snapshot = await api('/api/v1/tenant/activate', {
+      method: 'POST',
+      body: JSON.stringify({ client_id: Number(clientId) }),
+    });
+    setMsg('Active tenant is ' + (snapshot.client && snapshot.client.name) + '.', 'ok');
+    renderStatus(snapshot);
+    await loadClients();
+    document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed', {
+      detail: { active_client_id: snapshot.active_client_id, tenantName: snapshot.client && snapshot.client.name },
+    }));
+  }
+
+  document.getElementById('createForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = document.getElementById('createBtn');
+    btn.disabled = true;
+    setMsg('Provisioning workspace…');
+    try {
+      const body = {
+        companyName: document.getElementById('companyName').value,
+        primaryContact: document.getElementById('primaryContact').value,
+        email: document.getElementById('email').value,
+        industry: document.getElementById('industry').value,
+        country: document.getElementById('country').value,
+        timezone: document.getElementById('timezone').value,
+        website: document.getElementById('website').value,
+        logoUrl: document.getElementById('logoUrl').value,
+        phone: document.getElementById('phone').value,
+        notes: document.getElementById('notes').value,
+      };
+      const created = await api('/api/clients', { method: 'POST', body: JSON.stringify(body) });
+      setMsg('Created ' + created.client.name + ' (id ' + created.client.id + '). Activate it to work in that tenant.', 'ok');
+      renderStatus(created);
+      await loadClients();
+      activateSelect.value = String(created.client.id);
+    } catch (err) {
+      setMsg(err.message, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('activateBtn').addEventListener('click', () => {
+    activate(activateSelect.value).catch((err) => setMsg(err.message, 'err'));
+  });
+  document.getElementById('refreshBtn').addEventListener('click', () => {
+    loadClients()
+      .then((data) => loadWorkspace(activateSelect.value || data.active_client_id))
+      .catch((err) => setMsg(err.message, 'err'));
+  });
+  clientRows.addEventListener('click', (ev) => {
+    const id = ev.target && ev.target.getAttribute && ev.target.getAttribute('data-activate');
+    if (id) activate(id).catch((err) => setMsg(err.message, 'err'));
+  });
+
+  loadClients()
+    .then((data) => loadWorkspace(data.active_client_id))
+    .catch((err) => setMsg(err.message, 'err'));
+</script>
+</body>
+</html>

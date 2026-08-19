@@ -49,6 +49,13 @@ const CLIENT_COLUMNS = [
   // cleaning company uses 'cleaning_buyer', a commercial-cleaning BUYER
   // rubric (professional-services offices), NOT the lead-gen-target rubric.
   ['scoring_profile', 'text'],
+  // SPEC-114 — operator-facing tenant identity collected at create time.
+  ['primary_contact', 'text'],
+  ['industry', 'text'],
+  ['country', 'text'],
+  ['timezone', 'text'],
+  ['logo_url', 'text'],
+  ['notes', 'text'],
   ['warmup_start_date', 'date'],
   ['autosend_enabled', 'boolean default false'],
   ['active', 'boolean default true'],
