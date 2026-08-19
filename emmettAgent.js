@@ -18,6 +18,7 @@ const {
   getBrevoState,
 } = require('./utils/sendingReadiness');
 const { notSyntheticSql } = require('./utils/callDispositions');
+const outboundIntel = require('./services/emmettOutbound');
 
 const AGENT_NAME = 'emmett';
 let FROM_EMAIL = null;
@@ -1319,6 +1320,60 @@ async function completeEmailSendLog(logId, action, payload, status = 'completed'
   `, [action, status, JSON.stringify(payload), logId, CLIENT_ID]);
 }
 
+async function applyOutboundGate({ alreadySentToday, sendConfig }) {
+  try {
+    const pool = require('./db');
+    await outboundIntel.hydrateTenant(String(CLIENT_ID), { pool });
+    const snapshot = await outboundIntel.buildInboxSnapshot(CLIENT_ID, {
+      pool,
+      providerCeiling: sendConfig.dailyCap,
+      warmupStages: sendConfig.warmup?.stages || [],
+    });
+    snapshot.sentToday = alreadySentToday;
+    const assessed = outboundIntel.getEngine().assess({
+      tenantId: String(CLIENT_ID),
+      clientId: CLIENT_ID,
+      snapshot,
+    });
+    const { governor, capacity, approvedPlan } = assessed;
+    if (governor.halt) {
+      return {
+        allowRun: false,
+        reason: governor.outcome,
+        governor,
+        capacity,
+        approvedPlan,
+        localDate: snapshot.localDate,
+      };
+    }
+    if (!approvedPlan) {
+      return {
+        allowRun: false,
+        reason: 'awaiting_operator_approval',
+        governor,
+        capacity,
+        approvedPlan,
+        localDate: snapshot.localDate,
+      };
+    }
+    const reasonedCap = Number(approvedPlan.approvedCapacity || capacity.recommended || 0);
+    const slowCap = governor.slowCap || reasonedCap;
+    return {
+      allowRun: true,
+      reason: governor.outcome,
+      governor,
+      capacity,
+      approvedPlan,
+      localDate: snapshot.localDate,
+      dailyCap: Math.max(0, Math.min(sendConfig.dailyCap, reasonedCap, slowCap)),
+      allowLegacySequences: approvedPlan.allowLegacySequences === true,
+    };
+  } catch (err) {
+    console.error('[Emmett] Outbound intelligence gate failed closed:', err.message);
+    return { allowRun: false, reason: 'governor_unavailable', error: err.message };
+  }
+}
+
 async function logSendingReadinessBlocked(readiness, stage) {
   const failureCodes = readiness.failures.map(failure => failure.code);
   console.error(
@@ -1723,6 +1778,28 @@ async function run(context = {}) {
     sendConfig = { ...sendConfig, dailyCap: Math.min(getEmmettClientConfig(CLIENT_ID).dailyCap, capOverride) };
   }
   const alreadySentToday = await getEmailsSentToday();
+  const outboundGate = await applyOutboundGate({ alreadySentToday, sendConfig });
+  if (!outboundGate.allowRun) {
+    console.warn(`[Emmett] Safe Send Governor blocked the run: ${outboundGate.reason}`);
+    await db.logAgentAction(
+      AGENT_NAME,
+      'cron_run',
+      null,
+      null,
+      {
+        sent: 0,
+        prospects_evaluated: 0,
+        already_sent_today: alreadySentToday,
+        client_id: CLIENT_ID,
+        reason: outboundGate.reason,
+        governor: outboundGate.governor || null,
+        capacity: outboundGate.capacity || null,
+      },
+      outboundGate.reason === 'emergency' ? 'failed' : 'skipped'
+    );
+    return finish({ idle: true, reason: outboundGate.reason });
+  }
+  sendConfig = { ...sendConfig, dailyCap: outboundGate.dailyCap };
   const remainingCapacity = Math.max(0, sendConfig.dailyCap - alreadySentToday);
   const warmupLabel = sendConfig.warmupProgress
     ? ` (warmup send-day ${sendConfig.warmupProgress.activeSendDays},${sendConfig.warmupProgress.reset ? ' reset,' : ''} ceiling ${getEmmettClientConfig(CLIENT_ID).dailyCap})`
@@ -1938,6 +2015,45 @@ async function run(context = {}) {
       await logSendingReadinessBlocked(finalReadiness, 'pre_send');
       continue;
     }
+    const sendDecision = outboundIntel.canSend({
+      tenantId: String(CLIENT_ID),
+      localDate: outboundGate.localDate,
+      governor: outboundGate.governor,
+      capacity: outboundGate.capacity,
+      approvedPlan: outboundGate.approvedPlan,
+      sentToday: alreadySentToday + sent,
+      allowLegacySequences: outboundGate.allowLegacySequences,
+      candidate: {
+        id: prospect.id,
+        email: prospect.email,
+        dnc: prospect.do_not_contact === true,
+        contentSource: outboundGate.allowLegacySequences ? 'legacy_sequence' : 'paige',
+        paige: {
+          source: outboundGate.allowLegacySequences ? 'legacy_sequence' : 'paige',
+          author: outboundGate.allowLegacySequences ? 'legacy_sequence' : 'paige',
+          subject,
+          body,
+        },
+      },
+    });
+    if (!sendDecision.allowed) {
+      skipped++;
+      console.warn(`[Emmett] Governor blocked ${prospect.email}: ${sendDecision.code} — ${sendDecision.reason}`);
+      await db.logAgentAction(
+        AGENT_NAME,
+        'governor_blocked',
+        prospect.id,
+        null,
+        {
+          code: sendDecision.code,
+          reason: sendDecision.reason,
+          prospect_id: prospect.id,
+          client_id: CLIENT_ID,
+        },
+        'skipped'
+      );
+      continue;
+    }
     const sendLogId = await createEmailSendLog(prospect, logPayload);
     attempts++;
     const result = await sendEmail(
@@ -2018,7 +2134,7 @@ async function run(context = {}) {
   }
 }
 
-module.exports = { run, checkSendingDomainHealth };
+module.exports = { run, checkSendingDomainHealth, applyOutboundGate };
 
 if (require.main === module) {
   run().catch(async (err) => {

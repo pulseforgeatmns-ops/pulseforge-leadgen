@@ -35,7 +35,7 @@ Each agent is a standalone JS module that reads from the DB and writes results b
 |---|---|---|
 | `maxAgent.js` | Max | Daily manager briefing — pulls system snapshot, generates AI summary of pipeline health |
 | `paigeAgent.js` | Paige | Content creation — writes posts for GBP, Facebook, LinkedIn; queues to `pending_comments` for approval |
-| `emmettAgent.js` | Emmett | Email outreach — writes and sends cold email sequences via Brevo API |
+| `emmettAgent.js` | Emmett | Outbound infrastructure — Safe Send Governor, explainable inbox health/capacity, operator-approved daily queue (SPEC-117). Does not write copy. |
 | `rileyAgent.js` | Riley | Inbound triage — reads Gmail inbox, classifies replies from known prospects (interested/not_now/unsubscribe/out_of_office/wrong_person/negative), updates prospect status, logs inbound touchpoints, deposits action cards for interested replies. Also processes Brevo email event webhooks. |
 | `warmSignalAgent.js` | Warm Signal | Detects 2+ opens in 7 days, writes 🔥 2ND OPEN flag to Setter Lead List Google Sheet |
 | `setterHandoffAgent.js` | handoff_utility | Runs after Scout to evaluate newly inserted prospect rows. Applies scoring threshold and writes qualified leads to the setter queue with `setter_status = 'new'` and `setter_visible = true`. Also serves as a backfill agent for historical prospects that were never handed off. Triggered post-Scout via n8n/Railway cron or manual invocation. |
