@@ -430,15 +430,30 @@ function buildEngineMissionCommunication(mission, opts = {}) {
   const currentUnderstanding = [];
   if (mission.discoveryProfile) {
     currentUnderstanding.push({
-      label: `Discovery profile: ${mission.discoveryProfile.name}`,
+      label: `Discovery Profile: ${mission.discoveryProfile.name}`,
       done: true,
     });
   }
   if (mission.operatorProspectList && mission.operatorProspectList.injected) {
     currentUnderstanding.push({
-      label: `Operator prospect list imported (${mission.operatorProspectList.prospectCount})`,
+      label: `Operator ProspectList imported (${mission.operatorProspectList.prospectCount} prospects). Discovery marked Satisfied (Operator Supplied).`,
       done: true,
     });
+  }
+
+  if (
+    mission.operatorProspectList &&
+    mission.operatorProspectList.promptImport &&
+    !mission.operatorProspectList.injected
+  ) {
+    nextStep = `Detected a ProspectList in your prompt (${mission.operatorProspectList.prospectCount || 'partial'} rows). Open Mission Workspace to Import Prospect List.`;
+    operatorDecision = 'Import detected ProspectList?';
+  } else if (
+    mission.operatorProspectList &&
+    mission.operatorProspectList.injected
+  ) {
+    nextStep =
+      'Operator ProspectList imported. Continuing at Business Intelligence.';
   }
 
   const comm = buildMissionCommunication({
