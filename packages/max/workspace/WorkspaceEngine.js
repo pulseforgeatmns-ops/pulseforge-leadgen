@@ -469,6 +469,7 @@ class WorkspaceEngine {
         context: rawContext || session.context,
         acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
         acquisitionMissionService: this._acquisitionMissionService || undefined,
+        missionEngine: this._missionEngine || undefined,
       });
       if (amoExecutionTurn) {
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;

@@ -59,6 +59,10 @@ function createMission(input = {}) {
     constraints: Array.isArray(input.constraints) ? input.constraints.map(asText).filter(Boolean) : [],
     blockers: [],
     progressPercent: 8,
+    pendingOperatorDecision:
+      stage === STAGES.DISCOVER
+        ? { stage: STAGES.DISCOVER, prompt: 'Approve discovery?' }
+        : null,
     createdAt: now,
     updatedAt: now,
   };
