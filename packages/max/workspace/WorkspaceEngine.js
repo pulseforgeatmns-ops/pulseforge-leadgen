@@ -151,21 +151,17 @@ const {
 const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
 
 /**
- * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 routing.
+ * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 + SPEC-125 routing.
  *
- * Execution flow (operator intent owns the subsystem):
+ * Execution flow (ownership-first):
  *   Operator Input
  *   → Resolve tenant/operator/client
- *   → Retrieve active objectives (SPEC-095)
- *   → Reference resolution
- *   → Intent Understanding in context (via selectExecutionDomain)
- *   → Select Execution Domain
- *   → Select/Attach Context
- *   → Execute (Mission Engine | domain-owned intelligence)
+ *   → Workspace Ownership Resolver (SPEC-125)
+ *   → Owner Pipeline (Mission | Blueprint | Specialist | Knowledge | Reasoning)
+ *   → Response
  *
- * Active conversation never selects the execution domain.
+ * Intent classification runs only in the Reasoning fallback owner.
  * Active Mission Resolver still runs inside the Mission domain (ADR-025).
- * Durable objectives are Pulseforge state — not provider/LLM memory.
  */
 class WorkspaceEngine {
   /**

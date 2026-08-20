@@ -59,7 +59,25 @@ const PAIGE_COMMAND_RE =
   /\b(?:write|draft|create|compose)\b.{0,40}\b(?:outreach|email|sequence|campaign|content|post|linkedin|copy)\b|\b(?:review|critique|improve)\b.{0,30}\b(?:campaign|content|copy|email|post)\b|\b(?:ask|get|have)\s+paige\b/i;
 
 const CAL_COMMAND_RE =
-  /\b(?:coach|prep(?:are)?|script|role[- ]?play)\b.{0,40}\b(?:call|discovery|meeting|conversation)\b|\bhelp me (?:prep(?:are)?|practice)\b.{0,30}\b(?:call|pitch)\b/i;
+  /\b(?:coach(?:\s+me\s+for)?|role[- ]?play)\b.{0,40}\b(?:call|discovery|meeting|conversation)\b|\bhelp me (?:prep(?:are)?|practice)\b.{0,30}\b(?:call|pitch|discovery)\b|\bprepare (?:me )?for (?:a |the )?(?:discovery )?call\b/i;
+
+function claimsActiveDeskWorkflow(question) {
+  const q = String(question || '').trim();
+  if (!q) return false;
+  try {
+    const active = require('./ActiveWorkContext');
+    if (active.isProceedWithCallScriptReviewRequest(q)) return true;
+    if (active.isCallScriptDecisionRecordRequest(q)) return true;
+    if (active.isCallScriptReviewRequest(q)) return true;
+    if (active.isPacketReviewRequest(q)) return true;
+    if (active.isFillableTableRequest(q)) return true;
+    if (active.isCanarySummaryJudgmentRequest(q)) return true;
+    if (active.isFocusedCanaryWorkOrderRequest(q)) return true;
+  } catch (_) {
+    /* ActiveWorkContext unavailable */
+  }
+  return false;
+}
 
 const INTERROGATION_RE =
   /\b(?:what did|what has|show me what|explain what)\b.{0,30}\b(?:scout|paige|find|search|investigation)\b|\bwhy did (?:you|scout|paige)\b/i;
@@ -159,7 +177,7 @@ function claimsSpecialistOwnership(question) {
       specialist: null,
     };
   }
-  if (CAL_COMMAND_RE.test(q)) {
+  if (CAL_COMMAND_RE.test(q) && !claimsActiveDeskWorkflow(q)) {
     return {
       owner: WORKSPACE_OWNERS.SPECIALIST_CAL,
       reason: 'cal_call_coaching',
@@ -213,6 +231,16 @@ async function resolveWorkspaceOwner(input = {}) {
       confidence: 1,
       specialist: null,
       fallback: true,
+    };
+  }
+
+  // Active desk workflows (canary call-script review, packet review, tables)
+  if (claimsActiveDeskWorkflow(question)) {
+    return {
+      owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+      reason: 'active_desk_workflow',
+      confidence: 0.95,
+      specialist: null,
     };
   }
 
@@ -321,5 +349,6 @@ module.exports = {
   claimsMissionCreation,
   claimsMissionInspection,
   claimsSpecialistOwnership,
+  claimsActiveDeskWorkflow,
   claimsKnowledgeRetrieval,
 };
