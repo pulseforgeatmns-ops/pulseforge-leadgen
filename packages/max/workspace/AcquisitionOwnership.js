@@ -34,6 +34,7 @@ const {
 } = require('./audit/AcquisitionOwnershipAudit');
 const { objectivesSimilar } = require('../scoutAcquisition/NeedAssessment');
 const { detectAcquisitionObjective, normalizeObjectiveText } = require('./AcquisitionObjectiveDetection');
+const { detectMissionExecutionLanguage } = require('./ExecutionLanguageDetection');
 
 function isAcquisitionObjectiveForMission(question) {
   const q = normalizeObjectiveText(question);
@@ -322,7 +323,13 @@ function buildOwnershipMissionResponse({
  */
 async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   const question = normalizeObjectiveText(input.question);
-  if (!isAcquisitionObjectiveForMission(question)) return null;
+  const executionLanguage = detectMissionExecutionLanguage(question);
+  const isAcquisition = isAcquisitionObjectiveForMission(question);
+  const isExplicitMissionCommand =
+    executionLanguage.matched &&
+    (executionLanguage.reason === 'mission_create_command' ||
+      executionLanguage.reason === 'mission_operate_command');
+  if (!isAcquisition && !isExplicitMissionCommand) return null;
 
   const tenantId = resolveTenantId(input);
   const audit = input.audit || createAcquisitionOwnershipAudit();

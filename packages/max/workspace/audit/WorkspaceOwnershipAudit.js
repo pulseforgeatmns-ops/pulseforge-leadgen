@@ -27,8 +27,20 @@ function logWorkspaceOwnershipEvent(event, payload = {}) {
  * @param {number} [payload.confidence]
  * @param {string} [payload.question]
  */
+/**
+ * SPEC-125 / SPEC-126 — map pipeline owner to audit owner kind.
+ * @param {string|null} owner
+ * @returns {string|null}
+ */
+function normalizeWorkspaceOwnerKind(owner) {
+  if (owner === 'mission_creation') return 'MissionCreation';
+  if (owner === 'objective_persistence') return 'ObjectivePersistence';
+  return null;
+}
+
 function logWorkspaceOwnerSelected(payload = {}) {
-  return logWorkspaceOwnershipEvent('WORKSPACE_OWNER_SELECTED', {
+  const ownerKind = normalizeWorkspaceOwnerKind(payload.owner);
+  const row = logWorkspaceOwnershipEvent('WORKSPACE_OWNER_SELECTED', {
     owner: payload.owner || null,
     reason: payload.reason || null,
     confidence: payload.confidence != null ? payload.confidence : 1,
@@ -36,6 +48,16 @@ function logWorkspaceOwnerSelected(payload = {}) {
     specialist: payload.specialist || null,
     ...payload,
   });
+  if (ownerKind) {
+    logWorkspaceOwnershipEvent('WORKSPACE_OWNER', {
+      owner: ownerKind,
+      pipelineOwner: payload.owner || null,
+      reason: payload.reason || null,
+      confidence: payload.confidence != null ? payload.confidence : 1,
+      question: payload.question || null,
+    });
+  }
+  return row;
 }
 
 /**
@@ -69,6 +91,18 @@ function createWorkspaceOwnershipAudit() {
     logOwnerSelected(payload) {
       const row = logWorkspaceOwnerSelected(payload);
       localLog.push(row);
+      const ownerKind = normalizeWorkspaceOwnerKind(payload.owner);
+      if (ownerKind) {
+        localLog.push({
+          event: 'WORKSPACE_OWNER',
+          timestamp: row.timestamp,
+          owner: ownerKind,
+          pipelineOwner: payload.owner || null,
+          reason: payload.reason || null,
+          confidence: payload.confidence != null ? payload.confidence : 1,
+          question: payload.question || null,
+        });
+      }
       return row;
     },
     logOwnerFallback(payload) {
@@ -83,6 +117,7 @@ module.exports = {
   logWorkspaceOwnershipEvent,
   logWorkspaceOwnerSelected,
   logWorkspaceOwnerFallback,
+  normalizeWorkspaceOwnerKind,
   listWorkspaceOwnershipAuditLog,
   clearWorkspaceOwnershipAuditLog,
   createWorkspaceOwnershipAudit,
