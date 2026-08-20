@@ -122,6 +122,15 @@ const {
   buildOwnershipTrace,
 } = require('./audit/WorkspaceMissionInspectionAudit');
 const {
+  resolveWorkspaceOwner,
+  WORKSPACE_OWNERS,
+} = require('./WorkspaceOwnershipResolver');
+const {
+  listWorkspaceOwnershipAuditLog,
+  clearWorkspaceOwnershipAuditLog,
+  createWorkspaceOwnershipAudit,
+} = require('./audit/WorkspaceOwnershipAudit');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
 const {
@@ -173,6 +182,11 @@ module.exports = {
   listWorkspaceMissionInspectionAuditLog,
   clearWorkspaceMissionInspectionAuditLog,
   buildOwnershipTrace,
+  resolveWorkspaceOwner,
+  WORKSPACE_OWNERS,
+  listWorkspaceOwnershipAuditLog,
+  clearWorkspaceOwnershipAuditLog,
+  createWorkspaceOwnershipAudit,
   looksLikeAcquisitionMissionQuestion,
   referencesMissionState,
   shouldInspectActiveMission,
