@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge - Pricing Calculator</title>
+<link rel="icon" href="/favicon.ico">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<style>
+* { box-sizing: border-box; }
+html, body { min-height: 100%; margin: 0; background: var(--pf-bg); color: var(--pf-text); }
+body {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--pf-font-body);
+}
+.quote-page {
+  flex: 1;
+  padding: 22px;
+  overflow: auto;
+}
+.quote-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0 auto 18px;
+  max-width: 1440px;
+}
+.quote-kicker, label, .metric-label, .adjustment-label, .section-kicker {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+h1, h2, h3, p { margin: 0; }
+h1 {
+  font-family: var(--pf-font-display);
+  font-size: clamp(2.1rem, 4vw, 4rem);
+  letter-spacing: 1.8px;
+  font-weight: 400;
+  color: var(--pf-navy);
+  line-height: 0.95;
+}
+.quote-sub {
+  margin-top: 6px;
+  max-width: 680px;
+  color: var(--pf-text-dim);
+  line-height: 1.5;
+}
+.quote-layout {
+  max-width: 1440px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(360px, 0.95fr) minmax(420px, 1.05fr);
+  gap: 16px;
+  align-items: start;
+}
+.panel {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius);
+  box-shadow: var(--pf-shadow);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--pf-border);
+}
+.panel-title {
+  font-family: var(--pf-font-display);
+  font-size: 1.45rem;
+  letter-spacing: 1.3px;
+  font-weight: 400;
+  color: var(--pf-navy);
+}
+.panel-body { padding: 18px; }
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.full { grid-column: 1 / -1; }
+label { display: block; margin-bottom: 6px; }
+input, select, textarea {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--pf-border);
+  border-radius: 7px;
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  font: 500 0.95rem var(--pf-font-body);
+  padding: 10px 11px;
+}
+textarea { min-height: 96px; resize: vertical; line-height: 1.45; }
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--pf-gold);
+  outline-offset: 1px;
+  border-color: var(--pf-gold-strong);
+}
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 4px;
+  background: var(--pf-bg);
+  border: 1px solid var(--pf-border);
+  border-radius: 8px;
+}
+.segment {
+  min-height: 38px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+}
+.segment[aria-pressed="true"] {
+  background: var(--pf-gold);
+  color: #fffdf5;
+  font-weight: 700;
+}
+.checks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 10px;
+  border: 1px solid var(--pf-border);
+  border-radius: 7px;
+  background: var(--pf-bg);
+  color: var(--pf-text-dim);
+  font-weight: 600;
+}
+.check input { width: 16px; min-height: 16px; accent-color: var(--pf-gold); }
+.inline-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--pf-border);
+  border-radius: 7px;
+  background: var(--pf-bg);
+}
+.inline-control input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--pf-gold); }
+.inline-control span { color: var(--pf-text-dim); font-weight: 600; }
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.config-grid input { min-height: 38px; padding: 8px 9px; }
+.result-card {
+  position: sticky;
+  top: 12px;
+}
+.quote-total {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 22px;
+  background: var(--pf-nav-bg);
+  color: var(--pf-nav-text);
+  border-radius: 8px 8px 0 0;
+}
+.quote-total .metric-label { color: var(--pf-nav-muted); }
+.quote-price {
+  font-family: var(--pf-font-display);
+  font-size: clamp(3.25rem, 6vw, 5.4rem);
+  letter-spacing: 1.2px;
+  line-height: 0.85;
+}
+.quote-range { color: var(--pf-nav-muted); line-height: 1.5; }
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-family: var(--pf-font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.status-ok { color: var(--pf-green); background: rgba(30, 122, 69, 0.1); }
+.status-watch { color: var(--pf-amber); background: rgba(160, 94, 3, 0.12); }
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-bottom: 1px solid var(--pf-border);
+}
+.metric {
+  padding: 15px 16px;
+  border-right: 1px solid var(--pf-border);
+}
+.metric:last-child { border-right: 0; }
+.metric-value {
+  margin-top: 5px;
+  font-family: var(--pf-font-display);
+  font-size: 2rem;
+  letter-spacing: 1px;
+  color: var(--pf-navy);
+}
+.adjustments {
+  display: grid;
+  gap: 8px;
+}
+.adjustment-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--pf-border);
+}
+.adjustment-row:last-child { border-bottom: 0; }
+.adjustment-note {
+  color: var(--pf-text-dim);
+  font-size: 0.85rem;
+  margin-top: 2px;
+}
+.adjustment-value {
+  font-family: var(--pf-font-mono);
+  color: var(--pf-navy);
+  white-space: nowrap;
+}
+.warning {
+  display: none;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(160, 94, 3, 0.35);
+  background: rgba(160, 94, 3, 0.12);
+  color: var(--pf-text);
+  line-height: 1.45;
+}
+.warning.visible { display: block; }
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.empty-note {
+  color: var(--pf-text-dim);
+  line-height: 1.55;
+}
+.job-note {
+  margin-top: 14px;
+  padding: 12px;
+  background: var(--pf-bg);
+  border: 1px dashed var(--pf-border-strong);
+  border-radius: 8px;
+  color: var(--pf-text-dim);
+  line-height: 1.5;
+}
+@media (max-width: 1020px) {
+  .quote-layout { grid-template-columns: 1fr; }
+  .result-card { position: static; }
+}
+@media (max-width: 720px) {
+  .quote-page { padding: 14px; }
+  .quote-header { align-items: flex-start; flex-direction: column; }
+  .form-grid, .checks, .config-grid, .metrics { grid-template-columns: 1fr; }
+  .quote-total { grid-template-columns: 1fr; }
+  .metric { border-right: 0; border-bottom: 1px solid var(--pf-border); }
+  .metric:last-child { border-bottom: 0; }
+}
+</style>
+</head>
+<body>
+<main class="quote-page">
+  <header class="quote-header">
+    <div>
+      <div class="quote-kicker">Internal Quote Tool</div>
+      <h1>Cleaning Pricing</h1>
+      <p class="quote-sub">Residential cleaning quote builder for Greater Manchester, NH. Defaults are editable here before quoting.</p>
+    </div>
+    <span class="status-chip status-ok">Internal only</span>
+  </header>
+
+  <div class="quote-layout">
+    <section class="panel" aria-labelledby="jobDetailsTitle">
+      <div class="panel-head">
+        <h2 class="panel-title" id="jobDetailsTitle">Job Details</h2>
+      </div>
+      <div class="panel-body">
+        <form id="quoteForm" class="form-grid">
+          <div class="full">
+            <label>Service Type</label>
+            <div class="segmented" data-segment-group="serviceType">
+              <button class="segment" type="button" data-value="standard" aria-pressed="true">Standard</button>
+              <button class="segment" type="button" data-value="deep" aria-pressed="false">Deep</button>
+              <button class="segment" type="button" data-value="move" aria-pressed="false">Move In/Out</button>
+            </div>
+          </div>
+          <div>
+            <label for="squareFeet">Square Feet</label>
+            <input id="squareFeet" type="number" min="250" step="50" value="1800">
+          </div>
+          <div>
+            <label for="travelZone">Travel Zone</label>
+            <select id="travelZone">
+              <option value="core">Manchester / Bedford</option>
+              <option value="near">Londonderry / Goffstown</option>
+              <option value="edge">Auburn / Edge of Route</option>
+              <option value="extended">Extended travel</option>
+            </select>
+          </div>
+          <div>
+            <label for="bedrooms">Bedrooms</label>
+            <input id="bedrooms" type="number" min="0" step="1" value="3">
+          </div>
+          <div>
+            <label for="bathrooms">Bathrooms</label>
+            <input id="bathrooms" type="number" min="0" step="0.5" value="2">
+          </div>
+          <div>
+            <label for="furnished">Occupancy</label>
+            <select id="furnished">
+              <option value="empty">Empty</option>
+              <option value="furnished" selected>Furnished</option>
+            </select>
+          </div>
+          <div>
+            <label for="condition">Condition</label>
+            <select id="condition">
+              <option value="light">Light</option>
+              <option value="normal" selected>Normal</option>
+              <option value="heavy">Heavy</option>
+            </select>
+          </div>
+          <div class="full">
+            <label>Add-ons</label>
+            <div class="checks">
+              <label class="check"><input type="checkbox" id="addonOven"> Inside oven</label>
+              <label class="check"><input type="checkbox" id="addonFridge"> Refrigerator</label>
+              <label class="check"><input type="checkbox" id="addonCabinets"> Inside cabinets</label>
+              <label class="check"><input type="checkbox" id="addonWindows"> Interior windows</label>
+              <label class="check"><input type="checkbox" id="addonPetHair"> Pet hair</label>
+            </div>
+          </div>
+          <div>
+            <label for="hoursOverride">Cleaning Hours</label>
+            <input id="hoursOverride" type="number" min="1" step="0.25" value="">
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <label class="inline-control"><input type="checkbox" id="useHoursOverride"><span>Override suggested hours</span></label>
+          </div>
+          <div class="full">
+            <label for="notes">Notes</label>
+            <textarea id="notes" placeholder="Access notes, quote context, walkthrough details, exclusions, or anything the team should remember."></textarea>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <aside class="panel result-card" aria-labelledby="resultTitle">
+      <div class="quote-total">
+        <div>
+          <div class="metric-label">Recommended Flat Quote</div>
+          <div class="quote-price" id="recommendedQuote">$0</div>
+          <div class="quote-range" id="quoteRange">$0-$0 range</div>
+        </div>
+        <span class="status-chip" id="rateStatus">Ready</span>
+      </div>
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">Estimated Hours</div>
+          <div class="metric-value" id="estimatedHours">0.0</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Revenue / Hour</div>
+          <div class="metric-value" id="revenuePerHour">$0</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Adjustments</div>
+          <div class="metric-value" id="adjustmentTotal">$0</div>
+        </div>
+      </div>
+      <div class="panel-body">
+        <h2 class="panel-title" id="resultTitle">Quote Build</h2>
+        <div class="adjustments" id="adjustments"></div>
+        <div class="warning" id="rateWarning"></div>
+        <div class="actions">
+          <button class="pf-btn pf-primary" type="button" id="copySummary">Copy Summary</button>
+          <button class="pf-btn" type="button" id="resetDefaults">Reset Defaults</button>
+        </div>
+        <p class="job-note">Post-job logging is not enabled here because the existing persistent revenue tables require a customer and opportunity workflow. Clean logging would need a dedicated quote/job table or a formal bridge into the revenue opportunity model.</p>
+      </div>
+    </aside>
+
+    <section class="panel full" aria-labelledby="defaultsTitle">
+      <div class="panel-head">
+        <div>
+          <div class="section-kicker">Editable Defaults</div>
+          <h2 class="panel-title" id="defaultsTitle">Pricing Controls</h2>
+        </div>
+      </div>
+      <div class="panel-body config-grid" id="configGrid">
+        <div><label for="baseStandard">Standard $ / Hour</label><input id="baseStandard" type="number" min="1" step="1" value="100"></div>
+        <div><label for="baseDeep">Deep $ / Hour</label><input id="baseDeep" type="number" min="1" step="1" value="115"></div>
+        <div><label for="baseMove">Move $ / Hour</label><input id="baseMove" type="number" min="1" step="1" value="125"></div>
+        <div><label for="moveMinimum">Move Minimum</label><input id="moveMinimum" type="number" min="1" step="5" value="325"></div>
+        <div><label for="bathFee">Bath Over First</label><input id="bathFee" type="number" min="0" step="5" value="25"></div>
+        <div><label for="ovenFee">Oven Fee</label><input id="ovenFee" type="number" min="0" step="5" value="50"></div>
+        <div><label for="fridgeFee">Refrigerator Fee</label><input id="fridgeFee" type="number" min="0" step="5" value="50"></div>
+        <div><label for="cabinetFee">Cabinets Fee</label><input id="cabinetFee" type="number" min="0" step="5" value="50"></div>
+        <div><label for="windowsFee">Interior Windows</label><input id="windowsFee" type="number" min="0" step="5" value="40"></div>
+        <div><label for="petHairFee">Pet Hair</label><input id="petHairFee" type="number" min="0" step="5" value="35"></div>
+        <div><label for="heavyPct">Heavy Condition %</label><input id="heavyPct" type="number" min="0" step="1" value="28"></div>
+        <div><label for="furnishedPct">Furnished %</label><input id="furnishedPct" type="number" min="0" step="1" value="15"></div>
+        <div><label for="nearTravelFee">Near Travel</label><input id="nearTravelFee" type="number" min="0" step="5" value="15"></div>
+        <div><label for="edgeTravelFee">Edge Travel</label><input id="edgeTravelFee" type="number" min="0" step="5" value="25"></div>
+        <div><label for="extendedTravelFee">Extended Travel</label><input id="extendedTravelFee" type="number" min="0" step="5" value="45"></div>
+        <div><label for="warnLow">Flag Under $ / Hr</label><input id="warnLow" type="number" min="1" step="1" value="100"></div>
+      </div>
+    </section>
+  </div>
+</main>
+<script src="/shared/shell.js"></script>
+<script>
+(function () {
+  const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+  const state = { serviceType: 'standard' };
+  const ids = [
+    'squareFeet', 'bedrooms', 'bathrooms', 'travelZone', 'furnished', 'condition',
+    'addonOven', 'addonFridge', 'addonCabinets', 'addonWindows', 'addonPetHair',
+    'hoursOverride', 'useHoursOverride', 'notes', 'baseStandard', 'baseDeep',
+    'baseMove', 'moveMinimum', 'bathFee', 'ovenFee', 'fridgeFee', 'cabinetFee',
+    'windowsFee', 'petHairFee', 'heavyPct', 'furnishedPct', 'nearTravelFee',
+    'edgeTravelFee', 'extendedTravelFee', 'warnLow'
+  ];
+  const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
+
+  function num(id, fallback = 0) {
+    const value = Number(el[id].value);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function checked(id) {
+    return Boolean(el[id].checked);
+  }
+
+  function roundToFive(value) {
+    return Math.round(value / 5) * 5;
+  }
+
+  function suggestedHours() {
+    const sqft = Math.max(250, num('squareFeet', 0));
+    const bedrooms = Math.max(0, num('bedrooms', 0));
+    const baths = Math.max(0, num('bathrooms', 0));
+    const serviceMultiplier = { standard: 1, deep: 1.28, move: 1.45 }[state.serviceType];
+    let hours = 1.25 + (sqft / 760) + (bedrooms * 0.18) + (baths * 0.35);
+    if (el.condition.value === 'light') hours *= 0.9;
+    if (el.condition.value === 'heavy') hours *= 1.22;
+    if (el.furnished.value === 'furnished') hours *= 1.08;
+    if (checked('addonOven')) hours += 0.35;
+    if (checked('addonFridge')) hours += 0.35;
+    if (checked('addonCabinets')) hours += 0.45;
+    if (checked('addonWindows')) hours += 0.35;
+    if (checked('addonPetHair')) hours += 0.3;
+    return Math.max(2, Math.round(hours * serviceMultiplier * 4) / 4);
+  }
+
+  function calculate() {
+    const rate = state.serviceType === 'deep' ? num('baseDeep', 115) : state.serviceType === 'move' ? num('baseMove', 125) : num('baseStandard', 100);
+    const suggested = suggestedHours();
+    const hours = checked('useHoursOverride') ? Math.max(1, num('hoursOverride', suggested)) : suggested;
+    if (!checked('useHoursOverride')) el.hoursOverride.placeholder = String(suggested.toFixed(2));
+    const base = hours * rate;
+    const adjustments = [
+      { label: 'Base labor', note: `${hours.toFixed(2)} cleaning hours at ${money.format(rate)} / hour`, value: base },
+    ];
+    if (state.serviceType === 'move') {
+      adjustments.push({ label: 'Move-in/out minimum', note: `${money.format(num('moveMinimum', 325))} floor before other fixed add-ons`, value: Math.max(0, num('moveMinimum', 325) - base), floor: true });
+    }
+    const bathsOverFirst = Math.max(0, Math.ceil(num('bathrooms', 0) - 1));
+    if (bathsOverFirst > 0) adjustments.push({ label: 'Additional bathrooms', note: `${bathsOverFirst} over first bath`, value: bathsOverFirst * num('bathFee', 25) });
+    if (checked('addonOven')) adjustments.push({ label: 'Inside oven', note: 'Fixed add-on', value: num('ovenFee', 50) });
+    if (checked('addonFridge')) adjustments.push({ label: 'Refrigerator', note: 'Fixed add-on', value: num('fridgeFee', 50) });
+    if (checked('addonCabinets')) adjustments.push({ label: 'Inside cabinets', note: 'Fixed add-on', value: num('cabinetFee', 50) });
+    if (checked('addonWindows')) adjustments.push({ label: 'Interior windows', note: 'Fixed add-on', value: num('windowsFee', 40) });
+    if (checked('addonPetHair')) adjustments.push({ label: 'Pet hair', note: 'Fixed add-on', value: num('petHairFee', 35) });
+    if (el.travelZone.value === 'near') adjustments.push({ label: 'Travel', note: 'Londonderry / Goffstown fixed fee', value: num('nearTravelFee', 15) });
+    if (el.travelZone.value === 'edge') adjustments.push({ label: 'Travel', note: 'Auburn / edge-of-route fixed fee', value: num('edgeTravelFee', 25) });
+    if (el.travelZone.value === 'extended') adjustments.push({ label: 'Travel', note: 'Extended route fixed fee', value: num('extendedTravelFee', 45) });
+
+    let subtotal = adjustments.reduce((sum, item) => sum + item.value, 0);
+    if (el.condition.value === 'heavy') {
+      const amount = subtotal * (num('heavyPct', 28) / 100);
+      adjustments.push({ label: 'Heavy condition', note: `${num('heavyPct', 28)}% condition lift`, value: amount });
+      subtotal += amount;
+    }
+    if (el.furnished.value === 'furnished') {
+      const amount = subtotal * (num('furnishedPct', 15) / 100);
+      adjustments.push({ label: 'Furnished home', note: `${num('furnishedPct', 15)}% furnished lift`, value: amount });
+      subtotal += amount;
+    }
+    if (state.serviceType === 'move') subtotal = Math.max(subtotal, num('moveMinimum', 325));
+
+    const recommended = roundToFive(subtotal);
+    const rangeLow = roundToFive(recommended * 0.92);
+    const rangeHigh = roundToFive(recommended * 1.12);
+    const revenuePerHour = recommended / hours;
+    render({ adjustments, recommended, rangeLow, rangeHigh, hours, revenuePerHour, suggested });
+  }
+
+  function render(result) {
+    document.getElementById('recommendedQuote').textContent = money.format(result.recommended);
+    document.getElementById('quoteRange').textContent = `${money.format(result.rangeLow)}-${money.format(result.rangeHigh)} range`;
+    document.getElementById('estimatedHours').textContent = result.hours.toFixed(2);
+    document.getElementById('revenuePerHour').textContent = money.format(result.revenuePerHour);
+    const adjustmentTotal = result.adjustments.reduce((sum, item) => sum + (item.label === 'Base labor' ? 0 : item.value), 0);
+    document.getElementById('adjustmentTotal').textContent = money.format(adjustmentTotal);
+
+    const rows = result.adjustments.map(item => `
+      <div class="adjustment-row">
+        <div>
+          <div class="adjustment-label">${item.label}</div>
+          <div class="adjustment-note">${item.note}</div>
+        </div>
+        <div class="adjustment-value">${money.format(item.value)}</div>
+      </div>
+    `).join('');
+    document.getElementById('adjustments').innerHTML = rows || '<p class="empty-note">Enter job details to build a quote.</p>';
+
+    const status = document.getElementById('rateStatus');
+    const warning = document.getElementById('rateWarning');
+    const warnLow = num('warnLow', 100);
+    if (result.revenuePerHour < warnLow) {
+      status.className = 'status-chip status-watch';
+      status.textContent = 'Review rate';
+      warning.classList.add('visible');
+      warning.textContent = `Internal flag: this quote works out to ${money.format(result.revenuePerHour)} per cleaning hour, below the ${money.format(warnLow)} target. Consider raising the quote, reducing scope, or confirming crew time.`;
+    } else {
+      status.className = 'status-chip status-ok';
+      status.textContent = 'Healthy rate';
+      warning.classList.remove('visible');
+      warning.textContent = '';
+    }
+    window.currentQuoteSummary = buildSummary(result);
+  }
+
+  function labelFor(select) {
+    return select.options[select.selectedIndex]?.text || select.value;
+  }
+
+  function buildSummary(result) {
+    const addons = [
+      ['Oven', checked('addonOven')],
+      ['Refrigerator', checked('addonFridge')],
+      ['Cabinets', checked('addonCabinets')],
+      ['Interior windows', checked('addonWindows')],
+      ['Pet hair', checked('addonPetHair')],
+    ].filter(([, enabled]) => enabled).map(([name]) => name).join(', ') || 'None';
+    return [
+      `Recommended quote: ${money.format(result.recommended)} (${money.format(result.rangeLow)}-${money.format(result.rangeHigh)} range)`,
+      `Service: ${state.serviceType === 'move' ? 'Move-in/out' : state.serviceType}`,
+      `Home: ${num('squareFeet')} sq ft, ${num('bedrooms')} bed, ${num('bathrooms')} bath, ${labelFor(el.furnished)}, ${labelFor(el.condition)} condition`,
+      `Travel: ${labelFor(el.travelZone)}`,
+      `Add-ons: ${addons}`,
+      `Estimated hours: ${result.hours.toFixed(2)} (${checked('useHoursOverride') ? 'override' : 'suggested'})`,
+      `Effective revenue per cleaning hour: ${money.format(result.revenuePerHour)}`,
+      el.notes.value.trim() ? `Notes: ${el.notes.value.trim()}` : null,
+    ].filter(Boolean).join('\n');
+  }
+
+  document.querySelectorAll('[data-segment-group="serviceType"] .segment').forEach(button => {
+    button.addEventListener('click', () => {
+      state.serviceType = button.dataset.value;
+      document.querySelectorAll('[data-segment-group="serviceType"] .segment').forEach(item => {
+        item.setAttribute('aria-pressed', String(item === button));
+      });
+      calculate();
+    });
+  });
+  document.querySelectorAll('input, select, textarea').forEach(node => node.addEventListener('input', calculate));
+  document.querySelectorAll('select, input[type="checkbox"]').forEach(node => node.addEventListener('change', calculate));
+  document.getElementById('copySummary').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(window.currentQuoteSummary || '');
+      document.getElementById('copySummary').textContent = 'Copied';
+      window.setTimeout(() => { document.getElementById('copySummary').textContent = 'Copy Summary'; }, 1200);
+    } catch (_err) {
+      window.prompt('Copy quote summary', window.currentQuoteSummary || '');
+    }
+  });
+  document.getElementById('resetDefaults').addEventListener('click', () => {
+    const defaults = {
+      baseStandard: 100, baseDeep: 115, baseMove: 125, moveMinimum: 325, bathFee: 25,
+      ovenFee: 50, fridgeFee: 50, cabinetFee: 50, windowsFee: 40, petHairFee: 35,
+      heavyPct: 28, furnishedPct: 15, nearTravelFee: 15, edgeTravelFee: 25,
+      extendedTravelFee: 45, warnLow: 100
+    };
+    Object.entries(defaults).forEach(([id, value]) => { el[id].value = value; });
+    calculate();
+  });
+  calculate();
+})();
+</script>
+</body>
+</html>
