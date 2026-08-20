@@ -76,6 +76,51 @@ function logWorkspaceOwnerFallback(payload = {}) {
   });
 }
 
+/**
+ * SPEC-127 — active mission guard blocked GC / briefing domain switch.
+ * @param {object} payload
+ */
+function logActiveMissionGuard(payload = {}) {
+  return logWorkspaceOwnershipEvent('ACTIVE_MISSION_GUARD', {
+    missionId: payload.missionId || null,
+    source: payload.source || null,
+    blockedDomain: payload.blockedDomain || null,
+    executionCommand: payload.executionCommand === true,
+    question: payload.question || null,
+    reason: payload.reason || null,
+    ...payload,
+  });
+}
+
+/**
+ * SPEC-127 — mission pipeline selected as owner.
+ * @param {object} payload
+ */
+function logMissionOwnerSelected(payload = {}) {
+  return logWorkspaceOwnershipEvent('MISSION_OWNER_SELECTED', {
+    owner: payload.owner || null,
+    reason: payload.reason || null,
+    missionId: payload.missionId || null,
+    source: payload.source || null,
+    question: payload.question || null,
+    ...payload,
+  });
+}
+
+/**
+ * SPEC-127 — error when GC/briefing claimed a mission execution turn.
+ * @param {object} payload
+ */
+function logMissionOwnerBypassed(payload = {}) {
+  return logWorkspaceOwnershipEvent('MISSION_OWNER_BYPASSED', {
+    attemptedOwner: payload.attemptedOwner || null,
+    missionId: payload.missionId || null,
+    question: payload.question || null,
+    reason: payload.reason || null,
+    ...payload,
+  });
+}
+
 function listWorkspaceOwnershipAuditLog() {
   return _auditLog.map((row) => ({ ...row }));
 }
@@ -110,6 +155,21 @@ function createWorkspaceOwnershipAudit() {
       localLog.push(row);
       return row;
     },
+    logActiveMissionGuard(payload) {
+      const row = logActiveMissionGuard(payload);
+      localLog.push(row);
+      return row;
+    },
+    logMissionOwnerSelected(payload) {
+      const row = logMissionOwnerSelected(payload);
+      localLog.push(row);
+      return row;
+    },
+    logMissionOwnerBypassed(payload) {
+      const row = logMissionOwnerBypassed(payload);
+      localLog.push(row);
+      return row;
+    },
   };
 }
 
@@ -117,6 +177,9 @@ module.exports = {
   logWorkspaceOwnershipEvent,
   logWorkspaceOwnerSelected,
   logWorkspaceOwnerFallback,
+  logActiveMissionGuard,
+  logMissionOwnerSelected,
+  logMissionOwnerBypassed,
   normalizeWorkspaceOwnerKind,
   listWorkspaceOwnershipAuditLog,
   clearWorkspaceOwnershipAuditLog,
