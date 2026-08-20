@@ -582,7 +582,86 @@ class WorkspaceEngine {
       fallbackToReasoning('mission_creation_unhandled');
     }
 
-    // 3 — Blueprint (Client Intelligence)
+    // 3 — Objective Persistence (SPEC-126 — never execution language)
+    if (ownerIs(WORKSPACE_OWNERS.OBJECTIVE_PERSISTENCE)) {
+      const objectivePersistenceTurn = await maybeHandleOperatorObjectiveTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        objectiveService: this._operatorObjectiveService || undefined,
+        objectiveOpts: this._operatorObjectiveOpts || undefined,
+        allowEstablishment: true,
+      });
+      if (objectivePersistenceTurn && objectivePersistenceTurn.handled) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+          if (objectivePersistenceTurn.resolvedObjective) {
+            session.context.resolvedObjective = objectivePersistenceTurn.resolvedObjective;
+            session.context.objective =
+              objectivePersistenceTurn.resolvedObjective.objectiveText ||
+              session.context.objective;
+            session.context.objectiveId = objectivePersistenceTurn.resolvedObjective.id;
+          }
+          if (objectivePersistenceTurn.activeObjectives) {
+            session.context.activeObjectives = objectivePersistenceTurn.activeObjectives;
+          }
+          session.context.objectiveResolution =
+            objectivePersistenceTurn.objectiveResolution || null;
+        }
+        const structuredObj = objectivePersistenceTurn.structured;
+        const presentedObj = await this._presentation.present(structuredObj);
+        const proseObj = presentedObj.prose || objectivePersistenceTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseObj,
+          structured: structuredObj,
+        });
+        return {
+          sessionId: session.id,
+          prose: proseObj,
+          structured: structuredObj,
+          metadata: presentedObj.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredObj,
+            session,
+            question,
+          }),
+          recommendedActions: structuredObj.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedObj.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: null,
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          resolvedObjective: objectivePersistenceTurn.resolvedObjective || null,
+          activeObjectives: objectivePersistenceTurn.activeObjectives || [],
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: objectivePersistenceTurn.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: objectivePersistenceTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        };
+      }
+      fallbackToReasoning('objective_persistence_unhandled');
+    }
+
+    // 4 — Blueprint (Client Intelligence)
     if (ownerIs(WORKSPACE_OWNERS.BLUEPRINT)) {
       const cieTurnBlueprint = await maybeHandleClientIntelligenceTurn({
         question,
@@ -1298,6 +1377,7 @@ class WorkspaceEngine {
       context: rawContext || session.context,
       objectiveService: this._operatorObjectiveService || undefined,
       objectiveOpts: this._operatorObjectiveOpts || undefined,
+      allowEstablishment: false,
     });
     if (objectiveTurn && objectiveTurn.handled) {
       session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;

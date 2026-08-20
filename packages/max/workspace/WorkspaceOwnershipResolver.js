@@ -1,12 +1,13 @@
 'use strict';
 
 /**
- * SPEC-125 — Workspace Ownership-First Runtime.
+ * SPEC-125 / SPEC-126 — Workspace Ownership-First Runtime.
  * Resolve exactly one pipeline owner before intent classification or retrieval.
  *
  * Ownership order:
- *   Active Mission → Mission Creation → Blueprint → Mission Inspection →
- *   Specialist Commands → Knowledge Retrieval → Reasoning (fallback)
+ *   Active Mission → Mission Creation → Mission Continuation → Objective Persistence →
+ *   Blueprint → Mission Inspection → Specialist Commands → Knowledge Retrieval →
+ *   Reasoning (fallback)
  */
 
 const {
@@ -27,10 +28,19 @@ const {
   detectAcquisitionObjective,
   normalizeObjectiveText,
 } = require('./AcquisitionObjectiveDetection');
+const {
+  hasExecutionLanguage,
+  detectMissionExecutionLanguage,
+} = require('./ExecutionLanguageDetection');
+const {
+  detectObjectiveEstablishment,
+  isExplicitObjectivePersistenceRequest,
+} = require('../../../services/operatorObjectives');
 
 const WORKSPACE_OWNERS = Object.freeze({
   ACTIVE_MISSION: 'active_mission',
   MISSION_CREATION: 'mission_creation',
+  OBJECTIVE_PERSISTENCE: 'objective_persistence',
   BLUEPRINT: 'blueprint',
   MISSION_INSPECTION: 'mission_inspection',
   SPECIALIST_INTERROGATION: 'specialist_interrogation',
@@ -124,6 +134,16 @@ function claimsBlueprintOwnership(question, input = {}) {
 function claimsMissionCreation(question, input = {}) {
   const q = normalizeQuestion(question);
   if (!q) return false;
+
+  const executionLanguage = detectMissionExecutionLanguage(q);
+  if (executionLanguage.matched) {
+    return {
+      owner: WORKSPACE_OWNERS.MISSION_CREATION,
+      reason: executionLanguage.reason,
+      confidence: 0.95,
+    };
+  }
+
   if (isAcquisitionObjectiveForMission(q)) {
     return {
       owner: WORKSPACE_OWNERS.MISSION_CREATION,
@@ -156,6 +176,28 @@ function claimsMissionCreation(question, input = {}) {
     };
   }
   return null;
+}
+
+function claimsObjectivePersistence(question) {
+  const q = normalizeQuestion(question);
+  if (!q) return null;
+
+  // SPEC-126 — execution language never yields to objective persistence.
+  if (hasExecutionLanguage(q)) return null;
+  if (isAcquisitionObjectiveForMission(q)) return null;
+
+  const establish = detectObjectiveEstablishment(q);
+  if (!establish || establish.kind !== 'establish') return null;
+
+  const reason = isExplicitObjectivePersistenceRequest(q)
+    ? 'explicit_objective_persistence'
+    : 'objective_establishment';
+
+  return {
+    owner: WORKSPACE_OWNERS.OBJECTIVE_PERSISTENCE,
+    reason,
+    confidence: isExplicitObjectivePersistenceRequest(q) ? 0.94 : 0.9,
+  };
 }
 
 function claimsMissionInspection(question, input = {}) {
@@ -295,7 +337,11 @@ async function resolveWorkspaceOwner(input = {}) {
   const missionClaim = claimsMissionCreation(question, input);
   if (missionClaim) return { ...missionClaim, specialist: null };
 
-  // 3 — Blueprint
+  // 3 — Objective Persistence (explicit save/track only; never execution language)
+  const objectiveClaim = claimsObjectivePersistence(question);
+  if (objectiveClaim) return { ...objectiveClaim, specialist: null };
+
+  // 4 — Blueprint
   if (claimsBlueprintOwnership(question, input)) {
     return {
       owner: WORKSPACE_OWNERS.BLUEPRINT,
@@ -305,7 +351,7 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // 4 — Mission Inspection (always before retrieval)
+  // 5 — Mission Inspection (always before retrieval)
   if (claimsMissionInspection(question, input)) {
     return {
       owner: WORKSPACE_OWNERS.MISSION_INSPECTION,
@@ -315,11 +361,11 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // 5 — Specialist Commands
+  // 6 — Specialist Commands
   const specialistClaim = claimsSpecialistOwnership(question);
   if (specialistClaim) return specialistClaim;
 
-  // 6 — Knowledge Retrieval
+  // 7 — Knowledge Retrieval
   if (claimsKnowledgeRetrieval(question)) {
     return {
       owner: WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
@@ -331,7 +377,7 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // 7 — Reasoning fallback
+  // 8 — Reasoning fallback
   return {
     owner: WORKSPACE_OWNERS.REASONING,
     reason: 'no_owner_claim',
@@ -353,6 +399,7 @@ module.exports = {
   missionOwnsAcquisitionRequest,
   claimsBlueprintOwnership,
   claimsMissionCreation,
+  claimsObjectivePersistence,
   claimsMissionInspection,
   claimsSpecialistOwnership,
   claimsActiveDeskWorkflow,
