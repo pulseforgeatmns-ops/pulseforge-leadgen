@@ -12,7 +12,13 @@ const {
   advanceDiscoveryAfterApproval,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
+  APPROVAL_PHASES,
 } = require('../AmoOperatorApproval');
+const {
+  createMissionApprovalAudit,
+  clearMissionApprovalAuditLog,
+  listMissionApprovalAuditLog,
+} = require('../audit/MissionApprovalAudit');
 
 const ANCHOR_OBJECTIVE =
   'Acquire commercial cleaning customers in Manchester for law firms.';
@@ -22,6 +28,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
   let mission;
 
   beforeEach(() => {
+    clearMissionApprovalAuditLog();
     engine = amo.createAcquisitionMissionEngine();
     mission = engine.create({
       tenantId: '10',
@@ -116,5 +123,55 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
     const updated = engine.get(mission.id, '10');
     assert.equal(updated.stage, 'understand');
     assert.equal(updated.pendingOperatorDecision, null);
+  });
+
+  it('emits SPEC-128 audit events through approval consumption lifecycle', async () => {
+    const audit = createMissionApprovalAudit();
+
+    await advanceDiscoveryAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved. Begin Discovery.',
+      allowFixtureFallback: true,
+      audit,
+    });
+
+    const events = audit.list().map((row) => row.event);
+    assert.ok(events.includes('MISSION_APPROVAL_RECEIVED'));
+    assert.ok(events.includes('MISSION_APPROVAL_CONSUMED'));
+    assert.ok(events.includes('MISSION_STAGE_EXECUTION_STARTED'));
+    assert.ok(events.includes('MISSION_STAGE_EXECUTION_COMPLETED'));
+
+    const completed = audit.list().find((row) => row.event === 'MISSION_STAGE_EXECUTION_COMPLETED');
+    assert.equal(completed.phase, APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION);
+    assert.equal(completed.outcome, 'completed');
+  });
+
+  it('maybeHandleAcquisitionMissionExecution emits MISSION_APPROVAL_MATCHED and clears waiting state', async () => {
+    const audit = createMissionApprovalAudit();
+
+    const turn = await maybeHandleAcquisitionMissionExecution({
+      question: 'Approved. Begin Discovery.',
+      context: { tenantId: '10', missionId: mission.id },
+      acquisitionMissionEngine: engine,
+      allowFixtureFallback: true,
+      audit,
+    });
+
+    assert.ok(turn);
+    assert.match(turn.prose, /Approval Consumed/i);
+    assert.match(turn.prose, /Scout Discovery completed/i);
+    assert.doesNotMatch(turn.prose, /Waiting On[\s\S]*Operator direction/i);
+    assert.match(turn.prose, /Waiting On[\s\S]*Prioritization approval/i);
+    assert.equal(turn.executionResult.approvalPhase, APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION);
+
+    const events = audit.list().map((row) => row.event);
+    assert.ok(events.includes('MISSION_APPROVAL_MATCHED'));
+    assert.ok(events.includes('MISSION_APPROVAL_CONSUMED'));
+    assert.ok(events.includes('MISSION_STAGE_EXECUTION_COMPLETED'));
+
+    const globalEvents = listMissionApprovalAuditLog().map((row) => row.event);
+    assert.ok(globalEvents.includes('MISSION_APPROVAL_RECEIVED'));
   });
 });

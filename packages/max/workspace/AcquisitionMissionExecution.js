@@ -30,7 +30,12 @@ const {
   hasPendingDiscoveryApproval,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
+  APPROVAL_PHASES,
 } = require('./AmoOperatorApproval');
+const {
+  createMissionApprovalAudit,
+  logMissionApprovalMatched,
+} = require('./audit/MissionApprovalAudit');
 
 const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
 
@@ -53,24 +58,33 @@ function buildExecutionMissionResponse({
   if (executionResult && action === 'discovery_approved') {
     const prose = buildDiscoveryApprovalProse(executionResult);
     const blocked = executionResult.executionOutcome === 'blocked';
+    const scoutComplete =
+      !blocked &&
+      snapshot.workspace &&
+      snapshot.workspace.scout &&
+      snapshot.workspace.scout.state === 'complete';
     const comm = buildMissionCommunication({
       headline: 'Mission Updated',
       mission: mission.title || mission.id,
       objective: mission.objective,
-      status: blocked ? 'Discovery Blocked' : stageLabel(stage),
+      status: blocked ? 'Discovery Blocked' : stageLabel(mission.stage || stage),
       stage: 'Discovery',
       progress,
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
-      waitingOn: blocked ? 'Discovery blocker' : null,
+      waitingOn: blocked
+        ? 'Discovery blocker'
+        : scoutComplete
+          ? 'Prioritization approval'
+          : null,
       confidence: mission.confidence,
       nextStep: blocked
         ? 'Resolve the discovery blocker, then retry Discovery.'
-        : scout && scout.state === 'complete'
-          ? 'Review Scout results and approve prioritization to continue.'
+        : scoutComplete
+          ? 'Review discovered prospects and approve prioritization to continue.'
           : 'Review mission workspace for Scout contributions.',
       operatorDecision: blocked
         ? 'Retry discovery?'
-        : scout && scout.state === 'complete'
+        : scoutComplete
           ? 'Approve prioritization?'
           : null,
       evidenceStatus: 'Mission state',
@@ -210,6 +224,7 @@ function buildExecutionMetadata(mission, action, executionResult) {
     approvalConsumed: Boolean(executionResult && executionResult.approval),
     stageExecuted: Boolean(executionResult && executionResult.discovery),
     executionOutcome: executionResult ? executionResult.executionOutcome : null,
+    approvalPhase: executionResult ? executionResult.approvalPhase || null : null,
     strictOutputShape: true,
     missionCommunication: true,
   };
@@ -287,6 +302,26 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
 
   let snapshot = engine.inspect(mission.id, { tenantId });
   const action = detectExecutionAction(question, snapshot);
+  const audit = input.audit || createMissionApprovalAudit();
+  const useGlobalAudit = !input.audit;
+  const emitMatched = useGlobalAudit
+    ? logMissionApprovalMatched
+    : audit.logApprovalMatched.bind(audit);
+
+  if (action === 'discovery_approved' && shouldExecuteDiscovery(action, snapshot)) {
+    emitMatched({
+      missionId: mission.id,
+      tenantId,
+      stage: STAGES.DISCOVER,
+      action,
+      phase: APPROVAL_PHASES.WAITING_FOR_OPERATOR,
+      pendingPrompt:
+        (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) ||
+        'Approve discovery?',
+      command: question,
+    });
+  }
+
   let executionResult = null;
 
   if (shouldExecuteDiscovery(action, snapshot)) {
@@ -302,18 +337,23 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       scoutCompanies: input.scoutCompanies,
       scoutPeople: input.scoutPeople,
       allowFixtureFallback: input.allowFixtureFallback,
+      audit,
     });
     snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
   } else if (action === 'discovery_approved') {
     const approval = findDiscoveryApproval(snapshot.contributions || []);
     const discovery = findScoutDiscoveryAfterApproval(snapshot.contributions || [], approval);
     if (approval && discovery) {
+      const blocked = discovery.payload.outcome === 'blocked';
       executionResult = {
         alreadyExecuted: true,
         approval,
         discovery,
         snapshot,
-        executionOutcome: discovery.payload.outcome === 'blocked' ? 'blocked' : 'completed',
+        executionOutcome: blocked ? 'blocked' : 'completed',
+        approvalPhase: blocked
+          ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
+          : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
       };
     }
   } else if (action === 'operator_approved') {
@@ -354,6 +394,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     mission: snapshot.mission || mission,
     action,
     executionResult,
+    audit,
   };
 }
 
