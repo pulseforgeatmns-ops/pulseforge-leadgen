@@ -14,11 +14,8 @@ const MISSION_CREATE_COMMAND_RE =
 const MISSION_OPERATE_COMMAND_RE =
   /\boperate\b.{0,60}\b(?:anchor|client|account|campaign|mission|pulseforge|through)\b/i;
 
-const MISSION_EXECUTION_COMMAND_RE =
-  /\b(resume|continue|execute|manage|run|complete)\b/i;
-
-const MISSION_EXECUTION_CONTEXT_RE =
-  /\b(mission|acquisition|campaign|anchor|pulseforge)\b/i;
+const NEGATED_EXECUTION_RE =
+  /\b(?:do not|don't|never|not)\s+(?:run|create|execute|resume|launch|begin|operate|continue|manage|complete)\b|\binstead of creating\b|\bpreparation-only\b|\bnot (?:launching|executing|running|creating)\b/i;
 
 function normalizeText(text) {
   return String(text || '')
@@ -33,11 +30,13 @@ function normalizeText(text) {
 function hasExecutionLanguage(text) {
   const q = normalizeText(text);
   if (!q) return false;
+  if (NEGATED_EXECUTION_RE.test(q)) return false;
   return EXECUTION_VERB_RE.test(q);
 }
 
 /**
- * Execution phrasing that should bind to Mission Creation / Continuation.
+ * Positive acquisition-mission execution phrasing for SPEC-126 ownership.
+ * Does not claim legacy campaign/direct-mail workspace flows.
  * @param {string} text
  * @returns {{ matched: boolean, reason: string|null }}
  */
@@ -52,12 +51,6 @@ function detectMissionExecutionLanguage(text) {
   }
   if (MISSION_OPERATE_COMMAND_RE.test(q)) {
     return { matched: true, reason: 'mission_operate_command' };
-  }
-  if (
-    MISSION_EXECUTION_COMMAND_RE.test(q) &&
-    MISSION_EXECUTION_CONTEXT_RE.test(q)
-  ) {
-    return { matched: true, reason: 'mission_execution_command' };
   }
 
   return { matched: false, reason: null };
