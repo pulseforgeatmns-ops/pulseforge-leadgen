@@ -168,7 +168,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
     ]);
   });
 
-  it('WorkspaceEngine.ask() invokes mission inspection before intent classification', async () => {
+  it('WorkspaceEngine.ask() resolves mission_inspection owner before reasoning', async () => {
     const amoEngine = amo.createAcquisitionMissionEngine();
     const mission = lawFirmMission(amoEngine);
     const engine = createWorkspaceEngine({
@@ -176,12 +176,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
       missionsEnabled: true,
       missionEngine: {
         activeMissionResolver: {
-          resolveActiveMission: async () => ({
-            id: 'legacy-mission',
-            type: 'campaign_review',
-            title: 'Legacy Mission',
-            progress: { currentStage: 'Discovery' },
-          }),
+          resolveActiveMission: async () => null,
           resolve: async () => ({ action: 'intelligence' }),
           clearActiveMission: async () => {},
         },
@@ -194,6 +189,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
       context: { tenantId: '10', missionId: mission.id, clientId: '10' },
     });
 
+    assert.equal(result.workspaceOwnership.owner, 'mission_inspection');
     assert.equal(result.domainDecision.reason, 'mission_inspection');
     assert.equal(result.executionContext.missionType, 'acquisition_mission');
     assert.equal(result.executionContext.missionId, mission.id);
