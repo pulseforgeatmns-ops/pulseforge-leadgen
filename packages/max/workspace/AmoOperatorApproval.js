@@ -14,8 +14,24 @@ const {
   SPECIALISTS,
   CONTRIBUTION_KINDS,
 } = amo;
+const {
+  createMissionApprovalAudit,
+  logMissionApprovalReceived,
+  logMissionApprovalConsumed,
+  logMissionStageExecutionStarted,
+  logMissionStageExecutionCompleted,
+} = require('./audit/MissionApprovalAudit');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
+
+/** SPEC-128 — operator approval lifecycle phases (audit + response). */
+const APPROVAL_PHASES = Object.freeze({
+  WAITING_FOR_OPERATOR: 'waiting_for_operator',
+  APPROVAL_RECEIVED: 'approval_received',
+  EXECUTING_STAGE: 'executing_stage',
+  STAGE_COMPLETED: 'stage_completed',
+  WAITING_FOR_NEXT_DECISION: 'waiting_for_next_decision',
+});
 
 function buildDelegationFromAmoMission(mission) {
   const objective = String(mission.objective || '');
@@ -234,11 +250,37 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     scoutCompanies,
     scoutPeople,
     allowFixtureFallback,
+    audit: inputAudit,
   } = input;
 
   if (!engine || !mission) {
     throw new Error('engine and mission are required');
   }
+
+  const audit = inputAudit || createMissionApprovalAudit();
+  const useGlobalAudit = !inputAudit;
+  const emitReceived = useGlobalAudit
+    ? logMissionApprovalReceived
+    : audit.logApprovalReceived.bind(audit);
+  const emitConsumed = useGlobalAudit
+    ? logMissionApprovalConsumed
+    : audit.logApprovalConsumed.bind(audit);
+  const emitStarted = useGlobalAudit
+    ? logMissionStageExecutionStarted
+    : audit.logStageExecutionStarted.bind(audit);
+  const emitCompleted = useGlobalAudit
+    ? logMissionStageExecutionCompleted
+    : audit.logStageExecutionCompleted.bind(audit);
+
+  emitReceived({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    action: DISCOVERY_APPROVAL_ACTION,
+    phase: APPROVAL_PHASES.APPROVAL_RECEIVED,
+    command: question,
+    operatorId,
+  });
 
   let snapshot = engine.inspect(mission.id, { tenantId });
   const contributions = snapshot.contributions || [];
@@ -252,6 +294,8 @@ async function advanceDiscoveryAfterApproval(input = {}) {
       discovery: existingDiscovery,
       snapshot: engine.inspect(mission.id, { tenantId }),
       executionOutcome: existingDiscovery.payload.outcome || 'completed',
+      approvalPhase: APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+      audit,
     };
   }
 
@@ -275,9 +319,37 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     );
     approval = approvalResult.contribution;
     clearPendingOperatorDecision(engine, approvalResult.mission);
+    emitConsumed({
+      missionId: mission.id,
+      tenantId,
+      stage: STAGES.DISCOVER,
+      action: DISCOVERY_APPROVAL_ACTION,
+      phase: APPROVAL_PHASES.EXECUTING_STAGE,
+      approvalId: approval.id,
+      operatorId,
+    });
   } else {
     clearPendingOperatorDecision(engine, snapshot.mission);
+    emitConsumed({
+      missionId: mission.id,
+      tenantId,
+      stage: STAGES.DISCOVER,
+      action: DISCOVERY_APPROVAL_ACTION,
+      phase: APPROVAL_PHASES.EXECUTING_STAGE,
+      approvalId: approval.id,
+      operatorId,
+      reusedApproval: true,
+    });
   }
+
+  emitStarted({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    executor: SPECIALISTS.SCOUT,
+    phase: APPROVAL_PHASES.EXECUTING_STAGE,
+    approvalId: approval.id,
+  });
 
   const scoutResult = await runScoutForAmoMission(snapshot.mission, {
     question,
@@ -324,6 +396,22 @@ async function advanceDiscoveryAfterApproval(input = {}) {
 
   const executionOutcome = discoveryPayload.blocked ? 'blocked' : 'completed';
 
+  emitCompleted({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    executor: SPECIALISTS.SCOUT,
+    outcome: executionOutcome,
+    phase:
+      executionOutcome === 'blocked'
+        ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
+        : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+    nextStage: snapshot.mission.stage,
+    approvalId: approval.id,
+    discoveryId: discoveryContribution.contribution.id,
+    qualifiedCount: discoveryPayload.qualifiedCount || 0,
+  });
+
   return {
     alreadyExecuted: false,
     approval,
@@ -331,6 +419,11 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     scoutResult,
     snapshot,
     executionOutcome,
+    approvalPhase:
+      executionOutcome === 'blocked'
+        ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
+        : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+    audit,
   };
 }
 
@@ -338,8 +431,15 @@ function buildDiscoveryApprovalProse(result) {
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
   const blocked = result.executionOutcome === 'blocked';
   const prospectCount = scoutPayload.qualifiedCount || 0;
+  const waitingOn = blocked
+    ? 'Discovery blocker'
+    : result.approvalPhase === APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION
+      ? 'Prioritization approval'
+      : null;
   const lines = [
     'Mission Updated',
+    '',
+    result.alreadyExecuted ? 'Discovery already executed.' : 'Approval Consumed',
     '',
     'Stage: Discovery',
     `Outcome: ${blocked ? 'BLOCKED' : 'COMPLETED'}`,
@@ -354,6 +454,9 @@ function buildDiscoveryApprovalProse(result) {
         ? ` Found ${prospectCount} verified prospect(s).`
         : ' No verified prospects were returned.')
   );
+  if (waitingOn) {
+    lines.push('', 'Waiting On', '', waitingOn);
+  }
   if (!blocked && prospectCount > 0) {
     lines.push(
       '',
@@ -366,6 +469,7 @@ function buildDiscoveryApprovalProse(result) {
 }
 
 module.exports = {
+  APPROVAL_PHASES,
   DISCOVERY_APPROVAL_ACTION,
   buildDelegationFromAmoMission,
   findDiscoveryApproval,
