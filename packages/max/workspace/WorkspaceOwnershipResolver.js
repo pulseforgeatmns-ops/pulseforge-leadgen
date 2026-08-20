@@ -254,20 +254,26 @@ async function resolveWorkspaceOwner(input = {}) {
     input.session.id
   ) {
     const escape = evaluateMissionEscape(question);
-    if (!escape.explicit) {
-      const activeMission = await input.missionEngine.activeMissionResolver.resolveActiveMission(
-        input.session.id
-      );
-      if (activeMission) {
-        const continuation = evaluateMissionContinuation(question, activeMission);
-        if (continuation.continues && continuation.confidence >= CONTINUATION_THRESHOLD) {
-          return {
-            owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
-            reason: `active_mission_${continuation.classification}`,
-            confidence: continuation.confidence,
-            specialist: null,
-          };
-        }
+    const activeMission = await input.missionEngine.activeMissionResolver.resolveActiveMission(
+      input.session.id
+    );
+    if (activeMission && escape.explicit) {
+      return {
+        owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+        reason: 'mission_explicit_escape',
+        confidence: 0.98,
+        specialist: null,
+      };
+    }
+    if (activeMission && !escape.explicit) {
+      const continuation = evaluateMissionContinuation(question, activeMission);
+      if (continuation.continues && continuation.confidence >= CONTINUATION_THRESHOLD) {
+        return {
+          owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+          reason: `active_mission_${continuation.classification}`,
+          confidence: continuation.confidence,
+          specialist: null,
+        };
       }
     }
   }
