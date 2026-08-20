@@ -74,6 +74,11 @@
       href: { default: '/dashboard#pf-tab=pipeline' },
     },
     {
+      id: 'pricing', label: 'Pricing',
+      roles: ['admin', 'manager', 'sales', 'closer'],
+      href: { default: '/pricing-calculator' },
+    },
+    {
       id: 'campaigns', label: 'Campaigns',
       roles: ['admin', 'manager'],
       href: { default: '/dashboard#pf-tab=approvals' },
@@ -118,6 +123,7 @@
     if (path.startsWith('/acquisition-missions')) return 'acquisition-missions';
     if (path.startsWith('/setter')) return 'calls';
     if (path.startsWith('/closer')) return 'customers';
+    if (path.startsWith('/pricing-calculator')) return 'pricing';
     if (path.startsWith('/dashboard')) {
       const match = /pf-tab=([a-z_-]+)/.exec(window.location.hash || '');
       const tab = match ? match[1] : null;

@@ -141,6 +141,12 @@ app.use((req, res, next) => {
       return requireRole('admin', 'manager')(req, res, next);
     });
   }
+  if (req.path === '/public/pricing-calculator.html' || req.path === '/pricing-calculator.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'sales', 'closer')(req, res, next);
+    });
+  }
   return next();
 });
 // Phase A2 shared frontend foundation (tokens, shell, workspace modules)
@@ -225,6 +231,7 @@ app.use('/', require('./routes/operatorContext'));
 app.use('/', require('./routes/missions'));
 app.use('/', require('./routes/approvals'));
 app.use('/', require('./routes/users'));
+app.use('/', require('./routes/pricingCalculator'));
 app.use('/clients', require('./routes/revenue'));
 app.use('/client', require('./routes/client'));
 app.use('/setter', require('./routes/setter'));
