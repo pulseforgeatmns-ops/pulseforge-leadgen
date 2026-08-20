@@ -1,15 +1,15 @@
 'use strict';
 
 /**
- * SPEC-127 — Acquisition Mission execution commands from the workspace ask path.
- * Maps operator execution language (approve, begin discovery, …) to mission
- * contributions and mission-oriented responses.
+ * SPEC-127 / SPEC-128 — Acquisition Mission execution commands from the workspace ask path.
+ * Operator approval consumes pending decisions and executes the current stage once.
  */
 
 const amo = require('../../acquisition-mission');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const {
   buildAcquisitionMissionCommunication,
+  buildMissionCommunication,
   formatMissionProse,
   applyMissionCommunication,
   buildReasoningEvidence,
@@ -24,6 +24,13 @@ const {
   isExplicitMissionExit,
   resolveAcquisitionActiveMission,
 } = require('./ActiveMissionGuard');
+const {
+  advanceDiscoveryAfterApproval,
+  buildDiscoveryApprovalProse,
+  hasPendingDiscoveryApproval,
+  findDiscoveryApproval,
+  findScoutDiscoveryAfterApproval,
+} = require('./AmoOperatorApproval');
 
 const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
 
@@ -31,26 +38,92 @@ function stageLabel(stage) {
   return STAGE_LABELS[stage] || stage || 'Active';
 }
 
-function buildExecutionMissionResponse({ mission, snapshot, action, question }) {
+function buildExecutionMissionResponse({
+  mission,
+  snapshot,
+  action,
+  question,
+  executionResult,
+}) {
   const workspace = snapshot.workspace || {};
   const scout = workspace.scout || null;
   const stage = mission.stage || STAGES.DISCOVER;
   const progress = mission.progressPercent != null ? mission.progressPercent : null;
 
-  let status = `Active mission — ${stageLabel(stage)}.`;
-  let nextStep = scout && scout.state === 'waiting'
-    ? 'Scout discovery is running for this mission.'
-    : 'Review mission workspace for the latest specialist contributions.';
-  let operatorDecision = 'Continue in mission workspace?';
+  if (executionResult && action === 'discovery_approved') {
+    const prose = buildDiscoveryApprovalProse(executionResult);
+    const blocked = executionResult.executionOutcome === 'blocked';
+    const comm = buildMissionCommunication({
+      headline: 'Mission Updated',
+      mission: mission.title || mission.id,
+      objective: mission.objective,
+      status: blocked ? 'Discovery Blocked' : stageLabel(stage),
+      stage: 'Discovery',
+      progress,
+      health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
+      waitingOn: blocked ? 'Discovery blocker' : null,
+      confidence: mission.confidence,
+      nextStep: blocked
+        ? 'Resolve the discovery blocker, then retry Discovery.'
+        : scout && scout.state === 'complete'
+          ? 'Review Scout results and approve prioritization to continue.'
+          : 'Review mission workspace for Scout contributions.',
+      operatorDecision: blocked
+        ? 'Retry discovery?'
+        : scout && scout.state === 'complete'
+          ? 'Approve prioritization?'
+          : null,
+      evidenceStatus: 'Mission state',
+      sources: ['acquisition_mission', 'scout'],
+      reasoningEvidence: buildReasoningEvidence({
+        known: [`Mission ${mission.id} executed Discovery after operator approval.`],
+        inference: executionResult.alreadyExecuted
+          ? ['Discovery was already executed for this approval — not re-run.']
+          : ['Operator approval consumed; Scout discovery ran once.'],
+        unknown: [],
+        evidenceNeeded: [],
+        confidence: mission.confidence,
+      }),
+      includeReasoningMarker: true,
+    });
 
-  if (action === 'discovery_approved') {
-    status = 'Discovery stage — operator approved. Scout is next.';
-    nextStep = scout && scout.state === 'complete'
-      ? 'Scout discovery complete. Review ranked prospects and approve the next stage.'
-      : 'Scout discovery initiated for the active mission.';
-    operatorDecision = scout && scout.state === 'complete'
-      ? 'Approve prioritization?'
-      : 'Review Scout results when discovery completes.';
+    const structured = applyMissionCommunication(
+      buildStructuredResponse({
+        answer: prose,
+        reasoning: [],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: mission.confidence != null ? mission.confidence : 0.84,
+        nextInvestigations: [],
+        recommendedActions: [
+          {
+            id: 'open_mission',
+            type: 'open_mission',
+            label: 'Open mission workspace',
+            payload: { missionId: mission.id },
+          },
+        ],
+        confidenceContributors: ['spec_128', 'acquisition_mission'],
+        timelineReferences: [],
+        relatedEntities: [
+          { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
+        ],
+        metadata: buildExecutionMetadata(mission, action, executionResult),
+      }),
+      comm
+    );
+
+    return { structured, prose, comm, action };
+  }
+
+  let status = `Active mission — ${stageLabel(stage)}.`;
+  let nextStep = 'Review mission workspace for the latest specialist contributions.';
+  let operatorDecision = null;
+
+  const pendingDiscovery = hasPendingDiscoveryApproval(snapshot);
+  if (pendingDiscovery) {
+    operatorDecision = (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) ||
+      'Approve discovery?';
   } else if (action === 'operator_approved') {
     status = `Operator approved — ${stageLabel(stage)}.`;
     nextStep = 'Mission advanced under operator approval.';
@@ -109,25 +182,7 @@ function buildExecutionMissionResponse({ mission, snapshot, action, question }) 
       relatedEntities: [
         { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
       ],
-      metadata: {
-        sourcesUsed: {
-          briefing: false,
-          reasoning: false,
-          memory: false,
-          policy: false,
-          knowledge: false,
-          missionState: true,
-          clientIntelligence: false,
-        },
-        evidenceCount: 0,
-        asOf: new Date().toISOString(),
-        unavailable: [],
-        acquisitionMission: true,
-        acquisitionMissionExecution: true,
-        missionExecutionAction: action,
-        strictOutputShape: true,
-        missionCommunication: true,
-      },
+      metadata: buildExecutionMetadata(mission, action, executionResult),
     }),
     comm
   );
@@ -135,18 +190,56 @@ function buildExecutionMissionResponse({ mission, snapshot, action, question }) 
   return { structured, prose, comm, action };
 }
 
-function detectExecutionAction(question) {
+function buildExecutionMetadata(mission, action, executionResult) {
+  return {
+    sourcesUsed: {
+      briefing: false,
+      reasoning: false,
+      memory: false,
+      policy: false,
+      knowledge: false,
+      missionState: true,
+      clientIntelligence: false,
+    },
+    evidenceCount: 0,
+    asOf: new Date().toISOString(),
+    unavailable: [],
+    acquisitionMission: true,
+    acquisitionMissionExecution: true,
+    missionExecutionAction: action,
+    approvalConsumed: Boolean(executionResult && executionResult.approval),
+    stageExecuted: Boolean(executionResult && executionResult.discovery),
+    executionOutcome: executionResult ? executionResult.executionOutcome : null,
+    strictOutputShape: true,
+    missionCommunication: true,
+  };
+}
+
+function detectExecutionAction(question, snapshot) {
   const q = String(question || '').trim();
   const lower = q.toLowerCase();
 
-  if (/\bapprov(e|al|ed)\b.*\bbegin\b/i.test(q) || /\bbegin\b.*\bdiscover/i.test(lower)) {
+  const discoveryApprovalPattern =
+    /\bapprov(e|al|ed)\b.*\bbegin\b/i.test(q) ||
+    /\bbegin\b.*\bdiscover/i.test(lower) ||
+    /\b(?:begin|start|run|execute)\b.*\bdiscover/i.test(lower);
+
+  if (discoveryApprovalPattern) {
     return 'discovery_approved';
   }
+
+  if (
+    snapshot &&
+    snapshot.mission &&
+    snapshot.mission.stage === STAGES.DISCOVER &&
+    hasPendingDiscoveryApproval(snapshot) &&
+    /\bapprov(e|al|ed)\b/i.test(q)
+  ) {
+    return 'discovery_approved';
+  }
+
   if (/\bapprov(e|al|ed)\b/i.test(q)) {
     return 'operator_approved';
-  }
-  if (/\b(?:begin|start|run|execute)\b.*\bdiscover/i.test(lower)) {
-    return 'discovery_approved';
   }
   if (/\b(?:continue|proceed|resume|next)\b/i.test(q)) {
     return 'operator_approved';
@@ -155,6 +248,18 @@ function detectExecutionAction(question) {
     return 'operator_approved';
   }
   return 'operator_approved';
+}
+
+function shouldExecuteDiscovery(action, snapshot) {
+  if (action !== 'discovery_approved') return false;
+  const mission = snapshot.mission || {};
+  if (mission.stage !== STAGES.DISCOVER) return false;
+  const contributions = snapshot.contributions || [];
+  const approval = findDiscoveryApproval(contributions);
+  if (approval && findScoutDiscoveryAfterApproval(contributions, approval)) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -180,9 +285,38 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
 
   if (!mission || mission.stage === STAGES.IMPROVE) return null;
 
-  const action = detectExecutionAction(question);
+  let snapshot = engine.inspect(mission.id, { tenantId });
+  const action = detectExecutionAction(question, snapshot);
+  let executionResult = null;
 
-  if (action === 'discovery_approved' || action === 'operator_approved') {
+  if (shouldExecuteDiscovery(action, snapshot)) {
+    executionResult = await advanceDiscoveryAfterApproval({
+      engine,
+      mission,
+      tenantId,
+      question,
+      operatorId: input.operatorId || (input.session && input.session.operator) || null,
+      missionEngine: input.missionEngine,
+      persist: input.persist,
+      runScout: input.runScout,
+      scoutCompanies: input.scoutCompanies,
+      scoutPeople: input.scoutPeople,
+      allowFixtureFallback: input.allowFixtureFallback,
+    });
+    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+  } else if (action === 'discovery_approved') {
+    const approval = findDiscoveryApproval(snapshot.contributions || []);
+    const discovery = findScoutDiscoveryAfterApproval(snapshot.contributions || [], approval);
+    if (approval && discovery) {
+      executionResult = {
+        alreadyExecuted: true,
+        approval,
+        discovery,
+        snapshot,
+        executionOutcome: discovery.payload.outcome === 'blocked' ? 'blocked' : 'completed',
+      };
+    }
+  } else if (action === 'operator_approved') {
     try {
       engine.contribute(
         mission.id,
@@ -196,14 +330,15 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     } catch (_) {
       /* approval may already exist — mission still owns the turn */
     }
+    snapshot = engine.inspect(mission.id, { tenantId });
   }
 
-  const snapshot = engine.inspect(mission.id, { tenantId });
   const response = buildExecutionMissionResponse({
     mission: snapshot.mission || mission,
     snapshot,
     action,
     question,
+    executionResult,
   });
 
   if (input.session && input.session.context && typeof input.session.context === 'object') {
@@ -218,6 +353,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     prose: response.prose,
     mission: snapshot.mission || mission,
     action,
+    executionResult,
   };
 }
 
@@ -225,4 +361,5 @@ module.exports = {
   detectExecutionAction,
   buildExecutionMissionResponse,
   maybeHandleAcquisitionMissionExecution,
+  shouldExecuteDiscovery,
 };
