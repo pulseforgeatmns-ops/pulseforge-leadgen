@@ -61,6 +61,11 @@ const EXPLICIT_ESCAPE = [
   /\bstop\s+(this\s+)?mission\b/i,
   /\bexit\s+(this\s+)?mission\b/i,
   /\bleave\s+(this\s+)?mission\b/i,
+  /\bcancel\s+(?:the\s+)?mission\b/i,
+  /\bpause\s+(?:the\s+)?mission\b/i,
+  /\bend\s+(?:the\s+)?mission\b/i,
+  /\btoday'?s\s+brief(ing)?\b/i,
+  /\bnew\s+topic\b/i,
 ];
 
 /** @type {object[]} */

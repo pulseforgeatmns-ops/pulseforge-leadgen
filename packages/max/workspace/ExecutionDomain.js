@@ -27,6 +27,7 @@ const {
 } = require('../../mission-engine');
 const { normalizeContext } = require('./ContextEnvelope');
 const { PAGE_TYPES } = require('./WorkspaceTypes');
+const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 
 /** Registered execution domains — each owns its requests once selected. */
 const EXECUTION_DOMAINS = Object.freeze({
@@ -88,11 +89,15 @@ const MISSION_EXECUTION_CATEGORIES = new Set([
  * @param {string|null} [opts.previousDomain]
  * @param {object|null} [opts.resolvedObjective] - SPEC-095 recovered objective
  * @param {boolean} [opts.suppressMissionForObjective] - SPEC-095 status/content about existing objective
+ * @param {boolean} [opts.activeMissionLock] - SPEC-127 block GC / briefing while mission active
+ * @param {boolean} [opts.explicitMissionExit] - SPEC-127 operator explicitly exited mission
  * @returns {DomainDecision}
  */
 function selectExecutionDomain(text, opts = {}) {
   const q = String(text || '').trim();
   const previousDomain = opts.previousDomain || null;
+  const activeMissionLock = opts.activeMissionLock === true;
+  const explicitMissionExit = opts.explicitMissionExit === true;
 
   if (!q) {
     return finalizeDomain({
@@ -180,7 +185,7 @@ function selectExecutionDomain(text, opts = {}) {
   // 3) Non-mission domains — still from operator language, not active convo
   const briefing = classifyMorningBriefing(q);
   if (briefing) {
-    return finalizeDomain({
+    const briefingDecision = finalizeDomain({
       domain: EXECUTION_DOMAINS.MORNING_BRIEFING,
       missionIntent: null,
       missionType: null,
@@ -189,6 +194,22 @@ function selectExecutionDomain(text, opts = {}) {
       confidence: briefing.confidence,
       previousDomain,
     });
+    if (activeMissionLock && !explicitMissionExit) {
+      return finalizeDomain({
+        domain: EXECUTION_DOMAINS.WORKSPACE,
+        missionIntent: null,
+        missionType: 'acquisition_mission',
+        routeKind: ROUTE_KINDS.INTELLIGENCE,
+        reason: isMissionExecutionCommand(q)
+          ? 'mission_execution_command'
+          : 'active_mission_lock',
+        confidence: 0.96,
+        previousDomain,
+        activeMissionGuard: true,
+        blockedDomain: EXECUTION_DOMAINS.MORNING_BRIEFING,
+      });
+    }
+    return briefingDecision;
   }
 
   const market = classifyMarketIntelligence(q);
@@ -237,7 +258,7 @@ function selectExecutionDomain(text, opts = {}) {
     });
   }
 
-  return finalizeDomain({
+  const generalDecision = finalizeDomain({
     domain: EXECUTION_DOMAINS.GENERAL_CONVERSATION,
     missionIntent:
       category === INTENT_CATEGORIES.OPERATOR_HELP ? missionIntent : null,
@@ -250,6 +271,24 @@ function selectExecutionDomain(text, opts = {}) {
     confidence: Number(missionIntent.confidence) || 0.2,
     previousDomain,
   });
+
+  if (activeMissionLock && !explicitMissionExit) {
+    return finalizeDomain({
+      domain: EXECUTION_DOMAINS.WORKSPACE,
+      missionIntent: null,
+      missionType: 'acquisition_mission',
+      routeKind: ROUTE_KINDS.INTELLIGENCE,
+      reason: isMissionExecutionCommand(q)
+        ? 'mission_execution_command'
+        : 'active_mission_lock',
+      confidence: 0.96,
+      previousDomain,
+      activeMissionGuard: true,
+      blockedDomain: EXECUTION_DOMAINS.GENERAL_CONVERSATION,
+    });
+  }
+
+  return generalDecision;
 }
 
 /**
@@ -411,6 +450,12 @@ function finalizeDomain(partial) {
     confidence: Number(partial.confidence) || 0,
     domainSwitched,
     previousDomain: partial.previousDomain || null,
+    ...(partial.activeMissionGuard != null
+      ? { activeMissionGuard: partial.activeMissionGuard }
+      : {}),
+    ...(partial.blockedDomain != null
+      ? { blockedDomain: partial.blockedDomain }
+      : {}),
   };
 }
 

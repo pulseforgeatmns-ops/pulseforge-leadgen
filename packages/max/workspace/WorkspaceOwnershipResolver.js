@@ -5,9 +5,8 @@
  * Resolve exactly one pipeline owner before intent classification or retrieval.
  *
  * Ownership order:
- *   Active Mission → Mission Creation → Mission Continuation → Objective Persistence →
- *   Blueprint → Mission Inspection → Specialist Commands → Knowledge Retrieval →
- *   Reasoning (fallback)
+ *   Active Mission → Mission Stage → Mission Inspection → Daily Briefing →
+ *   General Conversation (SPEC-127 locks briefing/GC while mission active)
  */
 
 const {
@@ -36,6 +35,13 @@ const {
   detectObjectiveEstablishment,
   isExplicitObjectivePersistenceRequest,
 } = require('../../../services/operatorObjectives');
+const {
+  isMissionExecutionCommand,
+} = require('./ExecutionLanguageDetection');
+const {
+  isExplicitMissionExit,
+  resolveActiveMissionLock,
+} = require('./ActiveMissionGuard');
 
 const WORKSPACE_OWNERS = Object.freeze({
   ACTIVE_MISSION: 'active_mission',
@@ -134,6 +140,11 @@ function claimsBlueprintOwnership(question, input = {}) {
 function claimsMissionCreation(question, input = {}) {
   const q = normalizeQuestion(question);
   if (!q) return false;
+
+  // SPEC-127 — execution commands on an active mission bind to the mission, not creation.
+  if (isMissionExecutionCommand(q) && hasAcquisitionMissionContext(input)) {
+    return null;
+  }
 
   const executionLanguage = detectMissionExecutionLanguage(q);
   if (executionLanguage.matched) {
@@ -286,7 +297,28 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // 1 — Active Mission (legacy mission continuation)
+  // 1 — Active Mission (legacy continuation + SPEC-127 execution lock)
+  const missionLock = await resolveActiveMissionLock({
+    question,
+    session: input.session,
+    context: input.context || (input.session && input.session.context),
+    missionEngine: input.missionEngine,
+    missionsEnabled: input.missionsEnabled,
+    resolverEnabled: input.resolverEnabled,
+    acquisitionMissionEngine: input.acquisitionMissionEngine,
+    acquisitionMissionService: input.acquisitionMissionService,
+  });
+
+  if (missionLock.active && missionLock.executionCommand && !missionLock.explicitExit) {
+    return {
+      owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+      reason: 'active_mission_execution_command',
+      confidence: 0.97,
+      specialist: null,
+      missionLock,
+    };
+  }
+
   if (
     input.missionsEnabled !== false &&
     input.missionEngine &&
@@ -315,6 +347,7 @@ async function resolveWorkspaceOwner(input = {}) {
           reason: `active_mission_${continuation.classification}`,
           confidence: continuation.confidence,
           specialist: null,
+          missionLock,
         };
       }
     }
@@ -377,7 +410,18 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // 8 — Reasoning fallback
+  // 8 — Reasoning fallback (blocked while active mission lock is engaged)
+  if (missionLock.active && !missionLock.explicitExit) {
+    return {
+      owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+      reason: 'active_mission_guard',
+      confidence: 0.88,
+      specialist: null,
+      fallback: false,
+      missionLock,
+    };
+  }
+
   return {
     owner: WORKSPACE_OWNERS.REASONING,
     reason: 'no_owner_claim',

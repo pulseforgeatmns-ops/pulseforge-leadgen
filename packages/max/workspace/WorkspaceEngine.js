@@ -39,6 +39,14 @@ const {
   maybeHandleAcquisitionOwnershipTurn,
 } = require('./AcquisitionOwnership');
 const {
+  maybeHandleAcquisitionMissionExecution,
+} = require('./AcquisitionMissionExecution');
+const {
+  resolveActiveMissionLock,
+  guardExecutionDomain,
+  isExplicitMissionExit,
+} = require('./ActiveMissionGuard');
+const {
   resolveWorkspaceOwner,
   WORKSPACE_OWNERS,
 } = require('./WorkspaceOwnershipResolver');
@@ -388,6 +396,19 @@ class WorkspaceEngine {
       ...workspaceOwnership,
       question,
     });
+    if (
+      workspaceOwnership.owner === WORKSPACE_OWNERS.ACTIVE_MISSION &&
+      workspaceOwnership.missionLock &&
+      workspaceOwnership.missionLock.active
+    ) {
+      ownershipAudit.logMissionOwnerSelected({
+        owner: workspaceOwnership.owner,
+        reason: workspaceOwnership.reason,
+        missionId: workspaceOwnership.missionLock.missionId,
+        source: workspaceOwnership.missionLock.source,
+        question,
+      });
+    }
     if (session.context && typeof session.context === 'object') {
       session.context.workspaceOwner = workspaceOwnership.owner;
       session.context.workspaceOwnerReason = workspaceOwnership.reason;
@@ -438,6 +459,75 @@ class WorkspaceEngine {
           }),
           recommendedActions: missionFirstTurn.structured.recommendedActions,
           interrogation: null,
+          workspaceOwnership,
+        };
+      }
+
+      const amoExecutionTurn = await maybeHandleAcquisitionMissionExecution({
+        question,
+        session,
+        context: rawContext || session.context,
+        acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
+        acquisitionMissionService: this._acquisitionMissionService || undefined,
+      });
+      if (amoExecutionTurn) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+          session.context.acquisitionOwner = 'MissionEngine';
+          if (amoExecutionTurn.mission) {
+            session.context.missionId = amoExecutionTurn.mission.id;
+            session.context.acquisitionMissionId = amoExecutionTurn.mission.id;
+          }
+        }
+        const structuredAmoExec = amoExecutionTurn.structured;
+        const presentedAmoExec = await this._presentation.present(structuredAmoExec);
+        const proseAmoExec = presentedAmoExec.prose || amoExecutionTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseAmoExec,
+          structured: structuredAmoExec,
+        });
+        return {
+          sessionId: session.id,
+          prose: proseAmoExec,
+          structured: structuredAmoExec,
+          metadata: presentedAmoExec.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredAmoExec,
+            session,
+            question,
+          }),
+          recommendedActions: structuredAmoExec.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedAmoExec.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: amoExecutionTurn.mission || null,
+          resolution: { action: 'executed', reason: amoExecutionTurn.reason },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: amoExecutionTurn.reason,
+            missionType: 'acquisition_mission',
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: amoExecutionTurn.reason,
+            missionType: 'acquisition_mission',
+            missionId:
+              amoExecutionTurn.mission && amoExecutionTurn.mission.id
+                ? amoExecutionTurn.mission.id
+                : null,
+          },
           workspaceOwnership,
         };
       }
@@ -1681,14 +1771,84 @@ class WorkspaceEngine {
 
     // Intent Understanding → Select Execution Domain (reasoning fallback only)
     // SPEC-095: pass resolved objective so status references do not become Missions.
-    const domainDecision = selectExecutionDomain(question, {
+    // SPEC-127: block GC / briefing while an active mission is engaged.
+    const activeMissionLockState = await resolveActiveMissionLock({
+      question,
+      session,
+      context: rawContext || session.context,
+      missionEngine: this._missionEngine,
+      missionsEnabled: this._missionsEnabled,
+      resolverEnabled: this._resolverEnabled,
+      acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
+      acquisitionMissionService: this._acquisitionMissionService || undefined,
+    });
+    const explicitMissionExit = isExplicitMissionExit(question).explicit;
+
+    let domainDecision = selectExecutionDomain(question, {
       previousDomain: session.executionDomain || null,
       resolvedObjective:
         (session.context && session.context.resolvedObjective) ||
         (objectiveTurn && objectiveTurn.resolvedObjective) ||
         null,
       suppressMissionForObjective,
+      activeMissionLock:
+        activeMissionLockState.active && !explicitMissionExit,
+      explicitMissionExit,
     });
+
+    if (
+      activeMissionLockState.active &&
+      !explicitMissionExit &&
+      (domainDecision.activeMissionGuard ||
+        domainDecision.blockedDomain ||
+        domainDecision.reason === 'active_mission_lock' ||
+        domainDecision.reason === 'mission_execution_command')
+    ) {
+      ownershipAudit.logActiveMissionGuard({
+        missionId: activeMissionLockState.missionId,
+        source: activeMissionLockState.source,
+        blockedDomain:
+          domainDecision.blockedDomain ||
+          (domainDecision.reason === 'active_mission_lock'
+            ? 'general_conversation'
+            : null),
+        executionCommand: activeMissionLockState.executionCommand,
+        question,
+        reason: domainDecision.reason,
+      });
+    }
+
+    const guardedDomain = guardExecutionDomain(
+      domainDecision,
+      activeMissionLockState,
+      question
+    );
+    if (guardedDomain.guarded) {
+      ownershipAudit.logActiveMissionGuard({
+        missionId: activeMissionLockState.missionId,
+        source: activeMissionLockState.source,
+        blockedDomain: guardedDomain.blockedDomain,
+        executionCommand: activeMissionLockState.executionCommand,
+        question,
+        reason: guardedDomain.decision.reason,
+      });
+      domainDecision = guardedDomain.decision;
+    }
+
+    if (
+      activeMissionLockState.active &&
+      activeMissionLockState.executionCommand &&
+      !explicitMissionExit &&
+      (domainDecision.domain === EXECUTION_DOMAINS.GENERAL_CONVERSATION ||
+        domainDecision.domain === EXECUTION_DOMAINS.MORNING_BRIEFING)
+    ) {
+      ownershipAudit.logMissionOwnerBypassed({
+        attemptedOwner: domainDecision.domain,
+        missionId: activeMissionLockState.missionId,
+        question,
+        reason: 'execution_command_reached_blocked_domain',
+      });
+    }
 
     let structured;
     let mission = null;
