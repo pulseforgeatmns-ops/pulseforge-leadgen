@@ -5,8 +5,9 @@
  * Resolve exactly one pipeline owner before intent classification or retrieval.
  *
  * Ownership order:
- *   Active Mission → Mission Stage → Mission Inspection → Daily Briefing →
- *   General Conversation (SPEC-127 locks briefing/GC while mission active)
+ *   Active Mission execution lock → Acquisition objective (SPEC-132) →
+ *   Legacy active mission continuation → Mission Creation → …
+ *   (SPEC-127 locks briefing/GC while mission active)
  */
 
 const {
@@ -323,6 +324,24 @@ async function resolveWorkspaceOwner(input = {}) {
       confidence: 0.97,
       specialist: null,
       missionLock,
+    };
+  }
+
+  // SPEC-132 — acquisition objectives override legacy SPEC-022 continuation.
+  if (isAcquisitionObjectiveForMission(question)) {
+    askPathTrace.traceOwner(
+      WORKSPACE_OWNERS.MISSION_CREATION,
+      'acquisition_objective_precedence'
+    );
+    askPathTrace.traceEarlyReturn(
+      'resolveWorkspaceOwner',
+      'acquisition_objective_precedence'
+    );
+    return {
+      owner: WORKSPACE_OWNERS.MISSION_CREATION,
+      reason: 'acquisition_objective_precedence',
+      confidence: 0.96,
+      specialist: null,
     };
   }
 
