@@ -1,85 +1,196 @@
-# SPEC-130 — Structured Mission Planning
+# SPEC-130 — Mission Planning Engine (MPE)
 
 **Status:** Implemented  
-**Depends on:** SPEC-118 (Acquisition Mission Orchestration), SPEC-128 (Operator Approval)
+**Depends on:** SPEC-118 (Acquisition Mission Orchestration), SPEC-128 (Operator Approval)  
+**ADR:** [ADR-056](../adr/ADR-056_Mission_Planning_Engine_Is_The_Single_Interpreter.md)
 
 ## Purpose
 
-Introduce a dedicated Mission Planning stage that converts operator intent into a structured Acquisition Mission **before** any specialist executes. Scout, Paige, Vera, Rex, and future specialists consume the structured mission — not free-form operator text.
+Introduce a dedicated Mission Planning Engine that converts operator intent into a structured, governed Mission Plan **before** any specialist executes.
 
-## Philosophy
+The Mission Plan is the canonical contract for the lifetime of the mission.
 
-- The mission plan is the **canonical representation** of operator intent.
-- Specialists must **never infer** business objectives independently.
-- **Mission Planning owns interpretation.** Specialists own execution.
+## Design Principle
 
-## Flow
+**Interpret once. Execute many.**
+
+Today every specialist interprets operator intent. Tomorrow only one component does.
+
+## Architecture
 
 ```
-Operator objective (NL)
-        ↓
-   Mission Planner
-        ↓
- Structured Mission (draft)
-        ↓
- Operator confirms plan
-        ↓
- Structured Mission (immutable)
-        ↓
- Scout · Paige · Vera · Rex
+Operator
+      │
+Natural Language
+      │
+Mission Planning Engine
+      │
+Mission Plan
+      │
+Mission Approval
+      │
+Scout · Paige · Vera · Rex · Future Specialists
 ```
 
-## Structured Mission Contract
+No specialist parses operator English.
 
-```json
-{
-  "missionType": "acquisition",
-  "objective": "Acquire one recurring commercial cleaning client.",
-  "successMetric": { "type": "customers", "target": 1 },
-  "market": {
-    "segment": "short_term_rental",
-    "industry": "hospitality",
-    "buyer": "property_operator"
-  },
-  "geography": {
-    "region": "Greater Manchester",
-    "cities": ["Manchester", "Hooksett", "Bedford", "Auburn", "Goffstown"]
-  },
-  "constraints": ["recurring", "commercial_only"],
-  "priority": 1
-}
+## Responsibilities
+
+Mission Planning owns:
+
+- intent extraction
+- entity extraction
+- structured planning
+- ambiguity detection
+- normalization
+- validation
+- operator confirmation
+
+Mission Planning **never** performs execution.
+
+## Pipeline
+
+```
+Operator Request
+        │
+Intent Analysis
+        │
+Entity Extraction
+        │
+Mission Structuring
+        │
+Ambiguity Detection
+        │
+Operator Review
+        │
+Mission Lock
+        │
+Execution
 ```
 
-After operator approval the contract is frozen with `immutable: true` and a `contractHash`.
+## Intent Analysis
+
+Mission Planning determines mission type. Specialists must not.
+
+Examples: Acquisition, Retention, Expansion, Marketing, Hiring, Operations, Research, Support, Knowledge.
+
+## Entity Extraction
+
+Immutable mission fields:
+
+- Objective
+- Market
+- Buyer
+- Industry
+- Region
+- Constraints
+- Success Metric
+- Priority
+- Evidence Policy
+
+Every structured field carries provenance (`value`, `confidence`, `reason`, `source`).
+
+## Ambiguity Detection
+
+Instead of guessing, Max asks.
+
+Example:
+
+> Operator: Find STR operators around Manchester.  
+> Planner: Manchester NH or Manchester UK?  
+> Operator chooses. Mission updated.
+
+Example:
+
+> Operator: Find property managers.  
+> Planner: Residential? Commercial? Short-term rental? Mixed?
+
+No guessing.
 
 ## Operator Confirmation
 
-1. Max creates mission and shows **Mission Understanding** (objective, market, region, buyer, constraints).
-2. Operator approves or edits the plan (`Approve mission plan?`).
-3. Plan becomes immutable; pending decision advances to `Approve discovery?`.
-4. Only after discovery approval does Scout execute — using structured fields only.
+Before execution the operator sees Mission Understanding:
 
-## Specialist Input Contracts
+- Objective
+- Market
+- Region
+- Success
+- Constraints
+- Evidence Threshold
+
+Proceed? **Approve** · **Edit** · **Cancel**
+
+Once approved, the Mission Plan is immutable.
+
+## Specialist Contracts
 
 | Specialist | Receives | Must not infer |
 |---|---|---|
-| Scout | segment, industry, buyer, geography, constraints, successMetric | market, region |
-| Paige | market, buyer, objective, campaignGoal, constraints | target audience |
-| Vera | market, buyer, region, companies | market |
-| Rex | mission, objective, successMetric, progress | NL parsing |
+| Scout | segment, industry, buyer, geography, constraints, evidence_policy, success_metric | market, region, English |
+| Paige | audience, campaign_goal, market, constraints, tone, objective | target audience |
+| Vera | market, companies, buyer, review_policy | market |
+| Rex | mission, progress, objective, KPIs | NL parsing |
+
+## Blueprint Relationship
+
+Blueprint is context. Mission is authority.
+
+```
+Blueprint
+        │
+Reference Only
+        │
+Mission Planner
+        │
+Mission Plan
+        │
+Specialists
+```
+
+Blueprint informs. Mission decides.
+
+## Context Precedence
+
+```
+Operator Approval
+        ↓
+Mission Plan
+        ↓
+Workspace State
+        ↓
+Blueprint
+        ↓
+Historical Memory
+        ↓
+General Knowledge
+```
+
+Nothing may override the approved Mission Plan.
+
+## Explainability
+
+Mission Planning stores every interpretation.
+
+Example:
+
+> Operator wrote `acquire one recurring STR client`  
+> Planner interpreted `segment: short_term_rental`  
+> `confidence: 0.96`  
+> `reason: "Matched STR operator taxonomy."`
 
 ## Implementation
 
 | Module | Role |
 |---|---|
-| `packages/acquisition-mission/MissionPlanner.js` | NL → structured contract |
-| `packages/acquisition-mission/StructuredMission.js` | Schema, validation, freeze, display |
-| `packages/acquisition-mission/SpecialistInputs.js` | Per-specialist input mapping |
-| `packages/acquisition-mission/Mission.js` | Seeds draft + plan approval gate |
-| `packages/max/workspace/AmoOperatorApproval.js` | Plan approval + structured Scout delegation |
-| `public/acquisition-missions.html` | Mission Understanding panel |
+| `packages/acquisition-mission/MissionPlanner.js` | Intent → extraction → structure → ambiguity → confirmation |
+| `packages/acquisition-mission/StructuredMission.js` | Schema, provenance, freeze, confirmation copy |
+| `packages/acquisition-mission/ContextPrecedence.js` | Precedence ranks; Blueprint cannot override operator fields |
+| `packages/acquisition-mission/SpecialistInputs.js` | Per-specialist structured contracts |
+| `packages/acquisition-mission/Mission.js` | Seeds draft, clarification, or plan-approval gate |
+| `packages/max/workspace/AmoOperatorApproval.js` | Clarify / approve / edit / cancel; freeze; Scout only after lock |
+| `public/acquisition-missions.html` | Mission Understanding + Approve / Edit / Cancel |
 
 ## Tests
 
 - `packages/acquisition-mission/tests/spec130.test.js`
-- Updated SPEC-128 approval tests for two-phase flow
+- Updated SPEC-128 approval tests for two-phase flow plus clarification

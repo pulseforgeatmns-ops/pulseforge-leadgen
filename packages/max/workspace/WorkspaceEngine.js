@@ -38,9 +38,7 @@ const {
 const {
   maybeHandleAcquisitionOwnershipTurn,
 } = require('./AcquisitionOwnership');
-const {
-  maybeHandleAcquisitionMissionExecution,
-} = require('./AcquisitionMissionExecution');
+const acquisitionMissionExecution = require('./AcquisitionMissionExecution');
 const {
   resolveActiveMissionLock,
   guardExecutionDomain,
@@ -526,7 +524,7 @@ class WorkspaceEngine {
         }
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
         askPathTrace.traceBranch('runtime:amo');
-        const amoExecutionTurn = await maybeHandleAcquisitionMissionExecution({
+        const amoExecutionTurn = await acquisitionMissionExecution.maybeHandleAcquisitionMissionExecution({
           question,
           session,
           context: rawContext || session.context,

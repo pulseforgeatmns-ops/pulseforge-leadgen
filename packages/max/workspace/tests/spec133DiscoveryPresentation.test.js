@@ -82,7 +82,7 @@ describe('SPEC-133 — Discovery Artifact Presentation', () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = engine.create({
       tenantId: '10',
-      objective: 'Acquire commercial cleaning customers in Manchester for law firms.',
+      objective: 'Acquire commercial cleaning customers in Manchester NH for law firms.',
       targetSegment: 'Law Firms',
     });
 
@@ -130,7 +130,7 @@ describe('SPEC-133 — Discovery Artifact Presentation', () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = engine.create({
       tenantId: '10',
-      objective: 'Acquire commercial cleaning customers in Manchester.',
+      objective: 'Acquire commercial cleaning customers in Manchester NH.',
       targetSegment: 'Law Firms',
       planApproved: true,
     });

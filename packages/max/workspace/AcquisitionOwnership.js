@@ -232,12 +232,16 @@ function buildOwnershipMissionResponse({
     health: 'Healthy',
     waitingOn: 'Operator direction',
     nextStep: created
-      ? (mission.missionPlanDraft
-          ? 'Review Mission Understanding below, then approve the mission plan before Discovery.'
-          : 'Scout will identify high-probability operators matching this objective.')
+      ? (mission.pendingOperatorDecision && mission.pendingOperatorDecision.kind === 'plan_clarification'
+          ? 'Answer the planner question. Mission Planning will not guess.'
+          : mission.missionPlanDraft
+            ? 'Review Mission Understanding below, then Approve, Edit, or Cancel the mission plan before Discovery.'
+            : 'Scout will identify high-probability operators matching this objective.')
       : 'Continuing the active acquisition mission from current stage.',
     operatorDecision: created
-      ? (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) || 'Approve mission plan?'
+      ? (mission.pendingOperatorDecision && mission.pendingOperatorDecision.clarificationPrompt)
+        || (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt)
+        || 'Approve mission plan?'
       : 'Continue in mission workspace?',
     evidenceStatus: ciEvidence && ciEvidence.attached ? '✓ Blueprint attached' : 'Mission context only',
     sources,
@@ -254,6 +258,7 @@ function buildOwnershipMissionResponse({
 
   const prose = formatMissionProse(comm);
   const missionUnderstanding =
+    (mission.pendingOperatorDecision && mission.pendingOperatorDecision.clarificationPrompt) ||
     (mission.missionPlanDraft && formatMissionUnderstandingProse(mission.missionPlanDraft)) ||
     (mission.pendingOperatorDecision && mission.pendingOperatorDecision.missionUnderstanding) ||
     null;
@@ -384,6 +389,9 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
         createdBy: 'max',
         owner: 'Operator',
         constraints: ciEvidence.constraints.slice(),
+        planningContext: {
+          blueprint: ciEvidence.strategicEvidence || null,
+        },
       },
       {
         persist: input.persist,

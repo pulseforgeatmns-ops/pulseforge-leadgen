@@ -26,7 +26,7 @@ const { createMissionEngine } = require('../../../mission-engine');
 const { createBuiltinRegistry } = require('../../../capabilities');
 
 const ANCHOR_OBJECTIVE =
-  'Acquire commercial cleaning customers in Manchester for law firms.';
+  'Acquire commercial cleaning customers in Manchester NH for law firms.';
 
 function stubLegacyMissionEngine() {
   return {
@@ -139,6 +139,7 @@ describe('SPEC-127 — Active Mission Lock', () => {
       tenantId: '10',
       objective: ANCHOR_OBJECTIVE,
       targetSegment: 'Law Firms',
+      planApproved: true,
     });
 
     const engine = createWorkspaceEngine({

@@ -24,7 +24,7 @@ const { composeOperations } = require('../../commandDeck/sections/Operations');
 const { ensureAmoTenantHydrated, clearAmoHydrationCache } = require('../AmoWorkspaceHydration');
 
 const ANCHOR_OBJECTIVE =
-  'Acquire commercial cleaning customers in Manchester for law firms.';
+  'Acquire commercial cleaning customers in Manchester NH for law firms.';
 
 describe('SPEC-131 — Mission Runtime Unification', () => {
   beforeEach(() => {

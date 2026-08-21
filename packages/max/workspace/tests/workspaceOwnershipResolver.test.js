@@ -163,7 +163,7 @@ describe('SPEC-125 — Workspace Ownership-First Runtime', () => {
     const amoEngine = amo.createAcquisitionMissionEngine();
     const mission = amoEngine.create({
       tenantId: '10',
-      objective: 'Acquire commercial cleaning customers in Manchester.',
+      objective: 'Acquire commercial cleaning customers in Manchester NH.',
       targetSegment: 'Commercial Law Firms',
     });
     amoEngine.contribute(mission.id, {

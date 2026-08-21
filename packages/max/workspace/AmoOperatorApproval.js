@@ -34,21 +34,24 @@ const {
   hasSufficientEvidenceForPrioritization,
 } = require('../../acquisition-mission/DiscoveryPayload');
 const {
-  inferTargetSegmentFromObjective,
-  extractGeography,
-  segmentToSearchKey,
-} = require('../../acquisition-mission/MissionNaming');
-const {
   freezeStructuredMission,
   isStructuredMissionApproved,
+  isReadyForLock,
+  formatOperatorConfirmation,
+  formatAmbiguityPrompt,
 } = require('../../acquisition-mission/StructuredMission');
 const {
   scoutDelegationFromMission,
 } = require('../../acquisition-mission/SpecialistInputs');
+const { applyClarification, applyEdits } = require('../../acquisition-mission/MissionPlanner');
+const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const { OPERATOR_DECISION_KINDS } = amo;
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
 const PLAN_APPROVAL_ACTION = 'plan_approved';
+const PLAN_CLARIFICATION_ACTION = 'plan_clarified';
+const PLAN_CANCEL_ACTION = 'plan_cancelled';
+const PLAN_EDIT_ACTION = 'plan_edited';
 
 /** SPEC-128 — operator approval lifecycle phases (audit + response). */
 const APPROVAL_PHASES = Object.freeze({
@@ -60,41 +63,26 @@ const APPROVAL_PHASES = Object.freeze({
 });
 
 function buildDelegationFromAmoMission(mission) {
-  if (isStructuredMissionApproved(mission) || mission.structuredMission) {
-    return scoutDelegationFromMission(mission);
+  return scoutDelegationFromMission(mission);
+}
+
+function hasPendingPlanClarification(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (isStructuredMissionApproved(mission)) return false;
+  if (mission.pendingOperatorDecision) {
+    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION;
   }
-
-  const objective = String(mission.objective || '');
-  const geography = extractGeography(objective);
-  const segment =
-    inferTargetSegmentFromObjective(objective) || mission.targetSegment || null;
-  const searchSegment = segment ? segmentToSearchKey(segment) : null;
-
-  return {
-    tenantId: String(mission.tenantId || mission.clientId || ''),
-    missionId: mission.id,
-    targetContext: {
-      geography,
-      segments: searchSegment ? [searchSegment] : [],
-      businessType: 'commercial_cleaning',
-      missionBound: true,
-    },
-    businessContext: {
-      serviceGeography: geography,
-      preferredSegments: searchSegment ? [searchSegment] : [],
-      operatorDirection: objective,
-      missionObjectiveImmutable: true,
-      commercialCapability: 'commercial_cleaning',
-      exclusions: Array.isArray(mission.constraints) ? mission.constraints.slice() : [],
-    },
-  };
+  return Array.isArray(mission.planAmbiguities) && mission.planAmbiguities.length > 0;
 }
 
 function hasPendingPlanApproval(snapshot) {
   const mission = snapshot.mission || {};
   if (isStructuredMissionApproved(mission)) return false;
+  if (hasPendingPlanClarification(snapshot)) return false;
+  if (mission.planCancelled) return false;
   if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_APPROVAL;
+    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_APPROVAL
+      || mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_EDIT;
   }
   return Boolean(mission.missionPlanDraft && !mission.structuredMission);
 }
@@ -133,6 +121,9 @@ async function advancePlanAfterApproval(input = {}) {
 
   const draft = snapshot.mission.missionPlanDraft;
   if (!draft) throw new Error('No mission plan draft to approve.');
+  if (!isReadyForLock(draft) || hasPendingPlanClarification(snapshot)) {
+    throw new Error('Mission plan still has unresolved ambiguities.');
+  }
 
   const frozen = freezeStructuredMission(draft, {
     approvedBy: operatorId || 'operator',
@@ -159,6 +150,7 @@ async function advancePlanAfterApproval(input = {}) {
   updated.missionPlanDraft = null;
   updated.structuredMission = frozen;
   updated.structuredMissionApproved = true;
+  updated.planAmbiguities = [];
   updated.pendingOperatorDecision = {
     stage: STAGES.DISCOVER,
     kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
@@ -183,6 +175,140 @@ async function advancePlanAfterApproval(input = {}) {
     snapshot,
     structuredMission: frozen,
   };
+}
+
+function putPlannedMission(engine, mission, planned, extra = {}) {
+  mission.missionPlanDraft = planned.draft;
+  mission.planAmbiguities = planned.ambiguities || [];
+  mission.planResolutions = planned.resolutions || mission.planResolutions || null;
+  mission.structuredMission = null;
+  mission.structuredMissionApproved = false;
+  Object.assign(mission, extra);
+  if (planned.ambiguities && planned.ambiguities.length) {
+    const first = planned.ambiguities[0];
+    mission.pendingOperatorDecision = {
+      stage: STAGES.DISCOVER,
+      kind: OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION,
+      prompt: first.question,
+      question: first.question,
+      choices: first.choices || [],
+      field: first.field,
+      clarificationPrompt: formatAmbiguityPrompt(first),
+    };
+  } else {
+    mission.pendingOperatorDecision = {
+      stage: STAGES.DISCOVER,
+      kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
+      prompt: 'Approve mission plan?',
+      missionUnderstanding: planned.confirmation || formatOperatorConfirmation(planned.draft),
+      actions: ['Approve', 'Edit', 'Cancel'],
+    };
+  }
+  return engine.store.putMission(mission);
+}
+
+/**
+ * Apply an operator clarification choice and replan. Does not execute specialists.
+ */
+function advancePlanClarification(input = {}) {
+  const { engine, mission, tenantId, question } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const current = snapshot.mission;
+  const planned = applyClarification(current.objective, question, {
+    targetSegment: current.targetSegment,
+    constraints: current.constraints,
+    prior: { ambiguities: current.planAmbiguities, draft: current.missionPlanDraft, resolutions: current.planResolutions },
+    resolutions: current.planResolutions,
+    context: input.context,
+  });
+  if (planned.unmatchedClarification) {
+    return {
+      matched: false,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+      clarificationPrompt: planned.clarificationPrompt,
+      planned,
+    };
+  }
+  engine.contribute(
+    mission.id,
+    {
+      specialist: SPECIALISTS.OPERATOR,
+      kind: CONTRIBUTION_KINDS.EDIT,
+      payload: {
+        action: PLAN_CLARIFICATION_ACTION,
+        command: question,
+        field: current.pendingOperatorDecision && current.pendingOperatorDecision.field,
+        resolutions: planned.resolutions,
+      },
+    },
+    { tenantId }
+  );
+  putPlannedMission(engine, engine.get(mission.id, tenantId), planned);
+  return {
+    matched: true,
+    snapshot: engine.inspect(mission.id, { tenantId }),
+    planned,
+    readyForConfirmation: planned.readyForConfirmation,
+  };
+}
+
+function cancelMissionPlan(input = {}) {
+  const { engine, mission, tenantId, question } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+  const current = engine.get(mission.id, tenantId);
+  current.planCancelled = true;
+  current.missionPlanDraft = current.missionPlanDraft
+    ? { ...current.missionPlanDraft, execution: { state: 'cancelled' } }
+    : null;
+  current.pendingOperatorDecision = null;
+  current.status = 'Cancelled';
+  engine.store.putMission(current);
+  engine.contribute(
+    mission.id,
+    {
+      specialist: SPECIALISTS.OPERATOR,
+      kind: CONTRIBUTION_KINDS.EDIT,
+      payload: { action: PLAN_CANCEL_ACTION, command: question, cancelled: true },
+    },
+    { tenantId }
+  );
+  return { snapshot: engine.inspect(mission.id, { tenantId }), cancelled: true };
+}
+
+function beginPlanEdit(input = {}) {
+  const { engine, mission, tenantId } = input;
+  const current = engine.get(mission.id, tenantId);
+  current.pendingOperatorDecision = {
+    stage: STAGES.DISCOVER,
+    kind: OPERATOR_DECISION_KINDS.PLAN_EDIT,
+    prompt: 'What should we change?',
+    actions: ['Approve', 'Edit', 'Cancel'],
+  };
+  engine.store.putMission(current);
+  return { snapshot: engine.inspect(mission.id, tenantId) };
+}
+
+function applyPlanEdits(input = {}) {
+  const { engine, mission, tenantId, question, edits } = input;
+  const current = engine.get(mission.id, tenantId);
+  const planned = applyEdits(current.objective, edits || { geographyText: question, region: question }, {
+    targetSegment: current.targetSegment,
+    constraints: current.constraints,
+    resolutions: current.planResolutions,
+    context: input.context,
+  });
+  engine.contribute(
+    mission.id,
+    {
+      specialist: SPECIALISTS.OPERATOR,
+      kind: CONTRIBUTION_KINDS.EDIT,
+      payload: { action: PLAN_EDIT_ACTION, command: question, edits: edits || { region: question } },
+    },
+    { tenantId }
+  );
+  putPlannedMission(engine, engine.get(mission.id, tenantId), planned);
+  return { snapshot: engine.inspect(mission.id, tenantId), planned };
 }
 
 function findDiscoveryApproval(contributions = []) {
@@ -212,6 +338,7 @@ function findScoutDiscoveryAfterApproval(contributions = [], approval) {
 
 function hasPendingDiscoveryApproval(snapshot) {
   const mission = snapshot.mission || {};
+  if (hasPendingPlanClarification(snapshot)) return false;
   if (hasPendingPlanApproval(snapshot)) return false;
   if (!isStructuredMissionApproved(mission) && mission.missionPlanDraft) return false;
   if (mission.pendingOperatorDecision) {
@@ -613,13 +740,22 @@ module.exports = {
   APPROVAL_PHASES,
   DISCOVERY_APPROVAL_ACTION,
   PLAN_APPROVAL_ACTION,
+  PLAN_CLARIFICATION_ACTION,
+  PLAN_CANCEL_ACTION,
+  PLAN_EDIT_ACTION,
   buildDelegationFromAmoMission,
   findDiscoveryApproval,
   findPlanApproval,
   findScoutDiscoveryAfterApproval,
   hasPendingPlanApproval,
+  hasPendingPlanClarification,
+  isMissionPlanningTurn,
   hasPendingDiscoveryApproval,
   advancePlanAfterApproval,
+  advancePlanClarification,
+  cancelMissionPlan,
+  beginPlanEdit,
+  applyPlanEdits,
   advanceDiscoveryAfterApproval,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,

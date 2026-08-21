@@ -9,7 +9,7 @@ describe('SPEC-128 pending operator decision', () => {
   it('seeds pending plan approval on discover-stage missions', () => {
     const mission = createMission({
       tenantId: '10',
-      objective: 'Acquire commercial cleaning customers in Manchester.',
+      objective: 'Acquire commercial cleaning customers in Manchester NH.',
       targetSegment: 'Law Firms',
       stage: amo.STAGES.DISCOVER,
     });

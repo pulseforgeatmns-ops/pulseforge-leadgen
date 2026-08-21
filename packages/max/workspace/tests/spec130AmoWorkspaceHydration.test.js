@@ -34,7 +34,7 @@ const {
 const { WORKSPACE_OWNERS } = require('../WorkspaceOwnershipResolver');
 
 const ANCHOR_OBJECTIVE =
-  'Acquire commercial cleaning customers in Manchester for law firms.';
+  'Acquire commercial cleaning customers in Manchester NH for law firms.';
 
 function realLegacyEngine() {
   return createMissionEngine({
@@ -49,6 +49,7 @@ function buildPersistedAmoFixture() {
     tenantId: '10',
     objective: ANCHOR_OBJECTIVE,
     targetSegment: 'Law Firms',
+    planApproved: true,
   });
   return { source, mission };
 }

@@ -9,6 +9,7 @@
 const { isActiveMissionStatus } = require('../../mission-engine/types');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
+const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const MISSION_RUNTIMES = Object.freeze({
@@ -120,9 +121,10 @@ async function resolveMissionRuntime(input = {}) {
   const legacyMission = await resolveLegacyActiveMission(input);
   const amoActive = isAmoMission(amoMission);
   const legacyActive = Boolean(legacyMission);
-  const executionCommand = isMissionExecutionCommand(question);
+  const executionCommand = isMissionExecutionCommand(question)
+    || isMissionPlanningTurn(amoMission, question);
 
-  if (amoActive && hasPendingOperatorDecision(amoMission) && executionCommand) {
+  if (amoActive && hasPendingOperatorDecision(amoMission) && (executionCommand || isMissionPlanningTurn(amoMission, question))) {
     askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, 'amo_pending_approval', {
       missionId: amoMission && amoMission.id,
     });
