@@ -131,6 +131,13 @@ const {
   createWorkspaceOwnershipAudit,
 } = require('./audit/WorkspaceOwnershipAudit');
 const {
+  listOperatorApprovalRoutingAuditLog,
+  clearOperatorApprovalRoutingAuditLog,
+  createOperatorApprovalRoutingAudit,
+  PIPELINES: APPROVAL_ROUTING_PIPELINES,
+  BREAKPOINT_LEGACY_MISSION_FIRST,
+} = require('./audit/OperatorApprovalRoutingAudit');
+const {
   maybeHandleRetrievalBeforeDelegationTurn,
 } = require('./RetrievalBeforeDelegationContext');
 const {
@@ -187,6 +194,11 @@ module.exports = {
   listWorkspaceOwnershipAuditLog,
   clearWorkspaceOwnershipAuditLog,
   createWorkspaceOwnershipAudit,
+  listOperatorApprovalRoutingAuditLog,
+  clearOperatorApprovalRoutingAuditLog,
+  createOperatorApprovalRoutingAudit,
+  APPROVAL_ROUTING_PIPELINES,
+  BREAKPOINT_LEGACY_MISSION_FIRST,
   looksLikeAcquisitionMissionQuestion,
   referencesMissionState,
   shouldInspectActiveMission,

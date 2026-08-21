@@ -53,6 +53,15 @@ const {
 const {
   createWorkspaceOwnershipAudit,
 } = require('./audit/WorkspaceOwnershipAudit');
+const {
+  emitApprovalRoutingContext,
+  logPipelineSelected,
+  logMissionApprovalMatch,
+  logMissionStageExecution,
+  logFallbackReason,
+  PIPELINES: APPROVAL_ROUTING_PIPELINES,
+  BREAKPOINT_LEGACY_MISSION_FIRST,
+} = require('./audit/OperatorApprovalRoutingAudit');
 const { maybeHandleCalCoachingTurn } = require('./CalCoachingContext');
 const {
   maybeHandleRetrievalBeforeDelegationTurn,
@@ -414,6 +423,15 @@ class WorkspaceEngine {
       session.context.workspaceOwnerReason = workspaceOwnership.reason;
     }
 
+    const approvalRouting = emitApprovalRoutingContext({
+      question,
+      session,
+      context: rawContext || session.context,
+      workspaceOwnership,
+      acquisitionMissionEngine: this._acquisitionMissionEngine,
+      acquisitionMissionService: this._acquisitionMissionService,
+    });
+
     const ownerIs = (...owners) => owners.includes(workspaceOwnership.owner);
 
     const fallbackToReasoning = (reason) => {
@@ -450,6 +468,29 @@ class WorkspaceEngine {
         sessions: this._sessions,
       });
       if (missionFirstTurn) {
+        const legacyAction =
+          missionFirstTurn.resolution && missionFirstTurn.resolution.action;
+        logPipelineSelected({
+          pipeline:
+            legacyAction === 'stage_fallback'
+              ? APPROVAL_ROUTING_PIPELINES.RECOMMENDATION_ENGINE
+              : APPROVAL_ROUTING_PIPELINES.MISSION_ENGINE,
+          claimedBy: 'maybeHandleMissionFirstTurn',
+          action: legacyAction || null,
+          classification:
+            missionFirstTurn.resolution &&
+            missionFirstTurn.resolution.classification,
+        });
+        if (approvalRouting.pending) {
+          logFallbackReason({
+            reason: 'legacy_mission_first_preempted_amo',
+            breakpoint: BREAKPOINT_LEGACY_MISSION_FIRST,
+            claimedRuntime: 'MissionEngine',
+            pendingPrompt: approvalRouting.pending.prompt || null,
+            amoMissionId:
+              approvalRouting.amoMission && approvalRouting.amoMission.id,
+          });
+        }
         return {
           ...missionFirstTurn,
           suggestions: resolveResultSuggestions({
@@ -472,6 +513,31 @@ class WorkspaceEngine {
         missionEngine: this._missionEngine || undefined,
       });
       if (amoExecutionTurn) {
+        logPipelineSelected({
+          pipeline: APPROVAL_ROUTING_PIPELINES.ACQUISITION_MISSION,
+          claimedBy: 'maybeHandleAcquisitionMissionExecution',
+          action: amoExecutionTurn.action || null,
+        });
+        if (amoExecutionTurn.action === 'discovery_approved') {
+          logMissionApprovalMatch({
+            matched: true,
+            missionId:
+              amoExecutionTurn.mission && amoExecutionTurn.mission.id,
+            action: amoExecutionTurn.action,
+          });
+          logMissionStageExecution({
+            started: Boolean(
+              amoExecutionTurn.executionResult &&
+                amoExecutionTurn.executionResult.discovery
+            ),
+            executor: 'scout',
+            missionId:
+              amoExecutionTurn.mission && amoExecutionTurn.mission.id,
+            outcome:
+              amoExecutionTurn.executionResult &&
+              amoExecutionTurn.executionResult.executionOutcome,
+          });
+        }
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
         if (session.context && typeof session.context === 'object') {
           session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
@@ -591,6 +657,15 @@ class WorkspaceEngine {
         };
       }
 
+      logPipelineSelected({
+        pipeline: APPROVAL_ROUTING_PIPELINES.REASONING,
+        claimedBy: 'fallbackToReasoning',
+      });
+      logFallbackReason({
+        reason: 'active_mission_unhandled',
+        breakpoint: 'WorkspaceEngine.ask:fallbackToReasoning(active_mission_unhandled)',
+        claimedRuntime: 'Reasoning',
+      });
       fallbackToReasoning('active_mission_unhandled');
     }
 
