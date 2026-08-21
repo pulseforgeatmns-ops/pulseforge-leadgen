@@ -5,6 +5,8 @@
  * Render directly from executionResult.discovery.payload — never reconstruct.
  */
 
+const { formatSignalLabel, sourceLabel } = require('./DiscoveryPayload');
+
 /**
  * @param {unknown} item
  * @returns {string}
@@ -25,6 +27,29 @@ function formatDiscoveryItem(item) {
   return String(item);
 }
 
+function formatBuyingSignalLine(signal) {
+  if (signal == null) return '';
+  if (typeof signal === 'string') return signal.trim();
+  if (typeof signal !== 'object') return String(signal);
+  const parts = [];
+  if (signal.label) parts.push(String(signal.label));
+  else if (signal.type) parts.push(formatSignalLabel(signal));
+  if (signal.company) parts.push(`@ ${signal.company}`);
+  if (signal.source) parts.push(`(${signal.source})`);
+  return parts.join(' ').trim();
+}
+
+function formatEvidenceLine(item) {
+  if (item == null) return '';
+  if (typeof item === 'string') return item.trim();
+  if (typeof item !== 'object') return String(item);
+  const parts = [];
+  if (item.label) parts.push(String(item.label));
+  if (item.source) parts.push(`— ${item.source}`);
+  if (item.company) parts.push(`(${item.company})`);
+  return parts.join(' ').trim();
+}
+
 /**
  * @param {unknown[] | null | undefined} items
  * @returns {string[]}
@@ -42,12 +67,18 @@ function normalizeDiscoveryItems(items) {
 function presentationFromDiscoveryPayload(payload = {}) {
   const companies = Array.isArray(payload.companies) ? payload.companies : [];
   const prospects = Array.isArray(payload.prospects) ? payload.prospects : [];
-  const buyingSignals = normalizeDiscoveryItems(payload.buyingSignals);
-  const evidence = normalizeDiscoveryItems(payload.evidence);
+  const buyingSignalsRaw = Array.isArray(payload.buyingSignals) ? payload.buyingSignals : [];
+  const buyingSignals = buyingSignalsRaw.map(formatBuyingSignalLine).filter(Boolean);
+  const evidenceRaw = Array.isArray(payload.evidence) ? payload.evidence : [];
+  const evidence = evidenceRaw.map(formatEvidenceLine).filter(Boolean);
   const decisionMakers = normalizeDiscoveryItems(payload.decisionMakers);
   const confidence =
     payload.confidence != null && Number.isFinite(Number(payload.confidence))
       ? Number(payload.confidence)
+      : null;
+  const confidenceBreakdown =
+    payload.confidenceBreakdown && typeof payload.confidenceBreakdown === 'object'
+      ? payload.confidenceBreakdown
       : null;
   const qualifiedCount =
     payload.qualifiedCount != null
@@ -57,19 +88,28 @@ function presentationFromDiscoveryPayload(payload = {}) {
     payload.summary != null && String(payload.summary).trim()
       ? String(payload.summary).trim()
       : null;
+  const missionObjective =
+    payload.missionObjective != null && String(payload.missionObjective).trim()
+      ? String(payload.missionObjective).trim()
+      : null;
 
-  const rankedProspects = [];
-  for (let i = 0; i < companies.length; i += 1) {
-    const company = companies[i];
-    rankedProspects.push({
-      rank: i + 1,
-      name: formatDiscoveryItem(company) || `Prospect ${i + 1}`,
-      id:
-        company && typeof company === 'object' && company.id != null
-          ? company.id
-          : null,
-      kind: 'company',
-    });
+  let rankedProspects = Array.isArray(payload.rankedProspects)
+    ? payload.rankedProspects.map((row) => ({ ...row }))
+    : [];
+
+  if (!rankedProspects.length) {
+    for (let i = 0; i < companies.length; i += 1) {
+      const company = companies[i];
+      rankedProspects.push({
+        rank: i + 1,
+        name: formatDiscoveryItem(company) || `Prospect ${i + 1}`,
+        id:
+          company && typeof company === 'object' && company.id != null
+            ? company.id
+            : null,
+        kind: 'company',
+      });
+    }
   }
   if (!rankedProspects.length && prospects.length) {
     for (let i = 0; i < prospects.length; i += 1) {
@@ -95,11 +135,15 @@ function presentationFromDiscoveryPayload(payload = {}) {
     prospects,
     rankedProspects,
     buyingSignals,
+    buyingSignalsRaw,
     evidence,
+    evidenceRaw,
     decisionMakers,
     confidence,
+    confidenceBreakdown,
     qualifiedCount,
     summary,
+    missionObjective,
     outcome: payload.outcome || null,
     blocked: Boolean(payload.blocked),
   };
@@ -113,14 +157,36 @@ function formatDiscoveryResultsLines(presentation) {
   if (!presentation) return [];
   const lines = ['Scout Discovery', ''];
   const count = presentation.qualifiedCount || presentation.rankedProspects.length;
+
+  if (presentation.missionObjective) {
+    lines.push('Mission Objective');
+    lines.push('');
+    lines.push(presentation.missionObjective);
+    lines.push('');
+  }
+
+  if (presentation.summary) {
+    lines.push('Discovery Summary');
+    lines.push('');
+    lines.push(presentation.summary);
+    lines.push('');
+  }
+
   lines.push(`Found ${count} prospect${count === 1 ? '' : 's'}`);
   lines.push('');
 
   if (presentation.rankedProspects.length) {
+    lines.push('Ranked Prospects');
+    lines.push('');
     for (const row of presentation.rankedProspects) {
-      lines.push(`${row.rank}.`);
-      lines.push(row.name);
+      lines.push(`${row.rank}. ${row.name}`);
+      if (row.rationale) lines.push(`   Why: ${row.rationale}`);
+      if (row.fit != null) lines.push(`   Fit: ${Number(row.fit).toFixed(2)}`);
+      if (row.timing != null) lines.push(`   Timing: ${Number(row.timing).toFixed(2)}`);
       if (row.title) lines.push(`   Role: ${row.title}`);
+      if (row.unknowns && row.unknowns.length) {
+        lines.push(`   Unknowns: ${row.unknowns.slice(0, 2).join('; ')}`);
+      }
       lines.push('');
     }
   } else if (count > 0) {
@@ -128,7 +194,28 @@ function formatDiscoveryResultsLines(presentation) {
     lines.push('');
   }
 
-  if (presentation.confidence != null) {
+  if (presentation.confidenceBreakdown) {
+    const cb = presentation.confidenceBreakdown;
+    lines.push('Confidence');
+    lines.push('');
+    lines.push(`Overall: ${cb.overall != null ? cb.overall.toFixed(2) : '—'}`);
+    lines.push(`  Discovery: ${cb.discovery != null ? cb.discovery.toFixed(2) : '—'}`);
+    lines.push(`  Evidence: ${cb.evidence != null ? cb.evidence.toFixed(2) : '—'}`);
+    lines.push(`  Market: ${cb.market != null ? cb.market.toFixed(2) : '—'}`);
+    lines.push(`  Fit: ${cb.fit != null ? cb.fit.toFixed(2) : '—'}`);
+    lines.push(`  Completeness: ${cb.completeness != null ? cb.completeness.toFixed(2) : '—'}`);
+    if (cb.missingEvidence && cb.missingEvidence.length) {
+      lines.push('');
+      lines.push('Missing Evidence');
+      for (const item of cb.missingEvidence) lines.push(`• ${item}`);
+    }
+    if (cb.unknowns && cb.unknowns.length) {
+      lines.push('');
+      lines.push('Unknowns');
+      for (const item of cb.unknowns.slice(0, 3)) lines.push(`• ${item}`);
+    }
+    lines.push('');
+  } else if (presentation.confidence != null) {
     lines.push('Confidence');
     lines.push('');
     lines.push(presentation.confidence.toFixed(2));
@@ -162,13 +249,6 @@ function formatDiscoveryResultsLines(presentation) {
     lines.push('');
   }
 
-  if (presentation.summary) {
-    lines.push('Discovery Summary');
-    lines.push('');
-    lines.push(presentation.summary);
-    lines.push('');
-  }
-
   return lines;
 }
 
@@ -199,4 +279,6 @@ module.exports = {
   formatDiscoveryResultsLines,
   formatDiscoveryResultsProse,
   findLatestDiscoveryContribution,
+  formatBuyingSignalLine,
+  formatEvidenceLine,
 };

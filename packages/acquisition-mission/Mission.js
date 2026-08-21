@@ -16,8 +16,8 @@ const {
   amoError,
   clamp,
   round2,
-  titleCaseSegment,
 } = require('./types');
+const { deriveMissionTitle } = require('./MissionNaming');
 
 function normalizePriority(value) {
   const text = asText(value).toLowerCase();
@@ -48,7 +48,7 @@ function createMission(input = {}) {
     objective,
     targetSegment,
     campaign,
-    title: asText(input.title) || titleCaseSegment(targetSegment || campaign || objective),
+    title: asText(input.title) || deriveMissionTitle(objective, targetSegment),
     priority: normalizePriority(input.priority),
     stage,
     status: STAGE_LABELS[stage] || 'Discovering',

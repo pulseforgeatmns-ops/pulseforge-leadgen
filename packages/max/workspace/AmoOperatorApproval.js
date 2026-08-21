@@ -29,6 +29,15 @@ const {
 const {
   presentationFromDiscoveryPayload,
 } = require('../../acquisition-mission/DiscoveryPresentation');
+const {
+  normalizeScoutDiscoveryPayload,
+  hasSufficientEvidenceForPrioritization,
+} = require('../../acquisition-mission/DiscoveryPayload');
+const {
+  inferTargetSegmentFromObjective,
+  extractGeography,
+  segmentToSearchKey,
+} = require('../../acquisition-mission/MissionNaming');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
 
@@ -43,20 +52,27 @@ const APPROVAL_PHASES = Object.freeze({
 
 function buildDelegationFromAmoMission(mission) {
   const objective = String(mission.objective || '');
-  const geoMatch = objective.match(/\bin\s+([A-Za-z][A-Za-z\s,]+?)(?:\.|$)/i);
-  const geography = geoMatch ? geoMatch[1].trim() : null;
-  const segment = mission.targetSegment || null;
+  const geography = extractGeography(objective);
+  const segment =
+    inferTargetSegmentFromObjective(objective) || mission.targetSegment || null;
+  const searchSegment = segment ? segmentToSearchKey(segment) : null;
+
   return {
     tenantId: String(mission.tenantId || mission.clientId || ''),
+    missionId: mission.id,
     targetContext: {
       geography,
-      segments: segment ? [segment] : [],
-      businessType: segment,
+      segments: searchSegment ? [searchSegment] : [],
+      businessType: 'commercial_cleaning',
+      missionBound: true,
     },
     businessContext: {
       serviceGeography: geography,
-      preferredSegments: segment ? [segment] : [],
+      preferredSegments: searchSegment ? [searchSegment] : [],
       operatorDirection: objective,
+      missionObjectiveImmutable: true,
+      commercialCapability: 'commercial_cleaning',
+      exclusions: Array.isArray(mission.constraints) ? mission.constraints.slice() : [],
     },
   };
 }
@@ -97,52 +113,78 @@ function hasPendingDiscoveryApproval(snapshot) {
   return !findDiscoveryApproval(contributions);
 }
 
-function mapScoutIntelligenceToDiscoveryPayload(result = {}) {
-  const payload = result.payload || {};
-  const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
-  const companies =
-    payload.companies ||
-    opportunities
-      .map((row) => ({
-        id: row.companyId || row.id,
-        name: row.name,
-      }))
-      .filter((row) => row.id || row.name);
-  const prospects = payload.prospects || payload.people || [];
-  const qualifiedCount =
-    payload.qualifiedCount != null
-      ? Number(payload.qualifiedCount)
-      : companies.length || opportunities.length;
-
-  return {
-    companies,
-    prospects,
-    buyingSignals: payload.buyingSignals || payload.signals || [],
-    decisionMakers: payload.decisionMakers || [],
-    confidence: payload.confidence != null ? payload.confidence : result.confidence,
-    evidence: payload.evidence || payload.evidenceRefs || [],
-    qualifiedCount,
-    outcome: result.status || (qualifiedCount > 0 ? 'completed' : 'blocked'),
-    blocked: result.status === 'blocked' || qualifiedCount <= 0,
-    summary: result.summary || null,
+function mapScoutIntelligenceToDiscoveryPayload(result = {}, opts = {}) {
+  return normalizeScoutDiscoveryPayload(result, {
+    missionObjective: opts.missionObjective,
     approvalConsumed: true,
-  };
+  });
 }
 
 function fixtureScoutDiscoveryResult() {
+  const opportunities = [
+    {
+      companyId: 'co-harbor',
+      name: 'Harbor Law Group',
+      fit: 0.78,
+      timing: 0.65,
+      confidence: 0.74,
+      signals: [
+        {
+          type: 'hiring',
+          label: 'Hiring operations manager',
+          source: 'job_board',
+          observedAt: '2026-08-01T00:00:00.000Z',
+        },
+        {
+          type: 'decision_maker',
+          label: 'Alex Morgan, Office Manager',
+          source: 'existing_repository',
+        },
+      ],
+      evidenceRefs: [
+        {
+          id: 'ev-harbor-hire',
+          label: 'Operations manager job posting on company careers page',
+          snapshot: { source: 'job_board', companyName: 'Harbor Law Group' },
+        },
+      ],
+      unknowns: [{ text: 'Current cleaning vendor unknown.' }],
+    },
+    {
+      companyId: 'co-granite',
+      name: 'Granite Legal Partners',
+      fit: 0.71,
+      timing: 0.58,
+      confidence: 0.68,
+      signals: [
+        {
+          type: 'hiring',
+          label: 'Hiring office coordinator',
+          source: 'linkedin',
+          observedAt: '2026-07-28T00:00:00.000Z',
+        },
+      ],
+      evidenceRefs: [
+        {
+          id: 'ev-granite-li',
+          label: 'LinkedIn hiring post for office coordinator',
+          snapshot: { source: 'linkedin', companyName: 'Granite Legal Partners' },
+        },
+      ],
+      unknowns: [],
+    },
+  ];
   return {
     status: 'completed',
     confidence: 0.72,
-    summary: 'Scout discovery completed for the active mission.',
+    summary:
+      '2 prospects ranked against the mission objective. Top: Harbor Law Group, Granite Legal Partners. 1 have identifiable decision-makers.',
     payload: {
-      companies: [
-        { id: 'co-harbor', name: 'Harbor Law Group' },
-        { id: 'co-granite', name: 'Granite Legal Partners' },
-      ],
-      prospects: [{ id: 'p-1', name: 'Alex Morgan' }],
-      buyingSignals: ['Hiring'],
-      evidence: ['fixture'],
+      companies: opportunities.map((o) => ({ id: o.companyId, name: o.name })),
+      prospects: [{ id: 'p-1', name: 'Alex Morgan', title: 'Office Manager' }],
+      opportunities,
       qualifiedCount: 2,
+      confidence: 0.72,
     },
   };
 }
@@ -163,42 +205,45 @@ async function runScoutForAmoMission(mission, opts = {}) {
       discover: opts.discover,
       enablePlaces: opts.enablePlaces,
     });
-    const mapped = mapScoutIntelligenceToDiscoveryPayload(result);
+    const mapped = mapScoutIntelligenceToDiscoveryPayload(result, {
+      missionObjective: mission.objective,
+    });
     if (
-      opts.allowFixtureFallback !== false &&
+      opts.allowFixtureFallback === true &&
       (mapped.blocked || mapped.qualifiedCount <= 0)
     ) {
       return fixtureScoutDiscoveryResult();
     }
     return result;
   } catch (err) {
-    if (opts.allowFixtureFallback === false) throw err;
-    return fixtureScoutDiscoveryResult();
+    if (opts.allowFixtureFallback === true) return fixtureScoutDiscoveryResult();
+    throw err;
   }
 }
 
-function discoveryPayloadFromScoutResult(scoutResult) {
+function discoveryPayloadFromScoutResult(scoutResult, mission) {
   if (scoutResult && scoutResult.discoveryReport) {
     const report = scoutResult.discoveryReport;
-    return {
-      companies: Array.from({ length: Math.max(report.prospectCount || 0, 1) }, (_, i) => ({
-        id: `discovered-${i + 1}`,
-        name: `Prospect ${i + 1}`,
-      })),
-      prospects: [],
-      buyingSignals: [],
-      evidence: report.evidenceSources
-        ? report.evidenceSources.filter((row) => row.succeeded).map((row) => row.source)
-        : ['scout.discover'],
-      qualifiedCount: report.prospectCount || 0,
-      confidence: 0.7,
-      outcome: report.outcome,
-      blocked: /blocked/i.test(String(report.outcome || '')),
-      summary: report.blockReason || null,
-      approvalConsumed: true,
-    };
+    return normalizeScoutDiscoveryPayload(
+      {
+        status: /blocked/i.test(String(report.outcome || '')) ? 'blocked' : 'completed',
+        summary: report.blockReason || null,
+        payload: {
+          qualifiedCount: report.prospectCount || 0,
+          evidence: report.evidenceSources
+            ? report.evidenceSources
+                .filter((row) => row.succeeded)
+                .map((row) => ({ label: row.source, source: row.source }))
+            : [{ label: 'Scout discovery', source: 'scout.discover' }],
+          outcome: report.outcome,
+        },
+      },
+      { missionObjective: mission && mission.objective, approvalConsumed: true }
+    );
   }
-  return mapScoutIntelligenceToDiscoveryPayload(scoutResult);
+  return mapScoutIntelligenceToDiscoveryPayload(scoutResult, {
+    missionObjective: mission && mission.objective,
+  });
 }
 
 function clearPendingOperatorDecision(engine, mission) {
@@ -345,7 +390,7 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     allowFixtureFallback,
   });
 
-  const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult);
+  const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, snapshot.mission);
   discoveryPayload.approvalId = approval.id;
 
   const discoveryContribution = engine.contribute(
@@ -416,11 +461,14 @@ function buildDiscoveryApprovalProse(result) {
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
   const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
   const blocked = result.executionOutcome === 'blocked';
+  const sufficientEvidence = hasSufficientEvidenceForPrioritization(discoveryResults);
   const waitingOn = blocked
     ? 'Discovery blocker'
-    : result.approvalPhase === APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION
+    : result.approvalPhase === APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION && sufficientEvidence
       ? 'Prioritization approval'
-      : null;
+      : result.approvalPhase === APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION
+        ? 'Evidence review'
+        : null;
   const comm = buildMissionCommunication({
     headline: 'Mission Updated',
     mission: result.alreadyExecuted ? 'Discovery already executed.' : 'Approval Consumed',
@@ -428,16 +476,19 @@ function buildDiscoveryApprovalProse(result) {
     status: blocked ? 'Discovery Blocked' : 'Discovery Complete',
     waitingOn,
     confidence: discoveryResults.confidence,
+    confidenceBreakdown: discoveryResults.confidenceBreakdown,
     nextStep: blocked
       ? 'Resolve the discovery blocker, then retry Discovery.'
-      : discoveryResults.qualifiedCount > 0
+      : sufficientEvidence
         ? 'Review discovered prospects and approve prioritization to continue.'
-        : null,
+        : 'Review discovery evidence. Scout must surface attributable signals before prioritization.',
     operatorDecision: blocked
       ? 'Retry discovery?'
-      : !blocked && discoveryResults.qualifiedCount > 0
+      : !blocked && sufficientEvidence
         ? 'Approve prioritization?'
-        : null,
+        : !blocked
+          ? 'Request more discovery evidence?'
+          : null,
     discoveryResults: result.discovery ? discoveryResults : null,
     evidenceStatus: blocked && scoutPayload.summary ? scoutPayload.summary : null,
     sources: ['acquisition_mission', 'scout'],

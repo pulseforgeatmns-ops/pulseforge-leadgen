@@ -7,6 +7,7 @@
 
 const amo = require('../packages/acquisition-mission');
 const { STAGE_ORDER } = amo;
+const { normalizeScoutDiscoveryPayload } = require('../packages/acquisition-mission/DiscoveryPayload');
 
 /** Legacy SPEC-022 types that now persist only through AMO (SPEC-131). */
 const ACQUISITION_LEGACY_MISSION_TYPES = new Set([
@@ -155,28 +156,14 @@ async function attachScoutDiscovery(input = {}, result = {}, opts = {}) {
   const missionId = input.missionId || opts.missionId
     || (opts.attachToActive ? (activeMissionFor(tenantId, opts) || {}).id : null);
   if (!missionId) return null;
-  const payload = result && result.payload ? result.payload : result;
-  const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
-  const companies = payload.companies || opportunities.map((row) => ({
-    id: row.companyId || row.id,
-    name: row.name,
-  })).filter((row) => row.id || row.name);
-  const prospects = payload.prospects || payload.people || (payload.personIds || []).map((id) => ({ id }));
-  const buyingSignals = payload.buyingSignals || payload.signals || opportunities.flatMap((row) => row.signals || []);
-  const evidence = payload.evidence || payload.evidenceRefs || opportunities.flatMap((row) => row.evidenceRefs || []);
+  const normalized = normalizeScoutDiscoveryPayload(result, {
+    missionObjective: input.missionObjective || opts.missionObjective,
+  });
   try {
     return await contribute(missionId, {
       specialist: 'scout',
       kind: 'discovery',
-      payload: {
-        companies,
-        prospects,
-        buyingSignals,
-        decisionMakers: payload.decisionMakers || [],
-        confidence: payload.confidence || result.confidence,
-        evidence,
-        qualifiedCount: payload.qualifiedCount || companies.length || opportunities.length,
-      },
+      payload: normalized,
     }, { ...opts, tenantId });
   } catch (err) {
     console.error('[amo] attach scout:', err.message);
