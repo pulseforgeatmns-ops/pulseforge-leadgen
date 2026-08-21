@@ -9,6 +9,7 @@
 const { isActiveMissionStatus } = require('../../mission-engine/types');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
+const askPathTrace = require('./audit/AskPathTrace');
 
 const MISSION_RUNTIMES = Object.freeze({
   AMO: 'AMO',
@@ -113,6 +114,7 @@ async function resolveLegacyActiveMission(input = {}) {
  * @returns {Promise<{ runtime: 'AMO'|'SPEC-022'|null, reason: string, missionType: string|null, mission: object|null, amoMission: object|null, legacyMission: object|null }>}
  */
 async function resolveMissionRuntime(input = {}) {
+  askPathTrace.traceEnter('resolveMissionRuntime');
   const question = String(input.question || '').trim();
   const amoMission = await resolveAcquisitionActiveMission(input);
   const legacyMission = await resolveLegacyActiveMission(input);
@@ -121,6 +123,10 @@ async function resolveMissionRuntime(input = {}) {
   const executionCommand = isMissionExecutionCommand(question);
 
   if (amoActive && hasPendingOperatorDecision(amoMission) && executionCommand) {
+    askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, 'amo_pending_approval', {
+      missionId: amoMission && amoMission.id,
+    });
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'amo_pending_approval');
     return {
       runtime: MISSION_RUNTIMES.AMO,
       reason: 'amo_pending_approval',
@@ -132,6 +138,10 @@ async function resolveMissionRuntime(input = {}) {
   }
 
   if (amoActive && !legacyActive) {
+    askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, 'amo_mission', {
+      missionId: amoMission && amoMission.id,
+    });
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'amo_mission');
     return {
       runtime: MISSION_RUNTIMES.AMO,
       reason: 'amo_mission',
@@ -143,6 +153,10 @@ async function resolveMissionRuntime(input = {}) {
   }
 
   if (legacyActive && !amoActive) {
+    askPathTrace.traceRuntime(MISSION_RUNTIMES.SPEC_022, 'legacy_mission', {
+      missionId: legacyMission && legacyMission.id,
+    });
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'legacy_mission');
     return {
       runtime: MISSION_RUNTIMES.SPEC_022,
       reason: 'legacy_mission',
@@ -154,6 +168,10 @@ async function resolveMissionRuntime(input = {}) {
   }
 
   if (amoActive && sessionBoundToAmo(input.session, amoMission)) {
+    askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, 'session_bound_amo', {
+      missionId: amoMission && amoMission.id,
+    });
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'session_bound_amo');
     return {
       runtime: MISSION_RUNTIMES.AMO,
       reason: 'session_bound_amo',
@@ -165,6 +183,10 @@ async function resolveMissionRuntime(input = {}) {
   }
 
   if (legacyActive) {
+    askPathTrace.traceRuntime(MISSION_RUNTIMES.SPEC_022, 'legacy_mission', {
+      missionId: legacyMission && legacyMission.id,
+    });
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'legacy_mission');
     return {
       runtime: MISSION_RUNTIMES.SPEC_022,
       reason: 'legacy_mission',
@@ -176,6 +198,10 @@ async function resolveMissionRuntime(input = {}) {
   }
 
   if (amoActive) {
+    askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, 'amo_mission', {
+      missionId: amoMission && amoMission.id,
+    });
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'amo_mission');
     return {
       runtime: MISSION_RUNTIMES.AMO,
       reason: 'amo_mission',
@@ -186,6 +212,8 @@ async function resolveMissionRuntime(input = {}) {
     };
   }
 
+  askPathTrace.traceRuntime(null, 'no_active_mission');
+  askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'no_active_mission');
   return {
     runtime: null,
     reason: 'no_active_mission',

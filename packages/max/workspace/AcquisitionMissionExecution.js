@@ -36,6 +36,7 @@ const {
   createMissionApprovalAudit,
   logMissionApprovalMatched,
 } = require('./audit/MissionApprovalAudit');
+const askPathTrace = require('./audit/AskPathTrace');
 
 const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
 
@@ -50,6 +51,7 @@ function buildExecutionMissionResponse({
   question,
   executionResult,
 }) {
+  askPathTrace.traceEnter('buildExecutionMissionResponse', { action });
   const workspace = snapshot.workspace || {};
   const scout = workspace.scout || null;
   const stage = mission.stage || STAGES.DISCOVER;
@@ -231,6 +233,7 @@ function buildExecutionMetadata(mission, action, executionResult) {
 }
 
 function detectExecutionAction(question, snapshot) {
+  askPathTrace.traceEnter('detectExecutionAction');
   const q = String(question || '').trim();
   const lower = q.toLowerCase();
 
@@ -240,6 +243,7 @@ function detectExecutionAction(question, snapshot) {
     /\b(?:begin|start|run|execute)\b.*\bdiscover/i.test(lower);
 
   if (discoveryApprovalPattern) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved');
     return 'discovery_approved';
   }
 
@@ -250,30 +254,44 @@ function detectExecutionAction(question, snapshot) {
     hasPendingDiscoveryApproval(snapshot) &&
     /\bapprov(e|al|ed)\b/i.test(q)
   ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved_pending');
     return 'discovery_approved';
   }
 
   if (/\bapprov(e|al|ed)\b/i.test(q)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved');
     return 'operator_approved';
   }
   if (/\b(?:continue|proceed|resume|next)\b/i.test(q)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved_continue');
     return 'operator_approved';
   }
   if (/\b(?:prioritization|outreach|send)\b/i.test(q)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved_prioritization');
     return 'operator_approved';
   }
+  askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved_default');
   return 'operator_approved';
 }
 
 function shouldExecuteDiscovery(action, snapshot) {
-  if (action !== 'discovery_approved') return false;
+  askPathTrace.traceEnter('shouldExecuteDiscovery', { action });
+  if (action !== 'discovery_approved') {
+    askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'action_not_discovery_approved');
+    return false;
+  }
   const mission = snapshot.mission || {};
-  if (mission.stage !== STAGES.DISCOVER) return false;
+  if (mission.stage !== STAGES.DISCOVER) {
+    askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'wrong_stage');
+    return false;
+  }
   const contributions = snapshot.contributions || [];
   const approval = findDiscoveryApproval(contributions);
   if (approval && findScoutDiscoveryAfterApproval(contributions, approval)) {
+    askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'already_executed');
     return false;
   }
+  askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'should_execute', { result: true });
   return true;
 }
 
@@ -282,13 +300,23 @@ function shouldExecuteDiscovery(action, snapshot) {
  * @returns {Promise<object|null>}
  */
 async function maybeHandleAcquisitionMissionExecution(input = {}) {
+  askPathTrace.traceEnter('maybeHandleAcquisitionMissionExecution');
   const question = String(input.question || '').trim();
-  if (!question || !isMissionExecutionCommand(question)) return null;
-  if (isExplicitMissionExit(question).explicit) return null;
+  if (!question || !isMissionExecutionCommand(question)) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'not_execution_command');
+    return null;
+  }
+  if (isExplicitMissionExit(question).explicit) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'explicit_mission_exit');
+    return null;
+  }
 
   const tenantId = resolveTenantId(input);
   const engine = resolveAcquisitionEngine(input);
-  if (!engine || !tenantId) return null;
+  if (!engine || !tenantId) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'no_engine_or_tenant');
+    return null;
+  }
 
   const mission =
     (await resolveAcquisitionActiveMission(input)) ||
@@ -298,7 +326,10 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       return missionId ? missions.find((row) => row && row.id === missionId) : null;
     })();
 
-  if (!mission || mission.stage === STAGES.IMPROVE) return null;
+  if (!mission || mission.stage === STAGES.IMPROVE) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'no_mission_or_improve');
+    return null;
+  }
 
   let snapshot = engine.inspect(mission.id, { tenantId });
   const action = detectExecutionAction(question, snapshot);
@@ -387,6 +418,10 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     input.session.context.acquisitionOwner = 'MissionEngine';
   }
 
+  askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', `acquisition_mission_${action}`, {
+    action,
+    missionId: mission.id,
+  });
   return {
     reason: `acquisition_mission_${action}`,
     structured: response.structured,

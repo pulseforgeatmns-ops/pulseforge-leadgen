@@ -19,6 +19,7 @@ const {
   composeMissionResponse,
   composeActiveMissionResponse,
 } = require('./MissionResponse');
+const askPathTrace = require('./audit/AskPathTrace');
 
 const PIPELINES = Object.freeze({
   MISSION_ENGINE: 'Mission Engine',
@@ -266,6 +267,7 @@ function composeMissionBlockedResponse(mission, question, reason, card) {
  * @returns {Promise<object|null>}
  */
 async function maybeHandleMissionFirstTurn(input) {
+  askPathTrace.traceEnter('maybeHandleMissionFirstTurn');
   const {
     question,
     session,
@@ -279,11 +281,15 @@ async function maybeHandleMissionFirstTurn(input) {
   } = input;
 
   if (!missionsEnabled || !missionEngine || resolverEnabled === false) {
+    askPathTrace.traceEarlyReturn('maybeHandleMissionFirstTurn', 'missions_disabled_or_no_engine');
     return null;
   }
 
   const resolver = missionEngine.activeMissionResolver;
-  if (!resolver) return null;
+  if (!resolver) {
+    askPathTrace.traceEarlyReturn('maybeHandleMissionFirstTurn', 'no_resolver');
+    return null;
+  }
 
   const activeMission = await resolver.resolveActiveMission(session.id);
   const missionFound = Boolean(activeMission);
@@ -295,6 +301,7 @@ async function maybeHandleMissionFirstTurn(input) {
       selectedPipeline: null,
       routingReason: 'no_active_mission',
     });
+    askPathTrace.traceEarlyReturn('maybeHandleMissionFirstTurn', 'no_active_mission');
     return null;
   }
 
@@ -310,6 +317,7 @@ async function maybeHandleMissionFirstTurn(input) {
       stage: currentStageForMission(activeMission),
       capability: currentCapabilityForMission(activeMission),
     });
+    askPathTrace.traceEarlyReturn('maybeHandleMissionFirstTurn', 'explicit_escape');
     return null;
   }
 
@@ -330,6 +338,7 @@ async function maybeHandleMissionFirstTurn(input) {
   });
 
   if (!continuation.continues) {
+    askPathTrace.traceEarlyReturn('maybeHandleMissionFirstTurn', 'continuation_below_threshold');
     return null;
   }
 

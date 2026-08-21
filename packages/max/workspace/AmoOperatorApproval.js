@@ -21,6 +21,7 @@ const {
   logMissionStageExecutionStarted,
   logMissionStageExecutionCompleted,
 } = require('./audit/MissionApprovalAudit');
+const askPathTrace = require('./audit/AskPathTrace');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
 
@@ -238,6 +239,7 @@ function setDiscoveryExecutingStatus(engine, mission) {
  * @returns {Promise<object>}
  */
 async function advanceDiscoveryAfterApproval(input = {}) {
+  askPathTrace.traceEnter('advanceDiscoveryAfterApproval');
   const {
     engine,
     mission,
@@ -288,6 +290,7 @@ async function advanceDiscoveryAfterApproval(input = {}) {
   const existingDiscovery = findScoutDiscoveryAfterApproval(contributions, existingApproval);
 
   if (existingApproval && existingDiscovery) {
+    askPathTrace.traceEarlyReturn('advanceDiscoveryAfterApproval', 'already_executed');
     return {
       alreadyExecuted: true,
       approval: existingApproval,
@@ -412,6 +415,7 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     qualifiedCount: discoveryPayload.qualifiedCount || 0,
   });
 
+  askPathTrace.traceEarlyReturn('advanceDiscoveryAfterApproval', executionOutcome);
   return {
     alreadyExecuted: false,
     approval,
@@ -428,6 +432,7 @@ async function advanceDiscoveryAfterApproval(input = {}) {
 }
 
 function buildDiscoveryApprovalProse(result) {
+  askPathTrace.traceEnter('buildDiscoveryApprovalProse');
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
   const blocked = result.executionOutcome === 'blocked';
   const prospectCount = scoutPayload.qualifiedCount || 0;
