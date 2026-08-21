@@ -145,11 +145,10 @@ function expandGeography(rawGeography, text) {
     const cities = [...GREATER_MANCHESTER_CITIES];
     const extraCities = regionText
       .split(/,|\band\b/i)
-      .map((part) => part.trim())
-      .filter((part) => /^[A-Z]/.test(part));
+      .map((part) => part.replace(/\bNH\b/i, '').trim())
+      .filter((part) => /^[A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?$/.test(part));
     for (const city of extraCities) {
-      const normalized = city.replace(/\bNH\b/i, '').trim();
-      if (normalized && !cities.includes(normalized)) cities.push(normalized);
+      if (city && !cities.includes(city)) cities.push(city);
     }
     return { region: 'Greater Manchester', cities };
   }

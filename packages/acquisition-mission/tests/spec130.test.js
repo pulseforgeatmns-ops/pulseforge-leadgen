@@ -96,6 +96,18 @@ describe('SPEC-130 — Mission Planning Engine', () => {
     assert.match(next.confirmation, /Evidence Threshold/i);
   });
 
+  it('does not treat segment language after Manchester NH as extra cities', () => {
+    const planned = planFromObjective(
+      'Acquire commercial cleaning customers in Manchester NH for law firms.',
+      { targetSegment: 'Law Firms' }
+    );
+    assert.equal(planned.draft.geography.region, 'Greater Manchester');
+    assert.deepEqual(
+      planned.draft.geography.cities.filter((city) => /for law firms/i.test(city)),
+      []
+    );
+  });
+
   it('asks instead of guessing property-manager slice', () => {
     const planned = planFromObjective('Find property managers.');
     assert.equal(planned.readyForConfirmation, false);

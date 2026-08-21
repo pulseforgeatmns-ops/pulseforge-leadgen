@@ -21,7 +21,9 @@ const BEACHHEAD_PATTERNS = Object.freeze([
 
 function extractGeography(objective) {
   const text = asText(objective);
-  const geoMatch = text.match(/\bin\s+([A-Za-z][A-Za-z\s,]+?)(?:\.|$)/i);
+  const geoMatch = text.match(
+    /\bin\s+((?:greater\s+)?[A-Za-z][A-Za-z\s,]*?)(?:\s+for\b|\s+from\b|\.|$)/i
+  );
   return geoMatch ? geoMatch[1].trim() : null;
 }
 

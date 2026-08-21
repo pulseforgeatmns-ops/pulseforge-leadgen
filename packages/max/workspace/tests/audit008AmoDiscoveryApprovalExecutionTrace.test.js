@@ -49,11 +49,6 @@ instrumentExport('../MissionFirstRouting.js', 'maybeHandleMissionFirstTurn', 'ma
 instrumentSyncExport('../ResponseComposer.js', 'composeResponse', 'composeResponse');
 instrumentExport('../AmoOperatorApproval.js', 'advanceDiscoveryAfterApproval', 'advanceDiscoveryAfterApproval');
 instrumentSyncExport('../AmoOperatorApproval.js', 'buildDiscoveryApprovalProse', 'buildDiscoveryApprovalProse');
-instrumentExport(
-  '../AcquisitionMissionExecution.js',
-  'maybeHandleAcquisitionMissionExecution',
-  'maybeHandleAcquisitionMissionExecution'
-);
 
 const amo = require('../../../acquisition-mission');
 const { STAGES } = amo;
@@ -76,6 +71,22 @@ const {
 } = require('../audit/MissionApprovalAudit');
 const { createWorkspaceEngine } = require('../WorkspaceEngine');
 
+function instrumentCachedExport(fileSuffix, exportName, counterKey) {
+  for (const file of Object.keys(require.cache)) {
+    if (!file.endsWith(fileSuffix)) continue;
+    const mod = require.cache[file].exports;
+    if (!mod || typeof mod[exportName] !== 'function') continue;
+    if (mod[exportName].name === 'instrumentedExport') continue;
+    const original = mod[exportName];
+    mod[exportName] = async function instrumentedExport(...args) {
+      invocationTrace[counterKey] += 1;
+      return original.apply(this, args);
+    };
+  }
+}
+
+instrumentCachedExport('AcquisitionMissionExecution.js', 'maybeHandleAcquisitionMissionExecution', 'maybeHandleAcquisitionMissionExecution');
+
 const ANCHOR_OBJECTIVE =
   'Acquire commercial cleaning customers in Manchester NH for law firms.';
 
@@ -92,7 +103,7 @@ function resetTrace() {
   }
 }
 
-describe('AUDIT-008 active AMO discovery approval execution trace', () => {
+describe('AUDIT-008 active AMO discovery approval execution trace', { concurrency: false }, () => {
   let amoEngine;
   let amoMission;
   let missionEngine;
@@ -170,7 +181,8 @@ describe('AUDIT-008 active AMO discovery approval execution trace', () => {
 
     assert.equal(invocationTrace.maybeHandleAcquisitionMissionExecution, 1);
     assert.equal(invocationTrace.advanceDiscoveryAfterApproval, 1);
-    assert.equal(invocationTrace.buildDiscoveryApprovalProse, 1);
+    // Live ask path renders through buildExecutionMissionResponse, not buildDiscoveryApprovalProse.
+    assert.equal(invocationTrace.buildDiscoveryApprovalProse, 0);
     assert.equal(invocationTrace.maybeHandleMissionFirstTurn, 0);
     assert.equal(invocationTrace.composeResponse, 0);
 
