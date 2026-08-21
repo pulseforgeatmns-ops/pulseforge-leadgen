@@ -20,7 +20,6 @@ const {
 } = require('./ClientIntelligenceContext');
 const {
   resolveTenantId,
-  resolveAcquisitionEngine,
 } = require('./WorkspaceMissionInspection');
 const {
   looksLikeAcquisitionMissionQuestion,
@@ -346,36 +345,54 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
 
   if (!tenantId) return null;
 
-  const engine = resolveAcquisitionEngine(input);
-  if (!engine || typeof engine.create !== 'function') return null;
+  let service = input.acquisitionMissionService;
+  if (!service) {
+    try {
+      service = require('../../../services/acquisitionMission');
+    } catch (_) {
+      return null;
+    }
+  }
+  if (!service || typeof service.createMission !== 'function') return null;
 
   const ciLoaded = await attachClientIntelligenceContext(input);
   const ciEvidence = buildClientIntelligenceMissionEvidence(ciLoaded.summary);
 
-  const missions = engine.list(tenantId);
+  const missions = await service.listMissions(tenantId, {
+    persist: input.persist,
+    pool: input.pool,
+  });
   let mission = findResumableMission(missions, question);
   let created = false;
 
   if (!mission) {
-    mission = engine.create({
-      tenantId,
-      clientId: Number(tenantId) || tenantId,
-      objective: question,
-      targetSegment: inferTargetSegment(question, ciEvidence),
-      createdBy: 'max',
-      owner: 'Operator',
-      constraints: ciEvidence.constraints.slice(),
-    });
+    mission = await service.createMission(
+      {
+        tenantId,
+        clientId: Number(tenantId) || tenantId,
+        objective: question,
+        targetSegment: inferTargetSegment(question, ciEvidence),
+        createdBy: 'max',
+        owner: 'Operator',
+        constraints: ciEvidence.constraints.slice(),
+      },
+      {
+        persist: input.persist,
+        pool: input.pool,
+      }
+    );
     created = true;
   }
+
+  const engine = service.getEngine();
+  if (!engine || typeof engine.inspect !== 'function') return null;
 
   if (ciEvidence.attached) {
     await attachEvidenceToMission(mission.id, question, ciEvidence, {
       tenantId,
       persist: input.persist,
       pool: input.pool,
-      acquisitionMissionEngine: engine,
-      acquisitionMissionService: input.acquisitionMissionService,
+      acquisitionMissionService: service,
     });
     emitCiContribution({
       missionId: mission.id,

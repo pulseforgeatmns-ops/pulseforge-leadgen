@@ -6,6 +6,14 @@
  */
 
 const amo = require('../packages/acquisition-mission');
+const { STAGE_ORDER } = amo;
+
+/** Legacy SPEC-022 types that now persist only through AMO (SPEC-131). */
+const ACQUISITION_LEGACY_MISSION_TYPES = new Set([
+  'acquisition_search',
+  'prospect_discovery',
+  'campaign_creation',
+]);
 const {
   persistMission,
   persistEvent,
@@ -230,6 +238,42 @@ async function attachEmmettCapacity(input = {}, day = {}, opts = {}) {
   }
 }
 
+function isAcquisitionLegacyMissionType(mission) {
+  if (!mission) return false;
+  const type = String(mission.type || '').toLowerCase();
+  return ACQUISITION_LEGACY_MISSION_TYPES.has(type);
+}
+
+/**
+ * Command Deck Operations card for an acquisition mission (SPEC-131).
+ * @param {object} mission
+ */
+function toCommandDeckCard(mission) {
+  if (!mission) return null;
+  const stageIdx = STAGE_ORDER.indexOf(mission.stage);
+  const totalSteps = STAGE_ORDER.length;
+  const completedSteps = stageIdx >= 0 ? stageIdx + 1 : 0;
+  return {
+    id: mission.id,
+    title: mission.title || mission.objective,
+    type: 'acquisition',
+    runtime: 'AMO',
+    status: mission.stage === 'improve' ? 'completed' : 'executing',
+    statusLabel: mission.status || mission.stage,
+    progress: {
+      completedSteps,
+      totalSteps,
+      percent: mission.progressPercent || 0,
+      currentStage: mission.stage || null,
+      label: stageIdx >= 0 ? `${completedSteps} / ${totalSteps}` : null,
+    },
+    startedAt: mission.createdAt,
+    createdAt: mission.createdAt,
+    objectiveText: mission.objective,
+    pendingOperatorDecision: mission.pendingOperatorDecision || null,
+  };
+}
+
 module.exports = {
   getEngine,
   resetEngine,
@@ -244,4 +288,7 @@ module.exports = {
   attachEmmettCapacity,
   activeMissionFor,
   hydrateTenant,
+  toCommandDeckCard,
+  isAcquisitionLegacyMissionType,
+  ACQUISITION_LEGACY_MISSION_TYPES,
 };

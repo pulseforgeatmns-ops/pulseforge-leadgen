@@ -21,6 +21,11 @@ const {
 const { getMaxRuntime } = require('../utils/maxRuntime');
 const { buildOperatorBrief } = require('../services/commandDeckOperatorBrief');
 const {
+  listMissions,
+  toCommandDeckCard,
+  isAcquisitionLegacyMissionType,
+} = require('../services/acquisitionMission');
+const {
   loadPriorities,
   reconcileDomainPriority,
 } = require('../services/commandDeckPriority');
@@ -74,6 +79,19 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
 
     const max = await getMaxRuntime();
     let missions = [];
+
+    // SPEC-131 — acquisition missions load from AMO store only
+    try {
+      const amoList = await listMissions(String(clientId));
+      missions = amoList
+        .filter((m) => m.stage !== 'improve')
+        .map((m) => toCommandDeckCard(m))
+        .filter(Boolean);
+    } catch (err) {
+      console.warn('[command-deck] amo missions list failed:', err.message);
+    }
+
+    // Legacy SPEC-022 missions — non-acquisition types only
     if (max.missionEngine) {
       try {
         const list = await max.missionEngine.list({
@@ -81,9 +99,12 @@ router.get('/api/v1/command-deck', requireDashboardRead, async (req, res) => {
           clientId,
           limit: 20,
         });
-        missions = list.map((m) => max.missionEngine.toCard(m));
+        const legacyCards = list
+          .filter((m) => !isAcquisitionLegacyMissionType(m))
+          .map((m) => max.missionEngine.toCard(m));
+        missions = [...missions, ...legacyCards];
       } catch (err) {
-        console.warn('[command-deck] missions list failed:', err.message);
+        console.warn('[command-deck] legacy missions list failed:', err.message);
       }
     }
 

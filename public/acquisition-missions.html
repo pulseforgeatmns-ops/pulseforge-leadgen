@@ -151,7 +151,12 @@
     const body = await api('/api/v1/amo/missions');
     missions = body.missions || [];
     renderList();
-    if (!selected && missions[0]) await loadOne(missions[0].id);
+    const urlMission = new URLSearchParams(window.location.search).get('mission');
+    if (urlMission && missions.some((row) => row.id === urlMission)) {
+      await loadOne(urlMission);
+    } else if (!selected && missions[0]) {
+      await loadOne(missions[0].id);
+    }
   }
 
   async function loadOne(id) {
