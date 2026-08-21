@@ -30,7 +30,7 @@ describe('SPEC-125 — Workspace Ownership-First Runtime', () => {
       context: { tenantId: '10' },
     });
     assert.equal(ownership.owner, WORKSPACE_OWNERS.MISSION_CREATION);
-    assert.equal(ownership.reason, 'acquisition_objective');
+    assert.equal(ownership.reason, 'acquisition_objective_precedence');
   });
 
   it('selects mission_creation for Operate Anchor phrasing', async () => {
