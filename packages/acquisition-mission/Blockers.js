@@ -13,6 +13,7 @@ const {
   newId,
   clone,
 } = require('./types');
+const { isStructuredMissionApproved } = require('./StructuredMission');
 
 function createBlocker(input = {}) {
   const kind = asText(input.kind);
@@ -40,7 +41,13 @@ function inferBlockers(mission, ctx) {
       specialist: 'emmett',
     }));
   }
-  if ((mission.stage === STAGES.DISCOVER || mission.stage === STAGES.UNDERSTAND) && !ctx.scoutComplete) {
+  if (mission.stage === STAGES.DISCOVER && !isStructuredMissionApproved(mission)) {
+    blockers.push(createBlocker({
+      kind: BLOCKER_KINDS.WAITING_FOR_OPERATOR,
+      specialist: 'operator',
+      reason: 'Mission plan must be approved before discovery.',
+    }));
+  } else if ((mission.stage === STAGES.DISCOVER || mission.stage === STAGES.UNDERSTAND) && !ctx.scoutComplete) {
     if (ctx.prospectCount > 0 && ctx.prospectCount < (ctx.prospectThreshold || 15)) {
       blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_MORE_PROSPECTS, specialist: 'scout' }));
     } else {
