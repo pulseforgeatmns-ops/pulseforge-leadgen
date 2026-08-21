@@ -21,7 +21,7 @@ const {
 } = require('../audit/MissionApprovalAudit');
 
 const ANCHOR_OBJECTIVE =
-  'Acquire commercial cleaning customers in Manchester for law firms.';
+  'Acquire commercial cleaning customers in Manchester NH for law firms.';
 
 function stubLegacyMissionEngine() {
   return {

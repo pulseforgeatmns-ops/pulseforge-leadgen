@@ -112,17 +112,20 @@
     }
     const understanding = [
       ['Objective', plan.objective],
-      ['Market', plan.market.label || plan.market.segment],
-      ['Industry', plan.market.industry],
-      ['Region', plan.geography.region],
-      ['Cities', (plan.geography.cities || []).join(', ')],
-      ['Buyer', plan.market.buyer],
+      ['Market', (plan.market && (plan.market.label || plan.market.segment)) || ''],
+      ['Industry', plan.market && plan.market.industry],
+      ['Region', plan.geography && plan.geography.region],
+      ['Cities', ((plan.geography && plan.geography.cities) || []).join(', ')],
+      ['Buyer', plan.market && plan.market.buyer],
       ['Constraints', (plan.constraints || []).join(', ')],
-      ['Success Metric', plan.successMetric.target + ' ' + plan.successMetric.type],
+      ['Success', plan.successMetric ? (plan.successMetric.target + ' ' + plan.successMetric.type) : ''],
+      ['Evidence Threshold', plan.evidence && (plan.evidence.thresholdLabel || plan.evidence.minimumConfidence)],
     ];
     let html = '<h2>Mission Understanding</h2>';
     if (plan.immutable) {
       html += pill('Plan approved', 'ok') + ' ';
+    } else if (pending && pending.kind === 'plan_clarification') {
+      html += pill('Clarification required', 'warn') + ' ';
     } else {
       html += pill('Awaiting approval', 'warn') + ' ';
     }
@@ -133,7 +136,13 @@
     });
     html += '</dl>';
     if (pending && pending.prompt) {
-      html += '<div class="discovery-section"><h3>Operator Decision</h3><p>' + pending.prompt + '</p></div>';
+      html += '<div class="discovery-section"><h3>Operator Decision</h3><p>' + pending.prompt + '</p>';
+      if (pending.choices && pending.choices.length) {
+        html += '<p class="meta">' + pending.choices.map(function (row) { return row.label; }).join(' · ') + '</p>';
+      } else if (!plan.immutable) {
+        html += '<p class="meta">Approve · Edit · Cancel</p>';
+      }
+      html += '</div>';
     }
     $('planPanel').innerHTML = html;
   }

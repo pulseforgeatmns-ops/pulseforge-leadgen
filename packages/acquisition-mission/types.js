@@ -120,7 +120,9 @@ const CONTRIBUTION_KINDS = Object.freeze({
 
 /** SPEC-130 — operator decision kinds before specialist execution. */
 const OPERATOR_DECISION_KINDS = Object.freeze({
+  PLAN_CLARIFICATION: 'plan_clarification',
   PLAN_APPROVAL: 'plan_approval',
+  PLAN_EDIT: 'plan_edit',
   DISCOVERY_APPROVAL: 'discovery_approval',
 });
 

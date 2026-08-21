@@ -27,8 +27,13 @@ const {
 const {
   advanceDiscoveryAfterApproval,
   advancePlanAfterApproval,
+  advancePlanClarification,
+  cancelMissionPlan,
+  beginPlanEdit,
+  applyPlanEdits,
   hasPendingDiscoveryApproval,
   hasPendingPlanApproval,
+  hasPendingPlanClarification,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
   APPROVAL_PHASES,
@@ -44,6 +49,7 @@ const {
   logMissionApprovalMatched,
 } = require('./audit/MissionApprovalAudit');
 const { formatMissionUnderstandingProse } = require('../../acquisition-mission/StructuredMission');
+const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
@@ -64,6 +70,82 @@ function buildExecutionMissionResponse({
   const scout = workspace.scout || null;
   const stage = mission.stage || STAGES.DISCOVER;
   const progress = mission.progressPercent != null ? mission.progressPercent : null;
+
+  if (executionResult && action === 'plan_clarified') {
+    const pending = mission.pendingOperatorDecision || {};
+    const comm = buildMissionCommunication({
+      headline: pending.kind === 'plan_approval' ? 'Mission Understanding' : 'Need a decision',
+      mission: mission.title || mission.id,
+      objective: mission.objective,
+      status: pending.kind === 'plan_approval' ? 'Plan ready for approval' : 'Clarification required',
+      stage: 'Planning',
+      progress,
+      waitingOn: pending.prompt || 'Operator clarification',
+      nextStep: pending.clarificationPrompt || pending.missionUnderstanding || pending.prompt,
+      operatorDecision: pending.kind === 'plan_approval'
+        ? 'Approve\nEdit\nCancel'
+        : pending.prompt,
+      evidenceStatus: pending.missionUnderstanding || pending.clarificationPrompt || 'Mission Planning Engine',
+      sources: ['acquisition_mission', 'mission_planner'],
+      includeReasoningMarker: false,
+    });
+    const prose = formatMissionProse(comm);
+    const structured = applyMissionCommunication(
+      buildStructuredResponse({
+        answer: prose,
+        reasoning: [],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: mission.confidence != null ? mission.confidence : 0.84,
+        nextInvestigations: [],
+        recommendedActions: [],
+        confidenceContributors: ['spec_130', 'mission_planner'],
+        timelineReferences: [],
+        relatedEntities: [
+          { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
+        ],
+        metadata: buildExecutionMetadata(mission, action, executionResult),
+      }),
+      comm
+    );
+    return { structured, prose, comm, action };
+  }
+
+  if (executionResult && action === 'plan_cancelled') {
+    const comm = buildMissionCommunication({
+      headline: 'Mission Plan Cancelled',
+      mission: mission.title || mission.id,
+      objective: mission.objective,
+      status: 'Cancelled',
+      stage: 'Planning',
+      progress,
+      nextStep: 'No specialist will execute. Create a new mission when ready.',
+      operatorDecision: null,
+      evidenceStatus: 'Operator cancelled before lock.',
+      sources: ['acquisition_mission', 'mission_planner'],
+      includeReasoningMarker: false,
+    });
+    const prose = formatMissionProse(comm);
+    const structured = applyMissionCommunication(
+      buildStructuredResponse({
+        answer: prose,
+        reasoning: [],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: 1,
+        nextInvestigations: [],
+        recommendedActions: [],
+        confidenceContributors: ['spec_130', 'mission_planner'],
+        timelineReferences: [],
+        relatedEntities: [
+          { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
+        ],
+        metadata: buildExecutionMetadata(mission, action, executionResult),
+      }),
+      comm
+    );
+    return { structured, prose, comm, action };
+  }
 
   if (executionResult && action === 'plan_approved') {
     const understanding =
@@ -317,9 +399,35 @@ function detectExecutionAction(question, snapshot) {
   askPathTrace.traceEnter('detectExecutionAction');
   const q = String(question || '').trim();
   const lower = q.toLowerCase();
-  const mission = snapshot && snapshot.mission ? snapshot.mission : {};
 
-  if (hasPendingPlanApproval(snapshot) && /\bapprov(e|al|ed)\b/i.test(q)) {
+  if (
+    hasPendingPlanClarification(snapshot) &&
+    !/\b(cancel)\b/i.test(q) &&
+    isMissionPlanningTurn(snapshot.mission || snapshot, q)
+  ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'plan_clarified');
+    return 'plan_clarified';
+  }
+
+  if (
+    (hasPendingPlanApproval(snapshot) || hasPendingPlanClarification(snapshot))
+    && /\bcancel\b/i.test(q)
+  ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'plan_cancelled');
+    return 'plan_cancelled';
+  }
+
+  if (hasPendingPlanApproval(snapshot) && /\bedit\b/i.test(q) && !/\bapprov/i.test(q)) {
+    const pending = snapshot.mission && snapshot.mission.pendingOperatorDecision;
+    if (pending && pending.kind === 'plan_edit' && !/^edit$/i.test(q)) {
+      askPathTrace.traceEarlyReturn('detectExecutionAction', 'plan_edited');
+      return 'plan_edited';
+    }
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'plan_edit');
+    return 'plan_edit';
+  }
+
+  if (hasPendingPlanApproval(snapshot) && /\bapprov(e|al|ed)|proceed\b/i.test(q)) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'plan_approved');
     return 'plan_approved';
   }
@@ -366,6 +474,10 @@ function shouldExecutePlan(action, snapshot) {
   return hasPendingPlanApproval(snapshot);
 }
 
+function shouldClarifyPlan(action, snapshot) {
+  return action === 'plan_clarified' && hasPendingPlanClarification(snapshot);
+}
+
 function shouldExecuteDiscovery(action, snapshot) {
   askPathTrace.traceEnter('shouldExecuteDiscovery', { action });
   if (action !== 'discovery_approved') {
@@ -398,15 +510,6 @@ function shouldExecuteDiscovery(action, snapshot) {
 async function maybeHandleAcquisitionMissionExecution(input = {}) {
   askPathTrace.traceEnter('maybeHandleAcquisitionMissionExecution');
   const question = String(input.question || '').trim();
-  if (!question || !isMissionExecutionCommand(question)) {
-    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'not_execution_command');
-    return null;
-  }
-  if (isExplicitMissionExit(question).explicit) {
-    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'explicit_mission_exit');
-    return null;
-  }
-
   const tenantId = resolveTenantId(input);
   const engine = resolveAcquisitionEngine(input);
   if (!engine || !tenantId) {
@@ -424,6 +527,16 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
 
   if (!mission || mission.stage === STAGES.IMPROVE) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'no_mission_or_improve');
+    return null;
+  }
+
+  const planningTurn = isMissionPlanningTurn(mission, question);
+  if (!question || (!isMissionExecutionCommand(question) && !planningTurn)) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'not_execution_command');
+    return null;
+  }
+  if (isExplicitMissionExit(question).explicit && !planningTurn) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'explicit_mission_exit');
     return null;
   }
 
@@ -451,7 +564,25 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
 
   let executionResult = null;
 
-  if (shouldExecutePlan(action, snapshot)) {
+  if (shouldClarifyPlan(action, snapshot)) {
+    executionResult = advancePlanClarification({
+      engine,
+      mission,
+      tenantId,
+      question,
+      context: input.planningContext || input.context,
+    });
+    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+  } else if (action === 'plan_cancelled') {
+    executionResult = cancelMissionPlan({ engine, mission, tenantId, question });
+    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+  } else if (action === 'plan_edit') {
+    executionResult = beginPlanEdit({ engine, mission, tenantId, question });
+    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+  } else if (action === 'plan_edited') {
+    executionResult = applyPlanEdits({ engine, mission, tenantId, question });
+    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+  } else if (shouldExecutePlan(action, snapshot)) {
     executionResult = await advancePlanAfterApproval({
       engine,
       mission,
@@ -544,4 +675,5 @@ module.exports = {
   maybeHandleAcquisitionMissionExecution,
   shouldExecuteDiscovery,
   shouldExecutePlan,
+  shouldClarifyPlan,
 };

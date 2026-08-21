@@ -35,6 +35,7 @@ const {
 const structuredMission = require('./StructuredMission');
 const missionPlanner = require('./MissionPlanner');
 const specialistInputs = require('./SpecialistInputs');
+const contextPrecedence = require('./ContextPrecedence');
 
 module.exports = {
   ...types,
@@ -73,4 +74,5 @@ module.exports = {
   ...structuredMission,
   ...missionPlanner,
   ...specialistInputs,
+  ...contextPrecedence,
 };

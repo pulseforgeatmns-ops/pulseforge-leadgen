@@ -21,6 +21,7 @@ const {
   ensureAmoTenantHydrated,
   logAmoActiveResolved,
 } = require('./AmoWorkspaceHydration');
+const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const BLOCKED_DOMAIN_GENERAL = 'general_conversation';
@@ -114,18 +115,20 @@ async function resolveActiveMissionLock(input = {}) {
 
   const amoMission = await resolveAcquisitionActiveMission(input);
   if (amoMission) {
+    const planningTurn = isMissionPlanningTurn(amoMission, question);
+    const cancelDuringPlanning = planningTurn && /\bcancel\b/i.test(question);
     askPathTrace.traceEarlyReturn('resolveActiveMissionLock', 'amo_active', {
       missionId: amoMission.id,
-      executionCommand,
+      executionCommand: executionCommand || planningTurn,
     });
     return {
       active: true,
       mission: amoMission,
       source: 'amo',
       missionId: amoMission.id,
-      executionCommand,
-      explicitExit: exit.explicit,
-      exitReason: exit.reason,
+      executionCommand: executionCommand || planningTurn,
+      explicitExit: cancelDuringPlanning ? false : exit.explicit,
+      exitReason: cancelDuringPlanning ? null : exit.reason,
     };
   }
 

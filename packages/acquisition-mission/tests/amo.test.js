@@ -27,7 +27,7 @@ function lawFirmMission(amoEngine, overrides = {}) {
     id: 'mission_481',
     tenantId: '10',
     clientId: 10,
-    objective: 'Acquire commercial cleaning customers in Manchester.',
+    objective: 'Acquire commercial cleaning customers in Manchester NH.',
     targetSegment: 'Commercial Law Firms',
     campaign: 'Fall Outreach',
     priority: 'high',
@@ -79,7 +79,7 @@ describe('SPEC-118 mission object', () => {
   it('creates a durable acquisition mission with the spec example fields', () => {
     const created = lawFirmMission(engine());
     assert.equal(created.id, 'mission_481');
-    assert.equal(created.objective, 'Acquire commercial cleaning customers in Manchester.');
+    assert.equal(created.objective, 'Acquire commercial cleaning customers in Manchester NH.');
     assert.equal(created.targetSegment, 'Commercial Law Firms');
     assert.equal(created.campaign, 'Fall Outreach');
     assert.equal(created.priority, 'high');
@@ -185,7 +185,7 @@ describe('SPEC-118 shared context', () => {
     toPrepare(amoEngine, mission.id);
     const context = amoEngine.context(mission.id);
     assert.equal(context.mission.campaign, 'Fall Outreach');
-    assert.match(context.mission.objective, /Acquire commercial cleaning customers in Manchester/i);
+    assert.match(context.mission.objective, /Acquire commercial cleaning customers in Manchester NH/i);
     assert.ok(context.mission.constraints.includes('Veteran discount available'));
     assert.ok(context.buyingSignals.length >= 1);
     assert.ok(context.priorityReasoning.length >= 1);

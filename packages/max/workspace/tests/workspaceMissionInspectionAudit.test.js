@@ -18,7 +18,7 @@ const { createWorkspaceEngine } = require('../WorkspaceEngine');
 function lawFirmMission(engine, overrides = {}) {
   const mission = engine.create({
     tenantId: '10',
-    objective: 'Acquire commercial cleaning customers in Manchester.',
+    objective: 'Acquire commercial cleaning customers in Manchester NH.',
     targetSegment: 'Commercial Law Firms',
     campaign: 'Fall Outreach',
     confidence: 0.84,

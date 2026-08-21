@@ -13,6 +13,8 @@ const {
   hasSufficientEvidenceForPrioritization,
 } = require('../DiscoveryPayload');
 const { presentationFromDiscoveryPayload } = require('../DiscoveryPresentation');
+const { planFromObjective } = require('../MissionPlanner');
+const { freezeStructuredMission } = require('../StructuredMission');
 const {
   buildDelegationFromAmoMission,
   advanceDiscoveryAfterApproval,
@@ -51,13 +53,15 @@ describe('AMO discovery audit fixes', () => {
       objective: STR_OBJECTIVE,
       targetSegment: 'Property Managers, Facility Managers, Professional Offices',
       constraints: ['Commercial only'],
+      structuredMission: freezeStructuredMission(planFromObjective(STR_OBJECTIVE).draft),
+      structuredMissionApproved: true,
     };
     const delegation = buildDelegationFromAmoMission(mission);
-    assert.equal(delegation.businessContext.operatorDirection, STR_OBJECTIVE);
+    assert.equal(delegation.businessContext.operatorDirection, 'Acquire one recurring commercial cleaning client.');
     assert.equal(delegation.businessContext.missionObjectiveImmutable, true);
     assert.equal(delegation.targetContext.missionBound, true);
     assert.deepEqual(delegation.targetContext.segments, ['short_term_rental']);
-    assert.notEqual(delegation.targetContext.businessType, mission.targetSegment);
+    assert.notEqual(delegation.businessContext.operatorDirection, mission.objective);
   });
 
   it('normalizes scout payload with attributable evidence and signal specificity', () => {

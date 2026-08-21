@@ -2,6 +2,7 @@
 
 /**
  * SPEC-118 — Acquisition Mission object.
+ * SPEC-130 — Mission Planning Engine seeds the canonical Mission Plan.
  */
 
 const {
@@ -20,13 +21,29 @@ const {
 } = require('./types');
 const { deriveMissionTitle } = require('./MissionNaming');
 const { planFromObjective } = require('./MissionPlanner');
-const { formatMissionUnderstandingProse } = require('./StructuredMission');
+const {
+  formatMissionUnderstandingProse,
+  formatOperatorConfirmation,
+  formatAmbiguityPrompt,
+} = require('./StructuredMission');
 
 function normalizePriority(value) {
   const text = asText(value).toLowerCase();
   if (text === PRIORITIES.HIGH || text === 'urgent') return PRIORITIES.HIGH;
   if (text === PRIORITIES.LOW) return PRIORITIES.LOW;
   return PRIORITIES.NORMAL;
+}
+
+function planMission(objective, input = {}) {
+  return planFromObjective(objective, {
+    targetSegment: asText(input.targetSegment || input.segment) || null,
+    constraints: input.constraints,
+    priority: input.priority,
+    context: input.planningContext || input.context || null,
+    resolutions: input.planResolutions || input.resolutions || null,
+    missionType: input.missionType || input.type || null,
+    evidence: input.evidence || null,
+  });
 }
 
 function createMission(input = {}) {
@@ -44,26 +61,32 @@ function createMission(input = {}) {
 
   let missionPlanDraft = input.missionPlanDraft || input.structuredMissionDraft || null;
   let structuredMission = input.structuredMission || null;
-  if (input.planApproved === true && !structuredMission) {
-    const planned = planFromObjective(objective, {
-      targetSegment,
-      constraints: input.constraints,
-      priority: input.priority,
-    });
+  let planAmbiguities = Array.isArray(input.planAmbiguities) ? input.planAmbiguities : [];
+  let planResolutions = input.planResolutions || null;
+  let planned = null;
+
+  if (input.planCancelled === true) {
+    missionPlanDraft = null;
+    structuredMission = null;
+  } else if (input.planApproved === true && !structuredMission) {
+    planned = planMission(objective, input);
+    if (!planned.readyForConfirmation) {
+      throw amoError('amo_plan_ambiguous', planned.clarificationPrompt || 'Mission plan still has ambiguities.');
+    }
     structuredMission = require('./StructuredMission').freezeStructuredMission(planned.draft, {
       approvedBy: 'test',
     });
     missionPlanDraft = null;
+    planAmbiguities = [];
   } else if (!missionPlanDraft && !structuredMission && input.skipMissionPlanning !== true) {
-    const planned = planFromObjective(objective, {
-      targetSegment,
-      constraints: input.constraints,
-      priority: input.priority,
-    });
+    planned = planMission(objective, input);
     missionPlanDraft = planned.draft;
+    planAmbiguities = planned.ambiguities || [];
+    planResolutions = planned.resolutions || planResolutions;
   }
   if (structuredMission && structuredMission.immutable) {
     missionPlanDraft = null;
+    planAmbiguities = [];
   }
 
   const pendingOperatorDecision = buildPendingOperatorDecision({
@@ -71,6 +94,8 @@ function createMission(input = {}) {
     input,
     missionPlanDraft,
     structuredMission,
+    planAmbiguities,
+    planned,
   });
 
   return {
@@ -85,7 +110,9 @@ function createMission(input = {}) {
     title: asText(input.title) || deriveMissionTitle(objective, targetSegment),
     priority: normalizePriority(input.priority),
     stage,
-    status: STAGE_LABELS[stage] || 'Discovering',
+    status: input.planCancelled === true
+      ? 'Cancelled'
+      : STAGE_LABELS[stage] || 'Discovering',
     confidence: round2(confidence),
     owner: asText(input.owner) || 'Operator',
     createdBy: asText(input.createdBy || input.created_by) || SPECIALISTS.MAX,
@@ -96,14 +123,25 @@ function createMission(input = {}) {
     missionPlanDraft,
     structuredMission: structuredMission || null,
     structuredMissionApproved: Boolean(structuredMission && structuredMission.immutable),
+    planAmbiguities,
+    planResolutions,
+    planCancelled: input.planCancelled === true,
     pendingOperatorDecision,
     createdAt: now,
     updatedAt: now,
   };
 }
 
-function buildPendingOperatorDecision({ stage, input, missionPlanDraft, structuredMission }) {
+function buildPendingOperatorDecision({
+  stage,
+  input,
+  missionPlanDraft,
+  structuredMission,
+  planAmbiguities,
+  planned,
+}) {
   if (input.pendingOperatorDecision !== undefined) return input.pendingOperatorDecision;
+  if (input.planCancelled === true) return null;
   if (stage !== STAGES.DISCOVER) return null;
   if (structuredMission && structuredMission.immutable) {
     return {
@@ -112,12 +150,28 @@ function buildPendingOperatorDecision({ stage, input, missionPlanDraft, structur
       prompt: 'Approve discovery?',
     };
   }
+  const ambiguities = Array.isArray(planAmbiguities) ? planAmbiguities : [];
+  if (ambiguities.length) {
+    const first = ambiguities[0];
+    return {
+      stage: STAGES.DISCOVER,
+      kind: OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION,
+      prompt: first.question,
+      question: first.question,
+      choices: first.choices || [],
+      field: first.field,
+      clarificationPrompt: formatAmbiguityPrompt(first),
+    };
+  }
   if (missionPlanDraft) {
     return {
       stage: STAGES.DISCOVER,
       kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
       prompt: 'Approve mission plan?',
-      missionUnderstanding: formatMissionUnderstandingProse(missionPlanDraft),
+      missionUnderstanding: formatOperatorConfirmation(missionPlanDraft)
+        || (planned && planned.confirmation)
+        || formatMissionUnderstandingProse(missionPlanDraft),
+      actions: ['Approve', 'Edit', 'Cancel'],
     };
   }
   return {
@@ -135,4 +189,6 @@ module.exports = {
   createMission,
   snapshotMission,
   normalizePriority,
+  planMission,
+  buildPendingOperatorDecision,
 };

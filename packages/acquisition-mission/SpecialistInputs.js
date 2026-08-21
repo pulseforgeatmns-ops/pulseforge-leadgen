@@ -16,8 +16,17 @@ function requireStructuredMission(mission) {
   return plan;
 }
 
+function requireLockedMissionPlan(mission) {
+  if (!isStructuredMissionApproved(mission) || !mission.structuredMission) {
+    const err = new Error('Specialists cannot execute until the Mission Plan is approved and locked.');
+    err.code = 'amo_plan_not_locked';
+    throw err;
+  }
+  return mission.structuredMission;
+}
+
 /**
- * Scout receives segment, industry, buyer, geography, constraints, success metric.
+ * Scout receives segment, industry, buyer, geography, constraints, evidence policy, success metric.
  * Scout is forbidden from inferring these from English.
  */
 function scoutInput(mission) {
@@ -27,30 +36,33 @@ function scoutInput(mission) {
     industry: plan.market.industry,
     buyer: plan.market.buyer,
     geography: plan.geography,
-    constraints: plan.constraints.slice(),
-    successMetric: { ...plan.successMetric },
+    constraints: (plan.constraints || []).slice(),
+    evidencePolicy: { ...(plan.evidence || plan.evidencePolicy || {}) },
+    successMetric: { ...(plan.successMetric || plan.success || {}) },
     missionBound: true,
     structuredOnly: true,
   };
 }
 
 /**
- * Paige receives market, buyer, objective, campaign goal, constraints.
+ * Paige receives audience, campaign goal, market, constraints, tone, objective.
  */
 function paigeInput(mission) {
   const plan = requireStructuredMission(mission);
   return {
+    audience: plan.market.label || plan.market.segment,
+    campaignGoal: plan.successMetric || plan.success,
     market: { ...plan.market },
     buyer: plan.market.buyer,
     objective: plan.objective,
-    campaignGoal: plan.successMetric,
-    constraints: plan.constraints.slice(),
+    constraints: (plan.constraints || []).slice(),
+    tone: asText(plan.tone) || 'operator_voice',
     structuredOnly: true,
   };
 }
 
 /**
- * Vera receives market, buyer, region.
+ * Vera receives market, companies, buyer, review policy.
  */
 function veraInput(mission, companies = []) {
   const plan = requireStructuredMission(mission);
@@ -59,15 +71,20 @@ function veraInput(mission, companies = []) {
     buyer: plan.market.buyer,
     region: plan.geography.region,
     companies: Array.isArray(companies) ? companies.slice() : [],
+    reviewPolicy: plan.reviewPolicy || {
+      respondToAll: true,
+      minRating: 1,
+    },
     structuredOnly: true,
   };
 }
 
 /**
- * Rex receives mission summary, objective, success metric, progress.
+ * Rex receives mission, progress, objective, KPIs.
  */
 function rexInput(mission, progress = {}) {
   const plan = requireStructuredMission(mission);
+  const success = plan.successMetric || plan.success || {};
   return {
     mission: {
       id: mission.id,
@@ -76,7 +93,10 @@ function rexInput(mission, progress = {}) {
       status: mission.status,
     },
     objective: plan.objective,
-    successMetric: { ...plan.successMetric },
+    successMetric: { ...success },
+    kpis: [
+      { metric: success.metric || success.type, target: success.target },
+    ],
     progress: {
       percent: progress.percent != null ? progress.percent : mission.progressPercent,
       stage: progress.stage || mission.stage,
@@ -87,21 +107,21 @@ function rexInput(mission, progress = {}) {
 }
 
 /**
- * Build Scout delegation from structured mission — no English parsing.
+ * Build Scout delegation from a locked Mission Plan — no English parsing.
  */
 function scoutDelegationFromMission(mission) {
-  const plan = requireStructuredMission(mission);
+  const plan = requireLockedMissionPlan(mission);
   const input = scoutInput(mission);
   const geographyLabel =
     plan.geography.region ||
-    (plan.geography.cities.length ? plan.geography.cities.join(', ') : null);
+    (plan.geography.cities && plan.geography.cities.length ? plan.geography.cities.join(', ') : null);
 
   return {
     tenantId: String(mission.tenantId || mission.clientId || ''),
     missionId: mission.id,
     targetContext: {
       geography: geographyLabel,
-      cities: plan.geography.cities.slice(),
+      cities: (plan.geography.cities || []).slice(),
       segments: [plan.market.segment],
       industry: plan.market.industry,
       buyer: plan.market.buyer,
@@ -113,12 +133,13 @@ function scoutDelegationFromMission(mission) {
       serviceGeography: geographyLabel,
       preferredSegments: [plan.market.segment],
       operatorDirection: plan.objective,
-      missionObjectiveImmutable: isStructuredMissionApproved(mission),
-      commercialCapability: plan.constraints.includes('commercial_only')
+      missionObjectiveImmutable: true,
+      commercialCapability: (plan.constraints || []).includes('commercial_only')
         ? 'commercial_cleaning'
         : null,
-      exclusions: plan.constraints.slice(),
-      successMetric: { ...plan.successMetric },
+      exclusions: (plan.constraints || []).slice(),
+      successMetric: { ...(plan.successMetric || {}) },
+      evidencePolicy: { ...(plan.evidence || plan.evidencePolicy || {}) },
       structuredOnly: true,
     },
     specialistInput: input,
@@ -132,4 +153,5 @@ module.exports = {
   rexInput,
   scoutDelegationFromMission,
   requireStructuredMission,
+  requireLockedMissionPlan,
 };

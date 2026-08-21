@@ -60,7 +60,7 @@ describe('SPEC-118 service attach points', () => {
   it('attaches Scout, Paige, and Emmett outputs to the mission', async () => {
     const mission = await createMission({
       tenantId: '10',
-      objective: 'Acquire commercial cleaning customers in Manchester.',
+      objective: 'Acquire commercial cleaning customers in Manchester NH.',
       targetSegment: 'Law Firms',
       campaign: 'Fall Outreach',
     }, { persist: false });
@@ -116,7 +116,7 @@ describe('SPEC-118 Max Ask', () => {
     const amoEngine = getEngine();
     const mission = amoEngine.create({
       tenantId: '10',
-      objective: 'Acquire commercial cleaning customers in Manchester.',
+      objective: 'Acquire commercial cleaning customers in Manchester NH.',
       targetSegment: 'Commercial Law Firms',
       campaign: 'Fall Outreach',
       confidence: 0.84,
@@ -162,7 +162,7 @@ describe('SPEC-118 Max Ask', () => {
     const amoEngine = getEngine();
     const mission = amoEngine.create({
       tenantId: '10',
-      objective: 'Acquire commercial cleaning customers in Manchester.',
+      objective: 'Acquire commercial cleaning customers in Manchester NH.',
       targetSegment: 'Commercial Law Firms',
       campaign: 'Fall Outreach',
       confidence: 0.84,
@@ -237,7 +237,7 @@ describe('SPEC-118 Max orchestrates', () => {
   it('lets Max progress after Scout discovery and rejects Paige advancing', async () => {
     const mission = await createMission({
       tenantId: '10',
-      objective: 'Acquire commercial cleaning customers in Manchester.',
+      objective: 'Acquire commercial cleaning customers in Manchester NH.',
     }, { persist: false });
     await contribute(mission.id, {
       specialist: 'scout',
