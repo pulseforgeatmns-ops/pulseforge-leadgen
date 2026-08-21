@@ -6,6 +6,7 @@
  */
 
 const amo = require('../../acquisition-mission');
+const { isRolledBackExecution, formatRollbackProse } = amo;
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const {
   buildAcquisitionMissionCommunication,
@@ -70,6 +71,50 @@ function buildExecutionMissionResponse({
   const scout = workspace.scout || null;
   const stage = mission.stage || STAGES.DISCOVER;
   const progress = mission.progressPercent != null ? mission.progressPercent : null;
+
+  if (executionResult && executionResult.rolledBack) {
+    const err = executionResult.error || {};
+    const stageName = action === 'plan_approved' ? 'Mission plan' : 'Discovery';
+    const comm = buildMissionCommunication({
+      headline: `${stageName} could not execute`,
+      mission: mission.title || mission.id,
+      objective: mission.objective,
+      status: 'Unchanged',
+      stage: stageName,
+      progress,
+      waitingOn: 'Resolve the blocker',
+      nextStep: 'Resolve the blocker and retry.',
+      operatorDecision: action === 'plan_approved' ? 'Approve mission plan?' : 'Approve discovery?',
+      evidenceStatus: err.rollbackReason || err.message || formatRollbackProse(stageName),
+      sources: ['acquisition_mission', 'tme'],
+      includeReasoningMarker: false,
+    });
+    const prose = formatRollbackProse(stageName);
+    const structured = applyMissionCommunication(
+      buildStructuredResponse({
+        answer: prose,
+        reasoning: [],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: mission.confidence != null ? mission.confidence : 0.5,
+        nextInvestigations: [],
+        recommendedActions: [],
+        confidenceContributors: ['spec_131', 'tme'],
+        timelineReferences: [],
+        relatedEntities: [
+          { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
+        ],
+        metadata: {
+          ...buildExecutionMetadata(mission, action, executionResult),
+          rolledBack: true,
+          transactionId: executionResult.transactionId || err.transactionId,
+          errorClass: err.tmeClass || null,
+        },
+      }),
+      comm
+    );
+    return { structured, prose, comm, action };
+  }
 
   if (executionResult && action === 'plan_clarified') {
     const pending = mission.pendingOperatorDecision || {};
@@ -583,29 +628,49 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionResult = applyPlanEdits({ engine, mission, tenantId, question });
     snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
   } else if (shouldExecutePlan(action, snapshot)) {
-    executionResult = await advancePlanAfterApproval({
-      engine,
-      mission,
-      tenantId,
-      question,
-      operatorId: input.operatorId || (input.session && input.session.operator) || null,
-    });
+    try {
+      executionResult = await advancePlanAfterApproval({
+        engine,
+        mission,
+        tenantId,
+        question,
+        operatorId: input.operatorId || (input.session && input.session.operator) || null,
+      });
+    } catch (err) {
+      if (!isRolledBackExecution(err)) throw err;
+      executionResult = {
+        rolledBack: true,
+        error: err,
+        snapshot: engine.inspect(mission.id, { tenantId }),
+        transactionId: err.transactionId,
+      };
+    }
     snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
   } else if (shouldExecuteDiscovery(action, snapshot)) {
-    executionResult = await advanceDiscoveryAfterApproval({
-      engine,
-      mission,
-      tenantId,
-      question,
-      operatorId: input.operatorId || (input.session && input.session.operator) || null,
-      missionEngine: input.missionEngine,
-      persist: input.persist,
-      runScout: input.runScout,
-      scoutCompanies: input.scoutCompanies,
-      scoutPeople: input.scoutPeople,
-      allowFixtureFallback: input.allowFixtureFallback,
-      audit,
-    });
+    try {
+      executionResult = await advanceDiscoveryAfterApproval({
+        engine,
+        mission,
+        tenantId,
+        question,
+        operatorId: input.operatorId || (input.session && input.session.operator) || null,
+        missionEngine: input.missionEngine,
+        persist: input.persist,
+        runScout: input.runScout,
+        scoutCompanies: input.scoutCompanies,
+        scoutPeople: input.scoutPeople,
+        allowFixtureFallback: input.allowFixtureFallback,
+        audit,
+      });
+    } catch (err) {
+      if (!isRolledBackExecution(err)) throw err;
+      executionResult = {
+        rolledBack: true,
+        error: err,
+        snapshot: engine.inspect(mission.id, { tenantId }),
+        transactionId: err.transactionId,
+      };
+    }
     snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
   } else if (action === 'discovery_approved') {
     const approval = findDiscoveryApproval(snapshot.contributions || []);

@@ -544,7 +544,19 @@ class WorkspaceEngine {
           }
         }
         const structuredAmoExec = amoExecutionTurn.structured;
-        const presentedAmoExec = await this._presentation.present(structuredAmoExec);
+        let presentedAmoExec;
+        try {
+          presentedAmoExec = await this._presentation.present(structuredAmoExec);
+        } catch (err) {
+          presentedAmoExec = {
+            prose: amoExecutionTurn.prose,
+            metadata: {
+              presentationError: true,
+              presentationMessage: err && err.message,
+            },
+            presentation: { retryable: true, spec: 'SPEC-131' },
+          };
+        }
         const proseAmoExec = presentedAmoExec.prose || amoExecutionTurn.prose;
         this._sessions.appendMessage(session.id, {
           role: 'max',

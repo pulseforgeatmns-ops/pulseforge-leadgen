@@ -106,6 +106,35 @@ function createMemoryAmoStore(opts = {}) {
     return learning.filter((row) => String(row.tenantId || '') === key).map(clone);
   }
 
+  function snapshot() {
+    return {
+      missions: [...missions.entries()].map(([id, row]) => [id, clone(row)]),
+      events: events.map(clone),
+      contributions: contributions.map(clone),
+      observations: observations.map(clone),
+      outcomes: outcomes.map(clone),
+      learning: learning.map(clone),
+    };
+  }
+
+  function replaceArray(target, source) {
+    target.length = 0;
+    for (const row of source || []) target.push(clone(row));
+  }
+
+  function restore(snap) {
+    if (!snap) return;
+    missions.clear();
+    for (const [id, row] of snap.missions || []) {
+      missions.set(id, clone(row));
+    }
+    replaceArray(events, snap.events);
+    replaceArray(contributions, snap.contributions);
+    replaceArray(observations, snap.observations);
+    replaceArray(outcomes, snap.outcomes);
+    replaceArray(learning, snap.learning);
+  }
+
   for (const extra of opts.seeds || []) putMission(extra);
 
   return {
@@ -123,6 +152,8 @@ function createMemoryAmoStore(opts = {}) {
     listOutcomes,
     addLearning,
     listLearning,
+    snapshot,
+    restore,
   };
 }
 

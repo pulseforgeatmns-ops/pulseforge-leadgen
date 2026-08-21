@@ -116,9 +116,9 @@ function missionFromRow(row) {
   };
 }
 
-async function persistMission(mission, pool = defaultPool()) {
+async function persistMission(mission, pool = defaultPool(), opts = {}) {
   if (!mission?.id) return null;
-  await ensureAcquisitionMissionSchema(pool);
+  if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_missions (
        id, tenant_id, client_id, stage, status, objective, target_segment, campaign,
@@ -159,9 +159,9 @@ async function persistMission(mission, pool = defaultPool()) {
   return mission;
 }
 
-async function persistEvent(event, tenantId, pool = defaultPool()) {
+async function persistEvent(event, tenantId, pool = defaultPool(), opts = {}) {
   if (!event?.id) return null;
-  await ensureAcquisitionMissionSchema(pool);
+  if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_events (id, mission_id, tenant_id, kind, specialist, label, payload, at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -171,9 +171,9 @@ async function persistEvent(event, tenantId, pool = defaultPool()) {
   return event;
 }
 
-async function persistContribution(row, tenantId, pool = defaultPool()) {
+async function persistContribution(row, tenantId, pool = defaultPool(), opts = {}) {
   if (!row?.id) return null;
-  await ensureAcquisitionMissionSchema(pool);
+  if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_contributions (id, mission_id, tenant_id, specialist, kind, payload, at)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
@@ -183,9 +183,9 @@ async function persistContribution(row, tenantId, pool = defaultPool()) {
   return row;
 }
 
-async function persistObservation(row, tenantId, pool = defaultPool()) {
+async function persistObservation(row, tenantId, pool = defaultPool(), opts = {}) {
   if (!row?.id) return null;
-  await ensureAcquisitionMissionSchema(pool);
+  if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_observations (id, mission_id, tenant_id, specialist, observation, at)
      VALUES ($1,$2,$3,$4,$5,$6)
@@ -195,9 +195,9 @@ async function persistObservation(row, tenantId, pool = defaultPool()) {
   return row;
 }
 
-async function persistOutcome(row, pool = defaultPool()) {
+async function persistOutcome(row, pool = defaultPool(), opts = {}) {
   if (!row?.id) return null;
-  await ensureAcquisitionMissionSchema(pool);
+  if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_outcomes (id, mission_id, tenant_id, client_id, outcome_type, segment, prospect_id, payload, at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
@@ -217,6 +217,121 @@ async function persistLearning(row, pool = defaultPool()) {
     [row.id, String(row.tenantId), row.missionId || null, row.segment, row.sends, row.replies, row.replyRate, row.statement, row]
   );
   return row;
+}
+
+async function ensureExecutionAuditSchema(pool = defaultPool()) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS acquisition_mission_execution_audit (
+      id TEXT PRIMARY KEY,
+      transaction_id TEXT NOT NULL,
+      mission_id TEXT,
+      tenant_id TEXT,
+      mission_version INTEGER,
+      specialist TEXT,
+      stage TEXT,
+      preconditions JSONB NOT NULL DEFAULT '{}'::jsonb,
+      duration_ms INTEGER,
+      commit_status TEXT NOT NULL,
+      rollback_reason TEXT,
+      error_class TEXT,
+      exception TEXT,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS acquisition_mission_execution_audit_txn_idx
+      ON acquisition_mission_execution_audit (transaction_id)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS acquisition_mission_execution_audit_mission_idx
+      ON acquisition_mission_execution_audit (mission_id, at DESC)
+  `);
+}
+
+async function persistExecutionAudit(row, pool = defaultPool(), opts = {}) {
+  if (!row?.id && !row?.transactionId) return null;
+  if (opts.skipEnsure !== true) await ensureExecutionAuditSchema(pool);
+  const id = row.id || row.transactionId;
+  await pool.query(
+    `INSERT INTO acquisition_mission_execution_audit (
+       id, transaction_id, mission_id, tenant_id, mission_version, specialist, stage,
+       preconditions, duration_ms, commit_status, rollback_reason, error_class, exception, payload, at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      id,
+      row.transactionId,
+      row.missionId || null,
+      row.tenantId != null ? String(row.tenantId) : null,
+      row.missionVersion != null ? row.missionVersion : 0,
+      row.specialist || null,
+      row.stage || null,
+      row.preconditions || {},
+      row.durationMs != null ? row.durationMs : 0,
+      row.commitStatus,
+      row.rollbackReason || null,
+      row.errorClass || null,
+      row.exception || null,
+      row.payload || {},
+      row.at || new Date().toISOString(),
+    ]
+  );
+  return row;
+}
+
+/**
+ * SPEC-131 — persist mission + events + contributions + commit audit in one SQL transaction.
+ */
+async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) {
+  const mission = bundle.mission;
+  if (!mission?.id) {
+    const err = new Error('Mission is required to persist a stage commit.');
+    err.code = 'tme_persistence';
+    throw err;
+  }
+  if (opts.skipEnsure !== true) {
+    await ensureAcquisitionMissionSchema(pool);
+    await ensureExecutionAuditSchema(pool);
+  }
+
+  const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
+  const ownsClient = client !== pool && typeof client.release === 'function';
+  const writeOpts = { skipEnsure: true };
+
+  try {
+    await client.query('BEGIN');
+    await persistMission(mission, client, writeOpts);
+    for (const event of bundle.events || []) {
+      await persistEvent(event, mission.tenantId, client, writeOpts);
+    }
+    for (const row of bundle.contributions || []) {
+      await persistContribution(row, mission.tenantId, client, writeOpts);
+    }
+    for (const row of bundle.observations || []) {
+      await persistObservation(row, mission.tenantId, client, writeOpts);
+    }
+    for (const row of bundle.outcomes || []) {
+      await persistOutcome(row, client, writeOpts);
+    }
+    if (bundle.audit) {
+      await persistExecutionAudit(bundle.audit, client, writeOpts);
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* rollback best-effort */
+    }
+    const wrapped = new Error(err.message || 'Persistence failure.');
+    wrapped.code = 'tme_persistence';
+    wrapped.cause = err;
+    throw wrapped;
+  } finally {
+    if (ownsClient) client.release();
+  }
+  return mission;
 }
 
 async function loadTenantMissions(tenantId, pool = defaultPool()) {
@@ -257,11 +372,14 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
 
 module.exports = {
   ensureAcquisitionMissionSchema,
+  ensureExecutionAuditSchema,
   persistMission,
   persistEvent,
   persistContribution,
   persistObservation,
   persistOutcome,
   persistLearning,
+  persistExecutionAudit,
+  persistStageCommit,
   loadTenantMissions,
 };

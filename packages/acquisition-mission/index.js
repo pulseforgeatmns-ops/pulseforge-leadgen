@@ -36,6 +36,9 @@ const structuredMission = require('./StructuredMission');
 const missionPlanner = require('./MissionPlanner');
 const specialistInputs = require('./SpecialistInputs');
 const contextPrecedence = require('./ContextPrecedence');
+const executionErrors = require('./ExecutionErrors');
+const executionAudit = require('./ExecutionAudit');
+const transactionalExecution = require('./TransactionalExecution');
 
 module.exports = {
   ...types,
@@ -75,4 +78,7 @@ module.exports = {
   ...missionPlanner,
   ...specialistInputs,
   ...contextPrecedence,
+  ...executionErrors,
+  ...executionAudit,
+  ...transactionalExecution,
 };
