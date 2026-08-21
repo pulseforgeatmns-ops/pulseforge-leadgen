@@ -2,8 +2,9 @@
 
 /**
  * SPEC-124 — Acquisition Ownership Convergence.
- * Mission Engine owns acquisition objectives. Client Intelligence contributes
- * structured evidence — never the final operator response.
+ * SPEC-134 — Once the AMO runtime owns a response, presentation stays AMO.
+ * Ownership selects the owner. It does not replace AMO presentation with
+ * Mission Engine fields. Client Intelligence is supporting evidence only.
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
@@ -39,6 +40,15 @@ const {
   deriveMissionTitle,
 } = require('../../acquisition-mission/MissionNaming');
 const { formatMissionUnderstandingProse } = require('../../acquisition-mission/StructuredMission');
+const {
+  presentationFromDiscoveryPayload,
+  findLatestDiscoveryContribution,
+} = require('../../acquisition-mission/DiscoveryPresentation');
+const {
+  hasSufficientEvidenceForPrioritization,
+} = require('../../acquisition-mission/DiscoveryPayload');
+
+const AMO_SOURCES = Object.freeze(['acquisition_mission', 'scout']);
 
 function isAcquisitionObjectiveForMission(question) {
   const q = normalizeObjectiveText(question);
@@ -177,6 +187,53 @@ async function attachEvidenceToMission(missionId, objective, ciEvidence, opts = 
   });
 }
 
+function discoveryFromSnapshot(snapshot = {}) {
+  if (snapshot.discoveryArtifact) return snapshot.discoveryArtifact;
+  const row = findLatestDiscoveryContribution(snapshot.contributions || []);
+  if (!row) return null;
+  return presentationFromDiscoveryPayload(row.payload || {});
+}
+
+function amoOperatorDecision(mission, snapshot, discovery) {
+  const pending = (mission && mission.pendingOperatorDecision) || {};
+  if (pending.kind === 'plan_clarification' && pending.clarificationPrompt) {
+    return pending.clarificationPrompt;
+  }
+  if (pending.prompt) return pending.prompt;
+  if (snapshot && snapshot.blocker) return 'Resolve blocker to continue?';
+  if (discovery && hasSufficientEvidenceForPrioritization(discovery)) {
+    return 'Approve prioritization?';
+  }
+  if (discovery) return 'Request more discovery evidence?';
+  return null;
+}
+
+function amoEvidenceStatus(discovery) {
+  if (discovery && discovery.summary) return discovery.summary;
+  if (discovery) return 'Scout discovery attached';
+  return 'Mission state';
+}
+
+/**
+ * SPEC-134 — fill AMO presentation contract fields on the AMO communication
+ * object. Does not apply Mission Engine sources, Blueprint evidence status,
+ * or legacy operator-decision copy.
+ */
+function applyAmoPresentationContract(baseComm, { mission, snapshot, created } = {}) {
+  const discovery = discoveryFromSnapshot(snapshot);
+  const operatorDecision = amoOperatorDecision(mission, snapshot, discovery);
+  return buildMissionCommunication({
+    ...baseComm,
+    headline: created ? 'Mission Created' : 'Mission Resumed',
+    mission: (mission && (mission.title || mission.id)) || baseComm.mission,
+    objective: (mission && mission.objective) || baseComm.objective,
+    operatorDecision: operatorDecision || baseComm.operatorDecision,
+    evidenceStatus: amoEvidenceStatus(discovery),
+    sources: AMO_SOURCES.slice(),
+    discoveryResults: discovery || baseComm.discoveryResults || null,
+  });
+}
+
 function buildOwnershipMissionResponse({
   mission,
   snapshot,
@@ -186,8 +243,9 @@ function buildOwnershipMissionResponse({
 }) {
   const baseComm = buildAcquisitionMissionCommunication(
     {
+      ...(snapshot || {}),
       mission,
-      workspace: snapshot.workspace,
+      workspace: snapshot && snapshot.workspace,
       missionContext: {
         stage: mission.stage,
         stageLabel: mission.status,
@@ -198,62 +256,19 @@ function buildOwnershipMissionResponse({
     { kind: 'workspace' }
   );
 
-  const known = [`Objective: ${mission.objective}.`];
-  if (ciEvidence && ciEvidence.known && ciEvidence.known.length) {
-    known.push(...ciEvidence.known.map((row) => `${row} (Client Intelligence).`));
-  }
-
-  const inference = [];
-  if (ciEvidence && ciEvidence.strategicEvidence && ciEvidence.strategicEvidence.icp) {
-    inference.push(
-      `Strategic basis: ${ciEvidence.strategicEvidence.icp}` +
-        (ciEvidence.strategicEvidence.geography
-          ? ` in ${ciEvidence.strategicEvidence.geography}`
-          : '') +
-        '.'
-    );
-  } else {
-    inference.push('Mission will gather market evidence before prioritizing outreach.');
-  }
-
-  const unknown = (ciEvidence && ciEvidence.strategicEvidence && ciEvidence.strategicEvidence.unknowns) || [];
-  const sources = ['Mission Engine'];
-  if (ciEvidence && ciEvidence.attached) sources.push('Client Intelligence');
-
-  const comm = buildMissionCommunication({
-    ...baseComm,
-    headline: created ? 'Mission Created' : 'Mission Resumed',
-    mission: mission.title || 'Acquisition Mission',
-    objective: mission.objective,
-    status: mission.status,
-    stage: mission.status,
-    progress: mission.progressPercent,
+  const comm = applyAmoPresentationContract(baseComm, {
+    mission,
+    snapshot,
+    created,
+  });
+  comm.reasoningEvidence = buildReasoningEvidence({
+    known: [`Objective: ${mission.objective}.`],
+    inference: comm.discoveryResults
+      ? ['Scout discovery artifact is attached to the mission.']
+      : ['AMO runtime owns this response. Presentation stays on the acquisition mission.'],
+    unknown: [],
+    evidenceNeeded: [],
     confidence: mission.confidence,
-    health: 'Healthy',
-    waitingOn: 'Operator direction',
-    nextStep: created
-      ? (mission.pendingOperatorDecision && mission.pendingOperatorDecision.kind === 'plan_clarification'
-          ? 'Answer the planner question. Mission Planning will not guess.'
-          : mission.missionPlanDraft
-            ? 'Review Mission Understanding below, then Approve, Edit, or Cancel the mission plan before Discovery.'
-            : 'Scout will identify high-probability operators matching this objective.')
-      : 'Continuing the active acquisition mission from current stage.',
-    operatorDecision: created
-      ? (mission.pendingOperatorDecision && mission.pendingOperatorDecision.clarificationPrompt)
-        || (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt)
-        || 'Approve mission plan?'
-      : 'Continue in mission workspace?',
-    evidenceStatus: ciEvidence && ciEvidence.attached ? '✓ Blueprint attached' : 'Mission context only',
-    sources,
-    reasoningEvidence: buildReasoningEvidence({
-      known,
-      inference,
-      unknown,
-      evidenceNeeded: [
-        'Live campaign performance before scaling beyond the first experiment.',
-      ],
-      confidence: mission.confidence,
-    }),
   });
 
   const prose = formatMissionProse(comm);
@@ -286,7 +301,7 @@ function buildOwnershipMissionResponse({
           payload: { missionId: mission.id },
         },
       ],
-      confidenceContributors: ['spec_124', 'acquisition_mission'],
+      confidenceContributors: ['spec_134', 'spec_124', 'acquisition_mission'],
       timelineReferences: [],
       relatedEntities: [
         { id: mission.id, type: 'acquisition_mission', name: mission.title },
@@ -306,6 +321,8 @@ function buildOwnershipMissionResponse({
         unavailable: [],
         acquisitionMission: true,
         acquisitionOwnership: true,
+        missionRuntime: 'AMO',
+        presentationContract: 'amo',
         missionCreated: created === true,
         missionResumed: created === false,
         missionUnderstanding,
@@ -468,6 +485,8 @@ module.exports = {
   buildClientIntelligenceMissionEvidence,
   findResumableMission,
   attachEvidenceToMission,
+  applyAmoPresentationContract,
   buildOwnershipMissionResponse,
   maybeHandleAcquisitionOwnershipTurn,
+  AMO_SOURCES,
 };
