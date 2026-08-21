@@ -80,6 +80,25 @@ function veraInput(mission, companies = []) {
 }
 
 /**
+ * Emmett receives audience, geography, constraints, and deliverability policy.
+ */
+function emmettInput(mission, extras = {}) {
+  const plan = requireStructuredMission(mission);
+  return {
+    audience: plan.market.label || plan.market.segment,
+    market: { ...plan.market },
+    geography: { ...plan.geography },
+    constraints: (plan.constraints || []).slice(),
+    deliverabilityPolicy: extras.deliverabilityPolicy || {
+      safeSendGovernor: true,
+      requireHealthyInbox: true,
+    },
+    queueContext: extras.queueContext || null,
+    structuredOnly: true,
+  };
+}
+
+/**
  * Rex receives mission, progress, objective, KPIs.
  */
 function rexInput(mission, progress = {}) {
@@ -151,6 +170,7 @@ module.exports = {
   paigeInput,
   veraInput,
   rexInput,
+  emmettInput,
   scoutDelegationFromMission,
   requireStructuredMission,
   requireLockedMissionPlan,

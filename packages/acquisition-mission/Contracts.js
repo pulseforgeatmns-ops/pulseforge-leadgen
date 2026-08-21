@@ -24,6 +24,13 @@ const FORBIDDEN = Object.freeze({
     'subject', 'subjects', 'body', 'cta', 'variant', 'variants',
     'messaging', 'copy', 'emailBody', 'email_body', 'hypothesis', 'hypotheses',
   ],
+  [SPECIALISTS.VERA]: [
+    'recipients', 'recipientIds', 'recipient_ids', 'sendTo', 'send_to',
+    'messaging', 'copy', 'queue', 'sendList', 'send_list',
+  ],
+  [SPECIALISTS.REX]: [
+    'recipients', 'recipientIds', 'sendTo', 'messaging', 'copy', 'queue',
+  ],
 });
 
 const PRODUCES = Object.freeze({
@@ -42,6 +49,14 @@ const PRODUCES = Object.freeze({
   [SPECIALISTS.EMMETT]: [
     'capacity', 'queue', 'sendRecommendations', 'send_recommendations',
     'deliverability', 'reputation',
+  ],
+  [SPECIALISTS.VERA]: [
+    'reviews', 'responses', 'draftResponses', 'draft_responses',
+    'sentiment', 'reputation', 'confidence', 'evidence',
+  ],
+  [SPECIALISTS.REX]: [
+    'report', 'summary', 'metrics', 'kpis', 'insights',
+    'recommendations', 'performance',
   ],
 });
 

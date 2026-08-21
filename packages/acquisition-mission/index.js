@@ -39,6 +39,7 @@ const contextPrecedence = require('./ContextPrecedence');
 const executionErrors = require('./ExecutionErrors');
 const executionAudit = require('./ExecutionAudit');
 const transactionalExecution = require('./TransactionalExecution');
+const specialistExecutionContract = require('./SpecialistExecutionContract');
 
 module.exports = {
   ...types,
@@ -81,4 +82,5 @@ module.exports = {
   ...executionErrors,
   ...executionAudit,
   ...transactionalExecution,
+  ...specialistExecutionContract,
 };
