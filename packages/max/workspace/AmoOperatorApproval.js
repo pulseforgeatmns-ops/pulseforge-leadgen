@@ -22,6 +22,13 @@ const {
   logMissionStageExecutionCompleted,
 } = require('./audit/MissionApprovalAudit');
 const askPathTrace = require('./audit/AskPathTrace');
+const {
+  buildMissionCommunication,
+  formatMissionProse,
+} = require('./MissionCommunication');
+const {
+  presentationFromDiscoveryPayload,
+} = require('../../acquisition-mission/DiscoveryPresentation');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
 
@@ -407,43 +414,36 @@ async function advanceDiscoveryAfterApproval(input = {}) {
 function buildDiscoveryApprovalProse(result) {
   askPathTrace.traceEnter('buildDiscoveryApprovalProse');
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
+  const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
   const blocked = result.executionOutcome === 'blocked';
-  const prospectCount = scoutPayload.qualifiedCount || 0;
   const waitingOn = blocked
     ? 'Discovery blocker'
     : result.approvalPhase === APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION
       ? 'Prioritization approval'
       : null;
-  const lines = [
-    'Mission Updated',
-    '',
-    result.alreadyExecuted ? 'Discovery already executed.' : 'Approval Consumed',
-    '',
-    'Stage: Discovery',
-    `Outcome: ${blocked ? 'BLOCKED' : 'COMPLETED'}`,
-  ];
-  if (blocked && scoutPayload.summary) {
-    lines.push(`Reason: ${scoutPayload.summary}`);
-  }
-  lines.push(
-    '',
-    `Scout Discovery completed (Scout Discovery).` +
-      (prospectCount > 0
-        ? ` Found ${prospectCount} verified prospect(s).`
-        : ' No verified prospects were returned.')
-  );
-  if (waitingOn) {
-    lines.push('', 'Waiting On', '', waitingOn);
-  }
-  if (!blocked && prospectCount > 0) {
-    lines.push(
-      '',
-      'Next Recommendation: Review discovered prospects and approve prioritization to continue.'
-    );
-  } else if (blocked) {
-    lines.push('', 'Next Recommendation: Resolve the discovery blocker, then retry Discovery.');
-  }
-  return lines.join('\n');
+  const comm = buildMissionCommunication({
+    headline: 'Mission Updated',
+    mission: result.alreadyExecuted ? 'Discovery already executed.' : 'Approval Consumed',
+    stage: 'Discovery',
+    status: blocked ? 'Discovery Blocked' : 'Discovery Complete',
+    waitingOn,
+    confidence: discoveryResults.confidence,
+    nextStep: blocked
+      ? 'Resolve the discovery blocker, then retry Discovery.'
+      : discoveryResults.qualifiedCount > 0
+        ? 'Review discovered prospects and approve prioritization to continue.'
+        : null,
+    operatorDecision: blocked
+      ? 'Retry discovery?'
+      : !blocked && discoveryResults.qualifiedCount > 0
+        ? 'Approve prioritization?'
+        : null,
+    discoveryResults: result.discovery ? discoveryResults : null,
+    evidenceStatus: blocked && scoutPayload.summary ? scoutPayload.summary : null,
+    sources: ['acquisition_mission', 'scout'],
+    includeReasoningMarker: false,
+  });
+  return formatMissionProse(comm);
 }
 
 module.exports = {
