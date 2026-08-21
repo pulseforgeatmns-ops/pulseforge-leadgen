@@ -114,7 +114,7 @@ async function resolveLegacyActiveMission(input = {}) {
  */
 async function resolveMissionRuntime(input = {}) {
   const question = String(input.question || '').trim();
-  const amoMission = resolveAcquisitionActiveMission(input);
+  const amoMission = await resolveAcquisitionActiveMission(input);
   const legacyMission = await resolveLegacyActiveMission(input);
   const amoActive = isAmoMission(amoMission);
   const legacyActive = Boolean(legacyMission);
