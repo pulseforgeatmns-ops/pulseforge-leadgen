@@ -278,6 +278,13 @@ function buildResponseMetadata(partial = {}) {
   if (partial.claimVerdict != null) meta.claimVerdict = String(partial.claimVerdict);
   if (partial.executed === false) meta.executed = false;
   if (partial.acquisitionMission === true) meta.acquisitionMission = true;
+  if (partial.acquisitionOwnership === true) meta.acquisitionOwnership = true;
+  if (partial.missionRuntime != null) meta.missionRuntime = String(partial.missionRuntime);
+  if (partial.presentationContract != null) {
+    meta.presentationContract = String(partial.presentationContract);
+  }
+  if (partial.missionCreated === true) meta.missionCreated = true;
+  if (partial.missionResumed === true) meta.missionResumed = true;
   if (partial.missionInspection === true) meta.missionInspection = true;
   if (partial.inspectionProperty != null) {
     meta.inspectionProperty = String(partial.inspectionProperty);

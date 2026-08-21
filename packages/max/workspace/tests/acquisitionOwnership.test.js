@@ -19,6 +19,15 @@ const {
   listAcquisitionOwnershipAuditLog,
 } = require('../audit/AcquisitionOwnershipAudit');
 
+function engineAsService(engine) {
+  return {
+    createMission: async (input) => engine.create(input),
+    listMissions: async (tenantId) => engine.list(tenantId),
+    contribute: (id, payload, opts) => engine.contribute(id, payload, opts),
+    getEngine: () => engine,
+  };
+}
+
 const ANCHOR_OBJECTIVE =
   'I want to acquire one recurring commercial cleaning client in Greater Manchester.';
 
@@ -83,6 +92,8 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
       question: ANCHOR_OBJECTIVE,
       context: { tenantId: '10' },
       acquisitionMissionEngine: amoEngine,
+      acquisitionMissionService: engineAsService(amoEngine),
+      persist: false,
       audit,
       cieService: {
         getApprovedClientBlueprint: async () => ({
@@ -102,7 +113,13 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     assert.ok(turn);
     assert.equal(turn.reason, 'acquisition_mission_created');
     assert.match(turn.prose, /Mission Created/);
-    assert.match(turn.prose, /Approve discovery/);
+    assert.match(turn.prose, /Approve discovery|Approve mission plan|Operator Decision/i);
+    assert.deepEqual(
+      turn.structured.metadata.missionCommunicationPayload.sources,
+      ['acquisition_mission', 'scout']
+    );
+    assert.doesNotMatch(turn.prose, /Mission Engine/);
+    assert.doesNotMatch(turn.prose, /Blueprint attached/);
     assert.doesNotMatch(turn.prose, /advisory guidance/i);
     assert.doesNotMatch(turn.prose, /I'd start with a qualified group/i);
     assert.equal(turn.mission.objective, ANCHOR_OBJECTIVE);
@@ -133,11 +150,18 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
       question: 'Acquire one recurring commercial cleaning client',
       context: { tenantId: '10' },
       acquisitionMissionEngine: amoEngine,
+      acquisitionMissionService: engineAsService(amoEngine),
+      persist: false,
     });
 
     assert.ok(turn);
     assert.equal(turn.reason, 'acquisition_mission_resumed');
     assert.match(turn.prose, /Mission Resumed/);
+    assert.deepEqual(
+      turn.structured.metadata.missionCommunicationPayload.sources,
+      ['acquisition_mission', 'scout']
+    );
+    assert.doesNotMatch(turn.prose, /Continue in mission workspace\?/);
     assert.equal(turn.mission.id, existing.id);
     assert.equal(amoEngine.list('10').length, 1);
   });
@@ -186,6 +210,8 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
       question: ANCHOR_OBJECTIVE,
       context: { tenantId: '10' },
       acquisitionMissionEngine: amoEngine,
+      acquisitionMissionService: engineAsService(amoEngine),
+      persist: false,
     });
 
     const events = listAcquisitionOwnershipAuditLog();
