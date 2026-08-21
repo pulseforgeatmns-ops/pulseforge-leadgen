@@ -291,7 +291,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   if (!engine || !tenantId) return null;
 
   const mission =
-    resolveAcquisitionActiveMission(input) ||
+    (await resolveAcquisitionActiveMission(input)) ||
     (() => {
       const missions = engine.list(tenantId);
       const missionId = resolveMissionId(input, missions);

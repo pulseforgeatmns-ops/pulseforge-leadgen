@@ -2,6 +2,7 @@
 
 /**
  * SPEC-127 — Active Mission Lock.
+ * SPEC-130 — Hydrate AMO before resolving acquisition missions.
  * When an active mission exists, execution commands bind to the mission and
  * General Conversation / Daily Briefing cannot claim the turn unless the
  * operator explicitly exits.
@@ -16,6 +17,10 @@ const {
   isMissionExecutionCommand,
   MISSION_EXECUTION_COMMAND_RES,
 } = require('./ExecutionLanguageDetection');
+const {
+  ensureAmoTenantHydrated,
+  logAmoActiveResolved,
+} = require('./AmoWorkspaceHydration');
 
 const BLOCKED_DOMAIN_GENERAL = 'general_conversation';
 const BLOCKED_DOMAIN_BRIEFING = 'morning_briefing';
@@ -58,13 +63,7 @@ function isExplicitMissionExit(text) {
   return { explicit: false, reason: null };
 }
 
-function resolveAcquisitionActiveMission(input = {}) {
-  const tenantId = resolveTenantId(input);
-  const engine = resolveAcquisitionEngine(input);
-  if (!engine || !tenantId || typeof engine.list !== 'function') {
-    return null;
-  }
-  const missions = engine.list(tenantId);
+function pickAcquisitionMission(missions, input = {}) {
   const sessionCtx =
     (input.session && input.session.context) ||
     (input.context && typeof input.context === 'object' ? input.context : {});
@@ -78,12 +77,46 @@ function resolveAcquisitionActiveMission(input = {}) {
 
 /**
  * @param {object} input
+ * @returns {Promise<object|null>}
+ */
+async function resolveAcquisitionActiveMission(input = {}) {
+  const tenantId = resolveTenantId(input);
+  const engine = resolveAcquisitionEngine(input);
+  if (!engine || !tenantId || typeof engine.list !== 'function') {
+    return null;
+  }
+
+  await ensureAmoTenantHydrated(input);
+
+  const missions = engine.list(tenantId);
+  const resolved = pickAcquisitionMission(missions, input);
+  if (resolved) {
+    logAmoActiveResolved(resolved, tenantId);
+  }
+  return resolved;
+}
+
+/**
+ * @param {object} input
  * @returns {Promise<{ active: boolean, mission: object|null, source: 'legacy'|'amo'|null, missionId: string|null, executionCommand: boolean, explicitExit: boolean, exitReason: string|null }>}
  */
 async function resolveActiveMissionLock(input = {}) {
   const question = normalizeText(input.question);
   const executionCommand = isMissionExecutionCommand(question);
   const exit = isExplicitMissionExit(question);
+
+  const amoMission = await resolveAcquisitionActiveMission(input);
+  if (amoMission) {
+    return {
+      active: true,
+      mission: amoMission,
+      source: 'amo',
+      missionId: amoMission.id,
+      executionCommand,
+      explicitExit: exit.explicit,
+      exitReason: exit.reason,
+    };
+  }
 
   if (
     input.missionsEnabled !== false &&
@@ -107,19 +140,6 @@ async function resolveActiveMissionLock(input = {}) {
         exitReason: exit.reason,
       };
     }
-  }
-
-  const amoMission = resolveAcquisitionActiveMission(input);
-  if (amoMission) {
-    return {
-      active: true,
-      mission: amoMission,
-      source: 'amo',
-      missionId: amoMission.id,
-      executionCommand,
-      explicitExit: exit.explicit,
-      exitReason: exit.reason,
-    };
   }
 
   return {
