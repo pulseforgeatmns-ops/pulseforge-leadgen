@@ -35,6 +35,9 @@ const {
   presentationFromDiscoveryPayload,
 } = require('../../acquisition-mission/DiscoveryPresentation');
 const {
+  hasSufficientEvidenceForPrioritization,
+} = require('../../acquisition-mission/DiscoveryPayload');
+const {
   createMissionApprovalAudit,
   logMissionApprovalMatched,
 } = require('./audit/MissionApprovalAudit');
@@ -63,6 +66,7 @@ function buildExecutionMissionResponse({
     const scoutPayload = (executionResult.discovery && executionResult.discovery.payload) || {};
     const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
     const blocked = executionResult.executionOutcome === 'blocked';
+    const sufficientEvidence = hasSufficientEvidenceForPrioritization(discoveryResults);
     const scoutComplete =
       !blocked &&
       snapshot.workspace &&
@@ -78,23 +82,30 @@ function buildExecutionMissionResponse({
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
       waitingOn: blocked
         ? 'Discovery blocker'
-        : scoutComplete
+        : scoutComplete && sufficientEvidence
           ? 'Prioritization approval'
-          : null,
+          : scoutComplete
+            ? 'Evidence review'
+            : null,
       confidence:
         discoveryResults.confidence != null
           ? discoveryResults.confidence
           : mission.confidence,
+      confidenceBreakdown: discoveryResults.confidenceBreakdown,
       nextStep: blocked
         ? 'Resolve the discovery blocker, then retry Discovery.'
-        : scoutComplete
+        : scoutComplete && sufficientEvidence
           ? 'Review discovered prospects and approve prioritization to continue.'
-          : 'Review mission workspace for Scout contributions.',
+          : scoutComplete
+            ? 'Review discovery evidence. Scout must surface attributable signals before prioritization.'
+            : 'Review mission workspace for Scout contributions.',
       operatorDecision: blocked
         ? 'Retry discovery?'
-        : scoutComplete
+        : scoutComplete && sufficientEvidence
           ? 'Approve prioritization?'
-          : null,
+          : scoutComplete
+            ? 'Request more discovery evidence?'
+            : null,
       discoveryResults: executionResult.discovery ? discoveryResults : null,
       evidenceStatus: 'Mission state',
       sources: ['acquisition_mission', 'scout'],

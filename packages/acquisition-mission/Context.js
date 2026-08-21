@@ -29,7 +29,7 @@ function buildSharedContext(mission, contributions = []) {
       id: mission.id,
       title: mission.title,
       targetSegment: mission.targetSegment,
-      objective: asText(max.objectives && max.objectives[0] && (max.objectives[0].text || max.objectives[0])) || mission.objective,
+      objective: mission.objective,
       campaign: mission.campaign,
       priority: mission.priority,
       status: mission.status,

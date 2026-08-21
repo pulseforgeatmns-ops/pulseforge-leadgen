@@ -209,6 +209,14 @@ function createAcquisitionMissionEngine(opts = {}) {
         label: 'Campaign launched',
       }));
     }
+    if (
+      specialist === SPECIALISTS.SCOUT &&
+      kind === CONTRIBUTION_KINDS.DISCOVERY &&
+      payload.confidence != null
+    ) {
+      mission.confidence = round2(payload.confidence);
+      store.putMission(mission);
+    }
     refresh(store, mission);
     return { mission: store.getMission(mission.id), contribution: row };
   }

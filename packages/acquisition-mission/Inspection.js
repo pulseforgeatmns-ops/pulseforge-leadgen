@@ -200,19 +200,35 @@ function explainConfidenceBasis(mission, snapshot) {
   const contributions = snapshot.contributions || [];
   const learning = snapshot.learning || {};
   const factors = [];
+  const scoutDiscovery = [...contributions]
+    .reverse()
+    .find((row) => row.specialist === SPECIALISTS.SCOUT && row.kind === 'discovery');
+  const scoutPayload = scoutDiscovery && scoutDiscovery.payload ? scoutDiscovery.payload : {};
+  const breakdown = scoutPayload.confidenceBreakdown;
 
   if (mission.targetSegment) {
     factors.push({ label: 'Target definition', detail: `Segment: ${mission.targetSegment}` });
   }
   if (mission.objective) {
-    factors.push({ label: 'Blueprint completeness', detail: 'Objective and campaign scope recorded at mission creation' });
+    factors.push({ label: 'Mission objective', detail: 'Operator objective recorded at mission creation' });
   }
-  if (/manchester|charleston|nashville|location|area/i.test(String(mission.objective || ''))) {
+  if (/manchester|charleston|nashville|location|area|hooksett|auburn/i.test(String(mission.objective || ''))) {
     factors.push({ label: 'Known geography', detail: 'Service area captured in mission objective' });
   }
-  const scout = contributions.find((row) => row.specialist === SPECIALISTS.SCOUT);
-  if (scout) {
-    factors.push({ label: 'Scout evidence', detail: 'Discovery contribution attached to mission' });
+  if (scoutDiscovery) {
+    factors.push({
+      label: 'Scout discovery evidence',
+      detail: breakdown
+        ? `Overall ${breakdown.overall}; evidence ${breakdown.evidence}; fit ${breakdown.fit}`
+        : 'Discovery contribution attached to mission',
+    });
+    if (breakdown) {
+      factors.push({ label: 'Discovery confidence', detail: String(breakdown.discovery) });
+      factors.push({ label: 'Evidence confidence', detail: String(breakdown.evidence) });
+      factors.push({ label: 'Market confidence', detail: String(breakdown.market) });
+      factors.push({ label: 'Fit confidence', detail: String(breakdown.fit) });
+      factors.push({ label: 'Completeness', detail: String(breakdown.completeness) });
+    }
   }
   if (learning.segments && learning.segments.length) {
     factors.push({ label: 'Historical evidence', detail: `${learning.segments.length} segment learning record(s) on file` });
@@ -223,12 +239,20 @@ function explainConfidenceBasis(mission, snapshot) {
     factors.push({ label: 'No campaign results yet', detail: 'Confidence reflects planning evidence, not live send outcomes' });
   }
 
+  const value =
+    breakdown && breakdown.overall != null
+      ? round2(breakdown.overall)
+      : scoutPayload.confidence != null
+        ? round2(scoutPayload.confidence)
+        : round2(mission.confidence);
+
   return {
     property: INSPECTION_PROPERTIES.CONFIDENCE,
-    value: round2(mission.confidence),
+    value,
     summary: factors.map((row) => row.label).join('; ') || 'Mission creation inputs',
     derivedFrom: factors,
     headline: 'Confidence',
+    breakdown: breakdown || null,
   };
 }
 

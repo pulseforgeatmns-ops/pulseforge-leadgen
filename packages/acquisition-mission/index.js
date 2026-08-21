@@ -24,6 +24,14 @@ const {
   findLatestDiscoveryContribution,
   presentationFromDiscoveryPayload,
 } = require('./DiscoveryPresentation');
+const {
+  normalizeScoutDiscoveryPayload,
+  hasSufficientEvidenceForPrioritization,
+} = require('./DiscoveryPayload');
+const {
+  deriveMissionTitle,
+  inferTargetSegmentFromObjective,
+} = require('./MissionNaming');
 
 module.exports = {
   ...types,

@@ -34,6 +34,10 @@ const {
 const { objectivesSimilar } = require('../scoutAcquisition/NeedAssessment');
 const { detectAcquisitionObjective, normalizeObjectiveText } = require('./AcquisitionObjectiveDetection');
 const { detectMissionExecutionLanguage } = require('./ExecutionLanguageDetection');
+const {
+  inferTargetSegmentFromObjective,
+  deriveMissionTitle,
+} = require('../../acquisition-mission/MissionNaming');
 
 function isAcquisitionObjectiveForMission(question) {
   const q = normalizeObjectiveText(question);
@@ -127,14 +131,8 @@ function findResumableMission(missions, objective) {
   return missions.find((row) => objectivesSimilar(row.objective, objective)) || null;
 }
 
-function inferTargetSegment(objective, evidence) {
-  if (evidence && evidence.strategicEvidence && evidence.strategicEvidence.icp) {
-    return evidence.strategicEvidence.icp;
-  }
-  const match = String(objective || '').match(
-    /\b(commercial(?:\s+\w+){0,3}\s+(?:client|customer|account)s?)\b/i
-  );
-  return match ? match[1] : null;
+function inferTargetSegment(objective) {
+  return inferTargetSegmentFromObjective(objective);
 }
 
 async function attachEvidenceToMission(missionId, objective, ciEvidence, opts = {}) {
@@ -142,18 +140,16 @@ async function attachEvidenceToMission(missionId, objective, ciEvidence, opts = 
 
   const payload = {
     specialist: 'max',
-    kind: 'prioritization',
+    kind: 'constraints',
     payload: {
-      objectives: [objective],
+      source: 'client_intelligence',
+      blueprintReference: true,
       constraints: ciEvidence.constraints,
-      recommendations: [
-        {
-          source: 'client_intelligence',
-          blueprintId: ciEvidence.blueprintId,
-          sectionsAttached: ciEvidence.sectionsAttached,
-          ...ciEvidence.strategicEvidence,
-        },
-      ],
+      strategicContext: {
+        blueprintId: ciEvidence.blueprintId,
+        sectionsAttached: ciEvidence.sectionsAttached,
+        ...ciEvidence.strategicEvidence,
+      },
     },
   };
 
@@ -366,12 +362,14 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   let created = false;
 
   if (!mission) {
+    const targetSegment = inferTargetSegment(question);
     mission = await service.createMission(
       {
         tenantId,
         clientId: Number(tenantId) || tenantId,
         objective: question,
-        targetSegment: inferTargetSegment(question, ciEvidence),
+        title: deriveMissionTitle(question, targetSegment),
+        targetSegment,
         createdBy: 'max',
         owner: 'Operator',
         constraints: ciEvidence.constraints.slice(),

@@ -162,18 +162,24 @@ function buildAcquisitionSearchDefinition(input = {}) {
     asText(business.operatorDirection && business.operatorDirection.focus) ||
     asText(business.operatorDirection && business.operatorDirection.text) ||
     asText(business.acquisitionDirection);
+  const missionBound =
+    Boolean(target.missionBound || business.missionObjectiveImmutable) &&
+    Boolean(operatorDirection);
   const narrowedByOperator =
     /\bfocus on property|\bproperty managers?\b/i.test(String(operatorDirection || '')) ||
     (suppliedSegments.length === 1 && /property/.test(String(suppliedSegments[0] || '')));
-  const segments = narrowedByOperator && suppliedSegments.length
+  const segments = missionBound && suppliedSegments.length
     ? suppliedSegments.map(asText).filter(Boolean)
-    : defaultSegmentsForNeed(businessNeed, suppliedSegments);
+    : narrowedByOperator && suppliedSegments.length
+      ? suppliedSegments.map(asText).filter(Boolean)
+      : defaultSegmentsForNeed(businessNeed, suppliedSegments);
 
-  const geoLabel =
-    asText(target.geography) ||
-    asText(business.serviceGeography) ||
-    asText(business.approvedUnderstanding && business.approvedUnderstanding.serviceGeography) ||
-    null;
+  const geoLabel = missionBound
+    ? asText(target.geography) || asText(business.serviceGeography) || null
+    : asText(target.geography) ||
+      asText(business.serviceGeography) ||
+      asText(business.approvedUnderstanding && business.approvedUnderstanding.serviceGeography) ||
+      null;
   const profile = resolveProfile({ tenantId, businessNeed, segments });
   const geography = geoLabel ? geographyFromLabel(geoLabel, profile) : null;
   const exclusions = Array.isArray(business.exclusions)
@@ -212,6 +218,7 @@ function buildAcquisitionSearchDefinition(input = {}) {
     populationStatement,
     profileId: profile ? profile.id : null,
     operatorDirection: operatorDirection || null,
+    missionBound,
     expansionRequiresAuthority: true,
     valid: !invalidReason,
     invalidReason,

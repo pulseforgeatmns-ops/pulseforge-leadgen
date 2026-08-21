@@ -185,7 +185,7 @@ describe('SPEC-118 shared context', () => {
     toPrepare(amoEngine, mission.id);
     const context = amoEngine.context(mission.id);
     assert.equal(context.mission.campaign, 'Fall Outreach');
-    assert.match(context.mission.objective, /walkthrough/i);
+    assert.match(context.mission.objective, /Acquire commercial cleaning customers in Manchester/i);
     assert.ok(context.mission.constraints.includes('Veteran discount available'));
     assert.ok(context.buyingSignals.length >= 1);
     assert.ok(context.priorityReasoning.length >= 1);
@@ -276,7 +276,7 @@ describe('SPEC-118 health and blockers', () => {
       statement: 'Commercial firms responding better to operational messaging.',
     });
     const health = amoEngine.health(mission.id);
-    assert.equal(health.confidence, 0.87);
+    assert.equal(health.confidence, 0.8);
     assert.equal(health.currentBlocker, 'Operator approval');
     assert.equal(health.risk, 'Low');
     assert.equal(health.capacityRemaining, 18);
@@ -347,7 +347,7 @@ describe('SPEC-118 learning and explainability', () => {
     assert.ok(why.reasons.some((row) => /61 qualified firms/.test(row)));
     assert.ok(why.reasons.some((row) => /Inbox capacity available/.test(row)));
     assert.ok(why.reasons.some((row) => /11% reply rate/.test(row)));
-    assert.equal(why.confidence, 0.84);
+    assert.equal(why.confidence, 0.8);
     const answered = amoEngine.answerOperator('Why is this mission here?', { tenantId: '10', missionId: mission.id, previousReplyRate: 0.11 });
     assert.equal(answered.invented, false);
     assert.match(answered.prose, /Mission exists because/);
