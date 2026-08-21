@@ -115,6 +115,13 @@ const CONTRIBUTION_KINDS = Object.freeze({
   EDIT: 'edit',
   OBJECTIVE: 'objective',
   CONSTRAINTS: 'constraints',
+  MISSION_PLAN: 'mission_plan',
+});
+
+/** SPEC-130 — operator decision kinds before specialist execution. */
+const OPERATOR_DECISION_KINDS = Object.freeze({
+  PLAN_APPROVAL: 'plan_approval',
+  DISCOVERY_APPROVAL: 'discovery_approval',
 });
 
 const SPECIALIST_STATES = Object.freeze({
@@ -213,6 +220,7 @@ module.exports = {
   BLOCKER_LABELS,
   EVENT_KINDS,
   CONTRIBUTION_KINDS,
+  OPERATOR_DECISION_KINDS,
   SPECIALIST_STATES,
   HEALTH_LABELS,
   RISK_LEVELS,

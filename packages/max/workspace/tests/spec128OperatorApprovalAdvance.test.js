@@ -9,7 +9,9 @@ const {
 } = require('../AcquisitionMissionExecution');
 const {
   hasPendingDiscoveryApproval,
+  hasPendingPlanApproval,
   advanceDiscoveryAfterApproval,
+  advancePlanAfterApproval,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
   APPROVAL_PHASES,
@@ -37,13 +39,23 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
     });
   });
 
-  it('creates discover missions with a pending operator decision', () => {
+  it('creates discover missions with a pending plan approval decision', () => {
     assert.equal(mission.stage, 'discover');
     assert.ok(mission.pendingOperatorDecision);
-    assert.equal(mission.pendingOperatorDecision.prompt, 'Approve discovery?');
+    assert.equal(mission.pendingOperatorDecision.prompt, 'Approve mission plan?');
   });
 
+  async function approvePlan() {
+    await advancePlanAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved.',
+    });
+  }
+
   it('consumes approval and executes discovery exactly once', async () => {
+    await approvePlan();
     const snapshotBefore = engine.inspect(mission.id, { tenantId: '10' });
     assert.equal(hasPendingDiscoveryApproval(snapshotBefore), true);
     assert.equal(shouldExecuteDiscovery('discovery_approved', snapshotBefore), true);
@@ -84,6 +96,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
   });
 
   it('maybeHandleAcquisitionMissionExecution returns Mission Updated without repeating Approve discovery', async () => {
+    await approvePlan();
     const turn = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10', missionId: mission.id },
@@ -112,6 +125,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
   });
 
   it('advances mission after successful discovery', async () => {
+    await approvePlan();
     await advanceDiscoveryAfterApproval({
       engine,
       mission,
@@ -127,6 +141,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
 
   it('emits SPEC-128 audit events through approval consumption lifecycle', async () => {
     const audit = createMissionApprovalAudit();
+    await approvePlan();
 
     await advanceDiscoveryAfterApproval({
       engine,
@@ -150,6 +165,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
 
   it('maybeHandleAcquisitionMissionExecution emits MISSION_APPROVAL_MATCHED and clears waiting state', async () => {
     const audit = createMissionApprovalAudit();
+    await approvePlan();
 
     const turn = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved. Begin Discovery.',

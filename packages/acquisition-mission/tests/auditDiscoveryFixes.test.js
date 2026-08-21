@@ -16,6 +16,7 @@ const { presentationFromDiscoveryPayload } = require('../DiscoveryPresentation')
 const {
   buildDelegationFromAmoMission,
   advanceDiscoveryAfterApproval,
+  advancePlanAfterApproval,
 } = require('../../max/workspace/AmoOperatorApproval');
 
 const STR_OBJECTIVE =
@@ -135,6 +136,7 @@ describe('AMO discovery audit fixes', () => {
       tenantId: '10',
       objective: STR_OBJECTIVE,
       targetSegment: 'Short-Term Rental Operators',
+      planApproved: true,
     });
 
     const result = await advanceDiscoveryAfterApproval({

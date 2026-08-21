@@ -52,6 +52,7 @@
   <h1>Acquisition Missions</h1>
   <p class="sub">SPEC-118 · Max manages missions · Capabilities contribute · Nothing is hidden</p>
   <p class="msg" id="msg"></p>
+  <section class="panel" id="planPanel"></section>
   <section class="panel" id="listPanel"></section>
   <section class="panel" id="workspacePanel"></section>
   <section class="panel" id="discoveryPanel"></section>
@@ -101,6 +102,40 @@
     if (state === 'complete' || state === 'approved') return 'ok';
     if (state === 'generating' || state === 'approval_required') return 'warn';
     return '';
+  }
+
+  function renderMissionPlan(mission, pending) {
+    const plan = (mission && mission.structuredMission) || (mission && mission.missionPlanDraft) || null;
+    if (!plan) {
+      $('planPanel').innerHTML = '';
+      return;
+    }
+    const understanding = [
+      ['Objective', plan.objective],
+      ['Market', plan.market.label || plan.market.segment],
+      ['Industry', plan.market.industry],
+      ['Region', plan.geography.region],
+      ['Cities', (plan.geography.cities || []).join(', ')],
+      ['Buyer', plan.market.buyer],
+      ['Constraints', (plan.constraints || []).join(', ')],
+      ['Success Metric', plan.successMetric.target + ' ' + plan.successMetric.type],
+    ];
+    let html = '<h2>Mission Understanding</h2>';
+    if (plan.immutable) {
+      html += pill('Plan approved', 'ok') + ' ';
+    } else {
+      html += pill('Awaiting approval', 'warn') + ' ';
+    }
+    html += '<dl style="margin:0.5rem 0">';
+    understanding.forEach(function (row) {
+      if (!row[1]) return;
+      html += '<div style="margin:0.35rem 0"><span class="meta">' + row[0] + '</span><br><strong>' + row[1] + '</strong></div>';
+    });
+    html += '</dl>';
+    if (pending && pending.prompt) {
+      html += '<div class="discovery-section"><h3>Operator Decision</h3><p>' + pending.prompt + '</p></div>';
+    }
+    $('planPanel').innerHTML = html;
   }
 
   function renderList() {
@@ -167,6 +202,8 @@
 
   function renderSnapshot() {
     if (!snapshot) return;
+    const mission = snapshot.mission || {};
+    renderMissionPlan(mission, mission.pendingOperatorDecision || null);
     const ws = snapshot.workspace || {};
     const health = snapshot.health || {};
     const blocker = snapshot.blocker;

@@ -19,7 +19,7 @@ const {
   isAcquisitionLegacyMissionType,
 } = require('../../../../services/acquisitionMission');
 const { maybeHandleAcquisitionOwnershipTurn } = require('../AcquisitionOwnership');
-const { advanceDiscoveryAfterApproval } = require('../AmoOperatorApproval');
+const { advanceDiscoveryAfterApproval, advancePlanAfterApproval } = require('../AmoOperatorApproval');
 const { composeOperations } = require('../../commandDeck/sections/Operations');
 const { ensureAmoTenantHydrated, clearAmoHydrationCache } = require('../AmoWorkspaceHydration');
 
@@ -99,6 +99,7 @@ describe('SPEC-131 — Mission Runtime Unification', () => {
       tenantId: '10',
       objective: ANCHOR_OBJECTIVE,
       targetSegment: 'Law Firms',
+      planApproved: true,
     });
 
     let legacyCreateCount = 0;
