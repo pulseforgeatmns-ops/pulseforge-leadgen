@@ -1,7 +1,7 @@
 import logging
 
 from kalshi_research.data.btc import BtcPriceSource
-from kalshi_research.domain import MarketSnapshot, SimulatedOrder
+from kalshi_research.domain import BtcPriceTick, MarketSnapshot, SimulatedOrder
 from kalshi_research.engine.paper import PaperExecutionEngine
 from kalshi_research.strategies.base import Strategy
 
