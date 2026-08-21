@@ -19,6 +19,7 @@ const DEFAULT_LABELS = Object.freeze({
   [EVENT_KINDS.QUEUED]: 'Emails queued',
   [EVENT_KINDS.LAUNCHED]: 'Campaign launched',
   [EVENT_KINDS.LEARNING]: 'Learning recorded',
+  [EVENT_KINDS.EXECUTION_COMMITTED]: 'Stage committed',
 });
 
 function createEvent(input = {}) {

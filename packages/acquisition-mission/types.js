@@ -104,6 +104,7 @@ const EVENT_KINDS = Object.freeze({
   QUEUED: 'queued',
   LAUNCHED: 'launched',
   LEARNING: 'learning',
+  EXECUTION_COMMITTED: 'execution_committed',
 });
 
 const CONTRIBUTION_KINDS = Object.freeze({

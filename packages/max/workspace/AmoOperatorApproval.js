@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * SPEC-128 — Operator approval consumes pending decisions and executes the stage once.
+ * SPEC-128 / SPEC-131 — Operator approval consumes pending decisions only when the stage commits.
  */
 
 const amo = require('../../acquisition-mission');
@@ -10,10 +10,20 @@ const { runScoutAcquisitionIntelligence } = require('../scoutAcquisition/ScoutAd
 
 const {
   STAGES,
-  STAGE_LABELS,
   SPECIALISTS,
   CONTRIBUTION_KINDS,
+  EVENT_KINDS,
 } = amo;
+const {
+  executeMissionStage,
+  assertConfidenceValid,
+  assertEvidenceAttached,
+  assertContributionContract,
+  bumpMissionVersion,
+  planningError,
+  validationError,
+} = amo;
+const { createEvent } = require('../../acquisition-mission/Timeline');
 const {
   createMissionApprovalAudit,
   logMissionApprovalReceived,
@@ -66,6 +76,25 @@ function buildDelegationFromAmoMission(mission) {
   return scoutDelegationFromMission(mission);
 }
 
+function bindPersistDurable(input, engine, tenantId) {
+  if (typeof input.persistStage === 'function') {
+    return (ctx) => input.persistStage(ctx);
+  }
+  if (input.persist !== true) return null;
+  return async (ctx) => {
+    const { persistStageCommit } = require('../../services/acquisitionMissionPersistence');
+    const missionId = ctx.missionId;
+    await persistStageCommit({
+      mission: engine.get(missionId, tenantId),
+      events: engine.store.listEvents(missionId),
+      contributions: engine.store.listContributions(missionId),
+      observations: engine.store.listObservations(missionId),
+      outcomes: engine.store.listOutcomes(missionId),
+      audit: ctx.audit,
+    }, input.pool);
+  };
+}
+
 function hasPendingPlanClarification(snapshot) {
   const mission = snapshot.mission || snapshot;
   if (isStructuredMissionApproved(mission)) return false;
@@ -101,6 +130,7 @@ function findPlanApproval(contributions = []) {
 
 /**
  * Consume plan approval, freeze structured mission, and advance to discovery approval.
+ * SPEC-131 — plan lock commits atomically; failure leaves the mission unchanged.
  * @param {object} input
  * @returns {Promise<object>}
  */
@@ -119,61 +149,113 @@ async function advancePlanAfterApproval(input = {}) {
     };
   }
 
-  const draft = snapshot.mission.missionPlanDraft;
-  if (!draft) throw new Error('No mission plan draft to approve.');
-  if (!isReadyForLock(draft) || hasPendingPlanClarification(snapshot)) {
-    throw new Error('Mission plan still has unresolved ambiguities.');
-  }
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    specialist: SPECIALISTS.MAX,
+    stage: 'plan_lock',
+    operatorId,
+    requireLockedPlan: false,
+    validatePreconditions: ({ mission: current }) => {
+      if (!current) throw planningError('tme_mission_missing', 'Mission does not exist.');
+      if (!current.missionPlanDraft) {
+        throw planningError('tme_plan_missing', 'No mission plan draft to approve.');
+      }
+      if (!isReadyForLock(current.missionPlanDraft) || hasPendingPlanClarification({ mission: current })) {
+        throw planningError('tme_plan_ambiguous', 'Mission plan still has unresolved ambiguities.');
+      }
+      return {
+        missionExists: true,
+        missionActive: current.planCancelled !== true,
+        missionLocked: false,
+        structuredPlanApproved: false,
+        specialistAvailable: true,
+        requiredEvidencePresent: true,
+      };
+    },
+    execute: async ({ mission: current }) => {
+      const frozen = freezeStructuredMission(current.missionPlanDraft, {
+        approvedBy: operatorId || 'operator',
+      });
+      return { frozen, question };
+    },
+    validateOutput: (output) => {
+      if (!output || !output.frozen || output.frozen.immutable !== true) {
+        throw planningError('tme_plan_invalid', 'Structured mission was not frozen.');
+      }
+    },
+    commit: ({ engine: amoEngine, tenantId: tid, output, transactionId, missionVersion }) => {
+      const approvalResult = amoEngine.contribute(
+        mission.id,
+        {
+          specialist: SPECIALISTS.OPERATOR,
+          kind: CONTRIBUTION_KINDS.APPROVAL,
+          payload: {
+            approved: true,
+            consumed: true,
+            command: output.question,
+            action: PLAN_APPROVAL_ACTION,
+            kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
+            contractHash: output.frozen.contractHash,
+            transactionId,
+          },
+        },
+        { tenantId: tid }
+      );
 
-  const frozen = freezeStructuredMission(draft, {
-    approvedBy: operatorId || 'operator',
+      const updated = approvalResult.mission;
+      updated.missionPlanDraft = null;
+      updated.structuredMission = output.frozen;
+      updated.structuredMissionApproved = true;
+      updated.planAmbiguities = [];
+      updated.pendingOperatorDecision = {
+        stage: STAGES.DISCOVER,
+        kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
+        prompt: 'Approve discovery?',
+      };
+      bumpMissionVersion(updated, transactionId);
+      amoEngine.store.putMission(updated);
+
+      amoEngine.contribute(
+        mission.id,
+        {
+          specialist: SPECIALISTS.MAX,
+          kind: CONTRIBUTION_KINDS.MISSION_PLAN,
+          payload: {
+            structuredMission: output.frozen,
+            contractHash: output.frozen.contractHash,
+            transactionId,
+          },
+        },
+        { tenantId: tid }
+      );
+
+      amoEngine.store.addEvent(createEvent({
+        missionId: mission.id,
+        kind: EVENT_KINDS.EXECUTION_COMMITTED,
+        specialist: SPECIALISTS.MAX,
+        label: 'Mission plan committed',
+        payload: { transactionId, missionVersion: missionVersion + 1, priorVersion: missionVersion },
+      }));
+
+      const nextSnapshot = amoEngine.inspect(mission.id, { tenantId: tid });
+      return {
+        approval: approvalResult.contribution,
+        snapshot: nextSnapshot,
+        structuredMission: output.frozen,
+      };
+    },
+    persistDurable: bindPersistDurable(input, engine, tenantId),
   });
 
-  const approvalResult = engine.contribute(
-    mission.id,
-    {
-      specialist: SPECIALISTS.OPERATOR,
-      kind: CONTRIBUTION_KINDS.APPROVAL,
-      payload: {
-        approved: true,
-        consumed: true,
-        command: question,
-        action: PLAN_APPROVAL_ACTION,
-        kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
-        contractHash: frozen.contractHash,
-      },
-    },
-    { tenantId }
-  );
-
-  const updated = approvalResult.mission;
-  updated.missionPlanDraft = null;
-  updated.structuredMission = frozen;
-  updated.structuredMissionApproved = true;
-  updated.planAmbiguities = [];
-  updated.pendingOperatorDecision = {
-    stage: STAGES.DISCOVER,
-    kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
-    prompt: 'Approve discovery?',
-  };
-  engine.store.putMission(updated);
-
-  engine.contribute(
-    mission.id,
-    {
-      specialist: SPECIALISTS.MAX,
-      kind: CONTRIBUTION_KINDS.MISSION_PLAN,
-      payload: { structuredMission: frozen, contractHash: frozen.contractHash },
-    },
-    { tenantId }
-  );
-
-  snapshot = engine.inspect(mission.id, { tenantId });
   return {
     alreadyExecuted: false,
-    approval: approvalResult.contribution,
-    snapshot,
-    structuredMission: frozen,
+    approval: staged.commitResult.approval,
+    snapshot: staged.commitResult.snapshot,
+    structuredMission: staged.output.frozen,
+    transactionId: staged.transactionId,
+    audit: staged.audit,
   };
 }
 
@@ -491,14 +573,132 @@ function clearPendingOperatorDecision(engine, mission) {
   return engine.store.putMission(mission);
 }
 
-function setDiscoveryExecutingStatus(engine, mission) {
-  mission.status = 'Discovery Executing';
-  mission.updatedAt = new Date().toISOString();
-  return engine.store.putMission(mission);
+function validateDiscoveryPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  if (!isStructuredMissionApproved(mission)) {
+    throw planningError('tme_plan_missing', 'Mission Plan missing.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  if (hasPendingPlanClarification(snapshot) || hasPendingPlanApproval(snapshot)) {
+    throw planningError('tme_plan_missing', 'Mission Plan missing.');
+  }
+  if (mission.stage && mission.stage !== STAGES.DISCOVER) {
+    throw planningError('tme_wrong_stage', `Discovery cannot execute while the mission is at ${mission.stage}.`);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function validateDiscoveryOutput(output) {
+  if (!output || !output.discoveryPayload) {
+    throw validationError('tme_contribution_missing', 'Discovery contribution is missing.');
+  }
+  const payload = output.discoveryPayload;
+  const blocked = payload.blocked === true || payload.outcome === 'blocked';
+  assertContributionContract(SPECIALISTS.SCOUT, payload);
+  assertConfidenceValid(payload.confidence, { required: true });
+  assertEvidenceAttached(payload, { required: !blocked });
+}
+
+function commitDiscoveryStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+  existingApproval,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { question, discoveryPayload } = output;
+  let approval = existingApproval;
+  if (!approval) {
+    const approvalResult = engine.contribute(
+      missionId,
+      {
+        specialist: SPECIALISTS.OPERATOR,
+        kind: CONTRIBUTION_KINDS.APPROVAL,
+        payload: {
+          approved: true,
+          consumed: true,
+          command: question,
+          action: DISCOVERY_APPROVAL_ACTION,
+          stage: STAGES.DISCOVER,
+          transactionId,
+        },
+      },
+      { tenantId }
+    );
+    approval = approvalResult.contribution;
+    clearPendingOperatorDecision(engine, approvalResult.mission);
+  } else {
+    const current = engine.get(missionId, tenantId);
+    clearPendingOperatorDecision(engine, current);
+  }
+
+  const payload = { ...discoveryPayload, approvalId: approval.id, transactionId };
+  const discoveryContribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.SCOUT,
+      kind: CONTRIBUTION_KINDS.DISCOVERY,
+      payload,
+    },
+    { tenantId }
+  );
+
+  let snapshot = engine.inspect(missionId, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || [], {});
+  if (ctx.scoutComplete && snapshot.mission.stage === STAGES.DISCOVER) {
+    try {
+      engine.progress(missionId, SPECIALISTS.OPERATOR, {
+        tenantId,
+        stage: STAGES.UNDERSTAND,
+      });
+    } catch (_) {
+      /* stage may already have advanced */
+    }
+    snapshot = engine.inspect(missionId, { tenantId });
+  }
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.SCOUT,
+    label: 'Discovery stage committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      approvalId: approval.id,
+      discoveryId: discoveryContribution.contribution.id,
+    },
+  }));
+
+  snapshot = engine.inspect(missionId, { tenantId });
+  return {
+    approval,
+    discovery: discoveryContribution.contribution,
+    scoutResult: output.scoutResult,
+    snapshot,
+  };
 }
 
 /**
  * Consume discovery approval, execute Scout once, attach results, and advance when ready.
+ * SPEC-131 — approval is consumed only in the same commit as successful Scout execution.
  * @param {object} input
  * @returns {Promise<object>}
  */
@@ -566,102 +766,73 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     };
   }
 
-  let approval = existingApproval;
-  if (!approval) {
-    setDiscoveryExecutingStatus(engine, snapshot.mission);
-    const approvalResult = engine.contribute(
-      mission.id,
-      {
-        specialist: SPECIALISTS.OPERATOR,
-        kind: CONTRIBUTION_KINDS.APPROVAL,
-        payload: {
-          approved: true,
-          consumed: true,
-          command: question,
-          action: DISCOVERY_APPROVAL_ACTION,
-          stage: STAGES.DISCOVER,
-        },
-      },
-      { tenantId }
-    );
-    approval = approvalResult.contribution;
-    clearPendingOperatorDecision(engine, approvalResult.mission);
-    emitConsumed({
-      missionId: mission.id,
-      tenantId,
-      stage: STAGES.DISCOVER,
-      action: DISCOVERY_APPROVAL_ACTION,
-      phase: APPROVAL_PHASES.EXECUTING_STAGE,
-      approvalId: approval.id,
-      operatorId,
-    });
-  } else {
-    clearPendingOperatorDecision(engine, snapshot.mission);
-    emitConsumed({
-      missionId: mission.id,
-      tenantId,
-      stage: STAGES.DISCOVER,
-      action: DISCOVERY_APPROVAL_ACTION,
-      phase: APPROVAL_PHASES.EXECUTING_STAGE,
-      approvalId: approval.id,
-      operatorId,
-      reusedApproval: true,
-    });
-  }
-
   emitStarted({
     missionId: mission.id,
     tenantId,
     stage: STAGES.DISCOVER,
     executor: SPECIALISTS.SCOUT,
     phase: APPROVAL_PHASES.EXECUTING_STAGE,
-    approvalId: approval.id,
+    approvalId: existingApproval && existingApproval.id,
   });
 
-  const scoutResult = await runScoutForAmoMission(snapshot.mission, {
-    question,
-    operatorId,
-    missionEngine,
-    persist,
-    runScout,
-    scoutCompanies,
-    scoutPeople,
-    allowFixtureFallback,
-  });
-
-  const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, snapshot.mission);
-  discoveryPayload.approvalId = approval.id;
-
-  const discoveryContribution = engine.contribute(
-    mission.id,
-    {
+  let staged;
+  try {
+    staged = await executeMissionStage({
+      engine,
+      missionId: mission.id,
+      tenantId,
       specialist: SPECIALISTS.SCOUT,
-      kind: CONTRIBUTION_KINDS.DISCOVERY,
-      payload: discoveryPayload,
-    },
-    { tenantId }
-  );
-
-  snapshot = engine.inspect(mission.id, { tenantId });
-  const ctx = specialistContext(snapshot.contributions || [], {});
-
-  if (ctx.scoutComplete && snapshot.mission.stage === STAGES.DISCOVER) {
-    try {
-      engine.progress(mission.id, SPECIALISTS.OPERATOR, {
-        tenantId,
-        stage: STAGES.UNDERSTAND,
-      });
-    } catch (_) {
-      /* stage may already have advanced */
-    }
-    snapshot = engine.inspect(mission.id, { tenantId });
-  } else if (snapshot.mission.status === 'Discovery Executing') {
-    snapshot.mission.status = STAGE_LABELS[STAGES.DISCOVER] || 'Discovering';
-    engine.store.putMission(snapshot.mission);
-    snapshot = engine.inspect(mission.id, { tenantId });
+      stage: STAGES.DISCOVER,
+      operatorId,
+      validatePreconditions: (ctx) => validateDiscoveryPreconditions(ctx),
+      execute: async ({ mission: current }) => {
+        const scoutResult = await runScoutForAmoMission(current, {
+          question,
+          operatorId,
+          missionEngine,
+          persist,
+          runScout,
+          scoutCompanies,
+          scoutPeople,
+          allowFixtureFallback,
+        });
+        const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
+        return {
+          scoutResult,
+          discoveryPayload,
+          question,
+          missionId: current.id,
+        };
+      },
+      validateOutput: validateDiscoveryOutput,
+      commit: (ctx) => commitDiscoveryStage({
+        ...ctx,
+        existingApproval,
+      }),
+      persistDurable: bindPersistDurable(input, engine, tenantId),
+    });
+  } catch (err) {
+    askPathTrace.traceEarlyReturn('advanceDiscoveryAfterApproval', 'rolled_back');
+    throw err;
   }
 
+  const approval = staged.commitResult.approval;
+  const discovery = staged.commitResult.discovery;
+  snapshot = staged.commitResult.snapshot;
+  const discoveryPayload = staged.output.discoveryPayload;
   const executionOutcome = discoveryPayload.blocked ? 'blocked' : 'completed';
+
+  emitConsumed({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    action: DISCOVERY_APPROVAL_ACTION,
+    phase: APPROVAL_PHASES.EXECUTING_STAGE,
+    approvalId: approval.id,
+    operatorId,
+    reusedApproval: Boolean(existingApproval),
+    transactionId: staged.transactionId,
+  });
 
   emitCompleted({
     missionId: mission.id,
@@ -675,16 +846,17 @@ async function advanceDiscoveryAfterApproval(input = {}) {
         : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
     nextStage: snapshot.mission.stage,
     approvalId: approval.id,
-    discoveryId: discoveryContribution.contribution.id,
+    discoveryId: discovery.id,
     qualifiedCount: discoveryPayload.qualifiedCount || 0,
+    transactionId: staged.transactionId,
   });
 
   askPathTrace.traceEarlyReturn('advanceDiscoveryAfterApproval', executionOutcome);
   return {
     alreadyExecuted: false,
     approval,
-    discovery: discoveryContribution.contribution,
-    scoutResult,
+    discovery,
+    scoutResult: staged.output.scoutResult,
     snapshot,
     executionOutcome,
     approvalPhase:
@@ -692,6 +864,8 @@ async function advanceDiscoveryAfterApproval(input = {}) {
         ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
         : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
     audit,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
   };
 }
 

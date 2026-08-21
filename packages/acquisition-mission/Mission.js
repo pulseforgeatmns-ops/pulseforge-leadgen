@@ -127,6 +127,8 @@ function createMission(input = {}) {
     planResolutions,
     planCancelled: input.planCancelled === true,
     pendingOperatorDecision,
+    version: Number.isFinite(Number(input.version)) ? Number(input.version) : 0,
+    lastTransactionId: asText(input.lastTransactionId) || null,
     createdAt: now,
     updatedAt: now,
   };
