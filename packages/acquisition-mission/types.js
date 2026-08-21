@@ -66,6 +66,8 @@ const SPECIALISTS = Object.freeze({
   MAX: 'max',
   PAIGE: 'paige',
   EMMETT: 'emmett',
+  VERA: 'vera',
+  REX: 'rex',
   OPERATOR: 'operator',
 });
 

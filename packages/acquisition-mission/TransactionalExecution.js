@@ -12,6 +12,10 @@
 
 const { clone, asText, nowIso, newId } = require('./types');
 const { assertContract } = require('./Contracts');
+const {
+  validateExecutionResult,
+  executionResultFromStageOutput,
+} = require('./SpecialistExecutionContract');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const { recordExecutionAudit, COMMIT_STATUS } = require('./ExecutionAudit');
 const {
@@ -113,6 +117,17 @@ function assertContributionContract(specialist, payload) {
     assertContract(specialist, payload);
   } catch (err) {
     throw wrapAs(TME_CLASSES.VALIDATION, err, 'tme_contract', err.message);
+  }
+}
+
+/**
+ * SPEC-132 — validate normalized Execution Result before commit.
+ */
+function assertExecutionResult(result, options = {}) {
+  try {
+    return validateExecutionResult(result, options);
+  } catch (err) {
+    throw wrapAs(TME_CLASSES.VALIDATION, err, 'sec_validation', err.message || 'Execution Result validation failed.');
   }
 }
 
@@ -245,6 +260,7 @@ async function executeMissionStage(input = {}) {
           tenantId,
           specialist,
           stage,
+          transactionId,
         });
       } catch (err) {
         throw wrapAs(TME_CLASSES.VALIDATION, err, 'tme_validation', err.message || 'Output validation failed.');
@@ -374,6 +390,8 @@ module.exports = {
   assertConfidenceValid,
   assertEvidenceAttached,
   assertContributionContract,
+  assertExecutionResult,
+  executionResultFromStageOutput,
   bumpMissionVersion,
   snapshotStore,
   restoreStore,

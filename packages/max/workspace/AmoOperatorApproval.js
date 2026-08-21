@@ -19,6 +19,8 @@ const {
   assertConfidenceValid,
   assertEvidenceAttached,
   assertContributionContract,
+  assertExecutionResult,
+  executionResultFromStageOutput,
   bumpMissionVersion,
   planningError,
   validationError,
@@ -598,7 +600,7 @@ function validateDiscoveryPreconditions({ mission, engine, tenantId }) {
   };
 }
 
-function validateDiscoveryOutput(output) {
+function validateDiscoveryOutput(output, ctx = {}) {
   if (!output || !output.discoveryPayload) {
     throw validationError('tme_contribution_missing', 'Discovery contribution is missing.');
   }
@@ -607,6 +609,17 @@ function validateDiscoveryOutput(output) {
   assertContributionContract(SPECIALISTS.SCOUT, payload);
   assertConfidenceValid(payload.confidence, { required: true });
   assertEvidenceAttached(payload, { required: !blocked });
+
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.SCOUT,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.SCOUT,
+    requireContributions: !blocked,
+    requireEvidence: !blocked,
+  });
+  output.executionResult = executionResult;
 }
 
 function commitDiscoveryStage({
@@ -785,7 +798,7 @@ async function advanceDiscoveryAfterApproval(input = {}) {
       stage: STAGES.DISCOVER,
       operatorId,
       validatePreconditions: (ctx) => validateDiscoveryPreconditions(ctx),
-      execute: async ({ mission: current }) => {
+      execute: async ({ mission: current, transactionId }) => {
         const scoutResult = await runScoutForAmoMission(current, {
           question,
           operatorId,
@@ -797,9 +810,14 @@ async function advanceDiscoveryAfterApproval(input = {}) {
           allowFixtureFallback,
         });
         const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
+        const executionResult = executionResultFromStageOutput(
+          { scoutResult, discoveryPayload },
+          { specialist: SPECIALISTS.SCOUT, transactionId }
+        );
         return {
           scoutResult,
           discoveryPayload,
+          executionResult,
           question,
           missionId: current.id,
         };
