@@ -38,8 +38,17 @@ const {
   extractGeography,
   segmentToSearchKey,
 } = require('../../acquisition-mission/MissionNaming');
+const {
+  freezeStructuredMission,
+  isStructuredMissionApproved,
+} = require('../../acquisition-mission/StructuredMission');
+const {
+  scoutDelegationFromMission,
+} = require('../../acquisition-mission/SpecialistInputs');
+const { OPERATOR_DECISION_KINDS } = amo;
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
+const PLAN_APPROVAL_ACTION = 'plan_approved';
 
 /** SPEC-128 — operator approval lifecycle phases (audit + response). */
 const APPROVAL_PHASES = Object.freeze({
@@ -51,6 +60,10 @@ const APPROVAL_PHASES = Object.freeze({
 });
 
 function buildDelegationFromAmoMission(mission) {
+  if (isStructuredMissionApproved(mission) || mission.structuredMission) {
+    return scoutDelegationFromMission(mission);
+  }
+
   const objective = String(mission.objective || '');
   const geography = extractGeography(objective);
   const segment =
@@ -74,6 +87,101 @@ function buildDelegationFromAmoMission(mission) {
       commercialCapability: 'commercial_cleaning',
       exclusions: Array.isArray(mission.constraints) ? mission.constraints.slice() : [],
     },
+  };
+}
+
+function hasPendingPlanApproval(snapshot) {
+  const mission = snapshot.mission || {};
+  if (isStructuredMissionApproved(mission)) return false;
+  if (mission.pendingOperatorDecision) {
+    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_APPROVAL;
+  }
+  return Boolean(mission.missionPlanDraft && !mission.structuredMission);
+}
+
+function findPlanApproval(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.OPERATOR &&
+        row.kind === CONTRIBUTION_KINDS.APPROVAL &&
+        (row.payload.action === PLAN_APPROVAL_ACTION ||
+          row.payload.kind === OPERATOR_DECISION_KINDS.PLAN_APPROVAL)
+    );
+}
+
+/**
+ * Consume plan approval, freeze structured mission, and advance to discovery approval.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advancePlanAfterApproval(input = {}) {
+  const { engine, mission, tenantId, question, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  let snapshot = engine.inspect(mission.id, { tenantId });
+  const existing = findPlanApproval(snapshot.contributions || []);
+  if (existing && isStructuredMissionApproved(snapshot.mission)) {
+    return {
+      alreadyExecuted: true,
+      approval: existing,
+      snapshot,
+      structuredMission: snapshot.mission.structuredMission,
+    };
+  }
+
+  const draft = snapshot.mission.missionPlanDraft;
+  if (!draft) throw new Error('No mission plan draft to approve.');
+
+  const frozen = freezeStructuredMission(draft, {
+    approvedBy: operatorId || 'operator',
+  });
+
+  const approvalResult = engine.contribute(
+    mission.id,
+    {
+      specialist: SPECIALISTS.OPERATOR,
+      kind: CONTRIBUTION_KINDS.APPROVAL,
+      payload: {
+        approved: true,
+        consumed: true,
+        command: question,
+        action: PLAN_APPROVAL_ACTION,
+        kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
+        contractHash: frozen.contractHash,
+      },
+    },
+    { tenantId }
+  );
+
+  const updated = approvalResult.mission;
+  updated.missionPlanDraft = null;
+  updated.structuredMission = frozen;
+  updated.structuredMissionApproved = true;
+  updated.pendingOperatorDecision = {
+    stage: STAGES.DISCOVER,
+    kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
+    prompt: 'Approve discovery?',
+  };
+  engine.store.putMission(updated);
+
+  engine.contribute(
+    mission.id,
+    {
+      specialist: SPECIALISTS.MAX,
+      kind: CONTRIBUTION_KINDS.MISSION_PLAN,
+      payload: { structuredMission: frozen, contractHash: frozen.contractHash },
+    },
+    { tenantId }
+  );
+
+  snapshot = engine.inspect(mission.id, { tenantId });
+  return {
+    alreadyExecuted: false,
+    approval: approvalResult.contribution,
+    snapshot,
+    structuredMission: frozen,
   };
 }
 
@@ -104,8 +212,12 @@ function findScoutDiscoveryAfterApproval(contributions = [], approval) {
 
 function hasPendingDiscoveryApproval(snapshot) {
   const mission = snapshot.mission || {};
+  if (hasPendingPlanApproval(snapshot)) return false;
+  if (!isStructuredMissionApproved(mission) && mission.missionPlanDraft) return false;
   if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.stage === STAGES.DISCOVER;
+    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL ||
+      (!mission.pendingOperatorDecision.kind &&
+        mission.pendingOperatorDecision.stage === STAGES.DISCOVER);
   }
   const contributions = snapshot.contributions || [];
   const ctx = specialistContext(contributions, {});
@@ -500,10 +612,14 @@ function buildDiscoveryApprovalProse(result) {
 module.exports = {
   APPROVAL_PHASES,
   DISCOVERY_APPROVAL_ACTION,
+  PLAN_APPROVAL_ACTION,
   buildDelegationFromAmoMission,
   findDiscoveryApproval,
+  findPlanApproval,
   findScoutDiscoveryAfterApproval,
+  hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
+  advancePlanAfterApproval,
   advanceDiscoveryAfterApproval,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,

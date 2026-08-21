@@ -101,6 +101,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
       tenantId: '10',
       objective: ANCHOR_OBJECTIVE,
       targetSegment: 'Law Firms',
+      planApproved: true,
     });
     const missionEngine = realLegacyEngine();
     const legacy = await missionEngine.createFromObjective({
@@ -153,6 +154,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
       tenantId: '10',
       objective: ANCHOR_OBJECTIVE,
       targetSegment: 'Law Firms',
+      planApproved: true,
     });
     const missionEngine = realLegacyEngine();
     const legacy = await missionEngine.createFromObjective({

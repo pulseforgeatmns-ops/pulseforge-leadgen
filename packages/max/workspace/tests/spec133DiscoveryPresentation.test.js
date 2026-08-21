@@ -132,6 +132,7 @@ describe('SPEC-133 — Discovery Artifact Presentation', () => {
       tenantId: '10',
       objective: 'Acquire commercial cleaning customers in Manchester.',
       targetSegment: 'Law Firms',
+      planApproved: true,
     });
 
     await advanceDiscoveryAfterApproval({

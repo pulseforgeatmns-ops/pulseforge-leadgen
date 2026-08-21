@@ -32,6 +32,9 @@ const {
   deriveMissionTitle,
   inferTargetSegmentFromObjective,
 } = require('./MissionNaming');
+const structuredMission = require('./StructuredMission');
+const missionPlanner = require('./MissionPlanner');
+const specialistInputs = require('./SpecialistInputs');
 
 module.exports = {
   ...types,
@@ -67,4 +70,7 @@ module.exports = {
   createAcquisitionMissionEngine,
   ...inspection,
   ...require('./DiscoveryPresentation'),
+  ...structuredMission,
+  ...missionPlanner,
+  ...specialistInputs,
 };

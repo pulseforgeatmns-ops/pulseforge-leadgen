@@ -5,6 +5,7 @@
  */
 
 const { SPECIALISTS, clone, asText } = require('./types');
+const { formatMissionUnderstanding } = require('./StructuredMission');
 
 function latest(rows, specialist, kind) {
   const match = [...rows].reverse().find((row) =>
@@ -22,6 +23,7 @@ function buildSharedContext(mission, contributions = []) {
     ...(mission.constraints || []),
     ...((max.constraints || []).map((row) => (typeof row === 'string' ? row : row.label || row.text)).filter(Boolean)),
   ];
+  const structuredMission = mission.structuredMission || mission.missionPlanDraft || null;
 
   return {
     spec: 'SPEC-118',
@@ -35,6 +37,10 @@ function buildSharedContext(mission, contributions = []) {
       status: mission.status,
       stage: mission.stage,
       constraints,
+      structuredMission: structuredMission ? clone(structuredMission) : null,
+      missionUnderstanding: structuredMission
+        ? formatMissionUnderstanding(structuredMission)
+        : null,
     },
     buyingSignals: clone(buyingSignals),
     priorityReasoning: clone(max.recommendations || max.priorities || max.reasoning || []),
@@ -58,6 +64,13 @@ function formatSharedContext(context) {
   }
   if (mission.campaign) {
     lines.push('', 'Campaign', mission.campaign);
+  }
+  if (context.mission.missionUnderstanding) {
+    const u = context.mission.missionUnderstanding;
+    lines.push('', 'Market', u.market || '', '', 'Region', u.region || '', '', 'Buyer', u.buyer || '');
+    if (u.constraints && u.constraints.length) {
+      lines.push('', 'Constraints', ...u.constraints);
+    }
   }
   if (context.buyingSignals && context.buyingSignals.length) {
     lines.push('', 'Buying signals', 'Scout evidence');

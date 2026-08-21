@@ -38,6 +38,7 @@ const {
   inferTargetSegmentFromObjective,
   deriveMissionTitle,
 } = require('../../acquisition-mission/MissionNaming');
+const { formatMissionUnderstandingProse } = require('../../acquisition-mission/StructuredMission');
 
 function isAcquisitionObjectiveForMission(question) {
   const q = normalizeObjectiveText(question);
@@ -231,9 +232,13 @@ function buildOwnershipMissionResponse({
     health: 'Healthy',
     waitingOn: 'Operator direction',
     nextStep: created
-      ? 'Scout will identify high-probability operators matching this objective.'
+      ? (mission.missionPlanDraft
+          ? 'Review Mission Understanding below, then approve the mission plan before Discovery.'
+          : 'Scout will identify high-probability operators matching this objective.')
       : 'Continuing the active acquisition mission from current stage.',
-    operatorDecision: created ? 'Approve discovery?' : 'Continue in mission workspace?',
+    operatorDecision: created
+      ? (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) || 'Approve mission plan?'
+      : 'Continue in mission workspace?',
     evidenceStatus: ciEvidence && ciEvidence.attached ? '✓ Blueprint attached' : 'Mission context only',
     sources,
     reasoningEvidence: buildReasoningEvidence({
@@ -248,6 +253,10 @@ function buildOwnershipMissionResponse({
   });
 
   const prose = formatMissionProse(comm);
+  const missionUnderstanding =
+    (mission.missionPlanDraft && formatMissionUnderstandingProse(mission.missionPlanDraft)) ||
+    (mission.pendingOperatorDecision && mission.pendingOperatorDecision.missionUnderstanding) ||
+    null;
   const structured = applyMissionCommunication(
     buildStructuredResponse({
       answer: prose,
@@ -294,6 +303,8 @@ function buildOwnershipMissionResponse({
         acquisitionOwnership: true,
         missionCreated: created === true,
         missionResumed: created === false,
+        missionUnderstanding,
+        structuredMissionDraft: mission.missionPlanDraft || null,
         blueprintId: ciEvidence ? ciEvidence.blueprintId : null,
         clientIntelligenceContribution: ciEvidence
           ? {

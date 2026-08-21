@@ -26,7 +26,9 @@ const {
 } = require('./ActiveMissionGuard');
 const {
   advanceDiscoveryAfterApproval,
+  advancePlanAfterApproval,
   hasPendingDiscoveryApproval,
+  hasPendingPlanApproval,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
   APPROVAL_PHASES,
@@ -41,6 +43,7 @@ const {
   createMissionApprovalAudit,
   logMissionApprovalMatched,
 } = require('./audit/MissionApprovalAudit');
+const { formatMissionUnderstandingProse } = require('../../acquisition-mission/StructuredMission');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
@@ -61,6 +64,58 @@ function buildExecutionMissionResponse({
   const scout = workspace.scout || null;
   const stage = mission.stage || STAGES.DISCOVER;
   const progress = mission.progressPercent != null ? mission.progressPercent : null;
+
+  if (executionResult && action === 'plan_approved') {
+    const understanding =
+      (mission.structuredMission &&
+        formatMissionUnderstandingProse(mission.structuredMission)) ||
+      (executionResult.structuredMission &&
+        formatMissionUnderstandingProse(executionResult.structuredMission)) ||
+      '';
+    const comm = buildMissionCommunication({
+      headline: 'Mission Plan Approved',
+      mission: mission.title || mission.id,
+      objective: mission.objective,
+      status: 'Plan Approved',
+      stage: 'Discover',
+      progress,
+      health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
+      waitingOn: 'Discovery approval',
+      confidence: mission.confidence,
+      nextStep: 'Mission plan is now immutable. Approve discovery to begin Scout.',
+      operatorDecision: 'Approve discovery?',
+      evidenceStatus: understanding || 'Structured mission contract frozen',
+      sources: ['acquisition_mission', 'mission_planner'],
+      includeReasoningMarker: false,
+    });
+    const prose = formatMissionProse(comm);
+    const structured = applyMissionCommunication(
+      buildStructuredResponse({
+        answer: prose,
+        reasoning: [],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: mission.confidence != null ? mission.confidence : 0.84,
+        nextInvestigations: [],
+        recommendedActions: [
+          {
+            id: 'open_mission',
+            type: 'open_mission',
+            label: 'Open mission workspace',
+            payload: { missionId: mission.id },
+          },
+        ],
+        confidenceContributors: ['spec_130', 'acquisition_mission'],
+        timelineReferences: [],
+        relatedEntities: [
+          { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
+        ],
+        metadata: buildExecutionMetadata(mission, action, executionResult),
+      }),
+      comm
+    );
+    return { structured, prose, comm, action };
+  }
 
   if (executionResult && action === 'discovery_approved') {
     const scoutPayload = (executionResult.discovery && executionResult.discovery.payload) || {};
@@ -158,8 +213,12 @@ function buildExecutionMissionResponse({
   let nextStep = 'Review mission workspace for the latest specialist contributions.';
   let operatorDecision = null;
 
+  const pendingPlan = hasPendingPlanApproval(snapshot);
   const pendingDiscovery = hasPendingDiscoveryApproval(snapshot);
-  if (pendingDiscovery) {
+  if (pendingPlan) {
+    operatorDecision = (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) ||
+      'Approve mission plan?';
+  } else if (pendingDiscovery) {
     operatorDecision = (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) ||
       'Approve discovery?';
   } else if (action === 'operator_approved') {
@@ -258,6 +317,12 @@ function detectExecutionAction(question, snapshot) {
   askPathTrace.traceEnter('detectExecutionAction');
   const q = String(question || '').trim();
   const lower = q.toLowerCase();
+  const mission = snapshot && snapshot.mission ? snapshot.mission : {};
+
+  if (hasPendingPlanApproval(snapshot) && /\bapprov(e|al|ed)\b/i.test(q)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'plan_approved');
+    return 'plan_approved';
+  }
 
   const discoveryApprovalPattern =
     /\bapprov(e|al|ed)\b.*\bbegin\b/i.test(q) ||
@@ -296,10 +361,19 @@ function detectExecutionAction(question, snapshot) {
   return 'operator_approved';
 }
 
+function shouldExecutePlan(action, snapshot) {
+  if (action !== 'plan_approved') return false;
+  return hasPendingPlanApproval(snapshot);
+}
+
 function shouldExecuteDiscovery(action, snapshot) {
   askPathTrace.traceEnter('shouldExecuteDiscovery', { action });
   if (action !== 'discovery_approved') {
     askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'action_not_discovery_approved');
+    return false;
+  }
+  if (hasPendingPlanApproval(snapshot)) {
+    askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'plan_not_approved');
     return false;
   }
   const mission = snapshot.mission || {};
@@ -377,7 +451,16 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
 
   let executionResult = null;
 
-  if (shouldExecuteDiscovery(action, snapshot)) {
+  if (shouldExecutePlan(action, snapshot)) {
+    executionResult = await advancePlanAfterApproval({
+      engine,
+      mission,
+      tenantId,
+      question,
+      operatorId: input.operatorId || (input.session && input.session.operator) || null,
+    });
+    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+  } else if (shouldExecuteDiscovery(action, snapshot)) {
     executionResult = await advanceDiscoveryAfterApproval({
       engine,
       mission,
@@ -460,4 +543,5 @@ module.exports = {
   buildExecutionMissionResponse,
   maybeHandleAcquisitionMissionExecution,
   shouldExecuteDiscovery,
+  shouldExecutePlan,
 };

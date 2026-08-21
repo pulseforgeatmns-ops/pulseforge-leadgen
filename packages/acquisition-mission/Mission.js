@@ -9,6 +9,7 @@ const {
   STAGE_LABELS,
   PRIORITIES,
   SPECIALISTS,
+  OPERATOR_DECISION_KINDS,
   clone,
   asText,
   nowIso,
@@ -18,6 +19,8 @@ const {
   round2,
 } = require('./types');
 const { deriveMissionTitle } = require('./MissionNaming');
+const { planFromObjective } = require('./MissionPlanner');
+const { formatMissionUnderstandingProse } = require('./StructuredMission');
 
 function normalizePriority(value) {
   const text = asText(value).toLowerCase();
@@ -39,6 +42,37 @@ function createMission(input = {}) {
   const stage = asText(input.stage).toLowerCase() || STAGES.DISCOVER;
   const confidence = clamp(input.confidence == null ? 0.5 : input.confidence, 0, 1);
 
+  let missionPlanDraft = input.missionPlanDraft || input.structuredMissionDraft || null;
+  let structuredMission = input.structuredMission || null;
+  if (input.planApproved === true && !structuredMission) {
+    const planned = planFromObjective(objective, {
+      targetSegment,
+      constraints: input.constraints,
+      priority: input.priority,
+    });
+    structuredMission = require('./StructuredMission').freezeStructuredMission(planned.draft, {
+      approvedBy: 'test',
+    });
+    missionPlanDraft = null;
+  } else if (!missionPlanDraft && !structuredMission && input.skipMissionPlanning !== true) {
+    const planned = planFromObjective(objective, {
+      targetSegment,
+      constraints: input.constraints,
+      priority: input.priority,
+    });
+    missionPlanDraft = planned.draft;
+  }
+  if (structuredMission && structuredMission.immutable) {
+    missionPlanDraft = null;
+  }
+
+  const pendingOperatorDecision = buildPendingOperatorDecision({
+    stage,
+    input,
+    missionPlanDraft,
+    structuredMission,
+  });
+
   return {
     id: asText(input.id) || newId('mission'),
     kind: 'acquisition_mission',
@@ -59,12 +93,37 @@ function createMission(input = {}) {
     constraints: Array.isArray(input.constraints) ? input.constraints.map(asText).filter(Boolean) : [],
     blockers: [],
     progressPercent: 8,
-    pendingOperatorDecision:
-      stage === STAGES.DISCOVER
-        ? { stage: STAGES.DISCOVER, prompt: 'Approve discovery?' }
-        : null,
+    missionPlanDraft,
+    structuredMission: structuredMission || null,
+    structuredMissionApproved: Boolean(structuredMission && structuredMission.immutable),
+    pendingOperatorDecision,
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+function buildPendingOperatorDecision({ stage, input, missionPlanDraft, structuredMission }) {
+  if (input.pendingOperatorDecision !== undefined) return input.pendingOperatorDecision;
+  if (stage !== STAGES.DISCOVER) return null;
+  if (structuredMission && structuredMission.immutable) {
+    return {
+      stage: STAGES.DISCOVER,
+      kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
+      prompt: 'Approve discovery?',
+    };
+  }
+  if (missionPlanDraft) {
+    return {
+      stage: STAGES.DISCOVER,
+      kind: OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
+      prompt: 'Approve mission plan?',
+      missionUnderstanding: formatMissionUnderstandingProse(missionPlanDraft),
+    };
+  }
+  return {
+    stage: STAGES.DISCOVER,
+    kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
+    prompt: 'Approve discovery?',
   };
 }
 

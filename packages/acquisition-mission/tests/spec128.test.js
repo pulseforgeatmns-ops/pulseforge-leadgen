@@ -6,7 +6,7 @@ const amo = require('../index');
 const { createMission } = require('../Mission');
 
 describe('SPEC-128 pending operator decision', () => {
-  it('seeds pending approval on discover-stage missions', () => {
+  it('seeds pending plan approval on discover-stage missions', () => {
     const mission = createMission({
       tenantId: '10',
       objective: 'Acquire commercial cleaning customers in Manchester.',
@@ -14,6 +14,7 @@ describe('SPEC-128 pending operator decision', () => {
       stage: amo.STAGES.DISCOVER,
     });
     assert.ok(mission.pendingOperatorDecision);
-    assert.equal(mission.pendingOperatorDecision.stage, amo.STAGES.DISCOVER);
+    assert.equal(mission.pendingOperatorDecision.prompt, 'Approve mission plan?');
+    assert.ok(mission.missionPlanDraft);
   });
 });

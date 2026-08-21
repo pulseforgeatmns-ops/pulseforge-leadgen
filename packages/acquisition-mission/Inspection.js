@@ -33,9 +33,34 @@ const INSPECTION_PROPERTIES = Object.freeze({
 });
 
 const PLANNING_REQUIREMENTS = Object.freeze([
-  { key: 'targetCustomer', label: 'Target customer defined', check: (mission) => Boolean(mission.targetSegment) },
-  { key: 'geography', label: 'Geography confirmed', check: (mission) => /manchester|charleston|nashville|location|area/i.test(String(mission.objective || '')) },
-  { key: 'objective', label: 'Business objective defined', check: (mission) => Boolean(mission.objective) },
+  {
+    key: 'targetCustomer',
+    label: 'Target customer defined',
+    check: (mission) =>
+      Boolean(mission.targetSegment) ||
+      Boolean(mission.structuredMission && mission.structuredMission.market && mission.structuredMission.market.segment),
+  },
+  {
+    key: 'geography',
+    label: 'Geography confirmed',
+    check: (mission) =>
+      Boolean(mission.structuredMission && mission.structuredMission.geography && mission.structuredMission.geography.region) ||
+      /manchester|charleston|nashville|location|area/i.test(String(mission.objective || '')),
+  },
+  {
+    key: 'objective',
+    label: 'Business objective defined',
+    check: (mission) =>
+      Boolean(mission.structuredMission && mission.structuredMission.objective) ||
+      Boolean(mission.objective),
+  },
+  {
+    key: 'planApproved',
+    label: 'Mission plan approved',
+    check: (mission) =>
+      Boolean(mission.structuredMission && mission.structuredMission.immutable) ||
+      !mission.missionPlanDraft,
+  },
 ]);
 
 function capitalize(value) {

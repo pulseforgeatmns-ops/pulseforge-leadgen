@@ -109,6 +109,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', () => {
       tenantId: '10',
       objective: ANCHOR_OBJECTIVE,
       targetSegment: 'Law Firms',
+      planApproved: true,
     });
   });
 
