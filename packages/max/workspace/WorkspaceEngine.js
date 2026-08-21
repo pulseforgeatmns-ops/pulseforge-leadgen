@@ -75,6 +75,11 @@ const {
   composeActiveMissionResponse,
 } = require('./MissionResponse');
 const { maybeHandleMissionFirstTurn } = require('./MissionFirstRouting');
+const {
+  resolveMissionRuntime,
+  logMissionRuntimeSelected,
+  MISSION_RUNTIMES,
+} = require('./MissionRuntimeDispatch');
 const { PresentationEngine } = require('./PresentationEngine');
 const {
   selectExecutionDomain,
@@ -436,42 +441,64 @@ class WorkspaceEngine {
       }
     };
 
-    // 1 — Active Mission (legacy continuation + desk context)
+    // 1 — Active Mission. Owner is not enough: dispatch by mission type (SPEC-129).
     if (ownerIs(WORKSPACE_OWNERS.ACTIVE_MISSION)) {
-      const missionFirstTurn = await maybeHandleMissionFirstTurn({
-        question,
-        session,
-        missionEngine: this._missionEngine,
-        missionsEnabled: this._missionsEnabled,
-        resolverEnabled: this._resolverEnabled,
-        rawContext,
-        envelopeSwitch,
-        presentation: this._presentation,
-        sessions: this._sessions,
-      });
-      if (missionFirstTurn) {
-        return {
-          ...missionFirstTurn,
-          suggestions: resolveResultSuggestions({
-            structured: missionFirstTurn.structured,
-            session,
-            question,
-          }),
-          recommendedActions: missionFirstTurn.structured.recommendedActions,
-          interrogation: null,
-          workspaceOwnership,
-        };
-      }
-
-      const amoExecutionTurn = await maybeHandleAcquisitionMissionExecution({
+      const runtimeDecision = await resolveMissionRuntime({
         question,
         session,
         context: rawContext || session.context,
+        missionEngine: this._missionEngine,
+        missionsEnabled: this._missionsEnabled,
+        resolverEnabled: this._resolverEnabled,
         acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
         acquisitionMissionService: this._acquisitionMissionService || undefined,
-        missionEngine: this._missionEngine || undefined,
       });
-      if (amoExecutionTurn) {
+      logMissionRuntimeSelected({
+        runtime: runtimeDecision.runtime,
+        reason: runtimeDecision.reason,
+        missionId: runtimeDecision.mission && runtimeDecision.mission.id,
+        missionType: runtimeDecision.missionType,
+        question,
+      });
+
+      if (runtimeDecision.runtime === MISSION_RUNTIMES.SPEC_022) {
+        const missionFirstTurn = await maybeHandleMissionFirstTurn({
+          question,
+          session,
+          missionEngine: this._missionEngine,
+          missionsEnabled: this._missionsEnabled,
+          resolverEnabled: this._resolverEnabled,
+          rawContext,
+          envelopeSwitch,
+          presentation: this._presentation,
+          sessions: this._sessions,
+        });
+        if (missionFirstTurn) {
+          return {
+            ...missionFirstTurn,
+            suggestions: resolveResultSuggestions({
+              structured: missionFirstTurn.structured,
+              session,
+              question,
+            }),
+            recommendedActions: missionFirstTurn.structured.recommendedActions,
+            interrogation: null,
+            workspaceOwnership: {
+              ...workspaceOwnership,
+              missionRuntime: MISSION_RUNTIMES.SPEC_022,
+            },
+          };
+        }
+      } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
+        const amoExecutionTurn = await maybeHandleAcquisitionMissionExecution({
+          question,
+          session,
+          context: rawContext || session.context,
+          acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
+          acquisitionMissionService: this._acquisitionMissionService || undefined,
+          missionEngine: this._missionEngine || undefined,
+        });
+        if (amoExecutionTurn) {
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
         if (session.context && typeof session.context === 'object') {
           session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
@@ -529,8 +556,13 @@ class WorkspaceEngine {
                 ? amoExecutionTurn.mission.id
                 : null,
           },
-          workspaceOwnership,
+          workspaceOwnership: {
+            ...workspaceOwnership,
+            missionRuntime: MISSION_RUNTIMES.AMO,
+            missionType: 'acquisition_mission',
+          },
         };
+        }
       }
 
       const activeContinuationEarly = await maybeHandleActiveWorkContinuation({
