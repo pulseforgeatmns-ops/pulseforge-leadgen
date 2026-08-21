@@ -93,7 +93,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
 
     assert.ok(turn);
     assert.match(turn.prose, /Mission Updated/i);
-    assert.match(turn.prose, /Scout Discovery completed/i);
+    assert.match(turn.prose, /Scout Discovery/i);
     assert.doesNotMatch(turn.prose, /Approve discovery\?/i);
     assert.equal(turn.executionResult.executionOutcome, 'completed');
 
@@ -160,10 +160,12 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
     });
 
     assert.ok(turn);
-    assert.match(turn.prose, /Approval Consumed/i);
-    assert.match(turn.prose, /Scout Discovery completed/i);
+    assert.match(turn.prose, /Mission Updated/i);
+    assert.match(turn.prose, /Scout Discovery/i);
+    assert.match(turn.prose, /Harbor Law Group/);
     assert.doesNotMatch(turn.prose, /Waiting On[\s\S]*Operator direction/i);
     assert.match(turn.prose, /Waiting On[\s\S]*Prioritization approval/i);
+    assert.match(turn.prose, /Approve prioritization\?/);
     assert.equal(turn.executionResult.approvalPhase, APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION);
 
     const events = audit.list().map((row) => row.event);

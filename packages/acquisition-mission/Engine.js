@@ -43,6 +43,10 @@ const {
   inspectQuestion,
   formatInspection,
 } = require('./Inspection');
+const {
+  findLatestDiscoveryContribution,
+  presentationFromDiscoveryPayload,
+} = require('./DiscoveryPresentation');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -356,6 +360,10 @@ function createAcquisitionMissionEngine(opts = {}) {
     const context = buildSharedContext(mission, contributions);
     const timeline = formatTimeline(store.listEvents(mission.id));
     const why = explainWhy(mission, contributions, explainExtras);
+    const discoveryContribution = findLatestDiscoveryContribution(contributions);
+    const discoveryArtifact = discoveryContribution
+      ? presentationFromDiscoveryPayload(discoveryContribution.payload || {})
+      : null;
     return {
       spec: 'SPEC-118',
       mission,
@@ -369,6 +377,7 @@ function createAcquisitionMissionEngine(opts = {}) {
       contributions,
       outcomes: store.listOutcomes(mission.id),
       blocker: currentBlocker(mission.blockers),
+      discoveryArtifact,
     };
   }
 

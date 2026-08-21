@@ -20,6 +20,10 @@ const { createObservation, formatMemory } = require('./Memory');
 const { createMemoryAmoStore } = require('./Store');
 const { createAcquisitionMissionEngine } = require('./Engine');
 const inspection = require('./Inspection');
+const {
+  findLatestDiscoveryContribution,
+  presentationFromDiscoveryPayload,
+} = require('./DiscoveryPresentation');
 
 module.exports = {
   ...types,
@@ -54,4 +58,5 @@ module.exports = {
   createMemoryAmoStore,
   createAcquisitionMissionEngine,
   ...inspection,
+  ...require('./DiscoveryPresentation'),
 };

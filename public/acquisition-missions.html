@@ -37,6 +37,13 @@
   .mission-row:hover { color: #fff; }
   .timeline { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #9bb0d0; }
   .timeline div { padding: 0.2rem 0; }
+  .discovery-list { margin: 0.5rem 0 0; padding: 0; list-style: none; }
+  .discovery-list li { padding: 0.45rem 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .discovery-list li:last-child { border-bottom: none; }
+  .discovery-rank { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; color: #8b5cf6; margin-right: 0.35rem; }
+  .discovery-section { margin-top: 0.75rem; }
+  .discovery-section h3 { margin: 0 0 0.35rem; font-size: 0.82rem; color: #c4b5fd; font-family: 'JetBrains Mono', monospace; letter-spacing: 1px; text-transform: uppercase; }
+  .discovery-section ul { margin: 0; padding-left: 1.1rem; }
   @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -47,6 +54,7 @@
   <p class="msg" id="msg"></p>
   <section class="panel" id="listPanel"></section>
   <section class="panel" id="workspacePanel"></section>
+  <section class="panel" id="discoveryPanel"></section>
   <section class="panel" id="healthPanel"></section>
   <section class="panel" id="blockerPanel"></section>
   <section class="panel" id="timelinePanel"></section>
@@ -112,6 +120,51 @@
     });
   }
 
+  function renderDiscoveryArtifact(artifact) {
+    if (!artifact || !artifact.rankedProspects) {
+      $('discoveryPanel').innerHTML = '';
+      return;
+    }
+    const count = artifact.qualifiedCount || artifact.rankedProspects.length;
+    let html = '<h2>Scout Discovery</h2>';
+    html += '<p><strong>Found ' + count + ' prospect' + (count === 1 ? '' : 's') + '</strong></p>';
+    if (artifact.rankedProspects.length) {
+      html += '<ol class="discovery-list">';
+      artifact.rankedProspects.forEach(function (row) {
+        html += '<li><span class="discovery-rank">' + row.rank + '.</span><strong>' + row.name + '</strong>';
+        if (row.title) html += '<div class="meta">Role: ' + row.title + '</div>';
+        html += '</li>';
+      });
+      html += '</ol>';
+    }
+    if (artifact.confidence != null) {
+      html += '<div class="discovery-section"><h3>Confidence</h3><p>' + artifact.confidence.toFixed(2) + '</p></div>';
+    }
+    if (artifact.buyingSignals && artifact.buyingSignals.length) {
+      html += '<div class="discovery-section"><h3>Buying Signals</h3><ul>';
+      artifact.buyingSignals.forEach(function (signal) {
+        html += '<li>' + signal + '</li>';
+      });
+      html += '</ul></div>';
+    }
+    if (artifact.evidence && artifact.evidence.length) {
+      html += '<div class="discovery-section"><h3>Supporting Evidence</h3><ul>';
+      artifact.evidence.forEach(function (item) {
+        html += '<li>' + item + '</li>';
+      });
+      html += '</ul></div>';
+    }
+    if (artifact.summary) {
+      html += '<div class="discovery-section"><h3>Discovery Summary</h3><p>' + artifact.summary + '</p></div>';
+    }
+    const scoutComplete = snapshot.workspace && snapshot.workspace.scout && snapshot.workspace.scout.state === 'complete';
+    const maxWaiting = snapshot.workspace && snapshot.workspace.max && snapshot.workspace.max.state === 'waiting';
+    if (scoutComplete && maxWaiting && count > 0) {
+      html += '<div class="discovery-section"><h3>Operator Decision</h3><p>Approve prioritization?</p></div>';
+    }
+    $('discoveryPanel').innerHTML = html;
+  }
+
   function renderSnapshot() {
     if (!snapshot) return;
     const ws = snapshot.workspace || {};
@@ -145,6 +198,7 @@
     $('whyPanel').innerHTML = '<h2>Why is this mission here?</h2>' +
       (why.reasons || []).map((row) => '<p>' + row + '</p>').join('') +
       '<p class="meta">Confidence ' + (why.confidence == null ? '—' : why.confidence) + ' · evidence, not opinion</p>';
+    renderDiscoveryArtifact(snapshot.discoveryArtifact || null);
   }
 
   async function loadList() {

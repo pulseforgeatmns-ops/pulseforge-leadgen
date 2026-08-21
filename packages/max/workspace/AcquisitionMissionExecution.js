@@ -26,12 +26,14 @@ const {
 } = require('./ActiveMissionGuard');
 const {
   advanceDiscoveryAfterApproval,
-  buildDiscoveryApprovalProse,
   hasPendingDiscoveryApproval,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
   APPROVAL_PHASES,
 } = require('./AmoOperatorApproval');
+const {
+  presentationFromDiscoveryPayload,
+} = require('../../acquisition-mission/DiscoveryPresentation');
 const {
   createMissionApprovalAudit,
   logMissionApprovalMatched,
@@ -58,7 +60,8 @@ function buildExecutionMissionResponse({
   const progress = mission.progressPercent != null ? mission.progressPercent : null;
 
   if (executionResult && action === 'discovery_approved') {
-    const prose = buildDiscoveryApprovalProse(executionResult);
+    const scoutPayload = (executionResult.discovery && executionResult.discovery.payload) || {};
+    const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
     const blocked = executionResult.executionOutcome === 'blocked';
     const scoutComplete =
       !blocked &&
@@ -78,7 +81,10 @@ function buildExecutionMissionResponse({
         : scoutComplete
           ? 'Prioritization approval'
           : null,
-      confidence: mission.confidence,
+      confidence:
+        discoveryResults.confidence != null
+          ? discoveryResults.confidence
+          : mission.confidence,
       nextStep: blocked
         ? 'Resolve the discovery blocker, then retry Discovery.'
         : scoutComplete
@@ -89,6 +95,7 @@ function buildExecutionMissionResponse({
         : scoutComplete
           ? 'Approve prioritization?'
           : null,
+      discoveryResults: executionResult.discovery ? discoveryResults : null,
       evidenceStatus: 'Mission state',
       sources: ['acquisition_mission', 'scout'],
       reasoningEvidence: buildReasoningEvidence({
@@ -98,10 +105,14 @@ function buildExecutionMissionResponse({
           : ['Operator approval consumed; Scout discovery ran once.'],
         unknown: [],
         evidenceNeeded: [],
-        confidence: mission.confidence,
+        confidence:
+          discoveryResults.confidence != null
+            ? discoveryResults.confidence
+            : mission.confidence,
       }),
       includeReasoningMarker: true,
     });
+    const prose = formatMissionProse(comm);
 
     const structured = applyMissionCommunication(
       buildStructuredResponse({

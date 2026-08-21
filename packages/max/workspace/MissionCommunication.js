@@ -6,6 +6,10 @@
  * Internal reasoning (Known / Inference / Unknown / Evidence) stays available on demand.
  */
 
+const {
+  formatDiscoveryResultsLines,
+} = require('../../acquisition-mission/DiscoveryPresentation');
+
 const REASONING_MARKER = '▼ Show reasoning';
 const REASONING_EXPANDED_MARKER = '▲ Hide reasoning';
 
@@ -104,6 +108,7 @@ function buildMissionCommunication(input = {}) {
     sources: Array.isArray(input.sources) ? input.sources : [],
     reasoningEvidence: input.reasoningEvidence || null,
     includeReasoningMarker: input.includeReasoningMarker !== false,
+    discoveryResults: input.discoveryResults || null,
   };
 }
 
@@ -192,6 +197,13 @@ function formatMissionProse(comm, opts = {}) {
     lines.push('');
     lines.push(comm.nextStep);
     lines.push('');
+  }
+
+  if (comm.discoveryResults) {
+    const discoveryLines = formatDiscoveryResultsLines(comm.discoveryResults);
+    if (discoveryLines.length) {
+      lines.push(...discoveryLines);
+    }
   }
 
   if (comm.operatorDecision) {
