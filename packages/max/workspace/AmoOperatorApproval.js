@@ -424,11 +424,10 @@ function hasPendingDiscoveryApproval(snapshot) {
   const mission = snapshot.mission || {};
   if (hasPendingPlanClarification(snapshot)) return false;
   if (hasPendingPlanApproval(snapshot)) return false;
-  if (!isStructuredMissionApproved(mission) && mission.missionPlanDraft) return false;
+  // SPEC-135 — discovery approval is illegal until the mission plan is frozen.
+  if (!isStructuredMissionApproved(mission)) return false;
   if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL ||
-      (!mission.pendingOperatorDecision.kind &&
-        mission.pendingOperatorDecision.stage === STAGES.DISCOVER);
+    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL;
   }
   const contributions = snapshot.contributions || [];
   const ctx = specialistContext(contributions, {});

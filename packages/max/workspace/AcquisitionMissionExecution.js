@@ -39,6 +39,7 @@ const {
   findScoutDiscoveryAfterApproval,
   APPROVAL_PHASES,
 } = require('./AmoOperatorApproval');
+const { isStructuredMissionApproved } = require('../../acquisition-mission/StructuredMission');
 const {
   presentationFromDiscoveryPayload,
 } = require('../../acquisition-mission/DiscoveryPresentation');
@@ -483,8 +484,11 @@ function detectExecutionAction(question, snapshot) {
     /\b(?:begin|start|run|execute)\b.*\bdiscover/i.test(lower);
 
   if (discoveryApprovalPattern) {
-    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved');
-    return 'discovery_approved';
+    if (isStructuredMissionApproved(snapshot.mission || {})) {
+      askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved');
+      return 'discovery_approved';
+    }
+    // SPEC-135 — discovery commands are ignored until the mission plan is locked.
   }
 
   if (
@@ -534,6 +538,10 @@ function shouldExecuteDiscovery(action, snapshot) {
     return false;
   }
   const mission = snapshot.mission || {};
+  if (!isStructuredMissionApproved(mission)) {
+    askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'plan_not_locked');
+    return false;
+  }
   if (mission.stage !== STAGES.DISCOVER) {
     askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'wrong_stage');
     return false;

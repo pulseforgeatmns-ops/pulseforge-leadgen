@@ -176,11 +176,8 @@ function buildPendingOperatorDecision({
       actions: ['Approve', 'Edit', 'Cancel'],
     };
   }
-  return {
-    stage: STAGES.DISCOVER,
-    kind: OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
-    prompt: 'Approve discovery?',
-  };
+  // SPEC-135 — no discovery approval without a locked plan; missing draft is not evidence planning is complete.
+  return null;
 }
 
 function snapshotMission(mission) {

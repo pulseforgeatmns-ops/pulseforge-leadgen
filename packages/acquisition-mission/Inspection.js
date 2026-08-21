@@ -58,8 +58,7 @@ const PLANNING_REQUIREMENTS = Object.freeze([
     key: 'planApproved',
     label: 'Mission plan approved',
     check: (mission) =>
-      Boolean(mission.structuredMission && mission.structuredMission.immutable) ||
-      !mission.missionPlanDraft,
+      Boolean(mission.structuredMission && mission.structuredMission.immutable),
   },
 ]);
 
