@@ -2085,7 +2085,7 @@
               <button type="button" class="cd-btn cd-btn-ghost" data-cd-action-type="${
                 ACTION_TYPES.OPEN_MISSION
               }" data-cd-action-payload="${escapeHtml(
-                JSON.stringify({ missionId: m.id })
+                JSON.stringify({ missionId: m.id, runtime: m.runtime || null })
               )}">Expand</button>
             </div>
           </article>`;
@@ -2425,7 +2425,8 @@
     }
     if (type === ACTION_TYPES.OPEN_MISSION || type === 'review_mission') {
       const missionId = payload && payload.missionId;
-      if (missionId) openMissionWorkspace(missionId);
+      const runtime = payload && payload.runtime;
+      if (missionId) openMissionWorkspace(missionId, runtime);
       return;
     }
     // dismiss / snooze — presentation acknowledgement + operator learning
@@ -3354,8 +3355,13 @@
     bindReviewQueueControls();
   }
 
-  async function openMissionWorkspace(missionId) {
+  async function openMissionWorkspace(missionId, runtime) {
     if (!els.missionWorkspace || !missionId) return;
+    if (runtime === 'AMO') {
+      window.location.href =
+        '/acquisition-missions?mission=' + encodeURIComponent(missionId);
+      return;
+    }
     try {
       const data = await apiRequest(`/api/v1/missions/${encodeURIComponent(missionId)}`);
       const mission = data.mission || {};

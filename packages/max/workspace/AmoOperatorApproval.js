@@ -145,33 +145,6 @@ async function runScoutForAmoMission(mission, opts = {}) {
     return opts.runScout(mission, opts);
   }
 
-  if (opts.missionEngine && typeof opts.missionEngine.createFromObjective === 'function') {
-    const { Scout } = require('../../scout');
-    const legacyMission = await opts.missionEngine.createFromObjective({
-      objective: mission.objective,
-      tenantId: mission.tenantId,
-      clientId: mission.clientId != null ? mission.clientId : mission.tenantId,
-      execute: false,
-    });
-    return Scout.discover({
-      mission: legacyMission,
-      missionEngine: opts.missionEngine,
-      scoutPayload: {
-        objective: mission.objective,
-        operatorMessage: opts.question,
-        geography: buildDelegationFromAmoMission(mission).targetContext.geography,
-      },
-      operatorId: opts.operatorId,
-      message: opts.question,
-      opts: {
-        amoMissionId: mission.id,
-        missionId: mission.id,
-        attachScoutDiscovery: false,
-        persist: opts.persist,
-      },
-    });
-  }
-
   const delegation = buildDelegationFromAmoMission(mission);
   try {
     const result = await runScoutAcquisitionIntelligence(delegation, {

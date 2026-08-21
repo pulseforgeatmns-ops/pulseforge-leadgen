@@ -78,13 +78,17 @@ function toOperationsCard(mission, updatedAt) {
     estimatedCompletion: mission.estimatedCompletion || null,
     createdAt: mission.createdAt || null,
     type: mission.type || null,
+    runtime: mission.runtime || null,
     updatedAt,
     actions: [
       {
         id: `expand_${mission.id}`,
         type: ACTION_TYPES.OPEN_MISSION || 'open_mission',
         label: 'Expand',
-        payload: { missionId: mission.id },
+        payload: {
+          missionId: mission.id,
+          runtime: mission.runtime || null,
+        },
       },
     ],
   };
