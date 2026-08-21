@@ -42,6 +42,7 @@ const {
   isExplicitMissionExit,
   resolveActiveMissionLock,
 } = require('./ActiveMissionGuard');
+const askPathTrace = require('./audit/AskPathTrace');
 
 const WORKSPACE_OWNERS = Object.freeze({
   ACTIVE_MISSION: 'active_mission',
@@ -276,8 +277,10 @@ function claimsKnowledgeRetrieval(question) {
  * @returns {Promise<{ owner: string, reason: string, confidence: number, specialist?: string|null, fallback?: boolean }>}
  */
 async function resolveWorkspaceOwner(input = {}) {
+  askPathTrace.traceEnter('resolveWorkspaceOwner');
   const question = normalizeQuestion(input.question);
   if (!question) {
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'empty_question');
     return {
       owner: WORKSPACE_OWNERS.REASONING,
       reason: 'empty_question',
@@ -289,6 +292,8 @@ async function resolveWorkspaceOwner(input = {}) {
 
   // Active desk workflows (canary call-script review, packet review, tables)
   if (claimsActiveDeskWorkflow(question)) {
+    askPathTrace.traceOwner(WORKSPACE_OWNERS.ACTIVE_MISSION, 'active_desk_workflow');
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'active_desk_workflow');
     return {
       owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
       reason: 'active_desk_workflow',
@@ -310,6 +315,8 @@ async function resolveWorkspaceOwner(input = {}) {
   });
 
   if (missionLock.active && missionLock.executionCommand && !missionLock.explicitExit) {
+    askPathTrace.traceOwner(WORKSPACE_OWNERS.ACTIVE_MISSION, 'active_mission_execution_command');
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'active_mission_execution_command');
     return {
       owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
       reason: 'active_mission_execution_command',

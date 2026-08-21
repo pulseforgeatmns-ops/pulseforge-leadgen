@@ -162,6 +162,7 @@ const {
 } = require('../../mission-engine');
 
 const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
+const askPathTrace = require('./audit/AskPathTrace');
 
 /**
  * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 + SPEC-125 routing.
@@ -349,17 +350,40 @@ class WorkspaceEngine {
       throw new Error('question is required');
     }
     const question = String(input.question).trim().slice(0, 100000);
+    askPathTrace.beginTrace(question);
+    askPathTrace.traceEnter('WorkspaceEngine.ask', {
+      sessionId: input.sessionId || null,
+    });
     const rawContext = input.context || input.rawContext || null;
 
     let session = input.sessionId
       ? this._sessions.get(input.sessionId)
       : null;
     let envelopeSwitch = null;
+    let workspaceOwnership = null;
+    const traceAskReturn = (label, value, meta = {}) => {
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', label, {
+        responseOwner:
+          meta.responseOwner ||
+          (value && value.workspaceOwnership && value.workspaceOwnership.owner) ||
+          (workspaceOwnership && workspaceOwnership.owner) ||
+          null,
+        missionRuntime:
+          meta.missionRuntime ||
+          (value && value.workspaceOwnership && value.workspaceOwnership.missionRuntime) ||
+          null,
+        route: value && value.route != null ? value.route : meta.route || null,
+        ...meta,
+      });
+      return value;
+    };
 
+    try {
     if (!session) {
       if (!rawContext) {
         throw new Error('sessionId or context is required');
       }
+      askPathTrace.traceEnter('WorkspaceEngine.open');
       const opened = await this.open(rawContext, {
       loadOperatorContext: false,
     });
@@ -387,7 +411,7 @@ class WorkspaceEngine {
     // SPEC-125 — Ownership-first runtime. Resolve owner before intent classification.
     const ownershipAudit =
       this._ownershipAudit || createWorkspaceOwnershipAudit();
-    let workspaceOwnership = await resolveWorkspaceOwner({
+    workspaceOwnership = await resolveWorkspaceOwner({
       question,
       session,
       context: rawContext || session.context,
@@ -396,6 +420,10 @@ class WorkspaceEngine {
       resolverEnabled: this._resolverEnabled,
       acquisitionMissionEngine: this._acquisitionMissionEngine,
       acquisitionMissionService: this._acquisitionMissionService,
+    });
+    askPathTrace.traceOwner(workspaceOwnership.owner, workspaceOwnership.reason, {
+      confidence: workspaceOwnership.confidence,
+      fallback: workspaceOwnership.fallback || false,
     });
     ownershipAudit.logOwnerSelected({
       ...workspaceOwnership,
@@ -422,6 +450,11 @@ class WorkspaceEngine {
     const ownerIs = (...owners) => owners.includes(workspaceOwnership.owner);
 
     const fallbackToReasoning = (reason) => {
+      askPathTrace.traceFallback(
+        workspaceOwnership.owner,
+        WORKSPACE_OWNERS.REASONING,
+        reason
+      );
       ownershipAudit.logOwnerFallback({
         claimedOwner: workspaceOwnership.owner,
         fallbackOwner: WORKSPACE_OWNERS.REASONING,
@@ -443,6 +476,7 @@ class WorkspaceEngine {
 
     // 1 — Active Mission. Owner is not enough: dispatch by mission type (SPEC-129).
     if (ownerIs(WORKSPACE_OWNERS.ACTIVE_MISSION)) {
+      askPathTrace.traceBranch('owner_pipeline:active_mission');
       const runtimeDecision = await resolveMissionRuntime({
         question,
         session,
@@ -462,6 +496,7 @@ class WorkspaceEngine {
       });
 
       if (runtimeDecision.runtime === MISSION_RUNTIMES.SPEC_022) {
+        askPathTrace.traceBranch('runtime:spec_022');
         const missionFirstTurn = await maybeHandleMissionFirstTurn({
           question,
           session,
@@ -474,7 +509,7 @@ class WorkspaceEngine {
           sessions: this._sessions,
         });
         if (missionFirstTurn) {
-          return {
+          return traceAskReturn('mission_first_turn', {
             ...missionFirstTurn,
             suggestions: resolveResultSuggestions({
               structured: missionFirstTurn.structured,
@@ -487,9 +522,10 @@ class WorkspaceEngine {
               ...workspaceOwnership,
               missionRuntime: MISSION_RUNTIMES.SPEC_022,
             },
-          };
+          }, { missionRuntime: MISSION_RUNTIMES.SPEC_022 });
         }
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
+        askPathTrace.traceBranch('runtime:amo');
         const amoExecutionTurn = await maybeHandleAcquisitionMissionExecution({
           question,
           session,
@@ -517,7 +553,7 @@ class WorkspaceEngine {
           text: proseAmoExec,
           structured: structuredAmoExec,
         });
-        return {
+        return traceAskReturn('amo_execution', {
           sessionId: session.id,
           prose: proseAmoExec,
           structured: structuredAmoExec,
@@ -561,7 +597,7 @@ class WorkspaceEngine {
             missionRuntime: MISSION_RUNTIMES.AMO,
             missionType: 'acquisition_mission',
           },
-        };
+        }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
         }
       }
 
@@ -570,6 +606,7 @@ class WorkspaceEngine {
         session,
       });
       if (activeContinuationEarly) {
+        askPathTrace.traceBranch('active_work_continuation_early');
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
         if (session.context && typeof session.context === 'object') {
           session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
@@ -584,7 +621,7 @@ class WorkspaceEngine {
           text: proseEarly,
           structured: structuredEarly,
         });
-        return {
+        return traceAskReturn('active_continuation_early', {
           sessionId: session.id,
           prose: proseEarly,
           structured: structuredEarly,
@@ -620,7 +657,7 @@ class WorkspaceEngine {
             missionId: null,
           },
           workspaceOwnership,
-        };
+        });
       }
 
       fallbackToReasoning('active_mission_unhandled');
@@ -628,6 +665,7 @@ class WorkspaceEngine {
 
     // 2 — Mission Creation (acquisition objectives)
     if (ownerIs(WORKSPACE_OWNERS.MISSION_CREATION)) {
+      askPathTrace.traceBranch('owner_pipeline:mission_creation');
       const acquisitionOwnershipTurn = await maybeHandleAcquisitionOwnershipTurn({
         question,
         session,
@@ -707,6 +745,7 @@ class WorkspaceEngine {
 
     // 3 — Objective Persistence (SPEC-126 — never execution language)
     if (ownerIs(WORKSPACE_OWNERS.OBJECTIVE_PERSISTENCE)) {
+      askPathTrace.traceBranch('owner_pipeline:objective_persistence');
       const objectivePersistenceTurn = await maybeHandleOperatorObjectiveTurn({
         question,
         session,
@@ -786,6 +825,7 @@ class WorkspaceEngine {
 
     // 4 — Blueprint (Client Intelligence)
     if (ownerIs(WORKSPACE_OWNERS.BLUEPRINT)) {
+      askPathTrace.traceBranch('owner_pipeline:blueprint');
       const cieTurnBlueprint = await maybeHandleClientIntelligenceTurn({
         question,
         session,
@@ -857,6 +897,7 @@ class WorkspaceEngine {
 
     // 4 — Mission Inspection
     if (ownerIs(WORKSPACE_OWNERS.MISSION_INSPECTION)) {
+      askPathTrace.traceBranch('owner_pipeline:mission_inspection');
       const workspaceMissionInspectionTurn = await maybeHandleWorkspaceMissionInspection({
         question,
         session,
@@ -939,6 +980,7 @@ class WorkspaceEngine {
         WORKSPACE_OWNERS.SPECIALIST_DIRECTION
       )
     ) {
+      askPathTrace.traceBranch('owner_pipeline:specialist');
       if (ownerIs(WORKSPACE_OWNERS.SPECIALIST_INTERROGATION)) {
         const interrogationTurn = await maybeHandleSpecialistInterrogationTurn({
           question,
@@ -1267,6 +1309,7 @@ class WorkspaceEngine {
 
     // 6 — Knowledge Retrieval (only when no specialist owner claimed)
     if (ownerIs(WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL)) {
+      askPathTrace.traceBranch('owner_pipeline:knowledge_retrieval');
       const operatingUpdateTurn = await maybeHandleOperatorOperatingUpdate({
         question,
         session,
@@ -1423,7 +1466,10 @@ class WorkspaceEngine {
 
     // 7 — Reasoning fallback (intent classification runs only here)
     if (!ownerIs(WORKSPACE_OWNERS.REASONING)) {
+      askPathTrace.traceBranch('owner_pipeline:reasoning_fallback');
       fallbackToReasoning('owner_pipeline_miss');
+    } else {
+      askPathTrace.traceBranch('owner_pipeline:reasoning');
     }
 
     const cognitive = classifyCognitiveMode(question, {
@@ -2120,7 +2166,7 @@ class WorkspaceEngine {
 
     const context = (domainAttach && domainAttach.context) || session.context;
 
-    return {
+    return traceAskReturn('reasoning_fallback_final', {
       sessionId: session.id,
       prose,
       structured,
@@ -2144,7 +2190,11 @@ class WorkspaceEngine {
       domainDecision,
       executionContext:
         (domainAttach && domainAttach.executionContext) || null,
-    };
+      workspaceOwnership,
+    }, { route: route.kind });
+    } finally {
+      askPathTrace.endTrace();
+    }
   }
 
   /**
@@ -2243,12 +2293,19 @@ function preserveActiveWorkFocusOverStaleRecommendation(input) {
  * @returns {Promise<{ structured: object, reason: string }|null>}
  */
 async function maybeHandleActiveWorkContinuation(input) {
+  askPathTrace.traceEnter('maybeHandleActiveWorkContinuation');
   const question = String(input.question || '');
   const session = input.session || null;
-  if (!question.trim()) return null;
+  if (!question.trim()) {
+    askPathTrace.traceEarlyReturn('maybeHandleActiveWorkContinuation', 'empty_question');
+    return null;
+  }
 
   // Explicit new campaign/mission work always goes through normal routing.
-  if (isExplicitNewMissionRequest(question)) return null;
+  if (isExplicitNewMissionRequest(question)) {
+    askPathTrace.traceEarlyReturn('maybeHandleActiveWorkContinuation', 'explicit_new_mission');
+    return null;
+  }
 
   // Pasted fillable verification table / readiness summary table → desk
   // context before packet review, table mutation, prospect extraction, or

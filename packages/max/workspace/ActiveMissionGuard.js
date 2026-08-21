@@ -21,6 +21,7 @@ const {
   ensureAmoTenantHydrated,
   logAmoActiveResolved,
 } = require('./AmoWorkspaceHydration');
+const askPathTrace = require('./audit/AskPathTrace');
 
 const BLOCKED_DOMAIN_GENERAL = 'general_conversation';
 const BLOCKED_DOMAIN_BRIEFING = 'morning_briefing';
@@ -80,9 +81,11 @@ function pickAcquisitionMission(missions, input = {}) {
  * @returns {Promise<object|null>}
  */
 async function resolveAcquisitionActiveMission(input = {}) {
+  askPathTrace.traceEnter('resolveAcquisitionActiveMission');
   const tenantId = resolveTenantId(input);
   const engine = resolveAcquisitionEngine(input);
   if (!engine || !tenantId || typeof engine.list !== 'function') {
+    askPathTrace.traceEarlyReturn('resolveAcquisitionActiveMission', 'no_engine_or_tenant');
     return null;
   }
 
@@ -93,6 +96,9 @@ async function resolveAcquisitionActiveMission(input = {}) {
   if (resolved) {
     logAmoActiveResolved(resolved, tenantId);
   }
+  askPathTrace.traceEarlyReturn('resolveAcquisitionActiveMission', resolved ? 'mission_found' : 'no_mission', {
+    missionId: resolved && resolved.id,
+  });
   return resolved;
 }
 
@@ -101,12 +107,17 @@ async function resolveAcquisitionActiveMission(input = {}) {
  * @returns {Promise<{ active: boolean, mission: object|null, source: 'legacy'|'amo'|null, missionId: string|null, executionCommand: boolean, explicitExit: boolean, exitReason: string|null }>}
  */
 async function resolveActiveMissionLock(input = {}) {
+  askPathTrace.traceEnter('resolveActiveMissionLock');
   const question = normalizeText(input.question);
   const executionCommand = isMissionExecutionCommand(question);
   const exit = isExplicitMissionExit(question);
 
   const amoMission = await resolveAcquisitionActiveMission(input);
   if (amoMission) {
+    askPathTrace.traceEarlyReturn('resolveActiveMissionLock', 'amo_active', {
+      missionId: amoMission.id,
+      executionCommand,
+    });
     return {
       active: true,
       mission: amoMission,
@@ -130,6 +141,10 @@ async function resolveActiveMissionLock(input = {}) {
       input.session.id
     );
     if (legacy && isActiveMissionStatus(legacy.status)) {
+      askPathTrace.traceEarlyReturn('resolveActiveMissionLock', 'legacy_active', {
+        missionId: legacy.id,
+        executionCommand,
+      });
       return {
         active: true,
         mission: legacy,
@@ -142,6 +157,9 @@ async function resolveActiveMissionLock(input = {}) {
     }
   }
 
+  askPathTrace.traceEarlyReturn('resolveActiveMissionLock', 'no_active_mission', {
+    executionCommand,
+  });
   return {
     active: false,
     mission: null,
