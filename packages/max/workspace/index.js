@@ -47,6 +47,14 @@ const {
   CONTINUATION_THRESHOLD,
 } = require('./MissionFirstRouting');
 const {
+  resolveMissionRuntime,
+  logMissionRuntimeSelected,
+  listMissionRuntimeAuditLog,
+  clearMissionRuntimeAuditLog,
+  MISSION_RUNTIMES,
+  MISSION_TYPES,
+} = require('./MissionRuntimeDispatch');
+const {
   PresentationEngine,
   formatDeterministicProse,
 } = require('./PresentationEngine');
@@ -260,6 +268,12 @@ module.exports = {
   clearMissionRoutingLog,
   PIPELINES,
   CONTINUATION_THRESHOLD,
+  resolveMissionRuntime,
+  logMissionRuntimeSelected,
+  listMissionRuntimeAuditLog,
+  clearMissionRuntimeAuditLog,
+  MISSION_RUNTIMES,
+  MISSION_TYPES,
   PresentationEngine,
   formatDeterministicProse,
   WorkspaceEngine,
