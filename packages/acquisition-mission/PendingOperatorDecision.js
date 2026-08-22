@@ -104,7 +104,15 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
   const kind = pendingKind(mission);
   const approved = isStructuredMissionApproved(mission);
   const stage = mission.stage || null;
+  const pending = mission.pendingOperatorDecision;
   const details = consistencyDetails(mission, snapshot);
+
+  if (pending && pending.stage && stage && pending.stage !== stage) {
+    throw missionStateInconsistent(
+      'pendingOperatorDecision.stage does not match mission.stage.',
+      details
+    );
+  }
 
   if (mission.planCancelled === true && kind) {
     throw missionStateInconsistent(
@@ -203,12 +211,12 @@ const DISCOVER_DECISION_KINDS = new Set([
 
 /**
  * Leaving Discover makes plan/discovery decisions unconsumable.
- * Clear them in the same mutation so the resulting state stays consistent.
+ * Prefer applyStageTransition — this helper remains for legacy callers.
  */
 function applyStageToPendingDecision(mission, targetStage) {
   if (!mission) return mission;
   if (targetStage === STAGES.DISCOVER) return mission;
-  if (DISCOVER_DECISION_KINDS.has(pendingKind(mission))) {
+  if (DISCOVER_DECISION_KINDS.has(pendingKind(mission)) || mission.pendingOperatorDecision) {
     mission.pendingOperatorDecision = null;
   }
   return mission;

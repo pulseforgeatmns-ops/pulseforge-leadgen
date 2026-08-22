@@ -15,6 +15,8 @@ const {
   amoError,
   clamp,
 } = require('./types');
+const { buildPendingOperatorDecision } = require('./Mission');
+const { assertMissionStateConsistent } = require('./PendingOperatorDecision');
 
 const PREREQUISITES = Object.freeze({
   [STAGES.UNDERSTAND]: (ctx) =>
@@ -145,11 +147,57 @@ function specialistState(specialist, ctx, mission) {
   return { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
 }
 
+/**
+ * SPEC-137 — Derive pendingOperatorDecision valid for the target stage.
+ * Only Discover advertises consumable operator decisions today.
+ */
+function derivePendingOperatorDecisionForStage(mission, targetStage) {
+  if (targetStage !== STAGES.DISCOVER) return null;
+  return buildPendingOperatorDecision({
+    stage: STAGES.DISCOVER,
+    input: {},
+    missionPlanDraft: mission.missionPlanDraft,
+    structuredMission: mission.structuredMission,
+    planAmbiguities: mission.planAmbiguities || [],
+    planned: null,
+  });
+}
+
+/**
+ * SPEC-137 — Canonical lifecycle snapshot after a stage change.
+ * One place computes stage, status, and pendingOperatorDecision together.
+ */
+function deriveStageLifecycle(mission, targetStage) {
+  return {
+    stage: targetStage,
+    status: STAGE_LABELS[targetStage] || targetStage,
+    pendingOperatorDecision: derivePendingOperatorDecisionForStage(mission, targetStage),
+  };
+}
+
+/**
+ * SPEC-137 — Apply a complete lifecycle transition in one mutation.
+ * Never updates stage/status without the matching pendingOperatorDecision.
+ */
+function applyStageTransition(mission, targetStage, opts = {}) {
+  if (!mission) throw amoError('amo_mission_required', 'Mission is required.');
+  const fromStage = mission.stage;
+  const lifecycle = deriveStageLifecycle(mission, targetStage);
+  mission.stage = lifecycle.stage;
+  mission.status = lifecycle.status;
+  mission.pendingOperatorDecision = lifecycle.pendingOperatorDecision;
+  if (opts.assert !== false) {
+    assertMissionStateConsistent(mission, {
+      contributions: opts.contributions || [],
+      snapshot: opts.snapshot,
+    });
+  }
+  return { mission, from: fromStage, to: targetStage, lifecycle };
+}
+
+/** @deprecated Prefer applyStageTransition — kept for callers that only need stage/status. */
 function applyStage(mission, stage) {
-  mission.stage = stage;
-  mission.status = STAGE_LABELS[stage] || stage;
-  mission.updatedAt = mission.updatedAt;
-  return mission;
+  return applyStageTransition(mission, stage, { assert: false }).mission;
 }
 
 module.exports = {
@@ -161,5 +209,8 @@ module.exports = {
   assertActorCanProgress,
   progressPercent,
   specialistState,
+  derivePendingOperatorDecisionForStage,
+  deriveStageLifecycle,
+  applyStageTransition,
   applyStage,
 };

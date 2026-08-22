@@ -28,6 +28,7 @@ const {
   canEnter,
   assertActorCanProgress,
   progressPercent,
+  applyStageTransition,
 } = require('./Lifecycle');
 const { createEvent, formatTimeline } = require('./Timeline');
 const { buildSharedContext, formatSharedContext } = require('./Context');
@@ -50,7 +51,6 @@ const {
 const {
   assertMissionStateConsistent,
   presentableOperatorDecision,
-  applyStageToPendingDecision,
 } = require('./PendingOperatorDecision');
 
 function actorRole(actor) {
@@ -229,18 +229,16 @@ function createAcquisitionMissionEngine(opts = {}) {
   function progress(missionId, actor, progressOpts = {}) {
     assertActorCanProgress(actor);
     const mission = requireMission(missionId, progressOpts.tenantId);
+    const contributions = store.listContributions(mission.id);
     const extra = extrasFrom(store, mission);
-    const ctx = specialistContext(store.listContributions(mission.id), extra);
+    const ctx = specialistContext(contributions, extra);
     const target = asText(progressOpts.stage).toLowerCase() || nextStage(mission.stage);
     if (stageIndexSafe(target) <= stageIndexSafe(mission.stage) && !progressOpts.allowSame) {
       throw amoError('amo_already_at_stage', `Mission is already at ${mission.stage}.`);
     }
     const gate = canEnter(target, { ...ctx, ...extra });
     if (!gate.ok) throw amoError('amo_stage_blocked', gate.reason);
-    const from = mission.stage;
-    mission.stage = target;
-    mission.status = STAGE_LABELS[target] || target;
-    applyStageToPendingDecision(mission, target);
+    const { from } = applyStageTransition(mission, target, { contributions });
     store.addEvent(createEvent({
       missionId: mission.id,
       kind: EVENT_KINDS.STAGE_TRANSITION,
