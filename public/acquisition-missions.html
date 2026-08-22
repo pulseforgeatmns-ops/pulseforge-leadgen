@@ -212,7 +212,7 @@
   function renderSnapshot() {
     if (!snapshot) return;
     const mission = snapshot.mission || {};
-    renderMissionPlan(mission, mission.pendingOperatorDecision || null);
+    renderMissionPlan(mission, snapshot.executableDecision || null);
     const ws = snapshot.workspace || {};
     const health = snapshot.health || {};
     const blocker = snapshot.blocker;
@@ -261,9 +261,21 @@
 
   async function loadOne(id) {
     selected = id;
-    snapshot = await api('/api/v1/amo/missions/' + encodeURIComponent(id));
-    renderSnapshot();
-    setMsg('Inspecting ' + id, 'ok');
+    try {
+      snapshot = await api('/api/v1/amo/missions/' + encodeURIComponent(id));
+      renderSnapshot();
+      setMsg('Inspecting ' + id, 'ok');
+    } catch (err) {
+      snapshot = null;
+      $('planPanel').innerHTML = '';
+      $('workspacePanel').innerHTML = '';
+      $('discoveryPanel').innerHTML = '';
+      $('healthPanel').innerHTML = '';
+      $('blockerPanel').innerHTML = '';
+      $('timelinePanel').innerHTML = '';
+      $('whyPanel').innerHTML = '';
+      setMsg(err.message || 'MISSION_STATE_INCONSISTENT', 'err');
+    }
   }
 
   $('createBtn').addEventListener('click', async () => {

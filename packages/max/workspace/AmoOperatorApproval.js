@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * SPEC-128 / SPEC-131 — Operator approval consumes pending decisions only when the stage commits.
+ * SPEC-128 / SPEC-131 / SPEC-136 — Operator approval consumes pending decisions
+ * only when the stage commits. pendingOperatorDecision must match execution predicates.
  */
 
 const amo = require('../../acquisition-mission');
@@ -58,6 +59,14 @@ const {
 const { applyClarification, applyEdits } = require('../../acquisition-mission/MissionPlanner');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const { OPERATOR_DECISION_KINDS } = amo;
+const {
+  hasPendingPlanClarification,
+  hasPendingPlanApproval,
+  hasPendingDiscoveryApproval,
+  hasConsumablePendingDecision,
+  presentableOperatorDecision,
+  assertMissionStateConsistent,
+} = require('../../acquisition-mission/PendingOperatorDecision');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
 const PLAN_APPROVAL_ACTION = 'plan_approved';
@@ -95,27 +104,6 @@ function bindPersistDurable(input, engine, tenantId) {
       audit: ctx.audit,
     }, input.pool);
   };
-}
-
-function hasPendingPlanClarification(snapshot) {
-  const mission = snapshot.mission || snapshot;
-  if (isStructuredMissionApproved(mission)) return false;
-  if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION;
-  }
-  return Array.isArray(mission.planAmbiguities) && mission.planAmbiguities.length > 0;
-}
-
-function hasPendingPlanApproval(snapshot) {
-  const mission = snapshot.mission || {};
-  if (isStructuredMissionApproved(mission)) return false;
-  if (hasPendingPlanClarification(snapshot)) return false;
-  if (mission.planCancelled) return false;
-  if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_APPROVAL
-      || mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.PLAN_EDIT;
-  }
-  return Boolean(mission.missionPlanDraft && !mission.structuredMission);
 }
 
 function findPlanApproval(contributions = []) {
@@ -242,6 +230,9 @@ async function advancePlanAfterApproval(input = {}) {
       }));
 
       const nextSnapshot = amoEngine.inspect(mission.id, { tenantId: tid });
+      assertMissionStateConsistent(nextSnapshot.mission, {
+        contributions: nextSnapshot.contributions,
+      });
       return {
         approval: approvalResult.contribution,
         snapshot: nextSnapshot,
@@ -420,20 +411,6 @@ function findScoutDiscoveryAfterApproval(contributions = [], approval) {
     );
 }
 
-function hasPendingDiscoveryApproval(snapshot) {
-  const mission = snapshot.mission || {};
-  if (hasPendingPlanClarification(snapshot)) return false;
-  if (hasPendingPlanApproval(snapshot)) return false;
-  // SPEC-135 — discovery approval is illegal until the mission plan is frozen.
-  if (!isStructuredMissionApproved(mission)) return false;
-  if (mission.pendingOperatorDecision) {
-    return mission.pendingOperatorDecision.kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL;
-  }
-  const contributions = snapshot.contributions || [];
-  const ctx = specialistContext(contributions, {});
-  if (mission.stage !== STAGES.DISCOVER || ctx.scoutComplete) return false;
-  return !findDiscoveryApproval(contributions);
-}
 
 function mapScoutIntelligenceToDiscoveryPayload(result = {}, opts = {}) {
   return normalizeScoutDiscoveryPayload(result, {
@@ -700,6 +677,9 @@ function commitDiscoveryStage({
   }));
 
   snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
   return {
     approval,
     discovery: discoveryContribution.contribution,
@@ -940,6 +920,8 @@ module.exports = {
   findScoutDiscoveryAfterApproval,
   hasPendingPlanApproval,
   hasPendingPlanClarification,
+  hasConsumablePendingDecision,
+  presentableOperatorDecision,
   isMissionPlanningTurn,
   hasPendingDiscoveryApproval,
   advancePlanAfterApproval,

@@ -35,10 +35,16 @@ const {
   hasPendingDiscoveryApproval,
   hasPendingPlanApproval,
   hasPendingPlanClarification,
+  hasConsumablePendingDecision,
+  presentableOperatorDecision,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
   APPROVAL_PHASES,
 } = require('./AmoOperatorApproval');
+const {
+  assertMissionStateConsistent,
+  MISSION_STATE_INCONSISTENT,
+} = require('../../acquisition-mission/PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('../../acquisition-mission/StructuredMission');
 const {
   presentationFromDiscoveryPayload,
@@ -341,14 +347,9 @@ function buildExecutionMissionResponse({
   let nextStep = 'Review mission workspace for the latest specialist contributions.';
   let operatorDecision = null;
 
-  const pendingPlan = hasPendingPlanApproval(snapshot);
-  const pendingDiscovery = hasPendingDiscoveryApproval(snapshot);
-  if (pendingPlan) {
-    operatorDecision = (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) ||
-      'Approve mission plan?';
-  } else if (pendingDiscovery) {
-    operatorDecision = (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) ||
-      'Approve discovery?';
+  const presented = presentableOperatorDecision(snapshot);
+  if (presented) {
+    operatorDecision = presented.prompt;
   } else if (action === 'operator_approved') {
     status = `Operator approved — ${stageLabel(stage)}.`;
     nextStep = 'Mission advanced under operator approval.';
@@ -483,12 +484,9 @@ function detectExecutionAction(question, snapshot) {
     /\bbegin\b.*\bdiscover/i.test(lower) ||
     /\b(?:begin|start|run|execute)\b.*\bdiscover/i.test(lower);
 
-  if (discoveryApprovalPattern) {
-    if (isStructuredMissionApproved(snapshot.mission || {})) {
-      askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved');
-      return 'discovery_approved';
-    }
-    // SPEC-135 — discovery commands are ignored until the mission plan is locked.
+  if (discoveryApprovalPattern && hasPendingDiscoveryApproval(snapshot)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved');
+    return 'discovery_approved';
   }
 
   if (
@@ -500,6 +498,19 @@ function detectExecutionAction(question, snapshot) {
   ) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved_pending');
     return 'discovery_approved';
+  }
+
+  if (hasConsumablePendingDecision(snapshot)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_operator_decision');
+    return 'pending_operator_decision';
+  }
+
+  const pending = snapshot && snapshot.mission && snapshot.mission.pendingOperatorDecision;
+  if (pending) {
+    const err = new Error('Pending operator decision does not match executable mission state.');
+    err.code = MISSION_STATE_INCONSISTENT;
+    err.spec = 'SPEC-136';
+    throw err;
   }
 
   if (/\bapprov(e|al|ed)\b/i.test(q)) {
@@ -535,6 +546,10 @@ function shouldExecuteDiscovery(action, snapshot) {
   }
   if (hasPendingPlanApproval(snapshot)) {
     askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'plan_not_approved');
+    return false;
+  }
+  if (!hasPendingDiscoveryApproval(snapshot)) {
+    askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'no_pending_discovery_approval');
     return false;
   }
   const mission = snapshot.mission || {};
@@ -594,6 +609,9 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   }
 
   let snapshot = engine.inspect(mission.id, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
   const action = detectExecutionAction(question, snapshot);
   const audit = input.audit || createMissionApprovalAudit();
   const useGlobalAudit = !input.audit;
@@ -696,7 +714,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
           : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
       };
     }
-  } else if (action === 'operator_approved') {
+  } else if (action === 'operator_approved' && !hasConsumablePendingDecision(snapshot)) {
     try {
       engine.contribute(
         mission.id,

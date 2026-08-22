@@ -47,6 +47,7 @@ const {
 const {
   hasSufficientEvidenceForPrioritization,
 } = require('../../acquisition-mission/DiscoveryPayload');
+const { presentableOperatorDecision } = require('../../acquisition-mission/PendingOperatorDecision');
 
 const AMO_SOURCES = Object.freeze(['acquisition_mission', 'scout']);
 
@@ -195,11 +196,11 @@ function discoveryFromSnapshot(snapshot = {}) {
 }
 
 function amoOperatorDecision(mission, snapshot, discovery) {
-  const pending = (mission && mission.pendingOperatorDecision) || {};
-  if (pending.kind === 'plan_clarification' && pending.clarificationPrompt) {
-    return pending.clarificationPrompt;
-  }
-  if (pending.prompt) return pending.prompt;
+  const presented = presentableOperatorDecision({
+    mission,
+    contributions: snapshot && snapshot.contributions,
+  });
+  if (presented) return presented.prompt;
   if (snapshot && snapshot.blocker) return 'Resolve blocker to continue?';
   if (discovery && hasSufficientEvidenceForPrioritization(discovery)) {
     return 'Approve prioritization?';

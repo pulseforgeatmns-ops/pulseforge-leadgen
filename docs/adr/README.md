@@ -56,6 +56,9 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-053](ADR-053_Business_Success_Is_Operator_Defined.md) | Business Success Is Operator-Defined | Accepted |
 | [ADR-054](ADR-054_Reputation_Is_Capital.md) | Reputation Is Capital | Accepted |
 | [ADR-055](ADR-055_Max_Manages_Missions.md) | Max Manages Missions, Not Agents | Accepted |
+| [ADR-056](ADR-056_Mission_Planning_Engine_Is_The_Single_Interpreter.md) | Mission Planning Engine Is The Single Interpreter | Accepted |
+| [ADR-057](ADR-057_Transactional_Mission_Execution.md) | Transactional Mission Execution Is Atomic | Accepted |
+| [ADR-058](ADR-058_Pending_Operator_Decision_Matches_Execution.md) | Pending Operator Decision Must Match Execution | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

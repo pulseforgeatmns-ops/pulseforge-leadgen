@@ -47,6 +47,10 @@ const {
   findLatestDiscoveryContribution,
   presentationFromDiscoveryPayload,
 } = require('./DiscoveryPresentation');
+const {
+  assertMissionStateConsistent,
+  presentableOperatorDecision,
+} = require('./PendingOperatorDecision');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -372,9 +376,11 @@ function createAcquisitionMissionEngine(opts = {}) {
     const discoveryArtifact = discoveryContribution
       ? presentationFromDiscoveryPayload(discoveryContribution.payload || {})
       : null;
+    assertMissionStateConsistent(mission, { contributions });
     return {
       spec: 'SPEC-118',
       mission,
+      executableDecision: presentableOperatorDecision({ mission, contributions }),
       workspace,
       health,
       context,

@@ -2,6 +2,7 @@
 
 /**
  * SPEC-118 — Acquisition Mission Orchestration.
+ * SPEC-136 — Pending operator decision must match executable mission state.
  * Max manages missions. Capabilities contribute.
  */
 
@@ -40,6 +41,7 @@ const executionErrors = require('./ExecutionErrors');
 const executionAudit = require('./ExecutionAudit');
 const transactionalExecution = require('./TransactionalExecution');
 const specialistExecutionContract = require('./SpecialistExecutionContract');
+const pendingOperatorDecision = require('./PendingOperatorDecision');
 
 module.exports = {
   ...types,
@@ -83,4 +85,5 @@ module.exports = {
   ...executionAudit,
   ...transactionalExecution,
   ...specialistExecutionContract,
+  ...pendingOperatorDecision,
 };
