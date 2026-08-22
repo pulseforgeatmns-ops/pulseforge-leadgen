@@ -648,14 +648,10 @@ function commitDiscoveryStage({
   let snapshot = engine.inspect(missionId, { tenantId });
   const ctx = specialistContext(snapshot.contributions || [], {});
   if (ctx.scoutComplete && snapshot.mission.stage === STAGES.DISCOVER) {
-    try {
-      engine.progress(missionId, SPECIALISTS.OPERATOR, {
-        tenantId,
-        stage: STAGES.UNDERSTAND,
-      });
-    } catch (_) {
-      /* stage may already have advanced */
-    }
+    engine.progress(missionId, SPECIALISTS.OPERATOR, {
+      tenantId,
+      stage: STAGES.UNDERSTAND,
+    });
     snapshot = engine.inspect(missionId, { tenantId });
   }
 
