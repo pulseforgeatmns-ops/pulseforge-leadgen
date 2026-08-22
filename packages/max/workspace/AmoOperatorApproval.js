@@ -57,6 +57,7 @@ const {
   scoutDelegationFromMission,
 } = require('../../acquisition-mission/SpecialistInputs');
 const { applyClarification, applyEdits } = require('../../acquisition-mission/MissionPlanner');
+const { bindStagePersistDurable } = require('../../../services/acquisitionMissionPersistence');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const { OPERATOR_DECISION_KINDS } = amo;
 const {
@@ -88,22 +89,7 @@ function buildDelegationFromAmoMission(mission) {
 }
 
 function bindPersistDurable(input, engine, tenantId) {
-  if (typeof input.persistStage === 'function') {
-    return (ctx) => input.persistStage(ctx);
-  }
-  if (input.persist !== true) return null;
-  return async (ctx) => {
-    const { persistStageCommit } = require('../../services/acquisitionMissionPersistence');
-    const missionId = ctx.missionId;
-    await persistStageCommit({
-      mission: engine.get(missionId, tenantId),
-      events: engine.store.listEvents(missionId),
-      contributions: engine.store.listContributions(missionId),
-      observations: engine.store.listObservations(missionId),
-      outcomes: engine.store.listOutcomes(missionId),
-      audit: ctx.audit,
-    }, input.pool);
-  };
+  return bindStagePersistDurable(input, engine, tenantId);
 }
 
 function findPlanApproval(contributions = []) {

@@ -334,6 +334,95 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
   return mission;
 }
 
+/**
+ * SPEC-139 — load one mission + tenant-scoped side effects for durable verification.
+ */
+async function loadMissionSnapshot(missionId, tenantId, pool = defaultPool()) {
+  const loaded = await loadTenantMissions(tenantId, pool);
+  const mission = loaded.missions.find((row) => row && row.id === missionId) || null;
+  if (!mission) return null;
+  const contributions = loaded.contributions.filter((row) => row && row.missionId === missionId);
+  const events = loaded.events
+    .map((row) => {
+      const payload = row.payload && typeof row.payload === 'object' ? row.payload : row;
+      return {
+        id: payload.id || row.id,
+        missionId: payload.missionId || row.mission_id,
+        kind: payload.kind || row.kind,
+        specialist: payload.specialist || row.specialist,
+        label: payload.label || row.label,
+        at: payload.at || row.at,
+        payload: payload.payload || {},
+      };
+    })
+    .filter((row) => row.missionId === missionId);
+  const observations = loaded.observations.filter((row) => row && row.missionId === missionId);
+  const outcomes = loaded.outcomes.filter((row) => row && row.missionId === missionId);
+  return { mission, contributions, events, observations, outcomes };
+}
+
+function comparableMissionState(snapshot) {
+  const mission = snapshot && snapshot.mission ? snapshot.mission : snapshot;
+  const contributions = (snapshot && snapshot.contributions) || [];
+  return {
+    id: mission && mission.id,
+    version: mission && mission.version,
+    stage: mission && mission.stage,
+    status: mission && mission.status,
+    structuredMissionApproved: mission && mission.structuredMissionApproved,
+    structuredMission: mission && mission.structuredMission,
+    missionPlanDraft: mission && mission.missionPlanDraft,
+    pendingOperatorDecision: mission && mission.pendingOperatorDecision,
+    lastTransactionId: mission && mission.lastTransactionId,
+    contributionIds: contributions.map((row) => row.id).sort(),
+  };
+}
+
+/**
+ * SPEC-139 — persisted mission must match in-memory engine state before commit succeeds.
+ */
+async function assertPersistedMatchesEngine(engine, missionId, tenantId, pool = defaultPool()) {
+  const inMemory = engine.inspect(missionId, { tenantId });
+  const persisted = await loadMissionSnapshot(missionId, tenantId, pool);
+  if (!persisted || !persisted.mission) {
+    const err = new Error('Persisted mission snapshot is missing after stage commit.');
+    err.code = 'tme_persistence_verify';
+    throw err;
+  }
+  const memoryComparable = comparableMissionState(inMemory);
+  const persistedComparable = comparableMissionState(persisted);
+  if (JSON.stringify(memoryComparable) !== JSON.stringify(persistedComparable)) {
+    const err = new Error('Persisted mission does not match committed in-memory mission.');
+    err.code = 'tme_persistence_verify';
+    err.details = { memory: memoryComparable, persisted: persistedComparable };
+    throw err;
+  }
+  return persisted;
+}
+
+/**
+ * SPEC-139 — bind durable stage persistence + verification for TME commits.
+ * Returns null when persistence is disabled or no pool is available.
+ */
+function bindStagePersistDurable(input = {}, engine, tenantId) {
+  if (typeof input.persistStage === 'function') {
+    return (ctx) => input.persistStage(ctx);
+  }
+  if (input.persist === false || !input.pool || !engine) return null;
+  return async (ctx) => {
+    const missionId = ctx.missionId;
+    await persistStageCommit({
+      mission: engine.get(missionId, tenantId),
+      events: engine.store.listEvents(missionId),
+      contributions: engine.store.listContributions(missionId),
+      observations: engine.store.listObservations(missionId),
+      outcomes: engine.store.listOutcomes(missionId),
+      audit: ctx.audit,
+    }, input.pool);
+    await assertPersistedMatchesEngine(engine, missionId, tenantId, input.pool);
+  };
+}
+
 async function loadTenantMissions(tenantId, pool = defaultPool()) {
   await ensureAcquisitionMissionSchema(pool);
   const key = String(tenantId);
@@ -481,6 +570,10 @@ module.exports = {
   persistLearning,
   persistExecutionAudit,
   persistStageCommit,
+  loadMissionSnapshot,
+  comparableMissionState,
+  assertPersistedMatchesEngine,
+  bindStagePersistDurable,
   loadTenantMissions,
   countAmoRows,
   deleteAllAmoData,
