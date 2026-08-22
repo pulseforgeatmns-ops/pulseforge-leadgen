@@ -230,6 +230,34 @@ describe('SPEC-136 — Pending Operator Decision Consistency', () => {
     );
   });
 
+  it('progressing off Discover clears unconsumable pending decisions', () => {
+    const engine = amo.createAcquisitionMissionEngine();
+    const mission = engine.create({
+      tenantId: '10',
+      objective: OBJECTIVE,
+    });
+    engine.contribute(mission.id, {
+      specialist: amo.SPECIALISTS.SCOUT,
+      kind: amo.CONTRIBUTION_KINDS.DISCOVERY,
+      payload: {
+        companies: [{ id: 'c1', name: 'Harbor Law' }],
+        prospects: [{ id: 'p1', name: 'Alex' }],
+        buyingSignals: ['Hiring office manager'],
+        evidence: [{ label: 'Job post', source: 'job_board' }],
+        confidence: 0.8,
+      },
+    }, { tenantId: '10' });
+    const progressed = engine.progress(mission.id, { role: 'max' }, {
+      tenantId: '10',
+      stage: STAGES.UNDERSTAND,
+    });
+    assert.equal(progressed.stage, STAGES.UNDERSTAND);
+    assert.equal(progressed.pendingOperatorDecision, null);
+    const snapshot = engine.inspect(mission.id, { tenantId: '10' });
+    assert.equal(hasPendingPlanApproval(snapshot), false);
+    assert.equal(hasPendingDiscoveryApproval(snapshot), false);
+  });
+
   it('advanceDiscoveryAfterApproval consumes pending before Scout result is durable', async () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = engine.create({

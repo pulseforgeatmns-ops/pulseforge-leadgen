@@ -194,6 +194,26 @@ function isMissionStateInconsistent(err) {
   return Boolean(err && err.code === MISSION_STATE_INCONSISTENT);
 }
 
+const DISCOVER_DECISION_KINDS = new Set([
+  OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION,
+  OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
+  OPERATOR_DECISION_KINDS.PLAN_EDIT,
+  OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
+]);
+
+/**
+ * Leaving Discover makes plan/discovery decisions unconsumable.
+ * Clear them in the same mutation so the resulting state stays consistent.
+ */
+function applyStageToPendingDecision(mission, targetStage) {
+  if (!mission) return mission;
+  if (targetStage === STAGES.DISCOVER) return mission;
+  if (DISCOVER_DECISION_KINDS.has(pendingKind(mission))) {
+    mission.pendingOperatorDecision = null;
+  }
+  return mission;
+}
+
 module.exports = {
   MISSION_STATE_INCONSISTENT,
   hasPendingPlanClarification,
@@ -205,4 +225,5 @@ module.exports = {
   assertMissionStateConsistent,
   missionStateInconsistent,
   isMissionStateInconsistent,
+  applyStageToPendingDecision,
 };
