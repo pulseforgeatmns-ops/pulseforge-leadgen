@@ -23,6 +23,9 @@ const {
   persistOutcome,
   persistLearning,
   loadTenantMissions,
+  countAmoRows,
+  deleteAllAmoData,
+  clearAmoSessionBindings,
 } = require('./acquisitionMissionPersistence');
 
 let engine = null;
@@ -36,6 +39,43 @@ function getEngine(opts = {}) {
 function resetEngine() {
   engine = amo.createAcquisitionMissionEngine();
   return engine;
+}
+
+/**
+ * SPEC-138 — one-time production reset: purge legacy AMO workflow state and clear runtime caches.
+ */
+async function resetAmoRuntime(opts = {}) {
+  const { tenantId = null, pool, clearSessions = true } = opts;
+  const deleted = await deleteAllAmoData(tenantId, pool);
+  resetEngine();
+  try {
+    const { clearAmoHydrationCache } = require('../packages/max/workspace/AmoWorkspaceHydration');
+    clearAmoHydrationCache();
+  } catch (_) {
+    /* hydration module optional in isolated scripts */
+  }
+  let sessionsCleared = 0;
+  if (clearSessions && opts.persist !== false) {
+    try {
+      const sessionResult = await clearAmoSessionBindings(pool);
+      sessionsCleared = sessionResult.sessionsCleared;
+    } catch (err) {
+      if (!/relation .* does not exist/i.test(String(err.message))) {
+        console.error('[amo] clear session bindings:', err.message);
+      }
+    }
+  }
+  const verifyTenant = tenantId != null ? String(tenantId) : null;
+  const missionsRemaining = verifyTenant
+    ? getEngine(opts).list(verifyTenant).length
+    : 0;
+  return {
+    spec: 'SPEC-138',
+    runtimeVersion: amo.RUNTIME_VERSION,
+    deleted,
+    sessionsCleared,
+    missionsRemaining,
+  };
 }
 
 async function hydrateTenant(tenantId, opts = {}) {
@@ -274,6 +314,7 @@ function toCommandDeckCard(mission) {
 module.exports = {
   getEngine,
   resetEngine,
+  resetAmoRuntime,
   createMission,
   inspectMission,
   listMissions,

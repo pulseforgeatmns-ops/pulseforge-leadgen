@@ -7,6 +7,9 @@
 
 const crypto = require('crypto');
 
+/** SPEC-138 — AMO runtime generation; bump on breaking lifecycle changes. */
+const RUNTIME_VERSION = 1;
+
 const STAGES = Object.freeze({
   DISCOVER: 'discover',
   UNDERSTAND: 'understand',
@@ -215,6 +218,7 @@ function formatClock(iso) {
 }
 
 module.exports = {
+  RUNTIME_VERSION,
   STAGES,
   STAGE_ORDER,
   STAGE_LABELS,
