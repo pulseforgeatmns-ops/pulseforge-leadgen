@@ -251,6 +251,25 @@ class WorkspaceEngine {
   }
 
   /**
+   * SPEC-139 — pool + persist flags for transactional AMO stage commits.
+   * @returns {{ persist?: boolean, pool?: object }}
+   */
+  _amoStagePersistOpts() {
+    if (this._acquisitionMissionEngine) {
+      return { persist: false };
+    }
+    const pool = this._operatorContextOpts && this._operatorContextOpts.pool;
+    if (pool) {
+      return { persist: true, pool };
+    }
+    try {
+      return { persist: true, pool: require('../../../db') };
+    } catch (_) {
+      return { persist: false };
+    }
+  }
+
+  /**
    * Open a workspace session from an explicit context envelope.
    * Sync when operator context is not loaded; returns a Promise when loading context.
    *
@@ -531,6 +550,7 @@ class WorkspaceEngine {
           acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
           acquisitionMissionService: this._acquisitionMissionService || undefined,
           missionEngine: this._missionEngine || undefined,
+          ...this._amoStagePersistOpts(),
         });
         if (amoExecutionTurn) {
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;

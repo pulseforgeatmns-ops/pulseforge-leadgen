@@ -62,6 +62,19 @@ const askPathTrace = require('./audit/AskPathTrace');
 
 const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
 
+function resolveStagePersistOpts(input = {}) {
+  if (input.persist === false) {
+    return { persist: false, pool: input.pool, persistStage: input.persistStage };
+  }
+  if (typeof input.persistStage === 'function') {
+    return { persistStage: input.persistStage, pool: input.pool };
+  }
+  if (input.pool) {
+    return { persist: true, pool: input.pool };
+  }
+  return {};
+}
+
 function stageLabel(stage) {
   return STAGE_LABELS[stage] || stage || 'Active';
 }
@@ -634,6 +647,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   }
 
   let executionResult = null;
+  const persistOpts = resolveStagePersistOpts(input);
 
   if (shouldClarifyPlan(action, snapshot)) {
     executionResult = advancePlanClarification({
@@ -661,6 +675,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
         tenantId,
         question,
         operatorId: input.operatorId || (input.session && input.session.operator) || null,
+        ...persistOpts,
       });
     } catch (err) {
       if (!isRolledBackExecution(err)) throw err;
@@ -681,12 +696,12 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
         question,
         operatorId: input.operatorId || (input.session && input.session.operator) || null,
         missionEngine: input.missionEngine,
-        persist: input.persist,
         runScout: input.runScout,
         scoutCompanies: input.scoutCompanies,
         scoutPeople: input.scoutPeople,
         allowFixtureFallback: input.allowFixtureFallback,
         audit,
+        ...persistOpts,
       });
     } catch (err) {
       if (!isRolledBackExecution(err)) throw err;

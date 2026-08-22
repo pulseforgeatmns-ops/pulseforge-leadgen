@@ -152,7 +152,7 @@ function bumpMissionVersion(mission, transactionId) {
  * @param {Function} input.execute  async (ctx) => output — must not rely on durable mission writes
  * @param {Function} [input.validateOutput]
  * @param {Function} input.commit   async (ctx) => commitResult — mutates store; rolled back on throw
- * @param {Function} [input.persistDurable] async (ctx) => void — durable persist after in-memory commit
+ * @param {Function} [input.persistDurable] async (ctx) => void — durable persist + verify after in-memory commit (SPEC-139)
  * @param {Function} [input.present] async (ctx) => presentation — failures do not rollback
  * @returns {Promise<object>}
  */
