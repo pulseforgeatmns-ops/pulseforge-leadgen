@@ -43,7 +43,17 @@ async function hydrateTenant(tenantId, opts = {}) {
   if (tenantId == null || tenantId === '' || opts.persist === false) return instance;
   try {
     const loaded = await loadTenantMissions(tenantId, opts.pool);
-    for (const mission of loaded.missions) instance.store.putMission(mission);
+    for (const mission of loaded.missions) {
+      try {
+        instance.store.putMission(mission);
+      } catch (putErr) {
+        if (putErr && putErr.code === amo.MISSION_STATE_INCONSISTENT) {
+          console.error('[amo] hydrate skip inconsistent mission', mission && mission.id, putErr.message);
+          continue;
+        }
+        throw putErr;
+      }
+    }
     for (const event of loaded.events) {
       const payload = event.payload && typeof event.payload === 'object' ? event.payload : event;
       instance.store.addEvent({

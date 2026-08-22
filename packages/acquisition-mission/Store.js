@@ -5,6 +5,7 @@
  */
 
 const { clone, asText, nowIso, amoError } = require('./types');
+const { assertMissionStateConsistent } = require('./PendingOperatorDecision');
 
 function createMemoryAmoStore(opts = {}) {
   const missions = new Map();
@@ -15,6 +16,7 @@ function createMemoryAmoStore(opts = {}) {
   const learning = [];
 
   function putMission(mission) {
+    assertMissionStateConsistent(mission);
     const copy = clone(mission);
     copy.updatedAt = copy.updatedAt || nowIso();
     missions.set(copy.id, copy);

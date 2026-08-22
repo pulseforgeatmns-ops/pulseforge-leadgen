@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Pending Operator Decision Consistency ([SPEC-136](docs/specs/SPEC-136_Pending_Operator_Decision_Consistency.md), [ADR-058](docs/adr/ADR-058_Pending_Operator_Decision_Matches_Execution.md))
+  - `pendingOperatorDecision` must satisfy `hasPendingPlanApproval` / `hasPendingDiscoveryApproval` after every mission mutation
+  - Plan approval atomically advances to discovery approval; discovery approval is consumed before Scout is durable
+  - Inconsistent missions fail with `MISSION_STATE_INCONSISTENT` and are not rendered
+  - Presentation derives from executable mission state; generic `operator_approved` cannot run while a valid pending decision exists
+
 - Acquisition Mission Orchestration ([SPEC-118](docs/specs/SPEC-118_Acquisition_Mission_Orchestration.md), [ADR-055](docs/adr/ADR-055_Max_Manages_Missions.md))
   - Max manages missions, not agents; capabilities contribute evidence and execution
   - Durable Acquisition Mission object with Discover → Understand → Plan → Prepare → Ready → Execute → Observe → Learn → Improve

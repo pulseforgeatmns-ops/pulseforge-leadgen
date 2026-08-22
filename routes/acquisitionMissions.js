@@ -59,6 +59,7 @@ function fail(res, err, fallbackCode, fallbackStatus = 500) {
   const code = (err && err.code) || fallbackCode;
   const status =
     code === 'amo_mission_not_found' ? 404
+      : code === 'MISSION_STATE_INCONSISTENT' ? 409
       : code === 'amo_tenant_required'
         || code === 'amo_tenant_mismatch'
         || code === 'amo_objective_required'

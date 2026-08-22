@@ -47,6 +47,11 @@ const {
   findLatestDiscoveryContribution,
   presentationFromDiscoveryPayload,
 } = require('./DiscoveryPresentation');
+const {
+  assertMissionStateConsistent,
+  presentableOperatorDecision,
+  applyStageToPendingDecision,
+} = require('./PendingOperatorDecision');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -235,6 +240,7 @@ function createAcquisitionMissionEngine(opts = {}) {
     const from = mission.stage;
     mission.stage = target;
     mission.status = STAGE_LABELS[target] || target;
+    applyStageToPendingDecision(mission, target);
     store.addEvent(createEvent({
       missionId: mission.id,
       kind: EVENT_KINDS.STAGE_TRANSITION,
@@ -372,9 +378,11 @@ function createAcquisitionMissionEngine(opts = {}) {
     const discoveryArtifact = discoveryContribution
       ? presentationFromDiscoveryPayload(discoveryContribution.payload || {})
       : null;
+    assertMissionStateConsistent(mission, { contributions });
     return {
       spec: 'SPEC-118',
       mission,
+      executableDecision: presentableOperatorDecision({ mission, contributions }),
       workspace,
       health,
       context,

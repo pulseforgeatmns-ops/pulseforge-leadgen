@@ -54,6 +54,9 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-053](docs/adr/ADR-053_Business_Success_Is_Operator_Defined.md) | Business Success Is Operator-Defined | Accepted | Max recommends explainable metrics; the operator-approved scorecard is the canonical definition of success; drafts never report |
 | [ADR-054](docs/adr/ADR-054_Reputation_Is_Capital.md) | Reputation Is Capital | Accepted | Emmett protects outbound reputation; capacity is reasoned; the Safe Send Governor evaluates every send; Max cannot override Pause/Emergency silently |
 | [ADR-055](docs/adr/ADR-055_Max_Manages_Missions.md) | Max Manages Missions, Not Agents | Accepted | Every outbound campaign is a durable Acquisition Mission; Max orchestrates lifecycle; specialists contribute under contract |
+| [ADR-056](docs/adr/ADR-056_Mission_Planning_Engine_Is_The_Single_Interpreter.md) | Mission Planning Engine Is The Single Interpreter | Accepted | Only the Mission Planning Engine interprets operator English; specialists consume the locked Mission Plan |
+| [ADR-057](docs/adr/ADR-057_Transactional_Mission_Execution.md) | Transactional Mission Execution Is Atomic | Accepted | A mission stage commits completely or rolls back; approval consumption is part of the same commit |
+| [ADR-058](docs/adr/ADR-058_Pending_Operator_Decision_Matches_Execution.md) | Pending Operator Decision Must Match Execution | Accepted | Advertised operator decisions must be consumable; presentation derives from execution predicates |
 
 ## How to add a decision
 

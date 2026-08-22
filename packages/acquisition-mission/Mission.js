@@ -26,6 +26,7 @@ const {
   formatOperatorConfirmation,
   formatAmbiguityPrompt,
 } = require('./StructuredMission');
+const { assertMissionStateConsistent } = require('./PendingOperatorDecision');
 
 function normalizePriority(value) {
   const text = asText(value).toLowerCase();
@@ -98,7 +99,7 @@ function createMission(input = {}) {
     planned,
   });
 
-  return {
+  const created = {
     id: asText(input.id) || newId('mission'),
     kind: 'acquisition_mission',
     spec: 'SPEC-118',
@@ -132,6 +133,8 @@ function createMission(input = {}) {
     createdAt: now,
     updatedAt: now,
   };
+  assertMissionStateConsistent(created);
+  return created;
 }
 
 function buildPendingOperatorDecision({
