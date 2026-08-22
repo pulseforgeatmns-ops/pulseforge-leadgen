@@ -11,6 +11,7 @@ const {
   PRIORITIES,
   SPECIALISTS,
   OPERATOR_DECISION_KINDS,
+  RUNTIME_VERSION,
   clone,
   asText,
   nowIso,
@@ -128,6 +129,9 @@ function createMission(input = {}) {
     planResolutions,
     planCancelled: input.planCancelled === true,
     pendingOperatorDecision,
+    runtimeVersion: Number.isFinite(Number(input.runtimeVersion))
+      ? Number(input.runtimeVersion)
+      : RUNTIME_VERSION,
     version: Number.isFinite(Number(input.version)) ? Number(input.version) : 0,
     lastTransactionId: asText(input.lastTransactionId) || null,
     createdAt: now,

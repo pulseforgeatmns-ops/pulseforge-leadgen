@@ -370,6 +370,106 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
   return { missions, events, contributions, observations, outcomes, learning };
 }
 
+const AMO_TABLES = Object.freeze([
+  'acquisition_mission_execution_audit',
+  'acquisition_mission_learning',
+  'acquisition_mission_outcomes',
+  'acquisition_mission_observations',
+  'acquisition_mission_contributions',
+  'acquisition_mission_events',
+  'acquisition_missions',
+]);
+
+/**
+ * SPEC-138 — row counts for AMO tables (optional tenant scope).
+ */
+async function countAmoRows(tenantId = null, pool = defaultPool()) {
+  await ensureAcquisitionMissionSchema(pool);
+  await ensureExecutionAuditSchema(pool);
+  const counts = {};
+  const tenantClause = tenantId != null ? ' WHERE tenant_id = $1' : '';
+  const params = tenantId != null ? [String(tenantId)] : [];
+  for (const table of AMO_TABLES) {
+    const result = await pool.query(`SELECT COUNT(*)::int AS count FROM ${table}${tenantClause}`, params);
+    counts[table] = result.rows[0].count;
+  }
+  return counts;
+}
+
+/**
+ * SPEC-138 — delete all AMO workflow state. Business intelligence tables are untouched.
+ */
+async function deleteAllAmoData(tenantId = null, pool = defaultPool()) {
+  await ensureAcquisitionMissionSchema(pool);
+  await ensureExecutionAuditSchema(pool);
+
+  const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
+  const ownsClient = client !== pool && typeof client.release === 'function';
+  const tenantKey = tenantId != null ? String(tenantId) : null;
+  const before = await countAmoRows(tenantId, pool);
+
+  try {
+    await client.query('BEGIN');
+    if (tenantKey) {
+      await client.query('DELETE FROM acquisition_mission_execution_audit WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_mission_learning WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_mission_outcomes WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_mission_observations WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_mission_contributions WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_mission_events WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_missions WHERE tenant_id = $1', [tenantKey]);
+    } else {
+      await client.query('DELETE FROM acquisition_mission_execution_audit');
+      await client.query('DELETE FROM acquisition_mission_learning');
+      await client.query('DELETE FROM acquisition_mission_outcomes');
+      await client.query('DELETE FROM acquisition_mission_observations');
+      await client.query('DELETE FROM acquisition_mission_contributions');
+      await client.query('DELETE FROM acquisition_mission_events');
+      await client.query('DELETE FROM acquisition_missions');
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* rollback best-effort */
+    }
+    throw err;
+  } finally {
+    if (ownsClient) client.release();
+  }
+
+  const after = await countAmoRows(tenantId, pool);
+  return { before, after, tenantId: tenantKey };
+}
+
+/**
+ * SPEC-138 — clear persisted session references to deleted AMO missions.
+ */
+async function clearAmoSessionBindings(pool = defaultPool()) {
+  const result = await pool.query(`
+    UPDATE session
+    SET sess = (
+      (sess::jsonb - 'context' - '_amoHydration')
+      || jsonb_build_object(
+        'context',
+        COALESCE(sess::jsonb->'context', '{}'::jsonb)
+          - 'missionId'
+          - 'acquisitionMissionId'
+          - 'acquisitionOwner'
+      )
+    )::json
+    WHERE sess::jsonb ? 'context'
+      AND (
+        sess::jsonb->'context' ? 'missionId'
+        OR sess::jsonb->'context' ? 'acquisitionMissionId'
+        OR sess::jsonb->'context' ? 'acquisitionOwner'
+      )
+      OR sess::jsonb ? '_amoHydration'
+  `);
+  return { sessionsCleared: result.rowCount || 0 };
+}
+
 module.exports = {
   ensureAcquisitionMissionSchema,
   ensureExecutionAuditSchema,
@@ -382,4 +482,7 @@ module.exports = {
   persistExecutionAudit,
   persistStageCommit,
   loadTenantMissions,
+  countAmoRows,
+  deleteAllAmoData,
+  clearAmoSessionBindings,
 };
