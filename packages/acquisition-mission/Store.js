@@ -16,7 +16,8 @@ function createMemoryAmoStore(opts = {}) {
   const learning = [];
 
   function putMission(mission) {
-    assertMissionStateConsistent(mission);
+    const missionContributions = contributions.filter((row) => row.missionId === mission.id);
+    assertMissionStateConsistent(mission, { contributions: missionContributions });
     const copy = clone(mission);
     copy.updatedAt = copy.updatedAt || nowIso();
     missions.set(copy.id, copy);

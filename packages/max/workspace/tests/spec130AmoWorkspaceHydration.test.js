@@ -225,8 +225,8 @@ describe('SPEC-130 — AMO workspace hydration', () => {
     assert.ok(approvalEvents.includes('MISSION_STAGE_EXECUTION_COMPLETED'));
 
     const after = runtimeEngine.get(mission.id, '10');
-    assert.equal(after.stage, STAGES.UNDERSTAND);
-    assert.equal(after.pendingOperatorDecision, null);
+    assert.equal(after.stage, STAGES.DISCOVER);
+    assert.equal(after.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
   });
 
   it('falls back to SPEC-022 only when hydration succeeds with no AMO missions', async () => {

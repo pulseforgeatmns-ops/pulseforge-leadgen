@@ -9,7 +9,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const amo = require('../index');
-const { advancePlanAfterApproval, advanceDiscoveryAfterApproval } = require('../../max/workspace/AmoOperatorApproval');
+const { advancePlanAfterApproval, advanceDiscoveryAfterApproval, advancePrioritizationAfterApproval } = require('../../max/workspace/AmoOperatorApproval');
 const {
   bindStagePersistDurable,
   assertPersistedMatchesEngine,
@@ -297,8 +297,21 @@ describe('SPEC-139 — Transactional Durable Mission Persistence', () => {
     });
 
     const inMemory = engine.inspect(mission.id, { tenantId: '10' });
-    assert.equal(inMemory.mission.stage, amo.STAGES.UNDERSTAND);
+    assert.equal(inMemory.mission.stage, amo.STAGES.DISCOVER);
+    assert.equal(inMemory.mission.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
     assert.ok(inMemory.contributions.some((row) => row.specialist === amo.SPECIALISTS.SCOUT));
+
+    await advancePrioritizationAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved prioritization.',
+      persist: true,
+      pool,
+    });
+
+    const inMemoryAfterPrioritization = engine.inspect(mission.id, { tenantId: '10' });
+    assert.equal(inMemoryAfterPrioritization.mission.stage, amo.STAGES.UNDERSTAND);
 
     resetEngine();
     await hydrateTenant('10', { pool });
@@ -306,7 +319,7 @@ describe('SPEC-139 — Transactional Durable Mission Persistence', () => {
     const hydrated = getEngine().inspect(mission.id, { tenantId: '10' });
     assert.equal(hydrated.mission.stage, amo.STAGES.UNDERSTAND);
     assert.ok(hydrated.contributions.some((row) => row.specialist === amo.SPECIALISTS.SCOUT));
-    assert.equal(hydrated.mission.version, inMemory.mission.version);
+    assert.equal(hydrated.mission.version, inMemoryAfterPrioritization.mission.version);
   });
 
   it('persistence failure rolls back the in-memory commit', async () => {

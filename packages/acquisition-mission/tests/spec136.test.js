@@ -16,6 +16,7 @@ const {
   MISSION_STATE_INCONSISTENT,
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
+  hasPendingPrioritizationApproval,
   hasConsumablePendingDecision,
   presentableOperatorDecision,
   assertMissionStateConsistent,
@@ -23,6 +24,7 @@ const {
 const {
   advancePlanAfterApproval,
   advanceDiscoveryAfterApproval,
+  advancePrioritizationAfterApproval,
 } = require('../../max/workspace/AmoOperatorApproval');
 const { maybeHandleAcquisitionMissionExecution } = require('../../max/workspace/AcquisitionMissionExecution');
 
@@ -166,7 +168,7 @@ describe('SPEC-136 — Pending Operator Decision Consistency', () => {
     assert.equal(after.executableDecision.prompt, 'Approve discovery?');
   });
 
-  it('full lifecycle: plan → approve → discovery → consume → Scout → cleared', async () => {
+  it('full lifecycle: plan → approve → discovery → prioritization → understand', async () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = engine.create({
       tenantId: '10',
@@ -196,15 +198,29 @@ describe('SPEC-136 — Pending Operator Decision Consistency', () => {
     assert.ok(discoveryTurn.executionResult.discovery);
 
     const afterDiscovery = engine.inspect(mission.id, { tenantId: '10' });
-    assert.equal(afterDiscovery.mission.pendingOperatorDecision, null);
+    assert.equal(afterDiscovery.mission.stage, STAGES.DISCOVER);
+    assert.equal(hasPendingPrioritizationApproval(afterDiscovery), true);
+    assert.equal(afterDiscovery.mission.pendingOperatorDecision.kind, OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
     assert.equal(hasPendingDiscoveryApproval(afterDiscovery), false);
     assert.equal(hasPendingPlanApproval(afterDiscovery), false);
-    assert.equal(hasConsumablePendingDecision(afterDiscovery), false);
-    assert.equal(presentableOperatorDecision(afterDiscovery), null);
     assert.equal(
       afterDiscovery.contributions.some((row) => row.specialist === amo.SPECIALISTS.SCOUT),
       true
     );
+
+    await advancePrioritizationAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved prioritization.',
+    });
+
+    const afterPrioritization = engine.inspect(mission.id, { tenantId: '10' });
+    assert.equal(afterPrioritization.mission.stage, STAGES.UNDERSTAND);
+    assert.equal(afterPrioritization.mission.pendingOperatorDecision, null);
+    assert.equal(hasPendingPrioritizationApproval(afterPrioritization), false);
+    assert.equal(hasConsumablePendingDecision(afterPrioritization), false);
+    assert.equal(presentableOperatorDecision(afterPrioritization), null);
   });
 
   it('never executes generic operator_approved while a consumable decision exists', async () => {
@@ -231,35 +247,81 @@ describe('SPEC-136 — Pending Operator Decision Consistency', () => {
     );
   });
 
-  it('progressing off Discover clears unconsumable pending decisions', () => {
+  it('advancePrioritizationAfterApproval advances discover → understand', async () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = engine.create({
       tenantId: '10',
       objective: OBJECTIVE,
     });
-    engine.contribute(mission.id, {
-      specialist: amo.SPECIALISTS.SCOUT,
-      kind: amo.CONTRIBUTION_KINDS.DISCOVERY,
-      payload: {
-        companies: [{ id: 'c1', name: 'Harbor Law' }],
-        prospects: [{ id: 'p1', name: 'Alex' }],
-        buyingSignals: ['Hiring office manager'],
-        evidence: [{ label: 'Job post', source: 'job_board' }],
-        confidence: 0.8,
-      },
-    }, { tenantId: '10' });
-    const progressed = engine.progress(mission.id, { role: 'max' }, {
+    await advancePlanAfterApproval({
+      engine,
+      mission,
       tenantId: '10',
-      stage: STAGES.UNDERSTAND,
+      question: 'Approved.',
     });
+    await advanceDiscoveryAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved. Begin Discovery.',
+      allowFixtureFallback: true,
+    });
+
+    await advancePrioritizationAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved prioritization.',
+    });
+
+    const after = engine.inspect(mission.id, { tenantId: '10' });
+    assert.equal(after.mission.stage, STAGES.UNDERSTAND);
+    assert.equal(after.mission.pendingOperatorDecision, null);
+  });
+
+  it('progressing off Discover requires consumed prioritization approval', async () => {
+    const engine = amo.createAcquisitionMissionEngine();
+    const mission = engine.create({
+      tenantId: '10',
+      objective: OBJECTIVE,
+    });
+    await advancePlanAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved.',
+    });
+    await advanceDiscoveryAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved. Begin Discovery.',
+      allowFixtureFallback: true,
+    });
+    assert.throws(
+      () => engine.progress(mission.id, { role: 'max' }, {
+        tenantId: '10',
+        stage: STAGES.UNDERSTAND,
+      }),
+      (err) => err.code === 'amo_prioritization_pending'
+    );
+
+    await advancePrioritizationAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved prioritization.',
+    });
+    const progressed = engine.get(mission.id, '10');
     assert.equal(progressed.stage, STAGES.UNDERSTAND);
     assert.equal(progressed.pendingOperatorDecision, null);
     const snapshot = engine.inspect(mission.id, { tenantId: '10' });
     assert.equal(hasPendingPlanApproval(snapshot), false);
     assert.equal(hasPendingDiscoveryApproval(snapshot), false);
+    assert.equal(hasPendingPrioritizationApproval(snapshot), false);
   });
 
-  it('advanceDiscoveryAfterApproval consumes pending before Scout result is durable', async () => {
+  it('advanceDiscoveryAfterApproval leaves prioritization approval pending', async () => {
     const engine = amo.createAcquisitionMissionEngine();
     const mission = engine.create({
       tenantId: '10',
@@ -281,7 +343,8 @@ describe('SPEC-136 — Pending Operator Decision Consistency', () => {
       allowFixtureFallback: true,
     });
     assert.equal(result.executionOutcome, 'completed');
-    assert.equal(result.snapshot.mission.pendingOperatorDecision, null);
+    assert.equal(result.snapshot.mission.pendingOperatorDecision.kind, OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
+    assert.equal(hasPendingPrioritizationApproval(result.snapshot), true);
     assert.ok(result.discovery);
   });
 });

@@ -6,7 +6,6 @@
  */
 
 const amo = require('../../acquisition-mission');
-const { specialistContext } = require('../../acquisition-mission/Lifecycle');
 const { runScoutAcquisitionIntelligence } = require('../scoutAcquisition/ScoutAdapter');
 
 const {
@@ -64,12 +63,14 @@ const {
   hasPendingPlanClarification,
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
+  hasPendingPrioritizationApproval,
   hasConsumablePendingDecision,
   presentableOperatorDecision,
   assertMissionStateConsistent,
 } = require('../../acquisition-mission/PendingOperatorDecision');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
+const PRIORITIZATION_APPROVAL_ACTION = 'prioritization_approved';
 const PLAN_APPROVAL_ACTION = 'plan_approved';
 const PLAN_CLARIFICATION_ACTION = 'plan_clarified';
 const PLAN_CANCEL_ACTION = 'plan_cancelled';
@@ -372,6 +373,26 @@ function applyPlanEdits(input = {}) {
   return { snapshot: engine.inspect(mission.id, tenantId), planned };
 }
 
+function findPrioritizationApproval(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.OPERATOR &&
+        row.kind === CONTRIBUTION_KINDS.APPROVAL &&
+        (row.payload.action === PRIORITIZATION_APPROVAL_ACTION ||
+          row.payload.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL)
+    );
+}
+
+function findLatestScoutDiscovery(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
+    );
+}
+
 function findDiscoveryApproval(contributions = []) {
   return [...contributions]
     .reverse()
@@ -631,19 +652,15 @@ function commitDiscoveryStage({
     { tenantId }
   );
 
-  let snapshot = engine.inspect(missionId, { tenantId });
-  const ctx = specialistContext(snapshot.contributions || [], {});
-  if (ctx.scoutComplete && snapshot.mission.stage === STAGES.DISCOVER) {
-    engine.progress(missionId, SPECIALISTS.OPERATOR, {
-      tenantId,
-      stage: STAGES.UNDERSTAND,
-    });
-    snapshot = engine.inspect(missionId, { tenantId });
-  }
-
   const updated = engine.get(missionId, tenantId);
+  updated.pendingOperatorDecision = {
+    stage: STAGES.DISCOVER,
+    kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
+    prompt: 'Approve prioritization?',
+  };
   bumpMissionVersion(updated, transactionId);
   engine.store.putMission(updated);
+
   engine.store.addEvent(createEvent({
     missionId,
     kind: EVENT_KINDS.EXECUTION_COMMITTED,
@@ -658,7 +675,7 @@ function commitDiscoveryStage({
     },
   }));
 
-  snapshot = engine.inspect(missionId, { tenantId });
+  const snapshot = engine.inspect(missionId, { tenantId });
   assertMissionStateConsistent(snapshot.mission, {
     contributions: snapshot.contributions,
   });
@@ -848,6 +865,172 @@ async function advanceDiscoveryAfterApproval(input = {}) {
   };
 }
 
+function validatePrioritizationPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  if (!isStructuredMissionApproved(mission)) {
+    throw planningError('tme_plan_missing', 'Mission Plan missing.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  if (!hasPendingPrioritizationApproval(snapshot)) {
+    throw planningError('tme_no_pending_prioritization', 'No prioritization approval is pending.');
+  }
+  if (mission.stage && mission.stage !== STAGES.DISCOVER) {
+    throw planningError('tme_wrong_stage', `Prioritization cannot execute while the mission is at ${mission.stage}.`);
+  }
+  const discovery = findLatestScoutDiscovery(snapshot.contributions || []);
+  if (!discovery) {
+    throw planningError('tme_discovery_missing', 'Discovery artifact is required before prioritization approval.');
+  }
+  const presentation = presentationFromDiscoveryPayload(discovery.payload || {});
+  if (!hasSufficientEvidenceForPrioritization(presentation)) {
+    throw validationError('tme_evidence_insufficient', 'Insufficient evidence for prioritization approval.');
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function commitPrioritizationStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+  existingApproval,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { question } = output;
+  let approval = existingApproval;
+  if (!approval) {
+    const approvalResult = engine.contribute(
+      missionId,
+      {
+        specialist: SPECIALISTS.OPERATOR,
+        kind: CONTRIBUTION_KINDS.APPROVAL,
+        payload: {
+          approved: true,
+          consumed: true,
+          command: question,
+          action: PRIORITIZATION_APPROVAL_ACTION,
+          kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
+          stage: STAGES.DISCOVER,
+          transactionId,
+        },
+      },
+      { tenantId }
+    );
+    approval = approvalResult.contribution;
+  }
+
+  const current = engine.get(missionId, tenantId);
+  current.pendingOperatorDecision = null;
+  engine.store.putMission(current);
+
+  engine.progress(missionId, SPECIALISTS.OPERATOR, {
+    tenantId,
+    stage: STAGES.UNDERSTAND,
+  });
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.OPERATOR,
+    label: 'Prioritization approved — advancing to Understanding',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      approvalId: approval.id,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    approval,
+    snapshot,
+  };
+}
+
+/**
+ * Consume prioritization approval and advance discover → understand.
+ * SPEC-141 — the only path that transitions to Understanding after Discovery.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advancePrioritizationAfterApproval(input = {}) {
+  askPathTrace.traceEnter('advancePrioritizationAfterApproval');
+  const {
+    engine,
+    mission,
+    tenantId,
+    question,
+    operatorId,
+  } = input;
+
+  if (!engine || !mission) {
+    throw new Error('engine and mission are required');
+  }
+
+  let snapshot = engine.inspect(mission.id, { tenantId });
+  const contributions = snapshot.contributions || [];
+  const existingApproval = findPrioritizationApproval(contributions);
+
+  if (existingApproval && snapshot.mission.stage === STAGES.UNDERSTAND) {
+    askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'already_executed');
+    return {
+      alreadyExecuted: true,
+      approval: existingApproval,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+      approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    specialist: SPECIALISTS.OPERATOR,
+    stage: 'prioritization_approval',
+    operatorId,
+    validatePreconditions: (ctx) => validatePrioritizationPreconditions(ctx),
+    execute: async ({ mission: current }) => ({
+      question,
+      missionId: current.id,
+    }),
+    commit: (ctx) => commitPrioritizationStage({
+      ...ctx,
+      existingApproval,
+    }),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  snapshot = staged.commitResult.snapshot;
+  askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'completed');
+  return {
+    alreadyExecuted: false,
+    approval: staged.commitResult.approval,
+    snapshot,
+    approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+  };
+}
+
 function buildDiscoveryApprovalProse(result) {
   askPathTrace.traceEnter('buildDiscoveryApprovalProse');
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
@@ -892,12 +1075,14 @@ function buildDiscoveryApprovalProse(result) {
 module.exports = {
   APPROVAL_PHASES,
   DISCOVERY_APPROVAL_ACTION,
+  PRIORITIZATION_APPROVAL_ACTION,
   PLAN_APPROVAL_ACTION,
   PLAN_CLARIFICATION_ACTION,
   PLAN_CANCEL_ACTION,
   PLAN_EDIT_ACTION,
   buildDelegationFromAmoMission,
   findDiscoveryApproval,
+  findPrioritizationApproval,
   findPlanApproval,
   findScoutDiscoveryAfterApproval,
   hasPendingPlanApproval,
@@ -906,12 +1091,14 @@ module.exports = {
   presentableOperatorDecision,
   isMissionPlanningTurn,
   hasPendingDiscoveryApproval,
+  hasPendingPrioritizationApproval,
   advancePlanAfterApproval,
   advancePlanClarification,
   cancelMissionPlan,
   beginPlanEdit,
   applyPlanEdits,
   advanceDiscoveryAfterApproval,
+  advancePrioritizationAfterApproval,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,
   fixtureScoutDiscoveryResult,
