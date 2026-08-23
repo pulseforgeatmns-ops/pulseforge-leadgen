@@ -311,6 +311,14 @@ function buildResponseMetadata(partial = {}) {
     meta.businessIntelligenceUsed = false;
   }
   if (partial.identityConversation === true) meta.identityConversation = true;
+  if (partial.operatingModelReflection === true) meta.operatingModelReflection = true;
+  if (partial.operatingModelReflection === false) meta.operatingModelReflection = false;
+  if (partial.operatingModelReasoning != null) {
+    meta.operatingModelReasoning = partial.operatingModelReasoning;
+  }
+  if (partial.underlyingIntent != null) {
+    meta.underlyingIntent = String(partial.underlyingIntent);
+  }
   if (partial.reflectiveCognition === true) meta.reflectiveCognition = true;
   if (partial.conversationLayer === true) meta.conversationLayer = true;
   if (partial.conversationSubject != null) {

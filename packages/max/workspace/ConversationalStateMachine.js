@@ -28,6 +28,8 @@ const CONVERSATIONAL_MODES = Object.freeze({
   EDUCATION: 'education',
   EXPLORATION: 'exploration',
   CONTINUATION: 'continuation',
+  /** SPEC-151 — operating model reflection (why/how/compare/should/when). */
+  OPERATING_MODEL_REFLECTION: 'operating_model_reflection',
 });
 
 const SUBJECT_TO_OWNER = Object.freeze({
@@ -138,6 +140,8 @@ function modeFromIntent(intent) {
       return CONVERSATIONAL_MODES.CONTINUATION;
     case THINKING_MODES.CHALLENGE:
       return CONVERSATIONAL_MODES.REFLECTION;
+    case THINKING_MODES.OPERATING_MODEL:
+      return CONVERSATIONAL_MODES.OPERATING_MODEL_REFLECTION;
     default:
       return CONVERSATIONAL_MODES.EXPLANATION;
   }
@@ -212,12 +216,37 @@ function isExplicitSubjectChange(question) {
   return matchesAny(normalizeText(question), EXPLICIT_SUBJECT_CHANGE_RES);
 }
 
+function isIdentityOperatingModelFollowUp(question, priorState) {
+  if (!priorState || priorState.subject !== CONVERSATION_SUBJECTS.IDENTITY) {
+    return false;
+  }
+  const q = normalizeText(question);
+  if (isExplicitSubjectChange(q)) return false;
+
+  const identityFollowUpPatterns = [
+    /^why\b/i,
+    /\bwhen should i ignore\b/i,
+    /\bwhy shouldn'?t scout\b/i,
+    /\bhow is (?:that|this|it|max|you) different\b/i,
+    /\bwhat should never belong\b/i,
+    /\bwhat decisions require me\b/i,
+    /\bwhy (?:not merge|separate specialists)\b/i,
+    /\bvs\.?\s+(?:scout|paige|rex|emmett|sam|riley|cal|vera|max)\b/i,
+    /\bdifferent from\s+(?:scout|paige|rex|emmett|sam|riley|cal|vera)\b/i,
+  ];
+  return matchesAny(q, identityFollowUpPatterns);
+}
+
 function isContinuityFollowUp(question, priorState) {
   if (!priorState || !priorState.subject) return false;
 
   const q = normalizeText(question);
   if (!q) return false;
   if (isExplicitSubjectChange(q)) return false;
+
+  if (isIdentityOperatingModelFollowUp(q, priorState)) {
+    return true;
+  }
 
   const tokens = tokenize(q);
 
@@ -249,6 +278,14 @@ function resolveContinuityIntent(question, priorState) {
   }
 
   if (/^why\b/i.test(q) || /\bwhy (?:that|this|it)\b/i.test(q)) {
+    if (/\bwhy shouldn'?t scout do (?:your|max'?s?) job\b/i.test(q)) {
+      return {
+        intent: THINKING_MODES.COMPARE,
+        via: 'conversation_continuity_scout_job',
+        confidence: 0.93,
+        objects: ['max', 'scout'],
+      };
+    }
     return {
       intent: THINKING_MODES.EXPLAIN,
       via: 'conversation_continuity_why',
@@ -353,10 +390,16 @@ function applyConversationalContinuity(input = {}) {
   );
 
   conversationIntent = attachSpecialists({
-    intent: continuityIntent.intent,
+    intent:
+      inheritedSubject === CONVERSATION_SUBJECTS.IDENTITY
+        ? THINKING_MODES.OPERATING_MODEL
+        : continuityIntent.intent,
     confidence: continuityIntent.confidence,
     mutatesMission: false,
-    thinkingMode: thinkingModeCategory(continuityIntent.intent),
+    thinkingMode:
+      inheritedSubject === CONVERSATION_SUBJECTS.IDENTITY
+        ? 'operating_model_reflection'
+        : thinkingModeCategory(continuityIntent.intent),
     via: continuityIntent.via,
     specialists: null,
     continuity: true,
@@ -366,6 +409,7 @@ function applyConversationalContinuity(input = {}) {
       depth: priorState.depth,
     },
     compareObjects: continuityIntent.objects || null,
+    underlyingIntent: continuityIntent.intent,
   });
 
   const resolvedQuestion = buildResolvedQuestion(question, priorState, {

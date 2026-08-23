@@ -17,6 +17,8 @@ const THINKING_MODES = Object.freeze({
   TEACH: 'teach',
   EDIT: 'edit',
   RESUME: 'resume',
+  /** SPEC-151 — reasoning over the operating model (why/how/compare/should/when). */
+  OPERATING_MODEL: 'operating_model',
 });
 
 const THINKING_MODE_CATEGORY = Object.freeze({
@@ -31,6 +33,7 @@ const THINKING_MODE_CATEGORY = Object.freeze({
   [THINKING_MODES.BRAINSTORM]: 'exploration',
   [THINKING_MODES.TEACH]: 'education',
   [THINKING_MODES.RESUME]: 'continuation',
+  [THINKING_MODES.OPERATING_MODEL]: 'operating_model_reflection',
 });
 
 /** Only Execute and Edit may mutate mission state (SPEC-146 execution guard). */

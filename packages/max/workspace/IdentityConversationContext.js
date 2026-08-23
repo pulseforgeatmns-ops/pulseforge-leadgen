@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * SPEC-149 / SPEC-149A — Identity Conversation routing.
+ * SPEC-149 / SPEC-149A / SPEC-151 — Identity Conversation routing.
  * Answers questions about Max itself — role, capabilities, boundaries, roster.
+ * Follow-ups reason over the structured operating model (SPEC-151).
  * Does not receive Blueprint strategy or acquisition recommendations.
  */
 
@@ -22,6 +23,12 @@ const {
   operatingModeLabel,
   assertIdentityCompliance,
 } = require('../identity/MaxIdentity');
+const {
+  shouldUseOperatingModelReasoning,
+  composeIdentityReasoning,
+  planOperatingModelQuery,
+  reasoningMetadata,
+} = require('../identity/IdentityReasoning');
 
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -48,6 +55,16 @@ function classifyIdentityQuestion(question) {
   if (/\b(?:decision framework|how do you recommend|recommendation)\b/.test(q)) {
     return 'decision_framework';
   }
+  if (/\bwhen should i ignore\b/.test(q)) return 'failure_modes';
+  if (/\bwhy shouldn'?t scout\b/.test(q) || /\bwhy not merge scout\b/.test(q)) {
+    return 'operating_model_reasoning';
+  }
+  if (/\bwhy (?:does|do) pulseforge separate specialists\b/.test(q)) return 'operating_model_reasoning';
+  if (/\bwhy preserve operator authority\b/.test(q)) return 'operating_model_reasoning';
+  if (/\bwhat should never belong to you\b/.test(q)) return 'operating_model_reasoning';
+  if (/\bwhat decisions require me\b/.test(q)) return 'operating_model_reasoning';
+  if (/^why\b/.test(q)) return 'operating_model_reasoning';
+  if (/\b(?:different from|vs\.?|versus|compare)\b/.test(q)) return 'operating_model_reasoning';
   return 'role';
 }
 
@@ -114,19 +131,29 @@ function composeIdentityProse(question, session, registry) {
   return prose;
 }
 
-function buildIdentityStructured(prose, conversationIntent, conversationSubject) {
+function buildIdentityStructured(prose, conversationIntent, conversationSubject, reasoningMeta = null) {
+  const reasoning = [
+    'SPEC-149A — Identity subject routed before business intelligence.',
+    'Response grounded in Max operating-system role, capability registry, and delegation boundaries only.',
+  ];
+  if (reasoningMeta && reasoningMeta.operatingModelReflection) {
+    reasoning.push(
+      'SPEC-151 — Operating model reflection synthesized from structured concepts.',
+      `Reasoning target: ${reasoningMeta.reasoningTarget || 'unknown'}.`
+    );
+  }
+
   return buildStructuredResponse({
     answer: prose,
-    reasoning: [
-      'SPEC-149A — Identity subject routed before business intelligence.',
-      'Response grounded in Max operating-system role, capability registry, and delegation boundaries only.',
-    ],
+    reasoning,
     supportingEvidence: [],
     contradictingEvidence: [],
-    confidence: 0.96,
+    confidence: reasoningMeta && reasoningMeta.operatingModelReflection ? 0.97 : 0.96,
     nextInvestigations: [],
     recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
-    confidenceContributors: ['spec_149a', 'identity_conversation'],
+    confidenceContributors: reasoningMeta && reasoningMeta.operatingModelReflection
+      ? ['spec_151', 'operating_model_reflection']
+      : ['spec_149a', 'identity_conversation'],
     timelineReferences: [],
     relatedEntities: [],
     metadata: {
@@ -142,8 +169,11 @@ function buildIdentityStructured(prose, conversationIntent, conversationSubject)
       unavailable: ['blueprint_strategy', 'acquisition_recommendations'],
       identityConversation: true,
       businessIntelligenceUsed: false,
+      operatingModelReflection: Boolean(reasoningMeta && reasoningMeta.operatingModelReflection),
+      operatingModelReasoning: reasoningMeta || null,
       conversationSubject: conversationSubject && conversationSubject.subject,
       conversationIntent: conversationIntent && conversationIntent.intent,
+      underlyingIntent: conversationIntent && conversationIntent.underlyingIntent,
       readOnlyCognition: true,
     },
   });
@@ -162,6 +192,7 @@ async function maybeHandleIdentityTurn(input = {}) {
   askPathTrace.traceEnter('maybeHandleIdentityTurn', {
     subject: conversationSubject.subject,
     reason: conversationSubject.reason,
+    resolvedQuestion: input.resolvedQuestion || null,
   });
 
   const question = normalizeText(input.question);
@@ -174,21 +205,57 @@ async function maybeHandleIdentityTurn(input = {}) {
   const registry =
     input.capabilityRegistry || createDefaultCapabilityRegistry();
 
-  const prose = composeIdentityProse(question, session, registry);
+  let prose;
+  let reasoningMeta = null;
+  let answerKind = classifyIdentityQuestion(question);
+
+  if (shouldUseOperatingModelReasoning({
+    question,
+    resolvedQuestion: input.resolvedQuestion,
+    conversationIntent,
+    session,
+  })) {
+    const query = planOperatingModelQuery({
+      question,
+      resolvedQuestion: input.resolvedQuestion,
+      conversationIntent,
+      session,
+    });
+    prose = composeIdentityReasoning({
+      question,
+      resolvedQuestion: input.resolvedQuestion,
+      conversationIntent,
+      session,
+    });
+    reasoningMeta = reasoningMetadata(query);
+    if (prose) {
+      answerKind = 'operating_model_reasoning';
+    }
+  }
+
+  if (!prose) {
+    prose = composeIdentityProse(question, session, registry);
+  }
+
   const structured = buildIdentityStructured(
     prose,
     conversationIntent,
-    conversationSubject
+    conversationSubject,
+    reasoningMeta
   );
 
-  askPathTrace.traceEarlyReturn('maybeHandleIdentityTurn', 'identity_composed');
+  askPathTrace.traceEarlyReturn('maybeHandleIdentityTurn', reasoningMeta && reasoningMeta.operatingModelReflection
+    ? 'operating_model_reasoning'
+    : 'identity_composed');
 
   return {
     handled: true,
     prose,
     structured,
-    reason: 'identity_conversation',
-    answered: { kind: 'identity', identityKind: classifyIdentityQuestion(question) },
+    reason: reasoningMeta && reasoningMeta.operatingModelReflection
+      ? 'operating_model_reflection'
+      : 'identity_conversation',
+    answered: { kind: 'identity', identityKind: answerKind },
   };
 }
 
