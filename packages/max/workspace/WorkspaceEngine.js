@@ -572,6 +572,19 @@ class WorkspaceEngine {
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
         askPathTrace.traceBranch('runtime:amo');
 
+        if (runtimeDecision.mission) {
+          conversationIntent = attachSpecialists(
+            classifyOperatorCognition(question, {
+              session,
+              context: rawContext || session.context,
+              mission: runtimeDecision.mission,
+            })
+          );
+          if (session.context && typeof session.context === 'object') {
+            session.context.conversationIntent = conversationIntent;
+          }
+        }
+
         if (isReadOnlyCognition(conversationIntent)) {
           const cognitionTurn = await maybeHandleOperatorCognitionTurn({
             question,

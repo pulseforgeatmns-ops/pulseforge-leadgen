@@ -72,6 +72,20 @@ class PresentationEngine {
       };
     }
 
+    // SPEC-147 — conversational intelligence responses are already natural-language prose.
+    if (metadata.conversationalIntelligence === true) {
+      prose = formatDeterministicProse(structured);
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'conversational_intelligence',
+        },
+        presentation: 'conversational_intelligence',
+      };
+    }
+
     // Strict output-shape / packet-review artifact mode: answer is already the
     // operator artifact — do not append Reasoning / Unavailable / Next, and do
     // not rephrase via Claude.

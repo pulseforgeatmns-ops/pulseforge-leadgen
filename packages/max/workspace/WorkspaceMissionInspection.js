@@ -7,11 +7,12 @@
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const {
-  buildAcquisitionMissionCommunication,
-  formatMissionProse,
-  applyMissionCommunication,
   looksLikeReasoningRequest,
 } = require('./MissionCommunication');
+const {
+  composeConversationalResponse,
+  applyConversationalPresentation,
+} = require('./ConversationLayer');
 const {
   INSPECTION_PROPERTIES,
   inspectQuestion,
@@ -19,6 +20,7 @@ const {
   formatInspection,
   referencesMissionState,
   referencesSpecialistState,
+  buildMissionContext,
 } = require('../../acquisition-mission/Inspection');
 const { formatExplain } = require('../../acquisition-mission/Explain');
 const { formatWorkspace } = require('../../acquisition-mission/Workspace');
@@ -46,14 +48,33 @@ function looksLikeAcquisitionMissionQuestion(question) {
   );
 }
 
+const CONVERSATIONAL_MISSION_MODES = Object.freeze([
+  'inspect',
+  'explain',
+  'challenge',
+  'compare',
+  'strategy',
+  'brainstorm',
+  'teach',
+  'resume',
+]);
+
 function shouldInspectActiveMission(question, hasActiveMission, conversationIntent = null) {
-  if (conversationIntent && ['inspect', 'explain', 'challenge', 'compare'].includes(conversationIntent.intent)) {
+  if (
+    conversationIntent &&
+    CONVERSATIONAL_MISSION_MODES.includes(conversationIntent.intent)
+  ) {
     if (hasActiveMission || looksLikeAcquisitionMissionQuestion(question) || referencesSpecialistState(question)) {
       return true;
     }
   }
   if (!hasActiveMission) return looksLikeAcquisitionMissionQuestion(question);
   return Boolean(classifyInspectionQuestion(question)) || referencesSpecialistState(question);
+}
+
+function isConversationalFallbackMode(conversationIntent) {
+  if (!conversationIntent || !conversationIntent.intent) return false;
+  return ['strategy', 'brainstorm', 'teach'].includes(conversationIntent.intent);
 }
 
 function resolveTenantId(input = {}) {
@@ -184,31 +205,22 @@ function buildAnswerFromInspection(question, snapshot, mission, inspection) {
   return null;
 }
 
-function buildMissionInspectionResponse(question, answered) {
+function buildMissionInspectionResponse(question, answered, input = {}) {
   const explicitReasoning = looksLikeReasoningRequest(question);
   const inspectionProperty =
     answered.inspection && answered.inspection.property
       ? answered.inspection.property
       : classifyInspectionQuestion(question);
 
-  const missionComm = buildAcquisitionMissionCommunication(
-    {
-      mission: answered.mission,
-      workspace: answered.kind === 'workspace' ? answered.structured : answered.missionContext,
-      blocker: answered.kind === 'blocker' ? answered.structured : null,
-      health: answered.kind === 'health' ? answered.structured : null,
-      why: answered.kind === 'explain' ? answered.structured : null,
-      inspection: answered.kind === 'inspection' ? answered.structured : null,
-      missionContext: answered.missionContext || null,
-    },
-    {
-      kind: answered.kind,
-      includeReasoning: explicitReasoning,
-    }
-  );
-  const prose = answered.prose || formatMissionProse(missionComm, {
-    explicitReasoningRequest: explicitReasoning,
+  const conversational = composeConversationalResponse({
+    question,
+    conversationIntent: input.conversationIntent || null,
+    snapshot: input.snapshot || {},
+    answered,
+    session: input.session || null,
+    explicitReasoning,
   });
+  const prose = conversational.prose;
 
   const base = buildStructuredResponse({
     answer: prose,
@@ -232,7 +244,7 @@ function buildMissionInspectionResponse(question, answered) {
       sourcesUsed: {
         briefing: false,
         reasoning: false,
-        memory: false,
+        memory: Boolean(input.session && input.session.conversationMemory),
         policy: false,
         knowledge: false,
         missionState: true,
@@ -249,11 +261,9 @@ function buildMissionInspectionResponse(question, answered) {
     },
   });
 
-  const structured = applyMissionCommunication(base, missionComm, {
-    includeReasoningInStructured: explicitReasoning,
-  });
+  const structured = applyConversationalPresentation(base, conversational);
 
-  return { structured, prose, inspectionProperty };
+  return { structured, prose, inspectionProperty, conversational };
 }
 
 /**
@@ -352,6 +362,58 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
   const answered = buildAnswerFromInspection(question, snapshot, mission, inspection);
 
   if (!answered || answered.kind === 'inspection_fallback') {
+    if (isConversationalFallbackMode(input.conversationIntent)) {
+      const missionContext = buildMissionContext(snapshot);
+      const fallbackAnswered = {
+        kind: 'conversational',
+        prose: null,
+        structured: missionContext,
+        mission,
+        missionContext,
+        inspection: {
+          property: null,
+          pipeline: PIPELINE_MISSION_INSPECTION,
+          resolved: true,
+        },
+        invented: false,
+      };
+      const { structured, prose, inspectionProperty } = buildMissionInspectionResponse(
+        question,
+        fallbackAnswered,
+        {
+          conversationIntent: input.conversationIntent,
+          snapshot,
+          session: input.session,
+        }
+      );
+      emitInspectionResult({
+        claimed: true,
+        property: inspectionProperty,
+        confidence: mission.confidence,
+        missionId: mission.id,
+        reason: 'conversational_fallback',
+      });
+      emitPipeline({
+        selectedPipeline: PIPELINE_MISSION_INSPECTION,
+        reason: 'conversational_fallback',
+        missionId: mission.id,
+      });
+      emitResponse({
+        selectedPipeline: PIPELINE_MISSION_INSPECTION,
+        missionId: mission.id,
+        inspectionProperty,
+        reason: 'conversational_fallback_complete',
+      });
+      return {
+        reason: 'conversational_fallback',
+        structured,
+        prose,
+        answered: fallbackAnswered,
+        ownershipTrace: traceOwnership(),
+        audit,
+      };
+    }
+
     emitInspectionResult({
       claimed: false,
       property: inspection && inspection.property ? inspection.property : null,
@@ -389,7 +451,15 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
     missionId: mission.id,
   });
 
-  const { structured, prose, inspectionProperty } = buildMissionInspectionResponse(question, answered);
+  const { structured, prose, inspectionProperty } = buildMissionInspectionResponse(
+    question,
+    answered,
+    {
+      conversationIntent: input.conversationIntent,
+      snapshot,
+      session: input.session,
+    }
+  );
 
   emitResponse({
     selectedPipeline: PIPELINE_MISSION_INSPECTION,
@@ -411,6 +481,7 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
 module.exports = {
   PIPELINE_MISSION_INSPECTION,
   PIPELINE_RETRIEVAL,
+  CONVERSATIONAL_MISSION_MODES,
   resolveMissionId,
   resolveAcquisitionMissionRuntime,
   resolveAcquisitionEngine,
@@ -421,5 +492,6 @@ module.exports = {
   looksLikeAcquisitionMissionQuestion,
   referencesMissionState,
   shouldInspectActiveMission,
+  isConversationalFallbackMode,
   resolveTenantId,
 };
