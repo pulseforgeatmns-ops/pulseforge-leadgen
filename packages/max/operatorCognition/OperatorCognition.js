@@ -37,10 +37,29 @@ const INSPECT_RES = [
   /\bwhat(?:'s| is) the current (?:stage|phase)\b/i,
 ];
 
+const REFLECT_RES = [
+  /\bwhat did you think i (?:was )?(?:ask(?:ing|ed)|mean(?:t|ing)?)\b/i,
+  /\bwhy did you answer (?:like )?that\b/i,
+  /\bwalk me through (?:your )?(?:reasoning|logic|thought process)\b/i,
+  /\bwhy are you waiting\b/i,
+  /\bwhat assumptions (?:are you|did you) (?:mak(?:ing|e)|made)\b/i,
+  /\bwhat were you trying to (?:accomplish|do)\b/i,
+  /\bdid you misunderstand me\b/i,
+  /\bwhat pipeline (?:answered|handled|claimed|selected)\b/i,
+  /\bwhy did scout (?:run|execute)\b/i,
+  /\bwhy didn'?t scout (?:run|execute)\b/i,
+  /\bwhy did you recommend\b/i,
+  /\bwould you answer differently (?:now|today)\b/i,
+  /\bwhat (?:was|is) your (?:reasoning|interpretation)\b/i,
+  /\bexplain (?:your )?(?:reasoning|interpretation|assumptions)\b/i,
+  /\bwhere are you uncertain\b/i,
+  /\bwhat else could you have (?:answered|said|done)\b/i,
+  /\bwhat would you improve\b/i,
+  /\bi don'?t agree with your (?:earlier )?recommendation\b/i,
+];
+
 const EXPLAIN_RES = [
   /\bwhy (?:did|does|is|are|was|were|has|have|couldn'?t|didn'?t)\b/i,
-  /\bexplain (?:your )?reasoning\b/i,
-  /\bwalk me through\b/i,
   /\bexplain (?:why|that|this)\b/i,
   new RegExp(String.raw`\bwhy did (?:${SPECIALIST_NAMES})\b`, 'i'),
   new RegExp(String.raw`\bwhy (?:has|hasn't|did|didn't) (?:${SPECIALIST_NAMES})\b`, 'i'),
@@ -135,6 +154,10 @@ function classifyOperatorCognition(question, input = {}) {
     return buildConversationIntent(THINKING_MODES.RESUME, 'resume_phrase', 0.93);
   }
 
+  if (matchesAny(q, REFLECT_RES)) {
+    return buildConversationIntent(THINKING_MODES.REFLECT, 'reflect_phrase', 0.96);
+  }
+
   if (matchesAny(q, EDIT_RES)) {
     return buildConversationIntent(THINKING_MODES.EDIT, 'edit_phrase', 0.91);
   }
@@ -210,5 +233,6 @@ module.exports = {
   attachSpecialists,
   EXECUTE_RES,
   INSPECT_RES,
+  REFLECT_RES,
   EXPLAIN_RES,
 };

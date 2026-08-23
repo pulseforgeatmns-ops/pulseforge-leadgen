@@ -12,6 +12,7 @@ const MODE_SPECIALISTS = Object.freeze({
   [THINKING_MODES.EXECUTE]: ['scout', 'max', 'emmett', 'paige'],
   [THINKING_MODES.EDIT]: ['max'],
   [THINKING_MODES.INSPECT]: ['max'],
+  [THINKING_MODES.REFLECT]: ['max'],
   [THINKING_MODES.EXPLAIN]: ['scout', 'max'],
   [THINKING_MODES.CHALLENGE]: ['scout', 'max'],
   [THINKING_MODES.COMPARE]: ['scout', 'max'],
