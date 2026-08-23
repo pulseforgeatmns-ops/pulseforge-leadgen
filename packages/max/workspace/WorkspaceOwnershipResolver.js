@@ -59,6 +59,7 @@ const WORKSPACE_OWNERS = Object.freeze({
   SPECIALIST_DIRECTION: 'specialist_direction',
   KNOWLEDGE_RETRIEVAL: 'knowledge_retrieval',
   REASONING: 'reasoning',
+  REFLECTION: 'reflection',
 });
 
 /** Mission Engine keywords — bind immediately when not superseded by Blueprint topics. */
@@ -307,6 +308,7 @@ function claimsKnowledgeRetrieval(question) {
  * @param {string} input.question
  * @param {object} [input.session]
  * @param {object} [input.context]
+ * @param {object} [input.conversationSubject] — SPEC-148 subject lock
  * @param {object} [input.missionEngine]
  * @param {boolean} [input.missionsEnabled]
  * @param {boolean} [input.resolverEnabled]
@@ -323,6 +325,20 @@ async function resolveWorkspaceOwner(input = {}) {
       confidence: 1,
       specialist: null,
       fallback: true,
+    };
+  }
+
+  // SPEC-148 — reasoning subject locks ownership to Reflection before any business pipeline.
+  const subject = input.conversationSubject || null;
+  if (subject && subject.subject === 'reasoning' && subject.locked) {
+    askPathTrace.traceOwner(WORKSPACE_OWNERS.REFLECTION, subject.via || 'reasoning_subject_lock');
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'reasoning_subject_lock');
+    return {
+      owner: WORKSPACE_OWNERS.REFLECTION,
+      reason: subject.via || 'reasoning_subject_lock',
+      confidence: subject.confidence || 0.95,
+      specialist: null,
+      subjectLock: true,
     };
   }
 

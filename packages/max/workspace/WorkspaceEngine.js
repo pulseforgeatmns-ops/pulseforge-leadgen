@@ -54,6 +54,8 @@ const {
   isReadOnlyCognition,
 } = require('../operatorCognition');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
+const { detectConversationSubject } = require('./ConversationSubject');
+const { maybeHandleReflectionTurn } = require('./ReflectionRouting');
 const {
   createWorkspaceOwnershipAudit,
 } = require('./audit/WorkspaceOwnershipAudit');
@@ -439,6 +441,15 @@ class WorkspaceEngine {
     });
 
     // SPEC-146 — Operator Cognition runs before mission runtime or execution.
+    const previousTurnContext =
+      session.context && typeof session.context === 'object'
+        ? {
+            conversationIntent: session.context.conversationIntent || null,
+            workspaceOwner: session.context.workspaceOwner || null,
+            workspaceOwnerReason: session.context.workspaceOwnerReason || null,
+          }
+        : null;
+
     let conversationIntent = attachSpecialists(
       classifyOperatorCognition(question, {
         session,
@@ -455,13 +466,29 @@ class WorkspaceEngine {
       confidence: conversationIntent.confidence,
     });
 
-    // SPEC-125 — Ownership-first runtime. Resolve owner before intent classification.
+    const conversationSubject = detectConversationSubject(
+      question,
+      conversationIntent,
+      session
+    );
+    if (session.context && typeof session.context === 'object') {
+      session.context.conversationSubject = conversationSubject.subject;
+      session.context.conversationSubjectLocked = conversationSubject.locked;
+    }
+    askPathTrace.traceBranch('conversation_subject', {
+      subject: conversationSubject.subject,
+      locked: conversationSubject.locked,
+      via: conversationSubject.via,
+    });
+
+    // SPEC-125 — Ownership-first runtime. Subject governs owner before business pipelines.
     const ownershipAudit =
       this._ownershipAudit || createWorkspaceOwnershipAudit();
     workspaceOwnership = await resolveWorkspaceOwner({
       question,
       session,
       context: rawContext || session.context,
+      conversationSubject,
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
@@ -519,6 +546,79 @@ class WorkspaceEngine {
         session.context.workspaceOwnerReason = workspaceOwnership.reason;
       }
     };
+
+    // SPEC-148 — Reflection. Subject = reasoning locks ownership; no business subsystem may claim.
+    if (ownerIs(WORKSPACE_OWNERS.REFLECTION)) {
+      askPathTrace.traceBranch('owner_pipeline:reflection');
+      const reflectionTurn = await maybeHandleReflectionTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        conversationIntent,
+        conversationSubject,
+        previousTurnContext,
+      });
+      if (reflectionTurn && reflectionTurn.handled) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'reflection';
+        }
+        const structuredReflection = reflectionTurn.structured;
+        const presentedReflection = await this._presentation.present(structuredReflection);
+        const proseReflection = presentedReflection.prose || reflectionTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseReflection,
+          structured: structuredReflection,
+        });
+        return traceAskReturn('reflective_cognition', {
+          sessionId: session.id,
+          prose: proseReflection,
+          structured: structuredReflection,
+          metadata: {
+            ...(presentedReflection.metadata || {}),
+            conversationIntent,
+            conversationSubject,
+          },
+          suggestions: resolveResultSuggestions({
+            structured: structuredReflection,
+            session,
+            question,
+          }),
+          recommendedActions: structuredReflection.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedReflection.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: { action: 'reflected', reason: reflectionTurn.reason },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent,
+          conversationSubject,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: reflectionTurn.reason,
+            missionType: null,
+            missionIntent: conversationIntent.intent,
+            confidence: conversationIntent.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: reflectionTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership,
+        }, { responseOwner: WORKSPACE_OWNERS.REFLECTION });
+      }
+      fallbackToReasoning('reflection_unhandled');
+    }
 
     // 1 — Active Mission. Owner is not enough: dispatch by mission type (SPEC-129).
     if (ownerIs(WORKSPACE_OWNERS.ACTIVE_MISSION)) {

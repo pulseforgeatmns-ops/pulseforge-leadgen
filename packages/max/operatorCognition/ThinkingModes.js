@@ -8,6 +8,7 @@
 const THINKING_MODES = Object.freeze({
   EXECUTE: 'execute',
   INSPECT: 'inspect',
+  REFLECT: 'reflect',
   EXPLAIN: 'explain',
   CHALLENGE: 'challenge',
   COMPARE: 'compare',
@@ -22,6 +23,7 @@ const THINKING_MODE_CATEGORY = Object.freeze({
   [THINKING_MODES.EXECUTE]: 'execution',
   [THINKING_MODES.EDIT]: 'execution',
   [THINKING_MODES.INSPECT]: 'inspection',
+  [THINKING_MODES.REFLECT]: 'reflection',
   [THINKING_MODES.EXPLAIN]: 'reasoning',
   [THINKING_MODES.CHALLENGE]: 'reasoning',
   [THINKING_MODES.COMPARE]: 'reasoning',
