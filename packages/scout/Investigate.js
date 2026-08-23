@@ -89,6 +89,9 @@ async function investigate(input) {
     evidencePlan: engineResult.evidencePlan,
     providerStrategy: engineResult.providerStrategy,
     opportunities: rankedOpportunities,
+    startingPoint: engineResult.startingPoint || null,
+    memoryLoaded: engineResult.memoryLoaded === true,
+    memoryPersist: engineResult.memoryPersist || null,
   };
 }
 

@@ -35,6 +35,12 @@ const {
   emitInvestigationConflict,
   emitInvestigationCompleted,
 } = require('./observability');
+const {
+  prepareInvestigationWithMemory,
+  persistInvestigationKnowledge,
+  emitMemoryEvent,
+  MEMORY_EVENTS,
+} = require('../memory');
 
 function mergeCandidateEvidence(candidate, collected) {
   const existing = candidate.evidence || [];
@@ -97,6 +103,21 @@ async function runInvestigationEngine(input = {}) {
 
   const baseHypotheses = generateHypotheses(marketDefinition, mission, opts);
 
+  const memoryPrep = await prepareInvestigationWithMemory({
+    tenantId: mission.tenantId || mission.clientId,
+    mission,
+    marketDefinition,
+    opts: { ...opts, store: opts.memoryStore },
+  });
+  const startingPoint = memoryPrep.startingPoint;
+  if (memoryPrep.hasPriorKnowledge) {
+    emitMemoryEvent(MEMORY_EVENTS.LOADED, {
+      tenantId: mission.tenantId,
+      missionId,
+      counts: startingPoint.counts,
+    });
+  }
+
   const candidateUniverse = await discoverCandidateUniverse({
     marketDefinition,
     delegation: input.delegation,
@@ -105,7 +126,28 @@ async function runInvestigationEngine(input = {}) {
     opts,
   });
 
-  const candidates = candidateUniverse.candidates || candidateUniverse.resolved || [];
+  let candidates = candidateUniverse.candidates || candidateUniverse.resolved || [];
+
+  if ((startingPoint.inheritedEvidence || []).length) {
+    const evidenceByEntity = new Map();
+    for (const item of startingPoint.inheritedEvidence) {
+      const key = item.entityId;
+      if (!evidenceByEntity.has(key)) evidenceByEntity.set(key, []);
+      evidenceByEntity.get(key).push(item);
+    }
+    candidates = candidates.map((c) => {
+      const inherited = evidenceByEntity.get(c.id) || [];
+      if (!inherited.length) return c;
+      const merged = [...(c.evidence || [])];
+      for (const item of inherited) {
+        if (!merged.some((e) => e.source === item.source && e.label === item.label)) {
+          merged.push(item);
+        }
+      }
+      return { ...c, evidence: merged };
+    });
+  }
+
   const graph = createInvestigationGraph({
     missionId: mission.id,
     mission,
@@ -124,10 +166,16 @@ async function runInvestigationEngine(input = {}) {
   const providerStrategy = buildProviderStrategy(evidencePlan, opts);
 
   const attempted = new Set();
-  const resolvedGaps = new Set();
+  for (const step of startingPoint.skippedSteps || []) {
+    const stepKey = `${step.entityId || 'global'}:${step.gap}:${step.providerId}:${step.capability}`;
+    attempted.add(stepKey);
+  }
+  const resolvedGaps = new Set(
+    (memoryPrep.memory?.investigation?.resolvedGaps || []).map(String)
+  );
   const iterations = [];
   let totalCost = 0;
-  let allClaims = [];
+  let allClaims = (startingPoint.preloadedClaims || []).map((c) => ({ ...c }));
   let workingCandidates = candidates.map((c) => ({ ...c, evidence: c.evidence || [] }));
   let allConflicts = [];
 
@@ -289,7 +337,7 @@ async function runInvestigationEngine(input = {}) {
     claims: allClaims.length,
   });
 
-  return buildInvestigationResult({
+  const investigationResult = buildInvestigationResult({
     outcome: candidates.length > 0 ? 'completed' : 'partial',
     completionReason,
     iterations,
@@ -308,6 +356,25 @@ async function runInvestigationEngine(input = {}) {
     providerStrategy,
     evidencePlan,
   });
+
+  let memoryPersist = null;
+  if (opts.persistMemory !== false) {
+    memoryPersist = await persistInvestigationKnowledge(investigationResult, {
+      tenantId: mission.tenantId || mission.clientId,
+      missionId,
+      mission,
+      store: opts.memoryStore,
+      completedAt: new Date().toISOString(),
+      opts,
+    });
+  }
+
+  return {
+    ...investigationResult,
+    startingPoint,
+    memoryLoaded: memoryPrep.hasPriorKnowledge,
+    memoryPersist,
+  };
 }
 
 module.exports = {
