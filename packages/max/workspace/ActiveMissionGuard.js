@@ -105,12 +105,16 @@ async function resolveAcquisitionActiveMission(input = {}) {
 
 /**
  * @param {object} input
+ * @param {boolean} [input.detectExecution=false] — SPEC-140: execution language is illegal
+ *   until ownership is established. Only set true on the reasoning fallback path after
+ *   ownership resolution has already selected a non-mission owner.
  * @returns {Promise<{ active: boolean, mission: object|null, source: 'legacy'|'amo'|null, missionId: string|null, executionCommand: boolean, explicitExit: boolean, exitReason: string|null }>}
  */
 async function resolveActiveMissionLock(input = {}) {
   askPathTrace.traceEnter('resolveActiveMissionLock');
   const question = normalizeText(input.question);
-  const executionCommand = isMissionExecutionCommand(question);
+  const executionCommand =
+    input.detectExecution === true && isMissionExecutionCommand(question);
   const exit = isExplicitMissionExit(question);
 
   const amoMission = await resolveAcquisitionActiveMission(input);
