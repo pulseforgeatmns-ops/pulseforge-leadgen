@@ -37,7 +37,7 @@ const AGENT_META = {
   paige:  { name: 'Paige',  label: 'PAIGE',  role: 'Content Agent',       icon: '✍️', color: '#00c896', ringOffset: 230 },
   faye:   { name: 'Faye',   label: 'FAYE',   role: 'Facebook Agent',      icon: 'f', color: '#5ba3f5', ringOffset: 180 },
   vera:   { name: 'Vera',   label: 'VERA',   role: 'Review Agent',        icon: '⭐', color: '#f4b942', ringOffset: 230 },
-  max:    { name: 'Max',    label: 'MAX',    role: 'Manager Agent',       icon: '🧠', color: '#8b5cf6', ringOffset: 12 },
+  max:    { name: 'Max',    label: 'MAX',    role: 'Business Operating System', icon: '🧠', color: '#8b5cf6', ringOffset: 12 },
   rex:    { name: 'Rex',    label: 'REX',    role: 'Reporting Agent',     icon: '▣', color: '#00e676', ringOffset: 95 },
   cal:    { name: 'Cal',    label: 'CAL',    role: 'Calendar Agent',      icon: '◷', color: '#22d3ee', ringOffset: 140 },
   link:   { name: 'Link',   label: 'LINK',   role: 'LinkedIn Agent',      icon: 'in', color: '#5b9fd4', ringOffset: 170 },

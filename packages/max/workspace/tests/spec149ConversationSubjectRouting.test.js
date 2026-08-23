@@ -174,7 +174,7 @@ describe('SPEC-149 — Conversation Subject Routing', () => {
       });
       assert.ok(turn);
       assert.equal(turn.handled, true);
-      assert.match(turn.prose, /Max|acquisition mission manager|orchestrat/i);
+      assert.match(turn.prose, /Max|operating system|coordinate/i);
       assert.doesNotMatch(turn.prose, /repeatable commercial acquisition motion/i);
       assert.doesNotMatch(turn.prose, /ideal customer|ICP|Blueprint/i);
       assert.equal(turn.structured.metadata.businessIntelligenceUsed, false);
@@ -185,7 +185,7 @@ describe('SPEC-149 — Conversation Subject Routing', () => {
       const prose = composeIdentityProse('Who are you?', { context: {} }, {
         listCallable: () => [{ specialist: 'scout', capability: 'acquisition_intelligence' }],
       });
-      assert.match(prose, /Max/i);
+      assert.match(prose, /operating system/i);
       assert.doesNotMatch(prose, /Blueprint|ICP|commercial acquisition motion/i);
     });
   });
@@ -311,7 +311,7 @@ describe('SPEC-149 — Conversation Subject Routing', () => {
       assert.ok(result.routingTrace);
       assert.equal(result.routingTrace.subject, 'identity');
       assert.equal(result.routingTrace.pipeline, 'IdentityConversation');
-      assert.match(result.prose, /Max|acquisition mission manager/i);
+      assert.match(result.prose, /Max|operating system/i);
       assert.doesNotMatch(result.prose, /repeatable commercial acquisition motion|ideal customer profile/i);
     });
 
