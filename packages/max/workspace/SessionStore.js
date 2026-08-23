@@ -75,7 +75,15 @@ class SessionStore {
       null;
     const nextActive =
       (context && context.activeWorkContext) || priorActive || null;
+    const preservedConversationalState =
+      session.conversationalState ||
+      (session.context && session.context.conversationalState) ||
+      null;
     session.context = context;
+    if (preservedConversationalState) {
+      session.conversationalState = preservedConversationalState;
+      session.context.conversationalState = preservedConversationalState;
+    }
     if (nextActive) {
       session.activeWorkContext = nextActive;
       session.context.activeWorkContext = nextActive;

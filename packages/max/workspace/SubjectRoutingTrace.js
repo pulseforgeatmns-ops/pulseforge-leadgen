@@ -57,6 +57,7 @@ function buildRoutingTrace(input = {}) {
   const conversationSubject = input.conversationSubject || null;
   const conversationIntent = input.conversationIntent || null;
   const workspaceOwnership = input.workspaceOwnership || null;
+  const conversationalState = input.conversationalState || null;
   const owner = workspaceOwnership && workspaceOwnership.owner ? workspaceOwnership.owner : null;
   const subject = conversationSubject && conversationSubject.subject
     ? conversationSubject.subject
@@ -72,6 +73,17 @@ function buildRoutingTrace(input = {}) {
     owner,
     pipeline: input.pipeline || pipelineForOwner(owner, subject),
     claimedBy: claimedByFor(input),
+    activeObject: conversationalState && conversationalState.activeObject
+      ? conversationalState.activeObject
+      : null,
+    mode: conversationalState && conversationalState.mode
+      ? conversationalState.mode
+      : null,
+    depth: conversationalState && conversationalState.depth
+      ? conversationalState.depth
+      : null,
+    resolvedQuestion: input.resolvedQuestion || null,
+    continuity: Boolean(conversationIntent && conversationIntent.continuity),
   };
 }
 
