@@ -5,6 +5,9 @@ const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { getRequestClientId } = require('../utils/clientContext');
 const { routeIntent, ROUTE_KINDS, activeMissionResolverEnabled } = require('../packages/mission-engine');
 const { getMissionEngine, missionEnabled } = require('../utils/missionRuntime');
+const { detectConversationSubject } = require('../packages/max/workspace/ConversationSubject');
+const { maybeHandleIdentityTurn } = require('../packages/max/workspace/IdentityConversationContext');
+const { LEGACY_CHAT_SYSTEM } = require('../packages/max/identity/MaxIdentity');
 
 function shouldRouteAoQuestion(question) {
   return /\b(ao|anchor|mike|field visit|campaign 001|direct mail|walkthrough|escalation|ao lead|who do i need to call|what happened today|what needs my attention|hottest ao|current cleaner|objection|promot.*crm)\b/i.test(question);
@@ -155,6 +158,23 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
 
     const clientId = getRequestClientId(req);
 
+    const conversationSubject = detectConversationSubject(question);
+    if (conversationSubject.subject === 'identity') {
+      const identityTurn = await maybeHandleIdentityTurn({
+        question,
+        conversationSubject,
+        session: { context: { tenantId: String(clientId) } },
+      });
+      if (identityTurn && identityTurn.handled) {
+        return res.json({
+          answer: identityTurn.prose,
+          route: 'identity',
+          sources: ['max_identity'],
+          context_generated_at: new Date().toISOString(),
+        });
+      }
+    }
+
     // SPEC-039 / ADR-025: Active Mission Resolver before IntentRouter.
     if (missionEnabled()) {
       const engine = await getMissionEngine();
@@ -295,7 +315,7 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
     const message = await anthropic.messages.create({
       model: process.env.MAX_CHAT_MODEL || 'claude-sonnet-4-6',
       max_tokens: 700,
-      system: `You are Max, the manager agent for Pulseforge. You answer operator questions about the sales and marketing pipeline using only the provided database context. Be concise, direct, and practical. If the context does not contain enough evidence, say what is missing instead of inventing details. Prioritize warm signals, pipeline risk, next actions, and anomalies. When the user asks you to take an action like triggering Emmett or flagging prospects, respond with the specific prospect names and emails from the context provided, and confirm what action you would take. You have access to real prospect data - use it.`,
+      system: LEGACY_CHAT_SYSTEM,
       messages: [{
         role: 'user',
         content: `Current pipeline context:

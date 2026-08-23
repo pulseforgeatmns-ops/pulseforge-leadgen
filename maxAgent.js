@@ -12,6 +12,7 @@ const { sendMiraTelegramMessage } = require('./utils/miraCorrections');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { formatShadowDigest, getShadowDigestData } = require('./utils/maxOrchestrationAnalytics');
 const { getRuntime, digestCopy } = require('./services/operatorScorecard');
+const { DIGEST_IDENTITY } = require('./packages/max/identity/MaxIdentity');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
@@ -1008,7 +1009,7 @@ async function generateInsightsViaLLM(snapshot, autoExec, scorecardText) {
     system: buildDigestAgentNamingRules(snapshot),
     messages: [{
       role: 'user',
-      content: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. You are Max, the manager agent for Pulseforge.
+      content: `Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}. ${DIGEST_IDENTITY}
 
 Max already auto-executed these actions before this digest was generated. Do NOT repeat, re-flag, or recommend them:
 ${autoExecLine}
