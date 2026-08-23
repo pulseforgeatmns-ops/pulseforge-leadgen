@@ -116,9 +116,121 @@ function missionFromRow(row) {
   };
 }
 
+/** AUDIT-025 — durable write trace (persistMission only). */
+const writeEventLog = [];
+
+function resolvePersistCaller() {
+  const frames = String(new Error().stack || '').split('\n').slice(1);
+  for (let i = 0; i < frames.length; i += 1) {
+    const frame = frames[i];
+    if (!/persistMission/.test(frame)) continue;
+    const callerFrame = frames[i + 1];
+    if (!callerFrame) return 'unknown';
+    const fnMatch = callerFrame.match(/at (?:async )?([^(\s]+)/);
+    if (fnMatch && !fnMatch[1].includes('/')) {
+      return `${fnMatch[1]}()`;
+    }
+    const fileMatch = callerFrame.match(/\(([^)]+)\)/);
+    if (fileMatch) return fileMatch[1];
+    return callerFrame.trim();
+  }
+  return 'unknown';
+}
+
+function snapshotWriteEvent(mission, callerOverride) {
+  const pending = mission.pendingOperatorDecision || null;
+  return {
+    timestamp: new Date().toISOString(),
+    caller: callerOverride || resolvePersistCaller(),
+    transactionId: mission.lastTransactionId || null,
+    missionId: mission.id,
+    tenantId: String(mission.tenantId),
+    version: mission.version != null ? mission.version : 0,
+    structuredMissionApproved: mission.structuredMissionApproved === true,
+    structuredMissionPresent: Boolean(mission.structuredMission),
+    missionPlanDraftPresent: Boolean(mission.missionPlanDraft),
+    pendingOperatorDecisionKind: pending && pending.kind ? pending.kind : null,
+    updatedAt: mission.updatedAt || null,
+  };
+}
+
+function emitWriteEvent(mission, callerOverride) {
+  const event = snapshotWriteEvent(mission, callerOverride || resolvePersistCaller());
+  const sameMission = writeEventLog.filter((row) => row.missionId === mission.id);
+  event.writeNumber = sameMission.length + 1;
+  writeEventLog.push(event);
+  console.log('WRITE_EVENT', JSON.stringify(event));
+  return event;
+}
+
+function clearWriteEventLog() {
+  writeEventLog.length = 0;
+}
+
+function listWriteEvents(missionId = null) {
+  if (missionId == null) return writeEventLog.slice();
+  return writeEventLog.filter((row) => row.missionId === missionId);
+}
+
+const PENDING_DECISION_ORDER = Object.freeze({
+  plan_clarification: 0,
+  plan_approval: 1,
+  discovery_approval: 2,
+  prioritization_approval: 3,
+});
+
+function pendingDecisionRank(kind) {
+  if (!kind) return -1;
+  return PENDING_DECISION_ORDER[kind] != null ? PENDING_DECISION_ORDER[kind] : 99;
+}
+
+function isLifecycleRegression(previous, current) {
+  if (previous.structuredMissionApproved === true && current.structuredMissionApproved === false) {
+    return true;
+  }
+  if (previous.structuredMissionPresent && !current.structuredMissionPresent) {
+    return true;
+  }
+  if (!previous.missionPlanDraftPresent && current.missionPlanDraftPresent
+      && previous.structuredMissionApproved === true) {
+    return true;
+  }
+  const prevRank = pendingDecisionRank(previous.pendingOperatorDecisionKind);
+  const currRank = pendingDecisionRank(current.pendingOperatorDecisionKind);
+  if (prevRank >= 0 && currRank >= 0 && currRank < prevRank) {
+    return true;
+  }
+  return false;
+}
+
+function findFirstStaleOverwrite(events) {
+  const byMission = new Map();
+  for (const event of events) {
+    const prior = byMission.get(event.missionId) || [];
+    if (prior.length > 0) {
+      const previous = prior[prior.length - 1];
+      const versionRegression = event.version < previous.version;
+      const updatedAtRegression = previous.updatedAt && event.updatedAt
+        && String(event.updatedAt) < String(previous.updatedAt);
+      const lifecycleRegression = isLifecycleRegression(previous, event);
+      if (versionRegression || updatedAtRegression || lifecycleRegression) {
+        return { previous, current: event, reason: {
+          versionRegression,
+          updatedAtRegression,
+          lifecycleRegression,
+        } };
+      }
+    }
+    prior.push(event);
+    byMission.set(event.missionId, prior);
+  }
+  return null;
+}
+
 async function persistMission(mission, pool = defaultPool(), opts = {}) {
   if (!mission?.id) return null;
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
+  emitWriteEvent(mission, opts.caller);
   await pool.query(
     `INSERT INTO acquisition_missions (
        id, tenant_id, client_id, stage, status, objective, target_segment, campaign,
@@ -301,7 +413,7 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
 
   try {
     await client.query('BEGIN');
-    await persistMission(mission, client, writeOpts);
+    await persistMission(mission, client, { ...writeOpts, caller: 'persistStageCommit()' });
     for (const event of bundle.events || []) {
       await persistEvent(event, mission.tenantId, client, writeOpts);
     }
@@ -562,6 +674,9 @@ async function clearAmoSessionBindings(pool = defaultPool()) {
 module.exports = {
   ensureAcquisitionMissionSchema,
   ensureExecutionAuditSchema,
+  clearWriteEventLog,
+  listWriteEvents,
+  findFirstStaleOverwrite,
   persistMission,
   persistEvent,
   persistContribution,

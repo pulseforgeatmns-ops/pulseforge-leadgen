@@ -59,6 +59,7 @@ const {
 const { applyClarification, applyEdits } = require('../../acquisition-mission/MissionPlanner');
 const { bindStagePersistDurable } = require('../../../services/acquisitionMissionPersistence');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
+const { logEngineIdentity } = require('./audit/EngineIdentityAudit');
 const { OPERATOR_DECISION_KINDS } = amo;
 const {
   hasPendingPlanClarification,
@@ -112,6 +113,12 @@ function findPlanApproval(contributions = []) {
  */
 async function advancePlanAfterApproval(input = {}) {
   const { engine, mission, tenantId, question, operatorId } = input;
+  logEngineIdentity('advancePlanAfterApproval()', {
+    engine,
+    tenantId,
+    missionId: mission && mission.id,
+    engineSource: input.acquisitionMissionEngine ? 'injected' : 'input.engine',
+  });
   if (!engine || !mission) throw new Error('engine and mission are required');
 
   let snapshot = engine.inspect(mission.id, { tenantId });

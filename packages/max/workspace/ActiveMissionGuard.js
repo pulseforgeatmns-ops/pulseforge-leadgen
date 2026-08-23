@@ -23,6 +23,7 @@ const {
 } = require('./AmoWorkspaceHydration');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
+const { logEngineIdentity } = require('./audit/EngineIdentityAudit');
 
 const BLOCKED_DOMAIN_GENERAL = 'general_conversation';
 const BLOCKED_DOMAIN_BRIEFING = 'morning_briefing';
@@ -85,6 +86,20 @@ async function resolveAcquisitionActiveMission(input = {}) {
   askPathTrace.traceEnter('resolveAcquisitionActiveMission');
   const tenantId = resolveTenantId(input);
   const engine = resolveAcquisitionEngine(input);
+  const engineSource = input.acquisitionMissionEngine
+    ? 'injected_acquisitionMissionEngine'
+    : input.acquisitionMissionService
+      ? 'acquisitionMissionService.getEngine'
+      : 'require_service_getEngine';
+  logEngineIdentity('resolveAcquisitionActiveMission()', {
+    engine,
+    tenantId,
+    engineSource,
+    missionId:
+      (input.session && input.session.context && input.session.context.missionId) ||
+      (input.context && input.context.missionId) ||
+      null,
+  });
   if (!engine || !tenantId || typeof engine.list !== 'function') {
     askPathTrace.traceEarlyReturn('resolveAcquisitionActiveMission', 'no_engine_or_tenant');
     return null;
