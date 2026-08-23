@@ -123,7 +123,7 @@ async function rememberMission(mission, opts = {}) {
   getEngine(opts).store.putMission(mission);
   if (opts.persist !== false) {
     try {
-      await persistMission(mission, opts.pool);
+      await persistMission(mission, opts.pool, { caller: 'rememberMission()' });
     } catch (err) {
       console.error('[amo] persist mission:', err.message);
     }
@@ -137,7 +137,7 @@ async function persistSideEffects(missionId, opts = {}) {
   const mission = instance.store.getMission(missionId);
   if (!mission) return;
   try {
-    await persistMission(mission, opts.pool);
+    await persistMission(mission, opts.pool, { caller: 'persistSideEffects()' });
     for (const event of instance.store.listEvents(missionId)) {
       await persistEvent(event, mission.tenantId, opts.pool);
     }
