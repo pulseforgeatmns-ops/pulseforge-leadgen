@@ -1,17 +1,18 @@
 'use strict';
 
 /**
- * SPEC-141 — Scout.investigate() entry point.
- * Scout investigates markets; providers are instrumentation.
+ * SPEC-141 + SPEC-142 — Scout.investigate() entry point.
+ * Scout investigates markets through a hypothesis-driven evidence loop (SPEC-142),
+ * reusing SPEC-141 provider capabilities, fusion, and qualification.
  */
 
-const { runIntelligencePipeline } = require('./intelligence/Pipeline');
+const { runInvestigationEngine } = require('./investigation/InvestigationLoop');
 const { buildDelegationFromMission } = require('./intelligence/MarketUnderstanding');
 const { buildDiscoveryResult, DISCOVERY_OUTCOMES } = require('./types');
 
 /**
- * Canonical Scout investigation contract (SPEC-141).
- * Runs the 8-stage intelligence pipeline and returns a Mission Intelligence Report.
+ * Canonical Scout investigation contract.
+ * Runs the SPEC-142 hypothesis-driven investigation engine.
  *
  * @param {object} input
  * @param {object} input.mission
@@ -26,55 +27,68 @@ async function investigate(input) {
     throw new Error('Scout.investigate requires mission');
   }
 
-  const pipelineResult = await runIntelligencePipeline({
+  const engineResult = await runInvestigationEngine({
     mission,
     scoutPayload,
+    delegation: input.delegation,
     opts: {
       ...opts,
       amoMissionId: opts.amoMissionId || opts.missionId,
     },
   });
 
-  const report = pipelineResult.report || {};
-  const intelligenceResult = pipelineResult.intelligenceResult;
-  const opportunities =
-    intelligenceResult &&
-    intelligenceResult.payload &&
-    intelligenceResult.payload.opportunities;
+  const report = engineResult.report || {};
+  const legacyReport = report.kind === 'investigation_report' ? report : null;
 
   const outcome =
-    pipelineResult.outcome === 'blocked'
+    engineResult.outcome === 'blocked'
       ? DISCOVERY_OUTCOMES.BLOCKED
-      : pipelineResult.outcome === 'partial'
+      : engineResult.outcome === 'partial'
         ? DISCOVERY_OUTCOMES.PARTIAL
         : DISCOVERY_OUTCOMES.COMPLETED;
+
+  const rankedOpportunities = (engineResult.ranking && engineResult.ranking.rankedOpportunities) || [];
 
   return {
     ...buildDiscoveryResult({
       outcome,
-      strategy: 'Intelligence Pipeline',
-      phases: pipelineResult.stages.map((s) => ({
-        phase: s.stage,
-        startedAt: s.startedAt,
-        completedAt: s.completedAt,
-        result: s.output,
+      strategy: 'Evidence-Driven Investigation Engine',
+      phases: (engineResult.iterations || []).map((it) => ({
+        phase: it.phase,
+        iteration: it.iteration,
+        result: {
+          overallConfidence: it.overallConfidence,
+          missing: it.missing,
+          claimsCount: it.claimsCount,
+          nextStep: it.nextStep,
+        },
       })),
-      prospectCount: report.qualified || 0,
-      companies: (pipelineResult.candidateUniverse && pipelineResult.candidateUniverse.candidates) || [],
-      confidence: report.confidence,
-      recommendations: (report.immediateOpportunities || []).map(
-        (o) => `${o.rank}. ${o.name} — ${o.reasons && o.reasons.join(', ')}`
+      prospectCount: report.qualified || (engineResult.qualification && engineResult.qualification.qualifiedCount) || 0,
+      companies: (engineResult.candidateUniverse && engineResult.candidateUniverse.candidates) || [],
+      confidence: engineResult.overallConfidence || report.missionIntelligence?.overallConfidence,
+      recommendations: (report.recommendations || []).map(
+        (r) => `${r.rank}. ${r.name} — ${(r.reasons && r.reasons.join(', ')) || r.claim}`
       ),
     }),
-    intelligence: pipelineResult,
-    report,
-    rankedOpportunities: pipelineResult.rankedOpportunities || [],
-    coverage: pipelineResult.coverage,
-    marketDefinition: pipelineResult.marketDefinition,
-    evidencePlan: pipelineResult.evidencePlan,
-    providerStrategy: pipelineResult.providerStrategy,
-    intelligenceResult,
-    opportunities: opportunities || pipelineResult.rankedOpportunities,
+    investigation: engineResult,
+    investigationReport: report,
+    investigationGraph: engineResult.graph,
+    hypotheses: engineResult.hypotheses,
+    claims: engineResult.claims,
+    missingEvidence: engineResult.missingEvidence,
+    report: legacyReport,
+    rankedOpportunities,
+    coverage: {
+      estimatedUniverse: engineResult.candidateUniverse?.estimatedMarket,
+      investigated: (engineResult.candidateUniverse?.candidates || []).length,
+      qualified: engineResult.qualification?.qualifiedCount || 0,
+      confidence: engineResult.overallConfidence,
+      finished: engineResult.completionReason === 'confidence_threshold_reached',
+    },
+    marketDefinition: engineResult.marketDefinition,
+    evidencePlan: engineResult.evidencePlan,
+    providerStrategy: engineResult.providerStrategy,
+    opportunities: rankedOpportunities,
   };
 }
 

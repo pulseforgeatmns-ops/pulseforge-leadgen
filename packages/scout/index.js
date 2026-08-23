@@ -2,9 +2,10 @@
 
 /**
  * @pulseforge/scout — Unified Scout Discovery (SPEC-123) + Intelligence Pipeline (SPEC-141)
+ * + Evidence-Driven Investigation Engine (SPEC-142)
  *
  * Scout owns Discovery and Investigation. Operators issue objectives;
- * Scout determines strategy and evidence requirements.
+ * Scout determines strategy and evidence requirements through hypothesis-driven loops.
  * Mission Engine calls Scout.discover() or Scout.investigate().
  */
 
@@ -30,6 +31,7 @@ const {
   clearPhaseLog,
 } = require('./observability');
 const intelligence = require('./intelligence');
+const investigation = require('./investigation');
 
 const Scout = Object.freeze({
   discover,
@@ -58,4 +60,5 @@ module.exports = {
   listPhaseLog,
   clearPhaseLog,
   intelligence,
+  investigation,
 };

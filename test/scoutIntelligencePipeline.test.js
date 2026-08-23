@@ -170,23 +170,26 @@ describe('SPEC-141 — Scout Intelligence Pipeline', () => {
     assert.ok(events.some((e) => e.event === SCOUT_INTELLIGENCE_EVENTS.COMPLETED));
   });
 
-  it('Scout.investigate returns discovery-compatible result with intelligence report', async () => {
+  it('Scout.investigate delegates to SPEC-142 investigation engine', async () => {
     const mission = sampleMission();
     const candidates = sampleCandidates();
 
     const result = await Scout.investigate({
       mission,
       opts: {
-        runAcquisitionIntelligence: false,
         discover: async () => candidates,
         companies: candidates,
         estimatedMarket: 4,
+        maxIterations: 6,
+        confidenceThreshold: 0.5,
       },
     });
 
-    assert.ok(result.report);
-    assert.ok(result.intelligence);
-    assert.ok(result.phases.length === 8);
+    assert.ok(result.investigationReport);
+    assert.equal(result.investigationReport.kind, 'investigation_report');
+    assert.ok(result.investigationGraph);
+    assert.ok(result.hypotheses.length >= 1);
+    assert.ok(result.claims.length >= 1);
     assert.ok(['DISCOVERY_COMPLETED', 'DISCOVERY_PARTIAL'].includes(result.outcome));
     assert.ok(result.rankedOpportunities.length >= 1);
   });
