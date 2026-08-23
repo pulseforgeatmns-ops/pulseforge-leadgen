@@ -44,6 +44,10 @@ const {
   isExplicitMissionExit,
   resolveActiveMissionLock,
 } = require('./ActiveMissionGuard');
+const {
+  blocksBusinessSubsystemClaim,
+} = require('./WorkspaceRoutingPatterns');
+const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const WORKSPACE_OWNERS = Object.freeze({
@@ -60,6 +64,8 @@ const WORKSPACE_OWNERS = Object.freeze({
   KNOWLEDGE_RETRIEVAL: 'knowledge_retrieval',
   REASONING: 'reasoning',
   REFLECTION: 'reflection',
+  CONVERSATION_IDENTITY: 'conversation_identity',
+  CONVERSATION_LAYER: 'conversation_layer',
 });
 
 /** Mission Engine keywords — bind immediately when not superseded by Blueprint topics. */
@@ -157,6 +163,7 @@ function missionOwnsAcquisitionRequest(question, opts = {}) {
 function claimsBlueprintOwnership(question, input = {}) {
   const q = normalizeQuestion(question);
   if (!q) return false;
+  if (blocksBusinessSubsystemClaim(input.conversationSubject)) return false;
   if (isAcquisitionObjectiveForMission(q)) return false;
   if (MISSION_KEYWORD_RE.test(q) && hasAcquisitionMissionContext(input)) return false;
   if (!BLUEPRINT_TOPIC_RE.test(q)) return false;
@@ -328,18 +335,86 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // SPEC-148 — reasoning subject locks ownership to Reflection before any business pipeline.
+  // SPEC-149 — subject governs owner before business pipelines.
   const subject = input.conversationSubject || null;
-  if (subject && subject.subject === 'reasoning' && subject.locked) {
-    askPathTrace.traceOwner(WORKSPACE_OWNERS.REFLECTION, subject.via || 'reasoning_subject_lock');
-    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'reasoning_subject_lock');
-    return {
-      owner: WORKSPACE_OWNERS.REFLECTION,
-      reason: subject.via || 'reasoning_subject_lock',
-      confidence: subject.confidence || 0.95,
-      specialist: null,
-      subjectLock: true,
-    };
+  if (subject && subject.locked) {
+    const subjectName = subject.subject;
+    if (subjectName === CONVERSATION_SUBJECTS.IDENTITY) {
+      askPathTrace.traceOwner(
+        WORKSPACE_OWNERS.CONVERSATION_IDENTITY,
+        subject.reason || 'identity_subject_lock'
+      );
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'identity_subject_lock');
+      return {
+        owner: WORKSPACE_OWNERS.CONVERSATION_IDENTITY,
+        reason: subject.reason || 'identity_subject_lock',
+        confidence: subject.confidence || 0.97,
+        specialist: null,
+        subjectLock: true,
+      };
+    }
+    if (
+      subjectName === CONVERSATION_SUBJECTS.REFLECTION ||
+      subjectName === 'reasoning'
+    ) {
+      askPathTrace.traceOwner(
+        WORKSPACE_OWNERS.REFLECTION,
+        subject.reason || 'reflection_subject_lock'
+      );
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'reflection_subject_lock');
+      return {
+        owner: WORKSPACE_OWNERS.REFLECTION,
+        reason: subject.reason || 'reflection_subject_lock',
+        confidence: subject.confidence || 0.95,
+        specialist: null,
+        subjectLock: true,
+      };
+    }
+    if (subjectName === CONVERSATION_SUBJECTS.CONVERSATION) {
+      askPathTrace.traceOwner(
+        WORKSPACE_OWNERS.CONVERSATION_LAYER,
+        subject.reason || 'conversation_subject_lock'
+      );
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'conversation_subject_lock');
+      return {
+        owner: WORKSPACE_OWNERS.CONVERSATION_LAYER,
+        reason: subject.reason || 'conversation_subject_lock',
+        confidence: subject.confidence || 0.88,
+        specialist: null,
+        subjectLock: true,
+      };
+    }
+    if (subjectName === CONVERSATION_SUBJECTS.KNOWLEDGE) {
+      askPathTrace.traceOwner(
+        WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
+        subject.reason || 'knowledge_subject_lock'
+      );
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'knowledge_subject_lock');
+      return {
+        owner: WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
+        reason: subject.reason || 'knowledge_subject_lock',
+        confidence: subject.confidence || 0.9,
+        specialist: null,
+        subjectLock: true,
+      };
+    }
+  }
+
+  if (subject && subject.subject === CONVERSATION_SUBJECTS.SPECIALIST) {
+    if (claimsMissionInspection(question, input)) {
+      askPathTrace.traceOwner(WORKSPACE_OWNERS.MISSION_INSPECTION, 'specialist_subject_mission');
+      return {
+        owner: WORKSPACE_OWNERS.MISSION_INSPECTION,
+        reason: 'specialist_subject_mission',
+        confidence: subject.confidence || 0.91,
+        specialist: null,
+      };
+    }
+    const specialistClaim = claimsSpecialistOwnership(question);
+    if (specialistClaim) {
+      askPathTrace.traceOwner(specialistClaim.owner, 'specialist_subject');
+      return { ...specialistClaim, subjectLock: false };
+    }
   }
 
   // Active desk workflows (canary call-script review, packet review, tables)

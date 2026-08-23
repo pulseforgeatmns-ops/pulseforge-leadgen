@@ -304,6 +304,22 @@ function buildResponseMetadata(partial = {}) {
   if (partial.showReasoningDisclosure === true) {
     meta.showReasoningDisclosure = true;
   }
+  if (partial.businessIntelligenceUsed === true) {
+    meta.businessIntelligenceUsed = true;
+  }
+  if (partial.businessIntelligenceUsed === false) {
+    meta.businessIntelligenceUsed = false;
+  }
+  if (partial.identityConversation === true) meta.identityConversation = true;
+  if (partial.reflectiveCognition === true) meta.reflectiveCognition = true;
+  if (partial.conversationLayer === true) meta.conversationLayer = true;
+  if (partial.conversationSubject != null) {
+    meta.conversationSubject = String(partial.conversationSubject);
+  }
+  if (partial.conversationIntent != null) {
+    meta.conversationIntent = String(partial.conversationIntent);
+  }
+  if (partial.readOnlyCognition === true) meta.readOnlyCognition = true;
   return meta;
 }
 
