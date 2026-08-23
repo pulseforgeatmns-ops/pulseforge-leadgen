@@ -32,6 +32,7 @@ const {
 } = require('./observability');
 const intelligence = require('./intelligence');
 const investigation = require('./investigation');
+const credibility = require('./credibility');
 const memory = require('./memory');
 
 const Scout = Object.freeze({
@@ -62,5 +63,6 @@ module.exports = {
   clearPhaseLog,
   intelligence,
   investigation,
+  credibility,
   memory,
 };

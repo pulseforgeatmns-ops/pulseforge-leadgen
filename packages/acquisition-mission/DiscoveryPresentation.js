@@ -181,11 +181,51 @@ function formatDiscoveryResultsLines(presentation) {
     for (const row of presentation.rankedProspects) {
       lines.push(`${row.rank}. ${row.name}`);
       if (row.rationale) lines.push(`   Why: ${row.rationale}`);
+      if (row.intelligenceBrief && row.intelligenceBrief.whyRankedHere) {
+        lines.push(`   Because: ${row.intelligenceBrief.whyRankedHere}`);
+      }
+      if (row.confidenceExplanation) {
+        lines.push(`   Confidence: ${row.confidenceExplanation.score}`);
+        if (row.confidenceExplanation.basedOn && row.confidenceExplanation.basedOn.length) {
+          lines.push(
+            `   Based on: ${row.confidenceExplanation.basedOn.map((b) => b.label).join(', ')}`
+          );
+        }
+        if (row.confidenceExplanation.missing && row.confidenceExplanation.missing.length) {
+          lines.push(
+            `   Missing: ${row.confidenceExplanation.missing
+              .slice(0, 3)
+              .map((m) => m.label)
+              .join(', ')}`
+          );
+        }
+        if (row.confidenceExplanation.contradictionNote) {
+          lines.push(`   ${row.confidenceExplanation.contradictionNote}`);
+        }
+      } else if (row.confidence != null) {
+        lines.push(`   Confidence: ${Number(row.confidence).toFixed(2)}`);
+      }
+      if (row.trust) {
+        lines.push(`   Trust: ${row.trust.label} — ${row.trust.reason}`);
+      }
       if (row.fit != null) lines.push(`   Fit: ${Number(row.fit).toFixed(2)}`);
       if (row.timing != null) lines.push(`   Timing: ${Number(row.timing).toFixed(2)}`);
       if (row.title) lines.push(`   Role: ${row.title}`);
-      if (row.unknowns && row.unknowns.length) {
+      if (row.intelligenceBrief && row.intelligenceBrief.competingHypotheses?.length) {
+        lines.push('   Competing hypotheses:');
+        for (const hyp of row.intelligenceBrief.competingHypotheses.slice(0, 3)) {
+          lines.push(`     • ${hyp.text} (${hyp.confidence})`);
+        }
+      }
+      if (row.highestRemainingUnknowns && row.highestRemainingUnknowns.length) {
+        const top = row.highestRemainingUnknowns[0];
+        lines.push(`   Highest unknown: ${top.unknown} (${top.impact} impact)`);
+        lines.push(`   Verify via: ${top.howToVerify}`);
+      } else if (row.unknowns && row.unknowns.length) {
         lines.push(`   Unknowns: ${row.unknowns.slice(0, 2).join('; ')}`);
+      }
+      if (row.recommendedNextInvestigation && row.recommendedNextInvestigation.action) {
+        lines.push(`   Next verification: ${row.recommendedNextInvestigation.action}`);
       }
       lines.push('');
     }

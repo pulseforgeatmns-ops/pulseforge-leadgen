@@ -2,8 +2,14 @@
 
 /**
  * SPEC-142 — Investigation Report.
- * Deliverable with six-question answers for every recommendation.
+ * SPEC-144 — Intelligence briefs with credibility framework on every recommendation.
  */
+
+const {
+  buildIntelligenceBrief,
+  buildIntelligenceBriefs,
+  validateBriefAcceptance,
+} = require('../credibility/CredibilityFramework');
 
 function buildSixQuestions(recommendation, context = {}) {
   const claim = context.claim || {};
@@ -29,7 +35,7 @@ function buildSixQuestions(recommendation, context = {}) {
   };
 }
 
-function buildRecommendation(entry, claims, missingEvidence, rankingEntry) {
+function buildRecommendation(entry, claims, missingEvidence, rankingEntry, context = {}) {
   const entityClaims = claims.filter((c) => c.entityId === entry.companyId || c.entityId === entry.id);
   const primaryClaim = entityClaims.sort((a, b) => b.confidence - a.confidence)[0];
 
@@ -51,6 +57,21 @@ function buildRecommendation(entry, claims, missingEvidence, rankingEntry) {
     claim: primaryClaim,
     missingEvidence: rec.missingEvidence,
   });
+
+  rec.intelligenceBrief = buildIntelligenceBrief({
+    rankingEntry,
+    candidate: entry,
+    claims,
+    hypotheses: context.hypotheses || [],
+    conflicts: context.conflicts || [],
+    missingEvidence: rec.missingEvidence,
+  });
+
+  rec.credibility = {
+    trust: rec.intelligenceBrief.trust,
+    confidenceExplanation: rec.intelligenceBrief.confidenceExplanation,
+    acceptance: validateBriefAcceptance(rec.intelligenceBrief),
+  };
 
   return rec;
 }
@@ -78,14 +99,31 @@ function buildInvestigationReport(input = {}) {
   ).length;
 
   const ranked = ranking.rankedOpportunities || [];
+  const candidates = candidateUniverse.candidates || [];
+  const candidateMap = new Map(candidates.map((c) => [String(c.id), c]));
+
   const recommendations = ranked.slice(0, 10).map((r) =>
     buildRecommendation(
-      { name: r.name, id: r.companyId, companyId: r.companyId },
+      candidateMap.get(String(r.companyId || r.candidateId)) || {
+        name: r.name,
+        id: r.companyId,
+        companyId: r.companyId,
+      },
       claims,
       missingEvidence,
-      r
+      r,
+      { hypotheses, conflicts }
     )
   );
+
+  const intelligenceBriefs = buildIntelligenceBriefs({
+    ranking,
+    claims,
+    hypotheses,
+    conflicts,
+    missingEvidence,
+    candidateUniverse,
+  });
 
   const marketLabel = [marketDefinition.geography, marketDefinition.segment].filter(Boolean).join(' ');
 
@@ -112,6 +150,14 @@ function buildInvestigationReport(input = {}) {
     missingEvidence,
     conflicts,
     recommendations,
+    intelligenceBriefs,
+    credibilityFramework: {
+      version: 'SPEC-144',
+      briefCount: intelligenceBriefs.length,
+      allBriefsPassAcceptance: intelligenceBriefs.every(
+        (brief) => validateBriefAcceptance(brief).passes
+      ),
+    },
     iterations: input.iterations || [],
     qualified: qualification.qualifiedCount || 0,
     watch: qualification.watchCount || 0,
@@ -131,6 +177,10 @@ function buildInvestigationReport(input = {}) {
     acceptanceCriteria: {
       sixQuestionsRequired: true,
       allRecommendationsAnswered: recommendations.every((r) => r.sixQuestions && r.sixQuestions.whatDoIBelieve),
+      credibilityBriefRequired: true,
+      allCredibilityBriefsPass: recommendations.every(
+        (r) => r.credibility && r.credibility.acceptance && r.credibility.acceptance.passes
+      ),
     },
   };
 }
@@ -149,4 +199,6 @@ module.exports = {
   buildInvestigationReport,
   buildSixQuestions,
   buildRecommendation,
+  buildIntelligenceBriefs,
+  validateBriefAcceptance,
 };

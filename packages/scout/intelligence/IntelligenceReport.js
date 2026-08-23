@@ -2,8 +2,10 @@
 
 /**
  * SPEC-141 — Mission Intelligence Report.
- * Scout's deliverable: evidence-backed market understanding, not "found N companies."
+ * SPEC-144 — Credibility briefs on ranked opportunities.
  */
+
+const { buildIntelligenceBriefs } = require('../credibility/CredibilityFramework');
 
 function formatMarketLabel(marketDefinition) {
   const parts = [];
@@ -47,6 +49,15 @@ function buildIntelligenceReport(input = {}) {
     evidenceConfidence: r.evidenceConfidence,
   }));
 
+  const intelligenceBriefs = buildIntelligenceBriefs({
+    rankedOpportunities: ranked,
+    candidateUniverse: input.candidateUniverse || {},
+    claims: input.claims || [],
+    hypotheses: input.hypotheses || [],
+    conflicts: input.conflicts || [],
+    missingEvidence: input.missingEvidence || [],
+  });
+
   const evidenceSources = [
     ...new Set([
       ...(coverage.sourcesUsed || []),
@@ -76,6 +87,11 @@ function buildIntelligenceReport(input = {}) {
     evidenceSources,
     immediateOpportunities,
     topOpportunities,
+    intelligenceBriefs,
+    credibilityFramework: {
+      version: 'SPEC-144',
+      briefCount: intelligenceBriefs.length,
+    },
     summary,
     watchCount: coverage.watch,
     investigated: coverage.investigated,

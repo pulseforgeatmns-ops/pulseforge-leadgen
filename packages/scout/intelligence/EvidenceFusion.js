@@ -10,23 +10,10 @@ function asText(value) {
   return String(value).trim();
 }
 
+const { evidenceWeight } = require('../credibility/EvidenceWeights');
+
 function sourceWeight(source) {
-  const weights = {
-    existing_pf: 0.85,
-    google_maps: 0.9,
-    google_places: 0.9,
-    public_business_places: 0.88,
-    linkedin: 0.82,
-    hunter: 0.8,
-    prospeo: 0.78,
-    website: 0.75,
-    company_website: 0.75,
-    news: 0.7,
-    county_records: 0.72,
-    fixture: 0.5,
-  };
-  const key = asText(source).toLowerCase().replace(/[\s-]+/g, '_');
-  return weights[key] != null ? weights[key] : 0.65;
+  return evidenceWeight(source);
 }
 
 /**

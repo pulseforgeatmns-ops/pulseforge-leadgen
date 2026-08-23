@@ -5,6 +5,8 @@
  * Preserves evidence provenance, signal specificity, and confidence decomposition.
  */
 
+const { buildIntelligenceBrief } = require('../scout/credibility/CredibilityFramework');
+
 const SOURCE_LABELS = Object.freeze({
   existing_repository: 'Company repository',
   google_places: 'Google Places',
@@ -94,6 +96,54 @@ function buildProspectRationale(opp) {
     parts.push(`${unknowns.length} unknown${unknowns.length === 1 ? '' : 's'}`);
   }
   return parts.length ? parts.join(' · ') : 'Matches mission objective under current criteria.';
+}
+
+function buildOpportunityCredibilityBrief(opp, index) {
+  const evidence = (opp.evidenceRefs || []).map((ref) => normalizeEvidenceItem(ref, opp.name)).filter(Boolean);
+  const supportedBy = evidence.map((e) => ({
+    source: e.source,
+    label: e.label,
+    observedAt: e.observedAt,
+  }));
+
+  return buildIntelligenceBrief({
+    rankingEntry: {
+      rank: index + 1,
+      name: opp.name,
+      companyId: opp.companyId || opp.id,
+      rankScore: opp.fit != null ? Number(opp.fit) : null,
+      evidenceConfidence: opp.confidence != null ? Number(opp.confidence) : null,
+      reasons: [buildProspectRationale(opp)],
+      signals: opp.signals || [],
+      scores: {
+        revenue_potential: opp.fit != null ? Number(opp.fit) * 0.2 : 0,
+        buying_signals: (opp.signals || []).length ? 0.18 : 0.05,
+        evidence_confidence: supportedBy.length ? 0.11 : 0.03,
+        geographic_fit: 0.15,
+        relationship_probability: 0.12,
+        ease_of_access: 0.14,
+        strategic_value: 0.08,
+      },
+    },
+    candidate: {
+      id: opp.companyId || opp.id,
+      name: opp.name,
+      signals: opp.signals || [],
+      evidence: opp.evidenceRefs || [],
+    },
+    claims: supportedBy.length
+      ? [
+          {
+            entityId: opp.companyId || opp.id,
+            text: `${opp.name} matches mission objective under current Scout evidence.`,
+            confidence: opp.confidence != null ? Number(opp.confidence) : 0.5,
+            supportedBy,
+            missingEvidence: (opp.unknowns || []).map((u) => (typeof u === 'object' ? u.text : String(u))),
+          },
+        ]
+      : [],
+    missingEvidence: (opp.unknowns || []).map((u) => (typeof u === 'object' ? u.text : String(u))),
+  });
 }
 
 function computeConfidenceBreakdown(opportunities, payload, rollupConfidence) {
@@ -250,19 +300,27 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     else if (dm && dm.name) decisionMakers.push(dm);
   }
 
-  const rankedProspects = opportunities.map((opp, index) => ({
-    rank: index + 1,
-    name: opp.name,
-    id: opp.companyId || opp.id || null,
-    fit: opp.fit != null ? Number(opp.fit) : null,
-    timing: opp.timing != null ? Number(opp.timing) : null,
-    confidence: opp.confidence != null ? Number(opp.confidence) : null,
-    rationale: buildProspectRationale(opp),
-    signals: (opp.signals || []).map((s) => normalizeBuyingSignal(s, opp.name)).filter(Boolean),
-    unknowns: (opp.unknowns || [])
-      .map((u) => (typeof u === 'object' ? u.text : String(u)))
-      .filter(Boolean),
-  }));
+  const rankedProspects = opportunities.map((opp, index) => {
+    const credibilityBrief = buildOpportunityCredibilityBrief(opp, index);
+    return {
+      rank: index + 1,
+      name: opp.name,
+      id: opp.companyId || opp.id || null,
+      fit: opp.fit != null ? Number(opp.fit) : null,
+      timing: opp.timing != null ? Number(opp.timing) : null,
+      confidence: opp.confidence != null ? Number(opp.confidence) : null,
+      rationale: buildProspectRationale(opp),
+      signals: (opp.signals || []).map((s) => normalizeBuyingSignal(s, opp.name)).filter(Boolean),
+      unknowns: (opp.unknowns || [])
+        .map((u) => (typeof u === 'object' ? u.text : String(u)))
+        .filter(Boolean),
+      intelligenceBrief: credibilityBrief,
+      trust: credibilityBrief.trust,
+      confidenceExplanation: credibilityBrief.confidenceExplanation,
+      highestRemainingUnknowns: credibilityBrief.highestRemainingUnknowns,
+      recommendedNextInvestigation: credibilityBrief.recommendedNextInvestigation,
+    };
+  });
 
   if (!rankedProspects.length && companies.length) {
     for (let i = 0; i < companies.length; i += 1) {
@@ -303,6 +361,10 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     rankedProspects,
     confidence: confidenceBreakdown.overall,
     confidenceBreakdown,
+    credibilityFramework: {
+      version: 'SPEC-144',
+      briefCount: rankedProspects.filter((r) => r.intelligenceBrief).length,
+    },
     qualifiedCount,
     outcome: result.status || (blocked ? 'blocked' : 'completed'),
     blocked,
@@ -345,5 +407,6 @@ module.exports = {
   sourceLabel,
   formatSignalLabel,
   buildProspectRationale,
+  buildOpportunityCredibilityBrief,
   computeConfidenceBreakdown,
 };
