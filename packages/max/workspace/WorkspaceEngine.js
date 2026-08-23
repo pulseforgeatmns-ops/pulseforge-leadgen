@@ -692,6 +692,7 @@ class WorkspaceEngine {
         context: rawContext || session.context,
         conversationIntent,
         conversationSubject,
+        resolvedQuestion,
       });
       if (identityTurn && identityTurn.handled) {
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;

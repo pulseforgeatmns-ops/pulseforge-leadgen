@@ -44,6 +44,17 @@ const IDENTITY_SUBJECT_RES = [
   /\bwhat are your (?:capabilities|responsibilities|boundaries)\b/i,
   /\bwhat is your (?:purpose|job|function)\b/i,
   /\b(?:describe|explain) (?:yourself|your role)\b/i,
+  // SPEC-151 — operating model reflection questions
+  /\bwhen should i ignore (?:your )?advice\b/i,
+  /\bwhy shouldn'?t scout do (?:your|max'?s?) job\b/i,
+  /\bwhy not merge scout into max\b/i,
+  /\bwhy (?:does|do) pulseforge separate specialists\b/i,
+  /\bwhy preserve operator authority\b/i,
+  /\bwhat should never belong to you\b/i,
+  /\bwhat decisions require me\b/i,
+  /\bhow is (?:that|this|it|max|you) different from\b/i,
+  /\b(?:max|you) vs\.?\s+(?:scout|paige|rex|emmett|sam|riley|cal|vera)\b/i,
+  /\b(?:scout|paige|rex) vs\.?\s+(?:scout|paige|rex|max)\b/i,
 ];
 
 const REFLECT_SUBJECT_RES = [

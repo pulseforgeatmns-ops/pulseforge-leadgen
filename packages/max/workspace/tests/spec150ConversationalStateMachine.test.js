@@ -146,7 +146,9 @@ describe('SPEC-150 — Conversational State Machine', () => {
 
       assert.equal(continuity.applied, true);
       assert.equal(continuity.conversationSubject.subject, CONVERSATION_SUBJECTS.IDENTITY);
-      assert.equal(continuity.conversationIntent.intent, THINKING_MODES.EXPLAIN);
+      assert.equal(continuity.conversationIntent.intent, THINKING_MODES.OPERATING_MODEL);
+      assert.equal(continuity.conversationIntent.thinkingMode, 'operating_model_reflection');
+      assert.equal(continuity.conversationIntent.underlyingIntent, THINKING_MODES.EXPLAIN);
       assert.equal(continuity.resolvedQuestion, 'why(identity)');
       assert.equal(continuity.conversationIntent.continuity, true);
     });
@@ -171,8 +173,9 @@ describe('SPEC-150 — Conversational State Machine', () => {
 
       assert.equal(continuity.applied, true);
       assert.equal(continuity.conversationSubject.subject, CONVERSATION_SUBJECTS.IDENTITY);
-      assert.equal(continuity.conversationIntent.intent, THINKING_MODES.COMPARE);
-      assert.notEqual(continuity.conversationIntent.intent, THINKING_MODES.EXPLAIN);
+      assert.equal(continuity.conversationIntent.intent, THINKING_MODES.OPERATING_MODEL);
+      assert.equal(continuity.conversationIntent.thinkingMode, 'operating_model_reflection');
+      assert.equal(continuity.conversationIntent.underlyingIntent, THINKING_MODES.COMPARE);
       assert.deepEqual(continuity.compareObjects, ['max', 'scout']);
       assert.equal(continuity.resolvedQuestion, 'compare(max,scout)');
     });
@@ -220,7 +223,7 @@ describe('SPEC-150 — Conversational State Machine', () => {
 
       assert.equal(afterSecond.subject, CONVERSATION_SUBJECTS.IDENTITY);
       assert.equal(afterSecond.activeObject, 'max');
-      assert.equal(afterSecond.mode, CONVERSATIONAL_MODES.EXPLANATION);
+      assert.equal(afterSecond.mode, CONVERSATIONAL_MODES.OPERATING_MODEL_REFLECTION);
       assert.equal(afterSecond.depth, 2);
       assert.equal(getConversationalState(session).depth, 2);
     });
@@ -258,7 +261,9 @@ describe('SPEC-150 — Conversational State Machine', () => {
       });
 
       assert.equal(turn2.conversationSubject.subject, CONVERSATION_SUBJECTS.IDENTITY);
-      assert.equal(turn2.conversationIntent.intent, THINKING_MODES.EXPLAIN);
+      assert.equal(turn2.conversationIntent.intent, THINKING_MODES.OPERATING_MODEL);
+      assert.equal(turn2.conversationIntent.thinkingMode, 'operating_model_reflection');
+      assert.equal(turn2.conversationIntent.underlyingIntent, THINKING_MODES.EXPLAIN);
       assert.equal(turn2.conversationIntent.continuity, true);
       assert.equal(turn2.resolvedQuestion, 'why(identity)');
       assert.equal(turn2.conversationalState.depth, 2);
@@ -271,11 +276,11 @@ describe('SPEC-150 — Conversational State Machine', () => {
       });
 
       assert.equal(turn3.conversationSubject.subject, CONVERSATION_SUBJECTS.IDENTITY);
-      assert.equal(turn3.conversationIntent.intent, THINKING_MODES.COMPARE);
-      assert.notEqual(turn3.conversationIntent.intent, THINKING_MODES.EXPLAIN);
+      assert.equal(turn3.conversationIntent.intent, THINKING_MODES.OPERATING_MODEL);
+      assert.equal(turn3.conversationIntent.underlyingIntent, THINKING_MODES.COMPARE);
       assert.equal(turn3.resolvedQuestion, 'compare(max,scout)');
       assert.equal(turn3.conversationalState.depth, 3);
-      assert.equal(turn3.conversationalState.mode, CONVERSATIONAL_MODES.COMPARISON);
+      assert.equal(turn3.conversationalState.mode, CONVERSATIONAL_MODES.OPERATING_MODEL_REFLECTION);
     });
 
     it('explicit topic change resets depth on new subject', async () => {
