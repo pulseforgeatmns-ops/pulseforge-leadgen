@@ -55,6 +55,10 @@ const {
 } = require('../operatorCognition');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
 const { detectConversationSubject } = require('./ConversationSubject');
+const {
+  applyConversationalContinuity,
+  advanceConversationalState,
+} = require('./ConversationalStateMachine');
 const { maybeHandleReflectionTurn } = require('./ReflectionRouting');
 const { maybeHandleIdentityTurn } = require('./IdentityConversationContext');
 const { maybeHandleConversationTurn } = require('./ConversationTurnContext');
@@ -470,6 +474,36 @@ class WorkspaceEngine {
       confidence: conversationIntent.confidence,
     });
 
+    // SPEC-150 — Follow-ups inherit subject/intent; not classified from scratch.
+    let resolvedQuestion = question;
+    let continuityApplied = false;
+    const continuity = applyConversationalContinuity({
+      question,
+      session,
+      conversationSubject,
+      conversationIntent,
+    });
+    if (continuity.applied) {
+      continuityApplied = true;
+      conversationSubject = continuity.conversationSubject;
+      conversationIntent = continuity.conversationIntent;
+      resolvedQuestion = continuity.resolvedQuestion;
+      if (session.context && typeof session.context === 'object') {
+        session.context.conversationSubject = conversationSubject.subject;
+        session.context.conversationSubjectLocked = conversationSubject.locked;
+        session.context.conversationSubjectReason = conversationSubject.reason;
+        session.context.conversationIntent = conversationIntent;
+        session.context.resolvedQuestion = resolvedQuestion;
+      }
+      askPathTrace.traceBranch('conversation_continuity', {
+        subject: conversationSubject.subject,
+        intent: conversationIntent.intent,
+        resolvedQuestion,
+        priorDepth: continuity.priorState && continuity.priorState.depth,
+        via: conversationIntent.via,
+      });
+    }
+
     traceAskReturn = (label, value, meta = {}) => {
       askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', label, {
         responseOwner:
@@ -484,14 +518,30 @@ class WorkspaceEngine {
         route: value && value.route != null ? value.route : meta.route || null,
         ...meta,
       });
-      return attachRoutingTrace(value, {
+      const conversationalState = advanceConversationalState(session, {
+        question,
+        conversationSubject,
+        conversationIntent,
+        workspaceOwnership:
+          (value && value.workspaceOwnership) || workspaceOwnership,
+        resolvedQuestion,
+        continuityApplied,
+      });
+      const enriched = attachRoutingTrace(value, {
         conversationSubject,
         conversationIntent,
         workspaceOwnership:
           (value && value.workspaceOwnership) || workspaceOwnership,
         pipeline: meta.pipeline || null,
         claimedBy: meta.claimedBy || null,
+        conversationalState,
+        resolvedQuestion,
       });
+      if (enriched && typeof enriched === 'object') {
+        enriched.conversationalState = conversationalState;
+        enriched.resolvedQuestion = resolvedQuestion;
+      }
+      return enriched;
     };
 
     // SPEC-125 — Ownership-first runtime. Subject governs owner before business pipelines.
