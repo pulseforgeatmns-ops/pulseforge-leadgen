@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -59,7 +60,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
     await maybeHandleWorkspaceMissionInspection({
       question: 'Why is the progress 40%?',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       audit,
       silentInspection: true,
     });
@@ -80,7 +81,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
     await maybeHandleWorkspaceMissionInspection({
       question: 'Why is the progress 40%?',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       audit,
       silentInspection: true,
     });
@@ -101,7 +102,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
     const turn = await maybeHandleWorkspaceMissionInspection({
       question: 'Why is the progress 40%?',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       audit,
       silentInspection: true,
     });
@@ -129,7 +130,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
     await maybeHandleWorkspaceMissionInspection({
       question: 'Why is the progress 40%?',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       audit,
       silentInspection: true,
     });
@@ -153,7 +154,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
     const turn = await maybeHandleWorkspaceMissionInspection({
       question: 'Why is the progress 40%?',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       audit,
       silentInspection: true,
     });
@@ -172,7 +173,7 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
     const amoEngine = amo.createAcquisitionMissionEngine();
     const mission = lawFirmMission(amoEngine);
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine: {
         activeMissionResolver: {

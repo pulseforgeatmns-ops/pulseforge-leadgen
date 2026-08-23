@@ -11,7 +11,9 @@
 const { isActiveMissionStatus } = require('../../mission-engine/types');
 const {
   resolveTenantId,
+  resolveAcquisitionMissionRuntime,
   resolveAcquisitionEngine,
+  assertRuntimeEngine,
 } = require('./WorkspaceMissionInspection');
 const {
   isMissionExecutionCommand,
@@ -84,11 +86,9 @@ function pickAcquisitionMission(missions, input = {}) {
 async function resolveAcquisitionActiveMission(input = {}) {
   askPathTrace.traceEnter('resolveAcquisitionActiveMission');
   const tenantId = resolveTenantId(input);
-  const engine = resolveAcquisitionEngine(input);
-  if (!engine || !tenantId || typeof engine.list !== 'function') {
-    askPathTrace.traceEarlyReturn('resolveAcquisitionActiveMission', 'no_engine_or_tenant');
-    return null;
-  }
+  const runtime = resolveAcquisitionMissionRuntime(input);
+  const engine = runtime.engine();
+  assertRuntimeEngine(engine, runtime);
 
   await ensureAmoTenantHydrated(input);
 

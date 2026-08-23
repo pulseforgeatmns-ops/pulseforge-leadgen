@@ -32,6 +32,10 @@ const {
   listMissionApprovalAuditLog,
 } = require('../audit/MissionApprovalAudit');
 const { WORKSPACE_OWNERS } = require('../WorkspaceOwnershipResolver');
+const {
+  createHydratingTestRuntime,
+  runtimeProviderFromEngine,
+} = require('./amoTestRuntime');
 
 const ANCHOR_OBJECTIVE =
   'Acquire commercial cleaning customers in Manchester NH for law firms.';
@@ -64,20 +68,13 @@ describe('SPEC-130 — AMO workspace hydration', () => {
 
   it('ensureAmoTenantHydrated loads missions and emits audit events', async () => {
     const { source } = buildPersistedAmoFixture();
-    const runtimeEngine = amo.createAcquisitionMissionEngine();
-    const service = {
-      getEngine: () => runtimeEngine,
-      hydrateTenant: async (tenantId) => {
-        for (const row of source.list(tenantId)) runtimeEngine.store.putMission(row);
-        return runtimeEngine;
-      },
-    };
+    const runtime = createHydratingTestRuntime(source, { persist: true, pool: null });
 
     const session = { id: 's-hydrate', context: { tenantId: '10' } };
     const result = await ensureAmoTenantHydrated({
       session,
       context: session.context,
-      acquisitionMissionService: service,
+      acquisitionMissionRuntime: runtime,
     });
 
     assert.equal(result.hydrated, true);
@@ -91,28 +88,22 @@ describe('SPEC-130 — AMO workspace hydration', () => {
     const cached = await ensureAmoTenantHydrated({
       session,
       context: session.context,
-      acquisitionMissionService: service,
+      acquisitionMissionRuntime: runtime,
     });
     assert.equal(cached.skipped, 'session_cached');
   });
 
   it('resolveAcquisitionActiveMission hydrates an empty singleton and returns persisted mission', async () => {
     const { source, mission } = buildPersistedAmoFixture();
-    const runtimeEngine = amo.createAcquisitionMissionEngine();
-    const service = {
-      getEngine: () => runtimeEngine,
-      hydrateTenant: async (tenantId) => {
-        for (const row of source.list(tenantId)) runtimeEngine.store.putMission(row);
-        return runtimeEngine;
-      },
-    };
+    const runtime = createHydratingTestRuntime(source, { persist: true, pool: null });
+    const runtimeEngine = runtime.engine();
 
     assert.equal(runtimeEngine.list('10').length, 0);
 
     const resolved = await resolveAcquisitionActiveMission({
       context: { tenantId: '10' },
       session: { id: 's-resolve', context: { tenantId: '10' } },
-      acquisitionMissionService: service,
+      acquisitionMissionRuntime: runtime,
     });
 
     assert.equal(resolved.id, mission.id);
@@ -124,14 +115,7 @@ describe('SPEC-130 — AMO workspace hydration', () => {
 
   it('resolveActiveMissionLock prefers hydrated AMO before legacy mission', async () => {
     const { source, mission } = buildPersistedAmoFixture();
-    const runtimeEngine = amo.createAcquisitionMissionEngine();
-    const service = {
-      getEngine: () => runtimeEngine,
-      hydrateTenant: async (tenantId) => {
-        for (const row of source.list(tenantId)) runtimeEngine.store.putMission(row);
-        return runtimeEngine;
-      },
-    };
+    const runtime = createHydratingTestRuntime(source, { persist: true, pool: null });
 
     const missionEngine = realLegacyEngine();
     const legacy = await missionEngine.createFromObjective({
@@ -152,7 +136,7 @@ describe('SPEC-130 — AMO workspace hydration', () => {
       question: 'approved',
       session,
       context: session.context,
-      acquisitionMissionService: service,
+      acquisitionMissionRuntime: runtime,
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: true,
@@ -165,14 +149,7 @@ describe('SPEC-130 — AMO workspace hydration', () => {
 
   it('runtime dispatch selects AMO after hydration when legacy is also bound', async () => {
     const { source, mission } = buildPersistedAmoFixture();
-    const runtimeEngine = amo.createAcquisitionMissionEngine();
-    const service = {
-      getEngine: () => runtimeEngine,
-      hydrateTenant: async (tenantId) => {
-        for (const row of source.list(tenantId)) runtimeEngine.store.putMission(row);
-        return runtimeEngine;
-      },
-    };
+    const runtime = createHydratingTestRuntime(source, { persist: true, pool: null });
 
     const missionEngine = realLegacyEngine();
     const legacy = await missionEngine.createFromObjective({
@@ -183,32 +160,26 @@ describe('SPEC-130 — AMO workspace hydration', () => {
     });
     await missionEngine.store.update({ id: legacy.id, status: 'planning' });
 
-    const runtime = await resolveMissionRuntime({
+    const runtimeDecision = await resolveMissionRuntime({
       question: 'approved',
       context: { tenantId: '10' },
       session: { id: 's-runtime', context: { tenantId: '10', missionId: legacy.id } },
-      acquisitionMissionService: service,
+      acquisitionMissionRuntime: runtime,
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: true,
     });
 
-    assert.equal(runtime.runtime, MISSION_RUNTIMES.AMO);
-    assert.equal(runtime.reason, 'amo_pending_approval');
-    assert.equal(runtime.mission.id, mission.id);
-    assert.notEqual(runtime.mission.id, legacy.id);
+    assert.equal(runtimeDecision.runtime, MISSION_RUNTIMES.AMO);
+    assert.equal(runtimeDecision.reason, 'amo_pending_approval');
+    assert.equal(runtimeDecision.mission.id, mission.id);
+    assert.notEqual(runtimeDecision.mission.id, legacy.id);
   });
 
   it('Workspace ask executes Discovery after hydration with empty singleton store', async () => {
     const { source, mission } = buildPersistedAmoFixture();
-    const runtimeEngine = amo.createAcquisitionMissionEngine();
-    const service = {
-      getEngine: () => runtimeEngine,
-      hydrateTenant: async (tenantId) => {
-        for (const row of source.list(tenantId)) runtimeEngine.store.putMission(row);
-        return runtimeEngine;
-      },
-    };
+    const runtime = createHydratingTestRuntime(source, { persist: true, pool: null });
+    const runtimeEngine = runtime.engine();
 
     const missionEngine = realLegacyEngine();
     const legacy = await missionEngine.createFromObjective({
@@ -220,7 +191,7 @@ describe('SPEC-130 — AMO workspace hydration', () => {
     await missionEngine.store.update({ id: legacy.id, status: 'planning' });
 
     const workspace = createWorkspaceEngine({
-      acquisitionMissionService: service,
+      runtimeProvider: () => runtime,
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: true,
@@ -260,10 +231,8 @@ describe('SPEC-130 — AMO workspace hydration', () => {
 
   it('falls back to SPEC-022 only when hydration succeeds with no AMO missions', async () => {
     const runtimeEngine = amo.createAcquisitionMissionEngine();
-    const service = {
-      getEngine: () => runtimeEngine,
-      hydrateTenant: async () => runtimeEngine,
-    };
+    const runtime = createHydratingTestRuntime(runtimeEngine, { persist: false });
+    runtime.hydrate = async () => runtimeEngine;
 
     const missionEngine = realLegacyEngine();
     const legacy = await missionEngine.createFromObjective({
@@ -277,17 +246,17 @@ describe('SPEC-130 — AMO workspace hydration', () => {
     const session = { id: 's-legacy-only', context: { tenantId: '10', missionId: legacy.id } };
     await missionEngine.activeMissionResolver.bindSession({ sessionId: session.id, mission: legacy });
 
-    const runtime = await resolveMissionRuntime({
+    const runtimeDecision = await resolveMissionRuntime({
       question: 'approved',
       session,
       context: session.context,
-      acquisitionMissionService: service,
+      acquisitionMissionRuntime: runtime,
       missionEngine,
       missionsEnabled: true,
       resolverEnabled: true,
     });
 
-    assert.equal(runtime.runtime, MISSION_RUNTIMES.SPEC_022);
-    assert.equal(runtime.mission.id, legacy.id);
+    assert.equal(runtimeDecision.runtime, MISSION_RUNTIMES.SPEC_022);
+    assert.equal(runtimeDecision.mission.id, legacy.id);
   });
 });

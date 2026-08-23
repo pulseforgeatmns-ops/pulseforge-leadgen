@@ -206,12 +206,12 @@ router.get('/api/v1/amo/learning', requireActor, async (req, res) => {
       return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
     }
     const missions = await listMissions(tenantId, { pool });
-    const { getEngine } = require('../services/acquisitionMission');
+    const { getAcquisitionMissionRuntime } = require('../services/acquisitionMissionRuntime');
     noStore(res);
     return res.json({
       spec: 'SPEC-118',
       tenantId,
-      learning: getEngine().learning(tenantId),
+      learning: getAcquisitionMissionRuntime().engine().learning(tenantId),
       missionCount: missions.length,
     });
   } catch (err) {

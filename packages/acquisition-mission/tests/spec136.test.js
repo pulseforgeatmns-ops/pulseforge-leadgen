@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime } = require('../../max/workspace/tests/amoTestRuntime');
 
 /**
  * SPEC-136 — Pending Operator Decision Consistency.
@@ -175,7 +176,7 @@ describe('SPEC-136 — Pending Operator Decision Consistency', () => {
     const planTurn = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: true,
     });
     assert.equal(planTurn.action, 'plan_approved');
@@ -187,7 +188,7 @@ describe('SPEC-136 — Pending Operator Decision Consistency', () => {
     const discoveryTurn = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: true,
     });
     assert.equal(discoveryTurn.action, 'discovery_approved');
@@ -216,7 +217,7 @@ describe('SPEC-136 — Pending Operator Decision Consistency', () => {
     const turn = await maybeHandleAcquisitionMissionExecution({
       question: 'Continue.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: true,
     });
 

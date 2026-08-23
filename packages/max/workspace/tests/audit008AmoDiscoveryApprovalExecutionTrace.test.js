@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 /**
  * AUDIT-008 — Active AMO Mission · stage=discover · pending Approve discovery · operator input="approved"
@@ -126,7 +127,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
 
   function openAmoSession(engineOpts = {}) {
     workspace = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       resolverEnabled: true,
       disableLlm: true,
@@ -157,7 +158,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
       context: session.context,
       missionsEnabled: true,
       resolverEnabled: true,
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
     });
     assert.equal(ownership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.equal(ownership.reason, 'active_mission_execution_command');
@@ -168,7 +169,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
       context: session.context,
       missionsEnabled: true,
       resolverEnabled: true,
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
     });
     assert.equal(runtimeDecision.runtime, MISSION_RUNTIMES.AMO);
     assert.equal(runtimeDecision.reason, 'amo_pending_approval');

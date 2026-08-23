@@ -2,12 +2,13 @@
 
 /**
  * SPEC-130 — Hydrate persisted Acquisition Missions before workspace runtime resolution.
+ * SPEC-140 — Hydration executes against Runtime.current() only.
  * Mission visibility precedes runtime selection.
  */
 
 const {
   resolveTenantId,
-  resolveAcquisitionEngine,
+  resolveAcquisitionMissionRuntime,
 } = require('./WorkspaceMissionInspection');
 
 /** @type {Map<string, { hydratedAt: string, missionsLoaded: number }>} */
@@ -70,21 +71,10 @@ function markSessionHydrated(input = {}, tenantId, missionsLoaded) {
   };
 }
 
-function resolveHydrationService(input = {}) {
-  if (input.acquisitionMissionService) return input.acquisitionMissionService;
-  if (input.acquisitionMissionEngine) return null;
-  try {
-    return require('../../../services/acquisitionMission');
-  } catch (_) {
-    return null;
-  }
-}
-
-function shouldHydrateFromService(input = {}) {
-  if (input.acquisitionMissionEngine) return false;
+function shouldHydrateFromRuntime(input = {}) {
   const tenantId = resolveTenantId(input);
   if (!tenantId) return false;
-  return Boolean(resolveHydrationService(input));
+  return Boolean(resolveAcquisitionMissionRuntime(input));
 }
 
 /**
@@ -97,19 +87,10 @@ async function ensureAmoTenantHydrated(input = {}) {
     return { hydrated: false, missionsLoaded: 0, skipped: 'no_tenant' };
   }
 
-  if (input.acquisitionMissionEngine) {
-    const engine = resolveAcquisitionEngine(input);
-    const missionsLoaded =
-      engine && typeof engine.list === 'function' ? engine.list(tenantId).length : 0;
-    return { hydrated: true, missionsLoaded, skipped: 'injected_engine' };
-  }
-
-  const service = resolveHydrationService(input);
-  if (!service || typeof service.hydrateTenant !== 'function') {
-    return { hydrated: false, missionsLoaded: 0, skipped: 'no_service' };
-  }
-
+  const runtime = resolveAcquisitionMissionRuntime(input);
+  const persistOpts = runtime.persistOpts(input);
   const cacheKey = hydrationCacheKey(input, tenantId);
+
   if (isSessionHydrated(input, tenantId)) {
     const cached = _hydrationCache.get(cacheKey);
     return {
@@ -125,6 +106,27 @@ async function ensureAmoTenantHydrated(input = {}) {
     return { hydrated: true, missionsLoaded: cached.missionsLoaded, skipped: 'cache_hit' };
   }
 
+  if (persistOpts.persist === false) {
+    logAmoHydrationEvent('AMO_HYDRATE_BEGIN', { tenantId, cacheKey });
+    await runtime.hydrate(tenantId, { persist: false });
+    const missionsLoaded = runtime.engine().list(tenantId).length;
+    logAmoHydrationEvent('AMO_HYDRATE_COMPLETE', {
+      tenantId,
+      cacheKey,
+      missionsLoaded,
+      runtimeId: runtime.runtimeId,
+      engineId: runtime.engineId,
+      storeId: runtime.storeId,
+    });
+    logAmoHydrationEvent('missionsLoaded', { tenantId, cacheKey, missionsLoaded });
+    markSessionHydrated(input, tenantId, missionsLoaded);
+    _hydrationCache.set(cacheKey, {
+      hydratedAt: new Date().toISOString(),
+      missionsLoaded,
+    });
+    return { hydrated: true, missionsLoaded, skipped: 'in_memory_runtime' };
+  }
+
   if (_hydrationInFlight.has(cacheKey)) {
     return _hydrationInFlight.get(cacheKey);
   }
@@ -132,19 +134,17 @@ async function ensureAmoTenantHydrated(input = {}) {
   const hydratePromise = (async () => {
     logAmoHydrationEvent('AMO_HYDRATE_BEGIN', { tenantId, cacheKey });
 
-    await service.hydrateTenant(tenantId, {
-      pool: input.pool,
-      persist: input.persist,
-    });
+    await runtime.hydrate(tenantId, persistOpts);
 
-    const engine = resolveAcquisitionEngine(input);
-    const missionsLoaded =
-      engine && typeof engine.list === 'function' ? engine.list(tenantId).length : 0;
+    const missionsLoaded = runtime.engine().list(tenantId).length;
 
     logAmoHydrationEvent('AMO_HYDRATE_COMPLETE', {
       tenantId,
       cacheKey,
       missionsLoaded,
+      runtimeId: runtime.runtimeId,
+      engineId: runtime.engineId,
+      storeId: runtime.storeId,
     });
     logAmoHydrationEvent('missionsLoaded', {
       tenantId,
@@ -186,5 +186,5 @@ module.exports = {
   listAmoHydrationAuditLog,
   clearAmoHydrationAuditLog,
   clearAmoHydrationCache,
-  shouldHydrateFromService,
+  shouldHydrateFromRuntime,
 };

@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -125,7 +126,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
     const amoEngine = amo.createAcquisitionMissionEngine();
     const store = createMemoryStore();
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       operatorObjectiveOpts: { store },
       missionEngine: {
@@ -176,7 +177,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
   it('WorkspaceEngine.ask creates mission for Operate through Pulseforge', async () => {
     const amoEngine = amo.createAcquisitionMissionEngine();
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine: {
         activeMissionResolver: {

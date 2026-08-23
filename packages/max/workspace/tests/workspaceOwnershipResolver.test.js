@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -66,7 +67,7 @@ describe('SPEC-125 — Workspace Ownership-First Runtime', () => {
     const ownership = await resolveWorkspaceOwner({
       question: 'Why is the progress 40%?',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
     });
     assert.equal(ownership.owner, WORKSPACE_OWNERS.MISSION_INSPECTION);
   });
@@ -136,7 +137,7 @@ describe('SPEC-125 — Workspace Ownership-First Runtime', () => {
   it('WorkspaceEngine.ask creates mission for Operate Anchor objective', async () => {
     const amoEngine = amo.createAcquisitionMissionEngine();
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine: {
         activeMissionResolver: {
@@ -173,7 +174,7 @@ describe('SPEC-125 — Workspace Ownership-First Runtime', () => {
     amoEngine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.UNDERSTAND });
 
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine: {
         activeMissionResolver: {
