@@ -41,6 +41,8 @@ const COMPLETION_REASONS = Object.freeze({
   COVERAGE_COMPLETE: 'coverage_complete',
   NO_HIGHER_VALUE_EVIDENCE: 'no_higher_value_evidence',
   COST_EXCEEDS_BENEFIT: 'cost_exceeds_benefit',
+  DIMINISHING_RETURNS: 'diminishing_returns',
+  PERSISTENT_UNKNOWNS: 'persistent_unknowns_only',
   BLOCKED: 'blocked',
 });
 
@@ -109,8 +111,14 @@ function buildInvestigationStep(partial = {}) {
     costScore: partial.costScore != null ? partial.costScore : 1,
     entityId: partial.entityId || null,
     rationale: partial.rationale || '',
+    question: partial.question || null,
+    gapImpact: partial.gapImpact != null ? partial.gapImpact : null,
+    gapDifficulty: partial.gapDifficulty != null ? partial.gapDifficulty : null,
+    expectedInformationGain: partial.expectedInformationGain != null ? partial.expectedInformationGain : null,
     skipped: partial.skipped === true,
     skipReason: partial.skipReason || null,
+    belowGainThreshold: partial.belowGainThreshold === true,
+    stopRecommendation: partial.stopRecommendation || null,
   };
 }
 
@@ -118,6 +126,7 @@ function buildInvestigationResult(partial = {}) {
   return {
     outcome: partial.outcome || 'completed',
     completionReason: partial.completionReason || null,
+    stopExplanation: partial.stopExplanation || null,
     iterations: Array.isArray(partial.iterations) ? partial.iterations : [],
     graph: partial.graph || null,
     hypotheses: Array.isArray(partial.hypotheses) ? partial.hypotheses : [],
@@ -133,6 +142,10 @@ function buildInvestigationResult(partial = {}) {
     evidenceCollection: partial.evidenceCollection || null,
     providerStrategy: partial.providerStrategy || null,
     evidencePlan: partial.evidencePlan || null,
+    investigationBoard: partial.investigationBoard || null,
+    investigationJournal: partial.investigationJournal || null,
+    providerLearning: partial.providerLearning || null,
+    stepSelection: partial.stepSelection || null,
   };
 }
 

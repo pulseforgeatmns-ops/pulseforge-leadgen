@@ -159,6 +159,8 @@ function buildInvestigationReport(input = {}) {
       ),
     },
     iterations: input.iterations || [],
+    investigationBoard: input.investigationBoard || null,
+    investigationJournal: input.investigationJournal || null,
     qualified: qualification.qualifiedCount || 0,
     watch: qualification.watchCount || 0,
     rejected: qualification.rejectedCount || 0,
@@ -181,6 +183,8 @@ function buildInvestigationReport(input = {}) {
       allCredibilityBriefsPass: recommendations.every(
         (r) => r.credibility && r.credibility.acceptance && r.credibility.acceptance.passes
       ),
+      adaptivePlanning: Boolean(input.investigationBoard),
+      canAnswerStopReason: Boolean(input.investigationJournal?.stopExplanation),
     },
   };
 }

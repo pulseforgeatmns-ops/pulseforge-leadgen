@@ -2,44 +2,16 @@
 
 /**
  * SPEC-142 — Investigation Planner.
- * Select the lowest-cost investigation to resolve uncertainty.
+ * SPEC-145 — Adaptive value-of-information planning; question chooses provider.
  */
 
 const { buildInvestigationStep } = require('./types');
 const { GAP_TO_EVIDENCE_TYPES } = require('./MissingEvidence');
 const {
   createDefaultProviderRegistry,
-  EVIDENCE_CAPABILITIES,
   COST_TIER_ORDER,
 } = require('../intelligence/ProviderCapabilityRegistry');
-
-const GAP_TO_CAPABILITY = Object.freeze({
-  decision_maker: EVIDENCE_CAPABILITIES.PEOPLE,
-  portfolio_size: EVIDENCE_CAPABILITIES.PROPERTY_COUNT,
-  cleaning_responsibility: EVIDENCE_CAPABILITIES.WEBSITE,
-  contact_path: EVIDENCE_CAPABILITIES.EMAILS,
-  buying_signals: EVIDENCE_CAPABILITIES.BUYING_SIGNALS,
-  business_fit: EVIDENCE_CAPABILITIES.WEBSITE,
-  geographic_fit: EVIDENCE_CAPABILITIES.BUSINESSES,
-  vendor_relationship: EVIDENCE_CAPABILITIES.BUYING_SIGNALS,
-  company_size: EVIDENCE_CAPABILITIES.GROWTH,
-  ownership: EVIDENCE_CAPABILITIES.OWNERSHIP,
-});
-
-const EVIDENCE_TYPE_TO_CAPABILITY = Object.freeze({
-  website: EVIDENCE_CAPABILITIES.WEBSITE,
-  linkedin: EVIDENCE_CAPABILITIES.PEOPLE,
-  contacts: EVIDENCE_CAPABILITIES.CONTACTS,
-  people: EVIDENCE_CAPABILITIES.PEOPLE,
-  emails: EVIDENCE_CAPABILITIES.EMAILS,
-  phone: EVIDENCE_CAPABILITIES.PHONE,
-  reviews: EVIDENCE_CAPABILITIES.REVIEWS,
-  news: EVIDENCE_CAPABILITIES.NEWS,
-  hiring_activity: EVIDENCE_CAPABILITIES.HIRING,
-  property_portfolio: EVIDENCE_CAPABILITIES.PROPERTY_COUNT,
-  county_records: EVIDENCE_CAPABILITIES.COUNTY_RECORDS,
-  vendor_references: EVIDENCE_CAPABILITIES.BUYING_SIGNALS,
-});
+const { GAP_TO_CAPABILITY, EVIDENCE_TYPE_TO_CAPABILITY, resolveCapability } = require('./GapCapabilities');
 
 const COST_TIER_SCORE = Object.freeze({
   free: 1,
@@ -48,25 +20,50 @@ const COST_TIER_SCORE = Object.freeze({
   paid: 8,
 });
 
+const { getGapProfile, getTopPriorityUnknown } = require('./InvestigationBoard');
+const {
+  createProviderLearningStore,
+  estimateInformationGain,
+  loadLearningFromMemory,
+} = require('./ProviderLearning');
+
+const DEFAULT_MIN_EXPECTED_GAIN = 0.02;
+
 function costScoreForTier(tier) {
   return COST_TIER_SCORE[tier] != null ? COST_TIER_SCORE[tier] : 10;
 }
 
-function resolveCapability(gapOrEvidenceType) {
-  const key = String(gapOrEvidenceType || '').toLowerCase();
-  if (GAP_TO_CAPABILITY[key]) return GAP_TO_CAPABILITY[key];
-  if (EVIDENCE_TYPE_TO_CAPABILITY[key]) return EVIDENCE_TYPE_TO_CAPABILITY[key];
-  return key;
+/**
+ * Map a gap to the provider best suited to answer it (question-driven, not pipeline order).
+ * @param {string} gap
+ * @param {object} [opts]
+ * @returns {string[]}
+ */
+function providersForGap(gap, opts = {}) {
+  const learning = opts.learning || createProviderLearningStore();
+  const ranked = learning.getBestProvidersForGap(gap, 5).map((r) => r.providerId);
+  const evidenceTypes = GAP_TO_EVIDENCE_TYPES[gap] || [gap];
+  const fromEvidence = evidenceTypes.map((et) => {
+    const cap = resolveCapability(et);
+    const registry = opts.registry || createDefaultProviderRegistry();
+    const match = registry.selectForCapabilities([cap], { allowMultiplePerCapability: true });
+    return match[0] && match[0].providerId;
+  }).filter(Boolean);
+
+  const merged = [...new Set([...ranked, ...fromEvidence])];
+  return merged;
 }
 
 /**
- * Build investigation chain for a gap (cheapest providers first).
+ * Build investigation chain for a gap (adaptive: highest expected gain first).
  * @param {string} gap
  * @param {object} [opts]
  * @returns {object[]}
  */
 function planInvestigationChain(gap, opts = {}) {
   const registry = opts.registry || createDefaultProviderRegistry();
+  const learning = opts.learning || createProviderLearningStore();
+  const profile = getGapProfile(gap);
   const evidenceTypes = GAP_TO_EVIDENCE_TYPES[gap] || [gap];
   const steps = [];
   const seen = new Set();
@@ -79,6 +76,15 @@ function planInvestigationChain(gap, opts = {}) {
 
     for (const provider of providers) {
       seen.add(`${provider.providerId}:${capability}`);
+      const providerMeta = registry.get(provider.providerId) || {};
+      const effectiveness = learning.getEffectiveness(provider.providerId, gap);
+      const expectedGain = estimateInformationGain({
+        gapImpact: profile.impact,
+        providerEffectiveness: effectiveness,
+        providerCoverage: providerMeta.coverage || 0.5,
+        providerReliability: providerMeta.reliability || provider.reliability || 0.7,
+      });
+
       steps.push(
         buildInvestigationStep({
           gap,
@@ -88,32 +94,68 @@ function planInvestigationChain(gap, opts = {}) {
           costTier: provider.costTier,
           costScore: costScoreForTier(provider.costTier),
           entityId: opts.entityId || null,
-          rationale: `Resolve ${gap} via ${provider.label} (${evidenceType})`,
+          expectedInformationGain: expectedGain,
+          rationale: `Resolve ${profile.label} via ${provider.label} — expected gain ${Math.round(expectedGain * 100)}%`,
+          question: `Need ${profile.label}`,
+          gapImpact: profile.impact,
+          gapDifficulty: profile.difficulty,
         })
       );
     }
   }
 
-  return steps.sort((a, b) => a.costScore - b.costScore);
+  if (opts.adaptivePlanning === false) {
+    return steps.sort((a, b) => a.costScore - b.costScore);
+  }
+
+  return steps.sort((a, b) => {
+    const gainA = a.expectedInformationGain || 0;
+    const gainB = b.expectedInformationGain || 0;
+    if (gainB !== gainA) return gainB - gainA;
+    if (a.costScore !== b.costScore) return a.costScore - b.costScore;
+    return COST_TIER_ORDER.indexOf(a.costTier) - COST_TIER_ORDER.indexOf(b.costTier);
+  });
 }
 
 /**
- * Select the next best investigation step.
+ * Select the next best investigation step using value-of-information.
  * @param {object} input
  * @returns {object|null}
  */
 function selectNextInvestigation(input = {}) {
-  const missing = input.missing || [];
   const attempted = new Set(input.attempted || []);
   const resolvedGaps = new Set(input.resolvedGaps || []);
   const registry = input.registry || createDefaultProviderRegistry();
+  const learning =
+    input.learning ||
+    (input.memory ? loadLearningFromMemory(input.memory) : createProviderLearningStore());
+  const minGain = input.minExpectedGain != null ? input.minExpectedGain : DEFAULT_MIN_EXPECTED_GAIN;
+  const adaptivePlanning = input.adaptivePlanning !== false;
 
-  const priorityGaps = missing.filter((g) => !resolvedGaps.has(g));
+  let priorityGaps = input.missing || [];
+  if (input.board) {
+    const top = getTopPriorityUnknown(input.board);
+    if (top) {
+      priorityGaps = [
+        top.gap,
+        ...priorityGaps.filter((g) => g !== top.gap),
+      ];
+    }
+  }
+
+  priorityGaps = priorityGaps.filter((g) => !resolvedGaps.has(g));
   if (priorityGaps.length === 0) return null;
 
   const chains = [];
   for (const gap of priorityGaps) {
-    chains.push(...planInvestigationChain(gap, { registry, entityId: input.entityId }));
+    chains.push(
+      ...planInvestigationChain(gap, {
+        registry,
+        learning,
+        entityId: input.entityId,
+        adaptivePlanning,
+      })
+    );
   }
 
   const available = chains.filter((step) => {
@@ -123,12 +165,51 @@ function selectNextInvestigation(input = {}) {
 
   if (available.length === 0) return null;
 
+  if (adaptivePlanning) {
+    available.sort((a, b) => {
+      const gainA = a.expectedInformationGain || 0;
+      const gainB = b.expectedInformationGain || 0;
+      if (gainB !== gainA) return gainB - gainA;
+      if (a.costScore !== b.costScore) return a.costScore - b.costScore;
+      return COST_TIER_ORDER.indexOf(a.costTier) - COST_TIER_ORDER.indexOf(b.costTier);
+    });
+
+    const best = available[0];
+    if ((best.expectedInformationGain || 0) < minGain) {
+      return {
+        ...best,
+        belowGainThreshold: true,
+        stopRecommendation: {
+          reason: 'diminishing_returns',
+          expectedGain: best.expectedInformationGain,
+          minGain,
+          explanation: `Best next step (${best.providerLabel}) yields only ${Math.round((best.expectedInformationGain || 0) * 100)}% expected gain`,
+        },
+      };
+    }
+    return best;
+  }
+
   available.sort((a, b) => {
     if (a.costScore !== b.costScore) return a.costScore - b.costScore;
     return COST_TIER_ORDER.indexOf(a.costTier) - COST_TIER_ORDER.indexOf(b.costTier);
   });
-
   return available[0];
+}
+
+/**
+ * Compare candidate steps by diminishing returns — pick highest gain per cost unit.
+ * @param {object[]} candidates
+ * @returns {object|null}
+ */
+function selectByDiminishingReturns(candidates = []) {
+  if (!candidates.length) return null;
+  const scored = candidates.map((step) => ({
+    ...step,
+    gainPerCost: (step.expectedInformationGain || 0) / Math.max(step.costScore || 1, 1),
+  }));
+  scored.sort((a, b) => b.gainPerCost - a.gainPerCost);
+  return scored[0];
 }
 
 /**
@@ -153,12 +234,37 @@ function applyDynamicReplanning(chain, resolvedGaps) {
   });
 }
 
+/**
+ * Explain why a step was chosen (acceptance criteria helper).
+ * @param {object} step
+ * @param {object} board
+ * @returns {object}
+ */
+function explainStepSelection(step, board = null) {
+  const top = board ? getTopPriorityUnknown(board) : null;
+  return {
+    mostImportantUnknown: top ? top.gap : step.gap,
+    whyHighestPriority: top
+      ? `Impact ${top.impact}, difficulty ${top.difficulty}, expected value ${top.expectedValue}`
+      : `Gap ${step.gap} has impact ${step.gapImpact}`,
+    chosenProvider: step.providerId,
+    providerLabel: step.providerLabel,
+    whyThisProvider: step.rationale,
+    expectedInformationGain: step.expectedInformationGain,
+    question: step.question || `Need ${step.gap}`,
+  };
+}
+
 module.exports = {
   GAP_TO_CAPABILITY,
   EVIDENCE_TYPE_TO_CAPABILITY,
   COST_TIER_SCORE,
+  DEFAULT_MIN_EXPECTED_GAIN,
+  providersForGap,
   planInvestigationChain,
   selectNextInvestigation,
+  selectByDiminishingReturns,
   applyDynamicReplanning,
   costScoreForTier,
+  explainStepSelection,
 };

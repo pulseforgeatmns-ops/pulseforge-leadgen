@@ -161,7 +161,7 @@ describe('SPEC-142 — Evidence-Driven Investigation Engine', () => {
   });
 
   it('plans investigation chain website → linkedin → paid providers', () => {
-    const chain = planInvestigationChain('decision_maker');
+    const chain = planInvestigationChain('decision_maker', { adaptivePlanning: false });
     assert.ok(chain.length >= 2);
     assert.equal(chain[0].costScore, Math.min(...chain.map((s) => s.costScore)));
   });

@@ -92,6 +92,11 @@ async function investigate(input) {
     startingPoint: engineResult.startingPoint || null,
     memoryLoaded: engineResult.memoryLoaded === true,
     memoryPersist: engineResult.memoryPersist || null,
+    investigationBoard: engineResult.investigationBoard || report.investigationBoard || null,
+    investigationJournal: engineResult.investigationJournal || report.investigationJournal || null,
+    stopExplanation: engineResult.stopExplanation || null,
+    completionReason: engineResult.completionReason || null,
+    providerLearning: engineResult.providerLearning || null,
   };
 }
 

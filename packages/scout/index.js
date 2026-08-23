@@ -2,7 +2,7 @@
 
 /**
  * @pulseforge/scout — Unified Scout Discovery (SPEC-123) + Intelligence Pipeline (SPEC-141)
- * + Evidence-Driven Investigation Engine (SPEC-142)
+ * + Evidence-Driven Investigation Engine (SPEC-142) + Adaptive Investigation Planning (SPEC-145)
  *
  * Scout owns Discovery and Investigation. Operators issue objectives;
  * Scout determines strategy and evidence requirements through hypothesis-driven loops.
