@@ -22,6 +22,7 @@ const { maybeHandleAcquisitionOwnershipTurn } = require('../AcquisitionOwnership
 const { advanceDiscoveryAfterApproval, advancePlanAfterApproval } = require('../AmoOperatorApproval');
 const { composeOperations } = require('../../commandDeck/sections/Operations');
 const { ensureAmoTenantHydrated, clearAmoHydrationCache } = require('../AmoWorkspaceHydration');
+const { createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const ANCHOR_OBJECTIVE =
   'Acquire commercial cleaning customers in Manchester NH for law firms.';
@@ -136,22 +137,13 @@ describe('SPEC-131 — Mission Runtime Unification', () => {
       targetSegment: 'Law Firms',
     });
 
-    const runtimeEngine = amo.createAcquisitionMissionEngine();
-    const service = {
-      getEngine: () => runtimeEngine,
-      hydrateTenant: async (tenantId) => {
-        for (const row of source.list(tenantId)) {
-          runtimeEngine.store.putMission(row);
-        }
-        return runtimeEngine;
-      },
-    };
+    const runtime = createHydratingTestRuntime(source, { persist: false });
 
     const session = { id: 's-spec131', context: { tenantId: '10' } };
     const result = await ensureAmoTenantHydrated({
       session,
       context: session.context,
-      acquisitionMissionService: service,
+      acquisitionMissionRuntime: runtime,
     });
 
     assert.equal(result.hydrated, true);

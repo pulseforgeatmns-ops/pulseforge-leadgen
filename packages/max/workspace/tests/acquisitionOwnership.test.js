@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -18,15 +19,6 @@ const {
   clearAcquisitionOwnershipAuditLog,
   listAcquisitionOwnershipAuditLog,
 } = require('../audit/AcquisitionOwnershipAudit');
-
-function engineAsService(engine) {
-  return {
-    createMission: async (input) => engine.create(input),
-    listMissions: async (tenantId) => engine.list(tenantId),
-    contribute: (id, payload, opts) => engine.contribute(id, payload, opts),
-    getEngine: () => engine,
-  };
-}
 
 const ANCHOR_OBJECTIVE =
   'I want to acquire one recurring commercial cleaning client in Greater Manchester.';
@@ -91,8 +83,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     const turn = await maybeHandleAcquisitionOwnershipTurn({
       question: ANCHOR_OBJECTIVE,
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
-      acquisitionMissionService: engineAsService(amoEngine),
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
       audit,
       cieService: {
@@ -149,8 +140,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     const turn = await maybeHandleAcquisitionOwnershipTurn({
       question: 'Acquire one recurring commercial cleaning client',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
-      acquisitionMissionService: engineAsService(amoEngine),
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
     });
 
@@ -209,8 +199,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
     await maybeHandleAcquisitionOwnershipTurn({
       question: ANCHOR_OBJECTIVE,
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
-      acquisitionMissionService: engineAsService(amoEngine),
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
     });
 

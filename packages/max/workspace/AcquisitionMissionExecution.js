@@ -17,8 +17,10 @@ const {
 } = require('./MissionCommunication');
 const {
   resolveTenantId,
+  resolveAcquisitionMissionRuntime,
   resolveAcquisitionEngine,
   resolveMissionId,
+  assertRuntimeEngine,
 } = require('./WorkspaceMissionInspection');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const {
@@ -592,8 +594,10 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   askPathTrace.traceEnter('maybeHandleAcquisitionMissionExecution');
   const question = String(input.question || '').trim();
   const tenantId = resolveTenantId(input);
-  const engine = resolveAcquisitionEngine(input);
-  if (!engine || !tenantId) {
+  const runtime = resolveAcquisitionMissionRuntime(input);
+  const engine = runtime.engine();
+  assertRuntimeEngine(engine, runtime);
+  if (!tenantId) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'no_engine_or_tenant');
     return null;
   }

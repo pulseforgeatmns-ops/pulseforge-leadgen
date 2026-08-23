@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -100,7 +101,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
     const turn = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: true,
     });
 
@@ -113,7 +114,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
     const repeat = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: true,
     });
 
@@ -170,7 +171,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
     const turn = await maybeHandleAcquisitionMissionExecution({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: engine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: engine }),
       allowFixtureFallback: true,
       audit,
     });

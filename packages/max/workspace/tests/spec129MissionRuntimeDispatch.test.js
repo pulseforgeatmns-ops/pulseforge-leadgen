@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -57,7 +58,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     const selected = await resolveMissionRuntime({
       question: 'approved',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine: stubLegacyMissionEngine(),
       session: { id: 's-amo', context: { tenantId: '10', missionId: mission.id } },
       missionsEnabled: true,
@@ -119,7 +120,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     const selected = await resolveMissionRuntime({
       question: 'approved',
       context: { tenantId: '10', missionId: legacy.id },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine,
       session: {
         id: 's-both',
@@ -166,7 +167,7 @@ describe('SPEC-129 — Mission Runtime Dispatch', () => {
     await missionEngine.store.update({ id: legacy.id, status: 'planning' });
 
     const workspace = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine,
       resolverEnabled: true,

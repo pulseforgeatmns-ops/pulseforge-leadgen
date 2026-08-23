@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 /**
  * SPEC-134 — Preserve AMO Presentation Contract.
@@ -47,15 +48,6 @@ const CI_EVIDENCE = {
   constraints: [],
 };
 
-function engineAsService(engine) {
-  return {
-    createMission: async (input) => engine.create(input),
-    listMissions: async (tenantId) => engine.list(tenantId),
-    contribute: (id, payload, opts) => engine.contribute(id, payload, opts),
-    getEngine: () => engine,
-  };
-}
-
 function assertAmoPresentation(comm, prose, structured) {
   assert.deepEqual(comm.sources, AMO_SOURCES.slice());
   assert.ok(comm.sources.includes('acquisition_mission'));
@@ -83,7 +75,7 @@ describe('SPEC-134 — Preserve AMO Presentation Contract', { concurrency: false
     const turn = await maybeHandleAcquisitionOwnershipTurn({
       question: ANCHOR_OBJECTIVE,
       context: { tenantId: '10' },
-      acquisitionMissionService: engineAsService(amoEngine),
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
       audit: createAcquisitionOwnershipAudit(),
       cieService: {

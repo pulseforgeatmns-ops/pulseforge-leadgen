@@ -17,6 +17,7 @@ const {
 } = require('./MissionFirstRouting');
 const {
   shouldInspectActiveMission,
+  resolveAcquisitionMissionRuntime,
   resolveAcquisitionEngine,
   resolveTenantId,
   looksLikeAcquisitionMissionQuestion,
@@ -109,7 +110,8 @@ function hasAcquisitionMissionContext(input = {}) {
   const ctx = input.context || (session && session.context) || {};
   if (ctx.missionId || ctx.acquisitionMissionId || ctx.acquisitionOwner) return true;
   const tenantId = resolveTenantId(input);
-  const engine = resolveAcquisitionEngine(input);
+  const runtime = resolveAcquisitionMissionRuntime(input);
+  const engine = runtime.engine();
   if (!engine || !tenantId) return false;
   const missions = typeof engine.list === 'function' ? engine.list(tenantId) : [];
   return missions.some((row) => row && row.stage !== 'improve');
@@ -304,6 +306,7 @@ async function resolveWorkspaceOwner(input = {}) {
   }
 
   // 1 — Active Mission (legacy continuation + SPEC-127 execution lock)
+  const amoRuntime = resolveAcquisitionMissionRuntime(input);
   const missionLock = await resolveActiveMissionLock({
     question,
     session: input.session,
@@ -311,8 +314,8 @@ async function resolveWorkspaceOwner(input = {}) {
     missionEngine: input.missionEngine,
     missionsEnabled: input.missionsEnabled,
     resolverEnabled: input.resolverEnabled,
-    acquisitionMissionEngine: input.acquisitionMissionEngine,
-    acquisitionMissionService: input.acquisitionMissionService,
+    acquisitionMissionRuntime: amoRuntime,
+    runtimeProvider: input.runtimeProvider,
   });
 
   if (missionLock.active && missionLock.executionCommand && !missionLock.explicitExit) {

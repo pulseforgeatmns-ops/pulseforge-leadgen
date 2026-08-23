@@ -23,6 +23,10 @@ const {
   resolveTenantId,
 } = require('./WorkspaceMissionInspection');
 const {
+  resolveAcquisitionMissionRuntime,
+  assertRuntimeEngine,
+} = require('../../../services/acquisitionMissionRuntime');
+const {
   looksLikeAcquisitionMissionQuestion,
   shouldInspectActiveMission,
 } = require('./WorkspaceMissionInspection');
@@ -165,26 +169,10 @@ async function attachEvidenceToMission(missionId, objective, ciEvidence, opts = 
     },
   };
 
-  if (opts.acquisitionMissionEngine && typeof opts.acquisitionMissionEngine.contribute === 'function') {
-    return opts.acquisitionMissionEngine.contribute(missionId, payload, {
-      tenantId: opts.tenantId,
-    });
-  }
-
-  let service = opts.acquisitionMissionService;
-  if (!service) {
-    try {
-      service = require('../../../services/acquisitionMission');
-    } catch (_) {
-      return null;
-    }
-  }
-  if (!service || typeof service.contribute !== 'function') return null;
-
-  return service.contribute(missionId, payload, {
+  const runtime = resolveAcquisitionMissionRuntime(opts);
+  return runtime.contribute(missionId, payload, {
     tenantId: opts.tenantId,
-    persist: opts.persist,
-    pool: opts.pool,
+    ...runtime.persistOpts(opts),
   });
 }
 
@@ -375,29 +363,19 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
 
   if (!tenantId) return null;
 
-  let service = input.acquisitionMissionService;
-  if (!service) {
-    try {
-      service = require('../../../services/acquisitionMission');
-    } catch (_) {
-      return null;
-    }
-  }
-  if (!service || typeof service.createMission !== 'function') return null;
+  const runtime = resolveAcquisitionMissionRuntime(input);
+  const persistOpts = runtime.persistOpts(input);
 
   const ciLoaded = await attachClientIntelligenceContext(input);
   const ciEvidence = buildClientIntelligenceMissionEvidence(ciLoaded.summary);
 
-  const missions = await service.listMissions(tenantId, {
-    persist: input.persist,
-    pool: input.pool,
-  });
+  const missions = await runtime.list(tenantId, persistOpts);
   let mission = findResumableMission(missions, question);
   let created = false;
 
   if (!mission) {
     const targetSegment = inferTargetSegment(question);
-    mission = await service.createMission(
+    mission = await runtime.create(
       {
         tenantId,
         clientId: Number(tenantId) || tenantId,
@@ -411,23 +389,19 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
           blueprint: ciEvidence.strategicEvidence || null,
         },
       },
-      {
-        persist: input.persist,
-        pool: input.pool,
-      }
+      persistOpts
     );
     created = true;
   }
 
-  const engine = service.getEngine();
-  if (!engine || typeof engine.inspect !== 'function') return null;
+  const engine = runtime.engine();
+  assertRuntimeEngine(engine, runtime);
 
   if (ciEvidence.attached) {
     await attachEvidenceToMission(mission.id, question, ciEvidence, {
       tenantId,
-      persist: input.persist,
-      pool: input.pool,
-      acquisitionMissionService: service,
+      ...persistOpts,
+      acquisitionMissionRuntime: runtime,
     });
     emitCiContribution({
       missionId: mission.id,

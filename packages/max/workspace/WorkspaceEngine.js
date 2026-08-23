@@ -200,8 +200,7 @@ class WorkspaceEngine {
    * @param {object} [options.operatingEvidenceOpts] - SPEC-105 operating evidence loaders (tests)
    * @param {object} [options.operatingUpdateOpts] - SPEC-106 operator-reported evidence (tests)
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
-   * @param {object} [options.acquisitionMissionEngine] - SPEC-118 acquisition mission engine
-   * @param {object} [options.acquisitionMissionService] - SPEC-118 service facade (tests)
+   * @param {object} [options.runtimeProvider] - SPEC-140 acquisition mission runtime provider (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
@@ -237,8 +236,11 @@ class WorkspaceEngine {
     this._operatorContextOpts = options.operatorContextOpts || null;
     this._operatingEvidenceOpts = options.operatingEvidenceOpts || null;
     this._operatingUpdateOpts = options.operatingUpdateOpts || null;
-    this._acquisitionMissionEngine = options.acquisitionMissionEngine || null;
-    this._acquisitionMissionService = options.acquisitionMissionService || null;
+    this._runtimeProvider =
+      options.runtimeProvider ||
+      (options.acquisitionMissionRuntime
+        ? () => options.acquisitionMissionRuntime
+        : null);
     this._loadOperatorContext =
       options.loadOperatorContext != null
         ? options.loadOperatorContext !== false
@@ -250,23 +252,28 @@ class WorkspaceEngine {
     return this._sessions;
   }
 
+  _resolveAmoRuntime() {
+    if (this._runtimeProvider) return this._runtimeProvider();
+    const { getAcquisitionMissionRuntime } = require('../../../services/acquisitionMissionRuntime');
+    return getAcquisitionMissionRuntime();
+  }
+
+  _amoRuntimeInput(extra = {}) {
+    const runtime = this._resolveAmoRuntime();
+    return {
+      acquisitionMissionRuntime: runtime,
+      runtimeProvider: this._runtimeProvider || undefined,
+      ...runtime.persistOpts(extra),
+      ...extra,
+    };
+  }
+
   /**
    * SPEC-139 — pool + persist flags for transactional AMO stage commits.
    * @returns {{ persist?: boolean, pool?: object }}
    */
   _amoStagePersistOpts() {
-    if (this._acquisitionMissionEngine) {
-      return { persist: false };
-    }
-    const pool = this._operatorContextOpts && this._operatorContextOpts.pool;
-    if (pool) {
-      return { persist: true, pool };
-    }
-    try {
-      return { persist: true, pool: require('../../../db') };
-    } catch (_) {
-      return { persist: false };
-    }
+    return this._resolveAmoRuntime().persistOpts();
   }
 
   /**
@@ -435,8 +442,7 @@ class WorkspaceEngine {
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
-      acquisitionMissionEngine: this._acquisitionMissionEngine,
-      acquisitionMissionService: this._acquisitionMissionService,
+      ...this._amoRuntimeInput(),
     });
     askPathTrace.traceOwner(workspaceOwnership.owner, workspaceOwnership.reason, {
       confidence: workspaceOwnership.confidence,
@@ -501,8 +507,7 @@ class WorkspaceEngine {
         missionEngine: this._missionEngine,
         missionsEnabled: this._missionsEnabled,
         resolverEnabled: this._resolverEnabled,
-        acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
-        acquisitionMissionService: this._acquisitionMissionService || undefined,
+        ...this._amoRuntimeInput(),
       });
       logMissionRuntimeSelected({
         runtime: runtimeDecision.runtime,
@@ -547,8 +552,7 @@ class WorkspaceEngine {
           question,
           session,
           context: rawContext || session.context,
-          acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
-          acquisitionMissionService: this._acquisitionMissionService || undefined,
+          ...this._amoRuntimeInput(),
           missionEngine: this._missionEngine || undefined,
           ...this._amoStagePersistOpts(),
         });
@@ -700,11 +704,9 @@ class WorkspaceEngine {
         question,
         session,
         context: rawContext || session.context,
-        acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
-        acquisitionMissionService: this._acquisitionMissionService || undefined,
+        ...this._amoRuntimeInput(),
         cieService: this._clientIntelligenceService || undefined,
         cieOpts: this._clientIntelligenceOpts || undefined,
-        persist: this._acquisitionMissionEngine ? false : undefined,
       });
       if (acquisitionOwnershipTurn) {
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
@@ -932,9 +934,7 @@ class WorkspaceEngine {
         question,
         session,
         context: rawContext || session.context,
-        acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
-        acquisitionMissionService: this._acquisitionMissionService || undefined,
-        persist: this._acquisitionMissionEngine ? false : undefined,
+        ...this._amoRuntimeInput(),
       });
       if (workspaceMissionInspectionTurn) {
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
@@ -1888,8 +1888,7 @@ class WorkspaceEngine {
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
-      acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
-      acquisitionMissionService: this._acquisitionMissionService || undefined,
+      ...this._amoRuntimeInput(),
     });
     const explicitMissionExit = isExplicitMissionExit(question).explicit;
 

@@ -73,19 +73,11 @@ function resolveMissionId(input = {}, missions = []) {
   );
 }
 
-function resolveAcquisitionEngine(input = {}) {
-  if (input.acquisitionMissionEngine) return input.acquisitionMissionEngine;
-  let service = input.acquisitionMissionService;
-  if (!service) {
-    try {
-      service = require('../../../services/acquisitionMission');
-    } catch (_) {
-      return null;
-    }
-  }
-  if (!service) return null;
-  return service.getEngine && service.getEngine();
-}
+const {
+  resolveAcquisitionMissionRuntime,
+  resolveAcquisitionEngine,
+  assertRuntimeEngine,
+} = require('../../../services/acquisitionMissionRuntime');
 
 function buildAnswerFromInspection(question, snapshot, mission, inspection) {
   if (inspection && inspection.resolved) {
@@ -302,12 +294,9 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
     return null;
   }
 
-  const engine = resolveAcquisitionEngine(input);
-  if (!engine || typeof engine.inspect !== 'function' || typeof engine.list !== 'function') {
-    emitActiveMission({ missionFound: false, reason: 'no_acquisition_engine' });
-    emitInspection({ attempted: false, reason: 'no_acquisition_engine' });
-    return null;
-  }
+  const runtime = resolveAcquisitionMissionRuntime(input);
+  const engine = runtime.engine();
+  assertRuntimeEngine(engine, runtime);
 
   const missions = engine.list(tenantId);
   const hasActiveMission = missions.length > 0;
@@ -417,7 +406,9 @@ module.exports = {
   PIPELINE_MISSION_INSPECTION,
   PIPELINE_RETRIEVAL,
   resolveMissionId,
+  resolveAcquisitionMissionRuntime,
   resolveAcquisitionEngine,
+  assertRuntimeEngine,
   buildAnswerFromInspection,
   buildMissionInspectionResponse,
   maybeHandleWorkspaceMissionInspection,

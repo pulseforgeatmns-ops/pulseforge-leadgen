@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime } = require('../packages/max/workspace/tests/amoTestRuntime');
 
 /**
  * SPEC-118 — Acquisition Mission Orchestration (service, routes, competency, Max Ask).
@@ -140,11 +141,7 @@ describe('SPEC-118 Max Ask', () => {
     const turn = await maybeHandleAcquisitionMissionTurn({
       question: 'Why is this mission here?',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: amoEngine,
-      acquisitionMissionService: {
-        answerOperator: (question, input) => amoEngine.answerOperator(question, input),
-        getEngine: () => amoEngine,
-      },
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
     });
     assert.ok(turn);
@@ -195,11 +192,7 @@ describe('SPEC-118 Max Ask', () => {
     const turn = await maybeHandleAcquisitionMissionTurn({
       question: 'What is the 68% progress based on?',
       context: { tenantId: '10', missionId: mission.id },
-      acquisitionMissionEngine: amoEngine,
-      acquisitionMissionService: {
-        answerOperator: (question, input) => amoEngine.answerOperator(question, input),
-        getEngine: () => amoEngine,
-      },
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       persist: false,
     });
     assert.ok(turn);

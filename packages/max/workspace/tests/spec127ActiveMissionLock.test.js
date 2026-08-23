@@ -1,4 +1,5 @@
 'use strict';
+const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRuntime } = require('./amoTestRuntime');
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -68,7 +69,7 @@ describe('SPEC-127 — Active Mission Lock', () => {
     const ownership = await resolveWorkspaceOwner({
       question: 'Approved. Begin Discovery.',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine: stubLegacyMissionEngine(),
       missionsEnabled: true,
       resolverEnabled: true,
@@ -143,7 +144,7 @@ describe('SPEC-127 — Active Mission Lock', () => {
     });
 
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine: stubLegacyMissionEngine(),
       disableLlm: true,
@@ -212,7 +213,7 @@ describe('SPEC-127 — Active Mission Lock', () => {
     });
 
     const engine = createWorkspaceEngine({
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionsEnabled: true,
       missionEngine: stubLegacyMissionEngine(),
       disableLlm: true,
@@ -244,7 +245,7 @@ describe('SPEC-127 — Active Mission Lock', () => {
     const lock = await resolveActiveMissionLock({
       question: 'continue',
       context: { tenantId: '10' },
-      acquisitionMissionEngine: amoEngine,
+      acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
       missionEngine: stubLegacyMissionEngine(),
       session: { id: 's1', context: { tenantId: '10' } },
     });
