@@ -18,6 +18,7 @@ const {
   classifyInspectionQuestion,
   formatInspection,
   referencesMissionState,
+  referencesSpecialistState,
 } = require('../../acquisition-mission/Inspection');
 const { formatExplain } = require('../../acquisition-mission/Explain');
 const { formatWorkspace } = require('../../acquisition-mission/Workspace');
@@ -45,9 +46,14 @@ function looksLikeAcquisitionMissionQuestion(question) {
   );
 }
 
-function shouldInspectActiveMission(question, hasActiveMission) {
+function shouldInspectActiveMission(question, hasActiveMission, conversationIntent = null) {
+  if (conversationIntent && ['inspect', 'explain', 'challenge', 'compare'].includes(conversationIntent.intent)) {
+    if (hasActiveMission || looksLikeAcquisitionMissionQuestion(question) || referencesSpecialistState(question)) {
+      return true;
+    }
+  }
   if (!hasActiveMission) return looksLikeAcquisitionMissionQuestion(question);
-  return Boolean(classifyInspectionQuestion(question));
+  return Boolean(classifyInspectionQuestion(question)) || referencesSpecialistState(question);
 }
 
 function resolveTenantId(input = {}) {
@@ -312,7 +318,7 @@ async function maybeHandleWorkspaceMissionInspection(input = {}) {
     status: mission ? mission.status : null,
   });
 
-  if (!shouldInspectActiveMission(question, hasActiveMission)) {
+  if (!shouldInspectActiveMission(question, hasActiveMission, input.conversationIntent || null)) {
     emitInspection({ attempted: false, reason: 'not_inspection_question', missionId: mission && mission.id });
     return null;
   }

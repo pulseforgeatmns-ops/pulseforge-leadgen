@@ -67,10 +67,21 @@ function capitalize(value) {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
 }
 
+function referencesSpecialistState(question) {
+  const q = String(question || '').trim().toLowerCase();
+  if (!q) return false;
+  return (
+    /\bwhy did (?:scout|paige|emmett|max)\b/.test(q) ||
+    /\bwhy (?:has|hasn't|did|didn't) (?:scout|paige|emmett|max)\b/.test(q) ||
+    /\bwhy (?:did|has) scout (?:stop|pause|halt|fail)\b/.test(q)
+  );
+}
+
 function referencesMissionState(question) {
   const q = String(question || '').trim().toLowerCase();
   if (!q) return false;
   return (
+    referencesSpecialistState(q) ||
     /\b(?:why|what).*\b(?:progress|mission progress)\b/.test(q) ||
     /\bprogress\b.*\bbased\b|\bwhat is the \d+\s*%/.test(q) ||
     /\d+\s*%\s*(?:progress|complete|done)\b/.test(q) ||
@@ -89,6 +100,16 @@ function referencesMissionState(question) {
 function classifyInspectionQuestion(question) {
   const q = String(question || '').trim().toLowerCase();
   if (!q) return null;
+
+  if (referencesSpecialistState(q)) {
+    if (/\b(?:stop|pause|halt|fail|error|block|wait)\b/.test(q)) {
+      return INSPECTION_PROPERTIES.BLOCKER;
+    }
+    if (/\b(?:wait|pending|approval)\b/.test(q)) {
+      return INSPECTION_PROPERTIES.WAITING;
+    }
+    return INSPECTION_PROPERTIES.BLOCKER;
+  }
 
   if (/why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this\b/.test(q)) {
     return INSPECTION_PROPERTIES.EXPLAIN;
@@ -366,7 +387,50 @@ function explainStage(snapshot) {
   };
 }
 
-function explainBlocker(snapshot) {
+function explainSpecialistStop(snapshot, question = '') {
+  const q = String(question || '').toLowerCase();
+  const workspace = snapshot.workspace || {};
+  const scout = workspace.scout || {};
+  const mission = snapshot.mission || {};
+  const blocker = snapshot.blocker || currentBlocker(mission.blockers || []);
+  const specialist = /\bpaige\b/.test(q)
+    ? 'Paige'
+    : /\bemmett\b/.test(q)
+      ? 'Emmett'
+      : 'Scout';
+
+  let summary = blocker
+    ? blocker.reason || blocker.label
+    : scout.state === 'waiting'
+      ? `${specialist} completed its stage and the mission is waiting on the next gate.`
+      : scout.state === 'complete'
+        ? `${specialist} finished discovery; the mission awaits operator review before advancing.`
+        : `${specialist} is idle at the current lifecycle gate.`;
+
+  if (mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) {
+    summary = `${specialist} stopped because the mission requires operator input: ${mission.pendingOperatorDecision.prompt}`;
+  }
+
+  return {
+    property: INSPECTION_PROPERTIES.BLOCKER,
+    value: blocker ? blocker.label : `${specialist} gate`,
+    summary,
+    derivedFrom: [
+      { label: 'Specialist', detail: specialist },
+      { label: 'Scout state', detail: scout.state || 'unknown' },
+      ...(blocker ? [{ label: blocker.label, detail: blocker.reason || blocker.label }] : []),
+      ...(mission.pendingOperatorDecision
+        ? [{ label: 'Pending decision', detail: mission.pendingOperatorDecision.prompt }]
+        : []),
+    ],
+    headline: `Why ${specialist} Stopped`,
+  };
+}
+
+function explainBlocker(snapshot, question = '') {
+  if (referencesSpecialistState(question)) {
+    return explainSpecialistStop(snapshot, question);
+  }
   const blocker = snapshot.blocker || currentBlocker((snapshot.mission || {}).blockers || []);
   return {
     property: INSPECTION_PROPERTIES.BLOCKER,
@@ -443,7 +507,7 @@ function explainRecommendation(snapshot) {
   };
 }
 
-function explainMetric(property, snapshot) {
+function explainMetric(property, snapshot, question = '') {
   switch (property) {
     case INSPECTION_PROPERTIES.PROGRESS:
       return explainProgressBasis(snapshot.mission, specialistContext(snapshot.contributions || [], {}));
@@ -456,7 +520,7 @@ function explainMetric(property, snapshot) {
     case INSPECTION_PROPERTIES.WAITING:
       return explainWaiting(snapshot);
     case INSPECTION_PROPERTIES.BLOCKER:
-      return explainBlocker(snapshot);
+      return explainBlocker(snapshot, question);
     case INSPECTION_PROPERTIES.TIMELINE:
       return explainTimeline(snapshot);
     case INSPECTION_PROPERTIES.NEXT:
@@ -587,7 +651,7 @@ function inspectQuestion(question, snapshot, opts = {}) {
     return result;
   }
 
-  const explanation = explainMetric(property, snapshot);
+  const explanation = explainMetric(property, snapshot, question);
   const result = {
     resolved: true,
     property,
@@ -609,6 +673,7 @@ function inspectQuestion(question, snapshot, opts = {}) {
 module.exports = {
   INSPECTION_PROPERTIES,
   referencesMissionState,
+  referencesSpecialistState,
   classifyInspectionQuestion,
   buildMissionContext,
   explainMetric,

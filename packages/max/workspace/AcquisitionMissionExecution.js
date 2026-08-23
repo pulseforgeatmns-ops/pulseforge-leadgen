@@ -694,6 +694,12 @@ function shouldExecutePrioritization(action, snapshot) {
 async function maybeHandleAcquisitionMissionExecution(input = {}) {
   askPathTrace.traceEnter('maybeHandleAcquisitionMissionExecution');
   const question = String(input.question || '').trim();
+  const conversationIntent = input.conversationIntent || null;
+  const { mayMutateMission } = require('../operatorCognition');
+  if (conversationIntent && !mayMutateMission(conversationIntent)) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'cognition_read_only');
+    return null;
+  }
   const tenantId = resolveTenantId(input);
   const runtime = resolveAcquisitionMissionRuntime(input);
   const engine = runtime.engine();

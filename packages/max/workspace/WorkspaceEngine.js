@@ -49,6 +49,12 @@ const {
   WORKSPACE_OWNERS,
 } = require('./WorkspaceOwnershipResolver');
 const {
+  classifyOperatorCognition,
+  attachSpecialists,
+  isReadOnlyCognition,
+} = require('../operatorCognition');
+const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
+const {
   createWorkspaceOwnershipAudit,
 } = require('./audit/WorkspaceOwnershipAudit');
 const { maybeHandleCalCoachingTurn } = require('./CalCoachingContext');
@@ -432,6 +438,23 @@ class WorkspaceEngine {
       text: question,
     });
 
+    // SPEC-146 — Operator Cognition runs before mission runtime or execution.
+    let conversationIntent = attachSpecialists(
+      classifyOperatorCognition(question, {
+        session,
+        context: rawContext || session.context,
+      })
+    );
+    if (session.context && typeof session.context === 'object') {
+      session.context.conversationIntent = conversationIntent;
+    }
+    askPathTrace.traceBranch('operator_cognition', {
+      intent: conversationIntent.intent,
+      thinkingMode: conversationIntent.thinkingMode,
+      mutatesMission: conversationIntent.mutatesMission,
+      confidence: conversationIntent.confidence,
+    });
+
     // SPEC-125 — Ownership-first runtime. Resolve owner before intent classification.
     const ownershipAudit =
       this._ownershipAudit || createWorkspaceOwnershipAudit();
@@ -548,10 +571,90 @@ class WorkspaceEngine {
         }
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
         askPathTrace.traceBranch('runtime:amo');
+
+        if (isReadOnlyCognition(conversationIntent)) {
+          const cognitionTurn = await maybeHandleOperatorCognitionTurn({
+            question,
+            session,
+            context: rawContext || session.context,
+            conversationIntent,
+            ...this._amoRuntimeInput(),
+          });
+          if (cognitionTurn) {
+            session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            if (session.context && typeof session.context === 'object') {
+              session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+              session.context._answerCorpus = 'workspace';
+            }
+            const structuredCognition = cognitionTurn.structured;
+            const presentedCognition = await this._presentation.present(structuredCognition);
+            const proseCognition = presentedCognition.prose || cognitionTurn.prose;
+            this._sessions.appendMessage(session.id, {
+              role: 'max',
+              text: proseCognition,
+              structured: structuredCognition,
+            });
+            return traceAskReturn('operator_cognition_inspection', {
+              sessionId: session.id,
+              prose: proseCognition,
+              structured: structuredCognition,
+              metadata: {
+                ...(presentedCognition.metadata || {}),
+                conversationIntent: cognitionTurn.conversationIntent || conversationIntent,
+              },
+              suggestions: resolveResultSuggestions({
+                structured: structuredCognition,
+                session,
+                question,
+              }),
+              recommendedActions: structuredCognition.recommendedActions,
+              contextSwitch: envelopeSwitch,
+              domainSwitch: null,
+              context: session.context,
+              presentation: presentedCognition.presentation,
+              route: ROUTE_KINDS.INTELLIGENCE,
+              mission:
+                cognitionTurn.answered &&
+                cognitionTurn.answered.mission ||
+                null,
+              resolution: { action: 'explained', reason: cognitionTurn.reason },
+              executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+              interrogation: null,
+              conversationIntent: cognitionTurn.conversationIntent || conversationIntent,
+              domainDecision: {
+                domain: EXECUTION_DOMAINS.WORKSPACE,
+                reason: cognitionTurn.reason,
+                missionType: 'acquisition_mission',
+                missionIntent: conversationIntent.intent,
+                confidence: conversationIntent.confidence,
+                previousDomain: session.previousExecutionDomain || null,
+                domainSwitched: false,
+              },
+              executionContext: {
+                domain: EXECUTION_DOMAINS.WORKSPACE,
+                routeKind: ROUTE_KINDS.INTELLIGENCE,
+                reason: cognitionTurn.reason,
+                missionType: 'acquisition_mission',
+                missionId:
+                  cognitionTurn.answered &&
+                  cognitionTurn.answered.mission
+                    ? cognitionTurn.answered.mission.id
+                    : null,
+              },
+              workspaceOwnership: {
+                ...workspaceOwnership,
+                missionRuntime: MISSION_RUNTIMES.AMO,
+                missionType: 'acquisition_mission',
+              },
+            }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
+          }
+        }
+
         const amoExecutionTurn = await acquisitionMissionExecution.maybeHandleAcquisitionMissionExecution({
           question,
           session,
           context: rawContext || session.context,
+          conversationIntent,
           ...this._amoRuntimeInput(),
           missionEngine: this._missionEngine || undefined,
           ...this._amoStagePersistOpts(),
@@ -934,6 +1037,7 @@ class WorkspaceEngine {
         question,
         session,
         context: rawContext || session.context,
+        conversationIntent,
         ...this._amoRuntimeInput(),
       });
       if (workspaceMissionInspectionTurn) {
@@ -954,7 +1058,10 @@ class WorkspaceEngine {
           sessionId: session.id,
           prose: proseMission,
           structured: structuredMission,
-          metadata: presentedMission.metadata,
+          metadata: {
+            ...(presentedMission.metadata || {}),
+            conversationIntent,
+          },
           suggestions: resolveResultSuggestions({
             structured: structuredMission,
             session,
@@ -973,12 +1080,13 @@ class WorkspaceEngine {
           resolution: null,
           executionDomain: EXECUTION_DOMAINS.WORKSPACE,
           interrogation: null,
+          conversationIntent,
           domainDecision: {
             domain: EXECUTION_DOMAINS.WORKSPACE,
             reason: workspaceMissionInspectionTurn.reason,
             missionType: null,
-            missionIntent: null,
-            confidence: 1,
+            missionIntent: conversationIntent.intent,
+            confidence: conversationIntent.confidence,
             previousDomain: session.previousExecutionDomain || null,
             domainSwitched: false,
           },
