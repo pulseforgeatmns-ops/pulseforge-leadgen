@@ -10,13 +10,16 @@ const {
 } = require('../AcquisitionMissionExecution');
 const {
   hasPendingDiscoveryApproval,
+  hasPendingPrioritizationApproval,
   hasPendingPlanApproval,
   advanceDiscoveryAfterApproval,
+  advancePrioritizationAfterApproval,
   advancePlanAfterApproval,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
   APPROVAL_PHASES,
 } = require('../AmoOperatorApproval');
+const { OPERATOR_DECISION_KINDS } = amo;
 const {
   createMissionApprovalAudit,
   clearMissionApprovalAuditLog,
@@ -77,7 +80,8 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
 
     const snapshotAfter = engine.inspect(mission.id, { tenantId: '10' });
     assert.equal(hasPendingDiscoveryApproval(snapshotAfter), false);
-    assert.equal(snapshotAfter.mission.pendingOperatorDecision, null);
+    assert.equal(hasPendingPrioritizationApproval(snapshotAfter), true);
+    assert.equal(snapshotAfter.mission.pendingOperatorDecision.kind, OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
     assert.ok(findDiscoveryApproval(snapshotAfter.contributions));
     assert.ok(findScoutDiscoveryAfterApproval(snapshotAfter.contributions, first.approval));
 
@@ -125,7 +129,7 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
     }
   });
 
-  it('advances mission after successful discovery', async () => {
+  it('stays in discover after successful discovery until prioritization is approved', async () => {
     await approvePlan();
     await advanceDiscoveryAfterApproval({
       engine,
@@ -133,6 +137,28 @@ describe('SPEC-128 — Operator Approval Must Advance Stage', () => {
       tenantId: '10',
       question: 'Approved. Begin Discovery.',
       allowFixtureFallback: true,
+    });
+
+    const updated = engine.get(mission.id, '10');
+    assert.equal(updated.stage, 'discover');
+    assert.equal(updated.pendingOperatorDecision.kind, OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
+  });
+
+  it('advances to understand only after prioritization approval', async () => {
+    await approvePlan();
+    await advanceDiscoveryAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved. Begin Discovery.',
+      allowFixtureFallback: true,
+    });
+
+    await advancePrioritizationAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved prioritization.',
     });
 
     const updated = engine.get(mission.id, '10');

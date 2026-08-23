@@ -130,6 +130,8 @@ const OPERATOR_DECISION_KINDS = Object.freeze({
   PLAN_APPROVAL: 'plan_approval',
   PLAN_EDIT: 'plan_edit',
   DISCOVERY_APPROVAL: 'discovery_approval',
+  /** SPEC-141 — operator reviews ranked prospects before Understand. */
+  PRIORITIZATION_APPROVAL: 'prioritization_approval',
 });
 
 const SPECIALIST_STATES = Object.freeze({

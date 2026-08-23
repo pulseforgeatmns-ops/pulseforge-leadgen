@@ -26,7 +26,7 @@ const {
   listMissions,
 } = require('../../../services/acquisitionMission');
 const { maybeHandleAcquisitionOwnershipTurn } = require('../../max/workspace/AcquisitionOwnership');
-const { advancePlanAfterApproval } = require('../../max/workspace/AmoOperatorApproval');
+const { advancePlanAfterApproval, advanceDiscoveryAfterApproval, advancePrioritizationAfterApproval } = require('../../max/workspace/AmoOperatorApproval');
 const { maybeHandleAcquisitionMissionExecution } = require('../../max/workspace/AcquisitionMissionExecution');
 const { createTestAmoRuntime } = require('../../max/workspace/tests/amoTestRuntime');
 
@@ -64,14 +64,25 @@ describe('SPEC-140 — Unified Acquisition Mission Runtime', () => {
 
     assert.equal(runtime.engineId, engineId);
 
-    const execution = await maybeHandleAcquisitionMissionExecution({
-      question: 'approved',
+    const discoveryExecution = await maybeHandleAcquisitionMissionExecution({
+      question: 'Approved. Begin Discovery.',
+      context: { tenantId: '10', missionId: mission.id },
+      acquisitionMissionRuntime: runtime,
+      persist: false,
+      allowFixtureFallback: true,
+    });
+
+    assert.ok(discoveryExecution);
+    assert.equal(runtime.engine().get(mission.id, '10').stage, STAGES.DISCOVER);
+
+    const prioritizationExecution = await maybeHandleAcquisitionMissionExecution({
+      question: 'Approved prioritization.',
       context: { tenantId: '10', missionId: mission.id },
       acquisitionMissionRuntime: runtime,
       persist: false,
     });
 
-    assert.ok(execution);
+    assert.ok(prioritizationExecution);
     assert.equal(runtime.engine().get(mission.id, '10').stage, STAGES.UNDERSTAND);
     assert.equal(runtime.engineId, engineId);
   });

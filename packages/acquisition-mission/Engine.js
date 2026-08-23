@@ -51,7 +51,10 @@ const {
 const {
   assertMissionStateConsistent,
   presentableOperatorDecision,
+  hasPendingPrioritizationApproval,
 } = require('./PendingOperatorDecision');
+const { isStructuredMissionApproved } = require('./StructuredMission');
+const { OPERATOR_DECISION_KINDS } = require('./types');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -214,12 +217,17 @@ function createAcquisitionMissionEngine(opts = {}) {
         label: 'Campaign launched',
       }));
     }
-    if (
-      specialist === SPECIALISTS.SCOUT &&
-      kind === CONTRIBUTION_KINDS.DISCOVERY &&
-      payload.confidence != null
-    ) {
-      mission.confidence = round2(payload.confidence);
+    if (specialist === SPECIALISTS.SCOUT && kind === CONTRIBUTION_KINDS.DISCOVERY) {
+      if (payload.confidence != null) {
+        mission.confidence = round2(payload.confidence);
+      }
+      if (mission.stage === STAGES.DISCOVER && isStructuredMissionApproved(mission)) {
+        mission.pendingOperatorDecision = {
+          stage: STAGES.DISCOVER,
+          kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
+          prompt: 'Approve prioritization?',
+        };
+      }
       store.putMission(mission);
     }
     refresh(store, mission);
@@ -238,6 +246,16 @@ function createAcquisitionMissionEngine(opts = {}) {
     }
     const gate = canEnter(target, { ...ctx, ...extra });
     if (!gate.ok) throw amoError('amo_stage_blocked', gate.reason);
+    if (
+      target === STAGES.UNDERSTAND &&
+      mission.stage === STAGES.DISCOVER &&
+      hasPendingPrioritizationApproval({ mission, contributions })
+    ) {
+      throw amoError(
+        'amo_prioritization_pending',
+        'Prioritization approval must be consumed before Understanding.'
+      );
+    }
     const { from } = applyStageTransition(mission, target, { contributions });
     store.addEvent(createEvent({
       missionId: mission.id,

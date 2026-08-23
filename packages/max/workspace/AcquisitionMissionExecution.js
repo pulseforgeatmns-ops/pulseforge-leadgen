@@ -29,18 +29,21 @@ const {
 } = require('./ActiveMissionGuard');
 const {
   advanceDiscoveryAfterApproval,
+  advancePrioritizationAfterApproval,
   advancePlanAfterApproval,
   advancePlanClarification,
   cancelMissionPlan,
   beginPlanEdit,
   applyPlanEdits,
   hasPendingDiscoveryApproval,
+  hasPendingPrioritizationApproval,
   hasPendingPlanApproval,
   hasPendingPlanClarification,
   hasConsumablePendingDecision,
   presentableOperatorDecision,
   findDiscoveryApproval,
   findScoutDiscoveryAfterApproval,
+  findPrioritizationApproval,
   APPROVAL_PHASES,
 } = require('./AmoOperatorApproval');
 const {
@@ -271,26 +274,19 @@ function buildExecutionMissionResponse({
     const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
     const blocked = executionResult.executionOutcome === 'blocked';
     const sufficientEvidence = hasSufficientEvidenceForPrioritization(discoveryResults);
-    const scoutComplete =
-      !blocked &&
-      snapshot.workspace &&
-      snapshot.workspace.scout &&
-      snapshot.workspace.scout.state === 'complete';
     const comm = buildMissionCommunication({
       headline: 'Mission Updated',
       mission: mission.title || mission.id,
       objective: mission.objective,
-      status: blocked ? 'Discovery Blocked' : stageLabel(mission.stage || stage),
+      status: blocked ? 'Discovery Blocked' : 'Discovery Complete',
       stage: 'Discovery',
       progress,
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
       waitingOn: blocked
         ? 'Discovery blocker'
-        : scoutComplete && sufficientEvidence
+        : sufficientEvidence
           ? 'Prioritization approval'
-          : scoutComplete
-            ? 'Evidence review'
-            : null,
+          : 'Evidence review',
       confidence:
         discoveryResults.confidence != null
           ? discoveryResults.confidence
@@ -298,18 +294,14 @@ function buildExecutionMissionResponse({
       confidenceBreakdown: discoveryResults.confidenceBreakdown,
       nextStep: blocked
         ? 'Resolve the discovery blocker, then retry Discovery.'
-        : scoutComplete && sufficientEvidence
+        : sufficientEvidence
           ? 'Review discovered prospects and approve prioritization to continue.'
-          : scoutComplete
-            ? 'Review discovery evidence. Scout must surface attributable signals before prioritization.'
-            : 'Review mission workspace for Scout contributions.',
+          : 'Review discovery evidence. Scout must surface attributable signals before prioritization.',
       operatorDecision: blocked
         ? 'Retry discovery?'
-        : scoutComplete && sufficientEvidence
+        : sufficientEvidence
           ? 'Approve prioritization?'
-          : scoutComplete
-            ? 'Request more discovery evidence?'
-            : null,
+          : 'Request more discovery evidence?',
       discoveryResults: executionResult.discovery ? discoveryResults : null,
       evidenceStatus: 'Mission state',
       sources: ['acquisition_mission', 'scout'],
@@ -355,6 +347,61 @@ function buildExecutionMissionResponse({
       comm
     );
 
+    return { structured, prose, comm, action };
+  }
+
+  if (executionResult && action === 'prioritization_approved') {
+    const scoutPayload = ((snapshot.contributions || []).find(
+      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
+    ) || {}).payload || {};
+    const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
+    const comm = buildMissionCommunication({
+      headline: 'Mission Updated',
+      mission: mission.title || mission.id,
+      objective: mission.objective,
+      status: stageLabel(mission.stage || stage),
+      stage: stageLabel(mission.stage || stage),
+      progress,
+      health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
+      waitingOn: null,
+      confidence:
+        discoveryResults.confidence != null
+          ? discoveryResults.confidence
+          : mission.confidence,
+      confidenceBreakdown: discoveryResults.confidenceBreakdown,
+      nextStep: 'Review mission workspace for Max prioritization and planning.',
+      operatorDecision: null,
+      discoveryResults,
+      evidenceStatus: 'Prioritization approved',
+      sources: ['acquisition_mission', 'scout'],
+      includeReasoningMarker: false,
+    });
+    const prose = formatMissionProse(comm);
+    const structured = applyMissionCommunication(
+      buildStructuredResponse({
+        answer: prose,
+        reasoning: [],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence: mission.confidence != null ? mission.confidence : 0.84,
+        nextInvestigations: [],
+        recommendedActions: [
+          {
+            id: 'open_mission',
+            type: 'open_mission',
+            label: 'Open mission workspace',
+            payload: { missionId: mission.id },
+          },
+        ],
+        confidenceContributors: ['spec_141', 'acquisition_mission'],
+        timelineReferences: [],
+        relatedEntities: [
+          { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
+        ],
+        metadata: buildExecutionMetadata(mission, action, executionResult),
+      }),
+      comm
+    );
     return { structured, prose, comm, action };
   }
 
@@ -504,6 +551,18 @@ function detectExecutionAction(question, snapshot) {
     return 'discovery_approved';
   }
 
+  const discoveryAlreadyExecuted = findScoutDiscoveryAfterApproval(
+    snapshot.contributions || [],
+    findDiscoveryApproval(snapshot.contributions || [])
+  );
+  if (
+    discoveryAlreadyExecuted &&
+    (discoveryApprovalPattern || /\bbegin\b.*\bdiscover/i.test(lower))
+  ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_already_executed');
+    return 'discovery_approved';
+  }
+
   if (
     snapshot &&
     snapshot.mission &&
@@ -513,6 +572,24 @@ function detectExecutionAction(question, snapshot) {
   ) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved_pending');
     return 'discovery_approved';
+  }
+
+  const prioritizationApprovalPattern =
+    /\bapprov(e|al|ed)\b.*\bpriorit/i.test(q) ||
+    (/\bpriorit/i.test(q) && /\bapprov(e|al|ed)\b/i.test(q));
+
+  if (prioritizationApprovalPattern && hasPendingPrioritizationApproval(snapshot)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'prioritization_approved');
+    return 'prioritization_approved';
+  }
+
+  if (
+    hasPendingPrioritizationApproval(snapshot) &&
+    /\bapprov(e|al|ed)\b/i.test(q) &&
+    !/\bdiscover/i.test(q)
+  ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'prioritization_approved_pending');
+    return 'prioritization_approved';
   }
 
   if (hasConsumablePendingDecision(snapshot)) {
@@ -583,6 +660,30 @@ function shouldExecuteDiscovery(action, snapshot) {
     return false;
   }
   askPathTrace.traceEarlyReturn('shouldExecuteDiscovery', 'should_execute', { result: true });
+  return true;
+}
+
+function shouldExecutePrioritization(action, snapshot) {
+  askPathTrace.traceEnter('shouldExecutePrioritization', { action });
+  if (action !== 'prioritization_approved') {
+    askPathTrace.traceEarlyReturn('shouldExecutePrioritization', 'action_not_prioritization_approved');
+    return false;
+  }
+  if (!hasPendingPrioritizationApproval(snapshot)) {
+    askPathTrace.traceEarlyReturn('shouldExecutePrioritization', 'no_pending_prioritization_approval');
+    return false;
+  }
+  const mission = snapshot.mission || {};
+  if (mission.stage !== STAGES.DISCOVER) {
+    askPathTrace.traceEarlyReturn('shouldExecutePrioritization', 'wrong_stage');
+    return false;
+  }
+  const approval = findPrioritizationApproval(snapshot.contributions || []);
+  if (approval && mission.stage === STAGES.UNDERSTAND) {
+    askPathTrace.traceEarlyReturn('shouldExecutePrioritization', 'already_executed');
+    return false;
+  }
+  askPathTrace.traceEarlyReturn('shouldExecutePrioritization', 'should_execute', { result: true });
   return true;
 }
 
@@ -717,6 +818,26 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       };
     }
     snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+  } else if (shouldExecutePrioritization(action, snapshot)) {
+    try {
+      executionResult = await advancePrioritizationAfterApproval({
+        engine,
+        mission,
+        tenantId,
+        question,
+        operatorId: input.operatorId || (input.session && input.session.operator) || null,
+        ...persistOpts,
+      });
+    } catch (err) {
+      if (!isRolledBackExecution(err)) throw err;
+      executionResult = {
+        rolledBack: true,
+        error: err,
+        snapshot: engine.inspect(mission.id, { tenantId }),
+        transactionId: err.transactionId,
+      };
+    }
+    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
   } else if (action === 'discovery_approved') {
     const approval = findDiscoveryApproval(snapshot.contributions || []);
     const discovery = findScoutDiscoveryAfterApproval(snapshot.contributions || [], approval);
@@ -731,6 +852,16 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
         approvalPhase: blocked
           ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
           : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+      };
+    }
+  } else if (action === 'prioritization_approved') {
+    const approval = findPrioritizationApproval(snapshot.contributions || []);
+    if (approval && snapshot.mission.stage === STAGES.UNDERSTAND) {
+      executionResult = {
+        alreadyExecuted: true,
+        approval,
+        snapshot,
+        approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
       };
     }
   } else if (action === 'operator_approved' && !hasConsumablePendingDecision(snapshot)) {
@@ -784,6 +915,7 @@ module.exports = {
   buildExecutionMissionResponse,
   maybeHandleAcquisitionMissionExecution,
   shouldExecuteDiscovery,
+  shouldExecutePrioritization,
   shouldExecutePlan,
   shouldClarifyPlan,
 };

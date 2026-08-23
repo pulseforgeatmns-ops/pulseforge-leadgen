@@ -142,7 +142,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
     return session;
   }
 
-  it('routes operator "approved" through AMO execution and advances discover → understand', async () => {
+  it('routes operator "approved" through AMO execution and leaves discover pending prioritization review', async () => {
     assert.equal(amoMission.stage, STAGES.DISCOVER);
     assert.ok(amoMission.pendingOperatorDecision);
     assert.equal(amoMission.pendingOperatorDecision.prompt, 'Approve discovery?');
@@ -230,8 +230,8 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
     assert.ok(approvalEvents.includes('MISSION_STAGE_EXECUTION_COMPLETED'));
 
     const after = amoEngine.get(amoMission.id, '10');
-    assert.equal(after.stage, STAGES.UNDERSTAND);
-    assert.equal(after.pendingOperatorDecision, null);
+    assert.equal(after.stage, STAGES.DISCOVER);
+    assert.equal(after.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
   });
 
   it('does not let bound SPEC-022 mission preempt AMO approval on the same turn', async () => {
@@ -265,6 +265,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
     assert.notEqual(turn.resolution.action, 'resumed');
 
     const after = amoEngine.get(amoMission.id, '10');
-    assert.equal(after.stage, STAGES.UNDERSTAND);
+    assert.equal(after.stage, STAGES.DISCOVER);
+    assert.equal(after.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
   });
 });

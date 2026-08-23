@@ -2,10 +2,17 @@
 
 /**
  * SPEC-136 — Pending operator decision must match executable mission state.
+ * SPEC-141 — Discovery review gate: prioritization_approval after Scout completes.
  * Presentation derives from these predicates. It is never an independent source of truth.
  */
 
-const { STAGES, OPERATOR_DECISION_KINDS, amoError } = require('./types');
+const {
+  STAGES,
+  SPECIALISTS,
+  CONTRIBUTION_KINDS,
+  OPERATOR_DECISION_KINDS,
+  amoError,
+} = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 
 const MISSION_STATE_INCONSISTENT = 'MISSION_STATE_INCONSISTENT';
@@ -20,9 +27,22 @@ function missionFrom(snapshotOrMission) {
   return snapshotOrMission.mission || snapshotOrMission;
 }
 
+function contributionsFrom(snapshotOrMission, extras = {}) {
+  if (extras.contributions) return extras.contributions;
+  if (snapshotOrMission && snapshotOrMission.contributions) return snapshotOrMission.contributions;
+  return [];
+}
+
 function pendingKind(mission) {
   const pending = mission && mission.pendingOperatorDecision;
   return pending && pending.kind ? pending.kind : null;
+}
+
+function hasDiscoveryArtifact(snapshotOrMission, extras = {}) {
+  const contributions = contributionsFrom(snapshotOrMission, extras);
+  return contributions.some(
+    (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
+  );
 }
 
 function hasPendingPlanClarification(snapshot) {
@@ -46,13 +66,37 @@ function hasPendingDiscoveryApproval(snapshot) {
   if (hasPendingPlanApproval(snapshot)) return false;
   if (!isStructuredMissionApproved(mission)) return false;
   if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
+  if (hasDiscoveryArtifact(snapshot)) return false;
   return pendingKind(mission) === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL;
+}
+
+function hasConsumedPrioritizationApproval(snapshotOrMission, extras = {}) {
+  const contributions = contributionsFrom(snapshotOrMission, extras);
+  return contributions.some(
+    (row) =>
+      row.specialist === SPECIALISTS.OPERATOR &&
+      row.kind === CONTRIBUTION_KINDS.APPROVAL &&
+      (row.payload.action === 'prioritization_approved' ||
+        row.payload.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL)
+  );
+}
+
+function hasPendingPrioritizationApproval(snapshot) {
+  const mission = missionFrom(snapshot) || {};
+  if (hasPendingPlanClarification(snapshot)) return false;
+  if (hasPendingPlanApproval(snapshot)) return false;
+  if (hasPendingDiscoveryApproval(snapshot)) return false;
+  if (!isStructuredMissionApproved(mission)) return false;
+  if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
+  if (!hasDiscoveryArtifact(snapshot)) return false;
+  return pendingKind(mission) === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL;
 }
 
 function hasConsumablePendingDecision(snapshot) {
   return hasPendingPlanClarification(snapshot)
     || hasPendingPlanApproval(snapshot)
-    || hasPendingDiscoveryApproval(snapshot);
+    || hasPendingDiscoveryApproval(snapshot)
+    || hasPendingPrioritizationApproval(snapshot);
 }
 
 function presentableOperatorDecision(snapshot) {
@@ -66,7 +110,9 @@ function presentableOperatorDecision(snapshot) {
       ? (pending.clarificationPrompt || pending.prompt || null)
       : hasPendingPlanApproval(snapshot)
         ? (pending.prompt || 'Approve mission plan?')
-        : (pending.prompt || 'Approve discovery?'),
+        : hasPendingPrioritizationApproval(snapshot)
+          ? (pending.prompt || 'Approve prioritization?')
+          : (pending.prompt || 'Approve discovery?'),
     consumable: true,
   };
 }
@@ -88,7 +134,9 @@ function consistencyDetails(mission, snapshot) {
     structuredMissionApproved: isStructuredMissionApproved(mission),
     hasPendingPlanApproval: hasPendingPlanApproval(snapshot),
     hasPendingDiscoveryApproval: hasPendingDiscoveryApproval(snapshot),
+    hasPendingPrioritizationApproval: hasPendingPrioritizationApproval(snapshot),
     hasPendingPlanClarification: hasPendingPlanClarification(snapshot),
+    hasDiscoveryArtifact: hasDiscoveryArtifact(snapshot),
   };
 }
 
@@ -135,9 +183,23 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
+  if (!approved && kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) {
+    throw missionStateInconsistent(
+      'Prioritization approval is advertised before the mission plan is locked.',
+      details
+    );
+  }
+
   if (kind === OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL && stage && stage !== STAGES.DISCOVER) {
     throw missionStateInconsistent(
       'Discovery approval is advertised outside the discover stage.',
+      details
+    );
+  }
+
+  if (kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL && stage && stage !== STAGES.DISCOVER) {
+    throw missionStateInconsistent(
+      'Prioritization approval is advertised outside the discover stage.',
       details
     );
   }
@@ -174,6 +236,13 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
+  if (kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL && !hasPendingPrioritizationApproval(snapshot)) {
+    throw missionStateInconsistent(
+      'pendingOperatorDecision.kind is a prioritization approval that the execution engine cannot consume.',
+      details
+    );
+  }
+
   if (hasPendingPlanApproval(snapshot) && !PLAN_KINDS.has(kind)) {
     throw missionStateInconsistent(
       'hasPendingPlanApproval is true but pendingOperatorDecision does not match.',
@@ -188,11 +257,32 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
+  if (hasPendingPrioritizationApproval(snapshot) && kind !== OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) {
+    throw missionStateInconsistent(
+      'hasPendingPrioritizationApproval is true but pendingOperatorDecision does not match.',
+      details
+    );
+  }
+
   if (hasPendingPlanClarification(snapshot) && kind !== OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION) {
     throw missionStateInconsistent(
       'hasPendingPlanClarification is true but pendingOperatorDecision does not match.',
       details
     );
+  }
+
+  if (
+    stage === STAGES.DISCOVER &&
+    isStructuredMissionApproved(mission) &&
+    hasDiscoveryArtifact(snapshot)
+  ) {
+    const consumed = hasConsumedPrioritizationApproval(snapshot);
+    if (!consumed && kind !== OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) {
+      throw missionStateInconsistent(
+        'Discovery artifact exists but prioritization approval is not pending.',
+        details
+      );
+    }
   }
 
   return mission;
@@ -207,10 +297,11 @@ const DISCOVER_DECISION_KINDS = new Set([
   OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
   OPERATOR_DECISION_KINDS.PLAN_EDIT,
   OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
+  OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
 ]);
 
 /**
- * Leaving Discover makes plan/discovery decisions unconsumable.
+ * Leaving Discover makes plan/discovery/prioritization decisions unconsumable.
  * Prefer applyStageTransition — this helper remains for legacy callers.
  */
 function applyStageToPendingDecision(mission, targetStage) {
@@ -224,9 +315,12 @@ function applyStageToPendingDecision(mission, targetStage) {
 
 module.exports = {
   MISSION_STATE_INCONSISTENT,
+  hasDiscoveryArtifact,
   hasPendingPlanClarification,
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
+  hasPendingPrioritizationApproval,
+  hasConsumedPrioritizationApproval,
   hasConsumablePendingDecision,
   presentableOperatorDecision,
   pendingKind,
