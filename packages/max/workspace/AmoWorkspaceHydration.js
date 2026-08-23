@@ -9,6 +9,7 @@ const {
   resolveTenantId,
   resolveAcquisitionEngine,
 } = require('./WorkspaceMissionInspection');
+const { logEngineIdentity } = require('./audit/EngineIdentityAudit');
 
 /** @type {Map<string, { hydratedAt: string, missionsLoaded: number }>} */
 const _hydrationCache = new Map();
@@ -18,6 +19,15 @@ const _hydrationInFlight = new Map();
 
 /** @type {object[]} */
 const _auditLog = [];
+
+function hydrationCacheSnapshot(cacheKey) {
+  return {
+    cacheKey,
+    cached: _hydrationCache.has(cacheKey),
+    inFlight: _hydrationInFlight.has(cacheKey),
+    entry: _hydrationCache.get(cacheKey) || null,
+  };
+}
 
 function logAmoHydrationEvent(event, payload = {}) {
   const row = {
@@ -112,6 +122,13 @@ async function ensureAmoTenantHydrated(input = {}) {
   const cacheKey = hydrationCacheKey(input, tenantId);
   if (isSessionHydrated(input, tenantId)) {
     const cached = _hydrationCache.get(cacheKey);
+    logEngineIdentity('ensureAmoTenantHydrated()', {
+      engine: resolveAcquisitionEngine(input),
+      tenantId,
+      tenantCacheKey: cacheKey,
+      tenantCacheHit: true,
+      engineSource: 'session_cached',
+    });
     return {
       hydrated: true,
       missionsLoaded: cached ? cached.missionsLoaded : input.session._amoHydration.missionsLoaded,
@@ -131,6 +148,7 @@ async function ensureAmoTenantHydrated(input = {}) {
 
   const hydratePromise = (async () => {
     logAmoHydrationEvent('AMO_HYDRATE_BEGIN', { tenantId, cacheKey });
+    const cacheSnap = hydrationCacheSnapshot(cacheKey);
 
     await service.hydrateTenant(tenantId, {
       pool: input.pool,
@@ -140,6 +158,18 @@ async function ensureAmoTenantHydrated(input = {}) {
     const engine = resolveAcquisitionEngine(input);
     const missionsLoaded =
       engine && typeof engine.list === 'function' ? engine.list(tenantId).length : 0;
+
+    logEngineIdentity('ensureAmoTenantHydrated()', {
+      engine,
+      tenantId,
+      tenantCacheKey: cacheKey,
+      tenantCacheHit: cacheSnap.cached,
+      tenantCacheInFlight: cacheSnap.inFlight,
+      missionCount: missionsLoaded,
+      engineSource: input.acquisitionMissionEngine
+        ? 'injected_acquisitionMissionEngine'
+        : 'acquisitionMissionService.getEngine',
+    });
 
     logAmoHydrationEvent('AMO_HYDRATE_COMPLETE', {
       tenantId,
@@ -186,5 +216,6 @@ module.exports = {
   listAmoHydrationAuditLog,
   clearAmoHydrationAuditLog,
   clearAmoHydrationCache,
+  hydrationCacheSnapshot,
   shouldHydrateFromService,
 };

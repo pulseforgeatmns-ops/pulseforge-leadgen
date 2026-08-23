@@ -52,6 +52,7 @@ const {
   assertMissionStateConsistent,
   presentableOperatorDecision,
 } = require('./PendingOperatorDecision');
+const { logEngineIdentity } = require('../max/workspace/audit/EngineIdentityAudit');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -137,15 +138,6 @@ function createAcquisitionMissionEngine(opts = {}) {
     }));
     const refreshed = refresh(store, mission);
     return refreshed.mission;
-  }
-
-  function get(id, tenantId) {
-    const mission = store.getMission(id);
-    if (!mission) return null;
-    if (tenantId != null && String(mission.tenantId) !== String(tenantId)) {
-      throw amoError('amo_tenant_mismatch', 'Mission does not belong to this tenant.');
-    }
-    return mission;
   }
 
   function requireMission(id, tenantId) {
@@ -519,13 +511,35 @@ function createAcquisitionMissionEngine(opts = {}) {
     };
   }
 
-  return {
+  const engine = {
     store,
     create,
-    get,
+    get(id, tenantId) {
+      logEngineIdentity('engine.get()', {
+        engine,
+        tenantId,
+        missionId: id,
+        engineSource: 'engine_api',
+      });
+      const mission = store.getMission(id);
+      if (!mission) return null;
+      if (tenantId != null && String(mission.tenantId) !== String(tenantId)) {
+        throw amoError('amo_tenant_mismatch', 'Mission does not belong to this tenant.');
+      }
+      return mission;
+    },
     require: requireMission,
     requireMission,
-    list: (tenantId) => store.listMissions(tenantId),
+    list(tenantId) {
+      const rows = store.listMissions(tenantId);
+      logEngineIdentity('engine.list()', {
+        engine,
+        tenantId,
+        missionCount: rows.length,
+        engineSource: 'engine_api',
+      });
+      return rows;
+    },
     contribute,
     progress,
     setBlocker,
@@ -549,6 +563,13 @@ function createAcquisitionMissionEngine(opts = {}) {
     BLOCKER_KINDS,
     STAGES,
   };
+
+  logEngineIdentity('createAcquisitionMissionEngine()', {
+    engine,
+    engineSource: opts.engineSource || 'factory',
+  });
+
+  return engine;
 }
 
 function stageIndexSafe(stage) {

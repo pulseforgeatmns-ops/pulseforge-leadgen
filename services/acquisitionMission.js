@@ -27,17 +27,39 @@ const {
   deleteAllAmoData,
   clearAmoSessionBindings,
 } = require('./acquisitionMissionPersistence');
+const {
+  logEngineIdentity,
+  registerSingleton,
+} = require('../packages/max/workspace/audit/EngineIdentityAudit');
 
 let engine = null;
 
 function getEngine(opts = {}) {
-  if (opts.engine) return opts.engine;
-  if (!engine) engine = amo.createAcquisitionMissionEngine({ store: opts.store });
+  if (opts.engine) {
+    logEngineIdentity('getEngine()', {
+      engine: opts.engine,
+      engineSource: 'opts.engine',
+    });
+    return opts.engine;
+  }
+  if (!engine) {
+    engine = amo.createAcquisitionMissionEngine({ engineSource: 'singleton_create' });
+    registerSingleton(engine);
+  }
+  logEngineIdentity('getEngine()', {
+    engine,
+    engineSource: 'singleton',
+  });
   return engine;
 }
 
 function resetEngine() {
-  engine = amo.createAcquisitionMissionEngine();
+  engine = amo.createAcquisitionMissionEngine({ engineSource: 'singleton_reset' });
+  registerSingleton(engine);
+  logEngineIdentity('resetEngine()', {
+    engine,
+    engineSource: 'singleton_reset',
+  });
   return engine;
 }
 
@@ -80,6 +102,11 @@ async function resetAmoRuntime(opts = {}) {
 
 async function hydrateTenant(tenantId, opts = {}) {
   const instance = getEngine(opts);
+  logEngineIdentity('hydrateTenant()', {
+    engine: instance,
+    tenantId,
+    engineSource: opts.engine ? 'opts.engine' : 'singleton',
+  });
   if (tenantId == null || tenantId === '' || opts.persist === false) return instance;
   try {
     const loaded = await loadTenantMissions(tenantId, opts.pool);
@@ -161,6 +188,12 @@ async function persistSideEffects(missionId, opts = {}) {
 async function createMission(input = {}, opts = {}) {
   const instance = await hydrateTenant(input.tenantId || input.clientId, opts);
   const mission = instance.create(input);
+  logEngineIdentity('createMission()', {
+    engine: instance,
+    tenantId: mission.tenantId,
+    missionId: mission.id,
+    engineSource: opts.engine ? 'opts.engine' : 'singleton',
+  });
   await rememberMission(mission, opts);
   await persistSideEffects(mission.id, opts);
   return mission;

@@ -6,6 +6,7 @@
 
 const { clone, asText, nowIso, amoError } = require('./types');
 const { assertMissionStateConsistent } = require('./PendingOperatorDecision');
+const { logEngineIdentity } = require('../max/workspace/audit/EngineIdentityAudit');
 
 function createMemoryAmoStore(opts = {}) {
   const missions = new Map();
@@ -20,6 +21,13 @@ function createMemoryAmoStore(opts = {}) {
     const copy = clone(mission);
     copy.updatedAt = copy.updatedAt || nowIso();
     missions.set(copy.id, copy);
+    logEngineIdentity('putMission()', {
+      store: api,
+      tenantId: copy.tenantId,
+      missionId: copy.id,
+      version: copy.version,
+      missionCount: missions.size,
+    });
     return clone(copy);
   }
 
@@ -137,9 +145,14 @@ function createMemoryAmoStore(opts = {}) {
     replaceArray(learning, snap.learning);
   }
 
-  for (const extra of opts.seeds || []) putMission(extra);
+  for (const extra of opts.seeds || []) {
+    assertMissionStateConsistent(extra);
+    const copy = clone(extra);
+    copy.updatedAt = copy.updatedAt || nowIso();
+    missions.set(copy.id, copy);
+  }
 
-  return {
+  const api = {
     putMission,
     getMission,
     requireMission,
@@ -157,6 +170,8 @@ function createMemoryAmoStore(opts = {}) {
     snapshot,
     restore,
   };
+
+  return api;
 }
 
 module.exports = {

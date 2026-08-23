@@ -34,6 +34,8 @@ const {
 } = require('./SpecialistInterrogationContext');
 const {
   maybeHandleWorkspaceMissionInspection,
+  resolveTenantId,
+  resolveAcquisitionEngine,
 } = require('./WorkspaceMissionInspection');
 const {
   maybeHandleAcquisitionOwnershipTurn,
@@ -161,6 +163,7 @@ const {
 
 const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
 const askPathTrace = require('./audit/AskPathTrace');
+const { logEngineIdentity } = require('./audit/EngineIdentityAudit');
 
 /**
  * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 + SPEC-125 routing.
@@ -370,6 +373,24 @@ class WorkspaceEngine {
     askPathTrace.beginTrace(question);
     askPathTrace.traceEnter('WorkspaceEngine.ask', {
       sessionId: input.sessionId || null,
+    });
+    const resolvedEngine = resolveAcquisitionEngine({
+      acquisitionMissionEngine: this._acquisitionMissionEngine || undefined,
+      acquisitionMissionService: this._acquisitionMissionService || undefined,
+    });
+    logEngineIdentity('WorkspaceEngine.ask()', {
+      workspaceEngine: this,
+      engine: resolvedEngine,
+      tenantId: resolveTenantId(input),
+      engineSource: this._acquisitionMissionEngine
+        ? 'injected_acquisitionMissionEngine'
+        : this._acquisitionMissionService
+          ? 'acquisitionMissionService.getEngine'
+          : 'require_service_getEngine',
+      missionId:
+        (input.context && input.context.missionId) ||
+        (input.session && input.session.context && input.session.context.missionId) ||
+        null,
     });
     const rawContext = input.context || input.rawContext || null;
 
