@@ -23,8 +23,15 @@ async function maybeHandleReflectionTurn(input = {}) {
   const conversationSubject = input.conversationSubject || null;
 
   if (!conversationIntent) return null;
+  const subjectName =
+    conversationSubject && conversationSubject.subject
+      ? conversationSubject.subject
+      : null;
   if (conversationIntent.intent !== THINKING_MODES.REFLECT) {
-    if (!conversationSubject || conversationSubject.subject !== 'reasoning') {
+    if (
+      subjectName !== 'reflection' &&
+      subjectName !== 'reasoning'
+    ) {
       return null;
     }
   }

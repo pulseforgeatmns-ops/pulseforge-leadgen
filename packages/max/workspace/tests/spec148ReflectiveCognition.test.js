@@ -82,12 +82,9 @@ describe('SPEC-148 — Reflective Cognition', () => {
   });
 
   describe('detectConversationSubject', () => {
-    it('locks subject to reasoning for REFLECT intent', () => {
-      const subject = detectConversationSubject('What did you think I meant?', {
-        intent: THINKING_MODES.REFLECT,
-        confidence: 0.96,
-      });
-      assert.equal(subject.subject, CONVERSATION_SUBJECTS.REASONING);
+    it('locks subject to reflection for REFLECT intent phrases', () => {
+      const subject = detectConversationSubject('What did you think I meant?');
+      assert.equal(subject.subject, CONVERSATION_SUBJECTS.REFLECTION);
       assert.equal(subject.locked, true);
     });
 
@@ -100,15 +97,15 @@ describe('SPEC-148 — Reflective Cognition', () => {
     });
   });
 
-  describe('resolveWorkspaceOwner — reasoning subject lock', () => {
-    it('returns REFLECTION owner when subject is locked reasoning', async () => {
+  describe('resolveWorkspaceOwner — reflection subject lock', () => {
+    it('returns REFLECTION owner when subject is locked reflection', async () => {
       const owner = await resolveWorkspaceOwner({
         question: 'What did you think I was asking?',
         session: { id: 's1', context: { tenantId: '10' } },
         conversationSubject: {
-          subject: CONVERSATION_SUBJECTS.REASONING,
+          subject: CONVERSATION_SUBJECTS.REFLECTION,
           locked: true,
-          via: 'reflect_intent',
+          reason: 'reflect_subject_phrase',
           confidence: 0.96,
         },
       });
@@ -262,9 +259,9 @@ describe('SPEC-148 — Reflective Cognition', () => {
         question: 'What assumptions are you making?',
         conversationIntent: classifyOperatorCognition('What assumptions are you making?'),
         conversationSubject: {
-          subject: CONVERSATION_SUBJECTS.REASONING,
+          subject: CONVERSATION_SUBJECTS.REFLECTION,
           locked: true,
-          via: 'reflect_intent',
+          reason: 'reflect_subject_phrase',
         },
         session: {
           messages: [

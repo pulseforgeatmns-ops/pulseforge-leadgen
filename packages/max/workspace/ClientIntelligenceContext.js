@@ -33,6 +33,7 @@ const {
 } = require('./OperatingEvidenceRetrieval');
 const { isOperatorOperatingUpdate } = require('./OperatorOperatingUpdate');
 const { detectAcquisitionObjective } = require('./AcquisitionObjectiveDetection');
+const { blocksBusinessSubsystemClaim } = require('./WorkspaceRoutingPatterns');
 
 const ACTIVE_ONBOARDING_STATUSES = new Set([
   'NEW',
@@ -1287,6 +1288,9 @@ function isClearlyNonBusinessUtterance(question, session) {
  * Concept scores select mode; they do not exclusively gate entry.
  */
 function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
+  if (blocksBusinessSubsystemClaim(opts.conversationSubject)) {
+    return false;
+  }
   try {
     const challenge = require('./RecommendationClaimChallenge');
     if (challenge.isClaimChallenge(question) || challenge.isOperatorClaimCorrection(question)) {
@@ -2142,6 +2146,13 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
   const question = String(input.question || '').trim();
   if (!question) return null;
 
+  if (blocksBusinessSubsystemClaim(input.conversationSubject)) {
+    return {
+      handled: false,
+      skipReason: 'subject_owner_lock',
+    };
+  }
+
   const session = input.session || null;
   const pre = await attachClientIntelligenceContext(input);
   const summary = pre.summary;
@@ -2300,6 +2311,7 @@ async function maybeHandleClientIntelligenceTurn(input = {}) {
   if (
     !shouldClaimClientIntelligenceTurn(question, session, {
       approvedBlueprint,
+      conversationSubject: input.conversationSubject,
     })
   ) {
     return {
