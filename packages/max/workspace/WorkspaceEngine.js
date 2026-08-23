@@ -1888,6 +1888,7 @@ class WorkspaceEngine {
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
+      detectExecution: true,
       ...this._amoRuntimeInput(),
     });
     const explicitMissionExit = isExplicitMissionExit(question).explicit;
