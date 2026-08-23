@@ -37,7 +37,7 @@ const { computeClaimConfidence, fuseAndUpdateClaims } = require('./ClaimConfiden
 const { detectContradictions } = require('./ContradictionDetection');
 const { executeInvestigationStep } = require('./EvidenceExecutor');
 const { runInvestigationEngine } = require('./InvestigationLoop');
-const { buildInvestigationReport, buildSixQuestions } = require('./InvestigationReport');
+const { buildInvestigationReport, buildSixQuestions, buildIntelligenceBriefs, validateBriefAcceptance } = require('./InvestigationReport');
 const {
   emitInvestigationStarted,
   emitInvestigationIteration,
@@ -82,6 +82,8 @@ module.exports = {
   runInvestigationEngine,
   buildInvestigationReport,
   buildSixQuestions,
+  buildIntelligenceBriefs,
+  validateBriefAcceptance,
   emitInvestigationStarted,
   emitInvestigationIteration,
   emitInvestigationStep,
