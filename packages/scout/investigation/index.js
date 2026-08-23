@@ -2,6 +2,7 @@
 
 /**
  * SPEC-142 — Evidence-Driven Investigation Engine public exports.
+ * SPEC-145 — Adaptive investigation planning exports.
  */
 
 const {
@@ -32,7 +33,13 @@ const {
 
 const { generateHypotheses, generateCandidateHypotheses } = require('./HypothesisGeneration');
 const { determineMissingEvidence, evidenceSatisfiesGap } = require('./MissingEvidence');
-const { selectNextInvestigation, planInvestigationChain } = require('./InvestigationPlanner');
+const {
+  selectNextInvestigation,
+  planInvestigationChain,
+  explainStepSelection,
+  providersForGap,
+  DEFAULT_MIN_EXPECTED_GAIN,
+} = require('./InvestigationPlanner');
 const { computeClaimConfidence, fuseAndUpdateClaims } = require('./ClaimConfidence');
 const { detectContradictions } = require('./ContradictionDetection');
 const { executeInvestigationStep } = require('./EvidenceExecutor');
@@ -48,6 +55,30 @@ const {
   clearInvestigationLog,
 } = require('./observability');
 
+const {
+  createInvestigationBoard,
+  summarizeBoard,
+  getTopPriorityUnknown,
+  updateBoardAfterStep,
+  computeCoverage,
+  computeExpectedValue,
+  GAP_VALUE_PROFILE,
+  DEFAULT_COVERAGE_THRESHOLD,
+} = require('./InvestigationBoard');
+
+const {
+  createInvestigationJournal,
+  recordJournalStep,
+  serializeJournal,
+  renderJournalTrail,
+} = require('./InvestigationJournal');
+
+const {
+  createProviderLearningStore,
+  estimateInformationGain,
+  DEFAULT_PROVIDER_EFFECTIVENESS,
+} = require('./ProviderLearning');
+
 module.exports = {
   INVESTIGATION_PHASES,
   GRAPH_NODE_TYPES,
@@ -58,6 +89,10 @@ module.exports = {
   DEFAULT_CONFIDENCE_THRESHOLD,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_MAX_COST_BUDGET,
+  DEFAULT_MIN_EXPECTED_GAIN,
+  DEFAULT_COVERAGE_THRESHOLD,
+  GAP_VALUE_PROFILE,
+  DEFAULT_PROVIDER_EFFECTIVENESS,
   buildHypothesis,
   buildClaim,
   buildInvestigationStep,
@@ -75,6 +110,8 @@ module.exports = {
   evidenceSatisfiesGap,
   selectNextInvestigation,
   planInvestigationChain,
+  explainStepSelection,
+  providersForGap,
   computeClaimConfidence,
   fuseAndUpdateClaims,
   detectContradictions,
@@ -91,4 +128,16 @@ module.exports = {
   emitInvestigationCompleted,
   listInvestigationLog,
   clearInvestigationLog,
+  createInvestigationBoard,
+  summarizeBoard,
+  getTopPriorityUnknown,
+  updateBoardAfterStep,
+  computeCoverage,
+  computeExpectedValue,
+  createInvestigationJournal,
+  recordJournalStep,
+  serializeJournal,
+  renderJournalTrail,
+  createProviderLearningStore,
+  estimateInformationGain,
 };
