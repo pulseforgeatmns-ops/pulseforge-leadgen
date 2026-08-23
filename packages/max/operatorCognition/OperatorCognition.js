@@ -140,6 +140,12 @@ function classifyOperatorCognition(question, input = {}) {
   }
 
   if (isMissionExecutionCommand(q)) {
+    if (
+      /\bcontinue\b/i.test(q) &&
+      !/\b(?:approved?|discovery|campaign|send|launch|execute|proceed|prioritization)\b/i.test(q)
+    ) {
+      return buildConversationIntent(THINKING_MODES.INSPECT, 'conversational_continue', 0.86);
+    }
     return buildConversationIntent(THINKING_MODES.EXECUTE, 'execution_command', 0.97);
   }
 

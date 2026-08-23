@@ -32,6 +32,7 @@ class SessionStore {
       fingerprint: contextFingerprint(context),
       messages: [],
       discussedEntities: new Set(),
+      conversationMemory: null,
       activeWorkContext:
         context && context.activeWorkContext
           ? context.activeWorkContext
