@@ -50,6 +50,11 @@ const {
   assertMissionStateConsistent,
   MISSION_STATE_INCONSISTENT,
 } = require('../../acquisition-mission/PendingOperatorDecision');
+const {
+  runAutonomousProgression,
+  isAutonomousProgressionCommand,
+  formatMissionProgressPresentation,
+} = require('../../acquisition-mission/MissionProgression');
 const { isStructuredMissionApproved } = require('../../acquisition-mission/StructuredMission');
 const {
   presentationFromDiscoveryPayload,
@@ -745,9 +750,57 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   assertMissionStateConsistent(snapshot.mission, {
     contributions: snapshot.contributions,
   });
-  const action = detectExecutionAction(question, snapshot, operatorIntent);
   const audit = input.audit || createMissionApprovalAudit();
   const useGlobalAudit = !input.audit;
+
+  if (isAutonomousProgressionCommand(question)) {
+    const progression = await runAutonomousProgression({
+      engine,
+      missionId: mission.id,
+      tenantId,
+      operatorId: input.operatorId || (input.session && input.session.operator) || null,
+      allowFixtureFallback: input.allowFixtureFallback,
+      ...resolveStagePersistOpts(input),
+    });
+    snapshot = progression.snapshot || engine.inspect(mission.id, { tenantId });
+    const prose = progression.presentation || formatMissionProgressPresentation(snapshot, progression);
+    const structured = buildStructuredResponse({
+      answer: prose,
+      reasoning: [],
+      supportingEvidence: [],
+      contradictingEvidence: [],
+      confidence: snapshot.mission.confidence != null ? snapshot.mission.confidence : 0.84,
+      nextInvestigations: [],
+      recommendedActions: progression.pause && progression.pause.availableOptions
+        ? progression.pause.availableOptions
+        : [],
+      confidenceContributors: ['spec_147', 'autonomous_progression'],
+      timelineReferences: [],
+      relatedEntities: [
+        { id: mission.id, type: 'acquisition_mission', name: snapshot.mission.title || mission.id },
+      ],
+      metadata: {
+        spec: 'SPEC-147',
+        outcome: progression.outcome,
+        progressionStage: progression.progressionStage,
+        pause: progression.pause,
+        block: progression.block,
+        transitions: progression.transitions,
+      },
+    });
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'autonomous_progression');
+    return {
+      reason: 'acquisition_mission_autonomous_progression',
+      structured,
+      prose,
+      mission: snapshot.mission || mission,
+      action: 'autonomous_progression',
+      executionResult: progression,
+      audit,
+    };
+  }
+
+  const action = detectExecutionAction(question, snapshot, operatorIntent);
   const emitMatched = useGlobalAudit
     ? logMissionApprovalMatched
     : audit.logApprovalMatched.bind(audit);

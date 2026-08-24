@@ -85,6 +85,11 @@ async function progressMission(missionId, actor, progressOpts = {}, opts = {}) {
   return runtime.progress(missionId, actor, progressOpts, opts);
 }
 
+async function runAutonomousProgressionForMission(missionId, opts = {}) {
+  const runtime = runtimeFromOpts(opts);
+  return runtime.runAutonomousProgression(missionId, opts);
+}
+
 async function answerOperator(question, input = {}, opts = {}) {
   const runtime = runtimeFromOpts(opts);
   return runtime.answerOperator(question, input, opts);
@@ -216,6 +221,7 @@ module.exports = {
   listMissions,
   contribute,
   progressMission,
+  runAutonomousProgressionForMission,
   answerOperator,
   attachScoutDiscovery,
   attachPaigeVariants,

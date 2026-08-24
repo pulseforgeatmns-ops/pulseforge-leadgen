@@ -8,7 +8,7 @@
 const crypto = require('crypto');
 
 /** SPEC-138 — AMO runtime generation; bump on breaking lifecycle changes. */
-const RUNTIME_VERSION = 1;
+const RUNTIME_VERSION = 2;
 
 const STAGES = Object.freeze({
   DISCOVER: 'discover',

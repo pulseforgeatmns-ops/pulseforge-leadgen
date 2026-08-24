@@ -426,7 +426,7 @@ function buildIntelligenceBrief(input = {}) {
         ]
       : missingEvidence,
     competingExplanations: competingHypotheses.map((h) => ({
-      hypothesis: h.text,
+      explanation: h.text,
       confidence: h.confidence,
     })),
   };

@@ -238,7 +238,31 @@ function createAcquisitionMissionRuntime(opts = {}) {
       const mission = state.engine.create(input);
       await this.rememberMission(mission, createOpts);
       await this.persistSideEffects(mission.id, createOpts);
+      if (input.autonomous === true || createOpts.autonomous === true) {
+        return this.runAutonomousProgression(mission.id, {
+          tenantId: mission.tenantId,
+          ...createOpts,
+          ...input,
+        });
+      }
       return mission;
+    },
+
+    async runAutonomousProgression(missionId, opts = {}) {
+      const { runAutonomousProgression } = require('../packages/acquisition-mission/MissionProgression');
+      if (opts.tenantId) await this.hydrate(opts.tenantId, opts);
+      const result = await runAutonomousProgression({
+        engine: state.engine,
+        missionId,
+        tenantId: opts.tenantId,
+        operatorId: opts.operatorId,
+        allowFixtureFallback: opts.allowFixtureFallback !== false,
+        maxSteps: opts.maxSteps,
+        deps: opts.deps,
+        ...opts,
+      });
+      await this.persistSideEffects(missionId, opts);
+      return result;
     },
 
     async inspectMission(missionId, inspectOpts = {}) {
