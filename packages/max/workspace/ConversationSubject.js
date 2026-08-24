@@ -68,6 +68,12 @@ const IDENTITY_SUBJECT_RES = [
   /\bwhy shouldn'?t scout (?:replace|make)\b/i,
   /\bhow do scout and paige depend\b/i,
   /\bwhat happens if one fails\b/i,
+  // SPEC-156 — reasoning operator follow-ups during identity conversations
+  /\bwhat assumption(?:s)? (?:is|are|that|this) (?:based|that)/i,
+  /\bcould (?:that|it|this) (?:assumption )?fail\b/i,
+  /\bif it failed\b/i,
+  /\bdoes that change your conclusion\b/i,
+  /\bsummarize (?:how )?(?:your )?reasoning\b/i,
 ];
 
 const REFLECT_SUBJECT_RES = [

@@ -726,6 +726,8 @@ class WorkspaceEngine {
         resolvedQuestion,
         activeReasoningContext: operatorIntent.activeReasoningContext,
         arcFollowUp: operatorIntent.arcFollowUp,
+        operatorIntent,
+        conversationContract,
       });
       if (identityTurn && identityTurn.handled) {
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;

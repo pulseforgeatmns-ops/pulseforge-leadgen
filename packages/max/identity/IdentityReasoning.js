@@ -23,10 +23,14 @@ const {
 } = require('../reasoning/ConceptGraph');
 const {
   parseArcResolvedQuestion,
-  synthesizeFromArc,
   classifyArcFollowUp,
   FOLLOW_UP_TYPES,
 } = require('../workspace/ActiveReasoningContext');
+const {
+  executeReasoning,
+  verbalizeReasoningResult,
+  detectExplicitOperator,
+} = require('../workspace/ReasoningOperatorEngine');
 
 const REASONING_TARGETS = Object.freeze({
   ROLE: 'role',
@@ -268,6 +272,18 @@ function planOperatingModelQuery(input = {}) {
     }
   }
 
+  if (activeReasoningContext && activeReasoningContext.primaryClaim) {
+    return {
+      target: REASONING_TARGETS.WHY,
+      via: 'reasoning_operator_engine',
+      continuity: Boolean(continuity),
+      arcBound: Boolean(detectExplicitOperator(question) || arcParsed),
+      goal: activeReasoningContext.goal || REASONING_GOALS.EXPLAIN_IDENTITY,
+      concepts: activeReasoningContext.reasoningChain || ['identity'],
+      primaryClaim: activeReasoningContext.primaryClaim,
+    };
+  }
+
   return null;
 }
 
@@ -405,6 +421,12 @@ function synthesizeFromQuery(query, input = {}) {
 }
 
 function shouldUseOperatingModelReasoning(input = {}) {
+  if (input.activeReasoningContext && input.activeReasoningContext.primaryClaim) {
+    return true;
+  }
+  if (detectExplicitOperator(input.question || '')) {
+    return true;
+  }
   if (input.activeReasoningContext && input.resolvedQuestion && parseArcResolvedQuestion(input.resolvedQuestion)) {
     return true;
   }
@@ -422,13 +444,29 @@ function composeIdentityReasoning(input = {}) {
 
   let prose = null;
 
-  // SPEC-154 — answer the current proposition before retrieving additional context.
-  if (query.arcBound && input.activeReasoningContext) {
-    prose = synthesizeFromArc(
-      input.activeReasoningContext,
-      query.arcFollowUpType || FOLLOW_UP_TYPES.WHY,
-      input.question
-    );
+  // SPEC-156 — transform the active proposition through an explicit reasoning operator.
+  const hasArc = input.activeReasoningContext && input.activeReasoningContext.primaryClaim;
+  const shouldUseRoe =
+    hasArc &&
+    (query.arcBound ||
+      detectExplicitOperator(input.question) ||
+      (input.conversationIntent && input.conversationIntent.continuity));
+
+  if (shouldUseRoe) {
+    const reasoningResult = executeReasoning({
+      arc: input.activeReasoningContext,
+      activeReasoningContext: input.activeReasoningContext,
+      session: input.session,
+      question: input.question,
+      arcFollowUp: input.arcFollowUp || classifyArcFollowUp(input.question),
+      operatorIntent: input.operatorIntent || null,
+      conversationContract: input.conversationContract || null,
+    });
+    if (reasoningResult) {
+      prose = verbalizeReasoningResult(reasoningResult);
+      query.reasoningResult = reasoningResult;
+      query.arcBound = true;
+    }
   }
 
   if (!prose) {
@@ -462,16 +500,21 @@ function reasoningMetadata(query) {
   }
 
   if (query.arcBound) {
+    const rr = query.reasoningResult;
     return {
       operatingModelReflection: true,
       conceptGraphReasoning: false,
       activeReasoningContext: true,
+      reasoningOperatorEngine: true,
+      reasoningOperator: rr && rr.operator ? rr.operator.id : null,
+      reasoningDepth: rr && typeof rr.depth === 'number' ? rr.depth : null,
+      reasoningDispatchSource: rr && rr.dispatch ? rr.dispatch.source : null,
       reasoningTarget: query.arcFollowUpType || 'why',
       primaryClaim: query.primaryClaim || null,
       sectionsUsed: query.concepts || [],
       concepts: query.concepts || [],
       goal: query.goal || null,
-      via: 'active_reasoning_context',
+      via: 'reasoning_operator_engine',
     };
   }
 
