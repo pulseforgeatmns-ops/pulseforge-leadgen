@@ -61,6 +61,9 @@ const {
   resolveMessageType,
   messageTypeBypassesReasoning,
 } = require('./MessageTypeClassifier');
+const { extractIntents, isCompoundMessage } = require('./IntentExtractor');
+const { buildExecutionPlan } = require('./ExecutionPlanner');
+const { executeMultiIntentPlan } = require('./MultiIntentExecutor');
 const { buildSessionConfigurationResponse } = require('./SessionConfigurationAcknowledgement');
 const {
   inspectCurrentSession,
@@ -444,10 +447,14 @@ class WorkspaceEngine {
       session = switched.session;
     }
 
-    this._sessions.appendMessage(session.id, {
-      role: 'operator',
-      text: question,
-    });
+    const miepInternal = input._miepInternal === true;
+
+    if (!miepInternal) {
+      this._sessions.appendMessage(session.id, {
+        role: 'operator',
+        text: question,
+      });
+    }
 
     // SPEC-149 — Message Type Classifier precedes cognition (ADR-069).
     const messageTypeResolution = resolveMessageType({ question, session });
@@ -490,8 +497,34 @@ class WorkspaceEngine {
       changed: sessionStateResolution.changed,
     });
 
+    const hasActiveMissionContext = Boolean(
+      session.context &&
+        (session.context.missionId || session.context.acquisitionMissionId)
+    );
+    const intentExtraction = extractIntents({
+      question,
+      hasActiveMission: hasActiveMissionContext,
+      mission: session.context && session.context.mission,
+    });
+    const executionPlan = buildExecutionPlan({
+      intents: intentExtraction.intents,
+      sessionState,
+    });
+    const isCompoundTurn =
+      !miepInternal && isCompoundMessage(intentExtraction.intents);
+    if (session.context && typeof session.context === 'object') {
+      session.context.detectedIntents = intentExtraction.intents;
+      session.context.executionPlan = isCompoundTurn ? executionPlan : null;
+    }
+    askPathTrace.traceBranch('miep_compound_turn', {
+      compound: isCompoundTurn,
+      intentCount: intentExtraction.intents.length,
+      stepCount: executionPlan.steps.length,
+    });
+
     // SPEC-149 — SESSION_CONFIGURATION bypasses reasoning, ownership, and mission runtime.
     if (
+      !isCompoundTurn &&
       messageClassification.type === MESSAGE_TYPES.SESSION_CONFIGURATION &&
       messageTypeBypassesReasoning(messageClassification.type)
     ) {
@@ -580,6 +613,7 @@ class WorkspaceEngine {
 
     // SPEC-150 — SESSION_INSPECTION reads stored Session State (ADR-070).
     if (
+      !isCompoundTurn &&
       messageClassification.type === MESSAGE_TYPES.SESSION_INSPECTION &&
       messageTypeBypassesReasoning(messageClassification.type)
     ) {
@@ -667,6 +701,31 @@ class WorkspaceEngine {
           sessionState,
         }
       );
+    }
+
+    // SPEC-151 — Multi-Intent Execution Planner (ADR-072).
+    if (isCompoundTurn) {
+      askPathTrace.traceBranch('owner_pipeline:multi_intent_execution_planner');
+      const miepResult = await executeMultiIntentPlan(this, {
+        plan: executionPlan,
+        session,
+        sessionState,
+        input,
+        envelopeSwitch,
+        messageClassification,
+      });
+      if (!miepInternal || input._miepFinalStep) {
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: miepResult.prose || '',
+          structured: miepResult.structured || null,
+        });
+      }
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'multi_intent_plan', {
+        responseOwner: 'multi_intent_execution_planner',
+        pipeline: 'MultiIntentExecutionPlanner',
+      });
+      return miepResult;
     }
 
     // SPEC-155 — Conversation Contract precedes ownership (ADR-062).
