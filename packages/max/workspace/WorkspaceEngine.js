@@ -586,6 +586,7 @@ class WorkspaceEngine {
       askPathTrace.traceBranch('owner_pipeline:session_inspection');
       const inspectionCognition = classifyOperatorCognition(question);
       const inspectionTurn = inspectCurrentSession({
+        question,
         session,
         sessionState,
         messageClassification,

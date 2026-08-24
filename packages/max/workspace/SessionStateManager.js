@@ -47,25 +47,27 @@ const SESSION_RESET_RES = [
   /\breturn to default (?:mode|settings)\b/i,
 ];
 
-const SESSION_INSPECTION_RES = [
-  /\bwhat operating mode (?:are you|am i) (?:currently )?using\b/i,
-  /\bwhat mode are you currently in\b/i,
-  /\bwhat (?:is your )?current (?:session settings|session|operating mode)\b/i,
-  /\bwhat are your current session settings\b/i,
-  /\bhow are you operating right now\b/i,
-  /\bwhat execution policy (?:are you following|is active)\b/i,
-  /\bwhat conversation style is active\b/i,
-  /\bwhat reasoning mode is active\b/i,
-  /\bwhat evaluation mode is active\b/i,
-  /\bsummarize (?:the )?current session\b/i,
-  /\bshow (?:me )?(?:the )?current session\b/i,
-  /\bwhat session (?:state|settings) (?:are you|am i) (?:in|using)\b/i,
-  /\bcurrent session\b/i,
-];
-
 const SESSION_WHY_RES = [
   /\bwhy are you using that(?: operating mode)?\b/i,
   /\bwhy are you using it\b/i,
+  /\bwhy (?:are you|is (?:that|this)) (?:using )?(?:that )?(?:operating mode|execution policy|reasoning mode|conversation style|evaluation mode)\b/i,
+  /\bwhy is (?:that|this) (?:the )?(?:operating mode|execution policy|reasoning mode)\b/i,
+];
+
+/** Operator asks to read stored state — not configure it. */
+const SESSION_INSPECTION_INTENT_RES = [
+  /\bwhat\b/i,
+  /\bhow are you\b/i,
+  /\bhow am i\b/i,
+  /\bsummarize\b/i,
+  /\bshow (?:me )?\b/i,
+  /\bis active\b/i,
+  /\bare you\b/i,
+  /\bcurrent\b/i,
+  /\bconfigured\b/i,
+  /\bfollowing\b/i,
+  /\busing\b/i,
+  /\bare we\b/i,
 ];
 
 const EXECUTION_DISABLED_RES = [
@@ -234,11 +236,46 @@ function isSessionResetRequest(text) {
   return matchesAny(text, SESSION_RESET_RES);
 }
 
-function isSessionInspectionQuestion(text) {
+/**
+ * SPEC-150A — registry of every inspectable Session State field.
+ * @type {Array<{ key: string, displayName: string, stateKey: string, aliases: RegExp[], formatter: (value: *) => string, isSummary?: boolean }>}
+ */
+const SESSION_STATE_FIELDS = [];
+
+function registerSessionStateField(field) {
+  SESSION_STATE_FIELDS.push(field);
+}
+
+function fieldMatchesQuestion(field, question) {
+  return field.aliases.some((alias) => alias.test(question));
+}
+
+function hasSessionInspectionIntent(question) {
+  return matchesAny(question, SESSION_INSPECTION_INTENT_RES);
+}
+
+/**
+ * Resolve which Session State field an operator question inspects.
+ * @param {string} text
+ * @returns {object|null}
+ */
+function resolveSessionStateField(text) {
   const q = normalizeText(text);
-  if (!q) return false;
-  if (matchesAny(q, SESSION_WHY_RES)) return false;
-  return matchesAny(q, SESSION_INSPECTION_RES);
+  if (!q || matchesAny(q, SESSION_WHY_RES)) return null;
+  if (!hasSessionInspectionIntent(q)) return null;
+
+  for (const field of SESSION_STATE_FIELDS) {
+    if (fieldMatchesQuestion(field, q)) return field;
+  }
+  return null;
+}
+
+function isSessionInspectionQuestion(text) {
+  return resolveSessionStateField(text) != null;
+}
+
+function getSessionStateField(key) {
+  return SESSION_STATE_FIELDS.find((field) => field.key === key) || null;
 }
 
 function detectSessionDirectiveSignals(text) {
@@ -480,6 +517,101 @@ function formatEvaluationModeLabel(mode) {
   return String(mode);
 }
 
+registerSessionStateField({
+  key: 'executionPolicy',
+  displayName: 'Execution Policy',
+  stateKey: 'executionPolicy',
+  aliases: [
+    /\bexecution policy\b/i,
+    /\bexecution mode\b/i,
+    /\bare you allowed to execute\b/i,
+    /\bexecution settings\b/i,
+    /\bcurrent execution policy\b/i,
+  ],
+  formatter: formatExecutionPolicyLabel,
+});
+registerSessionStateField({
+  key: 'reasoningMode',
+  displayName: 'Reasoning Mode',
+  stateKey: 'reasoningMode',
+  aliases: [
+    /\breasoning mode\b/i,
+    /\bthinking mode\b/i,
+    /\bhow are you reasoning\b/i,
+    /\bcurrent reasoning mode\b/i,
+  ],
+  formatter: formatReasoningModeLabel,
+});
+registerSessionStateField({
+  key: 'conversationStyle',
+  displayName: 'Conversation Style',
+  stateKey: 'conversationStyle',
+  aliases: [
+    /\bconversation style\b/i,
+    /\bresponse style\b/i,
+    /\bcommunication style\b/i,
+    /\bhow are you responding\b/i,
+  ],
+  formatter: formatConversationStyleLabel,
+});
+registerSessionStateField({
+  key: 'evaluationMode',
+  displayName: 'Evaluation Mode',
+  stateKey: 'evaluationMode',
+  aliases: [
+    /\bevaluation mode\b/i,
+    /\bwhat are we evaluating\b/i,
+    /\bevaluation state\b/i,
+    /\bcurrent evaluation\b/i,
+  ],
+  formatter: formatEvaluationModeLabel,
+});
+registerSessionStateField({
+  key: 'operatingMode',
+  displayName: 'Operating Mode',
+  stateKey: 'operatingMode',
+  aliases: [
+    /\boperating mode\b/i,
+    /\bhow are you operating\b/i,
+    /\bcurrent mode\b/i,
+    /\bwhat mode\b/i,
+    /\b(?:your )?mode\b/i,
+  ],
+  formatter: formatOperatingModeLabel,
+});
+registerSessionStateField({
+  key: 'summary',
+  displayName: 'Session Summary',
+  stateKey: 'summary',
+  isSummary: true,
+  aliases: [
+    /\bsession state\b/i,
+    /\bcurrent session\b/i,
+    /\bsummarize(?:\s+(?:the\s+)?(?:current\s+)?session|\s+your(?:\s+current)?\s+session)\b/i,
+    /\bsession summary\b/i,
+    /\bhow are you configured\b/i,
+    /\b(?:what are your )?current session settings\b/i,
+    /\bshow (?:me )?(?:the )?current session\b/i,
+    /\bwhat (?:is your )?current session\b/i,
+  ],
+  formatter: () => '',
+});
+
+/**
+ * Format one inspectable field or the full session summary.
+ * @param {object|null} state
+ * @param {object|null} field
+ * @returns {string}
+ */
+function formatSessionFieldInspection(state, field) {
+  if (!field || field.isSummary) {
+    return formatSessionInspection(state);
+  }
+  const s = state || createDefaultSessionState();
+  const value = field.formatter(s[field.stateKey]);
+  return ['Current Session', '', field.displayName, '', value].join('\n');
+}
+
 /**
  * Format session state for operator inspection — reads stored state, not inference.
  * @param {object|null} state
@@ -641,7 +773,11 @@ module.exports = {
   isPersistentDirective,
   isSessionResetRequest,
   isSessionInspectionQuestion,
+  resolveSessionStateField,
+  SESSION_STATE_FIELDS,
+  getSessionStateField,
   formatSessionInspection,
+  formatSessionFieldInspection,
   formatOperatingModeLabel,
   formatExecutionPolicyLabel,
   formatReasoningModeLabel,
@@ -650,4 +786,5 @@ module.exports = {
   getCurrentState,
   applySessionStateToContract,
   sessionStateBlocksExecution,
+  SESSION_WHY_RES,
 };
