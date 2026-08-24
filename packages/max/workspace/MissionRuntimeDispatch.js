@@ -117,14 +117,23 @@ async function resolveLegacyActiveMission(input = {}) {
 async function resolveMissionRuntime(input = {}) {
   askPathTrace.traceEnter('resolveMissionRuntime');
   const question = String(input.question || '').trim();
+  const operatorIntent = input.operatorIntent || null;
   const amoMission = await resolveAcquisitionActiveMission(input);
   const legacyMission = await resolveLegacyActiveMission(input);
   const amoActive = isAmoMission(amoMission);
   const legacyActive = Boolean(legacyMission);
-  const executionCommand = isMissionExecutionCommand(question)
-    || isMissionPlanningTurn(amoMission, question);
+  const executionCommand = operatorIntent
+    ? operatorIntent.executionRequested || operatorIntent.planningRequested
+    : isMissionExecutionCommand(question) || isMissionPlanningTurn(amoMission, question);
 
-  if (amoActive && hasPendingOperatorDecision(amoMission) && (executionCommand || isMissionPlanningTurn(amoMission, question))) {
+  if (
+    amoActive &&
+    hasPendingOperatorDecision(amoMission) &&
+    (executionCommand ||
+      (operatorIntent
+        ? operatorIntent.planningRequested
+        : isMissionPlanningTurn(amoMission, question)))
+  ) {
     askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, 'amo_pending_approval', {
       missionId: amoMission && amoMission.id,
     });

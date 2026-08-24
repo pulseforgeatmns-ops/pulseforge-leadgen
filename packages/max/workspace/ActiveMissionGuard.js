@@ -113,13 +113,17 @@ async function resolveAcquisitionActiveMission(input = {}) {
 async function resolveActiveMissionLock(input = {}) {
   askPathTrace.traceEnter('resolveActiveMissionLock');
   const question = normalizeText(input.question);
-  const executionCommand =
-    input.detectExecution === true && isMissionExecutionCommand(question);
+  const operatorIntent = input.operatorIntent || null;
+  const executionCommand = operatorIntent
+    ? operatorIntent.executionRequested
+    : input.detectExecution === true && isMissionExecutionCommand(question);
   const exit = isExplicitMissionExit(question);
 
   const amoMission = await resolveAcquisitionActiveMission(input);
   if (amoMission) {
-    const planningTurn = isMissionPlanningTurn(amoMission, question);
+    const planningTurn = operatorIntent
+      ? operatorIntent.planningRequested
+      : isMissionPlanningTurn(amoMission, question);
     const cancelDuringPlanning = planningTurn && /\bcancel\b/i.test(question);
     askPathTrace.traceEarlyReturn('resolveActiveMissionLock', 'amo_active', {
       missionId: amoMission.id,
@@ -185,7 +189,7 @@ async function resolveActiveMissionLock(input = {}) {
  * @param {string} question
  * @returns {{ decision: object, guarded: boolean, blockedDomain: string|null }}
  */
-function guardExecutionDomain(decision, lockState, question) {
+function guardExecutionDomain(decision, lockState, question, operatorIntent = null) {
   if (!lockState || !lockState.active || lockState.explicitExit) {
     return { decision, guarded: false, blockedDomain: null };
   }
@@ -195,9 +199,11 @@ function guardExecutionDomain(decision, lockState, question) {
   }
 
   const blockedDomain = decision.domain;
-  const reason = isMissionExecutionCommand(question)
-    ? 'mission_execution_command'
-    : 'active_mission_lock';
+  const reason =
+    (operatorIntent && operatorIntent.executionRequested) ||
+    lockState.executionCommand
+      ? 'mission_execution_command'
+      : 'active_mission_lock';
 
   return {
     decision: {

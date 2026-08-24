@@ -504,15 +504,18 @@ function buildExecutionMetadata(mission, action, executionResult) {
   };
 }
 
-function detectExecutionAction(question, snapshot) {
+function detectExecutionAction(question, snapshot, operatorIntent = null) {
   askPathTrace.traceEnter('detectExecutionAction');
   const q = String(question || '').trim();
   const lower = q.toLowerCase();
+  const planningTurn = operatorIntent
+    ? operatorIntent.planningRequested
+    : isMissionPlanningTurn(snapshot.mission || snapshot, q);
 
   if (
     hasPendingPlanClarification(snapshot) &&
     !/\b(cancel)\b/i.test(q) &&
-    isMissionPlanningTurn(snapshot.mission || snapshot, q)
+    planningTurn
   ) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'plan_clarified');
     return 'plan_clarified';
@@ -722,8 +725,14 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     return null;
   }
 
-  const planningTurn = isMissionPlanningTurn(mission, question);
-  if (!question || (!isMissionExecutionCommand(question) && !planningTurn)) {
+  const operatorIntent = input.operatorIntent || null;
+  const planningTurn = operatorIntent
+    ? operatorIntent.planningRequested
+    : isMissionPlanningTurn(mission, question);
+  const executionRequested = operatorIntent
+    ? operatorIntent.executionRequested
+    : isMissionExecutionCommand(question);
+  if (!question || (!executionRequested && !planningTurn)) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'not_execution_command');
     return null;
   }
@@ -736,7 +745,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   assertMissionStateConsistent(snapshot.mission, {
     contributions: snapshot.contributions,
   });
-  const action = detectExecutionAction(question, snapshot);
+  const action = detectExecutionAction(question, snapshot, operatorIntent);
   const audit = input.audit || createMissionApprovalAudit();
   const useGlobalAudit = !input.audit;
   const emitMatched = useGlobalAudit
