@@ -64,6 +64,9 @@ function classifyIdentityQuestion(question) {
   if (/\bhow do scout and paige depend\b/.test(q)) return 'operating_model_reasoning';
   if (/^why\b/.test(q)) return 'operating_model_reasoning';
   if (/\b(?:different from|vs\.?|versus|compare)\b/.test(q)) return 'operating_model_reasoning';
+  if (/\b(?:what assumption|could (?:that|it) (?:assumption )?fail|summarize (?:how )?your reasoning)\b/.test(q)) {
+    return 'operating_model_reasoning';
+  }
   if (/\b(?:capabilities|what can you do)\b/.test(q)) return 'capabilities';
   if (/\b(?:responsibilit|boundar)\b/.test(q)) return 'boundaries';
   if (/\b(?:specialists?|scout|paige|emmett|riley|cal|vera|rex|sam|roster|team)\b/.test(q)) {
@@ -151,6 +154,12 @@ function buildIdentityStructured(prose, conversationIntent, conversationSubject,
       'SPEC-154 — Active Reasoning Context bound follow-up to the current proposition.',
       `Primary claim: ${reasoningMeta.primaryClaim || 'unknown'}.`
     );
+    if (reasoningMeta.reasoningOperatorEngine) {
+      reasoning.push(
+        'SPEC-156 — Reasoning Operator Engine transformed the proposition before presentation.',
+        `Operator: ${reasoningMeta.reasoningOperator || 'unknown'} at depth ${reasoningMeta.reasoningDepth ?? 'unknown'}.`
+      );
+    }
   } else if (reasoningMeta && reasoningMeta.conceptGraphReasoning) {
     reasoning.push(
       'SPEC-152 — Concept graph reasoning synthesized from relationship traversal.',
@@ -199,6 +208,9 @@ function buildIdentityStructured(prose, conversationIntent, conversationSubject,
       activeConcepts: reasoningMeta && reasoningMeta.activeConcepts ? reasoningMeta.activeConcepts : null,
       operatingModelReasoning: reasoningMeta || null,
       activeReasoningContext: Boolean(reasoningMeta && reasoningMeta.activeReasoningContext),
+      reasoningOperatorEngine: Boolean(reasoningMeta && reasoningMeta.reasoningOperatorEngine),
+      reasoningOperator: reasoningMeta && reasoningMeta.reasoningOperator ? reasoningMeta.reasoningOperator : null,
+      reasoningDepth: reasoningMeta && reasoningMeta.reasoningDepth != null ? reasoningMeta.reasoningDepth : null,
       primaryClaim: reasoningMeta && reasoningMeta.primaryClaim ? reasoningMeta.primaryClaim : null,
       conversationSubject: conversationSubject && conversationSubject.subject,
       conversationIntent: conversationIntent && conversationIntent.intent,
@@ -269,6 +281,8 @@ async function maybeHandleIdentityTurn(input = {}) {
       activeConcepts,
       activeReasoningContext,
       arcFollowUp,
+      operatorIntent: input.operatorIntent || null,
+      conversationContract: input.conversationContract || null,
     });
     reasoningMeta = reasoningMetadata({
       ...query,
