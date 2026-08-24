@@ -10,6 +10,7 @@ const { isActiveMissionStatus } = require('../../mission-engine/types');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
+const { sessionStateBlocksExecution } = require('./SessionState');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const MISSION_RUNTIMES = Object.freeze({
@@ -122,6 +123,26 @@ async function resolveMissionRuntime(input = {}) {
     input.conversationContract ||
     (operatorIntent && operatorIntent.conversationContract) ||
     null;
+  const sessionState =
+    input.sessionState ||
+    (operatorIntent && operatorIntent.sessionState) ||
+    (input.session && input.session.sessionState) ||
+    null;
+
+  if (sessionState && sessionStateBlocksExecution(sessionState)) {
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'session_state_read_only');
+    return {
+      runtime: null,
+      reason: 'session_state_read_only',
+      missionType: null,
+      mission: null,
+      amoMission: null,
+      legacyMission: null,
+      readOnly: true,
+      sessionState,
+      sessionExecutionPolicy: sessionState.executionPolicy,
+    };
+  }
 
   if (conversationContract && conversationContract.executionAllowed === false) {
     askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'conversation_contract_read_only');

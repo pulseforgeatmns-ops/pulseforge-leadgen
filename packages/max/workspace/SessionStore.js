@@ -79,10 +79,18 @@ class SessionStore {
       session.conversationalState ||
       (session.context && session.context.conversationalState) ||
       null;
+    const preservedSessionState =
+      session.sessionState ||
+      (session.context && session.context.sessionState) ||
+      null;
     session.context = context;
     if (preservedConversationalState) {
       session.conversationalState = preservedConversationalState;
       session.context.conversationalState = preservedConversationalState;
+    }
+    if (preservedSessionState) {
+      session.sessionState = preservedSessionState;
+      session.context.sessionState = preservedSessionState;
     }
     if (nextActive) {
       session.activeWorkContext = nextActive;

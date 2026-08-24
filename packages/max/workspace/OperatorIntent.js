@@ -36,6 +36,7 @@ const {
   contractRequiresContinuity,
   contractLocksConversation,
 } = require('./ConversationContract');
+const { sessionStateBlocksExecution, getSessionState } = require('./SessionState');
 const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
 
 /**
@@ -215,6 +216,30 @@ function applyConversationContractToIntent(baseIntent, conversationContract) {
   return baseIntent;
 }
 
+function applySessionStateToIntent(baseIntent, sessionState) {
+  if (!sessionState || !sessionStateBlocksExecution(sessionState)) {
+    if (sessionState) {
+      baseIntent.sessionState = sessionState;
+    }
+    return baseIntent;
+  }
+
+  baseIntent.executionRequested = false;
+  baseIntent.planningRequested = false;
+  baseIntent.mutatesMission = false;
+  baseIntent.missionContinuationRequested = false;
+  baseIntent.conversationLocked = true;
+  baseIntent.ownerHints = {
+    ...(baseIntent.ownerHints || {}),
+    readOnly: true,
+    executionLanguagePresent: false,
+    missionContinuation: false,
+    sessionExecutionPolicy: sessionState.executionPolicy,
+  };
+  baseIntent.sessionState = sessionState;
+  return baseIntent;
+}
+
 async function analyzeOperatorIntent(input = {}) {
   resetOperatorIntentAudit();
 
@@ -222,6 +247,7 @@ async function analyzeOperatorIntent(input = {}) {
   const session = input.session || null;
   const context = input.context || (session && session.context) || null;
   const conversationContract = input.conversationContract || null;
+  const sessionState = input.sessionState || getSessionState(session);
 
   let mission = input.mission || null;
   if (!mission && input.resolveMission !== false) {
@@ -357,6 +383,7 @@ async function analyzeOperatorIntent(input = {}) {
   };
 
   operatorIntent = applyConversationContractToIntent(operatorIntent, conversationContract);
+  operatorIntent = applySessionStateToIntent(operatorIntent, sessionState);
 
   sealOperatorIntent(operatorIntent);
   return operatorIntent;
