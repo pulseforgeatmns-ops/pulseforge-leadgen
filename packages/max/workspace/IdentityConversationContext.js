@@ -30,10 +30,10 @@ const {
   reasoningMetadata,
 } = require('../identity/IdentityReasoning');
 const { getConversationalState } = require('./ConversationalStateMachine');
-const { getSessionState } = require('./SessionState');
 const {
   isSessionInspectionQuestion,
   formatSessionInspection,
+  getCurrentState,
 } = require('./SessionStateManager');
 const { getActiveReasoningContext } = require('./ActiveReasoningContext');
 
@@ -89,7 +89,7 @@ function classifyIdentityQuestion(question) {
 
 function composeIdentityProse(question, session, registry) {
   const kind = classifyIdentityQuestion(question);
-  const storedSessionState = getSessionState(session);
+  const storedSessionState = getCurrentState(session);
   const mode = operatingModeLabel(session);
   const callable = capabilitySummary(registry);
   const introduction = composeWorkspaceIntroduction(session);
@@ -141,9 +141,7 @@ function composeIdentityProse(question, session, registry) {
         ].join(' → ')}. ${mode}`;
       break;
     case 'operating_mode':
-      prose = storedSessionState
-        ? formatSessionInspection(storedSessionState)
-        : `${MAX_ROLE} ${mode}`;
+      prose = formatSessionInspection(storedSessionState);
       break;
     case 'role':
     default:
@@ -268,7 +266,7 @@ async function maybeHandleIdentityTurn(input = {}) {
   const arcFollowUp = input.arcFollowUp || null;
 
   if (answerKind === 'session_inspection' || answerKind === 'operating_mode') {
-    prose = formatSessionInspection(getSessionState(session));
+    prose = formatSessionInspection(getCurrentState(session));
     answerKind = 'session_inspection';
   } else if (shouldUseOperatingModelReasoning({
     question,

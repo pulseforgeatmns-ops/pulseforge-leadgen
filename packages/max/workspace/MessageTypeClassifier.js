@@ -204,7 +204,7 @@ function isPureQuestion(text) {
   const q = normalizeText(text);
   if (!q) return false;
   if (isSessionConfigurationMessage(q)) return false;
-  if (isSessionInspectionQuestion(q)) return true;
+  if (isSessionInspectionQuestion(q)) return false;
   if (/^(?:why|how|what|where|when|who)\??$/i.test(q)) return true;
   return matchesAny(q, QUESTION_RES) && !matchesAny(q, COMMAND_RES);
 }
@@ -266,6 +266,15 @@ function classifyMessageType(question, input = {}) {
     return buildMessageClassification(MESSAGE_TYPES.UNKNOWN, 0.4, ['empty_message'], {
       via: 'empty',
     });
+  }
+
+  if (isSessionInspectionQuestion(q)) {
+    return buildMessageClassification(
+      MESSAGE_TYPES.SESSION_INSPECTION,
+      0.97,
+      ['session_inspection'],
+      { mutatesSession: false, mutatesMission: false, via: 'session_inspection' }
+    );
   }
 
   if (isSessionConfigurationMessage(q)) {
@@ -394,11 +403,17 @@ function resolveMessageType(input = {}) {
 }
 
 function messageTypeBypassesOwnership(type) {
-  return type === MESSAGE_TYPES.SESSION_CONFIGURATION;
+  return (
+    type === MESSAGE_TYPES.SESSION_CONFIGURATION ||
+    type === MESSAGE_TYPES.SESSION_INSPECTION
+  );
 }
 
 function messageTypeBypassesReasoning(type) {
-  return type === MESSAGE_TYPES.SESSION_CONFIGURATION;
+  return (
+    type === MESSAGE_TYPES.SESSION_CONFIGURATION ||
+    type === MESSAGE_TYPES.SESSION_INSPECTION
+  );
 }
 
 module.exports = {

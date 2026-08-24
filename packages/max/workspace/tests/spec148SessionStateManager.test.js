@@ -154,11 +154,10 @@ describe('SPEC-148 — Session State Manager', () => {
       assert.equal(isSessionInspectionQuestion('What operating mode are you using?'), true);
 
       const inspection = formatSessionInspection(getSessionState(session));
-      assert.match(inspection, /Operating Mode: Business Operation/);
-      assert.match(inspection, /Execution Policy: Read Only/);
-      assert.match(inspection, /Reasoning Mode: Analytical/);
-      assert.match(inspection, /Conversation Style: Natural/);
-      assert.match(inspection, /remain active until you change or reset them/);
+      assert.match(inspection, /Operating Mode\s+Business Operation/);
+      assert.match(inspection, /Execution Policy\s+Read Only/);
+      assert.match(inspection, /Reasoning Mode\s+Analytical/);
+      assert.match(inspection, /Conversation Style\s+Natural/);
     });
 
     it('Test 4 — operator mode change updates immediately and records history', () => {
@@ -273,10 +272,10 @@ describe('SPEC-148 — Session State Manager', () => {
         question: 'What operating mode are you using?',
       });
 
-      assert.match(inspection.structured.answer, /Operating Mode: Business Operation/);
-      assert.match(inspection.structured.answer, /Execution Policy: Read Only/);
-      assert.match(inspection.structured.answer, /Reasoning Mode: Analytical/);
-      assert.match(inspection.structured.answer, /Conversation Style: Natural/);
+      assert.match(inspection.structured.answer, /Operating Mode\s+Business Operation/);
+      assert.match(inspection.structured.answer, /Execution Policy\s+Read Only/);
+      assert.match(inspection.structured.answer, /Reasoning Mode\s+Analytical/);
+      assert.match(inspection.structured.answer, /Conversation Style\s+Natural/);
     });
   });
 });

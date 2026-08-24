@@ -37,10 +37,20 @@ function buildSessionConfigurationResponse(input = {}) {
 
   const structured = buildStructuredResponse({
     answer: prose,
-    answerKind: 'session_configuration',
     reasoning: ['SPEC-149 — SESSION_CONFIGURATION; no reasoning pipeline.'],
-    sources: [],
     recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
+    metadata: {
+      sessionConfiguration: true,
+      sessionStateRead: true,
+      businessIntelligenceUsed: false,
+      sourcesUsed: {
+        briefing: false,
+        reasoning: false,
+        memory: false,
+        policy: true,
+        knowledge: false,
+      },
+    },
   });
 
   return {

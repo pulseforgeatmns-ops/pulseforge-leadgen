@@ -49,10 +49,23 @@ const SESSION_RESET_RES = [
 
 const SESSION_INSPECTION_RES = [
   /\bwhat operating mode (?:are you|am i) (?:currently )?using\b/i,
-  /\bwhat (?:is your )?current (?:session|operating mode)\b/i,
+  /\bwhat mode are you currently in\b/i,
+  /\bwhat (?:is your )?current (?:session settings|session|operating mode)\b/i,
+  /\bwhat are your current session settings\b/i,
+  /\bhow are you operating right now\b/i,
+  /\bwhat execution policy (?:are you following|is active)\b/i,
+  /\bwhat conversation style is active\b/i,
+  /\bwhat reasoning mode is active\b/i,
+  /\bwhat evaluation mode is active\b/i,
+  /\bsummarize (?:the )?current session\b/i,
   /\bshow (?:me )?(?:the )?current session\b/i,
   /\bwhat session (?:state|settings) (?:are you|am i) (?:in|using)\b/i,
   /\bcurrent session\b/i,
+];
+
+const SESSION_WHY_RES = [
+  /\bwhy are you using that(?: operating mode)?\b/i,
+  /\bwhy are you using it\b/i,
 ];
 
 const EXECUTION_DISABLED_RES = [
@@ -224,6 +237,7 @@ function isSessionResetRequest(text) {
 function isSessionInspectionQuestion(text) {
   const q = normalizeText(text);
   if (!q) return false;
+  if (matchesAny(q, SESSION_WHY_RES)) return false;
   return matchesAny(q, SESSION_INSPECTION_RES);
 }
 
@@ -476,16 +490,67 @@ function formatSessionInspection(state) {
   const lines = [
     'Current Session',
     '',
-    `Operating Mode: ${formatOperatingModeLabel(s.operatingMode)}`,
-    `Execution Policy: ${formatExecutionPolicyLabel(s.executionPolicy)}`,
-    `Reasoning Mode: ${formatReasoningModeLabel(s.reasoningMode)}`,
-    `Conversation Style: ${formatConversationStyleLabel(s.conversationStyle)}`,
+    'Operating Mode',
+    '',
+    formatOperatingModeLabel(s.operatingMode),
+    '',
+    'Execution Policy',
+    '',
+    formatExecutionPolicyLabel(s.executionPolicy),
+    '',
+    'Reasoning Mode',
+    '',
+    formatReasoningModeLabel(s.reasoningMode),
+    '',
+    'Conversation Style',
+    '',
+    formatConversationStyleLabel(s.conversationStyle),
+    '',
+    'Evaluation Mode',
+    '',
+    formatEvaluationModeLabel(s.evaluationMode),
   ];
-  if (s.evaluationMode && s.evaluationMode !== EVALUATION_MODES.NONE) {
-    lines.push(`Evaluation: ${formatEvaluationModeLabel(s.evaluationMode)}`);
+  if (s.activeObjective) {
+    lines.push('', 'Active Objective', '', String(s.activeObjective));
   }
-  lines.push('', 'These settings remain active until you change or reset them.');
   return lines.join('\n');
+}
+
+/**
+ * SPEC-150 / ADR-070 — the shared inspection read interface.
+ * Returns stored Session State only. Never infers from mission context or the prompt.
+ *
+ * Any runtime component that mutates persistent Session State must write through
+ * `setSessionState` so this function exposes the same fields.
+ *
+ * @param {object|null} session
+ * @returns {{
+ *   operatingMode: string,
+ *   executionPolicy: string,
+ *   reasoningMode: string,
+ *   conversationStyle: string,
+ *   evaluationMode: string,
+ *   activeObjective: string|null,
+ *   sessionStarted: string|null,
+ *   lastUpdated: string|null
+ * }}
+ */
+function getCurrentState(session) {
+  const stored = getSessionState(session);
+  const state =
+    stored && typeof stored === 'object'
+      ? cloneSessionState(stored)
+      : createDefaultSessionState();
+  return {
+    operatingMode: state.operatingMode,
+    executionPolicy: state.executionPolicy,
+    reasoningMode: state.reasoningMode,
+    conversationStyle: state.conversationStyle,
+    evaluationMode: state.evaluationMode,
+    activeObjective: state.activeObjective || null,
+    sessionStarted: state.sessionStarted || state.createdAt || null,
+    lastUpdated: state.lastUpdated || state.updatedAt || null,
+  };
 }
 
 /**
@@ -577,6 +642,12 @@ module.exports = {
   isSessionResetRequest,
   isSessionInspectionQuestion,
   formatSessionInspection,
+  formatOperatingModeLabel,
+  formatExecutionPolicyLabel,
+  formatReasoningModeLabel,
+  formatConversationStyleLabel,
+  formatEvaluationModeLabel,
+  getCurrentState,
   applySessionStateToContract,
   sessionStateBlocksExecution,
 };
