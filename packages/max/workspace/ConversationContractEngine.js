@@ -7,7 +7,7 @@
  * before ownership, operator intent, or mission runtime.
  *
  * Pipeline position:
- *   Raw Operator Message → Conversation Contract Engine → Conversation State → …
+ *   Raw Operator Message → Session State Manager → Conversation Contract Engine → Conversation State → …
  */
 
 const {
@@ -19,6 +19,8 @@ const {
   contractLocksConversation,
 } = require('./ConversationContract');
 const { getConversationalState, setConversationalState } = require('./ConversationalStateMachine');
+const { applySessionStateToContract } = require('./SessionStateManager');
+const { getSessionState } = require('./SessionState');
 const askPathTrace = require('./audit/AskPathTrace');
 
 function normalizeText(value) {
@@ -32,12 +34,14 @@ function normalizeText(value) {
  * @param {object} input
  * @param {string} input.question
  * @param {object} [input.session]
+ * @param {object} [input.sessionState] — SPEC-148 session state (ADR-068)
  * @returns {{ contract: object, changed: boolean, reason: string|null, priorContract: object|null }}
  */
 function resolveConversationContract(input = {}) {
   askPathTrace.traceEnter('resolveConversationContract');
   const question = normalizeText(input.question);
   const session = input.session || null;
+  const sessionState = input.sessionState || getSessionState(session);
   const priorContract = getConversationContract(session);
   const priorState = getConversationalState(session);
 
@@ -46,7 +50,7 @@ function resolveConversationContract(input = {}) {
     priorContract,
   });
 
-  const contract = built.contract;
+  const contract = applySessionStateToContract(sessionState, built.contract);
   setConversationContract(session, contract);
 
   if (priorState && session) {

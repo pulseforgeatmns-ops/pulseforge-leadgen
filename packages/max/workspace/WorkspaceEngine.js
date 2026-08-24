@@ -55,6 +55,12 @@ const {
 } = require('../operatorCognition');
 const { analyzeOperatorIntent } = require('./OperatorIntent');
 const { resolveConversationContract } = require('./ConversationContractEngine');
+const {
+  resolveSessionState,
+  isSessionInspectionQuestion,
+  formatSessionInspection,
+} = require('./SessionStateManager');
+const { getSessionState } = require('./SessionState');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
@@ -403,6 +409,7 @@ class WorkspaceEngine {
     let conversationIntent = null;
     let operatorIntent = null;
     let conversationContract = null;
+    let sessionState = null;
     let traceAskReturn = (label, value, meta = {}) => value;
 
     try {
@@ -445,10 +452,29 @@ class WorkspaceEngine {
           }
         : null;
 
+    // SPEC-148 — Session State precedes conversation contract (ADR-068).
+    const sessionStateResolution = resolveSessionState({
+      question,
+      session,
+    });
+    sessionState = sessionStateResolution.state;
+    if (session.context && typeof session.context === 'object') {
+      session.context.sessionState = sessionState;
+    }
+    askPathTrace.traceBranch('session_state', {
+      operatingMode: sessionState.operatingMode,
+      executionPolicy: sessionState.executionPolicy,
+      reasoningMode: sessionState.reasoningMode,
+      conversationStyle: sessionState.conversationStyle,
+      evaluationMode: sessionState.evaluationMode,
+      changed: sessionStateResolution.changed,
+    });
+
     // SPEC-155 — Conversation Contract precedes ownership (ADR-062).
     const contractResolution = resolveConversationContract({
       question,
       session,
+      sessionState,
     });
     conversationContract = contractResolution.contract;
     if (session.context && typeof session.context === 'object') {
@@ -469,6 +495,7 @@ class WorkspaceEngine {
       session,
       context: rawContext || session.context,
       conversationContract,
+      sessionState,
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
@@ -486,6 +513,7 @@ class WorkspaceEngine {
       session.context.conversationIntent = conversationIntent;
       session.context.operatorIntent = operatorIntent;
       session.context.conversationContract = conversationContract;
+      session.context.sessionState = sessionState;
       if (continuityApplied) {
         session.context.resolvedQuestion = resolvedQuestion;
       }
@@ -569,6 +597,7 @@ class WorkspaceEngine {
         enriched.resolvedQuestion = resolvedQuestion;
         enriched.activeReasoningContext = activeReasoningContext;
         enriched.conversationContract = conversationContract;
+        enriched.sessionState = sessionState;
       }
       return enriched;
     };
