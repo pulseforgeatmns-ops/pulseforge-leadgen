@@ -91,7 +91,7 @@ function classifyGoal(question, parsed = null) {
   if (/\b(?:depend on each other|what happens if one fails|relationship between)\b/.test(q)) {
     return REASONING_GOALS.EXPLAIN_DEPENDENCY;
   }
-  if (/\b(?:when should i ignore|should i ignore)\b/.test(q)) {
+  if (/\b(?:when should i ignore|when would you disagree|should i ignore)\b/.test(q)) {
     return REASONING_GOALS.EXPLAIN_FAILURE_MODES;
   }
   if (/\b(?:what should never belong|never do|boundaries)\b/.test(q)) {

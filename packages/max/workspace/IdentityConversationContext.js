@@ -30,6 +30,7 @@ const {
   reasoningMetadata,
 } = require('../identity/IdentityReasoning');
 const { getConversationalState } = require('./ConversationalStateMachine');
+const { getActiveReasoningContext } = require('./ActiveReasoningContext');
 
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -46,6 +47,7 @@ function classifyIdentityQuestion(question) {
   const q = normalizeText(question).toLowerCase();
   if (/\b(?:who are you|tell me about yourself)\b/.test(q)) return 'introduction';
   if (/\bwhen should i ignore\b/.test(q)) return 'failure_modes';
+  if (/\bwhen would you disagree\b/.test(q)) return 'operating_model_reasoning';
   if (/\bscout disagrees with paige\b/.test(q) || /\bif scout and paige disagreed\b/.test(q)) {
     return 'operating_model_reasoning';
   }
@@ -144,7 +146,12 @@ function buildIdentityStructured(prose, conversationIntent, conversationSubject,
     'SPEC-149A — Identity subject routed before business intelligence.',
     'Response grounded in Max operating-system role, capability registry, and delegation boundaries only.',
   ];
-  if (reasoningMeta && reasoningMeta.conceptGraphReasoning) {
+  if (reasoningMeta && reasoningMeta.activeReasoningContext) {
+    reasoning.push(
+      'SPEC-154 — Active Reasoning Context bound follow-up to the current proposition.',
+      `Primary claim: ${reasoningMeta.primaryClaim || 'unknown'}.`
+    );
+  } else if (reasoningMeta && reasoningMeta.conceptGraphReasoning) {
     reasoning.push(
       'SPEC-152 — Concept graph reasoning synthesized from relationship traversal.',
       `Reasoning goal: ${reasoningMeta.goal || reasoningMeta.reasoningTarget || 'unknown'}.`
@@ -191,6 +198,8 @@ function buildIdentityStructured(prose, conversationIntent, conversationSubject,
       conceptGraphReasoning: Boolean(reasoningMeta && reasoningMeta.conceptGraphReasoning),
       activeConcepts: reasoningMeta && reasoningMeta.activeConcepts ? reasoningMeta.activeConcepts : null,
       operatingModelReasoning: reasoningMeta || null,
+      activeReasoningContext: Boolean(reasoningMeta && reasoningMeta.activeReasoningContext),
+      primaryClaim: reasoningMeta && reasoningMeta.primaryClaim ? reasoningMeta.primaryClaim : null,
       conversationSubject: conversationSubject && conversationSubject.subject,
       conversationIntent: conversationIntent && conversationIntent.intent,
       underlyingIntent: conversationIntent && conversationIntent.underlyingIntent,
@@ -230,6 +239,9 @@ async function maybeHandleIdentityTurn(input = {}) {
   let answerKind = classifyIdentityQuestion(question);
   const priorState = getConversationalState(session);
   const activeConcepts = priorState && priorState.activeConcepts ? priorState.activeConcepts : null;
+  const activeReasoningContext =
+    input.activeReasoningContext || getActiveReasoningContext(session);
+  const arcFollowUp = input.arcFollowUp || null;
 
   if (shouldUseOperatingModelReasoning({
     question,
@@ -237,6 +249,8 @@ async function maybeHandleIdentityTurn(input = {}) {
     conversationIntent,
     session,
     activeConcepts,
+    activeReasoningContext,
+    arcFollowUp,
   })) {
     const query = planOperatingModelQuery({
       question,
@@ -244,6 +258,8 @@ async function maybeHandleIdentityTurn(input = {}) {
       conversationIntent,
       session,
       activeConcepts,
+      activeReasoningContext,
+      arcFollowUp,
     });
     prose = composeIdentityReasoning({
       question,
@@ -251,6 +267,8 @@ async function maybeHandleIdentityTurn(input = {}) {
       conversationIntent,
       session,
       activeConcepts,
+      activeReasoningContext,
+      arcFollowUp,
     });
     reasoningMeta = reasoningMetadata({
       ...query,
@@ -274,7 +292,9 @@ async function maybeHandleIdentityTurn(input = {}) {
     reasoningMeta
   );
 
-  askPathTrace.traceEarlyReturn('maybeHandleIdentityTurn', reasoningMeta && reasoningMeta.conceptGraphReasoning
+  askPathTrace.traceEarlyReturn('maybeHandleIdentityTurn', reasoningMeta && reasoningMeta.activeReasoningContext
+    ? 'active_reasoning_context'
+    : reasoningMeta && reasoningMeta.conceptGraphReasoning
     ? 'concept_graph_reasoning'
     : reasoningMeta && reasoningMeta.operatingModelReflection
       ? 'operating_model_reasoning'
@@ -284,7 +304,9 @@ async function maybeHandleIdentityTurn(input = {}) {
     handled: true,
     prose,
     structured,
-    reason: reasoningMeta && reasoningMeta.conceptGraphReasoning
+    reason: reasoningMeta && reasoningMeta.activeReasoningContext
+      ? 'active_reasoning_context'
+      : reasoningMeta && reasoningMeta.conceptGraphReasoning
       ? 'concept_graph_reasoning'
       : reasoningMeta && reasoningMeta.operatingModelReflection
         ? 'operating_model_reflection'
