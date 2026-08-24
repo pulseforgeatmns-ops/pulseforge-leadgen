@@ -265,7 +265,7 @@ describe('SPEC-150 — Conversational State Machine', () => {
       assert.equal(turn2.conversationIntent.thinkingMode, 'operating_model_reflection');
       assert.equal(turn2.conversationIntent.underlyingIntent, THINKING_MODES.EXPLAIN);
       assert.equal(turn2.conversationIntent.continuity, true);
-      assert.equal(turn2.resolvedQuestion, 'why(identity)');
+      assert.match(turn2.resolvedQuestion, /^claim_why\(|^why\(identity\)$/);
       assert.equal(turn2.conversationalState.depth, 2);
       assert.equal(turn2.routingTrace.continuity, true);
 

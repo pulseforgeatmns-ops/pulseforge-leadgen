@@ -255,7 +255,7 @@ describe('SPEC-151 — Max Operating Model Reasoning', () => {
       assert.equal(turn2.workspaceOwnership.owner, WORKSPACE_OWNERS.CONVERSATION_IDENTITY);
       assert.equal(turn2.conversationIntent.intent, THINKING_MODES.OPERATING_MODEL);
       assert.equal(turn2.conversationIntent.thinkingMode, 'operating_model_reflection');
-      assert.equal(turn2.resolvedQuestion, 'why(identity)');
+      assert.match(turn2.resolvedQuestion, /^claim_why\(|^why\(identity\)$/);
       assert.match(turn2.prose, /specialist sees the entire business|integrate competing evidence/i);
       assert.doesNotMatch(turn2.prose, /Blueprint|ICP|ideal customer/i);
 

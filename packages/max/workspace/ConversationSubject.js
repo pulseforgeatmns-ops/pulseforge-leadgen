@@ -46,6 +46,7 @@ const IDENTITY_SUBJECT_RES = [
   /\b(?:describe|explain) (?:yourself|your role)\b/i,
   // SPEC-151 — operating model reflection questions
   /\bwhen should i ignore (?:your )?advice\b/i,
+  /\bwhen would you disagree\b/i,
   /\bwhy shouldn'?t scout do (?:your|max'?s?) job\b/i,
   /\bwhy not merge scout into max\b/i,
   /\bwhy (?:does|do) pulseforge separate specialists\b/i,

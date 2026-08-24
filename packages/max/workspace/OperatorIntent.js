@@ -13,7 +13,8 @@ const {
   attachSpecialists,
   THINKING_MODES,
 } = require('../operatorCognition');
-const { applyConversationalContinuity } = require('./ConversationalStateMachine');
+const { applyConversationalContinuity, getConversationalState } = require('./ConversationalStateMachine');
+const { applyActiveReasoningContinuity } = require('./ActiveReasoningContext');
 const {
   hasExecutionLanguage,
   detectMissionExecutionLanguage,
@@ -223,6 +224,27 @@ async function analyzeOperatorIntent(input = {}) {
     }
   }
 
+  // SPEC-154 — follow-ups bind to active primaryClaim before conversation topic.
+  let activeReasoningContext = null;
+  let arcFollowUp = null;
+  const arcContinuity = applyActiveReasoningContinuity({
+    question,
+    session,
+    priorState: getConversationalState(session),
+    continuityApplied,
+  });
+  if (arcContinuity.activeReasoningContext) {
+    activeReasoningContext = arcContinuity.activeReasoningContext;
+  }
+  if (arcContinuity.applied) {
+    resolvedQuestion = arcContinuity.resolvedQuestion;
+    arcFollowUp = arcContinuity.arcFollowUp || null;
+    if (session && session.context && typeof session.context === 'object') {
+      session.context.resolvedQuestion = resolvedQuestion;
+      session.context.arcFollowUp = arcFollowUp;
+    }
+  }
+
   const conversationLocked = Boolean(
     conversationSubject && conversationSubject.locked
   );
@@ -263,6 +285,10 @@ async function analyzeOperatorIntent(input = {}) {
     missionContinuationConfidence: legacyContinuation.confidence,
     missionContinuationClassification: legacyContinuation.classification,
     mission,
+    activeReasoningContext,
+    arcFollowUp,
+    conversationGoal: activeReasoningContext && activeReasoningContext.conversationGoal,
+    primaryClaim: activeReasoningContext && activeReasoningContext.primaryClaim,
   };
 
   sealOperatorIntent(operatorIntent);

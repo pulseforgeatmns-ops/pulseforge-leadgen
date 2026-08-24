@@ -56,6 +56,7 @@ const {
 const { analyzeOperatorIntent } = require('./OperatorIntent');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
+const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
 const { maybeHandleReflectionTurn } = require('./ReflectionRouting');
 const { maybeHandleIdentityTurn } = require('./IdentityConversationContext');
 const { maybeHandleConversationTurn } = require('./ConversationTurnContext');
@@ -516,6 +517,15 @@ class WorkspaceEngine {
           (value && value.workspaceOwnership) || workspaceOwnership,
         resolvedQuestion,
         continuityApplied,
+        structured: value && value.structured,
+      });
+      const activeReasoningContext = advanceActiveReasoningContext(session, {
+        question,
+        conversationSubject,
+        conversationIntent,
+        resolvedQuestion,
+        arcFollowUp: operatorIntent && operatorIntent.arcFollowUp,
+        structured: value && value.structured,
       });
       const enriched = attachRoutingTrace(value, {
         conversationSubject,
@@ -526,10 +536,12 @@ class WorkspaceEngine {
         claimedBy: meta.claimedBy || null,
         conversationalState,
         resolvedQuestion,
+        activeReasoningContext,
       });
       if (enriched && typeof enriched === 'object') {
         enriched.conversationalState = conversationalState;
         enriched.resolvedQuestion = resolvedQuestion;
+        enriched.activeReasoningContext = activeReasoningContext;
       }
       return enriched;
     };
@@ -684,6 +696,8 @@ class WorkspaceEngine {
         conversationIntent,
         conversationSubject,
         resolvedQuestion,
+        activeReasoningContext: operatorIntent.activeReasoningContext,
+        arcFollowUp: operatorIntent.arcFollowUp,
       });
       if (identityTurn && identityTurn.handled) {
         session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;

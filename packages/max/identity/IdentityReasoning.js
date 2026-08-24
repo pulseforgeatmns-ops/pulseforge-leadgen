@@ -21,6 +21,12 @@ const {
   composeConceptGraphAnswer,
   joinSentences,
 } = require('../reasoning/ConceptGraph');
+const {
+  parseArcResolvedQuestion,
+  synthesizeFromArc,
+  classifyArcFollowUp,
+  FOLLOW_UP_TYPES,
+} = require('../workspace/ActiveReasoningContext');
 
 const REASONING_TARGETS = Object.freeze({
   ROLE: 'role',
@@ -81,6 +87,9 @@ function classifyDirectQuestion(question) {
   const q = normalizeText(question).toLowerCase();
 
   if (/\bwhen should i ignore (?:your )?advice\b/.test(q)) {
+    return { target: REASONING_TARGETS.FAILURE_MODES, sections: ['failureModes', 'boundaries', 'principles'] };
+  }
+  if (/\bwhen would you disagree\b/.test(q)) {
     return { target: REASONING_TARGETS.FAILURE_MODES, sections: ['failureModes', 'boundaries', 'principles'] };
   }
   if (/\bwhy shouldn'?t scout do your job\b/.test(q) || /\bwhy can'?t scout do (?:your|max'?s?) job\b/.test(q)) {
@@ -201,6 +210,24 @@ function planOperatingModelQuery(input = {}) {
   const resolvedQuestion = normalizeText(input.resolvedQuestion);
   const conversationIntent = input.conversationIntent || null;
   const continuity = Boolean(conversationIntent && conversationIntent.continuity);
+  const activeReasoningContext = input.activeReasoningContext || null;
+
+  // SPEC-154 — ARC-bound follow-ups reason from the active proposition.
+  const arcParsed = resolvedQuestion ? parseArcResolvedQuestion(resolvedQuestion) : null;
+  if (arcParsed && activeReasoningContext) {
+    const followUp = input.arcFollowUp || classifyArcFollowUp(question);
+    return {
+      target: REASONING_TARGETS.WHY,
+      via: 'active_reasoning_context',
+      continuity: true,
+      arcBound: true,
+      arcParsed,
+      arcFollowUpType: followUp && followUp.type ? followUp.type : FOLLOW_UP_TYPES.WHY,
+      goal: activeReasoningContext.goal || REASONING_GOALS.EXPLAIN_IDENTITY,
+      concepts: activeReasoningContext.reasoningChain || ['identity'],
+      primaryClaim: activeReasoningContext.primaryClaim,
+    };
+  }
 
   if (shouldUseConceptGraphReasoning({
     question,
@@ -378,6 +405,9 @@ function synthesizeFromQuery(query, input = {}) {
 }
 
 function shouldUseOperatingModelReasoning(input = {}) {
+  if (input.activeReasoningContext && input.resolvedQuestion && parseArcResolvedQuestion(input.resolvedQuestion)) {
+    return true;
+  }
   return shouldUseConceptGraphReasoning(input) || Boolean(
     (input.resolvedQuestion && parseResolvedQuestion(input.resolvedQuestion)) ||
     classifyDirectQuestion(input.question || '') ||
@@ -390,7 +420,20 @@ function composeIdentityReasoning(input = {}) {
   const query = planOperatingModelQuery(input);
   if (!query) return null;
 
-  let prose = synthesizeFromQuery(query, input);
+  let prose = null;
+
+  // SPEC-154 — answer the current proposition before retrieving additional context.
+  if (query.arcBound && input.activeReasoningContext) {
+    prose = synthesizeFromArc(
+      input.activeReasoningContext,
+      query.arcFollowUpType || FOLLOW_UP_TYPES.WHY,
+      input.question
+    );
+  }
+
+  if (!prose) {
+    prose = synthesizeFromQuery(query, input);
+  }
   if (!prose) return null;
 
   const session = input.session || null;
@@ -415,6 +458,20 @@ function reasoningMetadata(query) {
       reasoningTarget: null,
       sectionsUsed: [],
       concepts: [],
+    };
+  }
+
+  if (query.arcBound) {
+    return {
+      operatingModelReflection: true,
+      conceptGraphReasoning: false,
+      activeReasoningContext: true,
+      reasoningTarget: query.arcFollowUpType || 'why',
+      primaryClaim: query.primaryClaim || null,
+      sectionsUsed: query.concepts || [],
+      concepts: query.concepts || [],
+      goal: query.goal || null,
+      via: 'active_reasoning_context',
     };
   }
 
