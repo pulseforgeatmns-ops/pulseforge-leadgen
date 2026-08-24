@@ -8,77 +8,21 @@
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
-const { normalizeText } = require('./SessionState');
 const {
   getExecutionState,
   serializeExecutionState,
   describeStepKind,
   EXECUTION_STATUSES,
 } = require('./ExecutionState');
-
-const EXECUTION_INSPECTION_RES = [
-  /\bwhat are you doing\b/i,
-  /\bwhat(?:'s| is) your current step\b/i,
-  /\bwhat step are you on\b/i,
-  /\bwhere are you in the plan\b/i,
-  /\bshow me your execution state\b/i,
-  /\bsummarize the execution plan\b/i,
-  /\bwhat(?:'s| is) the execution status\b/i,
-];
-
-const EXECUTION_PAUSE_EXPLANATION_RES = [
-  /\bwhy did you stop\b/i,
-  /\bwhy are you paused\b/i,
-  /\bwhy didn'?t you continue\b/i,
-  /\bwhy is this blocked\b/i,
-  /\bwhy didn'?t you continue autonomous execution\b/i,
-  /\bwhat are you waiting for\b/i,
-  /\bwhat(?:'s| is) blocking you\b/i,
-];
-
-const EXECUTION_NEXT_STEP_RES = [
-  /\bwhat(?:'s| is) next\b/i,
-  /\bwhat happens next\b/i,
-  /\bwhat will you do next\b/i,
-];
-
-function matchesAny(text, patterns) {
-  return patterns.some((re) => re.test(text));
-}
-
-/**
- * @param {string} text
- * @returns {boolean}
- */
-function isExecutionInspectionQuestion(text) {
-  const q = normalizeText(text);
-  if (!q) return false;
-  return (
-    matchesAny(q, EXECUTION_INSPECTION_RES) ||
-    matchesAny(q, EXECUTION_PAUSE_EXPLANATION_RES) ||
-    matchesAny(q, EXECUTION_NEXT_STEP_RES)
-  );
-}
-
-/**
- * @param {string} text
- * @returns {boolean}
- */
-function isExecutionExplanationQuestion(text) {
-  const q = normalizeText(text);
-  if (!q) return false;
-  return matchesAny(q, EXECUTION_PAUSE_EXPLANATION_RES);
-}
-
-function detectInspectionMode(question) {
-  const q = normalizeText(question);
-  if (matchesAny(q, EXECUTION_PAUSE_EXPLANATION_RES)) return 'pause_explanation';
-  if (matchesAny(q, EXECUTION_NEXT_STEP_RES)) return 'next_step';
-  if (/\bshow me your execution state\b/i.test(q)) return 'full_state';
-  if (/\bsummarize the execution plan\b/i.test(q)) return 'plan_summary';
-  if (/\bwhere are you in the plan\b/i.test(q)) return 'plan_position';
-  return 'current_activity';
-}
+const {
+  EXECUTION_INSPECTION_INTENTS,
+  EXECUTION_INSPECTION_RES,
+  EXECUTION_PAUSE_EXPLANATION_RES,
+  EXECUTION_NEXT_STEP_RES,
+  isExecutionInspectionQuestion,
+  isExecutionExplanationQuestion,
+  detectInspectionMode,
+} = require('./ExecutionInspectionRegistry');
 
 function executionStateEvidence(state) {
   return {
@@ -321,6 +265,7 @@ function inspectExecutionState(input = {}) {
 }
 
 module.exports = {
+  EXECUTION_INSPECTION_INTENTS,
   EXECUTION_INSPECTION_RES,
   EXECUTION_PAUSE_EXPLANATION_RES,
   EXECUTION_NEXT_STEP_RES,
