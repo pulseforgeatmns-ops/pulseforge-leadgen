@@ -396,6 +396,7 @@ function createAcquisitionMissionEngine(opts = {}) {
       : null;
     assertMissionStateConsistent(mission, { contributions });
     const progression = require('./MissionProgression');
+    const progressionState = progression.resolveProgressionState({ mission, contributions });
     return {
       spec: 'SPEC-118',
       mission,
@@ -412,10 +413,16 @@ function createAcquisitionMissionEngine(opts = {}) {
       blocker: currentBlocker(mission.blockers),
       discoveryArtifact,
       progression: {
-        stage: progression.deriveProgressionStage({ mission, contributions }),
-        pause: progression.deriveMissionPause({ mission, contributions }),
-        block: progression.deriveExecutionBlock({ mission, contributions }),
-        presentation: progression.formatMissionProgressPresentation({ mission, contributions }),
+        stage: progressionState.progressionStage,
+        contract: progressionState.contract,
+        outcome: progressionState.outcome,
+        pause: progressionState.pause,
+        block: progressionState.block,
+        presentation: progression.formatMissionProgressPresentation({ mission, contributions }, {
+          progressionStage: progressionState.progressionStage,
+          pause: progressionState.pause,
+          block: progressionState.block,
+        }),
       },
     };
   }
