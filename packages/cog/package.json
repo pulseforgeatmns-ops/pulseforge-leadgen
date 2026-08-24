@@ -1,0 +1,14 @@
+{
+  "name": "@pulseforge/cog",
+  "version": "0.1.0",
+  "description": "Cognitive Evaluation Framework — permanent benchmark for Max reasoning maturity",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "license": "ISC",
+  "engines": {
+    "node": ">=18"
+  }
+}
