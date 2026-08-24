@@ -49,6 +49,22 @@ Return (blocked | complete)
 
 Ownership is **step-level**, not message-level. Each execution step assigns one pipeline owner (Session State Manager, Mission Runtime, Max Reasoning, etc.).
 
+### Invariant: execution plans are additive, not competitive
+
+**Execution plans are additive, not competitive.**
+
+Intents extracted from one message should **coexist** in the plan whenever they do not conflict. The planner must not treat multiple intents as a classification tournament where one winner suppresses the rest.
+
+The planner **only forces a choice** when two intents are **mutually exclusive** — for example, `enable execution` and `disable execution` in the same message, or an execution request that contradicts an active session execution policy after both have been applied.
+
+| Situation | Planner behavior |
+|---|---|
+| Compatible intents (config + business operation + reasoning) | Include all; order by dependencies and segment order |
+| Independent intents with no conflict | Include all; execute sequentially |
+| Mutually exclusive intents | Resolve conflict explicitly; do not silently discard one |
+
+This invariant preserves operator messages as **plans**: every non-conflicting intention gets a step unless blocked by policy or approval gates.
+
 ### Constraints
 
 - Human approval contracts remain intact — the planner never bypasses discovery review, plan approval, or operator decision gates.

@@ -35,6 +35,7 @@ Operator Message
 ## Runtime Guarantees
 
 - Multiple compatible intents execute from one message.
+- **Execution plans are additive, not competitive** — intents coexist unless mutually exclusive (ADR-072).
 - Execution order is deterministic (segment order + dependency repair).
 - Human approval contracts remain intact.
 - Ownership is per step, not per message.

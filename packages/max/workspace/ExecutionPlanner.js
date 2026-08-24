@@ -5,6 +5,9 @@
  *
  * Builds a deterministic ordered execution plan from detected intents.
  * Dependencies are respected; segment order breaks ties.
+ *
+ * ADR-072 invariant: execution plans are additive, not competitive — intents
+ * coexist unless mutually exclusive; the planner only forces a choice on conflict.
  */
 
 const askPathTrace = require('./audit/AskPathTrace');
