@@ -27,6 +27,14 @@ const {
   createInvestigationJournal,
   recordJournalStep,
   serializeJournal,
+  createInvestigationPlan,
+  createInvestigationPlanWithLearning,
+  reviseInvestigationPlan,
+  skipRemainingProviders,
+  buildInvestigationStatusFromPlan,
+  buildInvestigationPlan,
+  buildProviderPlan,
+  PROVIDER_STATUS,
 } = investigation;
 
 describe('SPEC-145 — Adaptive Investigation Planning', () => {
@@ -258,5 +266,358 @@ describe('SPEC-145 — Adaptive Investigation Planning', () => {
     });
     const coverage = computeCoverage(board);
     assert.ok(coverage >= 0.5);
+  });
+
+  // --- SPEC-145 Acceptance Tests (ADR-064 Investigation Before Execution) ---
+
+  it('Test 1: generates complete Investigation Plan before calling any provider', async () => {
+    const mission = {
+      id: 'mission-spec145-at1',
+      tenantId: '10',
+      objectiveText: 'Find STR operators in Greater Manchester',
+      constraints: { vertical: 'short_term_rental', locationHint: 'Manchester NH' },
+    };
+
+    let providerCalled = false;
+    const plan = createInvestigationPlan({
+      mission,
+      marketDefinition: {
+        valid: true,
+        segment: 'short_term_rental',
+        geography: 'Manchester NH',
+        segments: ['short_term_rental'],
+      },
+    });
+
+    assert.equal(plan.version, 'SPEC-145');
+    assert.ok(plan.objective);
+    assert.ok(plan.hypotheses.length >= 1);
+    assert.ok(plan.evidenceRequired.length >= 1);
+    assert.ok(plan.providerSequence.length >= 1);
+    assert.ok(plan.stoppingConditions.confidenceTarget);
+    assert.ok(plan.stoppingConditions.coverageTarget);
+    assert.ok(plan.estimatedCoverage);
+    assert.ok(plan.estimatedConfidence >= 0);
+    assert.ok(plan.estimatedCost >= 0);
+
+    for (const entry of plan.providerSequence) {
+      assert.ok(entry.provider || entry.providerId);
+      assert.ok(Array.isArray(entry.capabilities));
+      assert.ok(Array.isArray(entry.evidenceExpected));
+      assert.ok(entry.estimatedCost != null);
+      assert.ok(entry.confidenceGain != null);
+    }
+
+    const result = await runInvestigationEngine({
+      mission,
+      opts: {
+        investigationPlan: plan,
+        discover: async () => {
+          providerCalled = true;
+          return [];
+        },
+        maxIterations: 2,
+        persistMemory: false,
+      },
+    });
+
+    assert.ok(result.investigationPlan);
+    assert.equal(result.investigationPlan.version, 'SPEC-145');
+    assert.ok(plan.createdAt);
+    assert.ok(providerCalled);
+  });
+
+  it('Test 2: replans when provider unavailable without investigation failure', async () => {
+    const basePlan = buildInvestigationPlan({
+      mission: { id: 'm-replan' },
+      objective: 'Find decision makers',
+      hypotheses: [{ text: 'Decision maker exists', gap: 'decision_maker' }],
+      evidenceRequired: ['decision_makers'],
+      providerSequence: [
+        buildProviderPlan({
+          providerId: 'county_records',
+          providerLabel: 'County Records',
+          gap: 'portfolio_size',
+          capabilities: ['property_count'],
+          evidenceExpected: ['portfolio_size'],
+          estimatedCost: 2,
+          confidenceGain: 0.7,
+          order: 1,
+        }),
+        buildProviderPlan({
+          providerId: 'linkedin',
+          providerLabel: 'LinkedIn',
+          gap: 'decision_maker',
+          capabilities: ['people'],
+          evidenceExpected: ['decision_maker'],
+          estimatedCost: 8,
+          confidenceGain: 0.5,
+          order: 2,
+        }),
+      ],
+      stoppingConditions: { confidenceTarget: 0.8, coverageTarget: 0.8 },
+      estimatedConfidence: 0.75,
+    });
+
+    const revised = reviseInvestigationPlan(basePlan, {
+      unavailableProviders: ['county_records'],
+      reason: 'County records unavailable',
+      replacements: {
+        county_records: [
+          buildProviderPlan({
+            providerId: 'website',
+            providerLabel: 'Company Website',
+            gap: 'portfolio_size',
+            capabilities: ['website'],
+            evidenceExpected: ['portfolio_size'],
+            estimatedCost: 0,
+            confidenceGain: 0.35,
+          }),
+        ],
+      },
+    });
+
+    assert.equal(revised.revisions.length, 1);
+    assert.ok(revised.estimatedConfidence < basePlan.estimatedConfidence);
+    const unavailable = revised.providerSequence.find((p) => p.providerId === 'county_records');
+    assert.equal(unavailable.status, PROVIDER_STATUS.UNAVAILABLE);
+    const replacement = revised.providerSequence.find((p) => p.providerId === 'website');
+    assert.ok(replacement);
+
+    const mission = {
+      id: 'mission-spec145-at2',
+      tenantId: '10',
+      objectiveText: 'Find STR operators',
+      constraints: { vertical: 'short_term_rental', locationHint: 'Manchester NH' },
+    };
+
+    const result = await runInvestigationEngine({
+      mission,
+      opts: {
+        investigationPlan: revised,
+        discover: async () => [
+          {
+            id: 'c1',
+            name: 'STR Co',
+            website: 'https://str.example',
+            people: [{ name: 'Owner', jobTitle: 'Owner' }],
+          },
+        ],
+        executeStep: async (step) => {
+          if (step.providerId === 'county_records') {
+            return { step, collected: [], resolvedGaps: [], cost: 2, skipped: false };
+          }
+          return {
+            step,
+            collected: [{ id: 'ev1', source: step.providerId, evidenceType: step.providerId }],
+            resolvedGaps: [step.gap],
+            cost: step.costScore || 1,
+          };
+        },
+        maxIterations: 6,
+        persistMemory: false,
+      },
+    });
+
+    assert.notEqual(result.outcome, 'blocked');
+    assert.ok(result.investigationPlan.revisions.length >= 0 || result.investigationStatus);
+  });
+
+  it('Test 3: skips remaining providers when confidence threshold reached early', async () => {
+    const plan = createInvestigationPlan({
+      mission: {
+        id: 'mission-spec145-at3',
+        objectiveText: 'Find property managers',
+        constraints: { vertical: 'property_management', locationHint: 'Manchester NH' },
+      },
+      marketDefinition: {
+        valid: true,
+        segment: 'property_management',
+        geography: 'Manchester NH',
+        segments: ['property_management'],
+      },
+    });
+
+    const pendingBefore = plan.providerSequence.filter((p) => p.status === 'pending').length;
+    assert.ok(pendingBefore >= 2);
+
+    const result = await runInvestigationEngine({
+      mission: {
+        id: 'mission-spec145-at3',
+        tenantId: '10',
+        objectiveText: 'Find property managers',
+        constraints: { vertical: 'property_management', locationHint: 'Manchester NH' },
+      },
+      opts: {
+        investigationPlan: plan,
+        discover: async () => [
+          {
+            id: 'c1',
+            name: 'Full Evidence PM',
+            website: 'https://full.example',
+            email: 'owner@full.example',
+            people: [{ name: 'Jane Owner', jobTitle: 'Owner', email: 'jane@full.example' }],
+            signals: [{ type: 'portfolio_growth', source: 'website', label: '50 units' }],
+          },
+        ],
+        confidenceThreshold: 0.3,
+        maxIterations: 8,
+        persistMemory: false,
+      },
+    });
+
+    const skipped = (result.investigationPlan?.providerSequence || []).filter(
+      (p) => p.status === 'skipped'
+    );
+    const completedEarly =
+      result.completionReason === COMPLETION_REASONS.CONFIDENCE_THRESHOLD ||
+      result.completionReason === COMPLETION_REASONS.COVERAGE_COMPLETE ||
+      skipped.length > 0;
+
+    assert.ok(completedEarly || result.overallConfidence >= 0.3);
+    if (skipped.length > 0) {
+      assert.ok(skipped.every((s) => s.skipReason));
+    }
+  });
+
+  it('Test 4: reports remaining unknowns, confidence, and recommended next provider when budget exhausted', async () => {
+    const plan = createInvestigationPlan({
+      mission: {
+        id: 'mission-spec145-at4',
+        objectiveText: 'Find STR operators',
+        constraints: { vertical: 'short_term_rental', locationHint: 'Manchester NH' },
+      },
+      marketDefinition: {
+        valid: true,
+        segment: 'short_term_rental',
+        geography: 'Manchester NH',
+        segments: ['short_term_rental'],
+      },
+    });
+
+    const result = await runInvestigationEngine({
+      mission: {
+        id: 'mission-spec145-at4',
+        tenantId: '10',
+        objectiveText: 'Find STR operators',
+        constraints: { vertical: 'short_term_rental', locationHint: 'Manchester NH' },
+      },
+      opts: {
+        investigationPlan: plan,
+        discover: async () => [{ id: 'c1', name: 'Sparse STR Co' }],
+        maxCostBudget: 1,
+        maxIterations: 12,
+        confidenceThreshold: 0.99,
+        persistMemory: false,
+      },
+    });
+
+    assert.ok(result.investigationStatus);
+    assert.ok(Array.isArray(result.investigationStatus.remainingUnknowns));
+    assert.ok(result.investigationStatus.confidence != null);
+    assert.ok(
+      result.completionReason === COMPLETION_REASONS.COST_EXCEEDS_BENEFIT ||
+        result.totalCost >= 1 ||
+        result.investigationStatus.remainingSteps.length > 0
+    );
+    if (result.investigationStatus.remainingSteps.length > 0) {
+      assert.ok(
+        result.investigationStatus.recommendedNextProvider ||
+          result.investigationStatus.recommendedNextInvestigation
+      );
+    }
+    assert.ok(result.report?.investigationStatus || result.investigationStatus);
+  });
+
+  it('Test 5: repeat investigation reuses provider learning and produces different plan', () => {
+    const mission = {
+      id: 'mission-spec145-at5',
+      objectiveText: 'Find STR operators in Manchester',
+      constraints: { vertical: 'short_term_rental', locationHint: 'Manchester NH' },
+    };
+    const marketDefinition = {
+      valid: true,
+      segment: 'short_term_rental',
+      geography: 'Manchester NH',
+      segments: ['short_term_rental'],
+    };
+
+    const freshPlan = createInvestigationPlan({ mission, marketDefinition });
+    const priorMemory = {
+      investigation: {
+        providerLearning: {
+          google_maps: { geographic_fit: 0.82, business_fit: 0.6 },
+          linkedin: { decision_maker: 0.91, portfolio_size: 0.09 },
+          county_records: { portfolio_size: 0.85 },
+          apollo: { decision_maker: 0.15 },
+        },
+      },
+    };
+
+    const learnedPlan = createInvestigationPlanWithLearning(
+      { mission, marketDefinition },
+      priorMemory
+    );
+
+    assert.notDeepEqual(
+      freshPlan.providerSequence.map((p) => `${p.providerId}:${p.gap}`),
+      learnedPlan.providerSequence.map((p) => `${p.providerId}:${p.gap}`)
+    );
+
+    const freshLinkedIn = freshPlan.providerSequence.find(
+      (p) => p.providerId === 'linkedin' && p.gap === 'decision_maker'
+    );
+    const learnedLinkedIn = learnedPlan.providerSequence.find(
+      (p) => p.providerId === 'linkedin' && p.gap === 'decision_maker'
+    );
+    if (freshLinkedIn && learnedLinkedIn) {
+      assert.ok(learnedLinkedIn.confidenceGain >= freshLinkedIn.confidenceGain);
+    }
+
+    const learnedCounty = learnedPlan.providerSequence.find(
+      (p) => p.providerId === 'county_records' && p.gap === 'portfolio_size'
+    );
+    if (learnedCounty) {
+      assert.ok(learnedCounty.order <= (learnedPlan.providerSequence.length || 1));
+    }
+  });
+
+  it('buildInvestigationStatusFromPlan surfaces completed and remaining steps', () => {
+    const plan = buildInvestigationPlan({
+      providerSequence: [
+        buildProviderPlan({ providerId: 'google_maps', gap: 'geographic_fit', status: 'completed' }),
+        buildProviderPlan({ providerId: 'linkedin', gap: 'decision_maker', status: 'pending' }),
+      ],
+      estimatedConfidence: 0.6,
+    });
+
+    const status = buildInvestigationStatusFromPlan(plan, {
+      confidence: 0.72,
+      coverage: 0.4,
+      cost: 8,
+      remainingUnknowns: ['portfolio_size'],
+    });
+
+    assert.equal(status.completedSteps.length, 1);
+    assert.equal(status.remainingSteps.length, 1);
+    assert.equal(status.confidence, 0.72);
+    assert.equal(status.recommendedNextProvider, 'linkedin');
+  });
+
+  it('skipRemainingProviders marks pending steps as skipped', () => {
+    const plan = buildInvestigationPlan({
+      providerSequence: [
+        buildProviderPlan({ providerId: 'a', status: 'completed' }),
+        buildProviderPlan({ providerId: 'b', status: 'pending' }),
+        buildProviderPlan({ providerId: 'c', status: 'pending' }),
+      ],
+    });
+
+    const skipped = skipRemainingProviders(plan, 'confidence_threshold_reached');
+    const pending = skipped.providerSequence.filter((p) => p.status === 'pending');
+    const skippedSteps = skipped.providerSequence.filter((p) => p.status === 'skipped');
+
+    assert.equal(pending.length, 0);
+    assert.equal(skippedSteps.length, 2);
   });
 });

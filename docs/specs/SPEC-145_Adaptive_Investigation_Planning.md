@@ -1,134 +1,146 @@
 # SPEC-145 — Adaptive Investigation Planning
 
 **Status:** Implemented  
-**Builds on:** SPEC-142 (Investigation Engine), SPEC-143 (Memory), SPEC-144 (Credibility)
+**Depends on:** [SPEC-141](SPEC-141_Scout_Intelligence_Pipeline.md), [SPEC-142](SPEC-142_Evidence_Driven_Investigation_Engine.md), [SPEC-143](SPEC-143_Scout_Intelligence_Memory.md), [SPEC-144](SPEC-144_Scout_Intelligence_Credibility_Framework.md)  
+**Related ADR:** ADR-064 — Investigation Before Execution
 
 ## Objective
 
-Scout continuously re-plans an investigation as new evidence arrives, rather than executing a fixed provider sequence.
+Before collecting evidence, Scout constructs an explicit **Investigation Plan**. Providers execute the plan; they do not define it.
 
-## Philosophy
+## Design Principle
 
-**Before:** Plan → Google → Website → LinkedIn → Rank (pipeline-driven)
+Every investigation begins with a hypothesis — not with a search.
 
-**After:** Question → Evidence → What changed? → What's still unknown? → Highest-value next question → Choose provider → Repeat
-
-## Investigation Loop
+## Pipeline
 
 ```
-Understand Market
-  → Identify Unknowns
-  → Choose Best Next Question
-  → Choose Cheapest Provider (with highest expected gain)
-  → Collect Evidence
-  → Update Beliefs
-  → Choose Next Question
-  → Repeat
-  → Coverage Satisfied
+Mission
+  → Market Understanding
+  → Investigation Planning          (SPEC-145 — new)
+  → Evidence Planning
+  → Provider Strategy
+  → Candidate Discovery
+  → Evidence Collection
+  → Qualification
+  → Ranking
+  → Coverage Review
+```
+
+## InvestigationPlan
+
+```javascript
+{
+  version: 'SPEC-145',
+  mission,
+  objective,
+  hypotheses,
+  evidenceRequired,
+  providerSequence,      // ProviderPlan[]
+  stoppingConditions,
+  estimatedCoverage,
+  estimatedConfidence,
+  estimatedCost,
+  revisions,
+}
+```
+
+### ProviderPlan
+
+```javascript
+{
+  provider,
+  capabilities,
+  evidenceExpected,
+  estimatedCost,
+  confidenceGain,
+  gap,
+  order,
+  status,               // pending | completed | skipped | failed | unavailable
+}
+```
+
+### InvestigationStatus
+
+```javascript
+{
+  completedSteps,
+  remainingSteps,
+  confidence,
+  coverage,
+  cost,
+  blockers,
+  remainingUnknowns,
+  recommendedNextProvider,
+  recommendedNextInvestigation,
+}
 ```
 
 ## Components
 
 | Module | Purpose |
 |--------|---------|
+| `InvestigationPlanBuilder.js` | Explicit plan before provider execution (ADR-064) |
 | `InvestigationBoard.js` | Live Known / Unknown / Persistent board with value-of-information scores |
-| `InvestigationJournal.js` | Reasoning trail for every step (debugging + operator trust) |
+| `InvestigationJournal.js` | Reasoning trail for every step |
 | `ProviderLearning.js` | Second Brain learns provider × gap effectiveness |
 | `InvestigationPlanner.js` | Adaptive step selection — question chooses provider |
-| `InvestigationLoop.js` | Wires board, journal, stop conditions, learning feedback |
+| `InvestigationLoop.js` | Wires plan, board, journal, stop conditions, learning feedback |
 
-## Value of Information
+## Cost Optimization
 
-Every unknown gets impact (0–1), difficulty (0–1), and expected value:
+Scout maximizes **confidence gained / cost incurred**, not providers queried.
 
-```
-expectedValue = impact × (1 - difficulty)
-```
+## Stopping Conditions
 
-Scout always investigates the highest-value unknown first.
+Investigation stops when one of:
 
-## Dynamic Provider Selection
+1. Confidence target achieved
+2. Coverage target achieved
+3. Budget exhausted
+4. Evidence exhausted (diminishing returns)
+5. Persistent unknowns only
+6. Operator interruption
 
-Provider choice is driven by the gap, not pipeline order:
+## Plan Revision
 
-- Need decision maker → LinkedIn
-- Need ownership → Secretary of State / county records
-- Need property count → County assessor
+When a provider is unavailable or fails, Scout revises the plan (switches providers, decreases estimated confidence) and continues — no investigation failure.
 
-Expected information gain:
+## Second Brain Integration
 
-```
-gain = gapImpact × providerEffectiveness × coverage × reliability
-```
+Investigation plans and provider learning persist to SPEC-143 memory via `extractInvestigationMemory()`.
 
-## Stop Conditions
+## Mission Intelligence Report
 
-Investigation stops when:
+Reports now include:
 
-1. **Coverage complete** — key gaps satisfied at ≥91% coverage threshold
-2. **Diminishing returns** — best next step expected gain < 2%
-3. **Confidence threshold** — overall confidence met with no open gaps
-4. **Cost budget** — spend exceeds configured budget
-5. **Persistent unknowns only** — remaining gaps require human conversation
-
-Every stop includes `stopExplanation` in the investigation journal.
-
-## Dead-End Recognition
-
-If three providers fail to answer the same unknown, Scout marks it:
-
-```
-status: persistent
-resolution: requires_human_conversation
-```
-
-## Investigation Journal
-
-Every investigation produces a reasoning trail:
-
-```
-Started with: Understand market and identify highest-value unknowns
-Need decision maker
-Resolve decision maker via LinkedIn — expected gain 42%
-Verified decision_maker
-Next question became: Need portfolio size
-Stopped because: Coverage 91%, decision maker and buying signals satisfied
-```
-
-## Learning Feedback
-
-Provider effectiveness is updated after each step and persisted to SPEC-143 memory:
-
-```
-County records → excellent for property counts
-LinkedIn → excellent for operations leaders
-Google Maps → poor for ownership verification
-```
-
-## Acceptance Criteria
-
-At every step, Scout can answer:
-
-1. **What is the single most important unknown?** → `investigationBoard.topPriorityUnknown`
-2. **Why is it the highest priority?** → impact vs difficulty expected value
-3. **Which provider is expected to answer it best?** → `stepSelection.chosenProvider` + `expectedInformationGain`
-4. **Why are we stopping when we stop?** → `stopExplanation` + `completionReason`
-
-A Scout investigation is no longer describable as a fixed provider pipeline.
+- Investigation Strategy (objective, hypotheses, provider sequence)
+- Evidence Summary
+- Coverage / Confidence
+- Remaining Unknowns
+- Recommended Next Investigation
 
 ## API
 
 Adaptive planning is enabled by default in `Scout.investigate()` / `runInvestigationEngine()`.
-
-Disable with `opts.adaptivePlanning: false` for legacy cost-only selection.
-
-### Key options
 
 | Option | Default | Purpose |
 |--------|---------|---------|
 | `coverageThreshold` | 0.91 | Stop when key gap coverage reached |
 | `minExpectedGain` | 0.02 | Diminishing returns threshold |
 | `adaptivePlanning` | true | Enable value-of-information planning |
+| `enforceInvestigationPlan` | true | No provider executes outside the plan |
+| `replanOnProviderFailure` | true | Revise plan when a provider fails |
+
+## Acceptance Tests
+
+| Test | Scenario | Expected |
+|------|----------|----------|
+| 1 | Find STR operators | Complete Investigation Plan before any provider call |
+| 2 | Provider unavailable | Replan; investigation continues |
+| 3 | Confidence threshold early | Remaining providers skipped |
+| 4 | Budget exhausted | Report remaining unknowns, confidence, recommended next provider |
+| 5 | Repeat investigation | Plan differs based on prior provider learning |
 
 ## Tests
 

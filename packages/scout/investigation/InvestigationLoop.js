@@ -60,6 +60,16 @@ const {
   emitMemoryEvent,
   MEMORY_EVENTS,
 } = require('../memory');
+const {
+  createInvestigationPlan,
+  createInvestigationPlanWithLearning,
+  reviseInvestigationPlan,
+  updatePlanAfterStep,
+  skipRemainingProviders,
+  isStepInPlan,
+  buildInvestigationStatusFromPlan,
+  findReplacementProviders,
+} = require('./InvestigationPlanBuilder');
 
 function mergeCandidateEvidence(candidate, collected) {
   const existing = candidate.evidence || [];
@@ -192,6 +202,26 @@ async function runInvestigationEngine(input = {}) {
     });
   }
 
+  const learning =
+    opts.learningStore ||
+    (memoryPrep.memory ? loadLearningFromMemory(memoryPrep.memory) : createProviderLearningStore());
+
+  // SPEC-145 — Investigation Plan before any provider executes (ADR-064)
+  let investigationPlan =
+    opts.investigationPlan ||
+    (memoryPrep.hasPriorKnowledge
+      ? createInvestigationPlanWithLearning(
+          { mission, marketDefinition, opts: { ...opts, estimatedMarket: opts.estimatedMarket } },
+          memoryPrep.memory
+        )
+      : createInvestigationPlan({
+          mission,
+          marketDefinition,
+          opts: { ...opts, estimatedMarket: opts.estimatedMarket },
+          learning,
+          memory: memoryPrep.memory,
+        }));
+
   const candidateUniverse = await discoverCandidateUniverse({
     marketDefinition,
     delegation: input.delegation,
@@ -239,9 +269,21 @@ async function runInvestigationEngine(input = {}) {
   const evidencePlan = buildEvidencePlan(marketDefinition, opts);
   const providerStrategy = buildProviderStrategy(evidencePlan, opts);
 
-  const learning =
-    opts.learningStore ||
-    (memoryPrep.memory ? loadLearningFromMemory(memoryPrep.memory) : createProviderLearningStore());
+  if (opts.estimatedMarket == null && candidateUniverse.estimatedMarket) {
+    investigationPlan = {
+      ...investigationPlan,
+      estimatedCoverage: {
+        ...investigationPlan.estimatedCoverage,
+        estimatedUniverse: candidateUniverse.estimatedMarket,
+        requiredSample: Math.ceil(
+          candidateUniverse.estimatedMarket *
+            (investigationPlan.stoppingConditions?.coverageTarget ||
+              opts.coverageThreshold ||
+              DEFAULT_COVERAGE_THRESHOLD)
+        ),
+      },
+    };
+  }
 
   let board = createInvestigationBoard({
     known: (startingPoint.known || []).map((k) => ({
@@ -389,6 +431,12 @@ async function runInvestigationEngine(input = {}) {
 
     if (completion.complete) {
       completionMeta = { reason: completion.reason, explanation: completion.explanation };
+      if (
+        completion.reason === COMPLETION_REASONS.CONFIDENCE_THRESHOLD ||
+        completion.reason === COMPLETION_REASONS.COVERAGE_COMPLETE
+      ) {
+        investigationPlan = skipRemainingProviders(investigationPlan, completion.reason);
+      }
       recordJournalStop(journal, {
         stopReason: completion.reason,
         stopExplanation: completion.explanation,
@@ -403,6 +451,10 @@ async function runInvestigationEngine(input = {}) {
         reason: COMPLETION_REASONS.DIMINISHING_RETURNS,
         explanation: nextStep.stopRecommendation?.explanation,
       };
+      investigationPlan = skipRemainingProviders(
+        investigationPlan,
+        COMPLETION_REASONS.DIMINISHING_RETURNS
+      );
       recordJournalStop(journal, {
         stopReason: COMPLETION_REASONS.DIMINISHING_RETURNS,
         stopExplanation: nextStep.stopRecommendation?.explanation,
@@ -419,6 +471,22 @@ async function runInvestigationEngine(input = {}) {
     const stepKey = `${nextStep.entityId || 'global'}:${nextStep.gap}:${nextStep.providerId}:${nextStep.capability}`;
     attempted.add(stepKey);
 
+    if (opts.enforceInvestigationPlan !== false && !isStepInPlan(nextStep, investigationPlan)) {
+      const replanGap = nextStep.gap;
+      const replacements = findReplacementProviders(replanGap, nextStep.providerId, {
+        registry: opts.registry,
+        learning,
+      });
+      investigationPlan = reviseInvestigationPlan(investigationPlan, {
+        unavailableProviders: [nextStep.providerId],
+        reason: `Step ${nextStep.providerId} not in investigation plan`,
+        replacements: replacements.length
+          ? { [nextStep.providerId]: replacements }
+          : {},
+        opts: { registry: opts.registry, learning },
+      });
+    }
+
     const priorUnknowns = boardSummary.unknown.map((u) => u.label);
     const result = await executeInvestigationStep(nextStep, targetCandidate, opts);
     emitInvestigationStep({ missionId, step: nextStep, collected: result.collected.length });
@@ -428,6 +496,24 @@ async function runInvestigationEngine(input = {}) {
       resolved: (result.resolvedGaps || []).includes(nextStep.gap),
       partial: (result.collected || []).length > 0 && !(result.resolvedGaps || []).includes(nextStep.gap),
     });
+
+    investigationPlan = updatePlanAfterStep(investigationPlan, nextStep, {
+      failed: stepFailed,
+      skipped: result.skipped,
+    });
+
+    if (stepFailed && opts.replanOnProviderFailure !== false) {
+      const replacements = findReplacementProviders(nextStep.gap, nextStep.providerId, {
+        registry: opts.registry,
+        learning,
+      });
+      investigationPlan = reviseInvestigationPlan(investigationPlan, {
+        unavailableProviders: [nextStep.providerId],
+        reason: `${nextStep.providerLabel || nextStep.providerId} failed to resolve ${nextStep.gap}`,
+        replacements: replacements.length ? { [nextStep.providerId]: replacements } : {},
+        opts: { registry: opts.registry, learning },
+      });
+    }
 
     board = updateBoardAfterStep(board, {
       gap: nextStep.gap,
@@ -500,6 +586,12 @@ async function runInvestigationEngine(input = {}) {
   const finalBoardSummary = summarizeBoard(board);
   const serializedJournal = serializeJournal(journal);
   const providerLearningSummary = learning.summarize();
+  const investigationStatus = buildInvestigationStatusFromPlan(investigationPlan, {
+    confidence: overallConfidence,
+    coverage: finalBoardSummary.coveragePct || computeCoverage(board),
+    cost: totalCost,
+    remainingUnknowns: finalMissing.missing || [],
+  });
 
   const report = buildInvestigationReport({
     mission,
@@ -515,6 +607,8 @@ async function runInvestigationEngine(input = {}) {
     conflicts: allConflicts,
     iterations,
     providerStrategy,
+    investigationPlan,
+    investigationStatus,
     investigationBoard: finalBoardSummary,
     investigationJournal: serializedJournal,
   });
@@ -555,6 +649,8 @@ async function runInvestigationEngine(input = {}) {
     evidenceCollection,
     providerStrategy,
     evidencePlan,
+    investigationPlan,
+    investigationStatus,
     investigationBoard: finalBoardSummary,
     investigationJournal: serializedJournal,
     providerLearning: providerLearningSummary,
@@ -581,6 +677,8 @@ async function runInvestigationEngine(input = {}) {
     startingPoint,
     memoryLoaded: memoryPrep.hasPriorKnowledge,
     memoryPersist,
+    investigationPlan,
+    investigationStatus,
     investigationBoard: finalBoardSummary,
     investigationJournal: serializedJournal,
   };
