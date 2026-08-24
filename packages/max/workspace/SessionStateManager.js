@@ -12,11 +12,10 @@
 
 const askPathTrace = require('./audit/AskPathTrace');
 const {
-  OPERATING_MODES,
+  EVALUATION_MODES,
   EXECUTION_POLICIES,
   REASONING_MODES,
   CONVERSATION_STYLES,
-  EVALUATION_MODES,
   normalizeText,
   cloneSessionState,
   getSessionState,
@@ -25,27 +24,12 @@ const {
   createDefaultSessionState,
   sessionStateBlocksExecution,
 } = require('./SessionState');
-
-/** Operator establishes persistent session rules for the remainder of the workspace. */
-const PERSISTENT_DIRECTIVE_RES = [
-  /\bfor the rest of (?:this )?conversation\b/i,
-  /\bfor the remainder of (?:this )?conversation\b/i,
-  /\buntil i (?:say|tell you) otherwise\b/i,
-  /\bfor the rest of this session\b/i,
-  /\bfor the remainder of this session\b/i,
-  /\bfor this session\b/i,
-  /\bfor today'?s conversation\b/i,
-  /\bduring this evaluation\b/i,
-  /\bgoing forward\b/i,
-  /\buntil i change it\b/i,
-];
-
-const SESSION_RESET_RES = [
-  /\breset (?:the )?session\b/i,
-  /\bclear (?:the )?session (?:state|settings)\b/i,
-  /\bstart (?:a )?fresh session\b/i,
-  /\breturn to default (?:mode|settings)\b/i,
-];
+const {
+  extractDirectiveSignals,
+  isPersistentDirective,
+  isResetDirective,
+  hasStandaloneFieldDirective,
+} = require('./SessionDirectiveRegistry');
 
 const SESSION_WHY_RES = [
   /\bwhy are you using that(?: operating mode)?\b/i,
@@ -70,170 +54,12 @@ const SESSION_INSPECTION_INTENT_RES = [
   /\bare we\b/i,
 ];
 
-const EXECUTION_DISABLED_RES = [
-  /\b(?:don'?t|do not)\s+execute anything\b/i,
-  /\b(?:don'?t|do not)\s+execute\b(?!\s*(?:,|launch|approve|print|or mail))/i,
-  /\b(?:don'?t|do not)\s+(?:do|perform)\s+anything\b/i,
-  /\bread[\s-]?only\b/i,
-  /\bno execution\b/i,
-  /\bexecution disabled\b/i,
-];
-
-const EXECUTION_AUTONOMOUS_RES = [
-  /\bautonomous execution\b/i,
-  /\bexecute autonomously\b/i,
-  /\b(?:you may|go ahead and) execute without asking\b/i,
-];
-
-const EXECUTION_NORMAL_RES = [
-  /\b(?:let'?s|go ahead and|time to|ready to)\s+execute\b/i,
-  /\bstop theoriz(?:e|ing|y)\b/i,
-  /\benough theory\b/i,
-  /\b(?:let'?s|go ahead and)\s+(?:run|launch|begin|operate|proceed|approve)\b/i,
-  /\benable execution\b/i,
-  /\bresume execution\b/i,
-];
-
-const REASONING_ANALYTICAL_RES = [
-  /\bexplain your reasoning\b/i,
-  /\bexplain (?:the )?reasoning\b/i,
-  /\bshow your (?:reasoning|work)\b/i,
-  /\bwalk me through your reasoning\b/i,
-  /\bthink (?:aloud|out loud)\b/i,
-];
-
-const REASONING_NATURAL_RES = [
-  /\bexplain (?:your reasoning )?naturally\b/i,
-  /\banswer naturally\b/i,
-  /\btalk naturally\b/i,
-  /\bnatural reasoning\b/i,
-];
-
-const REASONING_CONCISE_RES = [
-  /\bbe concise\b/i,
-  /\bkeep (?:it )?brief\b/i,
-  /\bshort answers?\b/i,
-];
-
-const REASONING_TEACHING_RES = [
-  /\bteach(?:ing)? mode\b/i,
-  /\bexplain like (?:i'?m|you'?re) teaching\b/i,
-  /\bwalk me through step by step\b/i,
-];
-
-const CONVERSATION_NATURAL_RES = [
-  /\banswer naturally\b/i,
-  /\btalk (?:to me )?naturally\b/i,
-  /\b(?:stay|keep it)\s+conversational\b/i,
-  /\bnatural conversation\b/i,
-];
-
-const CONVERSATION_TECHNICAL_RES = [
-  /\btechnical (?:mode|detail)\b/i,
-  /\bbe technical\b/i,
-  /\buse technical language\b/i,
-];
-
-const CONVERSATION_EXECUTIVE_RES = [
-  /\bexecutive (?:mode|summary)\b/i,
-  /\bbe (?:brief and )?executive\b/i,
-  /\bhigh[\s-]?level only\b/i,
-];
-
-const OPERATING_MODE_PATTERNS = [
-  {
-    re: /\boperate as (?:the )?business operating system\b/i,
-    mode: OPERATING_MODES.BUSINESS_OPERATION,
-  },
-  {
-    re: /\bbusiness operation(?:s)? mode\b/i,
-    mode: OPERATING_MODES.BUSINESS_OPERATION,
-  },
-  {
-    re: /\boperate (?:according to|in) your role\b/i,
-    mode: OPERATING_MODES.BUSINESS_OPERATION,
-  },
-  {
-    re: /\b(?:work|function|behave) as\b/i,
-    mode: OPERATING_MODES.BUSINESS_OPERATION,
-  },
-  {
-    re: /\btreat .+ as (?:a )?(?:real )?production business\b/i,
-    mode: OPERATING_MODES.BUSINESS_OPERATION,
-  },
-  {
-    re: /\btreat .+ like (?:a )?(?:real )?production business\b/i,
-    mode: OPERATING_MODES.BUSINESS_OPERATION,
-  },
-  {
-    re: /\bassume .+ is (?:a )?(?:real )?production business\b/i,
-    mode: OPERATING_MODES.BUSINESS_OPERATION,
-  },
-  {
-    re: /\bconsider .+ (?:a )?(?:real )?production business\b/i,
-    mode: OPERATING_MODES.BUSINESS_OPERATION,
-  },
-  {
-    re: /\b(?:i(?:'d| would)? like to|i want to|we'?re|i'?m)\s+evaluat(?:e|ing)\b/i,
-    mode: OPERATING_MODES.REASONING_EVALUATION,
-  },
-  {
-    re: /\bevaluat(?:e|ing)\b.{0,40}\bhow you operate\b/i,
-    mode: OPERATING_MODES.REASONING_EVALUATION,
-  },
-  {
-    re: /\bfor this session\s+evaluat(?:e|ing)\b/i,
-    mode: OPERATING_MODES.REASONING_EVALUATION,
-  },
-  {
-    re: /\breasoning evaluation\b/i,
-    mode: OPERATING_MODES.REASONING_EVALUATION,
-  },
-  {
-    re: /\bmission execution mode\b/i,
-    mode: OPERATING_MODES.MISSION_EXECUTION,
-  },
-  {
-    re: /\barchitecture review\b/i,
-    mode: OPERATING_MODES.ARCHITECTURE_REVIEW,
-  },
-  {
-    re: /\bdebug(?:ging)? mode\b/i,
-    mode: OPERATING_MODES.DEBUGGING,
-  },
-  {
-    re: /\blearning mode\b/i,
-    mode: OPERATING_MODES.LEARNING,
-  },
-  {
-    re: /\bplanning mode\b/i,
-    mode: OPERATING_MODES.PLANNING,
-  },
-  {
-    re: /\bbrainstorm(?:ing)? mode\b/i,
-    mode: OPERATING_MODES.BRAINSTORMING,
-  },
-];
-
-const EVALUATION_PATTERNS = [
-  { re: /\b(?:we'?re|i'?m|i(?:'d| would)? like to|i want to)\s+evaluat(?:e|ing)\s+max\b/i, mode: EVALUATION_MODES.MAX },
-  { re: /\bevaluat(?:e|ing)\s+max\b/i, mode: EVALUATION_MODES.MAX },
-  { re: /\bevaluat(?:e|ing)\s+scout\b/i, mode: EVALUATION_MODES.SCOUT },
-  { re: /\bevaluat(?:e|ing)\s+(?:the )?mission runtime\b/i, mode: EVALUATION_MODES.MISSION_RUNTIME },
-  { re: /\bevaluat(?:e|ing)\s+(?:the )?business\b/i, mode: EVALUATION_MODES.BUSINESS },
-  { re: /\bevaluat(?:e|ing)\s+how you operate\b/i, mode: EVALUATION_MODES.MAX },
-];
-
 function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
 }
 
-function isPersistentDirective(text) {
-  return matchesAny(text, PERSISTENT_DIRECTIVE_RES);
-}
-
 function isSessionResetRequest(text) {
-  return matchesAny(text, SESSION_RESET_RES);
+  return isResetDirective(text);
 }
 
 /**
@@ -279,84 +105,15 @@ function getSessionStateField(key) {
 }
 
 function detectSessionDirectiveSignals(text) {
-  const q = normalizeText(text);
-  if (!q) {
-    return {
-      persistent: false,
-      reset: false,
-      executionPolicy: null,
-      reasoningMode: null,
-      conversationStyle: null,
-      operatingMode: null,
-      evaluationMode: null,
-    };
-  }
-
-  const persistent = isPersistentDirective(q);
-  const reset = isSessionResetRequest(q);
-
-  let executionPolicy = null;
-  if (matchesAny(q, EXECUTION_DISABLED_RES)) {
-    executionPolicy = EXECUTION_POLICIES.READ_ONLY;
-  } else if (matchesAny(q, EXECUTION_AUTONOMOUS_RES)) {
-    executionPolicy = EXECUTION_POLICIES.AUTONOMOUS;
-  } else if (matchesAny(q, EXECUTION_NORMAL_RES)) {
-    executionPolicy = EXECUTION_POLICIES.NORMAL;
-  }
-
-  let reasoningMode = null;
-  const explainReasoningNaturally =
-    /\bexplain (?:your )?reasoning naturally\b/i.test(q) ||
-    /\bexplain your reasoning\b.*\bnaturally\b/i.test(q);
-  if (explainReasoningNaturally) {
-    reasoningMode = REASONING_MODES.ANALYTICAL;
-  } else if (matchesAny(q, REASONING_ANALYTICAL_RES)) {
-    reasoningMode = REASONING_MODES.ANALYTICAL;
-  } else if (matchesAny(q, REASONING_NATURAL_RES)) {
-    reasoningMode = REASONING_MODES.NATURAL;
-  } else if (matchesAny(q, REASONING_CONCISE_RES)) {
-    reasoningMode = REASONING_MODES.CONCISE;
-  } else if (matchesAny(q, REASONING_TEACHING_RES)) {
-    reasoningMode = REASONING_MODES.TEACHING;
-  }
-
-  let conversationStyle = null;
-  if (
-    matchesAny(q, CONVERSATION_NATURAL_RES) ||
-    explainReasoningNaturally ||
-    /\bnaturally\b/i.test(q)
-  ) {
-    conversationStyle = CONVERSATION_STYLES.NATURAL;
-  } else if (matchesAny(q, CONVERSATION_TECHNICAL_RES)) {
-    conversationStyle = CONVERSATION_STYLES.TECHNICAL;
-  } else if (matchesAny(q, CONVERSATION_EXECUTIVE_RES)) {
-    conversationStyle = CONVERSATION_STYLES.EXECUTIVE;
-  }
-
-  let operatingMode = null;
-  for (const entry of OPERATING_MODE_PATTERNS) {
-    if (entry.re.test(q)) {
-      operatingMode = entry.mode;
-      break;
-    }
-  }
-
-  let evaluationMode = null;
-  for (const entry of EVALUATION_PATTERNS) {
-    if (entry.re.test(q)) {
-      evaluationMode = entry.mode;
-      break;
-    }
-  }
-
+  const extracted = extractDirectiveSignals(text);
   return {
-    persistent,
-    reset,
-    executionPolicy,
-    reasoningMode,
-    conversationStyle,
-    operatingMode,
-    evaluationMode,
+    persistent: extracted.persistent,
+    reset: extracted.reset,
+    executionPolicy: extracted.executionPolicy,
+    reasoningMode: extracted.reasoningMode,
+    conversationStyle: extracted.conversationStyle,
+    operatingMode: extracted.operatingMode,
+    evaluationMode: extracted.evaluationMode,
   };
 }
 
@@ -449,31 +206,7 @@ function buildSessionState(input = {}) {
 
 /** Standalone session-setting phrases that update state even without persistent marker. */
 function shouldApplyStandaloneField(question, field) {
-  const q = normalizeText(question);
-  if (!q) return false;
-  switch (field) {
-    case 'executionPolicy':
-      return matchesAny(q, EXECUTION_DISABLED_RES) || matchesAny(q, EXECUTION_NORMAL_RES);
-    case 'reasoningMode':
-      return (
-        matchesAny(q, REASONING_ANALYTICAL_RES) ||
-        matchesAny(q, REASONING_NATURAL_RES) ||
-        matchesAny(q, REASONING_CONCISE_RES) ||
-        matchesAny(q, REASONING_TEACHING_RES)
-      );
-    case 'conversationStyle':
-      return (
-        matchesAny(q, CONVERSATION_NATURAL_RES) ||
-        matchesAny(q, CONVERSATION_TECHNICAL_RES) ||
-        matchesAny(q, CONVERSATION_EXECUTIVE_RES)
-      );
-    case 'operatingMode':
-      return OPERATING_MODE_PATTERNS.some((entry) => entry.re.test(q));
-    case 'evaluationMode':
-      return EVALUATION_PATTERNS.some((entry) => entry.re.test(q));
-    default:
-      return false;
-  }
+  return hasStandaloneFieldDirective(question, field);
 }
 
 function formatOperatingModeLabel(mode) {

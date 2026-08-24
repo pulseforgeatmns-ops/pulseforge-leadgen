@@ -59,6 +59,10 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-056](ADR-056_Mission_Planning_Engine_Is_The_Single_Interpreter.md) | Mission Planning Engine Is The Single Interpreter | Accepted |
 | [ADR-057](ADR-057_Transactional_Mission_Execution.md) | Transactional Mission Execution Is Atomic | Accepted |
 | [ADR-058](ADR-058_Pending_Operator_Decision_Matches_Execution.md) | Pending Operator Decision Must Match Execution | Accepted |
+| [ADR-068](ADR-068_Session_State_Is_Explicit.md) | Session State Is Explicit | Accepted |
+| [ADR-069](ADR-069_Classify_Communication_Before_Cognition.md) | Classify Communication Before Cognition | Accepted |
+| [ADR-070](ADR-070_Session_State_Is_Inspectable.md) | Session State Is Inspectable | Accepted |
+| [ADR-071](ADR-071_Session_Directive_Registry.md) | Session Directive Registry | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

@@ -15,10 +15,17 @@ const { MESSAGE_TYPES, buildMessageClassification } = require('./MessageType');
 const { normalizeText } = require('./SessionState');
 const {
   detectSessionDirectiveSignals,
-  isPersistentDirective,
   isSessionResetRequest,
   isSessionInspectionQuestion,
 } = require('./SessionStateManager');
+const {
+  countSettingHits,
+  hasScopeMarker,
+  hasStructuredSessionField,
+  isInterpretableSessionConfiguration,
+  SESSION_CONFIGURATION_THRESHOLD,
+  matchFieldDirectives,
+} = require('./SessionDirectiveRegistry');
 const {
   isMissionExecutionCommand,
   MISSION_CREATE_COMMAND_RE,
@@ -98,45 +105,6 @@ const QUESTION_RES = [
   /\bshow me\b/i,
 ];
 
-/** Minimum independent heuristic configuration signals for classification without structured fields. */
-const SESSION_CONFIGURATION_THRESHOLD = 2;
-
-const SESSION_SCOPE_RES = [
-  /\bfor the rest of (?:this )?conversation\b/i,
-  /\bfor the remainder of (?:this )?conversation\b/i,
-  /\bfor the rest of this session\b/i,
-  /\bfor the remainder of this session\b/i,
-  /\bfor this session\b/i,
-  /\bfor today'?s session\b/i,
-  /\bfor today'?s conversation\b/i,
-  /\bduring this evaluation\b/i,
-  /\bgoing forward\b/i,
-  /\buntil i change it\b/i,
-  /\buntil i (?:say|tell you) otherwise\b/i,
-];
-
-const SESSION_SETTING_RES = [
-  /\b(?:don'?t|do not)\s+execute\b/i,
-  /\bread[\s-]?only\b/i,
-  /\bexplain (?:your )?reasoning naturally\b/i,
-  /\bexplain your reasoning\b/i,
-  /\banswer naturally\b/i,
-  /\boperate as (?:the )?(?:business operating system|max)\b/i,
-  /\boperate (?:according to|in) your role\b/i,
-  /\b(?:work|function|behave) as\b/i,
-  /\bevaluat(?:e|ing)\b.{0,40}\b(?:reasoning|how you operate|your operating model)\b/i,
-  /\bevaluat(?:e|ing)\s+how you operate\b/i,
-  /\b(?:i(?:'d| would)? like to|i want to|we'?re)\s+evaluat(?:e|ing)\b/i,
-  /\bfor this session\s+evaluat(?:e|ing)\b/i,
-  /\btreat .+ as (?:a )?(?:real )?production business\b/i,
-  /\btreat .+ like (?:a )?(?:real )?production business\b/i,
-  /\bassume .+ is (?:a )?(?:real )?production business\b/i,
-  /\bconsider .+ (?:a )?(?:real )?production business\b/i,
-  /\b(?:enable|disable|resume) execution\b/i,
-  /\bautonomous execution\b/i,
-  /\b(?:we'?re|i'?m)\s+evaluat(?:e|ing)\b/i,
-];
-
 function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
 }
@@ -149,21 +117,11 @@ function firstMatchLabel(text, entries) {
 }
 
 function countSessionSettingHits(text) {
-  return SESSION_SETTING_RES.filter((re) => re.test(text)).length;
+  return countSettingHits(text);
 }
 
 function hasSessionScopeMarker(text) {
-  return isPersistentDirective(text) || matchesAny(text, SESSION_SCOPE_RES);
-}
-
-function hasStructuredSessionField(signals) {
-  return (
-    signals.executionPolicy != null ||
-    signals.reasoningMode != null ||
-    signals.conversationStyle != null ||
-    signals.operatingMode != null ||
-    signals.evaluationMode != null
-  );
+  return hasScopeMarker(text);
 }
 
 function isSessionConfigurationMessage(text) {
@@ -174,19 +132,12 @@ function isSessionConfigurationMessage(text) {
   if (isSessionResetRequest(q)) return true;
 
   const signals = detectSessionDirectiveSignals(q);
-  if (hasStructuredSessionField(signals)) return true;
-
-  const sessionSettingHits = countSessionSettingHits(q);
-  if (sessionSettingHits >= SESSION_CONFIGURATION_THRESHOLD) return true;
-
-  if (sessionSettingHits >= 1 && hasSessionScopeMarker(q)) return true;
-
-  return false;
+  return isInterpretableSessionConfiguration(q, signals);
 }
 
 function computeSessionConfigurationConfidence(q, signals, evidence) {
-  const sessionSettingHits = countSessionSettingHits(q);
-  const hasScope = hasSessionScopeMarker(q);
+  const sessionSettingHits = countSettingHits(q);
+  const hasScope = hasScopeMarker(q);
   let confidence = 0.82;
 
   if (hasStructuredSessionField(signals)) confidence += 0.08;
@@ -279,17 +230,17 @@ function classifyMessageType(question, input = {}) {
 
   if (isSessionConfigurationMessage(q)) {
     const evidence = [];
-    if (isPersistentDirective(q)) evidence.push('persistent_directive');
-    if (isSessionResetRequest(q)) evidence.push('session_reset');
-    if (matchesAny(q, SESSION_SCOPE_RES)) evidence.push('session_scope');
     const signals = detectSessionDirectiveSignals(q);
+    if (signals.persistent) evidence.push('persistent_directive');
+    if (isSessionResetRequest(q)) evidence.push('session_reset');
+    if (hasScopeMarker(q)) evidence.push('session_scope');
     if (signals.executionPolicy) evidence.push(`execution_policy:${signals.executionPolicy}`);
     if (signals.reasoningMode) evidence.push(`reasoning_mode:${signals.reasoningMode}`);
     if (signals.operatingMode) evidence.push(`operating_mode:${signals.operatingMode}`);
     if (signals.evaluationMode) evidence.push(`evaluation_mode:${signals.evaluationMode}`);
     if (signals.conversationStyle) evidence.push(`conversation_style:${signals.conversationStyle}`);
-    if (matchesAny(q, SESSION_SETTING_RES)) evidence.push('session_setting_heuristic');
-    if (hasSessionScopeMarker(q)) evidence.push('session_scope');
+    if (matchFieldDirectives(q).length > 0) evidence.push('session_setting_heuristic');
+    if (hasScopeMarker(q)) evidence.push('session_scope');
 
     return buildMessageClassification(
       MESSAGE_TYPES.SESSION_CONFIGURATION,
@@ -429,8 +380,6 @@ module.exports = {
   hasSessionScopeMarker,
   computeSessionConfigurationConfidence,
   SESSION_CONFIGURATION_THRESHOLD,
-  SESSION_SETTING_RES,
-  SESSION_SCOPE_RES,
   CORRECTION_RES,
   APPROVAL_RES,
 };
