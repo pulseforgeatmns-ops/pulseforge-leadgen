@@ -12,6 +12,7 @@ const INTELLIGENCE_STAGES = Object.freeze({
   PROVIDER_STRATEGY: 'provider_strategy',
   CANDIDATE_DISCOVERY: 'candidate_universe_discovery',
   EVIDENCE_COLLECTION: 'evidence_collection',
+  EVIDENCE_CONFLICT_RESOLUTION: 'evidence_conflict_resolution',
   QUALIFICATION: 'qualification',
   OPPORTUNITY_RANKING: 'opportunity_ranking',
   MARKET_COVERAGE: 'market_coverage',
@@ -82,6 +83,7 @@ function buildIntelligenceResult(partial = {}) {
     rankedOpportunities: Array.isArray(partial.rankedOpportunities) ? partial.rankedOpportunities : [],
     coverage: partial.coverage || null,
     report: partial.report || null,
+    conflictResolution: partial.conflictResolution || null,
     intelligenceResult: partial.intelligenceResult || null,
   };
 }

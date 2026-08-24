@@ -210,6 +210,13 @@ function extractInvestigationMemory(investigationResult, context = {}) {
     sourceChain: attemptedSteps.map((s) => s.providerId || s.capability).filter(Boolean),
     investigationPlan: investigationResult.investigationPlan || null,
     providerLearning: investigationResult.providerLearning?.effectiveness || null,
+    providerConflictLearning: investigationResult.conflictResolution?.providerConflictLearning || null,
+    conflictHistory: (investigationResult.conflictResolution?.conflicts || []).map((c) => ({
+      subject: c.subject,
+      resolved: c.resolution?.resolved,
+      strategy: c.resolution?.strategy,
+      workingEstimate: c.resolution?.workingEstimate,
+    })),
     overallConfidence: investigationResult.overallConfidence || 0,
     verifiedAt: context.completedAt || new Date().toISOString(),
     sourceCount: attemptedSteps.length || 1,

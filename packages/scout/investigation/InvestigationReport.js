@@ -157,6 +157,9 @@ function buildInvestigationReport(input = {}) {
       }
     : null;
 
+  const conflictResolution = input.conflictResolution || null;
+  const evidenceConflicts = conflictResolution?.evidenceConflicts || null;
+
   return {
     kind: 'investigation_report',
     investigationStrategy,
@@ -165,7 +168,9 @@ function buildInvestigationReport(input = {}) {
       claims: claims.length,
       highConfidence,
       needsInvestigation,
-      conflicts: conflicts.length || graph.summary?.conflicts || 0,
+      conflicts: (evidenceConflicts?.summary?.detected ?? conflicts.length) || graph.summary?.conflicts || 0,
+      conflictsResolved: evidenceConflicts?.summary?.resolved ?? 0,
+      conflictsOutstanding: evidenceConflicts?.summary?.outstanding ?? 0,
       overallConfidence,
       coverage: coveragePct,
     },
@@ -177,10 +182,11 @@ function buildInvestigationReport(input = {}) {
       claims: claims.length,
       highConfidence,
       needsInvestigation,
-      conflicts: conflicts.length || graph.summary.conflicts || 0,
+      conflicts: (evidenceConflicts?.summary?.detected ?? conflicts.length) || graph.summary.conflicts || 0,
       recommendations: recommendations.length,
       overallConfidence,
     },
+    evidenceConflicts,
     market: marketLabel,
     hypotheses,
     claims,

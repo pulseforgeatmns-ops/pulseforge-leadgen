@@ -7,6 +7,7 @@
  * Scout owns Discovery and Investigation. Operators issue objectives;
  * Scout determines strategy and evidence requirements through hypothesis-driven loops.
  * Mission Engine calls Scout.discover() or Scout.investigate().
+ * SPEC-146 — Evidence Conflict Resolution between collection and qualification.
  */
 
 const { discover, selectDiscoveryStrategy, buildDelegationFromMission } = require('./Discovery');
@@ -34,6 +35,7 @@ const intelligence = require('./intelligence');
 const investigation = require('./investigation');
 const credibility = require('./credibility');
 const memory = require('./memory');
+const conflict = require('./conflict');
 
 const Scout = Object.freeze({
   discover,
@@ -65,4 +67,5 @@ module.exports = {
   investigation,
   credibility,
   memory,
+  conflict,
 };

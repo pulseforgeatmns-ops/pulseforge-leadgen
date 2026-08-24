@@ -147,6 +147,7 @@ function buildInvestigationResult(partial = {}) {
     investigationBoard: partial.investigationBoard || null,
     investigationJournal: partial.investigationJournal || null,
     providerLearning: partial.providerLearning || null,
+    conflictResolution: partial.conflictResolution || null,
     stepSelection: partial.stepSelection || null,
   };
 }
