@@ -113,7 +113,8 @@ const SESSION_DIRECTIVES = [
       /\b(?:don'?t|do not)\s+execute anything\b/i,
       /\b(?:don'?t|do not)\s+execute\b(?!\s*(?:,|launch|approve|print|or mail))/i,
       /\b(?:don'?t|do not)\s+(?:do|perform)\s+anything\b/i,
-      /\bread[\s-]?only\b/i,
+      /\bdisable execution\b(?:\s+until\b.{0,80})?/i,
+      /\bread[\s-]?only(?:\s+mode)?\b/i,
       /\bno execution\b/i,
       /\bexecution disabled\b/i,
     ],
@@ -197,7 +198,7 @@ const SESSION_DIRECTIVES = [
     targetField: 'reasoningMode',
     parsedValue: REASONING_MODES.CONCISE,
     standalone: true,
-    aliases: [/\bbe concise\b/i, /\bkeep (?:it )?brief\b/i, /\bshort answers?\b/i],
+    aliases: [/\bshort answers?\b/i],
     confidence: 0.9,
   },
   {
@@ -207,6 +208,10 @@ const SESSION_DIRECTIVES = [
     parsedValue: REASONING_MODES.TEACHING,
     standalone: true,
     aliases: [
+      /\bteaching reasoning mode\b/i,
+      /\bswitch to teaching reasoning mode\b/i,
+      /\buse teaching reasoning\b/i,
+      /\breason in teaching mode\b/i,
       /\bteach(?:ing)? mode\b/i,
       /\bexplain like (?:i'?m|you'?re) teaching\b/i,
       /\bwalk me through step by step\b/i,
@@ -215,6 +220,21 @@ const SESSION_DIRECTIVES = [
   },
 
   // --- conversation style ---
+  {
+    id: 'conversation_concise',
+    kind: 'field',
+    targetField: 'conversationStyle',
+    parsedValue: CONVERSATION_STYLES.CONCISE,
+    standalone: true,
+    aliases: [
+      /\buse concise responses?\b/i,
+      /\brespond concisely\b/i,
+      /\bkeep your answers? brief\b/i,
+      /\bbe concise\b/i,
+      /\bkeep (?:it )?brief\b/i,
+    ],
+    confidence: 0.92,
+  },
   {
     id: 'conversation_natural_explicit',
     kind: 'field',
