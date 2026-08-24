@@ -34,16 +34,33 @@ const DEFAULT_CONTRACT = Object.freeze({
   createdAt: null,
 });
 
+/** Conversation-level execution bans — not preparation-only workflow negations. */
 const EXECUTION_FORBIDDEN_RES = [
-  /\b(?:don'?t|do not|never|not)\s+(?:execute|run|mutate|update|change|launch|begin|operate)\b/i,
+  /\b(?:don'?t|do not)\s+execute anything\b/i,
+  /\b(?:don'?t|do not)\s+execute\b(?!\s*(?:,|launch|approve|print|or mail))/i,
+  /\b(?:don'?t|do not)\s+execute\b.{0,30}\b(?:during|this)\s+(?:conversation|discussion|turn)\b/i,
   /\b(?:don'?t|do not)\s+(?:do|perform)\s+anything\b/i,
   /\bread[\s-]?only\b/i,
-  /\bno\s+(?:mutations?|mission updates?|execution|changes?)\b/i,
+  /\bno\s+(?:mutations?|mission updates?)\b/i,
   /\breasoning only\b/i,
   /\b(?:just|only)\s+(?:talk|discuss|converse|explore|think)\b/i,
   /\b(?:i'?m|i am)\s+evaluat(?:e|ing)\s+how you think\b/i,
   /\bunderstand how you think\b/i,
-  /\b(?:don'?t|do not)\s+execute anything\b/i,
+];
+
+/** Desk/canary workflow negations — not conversation contract signals. */
+const WORKFLOW_SCOPED_NEGATION_RES = [
+  /\bdo not create a mission\b/i,
+  /\bdo not launch,\s*execute,\s*approve\b/i,
+  /\bdo not print or mail\b/i,
+  /\bpreparation-only\b/i,
+  /\bdo not include reasoning\b/i,
+  /\bproceed with the recommended next preparation-only work order\b/i,
+  /\bpacket-content review\b/i,
+  /\bcall-script review\b/i,
+  /\bfillable (?:verification )?table\b/i,
+  /\bcanary summary\b/i,
+  /\bwork order:/i,
 ];
 
 const EXECUTION_ALLOWED_RES = [
@@ -78,7 +95,7 @@ const MAINTAIN_CONTEXT_RES = [
 
 const REFLECTION_MODE_RES = [
   /\b(?:evaluat(?:e|ing)|understand)\s+how you think\b/i,
-  /\b(?:your )?reasoning\b/i,
+  /\b(?:discuss|explore|evaluate)\s+(?:your )?reasoning\b/i,
   /\bthink out loud\b/i,
   /\bwalk me through (?:your )?(?:reasoning|thinking)\b/i,
   /\b(?:discuss|explore) your (?:reasoning|thinking|operating model)\b/i,
@@ -181,6 +198,10 @@ function extractConversationGoal(text) {
   return null;
 }
 
+function isWorkflowScopedNegation(text) {
+  return matchesAny(text, WORKFLOW_SCOPED_NEGATION_RES);
+}
+
 function detectContractSignals(text) {
   const q = normalizeText(text);
   if (!q) {
@@ -196,7 +217,10 @@ function detectContractSignals(text) {
     };
   }
 
-  const executionForbidden = matchesAny(q, EXECUTION_FORBIDDEN_RES);
+  let executionForbidden = matchesAny(q, EXECUTION_FORBIDDEN_RES);
+  if (executionForbidden && isWorkflowScopedNegation(q)) {
+    executionForbidden = false;
+  }
   const executionAllowed =
     !executionForbidden && matchesAny(q, EXECUTION_ALLOWED_RES) ? true : null;
   const explicitExecutionAllowed =
