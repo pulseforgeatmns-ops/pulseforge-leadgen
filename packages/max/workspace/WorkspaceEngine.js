@@ -70,6 +70,11 @@ const {
   explainCurrentSession,
   isSessionStateExplanationQuestion,
 } = require('./SessionInspectionOperator');
+const {
+  inspectExecutionState,
+  isExecutionInspectionQuestion,
+} = require('./ExecutionInspectionOperator');
+const { serializeExecutionState, getExecutionState } = require('./ExecutionState');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
@@ -697,6 +702,102 @@ class WorkspaceEngine {
         {
           pipeline: 'SessionStateManager',
           claimedBy: 'session_inspection_operator',
+          messageClassification,
+          sessionState,
+        }
+      );
+    }
+
+    // SPEC-152 — EXECUTION_INSPECTION reads stored Execution State (ADR-073).
+    if (
+      !miepInternal &&
+      isExecutionInspectionQuestion(question)
+    ) {
+      askPathTrace.traceBranch('owner_pipeline:execution_inspection');
+      const executionInspectionTurn = inspectExecutionState({
+        question,
+        session,
+      });
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'execution_inspection';
+      }
+      const presentedExecutionInspection = await this._presentation.present(
+        executionInspectionTurn.structured
+      );
+      const proseExecutionInspection =
+        presentedExecutionInspection.prose || executionInspectionTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseExecutionInspection,
+        structured: executionInspectionTurn.structured,
+      });
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'execution_inspection', {
+        responseOwner: 'execution_state_manager',
+        pipeline: 'ExecutionInspectionOperator',
+      });
+      const executionStateSnapshot =
+        executionInspectionTurn.structured.metadata?.executionState ||
+        serializeExecutionState(getExecutionState(session));
+      return attachRoutingTrace(
+        {
+          sessionId: session.id,
+          prose: proseExecutionInspection,
+          structured: executionInspectionTurn.structured,
+          metadata: {
+            ...(presentedExecutionInspection.metadata || {}),
+            ...(executionInspectionTurn.structured.metadata || {}),
+            messageClassification,
+            sessionState,
+            executionState: executionStateSnapshot,
+          },
+          executionState: executionStateSnapshot,
+          suggestions: [],
+          recommendedActions: executionInspectionTurn.structured.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedExecutionInspection.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: {
+            action: 'execution_inspected',
+            reason: executionInspectionTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent: null,
+          conversationSubject: null,
+          messageClassification,
+          sessionState,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: executionInspectionTurn.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: 1,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: executionInspectionTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership: {
+            owner: 'execution_state_manager',
+            reason: 'execution_inspection_bypass',
+            confidence: 1,
+            specialist: null,
+            fallback: false,
+          },
+        },
+        {
+          pipeline: 'ExecutionInspectionOperator',
+          claimedBy: 'execution_inspection_operator',
           messageClassification,
           sessionState,
         }
