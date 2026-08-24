@@ -54,6 +54,7 @@ const {
   isReadOnlyCognition,
 } = require('../operatorCognition');
 const { analyzeOperatorIntent } = require('./OperatorIntent');
+const { resolveConversationContract } = require('./ConversationContractEngine');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
@@ -401,6 +402,7 @@ class WorkspaceEngine {
     let conversationSubject = null;
     let conversationIntent = null;
     let operatorIntent = null;
+    let conversationContract = null;
     let traceAskReturn = (label, value, meta = {}) => value;
 
     try {
@@ -443,11 +445,30 @@ class WorkspaceEngine {
           }
         : null;
 
+    // SPEC-155 — Conversation Contract precedes ownership (ADR-062).
+    const contractResolution = resolveConversationContract({
+      question,
+      session,
+    });
+    conversationContract = contractResolution.contract;
+    if (session.context && typeof session.context === 'object') {
+      session.context.conversationContract = conversationContract;
+    }
+    askPathTrace.traceBranch('conversation_contract', {
+      executionAllowed: conversationContract.executionAllowed,
+      reasoningMode: conversationContract.reasoningMode,
+      maintainContext: conversationContract.maintainContext,
+      locked: conversationContract.locked,
+      conversationGoal: conversationContract.conversationGoal,
+      changed: contractResolution.changed,
+    });
+
     // SPEC-153 — interpret operator language exactly once (ADR-061).
     operatorIntent = await analyzeOperatorIntent({
       question,
       session,
       context: rawContext || session.context,
+      conversationContract,
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
@@ -464,6 +485,7 @@ class WorkspaceEngine {
       session.context.conversationSubjectReason = conversationSubject.reason;
       session.context.conversationIntent = conversationIntent;
       session.context.operatorIntent = operatorIntent;
+      session.context.conversationContract = conversationContract;
       if (continuityApplied) {
         session.context.resolvedQuestion = resolvedQuestion;
       }
@@ -485,6 +507,8 @@ class WorkspaceEngine {
       executionRequested: operatorIntent.executionRequested,
       planningRequested: operatorIntent.planningRequested,
       conversationLocked: operatorIntent.conversationLocked,
+      executionAllowed:
+        conversationContract && conversationContract.executionAllowed,
     });
     if (continuityApplied) {
       askPathTrace.traceBranch('conversation_continuity', {
@@ -518,6 +542,7 @@ class WorkspaceEngine {
         resolvedQuestion,
         continuityApplied,
         structured: value && value.structured,
+        conversationContract,
       });
       const activeReasoningContext = advanceActiveReasoningContext(session, {
         question,
@@ -537,11 +562,13 @@ class WorkspaceEngine {
         conversationalState,
         resolvedQuestion,
         activeReasoningContext,
+        conversationContract,
       });
       if (enriched && typeof enriched === 'object') {
         enriched.conversationalState = conversationalState;
         enriched.resolvedQuestion = resolvedQuestion;
         enriched.activeReasoningContext = activeReasoningContext;
+        enriched.conversationContract = conversationContract;
       }
       return enriched;
     };
@@ -555,6 +582,7 @@ class WorkspaceEngine {
       context: rawContext || session.context,
       conversationSubject,
       operatorIntent,
+      conversationContract,
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
@@ -848,6 +876,7 @@ class WorkspaceEngine {
         session,
         context: rawContext || session.context,
         operatorIntent,
+        conversationContract,
         missionEngine: this._missionEngine,
         missionsEnabled: this._missionsEnabled,
         resolverEnabled: this._resolverEnabled,
@@ -2107,7 +2136,7 @@ class WorkspaceEngine {
         text: proseCie,
         structured: structuredCie,
       });
-      return {
+      return traceAskReturn('client_intelligence', {
         sessionId: session.id,
         prose: proseCie,
         structured: structuredCie,
@@ -2145,7 +2174,7 @@ class WorkspaceEngine {
           missionId: null,
         },
         workspaceOwnership,
-      };
+      }, { pipeline: 'ClientIntelligence', claimedBy: cieTurn.reason });
     }
 
     if (responseContract && responseContract.id === CONTRACT_IDS.INVESTIGATION) {

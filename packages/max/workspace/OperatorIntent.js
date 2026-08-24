@@ -31,6 +31,12 @@ const {
   resetOperatorIntentAudit,
 } = require('./audit/OperatorIntentAudit');
 const { missionMayOwnTurn } = require('./OperatorIntentContract');
+const {
+  contractBlocksExecution,
+  contractRequiresContinuity,
+  contractLocksConversation,
+} = require('./ConversationContract');
+const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
 
 /**
  * @typedef {object} OperatorIntent
@@ -43,6 +49,7 @@ const { missionMayOwnTurn } = require('./OperatorIntentContract');
  * @property {number} confidence
  * @property {object|null} ownerHints
  * @property {boolean} conversationLocked
+ * @property {object|null} conversationContract — SPEC-155
  * @property {object} conversationSubject
  * @property {object} conversationIntent
  * @property {string} resolvedQuestion
@@ -155,12 +162,66 @@ async function resolveLegacyMissionContinuation(input = {}, question) {
  * @param {boolean} [input.resolveMission=true]
  * @returns {Promise<OperatorIntent>}
  */
+function applyConversationContractToIntent(baseIntent, conversationContract) {
+  if (!conversationContract) return baseIntent;
+
+  const blocked = contractBlocksExecution(conversationContract);
+  const locked = contractLocksConversation(conversationContract);
+
+  if (blocked) {
+    baseIntent.executionRequested = false;
+    baseIntent.planningRequested = false;
+    baseIntent.mutatesMission = false;
+    baseIntent.missionContinuationRequested = false;
+    baseIntent.ownerHints = {
+      ...(baseIntent.ownerHints || {}),
+      readOnly: true,
+      executionLanguagePresent: false,
+      missionContinuation: false,
+    };
+    if (
+      conversationContract.reasoningMode === 'reflection' &&
+      baseIntent.conversationSubject
+    ) {
+      baseIntent.conversationSubject = {
+        ...baseIntent.conversationSubject,
+        subject: CONVERSATION_SUBJECTS.IDENTITY,
+        locked: true,
+        reason: 'conversation_contract_reflection',
+        via: 'conversation_contract',
+      };
+      baseIntent.subject = CONVERSATION_SUBJECTS.IDENTITY;
+      baseIntent.intent = 'meta_conversation';
+    }
+  }
+
+  if (locked || blocked) {
+    baseIntent.conversationLocked = blocked ? true : locked;
+  }
+
+  if (!blocked && conversationContract.executionAllowed === true) {
+    baseIntent.conversationLocked = false;
+  }
+
+  if (contractRequiresContinuity(conversationContract)) {
+    baseIntent.continuityApplied = true;
+  }
+
+  if (conversationContract.conversationGoal) {
+    baseIntent.conversationGoal = conversationContract.conversationGoal;
+  }
+
+  baseIntent.conversationContract = conversationContract;
+  return baseIntent;
+}
+
 async function analyzeOperatorIntent(input = {}) {
   resetOperatorIntentAudit();
 
   const question = normalizeText(input.question);
   const session = input.session || null;
   const context = input.context || (session && session.context) || null;
+  const conversationContract = input.conversationContract || null;
 
   let mission = input.mission || null;
   if (!mission && input.resolveMission !== false) {
@@ -232,6 +293,7 @@ async function analyzeOperatorIntent(input = {}) {
     session,
     priorState: getConversationalState(session),
     continuityApplied,
+    conversationContract,
   });
   if (arcContinuity.activeReasoningContext) {
     activeReasoningContext = arcContinuity.activeReasoningContext;
@@ -253,7 +315,7 @@ async function analyzeOperatorIntent(input = {}) {
     ? false
     : Boolean(conversationIntent && conversationIntent.mutatesMission);
 
-  const operatorIntent = {
+  let operatorIntent = {
     subject: conversationSubject.subject,
     thinkingMode: conversationIntent.thinkingMode,
     intent: deriveIntentLabel(conversationSubject, conversationIntent),
@@ -287,9 +349,14 @@ async function analyzeOperatorIntent(input = {}) {
     mission,
     activeReasoningContext,
     arcFollowUp,
-    conversationGoal: activeReasoningContext && activeReasoningContext.conversationGoal,
+    conversationGoal:
+      (conversationContract && conversationContract.conversationGoal) ||
+      (activeReasoningContext && activeReasoningContext.conversationGoal),
     primaryClaim: activeReasoningContext && activeReasoningContext.primaryClaim,
+    conversationContract,
   };
+
+  operatorIntent = applyConversationContractToIntent(operatorIntent, conversationContract);
 
   sealOperatorIntent(operatorIntent);
   return operatorIntent;

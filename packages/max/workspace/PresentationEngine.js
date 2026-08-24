@@ -54,6 +54,33 @@ class PresentationEngine {
     }
 
     const metadata = structured.metadata || {};
+    const conversationContract = metadata.conversationContract || null;
+    const executionBlocked =
+      conversationContract && conversationContract.executionAllowed === false;
+
+    // SPEC-155 — read-only conversation contract blocks mission presentation.
+    if (executionBlocked && metadata.missionCommunication === true) {
+      const readOnlyStructured = {
+        ...structured,
+        metadata: {
+          ...metadata,
+          missionCommunication: false,
+          readOnlyConversation: true,
+          conversationContract,
+        },
+      };
+      const prose = formatDeterministicProse(readOnlyStructured);
+      return {
+        prose,
+        structured: readOnlyStructured,
+        metadata: {
+          ...readOnlyStructured.metadata,
+          presentation: 'conversation_contract_read_only',
+        },
+        presentation: 'conversation_contract_read_only',
+      };
+    }
+
     let prose;
     let presentation = 'fallback';
 
