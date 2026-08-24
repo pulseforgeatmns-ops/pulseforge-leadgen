@@ -55,6 +55,15 @@ const IDENTITY_SUBJECT_RES = [
   /\bhow is (?:that|this|it|max|you) different from\b/i,
   /\b(?:max|you) vs\.?\s+(?:scout|paige|rex|emmett|sam|riley|cal|vera)\b/i,
   /\b(?:scout|paige|rex) vs\.?\s+(?:scout|paige|rex|max)\b/i,
+  // SPEC-152 — concept graph authority, conflict, and relationship questions
+  /\b(?:who ultimately decides|who decides)\b/i,
+  /\bcan (?:scout|paige|max) approve\b/i,
+  /\bwho can approve outreach\b/i,
+  /\bscout disagrees with paige\b/i,
+  /\bif scout and paige disagreed\b/i,
+  /\bwhy shouldn'?t scout (?:replace|make)\b/i,
+  /\bhow do scout and paige depend\b/i,
+  /\bwhat happens if one fails\b/i,
 ];
 
 const REFLECT_SUBJECT_RES = [

@@ -57,6 +57,8 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-056](docs/adr/ADR-056_Mission_Planning_Engine_Is_The_Single_Interpreter.md) | Mission Planning Engine Is The Single Interpreter | Accepted | Only the Mission Planning Engine interprets operator English; specialists consume the locked Mission Plan |
 | [ADR-057](docs/adr/ADR-057_Transactional_Mission_Execution.md) | Transactional Mission Execution Is Atomic | Accepted | A mission stage commits completely or rolls back; approval consumption is part of the same commit |
 | [ADR-058](docs/adr/ADR-058_Pending_Operator_Decision_Matches_Execution.md) | Pending Operator Decision Must Match Execution | Accepted | Advertised operator decisions must be consumable; presentation derives from execution predicates |
+| [ADR-059](docs/adr/ADR-059_Max_as_the_Business_Operating_System.md) | Max as the Business Operating System | Accepted | Max is the business operating system — canonical identity, operator authority, specialist coordination |
+| [ADR-060](docs/adr/ADR-060_Knowledge_as_Relationships.md) | Knowledge as Relationships | Accepted | PulseForge stores relationships between concepts; answers are synthesized by graph traversal (SPEC-152) |
 
 ## How to add a decision
 
