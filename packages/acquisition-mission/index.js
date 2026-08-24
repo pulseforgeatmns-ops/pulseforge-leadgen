@@ -42,6 +42,7 @@ const executionAudit = require('./ExecutionAudit');
 const transactionalExecution = require('./TransactionalExecution');
 const specialistExecutionContract = require('./SpecialistExecutionContract');
 const pendingOperatorDecision = require('./PendingOperatorDecision');
+const missionProgression = require('./MissionProgression');
 
 module.exports = {
   ...types,
@@ -86,4 +87,5 @@ module.exports = {
   ...transactionalExecution,
   ...specialistExecutionContract,
   ...pendingOperatorDecision,
+  ...missionProgression,
 };
