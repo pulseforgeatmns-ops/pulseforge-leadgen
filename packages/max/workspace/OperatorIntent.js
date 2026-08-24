@@ -20,6 +20,12 @@ const {
 } = require('./ExecutionLanguageDetection');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
 const {
+  evaluateMissionContinuation,
+  evaluateMissionEscape,
+  CONTINUATION_THRESHOLD,
+} = require('./MissionFirstRouting');
+const { isActiveMissionStatus } = require('../../mission-engine/types');
+const {
   sealOperatorIntent,
   resetOperatorIntentAudit,
 } = require('./audit/OperatorIntentAudit');
@@ -88,10 +94,52 @@ function buildOwnerHints(input = {}) {
     missionCreation: input.missionCreationRequested || false,
     missionCreationReason: input.missionCreationReason || null,
     executionLanguagePresent: input.executionLanguagePresent || false,
+    missionContinuation: input.missionContinuationRequested || false,
     readOnly:
       !input.mutatesMission &&
       !input.executionRequested &&
-      !input.planningRequested,
+      !input.planningRequested &&
+      !input.missionContinuationRequested,
+  };
+}
+
+/**
+ * Evaluate legacy SPEC-022 mission continuation once during intent analysis.
+ * @param {object} input
+ * @param {string} question
+ * @returns {Promise<{ requested: boolean, confidence: number, classification: string|null, reason: string|null }>}
+ */
+async function resolveLegacyMissionContinuation(input = {}, question) {
+  if (
+    input.missionsEnabled === false ||
+    !input.missionEngine ||
+    !input.missionEngine.activeMissionResolver ||
+    input.resolverEnabled === false ||
+    !input.session ||
+    !input.session.id
+  ) {
+    return { requested: false, confidence: 0, classification: null, reason: null };
+  }
+
+  const escape = evaluateMissionEscape(question);
+  if (escape.explicit) {
+    return { requested: false, confidence: 0, classification: null, reason: escape.reason };
+  }
+
+  const activeMission = await input.missionEngine.activeMissionResolver.resolveActiveMission(
+    input.session.id
+  );
+  if (!activeMission || !isActiveMissionStatus(activeMission.status)) {
+    return { requested: false, confidence: 0, classification: null, reason: null };
+  }
+
+  const continuation = evaluateMissionContinuation(question, activeMission);
+  return {
+    requested:
+      continuation.continues && continuation.confidence >= CONTINUATION_THRESHOLD,
+    confidence: continuation.confidence,
+    classification: continuation.classification,
+    reason: continuation.reason,
   };
 }
 
@@ -143,9 +191,11 @@ async function analyzeOperatorIntent(input = {}) {
 
   const executionLanguagePresent = hasExecutionLanguage(question);
   const creationLanguage = detectMissionExecutionLanguage(question);
+  const legacyContinuation = await resolveLegacyMissionContinuation(input, question);
 
   let executionRequested = deriveExecutionRequested(conversationIntent);
   let planningRequested = derivePlanningRequested(conversationIntent);
+  let missionContinuationRequested = legacyContinuation.requested;
 
   let resolvedQuestion = question;
   let continuityApplied = false;
@@ -158,12 +208,19 @@ async function analyzeOperatorIntent(input = {}) {
   });
 
   if (continuity.applied) {
-    continuityApplied = true;
-    conversationSubject = continuity.conversationSubject;
-    conversationIntent = continuity.conversationIntent;
-    resolvedQuestion = continuity.resolvedQuestion;
-    executionRequested = false;
-    planningRequested = false;
+    if (legacyContinuation.requested) {
+      // SPEC-153 — mission continuation beats generic conversational continuity.
+      continuityApplied = false;
+      missionContinuationRequested = true;
+    } else {
+      continuityApplied = true;
+      conversationSubject = continuity.conversationSubject;
+      conversationIntent = continuity.conversationIntent;
+      resolvedQuestion = continuity.resolvedQuestion;
+      executionRequested = false;
+      planningRequested = false;
+      missionContinuationRequested = false;
+    }
   }
 
   const conversationLocked = Boolean(
@@ -192,6 +249,7 @@ async function analyzeOperatorIntent(input = {}) {
       mutatesMission,
       executionRequested,
       planningRequested,
+      missionContinuationRequested,
     }),
     conversationLocked,
     conversationSubject,
@@ -201,6 +259,9 @@ async function analyzeOperatorIntent(input = {}) {
     executionLanguagePresent,
     missionCreationRequested: creationLanguage.matched,
     missionCreationReason: creationLanguage.reason,
+    missionContinuationRequested,
+    missionContinuationConfidence: legacyContinuation.confidence,
+    missionContinuationClassification: legacyContinuation.classification,
     mission,
   };
 

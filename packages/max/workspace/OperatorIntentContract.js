@@ -15,7 +15,8 @@ function missionMayOwnTurn(operatorIntent) {
   return (
     operatorIntent.mutatesMission ||
     operatorIntent.executionRequested ||
-    operatorIntent.planningRequested
+    operatorIntent.planningRequested ||
+    operatorIntent.missionContinuationRequested
   );
 }
 

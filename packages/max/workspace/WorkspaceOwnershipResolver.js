@@ -566,11 +566,13 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // 4 — SPEC-153: active mission owns only execution/planning/mutation turns
+  // 4 — SPEC-153: active mission owns execution/planning/mutation/continuation turns
   const activeMissionExecutionCommand =
     missionLock.executionCommand ||
     (operatorIntent
-      ? operatorIntent.executionRequested || operatorIntent.planningRequested
+      ? operatorIntent.executionRequested ||
+        operatorIntent.planningRequested ||
+        operatorIntent.missionContinuationRequested
       : isMissionExecutionCommand(question));
   if (
     missionLock.active &&
@@ -614,7 +616,9 @@ async function resolveWorkspaceOwner(input = {}) {
       if (
         continuation.continues &&
         continuation.confidence >= CONTINUATION_THRESHOLD &&
-        (!operatorIntent || missionMayOwnTurn(operatorIntent))
+        (!operatorIntent ||
+          operatorIntent.missionContinuationRequested ||
+          missionMayOwnTurn(operatorIntent))
       ) {
         return {
           owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
