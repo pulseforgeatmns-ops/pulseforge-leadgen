@@ -33,6 +33,8 @@ const { getConversationalState } = require('./ConversationalStateMachine');
 const {
   isSessionInspectionQuestion,
   formatSessionInspection,
+  formatSessionFieldInspection,
+  resolveSessionStateField,
   getCurrentState,
 } = require('./SessionStateManager');
 const { getActiveReasoningContext } = require('./ActiveReasoningContext');
@@ -97,7 +99,10 @@ function composeIdentityProse(question, session, registry) {
 
   switch (kind) {
     case 'session_inspection':
-      prose = formatSessionInspection(storedSessionState);
+      prose = formatSessionFieldInspection(
+        storedSessionState,
+        resolveSessionStateField(question)
+      );
       break;
     case 'introduction':
       prose =
@@ -266,7 +271,10 @@ async function maybeHandleIdentityTurn(input = {}) {
   const arcFollowUp = input.arcFollowUp || null;
 
   if (answerKind === 'session_inspection' || answerKind === 'operating_mode') {
-    prose = formatSessionInspection(getCurrentState(session));
+    prose = formatSessionFieldInspection(
+      getCurrentState(session),
+      resolveSessionStateField(question)
+    );
     answerKind = 'session_inspection';
   } else if (shouldUseOperatingModelReasoning({
     question,

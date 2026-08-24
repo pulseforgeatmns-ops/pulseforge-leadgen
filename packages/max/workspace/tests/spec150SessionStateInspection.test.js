@@ -201,7 +201,7 @@ describe('SPEC-150 — Session State Inspection', () => {
       const expected = formatReasoningModeLabel(stored.reasoningMode);
       assert.equal(result.messageClassification.type, MESSAGE_TYPES.SESSION_INSPECTION);
       assert.match(result.prose, new RegExp(`Reasoning Mode\\s+${expected}`));
-      assert.match(result.prose, /Conversation Style\s+Natural/);
+      assert.doesNotMatch(result.prose, /Conversation Style/);
     });
 
     it('Test 4 — summarize the current session returns complete Session State', async () => {

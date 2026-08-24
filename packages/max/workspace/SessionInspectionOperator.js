@@ -18,20 +18,17 @@ const {
 const {
   getCurrentState,
   formatSessionInspection,
+  formatSessionFieldInspection,
+  resolveSessionStateField,
+  getSessionStateField,
   formatOperatingModeLabel,
   formatExecutionPolicyLabel,
   formatReasoningModeLabel,
   formatConversationStyleLabel,
   formatEvaluationModeLabel,
   isSessionInspectionQuestion,
+  SESSION_WHY_RES,
 } = require('./SessionStateManager');
-
-const SESSION_WHY_RES = [
-  /\bwhy are you using that(?: operating mode)?\b/i,
-  /\bwhy are you using it\b/i,
-  /\bwhy (?:are you|is (?:that|this)) (?:using )?(?:that )?(?:operating mode|execution policy|reasoning mode|conversation style|evaluation mode)\b/i,
-  /\bwhy is (?:that|this) (?:the )?(?:operating mode|execution policy|reasoning mode)\b/i,
-];
 
 function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
@@ -57,34 +54,16 @@ function detectExplanationField(question) {
   return 'operatingMode';
 }
 
-function fieldLabel(field) {
-  switch (field) {
-    case 'executionPolicy':
-      return 'execution policy';
-    case 'reasoningMode':
-      return 'reasoning mode';
-    case 'conversationStyle':
-      return 'conversation style';
-    case 'evaluationMode':
-      return 'evaluation mode';
-    default:
-      return 'operating mode';
-  }
+function fieldLabel(fieldKey) {
+  const field = getSessionStateField(fieldKey);
+  if (field) return field.displayName.toLowerCase();
+  return fieldKey;
 }
 
-function storedFieldLabel(state, field) {
-  switch (field) {
-    case 'executionPolicy':
-      return formatExecutionPolicyLabel(state.executionPolicy);
-    case 'reasoningMode':
-      return formatReasoningModeLabel(state.reasoningMode);
-    case 'conversationStyle':
-      return formatConversationStyleLabel(state.conversationStyle);
-    case 'evaluationMode':
-      return formatEvaluationModeLabel(state.evaluationMode);
-    default:
-      return formatOperatingModeLabel(state.operatingMode);
-  }
+function storedFieldLabel(state, fieldKey) {
+  const field = getSessionStateField(fieldKey);
+  if (!field || field.isSummary) return formatOperatingModeLabel(state.operatingMode);
+  return field.formatter(state[field.stateKey]);
 }
 
 /**
@@ -138,11 +117,14 @@ function sessionStateEvidence(state) {
  */
 function inspectCurrentSession(input = {}) {
   const state = input.sessionState || getCurrentState(input.session);
-  const prose = formatSessionInspection(state);
+  const field = resolveSessionStateField(input.question || '');
+  const prose = formatSessionFieldInspection(state, field);
   const structured = buildStructuredResponse({
     answer: prose,
     reasoning: [
-      'SPEC-150 — SESSION_INSPECTION reads stored Session State; no business reasoning.',
+      field && !field.isSummary
+        ? `SPEC-150A — SESSION_INSPECTION reads stored ${field.displayName}; no business reasoning.`
+        : 'SPEC-150 — SESSION_INSPECTION reads stored Session State; no business reasoning.',
     ],
     supportingEvidence: [sessionStateEvidence(state)],
     confidence: 1,

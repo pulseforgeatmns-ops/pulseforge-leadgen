@@ -273,9 +273,9 @@ describe('SPEC-148 — Session State Manager', () => {
       });
 
       assert.match(inspection.structured.answer, /Operating Mode\s+Business Operation/);
-      assert.match(inspection.structured.answer, /Execution Policy\s+Read Only/);
-      assert.match(inspection.structured.answer, /Reasoning Mode\s+Analytical/);
-      assert.match(inspection.structured.answer, /Conversation Style\s+Natural/);
+      assert.doesNotMatch(inspection.structured.answer, /\nExecution Policy\n/);
+      assert.doesNotMatch(inspection.structured.answer, /\nReasoning Mode\n/);
+      assert.doesNotMatch(inspection.structured.answer, /\nConversation Style\n/);
     });
   });
 });
