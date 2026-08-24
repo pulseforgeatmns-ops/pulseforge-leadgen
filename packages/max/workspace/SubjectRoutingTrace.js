@@ -5,6 +5,7 @@
  */
 
 const PIPELINE_BY_OWNER = Object.freeze({
+  session_state_manager: 'SessionStateManager',
   conversation_identity: 'IdentityConversation',
   reflection: 'ReflectionEngine',
   active_mission: 'MissionRuntime',
@@ -58,12 +59,17 @@ function buildRoutingTrace(input = {}) {
   const conversationIntent = input.conversationIntent || null;
   const workspaceOwnership = input.workspaceOwnership || null;
   const conversationalState = input.conversationalState || null;
+  const messageClassification = input.messageClassification || null;
   const owner = workspaceOwnership && workspaceOwnership.owner ? workspaceOwnership.owner : null;
   const subject = conversationSubject && conversationSubject.subject
     ? conversationSubject.subject
     : null;
 
   return {
+    messageType:
+      messageClassification && messageClassification.type
+        ? messageClassification.type
+        : null,
     subject,
     intent: conversationIntent && conversationIntent.intent ? conversationIntent.intent : null,
     thinkingMode:

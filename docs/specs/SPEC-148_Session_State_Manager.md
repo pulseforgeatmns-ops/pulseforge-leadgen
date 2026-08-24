@@ -28,6 +28,7 @@ Session behavior shall never be inferred solely from recent prompts (ADR-068).
 
 ```text
 Raw Operator Message
+  → Message Type Classifier (SPEC-149)
   → Session State Manager (SPEC-148)
   → Conversation Contract Engine (SPEC-155)
   → Operator Intent (SPEC-153)
