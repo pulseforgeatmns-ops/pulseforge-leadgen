@@ -337,6 +337,11 @@ function buildResponseMetadata(partial = {}) {
   if (partial.sessionConfiguration === true) meta.sessionConfiguration = true;
   if (partial.sessionStateRead === true) meta.sessionStateRead = true;
   if (partial.sessionStateEvidence === true) meta.sessionStateEvidence = true;
+  // SPEC-152: execution state introspection metadata
+  if (partial.executionInspection === true) meta.executionInspection = true;
+  if (partial.executionStateRead === true) meta.executionStateRead = true;
+  if (partial.executionState != null) meta.executionState = partial.executionState;
+  if (partial.inspectionMode != null) meta.inspectionMode = String(partial.inspectionMode);
   return meta;
 }
 

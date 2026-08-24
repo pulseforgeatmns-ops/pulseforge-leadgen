@@ -12,6 +12,19 @@ const { formatReasoningModeLabel } = require('./SessionStateManager');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const { EXECUTION_DOMAINS } = require('./ExecutionDomain');
 const { ROUTE_KINDS } = require('../../mission-engine');
+const {
+  createExecutionState,
+  recordStepStarted,
+  recordStepCompleted,
+  recordExecutionPaused,
+  recordExecutionBlocked,
+  recordExecutionCompleted,
+  inferPostStepPause,
+  serializeExecutionState,
+  setExecutionState,
+  describeStepKind,
+  stepIdFor,
+} = require('./ExecutionState');
 
 const INTERNAL_STEP_KINDS = new Set([
   STEP_KINDS.APPLY_SESSION_CONFIGURATION,
@@ -115,7 +128,12 @@ function enrichMultiIntentResponse(response, meta = {}) {
     })),
     blocked: meta.blocked === true,
     pauseReason: meta.pauseReason || null,
+    blockingContract: meta.blockingContract || null,
+    nextStep: meta.nextStep || null,
   };
+  const executionStateSnapshot = meta.executionState
+    ? serializeExecutionState(meta.executionState)
+    : null;
 
   return {
     ...response,
@@ -123,14 +141,19 @@ function enrichMultiIntentResponse(response, meta = {}) {
       ...(response.metadata || {}),
       miep: true,
       executionPlan,
+      executionState: executionStateSnapshot,
       sessionState: meta.sessionState || response.sessionState || null,
     },
     executionPlan,
+    executionState: executionStateSnapshot,
     miep: {
       plan: meta.plan || null,
       stepResults: meta.stepResults || [],
       blocked: meta.blocked === true,
       pauseReason: meta.pauseReason || null,
+      blockingContract: meta.blockingContract || null,
+      nextStep: meta.nextStep || null,
+      executionState: executionStateSnapshot,
     },
   };
 }
@@ -158,19 +181,42 @@ async function executeMultiIntentPlan(engine, ctx) {
   let lastResponse = null;
   let blocked = false;
   let pauseReason = null;
+  let blockingContract = null;
+  let nextStepHint = null;
+
+  let executionState = createExecutionState({ plan });
+  setExecutionState(session, executionState);
 
   const substantiveSteps = plan.steps.filter((step) => !INTERNAL_STEP_KINDS.has(step.kind));
   const lastSubstantive = substantiveSteps[substantiveSteps.length - 1] || null;
 
-  for (const step of plan.steps) {
+  for (let stepIndex = 0; stepIndex < plan.steps.length; stepIndex += 1) {
+    const step = plan.steps[stepIndex];
+
+    executionState = recordStepStarted(executionState, step, stepIndex);
+    setExecutionState(session, executionState);
+
     if (INTERNAL_STEP_KINDS.has(step.kind)) {
+      executionState = recordStepCompleted(executionState, step, stepIndex, {
+        internal: true,
+      });
+      setExecutionState(session, executionState);
       stepResults.push({ step, completed: true, blocked: false });
       continue;
     }
 
     if (step.blocking) {
       blocked = true;
-      pauseReason = 'execution_disabled_by_session';
+      pauseReason = 'Execution is disabled for this session.';
+      blockingContract = 'SPEC-148 Session Execution Policy';
+      nextStepHint = `Enable execution, then ${describeStepKind(step.kind).toLowerCase()}.`;
+      executionState = recordExecutionBlocked(executionState, {
+        pauseReason,
+        blockingContract,
+        nextStep: nextStepHint,
+        blockedStepId: stepIdFor(step, stepIndex),
+      });
+      setExecutionState(session, executionState);
       const blockedResponse = buildBlockedStepResponse(step, sessionState, session, ctx);
       stepResults.push({
         step,
@@ -201,6 +247,11 @@ async function executeMultiIntentPlan(engine, ctx) {
       _miepFinalStep: lastSubstantive && lastSubstantive.order === step.order,
     });
 
+    executionState = recordStepCompleted(executionState, step, stepIndex, {
+      action: segmentResult?.resolution?.action || null,
+    });
+    setExecutionState(session, executionState);
+
     stepResults.push({
       step,
       completed: true,
@@ -212,6 +263,37 @@ async function executeMultiIntentPlan(engine, ctx) {
     if (segmentResult && segmentResult.miep && segmentResult.miep.blocked) {
       blocked = true;
       pauseReason = segmentResult.miep.pauseReason || 'step_blocked';
+      blockingContract = 'SPEC-151 Multi-Intent Execution Planner';
+      nextStepHint = describeStepKind(step.kind);
+      executionState = recordExecutionBlocked(executionState, {
+        pauseReason,
+        blockingContract,
+        nextStep: nextStepHint,
+        blockedStepId: stepIdFor(step, stepIndex),
+      });
+      setExecutionState(session, executionState);
+      break;
+    }
+
+    const inferredPause = inferPostStepPause({
+      step,
+      stepIndex,
+      stepResult: { response: segmentResult },
+      sessionState,
+      plan,
+    });
+    if (inferredPause) {
+      blocked = true;
+      pauseReason = inferredPause.pauseReason;
+      blockingContract = inferredPause.blockingContract;
+      nextStepHint = inferredPause.nextStep;
+      executionState = recordExecutionPaused(executionState, {
+        pauseReason,
+        blockingContract,
+        nextStep: nextStepHint,
+        blockedStepId: stepIdFor(step, stepIndex),
+      });
+      setExecutionState(session, executionState);
       break;
     }
   }
@@ -232,12 +314,23 @@ async function executeMultiIntentPlan(engine, ctx) {
     }
   }
 
+  if (!blocked) {
+    executionState = recordExecutionCompleted(executionState, {
+      message: 'Multi-intent execution plan completed.',
+      nextStep: null,
+    });
+    setExecutionState(session, executionState);
+  }
+
   const enriched = enrichMultiIntentResponse(lastResponse, {
     plan,
     stepResults,
     sessionState,
     blocked,
     pauseReason,
+    blockingContract,
+    nextStep: nextStepHint,
+    executionState,
   });
 
   askPathTrace.traceEarlyReturn('executeMultiIntentPlan', blocked ? 'blocked' : 'complete');
