@@ -41,6 +41,7 @@ const CONVERSATION_STYLES = Object.freeze({
   EXECUTIVE: 'executive',
   SPECIFICATION: 'specification',
   BRAINSTORM: 'brainstorm',
+  CONCISE: 'concise',
 });
 
 const EVALUATION_MODES = Object.freeze({

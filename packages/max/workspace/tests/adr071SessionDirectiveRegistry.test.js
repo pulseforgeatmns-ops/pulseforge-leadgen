@@ -19,6 +19,7 @@ const {
   matchFieldDirectives,
   countSettingHits,
 } = require('../SessionDirectiveRegistry');
+const { EXECUTION_POLICIES, REASONING_MODES, CONVERSATION_STYLES } = require('../SessionState');
 
 const CONFIGURATION_FIXTURES = [
   "For the remainder of this conversation, don't execute anything.",
@@ -99,8 +100,76 @@ describe('ADR-071 — Session Directive Registry', () => {
   it('new phrasing is registry data — be concise resolves through registry', () => {
     const text = 'For this session, be concise.';
     const signals = extractDirectiveSignals(text);
-    assert.equal(signals.reasoningMode, 'concise');
+    assert.equal(signals.conversationStyle, CONVERSATION_STYLES.CONCISE);
     assert.equal(isSessionConfigurationMessage(text), true);
     assert.equal(buildSessionState({ question: text }).changed, true);
+  });
+
+  describe('BUG-001 — alias parity produces identical Session State mutations', () => {
+    const CONVERSATION_STYLE_CONCISE = [
+      'Use concise responses.',
+      'Respond concisely.',
+      'Keep your answers brief.',
+      'Be concise.',
+    ];
+
+    const REASONING_MODE_TEACHING = [
+      'Teaching reasoning mode',
+      'Switch to Teaching reasoning mode',
+      'Use Teaching reasoning',
+      'Reason in Teaching mode',
+    ];
+
+    const EXECUTION_POLICY_READ_ONLY = [
+      'Disable execution',
+      'Do not execute',
+      "Don't execute anything",
+      'Disable execution until I explicitly authorize it',
+      'Read-only mode',
+    ];
+
+    function expectedSignalsForGroup(group) {
+      if (group === 'conversationStyle') {
+        return { conversationStyle: CONVERSATION_STYLES.CONCISE };
+      }
+      if (group === 'reasoningMode') {
+        return { reasoningMode: REASONING_MODES.TEACHING };
+      }
+      return { executionPolicy: EXECUTION_POLICIES.READ_ONLY };
+    }
+
+    function assertIdenticalMutations(phrases, group) {
+      const expected = expectedSignalsForGroup(group);
+      const baseline = buildSessionState({ question: phrases[0] });
+
+      for (const phrase of phrases) {
+        const signals = extractDirectiveSignals(phrase);
+        const built = buildSessionState({ question: phrase });
+
+        for (const [field, value] of Object.entries(expected)) {
+          assert.equal(signals[field], value, `${phrase} → signals.${field}`);
+          assert.equal(built.state[field], value, `${phrase} → state.${field}`);
+        }
+
+        assert.equal(built.changed, true, `${phrase} should mutate session state`);
+        assert.equal(
+          baseline.state[group],
+          built.state[group],
+          `${phrase} should match baseline mutation for ${group}`
+        );
+      }
+    }
+
+    it('Conversation Style — concise phrasing variants', () => {
+      assertIdenticalMutations(CONVERSATION_STYLE_CONCISE, 'conversationStyle');
+    });
+
+    it('Reasoning Mode — teaching phrasing variants', () => {
+      assertIdenticalMutations(REASONING_MODE_TEACHING, 'reasoningMode');
+    });
+
+    it('Execution Policy — read-only phrasing variants', () => {
+      assertIdenticalMutations(EXECUTION_POLICY_READ_ONLY, 'executionPolicy');
+    });
   });
 });
