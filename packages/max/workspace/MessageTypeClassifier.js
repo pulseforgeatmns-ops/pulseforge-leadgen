@@ -98,12 +98,20 @@ const QUESTION_RES = [
   /\bshow me\b/i,
 ];
 
+/** Minimum independent heuristic configuration signals for classification without structured fields. */
+const SESSION_CONFIGURATION_THRESHOLD = 2;
+
 const SESSION_SCOPE_RES = [
   /\bfor the rest of (?:this )?conversation\b/i,
   /\bfor the remainder of (?:this )?conversation\b/i,
   /\bfor the rest of this session\b/i,
   /\bfor the remainder of this session\b/i,
+  /\bfor this session\b/i,
   /\bfor today'?s session\b/i,
+  /\bfor today'?s conversation\b/i,
+  /\bduring this evaluation\b/i,
+  /\bgoing forward\b/i,
+  /\buntil i change it\b/i,
   /\buntil i (?:say|tell you) otherwise\b/i,
 ];
 
@@ -114,8 +122,16 @@ const SESSION_SETTING_RES = [
   /\bexplain your reasoning\b/i,
   /\banswer naturally\b/i,
   /\boperate as (?:the )?(?:business operating system|max)\b/i,
+  /\boperate (?:according to|in) your role\b/i,
+  /\b(?:work|function|behave) as\b/i,
   /\bevaluat(?:e|ing)\b.{0,40}\b(?:reasoning|how you operate|your operating model)\b/i,
-  /\btreat .+ as (?:a )?production business\b/i,
+  /\bevaluat(?:e|ing)\s+how you operate\b/i,
+  /\b(?:i(?:'d| would)? like to|i want to|we'?re)\s+evaluat(?:e|ing)\b/i,
+  /\bfor this session\s+evaluat(?:e|ing)\b/i,
+  /\btreat .+ as (?:a )?(?:real )?production business\b/i,
+  /\btreat .+ like (?:a )?(?:real )?production business\b/i,
+  /\bassume .+ is (?:a )?(?:real )?production business\b/i,
+  /\bconsider .+ (?:a )?(?:real )?production business\b/i,
   /\b(?:enable|disable|resume) execution\b/i,
   /\bautonomous execution\b/i,
   /\b(?:we'?re|i'?m)\s+evaluat(?:e|ing)\b/i,
@@ -132,54 +148,56 @@ function firstMatchLabel(text, entries) {
   return null;
 }
 
-function isSessionConfigurationMessage(text) {
-  const q = normalizeText(text);
-  if (!q) return false;
+function countSessionSettingHits(text) {
+  return SESSION_SETTING_RES.filter((re) => re.test(text)).length;
+}
 
-  if (isSessionResetRequest(q)) return true;
-  if (isPersistentDirective(q)) return true;
-  if (matchesAny(q, SESSION_SCOPE_RES)) return true;
+function hasSessionScopeMarker(text) {
+  return isPersistentDirective(text) || matchesAny(text, SESSION_SCOPE_RES);
+}
 
-  const signals = detectSessionDirectiveSignals(q);
-  const hasSessionField =
+function hasStructuredSessionField(signals) {
+  return (
     signals.executionPolicy != null ||
     signals.reasoningMode != null ||
     signals.conversationStyle != null ||
     signals.operatingMode != null ||
-    signals.evaluationMode != null;
-
-  if (!hasSessionField) return false;
-
-  if (signals.persistent || matchesAny(q, SESSION_SCOPE_RES)) return true;
-
-  const sessionSettingHits = SESSION_SETTING_RES.filter((re) => re.test(q)).length;
-  if (sessionSettingHits >= 2) return true;
-
-  if (
-    sessionSettingHits >= 1 &&
-    (/\bfor today'?s session\b/i.test(q) ||
-      /\b(?:remainder|rest) of (?:this )?(?:conversation|session)\b/i.test(q))
-  ) {
-    return true;
-  }
-
-  return shouldApplyStandaloneSessionConfig(q, signals);
+    signals.evaluationMode != null
+  );
 }
 
-function shouldApplyStandaloneSessionConfig(text, signals) {
-  if (matchesAny(text, SESSION_SETTING_RES) && !isSessionInspectionQuestion(text)) {
-    if (/\bfor today'?s session\b/i.test(text)) return true;
-    if (
-      signals.executionPolicy != null &&
-      /\b(?:don'?t|do not)\s+execute\b/i.test(text)
-    ) {
-      return true;
-    }
-    if (signals.operatingMode != null && /\boperate as\b/i.test(text)) {
-      return true;
-    }
-  }
+function isSessionConfigurationMessage(text) {
+  const q = normalizeText(text);
+  if (!q) return false;
+  if (isSessionInspectionQuestion(q)) return false;
+
+  if (isSessionResetRequest(q)) return true;
+
+  const signals = detectSessionDirectiveSignals(q);
+  if (hasStructuredSessionField(signals)) return true;
+
+  const sessionSettingHits = countSessionSettingHits(q);
+  if (sessionSettingHits >= SESSION_CONFIGURATION_THRESHOLD) return true;
+
+  if (sessionSettingHits >= 1 && hasSessionScopeMarker(q)) return true;
+
   return false;
+}
+
+function computeSessionConfigurationConfidence(q, signals, evidence) {
+  const sessionSettingHits = countSessionSettingHits(q);
+  const hasScope = hasSessionScopeMarker(q);
+  let confidence = 0.82;
+
+  if (hasStructuredSessionField(signals)) confidence += 0.08;
+  if (sessionSettingHits >= SESSION_CONFIGURATION_THRESHOLD) confidence += 0.06;
+  else if (sessionSettingHits >= 1) confidence += 0.04;
+  if (hasScope) confidence += 0.03;
+  if (signals.persistent || isSessionResetRequest(q)) confidence += 0.02;
+  if (evidence.length >= 3) confidence += 0.04;
+  else if (evidence.length >= 2) confidence += 0.02;
+
+  return Math.min(confidence, 0.99);
 }
 
 function isPureQuestion(text) {
@@ -261,9 +279,12 @@ function classifyMessageType(question, input = {}) {
     if (signals.operatingMode) evidence.push(`operating_mode:${signals.operatingMode}`);
     if (signals.evaluationMode) evidence.push(`evaluation_mode:${signals.evaluationMode}`);
     if (signals.conversationStyle) evidence.push(`conversation_style:${signals.conversationStyle}`);
+    if (matchesAny(q, SESSION_SETTING_RES)) evidence.push('session_setting_heuristic');
+    if (hasSessionScopeMarker(q)) evidence.push('session_scope');
+
     return buildMessageClassification(
       MESSAGE_TYPES.SESSION_CONFIGURATION,
-      evidence.length ? 0.97 : 0.88,
+      computeSessionConfigurationConfidence(q, signals, evidence),
       evidence.length ? evidence : ['session_directive'],
       { mutatesSession: true, mutatesMission: false, via: 'session_configuration' }
     );
@@ -389,6 +410,12 @@ module.exports = {
   isCorrectionMessage,
   messageTypeBypassesOwnership,
   messageTypeBypassesReasoning,
+  countSessionSettingHits,
+  hasSessionScopeMarker,
+  computeSessionConfigurationConfidence,
+  SESSION_CONFIGURATION_THRESHOLD,
+  SESSION_SETTING_RES,
+  SESSION_SCOPE_RES,
   CORRECTION_RES,
   APPROVAL_RES,
 };

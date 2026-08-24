@@ -33,6 +33,11 @@ const PERSISTENT_DIRECTIVE_RES = [
   /\buntil i (?:say|tell you) otherwise\b/i,
   /\bfor the rest of this session\b/i,
   /\bfor the remainder of this session\b/i,
+  /\bfor this session\b/i,
+  /\bfor today'?s conversation\b/i,
+  /\bduring this evaluation\b/i,
+  /\bgoing forward\b/i,
+  /\buntil i change it\b/i,
 ];
 
 const SESSION_RESET_RES = [
@@ -130,7 +135,39 @@ const OPERATING_MODE_PATTERNS = [
     mode: OPERATING_MODES.BUSINESS_OPERATION,
   },
   {
-    re: /\b(?:we'?re|i'?m)\s+evaluat(?:e|ing)\b/i,
+    re: /\boperate (?:according to|in) your role\b/i,
+    mode: OPERATING_MODES.BUSINESS_OPERATION,
+  },
+  {
+    re: /\b(?:work|function|behave) as\b/i,
+    mode: OPERATING_MODES.BUSINESS_OPERATION,
+  },
+  {
+    re: /\btreat .+ as (?:a )?(?:real )?production business\b/i,
+    mode: OPERATING_MODES.BUSINESS_OPERATION,
+  },
+  {
+    re: /\btreat .+ like (?:a )?(?:real )?production business\b/i,
+    mode: OPERATING_MODES.BUSINESS_OPERATION,
+  },
+  {
+    re: /\bassume .+ is (?:a )?(?:real )?production business\b/i,
+    mode: OPERATING_MODES.BUSINESS_OPERATION,
+  },
+  {
+    re: /\bconsider .+ (?:a )?(?:real )?production business\b/i,
+    mode: OPERATING_MODES.BUSINESS_OPERATION,
+  },
+  {
+    re: /\b(?:i(?:'d| would)? like to|i want to|we'?re|i'?m)\s+evaluat(?:e|ing)\b/i,
+    mode: OPERATING_MODES.REASONING_EVALUATION,
+  },
+  {
+    re: /\bevaluat(?:e|ing)\b.{0,40}\bhow you operate\b/i,
+    mode: OPERATING_MODES.REASONING_EVALUATION,
+  },
+  {
+    re: /\bfor this session\s+evaluat(?:e|ing)\b/i,
     mode: OPERATING_MODES.REASONING_EVALUATION,
   },
   {
@@ -164,11 +201,12 @@ const OPERATING_MODE_PATTERNS = [
 ];
 
 const EVALUATION_PATTERNS = [
-  { re: /\b(?:we'?re|i'?m)\s+evaluat(?:e|ing)\s+max\b/i, mode: EVALUATION_MODES.MAX },
+  { re: /\b(?:we'?re|i'?m|i(?:'d| would)? like to|i want to)\s+evaluat(?:e|ing)\s+max\b/i, mode: EVALUATION_MODES.MAX },
   { re: /\bevaluat(?:e|ing)\s+max\b/i, mode: EVALUATION_MODES.MAX },
   { re: /\bevaluat(?:e|ing)\s+scout\b/i, mode: EVALUATION_MODES.SCOUT },
   { re: /\bevaluat(?:e|ing)\s+(?:the )?mission runtime\b/i, mode: EVALUATION_MODES.MISSION_RUNTIME },
   { re: /\bevaluat(?:e|ing)\s+(?:the )?business\b/i, mode: EVALUATION_MODES.BUSINESS },
+  { re: /\bevaluat(?:e|ing)\s+how you operate\b/i, mode: EVALUATION_MODES.MAX },
 ];
 
 function matchesAny(text, patterns) {
