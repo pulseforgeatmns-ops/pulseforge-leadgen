@@ -177,6 +177,8 @@ function buildInvestigationMemory(partial = {}) {
     resolvedGaps: Array.isArray(partial.resolvedGaps) ? partial.resolvedGaps : [],
     remainingGaps: Array.isArray(partial.remainingGaps) ? partial.remainingGaps : [],
     sourceChain: Array.isArray(partial.sourceChain) ? partial.sourceChain : [],
+    investigationPlan: partial.investigationPlan || null,
+    providerLearning: partial.providerLearning || null,
     overallConfidence:
       partial.overallConfidence != null ? Number(partial.overallConfidence) : 0,
     verifiedAt: partial.verifiedAt || nowIso(),

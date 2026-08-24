@@ -142,6 +142,8 @@ function buildInvestigationResult(partial = {}) {
     evidenceCollection: partial.evidenceCollection || null,
     providerStrategy: partial.providerStrategy || null,
     evidencePlan: partial.evidencePlan || null,
+    investigationPlan: partial.investigationPlan || null,
+    investigationStatus: partial.investigationStatus || null,
     investigationBoard: partial.investigationBoard || null,
     investigationJournal: partial.investigationJournal || null,
     providerLearning: partial.providerLearning || null,

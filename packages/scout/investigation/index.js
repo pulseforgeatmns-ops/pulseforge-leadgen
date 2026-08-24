@@ -79,6 +79,22 @@ const {
   DEFAULT_PROVIDER_EFFECTIVENESS,
 } = require('./ProviderLearning');
 
+const {
+  buildInvestigationPlan,
+  buildProviderPlan,
+  buildInvestigationStatus,
+  createInvestigationPlan,
+  createInvestigationPlanWithLearning,
+  reviseInvestigationPlan,
+  updatePlanAfterStep,
+  skipRemainingProviders,
+  isStepInPlan,
+  buildInvestigationStatusFromPlan,
+  findReplacementProviders,
+  buildStoppingConditions,
+  PROVIDER_STATUS,
+} = require('./InvestigationPlanBuilder');
+
 module.exports = {
   INVESTIGATION_PHASES,
   GRAPH_NODE_TYPES,
@@ -140,4 +156,17 @@ module.exports = {
   renderJournalTrail,
   createProviderLearningStore,
   estimateInformationGain,
+  buildInvestigationPlan,
+  buildProviderPlan,
+  buildInvestigationStatus,
+  createInvestigationPlan,
+  createInvestigationPlanWithLearning,
+  reviseInvestigationPlan,
+  updatePlanAfterStep,
+  skipRemainingProviders,
+  isStepInPlan,
+  buildInvestigationStatusFromPlan,
+  findReplacementProviders,
+  buildStoppingConditions,
+  PROVIDER_STATUS,
 };

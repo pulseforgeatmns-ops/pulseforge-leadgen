@@ -3,13 +3,14 @@
 /**
  * SPEC-141 — Scout Intelligence Pipeline orchestrator.
  *
- * Mission → Market Understanding → Evidence Planning → Provider Strategy →
+ * Mission → Market Understanding → Investigation Planning → Evidence Planning → Provider Strategy →
  * Candidate Universe Discovery → Evidence Collection → Qualification →
  * Opportunity Ranking → Market Coverage → Mission Intelligence Report
  */
 
 const { INTELLIGENCE_STAGES, buildStageResult, buildIntelligenceResult } = require('./types');
 const { buildMarketDefinition, buildDelegationFromMission } = require('./MarketUnderstanding');
+const { createInvestigationPlan } = require('../investigation/InvestigationPlanBuilder');
 const { buildEvidencePlan } = require('./EvidencePlanning');
 const { buildProviderStrategy } = require('./ProviderStrategy');
 const { discoverCandidateUniverse } = require('./CandidateDiscovery');
@@ -81,21 +82,32 @@ async function runIntelligencePipeline(input = {}) {
   const delegation =
     input.delegation || buildDelegationFromMission(input.mission || {}, input.scoutPayload || {});
 
-  // Stage 2 — Evidence Planning
+  // Stage 2 — Investigation Planning (SPEC-145 / ADR-064)
+  emitIntelligenceStage(INTELLIGENCE_STAGES.INVESTIGATION_PLANNING, { missionId });
+  const investigationPlan = createInvestigationPlan({
+    mission: input.mission || {},
+    marketDefinition,
+    opts,
+  });
+  stages.push(
+    buildStageResult(INTELLIGENCE_STAGES.INVESTIGATION_PLANNING, { output: investigationPlan })
+  );
+
+  // Stage 3 — Evidence Planning
   emitIntelligenceStage(INTELLIGENCE_STAGES.EVIDENCE_PLANNING, { missionId });
   const evidencePlan = buildEvidencePlan(marketDefinition, opts);
   stages.push(
     buildStageResult(INTELLIGENCE_STAGES.EVIDENCE_PLANNING, { output: evidencePlan })
   );
 
-  // Stage 3 — Provider Strategy
+  // Stage 4 — Provider Strategy
   emitIntelligenceStage(INTELLIGENCE_STAGES.PROVIDER_STRATEGY, { missionId });
   const providerStrategy = buildProviderStrategy(evidencePlan, opts);
   stages.push(
     buildStageResult(INTELLIGENCE_STAGES.PROVIDER_STRATEGY, { output: providerStrategy })
   );
 
-  // Stage 4 — Candidate Universe Discovery
+  // Stage 5 — Candidate Universe Discovery
   emitIntelligenceStage(INTELLIGENCE_STAGES.CANDIDATE_DISCOVERY, { missionId });
   const candidateUniverse = await discoverCandidateUniverse({
     marketDefinition,
@@ -113,7 +125,7 @@ async function runIntelligencePipeline(input = {}) {
     })
   );
 
-  // Stage 5 — Evidence Collection
+  // Stage 6 — Evidence Collection
   emitIntelligenceStage(INTELLIGENCE_STAGES.EVIDENCE_COLLECTION, { missionId });
   const evidenceCollection = collectEvidence({
     candidateUniverse,
@@ -128,7 +140,7 @@ async function runIntelligencePipeline(input = {}) {
     })
   );
 
-  // Stage 6 — Qualification
+  // Stage 7 — Qualification
   emitIntelligenceStage(INTELLIGENCE_STAGES.QUALIFICATION, { missionId });
   const qualification = await qualifyCandidates({
     marketDefinition,
@@ -146,7 +158,7 @@ async function runIntelligencePipeline(input = {}) {
     })
   );
 
-  // Stage 7 — Opportunity Ranking
+  // Stage 8 — Opportunity Ranking
   emitIntelligenceStage(INTELLIGENCE_STAGES.OPPORTUNITY_RANKING, { missionId });
   const ranking = rankOpportunities({
     qualification,
@@ -163,7 +175,7 @@ async function runIntelligencePipeline(input = {}) {
     })
   );
 
-  // Stage 8 — Market Coverage
+  // Stage 9 — Market Coverage
   emitIntelligenceStage(INTELLIGENCE_STAGES.MARKET_COVERAGE, { missionId });
   const coverage = analyzeMarketCoverage({
     candidateUniverse,
@@ -181,6 +193,7 @@ async function runIntelligencePipeline(input = {}) {
     ranking,
     evidenceCollection,
     providerStrategy,
+    investigationPlan,
   });
 
   // Delegate to existing acquisition intelligence for AMO-compatible payload
@@ -207,6 +220,7 @@ async function runIntelligencePipeline(input = {}) {
     outcome: candidateUniverse.discovered > 0 ? 'completed' : 'partial',
     stages,
     marketDefinition,
+    investigationPlan,
     evidencePlan,
     providerStrategy,
     candidateUniverse,

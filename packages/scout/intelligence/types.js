@@ -7,6 +7,7 @@
 
 const INTELLIGENCE_STAGES = Object.freeze({
   MARKET_UNDERSTANDING: 'market_understanding',
+  INVESTIGATION_PLANNING: 'investigation_planning',
   EVIDENCE_PLANNING: 'evidence_planning',
   PROVIDER_STRATEGY: 'provider_strategy',
   CANDIDATE_DISCOVERY: 'candidate_universe_discovery',
@@ -72,6 +73,7 @@ function buildIntelligenceResult(partial = {}) {
     outcome: partial.outcome || 'completed',
     stages: Array.isArray(partial.stages) ? partial.stages : [],
     marketDefinition: partial.marketDefinition || null,
+    investigationPlan: partial.investigationPlan || null,
     evidencePlan: partial.evidencePlan || null,
     providerStrategy: partial.providerStrategy || null,
     candidateUniverse: partial.candidateUniverse || null,

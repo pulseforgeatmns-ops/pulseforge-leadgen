@@ -131,8 +131,46 @@ function buildInvestigationReport(input = {}) {
   const estimated = candidateUniverse.estimatedMarket || candidateUniverse.discovered || investigated;
   const coveragePct = estimated > 0 ? Number((investigated / estimated).toFixed(2)) : 0;
 
+  const investigationPlan = input.investigationPlan || null;
+  const investigationStatus = input.investigationStatus || null;
+
+  const investigationStrategy = investigationPlan
+    ? {
+        objective: investigationPlan.objective,
+        hypotheses: (investigationPlan.hypotheses || []).map((h) => ({
+          text: h.text,
+          status: h.status || 'open',
+          gap: h.gap,
+        })),
+        evidenceRequired: investigationPlan.evidenceRequired,
+        providerSequence: (investigationPlan.providerSequence || []).slice(0, 10).map((p) => ({
+          order: p.order,
+          provider: p.providerLabel || p.providerId,
+          gap: p.gap,
+          confidenceGain: p.confidenceGain,
+          status: p.status,
+        })),
+        estimatedUniverse: investigationPlan.estimatedCoverage?.estimatedUniverse,
+        targetCoverage: investigationPlan.estimatedCoverage?.targetCoverage,
+        targetConfidence: investigationPlan.stoppingConditions?.confidenceTarget,
+        stoppingCondition: investigationPlan.stoppingConditions?.expression,
+      }
+    : null;
+
   return {
     kind: 'investigation_report',
+    investigationStrategy,
+    investigationStatus,
+    evidenceSummary: {
+      claims: claims.length,
+      highConfidence,
+      needsInvestigation,
+      conflicts: conflicts.length || graph.summary?.conflicts || 0,
+      overallConfidence,
+      coverage: coveragePct,
+    },
+    remainingUnknowns: investigationStatus?.remainingUnknowns || missingEvidence.missing || [],
+    recommendedNextInvestigation: investigationStatus?.recommendedNextInvestigation || null,
     missionIntelligence: {
       market: marketLabel || 'Target market',
       coverage: coveragePct,
@@ -184,6 +222,7 @@ function buildInvestigationReport(input = {}) {
         (r) => r.credibility && r.credibility.acceptance && r.credibility.acceptance.passes
       ),
       adaptivePlanning: Boolean(input.investigationBoard),
+      explicitInvestigationPlan: Boolean(investigationPlan),
       canAnswerStopReason: Boolean(input.investigationJournal?.stopExplanation),
     },
   };

@@ -195,7 +195,7 @@ function extractInvestigationMemory(investigationResult, context = {}) {
     }
   }
 
-  const resolvedGaps = [];
+  const resolvedGaps = investigationResult.investigationStatus?.completedSteps?.map((s) => s.gap).filter(Boolean) || [];
   const remainingGaps = investigationResult.missingEvidence?.missing || [];
 
   return buildInvestigationMemory({
@@ -208,6 +208,8 @@ function extractInvestigationMemory(investigationResult, context = {}) {
     resolvedGaps,
     remainingGaps,
     sourceChain: attemptedSteps.map((s) => s.providerId || s.capability).filter(Boolean),
+    investigationPlan: investigationResult.investigationPlan || null,
+    providerLearning: investigationResult.providerLearning?.effectiveness || null,
     overallConfidence: investigationResult.overallConfidence || 0,
     verifiedAt: context.completedAt || new Date().toISOString(),
     sourceCount: attemptedSteps.length || 1,

@@ -26,6 +26,8 @@ function buildIntelligenceReport(input = {}) {
   const ranking = input.ranking || {};
   const evidenceCollection = input.evidenceCollection || {};
   const providerStrategy = input.providerStrategy || {};
+  const investigationPlan = input.investigationPlan || null;
+  const investigationStatus = input.investigationStatus || null;
 
   const marketLabel = formatMarketLabel(marketDefinition);
   const ranked = ranking.rankedOpportunities || [];
@@ -67,6 +69,26 @@ function buildIntelligenceReport(input = {}) {
 
   const summary = buildSummary(marketLabel, coverage, ranking);
 
+  const investigationStrategy = investigationPlan
+    ? {
+        objective: investigationPlan.objective,
+        hypotheses: (investigationPlan.hypotheses || []).map((h) => h.text || h),
+        evidenceRequired: investigationPlan.evidenceRequired,
+        providerSequence: (investigationPlan.providerSequence || []).map((p) => ({
+          order: p.order,
+          provider: p.providerLabel || p.providerId,
+          gap: p.gap,
+          estimatedCost: p.estimatedCost,
+          confidenceGain: p.confidenceGain,
+          status: p.status,
+        })),
+        stoppingConditions: investigationPlan.stoppingConditions,
+        estimatedCoverage: investigationPlan.estimatedCoverage,
+        estimatedConfidence: investigationPlan.estimatedConfidence,
+        estimatedCost: investigationPlan.estimatedCost,
+      }
+    : null;
+
   return {
     kind: 'mission_intelligence_report',
     market: marketLabel,
@@ -77,6 +99,15 @@ function buildIntelligenceReport(input = {}) {
       industry: marketDefinition.industry,
       missionGoal: marketDefinition.missionGoal,
     },
+    investigationStrategy,
+    investigationStatus,
+    evidenceSummary: {
+      sourcesUsed: evidenceSources,
+      withEvidence: evidenceCollection.withEvidence || 0,
+      avgConfidence: evidenceCollection.avgConfidence || coverage.confidence || 0,
+    },
+    remainingUnknowns: investigationStatus?.remainingUnknowns || [],
+    recommendedNextInvestigation: investigationStatus?.recommendedNextInvestigation || null,
     estimatedUniverse: coverage.estimatedUniverse,
     coverage: coverage.coveragePct,
     qualified: coverage.qualified,
