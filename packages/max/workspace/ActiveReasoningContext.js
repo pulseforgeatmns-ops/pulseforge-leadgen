@@ -387,6 +387,11 @@ function applyActiveReasoningContinuity(input = {}) {
   const priorArc = getActiveReasoningContext(session);
   const priorState = input.priorState || null;
   const continuityApplied = Boolean(input.continuityApplied);
+  const conversationContract = input.conversationContract || null;
+  const contractGoal =
+    conversationContract && conversationContract.conversationGoal
+      ? conversationContract.conversationGoal
+      : null;
 
   const goalChange = detectConversationGoalChange(question, priorArc, priorState);
   if (goalChange.changed) {
@@ -427,7 +432,11 @@ function applyActiveReasoningContinuity(input = {}) {
   const shouldBind = shouldBindFollowUpToArc(question, continuityApplied);
 
   if (!shouldBind) {
-    return { applied: false, activeReasoningContext: priorArc };
+    return {
+      applied: false,
+      activeReasoningContext: priorArc,
+      conversationGoal: contractGoal || (priorArc && priorArc.conversationGoal),
+    };
   }
 
   const resolvedQuestion = buildResolvedQuestionFromArc(question, priorArc, followUp);
@@ -438,7 +447,7 @@ function applyActiveReasoningContinuity(input = {}) {
     arcFollowUp: followUp,
     resolvedQuestion,
     bindToClaim: priorArc.primaryClaim,
-    conversationGoal: priorArc.conversationGoal,
+    conversationGoal: contractGoal || priorArc.conversationGoal,
   };
 }
 

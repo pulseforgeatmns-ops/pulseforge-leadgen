@@ -504,6 +504,11 @@ function advanceConversationalState(session, turn = {}) {
       (workspaceOwnership && workspaceOwnership.owner) ||
       (priorState && priorState.owner) ||
       ownerForSubject(subject),
+    contract: turn.conversationContract || (priorState && priorState.contract) || null,
+    goal:
+      (turn.conversationContract && turn.conversationContract.conversationGoal) ||
+      (priorState && priorState.goal) ||
+      null,
     activeObject,
     activeConcepts: activeConcepts.length ? activeConcepts : priorState && priorState.activeConcepts || null,
     mode: modeFromIntent(intent),

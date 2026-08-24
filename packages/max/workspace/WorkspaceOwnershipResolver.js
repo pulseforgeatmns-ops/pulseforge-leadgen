@@ -46,6 +46,7 @@ const {
 } = require('./WorkspaceRoutingPatterns');
 const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
 const { missionMayOwnTurn } = require('./OperatorIntentContract');
+const { contractBlocksExecution, contractLocksConversation } = require('./ConversationContract');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const askPathTrace = require('./audit/AskPathTrace');
 
@@ -329,6 +330,7 @@ function claimsKnowledgeRetrieval(question) {
  * @param {object} [input.context]
  * @param {object} [input.conversationSubject] — SPEC-148 subject lock
  * @param {object} [input.operatorIntent] — SPEC-153 structured intent (required at runtime)
+ * @param {object} [input.conversationContract] — SPEC-155 conversation contract
  * @param {object} [input.missionEngine]
  * @param {boolean} [input.missionsEnabled]
  * @param {boolean} [input.resolverEnabled]
@@ -351,6 +353,69 @@ async function resolveWorkspaceOwner(input = {}) {
   // SPEC-149 — subject governs owner before business pipelines.
   const subject = input.conversationSubject || null;
   const operatorIntent = input.operatorIntent || null;
+  const conversationContract =
+    input.conversationContract ||
+    (operatorIntent && operatorIntent.conversationContract) ||
+    null;
+
+  // SPEC-155 — conversation contract precedes ownership (ADR-062).
+  if (contractBlocksExecution(conversationContract)) {
+    const subjectName =
+      (operatorIntent && operatorIntent.subject) ||
+      (subject && subject.subject) ||
+      CONVERSATION_SUBJECTS.IDENTITY;
+    const lockReason = 'conversation_contract_execution_forbidden';
+
+    if (subjectName === CONVERSATION_SUBJECTS.IDENTITY) {
+      askPathTrace.traceOwner(WORKSPACE_OWNERS.CONVERSATION_IDENTITY, lockReason);
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', lockReason);
+      return {
+        owner: WORKSPACE_OWNERS.CONVERSATION_IDENTITY,
+        reason: lockReason,
+        confidence: conversationContract.confidence || 0.97,
+        specialist: null,
+        subjectLock: true,
+        conversationContract,
+      };
+    }
+    if (
+      subjectName === CONVERSATION_SUBJECTS.REFLECTION ||
+      subjectName === 'reasoning'
+    ) {
+      askPathTrace.traceOwner(WORKSPACE_OWNERS.REFLECTION, lockReason);
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', lockReason);
+      return {
+        owner: WORKSPACE_OWNERS.REFLECTION,
+        reason: lockReason,
+        confidence: conversationContract.confidence || 0.95,
+        specialist: null,
+        subjectLock: true,
+        conversationContract,
+      };
+    }
+    if (subjectName === CONVERSATION_SUBJECTS.CONVERSATION) {
+      askPathTrace.traceOwner(WORKSPACE_OWNERS.CONVERSATION_LAYER, lockReason);
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', lockReason);
+      return {
+        owner: WORKSPACE_OWNERS.CONVERSATION_LAYER,
+        reason: lockReason,
+        confidence: conversationContract.confidence || 0.88,
+        specialist: null,
+        subjectLock: true,
+        conversationContract,
+      };
+    }
+    askPathTrace.traceOwner(WORKSPACE_OWNERS.CONVERSATION_IDENTITY, lockReason);
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', lockReason);
+    return {
+      owner: WORKSPACE_OWNERS.CONVERSATION_IDENTITY,
+      reason: lockReason,
+      confidence: conversationContract.confidence || 0.9,
+      specialist: null,
+      subjectLock: contractLocksConversation(conversationContract),
+      conversationContract,
+    };
+  }
 
   // SPEC-153 — conversation lock is authoritative over active mission context.
   if (operatorIntent && operatorIntent.conversationLocked) {

@@ -118,6 +118,25 @@ async function resolveMissionRuntime(input = {}) {
   askPathTrace.traceEnter('resolveMissionRuntime');
   const question = String(input.question || '').trim();
   const operatorIntent = input.operatorIntent || null;
+  const conversationContract =
+    input.conversationContract ||
+    (operatorIntent && operatorIntent.conversationContract) ||
+    null;
+
+  if (conversationContract && conversationContract.executionAllowed === false) {
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', 'conversation_contract_read_only');
+    return {
+      runtime: null,
+      reason: 'conversation_contract_read_only',
+      missionType: null,
+      mission: null,
+      amoMission: null,
+      legacyMission: null,
+      readOnly: true,
+      conversationContract,
+    };
+  }
+
   const amoMission = await resolveAcquisitionActiveMission(input);
   const legacyMission = await resolveLegacyActiveMission(input);
   const amoActive = isAmoMission(amoMission);
