@@ -44,6 +44,27 @@ const REFLECTION_RES = [
   /\bstep back and\b/i,
 ];
 
+/** Operator constraints — not actionable intents (desk workflows, safety rails). */
+const NEGATION_OR_CONSTRAINT_RES = [
+  /\b(?:don'?t|do not)\s+create (?:a )?mission\b/i,
+  /\b(?:don'?t|do not)\s+(?:launch|execute|approve|print|mail)\b/i,
+  /\b(?:don'?t|do not)\s+(?:include|show|add)\b/i,
+  /\bno mission creation\b/i,
+  /\bwithout creating (?:a )?mission\b/i,
+];
+
+function isNegationOrConstraintSegment(text) {
+  return matchesAny(normalizeText(text), NEGATION_OR_CONSTRAINT_RES);
+}
+
+function isActionableIntent(intent) {
+  if (!intent) return false;
+  if (isNegationOrConstraintSegment(intent.segment || intent.sourceText || '')) {
+    return false;
+  }
+  return true;
+}
+
 function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
 }
@@ -98,7 +119,7 @@ function segmentHasSessionConfiguration(segment) {
 function classifySegmentIntent(segment, segmentIndex, input = {}) {
   const text = normalizeText(segment);
   if (!text) return null;
-
+  if (isNegationOrConstraintSegment(text)) return null;
   if (segmentHasSessionConfiguration(text)) {
     return buildDetectedIntent(INTENT_TYPES.SESSION_CONFIGURATION, {
       confidence: 0.92,
@@ -248,15 +269,24 @@ function extractIntents(input = {}) {
  * @returns {boolean}
  */
 function isCompoundMessage(intents) {
-  if (!intents || intents.length <= 1) return false;
-  const types = new Set(intents.map((row) => row.type));
-  if (
-    types.size === 1 &&
-    types.has(INTENT_TYPES.SESSION_CONFIGURATION)
-  ) {
-    return false;
+  const actionable = (intents || []).filter(isActionableIntent);
+  if (actionable.length <= 1) return false;
+
+  const types = new Set(actionable.map((row) => row.type));
+  if (types.size <= 1) return false;
+
+  const has = (type) => types.has(type);
+
+  if (has(INTENT_TYPES.SESSION_CONFIGURATION)) return true;
+  if (has(INTENT_TYPES.SYSTEM_CONFIGURATION)) return true;
+  if (has(INTENT_TYPES.INSPECTION) && has(INTENT_TYPES.MISSION_EXECUTION)) {
+    return true;
   }
-  return types.size > 1;
+  if (has(INTENT_TYPES.BUSINESS_OPERATION) && has(INTENT_TYPES.BUSINESS_REASONING)) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
