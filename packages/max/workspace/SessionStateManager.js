@@ -4,7 +4,7 @@
  * SPEC-148 — Session State Manager (ADR-068).
  *
  * Pipeline position:
- *   Raw Operator Message → Session State Manager → Conversation Contract → …
+ *   Raw Operator Message → Message Type Classifier (SPEC-149) → Session State Manager → Conversation Contract → …
  *
  * Session State precedes conversation analysis. Persistent operator directives
  * become explicit Session State — never inferred solely from recent prompts.

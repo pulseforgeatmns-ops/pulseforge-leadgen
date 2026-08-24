@@ -48,6 +48,8 @@ const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
 const { missionMayOwnTurn } = require('./OperatorIntentContract');
 const { contractBlocksExecution, contractLocksConversation } = require('./ConversationContract');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
+const { MESSAGE_TYPES } = require('./MessageType');
+const { messageTypeBypassesOwnership } = require('./MessageTypeClassifier');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const WORKSPACE_OWNERS = Object.freeze({
@@ -357,6 +359,26 @@ async function resolveWorkspaceOwner(input = {}) {
     input.conversationContract ||
     (operatorIntent && operatorIntent.conversationContract) ||
     null;
+
+  // SPEC-149 — SESSION_CONFIGURATION bypasses ownership (ADR-069).
+  const messageClassification =
+    input.messageClassification ||
+    (operatorIntent && operatorIntent.messageClassification) ||
+    null;
+  if (
+    messageClassification &&
+    messageClassification.type === MESSAGE_TYPES.SESSION_CONFIGURATION &&
+    messageTypeBypassesOwnership(messageClassification.type)
+  ) {
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'session_configuration_bypass');
+    return {
+      owner: 'session_state_manager',
+      reason: 'session_configuration_bypass',
+      confidence: messageClassification.confidence || 1,
+      specialist: null,
+      fallback: false,
+    };
+  }
 
   // SPEC-155 — conversation contract precedes ownership (ADR-062).
   if (contractBlocksExecution(conversationContract)) {

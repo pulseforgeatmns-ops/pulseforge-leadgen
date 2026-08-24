@@ -61,6 +61,12 @@ const {
   formatSessionInspection,
 } = require('./SessionStateManager');
 const { getSessionState } = require('./SessionState');
+const { MESSAGE_TYPES } = require('./MessageType');
+const {
+  resolveMessageType,
+  messageTypeBypassesReasoning,
+} = require('./MessageTypeClassifier');
+const { buildSessionConfigurationResponse } = require('./SessionConfigurationAcknowledgement');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
@@ -410,6 +416,7 @@ class WorkspaceEngine {
     let operatorIntent = null;
     let conversationContract = null;
     let sessionState = null;
+    let messageClassification = null;
     let traceAskReturn = (label, value, meta = {}) => value;
 
     try {
@@ -442,6 +449,19 @@ class WorkspaceEngine {
       text: question,
     });
 
+    // SPEC-149 — Message Type Classifier precedes cognition (ADR-069).
+    const messageTypeResolution = resolveMessageType({ question, session });
+    messageClassification = messageTypeResolution.classification;
+    if (session.context && typeof session.context === 'object') {
+      session.context.messageClassification = messageClassification;
+    }
+    askPathTrace.traceBranch('message_classification', {
+      type: messageClassification.type,
+      confidence: messageClassification.confidence,
+      mutatesSession: messageClassification.mutatesSession,
+      mutatesMission: messageClassification.mutatesMission,
+    });
+
     // SPEC-146 — Operator Cognition runs before mission runtime or execution.
     const previousTurnContext =
       session.context && typeof session.context === 'object'
@@ -469,6 +489,94 @@ class WorkspaceEngine {
       evaluationMode: sessionState.evaluationMode,
       changed: sessionStateResolution.changed,
     });
+
+    // SPEC-149 — SESSION_CONFIGURATION bypasses reasoning, ownership, and mission runtime.
+    if (
+      messageClassification.type === MESSAGE_TYPES.SESSION_CONFIGURATION &&
+      messageTypeBypassesReasoning(messageClassification.type)
+    ) {
+      askPathTrace.traceBranch('owner_pipeline:session_configuration');
+      const sessionConfigTurn = buildSessionConfigurationResponse({
+        sessionState,
+        changed: sessionStateResolution.changed,
+        messageClassification,
+      });
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'session_configuration';
+      }
+      const presentedConfig = await this._presentation.present(sessionConfigTurn.structured);
+      const proseConfig = presentedConfig.prose || sessionConfigTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseConfig,
+        structured: sessionConfigTurn.structured,
+      });
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'session_configuration', {
+        responseOwner: 'session_state_manager',
+        pipeline: 'SessionStateManager',
+      });
+      return attachRoutingTrace(
+        {
+          sessionId: session.id,
+          prose: proseConfig,
+          structured: sessionConfigTurn.structured,
+          metadata: {
+            ...(presentedConfig.metadata || {}),
+            messageClassification,
+            sessionState,
+          },
+          suggestions: [],
+          recommendedActions: sessionConfigTurn.structured.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedConfig.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: {
+            action: 'session_configured',
+            reason: sessionConfigTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent: null,
+          conversationSubject: null,
+          messageClassification,
+          sessionState,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: sessionConfigTurn.reason,
+            missionType: null,
+            missionIntent: null,
+            confidence: messageClassification.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: sessionConfigTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership: {
+            owner: 'session_state_manager',
+            reason: 'session_configuration_bypass',
+            confidence: messageClassification.confidence,
+            specialist: null,
+            fallback: false,
+          },
+        },
+        {
+          pipeline: 'SessionStateManager',
+          claimedBy: 'message_type_classifier',
+          messageClassification,
+          sessionState,
+        }
+      );
+    }
 
     // SPEC-155 — Conversation Contract precedes ownership (ADR-062).
     const contractResolution = resolveConversationContract({
@@ -591,6 +699,7 @@ class WorkspaceEngine {
         resolvedQuestion,
         activeReasoningContext,
         conversationContract,
+        messageClassification,
       });
       if (enriched && typeof enriched === 'object') {
         enriched.conversationalState = conversationalState;
@@ -598,6 +707,7 @@ class WorkspaceEngine {
         enriched.activeReasoningContext = activeReasoningContext;
         enriched.conversationContract = conversationContract;
         enriched.sessionState = sessionState;
+        enriched.messageClassification = messageClassification;
       }
       return enriched;
     };
