@@ -55,18 +55,18 @@ const {
 } = require('../operatorCognition');
 const { analyzeOperatorIntent } = require('./OperatorIntent');
 const { resolveConversationContract } = require('./ConversationContractEngine');
-const {
-  resolveSessionState,
-  isSessionInspectionQuestion,
-  formatSessionInspection,
-} = require('./SessionStateManager');
-const { getSessionState } = require('./SessionState');
+const { resolveSessionState } = require('./SessionStateManager');
 const { MESSAGE_TYPES } = require('./MessageType');
 const {
   resolveMessageType,
   messageTypeBypassesReasoning,
 } = require('./MessageTypeClassifier');
 const { buildSessionConfigurationResponse } = require('./SessionConfigurationAcknowledgement');
+const {
+  inspectCurrentSession,
+  explainCurrentSession,
+  isSessionStateExplanationQuestion,
+} = require('./SessionInspectionOperator');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
@@ -578,6 +578,96 @@ class WorkspaceEngine {
       );
     }
 
+    // SPEC-150 — SESSION_INSPECTION reads stored Session State (ADR-070).
+    if (
+      messageClassification.type === MESSAGE_TYPES.SESSION_INSPECTION &&
+      messageTypeBypassesReasoning(messageClassification.type)
+    ) {
+      askPathTrace.traceBranch('owner_pipeline:session_inspection');
+      const inspectionCognition = classifyOperatorCognition(question);
+      const inspectionTurn = inspectCurrentSession({
+        session,
+        sessionState,
+        messageClassification,
+        conversationIntent: inspectionCognition,
+      });
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'session_inspection';
+      }
+      const presentedInspection = await this._presentation.present(inspectionTurn.structured);
+      const proseInspection = presentedInspection.prose || inspectionTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseInspection,
+        structured: inspectionTurn.structured,
+      });
+      askPathTrace.traceEarlyReturn('WorkspaceEngine.ask', 'session_inspection', {
+        responseOwner: 'session_state_manager',
+        pipeline: 'SessionStateManager',
+      });
+      return attachRoutingTrace(
+        {
+          sessionId: session.id,
+          prose: proseInspection,
+          structured: inspectionTurn.structured,
+          metadata: {
+            ...(presentedInspection.metadata || {}),
+            messageClassification,
+            sessionState,
+          },
+          suggestions: [],
+          recommendedActions: inspectionTurn.structured.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedInspection.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: {
+            action: 'session_inspected',
+            reason: inspectionTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent: inspectionCognition,
+          conversationSubject: null,
+          messageClassification,
+          sessionState,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: inspectionTurn.reason,
+            missionType: null,
+            missionIntent: inspectionCognition && inspectionCognition.intent,
+            confidence: messageClassification.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: inspectionTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership: {
+            owner: 'session_state_manager',
+            reason: 'session_inspection_bypass',
+            confidence: messageClassification.confidence,
+            specialist: null,
+            fallback: false,
+          },
+        },
+        {
+          pipeline: 'SessionStateManager',
+          claimedBy: 'session_inspection_operator',
+          messageClassification,
+          sessionState,
+        }
+      );
+    }
+
     // SPEC-155 — Conversation Contract precedes ownership (ADR-062).
     const contractResolution = resolveConversationContract({
       question,
@@ -711,6 +801,90 @@ class WorkspaceEngine {
       }
       return enriched;
     };
+
+    // SPEC-150 — "Why are you using that operating mode?" reasons over stored Session State.
+    if (isSessionStateExplanationQuestion(question)) {
+      askPathTrace.traceBranch('owner_pipeline:session_state_explanation');
+      const explanationTurn = explainCurrentSession({
+        session,
+        sessionState,
+        question,
+        conversationIntent,
+        messageClassification,
+      });
+      session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+      if (session.context && typeof session.context === 'object') {
+        session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        session.context._answerCorpus = 'session_state_explanation';
+      }
+      const presentedExplanation = await this._presentation.present(explanationTurn.structured);
+      const proseExplanation = presentedExplanation.prose || explanationTurn.prose;
+      this._sessions.appendMessage(session.id, {
+        role: 'max',
+        text: proseExplanation,
+        structured: explanationTurn.structured,
+      });
+      return traceAskReturn(
+        'session_state_explanation',
+        {
+          sessionId: session.id,
+          prose: proseExplanation,
+          structured: explanationTurn.structured,
+          metadata: {
+            ...(presentedExplanation.metadata || {}),
+            conversationIntent,
+            messageClassification,
+            sessionState,
+          },
+          suggestions: [],
+          recommendedActions: explanationTurn.structured.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedExplanation.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: null,
+          resolution: {
+            action: 'explained',
+            reason: explanationTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent,
+          conversationSubject,
+          messageClassification,
+          sessionState,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: explanationTurn.reason,
+            missionType: null,
+            missionIntent: conversationIntent && conversationIntent.intent,
+            confidence: (conversationIntent && conversationIntent.confidence) || 0.9,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: explanationTurn.reason,
+            missionType: null,
+            missionId: null,
+          },
+          workspaceOwnership: {
+            owner: 'session_state_manager',
+            reason: 'session_state_explanation',
+            confidence: (conversationIntent && conversationIntent.confidence) || 0.9,
+            specialist: null,
+            fallback: false,
+          },
+        },
+        {
+          responseOwner: 'session_state_manager',
+          pipeline: 'SessionStateManager',
+          claimedBy: 'session_inspection_operator',
+        }
+      );
+    }
 
     // SPEC-125 — Ownership-first runtime. Subject governs owner before business pipelines.
     const ownershipAudit =

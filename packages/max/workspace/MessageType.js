@@ -9,6 +9,7 @@ const MESSAGE_TYPES = Object.freeze({
   QUESTION: 'question',
   COMMAND: 'command',
   SESSION_CONFIGURATION: 'session_configuration',
+  SESSION_INSPECTION: 'session_inspection',
   MISSION_CREATION: 'mission_creation',
   MISSION_EXECUTION: 'mission_execution',
   INFORMATION: 'information',

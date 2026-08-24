@@ -333,6 +333,9 @@ function buildResponseMetadata(partial = {}) {
     meta.conversationIntent = String(partial.conversationIntent);
   }
   if (partial.readOnlyCognition === true) meta.readOnlyCognition = true;
+  if (partial.sessionInspection === true) meta.sessionInspection = true;
+  if (partial.sessionStateRead === true) meta.sessionStateRead = true;
+  if (partial.sessionStateEvidence === true) meta.sessionStateEvidence = true;
   return meta;
 }
 

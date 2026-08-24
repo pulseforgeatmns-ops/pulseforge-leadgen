@@ -360,20 +360,23 @@ async function resolveWorkspaceOwner(input = {}) {
     (operatorIntent && operatorIntent.conversationContract) ||
     null;
 
-  // SPEC-149 — SESSION_CONFIGURATION bypasses ownership (ADR-069).
+  // SPEC-149 / SPEC-150 — session configuration and inspection bypass ownership.
   const messageClassification =
     input.messageClassification ||
     (operatorIntent && operatorIntent.messageClassification) ||
     null;
   if (
     messageClassification &&
-    messageClassification.type === MESSAGE_TYPES.SESSION_CONFIGURATION &&
     messageTypeBypassesOwnership(messageClassification.type)
   ) {
-    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'session_configuration_bypass');
+    const bypassReason =
+      messageClassification.type === MESSAGE_TYPES.SESSION_INSPECTION
+        ? 'session_inspection_bypass'
+        : 'session_configuration_bypass';
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', bypassReason);
     return {
       owner: 'session_state_manager',
-      reason: 'session_configuration_bypass',
+      reason: bypassReason,
       confidence: messageClassification.confidence || 1,
       specialist: null,
       fallback: false,

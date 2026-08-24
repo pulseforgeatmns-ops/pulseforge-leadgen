@@ -24,6 +24,7 @@ Introduce a **Message Type Classifier (MTC)** that determines the communicative 
 Raw Operator Message
   → Message Type Classifier (SPEC-149)
   → Session State Manager (SPEC-148, if SESSION_CONFIGURATION)
+  → Session Inspection (SPEC-150, if SESSION_INSPECTION)
   → Conversation Contract Engine (SPEC-155)
   → Operator Intent (SPEC-153)
   → Workspace Ownership
@@ -38,6 +39,7 @@ Raw Operator Message
 | `QUESTION` | Operator seeks understanding | Operator Cognition |
 | `COMMAND` | Immediate action | Mission Runtime |
 | `SESSION_CONFIGURATION` | Persistent operating instructions | Session State Manager (ack only) |
+| `SESSION_INSPECTION` | Questions about the current session | Session State Manager (read only) |
 | `MISSION_CREATION` | Create new mission | Mission Runtime |
 | `MISSION_EXECUTION` | Advance active mission | Mission Runtime |
 | `INFORMATION` | Provide facts | Knowledge / Second Brain |
@@ -56,7 +58,8 @@ Raw Operator Message
 | `packages/max/workspace/MessageTypeClassifier.js` | `classifyMessageType()` / `resolveMessageType()` — first step in `WorkspaceEngine.ask` |
 | `packages/max/workspace/SessionConfigurationAcknowledgement.js` | Acknowledgement response for `SESSION_CONFIGURATION` turns |
 | `packages/max/workspace/SessionStateManager.js` | Session mutations when `mutatesSession` is true |
-| `packages/max/workspace/WorkspaceEngine.js` | Early return for session configuration; passes classification downstream |
+| `packages/max/workspace/SessionInspectionOperator.js` | Inspection/explanation for `SESSION_INSPECTION` and session-why questions |
+| `packages/max/workspace/WorkspaceEngine.js` | Early return for session configuration and inspection; passes classification downstream |
 | `packages/max/workspace/SubjectRoutingTrace.js` | Includes `messageType` on every routing trace |
 
 ## Acceptance Tests
@@ -74,6 +77,7 @@ Raw Operator Message
 
 - Every message has exactly one primary Message Type
 - Session Configuration bypasses reasoning and ownership
+- Session Inspection reads stored Session State and bypasses business reasoning
 - Reasoning never classifies communication purpose
 - Session mutations occur before downstream pipelines
 
@@ -83,6 +87,7 @@ Raw Operator Message
 |---|---|
 | Message Type | What kind of communication is this? |
 | Session State | How should Max operate? |
+| Session Inspection | How is Max currently operating? |
 | Conversation Contract | How should this dialogue behave? |
 | Operator Intent | What is requested on this turn? |
 | Reasoning | Given all of the above, how should I think? |

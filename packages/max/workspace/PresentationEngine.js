@@ -112,6 +112,20 @@ class PresentationEngine {
       };
     }
 
+    // SPEC-150 — session inspection is a stored-state snapshot; do not rephrase.
+    if (metadata.sessionInspection === true) {
+      prose = structured.answer ? String(structured.answer).trim() : '';
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'session_inspection',
+        },
+        presentation: 'session_inspection',
+      };
+    }
+
     // SPEC-147 — conversational intelligence responses are already natural-language prose.
     if (metadata.conversationalIntelligence === true) {
       prose = formatDeterministicProse(structured);

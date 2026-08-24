@@ -135,7 +135,7 @@ describe('SPEC-149 — Message Type Classification', () => {
 
       assert.equal(result.messageClassification.type, MESSAGE_TYPES.SESSION_CONFIGURATION);
       assert.match(result.prose, /^Acknowledged\./);
-      assert.match(result.prose, /Operating Mode:/);
+      assert.match(result.prose, /Operating Mode/);
       assert.match(result.prose, /Execution Policy: Read Only/);
       assert.doesNotMatch(result.prose, /misunderstand/i);
       assert.doesNotMatch(result.prose, /Anchor Cleaning customers/i);
