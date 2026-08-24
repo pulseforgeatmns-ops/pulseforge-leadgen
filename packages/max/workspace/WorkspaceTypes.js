@@ -313,6 +313,11 @@ function buildResponseMetadata(partial = {}) {
   if (partial.identityConversation === true) meta.identityConversation = true;
   if (partial.operatingModelReflection === true) meta.operatingModelReflection = true;
   if (partial.operatingModelReflection === false) meta.operatingModelReflection = false;
+  if (partial.conceptGraphReasoning === true) meta.conceptGraphReasoning = true;
+  if (partial.conceptGraphReasoning === false) meta.conceptGraphReasoning = false;
+  if (Array.isArray(partial.activeConcepts) && partial.activeConcepts.length) {
+    meta.activeConcepts = partial.activeConcepts.map(String);
+  }
   if (partial.operatingModelReasoning != null) {
     meta.operatingModelReasoning = partial.operatingModelReasoning;
   }

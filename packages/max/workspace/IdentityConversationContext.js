@@ -29,6 +29,7 @@ const {
   planOperatingModelQuery,
   reasoningMetadata,
 } = require('../identity/IdentityReasoning');
+const { getConversationalState } = require('./ConversationalStateMachine');
 
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -44,6 +45,23 @@ function capabilitySummary(registry) {
 function classifyIdentityQuestion(question) {
   const q = normalizeText(question).toLowerCase();
   if (/\b(?:who are you|tell me about yourself)\b/.test(q)) return 'introduction';
+  if (/\bwhen should i ignore\b/.test(q)) return 'failure_modes';
+  if (/\bscout disagrees with paige\b/.test(q) || /\bif scout and paige disagreed\b/.test(q)) {
+    return 'operating_model_reasoning';
+  }
+  if (/\b(?:who ultimately decides|can scout approve|can paige approve|who can approve)\b/.test(q)) {
+    return 'operating_model_reasoning';
+  }
+  if (/\bwhy shouldn'?t scout\b/.test(q) || /\bwhy not merge scout\b/.test(q)) {
+    return 'operating_model_reasoning';
+  }
+  if (/\bwhy (?:does|do) pulseforge separate specialists\b/.test(q)) return 'operating_model_reasoning';
+  if (/\bwhy preserve operator authority\b/.test(q)) return 'operating_model_reasoning';
+  if (/\bwhat should never belong to you\b/.test(q)) return 'operating_model_reasoning';
+  if (/\bwhat decisions require me\b/.test(q)) return 'operating_model_reasoning';
+  if (/\bhow do scout and paige depend\b/.test(q)) return 'operating_model_reasoning';
+  if (/^why\b/.test(q)) return 'operating_model_reasoning';
+  if (/\b(?:different from|vs\.?|versus|compare)\b/.test(q)) return 'operating_model_reasoning';
   if (/\b(?:capabilities|what can you do)\b/.test(q)) return 'capabilities';
   if (/\b(?:responsibilit|boundar)\b/.test(q)) return 'boundaries';
   if (/\b(?:specialists?|scout|paige|emmett|riley|cal|vera|rex|sam|roster|team)\b/.test(q)) {
@@ -55,16 +73,6 @@ function classifyIdentityQuestion(question) {
   if (/\b(?:decision framework|how do you recommend|recommendation)\b/.test(q)) {
     return 'decision_framework';
   }
-  if (/\bwhen should i ignore\b/.test(q)) return 'failure_modes';
-  if (/\bwhy shouldn'?t scout\b/.test(q) || /\bwhy not merge scout\b/.test(q)) {
-    return 'operating_model_reasoning';
-  }
-  if (/\bwhy (?:does|do) pulseforge separate specialists\b/.test(q)) return 'operating_model_reasoning';
-  if (/\bwhy preserve operator authority\b/.test(q)) return 'operating_model_reasoning';
-  if (/\bwhat should never belong to you\b/.test(q)) return 'operating_model_reasoning';
-  if (/\bwhat decisions require me\b/.test(q)) return 'operating_model_reasoning';
-  if (/^why\b/.test(q)) return 'operating_model_reasoning';
-  if (/\b(?:different from|vs\.?|versus|compare)\b/.test(q)) return 'operating_model_reasoning';
   return 'role';
 }
 
@@ -136,7 +144,15 @@ function buildIdentityStructured(prose, conversationIntent, conversationSubject,
     'SPEC-149A — Identity subject routed before business intelligence.',
     'Response grounded in Max operating-system role, capability registry, and delegation boundaries only.',
   ];
-  if (reasoningMeta && reasoningMeta.operatingModelReflection) {
+  if (reasoningMeta && reasoningMeta.conceptGraphReasoning) {
+    reasoning.push(
+      'SPEC-152 — Concept graph reasoning synthesized from relationship traversal.',
+      `Reasoning goal: ${reasoningMeta.goal || reasoningMeta.reasoningTarget || 'unknown'}.`
+    );
+    if (reasoningMeta.concepts && reasoningMeta.concepts.length) {
+      reasoning.push(`Active concepts: ${reasoningMeta.concepts.join(', ')}.`);
+    }
+  } else if (reasoningMeta && reasoningMeta.operatingModelReflection) {
     reasoning.push(
       'SPEC-151 — Operating model reflection synthesized from structured concepts.',
       `Reasoning target: ${reasoningMeta.reasoningTarget || 'unknown'}.`
@@ -151,9 +167,11 @@ function buildIdentityStructured(prose, conversationIntent, conversationSubject,
     confidence: reasoningMeta && reasoningMeta.operatingModelReflection ? 0.97 : 0.96,
     nextInvestigations: [],
     recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
-    confidenceContributors: reasoningMeta && reasoningMeta.operatingModelReflection
-      ? ['spec_151', 'operating_model_reflection']
-      : ['spec_149a', 'identity_conversation'],
+    confidenceContributors: reasoningMeta && reasoningMeta.conceptGraphReasoning
+      ? ['spec_152', 'concept_graph_reasoning']
+      : reasoningMeta && reasoningMeta.operatingModelReflection
+        ? ['spec_151', 'operating_model_reflection']
+        : ['spec_149a', 'identity_conversation'],
     timelineReferences: [],
     relatedEntities: [],
     metadata: {
@@ -170,6 +188,8 @@ function buildIdentityStructured(prose, conversationIntent, conversationSubject,
       identityConversation: true,
       businessIntelligenceUsed: false,
       operatingModelReflection: Boolean(reasoningMeta && reasoningMeta.operatingModelReflection),
+      conceptGraphReasoning: Boolean(reasoningMeta && reasoningMeta.conceptGraphReasoning),
+      activeConcepts: reasoningMeta && reasoningMeta.activeConcepts ? reasoningMeta.activeConcepts : null,
       operatingModelReasoning: reasoningMeta || null,
       conversationSubject: conversationSubject && conversationSubject.subject,
       conversationIntent: conversationIntent && conversationIntent.intent,
@@ -208,26 +228,36 @@ async function maybeHandleIdentityTurn(input = {}) {
   let prose;
   let reasoningMeta = null;
   let answerKind = classifyIdentityQuestion(question);
+  const priorState = getConversationalState(session);
+  const activeConcepts = priorState && priorState.activeConcepts ? priorState.activeConcepts : null;
 
   if (shouldUseOperatingModelReasoning({
     question,
     resolvedQuestion: input.resolvedQuestion,
     conversationIntent,
     session,
+    activeConcepts,
   })) {
     const query = planOperatingModelQuery({
       question,
       resolvedQuestion: input.resolvedQuestion,
       conversationIntent,
       session,
+      activeConcepts,
     });
     prose = composeIdentityReasoning({
       question,
       resolvedQuestion: input.resolvedQuestion,
       conversationIntent,
       session,
+      activeConcepts,
     });
-    reasoningMeta = reasoningMetadata(query);
+    reasoningMeta = reasoningMetadata({
+      ...query,
+      question,
+      resolvedQuestion: input.resolvedQuestion,
+      conversationIntent,
+    });
     if (prose) {
       answerKind = 'operating_model_reasoning';
     }
@@ -244,17 +274,21 @@ async function maybeHandleIdentityTurn(input = {}) {
     reasoningMeta
   );
 
-  askPathTrace.traceEarlyReturn('maybeHandleIdentityTurn', reasoningMeta && reasoningMeta.operatingModelReflection
-    ? 'operating_model_reasoning'
-    : 'identity_composed');
+  askPathTrace.traceEarlyReturn('maybeHandleIdentityTurn', reasoningMeta && reasoningMeta.conceptGraphReasoning
+    ? 'concept_graph_reasoning'
+    : reasoningMeta && reasoningMeta.operatingModelReflection
+      ? 'operating_model_reasoning'
+      : 'identity_composed');
 
   return {
     handled: true,
     prose,
     structured,
-    reason: reasoningMeta && reasoningMeta.operatingModelReflection
-      ? 'operating_model_reflection'
-      : 'identity_conversation',
+    reason: reasoningMeta && reasoningMeta.conceptGraphReasoning
+      ? 'concept_graph_reasoning'
+      : reasoningMeta && reasoningMeta.operatingModelReflection
+        ? 'operating_model_reflection'
+        : 'identity_conversation',
     answered: { kind: 'identity', identityKind: answerKind },
   };
 }

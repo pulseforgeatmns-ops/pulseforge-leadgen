@@ -14,6 +14,7 @@ const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
 const { WORKSPACE_OWNERS } = require('./WorkspaceOwnershipResolver');
 const { THINKING_MODES, thinkingModeCategory } = require('../operatorCognition/ThinkingModes');
 const { attachSpecialists } = require('../operatorCognition/OperatorCognition');
+const { mergeConcepts } = require('../reasoning/ConceptGraph');
 
 const SPECIALIST_NAMES =
   'scout|paige|emmett|max|riley|sam|link|faye|ivy|cal|vera|rex|penny';
@@ -30,6 +31,8 @@ const CONVERSATIONAL_MODES = Object.freeze({
   CONTINUATION: 'continuation',
   /** SPEC-151 — operating model reflection (why/how/compare/should/when). */
   OPERATING_MODEL_REFLECTION: 'operating_model_reflection',
+  /** SPEC-152 — concept graph reasoning over relationships. */
+  CONCEPT_GRAPH_REASONING: 'concept_graph_reasoning',
 });
 
 const SUBJECT_TO_OWNER = Object.freeze({
@@ -142,6 +145,8 @@ function modeFromIntent(intent) {
       return CONVERSATIONAL_MODES.REFLECTION;
     case THINKING_MODES.OPERATING_MODEL:
       return CONVERSATIONAL_MODES.OPERATING_MODEL_REFLECTION;
+    case THINKING_MODES.CONCEPT_GRAPH:
+      return CONVERSATIONAL_MODES.CONCEPT_GRAPH_REASONING;
     default:
       return CONVERSATIONAL_MODES.EXPLANATION;
   }
@@ -228,9 +233,14 @@ function isIdentityOperatingModelFollowUp(question, priorState) {
     /\bwhen should i ignore\b/i,
     /\bwhy shouldn'?t scout\b/i,
     /\bhow is (?:that|this|it|max|you) different\b/i,
+    /\bhow are you different\b/i,
     /\bwhat should never belong\b/i,
     /\bwhat decisions require me\b/i,
     /\bwhy (?:not merge|separate specialists)\b/i,
+    /\b(?:who decides|who ultimately decides|who wins|who can)\b/i,
+    /\bcan scout approve\b/i,
+    /\bwhy not\b/i,
+    /\bexplain\b/i,
     /\bvs\.?\s+(?:scout|paige|rex|emmett|sam|riley|cal|vera|max)\b/i,
     /\bdifferent from\s+(?:scout|paige|rex|emmett|sam|riley|cal|vera)\b/i,
   ];
@@ -475,6 +485,19 @@ function advanceConversationalState(session, turn = {}) {
       conversationIntent.compareObjects[0]) ||
     deriveActiveObject(subject, question, priorState);
 
+  const activeConcepts = mergeConcepts(
+    priorState && priorState.activeConcepts,
+    (turn.structured &&
+      turn.structured.metadata &&
+      turn.structured.metadata.operatingModelReasoning &&
+      turn.structured.metadata.operatingModelReasoning.activeConcepts) ||
+      (turn.structured &&
+        turn.structured.metadata &&
+        turn.structured.metadata.operatingModelReasoning &&
+        turn.structured.metadata.operatingModelReasoning.concepts) ||
+      null
+  );
+
   const next = {
     subject,
     owner:
@@ -482,6 +505,7 @@ function advanceConversationalState(session, turn = {}) {
       (priorState && priorState.owner) ||
       ownerForSubject(subject),
     activeObject,
+    activeConcepts: activeConcepts.length ? activeConcepts : priorState && priorState.activeConcepts || null,
     mode: modeFromIntent(intent),
     depth: subjectChanged ? 1 : (priorState && priorState.depth ? priorState.depth + 1 : 1),
     objects:

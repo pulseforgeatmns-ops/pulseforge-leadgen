@@ -19,6 +19,8 @@ const THINKING_MODES = Object.freeze({
   RESUME: 'resume',
   /** SPEC-151 — reasoning over the operating model (why/how/compare/should/when). */
   OPERATING_MODEL: 'operating_model',
+  /** SPEC-152 — concept graph traversal over relationships. */
+  CONCEPT_GRAPH: 'concept_graph',
 });
 
 const THINKING_MODE_CATEGORY = Object.freeze({
@@ -34,6 +36,7 @@ const THINKING_MODE_CATEGORY = Object.freeze({
   [THINKING_MODES.TEACH]: 'education',
   [THINKING_MODES.RESUME]: 'continuation',
   [THINKING_MODES.OPERATING_MODEL]: 'operating_model_reflection',
+  [THINKING_MODES.CONCEPT_GRAPH]: 'concept_graph_reasoning',
 });
 
 /** Only Execute and Edit may mutate mission state (SPEC-146 execution guard). */

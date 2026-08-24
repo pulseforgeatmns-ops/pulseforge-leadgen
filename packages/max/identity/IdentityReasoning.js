@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * SPEC-151 — Identity Reasoning Layer.
- * Converts operator questions into operating-model queries and synthesizes
- * responses from structured concepts — not retrieved paragraphs.
+ * SPEC-151 / SPEC-152 — Identity Reasoning Layer.
+ * Converts operator questions into concept-graph plans and synthesizes
+ * responses by traversing relationships — not retrieved paragraphs.
  */
 
 const { THINKING_MODES } = require('../operatorCognition/ThinkingModes');
@@ -13,6 +13,14 @@ const {
   listSpecialistNames,
 } = require('./OperatingModel');
 const { assertIdentityCompliance, composeWorkspaceIntroduction, operatingModeLabel } = require('./MaxIdentity');
+const {
+  planConceptQuery,
+  shouldUseConceptGraphReasoning,
+  parseResolvedQuestion: parseConceptResolvedQuestion,
+  REASONING_GOALS,
+  composeConceptGraphAnswer,
+  joinSentences,
+} = require('../reasoning/ConceptGraph');
 
 const REASONING_TARGETS = Object.freeze({
   ROLE: 'role',
@@ -29,6 +37,18 @@ const REASONING_TARGETS = Object.freeze({
   SPECIALIST_SEPARATION: 'specialist_separation',
 });
 
+const GOAL_TO_TARGET = Object.freeze({
+  [REASONING_GOALS.EXPLAIN_IDENTITY]: REASONING_TARGETS.WHY,
+  [REASONING_GOALS.EXPLAIN_AUTHORITY]: REASONING_TARGETS.AUTHORITY,
+  [REASONING_GOALS.COMPARE_ROLES]: REASONING_TARGETS.COMPARE,
+  [REASONING_GOALS.RESOLVE_CONFLICT]: REASONING_TARGETS.RELATIONSHIPS,
+  [REASONING_GOALS.EXPLAIN_BOUNDARIES]: REASONING_TARGETS.BOUNDARIES,
+  [REASONING_GOALS.EXPLAIN_FAILURE_MODES]: REASONING_TARGETS.FAILURE_MODES,
+  [REASONING_GOALS.EXPLAIN_RELATIONSHIPS]: REASONING_TARGETS.RELATIONSHIPS,
+  [REASONING_GOALS.EXPLAIN_SPECIALIZATION]: REASONING_TARGETS.SPECIALIST_SEPARATION,
+  [REASONING_GOALS.EXPLAIN_DEPENDENCY]: REASONING_TARGETS.RELATIONSHIPS,
+});
+
 function normalizeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
@@ -37,17 +57,6 @@ function capitalizeFirst(text) {
   const s = normalizeText(text);
   if (!s) return s;
   return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function joinSentences(parts) {
-  return parts
-    .filter(Boolean)
-    .map((part) => {
-      const trimmed = normalizeText(part);
-      if (!trimmed) return '';
-      return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
-    })
-    .join(' ');
 }
 
 function parseResolvedQuestion(resolvedQuestion) {
@@ -77,6 +86,9 @@ function classifyDirectQuestion(question) {
   if (/\bwhy shouldn'?t scout do your job\b/.test(q) || /\bwhy can'?t scout do (?:your|max'?s?) job\b/.test(q)) {
     return { target: REASONING_TARGETS.COMPARE, objects: ['max', 'scout'], sections: ['relationships', 'why', 'authority'] };
   }
+  if (/\bwhy shouldn'?t scout replace you\b/.test(q) || /\bwhy shouldn'?t scout replace max\b/.test(q)) {
+    return { target: REASONING_TARGETS.COMPARE, objects: ['max', 'scout'], sections: ['relationships', 'why', 'authority'] };
+  }
   if (/\bwhy not merge scout into max\b/.test(q) || /\bwhy not combine scout and max\b/.test(q)) {
     return { target: REASONING_TARGETS.SPECIALIST_SEPARATION, sections: ['why', 'relationships', 'principles'] };
   }
@@ -91,6 +103,21 @@ function classifyDirectQuestion(question) {
   }
   if (/\bwhat decisions require me\b/.test(q) || /\bwhat (?:do i|does the operator) (?:decide|own)\b/.test(q)) {
     return { target: REASONING_TARGETS.OPERATOR_DECISIONS, sections: ['authority'] };
+  }
+  if (/\b(?:who ultimately decides|who decides)\b/.test(q)) {
+    return { target: REASONING_TARGETS.AUTHORITY, sections: ['authority', 'operator'] };
+  }
+  if (/\bcan scout approve\b/.test(q) || /\bcan paige approve\b/.test(q) || /\bwho can approve outreach\b/.test(q)) {
+    return { target: REASONING_TARGETS.AUTHORITY, sections: ['authority', 'outreach_approval'] };
+  }
+  if (/\bscout disagrees with paige\b/.test(q) || /\bif scout and paige disagreed\b/.test(q)) {
+    return { target: REASONING_TARGETS.RELATIONSHIPS, sections: ['conflict', 'governance', 'authority'] };
+  }
+  if (/\bhow do scout and paige depend\b/.test(q) || /\bwhat happens if one fails\b/.test(q)) {
+    return { target: REASONING_TARGETS.RELATIONSHIPS, sections: ['scout', 'paige', 'max'] };
+  }
+  if (/\bwhy shouldn'?t scout make business decisions\b/.test(q)) {
+    return { target: REASONING_TARGETS.AUTHORITY, sections: ['scout', 'business_decisions', 'operator'] };
   }
   if (/\bscout vs rex\b/.test(q) || /\bdifference between scout and rex\b/.test(q)) {
     return { target: REASONING_TARGETS.COMPARE, objects: ['scout', 'rex'], sections: ['relationships'] };
@@ -137,11 +164,53 @@ function classifyDirectQuestion(question) {
   return null;
 }
 
+function planFromConceptGraph(input = {}) {
+  const composed = composeConceptGraphAnswer({
+    question: input.question,
+    resolvedQuestion: input.resolvedQuestion,
+    conversationIntent: input.conversationIntent,
+    activeConcepts: input.activeConcepts,
+  });
+  if (!composed || !composed.plan) return null;
+
+  const { plan } = composed;
+  const target = GOAL_TO_TARGET[plan.goal] || REASONING_TARGETS.WHY;
+  const query = {
+    target,
+    goal: plan.goal,
+    concepts: plan.concepts,
+    via: plan.via || 'concept_graph',
+    continuity: plan.continuity,
+    sections: plan.concepts,
+  };
+
+  if (plan.parsed && plan.parsed.kind === 'why') {
+    query.subject = plan.parsed.subject;
+  }
+  if (plan.parsed && plan.parsed.kind === 'compare') {
+    query.objects = plan.parsed.objects;
+  } else if (plan.specialists && plan.specialists.length) {
+    query.objects = plan.specialists;
+  }
+
+  return query;
+}
+
 function planOperatingModelQuery(input = {}) {
   const question = normalizeText(input.question);
   const resolvedQuestion = normalizeText(input.resolvedQuestion);
   const conversationIntent = input.conversationIntent || null;
   const continuity = Boolean(conversationIntent && conversationIntent.continuity);
+
+  if (shouldUseConceptGraphReasoning({
+    question,
+    resolvedQuestion,
+    conversationIntent,
+    activeConcepts: input.activeConcepts,
+  })) {
+    const conceptPlan = planFromConceptGraph(input);
+    if (conceptPlan) return conceptPlan;
+  }
 
   if (resolvedQuestion) {
     const parsed = parseResolvedQuestion(resolvedQuestion);
@@ -173,6 +242,16 @@ function planOperatingModelQuery(input = {}) {
   }
 
   return null;
+}
+
+function synthesizeFromConceptGraph(input = {}) {
+  const composed = composeConceptGraphAnswer({
+    question: input.question,
+    resolvedQuestion: input.resolvedQuestion,
+    conversationIntent: input.conversationIntent,
+    activeConcepts: input.activeConcepts,
+  });
+  return composed && composed.result ? composed.result.prose : null;
 }
 
 function synthesizeWhy(subject) {
@@ -266,8 +345,18 @@ function synthesizeSpecialistSeparation() {
   ]);
 }
 
-function synthesizeFromQuery(query) {
+function synthesizeFromQuery(query, input = {}) {
   if (!query) return null;
+
+  if (query.goal || (query.concepts && query.concepts.length)) {
+    const conceptProse = synthesizeFromConceptGraph({
+      question: input.question,
+      resolvedQuestion: input.resolvedQuestion,
+      conversationIntent: input.conversationIntent,
+      activeConcepts: query.concepts,
+    });
+    if (conceptProse) return conceptProse;
+  }
 
   switch (query.target) {
     case REASONING_TARGETS.WHY:
@@ -289,28 +378,19 @@ function synthesizeFromQuery(query) {
 }
 
 function shouldUseOperatingModelReasoning(input = {}) {
-  const conversationIntent = input.conversationIntent || null;
-  const resolvedQuestion = normalizeText(input.resolvedQuestion);
-  const question = normalizeText(input.question);
-
-  if (resolvedQuestion && parseResolvedQuestion(resolvedQuestion)) return true;
-  if (classifyDirectQuestion(question)) return true;
-  if (conversationIntent && conversationIntent.continuity) return true;
-  if (conversationIntent && conversationIntent.thinkingMode === 'operating_model_reflection') return true;
-
-  return false;
+  return shouldUseConceptGraphReasoning(input) || Boolean(
+    (input.resolvedQuestion && parseResolvedQuestion(input.resolvedQuestion)) ||
+    classifyDirectQuestion(input.question || '') ||
+    (input.conversationIntent && input.conversationIntent.continuity) ||
+    (input.conversationIntent && input.conversationIntent.thinkingMode === 'operating_model_reflection')
+  );
 }
 
-/**
- * Compose identity response by reasoning over the operating model.
- * @param {object} input
- * @returns {string|null}
- */
 function composeIdentityReasoning(input = {}) {
   const query = planOperatingModelQuery(input);
   if (!query) return null;
 
-  let prose = synthesizeFromQuery(query);
+  let prose = synthesizeFromQuery(query, input);
   if (!prose) return null;
 
   const session = input.session || null;
@@ -331,12 +411,31 @@ function reasoningMetadata(query) {
   if (!query) {
     return {
       operatingModelReflection: false,
+      conceptGraphReasoning: false,
       reasoningTarget: null,
       sectionsUsed: [],
+      concepts: [],
     };
   }
+
+  const composed = composeConceptGraphAnswer({
+    question: query.question,
+    resolvedQuestion: query.resolvedQuestion,
+    conversationIntent: query.conversationIntent,
+    activeConcepts: query.concepts,
+  });
+
+  if (composed && composed.metadata) {
+    return {
+      ...composed.metadata,
+      reasoningTarget: query.target || composed.metadata.goal,
+      sectionsUsed: query.sections || composed.metadata.concepts || [query.target],
+    };
+  }
+
   return {
     operatingModelReflection: true,
+    conceptGraphReasoning: false,
     reasoningTarget: query.target,
     sectionsUsed: query.sections || [query.target],
     via: query.via || 'operating_model_reasoning',
@@ -352,4 +451,5 @@ module.exports = {
   composeIdentityReasoning,
   reasoningMetadata,
   synthesizeFromQuery,
+  planFromConceptGraph,
 };
