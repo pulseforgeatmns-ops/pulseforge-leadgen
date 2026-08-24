@@ -334,6 +334,7 @@ function buildResponseMetadata(partial = {}) {
   }
   if (partial.readOnlyCognition === true) meta.readOnlyCognition = true;
   if (partial.sessionInspection === true) meta.sessionInspection = true;
+  if (partial.sessionConfiguration === true) meta.sessionConfiguration = true;
   if (partial.sessionStateRead === true) meta.sessionStateRead = true;
   if (partial.sessionStateEvidence === true) meta.sessionStateEvidence = true;
   return meta;

@@ -126,6 +126,20 @@ class PresentationEngine {
       };
     }
 
+    // SPEC-149 — session configuration acknowledgement is already the operator artifact.
+    if (metadata.sessionConfiguration === true) {
+      prose = structured.answer ? String(structured.answer).trim() : '';
+      return {
+        prose,
+        structured,
+        metadata: {
+          ...metadata,
+          presentation: 'session_configuration',
+        },
+        presentation: 'session_configuration',
+      };
+    }
+
     // SPEC-147 — conversational intelligence responses are already natural-language prose.
     if (metadata.conversationalIntelligence === true) {
       prose = formatDeterministicProse(structured);
