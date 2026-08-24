@@ -3,7 +3,11 @@
 /**
  * SPEC-126 — Execution language detection for ownership routing.
  * When present, objective persistence must not claim the turn.
+ * SPEC-153 — invoked only during analyzeOperatorIntent(); downstream consumers
+ * use OperatorIntent.executionRequested instead of re-parsing.
  */
+
+const { guardPostIntentParsing } = require('./audit/OperatorIntentAudit');
 
 const EXECUTION_VERB_RE =
   /\b(create|resume|begin|operate|execute|manage|run|continue|complete)\b/i;
@@ -45,6 +49,7 @@ function normalizeText(text) {
  * @returns {boolean}
  */
 function hasExecutionLanguage(text) {
+  guardPostIntentParsing('hasExecutionLanguage');
   const q = normalizeText(text);
   if (!q) return false;
   if (NEGATED_EXECUTION_RE.test(q)) return false;
@@ -58,6 +63,7 @@ function hasExecutionLanguage(text) {
  * @returns {{ matched: boolean, reason: string|null }}
  */
 function detectMissionExecutionLanguage(text) {
+  guardPostIntentParsing('detectMissionExecutionLanguage');
   const q = normalizeText(text);
   if (!q || !hasExecutionLanguage(q)) {
     return { matched: false, reason: null };
@@ -82,6 +88,7 @@ function detectMissionExecutionLanguage(text) {
  * @returns {boolean}
  */
 function isMissionExecutionCommand(text) {
+  guardPostIntentParsing('isMissionExecutionCommand');
   const q = normalizeText(text);
   if (!q) return false;
   if (NEGATED_EXECUTION_RE.test(q)) return false;

@@ -53,12 +53,9 @@ const {
   attachSpecialists,
   isReadOnlyCognition,
 } = require('../operatorCognition');
+const { analyzeOperatorIntent } = require('./OperatorIntent');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
-const { detectConversationSubject } = require('./ConversationSubject');
-const {
-  applyConversationalContinuity,
-  advanceConversationalState,
-} = require('./ConversationalStateMachine');
+const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { maybeHandleReflectionTurn } = require('./ReflectionRouting');
 const { maybeHandleIdentityTurn } = require('./IdentityConversationContext');
 const { maybeHandleConversationTurn } = require('./ConversationTurnContext');
@@ -402,6 +399,7 @@ class WorkspaceEngine {
     let workspaceOwnership = null;
     let conversationSubject = null;
     let conversationIntent = null;
+    let operatorIntent = null;
     let traceAskReturn = (label, value, meta = {}) => value;
 
     try {
@@ -444,12 +442,30 @@ class WorkspaceEngine {
           }
         : null;
 
-    // SPEC-149 — Conversation subject runs before intent, thinking mode, and owner.
-    conversationSubject = detectConversationSubject(question, null, session);
+    // SPEC-153 — interpret operator language exactly once (ADR-061).
+    operatorIntent = await analyzeOperatorIntent({
+      question,
+      session,
+      context: rawContext || session.context,
+      missionEngine: this._missionEngine,
+      missionsEnabled: this._missionsEnabled,
+      resolverEnabled: this._resolverEnabled,
+      ...this._amoRuntimeInput(),
+    });
+    conversationSubject = operatorIntent.conversationSubject;
+    conversationIntent = operatorIntent.conversationIntent;
+    let resolvedQuestion = operatorIntent.resolvedQuestion;
+    let continuityApplied = operatorIntent.continuityApplied;
+
     if (session.context && typeof session.context === 'object') {
       session.context.conversationSubject = conversationSubject.subject;
       session.context.conversationSubjectLocked = conversationSubject.locked;
       session.context.conversationSubjectReason = conversationSubject.reason;
+      session.context.conversationIntent = conversationIntent;
+      session.context.operatorIntent = operatorIntent;
+      if (continuityApplied) {
+        session.context.resolvedQuestion = resolvedQuestion;
+      }
     }
     askPathTrace.traceBranch('conversation_subject', {
       subject: conversationSubject.subject,
@@ -457,49 +473,23 @@ class WorkspaceEngine {
       reason: conversationSubject.reason,
       confidence: conversationSubject.confidence,
     });
-
-    conversationIntent = attachSpecialists(
-      classifyOperatorCognition(question, {
-        session,
-        context: rawContext || session.context,
-      })
-    );
-    if (session.context && typeof session.context === 'object') {
-      session.context.conversationIntent = conversationIntent;
-    }
     askPathTrace.traceBranch('operator_cognition', {
       intent: conversationIntent.intent,
       thinkingMode: conversationIntent.thinkingMode,
       mutatesMission: conversationIntent.mutatesMission,
       confidence: conversationIntent.confidence,
     });
-
-    // SPEC-150 — Follow-ups inherit subject/intent; not classified from scratch.
-    let resolvedQuestion = question;
-    let continuityApplied = false;
-    const continuity = applyConversationalContinuity({
-      question,
-      session,
-      conversationSubject,
-      conversationIntent,
+    askPathTrace.traceBranch('operator_intent', {
+      intent: operatorIntent.intent,
+      executionRequested: operatorIntent.executionRequested,
+      planningRequested: operatorIntent.planningRequested,
+      conversationLocked: operatorIntent.conversationLocked,
     });
-    if (continuity.applied) {
-      continuityApplied = true;
-      conversationSubject = continuity.conversationSubject;
-      conversationIntent = continuity.conversationIntent;
-      resolvedQuestion = continuity.resolvedQuestion;
-      if (session.context && typeof session.context === 'object') {
-        session.context.conversationSubject = conversationSubject.subject;
-        session.context.conversationSubjectLocked = conversationSubject.locked;
-        session.context.conversationSubjectReason = conversationSubject.reason;
-        session.context.conversationIntent = conversationIntent;
-        session.context.resolvedQuestion = resolvedQuestion;
-      }
+    if (continuityApplied) {
       askPathTrace.traceBranch('conversation_continuity', {
         subject: conversationSubject.subject,
         intent: conversationIntent.intent,
         resolvedQuestion,
-        priorDepth: continuity.priorState && continuity.priorState.depth,
         via: conversationIntent.via,
       });
     }
@@ -552,6 +542,7 @@ class WorkspaceEngine {
       session,
       context: rawContext || session.context,
       conversationSubject,
+      operatorIntent,
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
@@ -842,6 +833,7 @@ class WorkspaceEngine {
         question,
         session,
         context: rawContext || session.context,
+        operatorIntent,
         missionEngine: this._missionEngine,
         missionsEnabled: this._missionsEnabled,
         resolverEnabled: this._resolverEnabled,
@@ -886,19 +878,6 @@ class WorkspaceEngine {
         }
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
         askPathTrace.traceBranch('runtime:amo');
-
-        if (runtimeDecision.mission) {
-          conversationIntent = attachSpecialists(
-            classifyOperatorCognition(question, {
-              session,
-              context: rawContext || session.context,
-              mission: runtimeDecision.mission,
-            })
-          );
-          if (session.context && typeof session.context === 'object') {
-            session.context.conversationIntent = conversationIntent;
-          }
-        }
 
         if (isReadOnlyCognition(conversationIntent)) {
           const cognitionTurn = await maybeHandleOperatorCognitionTurn({
@@ -983,6 +962,7 @@ class WorkspaceEngine {
           session,
           context: rawContext || session.context,
           conversationIntent,
+          operatorIntent,
           ...this._amoRuntimeInput(),
           missionEngine: this._missionEngine || undefined,
           ...this._amoStagePersistOpts(),
@@ -2329,6 +2309,7 @@ class WorkspaceEngine {
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
       detectExecution: true,
+      operatorIntent,
       ...this._amoRuntimeInput(),
     });
     const explicitMissionExit = isExplicitMissionExit(question).explicit;
@@ -2343,6 +2324,8 @@ class WorkspaceEngine {
       activeMissionLock:
         activeMissionLockState.active && !explicitMissionExit,
       explicitMissionExit,
+      executionCommand: activeMissionLockState.executionCommand,
+      operatorIntent,
     });
 
     if (
@@ -2370,7 +2353,8 @@ class WorkspaceEngine {
     const guardedDomain = guardExecutionDomain(
       domainDecision,
       activeMissionLockState,
-      question
+      question,
+      operatorIntent
     );
     if (guardedDomain.guarded) {
       ownershipAudit.logActiveMissionGuard({

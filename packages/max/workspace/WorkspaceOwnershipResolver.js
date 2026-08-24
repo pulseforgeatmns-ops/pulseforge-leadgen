@@ -38,9 +38,6 @@ const {
   isExplicitObjectivePersistenceRequest,
 } = require('../../../services/operatorObjectives');
 const {
-  isMissionExecutionCommand,
-} = require('./ExecutionLanguageDetection');
-const {
   isExplicitMissionExit,
   resolveActiveMissionLock,
 } = require('./ActiveMissionGuard');
@@ -48,6 +45,8 @@ const {
   blocksBusinessSubsystemClaim,
 } = require('./WorkspaceRoutingPatterns');
 const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
+const { missionMayOwnTurn } = require('./OperatorIntentContract');
+const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const WORKSPACE_OWNERS = Object.freeze({
@@ -173,6 +172,7 @@ function claimsBlueprintOwnership(question, input = {}) {
 function claimsMissionCreation(question, input = {}) {
   const q = normalizeQuestion(question);
   if (!q) return false;
+  const operatorIntent = input.operatorIntent || null;
 
   // SPEC-140 — acquisition objectives and explicit resume always bind to creation.
   if (isAcquisitionObjectiveForMission(q) || isExplicitMissionResume(q).explicit) {
@@ -185,17 +185,25 @@ function claimsMissionCreation(question, input = {}) {
     };
   }
 
-  // SPEC-127 / SPEC-140 — execution commands on an active mission bind to the mission,
-  // not creation, but only when the message is not establishing a new mission.
-  if (isMissionExecutionCommand(q) && hasAcquisitionMissionContext(input)) {
+  // SPEC-153 — execution on an active mission binds to the mission, not creation.
+  if (
+    operatorIntent &&
+    operatorIntent.executionRequested &&
+    hasAcquisitionMissionContext(input)
+  ) {
     return null;
   }
 
-  const executionLanguage = detectMissionExecutionLanguage(q);
-  if (executionLanguage.matched) {
+  const creationLanguage = operatorIntent
+    ? {
+        matched: operatorIntent.missionCreationRequested,
+        reason: operatorIntent.missionCreationReason,
+      }
+    : detectMissionExecutionLanguage(q);
+  if (creationLanguage.matched) {
     return {
       owner: WORKSPACE_OWNERS.MISSION_CREATION,
-      reason: executionLanguage.reason,
+      reason: creationLanguage.reason,
       confidence: 0.95,
     };
   }
@@ -234,12 +242,16 @@ function claimsMissionCreation(question, input = {}) {
   return null;
 }
 
-function claimsObjectivePersistence(question) {
+function claimsObjectivePersistence(question, input = {}) {
   const q = normalizeQuestion(question);
   if (!q) return null;
+  const operatorIntent = input.operatorIntent || null;
 
-  // SPEC-126 — execution language never yields to objective persistence.
-  if (hasExecutionLanguage(q)) return null;
+  // SPEC-126 / SPEC-153 — execution language never yields to objective persistence.
+  const executionPresent = operatorIntent
+    ? operatorIntent.executionLanguagePresent || operatorIntent.executionRequested
+    : hasExecutionLanguage(q);
+  if (executionPresent) return null;
   if (isAcquisitionObjectiveForMission(q)) return null;
 
   const establish = detectObjectiveEstablishment(q);
@@ -316,6 +328,7 @@ function claimsKnowledgeRetrieval(question) {
  * @param {object} [input.session]
  * @param {object} [input.context]
  * @param {object} [input.conversationSubject] — SPEC-148 subject lock
+ * @param {object} [input.operatorIntent] — SPEC-153 structured intent (required at runtime)
  * @param {object} [input.missionEngine]
  * @param {boolean} [input.missionsEnabled]
  * @param {boolean} [input.resolverEnabled]
@@ -337,6 +350,72 @@ async function resolveWorkspaceOwner(input = {}) {
 
   // SPEC-149 — subject governs owner before business pipelines.
   const subject = input.conversationSubject || null;
+  const operatorIntent = input.operatorIntent || null;
+
+  // SPEC-153 — conversation lock is authoritative over active mission context.
+  if (operatorIntent && operatorIntent.conversationLocked) {
+    const subjectName = operatorIntent.subject || (subject && subject.subject);
+    if (subjectName === CONVERSATION_SUBJECTS.IDENTITY) {
+      askPathTrace.traceOwner(
+        WORKSPACE_OWNERS.CONVERSATION_IDENTITY,
+        'operator_intent_identity_lock'
+      );
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'operator_intent_identity_lock');
+      return {
+        owner: WORKSPACE_OWNERS.CONVERSATION_IDENTITY,
+        reason: 'operator_intent_identity_lock',
+        confidence: operatorIntent.confidence || 0.97,
+        specialist: null,
+        subjectLock: true,
+      };
+    }
+    if (
+      subjectName === CONVERSATION_SUBJECTS.REFLECTION ||
+      subjectName === 'reasoning'
+    ) {
+      askPathTrace.traceOwner(
+        WORKSPACE_OWNERS.REFLECTION,
+        'operator_intent_reflection_lock'
+      );
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'operator_intent_reflection_lock');
+      return {
+        owner: WORKSPACE_OWNERS.REFLECTION,
+        reason: 'operator_intent_reflection_lock',
+        confidence: operatorIntent.confidence || 0.95,
+        specialist: null,
+        subjectLock: true,
+      };
+    }
+    if (subjectName === CONVERSATION_SUBJECTS.CONVERSATION) {
+      askPathTrace.traceOwner(
+        WORKSPACE_OWNERS.CONVERSATION_LAYER,
+        'operator_intent_conversation_lock'
+      );
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'operator_intent_conversation_lock');
+      return {
+        owner: WORKSPACE_OWNERS.CONVERSATION_LAYER,
+        reason: 'operator_intent_conversation_lock',
+        confidence: operatorIntent.confidence || 0.88,
+        specialist: null,
+        subjectLock: true,
+      };
+    }
+    if (subjectName === CONVERSATION_SUBJECTS.KNOWLEDGE) {
+      askPathTrace.traceOwner(
+        WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
+        'operator_intent_knowledge_lock'
+      );
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'operator_intent_knowledge_lock');
+      return {
+        owner: WORKSPACE_OWNERS.KNOWLEDGE_RETRIEVAL,
+        reason: 'operator_intent_knowledge_lock',
+        confidence: operatorIntent.confidence || 0.9,
+        specialist: null,
+        subjectLock: true,
+      };
+    }
+  }
+
   if (subject && subject.locked) {
     const subjectName = subject.subject;
     if (subjectName === CONVERSATION_SUBJECTS.IDENTITY) {
@@ -471,7 +550,7 @@ async function resolveWorkspaceOwner(input = {}) {
     resolverEnabled: input.resolverEnabled,
     acquisitionMissionRuntime: amoRuntime,
     runtimeProvider: input.runtimeProvider,
-    detectExecution: false,
+    operatorIntent,
   });
 
   // 3 — Explicit exit while a mission is active
@@ -487,10 +566,18 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // 4 — Active mission execution (execution detection only after ownership context)
+  // 4 — SPEC-153: active mission owns only execution/planning/mutation turns
   const activeMissionExecutionCommand =
-    missionLock.executionCommand || isMissionExecutionCommand(question);
-  if (missionLock.active && activeMissionExecutionCommand && !missionLock.explicitExit) {
+    missionLock.executionCommand ||
+    (operatorIntent
+      ? operatorIntent.executionRequested || operatorIntent.planningRequested
+      : isMissionExecutionCommand(question));
+  if (
+    missionLock.active &&
+    activeMissionExecutionCommand &&
+    !missionLock.explicitExit &&
+    (!operatorIntent || missionMayOwnTurn(operatorIntent))
+  ) {
     askPathTrace.traceOwner(WORKSPACE_OWNERS.ACTIVE_MISSION, 'active_mission_execution_command');
     askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'active_mission_execution_command');
     return {
@@ -524,7 +611,11 @@ async function resolveWorkspaceOwner(input = {}) {
     }
     if (activeMission && !escape.explicit) {
       const continuation = evaluateMissionContinuation(question, activeMission);
-      if (continuation.continues && continuation.confidence >= CONTINUATION_THRESHOLD) {
+      if (
+        continuation.continues &&
+        continuation.confidence >= CONTINUATION_THRESHOLD &&
+        (!operatorIntent || missionMayOwnTurn(operatorIntent))
+      ) {
         return {
           owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
           reason: `active_mission_${continuation.classification}`,
@@ -554,7 +645,7 @@ async function resolveWorkspaceOwner(input = {}) {
   if (missionClaim) return { ...missionClaim, specialist: null };
 
   // 3 — Objective Persistence (explicit save/track only; never execution language)
-  const objectiveClaim = claimsObjectivePersistence(question);
+  const objectiveClaim = claimsObjectivePersistence(question, input);
   if (objectiveClaim) return { ...objectiveClaim, specialist: null };
 
   // 4 — Blueprint
@@ -593,8 +684,13 @@ async function resolveWorkspaceOwner(input = {}) {
     };
   }
 
-  // 8 — Reasoning fallback (blocked while active mission lock is engaged)
-  if (missionLock.active && !missionLock.explicitExit) {
+  // 8 — Reasoning fallback (SPEC-153: mission context alone does not force ownership)
+  if (
+    missionLock.active &&
+    !missionLock.explicitExit &&
+    operatorIntent &&
+    missionMayOwnTurn(operatorIntent)
+  ) {
     return {
       owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
       reason: 'active_mission_guard',

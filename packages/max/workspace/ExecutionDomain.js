@@ -29,6 +29,21 @@ const { normalizeContext } = require('./ContextEnvelope');
 const { PAGE_TYPES } = require('./WorkspaceTypes');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 
+function missionExecutionReasonFromOpts(opts = {}) {
+  if (opts.operatorIntent && opts.operatorIntent.executionRequested) {
+    return 'mission_execution_command';
+  }
+  if (opts.executionCommand === true) {
+    return 'mission_execution_command';
+  }
+  if (!opts.operatorIntent) {
+    return isMissionExecutionCommand(String(opts.text || ''))
+      ? 'mission_execution_command'
+      : 'active_mission_lock';
+  }
+  return 'active_mission_lock';
+}
+
 /** Registered execution domains — each owns its requests once selected. */
 const EXECUTION_DOMAINS = Object.freeze({
   MISSION_EXECUTION: 'mission_execution',
@@ -200,9 +215,7 @@ function selectExecutionDomain(text, opts = {}) {
         missionIntent: null,
         missionType: 'acquisition_mission',
         routeKind: ROUTE_KINDS.INTELLIGENCE,
-        reason: isMissionExecutionCommand(q)
-          ? 'mission_execution_command'
-          : 'active_mission_lock',
+        reason: missionExecutionReasonFromOpts({ ...opts, text: q }),
         confidence: 0.96,
         previousDomain,
         activeMissionGuard: true,
@@ -278,9 +291,7 @@ function selectExecutionDomain(text, opts = {}) {
       missionIntent: null,
       missionType: 'acquisition_mission',
       routeKind: ROUTE_KINDS.INTELLIGENCE,
-      reason: isMissionExecutionCommand(q)
-        ? 'mission_execution_command'
-        : 'active_mission_lock',
+      reason: missionExecutionReasonFromOpts({ ...opts, text: q }),
       confidence: 0.96,
       previousDomain,
       activeMissionGuard: true,
