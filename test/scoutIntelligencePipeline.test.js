@@ -156,10 +156,13 @@ describe('SPEC-141 — Scout Intelligence Pipeline', () => {
       },
     });
 
-    assert.equal(result.stages.length, 9);
+    assert.equal(result.stages.length, 10);
     assert.equal(result.stages[0].stage, INTELLIGENCE_STAGES.MARKET_UNDERSTANDING);
     assert.equal(result.stages[1].stage, INTELLIGENCE_STAGES.INVESTIGATION_PLANNING);
-    assert.equal(result.stages[8].stage, INTELLIGENCE_STAGES.MARKET_COVERAGE);
+    assert.equal(result.stages[6].stage, INTELLIGENCE_STAGES.EVIDENCE_CONFLICT_RESOLUTION);
+    assert.equal(result.stages[9].stage, INTELLIGENCE_STAGES.MARKET_COVERAGE);
+    assert.ok(result.conflictResolution);
+    assert.ok(result.report.evidenceConflicts);
     assert.ok(result.investigationPlan);
     assert.equal(result.investigationPlan.version, 'SPEC-145');
     assert.ok(result.report);

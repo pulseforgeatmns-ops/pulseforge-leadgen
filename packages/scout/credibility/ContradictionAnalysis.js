@@ -2,10 +2,20 @@
 
 /**
  * SPEC-144 — Contradiction analysis beyond SPEC-142 rule set.
- * Detects numeric and cross-source conflicts (e.g. website 15 vs county 42 properties).
+ * Delegates numeric detection to SPEC-146 ECRE; retains backward-compatible exports.
  */
 
+const {
+  detectEvidenceConflicts,
+  resolveAllConflicts,
+  conflictsToLegacyFormat,
+} = require('../conflict');
 const { evidenceSourceLabel } = require('./EvidenceWeights');
+
+function asText(value) {
+  if (value == null) return '';
+  return String(value).trim();
+}
 
 function asText(value) {
   if (value == null) return '';
@@ -28,60 +38,29 @@ function extractNumericClaims(label) {
 
 /**
  * Detect numeric contradictions across evidence items.
+ * Uses SPEC-146 ECRE detection; returns legacy format for backward compatibility.
  * @param {object[]} evidence
  * @returns {object[]}
  */
 function detectNumericContradictions(evidence = []) {
-  const byField = {};
-
-  for (const item of evidence) {
-    const label = asText(item.label || item.text || item);
-    const source = item.source || 'unknown';
-    for (const claim of extractNumericClaims(label)) {
-      if (!byField[claim.field]) byField[claim.field] = [];
-      byField[claim.field].push({
-        source,
-        sourceLabel: evidenceSourceLabel(source),
-        value: claim.value,
-        label,
-      });
-    }
-  }
-
-  const contradictions = [];
-  for (const [field, entries] of Object.entries(byField)) {
-    if (entries.length < 2) continue;
-    const values = [...new Set(entries.map((e) => e.value))];
-    if (values.length <= 1) continue;
-
-    const sorted = [...entries].sort((a, b) => b.value - a.value);
-    contradictions.push({
-      id: `numeric:${field}:${sorted[0].source}:${sorted[1].source}`,
-      type: 'numeric_mismatch',
-      field,
-      description: `${sorted[0].sourceLabel} reports ${sorted[0].value}; ${sorted[1].sourceLabel} reports ${sorted[1].value}.`,
-      sources: sorted.map((e) => ({ source: e.source, sourceLabel: e.sourceLabel, value: e.value, label: e.label })),
-      confidencePenalty: 0.12,
-      resolved: false,
-      recommendation: 'Verify the authoritative count before acting on portfolio-size assumptions.',
-    });
-  }
-
-  return contradictions;
+  const conflicts = detectEvidenceConflicts({ id: 'numeric-scan' }, evidence);
+  return conflictsToLegacyFormat(conflicts);
 }
 
 /**
- * Merge SPEC-142 conflicts with numeric contradictions, deduping by description.
+ * Merge SPEC-142 conflicts with ECRE-resolved conflicts, deduping by description.
  * @param {object[]} existingConflicts
  * @param {object[]} evidence
  * @returns {object[]}
  */
 function mergeContradictions(existingConflicts = [], evidence = []) {
-  const numeric = detectNumericContradictions(evidence);
+  const detected = detectEvidenceConflicts({ id: 'merge-scan' }, evidence);
+  const resolved = resolveAllConflicts(detected);
+  const ecreLegacy = conflictsToLegacyFormat(resolved);
   const seen = new Set();
   const merged = [];
 
-  for (const conflict of [...existingConflicts, ...numeric]) {
+  for (const conflict of [...existingConflicts, ...ecreLegacy]) {
     const key = conflict.id || conflict.description;
     if (seen.has(key)) continue;
     seen.add(key);

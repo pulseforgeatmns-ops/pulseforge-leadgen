@@ -60,6 +60,9 @@ function buildIntelligenceReport(input = {}) {
     missingEvidence: input.missingEvidence || [],
   });
 
+  const conflictResolution = input.conflictResolution || null;
+  const evidenceConflicts = conflictResolution?.evidenceConflicts || null;
+
   const evidenceSources = [
     ...new Set([
       ...(coverage.sourcesUsed || []),
@@ -119,6 +122,7 @@ function buildIntelligenceReport(input = {}) {
     immediateOpportunities,
     topOpportunities,
     intelligenceBriefs,
+    evidenceConflicts,
     credibilityFramework: {
       version: 'SPEC-144',
       briefCount: intelligenceBriefs.length,

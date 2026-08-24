@@ -26,6 +26,13 @@ const { determineMissingEvidence, evidenceSatisfiesGap } = require('./MissingEvi
 const { selectNextInvestigation, explainStepSelection, DEFAULT_MIN_EXPECTED_GAIN } = require('./InvestigationPlanner');
 const { fuseAndUpdateClaims } = require('./ClaimConfidence');
 const { detectContradictions } = require('./ContradictionDetection');
+const {
+  resolveEvidenceConflicts,
+  conflictsToLegacyFormat,
+  loadConflictLearningFromMemory,
+  runEvidenceConflictResolution,
+  exportConflictLearningForMemory,
+} = require('../conflict');
 const { executeInvestigationStep } = require('./EvidenceExecutor');
 const { buildInvestigationReport } = require('./InvestigationReport');
 const {
@@ -317,6 +324,7 @@ async function runInvestigationEngine(input = {}) {
   let allClaims = (startingPoint.preloadedClaims || []).map((c) => ({ ...c }));
   let workingCandidates = candidates.map((c) => ({ ...c, evidence: c.evidence || [] }));
   let allConflicts = [];
+  const conflictLearning = loadConflictLearningFromMemory(memoryPrep.memory || {});
 
   let completionMeta = { reason: null, explanation: null };
 
@@ -326,9 +334,15 @@ async function runInvestigationEngine(input = {}) {
 
     for (const candidate of workingCandidates) {
       const candidateHyps = allHypotheses.filter((h) => h.entityId === candidate.id);
-      const conflicts = detectContradictions(candidate, candidate.evidence || []);
+      const ecreResult = resolveEvidenceConflicts(candidate, candidate.evidence || [], {
+        learning: conflictLearning,
+        baseConfidence: computeOverallConfidence(allClaims) || 0.85,
+      });
+      const conflicts = conflictsToLegacyFormat(ecreResult.conflicts);
       if (conflicts.length) {
-        for (const c of conflicts) emitInvestigationConflict({ missionId, conflict: c });
+        for (const c of ecreResult.conflicts) {
+          emitInvestigationConflict({ missionId, conflict: c });
+        }
         iterationConflicts.push(...conflicts);
       }
 
@@ -582,6 +596,16 @@ async function runInvestigationEngine(input = {}) {
 
   const finalMissing = determineMissingEvidence({ hypotheses: allHypotheses, claims: allClaims });
   const overallConfidence = computeOverallConfidence(allClaims);
+  const finalEcreResult = runEvidenceConflictResolution({
+    candidates: workingCandidates,
+    evidenceByCandidate: (evidenceCollection.evidenceByCandidate || []).map((e) => ({
+      candidateId: e.candidateId,
+      evidence: e.evidence,
+    })),
+    baseConfidence: overallConfidence,
+    opts: { learning: conflictLearning, memory: memoryPrep.memory },
+  });
+  const adjustedConfidence = finalEcreResult.adjustedConfidence ?? overallConfidence;
   const serializedGraph = serializeGraph(graph);
   const finalBoardSummary = summarizeBoard(board);
   const serializedJournal = serializeJournal(journal);
@@ -600,11 +624,12 @@ async function runInvestigationEngine(input = {}) {
     hypotheses: allHypotheses,
     claims: allClaims,
     missingEvidence: finalMissing,
-    overallConfidence,
+    overallConfidence: adjustedConfidence,
     qualification,
     ranking,
     candidateUniverse,
     conflicts: allConflicts,
+    conflictResolution: finalEcreResult,
     iterations,
     providerStrategy,
     investigationPlan,
@@ -642,11 +667,12 @@ async function runInvestigationEngine(input = {}) {
     report,
     marketDefinition,
     candidateUniverse: { ...candidateUniverse, candidates: workingCandidates },
-    overallConfidence,
+    overallConfidence: adjustedConfidence,
     totalCost,
     qualification,
     ranking,
     evidenceCollection,
+    conflictResolution: finalEcreResult,
     providerStrategy,
     evidencePlan,
     investigationPlan,
@@ -668,6 +694,8 @@ async function runInvestigationEngine(input = {}) {
       opts: {
         ...opts,
         providerLearning: exportLearningForMemory(learning),
+        providerConflictLearning: exportConflictLearningForMemory(conflictLearning),
+        conflicts: finalEcreResult.conflicts,
       },
     });
   }

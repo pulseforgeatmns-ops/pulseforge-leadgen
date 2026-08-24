@@ -4,8 +4,8 @@
  * SPEC-141 — Scout Intelligence Pipeline orchestrator.
  *
  * Mission → Market Understanding → Investigation Planning → Evidence Planning → Provider Strategy →
- * Candidate Universe Discovery → Evidence Collection → Qualification →
- * Opportunity Ranking → Market Coverage → Mission Intelligence Report
+ * Candidate Universe Discovery → Evidence Collection → Evidence Conflict Resolution →
+ * Qualification → Opportunity Ranking → Market Coverage → Mission Intelligence Report
  */
 
 const { INTELLIGENCE_STAGES, buildStageResult, buildIntelligenceResult } = require('./types');
@@ -19,6 +19,7 @@ const { qualifyCandidates } = require('./Qualification');
 const { rankOpportunities } = require('./OpportunityRanking');
 const { analyzeMarketCoverage } = require('./MarketCoverage');
 const { buildIntelligenceReport } = require('./IntelligenceReport');
+const { runEvidenceConflictResolution } = require('../conflict');
 const { runScoutAcquisitionIntelligence } = require('../../max/scoutAcquisition/ScoutAdapter');
 const {
   emitIntelligenceStarted,
@@ -140,12 +141,32 @@ async function runIntelligencePipeline(input = {}) {
     })
   );
 
+  // Stage 6b — Evidence Conflict Resolution (SPEC-146 / ADR-065)
+  emitIntelligenceStage(INTELLIGENCE_STAGES.EVIDENCE_CONFLICT_RESOLUTION, { missionId });
+  const conflictResolution = runEvidenceConflictResolution({
+    candidateUniverse,
+    evidenceCollection,
+    baseConfidence: evidenceCollection.avgConfidence || 0.91,
+    opts,
+  });
+  stages.push(
+    buildStageResult(INTELLIGENCE_STAGES.EVIDENCE_CONFLICT_RESOLUTION, {
+      output: {
+        detected: conflictResolution.detected,
+        resolved: conflictResolution.resolved,
+        outstanding: conflictResolution.outstanding,
+        adjustedConfidence: conflictResolution.adjustedConfidence,
+      },
+    })
+  );
+
   // Stage 7 — Qualification
   emitIntelligenceStage(INTELLIGENCE_STAGES.QUALIFICATION, { missionId });
   const qualification = await qualifyCandidates({
     marketDefinition,
     candidateUniverse,
     evidenceCollection,
+    conflictResolution,
     opts,
   });
   stages.push(
@@ -194,6 +215,7 @@ async function runIntelligencePipeline(input = {}) {
     evidenceCollection,
     providerStrategy,
     investigationPlan,
+    conflictResolution,
   });
 
   // Delegate to existing acquisition intelligence for AMO-compatible payload
@@ -225,6 +247,7 @@ async function runIntelligencePipeline(input = {}) {
     providerStrategy,
     candidateUniverse,
     evidenceByCandidate: evidenceCollection.evidenceByCandidate,
+    conflictResolution,
     qualified: qualification.qualified,
     rankedOpportunities: ranking.rankedOpportunities,
     coverage,
