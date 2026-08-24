@@ -317,9 +317,19 @@ function claimsSpecialistOwnership(question) {
   return null;
 }
 
+function claimsExecutionInspection(question) {
+  try {
+    const { isExecutionInspectionQuestion } = require('./ExecutionInspectionRegistry');
+    return isExecutionInspectionQuestion(question);
+  } catch (_) {
+    return false;
+  }
+}
+
 function claimsKnowledgeRetrieval(question) {
   const q = normalizeQuestion(question);
   if (!q) return false;
+  if (claimsExecutionInspection(q)) return false;
   if (isOperatorOperatingUpdate(q)) return true;
   if (shouldRetrieveOperatingEvidence(q)) return true;
   return false;

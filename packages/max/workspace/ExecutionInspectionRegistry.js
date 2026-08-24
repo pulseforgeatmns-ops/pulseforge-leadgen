@@ -58,7 +58,9 @@ const EXECUTION_INSPECTION_INTENTS = [
     id: 'execution_state_inspection',
     mode: 'full_state',
     aliases: [
-      /\bshow me your execution state\b/i,
+      /\bshow me (?:the |your )?execution state\b/i,
+      /\bshow (?:the |your )?execution state\b/i,
+      /\bwhat(?:'s| is) (?:the |your )?execution state\b/i,
       /\bsummarize (?:your )?execution\b/i,
       /\bsummarize the execution plan\b/i,
       /\bshow (?:the )?execution plan\b/i,

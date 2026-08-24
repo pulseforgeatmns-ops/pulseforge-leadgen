@@ -1301,6 +1301,12 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
   }
   // SPEC-124 — acquisition objectives belong to Mission Engine, not CIE essays.
   if (detectAcquisitionObjective(question)) return false;
+  try {
+    const { isExecutionInspectionQuestion } = require('./ExecutionInspectionRegistry');
+    if (isExecutionInspectionQuestion(question)) return false;
+  } catch (_) {
+    /* registry unavailable */
+  }
   if (shouldRetrieveOperatingEvidence(question)) return false;
   const sessionContract =
     opts.responseContract ||
