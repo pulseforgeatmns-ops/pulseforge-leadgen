@@ -401,6 +401,11 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     discoveryReport: payload.discoveryReport || null,
     discoveryConfidence: payload.discoveryConfidence || null,
     discoveryPlan: payload.discoveryPlan || null,
+    intelligenceReport: payload.intelligenceReport || result.intelligenceReport || null,
+    missionIntelligenceReport:
+      payload.missionIntelligenceReport ||
+      result.missionIntelligenceReport ||
+      null,
   };
 }
 

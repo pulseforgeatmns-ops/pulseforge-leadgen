@@ -24,6 +24,7 @@ const {
   bumpMissionVersion,
   planningError,
   validationError,
+  buildMissionExecutionContext,
 } = amo;
 const { createEvent } = require('../../acquisition-mission/Timeline');
 const {
@@ -502,6 +503,14 @@ async function runScoutForAmoMission(mission, opts = {}) {
   }
 
   const delegation = buildDelegationFromAmoMission(mission);
+  const executionContext = buildMissionExecutionContext({
+    engine: opts.engine,
+    mission,
+    tenantId: delegation.tenantId,
+    transactionId: opts.transactionId,
+    pool: opts.pool,
+  });
+
   try {
     const result = await Scout.discover({
       mission,
@@ -512,6 +521,7 @@ async function runScoutForAmoMission(mission, opts = {}) {
       opts: {
         ...opts,
         delegation,
+        executionContext,
         mode: opts.scoutMode || 'completed',
         missionId: mission.id,
         amoMissionId: mission.id,
@@ -543,9 +553,10 @@ async function runScoutForAmoMission(mission, opts = {}) {
 }
 
 function discoveryPayloadFromScoutResult(scoutResult, mission) {
+  let payload;
   if (scoutResult && scoutResult.discoveryReport) {
     const report = scoutResult.discoveryReport;
-    return normalizeScoutDiscoveryPayload(
+    payload = normalizeScoutDiscoveryPayload(
       {
         status: /blocked/i.test(String(report.outcome || '')) ? 'blocked' : 'completed',
         summary: report.blockReason || null,
@@ -561,10 +572,23 @@ function discoveryPayloadFromScoutResult(scoutResult, mission) {
       },
       { missionObjective: mission && mission.objective, approvalConsumed: true }
     );
+  } else {
+    payload = mapScoutIntelligenceToDiscoveryPayload(scoutResult, {
+      missionObjective: mission && mission.objective,
+    });
   }
-  return mapScoutIntelligenceToDiscoveryPayload(scoutResult, {
-    missionObjective: mission && mission.objective,
-  });
+
+  if (scoutResult?.intelligenceReport) {
+    payload.intelligenceReport = scoutResult.intelligenceReport;
+  }
+  const mir =
+    scoutResult?.missionIntelligenceReport ||
+    scoutResult?.pipeline?.missionIntelligenceReport ||
+    null;
+  if (mir) {
+    payload.missionIntelligenceReport = mir;
+  }
+  return payload;
 }
 
 function clearPendingOperatorDecision(engine, mission) {
@@ -716,7 +740,6 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     tenantId,
     question,
     operatorId,
-    missionEngine,
     persist,
     runScout,
     scoutCompanies,
@@ -796,7 +819,9 @@ async function advanceDiscoveryAfterApproval(input = {}) {
         const scoutResult = await runScoutForAmoMission(current, {
           question,
           operatorId,
-          missionEngine,
+          engine,
+          transactionId,
+          pool: input.pool,
           persist,
           runScout,
           scoutCompanies,

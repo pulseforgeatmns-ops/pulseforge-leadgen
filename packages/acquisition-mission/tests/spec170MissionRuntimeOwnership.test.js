@@ -7,7 +7,6 @@ const { createMissionEngine } = require('../../mission-engine');
 const { Scout } = require('../../scout');
 const {
   advanceDiscoveryAfterApproval,
-  advancePlanAfterApproval,
 } = require('../../max/workspace/AmoOperatorApproval');
 const {
   RUNTIME_OWNERS,
