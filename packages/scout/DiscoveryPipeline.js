@@ -34,6 +34,13 @@ const {
 } = require('./universe/CandidateUniverseEstimate');
 const { runInvestigativeReasoningLoop } = require('./investigation/InvestigativeReasoningLoop');
 const { mergeIntoDiscoveryReport } = require('./investigation/MissionIntelligenceReport');
+const {
+  prepareInvestigationWithMemory,
+  persistDiscoveryKnowledge,
+  recallMarketMemoryForInvestigation,
+  buildMarketChangesSection,
+  detectMarketChanges,
+} = require('./memory');
 
 function nowIso() {
   return new Date().toISOString();
@@ -83,6 +90,9 @@ function buildPipelineResult(partial = {}) {
     qualifiedCount: partial.qualifiedCount != null ? Number(partial.qualifiedCount) : 0,
     blockReason: partial.blockReason || null,
     coverageEngineUsed: partial.coverageEngineUsed !== false,
+    marketMemoryRecall: partial.marketMemoryRecall || null,
+    marketMemoryPersist: partial.marketMemoryPersist || null,
+    memoryLoaded: partial.memoryLoaded === true,
   };
 }
 
@@ -107,6 +117,28 @@ async function runDiscoveryPipeline(input = {}) {
       opts.tenantId ||
       ''
   );
+
+  // ── SPEC-161: Recall Market Memory before investigation ────────
+  let loadedMemory = null;
+  let marketMemoryRecall = null;
+  if (opts.persistMemory !== false && tenantId) {
+    const preDelegation =
+      input.delegation || buildDelegationFromMission(mission, input.scoutPayload || {});
+    const preMarket = buildMarketDefinition(input);
+    loadedMemory = await prepareInvestigationWithMemory({
+      tenantId,
+      mission,
+      marketDefinition: preMarket,
+      opts: { store: opts.memoryStore || opts.store },
+    });
+    marketMemoryRecall = recallMarketMemoryForInvestigation({
+      priorMarketMemory: loadedMemory.memory?.market || null,
+      memory: loadedMemory.memory,
+    });
+    opts.memory = loadedMemory.memory;
+    opts.investigationMemory = loadedMemory.memory;
+    opts.marketMemoryRecall = marketMemoryRecall;
+  }
 
   // ── Stage 1: Understand Market ─────────────────────────────────
   const marketStageStarted = nowIso();
@@ -138,6 +170,18 @@ async function runDiscoveryPipeline(input = {}) {
   };
 
   let marketDefinition = buildMarketDefinition(input);
+  if (marketMemoryRecall?.loaded && marketMemoryRecall.marketUnderstanding?.dominantTerminology?.length) {
+    marketDefinition = {
+      ...marketDefinition,
+      terminology: [
+        ...new Set([
+          ...(marketMemoryRecall.marketUnderstanding.dominantTerminology || []),
+          ...(marketDefinition.terminology || []),
+        ]),
+      ],
+      priorMarketMemory: true,
+    };
+  }
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.UNDERSTAND_MARKET, {
       startedAt: marketStageStarted,
@@ -385,6 +429,30 @@ async function runDiscoveryPipeline(input = {}) {
     }
   }
 
+  if (missionIntelligenceReport && marketMemoryRecall?.loaded) {
+    const marketChanges = detectMarketChanges(marketMemoryRecall.marketMemory, {
+      entities: missionIntelligenceReport.businessUnderstanding?.items?.map((item) => ({
+        entityId: item.entity,
+        name: item.entity,
+        currentUnderstanding: {
+          assertions: item.assertions || [],
+          confidence: item.confidence || 0,
+        },
+        buyingSignalHistory: [],
+      })) || [],
+      confidence: investigationState?.confidence || discoveryConfidence?.overall || 0,
+      marketUnderstanding: {
+        dominantTerminology: marketDefinition.terminology || [],
+      },
+    });
+    missionIntelligenceReport = {
+      ...missionIntelligenceReport,
+      ...buildMarketChangesSection(marketChanges, {
+        outstandingUnknowns: missionIntelligenceReport.remainingUnknowns || [],
+      }),
+    };
+  }
+
   let intelligenceReport =
     payload.discoveryReport ||
     buildDiscoveryReport({
@@ -411,8 +479,11 @@ async function runDiscoveryPipeline(input = {}) {
 
   const emptyMarketDecision = canConcludeEmptyUniverse(coverageMetrics, qualifiedCount);
   const outcome = mapIntelligenceStatus(intelligenceResult.status);
+  const pipelineConfidence =
+    (investigationState && investigationState.confidence) ||
+    (discoveryConfidence.overall != null ? discoveryConfidence.overall : intelligenceResult.confidence);
 
-  return buildPipelineResult({
+  const pipelineResult = buildPipelineResult({
     outcome,
     stages,
     marketDefinition,
@@ -425,9 +496,7 @@ async function runDiscoveryPipeline(input = {}) {
     investigationState,
     missionIntelligenceReport,
     emptyMarketDecision,
-    confidence:
-      (investigationState && investigationState.confidence) ||
-      (discoveryConfidence.overall != null ? discoveryConfidence.overall : intelligenceResult.confidence),
+    confidence: pipelineConfidence,
     discoveryConfidence,
     sufficiency,
     gapAnalysis,
@@ -436,7 +505,25 @@ async function runDiscoveryPipeline(input = {}) {
     qualifiedCount,
     blockReason: intelligenceResult.summary || null,
     coverageEngineUsed: true,
+    marketMemoryRecall,
+    memoryLoaded: Boolean(marketMemoryRecall?.loaded),
   });
+
+  let marketMemoryPersist = null;
+  if (opts.persistMemory !== false && tenantId) {
+    marketMemoryPersist = await persistDiscoveryKnowledge(pipelineResult, {
+      tenantId,
+      missionId: opts.amoMissionId || opts.missionId || mission.id,
+      mission,
+      priorMarketMemory: marketMemoryRecall?.marketMemory || loadedMemory?.memory?.market || null,
+      completedAt: nowIso(),
+      store: opts.memoryStore || opts.store,
+      opts,
+    });
+    pipelineResult.marketMemoryPersist = marketMemoryPersist;
+  }
+
+  return pipelineResult;
 }
 
 module.exports = {

@@ -13,6 +13,7 @@ const retrieval = require('./MemoryRetrieval');
 const startingPoint = require('./InvestigationStartingPoint');
 const contradictions = require('./ContradictionMemory');
 const graph = require('./MemoryGraph');
+const marketMemory = require('./MarketMemory');
 
 const MEMORY_EVENTS = Object.freeze({
   LOADED: 'SCOUT_MEMORY_LOADED',
@@ -48,6 +49,27 @@ function clearMemoryLog() {
  */
 async function persistInvestigationKnowledge(investigationResult, context = {}) {
   const knowledge = extraction.extractKnowledgeFromInvestigation(investigationResult, context);
+  return persistExtractedKnowledge(knowledge, context);
+}
+
+/**
+ * Persist knowledge extracted from a completed discovery pipeline (SPEC-161).
+ * @param {object} pipelineResult
+ * @param {object} context — { tenantId, missionId, priorMarketMemory, store }
+ * @returns {Promise<object>}
+ */
+async function persistDiscoveryKnowledge(pipelineResult, context = {}) {
+  const extracted = marketMemory.extractMarketMemoryFromDiscovery(pipelineResult, context);
+  const knowledge = extraction.extractKnowledgeFromDiscovery(pipelineResult, context, extracted);
+  const result = await persistExtractedKnowledge(knowledge, context);
+  return {
+    ...result,
+    marketMemory: extracted?.marketMemory || null,
+    marketChanges: extracted?.changes || null,
+  };
+}
+
+async function persistExtractedKnowledge(knowledge, context = {}) {
   emitMemoryEvent(MEMORY_EVENTS.EXTRACTED, {
     tenantId: context.tenantId,
     missionId: context.missionId,
@@ -91,5 +113,7 @@ module.exports = {
   listMemoryLog,
   clearMemoryLog,
   persistInvestigationKnowledge,
+  persistDiscoveryKnowledge,
+  ...marketMemory,
   ...require('./TerminologyLearning'),
 };
