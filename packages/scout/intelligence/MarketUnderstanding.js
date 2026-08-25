@@ -2,11 +2,19 @@
 
 /**
  * SPEC-141 Stage 1 — Market Understanding.
+ * SPEC-158 — Semantic Market Definition (Scout brain).
  * Answer: What market am I actually investigating?
+ *
+ * Invariant: every investigation begins from a Market Definition, not operator wording.
  */
 
 const { buildAcquisitionSearchDefinition } = require('../../max/scoutAcquisition/SearchDefinition');
 const { buildDelegationFromMission } = require('../Discovery.helpers');
+const {
+  buildSemanticMarketDefinition,
+  conceptsFromMarketDefinition,
+} = require('./MarketDefinition');
+const { applyTerminologyLearning } = require('../memory/TerminologyLearning');
 
 function asText(value) {
   if (value == null) return '';
@@ -48,8 +56,22 @@ function buildMarketDefinition(input = {}) {
     (plan.geography && plan.geography.label) ||
     null;
 
+  const operatorSegment = segments[0] ? String(segments[0]).replace(/_/g, ' ') : null;
+
+  let semantic = buildSemanticMarketDefinition({
+    mission,
+    segments,
+    geography,
+    operatorSegment,
+    searchDefinition,
+  });
+
+  if (input.terminologyLearning || input.opts?.terminologyLearning) {
+    semantic = applyTerminologyLearning(semantic, input.terminologyLearning || input.opts.terminologyLearning);
+  }
+
   return {
-    segment: segments[0] ? String(segments[0]).replace(/_/g, ' ') : null,
+    segment: operatorSegment,
     segments,
     geography,
     buyer:
@@ -71,6 +93,20 @@ function buildMarketDefinition(input = {}) {
     searchDefinition,
     valid: searchDefinition.valid === true,
     invalidReason: searchDefinition.invalidReason || null,
+    // SPEC-158 semantic market model
+    market: semantic.market,
+    customerTypes: semantic.customerTypes,
+    decisionMakers: semantic.decisionMakers,
+    businessModels: semantic.businessModels,
+    terminology: semantic.terminology,
+    adjacentMarkets: semantic.adjacentMarkets,
+    exclusions: semantic.exclusions,
+    buyingSignals: semantic.buyingSignals,
+    expectedEvidence: semantic.expectedEvidence,
+    operatorSegment: semantic.operatorSegment,
+    segmentKey: semantic.segmentKey,
+    semanticSource: semantic.source,
+    searchConcepts: conceptsFromMarketDefinition(semantic),
   };
 }
 

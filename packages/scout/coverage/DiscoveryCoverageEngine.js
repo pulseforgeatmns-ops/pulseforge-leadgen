@@ -133,7 +133,7 @@ function adapterForSource(adapters, sourceType) {
  */
 function buildDiscoveryPlan(searchDefinition = {}, opts = {}) {
   const cities = expandCitiesFromSearchDefinition(searchDefinition);
-  const concepts = expandConcepts(searchDefinition);
+  const concepts = expandConcepts(searchDefinition, opts.marketDefinition);
   const adapters = opts.adapters || [];
   const enabledSources = opts.enabledSources || defaultEnabledSources(adapters);
   const externalSources = enabledSources.filter((src) => src !== SOURCE_TYPES.EXISTING_PF);
@@ -444,6 +444,37 @@ function buildDiscoveryReport(input = {}) {
         : 'Investigation complete. No qualified candidates remain — proceed to operator review.'
       : 'Continue investigation.',
   };
+
+  if (input.marketDefinition) {
+    report.marketDefinition = {
+      market: input.marketDefinition.market,
+      geography: input.marketDefinition.geography,
+      customerTypes: input.marketDefinition.customerTypes,
+      decisionMakers: input.marketDefinition.decisionMakers,
+      businessModels: input.marketDefinition.businessModels,
+      terminology: input.marketDefinition.terminology,
+      adjacentMarkets: input.marketDefinition.adjacentMarkets,
+      exclusions: input.marketDefinition.exclusions,
+      buyingSignals: input.marketDefinition.buyingSignals,
+      expectedEvidence: input.marketDefinition.expectedEvidence,
+      operatorSegment: input.marketDefinition.operatorSegment,
+    };
+  }
+
+  if (input.investigationReport) {
+    report.investigationHypotheses = input.investigationReport.hypotheses;
+    report.investigationBranches = input.investigationReport.branches;
+    report.finalUnderstanding = input.investigationReport.finalUnderstanding;
+  }
+
+  if (input.revisedMarketDefinition) {
+    report.revisedMarketDefinition = {
+      market: input.revisedMarketDefinition.market,
+      terminology: input.revisedMarketDefinition.terminology,
+      customerTypes: input.revisedMarketDefinition.customerTypes,
+      revisionHistory: input.revisedMarketDefinition.revisionHistory,
+    };
+  }
 
   if (universeEstimate) {
     report.estimatedMarket = {

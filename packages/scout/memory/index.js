@@ -91,4 +91,5 @@ module.exports = {
   listMemoryLog,
   clearMemoryLog,
   persistInvestigationKnowledge,
+  ...require('./TerminologyLearning'),
 };

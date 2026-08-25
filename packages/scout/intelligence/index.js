@@ -23,6 +23,11 @@ const {
 } = require('./ProviderCapabilityRegistry');
 
 const { buildMarketDefinition, buildDelegationFromMission } = require('./MarketUnderstanding');
+const {
+  buildSemanticMarketDefinition,
+  reviseMarketDefinition,
+  conceptsFromMarketDefinition,
+} = require('./MarketDefinition');
 const { buildEvidencePlan } = require('./EvidencePlanning');
 const { buildProviderStrategy } = require('./ProviderStrategy');
 const { discoverCandidateUniverse } = require('./CandidateDiscovery');
@@ -56,6 +61,9 @@ module.exports = {
   createProviderCapabilityRegistry,
   buildMarketDefinition,
   buildDelegationFromMission,
+  buildSemanticMarketDefinition,
+  reviseMarketDefinition,
+  conceptsFromMarketDefinition,
   buildEvidencePlan,
   buildProviderStrategy,
   discoverCandidateUniverse,

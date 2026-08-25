@@ -19,6 +19,7 @@ const {
   computeDiscoveryConfidence,
   discoveryStatusFromCoverage,
 } = require('../../scout/coverage/DiscoveryCoverageEngine');
+const { executeHypothesisDrivenCoverage } = require('../../scout/coverage/HypothesisDrivenDiscovery');
 
 function createMemoryDiscoveryStore(snapshot = null) {
   /** @type {Map<string, object[]>} */
@@ -183,6 +184,8 @@ async function constructCandidateUniverse(input = {}) {
     seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
   });
   let discoveryReport = null;
+  let investigationReport = null;
+  let revisedMarketDefinition = input.marketDefinition || null;
 
   const useCoverageEngine = input.useCoverageEngine !== false;
   if (input.useCoverageEngine === false) {
@@ -195,12 +198,33 @@ async function constructCandidateUniverse(input = {}) {
     discoveryRan = true;
     let result;
     if (useCoverageEngine) {
-      discoveryPlan = buildDiscoveryPlan(searchDefinition, { adapters: marketAdapters });
-      result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters);
-      coverageMetrics = result.coverage;
-      actionsTaken.push({
-        text: `Executed coverage plan: ${coverageMetrics.searches.addressed}/${coverageMetrics.searches.planned} searches across ${coverageMetrics.cities.planned} cities and ${coverageMetrics.concepts.planned} concepts.`,
-      });
+      if (input.marketDefinition && input.useHypothesisEngine !== false) {
+        const hypothesisResult = await executeHypothesisDrivenCoverage({
+          marketDefinition: input.marketDefinition,
+          searchDefinition,
+          adapters: marketAdapters,
+          opts: input.hypothesisOpts || {},
+          terminologyLearningStore: input.terminologyLearningStore,
+        });
+        result = hypothesisResult;
+        discoveryPlan = hypothesisResult.discoveryPlan;
+        coverageMetrics = hypothesisResult.coverage;
+        investigationReport = hypothesisResult.investigationReport;
+        revisedMarketDefinition = hypothesisResult.revisedMarketDefinition || input.marketDefinition;
+        actionsTaken.push({
+          text: `Hypothesis-driven investigation: ${(hypothesisResult.searchHypotheses || []).length} terminology hypotheses evaluated.`,
+        });
+      } else {
+        discoveryPlan = buildDiscoveryPlan(searchDefinition, {
+          adapters: marketAdapters,
+          marketDefinition: input.marketDefinition,
+        });
+        result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters);
+        coverageMetrics = result.coverage;
+        actionsTaken.push({
+          text: `Executed coverage plan: ${coverageMetrics.searches.addressed}/${coverageMetrics.searches.planned} searches across ${coverageMetrics.cities.planned} cities and ${coverageMetrics.concepts.planned} concepts.`,
+        });
+      }
     } else {
       result = await discoverCandidates(searchDefinition, marketAdapters);
     }
@@ -236,6 +260,9 @@ async function constructCandidateUniverse(input = {}) {
       candidateUniverse: candidateUniverseRecords,
       qualifiedCount: 0,
       discoveryConfidence,
+      marketDefinition: revisedMarketDefinition,
+      investigationReport,
+      revisedMarketDefinition,
     });
     if (discoveredRaw.length) {
       actionsTaken.push({
@@ -324,6 +351,8 @@ async function constructCandidateUniverse(input = {}) {
     candidateUniverse: candidateUniverseRecords,
     discoveryReport,
     discoveryStatus,
+    investigationReport,
+    revisedMarketDefinition,
   };
 }
 

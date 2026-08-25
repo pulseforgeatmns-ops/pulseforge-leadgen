@@ -244,6 +244,8 @@ async function runDiscoveryPipeline(input = {}) {
       missionId: opts.amoMissionId || opts.missionId || mission.id,
       tenantId,
       useCoverageEngine: true,
+      marketDefinition,
+      useHypothesisEngine: opts.useHypothesisEngine !== false,
     });
   } catch (err) {
     stages.push(
