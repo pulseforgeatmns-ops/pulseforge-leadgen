@@ -33,6 +33,10 @@ const {
   emitRanking,
   emitDiscoveryCompleted,
 } = require('./observability');
+const {
+  isNativeAmoExecution,
+  shouldSuppressSpecialistSideEffects,
+} = require('../acquisition-mission/MissionExecutionContext');
 
 function findDiscoveryStepIndex(mission) {
   const steps = (mission.plan && mission.plan.steps) || [];
@@ -191,10 +195,13 @@ async function syncMissionFromPipeline(input) {
  * @param {object} input
  * @param {object} input.mission
  * @param {import('../mission-engine/MissionEngine').MissionEngine} [input.missionEngine]
+ *   Legacy SPEC-022 engine — used only when orchestrationMissionId is bound.
+ *   Native AMO execution (SPEC-170) passes executionContext instead.
  * @param {object} [input.scoutPayload]
  * @param {string} [input.operatorId]
  * @param {string} [input.message]
  * @param {object} [input.opts]
+ * @param {object} [input.opts.executionContext] SPEC-170 runtime contract
  * @returns {Promise<object>}
  */
 async function discover(input) {
@@ -257,8 +264,13 @@ async function discover(input) {
   emitEnrichment({ missionId, strategy, source: 'discovery_pipeline' });
   emitRanking({ missionId, strategy, source: 'discovery_pipeline' });
 
+  const executionContext = opts.executionContext || null;
+  const nativeAmoExecution = isNativeAmoExecution(executionContext);
+  const orchestrationMissionId =
+    opts.orchestrationMissionId || mission.orchestrationMissionId || null;
+
   let updatedMission = mission;
-  if (missionEngine) {
+  if (missionEngine && !nativeAmoExecution && orchestrationMissionId) {
     updatedMission = await syncMissionFromPipeline({
       mission,
       missionEngine,
@@ -308,7 +320,12 @@ async function discover(input) {
     operatorResponseKind: 'mission_execution_outcome',
   });
 
-  if (opts.attachScoutDiscovery !== false && (opts.amoMissionId || opts.missionId)) {
+  const suppressSideEffects = shouldSuppressSpecialistSideEffects(executionContext);
+  if (
+    !suppressSideEffects &&
+    opts.attachScoutDiscovery !== false &&
+    (opts.amoMissionId || opts.missionId)
+  ) {
     try {
       const { attachScoutDiscovery } = require('../../services/acquisitionMission');
       await attachScoutDiscovery(
