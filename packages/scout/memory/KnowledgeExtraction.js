@@ -19,6 +19,59 @@ const {
 } = require('./types');
 const { mergeVerificationSources } = require('./MemoryConfidence');
 
+function extractKnowledgeFromDiscovery(pipelineResult, context = {}, extracted = null) {
+  const base = shapeDiscoveryAsInvestigationResult(pipelineResult);
+  const knowledge = extractKnowledgeFromInvestigation(base, context);
+
+  if (extracted?.marketMemory) {
+    knowledge.market = extracted.marketMemory;
+  }
+
+  return knowledge;
+}
+
+function shapeDiscoveryAsInvestigationResult(pipelineResult = {}) {
+  const missionReport = pipelineResult.missionIntelligenceReport || {};
+  const marketDefinition = pipelineResult.marketDefinition || missionReport.finalMarketDefinition || {};
+  const candidates =
+    pipelineResult.intelligenceResult?.payload?.candidateUniverse ||
+    pipelineResult.intelligenceReport?.candidateUniverse ||
+    [];
+
+  return {
+    marketDefinition,
+    candidateUniverse: {
+      candidates,
+      estimatedMarket: pipelineResult.universeEstimate?.expected || null,
+    },
+    claims: (missionReport.businessUnderstanding?.items || []).flatMap((item) =>
+      (item.assertions || []).map((text, idx) => ({
+        id: `claim-${item.entity}-${idx}`,
+        entityId: item.entityId || item.entity,
+        text,
+        confidence: item.confidence || 0,
+        supportedBy: item.supportingEvidence || [],
+        missingEvidence: [],
+      }))
+    ),
+    overallConfidence:
+      pipelineResult.confidence ||
+      missionReport.currentConfidence ||
+      pipelineResult.investigationState?.confidence ||
+      0,
+    iterations: pipelineResult.stages || [],
+    missingEvidence: {
+      missing: missionReport.remainingUnknowns || [],
+      gapCount: (missionReport.remainingUnknowns || []).length,
+    },
+    qualification: {
+      qualifiedCount: pipelineResult.qualifiedCount || 0,
+    },
+    investigationState: pipelineResult.investigationState || null,
+    missionIntelligenceReport: missionReport,
+  };
+}
+
 function extractSourcesFromClaim(claim) {
   const sources = [];
   for (const item of claim.supportedBy || []) {
@@ -254,6 +307,8 @@ function extractKnowledgeFromInvestigation(investigationResult, context = {}) {
 
 module.exports = {
   extractKnowledgeFromInvestigation,
+  extractKnowledgeFromDiscovery,
+  shapeDiscoveryAsInvestigationResult,
   extractMarketMemory,
   extractCompanyMemories,
   extractPersonMemories,

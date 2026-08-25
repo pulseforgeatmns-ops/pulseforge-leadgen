@@ -85,7 +85,9 @@ async function prepareInvestigationWithMemory(input = {}) {
     hasPriorKnowledge:
       startingPoint.counts.known > 0 ||
       startingPoint.counts.skippedSteps > 0 ||
-      (memory.companies || []).length > 0,
+      (memory.companies || []).length > 0 ||
+      (memory.market?.entities || []).length > 0 ||
+      Boolean(memory.market?.historicalSnapshots?.length),
   };
 }
 

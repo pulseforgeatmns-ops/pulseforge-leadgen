@@ -92,14 +92,26 @@ function seedFromPriorMemory(state, memory = {}) {
 
   if (marketMemory && next.marketDefinition) {
     const terminology = cloneList(marketMemory.knownTerminology || marketMemory.terminology);
-    if (terminology.length) {
+    const dominantTerminology =
+      marketMemory.marketUnderstanding?.dominantTerminology || terminology;
+    if (dominantTerminology.length) {
       next = {
         ...next,
         marketDefinition: {
           ...next.marketDefinition,
-          terminology: [...new Set([...terminology, ...(next.marketDefinition.terminology || [])])],
+          terminology: [...new Set([...dominantTerminology, ...(next.marketDefinition.terminology || [])])],
           priorMarketMemory: true,
         },
+      };
+    }
+
+    if (Array.isArray(marketMemory.entities) && marketMemory.entities.length) {
+      const entityNames = marketMemory.entities.map((e) => e.name).filter(Boolean);
+      next.uncertainty = {
+        ...next.uncertainty,
+        resolved: [
+          ...new Set([...(next.uncertainty.resolved || []), ...entityNames.slice(0, 10)]),
+        ],
       };
     }
   }
