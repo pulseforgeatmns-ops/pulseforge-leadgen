@@ -10,6 +10,7 @@
  */
 
 const { extractExpectedValue } = require('../universe/CandidateUniverseEstimate');
+const { buildBusinessUnderstandingReport } = require('../synthesis/EvidenceSynthesisEngine');
 const { summarizeHypothesisHistory } = require('./HypothesisLifecycle');
 const { serializeInvestigationState } = require('./InvestigationState');
 
@@ -42,20 +43,38 @@ function summarizeEvidenceGraph(evidenceGraph = {}) {
   };
 }
 
-function buildRecommendationFromUnderstanding(state = {}) {
+function buildRecommendationFromUnderstanding(state = {}, synthesisResult = null) {
   const market = state.marketDefinition || {};
+  const businessItems = state.businessUnderstandings || [];
+  const topBusiness = businessItems[0];
+
+  if (topBusiness) {
+    return {
+      kind: 'business_understanding',
+      summary: `${topBusiness.entity}: ${(topBusiness.assertions || []).join('; ')} (confidence ${topBusiness.confidence}).`,
+      entity: topBusiness.entity,
+      assertions: topBusiness.assertions,
+      confidence: topBusiness.confidence,
+      basedOnUnderstanding: true,
+      notDirectFromEvidence: true,
+      adr: 'ADR-080',
+    };
+  }
+
   const supported = (state.activeHypotheses || []).filter((h) => h.lifecycle === 'supported');
   const dominantTerm = supported[0]?.searchTerms?.[0] || market.terminology?.[0] || null;
+  const synthesisConfidence = synthesisResult?.summary?.averageConfidence;
 
   return {
     kind: 'market_understanding',
     summary: dominantTerm
-      ? `Market best understood through "${dominantTerm}" terminology (confidence ${state.confidence}).`
-      : `Market investigation at confidence ${state.confidence} — review remaining unknowns before outreach.`,
+      ? `Market best understood through "${dominantTerm}" terminology (confidence ${synthesisConfidence ?? state.confidence}).`
+      : `Market investigation at confidence ${synthesisConfidence ?? state.confidence} — review remaining unknowns before outreach.`,
     dominantTerminology: dominantTerm,
-    confidence: state.confidence,
+    confidence: synthesisConfidence ?? state.confidence,
     basedOnUnderstanding: true,
     notDirectFromEvidence: true,
+    adr: 'ADR-080',
   };
 }
 
@@ -91,7 +110,12 @@ function buildMissionIntelligenceReport(input = {}) {
 
   const hypothesisHistory = summarizeHypothesisHistory(state);
   const evidenceGraphSummary = summarizeEvidenceGraph(state.evidenceGraph);
-  const recommendation = buildRecommendationFromUnderstanding(state);
+  const synthesisResult = input.synthesisResult || null;
+  const businessUnderstandingSection = buildBusinessUnderstandingReport(
+    state.businessUnderstandings || [],
+    synthesisResult || { summary: state.synthesisSummary }
+  );
+  const recommendation = buildRecommendationFromUnderstanding(state, synthesisResult);
   const suggestedNextInvestigation = buildSuggestedNextInvestigation(state);
 
   const remainingUnknowns = [
@@ -102,7 +126,9 @@ function buildMissionIntelligenceReport(input = {}) {
   return {
     kind: 'mission_intelligence_report',
     spec: 'SPEC-159',
+    synthesisSpec: 'SPEC-160',
     adr: 'ADR-079',
+    synthesisAdr: 'ADR-080',
     finalMarketDefinition: {
       market: marketDefinition.market,
       geography: marketDefinition.geography,
@@ -125,6 +151,7 @@ function buildMissionIntelligenceReport(input = {}) {
       : null,
     hypothesisHistory,
     evidenceGraphSummary,
+    businessUnderstanding: businessUnderstandingSection,
     remainingUnknowns,
     confidenceEvolution: state.confidenceEvolution || [],
     currentConfidence: state.confidence,
@@ -137,6 +164,7 @@ function buildMissionIntelligenceReport(input = {}) {
     coverage: state.coverage || input.coverageMetrics || null,
     candidateCount: (input.candidates || []).length,
     understandingFirst: true,
+    synthesizedNotRaw: businessUnderstandingSection.synthesizedNotRaw === true,
     summary: buildReportSummary({
       marketDefinition,
       confidence: state.confidence,
@@ -165,10 +193,12 @@ function mergeIntoDiscoveryReport(discoveryReport = {}, missionReport = {}) {
     finalMarketDefinition: missionReport.finalMarketDefinition,
     hypothesisHistory: missionReport.hypothesisHistory,
     evidenceGraphSummary: missionReport.evidenceGraphSummary,
+    businessUnderstanding: missionReport.businessUnderstanding,
     remainingUnknowns: missionReport.remainingUnknowns,
     confidenceEvolution: missionReport.confidenceEvolution,
     suggestedNextInvestigation: missionReport.suggestedNextInvestigation,
     understandingFirst: true,
+    synthesizedNotRaw: missionReport.synthesizedNotRaw === true,
     recommendation: missionReport.recommendation,
   };
 }

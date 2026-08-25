@@ -41,6 +41,8 @@ function cloneList(value) {
  * @property {object[]} [archivedHypotheses]
  * @property {object[]} [confidenceEvolution]
  * @property {object[]} [understandingRevisions]
+ * @property {object[]} [businessUnderstandings]
+ * @property {object|null} [synthesisSummary]
  * @property {object|null} [priorUnderstanding]
  */
 
@@ -61,6 +63,8 @@ function buildInvestigationState(partial = {}) {
     nextQuestions: cloneList(partial.nextQuestions),
     confidenceEvolution: cloneList(partial.confidenceEvolution),
     understandingRevisions: cloneList(partial.understandingRevisions),
+    businessUnderstandings: cloneList(partial.businessUnderstandings),
+    synthesisSummary: partial.synthesisSummary || null,
     priorUnderstanding: partial.priorUnderstanding || null,
     seededFromMemory: partial.seededFromMemory === true,
     createdAt: partial.createdAt || nowIso(),
@@ -345,6 +349,46 @@ function updateUncertainty(state, partial = {}) {
   };
 }
 
+function applyBusinessUnderstandingSynthesis(state, synthesisResult = {}) {
+  const understandings = synthesisResult.understandings || [];
+  if (!understandings.length && !(synthesisResult.revisions || []).length) {
+    return state;
+  }
+
+  const before = {
+    count: (state.businessUnderstandings || []).length,
+    confidence: state.confidence,
+  };
+
+  let next = {
+    ...state,
+    businessUnderstandings: understandings,
+    synthesisSummary: synthesisResult.summary || null,
+    phase: 'update_understanding',
+    updatedAt: nowIso(),
+  };
+
+  const avgConfidence = synthesisResult.summary?.averageConfidence;
+  if (avgConfidence != null && avgConfidence > next.confidence) {
+    next = recordConfidenceStep(next, {
+      confidence: avgConfidence,
+      reason: 'Business understanding synthesized from multi-source evidence',
+      source: 'evidence_synthesis',
+    });
+  }
+
+  return recordUnderstandingRevision(next, {
+    kind: 'business_understanding',
+    reason: 'Evidence synthesis produced business understanding',
+    before,
+    after: {
+      count: understandings.length,
+      confidence: next.confidence,
+      contradictions: synthesisResult.summary?.contradictions || 0,
+    },
+  });
+}
+
 function serializeInvestigationState(state) {
   return {
     missionId: state.missionId,
@@ -362,6 +406,8 @@ function serializeInvestigationState(state) {
     nextQuestions: state.nextQuestions,
     confidenceEvolution: state.confidenceEvolution,
     understandingRevisions: state.understandingRevisions,
+    businessUnderstandings: state.businessUnderstandings,
+    synthesisSummary: state.synthesisSummary,
     priorUnderstanding: state.priorUnderstanding,
     seededFromMemory: state.seededFromMemory,
     createdAt: state.createdAt,
@@ -377,6 +423,7 @@ module.exports = {
   recordUnderstandingRevision,
   applyMarketDefinitionRevision,
   applyUniverseEstimateRevision,
+  applyBusinessUnderstandingSynthesis,
   updateHypothesisBuckets,
   addEvidenceToGraph,
   setNextQuestions,
