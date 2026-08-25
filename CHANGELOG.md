@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Canonical Mission Verification ([SPEC-169](docs/specs/SPEC-169_Canonical_Mission_Verification.md), [ADR-088](docs/adr/ADR-088_Canonical_Mission_Projection_Is_The_Verification_Contract.md))
+  - Transaction verification compares `CanonicalMissionProjection`, not a 10-field subset
+  - `buildCanonicalMissionProjection()` is the single projection builder consumed by `assertPersistedMatchesEngine`
+  - Future durable mission fields (e.g. `organizationalPlan`) participate automatically
+  - Persistence mismatches return a structured projection diff: field, memory, persisted, reason, first divergence
+
 - Pending Operator Decision Consistency ([SPEC-136](docs/specs/SPEC-136_Pending_Operator_Decision_Consistency.md), [ADR-058](docs/adr/ADR-058_Pending_Operator_Decision_Matches_Execution.md))
   - `pendingOperatorDecision` must satisfy `hasPendingPlanApproval` / `hasPendingDiscoveryApproval` after every mission mutation
   - Plan approval atomically advances to discovery approval; discovery approval is consumed before Scout is durable

@@ -10,6 +10,11 @@ const {
   releaseMissionDurableLock,
   isGlobalLockHeld,
 } = require('../packages/acquisition-mission/TransactionalPersistence');
+const {
+  buildCanonicalMissionProjection,
+  snapshotFromEngine,
+  diffCanonicalMissionProjections,
+} = require('../packages/acquisition-mission/CanonicalMissionProjection');
 
 function defaultPool() {
   return require('../db');
@@ -156,26 +161,30 @@ async function ensureOutcomeLearningSchema(pool = defaultPool()) {
   `);
 }
 
+function columnOrPayload(rowValue, payloadValue) {
+  return rowValue === undefined ? payloadValue : rowValue;
+}
+
 function missionFromRow(row) {
   const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
   return {
     ...payload,
     id: row.id,
-    tenantId: row.tenant_id,
-    clientId: row.client_id,
-    stage: row.stage,
-    status: row.status,
-    objective: row.objective,
-    targetSegment: row.target_segment,
-    campaign: row.campaign,
-    title: row.title,
-    priority: row.priority,
-    confidence: row.confidence,
-    owner: row.owner,
-    createdBy: row.created_by,
-    orchestrationMissionId: row.orchestration_mission_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    tenantId: columnOrPayload(row.tenant_id, payload.tenantId),
+    clientId: columnOrPayload(row.client_id, payload.clientId),
+    stage: columnOrPayload(row.stage, payload.stage),
+    status: columnOrPayload(row.status, payload.status),
+    objective: columnOrPayload(row.objective, payload.objective),
+    targetSegment: columnOrPayload(row.target_segment, payload.targetSegment),
+    campaign: columnOrPayload(row.campaign, payload.campaign),
+    title: columnOrPayload(row.title, payload.title),
+    priority: columnOrPayload(row.priority, payload.priority),
+    confidence: columnOrPayload(row.confidence, payload.confidence),
+    owner: columnOrPayload(row.owner, payload.owner),
+    createdBy: columnOrPayload(row.created_by, payload.createdBy),
+    orchestrationMissionId: columnOrPayload(row.orchestration_mission_id, payload.orchestrationMissionId),
+    createdAt: columnOrPayload(row.created_at, payload.createdAt),
+    updatedAt: columnOrPayload(row.updated_at, payload.updatedAt),
   };
 }
 
@@ -512,40 +521,43 @@ async function loadMissionSnapshot(missionId, tenantId, pool = defaultPool()) {
   return { mission, contributions, events, observations, outcomes };
 }
 
+/**
+ * SPEC-169 — subset comparator removed. Persistence verification uses the
+ * canonical mission projection only. Kept as a compatibility alias.
+ */
 function comparableMissionState(snapshot) {
-  const mission = snapshot && snapshot.mission ? snapshot.mission : snapshot;
-  const contributions = (snapshot && snapshot.contributions) || [];
-  return {
-    id: mission && mission.id,
-    version: mission && mission.version,
-    stage: mission && mission.stage,
-    status: mission && mission.status,
-    structuredMissionApproved: mission && mission.structuredMissionApproved,
-    structuredMission: mission && mission.structuredMission,
-    missionPlanDraft: mission && mission.missionPlanDraft,
-    pendingOperatorDecision: mission && mission.pendingOperatorDecision,
-    lastTransactionId: mission && mission.lastTransactionId,
-    contributionIds: contributions.map((row) => row.id).sort(),
-  };
+  return buildCanonicalMissionProjection(snapshot);
 }
 
 /**
- * SPEC-139 — persisted mission must match in-memory engine state before commit succeeds.
+ * SPEC-139 / SPEC-169 — persisted canonical projection must match in-memory
+ * engine state before commit succeeds.
  */
 async function assertPersistedMatchesEngine(engine, missionId, tenantId, pool = defaultPool()) {
-  const inMemory = engine.inspect(missionId, { tenantId });
+  const inMemory = snapshotFromEngine(engine, missionId, tenantId);
   const persisted = await loadMissionSnapshot(missionId, tenantId, pool);
   if (!persisted || !persisted.mission) {
     const err = new Error('Persisted mission snapshot is missing after stage commit.');
     err.code = 'tme_persistence_verify';
     throw err;
   }
-  const memoryComparable = comparableMissionState(inMemory);
-  const persistedComparable = comparableMissionState(persisted);
-  if (JSON.stringify(memoryComparable) !== JSON.stringify(persistedComparable)) {
-    const err = new Error('Persisted mission does not match committed in-memory mission.');
+  const memoryProjection = buildCanonicalMissionProjection(inMemory);
+  const persistedProjection = buildCanonicalMissionProjection(persisted);
+  const diff = diffCanonicalMissionProjections(memoryProjection, persistedProjection);
+  if (!diff.equal) {
+    const first = diff.firstDivergence;
+    const err = new Error(
+      `Persisted mission does not match committed in-memory mission (${first.field}: ${first.reason}).`
+    );
     err.code = 'tme_persistence_verify';
-    err.details = { memory: memoryComparable, persisted: persistedComparable };
+    err.details = {
+      firstDivergence: first,
+      diff: diff.fields,
+      memory: first && first.memory,
+      persisted: first && first.persisted,
+      reason: first && first.reason,
+      field: first && first.field,
+    };
     throw err;
   }
   return persisted;
@@ -742,6 +754,9 @@ module.exports = {
   persistStageCommit,
   loadMissionSnapshot,
   comparableMissionState,
+  buildCanonicalMissionProjection,
+  snapshotFromEngine,
+  diffCanonicalMissionProjections,
   assertPersistedMatchesEngine,
   bindStagePersistDurable,
   loadTenantMissions,
