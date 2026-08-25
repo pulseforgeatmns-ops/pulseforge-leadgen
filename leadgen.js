@@ -52,6 +52,11 @@ const {
   targetVerticalEntries,
   autonomousTargetVerticals,
 } = require('./utils/verticalTiers');
+const {
+  establishBusinessIdentity,
+  leadHasEstablishedIdentity,
+} = require('./packages/scout/identity/BusinessIdentity');
+const { expandPlacesQueriesForVertical } = require('./packages/scout/hypothesis/MarketHypothesisRegistry');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -183,6 +188,8 @@ function scoutDiscoveryMethod(lead) {
 }
 
 function scoutCandidateIdentifier(lead, companyName) {
+  const identity = establishBusinessIdentity({ ...lead, company: companyName || lead?.company });
+  if (identity.identityKey) return identity.identityKey;
   const email = typeof lead?.email === 'string' && lead.email !== '—' ? lead.email.trim() : '';
   return email || normalizeDomain(lead?.url) || `${companyName || lead?.company || 'unknown'} @ ${CONFIG.location}`;
 }
@@ -560,12 +567,15 @@ function isQueueLocationValidForPlan(clientId, vertical, location) {
 }
 
 function getSearchQueriesForTarget() {
+  const city = cityFromLocation(CONFIG.location);
+  const state = sanitizeQueueLocation(CONFIG.location).split(/\s+/).pop() || CLIENT_CONFIG?.state || '';
+  const hypothesisQueries = expandPlacesQueriesForVertical(CONFIG.vertical, { city, state });
+  if (hypothesisQueries.length) return hypothesisQueries;
+
   const configured = targetVerticalEntries(CLIENT_CONFIG)
     .find(entry => entry.vertical === normalizeVertical(CONFIG.vertical));
   if (configured) {
     if (!configured.autonomous_sourcing || configured.tier !== 'A') return [];
-    const city = cityFromLocation(CONFIG.location);
-    const state = sanitizeQueueLocation(CONFIG.location).split(/\s+/).pop() || CLIENT_CONFIG?.state || '';
     return configured.seed_terms.map(seed => seed
       .replace(/\{city\}/g, city)
       .replace(/\{state\}/g, state)
@@ -576,8 +586,6 @@ function getSearchQueriesForTarget() {
   if (!Array.isArray(seeds) || seeds.length === 0) {
     return [sanitizeQueueLocation(`${CONFIG.industry} ${CONFIG.location}`)];
   }
-  const city = cityFromLocation(CONFIG.location);
-  const state = sanitizeQueueLocation(CONFIG.location).split(/\s+/).pop() || CLIENT_CONFIG?.state || '';
   return seeds.map(seed => seed
     .replace(/\{city\}/g, city)
     .replace(/\{state\}/g, state)
@@ -1051,27 +1059,32 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
     for (const hit of results) {
       try {
         const details = await fetchPlaceDetails(hit.place_id, PLACES_KEY);
-        if (!details?.website) continue;
+        if (!details?.name && !hit.name) continue;
 
-        const domain = extractDomain(details.website);
-        if (!domain || isBlacklistedDomain(domain)) continue;
+        const placeAddress = parsePlacesAddressComponents(details?.address_components || hit.address_components);
+        const domain = details?.website ? extractDomain(details.website) : null;
+        if (domain && isBlacklistedDomain(domain)) continue;
 
-        const placeAddress = parsePlacesAddressComponents(details.address_components);
-        leads.push({
-          company: normalizeCompanyName(details.name || hit.name || 'Unknown'),
-          url: domain,
-          phone: details.formatted_phone_number || null,
-          address: details.formatted_address || hit.formatted_address || '',
+        const leadDraft = {
+          company: normalizeCompanyName(details?.name || hit.name || 'Unknown'),
+          url: domain || null,
+          phone: details?.formatted_phone_number || null,
+          address: details?.formatted_address || hit.formatted_address || '',
           places_locality: placeAddress.locality,
           places_administrative_area_level_1: placeAddress.administrativeAreaLevel1,
           places_postal_code: placeAddress.postalCode,
-          place_id: details.place_id || hit.place_id,
-          google_rating: details.rating ?? hit.rating ?? null,
-          google_review_count: details.user_ratings_total ?? hit.user_ratings_total ?? null,
-          place_types: details.types || hit.types || [],
+          place_id: details?.place_id || hit.place_id,
+          google_rating: details?.rating ?? hit.rating ?? null,
+          google_review_count: details?.user_ratings_total ?? hit.user_ratings_total ?? null,
+          place_types: details?.types || hit.types || [],
           source: ['google_places'],
           snippet: '',
-        });
+        };
+
+        const identity = establishBusinessIdentity(leadDraft);
+        if (!identity.established) continue;
+
+        leads.push(leadDraft);
 
         await new Promise(r => setTimeout(r, 200));
       } catch (err) {
@@ -1079,7 +1092,7 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
       }
     }
 
-    console.log(`[Places] Found ${leads.length} results with websites`);
+    console.log(`[Places] Found ${leads.length} identity-established results`);
     return leads;
   } catch (err) {
     console.error('[Places] Error:', err.response?.data || err.message);
@@ -1488,7 +1501,18 @@ async function main({ runId = null } = {}) {
 
   const uniqueLeads = [];
   const seenDomains = new Set();
+  const seenIdentityKeys = new Set();
   for (const lead of leads) {
+    const identity = establishBusinessIdentity(lead);
+    if (identity.identityKey && seenIdentityKeys.has(identity.identityKey)) {
+      incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.DUPLICATE);
+      preSaveStats.skipped++;
+      await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DUPLICATE, {
+        match: 'within_run_identity',
+        identity_key: identity.identityKey,
+      });
+      continue;
+    }
     const domain = normalizeDomain(lead.url);
     if (domain && seenDomains.has(domain)) {
       incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.DUPLICATE);
@@ -1496,11 +1520,12 @@ async function main({ runId = null } = {}) {
       await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.DUPLICATE, { match: 'within_run_domain', domain });
       continue;
     }
+    if (identity.identityKey) seenIdentityKeys.add(identity.identityKey);
     if (domain) seenDomains.add(domain);
     uniqueLeads.push(lead);
   }
   leads = uniqueLeads;
-  console.log(`[Combined] ${leads.length} unique domains after SerpAPI + Places`);
+  console.log(`[Combined] ${leads.length} unique candidates after SerpAPI + Places (identity-aware dedupe)`);
 
   if (requiresB2BPlacesGate()) {
     const b2bAccepted = [];
@@ -1536,13 +1561,15 @@ async function main({ runId = null } = {}) {
   const beforePreEnrichment = leads.length;
   const preEnrichmentAccepted = [];
   for (const l of leads) {
-    const missingFields = [];
-    if (!String(l.company || '').trim()) missingFields.push('company');
-    if (!normalizeDomain(l.url)) missingFields.push('domain');
-    if (missingFields.length) {
+    const identity = establishBusinessIdentity(l);
+    if (!identity.established) {
       incrementBreakdown(preSaveStats.skipped_breakdown, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD);
       preSaveStats.skipped++;
-      await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD, { missing_fields: missingFields, stage: 'pre_enrichment' });
+      await persistScoutSkip(runId, l, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD, {
+        missing_fields: ['identity'],
+        stage: 'pre_enrichment',
+        website_only: identity.websiteOnly,
+      });
       continue;
     }
     const reason = preEnrichmentRejectReason(l);
@@ -1568,6 +1595,11 @@ async function main({ runId = null } = {}) {
     }
 
     const lead = leads[i];
+    const domain = normalizeDomain(lead.url);
+    if (!domain) {
+      process.stdout.write(`  [${i+1}/${leads.length}] ${lead.company || 'unknown'} (identity-only, no domain)... skipped enrichment\n`);
+      continue;
+    }
     process.stdout.write(`  [${i+1}/${leads.length}] ${lead.url}...`);
     const rootDomain = lead.url.replace(/^(?:[^.]+\.)+?([^.]+\.[^.]+)$/, (_, d) => d) || lead.url;
     let enrichmentMethod = 'none';
@@ -2387,14 +2419,15 @@ async function saveToDatabase(leads, {
       const domain = normalizeDomain(lead.url);
       const discoveryMethod = scoutDiscoveryMethod(lead);
       const websiteUrl = lead.url || null;
+      const identity = establishBusinessIdentity({ ...lead, company: companyName });
 
-      const missingFields = [];
-      if (!companyName || companyName.toLowerCase() === 'unknown') missingFields.push('company');
-      if (!domain) missingFields.push('domain');
-      if (missingFields.length) {
+      if (!identity.established) {
         incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD);
         skipped++;
-        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD, { missing_fields: missingFields }, companyName);
+        await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.MISSING_REQUIRED_FIELD, {
+          missing_fields: ['identity'],
+          website_only: identity.websiteOnly,
+        }, companyName);
         continue;
       }
 

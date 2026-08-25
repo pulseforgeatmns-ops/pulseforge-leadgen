@@ -1,16 +1,20 @@
 'use strict';
 
 /**
- * SPEC-175 — Candidate Minimum Contract.
+ * SPEC-175 / ADR-092 — Candidate Minimum Contract.
  * A provider must return identity, location, source, and retrieval provenance
- * before evaluation begins. Timing signals are optional; identity is not.
+ * before evaluation begins. Identity is established by existence evidence —
+ * website is enrichment, not the identity gate.
  */
 
 const { asText, nowIso } = require('../../max/scoutAcquisition/Types');
+const { establishBusinessIdentity } = require('../identity/BusinessIdentity');
 
 const REQUIRED_FIELDS = Object.freeze(['identity', 'location', 'source', 'retrievalProvenance']);
 
 function candidateIdentity(row = {}) {
+  const established = establishBusinessIdentity(row);
+  if (established.identityKey) return established.identityKey;
   return (
     asText(row.id || row.companyId || row.placeId || row.candidate_id || row.name) || null
   );
