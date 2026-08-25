@@ -12,6 +12,9 @@
  * GET  /api/v1/amo/missions/:id/context
  * GET  /api/v1/amo/missions/:id/explain
  * GET  /api/v1/amo/learning
+ * GET  /api/v1/amo/outcome-learning
+ * GET  /api/v1/amo/missions/:id/outcome-learning
+ * POST /api/v1/amo/missions/:id/outcome-learning/evaluate
  * POST /api/v1/amo/ask
  */
 
@@ -210,6 +213,7 @@ router.get('/api/v1/amo/learning', requireActor, async (req, res) => {
     noStore(res);
     return res.json({
       spec: 'SPEC-118',
+      outcomeLearningSpec: 'SPEC-166',
       tenantId,
       learning: getAcquisitionMissionRuntime().engine().learning(tenantId),
       missionCount: missions.length,
@@ -217,6 +221,80 @@ router.get('/api/v1/amo/learning', requireActor, async (req, res) => {
   } catch (err) {
     console.error('[amo] learning', err);
     return fail(res, err, 'amo_learning_failed');
+  }
+});
+
+router.get('/api/v1/amo/outcome-learning', requireActor, async (req, res) => {
+  try {
+    const tenantId = actorTenantId(req);
+    if (tenantId == null) {
+      return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
+    }
+    const { getAcquisitionMissionRuntime } = require('../services/acquisitionMissionRuntime');
+    await listMissions(tenantId, { pool });
+    const engine = getAcquisitionMissionRuntime().engine();
+    const { summarizeOrganizationalLearning } = require('../packages/acquisition-mission/OutcomeLearning');
+    const since = req.query.since || null;
+    noStore(res);
+    return res.json({
+      spec: 'SPEC-166',
+      tenantId,
+      organizationalLearning: summarizeOrganizationalLearning(
+        engine.store.listEvaluations(null).filter((row) => String(row.tenantId) === String(tenantId)),
+        engine.store.listOutcomeLearnings(tenantId),
+        { since, period: since ? 'custom' : 'all' }
+      ),
+      autoApplied: false,
+    });
+  } catch (err) {
+    console.error('[amo] outcome-learning', err);
+    return fail(res, err, 'amo_outcome_learning_failed');
+  }
+});
+
+router.get('/api/v1/amo/missions/:id/outcome-learning', requireActor, async (req, res) => {
+  try {
+    const tenantId = actorTenantId(req);
+    if (tenantId == null) {
+      return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
+    }
+    const snapshot = await inspectMission(req.params.id, { tenantId, pool });
+    noStore(res);
+    return res.json({
+      spec: 'SPEC-166',
+      missionId: req.params.id,
+      outcomeLearning: snapshot.outcomeLearning,
+      autoApplied: false,
+    });
+  } catch (err) {
+    console.error('[amo] mission outcome-learning', err);
+    return fail(res, err, 'amo_mission_outcome_learning_failed');
+  }
+});
+
+router.post('/api/v1/amo/missions/:id/outcome-learning/evaluate', requireActor, async (req, res) => {
+  try {
+    const tenantId = actorTenantId(req);
+    if (tenantId == null) {
+      return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
+    }
+    const { getAcquisitionMissionRuntime } = require('../services/acquisitionMissionRuntime');
+    await listMissions(tenantId, { pool });
+    const result = getAcquisitionMissionRuntime().engine().evaluateOutcomeLearning(
+      req.params.id,
+      req.body || {},
+      { tenantId }
+    );
+    await getAcquisitionMissionRuntime().persistMissionState(req.params.id, { pool });
+    noStore(res);
+    return res.json({
+      spec: 'SPEC-166',
+      ...result,
+      autoApplied: false,
+    });
+  } catch (err) {
+    console.error('[amo] evaluate outcome-learning', err);
+    return fail(res, err, 'amo_evaluate_outcome_learning_failed', err.code === 'amo_prediction_not_found' ? 404 : 500);
   }
 });
 

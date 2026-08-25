@@ -27,6 +27,7 @@ const {
   buildRecommendationFromOpportunity,
 } = require('../opportunity/OpportunityIntelligenceEngine');
 const { buildStrategicDecision } = require('../../max/decision');
+const { buildOutcomeReviewSection } = require('../../acquisition-mission/OutcomeLearning');
 
 function summarizeEvidenceGraph(evidenceGraph = {}) {
   const nodes = evidenceGraph.nodes || [];
@@ -214,6 +215,13 @@ function buildMissionIntelligenceReport(input = {}) {
     ? { ...opportunityRecommendation, ...strategicDecision.recommendationOverlay }
     : heuristicRecommendation;
 
+  const outcomeReview = buildOutcomeReviewSection({
+    predictions: input.priorPredictions || [],
+    evaluations: input.priorEvaluations || [],
+    outcomeLearnings: input.priorOutcomeLearnings || input.priorLearnings || [],
+    allowPending: true,
+  });
+
   return {
     kind: 'mission_intelligence_report',
     spec: 'SPEC-159',
@@ -222,12 +230,14 @@ function buildMissionIntelligenceReport(input = {}) {
     strategySpec: 'SPEC-163',
     opportunitySpec: 'SPEC-164',
     decisionSpec: 'SPEC-165',
+    outcomeLearningSpec: 'SPEC-166',
     adr: 'ADR-079',
     synthesisAdr: 'ADR-080',
     heuristicsAdr: 'ADR-082',
     strategyAdr: 'ADR-083',
     opportunityAdr: 'ADR-084',
     decisionAdr: 'ADR-085',
+    outcomeLearningAdr: 'ADR-086',
     opportunityIntelligence,
     strategicDecision,
     topOpportunities: opportunityIntelligence.topOpportunities,
@@ -261,6 +271,7 @@ function buildMissionIntelligenceReport(input = {}) {
     confidenceEvolution: state.confidenceEvolution || [],
     currentConfidence: state.confidence,
     recommendation,
+    outcomeReview,
     suggestedNextInvestigation,
     investigationCycles: input.cycles || [],
     stopCondition: input.stop || null,
@@ -328,6 +339,7 @@ function mergeIntoDiscoveryReport(discoveryReport = {}, missionReport = {}) {
     synthesizedNotRaw: missionReport.synthesizedNotRaw === true,
     basedOnStrategicDecision: missionReport.basedOnStrategicDecision === true,
     recommendation: missionReport.recommendation,
+    outcomeReview: missionReport.outcomeReview,
   };
 }
 

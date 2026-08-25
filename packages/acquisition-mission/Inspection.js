@@ -28,6 +28,7 @@ const INSPECTION_PROPERTIES = Object.freeze({
   TIMELINE: 'timeline',
   NEXT: 'next',
   RECOMMENDATION: 'recommendation',
+  OUTCOME_LEARNING: 'outcome_learning',
   EXPLAIN: 'explain',
   WORKSPACE: 'workspace',
 });
@@ -140,6 +141,11 @@ function classifyInspectionQuestion(question) {
   }
   if (/\bwhy this recommendation\b|\bwhy (?:that|this) recommend/.test(q)) {
     return INSPECTION_PROPERTIES.RECOMMENDATION;
+  }
+  if (
+    /what have we learned|organizational learning|prediction accuracy|outcome learning|what surprised us|what prediction failed|what should change|what should never happen again/.test(q)
+  ) {
+    return INSPECTION_PROPERTIES.OUTCOME_LEARNING;
   }
   if (/mission workspace|mission status|mission progress|where are we\b/.test(q)) {
     return INSPECTION_PROPERTIES.WORKSPACE;
@@ -487,6 +493,36 @@ function explainNext(snapshot) {
   };
 }
 
+function explainOutcomeLearning(snapshot) {
+  const outcomeLearning = snapshot.outcomeLearning || {};
+  const org = outcomeLearning.organizationalLearning || {};
+  const derivedFrom = [];
+
+  if (outcomeLearning.accuracy?.label) {
+    derivedFrom.push({ label: 'Prediction accuracy', detail: outcomeLearning.accuracy.label });
+  }
+  for (const lesson of (outcomeLearning.lessons || []).slice(0, 5)) {
+    derivedFrom.push({ label: capitalize(lesson.kind || 'lesson'), detail: lesson.statement });
+  }
+  for (const row of (org.whatPredictionFailed || []).slice(0, 3)) {
+    derivedFrom.push({
+      label: 'Failed prediction',
+      detail: `${row.prediction || '—'} — expected ${row.expected || '—'}, got ${row.actual || '—'}`,
+    });
+  }
+
+  return {
+    property: INSPECTION_PROPERTIES.OUTCOME_LEARNING,
+    value: org.summary || outcomeLearning.accuracy?.label || 'No outcome learning on file yet',
+    summary: org.summary || 'Predictions will be compared once business outcomes are observed.',
+    derivedFrom: derivedFrom.length
+      ? derivedFrom
+      : [{ label: 'Pending', detail: 'Complete a mission cycle to capture outcome learning' }],
+    headline: 'Outcome Learning',
+    structured: outcomeLearning,
+  };
+}
+
 function explainRecommendation(snapshot) {
   const learning = snapshot.learning || {};
   const max = [...(snapshot.contributions || [])].reverse().find((row) => row.specialist === SPECIALISTS.MAX);
@@ -527,6 +563,8 @@ function explainMetric(property, snapshot, question = '') {
       return explainNext(snapshot);
     case INSPECTION_PROPERTIES.RECOMMENDATION:
       return explainRecommendation(snapshot);
+    case INSPECTION_PROPERTIES.OUTCOME_LEARNING:
+      return explainOutcomeLearning(snapshot);
     default:
       return null;
   }

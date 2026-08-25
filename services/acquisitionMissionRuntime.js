@@ -12,6 +12,9 @@ const { MISSION_STATE_INCONSISTENT } = amo;
 const {
   persistMission,
   persistLearning,
+  persistPrediction,
+  persistOutcomeEvaluation,
+  persistOutcomeLearning,
   persistStageCommit,
   loadTenantMissions,
   deleteAllAmoData,
@@ -180,6 +183,9 @@ function createAcquisitionMissionRuntime(opts = {}) {
         for (const row of loaded.observations) if (row) state.engine.store.addObservation(row);
         for (const row of loaded.outcomes) if (row) state.engine.store.addOutcome(row);
         for (const row of loaded.learning) if (row) state.engine.store.addLearning(row);
+        for (const row of loaded.predictions || []) if (row) state.engine.store.addPrediction(row);
+        for (const row of loaded.evaluations || []) if (row) state.engine.store.addEvaluation(row);
+        for (const row of loaded.outcomeLearnings || []) if (row) state.engine.store.addOutcomeLearning(row);
       } catch (err) {
         if (!/relation .* does not exist/i.test(String(err.message))) {
           console.error('[amo] hydrate:', err.message);
@@ -239,6 +245,15 @@ function createAcquisitionMissionRuntime(opts = {}) {
         }, effectivePool);
         for (const row of state.engine.store.listLearning(mission.tenantId)) {
           await persistLearning(row, effectivePool);
+        }
+        for (const row of state.engine.store.listPredictions(missionId)) {
+          await persistPrediction(row, effectivePool);
+        }
+        for (const row of state.engine.store.listEvaluations(missionId)) {
+          await persistOutcomeEvaluation(row, effectivePool);
+        }
+        for (const row of state.engine.store.listOutcomeLearnings(mission.tenantId, missionId)) {
+          await persistOutcomeLearning(row, effectivePool);
         }
       } catch (err) {
         console.error('[amo] persist mission state:', err.message);
