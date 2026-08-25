@@ -355,8 +355,6 @@ async function runDiscoveryPipeline(input = {}) {
       useCoverageEngine: true,
       marketDefinition,
       mission,
-      useHypothesisEngine: opts.useHypothesisEngine !== false,
-      useHypothesisDiscoveryEngine: opts.useHypothesisDiscoveryEngine !== false,
     });
   } catch (err) {
     stages.push(

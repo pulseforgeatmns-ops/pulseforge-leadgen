@@ -189,7 +189,7 @@ describe('SPEC-177 — Hypothesis-Driven Discovery Engine', () => {
     const market = buildMarketDefinition({ mission });
     const plan = createHypothesisInvestigationPlan({ mission, marketDefinition: market });
 
-    assert.equal(plan.version, 'SPEC-177');
+    assert.equal(plan.version, 'SPEC-180');
     assert.ok(plan.hypotheses.length > 0);
     assert.ok(plan.questions.length > 0);
     assert.ok(plan.evidenceRequirements.length > 0);
@@ -272,7 +272,7 @@ describe('SPEC-177 — Hypothesis-Driven Discovery Engine', () => {
     });
 
     assert.ok(result.investigationPlan);
-    assert.equal(result.investigationPlan.version, 'SPEC-177');
+    assert.equal(result.investigationPlan.version, 'SPEC-180');
     assert.ok(result.executedTasks.length > 0);
     assert.ok(result.candidates.length >= 1);
     assert.ok(result.investigationState);

@@ -120,6 +120,6 @@ Max can answer "Why are we searching LinkedIn?" with:
 
 ## Integration
 
-- `CandidateUniverse.constructCandidateUniverse()` uses `runHypothesisDrivenDiscovery()` when `useHypothesisDiscoveryEngine !== false` (default).
-- SPEC-158 terminology engine remains available via `useHypothesisDiscoveryEngine: false`.
+- `CandidateUniverse.constructCandidateUniverse()` routes through `runHypothesisDrivenDiscovery()` whenever `marketDefinition` is present (EPIC-001 / SPEC-180).
+- SPEC-158 terminology hypotheses are merged into `CanonicalHypothesisEngine` (SPEC-179); the standalone SPEC-158 orchestrator branch is retired.
 - `InvestigationState` is updated live during discovery and passed to SPEC-159 reasoning loop.
