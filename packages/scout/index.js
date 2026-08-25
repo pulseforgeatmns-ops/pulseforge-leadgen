@@ -81,4 +81,7 @@ module.exports = {
   heuristics,
   opportunity,
   universe: require('./universe'),
+  adapters: {
+    ...require('./adapters/ScoutDiscoveryArtifact'),
+  },
 };
