@@ -15,6 +15,7 @@ const {
   createInvestigationState,
   applyMarketDefinitionRevision,
   applyUniverseEstimateRevision,
+  applyBusinessUnderstandingSynthesis,
   updateHypothesisBuckets,
   addEvidenceToGraph,
   setNextQuestions,
@@ -30,6 +31,7 @@ const {
   markHypothesisTesting,
 } = require('./HypothesisLifecycle');
 const { buildMissionIntelligenceReport } = require('./MissionIntelligenceReport');
+const { synthesizeFromCandidates } = require('../synthesis/EvidenceSynthesisEngine');
 const { COMPLETION_REASONS } = require('./types');
 
 const DEFAULT_UNCERTAINTY_THRESHOLD = 0.15;
@@ -416,6 +418,15 @@ async function runInvestigativeReasoningLoop(input = {}) {
   }
 
   state = setNextQuestions(state, generateQuestionsFromUncertainty(state));
+
+  const synthesisResult = synthesizeFromCandidates({
+    candidates,
+    priorUnderstandings: state.businessUnderstandings || [],
+  });
+  if (synthesisResult.understandings.length) {
+    state = applyBusinessUnderstandingSynthesis(state, synthesisResult);
+  }
+
   const stop = shouldStopInvestigation(state, { ...opts, forceComplete: true });
   state = { ...state, phase: stop.stop ? 'complete' : 'investigate' };
 
@@ -426,6 +437,7 @@ async function runInvestigativeReasoningLoop(input = {}) {
     stop,
     candidates,
     coverageMetrics,
+    synthesisResult,
   });
 
   return {
