@@ -63,6 +63,8 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-069](ADR-069_Classify_Communication_Before_Cognition.md) | Classify Communication Before Cognition | Accepted |
 | [ADR-070](ADR-070_Session_State_Is_Inspectable.md) | Session State Is Inspectable | Accepted |
 | [ADR-071](ADR-071_Session_Directive_Registry.md) | Session Directive Registry | Accepted |
+| [ADR-072](ADR-072_Operator_Messages_May_Contain_Multiple_Intents.md) | Operator Messages May Contain Multiple Intents | Accepted |
+| [ADR-087](ADR-087_Operator_Objective_Takes_Precedence.md) | Operator Objective Takes Precedence | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

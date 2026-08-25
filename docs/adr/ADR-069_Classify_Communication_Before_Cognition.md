@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Accepted |
 | **Date** | 2026-08-24 |
-| **Related** | [SPEC-149](../specs/SPEC-149_Message_Type_Classification.md) |
+| **Related** | [SPEC-149](../specs/SPEC-149_Message_Type_Classification.md), [ADR-087](ADR-087_Operator_Objective_Takes_Precedence.md) |
 
 ## Context
 
@@ -42,6 +42,8 @@ Reasoning
   ↓
 Composition
 ```
+
+> **ADR-087 (2026-08-25):** Within the Message Type Classifier, the operator's **primary business objective** is resolved before execution or conversation modifiers. Modifiers may mutate session state and influence presentation but must not displace routing. See [ADR-087](ADR-087_Operator_Objective_Takes_Precedence.md).
 
 ## Consequences
 
