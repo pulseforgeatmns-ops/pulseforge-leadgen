@@ -60,16 +60,30 @@ function buildRoutingTrace(input = {}) {
   const workspaceOwnership = input.workspaceOwnership || null;
   const conversationalState = input.conversationalState || null;
   const messageClassification = input.messageClassification || null;
+  const objectiveResolution = input.objectiveResolution || null;
   const owner = workspaceOwnership && workspaceOwnership.owner ? workspaceOwnership.owner : null;
   const subject = conversationSubject && conversationSubject.subject
     ? conversationSubject.subject
     : null;
 
   return {
+    primaryObjective:
+      objectiveResolution && objectiveResolution.primaryObjective
+        ? objectiveResolution.primaryObjective
+        : null,
     messageType:
       messageClassification && messageClassification.type
         ? messageClassification.type
         : null,
+    objectiveResolution: objectiveResolution
+      ? {
+          primaryObjective: objectiveResolution.primaryObjective,
+          supportingObjectives: objectiveResolution.supportingObjectives,
+          executionModifiers: objectiveResolution.executionModifiers,
+          conversationModifiers: objectiveResolution.conversationModifiers,
+          routingDecision: objectiveResolution.routingDecision,
+        }
+      : null,
     subject,
     intent: conversationIntent && conversationIntent.intent ? conversationIntent.intent : null,
     thinkingMode:
