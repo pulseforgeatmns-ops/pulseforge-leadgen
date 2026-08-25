@@ -50,10 +50,10 @@ describe('SPEC-147 — Autonomous Mission Progression', () => {
     assert.equal(result.outcome, 'paused');
     assert.equal(result.progressionStage, PROGRESSION_STAGES.DISCOVERY_REVIEW);
     assert.ok(result.transitions.length >= 2);
-    assert.equal(result.transitions[0].from, PROGRESSION_STAGES.UNDERSTANDING);
-    assert.equal(result.transitions[0].to, PROGRESSION_STAGES.DISCOVERY);
+    assert.equal(result.transitions[0].from, PROGRESSION_STAGES.MISSION_PLANNING);
+    assert.equal(result.transitions[0].to, PROGRESSION_STAGES.DISCOVERY_RUNNING);
     assert.equal(result.transitions[0].automatic, true);
-    assert.equal(result.transitions[1].from, PROGRESSION_STAGES.DISCOVERY);
+    assert.equal(result.transitions[1].from, PROGRESSION_STAGES.DISCOVERY_RUNNING);
     assert.equal(result.transitions[1].to, PROGRESSION_STAGES.DISCOVERY_REVIEW);
 
     const snapshot = engine.inspect(mission.id, { tenantId: '10' });
@@ -120,7 +120,7 @@ describe('SPEC-147 — Autonomous Mission Progression', () => {
 
     assert.equal(result.outcome, 'blocked');
     assert.ok(result.block);
-    assert.equal(result.block.stage, PROGRESSION_STAGES.DISCOVERY);
+    assert.equal(result.block.stage, PROGRESSION_STAGES.DISCOVERY_RUNNING);
     assert.match(result.block.unmetPrecondition, /Investigation planner unavailable/i);
     assert.equal(result.block.blockingComponent, 'Scout Investigation Runtime');
     assert.match(result.block.recommendedAction, /Retry/i);
@@ -159,7 +159,7 @@ describe('SPEC-147 — Autonomous Mission Progression', () => {
     });
 
     assert.equal(result.outcome, 'paused');
-    assert.equal(result.progressionStage, PROGRESSION_STAGES.UNDERSTANDING);
+    assert.equal(result.progressionStage, PROGRESSION_STAGES.MISSION_PLANNING);
     assert.equal(result.transitions.length, 0);
     assert.equal(
       ambiguousEngine.get(ambiguous.id, '10').pendingOperatorDecision.kind,
@@ -177,7 +177,7 @@ describe('SPEC-147 — Autonomous Mission Progression', () => {
   it('inspect snapshot includes progression metadata', () => {
     const snapshot = engine.inspect(mission.id, { tenantId: '10' });
     assert.ok(snapshot.progression);
-    assert.equal(snapshot.progression.stage, PROGRESSION_STAGES.UNDERSTANDING);
+    assert.equal(snapshot.progression.stage, PROGRESSION_STAGES.MISSION_PLANNING);
     assert.ok(snapshot.progression.pause);
   });
 

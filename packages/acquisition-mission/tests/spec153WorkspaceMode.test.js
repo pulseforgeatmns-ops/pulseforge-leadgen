@@ -140,12 +140,31 @@ describe('SPEC-153 — Mission Workspace Modes', () => {
     const snapshot = engine.inspect(mission.id, { tenantId: '10' });
     assert.equal(
       deriveWorkspaceMode({ missionId: mission.id, snapshot }),
-      WORKSPACE_MODES.UNDERSTANDING
+      WORKSPACE_MODES.MISSION_PLANNING
     );
     assert.equal(
       snapshot.mission.pendingOperatorDecision.kind,
       OPERATOR_DECISION_KINDS.PLAN_APPROVAL
     );
+    assert.equal(snapshot.progression.stage, PROGRESSION_STAGES.MISSION_PLANNING);
+  });
+
+  it('plan approved mission surfaces discovery approval workspace mode', async () => {
+    const { advancePlanAfterApproval } = require('../../max/workspace/AmoOperatorApproval');
+    await advancePlanAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved.',
+      operatorId: 'operator',
+    });
+    const snapshot = engine.inspect(mission.id, { tenantId: '10' });
+    assert.equal(
+      deriveWorkspaceMode({ missionId: mission.id, snapshot }),
+      WORKSPACE_MODES.DISCOVERY_APPROVAL
+    );
+    assert.equal(snapshot.progression.stage, PROGRESSION_STAGES.DISCOVERY_APPROVAL);
+    assert.ok(isComponentVisible('operatorDecision', WORKSPACE_MODES.DISCOVERY_APPROVAL));
   });
 
   it('HTML workspace uses mode-driven component contracts', () => {

@@ -23,6 +23,7 @@ const {
   hasPendingPrioritizationApproval,
   hasDiscoveryArtifact,
 } = require('./PendingOperatorDecision');
+const { isStructuredMissionApproved } = require('./StructuredMission');
 const {
   presentationFromDiscoveryPayload,
   findLatestDiscoveryContribution,
@@ -30,18 +31,24 @@ const {
 const { currentBlocker } = require('./Blockers');
 const { canEnter, specialistContext } = require('./Lifecycle');
 
-/** Logical progression stages (SPEC-147 vocabulary). */
+/** Logical progression stages (SPEC-147 + ADR-074 execution-state vocabulary). */
 const PROGRESSION_STAGES = Object.freeze({
-  UNDERSTANDING: 'understanding',
-  DISCOVERY: 'discovery',
+  MISSION_PLANNING: 'mission_planning',
+  DISCOVERY_APPROVAL: 'discovery_approval',
+  DISCOVERY_RUNNING: 'discovery_running',
   DISCOVERY_REVIEW: 'discovery_review',
   OUTREACH_PLANNING: 'outreach_planning',
   EXECUTION: 'execution',
+  /** @deprecated Use MISSION_PLANNING */
+  UNDERSTANDING: 'mission_planning',
+  /** @deprecated Use DISCOVERY_APPROVAL or DISCOVERY_RUNNING */
+  DISCOVERY: 'discovery_approval',
 });
 
 const PROGRESSION_STAGE_LABELS = Object.freeze({
-  [PROGRESSION_STAGES.UNDERSTANDING]: 'Understanding',
-  [PROGRESSION_STAGES.DISCOVERY]: 'Discovery',
+  [PROGRESSION_STAGES.MISSION_PLANNING]: 'Mission Planning',
+  [PROGRESSION_STAGES.DISCOVERY_APPROVAL]: 'Discovery Approval',
+  [PROGRESSION_STAGES.DISCOVERY_RUNNING]: 'Discovery Running',
   [PROGRESSION_STAGES.DISCOVERY_REVIEW]: 'Discovery Review',
   [PROGRESSION_STAGES.OUTREACH_PLANNING]: 'Outreach Planning',
   [PROGRESSION_STAGES.EXECUTION]: 'Execution',
@@ -61,16 +68,24 @@ const SCOUT_PIPELINE_STAGES = Object.freeze([
 ]);
 
 const MISSION_STAGE_CONTRACTS = Object.freeze({
-  [PROGRESSION_STAGES.UNDERSTANDING]: {
-    stage: PROGRESSION_STAGES.UNDERSTANDING,
+  [PROGRESSION_STAGES.MISSION_PLANNING]: {
+    stage: PROGRESSION_STAGES.MISSION_PLANNING,
     amoStage: STAGES.DISCOVER,
     executesAutomatically: true,
     requiresHumanDecision: false,
     completionCriteria: 'Mission plan ready for lock with no ambiguities.',
-    nextStage: PROGRESSION_STAGES.DISCOVERY,
+    nextStage: PROGRESSION_STAGES.DISCOVERY_APPROVAL,
   },
-  [PROGRESSION_STAGES.DISCOVERY]: {
-    stage: PROGRESSION_STAGES.DISCOVERY,
+  [PROGRESSION_STAGES.DISCOVERY_APPROVAL]: {
+    stage: PROGRESSION_STAGES.DISCOVERY_APPROVAL,
+    amoStage: STAGES.DISCOVER,
+    executesAutomatically: true,
+    requiresHumanDecision: false,
+    completionCriteria: 'Operator or autonomous policy consumes discovery approval.',
+    nextStage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
+  },
+  [PROGRESSION_STAGES.DISCOVERY_RUNNING]: {
+    stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
     amoStage: STAGES.DISCOVER,
     executesAutomatically: true,
     requiresHumanDecision: false,
@@ -134,25 +149,39 @@ function createExecutionBlock(input = {}) {
   };
 }
 
+function isDiscoveryRunning(snapshot = {}) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission) return false;
+  if (hasPendingPlanClarification(snapshot) || hasPendingPlanApproval(snapshot)) return false;
+  if (hasPendingDiscoveryApproval(snapshot)) return false;
+  if (hasPendingPrioritizationApproval(snapshot)) return false;
+  if (hasDiscoveryArtifact(snapshot)) return false;
+  if (!isStructuredMissionApproved(mission)) return false;
+  if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
+  return true;
+}
+
 function deriveProgressionStage(snapshot = {}) {
   const mission = snapshot.mission || snapshot;
-  const contributions = snapshot.contributions || [];
   if (!mission) return null;
 
   if (hasPendingPlanClarification(snapshot)) {
-    return PROGRESSION_STAGES.UNDERSTANDING;
+    return PROGRESSION_STAGES.MISSION_PLANNING;
   }
   if (hasPendingPlanApproval(snapshot)) {
-    return PROGRESSION_STAGES.UNDERSTANDING;
+    return PROGRESSION_STAGES.MISSION_PLANNING;
   }
   if (hasPendingDiscoveryApproval(snapshot)) {
-    return PROGRESSION_STAGES.DISCOVERY;
+    return PROGRESSION_STAGES.DISCOVERY_APPROVAL;
   }
   if (hasPendingPrioritizationApproval(snapshot)) {
     return PROGRESSION_STAGES.DISCOVERY_REVIEW;
   }
   if (hasDiscoveryArtifact(snapshot) && mission.stage === STAGES.DISCOVER) {
     return PROGRESSION_STAGES.DISCOVERY_REVIEW;
+  }
+  if (isDiscoveryRunning(snapshot)) {
+    return PROGRESSION_STAGES.DISCOVERY_RUNNING;
   }
   if (mission.stage === STAGES.UNDERSTAND || mission.stage === STAGES.PLAN) {
     return PROGRESSION_STAGES.OUTREACH_PLANNING;
@@ -162,10 +191,10 @@ function deriveProgressionStage(snapshot = {}) {
   }
   if (mission.stage === STAGES.DISCOVER && !hasDiscoveryArtifact(snapshot)) {
     return hasPendingDiscoveryApproval(snapshot)
-      ? PROGRESSION_STAGES.DISCOVERY
-      : PROGRESSION_STAGES.UNDERSTANDING;
+      ? PROGRESSION_STAGES.DISCOVERY_APPROVAL
+      : PROGRESSION_STAGES.MISSION_PLANNING;
   }
-  return PROGRESSION_STAGES.UNDERSTANDING;
+  return PROGRESSION_STAGES.MISSION_PLANNING;
 }
 
 function deriveMissionPause(snapshot = {}) {
@@ -175,7 +204,7 @@ function deriveMissionPause(snapshot = {}) {
   if (hasPendingPlanClarification(snapshot)) {
     const pending = mission.pendingOperatorDecision || {};
     return createMissionPause({
-      stage: PROGRESSION_STAGES.UNDERSTANDING,
+      stage: PROGRESSION_STAGES.MISSION_PLANNING,
       reason: 'Mission understanding has unresolved ambiguities.',
       requiredDecision: pending.prompt || pending.clarificationPrompt || 'Clarify mission parameters.',
       availableOptions: pending.choices || [],
@@ -184,10 +213,19 @@ function deriveMissionPause(snapshot = {}) {
 
   if (hasPendingPlanApproval(snapshot)) {
     return createMissionPause({
-      stage: PROGRESSION_STAGES.UNDERSTANDING,
+      stage: PROGRESSION_STAGES.MISSION_PLANNING,
       reason: 'Mission understanding complete. Operator approval required before Scout investigation.',
       requiredDecision: 'Approve mission plan?',
       availableOptions: ['Approve', 'Edit', 'Cancel'],
+    });
+  }
+
+  if (hasPendingDiscoveryApproval(snapshot)) {
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.DISCOVERY_APPROVAL,
+      reason: 'Mission plan approved. Operator approval required before Scout investigation.',
+      requiredDecision: 'Approve discovery?',
+      availableOptions: ['Approve discovery', 'Cancel'],
     });
   }
 
@@ -225,7 +263,7 @@ function deriveExecutionBlock(snapshot = {}, err = null) {
 
   if (err && err.code === 'tme_plan_ambiguous') {
     return createExecutionBlock({
-      stage: PROGRESSION_STAGES.UNDERSTANDING,
+      stage: PROGRESSION_STAGES.MISSION_PLANNING,
       unmetPrecondition: 'Mission plan has unresolved ambiguities.',
       blockingComponent: 'Mission Planning Engine',
       recommendedAction: 'Answer clarification questions before retrying.',
@@ -234,7 +272,7 @@ function deriveExecutionBlock(snapshot = {}, err = null) {
 
   if (message && /investigation planner|scout/i.test(message)) {
     return createExecutionBlock({
-      stage: PROGRESSION_STAGES.DISCOVERY,
+      stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
       unmetPrecondition: message,
       blockingComponent: 'Scout Investigation Runtime',
       recommendedAction: 'Retry planning.',
@@ -244,7 +282,7 @@ function deriveExecutionBlock(snapshot = {}, err = null) {
   const discovery = findLatestDiscoveryContribution(snapshot.contributions || []);
   if (discovery && discovery.payload && discovery.payload.blocked) {
     return createExecutionBlock({
-      stage: PROGRESSION_STAGES.DISCOVERY,
+      stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
       unmetPrecondition: discovery.payload.summary || 'Discovery blocked.',
       blockingComponent: 'Scout Intelligence Pipeline',
       recommendedAction: 'Resolve discovery blocker and retry.',
@@ -366,8 +404,8 @@ function formatMissionProgressPresentation(snapshot = {}, result = {}) {
   for (const t of transitions) {
     lines.push(`✓ ${PROGRESSION_STAGE_LABELS[t.from] || t.from} completed automatically.`);
   }
-  if (progressionStage === PROGRESSION_STAGES.DISCOVERY) {
-    lines.push('', 'Beginning Scout Investigation.', '', 'Current Stage', '', 'Discovery', '', 'Executing', '');
+  if (progressionStage === PROGRESSION_STAGES.DISCOVERY_RUNNING) {
+    lines.push('', 'Beginning Scout Investigation.', '', 'Current Stage', '', 'Discovery Running', '', 'Executing', '');
     for (const row of pipeline) {
       const mark = row.status === 'complete' ? '✓ ' : row.status === 'executing' ? '• ' : '  ';
       lines.push(`${mark}${row.label}`);
@@ -448,8 +486,8 @@ async function runAutonomousProgression(input = {}) {
           ...input,
         });
         transitions.push(createStageTransition({
-          from: PROGRESSION_STAGES.UNDERSTANDING,
-          to: PROGRESSION_STAGES.DISCOVERY,
+          from: PROGRESSION_STAGES.MISSION_PLANNING,
+          to: PROGRESSION_STAGES.DISCOVERY_RUNNING,
           trigger: 'Mission understanding complete. No ambiguity detected.',
         }));
         recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
@@ -472,7 +510,7 @@ async function runAutonomousProgression(input = {}) {
           ...input,
         });
         transitions.push(createStageTransition({
-          from: PROGRESSION_STAGES.DISCOVERY,
+          from: PROGRESSION_STAGES.DISCOVERY_RUNNING,
           to: PROGRESSION_STAGES.DISCOVERY_REVIEW,
           trigger: result.executionOutcome === 'blocked'
             ? 'Scout investigation blocked.'
@@ -485,13 +523,13 @@ async function runAutonomousProgression(input = {}) {
           return {
             spec: 'SPEC-147',
             outcome: 'blocked',
-            progressionStage: PROGRESSION_STAGES.DISCOVERY,
+            progressionStage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
             pause: null,
             block: deriveExecutionBlock(after, { message: 'Discovery blocked.' }),
             transitions,
             snapshot: after,
             presentation: formatMissionProgressPresentation(after, {
-              progressionStage: PROGRESSION_STAGES.DISCOVERY,
+              progressionStage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
               block: deriveExecutionBlock(after),
               transitions,
             }),
@@ -554,6 +592,7 @@ module.exports = {
   deriveMissionPause,
   deriveExecutionBlock,
   recordStageTransition,
+  isDiscoveryRunning,
   canAutoAdvanceUnderstanding,
   canAutoAdvanceDiscovery,
   buildDiscoveryPipelineStatus,

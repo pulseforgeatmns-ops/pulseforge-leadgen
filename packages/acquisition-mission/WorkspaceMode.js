@@ -1,23 +1,33 @@
 'use strict';
 
 /**
- * SPEC-153 — Mission Workspace Modes.
- * A workspace has one active context. Rendering is driven by workspace mode,
- * not static HTML. Mission creation and mission inspection never render together.
+ * SPEC-153 / ADR-074 — Mission Workspace Modes.
+ * Workspace mode describes the operator's current executable state, not merely
+ * the next lifecycle stage. Modes are derived from progression execution state.
  */
 
 const { STAGES } = require('./types');
-const { deriveProgressionStage, PROGRESSION_STAGES } = require('./MissionProgression');
+const {
+  deriveProgressionStage,
+  PROGRESSION_STAGES,
+  isDiscoveryRunning,
+} = require('./MissionProgression');
+const { hasPendingDiscoveryApproval } = require('./PendingOperatorDecision');
 
-/** Operator-journey workspace modes (expanded from base CREATE / INSPECT / EXECUTION / REVIEW). */
+/** Operator-journey workspace modes (execution-state vocabulary). */
 const WORKSPACE_MODES = Object.freeze({
   CREATE: 'create',
-  UNDERSTANDING: 'understanding',
-  DISCOVERY: 'discovery',
+  MISSION_PLANNING: 'mission_planning',
+  DISCOVERY_APPROVAL: 'discovery_approval',
+  DISCOVERY_RUNNING: 'discovery_running',
   DISCOVERY_REVIEW: 'discovery_review',
   OUTREACH: 'outreach',
   EXECUTION: 'execution',
   COMPLETE: 'complete',
+  /** @deprecated Use MISSION_PLANNING */
+  UNDERSTANDING: 'mission_planning',
+  /** @deprecated Use DISCOVERY_APPROVAL or DISCOVERY_RUNNING */
+  DISCOVERY: 'discovery_approval',
 });
 
 /** Spec-level render groups for component contracts and backward compatibility. */
@@ -30,8 +40,9 @@ const RENDER_MODES = Object.freeze({
 
 const WORKSPACE_MODE_LABELS = Object.freeze({
   [WORKSPACE_MODES.CREATE]: 'Create',
-  [WORKSPACE_MODES.UNDERSTANDING]: 'Understanding',
-  [WORKSPACE_MODES.DISCOVERY]: 'Discovery',
+  [WORKSPACE_MODES.MISSION_PLANNING]: 'Mission Planning',
+  [WORKSPACE_MODES.DISCOVERY_APPROVAL]: 'Discovery Approval',
+  [WORKSPACE_MODES.DISCOVERY_RUNNING]: 'Discovery Running',
   [WORKSPACE_MODES.DISCOVERY_REVIEW]: 'Discovery Review',
   [WORKSPACE_MODES.OUTREACH]: 'Outreach',
   [WORKSPACE_MODES.EXECUTION]: 'Execution',
@@ -39,8 +50,9 @@ const WORKSPACE_MODE_LABELS = Object.freeze({
 });
 
 const INSPECT_LIKE_MODES = Object.freeze([
-  WORKSPACE_MODES.UNDERSTANDING,
-  WORKSPACE_MODES.DISCOVERY,
+  WORKSPACE_MODES.MISSION_PLANNING,
+  WORKSPACE_MODES.DISCOVERY_APPROVAL,
+  WORKSPACE_MODES.DISCOVERY_RUNNING,
   WORKSPACE_MODES.DISCOVERY_REVIEW,
   WORKSPACE_MODES.OUTREACH,
   WORKSPACE_MODES.EXECUTION,
@@ -60,8 +72,9 @@ const COMPONENTS = Object.freeze({
   missionUnderstanding: {
     id: 'missionUnderstanding',
     supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.MISSION_PLANNING,
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
+      WORKSPACE_MODES.DISCOVERY_RUNNING,
       WORKSPACE_MODES.DISCOVERY_REVIEW,
       WORKSPACE_MODES.OUTREACH,
       WORKSPACE_MODES.EXECUTION,
@@ -82,7 +95,11 @@ const COMPONENTS = Object.freeze({
   },
   discovery: {
     id: 'discovery',
-    supportedModes: [WORKSPACE_MODES.DISCOVERY, WORKSPACE_MODES.DISCOVERY_REVIEW],
+    supportedModes: [
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
+      WORKSPACE_MODES.DISCOVERY_RUNNING,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+    ],
   },
   missionIntelligenceReport: {
     id: 'missionIntelligenceReport',
@@ -91,8 +108,9 @@ const COMPONENTS = Object.freeze({
   blockers: {
     id: 'blockers',
     supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.MISSION_PLANNING,
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
+      WORKSPACE_MODES.DISCOVERY_RUNNING,
       WORKSPACE_MODES.DISCOVERY_REVIEW,
       WORKSPACE_MODES.OUTREACH,
       WORKSPACE_MODES.EXECUTION,
@@ -105,7 +123,8 @@ const COMPONENTS = Object.freeze({
   operatorDecision: {
     id: 'operatorDecision',
     supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.MISSION_PLANNING,
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
       WORKSPACE_MODES.DISCOVERY_REVIEW,
       WORKSPACE_MODES.EXECUTION,
     ],
@@ -117,8 +136,9 @@ const COMPONENTS = Object.freeze({
 });
 
 const PROGRESSION_TO_WORKSPACE = Object.freeze({
-  [PROGRESSION_STAGES.UNDERSTANDING]: WORKSPACE_MODES.UNDERSTANDING,
-  [PROGRESSION_STAGES.DISCOVERY]: WORKSPACE_MODES.DISCOVERY,
+  [PROGRESSION_STAGES.MISSION_PLANNING]: WORKSPACE_MODES.MISSION_PLANNING,
+  [PROGRESSION_STAGES.DISCOVERY_APPROVAL]: WORKSPACE_MODES.DISCOVERY_APPROVAL,
+  [PROGRESSION_STAGES.DISCOVERY_RUNNING]: WORKSPACE_MODES.DISCOVERY_RUNNING,
   [PROGRESSION_STAGES.DISCOVERY_REVIEW]: WORKSPACE_MODES.DISCOVERY_REVIEW,
   [PROGRESSION_STAGES.OUTREACH_PLANNING]: WORKSPACE_MODES.OUTREACH,
   [PROGRESSION_STAGES.EXECUTION]: WORKSPACE_MODES.EXECUTION,
@@ -142,7 +162,7 @@ function deriveWorkspaceMode(input = {}) {
   }
 
   if (!snapshot) {
-    return WORKSPACE_MODES.UNDERSTANDING;
+    return WORKSPACE_MODES.MISSION_PLANNING;
   }
 
   const mission = snapshot.mission || {};
@@ -159,7 +179,7 @@ function deriveWorkspaceMode(input = {}) {
   const progressionStage = (snapshot.progression && snapshot.progression.stage)
     || deriveProgressionStage(snapshot);
 
-  return PROGRESSION_TO_WORKSPACE[progressionStage] || WORKSPACE_MODES.UNDERSTANDING;
+  return PROGRESSION_TO_WORKSPACE[progressionStage] || WORKSPACE_MODES.MISSION_PLANNING;
 }
 
 function isComponentVisible(componentId, workspaceMode) {
@@ -177,13 +197,23 @@ function visibleComponents(workspaceMode) {
 function buildWorkspaceContext(input = {}) {
   const workspaceMode = deriveWorkspaceMode(input);
   const renderMode = deriveRenderMode(workspaceMode);
+  const snapshot = input.snapshot || null;
   return {
     spec: 'SPEC-153',
+    adr: 'ADR-074',
     workspaceMode,
     renderMode,
     label: WORKSPACE_MODE_LABELS[workspaceMode] || workspaceMode,
     visibleComponents: visibleComponents(workspaceMode),
-    missionId: input.missionId || (input.snapshot && input.snapshot.mission && input.snapshot.mission.id) || null,
+    missionId: input.missionId || (snapshot && snapshot.mission && snapshot.mission.id) || null,
+    executionState: snapshot
+      ? {
+        pendingDiscoveryApproval: hasPendingDiscoveryApproval(snapshot),
+        discoveryRunning: isDiscoveryRunning(snapshot),
+        progressionStage: (snapshot.progression && snapshot.progression.stage)
+          || deriveProgressionStage(snapshot),
+      }
+      : null,
   };
 }
 

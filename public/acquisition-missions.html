@@ -94,8 +94,9 @@
 (function () {
   const WORKSPACE_MODES = {
     CREATE: 'create',
-    UNDERSTANDING: 'understanding',
-    DISCOVERY: 'discovery',
+    MISSION_PLANNING: 'mission_planning',
+    DISCOVERY_APPROVAL: 'discovery_approval',
+    DISCOVERY_RUNNING: 'discovery_running',
     DISCOVERY_REVIEW: 'discovery_review',
     OUTREACH: 'outreach',
     EXECUTION: 'execution',
@@ -104,76 +105,50 @@
 
   const WORKSPACE_MODE_LABELS = {
     create: 'Create',
-    understanding: 'Understanding',
-    discovery: 'Discovery',
+    mission_planning: 'Mission Planning',
+    discovery_approval: 'Discovery Approval',
+    discovery_running: 'Discovery Running',
     discovery_review: 'Discovery Review',
     outreach: 'Outreach',
     execution: 'Execution',
     complete: 'Complete',
   };
 
+  const INSPECT_LIKE_MODES = [
+    WORKSPACE_MODES.MISSION_PLANNING,
+    WORKSPACE_MODES.DISCOVERY_APPROVAL,
+    WORKSPACE_MODES.DISCOVERY_RUNNING,
+    WORKSPACE_MODES.DISCOVERY_REVIEW,
+    WORKSPACE_MODES.OUTREACH,
+    WORKSPACE_MODES.EXECUTION,
+    WORKSPACE_MODES.COMPLETE,
+  ];
+
   const COMPONENTS = {
     missionCreator: { supportedModes: [WORKSPACE_MODES.CREATE] },
-    missionList: { supportedModes: [
-      WORKSPACE_MODES.CREATE,
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
+    missionList: { supportedModes: [WORKSPACE_MODES.CREATE].concat(INSPECT_LIKE_MODES) },
+    missionUnderstanding: { supportedModes: INSPECT_LIKE_MODES },
+    missionTimeline: { supportedModes: INSPECT_LIKE_MODES },
+    missionWorkspace: { supportedModes: INSPECT_LIKE_MODES },
+    missionHealth: { supportedModes: INSPECT_LIKE_MODES },
+    discovery: { supportedModes: [
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
+      WORKSPACE_MODES.DISCOVERY_RUNNING,
       WORKSPACE_MODES.DISCOVERY_REVIEW,
-      WORKSPACE_MODES.OUTREACH,
-      WORKSPACE_MODES.EXECUTION,
-      WORKSPACE_MODES.COMPLETE,
     ] },
-    missionUnderstanding: { supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
-      WORKSPACE_MODES.DISCOVERY_REVIEW,
-      WORKSPACE_MODES.OUTREACH,
-      WORKSPACE_MODES.EXECUTION,
-      WORKSPACE_MODES.COMPLETE,
-    ] },
-    missionTimeline: { supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
-      WORKSPACE_MODES.DISCOVERY_REVIEW,
-      WORKSPACE_MODES.OUTREACH,
-      WORKSPACE_MODES.EXECUTION,
-      WORKSPACE_MODES.COMPLETE,
-    ] },
-    missionWorkspace: { supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
-      WORKSPACE_MODES.DISCOVERY_REVIEW,
-      WORKSPACE_MODES.OUTREACH,
-      WORKSPACE_MODES.EXECUTION,
-      WORKSPACE_MODES.COMPLETE,
-    ] },
-    missionHealth: { supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
-      WORKSPACE_MODES.DISCOVERY_REVIEW,
-      WORKSPACE_MODES.OUTREACH,
-      WORKSPACE_MODES.EXECUTION,
-      WORKSPACE_MODES.COMPLETE,
-    ] },
-    discovery: { supportedModes: [WORKSPACE_MODES.DISCOVERY, WORKSPACE_MODES.DISCOVERY_REVIEW] },
     missionIntelligenceReport: { supportedModes: [WORKSPACE_MODES.DISCOVERY_REVIEW] },
     blockers: { supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.MISSION_PLANNING,
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
+      WORKSPACE_MODES.DISCOVERY_RUNNING,
       WORKSPACE_MODES.DISCOVERY_REVIEW,
       WORKSPACE_MODES.OUTREACH,
       WORKSPACE_MODES.EXECUTION,
     ] },
-    why: { supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
-      WORKSPACE_MODES.DISCOVERY,
-      WORKSPACE_MODES.DISCOVERY_REVIEW,
-      WORKSPACE_MODES.OUTREACH,
-      WORKSPACE_MODES.EXECUTION,
-      WORKSPACE_MODES.COMPLETE,
-    ] },
+    why: { supportedModes: INSPECT_LIKE_MODES },
     operatorDecision: { supportedModes: [
-      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.MISSION_PLANNING,
+      WORKSPACE_MODES.DISCOVERY_APPROVAL,
       WORKSPACE_MODES.DISCOVERY_REVIEW,
       WORKSPACE_MODES.EXECUTION,
     ] },
@@ -454,13 +429,13 @@
     try {
       snapshot = await api('/api/v1/amo/missions/' + encodeURIComponent(id));
       const ctx = snapshot.workspaceContext || {};
-      applyWorkspaceMode(ctx.workspaceMode || WORKSPACE_MODES.UNDERSTANDING);
+      applyWorkspaceMode(ctx.workspaceMode || WORKSPACE_MODES.MISSION_PLANNING);
       renderList();
       renderSnapshot();
       setMsg('Inspecting ' + id, 'ok');
     } catch (err) {
       snapshot = null;
-      applyWorkspaceMode(WORKSPACE_MODES.UNDERSTANDING);
+      applyWorkspaceMode(WORKSPACE_MODES.MISSION_PLANNING);
       clearMissionPanels();
       setMsg(err.message || 'MISSION_STATE_INCONSISTENT', 'err');
     }
