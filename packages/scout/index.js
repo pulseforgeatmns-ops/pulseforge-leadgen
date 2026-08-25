@@ -40,6 +40,7 @@ const credibility = require('./credibility');
 const memory = require('./memory');
 const conflict = require('./conflict');
 const synthesis = require('./synthesis');
+const heuristics = require('./heuristics');
 
 /** SPEC-154 — single public Scout capability. */
 const Scout = Object.freeze({
@@ -76,5 +77,6 @@ module.exports = {
   memory,
   conflict,
   synthesis,
+  heuristics,
   universe: require('./universe'),
 };

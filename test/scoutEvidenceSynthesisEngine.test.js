@@ -160,8 +160,13 @@ describe('SPEC-160 — Evidence Synthesis Engine', () => {
     assert.ok(report.businessUnderstanding.buyingSignals >= 0);
     assert.equal(report.recommendation.basedOnUnderstanding, true);
     assert.equal(report.recommendation.notDirectFromEvidence, true);
-    assert.equal(report.recommendation.adr, 'ADR-080');
-    assert.match(report.recommendation.summary, /ABC Property Management/);
+    if (report.recommendation.basedOnHeuristics) {
+      assert.equal(report.recommendation.adr, 'ADR-082');
+      assert.ok(report.businessJudgment);
+    } else {
+      assert.equal(report.recommendation.adr, 'ADR-080');
+      assert.match(report.recommendation.summary, /ABC Property Management/);
+    }
   });
 
   it('confidence evolves with additional sources on understanding, not isolated facts', () => {

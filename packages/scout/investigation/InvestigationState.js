@@ -401,6 +401,44 @@ function applyBusinessUnderstandingSynthesis(state, synthesisResult = {}) {
   });
 }
 
+function applyBusinessJudgment(state, judgmentResult = {}) {
+  if (!judgmentResult?.activatedHeuristics?.length) {
+    return state;
+  }
+
+  const before = {
+    heuristicCount: state.businessJudgment?.activatedHeuristics?.length || 0,
+    confidence: state.confidence,
+  };
+
+  let next = {
+    ...state,
+    businessJudgment: judgmentResult,
+    phase: 'apply_judgment',
+    updatedAt: nowIso(),
+  };
+
+  const judgmentConfidence = judgmentResult.overallJudgment?.confidence;
+  if (judgmentConfidence != null && judgmentConfidence > next.confidence) {
+    next = recordConfidenceStep(next, {
+      confidence: judgmentConfidence,
+      reason: 'Business heuristics activated from synthesized understanding',
+      source: 'business_heuristics',
+    });
+  }
+
+  return recordUnderstandingRevision(next, {
+    kind: 'business_judgment',
+    reason: 'Business heuristics engine produced judgment from understanding',
+    before,
+    after: {
+      heuristicCount: judgmentResult.activatedHeuristics.length,
+      confidence: next.confidence,
+      contradictions: (judgmentResult.contradictions || []).length,
+    },
+  });
+}
+
 function serializeInvestigationState(state) {
   return {
     missionId: state.missionId,
@@ -420,6 +458,7 @@ function serializeInvestigationState(state) {
     understandingRevisions: state.understandingRevisions,
     businessUnderstandings: state.businessUnderstandings,
     synthesisSummary: state.synthesisSummary,
+    businessJudgment: state.businessJudgment,
     priorUnderstanding: state.priorUnderstanding,
     seededFromMemory: state.seededFromMemory,
     createdAt: state.createdAt,
@@ -436,6 +475,7 @@ module.exports = {
   applyMarketDefinitionRevision,
   applyUniverseEstimateRevision,
   applyBusinessUnderstandingSynthesis,
+  applyBusinessJudgment,
   updateHypothesisBuckets,
   addEvidenceToGraph,
   setNextQuestions,
