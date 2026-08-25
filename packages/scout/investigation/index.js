@@ -118,6 +118,15 @@ const {
   mergeIntoDiscoveryReport,
 } = require('./MissionIntelligenceReport');
 
+const {
+  buildInvestigativeStrategy,
+  recalculateStrategyAfterResolution,
+  applyInvestigativeStrategy,
+  explainInvestigationChoice,
+  buildInvestigativeStrategyReport,
+  evaluateStrategyStoppingConditions,
+} = require('./InvestigativeStrategyEngine');
+
 module.exports = {
   INVESTIGATION_PHASES,
   GRAPH_NODE_TYPES,
@@ -205,4 +214,10 @@ module.exports = {
   shouldStopInvestigation,
   buildMissionIntelligenceReport,
   mergeIntoDiscoveryReport,
+  buildInvestigativeStrategy,
+  recalculateStrategyAfterResolution,
+  applyInvestigativeStrategy,
+  explainInvestigationChoice,
+  buildInvestigativeStrategyReport,
+  evaluateStrategyStoppingConditions,
 };
