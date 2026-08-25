@@ -1545,7 +1545,7 @@ class WorkspaceEngine {
         if (session.context && typeof session.context === 'object') {
           session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
           session.context._answerCorpus = 'workspace';
-          session.context.acquisitionOwner = 'MissionEngine';
+          session.context.acquisitionOwner = 'AMO';
           if (amoExecutionTurn.mission) {
             session.context.missionId = amoExecutionTurn.mission.id;
             session.context.acquisitionMissionId = amoExecutionTurn.mission.id;
@@ -1700,7 +1700,7 @@ class WorkspaceEngine {
         if (session.context && typeof session.context === 'object') {
           session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
           session.context._answerCorpus = 'workspace';
-          session.context.acquisitionOwner = 'MissionEngine';
+          session.context.acquisitionOwner = 'AMO';
           if (acquisitionOwnershipTurn.mission) {
             session.context.missionId = acquisitionOwnershipTurn.mission.id;
             session.context.acquisitionMissionId = acquisitionOwnershipTurn.mission.id;

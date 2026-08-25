@@ -34,6 +34,11 @@ const {
   emitDiscoveryCompleted,
 } = require('./observability');
 const {
+  resolveScoutDiscoveryRuntimePolicy,
+  assertMissionRuntimeBoundary,
+  RUNTIME_OWNERS,
+} = require('../acquisition-mission/MissionRuntimeOwnership');
+const {
   isNativeAmoExecution,
   shouldSuppressSpecialistSideEffects,
 } = require('../acquisition-mission/MissionExecutionContext');
@@ -265,12 +270,28 @@ async function discover(input) {
   emitRanking({ missionId, strategy, source: 'discovery_pipeline' });
 
   const executionContext = opts.executionContext || null;
-  const nativeAmoExecution = isNativeAmoExecution(executionContext);
+  const runtimePolicy = resolveScoutDiscoveryRuntimePolicy({ mission, missionEngine, opts });
+
+  if (runtimePolicy.amoOwned && missionEngine) {
+    assertMissionRuntimeBoundary({
+      mission,
+      missionEngine,
+      expectedOwner: RUNTIME_OWNERS.AMO,
+      operation: 'sync Scout discovery into Mission Engine',
+    });
+  }
+
+  const nativeAmoExecution = isNativeAmoExecution(executionContext) || runtimePolicy.amoOwned;
   const orchestrationMissionId =
     opts.orchestrationMissionId || mission.orchestrationMissionId || null;
 
   let updatedMission = mission;
-  if (missionEngine && !nativeAmoExecution && orchestrationMissionId) {
+  if (
+    runtimePolicy.syncToMissionEngine &&
+    missionEngine &&
+    !nativeAmoExecution &&
+    orchestrationMissionId
+  ) {
     updatedMission = await syncMissionFromPipeline({
       mission,
       missionEngine,
@@ -321,11 +342,7 @@ async function discover(input) {
   });
 
   const suppressSideEffects = shouldSuppressSpecialistSideEffects(executionContext);
-  if (
-    !suppressSideEffects &&
-    opts.attachScoutDiscovery !== false &&
-    (opts.amoMissionId || opts.missionId)
-  ) {
+  if (runtimePolicy.attachViaLegacyFacade && !suppressSideEffects) {
     try {
       const { attachScoutDiscovery } = require('../../services/acquisitionMission');
       await attachScoutDiscovery(

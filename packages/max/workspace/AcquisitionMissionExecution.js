@@ -1028,7 +1028,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   if (input.session && input.session.context && typeof input.session.context === 'object') {
     input.session.context.missionId = mission.id;
     input.session.context.acquisitionMissionId = mission.id;
-    input.session.context.acquisitionOwner = 'MissionEngine';
+    input.session.context.acquisitionOwner = 'AMO';
   }
 
   askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', `acquisition_mission_${action}`, {
