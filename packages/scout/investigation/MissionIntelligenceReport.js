@@ -18,6 +18,10 @@ const {
 } = require('../heuristics/BusinessHeuristicsEngine');
 const { summarizeHypothesisHistory } = require('./HypothesisLifecycle');
 const { serializeInvestigationState } = require('./InvestigationState');
+const {
+  buildInvestigativeStrategy,
+  buildInvestigativeStrategyReport,
+} = require('./InvestigativeStrategyEngine');
 
 function summarizeEvidenceGraph(evidenceGraph = {}) {
   const nodes = evidenceGraph.nodes || [];
@@ -87,7 +91,26 @@ function buildRecommendationFromUnderstanding(state = {}, synthesisResult = null
   };
 }
 
-function buildSuggestedNextInvestigation(state = {}) {
+function buildSuggestedNextInvestigation(state = {}, investigativeStrategy = null) {
+  const strategySection = investigativeStrategy || state.investigativeStrategy;
+  if (strategySection?.selectedInvestigation) {
+    const sel = strategySection.selectedInvestigation;
+    return {
+      action: 'investigate',
+      question: sel.objective,
+      gap: sel.gap,
+      priority: 'high',
+      source: 'investigative_strategy',
+      recommendedSource: sel.sourceLabel,
+      recommendedSourceId: sel.source,
+      expectedInformationGain: sel.expectedInformationGain,
+      hypothesisId: null,
+      rationale: sel.reasoning,
+      documentedGain: true,
+      adr: 'ADR-083',
+    };
+  }
+
   const top = (state.nextQuestions || [])[0];
   if (!top) {
     return {
@@ -102,7 +125,10 @@ function buildSuggestedNextInvestigation(state = {}) {
     priority: top.priority,
     source: top.source,
     hypothesisId: top.hypothesisId || null,
-    rationale: 'Highest-priority unanswered question from investigation state.',
+    expectedInformationGain: top.expectedInformationGain ?? null,
+    recommendedSource: top.recommendedSource ?? null,
+    rationale: top.rationale || 'Highest-priority unanswered question from investigation state.',
+    documentedGain: top.documentedGain === true,
   };
 }
 
@@ -134,21 +160,38 @@ function buildMissionIntelligenceReport(input = {}) {
     });
   const businessJudgmentSection = buildBusinessJudgmentReport(judgmentResult);
   const recommendation = buildRecommendationFromUnderstanding(state, synthesisResult, judgmentResult);
-  const suggestedNextInvestigation = buildSuggestedNextInvestigation(state);
+  const investigativeStrategy =
+    input.investigativeStrategy ||
+    state.investigativeStrategy ||
+    buildInvestigativeStrategy({
+      state,
+      judgmentResult,
+      memory: input.memory,
+      opts: input.opts,
+    });
+  const investigativeStrategySection = buildInvestigativeStrategyReport(
+    investigativeStrategy,
+    input.stop
+  );
+  const suggestedNextInvestigation = buildSuggestedNextInvestigation(state, investigativeStrategy);
 
-  const remainingUnknowns = [
-    ...(state.uncertainty?.open || []),
-    ...(state.uncertainty?.persistent || []),
-  ];
+  const remainingUnknowns = investigativeStrategySection.remainingUnknowns.length
+    ? investigativeStrategySection.remainingUnknowns.map((u) => u.label || u.gap)
+    : [
+        ...(state.uncertainty?.open || []),
+        ...(state.uncertainty?.persistent || []),
+      ];
 
   return {
     kind: 'mission_intelligence_report',
     spec: 'SPEC-159',
     synthesisSpec: 'SPEC-160',
     heuristicsSpec: 'SPEC-162',
+    strategySpec: 'SPEC-163',
     adr: 'ADR-079',
     synthesisAdr: 'ADR-080',
     heuristicsAdr: 'ADR-082',
+    strategyAdr: 'ADR-083',
     finalMarketDefinition: {
       market: marketDefinition.market,
       geography: marketDefinition.geography,
@@ -174,6 +217,7 @@ function buildMissionIntelligenceReport(input = {}) {
     businessUnderstanding: businessUnderstandingSection,
     businessJudgment: businessJudgmentSection,
     judgmentResult,
+    investigativeStrategy: investigativeStrategySection,
     remainingUnknowns,
     confidenceEvolution: state.confidenceEvolution || [],
     currentConfidence: state.confidence,
@@ -188,6 +232,7 @@ function buildMissionIntelligenceReport(input = {}) {
     understandingFirst: true,
     judgmentFromHeuristics: judgmentResult.basedOnHeuristics === true,
     synthesizedNotRaw: businessUnderstandingSection.synthesizedNotRaw === true,
+    strategyDrivenInvestigation: investigativeStrategySection.everyInvestigationDocumented === true,
     summary: buildReportSummary({
       marketDefinition,
       confidence: judgmentResult.overallJudgment?.confidence ?? state.confidence,
@@ -230,6 +275,7 @@ function mergeIntoDiscoveryReport(discoveryReport = {}, missionReport = {}) {
     businessUnderstanding: missionReport.businessUnderstanding,
     businessJudgment: missionReport.businessJudgment,
     judgmentResult: missionReport.judgmentResult,
+    investigativeStrategy: missionReport.investigativeStrategy,
     remainingUnknowns: missionReport.remainingUnknowns,
     confidenceEvolution: missionReport.confidenceEvolution,
     suggestedNextInvestigation: missionReport.suggestedNextInvestigation,

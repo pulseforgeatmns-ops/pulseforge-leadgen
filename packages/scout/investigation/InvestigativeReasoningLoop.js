@@ -34,6 +34,11 @@ const {
 const { buildMissionIntelligenceReport } = require('./MissionIntelligenceReport');
 const { synthesizeFromCandidates } = require('../synthesis/EvidenceSynthesisEngine');
 const { activateHeuristics } = require('../heuristics/BusinessHeuristicsEngine');
+const {
+  buildInvestigativeStrategy,
+  applyInvestigativeStrategy,
+  recalculateStrategyAfterResolution,
+} = require('./InvestigativeStrategyEngine');
 const { COMPLETION_REASONS } = require('./types');
 
 const DEFAULT_UNCERTAINTY_THRESHOLD = 0.15;
@@ -437,7 +442,23 @@ async function runInvestigativeReasoningLoop(input = {}) {
     state = applyBusinessJudgment(state, judgmentResult);
   }
 
+  let investigativeStrategy = buildInvestigativeStrategy({
+    state,
+    judgmentResult,
+    board: input.board,
+    memory: input.memory || opts.memory,
+    completedInvestigations: input.completedInvestigations,
+    opts,
+  });
+  state = applyInvestigativeStrategy(state, investigativeStrategy);
+
   const stop = shouldStopInvestigation(state, { ...opts, forceComplete: true });
+  if (investigativeStrategy.stoppingCondition?.stop) {
+    stop.stop = true;
+    stop.reason = investigativeStrategy.stoppingCondition.reason || stop.reason;
+    stop.explanation =
+      investigativeStrategy.stoppingCondition.explanation || stop.explanation;
+  }
   state = { ...state, phase: stop.stop ? 'complete' : 'investigate' };
 
   const report = buildMissionIntelligenceReport({
@@ -449,6 +470,7 @@ async function runInvestigativeReasoningLoop(input = {}) {
     coverageMetrics,
     synthesisResult,
     judgmentResult,
+    investigativeStrategy,
   });
 
   return {
@@ -456,6 +478,7 @@ async function runInvestigativeReasoningLoop(input = {}) {
     report,
     cycles,
     stop,
+    investigativeStrategy,
     understandingFirst: true,
     completionReason: stop.reason,
     stopExplanation: stop.explanation,
@@ -471,6 +494,7 @@ module.exports = {
   computeConfidenceFromEvidence,
   generateQuestionsFromUncertainty,
   extractEvidenceFromCandidate,
+  recalculateStrategyAfterResolution,
   DEFAULT_UNCERTAINTY_THRESHOLD,
   DEFAULT_CONFIDENCE_TARGET,
 };

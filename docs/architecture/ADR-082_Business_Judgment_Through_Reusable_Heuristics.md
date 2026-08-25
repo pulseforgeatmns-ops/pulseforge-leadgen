@@ -24,7 +24,7 @@ Heuristics are:
 
 - Mission Intelligence Report adds a `businessJudgment` section distinct from `businessUnderstanding`
 - `explainJudgment()` provides operator traceability
-- SPEC-163 will consume activated heuristics for investigative prioritization
+- SPEC-163 consumes activated heuristics for investigative prioritization ([SPEC-163](../specs/SPEC-163_Investigative_Strategy_Engine.md), [ADR-083](ADR-083_Investigate_What_Reduces_Uncertainty_Most.md))
 
 ## Relationship to Prior ADRs
 
