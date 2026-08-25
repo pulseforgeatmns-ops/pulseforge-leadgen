@@ -2,13 +2,22 @@
 
 /**
  * SPEC-172 — Canonical Scout Evidence Handoff.
+ * SPEC-174 — Canonical Evidence Coverage (registry-driven adapter completeness).
  * Normalizes all Scout-internal evidence representations exactly once
  * before Acquisition Mission execution consumes them.
  */
 
-const { GRAPH_NODE_TYPES } = require('../investigation/types');
+const {
+  collectExportableEvidenceEntries,
+  isExportableGraphNode,
+  EVIDENCE_CLASSIFICATION,
+  SCOUT_EVIDENCE_SOURCES,
+  GRAPH_NODE_EVIDENCE_CLASSIFICATION,
+} = require('./EvidenceCoverageRegistry');
 
 const SCOUT_EVIDENCE_HANDOFF_VIOLATION = 'SCOUT_EVIDENCE_HANDOFF_VIOLATION';
+const SCOUT_EVIDENCE_COVERAGE_VIOLATION = 'SCOUT_EVIDENCE_COVERAGE_VIOLATION';
+const CANONICAL_EVIDENCE_NORMALIZATION_PATH = 'ScoutDiscoveryArtifact.normalizeCanonicalEvidenceItem';
 
 function scoutEvidenceHandoffError(message, extras = {}) {
   const err = new Error(message);
@@ -16,6 +25,18 @@ function scoutEvidenceHandoffError(message, extras = {}) {
   err.code = SCOUT_EVIDENCE_HANDOFF_VIOLATION;
   err.tmeClass = 'validation';
   err.spec = 'SPEC-172';
+  err.rollback = true;
+  err.commitStatus = 'rolled_back';
+  if (extras.details) err.details = extras.details;
+  return err;
+}
+
+function scoutEvidenceCoverageError(message, extras = {}) {
+  const err = new Error(message);
+  err.name = 'ValidationError';
+  err.code = SCOUT_EVIDENCE_COVERAGE_VIOLATION;
+  err.tmeClass = 'validation';
+  err.spec = 'SPEC-174';
   err.rollback = true;
   err.commitStatus = 'rolled_back';
   if (extras.details) err.details = extras.details;
@@ -116,6 +137,7 @@ function normalizeCanonicalEvidenceItem(raw, context = {}) {
   if (typeof raw === 'string') {
     const text = raw.trim();
     if (!text) return null;
+    const originalLocation = context.sourcePath || null;
     return {
       id: context.fallbackId || `ev_${context.index || 0}`,
       source: text,
@@ -123,7 +145,13 @@ function normalizeCanonicalEvidenceItem(raw, context = {}) {
       claim: text,
       observedAt: null,
       entityId: context.entityId || null,
-      provenance: { kind: 'legacy_string', source: context.sourcePath || 'unknown' },
+      originalLocation,
+      provenance: {
+        kind: 'legacy_string',
+        source: originalLocation || 'unknown',
+        originalLocation,
+        normalizationPath: CANONICAL_EVIDENCE_NORMALIZATION_PATH,
+      },
       confidence: 0.5,
       originalRef: null,
     };
@@ -150,13 +178,19 @@ function normalizeCanonicalEvidenceItem(raw, context = {}) {
     || asText(context.entityId)
     || null;
 
+  const originalLocation = context.sourcePath || null;
   const provenance = isPlainObject(raw.provenance)
-    ? { ...raw.provenance }
+    ? {
+      ...raw.provenance,
+      ...(originalLocation ? { originalLocation } : {}),
+      normalizationPath: CANONICAL_EVIDENCE_NORMALIZATION_PATH,
+    }
     : {
       kind: asText(raw.sourceKind) || asText(raw.kind) || 'observed',
       source,
       ...(entityId ? { entityId } : {}),
-      ...(context.sourcePath ? { collectedFrom: context.sourcePath } : {}),
+      ...(originalLocation ? { collectedFrom: originalLocation, originalLocation } : {}),
+      normalizationPath: CANONICAL_EVIDENCE_NORMALIZATION_PATH,
     };
 
   return {
@@ -168,6 +202,7 @@ function normalizeCanonicalEvidenceItem(raw, context = {}) {
     value: raw.value != null ? raw.value : undefined,
     entityId,
     provenance,
+    originalLocation,
     confidence: round2(clamp01(raw.confidence != null ? raw.confidence : snapshot.weight)),
     originalRef: asText(raw.id) || null,
   };
@@ -212,55 +247,99 @@ function deduplicateCanonicalEvidence(items = []) {
   return [...byIdentity.values()];
 }
 
-function pushEvidenceRefs(target, refs, context = {}) {
-  if (!Array.isArray(refs)) return;
-  for (let index = 0; index < refs.length; index += 1) {
-    const normalized = normalizeCanonicalEvidenceItem(refs[index], {
-      ...context,
-      index,
-      fallbackId: refs[index]?.id || `${context.sourcePath || 'evidence'}_${index}`,
+function collectGraphEvidenceEntries(scoutResult = {}) {
+  const graph = resolveEvidenceGraph(scoutResult);
+  const entries = [];
+  for (const node of graph.nodes || []) {
+    const nodeType = node.type || node.nodeType;
+    if (!isExportableGraphNode(nodeType)) continue;
+    entries.push({
+      raw: graphNodeToEvidenceRef(node),
+      context: {
+        sourcePath: 'investigationGraph.nodes[EVIDENCE]',
+        entityId: node.data?.entityId || null,
+        fallbackId: node.id,
+        graphNodeType: nodeType,
+      },
     });
-    if (normalized) target.push(normalized);
   }
+  return entries;
 }
 
 /**
- * Gather evidence from every legitimate Scout source, normalize, deduplicate,
- * and preserve provenance.
+ * Gather evidence from every exportable Scout source via the coverage registry,
+ * normalize, deduplicate, and preserve provenance.
  * @param {object} scoutResult
  * @returns {object[]}
  */
 function collectCanonicalScoutEvidence(scoutResult = {}) {
   const resolved = resolveScoutExecutionResult(scoutResult);
   const payload = resolved.payload || {};
+  const graphEvidenceEntries = collectGraphEvidenceEntries(scoutResult);
+  const exportableEntries = collectExportableEvidenceEntries(
+    scoutResult,
+    resolved,
+    payload,
+    graphEvidenceEntries
+  );
   const collected = [];
 
-  pushEvidenceRefs(collected, resolved.evidenceRefs, { sourcePath: 'result.evidenceRefs' });
-  pushEvidenceRefs(collected, payload.evidence, { sourcePath: 'payload.evidence' });
-  pushEvidenceRefs(collected, payload.evidenceRefs, { sourcePath: 'payload.evidenceRefs' });
-
-  for (const bucket of ['opportunities', 'acquisitionOpportunities', 'fitCandidates', 'watchCandidates']) {
-    for (const candidate of payload[bucket] || []) {
-      const entityId = candidate.companyId || candidate.id || candidate.name || null;
-      pushEvidenceRefs(collected, candidate.evidenceRefs, {
-        sourcePath: `payload.${bucket}`,
-        entityId,
-      });
-    }
-  }
-
-  const graph = resolveEvidenceGraph(scoutResult);
-  for (const node of graph.nodes || []) {
-    const nodeType = node.type || node.nodeType;
-    if (nodeType !== GRAPH_NODE_TYPES.EVIDENCE && nodeType !== 'EVIDENCE') continue;
-    const normalized = normalizeCanonicalEvidenceItem(graphNodeToEvidenceRef(node), {
-      sourcePath: 'investigation.evidenceGraph',
-      entityId: node.data?.entityId || null,
-    });
+  for (const entry of exportableEntries) {
+    const normalized = normalizeCanonicalEvidenceItem(entry.raw, entry.context);
     if (normalized) collected.push(normalized);
   }
 
   return deduplicateCanonicalEvidence(collected);
+}
+
+/**
+ * Count exportable evidence identities before the export boundary deduplicates them.
+ * @param {object} scoutResult
+ * @returns {object[]}
+ */
+function collectExportableEvidenceIdentities(scoutResult = {}) {
+  const resolved = resolveScoutExecutionResult(scoutResult);
+  const payload = resolved.payload || {};
+  const graphEvidenceEntries = collectGraphEvidenceEntries(scoutResult);
+  const exportableEntries = collectExportableEvidenceEntries(
+    scoutResult,
+    resolved,
+    payload,
+    graphEvidenceEntries
+  );
+  const normalized = exportableEntries
+    .map((entry) => normalizeCanonicalEvidenceItem(entry.raw, entry.context))
+    .filter(Boolean);
+  return deduplicateCanonicalEvidence(normalized);
+}
+
+/**
+ * Development invariant: every exportable Scout evidence item must appear in canonical evidence.
+ * @param {object} scoutResult
+ * @param {object[]} canonicalEvidence
+ */
+function assertScoutEvidenceCoverage(scoutResult = {}, canonicalEvidence = []) {
+  const exportable = collectExportableEvidenceIdentities(scoutResult);
+  const canonical = deduplicateCanonicalEvidence(canonicalEvidence);
+
+  if (exportable.length !== canonical.length) {
+    const exportableKeys = new Set(exportable.map((item) => evidenceIdentity(item)));
+    const canonicalKeys = new Set(canonical.map((item) => evidenceIdentity(item)));
+    const missingFromCanonical = [...exportableKeys].filter((key) => !canonicalKeys.has(key));
+    const orphanCanonical = [...canonicalKeys].filter((key) => !exportableKeys.has(key));
+
+    throw scoutEvidenceCoverageError(
+      'Exportable Scout evidence count does not match canonical evidence after normalization.',
+      {
+        details: {
+          exportableCount: exportable.length,
+          canonicalCount: canonical.length,
+          missingFromCanonical,
+          orphanCanonical,
+        },
+      }
+    );
+  }
 }
 
 function collectBuyingSignals(payload = {}) {
@@ -329,11 +408,13 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
   const payload = resolved.payload || {};
   const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
   const evidence = collectCanonicalScoutEvidence(scoutResult);
+  assertScoutEvidenceCoverage(scoutResult, evidence);
   const blocked = resolveBlocked(resolved, payload);
   const mir = resolved.missionIntelligenceReport || null;
 
   return {
-    spec: 'SPEC-172',
+    spec: 'SPEC-174',
+    evidenceSpec: 'SPEC-172',
     companies: buildCompanies(payload),
     prospects: payload.prospects || payload.people || [],
     buyingSignals: collectBuyingSignals(payload),
@@ -442,10 +523,18 @@ function resolveScoutInternalReasoning(scoutResult = {}) {
 
 module.exports = {
   SCOUT_EVIDENCE_HANDOFF_VIOLATION,
+  SCOUT_EVIDENCE_COVERAGE_VIOLATION,
+  EVIDENCE_CLASSIFICATION,
+  SCOUT_EVIDENCE_SOURCES,
+  GRAPH_NODE_EVIDENCE_CLASSIFICATION,
+  CANONICAL_EVIDENCE_NORMALIZATION_PATH,
   resolveScoutExecutionResult,
+  collectGraphEvidenceEntries,
+  collectExportableEvidenceIdentities,
   collectCanonicalScoutEvidence,
   buildScoutDiscoveryArtifact,
   resolveScoutInternalReasoning,
+  assertScoutEvidenceCoverage,
   assertScoutEvidenceHandoff,
   mapCanonicalEvidenceToContribution,
   normalizeCanonicalEvidenceItem,
