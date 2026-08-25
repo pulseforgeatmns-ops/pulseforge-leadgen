@@ -3,7 +3,7 @@
 /**
  * SPEC-136 — Pending operator decision must match executable mission state.
  * SPEC-141 — Discovery review gate: prioritization_approval after Scout completes.
- * Presentation derives from these predicates. It is never an independent source of truth.
+ * ADR-077 — Only present decisions that can execute immediately.
  */
 
 const {
@@ -14,12 +14,22 @@ const {
   amoError,
 } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
+const {
+  buildDecisionReadiness,
+  buildPostDiscoveryPendingDecision,
+  canApprovePrioritization,
+} = require('./DecisionReadiness');
 
 const MISSION_STATE_INCONSISTENT = 'MISSION_STATE_INCONSISTENT';
 
 const PLAN_KINDS = new Set([
   OPERATOR_DECISION_KINDS.PLAN_APPROVAL,
   OPERATOR_DECISION_KINDS.PLAN_EDIT,
+]);
+
+const DISCOVER_REVIEW_KINDS = new Set([
+  OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
+  OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION,
 ]);
 
 function missionFrom(snapshotOrMission) {
@@ -81,7 +91,7 @@ function hasConsumedPrioritizationApproval(snapshotOrMission, extras = {}) {
   );
 }
 
-function hasPendingPrioritizationApproval(snapshot) {
+function hasPendingDiscoveryInvestigation(snapshot) {
   const mission = missionFrom(snapshot) || {};
   if (hasPendingPlanClarification(snapshot)) return false;
   if (hasPendingPlanApproval(snapshot)) return false;
@@ -89,32 +99,103 @@ function hasPendingPrioritizationApproval(snapshot) {
   if (!isStructuredMissionApproved(mission)) return false;
   if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
   if (!hasDiscoveryArtifact(snapshot)) return false;
-  return pendingKind(mission) === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL;
+  return pendingKind(mission) === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION;
+}
+
+function hasPendingPrioritizationApproval(snapshot) {
+  const mission = missionFrom(snapshot) || {};
+  if (pendingKind(mission) !== OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) return false;
+  if (hasPendingPlanClarification(snapshot)) return false;
+  if (hasPendingPlanApproval(snapshot)) return false;
+  if (hasPendingDiscoveryApproval(snapshot)) return false;
+  if (!isStructuredMissionApproved(mission)) return false;
+  if (mission.stage && mission.stage !== STAGES.DISCOVER) return false;
+  if (!hasDiscoveryArtifact(snapshot)) return false;
+  return canApprovePrioritization(snapshot).executable === true;
 }
 
 function hasConsumablePendingDecision(snapshot) {
   return hasPendingPlanClarification(snapshot)
     || hasPendingPlanApproval(snapshot)
     || hasPendingDiscoveryApproval(snapshot)
-    || hasPendingPrioritizationApproval(snapshot);
+    || hasPendingPrioritizationApproval(snapshot)
+    || hasPendingDiscoveryInvestigation(snapshot);
 }
 
 function presentableOperatorDecision(snapshot) {
   const mission = missionFrom(snapshot) || {};
   const pending = mission.pendingOperatorDecision || null;
   if (!hasConsumablePendingDecision(snapshot) || !pending) return null;
-  return {
-    ...pending,
-    kind: pendingKind(mission),
-    prompt: hasPendingPlanClarification(snapshot)
-      ? (pending.clarificationPrompt || pending.prompt || null)
-      : hasPendingPlanApproval(snapshot)
-        ? (pending.prompt || 'Approve mission plan?')
-        : hasPendingPrioritizationApproval(snapshot)
-          ? (pending.prompt || 'Approve prioritization?')
-          : (pending.prompt || 'Approve discovery?'),
-    consumable: true,
-  };
+
+  const readiness = buildDecisionReadiness(snapshot) || pending.readiness || null;
+
+  if (hasPendingPlanClarification(snapshot)) {
+    return {
+      ...pending,
+      kind: pendingKind(mission),
+      prompt: pending.clarificationPrompt || pending.prompt || null,
+      consumable: true,
+      readiness,
+    };
+  }
+
+  if (hasPendingPlanApproval(snapshot)) {
+    return {
+      ...pending,
+      kind: pendingKind(mission),
+      prompt: pending.prompt || 'Approve mission plan?',
+      consumable: true,
+      readiness,
+    };
+  }
+
+  if (hasPendingDiscoveryApproval(snapshot)) {
+    return {
+      ...pending,
+      kind: pendingKind(mission),
+      prompt: pending.prompt || 'Approve discovery?',
+      consumable: true,
+      readiness,
+    };
+  }
+
+  if (hasPendingPrioritizationApproval(snapshot)) {
+    return {
+      ...pending,
+      kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
+      prompt: pending.prompt || 'Approve findings?',
+      actions: pending.actions || [
+        'Approve findings',
+        'Request additional investigation',
+        'Adjust mission',
+        'Cancel',
+      ],
+      consumable: true,
+      readiness,
+    };
+  }
+
+  if (hasPendingDiscoveryInvestigation(snapshot)) {
+    return {
+      ...pending,
+      kind: OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION,
+      prompt: pending.prompt || 'Discovery Coverage Incomplete',
+      headline: pending.headline || 'Discovery Coverage Incomplete',
+      actions: pending.actions || [
+        'Continue Investigation',
+        'Modify Mission',
+        'Accept Incomplete Investigation',
+      ],
+      coveragePercent: pending.coveragePercent != null
+        ? pending.coveragePercent
+        : (readiness && readiness.coveragePercent),
+      missingEvidence: pending.missingEvidence || (readiness && readiness.missingEvidence) || [],
+      consumable: true,
+      readiness,
+    };
+  }
+
+  return null;
 }
 
 function missionStateInconsistent(message, details) {
@@ -135,6 +216,7 @@ function consistencyDetails(mission, snapshot) {
     hasPendingPlanApproval: hasPendingPlanApproval(snapshot),
     hasPendingDiscoveryApproval: hasPendingDiscoveryApproval(snapshot),
     hasPendingPrioritizationApproval: hasPendingPrioritizationApproval(snapshot),
+    hasPendingDiscoveryInvestigation: hasPendingDiscoveryInvestigation(snapshot),
     hasPendingPlanClarification: hasPendingPlanClarification(snapshot),
     hasDiscoveryArtifact: hasDiscoveryArtifact(snapshot),
   };
@@ -183,9 +265,13 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
-  if (!approved && kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) {
+  if (
+    !approved &&
+    (kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
+      || kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION)
+  ) {
     throw missionStateInconsistent(
-      'Prioritization approval is advertised before the mission plan is locked.',
+      'Discovery review is advertised before the mission plan is locked.',
       details
     );
   }
@@ -197,9 +283,14 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
-  if (kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL && stage && stage !== STAGES.DISCOVER) {
+  if (
+    (kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
+      || kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION)
+    && stage
+    && stage !== STAGES.DISCOVER
+  ) {
     throw missionStateInconsistent(
-      'Prioritization approval is advertised outside the discover stage.',
+      'Discovery review is advertised outside the discover stage.',
       details
     );
   }
@@ -243,6 +334,13 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
+  if (kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION && !hasPendingDiscoveryInvestigation(snapshot)) {
+    throw missionStateInconsistent(
+      'pendingOperatorDecision.kind is a discovery investigation that the execution engine cannot consume.',
+      details
+    );
+  }
+
   if (hasPendingPlanApproval(snapshot) && !PLAN_KINDS.has(kind)) {
     throw missionStateInconsistent(
       'hasPendingPlanApproval is true but pendingOperatorDecision does not match.',
@@ -264,6 +362,13 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
+  if (hasPendingDiscoveryInvestigation(snapshot) && kind !== OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION) {
+    throw missionStateInconsistent(
+      'hasPendingDiscoveryInvestigation is true but pendingOperatorDecision does not match.',
+      details
+    );
+  }
+
   if (hasPendingPlanClarification(snapshot) && kind !== OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION) {
     throw missionStateInconsistent(
       'hasPendingPlanClarification is true but pendingOperatorDecision does not match.',
@@ -277,10 +382,20 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     hasDiscoveryArtifact(snapshot)
   ) {
     const consumed = hasConsumedPrioritizationApproval(snapshot);
-    if (!consumed && kind !== OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) {
+    if (!consumed && !DISCOVER_REVIEW_KINDS.has(kind)) {
       throw missionStateInconsistent(
-        'Discovery artifact exists but prioritization approval is not pending.',
+        'Discovery artifact exists but discovery review decision is not pending.',
         details
+      );
+    }
+  }
+
+  if (kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL) {
+    const readiness = canApprovePrioritization(snapshot);
+    if (!readiness.executable) {
+      throw missionStateInconsistent(
+        'Prioritization approval is advertised but discovery evidence is insufficient.',
+        { ...details, readiness },
       );
     }
   }
@@ -298,6 +413,7 @@ const DISCOVER_DECISION_KINDS = new Set([
   OPERATOR_DECISION_KINDS.PLAN_EDIT,
   OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL,
   OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
+  OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION,
 ]);
 
 /**
@@ -319,6 +435,7 @@ module.exports = {
   hasPendingPlanClarification,
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
   hasPendingPrioritizationApproval,
   hasConsumedPrioritizationApproval,
   hasConsumablePendingDecision,
@@ -328,4 +445,5 @@ module.exports = {
   missionStateInconsistent,
   isMissionStateInconsistent,
   applyStageToPendingDecision,
+  buildPostDiscoveryPendingDecision,
 };

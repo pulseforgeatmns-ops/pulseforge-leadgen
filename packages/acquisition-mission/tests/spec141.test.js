@@ -75,7 +75,7 @@ describe('SPEC-141 — Discovery Review Gate', () => {
     assert.equal(turn.action, 'discovery_approved');
     assert.match(turn.prose, /Harbor Law Group|Discovery Complete/i);
     assert.doesNotMatch(turn.prose, /Status[\s\S]*Understanding/i);
-    assert.match(turn.prose, /Approve prioritization\?/i);
+    assert.match(turn.prose, /Approve findings\?/i);
     assert.equal(engine.get(mission.id, '10').stage, STAGES.DISCOVER);
   });
 

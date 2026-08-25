@@ -241,14 +241,47 @@
     const decision = pending || (pause ? {
       prompt: pause.requiredDecision,
       choices: (pause.availableOptions || []).map(function (label) { return { label: label }; }),
+      missingEvidence: pause.missingEvidence || [],
+      coveragePercent: pause.coveragePercent,
+      readiness: pause.missingEvidence || pause.coveragePercent != null
+        ? {
+          executable: false,
+          missingEvidence: pause.missingEvidence,
+          coveragePercent: pause.coveragePercent,
+        }
+        : null,
     } : null);
     if (!decision || !decision.prompt) {
       $('operatorPanel').innerHTML = '';
       return;
     }
-    let html = '<h2>Operator Decision</h2><p>' + decision.prompt + '</p>';
-    if (decision.choices && decision.choices.length) {
-      html += '<p class="meta">' + decision.choices.map(function (row) { return row.label; }).join(' · ') + '</p>';
+    let html = '<h2>Operator Decision</h2>';
+    if (decision.headline) {
+      html += '<p><strong>' + decision.headline + '</strong></p>';
+    }
+    html += '<p>' + decision.prompt + '</p>';
+    if (decision.coveragePercent != null) {
+      html += '<p class="meta">Coverage: ' + decision.coveragePercent + '%</p>';
+    }
+    if (decision.missingEvidence && decision.missingEvidence.length) {
+      html += '<p class="meta">Missing</p><ul>';
+      decision.missingEvidence.slice(0, 6).forEach(function (item) {
+        html += '<li>' + item + '</li>';
+      });
+      html += '</ul>';
+    }
+    if (decision.readiness && decision.readiness.blockingReason) {
+      html += '<p class="meta">' + decision.readiness.blockingReason + '</p>';
+    }
+    if (decision.readiness && decision.readiness.recommendedAction) {
+      html += '<p class="meta">Recommendation: ' + decision.readiness.recommendedAction + '</p>';
+    }
+    const choices = decision.choices
+      || (decision.actions || []).map(function (label) { return { label: label }; });
+    if (choices && choices.length) {
+      html += '<p class="meta">' + choices.map(function (row) {
+        return typeof row === 'string' ? row : row.label;
+      }).join(' · ') + '</p>';
     }
     $('operatorPanel').innerHTML = html;
   }
