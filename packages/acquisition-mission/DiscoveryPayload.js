@@ -7,6 +7,10 @@
 
 const { buildIntelligenceBrief } = require('../scout/credibility/CredibilityFramework');
 const {
+  buildPublicMissionIntelligenceReport,
+  containsForbiddenReasoningKeys,
+} = require('../scout/investigation/MissionIntelligenceReport');
+const {
   buildScoutDiscoveryArtifact,
   mapCanonicalEvidenceToContribution,
 } = require('../scout/adapters/ScoutDiscoveryArtifact');
@@ -347,7 +351,11 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
   const marketCoveragePct =
     artifact.marketCoveragePct != null ? artifact.marketCoveragePct : null;
 
-  return {
+  const publicMir = artifact.missionIntelligenceReport
+    ? buildPublicMissionIntelligenceReport(artifact.missionIntelligenceReport)
+    : null;
+
+  const contribution = {
     companies,
     prospects,
     buyingSignals,
@@ -374,17 +382,21 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     discoveryReport: artifact.discoveryReport || null,
     discoveryConfidence: artifact.discoveryConfidence || null,
     discoveryPlan: artifact.discoveryPlan || null,
-    intelligenceReport: artifact.intelligenceReport || null,
-    missionIntelligenceReport: artifact.missionIntelligenceReport || null,
+    missionIntelligenceReport: publicMir,
     discoveryArtifact: {
-      spec: artifact.spec,
+      spec: 'SPEC-173',
       fitCandidates: artifact.fitCandidates || [],
       watchCandidates: artifact.watchCandidates || [],
       businessUnderstanding: artifact.businessUnderstanding || null,
       businessJudgment: artifact.businessJudgment || null,
-      investigationState: artifact.investigationState || null,
     },
   };
+
+  if (containsForbiddenReasoningKeys(contribution)) {
+    throw new Error('SPEC-173 boundary projection failed: forbidden reasoning keys remain in discovery contribution.');
+  }
+
+  return contribution;
 }
 
 /**

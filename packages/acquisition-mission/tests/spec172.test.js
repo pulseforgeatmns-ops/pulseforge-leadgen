@@ -128,6 +128,11 @@ describe('SPEC-172 — Canonical Scout Evidence Handoff', () => {
           recommendation: { summary: 'Investigate STR operators first.', confidence: 0.7 },
           evidenceGraphSummary: { nodeCount: 3, edgeCount: 2, byType: { EVIDENCE: 1 } },
           businessUnderstanding: { items: [{ entity: 'Summit STR', assertions: ['Manages rentals'] }] },
+          investigationState: {
+            evidenceGraph: {
+              summary: { hypotheses: 3 },
+            },
+          },
         },
         investigationState: {
           evidenceGraph: {
@@ -140,6 +145,7 @@ describe('SPEC-172 — Canonical Scout Evidence Handoff', () => {
               },
             ],
             edges: [],
+            summary: { hypotheses: 3 },
           },
         },
       },
@@ -150,9 +156,13 @@ describe('SPEC-172 — Canonical Scout Evidence Handoff', () => {
     assert.ok(artifact.missionIntelligenceReport);
     assert.ok(artifact.missionIntelligenceReport.evidenceGraphSummary);
     assert.equal(artifact.missionIntelligenceReport.recommendation.summary, 'Investigate STR operators first.');
+    assert.ok(artifact.investigationState?.evidenceGraph?.summary?.hypotheses === 3);
 
     const payload = normalizeScoutDiscoveryPayload(scoutResult);
     assert.ok(payload.missionIntelligenceReport);
+    assert.equal(payload.missionIntelligenceReport.boundaryProjected, true);
+    assert.equal(payload.missionIntelligenceReport.investigationState, undefined);
+    assert.equal(payload.discoveryArtifact.investigationState, undefined);
     assert.equal(payload.evidence.length, 1);
     assert.doesNotThrow(() => assertEvidenceAttached(payload));
   });

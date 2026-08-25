@@ -115,7 +115,9 @@ const {
 
 const {
   buildMissionIntelligenceReport,
+  buildPublicMissionIntelligenceReport,
   mergeIntoDiscoveryReport,
+  containsForbiddenReasoningKeys,
 } = require('./MissionIntelligenceReport');
 
 const {
@@ -213,7 +215,9 @@ module.exports = {
   runReasoningCycle,
   shouldStopInvestigation,
   buildMissionIntelligenceReport,
+  buildPublicMissionIntelligenceReport,
   mergeIntoDiscoveryReport,
+  containsForbiddenReasoningKeys,
   buildInvestigativeStrategy,
   recalculateStrategyAfterResolution,
   applyInvestigativeStrategy,
