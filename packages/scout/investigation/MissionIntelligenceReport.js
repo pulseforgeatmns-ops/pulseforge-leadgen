@@ -26,6 +26,7 @@ const {
   buildOpportunityIntelligenceReport,
   buildRecommendationFromOpportunity,
 } = require('../opportunity/OpportunityIntelligenceEngine');
+const { buildStrategicDecision } = require('../../max/decision');
 
 function summarizeEvidenceGraph(evidenceGraph = {}) {
   const nodes = evidenceGraph.nodes || [];
@@ -187,10 +188,9 @@ function buildMissionIntelligenceReport(input = {}) {
   });
 
   const heuristicRecommendation = buildRecommendationFromUnderstanding(state, synthesisResult, judgmentResult);
-  const recommendation =
-    opportunityIntelligence.topOpportunity
-      ? buildRecommendationFromOpportunity(opportunityIntelligence.topOpportunity, heuristicRecommendation)
-      : heuristicRecommendation;
+  const opportunityRecommendation = opportunityIntelligence.topOpportunity
+    ? buildRecommendationFromOpportunity(opportunityIntelligence.topOpportunity, heuristicRecommendation)
+    : null;
 
   const remainingUnknowns = investigativeStrategySection.remainingUnknowns.length
     ? investigativeStrategySection.remainingUnknowns.map((u) => u.label || u.gap)
@@ -199,6 +199,21 @@ function buildMissionIntelligenceReport(input = {}) {
         ...(state.uncertainty?.persistent || []),
       ];
 
+  const strategicDecision = buildStrategicDecision({
+    mission: input.mission,
+    opportunities: opportunityIntelligence.opportunities,
+    opportunityIntelligence,
+    constraints: input.constraints,
+    competingWork: input.competingWork || input.mission?.competingWork,
+    pendingProposals: input.pendingProposals,
+    scoutDiscoveries: input.scoutDiscoveries,
+    remainingUnknowns,
+  });
+
+  const recommendation = opportunityRecommendation
+    ? { ...opportunityRecommendation, ...strategicDecision.recommendationOverlay }
+    : heuristicRecommendation;
+
   return {
     kind: 'mission_intelligence_report',
     spec: 'SPEC-159',
@@ -206,12 +221,15 @@ function buildMissionIntelligenceReport(input = {}) {
     heuristicsSpec: 'SPEC-162',
     strategySpec: 'SPEC-163',
     opportunitySpec: 'SPEC-164',
+    decisionSpec: 'SPEC-165',
     adr: 'ADR-079',
     synthesisAdr: 'ADR-080',
     heuristicsAdr: 'ADR-082',
     strategyAdr: 'ADR-083',
     opportunityAdr: 'ADR-084',
+    decisionAdr: 'ADR-085',
     opportunityIntelligence,
+    strategicDecision,
     topOpportunities: opportunityIntelligence.topOpportunities,
     finalMarketDefinition: {
       market: marketDefinition.market,
@@ -255,6 +273,7 @@ function buildMissionIntelligenceReport(input = {}) {
     synthesizedNotRaw: businessUnderstandingSection.synthesizedNotRaw === true,
     strategyDrivenInvestigation: investigativeStrategySection.everyInvestigationDocumented === true,
     opportunityRankedNotScored: opportunityIntelligence.notScoreBased === true,
+    basedOnStrategicDecision: true,
     summary: buildReportSummary({
       marketDefinition,
       confidence: judgmentResult.overallJudgment?.confidence ?? state.confidence,
@@ -302,10 +321,12 @@ function mergeIntoDiscoveryReport(discoveryReport = {}, missionReport = {}) {
     confidenceEvolution: missionReport.confidenceEvolution,
     suggestedNextInvestigation: missionReport.suggestedNextInvestigation,
     opportunityIntelligence: missionReport.opportunityIntelligence,
+    strategicDecision: missionReport.strategicDecision,
     topOpportunities: missionReport.topOpportunities,
     understandingFirst: true,
     judgmentFromHeuristics: missionReport.judgmentFromHeuristics === true,
     synthesizedNotRaw: missionReport.synthesizedNotRaw === true,
+    basedOnStrategicDecision: missionReport.basedOnStrategicDecision === true,
     recommendation: missionReport.recommendation,
   };
 }

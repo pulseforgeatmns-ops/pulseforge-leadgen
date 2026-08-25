@@ -5,7 +5,9 @@
  * ADR-084 — Every Max recommendation must include explicit opportunity reasoning.
  *
  * Max consumes Opportunity Intelligence output for executive decisions.
- * Scout answers "What is true?" — Opportunity Intelligence answers "What matters most?"
+ * Scout answers "What is true?"
+ * Opportunity Intelligence answers "What matters?"
+ * Strategic Decision (SPEC-165) answers "What should the business actually do today?"
  */
 
 const {
@@ -14,6 +16,13 @@ const {
   explainOvernightChanges,
   buildRecommendationFromOpportunity,
 } = require('../../scout/opportunity/OpportunityIntelligenceEngine');
+const {
+  buildStrategicDecision,
+  attachStrategicDecision,
+  ensureStrategicDecision,
+  evaluateTradeoff,
+  allocateResources,
+} = require('../decision');
 
 function opportunityReportFrom(missionReport = {}) {
   return (
@@ -95,21 +104,22 @@ function explainRankingComparison(input = {}) {
  * @param {object} missionReport
  * @returns {object}
  */
-function ensureOpportunityReasoning(recommendation = {}, missionReport = {}) {
-  if (recommendation.opportunityReasoning?.length && recommendation.basedOnOpportunityIntelligence) {
-    return recommendation;
+function ensureOpportunityReasoning(recommendation = {}, missionReport = {}, decisionInput = {}) {
+  let next = recommendation;
+  if (!(recommendation.opportunityReasoning?.length && recommendation.basedOnOpportunityIntelligence)) {
+    const report = opportunityReportFrom(missionReport);
+    const top = report.topOpportunity || (report.topOpportunities || [])[0];
+    if (top) {
+      const enriched = buildRecommendationFromOpportunity(top, recommendation);
+      next = {
+        ...recommendation,
+        ...enriched,
+        summary: enriched.summary || recommendation.summary,
+      };
+    }
   }
 
-  const report = opportunityReportFrom(missionReport);
-  const top = report.topOpportunity || (report.topOpportunities || [])[0];
-  if (!top) return recommendation;
-
-  const enriched = buildRecommendationFromOpportunity(top, recommendation);
-  return {
-    ...recommendation,
-    ...enriched,
-    summary: enriched.summary || recommendation.summary,
-  };
+  return ensureStrategicDecision(next, missionReport, decisionInput);
 }
 
 /**
@@ -126,6 +136,11 @@ module.exports = {
   explainRankingComparison,
   explainWhatChanged,
   ensureOpportunityReasoning,
+  ensureStrategicDecision,
+  buildStrategicDecision,
+  attachStrategicDecision,
+  evaluateTradeoff,
+  allocateResources,
   explainWhyFirst,
   compareOpportunities,
   explainOvernightChanges,

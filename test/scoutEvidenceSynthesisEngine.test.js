@@ -160,7 +160,11 @@ describe('SPEC-160 — Evidence Synthesis Engine', () => {
     assert.ok(report.businessUnderstanding.buyingSignals >= 0);
     assert.equal(report.recommendation.basedOnUnderstanding, true);
     assert.equal(report.recommendation.notDirectFromEvidence, true);
-    if (report.recommendation.basedOnHeuristics) {
+    if (report.recommendation.basedOnStrategicDecision) {
+      assert.equal(report.recommendation.decisionAdr, 'ADR-085');
+    } else if (report.recommendation.basedOnOpportunityIntelligence) {
+      assert.equal(report.recommendation.adr, 'ADR-084');
+    } else if (report.recommendation.basedOnHeuristics) {
       assert.equal(report.recommendation.adr, 'ADR-082');
       assert.ok(report.businessJudgment);
     } else {

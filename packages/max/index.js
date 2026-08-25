@@ -189,6 +189,15 @@ const {
   detectDrift,
   buildReviewDashboard,
 } = require('./outcome');
+const {
+  buildStrategicDecision,
+  attachStrategicDecision,
+  ensureStrategicDecision,
+  evaluateTradeoff,
+  allocateResources,
+  ACTIVITY_TYPES,
+  ALLOCATION_KINDS,
+} = require('./decision');
 
 /**
  * Create a Max reasoning + memory + briefing + policy + command-deck runtime.
@@ -604,4 +613,11 @@ module.exports = {
   buildStrategyPerformance,
   detectDrift,
   buildReviewDashboard,
+  buildStrategicDecision,
+  attachStrategicDecision,
+  ensureStrategicDecision,
+  evaluateTradeoff,
+  allocateResources,
+  ACTIVITY_TYPES,
+  ALLOCATION_KINDS,
 };
