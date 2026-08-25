@@ -79,7 +79,7 @@ describe('SPEC-154 — Unified Discovery Pipeline', () => {
       mission,
       delegation,
       opts: {
-        discover: injectedAdapter(),
+        discoveryAdapters: [injectedAdapter()],
         enablePlaces: false,
       },
     });
@@ -88,6 +88,7 @@ describe('SPEC-154 — Unified Discovery Pipeline', () => {
     assert.deepEqual(stageNames, [
       DISCOVERY_PIPELINE_STAGES.UNDERSTAND_MARKET,
       DISCOVERY_PIPELINE_STAGES.ESTIMATE_UNIVERSE,
+      'capability_evaluation',
       DISCOVERY_PIPELINE_STAGES.BUILD_INVESTIGATION_PLAN,
       DISCOVERY_PIPELINE_STAGES.EXECUTE_COVERAGE_PLAN,
       DISCOVERY_PIPELINE_STAGES.MEASURE_COVERAGE,
@@ -115,7 +116,7 @@ describe('SPEC-154 — Unified Discovery Pipeline', () => {
       targetContext: { geography: 'Greater Manchester', segments: ['law_firm'] },
       businessContext: { serviceGeography: 'Greater Manchester', commercialCapability: 'commercial_cleaning' },
     };
-    const opts = { discover: injectedAdapter(), enablePlaces: false };
+    const opts = { discoveryAdapters: [injectedAdapter()], enablePlaces: false };
 
     const viaPipeline = await runDiscoveryPipeline({ mission, delegation, opts });
     const viaDiscover = await Scout.discover({ mission, scoutPayload: {}, opts: { ...opts, delegation } });
@@ -157,7 +158,7 @@ describe('SPEC-154 — entry point parity', () => {
       targetContext: { geography: 'Greater Manchester', segments: ['law_firm'] },
       businessContext: { serviceGeography: 'Greater Manchester', commercialCapability: 'commercial_cleaning' },
     };
-    const opts = { discover: injectedAdapter(), enablePlaces: false };
+    const opts = { discoveryAdapters: [injectedAdapter()], enablePlaces: false };
 
     const pipeline = await runDiscoveryPipeline({ mission, delegation, opts });
     const discover = await Scout.discover({ mission, scoutPayload: {}, opts: { ...opts, delegation } });

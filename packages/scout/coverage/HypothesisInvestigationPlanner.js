@@ -1,12 +1,15 @@
 'use strict';
 
 /**
- * SPEC-177 — Hypothesis Investigation Planner.
+ * SPEC-180 — Canonical Investigation Planner (EPIC-001).
  * Business hypotheses become the primary planning abstraction.
  * Generates InvestigationPlan with questions, evidence requirements, and provider assignments.
  */
 
-const { generateHypotheses } = require('../investigation/HypothesisGeneration');
+const {
+  generateCanonicalHypotheses,
+  businessHypothesesForPlanner,
+} = require('../hypothesis/CanonicalHypothesisEngine');
 const {
   deriveQuestionsFromHypotheses,
   buildEvidenceRequirementsFromQuestions,
@@ -43,7 +46,7 @@ const PHASE_EVIDENCE_ORDER = Object.freeze([
 
 function buildHypothesisInvestigationPlan(partial = {}) {
   return {
-    version: 'SPEC-177',
+    version: 'SPEC-180',
     mission: partial.mission || null,
     objective: partial.objective || '',
     marketDefinition: partial.marketDefinition || null,
@@ -61,6 +64,7 @@ function buildHypothesisInvestigationPlan(partial = {}) {
     currentPhase: partial.currentPhase || INVESTIGATION_PHASES.IDENTITY,
     sufficientlyInvestigated: partial.sufficientlyInvestigated === true,
     rationale: partial.rationale || '',
+    canonicalHypotheses: Array.isArray(partial.canonicalHypotheses) ? partial.canonicalHypotheses : [],
     createdAt: partial.createdAt || new Date().toISOString(),
     updatedAt: partial.updatedAt || new Date().toISOString(),
   };
@@ -145,7 +149,14 @@ function phaseForEvidence(evidenceType) {
 function createHypothesisInvestigationPlan(input = {}) {
   const { mission = {}, marketDefinition = {}, opts = {} } = input;
 
-  const hypotheses = input.hypotheses || generateHypotheses(marketDefinition, mission, opts);
+  const canonical =
+    input.canonicalHypotheses ||
+    (input.hypotheses
+      ? { hypotheses: input.hypotheses, business: input.hypotheses }
+      : generateCanonicalHypotheses(marketDefinition, mission, opts));
+
+  const hypotheses =
+    input.hypotheses || businessHypothesesForPlanner(canonical.hypotheses || canonical.business);
   const questions = deriveQuestionsFromHypotheses(hypotheses, marketDefinition);
   const evidenceRequirements = buildEvidenceRequirementsFromQuestions(questions);
   const assignedProviders = assignProvidersForRequirements(evidenceRequirements, opts);
@@ -165,7 +176,8 @@ function createHypothesisInvestigationPlan(input = {}) {
     currentPhase: INVESTIGATION_PHASES.IDENTITY,
     sufficientlyInvestigated: false,
     rationale:
-      'Investigation plan constructed from business hypotheses (SPEC-177). Providers collect evidence; they do not define search strategy.',
+      'Investigation plan constructed from canonical hypotheses (SPEC-180). Providers collect evidence; they do not define search strategy.',
+    canonicalHypotheses: canonical.hypotheses || [],
   });
 }
 

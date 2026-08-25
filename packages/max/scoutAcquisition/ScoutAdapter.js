@@ -701,8 +701,6 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       useCoverageEngine: opts.useCoverageEngine !== false,
       marketDefinition: opts.marketDefinition,
       mission: opts.mission || delegation.mission,
-      useHypothesisDiscoveryEngine: opts.useHypothesisDiscoveryEngine,
-      useHypothesisEngine: opts.useHypothesisEngine,
       hypothesisOpts: opts.hypothesisOpts,
       terminologyLearningStore: opts.terminologyLearningStore,
     });

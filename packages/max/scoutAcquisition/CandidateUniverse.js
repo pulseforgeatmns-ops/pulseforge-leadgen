@@ -23,7 +23,6 @@ const {
   evaluateDiscoveryCapability,
   buildCapabilityBlockedResult,
 } = require('../../scout/coverage/DiscoveryCapabilityGate');
-const { executeHypothesisDrivenCoverage } = require('../../scout/coverage/HypothesisDrivenDiscovery');
 const { runHypothesisDrivenDiscovery } = require('../../scout/coverage/HypothesisDrivenDiscoveryEngine');
 
 function createMemoryDiscoveryStore(snapshot = null) {
@@ -271,7 +270,7 @@ async function constructCandidateUniverse(input = {}) {
     discoveryRan = true;
     let result;
     if (useCoverageEngine) {
-      if (input.marketDefinition && input.useHypothesisDiscoveryEngine !== false) {
+      if (input.marketDefinition) {
         const engineResult = await runHypothesisDrivenDiscovery({
           mission: input.mission || {},
           marketDefinition: input.marketDefinition,
@@ -287,23 +286,7 @@ async function constructCandidateUniverse(input = {}) {
         investigationPlan = engineResult.investigationPlan;
         revisedMarketDefinition = input.marketDefinition;
         actionsTaken.push({
-          text: `Hypothesis-driven discovery engine (SPEC-177): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
-        });
-      } else if (input.marketDefinition && input.useHypothesisEngine !== false) {
-        const hypothesisResult = await executeHypothesisDrivenCoverage({
-          marketDefinition: input.marketDefinition,
-          searchDefinition,
-          adapters: marketAdapters,
-          opts: input.hypothesisOpts || {},
-          terminologyLearningStore: input.terminologyLearningStore,
-        });
-        result = hypothesisResult;
-        discoveryPlan = hypothesisResult.discoveryPlan;
-        coverageMetrics = hypothesisResult.coverage;
-        investigationReport = hypothesisResult.investigationReport;
-        revisedMarketDefinition = hypothesisResult.revisedMarketDefinition || input.marketDefinition;
-        actionsTaken.push({
-          text: `Hypothesis-driven investigation: ${(hypothesisResult.searchHypotheses || []).length} terminology hypotheses evaluated.`,
+          text: `Canonical hypothesis-driven discovery (SPEC-180): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
         });
       } else {
         result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters);
