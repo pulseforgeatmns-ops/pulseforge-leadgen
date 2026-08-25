@@ -32,6 +32,8 @@ const {
   extractExpectedValue,
   estimateUniverseFromPlan,
 } = require('./universe/CandidateUniverseEstimate');
+const { runInvestigativeReasoningLoop } = require('./investigation/InvestigativeReasoningLoop');
+const { mergeIntoDiscoveryReport } = require('./investigation/MissionIntelligenceReport');
 
 function nowIso() {
   return new Date().toISOString();
@@ -69,6 +71,8 @@ function buildPipelineResult(partial = {}) {
     coverageMetrics: partial.coverageMetrics || null,
     coveragePct: partial.coveragePct != null ? partial.coveragePct : null,
     intelligenceReport: partial.intelligenceReport || null,
+    investigationState: partial.investigationState || null,
+    missionIntelligenceReport: partial.missionIntelligenceReport || null,
     emptyMarketDecision: partial.emptyMarketDecision === true,
     confidence: partial.confidence != null ? partial.confidence : null,
     discoveryConfidence: partial.discoveryConfidence || null,
@@ -133,7 +137,7 @@ async function runDiscoveryPipeline(input = {}) {
     error: existingError,
   };
 
-  const marketDefinition = buildMarketDefinition(input);
+  let marketDefinition = buildMarketDefinition(input);
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.UNDERSTAND_MARKET, {
       startedAt: marketStageStarted,
@@ -346,7 +350,42 @@ async function runDiscoveryPipeline(input = {}) {
       evidenceQuality: existingIntelligence.companyCount ? 0.65 : 0.35,
     });
 
-  const intelligenceReport =
+  // SPEC-159 — Investigative Reasoning Loop (ADR-079: understanding before recommendation)
+  let investigationState = null;
+  let missionIntelligenceReport = null;
+  if (opts.useInvestigativeReasoningLoop !== false) {
+    const reasoningResult = await runInvestigativeReasoningLoop({
+      mission,
+      tenantId,
+      marketDefinition,
+      universeEstimate: revisedUniverseEstimate,
+      existingIntelligence,
+      memory: opts.memory || opts.investigationMemory || {},
+      coverageResult: {
+        candidates: candidateUniverse,
+        searchHypotheses:
+          payload.searchHypotheses ||
+          (payload.investigationReport && payload.investigationReport.hypotheses) ||
+          [],
+        coverage: coverageMetrics,
+        revisedMarketDefinition:
+          payload.revisedMarketDefinition ||
+          (payload.discoveryReport && payload.discoveryReport.revisedMarketDefinition) ||
+          marketDefinition,
+      },
+      opts,
+    });
+    investigationState = reasoningResult.state;
+    missionIntelligenceReport = reasoningResult.report;
+    if (reasoningResult.state?.marketDefinition?.revised) {
+      marketDefinition = reasoningResult.state.marketDefinition;
+    }
+    if (reasoningResult.state?.universeEstimate) {
+      revisedUniverseEstimate = reasoningResult.state.universeEstimate;
+    }
+  }
+
+  let intelligenceReport =
     payload.discoveryReport ||
     buildDiscoveryReport({
       coverage: coverageMetrics || {},
@@ -356,7 +395,13 @@ async function runDiscoveryPipeline(input = {}) {
       universeEstimate: revisedUniverseEstimate,
       investigated: investigatedCount,
       coveragePct,
+      marketDefinition,
+      revisedMarketDefinition: marketDefinition.revised ? marketDefinition : undefined,
     });
+
+  if (missionIntelligenceReport) {
+    intelligenceReport = mergeIntoDiscoveryReport(intelligenceReport, missionIntelligenceReport);
+  }
 
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.PRODUCE_INTELLIGENCE_REPORT, {
@@ -377,8 +422,12 @@ async function runDiscoveryPipeline(input = {}) {
     coverageMetrics,
     coveragePct,
     intelligenceReport,
+    investigationState,
+    missionIntelligenceReport,
     emptyMarketDecision,
-    confidence: discoveryConfidence.overall != null ? discoveryConfidence.overall : intelligenceResult.confidence,
+    confidence:
+      (investigationState && investigationState.confidence) ||
+      (discoveryConfidence.overall != null ? discoveryConfidence.overall : intelligenceResult.confidence),
     discoveryConfidence,
     sufficiency,
     gapAnalysis,
