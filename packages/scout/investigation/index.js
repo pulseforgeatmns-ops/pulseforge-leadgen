@@ -95,6 +95,29 @@ const {
   PROVIDER_STATUS,
 } = require('./InvestigationPlanBuilder');
 
+const {
+  buildInvestigationState,
+  createInvestigationState,
+  serializeInvestigationState,
+} = require('./InvestigationState');
+
+const {
+  HYPOTHESIS_LIFECYCLE,
+  buildHypothesisLifecycleRecord,
+  summarizeHypothesisHistory,
+} = require('./HypothesisLifecycle');
+
+const {
+  runInvestigativeReasoningLoop,
+  runReasoningCycle,
+  shouldStopInvestigation,
+} = require('./InvestigativeReasoningLoop');
+
+const {
+  buildMissionIntelligenceReport,
+  mergeIntoDiscoveryReport,
+} = require('./MissionIntelligenceReport');
+
 module.exports = {
   INVESTIGATION_PHASES,
   GRAPH_NODE_TYPES,
@@ -171,4 +194,15 @@ module.exports = {
   PROVIDER_STATUS,
   ...require('./SearchHypothesisEngine'),
   ...require('./InvestigationTree'),
+  buildInvestigationState,
+  createInvestigationState,
+  serializeInvestigationState,
+  HYPOTHESIS_LIFECYCLE,
+  buildHypothesisLifecycleRecord,
+  summarizeHypothesisHistory,
+  runInvestigativeReasoningLoop,
+  runReasoningCycle,
+  shouldStopInvestigation,
+  buildMissionIntelligenceReport,
+  mergeIntoDiscoveryReport,
 };
