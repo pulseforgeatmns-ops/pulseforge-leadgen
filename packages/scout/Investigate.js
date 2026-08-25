@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * SPEC-141 + SPEC-142 — Scout.investigate() entry point.
- * Scout investigates markets through a hypothesis-driven evidence loop (SPEC-142),
- * reusing SPEC-141 provider capabilities, fusion, and qualification.
+ * SPEC-154 — Investigation is internal to discovery; not a separate operator contract.
+ * Module export retained for tests and advanced callers — use Scout.discover() in production.
  */
 
 const { runInvestigationEngine } = require('./investigation/InvestigationLoop');
@@ -11,20 +10,16 @@ const { buildDelegationFromMission } = require('./intelligence/MarketUnderstandi
 const { buildDiscoveryResult, DISCOVERY_OUTCOMES } = require('./types');
 
 /**
- * Canonical Scout investigation contract.
- * Runs the SPEC-142 hypothesis-driven investigation engine.
+ * Internal investigation entry — runs hypothesis-driven engine (SPEC-142).
+ * Production entry points should call Scout.discover() instead.
  *
  * @param {object} input
- * @param {object} input.mission
- * @param {object} [input.missionEngine]
- * @param {object} [input.scoutPayload]
- * @param {object} [input.opts]
  * @returns {Promise<object>}
  */
 async function investigate(input) {
   const { mission, scoutPayload = {}, opts = {} } = input;
   if (!mission) {
-    throw new Error('Scout.investigate requires mission');
+    throw new Error('Scout discovery requires mission');
   }
 
   const engineResult = await runInvestigationEngine({

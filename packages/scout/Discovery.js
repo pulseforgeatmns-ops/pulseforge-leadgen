@@ -1,30 +1,25 @@
 'use strict';
 
 /**
- * SPEC-123 — Unified Scout Discovery pipeline.
+ * SPEC-123 + SPEC-154 — Unified Scout Discovery.
  *
  * Canonical contract: Scout.discover()
- * Internal phases: Retrieve → Gap Analysis → External Discovery →
- *   Verification → Enrichment → Ranking → Mission Update
- *
- * runScoutAcquisitionIntelligence() and prospect_discovery() are internal
- * implementation details — never operator-visible.
+ * All discovery executes DiscoveryPipeline (CoverageEngine mandatory).
+ * Investigation is internal implementation — not a separate operator concept.
  */
 
 const { BUILTIN_IDS } = require('../capabilities/types');
-const { MISSION_STATUS, REVIEW_ACTIONS } = require('../mission-engine/types');
+const { MISSION_STATUS } = require('../mission-engine/types');
 const {
   buildDiscoveryExecutionReport,
   emitDiscoveryAuditEvents,
 } = require('../mission-engine/discoveryExecutionReport');
 const ScoutDiscoveryAudit = require('../mission-engine/ScoutDiscoveryAudit');
-const { loadRepository } = require('../max/scoutAcquisition/ExistingIntelligence');
-const { assessExistingSufficiency } = require('../max/scoutAcquisition/CandidateUniverse');
-const { buildAcquisitionSearchDefinition } = require('../max/scoutAcquisition/SearchDefinition');
-const { runScoutAcquisitionIntelligence } = require('../max/scoutAcquisition/ScoutAdapter');
+const { selectDiscoveryStrategy, buildDelegationFromMission } = require('./Discovery.helpers');
+const { runDiscoveryPipeline } = require('./DiscoveryPipeline');
 const {
   DISCOVERY_PHASES,
-  DISCOVERY_STRATEGIES,
+  DISCOVERY_PIPELINE_STAGES,
   DISCOVERY_OUTCOMES,
   buildDiscoveryResult,
 } = require('./types');
@@ -39,103 +34,6 @@ const {
   emitDiscoveryCompleted,
 } = require('./observability');
 
-/**
- * Map mission + scoutPayload to acquisition delegation for internal intelligence.
- * @param {object} mission
- * @param {object} [scoutPayload]
- * @returns {object}
- */
-function buildDelegationFromMission(mission, scoutPayload = {}) {
-  const constraints = mission.constraints || {};
-  const plan = (mission.plan && mission.plan.missionPlan) || mission.missionPlan || {};
-  return {
-    tenantId: String(mission.tenantId || mission.clientId || scoutPayload.tenantId || ''),
-    targetContext: {
-      geography:
-        scoutPayload.geography ||
-        constraints.locationHint ||
-        (plan.geography && plan.geography.label) ||
-        null,
-      segments: constraints.vertical ? [constraints.vertical] : [],
-      businessType: constraints.vertical || constraints.industry || null,
-    },
-    businessContext: {
-      serviceGeography: scoutPayload.geography || constraints.locationHint || null,
-      preferredSegments: constraints.vertical ? [constraints.vertical] : [],
-      operatorDirection: scoutPayload.operatorMessage || null,
-    },
-  };
-}
-
-/**
- * Select discovery strategy from gap analysis — internal optimization only.
- * @param {object} gapAnalysis
- * @param {object} existing
- * @returns {string}
- */
-function selectDiscoveryStrategy(gapAnalysis, existing) {
-  const existingCount = ((existing && existing.companies) || []).length;
-  const freshCount = gapAnalysis.freshCount || 0;
-
-  if (existingCount === 0) {
-    return DISCOVERY_STRATEGIES.EXTERNAL_HEAVY;
-  }
-  if (freshCount > 0 && gapAnalysis.shouldDiscoverGap) {
-    return DISCOVERY_STRATEGIES.HYBRID;
-  }
-  if (freshCount > 0 && !gapAnalysis.shouldDiscoverGap) {
-    return DISCOVERY_STRATEGIES.RETRIEVE_ONLY;
-  }
-  if (existingCount > 0 && freshCount === 0) {
-    return DISCOVERY_STRATEGIES.VERIFICATION_ONLY;
-  }
-  return DISCOVERY_STRATEGIES.HYBRID;
-}
-
-/**
- * Execute prospect_discovery via MissionExecutor (internal implementation detail).
- * @param {object} input
- * @returns {Promise<object>}
- */
-async function executeProspectDiscovery(input) {
-  const { mission, missionEngine, discoveryIdx } = input;
-  const missionId = mission.id;
-  const steps = (mission.plan && mission.plan.steps) || [];
-
-  if (
-    mission.status === MISSION_STATUS.PLANNING ||
-    mission.status === MISSION_STATUS.REQUESTED
-  ) {
-    return missionEngine.executor.execute(missionId);
-  }
-
-  if (discoveryIdx >= 0) {
-    const resetSteps = steps.map((s, idx) => {
-      if (idx >= discoveryIdx) {
-        return { ...s, status: 'queued', error: undefined };
-      }
-      return s.status === 'completed'
-        ? s
-        : { ...s, status: 'completed', error: undefined };
-    });
-
-    await missionEngine.store.update({
-      id: missionId,
-      status: MISSION_STATUS.EXECUTING,
-      plan: { ...mission.plan, steps: resetSteps },
-      review: null,
-    });
-
-    return missionEngine.executor.execute(missionId);
-  }
-
-  return missionEngine.review({
-    missionId,
-    action: REVIEW_ACTIONS.RUN_AGAIN,
-    actor: input.operatorId || null,
-  });
-}
-
 function findDiscoveryStepIndex(mission) {
   const steps = (mission.plan && mission.plan.steps) || [];
   return steps.findIndex(
@@ -146,12 +44,153 @@ function findDiscoveryStepIndex(mission) {
   );
 }
 
+function mapPipelineStrategy(gapAnalysis, existing) {
+  return selectDiscoveryStrategy(gapAnalysis, existing);
+}
+
+function pipelineStagesToLegacyPhases(pipelineStages = []) {
+  const legacy = [];
+  const hasStage = (name) => pipelineStages.some((row) => row.stage === name);
+
+  for (const row of pipelineStages) {
+    if (row.stage === DISCOVERY_PIPELINE_STAGES.UNDERSTAND_MARKET) {
+      legacy.push({
+        phase: DISCOVERY_PHASES.EXISTING_INTELLIGENCE,
+        startedAt: row.startedAt,
+        completedAt: row.completedAt,
+        result: { marketDefinition: row.output, consulted: true },
+      });
+    }
+    if (row.stage === DISCOVERY_PIPELINE_STAGES.DETERMINE_SUFFICIENCY) {
+      legacy.push({
+        phase: DISCOVERY_PHASES.GAP_ANALYSIS,
+        startedAt: row.startedAt,
+        completedAt: row.completedAt,
+        result: row.output,
+      });
+    }
+    if (row.stage === DISCOVERY_PIPELINE_STAGES.EXECUTE_COVERAGE_PLAN) {
+      legacy.push({
+        phase: DISCOVERY_PHASES.EXTERNAL_DISCOVERY,
+        startedAt: row.startedAt,
+        completedAt: row.completedAt,
+        result: { executed: !row.error, coverageEngineUsed: true, ...(row.output || {}) },
+      });
+    }
+    if (row.stage === DISCOVERY_PIPELINE_STAGES.PRODUCE_INTELLIGENCE_REPORT) {
+      legacy.push(
+        { phase: DISCOVERY_PHASES.VERIFICATION, completedAt: row.completedAt },
+        { phase: DISCOVERY_PHASES.ENRICHMENT, completedAt: row.completedAt },
+        { phase: DISCOVERY_PHASES.RANKING, completedAt: row.completedAt, result: row.output }
+      );
+    }
+  }
+
+  if (!hasStage(DISCOVERY_PIPELINE_STAGES.DETERMINE_SUFFICIENCY)) {
+    legacy.push({
+      phase: DISCOVERY_PHASES.GAP_ANALYSIS,
+      completedAt: new Date().toISOString(),
+    });
+  }
+  if (!hasStage(DISCOVERY_PIPELINE_STAGES.EXECUTE_COVERAGE_PLAN)) {
+    legacy.push({
+      phase: DISCOVERY_PHASES.EXTERNAL_DISCOVERY,
+      completedAt: new Date().toISOString(),
+      result: { executed: false, skipped: true, coverageEngineUsed: true },
+    });
+  }
+
+  legacy.push({
+    phase: DISCOVERY_PHASES.MISSION_UPDATE,
+    completedAt: new Date().toISOString(),
+  });
+  return legacy;
+}
+
 /**
- * Canonical Scout Discovery contract (SPEC-123).
+ * Sync mission store with pipeline results — replaces prospect_discovery capability path.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function syncMissionFromPipeline(input) {
+  const { mission, missionEngine, pipelineResult, operatorId } = input;
+  if (!missionEngine || !mission) return mission;
+
+  const discoveryIdx = findDiscoveryStepIndex(mission);
+  const steps = (mission.plan && mission.plan.steps) || [];
+  const prospectCount = pipelineResult.qualifiedCount || 0;
+  const stepResult = {
+    capabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+    stageId: 'prospect_discovery',
+    status: 'completed',
+    outcome: pipelineResult.outcome,
+    result: {
+      status: pipelineResult.outcome === DISCOVERY_OUTCOMES.BLOCKED ? 'blocked' : 'completed',
+      outputs: {
+        prospectCount,
+        prospects: [],
+        companies: (pipelineResult.intelligenceResult &&
+          pipelineResult.intelligenceResult.payload &&
+          pipelineResult.intelligenceResult.payload.companies) ||
+          [],
+        summary: {
+          discovered: prospectCount,
+          coveragePct: pipelineResult.coveragePct,
+        },
+        discoveryProfile: pipelineResult.marketDefinition &&
+          pipelineResult.marketDefinition.searchDefinition,
+      },
+      errors: pipelineResult.blockReason ? [pipelineResult.blockReason] : [],
+    },
+  };
+
+  const updatedSteps =
+    discoveryIdx >= 0
+      ? steps.map((s, idx) =>
+          idx === discoveryIdx
+            ? { ...s, status: 'completed', error: undefined }
+            : s
+        )
+      : steps;
+
+  const deliverables = {
+    ...(mission.deliverables || {}),
+    stepResults: [
+      ...((mission.deliverables && mission.deliverables.stepResults) || []).filter(
+        (s) =>
+          s.capabilityId !== BUILTIN_IDS.PROSPECT_DISCOVERY &&
+          s.capabilityId !== 'prospect_discovery'
+      ),
+      stepResult,
+    ],
+  };
+
+  const nextStatus =
+    mission.status === MISSION_STATUS.PLANNING || mission.status === MISSION_STATUS.REQUESTED
+      ? MISSION_STATUS.EXECUTING
+      : mission.status;
+
+  return missionEngine.store.update({
+    id: mission.id,
+    status: nextStatus,
+    plan: discoveryIdx >= 0 ? { ...mission.plan, steps: updatedSteps } : mission.plan,
+    deliverables,
+    review: null,
+    progress: {
+      ...(mission.progress || {}),
+      currentStage: 'Discovery',
+      currentCapabilityId: BUILTIN_IDS.PROSPECT_DISCOVERY,
+    },
+    ...(operatorId ? { lastOperatorId: operatorId } : {}),
+  });
+}
+
+/**
+ * Canonical Scout Discovery contract (SPEC-123 / SPEC-154).
  *
  * @param {object} input
  * @param {object} input.mission
- * @param {import('../mission-engine/MissionEngine').MissionEngine} input.missionEngine
+ * @param {import('../mission-engine/MissionEngine').MissionEngine} [input.missionEngine]
  * @param {object} [input.scoutPayload]
  * @param {string} [input.operatorId]
  * @param {string} [input.message]
@@ -160,13 +199,13 @@ function findDiscoveryStepIndex(mission) {
  */
 async function discover(input) {
   const { mission, missionEngine, scoutPayload = {}, operatorId, message, opts = {} } = input;
-  if (!mission || !missionEngine) {
-    throw new Error('Scout.discover requires mission and missionEngine');
+  if (!mission) {
+    throw new Error('Scout.discover requires mission');
   }
 
   const missionId = mission.id;
   const tenantId = String(mission.tenantId || mission.clientId || '');
-  const phases = [];
+  const delegation = opts.delegation || buildDelegationFromMission(mission, scoutPayload);
 
   emitDiscoveryStarted({
     missionId,
@@ -174,139 +213,78 @@ async function discover(input) {
     tenantId,
   });
 
-  // ── Phase 1: Existing Intelligence ─────────────────────────────
-  emitDiscoveryPhase(DISCOVERY_PHASES.EXISTING_INTELLIGENCE, { missionId });
-  phases.push({ phase: DISCOVERY_PHASES.EXISTING_INTELLIGENCE, startedAt: new Date().toISOString() });
-
-  let existing = { companies: [], people: [] };
-  let existingError = null;
-  const delegation = buildDelegationFromMission(mission, scoutPayload);
-
-  try {
-    existing = await loadRepository({
-      authorizedTenantId: tenantId,
+  const pipelineResult = await runDiscoveryPipeline({
+    mission,
+    delegation,
+    scoutPayload,
+    opts: {
+      ...opts,
+      amoMissionId: opts.amoMissionId || opts.missionId,
       tenantId,
-      targetContext: delegation.targetContext,
-      businessContext: delegation.businessContext,
-      loadCompanies: opts.loadCompanies,
-      companies: opts.companies,
-      people: opts.people,
-    });
-  } catch (err) {
-    existingError = err.message || String(err);
+    },
+  });
+
+  const phases = pipelineStagesToLegacyPhases(pipelineResult.stages);
+  for (const phaseRow of phases) {
+    emitDiscoveryPhase(phaseRow.phase, { missionId, result: phaseRow.result || null });
   }
 
-  const existingCompanyCount = (existing.companies || []).length;
-  const existingProspectCount = (existing.people || []).length;
-  phases[phases.length - 1].completedAt = new Date().toISOString();
-  phases[phases.length - 1].result = {
-    companies: existingCompanyCount,
-    prospects: existingProspectCount,
-    error: existingError,
-  };
-
-  // ── Phase 2: Gap Analysis ──────────────────────────────────────
-  emitDiscoveryPhase(DISCOVERY_PHASES.GAP_ANALYSIS, { missionId });
-  phases.push({ phase: DISCOVERY_PHASES.GAP_ANALYSIS, startedAt: new Date().toISOString() });
-
-  const searchDefinition = buildAcquisitionSearchDefinition({ delegation, tenantId });
-  const gapAnalysis = assessExistingSufficiency(existing, searchDefinition, opts);
-  const strategy = selectDiscoveryStrategy(gapAnalysis, existing);
+  const strategy = mapPipelineStrategy(
+    pipelineResult.gapAnalysis || { sufficient: false, shouldDiscoverGap: true, freshCount: 0 },
+    {
+      companies: new Array((pipelineResult.existingIntelligence || {}).companyCount || 0),
+    }
+  );
 
   emitGapAnalysis({
     missionId,
     strategy,
-    existingCompanyCount,
-    existingProspectCount,
-    freshCount: gapAnalysis.freshCount,
-    relevantCount: gapAnalysis.relevantCount,
-    shouldDiscoverGap: gapAnalysis.shouldDiscoverGap,
-    sufficient: gapAnalysis.sufficient,
+    existingCompanyCount: (pipelineResult.existingIntelligence || {}).companyCount || 0,
+    existingProspectCount: (pipelineResult.existingIntelligence || {}).prospectCount || 0,
+    freshCount: (pipelineResult.gapAnalysis || {}).freshCount || 0,
+    relevantCount: (pipelineResult.gapAnalysis || {}).relevantCount || 0,
+    shouldDiscoverGap: (pipelineResult.gapAnalysis || {}).shouldDiscoverGap,
+    sufficient: (pipelineResult.gapAnalysis || {}).sufficient,
   });
 
-  phases[phases.length - 1].completedAt = new Date().toISOString();
-  phases[phases.length - 1].result = { strategy, ...gapAnalysis };
+  emitExternalDiscovery({
+    missionId,
+    strategy,
+    skipped: false,
+    coverageEngineUsed: true,
+  });
+  emitVerification({ missionId, strategy, source: 'discovery_pipeline' });
+  emitEnrichment({ missionId, strategy, source: 'discovery_pipeline' });
+  emitRanking({ missionId, strategy, source: 'discovery_pipeline' });
 
-  // ── Phase 3: External Discovery (demand-driven) ────────────────
   let updatedMission = mission;
-  let intelligenceResult = null;
-  const discoveryIdx = findDiscoveryStepIndex(mission);
-  const skipExternal =
-    strategy === DISCOVERY_STRATEGIES.RETRIEVE_ONLY &&
-    gapAnalysis.sufficient &&
-    existingCompanyCount > 0;
-
-  if (!skipExternal) {
-    emitDiscoveryPhase(DISCOVERY_PHASES.EXTERNAL_DISCOVERY, { missionId, strategy });
-    emitExternalDiscovery({ missionId, strategy, skipped: false });
-    phases.push({
-      phase: DISCOVERY_PHASES.EXTERNAL_DISCOVERY,
-      startedAt: new Date().toISOString(),
-    });
-
-    updatedMission = await executeProspectDiscovery({
+  if (missionEngine) {
+    updatedMission = await syncMissionFromPipeline({
       mission,
       missionEngine,
-      discoveryIdx,
+      pipelineResult,
       operatorId,
-    });
-
-    phases[phases.length - 1].completedAt = new Date().toISOString();
-    phases[phases.length - 1].result = { executed: true, capability: 'prospect_discovery' };
-
-    // Hybrid intelligence enrichment (internal — SPEC-100A path)
-    if (
-      strategy === DISCOVERY_STRATEGIES.HYBRID ||
-      strategy === DISCOVERY_STRATEGIES.VERIFICATION_ONLY
-    ) {
-      try {
-        intelligenceResult = await runScoutAcquisitionIntelligence(delegation, {
-          ...opts,
-          mode: opts.mode || 'completed',
-          missionId: opts.amoMissionId || opts.missionId,
-        });
-      } catch {
-        // Intelligence enrichment is best-effort; external discovery is primary
-      }
-    }
-  } else {
-    emitExternalDiscovery({ missionId, strategy, skipped: true, reason: 'Existing intelligence sufficient' });
-    phases.push({
-      phase: DISCOVERY_PHASES.EXTERNAL_DISCOVERY,
-      startedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      result: { executed: false, skipped: true },
     });
   }
 
-  // ── Phases 4-6: Verification, Enrichment, Ranking ──────────────
-  // prospect_discovery handles these internally; emit observability markers.
-  emitVerification({ missionId, strategy, source: 'prospect_discovery' });
-  emitEnrichment({ missionId, strategy, source: 'prospect_discovery' });
-  emitRanking({ missionId, strategy, source: 'prospect_discovery' });
-  phases.push(
-    { phase: DISCOVERY_PHASES.VERIFICATION, completedAt: new Date().toISOString() },
-    { phase: DISCOVERY_PHASES.ENRICHMENT, completedAt: new Date().toISOString() },
-    { phase: DISCOVERY_PHASES.RANKING, completedAt: new Date().toISOString() }
-  );
-
-  // ── Phase 7: Mission Update ──────────────────────────────────────
-  emitDiscoveryPhase(DISCOVERY_PHASES.MISSION_UPDATE, { missionId });
-  phases.push({ phase: DISCOVERY_PHASES.MISSION_UPDATE, startedAt: new Date().toISOString() });
-
   const scoutDiscoveryMeta = {
     strategy,
-    gapAnalysis,
-    existingIntelligence: {
-      companyCount: existingCompanyCount,
-      prospectCount: existingProspectCount,
-      consulted: true,
-      error: existingError,
+    gapAnalysis: pipelineResult.gapAnalysis,
+    existingIntelligence: pipelineResult.existingIntelligence,
+    intelligenceResult: pipelineResult.intelligenceResult,
+    pipeline: {
+      stages: pipelineResult.stages,
+      marketDefinition: pipelineResult.marketDefinition,
+      universeEstimate: pipelineResult.universeEstimate,
+      coveragePlan: pipelineResult.coveragePlan,
+      coveragePct: pipelineResult.coveragePct,
+      emptyMarketDecision: pipelineResult.emptyMarketDecision,
+      confidence: pipelineResult.confidence,
     },
-    intelligenceResult,
     phases,
     capabilityPath: 'scout.discover',
-    scoutAcquisitionPathInvoked: Boolean(intelligenceResult),
+    scoutAcquisitionPathInvoked: Boolean(pipelineResult.intelligenceResult),
+    coverageEngineUsed: true,
   };
 
   const discoveryReport = buildDiscoveryExecutionReport(
@@ -315,6 +293,10 @@ async function discover(input) {
     scoutDiscoveryMeta
   );
   discoveryReport.missionStatus = updatedMission.status;
+  discoveryReport.pipeline = scoutDiscoveryMeta.pipeline;
+  discoveryReport.coveragePct = pipelineResult.coveragePct;
+  discoveryReport.emptyMarketDecision = pipelineResult.emptyMarketDecision;
+  discoveryReport.intelligenceReport = pipelineResult.intelligenceReport;
 
   emitDiscoveryAuditEvents(discoveryReport, ScoutDiscoveryAudit);
   ScoutDiscoveryAudit.logMissionDiscoveryResponse({
@@ -326,7 +308,6 @@ async function discover(input) {
     operatorResponseKind: 'mission_execution_outcome',
   });
 
-  // AMO mission update (best-effort)
   if (opts.attachScoutDiscovery !== false && (opts.amoMissionId || opts.missionId)) {
     try {
       const { attachScoutDiscovery } = require('../../services/acquisitionMission');
@@ -336,19 +317,14 @@ async function discover(input) {
           tenantId,
           clientId: mission.clientId,
         },
-        intelligenceResult || { payload: { companies: existing.companies, prospects: existing.people } },
+        pipelineResult.intelligenceResult ||
+          { payload: { companies: [], prospects: [] } },
         opts
       );
     } catch {
       // AMO attach is best-effort when no AMO mission exists
     }
   }
-
-  phases[phases.length - 1].completedAt = new Date().toISOString();
-  phases[phases.length - 1].result = {
-    outcome: discoveryReport.outcome,
-    prospectCount: discoveryReport.prospectCount,
-  };
 
   emitDiscoveryCompleted({
     missionId,
@@ -358,23 +334,40 @@ async function discover(input) {
     blockReason: discoveryReport.blockReason,
   });
 
-  return buildDiscoveryResult({
-    outcome: discoveryReport.outcome,
-    strategy: scoutDiscoveryMeta.strategy || discoveryReport.discoveryStrategy,
-    blockReason: discoveryReport.blockReason,
-    phases,
-    gapAnalysis,
-    existingIntelligence: scoutDiscoveryMeta.existingIntelligence,
-    prospectCount: discoveryReport.prospectCount,
-    mission: updatedMission,
-    discoveryReport,
-  });
+  return {
+    ...buildDiscoveryResult({
+      outcome: pipelineResult.outcome,
+      strategy,
+      blockReason: pipelineResult.blockReason || discoveryReport.blockReason,
+      phases,
+      gapAnalysis: pipelineResult.gapAnalysis,
+      existingIntelligence: pipelineResult.existingIntelligence,
+      prospectCount: pipelineResult.qualifiedCount || discoveryReport.prospectCount,
+      companies:
+        (pipelineResult.intelligenceResult &&
+          pipelineResult.intelligenceResult.payload &&
+          pipelineResult.intelligenceResult.payload.companies) ||
+        [],
+      confidence: pipelineResult.confidence,
+      mission: updatedMission,
+      discoveryReport,
+    }),
+    pipeline: pipelineResult,
+    intelligenceResult: pipelineResult.intelligenceResult,
+    marketDefinition: pipelineResult.marketDefinition,
+    universeEstimate: pipelineResult.universeEstimate,
+    coveragePlan: pipelineResult.coveragePlan,
+    coveragePct: pipelineResult.coveragePct,
+    intelligenceReport: pipelineResult.intelligenceReport,
+    emptyMarketDecision: pipelineResult.emptyMarketDecision,
+  };
 }
 
 module.exports = {
   discover,
   buildDelegationFromMission,
   selectDiscoveryStrategy,
-  executeProspectDiscovery,
   findDiscoveryStepIndex,
+  syncMissionFromPipeline,
+  runDiscoveryPipeline,
 };

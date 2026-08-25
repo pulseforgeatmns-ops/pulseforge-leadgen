@@ -6,7 +6,7 @@
  */
 
 const amo = require('../../acquisition-mission');
-const { runScoutAcquisitionIntelligence } = require('../scoutAcquisition/ScoutAdapter');
+const { Scout } = require('../../scout');
 
 const {
   STAGES,
@@ -502,16 +502,27 @@ async function runScoutForAmoMission(mission, opts = {}) {
 
   const delegation = buildDelegationFromAmoMission(mission);
   try {
-    const result = await runScoutAcquisitionIntelligence(delegation, {
-      mode: opts.scoutMode || 'completed',
-      missionId: mission.id,
-      tenantId: delegation.tenantId,
-      companies: opts.scoutCompanies,
-      people: opts.scoutPeople,
-      discover: opts.discover,
-      enablePlaces: opts.enablePlaces,
+    const result = await Scout.discover({
+      mission,
+      missionEngine: opts.missionEngine,
+      scoutPayload: {},
+      operatorId: opts.operatorId,
+      opts: {
+        ...opts,
+        delegation,
+        mode: opts.scoutMode || 'completed',
+        missionId: mission.id,
+        amoMissionId: mission.id,
+        tenantId: delegation.tenantId,
+        companies: opts.scoutCompanies,
+        people: opts.scoutPeople,
+        discover: opts.discover,
+        enablePlaces: opts.enablePlaces,
+        allowFixtureFallback: opts.allowFixtureFallback,
+      },
     });
-    const mapped = mapScoutIntelligenceToDiscoveryPayload(result, {
+    const intelligenceResult = result.intelligenceResult || result;
+    const mapped = mapScoutIntelligenceToDiscoveryPayload(intelligenceResult, {
       missionObjective: mission.objective,
     });
     if (
@@ -520,7 +531,7 @@ async function runScoutForAmoMission(mission, opts = {}) {
     ) {
       return fixtureScoutDiscoveryResult();
     }
-    return result;
+    return intelligenceResult;
   } catch (err) {
     if (opts.allowFixtureFallback === true) return fixtureScoutDiscoveryResult();
     throw err;
