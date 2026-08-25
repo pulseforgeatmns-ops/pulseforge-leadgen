@@ -741,6 +741,62 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
   }
 
   const criteria = existing.criteria;
+  if (universe.capabilityBlocked === true) {
+    const blockReason =
+      universe.blockReason || 'External Discovery Capability Unavailable';
+    const packed = emptyInvestigationResult({
+      delegation,
+      criteria,
+      startedAt,
+      candidatesDiscovered: universe.candidatesDiscovered,
+      sourceTypesChecked: universe.sourceTypesChecked,
+      sourceTypesUnavailable: universe.sourceTypesUnavailable,
+      providerFailed: false,
+      extraLimitations: [blockReason],
+    });
+    return {
+      status: 'blocked',
+      summary: blockReason,
+      observations: [],
+      actionsTaken: universe.actionsTaken.slice(),
+      evidenceRefs: [],
+      artifactRefs: [],
+      confidence: null,
+      uncertainties: [
+        universe.capabilityEvaluation && universe.capabilityEvaluation.explanation
+          ? universe.capabilityEvaluation.explanation
+          : 'No external discovery provider is available for this market.',
+      ],
+      recommendedNextAction: {
+        type: 'configure',
+        text: 'Configure an external discovery provider (e.g. Google Places) before retrying.',
+      },
+      policyEvents: [],
+      errors: [
+        {
+          code: universe.blockerCode || 'external_discovery_capability_unavailable',
+          message: blockReason,
+        },
+      ],
+      startedAt,
+      completedAt: packed.completedAt,
+      payload: {
+        opportunities: [],
+        searchDefinition,
+        broadened: false,
+        outboundInvoked: [],
+        criteria,
+        investigation: packed.investigation,
+        coverageConfidence: packed.investigation.coverageConfidence,
+        consumedContext: buildConsumedContext(searchDefinition),
+        discoveryPlan: universe.discoveryPlan || null,
+        capabilityEvaluation: universe.capabilityEvaluation || null,
+        capabilityBlocked: true,
+        outcome: 'blocked',
+      },
+    };
+  }
+
   const companies = universe.companies.slice();
   const discoveredCount = universe.candidatesDiscovered;
   for (const src of universe.sourceTypesChecked || []) {

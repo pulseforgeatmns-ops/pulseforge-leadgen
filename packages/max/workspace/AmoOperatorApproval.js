@@ -7,6 +7,9 @@
 
 const amo = require('../../acquisition-mission');
 const { Scout } = require('../../scout');
+const { defaultDiscoveryAdapters } = require('../scoutAcquisition/DiscoveryAdapters');
+const { evaluateDiscoveryCapability } = require('../../scout/coverage/DiscoveryCapabilityGate');
+const { EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE } = require('../../scout/coverage/ExternalDiscoveryProviderRegistry');
 
 const {
   STAGES,
@@ -599,7 +602,15 @@ function clearPendingOperatorDecision(engine, mission) {
   return engine.store.putMission(mission);
 }
 
-function validateDiscoveryPreconditions({ mission, engine, tenantId }) {
+function validateDiscoveryPreconditions({
+  mission,
+  engine,
+  tenantId,
+  discover,
+  enablePlaces,
+  placesProvider,
+  runScout,
+}) {
   if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
   if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
     throw planningError('tme_mission_inactive', 'Mission is not active.');
@@ -614,6 +625,39 @@ function validateDiscoveryPreconditions({ mission, engine, tenantId }) {
   if (mission.stage && mission.stage !== STAGES.DISCOVER) {
     throw planningError('tme_wrong_stage', `Discovery cannot execute while the mission is at ${mission.stage}.`);
   }
+
+  if (typeof runScout === 'function') {
+    return {
+      missionExists: true,
+      missionActive: true,
+      missionLocked: true,
+      structuredPlanApproved: true,
+      specialistAvailable: true,
+      requiredEvidencePresent: true,
+      externalDiscoveryCapability: { skipped: true, reason: 'runScout override' },
+    };
+  }
+
+  const adapters = defaultDiscoveryAdapters({
+    discover,
+    enablePlaces,
+    placesProvider,
+  });
+  const capability = evaluateDiscoveryCapability({
+    adapters,
+    requireExternalDiscovery: true,
+    coveragePlan: { totals: { searches: 1 }, sources: ['public_business_data'] },
+    discover,
+    enablePlaces,
+    placesProvider,
+  });
+  if (!capability.canExecute) {
+    throw planningError(
+      'external_discovery_capability_unavailable',
+      capability.blockReason || EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE
+    );
+  }
+
   return {
     missionExists: true,
     missionActive: true,
@@ -621,6 +665,7 @@ function validateDiscoveryPreconditions({ mission, engine, tenantId }) {
     structuredPlanApproved: true,
     specialistAvailable: true,
     requiredEvidencePresent: true,
+    externalDiscoveryCapability: capability,
   };
 }
 
@@ -748,7 +793,18 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     scoutPeople,
     allowFixtureFallback,
     audit: inputAudit,
+    discover: inputDiscover,
+    enablePlaces: inputEnablePlaces,
+    placesProvider: inputPlacesProvider,
   } = input;
+
+  const effectiveDiscover =
+    inputDiscover ||
+    (typeof runScout === 'function'
+      ? undefined
+      : allowFixtureFallback === true
+        ? async () => []
+        : undefined);
 
   if (!engine || !mission) {
     throw new Error('engine and mission are required');
@@ -816,7 +872,14 @@ async function advanceDiscoveryAfterApproval(input = {}) {
       specialist: SPECIALISTS.SCOUT,
       stage: STAGES.DISCOVER,
       operatorId,
-      validatePreconditions: (ctx) => validateDiscoveryPreconditions(ctx),
+      validatePreconditions: (ctx) =>
+        validateDiscoveryPreconditions({
+          ...ctx,
+          discover: effectiveDiscover,
+          enablePlaces: inputEnablePlaces,
+          placesProvider: inputPlacesProvider,
+          runScout,
+        }),
       execute: async ({ mission: current, transactionId }) => {
         const scoutResult = await runScoutForAmoMission(current, {
           question,
@@ -830,6 +893,9 @@ async function advanceDiscoveryAfterApproval(input = {}) {
           scoutPeople,
           allowFixtureFallback,
           executionRequest: input.executionRequest || null,
+          discover: effectiveDiscover,
+          enablePlaces: inputEnablePlaces,
+          placesProvider: inputPlacesProvider,
         });
         const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
         const executionResult = executionResultFromStageOutput(
@@ -1144,6 +1210,7 @@ module.exports = {
   applyPlanEdits,
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
+  validateDiscoveryPreconditions,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,
   fixtureScoutDiscoveryResult,

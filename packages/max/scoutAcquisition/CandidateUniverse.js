@@ -19,6 +19,10 @@ const {
   computeDiscoveryConfidence,
   discoveryStatusFromCoverage,
 } = require('../../scout/coverage/DiscoveryCoverageEngine');
+const {
+  evaluateDiscoveryCapability,
+  buildCapabilityBlockedResult,
+} = require('../../scout/coverage/DiscoveryCapabilityGate');
 const { executeHypothesisDrivenCoverage } = require('../../scout/coverage/HypothesisDrivenDiscovery');
 
 function createMemoryDiscoveryStore(snapshot = null) {
@@ -169,6 +173,8 @@ async function constructCandidateUniverse(input = {}) {
   let discoveredRaw = [];
   let discoveryRan = false;
   let discoveryFailedCompletely = false;
+  let capabilityBlocked = false;
+  let capabilityEvaluation = null;
 
   const adapters = Array.isArray(input.adapters)
     ? input.adapters
@@ -194,7 +200,71 @@ async function constructCandidateUniverse(input = {}) {
     );
   }
 
-  if (hasUsableMarketAdapter && (input.forceDiscover === true || sufficiency.shouldDiscoverGap)) {
+  if (input.forceDiscover === true || sufficiency.shouldDiscoverGap) {
+    discoveryPlan = buildDiscoveryPlan(searchDefinition, {
+      adapters: marketAdapters,
+      marketDefinition: input.marketDefinition,
+    });
+
+    capabilityEvaluation = evaluateDiscoveryCapability({
+      adapters: marketAdapters,
+      coveragePlan: discoveryPlan,
+      requireExternalDiscovery: true,
+      discover: input.adapterOpts && input.adapterOpts.discover,
+      enablePlaces: input.adapterOpts && input.adapterOpts.enablePlaces,
+      placesProvider: input.adapterOpts && input.adapterOpts.placesProvider,
+    });
+
+    if (!capabilityEvaluation.canExecute) {
+      const blocked = buildCapabilityBlockedResult(capabilityEvaluation);
+      capabilityBlocked = true;
+      sourceTypesUnavailable.push(SOURCE_TYPES.PUBLIC_BUSINESS_DATA);
+      actionsTaken.push({
+        text: blocked.blockReason,
+      });
+      actionsTaken.push({
+        text: blocked.explanation,
+      });
+      return {
+        searchDefinition,
+        companies: existingCompanies.map((c) => ({
+          ...c,
+          tenantId: c.tenantId || tenantId,
+          discoveredAt: c.discoveredAt || nowIso(),
+        })),
+        people: existing.people || input.people || [],
+        rejectedFromRetrieve,
+        sufficiency,
+        discoveryRan: false,
+        discoveryFailedCompletely: false,
+        capabilityBlocked: true,
+        capabilityEvaluation: blocked.capabilityEvaluation,
+        blockReason: blocked.blockReason,
+        blockerCode: blocked.blockerCode,
+        candidatesDiscovered: retrievedCount,
+        candidatesResolved: 0,
+        duplicatesRemoved: 0,
+        resolvedToExisting: 0,
+        sourceTypesChecked,
+        sourceTypesUnavailable,
+        discoveryErrors: [],
+        actionsTaken,
+        retrievedBeforeDiscover: true,
+        broadened: false,
+        discoveryPlan,
+        coverage: null,
+        candidateUniverse: candidateUniverseRecords,
+        discoveryReport: buildDiscoveryReport({
+          coverage: {},
+          candidateUniverse: candidateUniverseRecords,
+          qualifiedCount: 0,
+        }),
+        discoveryStatus: 'blocked',
+        investigationReport,
+        revisedMarketDefinition,
+      };
+    }
+
     discoveryRan = true;
     let result;
     if (useCoverageEngine) {
@@ -215,10 +285,6 @@ async function constructCandidateUniverse(input = {}) {
           text: `Hypothesis-driven investigation: ${(hypothesisResult.searchHypotheses || []).length} terminology hypotheses evaluated.`,
         });
       } else {
-        discoveryPlan = buildDiscoveryPlan(searchDefinition, {
-          adapters: marketAdapters,
-          marketDefinition: input.marketDefinition,
-        });
         result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters);
         coverageMetrics = result.coverage;
         actionsTaken.push({
@@ -351,6 +417,9 @@ async function constructCandidateUniverse(input = {}) {
     candidateUniverse: candidateUniverseRecords,
     discoveryReport,
     discoveryStatus,
+    capabilityBlocked,
+    capabilityEvaluation,
+    blockReason: capabilityBlocked ? capabilityEvaluation && capabilityEvaluation.blockReason : null,
     investigationReport,
     revisedMarketDefinition,
   };
