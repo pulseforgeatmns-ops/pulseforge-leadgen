@@ -11,6 +11,11 @@ const {
 } = require('../../max/scoutAcquisition/CandidateUniverse');
 const { defaultDiscoveryAdapters } = require('../../max/scoutAcquisition/DiscoveryAdapters');
 const { buildDelegationFromMission } = require('./MarketUnderstanding');
+const {
+  computeCoverageFromEstimate,
+  normalizeCandidateUniverseEstimate,
+  extractExpectedValue,
+} = require('../universe/CandidateUniverseEstimate');
 
 /**
  * Discover candidate universe for a market investigation.
@@ -78,16 +83,16 @@ async function discoverCandidateUniverse(input = {}) {
   const retrieved = universe.retrievedCount || 0;
   const newlyDiscovered = universe.discoveredCount || 0;
 
-  const estimatedMarket =
-    input.opts && input.opts.estimatedMarket != null
-      ? Number(input.opts.estimatedMarket)
-      : Math.max(discovered, Math.round(discovered / 0.7));
+  const universeEstimate =
+    normalizeCandidateUniverseEstimate(input.opts && input.opts.universeEstimate) ||
+    normalizeCandidateUniverseEstimate(input.opts && input.opts.estimatedMarket);
 
-  const coverage =
-    estimatedMarket > 0 ? Number((discovered / estimatedMarket).toFixed(2)) : 0;
+  const estimatedMarket = extractExpectedValue(universeEstimate);
+  const coverage = computeCoverageFromEstimate(discovered, universeEstimate);
 
   return {
     estimatedMarket,
+    universeEstimate,
     discovered,
     retrieved,
     newlyDiscovered,

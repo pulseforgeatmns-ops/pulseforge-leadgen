@@ -195,7 +195,15 @@ function buildProviderSequence(hypotheses, evidencePlan, opts = {}) {
 }
 
 function estimatePlanMetrics(providerSequence, opts = {}) {
-  const estimatedUniverse = opts.estimatedMarket || opts.estimatedUniverse || 0;
+  const universeEstimate =
+    opts.universeEstimate && typeof opts.universeEstimate === 'object'
+      ? opts.universeEstimate
+      : null;
+  const estimatedUniverse =
+    (universeEstimate && universeEstimate.expected) ||
+    opts.estimatedMarket ||
+    opts.estimatedUniverse ||
+    0;
   const targetCoverage = opts.coverageThreshold || DEFAULT_COVERAGE_THRESHOLD;
   const targetConfidence = opts.confidenceThreshold || DEFAULT_CONFIDENCE_THRESHOLD;
 

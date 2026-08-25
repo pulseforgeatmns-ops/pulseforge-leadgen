@@ -363,6 +363,17 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
           ? Number(payload.discoveryReport.candidateUniverse)
           : null;
 
+  const estimatedMarket =
+    payload.universeEstimate ||
+    (payload.discoveryReport && payload.discoveryReport.estimatedMarket) ||
+    null;
+  const marketCoveragePct =
+    payload.coveragePct != null
+      ? payload.coveragePct
+      : payload.discoveryReport && payload.discoveryReport.marketCoveragePct != null
+        ? payload.discoveryReport.marketCoveragePct
+        : null;
+
   return {
     companies,
     prospects,
@@ -385,6 +396,8 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     coverage,
     discoveryStatus,
     candidateUniverseCount,
+    estimatedMarket,
+    marketCoveragePct,
     discoveryReport: payload.discoveryReport || null,
     discoveryConfidence: payload.discoveryConfidence || null,
     discoveryPlan: payload.discoveryPlan || null,
