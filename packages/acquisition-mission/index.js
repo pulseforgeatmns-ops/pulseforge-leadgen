@@ -40,6 +40,7 @@ const contextPrecedence = require('./ContextPrecedence');
 const executionErrors = require('./ExecutionErrors');
 const executionAudit = require('./ExecutionAudit');
 const transactionalExecution = require('./TransactionalExecution');
+const transactionalPersistence = require('./TransactionalPersistence');
 const specialistExecutionContract = require('./SpecialistExecutionContract');
 const pendingOperatorDecision = require('./PendingOperatorDecision');
 const missionProgression = require('./MissionProgression');
@@ -87,6 +88,7 @@ module.exports = {
   ...executionErrors,
   ...executionAudit,
   ...transactionalExecution,
+  ...transactionalPersistence,
   ...specialistExecutionContract,
   ...pendingOperatorDecision,
   ...missionProgression,

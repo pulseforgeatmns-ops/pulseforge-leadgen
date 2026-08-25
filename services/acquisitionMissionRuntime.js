@@ -11,15 +11,13 @@ const amo = require('../packages/acquisition-mission');
 const { MISSION_STATE_INCONSISTENT } = amo;
 const {
   persistMission,
-  persistEvent,
-  persistContribution,
-  persistObservation,
-  persistOutcome,
   persistLearning,
+  persistStageCommit,
   loadTenantMissions,
   deleteAllAmoData,
   clearAmoSessionBindings,
 } = require('./acquisitionMissionPersistence');
+const { shouldSuppressLegacyDurableWrite } = require('../packages/acquisition-mission/TransactionalPersistence');
 
 const MULTIPLE_ACQUISITION_RUNTIMES = 'MULTIPLE_ACQUISITION_RUNTIMES';
 
@@ -193,6 +191,9 @@ function createAcquisitionMissionRuntime(opts = {}) {
     async rememberMission(mission, rememberOpts = {}) {
       if (!mission) return mission;
       state.engine.store.putMission(mission);
+      if (shouldSuppressLegacyDurableWrite(mission.id)) {
+        return mission;
+      }
       const { persist: effectivePersist, pool: effectivePool } = this.persistOpts(rememberOpts);
       if (effectivePersist !== false && effectivePool) {
         try {
@@ -204,7 +205,24 @@ function createAcquisitionMissionRuntime(opts = {}) {
       return mission;
     },
 
+    /**
+     * ADR-075 — deprecated legacy durable writer. Queues no durable writes during TME.
+     * Non-TME callers should prefer persistMissionState() which routes through persistStageCommit.
+     */
     async persistSideEffects(missionId, sideOpts = {}) {
+      if (shouldSuppressLegacyDurableWrite(missionId)) {
+        return { suppressed: true, reason: 'tme_transaction_active' };
+      }
+      return this.persistMissionState(missionId, sideOpts);
+    },
+
+    /**
+     * ADR-075 — single durable writer for non-TME mission state mutations.
+     */
+    async persistMissionState(missionId, sideOpts = {}) {
+      if (shouldSuppressLegacyDurableWrite(missionId)) {
+        return { suppressed: true, reason: 'tme_transaction_active' };
+      }
       const { persist: effectivePersist, pool: effectivePool } = this.persistOpts(sideOpts);
       if (effectivePersist === false || !effectivePool) return;
 
@@ -212,33 +230,31 @@ function createAcquisitionMissionRuntime(opts = {}) {
       if (!mission) return;
 
       try {
-        await persistMission(mission, effectivePool);
-        for (const event of state.engine.store.listEvents(missionId)) {
-          await persistEvent(event, mission.tenantId, effectivePool);
-        }
-        for (const row of state.engine.store.listContributions(missionId)) {
-          await persistContribution(row, mission.tenantId, effectivePool);
-        }
-        for (const row of state.engine.store.listObservations(missionId)) {
-          await persistObservation(row, mission.tenantId, effectivePool);
-        }
-        for (const row of state.engine.store.listOutcomes(missionId)) {
-          await persistOutcome(row, effectivePool);
-        }
+        await persistStageCommit({
+          mission,
+          events: state.engine.store.listEvents(missionId),
+          contributions: state.engine.store.listContributions(missionId),
+          observations: state.engine.store.listObservations(missionId),
+          outcomes: state.engine.store.listOutcomes(missionId),
+        }, effectivePool);
         for (const row of state.engine.store.listLearning(mission.tenantId)) {
           await persistLearning(row, effectivePool);
         }
       } catch (err) {
-        console.error('[amo] persist side effects:', err.message);
+        console.error('[amo] persist mission state:', err.message);
       }
     },
 
     async create(input = {}, createOpts = {}) {
       await this.hydrate(input.tenantId || input.clientId, createOpts);
       const mission = state.engine.create(input);
-      await this.rememberMission(mission, createOpts);
-      await this.persistSideEffects(mission.id, createOpts);
-      if (input.autonomous === true || createOpts.autonomous === true) {
+      const autonomous = input.autonomous === true || createOpts.autonomous === true;
+      // ADR-075 — defer durable writes until TME stages commit (autonomous) or explicit persist.
+      if (!autonomous) {
+        await this.rememberMission(mission, createOpts);
+        await this.persistMissionState(mission.id, createOpts);
+      }
+      if (autonomous) {
         return this.runAutonomousProgression(mission.id, {
           tenantId: mission.tenantId,
           ...createOpts,
@@ -261,7 +277,8 @@ function createAcquisitionMissionRuntime(opts = {}) {
         deps: opts.deps,
         ...opts,
       });
-      await this.persistSideEffects(missionId, opts);
+      // ADR-075 — persist post-TME side effects (e.g. stage transitions) via persistStageCommit only.
+      await this.persistMissionState(missionId, opts);
       return result;
     },
 
@@ -278,14 +295,14 @@ function createAcquisitionMissionRuntime(opts = {}) {
     async contribute(missionId, input, contributeOpts = {}) {
       if (contributeOpts.tenantId) await this.hydrate(contributeOpts.tenantId, contributeOpts);
       const result = state.engine.contribute(missionId, input, contributeOpts);
-      await this.persistSideEffects(missionId, contributeOpts);
+      await this.persistMissionState(missionId, contributeOpts);
       return result;
     },
 
     async progress(missionId, actor, progressOpts = {}, opts = {}) {
       if (opts.tenantId) await this.hydrate(opts.tenantId, opts);
       const mission = state.engine.progress(missionId, actor, { ...progressOpts, tenantId: opts.tenantId });
-      await this.persistSideEffects(missionId, opts);
+      await this.persistMissionState(missionId, opts);
       return mission;
     },
 
