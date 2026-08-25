@@ -1,13 +1,16 @@
 'use strict';
 
 /**
- * SPEC-149 — Message Type Classifier (ADR-069).
+ * SPEC-149 — Message Type Classifier (ADR-069, ADR-087).
  *
  * Pipeline position:
  *   Raw Operator Message → Message Type Classifier → Session State Manager (if applicable) → …
  *
  * Communication precedes cognition. Max cannot decide how to think until it
  * understands what kind of communication it received.
+ *
+ * ADR-087 — Primary business objective determines routing. Execution and
+ * conversation modifiers may mutate session state but never displace routing.
  */
 
 const askPathTrace = require('./audit/AskPathTrace');
@@ -61,6 +64,8 @@ const REJECTION_RES = [
 
 const MISSION_CREATION_RES = [
   /\bcreate (?:a )?(?:new )?mission\b/i,
+  /\bcreate\b.{0,40}\b(?:acquisition\s+)?mission\b/i,
+  /\bcreate\s+a\s+(?:new\s+|production\s+)?acquisition\s+mission\b/i,
   /\bstart (?:a )?(?:new )?(?:acquisition )?mission\b/i,
   /\bbegin (?:a )?(?:new )?(?:acquisition )?mission\b/i,
   /\bnew acquisition mission\b/i,
@@ -107,6 +112,148 @@ const QUESTION_RES = [
 
 function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
+}
+
+/**
+ * Split operator message into segments for primary-objective resolution (ADR-087).
+ * @param {string} question
+ * @returns {string[]}
+ */
+function splitMessageSegments(question) {
+  const raw = String(question || '').trim();
+  if (!raw) return [];
+
+  const paragraphs = raw
+    .split(/\n\s*\n/)
+    .map((part) => normalizeText(part))
+    .filter(Boolean);
+
+  if (paragraphs.length > 1) return paragraphs;
+
+  const single = paragraphs[0] || normalizeText(raw);
+  const sentenceParts = single
+    .split(/(?<=[.!?])\s+(?=[A-Z"'])/)
+    .map((part) => normalizeText(part))
+    .filter(Boolean);
+
+  if (sentenceParts.length > 1) return sentenceParts;
+  return [single];
+}
+
+function collectSessionModifierEvidence(text) {
+  const q = normalizeText(text);
+  const evidence = [];
+  const signals = detectSessionDirectiveSignals(q);
+  if (signals.persistent) evidence.push('persistent_directive');
+  if (isSessionResetRequest(q)) evidence.push('session_reset');
+  if (hasScopeMarker(q)) evidence.push('session_scope');
+  if (signals.executionPolicy) evidence.push(`execution_policy:${signals.executionPolicy}`);
+  if (signals.reasoningMode) evidence.push(`reasoning_mode:${signals.reasoningMode}`);
+  if (signals.operatingMode) evidence.push(`operating_mode:${signals.operatingMode}`);
+  if (signals.evaluationMode) evidence.push(`evaluation_mode:${signals.evaluationMode}`);
+  if (signals.conversationStyle) evidence.push(`conversation_style:${signals.conversationStyle}`);
+  if (matchFieldDirectives(q).length > 0) evidence.push('session_setting_heuristic');
+  return evidence.length ? evidence : ['session_directive'];
+}
+
+/**
+ * Resolve the primary business objective for one message segment (ADR-087).
+ * Returns null when the segment is only a modifier or unclassified.
+ *
+ * @param {string} segment
+ * @param {object} [input]
+ * @returns {import('./MessageType').MessageClassification|null}
+ */
+function classifySegmentPrimaryObjective(segment, input = {}) {
+  const q = normalizeText(segment);
+  if (!q || isSessionInspectionQuestion(q)) return null;
+
+  if (matchesAny(q, SYSTEM_CONFIGURATION_RES)) {
+    return buildMessageClassification(MESSAGE_TYPES.SYSTEM_CONFIGURATION, 0.92, ['system_config'], {
+      via: 'system_configuration',
+    });
+  }
+
+  if (isApprovalMessage(q)) {
+    return buildMessageClassification(MESSAGE_TYPES.APPROVAL, 0.95, ['approval_phrase'], {
+      mutatesMission: true,
+      via: 'approval',
+    });
+  }
+
+  if (isRejectionMessage(q)) {
+    return buildMessageClassification(MESSAGE_TYPES.REJECTION, 0.93, ['rejection_phrase'], {
+      via: 'rejection',
+    });
+  }
+
+  if (isCorrectionMessage(q)) {
+    return buildMessageClassification(MESSAGE_TYPES.CORRECTION, 0.94, ['correction_phrase'], {
+      via: 'correction',
+    });
+  }
+
+  if (isMissionCreationMessage(q)) {
+    return buildMessageClassification(MESSAGE_TYPES.MISSION_CREATION, 0.96, ['mission_creation'], {
+      mutatesMission: true,
+      via: 'mission_creation',
+    });
+  }
+
+  if (isMissionExecutionMessage(q, input)) {
+    return buildMessageClassification(MESSAGE_TYPES.MISSION_EXECUTION, 0.94, ['mission_execution'], {
+      mutatesMission: true,
+      via: 'mission_execution',
+    });
+  }
+
+  if (isCommandMessage(q)) {
+    const label = firstMatchLabel(
+      q,
+      COMMAND_RES.map((re, i) => ({ re, label: `command_${i}` }))
+    );
+    return buildMessageClassification(MESSAGE_TYPES.COMMAND, 0.91, [label || 'command'], {
+      mutatesMission: true,
+      via: 'command',
+    });
+  }
+
+  if (matchesAny(q, INFORMATION_RES)) {
+    return buildMessageClassification(MESSAGE_TYPES.INFORMATION, 0.9, ['information'], {
+      via: 'information',
+    });
+  }
+
+  if (matchesAny(q, FEEDBACK_RES)) {
+    return buildMessageClassification(MESSAGE_TYPES.FEEDBACK, 0.88, ['feedback'], {
+      via: 'feedback',
+    });
+  }
+
+  if (isPureQuestion(q)) {
+    return buildMessageClassification(MESSAGE_TYPES.QUESTION, 0.9, ['interrogative'], {
+      via: 'question',
+    });
+  }
+
+  return null;
+}
+
+/**
+ * Resolve primary business objective across all segments (ADR-087).
+ * First matching segment wins — executive directives lead with the objective.
+ *
+ * @param {string} text
+ * @param {object} [input]
+ * @returns {import('./MessageType').MessageClassification|null}
+ */
+function detectPrimaryObjective(text, input = {}) {
+  const segments = splitMessageSegments(text);
+  for (const segment of segments) {
+    const objective = classifySegmentPrimaryObjective(segment, input);
+    if (objective) return objective;
+  }
+  return null;
 }
 
 function firstMatchLabel(text, entries) {
@@ -228,7 +375,30 @@ function classifyMessageType(question, input = {}) {
     );
   }
 
-  if (isSessionConfigurationMessage(q)) {
+  const sessionModifiersPresent = isSessionConfigurationMessage(q);
+  const primaryObjective = detectPrimaryObjective(q, input);
+
+  // ADR-087 — primary objective determines routing; modifiers attach without displacing it.
+  if (primaryObjective) {
+    const evidence = [...primaryObjective.evidence];
+    if (sessionModifiersPresent) {
+      evidence.push('session_modifiers_present');
+      evidence.push(...collectSessionModifierEvidence(q));
+    }
+    return buildMessageClassification(
+      primaryObjective.type,
+      primaryObjective.confidence,
+      evidence,
+      {
+        mutatesSession: sessionModifiersPresent || primaryObjective.mutatesSession,
+        mutatesMission: primaryObjective.mutatesMission,
+        via: primaryObjective.via,
+        hasSessionModifiers: sessionModifiersPresent,
+      }
+    );
+  }
+
+  if (sessionModifiersPresent) {
     const evidence = [];
     const signals = detectSessionDirectiveSignals(q);
     if (signals.persistent) evidence.push('persistent_directive');
@@ -374,11 +544,16 @@ module.exports = {
   isPureQuestion,
   isApprovalMessage,
   isCorrectionMessage,
+  isMissionCreationMessage,
   messageTypeBypassesOwnership,
   messageTypeBypassesReasoning,
   countSessionSettingHits,
   hasSessionScopeMarker,
   computeSessionConfigurationConfidence,
+  splitMessageSegments,
+  detectPrimaryObjective,
+  classifySegmentPrimaryObjective,
+  collectSessionModifierEvidence,
   SESSION_CONFIGURATION_THRESHOLD,
   CORRECTION_RES,
   APPROVAL_RES,

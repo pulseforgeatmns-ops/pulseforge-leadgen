@@ -8,7 +8,7 @@
 | **Owner** | Max |
 | **Created** | 2026-08-24 |
 | **Depends on** | [SPEC-146](SPEC-146_Operator_Cognition_Engine.md), [SPEC-147](SPEC-147_Conversational_Intelligence_Layer.md), [SPEC-148](SPEC-148_Session_State_Manager.md) |
-| **Related ADR** | [ADR-069](../adr/ADR-069_Classify_Communication_Before_Cognition.md) |
+| **Related ADR** | [ADR-069](../adr/ADR-069_Classify_Communication_Before_Cognition.md), [ADR-087](../adr/ADR-087_Operator_Objective_Takes_Precedence.md) |
 
 ## Objective
 
@@ -17,6 +17,8 @@ Introduce a **Message Type Classifier (MTC)** that determines the communicative 
 ## Design Principle
 
 **Communication precedes cognition.** Max cannot decide how to think until it understands what kind of communication it received (ADR-069).
+
+**Operator objective takes precedence.** Within classification, the primary business objective determines routing. Execution and conversation modifiers may mutate session state and influence presentation but must not displace routing (ADR-087).
 
 ## Pipeline Position
 
@@ -65,6 +67,7 @@ Raw Operator Message
 ## Acceptance Tests
 
 `packages/max/workspace/tests/spec149MessageTypeClassification.test.js`
+`packages/max/workspace/tests/adr087OperatorObjectivePrecedence.test.js` (ADR-087 / AUDIT-046)
 
 1. **Persistent directive** → `SESSION_CONFIGURATION`, no reasoning
 2. **Why?** → `QUESTION`, reasoning pipeline executes

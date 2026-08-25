@@ -1,16 +1,18 @@
 'use strict';
 
 /**
- * SPEC-151 — Multi-Intent Extraction (ADR-072).
+ * SPEC-151 — Multi-Intent Extraction (ADR-072, ADR-087).
  *
  * Operator messages may contain multiple independent intents. Each segment is
  * classified independently; compound messages never discard secondary intents.
+ * ADR-087 — primary objectives are resolved before session modifiers per segment.
  */
 
 const { MESSAGE_TYPES } = require('./MessageType');
 const {
   classifyMessageType,
   isSessionConfigurationMessage,
+  isMissionCreationMessage,
 } = require('./MessageTypeClassifier');
 const { isSessionInspectionQuestion } = require('./SessionStateManager');
 const { detectAcquisitionObjective } = require('./AcquisitionObjectiveDetection');
@@ -120,18 +122,29 @@ function classifySegmentIntent(segment, segmentIndex, input = {}) {
   const text = normalizeText(segment);
   if (!text) return null;
   if (isNegationOrConstraintSegment(text)) return null;
-  if (segmentHasSessionConfiguration(text)) {
-    return buildDetectedIntent(INTENT_TYPES.SESSION_CONFIGURATION, {
-      confidence: 0.92,
+
+  if (isSessionInspectionQuestion(text)) {
+    return buildDetectedIntent(INTENT_TYPES.INSPECTION, {
+      confidence: 0.95,
       segment: text,
       segmentIndex,
       sourceText: text,
     });
   }
 
-  if (isSessionInspectionQuestion(text)) {
-    return buildDetectedIntent(INTENT_TYPES.INSPECTION, {
-      confidence: 0.95,
+  // ADR-087 — primary objective before session modifiers
+  if (isMissionCreationMessage(text)) {
+    return buildDetectedIntent(INTENT_TYPES.MISSION_CREATION, {
+      confidence: 0.96,
+      segment: text,
+      segmentIndex,
+      sourceText: text,
+    });
+  }
+
+  if (segmentHasSessionConfiguration(text)) {
+    return buildDetectedIntent(INTENT_TYPES.SESSION_CONFIGURATION, {
+      confidence: 0.92,
       segment: text,
       segmentIndex,
       sourceText: text,
