@@ -98,6 +98,9 @@ describe('SPEC-154 — Unified Discovery Pipeline', () => {
     assert.ok(result.marketDefinition);
     assert.ok(result.marketDefinition.valid);
     assert.ok(result.universeEstimate != null);
+    assert.ok(result.universeEstimate.expected > 0);
+    assert.ok(result.universeEstimate.minimum <= result.universeEstimate.expected);
+    assert.ok(result.universeEstimate.maximum >= result.universeEstimate.expected);
     assert.ok(result.coveragePlan);
     assert.ok(result.coveragePlan.workloads);
     assert.equal(result.coverageEngineUsed, true);
@@ -119,7 +122,7 @@ describe('SPEC-154 — Unified Discovery Pipeline', () => {
 
     assert.equal(viaDiscover.pipeline.outcome, viaPipeline.outcome);
     assert.equal(viaDiscover.coveragePlan.totals.searches, viaPipeline.coveragePlan.totals.searches);
-    assert.equal(viaDiscover.universeEstimate, viaPipeline.universeEstimate);
+    assert.equal(viaDiscover.universeEstimate.expected, viaPipeline.universeEstimate.expected);
     assert.equal(viaDiscover.coveragePct, viaPipeline.coveragePct);
     assert.equal(viaDiscover.emptyMarketDecision, viaPipeline.emptyMarketDecision);
     assert.equal(viaDiscover.marketDefinition.valid, viaPipeline.marketDefinition.valid);

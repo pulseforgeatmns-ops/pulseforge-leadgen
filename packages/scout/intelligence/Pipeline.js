@@ -203,6 +203,7 @@ async function runIntelligencePipeline(input = {}) {
     qualification,
     ranking,
     evidenceCollection,
+    universeEstimate: opts.universeEstimate || candidateUniverse.universeEstimate,
   });
   stages.push(
     buildStageResult(INTELLIGENCE_STAGES.MARKET_COVERAGE, { output: coverage })

@@ -12,6 +12,11 @@ const { MANCHESTER_GEO } = require('../../capabilities/discovery/seedProfiles');
 const { expandConcepts } = require('./ConceptLibrary');
 const { asText, nowIso, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
 const { discoverCandidates } = require('../../max/scoutAcquisition/DiscoveryAdapters');
+const {
+  computeCoverageFromEstimate,
+  normalizeCandidateUniverseEstimate,
+  extractExpectedValue,
+} = require('../universe/CandidateUniverseEstimate');
 
 const ORIGINS = Object.freeze({
   EXISTING_INTELLIGENCE: 'existing_intelligence',
@@ -410,15 +415,24 @@ function buildDiscoveryReport(input = {}) {
   const universe = input.candidateUniverse || [];
   const qualified = input.qualifiedCount != null ? Number(input.qualifiedCount) : 0;
   const confidence = input.discoveryConfidence || computeDiscoveryConfidence(input);
+  const universeEstimate = normalizeCandidateUniverseEstimate(input.universeEstimate);
+  const investigated =
+    input.investigated != null
+      ? Number(input.investigated)
+      : universe.filter((row) => row.dedupeStatus !== 'duplicate').length;
+  const marketCoveragePct =
+    input.coveragePct != null
+      ? input.coveragePct
+      : computeCoverageFromEstimate(investigated, universeEstimate);
 
-  return {
+  const report = {
     coverage: {
       cities: `${coverage.cities && coverage.cities.searched}/${coverage.cities && coverage.cities.planned}`,
       concepts: `${coverage.concepts && coverage.concepts.searched}/${coverage.concepts && coverage.concepts.planned}`,
       sources: `${coverage.sources && coverage.sources.searched}/${coverage.sources && coverage.sources.planned}`,
       searches: `${coverage.searches && coverage.searches.addressed}/${coverage.searches && coverage.searches.planned}`,
     },
-    candidateUniverse: universe.filter((row) => row.dedupeStatus !== 'duplicate').length,
+    candidateUniverse: investigated,
     qualified,
     confidence: confidence.overall,
     discoveryConfidence: confidence,
@@ -430,6 +444,24 @@ function buildDiscoveryReport(input = {}) {
         : 'Investigation complete. No qualified candidates remain — proceed to operator review.'
       : 'Continue investigation.',
   };
+
+  if (universeEstimate) {
+    report.estimatedMarket = {
+      minimum: universeEstimate.minimum,
+      expected: universeEstimate.expected,
+      maximum: universeEstimate.maximum,
+      confidence: universeEstimate.confidence,
+      reasoning: universeEstimate.reasoning,
+      revisionHistory: universeEstimate.revisionHistory || [],
+    };
+    report.investigated = investigated;
+    if (marketCoveragePct != null) {
+      report.marketCoveragePct = marketCoveragePct;
+      report.marketCoverage = `${Math.round(marketCoveragePct * 100)}%`;
+    }
+  }
+
+  return report;
 }
 
 function canConcludeEmptyUniverse(coverage, qualifiedCount) {

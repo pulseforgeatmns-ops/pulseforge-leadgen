@@ -268,10 +268,27 @@
     if (artifact.summary) {
       html += '<p>' + artifact.summary + '</p>';
     }
-    if (artifact.coverage || artifact.discoveryReport) {
+    if (artifact.coverage || artifact.discoveryReport || artifact.estimatedMarket) {
       html += '<div class="discovery-section"><h3>Coverage</h3><ul>';
       const report = artifact.discoveryReport || {};
       const cov = artifact.coverage || {};
+      const estimated = artifact.estimatedMarket || report.estimatedMarket || null;
+      if (estimated) {
+        html += '<li>Estimated Market — Expected Universe: ' + (estimated.expected != null ? estimated.expected : estimated) + '</li>';
+        if (estimated.minimum != null) html += '<li>Minimum: ' + estimated.minimum + '</li>';
+        if (estimated.maximum != null) html += '<li>Maximum: ' + estimated.maximum + '</li>';
+        if (estimated.confidence != null) html += '<li>Estimate Confidence: ' + Number(estimated.confidence).toFixed(2) + '</li>';
+        if (estimated.revisionHistory && estimated.revisionHistory.length) {
+          html += '<li>Revisions: ' + estimated.revisionHistory.length + '</li>';
+        }
+      }
+      if (artifact.marketCoveragePct != null || report.marketCoveragePct != null) {
+        const pct = artifact.marketCoveragePct != null ? artifact.marketCoveragePct : report.marketCoveragePct;
+        html += '<li>Investigation Coverage: ' + Math.round(Number(pct) * 100) + '%</li>';
+      }
+      if (artifact.candidateUniverseCount != null) {
+        html += '<li>Investigated: ' + artifact.candidateUniverseCount + '</li>';
+      }
       const cities = (report.coverage && report.coverage.cities) ||
         (cov.cities ? cov.cities.searched + ' / ' + cov.cities.planned : '—');
       const concepts = (report.coverage && report.coverage.concepts) ||
@@ -281,7 +298,7 @@
       html += '<li>Cities searched: ' + cities + '</li>';
       html += '<li>Concepts: ' + concepts + '</li>';
       html += '<li>Sources: ' + sources + '</li>';
-      if (artifact.candidateUniverseCount != null) {
+      if (artifact.candidateUniverseCount != null && !estimated) {
         html += '<li>Candidate Universe: ' + artifact.candidateUniverseCount + '</li>';
       }
       html += '<li>Qualified: ' + count + '</li>';

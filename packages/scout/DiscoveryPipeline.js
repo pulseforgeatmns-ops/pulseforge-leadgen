@@ -25,6 +25,13 @@ const {
   discoveryStatusFromCoverage,
 } = require('./coverage/DiscoveryCoverageEngine');
 const { DISCOVERY_PIPELINE_STAGES, DISCOVERY_OUTCOMES } = require('./types');
+const {
+  estimateCandidateUniverse,
+  reviseCandidateUniverseEstimate,
+  computeCoverageFromEstimate,
+  extractExpectedValue,
+  estimateUniverseFromPlan,
+} = require('./universe/CandidateUniverseEstimate');
 
 function nowIso() {
   return new Date().toISOString();
@@ -40,26 +47,10 @@ function buildStage(stage, partial = {}) {
   };
 }
 
-function estimateUniverseFromPlan(discoveryPlan, fallback = 0) {
-  const totals = (discoveryPlan && discoveryPlan.totals) || {};
-  const plannedSearches = Number(totals.searches) || 0;
-  const plannedCities = Number(totals.cities) || 0;
-  const plannedConcepts = Number(totals.concepts) || 0;
-  const heuristic = Math.max(
-    plannedSearches * 3,
-    plannedCities * plannedConcepts * 2,
-    Number(fallback) || 0
-  );
-  return heuristic > 0 ? heuristic : Math.max(Number(fallback) || 0, 1);
-}
-
-function computeCoveragePct(coverageMetrics) {
-  if (!coverageMetrics) return 0;
-  const searches = coverageMetrics.searches || {};
-  if (searches.planned > 0) {
-    return Number(((searches.addressed || searches.executed || 0) / searches.planned).toFixed(2));
-  }
-  return coverageMetrics.complete ? 1 : 0;
+function computeCoveragePct(coverageMetrics, universeEstimate, investigated = null) {
+  const marketCoverage = computeCoverageFromEstimate(investigated, universeEstimate);
+  if (marketCoverage != null) return marketCoverage;
+  return null;
 }
 
 function mapIntelligenceStatus(status) {
@@ -201,16 +192,20 @@ async function runDiscoveryPipeline(input = {}) {
     });
   }
 
-  const universeEstimate = estimateUniverseFromPlan(
-    coveragePlan,
-    (existing.companies || []).length
-  );
+  const universeEstimate = estimateCandidateUniverse({
+    discoveryPlan: coveragePlan,
+    existingIntelligence,
+    gapAnalysis,
+    marketDefinition,
+    memory: opts.memory || opts.investigationMemory || {},
+    historicalMissions: opts.historicalMissions || [],
+  });
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.ESTIMATE_UNIVERSE, {
       startedAt: universeStageStarted,
       output: {
-        estimatedUniverse: universeEstimate,
-        basis: 'coverage_plan_totals',
+        ...universeEstimate,
+        basis: 'multi_signal_estimation',
         planTotals: coveragePlan.totals || null,
       },
     })
@@ -221,7 +216,11 @@ async function runDiscoveryPipeline(input = {}) {
   const investigationPlan = createInvestigationPlan({
     mission,
     marketDefinition,
-    opts: { ...opts, estimatedMarket: universeEstimate },
+    opts: {
+      ...opts,
+      estimatedMarket: extractExpectedValue(universeEstimate),
+      universeEstimate,
+    },
   });
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.BUILD_INVESTIGATION_PLAN, {
@@ -298,12 +297,22 @@ async function runDiscoveryPipeline(input = {}) {
     })
   );
 
-  const coveragePct = computeCoveragePct(coverageMetrics);
+  const investigatedCount = candidateUniverse.filter((row) => row.dedupeStatus !== 'duplicate').length;
+  let revisedUniverseEstimate = reviseCandidateUniverseEstimate(universeEstimate, {
+    investigated: investigatedCount,
+    discovered: investigatedCount,
+    coverageMetrics,
+    coverageComplete: Boolean(coverageMetrics && coverageMetrics.complete),
+  });
+  const coveragePct = computeCoverageFromEstimate(investigatedCount, revisedUniverseEstimate);
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.MEASURE_COVERAGE, {
       output: {
         coverageMetrics,
         coveragePct,
+        investigated: investigatedCount,
+        estimatedUniverse: extractExpectedValue(revisedUniverseEstimate),
+        universeEstimate: revisedUniverseEstimate,
         discoveryStatus: discoveryStatusFromCoverage(coverageMetrics),
       },
     })
@@ -342,6 +351,9 @@ async function runDiscoveryPipeline(input = {}) {
       candidateUniverse,
       qualifiedCount,
       discoveryConfidence,
+      universeEstimate: revisedUniverseEstimate,
+      investigated: investigatedCount,
+      coveragePct,
     });
 
   stages.push(
@@ -357,7 +369,8 @@ async function runDiscoveryPipeline(input = {}) {
     outcome,
     stages,
     marketDefinition,
-    universeEstimate,
+    universeEstimate: revisedUniverseEstimate,
+    initialUniverseEstimate: universeEstimate,
     coveragePlan,
     coverageMetrics,
     coveragePct,
@@ -380,4 +393,7 @@ module.exports = {
   estimateUniverseFromPlan,
   computeCoveragePct,
   buildPipelineResult,
+  estimateCandidateUniverse,
+  reviseCandidateUniverseEstimate,
+  computeCoverageFromEstimate,
 };

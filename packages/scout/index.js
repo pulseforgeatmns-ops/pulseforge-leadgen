@@ -74,4 +74,5 @@ module.exports = {
   credibility,
   memory,
   conflict,
+  universe: require('./universe'),
 };
