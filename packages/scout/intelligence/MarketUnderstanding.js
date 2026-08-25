@@ -6,6 +6,7 @@
  */
 
 const { buildAcquisitionSearchDefinition } = require('../../max/scoutAcquisition/SearchDefinition');
+const { buildDelegationFromMission } = require('../Discovery.helpers');
 
 function asText(value) {
   if (value == null) return '';
@@ -70,28 +71,6 @@ function buildMarketDefinition(input = {}) {
     searchDefinition,
     valid: searchDefinition.valid === true,
     invalidReason: searchDefinition.invalidReason || null,
-  };
-}
-
-function buildDelegationFromMission(mission, scoutPayload = {}) {
-  const constraints = mission.constraints || {};
-  const plan = (mission.plan && mission.plan.missionPlan) || mission.missionPlan || {};
-  return {
-    tenantId: String(mission.tenantId || mission.clientId || scoutPayload.tenantId || ''),
-    targetContext: {
-      geography:
-        scoutPayload.geography ||
-        constraints.locationHint ||
-        (plan.geography && plan.geography.label) ||
-        null,
-      segments: constraints.vertical ? [constraints.vertical] : [],
-      businessType: constraints.vertical || constraints.industry || null,
-    },
-    businessContext: {
-      serviceGeography: scoutPayload.geography || constraints.locationHint || null,
-      preferredSegments: constraints.vertical ? [constraints.vertical] : [],
-      operatorDirection: scoutPayload.operatorMessage || null,
-    },
   };
 }
 

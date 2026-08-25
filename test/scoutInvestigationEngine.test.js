@@ -273,11 +273,12 @@ describe('SPEC-142 — Evidence-Driven Investigation Engine', () => {
     assert.ok(events.some((e) => e.event === INVESTIGATION_EVENTS.COMPLETED));
   });
 
-  it('Scout.investigate returns investigation report and graph', async () => {
+  it('investigate() returns investigation report and graph', async () => {
+    const { investigate } = require('../packages/scout');
     const mission = sampleMission();
     const candidates = sampleCandidates();
 
-    const result = await Scout.investigate({
+    const result = await investigate({
       mission,
       opts: {
         discover: async () => candidates,

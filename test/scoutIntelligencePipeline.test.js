@@ -8,6 +8,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   Scout,
+  investigate,
   intelligence,
 } = require('../packages/scout');
 
@@ -92,8 +93,10 @@ describe('SPEC-141 — Scout Intelligence Pipeline', () => {
     clearIntelligenceLog();
   });
 
-  it('exports Scout.investigate as canonical investigation contract', () => {
-    assert.equal(typeof Scout.investigate, 'function');
+  it('exports Scout.discover as the sole public discovery contract (SPEC-154)', () => {
+    assert.equal(typeof Scout.discover, 'function');
+    assert.equal(Scout.investigate, undefined);
+    assert.equal(typeof investigate, 'function');
   });
 
   it('Stage 1 — builds market definition from mission', () => {
@@ -177,28 +180,26 @@ describe('SPEC-141 — Scout Intelligence Pipeline', () => {
     assert.ok(events.some((e) => e.event === SCOUT_INTELLIGENCE_EVENTS.COMPLETED));
   });
 
-  it('Scout.investigate delegates to SPEC-142 investigation engine', async () => {
+  it('Scout.discover executes unified discovery pipeline (SPEC-154)', async () => {
     const mission = sampleMission();
     const candidates = sampleCandidates();
 
-    const result = await Scout.investigate({
+    const result = await Scout.discover({
       mission,
+      scoutPayload: {},
       opts: {
         discover: async () => candidates,
         companies: candidates,
         estimatedMarket: 4,
-        maxIterations: 6,
-        confidenceThreshold: 0.5,
       },
     });
 
-    assert.ok(result.investigationReport);
-    assert.equal(result.investigationReport.kind, 'investigation_report');
-    assert.ok(result.investigationGraph);
-    assert.ok(result.hypotheses.length >= 1);
-    assert.ok(result.claims.length >= 1);
-    assert.ok(['DISCOVERY_COMPLETED', 'DISCOVERY_PARTIAL'].includes(result.outcome));
-    assert.ok(result.rankedOpportunities.length >= 1);
+    assert.ok(result.pipeline);
+    assert.ok(result.marketDefinition);
+    assert.ok(result.coveragePlan);
+    assert.ok(result.intelligenceReport);
+    assert.match(result.outcome, /^DISCOVERY_/);
+    assert.equal(result.pipeline.coverageEngineUsed, true);
   });
 
   it('intelligence report includes coverage metrics and immediate opportunities', () => {

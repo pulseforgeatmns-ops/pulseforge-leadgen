@@ -229,7 +229,8 @@ describe('SPEC-145 — Adaptive Investigation Planning', () => {
   });
 
   it('Scout.investigate includes adaptive planning artifacts', async () => {
-    const result = await Scout.investigate({
+    const { investigate } = require('../packages/scout');
+    const result = await investigate({
       mission: {
         id: 'mission-spec145-2',
         tenantId: '1',

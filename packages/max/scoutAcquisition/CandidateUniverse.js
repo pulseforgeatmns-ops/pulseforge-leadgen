@@ -185,6 +185,11 @@ async function constructCandidateUniverse(input = {}) {
   let discoveryReport = null;
 
   const useCoverageEngine = input.useCoverageEngine !== false;
+  if (input.useCoverageEngine === false) {
+    throw new Error(
+      'CoverageEngine bypass is not permitted (SPEC-154). All discovery must execute DiscoveryPipeline.'
+    );
+  }
 
   if (hasUsableMarketAdapter && (input.forceDiscover === true || sufficiency.shouldDiscoverGap)) {
     discoveryRan = true;

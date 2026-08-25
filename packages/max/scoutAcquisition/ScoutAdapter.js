@@ -698,6 +698,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       persistCompanies: opts.persistCompanies,
       now: opts.now,
       freshnessMs: opts.freshnessMs,
+      useCoverageEngine: opts.useCoverageEngine !== false,
     });
   } catch (err) {
     const packed = emptyInvestigationResult({

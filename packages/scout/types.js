@@ -5,6 +5,17 @@
  * One canonical Discovery interface; strategy is internal.
  */
 
+/** SPEC-154 — unified discovery pipeline stages (single investigative engine). */
+const DISCOVERY_PIPELINE_STAGES = Object.freeze({
+  UNDERSTAND_MARKET: 'understand_market',
+  ESTIMATE_UNIVERSE: 'estimate_universe',
+  BUILD_INVESTIGATION_PLAN: 'build_investigation_plan',
+  EXECUTE_COVERAGE_PLAN: 'execute_coverage_plan',
+  MEASURE_COVERAGE: 'measure_coverage',
+  DETERMINE_SUFFICIENCY: 'determine_sufficiency',
+  PRODUCE_INTELLIGENCE_REPORT: 'produce_intelligence_report',
+});
+
 const DISCOVERY_PHASES = Object.freeze({
   EXISTING_INTELLIGENCE: 'existing_intelligence',
   GAP_ANALYSIS: 'gap_analysis',
@@ -64,6 +75,7 @@ function buildDiscoveryResult(partial = {}) {
 }
 
 module.exports = {
+  DISCOVERY_PIPELINE_STAGES,
   DISCOVERY_PHASES,
   DISCOVERY_STRATEGIES,
   DISCOVERY_OUTCOMES,
