@@ -423,11 +423,29 @@ function assertScoutEvidenceHandoff(artifact = {}, contributionPayload = {}) {
   }
 }
 
+/**
+ * Resolve internal Scout reasoning artifacts for replay/debug/learning.
+ * Never attach this object to AMO discovery contributions (SPEC-173).
+ * @param {object} scoutResult
+ * @returns {object}
+ */
+function resolveScoutInternalReasoning(scoutResult = {}) {
+  const artifact = buildScoutDiscoveryArtifact(scoutResult);
+  return {
+    spec: 'SPEC-173',
+    investigationState: artifact.investigationState || null,
+    missionIntelligenceReport: artifact.missionIntelligenceReport || null,
+    intelligenceReport: artifact.intelligenceReport || null,
+    sourceResult: artifact.sourceResult || scoutResult,
+  };
+}
+
 module.exports = {
   SCOUT_EVIDENCE_HANDOFF_VIOLATION,
   resolveScoutExecutionResult,
   collectCanonicalScoutEvidence,
   buildScoutDiscoveryArtifact,
+  resolveScoutInternalReasoning,
   assertScoutEvidenceHandoff,
   mapCanonicalEvidenceToContribution,
   normalizeCanonicalEvidenceItem,
