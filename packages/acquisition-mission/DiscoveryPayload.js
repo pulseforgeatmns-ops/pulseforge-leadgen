@@ -349,8 +349,19 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
 
   const blocked =
     result.status === 'blocked' ||
-    qualifiedCount <= 0 ||
+    (qualifiedCount <= 0 && payload.discoveryStatus === 'incomplete') ||
     payload.outcome === 'blocked';
+
+  const coverage = payload.coverage || (payload.discoveryReport && payload.discoveryReport.coverage) || null;
+  const discoveryStatus = payload.discoveryStatus || (payload.discoveryReport && payload.discoveryReport.status) || null;
+  const candidateUniverseCount =
+    payload.candidateUniverseCount != null
+      ? Number(payload.candidateUniverseCount)
+      : Array.isArray(payload.candidateUniverse)
+        ? payload.candidateUniverse.filter((row) => row.dedupeStatus !== 'duplicate').length
+        : payload.discoveryReport && payload.discoveryReport.candidateUniverse != null
+          ? Number(payload.discoveryReport.candidateUniverse)
+          : null;
 
   return {
     companies,
@@ -371,6 +382,12 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     summary,
     missionObjective,
     approvalConsumed: Boolean(opts.approvalConsumed),
+    coverage,
+    discoveryStatus,
+    candidateUniverseCount,
+    discoveryReport: payload.discoveryReport || null,
+    discoveryConfidence: payload.discoveryConfidence || null,
+    discoveryPlan: payload.discoveryPlan || null,
   };
 }
 
@@ -381,6 +398,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
  */
 function hasSufficientEvidenceForPrioritization(presentation) {
   if (!presentation || presentation.blocked) return false;
+  if (presentation.discoveryStatus === 'incomplete') return false;
   if (!presentation.rankedProspects || !presentation.rankedProspects.length) return false;
   if (!presentation.summary) return false;
 

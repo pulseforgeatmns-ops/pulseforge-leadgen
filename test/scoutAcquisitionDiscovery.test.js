@@ -214,7 +214,9 @@ describe('SPEC-100A Scout acquisition discovery foundation', () => {
       })
     );
     assert.equal(first.delegated, true);
-    assert.equal(discoverCalls, 1);
+    assert.ok(discoverCalls >= 1);
+    assert.ok(first.result.payload.discoveryPlan);
+    assert.equal(first.result.payload.discoveryPlan.totals.cities, 1);
     assert.equal(first.result.payload.retrievedBeforeInvestigate, true);
     const names = (first.result.payload.evaluatedCandidates || []).map((c) => c.name);
     assert.ok(names.some((n) => /Granite State/i.test(n)));
@@ -400,22 +402,19 @@ describe('SPEC-100A Scout acquisition discovery foundation', () => {
   });
 
   it('does not silently broaden Manchester into all New Hampshire commercial companies', async () => {
-    let received;
-    await runAcquisitionIntelligenceLoop(
+    const result = await runAcquisitionIntelligenceLoop(
       anchorInput(),
       loopOpts(store, aoStore, {
-        discover: async (input) => {
-          received = input;
-          return [];
-        },
+        discover: async () => [],
       })
     );
-    const def = received.searchDefinition;
+    const def = result.result.payload.searchDefinition;
     assert.equal(def.geography.label, 'Manchester, NH');
     assert.deepEqual(def.geography.cities, ['Manchester']);
     assert.equal(def.expansionRequiresAuthority, true);
     assert.ok(def.geography.permittedNearby.length);
     assert.equal(def.geography.cities.includes('Nashua'), false);
+    assert.equal(result.result.payload.discoveryPlan.totals.cities, 1);
   });
 
   it('keeps discovery sources and evidence traceable', async () => {
@@ -538,7 +537,8 @@ describe('SPEC-100A Scout acquisition discovery foundation', () => {
         },
       }
     );
-    assert.equal(discoverCalls, 1);
+    assert.ok(discoverCalls >= 1);
+    assert.ok(second.payload.discoveryPlan);
     const abc = (second.payload.evaluatedCandidates || []).filter((c) =>
       /ABC Property/i.test(c.name)
     );

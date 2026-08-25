@@ -92,6 +92,20 @@ function presentationFromDiscoveryPayload(payload = {}) {
     payload.missionObjective != null && String(payload.missionObjective).trim()
       ? String(payload.missionObjective).trim()
       : null;
+  const coverage =
+    payload.coverage && typeof payload.coverage === 'object' ? payload.coverage : null;
+  const discoveryReport =
+    payload.discoveryReport && typeof payload.discoveryReport === 'object'
+      ? payload.discoveryReport
+      : null;
+  const discoveryStatus =
+    payload.discoveryStatus != null ? String(payload.discoveryStatus) : null;
+  const candidateUniverseCount =
+    payload.candidateUniverseCount != null
+      ? Number(payload.candidateUniverseCount)
+      : discoveryReport && discoveryReport.candidateUniverse != null
+        ? Number(discoveryReport.candidateUniverse)
+        : null;
 
   let rankedProspects = Array.isArray(payload.rankedProspects)
     ? payload.rankedProspects.map((row) => ({ ...row }))
@@ -146,6 +160,10 @@ function presentationFromDiscoveryPayload(payload = {}) {
     missionObjective,
     outcome: payload.outcome || null,
     blocked: Boolean(payload.blocked),
+    coverage,
+    discoveryReport,
+    discoveryStatus,
+    candidateUniverseCount,
   };
 }
 
@@ -285,6 +303,48 @@ function formatDiscoveryResultsLines(presentation) {
     lines.push('');
     for (const maker of presentation.decisionMakers) {
       lines.push(`• ${maker}`);
+    }
+    lines.push('');
+  }
+
+  if (presentation.coverage || presentation.discoveryReport) {
+    lines.push('Coverage');
+    lines.push('');
+    const report = presentation.discoveryReport || {};
+    const cov = presentation.coverage || {};
+    const citiesLine =
+      report.coverage && report.coverage.cities
+        ? report.coverage.cities
+        : cov.cities
+          ? `${cov.cities.searched}/${cov.cities.planned}`
+          : '—';
+    const conceptsLine =
+      report.coverage && report.coverage.concepts
+        ? report.coverage.concepts
+        : cov.concepts
+          ? `${cov.concepts.searched}/${cov.concepts.planned}`
+          : '—';
+    const sourcesLine =
+      report.coverage && report.coverage.sources
+        ? report.coverage.sources
+        : cov.sources
+          ? `${cov.sources.searched}/${cov.sources.planned}`
+          : '—';
+    lines.push(`Cities searched: ${citiesLine}`);
+    lines.push(`Concepts: ${conceptsLine}`);
+    lines.push(`Sources: ${sourcesLine}`);
+    if (presentation.candidateUniverseCount != null) {
+      lines.push(`Candidate Universe: ${presentation.candidateUniverseCount}`);
+    }
+    lines.push(`Qualified: ${presentation.qualifiedCount || 0}`);
+    if (presentation.confidence != null) {
+      lines.push(`Confidence: ${Number(presentation.confidence).toFixed(2)}`);
+    }
+    if (presentation.discoveryStatus === 'incomplete') {
+      lines.push('');
+      lines.push('Coverage Warning');
+      const warnings = (report.warnings || cov.warnings || []).slice(0, 3);
+      for (const warning of warnings) lines.push(`• ${warning}`);
     }
     lines.push('');
   }
