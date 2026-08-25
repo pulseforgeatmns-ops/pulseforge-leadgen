@@ -281,11 +281,19 @@ function deriveExecutionBlock(snapshot = {}, err = null) {
 
   const discovery = findLatestDiscoveryContribution(snapshot.contributions || []);
   if (discovery && discovery.payload && discovery.payload.blocked) {
+    const summary = discovery.payload.summary || 'Discovery blocked.';
+    const isCapabilityBlock =
+      discovery.payload.blockerCode === 'external_discovery_capability_unavailable' ||
+      /external discovery capability unavailable/i.test(summary);
     return createExecutionBlock({
       stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
-      unmetPrecondition: discovery.payload.summary || 'Discovery blocked.',
-      blockingComponent: 'Scout Intelligence Pipeline',
-      recommendedAction: 'Resolve discovery blocker and retry.',
+      unmetPrecondition: summary,
+      blockingComponent: isCapabilityBlock
+        ? 'External Discovery Provider Registry'
+        : 'Scout Intelligence Pipeline',
+      recommendedAction: isCapabilityBlock
+        ? 'Configure an external discovery provider before retrying.'
+        : 'Resolve discovery blocker and retry.',
     });
   }
 

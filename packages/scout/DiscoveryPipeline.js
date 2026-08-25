@@ -16,6 +16,11 @@ const { createInvestigationPlan } = require('./investigation/InvestigationPlanBu
 const { loadRepository } = require('../max/scoutAcquisition/ExistingIntelligence');
 const { assessExistingSufficiency } = require('../max/scoutAcquisition/CandidateUniverse');
 const { defaultDiscoveryAdapters } = require('../max/scoutAcquisition/DiscoveryAdapters');
+const {
+  evaluateDiscoveryCapability,
+  buildCapabilityBlockedResult,
+  CAPABILITY_BLOCKER_CODE,
+} = require('./coverage/DiscoveryCapabilityGate');
 const { runScoutAcquisitionIntelligence } = require('../max/scoutAcquisition/ScoutAdapter');
 const {
   buildDiscoveryPlan,
@@ -89,6 +94,9 @@ function buildPipelineResult(partial = {}) {
     intelligenceResult: partial.intelligenceResult || null,
     qualifiedCount: partial.qualifiedCount != null ? Number(partial.qualifiedCount) : 0,
     blockReason: partial.blockReason || null,
+    capabilityBlocked: partial.capabilityBlocked === true,
+    capabilityEvaluation: partial.capabilityEvaluation || null,
+    blockerCode: partial.blockerCode || null,
     coverageEngineUsed: partial.coverageEngineUsed !== false,
     marketMemoryRecall: partial.marketMemoryRecall || null,
     marketMemoryPersist: partial.marketMemoryPersist || null,
@@ -258,6 +266,59 @@ async function runDiscoveryPipeline(input = {}) {
       },
     })
   );
+
+  // ── SPEC-175: Capability Evaluation before external discovery ──
+  const capabilityStageStarted = nowIso();
+  const capabilityEvaluation = evaluateDiscoveryCapability({
+    adapters,
+    coveragePlan,
+    requireExternalDiscovery: true,
+    discover: opts.discover,
+    enablePlaces: opts.enablePlaces,
+    placesProvider: opts.placesProvider,
+    apiKey: opts.apiKey,
+    fetchImpl: opts.fetchImpl,
+  });
+  stages.push(
+    buildStage('capability_evaluation', {
+      startedAt: capabilityStageStarted,
+      output: {
+        enoughSensors: capabilityEvaluation.enoughSensors,
+        canExecute: capabilityEvaluation.canExecute,
+        registry: capabilityEvaluation.registry,
+        operationalProviders: capabilityEvaluation.operationalProviders,
+      },
+    })
+  );
+
+  if (!capabilityEvaluation.canExecute) {
+    const blocked = buildCapabilityBlockedResult(capabilityEvaluation, {
+      coveragePlan,
+      existingIntelligence,
+      gapAnalysis,
+    });
+    return buildPipelineResult({
+      outcome: blocked.outcome,
+      stages,
+      marketDefinition,
+      universeEstimate,
+      coveragePlan,
+      gapAnalysis,
+      existingIntelligence,
+      blockReason: blocked.blockReason,
+      capabilityBlocked: true,
+      capabilityEvaluation: blocked.capabilityEvaluation,
+      blockerCode: blocked.blockerCode,
+      intelligenceReport: buildDiscoveryReport({
+        coverage: {},
+        candidateUniverse: [],
+        qualifiedCount: 0,
+      }),
+      emptyMarketDecision: false,
+      confidence: 0,
+      coverageEngineUsed: true,
+    });
+  }
 
   // ── Stage 3: Build Investigation Plan ──────────────────────────
   const planStageStarted = nowIso();

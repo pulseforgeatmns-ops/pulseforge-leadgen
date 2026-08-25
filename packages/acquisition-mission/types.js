@@ -83,6 +83,7 @@ const BLOCKER_KINDS = Object.freeze({
   WAITING_FOR_DOMAIN_WARMUP: 'waiting_for_domain_warmup',
   WAITING_FOR_MORE_PROSPECTS: 'waiting_for_more_prospects',
   PAUSED_DELIVERABILITY_RISK: 'paused_deliverability_risk',
+  EXTERNAL_DISCOVERY_CAPABILITY: 'external_discovery_capability_unavailable',
 });
 
 const BLOCKER_LABELS = Object.freeze({
@@ -94,6 +95,7 @@ const BLOCKER_LABELS = Object.freeze({
   [BLOCKER_KINDS.WAITING_FOR_DOMAIN_WARMUP]: 'Waiting for Domain Warm-up',
   [BLOCKER_KINDS.WAITING_FOR_MORE_PROSPECTS]: 'Waiting for More Prospects',
   [BLOCKER_KINDS.PAUSED_DELIVERABILITY_RISK]: 'Paused — Deliverability Risk',
+  [BLOCKER_KINDS.EXTERNAL_DISCOVERY_CAPABILITY]: 'External Discovery Capability Unavailable',
 });
 
 const EVENT_KINDS = Object.freeze({

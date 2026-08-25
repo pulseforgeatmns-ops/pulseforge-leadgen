@@ -390,6 +390,13 @@ function resolveBlocked(resolved = {}, payload = {}) {
       ? Number(payload.qualifiedCount)
       : (payload.opportunities || payload.acquisitionOpportunities || []).length;
 
+  if (
+    payload.capabilityBlocked === true ||
+    payload.blockerCode === 'external_discovery_capability_unavailable'
+  ) {
+    return true;
+  }
+
   return (
     resolved.status === 'blocked'
     || payload.outcome === 'blocked'

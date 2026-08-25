@@ -14,6 +14,7 @@ const {
   clone,
 } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
+const { EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE } = require('../scout/coverage/ExternalDiscoveryProviderRegistry');
 
 function createBlocker(input = {}) {
   const kind = asText(input.kind);
@@ -46,6 +47,12 @@ function inferBlockers(mission, ctx) {
       kind: BLOCKER_KINDS.WAITING_FOR_OPERATOR,
       specialist: 'operator',
       reason: 'Mission plan must be approved before discovery.',
+    }));
+  } else if (ctx.externalDiscoveryCapabilityBlocked) {
+    blockers.push(createBlocker({
+      kind: BLOCKER_KINDS.EXTERNAL_DISCOVERY_CAPABILITY,
+      specialist: 'scout',
+      reason: ctx.externalDiscoveryBlockReason || EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE,
     }));
   } else if ((mission.stage === STAGES.DISCOVER || mission.stage === STAGES.UNDERSTAND) && !ctx.scoutComplete) {
     if (ctx.prospectCount > 0 && ctx.prospectCount < (ctx.prospectThreshold || 15)) {

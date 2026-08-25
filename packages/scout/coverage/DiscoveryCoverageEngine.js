@@ -10,7 +10,9 @@
 const { expandGeography } = require('../../acquisition-mission/MissionPlanner');
 const { MANCHESTER_GEO } = require('../../capabilities/discovery/seedProfiles');
 const { expandConcepts } = require('./ConceptLibrary');
+const { parseGeographyList } = require('../../max/scoutAcquisition/InvestigationProvenance');
 const { asText, nowIso, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
+const { enforceCandidateMinimumContract } = require('./CandidateMinimumContract');
 const { discoverCandidates } = require('../../max/scoutAcquisition/DiscoveryAdapters');
 const {
   computeCoverageFromEstimate,
@@ -46,10 +48,18 @@ function expandCitiesFromSearchDefinition(searchDefinition = {}) {
     return MANCHESTER_GEO.cities.map((city) => formatCityState(city, state));
   }
 
-  // Single-city missions execute literally; cluster expansion requires "Greater Manchester".
+  // Multi-city missions execute each city independently with all concepts (SPEC-175).
   if (!/greater/i.test(label)) {
-    if (Array.isArray(geo.cities) && geo.cities.length === 1) {
-      return [formatCityState(geo.cities[0], geo.state || inferStateFromLabel(label))];
+    if (Array.isArray(geo.cities) && geo.cities.length >= 1) {
+      const state = geo.state || inferStateFromLabel(label);
+      return dedupeCities(geo.cities.map((city) => formatCityState(city, state)));
+    }
+    const parsed = parseGeographyList(label);
+    if (parsed.length > 1) {
+      const state = geo.state || inferStateFromLabel(label);
+      return dedupeCities(
+        parsed.map((part) => formatCityState(String(part).split(',')[0].trim(), state))
+      );
     }
     return [label];
   }
@@ -219,7 +229,17 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
       if (!sourceTypesChecked.includes(workload.source)) {
         sourceTypesChecked.push(workload.source);
       }
-      for (const row of rows) {
+      const { accepted, rejected } = enforceCandidateMinimumContract(rows, workload);
+      if (rejected.length) {
+        errors.push(
+          ...rejected.map((entry) => ({
+            code: 'candidate_minimum_contract',
+            message: entry.reason,
+            workload,
+          }))
+        );
+      }
+      for (const row of accepted) {
         candidates.push({
           ...row,
           _coverageWorkload: workload,
