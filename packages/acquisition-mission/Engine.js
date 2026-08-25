@@ -36,6 +36,15 @@ const { buildWorkspace, formatWorkspace } = require('./Workspace');
 const { createBlocker, inferBlockers, currentBlocker } = require('./Blockers');
 const { buildHealth, formatHealth } = require('./Health');
 const { recordSegmentOutcome, summarizeLearning, formatLearning } = require('./Learning');
+const {
+  capturePrediction,
+  resolvePrediction,
+  buildOutcomeReviewSection,
+  summarizeOrganizationalLearning,
+  formatOutcomeLearningReport,
+  isTerminalOutcomeType,
+  pendingPredictionsForMission,
+} = require('./OutcomeLearning');
 const { explainWhy, formatExplain } = require('./Explain');
 const { createObservation, formatMemory } = require('./Memory');
 const { createMemoryAmoStore } = require('./Store');
@@ -221,6 +230,27 @@ function createAcquisitionMissionEngine(opts = {}) {
       if (payload.confidence != null) {
         mission.confidence = round2(payload.confidence);
       }
+      const mir = payload.missionIntelligenceReport || payload.missionReport;
+      if (mir && mir.recommendation) {
+        const prediction = capturePrediction({
+          tenantId: mission.tenantId,
+          missionId: mission.id,
+          recommendation: mir.recommendation,
+          strategicDecision: mir.strategicDecision,
+          opportunity: mir.opportunityIntelligence?.topOpportunity || mir.topOpportunities?.[0],
+          judgmentResult: mir.judgmentResult,
+          expectedOutcome: mir.strategicDecision?.expectedBusinessOutcome,
+          confidence: mir.recommendation.confidence ?? mir.strategicDecision?.tradeoff?.confidencePercent,
+        });
+        store.addPrediction(prediction);
+        store.addEvent(createEvent({
+          missionId: mission.id,
+          kind: EVENT_KINDS.LEARNING,
+          specialist: SPECIALISTS.MAX,
+          label: 'Prediction captured',
+          payload: { predictionId: prediction.id, summary: prediction.recommendation.summary },
+        }));
+      }
       if (mission.stage === STAGES.DISCOVER && isStructuredMissionApproved(mission)) {
         mission.pendingOperatorDecision = {
           stage: STAGES.DISCOVER,
@@ -342,8 +372,91 @@ function createAcquisitionMissionEngine(opts = {}) {
       at: row.at,
       label: asText(input.label) || labels[row.type] || `Outcome: ${row.type}`,
     }));
+    if (isTerminalOutcomeType(row.type)) {
+      autoEvaluatePendingPredictions(mission, row, input);
+    }
     refresh(store, mission);
     return row;
+  }
+
+  function autoEvaluatePendingPredictions(mission, outcomeRow, input = {}) {
+    const pending = pendingPredictionsForMission(store.listPredictions(mission.id), mission.id);
+    for (const prediction of pending) {
+      const result = resolvePrediction(prediction, {
+        actualOutcome: outcomeRow.type,
+        at: outcomeRow.at,
+        prospectId: outcomeRow.prospectId,
+        notes: input.notes || (outcomeRow.payload && outcomeRow.payload.notes),
+        primaryCause: input.primaryCause,
+        secondaryCause: input.secondaryCause,
+        lesson: input.lesson,
+      });
+      store.putPrediction(result.prediction);
+      store.addEvaluation(result.evaluation);
+      for (const learning of result.learnings) store.addOutcomeLearning(learning);
+      store.addEvent(createEvent({
+        missionId: mission.id,
+        kind: EVENT_KINDS.LEARNING,
+        specialist: SPECIALISTS.MAX,
+        at: result.evaluation.evaluatedAt,
+        label: `Outcome evaluated: ${result.evaluation.accuracy}`,
+        payload: {
+          evaluationId: result.evaluation.id,
+          predictionId: prediction.id,
+          accuracy: result.evaluation.accuracy,
+          autoApplied: false,
+        },
+      }));
+    }
+  }
+
+  function captureMissionPrediction(missionId, input = {}, opts = {}) {
+    const mission = requireMission(missionId, opts.tenantId);
+    const prediction = capturePrediction({
+      ...input,
+      tenantId: mission.tenantId,
+      missionId: mission.id,
+    });
+    store.addPrediction(prediction);
+    store.addEvent(createEvent({
+      missionId: mission.id,
+      kind: EVENT_KINDS.LEARNING,
+      specialist: SPECIALISTS.MAX,
+      label: 'Prediction captured',
+      payload: { predictionId: prediction.id, summary: prediction.recommendation.summary },
+    }));
+    return prediction;
+  }
+
+  function evaluateOutcomeLearning(missionId, input = {}, opts = {}) {
+    const mission = requireMission(missionId, opts.tenantId);
+    const predictionId = asText(input.predictionId);
+    const pending = pendingPredictionsForMission(store.listPredictions(mission.id), mission.id);
+    const prediction = predictionId
+      ? pending.find((p) => p.id === predictionId) || store.listPredictions(mission.id).find((p) => p.id === predictionId)
+      : pending[0];
+    if (!prediction) {
+      throw amoError('amo_prediction_not_found', 'No pending prediction to evaluate.');
+    }
+    const result = resolvePrediction(prediction, input);
+    store.putPrediction(result.prediction);
+    store.addEvaluation(result.evaluation);
+    for (const learning of result.learnings) store.addOutcomeLearning(learning);
+    store.addEvent(createEvent({
+      missionId: mission.id,
+      kind: EVENT_KINDS.LEARNING,
+      specialist: SPECIALISTS.MAX,
+      at: result.evaluation.evaluatedAt,
+      label: `Outcome evaluated: ${result.evaluation.accuracy}`,
+      payload: {
+        evaluationId: result.evaluation.id,
+        predictionId: prediction.id,
+        accuracy: result.evaluation.accuracy,
+        autoApplied: false,
+      },
+    }));
+    refresh(store, mission);
+    return result;
   }
 
   function recordLearning(missionId, input = {}, learnOpts = {}) {
@@ -374,6 +487,12 @@ function createAcquisitionMissionEngine(opts = {}) {
     const ctx = specialistContext(contributions, extra);
     const learningRows = store.listLearning(mission.tenantId);
     const learning = summarizeLearning(learningRows);
+    const outcomeLearning = buildOutcomeReviewSection({
+      predictions: store.listPredictions(mission.id),
+      evaluations: store.listEvaluations(mission.id),
+      outcomeLearnings: store.listOutcomeLearnings(mission.tenantId, mission.id),
+      allowPending: true,
+    });
     const explainExtras = {
       ...extra,
       previousReplyRate: inspectOpts.previousReplyRate,
@@ -422,6 +541,7 @@ function createAcquisitionMissionEngine(opts = {}) {
       timeline,
       why,
       learning,
+      outcomeLearning,
       observations: formatMemory(store.listObservations(mission.id)),
       contributions,
       outcomes: store.listOutcomes(mission.id),
@@ -569,13 +689,23 @@ function createAcquisitionMissionEngine(opts = {}) {
     recordObservation,
     recordOutcome,
     recordLearning,
+    capturePrediction: captureMissionPrediction,
+    evaluateOutcomeLearning,
+    outcomeLearning: (id, o) => inspect(id, o).outcomeLearning,
     inspect,
     workspace: (id, o) => inspect(id, o).workspace,
     health: (id, o) => inspect(id, o).health,
     context: (id, o) => inspect(id, o).context,
     timeline: (id, o) => inspect(id, o).timeline,
     explainWhy: (id, o) => inspect(id, o).why,
-    learning: (tenantId) => summarizeLearning(store.listLearning(tenantId)),
+    learning: (tenantId) => ({
+      ...summarizeLearning(store.listLearning(tenantId)),
+      outcomeLearning: summarizeOrganizationalLearning(
+        store.listEvaluations(null).filter((row) => String(row.tenantId) === String(tenantId)),
+        store.listOutcomeLearnings(tenantId)
+      ),
+    }),
+    formatOutcomeLearningReport,
     answerOperator,
     formatWorkspace,
     formatHealth,

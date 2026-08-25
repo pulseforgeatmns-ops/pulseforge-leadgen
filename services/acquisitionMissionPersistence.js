@@ -91,6 +91,48 @@ async function ensureAcquisitionMissionSchema(pool = defaultPool()) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await ensureOutcomeLearningSchema(pool);
+}
+
+async function ensureOutcomeLearningSchema(pool = defaultPool()) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS acquisition_mission_predictions (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      mission_id TEXT NOT NULL REFERENCES acquisition_missions(id) ON DELETE CASCADE,
+      opportunity_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS acquisition_mission_outcome_evaluations (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      mission_id TEXT NOT NULL REFERENCES acquisition_missions(id) ON DELETE CASCADE,
+      prediction_id TEXT NOT NULL,
+      accuracy TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      evaluated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS acquisition_mission_outcome_learnings (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      mission_id TEXT,
+      evaluation_id TEXT,
+      kind TEXT NOT NULL,
+      subject TEXT,
+      direction TEXT,
+      statement TEXT,
+      auto_applied BOOLEAN NOT NULL DEFAULT FALSE,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
 }
 
 function missionFromRow(row) {
@@ -215,6 +257,73 @@ async function persistLearning(row, pool = defaultPool()) {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,FALSE,$9)
      ON CONFLICT (id) DO NOTHING`,
     [row.id, String(row.tenantId), row.missionId || null, row.segment, row.sends, row.replies, row.replyRate, row.statement, row]
+  );
+  return row;
+}
+
+async function persistPrediction(row, pool = defaultPool()) {
+  if (!row?.id) return null;
+  await ensureAcquisitionMissionSchema(pool);
+  await pool.query(
+    `INSERT INTO acquisition_mission_predictions (id, tenant_id, mission_id, opportunity_id, status, payload, captured_at, resolved_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (id) DO UPDATE SET
+       status = EXCLUDED.status,
+       payload = EXCLUDED.payload,
+       resolved_at = EXCLUDED.resolved_at`,
+    [
+      row.id,
+      String(row.tenantId),
+      row.missionId,
+      row.opportunityId || null,
+      row.status || 'pending',
+      row,
+      row.capturedAt || new Date().toISOString(),
+      row.resolvedAt || null,
+    ]
+  );
+  return row;
+}
+
+async function persistOutcomeEvaluation(row, pool = defaultPool()) {
+  if (!row?.id) return null;
+  await ensureAcquisitionMissionSchema(pool);
+  await pool.query(
+    `INSERT INTO acquisition_mission_outcome_evaluations (id, tenant_id, mission_id, prediction_id, accuracy, payload, evaluated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      row.id,
+      String(row.tenantId),
+      row.missionId,
+      row.predictionId,
+      row.accuracy,
+      row,
+      row.evaluatedAt || new Date().toISOString(),
+    ]
+  );
+  return row;
+}
+
+async function persistOutcomeLearning(row, pool = defaultPool()) {
+  if (!row?.id) return null;
+  await ensureAcquisitionMissionSchema(pool);
+  await pool.query(
+    `INSERT INTO acquisition_mission_outcome_learnings (id, tenant_id, mission_id, evaluation_id, kind, subject, direction, statement, auto_applied, payload, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,FALSE,$9,$10)
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      row.id,
+      String(row.tenantId),
+      row.missionId || null,
+      row.evaluationId || null,
+      row.kind,
+      row.subject || null,
+      row.direction || null,
+      row.statement || null,
+      row,
+      row.at || new Date().toISOString(),
+    ]
   );
   return row;
 }
@@ -456,10 +565,25 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
     `SELECT payload FROM acquisition_mission_learning WHERE tenant_id = $1`,
     [key]
   )).rows.map((row) => row.payload);
-  return { missions, events, contributions, observations, outcomes, learning };
+  const predictions = (await pool.query(
+    `SELECT payload FROM acquisition_mission_predictions WHERE tenant_id = $1`,
+    [key]
+  )).rows.map((row) => row.payload);
+  const evaluations = (await pool.query(
+    `SELECT payload FROM acquisition_mission_outcome_evaluations WHERE tenant_id = $1`,
+    [key]
+  )).rows.map((row) => row.payload);
+  const outcomeLearnings = (await pool.query(
+    `SELECT payload FROM acquisition_mission_outcome_learnings WHERE tenant_id = $1`,
+    [key]
+  )).rows.map((row) => row.payload);
+  return { missions, events, contributions, observations, outcomes, learning, predictions, evaluations, outcomeLearnings };
 }
 
 const AMO_TABLES = Object.freeze([
+  'acquisition_mission_outcome_learnings',
+  'acquisition_mission_outcome_evaluations',
+  'acquisition_mission_predictions',
   'acquisition_mission_execution_audit',
   'acquisition_mission_learning',
   'acquisition_mission_outcomes',
@@ -561,6 +685,7 @@ async function clearAmoSessionBindings(pool = defaultPool()) {
 
 module.exports = {
   ensureAcquisitionMissionSchema,
+  ensureOutcomeLearningSchema,
   ensureExecutionAuditSchema,
   persistMission,
   persistEvent,
@@ -568,6 +693,9 @@ module.exports = {
   persistObservation,
   persistOutcome,
   persistLearning,
+  persistPrediction,
+  persistOutcomeEvaluation,
+  persistOutcomeLearning,
   persistExecutionAudit,
   persistStageCommit,
   loadMissionSnapshot,

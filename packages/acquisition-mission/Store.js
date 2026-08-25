@@ -14,6 +14,9 @@ function createMemoryAmoStore(opts = {}) {
   const observations = [];
   const outcomes = [];
   const learning = [];
+  const predictions = [];
+  const evaluations = [];
+  const outcomeLearnings = [];
 
   function putMission(mission) {
     const missionContributions = contributions.filter((row) => row.missionId === mission.id);
@@ -109,6 +112,59 @@ function createMemoryAmoStore(opts = {}) {
     return learning.filter((row) => String(row.tenantId || '') === key).map(clone);
   }
 
+  function addPrediction(row) {
+    if (row && row.id && predictions.some((existing) => existing.id === row.id)) {
+      return clone(row);
+    }
+    predictions.push(clone(row));
+    return clone(row);
+  }
+
+  function listPredictions(missionId) {
+    if (missionId == null || missionId === '') return predictions.map(clone);
+    return predictions.filter((row) => row.missionId === missionId).map(clone);
+  }
+
+  function putPrediction(row) {
+    const idx = predictions.findIndex((existing) => existing.id === row.id);
+    if (idx >= 0) predictions[idx] = clone(row);
+    else predictions.push(clone(row));
+    return clone(row);
+  }
+
+  function addEvaluation(row) {
+    if (row && row.id && evaluations.some((existing) => existing.id === row.id)) {
+      return clone(row);
+    }
+    evaluations.push(clone(row));
+    return clone(row);
+  }
+
+  function listEvaluations(missionId) {
+    if (missionId == null || missionId === '') return evaluations.map(clone);
+    return evaluations.filter((row) => row.missionId === missionId).map(clone);
+  }
+
+  function addOutcomeLearning(row) {
+    if (row && row.id && outcomeLearnings.some((existing) => existing.id === row.id)) {
+      return clone(row);
+    }
+    outcomeLearnings.push(clone(row));
+    return clone(row);
+  }
+
+  function listOutcomeLearnings(tenantId, missionId = null) {
+    let rows = outcomeLearnings.map(clone);
+    if (tenantId != null && tenantId !== '') {
+      const key = String(tenantId);
+      rows = rows.filter((row) => String(row.tenantId || '') === key);
+    }
+    if (missionId != null && missionId !== '') {
+      rows = rows.filter((row) => row.missionId === missionId);
+    }
+    return rows;
+  }
+
   function snapshot() {
     return {
       missions: [...missions.entries()].map(([id, row]) => [id, clone(row)]),
@@ -117,6 +173,9 @@ function createMemoryAmoStore(opts = {}) {
       observations: observations.map(clone),
       outcomes: outcomes.map(clone),
       learning: learning.map(clone),
+      predictions: predictions.map(clone),
+      evaluations: evaluations.map(clone),
+      outcomeLearnings: outcomeLearnings.map(clone),
     };
   }
 
@@ -136,6 +195,9 @@ function createMemoryAmoStore(opts = {}) {
     replaceArray(observations, snap.observations);
     replaceArray(outcomes, snap.outcomes);
     replaceArray(learning, snap.learning);
+    replaceArray(predictions, snap.predictions);
+    replaceArray(evaluations, snap.evaluations);
+    replaceArray(outcomeLearnings, snap.outcomeLearnings);
   }
 
   for (const extra of opts.seeds || []) putMission(extra);
@@ -155,6 +217,13 @@ function createMemoryAmoStore(opts = {}) {
     listOutcomes,
     addLearning,
     listLearning,
+    addPrediction,
+    listPredictions,
+    putPrediction,
+    addEvaluation,
+    listEvaluations,
+    addOutcomeLearning,
+    listOutcomeLearnings,
     snapshot,
     restore,
   };

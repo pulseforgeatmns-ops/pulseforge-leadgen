@@ -46,6 +46,7 @@ const pendingOperatorDecision = require('./PendingOperatorDecision');
 const missionProgression = require('./MissionProgression');
 const workspaceMode = require('./WorkspaceMode');
 const operatorDecisionPolicy = require('./OperatorDecisionPolicy');
+const outcomeLearning = require('./OutcomeLearning');
 
 module.exports = {
   ...types,
@@ -94,4 +95,5 @@ module.exports = {
   ...missionProgression,
   ...workspaceMode,
   ...operatorDecisionPolicy,
+  ...outcomeLearning,
 };
