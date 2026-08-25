@@ -47,6 +47,10 @@ const {
   hasSufficientEvidenceForPrioritization,
 } = require('../../acquisition-mission/DiscoveryPayload');
 const {
+  buildScoutDiscoveryArtifact,
+  assertScoutEvidenceHandoff,
+} = require('../../scout/adapters/ScoutDiscoveryArtifact');
+const {
   freezeStructuredMission,
   isStructuredMissionApproved,
   isReadyForLock,
@@ -422,10 +426,16 @@ function findScoutDiscoveryAfterApproval(contributions = [], approval) {
 
 
 function mapScoutIntelligenceToDiscoveryPayload(result = {}, opts = {}) {
-  return normalizeScoutDiscoveryPayload(result, {
+  const artifact = buildScoutDiscoveryArtifact(result, {
     missionObjective: opts.missionObjective,
     approvalConsumed: true,
   });
+  const payload = normalizeScoutDiscoveryPayload(result, {
+    ...opts,
+    discoveryArtifact: artifact,
+  });
+  assertScoutEvidenceHandoff(artifact, payload);
+  return payload;
 }
 
 function fixtureScoutDiscoveryResult() {
@@ -539,7 +549,7 @@ async function runScoutForAmoMission(mission, opts = {}) {
       },
     });
     const intelligenceResult = result.intelligenceResult || result;
-    const mapped = mapScoutIntelligenceToDiscoveryPayload(intelligenceResult, {
+    const mapped = mapScoutIntelligenceToDiscoveryPayload(result, {
       missionObjective: mission.objective,
     });
     if (
@@ -548,7 +558,7 @@ async function runScoutForAmoMission(mission, opts = {}) {
     ) {
       return fixtureScoutDiscoveryResult();
     }
-    return intelligenceResult;
+    return result;
   } catch (err) {
     if (opts.allowFixtureFallback === true) return fixtureScoutDiscoveryResult();
     throw err;
@@ -557,7 +567,7 @@ async function runScoutForAmoMission(mission, opts = {}) {
 
 function discoveryPayloadFromScoutResult(scoutResult, mission) {
   let payload;
-  if (scoutResult && scoutResult.discoveryReport) {
+  if (scoutResult && scoutResult.discoveryReport && !scoutResult.intelligenceResult && !scoutResult.payload) {
     const report = scoutResult.discoveryReport;
     payload = normalizeScoutDiscoveryPayload(
       {
@@ -579,17 +589,6 @@ function discoveryPayloadFromScoutResult(scoutResult, mission) {
     payload = mapScoutIntelligenceToDiscoveryPayload(scoutResult, {
       missionObjective: mission && mission.objective,
     });
-  }
-
-  if (scoutResult?.intelligenceReport) {
-    payload.intelligenceReport = scoutResult.intelligenceReport;
-  }
-  const mir =
-    scoutResult?.missionIntelligenceReport ||
-    scoutResult?.pipeline?.missionIntelligenceReport ||
-    null;
-  if (mir) {
-    payload.missionIntelligenceReport = mir;
   }
   return payload;
 }

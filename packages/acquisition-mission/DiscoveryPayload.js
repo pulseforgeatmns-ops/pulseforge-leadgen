@@ -6,6 +6,10 @@
  */
 
 const { buildIntelligenceBrief } = require('../scout/credibility/CredibilityFramework');
+const {
+  buildScoutDiscoveryArtifact,
+  mapCanonicalEvidenceToContribution,
+} = require('../scout/adapters/ScoutDiscoveryArtifact');
 
 const SOURCE_LABELS = Object.freeze({
   existing_repository: 'Company repository',
@@ -224,69 +228,53 @@ function buildDiscoverySummary(opportunities, missionObjective) {
  * @returns {object}
  */
 function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
-  const payload = result.payload || {};
-  const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
-  const missionObjective = opts.missionObjective || payload.missionObjective || null;
+  const artifact =
+    opts.discoveryArtifact ||
+    buildScoutDiscoveryArtifact(result, {
+      missionObjective: opts.missionObjective,
+      approvalConsumed: opts.approvalConsumed,
+    });
+  const payload = artifact.sourceResult?.payload || result.payload || {};
+  const opportunities = artifact.opportunities || [];
+  const missionObjective = artifact.missionObjective || opts.missionObjective || payload.missionObjective || null;
 
-  const companies =
-    payload.companies ||
-    opportunities
-      .map((row) => ({
-        id: row.companyId || row.id,
-        name: row.name,
-        fit: row.fit,
-        timing: row.timing,
-        confidence: row.confidence,
-      }))
-      .filter((row) => row.id || row.name);
-
-  const prospects = payload.prospects || payload.people || [];
+  const companies = artifact.companies || [];
+  const prospects = artifact.prospects || [];
   const qualifiedCount =
-    payload.qualifiedCount != null
-      ? Number(payload.qualifiedCount)
+    artifact.qualifiedCount != null
+      ? Number(artifact.qualifiedCount)
       : companies.length || opportunities.length;
 
   const buyingSignals = [];
   const seenSignals = new Set();
-  for (const opp of opportunities) {
-    for (const sig of opp.signals || []) {
-      const normalized = normalizeBuyingSignal(sig, opp.name);
-      if (!normalized) continue;
-      const key = `${normalized.company}|${normalized.label}`;
-      if (seenSignals.has(key)) continue;
-      seenSignals.add(key);
-      buyingSignals.push(normalized);
-    }
-  }
-  for (const sig of payload.buyingSignals || payload.signals || []) {
-    const normalized = normalizeBuyingSignal(sig);
+  for (const sig of artifact.buyingSignals || []) {
+    const normalized = normalizeBuyingSignal(sig, sig.company);
     if (!normalized) continue;
-    const key = normalized.label;
+    const key = `${normalized.company || ''}|${normalized.label}`;
     if (seenSignals.has(key)) continue;
     seenSignals.add(key);
     buyingSignals.push(normalized);
   }
 
-  const evidence = [];
-  const seenEvidence = new Set();
-  for (const opp of opportunities) {
-    for (const ref of opp.evidenceRefs || []) {
-      const normalized = normalizeEvidenceItem(ref, opp.name);
-      if (!normalized) continue;
-      const key = `${normalized.company}|${normalized.label}|${normalized.source}`;
-      if (seenEvidence.has(key)) continue;
-      seenEvidence.add(key);
-      evidence.push(normalized);
-    }
-  }
-  for (const ref of payload.evidence || payload.evidenceRefs || []) {
-    const normalized = normalizeEvidenceItem(ref);
-    if (!normalized) continue;
-    const key = `${normalized.label}|${normalized.source}`;
-    if (seenEvidence.has(key)) continue;
-    seenEvidence.add(key);
-    evidence.push(normalized);
-  }
+  const evidence = mapCanonicalEvidenceToContribution(artifact.evidence || []).map((item) =>
+    normalizeEvidenceItem(
+      {
+        id: item.id,
+        label: item.label,
+        source: item.source,
+        observedAt: item.observedAt,
+        kind: item.evidenceType,
+        provenance: item.provenance,
+        snapshot: {
+          source: item.source,
+          companyName: item.company,
+          evidenceType: item.evidenceType,
+          observedAt: item.observedAt,
+        },
+      },
+      item.company
+    )
+  ).filter(Boolean);
 
   const decisionMakers = [];
   for (const opp of opportunities) {
@@ -336,43 +324,28 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     }
   }
 
-  const confidenceBreakdown = computeConfidenceBreakdown(
-    opportunities,
-    payload,
-    payload.confidence != null ? payload.confidence : result.confidence
-  );
+  const confidenceBreakdown =
+    artifact.confidenceBreakdown ||
+    computeConfidenceBreakdown(
+      opportunities,
+      payload,
+      artifact.confidence != null ? artifact.confidence : payload.confidence
+    );
 
   const summary =
-    (result.summary && String(result.summary).trim()) ||
-    (payload.summary && String(payload.summary).trim()) ||
+    (artifact.summary && String(artifact.summary).trim()) ||
     buildDiscoverySummary(opportunities, missionObjective);
 
-  const blocked =
-    result.status === 'blocked' ||
-    (qualifiedCount <= 0 && payload.discoveryStatus === 'incomplete') ||
-    payload.outcome === 'blocked';
+  const blocked = artifact.blocked === true;
 
-  const coverage = payload.coverage || (payload.discoveryReport && payload.discoveryReport.coverage) || null;
-  const discoveryStatus = payload.discoveryStatus || (payload.discoveryReport && payload.discoveryReport.status) || null;
+  const coverage = artifact.coverage || null;
+  const discoveryStatus = artifact.discoveryStatus || null;
   const candidateUniverseCount =
-    payload.candidateUniverseCount != null
-      ? Number(payload.candidateUniverseCount)
-      : Array.isArray(payload.candidateUniverse)
-        ? payload.candidateUniverse.filter((row) => row.dedupeStatus !== 'duplicate').length
-        : payload.discoveryReport && payload.discoveryReport.candidateUniverse != null
-          ? Number(payload.discoveryReport.candidateUniverse)
-          : null;
+    artifact.candidateUniverseCount != null ? Number(artifact.candidateUniverseCount) : null;
 
-  const estimatedMarket =
-    payload.universeEstimate ||
-    (payload.discoveryReport && payload.discoveryReport.estimatedMarket) ||
-    null;
+  const estimatedMarket = artifact.estimatedMarket || null;
   const marketCoveragePct =
-    payload.coveragePct != null
-      ? payload.coveragePct
-      : payload.discoveryReport && payload.discoveryReport.marketCoveragePct != null
-        ? payload.discoveryReport.marketCoveragePct
-        : null;
+    artifact.marketCoveragePct != null ? artifact.marketCoveragePct : null;
 
   return {
     companies,
@@ -388,24 +361,29 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       briefCount: rankedProspects.filter((r) => r.intelligenceBrief).length,
     },
     qualifiedCount,
-    outcome: result.status || (blocked ? 'blocked' : 'completed'),
+    outcome: artifact.outcome || (blocked ? 'blocked' : 'completed'),
     blocked,
     summary,
     missionObjective,
-    approvalConsumed: Boolean(opts.approvalConsumed),
+    approvalConsumed: Boolean(artifact.approvalConsumed ?? opts.approvalConsumed),
     coverage,
     discoveryStatus,
     candidateUniverseCount,
     estimatedMarket,
     marketCoveragePct,
-    discoveryReport: payload.discoveryReport || null,
-    discoveryConfidence: payload.discoveryConfidence || null,
-    discoveryPlan: payload.discoveryPlan || null,
-    intelligenceReport: payload.intelligenceReport || result.intelligenceReport || null,
-    missionIntelligenceReport:
-      payload.missionIntelligenceReport ||
-      result.missionIntelligenceReport ||
-      null,
+    discoveryReport: artifact.discoveryReport || null,
+    discoveryConfidence: artifact.discoveryConfidence || null,
+    discoveryPlan: artifact.discoveryPlan || null,
+    intelligenceReport: artifact.intelligenceReport || null,
+    missionIntelligenceReport: artifact.missionIntelligenceReport || null,
+    discoveryArtifact: {
+      spec: artifact.spec,
+      fitCandidates: artifact.fitCandidates || [],
+      watchCandidates: artifact.watchCandidates || [],
+      businessUnderstanding: artifact.businessUnderstanding || null,
+      businessJudgment: artifact.businessJudgment || null,
+      investigationState: artifact.investigationState || null,
+    },
   };
 }
 
