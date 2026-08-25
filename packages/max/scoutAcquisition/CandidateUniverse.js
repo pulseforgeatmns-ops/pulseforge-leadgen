@@ -11,6 +11,14 @@ const { retrieveExistingIntelligence } = require('./ExistingIntelligence');
 const { discoverCandidates, defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
 const { resolveCandidateUniverse } = require('./EntityResolution');
 const { searchDefinitionFingerprint } = require('./SearchDefinition');
+const {
+  buildDiscoveryPlan,
+  executeCoveragePlan,
+  buildCandidateUniverseRecords,
+  buildDiscoveryReport,
+  computeDiscoveryConfidence,
+  discoveryStatusFromCoverage,
+} = require('../../scout/coverage/DiscoveryCoverageEngine');
 
 function createMemoryDiscoveryStore(snapshot = null) {
   /** @type {Map<string, object[]>} */
@@ -169,9 +177,28 @@ async function constructCandidateUniverse(input = {}) {
     (a) => typeof a.available !== 'function' || a.available()
   );
 
+  let discoveryPlan = null;
+  let coverageMetrics = null;
+  let candidateUniverseRecords = buildCandidateUniverseRecords([], {
+    seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
+  });
+  let discoveryReport = null;
+
+  const useCoverageEngine = input.useCoverageEngine !== false;
+
   if (hasUsableMarketAdapter && (input.forceDiscover === true || sufficiency.shouldDiscoverGap)) {
     discoveryRan = true;
-    const result = await discoverCandidates(searchDefinition, marketAdapters);
+    let result;
+    if (useCoverageEngine) {
+      discoveryPlan = buildDiscoveryPlan(searchDefinition, { adapters: marketAdapters });
+      result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters);
+      coverageMetrics = result.coverage;
+      actionsTaken.push({
+        text: `Executed coverage plan: ${coverageMetrics.searches.addressed}/${coverageMetrics.searches.planned} searches across ${coverageMetrics.cities.planned} cities and ${coverageMetrics.concepts.planned} concepts.`,
+      });
+    } else {
+      result = await discoverCandidates(searchDefinition, marketAdapters);
+    }
     discoveredRaw = (result.candidates || []).filter((row) => {
       if (row.tenantId && tenantId && String(row.tenantId) !== String(tenantId)) return false;
       return true;
@@ -185,13 +212,39 @@ async function constructCandidateUniverse(input = {}) {
     }
     const newOnly = discoveredRaw.filter((row) => !alreadyKnown(existingCompanies, row));
     discoveredRaw = newOnly;
+    candidateUniverseRecords = buildCandidateUniverseRecords(discoveredRaw, {
+      seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
+    });
+    const discoveryConfidence = computeDiscoveryConfidence({
+      coverage: coverageMetrics,
+      candidateUniverse: candidateUniverseRecords,
+      searchSuccess:
+        coverageMetrics && coverageMetrics.searches.planned
+          ? coverageMetrics.searches.executed / coverageMetrics.searches.planned
+          : discoveredRaw.length > 0
+            ? 0.6
+            : 0.3,
+      evidenceQuality: existingCompanies.length ? 0.65 : 0.35,
+    });
+    discoveryReport = buildDiscoveryReport({
+      coverage: coverageMetrics,
+      candidateUniverse: candidateUniverseRecords,
+      qualifiedCount: 0,
+      discoveryConfidence,
+    });
     if (discoveredRaw.length) {
       actionsTaken.push({
         text: `Discovered ${discoveredRaw.length} additional candidate${discoveredRaw.length === 1 ? '' : 's'} for remaining coverage gaps.`,
       });
+    } else if (candidateUniverseRecords.length) {
+      actionsTaken.push({
+        text: `Candidate universe seeded from existing intelligence (${candidateUniverseRecords.length} record${candidateUniverseRecords.length === 1 ? '' : 's'}) before external discovery.`,
+      });
     } else {
       actionsTaken.push({
-        text: 'Ran bounded discovery for remaining coverage gaps; no new unique companies were added.',
+        text: coverageMetrics && !coverageMetrics.complete
+          ? 'Discovery incomplete — coverage plan not fully executed.'
+          : 'Ran bounded discovery for remaining coverage gaps; no new unique companies were added.',
       });
     }
     const marketChecked = (result.sourceTypesChecked || []).filter(
@@ -229,6 +282,20 @@ async function constructCandidateUniverse(input = {}) {
   }
 
   const candidatesDiscovered = retrievedCount + discoveredRaw.length;
+  if (!candidateUniverseRecords.length) {
+    candidateUniverseRecords = buildCandidateUniverseRecords(discoveredRaw, {
+      seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
+    });
+  }
+  const discoveryStatus = coverageMetrics
+    ? discoveryStatusFromCoverage(coverageMetrics)
+    : existingCompanies.length && !hasUsableMarketAdapter
+      ? 'complete'
+      : discoveryRan
+        ? discoveryStatusFromCoverage(coverageMetrics || { complete: true })
+        : existingCompanies.length
+          ? 'complete'
+          : 'incomplete';
   return {
     searchDefinition,
     companies,
@@ -247,6 +314,11 @@ async function constructCandidateUniverse(input = {}) {
     actionsTaken,
     retrievedBeforeDiscover: true,
     broadened: false,
+    discoveryPlan,
+    coverage: coverageMetrics,
+    candidateUniverse: candidateUniverseRecords,
+    discoveryReport,
+    discoveryStatus,
   };
 }
 

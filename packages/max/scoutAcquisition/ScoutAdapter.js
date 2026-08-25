@@ -31,6 +31,12 @@ const { attachFitToClassified, enrichPeopleSafe } = require('./FitEvaluation');
 const { defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
 const { OPPORTUNITY_CLASSES } = require('./Types');
 const { isRuntimeAim } = require('../../aim');
+const {
+  buildDiscoveryReport,
+  computeDiscoveryConfidence,
+  discoveryStatusFromCoverage,
+  canConcludeEmptyUniverse,
+} = require('../../scout/coverage/DiscoveryCoverageEngine');
 
 const OUTBOUND_RE = new RegExp(
   `\\b(${FORBIDDEN_OUTBOUND.join('|')}|send|enroll|publish|twilio|brevo|bland)\\b`,
@@ -883,10 +889,17 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
 
   const requested = requestedScopeFrom(delegation, criteria);
   const completedAt = nowIso();
+  const coverageMetrics = universe.coverage || null;
+  const discoveryStatus = universe.discoveryStatus || discoveryStatusFromCoverage(coverageMetrics);
+  const coverageIncomplete = Boolean(coverageMetrics && coverageMetrics.complete === false);
   const zeroEvaluated = classified.length === 0;
-  const coverageInsufficient = zeroEvaluated && searchDefinition.valid;
+  const coverageInsufficient =
+    coverageIncomplete ||
+    (zeroEvaluated && searchDefinition.valid && !(universe.candidateUniverse || []).length);
   const extraLimitations = [];
-  if (coverageInsufficient) {
+  if (coverageIncomplete && coverageMetrics && coverageMetrics.warnings) {
+    extraLimitations.push(...coverageMetrics.warnings);
+  } else if (coverageInsufficient) {
     extraLimitations.push(
       universe.discoveryRan
         ? 'Current discovery sources produced no candidate universe; investigation coverage insufficient.'
@@ -932,6 +945,30 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     discovered: discoveredCount,
     expansionText: expansionSuggestion(searchDefinition, basicFitCount),
   });
+
+  const candidateUniverseRecords = universe.candidateUniverse || [];
+  const discoveryConfidence = computeDiscoveryConfidence({
+    coverage: coverageMetrics,
+    candidateUniverse: candidateUniverseRecords,
+    searchSuccess:
+      coverageMetrics && coverageMetrics.searches && coverageMetrics.searches.planned
+        ? coverageMetrics.searches.executed / coverageMetrics.searches.planned
+        : discoveredCount > 0
+          ? 0.65
+          : 0.35,
+    evidenceQuality: timelyEvidenceCount > 0 ? 0.7 : basicFitCount > 0 ? 0.55 : 0.35,
+  });
+  const discoveryReport = buildDiscoveryReport({
+    coverage: coverageMetrics,
+    candidateUniverse: candidateUniverseRecords,
+    qualifiedCount: supported.length,
+    discoveryConfidence,
+  });
+  if (canConcludeEmptyUniverse(coverageMetrics, supported.length)) {
+    discoveryReport.emptyUniverse = true;
+    discoveryReport.summary =
+      'No candidate universe exists after complete investigation coverage.';
+  }
   const evidenceRefs = [];
   const seen = new Set();
   for (const opp of [...supported, ...fitCandidates]) {
@@ -942,19 +979,24 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     }
   }
 
-  const status = coverageInsufficient
-    ? universe.discoveryRan
-      ? 'partial'
-      : 'blocked'
-    : mode === 'partial' || enrichmentFailed
-      ? 'partial'
-      : 'completed';
+  const status = coverageIncomplete
+    ? 'partial'
+    : coverageInsufficient
+      ? universe.discoveryRan
+        ? 'partial'
+        : 'blocked'
+      : mode === 'partial' || enrichmentFailed
+        ? 'partial'
+        : 'completed';
 
   return {
     status,
-    summary: coverageInsufficient
-      ? extraLimitations[0]
-      : rollup.summary,
+    summary: coverageIncomplete
+      ? (coverageMetrics && coverageMetrics.warnings && coverageMetrics.warnings[0]) ||
+        'Discovery incomplete — coverage plan not fully executed.'
+      : coverageInsufficient
+        ? extraLimitations[0]
+        : rollup.summary,
     observations: [
       ...rollup.observations,
       ...supported.flatMap((o) => o.observations),
@@ -966,7 +1008,11 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     actionsTaken,
     evidenceRefs,
     artifactRefs: supported.map(toArtifact),
-    confidence: coverageInsufficient ? 0.35 : rollup.confidence,
+    confidence: coverageIncomplete
+      ? discoveryConfidence.overall
+      : coverageInsufficient
+        ? discoveryConfidence.overall
+        : rollup.confidence,
     uncertainties: [
       ...rollup.uncertainties,
       ...classified.flatMap((o) => o.unknowns.map((u) => u.text)),
@@ -1012,6 +1058,12 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       investigation,
       coverageConfidence: investigation.coverageConfidence,
       consumedContext: buildConsumedContext(searchDefinition),
+      coverage: coverageMetrics,
+      discoveryPlan: universe.discoveryPlan || null,
+      candidateUniverse: candidateUniverseRecords,
+      discoveryReport,
+      discoveryStatus,
+      discoveryConfidence,
     },
   };
 }
