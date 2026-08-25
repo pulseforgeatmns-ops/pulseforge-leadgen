@@ -699,6 +699,10 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       now: opts.now,
       freshnessMs: opts.freshnessMs,
       useCoverageEngine: opts.useCoverageEngine !== false,
+      marketDefinition: opts.marketDefinition,
+      useHypothesisEngine: opts.useHypothesisEngine,
+      hypothesisOpts: opts.hypothesisOpts,
+      terminologyLearningStore: opts.terminologyLearningStore,
     });
   } catch (err) {
     const packed = emptyInvestigationResult({

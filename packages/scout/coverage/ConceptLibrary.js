@@ -75,10 +75,25 @@ function conceptsFromText(text) {
 
 /**
  * Expand a search definition into executable discovery concepts.
+ * When a semantic market definition is provided, terminology drives expansion.
  * @param {object} searchDefinition
+ * @param {object} [marketDefinition]
  * @returns {string[]}
  */
-function expandConcepts(searchDefinition = {}) {
+function expandConcepts(searchDefinition = {}, marketDefinition = null) {
+  if (marketDefinition && Array.isArray(marketDefinition.terminology) && marketDefinition.terminology.length) {
+    const fromSemantic = new Set();
+    for (const term of marketDefinition.terminology) {
+      const text = asText(term);
+      if (text) fromSemantic.add(text);
+    }
+    for (const ct of marketDefinition.customerTypes || []) {
+      const text = asText(ct);
+      if (text) fromSemantic.add(text);
+    }
+    if (fromSemantic.size) return [...fromSemantic];
+  }
+
   const concepts = new Set();
   const segments = Array.isArray(searchDefinition.segments) ? searchDefinition.segments : [];
   const businessNeed = normalizeSegmentKey(searchDefinition.businessNeed || '');

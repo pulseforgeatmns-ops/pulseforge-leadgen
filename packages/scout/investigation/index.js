@@ -169,4 +169,6 @@ module.exports = {
   findReplacementProviders,
   buildStoppingConditions,
   PROVIDER_STATUS,
+  ...require('./SearchHypothesisEngine'),
+  ...require('./InvestigationTree'),
 };
