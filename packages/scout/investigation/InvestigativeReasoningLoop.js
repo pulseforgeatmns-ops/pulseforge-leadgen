@@ -354,7 +354,7 @@ async function runInvestigativeReasoningLoop(input = {}) {
   const coverageMetrics = coverageResult.coverage || input.coverageMetrics || null;
   const revisedMarketDefinition = coverageResult.revisedMarketDefinition || input.marketDefinition;
 
-  let state = createInvestigationState({
+  let state = input.investigationState || createInvestigationState({
     mission,
     tenantId: input.tenantId || mission.tenantId || mission.clientId,
     marketDefinition: input.marketDefinition,

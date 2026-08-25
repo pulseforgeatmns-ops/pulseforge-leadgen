@@ -82,6 +82,7 @@ module.exports = {
   opportunity,
   identity: require('./identity'),
   hypothesis: require('./hypothesis'),
+  coverage: require('./coverage'),
   universe: require('./universe'),
   adapters: {
     ...require('./adapters/ScoutDiscoveryArtifact'),

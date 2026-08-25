@@ -354,7 +354,9 @@ async function runDiscoveryPipeline(input = {}) {
       tenantId,
       useCoverageEngine: true,
       marketDefinition,
+      mission,
       useHypothesisEngine: opts.useHypothesisEngine !== false,
+      useHypothesisDiscoveryEngine: opts.useHypothesisDiscoveryEngine !== false,
     });
   } catch (err) {
     stages.push(
@@ -466,6 +468,10 @@ async function runDiscoveryPipeline(input = {}) {
       universeEstimate: revisedUniverseEstimate,
       existingIntelligence,
       memory: opts.memory || opts.investigationMemory || {},
+      investigationState:
+        payload.investigationState ||
+        (payload.investigation && payload.investigation.investigationState) ||
+        null,
       coverageResult: {
         candidates: candidateUniverse,
         searchHypotheses:
