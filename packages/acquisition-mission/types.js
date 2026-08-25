@@ -132,6 +132,8 @@ const OPERATOR_DECISION_KINDS = Object.freeze({
   DISCOVERY_APPROVAL: 'discovery_approval',
   /** SPEC-141 — operator reviews ranked prospects before Understand. */
   PRIORITIZATION_APPROVAL: 'prioritization_approval',
+  /** ADR-077 — blocking workflow when discovery coverage/evidence is insufficient. */
+  DISCOVERY_INVESTIGATION: 'discovery_investigation',
 });
 
 const SPECIALIST_STATES = Object.freeze({

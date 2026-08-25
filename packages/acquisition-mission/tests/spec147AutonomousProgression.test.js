@@ -87,7 +87,7 @@ describe('SPEC-147 — Autonomous Mission Progression', () => {
     assert.equal(result.outcome, 'paused');
     assert.ok(result.pause);
     assert.equal(result.pause.stage, PROGRESSION_STAGES.DISCOVERY_REVIEW);
-    assert.match(result.pause.requiredDecision, /priorit/i);
+    assert.match(result.pause.requiredDecision, /findings/i);
     assert.ok(result.pause.availableOptions.includes('Approve findings'));
     assert.match(result.presentation, /Mission Paused|Mission Intelligence Report Ready/i);
     assert.match(result.presentation, /Operator judgment required|Decision Needed/i);

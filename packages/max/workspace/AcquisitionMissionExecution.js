@@ -7,6 +7,7 @@
 
 const amo = require('../../acquisition-mission');
 const { isRolledBackExecution, formatRollbackProse } = amo;
+const { rollbackStageLabel } = require('../../acquisition-mission/DecisionReadiness');
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const { buildOpenMissionAction, MISSION_RUNTIMES } = require('./MissionActions');
 const {
@@ -64,9 +65,6 @@ const {
   presentationFromDiscoveryPayload,
 } = require('../../acquisition-mission/DiscoveryPresentation');
 const {
-  hasSufficientEvidenceForPrioritization,
-} = require('../../acquisition-mission/DiscoveryPayload');
-const {
   createMissionApprovalAudit,
   logMissionApprovalMatched,
 } = require('./audit/MissionApprovalAudit');
@@ -74,7 +72,7 @@ const { formatMissionUnderstandingProse } = require('../../acquisition-mission/S
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
 
-const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
+const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS, OPERATOR_DECISION_KINDS } = amo;
 
 function resolveExecutionPolicy(input = {}) {
   if (input.executionPolicy) return input.executionPolicy;
@@ -164,7 +162,8 @@ function buildExecutionMissionResponse({
 
   if (executionResult && executionResult.rolledBack) {
     const err = executionResult.error || {};
-    const stageName = action === 'plan_approved' ? 'Mission plan' : 'Discovery';
+    const stageName = rollbackStageLabel(action);
+    const presented = presentableOperatorDecision(snapshot);
     const comm = buildMissionCommunication({
       headline: `${stageName} could not execute`,
       mission: mission.title || mission.id,
@@ -173,13 +172,21 @@ function buildExecutionMissionResponse({
       stage: stageName,
       progress,
       waitingOn: 'Resolve the blocker',
-      nextStep: 'Resolve the blocker and retry.',
-      operatorDecision: action === 'plan_approved' ? 'Approve mission plan?' : 'Approve discovery?',
-      evidenceStatus: err.rollbackReason || err.message || formatRollbackProse(stageName),
+      nextStep: err.details && err.details.recommendedAction
+        ? err.details.recommendedAction
+        : 'Resolve the blocker and retry.',
+      operatorDecision: presented ? presented.prompt : (
+        action === 'plan_approved'
+          ? 'Approve mission plan?'
+          : action === 'prioritization_approved'
+            ? 'Approve findings?'
+            : 'Approve discovery?'
+      ),
+      evidenceStatus: err.rollbackReason || err.message || formatRollbackProse(stageName, err),
       sources: ['acquisition_mission', 'tme'],
       includeReasoningMarker: false,
     });
-    const prose = formatRollbackProse(stageName);
+    const prose = formatRollbackProse(stageName, err);
     const structured = applyMissionCommunication(
       buildStructuredResponse({
         answer: prose,
@@ -337,9 +344,13 @@ function buildExecutionMissionResponse({
     const scoutPayload = (executionResult.discovery && executionResult.discovery.payload) || {};
     const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
     const blocked = executionResult.executionOutcome === 'blocked';
-    const sufficientEvidence = hasSufficientEvidenceForPrioritization(discoveryResults);
+    const presented = presentableOperatorDecision(snapshot);
     const comm = buildMissionCommunication({
-      headline: 'Mission Updated',
+      headline: presented && presented.headline
+        ? presented.headline
+        : presented && presented.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
+          ? 'Mission Intelligence Report Ready'
+          : 'Mission Updated',
       mission: mission.title || mission.id,
       objective: mission.objective,
       status: blocked ? 'Discovery Blocked' : 'Discovery Complete',
@@ -348,9 +359,11 @@ function buildExecutionMissionResponse({
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
       waitingOn: blocked
         ? 'Discovery blocker'
-        : sufficientEvidence
+        : presented && presented.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
           ? 'Prioritization approval'
-          : 'Evidence review',
+          : presented && presented.kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION
+            ? 'Discovery coverage review'
+            : 'Evidence review',
       confidence:
         discoveryResults.confidence != null
           ? discoveryResults.confidence
@@ -358,14 +371,12 @@ function buildExecutionMissionResponse({
       confidenceBreakdown: discoveryResults.confidenceBreakdown,
       nextStep: blocked
         ? 'Resolve the discovery blocker, then retry Discovery.'
-        : sufficientEvidence
-          ? 'Review discovered prospects and approve prioritization to continue.'
-          : 'Review discovery evidence. Scout must surface attributable signals before prioritization.',
-      operatorDecision: blocked
-        ? 'Retry discovery?'
-        : sufficientEvidence
-          ? 'Approve prioritization?'
-          : 'Request more discovery evidence?',
+        : presented && presented.readiness && presented.readiness.recommendedAction
+          ? presented.readiness.recommendedAction
+          : presented && presented.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
+            ? 'Review discovered prospects and approve findings to continue.'
+            : 'Review discovery coverage and continue investigation.',
+      operatorDecision: presented ? presented.prompt : null,
       discoveryResults: executionResult.discovery ? discoveryResults : null,
       evidenceStatus: 'Mission state',
       sources: ['acquisition_mission', 'scout'],
@@ -639,8 +650,8 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
   }
 
   const prioritizationApprovalPattern =
-    /\bapprov(e|al|ed)\b.*\bpriorit/i.test(q) ||
-    (/\bpriorit/i.test(q) && /\bapprov(e|al|ed)\b/i.test(q));
+    /\bapprov(e|al|ed)\b.*\b(findings|priorit)/i.test(q) ||
+    (/\b(findings|priorit)/i.test(q) && /\bapprov(e|al|ed)\b/i.test(q));
 
   if (prioritizationApprovalPattern && hasPendingPrioritizationApproval(snapshot)) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'prioritization_approved');

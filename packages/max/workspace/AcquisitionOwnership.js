@@ -49,9 +49,6 @@ const {
   presentationFromDiscoveryPayload,
   findLatestDiscoveryContribution,
 } = require('../../acquisition-mission/DiscoveryPresentation');
-const {
-  hasSufficientEvidenceForPrioritization,
-} = require('../../acquisition-mission/DiscoveryPayload');
 const { presentableOperatorDecision } = require('../../acquisition-mission/PendingOperatorDecision');
 
 const AMO_SOURCES = Object.freeze(['acquisition_mission', 'scout']);
@@ -184,17 +181,14 @@ function discoveryFromSnapshot(snapshot = {}) {
   return presentationFromDiscoveryPayload(row.payload || {});
 }
 
-function amoOperatorDecision(mission, snapshot, discovery) {
+function amoOperatorDecision(mission, snapshot) {
   const presented = presentableOperatorDecision({
     mission,
     contributions: snapshot && snapshot.contributions,
+    discoveryArtifact: snapshot && snapshot.discoveryArtifact,
   });
   if (presented) return presented.prompt;
   if (snapshot && snapshot.blocker) return 'Resolve blocker to continue?';
-  if (discovery && hasSufficientEvidenceForPrioritization(discovery)) {
-    return 'Approve prioritization?';
-  }
-  if (discovery) return 'Request more discovery evidence?';
   return null;
 }
 
@@ -211,7 +205,7 @@ function amoEvidenceStatus(discovery) {
  */
 function applyAmoPresentationContract(baseComm, { mission, snapshot, created } = {}) {
   const discovery = discoveryFromSnapshot(snapshot);
-  const operatorDecision = amoOperatorDecision(mission, snapshot, discovery);
+  const operatorDecision = amoOperatorDecision(mission, snapshot);
   return buildMissionCommunication({
     ...baseComm,
     headline: created ? 'Mission Created' : 'Mission Resumed',

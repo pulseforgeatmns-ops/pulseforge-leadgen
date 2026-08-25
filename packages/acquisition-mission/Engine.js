@@ -222,11 +222,10 @@ function createAcquisitionMissionEngine(opts = {}) {
         mission.confidence = round2(payload.confidence);
       }
       if (mission.stage === STAGES.DISCOVER && isStructuredMissionApproved(mission)) {
-        mission.pendingOperatorDecision = {
-          stage: STAGES.DISCOVER,
-          kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
-          prompt: 'Approve prioritization?',
-        };
+        const { presentationFromDiscoveryPayload } = require('./DiscoveryPresentation');
+        const { buildPostDiscoveryPendingDecision } = require('./PendingOperatorDecision');
+        const presentation = presentationFromDiscoveryPayload(payload);
+        mission.pendingOperatorDecision = buildPostDiscoveryPendingDecision(presentation);
       }
       store.putMission(mission);
     }

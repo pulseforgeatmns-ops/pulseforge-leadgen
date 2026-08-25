@@ -98,13 +98,22 @@ function classifyError(err) {
   return TME_CLASSES.SPECIALIST;
 }
 
-function formatRollbackProse(stageLabel = 'Discovery') {
+function formatRollbackProse(stageLabel = 'Discovery', err = null) {
   const label = String(stageLabel || 'Discovery').replace(/^\w/, (ch) => ch.toUpperCase());
-  return [
-    `${label} could not execute.`,
-    'Mission remains unchanged.',
-    'Resolve the blocker and retry.',
-  ].join('\n');
+  const reason = err && (err.rollbackReason || err.message);
+  const recommendation = (err && err.details && err.details.recommendedAction)
+    || (reason && /insufficient evidence|coverage is incomplete|discovery evidence is insufficient/i.test(reason)
+      ? 'Continue investigation.'
+      : null)
+    || 'Resolve the blocker and retry.';
+  const lines = [`${label} could not execute.`];
+  if (reason) {
+    lines.push(`Reason: ${reason}`);
+  } else {
+    lines.push('Mission remains unchanged.');
+  }
+  lines.push(`Recommendation: ${recommendation}`);
+  return lines.join('\n');
 }
 
 module.exports = {

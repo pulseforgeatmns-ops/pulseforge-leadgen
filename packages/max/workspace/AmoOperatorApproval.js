@@ -64,9 +64,11 @@ const {
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
   hasPendingPrioritizationApproval,
+  hasPendingDiscoveryInvestigation,
   hasConsumablePendingDecision,
   presentableOperatorDecision,
   assertMissionStateConsistent,
+  buildPostDiscoveryPendingDecision,
 } = require('../../acquisition-mission/PendingOperatorDecision');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
@@ -664,11 +666,8 @@ function commitDiscoveryStage({
   );
 
   const updated = engine.get(missionId, tenantId);
-  updated.pendingOperatorDecision = {
-    stage: STAGES.DISCOVER,
-    kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
-    prompt: 'Approve prioritization?',
-  };
+  const presentation = presentationFromDiscoveryPayload(payload);
+  updated.pendingOperatorDecision = buildPostDiscoveryPendingDecision(presentation);
   bumpMissionVersion(updated, transactionId);
   engine.store.putMission(updated);
 
@@ -1047,16 +1046,23 @@ function buildDiscoveryApprovalProse(result) {
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
   const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
   const blocked = result.executionOutcome === 'blocked';
-  const sufficientEvidence = hasSufficientEvidenceForPrioritization(discoveryResults);
+  const snapshot = result.snapshot || {};
+  const presented = presentableOperatorDecision(snapshot);
   const waitingOn = blocked
     ? 'Discovery blocker'
-    : result.approvalPhase === APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION && sufficientEvidence
+    : presented && presented.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
       ? 'Prioritization approval'
-      : result.approvalPhase === APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION
-        ? 'Evidence review'
-        : null;
+      : presented && presented.kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION
+        ? 'Discovery coverage review'
+        : result.approvalPhase === APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION
+          ? 'Evidence review'
+          : null;
   const comm = buildMissionCommunication({
-    headline: 'Mission Updated',
+    headline: presented && presented.headline
+      ? presented.headline
+      : presented && presented.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
+        ? 'Mission Intelligence Report Ready'
+        : 'Mission Updated',
     mission: result.alreadyExecuted ? 'Discovery already executed.' : 'Approval Consumed',
     stage: 'Discovery',
     status: blocked ? 'Discovery Blocked' : 'Discovery Complete',
@@ -1065,16 +1071,12 @@ function buildDiscoveryApprovalProse(result) {
     confidenceBreakdown: discoveryResults.confidenceBreakdown,
     nextStep: blocked
       ? 'Resolve the discovery blocker, then retry Discovery.'
-      : sufficientEvidence
-        ? 'Review discovered prospects and approve prioritization to continue.'
-        : 'Review discovery evidence. Scout must surface attributable signals before prioritization.',
-    operatorDecision: blocked
-      ? 'Retry discovery?'
-      : !blocked && sufficientEvidence
-        ? 'Approve prioritization?'
-        : !blocked
-          ? 'Request more discovery evidence?'
-          : null,
+      : presented && presented.readiness && presented.readiness.recommendedAction
+        ? presented.readiness.recommendedAction
+        : presented && presented.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
+          ? 'Review discovered prospects and approve findings to continue.'
+          : 'Review discovery coverage and continue investigation.',
+    operatorDecision: presented ? presented.prompt : null,
     discoveryResults: result.discovery ? discoveryResults : null,
     evidenceStatus: blocked && scoutPayload.summary ? scoutPayload.summary : null,
     sources: ['acquisition_mission', 'scout'],
@@ -1103,6 +1105,7 @@ module.exports = {
   isMissionPlanningTurn,
   hasPendingDiscoveryApproval,
   hasPendingPrioritizationApproval,
+  hasPendingDiscoveryInvestigation,
   advancePlanAfterApproval,
   advancePlanClarification,
   cancelMissionPlan,

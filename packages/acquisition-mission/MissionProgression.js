@@ -21,6 +21,7 @@ const {
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
   hasPendingPrioritizationApproval,
+  hasPendingDiscoveryInvestigation,
   hasDiscoveryArtifact,
 } = require('./PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('./StructuredMission');
@@ -233,13 +234,32 @@ function deriveMissionPause(snapshot = {}) {
     return createMissionPause({
       stage: PROGRESSION_STAGES.DISCOVERY_REVIEW,
       reason: 'Scout investigation completed. Operator judgment required before outreach recommendations.',
-      requiredDecision: 'Approve prioritization?',
+      requiredDecision: 'Approve findings?',
       availableOptions: [
         'Approve findings',
         'Request additional investigation',
         'Adjust mission',
         'Cancel',
       ],
+    });
+  }
+
+  if (hasPendingDiscoveryInvestigation(snapshot)) {
+    const pending = mission.pendingOperatorDecision || {};
+    const readiness = pending.readiness || {};
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.DISCOVERY_REVIEW,
+      reason: readiness.blockingReason || 'Discovery coverage is incomplete.',
+      requiredDecision: pending.prompt || 'Discovery Coverage Incomplete',
+      availableOptions: pending.actions || [
+        'Continue Investigation',
+        'Modify Mission',
+        'Accept Incomplete Investigation',
+      ],
+      missingEvidence: pending.missingEvidence || readiness.missingEvidence || [],
+      coveragePercent: pending.coveragePercent != null
+        ? pending.coveragePercent
+        : readiness.coveragePercent,
     });
   }
 
