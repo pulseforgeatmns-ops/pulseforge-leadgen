@@ -161,26 +161,30 @@ async function ensureOutcomeLearningSchema(pool = defaultPool()) {
   `);
 }
 
+function columnOrPayload(rowValue, payloadValue) {
+  return rowValue === undefined ? payloadValue : rowValue;
+}
+
 function missionFromRow(row) {
   const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
   return {
     ...payload,
     id: row.id,
-    tenantId: row.tenant_id,
-    clientId: row.client_id,
-    stage: row.stage,
-    status: row.status,
-    objective: row.objective,
-    targetSegment: row.target_segment,
-    campaign: row.campaign,
-    title: row.title,
-    priority: row.priority,
-    confidence: row.confidence,
-    owner: row.owner,
-    createdBy: row.created_by,
-    orchestrationMissionId: row.orchestration_mission_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    tenantId: columnOrPayload(row.tenant_id, payload.tenantId),
+    clientId: columnOrPayload(row.client_id, payload.clientId),
+    stage: columnOrPayload(row.stage, payload.stage),
+    status: columnOrPayload(row.status, payload.status),
+    objective: columnOrPayload(row.objective, payload.objective),
+    targetSegment: columnOrPayload(row.target_segment, payload.targetSegment),
+    campaign: columnOrPayload(row.campaign, payload.campaign),
+    title: columnOrPayload(row.title, payload.title),
+    priority: columnOrPayload(row.priority, payload.priority),
+    confidence: columnOrPayload(row.confidence, payload.confidence),
+    owner: columnOrPayload(row.owner, payload.owner),
+    createdBy: columnOrPayload(row.created_by, payload.createdBy),
+    orchestrationMissionId: columnOrPayload(row.orchestration_mission_id, payload.orchestrationMissionId),
+    createdAt: columnOrPayload(row.created_at, payload.createdAt),
+    updatedAt: columnOrPayload(row.updated_at, payload.updatedAt),
   };
 }
 
