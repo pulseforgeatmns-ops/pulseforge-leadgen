@@ -396,9 +396,25 @@ function createAcquisitionMissionEngine(opts = {}) {
       : null;
     assertMissionStateConsistent(mission, { contributions });
     const progression = require('./MissionProgression');
+    const { buildWorkspaceContext } = require('./WorkspaceMode');
+    const progressionSnapshot = {
+      mission,
+      contributions,
+      progression: {
+        stage: progression.deriveProgressionStage({ mission, contributions }),
+        pause: progression.deriveMissionPause({ mission, contributions }),
+        block: progression.deriveExecutionBlock({ mission, contributions }),
+        presentation: progression.formatMissionProgressPresentation({ mission, contributions }),
+      },
+    };
+    const workspaceContext = buildWorkspaceContext({
+      missionId: mission.id,
+      snapshot: progressionSnapshot,
+    });
     return {
       spec: 'SPEC-118',
       mission,
+      workspaceContext,
       executableDecision: presentableOperatorDecision({ mission, contributions }),
       workspace,
       health,
@@ -411,12 +427,7 @@ function createAcquisitionMissionEngine(opts = {}) {
       outcomes: store.listOutcomes(mission.id),
       blocker: currentBlocker(mission.blockers),
       discoveryArtifact,
-      progression: {
-        stage: progression.deriveProgressionStage({ mission, contributions }),
-        pause: progression.deriveMissionPause({ mission, contributions }),
-        block: progression.deriveExecutionBlock({ mission, contributions }),
-        presentation: progression.formatMissionProgressPresentation({ mission, contributions }),
-      },
+      progression: progressionSnapshot.progression,
     };
   }
 

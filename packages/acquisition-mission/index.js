@@ -43,6 +43,7 @@ const transactionalExecution = require('./TransactionalExecution');
 const specialistExecutionContract = require('./SpecialistExecutionContract');
 const pendingOperatorDecision = require('./PendingOperatorDecision');
 const missionProgression = require('./MissionProgression');
+const workspaceMode = require('./WorkspaceMode');
 
 module.exports = {
   ...types,
@@ -88,4 +89,5 @@ module.exports = {
   ...specialistExecutionContract,
   ...pendingOperatorDecision,
   ...missionProgression,
+  ...workspaceMode,
 };

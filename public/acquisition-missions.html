@@ -11,8 +11,10 @@
   body { margin: 0; background: var(--pf-bg, #040810); color: var(--pf-text, #e8f0fe); font-family: 'DM Sans', sans-serif; }
   .wrap { max-width: 980px; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
   h1 { font-family: 'Bebas Neue', sans-serif; letter-spacing: 3px; font-size: 1.8rem; margin: 0 0 0.35rem; }
-  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 1.25rem; }
+  .sub { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1.6px; text-transform: uppercase; color: #6b7fa0; margin-bottom: 0.35rem; }
+  .mode-badge { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; letter-spacing: 1.2px; text-transform: uppercase; padding: 0.25rem 0.55rem; border-radius: 999px; border: 1px solid rgba(139,92,246,0.45); color: #c4b5fd; background: rgba(96,48,177,0.15); margin-bottom: 1.25rem; }
   .panel { background: #070d1a; border: 1px solid rgba(96,48,177,0.18); border-radius: 10px; padding: 1.1rem; margin-bottom: 1rem; }
+  .panel[data-hidden="true"] { display: none; }
   h2 { margin: 0 0 0.5rem; font-size: 1rem; }
   p { margin: 0.25rem 0; color: #9bb0d0; font-size: 0.9rem; line-height: 1.45; }
   .meta { font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; color: #6b7fa0; }
@@ -35,6 +37,7 @@
   .msg.ok { color: #00e676; }
   .mission-row { border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0.55rem 0; cursor: pointer; }
   .mission-row:hover { color: #fff; }
+  .mission-row.active { color: #c4b5fd; }
   .timeline { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: #9bb0d0; }
   .timeline div { padding: 0.2rem 0; }
   .discovery-list { margin: 0.5rem 0 0; padding: 0; list-style: none; }
@@ -51,16 +54,10 @@
 <div class="wrap">
   <h1>Acquisition Missions</h1>
   <p class="sub">SPEC-118 · Max manages missions · Capabilities contribute · Nothing is hidden</p>
+  <div class="mode-badge" id="modeBadge">Workspace Mode: Create</div>
   <p class="msg" id="msg"></p>
-  <section class="panel" id="planPanel"></section>
-  <section class="panel" id="listPanel"></section>
-  <section class="panel" id="workspacePanel"></section>
-  <section class="panel" id="discoveryPanel"></section>
-  <section class="panel" id="healthPanel"></section>
-  <section class="panel" id="blockerPanel"></section>
-  <section class="panel" id="timelinePanel"></section>
-  <section class="panel" id="whyPanel"></section>
-  <section class="panel" id="createPanel">
+
+  <section class="panel" id="createPanel" data-component="missionCreator">
     <h2>Create mission</h2>
     <label>Objective</label>
     <textarea id="objective" rows="2" placeholder="Acquire commercial cleaning customers in Manchester."></textarea>
@@ -70,26 +67,149 @@
     <input id="campaign" placeholder="Fall Outreach">
     <div class="actions">
       <button id="createBtn">Create</button>
-      <button class="secondary" id="advanceBtn">Advance stage</button>
+    </div>
+  </section>
+
+  <section class="panel" id="listPanel" data-component="missionList"></section>
+  <section class="panel" id="planPanel" data-component="missionUnderstanding"></section>
+  <section class="panel" id="intelligencePanel" data-component="missionIntelligenceReport"></section>
+  <section class="panel" id="operatorPanel" data-component="operatorDecision"></section>
+  <section class="panel" id="workspacePanel" data-component="missionWorkspace"></section>
+  <section class="panel" id="discoveryPanel" data-component="discovery"></section>
+  <section class="panel" id="healthPanel" data-component="missionHealth"></section>
+  <section class="panel" id="blockerPanel" data-component="blockers"></section>
+  <section class="panel" id="timelinePanel" data-component="missionTimeline"></section>
+  <section class="panel" id="whyPanel" data-component="why"></section>
+
+  <section class="panel" id="executionPanel" data-component="executionWorkspace">
+    <h2>Execution</h2>
+    <p class="meta">Current step</p>
+    <p id="executionStep"><strong>—</strong></p>
+    <div class="actions">
+      <button id="advanceBtn">Advance stage</button>
     </div>
   </section>
 </div>
 <script>
 (function () {
+  const WORKSPACE_MODES = {
+    CREATE: 'create',
+    UNDERSTANDING: 'understanding',
+    DISCOVERY: 'discovery',
+    DISCOVERY_REVIEW: 'discovery_review',
+    OUTREACH: 'outreach',
+    EXECUTION: 'execution',
+    COMPLETE: 'complete',
+  };
+
+  const WORKSPACE_MODE_LABELS = {
+    create: 'Create',
+    understanding: 'Understanding',
+    discovery: 'Discovery',
+    discovery_review: 'Discovery Review',
+    outreach: 'Outreach',
+    execution: 'Execution',
+    complete: 'Complete',
+  };
+
+  const COMPONENTS = {
+    missionCreator: { supportedModes: [WORKSPACE_MODES.CREATE] },
+    missionList: { supportedModes: [
+      WORKSPACE_MODES.CREATE,
+      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.OUTREACH,
+      WORKSPACE_MODES.EXECUTION,
+      WORKSPACE_MODES.COMPLETE,
+    ] },
+    missionUnderstanding: { supportedModes: [
+      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.OUTREACH,
+      WORKSPACE_MODES.EXECUTION,
+      WORKSPACE_MODES.COMPLETE,
+    ] },
+    missionTimeline: { supportedModes: [
+      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.OUTREACH,
+      WORKSPACE_MODES.EXECUTION,
+      WORKSPACE_MODES.COMPLETE,
+    ] },
+    missionWorkspace: { supportedModes: [
+      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.OUTREACH,
+      WORKSPACE_MODES.EXECUTION,
+      WORKSPACE_MODES.COMPLETE,
+    ] },
+    missionHealth: { supportedModes: [
+      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.OUTREACH,
+      WORKSPACE_MODES.EXECUTION,
+      WORKSPACE_MODES.COMPLETE,
+    ] },
+    discovery: { supportedModes: [WORKSPACE_MODES.DISCOVERY, WORKSPACE_MODES.DISCOVERY_REVIEW] },
+    missionIntelligenceReport: { supportedModes: [WORKSPACE_MODES.DISCOVERY_REVIEW] },
+    blockers: { supportedModes: [
+      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.OUTREACH,
+      WORKSPACE_MODES.EXECUTION,
+    ] },
+    why: { supportedModes: [
+      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.DISCOVERY,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.OUTREACH,
+      WORKSPACE_MODES.EXECUTION,
+      WORKSPACE_MODES.COMPLETE,
+    ] },
+    operatorDecision: { supportedModes: [
+      WORKSPACE_MODES.UNDERSTANDING,
+      WORKSPACE_MODES.DISCOVERY_REVIEW,
+      WORKSPACE_MODES.EXECUTION,
+    ] },
+    executionWorkspace: { supportedModes: [WORKSPACE_MODES.EXECUTION] },
+  };
+
   const $ = (id) => document.getElementById(id);
   const msg = $('msg');
   let missions = [];
   let selected = null;
   let snapshot = null;
+  let workspaceMode = WORKSPACE_MODES.CREATE;
 
   function setMsg(text, kind) {
     msg.textContent = text || '';
     msg.className = 'msg' + (kind ? ' ' + kind : '');
   }
 
+  function isComponentVisible(componentId, mode) {
+    const component = COMPONENTS[componentId];
+    if (!component) return false;
+    return component.supportedModes.indexOf(mode) !== -1;
+  }
+
+  function applyWorkspaceMode(mode) {
+    workspaceMode = mode;
+    $('modeBadge').textContent = 'Workspace Mode: ' + (WORKSPACE_MODE_LABELS[mode] || mode);
+    document.querySelectorAll('[data-component]').forEach(function (el) {
+      const visible = isComponentVisible(el.getAttribute('data-component'), mode);
+      el.setAttribute('data-hidden', visible ? 'false' : 'true');
+    });
+  }
+
   async function api(url, opts) {
     const res = await fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {}));
-    const body = await res.json().catch(() => ({}));
+    const body = await res.json().catch(function () { return {}; });
     if (!res.ok) throw new Error(body.message || body.error || 'Request failed');
     return body;
   }
@@ -135,16 +255,55 @@
       html += '<div style="margin:0.35rem 0"><span class="meta">' + row[0] + '</span><br><strong>' + row[1] + '</strong></div>';
     });
     html += '</dl>';
-    if (pending && pending.prompt) {
-      html += '<div class="discovery-section"><h3>Operator Decision</h3><p>' + pending.prompt + '</p>';
-      if (pending.choices && pending.choices.length) {
-        html += '<p class="meta">' + pending.choices.map(function (row) { return row.label; }).join(' · ') + '</p>';
-      } else if (!plan.immutable) {
-        html += '<p class="meta">Approve · Edit · Cancel</p>';
-      }
-      html += '</div>';
-    }
     $('planPanel').innerHTML = html;
+  }
+
+  function renderOperatorDecision(pending, pause) {
+    if (!isComponentVisible('operatorDecision', workspaceMode)) {
+      $('operatorPanel').innerHTML = '';
+      return;
+    }
+    const decision = pending || (pause ? {
+      prompt: pause.requiredDecision,
+      choices: (pause.availableOptions || []).map(function (label) { return { label: label }; }),
+    } : null);
+    if (!decision || !decision.prompt) {
+      $('operatorPanel').innerHTML = '';
+      return;
+    }
+    let html = '<h2>Operator Decision</h2><p>' + decision.prompt + '</p>';
+    if (decision.choices && decision.choices.length) {
+      html += '<p class="meta">' + decision.choices.map(function (row) { return row.label; }).join(' · ') + '</p>';
+    }
+    $('operatorPanel').innerHTML = html;
+  }
+
+  function renderIntelligenceReport(artifact, pause) {
+    if (!isComponentVisible('missionIntelligenceReport', workspaceMode)) {
+      $('intelligencePanel').innerHTML = '';
+      return;
+    }
+    if (!artifact || !artifact.rankedProspects) {
+      $('intelligencePanel').innerHTML = '<h2>Mission Intelligence Report</h2><p>Awaiting Scout findings.</p>';
+      return;
+    }
+    const count = artifact.qualifiedCount || artifact.rankedProspects.length;
+    let html = '<h2>Mission Intelligence Report</h2>';
+    html += '<p><strong>' + count + ' qualified prospect' + (count === 1 ? '' : 's') + '</strong></p>';
+    if (artifact.summary) {
+      html += '<p>' + artifact.summary + '</p>';
+    }
+    if (artifact.evidence && artifact.evidence.length) {
+      html += '<div class="discovery-section"><h3>Evidence</h3><ul>';
+      artifact.evidence.forEach(function (item) {
+        html += '<li>' + item + '</li>';
+      });
+      html += '</ul></div>';
+    }
+    if (pause && pause.reason) {
+      html += '<div class="discovery-section"><h3>Review Required</h3><p>' + pause.reason + '</p></div>';
+    }
+    $('intelligencePanel').innerHTML = html;
   }
 
   function renderList() {
@@ -152,15 +311,22 @@
       $('listPanel').innerHTML = '<h2>Missions</h2><p>No acquisition missions yet. Max creates them. You can start one below.</p>';
       return;
     }
-    $('listPanel').innerHTML = '<h2>Missions</h2>' + missions.map((row) =>
-      '<div class="mission-row" data-id="' + row.id + '">' +
+    $('listPanel').innerHTML = '<h2>Missions</h2>' + missions.map(function (row) {
+      const active = row.id === selected ? ' active' : '';
+      return '<div class="mission-row' + active + '" data-id="' + row.id + '">' +
         '<strong>' + (row.title || row.id) + '</strong> ' +
         pill(row.status, row.stage === 'prepare' ? 'warn' : 'ok') +
         '<div class="meta">' + row.id + ' · ' + (row.targetSegment || '') + ' · ' + (row.campaign || '') + '</div>' +
-      '</div>'
-    ).join('');
-    $('listPanel').querySelectorAll('.mission-row').forEach((el) => {
-      el.addEventListener('click', () => loadOne(el.getAttribute('data-id')));
+      '</div>';
+    }).join('');
+    $('listPanel').querySelectorAll('.mission-row').forEach(function (el) {
+      el.addEventListener('click', function () {
+        const id = el.getAttribute('data-id');
+        const url = new URL(window.location.href);
+        url.searchParams.set('mission', id);
+        window.history.replaceState({}, '', url.toString());
+        loadOne(id);
+      });
     });
   }
 
@@ -191,28 +357,39 @@
       });
       html += '</ul></div>';
     }
-    if (artifact.evidence && artifact.evidence.length) {
-      html += '<div class="discovery-section"><h3>Supporting Evidence</h3><ul>';
-      artifact.evidence.forEach(function (item) {
-        html += '<li>' + item + '</li>';
-      });
-      html += '</ul></div>';
-    }
-    if (artifact.summary) {
-      html += '<div class="discovery-section"><h3>Discovery Summary</h3><p>' + artifact.summary + '</p></div>';
-    }
-    const scoutComplete = snapshot.workspace && snapshot.workspace.scout && snapshot.workspace.scout.state === 'complete';
-    const maxWaiting = snapshot.workspace && snapshot.workspace.max && snapshot.workspace.max.state === 'waiting';
-    if (scoutComplete && maxWaiting && count > 0) {
-      html += '<div class="discovery-section"><h3>Operator Decision</h3><p>Approve prioritization?</p></div>';
-    }
     $('discoveryPanel').innerHTML = html;
+  }
+
+  function renderExecutionPanel() {
+    if (!isComponentVisible('executionWorkspace', workspaceMode)) return;
+    const ws = snapshot && snapshot.workspace ? snapshot.workspace : {};
+    const progression = snapshot && snapshot.progression ? snapshot.progression : {};
+    const step = (progression.presentation && progression.presentation.split('\n')[0])
+      || ws.status
+      || 'Execution in progress';
+    $('executionStep').innerHTML = '<strong>' + step + '</strong>';
+  }
+
+  function clearMissionPanels() {
+    ['planPanel', 'intelligencePanel', 'operatorPanel', 'workspacePanel', 'discoveryPanel',
+      'healthPanel', 'blockerPanel', 'timelinePanel', 'whyPanel', 'executionPanel'].forEach(function (id) {
+      $(id).innerHTML = id === 'executionPanel'
+        ? '<h2>Execution</h2><p class="meta">Current step</p><p id="executionStep"><strong>—</strong></p><div class="actions"><button id="advanceBtn">Advance stage</button></div>'
+        : '';
+    });
+    if ($('advanceBtn')) {
+      $('advanceBtn').addEventListener('click', onAdvance);
+    }
   }
 
   function renderSnapshot() {
     if (!snapshot) return;
     const mission = snapshot.mission || {};
-    renderMissionPlan(mission, snapshot.executableDecision || null);
+    const pending = snapshot.executableDecision || null;
+    const pause = snapshot.progression && snapshot.progression.pause ? snapshot.progression.pause : null;
+    renderMissionPlan(mission, pending);
+    renderIntelligenceReport(snapshot.discoveryArtifact || null, pause);
+    renderOperatorDecision(pending, pause);
     const ws = snapshot.workspace || {};
     const health = snapshot.health || {};
     const blocker = snapshot.blocker;
@@ -221,7 +398,9 @@
       '<h2>Workspace</h2>' +
       '<p class="meta">Status</p><p><strong>' + (ws.status || '') + '</strong></p>' +
       '<div class="bar">' + (ws.bar || '') + ' ' + (ws.progressPercent || 0) + '%</div>' +
-      (ws.specialists || []).map((row) => pill((row.id + ': ' + row.label), specialistKind(row.state))).join(' ');
+      (ws.specialists || []).map(function (row) {
+        return pill((row.id + ': ' + row.label), specialistKind(row.state));
+      }).join(' ');
     const healthKind = health.label === 'healthy' ? 'ok' : health.label === 'paused' ? 'danger' : 'warn';
     $('healthPanel').innerHTML =
       '<h2>Mission Health</h2>' +
@@ -239,23 +418,34 @@
       ? '<p>' + pill(blocker.label, blocker.kind && blocker.kind.indexOf('paused') === 0 ? 'danger' : 'warn') + '</p><p>' + (blocker.reason || '') + '</p>'
       : '<p>No silent waits. This mission can proceed.</p>');
     $('timelinePanel').innerHTML = '<h2>Timeline</h2><div class="timeline">' +
-      (snapshot.timeline || []).map((row) => '<div>' + (row.clock || '') + ' &nbsp; ' + (row.label || '') + '</div>').join('') +
+      (snapshot.timeline || []).map(function (row) {
+        return '<div>' + (row.clock || '') + ' &nbsp; ' + (row.label || '') + '</div>';
+      }).join('') +
       '</div>';
     $('whyPanel').innerHTML = '<h2>Why is this mission here?</h2>' +
-      (why.reasons || []).map((row) => '<p>' + row + '</p>').join('') +
+      (why.reasons || []).map(function (row) { return '<p>' + row + '</p>'; }).join('') +
       '<p class="meta">Confidence ' + (why.confidence == null ? '—' : why.confidence) + ' · evidence, not opinion</p>';
     renderDiscoveryArtifact(snapshot.discoveryArtifact || null);
+    renderExecutionPanel();
+  }
+
+  function enterCreateMode() {
+    selected = null;
+    snapshot = null;
+    applyWorkspaceMode(WORKSPACE_MODES.CREATE);
+    clearMissionPanels();
+    renderList();
+    setMsg('');
   }
 
   async function loadList() {
     const body = await api('/api/v1/amo/missions');
     missions = body.missions || [];
-    renderList();
     const urlMission = new URLSearchParams(window.location.search).get('mission');
-    if (urlMission && missions.some((row) => row.id === urlMission)) {
+    if (urlMission && missions.some(function (row) { return row.id === urlMission; })) {
       await loadOne(urlMission);
-    } else if (!selected && missions[0]) {
-      await loadOne(missions[0].id);
+    } else {
+      enterCreateMode();
     }
   }
 
@@ -263,22 +453,20 @@
     selected = id;
     try {
       snapshot = await api('/api/v1/amo/missions/' + encodeURIComponent(id));
+      const ctx = snapshot.workspaceContext || {};
+      applyWorkspaceMode(ctx.workspaceMode || WORKSPACE_MODES.UNDERSTANDING);
+      renderList();
       renderSnapshot();
       setMsg('Inspecting ' + id, 'ok');
     } catch (err) {
       snapshot = null;
-      $('planPanel').innerHTML = '';
-      $('workspacePanel').innerHTML = '';
-      $('discoveryPanel').innerHTML = '';
-      $('healthPanel').innerHTML = '';
-      $('blockerPanel').innerHTML = '';
-      $('timelinePanel').innerHTML = '';
-      $('whyPanel').innerHTML = '';
+      applyWorkspaceMode(WORKSPACE_MODES.UNDERSTANDING);
+      clearMissionPanels();
       setMsg(err.message || 'MISSION_STATE_INCONSISTENT', 'err');
     }
   }
 
-  $('createBtn').addEventListener('click', async () => {
+  $('createBtn').addEventListener('click', async function () {
     try {
       setMsg('Creating…');
       const body = await api('/api/v1/amo/missions', {
@@ -291,6 +479,9 @@
         }),
       });
       await loadList();
+      const url = new URL(window.location.href);
+      url.searchParams.set('mission', body.mission.id);
+      window.history.replaceState({}, '', url.toString());
       await loadOne(body.mission.id);
       setMsg('Mission created', 'ok');
     } catch (err) {
@@ -298,7 +489,7 @@
     }
   });
 
-  $('advanceBtn').addEventListener('click', async () => {
+  async function onAdvance() {
     if (!selected) return setMsg('Select a mission first', 'err');
     try {
       await api('/api/v1/amo/missions/' + encodeURIComponent(selected) + '/progress', {
@@ -310,9 +501,11 @@
     } catch (err) {
       setMsg(err.message, 'err');
     }
-  });
+  }
 
-  loadList().catch((err) => setMsg(err.message, 'err'));
+  $('advanceBtn').addEventListener('click', onAdvance);
+  applyWorkspaceMode(WORKSPACE_MODES.CREATE);
+  loadList().catch(function (err) { setMsg(err.message, 'err'); });
 })();
 </script>
 </body>
