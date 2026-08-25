@@ -50,6 +50,8 @@ const outcomeLearning = require('./OutcomeLearning');
 const canonicalMissionProjection = require('./CanonicalMissionProjection');
 const missionRuntimeOwnership = require('./MissionRuntimeOwnership');
 const missionExecutionContext = require('./MissionExecutionContext');
+const executionRequest = require('./ExecutionRequest');
+const executionRouter = require('./ExecutionRouter');
 
 module.exports = {
   ...types,
@@ -102,4 +104,6 @@ module.exports = {
   ...canonicalMissionProjection,
   ...missionRuntimeOwnership,
   ...missionExecutionContext,
+  ...executionRequest,
+  ...executionRouter,
 };

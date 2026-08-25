@@ -53,7 +53,7 @@
 <body>
 <div class="wrap">
   <h1>Acquisition Missions</h1>
-  <p class="sub">SPEC-118 · Max manages missions · Capabilities contribute · Nothing is hidden</p>
+  <p class="sub">SPEC-118 · SPEC-171 · Surfaces produce execution requests · Router dispatches</p>
   <div class="mode-badge" id="modeBadge">Workspace Mode: Create</div>
   <p class="msg" id="msg"></p>
 
@@ -233,6 +233,21 @@
     $('planPanel').innerHTML = html;
   }
 
+  function intentFromPending(pending) {
+    const kind = pending && pending.kind ? String(pending.kind) : '';
+    if (kind === 'plan_approval') return 'APPROVE_PLAN';
+    if (kind === 'discovery_approval') return 'APPROVE_DISCOVERY';
+    if (kind === 'prioritization_approval') return 'APPROVE_PRIORITIZATION';
+    return null;
+  }
+
+  function approvalButtonLabel(intent, pending) {
+    if (intent === 'APPROVE_PLAN') return 'Approve plan';
+    if (intent === 'APPROVE_DISCOVERY') return 'Approve discovery';
+    if (intent === 'APPROVE_PRIORITIZATION') return 'Approve prioritization';
+    return (pending && pending.prompt) || 'Approve';
+  }
+
   function renderOperatorDecision(pending, pause) {
     if (!isComponentVisible('operatorDecision', workspaceMode)) {
       $('operatorPanel').innerHTML = '';
@@ -250,7 +265,18 @@
     if (decision.choices && decision.choices.length) {
       html += '<p class="meta">' + decision.choices.map(function (row) { return row.label; }).join(' · ') + '</p>';
     }
+    const intent = intentFromPending(pending);
+    if (intent) {
+      html += '<div class="actions"><button type="button" id="approveDecisionBtn" data-intent="' + intent + '">' +
+        approvalButtonLabel(intent, pending) + '</button></div>';
+    }
     $('operatorPanel').innerHTML = html;
+    const approveBtn = $('approveDecisionBtn');
+    if (approveBtn) {
+      approveBtn.addEventListener('click', function () {
+        submitExecution(approveBtn.getAttribute('data-intent'));
+      });
+    }
   }
 
   function renderIntelligenceReport(artifact, pause) {
@@ -512,6 +538,26 @@
       setMsg(err.message, 'err');
     }
   });
+
+  async function submitExecution(intent) {
+    if (!selected) return setMsg('Select a mission first', 'err');
+    if (!intent) return setMsg('No executable intent', 'err');
+    try {
+      setMsg('Submitting execution request…');
+      const body = await api('/api/v1/amo/missions/' + encodeURIComponent(selected) + '/execute', {
+        method: 'POST',
+        body: JSON.stringify({
+          intent: intent,
+          source: 'approval_button',
+          question: intent,
+        }),
+      });
+      await loadOne(selected);
+      setMsg('Executed ' + ((body.request && body.request.intent) || intent), 'ok');
+    } catch (err) {
+      setMsg(err.message, 'err');
+    }
+  }
 
   async function onAdvance() {
     if (!selected) return setMsg('Select a mission first', 'err');
