@@ -2085,7 +2085,10 @@
               <button type="button" class="cd-btn cd-btn-ghost" data-cd-action-type="${
                 ACTION_TYPES.OPEN_MISSION
               }" data-cd-action-payload="${escapeHtml(
-                JSON.stringify({ missionId: m.id, runtime: m.runtime || null })
+                JSON.stringify({
+                  missionId: m.id,
+                  runtime: m.runtime === 'AMO' ? 'AMO' : 'SPEC-022',
+                })
               )}">Expand</button>
             </div>
           </article>`;

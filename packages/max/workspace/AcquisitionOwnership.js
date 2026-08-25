@@ -8,6 +8,7 @@
  */
 
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const { buildOpenMissionAction, MISSION_RUNTIMES } = require('./MissionActions');
 const {
   buildAcquisitionMissionCommunication,
   buildMissionCommunication,
@@ -283,12 +284,11 @@ function buildOwnershipMissionResponse({
       confidence: mission.confidence != null ? mission.confidence : 0.84,
       nextInvestigations: [],
       recommendedActions: [
-        {
-          id: 'open_mission',
-          type: 'open_mission',
+        buildOpenMissionAction({
+          missionId: mission.id,
+          runtime: mission.runtime || MISSION_RUNTIMES.AMO,
           label: 'Open mission workspace',
-          payload: { missionId: mission.id },
-        },
+        }),
       ],
       confidenceContributors: ['spec_134', 'spec_124', 'acquisition_mission'],
       timelineReferences: [],

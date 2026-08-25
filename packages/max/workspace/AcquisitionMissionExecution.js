@@ -8,6 +8,7 @@
 const amo = require('../../acquisition-mission');
 const { isRolledBackExecution, formatRollbackProse } = amo;
 const { buildStructuredResponse } = require('./WorkspaceTypes');
+const { buildOpenMissionAction, MISSION_RUNTIMES } = require('./MissionActions');
 const {
   buildAcquisitionMissionCommunication,
   buildMissionCommunication,
@@ -255,12 +256,11 @@ function buildExecutionMissionResponse({
         confidence: mission.confidence != null ? mission.confidence : 0.84,
         nextInvestigations: [],
         recommendedActions: [
-          {
-            id: 'open_mission',
-            type: 'open_mission',
+          buildOpenMissionAction({
+            missionId: mission.id,
+            runtime: mission.runtime || MISSION_RUNTIMES.AMO,
             label: 'Open mission workspace',
-            payload: { missionId: mission.id },
-          },
+          }),
         ],
         confidenceContributors: ['spec_130', 'acquisition_mission'],
         timelineReferences: [],
@@ -335,12 +335,11 @@ function buildExecutionMissionResponse({
         confidence: mission.confidence != null ? mission.confidence : 0.84,
         nextInvestigations: [],
         recommendedActions: [
-          {
-            id: 'open_mission',
-            type: 'open_mission',
+          buildOpenMissionAction({
+            missionId: mission.id,
+            runtime: mission.runtime || MISSION_RUNTIMES.AMO,
             label: 'Open mission workspace',
-            payload: { missionId: mission.id },
-          },
+          }),
         ],
         confidenceContributors: ['spec_128', 'acquisition_mission'],
         timelineReferences: [],
@@ -391,12 +390,11 @@ function buildExecutionMissionResponse({
         confidence: mission.confidence != null ? mission.confidence : 0.84,
         nextInvestigations: [],
         recommendedActions: [
-          {
-            id: 'open_mission',
-            type: 'open_mission',
+          buildOpenMissionAction({
+            missionId: mission.id,
+            runtime: mission.runtime || MISSION_RUNTIMES.AMO,
             label: 'Open mission workspace',
-            payload: { missionId: mission.id },
-          },
+          }),
         ],
         confidenceContributors: ['spec_141', 'acquisition_mission'],
         timelineReferences: [],
@@ -463,12 +461,11 @@ function buildExecutionMissionResponse({
       confidence: mission.confidence != null ? mission.confidence : 0.84,
       nextInvestigations: [],
       recommendedActions: [
-        {
-          id: 'open_mission',
-          type: 'open_mission',
+        buildOpenMissionAction({
+          missionId: mission.id,
+          runtime: mission.runtime || MISSION_RUNTIMES.AMO,
           label: 'Open mission workspace',
-          payload: { missionId: mission.id },
-        },
+        }),
       ],
       confidenceContributors: ['spec_127', 'acquisition_mission'],
       timelineReferences: [],
