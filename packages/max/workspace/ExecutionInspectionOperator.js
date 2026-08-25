@@ -173,6 +173,33 @@ function formatPlanPosition(state) {
     .join(' ');
 }
 
+function formatObjectiveResolution(objectiveResolution) {
+  if (!objectiveResolution) return 'No objective resolution recorded for this session.';
+  const lines = [
+    'Objective Resolution',
+    '',
+    `Primary Objective: ${objectiveResolution.primaryObjective}`,
+  ];
+  if (objectiveResolution.supportingObjectives && objectiveResolution.supportingObjectives.length) {
+    lines.push(`Supporting Objectives: ${objectiveResolution.supportingObjectives.join(', ')}`);
+  }
+  if (objectiveResolution.executionModifiers && objectiveResolution.executionModifiers.length) {
+    lines.push(`Execution Modifiers: ${objectiveResolution.executionModifiers.join(', ')}`);
+  }
+  if (objectiveResolution.conversationModifiers && objectiveResolution.conversationModifiers.length) {
+    lines.push(`Conversation Modifiers: ${objectiveResolution.conversationModifiers.join(', ')}`);
+  }
+  if (objectiveResolution.requiredCapabilities && objectiveResolution.requiredCapabilities.length) {
+    lines.push(`Required Capabilities: ${objectiveResolution.requiredCapabilities.join(', ')}`);
+  }
+  if (objectiveResolution.routingDecision) {
+    lines.push(
+      `Routing Decision: ${objectiveResolution.routingDecision.owner} → ${objectiveResolution.routingDecision.pipeline} (${objectiveResolution.routingDecision.reason})`
+    );
+  }
+  return lines.join('\n');
+}
+
 /**
  * Read-only inspection of stored Execution State.
  * @param {object} input
@@ -180,6 +207,48 @@ function formatPlanPosition(state) {
  */
 function inspectExecutionState(input = {}) {
   const state = input.executionState || getExecutionState(input.session);
+  const session = input.session || null;
+  const objectiveResolution =
+    input.objectiveResolution ||
+    (session && session.context && session.context.lastObjectiveResolution) ||
+    (session && session.context && session.context.objectiveResolution) ||
+    null;
+
+  const routingInspectionRes = [
+    /\bwhy did you (?:route|execute|choose)\b/i,
+    /\bwhy did you execute this\b/i,
+    /\bwhy (?:was|were) (?:this|that) routed\b/i,
+    /\bshow (?:me )?(?:the )?routing decision\b/i,
+    /\bwhat was (?:the )?routing decision\b/i,
+    /\bexplain (?:the )?routing\b/i,
+  ];
+
+  const question = String(input.question || '');
+  const wantsRoutingInspection = routingInspectionRes.some((re) => re.test(question));
+
+  if (wantsRoutingInspection) {
+    const prose = formatObjectiveResolution(objectiveResolution);
+    return {
+      handled: true,
+      prose,
+      structured: buildStructuredResponse({
+        answer: prose,
+        reasoning: [
+          'SPEC-167 — Routing inspection reads stored objective resolution; no inference from the current prompt.',
+        ],
+        confidence: 1,
+        recommendedActions: [{ id: 'acknowledge', type: 'review', label: 'Continue' }],
+        confidenceContributors: ['spec_167', 'objective_resolution'],
+        metadata: {
+          executionInspection: true,
+          objectiveResolutionRead: Boolean(objectiveResolution),
+          objectiveResolution: objectiveResolution || null,
+        },
+      }),
+      reason: 'routing_decision_inspected',
+      executionState: state,
+    };
+  }
 
   if (!state) {
     const prose =
@@ -252,6 +321,7 @@ function inspectExecutionState(input = {}) {
       executionStateRead: true,
       executionState: serializeExecutionState(state),
       inspectionMode: mode,
+      objectiveResolution: objectiveResolution || null,
     },
   });
 
@@ -277,4 +347,5 @@ module.exports = {
   formatPauseExplanation,
   formatNextStep,
   formatFullExecutionState,
+  formatObjectiveResolution,
 };

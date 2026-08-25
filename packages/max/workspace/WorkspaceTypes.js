@@ -341,6 +341,9 @@ function buildResponseMetadata(partial = {}) {
   if (partial.executionInspection === true) meta.executionInspection = true;
   if (partial.executionStateRead === true) meta.executionStateRead = true;
   if (partial.executionState != null) meta.executionState = partial.executionState;
+  // SPEC-167: objective resolution inspection
+  if (partial.objectiveResolutionRead === true) meta.objectiveResolutionRead = true;
+  if (partial.objectiveResolution != null) meta.objectiveResolution = partial.objectiveResolution;
   if (partial.inspectionMode != null) meta.inspectionMode = String(partial.inspectionMode);
   return meta;
 }

@@ -50,6 +50,10 @@ const { contractBlocksExecution, contractLocksConversation } = require('./Conver
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { MESSAGE_TYPES } = require('./MessageType');
 const { messageTypeBypassesOwnership } = require('./MessageTypeClassifier');
+const {
+  primaryObjectiveBypassesOwnership,
+} = require('./OperatorObjectiveResolutionEngine');
+const { PRIMARY_OBJECTIVES } = require('./PrimaryObjective');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const WORKSPACE_OWNERS = Object.freeze({
@@ -370,7 +374,33 @@ async function resolveWorkspaceOwner(input = {}) {
     (operatorIntent && operatorIntent.conversationContract) ||
     null;
 
-  // SPEC-149 / SPEC-150 — session configuration and inspection bypass ownership.
+  // SPEC-167 — objective resolution governs ownership bypass before business pipelines.
+  const objectiveResolution =
+    input.objectiveResolution ||
+    (input.executionContract && input.executionContract.objectiveResolution) ||
+    null;
+  if (
+    objectiveResolution &&
+    primaryObjectiveBypassesOwnership(objectiveResolution.primaryObjective)
+  ) {
+    const bypassReason =
+      objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.SESSION_INSPECTION
+        ? 'session_inspection_bypass'
+        : objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.EXECUTION_INSPECTION
+          ? 'execution_inspection_bypass'
+          : 'workspace_operation_bypass';
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', bypassReason);
+    return {
+      owner: objectiveResolution.routingDecision.owner,
+      reason: bypassReason,
+      confidence: objectiveResolution.confidence || 1,
+      specialist: null,
+      fallback: false,
+      objectiveResolution,
+    };
+  }
+
+  // SPEC-149 — legacy message classification bypass (fallback).
   const messageClassification =
     input.messageClassification ||
     (operatorIntent && operatorIntent.messageClassification) ||
@@ -391,6 +421,51 @@ async function resolveWorkspaceOwner(input = {}) {
       specialist: null,
       fallback: false,
     };
+  }
+
+  // SPEC-167 — primary objective drives routing when present.
+  if (objectiveResolution) {
+    const routing = objectiveResolution.routingDecision;
+    if (objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_CREATION) {
+      askPathTrace.traceOwner(WORKSPACE_OWNERS.MISSION_CREATION, routing.reason);
+      askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', routing.reason);
+      return {
+        owner: WORKSPACE_OWNERS.MISSION_CREATION,
+        reason: routing.reason,
+        confidence: objectiveResolution.confidence || 0.96,
+        specialist: null,
+        fallback: false,
+        objectiveResolution,
+      };
+    }
+    if (objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_EXECUTION) {
+      if (hasAcquisitionMissionContext(input)) {
+        askPathTrace.traceOwner(WORKSPACE_OWNERS.ACTIVE_MISSION, routing.reason);
+        askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', routing.reason);
+        return {
+          owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+          reason: routing.reason,
+          confidence: objectiveResolution.confidence || 0.94,
+          specialist: null,
+          fallback: false,
+          objectiveResolution,
+        };
+      }
+    }
+    if (objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_INSPECTION) {
+      if (hasAcquisitionMissionContext(input)) {
+        askPathTrace.traceOwner(WORKSPACE_OWNERS.MISSION_INSPECTION, routing.reason);
+        askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', routing.reason);
+        return {
+          owner: WORKSPACE_OWNERS.MISSION_INSPECTION,
+          reason: routing.reason,
+          confidence: objectiveResolution.confidence || 0.9,
+          specialist: null,
+          fallback: false,
+          objectiveResolution,
+        };
+      }
+    }
   }
 
   // SPEC-155 — conversation contract precedes ownership (ADR-062).

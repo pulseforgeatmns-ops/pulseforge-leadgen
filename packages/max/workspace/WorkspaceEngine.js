@@ -61,6 +61,13 @@ const {
   resolveMessageType,
   messageTypeBypassesReasoning,
 } = require('./MessageTypeClassifier');
+const {
+  resolveExecutionContract,
+  primaryObjectiveBypassesReasoning,
+  mapPrimaryObjectiveToMessageType,
+} = require('./OperatorObjectiveResolutionEngine');
+const { PRIMARY_OBJECTIVES } = require('./PrimaryObjective');
+const { buildMessageClassification } = require('./MessageType');
 const { extractIntents, isCompoundMessage } = require('./IntentExtractor');
 const { buildExecutionPlan } = require('./ExecutionPlanner');
 const { executeMultiIntentPlan } = require('./MultiIntentExecutor');
@@ -425,6 +432,8 @@ class WorkspaceEngine {
     let conversationContract = null;
     let sessionState = null;
     let messageClassification = null;
+    let objectiveResolution = null;
+    let executionContract = null;
     let traceAskReturn = (label, value, meta = {}) => value;
 
     try {
@@ -461,9 +470,43 @@ class WorkspaceEngine {
       });
     }
 
-    // SPEC-149 — Message Type Classifier precedes cognition (ADR-069).
+    // SPEC-167 — Operator Objective Resolution precedes routing (ADR-087).
+    const objectiveContractResolution = resolveExecutionContract({ question, session });
+    objectiveResolution = objectiveContractResolution.objectiveResolution;
+    executionContract = objectiveContractResolution.executionContract;
+    if (session.context && typeof session.context === 'object') {
+      session.context.objectiveResolution = objectiveResolution;
+      session.context.executionContract = executionContract;
+      session.context.lastObjectiveResolution = objectiveResolution;
+    }
+    askPathTrace.traceBranch('objective_resolution', {
+      primaryObjective: objectiveResolution.primaryObjective,
+      supportingObjectives: objectiveResolution.supportingObjectives,
+      executionModifiers: objectiveResolution.executionModifiers,
+      conversationModifiers: objectiveResolution.conversationModifiers,
+      routingOwner: objectiveResolution.routingDecision.owner,
+      confidence: objectiveResolution.confidence,
+    });
+
+    // SPEC-149 — Message Type Classifier (legacy trace; routing uses primaryObjective).
     const messageTypeResolution = resolveMessageType({ question, session });
     messageClassification = messageTypeResolution.classification;
+    const mappedType = mapPrimaryObjectiveToMessageType(objectiveResolution.primaryObjective);
+    if (mappedType) {
+      messageClassification = buildMessageClassification(
+        mappedType,
+        objectiveResolution.confidence,
+        objectiveResolution.evidence,
+        {
+          mutatesSession: objectiveResolution.executionModifiers.length > 0 ||
+            objectiveResolution.supportingObjectives.includes('session_configuration'),
+          mutatesMission:
+            objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_CREATION ||
+            objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.MISSION_EXECUTION,
+          via: 'objective_resolution',
+        }
+      );
+    }
     if (session.context && typeof session.context === 'object') {
       session.context.messageClassification = messageClassification;
     }
@@ -527,11 +570,11 @@ class WorkspaceEngine {
       stepCount: executionPlan.steps.length,
     });
 
-    // SPEC-149 — SESSION_CONFIGURATION bypasses reasoning, ownership, and mission runtime.
+    // SPEC-167 — WORKSPACE_OPERATION bypasses reasoning, ownership, and mission runtime.
     if (
       !isCompoundTurn &&
-      messageClassification.type === MESSAGE_TYPES.SESSION_CONFIGURATION &&
-      messageTypeBypassesReasoning(messageClassification.type)
+      objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.WORKSPACE_OPERATION &&
+      primaryObjectiveBypassesReasoning(objectiveResolution.primaryObjective)
     ) {
       askPathTrace.traceBranch('owner_pipeline:session_configuration');
       const sessionConfigTurn = buildSessionConfigurationResponse({
@@ -616,11 +659,11 @@ class WorkspaceEngine {
       );
     }
 
-    // SPEC-150 — SESSION_INSPECTION reads stored Session State (ADR-070).
+    // SPEC-167 — SESSION_INSPECTION bypasses reasoning and ownership.
     if (
       !isCompoundTurn &&
-      messageClassification.type === MESSAGE_TYPES.SESSION_INSPECTION &&
-      messageTypeBypassesReasoning(messageClassification.type)
+      objectiveResolution.primaryObjective === PRIMARY_OBJECTIVES.SESSION_INSPECTION &&
+      primaryObjectiveBypassesReasoning(objectiveResolution.primaryObjective)
     ) {
       askPathTrace.traceBranch('owner_pipeline:session_inspection');
       const inspectionCognition = classifyOperatorCognition(question);
@@ -951,6 +994,8 @@ class WorkspaceEngine {
         activeReasoningContext,
         conversationContract,
         messageClassification,
+        objectiveResolution,
+        executionContract,
       });
       if (enriched && typeof enriched === 'object') {
         enriched.conversationalState = conversationalState;
@@ -959,6 +1004,8 @@ class WorkspaceEngine {
         enriched.conversationContract = conversationContract;
         enriched.sessionState = sessionState;
         enriched.messageClassification = messageClassification;
+        enriched.objectiveResolution = objectiveResolution;
+        enriched.executionContract = executionContract;
       }
       return enriched;
     };
@@ -1057,6 +1104,8 @@ class WorkspaceEngine {
       conversationSubject,
       operatorIntent,
       conversationContract,
+      executionContract,
+      objectiveResolution,
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
