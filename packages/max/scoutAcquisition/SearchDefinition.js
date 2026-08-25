@@ -137,6 +137,10 @@ function companyCriteriaFor(businessNeed, populationStatement) {
  * @returns {object} AcquisitionSearchDefinition
  */
 function buildAcquisitionSearchDefinition(input = {}) {
+  if (input.marketDefinition && input.projectFromMarketDefinition !== false) {
+    return buildSearchDefinitionFromMarketDefinition(input.marketDefinition, input);
+  }
+
   const delegation = isPlainObject(input.delegation) ? input.delegation : {};
   const target = isPlainObject(input.targetContext || delegation.targetContext)
     ? input.targetContext || delegation.targetContext
@@ -227,6 +231,104 @@ function buildAcquisitionSearchDefinition(input = {}) {
   };
 }
 
+/**
+ * SPEC-178 / ADR-093 — project adapter-facing SearchDefinition from canonical MarketDefinition.
+ * Segments are never inferred here; they mirror the market definition exactly.
+ *
+ * @param {object} marketDefinition
+ * @param {object} [opts]
+ * @returns {object}
+ */
+function buildSearchDefinitionFromMarketDefinition(marketDefinition = {}, opts = {}) {
+  const md = marketDefinition || {};
+  const delegation = isPlainObject(opts.delegation) ? opts.delegation : {};
+  const target = isPlainObject(opts.targetContext || delegation.targetContext)
+    ? opts.targetContext || delegation.targetContext
+    : {};
+  const business = isPlainObject(opts.businessContext || delegation.businessContext)
+    ? opts.businessContext || delegation.businessContext
+    : {};
+  const tenantId = asText(
+    opts.tenantId || md.tenantId || delegation.tenantId || opts.authorizedTenantId
+  );
+  const segmentKey = asText(md.segmentKey) || 'general';
+  const segments = Array.isArray(md.segments) && md.segments.length
+    ? md.segments.map(asText).filter(Boolean)
+    : [segmentKey];
+
+  const businessNeed = normalizeBusinessNeed(
+    opts.businessNeed ||
+      target.businessType ||
+      business.commercialCapability ||
+      (business.approvedUnderstanding && business.approvedUnderstanding.commercialCapability)
+  );
+  const operatorDirection =
+    asText(opts.operatorDirection) ||
+    asText(business.operatorDirection && business.operatorDirection.focus) ||
+    asText(business.operatorDirection && business.operatorDirection.text) ||
+    asText(business.acquisitionDirection) ||
+    asText(md.missionGoal) ||
+    null;
+  const missionBound =
+    Boolean(target.missionBound || business.missionObjectiveImmutable) &&
+    Boolean(operatorDirection || md.missionGoal);
+  const geoLabel =
+    asText(md.geography) ||
+    asText(target.geography) ||
+    asText(business.serviceGeography) ||
+    asText(business.approvedUnderstanding && business.approvedUnderstanding.serviceGeography) ||
+    null;
+  const profile = resolveProfile({ tenantId, businessNeed, segments });
+  const geography = geoLabel ? geographyFromLabel(geoLabel, profile) : null;
+  const exclusions = Array.isArray(business.exclusions)
+    ? business.exclusions.map(asText).filter(Boolean)
+    : Array.isArray(md.exclusions)
+      ? md.exclusions.map(asText).filter(Boolean)
+      : [];
+  const desiredSignals = Array.isArray(target.desiredSignals)
+    ? target.desiredSignals.map(asText).filter(Boolean)
+    : [];
+  const rawAim = opts.aim || business.aim || null;
+  const aim = isRuntimeAim(rawAim) ? rawAim : null;
+  const populationStatement = buildPopulationStatement({
+    businessNeed,
+    geography,
+    segments,
+    aim,
+  });
+  const invalidReason = aim
+    ? !(aim.mission && aim.mission.known && aim.painOntology)
+      ? 'AIM is incomplete — Scout will not search a market it does not understand.'
+      : null
+    : !geography || !geography.label
+      ? 'Geography could not be resolved.'
+      : !businessNeed && !segments.length
+        ? 'Acquisition target definition is incomplete.'
+        : null;
+
+  return {
+    tenantId,
+    businessNeed,
+    geography,
+    segments,
+    companyCriteria: companyCriteriaFor(businessNeed, populationStatement),
+    exclusions,
+    desiredSignals,
+    createdFromDelegationId: asText(delegation.id || opts.createdFromDelegationId),
+    populationStatement,
+    profileId: profile ? profile.id : null,
+    operatorDirection: operatorDirection || null,
+    missionBound,
+    expansionRequiresAuthority: true,
+    valid: !invalidReason,
+    invalidReason,
+    aim: aim || null,
+    aimClientKey: aim ? aim.clientKey : asText(business.aimClientKey || business.clientKey) || null,
+    projectedFromMarketDefinition: true,
+    marketDefinitionSegmentKey: segmentKey,
+  };
+}
+
 function searchDefinitionFingerprint(definition) {
   if (!definition) return '';
   const geo = String((definition.geography && definition.geography.label) || '')
@@ -258,6 +360,7 @@ function expansionSuggestion(definition, basicFitCount) {
 
 module.exports = {
   buildAcquisitionSearchDefinition,
+  buildSearchDefinitionFromMarketDefinition,
   buildPopulationStatement,
   searchDefinitionFingerprint,
   expansionSuggestion,

@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted |
 | **Priority** | Critical |
 | **Owner** | Scout |
 | **Created** | 2026-08-25 |
@@ -74,7 +74,7 @@ interface MarketDefinition {
 
 ## Acceptance Criteria
 
-- [ ] Single `MarketDefinition` builder used by DiscoveryPipeline and CandidateUniverse
-- [ ] No code path generates search segments without a MarketDefinition ancestor
-- [ ] `MarketUnderstanding` delegates to `MarketDefinition` with no parallel logic
-- [ ] Tests verify SearchDefinition is always a projection, never a source of hypotheses
+- [x] Single `MarketDefinition` builder used by DiscoveryPipeline and CandidateUniverse
+- [x] No code path generates search segments without a MarketDefinition ancestor
+- [x] `MarketUnderstanding` delegates to `MarketDefinition` with no parallel logic
+- [x] Tests verify SearchDefinition is always a projection, never a source of hypotheses
