@@ -7,7 +7,6 @@
  * before Acquisition Mission execution consumes them.
  */
 
-const { GRAPH_NODE_TYPES } = require('../investigation/types');
 const {
   collectExportableEvidenceEntries,
   isExportableGraphNode,
