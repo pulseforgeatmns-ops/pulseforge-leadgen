@@ -26,6 +26,7 @@ Opportunities are evaluated on independent dimensions (business value, timing, s
 - Every Max recommendation includes `opportunityReasoning`
 - Comparative operator questions ("Why ABC before XYZ?") have first-class explainability
 - Opportunity timeline tracks evolution: Monitor → Developing → Immediate → Active → Won/Lost
+- Strategic Decision ([ADR-085](ADR-085_Strategic_Resource_Allocation.md)) consumes these rankings to allocate finite hours
 
 ## Relationship to Prior ADRs
 
@@ -38,4 +39,4 @@ Opportunities are evaluated on independent dimensions (business value, timing, s
 
 Businesses do not grow by completing activities. They grow by allocating finite effort toward the highest-value opportunities.
 
-Scout's responsibility is to understand reality. Max's responsibility is to determine where the business should act next.
+Scout's responsibility is to understand reality. Opportunity Intelligence ranks what matters. Max's responsibility is to allocate finite effort — [ADR-085](ADR-085_Strategic_Resource_Allocation.md).

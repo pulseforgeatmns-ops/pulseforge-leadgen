@@ -20,8 +20,10 @@ Introduce an Opportunity Intelligence layer that continuously evaluates every bu
 ## Pipeline
 
 ```
-Scout → Business Judgment → Opportunity Intelligence → Business Decision → Operator
+Scout → Business Judgment → Opportunity Intelligence → Strategic Decision → Operator
 ```
+
+Strategic Decision is [SPEC-165](SPEC-165_Strategic_Decision_Engine.md).
 
 ## Core Module
 

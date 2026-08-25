@@ -471,6 +471,10 @@ async function runInvestigativeReasoningLoop(input = {}) {
     synthesisResult,
     judgmentResult,
     investigativeStrategy,
+    constraints: input.constraints,
+    competingWork: input.competingWork || mission.competingWork,
+    pendingProposals: input.pendingProposals,
+    scoutDiscoveries: input.scoutDiscoveries,
   });
 
   return {

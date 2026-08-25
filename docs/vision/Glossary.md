@@ -20,6 +20,8 @@
 | **ADR** | Architecture Decision Record |
 | **SPEC** | Implementation specification |
 | **Warmth / orchestration** | Max scoring + lifecycle recommendation layer (shadow-default) |
+| **Opportunity Intelligence** | Ranks which opportunities matter (SPEC-164) — not a lead score |
+| **Strategic Decision** | Allocates finite hours/AOs toward the mix that maximizes the mission (SPEC-165) |
 | **Approval** | Human gate before publish/send |
 | **Vertical** | Industry/segment tag on prospects (not `industry` column) |
 | **Anchor** | Client 10 — commercial cleaning buyer LLC, separate from Pulseforge lead-gen ICP |

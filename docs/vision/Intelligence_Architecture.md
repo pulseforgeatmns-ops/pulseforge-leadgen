@@ -35,6 +35,16 @@ Max consumes graph + evidence via `packages/max` to produce:
 - Explanation chains (ADR-002)
 - Optional draft actions routed to approval (ADR-003) — not wired in v0.8.0
 
+## Opportunity → Decision (SPEC-164 / SPEC-165)
+
+```text
+Scout: What is true?
+Opportunity Intelligence: What matters?
+Strategic Decision: What should the business actually do today?
+```
+
+Opportunity Intelligence ranks businesses on independent dimensions (ADR-084). Strategic Decision allocates finite hours and AOs with explicit tradeoffs, expected business outcome, and confidence (ADR-085). Activities are never recommended because they are inherently good.
+
 ## Memory (SPEC-003)
 
 Max remembers **transitions**, not facts:
