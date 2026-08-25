@@ -80,6 +80,8 @@ module.exports = {
   synthesis,
   heuristics,
   opportunity,
+  identity: require('./identity'),
+  hypothesis: require('./hypothesis'),
   universe: require('./universe'),
   adapters: {
     ...require('./adapters/ScoutDiscoveryArtifact'),

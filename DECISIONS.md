@@ -63,6 +63,7 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-088](docs/adr/ADR-088_Canonical_Mission_Projection_Is_The_Verification_Contract.md) | Canonical Mission Projection Is The Verification Contract | Accepted | Persist and verify the same canonical mission projection |
 | [ADR-089](docs/adr/ADR-089_Mission_Ownership_Shall_Not_Cross_Runtime_Boundaries.md) | Mission Ownership Shall Not Cross Runtime Boundaries | Accepted | Specialists execute only inside the runtime that owns the mission |
 | [ADR-090](docs/adr/ADR-090_Canonical_Execution_Routing.md) | Canonical Execution Routing | Accepted | Every executable intent is a Canonical Execution Request dispatched by one router |
+| [ADR-092](docs/adr/ADR-092_Identity_Before_Enrichment.md) | Identity Before Enrichment | Accepted | Business identity precedes enrichment; vertical keys are market hypotheses that expand into multi-source search strategies |
 
 ## How to add a decision
 
