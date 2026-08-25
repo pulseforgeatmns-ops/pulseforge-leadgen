@@ -41,6 +41,7 @@ const memory = require('./memory');
 const conflict = require('./conflict');
 const synthesis = require('./synthesis');
 const heuristics = require('./heuristics');
+const opportunity = require('./opportunity');
 
 /** SPEC-154 — single public Scout capability. */
 const Scout = Object.freeze({
@@ -78,5 +79,6 @@ module.exports = {
   conflict,
   synthesis,
   heuristics,
+  opportunity,
   universe: require('./universe'),
 };
