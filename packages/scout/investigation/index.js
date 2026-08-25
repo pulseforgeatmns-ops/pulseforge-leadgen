@@ -99,6 +99,8 @@ const {
   buildInvestigationState,
   createInvestigationState,
   serializeInvestigationState,
+  applyInvestigationPlan,
+  updateEvidenceTracking,
 } = require('./InvestigationState');
 
 const {
@@ -208,6 +210,8 @@ module.exports = {
   buildInvestigationState,
   createInvestigationState,
   serializeInvestigationState,
+  applyInvestigationPlan,
+  updateEvidenceTracking,
   HYPOTHESIS_LIFECYCLE,
   buildHypothesisLifecycleRecord,
   summarizeHypothesisHistory,

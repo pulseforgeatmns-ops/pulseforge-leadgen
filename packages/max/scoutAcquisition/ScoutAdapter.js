@@ -700,6 +700,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       freshnessMs: opts.freshnessMs,
       useCoverageEngine: opts.useCoverageEngine !== false,
       marketDefinition: opts.marketDefinition,
+      mission: opts.mission || delegation.mission,
+      useHypothesisDiscoveryEngine: opts.useHypothesisDiscoveryEngine,
       useHypothesisEngine: opts.useHypothesisEngine,
       hypothesisOpts: opts.hypothesisOpts,
       terminologyLearningStore: opts.terminologyLearningStore,
@@ -1125,6 +1127,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       discoveryReport,
       discoveryStatus,
       discoveryConfidence,
+      investigationState: universe.investigationState || null,
+      investigationPlan: universe.investigationPlan || null,
     },
   };
 }

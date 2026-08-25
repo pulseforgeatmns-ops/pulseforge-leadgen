@@ -24,6 +24,7 @@ const {
   buildCapabilityBlockedResult,
 } = require('../../scout/coverage/DiscoveryCapabilityGate');
 const { executeHypothesisDrivenCoverage } = require('../../scout/coverage/HypothesisDrivenDiscovery');
+const { runHypothesisDrivenDiscovery } = require('../../scout/coverage/HypothesisDrivenDiscoveryEngine');
 
 function createMemoryDiscoveryStore(snapshot = null) {
   /** @type {Map<string, object[]>} */
@@ -191,6 +192,8 @@ async function constructCandidateUniverse(input = {}) {
   });
   let discoveryReport = null;
   let investigationReport = null;
+  let investigationState = null;
+  let investigationPlan = null;
   let revisedMarketDefinition = input.marketDefinition || null;
 
   const useCoverageEngine = input.useCoverageEngine !== false;
@@ -268,7 +271,25 @@ async function constructCandidateUniverse(input = {}) {
     discoveryRan = true;
     let result;
     if (useCoverageEngine) {
-      if (input.marketDefinition && input.useHypothesisEngine !== false) {
+      if (input.marketDefinition && input.useHypothesisDiscoveryEngine !== false) {
+        const engineResult = await runHypothesisDrivenDiscovery({
+          mission: input.mission || {},
+          marketDefinition: input.marketDefinition,
+          searchDefinition,
+          adapters: marketAdapters,
+          opts: input.hypothesisOpts || {},
+        });
+        result = engineResult;
+        discoveryPlan = engineResult.discoveryPlan;
+        coverageMetrics = engineResult.coverage;
+        investigationReport = engineResult.investigationPlan;
+        investigationState = engineResult.investigationState;
+        investigationPlan = engineResult.investigationPlan;
+        revisedMarketDefinition = input.marketDefinition;
+        actionsTaken.push({
+          text: `Hypothesis-driven discovery engine (SPEC-177): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
+        });
+      } else if (input.marketDefinition && input.useHypothesisEngine !== false) {
         const hypothesisResult = await executeHypothesisDrivenCoverage({
           marketDefinition: input.marketDefinition,
           searchDefinition,
@@ -421,6 +442,8 @@ async function constructCandidateUniverse(input = {}) {
     capabilityEvaluation,
     blockReason: capabilityBlocked ? capabilityEvaluation && capabilityEvaluation.blockReason : null,
     investigationReport,
+    investigationState,
+    investigationPlan,
     revisedMarketDefinition,
   };
 }
