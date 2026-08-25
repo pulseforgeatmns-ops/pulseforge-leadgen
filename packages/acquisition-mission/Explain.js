@@ -16,8 +16,14 @@ function collectEvidence(mission, contributions = [], extras = {}) {
     (max && max.payload && (max.payload.objectiveReason || (max.payload.objectives && max.payload.objectives[0])))
     || extras.objectiveReason
     || null;
+  const canonicalObjective =
+    (mission.resolvedObjective && mission.resolvedObjective.objective) ||
+    extras.canonicalObjective ||
+    null;
   if (objectiveReason) {
     reasons.push(typeof objectiveReason === 'string' ? objectiveReason : objectiveReason.text || objectiveReason.reason);
+  } else if (canonicalObjective) {
+    reasons.push(canonicalObjective);
   } else if (mission.objective) {
     reasons.push(mission.objective);
   }
