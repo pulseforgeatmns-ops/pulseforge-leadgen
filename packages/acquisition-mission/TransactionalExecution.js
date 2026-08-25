@@ -31,6 +31,10 @@ const {
   classifyError,
   formatRollbackProse,
 } = require('./ExecutionErrors');
+const {
+  beginTmeTransaction,
+  endTmeTransaction,
+} = require('./TransactionalPersistence');
 
 const RUNTIME_STATES = Object.freeze({
   PLANNED: 'planned',
@@ -170,6 +174,8 @@ async function executeMissionStage(input = {}) {
   const transactionId = asText(input.transactionId) || newId('tme');
   const startedAt = Date.now();
   const store = engine.store;
+
+  beginTmeTransaction(missionId, transactionId);
 
   let snapshot;
   try {
@@ -380,6 +386,8 @@ async function executeMissionStage(input = {}) {
     wrapped.rollback = true;
     wrapped.audit = audit;
     throw wrapped;
+  } finally {
+    endTmeTransaction(missionId, transactionId);
   }
 }
 
