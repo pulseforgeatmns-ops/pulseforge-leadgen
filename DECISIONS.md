@@ -59,6 +59,10 @@ Canonical Architectural Decision Records live in [`docs/adr/`](docs/adr/). This 
 | [ADR-058](docs/adr/ADR-058_Pending_Operator_Decision_Matches_Execution.md) | Pending Operator Decision Must Match Execution | Accepted | Advertised operator decisions must be consumable; presentation derives from execution predicates |
 | [ADR-059](docs/adr/ADR-059_Max_as_the_Business_Operating_System.md) | Max as the Business Operating System | Accepted | Max is the business operating system — canonical identity, operator authority, specialist coordination |
 | [ADR-060](docs/adr/ADR-060_Knowledge_as_Relationships.md) | Knowledge as Relationships | Accepted | PulseForge stores relationships between concepts; answers are synthesized by graph traversal (SPEC-152) |
+| [ADR-087](docs/adr/ADR-087_Operator_Objective_Takes_Precedence.md) | Operator Objective Takes Precedence | Accepted | Routing is determined by the operator's primary business objective; modifiers never replace it |
+| [ADR-088](docs/adr/ADR-088_Canonical_Mission_Projection_Is_The_Verification_Contract.md) | Canonical Mission Projection Is The Verification Contract | Accepted | Persist and verify the same canonical mission projection |
+| [ADR-089](docs/adr/ADR-089_Mission_Ownership_Shall_Not_Cross_Runtime_Boundaries.md) | Mission Ownership Shall Not Cross Runtime Boundaries | Accepted | Specialists execute only inside the runtime that owns the mission |
+| [ADR-090](docs/adr/ADR-090_Canonical_Execution_Routing.md) | Canonical Execution Routing | Accepted | Every executable intent is a Canonical Execution Request dispatched by one router |
 
 ## How to add a decision
 

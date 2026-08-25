@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Canonical Execution Router ([SPEC-171](docs/specs/SPEC-171_Canonical_Execution_Router.md), [ADR-090](docs/adr/ADR-090_Canonical_Execution_Routing.md))
+  - Every execution-capable surface produces an immutable Canonical Execution Request (CER)
+  - Only `routeExecutionRequest()` may dispatch specialists or TME
+  - Chat, Mission Workspace approval buttons, and `POST /api/v1/amo/missions/:id/execute` submit the same intent catalog
+  - Voice `START_DISCOVERY` is an alias of `APPROVE_DISCOVERY`; future surfaces add a producer, not a new router
+  - SPEC-170 runtime ownership is validated before dispatch; every CER is uniquely identified, replayable, and audited once
+
 - Canonical Mission Verification ([SPEC-169](docs/specs/SPEC-169_Canonical_Mission_Verification.md), [ADR-088](docs/adr/ADR-088_Canonical_Mission_Projection_Is_The_Verification_Contract.md))
   - Transaction verification compares `CanonicalMissionProjection`, not a 10-field subset
   - `buildCanonicalMissionProjection()` is the single projection builder consumed by `assertPersistedMatchesEngine`

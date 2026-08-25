@@ -95,6 +95,77 @@ async function answerOperator(question, input = {}, opts = {}) {
   return runtime.answerOperator(question, input, opts);
 }
 
+async function executeCanonical(input = {}, opts = {}) {
+  const runtime = runtimeFromOpts(opts);
+  const tenantId = String(input.tenantId || opts.tenantId || '');
+  if (!tenantId) {
+    const err = new Error('No active client selected.');
+    err.code = 'no_tenant';
+    throw err;
+  }
+  await runtime.hydrate(tenantId, opts);
+  const engine = getEngine(opts);
+  const missionId = String(input.missionId || '').trim();
+  if (!missionId) {
+    throw amo.amoError('amo_mission_not_found', 'missionId is required.');
+  }
+  const mission = engine.get(missionId, tenantId);
+  if (!mission) {
+    throw amo.amoError('amo_mission_not_found', `Unknown mission: ${missionId}`);
+  }
+
+  const intent = input.intent
+    || amo.intentFromPendingDecision(mission.pendingOperatorDecision);
+  if (!intent) {
+    throw amo.amoError(
+      'cer_unknown_intent',
+      'No executable intent. Pass intent or wait for a pending operator decision.'
+    );
+  }
+  const source = input.source || amo.EXECUTION_SOURCES.API;
+  const factory = source === amo.EXECUTION_SOURCES.APPROVAL_BUTTON
+    ? amo.createExecutionRequestFromApprovalButton
+    : source === amo.EXECUTION_SOURCES.VOICE
+      ? amo.createExecutionRequestFromVoice
+      : source === amo.EXECUTION_SOURCES.COMMAND_DECK
+        ? amo.createExecutionRequestFromCommandDeck
+        : source === amo.EXECUTION_SOURCES.CHAT
+          ? amo.createExecutionRequestFromChat
+          : amo.createExecutionRequestFromApi;
+
+  const request = factory({
+    intent,
+    missionId: mission.id,
+    mission,
+    operatorId: input.operatorId || 'operator',
+    stage: mission.stage,
+    executionMode: input.executionMode || null,
+    objective: mission.objective,
+    runtimeOwner: amo.resolveMissionRuntimeOwner(mission),
+    permissions: input.permissions || { canExecute: true, role: input.role || null },
+    pendingOperatorDecision: mission.pendingOperatorDecision,
+    payload: {
+      question: input.question || input.intent || null,
+      ...(input.payload || {}),
+    },
+    metadata: input.metadata || {},
+    source,
+  });
+
+  return amo.routeExecutionRequest(request, {
+    engine,
+    tenantId,
+    question: input.question,
+    operatorId: request.operatorId,
+    runScout: input.runScout,
+    allowFixtureFallback: input.allowFixtureFallback,
+    persist: opts.persist,
+    pool: opts.pool,
+    persistStage: opts.persistStage,
+    missionEngine: opts.missionEngine,
+  });
+}
+
 function activeMissionFor(tenantId, opts = {}) {
   const runtime = runtimeFromOpts(opts);
   const missions = runtime.engine().list(tenantId);
@@ -223,6 +294,7 @@ module.exports = {
   progressMission,
   runAutonomousProgressionForMission,
   answerOperator,
+  executeCanonical,
   attachScoutDiscovery,
   attachPaigeVariants,
   attachEmmettCapacity,

@@ -212,6 +212,7 @@ describe('SPEC-118 routes and workspace wiring', () => {
     const routes = fs.readFileSync(path.join(__dirname, '../routes/acquisitionMissions.js'), 'utf8');
     assert.match(routes, /\/api\/v1\/amo\/missions/);
     assert.match(routes, /\/api\/v1\/amo\/ask/);
+    assert.match(routes, /\/api\/v1\/amo\/missions\/:id\/execute/);
     const ui = fs.readFileSync(path.join(__dirname, '../public/acquisition-missions.html'), 'utf8');
     assert.match(ui, /Mission Health/);
     assert.match(ui, /Why is this mission here/);

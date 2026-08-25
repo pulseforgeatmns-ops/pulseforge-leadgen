@@ -67,6 +67,8 @@ ADRs capture **why** we locked an architectural choice. They are permanent. Stat
 | [ADR-075](ADR-075_Transactional_Persistence_Exclusivity.md) | Transactional Persistence Exclusivity | Accepted |
 | [ADR-087](ADR-087_Operator_Objective_Takes_Precedence.md) | Operator Objective Takes Precedence | Accepted |
 | [ADR-088](ADR-088_Canonical_Mission_Projection_Is_The_Verification_Contract.md) | Canonical Mission Projection Is The Verification Contract | Accepted |
+| [ADR-089](ADR-089_Mission_Ownership_Shall_Not_Cross_Runtime_Boundaries.md) | Mission Ownership Shall Not Cross Runtime Boundaries | Accepted |
+| [ADR-090](ADR-090_Canonical_Execution_Routing.md) | Canonical Execution Routing | Accepted |
 
 Also listed in root [`DECISIONS.md`](../../DECISIONS.md).
 

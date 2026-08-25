@@ -510,6 +510,9 @@ async function runScoutForAmoMission(mission, opts = {}) {
     transactionId: opts.transactionId,
     pool: opts.pool,
   });
+  if (opts.executionRequest) {
+    executionContext.executionRequest = opts.executionRequest;
+  }
 
   try {
     const result = await Scout.discover({
@@ -827,6 +830,7 @@ async function advanceDiscoveryAfterApproval(input = {}) {
           scoutCompanies,
           scoutPeople,
           allowFixtureFallback,
+          executionRequest: input.executionRequest || null,
         });
         const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
         const executionResult = executionResultFromStageOutput(

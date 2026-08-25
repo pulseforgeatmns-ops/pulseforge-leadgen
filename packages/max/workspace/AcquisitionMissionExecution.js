@@ -6,7 +6,14 @@
  */
 
 const amo = require('../../acquisition-mission');
-const { isRolledBackExecution, formatRollbackProse } = amo;
+const { formatRollbackProse } = amo;
+const {
+  EXECUTION_INTENTS,
+  createExecutionRequestFromChat,
+  intentFromAction,
+  routeExecutionRequest,
+  resolveMissionRuntimeOwner,
+} = amo;
 const { buildStructuredResponse } = require('./WorkspaceTypes');
 const { buildOpenMissionAction, MISSION_RUNTIMES } = require('./MissionActions');
 const {
@@ -29,13 +36,6 @@ const {
   resolveAcquisitionActiveMission,
 } = require('./ActiveMissionGuard');
 const {
-  advanceDiscoveryAfterApproval,
-  advancePrioritizationAfterApproval,
-  advancePlanAfterApproval,
-  advancePlanClarification,
-  cancelMissionPlan,
-  beginPlanEdit,
-  applyPlanEdits,
   hasPendingDiscoveryApproval,
   hasPendingPrioritizationApproval,
   hasPendingPlanApproval,
@@ -52,7 +52,6 @@ const {
   MISSION_STATE_INCONSISTENT,
 } = require('../../acquisition-mission/PendingOperatorDecision');
 const {
-  runAutonomousProgression,
   isAutonomousProgressionCommand,
   formatMissionProgressPresentation,
   AUTONOMOUS_OPERATOR_ID,
@@ -94,41 +93,41 @@ async function maybeAutoAdvanceDiscoveryAfterPlan(input = {}, planResult = {}) {
     return { planResult, snapshot, discoveryResult: null, action: 'plan_approved' };
   }
 
-  try {
-    const discoveryResult = await advanceDiscoveryAfterApproval({
-      engine,
-      mission: (snapshot && snapshot.mission) || mission,
-      tenantId,
-      question: 'Autonomous execution policy. Discovery approval auto-consumed.',
+  const current = (snapshot && snapshot.mission) || mission;
+  const routed = await routeExecutionRequest(
+    createExecutionRequestFromChat({
+      intent: EXECUTION_INTENTS.APPROVE_DISCOVERY,
+      missionId: current.id,
+      mission: current,
       operatorId: input.operatorId || (input.session && input.session.operator) || AUTONOMOUS_OPERATOR_ID,
+      stage: current.stage,
+      executionMode: executionPolicy,
+      objective: current.objective,
+      runtimeOwner: resolveMissionRuntimeOwner(current),
+      question: 'Autonomous execution policy. Discovery approval auto-consumed.',
+      metadata: { autoConsumed: true },
+    }),
+    {
+      engine,
+      tenantId,
       runScout: input.runScout,
       scoutCompanies: input.scoutCompanies,
       scoutPeople: input.scoutPeople,
       allowFixtureFallback: input.allowFixtureFallback,
       audit: input.audit,
+      executionPolicy,
       ...resolveStagePersistOpts(input),
-    });
-    snapshot = discoveryResult.snapshot || engine.inspect(mission.id, { tenantId });
-    return {
-      planResult,
-      snapshot,
-      discoveryResult,
-      action: 'discovery_approved',
-      autoConsumedDiscoveryApproval: true,
-    };
-  } catch (err) {
-    if (!isRolledBackExecution(err)) throw err;
-    return {
-      planResult,
-      snapshot: engine.inspect(mission.id, { tenantId }),
-      discoveryResult: {
-        rolledBack: true,
-        error: err,
-        transactionId: err.transactionId,
-      },
-      action: 'plan_approved',
-    };
-  }
+    }
+  );
+  snapshot = routed.snapshot || engine.inspect(mission.id, { tenantId });
+  return {
+    planResult,
+    snapshot,
+    discoveryResult: routed.executionResult,
+    action: routed.action || 'discovery_approved',
+    autoConsumedDiscoveryApproval: true,
+    executionRequest: routed.request,
+  };
 }
 
 function resolveStagePersistOpts(input = {}) {
@@ -142,6 +141,50 @@ function resolveStagePersistOpts(input = {}) {
     return { persist: true, pool: input.pool };
   }
   return {};
+}
+
+function resolveChatOperatorId(input = {}) {
+  return input.operatorId
+    || (input.session && (input.session.operator || (input.session.user && input.session.user.id)))
+    || 'operator';
+}
+
+async function submitChatExecutionRequest(input, {
+  intent,
+  mission,
+  tenantId,
+  engine,
+  question,
+  audit,
+}) {
+  const executionPolicy = resolveExecutionPolicy(input);
+  const request = createExecutionRequestFromChat({
+    intent,
+    missionId: mission.id,
+    mission,
+    operatorId: resolveChatOperatorId(input),
+    stage: mission.stage,
+    executionMode: executionPolicy,
+    objective: mission.objective,
+    runtimeOwner: resolveMissionRuntimeOwner(mission),
+    question,
+    permissions: { canExecute: true },
+  });
+  return routeExecutionRequest(request, {
+    engine,
+    tenantId,
+    question,
+    operatorId: request.operatorId,
+    runScout: input.runScout,
+    scoutCompanies: input.scoutCompanies,
+    scoutPeople: input.scoutPeople,
+    allowFixtureFallback: input.allowFixtureFallback,
+    audit,
+    executionPolicy,
+    planningContext: input.planningContext || input.context,
+    context: input.planningContext || input.context,
+    ...resolveStagePersistOpts(input),
+  });
 }
 
 function stageLabel(stage) {
@@ -809,16 +852,17 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   const useGlobalAudit = !input.audit;
 
   if (isAutonomousProgressionCommand(question)) {
-    const progression = await runAutonomousProgression({
-      engine,
-      missionId: mission.id,
+    const routed = await submitChatExecutionRequest(input, {
+      intent: EXECUTION_INTENTS.AUTONOMOUS_PROGRESSION,
+      mission,
       tenantId,
-      operatorId: input.operatorId || (input.session && input.session.operator) || null,
-      allowFixtureFallback: input.allowFixtureFallback,
-      ...resolveStagePersistOpts(input),
+      engine,
+      question,
+      audit,
     });
-    snapshot = progression.snapshot || engine.inspect(mission.id, { tenantId });
-    const prose = progression.presentation || formatMissionProgressPresentation(snapshot, progression);
+    const progression = routed.executionResult;
+    snapshot = routed.snapshot || engine.inspect(mission.id, { tenantId });
+    const prose = (progression && progression.presentation) || formatMissionProgressPresentation(snapshot, progression);
     const structured = buildStructuredResponse({
       answer: prose,
       reasoning: [],
@@ -826,21 +870,22 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       contradictingEvidence: [],
       confidence: snapshot.mission.confidence != null ? snapshot.mission.confidence : 0.84,
       nextInvestigations: [],
-      recommendedActions: progression.pause && progression.pause.availableOptions
+      recommendedActions: progression && progression.pause && progression.pause.availableOptions
         ? progression.pause.availableOptions
         : [],
-      confidenceContributors: ['spec_147', 'autonomous_progression'],
+      confidenceContributors: ['spec_147', 'autonomous_progression', 'spec_171'],
       timelineReferences: [],
       relatedEntities: [
         { id: mission.id, type: 'acquisition_mission', name: snapshot.mission.title || mission.id },
       ],
       metadata: {
-        spec: 'SPEC-147',
-        outcome: progression.outcome,
-        progressionStage: progression.progressionStage,
-        pause: progression.pause,
-        block: progression.block,
-        transitions: progression.transitions,
+        spec: 'SPEC-171',
+        executionRequestId: routed.request && routed.request.id,
+        outcome: progression && progression.outcome,
+        progressionStage: progression && progression.progressionStage,
+        pause: progression && progression.pause,
+        block: progression && progression.block,
+        transitions: progression && progression.transitions,
       },
     });
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'autonomous_progression');
@@ -851,6 +896,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
       mission: snapshot.mission || mission,
       action: 'autonomous_progression',
       executionResult: progression,
+      executionRequest: routed.request,
       audit,
     };
   }
@@ -875,146 +921,22 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   }
 
   let executionResult = null;
-  const persistOpts = resolveStagePersistOpts(input);
+  let executionRequest = null;
+  const intent = intentFromAction(action);
 
-  if (shouldClarifyPlan(action, snapshot)) {
-    executionResult = advancePlanClarification({
-      engine,
+  if (intent) {
+    const routed = await submitChatExecutionRequest(input, {
+      intent,
       mission,
       tenantId,
+      engine,
       question,
-      context: input.planningContext || input.context,
+      audit,
     });
-    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
-  } else if (action === 'plan_cancelled') {
-    executionResult = cancelMissionPlan({ engine, mission, tenantId, question });
-    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
-  } else if (action === 'plan_edit') {
-    executionResult = beginPlanEdit({ engine, mission, tenantId, question });
-    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
-  } else if (action === 'plan_edited') {
-    executionResult = applyPlanEdits({ engine, mission, tenantId, question });
-    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
-  } else if (shouldExecutePlan(action, snapshot)) {
-    try {
-      executionResult = await advancePlanAfterApproval({
-        engine,
-        mission,
-        tenantId,
-        question,
-        operatorId: input.operatorId || (input.session && input.session.operator) || null,
-        ...persistOpts,
-      });
-    } catch (err) {
-      if (!isRolledBackExecution(err)) throw err;
-      executionResult = {
-        rolledBack: true,
-        error: err,
-        snapshot: engine.inspect(mission.id, { tenantId }),
-        transactionId: err.transactionId,
-      };
-    }
-    if (executionResult && !executionResult.rolledBack && !executionResult.alreadyExecuted) {
-      const chained = await maybeAutoAdvanceDiscoveryAfterPlan(
-        { ...input, engine, mission, tenantId },
-        executionResult
-      );
-      snapshot = chained.snapshot || engine.inspect(mission.id, { tenantId });
-      if (chained.discoveryResult) {
-        executionResult = chained.discoveryResult;
-        action = chained.action;
-      } else {
-        executionResult = chained.planResult;
-      }
-    } else {
-      snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
-    }
-  } else if (shouldExecuteDiscovery(action, snapshot)) {
-    try {
-      executionResult = await advanceDiscoveryAfterApproval({
-        engine,
-        mission,
-        tenantId,
-        question,
-        operatorId: input.operatorId || (input.session && input.session.operator) || null,
-        runScout: input.runScout,
-        scoutCompanies: input.scoutCompanies,
-        scoutPeople: input.scoutPeople,
-        allowFixtureFallback: input.allowFixtureFallback,
-        audit,
-        ...persistOpts,
-      });
-    } catch (err) {
-      if (!isRolledBackExecution(err)) throw err;
-      executionResult = {
-        rolledBack: true,
-        error: err,
-        snapshot: engine.inspect(mission.id, { tenantId }),
-        transactionId: err.transactionId,
-      };
-    }
-    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
-  } else if (shouldExecutePrioritization(action, snapshot)) {
-    try {
-      executionResult = await advancePrioritizationAfterApproval({
-        engine,
-        mission,
-        tenantId,
-        question,
-        operatorId: input.operatorId || (input.session && input.session.operator) || null,
-        ...persistOpts,
-      });
-    } catch (err) {
-      if (!isRolledBackExecution(err)) throw err;
-      executionResult = {
-        rolledBack: true,
-        error: err,
-        snapshot: engine.inspect(mission.id, { tenantId }),
-        transactionId: err.transactionId,
-      };
-    }
-    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
-  } else if (action === 'discovery_approved') {
-    const approval = findDiscoveryApproval(snapshot.contributions || []);
-    const discovery = findScoutDiscoveryAfterApproval(snapshot.contributions || [], approval);
-    if (approval && discovery) {
-      const blocked = discovery.payload.outcome === 'blocked';
-      executionResult = {
-        alreadyExecuted: true,
-        approval,
-        discovery,
-        snapshot,
-        executionOutcome: blocked ? 'blocked' : 'completed',
-        approvalPhase: blocked
-          ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
-          : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
-      };
-    }
-  } else if (action === 'prioritization_approved') {
-    const approval = findPrioritizationApproval(snapshot.contributions || []);
-    if (approval && snapshot.mission.stage === STAGES.UNDERSTAND) {
-      executionResult = {
-        alreadyExecuted: true,
-        approval,
-        snapshot,
-        approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
-      };
-    }
-  } else if (action === 'operator_approved' && !hasConsumablePendingDecision(snapshot)) {
-    try {
-      engine.contribute(
-        mission.id,
-        {
-          specialist: SPECIALISTS.OPERATOR,
-          kind: CONTRIBUTION_KINDS.APPROVAL,
-          payload: { approved: true, command: question, action },
-        },
-        { tenantId }
-      );
-    } catch (_) {
-      /* approval may already exist — mission still owns the turn */
-    }
-    snapshot = engine.inspect(mission.id, { tenantId });
+    executionRequest = routed.request;
+    executionResult = routed.executionResult;
+    action = routed.action || action;
+    snapshot = routed.snapshot || engine.inspect(mission.id, { tenantId });
   }
 
   const response = buildExecutionMissionResponse({
@@ -1034,6 +956,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', `acquisition_mission_${action}`, {
     action,
     missionId: mission.id,
+    executionRequestId: executionRequest && executionRequest.id,
   });
   return {
     reason: `acquisition_mission_${action}`,
@@ -1042,6 +965,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     mission: snapshot.mission || mission,
     action,
     executionResult,
+    executionRequest,
     audit,
   };
 }

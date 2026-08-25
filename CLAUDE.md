@@ -32,8 +32,8 @@ An AI-powered lead generation and outreach CRM for Pulseforge. It scrapes leads,
 | `utils/clientContext.js` | `getClientConfig(clientId)` loads full client config from `clients`; also owns idempotent client architecture migration/backfill helpers. Called by agents/routes to scope behavior and queries. |
 | `utils/closerSchema.js` | Idempotent closer-role migration helper: users role constraint, prospect closer fields, and `commissions` table. |
 | `utils/emailPerformance.js` | Email performance tracking. `ensureEmailPerformanceTable()` startup migration + `recordSend` / `recordEvent` upserts keyed on client_id/vertical/sequence/step/subject_line. Emmett calls `recordSend` after each send; `routes/webhooks.js` calls `recordEvent` on open/click/bounce. Powers Max's weekly EMAIL PERFORMANCE digest section. |
-| `packages/acquisition-mission` | SPEC-118 Acquisition Mission engine — durable mission object, contracts, workspace, timeline, health, learning. SPEC-131 Transactional Mission Execution — atomic stage commit/rollback. |
-| `routes/acquisitionMissions.js` | `/acquisition-missions` workspace and `/api/v1/amo/*` inspect/create/progress/ask APIs. |
+| `packages/acquisition-mission` | SPEC-118 Acquisition Mission engine — durable mission object, contracts, workspace, timeline, health, learning. SPEC-131 Transactional Mission Execution — atomic stage commit/rollback. SPEC-171 Canonical Execution Router — surfaces produce ExecutionRequest; only the router dispatches specialists. |
+| `routes/acquisitionMissions.js` | `/acquisition-missions` workspace and `/api/v1/amo/*` inspect/create/progress/execute/ask APIs. |
 
 ---
 
@@ -109,7 +109,7 @@ Routes are now split across `routes/api.js`, `routes/cron.js`, `routes/webhooks.
 - **Closer dashboard**: `GET /closer` → authenticated closer UI (pipeline, commission tracker, metrics strip). `requireRole('admin', 'manager', 'closer')` — in `routes/closer.js`
 - **Setter API (read-only)**: `GET /api/setter/metrics`, `GET /api/setter/feed` — consumed by Max for pipeline monitoring. No write access. `PATCH /api/setter/leads/:id/notes`, `PATCH /api/setter/leads/:id/callback`, `PATCH /api/setter/leads/:id/hot`, `POST /api/setter/leads/:id/quick-log-call`, `POST /api/setter/leads/:id/enrich-phone`, `GET /api/setter/stats/today` — in `routes/setter.js`
 - **Brevo warm signal**: Brevo POSTs email events here → Riley logs touchpoints and upgrades cold→warm automatically — in `routes/webhooks.js`
-- **Acquisition missions**: `GET /acquisition-missions`, `GET/POST /api/v1/amo/missions`, `POST /api/v1/amo/ask` — durable acquisition mission workspace (SPEC-118) — in `routes/acquisitionMissions.js`
+- **Acquisition missions**: `GET /acquisition-missions`, `GET/POST /api/v1/amo/missions`, `POST /api/v1/amo/missions/:id/execute`, `POST /api/v1/amo/ask` — durable acquisition mission workspace (SPEC-118) with Canonical Execution Router (SPEC-171) — in `routes/acquisitionMissions.js`
 
 ---
 
@@ -230,3 +230,4 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Acquisition missions (SPEC-118, added Aug 2026)** — Max manages missions, not agents. Every outbound campaign is a durable Acquisition Mission (`packages/acquisition-mission`). Scout/Max/Paige/Emmett attach contributions under contract when `missionId` is present. Do not merge with SPEC-022 generic missions; optional `orchestrationMissionId` may bind them. Human approval still gates Execute.
 - **Transactional mission execution (SPEC-131, added Aug 2026)** — A mission stage either commits completely or rolls back to the previous consistent state. Operator approval is consumed in the same commit as successful specialist execution. `executing` is never durable on failure. Presentation failures do not undo a committed stage.
 - **Pending operator decision consistency (SPEC-136, added Aug 2026)** — `pendingOperatorDecision` must match `hasPendingPlanApproval` / `hasPendingDiscoveryApproval` after every mutation. Plan approval atomically advances to discovery approval. Inconsistent missions fail with `MISSION_STATE_INCONSISTENT` and are not rendered. Presentation derives from executable state; generic `operator_approved` cannot run while a valid pending decision exists.
+- **Canonical execution routing (SPEC-171 / ADR-090, added Aug 2026)** — Chat, Mission Workspace approval buttons, REST, and future voice all produce an immutable Canonical Execution Request. Only `routeExecutionRequest()` may dispatch specialists or TME. Surfaces resolve intent, create the CER, submit, and render. Runtime ownership (SPEC-170) is validated before dispatch.
