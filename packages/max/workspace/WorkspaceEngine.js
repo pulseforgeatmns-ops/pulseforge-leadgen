@@ -474,10 +474,15 @@ class WorkspaceEngine {
     const objectiveContractResolution = resolveExecutionContract({ question, session });
     objectiveResolution = objectiveContractResolution.objectiveResolution;
     executionContract = objectiveContractResolution.executionContract;
+    const resolvedObjective = objectiveContractResolution.resolvedObjective || null;
     if (session.context && typeof session.context === 'object') {
       session.context.objectiveResolution = objectiveResolution;
       session.context.executionContract = executionContract;
       session.context.lastObjectiveResolution = objectiveResolution;
+      if (resolvedObjective) {
+        session.context.resolvedObjective = resolvedObjective;
+        session.context.canonicalObjective = resolvedObjective.objective || null;
+      }
     }
     askPathTrace.traceBranch('objective_resolution', {
       primaryObjective: objectiveResolution.primaryObjective,
@@ -1683,6 +1688,9 @@ class WorkspaceEngine {
         question,
         session,
         context: rawContext || session.context,
+        resolvedObjective: (session.context && session.context.resolvedObjective) || null,
+        executionContract,
+        objectiveResolution,
         ...this._amoRuntimeInput(),
         cieService: this._clientIntelligenceService || undefined,
         cieOpts: this._clientIntelligenceOpts || undefined,

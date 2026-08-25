@@ -372,6 +372,25 @@ function formatMissionUnderstandingProse(plan) {
 }
 
 /**
+ * SPEC-168 — Mission Understanding displays only the canonical business objective.
+ * Never the full operator prompt or execution instructions.
+ * @param {object} mission
+ * @returns {string}
+ */
+function formatCanonicalObjectiveDisplay(mission) {
+  const resolved = mission && mission.resolvedObjective;
+  const objective = resolved && resolved.objective
+    ? resolved.objective
+    : (mission && mission.objective) || '';
+  if (!objective) return '';
+  return [
+    'Mission Understanding',
+    '',
+    objective,
+  ].join('\n');
+}
+
+/**
  * Operator confirmation copy. Approve / Edit / Cancel — never silent execute.
  */
 function formatOperatorConfirmation(plan) {
@@ -404,6 +423,7 @@ module.exports = {
   isReadyForLock,
   formatMissionUnderstanding,
   formatMissionUnderstandingProse,
+  formatCanonicalObjectiveDisplay,
   formatOperatorConfirmation,
   formatAmbiguityPrompt,
   provenanceFor,

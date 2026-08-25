@@ -59,7 +59,7 @@ describe('SPEC-130 — Mission Planning Engine', () => {
     assert.equal(draft.evidence.thresholdLabel, 'medium');
     assert.equal(draft.execution.state, 'planned');
     assert.equal(executed, false);
-    assert.ok(pipeline.includes('intent_analysis'));
+    assert.ok(pipeline.includes('resolved_objective') || pipeline.includes('intent_analysis'));
     assert.equal(understanding.market, 'Short-term rental operators');
     assert.match(confirmation, /Proceed\?/);
     assert.match(confirmation, /Approve/);

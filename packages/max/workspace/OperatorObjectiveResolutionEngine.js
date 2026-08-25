@@ -25,6 +25,7 @@ const {
 } = require('./PrimaryObjective');
 const { resolveRoutingDecision } = require('./ObjectiveRoutingMap');
 const { buildExecutionContract } = require('./ExecutionContract');
+const { resolveCanonicalObjective } = require('./ResolvedObjective');
 const { isSessionInspectionQuestion } = require('./SessionStateManager');
 const { isExecutionInspectionQuestion } = require('./ExecutionInspectionRegistry');
 const { detectConversationSubject, CONVERSATION_SUBJECTS } = require('./ConversationSubject');
@@ -560,14 +561,22 @@ function resolveOperatorObjective(input = {}) {
 }
 
 /**
- * Full resolution pipeline — returns ExecutionContract.
+ * Full resolution pipeline — returns ExecutionContract and canonical ResolvedObjective (SPEC-168).
  * @param {object} input
- * @returns {{ objectiveResolution: ObjectiveResolution, executionContract: ExecutionContract }}
+ * @returns {{ objectiveResolution: ObjectiveResolution, executionContract: ExecutionContract, resolvedObjective: import('./ResolvedObjective').ResolvedObjective|null }}
  */
 function resolveExecutionContract(input = {}) {
   askPathTrace.traceEnter('resolveExecutionContract');
   const objectiveResolution = resolveOperatorObjective(input);
   const executionContract = buildExecutionContract(objectiveResolution);
+  const resolvedObjective = resolveCanonicalObjective({
+    question: input.question,
+    objectiveResolution,
+    executionContract,
+    context: input.context || (input.session && input.session.context) || null,
+    targetSegment: input.targetSegment,
+    resolutions: input.resolutions,
+  });
 
   askPathTrace.traceBranch('objective_resolution', {
     primaryObjective: objectiveResolution.primaryObjective,
@@ -576,6 +585,8 @@ function resolveExecutionContract(input = {}) {
     conversationModifiers: objectiveResolution.conversationModifiers,
     routingOwner: objectiveResolution.routingDecision.owner,
     confidence: objectiveResolution.confidence,
+    canonicalObjective: resolvedObjective.objective || null,
+    canonicalReady: resolvedObjective.ready,
   });
 
   askPathTrace.traceEarlyReturn(
@@ -583,7 +594,7 @@ function resolveExecutionContract(input = {}) {
     objectiveResolution.primaryObjective
   );
 
-  return { objectiveResolution, executionContract };
+  return { objectiveResolution, executionContract, resolvedObjective };
 }
 
 function primaryObjectiveBypassesReasoning(primaryObjective) {

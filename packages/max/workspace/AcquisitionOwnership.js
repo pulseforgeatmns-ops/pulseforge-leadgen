@@ -44,7 +44,8 @@ const {
   inferTargetSegmentFromObjective,
   deriveMissionTitle,
 } = require('../../acquisition-mission/MissionNaming');
-const { formatMissionUnderstandingProse } = require('../../acquisition-mission/StructuredMission');
+const { formatMissionUnderstandingProse, formatCanonicalObjectiveDisplay } = require('../../acquisition-mission/StructuredMission');
+const { resolveCanonicalObjective, canonicalObjectiveText } = require('./ResolvedObjective');
 const {
   presentationFromDiscoveryPayload,
   findLatestDiscoveryContribution,
@@ -264,6 +265,7 @@ function buildOwnershipMissionResponse({
   const prose = formatMissionProse(comm);
   const missionUnderstanding =
     (mission.pendingOperatorDecision && mission.pendingOperatorDecision.clarificationPrompt) ||
+    formatCanonicalObjectiveDisplay(mission) ||
     (mission.missionPlanDraft && formatMissionUnderstandingProse(mission.missionPlanDraft)) ||
     (mission.pendingOperatorDecision && mission.pendingOperatorDecision.missionUnderstanding) ||
     null;
@@ -375,12 +377,30 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
 
   if (!mission) {
     const targetSegment = inferTargetSegment(question);
+    const resolvedObjective =
+      input.resolvedObjective ||
+      (input.session && input.session.context && input.session.context.resolvedObjective) ||
+      resolveCanonicalObjective({
+        question,
+        executionContract: input.executionContract,
+        objectiveResolution: input.objectiveResolution,
+        context: {
+          blueprint: ciEvidence.strategicEvidence || null,
+        },
+        targetSegment,
+      });
+    const canonicalObjective = canonicalObjectiveText(resolvedObjective) || question;
+
     mission = await runtime.create(
       {
         tenantId,
         clientId: Number(tenantId) || tenantId,
-        objective: question,
-        title: deriveMissionTitle(question, targetSegment),
+        objective: canonicalObjective,
+        resolvedObjective,
+        executionPolicy: resolvedObjective.executionPolicy,
+        communicationPolicy: resolvedObjective.communicationPolicy,
+        evaluationPolicy: resolvedObjective.evaluationPolicy,
+        title: deriveMissionTitle(canonicalObjective, targetSegment),
         targetSegment,
         createdBy: 'max',
         owner: 'Operator',
@@ -388,6 +408,7 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
         planningContext: {
           blueprint: ciEvidence.strategicEvidence || null,
         },
+        executionContract: input.executionContract || null,
       },
       persistOpts
     );

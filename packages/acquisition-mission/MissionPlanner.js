@@ -389,77 +389,61 @@ function inferEvidence(text, opts = {}) {
 }
 
 /**
- * Plan a structured mission from operator natural language.
- * Does not execute specialists. Asks when operator language is ambiguous.
- * @param {string} sourceText
+ * Plan a structured mission from a canonical ResolvedObjective (SPEC-168).
+ * Consumes business objects only — no NLP.
+ * @param {object} resolvedObjective
  * @param {object} [opts]
  * @returns {object}
  */
-function planFromObjective(sourceText, opts = {}) {
-  const text = asText(sourceText);
-  if (!text) throw new Error('Objective text is required for mission planning.');
+function planMission(resolvedObjective, opts = {}) {
+  if (!resolvedObjective || typeof resolvedObjective !== 'object') {
+    throw new Error('ResolvedObjective is required for mission planning.');
+  }
+
+  const objective = asText(resolvedObjective.objective);
+  if (!objective) throw new Error('ResolvedObjective.objective is required for mission planning.');
 
   const provenance = [];
-  const intent = analyzeIntent(text, opts);
+  const intent = resolvedObjective.intent || {
+    type: resolvedObjective.missionType,
+    confidence: 1,
+    reason: 'Consumed from canonical ResolvedObjective.',
+    source: 'resolved_objective',
+  };
   addProvenance(provenance, 'missionType', intent.type, intent.confidence, intent.reason, intent.source);
 
-  const segmentLabel = asText(opts.targetSegment) || inferTargetSegmentFromObjective(text);
-  let segmentKey = inferSegmentKey(text, segmentLabel);
+  const segmentKey = resolvedObjective.segmentKey || resolvedObjective.market;
+  const segmentLabel = resolvedObjective.segmentLabel || null;
   if (segmentKey) {
-    const reason = /short[- ]term rental|\bstr\b|airbnb|vrbo/i.test(text)
-      ? 'Matched STR operator taxonomy.'
-      : `Matched ${segmentKey} taxonomy.`;
-    addProvenance(provenance, 'market.segment', segmentKey, segmentKey === 'short_term_rental' ? 0.96 : 0.9, reason, 'operator');
-  }
-
-  const geographyMention = extractGeography(text)
-    || asText(opts.geography)
-    || ((asText(text).match(/\b(?:around|near|in)\s+([A-Za-z][A-Za-z\s,]+?)(?:\.|$)/i) || [])[1] || '');
-  const extractedGeography = expandGeography(geographyMention, text);
-  let extracted = {
-    intent,
-    segmentKey,
-    segmentLabel,
-    geography: extractedGeography,
-    constraints: [
-      ...inferConstraints(text),
-      ...(Array.isArray(opts.constraints) ? opts.constraints.map(asText).filter(Boolean) : []),
-    ],
-  };
-
-  extracted = applyContextPrecedence(extracted, opts.context || {});
-  extracted = applyResolutions(extracted, opts.resolutions || {});
-
-  const bareManchester = isBareManchester(text, extracted.geography && extracted.geography.region);
-  if (bareManchester && !(opts.resolutions && opts.resolutions.geography)) {
-    extracted.geography = { region: null, cities: [], mention: 'Manchester' };
-  } else if (extracted.geography && extracted.geography.region) {
+    const isStr = segmentKey === 'short_term_rental';
     addProvenance(
       provenance,
-      'geography.region',
-      extracted.geography.region,
-      /greater manchester|manchester nh/i.test(extracted.geography.region) ? 0.95 : 0.88,
-      'Normalized region from operator geography.',
+      'market.segment',
+      segmentKey,
+      isStr ? 0.96 : 0.9,
+      isStr
+        ? 'Matched STR operator taxonomy.'
+        : `Matched ${segmentKey} taxonomy.`,
       'operator'
     );
-  } else if (extracted.contextGeography && extracted.contextGeography.region) {
-    extracted.geography = extracted.contextGeography;
+  }
+
+  const extractedGeography = resolvedObjective.geography || { region: null, cities: [] };
+  if (extractedGeography.region) {
+    const geoSource = resolvedObjective.geographySource || 'resolved_objective';
     addProvenance(
       provenance,
       'geography.region',
-      extracted.geography.region,
-      0.8,
-      'Filled missing geography from context precedence. Blueprint informs; operator can still edit.',
-      extracted.contextGeography.source
+      extractedGeography.region,
+      geoSource === 'blueprint' ? 0.8 : 1,
+      geoSource === 'blueprint'
+        ? 'Filled missing geography from context precedence. Blueprint informs; operator can still edit.'
+        : 'Consumed from canonical ResolvedObjective.',
+      geoSource
     );
   }
 
-  if (extracted.segmentKey && extracted.segmentKey !== segmentKey) {
-    segmentKey = extracted.segmentKey;
-    addProvenance(provenance, 'market.segment', segmentKey, 1, 'Operator resolved market ambiguity.', 'operator');
-  }
-
-  const market = segmentMeta(extracted.segmentKey, extracted.segmentLabel);
+  const market = resolvedObjective.marketMeta || segmentMeta(segmentKey, segmentLabel);
   if (market.industry) {
     addProvenance(provenance, 'market.industry', market.industry, 0.9, 'Derived from segment taxonomy.', 'general_knowledge');
   }
@@ -467,25 +451,31 @@ function planFromObjective(sourceText, opts = {}) {
     addProvenance(provenance, 'market.buyer', market.buyer, 0.9, 'Derived from segment taxonomy.', 'general_knowledge');
   }
 
-  const evidence = inferEvidence(text, opts);
+  const evidence = resolvedObjective.evidence || inferEvidence(objective, opts);
   addProvenance(provenance, 'evidence.minimum_confidence', evidence.minimumConfidence, 0.8, `Evidence threshold ${evidence.thresholdLabel}.`, 'general_knowledge');
 
-  const ambiguities = detectAmbiguities(extracted, text, opts);
+  const ambiguities = Array.isArray(resolvedObjective.ambiguities)
+    ? resolvedObjective.ambiguities
+    : [];
+  const success = resolvedObjective.successCriteria || {};
+  const successType = success.type || (/recurr/i.test(objective) ? 'recurring_clients' : 'customers');
+  const successTarget = success.target || success.customers || 1;
+
   const draft = createStructuredMission({
-    missionType: extracted.intent.type,
-    objective: cleanObjective(text),
+    missionType: resolvedObjective.missionType || intent.type,
+    objective,
     successMetric: {
-      type: /recurr/i.test(text) ? 'recurring_clients' : 'customers',
-      target: extractCountObjective(text),
+      type: successType,
+      target: successTarget,
     },
     market,
-    geography: extracted.geography,
-    constraints: [...new Set(extracted.constraints.map((row) => asText(row).toLowerCase()).filter(Boolean))],
+    geography: extractedGeography,
+    constraints: [...new Set((resolvedObjective.constraints || []).map((row) => asText(row).toLowerCase()).filter(Boolean))],
     priority: opts.priority != null ? opts.priority : 1,
     evidence,
     provenance,
     ambiguities,
-    sourceText: text,
+    sourceText: asText(resolvedObjective.provenanceSource) || objective,
     execution: { state: ambiguities.length ? EXECUTION_STATES.DRAFTING : EXECUTION_STATES.PLANNED },
   }, { allowIncomplete: true });
 
@@ -498,10 +488,10 @@ function planFromObjective(sourceText, opts = {}) {
     confirmation: readyForConfirmation ? formatOperatorConfirmation(draft) : null,
     clarification: ambiguities[0] || null,
     clarificationPrompt: ambiguities[0] ? formatAmbiguityPrompt(ambiguities[0]) : null,
-    intent: extracted.intent,
+    intent,
+    resolvedObjective,
     pipeline: [
-      'intent_analysis',
-      'entity_extraction',
+      'resolved_objective',
       'mission_structuring',
       'ambiguity_detection',
       readyForConfirmation ? 'operator_review' : 'operator_clarification',
@@ -509,6 +499,31 @@ function planFromObjective(sourceText, opts = {}) {
     resolutions: opts.resolutions || null,
     executed: false,
   };
+}
+
+/**
+ * Legacy entry — resolves canonical objective once, then plans from the object.
+ * @param {string} sourceText
+ * @param {object} [opts]
+ * @returns {object}
+ */
+function planFromObjective(sourceText, opts = {}) {
+  const text = asText(sourceText);
+  if (!text) throw new Error('Objective text is required for mission planning.');
+
+  const { resolveCanonicalObjective } = require('../max/workspace/ResolvedObjective');
+  const resolvedObjective = resolveCanonicalObjective({
+    question: text,
+    context: opts.context,
+    resolutions: opts.resolutions,
+    targetSegment: opts.targetSegment,
+    missionType: opts.missionType,
+    constraints: opts.constraints,
+    geography: opts.geography,
+    evidence: opts.evidence,
+    executionContract: opts.executionContract,
+  });
+  return planMission(resolvedObjective, opts);
 }
 
 function matchChoice(ambiguity, answer) {
@@ -551,6 +566,7 @@ function resolutionsFromChoice(ambiguity, choice, existing = {}) {
  * Apply an operator clarification and replan. Never guesses the unanswered remainder.
  */
 function applyClarification(sourceText, answer, opts = {}) {
+  const { resolveCanonicalObjective } = require('../max/workspace/ResolvedObjective');
   const prior = opts.prior || planFromObjective(sourceText, opts);
   const ambiguity = (prior.ambiguities || [])[0];
   if (!ambiguity) return prior;
@@ -563,7 +579,16 @@ function applyClarification(sourceText, answer, opts = {}) {
     };
   }
   const resolutions = resolutionsFromChoice(ambiguity, choice, opts.resolutions || prior.resolutions || {});
-  const next = planFromObjective(sourceText, { ...opts, resolutions });
+  const resolvedObjective = resolveCanonicalObjective({
+    question: sourceText,
+    context: opts.context,
+    resolutions,
+    targetSegment: opts.targetSegment,
+    missionType: opts.missionType,
+    constraints: opts.constraints,
+    executionContract: opts.executionContract,
+  });
+  const next = planMission(resolvedObjective, { ...opts, resolutions });
   next.resolutions = resolutions;
   return next;
 }
@@ -585,8 +610,10 @@ function applyEdits(sourceText, edits = {}, opts = {}) {
 
 module.exports = {
   planFromObjective,
+  planMission,
   applyClarification,
   applyEdits,
+  applyResolutions,
   matchChoice,
   inferSegmentKey,
   inferConstraints,
@@ -594,6 +621,8 @@ module.exports = {
   cleanObjective,
   analyzeIntent,
   detectAmbiguities,
+  extractCountObjective,
   GREATER_MANCHESTER_CITIES,
   SEGMENT_META,
+  segmentMeta,
 };

@@ -24,6 +24,10 @@ function buildSharedContext(mission, contributions = []) {
     ...((max.constraints || []).map((row) => (typeof row === 'string' ? row : row.label || row.text)).filter(Boolean)),
   ];
   const structuredMission = mission.structuredMission || mission.missionPlanDraft || null;
+  const resolvedObjective = mission.resolvedObjective || null;
+  const canonicalObjective = resolvedObjective && resolvedObjective.objective
+    ? resolvedObjective.objective
+    : mission.objective;
 
   return {
     spec: 'SPEC-118',
@@ -31,7 +35,7 @@ function buildSharedContext(mission, contributions = []) {
       id: mission.id,
       title: mission.title,
       targetSegment: mission.targetSegment,
-      objective: mission.objective,
+      objective: canonicalObjective,
       campaign: mission.campaign,
       priority: mission.priority,
       status: mission.status,
@@ -41,7 +45,27 @@ function buildSharedContext(mission, contributions = []) {
       missionUnderstanding: structuredMission
         ? formatMissionUnderstanding(structuredMission)
         : null,
+      resolvedObjective: resolvedObjective ? clone(resolvedObjective) : null,
+      executionPolicy: resolvedObjective
+        ? resolvedObjective.executionPolicy
+        : mission.executionPolicy || null,
+      communicationPolicy: resolvedObjective
+        ? resolvedObjective.communicationPolicy
+        : mission.communicationPolicy || null,
+      evaluationPolicy: resolvedObjective
+        ? resolvedObjective.evaluationPolicy
+        : mission.evaluationPolicy || null,
     },
+    objective: canonicalObjective,
+    executionPolicy: resolvedObjective
+      ? resolvedObjective.executionPolicy
+      : mission.executionPolicy || null,
+    communicationPolicy: resolvedObjective
+      ? resolvedObjective.communicationPolicy
+      : mission.communicationPolicy || null,
+    evaluationPolicy: resolvedObjective
+      ? resolvedObjective.evaluationPolicy
+      : mission.evaluationPolicy || null,
     buyingSignals: clone(buyingSignals),
     priorityReasoning: clone(max.recommendations || max.priorities || max.reasoning || []),
     evidence: clone(evidence),
