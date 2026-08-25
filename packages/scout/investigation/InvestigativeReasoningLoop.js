@@ -16,6 +16,7 @@ const {
   applyMarketDefinitionRevision,
   applyUniverseEstimateRevision,
   applyBusinessUnderstandingSynthesis,
+  applyBusinessJudgment,
   updateHypothesisBuckets,
   addEvidenceToGraph,
   setNextQuestions,
@@ -32,6 +33,7 @@ const {
 } = require('./HypothesisLifecycle');
 const { buildMissionIntelligenceReport } = require('./MissionIntelligenceReport');
 const { synthesizeFromCandidates } = require('../synthesis/EvidenceSynthesisEngine');
+const { activateHeuristics } = require('../heuristics/BusinessHeuristicsEngine');
 const { COMPLETION_REASONS } = require('./types');
 
 const DEFAULT_UNCERTAINTY_THRESHOLD = 0.15;
@@ -427,6 +429,14 @@ async function runInvestigativeReasoningLoop(input = {}) {
     state = applyBusinessUnderstandingSynthesis(state, synthesisResult);
   }
 
+  const judgmentResult = activateHeuristics({
+    businessUnderstandings: state.businessUnderstandings || [],
+    heuristicLibrary: opts.heuristicLibrary,
+  });
+  if (judgmentResult.activatedHeuristics.length) {
+    state = applyBusinessJudgment(state, judgmentResult);
+  }
+
   const stop = shouldStopInvestigation(state, { ...opts, forceComplete: true });
   state = { ...state, phase: stop.stop ? 'complete' : 'investigate' };
 
@@ -438,6 +448,7 @@ async function runInvestigativeReasoningLoop(input = {}) {
     candidates,
     coverageMetrics,
     synthesisResult,
+    judgmentResult,
   });
 
   return {

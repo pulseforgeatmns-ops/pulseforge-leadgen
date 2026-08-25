@@ -11,6 +11,11 @@
 
 const { extractExpectedValue } = require('../universe/CandidateUniverseEstimate');
 const { buildBusinessUnderstandingReport } = require('../synthesis/EvidenceSynthesisEngine');
+const {
+  activateHeuristics,
+  buildRecommendationFromHeuristics,
+  buildBusinessJudgmentReport,
+} = require('../heuristics/BusinessHeuristicsEngine');
 const { summarizeHypothesisHistory } = require('./HypothesisLifecycle');
 const { serializeInvestigationState } = require('./InvestigationState');
 
@@ -43,7 +48,11 @@ function summarizeEvidenceGraph(evidenceGraph = {}) {
   };
 }
 
-function buildRecommendationFromUnderstanding(state = {}, synthesisResult = null) {
+function buildRecommendationFromUnderstanding(state = {}, synthesisResult = null, judgmentResult = null) {
+  if (judgmentResult?.activatedHeuristics?.length) {
+    return buildRecommendationFromHeuristics(judgmentResult);
+  }
+
   const market = state.marketDefinition || {};
   const businessItems = state.businessUnderstandings || [];
   const topBusiness = businessItems[0];
@@ -115,7 +124,16 @@ function buildMissionIntelligenceReport(input = {}) {
     state.businessUnderstandings || [],
     synthesisResult || { summary: state.synthesisSummary }
   );
-  const recommendation = buildRecommendationFromUnderstanding(state, synthesisResult);
+  const judgmentResult =
+    input.judgmentResult ||
+    state.businessJudgment ||
+    activateHeuristics({
+      businessUnderstandings: state.businessUnderstandings || [],
+      extraEvidence: input.extraEvidence || [],
+      heuristicLibrary: input.heuristicLibrary,
+    });
+  const businessJudgmentSection = buildBusinessJudgmentReport(judgmentResult);
+  const recommendation = buildRecommendationFromUnderstanding(state, synthesisResult, judgmentResult);
   const suggestedNextInvestigation = buildSuggestedNextInvestigation(state);
 
   const remainingUnknowns = [
@@ -127,8 +145,10 @@ function buildMissionIntelligenceReport(input = {}) {
     kind: 'mission_intelligence_report',
     spec: 'SPEC-159',
     synthesisSpec: 'SPEC-160',
+    heuristicsSpec: 'SPEC-162',
     adr: 'ADR-079',
     synthesisAdr: 'ADR-080',
+    heuristicsAdr: 'ADR-082',
     finalMarketDefinition: {
       market: marketDefinition.market,
       geography: marketDefinition.geography,
@@ -152,6 +172,8 @@ function buildMissionIntelligenceReport(input = {}) {
     hypothesisHistory,
     evidenceGraphSummary,
     businessUnderstanding: businessUnderstandingSection,
+    businessJudgment: businessJudgmentSection,
+    judgmentResult,
     remainingUnknowns,
     confidenceEvolution: state.confidenceEvolution || [],
     currentConfidence: state.confidence,
@@ -164,26 +186,38 @@ function buildMissionIntelligenceReport(input = {}) {
     coverage: state.coverage || input.coverageMetrics || null,
     candidateCount: (input.candidates || []).length,
     understandingFirst: true,
+    judgmentFromHeuristics: judgmentResult.basedOnHeuristics === true,
     synthesizedNotRaw: businessUnderstandingSection.synthesizedNotRaw === true,
     summary: buildReportSummary({
       marketDefinition,
-      confidence: state.confidence,
+      confidence: judgmentResult.overallJudgment?.confidence ?? state.confidence,
       remainingUnknowns,
       recommendation,
+      businessJudgment: businessJudgmentSection.overallJudgment?.summary,
     }),
     investigationState: serialized,
   };
 }
 
-function buildReportSummary({ marketDefinition, confidence, remainingUnknowns, recommendation }) {
+function buildReportSummary({
+  marketDefinition,
+  confidence,
+  remainingUnknowns,
+  recommendation,
+  businessJudgment,
+}) {
   const market = marketDefinition.market || 'Target market';
   const unknownCount = remainingUnknowns.length;
-  return [
+  const parts = [
     `Market: ${market}.`,
     `Confidence ${confidence}.`,
     `${unknownCount} remaining unknown${unknownCount === 1 ? '' : 's'}.`,
-    recommendation.summary,
-  ].join(' ');
+  ];
+  if (businessJudgment) {
+    parts.push(`Business Judgment: ${businessJudgment}`);
+  }
+  parts.push(recommendation.summary);
+  return parts.join(' ');
 }
 
 function mergeIntoDiscoveryReport(discoveryReport = {}, missionReport = {}) {
@@ -194,10 +228,13 @@ function mergeIntoDiscoveryReport(discoveryReport = {}, missionReport = {}) {
     hypothesisHistory: missionReport.hypothesisHistory,
     evidenceGraphSummary: missionReport.evidenceGraphSummary,
     businessUnderstanding: missionReport.businessUnderstanding,
+    businessJudgment: missionReport.businessJudgment,
+    judgmentResult: missionReport.judgmentResult,
     remainingUnknowns: missionReport.remainingUnknowns,
     confidenceEvolution: missionReport.confidenceEvolution,
     suggestedNextInvestigation: missionReport.suggestedNextInvestigation,
     understandingFirst: true,
+    judgmentFromHeuristics: missionReport.judgmentFromHeuristics === true,
     synthesizedNotRaw: missionReport.synthesizedNotRaw === true,
     recommendation: missionReport.recommendation,
   };
