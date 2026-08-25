@@ -34,6 +34,8 @@ const {
 const {
   beginTmeTransaction,
   endTmeTransaction,
+  acquireMissionDurableLock,
+  releaseMissionDurableLock,
 } = require('./TransactionalPersistence');
 
 const RUNTIME_STATES = Object.freeze({
@@ -176,6 +178,21 @@ async function executeMissionStage(input = {}) {
   const store = engine.store;
 
   beginTmeTransaction(missionId, transactionId);
+
+  const lockPool = input.pool || input.lockPool || null;
+  let globalLockHeld = false;
+  if (lockPool) {
+    try {
+      const lockResult = await acquireMissionDurableLock(missionId, lockPool, {
+        tryOnly: true,
+        transactionId,
+      });
+      globalLockHeld = lockResult.acquired === true && lockResult.reentrant !== true;
+    } catch (err) {
+      endTmeTransaction(missionId, transactionId);
+      throw wrapAs(TME_CLASSES.PERSISTENCE, err, err.code || 'tme_transaction_overlap', err.message);
+    }
+  }
 
   let snapshot;
   try {
@@ -387,6 +404,9 @@ async function executeMissionStage(input = {}) {
     wrapped.audit = audit;
     throw wrapped;
   } finally {
+    if (globalLockHeld && lockPool) {
+      await releaseMissionDurableLock(missionId, lockPool);
+    }
     endTmeTransaction(missionId, transactionId);
   }
 }

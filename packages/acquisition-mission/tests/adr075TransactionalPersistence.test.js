@@ -22,7 +22,9 @@ const {
   beginTmeTransaction,
   endTmeTransaction,
   shouldSuppressLegacyDurableWrite,
+  resetMissionDurableLocksForTests,
 } = require('../TransactionalPersistence');
+const { persistMission } = require('../../../services/acquisitionMissionPersistence');
 
 const OBJECTIVE = 'Acquire commercial cleaning customers in Manchester NH for law firms.';
 
@@ -49,9 +51,31 @@ function createAmoMemoryPool() {
     }
   }
 
+  /** @type {Map<string, { key1: number, key2: number }>} */
+  const advisoryLocks = new Map();
+
   async function query(sql, params = []) {
     const trimmed = sql.trim();
     if (/^CREATE TABLE|^CREATE INDEX/i.test(trimmed)) return { rows: [] };
+    if (/pg_try_advisory_lock/i.test(trimmed)) {
+      const key = `${params[0]}:${params[1]}`;
+      if (advisoryLocks.has(key)) return { rows: [{ locked: false }] };
+      advisoryLocks.set(key, { key1: params[0], key2: params[1] });
+      return { rows: [{ locked: true }] };
+    }
+    if (/pg_advisory_lock/i.test(trimmed) && !/pg_try_advisory_lock/i.test(trimmed)) {
+      const key = `${params[0]}:${params[1]}`;
+      if (advisoryLocks.has(key)) {
+        throw new Error('pg_advisory_lock: already held');
+      }
+      advisoryLocks.set(key, { key1: params[0], key2: params[1] });
+      return { rows: [{ locked: true }] };
+    }
+    if (/pg_advisory_unlock/i.test(trimmed)) {
+      const key = `${params[0]}:${params[1]}`;
+      advisoryLocks.delete(key);
+      return { rows: [{ pg_advisory_unlock: true }] };
+    }
     if (trimmed === 'BEGIN') {
       txnBackup = cloneTables();
       return { rows: [] };
@@ -198,6 +222,7 @@ function createAmoMemoryPool() {
     query,
     connect: async () => ({ query, release() {} }),
     tables,
+    advisoryLocks,
   };
 }
 
@@ -205,6 +230,7 @@ describe('ADR-075 — Transactional Persistence Exclusivity', () => {
   beforeEach(() => {
     amo.clearExecutionAudit();
     resetAcquisitionMissionRuntime();
+    resetMissionDurableLocksForTests();
   });
 
   it('shouldSuppressLegacyDurableWrite is true while TME transaction is active', () => {
@@ -286,5 +312,81 @@ describe('ADR-075 — Transactional Persistence Exclusivity', () => {
 
     assert.deepEqual(result, { suppressed: true, reason: 'tme_transaction_active' });
     assert.equal(pool.tables.acquisition_missions.size, before);
+  });
+
+  it('rememberMission is in-memory only and does not write durable mission rows', async () => {
+    const pool = createAmoMemoryPool();
+    const runtime = createAcquisitionMissionRuntime({ pool, persist: true });
+    const mission = runtime.engine().create({
+      tenantId: '10',
+      objective: OBJECTIVE,
+    });
+
+    await runtime.rememberMission({ ...mission, title: 'Updated in memory' }, { pool, persist: true });
+
+    assert.equal(pool.tables.acquisition_missions.size, 0);
+    assert.equal(runtime.engine().get(mission.id, '10').title, 'Updated in memory');
+  });
+
+  it('legacy persistMission rejects direct durable writes outside persistStageCommit', async () => {
+    const pool = createAmoMemoryPool();
+    const mission = {
+      id: 'm_legacy',
+      tenantId: '10',
+      stage: 'discover',
+      status: 'active',
+      objective: OBJECTIVE,
+      priority: 'normal',
+    };
+
+    await assert.rejects(
+      () => persistMission(mission, pool),
+      (err) => err.code === 'tme_persistence_exclusivity'
+    );
+  });
+
+  it('concurrent TME attempts reject when global advisory lock is held', async () => {
+    const pool = createAmoMemoryPool();
+    const runtime = createAcquisitionMissionRuntime({ pool, persist: true });
+    const engine = runtime.engine();
+    const mission = engine.create({
+      tenantId: '10',
+      objective: OBJECTIVE,
+      targetSegment: 'Law Firms',
+    });
+
+    const { acquireMissionDurableLock, releaseMissionDurableLock } = require('../TransactionalPersistence');
+    await acquireMissionDurableLock(mission.id, pool, { tryOnly: true });
+
+    try {
+      await assert.rejects(
+        () => advancePlanAfterApproval({
+          engine,
+          mission,
+          tenantId: '10',
+          question: 'Approved.',
+          persist: true,
+          pool,
+        }),
+        (err) => err.code === 'tme_transaction_overlap' || err.cause?.code === 'tme_transaction_overlap'
+      );
+    } finally {
+      await releaseMissionDurableLock(mission.id, pool);
+    }
+  });
+
+  it('runtime.create persists exclusively through persistStageCommit bundle', async () => {
+    const pool = createAmoMemoryPool();
+    const runtime = createAcquisitionMissionRuntime({ pool, persist: true });
+    const mission = await runtime.create({
+      tenantId: '10',
+      objective: OBJECTIVE,
+      targetSegment: 'Law Firms',
+    }, { pool, persist: true });
+
+    assert.equal(pool.tables.acquisition_missions.size, 1);
+    const stored = [...pool.tables.acquisition_missions.values()][0];
+    assert.equal(stored.id, mission.id);
+    assert.equal(stored.payload.objective, OBJECTIVE);
   });
 });
