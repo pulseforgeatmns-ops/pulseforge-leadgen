@@ -2,10 +2,31 @@
 
 /**
  * SPEC-118 — persist acquisition missions, events, contributions, learning.
+ * ADR-075 — core mission tables are writable only inside persistStageCommit().
  */
+
+const {
+  acquireMissionDurableLock,
+  releaseMissionDurableLock,
+  isGlobalLockHeld,
+} = require('../packages/acquisition-mission/TransactionalPersistence');
 
 function defaultPool() {
   return require('../db');
+}
+
+/** Depth counter — only persistStageCommit may write core mission tables (ADR-075). */
+let stageCommitDepth = 0;
+
+function assertExclusiveMissionWriter(fnName) {
+  if (stageCommitDepth <= 0) {
+    const err = new Error(
+      `${fnName} is not allowed outside persistStageCommit (ADR-075).`
+    );
+    err.code = 'tme_persistence_exclusivity';
+    err.spec = 'ADR-075';
+    throw err;
+  }
 }
 
 async function ensureAcquisitionMissionSchema(pool = defaultPool()) {
@@ -160,6 +181,7 @@ function missionFromRow(row) {
 
 async function persistMission(mission, pool = defaultPool(), opts = {}) {
   if (!mission?.id) return null;
+  if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistMission');
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_missions (
@@ -203,6 +225,7 @@ async function persistMission(mission, pool = defaultPool(), opts = {}) {
 
 async function persistEvent(event, tenantId, pool = defaultPool(), opts = {}) {
   if (!event?.id) return null;
+  if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistEvent');
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_events (id, mission_id, tenant_id, kind, specialist, label, payload, at)
@@ -215,6 +238,7 @@ async function persistEvent(event, tenantId, pool = defaultPool(), opts = {}) {
 
 async function persistContribution(row, tenantId, pool = defaultPool(), opts = {}) {
   if (!row?.id) return null;
+  if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistContribution');
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_contributions (id, mission_id, tenant_id, specialist, kind, payload, at)
@@ -227,6 +251,7 @@ async function persistContribution(row, tenantId, pool = defaultPool(), opts = {
 
 async function persistObservation(row, tenantId, pool = defaultPool(), opts = {}) {
   if (!row?.id) return null;
+  if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistObservation');
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_observations (id, mission_id, tenant_id, specialist, observation, at)
@@ -239,6 +264,7 @@ async function persistObservation(row, tenantId, pool = defaultPool(), opts = {}
 
 async function persistOutcome(row, pool = defaultPool(), opts = {}) {
   if (!row?.id) return null;
+  if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistOutcome');
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_outcomes (id, mission_id, tenant_id, client_id, outcome_type, segment, prospect_id, payload, at)
@@ -404,10 +430,20 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     await ensureExecutionAuditSchema(pool);
   }
 
+  const lockPool = opts.lockPool || pool;
+  let lockHeldHere = false;
+  if (opts.skipGlobalLock !== true && !isGlobalLockHeld(mission.id)) {
+    const lockResult = await acquireMissionDurableLock(mission.id, lockPool, {
+      tryOnly: opts.tryLock !== false,
+    });
+    lockHeldHere = lockResult.acquired === true;
+  }
+
   const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
   const ownsClient = client !== pool && typeof client.release === 'function';
-  const writeOpts = { skipEnsure: true };
+  const writeOpts = { skipEnsure: true, internalStageCommit: true };
 
+  stageCommitDepth += 1;
   try {
     await client.query('BEGIN');
     await persistMission(mission, client, writeOpts);
@@ -434,11 +470,17 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
       /* rollback best-effort */
     }
     const wrapped = new Error(err.message || 'Persistence failure.');
-    wrapped.code = 'tme_persistence';
+    wrapped.code = err.code === 'tme_transaction_overlap'
+      ? 'tme_transaction_overlap'
+      : 'tme_persistence';
     wrapped.cause = err;
     throw wrapped;
   } finally {
+    stageCommitDepth -= 1;
     if (ownsClient) client.release();
+    if (lockHeldHere) {
+      await releaseMissionDurableLock(mission.id, lockPool);
+    }
   }
   return mission;
 }
@@ -527,7 +569,7 @@ function bindStagePersistDurable(input = {}, engine, tenantId) {
       observations: engine.store.listObservations(missionId),
       outcomes: engine.store.listOutcomes(missionId),
       audit: ctx.audit,
-    }, input.pool);
+    }, input.pool, { skipGlobalLock: true });
     await assertPersistedMatchesEngine(engine, missionId, tenantId, input.pool);
   };
 }

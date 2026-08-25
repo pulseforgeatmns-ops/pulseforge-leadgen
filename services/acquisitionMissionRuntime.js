@@ -10,7 +10,6 @@ const crypto = require('crypto');
 const amo = require('../packages/acquisition-mission');
 const { MISSION_STATE_INCONSISTENT } = amo;
 const {
-  persistMission,
   persistLearning,
   persistPrediction,
   persistOutcomeEvaluation,
@@ -20,7 +19,11 @@ const {
   deleteAllAmoData,
   clearAmoSessionBindings,
 } = require('./acquisitionMissionPersistence');
-const { shouldSuppressLegacyDurableWrite } = require('../packages/acquisition-mission/TransactionalPersistence');
+const {
+  shouldSuppressLegacyDurableWrite,
+  acquireMissionDurableLock,
+  releaseMissionDurableLock,
+} = require('../packages/acquisition-mission/TransactionalPersistence');
 
 const MULTIPLE_ACQUISITION_RUNTIMES = 'MULTIPLE_ACQUISITION_RUNTIMES';
 
@@ -194,19 +197,14 @@ function createAcquisitionMissionRuntime(opts = {}) {
       return state.engine;
     },
 
+    /**
+     * ADR-075 — in-memory only. Durable writes route through persistMissionState → persistStageCommit.
+     */
     async rememberMission(mission, rememberOpts = {}) {
       if (!mission) return mission;
       state.engine.store.putMission(mission);
       if (shouldSuppressLegacyDurableWrite(mission.id)) {
         return mission;
-      }
-      const { persist: effectivePersist, pool: effectivePool } = this.persistOpts(rememberOpts);
-      if (effectivePersist !== false && effectivePool) {
-        try {
-          await persistMission(mission, effectivePool);
-        } catch (err) {
-          console.error('[amo] persist mission:', err.message);
-        }
       }
       return mission;
     },
@@ -224,6 +222,7 @@ function createAcquisitionMissionRuntime(opts = {}) {
 
     /**
      * ADR-075 — single durable writer for non-TME mission state mutations.
+     * Routes exclusively through persistStageCommit().
      */
     async persistMissionState(missionId, sideOpts = {}) {
       if (shouldSuppressLegacyDurableWrite(missionId)) {
@@ -235,14 +234,17 @@ function createAcquisitionMissionRuntime(opts = {}) {
       const mission = state.engine.store.getMission(missionId);
       if (!mission) return;
 
+      let lockHeld = false;
       try {
+        const lockResult = await acquireMissionDurableLock(missionId, effectivePool, { tryOnly: true });
+        lockHeld = lockResult.acquired === true && lockResult.reentrant !== true;
         await persistStageCommit({
           mission,
           events: state.engine.store.listEvents(missionId),
           contributions: state.engine.store.listContributions(missionId),
           observations: state.engine.store.listObservations(missionId),
           outcomes: state.engine.store.listOutcomes(missionId),
-        }, effectivePool);
+        }, effectivePool, { skipGlobalLock: true });
         for (const row of state.engine.store.listLearning(mission.tenantId)) {
           await persistLearning(row, effectivePool);
         }
@@ -257,6 +259,11 @@ function createAcquisitionMissionRuntime(opts = {}) {
         }
       } catch (err) {
         console.error('[amo] persist mission state:', err.message);
+        throw err;
+      } finally {
+        if (lockHeld) {
+          await releaseMissionDurableLock(missionId, effectivePool);
+        }
       }
     },
 
@@ -264,9 +271,8 @@ function createAcquisitionMissionRuntime(opts = {}) {
       await this.hydrate(input.tenantId || input.clientId, createOpts);
       const mission = state.engine.create(input);
       const autonomous = input.autonomous === true || createOpts.autonomous === true;
-      // ADR-075 — defer durable writes until TME stages commit (autonomous) or explicit persist.
+      // ADR-075 — defer durable writes until persistStageCommit (autonomous TME or explicit persist).
       if (!autonomous) {
-        await this.rememberMission(mission, createOpts);
         await this.persistMissionState(mission.id, createOpts);
       }
       if (autonomous) {
