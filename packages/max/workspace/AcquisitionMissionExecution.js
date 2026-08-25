@@ -55,7 +55,10 @@ const {
   runAutonomousProgression,
   isAutonomousProgressionCommand,
   formatMissionProgressPresentation,
+  AUTONOMOUS_OPERATOR_ID,
 } = require('../../acquisition-mission/MissionProgression');
+const { shouldAutoConsumeDiscoveryApproval } = require('../../acquisition-mission/OperatorDecisionPolicy');
+const { getSessionState } = require('./SessionState');
 const { isStructuredMissionApproved } = require('../../acquisition-mission/StructuredMission');
 const {
   presentationFromDiscoveryPayload,
@@ -72,6 +75,62 @@ const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
 
 const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
+
+function resolveExecutionPolicy(input = {}) {
+  if (input.executionPolicy) return input.executionPolicy;
+  const sessionState = getSessionState(input.session);
+  return sessionState && sessionState.executionPolicy ? sessionState.executionPolicy : null;
+}
+
+async function maybeAutoAdvanceDiscoveryAfterPlan(input = {}, planResult = {}) {
+  const { engine, mission, tenantId } = input;
+  if (!engine || !mission || planResult.rolledBack) {
+    return { planResult, snapshot: planResult.snapshot, discoveryResult: null, action: 'plan_approved' };
+  }
+
+  let snapshot = planResult.snapshot || engine.inspect(mission.id, { tenantId });
+  const executionPolicy = resolveExecutionPolicy(input);
+  if (!shouldAutoConsumeDiscoveryApproval(snapshot, executionPolicy)) {
+    return { planResult, snapshot, discoveryResult: null, action: 'plan_approved' };
+  }
+
+  try {
+    const discoveryResult = await advanceDiscoveryAfterApproval({
+      engine,
+      mission: (snapshot && snapshot.mission) || mission,
+      tenantId,
+      question: 'Autonomous execution policy. Discovery approval auto-consumed.',
+      operatorId: input.operatorId || (input.session && input.session.operator) || AUTONOMOUS_OPERATOR_ID,
+      missionEngine: input.missionEngine,
+      runScout: input.runScout,
+      scoutCompanies: input.scoutCompanies,
+      scoutPeople: input.scoutPeople,
+      allowFixtureFallback: input.allowFixtureFallback,
+      audit: input.audit,
+      ...resolveStagePersistOpts(input),
+    });
+    snapshot = discoveryResult.snapshot || engine.inspect(mission.id, { tenantId });
+    return {
+      planResult,
+      snapshot,
+      discoveryResult,
+      action: 'discovery_approved',
+      autoConsumedDiscoveryApproval: true,
+    };
+  } catch (err) {
+    if (!isRolledBackExecution(err)) throw err;
+    return {
+      planResult,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+      discoveryResult: {
+        rolledBack: true,
+        error: err,
+        transactionId: err.transactionId,
+      },
+      action: 'plan_approved',
+    };
+  }
+}
 
 function resolveStagePersistOpts(input = {}) {
   if (input.persist === false) {
@@ -797,7 +856,7 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     };
   }
 
-  const action = detectExecutionAction(question, snapshot, operatorIntent);
+  let action = detectExecutionAction(question, snapshot, operatorIntent);
   const emitMatched = useGlobalAudit
     ? logMissionApprovalMatched
     : audit.logApprovalMatched.bind(audit);
@@ -856,7 +915,21 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
         transactionId: err.transactionId,
       };
     }
-    snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+    if (executionResult && !executionResult.rolledBack && !executionResult.alreadyExecuted) {
+      const chained = await maybeAutoAdvanceDiscoveryAfterPlan(
+        { ...input, engine, mission, tenantId },
+        executionResult
+      );
+      snapshot = chained.snapshot || engine.inspect(mission.id, { tenantId });
+      if (chained.discoveryResult) {
+        executionResult = chained.discoveryResult;
+        action = chained.action;
+      } else {
+        executionResult = chained.planResult;
+      }
+    } else {
+      snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+    }
   } else if (shouldExecuteDiscovery(action, snapshot)) {
     try {
       executionResult = await advanceDiscoveryAfterApproval({
@@ -979,8 +1052,10 @@ module.exports = {
   detectExecutionAction,
   buildExecutionMissionResponse,
   maybeHandleAcquisitionMissionExecution,
+  maybeAutoAdvanceDiscoveryAfterPlan,
   shouldExecuteDiscovery,
   shouldExecutePrioritization,
   shouldExecutePlan,
   shouldClarifyPlan,
+  resolveExecutionPolicy,
 };
