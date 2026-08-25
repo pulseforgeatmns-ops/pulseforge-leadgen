@@ -440,7 +440,7 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   }
 
   emitOwner({
-    owner: 'MissionEngine',
+    owner: 'AMO',
     missionId: mission.id,
     action: created ? 'created' : 'resumed',
     objective: mission.objective,
@@ -459,7 +459,7 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   if (input.session && input.session.context && typeof input.session.context === 'object') {
     input.session.context.missionId = mission.id;
     input.session.context.acquisitionMissionId = mission.id;
-    input.session.context.acquisitionOwner = 'MissionEngine';
+    input.session.context.acquisitionOwner = 'AMO';
   }
 
   return {

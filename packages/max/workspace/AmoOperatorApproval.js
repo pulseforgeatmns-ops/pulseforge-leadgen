@@ -505,7 +505,8 @@ async function runScoutForAmoMission(mission, opts = {}) {
   try {
     const result = await Scout.discover({
       mission,
-      missionEngine: opts.missionEngine,
+      // ADR-089 — AMO-owned missions never sync through Mission Engine.
+      missionEngine: null,
       scoutPayload: {},
       operatorId: opts.operatorId,
       opts: {
@@ -514,6 +515,8 @@ async function runScoutForAmoMission(mission, opts = {}) {
         mode: opts.scoutMode || 'completed',
         missionId: mission.id,
         amoMissionId: mission.id,
+        runtimeOwner: 'amo',
+        attachScoutDiscovery: false,
         tenantId: delegation.tenantId,
         companies: opts.scoutCompanies,
         people: opts.scoutPeople,

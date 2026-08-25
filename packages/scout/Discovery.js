@@ -33,6 +33,11 @@ const {
   emitRanking,
   emitDiscoveryCompleted,
 } = require('./observability');
+const {
+  resolveScoutDiscoveryRuntimePolicy,
+  assertMissionRuntimeBoundary,
+  RUNTIME_OWNERS,
+} = require('../acquisition-mission/MissionRuntimeOwnership');
 
 function findDiscoveryStepIndex(mission) {
   const steps = (mission.plan && mission.plan.steps) || [];
@@ -257,8 +262,19 @@ async function discover(input) {
   emitEnrichment({ missionId, strategy, source: 'discovery_pipeline' });
   emitRanking({ missionId, strategy, source: 'discovery_pipeline' });
 
+  const runtimePolicy = resolveScoutDiscoveryRuntimePolicy({ mission, missionEngine, opts });
+
+  if (runtimePolicy.amoOwned && missionEngine) {
+    assertMissionRuntimeBoundary({
+      mission,
+      missionEngine,
+      expectedOwner: RUNTIME_OWNERS.AMO,
+      operation: 'sync Scout discovery into Mission Engine',
+    });
+  }
+
   let updatedMission = mission;
-  if (missionEngine) {
+  if (runtimePolicy.syncToMissionEngine) {
     updatedMission = await syncMissionFromPipeline({
       mission,
       missionEngine,
@@ -308,7 +324,8 @@ async function discover(input) {
     operatorResponseKind: 'mission_execution_outcome',
   });
 
-  if (opts.attachScoutDiscovery !== false && (opts.amoMissionId || opts.missionId)) {
+  // ADR-089 — AMO-owned discovery commits through TME; legacy attach is for non-AMO bridges only.
+  if (runtimePolicy.attachViaLegacyFacade) {
     try {
       const { attachScoutDiscovery } = require('../../services/acquisitionMission');
       await attachScoutDiscovery(

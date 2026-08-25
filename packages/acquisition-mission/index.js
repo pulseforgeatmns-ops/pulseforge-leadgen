@@ -48,6 +48,7 @@ const workspaceMode = require('./WorkspaceMode');
 const operatorDecisionPolicy = require('./OperatorDecisionPolicy');
 const outcomeLearning = require('./OutcomeLearning');
 const canonicalMissionProjection = require('./CanonicalMissionProjection');
+const missionRuntimeOwnership = require('./MissionRuntimeOwnership');
 
 module.exports = {
   ...types,
@@ -98,4 +99,5 @@ module.exports = {
   ...operatorDecisionPolicy,
   ...outcomeLearning,
   ...canonicalMissionProjection,
+  ...missionRuntimeOwnership,
 };

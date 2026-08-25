@@ -118,7 +118,7 @@ describe('SPEC-124 — Acquisition Ownership Convergence', () => {
 
     const ownerEvent = audit.log.find((row) => row.event === 'ACQUISITION_OWNER');
     assert.ok(ownerEvent);
-    assert.equal(ownerEvent.owner, 'MissionEngine');
+    assert.equal(ownerEvent.owner, 'AMO');
     assert.equal(ownerEvent.action, 'created');
 
     const ciEvent = audit.log.find(
