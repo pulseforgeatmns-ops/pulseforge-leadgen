@@ -114,8 +114,11 @@ function defaultHandlers() {
       persistStage: ctx.persistStage,
       runPaige: ctx.runPaige,
       runMax: ctx.runMax,
+      runEmmett: ctx.runEmmett,
+      infrastructureSnapshot: ctx.infrastructureSnapshot,
     }),
     [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
+    [EXECUTION_INTENTS.GENERATE_CAPACITY]: (ctx) => approval.advanceEmmettCapacity(ctx),
     [EXECUTION_INTENTS.OPERATOR_APPROVED]: async (ctx) => {
       const question = (ctx.executionRequest.payload && ctx.executionRequest.payload.question) || '';
       try {
@@ -220,6 +223,8 @@ function handlerContext(request, context, mission, runtimeOwner) {
     runScout: context.runScout,
     runPaige: context.runPaige,
     runMax: context.runMax,
+    runEmmett: context.runEmmett,
+    infrastructureSnapshot: context.infrastructureSnapshot,
     scoutCompanies: context.scoutCompanies,
     scoutPeople: context.scoutPeople,
     allowFixtureFallback: context.allowFixtureFallback,

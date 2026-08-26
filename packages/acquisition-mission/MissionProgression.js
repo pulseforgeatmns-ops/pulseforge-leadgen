@@ -373,6 +373,14 @@ function canAutoAdvanceOutreachToPaige(snapshot) {
   return [STAGES.UNDERSTAND, STAGES.PLAN, STAGES.PREPARE].includes(mission.stage);
 }
 
+function canAutoAdvanceOutreachToEmmett(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.paigeComplete || ctx.emmettComplete) return false;
+  return mission.stage === STAGES.PREPARE;
+}
+
 function buildDiscoveryPipelineStatus(snapshot = {}) {
   const discovery = findLatestDiscoveryContribution(snapshot.contributions || []);
   if (!discovery) {
@@ -475,6 +483,8 @@ async function runAutonomousProgression(input = {}) {
     || require('../max/workspace/AmoOperatorApproval').advanceMaxPrioritization;
   const advancePaigeVariants = deps.advancePaigeVariants
     || require('../max/workspace/AmoOperatorApproval').advancePaigeVariants;
+  const advanceEmmettCapacity = deps.advanceEmmettCapacity
+    || require('../max/workspace/AmoOperatorApproval').advanceEmmettCapacity;
 
   const transitions = [];
   let steps = 0;
@@ -635,9 +645,55 @@ async function runAutonomousProgression(input = {}) {
           trigger: 'Paige variants committed.',
         }));
         recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvanceOutreachToEmmett(snapshot)) {
+      try {
+        const beforeStage = snapshot.mission.stage;
+        const result = await advanceEmmettCapacity({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          infrastructureSnapshot: input.infrastructureSnapshot,
+          question: `${AUTONOMOUS_COMMAND} Plan outbound capacity.`,
+          ...input,
+        });
+        if (result.executionOutcome === 'blocked') {
+          const after = engine.inspect(missionId, { tenantId });
+          return {
+            spec: 'SPEC-147',
+            outcome: 'blocked',
+            progressionStage: deriveProgressionStage(after),
+            pause: null,
+            block: deriveExecutionBlock(after, { message: 'Emmett execution blocked.' }),
+            transitions,
+            snapshot: after,
+            presentation: formatMissionProgressPresentation(after, {
+              progressionStage: deriveProgressionStage(after),
+              block: deriveExecutionBlock(after),
+              transitions,
+            }),
+          };
+        }
+        const after = engine.inspect(missionId, { tenantId });
+        transitions.push(createStageTransition({
+          from: beforeStage === STAGES.PREPARE
+            ? PROGRESSION_STAGES.OUTREACH_PLANNING
+            : PROGRESSION_STAGES.OUTREACH_PLANNING,
+          to: PROGRESSION_STAGES.OUTREACH_PLANNING,
+          trigger: 'Emmett capacity committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
         if (after.mission.stage === STAGES.PREPARE) {
           const ctx = specialistContext(after.contributions || []);
-          if (ctx.paigeComplete) {
+          if (ctx.emmettComplete) {
             return {
               spec: 'SPEC-147',
               outcome: 'complete',
@@ -715,6 +771,7 @@ module.exports = {
   canAutoAdvanceDiscovery,
   canAutoAdvanceMaxPrioritization,
   canAutoAdvanceOutreachToPaige,
+  canAutoAdvanceOutreachToEmmett,
   buildDiscoveryPipelineStatus,
   formatMissionProgressPresentation,
   runAutonomousProgression,

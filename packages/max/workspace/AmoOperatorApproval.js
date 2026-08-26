@@ -69,6 +69,14 @@ const {
 const { applyClarification, applyEdits } = require('../../acquisition-mission/MissionPlanner');
 const { bindStagePersistDurable } = require('../../../services/acquisitionMissionPersistence');
 const { specialistContext, canEnter } = require('../../acquisition-mission/Lifecycle');
+const {
+  findEmmettCapacity,
+  runEmmettForAmoMission,
+  validateEmmettPreconditions,
+  validateEmmettCapacityOutput,
+  commitEmmettCapacityStage,
+  buildEmmettExecutionResult,
+} = require('./EmmettCapacityExecution');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const { OPERATOR_DECISION_KINDS } = amo;
 const {
@@ -1700,6 +1708,104 @@ async function advancePaigeVariants(input = {}) {
   };
 }
 
+/**
+ * Execute Emmett at PREPARE via SEC and commit CAPACITY contribution.
+ * Canonical path: CER → router → executeMissionStage → executeSpecialist('emmett') → CAPACITY.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advanceEmmettCapacity(input = {}) {
+  const { engine, mission, tenantId, operatorId, question } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const existing = findEmmettCapacity(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      capacity: existing,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+      executionOutcome: 'completed',
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.EMMETT,
+    stage: STAGES.PREPARE,
+    operatorId,
+    validatePreconditions: (ctx) => validateEmmettPreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
+      const emmettRun = await runEmmettForAmoMission(current, {
+        ...input,
+        contributions,
+        transactionId,
+        executionContext: {
+          stage: STAGES.PREPARE,
+          missionId: current.id,
+          tenantId,
+          executionRequestId: input.executionRequest?.id || null,
+        },
+      });
+      const { capacityPayload, assessed, executionInput } = emmettRun;
+      const executionResult = await executeSpecialist({
+        mission: current,
+        contributions,
+        specialist: SPECIALISTS.EMMETT,
+        transactionId,
+        run: async () => buildEmmettExecutionResult(capacityPayload, executionInput, { assessed }),
+      });
+
+      if (executionResult.status === EXECUTION_STATUSES.BLOCKED
+        || executionResult.status === EXECUTION_STATUSES.FAILED) {
+        return {
+          capacityPayload: null,
+          executionResult,
+          executionInput,
+          missionId: current.id,
+          blocked: true,
+        };
+      }
+
+      return {
+        capacityPayload,
+        executionResult,
+        executionInput,
+        assessed,
+        missionId: current.id,
+        question,
+      };
+    },
+    validateOutput: (output, ctx) => {
+      if (output.blocked) {
+        throw validationError(
+          'tme_emmett_blocked',
+          output.executionResult?.blocked?.reason || 'Emmett execution blocked.'
+        );
+      }
+      validateEmmettCapacityOutput(output, ctx);
+    },
+    commit: (ctx) => commitEmmettCapacityStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  const finalSnapshot = staged.commitResult.snapshot;
+  const executionOutcome = staged.output.blocked ? 'blocked' : 'completed';
+  return {
+    alreadyExecuted: false,
+    capacity: staged.commitResult.capacity,
+    snapshot: finalSnapshot,
+    executionOutcome,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    executionResult: staged.output.executionResult,
+  };
+}
+
 function buildDiscoveryApprovalProse(result) {
   askPathTrace.traceEnter('buildDiscoveryApprovalProse');
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
@@ -1770,6 +1876,7 @@ module.exports = {
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
   advancePaigeVariants,
+  advanceEmmettCapacity,
   validateDiscoveryPreconditions,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,
