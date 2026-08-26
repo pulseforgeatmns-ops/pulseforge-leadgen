@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- AUDIT-059 External Discovery Provider Failure ([AUDIT-059](docs/architecture/AUDIT-059_External_Discovery_Provider_Failure.md))
+  - Places execution records the actual Text Search query, Google status, HTTP status, latency, retries, quota, and errors
+  - `REQUEST_DENIED` / quota failures are provider failures, not empty markets
+  - Scout discovery payload includes `providerExecution` so Discovery Blocked can cite the sensor result
+  - First divergence: Provider Execution, not identity/qualification filters
+
 - Canonical Execution Router ([SPEC-171](docs/specs/SPEC-171_Canonical_Execution_Router.md), [ADR-090](docs/adr/ADR-090_Canonical_Execution_Routing.md))
   - Every execution-capable surface produces an immutable Canonical Execution Request (CER)
   - Only `routeExecutionRequest()` may dispatch specialists or TME
