@@ -194,6 +194,7 @@ async function constructCandidateUniverse(input = {}) {
   let investigationState = null;
   let investigationPlan = null;
   let revisedMarketDefinition = input.marketDefinition || null;
+  let providerReports = [];
 
   const useCoverageEngine = input.useCoverageEngine !== false;
   if (input.useCoverageEngine === false) {
@@ -286,6 +287,7 @@ async function constructCandidateUniverse(input = {}) {
         investigationState = engineResult.investigationState;
         investigationPlan = engineResult.investigationPlan;
         revisedMarketDefinition = input.marketDefinition;
+        providerReports = engineResult.providerReports || [];
         actionsTaken.push({
           text: `Canonical hypothesis-driven discovery (SPEC-180): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
         });
@@ -429,6 +431,7 @@ async function constructCandidateUniverse(input = {}) {
     investigationState,
     investigationPlan,
     revisedMarketDefinition,
+    providerReports,
   };
 }
 
