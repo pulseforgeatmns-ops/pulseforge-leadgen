@@ -260,7 +260,7 @@ function specialistInputFor(specialist, mission, extras = {}) {
     case SPECIALISTS.SCOUT:
       return scoutInput(mission);
     case SPECIALISTS.PAIGE:
-      return paigeInput(mission);
+      return paigeInput(mission, extras);
     case SPECIALISTS.VERA:
       return veraInput(mission, extras.companies || []);
     case SPECIALISTS.REX:

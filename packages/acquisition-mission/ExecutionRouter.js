@@ -112,7 +112,10 @@ function defaultHandlers() {
       persist: ctx.persist,
       pool: ctx.pool,
       persistStage: ctx.persistStage,
+      runPaige: ctx.runPaige,
+      runMax: ctx.runMax,
     }),
+    [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
     [EXECUTION_INTENTS.OPERATOR_APPROVED]: async (ctx) => {
       const question = (ctx.executionRequest.payload && ctx.executionRequest.payload.question) || '';
       try {
@@ -215,6 +218,8 @@ function handlerContext(request, context, mission, runtimeOwner) {
     question,
     operatorId: request.operatorId || context.operatorId || null,
     runScout: context.runScout,
+    runPaige: context.runPaige,
+    runMax: context.runMax,
     scoutCompanies: context.scoutCompanies,
     scoutPeople: context.scoutPeople,
     allowFixtureFallback: context.allowFixtureFallback,
