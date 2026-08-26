@@ -58,7 +58,7 @@ Recommendation → Google Places
 | SPEC-180 | Single Investigation Planner | Implemented |
 | SPEC-181 | Evidence-Native Execution | Accepted |
 | SPEC-182 | Provider Capability Architecture | Accepted |
-| SPEC-183 | Cognitive Explainability | Draft |
+| SPEC-183 | Cognitive Explainability | Accepted |
 
 ## Success Criteria
 
