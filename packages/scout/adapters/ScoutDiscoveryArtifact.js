@@ -500,6 +500,7 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
         : opportunities.length,
     candidateUniverseCount: payload.candidateUniverse?.length || null,
     estimatedMarket: payload.universeEstimate || payload.discoveryReport?.estimatedMarket || null,
+    providerExecution: payload.providerExecution || payload.providerReports || null,
     marketCoveragePct:
       payload.coveragePct != null
         ? payload.coveragePct

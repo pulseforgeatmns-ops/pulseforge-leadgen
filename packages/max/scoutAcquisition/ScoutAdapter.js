@@ -959,6 +959,40 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     coverageIncomplete ||
     (zeroEvaluated && searchDefinition.valid && !(universe.candidateUniverse || []).length);
   const extraLimitations = [];
+  const failedProviderReport = (universe.providerReports || []).find(
+    (row) =>
+      row &&
+      (row.status === 'failed' ||
+        (row.execution && Array.isArray(row.execution.errors) && row.execution.errors.length))
+  );
+  const providerFailure =
+    failedProviderReport ||
+    (universe.discoveryErrors || []).find(
+      (row) =>
+        row &&
+        (row.googleStatus ||
+          /google_places_status_|REQUEST_DENIED|OVER_QUERY_LIMIT|provider_unavailable|empty_geography/i.test(
+            String(row.message || row.error || row.code || '')
+          ))
+    );
+  if (failedProviderReport) {
+    const execError =
+      (failedProviderReport.execution &&
+        failedProviderReport.execution.errors &&
+        failedProviderReport.execution.errors[0]) ||
+      {};
+    extraLimitations.push(
+      execError.message ||
+        failedProviderReport.error ||
+        `External discovery provider failed (${execError.code || failedProviderReport.status}).`
+    );
+  } else if (providerFailure) {
+    extraLimitations.push(
+      providerFailure.message ||
+        providerFailure.error ||
+        `External discovery provider failed (${providerFailure.code || providerFailure.googleStatus}).`
+    );
+  }
   if (coverageIncomplete && coverageMetrics && coverageMetrics.warnings) {
     extraLimitations.push(...coverageMetrics.warnings);
   } else if (coverageInsufficient) {
@@ -1128,6 +1162,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       discoveryConfidence,
       investigationState: universe.investigationState || null,
       investigationPlan: universe.investigationPlan || null,
+      providerExecution: universe.providerReports || [],
     },
   };
 }
