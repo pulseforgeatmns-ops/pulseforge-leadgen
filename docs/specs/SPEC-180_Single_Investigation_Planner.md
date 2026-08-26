@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Implemented |
 | **Priority** | Critical |
 | **Owner** | Scout |
 | **Created** | 2026-08-25 |
@@ -69,7 +69,7 @@ interface InvestigationPlan {
 
 ## Acceptance Criteria
 
-- [ ] Single planner module produces all investigation plans in mission-path discovery
-- [ ] `InvestigationPlanBuilder` delegates to canonical planner (no independent hypothesis generation)
-- [ ] Plan version is `SPEC-180`
-- [ ] DiscoveryPipeline stage 3 and HypothesisDrivenDiscoveryEngine share the same plan builder
+- [x] Single planner module produces all investigation plans in mission-path discovery
+- [x] `InvestigationPlanBuilder` delegates to canonical planner (no independent hypothesis generation)
+- [x] Plan version is `SPEC-180`
+- [x] DiscoveryPipeline stage 3 and HypothesisDrivenDiscoveryEngine share the same plan builder

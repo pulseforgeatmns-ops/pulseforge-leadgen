@@ -55,7 +55,7 @@ Recommendation → Google Places
 |---|---|---|
 | SPEC-178 | Canonical Market Definition | Draft |
 | SPEC-179 | Canonical Hypothesis Objects | Draft |
-| SPEC-180 | Single Investigation Planner | Draft |
+| SPEC-180 | Single Investigation Planner | Implemented |
 | SPEC-181 | Evidence-Native Execution | Draft |
 | SPEC-182 | Provider Capability Architecture | Draft |
 | SPEC-183 | Cognitive Explainability | Draft |

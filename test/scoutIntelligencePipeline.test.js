@@ -167,7 +167,7 @@ describe('SPEC-141 — Scout Intelligence Pipeline', () => {
     assert.ok(result.conflictResolution);
     assert.ok(result.report.evidenceConflicts);
     assert.ok(result.investigationPlan);
-    assert.equal(result.investigationPlan.version, 'SPEC-145');
+    assert.equal(result.investigationPlan.version, 'SPEC-180');
     assert.ok(result.report);
     assert.equal(result.report.kind, 'mission_intelligence_report');
     assert.ok(result.report.investigationStrategy);

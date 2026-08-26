@@ -12,7 +12,7 @@
  */
 
 const { buildMarketDefinition, buildDelegationFromMission } = require('./intelligence/MarketUnderstanding');
-const { createInvestigationPlan } = require('./investigation/InvestigationPlanBuilder');
+const { createHypothesisInvestigationPlan } = require('./coverage/HypothesisInvestigationPlanner');
 const { loadRepository } = require('../max/scoutAcquisition/ExistingIntelligence');
 const { assessExistingSufficiency } = require('../max/scoutAcquisition/CandidateUniverse');
 const { defaultDiscoveryAdapters } = require('../max/scoutAcquisition/DiscoveryAdapters');
@@ -322,7 +322,7 @@ async function runDiscoveryPipeline(input = {}) {
 
   // ── Stage 3: Build Investigation Plan ──────────────────────────
   const planStageStarted = nowIso();
-  const investigationPlan = createInvestigationPlan({
+  const investigationPlan = createHypothesisInvestigationPlan({
     mission,
     marketDefinition,
     opts: {
@@ -355,6 +355,7 @@ async function runDiscoveryPipeline(input = {}) {
       useCoverageEngine: true,
       marketDefinition,
       mission,
+      investigationPlan,
     });
   } catch (err) {
     stages.push(
