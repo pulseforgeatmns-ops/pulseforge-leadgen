@@ -2,13 +2,14 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted |
 | **Priority** | Critical |
 | **Owner** | Scout |
 | **Created** | 2026-08-25 |
 | **Epic** | [EPIC-001](../epics/EPIC-001_Scout_Cognitive_Unification.md) |
 | **Depends on** | [SPEC-181](SPEC-181_Evidence_Native_Execution.md), [SPEC-172](../packages/acquisition-mission/tests/spec172.test.js), [SPEC-173](../packages/acquisition-mission/tests/spec172.test.js) |
 | **Supersedes** | Fragmented graph structures |
+| **ADR** | [ADR-098](../adr/ADR-098_Cognitive_Explainability.md) |
 
 ## Objective
 
@@ -100,8 +101,8 @@ Max shall answer:
 
 ## Acceptance Criteria
 
-- [ ] `ExplainabilityGraph` builds from DiscoveryPipeline output
-- [ ] Every recommendation node has traceable ancestors to mission objective
-- [ ] `ScoutDiscoveryArtifact` projects from ExplainabilityGraph
-- [ ] Operator serialization produces human-readable cognitive chain
-- [ ] No recommendation traces directly to a provider without intermediate hypothesis/evidence nodes
+- [x] `ExplainabilityGraph` builds from DiscoveryPipeline output
+- [x] Every recommendation node has traceable ancestors to mission objective
+- [x] `ScoutDiscoveryArtifact` projects from ExplainabilityGraph
+- [x] Operator serialization produces human-readable cognitive chain
+- [x] No recommendation traces directly to a provider without intermediate hypothesis/evidence nodes

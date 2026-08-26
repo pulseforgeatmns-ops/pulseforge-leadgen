@@ -39,6 +39,7 @@ const {
 } = require('./universe/CandidateUniverseEstimate');
 const { runInvestigativeReasoningLoop } = require('./investigation/InvestigativeReasoningLoop');
 const { mergeIntoDiscoveryReport } = require('./investigation/MissionIntelligenceReport');
+const { buildExplainabilityGraph, serializeGraph } = require('./explainability/ExplainabilityGraph');
 const {
   prepareInvestigationWithMemory,
   persistDiscoveryKnowledge,
@@ -101,6 +102,8 @@ function buildPipelineResult(partial = {}) {
     marketMemoryRecall: partial.marketMemoryRecall || null,
     marketMemoryPersist: partial.marketMemoryPersist || null,
     memoryLoaded: partial.memoryLoaded === true,
+    explainabilityGraph: partial.explainabilityGraph || null,
+    investigationPlan: partial.investigationPlan || null,
   };
 }
 
@@ -537,9 +540,20 @@ async function runDiscoveryPipeline(input = {}) {
     intelligenceReport = mergeIntoDiscoveryReport(intelligenceReport, missionIntelligenceReport);
   }
 
+  let explainabilityGraph = null;
+  if (investigationState || missionIntelligenceReport) {
+    explainabilityGraph = buildExplainabilityGraph({
+      mission,
+      investigationState,
+      plan: investigationPlan,
+      missionIntelligenceReport,
+    });
+  }
+
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.PRODUCE_INTELLIGENCE_REPORT, {
       output: intelligenceReport,
+      explainabilityGraph: explainabilityGraph ? serializeGraph(explainabilityGraph) : null,
     })
   );
 
@@ -573,6 +587,8 @@ async function runDiscoveryPipeline(input = {}) {
     coverageEngineUsed: true,
     marketMemoryRecall,
     memoryLoaded: Boolean(marketMemoryRecall?.loaded),
+    explainabilityGraph: explainabilityGraph ? serializeGraph(explainabilityGraph) : null,
+    investigationPlan,
   });
 
   let marketMemoryPersist = null;

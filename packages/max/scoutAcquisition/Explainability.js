@@ -11,6 +11,11 @@ const {
 } = require('../specialistDelegation/Provenance');
 const { asText, COVERAGE_BANDS } = require('./Types');
 const { investigationFromResult } = require('./InvestigationProvenance');
+const {
+  answerOperatorQuestion,
+  deserializeGraph,
+  serializeForOperator,
+} = require('../../scout/explainability/ExplainabilityGraph');
 
 function formatAcquisitionExplanation(input = {}) {
   const evaluation = input.evaluation || null;
@@ -105,7 +110,44 @@ function resolveInvestigation(input = {}) {
   );
 }
 
+function resolveExplainabilityGraph(input = {}) {
+  const serialized =
+    input.explainabilityGraph ||
+    input.result?.pipeline?.explainabilityGraph ||
+    input.result?.explainabilityGraph ||
+    input.state?.explainabilityGraph ||
+    null;
+  if (!serialized || !Array.isArray(serialized.nodes)) return null;
+  return deserializeGraph(serialized);
+}
+
+function formatCognitiveExplainabilityAnswer(input = {}) {
+  const question = String(input.question || '');
+  const graph = resolveExplainabilityGraph(input);
+  if (!graph) return null;
+
+  const answer = answerOperatorQuestion(graph, question);
+  if (answer) {
+    return {
+      narrative: answer,
+      chain: serializeForOperator(graph),
+      spec: 'SPEC-183',
+    };
+  }
+
+  return {
+    narrative: serializeForOperator(graph).join('\n'),
+    chain: serializeForOperator(graph),
+    spec: 'SPEC-183',
+  };
+}
+
 function formatInvestigationAnswer(input = {}) {
+  const cognitive = formatCognitiveExplainabilityAnswer(input);
+  if (cognitive && /why.*(?:linkedin|provider|recommend|reject|terminology|evidence|change)/i.test(input.question || '')) {
+    return cognitive.narrative;
+  }
+
   const question = String(input.question || '');
   const investigation = resolveInvestigation(input);
   const evaluation = input.evaluation || (input.state && {
@@ -252,6 +294,8 @@ module.exports = {
   formatAcquisitionExplanation,
   formatOpportunityAnswer,
   formatInvestigationAnswer,
+  formatCognitiveExplainabilityAnswer,
+  resolveExplainabilityGraph,
   buildProvenanceChain,
   formatProvenanceNarrative,
 };

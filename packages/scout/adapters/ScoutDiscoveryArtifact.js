@@ -14,6 +14,10 @@ const {
   SCOUT_EVIDENCE_SOURCES,
   GRAPH_NODE_EVIDENCE_CLASSIFICATION,
 } = require('./EvidenceCoverageRegistry');
+const {
+  serializeForAmo,
+  deserializeGraph,
+} = require('../explainability/ExplainabilityGraph');
 
 const SCOUT_EVIDENCE_HANDOFF_VIOLATION = 'SCOUT_EVIDENCE_HANDOFF_VIOLATION';
 const SCOUT_EVIDENCE_COVERAGE_VIOLATION = 'SCOUT_EVIDENCE_COVERAGE_VIOLATION';
@@ -84,6 +88,16 @@ function resolveScoutExecutionResult(raw = {}) {
       pipeline.investigationState ||
       intelligence.investigationState ||
       raw.investigationState ||
+      null,
+    explainabilityGraph:
+      pipeline.explainabilityGraph ||
+      intelligence.explainabilityGraph ||
+      raw.explainabilityGraph ||
+      null,
+    investigationPlan:
+      pipeline.investigationPlan ||
+      intelligence.investigationPlan ||
+      raw.investigationPlan ||
       null,
     intelligenceReport:
       raw.intelligenceReport ||
@@ -384,6 +398,29 @@ function buildCompanies(payload = {}) {
     .filter((row) => row.id || row.name);
 }
 
+function resolveExplainabilityProjection(scoutResult = {}, opts = {}) {
+  const resolved = resolveScoutExecutionResult(scoutResult);
+  const serialized = resolved.explainabilityGraph || null;
+
+  if (serialized && Array.isArray(serialized.nodes) && serialized.nodes.length) {
+    const graph = deserializeGraph(serialized);
+    return serializeForAmo(graph);
+  }
+
+  const mir = resolved.missionIntelligenceReport || null;
+  const investigationState = resolved.investigationState || null;
+  if (!mir && !investigationState) return null;
+
+  const { buildExplainabilityGraph } = require('../explainability/ExplainabilityGraph');
+  const graph = buildExplainabilityGraph({
+    mission: opts.mission || {},
+    investigationState,
+    plan: resolved.investigationPlan || investigationState?.investigationPlan || null,
+    missionIntelligenceReport: mir,
+  });
+  return serializeForAmo(graph);
+}
+
 function resolveBlocked(resolved = {}, payload = {}) {
   const qualifiedCount =
     payload.qualifiedCount != null
@@ -418,10 +455,12 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
   assertScoutEvidenceCoverage(scoutResult, evidence);
   const blocked = resolveBlocked(resolved, payload);
   const mir = resolved.missionIntelligenceReport || null;
+  const cognitiveTrace = resolveExplainabilityProjection(scoutResult, opts);
 
   return {
     spec: 'SPEC-174',
     evidenceSpec: 'SPEC-172',
+    explainabilitySpec: 'SPEC-183',
     companies: buildCompanies(payload),
     prospects: payload.prospects || payload.people || [],
     buyingSignals: collectBuyingSignals(payload),
@@ -453,6 +492,8 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
     discoveryPlan: payload.discoveryPlan || null,
     intelligenceReport: resolved.intelligenceReport || payload.intelligenceReport || null,
     investigationState: resolved.investigationState || null,
+    explainabilityGraph: resolved.explainabilityGraph || null,
+    cognitiveTrace,
     qualifiedCount:
       payload.qualifiedCount != null
         ? Number(payload.qualifiedCount)
@@ -524,6 +565,8 @@ function resolveScoutInternalReasoning(scoutResult = {}) {
     investigationState: artifact.investigationState || null,
     missionIntelligenceReport: artifact.missionIntelligenceReport || null,
     intelligenceReport: artifact.intelligenceReport || null,
+    explainabilityGraph: artifact.explainabilityGraph || null,
+    cognitiveTrace: artifact.cognitiveTrace || null,
     sourceResult: artifact.sourceResult || scoutResult,
   };
 }
@@ -536,6 +579,7 @@ module.exports = {
   GRAPH_NODE_EVIDENCE_CLASSIFICATION,
   CANONICAL_EVIDENCE_NORMALIZATION_PATH,
   resolveScoutExecutionResult,
+  resolveExplainabilityProjection,
   collectGraphEvidenceEntries,
   collectExportableEvidenceIdentities,
   collectCanonicalScoutEvidence,
