@@ -17,6 +17,10 @@ const {
 } = require('./types');
 const { buildPendingOperatorDecision } = require('./Mission');
 const { assertMissionStateConsistent } = require('./PendingOperatorDecision');
+const {
+  isExecutionApproved,
+  buildPendingExecutionDecision,
+} = require('./ExecutionApproval');
 
 const PREREQUISITES = Object.freeze({
   [STAGES.UNDERSTAND]: (ctx) =>
@@ -31,8 +35,11 @@ const PREREQUISITES = Object.freeze({
     if (ctx.deliverabilityPaused) return 'Deliverability risk blocks Ready.';
     return null;
   },
-  [STAGES.EXECUTE]: (ctx) =>
-    ctx.operatorApproved ? null : 'Operator approval is required before Execute.',
+  [STAGES.EXECUTE]: (ctx) => {
+    if (ctx.deliverabilityPaused) return 'Deliverability risk blocks Execute.';
+    if (!ctx.executionApproved) return 'Execution approval is required before Execute.';
+    return null;
+  },
   [STAGES.OBSERVE]: (ctx) =>
     ctx.queuedOrLaunched ? null : 'Queued or launched sends are required before Observe.',
   [STAGES.LEARN]: (ctx) =>
@@ -55,6 +62,10 @@ function specialistContext(contributions = [], extras = {}) {
   const rows = contributions || [];
   const by = (specialist, kinds) =>
     rows.some((row) => row.specialist === specialist && (!kinds || kinds.includes(row.kind)));
+  const emmett = [...rows].reverse().find((row) => row.specialist === SPECIALISTS.EMMETT);
+  const governor = emmett && emmett.payload && emmett.payload.governor;
+  const deliverabilityPaused = extras.deliverabilityPaused === true
+    || Boolean(governor && (governor.outcome === 'pause' || governor.outcome === 'emergency'));
   const scout = rows.filter((row) => row.specialist === SPECIALISTS.SCOUT);
   const prospectCount = scout.reduce((sum, row) => {
     const payload = row.payload || {};
@@ -74,7 +85,8 @@ function specialistContext(contributions = [], extras = {}) {
     paigeGenerating: extras.paigeGenerating === true,
     emmettComplete: by(SPECIALISTS.EMMETT, [CONTRIBUTION_KINDS.CAPACITY]) || extras.emmettComplete,
     operatorApproved: by(SPECIALISTS.OPERATOR, [CONTRIBUTION_KINDS.APPROVAL]) || extras.operatorApproved,
-    deliverabilityPaused: extras.deliverabilityPaused === true,
+    executionApproved: isExecutionApproved(rows, extras.missionId, { ...extras, deliverabilityPaused }) || extras.executionApproved === true,
+    deliverabilityPaused,
     queuedOrLaunched: extras.queuedOrLaunched === true,
     hasOutcomes: extras.hasOutcomes === true,
     hasLearning: extras.hasLearning === true,
@@ -109,7 +121,7 @@ function progressPercent(stage, ctx = {}) {
   if (ctx.paigeComplete) bonus += 8;
   else if (ctx.paigeGenerating) bonus += 0;
   if (ctx.emmettComplete) bonus += 6;
-  if (ctx.operatorApproved) bonus += 6;
+  if (ctx.executionApproved) bonus += 6;
   const next = STAGE_ORDER[Math.min(stageIndex(stage) + 1, STAGE_ORDER.length - 1)];
   const cap = next === stage ? 100 : (STAGE_PROGRESS_BASE[next] || 100) - 1;
   return clamp(base + bonus, 0, cap);
@@ -138,20 +150,33 @@ function specialistState(specialist, ctx, mission) {
       ? { state: SPECIALIST_STATES.COMPLETE, label: 'Capacity Approved' }
       : { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
   }
+  if (specialist === SPECIALISTS.OPERATOR) {
+    if (ctx.executionApproved) {
+      return { state: SPECIALIST_STATES.APPROVED, label: 'Execution Authorized' };
+    }
+    if (mission.stage === STAGES.READY) {
+      return { state: SPECIALIST_STATES.APPROVAL_REQUIRED, label: 'Execution Approval Required' };
+    }
+  }
   if (ctx.operatorApproved) {
     return { state: SPECIALIST_STATES.APPROVED, label: 'Approved' };
   }
-  if (mission.stage === STAGES.PREPARE || mission.stage === STAGES.READY) {
-    return { state: SPECIALIST_STATES.APPROVAL_REQUIRED, label: 'Approval Required' };
+  if (mission.stage === STAGES.PREPARE) {
+    return { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
   }
   return { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
 }
 
 /**
  * SPEC-137 — Derive pendingOperatorDecision valid for the target stage.
- * Only Discover advertises consumable operator decisions today.
  */
-function derivePendingOperatorDecisionForStage(mission, targetStage) {
+function derivePendingOperatorDecisionForStage(mission, targetStage, contributions = []) {
+  if (targetStage === STAGES.READY) {
+    const ctx = specialistContext(contributions, { missionId: mission.id });
+    if (!ctx.paigeComplete || !ctx.emmettComplete || ctx.deliverabilityPaused) return null;
+    if (isExecutionApproved(contributions, mission.id, ctx)) return null;
+    return buildPendingExecutionDecision(mission, contributions);
+  }
   if (targetStage !== STAGES.DISCOVER) return null;
   return buildPendingOperatorDecision({
     stage: STAGES.DISCOVER,
@@ -167,11 +192,11 @@ function derivePendingOperatorDecisionForStage(mission, targetStage) {
  * SPEC-137 — Canonical lifecycle snapshot after a stage change.
  * One place computes stage, status, and pendingOperatorDecision together.
  */
-function deriveStageLifecycle(mission, targetStage) {
+function deriveStageLifecycle(mission, targetStage, contributions = []) {
   return {
     stage: targetStage,
     status: STAGE_LABELS[targetStage] || targetStage,
-    pendingOperatorDecision: derivePendingOperatorDecisionForStage(mission, targetStage),
+    pendingOperatorDecision: derivePendingOperatorDecisionForStage(mission, targetStage, contributions),
   };
 }
 
@@ -181,14 +206,15 @@ function deriveStageLifecycle(mission, targetStage) {
  */
 function applyStageTransition(mission, targetStage, opts = {}) {
   if (!mission) throw amoError('amo_mission_required', 'Mission is required.');
+  const contributions = opts.contributions || [];
   const fromStage = mission.stage;
-  const lifecycle = deriveStageLifecycle(mission, targetStage);
+  const lifecycle = deriveStageLifecycle(mission, targetStage, contributions);
   mission.stage = lifecycle.stage;
   mission.status = lifecycle.status;
   mission.pendingOperatorDecision = lifecycle.pendingOperatorDecision;
   if (opts.assert !== false) {
     assertMissionStateConsistent(mission, {
-      contributions: opts.contributions || [],
+      contributions,
       snapshot: opts.snapshot,
     });
   }

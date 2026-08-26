@@ -52,6 +52,7 @@ const missionRuntimeOwnership = require('./MissionRuntimeOwnership');
 const missionExecutionContext = require('./MissionExecutionContext');
 const executionRequest = require('./ExecutionRequest');
 const executionRouter = require('./ExecutionRouter');
+const executionApproval = require('./ExecutionApproval');
 
 module.exports = {
   ...types,
@@ -106,4 +107,5 @@ module.exports = {
   ...missionExecutionContext,
   ...executionRequest,
   ...executionRouter,
+  ...executionApproval,
 };

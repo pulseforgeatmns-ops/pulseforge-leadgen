@@ -70,9 +70,12 @@ function inferBlockers(mission, ctx) {
   if (mission.stage === STAGES.PREPARE && ctx.paigeComplete && !ctx.emmettComplete) {
     blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_EMMETT, specialist: 'emmett' }));
   }
-  if ((mission.stage === STAGES.READY || (mission.stage === STAGES.PREPARE && ctx.paigeComplete && ctx.emmettComplete))
-    && !ctx.operatorApproved) {
-    blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_OPERATOR, specialist: 'operator' }));
+  if (mission.stage === STAGES.READY && !ctx.executionApproved) {
+    blockers.push(createBlocker({
+      kind: BLOCKER_KINDS.WAITING_FOR_OPERATOR,
+      specialist: 'operator',
+      reason: 'Execution authorization required before send.',
+    }));
   }
   return blockers;
 }

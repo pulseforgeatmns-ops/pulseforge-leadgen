@@ -132,8 +132,9 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
     const ctx = specialistContext(snapshot.contributions || []);
     assert.equal(ctx.maxComplete, true);
     assert.equal(ctx.paigeComplete, true);
-    assert.equal(snapshot.mission.stage, STAGES.PREPARE);
-    assert.equal(result.outcome, 'complete');
+    assert.equal(snapshot.mission.stage, STAGES.READY);
+    assert.equal(result.outcome, 'paused');
+    assert.equal(result.pause?.requiredDecision, 'Authorize external execution of prepared outreach?');
   });
 
   it('Paige SEC input receives Max prioritization and Scout intelligence', async () => {

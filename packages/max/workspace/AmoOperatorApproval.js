@@ -84,10 +84,16 @@ const {
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
   hasPendingPrioritizationApproval,
+  hasPendingExecutionApproval,
   hasConsumablePendingDecision,
   presentableOperatorDecision,
   assertMissionStateConsistent,
 } = require('../../acquisition-mission/PendingOperatorDecision');
+const {
+  buildExecutionApprovalPayload,
+  findValidExecutionApproval,
+  EXECUTION_APPROVAL_ACTION,
+} = require('../../acquisition-mission/ExecutionApproval');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
 const PRIORITIZATION_APPROVAL_ACTION = 'prioritization_approved';
@@ -1806,6 +1812,140 @@ async function advanceEmmettCapacity(input = {}) {
   };
 }
 
+function validateExecutionPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  if (!hasPendingExecutionApproval(snapshot)) {
+    throw planningError('tme_no_pending_execution', 'No execution approval is pending.');
+  }
+  if (mission.stage && mission.stage !== STAGES.READY) {
+    throw planningError('tme_wrong_stage', `Execution approval cannot execute while the mission is at ${mission.stage}.`);
+  }
+  const ctx = specialistContext(snapshot.contributions || [], { missionId: mission.id, ...snapshot });
+  if (ctx.deliverabilityPaused) {
+    throw planningError('tme_deliverability_paused', 'Deliverability risk blocks execution approval.');
+  }
+  const readyGate = canEnter(STAGES.READY, ctx);
+  if (!readyGate.ok) {
+    throw planningError('tme_execution_not_ready', readyGate.reason);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    specialistAvailable: true,
+  };
+}
+
+function commitExecutionApprovalStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  existingApproval,
+  executionRequest,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const contributions = engine.inspect(missionId, { tenantId }).contributions || [];
+  let approval = existingApproval;
+  if (!approval) {
+    const approvalResult = engine.contribute(
+      missionId,
+      {
+        specialist: SPECIALISTS.OPERATOR,
+        kind: CONTRIBUTION_KINDS.APPROVAL,
+        payload: buildExecutionApprovalPayload(mission, contributions, {
+          command: output.question,
+          operatorId: output.operatorId,
+          executionRequestId: executionRequest?.id || null,
+          transactionId,
+        }),
+      },
+      { tenantId }
+    );
+    approval = approvalResult.contribution;
+  }
+
+  const current = engine.get(missionId, tenantId);
+  current.pendingOperatorDecision = null;
+  engine.store.putMission(current);
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, { contributions: snapshot.contributions });
+  return { approval, snapshot };
+}
+
+/**
+ * Consume execution approval at READY. Does not dispatch provider sending.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advanceExecutionAfterApproval(input = {}) {
+  askPathTrace.traceEnter('advanceExecutionAfterApproval');
+  const {
+    engine,
+    mission,
+    tenantId,
+    question,
+    operatorId,
+    executionRequest,
+  } = input;
+
+  if (!engine || !mission) {
+    throw new Error('engine and mission are required');
+  }
+
+  let snapshot = engine.inspect(mission.id, { tenantId });
+  const contributions = snapshot.contributions || [];
+  const existingApproval = findValidExecutionApproval(contributions, mission.id);
+
+  if (existingApproval && snapshot.mission.stage === STAGES.READY) {
+    askPathTrace.traceEarlyReturn('advanceExecutionAfterApproval', 'already_executed');
+    return {
+      alreadyExecuted: true,
+      approval: existingApproval,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+      approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.OPERATOR,
+    stage: 'execution_approval',
+    operatorId,
+    validatePreconditions: (ctx) => validateExecutionPreconditions(ctx),
+    execute: async ({ mission: current }) => ({
+      question,
+      missionId: current.id,
+      operatorId,
+    }),
+    commit: (ctx) => commitExecutionApprovalStage({
+      ...ctx,
+      existingApproval,
+      executionRequest,
+    }),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  snapshot = staged.commitResult.snapshot;
+  askPathTrace.traceEarlyReturn('advanceExecutionAfterApproval', 'completed');
+  return {
+    alreadyExecuted: false,
+    approval: staged.commitResult.approval,
+    snapshot,
+    approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+  };
+}
+
 function buildDiscoveryApprovalProse(result) {
   askPathTrace.traceEnter('buildDiscoveryApprovalProse');
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
@@ -1851,6 +1991,7 @@ module.exports = {
   APPROVAL_PHASES,
   DISCOVERY_APPROVAL_ACTION,
   PRIORITIZATION_APPROVAL_ACTION,
+  EXECUTION_APPROVAL_ACTION,
   PLAN_APPROVAL_ACTION,
   PLAN_CLARIFICATION_ACTION,
   PLAN_CANCEL_ACTION,
@@ -1877,6 +2018,7 @@ module.exports = {
   advanceMaxPrioritization,
   advancePaigeVariants,
   advanceEmmettCapacity,
+  advanceExecutionAfterApproval,
   validateDiscoveryPreconditions,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,

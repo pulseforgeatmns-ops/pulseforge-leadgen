@@ -119,6 +119,7 @@ function defaultHandlers() {
     }),
     [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
     [EXECUTION_INTENTS.GENERATE_CAPACITY]: (ctx) => approval.advanceEmmettCapacity(ctx),
+    [EXECUTION_INTENTS.APPROVE_EXECUTION]: (ctx) => approval.advanceExecutionAfterApproval(ctx),
     [EXECUTION_INTENTS.OPERATOR_APPROVED]: async (ctx) => {
       const question = (ctx.executionRequest.payload && ctx.executionRequest.payload.question) || '';
       try {
