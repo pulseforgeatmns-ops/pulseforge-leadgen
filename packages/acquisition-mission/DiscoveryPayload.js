@@ -14,6 +14,7 @@ const {
   buildScoutDiscoveryArtifact,
   mapCanonicalEvidenceToContribution,
 } = require('../scout/adapters/ScoutDiscoveryArtifact');
+const { normalizeProviderExecution } = require('../scout/coverage/ProviderExecution');
 
 const SOURCE_LABELS = Object.freeze({
   existing_repository: 'Company repository',
@@ -355,6 +356,13 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     ? buildPublicMissionIntelligenceReport(artifact.missionIntelligenceReport)
     : null;
 
+  const providerExecution = normalizeProviderExecution(
+    artifact.providerExecution ||
+      payload.providerExecution ||
+      payload.providerReports ||
+      []
+  );
+
   const contribution = {
     companies,
     prospects,
@@ -392,6 +400,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     },
     cognitiveTrace: artifact.cognitiveTrace || null,
     explainabilityGraph: artifact.explainabilityGraph || null,
+    providerExecution,
   };
 
   if (containsForbiddenReasoningKeys(contribution)) {

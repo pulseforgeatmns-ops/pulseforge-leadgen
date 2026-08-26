@@ -8,6 +8,7 @@ module.exports = {
   ...require('./EvidenceRequirements'),
   ...require('./EvidenceProviderAssignment'),
   ...require('./ProviderEvidenceContract'),
+  ...require('./ProviderExecution'),
   ...require('./HypothesisInvestigationPlanner'),
   ...require('./HypothesisDrivenDiscoveryEngine'),
   executeHypothesisDrivenCoverage: require('./HypothesisDrivenDiscovery').executeHypothesisDrivenCoverage,
