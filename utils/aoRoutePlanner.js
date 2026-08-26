@@ -1,6 +1,8 @@
 const axios = require('axios');
 const { buildDirectMailOpening } = require('./aoMessageTemplates');
 const { normalizeDueDate } = require('./aoQueueFormat');
+const { PLACES_FEATURES } = require('./placesCostAttribution');
+const { geocodeAddress } = require('./placesApi');
 
 const ANCHOR_OFFICE_DEFAULT = 'Manchester, NH';
 const ANCHOR_OFFICE_COORDS = { lat: 42.9956, lng: -71.4548 };
@@ -30,11 +32,15 @@ async function geocodeAddress(address) {
 
   if (process.env.GOOGLE_PLACES_KEY) {
     try {
-      const { data } = await axios.get('https://maps.googleapis.com/maps/api/geocode/json', {
-        params: { address: text, key: process.env.GOOGLE_PLACES_KEY },
-        timeout: 8000,
+      const traced = await geocodeAddress({
+        address: text,
+        apiKey: process.env.GOOGLE_PLACES_KEY,
+        record: {
+          caller: 'aoRoutePlanner.js',
+          feature: PLACES_FEATURES.GEOCODE,
+        },
       });
-      const loc = data?.results?.[0]?.geometry?.location;
+      const loc = traced.data?.results?.[0]?.geometry?.location;
       if (loc?.lat != null && loc?.lng != null) {
         return { lat: Number(loc.lat), lng: Number(loc.lng), source: 'google' };
       }

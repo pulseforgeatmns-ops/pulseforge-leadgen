@@ -14,6 +14,8 @@ const {
   buildScoutPlacesTextSearchUrl,
   scoutPlacesUrlHostPath,
 } = require('./scoutPublicSourcing');
+const { PLACES_FEATURES, TRIGGER_MODES } = require('../utils/placesCostAttribution');
+const { legacyTextSearch } = require('../utils/placesApi');
 
 const PLACES_NEW_ENDPOINT_FAMILY = 'places_api_new_search_text';
 const PLACES_NEW_AUTH_STYLE = 'header_x_goog_api_key';
@@ -193,13 +195,21 @@ async function diagnoseScoutPlaces(opts = {}) {
   }
 
   try {
-    const res = await fetchImpl(textSearchUrl.toString());
-    report.httpStatus = res.status;
-    const { data, parseError } = await readJsonSafe(res);
-    if (parseError) {
-      report.error = 'google_response_not_json';
-      report.googleErrorMessage = parseError;
-    } else if (data && typeof data === 'object') {
+    const traced = await legacyTextSearch({
+      query: probeQuery,
+      apiKey,
+      fetchImpl,
+      record: {
+        caller: 'scoutPlacesDiagnostic.js',
+        feature: PLACES_FEATURES.DIAGNOSTIC,
+        triggerMode: TRIGGER_MODES.MANUAL,
+      },
+    });
+    report.httpStatus = traced.httpStatus;
+    const data = traced.data;
+    if (!data || typeof data !== 'object') {
+      report.error = 'google_response_empty';
+    } else {
       report.googleStatus = data.status || null;
       report.googleErrorMessage = data.error_message || null;
       report.resultCount = Array.isArray(data.results) ? data.results.length : null;
@@ -208,12 +218,10 @@ async function diagnoseScoutPlaces(opts = {}) {
       } else {
         report.error = `google_places_status_${data.status || 'unknown'}`;
       }
-    } else {
-      report.error = 'google_response_empty';
     }
 
-    if (!res.ok && !report.error) {
-      report.error = `google_places_http_${res.status}`;
+    if (!traced.ok && !report.error) {
+      report.error = `google_places_http_${traced.httpStatus}`;
     }
   } catch (err) {
     report.error = 'google_places_fetch_failed';

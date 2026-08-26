@@ -12,6 +12,8 @@ const {
   SEARCH_SOURCES,
 } = require('../../../scout/hypothesis/MarketHypothesisRegistry');
 const { INVESTIGATIVE_EVIDENCE } = require('../../../scout/coverage/EvidenceRequirements');
+const { PLACES_FEATURES } = require('../../../../utils/placesCostAttribution');
+const { legacyTextSearch, legacyPlaceDetails } = require('../../../../utils/placesApi');
 
 function isValidEvidenceRequest(value) {
   return (
@@ -304,6 +306,9 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
   return { attempts, retries, latencyMs, quota, error };
 }
 
+const PLACE_DETAILS_FIELDS =
+  'name,formatted_address,formatted_phone_number,website,place_id,types,rating,address_component,business_status';
+
 async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
   const q = `${querySpec.industry || ''} ${querySpec.location || ''}`.trim();
   const started = Date.now();
@@ -325,16 +330,20 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
     };
   }
 
-  const url = new URL('https://maps.googleapis.com/maps/api/place/textsearch/json');
-  url.searchParams.set('query', q);
-  url.searchParams.set('key', apiKey);
-  if (pageToken) url.searchParams.set('pagetoken', pageToken);
-
   try {
-    const res = await fetchImpl(url.toString());
+    const traced = await legacyTextSearch({
+      query: q,
+      apiKey,
+      pageToken,
+      fetchImpl,
+      record: {
+        caller: 'PlacesProvider',
+        feature: PLACES_FEATURES.DISCOVERY,
+      },
+    });
     const latencyMs = Date.now() - started;
-    const httpStatus = res.status;
-    if (!res.ok) {
+    const httpStatus = traced.httpStatus;
+    if (!traced.ok) {
       return {
         results: [],
         nextPageToken: null,
@@ -352,7 +361,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
       };
     }
 
-    const data = await res.json();
+    const data = traced.data || {};
     const googleStatus = data.status || null;
     const googleError = data.error_message || null;
     const ok = SUCCESS_GOOGLE_STATUS.has(googleStatus);
@@ -394,19 +403,18 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
 
 async function fetchPlaceDetails(placeId, apiKey, fetchImpl) {
   if (!placeId) return null;
-  const url = new URL(
-    'https://maps.googleapis.com/maps/api/place/details/json'
-  );
-  url.searchParams.set('place_id', placeId);
-  url.searchParams.set(
-    'fields',
-    'name,formatted_address,formatted_phone_number,website,place_id,types,rating,address_component,business_status'
-  );
-  url.searchParams.set('key', apiKey);
-  const res = await fetchImpl(url.toString());
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.result || null;
+  const traced = await legacyPlaceDetails({
+    placeId,
+    fields: PLACE_DETAILS_FIELDS,
+    apiKey,
+    fetchImpl,
+    record: {
+      caller: 'PlacesProvider',
+      feature: PLACES_FEATURES.DISCOVERY,
+    },
+  });
+  if (!traced.ok) return null;
+  return traced.data?.result || null;
 }
 
 function normalizeDomain(website) {

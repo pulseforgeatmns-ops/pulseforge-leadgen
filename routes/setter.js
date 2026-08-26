@@ -5,6 +5,11 @@ const { randomUUID } = require('crypto');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { enrichPhoneWaterfall } = require('../phoneEnrich');
+const {
+  PLACES_FEATURES,
+  TRIGGER_MODES,
+  withPlacesContext,
+} = require('../utils/placesCostAttribution');
 const { ensureCloserSchema } = require('../utils/closerSchema');
 const { ensureSetterVisibilitySchema, setSetterVisibility } = require('../utils/setterVisibility');
 const { normalizeClientId } = require('../utils/clientContext');
@@ -1028,12 +1033,21 @@ router.post(['/api/leads/:id/enrich-phone', '/leads/:id/enrich-phone'], requireS
     if (isAnchorPhoneSetter(clientId)) {
       return res.status(404).json({ error: 'Anchor phone enrichment is disabled for this manual rollout' });
     }
-    const enrichment = await enrichPhoneWaterfall({
-      ...rows[0],
-      business_name: businessName(rows[0]),
-      website: website(rows[0]),
-      city: cityFor(rows[0]),
-    }, { verbose: req.query.debug === 'true' });
+    const enrichment = await withPlacesContext(
+      {
+        caller: 'phoneEnrich.js',
+        feature: PLACES_FEATURES.CANDIDATE_REFRESH,
+        tenantId: clientId,
+        triggerMode: TRIGGER_MODES.OPERATOR,
+        executionId: req.params.id,
+      },
+      () => enrichPhoneWaterfall({
+        ...rows[0],
+        business_name: businessName(rows[0]),
+        website: website(rows[0]),
+        city: cityFor(rows[0]),
+      }, { verbose: req.query.debug === 'true' })
+    );
     const phone = enrichment.phone;
     if (phone) {
       status = 'success';

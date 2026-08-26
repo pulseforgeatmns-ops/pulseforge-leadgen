@@ -3,6 +3,8 @@ require('dotenv').config();
 const axios = require('axios');
 const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
+const { PLACES_FEATURES } = require('./utils/placesCostAttribution');
+const { v1SearchText, v1PlaceDetails } = require('./utils/placesApi');
 
 const GOOGLE_PLACES_ENDPOINT = 'https://places.googleapis.com/v1/places:searchText';
 const GOOGLE_PLACE_DETAILS_ENDPOINT = 'https://places.googleapis.com/v1/places';
@@ -96,16 +98,18 @@ async function googlePlacesAttempt(lead, options) {
   if (!key) return { source: 'google_places', phone: null, skipped: 'missing_google_places_key' };
 
   const query = queryFor(lead);
-  const searchRes = await axios.post(GOOGLE_PLACES_ENDPOINT, {
-    textQuery: query,
-    maxResultCount: 3,
-  }, {
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': key,
-      'X-Goog-FieldMask': 'places.displayName,places.websiteUri,places.nationalPhoneNumber,places.internationalPhoneNumber,places.formattedAddress,places.id',
+  const searchRes = await v1SearchText({
+    body: {
+      textQuery: query,
+      maxResultCount: 3,
     },
-    timeout: 30000,
+    fieldMask:
+      'places.displayName,places.websiteUri,places.nationalPhoneNumber,places.internationalPhoneNumber,places.formattedAddress,places.id',
+    apiKey: key,
+    record: {
+      caller: 'phoneEnrich.js',
+      feature: PLACES_FEATURES.CANDIDATE_REFRESH,
+    },
   });
 
   logVerbose(verbose, 'Google Places text search raw response', searchRes.data);
@@ -120,13 +124,15 @@ async function googlePlacesAttempt(lead, options) {
   const placeId = places[0].id;
   if (!placeId) return { source: 'google_places', phone: null, raw: searchRes.data };
 
-  const detailsRes = await axios.get(`${GOOGLE_PLACE_DETAILS_ENDPOINT}/${placeId}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Goog-Api-Key': key,
-      'X-Goog-FieldMask': 'displayName,websiteUri,nationalPhoneNumber,internationalPhoneNumber,formattedAddress,id',
+  const detailsRes = await v1PlaceDetails({
+    placeId,
+    fieldMask:
+      'displayName,websiteUri,nationalPhoneNumber,internationalPhoneNumber,formattedAddress,id',
+    apiKey: key,
+    record: {
+      caller: 'phoneEnrich.js',
+      feature: PLACES_FEATURES.CANDIDATE_REFRESH,
     },
-    timeout: 30000,
   });
   logVerbose(verbose, 'Google Places details raw response', detailsRes.data);
   return { source: 'google_places', phone: pickGooglePhone(detailsRes.data), raw: detailsRes.data };
