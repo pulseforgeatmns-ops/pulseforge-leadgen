@@ -209,6 +209,25 @@ function resolveMarketHypothesis(verticalKey) {
   return MARKET_HYPOTHESES[key] || null;
 }
 
+/**
+ * Resolve a market hypothesis by canonical segmentKey (e.g. short_term_rental → str_manager).
+ * Falls back to registry id lookup when segmentKey does not match.
+ * @param {string} segmentKey
+ * @returns {MarketHypothesis|null}
+ */
+function resolveMarketHypothesisBySegmentKey(segmentKey) {
+  const normalized = normalizeHypothesisKey(segmentKey);
+  if (!normalized) return null;
+
+  for (const hypothesis of Object.values(MARKET_HYPOTHESES)) {
+    if (normalizeHypothesisKey(hypothesis.segmentKey) === normalized) {
+      return hypothesis;
+    }
+  }
+
+  return resolveMarketHypothesis(segmentKey);
+}
+
 function renderQueryTemplate(template, geo = {}) {
   const city = asText(geo.city);
   const state = asText(geo.state);
@@ -290,6 +309,7 @@ module.exports = {
   SEARCH_SOURCES,
   MARKET_HYPOTHESES,
   resolveMarketHypothesis,
+  resolveMarketHypothesisBySegmentKey,
   expandSearchStrategies,
   expandPlacesQueriesForVertical,
   listMarketHypotheses,
