@@ -2,7 +2,7 @@ const axios = require('axios');
 const { buildDirectMailOpening } = require('./aoMessageTemplates');
 const { normalizeDueDate } = require('./aoQueueFormat');
 const { PLACES_FEATURES } = require('./placesCostAttribution');
-const { geocodeAddress } = require('./placesApi');
+const { geocodeAddress: tracedGeocodeAddress } = require('./placesApi');
 
 const ANCHOR_OFFICE_DEFAULT = 'Manchester, NH';
 const ANCHOR_OFFICE_COORDS = { lat: 42.9956, lng: -71.4548 };
@@ -32,7 +32,7 @@ async function geocodeAddress(address) {
 
   if (process.env.GOOGLE_PLACES_KEY) {
     try {
-      const traced = await geocodeAddress({
+      const traced = await tracedGeocodeAddress({
         address: text,
         apiKey: process.env.GOOGLE_PLACES_KEY,
         record: {
