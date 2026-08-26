@@ -5,8 +5,28 @@
  * Each specialist receives structured mission fields — never free-form operator text.
  */
 
-const { asText } = require('./types');
+const { asText, SPECIALISTS, CONTRIBUTION_KINDS, clone } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
+
+function findLatestScoutDiscovery(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
+    );
+}
+
+function findLatestOperatorPrioritizationApproval(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.OPERATOR
+        && row.kind === CONTRIBUTION_KINDS.APPROVAL
+        && (row.payload.action === 'prioritization_approved'
+          || row.payload.kind === 'prioritization_approval')
+    );
+}
 
 function requireStructuredMission(mission) {
   const plan = mission && (mission.structuredMission || mission.missionPlanDraft);
@@ -126,6 +146,43 @@ function rexInput(mission, progress = {}) {
 }
 
 /**
+ * Max receives locked structured mission, Scout discovery, MIR, ranked opportunities,
+ * evidence, operator prioritization approval, and mission constraints.
+ */
+function maxInput(mission, extras = {}) {
+  const plan = requireLockedMissionPlan(mission);
+  const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
+  const scoutDiscovery = extras.discovery
+    ? { payload: extras.discovery }
+    : findLatestScoutDiscovery(contributions);
+  const discoveryPayload = scoutDiscovery ? clone(scoutDiscovery.payload || {}) : null;
+  const operatorApproval = extras.operatorApproval || findLatestOperatorPrioritizationApproval(contributions);
+
+  return {
+    structuredMission: clone(plan),
+    discovery: discoveryPayload,
+    missionIntelligenceReport: discoveryPayload && discoveryPayload.missionIntelligenceReport
+      ? clone(discoveryPayload.missionIntelligenceReport)
+      : null,
+    rankedOpportunities: discoveryPayload
+      ? clone(
+        discoveryPayload.rankedProspects
+          || discoveryPayload.opportunities
+          || discoveryPayload.companies
+          || []
+      )
+      : [],
+    evidence: discoveryPayload ? clone(discoveryPayload.evidence || []) : [],
+    buyingSignals: discoveryPayload ? clone(discoveryPayload.buyingSignals || []) : [],
+    operatorPrioritizationApproval: operatorApproval ? clone(operatorApproval.payload || {}) : null,
+    constraints: (plan.constraints || []).slice(),
+    observations: clone(extras.observations || []),
+    missionBound: true,
+    structuredOnly: true,
+  };
+}
+
+/**
  * Build Scout delegation from a locked Mission Plan — no English parsing.
  */
 function scoutDelegationFromMission(mission) {
@@ -167,11 +224,13 @@ function scoutDelegationFromMission(mission) {
 
 module.exports = {
   scoutInput,
+  maxInput,
   paigeInput,
   veraInput,
   rexInput,
   emmettInput,
   scoutDelegationFromMission,
+  findLatestScoutDiscovery,
   requireStructuredMission,
   requireLockedMissionPlan,
 };

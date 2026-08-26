@@ -14,6 +14,7 @@ const { SPECIALISTS, asText, nowIso, newId, clone, amoError } = require('./types
 const { assertContract } = require('./Contracts');
 const {
   scoutInput,
+  maxInput,
   paigeInput,
   veraInput,
   rexInput,
@@ -259,6 +260,8 @@ function specialistInputFor(specialist, mission, extras = {}) {
   switch (who) {
     case SPECIALISTS.SCOUT:
       return scoutInput(mission);
+    case SPECIALISTS.MAX:
+      return maxInput(mission, extras);
     case SPECIALISTS.PAIGE:
       return paigeInput(mission);
     case SPECIALISTS.VERA:
@@ -678,6 +681,26 @@ function fromLegacyOutput(specialist, raw = {}, ctx = {}) {
     return fromScoutLegacyOutput(raw, { specialist, transactionId, durationMs });
   }
 
+  if (who === SPECIALISTS.MAX) {
+    const payload = raw.prioritizationPayload || raw.payload || raw;
+    const blocked = raw.blocked === true || /blocked/i.test(String(raw.status || ''));
+    const status = blocked ? EXECUTION_STATUSES.BLOCKED : normalizeStatus(raw.status) || EXECUTION_STATUSES.SUCCESS;
+    return createExecutionResult({
+      specialist,
+      transactionId,
+      status,
+      confidence: raw.confidence || payload.confidence,
+      evidence: payload.evidence || raw.evidence || [],
+      contributions: payload,
+      recommendations: raw.recommendations || payload.recommendations || [],
+      unknowns: raw.unknowns || payload.unknowns || [],
+      nextActions: raw.nextActions || raw.next_actions || [],
+      durationMs,
+      reason: blocked ? (raw.reason || raw.summary) : null,
+      requiredPrecondition: blocked ? 'max_prioritization' : null,
+    });
+  }
+
   const payload = raw.payload || raw;
   const status = normalizeStatus(raw.status) || EXECUTION_STATUSES.SUCCESS;
   return createExecutionResult({
@@ -748,6 +771,13 @@ function executionResultFromStageOutput(output = {}, options = {}) {
     return fromScoutLegacyOutput(
       { ...output.scoutResult, discoveryPayload: output.discoveryPayload, payload: output.discoveryPayload },
       { specialist: specialist || SPECIALISTS.SCOUT, transactionId: options.transactionId }
+    );
+  }
+  if (output.prioritizationPayload) {
+    return fromLegacyOutput(
+      specialist || SPECIALISTS.MAX,
+      { ...output.maxResult, prioritizationPayload: output.prioritizationPayload, payload: output.prioritizationPayload },
+      { transactionId: options.transactionId }
     );
   }
   return fromLegacyOutput(specialist, output, { transactionId: options.transactionId });

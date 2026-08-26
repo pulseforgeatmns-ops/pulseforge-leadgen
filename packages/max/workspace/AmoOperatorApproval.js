@@ -28,7 +28,12 @@ const {
   planningError,
   validationError,
   buildMissionExecutionContext,
+  EXECUTION_STATUSES,
 } = amo;
+const {
+  runMaxForAmoMission,
+  prioritizationPayloadFromMaxResult,
+} = require('./MaxPrioritizationExecutor');
 const { createEvent } = require('../../acquisition-mission/Timeline');
 const {
   createMissionApprovalAudit,
@@ -411,6 +416,14 @@ function findDiscoveryApproval(contributions = []) {
         row.kind === CONTRIBUTION_KINDS.APPROVAL &&
         (row.payload.action === DISCOVERY_APPROVAL_ACTION ||
           row.payload.stage === STAGES.DISCOVER)
+    );
+}
+
+function findLatestMaxPrioritization(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) => row.specialist === SPECIALISTS.MAX && row.kind === CONTRIBUTION_KINDS.PRIORITIZATION
     );
 }
 
@@ -1008,6 +1021,37 @@ function validatePrioritizationPreconditions({ mission, engine, tenantId }) {
   };
 }
 
+function validatePrioritizationOutput(output, ctx = {}) {
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.MAX,
+    transactionId: ctx.transactionId,
+  });
+
+  if (
+    executionResult.status === EXECUTION_STATUSES.BLOCKED
+    || executionResult.status === EXECUTION_STATUSES.FAILED
+  ) {
+    const reason =
+      (executionResult.blocked && executionResult.blocked.reason)
+      || executionResult.reason
+      || 'Max prioritization did not complete.';
+    throw validationError('tme_max_blocked', reason);
+  }
+
+  if (!output || !output.prioritizationPayload) {
+    throw validationError('tme_contribution_missing', 'Prioritization contribution is missing.');
+  }
+  const payload = output.prioritizationPayload;
+
+  assertContributionContract(SPECIALISTS.MAX, payload);
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.MAX,
+    requireContributions: true,
+    requireEvidence: true,
+  });
+  output.executionResult = executionResult;
+}
+
 function commitPrioritizationStage({
   engine,
   mission,
@@ -1018,7 +1062,7 @@ function commitPrioritizationStage({
   existingApproval,
 }) {
   const missionId = (mission && mission.id) || output.missionId;
-  const { question } = output;
+  const { question, prioritizationPayload } = output;
   let approval = existingApproval;
   if (!approval) {
     const approvalResult = engine.contribute(
@@ -1045,7 +1089,18 @@ function commitPrioritizationStage({
   current.pendingOperatorDecision = null;
   engine.store.putMission(current);
 
-  engine.progress(missionId, SPECIALISTS.OPERATOR, {
+  const payload = { ...prioritizationPayload, approvalId: approval.id, transactionId };
+  const prioritizationContribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.MAX,
+      kind: CONTRIBUTION_KINDS.PRIORITIZATION,
+      payload,
+    },
+    { tenantId }
+  );
+
+  engine.progress(missionId, SPECIALISTS.MAX, {
     tenantId,
     stage: STAGES.UNDERSTAND,
   });
@@ -1056,13 +1111,14 @@ function commitPrioritizationStage({
   engine.store.addEvent(createEvent({
     missionId,
     kind: EVENT_KINDS.EXECUTION_COMMITTED,
-    specialist: SPECIALISTS.OPERATOR,
-    label: 'Prioritization approved — advancing to Understanding',
+    specialist: SPECIALISTS.MAX,
+    label: 'Max prioritization committed',
     payload: {
       transactionId,
       missionVersion: updated.version,
       priorVersion: missionVersion,
       approvalId: approval.id,
+      prioritizationId: prioritizationContribution.contribution.id,
     },
   }));
 
@@ -1072,12 +1128,13 @@ function commitPrioritizationStage({
   });
   return {
     approval,
+    prioritization: prioritizationContribution.contribution,
     snapshot,
   };
 }
 
 /**
- * Consume prioritization approval and advance discover → understand.
+ * Consume prioritization approval, execute Max at UNDERSTAND, attach prioritization, and advance.
  * SPEC-141 — the only path that transitions to Understanding after Discovery.
  * @param {object} input
  * @returns {Promise<object>}
@@ -1090,6 +1147,7 @@ async function advancePrioritizationAfterApproval(input = {}) {
     tenantId,
     question,
     operatorId,
+    runMax,
   } = input;
 
   if (!engine || !mission) {
@@ -1099,42 +1157,80 @@ async function advancePrioritizationAfterApproval(input = {}) {
   let snapshot = engine.inspect(mission.id, { tenantId });
   const contributions = snapshot.contributions || [];
   const existingApproval = findPrioritizationApproval(contributions);
+  const existingPrioritization = findLatestMaxPrioritization(contributions);
 
-  if (existingApproval && snapshot.mission.stage === STAGES.UNDERSTAND) {
+  if (existingApproval && existingPrioritization && snapshot.mission.stage === STAGES.UNDERSTAND) {
     askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'already_executed');
     return {
       alreadyExecuted: true,
       approval: existingApproval,
+      prioritization: existingPrioritization,
       snapshot: engine.inspect(mission.id, { tenantId }),
       approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
     };
   }
 
-  const staged = await executeMissionStage({
-    engine,
-    missionId: mission.id,
-    tenantId,
-    pool: input.pool,
-    specialist: SPECIALISTS.OPERATOR,
-    stage: 'prioritization_approval',
-    operatorId,
-    validatePreconditions: (ctx) => validatePrioritizationPreconditions(ctx),
-    execute: async ({ mission: current }) => ({
-      question,
-      missionId: current.id,
-    }),
-    commit: (ctx) => commitPrioritizationStage({
-      ...ctx,
-      existingApproval,
-    }),
-    persistDurable: bindPersistDurable(input, engine, tenantId),
-  });
+  let staged;
+  try {
+    staged = await executeMissionStage({
+      engine,
+      missionId: mission.id,
+      tenantId,
+      pool: input.pool,
+      specialist: SPECIALISTS.MAX,
+      stage: STAGES.UNDERSTAND,
+      operatorId,
+      validatePreconditions: (ctx) => validatePrioritizationPreconditions(ctx),
+      execute: async ({ mission: current, transactionId }) => {
+        const maxResult = await runMaxForAmoMission(current, {
+          question,
+          operatorId,
+          engine,
+          transactionId,
+          pool: input.pool,
+          runMax,
+          executionRequest: input.executionRequest || null,
+        });
+        const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+          ? maxResult
+          : executionResultFromStageOutput(
+            { maxResult, prioritizationPayload: maxResult && maxResult.contributions },
+            { specialist: SPECIALISTS.MAX, transactionId }
+          );
+        const prioritizationPayload =
+          maxResult
+          && maxResult.status === EXECUTION_STATUSES.SUCCESS
+          && maxResult.contributions
+          && Object.keys(maxResult.contributions).length
+            ? prioritizationPayloadFromMaxResult(maxResult)
+            : null;
+        return {
+          maxResult,
+          prioritizationPayload,
+          executionResult,
+          question,
+          missionId: current.id,
+        };
+      },
+      validateOutput: validatePrioritizationOutput,
+      commit: (ctx) => commitPrioritizationStage({
+        ...ctx,
+        existingApproval,
+      }),
+      persistDurable: bindPersistDurable(input, engine, tenantId),
+    });
+  } catch (err) {
+    askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'rolled_back');
+    throw err;
+  }
 
   snapshot = staged.commitResult.snapshot;
   askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'completed');
   return {
     alreadyExecuted: false,
     approval: staged.commitResult.approval,
+    prioritization: staged.commitResult.prioritization,
+    maxResult: staged.output.maxResult,
     snapshot,
     approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
     transactionId: staged.transactionId,
@@ -1194,6 +1290,7 @@ module.exports = {
   buildDelegationFromAmoMission,
   findDiscoveryApproval,
   findPrioritizationApproval,
+  findLatestMaxPrioritization,
   findPlanApproval,
   findScoutDiscoveryAfterApproval,
   hasPendingPlanApproval,
