@@ -41,31 +41,40 @@ const {
   buildProviderEvidenceReport,
 } = require('./ProviderEvidenceContract');
 const { explainProviderForOperator } = require('./EvidenceProviderAssignment');
+const { getDefaultUnifiedRegistry } = require('./ProviderCapabilityRegistry');
 
-/** Provider ID → adapter sourceType mapping. */
-const PROVIDER_TO_SOURCE_TYPE = Object.freeze({
-  google_maps: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
-  county_records: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
-  existing_pf: SOURCE_TYPES.EXISTING_PF,
-  website: SOURCE_TYPES.COMPANY_WEBSITES,
-  linkedin: SOURCE_TYPES.LINKEDIN,
-  facebook: SOURCE_TYPES.FACEBOOK,
-  instagram: SOURCE_TYPES.INSTAGRAM,
-  prospeo: SOURCE_TYPES.ENRICHMENT_PROVIDER,
-  hunter: SOURCE_TYPES.ENRICHMENT_PROVIDER,
-  news: SOURCE_TYPES.ENRICHMENT_PROVIDER,
-});
+/** @deprecated Use getDefaultUnifiedRegistry().getSourceType() — SPEC-182 */
+function buildProviderToSourceTypeMap(registry = getDefaultUnifiedRegistry()) {
+  const map = {};
+  for (const provider of registry.list()) {
+    if (provider.sourceType) map[provider.id] = provider.sourceType;
+  }
+  return Object.freeze(map);
+}
 
-function adapterForProvider(adapters = [], providerId) {
-  const sourceType = PROVIDER_TO_SOURCE_TYPE[providerId];
-  if (providerId === 'google_maps') {
+const PROVIDER_TO_SOURCE_TYPE = buildProviderToSourceTypeMap();
+
+function adapterForProvider(adapters = [], providerId, registry = getDefaultUnifiedRegistry()) {
+  const meta = registry.get(providerId);
+  const sourceType = meta?.sourceType;
+
+  if (providerId === 'google_maps' || meta?.adapterIds?.includes('public_business_places')) {
     return (
       adapters.find((a) => a && a.sourceType === SOURCE_TYPES.PUBLIC_BUSINESS_DATA) || null
     );
   }
+
+  if (meta?.adapterIds?.length) {
+    for (const adapterId of meta.adapterIds) {
+      const match = adapters.find((a) => a && a.id === adapterId);
+      if (match) return match;
+    }
+  }
+
   if (!sourceType) {
     return adapters.find((a) => a && a.id === providerId) || null;
   }
+
   return (
     adapters.find((a) => a && a.sourceType === sourceType && a.id !== 'existing_pf') ||
     adapters.find((a) => a && a.sourceType === sourceType) ||

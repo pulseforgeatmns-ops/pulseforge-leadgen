@@ -1,54 +1,16 @@
 'use strict';
 
 /**
- * SPEC-177 — Evidence Provider Assignment.
+ * SPEC-177 / SPEC-182 — Evidence Provider Assignment.
  * Providers satisfy evidence — not questions.
- * The planner never says "Search Google Places"; it says "Need business identities"
- * and assigns all providers capable of producing that evidence.
+ * The planner asks "who can answer this question?" via dynamic capability matching.
  */
 
 const { INVESTIGATIVE_EVIDENCE } = require('./EvidenceRequirements');
 const {
-  createDefaultProviderRegistry,
-  EVIDENCE_CAPABILITIES,
-} = require('../intelligence/ProviderCapabilityRegistry');
-
-/** Evidence type → provider IDs (ordered by preference). */
-const EVIDENCE_TO_PROVIDERS = Object.freeze({
-  [INVESTIGATIVE_EVIDENCE.IDENTITY]: ['google_maps', 'county_records', 'existing_pf'],
-  [INVESTIGATIVE_EVIDENCE.DECISION_MAKERS]: ['linkedin', 'website', 'prospeo'],
-  [INVESTIGATIVE_EVIDENCE.REVIEWS]: ['google_maps'],
-  [INVESTIGATIVE_EVIDENCE.PORTFOLIO]: ['website', 'county_records'],
-  [INVESTIGATIVE_EVIDENCE.GROWTH]: ['linkedin', 'news'],
-  [INVESTIGATIVE_EVIDENCE.CLEANING]: ['website', 'google_maps'],
-  [INVESTIGATIVE_EVIDENCE.LICENSING]: ['county_records'],
-  [INVESTIGATIVE_EVIDENCE.SOCIAL]: ['facebook', 'instagram'],
-  [INVESTIGATIVE_EVIDENCE.CONTACT]: ['prospeo', 'hunter', 'website'],
-  [INVESTIGATIVE_EVIDENCE.BUYING]: ['news', 'linkedin'],
-});
-
-/** Fallback providers when primary is unavailable (Scenario 4). */
-const EVIDENCE_FALLBACK_PROVIDERS = Object.freeze({
-  [INVESTIGATIVE_EVIDENCE.IDENTITY]: ['county_records', 'existing_pf'],
-  [INVESTIGATIVE_EVIDENCE.DECISION_MAKERS]: ['website', 'prospeo'],
-  [INVESTIGATIVE_EVIDENCE.REVIEWS]: ['website'],
-  [INVESTIGATIVE_EVIDENCE.PORTFOLIO]: ['county_records'],
-  [INVESTIGATIVE_EVIDENCE.CLEANING]: ['google_maps'],
-});
-
-/** Evidence type → capability for registry lookup. */
-const EVIDENCE_TO_CAPABILITY = Object.freeze({
-  [INVESTIGATIVE_EVIDENCE.IDENTITY]: EVIDENCE_CAPABILITIES.BUSINESSES,
-  [INVESTIGATIVE_EVIDENCE.DECISION_MAKERS]: EVIDENCE_CAPABILITIES.PEOPLE,
-  [INVESTIGATIVE_EVIDENCE.REVIEWS]: EVIDENCE_CAPABILITIES.REVIEWS,
-  [INVESTIGATIVE_EVIDENCE.PORTFOLIO]: EVIDENCE_CAPABILITIES.PROPERTY_COUNT,
-  [INVESTIGATIVE_EVIDENCE.GROWTH]: EVIDENCE_CAPABILITIES.GROWTH,
-  [INVESTIGATIVE_EVIDENCE.CLEANING]: EVIDENCE_CAPABILITIES.WEBSITE,
-  [INVESTIGATIVE_EVIDENCE.LICENSING]: EVIDENCE_CAPABILITIES.COUNTY_RECORDS,
-  [INVESTIGATIVE_EVIDENCE.SOCIAL]: EVIDENCE_CAPABILITIES.BUSINESSES,
-  [INVESTIGATIVE_EVIDENCE.CONTACT]: EVIDENCE_CAPABILITIES.CONTACTS,
-  [INVESTIGATIVE_EVIDENCE.BUYING]: EVIDENCE_CAPABILITIES.BUYING_SIGNALS,
-});
+  createDefaultUnifiedRegistry,
+  EVIDENCE_TO_CAPABILITY,
+} = require('./ProviderCapabilityRegistry');
 
 /** Human-readable evidence labels for operator explainability. */
 const EVIDENCE_LABELS = Object.freeze({
@@ -63,6 +25,28 @@ const EVIDENCE_LABELS = Object.freeze({
   [INVESTIGATIVE_EVIDENCE.CONTACT]: 'contact paths',
   [INVESTIGATIVE_EVIDENCE.BUYING]: 'buying signals',
 });
+
+/**
+ * Derive provider preference order from registry capability matching.
+ * Used for backward-compatible test assertions.
+ * @param {object} [registry]
+ * @returns {object}
+ */
+function buildEvidenceToProvidersMap(registry = createDefaultUnifiedRegistry()) {
+  const map = {};
+  for (const evidenceType of Object.values(INVESTIGATIVE_EVIDENCE)) {
+    map[evidenceType] = registry
+      .selectForEvidenceType(evidenceType, { includeUnavailable: true })
+      .map((p) => p.id);
+  }
+  return Object.freeze(map);
+}
+
+/** @deprecated Dynamic — derived from registry at runtime. Kept for test compat. */
+const EVIDENCE_TO_PROVIDERS = buildEvidenceToProvidersMap();
+
+/** @deprecated Fallbacks are now automatic via registry ranking. */
+const EVIDENCE_FALLBACK_PROVIDERS = Object.freeze({});
 
 function buildProviderAssignment(partial = {}) {
   return {
@@ -80,53 +64,55 @@ function buildProviderAssignment(partial = {}) {
   };
 }
 
-function isProviderAvailable(providerId, registry) {
-  const meta = registry.get(providerId);
+function isProviderAvailable(providerId, registry, opts = {}) {
+  const unified = registry._unified || registry;
+  const meta = unified.get(providerId);
   if (!meta) return false;
-  if (typeof meta.available === 'function') return meta.available();
-  return true;
+  return unified.isAvailable(providerId, opts);
 }
 
 /**
- * Assign providers for a single evidence type.
+ * Assign providers for a single evidence type via dynamic capability matching.
  * @param {string} evidenceType
  * @param {object} [opts]
  * @returns {object[]}
  */
 function assignProvidersForEvidence(evidenceType, opts = {}) {
-  const registry = opts.registry || createDefaultProviderRegistry();
+  const registry = opts.registry?._unified || opts.registry || createDefaultUnifiedRegistry();
   const unavailable = new Set((opts.unavailableProviders || []).map((p) => String(p).toLowerCase()));
-  const preferred = EVIDENCE_TO_PROVIDERS[evidenceType] || [];
-  const fallbacks = EVIDENCE_FALLBACK_PROVIDERS[evidenceType] || [];
   const label = EVIDENCE_LABELS[evidenceType] || evidenceType;
   const task = `Collect ${label}`;
 
+  const capable = registry.selectForEvidenceType(evidenceType, {
+    includeUnavailable: opts.includeUnavailable !== false,
+    ...opts,
+  });
+
   const assignments = [];
-  const seen = new Set();
   let order = 0;
 
-  function tryAssign(providerId, isFallback = false) {
-    const key = String(providerId).toLowerCase();
-    if (seen.has(key)) return;
+  function tryAssign(provider, isFallback = false) {
+    const key = String(provider.id).toLowerCase();
     if (unavailable.has(key)) return;
+    if (assignments.some((a) => a.providerId === provider.id)) return;
 
-    const meta = registry.get(providerId);
-    const available = isProviderAvailable(providerId, registry);
-
+    const available = isProviderAvailable(provider.id, registry, opts);
     if (!available && opts.includeUnavailable === false) return;
 
-    seen.add(key);
     order += 1;
     assignments.push(
       buildProviderAssignment({
-        providerId,
-        providerLabel: meta?.label || providerId,
+        providerId: provider.id,
+        providerLabel: provider.label || provider.id,
         evidenceType,
         task,
-        rationale: explainProviderSelection(evidenceType, providerId, { isFallback }),
-        confidence: meta?.reliability || (available ? 0.7 : 0),
-        coverage: meta?.coverage || 0.5,
-        limitations: available ? [] : [`${providerId} unavailable`],
+        rationale: explainProviderSelection(evidenceType, provider.id, {
+          registry,
+          isFallback,
+        }),
+        confidence: provider.reliability || (available ? 0.7 : 0),
+        coverage: provider.coverage || 0.5,
+        limitations: available ? provider.limitations || [] : [`${provider.id} unavailable`],
         status: available ? 'pending' : 'unavailable',
         order,
         isFallback,
@@ -134,17 +120,20 @@ function assignProvidersForEvidence(evidenceType, opts = {}) {
     );
   }
 
-  for (const providerId of preferred) {
-    tryAssign(providerId, false);
+  for (const provider of capable) {
+    tryAssign(provider, false);
   }
 
-  // When all preferred are unavailable, use fallbacks (Scenario 4).
-  const allPreferredUnavailable = preferred.length > 0 && preferred.every(
-    (pid) => unavailable.has(String(pid).toLowerCase()) || !isProviderAvailable(pid, registry)
-  );
-  if (allPreferredUnavailable) {
-    for (const providerId of fallbacks) {
-      tryAssign(providerId, true);
+  const allCapableUnavailable =
+    capable.length > 0 &&
+    capable.every(
+      (p) =>
+        unavailable.has(String(p.id).toLowerCase()) || !isProviderAvailable(p.id, registry, opts)
+    );
+
+  if (allCapableUnavailable) {
+    for (const provider of capable) {
+      tryAssign(provider, true);
     }
   }
 
@@ -183,31 +172,26 @@ function assignProvidersForRequirements(evidenceRequirements = [], opts = {}) {
  */
 function explainProviderSelection(evidenceType, providerId, context = {}) {
   const evidenceLabel = EVIDENCE_LABELS[evidenceType] || evidenceType;
-  const registry = context.registry || createDefaultProviderRegistry();
+  const registry = context.registry || createDefaultUnifiedRegistry();
   const meta = registry.get(providerId);
   const providerLabel = meta?.label || providerId;
+  const capability = EVIDENCE_TO_CAPABILITY[evidenceType];
 
   if (context.isFallback) {
-    return `Primary identity sources unavailable; ${providerLabel} assigned as fallback to collect ${evidenceLabel}.`;
+    return `Primary sources unavailable; ${providerLabel} assigned as fallback to collect ${evidenceLabel}.`;
   }
 
-  const reasons = {
-    google_maps: `Google Maps is our highest-confidence source for ${evidenceLabel} in local markets.`,
-    county_records: `${providerLabel} provides registry and licensing evidence for ${evidenceLabel}.`,
-    linkedin: `Because the current hypothesis requires identifying decision makers, and ${providerLabel} is our highest-confidence source for organizational roles.`,
-    website: `${providerLabel} can verify ${evidenceLabel} from public business web presence.`,
-    prospeo: `${providerLabel} enriches contact and title data for ${evidenceLabel}.`,
-    existing_pf: `Existing PulseForge intelligence may already hold ${evidenceLabel}.`,
-    facebook: `${providerLabel} provides social presence signals for ${evidenceLabel}.`,
-    instagram: `${providerLabel} provides social presence signals for ${evidenceLabel}.`,
-    news: `${providerLabel} surfaces growth and buying signals for ${evidenceLabel}.`,
-    hunter: `${providerLabel} verifies email contact paths for ${evidenceLabel}.`,
-  };
-
-  return (
-    reasons[providerId] ||
-    `${providerLabel} assigned to collect ${evidenceLabel} because it satisfies the evidence requirement.`
-  );
+  const confidencePct = meta?.reliability ? Math.round(meta.reliability * 100) : null;
+  const costTier = meta?.costTier || 'paid';
+  const parts = [
+    `${providerLabel} advertises capability for ${evidenceLabel}`,
+  ];
+  if (capability) parts.push(`(${capability})`);
+  if (confidencePct) parts.push(`with ${confidencePct}% reliability`);
+  if (costTier === 'free' || costTier === 'cached') {
+    parts.push(`— preferred ${costTier} tier`);
+  }
+  return `${parts.join(' ')}.`;
 }
 
 /**
@@ -235,6 +219,7 @@ module.exports = {
   EVIDENCE_FALLBACK_PROVIDERS,
   EVIDENCE_TO_CAPABILITY,
   EVIDENCE_LABELS,
+  buildEvidenceToProvidersMap,
   buildProviderAssignment,
   assignProvidersForEvidence,
   assignProvidersForRequirements,

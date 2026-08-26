@@ -57,7 +57,7 @@ Recommendation → Google Places
 | SPEC-179 | Canonical Hypothesis Objects | Draft |
 | SPEC-180 | Single Investigation Planner | Implemented |
 | SPEC-181 | Evidence-Native Execution | Accepted |
-| SPEC-182 | Provider Capability Architecture | Draft |
+| SPEC-182 | Provider Capability Architecture | Accepted |
 | SPEC-183 | Cognitive Explainability | Draft |
 
 ## Success Criteria
