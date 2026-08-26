@@ -12,6 +12,7 @@ const {
   EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE,
   hasOperationalEvidenceProvider,
 } = require('./ExternalDiscoveryProviderRegistry');
+const { getDefaultUnifiedRegistry } = require('./ProviderCapabilityRegistry');
 
 const CAPABILITY_BLOCKER_CODE = 'external_discovery_capability_unavailable';
 
@@ -25,9 +26,12 @@ const CAPABILITY_BLOCKER_CODE = 'external_discovery_capability_unavailable';
  */
 function evaluateDiscoveryCapability(input = {}) {
   const adapters = Array.isArray(input.adapters) ? input.adapters : [];
-  const registry = buildProviderRegistry({ ...input, adapters });
+  const unifiedRegistry = input.registry || getDefaultUnifiedRegistry();
+  const registry = buildProviderRegistry({ ...input, adapters, registry: unifiedRegistry });
   const operationalProviders = resolveOperationalProvidersFromAdapters(adapters);
-  const enoughSensors = operationalProviders.length > 0 || hasOperationalEvidenceProvider({ adapters, ...input });
+  const enoughSensors =
+    operationalProviders.length > 0 ||
+    hasOperationalEvidenceProvider({ adapters, registry: unifiedRegistry, ...input });
   const requireExternal =
     input.requireExternalDiscovery !== false &&
     Boolean(

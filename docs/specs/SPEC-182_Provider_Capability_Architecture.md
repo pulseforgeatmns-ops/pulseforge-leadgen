@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted |
 | **Priority** | Critical |
 | **Owner** | Scout |
 | **Created** | 2026-08-25 |
@@ -68,7 +68,7 @@ interface ProviderCapability {
 
 ## Acceptance Criteria
 
-- [ ] Single registry source for provider capabilities and availability
-- [ ] Removing a provider from registry changes assignments but not hypothesis generation
-- [ ] `evaluateDiscoveryCapability` and `assignProvidersForRequirements` read same registry
-- [ ] Operator explainability cites registry rationale for provider selection
+- [x] Single registry source for provider capabilities and availability
+- [x] Removing a provider from registry changes assignments but not hypothesis generation
+- [x] `evaluateDiscoveryCapability` and `assignProvidersForRequirements` read same registry
+- [x] Operator explainability cites registry rationale for provider selection
