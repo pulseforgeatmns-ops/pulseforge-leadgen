@@ -15,7 +15,7 @@
 
 const { asText, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
 const { expandCitiesFromSearchDefinition } = require('./DiscoveryCoverageEngine');
-const { generateHypotheses } = require('../investigation/HypothesisGeneration');
+const { generateCanonicalHypotheses, businessHypothesesForPlanner } = require('../hypothesis/CanonicalHypothesisEngine');
 const {
   createInvestigationState,
   addEvidenceToGraph,
@@ -274,11 +274,16 @@ async function runHypothesisDrivenDiscovery(input = {}) {
   const adapters = input.adapters || [];
   const opts = input.opts || {};
 
-  const hypotheses = input.hypotheses || generateHypotheses(marketDefinition, mission, opts);
+  const canonical =
+    input.canonicalHypotheses ||
+    generateCanonicalHypotheses(marketDefinition, mission, opts);
+  const hypotheses =
+    input.hypotheses || businessHypothesesForPlanner(canonical.hypotheses || canonical.business);
   let plan = input.investigationPlan || createHypothesisInvestigationPlan({
     mission,
     marketDefinition,
     hypotheses,
+    canonicalHypotheses: canonical,
     opts,
   });
 

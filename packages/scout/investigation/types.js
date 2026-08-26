@@ -72,15 +72,31 @@ const DEFAULT_MAX_ITERATIONS = 12;
 const DEFAULT_MAX_COST_BUDGET = 100;
 
 function buildHypothesis(partial = {}) {
+  const confidence = partial.confidence != null ? partial.confidence : null;
+  const uncertainty =
+    partial.uncertainty != null
+      ? partial.uncertainty
+      : confidence != null
+        ? Math.max(0, 1 - confidence)
+        : 1;
+
   return {
     id: partial.id || `hyp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     text: partial.text || '',
     entityId: partial.entityId || null,
-    confidence: partial.confidence != null ? partial.confidence : null,
+    gap: partial.gap != null ? partial.gap : null,
+    rationale: partial.rationale || '',
+    confidence,
+    uncertainty,
     minConfidence: partial.minConfidence != null ? partial.minConfidence : DEFAULT_CONFIDENCE_THRESHOLD,
     requiredEvidence: Array.isArray(partial.requiredEvidence) ? partial.requiredEvidence : [],
     collectedEvidence: Array.isArray(partial.collectedEvidence) ? partial.collectedEvidence : [],
     missingEvidence: Array.isArray(partial.missingEvidence) ? partial.missingEvidence : [],
+    supportingEvidence: Array.isArray(partial.supportingEvidence) ? partial.supportingEvidence : [],
+    contradictoryEvidence: Array.isArray(partial.contradictoryEvidence)
+      ? partial.contradictoryEvidence
+      : [],
+    investigationStatus: partial.investigationStatus || 'pending',
     status: partial.status || HYPOTHESIS_STATUS.OPEN,
     claimIds: Array.isArray(partial.claimIds) ? partial.claimIds : [],
   };

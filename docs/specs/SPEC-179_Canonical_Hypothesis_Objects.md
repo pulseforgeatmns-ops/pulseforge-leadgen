@@ -28,7 +28,7 @@ Three hypothesis systems coexist:
 
 ## Decision
 
-Introduce `CanonicalHypothesisEngine` that emits a unified hypothesis set:
+Introduce `CanonicalHypothesisEngine` that emits a unified hypothesis set. Hypotheses are **immutable reasoning objects** — see [ADR-094](../adr/ADR-094_Canonical_Hypothesis_Objects.md).
 
 ```js
 interface CanonicalHypothesis {
@@ -36,12 +36,17 @@ interface CanonicalHypothesis {
   kind: 'business' | 'terminology' | 'search_strategy'
   text: string
   status: 'open' | 'confirmed' | 'rejected' | 'inconclusive'
-  requiredEvidence: string[]      // business kind
-  searchTerms: string[]           // terminology / search_strategy kind
-  gap: string | null              // business kind — links to evidence gap
   rationale: string
-  parentId: string | null
   confidence: number | null
+  uncertainty: number
+  gap: string | null              // business kind — links to evidence gap
+  requiredEvidence: string[]      // business kind
+  supportingEvidence: object[]    // observations increasing confidence
+  contradictoryEvidence: object[] // observations decreasing confidence
+  investigationStatus: 'pending' | 'in_progress' | 'complete'
+  generatedQuestions: object[]    // derived from gap at creation time
+  searchTerms: string[]           // terminology / search_strategy kind
+  parentId: string | null
 }
 ```
 
@@ -85,7 +90,8 @@ Implementation delegates to existing engines internally:
 
 ## Acceptance Criteria
 
-- [ ] `CanonicalHypothesisEngine` produces business + terminology + search_strategy hypotheses
-- [ ] `CandidateUniverse` no longer branches on `useHypothesisEngine` / `useHypothesisDiscoveryEngine`
-- [ ] `HypothesisInvestigationPlanner` consumes canonical hypotheses
-- [ ] Existing SPEC-142 and SPEC-158 unit tests pass (legacy generators still callable)
+- [x] `CanonicalHypothesisEngine` produces business + terminology + search_strategy hypotheses
+- [x] `CandidateUniverse` no longer branches on `useHypothesisEngine` / `useHypothesisDiscoveryEngine`
+- [x] `HypothesisInvestigationPlanner` consumes canonical hypotheses
+- [x] Every hypothesis with a gap produces a unique investigation (no generic fallback)
+- [x] Existing SPEC-142 and SPEC-158 unit tests pass (legacy generators still callable)

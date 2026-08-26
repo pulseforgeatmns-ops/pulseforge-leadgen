@@ -118,6 +118,38 @@ function buildEvidenceRequirement(partial = {}) {
 }
 
 /**
+ * Derive investigative questions for a single hypothesis from its gap.
+ * Generic fallback applies only when the hypothesis has no gap.
+ * @param {object} hypothesis
+ * @param {object} [marketDefinition]
+ * @returns {object[]}
+ */
+function deriveQuestionsForHypothesis(hypothesis = {}, marketDefinition = {}) {
+  const gapQuestions =
+    hypothesis.gap && GAP_TO_QUESTIONS[hypothesis.gap]
+      ? GAP_TO_QUESTIONS[hypothesis.gap]
+      : hypothesis.gap
+        ? []
+        : DEFAULT_INVESTIGATION_QUESTIONS;
+
+  return gapQuestions.map((qId) => {
+    const requiredEvidence = QUESTION_TO_EVIDENCE[qId] || [];
+    const increasingEvidence = requiredEvidence.flatMap((ev) => CONFIDENCE_INCREASING[ev] || []);
+    const decreasingEvidence = requiredEvidence.flatMap((ev) => CONFIDENCE_DECREASING[ev] || []);
+
+    return buildInvestigationQuestion({
+      id: `${hypothesis.id}:${qId}`,
+      question: qId,
+      text: questionLabel(qId, hypothesis, marketDefinition),
+      requiredEvidence,
+      increasingEvidence,
+      decreasingEvidence,
+      hypothesisId: hypothesis.id,
+    });
+  });
+}
+
+/**
  * Derive investigative questions from business hypotheses.
  * @param {object[]} hypotheses
  * @param {object} [marketDefinition]
@@ -128,34 +160,11 @@ function deriveQuestionsFromHypotheses(hypotheses = [], marketDefinition = {}) {
   const seen = new Set();
 
   for (const hyp of hypotheses) {
-    const gapQuestions =
-      (hyp.gap && GAP_TO_QUESTIONS[hyp.gap]) ||
-      DEFAULT_INVESTIGATION_QUESTIONS;
-
-    for (const qId of gapQuestions) {
-      const key = `${hyp.id}:${qId}`;
+    for (const question of deriveQuestionsForHypothesis(hyp, marketDefinition)) {
+      const key = question.id;
       if (seen.has(key)) continue;
       seen.add(key);
-
-      const requiredEvidence = QUESTION_TO_EVIDENCE[qId] || [];
-      const increasingEvidence = requiredEvidence.flatMap(
-        (ev) => CONFIDENCE_INCREASING[ev] || []
-      );
-      const decreasingEvidence = requiredEvidence.flatMap(
-        (ev) => CONFIDENCE_DECREASING[ev] || []
-      );
-
-      questions.push(
-        buildInvestigationQuestion({
-          id: key,
-          question: qId,
-          text: questionLabel(qId, hyp, marketDefinition),
-          requiredEvidence,
-          increasingEvidence,
-          decreasingEvidence,
-          hypothesisId: hyp.id,
-        })
-      );
+      questions.push(question);
     }
   }
 
@@ -273,6 +282,7 @@ module.exports = {
   DEFAULT_INVESTIGATION_QUESTIONS,
   buildInvestigationQuestion,
   buildEvidenceRequirement,
+  deriveQuestionsForHypothesis,
   deriveQuestionsFromHypotheses,
   buildEvidenceRequirementsFromQuestions,
   evidenceRequirementSatisfied,
