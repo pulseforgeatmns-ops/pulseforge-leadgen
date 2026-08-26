@@ -21,6 +21,7 @@ const {
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
   hasPendingPrioritizationApproval,
+  hasPendingExecutionApproval,
   hasDiscoveryArtifact,
 } = require('./PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('./StructuredMission');
@@ -240,6 +241,15 @@ function deriveMissionPause(snapshot = {}) {
         'Adjust mission',
         'Cancel',
       ],
+    });
+  }
+
+  if (hasPendingExecutionApproval(snapshot)) {
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.EXECUTION,
+      reason: 'Prepared outreach is ready. Operator authorization is required before external execution.',
+      requiredDecision: 'Authorize external execution of prepared outreach?',
+      availableOptions: ['Approve execution', 'Review execution review', 'Cancel'],
     });
   }
 
@@ -687,12 +697,28 @@ async function runAutonomousProgression(input = {}) {
           from: beforeStage === STAGES.PREPARE
             ? PROGRESSION_STAGES.OUTREACH_PLANNING
             : PROGRESSION_STAGES.OUTREACH_PLANNING,
-          to: PROGRESSION_STAGES.OUTREACH_PLANNING,
+          to: PROGRESSION_STAGES.EXECUTION,
           trigger: 'Emmett capacity committed.',
         }));
         recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        if (after.mission.stage === STAGES.READY && hasPendingExecutionApproval(after)) {
+          return {
+            spec: 'SPEC-147',
+            outcome: 'paused',
+            progressionStage: deriveProgressionStage(after),
+            pause: deriveMissionPause(after),
+            block: null,
+            transitions,
+            snapshot: after,
+            presentation: formatMissionProgressPresentation(after, {
+              progressionStage: deriveProgressionStage(after),
+              pause: deriveMissionPause(after),
+              transitions,
+            }),
+          };
+        }
         if (after.mission.stage === STAGES.PREPARE) {
-          const ctx = specialistContext(after.contributions || []);
+          const ctx = specialistContext(after.contributions || [], { missionId: after.mission.id });
           if (ctx.emmettComplete) {
             return {
               spec: 'SPEC-147',

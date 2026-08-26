@@ -50,6 +50,7 @@ const {
 const {
   assertMissionStateConsistent,
   MISSION_STATE_INCONSISTENT,
+  hasPendingExecutionApproval,
 } = require('../../acquisition-mission/PendingOperatorDecision');
 const {
   isAutonomousProgressionCommand,
@@ -709,6 +710,13 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
   }
 
   if (hasConsumablePendingDecision(snapshot)) {
+    if (
+      hasPendingExecutionApproval(snapshot) &&
+      (/\bapprov(e|al|ed)\b/i.test(q) || /\bauthoriz(e|ed|ation)\b/i.test(q) || /\bexecute\b/i.test(q))
+    ) {
+      askPathTrace.traceEarlyReturn('detectExecutionAction', 'execution_approved');
+      return 'execution_approved';
+    }
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_operator_decision');
     return 'pending_operator_decision';
   }

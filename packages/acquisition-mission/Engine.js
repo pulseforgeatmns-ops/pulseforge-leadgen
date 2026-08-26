@@ -29,6 +29,7 @@ const {
   assertActorCanProgress,
   progressPercent,
   applyStageTransition,
+  derivePendingOperatorDecisionForStage,
 } = require('./Lifecycle');
 const { createEvent, formatTimeline } = require('./Timeline');
 const { buildSharedContext, formatSharedContext } = require('./Context');
@@ -64,6 +65,7 @@ const {
 } = require('./PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const { OPERATOR_DECISION_KINDS } = require('./types');
+const { buildExecutionReview, isExecutionApproved } = require('./ExecutionApproval');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -117,7 +119,24 @@ function extrasFrom(store, mission) {
     capacityRemaining: capacity && (capacity.remaining != null ? capacity.remaining : capacity.recommended),
     capacityAvailable: Boolean(capacity && (capacity.recommended || capacity.available)),
     qualifiedCount: null,
+    missionId: mission.id,
   };
+}
+
+function maybeAutoAdvanceToReady(store, mission, contributions, ctx, extra) {
+  if (mission.stage !== STAGES.PREPARE) return null;
+  const combined = { ...ctx, ...extra, missionId: mission.id };
+  const gate = canEnter(STAGES.READY, combined);
+  if (!gate.ok) return null;
+  const { from } = applyStageTransition(mission, STAGES.READY, { contributions });
+  store.addEvent(createEvent({
+    missionId: mission.id,
+    kind: EVENT_KINDS.STAGE_TRANSITION,
+    specialist: SPECIALISTS.MAX,
+    label: `${from} → ${STAGES.READY}`,
+    payload: { from, to: STAGES.READY, automatic: true },
+  }));
+  return { from, to: STAGES.READY };
 }
 
 function refresh(store, mission) {
@@ -125,13 +144,26 @@ function refresh(store, mission) {
   const extra = extrasFrom(store, mission);
   const ctx = specialistContext(contributions, extra);
   if (extra.qualifiedCount == null) extra.qualifiedCount = ctx.prospectCount;
-  const inferred = inferBlockers(mission, { ...ctx, ...extra });
+  maybeAutoAdvanceToReady(store, mission, contributions, ctx, extra);
+  const missionExtras = { ...extra, missionId: mission.id };
+  if (mission.stage === STAGES.READY) {
+    if (isExecutionApproved(contributions, mission.id, missionExtras)) {
+      mission.pendingOperatorDecision = null;
+    } else {
+      const pending = derivePendingOperatorDecisionForStage(mission, STAGES.READY, contributions);
+      if (pending) {
+        mission.pendingOperatorDecision = pending;
+      }
+    }
+  }
+  const refreshedCtx = specialistContext(contributions, missionExtras);
+  const inferred = inferBlockers(mission, { ...refreshedCtx, ...extra });
   const manual = (mission.blockers || []).filter((row) => row.manual);
   mission.blockers = [...manual, ...inferred.filter((row) => !manual.some((m) => m.kind === row.kind))];
-  mission.progressPercent = progressPercent(mission.stage, ctx);
-  mission.status = mission.status;
+  mission.progressPercent = progressPercent(mission.stage, refreshedCtx);
+  mission.status = STAGE_LABELS[mission.stage] || mission.status;
   mission.updatedAt = nowIso();
-  return { mission: store.putMission(mission), ctx: { ...ctx, ...extra }, contributions };
+  return { mission: store.putMission(mission), ctx: { ...refreshedCtx, ...extra }, contributions };
 }
 
 function createAcquisitionMissionEngine(opts = {}) {
@@ -535,6 +567,9 @@ function createAcquisitionMissionEngine(opts = {}) {
       mission,
       workspaceContext,
       executableDecision: presentableOperatorDecision({ mission, contributions }),
+      executionReview: mission.stage === STAGES.READY
+        ? buildExecutionReview(mission, contributions)
+        : null,
       workspace,
       health,
       context,

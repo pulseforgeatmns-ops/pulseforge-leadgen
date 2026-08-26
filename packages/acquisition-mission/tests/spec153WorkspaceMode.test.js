@@ -59,9 +59,17 @@ function advanceMissionToExecution(amoEngine, missionId) {
   amoEngine.contribute(missionId, {
     specialist: SPECIALISTS.EMMETT,
     kind: 'capacity',
-    payload: { capacity: { remaining: 18 }, health: { status: 'healthy' } },
+    payload: {
+      capacity: { remaining: 18, recommended: 18 },
+      queue: { items: [{ company: 'Harbor Law', prospectId: 'p1' }] },
+      governor: { outcome: 'proceed' },
+      health: { status: 'healthy' },
+    },
   });
-  amoEngine.progress(missionId, { role: 'max' }, { stage: STAGES.READY });
+  const current = amoEngine.get(missionId);
+  if (current.stage !== STAGES.READY) {
+    amoEngine.progress(missionId, { role: 'max' }, { stage: STAGES.READY });
+  }
 }
 
 describe('SPEC-153 — Mission Workspace Modes', () => {

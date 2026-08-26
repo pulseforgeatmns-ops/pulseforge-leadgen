@@ -170,7 +170,7 @@ describe('SPEC-118 workspace', () => {
     assert.equal(snapshot.workspace.max.label, 'Prioritization Complete');
     assert.equal(snapshot.workspace.paige.label, 'Generating Variants');
     assert.equal(snapshot.workspace.emmett.label, 'Waiting');
-    assert.equal(snapshot.workspace.operator.label, 'Approval Required');
+    assert.equal(snapshot.workspace.operator.label, 'Waiting');
     const prose = amoEngine.formatWorkspace(snapshot.workspace);
     assert.match(prose, /Commercial Law Firms/);
     assert.match(prose, /68%/);

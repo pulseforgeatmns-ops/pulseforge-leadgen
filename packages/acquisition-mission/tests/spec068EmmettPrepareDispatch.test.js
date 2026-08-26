@@ -111,7 +111,7 @@ describe('SPEC-068 — Canonical Emmett PREPARE Dispatch', () => {
     const final = engine.inspect(mission.id, { tenantId: '10' });
     const ctx = specialistContext(final.contributions || []);
     assert.equal(ctx.emmettComplete, true);
-    assert.equal(final.mission.stage, STAGES.PREPARE);
+    assert.equal(final.mission.stage, STAGES.READY);
 
     const capacity = final.contributions.find(
       (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
@@ -172,8 +172,9 @@ describe('SPEC-068 — Canonical Emmett PREPARE Dispatch', () => {
     assert.equal(ctx.maxComplete, true);
     assert.equal(ctx.paigeComplete, true);
     assert.equal(ctx.emmettComplete, true);
-    assert.equal(snapshot.mission.stage, STAGES.PREPARE);
-    assert.equal(result.outcome, 'complete');
+    assert.equal(snapshot.mission.stage, STAGES.READY);
+    assert.equal(result.outcome, 'paused');
+    assert.equal(result.pause?.requiredDecision, 'Authorize external execution of prepared outreach?');
   });
 
   it('mission-bound queue candidates originate from Scout/Max not client CRM', async () => {
@@ -318,8 +319,8 @@ describe('SPEC-068 — Canonical Emmett PREPARE Dispatch', () => {
     const snapshot = engine.inspect(mission.id, { tenantId: '10' });
     const ctx = specialistContext(snapshot.contributions || []);
     assert.equal(ctx.emmettComplete, true);
-    assert.equal(snapshot.mission.stage, STAGES.PREPARE);
-    const readyGate = amo.canEnter(STAGES.READY, ctx);
+    assert.equal(snapshot.mission.stage, STAGES.READY);
+    const readyGate = amo.canEnter(STAGES.READY, { ...ctx, missionId: mission.id });
     assert.equal(readyGate.ok, true);
   });
 

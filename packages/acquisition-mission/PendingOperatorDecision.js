@@ -14,6 +14,10 @@ const {
   amoError,
 } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
+const {
+  isExecutionApproved,
+  canAdvertiseExecutionApproval,
+} = require('./ExecutionApproval');
 
 const MISSION_STATE_INCONSISTENT = 'MISSION_STATE_INCONSISTENT';
 
@@ -92,11 +96,25 @@ function hasPendingPrioritizationApproval(snapshot) {
   return pendingKind(mission) === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL;
 }
 
+function hasPendingExecutionApproval(snapshot, extras = {}) {
+  const mission = missionFrom(snapshot) || {};
+  const contributions = contributionsFrom(snapshot, extras);
+  if (!canAdvertiseExecutionApproval(mission, contributions, extras)) return false;
+  return pendingKind(mission) === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL;
+}
+
+function hasConsumedExecutionApproval(snapshotOrMission, extras = {}) {
+  const mission = missionFrom(snapshotOrMission) || {};
+  const contributions = contributionsFrom(snapshotOrMission, extras);
+  return isExecutionApproved(contributions, mission.id, extras);
+}
+
 function hasConsumablePendingDecision(snapshot) {
   return hasPendingPlanClarification(snapshot)
     || hasPendingPlanApproval(snapshot)
     || hasPendingDiscoveryApproval(snapshot)
-    || hasPendingPrioritizationApproval(snapshot);
+    || hasPendingPrioritizationApproval(snapshot)
+    || hasPendingExecutionApproval(snapshot);
 }
 
 function presentableOperatorDecision(snapshot) {
@@ -112,7 +130,9 @@ function presentableOperatorDecision(snapshot) {
         ? (pending.prompt || 'Approve mission plan?')
         : hasPendingPrioritizationApproval(snapshot)
           ? (pending.prompt || 'Approve prioritization?')
-          : (pending.prompt || 'Approve discovery?'),
+          : hasPendingExecutionApproval(snapshot)
+            ? (pending.prompt || 'Authorize external execution of prepared outreach?')
+            : (pending.prompt || 'Approve discovery?'),
     consumable: true,
   };
 }
@@ -135,6 +155,7 @@ function consistencyDetails(mission, snapshot) {
     hasPendingPlanApproval: hasPendingPlanApproval(snapshot),
     hasPendingDiscoveryApproval: hasPendingDiscoveryApproval(snapshot),
     hasPendingPrioritizationApproval: hasPendingPrioritizationApproval(snapshot),
+    hasPendingExecutionApproval: hasPendingExecutionApproval(snapshot),
     hasPendingPlanClarification: hasPendingPlanClarification(snapshot),
     hasDiscoveryArtifact: hasDiscoveryArtifact(snapshot),
   };
@@ -243,6 +264,31 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
     );
   }
 
+  if (kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && !hasPendingExecutionApproval(snapshot)) {
+    throw missionStateInconsistent(
+      'pendingOperatorDecision.kind is an execution approval that the execution engine cannot consume.',
+      details
+    );
+  }
+
+  if (hasPendingExecutionApproval(snapshot) && kind !== OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL) {
+    throw missionStateInconsistent(
+      'hasPendingExecutionApproval is true but pendingOperatorDecision does not match.',
+      details
+    );
+  }
+
+  if (
+    stage === STAGES.READY &&
+    canAdvertiseExecutionApproval(mission, snapshot.contributions || contributionsFrom(snapshot, extras), extras)
+    && kind !== OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
+  ) {
+    throw missionStateInconsistent(
+      'Prepared outreach is ready but execution approval is not pending.',
+      details
+    );
+  }
+
   if (hasPendingPlanApproval(snapshot) && !PLAN_KINDS.has(kind)) {
     throw missionStateInconsistent(
       'hasPendingPlanApproval is true but pendingOperatorDecision does not match.',
@@ -307,7 +353,7 @@ const DISCOVER_DECISION_KINDS = new Set([
 function applyStageToPendingDecision(mission, targetStage) {
   if (!mission) return mission;
   if (targetStage === STAGES.DISCOVER) return mission;
-  if (DISCOVER_DECISION_KINDS.has(pendingKind(mission)) || mission.pendingOperatorDecision) {
+  if (DISCOVER_DECISION_KINDS.has(pendingKind(mission))) {
     mission.pendingOperatorDecision = null;
   }
   return mission;
@@ -320,6 +366,8 @@ module.exports = {
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
   hasPendingPrioritizationApproval,
+  hasPendingExecutionApproval,
+  hasConsumedExecutionApproval,
   hasConsumedPrioritizationApproval,
   hasConsumablePendingDecision,
   presentableOperatorDecision,
