@@ -18,9 +18,15 @@ function buildProviderEvidenceReport(partial = {}) {
     limitations: Array.isArray(partial.limitations) ? partial.limitations : [],
     candidates: Array.isArray(partial.candidates) ? partial.candidates : [],
     rawResultCount: partial.rawResultCount != null ? Number(partial.rawResultCount) : 0,
+    mappedCandidateCount: partial.mappedCandidateCount != null
+      ? Number(partial.mappedCandidateCount)
+      : Array.isArray(partial.candidates)
+        ? partial.candidates.length
+        : 0,
     status: partial.status || 'completed',
     error: partial.error || null,
     executedAt: partial.executedAt || new Date().toISOString(),
+    execution: partial.execution || null,
   };
 }
 
@@ -33,10 +39,17 @@ function buildProviderEvidenceReport(partial = {}) {
 function normalizeProviderReport(adapterReport = {}, assignment = {}) {
   const candidates = adapterReport.candidates || [];
   const errors = adapterReport.errors || [];
+  const execution = adapterReport.execution || (adapterReport.coverage && adapterReport.coverage.execution) || null;
   const failed = adapterReport.available === false || errors.length > 0;
   const evidenceType = assignment.evidenceType || null;
+  const rawResultCount =
+    execution && execution.totals && execution.totals.results != null
+      ? Number(execution.totals.results)
+      : candidates.length;
 
-  const evidenceProduced = inferEvidenceProduced(candidates, evidenceType, assignment);
+  const evidenceProduced = failed
+    ? []
+    : inferEvidenceProduced(candidates, evidenceType, assignment);
 
   const confidence = computeReportConfidence({
     candidates,
@@ -62,6 +75,9 @@ function normalizeProviderReport(adapterReport = {}, assignment = {}) {
   if (candidates.length === 0 && !failed) {
     limitations.push('No candidates returned for this evidence type.');
   }
+  if (execution && execution.abortReason && execution.executed !== true) {
+    limitations.push(`Provider aborted before HTTP: ${execution.abortReason}.`);
+  }
 
   return buildProviderEvidenceReport({
     providerId: assignment.providerId,
@@ -73,9 +89,11 @@ function normalizeProviderReport(adapterReport = {}, assignment = {}) {
     coverage,
     limitations,
     candidates,
-    rawResultCount: candidates.length,
+    rawResultCount,
+    mappedCandidateCount: candidates.length,
     status: failed ? 'failed' : candidates.length ? 'completed' : 'empty',
     error: failed ? errors[0]?.message || 'Provider unavailable' : null,
+    execution,
   });
 }
 
