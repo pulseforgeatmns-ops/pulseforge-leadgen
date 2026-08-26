@@ -32,6 +32,11 @@ const {
   buildExecutionInput,
   EXECUTION_STATUSES,
 } = amo;
+const {
+  runMaxForAmoMission,
+  prioritizationPayloadFromMaxResult,
+  buildPrioritizationPayload,
+} = require('./MaxPrioritizationExecutor');
 const { createEvent } = require('../../acquisition-mission/Timeline');
 const {
   createMissionApprovalAudit,
@@ -429,6 +434,14 @@ function findDiscoveryApproval(contributions = []) {
         row.kind === CONTRIBUTION_KINDS.APPROVAL &&
         (row.payload.action === DISCOVERY_APPROVAL_ACTION ||
           row.payload.stage === STAGES.DISCOVER)
+    );
+}
+
+function findLatestMaxPrioritization(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) => row.specialist === SPECIALISTS.MAX && row.kind === CONTRIBUTION_KINDS.PRIORITIZATION
     );
 }
 
@@ -1026,6 +1039,37 @@ function validatePrioritizationPreconditions({ mission, engine, tenantId }) {
   };
 }
 
+function validatePrioritizationOutput(output, ctx = {}) {
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.MAX,
+    transactionId: ctx.transactionId,
+  });
+
+  if (
+    executionResult.status === EXECUTION_STATUSES.BLOCKED
+    || executionResult.status === EXECUTION_STATUSES.FAILED
+  ) {
+    const reason =
+      (executionResult.blocked && executionResult.blocked.reason)
+      || executionResult.reason
+      || 'Max prioritization did not complete.';
+    throw validationError('tme_max_blocked', reason);
+  }
+
+  if (!output || !output.prioritizationPayload) {
+    throw validationError('tme_contribution_missing', 'Prioritization contribution is missing.');
+  }
+  const payload = output.prioritizationPayload;
+
+  assertContributionContract(SPECIALISTS.MAX, payload);
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.MAX,
+    requireContributions: true,
+    requireEvidence: true,
+  });
+  output.executionResult = executionResult;
+}
+
 function commitPrioritizationStage({
   engine,
   mission,
@@ -1036,7 +1080,7 @@ function commitPrioritizationStage({
   existingApproval,
 }) {
   const missionId = (mission && mission.id) || output.missionId;
-  const { question } = output;
+  const { question, prioritizationPayload } = output;
   let approval = existingApproval;
   if (!approval) {
     const approvalResult = engine.contribute(
@@ -1063,7 +1107,18 @@ function commitPrioritizationStage({
   current.pendingOperatorDecision = null;
   engine.store.putMission(current);
 
-  engine.progress(missionId, SPECIALISTS.OPERATOR, {
+  const payload = { ...prioritizationPayload, approvalId: approval.id, transactionId };
+  const prioritizationContribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.MAX,
+      kind: CONTRIBUTION_KINDS.PRIORITIZATION,
+      payload,
+    },
+    { tenantId }
+  );
+
+  engine.progress(missionId, SPECIALISTS.MAX, {
     tenantId,
     stage: STAGES.UNDERSTAND,
   });
@@ -1074,13 +1129,14 @@ function commitPrioritizationStage({
   engine.store.addEvent(createEvent({
     missionId,
     kind: EVENT_KINDS.EXECUTION_COMMITTED,
-    specialist: SPECIALISTS.OPERATOR,
-    label: 'Prioritization approved — advancing to Understanding',
+    specialist: SPECIALISTS.MAX,
+    label: 'Max prioritization committed',
     payload: {
       transactionId,
       missionVersion: updated.version,
       priorVersion: missionVersion,
       approvalId: approval.id,
+      prioritizationId: prioritizationContribution.contribution.id,
     },
   }));
 
@@ -1090,12 +1146,13 @@ function commitPrioritizationStage({
   });
   return {
     approval,
+    prioritization: prioritizationContribution.contribution,
     snapshot,
   };
 }
 
 /**
- * Consume prioritization approval and advance discover → understand.
+ * Consume prioritization approval, execute Max at UNDERSTAND, attach prioritization, and advance.
  * SPEC-141 — the only path that transitions to Understanding after Discovery.
  * @param {object} input
  * @returns {Promise<object>}
@@ -1108,6 +1165,7 @@ async function advancePrioritizationAfterApproval(input = {}) {
     tenantId,
     question,
     operatorId,
+    runMax,
   } = input;
 
   if (!engine || !mission) {
@@ -1117,42 +1175,80 @@ async function advancePrioritizationAfterApproval(input = {}) {
   let snapshot = engine.inspect(mission.id, { tenantId });
   const contributions = snapshot.contributions || [];
   const existingApproval = findPrioritizationApproval(contributions);
+  const existingPrioritization = findLatestMaxPrioritization(contributions);
 
-  if (existingApproval && snapshot.mission.stage === STAGES.UNDERSTAND) {
+  if (existingApproval && existingPrioritization && snapshot.mission.stage === STAGES.UNDERSTAND) {
     askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'already_executed');
     return {
       alreadyExecuted: true,
       approval: existingApproval,
+      prioritization: existingPrioritization,
       snapshot: engine.inspect(mission.id, { tenantId }),
       approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
     };
   }
 
-  const staged = await executeMissionStage({
-    engine,
-    missionId: mission.id,
-    tenantId,
-    pool: input.pool,
-    specialist: SPECIALISTS.OPERATOR,
-    stage: 'prioritization_approval',
-    operatorId,
-    validatePreconditions: (ctx) => validatePrioritizationPreconditions(ctx),
-    execute: async ({ mission: current }) => ({
-      question,
-      missionId: current.id,
-    }),
-    commit: (ctx) => commitPrioritizationStage({
-      ...ctx,
-      existingApproval,
-    }),
-    persistDurable: bindPersistDurable(input, engine, tenantId),
-  });
+  let staged;
+  try {
+    staged = await executeMissionStage({
+      engine,
+      missionId: mission.id,
+      tenantId,
+      pool: input.pool,
+      specialist: SPECIALISTS.MAX,
+      stage: STAGES.UNDERSTAND,
+      operatorId,
+      validatePreconditions: (ctx) => validatePrioritizationPreconditions(ctx),
+      execute: async ({ mission: current, transactionId }) => {
+        const maxResult = await runMaxForAmoMission(current, {
+          question,
+          operatorId,
+          engine,
+          transactionId,
+          pool: input.pool,
+          runMax,
+          executionRequest: input.executionRequest || null,
+        });
+        const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+          ? maxResult
+          : executionResultFromStageOutput(
+            { maxResult, prioritizationPayload: maxResult && maxResult.contributions },
+            { specialist: SPECIALISTS.MAX, transactionId }
+          );
+        const prioritizationPayload =
+          maxResult
+          && maxResult.status === EXECUTION_STATUSES.SUCCESS
+          && maxResult.contributions
+          && Object.keys(maxResult.contributions).length
+            ? prioritizationPayloadFromMaxResult(maxResult)
+            : null;
+        return {
+          maxResult,
+          prioritizationPayload,
+          executionResult,
+          question,
+          missionId: current.id,
+        };
+      },
+      validateOutput: validatePrioritizationOutput,
+      commit: (ctx) => commitPrioritizationStage({
+        ...ctx,
+        existingApproval,
+      }),
+      persistDurable: bindPersistDurable(input, engine, tenantId),
+    });
+  } catch (err) {
+    askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'rolled_back');
+    throw err;
+  }
 
   snapshot = staged.commitResult.snapshot;
   askPathTrace.traceEarlyReturn('advancePrioritizationAfterApproval', 'completed');
   return {
     alreadyExecuted: false,
     approval: staged.commitResult.approval,
+    prioritization: staged.commitResult.prioritization,
+    maxResult: staged.output.maxResult,
     snapshot,
     approvalPhase: APPROVAL_PHASES.STAGE_COMPLETED,
     transactionId: staged.transactionId,
@@ -1161,11 +1257,7 @@ async function advancePrioritizationAfterApproval(input = {}) {
 }
 
 function findMaxPrioritization(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.MAX && row.kind === CONTRIBUTION_KINDS.PRIORITIZATION
-    );
+  return findLatestMaxPrioritization(contributions);
 }
 
 function findPaigeVariants(contributions = []) {
@@ -1180,38 +1272,7 @@ function buildMaxPrioritizationPayload(mission, contributions = []) {
   const scout = findLatestScoutDiscovery(contributions);
   const scoutPayload = scout?.payload || {};
   const plan = mission.structuredMission || {};
-  const opportunities = scoutPayload.opportunities || [];
-  const rankedTargets = opportunities.slice(0, 5).map((o, index) => ({
-    rank: index + 1,
-    companyId: o.companyId || o.id,
-    name: o.name,
-    fit: o.fit,
-    timing: o.timing,
-    signals: o.signals || [],
-  }));
-  const topName = rankedTargets[0]?.name || plan.market?.label || plan.market?.segment;
-  return {
-    priorities: rankedTargets.length
-      ? rankedTargets
-      : [{ segment: plan.market?.segment, rank: 1, name: topName }],
-    objectives: [{ text: plan.objective || mission.objective }],
-    objectiveReason: 'Prioritized from Scout discovery evidence and locked mission plan.',
-    timing: plan.timing || 'immediate',
-    recommendations: [
-      ...(Array.isArray(scoutPayload.recommendations) ? scoutPayload.recommendations : []),
-      rankedTargets.length
-        ? `Prioritize ${topName} based on fit and timing signals.`
-        : 'Review Scout evidence before outreach.',
-      'Delegate variant generation to Paige.',
-      'Delegate capacity planning to Emmett.',
-    ],
-    constraints: (plan.constraints || mission.constraints || []).slice(),
-    delegation: { paige: 'variants', emmett: 'capacity' },
-    rankedTargets,
-    buyingSignals: scoutPayload.buyingSignals || scoutPayload.signals || [],
-    evidence: scoutPayload.evidence || [],
-    confidence: scoutPayload.confidence || 0.7,
-  };
+  return buildPrioritizationPayload(mission, scoutPayload, plan);
 }
 
 function fixtureMaxPrioritizationResult(mission, contributions = []) {
@@ -1275,12 +1336,19 @@ function fixturePaigeVariantsResult(mission, contributions = []) {
 
 async function runMaxPrioritizationForAmoMission(mission, opts = {}) {
   if (typeof opts.runMax === 'function') {
-    return opts.runMax(mission, opts);
+    const custom = await opts.runMax(mission, opts);
+    if (custom && custom.contributions) return custom.contributions;
+    return custom;
   }
-  const contributions = opts.contributions
-    || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
-    || [];
-  return fixtureMaxPrioritizationResult(mission, contributions);
+  const maxResult = await runMaxForAmoMission(mission, opts);
+  if (maxResult.status === EXECUTION_STATUSES.BLOCKED || maxResult.status === EXECUTION_STATUSES.FAILED) {
+    const reason =
+      (maxResult.blocked && maxResult.blocked.reason)
+      || maxResult.reason
+      || 'Max prioritization did not complete.';
+    throw validationError('tme_max_blocked', reason);
+  }
+  return prioritizationPayloadFromMaxResult(maxResult);
 }
 
 async function runPaigeForAmoMission(mission, opts = {}) {
@@ -1546,51 +1614,31 @@ async function advanceMaxPrioritization(input = {}) {
     operatorId,
     validatePreconditions: (ctx) => validateMaxPrioritizationPreconditions(ctx),
     execute: async ({ mission: current, transactionId }) => {
-      const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
-      const prioritizationPayload = await runMaxPrioritizationForAmoMission(current, {
+      const maxResult = await runMaxForAmoMission(current, {
         ...input,
-        contributions,
         transactionId,
       });
-      const executionResult = await executeSpecialist({
-        mission: current,
-        contributions,
-        specialist: SPECIALISTS.MAX,
-        transactionId,
-        run: async (secInput) => {
-          const payload = prioritizationPayload;
-          return {
-            spec: 'SPEC-132',
-            status: EXECUTION_STATUSES.SUCCESS,
-            confidence: { overall: payload.confidence || 0.7, evidence: 0.7, fit: 0.7, completeness: 0.7 },
-            evidence: (payload.evidence || []).map((item, index) => (
-              typeof item === 'string'
-                ? {
-                  id: `ev_max_${index}`,
-                  label: item,
-                  source: item,
-                  timestamp: new Date().toISOString(),
-                  provenance: { kind: 'max_prioritization', source: 'scout_discovery' },
-                }
-                : item
-            )),
-            contributions: payload,
-            recommendations: (payload.recommendations || []).map((text) => ({
-              tier: 'required',
-              text: typeof text === 'string' ? text : text.text,
-            })),
-            unknowns: [],
-            nextActions: [{ kind: 'generate_outreach', label: 'Generate outreach variants' }],
-          };
-        },
-      });
+      const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+        ? maxResult
+        : executionResultFromStageOutput(
+          { maxResult, prioritizationPayload: maxResult && maxResult.contributions },
+          { specialist: SPECIALISTS.MAX, transactionId }
+        );
+      const prioritizationPayload =
+        maxResult
+        && maxResult.status === EXECUTION_STATUSES.SUCCESS
+        && maxResult.contributions
+        && Object.keys(maxResult.contributions).length
+          ? prioritizationPayloadFromMaxResult(maxResult)
+          : null;
       return {
+        maxResult,
         prioritizationPayload,
         executionResult,
         missionId: current.id,
       };
     },
-    validateOutput: validateMaxPrioritizationOutput,
+    validateOutput: validatePrioritizationOutput,
     commit: (ctx) => commitMaxPrioritizationStage(ctx),
     persistDurable: bindPersistDurable(input, engine, tenantId),
   });
@@ -1999,6 +2047,7 @@ module.exports = {
   buildDelegationFromAmoMission,
   findDiscoveryApproval,
   findPrioritizationApproval,
+  findLatestMaxPrioritization,
   findPlanApproval,
   findScoutDiscoveryAfterApproval,
   hasPendingPlanApproval,
