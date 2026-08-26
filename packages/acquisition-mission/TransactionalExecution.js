@@ -37,6 +37,7 @@ const {
   acquireMissionDurableLock,
   releaseMissionDurableLock,
 } = require('./TransactionalPersistence');
+const { attachProviderDiagnostics } = require('../scout/coverage/ProviderExecution');
 
 const RUNTIME_STATES = Object.freeze({
   PLANNED: 'planned',
@@ -286,6 +287,7 @@ async function executeMissionStage(input = {}) {
           transactionId,
         });
       } catch (err) {
+        attachProviderDiagnostics(err, output);
         throw wrapAs(TME_CLASSES.VALIDATION, err, 'tme_validation', err.message || 'Output validation failed.');
       }
     }

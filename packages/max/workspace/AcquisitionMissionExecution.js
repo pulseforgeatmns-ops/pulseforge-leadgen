@@ -62,6 +62,7 @@ const { isStructuredMissionApproved } = require('../../acquisition-mission/Struc
 const {
   presentationFromDiscoveryPayload,
 } = require('../../acquisition-mission/DiscoveryPresentation');
+const { formatProviderExecutionProse } = require('../../scout/coverage/ProviderExecution');
 const {
   hasSufficientEvidenceForPrioritization,
 } = require('../../acquisition-mission/DiscoveryPayload');
@@ -207,6 +208,13 @@ function buildExecutionMissionResponse({
   if (executionResult && executionResult.rolledBack) {
     const err = executionResult.error || {};
     const stageName = action === 'plan_approved' ? 'Mission plan' : 'Discovery';
+    const providerDiagnostics =
+      (err.details && Array.isArray(err.details.providerExecution) && err.details.providerExecution.length)
+        ? formatProviderExecutionProse(err.details.providerExecution)
+        : null;
+    const evidenceStatus = providerDiagnostics
+      ? `${err.message || err.rollbackReason || formatRollbackProse(stageName)}\n\n${providerDiagnostics}`
+      : err.rollbackReason || err.message || formatRollbackProse(stageName);
     const comm = buildMissionCommunication({
       headline: `${stageName} could not execute`,
       mission: mission.title || mission.id,
@@ -217,11 +225,13 @@ function buildExecutionMissionResponse({
       waitingOn: 'Resolve the blocker',
       nextStep: 'Resolve the blocker and retry.',
       operatorDecision: action === 'plan_approved' ? 'Approve mission plan?' : 'Approve discovery?',
-      evidenceStatus: err.rollbackReason || err.message || formatRollbackProse(stageName),
+      evidenceStatus,
       sources: ['acquisition_mission', 'tme'],
       includeReasoningMarker: false,
     });
-    const prose = formatRollbackProse(stageName);
+    const prose = providerDiagnostics
+      ? `${formatRollbackProse(stageName)}\n\n${providerDiagnostics}`
+      : formatRollbackProse(stageName);
     const structured = applyMissionCommunication(
       buildStructuredResponse({
         answer: prose,

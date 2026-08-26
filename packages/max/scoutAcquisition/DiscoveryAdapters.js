@@ -16,6 +16,7 @@ function adapterResult({
   coverage = null,
   errors = [],
   available = true,
+  execution = null,
 }) {
   return {
     source,
@@ -24,6 +25,7 @@ function adapterResult({
     coverage,
     errors,
     available,
+    execution,
   };
 }
 
@@ -163,9 +165,13 @@ function createPlacesDiscoveryAdapter(opts = {}) {
       if (evidenceRequest) {
         try {
           const hits = await provider.collectEvidence(evidenceRequest);
+          const execution = provider.lastExecution || null;
           for (const hit of hits || []) {
             const mapped = toDiscoveredCompany(hit, searchDefinition, 'public_business_places');
             if (mapped) candidates.push(mapped);
+          }
+          if (execution && Array.isArray(execution.errors) && execution.errors.length) {
+            errors.push(...execution.errors);
           }
           return adapterResult({
             source: 'public_business_places',
@@ -175,8 +181,11 @@ function createPlacesDiscoveryAdapter(opts = {}) {
               evidenceType: evidenceRequest.evidenceType,
               segment: evidenceRequest.segment,
               cities: (evidenceRequest.geography && evidenceRequest.geography.cities) || [],
+              execution,
             },
             errors,
+            execution,
+            available: !(execution && execution.abortReason === 'provider_unavailable'),
           });
         } catch (err) {
           errors.push({
@@ -190,6 +199,7 @@ function createPlacesDiscoveryAdapter(opts = {}) {
             candidates,
             coverage: { evidenceType: evidenceRequest.evidenceType },
             errors,
+            execution: provider.lastExecution || null,
           });
         }
       }

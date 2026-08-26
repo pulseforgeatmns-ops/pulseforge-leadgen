@@ -6,6 +6,10 @@
  */
 
 const { formatSignalLabel, sourceLabel } = require('./DiscoveryPayload');
+const {
+  normalizeProviderExecution,
+  formatProviderExecutionLines,
+} = require('../scout/coverage/ProviderExecution');
 
 /**
  * @param {unknown} item
@@ -106,6 +110,7 @@ function presentationFromDiscoveryPayload(payload = {}) {
       : discoveryReport && discoveryReport.candidateUniverse != null
         ? Number(discoveryReport.candidateUniverse)
         : null;
+  const providerExecution = normalizeProviderExecution(payload.providerExecution || []);
 
   let rankedProspects = Array.isArray(payload.rankedProspects)
     ? payload.rankedProspects.map((row) => ({ ...row }))
@@ -164,6 +169,7 @@ function presentationFromDiscoveryPayload(payload = {}) {
     discoveryReport,
     discoveryStatus,
     candidateUniverseCount,
+    providerExecution,
   };
 }
 
@@ -304,6 +310,11 @@ function formatDiscoveryResultsLines(presentation) {
     for (const maker of presentation.decisionMakers) {
       lines.push(`• ${maker}`);
     }
+    lines.push('');
+  }
+
+  if (presentation.providerExecution && presentation.providerExecution.length) {
+    lines.push(...formatProviderExecutionLines(presentation.providerExecution));
     lines.push('');
   }
 

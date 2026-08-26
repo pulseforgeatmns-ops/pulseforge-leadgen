@@ -6,6 +6,18 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- SPEC-184 Provider Execution Continuity ([SPEC-184](docs/specs/SPEC-184_Provider_Execution_Continuity.md), [ADR-099](docs/adr/ADR-099_Sensor_Observation_Continuity.md))
+  - `providerExecution` is part of the canonical Discovery contribution contract — never discarded at normalization
+  - Provider sensor telemetry (HTTP status, Google status, latency, query, results) persists with mission contributions
+  - Validation rollback attaches provider diagnostics so operators see sensor context instead of generic evidence errors
+  - Remediates AUDIT-060 propagation gap
+
+- AUDIT-059 External Discovery Provider Failure ([AUDIT-059](docs/architecture/AUDIT-059_External_Discovery_Provider_Failure.md))
+  - Places execution records the actual Text Search query, Google status, HTTP status, latency, retries, quota, and errors
+  - `REQUEST_DENIED` / quota failures are provider failures, not empty markets
+  - Scout discovery payload includes `providerExecution` so Discovery Blocked can cite the sensor result
+  - First divergence: Provider Execution, not identity/qualification filters
+
 - Canonical Execution Router ([SPEC-171](docs/specs/SPEC-171_Canonical_Execution_Router.md), [ADR-090](docs/adr/ADR-090_Canonical_Execution_Routing.md))
   - Every execution-capable surface produces an immutable Canonical Execution Request (CER)
   - Only `routeExecutionRequest()` may dispatch specialists or TME
