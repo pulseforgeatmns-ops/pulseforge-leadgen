@@ -703,6 +703,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       mission: opts.mission || delegation.mission,
       hypothesisOpts: opts.hypothesisOpts,
       terminologyLearningStore: opts.terminologyLearningStore,
+      investigationPlan: opts.investigationPlan || null,
     });
   } catch (err) {
     const packed = emptyInvestigationResult({

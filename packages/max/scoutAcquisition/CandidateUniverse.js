@@ -276,6 +276,7 @@ async function constructCandidateUniverse(input = {}) {
           marketDefinition: input.marketDefinition,
           searchDefinition,
           adapters: marketAdapters,
+          investigationPlan: input.investigationPlan || null,
           opts: input.hypothesisOpts || {},
         });
         result = engineResult;

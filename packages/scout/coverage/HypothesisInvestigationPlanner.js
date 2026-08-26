@@ -330,4 +330,5 @@ module.exports = {
   buildOperatorExplanations,
   revisePlanForUnavailableProviders,
   buildTasksFromAssignments,
+  deriveObjective,
 };

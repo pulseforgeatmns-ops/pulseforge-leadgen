@@ -1,19 +1,23 @@
 'use strict';
 
 /**
- * SPEC-145 — Adaptive Investigation Planning.
- * Before collecting evidence, Scout constructs an explicit Investigation Plan.
+ * SPEC-145 — Adaptive Investigation Planning (compatibility adapter).
+ * SPEC-180 — Delegates to HypothesisInvestigationPlanner; projects legacy fields.
  * ADR-064: Investigation Before Execution — providers execute the plan; they do not define it.
+ * ADR-095: Single Investigation Planner — one canonical plan builder.
  */
 
-const { generateHypotheses } = require('./HypothesisGeneration');
-const { buildEvidencePlan } = require('../intelligence/EvidencePlanning');
-const { createDefaultProviderRegistry } = require('../intelligence/ProviderCapabilityRegistry');
+const {
+  createHypothesisInvestigationPlan,
+  revisePlanForUnavailableProviders,
+  markInvestigationComplete,
+} = require('../coverage/HypothesisInvestigationPlanner');
 const { planInvestigationChain, costScoreForTier } = require('./InvestigationPlanner');
 const {
   createProviderLearningStore,
   loadLearningFromMemory,
 } = require('./ProviderLearning');
+const { createDefaultProviderRegistry } = require('../intelligence/ProviderCapabilityRegistry');
 const { DEFAULT_COVERAGE_THRESHOLD } = require('./InvestigationBoard');
 const { DEFAULT_CONFIDENCE_THRESHOLD, DEFAULT_MAX_COST_BUDGET } = require('./types');
 
@@ -24,16 +28,17 @@ const COST_TIER_ESTIMATE = Object.freeze({
   paid: 8,
 });
 
-const REQUIREMENT_TO_GAP = Object.freeze({
-  candidate_universe: 'geographic_fit',
+const EVIDENCE_TO_GAP = Object.freeze({
+  identity: 'geographic_fit',
+  portfolio_evidence: 'portfolio_size',
   decision_makers: 'decision_maker',
-  property_count: 'portfolio_size',
+  growth_signals: 'buying_signals',
+  cleaning_signals: 'cleaning_responsibility',
+  reviews: 'business_fit',
+  licensing: 'business_fit',
+  social: 'buying_signals',
   contact_path: 'contact_path',
   buying_signals: 'buying_signals',
-  cleaning_responsibility: 'cleaning_responsibility',
-  existing_vendors: 'vendor_relationship',
-  geographic_coverage: 'geographic_fit',
-  business_maturity: 'business_fit',
 });
 
 const PROVIDER_STATUS = Object.freeze({
@@ -64,7 +69,7 @@ function buildProviderPlan(partial = {}) {
 
 function buildInvestigationPlan(partial = {}) {
   return {
-    version: 'SPEC-145',
+    version: partial.version || 'SPEC-145',
     mission: partial.mission || null,
     objective: partial.objective || '',
     hypotheses: Array.isArray(partial.hypotheses) ? partial.hypotheses : [],
@@ -77,6 +82,7 @@ function buildInvestigationPlan(partial = {}) {
     createdAt: partial.createdAt || new Date().toISOString(),
     revisions: Array.isArray(partial.revisions) ? partial.revisions : [],
     rationale: partial.rationale || '',
+    ...partial,
   };
 }
 
@@ -92,14 +98,6 @@ function buildInvestigationStatus(partial = {}) {
     recommendedNextProvider: partial.recommendedNextProvider || null,
     recommendedNextInvestigation: partial.recommendedNextInvestigation || null,
   };
-}
-
-function deriveObjective(mission = {}, marketDefinition = {}) {
-  const text = mission.objectiveText || mission.objective || '';
-  const segment = marketDefinition.segment || marketDefinition.segments?.[0] || 'target market';
-  const geo = marketDefinition.geography || '';
-  if (text) return text;
-  return `Identify highest-probability opportunities among ${segment}${geo ? ` in ${geo}` : ''}`;
 }
 
 function buildStoppingConditions(opts = {}) {
@@ -125,73 +123,8 @@ function buildStoppingConditions(opts = {}) {
   };
 }
 
-function gapsFromHypotheses(hypotheses = []) {
-  const gaps = new Set();
-  for (const hyp of hypotheses) {
-    if (hyp.gap) gaps.add(hyp.gap);
-  }
-  return [...gaps];
-}
-
-function gapsFromEvidencePlan(evidencePlan = {}) {
-  return (evidencePlan.required || [])
-    .map((req) => REQUIREMENT_TO_GAP[req] || req)
-    .filter(Boolean);
-}
-
 function estimateCostForTier(tier) {
   return COST_TIER_ESTIMATE[tier] != null ? COST_TIER_ESTIMATE[tier] : costScoreForTier(tier);
-}
-
-function buildProviderSequence(hypotheses, evidencePlan, opts = {}) {
-  const registry = opts.registry || createDefaultProviderRegistry();
-  const learning = opts.learning || createProviderLearningStore();
-  const allGaps = [...new Set([...gapsFromHypotheses(hypotheses), ...gapsFromEvidencePlan(evidencePlan)])];
-
-  const providerPlans = [];
-  const seen = new Set();
-
-  for (const gap of allGaps) {
-    const chain = planInvestigationChain(gap, {
-      registry,
-      learning,
-      adaptivePlanning: opts.adaptivePlanning !== false,
-    });
-
-    for (const step of chain) {
-      const key = `${step.providerId}:${step.gap}:${step.capability}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      providerPlans.push(
-        buildProviderPlan({
-          provider: step.providerId,
-          providerId: step.providerId,
-          providerLabel: step.providerLabel,
-          capabilities: [step.capability],
-          evidenceExpected: [step.gap],
-          estimatedCost: estimateCostForTier(step.costTier),
-          confidenceGain: step.expectedInformationGain,
-          gap: step.gap,
-          order: providerPlans.length + 1,
-          rationale: step.rationale,
-        })
-      );
-    }
-  }
-
-  providerPlans.sort((a, b) => {
-    const ratioA = (a.confidenceGain || 0) / Math.max(a.estimatedCost, 1);
-    const ratioB = (b.confidenceGain || 0) / Math.max(b.estimatedCost, 1);
-    if (ratioB !== ratioA) return ratioB - ratioA;
-    return a.order - b.order;
-  });
-
-  providerPlans.forEach((p, i) => {
-    p.order = i + 1;
-  });
-
-  return providerPlans;
 }
 
 function estimatePlanMetrics(providerSequence, opts = {}) {
@@ -225,39 +158,117 @@ function estimatePlanMetrics(providerSequence, opts = {}) {
 }
 
 /**
+ * Project canonical SPEC-180 tasks into legacy providerSequence (SPEC-145 compat).
+ * @param {object} canonicalPlan
+ * @returns {object[]}
+ */
+function projectProviderSequenceFromCanonical(canonicalPlan) {
+  const sequence = [];
+  let order = 1;
+
+  for (const task of canonicalPlan.tasks || []) {
+    for (const provider of task.providers || []) {
+      sequence.push(
+        buildProviderPlan({
+          provider: provider.providerId,
+          providerId: provider.providerId,
+          providerLabel: provider.providerLabel || provider.providerId,
+          capabilities: provider.capabilities || [task.evidenceType],
+          evidenceExpected: [task.evidenceType],
+          estimatedCost: provider.estimatedCost != null ? provider.estimatedCost : 2,
+          confidenceGain: provider.confidenceGain != null ? provider.confidenceGain : 0.1,
+          gap: EVIDENCE_TO_GAP[task.evidenceType] || task.evidenceType,
+          order: order++,
+          rationale: provider.rationale || task.rationale || '',
+        })
+      );
+    }
+  }
+
+  return sequence;
+}
+
+function applyLearningToProviderSequence(sequence, learning) {
+  if (!learning || !learning.effectiveness) return sequence;
+
+  const adjusted = sequence.map((entry) => {
+    const effectiveness =
+      learning.effectiveness[entry.providerId] &&
+      learning.effectiveness[entry.providerId][entry.gap];
+    if (effectiveness == null) return entry;
+    return {
+      ...entry,
+      confidenceGain: Number((entry.confidenceGain * (0.5 + effectiveness)).toFixed(3)),
+    };
+  });
+
+  adjusted.sort((a, b) => {
+    const ratioA = (a.confidenceGain || 0) / Math.max(a.estimatedCost, 1);
+    const ratioB = (b.confidenceGain || 0) / Math.max(b.estimatedCost, 1);
+    if (ratioB !== ratioA) return ratioB - ratioA;
+    return a.order - b.order;
+  });
+
+  adjusted.forEach((p, i) => {
+    p.order = i + 1;
+  });
+
+  return adjusted;
+}
+
+/**
+ * Enrich canonical SPEC-180 plan with legacy SPEC-145 projection fields.
+ * @param {object} canonicalPlan
+ * @param {object} [opts]
+ * @param {object} [learning]
+ * @returns {object}
+ */
+function enrichCanonicalPlanWithLegacyFields(canonicalPlan, opts = {}, learning = null) {
+  let providerSequence = projectProviderSequenceFromCanonical(canonicalPlan);
+  if (learning) {
+    providerSequence = applyLearningToProviderSequence(providerSequence, learning);
+  }
+
+  const metrics = estimatePlanMetrics(providerSequence, opts);
+  const evidenceRequired = (canonicalPlan.evidenceRequirements || []).map(
+    (req) => req.evidenceType || req.type || req
+  );
+
+  return {
+    ...canonicalPlan,
+    providerSequence,
+    evidenceRequired,
+    stoppingConditions: buildStoppingConditions(opts),
+    estimatedCoverage: metrics.estimatedCoverage,
+    estimatedConfidence: metrics.estimatedConfidence,
+    estimatedCost: metrics.estimatedCost,
+    revisions: canonicalPlan.revisions || [],
+  };
+}
+
+function isCanonicalPlan(plan) {
+  return Boolean(plan && plan.version === 'SPEC-180' && Array.isArray(plan.tasks));
+}
+
+/**
  * Construct an explicit Investigation Plan before any provider executes.
+ * Delegates to HypothesisInvestigationPlanner (SPEC-180) — single canonical planner.
  * @param {object} input
  * @returns {object}
  */
 function createInvestigationPlan(input = {}) {
   const { mission = {}, marketDefinition = {}, opts = {}, learning, memory } = input;
-  const hypotheses = generateHypotheses(marketDefinition, mission, opts);
-  const evidencePlan = buildEvidencePlan(marketDefinition, opts);
 
   const learningStore =
     learning || (memory ? loadLearningFromMemory(memory) : createProviderLearningStore());
 
-  const providerSequence = buildProviderSequence(hypotheses, evidencePlan, {
-    ...opts,
-    learning: learningStore,
-  });
-
-  const metrics = estimatePlanMetrics(providerSequence, opts);
-  const stoppingConditions = buildStoppingConditions(opts);
-
-  return buildInvestigationPlan({
+  const canonicalPlan = createHypothesisInvestigationPlan({
     mission,
-    objective: deriveObjective(mission, marketDefinition),
-    hypotheses,
-    evidenceRequired: evidencePlan.required,
-    providerSequence,
-    stoppingConditions,
-    estimatedCoverage: metrics.estimatedCoverage,
-    estimatedConfidence: metrics.estimatedConfidence,
-    estimatedCost: metrics.estimatedCost,
-    rationale:
-      'Investigation plan constructed before any provider execution (ADR-064). Hypotheses drive evidence requirements; provider sequence optimizes confidence per cost.',
+    marketDefinition,
+    opts,
   });
+
+  return enrichCanonicalPlanWithLegacyFields(canonicalPlan, opts, learningStore);
 }
 
 function findReplacementProviders(gap, unavailableProvider, opts = {}) {
@@ -285,6 +296,7 @@ function findReplacementProviders(gap, unavailableProvider, opts = {}) {
 
 /**
  * Revise plan when providers are unavailable (Test 2).
+ * Canonical plans delegate to revisePlanForUnavailableProviders.
  * @param {object} plan
  * @param {object} revision
  * @returns {object}
@@ -294,6 +306,27 @@ function reviseInvestigationPlan(plan, revision = {}) {
     (revision.unavailableProviders || []).map((p) => String(p).toLowerCase())
   );
   const reason = revision.reason || 'Provider unavailable';
+
+  if (isCanonicalPlan(plan)) {
+    let revised = revisePlanForUnavailableProviders(plan, [...unavailable]);
+    const confidencePenalty = unavailable.size * 0.05;
+    const newConfidence = Math.max(0.1, (plan.estimatedConfidence || 0) - confidencePenalty);
+    const revisionRecord = {
+      at: new Date().toISOString(),
+      reason,
+      unavailableProviders: [...unavailable],
+      confidenceBefore: plan.estimatedConfidence,
+      confidenceAfter: newConfidence,
+    };
+    revised = enrichCanonicalPlanWithLegacyFields(revised, revision.opts || {});
+    return {
+      ...revised,
+      estimatedConfidence: Number(newConfidence.toFixed(2)),
+      revisions: [...(plan.revisions || []), revisionRecord],
+      rationale: `${plan.rationale || ''} Revised: ${reason}.`.trim(),
+    };
+  }
+
   const replacements = revision.replacements || {};
 
   let revisedSequence = plan.providerSequence.map((entry) => {
@@ -366,7 +399,7 @@ function reviseInvestigationPlan(plan, revision = {}) {
 }
 
 function updatePlanAfterStep(plan, step, outcome = {}) {
-  const sequence = plan.providerSequence.map((entry) => {
+  const sequence = (plan.providerSequence || []).map((entry) => {
     if (
       entry.providerId === step.providerId &&
       entry.gap === step.gap &&
@@ -380,16 +413,45 @@ function updatePlanAfterStep(plan, step, outcome = {}) {
     return entry;
   });
 
-  return { ...plan, providerSequence: sequence };
+  let updated = { ...plan, providerSequence: sequence };
+
+  if (isCanonicalPlan(plan)) {
+    const tasks = (plan.tasks || []).map((task) => {
+      const matchesProvider = (task.providers || []).some(
+        (p) => p.providerId === step.providerId
+      );
+      if (!matchesProvider || task.status === 'completed') return task;
+      let status = 'completed';
+      if (outcome.failed) status = 'failed';
+      else if (outcome.skipped) status = 'skipped';
+      return { ...task, status };
+    });
+    updated = { ...updated, tasks };
+  }
+
+  return updated;
 }
 
 function skipRemainingProviders(plan, reason = 'confidence_target_achieved') {
-  const sequence = plan.providerSequence.map((entry) => {
+  const sequence = (plan.providerSequence || []).map((entry) => {
     if (entry.status === PROVIDER_STATUS.PENDING) {
       return { ...entry, status: PROVIDER_STATUS.SKIPPED, skipReason: reason };
     }
     return entry;
   });
+
+  if (isCanonicalPlan(plan)) {
+    const completed = markInvestigationComplete(plan);
+    return {
+      ...completed,
+      providerSequence: sequence,
+      stoppingConditions: plan.stoppingConditions,
+      estimatedCoverage: plan.estimatedCoverage,
+      estimatedConfidence: plan.estimatedConfidence,
+      estimatedCost: plan.estimatedCost,
+    };
+  }
+
   return { ...plan, providerSequence: sequence };
 }
 
@@ -460,6 +522,7 @@ function createInvestigationPlanWithLearning(input = {}, priorMemory = null) {
 module.exports = {
   PROVIDER_STATUS,
   COST_TIER_ESTIMATE,
+  EVIDENCE_TO_GAP,
   buildInvestigationPlan,
   buildProviderPlan,
   buildInvestigationStatus,
@@ -473,6 +536,8 @@ module.exports = {
   findReplacementProviders,
   buildStoppingConditions,
   estimatePlanMetrics,
-  buildProviderSequence,
-  deriveObjective,
+  projectProviderSequenceFromCanonical,
+  enrichCanonicalPlanWithLegacyFields,
+  isCanonicalPlan,
+  deriveObjective: require('../coverage/HypothesisInvestigationPlanner').deriveObjective,
 };
