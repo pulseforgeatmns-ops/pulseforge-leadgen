@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- SPEC-185 Blocked Discovery Telemetry Continuity ([SPEC-185](docs/specs/SPEC-185_Blocked_Discovery_Telemetry_Continuity.md), [ADR-100](docs/adr/ADR-100_Uniform_Discovery_Payloads.md))
+  - Every Discovery exit path — success, blocked, partial, provider failure — includes `providerExecution`
+  - Blocked Scout returns preserve `universe.providerReports` instead of dropping sensor telemetry
+  - Operators on blocked discovery see provider execution records, not only generic failure copy
+  - Remediates AUDIT-061 blocked-path divergence
+
 - SPEC-184 Provider Execution Continuity ([SPEC-184](docs/specs/SPEC-184_Provider_Execution_Continuity.md), [ADR-099](docs/adr/ADR-099_Sensor_Observation_Continuity.md))
   - `providerExecution` is part of the canonical Discovery contribution contract — never discarded at normalization
   - Provider sensor telemetry (HTTP status, Google status, latency, query, results) persists with mission contributions

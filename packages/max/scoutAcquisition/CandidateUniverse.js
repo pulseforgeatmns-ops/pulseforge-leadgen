@@ -321,7 +321,7 @@ async function constructCandidateUniverse(input = {}) {
       coverage: coverageMetrics,
       candidateUniverse: candidateUniverseRecords,
       searchSuccess:
-        coverageMetrics && coverageMetrics.searches.planned
+        coverageMetrics && coverageMetrics.searches && coverageMetrics.searches.planned
           ? coverageMetrics.searches.executed / coverageMetrics.searches.planned
           : discoveredRaw.length > 0
             ? 0.6
