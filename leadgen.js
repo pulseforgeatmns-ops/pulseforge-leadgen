@@ -28,6 +28,12 @@ const { awaitProspeoSlot } = require('./utils/prospeoThrottle');
 const { checkProspeoQuota, recordProspeoCall, trip429 } = require('./utils/prospeoBreaker');
 const { shouldExcludeProspect, extractEmailDomain } = require('./utils/prospectFilter');
 const { normalizeVertical } = require('./utils/normalize');
+const {
+  PLACES_FEATURES,
+  TRIGGER_MODES,
+  withPlacesContext,
+} = require('./utils/placesCostAttribution');
+const { legacyTextSearch, legacyPlaceDetails } = require('./utils/placesApi');
 const { SCOUT_SKIP_REASONS, ensureScoutSkipLogTable, logScoutSkip } = require('./utils/scoutSkipLog');
 const { reportAgentRun } = require('./utils/agentObservability');
 const { setSetterVisibility } = require('./utils/setterVisibility');
@@ -1002,17 +1008,21 @@ async function enrichWithProspeo(domain) {
 // ─────────────────────────────────────────────────────────────────────
 const PLACES_TEXTSEARCH = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
 const PLACES_DETAILS    = 'https://maps.googleapis.com/maps/api/place/details/json';
+const PLACE_DETAILS_FIELDS =
+  'name,formatted_address,address_components,formatted_phone_number,website,place_id,rating,user_ratings_total,types';
 
 async function fetchPlaceDetails(placeId, apiKey) {
-  const res = await axios.get(PLACES_DETAILS, {
-    params: {
-      place_id: placeId,
-      fields: 'name,formatted_address,address_components,formatted_phone_number,website,place_id,rating,user_ratings_total,types',
-      key: apiKey,
+  const traced = await legacyPlaceDetails({
+    placeId,
+    fields: PLACE_DETAILS_FIELDS,
+    apiKey,
+    record: {
+      caller: 'leadgen.js',
+      feature: PLACES_FEATURES.LEADGEN,
     },
   });
-  if (res.data.status !== 'OK') return null;
-  return res.data.result;
+  if (traced.googleStatus !== 'OK') return null;
+  return traced.data?.result || null;
 }
 
 const B2B_SIGNAL_RE = /\b(commercial|industrial|business|facility|facilit(?:y|ies)|corporate|office|property management|hoa|association management|janitorial|staffing|recruiting|freight|logistics|insurance|managed (?:it|service)|msp|fire protection|fire sprinkler|access control|low voltage|mechanical contractor)\b/i;
@@ -1044,17 +1054,27 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
   const query = sanitizeQueueLocation(`${industry || ''} ${location || ''}`);
 
   try {
-    const res = await axios.get(PLACES_TEXTSEARCH, {
-      params: { query, key: PLACES_KEY },
+    const traced = await legacyTextSearch({
+      query,
+      apiKey: PLACES_KEY,
+      deferRecord: true,
+      record: {
+        caller: 'leadgen.js',
+        feature: PLACES_FEATURES.LEADGEN,
+        providerId: 'google_places',
+      },
     });
 
-    const status = res.data.status;
+    const status = traced.googleStatus;
     if (status !== 'OK' && status !== 'ZERO_RESULTS') {
-      console.error('[Places] Text Search status:', status, res.data.error_message || '');
+      console.error('[Places] Text Search status:', status, traced.data?.error_message || '');
+      if (typeof traced.commitRecord === 'function') {
+        await traced.commitRecord({ businessesReturned: 0, businessesAccepted: 0 });
+      }
       return [];
     }
 
-    const results = (res.data.results || []).slice(0, numResults);
+    const results = (traced.data?.results || []).slice(0, numResults);
 
     for (const hit of results) {
       try {
@@ -1093,6 +1113,12 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
     }
 
     console.log(`[Places] Found ${leads.length} identity-established results`);
+    if (typeof traced.commitRecord === 'function') {
+      await traced.commitRecord({
+        businessesAccepted: leads.length,
+        candidatesCreated: leads.length,
+      });
+    }
     return leads;
   } catch (err) {
     console.error('[Places] Error:', err.response?.data || err.message);
@@ -3114,6 +3140,20 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
 }
 
 async function run(params = {}) {
+  const triggerMode = params.cron || params.secret ? TRIGGER_MODES.CRON : TRIGGER_MODES.MANUAL;
+  return withPlacesContext(
+    {
+      caller: 'leadgen.js',
+      feature: PLACES_FEATURES.LEADGEN,
+      tenantId: params.client_id || params.clientId || process.env.ACTIVE_CLIENT_ID || null,
+      executionId: params.runId || params.run_id || null,
+      triggerMode,
+    },
+    () => runWithAttribution(params)
+  );
+}
+
+async function runWithAttribution(params = {}) {
   CONFIG.clientId = getRuntimeClientId(params);
   CONFIG.parkedRowsSkipped = 0;
   const observabilityRunId = makeScoutObservabilityRunId();

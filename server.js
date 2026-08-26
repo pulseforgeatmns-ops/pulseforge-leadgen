@@ -48,6 +48,7 @@ const { startMiraDigestScheduler } = require('./miraDigestAgent');
 const { startWarmRoutingScheduler } = require('./warmRoutingAgent');
 const { startAnchorUnenrichedEnrichmentScheduler } = require('./scoutUnenrichedEnrichmentAgent');
 const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
+const { ensurePlacesAttributionSchema } = require('./utils/placesCostAttribution');
 const stripeWebhookRouter = require('./routes/stripeWebhook');
 
 const app  = express();
@@ -69,6 +70,7 @@ ensureScoutLockTable().catch(err => console.error('[scoutLock] init error:', err
 ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init error:', err.message));
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
+ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();

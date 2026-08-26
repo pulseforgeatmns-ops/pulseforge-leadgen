@@ -18,6 +18,11 @@ const {
   createPlacesProvider,
 } = require('../packages/capabilities/discovery/providers/PlacesProvider');
 const {
+  PLACES_FEATURES,
+  withPlacesContext,
+} = require('../utils/placesCostAttribution');
+const { legacyTextSearch, legacyPlaceDetails } = require('../utils/placesApi');
+const {
   CANDIDATE_STATUS,
   interpretAnchorMarket,
   buildNhScopedSearchQueries,
@@ -372,13 +377,19 @@ function createScoutPlacesSearchProvider(deps = {}) {
       const q = String(query.query || query.industry || '').trim();
       if (!q) return [];
 
-      const url = buildScoutPlacesTextSearchUrl({ query: q, apiKey });
-
-      const res = await fetchImpl(url.toString());
-      if (!res.ok) {
-        throw new Error(`google_places_http_${res.status}`);
+      const traced = await legacyTextSearch({
+        query: q,
+        apiKey,
+        fetchImpl,
+        record: {
+          caller: 'scoutPublicSourcing.js',
+          feature: PLACES_FEATURES.DISCOVERY,
+        },
+      });
+      if (!traced.ok) {
+        throw new Error(`google_places_http_${traced.httpStatus}`);
       }
-      const data = await res.json();
+      const data = traced.data || {};
       if (data.status === 'ZERO_RESULTS') return [];
       if (data.status !== 'OK') {
         throw new Error(`google_places_status_${data.status || 'unknown'}`);
@@ -412,11 +423,18 @@ function createScoutPlacesSearchProvider(deps = {}) {
 
 async function fetchPlaceDetails(placeId, apiKey, fetchImpl) {
   if (!placeId) return null;
-  const url = buildScoutPlacesDetailsUrl({ placeId, apiKey });
-  const res = await fetchImpl(url.toString());
-  if (!res.ok) return null;
-  const data = await res.json();
-  return data.result || null;
+  const traced = await legacyPlaceDetails({
+    placeId,
+    fields: SCOUT_PLACES_DETAILS_FIELDS,
+    apiKey,
+    fetchImpl,
+    record: {
+      caller: 'scoutPublicSourcing.js',
+      feature: PLACES_FEATURES.DISCOVERY,
+    },
+  });
+  if (!traced.ok) return null;
+  return traced.data?.result || null;
 }
 
 function dedupeCandidates(rows) {
@@ -447,6 +465,22 @@ function dedupeCandidates(rows) {
  * @returns {Promise<{ ok: boolean, candidates: object[], warnings: string[], error: string|null, queried: string[], crmWritesMade: boolean, outreachCopyGenerated: boolean, accountChangesMade: boolean }>}
  */
 async function sourceScoutCandidatesFromPublicSources(input = {}) {
+  const workRequest = input.workRequest || input;
+  const opts = input.opts || {};
+  return withPlacesContext(
+    {
+      caller: 'scoutPublicSourcing.js',
+      feature: PLACES_FEATURES.DISCOVERY,
+      tenantId: workRequest?.clientId || workRequest?.client_id || opts.clientId || null,
+      missionId: workRequest?.missionId || workRequest?.mission_id || null,
+      executionId: opts.executionId || opts.execution_id || null,
+      triggerMode: opts.triggerMode || opts.trigger_mode || 'manual',
+    },
+    () => sourceScoutCandidatesFromPublicSourcesCore(input)
+  );
+}
+
+async function sourceScoutCandidatesFromPublicSourcesCore(input = {}) {
   const workRequest = input.workRequest || input;
   const opts = input.opts || {};
   const warnings = [];

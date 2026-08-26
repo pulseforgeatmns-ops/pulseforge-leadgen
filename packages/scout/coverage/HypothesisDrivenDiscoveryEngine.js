@@ -15,6 +15,10 @@
 
 const { asText, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
 const { scopeSearchDefinitionForTask } = require('./EvidenceRequest');
+const {
+  withPlacesContext,
+  buildPlacesContextFromDiscovery,
+} = require('../../../utils/placesCostAttribution');
 const { generateCanonicalHypotheses, businessHypothesesForPlanner } = require('../hypothesis/CanonicalHypothesisEngine');
 const {
   createInvestigationState,
@@ -205,7 +209,14 @@ async function executeProviderAssignment(assignment, searchDefinition, adapters,
   }
 
   try {
-    const report = await adapter.discover(scoped);
+    const placesCtx = buildPlacesContextFromDiscovery({
+      searchDefinition: scoped,
+      assignment,
+      task,
+      mission: marketDefinition.mission || searchDefinition.mission || {},
+      caller: 'HypothesisDrivenDiscoveryEngine',
+    });
+    const report = await withPlacesContext(placesCtx, () => adapter.discover(scoped));
     return normalizeProviderReport(report, assignment);
   } catch (err) {
     return normalizeProviderReport(
@@ -271,7 +282,31 @@ async function executeInvestigationTask(task, searchDefinition, adapters, market
 async function runHypothesisDrivenDiscovery(input = {}) {
   const mission = input.mission || {};
   const marketDefinition = input.marketDefinition || {};
-  const searchDefinition = input.searchDefinition || marketDefinition.searchDefinition || {};
+  let searchDefinition = input.searchDefinition || marketDefinition.searchDefinition || {};
+  searchDefinition = {
+    ...searchDefinition,
+    missionId: searchDefinition.missionId || searchDefinition.mission_id || mission.id || null,
+    missionStage:
+      searchDefinition.missionStage ||
+      searchDefinition.mission_stage ||
+      mission.stage ||
+      mission.currentStage ||
+      null,
+    operatorId:
+      searchDefinition.operatorId ||
+      searchDefinition.operator_id ||
+      mission.operatorId ||
+      mission.createdBy ||
+      null,
+    executionId:
+      searchDefinition.executionId ||
+      searchDefinition.execution_id ||
+      mission.executionId ||
+      null,
+    hypotheses: searchDefinition.hypotheses || mission.hypotheses || [],
+    mission,
+  };
+  marketDefinition.mission = mission;
   const adapters = input.adapters || [];
   const opts = input.opts || {};
 
