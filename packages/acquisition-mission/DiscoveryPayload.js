@@ -390,6 +390,8 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       businessUnderstanding: artifact.businessUnderstanding || null,
       businessJudgment: artifact.businessJudgment || null,
     },
+    cognitiveTrace: artifact.cognitiveTrace || null,
+    explainabilityGraph: artifact.explainabilityGraph || null,
   };
 
   if (containsForbiddenReasoningKeys(contribution)) {

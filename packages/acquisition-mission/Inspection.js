@@ -17,6 +17,10 @@ const {
 const { specialistContext, progressPercent } = require('./Lifecycle');
 const { currentBlocker } = require('./Blockers');
 const { collectEvidence } = require('./Explain');
+const {
+  answerOperatorQuestion,
+  deserializeGraph,
+} = require('../scout/explainability/ExplainabilityGraph');
 
 const INSPECTION_PROPERTIES = Object.freeze({
   PROGRESS: 'progress',
@@ -140,6 +144,11 @@ function classifyInspectionQuestion(question) {
     return INSPECTION_PROPERTIES.NEXT;
   }
   if (/\bwhy this recommendation\b|\bwhy (?:that|this) recommend/.test(q)) {
+    return INSPECTION_PROPERTIES.RECOMMENDATION;
+  }
+  if (
+    /\bwhy.*\b(?:linkedin|google places|website|provider)\b|\bwhy (?:this|that) evidence\b|\bwhy.*\breject|\bwhat terminology\b|\bwhat would change\b|\bwhy not another company\b/.test(q)
+  ) {
     return INSPECTION_PROPERTIES.RECOMMENDATION;
   }
   if (
@@ -523,7 +532,25 @@ function explainOutcomeLearning(snapshot) {
   };
 }
 
-function explainRecommendation(snapshot) {
+function resolveScoutCognitiveTrace(snapshot = {}) {
+  const contributions = snapshot.contributions || [];
+  const scoutDiscovery = [...contributions]
+    .reverse()
+    .find((row) => row.specialist === SPECIALISTS.SCOUT && row.kind === 'discovery');
+  const payload = scoutDiscovery?.payload || {};
+  if (payload.cognitiveTrace) return payload.cognitiveTrace;
+
+  const serialized = payload.explainabilityGraph || scoutDiscovery?.payload?.discoveryArtifact?.explainabilityGraph;
+  if (serialized && Array.isArray(serialized.nodes)) {
+    const graph = deserializeGraph(serialized);
+    const { serializeForAmo } = require('../scout/explainability/ExplainabilityGraph');
+    return serializeForAmo(graph);
+  }
+
+  return null;
+}
+
+function explainRecommendation(snapshot, question = '') {
   const learning = snapshot.learning || {};
   const max = [...(snapshot.contributions || [])].reverse().find((row) => row.specialist === SPECIALISTS.MAX);
   const recommendations = [];
@@ -532,15 +559,54 @@ function explainRecommendation(snapshot) {
     recommendations.push(...max.payload.recommendations);
   }
 
+  const cognitiveTrace = resolveScoutCognitiveTrace(snapshot);
+  const derivedFrom = [];
+
+  if (cognitiveTrace?.chain?.length) {
+    for (const node of cognitiveTrace.chain) {
+      derivedFrom.push({
+        label: node.kind.replace(/_/g, ' '),
+        detail: node.rationale || node.label,
+      });
+    }
+  } else if (recommendations.length) {
+    for (const row of recommendations) {
+      derivedFrom.push({ label: 'Recommendation', detail: String(row) });
+    }
+  } else {
+    derivedFrom.push({ label: 'Pending', detail: 'Awaiting Max prioritization or learning outcomes' });
+  }
+
+  let summary = recommendations[0] || cognitiveTrace?.recommendation?.label || 'Max has not recorded a segment recommendation yet';
+  if (question) {
+    const graphData = scoutGraphFromSnapshot(snapshot);
+    if (graphData) {
+      const answer = answerOperatorQuestion(graphData, question);
+      if (answer) summary = answer;
+    }
+  }
+
   return {
     property: INSPECTION_PROPERTIES.RECOMMENDATION,
-    value: recommendations[0] || 'No recommendation on file',
-    summary: recommendations[0] || 'Max has not recorded a segment recommendation yet',
-    derivedFrom: recommendations.length
-      ? recommendations.map((row) => ({ label: 'Recommendation', detail: String(row) }))
-      : [{ label: 'Pending', detail: 'Awaiting Max prioritization or learning outcomes' }],
+    value: recommendations[0] || cognitiveTrace?.recommendation?.label || 'No recommendation on file',
+    summary,
+    derivedFrom,
     headline: 'Recommendation',
+    cognitiveTrace: cognitiveTrace || null,
+    terminatesAtObjective: cognitiveTrace?.terminatesAtObjective === true,
   };
+}
+
+function scoutGraphFromSnapshot(snapshot = {}) {
+  const contributions = snapshot.contributions || [];
+  const scoutDiscovery = [...contributions]
+    .reverse()
+    .find((row) => row.specialist === SPECIALISTS.SCOUT && row.kind === 'discovery');
+  const serialized =
+    scoutDiscovery?.payload?.explainabilityGraph ||
+    scoutDiscovery?.payload?.discoveryArtifact?.explainabilityGraph;
+  if (!serialized || !Array.isArray(serialized.nodes)) return null;
+  return deserializeGraph(serialized);
 }
 
 function explainMetric(property, snapshot, question = '') {
@@ -562,7 +628,7 @@ function explainMetric(property, snapshot, question = '') {
     case INSPECTION_PROPERTIES.NEXT:
       return explainNext(snapshot);
     case INSPECTION_PROPERTIES.RECOMMENDATION:
-      return explainRecommendation(snapshot);
+      return explainRecommendation(snapshot, question);
     case INSPECTION_PROPERTIES.OUTCOME_LEARNING:
       return explainOutcomeLearning(snapshot);
     default:
@@ -718,6 +784,8 @@ module.exports = {
   explainProgressBasis,
   explainConfidenceBasis,
   explainHealthBasis,
+  explainRecommendation,
+  resolveScoutCognitiveTrace,
   formatInspection,
   inspectQuestion,
   emitMissionInspection,
