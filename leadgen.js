@@ -1057,15 +1057,20 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
     const traced = await legacyTextSearch({
       query,
       apiKey: PLACES_KEY,
+      deferRecord: true,
       record: {
         caller: 'leadgen.js',
         feature: PLACES_FEATURES.LEADGEN,
+        providerId: 'google_places',
       },
     });
 
     const status = traced.googleStatus;
     if (status !== 'OK' && status !== 'ZERO_RESULTS') {
       console.error('[Places] Text Search status:', status, traced.data?.error_message || '');
+      if (typeof traced.commitRecord === 'function') {
+        await traced.commitRecord({ businessesReturned: 0, businessesAccepted: 0 });
+      }
       return [];
     }
 
@@ -1108,6 +1113,12 @@ async function searchGooglePlaces(industry, location, numResults = 20) {
     }
 
     console.log(`[Places] Found ${leads.length} identity-established results`);
+    if (typeof traced.commitRecord === 'function') {
+      await traced.commitRecord({
+        businessesAccepted: leads.length,
+        candidatesCreated: leads.length,
+      });
+    }
     return leads;
   } catch (err) {
     console.error('[Places] Error:', err.response?.data || err.message);

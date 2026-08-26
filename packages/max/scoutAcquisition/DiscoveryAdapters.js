@@ -12,6 +12,7 @@ const {
   PLACES_FEATURES,
   TRIGGER_MODES,
   withPlacesContext,
+  buildPlacesContextFromDiscovery,
 } = require('../../../utils/placesCostAttribution');
 
 function adapterResult({
@@ -164,14 +165,10 @@ function createPlacesDiscoveryAdapter(opts = {}) {
       }
 
       return withPlacesContext(
-        {
+        buildPlacesContextFromDiscovery({
+          searchDefinition,
           caller: 'DiscoveryAdapters',
-          feature: PLACES_FEATURES.DISCOVERY,
-          tenantId: searchDefinition?.tenantId || null,
-          missionId: searchDefinition?.missionId || searchDefinition?.mission_id || null,
-          executionId: searchDefinition?.executionId || searchDefinition?.execution_id || null,
-          triggerMode: searchDefinition?.triggerMode || TRIGGER_MODES.MANUAL,
-        },
+        }),
         async () => {
           const evidenceRequest = searchDefinition.evidenceRequest || null;
           const candidates = [];

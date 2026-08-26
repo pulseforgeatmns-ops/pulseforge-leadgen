@@ -255,6 +255,7 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
 
   while (attempt <= MAX_RETRIES) {
     attempt += 1;
+    let pageAccepted = 0;
     const page = await fetchPlacesPage(querySpec, apiKey, fetchImpl, nextPageToken);
     attempts.push(page.attempt);
     latencyMs += page.attempt.latencyMs || 0;
@@ -280,9 +281,12 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
 
     for (const hit of page.results || []) {
       if (seenPlaceIds.has(hit.place_id)) continue;
-      const details = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl);
+      const details = await fetchPlaceDetails(hit.place_id, apiKey, fetchImpl, {
+        requireWebsite,
+      });
       const website = details?.website || null;
-      if (requireWebsite && !website) continue;
+      const accepted = !(requireWebsite && !website);
+      if (!accepted) continue;
 
       seenPlaceIds.add(hit.place_id);
       out.push({
@@ -296,6 +300,14 @@ async function searchWithRetry(querySpec, apiKey, fetchImpl, opts = {}) {
         source: 'google_places',
         industry: querySpec.industry || null,
         snippet: '',
+      });
+      pageAccepted += 1;
+    }
+
+    if (typeof page.commitRecord === 'function') {
+      await page.commitRecord({
+        businessesAccepted: pageAccepted,
+        candidatesCreated: pageAccepted,
       });
     }
 
@@ -336,14 +348,23 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
       apiKey,
       pageToken,
       fetchImpl,
+      deferRecord: true,
       record: {
         caller: 'PlacesProvider',
         feature: PLACES_FEATURES.DISCOVERY,
+        providerId: 'google_places',
       },
     });
     const latencyMs = Date.now() - started;
     const httpStatus = traced.httpStatus;
     if (!traced.ok) {
+      if (typeof traced.commitRecord === 'function') {
+        await traced.commitRecord({
+          businessesReturned: 0,
+          businessesAccepted: 0,
+          candidatesCreated: 0,
+        });
+      }
       return {
         results: [],
         nextPageToken: null,
@@ -371,6 +392,7 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
       results,
       nextPageToken: ok ? data.next_page_token || null : null,
       failed: !ok,
+      commitRecord: traced.commitRecord,
       attempt: {
         query: q,
         httpStatus,
@@ -401,20 +423,38 @@ async function fetchPlacesPage(querySpec, apiKey, fetchImpl, pageToken = null) {
   }
 }
 
-async function fetchPlaceDetails(placeId, apiKey, fetchImpl) {
+async function fetchPlaceDetails(placeId, apiKey, fetchImpl, opts = {}) {
   if (!placeId) return null;
+  const requireWebsite = opts.requireWebsite !== false;
   const traced = await legacyPlaceDetails({
     placeId,
     fields: PLACE_DETAILS_FIELDS,
     apiKey,
     fetchImpl,
+    deferRecord: true,
     record: {
       caller: 'PlacesProvider',
       feature: PLACES_FEATURES.DISCOVERY,
+      providerId: 'google_places',
     },
   });
-  if (!traced.ok) return null;
-  return traced.data?.result || null;
+  if (!traced.ok) {
+    if (typeof traced.commitRecord === 'function') {
+      await traced.commitRecord({ businessesReturned: 0, businessesAccepted: 0 });
+    }
+    return null;
+  }
+  const result = traced.data?.result || null;
+  const website = result?.website || null;
+  const accepted = !(requireWebsite && !website);
+  if (typeof traced.commitRecord === 'function') {
+    await traced.commitRecord({
+      businessesReturned: result ? 1 : 0,
+      businessesAccepted: accepted ? 1 : 0,
+      candidatesCreated: accepted ? 1 : 0,
+    });
+  }
+  return result;
 }
 
 function normalizeDomain(website) {

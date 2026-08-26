@@ -199,6 +199,7 @@ async function diagnoseScoutPlaces(opts = {}) {
       query: probeQuery,
       apiKey,
       fetchImpl,
+      useCache: false,
       record: {
         caller: 'scoutPlacesDiagnostic.js',
         feature: PLACES_FEATURES.DIAGNOSTIC,
