@@ -95,6 +95,7 @@ function createInjectedDiscoverAdapter(discoverFn) {
       const raw = await discoverFn({
         tenantId: searchDefinition.tenantId,
         searchDefinition,
+        evidenceRequest: searchDefinition.evidenceRequest || null,
         targetContext: {
           geography: searchDefinition.geography && searchDefinition.geography.label,
           segments: searchDefinition.segments,
@@ -138,7 +139,7 @@ function createPlacesDiscoveryAdapter(opts = {}) {
     sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
     required: false,
     available() {
-      return Boolean(provider && typeof provider.search === 'function' && provider.available());
+      return Boolean(provider && typeof provider.collectEvidence === 'function' && provider.available());
     },
     async discover(searchDefinition) {
       if (!this.available()) {
@@ -154,6 +155,46 @@ function createPlacesDiscoveryAdapter(opts = {}) {
           ],
         });
       }
+
+      const evidenceRequest = searchDefinition.evidenceRequest || null;
+      const candidates = [];
+      const errors = [];
+
+      if (evidenceRequest) {
+        try {
+          const hits = await provider.collectEvidence(evidenceRequest);
+          for (const hit of hits || []) {
+            const mapped = toDiscoveredCompany(hit, searchDefinition, 'public_business_places');
+            if (mapped) candidates.push(mapped);
+          }
+          return adapterResult({
+            source: 'public_business_places',
+            sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
+            candidates,
+            coverage: {
+              evidenceType: evidenceRequest.evidenceType,
+              segment: evidenceRequest.segment,
+              cities: (evidenceRequest.geography && evidenceRequest.geography.cities) || [],
+            },
+            errors,
+          });
+        } catch (err) {
+          errors.push({
+            code: 'provider_error',
+            message: err.message || String(err),
+            evidenceRequest,
+          });
+          return adapterResult({
+            source: 'public_business_places',
+            sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
+            candidates,
+            coverage: { evidenceType: evidenceRequest.evidenceType },
+            errors,
+          });
+        }
+      }
+
+      // Legacy segment path — retained until cron migration (SPEC-181 Phase 3).
       const geo = searchDefinition.geography && searchDefinition.geography.label;
       const segments = searchDefinition.segments || [];
       const queries = (segments.length ? segments : [searchDefinition.businessNeed || 'commercial'])
@@ -162,8 +203,6 @@ function createPlacesDiscoveryAdapter(opts = {}) {
           location: geo,
           limit: 20,
         }));
-      const candidates = [];
-      const errors = [];
       for (const query of queries) {
         try {
           const hits = await provider.search(query);
@@ -183,7 +222,7 @@ function createPlacesDiscoveryAdapter(opts = {}) {
         source: 'public_business_places',
         sourceType: SOURCE_TYPES.PUBLIC_BUSINESS_DATA,
         candidates,
-        coverage: { queries: queries.length },
+        coverage: { queries: queries.length, legacy: true },
         errors,
       });
     },

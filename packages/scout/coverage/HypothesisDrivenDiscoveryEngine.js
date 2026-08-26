@@ -14,7 +14,7 @@
  */
 
 const { asText, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
-const { expandCitiesFromSearchDefinition } = require('./DiscoveryCoverageEngine');
+const { scopeSearchDefinitionForTask } = require('./EvidenceRequest');
 const { generateCanonicalHypotheses, businessHypothesesForPlanner } = require('../hypothesis/CanonicalHypothesisEngine');
 const {
   createInvestigationState,
@@ -74,26 +74,7 @@ function adapterForProvider(adapters = [], providerId) {
 }
 
 function scopedSearchForTask(searchDefinition, task, marketDefinition) {
-  const cities = expandCitiesFromSearchDefinition(searchDefinition);
-  const city = cities[0] || (searchDefinition.geography && searchDefinition.geography.label) || '';
-  const segments =
-    marketDefinition.terminology ||
-    marketDefinition.searchConcepts ||
-    searchDefinition.segments ||
-    [];
-
-  return {
-    ...searchDefinition,
-    geography: {
-      ...(searchDefinition.geography || {}),
-      label: city,
-      cities: city ? [city.split(/\s+/)[0]] : [],
-    },
-    segments: segments.slice(0, 3),
-    _investigationTask: task.id,
-    _evidenceType: task.evidenceType,
-    _providerIds: (task.providers || []).map((p) => p.providerId),
-  };
+  return scopeSearchDefinitionForTask(searchDefinition, task, marketDefinition);
 }
 
 function normalizeCandidateRow(row) {
@@ -465,6 +446,7 @@ module.exports = {
   mergeIdentities,
   executeInvestigationTask,
   executeProviderAssignment,
+  scopedSearchForTask,
   explainProviderUsage,
   PROVIDER_TO_SOURCE_TYPE,
   buildProviderEvidenceReport,

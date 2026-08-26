@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
+| **Status** | Accepted |
 | **Priority** | Critical |
 | **Owner** | Scout |
 | **Created** | 2026-08-25 |
@@ -71,7 +71,7 @@ InvestigationState update
 
 ## Acceptance Criteria
 
-- [ ] Mission-path discovery uses evidence-native execution exclusively
-- [ ] `CandidateUniverse` does not call `executeCoveragePlan` when `marketDefinition` is present
-- [ ] Provider failure produces plan revision, not alternate reasoning path
+- [x] Mission-path discovery uses evidence-native execution exclusively
+- [x] `CandidateUniverse` does not call `executeCoveragePlan` when `marketDefinition` is present
+- [x] Provider failure produces plan revision, not alternate reasoning path
 - [ ] `leadgen.js` migration tracked as Phase 3 (separate PR)
