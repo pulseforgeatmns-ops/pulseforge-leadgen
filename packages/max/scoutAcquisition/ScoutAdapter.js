@@ -515,6 +515,11 @@ function emptyInvestigationResult(input) {
   };
 }
 
+function resolveProviderExecution(universe) {
+  if (!universe) return [];
+  return universe.providerReports || [];
+}
+
 function resolveAim(opts = {}, delegation = {}) {
   if (opts.aim) return isRuntimeAim(opts.aim) ? opts.aim : null;
   const ctx = (delegation && delegation.businessContext) || {};
@@ -574,6 +579,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         consumedContext: buildConsumedContext(null, {
           invalidReason: 'Discovery provider failed before opportunities could be confirmed.',
         }),
+        providerExecution: [],
       },
     };
   }
@@ -619,6 +625,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
+        providerExecution: [],
       },
     };
   }
@@ -666,6 +673,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
+        providerExecution: [],
       },
     };
   }
@@ -737,6 +745,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
+        providerExecution: [],
       },
     };
   }
@@ -794,6 +803,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         capabilityEvaluation: universe.capabilityEvaluation || null,
         capabilityBlocked: true,
         outcome: 'blocked',
+        providerExecution: resolveProviderExecution(universe),
       },
     };
   }
@@ -848,6 +858,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         investigation: packed.investigation,
         coverageConfidence: packed.investigation.coverageConfidence,
         consumedContext: buildConsumedContext(searchDefinition),
+        providerExecution: resolveProviderExecution(universe),
       },
     };
   }
@@ -1162,7 +1173,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       discoveryConfidence,
       investigationState: universe.investigationState || null,
       investigationPlan: universe.investigationPlan || null,
-      providerExecution: universe.providerReports || [],
+      providerExecution: resolveProviderExecution(universe),
     },
   };
 }
