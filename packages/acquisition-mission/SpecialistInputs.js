@@ -7,6 +7,14 @@
 
 const { asText } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
+const { buildSharedContext } = require('./Context');
+const { SPECIALISTS, CONTRIBUTION_KINDS } = require('./types');
+
+function latestContribution(contributions = [], specialist, kind) {
+  return [...contributions]
+    .reverse()
+    .find((row) => row.specialist === specialist && (!kind || row.kind === kind));
+}
 
 function requireStructuredMission(mission) {
   const plan = mission && (mission.structuredMission || mission.missionPlanDraft);
@@ -45,19 +53,53 @@ function scoutInput(mission) {
 }
 
 /**
- * Paige receives audience, campaign goal, market, constraints, tone, objective.
+ * Paige receives audience, campaign goal, market, constraints, tone, objective,
+ * plus mission-bound Scout discovery and Max prioritization intelligence.
+ * Paige must not rebuild Scout or Max reasoning — only consume upstream context.
  */
-function paigeInput(mission) {
+function paigeInput(mission, extras = {}) {
   const plan = requireStructuredMission(mission);
+  const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
+  const sharedContext = extras.sharedContext
+    || (contributions.length ? buildSharedContext(mission, contributions) : null);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+  const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
+  const maxPayload = maxRow?.payload || sharedContext?.max || {};
+  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
+
   return {
     audience: plan.market.label || plan.market.segment,
     campaignGoal: plan.successMetric || plan.success,
     market: { ...plan.market },
     buyer: plan.market.buyer,
     objective: plan.objective,
-    constraints: (plan.constraints || []).slice(),
+    constraints: [
+      ...(plan.constraints || []).slice(),
+      ...((maxPayload.constraints || []).filter(Boolean)),
+    ],
     tone: asText(plan.tone) || 'operator_voice',
+    structuredMission: plan,
+    scoutDiscovery: scoutPayload,
+    maxPrioritization: maxPayload,
+    priorities: maxPayload.priorities || [],
+    objectives: maxPayload.objectives || [],
+    objectiveReason: maxPayload.objectiveReason || null,
+    timing: maxPayload.timing || null,
+    recommendations: maxPayload.recommendations || sharedContext?.priorityReasoning || [],
+    delegation: maxPayload.delegation || null,
+    rankedTargets: maxPayload.rankedTargets || maxPayload.priorities || [],
+    buyingSignals: scoutPayload.buyingSignals || scoutPayload.signals || sharedContext?.buyingSignals || [],
+    evidence: scoutPayload.evidence || sharedContext?.evidence || [],
+    operatorApproval: prioritizationApproval
+      ? { consumed: prioritizationApproval.payload?.consumed === true }
+      : null,
+    workspaceContext: sharedContext ? {
+      objective: sharedContext.objective,
+      missionUnderstanding: sharedContext.mission?.missionUnderstanding || null,
+    } : null,
     structuredOnly: true,
+    missionBound: true,
   };
 }
 

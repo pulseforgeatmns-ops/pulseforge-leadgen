@@ -353,6 +353,26 @@ function canAutoAdvanceDiscovery(snapshot) {
   return Boolean(mission && mission.structuredMissionApproved);
 }
 
+function canAutoAdvanceMaxPrioritization(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  if (mission.stage !== STAGES.UNDERSTAND) return false;
+  if (hasPendingPrioritizationApproval(snapshot)) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.scoutComplete || ctx.maxComplete) return false;
+  const { findPrioritizationApproval } = require('../max/workspace/AmoOperatorApproval');
+  return Boolean(findPrioritizationApproval(snapshot.contributions || []));
+}
+
+function canAutoAdvanceOutreachToPaige(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  if (hasPendingPrioritizationApproval(snapshot)) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete || ctx.paigeComplete) return false;
+  return [STAGES.UNDERSTAND, STAGES.PLAN, STAGES.PREPARE].includes(mission.stage);
+}
+
 function buildDiscoveryPipelineStatus(snapshot = {}) {
   const discovery = findLatestDiscoveryContribution(snapshot.contributions || []);
   if (!discovery) {
@@ -451,6 +471,10 @@ async function runAutonomousProgression(input = {}) {
     || require('../max/workspace/AmoOperatorApproval').advancePlanAfterApproval;
   const advanceDiscovery = deps.advanceDiscoveryAfterApproval
     || require('../max/workspace/AmoOperatorApproval').advanceDiscoveryAfterApproval;
+  const advanceMaxPrioritization = deps.advanceMaxPrioritization
+    || require('../max/workspace/AmoOperatorApproval').advanceMaxPrioritization;
+  const advancePaigeVariants = deps.advancePaigeVariants
+    || require('../max/workspace/AmoOperatorApproval').advancePaigeVariants;
 
   const transitions = [];
   let steps = 0;
@@ -550,6 +574,92 @@ async function runAutonomousProgression(input = {}) {
       }
     }
 
+    if (canAutoAdvanceMaxPrioritization(snapshot)) {
+      try {
+        await advanceMaxPrioritization({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          ...input,
+        });
+        transitions.push(createStageTransition({
+          from: PROGRESSION_STAGES.OUTREACH_PLANNING,
+          to: PROGRESSION_STAGES.OUTREACH_PLANNING,
+          trigger: 'Max prioritization committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvanceOutreachToPaige(snapshot)) {
+      try {
+        const beforeStage = snapshot.mission.stage;
+        const result = await advancePaigeVariants({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          question: `${AUTONOMOUS_COMMAND} Generate outreach variants.`,
+          ...input,
+        });
+        if (result.executionOutcome === 'blocked') {
+          const after = engine.inspect(missionId, { tenantId });
+          return {
+            spec: 'SPEC-147',
+            outcome: 'blocked',
+            progressionStage: deriveProgressionStage(after),
+            pause: null,
+            block: deriveExecutionBlock(after, { message: 'Paige execution blocked.' }),
+            transitions,
+            snapshot: after,
+            presentation: formatMissionProgressPresentation(after, {
+              progressionStage: deriveProgressionStage(after),
+              block: deriveExecutionBlock(after),
+              transitions,
+            }),
+          };
+        }
+        const after = engine.inspect(missionId, { tenantId });
+        transitions.push(createStageTransition({
+          from: beforeStage === STAGES.PREPARE
+            ? PROGRESSION_STAGES.OUTREACH_PLANNING
+            : PROGRESSION_STAGES.OUTREACH_PLANNING,
+          to: PROGRESSION_STAGES.OUTREACH_PLANNING,
+          trigger: 'Paige variants committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        if (after.mission.stage === STAGES.PREPARE) {
+          const ctx = specialistContext(after.contributions || []);
+          if (ctx.paigeComplete) {
+            return {
+              spec: 'SPEC-147',
+              outcome: 'complete',
+              progressionStage: deriveProgressionStage(after),
+              pause: null,
+              block: null,
+              transitions,
+              snapshot: after,
+              presentation: formatMissionProgressPresentation(after, {
+                progressionStage: deriveProgressionStage(after),
+                transitions,
+              }),
+            };
+          }
+        }
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
     break;
   }
 
@@ -603,6 +713,8 @@ module.exports = {
   isDiscoveryRunning,
   canAutoAdvanceUnderstanding,
   canAutoAdvanceDiscovery,
+  canAutoAdvanceMaxPrioritization,
+  canAutoAdvanceOutreachToPaige,
   buildDiscoveryPipelineStatus,
   formatMissionProgressPresentation,
   runAutonomousProgression,

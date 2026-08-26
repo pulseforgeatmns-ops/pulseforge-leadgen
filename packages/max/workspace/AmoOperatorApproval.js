@@ -28,6 +28,9 @@ const {
   planningError,
   validationError,
   buildMissionExecutionContext,
+  executeSpecialist,
+  buildExecutionInput,
+  EXECUTION_STATUSES,
 } = amo;
 const { createEvent } = require('../../acquisition-mission/Timeline');
 const {
@@ -65,6 +68,7 @@ const {
 } = require('../../acquisition-mission/SpecialistInputs');
 const { applyClarification, applyEdits } = require('../../acquisition-mission/MissionPlanner');
 const { bindStagePersistDurable } = require('../../../services/acquisitionMissionPersistence');
+const { specialistContext, canEnter } = require('../../acquisition-mission/Lifecycle');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const { OPERATOR_DECISION_KINDS } = amo;
 const {
@@ -1142,6 +1146,560 @@ async function advancePrioritizationAfterApproval(input = {}) {
   };
 }
 
+function findMaxPrioritization(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) => row.specialist === SPECIALISTS.MAX && row.kind === CONTRIBUTION_KINDS.PRIORITIZATION
+    );
+}
+
+function findPaigeVariants(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) => row.specialist === SPECIALISTS.PAIGE && row.kind === CONTRIBUTION_KINDS.VARIANTS
+    );
+}
+
+function buildMaxPrioritizationPayload(mission, contributions = []) {
+  const scout = findLatestScoutDiscovery(contributions);
+  const scoutPayload = scout?.payload || {};
+  const plan = mission.structuredMission || {};
+  const opportunities = scoutPayload.opportunities || [];
+  const rankedTargets = opportunities.slice(0, 5).map((o, index) => ({
+    rank: index + 1,
+    companyId: o.companyId || o.id,
+    name: o.name,
+    fit: o.fit,
+    timing: o.timing,
+    signals: o.signals || [],
+  }));
+  const topName = rankedTargets[0]?.name || plan.market?.label || plan.market?.segment;
+  return {
+    priorities: rankedTargets.length
+      ? rankedTargets
+      : [{ segment: plan.market?.segment, rank: 1, name: topName }],
+    objectives: [{ text: plan.objective || mission.objective }],
+    objectiveReason: 'Prioritized from Scout discovery evidence and locked mission plan.',
+    timing: plan.timing || 'immediate',
+    recommendations: [
+      ...(Array.isArray(scoutPayload.recommendations) ? scoutPayload.recommendations : []),
+      rankedTargets.length
+        ? `Prioritize ${topName} based on fit and timing signals.`
+        : 'Review Scout evidence before outreach.',
+      'Delegate variant generation to Paige.',
+      'Delegate capacity planning to Emmett.',
+    ],
+    constraints: (plan.constraints || mission.constraints || []).slice(),
+    delegation: { paige: 'variants', emmett: 'capacity' },
+    rankedTargets,
+    buyingSignals: scoutPayload.buyingSignals || scoutPayload.signals || [],
+    evidence: scoutPayload.evidence || [],
+    confidence: scoutPayload.confidence || 0.7,
+  };
+}
+
+function fixtureMaxPrioritizationResult(mission, contributions = []) {
+  return buildMaxPrioritizationPayload(mission, contributions);
+}
+
+function buildPaigeVariantsPayload(executionInput = {}) {
+  const max = executionInput.workspaceContext?.max
+    || executionInput.specialistInput?.maxPrioritization
+    || {};
+  const scout = executionInput.workspaceContext?.scout
+    || executionInput.specialistInput?.scoutDiscovery
+    || {};
+  const plan = executionInput.missionPlan || executionInput.specialistInput?.structuredMission || {};
+  const topTarget = max.rankedTargets?.[0]?.name
+    || max.priorities?.[0]?.name
+    || scout.companies?.[0]?.name
+    || plan.market?.label
+    || 'your office';
+  const objective = max.objectives?.[0]?.text || plan.objective || executionInput.specialistInput?.objective;
+  const subject = `Commercial cleaning walkthrough for ${topTarget}`;
+  const body = [
+    `Hi — we help ${plan.market?.label || 'local offices'} maintain spotless workspaces.`,
+    objective ? `Mission focus: ${objective}` : null,
+    max.recommendations?.[0] ? `Why now: ${max.recommendations[0]}` : null,
+  ].filter(Boolean).join('\n\n');
+
+  return {
+    variants: [{
+      label: 'Primary',
+      subject,
+      body,
+      cta: 'Reply to schedule a walkthrough',
+    }],
+    subjects: [subject],
+    cta: 'Reply to schedule a walkthrough',
+    hypotheses: [
+      max.objectiveReason || 'Prioritized targets respond to timing-specific outreach.',
+      scout.buyingSignals?.[0]
+        ? `Signal: ${typeof scout.buyingSignals[0] === 'string' ? scout.buyingSignals[0] : scout.buyingSignals[0].label}`
+        : 'Ops hiring signals indicate receptivity window.',
+    ].filter(Boolean),
+    experiments: [{
+      name: 'subject_personalization',
+      variant: 'company_name_in_subject',
+      hypothesis: 'Company-specific subject lines increase open rates.',
+    }],
+    messaging: body,
+  };
+}
+
+function fixturePaigeVariantsResult(mission, contributions = []) {
+  const input = buildExecutionInput({
+    mission,
+    contributions,
+    specialist: SPECIALISTS.PAIGE,
+    transactionId: 'fixture_paige',
+  });
+  return buildPaigeVariantsPayload(input);
+}
+
+async function runMaxPrioritizationForAmoMission(mission, opts = {}) {
+  if (typeof opts.runMax === 'function') {
+    return opts.runMax(mission, opts);
+  }
+  const contributions = opts.contributions
+    || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
+    || [];
+  return fixtureMaxPrioritizationResult(mission, contributions);
+}
+
+async function runPaigeForAmoMission(mission, opts = {}) {
+  if (typeof opts.runPaige === 'function') {
+    return opts.runPaige(mission, opts);
+  }
+  const contributions = opts.contributions
+    || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
+    || [];
+  const executionInput = buildExecutionInput({
+    mission,
+    contributions,
+    specialist: SPECIALISTS.PAIGE,
+    transactionId: opts.transactionId,
+    executionContext: opts.executionContext,
+  });
+  if (opts.allowFixtureFallback === false && !findMaxPrioritization(contributions)) {
+    throw validationError('tme_max_prioritization_missing', 'Max prioritization is required before Paige execution.');
+  }
+  return buildPaigeVariantsPayload(executionInput);
+}
+
+function validateMaxPrioritizationOutput(output, ctx = {}) {
+  if (!output || !output.prioritizationPayload) {
+    throw validationError('tme_contribution_missing', 'Max prioritization contribution is missing.');
+  }
+  const payload = output.prioritizationPayload;
+  assertContributionContract(SPECIALISTS.MAX, payload);
+  assertConfidenceValid(payload.confidence, { required: false });
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.MAX,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.MAX,
+    requireContributions: true,
+    requireEvidence: false,
+  });
+  output.executionResult = executionResult;
+}
+
+function validatePaigeOutput(output, ctx = {}) {
+  if (!output || !output.variantsPayload) {
+    throw validationError('tme_contribution_missing', 'Paige variants contribution is missing.');
+  }
+  const payload = output.variantsPayload;
+  assertContributionContract(SPECIALISTS.PAIGE, payload);
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.PAIGE,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.PAIGE,
+    requireContributions: true,
+    requireEvidence: false,
+  });
+  output.executionResult = executionResult;
+}
+
+function commitMaxPrioritizationStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { prioritizationPayload } = output;
+  const payload = { ...prioritizationPayload, transactionId };
+
+  const contribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.MAX,
+      kind: CONTRIBUTION_KINDS.PRIORITIZATION,
+      payload,
+    },
+    { tenantId }
+  );
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.MAX,
+    label: 'Max prioritization committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      contributionId: contribution.contribution.id,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    prioritization: contribution.contribution,
+    snapshot,
+  };
+}
+
+function commitPaigeVariantsStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { variantsPayload } = output;
+  const payload = { ...variantsPayload, transactionId };
+
+  const contribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.PAIGE,
+      kind: CONTRIBUTION_KINDS.VARIANTS,
+      payload,
+    },
+    { tenantId }
+  );
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.PAIGE,
+    label: 'Paige variants committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      contributionId: contribution.contribution.id,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    variants: contribution.contribution,
+    snapshot,
+  };
+}
+
+function validateMaxPrioritizationPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  if (!isStructuredMissionApproved(mission)) {
+    throw planningError('tme_plan_missing', 'Mission Plan missing.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  if (mission.stage !== STAGES.UNDERSTAND) {
+    throw planningError('tme_wrong_stage', `Max prioritization requires stage ${STAGES.UNDERSTAND}.`);
+  }
+  if (!findPrioritizationApproval(snapshot.contributions || [])) {
+    throw planningError('tme_prioritization_not_approved', 'Operator prioritization approval is required.');
+  }
+  if (!findLatestScoutDiscovery(snapshot.contributions || [])) {
+    throw planningError('tme_discovery_missing', 'Scout discovery is required before Max prioritization.');
+  }
+  if (findMaxPrioritization(snapshot.contributions || [])) {
+    throw planningError('tme_already_executed', 'Max prioritization already committed.');
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function validatePaigePreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete) {
+    throw planningError('tme_max_incomplete', 'Max prioritization is required before Paige execution.');
+  }
+  if (ctx.paigeComplete) {
+    throw planningError('tme_already_executed', 'Paige variants already committed.');
+  }
+  if (mission.stage !== STAGES.PREPARE) {
+    throw planningError('tme_wrong_stage', `Paige execution requires stage ${STAGES.PREPARE}.`);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function ensureStagesForPaige(engine, missionId, tenantId) {
+  let mission = engine.get(missionId, tenantId);
+  const snapshot = engine.inspect(missionId, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || []);
+
+  if (mission.stage === STAGES.UNDERSTAND && ctx.maxComplete) {
+    const planGate = canEnter(STAGES.PLAN, ctx);
+    if (!planGate.ok) throw planningError('tme_stage_blocked', planGate.reason);
+    engine.progress(missionId, { role: 'max' }, { tenantId, stage: STAGES.PLAN });
+    mission = engine.get(missionId, tenantId);
+  }
+
+  const afterPlan = engine.inspect(missionId, { tenantId });
+  const ctxAfterPlan = specialistContext(afterPlan.contributions || []);
+  if (mission.stage === STAGES.PLAN && ctxAfterPlan.maxComplete) {
+    const prepareGate = canEnter(STAGES.PREPARE, ctxAfterPlan);
+    if (!prepareGate.ok) throw planningError('tme_stage_blocked', prepareGate.reason);
+    engine.progress(missionId, { role: 'max' }, { tenantId, stage: STAGES.PREPARE });
+    mission = engine.get(missionId, tenantId);
+  }
+
+  return mission;
+}
+
+/**
+ * Execute Max prioritization at UNDERSTAND and commit PRIORITIZATION contribution.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advanceMaxPrioritization(input = {}) {
+  const { engine, mission, tenantId, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const existing = findMaxPrioritization(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      prioritization: existing,
+      snapshot: engine.inspect(mission.id, { tenantId }),
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.MAX,
+    stage: STAGES.UNDERSTAND,
+    operatorId,
+    validatePreconditions: (ctx) => validateMaxPrioritizationPreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
+      const prioritizationPayload = await runMaxPrioritizationForAmoMission(current, {
+        ...input,
+        contributions,
+        transactionId,
+      });
+      const executionResult = await executeSpecialist({
+        mission: current,
+        contributions,
+        specialist: SPECIALISTS.MAX,
+        transactionId,
+        run: async (secInput) => {
+          const payload = prioritizationPayload;
+          return {
+            spec: 'SPEC-132',
+            status: EXECUTION_STATUSES.SUCCESS,
+            confidence: { overall: payload.confidence || 0.7, evidence: 0.7, fit: 0.7, completeness: 0.7 },
+            evidence: (payload.evidence || []).map((item, index) => (
+              typeof item === 'string'
+                ? {
+                  id: `ev_max_${index}`,
+                  label: item,
+                  source: item,
+                  timestamp: new Date().toISOString(),
+                  provenance: { kind: 'max_prioritization', source: 'scout_discovery' },
+                }
+                : item
+            )),
+            contributions: payload,
+            recommendations: (payload.recommendations || []).map((text) => ({
+              tier: 'required',
+              text: typeof text === 'string' ? text : text.text,
+            })),
+            unknowns: [],
+            nextActions: [{ kind: 'generate_outreach', label: 'Generate outreach variants' }],
+          };
+        },
+      });
+      return {
+        prioritizationPayload,
+        executionResult,
+        missionId: current.id,
+      };
+    },
+    validateOutput: validateMaxPrioritizationOutput,
+    commit: (ctx) => commitMaxPrioritizationStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  return {
+    alreadyExecuted: false,
+    prioritization: staged.commitResult.prioritization,
+    snapshot: staged.commitResult.snapshot,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+  };
+}
+
+/**
+ * Execute Paige at PREPARE via SEC and commit VARIANTS contribution.
+ * Canonical path: CER → router → executeMissionStage → executeSpecialist('paige') → VARIANTS.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advancePaigeVariants(input = {}) {
+  const { engine, mission, tenantId, operatorId, question } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  let currentMission = ensureStagesForPaige(engine, mission.id, tenantId);
+  const snapshot = engine.inspect(currentMission.id, { tenantId });
+  const existing = findPaigeVariants(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      variants: existing,
+      snapshot: engine.inspect(currentMission.id, { tenantId }),
+      executionOutcome: 'completed',
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: currentMission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.PAIGE,
+    stage: STAGES.PREPARE,
+    operatorId,
+    validatePreconditions: (ctx) => validatePaigePreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
+      const variantsPayload = await runPaigeForAmoMission(current, {
+        ...input,
+        contributions,
+        transactionId,
+        executionContext: {
+          stage: STAGES.PREPARE,
+          missionId: current.id,
+          tenantId,
+          executionRequestId: input.executionRequest?.id || null,
+        },
+      });
+      const executionResult = await executeSpecialist({
+        mission: current,
+        contributions,
+        specialist: SPECIALISTS.PAIGE,
+        transactionId,
+        run: async () => ({
+          spec: 'SPEC-132',
+          status: EXECUTION_STATUSES.SUCCESS,
+          confidence: { overall: 0.75, evidence: 0.7, fit: 0.8, completeness: 0.75 },
+          evidence: [{
+            id: 'ev_paige_0',
+            label: 'Max prioritization consumed for messaging',
+            source: 'max_prioritization',
+            timestamp: new Date().toISOString(),
+            provenance: { kind: 'upstream_intelligence', source: 'max' },
+          }],
+          contributions: variantsPayload,
+          recommendations: [{ tier: 'suggested', text: 'Review variants before operator approval.' }],
+          unknowns: [],
+          nextActions: [{ kind: 'operator_review', label: 'Operator review variants' }],
+        }),
+      });
+
+      if (executionResult.status === EXECUTION_STATUSES.BLOCKED
+        || executionResult.status === EXECUTION_STATUSES.FAILED) {
+        return {
+          variantsPayload: null,
+          executionResult,
+          missionId: current.id,
+          blocked: true,
+        };
+      }
+
+      return {
+        variantsPayload,
+        executionResult,
+        missionId: current.id,
+        question,
+      };
+    },
+    validateOutput: (output, ctx) => {
+      if (output.blocked) {
+        throw validationError(
+          'tme_paige_blocked',
+          output.executionResult?.blocked?.reason || 'Paige execution blocked.'
+        );
+      }
+      validatePaigeOutput(output, ctx);
+    },
+    commit: (ctx) => commitPaigeVariantsStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  const finalSnapshot = staged.commitResult.snapshot;
+  const executionOutcome = staged.output.blocked ? 'blocked' : 'completed';
+  return {
+    alreadyExecuted: false,
+    variants: staged.commitResult.variants,
+    snapshot: finalSnapshot,
+    executionOutcome,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    executionResult: staged.output.executionResult,
+  };
+}
+
 function buildDiscoveryApprovalProse(result) {
   askPathTrace.traceEnter('buildDiscoveryApprovalProse');
   const scoutPayload = (result.discovery && result.discovery.payload) || {};
@@ -1210,8 +1768,19 @@ module.exports = {
   applyPlanEdits,
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
+  advanceMaxPrioritization,
+  advancePaigeVariants,
   validateDiscoveryPreconditions,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,
   fixtureScoutDiscoveryResult,
+  fixtureMaxPrioritizationResult,
+  fixturePaigeVariantsResult,
+  findMaxPrioritization,
+  findPaigeVariants,
+  runMaxPrioritizationForAmoMission,
+  runPaigeForAmoMission,
+  buildMaxPrioritizationPayload,
+  buildPaigeVariantsPayload,
+  ensureStagesForPaige,
 };
