@@ -121,6 +121,9 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
 
   const afterMission = engine.get(missionId, tenantId);
   const outcomesCreated = engine.store.listOutcomes(missionId).length - priorOutcomes;
+  const interpretations = engine.store.listInterpretations
+    ? engine.store.listInterpretations(missionId)
+    : [];
 
   return {
     observation,
@@ -130,6 +133,7 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
     observeBlocked,
     stage: afterMission && afterMission.stage,
     outcomesCreated,
+    interpretationCount: interpretations.length,
   };
 }
 

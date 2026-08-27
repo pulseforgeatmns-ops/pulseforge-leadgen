@@ -11,6 +11,7 @@ const { reportAgentRun } = require('./utils/agentObservability');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
 const { resolveVerticalTier } = require('./utils/verticalTiers');
 const { safeIngestNormalizedSignal, safeIngestRileyReplySignal } = require('./utils/maxSignalIngestion');
+const { consumeRileyReplyInterpretation } = require('./services/acquisitionMissionRileyInterpretation');
 
 const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
@@ -1831,6 +1832,15 @@ async function run() {
         email,
         classification: result.classification,
         clientId: CLIENT_ID,
+      });
+      await consumeRileyReplyInterpretation({
+        prospect,
+        email,
+        classification: result.classification,
+        clientId: CLIENT_ID,
+        replyText: email.body || email.snippet || '',
+      }).catch((err) => {
+        console.warn('[Riley] Mission interpretation skipped:', err.message);
       });
       if (result.classification === 'interested') {
         await depositInterestedAction(prospect, email, result.suggested_reply);

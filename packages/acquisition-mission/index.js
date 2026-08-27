@@ -55,6 +55,7 @@ const executionRouter = require('./ExecutionRouter');
 const executionApproval = require('./ExecutionApproval');
 const outboundExecution = require('./OutboundExecution');
 const communicationObservation = require('./CommunicationObservation');
+const observationInterpretation = require('./ObservationInterpretation');
 
 module.exports = {
   ...types,
@@ -112,4 +113,5 @@ module.exports = {
   ...executionApproval,
   ...outboundExecution,
   ...communicationObservation,
+  ...observationInterpretation,
 };
