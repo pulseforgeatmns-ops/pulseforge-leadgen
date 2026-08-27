@@ -384,10 +384,12 @@ function collectBuyingSignals(payload = {}) {
 
 function buildCompanies(payload = {}) {
   const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
+  const fitCandidates = payload.fitCandidates || [];
   if (Array.isArray(payload.companies) && payload.companies.length) {
     return payload.companies;
   }
-  return opportunities
+  const source = opportunities.length ? opportunities : fitCandidates;
+  return source
     .map((row) => ({
       id: row.companyId || row.id,
       name: row.name,
@@ -425,7 +427,7 @@ function resolveBlocked(resolved = {}, payload = {}) {
   const qualifiedCount =
     payload.qualifiedCount != null
       ? Number(payload.qualifiedCount)
-      : (payload.opportunities || payload.acquisitionOpportunities || []).length;
+      : opportunities.length + (payload.fitCandidates || []).length;
 
   if (
     payload.capabilityBlocked === true ||
@@ -497,7 +499,7 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
     qualifiedCount:
       payload.qualifiedCount != null
         ? Number(payload.qualifiedCount)
-        : opportunities.length,
+        : opportunities.length + (payload.fitCandidates || []).length,
     candidateUniverseCount: payload.candidateUniverse?.length || null,
     estimatedMarket: payload.universeEstimate || payload.discoveryReport?.estimatedMarket || null,
     providerExecution: payload.providerExecution || payload.providerReports || null,

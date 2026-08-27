@@ -15,6 +15,7 @@ const {
   mapCanonicalEvidenceToContribution,
 } = require('../scout/adapters/ScoutDiscoveryArtifact');
 const { normalizeProviderExecution } = require('../scout/coverage/ProviderExecution');
+const { READINESS_STATES } = require('../max/scoutAcquisition/Types');
 
 const SOURCE_LABELS = Object.freeze({
   existing_repository: 'Company repository',
@@ -241,6 +242,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     });
   const payload = artifact.sourceResult?.payload || result.payload || {};
   const opportunities = artifact.opportunities || [];
+  const fitCandidates = artifact.fitCandidates || payload.fitCandidates || [];
   const missionObjective = artifact.missionObjective || opts.missionObjective || payload.missionObjective || null;
 
   const companies = artifact.companies || [];
@@ -248,7 +250,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
   const qualifiedCount =
     artifact.qualifiedCount != null
       ? Number(artifact.qualifiedCount)
-      : companies.length || opportunities.length;
+      : opportunities.length + fitCandidates.length || companies.length;
 
   const buyingSignals = [];
   const seenSignals = new Set();
@@ -293,7 +295,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     else if (dm && dm.name) decisionMakers.push(dm);
   }
 
-  const rankedProspects = opportunities.map((opp, index) => {
+  function buildRankedProspectRow(opp, index, readinessState) {
     const credibilityBrief = buildOpportunityCredibilityBrief(opp, index);
     return {
       rank: index + 1,
@@ -302,6 +304,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       fit: opp.fit != null ? Number(opp.fit) : null,
       timing: opp.timing != null ? Number(opp.timing) : null,
       confidence: opp.confidence != null ? Number(opp.confidence) : null,
+      readinessState,
       rationale: buildProspectRationale(opp),
       signals: (opp.signals || []).map((s) => normalizeBuyingSignal(s, opp.name)).filter(Boolean),
       unknowns: (opp.unknowns || [])
@@ -313,6 +316,34 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       highestRemainingUnknowns: credibilityBrief.highestRemainingUnknowns,
       recommendedNextInvestigation: credibilityBrief.recommendedNextInvestigation,
     };
+  }
+
+  const rankedProspects = opportunities.map((opp, index) =>
+    buildRankedProspectRow(opp, index, READINESS_STATES.READY)
+  );
+  for (let i = 0; i < fitCandidates.length; i += 1) {
+    rankedProspects.push(
+      buildRankedProspectRow(
+        fitCandidates[i],
+        rankedProspects.length,
+        fitCandidates[i].readinessState || READINESS_STATES.UNKNOWN
+      )
+    );
+  }
+
+  const readinessOrder = {
+    [READINESS_STATES.READY]: 0,
+    [READINESS_STATES.UNKNOWN]: 1,
+    [READINESS_STATES.NOT_READY]: 2,
+  };
+  rankedProspects.sort((a, b) => {
+    const left = readinessOrder[a.readinessState] ?? 1;
+    const right = readinessOrder[b.readinessState] ?? 1;
+    if (left !== right) return left - right;
+    return (Number(b.fit) || 0) - (Number(a.fit) || 0);
+  });
+  rankedProspects.forEach((row, index) => {
+    row.rank = index + 1;
   });
 
   if (!rankedProspects.length && companies.length) {
@@ -322,6 +353,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
         rank: i + 1,
         name: formatDiscoveryItem(company),
         id: company.id || null,
+        readinessState: READINESS_STATES.UNKNOWN,
         rationale: 'Returned by Scout discovery.',
         signals: [],
         unknowns: [],
@@ -421,21 +453,36 @@ function hasSufficientEvidenceForPrioritization(presentation) {
   if (!presentation.rankedProspects || !presentation.rankedProspects.length) return false;
   if (!presentation.summary) return false;
 
+  const evidenceItems = presentation.evidence || [];
+  const hasProvenance = evidenceItems.some((e) => {
+    if (typeof e === 'object') {
+      const source = String(e.source || '');
+      return source && !/test fixture/i.test(source);
+    }
+    const text = String(e || '').toLowerCase();
+    return text && text !== 'fixture' && !/test fixture/i.test(text);
+  });
+  if (!hasProvenance) return false;
+
+  const hasReadyProspects = presentation.rankedProspects.some(
+    (row) => row.readinessState === READINESS_STATES.READY
+  );
+  if (!hasReadyProspects) {
+    // ADR-101: qualified prospects with unknown readiness and provenance are prioritizable.
+    return presentation.rankedProspects.some(
+      (row) =>
+        row.readinessState === READINESS_STATES.UNKNOWN ||
+        row.readinessState == null
+    );
+  }
+
   const signals = presentation.buyingSignals || [];
   const hasSpecificSignals = signals.some((s) => {
     if (typeof s === 'object') return Boolean(s.label && s.type);
     return String(s).split(/\s+/).length >= 2;
   });
 
-  const evidenceItems = presentation.evidence || [];
-  const hasProvenance = evidenceItems.some((e) => {
-    if (typeof e === 'object') {
-      return e.source && !/test fixture/i.test(String(e.source));
-    }
-    return e && String(e).toLowerCase() !== 'fixture';
-  });
-
-  return hasSpecificSignals && hasProvenance;
+  return hasSpecificSignals;
 }
 
 module.exports = {

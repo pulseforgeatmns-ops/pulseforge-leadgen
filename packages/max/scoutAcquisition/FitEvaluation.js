@@ -376,6 +376,9 @@ function attachFitToClassified(classified, candidate, searchDefinition, now = Da
   const classifiedOpp = classifyOpportunity({ fit, classified: next, qualification });
   next.classification = classifiedOpp.classification;
   next.intent = classifiedOpp.intent;
+  next.qualified = qualification.qualified === true;
+  next.readinessState = qualification.readinessState || null;
+  next.evidenceKind = qualification.evidenceKind || null;
   if (classifiedOpp.intent !== INTENT_STATES.TIMED) {
     next.timing = Math.min(Number(next.timing || 0), 0.35);
   }

@@ -108,6 +108,20 @@ const INTENT_STATES = Object.freeze({
   NONE: 'none',
 });
 
+/** ADR-101 — buying readiness is independent of market qualification. */
+const READINESS_STATES = Object.freeze({
+  READY: 'ready',
+  NOT_READY: 'not_ready',
+  UNKNOWN: 'unknown',
+});
+
+/** ADR-101 — distinguish negative proof from missing proof. */
+const EVIDENCE_KINDS = Object.freeze({
+  NEGATIVE_EVIDENCE: 'negative_evidence',
+  INSUFFICIENT_EVIDENCE: 'insufficient_evidence',
+  POSITIVE_EVIDENCE: 'positive_evidence',
+});
+
 const DEFAULT_COMMERCIAL_CLEANING_SEGMENTS = Object.freeze([
   'property_management',
   'office',
@@ -201,6 +215,8 @@ module.exports = {
   OPPORTUNITY_CLASSES,
   FIT_LEVELS,
   INTENT_STATES,
+  READINESS_STATES,
+  EVIDENCE_KINDS,
   DEFAULT_COMMERCIAL_CLEANING_SEGMENTS,
   REFRESH_MS,
   asText,
