@@ -229,6 +229,57 @@ function buildDiscoverySummary(opportunities, missionObjective) {
 }
 
 /**
+ * Project candidate universe records for AMO contribution boundary (SPEC-173 / SPEC-196).
+ * Merges hypotheses into unknowns and strips contract-forbidden keys.
+ * @param {object[]} records
+ * @returns {object[]}
+ */
+function projectCandidateUniverseForContribution(records = []) {
+  if (!Array.isArray(records)) return [];
+  return records.map((record = {}) => {
+    const unknowns = [
+      ...(Array.isArray(record.unknowns) ? record.unknowns : []),
+      ...(Array.isArray(record.hypotheses) ? record.hypotheses : []),
+    ];
+    const investigationState =
+      record.investigationState && typeof record.investigationState === 'object'
+        ? {
+            missingEvidence: record.investigationState.missingEvidence || [],
+            unresolvedHypotheses: record.investigationState.unresolvedHypotheses || [],
+            canonicalGaps: record.investigationState.canonicalGaps || [],
+          }
+        : null;
+
+    const projected = {
+      candidateId: record.candidateId || record.candidate_id || record.id || null,
+      candidate_id: record.candidate_id || record.candidateId || record.id || null,
+      canonicalIdentity:
+        record.canonicalIdentity || record.candidateId || record.candidate_id || record.id || null,
+      name: record.name || null,
+      placeId: record.placeId || record.place_id || null,
+      website: record.website || record.url || null,
+      phone: record.phone || null,
+      address: record.address || record.location || null,
+      evidence: record.evidence || null,
+      qualification: record.qualification || null,
+      readiness: record.readiness || null,
+      origin: record.origin || null,
+      sources: record.sources || null,
+      cities: record.cities || null,
+      confidence: record.confidence != null ? Number(record.confidence) : null,
+      dedupeStatus: record.dedupeStatus || null,
+      concept: record.concept || null,
+    };
+
+    if (unknowns.length) projected.unknowns = unknowns;
+    if (investigationState) projected.investigationState = investigationState;
+    if (record.excluded === true) projected.excluded = true;
+
+    return projected;
+  });
+}
+
+/**
  * @param {object} result - Scout intelligence result
  * @param {object} [opts]
  * @returns {object}
@@ -403,8 +454,30 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
 
   const coverage = artifact.coverage || null;
   const discoveryStatus = artifact.discoveryStatus || null;
+  const candidateUniverse = projectCandidateUniverseForContribution(
+    Array.isArray(artifact.candidateUniverse)
+      ? artifact.candidateUniverse
+      : Array.isArray(payload.candidateUniverse)
+        ? payload.candidateUniverse
+        : []
+  );
   const candidateUniverseCount =
-    artifact.candidateUniverseCount != null ? Number(artifact.candidateUniverseCount) : null;
+    artifact.candidateUniverseCount != null
+      ? Number(artifact.candidateUniverseCount)
+      : candidateUniverse.length || null;
+  const rankedProspectCount = rankedProspects.length;
+  const readinessKnownCount =
+    payload.readinessKnownCount != null
+      ? Number(payload.readinessKnownCount)
+      : Number(payload.readinessReadyCount || 0) + Number(payload.readinessNotReadyCount || 0);
+  const excludedCount =
+    payload.excludedCount != null
+      ? Number(payload.excludedCount)
+      : [
+          ...watchCandidates,
+          ...fitCandidates,
+          ...candidateUniverse,
+        ].filter((row) => row.excluded === true || row.prospectBucket === 'excluded').length;
 
   const estimatedMarket = artifact.estimatedMarket || null;
   const marketCoveragePct =
@@ -448,7 +521,11 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     approvalConsumed: Boolean(artifact.approvalConsumed ?? opts.approvalConsumed),
     coverage,
     discoveryStatus,
+    candidateUniverse,
     candidateUniverseCount,
+    rankedProspectCount,
+    readinessKnownCount,
+    excludedCount,
     estimatedMarket,
     marketCoveragePct,
     discoveryReport: artifact.discoveryReport || null,
