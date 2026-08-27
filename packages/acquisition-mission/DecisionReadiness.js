@@ -8,6 +8,7 @@
 const { STAGES, OPERATOR_DECISION_KINDS } = require('./types');
 const { presentationFromDiscoveryPayload } = require('./DiscoveryPresentation');
 const { hasSufficientEvidenceForPrioritization } = require('./DiscoveryPayload');
+const { READINESS_STATES } = require('../max/scoutAcquisition/Types');
 
 const INVESTIGATION_CHOICES = Object.freeze([
   { label: 'Continue investigation' },
@@ -34,6 +35,13 @@ function hasRealProvenance(presentation) {
 }
 
 function candidateProductionReason(presentation, discoveryPayload = {}) {
+  const fitCandidates =
+    discoveryPayload.discoveryArtifact?.fitCandidates ||
+    discoveryPayload.fitCandidates ||
+    [];
+  if (fitCandidates.length > 0) {
+    return `${fitCandidates.length} qualified prospect${fitCandidates.length === 1 ? '' : 's'} found; buying readiness is unknown for all.`;
+  }
   const rawCount =
     discoveryPayload.candidateUniverseCount != null
       ? Number(discoveryPayload.candidateUniverseCount)
@@ -41,13 +49,13 @@ function candidateProductionReason(presentation, discoveryPayload = {}) {
         ? Number(presentation.candidateUniverseCount)
         : null;
   if (rawCount != null && rawCount > 0) {
-    return `Google Places returned ${rawCount} business${rawCount === 1 ? '' : 'es'}, but none became prioritizable prospects.`;
+    return `Google Places returned ${rawCount} business${rawCount === 1 ? '' : 'es'}, but none became qualified prospects.`;
   }
   const providerExecution = presentation && presentation.providerExecution;
   if (Array.isArray(providerExecution) && providerExecution.length) {
     const succeeded = providerExecution.filter((row) => row && row.succeeded !== false);
     if (succeeded.length) {
-      return 'Discovery providers returned businesses, but none became prioritizable prospects.';
+      return 'Discovery providers returned businesses, but none became qualified prospects.';
     }
   }
   return 'No ranked prospects were produced from the current investigation.';
@@ -110,13 +118,19 @@ function evaluatePrioritizationReadiness(discoveryPayload = {}) {
       waitingOn: 'More discovery evidence',
     });
   } else if (!hasTypedBuyingSignals(presentation)) {
-    blockers.push({
-      code: 'missing_buying_signals',
-      label: 'Insufficient Buying Signals',
-      reason: 'Ranked prospects exist but typed buying signals are missing.',
-      recommendedAction: 'Continue investigation',
-      waitingOn: 'More discovery evidence',
-    });
+    const hasUnknownReadiness = (presentation.rankedProspects || []).some(
+      (row) =>
+        row.readinessState === READINESS_STATES.UNKNOWN || row.readinessState == null
+    );
+    if (!hasUnknownReadiness) {
+      blockers.push({
+        code: 'missing_buying_signals',
+        label: 'Insufficient Buying Signals',
+        reason: 'Ranked prospects exist but typed buying signals are missing.',
+        recommendedAction: 'Continue investigation',
+        waitingOn: 'More discovery evidence',
+      });
+    }
   } else if (!hasRealProvenance(presentation)) {
     blockers.push({
       code: 'missing_provenance',

@@ -18,6 +18,8 @@ const {
   FORBIDDEN_OUTBOUND,
   SOURCE_TYPES,
   REJECTION_REASONS,
+  OPPORTUNITY_CLASSES,
+  READINESS_STATES,
 } = require('./Types');
 const { loadRepository } = require('./ExistingIntelligence');
 const {
@@ -29,7 +31,6 @@ const { buildAcquisitionSearchDefinition, expansionSuggestion } = require('./Sea
 const { constructCandidateUniverse } = require('./CandidateUniverse');
 const { attachFitToClassified, enrichPeopleSafe } = require('./FitEvaluation');
 const { defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
-const { OPPORTUNITY_CLASSES } = require('./Types');
 const { isRuntimeAim } = require('../../aim');
 const {
   buildDiscoveryReport,
@@ -938,7 +939,11 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       supported.push(next);
       return;
     }
-    incrementReason(rejectionReasonCounts, qualification.reason);
+    if (!qualification.qualified) {
+      incrementReason(rejectionReasonCounts, qualification.reason);
+    } else if (qualification.readinessState === READINESS_STATES.NOT_READY) {
+      incrementReason(rejectionReasonCounts, qualification.reason);
+    }
     if (next.classification === OPPORTUNITY_CLASSES.FIT) {
       fitCandidates.push(next);
     } else if (next.classification === OPPORTUNITY_CLASSES.WATCH) {
@@ -1030,6 +1035,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     basicFitCount,
     signalBearingCount,
     supportedOpportunityCount: supported.length,
+    qualifiedProspectCount: supported.length + fitCandidates.length,
+    readinessReadyCount: supported.length,
+    qualifiedUnknownReadinessCount: fitCandidates.length,
     unresolvedCount,
     sourceTypesChecked,
     sourceTypesUnavailable,
@@ -1065,13 +1073,14 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
           : 0.35,
     evidenceQuality: timelyEvidenceCount > 0 ? 0.7 : basicFitCount > 0 ? 0.55 : 0.35,
   });
+  const qualifiedProspectCount = supported.length + fitCandidates.length;
   const discoveryReport = buildDiscoveryReport({
     coverage: coverageMetrics,
     candidateUniverse: candidateUniverseRecords,
-    qualifiedCount: supported.length,
+    qualifiedCount: qualifiedProspectCount,
     discoveryConfidence,
   });
-  if (canConcludeEmptyUniverse(coverageMetrics, supported.length)) {
+  if (canConcludeEmptyUniverse(coverageMetrics, qualifiedProspectCount)) {
     discoveryReport.emptyUniverse = true;
     discoveryReport.summary =
       'No candidate universe exists after complete investigation coverage.';
@@ -1174,6 +1183,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       investigationState: universe.investigationState || null,
       investigationPlan: universe.investigationPlan || null,
       providerExecution: resolveProviderExecution(universe),
+      qualifiedCount: qualifiedProspectCount,
+      qualifiedProspectCount,
+      readinessReadyCount: supported.length,
     },
   };
 }
