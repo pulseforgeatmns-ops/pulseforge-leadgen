@@ -43,7 +43,9 @@ const PREREQUISITES = Object.freeze({
   [STAGES.OBSERVE]: (ctx) =>
     ctx.queuedOrLaunched ? null : 'Queued or launched sends are required before Observe.',
   [STAGES.LEARN]: (ctx) =>
-    ctx.hasOutcomes ? null : 'Outcomes are required before Learn.',
+    ctx.hasMeaningfulBusinessOutcome
+      ? null
+      : 'Meaningful business outcomes are required before Learn.',
   [STAGES.IMPROVE]: (ctx) =>
     ctx.hasLearning ? null : 'Learning records are required before Improve.',
 });
@@ -89,6 +91,7 @@ function specialistContext(contributions = [], extras = {}) {
     deliverabilityPaused,
     queuedOrLaunched: extras.queuedOrLaunched === true,
     hasOutcomes: extras.hasOutcomes === true,
+    hasMeaningfulBusinessOutcome: extras.hasMeaningfulBusinessOutcome === true,
     hasLearning: extras.hasLearning === true,
     prospectCount,
   };

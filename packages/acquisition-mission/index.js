@@ -56,6 +56,7 @@ const executionApproval = require('./ExecutionApproval');
 const outboundExecution = require('./OutboundExecution');
 const communicationObservation = require('./CommunicationObservation');
 const observationInterpretation = require('./ObservationInterpretation');
+const learnProgression = require('./LearnProgression');
 
 module.exports = {
   ...types,
@@ -114,4 +115,5 @@ module.exports = {
   ...outboundExecution,
   ...communicationObservation,
   ...observationInterpretation,
+  ...learnProgression,
 };
