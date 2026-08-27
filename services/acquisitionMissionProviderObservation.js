@@ -11,6 +11,7 @@ const { canEnter } = require('../packages/acquisition-mission/Lifecycle');
 const { isCommunicationEvidenceEventType, buildCommunicationObservationId } = require('../packages/acquisition-mission/CommunicationObservation');
 const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
 const { isGlobalLockHeld } = require('../packages/acquisition-mission/TransactionalPersistence');
+const { tryProgressToLearn, shouldProgressToLearn } = require('../packages/acquisition-mission/LearnProgression');
 
 function defaultPool() {
   return require('../db');
@@ -95,6 +96,8 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
 
   let progressed = false;
   let observeBlocked = null;
+  let learnProgressed = false;
+  let learnBlocked = null;
 
   mission = engine.get(missionId, tenantId);
   if (shouldProgressToObserve(mission, engine.store)) {
@@ -117,6 +120,20 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
     observeBlocked = 'execution_incomplete';
   }
 
+  mission = engine.get(missionId, tenantId);
+  if (shouldProgressToLearn(mission, engine.store)) {
+    if (isGlobalLockHeld(missionId)) {
+      learnBlocked = 'mission_lock_active';
+    } else {
+      try {
+        const learnResult = tryProgressToLearn(engine, missionId, { tenantId });
+        learnProgressed = learnResult.progressed === true;
+      } catch (err) {
+        learnBlocked = err.code || err.message;
+      }
+    }
+  }
+
   await runtime.persistMissionState(missionId, { pool: opts.pool || pool, persist: opts.persist });
 
   const afterMission = engine.get(missionId, tenantId);
@@ -131,6 +148,8 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
     providerEventInserted: result.inserted === true,
     progressed,
     observeBlocked,
+    learnProgressed,
+    learnBlocked,
     stage: afterMission && afterMission.stage,
     outcomesCreated,
     interpretationCount: interpretations.length,
@@ -140,6 +159,7 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
 module.exports = {
   consumeMissionProviderEvent,
   shouldProgressToObserve,
+  shouldProgressToLearn,
   executionAllowsObserveProgress,
   extrasFromStore,
   providerEventResultFromInput,

@@ -121,6 +121,50 @@ function isLegacyTransportOutcomeType(type) {
   return LEGACY_TRANSPORT_OUTCOME_TYPES.includes(asText(type).toLowerCase());
 }
 
+/** Outcome row carries canonical interpretation provenance (not raw provider telemetry). */
+function hasSemanticInterpretationProvenance(outcome = {}) {
+  const payload = outcome.payload || {};
+  if (payload.interpretationId) return true;
+  const source = asText(payload.source).toLowerCase();
+  if (
+    source === 'riley_reply_interpretation'
+    || source === 'booking_evidence'
+    || source === 'provider_observation_interpretation'
+  ) {
+    return true;
+  }
+  const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
+  return evidence.some(
+    (row) => row.kind === 'riley_classification' || row.kind === 'booking'
+  );
+}
+
+/**
+ * Canonical LEARN eligibility — one stored outcome row qualifies when its type is a
+ * business outcome per interpretation taxonomy, or legacy reply with interpretation provenance.
+ * @param {object} outcome
+ * @returns {boolean}
+ */
+function isMeaningfulBusinessOutcomeRow(outcome = {}) {
+  const type = asText(outcome.type).toLowerCase();
+  if (!type) return false;
+  if (type === 'reply') {
+    return hasSemanticInterpretationProvenance(outcome);
+  }
+  if (isLegacyTransportOutcomeType(type)) {
+    return false;
+  }
+  return isBusinessOutcomeType(type);
+}
+
+/**
+ * @param {object[]} outcomes
+ * @returns {boolean}
+ */
+function hasMeaningfulBusinessOutcome(outcomes = []) {
+  return outcomes.some(isMeaningfulBusinessOutcomeRow);
+}
+
 function buildMissionInterpretationContext(mission = {}, store = {}) {
   const contributions = store.listContributions
     ? store.listContributions(mission.id)
@@ -542,6 +586,9 @@ module.exports = {
   isEvidenceOnlyEventType,
   isBusinessOutcomeType,
   isLegacyTransportOutcomeType,
+  hasSemanticInterpretationProvenance,
+  isMeaningfulBusinessOutcomeRow,
+  hasMeaningfulBusinessOutcome,
   buildMissionInterpretationContext,
   interpretMissionObservation,
   interpretRileyReply,

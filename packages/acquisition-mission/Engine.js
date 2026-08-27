@@ -60,6 +60,7 @@ const {
   shouldCreateOutcome,
   buildOutcomePayload,
   createInterpretationRecord,
+  hasMeaningfulBusinessOutcome,
 } = require('./ObservationInterpretation');
 const { createMemoryAmoStore } = require('./Store');
 const {
@@ -126,6 +127,7 @@ function extrasFrom(store, mission) {
     warmupRequired: Boolean(warmup && (warmup.status === 'warming' || warmup.warmup === true)),
     queuedOrLaunched: queued,
     hasOutcomes: outcomes.length > 0,
+    hasMeaningfulBusinessOutcome: hasMeaningfulBusinessOutcome(outcomes),
     hasLearning: learning.length > 0,
     replies,
     meetings,
@@ -343,6 +345,28 @@ function createAcquisitionMissionEngine(opts = {}) {
     return store.getMission(mission.id);
   }
 
+  function tryAutoAdvanceToLearn(missionId, learnOpts = {}) {
+    const mission = get(missionId, learnOpts.tenantId);
+    if (!mission || mission.stage !== STAGES.OBSERVE) {
+      return { progressed: false };
+    }
+    const extra = extrasFrom(store, mission);
+    if (!extra.hasMeaningfulBusinessOutcome) {
+      return { progressed: false };
+    }
+    const contributions = store.listContributions(mission.id);
+    const ctx = specialistContext(contributions, extra);
+    const gate = canEnter(STAGES.LEARN, { ...ctx, ...extra });
+    if (!gate.ok) {
+      return { progressed: false, reason: gate.reason };
+    }
+    const updated = progress(missionId, { role: SPECIALISTS.MAX }, {
+      stage: STAGES.LEARN,
+      tenantId: learnOpts.tenantId,
+    });
+    return { progressed: true, mission: updated };
+  }
+
   function setBlocker(missionId, input = {}, blockerOpts = {}) {
     const mission = requireMission(missionId, blockerOpts.tenantId);
     const blocker = createBlocker({ ...input, manual: true });
@@ -506,7 +530,10 @@ function createAcquisitionMissionEngine(opts = {}) {
     if (isTerminalOutcomeType(row.type)) {
       autoEvaluatePendingPredictions(mission, row, input);
     }
-    refresh(store, mission);
+    const learnAdvance = tryAutoAdvanceToLearn(mission.id, outcomeOpts);
+    if (!learnAdvance.progressed) {
+      refresh(store, mission);
+    }
     return row;
   }
 

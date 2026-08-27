@@ -311,7 +311,7 @@ describe('Provider event consumer integration', () => {
     assert.ok(engine.store.listInterpretations('mission-interp-1').length >= 4);
   });
 
-  it('does not auto-progress OBSERVE → LEARN after outcomes created', async () => {
+  it('auto-progresses OBSERVE → LEARN after meaningful business outcome', async () => {
     setupObserveMission(engine, { id: 'mission-interp-1', stage: STAGES.EXECUTE });
     await consumeMissionProviderEvent(
       {
@@ -327,7 +327,7 @@ describe('Provider event consumer integration', () => {
       { runtime, persist: false }
     );
     const mission = engine.get('mission-interp-1', '10');
-    assert.equal(mission.stage, STAGES.OBSERVE);
+    assert.equal(mission.stage, STAGES.LEARN);
     assert.ok(engine.store.listOutcomes('mission-interp-1').length > 0);
   });
 });
