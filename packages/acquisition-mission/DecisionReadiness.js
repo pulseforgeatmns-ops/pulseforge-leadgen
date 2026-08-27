@@ -35,6 +35,16 @@ function hasRealProvenance(presentation) {
 }
 
 function candidateProductionReason(presentation, discoveryPayload = {}) {
+  const ranked = (presentation && presentation.rankedProspects) || [];
+  const qualifiedCount =
+    presentation && presentation.qualifiedCount != null
+      ? Number(presentation.qualifiedCount)
+      : ranked.filter((row) => row.qualificationStatus !== 'not_qualified').length;
+
+  if (qualifiedCount > 0) {
+    return `${qualifiedCount} qualified prospect${qualifiedCount === 1 ? '' : 's'} found; insufficient comparative evidence to prioritize outreach order.`;
+  }
+
   const fitCandidates =
     discoveryPayload.discoveryArtifact?.fitCandidates ||
     discoveryPayload.fitCandidates ||

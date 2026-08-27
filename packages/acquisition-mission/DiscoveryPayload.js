@@ -243,14 +243,25 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
   const payload = artifact.sourceResult?.payload || result.payload || {};
   const opportunities = artifact.opportunities || [];
   const fitCandidates = artifact.fitCandidates || payload.fitCandidates || [];
+  const watchCandidates = artifact.watchCandidates || payload.watchCandidates || [];
   const missionObjective = artifact.missionObjective || opts.missionObjective || payload.missionObjective || null;
 
   const companies = artifact.companies || [];
   const prospects = artifact.prospects || [];
+  const qualifiedFromEvaluations =
+    payload.readinessUnknownCount != null || payload.readinessReadyCount != null
+      ? Number(payload.readinessReadyCount || 0) +
+        Number(payload.readinessUnknownCount || 0) +
+        Number(payload.readinessNotReadyCount || 0)
+      : null;
   const qualifiedCount =
     artifact.qualifiedCount != null
       ? Number(artifact.qualifiedCount)
-      : opportunities.length + fitCandidates.length || companies.length;
+      : qualifiedFromEvaluations != null && qualifiedFromEvaluations > 0
+        ? qualifiedFromEvaluations
+        : opportunities.length +
+            fitCandidates.length +
+            watchCandidates.filter((row) => row.qualified === true).length || companies.length;
 
   const buyingSignals = [];
   const seenSignals = new Set();
@@ -297,6 +308,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
 
   function buildRankedProspectRow(opp, index, readinessState) {
     const credibilityBrief = buildOpportunityCredibilityBrief(opp, index);
+    const evaluation = opp.evaluation || null;
     return {
       rank: index + 1,
       name: opp.name,
@@ -305,6 +317,9 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       timing: opp.timing != null ? Number(opp.timing) : null,
       confidence: opp.confidence != null ? Number(opp.confidence) : null,
       readinessState,
+      qualificationStatus: evaluation && evaluation.qualification ? evaluation.qualification.status : opp.qualificationStatus || null,
+      prospectBucket: evaluation ? evaluation.bucket : opp.prospectBucket || null,
+      evaluation,
       rationale: buildProspectRationale(opp),
       signals: (opp.signals || []).map((s) => normalizeBuyingSignal(s, opp.name)).filter(Boolean),
       unknowns: (opp.unknowns || [])
@@ -327,6 +342,17 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
         fitCandidates[i],
         rankedProspects.length,
         fitCandidates[i].readinessState || READINESS_STATES.UNKNOWN
+      )
+    );
+  }
+  for (let i = 0; i < watchCandidates.length; i += 1) {
+    const row = watchCandidates[i];
+    if (row.qualified !== true && row.qualificationStatus !== 'qualified') continue;
+    rankedProspects.push(
+      buildRankedProspectRow(
+        row,
+        rankedProspects.length,
+        row.readinessState || READINESS_STATES.NOT_READY
       )
     );
   }
@@ -409,6 +435,12 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       briefCount: rankedProspects.filter((r) => r.intelligenceBrief).length,
     },
     qualifiedCount,
+    readinessReadyCount: payload.readinessReadyCount != null ? Number(payload.readinessReadyCount) : opportunities.length,
+    readinessUnknownCount:
+      payload.readinessUnknownCount != null
+        ? Number(payload.readinessUnknownCount)
+        : fitCandidates.length,
+    readinessNotReadyCount: payload.readinessNotReadyCount != null ? Number(payload.readinessNotReadyCount) : 0,
     outcome: artifact.outcome || (blocked ? 'blocked' : 'completed'),
     blocked,
     summary,

@@ -20,6 +20,8 @@ const {
   REJECTION_REASONS,
   OPPORTUNITY_CLASSES,
   READINESS_STATES,
+  QUALIFICATION_STATUSES,
+  PROSPECT_BUCKETS,
 } = require('./Types');
 const { loadRepository } = require('./ExistingIntelligence');
 const {
@@ -27,6 +29,7 @@ const {
   buildInvestigation,
   uniqueLocations,
 } = require('./InvestigationProvenance');
+const { buildProspectEvaluation, businessFitQualifiedCount, countByBucket } = require('./ProspectEvaluation');
 const { buildAcquisitionSearchDefinition, expansionSuggestion } = require('./SearchDefinition');
 const { constructCandidateUniverse } = require('./CandidateUniverse');
 const { attachFitToClassified, enrichPeopleSafe } = require('./FitEvaluation');
@@ -277,27 +280,33 @@ function summarizeOpportunities(opportunities, criteria, investigation, extras =
       ? investigation.coverage.signalBearingCount
       : extras.signalBearingCount || 0;
   const fitCandidates = extras.fitCandidates || [];
+  const nurtureCandidates = extras.nurtureCandidates || [];
+  const qualifiedFitOnly = fitCandidates.length + nurtureCandidates.length;
 
   if (!opportunities.length) {
-    const fitLine =
-      basicFit > 0
-        ? ` ${basicFit} compan${basicFit === 1 ? 'y meets' : 'ies meet'} the target profile. Current vendor timing is unknown.`
-        : '';
+    const qualifiedLine =
+      qualifiedFitOnly > 0
+        ? ` ${qualifiedFitOnly} qualified prospect${qualifiedFitOnly === 1 ? '' : 's'} found; buying readiness is unknown for ${fitCandidates.length === qualifiedFitOnly ? 'all' : 'some'}.`
+        : basicFit > 0
+          ? ` ${basicFit} compan${basicFit === 1 ? 'y meets' : 'ies meet'} the target profile. Current vendor timing is unknown.`
+          : '';
     const funnelLine =
       discovered != null && evaluated != null
         ? ` I discovered ${discovered} companies within the requested market. ${evaluated} had enough information for evaluation.`
         : '';
     return {
-      summary: `No sufficiently supported opportunities found under the current criteria${
+      summary: `No buying-ready prospects under the current criteria${
         criteria.geography ? ` (${criteria.geography}` : ''
-      }${criteria.segments && criteria.segments.length ? `; ${criteria.segments.join(', ')})` : criteria.geography ? ')' : ''}.${fitLine}`,
+      }${criteria.segments && criteria.segments.length ? `; ${criteria.segments.join(', ')})` : criteria.geography ? ')' : ''}.${qualifiedLine}`,
       observations: [
         {
           kind: 'observation',
           text:
-            basicFit > 0
-              ? `No strongly timed opportunities found, but ${basicFit} companies meet the target profile. Current vendor timing is unknown.`
-              : 'Current criteria produced no sufficiently supported opportunities. Expanding geography or segment may produce additional results.',
+            qualifiedFitOnly > 0
+              ? `${qualifiedFitOnly} qualified prospect${qualifiedFitOnly === 1 ? '' : 's'} found; buying readiness is unknown for ${fitCandidates.length === qualifiedFitOnly ? 'all' : 'some'}.`
+              : basicFit > 0
+                ? `No buying-ready prospects found, but ${basicFit} companies meet the target profile. Current vendor timing is unknown.`
+                : 'Current criteria produced no qualified prospects. Expanding geography or segment may produce additional results.',
         },
         funnelLine
           ? {
@@ -307,18 +316,22 @@ function summarizeOpportunities(opportunities, criteria, investigation, extras =
           : null,
       ].filter(Boolean),
       uncertainties: [
-        evaluated != null
-          ? `Zero supported opportunities after evaluating ${evaluated} candidate${evaluated === 1 ? '' : 's'} — criteria were not weakened to manufacture prospects.`
-          : 'Zero results are intelligence — criteria were not weakened to manufacture prospects.',
+        qualifiedFitOnly > 0
+          ? `${qualifiedFitOnly} qualified prospect${qualifiedFitOnly === 1 ? '' : 's'} lack timing signals — readiness is unknown, not negative.`
+          : evaluated != null
+            ? `Zero qualified prospects after evaluating ${evaluated} candidate${evaluated === 1 ? '' : 's'} — criteria were not weakened to manufacture prospects.`
+            : 'Zero results are intelligence — criteria were not weakened to manufacture prospects.',
       ],
       recommendedNextAction: {
-        type: 'review',
+        type: qualifiedFitOnly > 0 ? 'investigate' : 'review',
         text:
-          basicFit > 0 && basicFit < 8 && extras.expansionText
-            ? extras.expansionText
-            : 'Decide whether to broaden geography or segment. Scout will not do that automatically.',
+          qualifiedFitOnly > 0
+            ? 'Continue readiness investigation on qualified prospects before prioritizing outreach order.'
+            : basicFit > 0 && basicFit < 8 && extras.expansionText
+              ? extras.expansionText
+              : 'Decide whether to broaden geography or segment. Scout will not do that automatically.',
       },
-      confidence: evaluated != null && evaluated >= 12 ? 0.88 : 0.7,
+      confidence: evaluated != null && evaluated >= 12 ? 0.88 : qualifiedFitOnly > 0 ? 0.76 : 0.7,
     };
   }
 
@@ -917,6 +930,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
   const supported = [];
   const fitCandidates = [];
   const watchCandidates = [];
+  const uncertainCandidates = [];
+  const prospectEvaluations = [];
   const nearThreshold = [];
   let basicFitCount = 0;
   let signalBearingCount = 0;
@@ -930,25 +945,47 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     company.lastEvaluatedAt = attached.lastEvaluatedAt;
     company.evidenceObservedAt = attached.evidenceObservedAt;
     company.fitEvaluation = attached.fit;
+    company.prospectEvaluation = attached.evaluation || null;
     const qualification = attached.qualification;
+    const evaluation = attached.evaluation || buildProspectEvaluation({
+      candidate: company,
+      classified: next,
+      fit: attached.fit,
+      qualification,
+      searchDefinition,
+    });
+    next.evaluation = evaluation;
+    prospectEvaluations.push(evaluation);
+
     if (qualification.basicFit || attached.fit.basicFit) basicFitCount += 1;
     if (qualification.signalBearing) signalBearingCount += 1;
     if ((next.signals || []).some((s) => isTimely(s.observedAt, now))) timelyEvidenceCount += 1;
-    if (next.classification === OPPORTUNITY_CLASSES.SUPPORTED || qualification.supported) {
+
+    if (evaluation.bucket === PROSPECT_BUCKETS.HIGH_PRIORITY || qualification.supported) {
       next.classification = OPPORTUNITY_CLASSES.SUPPORTED;
       supported.push(next);
       return;
     }
-    if (!qualification.qualified) {
-      incrementReason(rejectionReasonCounts, qualification.reason);
-    } else if (qualification.readinessState === READINESS_STATES.NOT_READY) {
+
+    if (!evaluation.qualified && evaluation.qualification.status === QUALIFICATION_STATUSES.NOT_QUALIFIED) {
+      incrementReason(rejectionReasonCounts, qualification.reason || evaluation.qualification.reasonCode);
+    } else if (evaluation.readinessState === READINESS_STATES.NOT_READY) {
       incrementReason(rejectionReasonCounts, qualification.reason);
     }
-    if (next.classification === OPPORTUNITY_CLASSES.FIT) {
+
+    if (evaluation.bucket === PROSPECT_BUCKETS.INVESTIGATION_REQUIRED) {
+      fitCandidates.push(next);
+    } else if (evaluation.bucket === PROSPECT_BUCKETS.NURTURE) {
+      watchCandidates.push(next);
+    } else if (evaluation.bucket === PROSPECT_BUCKETS.FIT_INVESTIGATION) {
+      uncertainCandidates.push(next);
+      watchCandidates.push(next);
+    } else if (next.classification === OPPORTUNITY_CLASSES.FIT) {
       fitCandidates.push(next);
     } else if (next.classification === OPPORTUNITY_CLASSES.WATCH) {
       watchCandidates.push(next);
     }
+
     if (qualification.nearThreshold || next.classification === OPPORTUNITY_CLASSES.FIT) {
       nearThreshold.push({
         company,
@@ -1019,6 +1056,19 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     );
   }
 
+  const bucketCounts = countByBucket(prospectEvaluations);
+  const qualifiedProspectCount = businessFitQualifiedCount(prospectEvaluations);
+  const readinessUnknownCount = prospectEvaluations.filter(
+    (row) =>
+      row.qualification.status === QUALIFICATION_STATUSES.QUALIFIED &&
+      row.readiness.status === READINESS_STATES.UNKNOWN
+  ).length;
+  const readinessNotReadyCount = prospectEvaluations.filter(
+    (row) =>
+      row.qualification.status === QUALIFICATION_STATUSES.QUALIFIED &&
+      row.readiness.status === READINESS_STATES.NOT_READY
+  ).length;
+
   const investigation = buildInvestigation({
     requestedGeography: requested.geography,
     requestedSegments: requested.segments,
@@ -1035,9 +1085,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     basicFitCount,
     signalBearingCount,
     supportedOpportunityCount: supported.length,
-    qualifiedProspectCount: supported.length + fitCandidates.length,
+    qualifiedProspectCount,
     readinessReadyCount: supported.length,
-    qualifiedUnknownReadinessCount: fitCandidates.length,
+    qualifiedUnknownReadinessCount: readinessUnknownCount,
     unresolvedCount,
     sourceTypesChecked,
     sourceTypesUnavailable,
@@ -1055,6 +1105,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
 
   const rollup = summarizeOpportunities(supported, criteria, investigation, {
     fitCandidates,
+    nurtureCandidates: watchCandidates.filter(
+      (row) => row.prospectBucket === PROSPECT_BUCKETS.NURTURE || row.readinessState === READINESS_STATES.NOT_READY
+    ),
     basicFitCount,
     signalBearingCount,
     discovered: discoveredCount,
@@ -1073,7 +1126,6 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
           : 0.35,
     evidenceQuality: timelyEvidenceCount > 0 ? 0.7 : basicFitCount > 0 ? 0.55 : 0.35,
   });
-  const qualifiedProspectCount = supported.length + fitCandidates.length;
   const discoveryReport = buildDiscoveryReport({
     coverage: coverageMetrics,
     candidateUniverse: candidateUniverseRecords,
@@ -1087,7 +1139,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
   }
   const evidenceRefs = [];
   const seen = new Set();
-  for (const opp of [...supported, ...fitCandidates]) {
+  for (const opp of [...supported, ...fitCandidates, ...watchCandidates.filter((row) => row.qualified)]) {
     for (const ev of opp.evidenceRefs) {
       if (!ev.id || seen.has(ev.id)) continue;
       seen.add(ev.id);
@@ -1154,6 +1206,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       opportunities: supported,
       fitCandidates,
       watchCandidates,
+      uncertainCandidates,
+      prospectEvaluations,
+      prospectBuckets: bucketCounts,
       searchDefinition,
       evaluatedCandidates: classified.map((row) => ({
         companyId: row.companyId,
@@ -1186,6 +1241,8 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       qualifiedCount: qualifiedProspectCount,
       qualifiedProspectCount,
       readinessReadyCount: supported.length,
+      readinessUnknownCount,
+      readinessNotReadyCount,
     },
   };
 }

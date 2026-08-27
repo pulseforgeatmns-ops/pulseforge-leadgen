@@ -394,11 +394,17 @@ async function runDiscoveryPipeline(input = {}) {
   const qualifiedCount =
     payload.qualifiedCount != null
       ? Number(payload.qualifiedCount)
-      : Array.isArray(payload.opportunities)
-        ? payload.opportunities.length
-        : investigation.qualifiedCount != null
-          ? Number(investigation.qualifiedCount)
-          : 0;
+      : Array.isArray(payload.opportunities) && Array.isArray(payload.fitCandidates)
+        ? payload.opportunities.length +
+          payload.fitCandidates.length +
+          (Array.isArray(payload.watchCandidates)
+            ? payload.watchCandidates.filter((row) => row.qualified === true).length
+            : 0)
+        : Array.isArray(payload.opportunities)
+          ? payload.opportunities.length
+          : investigation.qualifiedCount != null
+            ? Number(investigation.qualifiedCount)
+            : 0;
 
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.EXECUTE_COVERAGE_PLAN, {
