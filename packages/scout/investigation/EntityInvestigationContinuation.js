@@ -117,7 +117,169 @@ function mapHypothesisToGap(text = '') {
   };
 }
 
+function canonicalIdentityKey(row = {}) {
+  return (
+    asText(
+      row.canonicalIdentity ||
+        row.candidateId ||
+        row.candidate_id ||
+        row.id ||
+        row.companyId ||
+        row.placeId ||
+        row.place_id ||
+        row._identityKey ||
+        row.name
+    ) || ''
+  ).toLowerCase();
+}
+
+function isExplicitlyExcluded(row = {}) {
+  if (row.excluded === true) return true;
+  if (row.prospectBucket === PROSPECT_BUCKETS.EXCLUDED) return true;
+  if (row.qualificationStatus === QUALIFICATION_STATUSES.NOT_QUALIFIED && row.excludedReason) {
+    return true;
+  }
+  const qual = row.qualification?.status || row.qualificationStatus;
+  if (qual === 'excluded') return true;
+  if (row.investigationState === 'excluded') return true;
+  return false;
+}
+
+function getFitCandidatesFromPayload(payload = {}) {
+  if (Array.isArray(payload.fitCandidates) && payload.fitCandidates.length) {
+    return payload.fitCandidates;
+  }
+  if (Array.isArray(payload.discoveryArtifact?.fitCandidates)) {
+    return payload.discoveryArtifact.fitCandidates;
+  }
+  return [];
+}
+
+function getUncertainCandidatesFromPayload(payload = {}) {
+  const direct = payload.uncertainCandidates || payload.watchCandidates || [];
+  if (direct.length) return direct;
+  return payload.discoveryArtifact?.uncertainCandidates || payload.discoveryArtifact?.watchCandidates || [];
+}
+
+function getCandidateUniverseFromPayload(payload = {}) {
+  if (Array.isArray(payload.candidateUniverse) && payload.candidateUniverse.length) {
+    return payload.candidateUniverse;
+  }
+  if (Array.isArray(payload.discoveryArtifact?.candidateUniverse)) {
+    return payload.discoveryArtifact.candidateUniverse;
+  }
+  return [];
+}
+
+function getQualifiedProspectsFromPayload(payload = {}) {
+  const ranked = Array.isArray(payload.rankedProspects) ? payload.rankedProspects : [];
+  return ranked.filter(
+    (row) =>
+      row.qualified === true ||
+      row.qualificationStatus === QUALIFICATION_STATUSES.QUALIFIED ||
+      row.prospectBucket === PROSPECT_BUCKETS.INVESTIGATION_REQUIRED
+  );
+}
+
+function mapFitCandidateToInvestigationRow(row = {}, index = 0) {
+  return {
+    rank: index + 1,
+    id: row.companyId || row.id || row.candidateId || row.candidate_id || null,
+    name: row.name,
+    readinessState: row.readinessState || READINESS_STATES.UNKNOWN,
+    qualificationStatus: row.qualificationStatus || QUALIFICATION_STATUSES.QUALIFIED,
+    prospectBucket: row.prospectBucket || PROSPECT_BUCKETS.INVESTIGATION_REQUIRED,
+    evaluation: row.evaluation || {
+      investigation: {
+        missingEvidence: ['Buying-readiness timing signals'],
+        unresolvedHypotheses: [
+          'What evidence would most reduce uncertainty about whether this business is worth contacting now?',
+        ],
+      },
+    },
+    unknowns: row.unknowns || [],
+    recommendedNextInvestigation: row.recommendedNextInvestigation || null,
+    website: row.website || row.url || null,
+    placeId: row.placeId || row.place_id || null,
+    address: row.address || row.location || null,
+    canonicalIdentity:
+      row.canonicalIdentity || row.companyId || row.id || row.candidateId || row.candidate_id || null,
+  };
+}
+
+function mapCandidateUniverseRecordToInvestigationCandidate(record = {}, rank = 1) {
+  if (record.dedupeStatus === 'duplicate') return null;
+  if (isExplicitlyExcluded(record)) return null;
+
+  const id = asText(record.candidateId || record.candidate_id || record.id);
+  if (!id) return null;
+
+  const qualification = record.qualification || {};
+  const readiness = record.readiness || {};
+  const hypotheses = Array.isArray(record.hypotheses) ? record.hypotheses : [];
+  const investigationMeta =
+    record.investigationState && typeof record.investigationState === 'object'
+      ? record.investigationState
+      : {};
+
+  const missingEvidence = [
+    ...(investigationMeta.missingEvidence || []),
+    ...(record.missingEvidence || []),
+  ];
+  if (!missingEvidence.length) {
+    missingEvidence.push('Website / portfolio / review / decision-maker enrichment');
+  }
+
+  const unresolvedHypotheses = [
+    ...hypotheses,
+    ...(investigationMeta.unresolvedHypotheses || []),
+    ...(record.unknowns || []),
+  ];
+  if (!unresolvedHypotheses.length) {
+    unresolvedHypotheses.push(
+      'What evidence would most reduce uncertainty about whether this business is worth contacting now?'
+    );
+  }
+
+  return {
+    rank,
+    id,
+    candidateId: id,
+    companyId: id,
+    name: record.name || id,
+    canonicalIdentity: record.canonicalIdentity || id,
+    placeId: record.placeId || record.place_id || null,
+    website: record.website || record.url || null,
+    phone: record.phone || null,
+    address: record.address || (Array.isArray(record.cities) ? record.cities[0] : null) || record.location || null,
+    readinessState: readiness.status || record.readinessState || READINESS_STATES.UNKNOWN,
+    qualificationStatus:
+      qualification.status || record.qualificationStatus || QUALIFICATION_STATUSES.UNCERTAIN,
+    prospectBucket: record.prospectBucket || PROSPECT_BUCKETS.FIT_INVESTIGATION,
+    evaluation: record.evaluation || {
+      qualification: {
+        status: qualification.status || record.qualificationStatus || QUALIFICATION_STATUSES.UNCERTAIN,
+      },
+      readiness: {
+        status: readiness.status || record.readinessState || READINESS_STATES.UNKNOWN,
+      },
+      investigation: {
+        missingEvidence,
+        unresolvedHypotheses,
+        canonicalGaps: investigationMeta.canonicalGaps || [],
+      },
+    },
+    unknowns: record.unknowns || hypotheses,
+    recommendedNextInvestigation: record.recommendedNextInvestigation || null,
+    confidence: record.confidence != null ? Number(record.confidence) : 0.5,
+    origin: record.origin || 'candidate_universe',
+    _identityKey: record.canonicalIdentity || id,
+    _preservedFromContinuation: true,
+  };
+}
+
 function candidateNeedsInvestigation(row = {}) {
+  if (isExplicitlyExcluded(row)) return false;
   if (row.prospectBucket === PROSPECT_BUCKETS.EXCLUDED) return false;
   if (row.qualificationStatus === QUALIFICATION_STATUSES.NOT_QUALIFIED) return false;
 
@@ -150,38 +312,46 @@ function candidateNeedsInvestigation(row = {}) {
 }
 
 function extractInvestigationCandidatesFromPayload(payload = {}) {
-  const ranked = Array.isArray(payload.rankedProspects) ? payload.rankedProspects : [];
-  const fromRanked = ranked.filter(candidateNeedsInvestigation);
+  const seen = new Set();
+  const result = [];
 
-  if (fromRanked.length) return fromRanked;
+  function addCandidate(row, source) {
+    if (!row || isExplicitlyExcluded(row)) return;
 
-  const fitCandidates = Array.isArray(payload.fitCandidates) ? payload.fitCandidates : [];
-  return fitCandidates
-    .filter(
-      (row) =>
-        row.qualified === true ||
-        row.qualificationStatus === QUALIFICATION_STATUSES.QUALIFIED ||
-        row.readinessState === READINESS_STATES.UNKNOWN
-    )
-    .map((row, index) => ({
-      rank: index + 1,
-      id: row.companyId || row.id || null,
-      name: row.name,
-      readinessState: row.readinessState || READINESS_STATES.UNKNOWN,
-      qualificationStatus: row.qualificationStatus || QUALIFICATION_STATUSES.QUALIFIED,
-      prospectBucket: PROSPECT_BUCKETS.INVESTIGATION_REQUIRED,
-      evaluation: row.evaluation || {
-        investigation: {
-          missingEvidence: ['Buying-readiness timing signals'],
-          unresolvedHypotheses: [
-            'What evidence would most reduce uncertainty about whether this business is worth contacting now?',
-          ],
-        },
-      },
-      unknowns: row.unknowns || [],
-      recommendedNextInvestigation: row.recommendedNextInvestigation || null,
-    }))
-    .filter(candidateNeedsInvestigation);
+    let mapped = row;
+    if (source === 'fitCandidates' || source === 'uncertainCandidates') {
+      mapped = mapFitCandidateToInvestigationRow(row, result.length);
+      if (source === 'uncertainCandidates') {
+        mapped.qualificationStatus = row.qualificationStatus || QUALIFICATION_STATUSES.UNCERTAIN;
+        mapped.prospectBucket = row.prospectBucket || PROSPECT_BUCKETS.FIT_INVESTIGATION;
+      }
+    } else if (source === 'candidateUniverse') {
+      mapped = mapCandidateUniverseRecordToInvestigationCandidate(row, result.length + 1);
+    }
+
+    if (!mapped) return;
+    const key = canonicalIdentityKey(mapped);
+    if (!key || seen.has(key)) return;
+    if (!candidateNeedsInvestigation(mapped)) return;
+    seen.add(key);
+    result.push(mapped);
+  }
+
+  for (const row of payload.rankedProspects || []) addCandidate(row, 'rankedProspects');
+  for (const row of getQualifiedProspectsFromPayload(payload)) addCandidate(row, 'qualifiedProspects');
+  for (const row of getFitCandidatesFromPayload(payload)) {
+    if (
+      row.qualified === true ||
+      row.qualificationStatus === QUALIFICATION_STATUSES.QUALIFIED ||
+      row.readinessState === READINESS_STATES.UNKNOWN
+    ) {
+      addCandidate(row, 'fitCandidates');
+    }
+  }
+  for (const row of getUncertainCandidatesFromPayload(payload)) addCandidate(row, 'uncertainCandidates');
+  for (const row of getCandidateUniverseFromPayload(payload)) addCandidate(row, 'candidateUniverse');
+
+  return result;
 }
 
 function buildEntityGapTasksForCandidate(candidate = {}, opts = {}) {
@@ -272,9 +442,22 @@ function extractPreservedCandidatesFromPayload(payload = {}) {
   for (const row of payload.rankedProspects || []) pushRow(row);
   for (const row of payload.companies || []) pushRow(row);
   for (const row of payload.opportunities || []) pushRow(row);
-  for (const row of payload.fitCandidates || []) pushRow(row);
+  for (const row of getFitCandidatesFromPayload(payload)) pushRow(row);
+  for (const row of getCandidateUniverseFromPayload(payload)) {
+    pushRow({
+      id: row.candidateId || row.candidate_id || row.id,
+      name: row.name,
+      website: row.website || row.url,
+      location: row.address || (Array.isArray(row.cities) ? row.cities[0] : null) || row.location,
+      _identityKey: row.canonicalIdentity || row.candidateId || row.candidate_id || row.id,
+    });
+  }
 
   return rows;
+}
+
+function countPrimaryCandidateUniverse(payload = {}) {
+  return getCandidateUniverseFromPayload(payload).filter((row) => row.dedupeStatus !== 'duplicate').length;
 }
 
 function shouldExpandUniverse(priorPayload = {}, opts = {}) {
@@ -282,7 +465,9 @@ function shouldExpandUniverse(priorPayload = {}, opts = {}) {
   if (priorPayload.blocked === true) return true;
   if (/REQUEST_DENIED|provider failure|blocked/i.test(String(priorPayload.summary || ''))) return true;
 
+  const universeFromRecords = countPrimaryCandidateUniverse(priorPayload);
   const universeCount =
+    universeFromRecords ||
     Number(priorPayload.candidateUniverseCount || 0) ||
     Number(priorPayload.companies && priorPayload.companies.length) ||
     0;
@@ -290,8 +475,11 @@ function shouldExpandUniverse(priorPayload = {}, opts = {}) {
   const rankedCount = Array.isArray(priorPayload.rankedProspects)
     ? priorPayload.rankedProspects.length
     : 0;
+  const investigableCount = extractInvestigationCandidatesFromPayload(priorPayload).length;
 
-  if (universeCount === 0 && qualifiedCount === 0 && rankedCount === 0) return true;
+  if (universeCount === 0 && qualifiedCount === 0 && rankedCount === 0 && investigableCount === 0) {
+    return true;
+  }
   if (/coverage insufficient|geographic coverage|expand universe/i.test(String(opts.question || ''))) {
     return true;
   }
@@ -334,8 +522,21 @@ function buildInvestigationContinuationContext(input = {}) {
 
 function extractPayloadFromDiscoveryContribution(contribution = {}) {
   const payload = contribution.payload || {};
-  if (payload.rankedProspects || payload.companies) return payload;
-  if (payload.payload && (payload.payload.rankedProspects || payload.payload.companies)) {
+  if (
+    payload.rankedProspects ||
+    payload.companies ||
+    payload.candidateUniverse ||
+    payload.candidateUniverseCount != null
+  ) {
+    return payload;
+  }
+  if (
+    payload.payload &&
+    (payload.payload.rankedProspects ||
+      payload.payload.companies ||
+      payload.payload.candidateUniverse ||
+      payload.payload.candidateUniverseCount != null)
+  ) {
     return payload.payload;
   }
   return payload;
@@ -360,11 +561,19 @@ module.exports = {
   INVESTIGATION_MODES,
   mapMissingEvidenceToGap,
   mapHypothesisToGap,
+  canonicalIdentityKey,
+  isExplicitlyExcluded,
+  getFitCandidatesFromPayload,
+  getUncertainCandidatesFromPayload,
+  getCandidateUniverseFromPayload,
+  getQualifiedProspectsFromPayload,
+  mapCandidateUniverseRecordToInvestigationCandidate,
   candidateNeedsInvestigation,
   extractInvestigationCandidatesFromPayload,
   buildEntityGapTasksForCandidate,
   buildEntityInvestigationPlan,
   extractPreservedCandidatesFromPayload,
+  countPrimaryCandidateUniverse,
   shouldExpandUniverse,
   resolveInvestigationMode,
   buildInvestigationContinuationContext,

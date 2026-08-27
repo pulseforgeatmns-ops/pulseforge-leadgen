@@ -424,6 +424,7 @@ function resolveExplainabilityProjection(scoutResult = {}, opts = {}) {
 }
 
 function resolveBlocked(resolved = {}, payload = {}) {
+  const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
   const qualifiedCount =
     payload.qualifiedCount != null
       ? Number(payload.qualifiedCount)
@@ -501,6 +502,7 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
         ? Number(payload.qualifiedCount)
         : opportunities.length + (payload.fitCandidates || []).length,
     candidateUniverseCount: payload.candidateUniverse?.length || null,
+    candidateUniverse: Array.isArray(payload.candidateUniverse) ? payload.candidateUniverse : [],
     estimatedMarket: payload.universeEstimate || payload.discoveryReport?.estimatedMarket || null,
     providerExecution: payload.providerExecution || payload.providerReports || null,
     marketCoveragePct:
