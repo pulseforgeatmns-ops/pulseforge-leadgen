@@ -76,13 +76,16 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
     const atUnderstand = await throughUnderstand();
     assert.equal(atUnderstand.mission.stage, STAGES.UNDERSTAND);
 
+    const ctxAtUnderstand = specialistContext(atUnderstand.contributions || []);
+    assert.equal(ctxAtUnderstand.maxComplete, true);
+
     const maxResult = await advanceMaxPrioritization({
       engine,
       mission: atUnderstand.mission,
       tenantId: '10',
       allowFixtureFallback: true,
     });
-    assert.equal(maxResult.alreadyExecuted, false);
+    assert.equal(maxResult.alreadyExecuted, true);
     assert.ok(maxResult.prioritization);
 
     const afterMax = engine.inspect(mission.id, { tenantId: '10' });
@@ -327,11 +330,12 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
     assert.equal(afterPrioritization.mission.stage, STAGES.UNDERSTAND);
     assert.equal(afterPrioritization.mission.pendingOperatorDecision, null);
     assert.ok(afterPrioritization.contributions.some((row) => row.specialist === SPECIALISTS.SCOUT));
-    assert.equal(
+    assert.ok(
       afterPrioritization.contributions.some(
         (row) => row.specialist === SPECIALISTS.MAX && row.kind === CONTRIBUTION_KINDS.PRIORITIZATION
-      ),
-      false
+      )
     );
+    const ctx = specialistContext(afterPrioritization.contributions || []);
+    assert.equal(ctx.maxComplete, true);
   });
 });
