@@ -1,5 +1,10 @@
--- Rollback SPEC-071 outbound execution evidence table.
+-- Rollback SPEC-071 outbound execution evidence tables.
 
+DROP INDEX IF EXISTS acquisition_mission_provider_events_mission_idx;
+DROP INDEX IF EXISTS acquisition_mission_provider_events_execution_idx;
+DROP TABLE IF EXISTS acquisition_mission_provider_events;
+
+DROP INDEX IF EXISTS acquisition_mission_outbound_executions_provider_msg_idx;
 DROP INDEX IF EXISTS acquisition_mission_outbound_executions_prospect_idx;
 DROP INDEX IF EXISTS acquisition_mission_outbound_executions_mission_idx;
 DROP INDEX IF EXISTS acquisition_mission_outbound_executions_identity_sent_idx;

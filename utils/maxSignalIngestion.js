@@ -237,6 +237,9 @@ function normalizeBrevoSignal(result, payload = {}) {
       open_source: result.open_source || null,
       open_source_reason: result.open_source_reason || null,
       verified: eventType === 'email_clicked' && result.has_corresponding_send !== false,
+      mission_id: result.mission_id || result.correlation?.missionId || null,
+      execution_record_id: result.execution_record_id || result.correlation?.executionRecordId || null,
+      correlation_source: result.correlation?.source || null,
     },
   };
 }

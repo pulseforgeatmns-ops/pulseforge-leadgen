@@ -15,6 +15,7 @@ const {
   snapshotFromEngine,
   diffCanonicalMissionProjections,
 } = require('../packages/acquisition-mission/CanonicalMissionProjection');
+const { persistOutboundExecution, ensureOutboundExecutionSchema } = require('./acquisitionMissionOutboundPersistence');
 
 function defaultPool() {
   return require('../db');
@@ -437,6 +438,7 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
   if (opts.skipEnsure !== true) {
     await ensureAcquisitionMissionSchema(pool);
     await ensureExecutionAuditSchema(pool);
+    await ensureOutboundExecutionSchema(pool);
   }
 
   const lockPool = opts.lockPool || pool;
@@ -467,6 +469,9 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     }
     for (const row of bundle.outcomes || []) {
       await persistOutcome(row, client, writeOpts);
+    }
+    for (const row of bundle.executionRecords || []) {
+      await persistOutboundExecution(row, client, { skipEnsure: true });
     }
     if (bundle.audit) {
       await persistExecutionAudit(bundle.audit, client, writeOpts);
@@ -580,6 +585,9 @@ function bindStagePersistDurable(input = {}, engine, tenantId) {
       contributions: engine.store.listContributions(missionId),
       observations: engine.store.listObservations(missionId),
       outcomes: engine.store.listOutcomes(missionId),
+      executionRecords: engine.store.listExecutionRecords
+        ? engine.store.listExecutionRecords(missionId)
+        : [],
       audit: ctx.audit,
     }, input.pool, { skipGlobalLock: true });
     await assertPersistedMatchesEngine(engine, missionId, tenantId, input.pool);
@@ -635,6 +643,8 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
 }
 
 const AMO_TABLES = Object.freeze([
+  'acquisition_mission_provider_events',
+  'acquisition_mission_outbound_executions',
   'acquisition_mission_outcome_learnings',
   'acquisition_mission_outcome_evaluations',
   'acquisition_mission_predictions',
@@ -653,6 +663,7 @@ const AMO_TABLES = Object.freeze([
 async function countAmoRows(tenantId = null, pool = defaultPool()) {
   await ensureAcquisitionMissionSchema(pool);
   await ensureExecutionAuditSchema(pool);
+  await ensureOutboundExecutionSchema(pool);
   const counts = {};
   const tenantClause = tenantId != null ? ' WHERE tenant_id = $1' : '';
   const params = tenantId != null ? [String(tenantId)] : [];
@@ -669,6 +680,7 @@ async function countAmoRows(tenantId = null, pool = defaultPool()) {
 async function deleteAllAmoData(tenantId = null, pool = defaultPool()) {
   await ensureAcquisitionMissionSchema(pool);
   await ensureExecutionAuditSchema(pool);
+  await ensureOutboundExecutionSchema(pool);
 
   const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
   const ownsClient = client !== pool && typeof client.release === 'function';
@@ -678,6 +690,8 @@ async function deleteAllAmoData(tenantId = null, pool = defaultPool()) {
   try {
     await client.query('BEGIN');
     if (tenantKey) {
+      await client.query('DELETE FROM acquisition_mission_provider_events WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_mission_outbound_executions WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_mission_execution_audit WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_mission_learning WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_mission_outcomes WHERE tenant_id = $1', [tenantKey]);
@@ -686,6 +700,8 @@ async function deleteAllAmoData(tenantId = null, pool = defaultPool()) {
       await client.query('DELETE FROM acquisition_mission_events WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_missions WHERE tenant_id = $1', [tenantKey]);
     } else {
+      await client.query('DELETE FROM acquisition_mission_provider_events');
+      await client.query('DELETE FROM acquisition_mission_outbound_executions');
       await client.query('DELETE FROM acquisition_mission_execution_audit');
       await client.query('DELETE FROM acquisition_mission_learning');
       await client.query('DELETE FROM acquisition_mission_outcomes');
