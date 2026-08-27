@@ -98,6 +98,8 @@ function defaultHandlers() {
     [EXECUTION_INTENTS.APPROVE_PLAN]: (ctx) => approval.advancePlanAfterApproval(ctx),
     [EXECUTION_INTENTS.APPROVE_DISCOVERY]: (ctx) => approval.advanceDiscoveryAfterApproval(ctx),
     [EXECUTION_INTENTS.START_DISCOVERY]: (ctx) => approval.advanceDiscoveryAfterApproval(ctx),
+    [EXECUTION_INTENTS.CONTINUE_INVESTIGATION]: (ctx) =>
+      approval.advanceDiscoveryInvestigationAfterApproval(ctx),
     [EXECUTION_INTENTS.APPROVE_PRIORITIZATION]: (ctx) => approval.advancePrioritizationAfterApproval(ctx),
     [EXECUTION_INTENTS.CLARIFY_PLAN]: (ctx) => approval.advancePlanClarification(ctx),
     [EXECUTION_INTENTS.CANCEL_PLAN]: (ctx) => approval.cancelMissionPlan(ctx),

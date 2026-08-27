@@ -37,6 +37,7 @@ const {
 } = require('./ActiveMissionGuard');
 const {
   hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
   hasPendingPrioritizationApproval,
   hasPendingPlanApproval,
   hasPendingPlanClarification,
@@ -709,6 +710,23 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     return 'prioritization_approved';
   }
 
+  const investigationContinuationPattern =
+    /\b(?:continue|retry|resume|proceed)\b.*\binvestig/i.test(q) ||
+    (/\binvestig/i.test(q) && /\b(?:continue|retry|resume|proceed)\b/i.test(q));
+
+  if (investigationContinuationPattern && hasPendingDiscoveryInvestigation(snapshot)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_investigation_continued');
+    return 'discovery_investigation_continued';
+  }
+
+  if (
+    hasPendingDiscoveryInvestigation(snapshot) &&
+    (/\b(?:continue|retry|resume|proceed)\b/i.test(q) || /\binvestig/i.test(q))
+  ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_investigation_continued_pending');
+    return 'discovery_investigation_continued';
+  }
+
   if (hasConsumablePendingDecision(snapshot)) {
     if (
       hasPendingExecutionApproval(snapshot) &&
@@ -734,6 +752,10 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     return 'operator_approved';
   }
   if (/\b(?:continue|proceed|resume|next)\b/i.test(q)) {
+    if (hasPendingDiscoveryInvestigation(snapshot)) {
+      askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_investigation_continued_continue');
+      return 'discovery_investigation_continued';
+    }
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved_continue');
     return 'operator_approved';
   }

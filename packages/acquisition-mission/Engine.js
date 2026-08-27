@@ -78,7 +78,7 @@ const {
   hasPendingPrioritizationApproval,
 } = require('./PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('./StructuredMission');
-const { OPERATOR_DECISION_KINDS } = require('./types');
+const { buildPostDiscoveryPendingDecision } = require('./DecisionReadiness');
 const { buildExecutionReview, isExecutionApproved } = require('./ExecutionApproval');
 
 function actorRole(actor) {
@@ -299,11 +299,7 @@ function createAcquisitionMissionEngine(opts = {}) {
         }));
       }
       if (mission.stage === STAGES.DISCOVER && isStructuredMissionApproved(mission)) {
-        mission.pendingOperatorDecision = {
-          stage: STAGES.DISCOVER,
-          kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
-          prompt: 'Approve prioritization?',
-        };
+        mission.pendingOperatorDecision = buildPostDiscoveryPendingDecision(payload);
       }
       store.putMission(mission);
     }

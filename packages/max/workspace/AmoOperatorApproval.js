@@ -88,6 +88,7 @@ const {
   hasPendingPlanClarification,
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
   hasPendingPrioritizationApproval,
   hasPendingExecutionApproval,
   hasConsumablePendingDecision,
@@ -95,12 +96,17 @@ const {
   assertMissionStateConsistent,
 } = require('../../acquisition-mission/PendingOperatorDecision');
 const {
+  buildPostDiscoveryPendingDecision,
+  discoveryNeedsInvestigation,
+} = require('../../acquisition-mission/DecisionReadiness');
+const {
   buildExecutionApprovalPayload,
   findValidExecutionApproval,
   EXECUTION_APPROVAL_ACTION,
 } = require('../../acquisition-mission/ExecutionApproval');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
+const DISCOVERY_INVESTIGATION_ACTION = 'discovery_investigation_continued';
 const PRIORITIZATION_APPROVAL_ACTION = 'prioritization_approved';
 const PLAN_APPROVAL_ACTION = 'plan_approved';
 const PLAN_CLARIFICATION_ACTION = 'plan_clarified';
@@ -730,11 +736,32 @@ function commitDiscoveryStage({
   transactionId,
   missionVersion,
   existingApproval,
+  investigationContinuation = false,
+  investigationCommand = null,
 }) {
   const missionId = (mission && mission.id) || output.missionId;
   const { question, discoveryPayload } = output;
   let approval = existingApproval;
-  if (!approval) {
+  if (investigationContinuation) {
+    const investigationResult = engine.contribute(
+      missionId,
+      {
+        specialist: SPECIALISTS.OPERATOR,
+        kind: CONTRIBUTION_KINDS.APPROVAL,
+        payload: {
+          approved: true,
+          consumed: true,
+          command: investigationCommand || question,
+          action: DISCOVERY_INVESTIGATION_ACTION,
+          kind: OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION,
+          stage: STAGES.DISCOVER,
+          transactionId,
+        },
+      },
+      { tenantId }
+    );
+    approval = approval || investigationResult.contribution;
+  } else if (!approval) {
     const approvalResult = engine.contribute(
       missionId,
       {
@@ -753,9 +780,6 @@ function commitDiscoveryStage({
     );
     approval = approvalResult.contribution;
     clearPendingOperatorDecision(engine, approvalResult.mission);
-  } else {
-    const current = engine.get(missionId, tenantId);
-    clearPendingOperatorDecision(engine, current);
   }
 
   const payload = { ...discoveryPayload, approvalId: approval.id, transactionId };
@@ -770,11 +794,7 @@ function commitDiscoveryStage({
   );
 
   const updated = engine.get(missionId, tenantId);
-  updated.pendingOperatorDecision = {
-    stage: STAGES.DISCOVER,
-    kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
-    prompt: 'Approve prioritization?',
-  };
+  updated.pendingOperatorDecision = buildPostDiscoveryPendingDecision(payload);
   bumpMissionVersion(updated, transactionId);
   engine.store.putMission(updated);
 
@@ -872,16 +892,20 @@ async function advanceDiscoveryAfterApproval(input = {}) {
   const existingDiscovery = findScoutDiscoveryAfterApproval(contributions, existingApproval);
 
   if (existingApproval && existingDiscovery) {
-    askPathTrace.traceEarlyReturn('advanceDiscoveryAfterApproval', 'already_executed');
-    return {
-      alreadyExecuted: true,
-      approval: existingApproval,
-      discovery: existingDiscovery,
-      snapshot: engine.inspect(mission.id, { tenantId }),
-      executionOutcome: existingDiscovery.payload.outcome || 'completed',
-      approvalPhase: APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
-      audit,
-    };
+    const needsInvestigation = discoveryNeedsInvestigation(existingDiscovery.payload || {});
+    const investigationPending = hasPendingDiscoveryInvestigation(snapshot);
+    if (!needsInvestigation || !investigationPending) {
+      askPathTrace.traceEarlyReturn('advanceDiscoveryAfterApproval', 'already_executed');
+      return {
+        alreadyExecuted: true,
+        approval: existingApproval,
+        discovery: existingDiscovery,
+        snapshot: engine.inspect(mission.id, { tenantId }),
+        executionOutcome: existingDiscovery.payload.outcome || 'completed',
+        approvalPhase: APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+        audit,
+      };
+    }
   }
 
   emitStarted({
@@ -1003,6 +1027,207 @@ async function advanceDiscoveryAfterApproval(input = {}) {
     audit,
     transactionId: staged.transactionId,
     missionVersion: staged.missionVersion,
+  };
+}
+
+/**
+ * Continue Scout investigation when post-discovery readiness is insufficient.
+ * SPEC-193 — investigation continuation must not be short-circuited by prior Discovery commits.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advanceDiscoveryInvestigationAfterApproval(input = {}) {
+  askPathTrace.traceEnter('advanceDiscoveryInvestigationAfterApproval');
+  const {
+    engine,
+    mission,
+    tenantId,
+    question,
+    operatorId,
+    persist,
+    runScout,
+    scoutCompanies,
+    scoutPeople,
+    allowFixtureFallback,
+    audit: inputAudit,
+    discover: inputDiscover,
+    enablePlaces: inputEnablePlaces,
+    placesProvider: inputPlacesProvider,
+  } = input;
+
+  const effectiveDiscover =
+    inputDiscover ||
+    (typeof runScout === 'function'
+      ? undefined
+      : allowFixtureFallback === true
+        ? async () => []
+        : undefined);
+
+  if (!engine || !mission) {
+    throw new Error('engine and mission are required');
+  }
+
+  let snapshot = engine.inspect(mission.id, { tenantId });
+  if (!hasPendingDiscoveryInvestigation(snapshot)) {
+    throw planningError(
+      'tme_no_pending_investigation',
+      'No discovery investigation decision is pending.'
+    );
+  }
+
+  const audit = inputAudit || createMissionApprovalAudit();
+  const useGlobalAudit = !inputAudit;
+  const emitReceived = useGlobalAudit
+    ? logMissionApprovalReceived
+    : audit.logApprovalReceived.bind(audit);
+  const emitConsumed = useGlobalAudit
+    ? logMissionApprovalConsumed
+    : audit.logApprovalConsumed.bind(audit);
+  const emitStarted = useGlobalAudit
+    ? logMissionStageExecutionStarted
+    : audit.logStageExecutionStarted.bind(audit);
+  const emitCompleted = useGlobalAudit
+    ? logMissionStageExecutionCompleted
+    : audit.logStageExecutionCompleted.bind(audit);
+
+  emitReceived({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    action: DISCOVERY_INVESTIGATION_ACTION,
+    phase: APPROVAL_PHASES.APPROVAL_RECEIVED,
+    command: question,
+    operatorId,
+  });
+
+  const contributions = snapshot.contributions || [];
+  const existingApproval = findDiscoveryApproval(contributions);
+
+  emitStarted({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    executor: SPECIALISTS.SCOUT,
+    phase: APPROVAL_PHASES.EXECUTING_STAGE,
+    approvalId: existingApproval && existingApproval.id,
+    investigationContinuation: true,
+  });
+
+  let staged;
+  try {
+    staged = await executeMissionStage({
+      engine,
+      missionId: mission.id,
+      tenantId,
+      pool: input.pool,
+      specialist: SPECIALISTS.SCOUT,
+      stage: STAGES.DISCOVER,
+      operatorId,
+      validatePreconditions: (ctx) =>
+        validateDiscoveryPreconditions({
+          ...ctx,
+          discover: effectiveDiscover,
+          enablePlaces: inputEnablePlaces,
+          placesProvider: inputPlacesProvider,
+          runScout,
+        }),
+      execute: async ({ mission: current, transactionId }) => {
+        const scoutResult = await runScoutForAmoMission(current, {
+          question,
+          operatorId,
+          engine,
+          transactionId,
+          pool: input.pool,
+          persist,
+          runScout,
+          scoutCompanies,
+          scoutPeople,
+          allowFixtureFallback,
+          executionRequest: input.executionRequest || null,
+          discover: effectiveDiscover,
+          enablePlaces: inputEnablePlaces,
+          placesProvider: inputPlacesProvider,
+        });
+        const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
+        const executionResult = executionResultFromStageOutput(
+          { scoutResult, discoveryPayload },
+          { specialist: SPECIALISTS.SCOUT, transactionId }
+        );
+        return {
+          scoutResult,
+          discoveryPayload,
+          executionResult,
+          question,
+          missionId: current.id,
+        };
+      },
+      validateOutput: validateDiscoveryOutput,
+      commit: (ctx) => commitDiscoveryStage({
+        ...ctx,
+        existingApproval,
+        investigationContinuation: true,
+        investigationCommand: question,
+      }),
+      persistDurable: bindPersistDurable(input, engine, tenantId),
+    });
+  } catch (err) {
+    askPathTrace.traceEarlyReturn('advanceDiscoveryInvestigationAfterApproval', 'rolled_back');
+    throw err;
+  }
+
+  const approval = staged.commitResult.approval;
+  const discovery = staged.commitResult.discovery;
+  snapshot = staged.commitResult.snapshot;
+  const discoveryPayload = staged.output.discoveryPayload;
+  const executionOutcome = discoveryPayload.blocked ? 'blocked' : 'completed';
+
+  emitConsumed({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    action: DISCOVERY_INVESTIGATION_ACTION,
+    phase: APPROVAL_PHASES.EXECUTING_STAGE,
+    approvalId: approval.id,
+    operatorId,
+    reusedApproval: Boolean(existingApproval),
+    transactionId: staged.transactionId,
+    investigationContinuation: true,
+  });
+
+  emitCompleted({
+    missionId: mission.id,
+    tenantId,
+    stage: STAGES.DISCOVER,
+    executor: SPECIALISTS.SCOUT,
+    outcome: executionOutcome,
+    phase:
+      executionOutcome === 'blocked'
+        ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
+        : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+    nextStage: snapshot.mission.stage,
+    approvalId: approval.id,
+    discoveryId: discovery.id,
+    qualifiedCount: discoveryPayload.qualifiedCount || 0,
+    transactionId: staged.transactionId,
+    investigationContinuation: true,
+  });
+
+  askPathTrace.traceEarlyReturn('advanceDiscoveryInvestigationAfterApproval', executionOutcome);
+  return {
+    alreadyExecuted: false,
+    approval,
+    discovery,
+    scoutResult: staged.output.scoutResult,
+    snapshot,
+    executionOutcome,
+    approvalPhase:
+      executionOutcome === 'blocked'
+        ? APPROVAL_PHASES.WAITING_FOR_OPERATOR
+        : APPROVAL_PHASES.WAITING_FOR_NEXT_DECISION,
+    audit,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    investigationContinuation: true,
   };
 }
 
@@ -2038,6 +2263,7 @@ function buildDiscoveryApprovalProse(result) {
 module.exports = {
   APPROVAL_PHASES,
   DISCOVERY_APPROVAL_ACTION,
+  DISCOVERY_INVESTIGATION_ACTION,
   PRIORITIZATION_APPROVAL_ACTION,
   EXECUTION_APPROVAL_ACTION,
   PLAN_APPROVAL_ACTION,
@@ -2056,6 +2282,7 @@ module.exports = {
   presentableOperatorDecision,
   isMissionPlanningTurn,
   hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
   hasPendingPrioritizationApproval,
   advancePlanAfterApproval,
   advancePlanClarification,
@@ -2063,6 +2290,7 @@ module.exports = {
   beginPlanEdit,
   applyPlanEdits,
   advanceDiscoveryAfterApproval,
+  advanceDiscoveryInvestigationAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
   advancePaigeVariants,
