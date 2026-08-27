@@ -68,6 +68,14 @@ function adapterForProvider(adapters = [], providerId, registry = getDefaultUnif
     );
   }
 
+  if (providerId === 'website' || meta?.adapterIds?.includes('company_websites')) {
+    return (
+      adapters.find((a) => a && a.id === 'company_websites') ||
+      adapters.find((a) => a && a.sourceType === SOURCE_TYPES.COMPANY_WEBSITES) ||
+      null
+    );
+  }
+
   if (meta?.adapterIds?.length) {
     for (const adapterId of meta.adapterIds) {
       const match = adapters.find((a) => a && a.id === adapterId);
@@ -390,6 +398,9 @@ async function runHypothesisDrivenDiscovery(input = {}) {
           confidence: report.confidence,
           coverage: report.coverage,
           limitations: report.limitations,
+          entityId: task.entityId || task.candidateId || null,
+          candidateId: task.candidateId || task.entityId || null,
+          hypothesisId: task.hypothesisId || null,
         });
       }
 

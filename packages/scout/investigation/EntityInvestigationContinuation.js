@@ -11,13 +11,9 @@
 
 const { asText, READINESS_STATES, QUALIFICATION_STATUSES, PROSPECT_BUCKETS } = require('../../max/scoutAcquisition/Types');
 const { INVESTIGATIVE_EVIDENCE } = require('../coverage/EvidenceRequirements');
-const {
-  assignProvidersForRequirements,
-  explainProviderForOperator,
-} = require('../coverage/EvidenceProviderAssignment');
+const { explainProviderForOperator } = require('../coverage/EvidenceProviderAssignment');
 const {
   buildHypothesisInvestigationPlan,
-  buildInvestigationTask,
   INVESTIGATION_PHASES,
 } = require('../coverage/HypothesisInvestigationPlanner');
 
@@ -189,110 +185,8 @@ function extractInvestigationCandidatesFromPayload(payload = {}) {
 }
 
 function buildEntityGapTasksForCandidate(candidate = {}, opts = {}) {
-  const entityId = asText(candidate.id || candidate.companyId) || `entity-${Date.now()}`;
-  const entityName = asText(candidate.name) || entityId;
-  const gaps = new Map();
-
-  const evaluation = candidate.evaluation || {};
-  const investigation = evaluation.investigation || {};
-
-  for (const text of investigation.missingEvidence || []) {
-    const mapped = mapMissingEvidenceToGap(text);
-    if (!mapped) continue;
-    gaps.set(`${mapped.gap}:${mapped.evidenceType}`, {
-      ...mapped,
-      source: 'missingEvidence',
-    });
-  }
-
-  for (const text of investigation.unresolvedHypotheses || []) {
-    const mapped = mapHypothesisToGap(text);
-    if (!mapped) continue;
-    gaps.set(`${mapped.gap}:${mapped.evidenceType}`, {
-      evidenceType: mapped.evidenceType,
-      gap: mapped.gap,
-      phase: phaseForEvidenceType(mapped.evidenceType),
-      hypothesis: mapped.hypothesis,
-      source: 'unresolvedHypothesis',
-    });
-  }
-
-  for (const unknown of candidate.unknowns || []) {
-    const text = typeof unknown === 'object' ? unknown.text : String(unknown || '');
-    const mapped = mapHypothesisToGap(text);
-    if (!mapped) continue;
-    gaps.set(`${mapped.gap}:${mapped.evidenceType}`, {
-      evidenceType: mapped.evidenceType,
-      gap: mapped.gap,
-      phase: phaseForEvidenceType(mapped.evidenceType),
-      hypothesis: mapped.hypothesis || text,
-      source: 'unknown',
-    });
-  }
-
-  const rec = candidate.recommendedNextInvestigation;
-  if (rec && rec.action && !/no further investigation required/i.test(rec.action)) {
-    const mapped = mapHypothesisToGap(rec.action);
-    if (mapped) {
-      gaps.set(`${mapped.gap}:${mapped.evidenceType}`, {
-        evidenceType: mapped.evidenceType,
-        gap: mapped.gap,
-        phase: phaseForEvidenceType(mapped.evidenceType),
-        hypothesis: rec.action,
-        source: 'recommendedNextInvestigation',
-        impact: rec.impact || 'high',
-        howToVerify: rec.howToVerify || null,
-      });
-    }
-  }
-
-  if (!gaps.size) {
-    gaps.set('decision_maker:decision_makers', {
-      evidenceType: INVESTIGATIVE_EVIDENCE.DECISION_MAKERS,
-      gap: 'decision_maker',
-      phase: INVESTIGATION_PHASES.DECISION_MAKERS,
-      hypothesis: `Resolve remaining uncertainty for ${entityName}`,
-      source: 'default',
-    });
-  }
-
-  const requirements = [...gaps.values()].map((gap) => ({
-    evidenceType: gap.evidenceType,
-    questionIds: [`${entityId}:${gap.gap}`],
-    required: true,
-    satisfied: false,
-    confidence: 0,
-    sources: [],
-  }));
-
-  const assignments = assignProvidersForRequirements(requirements, opts);
-  const tasks = [];
-
-  for (const gap of gaps.values()) {
-    const providers = assignments.filter((a) => a.evidenceType === gap.evidenceType);
-    tasks.push(
-      buildInvestigationTask({
-        id: `task:${entityId}:${gap.evidenceType}`,
-        evidenceType: gap.evidenceType,
-        label: `${entityName}: ${gap.hypothesis || gap.label || gap.gap}`,
-        providers,
-        phase: gap.phase || phaseForEvidenceType(gap.evidenceType),
-        mergeStrategy: 'evidence_fusion',
-        rationale: `Entity investigation (ADR-102): ${gap.source} → ${gap.gap}`,
-        scope: 'entity',
-        entityId,
-        entityName,
-        candidateId: entityId,
-        gap: gap.gap,
-        hypothesis: gap.hypothesis || gap.label || null,
-        impact: gap.impact || 'high',
-        howToVerify: gap.howToVerify || null,
-        status: 'pending',
-      })
-    );
-  }
-
-  return tasks;
+  const { buildCandidateInvestigationTasks } = require('./CandidateInvestigation');
+  return buildCandidateInvestigationTasks(candidate, opts);
 }
 
 function phaseForEvidenceType(evidenceType) {

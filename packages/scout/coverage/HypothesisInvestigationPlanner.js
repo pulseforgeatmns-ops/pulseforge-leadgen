@@ -200,24 +200,52 @@ function createHypothesisInvestigationPlan(input = {}) {
  * @returns {object}
  */
 function updatePlanAfterEvidence(plan, collectedEvidence = []) {
-  const satisfied = computeSatisfiedEvidence(plan.evidenceRequirements, collectedEvidence);
-  const outstanding = computeOutstandingEvidence(plan.evidenceRequirements, collectedEvidence);
+  const requirements = (plan.evidenceRequirements || []).map((req) => ({
+    ...req,
+    entityId: req.entityId || null,
+    candidateId: req.candidateId || req.entityId || null,
+    hypothesisId: req.hypothesisId || null,
+  }));
+
+  const satisfied = computeSatisfiedEvidence(requirements, collectedEvidence);
+  const outstanding = computeOutstandingEvidence(requirements, collectedEvidence);
 
   const updatedQuestions = plan.questions.map((q) => {
     const reqTypes = q.requiredEvidence || [];
     const allSatisfied = reqTypes.every((ev) =>
-      satisfied.some((s) => s.evidenceType === ev)
+      satisfied.some((s) => {
+        if (s.evidenceType !== ev) return false;
+        if (q.hypothesisId && s.hypothesisId && q.hypothesisId !== s.hypothesisId) return false;
+        if (q.id && s.questionIds && s.questionIds.includes(q.id)) return true;
+        return !s.entityId;
+      })
     );
     return { ...q, satisfied: allSatisfied };
   });
 
+  const entityTasks = (plan.tasks || []).filter((task) => task.scope === 'entity');
+  const marketTasks = (plan.tasks || []).filter((task) => task.scope !== 'entity');
+
+  const entityOutstanding = entityTasks.filter((task) =>
+    !satisfied.some(
+      (s) =>
+        s.evidenceType === task.evidenceType &&
+        String(s.entityId || s.candidateId) === String(task.entityId || task.candidateId)
+    )
+  );
+
+  const marketIdentitySatisfied = satisfied.some(
+    (s) => s.evidenceType === INVESTIGATIVE_EVIDENCE.IDENTITY && !s.entityId
+  );
+
   const sufficientlyInvestigated =
-    outstanding.length === 0 ||
-    (satisfied.some((s) => s.evidenceType === INVESTIGATIVE_EVIDENCE.IDENTITY) &&
-      updatedQuestions.filter((q) => !q.satisfied).length === 0);
+    (entityTasks.length ? entityOutstanding.length === 0 : outstanding.length === 0) ||
+    (marketIdentitySatisfied &&
+      updatedQuestions.filter((q) => !q.satisfied).length === 0 &&
+      entityOutstanding.length === 0);
 
   let currentPhase = plan.currentPhase;
-  if (satisfied.some((s) => s.evidenceType === INVESTIGATIVE_EVIDENCE.IDENTITY)) {
+  if (marketIdentitySatisfied || satisfied.some((s) => s.evidenceType === INVESTIGATIVE_EVIDENCE.IDENTITY)) {
     currentPhase = INVESTIGATION_PHASES.DECISION_MAKERS;
   }
   if (sufficientlyInvestigated) {
@@ -245,27 +273,36 @@ function updatePlanAfterEvidence(plan, collectedEvidence = []) {
 function getNextInvestigationTasks(plan, opts = {}) {
   if (plan.sufficientlyInvestigated) return [];
 
-  const identitySatisfied = (plan.satisfiedEvidence || []).some(
-    (s) => s.evidenceType === INVESTIGATIVE_EVIDENCE.IDENTITY
+  const marketIdentitySatisfied = (plan.satisfiedEvidence || []).some(
+    (s) => s.evidenceType === INVESTIGATIVE_EVIDENCE.IDENTITY && !s.entityId && !s.candidateId
   );
 
   return (plan.tasks || []).filter((task) => {
     if (task.status === 'completed' || task.status === 'skipped') return false;
 
-    // Scenario 2: decision-maker tasks only after identity established.
+    const isEntityTask = task.scope === 'entity';
+
     if (
-      !identitySatisfied &&
+      !isEntityTask &&
+      !marketIdentitySatisfied &&
       task.evidenceType !== INVESTIGATIVE_EVIDENCE.IDENTITY &&
       opts.requireIdentityFirst !== false
     ) {
       return false;
     }
 
-    // Skip tasks whose evidence is already satisfied (Scenario 6).
-    const alreadySatisfied = (plan.satisfiedEvidence || []).some(
-      (s) => s.evidenceType === task.evidenceType
-    );
+    const alreadySatisfied = (plan.satisfiedEvidence || []).some((s) => {
+      if (s.evidenceType !== task.evidenceType) return false;
+      if (isEntityTask) {
+        return String(s.entityId || s.candidateId) === String(task.entityId || task.candidateId);
+      }
+      return !s.entityId && !s.candidateId;
+    });
     if (alreadySatisfied) return false;
+
+    if (isEntityTask && !(task.providers || []).some((p) => p.status !== 'unavailable')) {
+      return task.status === 'pending';
+    }
 
     return true;
   });
