@@ -509,6 +509,7 @@ async function runDiscoveryPipeline(input = {}) {
         payload.investigationState ||
         (payload.investigation && payload.investigation.investigationState) ||
         null,
+      candidateInvestigation: payload.candidateInvestigation || null,
       coverageResult: {
         candidates: candidateUniverse,
         searchHypotheses:

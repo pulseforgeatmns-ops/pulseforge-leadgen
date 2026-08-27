@@ -452,7 +452,18 @@ async function runInvestigativeReasoningLoop(input = {}) {
   });
   state = applyInvestigativeStrategy(state, investigativeStrategy);
 
-  const stop = shouldStopInvestigation(state, { ...opts, forceComplete: true });
+  const candidateInvestigationPending = Boolean(
+    input.candidateInvestigation &&
+      Array.isArray(input.candidateInvestigation.queue) &&
+      input.candidateInvestigation.queue.some(
+        (task) => task.status === 'pending' || task.status === 'running'
+      )
+  );
+
+  const stop = shouldStopInvestigation(state, {
+    ...opts,
+    forceComplete: candidateInvestigationPending ? false : opts.forceComplete !== false,
+  });
   if (investigativeStrategy.stoppingCondition?.stop) {
     stop.stop = true;
     stop.reason = investigativeStrategy.stoppingCondition.reason || stop.reason;

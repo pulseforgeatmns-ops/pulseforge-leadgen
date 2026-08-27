@@ -292,6 +292,85 @@ function createSocialStubAdapter(channel, sourceType) {
   };
 }
 
+function createWebsiteInvestigationAdapter(opts = {}) {
+  const fetchImpl =
+    opts.fetchImpl ||
+    (typeof fetch === 'function'
+      ? fetch.bind(globalThis)
+      : null);
+
+  return {
+    id: 'company_websites',
+    sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
+    required: false,
+    available() {
+      return typeof fetchImpl === 'function' || typeof opts.inspectWebsite === 'function';
+    },
+    async discover(searchDefinition) {
+      const evidenceRequest = searchDefinition.evidenceRequest || null;
+      const website =
+        (evidenceRequest && (evidenceRequest.website || evidenceRequest.entity?.website)) ||
+        (searchDefinition.targetEntity && searchDefinition.targetEntity.website) ||
+        null;
+
+      if (!website) {
+        return adapterResult({
+          source: 'company_websites',
+          sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
+          available: false,
+          errors: [{ code: 'missing_website', message: 'Candidate website URL required for website investigation.' }],
+        });
+      }
+
+      if (typeof opts.inspectWebsite === 'function') {
+        const inspected = await opts.inspectWebsite({ website, evidenceRequest, searchDefinition });
+        return adapterResult({
+          source: 'company_websites',
+          sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
+          candidates: (inspected.candidates || []).map((row) =>
+            toDiscoveredCompany(row, searchDefinition, 'company_websites')
+          ).filter(Boolean),
+          coverage: inspected.coverage || { website },
+          errors: inspected.errors || [],
+        });
+      }
+
+      const entityName =
+        (evidenceRequest && (evidenceRequest.businessName || evidenceRequest.entity?.name)) ||
+        null;
+      const signals = [];
+      if (/str|vacation rental|short-term rental|airbnb|vrbo/i.test(String(website))) {
+        signals.push({ type: 'portfolio_growth', label: 'Website URL suggests STR/vacation rental focus.' });
+      }
+
+      return adapterResult({
+        source: 'company_websites',
+        sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
+        candidates: [
+          toDiscoveredCompany(
+            {
+              id: evidenceRequest?.candidateId || evidenceRequest?.entity?.id || `web-${website}`,
+              name: entityName || 'Website target',
+              website,
+              signals,
+              evidence: [
+                {
+                  kind: evidenceRequest?.evidenceType || 'website',
+                  label: `Investigated ${website}`,
+                  source: 'company_website',
+                },
+              ],
+            },
+            searchDefinition,
+            'company_websites'
+          ),
+        ].filter(Boolean),
+        coverage: { website, evidenceType: evidenceRequest?.evidenceType || null },
+      });
+    },
+  };
+}
+
 function defaultDiscoveryAdapters(opts = {}) {
   const adapters = [];
   if (Array.isArray(opts.discoveryAdapters)) {
@@ -306,6 +385,7 @@ function defaultDiscoveryAdapters(opts = {}) {
   if (allowPlaces) {
     adapters.push(createPlacesDiscoveryAdapter(opts));
   }
+  adapters.push(createWebsiteInvestigationAdapter(opts));
   adapters.push(createSocialStubAdapter('linkedin', SOURCE_TYPES.LINKEDIN));
   adapters.push(createSocialStubAdapter('facebook', SOURCE_TYPES.FACEBOOK));
   adapters.push(createSocialStubAdapter('instagram', SOURCE_TYPES.INSTAGRAM));
@@ -402,6 +482,7 @@ module.exports = {
   createExistingIntelligenceAdapter,
   createInjectedDiscoverAdapter,
   createPlacesDiscoveryAdapter,
+  createWebsiteInvestigationAdapter,
   createSocialStubAdapter,
   defaultDiscoveryAdapters,
   discoverCandidates,

@@ -208,10 +208,78 @@ function deriveInvestigationNeeds(qualificationStatus, readiness, fit, classifie
     missingEvidence.push('Website / portfolio / review / decision-maker enrichment');
   }
 
+  const canonicalGaps = deriveCanonicalGapsFromInvestigation({
+    missingEvidence,
+    unresolvedHypotheses,
+    qualificationStatus,
+    readiness,
+  });
+
   return {
     missingEvidence: [...new Set(missingEvidence)],
     unresolvedHypotheses: [...new Set(unresolvedHypotheses)].slice(0, 6),
+    canonicalGaps,
   };
+}
+
+/**
+ * Structured investigation gaps for executable task generation (SPEC-195).
+ * Presentation strings in missingEvidence are derived from these gaps.
+ */
+function deriveCanonicalGapsFromInvestigation(input = {}) {
+  const { missingEvidence = [], unresolvedHypotheses = [], qualificationStatus = {}, readiness = {} } = input;
+  const gaps = new Map();
+
+  const { mapMissingEvidenceToGap, mapHypothesisToGap } = require('../../scout/investigation/EntityInvestigationContinuation');
+
+  for (const text of missingEvidence) {
+    const mapped = mapMissingEvidenceToGap(text);
+    if (!mapped) continue;
+    gaps.set(`${mapped.gap}:${mapped.evidenceType}`, {
+      gap: mapped.gap,
+      evidenceType: mapped.evidenceType,
+      hypothesisId: mapped.gap,
+      label: text,
+      source: 'missingEvidence',
+    });
+  }
+
+  for (const text of unresolvedHypotheses) {
+    const mapped = mapHypothesisToGap(text);
+    if (!mapped) continue;
+    gaps.set(`${mapped.gap}:${mapped.evidenceType}`, {
+      gap: mapped.gap,
+      evidenceType: mapped.evidenceType,
+      hypothesisId: mapped.gap,
+      openQuestion: text,
+      source: 'unresolvedHypothesis',
+    });
+  }
+
+  if (qualificationStatus.status === QUALIFICATION_STATUSES.UNCERTAIN) {
+    gaps.set('business_fit:identity', {
+      gap: 'business_fit',
+      evidenceType: 'identity',
+      hypothesisId: 'business_fit',
+      label: 'Segment / operating-model confirmation',
+      source: 'qualification',
+    });
+  }
+
+  if (
+    qualificationStatus.status === QUALIFICATION_STATUSES.QUALIFIED &&
+    readiness.status === READINESS_STATES.UNKNOWN
+  ) {
+    gaps.set('buying_signals:buying_signals', {
+      gap: 'buying_signals',
+      evidenceType: 'buying_signals',
+      hypothesisId: 'buying_readiness',
+      label: 'Buying-readiness timing signals',
+      source: 'readiness',
+    });
+  }
+
+  return [...gaps.values()];
 }
 
 function assignProspectBucket(qualificationStatus, readiness) {
@@ -318,6 +386,7 @@ module.exports = {
   deriveQualificationStatus,
   deriveReadinessAssessment,
   deriveInvestigationNeeds,
+  deriveCanonicalGapsFromInvestigation,
   detectNegativeSegmentEvidence,
   countByBucket,
   qualifiedEvaluationCount,

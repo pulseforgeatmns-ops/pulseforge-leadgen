@@ -34,6 +34,7 @@ const { buildAcquisitionSearchDefinition, expansionSuggestion } = require('./Sea
 const { constructCandidateUniverse } = require('./CandidateUniverse');
 const { attachFitToClassified, enrichPeopleSafe } = require('./FitEvaluation');
 const { defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
+const { runCandidateInvestigationLoop } = require('../../scout/investigation/CandidateInvestigation');
 const { isRuntimeAim } = require('../../aim');
 const {
   buildDiscoveryReport,
@@ -1001,6 +1002,44 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     }
   });
 
+  // SPEC-195 — post-qualification candidate investigation loop.
+  let candidateInvestigation = null;
+  if (opts.runCandidateInvestigation !== false && classified.length) {
+    candidateInvestigation = await runCandidateInvestigationLoop({
+      companies,
+      classified,
+      searchDefinition,
+      marketDefinition: opts.marketDefinition || {},
+      mission: opts.mission || delegation.mission || {},
+      adapters,
+      opts: {
+        ...opts,
+        now,
+        maxCandidateInvestigationIterations:
+          opts.maxCandidateInvestigationIterations != null
+            ? opts.maxCandidateInvestigationIterations
+            : 8,
+      },
+    });
+
+    if (candidateInvestigation.companies) {
+      candidateInvestigation.companies.forEach((company, index) => {
+        companies[index] = company;
+      });
+    }
+    if (candidateInvestigation.classified) {
+      candidateInvestigation.classified.forEach((row, index) => {
+        classified[index] = row;
+      });
+    }
+
+    if (candidateInvestigation.executedTasks && candidateInvestigation.executedTasks.length) {
+      actionsTaken.push({
+        text: `Candidate investigation (SPEC-195): ${candidateInvestigation.executedTasks.length} entity task${candidateInvestigation.executedTasks.length === 1 ? '' : 's'} executed; stop reason: ${(candidateInvestigation.stop && candidateInvestigation.stop.reason) || 'queue_complete'}.`,
+      });
+    }
+  }
+
   if (opts.discoveryStore && typeof opts.discoveryStore.upsert === 'function' && companies.length) {
     await opts.discoveryStore.upsert(tenantId, companies);
   }
@@ -1240,6 +1279,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       discoveryConfidence,
       investigationState: universe.investigationState || null,
       investigationPlan: universe.investigationPlan || null,
+      candidateInvestigation: candidateInvestigation || null,
       providerExecution: resolveProviderExecution(universe),
       qualifiedCount: qualifiedProspectCount,
       qualifiedProspectCount,

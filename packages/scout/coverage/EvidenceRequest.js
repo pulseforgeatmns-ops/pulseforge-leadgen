@@ -112,6 +112,19 @@ function buildEvidenceRequest(task = {}, searchDefinition = {}, marketDefinition
           name: asText(task.entityName) || null,
           gap: asText(task.gap) || null,
           hypothesis: asText(task.hypothesis) || null,
+          hypothesisId: asText(task.hypothesisId) || null,
+          website:
+            asText(task.candidateContext?.website) ||
+            asText(task.website) ||
+            null,
+          placeId:
+            asText(task.candidateContext?.placeId) ||
+            asText(task.placeId) ||
+            null,
+          address:
+            asText(task.candidateContext?.address) ||
+            asText(task.address) ||
+            null,
         }
       : null;
 
@@ -124,6 +137,17 @@ function buildEvidenceRequest(task = {}, searchDefinition = {}, marketDefinition
       ? task.providers.map((p) => asText(p.providerId)).filter(Boolean)
       : [],
     tenantId: asText(searchDefinition.tenantId || marketDefinition.tenantId) || null,
+    missionId:
+      asText(task.missionId) ||
+      asText(searchDefinition.missionId) ||
+      asText(marketDefinition.mission?.id) ||
+      null,
+    candidateId: asText(task.candidateId || task.entityId) || null,
+    businessName: asText(task.entityName || task.candidateContext?.businessName) || null,
+    website: entity?.website || null,
+    placeId: entity?.placeId || null,
+    address: entity?.address || null,
+    hypothesisId: asText(task.hypothesisId) || entity?.hypothesisId || null,
     entity,
     scope: task.scope === 'entity' ? 'entity' : 'market',
   };

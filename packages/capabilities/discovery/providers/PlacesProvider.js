@@ -98,10 +98,10 @@ function createPlacesProvider(deps = {}) {
         return [];
       }
 
-      const { segment, evidenceType, geography = {} } = evidenceRequest;
+      const { segment, evidenceType, geography = {}, entity = null, businessName = null } = evidenceRequest;
       const cities = geography.cities || [];
       const state = geography.state || null;
-      if (!cities.length) {
+      if (!cities.length && !entity?.name) {
         this.lastExecution = createProviderExecution({
           executed: false,
           abortReason: 'empty_geography',
@@ -110,7 +110,14 @@ function createPlacesProvider(deps = {}) {
         return [];
       }
 
-      const queries = buildQueriesForEvidence({ segment, evidenceType, cities, state });
+      const queries = buildQueriesForEvidence({
+        segment,
+        evidenceType,
+        cities,
+        state,
+        entityName: entity?.name || businessName || null,
+        website: entity?.website || evidenceRequest.website || null,
+      });
       const requireWebsite = evidenceType !== INVESTIGATIVE_EVIDENCE.IDENTITY;
       const limit = DEFAULT_LIMIT;
       const out = [];
@@ -212,7 +219,14 @@ function createPlacesProvider(deps = {}) {
  * Derive Places query strings from segment + evidence type.
  * Query templates live in the market hypothesis registry — not in Scout execution.
  */
-function buildQueriesForEvidence({ segment, evidenceType, cities, state }) {
+function buildQueriesForEvidence({ segment, evidenceType, cities, state, entityName = null, website = null }) {
+  if (entityName) {
+    const loc = cities.length ? (state ? `${cities[0]} ${state}` : cities[0]) : '';
+    const base = `${entityName}${loc ? ` ${loc}` : ''}`.trim();
+    if (website) return [base, website];
+    return [base];
+  }
+
   const hypothesis = resolveMarketHypothesisBySegmentKey(segment);
   const geoRows = cities.map((city) => ({ city, state: state || '' }));
 
