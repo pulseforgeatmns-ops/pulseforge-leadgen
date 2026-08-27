@@ -32,6 +32,7 @@ const {
 const { assertMissionStateConsistent } = require('../../acquisition-mission/PendingOperatorDecision');
 const { createEvent } = require('../../acquisition-mission/Timeline');
 const { executeOutboundBundle } = require('./OutboundExecutionAdapter');
+const { persistOutboundExecution } = require('../../../services/acquisitionMissionOutboundPersistence');
 
 function validateExecuteOutboundPreconditions({ mission, engine, tenantId }) {
   if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
@@ -162,6 +163,14 @@ async function runExecuteOutboundForAmoMission(input = {}) {
   const persistExecutionRecord = async (record) => {
     if (engine.store.addExecutionRecord) {
       engine.store.addExecutionRecord(record);
+    }
+    if (input.pool && input.persist !== false) {
+      try {
+        await persistOutboundExecution(record, input.pool);
+      } catch (err) {
+        console.error('[execute_outbound] durable execution record persist failed:', err.message);
+        throw err;
+      }
     }
   };
 

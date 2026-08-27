@@ -7,6 +7,17 @@ const {
   logZeroSendSuppression,
   markBatchProxyEvents,
 } = require('./openSignalGate');
+const {
+  correlateBrevoSend,
+  isCanonicalCorrelation,
+  legacySendMatchFromCorrelation,
+  findLegacyAgentLogSend,
+} = require('./brevoSendCorrelation');
+const {
+  persistMissionProviderEvent,
+  logCorrelationFailure,
+  ensureOutboundExecutionSchema,
+} = require('../services/acquisitionMissionOutboundPersistence');
 
 const BREVO_EVENT_MAP = {
   request: 'sent',
@@ -264,35 +275,40 @@ function parseJsonMaybe(value) {
   }
 }
 
-async function findMatchingSend({ email, clientId, messageId, subject }) {
-  if (messageId) {
-    const byMessage = await pool.query(`
-      SELECT payload, client_id, prospect_id, ran_at
-      FROM agent_log
-      WHERE agent_name = 'emmett'
-        AND action = 'email_sent'
-        AND payload->>'message_id' = $1
-      ORDER BY ran_at DESC
-      LIMIT 1
-    `, [messageId]);
-    if (byMessage.rows.length) return byMessage.rows[0];
-  }
+async function findMatchingSend(params) {
+  return findLegacyAgentLogSend(params, pool);
+}
 
-  const params = [email, subject || null];
-  if (clientId) params.push(clientId);
-  const byEmail = await pool.query(`
-    SELECT al.payload, al.client_id, al.prospect_id, al.ran_at
-    FROM agent_log al
-    JOIN prospects p ON p.id = al.prospect_id AND p.client_id = al.client_id
-    WHERE al.agent_name = 'emmett'
-      AND al.action = 'email_sent'
-      AND LOWER(p.email) = $1
-      AND ($2::text IS NULL OR al.payload->>'subject' = $2)
-      ${clientId ? 'AND al.client_id = $3' : ''}
-    ORDER BY al.ran_at DESC
-    LIMIT 1
-  `, params);
-  return byEmail.rows[0] || null;
+async function persistCanonicalProviderEvent({
+  correlation,
+  payload,
+  eventType,
+  eventId: brevoEventId,
+  occurredAt,
+}) {
+  if (!isCanonicalCorrelation(correlation)) return null;
+  await ensureOutboundExecutionSchema(pool);
+  const rawEventType = String(payload.event || payload.event_type || payload.type || '').trim() || null;
+  const providerEventId = payload.id || payload.uuid || payload.event_id || payload.eventId || null;
+  return persistMissionProviderEvent({
+    missionId: correlation.missionId,
+    tenantId: correlation.tenantId,
+    prospectId: correlation.prospectId,
+    executionRecordId: correlation.executionRecordId,
+    preparedArtifactRevision: correlation.preparedArtifactRevision,
+    provider: 'brevo',
+    providerMessageId: correlation.providerMessageId,
+    eventType,
+    rawEventType,
+    providerEventId,
+    occurredAt,
+    link: payload.link || null,
+    payload: {
+      brevo_event_id: brevoEventId,
+      correlation_source: correlation.source,
+      open_source: payload.open_source || null,
+    },
+  }, pool);
 }
 
 async function resolveProspect(email, clientId, sendMatch) {
@@ -355,6 +371,7 @@ async function logBrevoEvent({ eventId, eventType, email, prospectId, clientId, 
 
 async function insertBrevoEvent(rawPayload = {}) {
   await ensureOpenSignalSchema(pool);
+  await ensureOutboundExecutionSchema(pool);
   const payload = rawPayload || {};
   const recipient = recipientEmail(payload);
   const type = internalEventType(payload);
@@ -369,19 +386,35 @@ async function insertBrevoEvent(rawPayload = {}) {
     payload.client_id
   ) || null;
   const subject = textValue(payload.subject || metadataValue(payload, 'subject'));
-  const sendMatch = await findMatchingSend({
+  const tags = Array.isArray(payload.tags) ? payload.tags : [];
+  const correlation = await correlateBrevoSend({
+    messageId,
     email: recipient,
     clientId: payloadClientId,
-    messageId,
     subject,
-  });
+    tags,
+  }, pool);
+  const sendMatch = legacySendMatchFromCorrelation(correlation);
   const sendPayload = parseJsonMaybe(sendMatch?.payload);
-  const clientId = Number(sendMatch?.client_id || payloadClientId) || null;
+  const clientId = Number(
+    correlation.clientId
+    || sendMatch?.client_id
+    || payloadClientId
+  ) || null;
   const prospect = await resolveProspect(recipient, clientId, sendMatch);
+  if (correlation.failed && messageId) {
+    await logCorrelationFailure({
+      providerMessageId: messageId,
+      recipientEmail: recipient,
+      eventType: type,
+      reason: correlation.reason || 'no_matching_send',
+      clientId: clientId || payloadClientId || null,
+      prospectId: prospect?.id || null,
+    }, pool);
+  }
   const finalClientId = Number(prospect?.client_id || clientId) || null;
   const domain = await sendingDomainForPayload(payload, sendPayload, prospect);
   const id = eventId(payload, type, recipient, messageId);
-  const tags = Array.isArray(payload.tags) ? payload.tags : [];
   const sequence = textValue(metadataValue(payload, 'sequence') || sendPayload.sequence || tags[0]);
   const step = parseStep(metadataValue(payload, 'step') || sendPayload.step || tags.find(tag => /^step_/i.test(String(tag))));
   const occurredAt = eventAt(payload);
@@ -528,6 +561,21 @@ async function insertBrevoEvent(rawPayload = {}) {
     inserted,
   });
 
+  let missionProviderEvent = null;
+  if (inserted && isCanonicalCorrelation(correlation)) {
+    try {
+      missionProviderEvent = await persistCanonicalProviderEvent({
+        correlation,
+        payload,
+        eventType: type,
+        eventId: id,
+        occurredAt,
+      });
+    } catch (err) {
+      console.error('[Brevo] mission provider event persistence failed:', err.message);
+    }
+  }
+
   return {
     inserted,
     updated,
@@ -540,8 +588,12 @@ async function insertBrevoEvent(rawPayload = {}) {
     sending_domain: domain,
     open_source: openSource,
     open_source_reason: openSourceReason,
-    has_corresponding_send: Boolean(sendMatch || openClassification.hasSend),
+    has_corresponding_send: Boolean(sendMatch || openClassification.hasSend || isCanonicalCorrelation(correlation)),
     reclassified_proxy_events: reclassifiedProxyEvents,
+    correlation,
+    mission_id: correlation.missionId || null,
+    execution_record_id: correlation.executionRecordId || null,
+    mission_provider_event: missionProviderEvent,
   };
 }
 
@@ -556,4 +608,6 @@ module.exports = {
   recipientEmail,
   rootDomainFromEmail,
   senderEmail,
+  findMatchingSend,
+  persistCanonicalProviderEvent,
 };
