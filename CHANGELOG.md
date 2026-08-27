@@ -6,6 +6,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- AUDIT-066 Max Post-Discovery Dispatch ([AUDIT-066](docs/architecture/AUDIT-066_Max_Post_Discovery_Dispatch.md))
+  - Operator `PRIORITIZATION_APPROVAL` now executes Max through SEC/TME and commits a validated `PRIORITIZATION` contribution atomically
+  - `MaxPrioritizationExecutor` builds mission-bound Max input from locked structured mission + Scout discovery (MIR, ranked prospects, evidence)
+  - Fail-closed: contract/execution failures leave the mission at `DISCOVER` without false `maxComplete`
+  - `advanceMaxPrioritization()` remains idempotent for back-compat and autonomous progression
+
 - SPEC-185 Blocked Discovery Telemetry Continuity ([SPEC-185](docs/specs/SPEC-185_Blocked_Discovery_Telemetry_Continuity.md), [ADR-100](docs/adr/ADR-100_Uniform_Discovery_Payloads.md))
   - Every Discovery exit path — success, blocked, partial, provider failure — includes `providerExecution`
   - Blocked Scout returns preserve `universe.providerReports` instead of dropping sensor telemetry
