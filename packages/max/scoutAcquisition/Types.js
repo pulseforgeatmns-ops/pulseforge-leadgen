@@ -122,6 +122,22 @@ const EVIDENCE_KINDS = Object.freeze({
   POSITIVE_EVIDENCE: 'positive_evidence',
 });
 
+/** SPEC-194 — market qualification status (independent of buying readiness). */
+const QUALIFICATION_STATUSES = Object.freeze({
+  QUALIFIED: 'qualified',
+  NOT_QUALIFIED: 'not_qualified',
+  UNCERTAIN: 'uncertain',
+});
+
+/** SPEC-194 — downstream candidate buckets. */
+const PROSPECT_BUCKETS = Object.freeze({
+  HIGH_PRIORITY: 'high_priority',
+  INVESTIGATION_REQUIRED: 'investigation_required',
+  NURTURE: 'nurture',
+  FIT_INVESTIGATION: 'fit_investigation',
+  EXCLUDED: 'excluded',
+});
+
 const DEFAULT_COMMERCIAL_CLEANING_SEGMENTS = Object.freeze([
   'property_management',
   'office',
@@ -217,6 +233,8 @@ module.exports = {
   INTENT_STATES,
   READINESS_STATES,
   EVIDENCE_KINDS,
+  QUALIFICATION_STATUSES,
+  PROSPECT_BUCKETS,
   DEFAULT_COMMERCIAL_CLEANING_SEGMENTS,
   REFRESH_MS,
   asText,
