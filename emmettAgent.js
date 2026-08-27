@@ -1095,45 +1095,21 @@ function createMailTransporter() {
 }
 
 async function sendEmail(toEmail, toName, subject, body, tags) {
-  try {
-    if (!process.env.BREVO_API_KEY) {
-      return { success: false, error: 'BREVO_API_KEY not set' };
-    }
-
-    const payload = {
-      sender: { name: FROM_NAME, email: FROM_EMAIL },
-      to: [{ email: toEmail, name: toName }],
-      subject,
-      htmlContent: '<html><body style="font-family:Georgia,serif;font-size:16px;line-height:1.6;color:#1a1a1a;max-width:560px;margin:0 auto;padding:20px;">' + body.replace(/\n/g, '<br>') + '</body></html>',
-      textContent: body,
-    };
-    if (Array.isArray(tags) && tags.length) {
-      payload.tags = tags.map(String);
-    }
-
-    const res = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
-      headers: { 'api-key': process.env.BREVO_API_KEY, 'Content-Type': 'application/json' },
-      timeout: 15000,
-    });
-
-    const messageId =
-      res.data?.messageId ||
-      res.data?.messageID ||
-      res.data?.message_id ||
-      res.data?.messageIds?.[0] ||
-      res.headers?.['message-id'] ||
-      res.headers?.['x-message-id'] ||
-      null;
-    console.log(`Email sent to ${toEmail} — Message ID: ${messageId || 'not returned'}`);
-    return { success: true, messageId, brevoResponse: res.data || null };
-  } catch (err) {
-    const errorDetail = err.response?.data || err.message;
-    console.error(`Failed to send to ${toEmail}:`, errorDetail);
-    return {
-      success: false,
-      error: typeof errorDetail === 'string' ? errorDetail : JSON.stringify(errorDetail),
-    };
+  const { sendEmail: brevoSend } = require('./packages/providers/brevo/sendEmail');
+  const result = await brevoSend({
+    toEmail,
+    toName,
+    subject,
+    body,
+    tags,
+    sender: { name: FROM_NAME, email: FROM_EMAIL },
+  });
+  if (result.success) {
+    console.log(`Email sent to ${toEmail} — Message ID: ${result.messageId || 'not returned'}`);
+    return { success: true, messageId: result.messageId, brevoResponse: result.brevoResponse };
   }
+  console.error(`Failed to send to ${toEmail}:`, result.error);
+  return { success: false, error: result.error };
 }
 
 function stripForbiddenMshiCopy(body, prospect) {

@@ -580,6 +580,9 @@ function createAcquisitionMissionEngine(opts = {}) {
       observations: formatMemory(store.listObservations(mission.id)),
       contributions,
       outcomes: store.listOutcomes(mission.id),
+      executionRecords: store.listExecutionRecords
+        ? store.listExecutionRecords(mission.id)
+        : [],
       blocker: currentBlocker(mission.blockers),
       discoveryArtifact,
       progression: progressionSnapshot.progression,

@@ -53,6 +53,7 @@ const missionExecutionContext = require('./MissionExecutionContext');
 const executionRequest = require('./ExecutionRequest');
 const executionRouter = require('./ExecutionRouter');
 const executionApproval = require('./ExecutionApproval');
+const outboundExecution = require('./OutboundExecution');
 
 module.exports = {
   ...types,
@@ -108,4 +109,5 @@ module.exports = {
   ...executionRequest,
   ...executionRouter,
   ...executionApproval,
+  ...outboundExecution,
 };

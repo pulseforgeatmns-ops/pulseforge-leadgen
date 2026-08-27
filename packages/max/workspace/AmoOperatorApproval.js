@@ -2019,6 +2019,7 @@ module.exports = {
   advancePaigeVariants,
   advanceEmmettCapacity,
   advanceExecutionAfterApproval,
+  advanceExecuteOutbound: require('./EmmettOutboundExecution').advanceExecuteOutbound,
   validateDiscoveryPreconditions,
   buildDiscoveryApprovalProse,
   mapScoutIntelligenceToDiscoveryPayload,
