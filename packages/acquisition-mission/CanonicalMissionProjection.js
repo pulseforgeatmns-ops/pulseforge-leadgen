@@ -121,13 +121,22 @@ function canonicalizeEvent(event) {
 
 function canonicalizeObservation(row) {
   const clean = stripPresentation(row) || {};
-  return canonicalizeValue({
+  const base = {
     id: clean.id || null,
     missionId: clean.missionId || null,
     specialist: clean.specialist || null,
     observation: clean.observation || null,
     at: canonicalizeTimestamp(clean.at) || null,
-  });
+  };
+  if (clean.kind) base.kind = clean.kind;
+  if (clean.prospectId != null) base.prospectId = clean.prospectId;
+  if (clean.category) base.category = clean.category;
+  if (clean.eventType) base.eventType = clean.eventType;
+  if (clean.occurredAt) base.occurredAt = canonicalizeTimestamp(clean.occurredAt);
+  if (clean.source) base.source = clean.source;
+  if (isPlainObject(clean.evidence)) base.evidence = clean.evidence;
+  if (isPlainObject(clean.payload)) base.payload = clean.payload;
+  return canonicalizeValue(base);
 }
 
 function canonicalizeContribution(row) {
