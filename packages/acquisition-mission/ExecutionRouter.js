@@ -120,6 +120,10 @@ function defaultHandlers() {
     [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
     [EXECUTION_INTENTS.GENERATE_CAPACITY]: (ctx) => approval.advanceEmmettCapacity(ctx),
     [EXECUTION_INTENTS.APPROVE_EXECUTION]: (ctx) => approval.advanceExecutionAfterApproval(ctx),
+    [EXECUTION_INTENTS.EXECUTE_OUTBOUND]: (ctx) => {
+      const { advanceExecuteOutbound } = require('../max/workspace/EmmettOutboundExecution');
+      return advanceExecuteOutbound(ctx);
+    },
     [EXECUTION_INTENTS.OPERATOR_APPROVED]: async (ctx) => {
       const question = (ctx.executionRequest.payload && ctx.executionRequest.payload.question) || '';
       try {
@@ -229,6 +233,9 @@ function handlerContext(request, context, mission, runtimeOwner) {
     scoutCompanies: context.scoutCompanies,
     scoutPeople: context.scoutPeople,
     allowFixtureFallback: context.allowFixtureFallback,
+    sendEmail: context.sendEmail,
+    resolveProspectAttributes: context.resolveProspectAttributes,
+    senderIdentity: context.senderIdentity,
     audit: context.audit,
     persist: context.persist,
     pool: context.pool,

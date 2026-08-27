@@ -17,6 +17,7 @@ function createMemoryAmoStore(opts = {}) {
   const predictions = [];
   const evaluations = [];
   const outcomeLearnings = [];
+  const executionRecords = [];
 
   function putMission(mission) {
     const missionContributions = contributions.filter((row) => row.missionId === mission.id);
@@ -165,6 +166,36 @@ function createMemoryAmoStore(opts = {}) {
     return rows;
   }
 
+  function addExecutionRecord(row) {
+    if (!row || !row.id) return null;
+    const idx = executionRecords.findIndex((existing) => existing.id === row.id);
+    const copy = clone(row);
+    if (idx >= 0) executionRecords[idx] = copy;
+    else executionRecords.push(copy);
+    return clone(copy);
+  }
+
+  function listExecutionRecords(missionId, filter = {}) {
+    let rows = executionRecords.map(clone);
+    if (missionId != null && missionId !== '') {
+      rows = rows.filter((row) => row.missionId === missionId);
+    }
+    if (filter.prospectId) {
+      rows = rows.filter((row) => row.prospectId === filter.prospectId);
+    }
+    if (filter.executionIdentity) {
+      rows = rows.filter((row) => row.executionIdentity === filter.executionIdentity);
+    }
+    if (filter.status) {
+      rows = rows.filter((row) => row.status === filter.status);
+    }
+    return rows.sort((a, b) => String(a.attemptedAt || a.createdAt).localeCompare(String(b.attemptedAt || b.createdAt)));
+  }
+
+  function findExecutionRecordByIdentity(executionIdentity) {
+    return executionRecords.find((row) => row.executionIdentity === executionIdentity) || null;
+  }
+
   function snapshot() {
     return {
       missions: [...missions.entries()].map(([id, row]) => [id, clone(row)]),
@@ -176,6 +207,7 @@ function createMemoryAmoStore(opts = {}) {
       predictions: predictions.map(clone),
       evaluations: evaluations.map(clone),
       outcomeLearnings: outcomeLearnings.map(clone),
+      executionRecords: executionRecords.map(clone),
     };
   }
 
@@ -198,6 +230,7 @@ function createMemoryAmoStore(opts = {}) {
     replaceArray(predictions, snap.predictions);
     replaceArray(evaluations, snap.evaluations);
     replaceArray(outcomeLearnings, snap.outcomeLearnings);
+    replaceArray(executionRecords, snap.executionRecords);
   }
 
   for (const extra of opts.seeds || []) putMission(extra);
@@ -224,6 +257,9 @@ function createMemoryAmoStore(opts = {}) {
     listEvaluations,
     addOutcomeLearning,
     listOutcomeLearnings,
+    addExecutionRecord,
+    listExecutionRecords,
+    findExecutionRecordByIdentity,
     snapshot,
     restore,
   };
