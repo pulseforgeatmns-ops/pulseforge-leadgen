@@ -48,6 +48,10 @@ const {
 } = require('./OutcomeLearning');
 const { explainWhy, formatExplain } = require('./Explain');
 const { createObservation, formatMemory } = require('./Memory');
+const {
+  createCommunicationObservation,
+  isCommunicationObservation,
+} = require('./CommunicationObservation');
 const { createMemoryAmoStore } = require('./Store');
 const {
   INSPECTION_PROPERTIES,
@@ -373,9 +377,26 @@ function createAcquisitionMissionEngine(opts = {}) {
       specialist: row.specialist,
       at: row.at,
       label: `${row.specialist} observed`,
-      payload: { observation: row.observation },
+      payload: isCommunicationObservation(row)
+        ? {
+          kind: row.kind,
+          category: row.category,
+          eventType: row.eventType,
+          prospectId: row.prospectId,
+          evidence: row.evidence,
+        }
+        : { observation: row.observation },
     }));
     return row;
+  }
+
+  function recordCommunicationObservation(missionId, providerEvent = {}, obsOpts = {}) {
+    const structured = createCommunicationObservation(providerEvent);
+    if (!structured) return null;
+    const mission = requireMission(missionId, obsOpts.tenantId);
+    const existing = store.listObservations(mission.id).find((row) => row.id === structured.id);
+    if (existing) return existing;
+    return recordObservation(mission.id, structured, obsOpts);
   }
 
   function recordOutcome(missionId, input = {}, outcomeOpts = {}) {
@@ -725,6 +746,7 @@ function createAcquisitionMissionEngine(opts = {}) {
     setBlocker,
     clearBlocker,
     recordObservation,
+    recordCommunicationObservation,
     recordOutcome,
     recordLearning,
     capturePrediction: captureMissionPrediction,

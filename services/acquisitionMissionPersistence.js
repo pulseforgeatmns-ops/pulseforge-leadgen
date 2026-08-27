@@ -91,6 +91,10 @@ async function ensureAcquisitionMissionSchema(pool = defaultPool()) {
     )
   `);
   await pool.query(`
+    ALTER TABLE acquisition_mission_observations
+      ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb
+  `);
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS acquisition_mission_outcomes (
       id TEXT PRIMARY KEY,
       mission_id TEXT NOT NULL REFERENCES acquisition_missions(id) ON DELETE CASCADE,
@@ -264,10 +268,10 @@ async function persistObservation(row, tenantId, pool = defaultPool(), opts = {}
   if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistObservation');
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
-    `INSERT INTO acquisition_mission_observations (id, mission_id, tenant_id, specialist, observation, at)
-     VALUES ($1,$2,$3,$4,$5,$6)
+    `INSERT INTO acquisition_mission_observations (id, mission_id, tenant_id, specialist, observation, payload, at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT (id) DO NOTHING`,
-    [row.id, row.missionId, String(tenantId), row.specialist, row.observation, row.at]
+    [row.id, row.missionId, String(tenantId), row.specialist, row.observation, row, row.at]
   );
   return row;
 }
@@ -610,15 +614,19 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
     [key]
   )).rows.map((row) => row.payload);
   const observations = (await pool.query(
-    `SELECT id, mission_id, specialist, observation, at FROM acquisition_mission_observations WHERE tenant_id = $1`,
+    `SELECT id, mission_id, specialist, observation, payload, at FROM acquisition_mission_observations WHERE tenant_id = $1`,
     [key]
-  )).rows.map((row) => ({
-    id: row.id,
-    missionId: row.mission_id,
-    specialist: row.specialist,
-    observation: row.observation,
-    at: row.at,
-  }));
+  )).rows.map((row) => {
+    const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+    return {
+      ...payload,
+      id: row.id,
+      missionId: row.mission_id,
+      specialist: row.specialist,
+      observation: row.observation,
+      at: row.at,
+    };
+  });
   const outcomes = (await pool.query(
     `SELECT payload FROM acquisition_mission_outcomes WHERE tenant_id = $1`,
     [key]

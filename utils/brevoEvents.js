@@ -18,6 +18,7 @@ const {
   logCorrelationFailure,
   ensureOutboundExecutionSchema,
 } = require('../services/acquisitionMissionOutboundPersistence');
+const { consumeMissionProviderEvent } = require('../services/acquisitionMissionProviderObservation');
 
 const BREVO_EVENT_MAP = {
   request: 'sent',
@@ -562,7 +563,8 @@ async function insertBrevoEvent(rawPayload = {}) {
   });
 
   let missionProviderEvent = null;
-  if (inserted && isCanonicalCorrelation(correlation)) {
+  let missionProviderObservation = null;
+  if (isCanonicalCorrelation(correlation)) {
     try {
       missionProviderEvent = await persistCanonicalProviderEvent({
         correlation,
@@ -571,8 +573,11 @@ async function insertBrevoEvent(rawPayload = {}) {
         eventId: id,
         occurredAt,
       });
+      if (missionProviderEvent && missionProviderEvent.event) {
+        missionProviderObservation = await consumeMissionProviderEvent(missionProviderEvent, pool);
+      }
     } catch (err) {
-      console.error('[Brevo] mission provider event persistence failed:', err.message);
+      console.error('[Brevo] mission provider event/observation failed:', err.message);
     }
   }
 
@@ -594,6 +599,7 @@ async function insertBrevoEvent(rawPayload = {}) {
     mission_id: correlation.missionId || null,
     execution_record_id: correlation.executionRecordId || null,
     mission_provider_event: missionProviderEvent,
+    mission_provider_observation: missionProviderObservation,
   };
 }
 
