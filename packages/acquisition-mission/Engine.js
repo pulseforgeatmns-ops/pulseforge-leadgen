@@ -52,6 +52,15 @@ const {
   createCommunicationObservation,
   isCommunicationObservation,
 } = require('./CommunicationObservation');
+const {
+  buildMissionInterpretationContext,
+  interpretMissionObservation,
+  interpretRileyReply,
+  interpretBookingEvidence,
+  shouldCreateOutcome,
+  buildOutcomePayload,
+  createInterpretationRecord,
+} = require('./ObservationInterpretation');
 const { createMemoryAmoStore } = require('./Store');
 const {
   INSPECTION_PROPERTIES,
@@ -396,7 +405,76 @@ function createAcquisitionMissionEngine(opts = {}) {
     const mission = requireMission(missionId, obsOpts.tenantId);
     const existing = store.listObservations(mission.id).find((row) => row.id === structured.id);
     if (existing) return existing;
-    return recordObservation(mission.id, structured, obsOpts);
+    const observation = recordObservation(mission.id, structured, obsOpts);
+    if (obsOpts.skipInterpretation !== true) {
+      applyCommunicationObservationInterpretation(mission.id, observation, obsOpts);
+    }
+    return observation;
+  }
+
+  function recordInterpretation(missionId, result = {}, interpOpts = {}) {
+    const mission = requireMission(missionId, interpOpts.tenantId);
+    const row = createInterpretationRecord({ ...result, missionId: mission.id });
+    store.addInterpretation(row);
+    store.addEvent(createEvent({
+      missionId: mission.id,
+      kind: EVENT_KINDS.OBSERVATION,
+      specialist: SPECIALISTS.MAX,
+      at: row.at,
+      label: `Interpreted: ${row.type}`,
+      payload: {
+        interpretationId: row.id,
+        observationId: row.observationId,
+        type: row.type,
+        confidence: row.confidence,
+        recommendedOutcome: row.recommendedOutcome,
+        requiresHumanConfirmation: row.requiresHumanConfirmation,
+      },
+    }));
+    return row;
+  }
+
+  function applyInterpretationResult(result = {}, applyOpts = {}) {
+    if (!result || !result.missionId) return { skipped: true, reason: 'missing_result' };
+    const mission = requireMission(result.missionId, applyOpts.tenantId);
+    const interpretationRow = recordInterpretation(mission.id, result, applyOpts);
+
+    let outcome = null;
+    if (shouldCreateOutcome(result, applyOpts)) {
+      outcome = recordOutcome(mission.id, {
+        type: result.recommendedOutcome.type,
+        prospectId: result.prospectId,
+        specialist: SPECIALISTS.MAX,
+        payload: buildOutcomePayload(result, interpretationRow),
+      }, applyOpts);
+    }
+
+    return { interpretation: interpretationRow, outcome };
+  }
+
+  function applyCommunicationObservationInterpretation(missionId, observation, interpOpts = {}) {
+    const mission = requireMission(missionId, interpOpts.tenantId);
+    const missionContext = buildMissionInterpretationContext(mission, store);
+    const result = interpretMissionObservation({
+      missionId: mission.id,
+      prospectId: observation.prospectId,
+      observation,
+      missionContext,
+    });
+    if (!result) return null;
+    return applyInterpretationResult(result, interpOpts);
+  }
+
+  function applyRileyReplyInterpretation(input = {}, applyOpts = {}) {
+    const result = interpretRileyReply(input);
+    if (!result.missionId) return { skipped: true, reason: 'missing_mission_id' };
+    return applyInterpretationResult(result, applyOpts);
+  }
+
+  function applyBookingInterpretation(input = {}, applyOpts = {}) {
+    const result = interpretBookingEvidence(input);
+    if (!result.missionId) return { skipped: true, reason: 'missing_mission_id' };
+    return applyInterpretationResult(result, applyOpts);
   }
 
   function recordOutcome(missionId, input = {}, outcomeOpts = {}) {
@@ -747,6 +825,11 @@ function createAcquisitionMissionEngine(opts = {}) {
     clearBlocker,
     recordObservation,
     recordCommunicationObservation,
+    recordInterpretation,
+    applyInterpretationResult,
+    applyCommunicationObservationInterpretation,
+    applyRileyReplyInterpretation,
+    applyBookingInterpretation,
     recordOutcome,
     recordLearning,
     capturePrediction: captureMissionPrediction,
