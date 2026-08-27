@@ -316,6 +316,8 @@ function computeCoverageMetrics(plan, executed = []) {
     concepts: { searched: conceptsSearched.size, planned: planned.concepts, ratio: conceptRatio },
     sources: { searched: sourcesSearched.size, planned: planned.sources, ratio: sourceRatio },
     searches: { executed: searchesExecuted, addressed: addressed.length, planned: planned.searches, ratio: searchRatio },
+    evidenceRequirements: { satisfied: null, planned: null, ratio: null },
+    tasks: { executed: null, planned: null, ratio: null },
     complete,
     warnings: buildCoverageWarnings({
       cities: { searched: citiesSearched.size, planned: planned.cities },

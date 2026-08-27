@@ -15,6 +15,7 @@ const {
   mapCanonicalEvidenceToContribution,
 } = require('../scout/adapters/ScoutDiscoveryArtifact');
 const { normalizeProviderExecution } = require('../scout/coverage/ProviderExecution');
+const { normalizeCoverage } = require('./CanonicalCoverage');
 
 const SOURCE_LABELS = Object.freeze({
   existing_repository: 'Company repository',
@@ -343,7 +344,14 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
 
   const blocked = artifact.blocked === true;
 
-  const coverage = artifact.coverage || null;
+  const coverage = normalizeCoverage({
+    coverage: artifact.coverage || null,
+    discoveryReport: artifact.discoveryReport || null,
+    candidateUniverseCount:
+      artifact.candidateUniverseCount != null ? Number(artifact.candidateUniverseCount) : null,
+    qualifiedCount,
+    confidence: confidenceBreakdown.overall,
+  });
   const discoveryStatus = artifact.discoveryStatus || null;
   const candidateUniverseCount =
     artifact.candidateUniverseCount != null ? Number(artifact.candidateUniverseCount) : null;

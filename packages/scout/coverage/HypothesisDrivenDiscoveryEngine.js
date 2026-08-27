@@ -26,6 +26,9 @@ const {
   updateHypothesisBuckets,
 } = require('../investigation/InvestigationState');
 const {
+  emptySearchedMetric,
+} = require('../../acquisition-mission/CanonicalCoverage');
+const {
   buildIdentityKey,
   establishBusinessIdentity,
   leadHasEstablishedIdentity,
@@ -477,8 +480,24 @@ function buildCoverageMetrics(plan, executedTasks = []) {
   const totalReqs = (plan.evidenceRequirements || []).length;
   const satisfied = (plan.satisfiedEvidence || []).length;
   return {
-    evidenceRequirements: { satisfied, planned: totalReqs, ratio: totalReqs ? satisfied / totalReqs : 1 },
-    tasks: { executed: executedTasks.length, planned: (plan.tasks || []).length },
+    cities: emptySearchedMetric(),
+    concepts: emptySearchedMetric(),
+    sources: emptySearchedMetric(),
+    evidenceRequirements: {
+      satisfied,
+      planned: totalReqs,
+      ratio: totalReqs ? satisfied / totalReqs : 1,
+    },
+    tasks: {
+      executed: executedTasks.length,
+      planned: (plan.tasks || []).length,
+      ratio: (plan.tasks || []).length
+        ? executedTasks.length / (plan.tasks || []).length
+        : null,
+    },
+    candidateUniverse: null,
+    qualified: null,
+    confidence: null,
     complete: plan.sufficientlyInvestigated === true,
     warnings: [],
   };
