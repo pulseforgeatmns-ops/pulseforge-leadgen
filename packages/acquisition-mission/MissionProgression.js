@@ -20,6 +20,7 @@ const {
   hasPendingPlanClarification,
   hasPendingPlanApproval,
   hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
   hasPendingPrioritizationApproval,
   hasPendingExecutionApproval,
   hasDiscoveryArtifact,
@@ -227,6 +228,17 @@ function deriveMissionPause(snapshot = {}) {
       reason: 'Mission plan approved. Operator approval required before Scout investigation.',
       requiredDecision: 'Approve discovery?',
       availableOptions: ['Approve discovery', 'Cancel'],
+    });
+  }
+
+  if (hasPendingDiscoveryInvestigation(snapshot)) {
+    const pending = mission.pendingOperatorDecision || {};
+    return createMissionPause({
+      stage: PROGRESSION_STAGES.DISCOVERY_RUNNING,
+      reason: pending.reason || pending.blocker || 'Discovery evidence is insufficient for prioritization.',
+      requiredDecision: pending.prompt || 'Continue investigation?',
+      availableOptions: (pending.choices || []).map((row) => row.label || row),
+      waitingOn: pending.waitingOn || 'More discovery evidence',
     });
   }
 

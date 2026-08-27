@@ -134,6 +134,8 @@ const OPERATOR_DECISION_KINDS = Object.freeze({
   DISCOVERY_APPROVAL: 'discovery_approval',
   /** SPEC-141 — operator reviews ranked prospects before Understand. */
   PRIORITIZATION_APPROVAL: 'prioritization_approval',
+  /** SPEC-193 — Discovery evidence insufficient; Scout may continue investigation. */
+  DISCOVERY_INVESTIGATION: 'discovery_investigation',
   /** Artifact-bound authorization for prepared outreach execution at READY. */
   EXECUTION_APPROVAL: 'execution_approval',
 });

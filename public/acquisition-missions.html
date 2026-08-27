@@ -237,6 +237,7 @@
     const kind = pending && pending.kind ? String(pending.kind) : '';
     if (kind === 'plan_approval') return 'APPROVE_PLAN';
     if (kind === 'discovery_approval') return 'APPROVE_DISCOVERY';
+    if (kind === 'discovery_investigation') return 'CONTINUE_INVESTIGATION';
     if (kind === 'prioritization_approval') return 'APPROVE_PRIORITIZATION';
     return null;
   }
@@ -244,6 +245,7 @@
   function approvalButtonLabel(intent, pending) {
     if (intent === 'APPROVE_PLAN') return 'Approve plan';
     if (intent === 'APPROVE_DISCOVERY') return 'Approve discovery';
+    if (intent === 'CONTINUE_INVESTIGATION') return 'Continue investigation';
     if (intent === 'APPROVE_PRIORITIZATION') return 'Approve prioritization';
     return (pending && pending.prompt) || 'Approve';
   }
