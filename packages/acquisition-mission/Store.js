@@ -17,6 +17,8 @@ function createMemoryAmoStore(opts = {}) {
   const predictions = [];
   const evaluations = [];
   const outcomeLearnings = [];
+  /** Append-only — survives TME rollback for provider idempotency (SPEC EXECUTE outbound). */
+  const executionRecords = [];
 
   function putMission(mission) {
     const missionContributions = contributions.filter((row) => row.missionId === mission.id);
@@ -165,6 +167,30 @@ function createMemoryAmoStore(opts = {}) {
     return rows;
   }
 
+  function putExecutionRecord(row) {
+    if (!row || !row.idempotencyKey) {
+      throw amoError('amo_execution_record_invalid', 'Execution record requires idempotencyKey.');
+    }
+    const idx = executionRecords.findIndex((existing) => existing.idempotencyKey === row.idempotencyKey);
+    const copy = clone(row);
+    copy.updatedAt = copy.updatedAt || nowIso();
+    if (idx >= 0) executionRecords[idx] = copy;
+    else executionRecords.push(copy);
+    return clone(copy);
+  }
+
+  function getExecutionRecordByKey(idempotencyKey) {
+    const key = asText(idempotencyKey);
+    const found = executionRecords.find((row) => row.idempotencyKey === key);
+    return found ? clone(found) : null;
+  }
+
+  function listExecutionRecords(missionId) {
+    return executionRecords
+      .filter((row) => row.missionId === missionId)
+      .map(clone);
+  }
+
   function snapshot() {
     return {
       missions: [...missions.entries()].map(([id, row]) => [id, clone(row)]),
@@ -176,6 +202,7 @@ function createMemoryAmoStore(opts = {}) {
       predictions: predictions.map(clone),
       evaluations: evaluations.map(clone),
       outcomeLearnings: outcomeLearnings.map(clone),
+      executionRecords: executionRecords.map(clone),
     };
   }
 
@@ -198,6 +225,7 @@ function createMemoryAmoStore(opts = {}) {
     replaceArray(predictions, snap.predictions);
     replaceArray(evaluations, snap.evaluations);
     replaceArray(outcomeLearnings, snap.outcomeLearnings);
+    // executionRecords intentionally not restored — append-only provider evidence
   }
 
   for (const extra of opts.seeds || []) putMission(extra);
@@ -224,6 +252,9 @@ function createMemoryAmoStore(opts = {}) {
     listEvaluations,
     addOutcomeLearning,
     listOutcomeLearnings,
+    putExecutionRecord,
+    getExecutionRecordByKey,
+    listExecutionRecords,
     snapshot,
     restore,
   };

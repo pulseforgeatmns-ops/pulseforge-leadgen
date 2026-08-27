@@ -120,6 +120,21 @@ function defaultHandlers() {
     [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
     [EXECUTION_INTENTS.GENERATE_CAPACITY]: (ctx) => approval.advanceEmmettCapacity(ctx),
     [EXECUTION_INTENTS.APPROVE_EXECUTION]: (ctx) => approval.advanceExecutionAfterApproval(ctx),
+    [EXECUTION_INTENTS.EXECUTE_OUTBOUND]: (ctx) => {
+      const { executeOutboundMission } = require('./OutboundExecution');
+      return executeOutboundMission({
+        engine: ctx.engine,
+        mission: ctx.mission,
+        tenantId: ctx.tenantId,
+        operatorId: ctx.operatorId,
+        executionRequest: ctx.executionRequest,
+        provider: ctx.provider,
+        resolveEmail: ctx.resolveEmail,
+        senderIdentity: ctx.senderIdentity,
+        pool: ctx.pool,
+        persistDurable: ctx.persistDurable,
+      });
+    },
     [EXECUTION_INTENTS.OPERATOR_APPROVED]: async (ctx) => {
       const question = (ctx.executionRequest.payload && ctx.executionRequest.payload.question) || '';
       try {
@@ -235,6 +250,9 @@ function handlerContext(request, context, mission, runtimeOwner) {
     persistStage: context.persistStage,
     context: context.planningContext || context.context,
     executionRequest: request,
+    provider: context.provider,
+    resolveEmail: context.resolveEmail,
+    senderIdentity: context.senderIdentity,
     // ADR-089 / SPEC-170 — AMO-owned missions never receive Mission Engine.
     missionEngine: owner === RUNTIME_OWNERS.AMO ? null : (context.missionEngine || null),
     executionContext: {
