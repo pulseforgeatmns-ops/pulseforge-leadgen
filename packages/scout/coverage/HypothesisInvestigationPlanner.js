@@ -67,6 +67,10 @@ function buildHypothesisInvestigationPlan(partial = {}) {
     canonicalHypotheses: Array.isArray(partial.canonicalHypotheses) ? partial.canonicalHypotheses : [],
     createdAt: partial.createdAt || new Date().toISOString(),
     updatedAt: partial.updatedAt || new Date().toISOString(),
+    investigationMode: partial.investigationMode || null,
+    preservedCandidateCount:
+      partial.preservedCandidateCount != null ? partial.preservedCandidateCount : null,
+    entityCandidates: Array.isArray(partial.entityCandidates) ? partial.entityCandidates : [],
   };
 }
 
@@ -80,6 +84,14 @@ function buildInvestigationTask(partial = {}) {
     mergeStrategy: partial.mergeStrategy || 'identity_resolution',
     rationale: partial.rationale || '',
     phase: partial.phase || INVESTIGATION_PHASES.IDENTITY,
+    scope: partial.scope || 'market',
+    entityId: partial.entityId || null,
+    entityName: partial.entityName || null,
+    candidateId: partial.candidateId || partial.entityId || null,
+    gap: partial.gap || null,
+    hypothesis: partial.hypothesis || null,
+    impact: partial.impact || null,
+    howToVerify: partial.howToVerify || null,
   };
 }
 

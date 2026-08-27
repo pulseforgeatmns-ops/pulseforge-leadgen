@@ -726,6 +726,9 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
       hypothesisOpts: opts.hypothesisOpts,
       terminologyLearningStore: opts.terminologyLearningStore,
       investigationPlan: opts.investigationPlan || null,
+      investigationMode: opts.investigationMode || null,
+      entityInvestigationContinuation: opts.entityInvestigationContinuation === true,
+      preservedCandidates: opts.preservedCandidates || [],
     });
   } catch (err) {
     const packed = emptyInvestigationResult({

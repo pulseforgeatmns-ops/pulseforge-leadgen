@@ -10,6 +10,10 @@ const { Scout } = require('../../scout');
 const { defaultDiscoveryAdapters } = require('../scoutAcquisition/DiscoveryAdapters');
 const { evaluateDiscoveryCapability } = require('../../scout/coverage/DiscoveryCapabilityGate');
 const { EXTERNAL_DISCOVERY_CAPABILITY_UNAVAILABLE } = require('../../scout/coverage/ExternalDiscoveryProviderRegistry');
+const {
+  buildInvestigationContinuationContext,
+  extractPayloadFromDiscoveryContribution,
+} = require('../../scout/investigation/EntityInvestigationContinuation');
 
 const {
   STAGES,
@@ -564,6 +568,46 @@ async function runScoutForAmoMission(mission, opts = {}) {
     executionContext.executionRequest = opts.executionRequest;
   }
 
+  let scoutOpts = {
+    ...opts,
+    delegation,
+    executionContext,
+    mode: opts.scoutMode || 'completed',
+    missionId: mission.id,
+    amoMissionId: mission.id,
+    runtimeOwner: 'amo',
+    attachScoutDiscovery: false,
+    tenantId: delegation.tenantId,
+    companies: opts.scoutCompanies,
+    people: opts.scoutPeople,
+    discover: opts.discover,
+    enablePlaces: opts.enablePlaces,
+    allowFixtureFallback: opts.allowFixtureFallback,
+  };
+
+  if (opts.investigationContinuation === true && opts.engine) {
+    const snapshot = opts.engine.inspect(mission.id, { tenantId: delegation.tenantId });
+    const priorDiscovery = findLatestScoutDiscovery(snapshot.contributions || []);
+    const priorPayload = extractPayloadFromDiscoveryContribution(priorDiscovery || {});
+    const continuation = buildInvestigationContinuationContext({
+      priorPayload,
+      opts: {
+        ...opts,
+        investigationContinuation: true,
+        question: opts.question,
+      },
+    });
+    scoutOpts = {
+      ...scoutOpts,
+      investigationContinuation: true,
+      investigationMode: continuation.investigationMode,
+      priorDiscoveryPayload: continuation.priorDiscoveryPayload,
+      preservedCandidates: continuation.preservedCandidates,
+      entityInvestigationContinuation:
+        continuation.investigationMode === 'entity_continuation',
+    };
+  }
+
   try {
     const result = await Scout.discover({
       mission,
@@ -571,22 +615,7 @@ async function runScoutForAmoMission(mission, opts = {}) {
       missionEngine: null,
       scoutPayload: {},
       operatorId: opts.operatorId,
-      opts: {
-        ...opts,
-        delegation,
-        executionContext,
-        mode: opts.scoutMode || 'completed',
-        missionId: mission.id,
-        amoMissionId: mission.id,
-        runtimeOwner: 'amo',
-        attachScoutDiscovery: false,
-        tenantId: delegation.tenantId,
-        companies: opts.scoutCompanies,
-        people: opts.scoutPeople,
-        discover: opts.discover,
-        enablePlaces: opts.enablePlaces,
-        allowFixtureFallback: opts.allowFixtureFallback,
-      },
+      opts: scoutOpts,
     });
     const intelligenceResult = result.intelligenceResult || result;
     const mapped = mapScoutIntelligenceToDiscoveryPayload(result, {
@@ -1147,6 +1176,7 @@ async function advanceDiscoveryInvestigationAfterApproval(input = {}) {
           discover: effectiveDiscover,
           enablePlaces: inputEnablePlaces,
           placesProvider: inputPlacesProvider,
+          investigationContinuation: true,
         });
         const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
         const executionResult = executionResultFromStageOutput(

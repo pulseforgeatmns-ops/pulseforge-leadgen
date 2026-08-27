@@ -350,6 +350,17 @@ async function runHypothesisDrivenDiscovery(input = {}) {
   let iteration = 0;
   const maxIterations = opts.maxIterations != null ? opts.maxIterations : 10;
 
+  // ADR-102 — preserve identities from prior discovery during entity continuation.
+  if (Array.isArray(opts.preservedCandidates) && opts.preservedCandidates.length) {
+    for (const row of opts.preservedCandidates) {
+      const normalized = normalizeCandidateRow(row);
+      const key = normalized._identityKey || candidateMatchKey(normalized);
+      normalized._identityKey = key;
+      normalized._preservedFromContinuation = true;
+      allCandidates.push(normalized);
+    }
+  }
+
   while (iteration < maxIterations) {
     iteration += 1;
     const nextTasks = getNextInvestigationTasks(plan, opts);
@@ -461,6 +472,8 @@ async function runHypothesisDrivenDiscovery(input = {}) {
     identityComplete,
     sufficientlyInvestigated: plan.sufficientlyInvestigated,
     operatorExplanations,
+    investigationMode: plan.investigationMode || opts.investigationMode || 'market',
+    preservedCandidateCount: opts.preservedCandidates ? opts.preservedCandidates.length : 0,
     discoveryPlan: {
       hypothesisDriven: true,
       spec: 'SPEC-177',
@@ -468,6 +481,7 @@ async function runHypothesisDrivenDiscovery(input = {}) {
       providersUsed: [...new Set(allReports.map((r) => r.providerId))],
       identityComplete,
       sufficientlyInvestigated: plan.sufficientlyInvestigated,
+      investigationMode: plan.investigationMode || opts.investigationMode || 'market',
     },
     coverage: buildCoverageMetrics(plan, executedTasks),
   };

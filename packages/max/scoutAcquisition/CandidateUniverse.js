@@ -150,6 +150,17 @@ async function constructCandidateUniverse(input = {}) {
       (row) => !(existing.companies || []).some((c) => String(c.id) === String(row.id))
     ),
   ];
+  const preservedCandidates = Array.isArray(input.preservedCandidates) ? input.preservedCandidates : [];
+  for (const row of preservedCandidates) {
+    if (!row || !row.id) continue;
+    if (existingCompanies.some((c) => String(c.id) === String(row.id))) continue;
+    existingCompanies.push({
+      ...row,
+      tenantId: row.tenantId || tenantId,
+      discoveredAt: row.discoveredAt || nowIso(),
+      origin: row.origin || 'prior_discovery',
+    });
+  }
   const rejectedFromRetrieve = [
     ...(existing.rejectedCandidates || []),
     ...(persistedScoped.rejectedCandidates || []),
@@ -203,7 +214,7 @@ async function constructCandidateUniverse(input = {}) {
     );
   }
 
-  if (input.forceDiscover === true || sufficiency.shouldDiscoverGap) {
+  if (input.forceDiscover === true || sufficiency.shouldDiscoverGap || input.entityInvestigationContinuation === true) {
     discoveryPlan = buildDiscoveryPlan(searchDefinition, {
       adapters: marketAdapters,
       marketDefinition: input.marketDefinition,
@@ -278,7 +289,11 @@ async function constructCandidateUniverse(input = {}) {
           searchDefinition,
           adapters: marketAdapters,
           investigationPlan: input.investigationPlan || null,
-          opts: input.hypothesisOpts || {},
+          opts: {
+            ...(input.hypothesisOpts || {}),
+            preservedCandidates,
+            investigationMode: input.investigationMode || null,
+          },
         });
         result = engineResult;
         discoveryPlan = engineResult.discoveryPlan;
@@ -289,7 +304,10 @@ async function constructCandidateUniverse(input = {}) {
         revisedMarketDefinition = input.marketDefinition;
         providerReports = engineResult.providerReports || [];
         actionsTaken.push({
-          text: `Canonical hypothesis-driven discovery (SPEC-180): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
+          text:
+            input.entityInvestigationContinuation === true
+              ? `Entity investigation continuation (ADR-102): ${(engineResult.executedTasks || []).length} entity tasks executed; ${preservedCandidates.length} identities preserved.`
+              : `Canonical hypothesis-driven discovery (SPEC-180): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
         });
       } else {
         result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters);

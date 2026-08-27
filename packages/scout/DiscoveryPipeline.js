@@ -13,6 +13,12 @@
 
 const { buildMarketDefinition, buildDelegationFromMission } = require('./intelligence/MarketUnderstanding');
 const { createHypothesisInvestigationPlan } = require('./coverage/HypothesisInvestigationPlanner');
+const {
+  INVESTIGATION_MODES,
+  resolveInvestigationMode,
+  buildEntityInvestigationPlan,
+  buildInvestigationContinuationContext,
+} = require('./investigation/EntityInvestigationContinuation');
 const { loadRepository } = require('../max/scoutAcquisition/ExistingIntelligence');
 const { assessExistingSufficiency } = require('../max/scoutAcquisition/CandidateUniverse');
 const { defaultDiscoveryAdapters } = require('../max/scoutAcquisition/DiscoveryAdapters');
@@ -325,21 +331,40 @@ async function runDiscoveryPipeline(input = {}) {
 
   // ── Stage 3: Build Investigation Plan ──────────────────────────
   const planStageStarted = nowIso();
-  const investigationPlan = createHypothesisInvestigationPlan({
-    mission,
-    marketDefinition,
-    opts: {
-      ...opts,
-      estimatedMarket: extractExpectedValue(universeEstimate),
-      universeEstimate,
-    },
+  const investigationMode = resolveInvestigationMode({
+    priorPayload: opts.priorDiscoveryPayload || {},
+    opts,
   });
+  let investigationPlan;
+  if (investigationMode === INVESTIGATION_MODES.ENTITY_CONTINUATION) {
+    investigationPlan = buildEntityInvestigationPlan({
+      mission,
+      marketDefinition,
+      priorPayload: opts.priorDiscoveryPayload || {},
+      opts: {
+        ...opts,
+        estimatedMarket: extractExpectedValue(universeEstimate),
+        universeEstimate,
+      },
+    });
+  } else {
+    investigationPlan = createHypothesisInvestigationPlan({
+      mission,
+      marketDefinition,
+      opts: {
+        ...opts,
+        estimatedMarket: extractExpectedValue(universeEstimate),
+        universeEstimate,
+      },
+    });
+  }
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.BUILD_INVESTIGATION_PLAN, {
       startedAt: planStageStarted,
       output: {
         coveragePlan,
         investigationPlan,
+        investigationMode,
       },
     })
   );
@@ -359,6 +384,10 @@ async function runDiscoveryPipeline(input = {}) {
       marketDefinition,
       mission,
       investigationPlan,
+      investigationMode,
+      entityInvestigationContinuation:
+        investigationMode === INVESTIGATION_MODES.ENTITY_CONTINUATION,
+      preservedCandidates: opts.preservedCandidates || [],
     });
   } catch (err) {
     stages.push(
