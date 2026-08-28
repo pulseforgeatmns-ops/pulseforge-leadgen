@@ -38,6 +38,11 @@ const {
 } = require('./ConversationContract');
 const { sessionStateBlocksExecution, getSessionState } = require('./SessionState');
 const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
+const {
+  resolvePendingOperatorDecision,
+  pendingDecisionRequestsExecution,
+} = require('./PendingDecisionResolver');
+const { THINKING_MODES: COGNITION_MODES } = require('../operatorCognition/ThinkingModes');
 
 /**
  * @typedef {object} OperatorIntent
@@ -58,6 +63,7 @@ const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
  * @property {boolean} executionLanguagePresent
  * @property {boolean} missionCreationRequested
  * @property {string|null} missionCreationReason
+ * @property {object|null} pendingDecisionResolution — SPEC-197 canonical pending decision intent
  */
 
 function normalizeText(value) {
@@ -77,12 +83,50 @@ function deriveExecutionRequested(conversationIntent) {
   );
 }
 
-function derivePlanningRequested(conversationIntent) {
+function derivePlanningRequested(conversationIntent, pendingDecisionResolution = null) {
   if (!conversationIntent) return false;
+  if (
+    pendingDecisionResolution &&
+    pendingDecisionResolution.resolved &&
+    pendingDecisionResolution.outcome === 'modify'
+  ) {
+    return true;
+  }
   return (
     conversationIntent.via === 'mission_planning_turn' ||
-    conversationIntent.via === 'mission_plan_edit'
+    conversationIntent.via === 'mission_plan_edit' ||
+    conversationIntent.via === 'pending_decision_modify'
   );
+}
+
+function buildPendingDecisionConversationIntent(pendingDecisionResolution) {
+  if (!pendingDecisionResolution || !pendingDecisionResolution.resolved) {
+    return null;
+  }
+  if (pendingDecisionResolution.outcome === 'modify') {
+    return {
+      intent: COGNITION_MODES.EDIT,
+      confidence: pendingDecisionResolution.confidence || 0.92,
+      mutatesMission: true,
+      thinkingMode: 'execution',
+      via: 'pending_decision_modify',
+      specialists: null,
+    };
+  }
+  if (
+    pendingDecisionResolution.resolvedFromPendingDecision &&
+    pendingDecisionResolution.executionIntent
+  ) {
+    return {
+      intent: COGNITION_MODES.EXECUTE,
+      confidence: pendingDecisionResolution.confidence || 0.98,
+      mutatesMission: true,
+      thinkingMode: 'execution',
+      via: 'pending_decision_resolved',
+      specialists: null,
+    };
+  }
+  return null;
 }
 
 function deriveIntentLabel(conversationSubject, conversationIntent) {
@@ -269,20 +313,34 @@ async function analyzeOperatorIntent(input = {}) {
 
   let conversationSubject = detectConversationSubject(question, null, session);
 
-  let conversationIntent = attachSpecialists(
-    classifyOperatorCognition(question, {
-      session,
-      context,
-      mission,
-    })
-  );
+  const pendingDecisionResolution = mission
+    ? resolvePendingOperatorDecision(question, mission)
+    : { resolved: false };
+
+  let conversationIntent = buildPendingDecisionConversationIntent(pendingDecisionResolution);
+  if (conversationIntent) {
+    conversationIntent = attachSpecialists(conversationIntent);
+  } else {
+    conversationIntent = attachSpecialists(
+      classifyOperatorCognition(question, {
+        session,
+        context,
+        mission,
+      })
+    );
+  }
 
   const executionLanguagePresent = hasExecutionLanguage(question);
   const creationLanguage = detectMissionExecutionLanguage(question);
   const legacyContinuation = await resolveLegacyMissionContinuation(input, question);
 
-  let executionRequested = deriveExecutionRequested(conversationIntent);
-  let planningRequested = derivePlanningRequested(conversationIntent);
+  let executionRequested =
+    pendingDecisionRequestsExecution(pendingDecisionResolution) ||
+    deriveExecutionRequested(conversationIntent);
+  let planningRequested = derivePlanningRequested(
+    conversationIntent,
+    pendingDecisionResolution
+  );
   let missionContinuationRequested = legacyContinuation.requested;
 
   let resolvedQuestion = question;
@@ -300,6 +358,9 @@ async function analyzeOperatorIntent(input = {}) {
       // SPEC-153 — mission continuation beats generic conversational continuity.
       continuityApplied = false;
       missionContinuationRequested = true;
+    } else if (pendingDecisionRequestsExecution(pendingDecisionResolution)) {
+      // SPEC-197 — pending decision resolution beats conversational continuity.
+      continuityApplied = false;
     } else {
       continuityApplied = true;
       conversationSubject = continuity.conversationSubject;
@@ -339,7 +400,10 @@ async function analyzeOperatorIntent(input = {}) {
 
   const mutatesMission = continuityApplied
     ? false
-    : Boolean(conversationIntent && conversationIntent.mutatesMission);
+    : pendingDecisionRequestsExecution(pendingDecisionResolution) ||
+      (pendingDecisionResolution.resolved &&
+        pendingDecisionResolution.outcome === 'modify') ||
+      Boolean(conversationIntent && conversationIntent.mutatesMission);
 
   let operatorIntent = {
     subject: conversationSubject.subject,
@@ -380,6 +444,9 @@ async function analyzeOperatorIntent(input = {}) {
       (activeReasoningContext && activeReasoningContext.conversationGoal),
     primaryClaim: activeReasoningContext && activeReasoningContext.primaryClaim,
     conversationContract,
+    pendingDecisionResolution: pendingDecisionResolution.resolved
+      ? pendingDecisionResolution
+      : null,
   };
 
   operatorIntent = applyConversationContractToIntent(operatorIntent, conversationContract);

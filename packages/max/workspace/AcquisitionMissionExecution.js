@@ -621,6 +621,11 @@ function buildExecutionMetadata(mission, action, executionResult) {
 
 function detectExecutionAction(question, snapshot, operatorIntent = null) {
   askPathTrace.traceEnter('detectExecutionAction');
+  const resolution = operatorIntent && operatorIntent.pendingDecisionResolution;
+  if (resolution && resolution.resolvedFromPendingDecision && resolution.executionAction) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_decision_resolution');
+    return resolution.executionAction;
+  }
   const q = String(question || '').trim();
   const lower = q.toLowerCase();
   const planningTurn = operatorIntent
@@ -841,8 +846,20 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   askPathTrace.traceEnter('maybeHandleAcquisitionMissionExecution');
   const question = String(input.question || '').trim();
   const conversationIntent = input.conversationIntent || null;
+  const operatorIntent = input.operatorIntent || null;
+  const pendingDecisionResolution =
+    operatorIntent && operatorIntent.pendingDecisionResolution;
+  const pendingDecisionExecutable = Boolean(
+    pendingDecisionResolution &&
+      pendingDecisionResolution.resolvedFromPendingDecision &&
+      pendingDecisionResolution.executionIntent
+  );
   const { mayMutateMission } = require('../operatorCognition');
-  if (conversationIntent && !mayMutateMission(conversationIntent)) {
+  if (
+    conversationIntent &&
+    !mayMutateMission(conversationIntent) &&
+    !pendingDecisionExecutable
+  ) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'cognition_read_only');
     return null;
   }
@@ -868,7 +885,6 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     return null;
   }
 
-  const operatorIntent = input.operatorIntent || null;
   const planningTurn = operatorIntent
     ? operatorIntent.planningRequested
     : isMissionPlanningTurn(mission, question);
