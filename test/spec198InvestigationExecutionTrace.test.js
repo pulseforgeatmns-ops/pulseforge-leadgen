@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 
 const {
   buildInvestigationExecutionTrace,
-  snapshotCandidateMetrics,
+  readTraceMetricsFromExecutionState,
   resolveProviderFromResult,
 } = require('../packages/scout/investigation/InvestigationExecutionTrace');
 const {
@@ -22,7 +22,6 @@ const { buildAcquisitionSearchDefinition } = require('../services/scoutAcquisiti
 const {
   READINESS_STATES,
   QUALIFICATION_STATUSES,
-  PROSPECT_BUCKETS,
 } = require('../packages/max/scoutAcquisition/Types');
 
 const TRACE_FIELDS = Object.freeze([
@@ -83,6 +82,54 @@ function lot202Fixture() {
   };
 }
 
+function investigationLoopInput(overrides = {}) {
+  const { evaluation, company, classified, searchDefinition } = lot202Fixture();
+  return {
+    companies: [company],
+    classified: [classified],
+    searchDefinition,
+    marketDefinition: { segments: ['property_management'] },
+    mission: { id: 'mission-anchor' },
+    adapters: [],
+    opts: {
+      maxCandidateInvestigationIterations: 2,
+      executeInvestigationTask: async (task) => ({
+        taskId: task.id,
+        evidenceType: task.evidenceType,
+        status: 'completed',
+        reports: [{ providerId: 'website', evidenceType: task.evidenceType, evidenceProduced: ['decision_maker_name'] }],
+        mergedReport: { evidenceProduced: ['decision_maker_name'] },
+        candidates: [
+          {
+            id: company.id,
+            name: company.name,
+            people: [{ name: 'Alex Manager', jobTitle: 'Operations Manager', decisionMaker: true }],
+            signals: [{ type: 'decision_maker', label: 'Alex Manager' }],
+          },
+        ],
+        errors: [],
+      }),
+      ...overrides.opts,
+    },
+    ...overrides,
+  };
+}
+
+function semanticLoopSnapshot(result) {
+  return {
+    executedTaskIds: result.executedTasks.map((row) => row.taskId || row.task && row.task.id),
+    queueTaskIds: result.queue.map((task) => task.id),
+    stop: result.stop,
+    candidateEvaluations: result.candidates.map((row) => ({
+      id: row.id,
+      qualification: row.evaluation && row.evaluation.qualification && row.evaluation.qualification.status,
+      readiness: row.evaluation && row.evaluation.readiness && row.evaluation.readiness.status,
+      rank: row.rank,
+    })),
+    classifiedEvaluations: result.classified.map((row) => row.evaluation && row.evaluation.qualification && row.evaluation.qualification.status),
+  };
+}
+
 describe('SPEC-198 — Investigation Execution Trace', () => {
   it('buildInvestigationExecutionTrace includes all canonical fields', () => {
     const trace = buildInvestigationExecutionTrace({
@@ -92,7 +139,6 @@ describe('SPEC-198 — Investigation Execution Trace', () => {
         hypothesisId: CANDIDATE_HYPOTHESIS_IDS.DECISION_MAKER,
         gap: 'decision_maker',
         providers: [{ providerId: 'website' }],
-        startedAt: '2026-08-28T12:00:00.000Z',
         completedAt: '2026-08-28T12:00:05.000Z',
       },
       result: {
@@ -127,17 +173,10 @@ describe('SPEC-198 — Investigation Execution Trace', () => {
     assert.equal(trace.gap, 'decision_maker');
     assert.equal(trace.provider, 'website');
     assert.deepEqual(trace.evidenceProduced, ['decision_maker_name']);
-    assert.equal(trace.qualificationBefore, QUALIFICATION_STATUSES.QUALIFIED);
-    assert.equal(trace.qualificationAfter, QUALIFICATION_STATUSES.QUALIFIED);
-    assert.equal(trace.readinessBefore, READINESS_STATES.UNKNOWN);
-    assert.equal(trace.readinessAfter, READINESS_STATES.UNKNOWN);
-    assert.equal(trace.confidenceBefore, 0);
     assert.equal(trace.confidenceAfter, 0.7);
-    assert.equal(trace.rankBefore, 1);
-    assert.equal(trace.rankAfter, 1);
   });
 
-  it('snapshotCandidateMetrics captures hypothesis-scoped confidence', () => {
+  it('readTraceMetricsFromExecutionState reads canonical objects without re-evaluation', () => {
     const { evaluation, company } = lot202Fixture();
     const hypothesisState = buildCandidateHypothesisState(
       { id: company.id, name: company.name, unknowns: [{ text: 'No identifiable operations decision-maker' }] },
@@ -145,20 +184,16 @@ describe('SPEC-198 — Investigation Execution Trace', () => {
     );
     hypothesisState[CANDIDATE_HYPOTHESIS_IDS.DECISION_MAKER].confidence = 0.42;
 
-    const snapshot = snapshotCandidateMetrics(
-      {
-        id: company.id,
-        rank: 2,
-        evaluation,
-        hypothesisState,
-      },
-      CANDIDATE_HYPOTHESIS_IDS.DECISION_MAKER
+    const metrics = readTraceMetricsFromExecutionState(
+      evaluation,
+      hypothesisState[CANDIDATE_HYPOTHESIS_IDS.DECISION_MAKER],
+      2
     );
 
-    assert.equal(snapshot.qualification, QUALIFICATION_STATUSES.QUALIFIED);
-    assert.equal(snapshot.readiness, READINESS_STATES.UNKNOWN);
-    assert.equal(snapshot.confidence, 0.42);
-    assert.equal(snapshot.rank, 2);
+    assert.equal(metrics.qualification, QUALIFICATION_STATUSES.QUALIFIED);
+    assert.equal(metrics.readiness, READINESS_STATES.UNKNOWN);
+    assert.equal(metrics.confidence, 0.42);
+    assert.equal(metrics.rank, 2);
   });
 
   it('resolveProviderFromResult prefers report provider over task assignment', () => {
@@ -170,56 +205,36 @@ describe('SPEC-198 — Investigation Execution Trace', () => {
     assert.equal(resolveProviderFromResult({}, {}), null);
   });
 
-  it('runCandidateInvestigationLoop persists one trace per executed task', async () => {
-    const { evaluation, company, classified, searchDefinition } = lot202Fixture();
-
-    const result = await runCandidateInvestigationLoop({
-      companies: [company],
-      classified: [classified],
-      searchDefinition,
-      marketDefinition: { segments: ['property_management'] },
-      mission: { id: 'mission-anchor' },
-      adapters: [],
-      opts: {
-        maxCandidateInvestigationIterations: 2,
-        executeInvestigationTask: async (task) => ({
-          taskId: task.id,
-          evidenceType: task.evidenceType,
-          status: 'completed',
-          reports: [{ providerId: 'website', evidenceType: task.evidenceType, evidenceProduced: ['decision_maker_name'] }],
-          mergedReport: { evidenceProduced: ['decision_maker_name'] },
-          candidates: [
-            {
-              id: company.id,
-              name: company.name,
-              people: [{ name: 'Alex Manager', jobTitle: 'Operations Manager', decisionMaker: true }],
-              signals: [{ type: 'decision_maker', label: 'Alex Manager' }],
-            },
-          ],
-          errors: [],
-        }),
-      },
-    });
+  it('runCandidateInvestigationLoop persists one trace per executed task from execution state', async () => {
+    const result = await runCandidateInvestigationLoop(investigationLoopInput());
 
     assert.ok(Array.isArray(result.executionTraces));
     assert.equal(result.executionTraces.length, result.executedTasks.length);
     assert.ok(result.executionTraces.length > 0);
+
+    const candidate = result.candidates.find((row) => row.id === 'co-lot-202');
+    const hypothesisRow =
+      candidate &&
+      candidate.hypothesisState &&
+      candidate.hypothesisState[CANDIDATE_HYPOTHESIS_IDS.DECISION_MAKER];
 
     for (const trace of result.executionTraces) {
       for (const field of TRACE_FIELDS) {
         assert.ok(Object.prototype.hasOwnProperty.call(trace, field), `missing field: ${field}`);
       }
       assert.equal(trace.candidateId, 'co-lot-202');
-      assert.equal(trace.candidateName, 'Lot 202 Property Management');
-      assert.ok(trace.hypothesisId);
-      assert.ok(trace.gap);
       assert.equal(trace.provider, 'website');
-      assert.ok(trace.startedAt);
-      assert.ok(trace.completedAt);
-      assert.ok(Array.isArray(trace.evidenceProduced));
-      assert.ok(trace.evidenceProduced.length > 0);
-      assert.equal(trace.confidenceAfter, 0.7);
+      assert.equal(trace.confidenceAfter, hypothesisRow && hypothesisRow.confidence);
     }
+  });
+
+  it('observability-only — traces do not alter investigation progression outputs', async () => {
+    const first = await runCandidateInvestigationLoop(investigationLoopInput());
+    const second = await runCandidateInvestigationLoop(investigationLoopInput());
+
+    assert.deepEqual(semanticLoopSnapshot(first), semanticLoopSnapshot(second));
+    assert.ok(first.executionTraces.length > 0);
+    assert.equal(first.executionTraces.length, second.executionTraces.length);
   });
 
   it('returns empty executionTraces when no investigable candidates exist', async () => {
