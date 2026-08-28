@@ -26,7 +26,7 @@ const {
   candidateNeedsInvestigation,
 } = require('./EntityInvestigationContinuation');
 const {
-  snapshotCandidateMetrics,
+  readTraceMetricsFromExecutionState,
   buildInvestigationExecutionTrace,
 } = require('./InvestigationExecutionTrace');
 
@@ -620,16 +620,18 @@ async function runCandidateInvestigationLoop(input = {}) {
     const task = selectNextInvestigation(queue, state);
     if (!task) break;
 
-    const candidateIndex = candidates.findIndex((row) => String(row.id) === String(task.candidateId));
-    const beforeMetrics =
-      candidateIndex >= 0
-        ? snapshotCandidateMetrics(candidates[candidateIndex], task.hypothesisId)
-        : snapshotCandidateMetrics({}, task.hypothesisId);
-    const startedAt = new Date().toISOString();
-
     task.status = TASK_STATUS.RUNNING;
     task.attempts = (task.attempts || 0) + 1;
-    task.startedAt = startedAt;
+
+    const candidateIndex = candidates.findIndex((row) => String(row.id) === String(task.candidateId));
+    const candidate = candidateIndex >= 0 ? candidates[candidateIndex] : null;
+    const hypothesisId = task.hypothesisId;
+    const traceStartedAt = new Date().toISOString();
+    const metricsBefore = readTraceMetricsFromExecutionState(
+      candidate && candidate.evaluation,
+      candidate && candidate.hypothesisState && candidate.hypothesisState[hypothesisId],
+      candidate && candidate.rank
+    );
 
     const executeFn = opts.executeInvestigationTask || executeInvestigationTask;
     let result;
@@ -704,17 +706,18 @@ async function runCandidateInvestigationLoop(input = {}) {
       }
     }
 
-    const afterMetrics =
-      candidateIndex >= 0
-        ? snapshotCandidateMetrics(candidates[candidateIndex], task.hypothesisId)
-        : beforeMetrics;
+    const metricsAfter = readTraceMetricsFromExecutionState(
+      candidate && candidate.evaluation,
+      candidate && candidate.hypothesisState && candidate.hypothesisState[hypothesisId],
+      candidate && candidate.rank
+    );
     executionTraces.push(
       buildInvestigationExecutionTrace({
         task,
         result,
-        before: beforeMetrics,
-        after: afterMetrics,
-        startedAt,
+        before: metricsBefore,
+        after: metricsAfter,
+        startedAt: traceStartedAt,
         completedAt: task.completedAt,
         evidenceProduced: produced,
       })

@@ -1,41 +1,44 @@
 'use strict';
 
 /**
- * SPEC-198 — Investigation Execution Trace.
- * Every candidate-scoped investigation task persists a compact canonical trace.
+ * SPEC-198 — Investigation Execution Trace (observability-only).
+ *
+ * Formats compact canonical traces from execution state already produced by
+ * the investigation loop. Must not introduce parallel evaluation, selection,
+ * or progression logic.
  */
 
 const { asText } = require('../../max/scoutAcquisition/Types');
 
-function hypothesisConfidence(hypothesisState = {}, hypothesisId) {
-  const row = hypothesisState && hypothesisId ? hypothesisState[hypothesisId] : null;
-  if (!row || row.confidence == null) return 0;
-  const n = Number(row.confidence);
-  return Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
-}
-
 /**
- * Snapshot qualification, readiness, hypothesis confidence, and rank for a candidate.
+ * Read trace metric fields from objects already held in canonical execution state.
+ * Pure read — no evaluation, ranking, or provider resolution.
  *
- * @param {object} candidate
+ * @param {object|null} evaluation — candidate.evaluation at record time
+ * @param {object|null} hypothesisRow — candidate.hypothesisState[hypothesisId] at record time
+ * @param {number|null} rank — candidate.rank at record time
  * @returns {object}
  */
-function snapshotCandidateMetrics(candidate = {}, hypothesisId = null) {
-  const evaluation = candidate.evaluation || {};
-  const qualification = evaluation.qualification || {};
-  const readiness = evaluation.readiness || {};
-  const hypothesisState = candidate.hypothesisState || {};
+function readTraceMetricsFromExecutionState(evaluation = null, hypothesisRow = null, rank = null) {
+  const qualification = evaluation && evaluation.qualification ? evaluation.qualification : {};
+  const readiness = evaluation && evaluation.readiness ? evaluation.readiness : {};
+
+  let confidence = 0;
+  if (hypothesisRow && hypothesisRow.confidence != null) {
+    const n = Number(hypothesisRow.confidence);
+    confidence = Number.isFinite(n) ? Number(n.toFixed(2)) : 0;
+  }
 
   return {
     qualification: asText(qualification.status) || null,
-    readiness: asText(readiness.status || evaluation.readinessState) || null,
-    confidence: hypothesisConfidence(hypothesisState, hypothesisId || null),
-    rank: candidate.rank != null ? Number(candidate.rank) : candidate.prospectRank != null ? Number(candidate.prospectRank) : null,
+    readiness: asText(readiness.status || (evaluation && evaluation.readinessState)) || null,
+    confidence,
+    rank: rank != null ? Number(rank) : null,
   };
 }
 
 /**
- * Resolve the provider id used for an investigation task execution.
+ * Resolve the provider id recorded on the execution result.
  *
  * @param {object} result
  * @param {object} task
@@ -78,7 +81,7 @@ function buildInvestigationExecutionTrace(input = {}) {
     hypothesisId: asText(task.hypothesisId) || null,
     gap: asText(task.gap) || null,
     provider: resolveProviderFromResult(result, task),
-    startedAt: asText(input.startedAt || task.startedAt) || null,
+    startedAt: asText(input.startedAt) || null,
     completedAt: asText(input.completedAt || task.completedAt) || null,
     evidenceProduced: Array.isArray(evidenceProduced) ? evidenceProduced.slice() : [],
     qualificationBefore: before.qualification != null ? before.qualification : null,
@@ -93,8 +96,7 @@ function buildInvestigationExecutionTrace(input = {}) {
 }
 
 module.exports = {
-  snapshotCandidateMetrics,
+  readTraceMetricsFromExecutionState,
   resolveProviderFromResult,
   buildInvestigationExecutionTrace,
-  hypothesisConfidence,
 };
