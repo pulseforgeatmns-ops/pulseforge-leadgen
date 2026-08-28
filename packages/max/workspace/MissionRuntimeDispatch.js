@@ -8,7 +8,7 @@
 
 const { isActiveMissionStatus } = require('../../mission-engine/types');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
-const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
+const { resolveAcquisitionActiveMission, UNRESOLVED_BOUND_MISSION_REASON } = require('./ActiveMissionGuard');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const { sessionStateBlocksExecution } = require('./SessionState');
 const askPathTrace = require('./audit/AskPathTrace');
@@ -158,13 +158,32 @@ async function resolveMissionRuntime(input = {}) {
     };
   }
 
-  const amoMission = await resolveAcquisitionActiveMission(input);
+  const amoResolution = await resolveAcquisitionActiveMission(input);
+  const amoMission = amoResolution.mission;
+  const unresolvedBoundMissionId = amoResolution.unresolvedBoundMissionId;
   const legacyMission = await resolveLegacyActiveMission(input);
   const amoActive = isAmoMission(amoMission);
   const legacyActive = Boolean(legacyMission);
   const executionCommand = operatorIntent
     ? operatorIntent.executionRequested || operatorIntent.planningRequested
     : isMissionExecutionCommand(question) || isMissionPlanningTurn(amoMission, question);
+
+  if (unresolvedBoundMissionId) {
+    askPathTrace.traceRuntime(MISSION_RUNTIMES.AMO, UNRESOLVED_BOUND_MISSION_REASON, {
+      boundMissionId: unresolvedBoundMissionId,
+    });
+    askPathTrace.traceEarlyReturn('resolveMissionRuntime', UNRESOLVED_BOUND_MISSION_REASON);
+    return {
+      runtime: MISSION_RUNTIMES.AMO,
+      reason: UNRESOLVED_BOUND_MISSION_REASON,
+      missionType: MISSION_TYPES.ACQUISITION,
+      mission: null,
+      amoMission: null,
+      legacyMission,
+      unresolvedBoundMission: true,
+      boundMissionId: unresolvedBoundMissionId,
+    };
+  }
 
   if (
     amoActive &&

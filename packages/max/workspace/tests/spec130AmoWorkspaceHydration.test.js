@@ -106,7 +106,7 @@ describe('SPEC-130 — AMO workspace hydration', () => {
       acquisitionMissionRuntime: runtime,
     });
 
-    assert.equal(resolved.id, mission.id);
+    assert.equal(resolved.mission.id, mission.id);
     assert.equal(runtimeEngine.list('10').length, 1);
     assert.ok(
       listAmoHydrationAuditLog().some((row) => row.event === 'AMO_ACTIVE_RESOLVED')

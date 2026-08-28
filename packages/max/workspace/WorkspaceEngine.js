@@ -1592,7 +1592,10 @@ class WorkspaceEngine {
           presentation: presentedAmoExec.presentation,
           route: ROUTE_KINDS.INTELLIGENCE,
           mission: amoExecutionTurn.mission || null,
-          resolution: { action: 'executed', reason: amoExecutionTurn.reason },
+          resolution: {
+            action: amoExecutionTurn.action || 'executed',
+            reason: amoExecutionTurn.reason,
+          },
           executionDomain: EXECUTION_DOMAINS.WORKSPACE,
           interrogation: null,
           domainDecision: {

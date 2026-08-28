@@ -34,6 +34,7 @@ const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const {
   isExplicitMissionExit,
   resolveAcquisitionActiveMission,
+  buildUnresolvedBoundMissionResponse,
 } = require('./ActiveMissionGuard');
 const {
   hasPendingDiscoveryApproval,
@@ -847,6 +848,20 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   const question = String(input.question || '').trim();
   const conversationIntent = input.conversationIntent || null;
   const operatorIntent = input.operatorIntent || null;
+
+  const tenantId = resolveTenantId(input);
+  let amoResolution = { mission: null, unresolvedBoundMissionId: null };
+  if (tenantId) {
+    amoResolution = await resolveAcquisitionActiveMission(input);
+    if (amoResolution.unresolvedBoundMissionId) {
+      askPathTrace.traceEarlyReturn(
+        'maybeHandleAcquisitionMissionExecution',
+        'unresolved_bound_mission_context'
+      );
+      return buildUnresolvedBoundMissionResponse(amoResolution.unresolvedBoundMissionId, input);
+    }
+  }
+
   const pendingDecisionResolution =
     operatorIntent && operatorIntent.pendingDecisionResolution;
   const pendingDecisionExecutable = Boolean(
@@ -863,7 +878,6 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'cognition_read_only');
     return null;
   }
-  const tenantId = resolveTenantId(input);
   const runtime = resolveAcquisitionMissionRuntime(input);
   const engine = runtime.engine();
   assertRuntimeEngine(engine, runtime);
@@ -872,8 +886,11 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     return null;
   }
 
+  const amoResolutionAfterGate = tenantId
+    ? amoResolution
+    : await resolveAcquisitionActiveMission(input);
   const mission =
-    (await resolveAcquisitionActiveMission(input)) ||
+    amoResolutionAfterGate.mission ||
     (() => {
       const missions = engine.list(tenantId);
       const missionId = resolveMissionId(input, missions);
