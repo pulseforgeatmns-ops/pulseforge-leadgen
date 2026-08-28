@@ -83,6 +83,8 @@ const {
 } = require('./ExecutionInspectionOperator');
 const { serializeExecutionState, getExecutionState } = require('./ExecutionState');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
+const { maybeHandlePendingDecisionTurn } = require('./PendingDecisionTurn');
+const { pendingDecisionOwnsTurn } = require('./PendingDecisionResolver');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
 const { maybeHandleReflectionTurn } = require('./ReflectionRouting');
@@ -1452,10 +1454,85 @@ class WorkspaceEngine {
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
         askPathTrace.traceBranch('runtime:amo');
 
+        const pendingDecisionTurn = await maybeHandlePendingDecisionTurn({
+          question,
+          session,
+          context: rawContext || session.context,
+          operatorIntent,
+          ...this._amoRuntimeInput(),
+        });
+        if (pendingDecisionTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredPending = pendingDecisionTurn.structured;
+          const presentedPending = await this._presentation.present(structuredPending);
+          const prosePending = presentedPending.prose || pendingDecisionTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: prosePending,
+            structured: structuredPending,
+          });
+          return traceAskReturn('pending_decision_turn_ownership', {
+            sessionId: session.id,
+            prose: prosePending,
+            structured: structuredPending,
+            metadata: presentedPending.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredPending,
+              session,
+              question,
+            }),
+            recommendedActions: structuredPending.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedPending.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: pendingDecisionTurn.mission || null,
+            resolution: {
+              action: pendingDecisionTurn.action || 'clarify',
+              reason: pendingDecisionTurn.reason,
+            },
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            interrogation: null,
+            conversationIntent,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: pendingDecisionTurn.reason,
+              missionType: 'acquisition_mission',
+              missionIntent: conversationIntent.intent,
+              confidence: conversationIntent.confidence,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: pendingDecisionTurn.reason,
+              missionType: 'acquisition_mission',
+              missionId:
+                pendingDecisionTurn.mission && pendingDecisionTurn.mission.id
+                  ? pendingDecisionTurn.mission.id
+                  : null,
+            },
+            workspaceOwnership: {
+              ...workspaceOwnership,
+              missionRuntime: MISSION_RUNTIMES.AMO,
+              missionType: 'acquisition_mission',
+            },
+          }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
+        }
+
         if (
           isReadOnlyCognition(conversationIntent) &&
           !(operatorIntent && operatorIntent.pendingDecisionResolution &&
-            operatorIntent.pendingDecisionResolution.resolvedFromPendingDecision)
+            operatorIntent.pendingDecisionResolution.resolvedFromPendingDecision) &&
+          !pendingDecisionOwnsTurn(
+            operatorIntent && operatorIntent.pendingDecisionResolution
+          )
         ) {
           const cognitionTurn = await maybeHandleOperatorCognitionTurn({
             question,

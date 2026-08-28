@@ -42,6 +42,7 @@ const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
 const {
   resolvePendingOperatorDecision,
   pendingDecisionRequestsExecution,
+  pendingDecisionOwnsTurn,
 } = require('./PendingDecisionResolver');
 const { THINKING_MODES: COGNITION_MODES } = require('../operatorCognition/ThinkingModes');
 
@@ -100,6 +101,18 @@ function derivePlanningRequested(conversationIntent, pendingDecisionResolution =
     conversationIntent.via === 'mission_plan_edit' ||
     conversationIntent.via === 'pending_decision_modify'
   );
+}
+
+function buildPendingDecisionOwnershipIntent(pendingDecisionResolution) {
+  return {
+    intent: COGNITION_MODES.INSPECT,
+    confidence: 0.98,
+    mutatesMission: false,
+    thinkingMode: 'pending_decision',
+    via: 'pending_decision_ownership',
+    specialists: null,
+    pendingDecisionOutcome: pendingDecisionResolution.outcome,
+  };
 }
 
 function buildPendingDecisionConversationIntent(pendingDecisionResolution) {
@@ -323,6 +336,10 @@ async function analyzeOperatorIntent(input = {}) {
   let conversationIntent = buildPendingDecisionConversationIntent(pendingDecisionResolution);
   if (conversationIntent) {
     conversationIntent = attachSpecialists(conversationIntent);
+  } else if (pendingDecisionOwnsTurn(pendingDecisionResolution)) {
+    conversationIntent = attachSpecialists(
+      buildPendingDecisionOwnershipIntent(pendingDecisionResolution)
+    );
   } else {
     conversationIntent = attachSpecialists(
       classifyOperatorCognition(question, {
@@ -364,6 +381,9 @@ async function analyzeOperatorIntent(input = {}) {
       missionContinuationRequested = true;
     } else if (pendingDecisionRequestsExecution(pendingDecisionResolution)) {
       // SPEC-197 — pending decision resolution beats conversational continuity.
+      continuityApplied = false;
+    } else if (pendingDecisionOwnsTurn(pendingDecisionResolution)) {
+      // SPEC-202 — unresolved pending decision retains turn ownership.
       continuityApplied = false;
     } else {
       continuityApplied = true;
@@ -450,9 +470,10 @@ async function analyzeOperatorIntent(input = {}) {
       (activeReasoningContext && activeReasoningContext.conversationGoal),
     primaryClaim: activeReasoningContext && activeReasoningContext.primaryClaim,
     conversationContract,
-    pendingDecisionResolution: pendingDecisionResolution.resolved
-      ? pendingDecisionResolution
-      : null,
+    pendingDecisionResolution:
+      pendingDecisionResolution.resolved || pendingDecisionResolution.pending
+        ? pendingDecisionResolution
+        : null,
   };
 
   operatorIntent = applyConversationContractToIntent(operatorIntent, conversationContract);

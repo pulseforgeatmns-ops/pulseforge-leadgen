@@ -45,7 +45,7 @@ const {
   blocksBusinessSubsystemClaim,
 } = require('./WorkspaceRoutingPatterns');
 const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
-const { missionMayOwnTurn } = require('./OperatorIntentContract');
+const { missionMayOwnTurn, pendingDecisionRetainsTurn } = require('./OperatorIntentContract');
 const { contractBlocksExecution, contractLocksConversation } = require('./ConversationContract');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { MESSAGE_TYPES } = require('./MessageType');
@@ -735,6 +735,24 @@ async function resolveWorkspaceOwner(input = {}) {
     return {
       owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
       reason: 'mission_explicit_exit',
+      confidence: 0.98,
+      specialist: null,
+      missionLock,
+    };
+  }
+
+  // SPEC-202 — pending operator decision retains turn ownership before retrieval/routing fallbacks.
+  if (
+    missionLock.active &&
+    !missionLock.explicitExit &&
+    operatorIntent &&
+    pendingDecisionRetainsTurn(operatorIntent)
+  ) {
+    askPathTrace.traceOwner(WORKSPACE_OWNERS.ACTIVE_MISSION, 'pending_decision_turn_ownership');
+    askPathTrace.traceEarlyReturn('resolveWorkspaceOwner', 'pending_decision_turn_ownership');
+    return {
+      owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+      reason: 'pending_decision_turn_ownership',
       confidence: 0.98,
       specialist: null,
       missionLock,
