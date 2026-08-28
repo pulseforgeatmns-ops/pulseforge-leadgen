@@ -1452,7 +1452,11 @@ class WorkspaceEngine {
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
         askPathTrace.traceBranch('runtime:amo');
 
-        if (isReadOnlyCognition(conversationIntent)) {
+        if (
+          isReadOnlyCognition(conversationIntent) &&
+          !(operatorIntent && operatorIntent.pendingDecisionResolution &&
+            operatorIntent.pendingDecisionResolution.resolvedFromPendingDecision)
+        ) {
           const cognitionTurn = await maybeHandleOperatorCognitionTurn({
             question,
             session,
