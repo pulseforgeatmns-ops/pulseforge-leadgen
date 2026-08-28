@@ -16,6 +16,11 @@ const {
   buildHypothesisInvestigationPlan,
   INVESTIGATION_PHASES,
 } = require('../coverage/HypothesisInvestigationPlanner');
+const {
+  collectCandidateBeliefsFromPayload,
+  beliefsToPreservedCandidates,
+  hydrateCandidateBelief,
+} = require('./CandidateBeliefState');
 
 const INVESTIGATION_MODES = Object.freeze({
   INITIAL: 'initial',
@@ -241,6 +246,40 @@ function mapCandidateUniverseRecordToInvestigationCandidate(record = {}, rank = 
     );
   }
 
+  const evaluation = record.evaluation
+    ? {
+        ...record.evaluation,
+        investigation: {
+          ...(record.evaluation.investigation || {}),
+          missingEvidence: missingEvidence.length
+            ? missingEvidence
+            : record.evaluation.investigation && record.evaluation.investigation.missingEvidence &&
+                record.evaluation.investigation.missingEvidence.length
+              ? record.evaluation.investigation.missingEvidence
+              : ['Website / portfolio / review / decision-maker enrichment'],
+          unresolvedHypotheses:
+            (record.evaluation.investigation && record.evaluation.investigation.unresolvedHypotheses) ||
+            unresolvedHypotheses,
+          canonicalGaps:
+            (record.evaluation.investigation && record.evaluation.investigation.canonicalGaps) ||
+            investigationMeta.canonicalGaps ||
+            [],
+        },
+      }
+    : {
+        qualification: {
+          status: qualification.status || record.qualificationStatus || QUALIFICATION_STATUSES.UNCERTAIN,
+        },
+        readiness: {
+          status: readiness.status || record.readinessState || READINESS_STATES.UNKNOWN,
+        },
+        investigation: {
+          missingEvidence,
+          unresolvedHypotheses,
+          canonicalGaps: investigationMeta.canonicalGaps || [],
+        },
+      };
+
   return {
     rank,
     id,
@@ -256,19 +295,7 @@ function mapCandidateUniverseRecordToInvestigationCandidate(record = {}, rank = 
     qualificationStatus:
       qualification.status || record.qualificationStatus || QUALIFICATION_STATUSES.UNCERTAIN,
     prospectBucket: record.prospectBucket || PROSPECT_BUCKETS.FIT_INVESTIGATION,
-    evaluation: record.evaluation || {
-      qualification: {
-        status: qualification.status || record.qualificationStatus || QUALIFICATION_STATUSES.UNCERTAIN,
-      },
-      readiness: {
-        status: readiness.status || record.readinessState || READINESS_STATES.UNKNOWN,
-      },
-      investigation: {
-        missingEvidence,
-        unresolvedHypotheses,
-        canonicalGaps: investigationMeta.canonicalGaps || [],
-      },
-    },
+    evaluation,
     unknowns: record.unknowns || hypotheses,
     recommendedNextInvestigation: record.recommendedNextInvestigation || null,
     confidence: record.confidence != null ? Number(record.confidence) : 0.5,
@@ -419,41 +446,8 @@ function buildEntityInvestigationPlan(input = {}) {
 }
 
 function extractPreservedCandidatesFromPayload(payload = {}) {
-  const rows = [];
-  const seen = new Set();
-
-  function pushRow(row = {}) {
-    const id = asText(row.id || row.companyId) || asText(row.name);
-    if (!id || seen.has(id)) return;
-    seen.add(id);
-    rows.push({
-      id: row.id || row.companyId || id,
-      name: row.name || id,
-      company: row.name || row.company || id,
-      industry: row.industry || null,
-      location: row.location || row.address || null,
-      website: row.website || row.url || null,
-      origin: 'prior_discovery',
-      _identityKey: row._identityKey || id,
-      _preservedFromContinuation: true,
-    });
-  }
-
-  for (const row of payload.rankedProspects || []) pushRow(row);
-  for (const row of payload.companies || []) pushRow(row);
-  for (const row of payload.opportunities || []) pushRow(row);
-  for (const row of getFitCandidatesFromPayload(payload)) pushRow(row);
-  for (const row of getCandidateUniverseFromPayload(payload)) {
-    pushRow({
-      id: row.candidateId || row.candidate_id || row.id,
-      name: row.name,
-      website: row.website || row.url,
-      location: row.address || (Array.isArray(row.cities) ? row.cities[0] : null) || row.location,
-      _identityKey: row.canonicalIdentity || row.candidateId || row.candidate_id || row.id,
-    });
-  }
-
-  return rows;
+  const beliefs = collectCandidateBeliefsFromPayload(payload);
+  return beliefsToPreservedCandidates(beliefs);
 }
 
 function countPrimaryCandidateUniverse(payload = {}) {
@@ -579,4 +573,5 @@ module.exports = {
   buildInvestigationContinuationContext,
   extractPayloadFromDiscoveryContribution,
   buildOperatorExplanationsForEntityPlan,
+  hydrateCandidateBelief,
 };

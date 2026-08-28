@@ -360,19 +360,45 @@ function buildCandidateUniverseRecords(candidates = [], opts = {}) {
   const records = [];
   const seen = new Set();
 
-  for (const row of seeded) {
-    const id = asText(row.id || row.companyId || row.candidate_id);
-    if (!id || seen.has(id)) continue;
+  function pushRecord(row = {}, originOverride) {
+    const id = asText(row.id || row.companyId || row.candidate_id || row.candidateId);
+    if (!id || seen.has(id)) return;
     seen.add(id);
-    records.push({
+    const record = {
       candidate_id: id,
-      origin: row.origin || ORIGINS.EXISTING_INTELLIGENCE,
+      candidateId: id,
+      canonicalIdentity: row.canonicalIdentity || row._identityKey || id,
+      origin: originOverride || row.origin || ORIGINS.EXISTING_INTELLIGENCE,
       sources: [row.source || row.discoverySource || SOURCE_TYPES.EXISTING_PF],
-      cities: [row.location || row.discoveryCity].filter(Boolean),
+      cities: [row.location || row.discoveryCity || row.address].filter(Boolean),
       confidence: row.confidence != null ? Number(row.confidence) : 0.75,
       dedupeStatus: 'primary',
       name: row.name || null,
-    });
+      website: row.website || row.url || null,
+      phone: row.phone || null,
+      address: row.address || row.location || null,
+      placeId: row.placeId || row.place_id || null,
+    };
+    if (row.qualification) record.qualification = row.qualification;
+    if (row.readiness) record.readiness = row.readiness;
+    if (row.evaluation || row.prospectEvaluation) {
+      record.evaluation = row.evaluation || row.prospectEvaluation;
+    }
+    if (row.businessFit || row.fitEvaluation) {
+      record.businessFit = row.businessFit || row.fitEvaluation;
+    }
+    if (Array.isArray(row.evidenceRefs) && row.evidenceRefs.length) {
+      record.evidenceRefs = row.evidenceRefs;
+    }
+    if (Array.isArray(row.signals) && row.signals.length) record.signals = row.signals;
+    if (row.investigationState) record.investigationState = row.investigationState;
+    if (row.hypothesisState) record.hypothesisState = row.hypothesisState;
+    if (Array.isArray(row.unknowns) && row.unknowns.length) record.unknowns = row.unknowns;
+    records.push(record);
+  }
+
+  for (const row of seeded) {
+    pushRecord(row, row.origin || ORIGINS.EXISTING_INTELLIGENCE);
   }
 
   for (const row of candidates) {
@@ -382,8 +408,9 @@ function buildCandidateUniverseRecords(candidates = [], opts = {}) {
     const dedupeStatus = seen.has(id) ? 'duplicate' : 'primary';
     if (!seen.has(id)) seen.add(id);
     const workload = row._coverageWorkload || {};
-    records.push({
+    const record = {
       candidate_id: id,
+      candidateId: id,
       origin: ORIGINS.EXTERNAL_DISCOVERY,
       sources: [row.discoverySource || row.source || SOURCE_TYPES.PUBLIC_BUSINESS_DATA],
       cities: [row.discoveryCity || row.location].filter(Boolean),
@@ -391,7 +418,11 @@ function buildCandidateUniverseRecords(candidates = [], opts = {}) {
       dedupeStatus,
       name: row.name || null,
       concept: workload.concept || row.discoveryConcept || null,
-    });
+    };
+    if (row.qualification) record.qualification = row.qualification;
+    if (row.readiness) record.readiness = row.readiness;
+    if (row.evaluation) record.evaluation = row.evaluation;
+    records.push(record);
   }
 
   return records;
