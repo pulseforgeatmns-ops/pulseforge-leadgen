@@ -12,6 +12,10 @@ const {
 } = require('./ThinkingModes');
 const { isMissionExecutionCommand } = require('../workspace/ExecutionLanguageDetection');
 const { isMissionPlanningTurn } = require('../workspace/MissionPlanningTurn');
+const {
+  splitClauses,
+  isVerbNegatedInClause,
+} = require('../workspace/MissionLifecycleIntent');
 
 const SPECIALIST_NAMES = 'scout|paige|emmett|max|riley|sam|link|faye|ivy|cal';
 
@@ -125,6 +129,14 @@ function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
 }
 
+function matchesResumePhrase(text) {
+  const clauses = splitClauses(text);
+  return clauses.some((clause) => {
+    if (isVerbNegatedInClause(clause, ['resume', 'continue', 'reuse'])) return false;
+    return matchesAny(clause, RESUME_RES);
+  });
+}
+
 function buildConversationIntent(mode, via, confidence, extras = {}) {
   return {
     intent: mode,
@@ -150,7 +162,7 @@ function classifyOperatorCognition(question, input = {}) {
 
   const mission = input.mission || null;
 
-  if (matchesAny(q, RESUME_RES)) {
+  if (matchesResumePhrase(q)) {
     return buildConversationIntent(THINKING_MODES.RESUME, 'resume_phrase', 0.93);
   }
 

@@ -19,6 +19,7 @@ const {
   hasExecutionLanguage,
   detectMissionExecutionLanguage,
 } = require('./ExecutionLanguageDetection');
+const { resolveMissionLifecycleIntent } = require('./MissionLifecycleIntent');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
 const {
   evaluateMissionContinuation,
@@ -63,6 +64,8 @@ const { THINKING_MODES: COGNITION_MODES } = require('../operatorCognition/Thinki
  * @property {boolean} executionLanguagePresent
  * @property {boolean} missionCreationRequested
  * @property {string|null} missionCreationReason
+ * @property {string} missionLifecycleIntent — SPEC-200 canonical lifecycle decision
+ * @property {string|null} missionLifecycleReason
  * @property {object|null} pendingDecisionResolution — SPEC-197 canonical pending decision intent
  */
 
@@ -332,6 +335,7 @@ async function analyzeOperatorIntent(input = {}) {
 
   const executionLanguagePresent = hasExecutionLanguage(question);
   const creationLanguage = detectMissionExecutionLanguage(question);
+  const lifecycleResolution = resolveMissionLifecycleIntent(question);
   const legacyContinuation = await resolveLegacyMissionContinuation(input, question);
 
   let executionRequested =
@@ -433,6 +437,8 @@ async function analyzeOperatorIntent(input = {}) {
     executionLanguagePresent,
     missionCreationRequested: creationLanguage.matched,
     missionCreationReason: creationLanguage.reason,
+    missionLifecycleIntent: lifecycleResolution.intent,
+    missionLifecycleReason: lifecycleResolution.reason,
     missionContinuationRequested,
     missionContinuationConfidence: legacyContinuation.confidence,
     missionContinuationClassification: legacyContinuation.classification,

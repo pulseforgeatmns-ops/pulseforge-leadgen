@@ -1695,6 +1695,7 @@ class WorkspaceEngine {
         resolvedObjective: (session.context && session.context.resolvedObjective) || null,
         executionContract,
         objectiveResolution,
+        missionLifecycleIntent: operatorIntent.missionLifecycleIntent,
         ...this._amoRuntimeInput(),
         cieService: this._clientIntelligenceService || undefined,
         cieOpts: this._clientIntelligenceOpts || undefined,

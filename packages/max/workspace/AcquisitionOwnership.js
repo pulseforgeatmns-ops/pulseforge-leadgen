@@ -41,6 +41,11 @@ const { objectivesSimilar } = require('../scoutAcquisition/NeedAssessment');
 const { detectAcquisitionObjective, normalizeObjectiveText } = require('./AcquisitionObjectiveDetection');
 const { detectMissionExecutionLanguage } = require('./ExecutionLanguageDetection');
 const {
+  MissionLifecycleIntent,
+  resolveMissionLifecycleIntent,
+  isExplicitLifecycleIntent,
+} = require('./MissionLifecycleIntent');
+const {
   inferTargetSegmentFromObjective,
   deriveMissionTitle,
 } = require('../../acquisition-mission/MissionNaming');
@@ -342,13 +347,17 @@ function buildOwnershipMissionResponse({
  */
 async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   const question = normalizeObjectiveText(input.question);
+  const lifecycleIntent =
+    input.missionLifecycleIntent ||
+    resolveMissionLifecycleIntent(question).intent;
   const executionLanguage = detectMissionExecutionLanguage(question);
   const isAcquisition = isAcquisitionObjectiveForMission(question);
   const isExplicitMissionCommand =
     executionLanguage.matched &&
     (executionLanguage.reason === 'mission_create_command' ||
       executionLanguage.reason === 'mission_operate_command');
-  if (!isAcquisition && !isExplicitMissionCommand) return null;
+  const isExplicitLifecycle = isExplicitLifecycleIntent(lifecycleIntent);
+  if (!isAcquisition && !isExplicitMissionCommand && !isExplicitLifecycle) return null;
 
   const tenantId = resolveTenantId(input);
   const audit = input.audit || createAcquisitionOwnershipAudit();
@@ -372,8 +381,14 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   const ciEvidence = buildClientIntelligenceMissionEvidence(ciLoaded.summary);
 
   const missions = await runtime.list(tenantId, persistOpts);
-  let mission = findResumableMission(missions, question);
+  let mission = null;
   let created = false;
+
+  if (lifecycleIntent === MissionLifecycleIntent.CREATE_NEW) {
+    mission = null;
+  } else {
+    mission = findResumableMission(missions, question);
+  }
 
   if (!mission) {
     const targetSegment = inferTargetSegment(question);
@@ -485,4 +500,6 @@ module.exports = {
   buildOwnershipMissionResponse,
   maybeHandleAcquisitionOwnershipTurn,
   AMO_SOURCES,
+  MissionLifecycleIntent,
+  resolveMissionLifecycleIntent,
 };
