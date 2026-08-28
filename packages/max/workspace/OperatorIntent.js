@@ -299,7 +299,7 @@ async function analyzeOperatorIntent(input = {}) {
   let mission = input.mission || null;
   if (!mission && input.resolveMission !== false) {
     try {
-      mission = await resolveAcquisitionActiveMission({
+      mission = (await resolveAcquisitionActiveMission({
         session,
         context,
         question,
@@ -308,7 +308,7 @@ async function analyzeOperatorIntent(input = {}) {
         resolverEnabled: input.resolverEnabled,
         acquisitionMissionRuntime: input.acquisitionMissionRuntime,
         runtimeProvider: input.runtimeProvider,
-      });
+      })).mission;
     } catch (_) {
       mission = null;
     }
