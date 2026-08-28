@@ -24,6 +24,7 @@ const {
   buildCapabilityBlockedResult,
 } = require('../../scout/coverage/DiscoveryCapabilityGate');
 const { runHypothesisDrivenDiscovery } = require('../../scout/coverage/HypothesisDrivenDiscoveryEngine');
+const { partitionDiscoveredCandidates } = require('../../scout/investigation/CandidateBeliefState');
 
 function createMemoryDiscoveryStore(snapshot = null) {
   /** @type {Map<string, object[]>} */
@@ -159,6 +160,7 @@ async function constructCandidateUniverse(input = {}) {
       tenantId: row.tenantId || tenantId,
       discoveredAt: row.discoveredAt || nowIso(),
       origin: row.origin || 'prior_discovery',
+      _preservedFromContinuation: true,
     });
   }
   const rejectedFromRetrieve = [
@@ -330,8 +332,10 @@ async function constructCandidateUniverse(input = {}) {
     for (const src of result.sourceTypesUnavailable || []) {
       if (!sourceTypesUnavailable.includes(src)) sourceTypesUnavailable.push(src);
     }
-    const newOnly = discoveredRaw.filter((row) => !alreadyKnown(existingCompanies, row));
-    discoveredRaw = newOnly;
+    const partitioned = partitionDiscoveredCandidates(existingCompanies, discoveredRaw);
+    existingCompanies.length = 0;
+    existingCompanies.push(...partitioned.existingCompanies);
+    discoveredRaw = partitioned.discoveredRaw;
     candidateUniverseRecords = buildCandidateUniverseRecords(discoveredRaw, {
       seeded: existingCompanies.map((row) => ({ ...row, origin: 'existing_intelligence' })),
     });

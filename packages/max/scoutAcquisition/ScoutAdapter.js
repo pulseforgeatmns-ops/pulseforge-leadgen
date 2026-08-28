@@ -35,6 +35,15 @@ const { constructCandidateUniverse } = require('./CandidateUniverse');
 const { attachFitToClassified, enrichPeopleSafe } = require('./FitEvaluation');
 const { defaultDiscoveryAdapters } = require('./DiscoveryAdapters');
 const { runCandidateInvestigationLoop } = require('../../scout/investigation/CandidateInvestigation');
+const {
+  applyBeliefToCompany,
+  seedClassifiedFromBelief,
+  rebuildProspectProjections,
+  buildCandidateUniverseWithBelief,
+  checkBeliefRegressionIntegrity,
+  collectCandidateBeliefsFromPayload,
+  reconcilePreservedEvaluation,
+} = require('../../scout/investigation/CandidateBeliefState');
 const { isRuntimeAim } = require('../../aim');
 const {
   buildDiscoveryReport,
@@ -826,7 +835,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     };
   }
 
-  const companies = universe.companies.slice();
+  const companies = universe.companies.slice().map((company) => applyBeliefToCompany(company, company._preservedBelief));
   const discoveredCount = universe.candidatesDiscovered;
   for (const src of universe.sourceTypesChecked || []) {
     if (!sourceTypesChecked.includes(src)) sourceTypesChecked.push(src);
@@ -889,7 +898,7 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     } else if (peopleResult.people.length) {
       company.people = peopleResult.people;
     }
-    const row = classifySignals(company);
+    const row = seedClassifiedFromBelief(classifySignals(company), company);
     if (peopleResult.failed) {
       row.unknowns.push(
         normalizeClaim(
@@ -943,7 +952,10 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
 
   classified.forEach((row, index) => {
     const company = companies[index];
-    const attached = attachFitToClassified(row, company, searchDefinition, now);
+    let attached = attachFitToClassified(row, company, searchDefinition, now);
+    if (opts.investigationContinuation === true && company._preservedBelief) {
+      attached = reconcilePreservedEvaluation(attached, company);
+    }
     const next = attached.classified;
     classified[index] = next;
     company.lastEvaluatedAt = attached.lastEvaluatedAt;
@@ -1038,6 +1050,27 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
         text: `Candidate investigation (SPEC-195): ${candidateInvestigation.executedTasks.length} entity task${candidateInvestigation.executedTasks.length === 1 ? '' : 's'} executed; stop reason: ${(candidateInvestigation.stop && candidateInvestigation.stop.reason) || 'queue_complete'}.`,
       });
     }
+
+    // SPEC-199 — rebuild projections from post-investigation canonical state.
+    const projections = rebuildProspectProjections({
+      classified,
+      companies,
+      searchDefinition,
+      now,
+      OPPORTUNITY_CLASSES,
+      PROSPECT_BUCKETS,
+      READINESS_STATES,
+      QUALIFICATION_STATUSES,
+    });
+    classified.splice(0, classified.length, ...projections.classified);
+    companies.splice(0, companies.length, ...projections.companies);
+    supported.splice(0, supported.length, ...projections.supported);
+    fitCandidates.splice(0, fitCandidates.length, ...projections.fitCandidates);
+    watchCandidates.splice(0, watchCandidates.length, ...projections.watchCandidates);
+    uncertainCandidates.splice(0, uncertainCandidates.length, ...projections.uncertainCandidates);
+    prospectEvaluations.splice(0, prospectEvaluations.length, ...projections.prospectEvaluations);
+    basicFitCount = projections.basicFitCount;
+    signalBearingCount = projections.signalBearingCount;
   }
 
   if (opts.discoveryStore && typeof opts.discoveryStore.upsert === 'function' && companies.length) {
@@ -1156,7 +1189,29 @@ async function runScoutAcquisitionIntelligence(delegation, opts = {}) {
     expansionText: expansionSuggestion(searchDefinition, basicFitCount),
   });
 
-  const candidateUniverseRecords = universe.candidateUniverse || [];
+  const candidateUniverseRecords = buildCandidateUniverseWithBelief(
+    companies,
+    classified,
+    universe.candidateUniverse || []
+  );
+
+  if (opts.investigationContinuation === true && opts.priorDiscoveryPayload) {
+    const integrity = checkBeliefRegressionIntegrity({
+      priorPayload: opts.priorDiscoveryPayload,
+      nextPayload: {
+        candidateUniverse: candidateUniverseRecords,
+        prospectEvaluations,
+        qualifiedCount: qualifiedProspectCount,
+      },
+    });
+    if (integrity.violation) {
+      const err = new Error(integrity.message || 'Candidate belief state regression detected.');
+      err.code = 'BELIEF_STATE_REGRESSION';
+      err.integrity = integrity;
+      throw err;
+    }
+  }
+
   const discoveryConfidence = computeDiscoveryConfidence({
     coverage: coverageMetrics,
     candidateUniverse: candidateUniverseRecords,

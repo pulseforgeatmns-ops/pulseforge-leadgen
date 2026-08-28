@@ -405,12 +405,17 @@ async function runHypothesisDrivenDiscovery(input = {}) {
       }
 
       const newCandidates = result.candidates || [];
-      const seen = new Set(allCandidates.map((c) => c._identityKey || asText(c.id || c.name).toLowerCase()));
       for (const row of newCandidates) {
-        const key = row._identityKey || asText(row.id || row.name).toLowerCase();
-        if (!seen.has(key)) {
-          seen.add(key);
-          allCandidates.push(row);
+        const normalized = normalizeCandidateRow(row);
+        const key = normalized._identityKey || candidateMatchKey(normalized);
+        normalized._identityKey = key;
+        const existingIndex = allCandidates.findIndex(
+          (c) => (c._identityKey || candidateMatchKey(c)) === key
+        );
+        if (existingIndex >= 0) {
+          allCandidates[existingIndex] = fuseCandidateRecords(allCandidates[existingIndex], normalized, establishBusinessIdentity(normalized));
+        } else {
+          allCandidates.push(normalized);
         }
       }
 
