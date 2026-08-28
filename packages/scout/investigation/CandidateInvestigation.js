@@ -25,6 +25,10 @@ const {
   mapHypothesisToGap,
   candidateNeedsInvestigation,
 } = require('./EntityInvestigationContinuation');
+const {
+  snapshotCandidateMetrics,
+  buildInvestigationExecutionTrace,
+} = require('./InvestigationExecutionTrace');
 
 const TASK_STATUS = Object.freeze({
   PENDING: 'pending',
@@ -563,6 +567,7 @@ async function runCandidateInvestigationLoop(input = {}) {
       candidates: [],
       queue: [],
       executedTasks: [],
+      executionTraces: [],
       companies,
       classified,
       stop: { stop: true, reason: STOP_REASONS.QUEUE_EMPTY, explanation: 'No investigable candidates.' },
@@ -583,6 +588,7 @@ async function runCandidateInvestigationLoop(input = {}) {
   };
 
   const executedTasks = [];
+  const executionTraces = [];
   const explainability = candidates.map((candidate) =>
     explainCandidateInvestigation(candidate, queue)
   );
@@ -599,6 +605,7 @@ async function runCandidateInvestigationLoop(input = {}) {
         candidates,
         queue,
         executedTasks,
+        executionTraces,
         companies: workingCompanies,
         classified: workingClassified,
         stop,
@@ -613,8 +620,16 @@ async function runCandidateInvestigationLoop(input = {}) {
     const task = selectNextInvestigation(queue, state);
     if (!task) break;
 
+    const candidateIndex = candidates.findIndex((row) => String(row.id) === String(task.candidateId));
+    const beforeMetrics =
+      candidateIndex >= 0
+        ? snapshotCandidateMetrics(candidates[candidateIndex], task.hypothesisId)
+        : snapshotCandidateMetrics({}, task.hypothesisId);
+    const startedAt = new Date().toISOString();
+
     task.status = TASK_STATUS.RUNNING;
     task.attempts = (task.attempts || 0) + 1;
+    task.startedAt = startedAt;
 
     const executeFn = opts.executeInvestigationTask || executeInvestigationTask;
     let result;
@@ -652,7 +667,6 @@ async function runCandidateInvestigationLoop(input = {}) {
       providerId: (result.reports && result.reports[0] && result.reports[0].providerId) || null,
     });
 
-    const candidateIndex = candidates.findIndex((row) => String(row.id) === String(task.candidateId));
     if (candidateIndex >= 0) {
       candidates[candidateIndex].hypothesisState = applyEvidenceToCandidateHypotheses(
         candidates[candidateIndex].hypothesisState || {},
@@ -690,6 +704,22 @@ async function runCandidateInvestigationLoop(input = {}) {
       }
     }
 
+    const afterMetrics =
+      candidateIndex >= 0
+        ? snapshotCandidateMetrics(candidates[candidateIndex], task.hypothesisId)
+        : beforeMetrics;
+    executionTraces.push(
+      buildInvestigationExecutionTrace({
+        task,
+        result,
+        before: beforeMetrics,
+        after: afterMetrics,
+        startedAt,
+        completedAt: task.completedAt,
+        evidenceProduced: produced,
+      })
+    );
+
     queue = buildCandidateInvestigationQueue(candidates, {
       ...opts,
       missionId: mission.id || opts.missionId,
@@ -702,6 +732,7 @@ async function runCandidateInvestigationLoop(input = {}) {
     candidates,
     queue,
     executedTasks,
+    executionTraces,
     companies: workingCompanies,
     classified: workingClassified,
     stop: finalStop,
