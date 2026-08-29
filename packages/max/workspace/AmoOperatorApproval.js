@@ -42,6 +42,12 @@ const {
   buildPrioritizationPayload,
 } = require('./MaxPrioritizationExecutor');
 const {
+  buildPaigeVariantsPayload,
+  runPaigeVariants,
+  runPaigeForAmoMission,
+  fixturePaigeVariantsResult,
+} = require('./PaigeVariantsExecutor');
+const {
   runScoutForAmoMission: runScoutForAmoMissionSec,
   mapScoutIntelligenceToDiscoveryPayload: mapScoutPayloadFromExecutor,
 } = require('./ScoutDiscoveryExecutor');
@@ -1463,61 +1469,6 @@ function fixtureMaxPrioritizationResult(mission, contributions = []) {
   return buildMaxPrioritizationPayload(mission, contributions);
 }
 
-function buildPaigeVariantsPayload(executionInput = {}) {
-  const max = executionInput.workspaceContext?.max
-    || executionInput.specialistInput?.maxPrioritization
-    || {};
-  const scout = executionInput.workspaceContext?.scout
-    || executionInput.specialistInput?.scoutDiscovery
-    || {};
-  const plan = executionInput.missionPlan || executionInput.specialistInput?.structuredMission || {};
-  const topTarget = max.rankedTargets?.[0]?.name
-    || max.priorities?.[0]?.name
-    || scout.companies?.[0]?.name
-    || plan.market?.label
-    || 'your office';
-  const objective = max.objectives?.[0]?.text || plan.objective || executionInput.specialistInput?.objective;
-  const subject = `Commercial cleaning walkthrough for ${topTarget}`;
-  const body = [
-    `Hi — we help ${plan.market?.label || 'local offices'} maintain spotless workspaces.`,
-    objective ? `Mission focus: ${objective}` : null,
-    max.recommendations?.[0] ? `Why now: ${max.recommendations[0]}` : null,
-  ].filter(Boolean).join('\n\n');
-
-  return {
-    variants: [{
-      label: 'Primary',
-      subject,
-      body,
-      cta: 'Reply to schedule a walkthrough',
-    }],
-    subjects: [subject],
-    cta: 'Reply to schedule a walkthrough',
-    hypotheses: [
-      max.objectiveReason || 'Prioritized targets respond to timing-specific outreach.',
-      scout.buyingSignals?.[0]
-        ? `Signal: ${typeof scout.buyingSignals[0] === 'string' ? scout.buyingSignals[0] : scout.buyingSignals[0].label}`
-        : 'Ops hiring signals indicate receptivity window.',
-    ].filter(Boolean),
-    experiments: [{
-      name: 'subject_personalization',
-      variant: 'company_name_in_subject',
-      hypothesis: 'Company-specific subject lines increase open rates.',
-    }],
-    messaging: body,
-  };
-}
-
-function fixturePaigeVariantsResult(mission, contributions = []) {
-  const input = buildExecutionInput({
-    mission,
-    contributions,
-    specialist: SPECIALISTS.PAIGE,
-    transactionId: 'fixture_paige',
-  });
-  return buildPaigeVariantsPayload(input);
-}
-
 async function runMaxPrioritizationForAmoMission(mission, opts = {}) {
   if (typeof opts.runMax === 'function') {
     const custom = await opts.runMax(mission, opts);
@@ -1533,27 +1484,6 @@ async function runMaxPrioritizationForAmoMission(mission, opts = {}) {
     throw validationError('tme_max_blocked', reason);
   }
   return prioritizationPayloadFromMaxResult(maxResult);
-}
-
-async function runPaigeForAmoMission(mission, opts = {}) {
-  if (typeof opts.runPaige === 'function') {
-    return opts.runPaige(mission, opts);
-  }
-  const contributions = opts.contributions
-    || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
-    || [];
-  const executionInput = buildExecutionInput({
-    mission,
-    contributions,
-    specialist: SPECIALISTS.PAIGE,
-    transactionId: opts.transactionId,
-    executionContext: opts.executionContext,
-    store: opts.engine?.store,
-  });
-  if (opts.allowFixtureFallback === false && !findMaxPrioritization(contributions)) {
-    throw validationError('tme_max_prioritization_missing', 'Max prioritization is required before Paige execution.');
-  }
-  return buildPaigeVariantsPayload(executionInput);
 }
 
 function validateMaxPrioritizationOutput(output, ctx = {}) {
@@ -1870,9 +1800,10 @@ async function advancePaigeVariants(input = {}) {
     validatePreconditions: (ctx) => validatePaigePreconditions(ctx),
     execute: async ({ mission: current, transactionId }) => {
       const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
-      const variantsPayload = await runPaigeForAmoMission(current, {
-        ...input,
+      const executionInput = buildExecutionInput({
+        mission: current,
         contributions,
+        specialist: SPECIALISTS.PAIGE,
         transactionId,
         executionContext: {
           stage: STAGES.PREPARE,
@@ -1880,30 +1811,55 @@ async function advancePaigeVariants(input = {}) {
           tenantId,
           executionRequestId: input.executionRequest?.id || null,
         },
-      });
-      const executionResult = await executeSpecialist({
-        mission: current,
-        contributions,
-        specialist: SPECIALISTS.PAIGE,
-        transactionId,
         store: engine?.store,
-        run: async () => ({
-          spec: 'SPEC-132',
-          status: EXECUTION_STATUSES.SUCCESS,
-          confidence: { overall: 0.75, evidence: 0.7, fit: 0.8, completeness: 0.75 },
-          evidence: [{
-            id: 'ev_paige_0',
-            label: 'Max prioritization consumed for messaging',
-            source: 'max_prioritization',
-            timestamp: new Date().toISOString(),
-            provenance: { kind: 'upstream_intelligence', source: 'max' },
-          }],
-          contributions: variantsPayload,
-          recommendations: [{ tier: 'suggested', text: 'Review variants before operator approval.' }],
-          unknowns: [],
-          nextActions: [{ kind: 'operator_review', label: 'Operator review variants' }],
-        }),
       });
+
+      let executionResult;
+      if (typeof input.runPaige === 'function') {
+        const variantsPayload = await input.runPaige(current, {
+          ...input,
+          contributions,
+          transactionId,
+          executionContext: executionInput.executionContext,
+        });
+        executionResult = await executeSpecialist({
+          mission: current,
+          contributions,
+          specialist: SPECIALISTS.PAIGE,
+          transactionId,
+          store: engine?.store,
+          run: async () => ({
+            spec: 'SPEC-132',
+            status: EXECUTION_STATUSES.SUCCESS,
+            confidence: { overall: 0.75, evidence: 0.7, fit: 0.8, completeness: 0.75 },
+            evidence: [{
+              id: 'ev_paige_0',
+              label: 'Max prioritization consumed for messaging',
+              source: 'max_prioritization',
+              timestamp: new Date().toISOString(),
+              provenance: { kind: 'upstream_intelligence', source: 'max' },
+            }],
+            contributions: variantsPayload,
+            recommendations: [{ tier: 'suggested', text: 'Review variants before operator approval.' }],
+            unknowns: [],
+            nextActions: [{ kind: 'operator_review', label: 'Operator review variants' }],
+          }),
+        });
+      } else {
+        executionResult = await executeSpecialist({
+          mission: current,
+          contributions,
+          specialist: SPECIALISTS.PAIGE,
+          transactionId,
+          store: engine?.store,
+          run: (secInput) => runPaigeVariants({
+            ...secInput,
+            ...executionInput,
+            mission: current,
+          }),
+        });
+      }
+      const variantsPayload = executionResult.contributions;
 
       if (executionResult.status === EXECUTION_STATUSES.BLOCKED
         || executionResult.status === EXECUTION_STATUSES.FAILED) {
