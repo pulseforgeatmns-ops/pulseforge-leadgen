@@ -9,6 +9,9 @@
 const {
   formatDiscoveryResultsLines,
 } = require('../../acquisition-mission/DiscoveryPresentation');
+const {
+  formatInvestigationContinuationLines,
+} = require('../../acquisition-mission/InvestigationContinuationPresentation');
 
 const REASONING_MARKER = '▼ Show reasoning';
 const REASONING_EXPANDED_MARKER = '▲ Hide reasoning';
@@ -109,6 +112,7 @@ function buildMissionCommunication(input = {}) {
     reasoningEvidence: input.reasoningEvidence || null,
     includeReasoningMarker: input.includeReasoningMarker !== false,
     discoveryResults: input.discoveryResults || null,
+    investigationContinuationResults: input.investigationContinuationResults || null,
   };
 }
 
@@ -199,7 +203,14 @@ function formatMissionProse(comm, opts = {}) {
     lines.push('');
   }
 
-  if (comm.discoveryResults) {
+  if (comm.investigationContinuationResults) {
+    const continuationLines = formatInvestigationContinuationLines(
+      comm.investigationContinuationResults
+    );
+    if (continuationLines.length) {
+      lines.push(...continuationLines);
+    }
+  } else if (comm.discoveryResults) {
     const discoveryLines = formatDiscoveryResultsLines(comm.discoveryResults);
     if (discoveryLines.length) {
       lines.push(...discoveryLines);
