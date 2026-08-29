@@ -17,6 +17,9 @@ const {
   isVerbNegatedInClause,
 } = require('../workspace/MissionLifecycleIntent');
 const { resolveMissionContinuation } = require('../../acquisition-mission/MissionProgression');
+const {
+  normalizeConversationalControlLanguage,
+} = require('../workspace/BoundedTypoNormalization');
 
 const SPECIALIST_NAMES = 'scout|paige|emmett|max|riley|sam|link|faye|ivy|cal';
 
@@ -193,30 +196,36 @@ function classifyOperatorCognition(question, input = {}) {
     return buildConversationIntent(THINKING_MODES.EDIT, 'edit_phrase', 0.91);
   }
 
-  if (isMissionExecutionCommand(q)) {
-    if (isBareContinuationUtterance(q)) {
-      const snapshot = resolveSnapshotFromInput(input);
-      if (snapshot && input.mission) {
-        const continuation = resolveMissionContinuation(snapshot);
-        if (continuation.kind === 'execute' && continuation.progression) {
-          return buildConversationIntent(
-            THINKING_MODES.EXECUTE,
-            'mission_continuation',
-            0.94,
-            { missionContinuation: continuation.progression }
-          );
-        }
-        if (continuation.kind === 'ambiguous') {
-          return buildConversationIntent(
-            THINKING_MODES.INSPECT,
-            'mission_continuation_ambiguous',
-            0.88,
-            { missionContinuationAmbiguity: continuation }
-          );
-        }
+  const continuationControlQ = normalizeConversationalControlLanguage(q);
+  const isTypoTolerantContinuation =
+    isMissionExecutionCommand(continuationControlQ) &&
+    isBareContinuationUtterance(continuationControlQ);
+
+  if (isTypoTolerantContinuation) {
+    const snapshot = resolveSnapshotFromInput(input);
+    if (snapshot && input.mission) {
+      const continuation = resolveMissionContinuation(snapshot);
+      if (continuation.kind === 'execute' && continuation.progression) {
+        return buildConversationIntent(
+          THINKING_MODES.EXECUTE,
+          'mission_continuation',
+          0.94,
+          { missionContinuation: continuation.progression }
+        );
       }
-      return buildConversationIntent(THINKING_MODES.INSPECT, 'conversational_continue', 0.86);
+      if (continuation.kind === 'ambiguous') {
+        return buildConversationIntent(
+          THINKING_MODES.INSPECT,
+          'mission_continuation_ambiguous',
+          0.88,
+          { missionContinuationAmbiguity: continuation }
+        );
+      }
     }
+    return buildConversationIntent(THINKING_MODES.INSPECT, 'conversational_continue', 0.86);
+  }
+
+  if (isMissionExecutionCommand(q)) {
     return buildConversationIntent(THINKING_MODES.EXECUTE, 'execution_command', 0.97);
   }
 
