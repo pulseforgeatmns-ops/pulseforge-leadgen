@@ -231,7 +231,9 @@ v1 reasoning is deterministic. No LLM invents a health score or a send decision.
 
 ## Data Model
 
-Tables: `emmett_inbox_snapshots`, `emmett_send_plans`, `emmett_governor_acks`, `emmett_outbound_outcomes`, `emmett_outbound_learning`.
+**Inbox Snapshot** is a runtime live-state object reconstructed from durable source events and config via `services/emmettOutboundSnapshot.js` → `buildInboxSnapshot()`. It is not a persisted historical table.
+
+Persistent tables: `emmett_send_plans`, `emmett_governor_acks`, `emmett_outbound_outcomes`, `emmett_outbound_learning`.
 
 Tenant isolation: `tenant_id` / `client_id`. Cross-tenant reads fail closed.
 
@@ -248,7 +250,7 @@ Plan status: `draft` | `approved` | `superseded`. Sends require `approved` for t
 
 ## Migration Strategy
 
-Additive. `migrations/2026-08-19-emmett-outbound-intelligence.sql` plus rollback. Existing tenants start with no approved plan (fail closed: do not send). Schema is also ensured on first service use.
+Additive. `migrations/2026-08-19-emmett-outbound-intelligence.sql` plus rollback. `emmett_inbox_snapshots` was removed by `migrations/2026-08-29-drop-emmett-inbox-snapshots.sql` (unused snapshot persistence scaffolding). Existing tenants start with no approved plan (fail closed: do not send). Schema is also ensured on first service use.
 
 ## Testing
 
