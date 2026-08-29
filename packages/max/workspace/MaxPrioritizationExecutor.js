@@ -16,7 +16,10 @@ const {
   executeSpecialist,
   EXECUTION_STATUSES,
 } = amo;
-const { buildMissionExecutionContext } = require('../../acquisition-mission/MissionExecutionContext');
+const {
+  buildMissionExecutionContext,
+  buildRuntimeDependencies,
+} = require('../../acquisition-mission/MissionExecutionContext');
 const { maxInput } = require('../../acquisition-mission/SpecialistInputs');
 
 function asText(value) {
@@ -204,11 +207,14 @@ async function runMaxForAmoMission(mission, opts = {}) {
     mission,
     tenantId,
     transactionId: opts.transactionId,
-    pool: opts.pool,
   });
   if (opts.executionRequest) {
     executionContext.executionRequest = opts.executionRequest;
   }
+  const runtimeDependencies = buildRuntimeDependencies({
+    pool: opts.pool,
+    engine: opts.engine,
+  });
 
   const discovery = findLatestScoutDiscovery(contributions);
   const input = buildExecutionInput({
@@ -227,7 +233,11 @@ async function runMaxForAmoMission(mission, opts = {}) {
     mission,
     contributions,
     transactionId: opts.transactionId,
-    run: () => runMaxPrioritization({ ...input, mission }),
+    run: () => runMaxPrioritization({
+      ...input,
+      mission,
+      runtimeDependencies,
+    }),
     treatErrorsAsBlocked: opts.treatErrorsAsBlocked !== false,
   });
 }
