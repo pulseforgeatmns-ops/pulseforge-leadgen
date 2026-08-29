@@ -242,6 +242,86 @@ function mergeCandidateBeliefs(prior = {}, incoming = {}) {
 }
 
 /**
+ * Canonical persisted candidate sources for a normalized Scout discovery contribution.
+ * Scalar counts (candidateUniverseCount, discoveryReport.candidateUniverse) are excluded.
+ * @param {object} payload
+ * @returns {Array<{ row: object, source: string }>}
+ */
+function enumerateCanonicalCandidateSources(payload = {}) {
+  const artifact = payload.discoveryArtifact || {};
+  const buckets = [
+    { rows: payload.rankedProspects, source: 'rankedProspects' },
+    { rows: artifact.rankedProspects, source: 'rankedProspects' },
+    { rows: payload.opportunities, source: 'opportunities' },
+    { rows: payload.companies, source: 'companies' },
+    { rows: payload.fitCandidates, source: 'fitCandidates' },
+    { rows: artifact.fitCandidates, source: 'fitCandidates' },
+    { rows: payload.uncertainCandidates, source: 'uncertainCandidates' },
+    { rows: payload.watchCandidates, source: 'uncertainCandidates' },
+    { rows: artifact.uncertainCandidates, source: 'uncertainCandidates' },
+    { rows: artifact.watchCandidates, source: 'uncertainCandidates' },
+    { rows: payload.candidateUniverse, source: 'candidateUniverse' },
+    { rows: artifact.candidateUniverse, source: 'candidateUniverse' },
+    { rows: payload.prospectEvaluations, source: 'prospectEvaluations' },
+    { rows: artifact.prospectEvaluations, source: 'prospectEvaluations' },
+  ];
+
+  const entries = [];
+  for (const bucket of buckets) {
+    if (!Array.isArray(bucket.rows)) continue;
+    for (const row of bucket.rows) {
+      entries.push({ row, source: bucket.source });
+    }
+  }
+  return entries;
+}
+
+function normalizeCandidateRowForBelief(row = {}, source = '') {
+  if (source === 'candidateUniverse') {
+    return {
+      ...row,
+      id: row.candidateId || row.candidate_id || row.id,
+      candidateId: row.candidateId || row.candidate_id || row.id,
+      location: row.address || (Array.isArray(row.cities) ? row.cities[0] : null) || row.location,
+      canonicalIdentity: row.canonicalIdentity || row.candidateId || row.candidate_id || row.id,
+    };
+  }
+  if (source === 'prospectEvaluations') {
+    return {
+      id: row.candidateId || row.companyId || row.id,
+      candidateId: row.candidateId || row.companyId || row.id,
+      name: row.name || row.companyName || null,
+      evaluation: row,
+      qualification: row.qualification,
+      readiness: row.readiness,
+      prospectBucket: row.bucket,
+      businessFit: row.businessFit,
+      evidenceRefs: row.evidenceRefs,
+    };
+  }
+  if (source === 'rankedProspects') {
+    return {
+      ...row,
+      id: row.id || row.companyId || row.candidateId || row.candidate_id,
+      candidateId: row.candidateId || row.candidate_id || row.id || row.companyId,
+      name: row.name,
+      evaluation: row.evaluation,
+      qualification:
+        row.qualification ||
+        (row.evaluation && row.evaluation.qualification) ||
+        (row.qualificationStatus ? { status: row.qualificationStatus } : null),
+      readiness:
+        row.readiness ||
+        (row.evaluation && row.evaluation.readiness) ||
+        (row.readinessState ? { status: row.readinessState } : null),
+      businessFit: row.businessFit || (row.evaluation && row.evaluation.businessFit),
+      evidenceRefs: row.evidenceRefs || row.signals,
+    };
+  }
+  return { ...row };
+}
+
+/**
  * Collect and merge canonical beliefs from all payload representations.
  * @param {object} payload
  * @returns {Map<string, object>}
@@ -253,26 +333,7 @@ function collectCandidateBeliefsFromPayload(payload = {}) {
     if (!row || typeof row !== 'object') return;
     if (row.dedupeStatus === 'duplicate') return;
 
-    let normalized = { ...row };
-    if (source === 'candidateUniverse') {
-      normalized = {
-        ...row,
-        id: row.candidateId || row.candidate_id || row.id,
-        candidateId: row.candidateId || row.candidate_id || row.id,
-        location: row.address || (Array.isArray(row.cities) ? row.cities[0] : null) || row.location,
-        canonicalIdentity: row.canonicalIdentity || row.candidateId || row.candidate_id || row.id,
-      };
-    } else if (source === 'prospectEvaluations') {
-      normalized = {
-        id: row.candidateId || row.companyId || row.id,
-        candidateId: row.candidateId || row.companyId || row.id,
-        evaluation: row,
-        qualification: row.qualification,
-        readiness: row.readiness,
-        prospectBucket: row.bucket,
-      };
-    }
-
+    const normalized = normalizeCandidateRowForBelief(row, source);
     const belief = hydrateCandidateBelief(normalized);
     if (!belief) return;
     const key = beliefMapKey(belief) || belief.candidateId.toLowerCase();
@@ -283,21 +344,66 @@ function collectCandidateBeliefsFromPayload(payload = {}) {
     }
   }
 
-  for (const row of payload.rankedProspects || []) ingest(row, 'rankedProspects');
-  for (const row of payload.opportunities || []) ingest(row, 'opportunities');
-  for (const row of payload.companies || []) ingest(row, 'companies');
-  for (const row of payload.fitCandidates || payload.discoveryArtifact?.fitCandidates || []) {
-    ingest(row, 'fitCandidates');
+  for (const { row, source } of enumerateCanonicalCandidateSources(payload)) {
+    ingest(row, source);
   }
-  for (const row of payload.uncertainCandidates || payload.watchCandidates || payload.discoveryArtifact?.watchCandidates || []) {
-    ingest(row, 'uncertainCandidates');
-  }
-  for (const row of payload.candidateUniverse || payload.discoveryArtifact?.candidateUniverse || []) {
-    ingest(row, 'candidateUniverse');
-  }
-  for (const row of payload.prospectEvaluations || []) ingest(row, 'prospectEvaluations');
 
   return beliefs;
+}
+
+function countQualifiedBeliefs(beliefs = new Map()) {
+  return [...beliefs.values()].filter(
+    (row) => row.qualification && row.qualification.status === QUALIFICATION_STATUSES.QUALIFIED
+  ).length;
+}
+
+function candidateBeliefPersistenceError(message, details = {}) {
+  const err = new Error(message);
+  err.code = 'CANDIDATE_BELIEF_PERSISTENCE_FAILURE';
+  err.details = details;
+  return err;
+}
+
+/**
+ * Fail closed when scalar candidate counts outlive durable candidate records.
+ * @param {object} payload
+ */
+function assertCandidateBeliefPersistence(payload = {}) {
+  if (payload.blocked === true) return;
+
+  const beliefs = collectCandidateBeliefsFromPayload(payload);
+  const recordCount = beliefs.size;
+  const declaredCount =
+    payload.candidateUniverseCount != null ? Number(payload.candidateUniverseCount) : null;
+  const reportCount =
+    payload.discoveryReport &&
+    payload.discoveryReport.candidateUniverse != null &&
+    !Array.isArray(payload.discoveryReport.candidateUniverse)
+      ? Number(payload.discoveryReport.candidateUniverse)
+      : null;
+  const expectedCount = Math.max(declaredCount || 0, reportCount || 0);
+
+  if (expectedCount > 0 && recordCount === 0) {
+    throw candidateBeliefPersistenceError(
+      `Candidate belief persistence failure: declared universe of ${expectedCount} has no recoverable candidate records.`,
+      {
+        declaredCount,
+        reportCount,
+        recordCount,
+      }
+    );
+  }
+
+  if (expectedCount > 0 && recordCount > 0 && recordCount < expectedCount) {
+    throw candidateBeliefPersistenceError(
+      `Candidate belief persistence failure: declared universe of ${expectedCount} but only ${recordCount} canonical candidate records are recoverable.`,
+      {
+        declaredCount,
+        reportCount,
+        recordCount,
+      }
+    );
+  }
 }
 
 /**
@@ -665,32 +771,119 @@ function rebuildProspectProjections(input = {}) {
   };
 }
 
+function isRecognizedCandidateTransition(prior = {}, next = null) {
+  if (!next) {
+    if (prior.excluded === true) return true;
+    const status = prior.qualification && prior.qualification.status;
+    if (status === QUALIFICATION_STATUSES.NOT_QUALIFIED && prior.excludedReason) return true;
+    return false;
+  }
+
+  if (prior.excluded === true || next.excluded === true) return true;
+
+  const priorStatus = prior.qualification && prior.qualification.status;
+  const nextStatus = next.qualification && next.qualification.status;
+  if (priorStatus === QUALIFICATION_STATUSES.QUALIFIED && nextStatus !== QUALIFICATION_STATUSES.QUALIFIED) {
+    const reasonCode = next.qualification && next.qualification.reasonCode;
+    const reason = next.qualification && next.qualification.reason;
+    const contradictoryReasonCodes = new Set([
+      'segment_mismatch',
+      'excluded_segment',
+      'negative_segment_evidence',
+      'geography_mismatch',
+      'not_in_service_area',
+    ]);
+    if (reasonCode && contradictoryReasonCodes.has(reasonCode)) return true;
+    if (reason && /exclusive|does not|not (?:a |an )?|residential only|no str|no vacation/i.test(reason)) {
+      return true;
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function findBeliefMatchForPrior(prior = {}, nextBeliefs = new Map()) {
+  const direct = nextBeliefs.get(beliefMapKey(prior));
+  if (direct) return direct;
+  for (const next of nextBeliefs.values()) {
+    if (
+      recordsMatch(
+        { id: prior.candidateId, name: prior.identity && prior.identity.name },
+        { id: next.candidateId, name: next.identity && next.identity.name }
+      )
+    ) {
+      return next;
+    }
+  }
+  return null;
+}
+
 /**
- * Detect destructive belief regression (15 → 0 without evidence invalidating all).
+ * Detect destructive belief regression (qualified collapse or durable universe disappearance).
  * @param {object} input
- * @returns {{ violation: boolean, message: string|null, priorQualified: number, nextQualified: number }}
+ * @returns {{ violation: boolean, message: string|null, priorQualified: number, nextQualified: number, priorTotal?: number, nextTotal?: number }}
  */
 function checkBeliefRegressionIntegrity(input = {}) {
   const priorBeliefs = input.priorBeliefs instanceof Map ? input.priorBeliefs : collectCandidateBeliefsFromPayload(input.priorPayload || {});
   const nextBeliefs = input.nextBeliefs instanceof Map ? input.nextBeliefs : collectCandidateBeliefsFromPayload(input.nextPayload || {});
 
-  const priorQualified = [...priorBeliefs.values()].filter(
-    (row) => row.qualification && row.qualification.status === QUALIFICATION_STATUSES.QUALIFIED
-  ).length;
-  const nextQualified = [...nextBeliefs.values()].filter(
-    (row) => row.qualification && row.qualification.status === QUALIFICATION_STATUSES.QUALIFIED
-  ).length;
+  const priorQualified = countQualifiedBeliefs(priorBeliefs);
+  const nextQualified = countQualifiedBeliefs(nextBeliefs);
+  const priorTotal = priorBeliefs.size;
+  const nextTotal = nextBeliefs.size;
+
+  if (priorTotal > 0 && nextTotal === 0) {
+    return {
+      violation: true,
+      message: `Candidate belief regression: ${priorTotal} hydrated candidates collapsed to 0 without attributable evidence.`,
+      priorQualified,
+      nextQualified,
+      priorTotal,
+      nextTotal,
+      lostCandidates: [...priorBeliefs.values()].map((row) => ({
+        candidateId: row.candidateId,
+        name: row.identity && row.identity.name,
+      })),
+    };
+  }
+
+  if (priorTotal > 0 && nextTotal > 0 && nextTotal < priorTotal) {
+    const unexplainedLoss = [];
+    for (const [, prior] of priorBeliefs.entries()) {
+      const next = findBeliefMatchForPrior(prior, nextBeliefs);
+      if (!next && !isRecognizedCandidateTransition(prior, null)) {
+        unexplainedLoss.push({
+          candidateId: prior.candidateId,
+          name: prior.identity && prior.identity.name,
+        });
+      }
+    }
+    if (unexplainedLoss.length === priorTotal) {
+      return {
+        violation: true,
+        message: `Candidate belief regression: all ${priorTotal} hydrated candidates disappeared without recognized evidence-backed transitions.`,
+        priorQualified,
+        nextQualified,
+        priorTotal,
+        nextTotal,
+        lostCandidates: unexplainedLoss,
+      };
+    }
+  }
 
   if (priorQualified === 0 || nextQualified >= priorQualified) {
-    return { violation: false, message: null, priorQualified, nextQualified };
+    return { violation: false, message: null, priorQualified, nextQualified, priorTotal, nextTotal };
   }
 
   const lost = [];
   for (const [key, prior] of priorBeliefs.entries()) {
     if (!prior.qualification || prior.qualification.status !== QUALIFICATION_STATUSES.QUALIFIED) continue;
-    const next = nextBeliefs.get(key);
+    const next = nextBeliefs.get(key) || findBeliefMatchForPrior(prior, nextBeliefs);
     if (!next || !next.qualification || next.qualification.status !== QUALIFICATION_STATUSES.QUALIFIED) {
-      lost.push({ candidateId: prior.candidateId, name: prior.identity && prior.identity.name });
+      if (!isRecognizedCandidateTransition(prior, next)) {
+        lost.push({ candidateId: prior.candidateId, name: prior.identity && prior.identity.name });
+      }
     }
   }
 
@@ -700,11 +893,13 @@ function checkBeliefRegressionIntegrity(input = {}) {
       message: `Belief regression: ${priorQualified} qualified candidates collapsed to ${nextQualified} without per-candidate contradictory evidence.`,
       priorQualified,
       nextQualified,
+      priorTotal,
+      nextTotal,
       lostCandidates: lost,
     };
   }
 
-  return { violation: false, message: null, priorQualified, nextQualified, lostCandidates: lost };
+  return { violation: false, message: null, priorQualified, nextQualified, priorTotal, nextTotal, lostCandidates: lost };
 }
 
 /**
@@ -765,7 +960,11 @@ module.exports = {
   hydrateCandidateBelief,
   mergeCandidateBeliefs,
   mergeEvidenceArrays,
+  enumerateCanonicalCandidateSources,
   collectCandidateBeliefsFromPayload,
+  countQualifiedBeliefs,
+  assertCandidateBeliefPersistence,
+  candidateBeliefPersistenceError,
   beliefsToPreservedCandidates,
   beliefToCompanyRow,
   applyBeliefToCompany,

@@ -20,6 +20,7 @@ const {
   collectCandidateBeliefsFromPayload,
   beliefsToPreservedCandidates,
   hydrateCandidateBelief,
+  countQualifiedBeliefs,
 } = require('./CandidateBeliefState');
 
 const INVESTIGATION_MODES = Object.freeze({
@@ -170,8 +171,35 @@ function getCandidateUniverseFromPayload(payload = {}) {
   if (Array.isArray(payload.candidateUniverse) && payload.candidateUniverse.length) {
     return payload.candidateUniverse;
   }
-  if (Array.isArray(payload.discoveryArtifact?.candidateUniverse)) {
+  if (Array.isArray(payload.discoveryArtifact?.candidateUniverse) && payload.discoveryArtifact.candidateUniverse.length) {
     return payload.discoveryArtifact.candidateUniverse;
+  }
+
+  const beliefs = collectCandidateBeliefsFromPayload(payload);
+  if (beliefs.size > 0) {
+    return beliefsToPreservedCandidates(beliefs).map((row) => ({
+      candidateId: row.candidateId || row.id,
+      candidate_id: row.candidate_id || row.id,
+      canonicalIdentity: row.canonicalIdentity || row.id,
+      name: row.name,
+      address: row.address || row.location,
+      location: row.location,
+      website: row.website,
+      placeId: row.placeId,
+      phone: row.phone,
+      qualification: row.qualification,
+      readiness: row.readiness,
+      evaluation: row.evaluation,
+      businessFit: row.businessFit,
+      evidenceRefs: row.evidenceRefs,
+      signals: row.signals,
+      observations: row.observations,
+      hypothesisState: row.hypothesisState,
+      investigationState: row.investigationState,
+      unknowns: row.unknowns,
+      dedupeStatus: 'primary',
+      _preservedFromContinuation: true,
+    }));
   }
   return [];
 }
@@ -365,6 +393,7 @@ function extractInvestigationCandidatesFromPayload(payload = {}) {
   }
 
   for (const row of payload.rankedProspects || []) addCandidate(row, 'rankedProspects');
+  for (const row of payload.discoveryArtifact?.rankedProspects || []) addCandidate(row, 'rankedProspects');
   for (const row of getQualifiedProspectsFromPayload(payload)) addCandidate(row, 'qualifiedProspects');
   for (const row of getFitCandidatesFromPayload(payload)) {
     if (
@@ -459,16 +488,17 @@ function shouldExpandUniverse(priorPayload = {}, opts = {}) {
   if (priorPayload.blocked === true) return true;
   if (/REQUEST_DENIED|provider failure|blocked/i.test(String(priorPayload.summary || ''))) return true;
 
+  const hydratedBeliefs = collectCandidateBeliefsFromPayload(priorPayload);
   const universeFromRecords = countPrimaryCandidateUniverse(priorPayload);
-  const universeCount =
-    universeFromRecords ||
-    Number(priorPayload.candidateUniverseCount || 0) ||
-    Number(priorPayload.companies && priorPayload.companies.length) ||
-    0;
-  const qualifiedCount = Number(priorPayload.qualifiedCount || 0);
+  const universeCount = universeFromRecords || hydratedBeliefs.size || 0;
+  const qualifiedCount =
+    countQualifiedBeliefs(hydratedBeliefs) ||
+    Number(priorPayload.qualifiedCount || 0);
   const rankedCount = Array.isArray(priorPayload.rankedProspects)
     ? priorPayload.rankedProspects.length
-    : 0;
+    : Array.isArray(priorPayload.discoveryArtifact?.rankedProspects)
+      ? priorPayload.discoveryArtifact.rankedProspects.length
+      : 0;
   const investigableCount = extractInvestigationCandidatesFromPayload(priorPayload).length;
 
   if (universeCount === 0 && qualifiedCount === 0 && rankedCount === 0 && investigableCount === 0) {
