@@ -704,6 +704,22 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_decision_resolution');
     return resolution.executionAction;
   }
+
+  const missionContinuation =
+    operatorIntent &&
+    operatorIntent.conversationIntent &&
+    operatorIntent.conversationIntent.missionContinuation;
+  if (
+    operatorIntent &&
+    operatorIntent.conversationIntent &&
+    operatorIntent.conversationIntent.via === 'mission_continuation' &&
+    missionContinuation &&
+    missionContinuation.action
+  ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'mission_continuation');
+    return missionContinuation.action;
+  }
+
   const q = String(question || '').trim();
   const lower = q.toLowerCase();
   const planningTurn = operatorIntent

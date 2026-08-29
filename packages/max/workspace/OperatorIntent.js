@@ -22,6 +22,10 @@ const {
 const { resolveMissionLifecycleIntent } = require('./MissionLifecycleIntent');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
 const {
+  resolveTenantId,
+  resolveAcquisitionMissionRuntime,
+} = require('./WorkspaceMissionInspection');
+const {
   evaluateMissionContinuation,
   evaluateMissionEscape,
   CONTINUATION_THRESHOLD,
@@ -78,6 +82,8 @@ function deriveExecutionRequested(conversationIntent) {
   if (!conversationIntent) return false;
   if (conversationIntent.continuity) return false;
   if (conversationIntent.via === 'conversational_continue') return false;
+  if (conversationIntent.via === 'mission_continuation_ambiguous') return false;
+  if (conversationIntent.via === 'mission_continuation') return true;
   return (
     conversationIntent.intent === THINKING_MODES.EXECUTE ||
     conversationIntent.intent === THINKING_MODES.EDIT ||
@@ -327,6 +333,20 @@ async function analyzeOperatorIntent(input = {}) {
     }
   }
 
+  let snapshot = input.snapshot || null;
+  if (!snapshot && mission) {
+    try {
+      const runtime = resolveAcquisitionMissionRuntime(input);
+      const engine = runtime && typeof runtime.engine === 'function' ? runtime.engine() : null;
+      const tenantId = resolveTenantId({ session, context });
+      if (engine && tenantId && mission.id) {
+        snapshot = engine.inspect(mission.id, { tenantId });
+      }
+    } catch (_) {
+      snapshot = null;
+    }
+  }
+
   let conversationSubject = detectConversationSubject(question, null, session);
 
   const pendingDecisionResolution = mission
@@ -346,6 +366,8 @@ async function analyzeOperatorIntent(input = {}) {
         session,
         context,
         mission,
+        snapshot,
+        contributions: snapshot && snapshot.contributions,
       })
     );
   }
