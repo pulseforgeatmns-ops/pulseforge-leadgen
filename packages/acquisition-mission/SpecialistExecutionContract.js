@@ -21,6 +21,7 @@ const {
   emmettInput,
 } = require('./SpecialistInputs');
 const { buildSharedContext } = require('./Context');
+const { buildMemoryContextWithPriorLearning } = require('./OutcomeLearningRetrieval');
 
 const EXECUTION_STATUSES = Object.freeze({
   SUCCESS: 'SUCCESS',
@@ -308,9 +309,7 @@ function buildExecutionInput(input = {}) {
       || (plan && (plan.evidence || plan.evidencePolicy))
       || {}
     ),
-    memoryContext: clone(input.memoryContext || {
-      observations: input.observations || [],
-    }),
+    memoryContext: buildMemoryContextWithPriorLearning(input, mission, specialist),
     operatorPreferences: clone(input.operatorPreferences || {}),
     specialistInput: specialistInputFor(specialist, mission, input),
     structuredOnly: true,

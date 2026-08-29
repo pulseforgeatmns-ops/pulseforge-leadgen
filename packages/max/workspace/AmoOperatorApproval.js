@@ -1619,6 +1619,7 @@ async function runPaigeForAmoMission(mission, opts = {}) {
     specialist: SPECIALISTS.PAIGE,
     transactionId: opts.transactionId,
     executionContext: opts.executionContext,
+    store: opts.engine?.store,
   });
   if (opts.allowFixtureFallback === false && !findMaxPrioritization(contributions)) {
     throw validationError('tme_max_prioritization_missing', 'Max prioritization is required before Paige execution.');
@@ -1956,6 +1957,7 @@ async function advancePaigeVariants(input = {}) {
         contributions,
         specialist: SPECIALISTS.PAIGE,
         transactionId,
+        store: engine?.store,
         run: async () => ({
           spec: 'SPEC-132',
           status: EXECUTION_STATUSES.SUCCESS,
@@ -2066,6 +2068,7 @@ async function advanceEmmettCapacity(input = {}) {
         contributions,
         specialist: SPECIALISTS.EMMETT,
         transactionId,
+        store: engine?.store,
         run: async () => buildEmmettExecutionResult(capacityPayload, executionInput, { assessed }),
       });
 
