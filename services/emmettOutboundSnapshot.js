@@ -29,6 +29,59 @@ async function querySafe(pool, sql, params, fallback) {
   }
 }
 
+/** Event types that prove a send was launched/accepted (Brevo request/sent/delivered). */
+const FIRST_SEND_EVENT_TYPES = ['sent', 'delivered'];
+
+/**
+ * Resolve inbox age from durable operational evidence — independent of reputation windows.
+ * Precedence: first_send → warmup_start_date → created_at → safe default.
+ */
+function resolveInboxAge({ firstSentAt, warmupStartDate, createdAt, now, fallbackAgeDays = 0 }) {
+  if (firstSentAt) {
+    return {
+      inboxAgeDays: Math.round(daysBetween(firstSentAt, now)),
+      inboxAgeSource: 'first_send',
+      inboxAgeAnchor: firstSentAt,
+    };
+  }
+  if (warmupStartDate) {
+    return {
+      inboxAgeDays: Math.round(daysBetween(warmupStartDate, now)),
+      inboxAgeSource: 'warmup_start_date',
+      inboxAgeAnchor: warmupStartDate,
+    };
+  }
+  if (createdAt) {
+    return {
+      inboxAgeDays: Math.round(daysBetween(createdAt, now)),
+      inboxAgeSource: 'created_at',
+      inboxAgeAnchor: createdAt,
+    };
+  }
+  return {
+    inboxAgeDays: Math.max(0, Number(fallbackAgeDays || 0)),
+    inboxAgeSource: 'default',
+    inboxAgeAnchor: null,
+  };
+}
+
+/**
+ * All-time first operational send for a tenant-scoped sending identity.
+ * Scoped to client_id today; opts.inboxId reserved for future multi-inbox narrowing.
+ */
+async function queryFirstOperationalSendAt(pool, clientId, _opts = {}) {
+  const res = await querySafe(
+    pool,
+    `SELECT MIN(event_at) AS first_sent_at
+       FROM email_events
+      WHERE client_id = $1
+        AND event_type = ANY($2::text[])`,
+    [clientId, FIRST_SEND_EVENT_TYPES],
+    { rows: [{ first_sent_at: null }] }
+  );
+  return res.rows[0]?.first_sent_at || null;
+}
+
 async function buildInboxSnapshot(clientId, opts = {}) {
   const pool = opts.pool;
   const now = opts.now instanceof Date ? opts.now : new Date(opts.now || Date.now());
@@ -52,15 +105,18 @@ async function buildInboxSnapshot(clientId, opts = {}) {
         COUNT(*) FILTER (WHERE event_type IN ('hard_bounce','soft_bounce','blocked'))::int AS bounces,
         COUNT(*) FILTER (WHERE event_type IN ('opened','open'))::int AS opens,
         COUNT(*) FILTER (WHERE event_type IN ('replied','reply'))::int AS replies,
-        COUNT(*) FILTER (WHERE event_type IN ('spam','complaint'))::int AS complaints,
-        MIN(event_at) FILTER (WHERE event_type IN ('sent','delivered')) AS first_sent_at
+        COUNT(*) FILTER (WHERE event_type IN ('spam','complaint'))::int AS complaints
       FROM email_events
       WHERE client_id = $1
         AND event_at >= NOW() - INTERVAL '7 days'`,
     [clientId],
-    { rows: [{ sends: 0, bounces: 0, opens: 0, replies: 0, complaints: 0, first_sent_at: null }] }
+    { rows: [{ sends: 0, bounces: 0, opens: 0, replies: 0, complaints: 0 }] }
   );
   const stats = events.rows[0] || {};
+
+  const firstSentAt = await queryFirstOperationalSendAt(pool, clientId, {
+    inboxId: opts.inboxId || null,
+  });
 
   const todayRes = await querySafe(
     pool,
@@ -120,8 +176,13 @@ async function buildInboxSnapshot(clientId, opts = {}) {
     warmupStatus = 'healthy';
   }
 
-  const firstSent = stats.first_sent_at || client.warmup_start_date || client.created_at;
-  const inboxAgeDays = Math.round(daysBetween(firstSent, now) || Number(opts.inboxAgeDays || 0));
+  const { inboxAgeDays, inboxAgeSource, inboxAgeAnchor } = resolveInboxAge({
+    firstSentAt,
+    warmupStartDate: client.warmup_start_date,
+    createdAt: client.created_at,
+    now,
+    fallbackAgeDays: opts.inboxAgeDays,
+  });
 
   const auth = opts.authentication || {
     spf: Boolean(client.sending_domain),
@@ -138,6 +199,8 @@ async function buildInboxSnapshot(clientId, opts = {}) {
     localDate,
     timeZone,
     inboxAgeDays,
+    inboxAgeSource,
+    inboxAgeAnchor,
     providerCeiling: Number(opts.providerCeiling || 50),
     authentication: auth,
     warmup: {
@@ -202,4 +265,7 @@ async function loadQueueProspects(clientId, pool, limit = 80) {
 module.exports = {
   buildInboxSnapshot,
   loadQueueProspects,
+  resolveInboxAge,
+  queryFirstOperationalSendAt,
+  FIRST_SEND_EVENT_TYPES,
 };
