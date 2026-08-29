@@ -21,6 +21,10 @@ const {
   buildRuntimeDependencies,
 } = require('../../acquisition-mission/MissionExecutionContext');
 const { maxInput } = require('../../acquisition-mission/SpecialistInputs');
+const {
+  evaluateMaxPriorLearningInfluence,
+  applyMaxPriorLearningAdjustments,
+} = require('./MaxPriorLearningInfluence');
 
 function asText(value) {
   if (value == null) return '';
@@ -172,8 +176,29 @@ async function runMaxPrioritization(executionInput = {}) {
   const mission = executionInput.mission
     || (executionInput.executionContext && executionInput.executionContext.mission)
     || null;
-  const prioritizationPayload = buildPrioritizationPayload(mission, discovery, plan);
+  const priorLearning = executionInput.memoryContext?.priorLearning || [];
+  let prioritizationPayload = buildPrioritizationPayload(mission, discovery, plan);
+
+  const priorLearningEvaluation = evaluateMaxPriorLearningInfluence({
+    priorLearning,
+    discovery,
+    plan,
+    mission,
+  });
+  prioritizationPayload = applyMaxPriorLearningAdjustments(
+    prioritizationPayload,
+    priorLearningEvaluation
+  );
+
+  const learningInfluence = priorLearningEvaluation.learningInfluence || [];
   const evidence = (discovery.evidence || discovery.evidenceRefs || []).slice(0, 12);
+  const unknowns = [];
+  if (executionInput.memoryContext?.priorLearningRetrievalWarning) {
+    unknowns.push({
+      unknown: 'Prior OutcomeLearning retrieval',
+      reason: executionInput.memoryContext.priorLearningRetrievalWarning,
+    });
+  }
 
   return createExecutionResult({
     specialist: SPECIALISTS.MAX,
@@ -186,8 +211,9 @@ async function runMaxPrioritization(executionInput = {}) {
       tier: 'required',
       text,
     })),
-    unknowns: [],
+    unknowns,
     nextActions: [{ kind: 'advance_stage', label: 'Advance toward Plan and Prepare.' }],
+    learningInfluence,
   });
 }
 
