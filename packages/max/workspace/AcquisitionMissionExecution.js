@@ -214,7 +214,11 @@ function buildExecutionMissionResponse({
 
   if (executionResult && executionResult.rolledBack) {
     const err = executionResult.error || {};
-    const stageName = action === 'plan_approved' ? 'Mission plan' : 'Discovery';
+    const stageName = action === 'plan_approved'
+      ? 'Mission plan'
+      : action === 'prioritization_approved'
+        ? 'Prioritization'
+        : 'Discovery';
     const providerDiagnostics =
       (err.details && Array.isArray(err.details.providerExecution) && err.details.providerExecution.length)
         ? formatProviderExecutionProse(err.details.providerExecution)
@@ -231,7 +235,11 @@ function buildExecutionMissionResponse({
       progress,
       waitingOn: 'Resolve the blocker',
       nextStep: 'Resolve the blocker and retry.',
-      operatorDecision: action === 'plan_approved' ? 'Approve mission plan?' : 'Approve discovery?',
+      operatorDecision: action === 'plan_approved'
+        ? 'Approve mission plan?'
+        : action === 'prioritization_approved'
+          ? 'Approve prioritization?'
+          : 'Approve discovery?',
       evidenceStatus,
       sources: ['acquisition_mission', 'tme'],
       includeReasoningMarker: false,

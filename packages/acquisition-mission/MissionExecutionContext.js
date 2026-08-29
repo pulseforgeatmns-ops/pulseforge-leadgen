@@ -28,18 +28,35 @@ function shouldSuppressSpecialistSideEffects(executionContext) {
 }
 
 /**
- * Build the abstract execution contract for specialist runs.
+ * Runtime handles travel separately from serializable mission execution context.
+ * Never clone, persist, or expose these as canonical mission data.
+ *
+ * @param {object} input
+ * @param {import('./Engine').AcquisitionMissionEngine} [input.engine]
+ * @param {object} [input.pool]
+ * @returns {{ pool: object|null, engine: object|null }}
+ */
+function buildRuntimeDependencies(input = {}) {
+  return {
+    pool: input.pool || null,
+    engine: input.engine || null,
+  };
+}
+
+/**
+ * Build the serializable execution contract for specialist runs.
+ * Runtime dependencies (pool, engine) must be passed separately via buildRuntimeDependencies.
  *
  * @param {object} input
  * @param {import('./Engine').AcquisitionMissionEngine} [input.engine]
  * @param {object} input.mission
  * @param {string|number} [input.tenantId]
  * @param {string} [input.transactionId]
- * @param {object} [input.pool]
+ * @param {object} [input.pool] — used only to resolve snapshot via engine; not stored on context
  * @returns {object}
  */
 function buildMissionExecutionContext(input = {}) {
-  const { engine, mission, tenantId, transactionId, pool } = input;
+  const { engine, mission, tenantId, transactionId } = input;
   if (!mission) {
     throw new Error('buildMissionExecutionContext requires mission');
   }
@@ -66,8 +83,6 @@ function buildMissionExecutionContext(input = {}) {
     persistence: {
       runtime: 'amo',
       suppressSideEffects: true,
-      engine: engine || null,
-      pool: pool || null,
     },
   };
 }
@@ -75,6 +90,7 @@ function buildMissionExecutionContext(input = {}) {
 module.exports = {
   RUNTIME_KINDS,
   buildMissionExecutionContext,
+  buildRuntimeDependencies,
   isNativeAmoExecution,
   shouldSuppressSpecialistSideEffects,
 };
