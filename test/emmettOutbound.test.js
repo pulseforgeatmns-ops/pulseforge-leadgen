@@ -115,6 +115,14 @@ describe('SPEC-117 service + send gate', () => {
     assert.ok(result.learning.some((row) => row.sink === 'emmett'));
     assert.ok(result.learning.every((row) => row.autoApplied === false));
   });
+  it('does not ensure emmett_inbox_snapshots in outbound persistence schema', () => {
+    const source = fs.readFileSync(path.join(__dirname, '../services/emmettOutboundPersistence.js'), 'utf8');
+    assert.doesNotMatch(source, /emmett_inbox_snapshots/);
+    assert.match(source, /emmett_send_plans/);
+    assert.match(source, /emmett_governor_acks/);
+    assert.match(source, /emmett_outbound_outcomes/);
+    assert.match(source, /emmett_outbound_learning/);
+  });
 });
 
 describe('SPEC-117 routes and send-path wiring', () => {
