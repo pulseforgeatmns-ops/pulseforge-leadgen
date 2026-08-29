@@ -547,6 +547,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     cognitiveTrace: artifact.cognitiveTrace || null,
     explainabilityGraph: artifact.explainabilityGraph || null,
     providerExecution,
+    candidateInvestigation: payload.candidateInvestigation || null,
   };
 
   if (containsForbiddenReasoningKeys(contribution)) {

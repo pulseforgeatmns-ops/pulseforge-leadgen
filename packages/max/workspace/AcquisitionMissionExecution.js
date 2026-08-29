@@ -65,6 +65,10 @@ const { isStructuredMissionApproved } = require('../../acquisition-mission/Struc
 const {
   presentationFromDiscoveryPayload,
 } = require('../../acquisition-mission/DiscoveryPresentation');
+const {
+  resolveInvestigationContinuationPayloads,
+  presentationFromInvestigationContinuation,
+} = require('../../acquisition-mission/InvestigationContinuationPresentation');
 const { formatProviderExecutionProse } = require('../../scout/coverage/ProviderExecution');
 const {
   hasSufficientEvidenceForPrioritization,
@@ -511,6 +515,68 @@ function buildExecutionMissionResponse({
           }),
         ],
         confidenceContributors: ['spec_141', 'acquisition_mission'],
+        timelineReferences: [],
+        relatedEntities: [
+          { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
+        ],
+        metadata: buildExecutionMetadata(mission, action, executionResult),
+      }),
+      comm
+    );
+    return { structured, prose, comm, action };
+  }
+
+  if (executionResult && action === 'discovery_investigation_continued') {
+    const { priorPayload, currentPayload } = resolveInvestigationContinuationPayloads({
+      snapshot,
+      executionResult,
+    });
+    const investigationResults = presentationFromInvestigationContinuation({
+      priorPayload,
+      currentPayload,
+      mission,
+      executionResult,
+    });
+    const blocked = executionResult.executionOutcome === 'blocked';
+    const pending = mission.pendingOperatorDecision || {};
+    const comm = buildMissionCommunication({
+      headline: 'Investigation Continued',
+      mission: mission.title || mission.id,
+      objective: mission.objective,
+      status: blocked ? 'Investigation Blocked' : 'Investigation Updated',
+      stage: 'Discovery',
+      progress,
+      health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
+      waitingOn: pending.waitingOn || pending.blocker || null,
+      nextStep: null,
+      operatorDecision: investigationResults.operatorDecision,
+      investigationContinuationResults: investigationResults,
+      evidenceStatus: 'Committed Scout investigation delta',
+      sources: ['acquisition_mission', 'scout'],
+      includeReasoningMarker: false,
+    });
+    const prose = formatMissionProse(comm);
+    const structured = applyMissionCommunication(
+      buildStructuredResponse({
+        answer: prose,
+        reasoning: [],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence:
+          investigationResults.confidenceAfter != null
+            ? investigationResults.confidenceAfter
+            : mission.confidence != null
+              ? mission.confidence
+              : 0.84,
+        nextInvestigations: [],
+        recommendedActions: [
+          buildOpenMissionAction({
+            missionId: mission.id,
+            runtime: mission.runtime || MISSION_RUNTIMES.AMO,
+            label: 'Open mission workspace',
+          }),
+        ],
+        confidenceContributors: ['spec_203', 'acquisition_mission'],
         timelineReferences: [],
         relatedEntities: [
           { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },

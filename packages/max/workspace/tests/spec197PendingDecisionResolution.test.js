@@ -411,8 +411,8 @@ describe('SPEC-197 — Pending Decision Conversational Resolution', () => {
       assert.equal(operatorIntent.executionRequested, true);
       assert.equal(result.workspaceOwnership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
       assert.equal(result.workspaceOwnership.missionRuntime, MISSION_RUNTIMES.AMO);
-      assert.match(result.prose, /Mission Updated/i);
-      assert.doesNotMatch(result.prose, /today'?s briefing/i);
+      assert.match(result.prose, /Investigation Continued/i);
+      assert.doesNotMatch(result.prose, /Continue in mission workspace/i);
       assert.doesNotMatch(result.prose, /I can investigate today'?s briefing/i);
       assert.equal(
         result.resolution.reason,

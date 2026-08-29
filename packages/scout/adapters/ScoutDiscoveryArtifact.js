@@ -505,6 +505,7 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
     candidateUniverse: Array.isArray(payload.candidateUniverse) ? payload.candidateUniverse : [],
     estimatedMarket: payload.universeEstimate || payload.discoveryReport?.estimatedMarket || null,
     providerExecution: payload.providerExecution || payload.providerReports || null,
+    candidateInvestigation: payload.candidateInvestigation || null,
     marketCoveragePct:
       payload.coveragePct != null
         ? payload.coveragePct
