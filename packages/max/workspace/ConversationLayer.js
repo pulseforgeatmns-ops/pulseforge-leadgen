@@ -215,6 +215,19 @@ function composeInspectLead(facts) {
   return `We're in ${facts.stageLabel}${facts.objective ? `, working toward: ${facts.objective}` : ''}.`;
 }
 
+function composeContinuationAmbiguityLead(facts, ambiguity = {}) {
+  const options = Array.isArray(ambiguity.options) && ambiguity.options.length
+    ? ambiguity.options
+    : (Array.isArray(ambiguity.eligible) ? ambiguity.eligible.map((row) => row.label) : []);
+  if (options.length) {
+    return `I can continue this mission, but more than one branch is available. Which should I take?\n\n${options.map((row) => `• ${row}`).join('\n')}`;
+  }
+  if (ambiguity.pause && ambiguity.pause.requiredDecision) {
+    return `Continue needs your judgment on this mission — ${ambiguity.pause.requiredDecision}`;
+  }
+  return composeInspectLead(facts);
+}
+
 function composeChallengeLead(facts, reasoning) {
   const reflection = composeSelfReflection(facts, THINKING_MODES.CHALLENGE);
   if (reflection) return reflection;
@@ -298,7 +311,13 @@ function composeConversationalResponse(input = {}) {
   });
 
   const preface = repetitionPreface(memory, topicKey);
-  const lead = composeLead(intent, facts, reasoning, question);
+  const lead =
+    conversationIntent.via === 'mission_continuation_ambiguous'
+      ? composeContinuationAmbiguityLead(
+        facts,
+        conversationIntent.missionContinuationAmbiguity || {}
+      )
+      : composeLead(intent, facts, reasoning, question);
   const expansion = composeExpansion(intent, facts, reasoning, explicitReasoning);
 
   const paragraphs = [];

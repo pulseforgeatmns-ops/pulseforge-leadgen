@@ -24,6 +24,7 @@ const {
   hasPendingPrioritizationApproval,
   hasPendingExecutionApproval,
   hasDiscoveryArtifact,
+  hasConsumablePendingDecision,
 } = require('./PendingOperatorDecision');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const {
@@ -791,6 +792,97 @@ function isAutonomousProgressionCommand(text) {
   );
 }
 
+const { EXECUTION_INTENTS, actionFromIntent } = require('./ExecutionRequest');
+
+const CANONICAL_PROGRESSION_CHECKS = Object.freeze([
+  {
+    check: canAutoAdvanceUnderstanding,
+    intent: EXECUTION_INTENTS.APPROVE_PLAN,
+    label: 'Approve mission plan',
+  },
+  {
+    check: canAutoAdvanceDiscovery,
+    intent: EXECUTION_INTENTS.APPROVE_DISCOVERY,
+    label: 'Begin Scout investigation',
+  },
+  {
+    check: canAutoAdvanceMaxPrioritization,
+    intent: EXECUTION_INTENTS.MISSION_CONTINUATION,
+    label: 'Run Max prioritization',
+  },
+  {
+    check: canAutoAdvanceOutreachToPaige,
+    intent: EXECUTION_INTENTS.GENERATE_VARIANTS,
+    label: 'Generate outreach variants',
+  },
+  {
+    check: canAutoAdvanceOutreachToEmmett,
+    intent: EXECUTION_INTENTS.GENERATE_CAPACITY,
+    label: 'Plan outbound capacity',
+  },
+]);
+
+/**
+ * SPEC-208 — eligible canonical next actions from mission graph predicates.
+ * @param {object} snapshot
+ * @returns {Array<{ intent: string, action: string|null, label: string }>}
+ */
+function resolveEligibleCanonicalProgressions(snapshot = {}) {
+  const eligible = [];
+  for (const row of CANONICAL_PROGRESSION_CHECKS) {
+    if (row.check(snapshot)) {
+      eligible.push({
+        intent: row.intent,
+        action: actionFromIntent(row.intent),
+        label: row.label,
+      });
+    }
+  }
+  return eligible;
+}
+
+/**
+ * SPEC-208 — resolve bare "continue" against active mission executable state.
+ * @param {object} snapshot
+ * @returns {{
+ *   kind: 'no_mission'|'pending_decision'|'execute'|'ambiguous'|'inspect',
+ *   progression?: { intent: string, action: string|null, label: string },
+ *   eligible?: Array<{ intent: string, action: string|null, label: string }>,
+ *   pause?: object|null,
+ *   options?: string[],
+ * }}
+ */
+function resolveMissionContinuation(snapshot = {}) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission) {
+    return { kind: 'no_mission' };
+  }
+
+  if (mission.pendingOperatorDecision || hasConsumablePendingDecision(snapshot)) {
+    return { kind: 'pending_decision' };
+  }
+
+  const eligible = resolveEligibleCanonicalProgressions(snapshot);
+  if (eligible.length === 1) {
+    return { kind: 'execute', progression: eligible[0] };
+  }
+  if (eligible.length > 1) {
+    return { kind: 'ambiguous', eligible };
+  }
+
+  const pause = deriveMissionPause(snapshot);
+  if (pause && Array.isArray(pause.availableOptions) && pause.availableOptions.length > 1) {
+    return {
+      kind: 'ambiguous',
+      eligible: [],
+      pause,
+      options: pause.availableOptions,
+    };
+  }
+
+  return { kind: 'inspect' };
+}
+
 module.exports = {
   PROGRESSION_STAGES,
   PROGRESSION_STAGE_LABELS,
@@ -814,4 +906,7 @@ module.exports = {
   formatMissionProgressPresentation,
   runAutonomousProgression,
   isAutonomousProgressionCommand,
+  resolveEligibleCanonicalProgressions,
+  resolveMissionContinuation,
+  CANONICAL_PROGRESSION_CHECKS,
 };

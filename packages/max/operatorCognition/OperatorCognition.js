@@ -16,6 +16,7 @@ const {
   splitClauses,
   isVerbNegatedInClause,
 } = require('../workspace/MissionLifecycleIntent');
+const { resolveMissionContinuation } = require('../../acquisition-mission/MissionProgression');
 
 const SPECIALIST_NAMES = 'scout|paige|emmett|max|riley|sam|link|faye|ivy|cal';
 
@@ -145,7 +146,25 @@ function buildConversationIntent(mode, via, confidence, extras = {}) {
     thinkingMode: thinkingModeCategory(mode),
     via,
     specialists: extras.specialists || null,
+    missionContinuation: extras.missionContinuation || null,
+    missionContinuationAmbiguity: extras.missionContinuationAmbiguity || null,
   };
+}
+
+function isBareContinuationUtterance(text) {
+  const q = String(text || '').replace(/\s+/g, ' ').trim();
+  return (
+    /\bcontinue\b/i.test(q) &&
+    !/\b(?:approved?|discovery|campaign|send|launch|execute|proceed|prioritization)\b/i.test(q)
+  );
+}
+
+function resolveSnapshotFromInput(input = {}) {
+  if (input.snapshot) return input.snapshot;
+  if (input.mission && input.contributions) {
+    return { mission: input.mission, contributions: input.contributions };
+  }
+  return null;
 }
 
 /**
@@ -175,10 +194,27 @@ function classifyOperatorCognition(question, input = {}) {
   }
 
   if (isMissionExecutionCommand(q)) {
-    if (
-      /\bcontinue\b/i.test(q) &&
-      !/\b(?:approved?|discovery|campaign|send|launch|execute|proceed|prioritization)\b/i.test(q)
-    ) {
+    if (isBareContinuationUtterance(q)) {
+      const snapshot = resolveSnapshotFromInput(input);
+      if (snapshot && input.mission) {
+        const continuation = resolveMissionContinuation(snapshot);
+        if (continuation.kind === 'execute' && continuation.progression) {
+          return buildConversationIntent(
+            THINKING_MODES.EXECUTE,
+            'mission_continuation',
+            0.94,
+            { missionContinuation: continuation.progression }
+          );
+        }
+        if (continuation.kind === 'ambiguous') {
+          return buildConversationIntent(
+            THINKING_MODES.INSPECT,
+            'mission_continuation_ambiguous',
+            0.88,
+            { missionContinuationAmbiguity: continuation }
+          );
+        }
+      }
       return buildConversationIntent(THINKING_MODES.INSPECT, 'conversational_continue', 0.86);
     }
     return buildConversationIntent(THINKING_MODES.EXECUTE, 'execution_command', 0.97);
