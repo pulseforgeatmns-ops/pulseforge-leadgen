@@ -12,6 +12,9 @@ const {
 const {
   formatInvestigationContinuationLines,
 } = require('../../acquisition-mission/InvestigationContinuationPresentation');
+const {
+  formatPrioritizationResultsLines,
+} = require('../../acquisition-mission/PrioritizationPresentation');
 
 const REASONING_MARKER = '▼ Show reasoning';
 const REASONING_EXPANDED_MARKER = '▲ Hide reasoning';
@@ -113,6 +116,7 @@ function buildMissionCommunication(input = {}) {
     includeReasoningMarker: input.includeReasoningMarker !== false,
     discoveryResults: input.discoveryResults || null,
     investigationContinuationResults: input.investigationContinuationResults || null,
+    prioritizationResults: input.prioritizationResults || null,
   };
 }
 
@@ -209,6 +213,11 @@ function formatMissionProse(comm, opts = {}) {
     );
     if (continuationLines.length) {
       lines.push(...continuationLines);
+    }
+  } else if (comm.prioritizationResults) {
+    const prioritizationLines = formatPrioritizationResultsLines(comm.prioritizationResults);
+    if (prioritizationLines.length) {
+      lines.push(...prioritizationLines);
     }
   } else if (comm.discoveryResults) {
     const discoveryLines = formatDiscoveryResultsLines(comm.discoveryResults);

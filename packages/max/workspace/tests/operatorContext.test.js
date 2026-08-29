@@ -125,6 +125,32 @@ describe('SPEC-104 operator context service', () => {
     assert.ok(doc.sources.blueprintApproved);
   });
 
+  it('AMO stage labels count as active missions in session brief projection', async () => {
+    await seedAnchorBlueprint(cieStore);
+
+    const doc = await assembleOperatorContext({
+      tenantId: String(CLIENT_ID),
+      clientId: CLIENT_ID,
+      ...baseOpts({
+        listMissions: async () => [
+          {
+            id: 'amo_mission_1',
+            title: 'Manchester Law Firms',
+            status: 'Understanding',
+            objectiveText: 'Acquire commercial cleaning customers in Manchester NH.',
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    });
+
+    assert.equal(doc.activeMissions.length, 1);
+    assert.equal(doc.activeMissions[0].status, 'Understanding');
+
+    const brief = generateSessionBrief({ context: doc });
+    assert.match(brief.fullText, /Active mission: Manchester Law Firms \(Understanding\)/);
+  });
+
   it('persists and versions operator context on rebuild', async () => {
     await seedAnchorBlueprint(cieStore);
 
