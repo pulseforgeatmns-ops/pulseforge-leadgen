@@ -47,7 +47,9 @@ const PREREQUISITES = Object.freeze({
       ? null
       : 'Meaningful business outcomes are required before Learn.',
   [STAGES.IMPROVE]: (ctx) =>
-    ctx.hasLearning ? null : 'Learning records are required before Improve.',
+    ctx.hasMeaningfulLearning
+      ? null
+      : 'Meaningful learning records are required before Improve.',
 });
 
 function stageIndex(stage) {
@@ -92,7 +94,8 @@ function specialistContext(contributions = [], extras = {}) {
     queuedOrLaunched: extras.queuedOrLaunched === true,
     hasOutcomes: extras.hasOutcomes === true,
     hasMeaningfulBusinessOutcome: extras.hasMeaningfulBusinessOutcome === true,
-    hasLearning: extras.hasLearning === true,
+    hasLearning: extras.hasMeaningfulLearning === true || extras.hasLearning === true,
+    hasMeaningfulLearning: extras.hasMeaningfulLearning === true,
     prospectCount,
   };
 }

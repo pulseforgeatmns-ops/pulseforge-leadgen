@@ -80,6 +80,7 @@ const {
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const { buildPostDiscoveryPendingDecision } = require('./DecisionReadiness');
 const { buildExecutionReview, isExecutionApproved } = require('./ExecutionApproval');
+const { hasMeaningfulLearning, learningEligibilityFromStore } = require('./MeaningfulLearning');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -110,7 +111,7 @@ function extrasFrom(store, mission) {
   const contributions = store.listContributions(mission.id);
   const outcomes = store.listOutcomes(mission.id);
   const events = store.listEvents(mission.id);
-  const learning = store.listLearning(mission.tenantId).filter((row) => !row.missionId || row.missionId === mission.id);
+  const meaningfulLearning = hasMeaningfulLearning(store, mission);
   const emmett = [...contributions].reverse().find((row) => row.specialist === SPECIALISTS.EMMETT);
   const capacity = emmett && emmett.payload && emmett.payload.capacity;
   const warmup = emmett && emmett.payload && (emmett.payload.warmup || emmett.payload.deliverability);
@@ -128,7 +129,8 @@ function extrasFrom(store, mission) {
     queuedOrLaunched: queued,
     hasOutcomes: outcomes.length > 0,
     hasMeaningfulBusinessOutcome: hasMeaningfulBusinessOutcome(outcomes),
-    hasLearning: learning.length > 0,
+    hasMeaningfulLearning: meaningfulLearning,
+    hasLearning: meaningfulLearning,
     replies,
     meetings,
     capacityRemaining: capacity && (capacity.remaining != null ? capacity.remaining : capacity.recommended),
@@ -363,6 +365,32 @@ function createAcquisitionMissionEngine(opts = {}) {
     return { progressed: true, mission: updated };
   }
 
+  function tryAutoAdvanceToImprove(missionId, improveOpts = {}) {
+    const mission = get(missionId, improveOpts.tenantId);
+    if (!mission || mission.stage !== STAGES.LEARN) {
+      return { progressed: false };
+    }
+    const extra = extrasFrom(store, mission);
+    if (!extra.hasMeaningfulLearning) {
+      return { progressed: false };
+    }
+    const contributions = store.listContributions(mission.id);
+    const ctx = specialistContext(contributions, extra);
+    const gate = canEnter(STAGES.IMPROVE, { ...ctx, ...extra });
+    if (!gate.ok) {
+      return { progressed: false, reason: gate.reason };
+    }
+    const updated = progress(missionId, { role: SPECIALISTS.MAX }, {
+      stage: STAGES.IMPROVE,
+      tenantId: improveOpts.tenantId,
+    });
+    return { progressed: true, mission: updated };
+  }
+
+  function tryAutoAdvanceAfterLearning(missionId, opts = {}) {
+    return tryAutoAdvanceToImprove(missionId, opts);
+  }
+
   function setBlocker(missionId, input = {}, blockerOpts = {}) {
     const mission = requireMission(missionId, blockerOpts.tenantId);
     const blocker = createBlocker({ ...input, manual: true });
@@ -527,7 +555,8 @@ function createAcquisitionMissionEngine(opts = {}) {
       autoEvaluatePendingPredictions(mission, row, input);
     }
     const learnAdvance = tryAutoAdvanceToLearn(mission.id, outcomeOpts);
-    if (!learnAdvance.progressed) {
+    const improveAdvance = tryAutoAdvanceToImprove(mission.id, outcomeOpts);
+    if (!learnAdvance.progressed && !improveAdvance.progressed) {
       refresh(store, mission);
     }
     return row;
@@ -562,6 +591,7 @@ function createAcquisitionMissionEngine(opts = {}) {
         },
       }));
     }
+    tryAutoAdvanceToImprove(mission.id, { tenantId: mission.tenantId });
   }
 
   function captureMissionPrediction(missionId, input = {}, opts = {}) {
@@ -609,7 +639,10 @@ function createAcquisitionMissionEngine(opts = {}) {
         autoApplied: false,
       },
     }));
-    refresh(store, mission);
+    const improveAdvance = tryAutoAdvanceToImprove(mission.id, opts);
+    if (!improveAdvance.progressed) {
+      refresh(store, mission);
+    }
     return result;
   }
 
@@ -629,7 +662,10 @@ function createAcquisitionMissionEngine(opts = {}) {
         label: `Learning: ${row.segment}`,
         payload: { learningId: row.id, autoApplied: false },
       }));
-      refresh(store, mission);
+      const improveAdvance = tryAutoAdvanceToImprove(mission.id, learnOpts);
+      if (!improveAdvance.progressed) {
+        refresh(store, mission);
+      }
     }
     return row;
   }
@@ -687,6 +723,7 @@ function createAcquisitionMissionEngine(opts = {}) {
     return {
       spec: 'SPEC-118',
       mission,
+      lifecycleLearning: learningEligibilityFromStore(store, mission),
       workspaceContext,
       executableDecision: presentableOperatorDecision({ mission, contributions }),
       executionReview: mission.stage === STAGES.READY

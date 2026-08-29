@@ -58,6 +58,8 @@ const outboundExecution = require('./OutboundExecution');
 const communicationObservation = require('./CommunicationObservation');
 const observationInterpretation = require('./ObservationInterpretation');
 const learnProgression = require('./LearnProgression');
+const improveProgression = require('./ImproveProgression');
+const meaningfulLearning = require('./MeaningfulLearning');
 
 module.exports = {
   ...types,
@@ -119,4 +121,6 @@ module.exports = {
   ...communicationObservation,
   ...observationInterpretation,
   ...learnProgression,
+  ...improveProgression,
+  ...meaningfulLearning,
 };
