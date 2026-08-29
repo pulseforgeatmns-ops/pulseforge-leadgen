@@ -41,6 +41,10 @@ const {
   prioritizationPayloadFromMaxResult,
   buildPrioritizationPayload,
 } = require('./MaxPrioritizationExecutor');
+const {
+  runScoutForAmoMission: runScoutForAmoMissionSec,
+  mapScoutIntelligenceToDiscoveryPayload: mapScoutPayloadFromExecutor,
+} = require('./ScoutDiscoveryExecutor');
 const { createEvent } = require('../../acquisition-mission/Timeline');
 const {
   createMissionApprovalAudit,
@@ -470,16 +474,7 @@ function findScoutDiscoveryAfterApproval(contributions = [], approval) {
 
 
 function mapScoutIntelligenceToDiscoveryPayload(result = {}, opts = {}) {
-  const artifact = buildScoutDiscoveryArtifact(result, {
-    missionObjective: opts.missionObjective,
-    approvalConsumed: true,
-  });
-  const payload = normalizeScoutDiscoveryPayload(result, {
-    ...opts,
-    discoveryArtifact: artifact,
-  });
-  assertScoutEvidenceHandoff(artifact, payload);
-  return payload;
+  return mapScoutPayloadFromExecutor(result, opts);
 }
 
 function fixtureScoutDiscoveryResult() {
@@ -552,86 +547,10 @@ function fixtureScoutDiscoveryResult() {
 }
 
 async function runScoutForAmoMission(mission, opts = {}) {
-  if (typeof opts.runScout === 'function') {
-    return opts.runScout(mission, opts);
-  }
-
-  const delegation = buildDelegationFromAmoMission(mission);
-  const executionContext = buildMissionExecutionContext({
-    engine: opts.engine,
-    mission,
-    tenantId: delegation.tenantId,
-    transactionId: opts.transactionId,
-    pool: opts.pool,
-  });
-  if (opts.executionRequest) {
-    executionContext.executionRequest = opts.executionRequest;
-  }
-
-  let scoutOpts = {
+  return runScoutForAmoMissionSec(mission, {
     ...opts,
-    delegation,
-    executionContext,
-    mode: opts.scoutMode || 'completed',
-    missionId: mission.id,
-    amoMissionId: mission.id,
-    runtimeOwner: 'amo',
-    attachScoutDiscovery: false,
-    tenantId: delegation.tenantId,
-    companies: opts.scoutCompanies,
-    people: opts.scoutPeople,
-    discover: opts.discover,
-    enablePlaces: opts.enablePlaces,
-    allowFixtureFallback: opts.allowFixtureFallback,
-  };
-
-  if (opts.investigationContinuation === true && opts.engine) {
-    const snapshot = opts.engine.inspect(mission.id, { tenantId: delegation.tenantId });
-    const priorDiscovery = findLatestScoutDiscovery(snapshot.contributions || []);
-    const priorPayload = extractPayloadFromDiscoveryContribution(priorDiscovery || {});
-    const continuation = buildInvestigationContinuationContext({
-      priorPayload,
-      opts: {
-        ...opts,
-        investigationContinuation: true,
-        question: opts.question,
-      },
-    });
-    scoutOpts = {
-      ...scoutOpts,
-      investigationContinuation: true,
-      investigationMode: continuation.investigationMode,
-      priorDiscoveryPayload: continuation.priorDiscoveryPayload,
-      preservedCandidates: continuation.preservedCandidates,
-      entityInvestigationContinuation:
-        continuation.investigationMode === 'entity_continuation',
-    };
-  }
-
-  try {
-    const result = await Scout.discover({
-      mission,
-      // ADR-089 — AMO-owned missions never sync through Mission Engine.
-      missionEngine: null,
-      scoutPayload: {},
-      operatorId: opts.operatorId,
-      opts: scoutOpts,
-    });
-    const intelligenceResult = result.intelligenceResult || result;
-    const mapped = mapScoutIntelligenceToDiscoveryPayload(result, {
-      missionObjective: mission.objective,
-    });
-    if (
-      opts.allowFixtureFallback === true &&
-      (mapped.blocked || mapped.qualifiedCount <= 0)
-    ) {
-      return fixtureScoutDiscoveryResult();
-    }
-    return result;
-  } catch (err) {
-    if (opts.allowFixtureFallback === true) return fixtureScoutDiscoveryResult();
-    throw err;
-  }
+    fixtureScoutDiscoveryResult,
+  });
 }
 
 function discoveryPayloadFromScoutResult(scoutResult, mission) {
@@ -981,11 +900,16 @@ async function advanceDiscoveryAfterApproval(input = {}) {
           enablePlaces: inputEnablePlaces,
           placesProvider: inputPlacesProvider,
         });
-        const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
-        const executionResult = executionResultFromStageOutput(
-          { scoutResult, discoveryPayload },
-          { specialist: SPECIALISTS.SCOUT, transactionId }
-        );
+        const executionResult =
+          scoutResult.executionResult ||
+          executionResultFromStageOutput(
+            { scoutResult, discoveryPayload: discoveryPayloadFromScoutResult(scoutResult, current) },
+            { specialist: SPECIALISTS.SCOUT, transactionId }
+          );
+        const discoveryPayload =
+          executionResult.contributions && Object.keys(executionResult.contributions).length
+            ? executionResult.contributions
+            : discoveryPayloadFromScoutResult(scoutResult, current);
         return {
           scoutResult,
           discoveryPayload,
@@ -1178,11 +1102,16 @@ async function advanceDiscoveryInvestigationAfterApproval(input = {}) {
           placesProvider: inputPlacesProvider,
           investigationContinuation: true,
         });
-        const discoveryPayload = discoveryPayloadFromScoutResult(scoutResult, current);
-        const executionResult = executionResultFromStageOutput(
-          { scoutResult, discoveryPayload },
-          { specialist: SPECIALISTS.SCOUT, transactionId }
-        );
+        const executionResult =
+          scoutResult.executionResult ||
+          executionResultFromStageOutput(
+            { scoutResult, discoveryPayload: discoveryPayloadFromScoutResult(scoutResult, current) },
+            { specialist: SPECIALISTS.SCOUT, transactionId }
+          );
+        const discoveryPayload =
+          executionResult.contributions && Object.keys(executionResult.contributions).length
+            ? executionResult.contributions
+            : discoveryPayloadFromScoutResult(scoutResult, current);
         return {
           scoutResult,
           discoveryPayload,

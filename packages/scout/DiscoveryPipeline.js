@@ -281,7 +281,7 @@ async function runDiscoveryPipeline(input = {}) {
   const capabilityEvaluation = evaluateDiscoveryCapability({
     adapters,
     coveragePlan,
-    requireExternalDiscovery: true,
+    requireExternalDiscovery: opts.requireExternalDiscovery !== false,
     discover: opts.discover,
     enablePlaces: opts.enablePlaces,
     placesProvider: opts.placesProvider,
@@ -505,6 +505,7 @@ async function runDiscoveryPipeline(input = {}) {
       universeEstimate: revisedUniverseEstimate,
       existingIntelligence,
       memory: opts.memory || opts.investigationMemory || {},
+      priorOutcomeLearnings: opts.priorOutcomeLearnings || [],
       investigationState:
         payload.investigationState ||
         (payload.investigation && payload.investigation.investigationState) ||
@@ -526,6 +527,12 @@ async function runDiscoveryPipeline(input = {}) {
     });
     investigationState = reasoningResult.state;
     missionIntelligenceReport = reasoningResult.report;
+    if (reasoningResult.learningInfluence?.length) {
+      missionIntelligenceReport = {
+        ...missionIntelligenceReport,
+        priorLearningInfluence: reasoningResult.learningInfluence,
+      };
+    }
     if (reasoningResult.state?.marketDefinition?.revised) {
       marketDefinition = reasoningResult.state.marketDefinition;
     }
@@ -625,6 +632,9 @@ async function runDiscoveryPipeline(input = {}) {
     memoryLoaded: Boolean(marketMemoryRecall?.loaded),
     explainabilityGraph: explainabilityGraph ? serializeGraph(explainabilityGraph) : null,
     investigationPlan,
+    learningInfluence:
+      (missionIntelligenceReport && missionIntelligenceReport.priorLearningInfluence) || [],
+    priorOutcomeLearnings: opts.priorOutcomeLearnings || [],
   });
 
   let marketMemoryPersist = null;

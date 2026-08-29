@@ -378,6 +378,7 @@ function createExecutionResult(input = {}) {
       recommendations,
       unknowns,
       contributions,
+      learningInfluence: input.learningInfluence,
       ...(isPlainObject(input.explainability) ? input.explainability : {}),
     }),
   };
@@ -485,6 +486,7 @@ function buildExplainability(input = {}) {
     whyNotRecommended,
     evidenceConfidenceChanges,
     remainsUnknown: unknowns.map((u) => `${u.unknown} — ${u.reason}`),
+    ...(Array.isArray(input.learningInfluence) ? { learningInfluence: input.learningInfluence } : {}),
   };
 }
 
