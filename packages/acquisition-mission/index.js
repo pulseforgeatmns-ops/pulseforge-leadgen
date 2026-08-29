@@ -93,6 +93,7 @@ module.exports = {
   createAcquisitionMissionEngine,
   ...inspection,
   ...require('./DiscoveryPresentation'),
+  ...require('./PrioritizationPresentation'),
   ...structuredMission,
   ...missionPlanner,
   ...specialistInputs,

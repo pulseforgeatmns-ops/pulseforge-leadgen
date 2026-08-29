@@ -66,6 +66,11 @@ const {
   presentationFromDiscoveryPayload,
 } = require('../../acquisition-mission/DiscoveryPresentation');
 const {
+  resolvePrioritizationPayload,
+  presentationFromPrioritizationPayload,
+  resolvePrioritizationApprovedNextStep,
+} = require('../../acquisition-mission/PrioritizationPresentation');
+const {
   resolveInvestigationContinuationPayloads,
   presentationFromInvestigationContinuation,
 } = require('../../acquisition-mission/InvestigationContinuationPresentation');
@@ -481,10 +486,9 @@ function buildExecutionMissionResponse({
   }
 
   if (executionResult && action === 'prioritization_approved') {
-    const scoutPayload = ((snapshot.contributions || []).find(
-      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
-    ) || {}).payload || {};
-    const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
+    const prioritizationPayload = resolvePrioritizationPayload({ executionResult, snapshot });
+    const prioritizationResults = presentationFromPrioritizationPayload(prioritizationPayload);
+    const nextStep = resolvePrioritizationApprovedNextStep(snapshot, mission);
     const comm = buildMissionCommunication({
       headline: 'Mission Updated',
       mission: mission.title || mission.id,
@@ -495,15 +499,14 @@ function buildExecutionMissionResponse({
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
       waitingOn: null,
       confidence:
-        discoveryResults.confidence != null
-          ? discoveryResults.confidence
+        prioritizationResults.confidence != null
+          ? prioritizationResults.confidence
           : mission.confidence,
-      confidenceBreakdown: discoveryResults.confidenceBreakdown,
-      nextStep: 'Review mission workspace for Max prioritization and planning.',
+      nextStep,
       operatorDecision: null,
-      discoveryResults,
-      evidenceStatus: 'Prioritization approved',
-      sources: ['acquisition_mission', 'scout'],
+      prioritizationResults,
+      evidenceStatus: 'Prioritization committed',
+      sources: ['acquisition_mission', 'max'],
       includeReasoningMarker: false,
     });
     const prose = formatMissionProse(comm);
