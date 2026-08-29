@@ -16,6 +16,7 @@ const {
 } = require('../scout/adapters/ScoutDiscoveryArtifact');
 const { normalizeProviderExecution } = require('../scout/coverage/ProviderExecution');
 const { READINESS_STATES } = require('../max/scoutAcquisition/Types');
+const { assertCandidateBeliefPersistence } = require('../scout/investigation/CandidateBeliefState');
 
 const SOURCE_LABELS = Object.freeze({
   existing_repository: 'Company repository',
@@ -466,10 +467,7 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
         ? payload.candidateUniverse
         : []
   );
-  const candidateUniverseCount =
-    artifact.candidateUniverseCount != null
-      ? Number(artifact.candidateUniverseCount)
-      : candidateUniverse.length || null;
+  const candidateUniverseCount = candidateUniverse.length || null;
   const rankedProspectCount = rankedProspects.length;
   const readinessKnownCount =
     payload.readinessKnownCount != null
@@ -541,6 +539,10 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
       spec: 'SPEC-173',
       fitCandidates: artifact.fitCandidates || [],
       watchCandidates: artifact.watchCandidates || [],
+      uncertainCandidates: artifact.uncertainCandidates || payload.uncertainCandidates || [],
+      rankedProspects: rankedProspects,
+      candidateUniverse,
+      prospectEvaluations: payload.prospectEvaluations || [],
       businessUnderstanding: artifact.businessUnderstanding || null,
       businessJudgment: artifact.businessJudgment || null,
     },
@@ -553,6 +555,8 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
   if (containsForbiddenReasoningKeys(contribution)) {
     throw new Error('SPEC-173 boundary projection failed: forbidden reasoning keys remain in discovery contribution.');
   }
+
+  assertCandidateBeliefPersistence(contribution);
 
   return contribution;
 }
