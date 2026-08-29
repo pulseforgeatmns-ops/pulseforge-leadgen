@@ -32,6 +32,10 @@ const {
   markHypothesisTesting,
 } = require('./HypothesisLifecycle');
 const { buildMissionIntelligenceReport } = require('./MissionIntelligenceReport');
+const {
+  evaluatePriorLearningInfluence,
+  applyPriorLearningToStrategy,
+} = require('./PriorLearningInfluence');
 const { synthesizeFromCandidates } = require('../synthesis/EvidenceSynthesisEngine');
 const { activateHeuristics } = require('../heuristics/BusinessHeuristicsEngine');
 const {
@@ -450,6 +454,21 @@ async function runInvestigativeReasoningLoop(input = {}) {
     completedInvestigations: input.completedInvestigations,
     opts,
   });
+
+  const priorOutcomeLearnings =
+    input.priorOutcomeLearnings || opts.priorOutcomeLearnings || [];
+  const priorLearningEvaluation = evaluatePriorLearningInfluence({
+    priorOutcomeLearnings,
+    candidates,
+  });
+  if (priorLearningEvaluation.strategyAdjustments.length) {
+    const adjusted = applyPriorLearningToStrategy(
+      investigativeStrategy,
+      priorLearningEvaluation.strategyAdjustments
+    );
+    investigativeStrategy = adjusted.strategy;
+  }
+
   state = applyInvestigativeStrategy(state, investigativeStrategy);
 
   const candidateInvestigationPending = Boolean(
@@ -486,6 +505,7 @@ async function runInvestigativeReasoningLoop(input = {}) {
     competingWork: input.competingWork || mission.competingWork,
     pendingProposals: input.pendingProposals,
     scoutDiscoveries: input.scoutDiscoveries,
+    priorOutcomeLearnings,
   });
 
   return {
@@ -494,6 +514,8 @@ async function runInvestigativeReasoningLoop(input = {}) {
     cycles,
     stop,
     investigativeStrategy,
+    learningInfluence: priorLearningEvaluation.learningInfluence,
+    priorOutcomeLearnings,
     understandingFirst: true,
     completionReason: stop.reason,
     stopExplanation: stop.explanation,
