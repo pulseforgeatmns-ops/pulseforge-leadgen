@@ -20,6 +20,7 @@ const {
 const { executeInvestigationTask } = require('../coverage/HypothesisDrivenDiscoveryEngine');
 const { attachFitToClassified } = require('../../max/scoutAcquisition/FitEvaluation');
 const { buildProspectEvaluation } = require('../../max/scoutAcquisition/ProspectEvaluation');
+const { reconcilePreservedEvaluation } = require('./CandidateBeliefState');
 const {
   mapMissingEvidenceToGap,
   mapHypothesisToGap,
@@ -691,12 +692,13 @@ async function runCandidateInvestigationLoop(input = {}) {
       workingCompanies[companyIndex] = merged.company;
       workingClassified[companyIndex] = merged.classified;
 
-      const attached = attachFitToClassified(
+      let attached = attachFitToClassified(
         merged.classified,
         merged.company,
         searchDefinition,
         opts.now
       );
+      attached = reconcilePreservedEvaluation(attached, merged.company);
       workingClassified[companyIndex] = attached.classified;
       workingCompanies[companyIndex].prospectEvaluation = attached.evaluation;
       workingClassified[companyIndex].evaluation = attached.evaluation;
