@@ -60,6 +60,7 @@ const observationInterpretation = require('./ObservationInterpretation');
 const learnProgression = require('./LearnProgression');
 const improveProgression = require('./ImproveProgression');
 const meaningfulLearning = require('./MeaningfulLearning');
+const outcomeLearningRetrieval = require('./OutcomeLearningRetrieval');
 
 module.exports = {
   ...types,
@@ -123,4 +124,5 @@ module.exports = {
   ...learnProgression,
   ...improveProgression,
   ...meaningfulLearning,
+  ...outcomeLearningRetrieval,
 };

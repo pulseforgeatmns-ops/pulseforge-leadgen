@@ -310,6 +310,7 @@ async function runEmmettForAmoMission(mission, opts = {}) {
     transactionId: opts.transactionId,
     executionContext: opts.executionContext,
     infrastructureSnapshot: opts.infrastructureSnapshot,
+    store: opts.engine?.store,
   });
   const { payload, assessed, infrastructureSnapshot, candidates } = await buildEmmettCapacityPayload(
     executionInput,

@@ -226,6 +226,7 @@ async function runMaxForAmoMission(mission, opts = {}) {
     discovery: discovery && discovery.payload,
     operatorApproval: opts.operatorApproval || null,
     observations: opts.observations || [],
+    store: opts.engine?.store,
   });
 
   return executeSpecialist({
@@ -233,6 +234,7 @@ async function runMaxForAmoMission(mission, opts = {}) {
     mission,
     contributions,
     transactionId: opts.transactionId,
+    store: opts.engine?.store,
     run: () => runMaxPrioritization({
       ...input,
       mission,
