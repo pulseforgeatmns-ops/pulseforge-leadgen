@@ -697,7 +697,10 @@ function rebuildProspectProjections(input = {}) {
 
   classified.forEach((row, index) => {
     const company = companies[index] || {};
-    const attached = attachFitToClassified(row, company, searchDefinition, now);
+    let attached = attachFitToClassified(row, company, searchDefinition, now);
+    if (company._preservedBelief) {
+      attached = reconcilePreservedEvaluation(attached, company);
+    }
     const next = attached.classified;
     const evaluation =
       attached.evaluation ||
