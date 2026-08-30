@@ -21,6 +21,12 @@ const {
   computePreparedArtifactRevision,
 } = require('./ExecutionApproval');
 const { specialistContext } = require('./Lifecycle');
+const {
+  BLOCK_CODES,
+  normalizeCanonicalSender,
+  extractCapacitySenderIdentity,
+  assertCapacityMatchesCanonical,
+} = require('../../utils/canonicalSenderIdentity');
 
 const EXECUTION_RECORD_STATUS = Object.freeze({
   QUEUED: 'queued',
@@ -96,6 +102,7 @@ function buildExecutionBundle(input = {}) {
     approval,
     tenantId,
     resolveProspectAttributes,
+    canonicalSender,
     senderIdentity,
   } = input;
 
@@ -125,10 +132,30 @@ function buildExecutionBundle(input = {}) {
     return { ok: false, blockReason: revisionCheck.reason, status: EXECUTION_RECORD_STATUS.BLOCKED };
   }
 
+  const resolvedSender = normalizeCanonicalSender(canonicalSender || senderIdentity);
+  if (!resolvedSender.ok) {
+    return {
+      ok: false,
+      blockReason: resolvedSender.blockReason,
+      status: EXECUTION_RECORD_STATUS.BLOCKED,
+      blockCode: resolvedSender.code || BLOCK_CODES.REQUIRED,
+    };
+  }
+
   const max = findMaxPrioritization(contributions);
   const paige = findPaigeVariants(contributions);
   const emmett = findEmmettCapacity(contributions);
   const emmettPayload = emmett?.payload || {};
+  const capacityIdentity = extractCapacitySenderIdentity(emmettPayload);
+  const capacityBind = assertCapacityMatchesCanonical(emmettPayload, resolvedSender.identity);
+  if (!capacityBind.ok) {
+    return {
+      ok: false,
+      blockReason: capacityBind.blockReason,
+      status: EXECUTION_RECORD_STATUS.BLOCKED,
+      blockCode: capacityBind.code,
+    };
+  }
   const paigePayload = paige?.payload || {};
   const queueItems = Array.isArray(emmettPayload.queue?.items) ? emmettPayload.queue.items : [];
 
@@ -247,8 +274,12 @@ function buildExecutionBundle(input = {}) {
     provider: {
       channel: 'email',
       provider: 'brevo',
-      senderIdentity: senderIdentity || process.env.FROM_EMAIL || 'hello@gopulseforge.com',
+      senderIdentity: resolvedSender.identity.senderEmail,
+      senderName: resolvedSender.identity.senderName,
+      sendingDomain: resolvedSender.identity.sendingDomain,
     },
+    senderIdentity: resolvedSender.identity,
+    capacitySenderIdentity: capacityIdentity,
   };
 
   return { ok: true, bundle, currentRevision: revisionCheck.currentRevision };

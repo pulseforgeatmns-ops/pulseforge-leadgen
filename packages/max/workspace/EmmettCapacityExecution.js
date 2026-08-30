@@ -49,7 +49,7 @@ function fixtureInfrastructureSnapshot(tenantId) {
   return {
     tenantId: id,
     clientId: Number(id) || null,
-    inboxId: `inbox-${id}`,
+    inboxId: 'hello@example.com',
     domain: 'example.com',
     inboxAgeDays: 45,
     providerCeiling: 50,
@@ -119,8 +119,24 @@ function sanitizeQueueItem(item = {}) {
   return clean;
 }
 
-function mapAssessedToCapacityPayload(assessed = {}) {
+function senderIdentityFromSnapshot(snapshot = {}) {
+  const inboxId = snapshot.inboxId || snapshot.senderEmail || null;
+  const domain = snapshot.domain || snapshot.sendingDomain || null;
+  return {
+    inboxId: inboxId || null,
+    domain: domain || null,
+    senderEmail: snapshot.senderEmail || inboxId || null,
+    senderName: snapshot.senderName || null,
+    sendingDomain: snapshot.sendingDomain || domain || null,
+  };
+}
+
+function mapAssessedToCapacityPayload(assessed = {}, extras = {}) {
   const { health, capacity, governor, queue, recommendations } = assessed;
+  const infrastructureSnapshot = extras.infrastructureSnapshot
+    || assessed.snapshot
+    || extras.snapshot
+    || {};
   const recommended = Number(capacity?.recommended || 0);
   const queueItems = (queue?.items || []).map(sanitizeQueueItem);
 
@@ -170,6 +186,7 @@ function mapAssessedToCapacityPayload(assessed = {}) {
       halt: governor?.halt === true,
       slowCap: governor?.slowCap != null ? governor.slowCap : null,
     },
+    senderIdentity: senderIdentityFromSnapshot(infrastructureSnapshot),
   };
 }
 
@@ -290,7 +307,7 @@ async function buildEmmettCapacityPayload(executionInput = {}, opts = {}) {
     timeZone: infrastructureSnapshot.timeZone || 'America/New_York',
   });
 
-  const payload = mapAssessedToCapacityPayload(assessed);
+  const payload = mapAssessedToCapacityPayload(assessed, { infrastructureSnapshot });
   assertContract(SPECIALISTS.EMMETT, payload);
   payload._assessed = undefined;
   return { payload, assessed, infrastructureSnapshot, candidates };
@@ -340,7 +357,9 @@ function fixtureEmmettCapacityResult(mission, contributions = [], opts = {}) {
     snapshot: executionInput.specialistInput.infrastructureSnapshot,
     prospects: candidates,
   });
-  return mapAssessedToCapacityPayload(assessed);
+  return mapAssessedToCapacityPayload(assessed, {
+    infrastructureSnapshot: executionInput.specialistInput.infrastructureSnapshot,
+  });
 }
 
 function validateEmmettPreconditions({ mission, engine, tenantId }) {
@@ -443,9 +462,19 @@ function commitEmmettCapacityStage({
   };
 }
 
+const FIXTURE_CANONICAL_SENDER = Object.freeze({
+  tenantId: '10',
+  clientId: 10,
+  senderEmail: 'hello@example.com',
+  senderName: 'Example Sender',
+  sendingDomain: 'example.com',
+});
+
 module.exports = {
   findEmmettCapacity,
   fixtureInfrastructureSnapshot,
+  FIXTURE_CANONICAL_SENDER,
+  senderIdentityFromSnapshot,
   resolveInfrastructureSnapshot,
   mapAssessedToCapacityPayload,
   buildEmmettCapacityPayload,

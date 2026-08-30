@@ -151,6 +151,12 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     sendEmail,
     resolveProspectAttributes,
     senderIdentity,
+    canonicalSender,
+    client,
+    loadClient,
+    brevoState,
+    senderReadiness,
+    requireProviderReadiness,
   } = input;
 
   const snapshot = engine.inspect(mission.id, { tenantId });
@@ -184,6 +190,13 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     sendEmail,
     resolveProspectAttributes,
     senderIdentity,
+    canonicalSender,
+    client,
+    loadClient,
+    pool: input.pool,
+    brevoState,
+    senderReadiness,
+    requireProviderReadiness,
     existingRecords,
     persistExecutionRecord,
   });

@@ -152,6 +152,24 @@ async function executeCanonical(input = {}, opts = {}) {
     source,
   });
 
+  let canonicalSender = input.canonicalSender || opts.canonicalSender || null;
+  if (!canonicalSender && (opts.pool || opts.client || input.client || typeof opts.loadClient === 'function')) {
+    const { resolveCanonicalSenderIdentity } = require('../utils/canonicalSenderIdentity');
+    const resolved = await resolveCanonicalSenderIdentity({
+      tenantId,
+      clientId: input.clientId || tenantId,
+      client: opts.client || input.client || null,
+      pool: opts.pool,
+      loadClient: opts.loadClient,
+    });
+    if (!resolved.ok) {
+      const err = amo.amoError(resolved.code || 'canonical_sender_incomplete', resolved.blockReason);
+      err.blockReason = resolved.blockReason;
+      throw err;
+    }
+    canonicalSender = resolved.identity;
+  }
+
   return amo.routeExecutionRequest(request, {
     engine,
     tenantId,
@@ -163,6 +181,15 @@ async function executeCanonical(input = {}, opts = {}) {
     pool: opts.pool,
     persistStage: opts.persistStage,
     missionEngine: opts.missionEngine,
+    sendEmail: input.sendEmail || opts.sendEmail,
+    resolveProspectAttributes: input.resolveProspectAttributes || opts.resolveProspectAttributes,
+    canonicalSender,
+    senderIdentity: canonicalSender,
+    client: opts.client || input.client,
+    loadClient: opts.loadClient,
+    brevoState: input.brevoState || opts.brevoState,
+    senderReadiness: input.senderReadiness || opts.senderReadiness,
+    requireProviderReadiness: input.requireProviderReadiness || opts.requireProviderReadiness,
   });
 }
 
