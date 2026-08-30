@@ -18,7 +18,7 @@ Recommended next work, in order:
 
 1. **Pilot 0 through the product** — Create tenant, create client user with a temporary password, force password change, complete Client Intelligence, compile and publish an AIM, ask Max, run Scout. If any step needs SQL, that is the next product gap (ADR-052).
 2. **Wire Scout and campaign evaluation to the approved scorecard** — SPEC-116 exports runtime helpers; consumers beyond Brief and Daily Briefing land in a later slice.
-3. **Paige copy into the Emmett queue** — SPEC-117 requires Paige-authored subject/body before send unless the operator explicitly allows legacy sequences.
+3. **Paige copy into the Emmett queue** — SPEC-117 requires Paige-authored subject/body before send. Legacy sequence compatibility has been removed post-canonicalization.
 4. **Durable assimilation of verified operator corrections** — persist *verified* working-model corrections after claim grounding, without treating Max-generated statements as operating fact. This is the next knowledge-layer milestone; do not start it by weakening SPEC-108, SPEC-109, SPEC-110, SPEC-111, SPEC-112, SPEC-113, SPEC-114, SPEC-115, SPEC-116, or SPEC-117.
 5. **Fedir live pilot (operational)** — 50 qualified prospects and outreach begin. The AIM engine already reports this honestly as unmet.
 6. **CIE typo-repair cleanup** — `app` → `gap` still inflates `unknowns` on CIE-claimed turns. This is no longer a Pilot blocker. Fix it as a narrow CIE semantic-contamination patch.
