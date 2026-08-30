@@ -28,7 +28,6 @@ const {
   advancePaigeVariants,
   advanceEmmettCapacity,
   advanceExecutionAfterApproval,
-  advanceExecuteOutbound,
 } = require('../../max/workspace/AmoOperatorApproval');
 const { executeOutboundBundle } = require('../../max/workspace/OutboundExecutionAdapter');
 const { FIXTURE_CANONICAL_SENDER } = require('../../max/workspace/EmmettCapacityExecution');
