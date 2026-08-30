@@ -234,6 +234,89 @@ describe('SPEC-203 — Investigation Continuation Presentation', () => {
     assert.doesNotMatch(response.prose, /Active mission — Discovering/i);
   });
 
+  it('buildExecutionMissionResponse renders canonical READY execution review instead of generic fallback', () => {
+    const mission = {
+      id: 'm-ready-1',
+      title: 'Ready execution review',
+      objective: OBJECTIVE,
+      stage: STAGES.READY,
+      pendingOperatorDecision: {
+        kind: OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL,
+        prompt: 'Authorize external execution of this prepared outreach?',
+      },
+    };
+
+    const snapshot = {
+      mission,
+      contributions: [
+        {
+          specialist: SPECIALISTS.PAIGE,
+          kind: CONTRIBUTION_KINDS.VARIANTS,
+          payload: {
+            variants: [{
+              subject: 'Cutting-edge cleaning for your offices',
+              body: 'Here is the prepared message body.',
+              cta: 'Book a quick call',
+            }],
+          },
+        },
+        {
+          specialist: SPECIALISTS.EMMETT,
+          kind: CONTRIBUTION_KINDS.CAPACITY,
+          payload: {
+            queue: { items: [{ prospectId: 'p-1' }, { prospectId: 'p-2' }] },
+            capacity: { recommended: 2, available: 2 },
+            deliverability: { status: 'healthy' },
+            governor: { outcome: 'clear' },
+          },
+        },
+      ],
+      executionReview: {
+        artifactBinding: {
+          maxContributionId: 'm-1',
+          paigeContributionId: 'p-1',
+          emmettContributionId: 'e-1',
+        },
+        targets: [{ company: 'North Street Law', priorityReason: 'Strong office fit' }],
+        communication: {
+          subject: 'Cutting-edge cleaning for your offices',
+          body: 'Here is the prepared message body.',
+          cta: 'Book a quick call',
+        },
+        infrastructure: {
+          queue: [{ prospectId: 'p-1' }, { prospectId: 'p-2' }],
+          safeCapacity: 2,
+          deliverabilityStatus: 'healthy',
+          governorOutcome: 'clear',
+        },
+        decision: {
+          blockers: [],
+          plannedSendCount: 2,
+        },
+      },
+      health: { label: 'Healthy' },
+    };
+
+    const response = buildExecutionMissionResponse({
+      mission,
+      snapshot,
+      action: 'pending_operator_decision',
+      question: 'continue',
+      executionResult: null,
+    });
+
+    assert.equal(response.comm.headline, 'Execution Ready');
+    assert.match(response.prose, /Execution Ready/i);
+    assert.match(response.prose, /Prepared targets/i);
+    assert.match(response.prose, /Prepared message/i);
+    assert.match(response.prose, /Channel/i);
+    assert.match(response.prose, /Send\/capacity summary/i);
+    assert.match(response.prose, /Delivery\/governor state/i);
+    assert.match(response.prose, /Authorize external execution of this prepared outreach\?/i);
+    assert.doesNotMatch(response.prose, /Continue in mission workspace/i);
+    assert.doesNotMatch(response.prose, /Active mission — Ready/i);
+  });
+
   it('resolveInvestigationContinuationPayloads reads prior/current from committed contributions', () => {
     const priorPayload = priorDiscoveryPayload();
     const currentPayload = continuedDiscoveryPayload();
