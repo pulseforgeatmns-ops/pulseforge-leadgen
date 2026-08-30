@@ -1,13 +1,40 @@
-const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+'use strict';
 
-const source = fs.readFileSync(path.join(__dirname, '..', 'emmettAgent.js'), 'utf8');
-const selectionStart = source.indexOf('async function getProspectsForEmail');
-const selectionEnd = source.indexOf('async function recalcStalledNoResponseProspects');
-const selectionSource = source.slice(selectionStart, selectionEnd);
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
-assert(selectionStart >= 0 && selectionEnd > selectionStart, 'candidate selection function must exist');
-assert(!/LIMIT\s+100/i.test(selectionSource), 'readiness candidates must not be truncated before evaluation');
+const forbiddenSymbols = [
+  { name: 'async function getProspectsForEmail', pattern: /async\s+function\s+getProspectsForEmail\s*\(/ },
+  { name: 'getSequenceForProspect', pattern: /getSequenceForProspect\s*\(/ },
+  { name: 'advanceEmailSequenceState', pattern: /advanceEmailSequenceState\s*\(/ },
+  { name: 'const SEQUENCES', pattern: /const\s+SEQUENCES\b/ },
+  { name: 'await sendEmail(', pattern: /await\s+sendEmail\s*\(/ },
+  { name: 'createEmailSendLog', pattern: /createEmailSendLog\b/ },
+  { name: 'completeEmailSendLog', pattern: /completeEmailSendLog\b/ },
+];
 
-console.log('Emmett queue starvation test passed');
+test('SPEC-189: Emmett infrastructure scheduler contains no acquisition machinery', () => {
+  const scheduler = fs.readFileSync(path.join(__dirname, '../utils/emmettScheduler.js'), 'utf8');
+
+  for (const { name, pattern } of forbiddenSymbols) {
+    assert.doesNotMatch(scheduler, pattern, `${name} must be absent from emmettScheduler.js`);
+  }
+
+  // Confirm the scheduler only assesses infrastructure
+  assert.match(scheduler, /assessInfrastructure/);
+  assert.match(scheduler, /checkSendingDomainHealth/);
+  assert.match(scheduler, /assessOutboundCapacity/);
+});
+
+test('SPEC-189: Emmett cron adapter wraps infrastructure scheduler only', () => {
+  const adapter = fs.readFileSync(path.join(__dirname, '../emmettSchedulerCron.js'), 'utf8');
+
+  for (const { name, pattern } of forbiddenSymbols) {
+    assert.doesNotMatch(adapter, pattern, `${name} must be absent from emmettSchedulerCron.js`);
+  }
+
+  assert.match(adapter, /assessInfrastructure/);
+  assert.match(adapter, /run\(/);
+});

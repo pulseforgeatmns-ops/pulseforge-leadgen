@@ -27,7 +27,7 @@ function isScoutPlacesDiagnosticAgent(agent) {
 
 const CRON_MODULES = {
   scout:     '../leadgen',
-  emmett:    '../emmettAgent',
+  emmett:    '../emmettSchedulerCron',
   max:       '../maxAgent',
   rex:       '../rexAgent',
   sketch:    '../sketchAgent',
