@@ -173,6 +173,20 @@ const OUTCOME_TYPES = Object.freeze({
   WALKTHROUGH_BOOKED: 'walkthrough_booked',
 });
 
+/** SPEC-212 — Message binding scope constraints. */
+const MESSAGE_BINDING_SCOPES = Object.freeze({
+  PROSPECT: 'prospect',
+  MISSION: 'mission',
+});
+
+/** SPEC-212 — Message binding validation outcomes. */
+const BINDING_VALIDATION_RESULTS = Object.freeze({
+  VALID: 'valid',
+  MISMATCH: 'mismatch',
+  MISSING: 'missing',
+  CONTAMINATED: 'contaminated',
+});
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -242,6 +256,8 @@ module.exports = {
   HEALTH_LABELS,
   RISK_LEVELS,
   OUTCOME_TYPES,
+  MESSAGE_BINDING_SCOPES,
+  BINDING_VALIDATION_RESULTS,
   clone,
   asText,
   nowIso,

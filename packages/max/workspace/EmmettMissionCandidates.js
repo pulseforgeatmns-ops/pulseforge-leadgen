@@ -3,6 +3,7 @@
 /**
  * SPEC-068 — Mission-bound candidate set for Emmett queue cognition.
  * Lineage: Scout qualified opportunities → Max prioritization → Emmett queue.
+ * SPEC-212 — Candidates matched to bound message variants by candidateId.
  */
 
 const { SPECIALISTS, CONTRIBUTION_KINDS, asText } = require('../../acquisition-mission/types');
@@ -57,7 +58,22 @@ function isCompanyLevelTarget(target, segmentLabel) {
 }
 
 /**
+ * SPEC-212 — Find the variant bound to this specific candidateId.
+ * Variants are bound to prospect intelligence and must not be cross-assigned.
+ */
+function findBoundVariant(variants = [], candidateId) {
+  if (!candidateId || !Array.isArray(variants)) return null;
+  const candidateIdStr = String(candidateId);
+  // First, try exact candidateId match
+  const exactMatch = variants.find((v) => String(v.candidateId || '') === candidateIdStr);
+  if (exactMatch) return exactMatch;
+  // Fallback to first variant if no explicit binding (shouldn't happen with SPEC-212)
+  return variants[0] || null;
+}
+
+/**
  * Build queue candidates strictly from mission contributions — never client-wide CRM.
+ * SPEC-212: Each candidate receives the message variant bound to its candidateId.
  */
 function buildMissionBoundCandidates(mission, contributions = []) {
   const scoutRow = findLatestScoutDiscovery(contributions);
@@ -67,7 +83,6 @@ function buildMissionBoundCandidates(mission, contributions = []) {
   const maxPayload = maxRow?.payload || {};
   const paigePayload = paigeRow?.payload || {};
   const paigeReady = buildPaigeReadinessMetadata(paigePayload);
-  const primaryVariant = (paigePayload.variants || [])[0] || null;
   const plan = mission.structuredMission || mission.missionPlanDraft || {};
   const segmentLabel = plan.market?.label || plan.market?.segment || mission.targetSegment;
 
@@ -110,8 +125,11 @@ function buildMissionBoundCandidates(mission, contributions = []) {
     const signals = target.signals || opp.signals || [];
     const maxPriority = Math.max(0.1, 1 - (rank - 1) * 0.12);
 
+    // SPEC-212: Use target's own ID as candidateId
+    const candidateId = target.id || target.companyId || prospect?.id || `mission-target-${rank}`;
+
     const row = {
-      id: target.companyId || prospect?.id || `mission-target-${rank}`,
+      id: candidateId,
       prospectId: prospect?.id || null,
       email: prospect?.email || null,
       company: name || opp.name || prospect?.company || `Target ${rank}`,
@@ -126,16 +144,26 @@ function buildMissionBoundCandidates(mission, contributions = []) {
       source: 'mission_intelligence',
     };
 
-    if (paigeReady.ready && primaryVariant) {
-      row.paige = {
-        author: 'paige',
-        source: 'paige',
-        ready: true,
-        variantLabel: primaryVariant.label || 'Primary',
-        subject: primaryVariant.subject || paigePayload.subjects?.[0] || null,
-        body: primaryVariant.body || paigePayload.messaging || null,
-      };
-      row.contentSource = 'paige';
+    if (paigeReady.ready && paigePayload.variants?.length) {
+      // SPEC-212: Find the variant bound to this specific candidate
+      const boundVariant = findBoundVariant(paigePayload.variants, candidateId);
+      if (boundVariant) {
+        row.paige = {
+          author: 'paige',
+          source: 'paige',
+          ready: true,
+          variantLabel: boundVariant.label || 'Primary',
+          subject: boundVariant.subject || null,
+          body: boundVariant.body || null,
+          // SPEC-212: Explicit binding preservation
+          candidateId: boundVariant.candidateId || String(candidateId),
+          variantId: boundVariant.variantId || null,
+          bindingScope: boundVariant.bindingScope || 'prospect',
+          attributableIntelligence: boundVariant.attributableIntelligence || null,
+        };
+        row.contentSource = 'paige';
+        row.cta = boundVariant.cta || paigePayload.cta || 'Reply to schedule a walkthrough';
+      }
     }
 
     candidates.push(row);
@@ -179,5 +207,6 @@ module.exports = {
   findMaxPrioritization,
   findPaigeVariants,
   buildPaigeReadinessMetadata,
+  findBoundVariant,
   buildMissionBoundCandidates,
 };
