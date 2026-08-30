@@ -9,7 +9,7 @@ process.stdin.on('end', async () => {
     if (Number(context.client_id) !== Number(process.env.ACTIVE_CLIENT_ID)) {
       throw new Error('Autorun child client context mismatch');
     }
-    const { run } = require('../emmettAgent');
+    const { run } = require('../emmettSchedulerCron');
     const result = await run(context);
     console.log(`EMMETT_AUTORUN_RESULT=${JSON.stringify(result || {})}`);
     process.exit(0);

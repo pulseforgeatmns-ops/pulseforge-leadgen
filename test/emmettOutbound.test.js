@@ -12,7 +12,6 @@ const express = require('express');
 
 const training = require('../packages/max/training');
 const eoi = require('../packages/emmett-outbound');
-const emmettAgent = require('../emmettAgent');
 const {
   resetEngine,
   getEngine,
@@ -141,36 +140,35 @@ describe('SPEC-117 routes and send-path wiring', () => {
     assert.match(shell, /emmett-outbound/);
   });
 
-  it('evaluates the governor before sendEmail and requires approval', () => {
-    const agent = fs.readFileSync(path.join(__dirname, '../emmettAgent.js'), 'utf8');
-    assert.match(agent, /applyOutboundGate/);
-    assert.match(agent, /awaiting_operator_approval/);
-    assert.match(agent, /outboundIntel\.canSend/);
-    const sendAt = agent.indexOf('const result = await sendEmail');
-    const gateAt = agent.indexOf('outboundIntel.canSend');
-    assert.ok(gateAt > 0 && sendAt > gateAt, 'governor must run before sendEmail');
+  it('evaluates the governor via shared EOI infrastructure (SPEC-189)', () => {
+    const scheduler = fs.readFileSync(path.join(__dirname, '../utils/emmettScheduler.js'), 'utf8');
+    assert.match(scheduler, /assessOutboundCapacity/);
+    assert.match(scheduler, /awaiting_operator_approval/);
+    assert.match(scheduler, /outboundIntel/);
+    // SPEC-189: Emmett infrastructure scheduler delegates to shared EOI services for governance.
+    // Governor evaluation happens via outboundIntel.getEngine().assess().
+    const gateAt = scheduler.indexOf('getEngine().assess');
+    assert.ok(gateAt > 0, 'governor must be evaluable via outboundIntel engine assessment');
     const webhooks = fs.readFileSync(path.join(__dirname, '../routes/webhooks.js'), 'utf8');
     assert.match(webhooks, /ingestBrevoResult/);
   });
 
-  it('classifies the legacy Emmett send path as acquisition and blocks provider execution', () => {
-    const classification = emmettAgent.classifyLegacyExecutionTraffic({
-      candidate: { id: 42, email: 'prospect@example.com', dnc: false, contentSource: 'legacy_sequence' },
-      context: { source: 'cron' },
-    });
-    assert.equal(classification, 'ACQUISITION');
-
-    const block = emmettAgent.buildLegacyExecutionBlock({
-      sendDecision: { allowed: true, code: 'approved', reason: 'healthy' },
-      prospect: { id: 42, email: 'prospect@example.com' },
-      clientId: 21,
-    });
-    assert.equal(block.blocked, true);
-    assert.equal(block.reason, 'canonical_execution_required');
-    assert.equal(block.providerSendAttempted, false);
+  it('enforces that canonical execution is the sole acquisition authority (SPEC-189)', () => {
+    // SPEC-189: Emmett infrastructure scheduler cannot execute acquisition sends.
+    // Canonical execution is owned by ExecutionRouter only.
+    const adapter = fs.readFileSync(path.join(__dirname, '../emmettSchedulerCron.js'), 'utf8');
+    assert.match(adapter, /assessInfrastructure/);
+    assert.doesNotMatch(adapter, /brevoSend|sendEmail|nodemailer/);
+    assert.doesNotMatch(adapter, /getProspectsForEmail/);
+    assert.doesNotMatch(adapter, /SEQUENCES/);
+    
+    const scheduler = fs.readFileSync(path.join(__dirname, '../utils/emmettScheduler.js'), 'utf8');
+    assert.match(scheduler, /assessInfrastructure/);
+    assert.doesNotMatch(scheduler, /brevoSend|sendEmail|nodemailer/);
+    assert.doesNotMatch(scheduler, /getProspectsForEmail/);
   });
 
-  it('keeps EOI approval semantics while the legacy path remains blocked', () => {
+  it('keeps EOI approval semantics while infrastructure assessment remains separate', () => {
     const engine = getEngine();
     const decision = engine.canSend({
       tenantId: '21',
@@ -188,14 +186,6 @@ describe('SPEC-117 routes and send-path wiring', () => {
       sentToday: 0,
     });
     assert.equal(decision.allowed, true);
-
-    const block = emmettAgent.buildLegacyExecutionBlock({
-      sendDecision: decision,
-      prospect: { id: 7, email: 'lead@example.com' },
-      clientId: 21,
-    });
-    assert.equal(block.blocked, true);
-    assert.equal(block.reason, 'canonical_execution_required');
   });
 
   it('approves through a thin HTTP stand-in with an in-memory engine', async () => {

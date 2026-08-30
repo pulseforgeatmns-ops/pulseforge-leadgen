@@ -2895,7 +2895,7 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
     return res.json({ success: false, message: `${agent} requires local execution — run from your terminal` });
   }
   const agentModules = {
-    scout: '../leadgen', emmett: '../emmettAgent',
+    scout: '../leadgen', emmett: '../emmettSchedulerCron',
     max: '../maxAgent', rex: '../rexAgent', sketch: '../sketchAgent',
     paige: '../paigeAgent', faye: '../facebookAgent', link: '../linkedinAgent',
     sam: '../samAgent', vera: '../veraAgent', cal: '../calAgent', ivy: '../ivyAgent',
