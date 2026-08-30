@@ -3,6 +3,7 @@
 /**
  * Canonical outbound execution adapter — executes approved mission bundle via provider transport.
  * Emmett does not regenerate copy or select recipients during EXECUTE.
+ * Provider adapter does not decide tenant identity — sender must be explicit.
  */
 
 const { sendEmail: brevoSendEmail } = require('../../providers/brevo/sendEmail');
@@ -14,6 +15,9 @@ const {
   summarizeExecutionRecords,
 } = require('../../acquisition-mission/OutboundExecution');
 const { nowIso } = require('../../acquisition-mission/types');
+const {
+  evaluateCanonicalSenderReadiness,
+} = require('../../../utils/canonicalSenderIdentity');
 
 /**
  * Execute one canonical approved outbound bundle.
@@ -30,9 +34,12 @@ async function executeOutboundBundle(input = {}) {
     executionRequestId,
     sendEmail = brevoSendEmail,
     resolveProspectAttributes,
+    canonicalSender,
     senderIdentity,
     existingRecords = [],
     persistExecutionRecord,
+    brevoState,
+    skipProviderReadiness = false,
   } = input;
 
   const bundleResult = buildExecutionBundle({
@@ -41,6 +48,7 @@ async function executeOutboundBundle(input = {}) {
     approval,
     tenantId,
     resolveProspectAttributes,
+    canonicalSender,
     senderIdentity,
   });
 
@@ -55,8 +63,46 @@ async function executeOutboundBundle(input = {}) {
   }
 
   const { bundle } = bundleResult;
+  const sender = bundle.canonicalSender;
+  if (!sender?.senderEmail || !sender?.senderName) {
+    return {
+      blocked: true,
+      blockReason: 'Canonical AMO execution requires an explicit provider sender identity.',
+      bundle,
+      records: [],
+      summary: summarizeExecutionRecords([]),
+    };
+  }
+
+  if (!skipProviderReadiness) {
+    const readiness = await evaluateCanonicalSenderReadiness({
+      identity: sender,
+      client: {
+        id: sender.clientId,
+        sender_email: sender.senderEmail,
+        sender_name: sender.senderName,
+        sending_domain: sender.sendingDomain,
+      },
+      brevoState,
+    });
+    if (!readiness.sendable) {
+      return {
+        blocked: true,
+        blockReason: readiness.reason || 'Canonical sender is not ready for provider delivery.',
+        bundle,
+        records: [],
+        summary: summarizeExecutionRecords([]),
+        readiness,
+      };
+    }
+  }
+
   const records = [];
   const approvalMeta = bundle.executionApproval;
+  const explicitSender = {
+    email: sender.senderEmail,
+    name: sender.senderName,
+  };
 
   for (const send of bundle.sends) {
     if (send.status === EXECUTION_RECORD_STATUS.BLOCKED) {
@@ -110,12 +156,15 @@ async function executeOutboundBundle(input = {}) {
         email: send.email,
         subject: send.message.subject,
         queuePosition: send.queuePosition,
+        senderEmail: explicitSender.email,
+        sendingDomain: sender.sendingDomain,
       },
     });
     if (typeof persistExecutionRecord === 'function') {
       await persistExecutionRecord(pendingRecord);
     }
 
+    // Omission of explicit sender is an error for canonical AMO — never rely on provider env defaults.
     const providerResult = await sendEmail({
       toEmail: send.email,
       toName: send.toName,
@@ -127,9 +176,8 @@ async function executeOutboundBundle(input = {}) {
         `revision:${approvalMeta.preparedArtifactRevision}`,
       ],
       idempotencyKey: send.idempotencyKey,
-      sender: senderIdentity
-        ? { email: senderIdentity, name: process.env.FROM_NAME || 'Pulseforge' }
-        : undefined,
+      sender: explicitSender,
+      requireExplicitSender: true,
     });
 
     const sentAt = nowIso();

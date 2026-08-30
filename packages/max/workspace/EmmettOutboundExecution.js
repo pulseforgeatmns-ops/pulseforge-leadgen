@@ -150,7 +150,10 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     executionRequest,
     sendEmail,
     resolveProspectAttributes,
+    canonicalSender: inputCanonicalSender,
     senderIdentity,
+    brevoState,
+    skipProviderReadiness,
   } = input;
 
   const snapshot = engine.inspect(mission.id, { tenantId });
@@ -159,6 +162,65 @@ async function runExecuteOutboundForAmoMission(input = {}) {
   const existingRecords = engine.store.listExecutionRecords
     ? engine.store.listExecutionRecords(mission.id)
     : [];
+
+  const {
+    loadCanonicalSenderIdentity,
+    resolveCanonicalSenderIdentity,
+    validateCanonicalSenderConfiguration,
+  } = require('../../../utils/canonicalSenderIdentity');
+
+  let canonicalSender = inputCanonicalSender || null;
+  if (!canonicalSender && senderIdentity && typeof senderIdentity === 'object') {
+    canonicalSender = resolveCanonicalSenderIdentity({
+      tenantId,
+      clientId: senderIdentity.clientId != null ? senderIdentity.clientId : tenantId,
+      client: {
+        id: senderIdentity.clientId != null ? senderIdentity.clientId : tenantId,
+        sender_email: senderIdentity.senderEmail || senderIdentity.email,
+        sender_name: senderIdentity.senderName || senderIdentity.name,
+        sending_domain: senderIdentity.sendingDomain || senderIdentity.domain,
+      },
+    });
+  }
+
+  if (!canonicalSender && input.pool) {
+    const loaded = await loadCanonicalSenderIdentity({
+      tenantId,
+      clientId: tenantId,
+      pool: input.pool,
+    });
+    if (!loaded.ok) {
+      return {
+        blocked: true,
+        blockReason: loaded.reason || 'Canonical sender identity could not be resolved.',
+        bundle: null,
+        records: [],
+        summary: summarizeExecutionRecords([]),
+      };
+    }
+    canonicalSender = loaded.identity;
+  }
+
+  if (!canonicalSender) {
+    return {
+      blocked: true,
+      blockReason: 'Canonical sender identity is required before outbound EXECUTE.',
+      bundle: null,
+      records: [],
+      summary: summarizeExecutionRecords([]),
+    };
+  }
+
+  const configCheck = validateCanonicalSenderConfiguration(canonicalSender);
+  if (!configCheck.ok) {
+    return {
+      blocked: true,
+      blockReason: configCheck.reason,
+      bundle: null,
+      records: [],
+      summary: summarizeExecutionRecords([]),
+    };
+  }
 
   const persistExecutionRecord = async (record) => {
     if (engine.store.addExecutionRecord) {
@@ -183,9 +245,11 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     executionRequestId: executionRequest?.id || null,
     sendEmail,
     resolveProspectAttributes,
-    senderIdentity,
+    canonicalSender: configCheck.identity,
     existingRecords,
     persistExecutionRecord,
+    brevoState,
+    skipProviderReadiness,
   });
 }
 

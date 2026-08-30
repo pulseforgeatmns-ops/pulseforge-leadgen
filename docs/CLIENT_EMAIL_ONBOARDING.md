@@ -37,6 +37,12 @@ Confirm the display name and reply mailbox with the client owner.
 
 **Fail:** Any null, placeholder, borrowed identity, or unapproved display name.
 
+### Canonical execution authority
+
+Tenant acquisition sends (legacy Emmett and canonical AMO EXECUTE) resolve sender identity only from `clients.sender_*`. Environment values such as `FROM_EMAIL` / `BREVO_SENDER_EMAIL` are not tenant identity authority.
+
+CIE `sender_identity` collected during onboarding is **not** execution authority until it is persisted into `clients.sender_email` / `clients.sender_name` / `clients.sending_domain`. If CIE and client configuration disagree, **clients sender config wins for execution** until a future onboarding synchronization spec changes that.
+
 ## 3. Add the sending domain in Brevo
 
 **Owner:** Human only

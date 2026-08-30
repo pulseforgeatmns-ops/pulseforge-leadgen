@@ -50,6 +50,10 @@ function computePreparedArtifactBinding(missionId, contributions = []) {
   const queue = emmettPayload.queue || {};
   const queueItems = Array.isArray(queue.items) ? queue.items : [];
   const governor = emmettPayload.governor || {};
+  const {
+    capacitySenderIdentity,
+  } = require('../../utils/canonicalSenderIdentity');
+  const sender = capacitySenderIdentity(emmettPayload);
 
   return {
     missionId,
@@ -63,6 +67,9 @@ function computePreparedArtifactBinding(missionId, contributions = []) {
       .filter(Boolean)
       .sort(),
     governorOutcome: governor.outcome || null,
+    // Identity drift in senderEmail/sendingDomain invalidates execution authorization.
+    senderEmail: sender.senderEmail || null,
+    sendingDomain: sender.sendingDomain || null,
   };
 }
 
@@ -130,6 +137,8 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
     emmettContributionId: binding.emmettContributionId,
     queueCount: binding.queueCount,
     governorOutcome: binding.governorOutcome,
+    senderEmail: binding.senderEmail,
+    sendingDomain: binding.sendingDomain,
     plannedSendCount: queueItems.length,
     approvedAt: input.approvedAt || nowIso(),
     approvedBy: asText(input.approvedBy || input.operatorId) || 'operator',

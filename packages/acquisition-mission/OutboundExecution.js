@@ -96,6 +96,8 @@ function buildExecutionBundle(input = {}) {
     approval,
     tenantId,
     resolveProspectAttributes,
+    canonicalSender,
+    // Legacy alias — string-only senderIdentity is no longer sufficient for tenant AMO sends.
     senderIdentity,
   } = input;
 
@@ -143,6 +145,67 @@ function buildExecutionBundle(input = {}) {
     return {
       ok: false,
       blockReason: 'Paige variants artifact does not match approved execution binding.',
+      status: EXECUTION_RECORD_STATUS.BLOCKED,
+    };
+  }
+
+  const {
+    resolveCanonicalSenderIdentity,
+    validateCanonicalSenderConfiguration,
+    assertCapacitySenderBinding,
+  } = require('../../utils/canonicalSenderIdentity');
+
+  let resolvedSender = null;
+  if (canonicalSender && typeof canonicalSender === 'object') {
+    resolvedSender = resolveCanonicalSenderIdentity({
+      tenantId: tenantId != null ? tenantId : mission.tenantId,
+      clientId: canonicalSender.clientId != null ? canonicalSender.clientId : tenantId,
+      client: {
+        id: canonicalSender.clientId != null ? canonicalSender.clientId : tenantId,
+        sender_email: canonicalSender.senderEmail,
+        sender_name: canonicalSender.senderName,
+        sending_domain: canonicalSender.sendingDomain,
+      },
+    });
+  } else if (senderIdentity && typeof senderIdentity === 'object') {
+    resolvedSender = resolveCanonicalSenderIdentity({
+      tenantId: tenantId != null ? tenantId : mission.tenantId,
+      clientId: senderIdentity.clientId != null ? senderIdentity.clientId : tenantId,
+      client: {
+        id: senderIdentity.clientId != null ? senderIdentity.clientId : tenantId,
+        sender_email: senderIdentity.senderEmail || senderIdentity.email,
+        sender_name: senderIdentity.senderName || senderIdentity.name,
+        sending_domain: senderIdentity.sendingDomain || senderIdentity.domain,
+      },
+    });
+  }
+
+  // No FROM_EMAIL / BREVO_SENDER_* / hello@gopulseforge.com fallback for tenant AMO sends.
+  if (!resolvedSender) {
+    return {
+      ok: false,
+      blockReason: 'Canonical sender identity is required for tenant acquisition sends.',
+      status: EXECUTION_RECORD_STATUS.BLOCKED,
+    };
+  }
+
+  const configCheck = validateCanonicalSenderConfiguration(resolvedSender);
+  if (!configCheck.ok) {
+    return {
+      ok: false,
+      blockReason: configCheck.reason || 'Canonical sender configuration is incomplete.',
+      status: EXECUTION_RECORD_STATUS.BLOCKED,
+    };
+  }
+
+  const bindingCheck = assertCapacitySenderBinding({
+    capacityPayload: emmettPayload,
+    canonicalSender: configCheck.identity,
+  });
+  if (!bindingCheck.ok) {
+    return {
+      ok: false,
+      blockReason: bindingCheck.reason,
       status: EXECUTION_RECORD_STATUS.BLOCKED,
     };
   }
@@ -225,6 +288,7 @@ function buildExecutionBundle(input = {}) {
     }
   }
 
+  const sender = configCheck.identity;
   const bundle = {
     missionId: mission.id,
     tenantId: tenantId != null ? String(tenantId) : String(mission.tenantId || ''),
@@ -247,8 +311,11 @@ function buildExecutionBundle(input = {}) {
     provider: {
       channel: 'email',
       provider: 'brevo',
-      senderIdentity: senderIdentity || process.env.FROM_EMAIL || 'hello@gopulseforge.com',
+      senderIdentity: sender.senderEmail,
+      senderName: sender.senderName,
+      sendingDomain: sender.sendingDomain,
     },
+    canonicalSender: sender,
   };
 
   return { ok: true, bundle, currentRevision: revisionCheck.currentRevision };

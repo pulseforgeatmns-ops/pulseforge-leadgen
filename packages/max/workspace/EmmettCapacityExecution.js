@@ -46,10 +46,11 @@ function findEmmettCapacity(contributions = []) {
 
 function fixtureInfrastructureSnapshot(tenantId) {
   const id = String(tenantId || '10');
+  // Coherent single-sender fixture: inboxId === sender email for CAPACITY → EXECUTE binding.
   return {
     tenantId: id,
     clientId: Number(id) || null,
-    inboxId: `inbox-${id}`,
+    inboxId: `ops@example.com`,
     domain: 'example.com',
     inboxAgeDays: 45,
     providerCeiling: 50,
@@ -70,6 +71,17 @@ function fixtureInfrastructureSnapshot(tenantId) {
     historicalDailyAvg: 8,
     recentSends: 40,
     replyByWeekday: { Tue: 0.12, Fri: 0.06 },
+  };
+}
+
+function fixtureCanonicalSender(tenantId) {
+  const snap = fixtureInfrastructureSnapshot(tenantId);
+  return {
+    tenantId: snap.tenantId,
+    clientId: snap.clientId,
+    senderEmail: snap.inboxId,
+    senderName: 'Example Sender',
+    sendingDomain: snap.domain,
   };
 }
 
@@ -119,7 +131,7 @@ function sanitizeQueueItem(item = {}) {
   return clean;
 }
 
-function mapAssessedToCapacityPayload(assessed = {}) {
+function mapAssessedToCapacityPayload(assessed = {}, opts = {}) {
   const { health, capacity, governor, queue, recommendations } = assessed;
   const recommended = Number(capacity?.recommended || 0);
   const queueItems = (queue?.items || []).map(sanitizeQueueItem);
@@ -136,6 +148,15 @@ function mapAssessedToCapacityPayload(assessed = {}) {
     || governorOutcome === GOVERNOR_OUTCOMES.EMERGENCY
     || Number(health?.score || 0) < 70
   );
+
+  const {
+    senderIdentityFromInfrastructureSnapshot,
+  } = require('../../../utils/canonicalSenderIdentity');
+  const infrastructureSnapshot = opts.infrastructureSnapshot || assessed.snapshot || null;
+  const senderIdentity = opts.senderIdentity
+    || (infrastructureSnapshot
+      ? senderIdentityFromInfrastructureSnapshot(infrastructureSnapshot)
+      : null);
 
   return {
     capacity: {
@@ -169,6 +190,12 @@ function mapAssessedToCapacityPayload(assessed = {}) {
       reason: governor?.reason || null,
       halt: governor?.halt === true,
       slowCap: governor?.slowCap != null ? governor.slowCap : null,
+    },
+    // Bound CAPACITY identity — EXECUTE must match clients.sender_* against these fields.
+    senderIdentity: senderIdentity || {
+      inboxId: null,
+      senderEmail: null,
+      sendingDomain: null,
     },
   };
 }
@@ -290,7 +317,7 @@ async function buildEmmettCapacityPayload(executionInput = {}, opts = {}) {
     timeZone: infrastructureSnapshot.timeZone || 'America/New_York',
   });
 
-  const payload = mapAssessedToCapacityPayload(assessed);
+  const payload = mapAssessedToCapacityPayload(assessed, { infrastructureSnapshot });
   assertContract(SPECIALISTS.EMMETT, payload);
   payload._assessed = undefined;
   return { payload, assessed, infrastructureSnapshot, candidates };
@@ -335,12 +362,13 @@ function fixtureEmmettCapacityResult(mission, contributions = [], opts = {}) {
   });
   const candidates = executionInput.specialistInput?.missionCandidates || [];
   const engine = eoi.createOutboundEngine();
+  const infrastructureSnapshot = executionInput.specialistInput.infrastructureSnapshot;
   const assessed = engine.assess({
     tenantId: String(mission.tenantId || '10'),
-    snapshot: executionInput.specialistInput.infrastructureSnapshot,
+    snapshot: infrastructureSnapshot,
     prospects: candidates,
   });
-  return mapAssessedToCapacityPayload(assessed);
+  return mapAssessedToCapacityPayload(assessed, { infrastructureSnapshot });
 }
 
 function validateEmmettPreconditions({ mission, engine, tenantId }) {
@@ -446,6 +474,7 @@ function commitEmmettCapacityStage({
 module.exports = {
   findEmmettCapacity,
   fixtureInfrastructureSnapshot,
+  fixtureCanonicalSender,
   resolveInfrastructureSnapshot,
   mapAssessedToCapacityPayload,
   buildEmmettCapacityPayload,

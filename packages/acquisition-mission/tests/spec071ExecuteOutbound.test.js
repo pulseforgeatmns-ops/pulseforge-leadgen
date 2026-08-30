@@ -36,6 +36,9 @@ const {
   advanceExecuteOutbound,
 } = require('../../max/workspace/AmoOperatorApproval');
 const { executeOutboundBundle } = require('../../max/workspace/OutboundExecutionAdapter');
+const {
+  fixtureCanonicalSender,
+} = require('../../max/workspace/EmmettCapacityExecution');
 
 const OBJECTIVE =
   'Acquire commercial cleaning customers in Manchester NH for law firms.';
@@ -45,9 +48,21 @@ const PROSPECT_EMAILS = {
   'co-granite': 'ops@granitelegal.com',
 };
 
+const CANONICAL_SENDER = fixtureCanonicalSender('10');
+
 function resolveProspectAttributes(prospectId) {
   const email = PROSPECT_EMAILS[prospectId];
   return email ? { email, name: prospectId } : null;
+}
+
+function executeOpts(extra = {}) {
+  return {
+    tenantId: '10',
+    canonicalSender: CANONICAL_SENDER,
+    resolveProspectAttributes,
+    skipProviderReadiness: true,
+    ...extra,
+  };
 }
 
 function mockSendEmailFactory(calls = []) {
@@ -125,10 +140,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     const result = await advanceExecuteOutbound({
       engine,
       mission: snapshot.mission,
-      tenantId: '10',
       operatorId: 'operator-1',
       sendEmail: mockSendEmailFactory(providerCalls),
-      resolveProspectAttributes,
+      ...executeOpts(),
     });
 
     assert.equal(result.executionOutcome, 'completed');
@@ -151,9 +165,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
 
     const routed = await routeExecutionRequest(request, {
       engine,
-      tenantId: '10',
       sendEmail: mockSendEmailFactory(providerCalls),
-      resolveProspectAttributes,
+      ...executeOpts(),
     });
 
     assert.equal(routed.specialist, 'emmett');
@@ -167,11 +180,13 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     const bundleResult = buildExecutionBundle({
       mission: snapshot.mission,
       contributions: snapshot.contributions,
-      resolveProspectAttributes,
+      ...executeOpts(),
     });
     assert.equal(bundleResult.ok, true);
     assert.ok(bundleResult.bundle.sends.length >= 1);
     assert.ok(bundleResult.bundle.sends.some((row) => row.message?.subject));
+    assert.equal(bundleResult.bundle.provider.senderIdentity, CANONICAL_SENDER.senderEmail);
+    assert.equal(bundleResult.bundle.provider.sendingDomain, CANONICAL_SENDER.sendingDomain);
   });
 
   it('changed artifact revision blocks execution with no provider call', async () => {
@@ -194,9 +209,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       () => advanceExecuteOutbound({
         engine,
         mission: engine.get(mission.id, '10'),
-        tenantId: '10',
         sendEmail: mockSendEmailFactory(providerCalls),
-        resolveProspectAttributes,
+        ...executeOpts(),
       }),
       (err) => err.code === 'tme_execution_approval_stale'
         || err.code === 'tme_execute_outbound_blocked'
@@ -217,7 +231,7 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     const bundleResult = buildExecutionBundle({
       mission: snapshot.mission,
       contributions: snapshot.contributions,
-      resolveProspectAttributes,
+      ...executeOpts(),
     });
     assert.equal(bundleResult.ok, true);
     for (const send of bundleResult.bundle.sends) {
@@ -235,7 +249,7 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     const bundleResult = buildExecutionBundle({
       mission: snapshot.mission,
       contributions: snapshot.contributions,
-      resolveProspectAttributes,
+      ...executeOpts(),
     });
     const sendable = bundleResult.bundle.sends.find((row) => row.message);
     assert.ok(sendable);
@@ -274,6 +288,11 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
         },
         deliverability: { status: 'healthy' },
         governor: { outcome: 'pause', reason: 'Reputation risk.', halt: true },
+        senderIdentity: {
+          inboxId: CANONICAL_SENDER.senderEmail,
+          senderEmail: CANONICAL_SENDER.senderEmail,
+          sendingDomain: CANONICAL_SENDER.sendingDomain,
+        },
       },
     }, { tenantId: '10' });
     engine.contribute(mission.id, {
@@ -291,9 +310,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       () => advanceExecuteOutbound({
         engine,
         mission: engine.get(mission.id, '10'),
-        tenantId: '10',
         sendEmail: mockSendEmailFactory(providerCalls),
-        resolveProspectAttributes,
+        ...executeOpts(),
       }),
       (err) => err.code === 'tme_deliverability_paused' || err.code === 'tme_execute_outbound_blocked'
     );
@@ -306,9 +324,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     const result = await advanceExecuteOutbound({
       engine,
       mission: engine.get(mission.id, '10'),
-      tenantId: '10',
+      operatorId: 'operator-1',
       sendEmail: mockSendEmailFactory(providerCalls),
-      resolveProspectAttributes,
+      ...executeOpts(),
     });
 
     const records = engine.store.listExecutionRecords(mission.id);
@@ -321,6 +339,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     assert.ok(sent.executionApprovalContributionId);
     assert.ok(sent.transactionId);
     assert.ok(sent.prospectId);
+    assert.equal(providerCalls[0].sender.email, CANONICAL_SENDER.senderEmail);
+    assert.equal(providerCalls[0].sender.name, CANONICAL_SENDER.senderName);
+    assert.equal(providerCalls[0].requireExplicitSender, true);
 
     const inspect = engine.inspect(mission.id, { tenantId: '10' });
     assert.ok(inspect.executionRecords?.length >= 1);
@@ -333,10 +354,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     const result = await executeOutboundBundle({
       mission: engine.get(mission.id, '10'),
       contributions: engine.inspect(mission.id, { tenantId: '10' }).contributions,
-      tenantId: '10',
       sendEmail: mockFailingSendEmail(providerCalls),
-      resolveProspectAttributes,
       persistExecutionRecord: (row) => engine.store.addExecutionRecord(row),
+      ...executeOpts(),
     });
 
     assert.equal(result.blocked, false);
@@ -366,10 +386,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     await executeOutboundBundle({
       mission: snap.mission,
       contributions: snap.contributions,
-      tenantId: '10',
       sendEmail,
-      resolveProspectAttributes,
       persistExecutionRecord: (row) => engine.store.addExecutionRecord(row),
+      ...executeOpts(),
     });
     const firstCallCount = providerCalls.length;
     assert.ok(firstCallCount >= 1);
@@ -377,11 +396,10 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     await executeOutboundBundle({
       mission: snap.mission,
       contributions: snap.contributions,
-      tenantId: '10',
       sendEmail,
-      resolveProspectAttributes,
       existingRecords: engine.store.listExecutionRecords(mission.id),
       persistExecutionRecord: (row) => engine.store.addExecutionRecord(row),
+      ...executeOpts(),
     });
     assert.equal(providerCalls.length, firstCallCount);
   });
@@ -395,5 +413,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     assert.equal(ctx.emmettComplete, true);
     assert.equal(ctx.executionApproved, true);
     assert.equal(snapshot.mission.stage, STAGES.READY);
+    assert.equal(
+      snapshot.contributions.find((r) => r.specialist === SPECIALISTS.EMMETT)?.payload?.senderIdentity?.senderEmail,
+      CANONICAL_SENDER.senderEmail
+    );
   });
 });
