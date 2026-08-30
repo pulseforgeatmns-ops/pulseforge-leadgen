@@ -11,8 +11,6 @@
  * until it is persisted into clients.sender_*.
  */
 
-const { evaluateSenderIdentityReadiness } = require('./sendingReadiness');
-
 const BLOCK_CODES = Object.freeze({
   TENANT_REQUIRED: 'canonical_sender_tenant_required',
   CLIENT_NOT_FOUND: 'canonical_sender_client_not_found',
@@ -258,6 +256,7 @@ function clientRowFromIdentity(identity = {}) {
 }
 
 async function evaluateCanonicalSenderReadiness(input = {}) {
+  const { evaluateSenderIdentityReadiness } = require('./sendingReadiness');
   const resolved = input.identity
     ? validateCanonicalSenderConfig(input.identity)
     : await resolveCanonicalSenderIdentity(input);
