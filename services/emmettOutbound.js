@@ -114,6 +114,14 @@ async function ingestOutcome(input = {}, opts = {}) {
 }
 
 async function ingestBrevoResult(result = {}, opts = {}) {
+  const identityStatus = result.sender_identity_status || result.senderIdentityStatus;
+  if (identityStatus === 'mismatch' || result.reputation_ingest === false) {
+    return {
+      skipped: true,
+      reason: 'sender_identity_mismatch',
+      sender_identity_status: identityStatus || 'mismatch',
+    };
+  }
   const clientId = result.client_id || result.clientId;
   if (!clientId) return null;
   return ingestOutcome({

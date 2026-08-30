@@ -14,6 +14,9 @@ const {
   asText,
   nowIso,
 } = require('./types');
+const {
+  extractCapacitySenderIdentity,
+} = require('../../utils/canonicalSenderIdentity');
 
 const EXECUTION_APPROVAL_ACTION = 'execution_approved';
 
@@ -50,6 +53,7 @@ function computePreparedArtifactBinding(missionId, contributions = []) {
   const queue = emmettPayload.queue || {};
   const queueItems = Array.isArray(queue.items) ? queue.items : [];
   const governor = emmettPayload.governor || {};
+  const senderIdentity = extractCapacitySenderIdentity(emmettPayload);
 
   return {
     missionId,
@@ -63,6 +67,8 @@ function computePreparedArtifactBinding(missionId, contributions = []) {
       .filter(Boolean)
       .sort(),
     governorOutcome: governor.outcome || null,
+    senderEmail: senderIdentity.senderEmail || null,
+    sendingDomain: senderIdentity.sendingDomain || null,
   };
 }
 

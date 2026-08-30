@@ -17,6 +17,7 @@ const {
   exactSequenceName,
   getBrevoState,
 } = require('./utils/sendingReadiness');
+const { resolveCanonicalSenderIdentity } = require('./utils/canonicalSenderIdentity');
 const { notSyntheticSql } = require('./utils/callDispositions');
 const outboundIntel = require('./services/emmettOutbound');
 
@@ -1701,8 +1702,31 @@ async function run(context = {}) {
   console.log('\nEmmett agent running...\n');
   CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
   if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
-  FROM_EMAIL = CLIENT_CONFIG.sender_email;
-  FROM_NAME = CLIENT_CONFIG.sender_name;
+  const canonicalSender = await resolveCanonicalSenderIdentity({
+    tenantId: CLIENT_ID,
+    clientId: CLIENT_ID,
+    client: CLIENT_CONFIG,
+  });
+  if (!canonicalSender.ok) {
+    console.error(`[Emmett] Canonical sender blocked: ${canonicalSender.blockReason}`);
+    await db.logAgentAction(
+      AGENT_NAME,
+      'cron_run',
+      null,
+      null,
+      {
+        sent: 0,
+        prospects_evaluated: 0,
+        client_id: CLIENT_ID,
+        reason: canonicalSender.code,
+        block_reason: canonicalSender.blockReason,
+      },
+      'failed'
+    );
+    return finish({ idle: true, reason: canonicalSender.code });
+  }
+  FROM_EMAIL = canonicalSender.identity.senderEmail;
+  FROM_NAME = canonicalSender.identity.senderName;
   MAIL_TRANSPORTER = createMailTransporter();
   console.log(`Configured sender: ${FROM_NAME || '(missing)'} <${FROM_EMAIL || '(missing)'}>`);
 

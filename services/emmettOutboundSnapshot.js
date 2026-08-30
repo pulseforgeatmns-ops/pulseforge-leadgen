@@ -6,6 +6,7 @@
 
 const { getWarmupProgress, resolveWarmupDailyCap } = require('../utils/sendWarmup');
 const { localDateOf } = require('../packages/emmett-outbound');
+const { ensureSenderIdentityEventSchema } = require('../utils/emailEventIdentitySchema');
 
 function pct(part, whole) {
   const w = Number(whole || 0);
@@ -75,7 +76,8 @@ async function queryFirstOperationalSendAt(pool, clientId, _opts = {}) {
     `SELECT MIN(event_at) AS first_sent_at
        FROM email_events
       WHERE client_id = $1
-        AND event_type = ANY($2::text[])`,
+        AND event_type = ANY($2::text[])
+        AND COALESCE(sender_identity_status, 'match') <> 'mismatch'`,
     [clientId, FIRST_SEND_EVENT_TYPES],
     { rows: [{ first_sent_at: null }] }
   );
@@ -88,6 +90,13 @@ async function buildInboxSnapshot(clientId, opts = {}) {
   const timeZone = opts.timeZone || 'America/New_York';
   const tenantId = String(clientId);
   const localDate = opts.localDate || localDateOf(now, timeZone);
+  if (pool) {
+    try {
+      await ensureSenderIdentityEventSchema(pool);
+    } catch (_) {
+      /* mock or pre-migration pools may not support ALTER */
+    }
+  }
 
   const clientRes = await querySafe(
     pool,
@@ -108,7 +117,8 @@ async function buildInboxSnapshot(clientId, opts = {}) {
         COUNT(*) FILTER (WHERE event_type IN ('spam','complaint'))::int AS complaints
       FROM email_events
       WHERE client_id = $1
-        AND event_at >= NOW() - INTERVAL '7 days'`,
+        AND event_at >= NOW() - INTERVAL '7 days'
+        AND COALESCE(sender_identity_status, 'match') <> 'mismatch'`,
     [clientId],
     { rows: [{ sends: 0, bounces: 0, opens: 0, replies: 0, complaints: 0 }] }
   );

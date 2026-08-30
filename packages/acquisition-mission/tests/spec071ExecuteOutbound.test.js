@@ -36,6 +36,15 @@ const {
   advanceExecuteOutbound,
 } = require('../../max/workspace/AmoOperatorApproval');
 const { executeOutboundBundle } = require('../../max/workspace/OutboundExecutionAdapter');
+const { FIXTURE_CANONICAL_SENDER } = require('../../max/workspace/EmmettCapacityExecution');
+
+const CANONICAL_SENDER = {
+  ...FIXTURE_CANONICAL_SENDER,
+  tenantId: '10',
+  clientId: 10,
+};
+
+const READY_SENDER = { ready: true };
 
 const OBJECTIVE =
   'Acquire commercial cleaning customers in Manchester NH for law firms.';
@@ -129,6 +138,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       operatorId: 'operator-1',
       sendEmail: mockSendEmailFactory(providerCalls),
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
     });
 
     assert.equal(result.executionOutcome, 'completed');
@@ -154,12 +165,19 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       tenantId: '10',
       sendEmail: mockSendEmailFactory(providerCalls),
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
     });
 
     assert.equal(routed.specialist, 'emmett');
     assert.equal(routed.action, 'execute_outbound');
     assert.equal(routed.executionResult.executionOutcome, 'completed');
     assert.ok(providerCalls.length >= 1);
+    assert.deepEqual(providerCalls[0].sender, {
+      email: CANONICAL_SENDER.senderEmail,
+      name: CANONICAL_SENDER.senderName,
+    });
+    assert.equal(providerCalls[0].requireExplicitSender, true);
   });
 
   it('matching artifact revision allows execution', async () => {
@@ -168,6 +186,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       mission: snapshot.mission,
       contributions: snapshot.contributions,
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
     });
     assert.equal(bundleResult.ok, true);
     assert.ok(bundleResult.bundle.sends.length >= 1);
@@ -197,6 +217,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
         tenantId: '10',
         sendEmail: mockSendEmailFactory(providerCalls),
         resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
       }),
       (err) => err.code === 'tme_execution_approval_stale'
         || err.code === 'tme_execute_outbound_blocked'
@@ -218,6 +240,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       mission: snapshot.mission,
       contributions: snapshot.contributions,
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
     });
     assert.equal(bundleResult.ok, true);
     for (const send of bundleResult.bundle.sends) {
@@ -236,6 +260,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       mission: snapshot.mission,
       contributions: snapshot.contributions,
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
     });
     const sendable = bundleResult.bundle.sends.find((row) => row.message);
     assert.ok(sendable);
@@ -274,6 +300,12 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
         },
         deliverability: { status: 'healthy' },
         governor: { outcome: 'pause', reason: 'Reputation risk.', halt: true },
+        senderIdentity: {
+          inboxId: CANONICAL_SENDER.senderEmail,
+          senderEmail: CANONICAL_SENDER.senderEmail,
+          domain: CANONICAL_SENDER.sendingDomain,
+          sendingDomain: CANONICAL_SENDER.sendingDomain,
+        },
       },
     }, { tenantId: '10' });
     engine.contribute(mission.id, {
@@ -294,6 +326,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
         tenantId: '10',
         sendEmail: mockSendEmailFactory(providerCalls),
         resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
       }),
       (err) => err.code === 'tme_deliverability_paused' || err.code === 'tme_execute_outbound_blocked'
     );
@@ -309,6 +343,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       tenantId: '10',
       sendEmail: mockSendEmailFactory(providerCalls),
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
     });
 
     const records = engine.store.listExecutionRecords(mission.id);
@@ -336,6 +372,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       tenantId: '10',
       sendEmail: mockFailingSendEmail(providerCalls),
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
       persistExecutionRecord: (row) => engine.store.addExecutionRecord(row),
     });
 
@@ -369,6 +407,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       tenantId: '10',
       sendEmail,
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
       persistExecutionRecord: (row) => engine.store.addExecutionRecord(row),
     });
     const firstCallCount = providerCalls.length;
@@ -380,6 +420,8 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       tenantId: '10',
       sendEmail,
       resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
       existingRecords: engine.store.listExecutionRecords(mission.id),
       persistExecutionRecord: (row) => engine.store.addExecutionRecord(row),
     });
