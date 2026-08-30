@@ -5,7 +5,7 @@
  *
  * Authority is clients.sender_email / sender_name / sending_domain only.
  * Environment sender values are not tenant identity and must not override
- * this contract for canonical AMO or legacy Emmett acquisition sends.
+ * this contract for canonical Acquisition Mission Orchestration (AMO) sends.
  *
  * CIE sender_identity is onboarding context, not execution authority,
  * until it is persisted into clients.sender_*.
