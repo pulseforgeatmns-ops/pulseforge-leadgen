@@ -41,6 +41,33 @@ function sendErrorSample(result, prospect = null) {
   };
 }
 
+function classifyLegacyExecutionTraffic({ candidate = {}, context = {} } = {}) {
+  const source = String(context?.source || context?.triggered_by || context?.triggeredBy || context?.origin || '').toLowerCase();
+  const contentSource = String(candidate?.contentSource || candidate?.paige?.source || candidate?.source || '').toLowerCase();
+  const operationalSources = ['internal', 'system', 'operational'];
+  if (operationalSources.includes(source) || operationalSources.includes(contentSource)) {
+    return 'OPERATIONAL';
+  }
+  if (candidate?.email || candidate?.paige?.subject || candidate?.paige?.body || contentSource === 'legacy_sequence' || contentSource === 'paige' || source === 'cron' || source === 'dashboard' || source === 'autorun' || source === 'auto' || source === 'scheduled') {
+    return 'ACQUISITION';
+  }
+  return 'UNKNOWN';
+}
+
+function buildLegacyExecutionBlock({ sendDecision = null, prospect = {}, clientId = null, classification = 'ACQUISITION' } = {}) {
+  return {
+    blocked: true,
+    classification,
+    reason: 'canonical_execution_required',
+    code: 'canonical_execution_required',
+    providerSendAttempted: false,
+    clientId,
+    prospectId: prospect?.id || null,
+    email: prospect?.email || null,
+    sendDecision,
+  };
+}
+
 async function reportEmmettRun({ runId, attempts, successes, skipped = 0, errorSample = null }) {
   try {
     return await reportAgentRun({
@@ -2054,6 +2081,48 @@ async function run(context = {}) {
       );
       continue;
     }
+
+    const legacyTrafficType = classifyLegacyExecutionTraffic({
+      candidate: {
+        id: prospect.id,
+        email: prospect.email,
+        dnc: prospect.do_not_contact === true,
+        contentSource: outboundGate.allowLegacySequences ? 'legacy_sequence' : 'paige',
+        paige: {
+          source: outboundGate.allowLegacySequences ? 'legacy_sequence' : 'paige',
+          author: outboundGate.allowLegacySequences ? 'legacy_sequence' : 'paige',
+          subject,
+          body,
+        },
+      },
+      context,
+    });
+    if (legacyTrafficType === 'ACQUISITION' || legacyTrafficType === 'UNKNOWN') {
+      const legacyBlock = buildLegacyExecutionBlock({
+        sendDecision,
+        prospect,
+        clientId: CLIENT_ID,
+        classification: legacyTrafficType,
+      });
+      skipped++;
+      console.warn(`[Emmett] Legacy acquisition execution blocked for ${prospect.email}: ${legacyBlock.reason} (${legacyTrafficType})`);
+      await db.logAgentAction(
+        AGENT_NAME,
+        'legacy_execution_blocked',
+        prospect.id,
+        null,
+        {
+          ...legacyBlock,
+          entrypoint: context?.source || context?.triggered_by || 'cron',
+          prospect_id: prospect.id,
+          client_id: CLIENT_ID,
+          subject,
+          sequence: sequenceName,
+        },
+        'skipped'
+      );
+      continue;
+    }
     const sendLogId = await createEmailSendLog(prospect, logPayload);
     attempts++;
     const result = await sendEmail(
@@ -2134,7 +2203,13 @@ async function run(context = {}) {
   }
 }
 
-module.exports = { run, checkSendingDomainHealth, applyOutboundGate };
+module.exports = {
+  run,
+  checkSendingDomainHealth,
+  applyOutboundGate,
+  classifyLegacyExecutionTraffic,
+  buildLegacyExecutionBlock,
+};
 
 if (require.main === module) {
   run().catch(async (err) => {

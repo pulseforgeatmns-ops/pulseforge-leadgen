@@ -12,6 +12,7 @@ const express = require('express');
 
 const training = require('../packages/max/training');
 const eoi = require('../packages/emmett-outbound');
+const emmettAgent = require('../emmettAgent');
 const {
   resetEngine,
   getEngine,
@@ -150,6 +151,51 @@ describe('SPEC-117 routes and send-path wiring', () => {
     assert.ok(gateAt > 0 && sendAt > gateAt, 'governor must run before sendEmail');
     const webhooks = fs.readFileSync(path.join(__dirname, '../routes/webhooks.js'), 'utf8');
     assert.match(webhooks, /ingestBrevoResult/);
+  });
+
+  it('classifies the legacy Emmett send path as acquisition and blocks provider execution', () => {
+    const classification = emmettAgent.classifyLegacyExecutionTraffic({
+      candidate: { id: 42, email: 'prospect@example.com', dnc: false, contentSource: 'legacy_sequence' },
+      context: { source: 'cron' },
+    });
+    assert.equal(classification, 'ACQUISITION');
+
+    const block = emmettAgent.buildLegacyExecutionBlock({
+      sendDecision: { allowed: true, code: 'approved', reason: 'healthy' },
+      prospect: { id: 42, email: 'prospect@example.com' },
+      clientId: 21,
+    });
+    assert.equal(block.blocked, true);
+    assert.equal(block.reason, 'canonical_execution_required');
+    assert.equal(block.providerSendAttempted, false);
+  });
+
+  it('keeps EOI approval semantics while the legacy path remains blocked', () => {
+    const engine = getEngine();
+    const decision = engine.canSend({
+      tenantId: '21',
+      localDate: '2026-08-30',
+      candidate: {
+        id: 7,
+        email: 'lead@example.com',
+        dnc: false,
+        contentSource: 'paige',
+        paige: { author: 'paige', source: 'paige', subject: 'walkthrough', body: 'worth a look?' },
+      },
+      governor: { outcome: 'PROCEED', slowCap: 10 },
+      capacity: { recommended: 10 },
+      approvedPlan: { status: 'approved', localDate: '2026-08-30', approvedCapacity: 10 },
+      sentToday: 0,
+    });
+    assert.equal(decision.allowed, true);
+
+    const block = emmettAgent.buildLegacyExecutionBlock({
+      sendDecision: decision,
+      prospect: { id: 7, email: 'lead@example.com' },
+      clientId: 21,
+    });
+    assert.equal(block.blocked, true);
+    assert.equal(block.reason, 'canonical_execution_required');
   });
 
   it('approves through a thin HTTP stand-in with an in-memory engine', async () => {
