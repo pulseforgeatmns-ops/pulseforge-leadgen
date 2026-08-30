@@ -229,6 +229,80 @@ describe('SPEC-197 — Pending Decision Conversational Resolution', () => {
     });
   });
 
+  describe('PendingDecisionResolver — execution_approval matrix', () => {
+    const mission = {
+      id: 'm-execution-approval',
+      stage: STAGES.READY,
+      objective: OBJECTIVE,
+      pendingOperatorDecision: {
+        stage: STAGES.READY,
+        kind: OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL,
+        prompt: 'Approve execution of the prepared outbound plan?',
+      },
+    };
+
+    it('resolves the exact production utterance as request_revision', () => {
+      const q =
+        'Do not authorize this outreach. The prepared messaging needs to be regenerated before execution. Regenerate the outreach messaging and outbound plan for these prospects, then return the updated package for my approval. Do not send anything.';
+      const resolution = resolvePendingOperatorDecision(q, mission);
+      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.REQUEST_REVISION);
+      assert.equal(resolution.action, 'request_revision');
+      assert.equal(resolution.resolvedFromPendingDecision, false);
+      assert.equal(resolution.decisionKind, OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL);
+      assert.equal(resolution.executionIntent, null);
+    });
+
+    it('rejects no-send language without authorizing execution', () => {
+      const resolution = resolvePendingOperatorDecision("No, don't send this.", mission);
+      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.REJECT);
+      assert.equal(resolution.action, 'cancel');
+      assert.equal(resolution.executionIntent, EXECUTION_INTENTS.CANCEL_PLAN);
+    });
+
+    it('approves execution when the operator explicitly authorizes it', () => {
+      const resolution = resolvePendingOperatorDecision('Yes, authorize it.', mission);
+      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.AFFIRM);
+      assert.equal(resolution.action, 'approve_execution');
+      assert.equal(resolution.executionIntent, EXECUTION_INTENTS.APPROVE_EXECUTION);
+    });
+
+    it('does not approve when the operator says do not authorize this', () => {
+      const resolution = resolvePendingOperatorDecision('Do not authorize this.', mission);
+      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.REJECT);
+      assert.notEqual(resolution.action, 'approve_execution');
+      assert.equal(resolution.executionIntent, EXECUTION_INTENTS.CANCEL_PLAN);
+    });
+
+    it('routes rewrite language to request_revision', () => {
+      const resolution = resolvePendingOperatorDecision('Regenerate the message.', mission);
+      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.REQUEST_REVISION);
+      assert.equal(resolution.action, 'request_revision');
+      assert.equal(resolution.executionIntent, null);
+    });
+
+    it('leaves clearly ambiguous execution_approval replies unresolved', () => {
+      const resolution = resolvePendingOperatorDecision('Continuee', mission);
+      assert.equal(resolution.resolved, false);
+      assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.AMBIGUOUS);
+    });
+
+    it('routes objective change language to modify_mission', () => {
+      const resolution = resolvePendingOperatorDecision(
+        'Change the mission objective instead.',
+        mission
+      );
+      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.MODIFY);
+      assert.equal(resolution.action, 'modify_mission');
+      assert.equal(resolution.resolvedFromPendingDecision, false);
+    });
+  });
+
   describe('AcquisitionMissionExecution — resolved pending decision executes Scout', () => {
     let engine;
     let mission;
