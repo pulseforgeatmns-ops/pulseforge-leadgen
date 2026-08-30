@@ -26,6 +26,22 @@ async function sendEmail(input = {}) {
   const body = String(input.body || '');
   const tags = Array.isArray(input.tags) ? input.tags : [];
   const apiKey = input.apiKey || process.env.BREVO_API_KEY;
+
+  // Env fallbacks remain for unrelated internal/ops usage only.
+  // Canonical AMO execution must pass requireExplicitSender + explicit sender.
+  if (input.requireExplicitSender) {
+    const email = input.sender && String(input.sender.email || '').trim();
+    const name = input.sender && String(input.sender.name || '').trim();
+    if (!email || !name) {
+      return {
+        success: false,
+        providerErrorCode: 'missing_explicit_sender',
+        providerErrorMessage: 'Canonical AMO sends require an explicit sender { email, name }.',
+        error: 'Canonical AMO sends require an explicit sender { email, name }.',
+      };
+    }
+  }
+
   const sender = input.sender || {
     name: process.env.BREVO_SENDER_NAME || process.env.FROM_NAME || 'Pulseforge',
     email: process.env.BREVO_SENDER_EMAIL || process.env.FROM_EMAIL || 'hello@gopulseforge.com',

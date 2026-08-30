@@ -152,6 +152,38 @@ async function executeCanonical(input = {}, opts = {}) {
     source,
   });
 
+  // Resolve tenant sender before outbound EXECUTE so CAPACITY and provider share one identity.
+  let canonicalSender = input.canonicalSender || null;
+  if (!canonicalSender && (intent === amo.EXECUTION_INTENTS.EXECUTE_OUTBOUND || intent === 'execute_outbound')) {
+    const {
+      loadCanonicalSenderIdentity,
+      resolveCanonicalSenderIdentity,
+      validateCanonicalSenderConfiguration,
+    } = require('../utils/canonicalSenderIdentity');
+    if (input.client || opts.client) {
+      const resolved = resolveCanonicalSenderIdentity({
+        tenantId,
+        clientId: tenantId,
+        client: input.client || opts.client,
+      });
+      const validated = validateCanonicalSenderConfiguration(resolved);
+      if (!validated.ok) {
+        throw amo.amoError('canonical_sender_invalid', validated.reason || 'Canonical sender configuration is incomplete.');
+      }
+      canonicalSender = validated.identity;
+    } else if (opts.pool || input.pool) {
+      const loaded = await loadCanonicalSenderIdentity({
+        tenantId,
+        clientId: tenantId,
+        pool: opts.pool || input.pool,
+      });
+      if (!loaded.ok) {
+        throw amo.amoError('canonical_sender_invalid', loaded.reason || 'Canonical sender could not be resolved.');
+      }
+      canonicalSender = loaded.identity;
+    }
+  }
+
   return amo.routeExecutionRequest(request, {
     engine,
     tenantId,
@@ -160,9 +192,15 @@ async function executeCanonical(input = {}, opts = {}) {
     runScout: input.runScout,
     allowFixtureFallback: input.allowFixtureFallback,
     persist: opts.persist,
-    pool: opts.pool,
+    pool: opts.pool || input.pool,
     persistStage: opts.persistStage,
     missionEngine: opts.missionEngine,
+    sendEmail: input.sendEmail,
+    resolveProspectAttributes: input.resolveProspectAttributes,
+    canonicalSender,
+    senderIdentity: input.senderIdentity,
+    brevoState: input.brevoState,
+    skipProviderReadiness: input.skipProviderReadiness,
   });
 }
 

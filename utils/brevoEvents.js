@@ -340,18 +340,57 @@ async function resolveProspect(email, clientId, sendMatch) {
 async function sendingDomainForPayload(payload, sendPayload, prospect) {
   const fromEmail = senderEmail(payload) || normalizeEmail(sendPayload.from_email);
   const fromDomain = rootDomainFromEmail(fromEmail);
-  if (fromDomain) return fromDomain;
-
-  const payloadDomain = normalizeRootDomain(payload.sending_domain || metadataValue(payload, 'sending_domain'));
-  if (payloadDomain) return payloadDomain;
-
-  if (prospect?.client_id) {
-    const clientRes = await pool.query('SELECT sending_domain FROM clients WHERE id = $1 LIMIT 1', [prospect.client_id]);
-    const clientDomain = normalizeRootDomain(clientRes.rows[0]?.sending_domain);
-    if (clientDomain) return clientDomain;
+  if (fromDomain) {
+    return { domain: fromDomain, source: 'event_sender', eventSenderEmail: fromEmail || null };
   }
 
-  return 'unknown.local';
+  const payloadDomain = normalizeRootDomain(payload.sending_domain || metadataValue(payload, 'sending_domain'));
+  if (payloadDomain) {
+    return { domain: payloadDomain, source: 'event_payload', eventSenderEmail: fromEmail || null };
+  }
+
+  // Do not fabricate the tenant domain onto the event — unknown is distinct from mismatch.
+  return { domain: null, source: 'unknown', eventSenderEmail: fromEmail || null };
+}
+
+async function loadTenantSendingDomain(clientId) {
+  if (!clientId) return null;
+  try {
+    const clientRes = await pool.query(
+      'SELECT sending_domain FROM clients WHERE id = $1 LIMIT 1',
+      [clientId]
+    );
+    return normalizeRootDomain(clientRes.rows[0]?.sending_domain);
+  } catch (_) {
+    return null;
+  }
+}
+
+let senderIdentitySchemaReady = false;
+let senderIdentitySchemaPromise = null;
+
+async function ensureSenderIdentitySchema(db = pool) {
+  if (senderIdentitySchemaReady) return;
+  if (!senderIdentitySchemaPromise) {
+    senderIdentitySchemaPromise = (async () => {
+      await db.query(`
+        ALTER TABLE email_events
+          ADD COLUMN IF NOT EXISTS sender_identity_status text,
+          ADD COLUMN IF NOT EXISTS reputation_excluded boolean NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS sender_identity_reason text
+      `);
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS email_events_reputation_scope_idx
+          ON email_events (client_id, event_at)
+          WHERE COALESCE(reputation_excluded, false) = false
+      `);
+      senderIdentitySchemaReady = true;
+    })().catch((err) => {
+      senderIdentitySchemaPromise = null;
+      throw err;
+    });
+  }
+  await senderIdentitySchemaPromise;
 }
 
 async function logBrevoEvent({ eventId, eventType, email, prospectId, clientId, inserted }) {
@@ -373,6 +412,7 @@ async function logBrevoEvent({ eventId, eventType, email, prospectId, clientId, 
 async function insertBrevoEvent(rawPayload = {}) {
   await ensureOpenSignalSchema(pool);
   await ensureOutboundExecutionSchema(pool);
+  await ensureSenderIdentitySchema(pool);
   const payload = rawPayload || {};
   const recipient = recipientEmail(payload);
   const type = internalEventType(payload);
@@ -414,7 +454,18 @@ async function insertBrevoEvent(rawPayload = {}) {
     }, pool);
   }
   const finalClientId = Number(prospect?.client_id || clientId) || null;
-  const domain = await sendingDomainForPayload(payload, sendPayload, prospect);
+  const domainResolution = await sendingDomainForPayload(payload, sendPayload, prospect);
+  const tenantDomain = await loadTenantSendingDomain(finalClientId);
+  const {
+    classifyProviderEventSenderIdentity,
+  } = require('./canonicalSenderIdentity');
+  const identity = classifyProviderEventSenderIdentity({
+    eventSendingDomain: domainResolution.domain,
+    eventSenderEmail: domainResolution.eventSenderEmail,
+    tenantSendingDomain: tenantDomain,
+  });
+  // Preserve event domain evidence; use explicit unknown marker only when domain evidence is absent.
+  const domain = identity.eventDomain || 'unknown.local';
   const id = eventId(payload, type, recipient, messageId);
   const sequence = textValue(metadataValue(payload, 'sequence') || sendPayload.sequence || tags[0]);
   const step = parseStep(metadataValue(payload, 'step') || sendPayload.step || tags.find(tag => /^step_/i.test(String(tag))));
@@ -449,13 +500,17 @@ async function insertBrevoEvent(rawPayload = {}) {
       open_source_reason,
       open_source_classified_at,
       user_agent,
-      ip_address
+      ip_address,
+      sender_identity_status,
+      reputation_excluded,
+      sender_identity_reason
     )
     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12,
-      $13::open_source, $14, CASE WHEN $14::text IS NULL THEN NULL ELSE NOW() END, $15, $16
+      $13::open_source, $14, CASE WHEN $14::text IS NULL THEN NULL ELSE NOW() END, $15, $16,
+      $17, $18, $19
     WHERE NOT (
       (
-        $17::boolean
+        $20::boolean
         AND $10::text IS NOT NULL
         AND EXISTS (
           SELECT 1
@@ -480,11 +535,16 @@ async function insertBrevoEvent(rawPayload = {}) {
           open_source_reason = COALESCE(EXCLUDED.open_source_reason, email_events.open_source_reason),
           open_source_classified_at = COALESCE(EXCLUDED.open_source_classified_at, email_events.open_source_classified_at),
           user_agent = COALESCE(EXCLUDED.user_agent, email_events.user_agent),
-          ip_address = COALESCE(EXCLUDED.ip_address, email_events.ip_address)
+          ip_address = COALESCE(EXCLUDED.ip_address, email_events.ip_address),
+          sender_identity_status = COALESCE(EXCLUDED.sender_identity_status, email_events.sender_identity_status),
+          reputation_excluded = EXCLUDED.reputation_excluded OR COALESCE(email_events.reputation_excluded, false),
+          sender_identity_reason = COALESCE(EXCLUDED.sender_identity_reason, email_events.sender_identity_reason)
       WHERE email_events.event_type IS DISTINCT FROM EXCLUDED.event_type
         OR email_events.open_source IS DISTINCT FROM EXCLUDED.open_source
         OR email_events.user_agent IS DISTINCT FROM EXCLUDED.user_agent
         OR email_events.ip_address IS DISTINCT FROM EXCLUDED.ip_address
+        OR email_events.sender_identity_status IS DISTINCT FROM EXCLUDED.sender_identity_status
+        OR email_events.reputation_excluded IS DISTINCT FROM EXCLUDED.reputation_excluded
     RETURNING id, open_source::text AS open_source, open_source_reason, (xmax = 0) AS inserted
   `, [
     id,
@@ -503,6 +563,9 @@ async function insertBrevoEvent(rawPayload = {}) {
     openClassification.reason,
     openClassification.userAgent,
     openClassification.ipAddress,
+    identity.status,
+    identity.reputationExcluded === true,
+    identity.reason,
     SINGLETON_MESSAGE_EVENT_TYPES.has(type),
   ]);
 
@@ -553,6 +616,25 @@ async function insertBrevoEvent(rawPayload = {}) {
     });
   }
 
+  if (identity.status === 'mismatch') {
+    await pool.query(`
+      INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
+      VALUES ('riley', 'brevo_sender_identity_mismatch', $1, $2, 'quarantined', NOW(), $3)
+    `, [
+      prospect?.id || null,
+      JSON.stringify({
+        event_id: id,
+        event_type: type,
+        recipient_email: recipient,
+        event_domain: identity.eventDomain,
+        tenant_domain: identity.tenantDomain,
+        reputation_excluded: true,
+        reason: identity.reason,
+      }),
+      finalClientId || null,
+    ]);
+  }
+
   await logBrevoEvent({
     eventId: id,
     eventType: type,
@@ -564,7 +646,8 @@ async function insertBrevoEvent(rawPayload = {}) {
 
   let missionProviderEvent = null;
   let missionProviderObservation = null;
-  if (isCanonicalCorrelation(correlation)) {
+  // Known sender-domain mismatch must not enter canonical mission/reputation observation paths.
+  if (isCanonicalCorrelation(correlation) && identity.status !== 'mismatch') {
     try {
       missionProviderEvent = await persistCanonicalProviderEvent({
         correlation,
@@ -591,6 +674,9 @@ async function insertBrevoEvent(rawPayload = {}) {
     prospect_id: prospect?.id || null,
     client_id: finalClientId,
     sending_domain: domain,
+    sender_identity_status: identity.status,
+    reputation_excluded: identity.reputationExcluded === true,
+    sender_identity_reason: identity.reason,
     open_source: openSource,
     open_source_reason: openSourceReason,
     has_corresponding_send: Boolean(sendMatch || openClassification.hasSend || isCanonicalCorrelation(correlation)),
@@ -616,4 +702,7 @@ module.exports = {
   senderEmail,
   findMatchingSend,
   persistCanonicalProviderEvent,
+  ensureSenderIdentitySchema,
+  sendingDomainForPayload,
+  loadTenantSendingDomain,
 };

@@ -75,7 +75,8 @@ async function queryFirstOperationalSendAt(pool, clientId, _opts = {}) {
     `SELECT MIN(event_at) AS first_sent_at
        FROM email_events
       WHERE client_id = $1
-        AND event_type = ANY($2::text[])`,
+        AND event_type = ANY($2::text[])
+        AND COALESCE(reputation_excluded, false) = false`,
     [clientId, FIRST_SEND_EVENT_TYPES],
     { rows: [{ first_sent_at: null }] }
   );
@@ -88,6 +89,13 @@ async function buildInboxSnapshot(clientId, opts = {}) {
   const timeZone = opts.timeZone || 'America/New_York';
   const tenantId = String(clientId);
   const localDate = opts.localDate || localDateOf(now, timeZone);
+
+  try {
+    const { ensureSenderIdentitySchema } = require('../utils/brevoEvents');
+    await ensureSenderIdentitySchema(pool);
+  } catch (_) {
+    /* schema ensure best-effort; querySafe falls back if columns missing */
+  }
 
   const clientRes = await querySafe(
     pool,
@@ -108,7 +116,8 @@ async function buildInboxSnapshot(clientId, opts = {}) {
         COUNT(*) FILTER (WHERE event_type IN ('spam','complaint'))::int AS complaints
       FROM email_events
       WHERE client_id = $1
-        AND event_at >= NOW() - INTERVAL '7 days'`,
+        AND event_at >= NOW() - INTERVAL '7 days'
+        AND COALESCE(reputation_excluded, false) = false`,
     [clientId],
     { rows: [{ sends: 0, bounces: 0, opens: 0, replies: 0, complaints: 0 }] }
   );
