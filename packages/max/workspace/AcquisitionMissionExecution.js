@@ -1308,4 +1308,11 @@ module.exports = {
   shouldExecutePlan,
   shouldClarifyPlan,
   resolveExecutionPolicy,
+  // SPEC-211 — Export execution review formatting helpers for pending decision clarification
+  ensureReadyExecutionReview,
+  summarizeReadyExecutionTargets,
+  summarizeReadyExecutionMessage,
+  summarizeReadyExecutionQueue,
+  summarizeReadyExecutionSafety,
+  readyExecutionApprovalPrompt,
 };

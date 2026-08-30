@@ -11,11 +11,20 @@ const {
   pendingDecisionOwnsTurn,
 } = require('./PendingDecisionResolver');
 const { presentableOperatorDecision } = require('../../acquisition-mission/PendingOperatorDecision');
+const { OPERATOR_DECISION_KINDS } = require('../../acquisition-mission/types');
 const {
   buildMissionCommunication,
   applyMissionCommunication,
   formatMissionProse,
 } = require('./MissionCommunication');
+const {
+  ensureReadyExecutionReview,
+  summarizeReadyExecutionTargets,
+  summarizeReadyExecutionMessage,
+  summarizeReadyExecutionQueue,
+  summarizeReadyExecutionSafety,
+  readyExecutionApprovalPrompt,
+} = require('./AcquisitionMissionExecution');
 const askPathTrace = require('./audit/AskPathTrace');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
 const { resolveAcquisitionMissionRuntime } = require('./WorkspaceMissionInspection');
@@ -51,14 +60,46 @@ function buildClarifyProse(question, resolution, snapshot) {
   const pending = presentableOperatorDecision(snapshot) || {};
   const prompt = resolution.prompt || pending.prompt || 'Please confirm your decision.';
   let prefix = '';
+  let reviewProse = '';
 
   if (resolution.outcome === RESOLUTION_OUTCOMES.QUESTION) {
     prefix = `${contextualPendingAnswer(question, resolution, snapshot)}\n\n`;
   } else if (resolution.outcome === RESOLUTION_OUTCOMES.AMBIGUOUS) {
-    prefix = "I didn't catch a clear yes or no for the pending decision.\n\n";
+    // SPEC-211 — For execution_approval decisions, include the canonical executionReview
+    // when clarifying an ambiguous response to help the operator make an informed decision.
+    if (resolution.decisionKind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && snapshot) {
+      const review = ensureReadyExecutionReview(snapshot, snapshot.mission || null);
+      if (review) {
+        const blockers = Array.isArray(review.decision && review.decision.blockers)
+          ? review.decision.blockers
+          : [];
+        reviewProse = [
+          '## Execution Ready',
+          '',
+          '**Targets**',
+          summarizeReadyExecutionTargets(review),
+          '',
+          '**Channel**',
+          '• Email',
+          '',
+          '**Message**',
+          summarizeReadyExecutionMessage(review),
+          '',
+          '**Outbound Plan**',
+          summarizeReadyExecutionQueue(review),
+          '',
+          '**Safety / Delivery**',
+          summarizeReadyExecutionSafety(review),
+          '',
+        ].join('\n');
+      }
+      prefix = "I didn't catch a clear yes or no for the pending decision.\n\n";
+    } else {
+      prefix = "I didn't catch a clear yes or no for the pending decision.\n\n";
+    }
   }
 
-  return `${prefix}${prompt}`.trim();
+  return `${prefix}${reviewProse}${prompt}`.trim();
 }
 
 function buildPendingDecisionStructured(prose, resolution, snapshot, mission) {
