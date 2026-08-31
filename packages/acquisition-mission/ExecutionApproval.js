@@ -13,6 +13,8 @@ const {
   OPERATOR_DECISION_KINDS,
   asText,
   nowIso,
+  MESSAGE_BINDING_SCOPES,
+  BINDING_VALIDATION_RESULTS,
 } = require('./types');
 const {
   extractCapacitySenderIdentity,
@@ -81,6 +83,96 @@ function computePreparedArtifactRevision(missionId, contributions = []) {
     .slice(0, 16);
 }
 
+/**
+ * SPEC-212 — Validate message binding integrity before execution.
+ * Every queue item must have a message bound to the same candidateId.
+ */
+function validateProspectMessageBindings(emmettPayload = {}) {
+  const queue = emmettPayload.queue || {};
+  const queueItems = Array.isArray(queue.items) ? queue.items : [];
+
+  if (!queueItems.length) {
+    return {
+      valid: true,
+      result: BINDING_VALIDATION_RESULTS.VALID,
+      violations: [],
+    };
+  }
+
+  const violations = [];
+
+  for (let i = 0; i < queueItems.length; i += 1) {
+    const item = queueItems[i];
+    const itemCandidateId = asText(item.id || item.candidateId || item.prospectId || item.companyId);
+
+    if (!itemCandidateId) {
+      violations.push({
+        index: i,
+        reason: 'missing_candidate_id',
+        message: `Queue item #${i} missing candidateId / prospectId / id`,
+        item,
+      });
+      continue;
+    }
+
+    // Check for message binding
+    if (!item.paige || !item.paige.candidateId) {
+      violations.push({
+        index: i,
+        reason: 'missing_message_binding',
+        message: `Queue item #${i} (${itemCandidateId}) has no bound message`,
+        item,
+      });
+      continue;
+    }
+
+    const messageCandidateId = asText(item.paige.candidateId);
+
+    // SPEC-212: Fail closed on mismatch
+    if (String(itemCandidateId) !== String(messageCandidateId)) {
+      violations.push({
+        index: i,
+        reason: 'candidate_id_mismatch',
+        message: `Queue item #${i}: itemCandidateId="${itemCandidateId}" ≠ messageCandidateId="${messageCandidateId}"`,
+        itemCandidateId,
+        messageCandidateId,
+        item,
+      });
+      continue;
+    }
+
+    // Check for prospect-specific binding scope
+    const bindingScope = item.paige.bindingScope || MESSAGE_BINDING_SCOPES.PROSPECT;
+    if (bindingScope === MESSAGE_BINDING_SCOPES.PROSPECT) {
+      // For prospect-bound messages, verify attributable intelligence exists
+      if (!item.paige.attributableIntelligence) {
+        violations.push({
+          index: i,
+          reason: 'missing_attributable_intelligence',
+          message: `Queue item #${i}: prospect-bound message lacking attributable intelligence`,
+          item,
+        });
+        continue;
+      }
+    }
+  }
+
+  if (violations.length) {
+    return {
+      valid: false,
+      result: BINDING_VALIDATION_RESULTS.CONTAMINATED,
+      violations,
+      blockerReason: `Message binding validation failed: ${violations.length} violation(s)`,
+    };
+  }
+
+  return {
+    valid: true,
+    result: BINDING_VALIDATION_RESULTS.VALID,
+    violations: [],
+  };
+}
+
 function isExecutionApprovalContribution(row) {
   if (!row || row.specialist !== SPECIALISTS.OPERATOR || row.kind !== CONTRIBUTION_KINDS.APPROVAL) {
     return false;
@@ -123,6 +215,9 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
   const emmettPayload = (emmett && emmett.payload) || {};
   const queueItems = Array.isArray(emmettPayload.queue?.items) ? emmettPayload.queue.items : [];
 
+  // SPEC-212: Validate message bindings before approval
+  const bindingValidation = validateProspectMessageBindings(emmettPayload);
+
   return {
     approved: true,
     consumed: true,
@@ -143,6 +238,8 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
     command: asText(input.command || input.question) || null,
     executionRequestId: input.executionRequestId || null,
     transactionId: input.transactionId || null,
+    // SPEC-212: Include binding validation in approval payload
+    bindingValidation,
   };
 }
 
@@ -250,6 +347,7 @@ module.exports = {
   findEmmettCapacity,
   computePreparedArtifactBinding,
   computePreparedArtifactRevision,
+  validateProspectMessageBindings,
   isExecutionApprovalContribution,
   findExecutionApprovals,
   findValidExecutionApproval,

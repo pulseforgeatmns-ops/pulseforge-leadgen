@@ -113,6 +113,32 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     await advanceEmmettCapacity({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
+    const prepared = engine.inspect(mission.id, { tenantId: '10' });
+    const paige = prepared.contributions
+      .slice().reverse()
+      .find((row) => row.specialist === SPECIALISTS.PAIGE && row.kind === CONTRIBUTION_KINDS.VARIANTS);
+    const emmett = prepared.contributions
+      .slice().reverse()
+      .find((row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY);
+    const variants = paige?.payload?.variants || [];
+    engine.store.updateContribution(emmett.id, (row) => ({
+      ...row,
+      payload: {
+        ...row.payload,
+        queue: {
+          ...row.payload.queue,
+          items: (row.payload.queue?.items || []).map((item, index) => {
+            const candidateId = item.candidateId || item.prospectId || item.id || item.companyId;
+            const variant = variants.find((entry) => entry.candidateId === candidateId) || variants[index];
+            return {
+              ...item,
+              candidateId,
+              paige: variant,
+            };
+          }),
+        },
+      },
+    }));
     await advanceExecutionAfterApproval({
       engine,
       mission: engine.get(mission.id, '10'),

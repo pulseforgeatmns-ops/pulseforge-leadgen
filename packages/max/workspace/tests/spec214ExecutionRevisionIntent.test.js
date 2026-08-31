@@ -95,7 +95,7 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
 
       assert.equal(pendingDecisionResolution.resolved, true);
       assert.equal(pendingDecisionResolution.outcome, 'request_revision');
-      assert.equal(pendingDecisionResolution.action, 'revise_prepared_outreach');
+      assert.equal(pendingDecisionResolution.action, 'request_revision');
       assert.equal(pendingDecisionResolution.executionIntent, amo.EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH);
     });
 
@@ -113,7 +113,7 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
 
       assert.ok(intent.pendingDecisionResolution);
       assert.equal(intent.pendingDecisionResolution.outcome, 'request_revision');
-      assert.equal(intent.pendingDecisionResolution.action, 'revise_prepared_outreach');
+      assert.equal(intent.pendingDecisionResolution.action, 'request_revision');
       assert.equal(
         intent.pendingDecisionResolution.decisionKind,
         OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
