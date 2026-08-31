@@ -1,5 +1,10 @@
 'use strict';
 
+const {
+  EPISTEMIC_STATES,
+  classifyEpistemicState,
+} = require('./clientIntelligenceEpistemic');
+
 /**
  * SPEC-090 — Max Conversational Reasoning Layer.
  *
@@ -1549,6 +1554,10 @@ function looksLikeExplicitUnknownAnswer(text) {
   if (!s) return true;
   // Deferral phrases are handled separately — do not treat as open uncertainty.
   if (looksLikeExplicitDeferral(text)) return false;
+  const epistemicState = classifyEpistemicState(text);
+  if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
+    return true;
+  }
   if (EXPLICIT_UNKNOWN_RE.test(String(text || '').trim())) return true;
   if (/^(we\s+)?(do\s+not|don't|dont)\s+know(\s+(yet|yeet|right\s+now))?$/i.test(s)) return true;
   if (
