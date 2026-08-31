@@ -72,6 +72,15 @@ function createMemoryAmoStore(opts = {}) {
     return clone(row);
   }
 
+  function updateContribution(id, updater) {
+    const index = contributions.findIndex((row) => row.id === id);
+    if (index < 0) return null;
+    const current = clone(contributions[index]);
+    const updated = typeof updater === 'function' ? updater(current) : { ...current, ...updater };
+    contributions[index] = clone(updated);
+    return clone(updated);
+  }
+
   function listContributions(missionId) {
     return contributions.filter((row) => row.missionId === missionId).map(clone);
   }
@@ -258,6 +267,7 @@ function createMemoryAmoStore(opts = {}) {
     addEvent,
     listEvents,
     addContribution,
+    updateContribution,
     listContributions,
     addObservation,
     listObservations,

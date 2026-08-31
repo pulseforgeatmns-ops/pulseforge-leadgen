@@ -136,6 +136,7 @@ function defaultHandlers() {
     }),
     [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
     [EXECUTION_INTENTS.GENERATE_CAPACITY]: (ctx) => approval.advanceEmmettCapacity(ctx),
+    [EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH]: (ctx) => approval.advancePreparedOutreachRevision(ctx),
     [EXECUTION_INTENTS.APPROVE_EXECUTION]: (ctx) => approval.advanceExecutionAfterApproval(ctx),
     [EXECUTION_INTENTS.EXECUTE_OUTBOUND]: (ctx) => {
       const { advanceExecuteOutbound } = require('../max/workspace/EmmettOutboundExecution');

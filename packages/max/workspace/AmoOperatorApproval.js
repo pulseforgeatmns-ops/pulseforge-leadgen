@@ -87,7 +87,7 @@ const {
 } = require('../../acquisition-mission/SpecialistInputs');
 const { applyClarification, applyEdits } = require('../../acquisition-mission/MissionPlanner');
 const { bindStagePersistDurable } = require('../../../services/acquisitionMissionPersistence');
-const { specialistContext, canEnter } = require('../../acquisition-mission/Lifecycle');
+const { specialistContext, canEnter, applyStageTransition } = require('../../acquisition-mission/Lifecycle');
 const {
   findEmmettCapacity,
   runEmmettForAmoMission,
@@ -118,6 +118,11 @@ const {
   findValidExecutionApproval,
   EXECUTION_APPROVAL_ACTION,
 } = require('../../acquisition-mission/ExecutionApproval');
+const {
+  buildExecutionReview,
+  buildPendingExecutionDecision,
+  computePreparedArtifactRevision,
+} = require('../../acquisition-mission/ExecutionApproval');
 
 const DISCOVERY_APPROVAL_ACTION = 'discovery_approved';
 const DISCOVERY_INVESTIGATION_ACTION = 'discovery_investigation_continued';
@@ -126,6 +131,26 @@ const PLAN_APPROVAL_ACTION = 'plan_approved';
 const PLAN_CLARIFICATION_ACTION = 'plan_clarified';
 const PLAN_CANCEL_ACTION = 'plan_cancelled';
 const PLAN_EDIT_ACTION = 'plan_edited';
+
+function invalidatePreparedOutreachApproval(engine, mission, tenantId) {
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const approvals = (snapshot.contributions || []).filter((row) =>
+    row.specialist === SPECIALISTS.OPERATOR
+      && row.kind === CONTRIBUTION_KINDS.APPROVAL
+      && row.payload?.decisionKind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
+  );
+  approvals.forEach((approval) => {
+    engine.store.updateContribution(approval.id, (current) => ({
+      ...current,
+      payload: {
+        ...(current.payload || {}),
+        invalidated: true,
+        invalidatedAt: new Date().toISOString(),
+        invalidatedReason: 'prepared_outreach_revision_requested',
+      },
+    }));
+  });
+}
 
 /** SPEC-128 — operator approval lifecycle phases (audit + response). */
 const APPROVAL_PHASES = Object.freeze({
@@ -2003,6 +2028,233 @@ async function advanceEmmettCapacity(input = {}) {
   };
 }
 
+/**
+ * Reprepare the exact READY bundle without dispatching any provider send.
+ * Both replacement contributions are staged and committed by one TME transaction.
+ */
+async function advancePreparedOutreachRevision(input = {}) {
+  const { engine, mission, tenantId, operatorId, question } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const current = engine.get(mission.id, tenantId);
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  if (!current || current.stage !== STAGES.READY) {
+    throw planningError('tme_revision_wrong_stage', 'Prepared outreach revision requires READY.');
+  }
+  if (!findValidExecutionApproval(snapshot.contributions || [], current.id)) {
+    throw planningError('tme_revision_no_approval', 'No current execution approval is available to revise.');
+  }
+
+  const preparing = engine.get(current.id, tenantId);
+  const contributions = snapshot.contributions || [];
+  applyStageTransition(preparing, STAGES.PREPARE, { contributions });
+  preparing.revisionState = {
+    status: 'running',
+    requestedAt: new Date().toISOString(),
+    requestedBy: operatorId || 'operator',
+    supersedesRevision: computePreparedArtifactRevision(current.id, contributions),
+  };
+  engine.store.putMission(preparing);
+  invalidatePreparedOutreachApproval(engine, preparing, tenantId);
+
+  try {
+    const staged = await executeMissionStage({
+      engine,
+      missionId: current.id,
+      tenantId,
+      pool: input.pool,
+      specialist: SPECIALISTS.MAX,
+      stage: STAGES.PREPARE,
+      operatorId,
+      validatePreconditions: ({ mission: preparedMission }) => {
+        if (preparedMission.stage !== STAGES.PREPARE) {
+          throw planningError('tme_revision_wrong_stage', 'Revision preparation requires PREPARE.');
+        }
+        const prepared = engine.inspect(preparedMission.id, { tenantId }).contributions || [];
+        if (!specialistContext(prepared).maxComplete) {
+          throw planningError('tme_max_incomplete', 'Max prioritization is required before revision.');
+        }
+        return { missionActive: true, specialistAvailable: true, revision: true };
+      },
+      execute: async ({ mission: preparedMission, transactionId }) => {
+        const preparedContributions = engine.inspect(preparedMission.id, { tenantId }).contributions || [];
+        const paigeInput = buildExecutionInput({
+          mission: preparedMission,
+          contributions: preparedContributions,
+          specialist: SPECIALISTS.PAIGE,
+          transactionId,
+          executionContext: {
+            stage: STAGES.PREPARE,
+            missionId: preparedMission.id,
+            tenantId,
+            executionRequestId: input.executionRequest?.id || null,
+          },
+          store: engine.store,
+        });
+        let paigeExecution;
+        if (typeof input.runPaige === 'function') {
+          const variantsPayload = await input.runPaige(preparedMission, {
+            ...input,
+            contributions: preparedContributions,
+            transactionId,
+            executionContext: paigeInput.executionContext,
+          });
+          paigeExecution = await executeSpecialist({
+            mission: preparedMission,
+            contributions: preparedContributions,
+            specialist: SPECIALISTS.PAIGE,
+            transactionId,
+            store: engine.store,
+            run: async () => ({
+              spec: 'SPEC-132',
+              status: EXECUTION_STATUSES.SUCCESS,
+              confidence: { overall: 0.75, evidence: 0.7, fit: 0.8, completeness: 0.75 },
+              evidence: [],
+              contributions: variantsPayload,
+              recommendations: [],
+              unknowns: [],
+              nextActions: [{ kind: 'operator_review', label: 'Review revised variants' }],
+            }),
+          });
+        } else {
+          paigeExecution = await executeSpecialist({
+            mission: preparedMission,
+            contributions: preparedContributions,
+            specialist: SPECIALISTS.PAIGE,
+            transactionId,
+            store: engine.store,
+            run: (secInput) => runPaigeVariants({
+              ...secInput,
+              ...paigeInput,
+              mission: preparedMission,
+            }),
+          });
+        }
+        if (paigeExecution.status !== EXECUTION_STATUSES.SUCCESS) {
+          throw validationError('tme_paige_revision_failed', 'Paige revision did not complete.');
+        }
+        const variantsPayload = paigeExecution.contributions;
+        validatePaigeOutput({ variantsPayload, executionResult: paigeExecution }, { transactionId });
+
+        const emmettRun = await runEmmettForAmoMission(preparedMission, {
+          ...input,
+          contributions: preparedContributions.concat([{
+            specialist: SPECIALISTS.PAIGE,
+            kind: CONTRIBUTION_KINDS.VARIANTS,
+            payload: variantsPayload,
+          }]),
+          transactionId,
+          executionContext: {
+            stage: STAGES.PREPARE,
+            missionId: preparedMission.id,
+            tenantId,
+            executionRequestId: input.executionRequest?.id || null,
+          },
+        });
+        const emmettExecution = await executeSpecialist({
+          mission: preparedMission,
+          contributions: preparedContributions,
+          specialist: SPECIALISTS.EMMETT,
+          transactionId,
+          store: engine.store,
+          run: async () => buildEmmettExecutionResult(
+            emmettRun.capacityPayload,
+            emmettRun.executionInput,
+            { assessed: emmettRun.assessed }
+          ),
+        });
+        if (emmettExecution.status !== EXECUTION_STATUSES.SUCCESS) {
+          throw validationError('tme_emmett_revision_failed', 'Emmett revision did not complete.');
+        }
+        const capacityPayload = emmettRun.capacityPayload;
+        validateEmmettCapacityOutput({
+          capacityPayload,
+          executionResult: emmettExecution,
+          executionInput: emmettRun.executionInput,
+        }, { transactionId });
+        return {
+          variantsPayload,
+          capacityPayload,
+          paigeExecution,
+          emmettExecution,
+          missionId: preparedMission.id,
+          question,
+        };
+      },
+      validateOutput: (output) => {
+        if (!output.variantsPayload || !output.capacityPayload) {
+          throw validationError('tme_revision_incomplete', 'Revision must prepare Paige and Emmett together.');
+        }
+      },
+      commit: ({ engine: commitEngine, mission: commitMission, tenantId: commitTenantId, output, transactionId }) => {
+        const missionId = commitMission.id;
+        const before = commitEngine.inspect(missionId, { tenantId: commitTenantId }).contributions || [];
+        const oldPaige = findPaigeVariants(before);
+        const oldEmmett = findEmmettCapacity(before);
+        const paige = commitEngine.contribute(missionId, {
+          specialist: SPECIALISTS.PAIGE,
+          kind: CONTRIBUTION_KINDS.VARIANTS,
+          payload: { ...output.variantsPayload, transactionId, revision: 'replacement' },
+        }, { tenantId: commitTenantId }).contribution;
+        const emmett = commitEngine.contribute(missionId, {
+          specialist: SPECIALISTS.EMMETT,
+          kind: CONTRIBUTION_KINDS.CAPACITY,
+          payload: { ...output.capacityPayload, transactionId, revision: 'replacement' },
+        }, { tenantId: commitTenantId }).contribution;
+        if (oldPaige) commitEngine.store.updateContribution(oldPaige.id, (row) => ({
+          ...row,
+          payload: { ...(row.payload || {}), superseded: true, supersededBy: paige.id },
+        }));
+        if (oldEmmett) commitEngine.store.updateContribution(oldEmmett.id, (row) => ({
+          ...row,
+          payload: { ...(row.payload || {}), superseded: true, supersededBy: emmett.id },
+        }));
+        const updated = commitEngine.get(missionId, commitTenantId);
+        const all = commitEngine.inspect(missionId, { tenantId: commitTenantId }).contributions || [];
+        applyStageTransition(updated, STAGES.READY, { contributions: all });
+        updated.revisionState = {
+          ...(updated.revisionState || {}),
+          status: 'completed',
+          completedAt: new Date().toISOString(),
+          paigeContributionId: paige.id,
+          emmettContributionId: emmett.id,
+          preparedArtifactRevision: computePreparedArtifactRevision(missionId, all),
+        };
+        commitEngine.store.putMission(updated);
+        return {
+          paige,
+          emmett,
+          snapshot: commitEngine.inspect(missionId, { tenantId: commitTenantId }),
+        };
+      },
+      persistDurable: bindPersistDurable(input, engine, tenantId),
+    });
+    return {
+      alreadyExecuted: false,
+      revision: staged.commitResult,
+      snapshot: staged.commitResult.snapshot,
+      executionReview: buildExecutionReview(
+        staged.commitResult.snapshot.mission,
+        staged.commitResult.snapshot.contributions
+      ),
+      executionOutcome: 'completed',
+      transactionId: staged.transactionId,
+      missionVersion: staged.missionVersion,
+    };
+  } catch (err) {
+    const failed = engine.get(current.id, tenantId);
+    failed.revisionState = {
+      ...(failed.revisionState || {}),
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      error: err.message,
+      retryable: true,
+    };
+    engine.store.putMission(failed);
+    throw err;
+  }
+}
+
 function validateExecutionPreconditions({ mission, engine, tenantId }) {
   if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
   if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
@@ -2213,6 +2465,7 @@ module.exports = {
   advanceMaxPrioritization,
   advancePaigeVariants,
   advanceEmmettCapacity,
+  advancePreparedOutreachRevision,
   advanceExecutionAfterApproval,
   advanceExecuteOutbound: require('./EmmettOutboundExecution').advanceExecuteOutbound,
   validateDiscoveryPreconditions,

@@ -63,10 +63,10 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
       });
 
       assert.ok(intent.conversationIntent);
-      assert.equal(intent.conversationIntent.intent, THINKING_MODES.INSPECT);
+      assert.equal(intent.conversationIntent.intent, THINKING_MODES.EDIT);
       assert.equal(intent.conversationIntent.via, 'pending_decision_revision_request');
       assert.equal(intent.conversationIntent.thinkingMode, 'execution_revision');
-      assert.equal(intent.conversationIntent.mutatesMission, false);
+      assert.equal(intent.conversationIntent.mutatesMission, true);
       assert.equal(intent.conversationIntent.pendingDecisionOutcome, 'request_revision');
     });
 
@@ -84,7 +84,7 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
 
       assert.equal(intent.executionRequested, false);
       assert.equal(intent.planningRequested, false);
-      assert.equal(intent.mutatesMission, false);
+      assert.equal(intent.mutatesMission, true);
     });
 
     it('REQUEST_REVISION does NOT approve execution', async () => {
@@ -95,8 +95,8 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
 
       assert.equal(pendingDecisionResolution.resolved, true);
       assert.equal(pendingDecisionResolution.outcome, 'request_revision');
-      assert.equal(pendingDecisionResolution.action, 'request_revision');
-      assert.equal(pendingDecisionResolution.executionIntent, null);
+      assert.equal(pendingDecisionResolution.action, 'revise_prepared_outreach');
+      assert.equal(pendingDecisionResolution.executionIntent, amo.EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH);
     });
 
     it('REQUEST_REVISION preserves structured pending decision through intent', async () => {
@@ -113,7 +113,7 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
 
       assert.ok(intent.pendingDecisionResolution);
       assert.equal(intent.pendingDecisionResolution.outcome, 'request_revision');
-      assert.equal(intent.pendingDecisionResolution.action, 'request_revision');
+      assert.equal(intent.pendingDecisionResolution.action, 'revise_prepared_outreach');
       assert.equal(
         intent.pendingDecisionResolution.decisionKind,
         OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
@@ -142,7 +142,7 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
       });
 
       assert.equal(intent.conversationIntent.via, 'pending_decision_revision_request');
-      assert.equal(intent.conversationIntent.intent, THINKING_MODES.INSPECT);
+      assert.equal(intent.conversationIntent.intent, THINKING_MODES.EDIT);
       assert.equal(getOperatorIntentAuditViolations().length, 0);
     });
   });
@@ -242,7 +242,7 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
       // Must NOT approve/send/execute
       assert.equal(operatorIntent.executionRequested, false);
       assert.equal(operatorIntent.planningRequested, false);
-      assert.equal(operatorIntent.mutatesMission, false);
+      assert.equal(operatorIntent.mutatesMission, true);
 
       // Must produce canonical revision intent (not fall through)
       assert.equal(operatorIntent.conversationIntent.via, 'pending_decision_revision_request');

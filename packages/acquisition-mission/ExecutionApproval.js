@@ -86,6 +86,7 @@ function isExecutionApprovalContribution(row) {
     return false;
   }
   const payload = row.payload || {};
+  if (payload.invalidated === true || payload.superseded === true) return false;
   return (
     payload.decisionKind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
     || payload.kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
