@@ -80,11 +80,12 @@ function normalizeText(value) {
 
 function deriveExecutionRequested(conversationIntent) {
   if (!conversationIntent) return false;
-  if (conversationIntent.executionIntent === 'REVISE_PREPARED_OUTREACH') return false;
   if (conversationIntent.continuity) return false;
   if (conversationIntent.via === 'conversational_continue') return false;
   if (conversationIntent.via === 'mission_continuation_ambiguous') return false;
   if (conversationIntent.via === 'mission_continuation') return true;
+  // SPEC-217: REVISE_PREPARED_OUTREACH must be execution-capable for canonical routing.
+  if (conversationIntent.executionIntent === 'REVISE_PREPARED_OUTREACH') return true;
   return (
     conversationIntent.intent === THINKING_MODES.EXECUTE ||
     conversationIntent.intent === THINKING_MODES.EDIT ||
@@ -398,9 +399,9 @@ async function analyzeOperatorIntent(input = {}) {
   const lifecycleResolution = resolveMissionLifecycleIntent(question);
   const legacyContinuation = await resolveLegacyMissionContinuation(input, question);
 
+  // SPEC-217: The prepared-outreach revision intent routes through pending decision resolution.
   let executionRequested =
-    (pendingDecisionResolution.executionIntent !== 'REVISE_PREPARED_OUTREACH'
-      && pendingDecisionRequestsExecution(pendingDecisionResolution)) ||
+    pendingDecisionRequestsExecution(pendingDecisionResolution) ||
     deriveExecutionRequested(conversationIntent);
   let planningRequested = derivePlanningRequested(
     conversationIntent,

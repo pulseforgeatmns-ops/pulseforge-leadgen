@@ -70,7 +70,7 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
       assert.equal(intent.conversationIntent.pendingDecisionOutcome, 'request_revision');
     });
 
-    it('REQUEST_REVISION does NOT request execution', async () => {
+    it('REQUEST_REVISION requests execution for SPEC-217 canonical routing', async () => {
       const mission = executionApprovalMission();
 
       const question = 'Regenerate the message.';
@@ -82,7 +82,9 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
         session: { id: 's-spec214-exec', context: { tenantId: '10', missionId: mission.id } },
       });
 
-      assert.equal(intent.executionRequested, false);
+      // SPEC-217: REQUEST_REVISION with REVISE_PREPARED_OUTREACH must be execution-capable
+      // so it can reach the canonical execution router and dispatch to advancePreparedOutreachRevision()
+      assert.equal(intent.executionRequested, true, 'executionRequested must be true for revision routing');
       assert.equal(intent.planningRequested, false);
       assert.equal(intent.mutatesMission, true);
     });
@@ -217,7 +219,7 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
   });
 
   describe('SPEC-214 Section 7 — Regression Test (exact production scenario)', () => {
-    it('REQUEST_REVISION does NOT send/execute/approve on operator revision request', async () => {
+    it('REQUEST_REVISION reaches canonical router (SPEC-217: executionRequested = true)', async () => {
       const mission = executionApprovalMission();
 
       const operatorUtterance =
@@ -239,22 +241,24 @@ describe('SPEC-214 — Route Canonical Execution Revision Intent', () => {
         session: { id: 's-spec214-regression', context: { tenantId: '10', missionId: mission.id } },
       });
 
-      // Must NOT approve/send/execute
-      assert.equal(operatorIntent.executionRequested, false);
+      // SPEC-217: Must set executionRequested = true so it reaches the canonical router
+      // (The router will dispatch to advancePreparedOutreachRevision, which regenerates but does NOT approve/send/execute)
+      assert.equal(operatorIntent.executionRequested, true, 'SPEC-217: executionRequested must be true for canonical routing');
       assert.equal(operatorIntent.planningRequested, false);
       assert.equal(operatorIntent.mutatesMission, true);
 
-      // Must produce canonical revision intent (not fall through)
+      // Must produce canonical revision intent (not fall through to generic cognition)
       assert.equal(operatorIntent.conversationIntent.via, 'pending_decision_revision_request');
       assert.notEqual(operatorIntent.conversationIntent.via, 'execution_command');
       assert.notEqual(operatorIntent.conversationIntent.via, 'conversational_continue');
 
-      // Must NOT invoke generic cognition
+      // Must NOT invoke generic cognition audit violations
       assert.equal(getOperatorIntentAuditViolations().length, 0);
 
-      // Current prepared artifacts must remain historical but unauthorized
+      // Must have the canonical execution intent preserved
       assert.ok(operatorIntent.pendingDecisionResolution);
       assert.equal(operatorIntent.pendingDecisionResolution.outcome, 'request_revision');
+      assert.equal(operatorIntent.pendingDecisionResolution.executionIntent, amo.EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH);
     });
   });
 
