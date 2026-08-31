@@ -25,6 +25,7 @@ const RESOLUTION_OUTCOMES = Object.freeze({
   QUESTION: 'question',
   UNRELATED: 'unrelated',
   AMBIGUOUS: 'ambiguous',
+  REQUEST_REVISION: 'request_revision',
 });
 
 const PENDING_ALLOWED_ACTIONS = Object.freeze({
@@ -46,6 +47,7 @@ const PENDING_ALLOWED_ACTIONS = Object.freeze({
   [OPERATOR_DECISION_KINDS.PLAN_APPROVAL]: ['approve_plan', 'modify_mission', 'cancel'],
   [OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL]: [
     'approve_execution',
+    'request_revision',
     'modify_mission',
     'cancel',
   ],
@@ -246,9 +248,27 @@ function classifyExecutionApproval(q) {
   if (isCancelPhrase(q)) {
     return { outcome: RESOLUTION_OUTCOMES.REJECT, action: 'cancel', confidence: 0.95 };
   }
+
+  const explicitRevision = /\b(?:regenerate|redo|rework|revise|rewrite|rebuild|reset|reprepare|renew|prepare\s+a\s+new\s+version|bring\s+me\s+a\s+new\s+package|bring\s+me\s+another\s+version|new\s+version|new\s+package|update\s+the\s+messag|update\s+the\s+plan|rewrite\s+it|change\s+the\s+copy|change\s+the\s+messag)\b/i.test(q);
+  const explicitNoSend = /\b(?:do\s+not\s+send|don't\s+send|do\s+not\s+authorize|don't\s+authorize|do\s+not\s+approve|don't\s+approve|not\s+authorize|not\s+approve)\b/i.test(q);
+  const explicitNegative = /\b(?:no\b|don't|do\s+not|not)\b/i.test(q) && /\b(?:send|authorize|approve)\b/i.test(q);
+
+  if (explicitRevision || (/\b(?:regenerate|redo|rework|revise|rewrite)\b/i.test(q) && explicitNegative)) {
+    return {
+      outcome: RESOLUTION_OUTCOMES.REQUEST_REVISION,
+      action: 'request_revision',
+      confidence: 0.98,
+    };
+  }
+
   if (isModifyPhrase(q)) {
     return { outcome: RESOLUTION_OUTCOMES.MODIFY, action: 'modify_mission', confidence: 0.92 };
   }
+
+  if (explicitNoSend || explicitNegative) {
+    return { outcome: RESOLUTION_OUTCOMES.REJECT, action: 'cancel', confidence: 0.93 };
+  }
+
   if (
     /\b(?:approv(e|al|ed)|authoriz(e|ed|ation)|execute|launch|go ahead|proceed|outbound|send)\b/i.test(
       q
@@ -285,7 +305,7 @@ function classifyByKind(kind, q) {
   return null;
 }
 
-function buildResolution(mission, pending, classification) {
+function buildResolution(mission, pending, classification, operatorUtterance = '') {
   const executionIntent = ACTION_EXECUTION_INTENT[classification.action] || null;
   const executable =
     classification.outcome === RESOLUTION_OUTCOMES.AFFIRM ||
@@ -304,6 +324,17 @@ function buildResolution(mission, pending, classification) {
     allowedActions: PENDING_ALLOWED_ACTIONS[pending.kind] || [],
     executionIntent,
     executionAction: executionIntent ? actionFromIntent(executionIntent) : null,
+    canonicalResolution:
+      classification.outcome === RESOLUTION_OUTCOMES.REQUEST_REVISION
+        ? {
+            kind: 'execution_approval',
+            resolution: RESOLUTION_OUTCOMES.REQUEST_REVISION,
+            missionId: mission.id,
+            decisionKind: pending.kind,
+            action: 'request_revision',
+            operatorUtterance: String(operatorUtterance || '').trim() || pending.prompt || null,
+          }
+        : null,
   };
 }
 
@@ -360,7 +391,7 @@ function resolvePendingOperatorDecision(question, mission) {
     return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS);
   }
 
-  return buildResolution(mission, pending, classification);
+  return buildResolution(mission, pending, classification, question);
 }
 
 function pendingDecisionRequestsExecution(resolution) {

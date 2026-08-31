@@ -12,6 +12,7 @@ const {
   createExecutionResult,
   executeSpecialist,
   EXECUTION_STATUSES,
+  MESSAGE_BINDING_SCOPES,
 } = amo;
 const {
   evaluatePaigePriorLearningInfluence,
@@ -23,7 +24,75 @@ function asText(value) {
   return String(value).trim();
 }
 
-function buildBasePaigeVariantsPayload(input = {}) {
+/**
+ * SPEC-212 — Generate per-prospect variants bound to candidateId.
+ * Each variant contains only that prospect's intelligence, never cross-prospect data.
+ */
+function buildPerProspectVariants(input = {}) {
+  const max = input.max || {};
+  const scout = input.scout || {};
+  const plan = input.plan || {};
+
+  // SPEC-212: Use ALL ranked targets, not just [0]
+  const candidates = max.rankedTargets || [];
+  if (!candidates.length && max.priorities?.length) {
+    candidates.push(...max.priorities);
+  }
+
+  // Fallback if no candidates available
+  if (!candidates.length) {
+    return buildFallbackMissionLevelVariant(input);
+  }
+
+  const objective = max.objectives?.[0]?.text || plan.objective || null;
+  const marketLabel = plan.market?.label || 'local offices';
+  const variants = [];
+
+  for (const candidate of candidates) {
+    const candidateId = candidate.id || candidate.companyId || candidate.name;
+    const companyName = candidate.name || candidate.label || 'Company';
+
+    // SPEC-212: Extract ONLY this candidate's intelligence
+    const candidateRationale = candidate.rationale || candidate.reason || null;
+    const candidateFit = candidate.fit != null ? Number(candidate.fit) : 0.7;
+    const candidateTiming = candidate.timing != null ? Number(candidate.timing) : 0.5;
+
+    // SPEC-212: Build prospect-specific subject and body
+    const subject = `Commercial cleaning walkthrough for ${companyName}`;
+    const body = [
+      `Hi — we help ${marketLabel} maintain spotless workspaces.`,
+      objective ? `Mission focus: ${objective}` : null,
+      candidateRationale ? `Why now: ${candidateRationale}` : null,
+    ].filter(Boolean).join('\n\n');
+
+    variants.push({
+      // SPEC-212: Explicit prospect binding
+      candidateId: String(candidateId),
+      companyName,
+      bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
+      variantId: `paige_v_${String(candidateId).replace(/\W/g, '_')}`,
+      label: `Primary - ${companyName}`,
+      subject,
+      body,
+      cta: 'Reply to schedule a walkthrough',
+      // SPEC-212: Store attributable intelligence for this prospect only
+      attributableIntelligence: {
+        rationale: candidateRationale,
+        fit: candidateFit,
+        timing: candidateTiming,
+        companyName,
+      },
+    });
+  }
+
+  return variants;
+}
+
+/**
+ * SPEC-212: Fallback mission-level variant if no candidate list.
+ * Explicitly marked as non-prospect-specific via bindingScope.
+ */
+function buildFallbackMissionLevelVariant(input = {}) {
   const max = input.max || {};
   const scout = input.scout || {};
   const plan = input.plan || {};
@@ -41,14 +110,26 @@ function buildBasePaigeVariantsPayload(input = {}) {
     max.recommendations?.[0] ? `Why now: ${max.recommendations[0]}` : null,
   ].filter(Boolean).join('\n\n');
 
+  return [{
+    bindingScope: MESSAGE_BINDING_SCOPES.MISSION,
+    variantId: 'paige_v_mission_fallback',
+    label: 'Primary - Mission Level',
+    subject,
+    body,
+    cta: 'Reply to schedule a walkthrough',
+    attributableIntelligence: null,
+  }];
+}
+
+function buildBasePaigeVariantsPayload(input = {}) {
+  const variants = buildPerProspectVariants(input);
+  const subjects = variants.map((v) => v.subject);
+  const max = input.max || {};
+  const scout = input.scout || {};
+
   return {
-    variants: [{
-      label: 'Primary',
-      subject,
-      body,
-      cta: 'Reply to schedule a walkthrough',
-    }],
-    subjects: [subject],
+    variants,
+    subjects,
     cta: 'Reply to schedule a walkthrough',
     hypotheses: [
       max.objectiveReason || 'Prioritized targets respond to timing-specific outreach.',
@@ -59,11 +140,11 @@ function buildBasePaigeVariantsPayload(input = {}) {
         : 'Ops hiring signals indicate receptivity window.',
     ].filter(Boolean),
     experiments: [{
-      name: 'subject_personalization',
-      variant: 'company_name_in_subject',
-      hypothesis: 'Company-specific subject lines increase open rates.',
+      name: 'prospect_binding',
+      variant: 'per_prospect_personalized',
+      hypothesis: 'Prospect-bound messages with prospect-specific intelligence increase engagement.',
     }],
-    messaging: body,
+    bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
   };
 }
 
@@ -86,6 +167,8 @@ function buildPaigeVariantsPayload(executionInput = {}) {
 
   let payload = buildBasePaigeVariantsPayload({ max, scout, plan });
 
+  // SPEC-212: Apply prior learning evaluations to all variants
+  // Prior learning is mission-level, but we evaluate against each prospect's context
   const priorLearningEvaluation = evaluatePaigePriorLearningInfluence({
     priorLearning,
     max,
@@ -94,6 +177,8 @@ function buildPaigeVariantsPayload(executionInput = {}) {
     channel: 'email',
   });
 
+  // TODO: Refactor applyPaigePriorLearningAdjustments to apply per-prospect
+  // For now, apply only to first variant to avoid contamination
   payload = applyPaigePriorLearningAdjustments(payload, priorLearningEvaluation, plan);
 
   return {
@@ -200,6 +285,8 @@ function fixturePaigeVariantsResult(mission, contributions = []) {
 }
 
 module.exports = {
+  buildPerProspectVariants,
+  buildFallbackMissionLevelVariant,
   buildBasePaigeVariantsPayload,
   buildPaigeVariantsPayload,
   runPaigeVariants,

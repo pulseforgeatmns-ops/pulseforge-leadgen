@@ -11,6 +11,7 @@ const {
   EVENT_KINDS,
   STAGES,
   nowIso,
+  MESSAGE_BINDING_SCOPES,
 } = require('../../acquisition-mission/types');
 const {
   executeMissionStage,
@@ -24,6 +25,7 @@ const { applyStageTransition } = require('../../acquisition-mission/Lifecycle');
 const {
   findValidExecutionApproval,
   isExecutionApproved,
+  validateProspectMessageBindings,
 } = require('../../acquisition-mission/ExecutionApproval');
 const {
   EXECUTION_RECORD_STATUS,
@@ -61,6 +63,26 @@ function validateExecuteOutboundPreconditions({ mission, engine, tenantId }) {
       'Prepared artifacts changed since execution approval. Re-approve before sending.'
     );
   }
+
+  // SPEC-212: Validate message binding integrity before execution (fail closed)
+  const emmettContribution = contributions
+    .slice()
+    .reverse()
+    .find((row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY);
+  if (emmettContribution && emmettContribution.payload) {
+    const bindingValidation = validateProspectMessageBindings(emmettContribution.payload);
+    if (!bindingValidation.valid) {
+      throw planningError(
+        'tme_message_binding_contamination',
+        bindingValidation.blockerReason || 'Message binding validation failed.',
+        {
+          violations: bindingValidation.violations,
+          result: bindingValidation.result,
+        }
+      );
+    }
+  }
+
   return {
     missionExists: true,
     missionActive: true,
