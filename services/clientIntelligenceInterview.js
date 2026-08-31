@@ -56,6 +56,12 @@ const {
   executeScoutWorkRequest,
 } = require('./clientIntelligenceCampaignPlanning');
 const {
+  EPISTEMIC_STATES,
+  classifyEpistemicState,
+  createBusinessFact,
+  preserveEpistemicState,
+} = require('./clientIntelligenceEpistemic');
+const {
   MESSAGE_CLASSES,
   ARTIFACT_KINDS,
   ANSWER_DISPOSITIONS,
@@ -511,6 +517,10 @@ function looksLikeExplicitUnknown(text) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return true;
+  const epistemicState = classifyEpistemicState(text);
+  if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
+    return true;
+  }
   if (
     /^(n\/?a|none|no|nothing|nope|nil|unknown|not sure|unsure|idk|tbd|-)$/i.test(s)
   ) {
@@ -2107,6 +2117,21 @@ function emptyNormalizedFacts() {
     brand_voice: null,
     ninety_day_outcomes: null,
     success_metrics: [],
+    epistemic_states: {
+      business_name: EPISTEMIC_STATES.UNRESOLVED,
+      business_description: EPISTEMIC_STATES.UNRESOLVED,
+      services: EPISTEMIC_STATES.UNRESOLVED,
+      growth_focus: EPISTEMIC_STATES.UNRESOLVED,
+      ideal_customers: EPISTEMIC_STATES.UNRESOLVED,
+      disqualified_customers: EPISTEMIC_STATES.UNRESOLVED,
+      geography: EPISTEMIC_STATES.UNRESOLVED,
+      differentiation: EPISTEMIC_STATES.UNRESOLVED,
+      brand_voice: EPISTEMIC_STATES.UNRESOLVED,
+      ninety_day_outcomes: EPISTEMIC_STATES.UNRESOLVED,
+      success_metrics: EPISTEMIC_STATES.UNRESOLVED,
+    },
+    hypotheses: {},
+    evidence_statements: {},
   };
 }
 
@@ -2126,6 +2151,16 @@ function cloneNormalizedFacts(facts) {
     brand_voice: src.brand_voice || null,
     ninety_day_outcomes: src.ninety_day_outcomes || null,
     success_metrics: [...(src.success_metrics || [])],
+    epistemic_states: {
+      ...(emptyNormalizedFacts().epistemic_states),
+      ...(src.epistemic_states || {}),
+    },
+    hypotheses: {
+      ...(src.hypotheses || {}),
+    },
+    evidence_statements: {
+      ...(src.evidence_statements || {}),
+    },
   };
 }
 
@@ -2149,16 +2184,45 @@ function extractPlaces(text) {
   return places;
 }
 
+const SECTION_TO_PRIMARY_FIELD = Object.freeze({
+  identity: 'business_description',
+  services: 'services',
+  idealCustomers: 'ideal_customers',
+  avoidCustomers: 'disqualified_customers',
+  targetMarkets: 'geography',
+  competitiveAdvantages: 'differentiation',
+  brandVoice: 'brand_voice',
+  campaignGoals: 'ninety_day_outcomes',
+  successMetrics: 'success_metrics',
+});
+
 /**
  * Ingest a direct answer into normalized evidence for a Blueprint section.
- * SPEC-099: explicit unknowns never become factual values; prior known facts survive.
+ * SPEC-099/SPEC-221: explicit unknowns and hypotheses never become factual values;
+ * epistemic state is recorded explicitly.
  */
 function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
   const next = cloneNormalizedFacts(facts);
   const cleaned = cleanRawAnswer(sectionKey, stripInterviewQuestionEcho(rawAnswer));
   if (!cleaned) return next;
+
+  const epistemicState = classifyEpistemicState(cleaned || rawAnswer);
+  const primaryField = SECTION_TO_PRIMARY_FIELD[sectionKey] || sectionKey;
+
+  next.epistemic_states[primaryField] = epistemicState;
+  next.evidence_statements[primaryField] = String(rawAnswer || cleaned);
+
+  if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
+    return next;
+  }
+  if (epistemicState === EPISTEMIC_STATES.HYPOTHESIS) {
+    next.hypotheses[primaryField] = cleaned;
+    return next;
+  }
+
   // Explicit unknowns leave the section unset rather than storing uncertainty phrases.
   if (looksLikeExplicitUnknown(cleaned) || isLiteralUncertaintyPhrase(cleaned)) {
+    next.epistemic_states[primaryField] = EPISTEMIC_STATES.UNKNOWN;
     return next;
   }
 
@@ -2544,8 +2608,13 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       `The business is understood as ${normalizeBusinessPhrase(firstSentence(f.business_description))}`
     );
   }
+  const getEpistemicState = (fieldKey, hasValue) => {
+    return f.epistemic_states?.[fieldKey] || (hasValue ? EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNRESOLVED);
+  };
+
   sections.identity = {
     ...(prior.identity || emptySection()),
+    epistemic_state: getEpistemicState('business_description', identityBits.length > 0),
     summary: identityBits.length
       ? [
           ensurePeriod(identityBits[0]),
@@ -2556,16 +2625,20 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
 
   sections.services = {
     ...(prior.services || emptySection()),
-    summary: f.services.length
+    epistemic_state: getEpistemicState('services', f.services.length > 0),
+    summary: f.services.length && f.epistemic_states?.services === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`Today the business delivers ${f.services.join(', ')}`),
           'Service understanding reflects what is actually sold now, not aspirational packaging.',
         ].join(' ')
-      : prior.services?.summary || '',
+      : f.epistemic_states?.services === EPISTEMIC_STATES.UNKNOWN
+        ? 'Services: Not yet defined.'
+        : prior.services?.summary || '',
   };
 
   sections.idealCustomers = {
     ...(prior.idealCustomers || emptySection()),
+    epistemic_state: getEpistemicState('ideal_customers', (f.ideal_customers || []).length > 0),
     summary: (() => {
       const cleanIdeal = (f.ideal_customers || []).filter(
         (item) =>
@@ -2574,11 +2647,17 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           !isValueTraitPhrase(item) &&
           !isConversationalFiller(item)
       );
-      if (cleanIdeal.length) {
+      if (cleanIdeal.length && f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.KNOWN) {
         return [
           ensurePeriod(`Ideal customers are ${cleanIdeal.join(', ')}`),
           'This ICP picture prioritizes fit over volume.',
         ].join(' ');
+      }
+      if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.HYPOTHESIS) {
+        return `Current hypothesis: target audience may be ${f.hypotheses?.ideal_customers || f.evidence_statements?.ideal_customers || 'under evaluation'}.`;
+      }
+      if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.UNKNOWN) {
+        return 'Ideal customers: Not yet defined.';
       }
       const priorSummary = String(prior.idealCustomers?.summary || '').trim();
       if (
@@ -2594,12 +2673,15 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
 
   sections.avoidCustomers = {
     ...(prior.avoidCustomers || emptySection()),
-    summary: f.disqualified_customers.length
+    epistemic_state: getEpistemicState('disqualified_customers', f.disqualified_customers.length > 0),
+    summary: f.disqualified_customers.length && f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`The business prefers to avoid ${f.disqualified_customers.join(', ')}`),
           'These constraints protect targeting quality and should stay visible in the Blueprint.',
         ].join(' ')
-      : prior.avoidCustomers?.summary || '',
+      : f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.UNKNOWN
+        ? 'Disqualified customers: Not yet defined.'
+        : prior.avoidCustomers?.summary || '',
   };
 
   const marketBits = [];
@@ -2607,32 +2689,47 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   if (f.growth_focus) marketBits.push(`with a near-term growth focus on ${f.growth_focus}`);
   sections.targetMarkets = {
     ...(prior.targetMarkets || emptySection()),
-    summary: marketBits.length
+    epistemic_state: getEpistemicState('geography', marketBits.length > 0),
+    summary: marketBits.length && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`Priority markets center on ${marketBits.join(' ')}`),
           'Geography and vertical focus here bound where discovery should concentrate first.',
         ].join(' ')
-      : prior.targetMarkets?.summary || '',
+      : f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS
+        ? `Current hypothesis: target markets center on ${f.hypotheses?.geography || f.evidence_statements?.geography || 'under evaluation'}.`
+        : f.epistemic_states?.geography === EPISTEMIC_STATES.UNKNOWN
+          ? 'Target markets: Not yet defined.'
+          : prior.targetMarkets?.summary || '',
   };
 
   sections.competitiveAdvantages = {
     ...(prior.competitiveAdvantages || emptySection()),
-    summary: f.differentiation
+    epistemic_state: getEpistemicState('differentiation', Boolean(f.differentiation)),
+    summary: f.differentiation && f.epistemic_states?.differentiation === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`Competitive edge is described as ${f.differentiation}`),
           'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
         ].join(' ')
-      : prior.competitiveAdvantages?.summary || '',
+      : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
+        ? `Current hypothesis: competitive advantage around ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'under evaluation'}.`
+        : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN
+          ? 'Differentiation: Not yet defined.'
+          : prior.competitiveAdvantages?.summary || '',
   };
 
   sections.brandVoice = {
     ...(prior.brandVoice || emptySection()),
-    summary: f.brand_voice
+    epistemic_state: getEpistemicState('brand_voice', Boolean(f.brand_voice)),
+    summary: f.brand_voice && f.epistemic_states?.brand_voice === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`Brand voice should read as ${f.brand_voice}`),
           'Tone guidance constrains later language without choosing channels or campaigns.',
         ].join(' ')
-      : prior.brandVoice?.summary || '',
+      : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.HYPOTHESIS
+        ? `Current hypothesis: brand voice tone may align with ${f.hypotheses?.brand_voice || f.evidence_statements?.brand_voice || 'under evaluation'}.`
+        : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.UNKNOWN
+          ? 'Brand voice: Not yet defined.'
+          : prior.brandVoice?.summary || '',
   };
 
   sections.campaignGoals = {
@@ -2659,9 +2756,12 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   for (const key of BLUEPRINT_SECTIONS) {
     const p = prior[key] || emptySection();
     const hasSummary =
+      (sections[key].epistemic_state === EPISTEMIC_STATES.KNOWN ||
+       sections[key].epistemic_state === EPISTEMIC_STATES.HYPOTHESIS ||
+       !sections[key].epistemic_state) &&
       Boolean(String(sections[key].summary || '').trim()) &&
       !answerLooksEmpty(sections[key].summary) &&
-      !/\bi don'?t know\b|\bnot sure yet\b/i.test(String(sections[key].summary || ''));
+      !/\bi don'?t know\b|\bnot sure yet\b|\bNot yet defined\b|\bNot applicable\b/i.test(String(sections[key].summary || ''));
     const unknowns = hasSummary
       ? []
       : [...(p.unknowns || [])];
@@ -2678,10 +2778,12 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       }
     }
     sections[key] = {
-      summary: hasSummary ? sections[key].summary : '',
+      ...sections[key],
+      summary: sections[key].summary || '',
       confidence: p.confidence || (hasSummary ? EXPLICIT_CONFIDENCE : UNKNOWN_CONFIDENCE),
       evidenceIds: [...(p.evidenceIds || [])],
       unknowns,
+      epistemic_state: sections[key].epistemic_state || p.epistemic_state || EPISTEMIC_STATES.UNRESOLVED,
     };
   }
   return sections;
@@ -3692,7 +3794,14 @@ function composeObservations(sections, normalizedFacts = null) {
           ''
         )
     );
-    if (edge && !containsRawPromptFragment(edge) && edge.split(/\s+/).length <= 40) {
+    if (
+      edge &&
+      !containsRawPromptFragment(edge) &&
+      edge.split(/\s+/).length <= 40 &&
+      !/Not yet defined|Not applicable/i.test(edge) &&
+      facts.epistemic_states?.differentiation !== EPISTEMIC_STATES.UNKNOWN &&
+      facts.epistemic_states?.differentiation !== EPISTEMIC_STATES.NOT_APPLICABLE
+    ) {
       observations.push(
         `${possessiveShort} differentiation centers on ${edge}.`
       );
@@ -3748,9 +3857,15 @@ function composeObservations(sections, normalizedFacts = null) {
     );
   }
 
-  if (facts.brand_voice) {
-    const tone = normalizeBrandVoiceTone(facts.brand_voice);
-    if (tone && !/anchor/i.test(tone)) {
+  if (facts.brand_voice || coreClaim(s('brandVoice').summary)) {
+    const tone = normalizeBrandVoiceTone(facts.brand_voice || coreClaim(s('brandVoice').summary));
+    if (
+      tone &&
+      !/anchor/i.test(tone) &&
+      !/Not yet defined|Not applicable/i.test(tone) &&
+      facts.epistemic_states?.brand_voice !== EPISTEMIC_STATES.UNKNOWN &&
+      facts.epistemic_states?.brand_voice !== EPISTEMIC_STATES.NOT_APPLICABLE
+    ) {
       observations.push(
         `${possessiveShort} brand voice reinforces its positioning by sounding ${tone}.`
       );
@@ -3877,6 +3992,20 @@ function composeAssessment(sections, opts = {}) {
     if (!hasNamedIdeal) marketFocusStars = Math.min(marketFocusStars, 2);
   }
 
+  const diffEpistemic = facts?.epistemic_states?.differentiation || s('competitiveAdvantages')?.epistemic_state || (facts?.differentiation ? EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNRESOLVED);
+
+  let diffStars = starsFromConfidence(diff);
+  let diffExplanation;
+  if (diffEpistemic === EPISTEMIC_STATES.UNKNOWN || diffEpistemic === EPISTEMIC_STATES.UNRESOLVED || !advClaim || answerLooksEmpty(advClaim) || /Not yet defined/i.test(advClaim)) {
+    diffStars = 1;
+    diffExplanation = 'Competitive reason-to-choose is not yet defined and remains an open area to investigate.';
+  } else if (diffEpistemic === EPISTEMIC_STATES.HYPOTHESIS) {
+    diffStars = Math.min(diffStars, 2);
+    diffExplanation = `Supported by a working hypothesis around ${softenClaim(advClaim)}; requires market validation.`;
+  } else {
+    diffExplanation = `Supported by stated advantages around ${softenClaim(advClaim)}.`;
+  }
+
   const ratings = [
     {
       label: 'Business Clarity',
@@ -3892,10 +4021,8 @@ function composeAssessment(sections, opts = {}) {
     },
     {
       label: 'Differentiation',
-      stars: starsFromConfidence(diff),
-      explanation: advClaim
-        ? `Supported by stated advantages around ${softenClaim(advClaim)}.`
-        : 'Competitive reason-to-choose is not yet evidenced with enough specificity.',
+      stars: diffStars,
+      explanation: diffExplanation,
     },
     {
       label: 'Growth Readiness',
@@ -9621,6 +9748,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
 }
 
 module.exports = {
+  EPISTEMIC_STATES,
+  classifyEpistemicState,
+  composeAssessment,
   SESSION_STATUSES,
   ALLOWED_TRANSITIONS,
   BLUEPRINT_SECTIONS,
