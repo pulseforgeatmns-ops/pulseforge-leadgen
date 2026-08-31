@@ -102,6 +102,13 @@ function derivePlanningRequested(conversationIntent, pendingDecisionResolution =
   ) {
     return true;
   }
+  if (
+    pendingDecisionResolution &&
+    pendingDecisionResolution.resolved &&
+    pendingDecisionResolution.outcome === 'request_revision'
+  ) {
+    return false;
+  }
   return (
     conversationIntent.via === 'mission_planning_turn' ||
     conversationIntent.via === 'mission_plan_edit' ||
@@ -133,6 +140,17 @@ function buildPendingDecisionConversationIntent(pendingDecisionResolution) {
       thinkingMode: 'execution',
       via: 'pending_decision_modify',
       specialists: null,
+    };
+  }
+  if (pendingDecisionResolution.outcome === 'request_revision') {
+    return {
+      intent: COGNITION_MODES.INSPECT,
+      confidence: pendingDecisionResolution.confidence || 0.95,
+      mutatesMission: false,
+      thinkingMode: 'execution_revision',
+      via: 'pending_decision_revision_request',
+      specialists: null,
+      pendingDecisionOutcome: 'request_revision',
     };
   }
   if (
