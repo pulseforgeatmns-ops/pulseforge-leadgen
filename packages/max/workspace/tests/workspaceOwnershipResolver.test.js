@@ -195,4 +195,216 @@ describe('SPEC-125 — Workspace Ownership-First Runtime', () => {
     assert.equal(result.domainDecision.reason, 'mission_inspection');
     assert.equal(result.structured.metadata.missionInspection, true);
   });
+
+  // SPEC-216 — Resolved pending decision retains active mission ownership
+  describe('SPEC-216 — Resolved pending decision ownership', () => {
+    it('retains active_mission ownership when pending decision resolves to REQUEST_REVISION', async () => {
+      const missionWithPending = {
+        id: 'test-mission-1',
+        tenantId: '10',
+        pendingOperatorDecision: {
+          kind: 'execution_approval',
+          prompt: 'Should we send the prepared outreach?',
+        },
+      };
+
+      const operatorIntent = {
+        pendingDecisionResolution: {
+          pending: true,
+          resolved: true,
+          resolvedFromPendingDecision: true,
+          decisionKind: 'execution_approval',
+          action: 'request_revision',
+          outcome: 'request_revision',
+          confidence: 0.95,
+          missionId: missionWithPending.id,
+          executionIntent: 'REVISE_PREPARED_OUTREACH',
+          executionAction: 'revise_prepared_outreach',
+        },
+      };
+
+      const ownership = await resolveWorkspaceOwner({
+        question: 'Do not authorize this outreach. Regenerate and return for approval.',
+        context: { tenantId: '10', missionId: missionWithPending.id, clientId: '10' },
+        operatorIntent,
+        session: { id: 'test-session-1', context: {} },
+        missionEngine: {
+          activeMissionResolver: {
+            resolveActiveMission: async () => missionWithPending,
+          },
+        },
+        missionsEnabled: true,
+        resolverEnabled: true,
+      });
+
+      assert.equal(ownership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
+      assert.equal(ownership.reason, 'pending_decision_turn_ownership');
+      assert.notEqual(ownership.reason, 'mission_creation');
+      assert.equal(ownership.confidence, 0.98);
+    });
+
+    it('approval of pending execution_approval does not fall to mission_creation', async () => {
+      const missionWithPending = {
+        id: 'test-mission-2',
+        tenantId: '10',
+        pendingOperatorDecision: {
+          kind: 'execution_approval',
+          prompt: 'Ready to execute?',
+        },
+      };
+
+      const operatorIntent = {
+        pendingDecisionResolution: {
+          pending: true,
+          resolved: true,
+          resolvedFromPendingDecision: true,
+          decisionKind: 'execution_approval',
+          action: 'approve_execution',
+          outcome: 'affirm',
+          confidence: 0.98,
+          missionId: missionWithPending.id,
+          executionIntent: 'APPROVE_EXECUTION',
+          executionAction: 'approve_execution',
+        },
+      };
+
+      const ownership = await resolveWorkspaceOwner({
+        question: 'Yes, authorize it.',
+        context: { tenantId: '10', missionId: missionWithPending.id, clientId: '10' },
+        operatorIntent,
+        session: { id: 'test-session-2', context: {} },
+        missionEngine: {
+          activeMissionResolver: {
+            resolveActiveMission: async () => missionWithPending,
+          },
+        },
+        missionsEnabled: true,
+        resolverEnabled: true,
+      });
+
+      assert.equal(ownership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
+      assert.equal(ownership.reason, 'pending_decision_turn_ownership');
+      assert.notEqual(ownership.reason, 'mission_creation');
+    });
+
+    it('rejection of pending execution_approval does not fall to mission_creation', async () => {
+      const missionWithPending = {
+        id: 'test-mission-3',
+        tenantId: '10',
+        pendingOperatorDecision: {
+          kind: 'execution_approval',
+          prompt: 'Ready to execute?',
+        },
+      };
+
+      const operatorIntent = {
+        pendingDecisionResolution: {
+          pending: true,
+          resolved: true,
+          resolvedFromPendingDecision: true,
+          decisionKind: 'execution_approval',
+          action: 'cancel',
+          outcome: 'reject',
+          confidence: 0.98,
+          missionId: missionWithPending.id,
+          executionIntent: 'CANCEL_PLAN',
+          executionAction: 'cancel_plan',
+        },
+      };
+
+      const ownership = await resolveWorkspaceOwner({
+        question: 'No, do not send this.',
+        context: { tenantId: '10', missionId: missionWithPending.id, clientId: '10' },
+        operatorIntent,
+        session: { id: 'test-session-3', context: {} },
+        missionEngine: {
+          activeMissionResolver: {
+            resolveActiveMission: async () => missionWithPending,
+          },
+        },
+        missionsEnabled: true,
+        resolverEnabled: true,
+      });
+
+      assert.equal(ownership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
+      assert.equal(ownership.reason, 'pending_decision_turn_ownership');
+      assert.notEqual(ownership.reason, 'mission_creation');
+    });
+
+    it('ambiguous pending decision does not trigger canonical action ownership', async () => {
+      const missionWithPending = {
+        id: 'test-mission-4',
+        tenantId: '10',
+        pendingOperatorDecision: {
+          kind: 'execution_approval',
+          prompt: 'Ready to execute?',
+        },
+      };
+
+      const operatorIntent = {
+        pendingDecisionResolution: {
+          pending: true,
+          resolved: false,
+          outcome: 'ambiguous',
+          decisionKind: 'execution_approval',
+          missionId: missionWithPending.id,
+        },
+      };
+
+      const ownership = await resolveWorkspaceOwner({
+        question: 'continuee',
+        context: { tenantId: '10', missionId: missionWithPending.id, clientId: '10' },
+        operatorIntent,
+        session: { id: 'test-session-4', context: {} },
+        missionEngine: {
+          activeMissionResolver: {
+            resolveActiveMission: async () => missionWithPending,
+          },
+        },
+        missionsEnabled: true,
+        resolverEnabled: true,
+      });
+
+      assert.notEqual(ownership.reason, 'resolved_pending_canonical_action');
+    });
+
+    it('resolved pending decision without executionIntent does not claim canonical action', async () => {
+      const missionWithPending = {
+        id: 'test-mission-5',
+        tenantId: '10',
+        pendingOperatorDecision: {
+          kind: 'discovery_approval',
+          prompt: 'Approve discovery?',
+        },
+      };
+
+      const operatorIntent = {
+        pendingDecisionResolution: {
+          pending: true,
+          resolved: true,
+          resolvedFromPendingDecision: true,
+          decisionKind: 'discovery_approval',
+          action: 'continue_investigation',
+          outcome: 'question',
+          missionId: missionWithPending.id,
+        },
+      };
+
+      const ownership = await resolveWorkspaceOwner({
+        question: 'What specifically should we investigate?',
+        context: { tenantId: '10', missionId: missionWithPending.id, clientId: '10' },
+        operatorIntent,
+        session: { id: 'test-session-5', context: {} },
+        missionEngine: {
+          activeMissionResolver: {
+            resolveActiveMission: async () => missionWithPending,
+          },
+        },
+        missionsEnabled: true,
+        resolverEnabled: true,
+      });
+
+      assert.notEqual(ownership.reason, 'resolved_pending_canonical_action');
+    });
+  });
 });
