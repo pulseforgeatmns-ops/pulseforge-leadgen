@@ -1,6 +1,7 @@
 'use strict';
 
-const assert = require('assert');
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
 const {
   EPISTEMIC_STATES,
   classifyEpistemicState,
@@ -14,6 +15,10 @@ const {
   buildExecutiveSummary,
   composeAssessment,
 } = require('../services/clientIntelligenceInterview');
+const {
+  assessAnswerSufficiency,
+  classifyAnswerDisposition,
+} = require('../services/clientIntelligenceReasoning');
 
 describe('SPEC-221 — Durable Epistemic State for Business Understanding', () => {
 
@@ -29,6 +34,41 @@ describe('SPEC-221 — Durable Epistemic State for Business Understanding', () =
       );
       assert.strictEqual(
         classifyEpistemicState('We provide commercial cleaning for medical offices in Manchester.'),
+        EPISTEMIC_STATES.KNOWN
+      );
+      assert.strictEqual(
+        classifyEpistemicState("We don't want to work with businesses that don't have a specific relevant pain."),
+        EPISTEMIC_STATES.KNOWN
+      );
+      assert.strictEqual(
+        classifyEpistemicState("We don't want to work with solopreneurs."),
+        EPISTEMIC_STATES.KNOWN
+      );
+      assert.strictEqual(
+        classifyEpistemicState("We generally avoid businesses without a specific relevant pain."),
+        EPISTEMIC_STATES.KNOWN
+      );
+      assert.strictEqual(
+        classifyEpistemicState("We're less focused on larger businesses with mature management infrastructure."),
+        EPISTEMIC_STATES.KNOWN
+      );
+    });
+
+    it('distinguishes uncertainty from negative business preference', () => {
+      assert.strictEqual(
+        classifyEpistemicState('We do not know which customers to avoid.'),
+        EPISTEMIC_STATES.UNKNOWN
+      );
+      assert.strictEqual(
+        classifyEpistemicState("We think solopreneurs are probably a poor fit, but we haven't validated that yet."),
+        EPISTEMIC_STATES.HYPOTHESIS
+      );
+      assert.strictEqual(
+        classifyEpistemicState('We do not have employees.', { questionContext: 'employee_management' }),
+        EPISTEMIC_STATES.NOT_APPLICABLE
+      );
+      assert.strictEqual(
+        classifyEpistemicState('We do not have employees.', { questionContext: 'business_profile' }),
         EPISTEMIC_STATES.KNOWN
       );
     });
@@ -103,18 +143,18 @@ describe('SPEC-221 — Durable Epistemic State for Business Understanding', () =
       );
     });
 
-    it('classifies NOT_APPLICABLE statements', () => {
+    it('classifies NOT_APPLICABLE statements in the correct employee-management context', () => {
       assert.strictEqual(
-        classifyEpistemicState("We don't have employees and don't plan to hire any."),
+        classifyEpistemicState("We don't have employees and don't plan to hire any.", { questionContext: 'employee_management' }),
         EPISTEMIC_STATES.NOT_APPLICABLE
       );
       assert.strictEqual(
-        classifyEpistemicState("That's not applicable to our business."),
+        classifyEpistemicState("That's not applicable to our business.", { questionContext: 'employee_management' }),
         EPISTEMIC_STATES.NOT_APPLICABLE
       );
       assert.strictEqual(
-        classifyEpistemicState("We don't sell to consumers."),
-        EPISTEMIC_STATES.NOT_APPLICABLE
+        classifyEpistemicState("We don't sell to consumers.", { questionContext: 'sales_channels' }),
+        EPISTEMIC_STATES.KNOWN
       );
     });
 
@@ -186,6 +226,30 @@ describe('SPEC-221 — Durable Epistemic State for Business Understanding', () =
         updated.evidence_statements.brand_voice,
         "We haven't defined a formal brand voice yet."
       );
+    });
+
+    it('classifies the Babrun production exclusion answer as known business preference and advances the question', () => {
+      const babrunAnswer =
+        "We don't want to work with businesses that don't have a specific relevant pain. We're less focused on larger businesses with mature management infrastructure.";
+
+      const classification = classifyEpistemicState(babrunAnswer);
+      assert.strictEqual(classification, EPISTEMIC_STATES.KNOWN);
+      assert.strictEqual(classification === EPISTEMIC_STATES.UNKNOWN, false);
+      assert.strictEqual(classification === EPISTEMIC_STATES.NOT_APPLICABLE, false);
+
+      const sufficiency = assessAnswerSufficiency(babrunAnswer, { section: 'avoidCustomers' }, { hasSpecificity: true });
+      assert.strictEqual(sufficiency.sufficient, true);
+      assert.strictEqual(sufficiency.reason, null);
+
+      const disposition = classifyAnswerDisposition(babrunAnswer, { section: 'avoidCustomers' }, { hasSpecificity: true });
+      assert.strictEqual(disposition.shouldAdvance, true);
+      assert.strictEqual(disposition.disposition, 'ANSWER_ACCEPTED');
+
+      const facts = emptyNormalizedFacts();
+      const updated = ingestAnswerIntoNormalizedFacts(facts, 'avoidCustomers', babrunAnswer);
+      assert.ok((updated.disqualified_customers || []).some((item) => /specific relevant pain/i.test(item)));
+      assert.ok((updated.disqualified_customers || []).some((item) => /larger businesses/i.test(item) || /mature management infrastructure/i.test(item)) || updated.evidence_statements.disqualified_customers.includes('larger businesses'));
+      assert.strictEqual(updated.epistemic_states.disqualified_customers, EPISTEMIC_STATES.KNOWN);
     });
 
     it('does not render affirmative brand voice prose in Executive Business Brief', () => {
