@@ -45,7 +45,7 @@ const {
   blocksBusinessSubsystemClaim,
 } = require('./WorkspaceRoutingPatterns');
 const { CONVERSATION_SUBJECTS } = require('./ConversationSubject');
-const { missionMayOwnTurn, pendingDecisionRetainsTurn } = require('./OperatorIntentContract');
+const { missionMayOwnTurn, pendingDecisionRetainsTurn, resolvedPendingHasCanonicalAction } = require('./OperatorIntentContract');
 const { contractBlocksExecution, contractLocksConversation } = require('./ConversationContract');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const { MESSAGE_TYPES } = require('./MessageType');
@@ -835,6 +835,31 @@ async function resolveWorkspaceOwner(input = {}) {
         specialist: null,
       };
     }
+  }
+
+  // SPEC-216 — Resolved pending decision with canonical mission action retains active-mission ownership.
+  // A resolved pending decision that produced an execution intent (e.g., REVISE_PREPARED_OUTREACH)
+  // must not be reclassified by generic mission_creation ownership rules.
+  if (
+    missionLock.active &&
+    operatorIntent &&
+    resolvedPendingHasCanonicalAction(operatorIntent.pendingDecisionResolution)
+  ) {
+    askPathTrace.traceOwner(
+      WORKSPACE_OWNERS.ACTIVE_MISSION,
+      'resolved_pending_canonical_action'
+    );
+    askPathTrace.traceEarlyReturn(
+      'resolveWorkspaceOwner',
+      'resolved_pending_canonical_action'
+    );
+    return {
+      owner: WORKSPACE_OWNERS.ACTIVE_MISSION,
+      reason: 'resolved_pending_canonical_action',
+      confidence: 0.98,
+      specialist: null,
+      missionLock,
+    };
   }
 
   // 2 — Mission Creation
