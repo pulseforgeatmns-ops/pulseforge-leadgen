@@ -23,9 +23,9 @@ const RESOLUTION_OUTCOMES = Object.freeze({
   REJECT: 'reject',
   MODIFY: 'modify',
   QUESTION: 'question',
+  REQUEST_REVISION: 'request_revision',
   UNRELATED: 'unrelated',
   AMBIGUOUS: 'ambiguous',
-  REQUEST_REVISION: 'request_revision',
 });
 
 const PENDING_ALLOWED_ACTIONS = Object.freeze({
@@ -47,6 +47,7 @@ const PENDING_ALLOWED_ACTIONS = Object.freeze({
   [OPERATOR_DECISION_KINDS.PLAN_APPROVAL]: ['approve_plan', 'modify_mission', 'cancel'],
   [OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL]: [
     'approve_execution',
+    'revise_prepared_outreach',
     'request_revision',
     'modify_mission',
     'cancel',
@@ -67,6 +68,8 @@ const ACTION_EXECUTION_INTENT = Object.freeze({
   approve_discovery: EXECUTION_INTENTS.APPROVE_DISCOVERY,
   approve_plan: EXECUTION_INTENTS.APPROVE_PLAN,
   approve_execution: EXECUTION_INTENTS.APPROVE_EXECUTION,
+  revise_prepared_outreach: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
+  request_revision: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
   cancel: EXECUTION_INTENTS.CANCEL_PLAN,
 });
 
@@ -105,7 +108,7 @@ function isUnrelatedTopic(q) {
 }
 
 function isCancelPhrase(q) {
-  return /\b(?:cancel(?:\s+(?:it|the mission|this))?|stop(?:\s+the)?\s+mission|abort(?:\s+the\s+mission)?)\b/i.test(
+  return /\b(?:cancel(?:\s+(?:it|the mission|this))?|stop(?:\s+the)?\s+mission|abort(?:\s+the\s+mission)?|don'?t\s+send(?:\s+this|\s+it)?)\b/i.test(
     q
   );
 }
@@ -245,6 +248,10 @@ function classifyPlanApproval(q) {
 }
 
 function classifyExecutionApproval(q) {
+  if (/\b(?:regenerate|rewrite|revise|re-?prepare|replace)\b/i.test(q)
+    && /\b(?:message|messaging|outreach|plan|package|bundle|before execution|before sending)\b/i.test(q)) {
+    return { outcome: RESOLUTION_OUTCOMES.REQUEST_REVISION, action: 'request_revision', confidence: 0.96 };
+  }
   if (isCancelPhrase(q)) {
     return { outcome: RESOLUTION_OUTCOMES.REJECT, action: 'cancel', confidence: 0.95 };
   }
@@ -309,7 +316,9 @@ function buildResolution(mission, pending, classification, operatorUtterance = '
   const executionIntent = ACTION_EXECUTION_INTENT[classification.action] || null;
   const executable =
     classification.outcome === RESOLUTION_OUTCOMES.AFFIRM ||
-    classification.outcome === RESOLUTION_OUTCOMES.REJECT;
+    classification.outcome === RESOLUTION_OUTCOMES.REJECT ||
+    classification.action === 'revise_prepared_outreach' ||
+    classification.action === 'request_revision';
 
   return {
     pending: true,
@@ -331,7 +340,7 @@ function buildResolution(mission, pending, classification, operatorUtterance = '
             resolution: RESOLUTION_OUTCOMES.REQUEST_REVISION,
             missionId: mission.id,
             decisionKind: pending.kind,
-            action: 'request_revision',
+            action: classification.action,
             operatorUtterance: String(operatorUtterance || '').trim() || pending.prompt || null,
           }
         : null,

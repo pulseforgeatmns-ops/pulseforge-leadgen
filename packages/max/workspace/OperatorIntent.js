@@ -80,6 +80,7 @@ function normalizeText(value) {
 
 function deriveExecutionRequested(conversationIntent) {
   if (!conversationIntent) return false;
+  if (conversationIntent.executionIntent === 'REVISE_PREPARED_OUTREACH') return false;
   if (conversationIntent.continuity) return false;
   if (conversationIntent.via === 'conversational_continue') return false;
   if (conversationIntent.via === 'mission_continuation_ambiguous') return false;
@@ -144,13 +145,15 @@ function buildPendingDecisionConversationIntent(pendingDecisionResolution) {
   }
   if (pendingDecisionResolution.outcome === 'request_revision') {
     return {
-      intent: COGNITION_MODES.INSPECT,
+      intent: COGNITION_MODES.EDIT,
       confidence: pendingDecisionResolution.confidence || 0.95,
-      mutatesMission: false,
+      mutatesMission: true,
       thinkingMode: 'execution_revision',
       via: 'pending_decision_revision_request',
       specialists: null,
       pendingDecisionOutcome: 'request_revision',
+      executionIntent: pendingDecisionResolution.executionIntent,
+      executionAction: pendingDecisionResolution.executionAction,
     };
   }
   if (
@@ -396,7 +399,8 @@ async function analyzeOperatorIntent(input = {}) {
   const legacyContinuation = await resolveLegacyMissionContinuation(input, question);
 
   let executionRequested =
-    pendingDecisionRequestsExecution(pendingDecisionResolution) ||
+    (pendingDecisionResolution.executionIntent !== 'REVISE_PREPARED_OUTREACH'
+      && pendingDecisionRequestsExecution(pendingDecisionResolution)) ||
     deriveExecutionRequested(conversationIntent);
   let planningRequested = derivePlanningRequested(
     conversationIntent,
