@@ -1,4 +1,5 @@
 const pool = require('../db');
+const { maybeHandleOperatorOperatingUpdate } = require('../packages/max/workspace/OperatorOperatingUpdate');
 const {
   safeGuidance,
   buildCompletionReply,
@@ -109,12 +110,12 @@ function detectEscalation(payload, nextActionOwner) {
   return { escalate: false, guidance: guidance.guidance, contactRole };
 }
 
-async function createSession({ aoOwnerId, clientId, mode, initialPayload = {} }) {
+async function createSession({ aoOwnerId, clientId, mode, missionId = null, tenantId = null, initialPayload = {} }) {
   const { rows } = await pool.query(`
-    INSERT INTO ao_max_sessions (ao_owner_id, client_id, mode, step_index, payload)
-    VALUES ($1, $2, $3, 0, $4::jsonb)
+    INSERT INTO ao_max_sessions (ao_owner_id, client_id, mode, step_index, payload, mission_id, tenant_id)
+    VALUES ($1, $2, $3, 0, $4::jsonb, $5, $6)
     RETURNING *
-  `, [aoOwnerId, clientId, mode, JSON.stringify(initialPayload)]);
+  `, [aoOwnerId, clientId, mode, JSON.stringify(initialPayload), missionId, tenantId]);
   return rows[0];
 }
 
@@ -146,7 +147,7 @@ function getSteps(mode) {
   return [];
 }
 
-async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
+async function startMode({ aoOwnerId, clientId, mode, aoName, taskId, missionId = null, tenantId = null }) {
   if (mode === 'follow_up') {
     return {
       completed: false,
@@ -170,11 +171,14 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
       aoOwnerId,
       clientId,
       mode,
+      missionId,
+      tenantId,
       initialPayload: {
         task_id: taskId,
         lead_id: task.lead_id,
         business_name: task.business_name,
         campaign_name: task.campaign_name,
+        mission_id: missionId,
       },
     });
     const opening = buildDirectMailOpening(aoName);
@@ -209,11 +213,14 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
       aoOwnerId,
       clientId,
       mode,
+      missionId,
+      tenantId,
       initialPayload: {
         task_id: taskId,
         lead_id: task.lead_id,
         business_name: task.business_name,
         address: task.address,
+        mission_id: missionId,
       },
     });
     const steps = getSteps(mode);
@@ -248,12 +255,15 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
       aoOwnerId,
       clientId,
       mode,
+      missionId,
+      tenantId,
       initialPayload: {
         task_id: taskId,
         lead_id: task.lead_id,
         business_name: task.business_name,
         contact_phone: task.contact_phone,
         campaign_name: task.campaign_name,
+        mission_id: missionId,
       },
     });
     const steps = getSteps(mode);
@@ -275,7 +285,7 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
     };
   }
 
-  const session = await createSession({ aoOwnerId, clientId, mode });
+  const session = await createSession({ aoOwnerId, clientId, mode, missionId, tenantId });
   const steps = getSteps(mode);
   const greeting = mode === 'log_visit'
     ? 'Let\'s log that visit.'
@@ -302,11 +312,11 @@ async function persistSessionProgress(sessionId, { stepIndex, payload }) {
   `, [sessionId, stepIndex, payload]);
 }
 
-async function completeSession(sessionId, { stepIndex, payload }) {
+async function completeSession(sessionId, { stepIndex, payload, missionId = null, tenantId = null }) {
   await pool.query(`
-    UPDATE ao_max_sessions SET step_index = $2, payload = $3, completed = true, updated_at = NOW()
+    UPDATE ao_max_sessions SET step_index = $2, payload = $3, mission_id = COALESCE($4, mission_id), tenant_id = COALESCE($5, tenant_id), completed = true, updated_at = NOW()
     WHERE id = $1
-  `, [sessionId, stepIndex, payload]);
+  `, [sessionId, stepIndex, payload, missionId, tenantId]);
 }
 
 function extractPreferredTiming(payload) {
@@ -668,7 +678,7 @@ async function finalizePhoneFollowUpSession({
   };
 }
 
-async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, message }) {
+async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, message, missionId = null, tenantId = null }) {
   const session = await getSession(sessionId, aoOwnerId);
   if (!session) return { error: 'Session not found or already completed', status: 404 };
 
@@ -831,6 +841,26 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
     const strong = String(payload.strong_opportunities || '').trim();
     const walkthroughs = String(payload.walkthrough_requests || '').trim();
     const revisit = String(payload.revisit_places || '').trim();
+    const rawNarrative = [
+      `Quick operating update: ${payload.visits_count != null ? `${payload.visits_count} physical visits.` : '0 physical visits.'}`,
+      strong && strong.toLowerCase() !== 'none' ? String(strong) : null,
+      payload.need_help && payload.need_help.toLowerCase() !== 'none' ? `I need help with ${payload.need_help}.` : null,
+    ].filter(Boolean).join(' ');
+
+    const canonicalTurn = await maybeHandleOperatorOperatingUpdate({
+      question: rawNarrative,
+      context: {
+        tenantId: String(tenantId || session.tenant_id || clientId || ''),
+        clientId,
+        missionId: missionId || session.mission_id || payload.mission_id || null,
+      },
+      operatingUpdateOpts: {
+        now: new Date().toISOString(),
+        timeZone: 'America/New_York',
+        actorId: String(aoOwnerId),
+      },
+    });
+
     const parts = [
       `Logged your debrief — ${payload.visits_count || 0} visits today.`,
       strong && strong.toLowerCase() !== 'none' ? `Strong opportunities noted: ${strong}` : null,
@@ -841,12 +871,30 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
         : 'Solid day — keep the momentum.',
     ].filter(Boolean);
 
+    const canonicalState = canonicalTurn && canonicalTurn.handled ? {
+      handled: true,
+      turnType: canonicalTurn.turnType,
+      missionId: canonicalTurn.missionId,
+      assertionCount: canonicalTurn.assertions ? canonicalTurn.assertions.length : 0,
+    } : { handled: false, turnType: null, missionId: missionId || session.mission_id || payload.mission_id || null, assertionCount: 0 };
+
+    await pool.query(`
+      UPDATE ao_max_sessions
+      SET payload = $2::jsonb,
+          mission_id = COALESCE($3, mission_id),
+          tenant_id = COALESCE($4, tenant_id),
+          updated_at = NOW()
+      WHERE id = $1
+    `, [sessionId, JSON.stringify({ ...payload, canonical_ingestion: canonicalState }), missionId || session.mission_id || payload.mission_id || null, tenantId || session.tenant_id || null]);
+
     return {
       session_id: sessionId,
       mode: session.mode,
       completed: true,
       reply: parts.join('\n'),
       debrief: payload,
+      canonical_ingestion: canonicalState,
+      canonical_turn: canonicalTurn || null,
     };
   }
 

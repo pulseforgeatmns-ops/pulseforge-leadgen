@@ -42,6 +42,7 @@ const SEMANTIC = Object.freeze({
   CAMPAIGN_EXECUTION: 'campaign_execution',
   INTERNAL_OPERATIONAL_EVENT: 'internal_operational_event',
   CAMPAIGN_FOLLOW_UP: 'campaign_follow_up',
+  ACTIVITY_COUNT: 'activity_count',
 });
 
 const DISPOSITION = Object.freeze({
@@ -68,7 +69,9 @@ const OPERATING_CONCEPT_RE = new RegExp(
     String.raw`\bpayments?\b`,
     String.raw`\boutreach\b`,
     String.raw`\bmail(?:ed|ing)?\b`,
-    String.raw`\bcalls?\b`,
+    String.raw`\bvisits?\b`,
+    String.raw`\bphysical\s+visits?\b`,
+    String.raw`\bcall(?:s| attempts)?\b`,
     String.raw`\bfollow[- ]ups?\b`,
     String.raw`\bmeetings?\b`,
     String.raw`\btraining\b`,
@@ -168,6 +171,30 @@ function resolveActor(input = {}) {
       user.email ||
       'workspace_operator'
   ).trim();
+}
+
+function resolveMissionId(input = {}) {
+  const session = input.session || {};
+  const sessionCtx =
+    session.context && typeof session.context === 'object' ? session.context : {};
+  const context =
+    input.context && typeof input.context === 'object' ? input.context : {};
+  const candidates = [
+    input.missionId,
+    input.mission_id,
+    context.missionId,
+    context.mission_id,
+    context.acquisitionMissionId,
+    context.acquisition_mission_id,
+    session.missionId,
+    session.mission_id,
+    sessionCtx.missionId,
+    sessionCtx.mission_id,
+    sessionCtx.acquisitionMissionId,
+    sessionCtx.acquisition_mission_id,
+  ];
+  const value = candidates.find((candidate) => candidate != null && String(candidate).trim());
+  return value == null ? null : String(value).trim();
 }
 
 function localDateKey(date, timeZone) {
@@ -311,6 +338,54 @@ function splitClauses(text) {
     .filter(Boolean);
 }
 
+function classifyActivityClause(clause, todayKey) {
+  const text = String(clause || '');
+  const physicalMatch = text.match(/\b(\d+)\s+physical(?:\s+business)?\s+visits?\b/i)
+    || text.match(/\b(\d+)\s+visits?\b/i);
+  if (physicalMatch) {
+    return {
+      type: 'operating_assertion',
+      semanticType: SEMANTIC.ACTIVITY_COUNT,
+      action: 'activity_count',
+      predicate: 'physical_visits',
+      value: Number(physicalMatch[1]),
+      temporalState: TEMPORAL.CURRENT_COMPLETED,
+      temporalClass: 'completed',
+      epistemicState: EPISTEMIC.OPERATOR_ATTESTED,
+      occurredAt: todayKey,
+      expectedAt: null,
+      originalWording: text,
+      subject: { kind: 'activity', name: 'physical visits' },
+      confidence: 0.85,
+      correction: false,
+    };
+  }
+
+  const outboundMatch = text.match(/\b(?:completed|made|did|logged)\s+(\d+)\s+(?:outbound(?:\s+business)?\s+)?call(?:\s+business)?\s+attempts?\b/i)
+    || text.match(/\b(\d+)\s+outbound(?:\s+business)?\s+call\s+attempts?\b/i)
+    || text.match(/\b(\d+)\s+calls?\b/i);
+  if (outboundMatch) {
+    return {
+      type: 'operating_assertion',
+      semanticType: SEMANTIC.ACTIVITY_COUNT,
+      action: 'activity_count',
+      predicate: 'outbound_call_attempts',
+      value: Number(outboundMatch[1]),
+      temporalState: TEMPORAL.CURRENT_COMPLETED,
+      temporalClass: 'completed',
+      epistemicState: EPISTEMIC.OPERATOR_ATTESTED,
+      occurredAt: todayKey,
+      expectedAt: null,
+      originalWording: text,
+      subject: { kind: 'activity', name: 'outbound call attempts' },
+      confidence: 0.85,
+      correction: false,
+    };
+  }
+
+  return null;
+}
+
 function classifyMailClause(clause, todayKey) {
   if (!/\b(mailed|went out|sent out)\b/i.test(clause)) return null;
   if (!/\bcampaign\b/i.test(clause) && !/\bmail\b/i.test(clause)) return null;
@@ -410,6 +485,7 @@ function extractOperatingAssertions(question, input = {}) {
 
   for (const clause of clauses) {
     const candidates = [
+      classifyActivityClause(clause, todayKey),
       classifyMailClause(clause, todayKey),
       classifyTrainingClause(clause, todayKey),
       classifyFollowUpClause(clause, todayKey),
@@ -517,6 +593,7 @@ async function resolveKnownEntities(assertions, input = {}) {
 function persistencePolicyFor(assertion) {
   if (assertion.entityResolution === 'ambiguous') return DISPOSITION.REJECTED;
   if (assertion.semanticType === SEMANTIC.CAMPAIGN_EXECUTION) return DISPOSITION.PERSISTED;
+  if (assertion.semanticType === SEMANTIC.ACTIVITY_COUNT) return DISPOSITION.PERSISTED;
   if (assertion.semanticType === SEMANTIC.CAMPAIGN_FOLLOW_UP) {
     return DISPOSITION.CONFIRMATION_REQUIRED;
   }
@@ -572,6 +649,9 @@ function claimStatement(assertion) {
   if (assertion.semanticType === SEMANTIC.CAMPAIGN_EXECUTION) {
     return `${campaign} was operator-reported as physically mailed on ${assertion.occurredAt}.`;
   }
+  if (assertion.semanticType === SEMANTIC.ACTIVITY_COUNT) {
+    return `${assertion.subject && assertion.subject.name ? assertion.subject.name : 'Activity'} was operator-reported at ${assertion.value}.`;
+  }
   if (assertion.semanticType === SEMANTIC.CAMPAIGN_FOLLOW_UP) {
     return `Follow-up on ${campaign} leads is operator-reported as expected to begin ${assertion.expectedAt}.`;
   }
@@ -599,6 +679,8 @@ function assertionMetadata(assertion, extras = {}) {
     campaignName: assertion.subject && assertion.subject.name,
     campaignKey: assertion.subject && assertion.subject.key,
     clientId: extras.clientId,
+    tenantId: extras.tenantId,
+    missionId: extras.missionId,
     actorId: extras.actorId,
     originalAssertion: assertion.originalWording,
     originalWording: assertion.originalWording,
@@ -624,6 +706,7 @@ async function persistAssertion(assertion, input, knowledge) {
   const tenantId = resolveTenantId(input);
   const clientId = resolveClientId(input);
   const actorId = resolveActor(input);
+  const missionId = resolveMissionId(input);
   const disposition = persistencePolicyFor(assertion);
   const recordedAt = assertion.recordedAt || new Date().toISOString();
 
@@ -749,10 +832,12 @@ async function persistAssertion(assertion, input, knowledge) {
       campaignName: assertion.subject && assertion.subject.name,
       campaignKey,
       clientId,
+      tenantId,
+      missionId,
       actorId,
       correction: isCorrection,
     },
-    metadata: assertionMetadata(assertion, { clientId, actorId, correction: isCorrection }),
+    metadata: assertionMetadata(assertion, { clientId, tenantId, missionId, actorId, correction: isCorrection }),
   });
   await knowledge.evidence.attachEvidence(tenantId, evidence.id, subject.id);
 
@@ -764,6 +849,8 @@ async function persistAssertion(assertion, input, knowledge) {
     reason: 'Operator-attested operating update. Not independently verified.',
     metadata: assertionMetadata(assertion, {
       clientId,
+      tenantId,
+      missionId,
       actorId,
       correction: isCorrection,
       supersedes: superseded.map((c) => c.id),
@@ -968,6 +1055,7 @@ async function maybeHandleOperatorOperatingUpdate(input = {}) {
 
   const tenantId = resolveTenantId(input);
   const clientId = resolveClientId(input);
+  const missionId = resolveMissionId(input);
   if (!tenantId || clientId == null) {
     const prose =
       'I heard an operating update, but I cannot record operator-attested evidence without an authorized tenant context.';
@@ -991,6 +1079,11 @@ async function maybeHandleOperatorOperatingUpdate(input = {}) {
   if (!extracted.length) return null;
 
   const resolved = await resolveKnownEntities(extracted, input);
+  for (const assertion of resolved) {
+    assertion.missionId = missionId;
+    assertion.tenantId = tenantId;
+    assertion.clientId = clientId;
+  }
   const knowledge = await getKnowledge(input);
   const results = [];
   for (const assertion of resolved) {
@@ -1012,6 +1105,9 @@ async function maybeHandleOperatorOperatingUpdate(input = {}) {
     reason: 'operator_operating_update',
     handled: true,
     turnType: TURN_TYPE,
+    missionId,
+    tenantId,
+    clientId,
     prose,
     structured: operatingUpdateStructured(prose, {
       results,
