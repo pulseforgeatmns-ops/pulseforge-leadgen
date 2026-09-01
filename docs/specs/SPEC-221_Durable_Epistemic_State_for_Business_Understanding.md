@@ -138,6 +138,52 @@ The important invariant is:
 
 **value and epistemic state are separate canonical concerns.**
 
+### Proposition-Level Authority
+
+The canonical unit is a business proposition / `BusinessFact`, not an interview
+answer and not a normalized business field. One operator answer may establish
+multiple facts for the same dimension with different epistemic states.
+
+```json
+{
+  "business_facts": {
+    "differentiation": [
+      {
+        "subject": "customer_buying_reason",
+        "value": null,
+        "epistemic_state": "UNKNOWN",
+        "confidence": 0.98,
+        "evidence": "We do not know what actually tips the decision.",
+        "provenance": "interview_turn_123"
+      },
+      {
+        "subject": "candidate_customer_buying_reason",
+        "hypothesis_value": "Practical transformation model may be important.",
+        "epistemic_state": "HYPOTHESIS",
+        "confidence": 0.7,
+        "evidence": "Our current hypothesis is that the practical transformation model may be important.",
+        "provenance": "interview_turn_123"
+      }
+    ]
+  }
+}
+```
+
+`normalizedFacts`, `epistemic_states`, `hypotheses`, and rendered Blueprint
+sections are compatibility projections. They must not overwrite or discard the
+canonical fact collection. A field projection may identify the primary state
+for the active business question and surface associated hypotheses, but it is
+not an independent epistemic authority.
+
+Proposition facts are durable business understanding. They are retained in the
+interview state and copied into the Blueprint record when generated or revised,
+so an approved Blueprint does not depend on a later reconstruction from an
+ephemeral interpretation. Existing JSONB persistence is sufficient.
+
+New evidence may add, support, refute, explicitly promote, or supersede an
+individual proposition while retaining its evidence and provenance. It must not
+implicitly promote unrelated propositions sharing the same normalized field.
+
 `value = "We haven't defined our brand voice"`
 
 MUST NOT be interpreted as:
@@ -291,6 +337,10 @@ Specialists consuming Max's understanding MUST be able to determine whether a re
 
 A specialist MUST NOT treat a hypothesis or unknown as an operator-approved constraint.
 
+Specialist context may retain scalar compatibility fields, but it must also
+carry the proposition collection where available. Scalar projections must omit
+or label non-KNOWN propositions rather than promoting them to established facts.
+
 
 ---
 
@@ -381,6 +431,10 @@ This SPEC does **not**:
 - redesign Scout;
 - replace raw interview evidence;
 - solve every Client Intelligence synthesis issue exposed by Babrun.
+
+The separate production discrepancy in which the supplied mixed Babrun answer
+repeated the differentiation question is an observability investigation. This
+SPEC does not change the SPEC-100 probing policy.
 
 Those remain separate concerns.
 

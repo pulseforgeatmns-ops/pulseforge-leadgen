@@ -115,17 +115,21 @@ function classifyEpistemicState(text, opts = {}) {
  * Ensures value and epistemic state are separate canonical concerns.
  */
 function createBusinessFact({
+  id = null,
   subject,
   value = null,
   epistemicState = EPISTEMIC_STATES.UNRESOLVED,
   confidence = 0.5,
   evidence = null,
   provenance = null,
+  relation = null,
+  supersedes = null,
 }) {
   const isAffirmative = epistemicState === EPISTEMIC_STATES.KNOWN;
   const isHypothesis = epistemicState === EPISTEMIC_STATES.HYPOTHESIS;
 
   return {
+    id,
     subject,
     value: isAffirmative ? value : null,
     hypothesis_value: isHypothesis ? (value || evidence) : null,
@@ -133,6 +137,106 @@ function createBusinessFact({
     confidence: Number(confidence) || 0.5,
     evidence: evidence ? String(evidence) : null,
     provenance: provenance ? String(provenance) : null,
+    relation: relation || null,
+    supersedes: supersedes || null,
+  };
+}
+
+function factId(subject, evidence, position) {
+  const basis = `${subject}|${evidence}|${position}`;
+  let hash = 2166136261;
+  for (let index = 0; index < basis.length; index += 1) {
+    hash ^= basis.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `bf_${(hash >>> 0).toString(36)}`;
+}
+
+function evidencePhrase(text, match, fallback) {
+  if (!match || match.index == null) return fallback;
+  const start = Math.max(0, text.lastIndexOf('.', match.index - 1) + 1);
+  const endMarker = text.indexOf('.', match.index + match[0].length);
+  return text.slice(start, endMarker >= 0 ? endMarker + 1 : text.length).trim() || fallback;
+}
+
+/**
+ * Extract independently meaningful business propositions from a complete
+ * operator utterance. This is deliberately not sentence splitting: a single
+ * utterance is inspected for semantic assertions and their relations before
+ * each proposition receives an epistemic classification.
+ */
+function extractBusinessFacts(text, opts = {}) {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  const section = String(opts.section || opts.questionContext || '').trim();
+  const provenance = opts.provenance || null;
+  const facts = [];
+  const add = (subject, state, value, match = null, relation = null) => {
+    const evidence = evidencePhrase(raw, match, raw);
+    const id = factId(subject, evidence, facts.length);
+    if (facts.some((fact) => fact.subject === subject && fact.evidence === evidence)) return;
+    facts.push(createBusinessFact({
+      id,
+      subject,
+      value,
+      epistemicState: state,
+      confidence: state === EPISTEMIC_STATES.UNKNOWN ? 0.98 : 0.7,
+      evidence,
+      provenance,
+      relation,
+    }));
+  };
+
+  if (section === 'competitiveAdvantages' || section === 'differentiation') {
+    const unknown = /(?:we\s+(?:do\s+not|don't)\s+know|not\s+yet\s+(?:known|established)|haven't\s+(?:investigated|established))[^.?!]*/ig;
+    for (const match of raw.matchAll(unknown)) {
+      add('customer_buying_reason', EPISTEMIC_STATES.UNKNOWN, null, match);
+    }
+    const evidenceState = /(?:insufficient|not\s+enough|sufficient)\s+(?:(?:[\w.-]+\s+){0,6})?(?:evidence|data)[^.?!]*/ig;
+    for (const match of raw.matchAll(evidenceState)) {
+      add(
+        'customer_buying_reason_evidence_state',
+        EPISTEMIC_STATES.KNOWN,
+        match[0].replace(/^\s*/g, ''),
+        match,
+        'evidence_state'
+      );
+    }
+    const hypothesis = /(?:current\s+)?(?:working\s+)?hypothesis\s+is\s+(?:that\s+)?([^.?!]+)|(?:we\s+think|we\s+believe)\s+([^.?!]+)/ig;
+    for (const match of raw.matchAll(hypothesis)) {
+      const value = (match[1] || match[2] || '').trim();
+      if (value) add('candidate_customer_buying_reason', EPISTEMIC_STATES.HYPOTHESIS, value, match, 'candidate');
+    }
+    const validation = /(?:hypothesis|theory)[^.?!]*(?:remain(?:s)?\s+)?unvalidated|unvalidated[^.?!]*/ig;
+    for (const match of raw.matchAll(validation)) {
+      add('candidate_customer_buying_reason_validation', EPISTEMIC_STATES.KNOWN, match[0].trim(), match, 'validation_constraint');
+    }
+    const objective = /(?:sales\s+conversations?|discovery)[^.?!]*(?:intended|will|should)[^.?!]*(?:discover|learn)[^.?!]*/ig;
+    for (const match of raw.matchAll(objective)) {
+      add('customer_buying_reason_validation_objective', EPISTEMIC_STATES.KNOWN, match[0].trim(), match, 'validation_objective');
+    }
+  }
+
+  if (!facts.length) {
+    const subject = opts.subject || section || 'business_understanding';
+    const state = classifyEpistemicState(raw, opts);
+    add(subject, state, raw);
+  }
+  return facts;
+}
+
+function projectBusinessFacts(facts = [], fieldKey) {
+  const list = Array.isArray(facts) ? facts : [];
+  const unknown = list.find((fact) => fact.subject === 'customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.UNKNOWN);
+  const hypothesis = list.find((fact) => fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS);
+  const known = list.find((fact) => fact.epistemic_state === EPISTEMIC_STATES.KNOWN && fact.value);
+  const primary = unknown || hypothesis || known || list[0] || null;
+  return {
+    epistemicState: primary ? primary.epistemic_state : EPISTEMIC_STATES.UNRESOLVED,
+    value: primary && primary.epistemic_state === EPISTEMIC_STATES.KNOWN ? primary.value : null,
+    hypothesisValue: hypothesis ? hypothesis.hypothesis_value : null,
+    evidence: primary ? primary.evidence : null,
+    fieldKey,
   };
 }
 
@@ -160,4 +264,6 @@ module.exports = {
   classifyEpistemicState,
   createBusinessFact,
   preserveEpistemicState,
+  extractBusinessFacts,
+  projectBusinessFacts,
 };

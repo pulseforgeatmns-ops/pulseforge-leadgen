@@ -244,6 +244,7 @@ function semanticFieldsFromNormalizedFacts(facts) {
     campaignGoals: sanitizeFactSummary(goalPhraseFromFacts(facts)),
     successMetrics: sanitizeFactSummary(joinNatural(metricList)),
     successMetricList: metricList,
+    businessFacts: facts.business_facts || {},
     semanticSource: 'normalized_facts',
   };
 }
@@ -409,6 +410,7 @@ function normalizeBlueprintSummary(blueprint) {
     campaignGoals: semantic.campaignGoals,
     successMetrics: semantic.successMetrics,
     successMetricList: semantic.successMetricList || [],
+    businessFacts: facts && facts.business_facts ? facts.business_facts : blueprint.epistemicFacts || {},
     semanticSource: semantic.semanticSource || null,
     unknowns,
     confidence,

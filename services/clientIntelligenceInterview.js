@@ -60,6 +60,8 @@ const {
   classifyEpistemicState,
   createBusinessFact,
   preserveEpistemicState,
+  extractBusinessFacts,
+  projectBusinessFacts,
 } = require('./clientIntelligenceEpistemic');
 const {
   MESSAGE_CLASSES,
@@ -2132,6 +2134,7 @@ function emptyNormalizedFacts() {
     },
     hypotheses: {},
     evidence_statements: {},
+    business_facts: {},
   };
 }
 
@@ -2161,6 +2164,12 @@ function cloneNormalizedFacts(facts) {
     evidence_statements: {
       ...(src.evidence_statements || {}),
     },
+    business_facts: Object.fromEntries(
+      Object.entries(src.business_facts || {}).map(([key, facts]) => [
+        key,
+        Array.isArray(facts) ? facts.map((fact) => ({ ...fact })) : [],
+      ])
+    ),
   };
 }
 
@@ -2201,16 +2210,31 @@ const SECTION_TO_PRIMARY_FIELD = Object.freeze({
  * SPEC-099/SPEC-221: explicit unknowns and hypotheses never become factual values;
  * epistemic state is recorded explicitly.
  */
-function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
+function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}) {
   const next = cloneNormalizedFacts(facts);
   const cleaned = cleanRawAnswer(sectionKey, stripInterviewQuestionEcho(rawAnswer));
   if (!cleaned) return next;
 
-  const epistemicState = classifyEpistemicState(cleaned || rawAnswer);
   const primaryField = SECTION_TO_PRIMARY_FIELD[sectionKey] || sectionKey;
+  const extractedFacts = extractBusinessFacts(rawAnswer, {
+    section: sectionKey,
+    subject: primaryField,
+    provenance: opts.provenance || null,
+  });
+  const existingFacts = next.business_facts[primaryField] || [];
+  next.business_facts[primaryField] = [
+    ...existingFacts,
+    ...extractedFacts.filter((fact) => !existingFacts.some((prior) => prior.id === fact.id)),
+  ];
+  const projection = projectBusinessFacts(next.business_facts[primaryField], primaryField);
+  const epistemicState = projection.epistemicState;
 
   next.epistemic_states[primaryField] = epistemicState;
-  next.evidence_statements[primaryField] = String(rawAnswer || cleaned);
+  next.evidence_statements[primaryField] = projection.evidence || String(rawAnswer || cleaned);
+
+  if (projection.hypothesisValue) {
+    next.hypotheses[primaryField] = projection.hypothesisValue;
+  }
 
   if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
     return next;
@@ -2710,7 +2734,9 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           ensurePeriod(`Competitive edge is described as ${f.differentiation}`),
           'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
         ].join(' ')
-      : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
+      : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN && f.hypotheses?.differentiation
+        ? `Actual customer reason-to-choose: Not yet established. Current hypothesis: ${f.hypotheses.differentiation}.`
+        : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
         ? `Current hypothesis: competitive advantage around ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'under evaluation'}.`
         : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN
           ? 'Differentiation: Not yet defined.'
@@ -4320,6 +4346,16 @@ function buildExecutiveSummary(sections, opts = {}) {
         )
       );
     }
+    const differentiationFacts = f.business_facts?.differentiation || [];
+    const unknownReason = differentiationFacts.find(
+      (fact) => fact.subject === 'customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.UNKNOWN
+    );
+    const candidateReason = differentiationFacts.find(
+      (fact) => fact.subject === 'candidate_customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS
+    );
+    if (unknownReason && candidateReason) {
+      whyChooseYou = `Actual customer reason-to-choose: Not yet established. Current hypothesis: ${candidateReason.hypothesis_value}.`;
+    }
   }
 
   const bleedRe =
@@ -5420,7 +5456,8 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
       state.normalizedFacts = ingestAnswerIntoNormalizedFacts(
         state.normalizedFacts || emptyNormalizedFacts(),
         sectionKey,
-        rawStatement
+        rawStatement,
+        { provenance: turnId }
       );
     }
     const fromFacts = sectionsFromNormalizedFacts(state.normalizedFacts, sectionState);
@@ -5592,7 +5629,9 @@ async function generateBlueprint(store, session) {
     confidence_summary,
     playbook_id: null,
     playbook_version: null,
-    section_provenance: {},
+    section_provenance: {
+      business_facts: state.normalizedFacts?.business_facts || {},
+    },
     parent_blueprint_id: null,
     readiness: {
       ready: readiness.ready,
@@ -6047,6 +6086,10 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
     );
   }
   const bp = publicBlueprint(approved[0]);
+  const durableFacts = bp.sectionProvenance?.business_facts || {};
+  if (Object.keys(durableFacts).length) {
+    bp.epistemicFacts = durableFacts;
+  }
   // SPEC-103A — attach structured normalizedFacts for Max semantic reasoning.
   // Section summaries remain precomposed Blueprint prose; Max must not nest them.
   try {
@@ -6063,6 +6106,11 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
     }
   } catch (_) {
     /* fail soft — Max falls back to peeled section substance */
+  }
+  if (!bp.normalizedFacts && Object.keys(durableFacts).length) {
+    const projected = emptyNormalizedFacts();
+    projected.business_facts = cloneNormalizedFacts({ business_facts: durableFacts }).business_facts;
+    bp.normalizedFacts = projected;
   }
   return bp;
 }
