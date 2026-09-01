@@ -3,6 +3,7 @@
 const {
   EPISTEMIC_STATES,
   classifyEpistemicState,
+  extractBusinessFacts,
 } = require('./clientIntelligenceEpistemic');
 
 /**
@@ -1690,7 +1691,17 @@ function assessAnswerSufficiency(text, activeQuestion = null, opts = {}) {
     return { sufficient: false, reason: 'deferred', shouldProbe: false };
   }
   if (looksLikeExplicitUnknownAnswer(raw)) {
-    return { sufficient: false, reason: 'explicit_unknown', shouldProbe: true };
+    const propositions = extractBusinessFacts(raw, {
+      section: activeQuestion && activeQuestion.section,
+    });
+    const hasSubstantiveProposition = propositions.some(
+      (fact) =>
+        fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS ||
+        (fact.epistemic_state === EPISTEMIC_STATES.KNOWN && fact.value)
+    );
+    if (!hasSubstantiveProposition) {
+      return { sufficient: false, reason: 'explicit_unknown', shouldProbe: true };
+    }
   }
   if (looksLikeGenericCategoryAnswer(raw)) {
     return { sufficient: false, reason: 'needs_specificity', shouldProbe: true };
