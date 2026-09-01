@@ -340,6 +340,40 @@ describe('SPEC-223B canonical semantic write boundary', () => {
     assert.equal(firstProjection.projection_digest, repeated.projection_digest);
   });
 
+  it('223C orders equal-time canonical labels by snapshot lineage instead of adversarial UUIDs', async () => {
+    const fixedTime = '2026-09-01T12:00:00.000Z';
+    const labels = [
+      ['ffffffff-ffff-4fff-8fff-ffffffffffff', 'Babrun'],
+      ['00000000-0000-4000-8000-000000000001', 'Babrun LLC'],
+      ['11111111-1111-4111-8111-111111111111', 'Babrun Group'],
+    ];
+    const snapshots = [];
+    try {
+      await pool.query(`ALTER TABLE canonical_entity_label_assertions
+        ALTER COLUMN created_at SET DEFAULT '${fixedTime}'::timestamptz`);
+      for (let index = 0; index < labels.length; index += 1) {
+        const [id, label] = labels[index];
+        await pool.query(`ALTER TABLE canonical_entity_label_assertions
+          ALTER COLUMN id SET DEFAULT '${id}'::uuid`);
+        const source = await evidence(1, `${label} is the current canonical label.`);
+        snapshots.push(await commitCanonicalSemanticBatch(pool, batch({ key: `223C-label-${index}`,
+          evidenceInputs: [source], labels: [{ entity_identity_key: 'client:1', label,
+            assertion_kind: 'CANONICAL', evidence_id: source.id }] })));
+      }
+    } finally {
+      await pool.query(`ALTER TABLE canonical_entity_label_assertions
+        ALTER COLUMN id SET DEFAULT gen_random_uuid(),
+        ALTER COLUMN created_at SET DEFAULT NOW()`);
+    }
+    for (let index = 0; index < snapshots.length; index += 1) {
+      const projection = await reconstructCanonicalSemanticProjection(pool, {
+        tenant_id: 'tenant:babrun', snapshot_id: snapshots[index].snapshot_id,
+      });
+      assert.equal(projection.entities.find(row => row.entity_type === 'BUSINESS').canonical_label,
+        labels[index][1]);
+    }
+  });
+
   it('223C L/M/N/O resolves snapshot conflict, merge, and temporal history', async () => {
     const one = await evidence(1, 'Babrun LLC is the legal name.');
     const single = await commitCanonicalSemanticBatch(pool, batch({ key: '223C-single', evidenceInputs: [one],
