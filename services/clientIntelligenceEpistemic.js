@@ -40,7 +40,7 @@ function classifyEpistemicState(text, opts = {}) {
 
   const explicitNotApplicable =
     /\b(?:not\s+applicable|doesn'?t apply|does not apply|not relevant|not something we do)\b/i.test(s) ||
-    /\b(?:no\s+(?:employees|locations|offices|stores|consumers|staff|workers))\b/i.test(s);
+    (isEmployeeContext && /\b(?:no\s+(?:employees|staff|workers))\b/i.test(s));
 
   const noEmployeeStatement = /^(?:we\s+)?(?:don'?t|do not|no|without)\s+(?:have|need|use|plan\s+to\s+hire|plan on hiring|want)\s+(?:any\s+)?(?:employees|staff|workers|contractors|team\s+members)\b/i;
   const noEmployeeWithHireIntent = /\b(?:don'?t|do not|no)\s+(?:have|plan\s+to\s+hire|plan on hiring)\s+(?:any\s+)?(?:employees|staff|workers|contractors|team\s+members)\b/i;

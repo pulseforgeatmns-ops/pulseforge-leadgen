@@ -239,7 +239,7 @@ describe('SPEC-221 — Durable Epistemic State for Business Understanding', () =
 
     it('classifies the Babrun production exclusion answer as known business preference and advances the question', () => {
       const babrunAnswer =
-        "We don't want to work with businesses that don't have a specific relevant pain. We're less focused on larger businesses with mature management infrastructure.";
+        'We would generally rather not take on pre-business founders or pure solopreneurs with no employees, because they have not reached the stage where the people-management problems we address exist.';
 
       const classification = classifyEpistemicState(babrunAnswer);
       assert.strictEqual(classification, EPISTEMIC_STATES.KNOWN);
@@ -256,8 +256,8 @@ describe('SPEC-221 — Durable Epistemic State for Business Understanding', () =
 
       const facts = emptyNormalizedFacts();
       const updated = ingestAnswerIntoNormalizedFacts(facts, 'avoidCustomers', babrunAnswer);
-      assert.ok((updated.disqualified_customers || []).some((item) => /specific relevant pain/i.test(item)));
-      assert.ok((updated.disqualified_customers || []).some((item) => /larger businesses/i.test(item) || /mature management infrastructure/i.test(item)) || updated.evidence_statements.disqualified_customers.includes('larger businesses'));
+      assert.ok((updated.disqualified_customers || []).some((item) => /pre-business founders/i.test(item)));
+      assert.ok((updated.disqualified_customers || []).some((item) => /solopreneurs/i.test(item)));
       assert.strictEqual(updated.epistemic_states.disqualified_customers, EPISTEMIC_STATES.KNOWN);
     });
 
@@ -289,6 +289,40 @@ describe('SPEC-221 — Durable Epistemic State for Business Understanding', () =
       const brandVoiceSection = sectionsFromNormalizedFacts(facts).brandVoice;
       assert.strictEqual(brandVoiceSection.epistemic_state, EPISTEMIC_STATES.UNKNOWN);
       assert.strictEqual(brandVoiceSection.summary, 'Brand voice: Not yet defined.');
+    });
+
+    it('accepts the mixed Babrun differentiation answer once and advances', async () => {
+      const disposition = classifyAnswerDisposition(
+        MIXED_BUYING_REASON,
+        { section: 'competitiveAdvantages' },
+        { hasSpecificity: true }
+      );
+      assert.strictEqual(disposition.disposition, 'ANSWER_ACCEPTED');
+      assert.strictEqual(disposition.shouldAdvance, true);
+
+      const store = createMemoryStore();
+      const opts = { store, useMemoryPlaybookStore: true };
+      const started = await startClientInterview({ clientId: 22102 }, opts);
+      const priorAnswers = [
+        'Babrun is a consulting practice.',
+        'Twelve-week one-to-one founder coaching.',
+        'Owners of founder-led U.S. service businesses with 1-10 employees.',
+        'Avoid pre-business founders and solopreneurs with no employees.',
+        'The United States, initially across service industries.',
+      ];
+      for (const answer of priorAnswers) {
+        await postInterviewMessage(started.interviewId, answer, opts);
+      }
+
+      const response = await postInterviewMessage(started.interviewId, MIXED_BUYING_REASON, opts);
+      assert.strictEqual(response.answerDisposition, 'ANSWER_ACCEPTED');
+      assert.strictEqual(response.nextAction, 'ASK');
+      assert.notStrictEqual(response.question.id, 'competitive_advantages');
+
+      const session = await store.getSession(started.interviewId);
+      const differentiation = session.interview_state.normalizedFacts.business_facts.differentiation;
+      assert.ok(differentiation.some((fact) => fact.epistemic_state === EPISTEMIC_STATES.UNKNOWN));
+      assert.ok(differentiation.some((fact) => fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS));
     });
   });
 
