@@ -215,4 +215,15 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, /\/api\/public\/walkthrough/);
     assert.match(html, /Thanks\. I'll reach out to set up a quick facilities assessment and give you a clear monthly quote\./);
   });
+
+  it('installs the GA4 Google tag exactly once before </head>', () => {
+    const scriptSrc = 'https://www.googletagmanager.com/gtag/js?id=G-LCOWW1SO7N';
+    const configCall = "gtag('config', 'G-LCOWW1SO7N')";
+    assert.equal(html.split(scriptSrc).length - 1, 1);
+    assert.equal(html.split(configCall).length - 1, 1);
+    const head = html.slice(0, html.indexOf('</head>'));
+    assert.match(head, /<!-- Google tag \(gtag\.js\) -->/);
+    assert.ok(head.includes(scriptSrc));
+    assert.ok(head.includes(configCall));
+  });
 });
