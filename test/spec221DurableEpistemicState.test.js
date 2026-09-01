@@ -7,8 +7,13 @@ const {
   classifyEpistemicState,
   createBusinessFact,
   preserveEpistemicState,
+  extractBusinessFacts,
 } = require('../services/clientIntelligenceEpistemic');
 const {
+  createMemoryStore,
+  startClientInterview,
+  postInterviewMessage,
+  getApprovedClientBlueprint,
   emptyNormalizedFacts,
   ingestAnswerIntoNormalizedFacts,
   sectionsFromNormalizedFacts,
@@ -19,6 +24,10 @@ const {
   assessAnswerSufficiency,
   classifyAnswerDisposition,
 } = require('../services/clientIntelligenceReasoning');
+const { normalizeBlueprintSummary } = require('../packages/max/workspace/ClientIntelligenceContext');
+
+const MIXED_BUYING_REASON =
+  "We don't know what actually tips the decision. There is insufficient U.S. market evidence to establish the buying reason. Our current hypothesis is that the practical transformation model may be important. That hypothesis remains unvalidated. Initial sales conversations are intended to discover buying reasons.";
 
 describe('SPEC-221 — Durable Epistemic State for Business Understanding', () => {
 
@@ -321,6 +330,92 @@ describe('SPEC-221 — Durable Epistemic State for Business Understanding', () =
       assert.ok(diffRating);
       assert.strictEqual(diffRating.stars, 2);
       assert.ok(diffRating.explanation.includes('hypothesis'));
+    });
+  });
+
+  describe('5. Proposition-Level Durable Facts', () => {
+    it('extracts UNKNOWN, KNOWN, and HYPOTHESIS propositions without collapsing a mixed answer', () => {
+      const facts = extractBusinessFacts(MIXED_BUYING_REASON, {
+        section: 'competitiveAdvantages',
+        provenance: 'turn_123',
+      });
+      assert.ok(facts.some((fact) => fact.subject === 'customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.UNKNOWN));
+      assert.ok(facts.some((fact) => fact.subject === 'customer_buying_reason_evidence_state' && fact.epistemic_state === EPISTEMIC_STATES.KNOWN));
+      assert.ok(facts.some((fact) => fact.subject === 'candidate_customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS));
+      assert.ok(facts.every((fact) => fact.provenance === 'turn_123'));
+    });
+
+    it('retains known evidence alongside a hypothesis when no unknown is present', () => {
+      const facts = extractBusinessFacts(
+        'There is sufficient market evidence that customers value speed. Our hypothesis is that practical transformation also matters.',
+        { section: 'competitiveAdvantages' }
+      );
+      assert.ok(facts.some((fact) => fact.epistemic_state === EPISTEMIC_STATES.KNOWN));
+      assert.ok(facts.some((fact) => fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS));
+    });
+
+    it('preserves multiple known facts, known constraints, and true non-applicability independently', () => {
+      const known = extractBusinessFacts('We avoid price-only work and exclude businesses without a clear need.', { section: 'avoidCustomers' });
+      assert.equal(known.length, 1);
+      assert.equal(known[0].epistemic_state, EPISTEMIC_STATES.KNOWN);
+      const notApplicable = extractBusinessFacts("We don't have employees.", { questionContext: 'employee_management' });
+      assert.equal(notApplicable[0].epistemic_state, EPISTEMIC_STATES.NOT_APPLICABLE);
+    });
+
+    it('updates one field collection without mutating unrelated proposition facts', () => {
+      let facts = emptyNormalizedFacts();
+      facts = ingestAnswerIntoNormalizedFacts(facts, 'competitiveAdvantages', MIXED_BUYING_REASON, { provenance: 'turn_123' });
+      const before = JSON.stringify(facts.business_facts.differentiation);
+      facts = ingestAnswerIntoNormalizedFacts(facts, 'brandVoice', 'Professional and direct.', { provenance: 'turn_124' });
+      assert.equal(JSON.stringify(facts.business_facts.differentiation), before);
+      assert.equal(facts.business_facts.brand_voice[0].epistemic_state, EPISTEMIC_STATES.KNOWN);
+    });
+
+    it('adds later evidence without mutating the earlier unknown or hypothesis', () => {
+      let facts = ingestAnswerIntoNormalizedFacts(emptyNormalizedFacts(), 'competitiveAdvantages', MIXED_BUYING_REASON, { provenance: 'turn_123' });
+      const original = facts.business_facts.differentiation.map((fact) => ({ ...fact }));
+      facts = ingestAnswerIntoNormalizedFacts(facts, 'competitiveAdvantages', 'Customers now report that practical transformation tips the decision.', { provenance: 'turn_124' });
+      assert.ok(facts.business_facts.differentiation.length > original.length);
+      assert.deepEqual(facts.business_facts.differentiation.slice(0, original.length), original);
+    });
+
+    it('renders a mixed differentiation state without promoting its hypothesis', () => {
+      const facts = ingestAnswerIntoNormalizedFacts(emptyNormalizedFacts(), 'competitiveAdvantages', MIXED_BUYING_REASON, { provenance: 'turn_123' });
+      const section = sectionsFromNormalizedFacts(facts).competitiveAdvantages;
+      assert.match(section.summary, /Actual customer reason-to-choose: Not yet established/i);
+      assert.match(section.summary, /Current hypothesis:.*practical transformation/i);
+      const brief = buildExecutiveSummary(null, { normalizedFacts: facts });
+      const whyChoose = brief.sections.find((sectionItem) => sectionItem.id === 'whyChooseYou');
+      assert.match(whyChoose.body, /Actual customer reason-to-choose: Not yet established/i);
+      assert.match(whyChoose.body, /Current hypothesis:.*practical transformation/i);
+    });
+
+    it('persists proposition facts with the Blueprint and exposes them to specialist context', async () => {
+      const store = createMemoryStore();
+      const opts = { store, useMemoryPlaybookStore: true };
+      const started = await startClientInterview({ clientId: 22101 }, opts);
+      const answers = [
+        'Babrun is a consulting practice.', 'Transformation advisory.', 'Growing U.S. businesses.',
+        'Avoid price-only work.', 'United States.', MIXED_BUYING_REASON,
+        'Professional and direct.', 'Learn buying reasons.', 'Qualified conversations.',
+      ];
+      for (const answer of answers) await postInterviewMessage(started.interviewId, answer, opts);
+      const drafts = await store.listBlueprintsForClient(22101, { status: 'in_review' });
+      assert.equal(drafts.length, 1);
+      const blueprint = drafts[0];
+      await store.updateBlueprint(blueprint.id, blueprint.version, { status: 'approved' });
+      const loaded = await getApprovedClientBlueprint(22101, opts);
+      assert.ok(loaded.epistemicFacts.differentiation.length >= 3);
+      assert.ok(loaded.normalizedFacts.business_facts.differentiation.length >= 3);
+      assert.ok(normalizeBlueprintSummary(loaded).businessFacts.differentiation.length >= 3);
+    });
+
+    it('keeps legacy sessions readable when proposition facts are absent', () => {
+      const legacy = normalizeBlueprintSummary({
+        id: 'legacy', status: 'approved', sections: { competitiveAdvantages: { summary: 'Competitive edge is described as reliable service.' } },
+      });
+      assert.equal(legacy.competitiveAdvantages, 'reliable service');
+      assert.deepEqual(legacy.businessFacts, {});
     });
   });
 });
