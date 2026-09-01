@@ -5133,6 +5133,8 @@ function createPostgresStore(pool) {
         playbook_id: 'playbook_id',
         playbook_version: 'playbook_version',
         section_provenance: 'section_provenance',
+        canonical_snapshot_id: 'canonical_snapshot_id',
+        canonical_snapshot_tenant_id: 'canonical_snapshot_tenant_id',
       };
       for (const [key, col] of Object.entries(map)) {
         if (Object.prototype.hasOwnProperty.call(patch, key)) {
@@ -5247,6 +5249,11 @@ function normalizeEvidenceRow(r) {
     statement: r.statement,
     confidence: Number(r.confidence),
     type: r.type,
+    // SPEC-224: preserved so callers (CIECanonicalAdapter) can build a
+    // canonical batch whose idempotency key matches what commitCanonicalSemanticBatch
+    // re-derives from cie_evidence directly.
+    source_text_sha256: r.source_text_sha256 || null,
+    immutable_at: r.immutable_at || null,
     created_at: r.created_at,
   };
 }
@@ -5272,6 +5279,8 @@ function normalizeBlueprintRow(r) {
         ? JSON.parse(r.section_provenance)
         : r.section_provenance || {},
     parent_blueprint_id: r.parent_blueprint_id,
+    canonical_snapshot_id: r.canonical_snapshot_id || null,
+    canonical_snapshot_tenant_id: r.canonical_snapshot_tenant_id || null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -5312,6 +5321,8 @@ function publicBlueprint(bp) {
     playbookVersion: bp.playbook_version,
     sectionProvenance: bp.section_provenance,
     parentBlueprintId: bp.parent_blueprint_id,
+    canonicalSnapshotId: bp.canonical_snapshot_id || null,
+    canonicalSnapshotTenantId: bp.canonical_snapshot_tenant_id || null,
     readiness: bp.readiness || null,
     createdAt: bp.created_at,
     updatedAt: bp.updated_at,
@@ -6090,6 +6101,33 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
   if (Object.keys(durableFacts).length) {
     bp.epistemicFacts = durableFacts;
   }
+
+  // SPEC-224: Prefer canonical projection if available (new authority model)
+  // Falls back to session normalizedFacts (legacy, archival)
+  if (approved[0].canonical_snapshot_id && approved[0].canonical_snapshot_tenant_id) {
+    try {
+      const { deriveBlueprintCompatibility } = require('../lib/canonicalProjection');
+      const pool = opts.pool || defaultPool;
+      const canonicalFacts = await deriveBlueprintCompatibility({
+        tenant_id: approved[0].canonical_snapshot_tenant_id,
+        snapshot_id: approved[0].canonical_snapshot_id,
+        pool,
+      });
+      if (
+        canonicalFacts &&
+        canonicalFacts._projection_metadata &&
+        canonicalFacts._projection_metadata.completeness !== 'UNAVAILABLE'
+      ) {
+        bp.normalizedFacts = canonicalFacts;
+        bp._canonical_authority = approved[0].canonical_snapshot_id;
+        return bp;
+      }
+    } catch (err) {
+      console.error('[SPEC-224] Canonical projection failed:', err.message);
+      // Fall through to legacy normalizedFacts
+    }
+  }
+
   // SPEC-103A — attach structured normalizedFacts for Max semantic reasoning.
   // Section summaries remain precomposed Blueprint prose; Max must not nest them.
   try {
@@ -6102,6 +6140,7 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
         session.interview_state.normalizedFacts;
       if (facts && typeof facts === 'object') {
         bp.normalizedFacts = cloneNormalizedFacts(facts);
+        bp._semantic_authority = 'session_archival'; // Mark as legacy authority
       }
     }
   } catch (_) {
@@ -6111,6 +6150,7 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
     const projected = emptyNormalizedFacts();
     projected.business_facts = cloneNormalizedFacts({ business_facts: durableFacts }).business_facts;
     bp.normalizedFacts = projected;
+    bp._semantic_authority = 'section_provenance';
   }
   return bp;
 }
@@ -8297,19 +8337,155 @@ async function approveBlueprint(blueprintId, opts = {}) {
     );
   }
 
+  // =====================================================================
+  // SPEC-224 Execution Order: Canonical Authority BEFORE Downstream Artifacts
+  // =====================================================================
+  // A. Load session + frozen approval interpretation (done above)
+  // B. Construct CanonicalSemanticBatch from normalizedFacts + evidence
+  // C. Commit through SPEC-223B (returns immutable canonical snapshot)
+  // D. Reconstruct through SPEC-223C projection (if enabled)
+  // E. Derive Blueprint-compatible representation from canonical projection
+  // F. Persist Blueprint as approved with canonical snapshot association
+  // G. Mark session approved
+  // H. Create playbook / perform downstream handoff
+
+  let canonicalSnapshotId = null;
+  let canonicalTenantId = null;
+  const commitCanonicalOpts = opts.canonicalCommit !== false;
+
+  if (commitCanonicalOpts) {
+    try {
+      // Step B+C: Build and commit canonical semantic batch
+      const { CIECanonicalAdapter } = require('../lib/cieCanonicalAdapter');
+      const { commitCanonicalSemanticBatch } = require('../lib/canonicalSemanticWrite');
+      const pool = opts.pool || defaultPool;
+
+      // Resolve the tenant workspace binding for this client (SPEC-223 authority check
+      // requires an existing tenant_workspaces row; tenant_id cannot be fabricated).
+      const clientId = current.client_id;
+      const tenantRow = (
+        await pool.query(
+          `SELECT tenant_key FROM tenant_workspaces WHERE client_id = $1`,
+          [clientId]
+        )
+      ).rows[0];
+      if (!tenantRow) {
+        throw new ClientIntelligenceError(
+          'missing_tenant_workspace',
+          `No tenant workspace bound to client ${clientId}`
+        );
+      }
+      canonicalTenantId = tenantRow.tenant_key;
+
+      // Retrieve frozen evidence records for this session
+      const sessionEvidence = await store.listEvidence(current.session_id);
+
+      // Retrieve approved SPEC-222 registry artifact
+      const registryArtifact = await getApprovedCanonicalRegistry({ ...opts, pool });
+      if (!registryArtifact) {
+        throw new ClientIntelligenceError(
+          'missing_registry',
+          'SPEC-222 canonical registry artifact not seeded (SPEC-224 blocker)'
+        );
+      }
+
+      // Build CanonicalSemanticBatch from approved Blueprint interpretation.
+      // normalizedFacts lives only in session.interview_state (frozen at approval);
+      // the Blueprint row itself carries no normalizedFacts column.
+      const canonicalBatch = CIECanonicalAdapter.buildBatch({
+        tenant_id: canonicalTenantId,
+        client_id: clientId,
+        blueprint: {
+          ...current,
+          normalizedFacts:
+            (session.interview_state && session.interview_state.normalizedFacts) || {},
+        },
+        blueprint_id: current.id,
+        blueprint_version: current.version,
+        cie_evidence_records: sessionEvidence,
+        registry_artifact: registryArtifact,
+        interpreter_id: 'cie-approval-interpreter',
+        interpreter_version: '1.0.0-spec-224',
+        session_id: current.session_id,
+      });
+
+      // Commit canonical batch (with SPEC-223B atomicity)
+      const commitResult = await commitCanonicalSemanticBatch(pool, canonicalBatch);
+      canonicalSnapshotId = commitResult.snapshot_id;
+
+      console.log(
+        `[SPEC-224] Approved Blueprint ${current.id} committed to canonical snapshot ${canonicalSnapshotId}`
+      );
+
+      // Step D+E: Reconstruct through SPEC-223C and derive the Blueprint-compatible
+      // representation BEFORE persisting approval. A projection failure here must
+      // block approval -- a committed snapshot that cannot be reconstructed must
+      // not be presented to the operator as an approved Blueprint.
+      const { deriveBlueprintCompatibility } = require('../lib/canonicalProjection');
+      const projected = await deriveBlueprintCompatibility({
+        tenant_id: canonicalTenantId,
+        snapshot_id: canonicalSnapshotId,
+        pool,
+      });
+      if (!projected || !projected._projection_metadata || projected._projection_metadata.completeness === 'UNAVAILABLE') {
+        throw new ClientIntelligenceError(
+          'projection_failed',
+          `Canonical snapshot ${canonicalSnapshotId} could not be reconstructed into a Blueprint-compatible projection`
+        );
+      }
+    } catch (err) {
+      // Step H (failure behavior): If canonical commit or projection fails, Blueprint remains unapproved
+      console.error('[SPEC-224] Canonical commit or projection failed; approval aborted:', err.message);
+      throw new ClientIntelligenceError(
+        err.code === 'projection_failed' ? 'projection_failed' : 'canonical_commit_failed',
+        `Canonical semantic authority could not be established: ${err.message}`
+      );
+    }
+  }
+
+  // =====================================================================
+  // Step F: Persist Blueprint as approved with canonical snapshot association
+  // (before playbook, per SPEC-224 order)
+  // =====================================================================
+  const approved = await store.updateBlueprint(current.id, current.version, {
+    status: 'approved',
+    canonical_snapshot_id: canonicalSnapshotId, // NEW: Link to canonical authority
+    canonical_snapshot_tenant_id: canonicalTenantId,
+    section_provenance: current.section_provenance,
+  });
+  await store.supersedeBlueprints(current.id, current.version);
+
+  // =====================================================================
+  // Step H: Create playbook / perform downstream handoff
+  // (AFTER canonical authority established, per SPEC-224 order)
+  // =====================================================================
   const handoffOpts = { ...opts };
   if (store.kind === 'memory' && !handoffOpts.playbookStore) {
     handoffOpts.useMemoryPlaybookStore = true;
   }
-  const handoff = await createPlaybookFromApprovedBlueprint(current, handoffOpts);
-  const approved = await store.updateBlueprint(current.id, current.version, {
-    status: 'approved',
-    playbook_id: handoff.playbook.id,
-    playbook_version: handoff.playbook.version,
-    section_provenance: handoff.sectionProvenance,
-  });
-  await store.supersedeBlueprints(current.id, current.version);
+  let handoff;
+  try {
+    handoff = await createPlaybookFromApprovedBlueprint(approved, handoffOpts);
+    // Link playbook to approved Blueprint
+    await store.updateBlueprint(approved.id, approved.version, {
+      playbook_id: handoff.playbook.id,
+      playbook_version: handoff.playbook.version,
+      section_provenance: handoff.sectionProvenance,
+    });
+  } catch (err) {
+    // Step H (failure behavior): Surface playbook failure separately
+    console.error('[SPEC-224] Playbook creation failed (after canonical approval):', err.message);
+    // Blueprint is already approved + canonical snapshot linked; don't revert
+    // Playbook handoff is a downstream concern, not an approval blocker
+    throw new ClientIntelligenceError(
+      'playbook_creation_failed',
+      `Playbook handoff failed after approval: ${err.message}`
+    );
+  }
 
+  // =====================================================================
+  // Growth direction (independent of canonical authority)
+  // =====================================================================
   const initialGrowthDirection = buildInitialGrowthDirection(approved, {
     normalizedFacts:
       (session.interview_state && session.interview_state.normalizedFacts) || null,
@@ -8333,18 +8509,22 @@ async function approveBlueprint(blueprintId, opts = {}) {
     ARTIFACT_KINDS.GROWTH_DIRECTION
   );
 
+  // =====================================================================
+  // Step G: Mark session approved
+  // =====================================================================
   advanceStatus(session, 'APPROVED');
   session.completed_at = new Date();
   await store.updateSession(session.id, {
     status: 'APPROVED',
     completed_at: session.completed_at,
-    summary: `Approved Business Blueprint ${approved.id}@${approved.version}`,
+    summary: `Approved Business Blueprint ${approved.id}@${approved.version} (canonical snapshot: ${canonicalSnapshotId || 'N/A'})`,
     interview_state: {
       ...session.interview_state,
       blueprintId: approved.id,
       blueprintVersion: approved.version,
       playbookId: handoff.playbook.id,
       playbookVersion: handoff.playbook.version,
+      canonicalSnapshotId, // NEW: Link for reference
       approvedAt: session.completed_at.toISOString(),
       initialGrowthDirection,
       growthConversation: null,
@@ -8364,10 +8544,32 @@ async function approveBlueprint(blueprintId, opts = {}) {
     message: 'approved',
     blueprint: publicBlueprint(approved),
     playbook: handoff.playbook,
+    canonicalSnapshotId, // NEW: Expose canonical authority link to caller
     initialGrowthDirection,
     sectionProvenance: handoff.sectionProvenance,
     alreadyApproved: false,
   };
+}
+
+/**
+ * Retrieve the approved SPEC-222 canonical registry artifact.
+ * Per SPEC-224: must exist and be seeded by production registry migration.
+ */
+async function getApprovedCanonicalRegistry(opts) {
+  try {
+    const pool = opts.pool || require('../db');
+    const result = await pool.query(
+      `SELECT id, registry_version, entity_vocabulary, predicate_definitions, content_digest
+       FROM canonical_registry_artifacts
+       WHERE registry_version LIKE '1.0.0-spec-222%'
+       ORDER BY created_at DESC
+       LIMIT 1`
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('[SPEC-224] Failed to retrieve canonical registry artifact:', err.message);
+    return null;
+  }
 }
 
 /**
