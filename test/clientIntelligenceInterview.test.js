@@ -37,6 +37,8 @@ const {
   sanitizeSummaryForBrief,
   synthesizeNormalizedFact,
   stripInterviewQuestionEcho,
+  reviewCorrectionOperations,
+  projectWorkingSemanticOperations,
 } = require('../services/clientIntelligenceInterview');
 
 const {
@@ -222,6 +224,95 @@ describe('clientIntelligenceInterview lifecycle', () => {
       /^We are Aji Home Services\.?$/i.test(started.blueprint.sections.identity.summary),
       false
     );
+  });
+});
+
+describe('SPEC-226 Blueprint refinement semantic corrections', () => {
+  it('persists inspectable correction history through the resumed Blueprint review path', async () => {
+    const { opts, store } = withStore();
+    const { started } = await completeInterview(opts);
+    await resumeInterview(started.interviewId, opts);
+    await postInterviewMessage(
+      started.interviewId,
+      'One primary offer = 12-week transformation program. Geography is not currently constrained. Lead volume is not a success metric.',
+      opts
+    );
+
+    const session = await store.getSession(started.interviewId);
+    const history = session.interview_state.workingSemanticCorrections;
+    assert.ok(history.length >= 3);
+    assert.ok(history.every((item) => item.evidence_ref && item.created_at));
+    assert.deepEqual(session.interview_state.normalizedFacts.services, ['12-week transformation program']);
+    assert.equal(session.interview_state.normalizedFacts.geography.length, 0);
+    assert.equal(session.interview_state.normalizedFacts.success_metrics.some((item) => /lead volume/i.test(item)), false);
+  });
+
+  it('projects the Babrun correction turn into active beliefs without stale instruction text', () => {
+    const prior = {
+      business_name: 'Babrun',
+      business_description: 'coaching programs for founders',
+      services: ['delegation', 'premium positioning', '12-week coaching'],
+      ideal_customers: ['any small business'],
+      geography: ['United States'],
+      differentiation: 'premium positioning',
+      success_metrics: ['raw lead volume', 'founder dependence'],
+      epistemic_states: { differentiation: 'KNOWN', geography: 'KNOWN' },
+    };
+    const correction = [
+      'One primary offer = 12-week transformation program.',
+      'Delegation is an outcome, not a separate service.',
+      'ICP is an existing operating small business, generally fewer than 10 employees, with a founder operational bottleneck; initial segments are cleaning/home services, e-commerce, and fitness.',
+      'Geography is not currently constrained.',
+      'Differentiation is practical transformation-focused 12-week approach and remains a hypothesis, unvalidated.',
+      'Qualified founder conversations, ICP-qualified conversations, serious program conversations, paid enrollments, and discovery to enrollment conversion are metrics.',
+      'Pain-pattern frequency and segment-response patterns are learning signals.',
+      'Employee problems, lack of owner time, founder dependence, and revenue pressure are pains or learning signals.',
+      'Lead volume is not a success metric.',
+      'We did not establish premium positioning.',
+    ].join('\n');
+
+    const operations = reviewCorrectionOperations(correction, { normalizedFacts: prior }, 'turn-babrun');
+    const active = projectWorkingSemanticOperations(prior, operations);
+
+    assert.ok(operations.length >= 12);
+    assert.ok(operations.some((item) => item.operation === 'CORRECT'));
+    assert.ok(operations.some((item) => item.operation === 'RETRACT'));
+    assert.ok(operations.some((item) => item.operation === 'RECLASSIFY'));
+    assert.deepEqual(active.services, ['12-week transformation program']);
+    assert.ok(active.transformation_areas.some((item) => /delegation/i.test(item)));
+    assert.ok(active.ideal_customers.some((item) => /existing operating small business/i.test(item)));
+    assert.ok(active.ideal_customers.some((item) => /e-commerce/i.test(item)));
+    assert.equal(active.geography.length, 0);
+    assert.equal(active.epistemic_states.geography, 'UNKNOWN');
+    assert.equal(active.epistemic_states.differentiation, 'HYPOTHESIS');
+    assert.match(active.differentiation, /practical transformation-focused/i);
+    assert.equal(active.success_metrics.some((item) => /lead volume|founder dependence/i.test(item)), false);
+    assert.equal(active.excluded_metrics.some((item) => /lead volume/i.test(item)), true);
+    assert.ok(active.pains.some((item) => /founder dependence/i.test(item)));
+    assert.equal(/Do not interpret|not a success metric|did not establish premium positioning/i.test(JSON.stringify(active)), false);
+
+    const brief = buildExecutiveSummary({
+      identity: { summary: 'Babrun is a coaching business.', confidence: 0.7 },
+      services: { summary: '', confidence: 0.7 },
+      idealCustomers: { summary: '', confidence: 0.7 },
+      targetMarkets: { summary: '', confidence: 0.7 },
+      competitiveAdvantages: { summary: '', confidence: 0.7 },
+      successMetrics: { summary: '', confidence: 0.7 },
+    }, { normalizedFacts: active, clientId: 1 });
+    const rendered = JSON.stringify(brief);
+    assert.match(rendered, /12-week transformation program/i);
+    assert.match(rendered, /qualified founder conversations/i);
+    assert.equal(/lead volume|premium positioning|not a success metric|did not establish/i.test(rendered), false);
+  });
+
+  it('fails closed for an unresolved correction-like proposition', () => {
+    const operations = reviewCorrectionOperations(
+      'Correction: move that ambiguous thing to the right category.',
+      { normalizedFacts: {} },
+      'turn-ambiguous'
+    );
+    assert.deepEqual(operations.map((item) => item.operation), ['CLARIFY']);
+    assert.equal(projectWorkingSemanticOperations({ success_metrics: ['existing metric'] }, operations).success_metrics[0], 'existing metric');
   });
 });
 

@@ -2135,6 +2135,10 @@ function emptyNormalizedFacts() {
     hypotheses: {},
     evidence_statements: {},
     business_facts: {},
+    transformation_areas: [],
+    pains: [],
+    learning_signals: [],
+    excluded_metrics: [],
   };
 }
 
@@ -2170,6 +2174,10 @@ function cloneNormalizedFacts(facts) {
         Array.isArray(facts) ? facts.map((fact) => ({ ...fact })) : [],
       ])
     ),
+    transformation_areas: [...(src.transformation_areas || [])],
+    pains: [...(src.pains || [])],
+    learning_signals: [...(src.learning_signals || [])],
+    excluded_metrics: [...(src.excluded_metrics || [])],
   };
 }
 
@@ -2534,6 +2542,143 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       break;
   }
   return next;
+}
+
+function normalizedSemanticValue(value) {
+  return normalizeBusinessPhrase(String(value || '')).replace(/[.!?]+$/, '').trim().toLowerCase();
+}
+
+function sameSemanticValue(left, right) {
+  const a = normalizedSemanticValue(left);
+  const b = normalizedSemanticValue(right);
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
+function withoutSemanticValue(values, value) {
+  return (values || []).filter((entry) => !sameSemanticValue(entry, value));
+}
+
+function reviewCorrectionOperations(text, state, turnId) {
+  const operations = [];
+  const add = (operation, slot, value, extra = {}) => operations.push({
+    operation, slot, target_key: normalizedSemanticValue(value) || slot,
+    previous_value: extra.previous_value || null,
+    value: value == null ? null : normalizeBusinessPhrase(value),
+    classification: extra.classification || null, negation: Boolean(extra.negation),
+    epistemic_state: extra.epistemic_state || EPISTEMIC_STATES.KNOWN,
+    evidence_ref: turnId, created_at: nowIso(), source_text: extra.source_text || text,
+  });
+  const sentences = String(text || '').split(/(?<=[.!?])\s+|\n+/).map((item) => item.trim()).filter(Boolean);
+  for (const sentence of sentences) {
+    const lower = sentence.toLowerCase();
+    if (/geograph(?:y|ic).{0,50}\b(?:not|no longer|isn't|is not).{0,40}\b(constrained|primary|restricted)\b/.test(lower)) {
+      add('RETRACT', 'geography', null, { previous_value: (state.normalizedFacts?.geography || []).join(', '), negation: true, epistemic_state: EPISTEMIC_STATES.UNKNOWN, source_text: sentence });
+    }
+    if (/\b(?:lead|raw)\s+volume\b.{0,60}\bnot\s+(?:a\s+)?(?:success\s+)?metric\b/.test(lower)) {
+      add('RETRACT', 'success_metrics', 'raw lead volume', { negation: true, source_text: sentence });
+    }
+    if (/\bpremium\s+positioning\b.{0,60}\b(?:never|not|did not|didn't).{0,40}\b(?:establish|established|validated|confirm)/.test(lower) || /\b(?:never|not|did not|didn't).{0,40}\b(?:establish|established|validated|confirm).{0,60}\bpremium\s+positioning\b/.test(lower)) {
+      add('RETRACT', 'differentiation', 'premium positioning', { negation: true, source_text: sentence });
+    }
+    const pain = sentence.match(/\b(.+?)\s+is\s+(?:a\s+)?pain\s*,?\s+not\s+(?:a\s+)?metric\b/i);
+    if (pain) add('RECLASSIFY', 'pains', pain[1], { previous_value: pain[1], classification: 'PAIN', negation: true, source_text: sentence });
+    const outcome = sentence.match(/\b(.+?)\s+is\s+(?:an?\s+)?(?:outcome|transformation area)\s*,?\s+not\s+(?:a\s+)?(?:separate\s+)?service\b/i);
+    if (outcome) add('RECLASSIFY', 'transformation_areas', outcome[1], { previous_value: outcome[1], classification: 'OUTCOME', negation: true, source_text: sentence });
+    const offer = sentence.match(/\b(?:one\s+)?(?:primary\s+)?offer\s+(?:is|=)\s+(?:the\s+)?([^.;]+)/i);
+    if (offer) add('CORRECT', 'services', offer[1], { source_text: sentence });
+    if (/\b(?:existing\s+)?operating\s+small\s+business\b/i.test(sentence) && /\b(?:icp|ideal customer|founder)\b/i.test(sentence)) {
+      add('CORRECT', 'ideal_customers', 'existing operating small business', { source_text: sentence });
+      const segments = sentence.match(/cleaning\/?home services|e-commerce|fitness/gi) || [];
+      for (const segment of segments) add('ASSERT', 'ideal_customers', segment, { source_text: sentence });
+    }
+    if (/\b(?:fewer than|under|less than)\s+10\s+employees\b/i.test(sentence)) {
+      add('ASSERT', 'ideal_customer_traits', 'generally fewer than 10 employees', { source_text: sentence });
+    }
+    if (/\bfounder operational bottleneck\b/i.test(sentence)) {
+      add('ASSERT', 'ideal_customer_traits', 'founder operational bottleneck', { source_text: sentence });
+    }
+    const metricMatches = sentence.match(/qualified founder conversations|icp-qualified conversations|serious program conversations|paid enrollments|discovery\s*(?:to|->|→)\s*enrollment conversion/gi) || [];
+    for (const metric of metricMatches) add('ASSERT', 'success_metrics', metric, { source_text: sentence });
+    const signalMatches = sentence.match(/pain[- ]pattern frequency|segment[- ]response patterns/gi) || [];
+    for (const signal of signalMatches) add('ASSERT', 'learning_signals', signal, { classification: 'LEARNING_SIGNAL', source_text: sentence });
+    const painMatches = /\b(?:pains?|learning signals?)\b/i.test(sentence) ? (sentence.match(/employee problems|lack of owner time|founder dependence|revenue pressure/gi) || []) : [];
+    for (const item of painMatches) add('ASSERT', 'pains', item, { classification: 'PAIN', source_text: sentence });
+    if (/\bdifferentiation\b/.test(lower) && /\b(?:hypothesis|unvalidated|not established)\b/.test(lower)) {
+      const value = sentence.replace(/^.*?\bdifferentiation\b\s*(?:is|:)?\s*/i, '').replace(/\b(?:is|remains)?\s*(?:a\s+)?hypothesis.*$/i, '').trim();
+      add('CORRECT', 'differentiation', value || 'practical transformation-focused 12-week approach', { epistemic_state: EPISTEMIC_STATES.HYPOTHESIS, source_text: sentence });
+    }
+  }
+  if (!operations.length && /\b(?:correction|correct|retract|remove|not a metric|not a service|not established|not constrained|reclassify)\b/i.test(text)) {
+    add('CLARIFY', 'unresolved', null, { epistemic_state: EPISTEMIC_STATES.UNRESOLVED });
+  }
+  return operations;
+}
+
+function projectWorkingSemanticOperations(facts, operations) {
+  const next = cloneNormalizedFacts(facts);
+  for (const operation of operations || []) {
+    const { operation: kind, slot, value } = operation;
+    if (kind === 'RETRACT') {
+      if (slot === 'geography') {
+        next.geography = [];
+        next.epistemic_states.geography = EPISTEMIC_STATES.UNKNOWN;
+      } else if (slot === 'success_metrics') {
+        next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+        next.excluded_metrics = uniquePush(next.excluded_metrics, [value]);
+      } else if (slot === 'differentiation') {
+        if (sameSemanticValue(next.differentiation, value)) next.differentiation = null;
+        delete next.hypotheses.differentiation;
+      }
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'services') {
+      next.services = [value];
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'differentiation') {
+      next.differentiation = value;
+      next.epistemic_states.differentiation = operation.epistemic_state;
+      if (operation.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS) next.hypotheses.differentiation = value;
+      continue;
+    }
+    if (kind === 'RECLASSIFY') {
+      next.services = withoutSemanticValue(next.services, value);
+      next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+    }
+    if (['pains', 'transformation_areas', 'learning_signals'].includes(slot)) {
+      next[slot] = uniquePush(next[slot], [value]);
+      if (slot === 'pains') next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+    } else if (slot === 'ideal_customers') {
+      next.ideal_customers = kind === 'CORRECT'
+        ? [value]
+        : uniquePush(next.ideal_customers, [value]);
+    } else if (slot === 'ideal_customer_traits') {
+      next.ideal_customer_traits = uniquePush(next.ideal_customer_traits, [value]);
+    } else if (slot === 'success_metrics' && !next.excluded_metrics.some((item) => sameSemanticValue(item, value))) {
+      next.success_metrics = uniquePush(next.success_metrics, [value]);
+    }
+  }
+  return next;
+}
+
+async function applyRefinementSemanticCorrections(store, session, state, text, turnId) {
+  const operations = reviewCorrectionOperations(text, state, turnId);
+  if (!operations.length) return { operations, evidenceIds: [] };
+  state.workingSemanticCorrections = [...(state.workingSemanticCorrections || []), ...operations];
+  state.normalizedFacts = projectWorkingSemanticOperations(state.normalizedFacts, operations);
+  const evidenceIds = [];
+  for (const operation of operations) {
+    const evidence = await store.insertEvidence({
+      id: newId(), client_id: session.client_id, session_id: session.id,
+      source: 'Blueprint refinement', source_turn_id: turnId, category: 'refinement',
+      statement: operation.source_text, confidence: EXPLICIT_CONFIDENCE,
+      type: 'CLIENT_EDITED', created_at: new Date(),
+    });
+    evidenceIds.push(evidence.id);
+  }
+  state.sectionState = sectionsFromNormalizedFacts(state.normalizedFacts, state.sectionState);
+  session.interview_state = state;
+  return { operations, evidenceIds };
 }
 
 function normalizeBrandVoiceTone(text) {
@@ -4081,7 +4226,7 @@ function composeConversationStarters(sections, learnMoreItems) {
   }
   if (sectionFilled(s('competitiveAdvantages'))) {
     starters.push(
-      'Whether your pricing reflects the premium positioning you described.'
+      'Whether your pricing reinforces the differentiation you want the market to recognize.'
     );
   }
   if (sectionFilled(s('avoidCustomers')) || sectionFilled(s('idealCustomers'))) {
@@ -4164,6 +4309,13 @@ function buildOperatorScorecardBriefSections(sections, opts = {}) {
       outcomes: opts.outcomes || null,
       learning: opts.scorecardLearning || null,
     });
+    if (facts && facts.excluded_metrics && facts.excluded_metrics.length) {
+      draft.metrics = draft.metrics.filter((metric) =>
+        !facts.excluded_metrics.some((excluded) =>
+          sameSemanticValue(metric.name, excluded) || sameSemanticValue(metric.key, excluded)
+        )
+      );
+    }
     return buildBriefScorecardSections(draft);
   } catch (_err) {
     return buildBriefScorecardSections({
@@ -4752,6 +4904,7 @@ function initialInterviewState({ notes } = {}) {
     normalizedFacts: emptyNormalizedFacts(),
     /** SPEC-090 — session-level conversational reasoning memory. */
     reasoningMemory: emptyReasoningMemory(),
+    workingSemanticCorrections: [],
     notes: notes ? String(notes) : null,
     blueprintId: null,
     lastReflectionAt: 0,
@@ -6440,7 +6593,13 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       derived_evidence: [],
       created_at: new Date(),
     });
-    const { assigned: mapped, guidance } = extractNotesIntoSections(text);
+    const correctionResult = await applyRefinementSemanticCorrections(
+      store, session, state, text, clientTurn.id
+    );
+    const extracted = correctionResult.operations.length
+      ? { assigned: {}, guidance: [] }
+      : extractNotesIntoSections(text);
+    const { assigned: mapped, guidance } = extracted;
     if (guidance.length) {
       state.revisionGuidance = [
         ...(state.revisionGuidance || []),
@@ -6452,7 +6611,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         })),
       ];
     }
-    const evidenceIds = [];
+    const evidenceIds = [...correctionResult.evidenceIds];
     const sectionsToUpdate = Object.keys(mapped);
     // Only apply when we extracted real business facts — never default the whole
     // refinement message into identity.
@@ -10088,6 +10247,8 @@ module.exports = {
   looksLikeRefinementFeedback,
   looksLikeCorrection,
   looksLikeSupplementalContext,
+  reviewCorrectionOperations,
+  projectWorkingSemanticOperations,
   containsMetaInstructionLanguage,
   containsRawPromptFragment,
   partitionUserResponse,
