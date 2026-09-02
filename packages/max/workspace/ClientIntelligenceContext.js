@@ -179,12 +179,208 @@ function goalPhraseFromFacts(facts) {
   return presentText(raw);
 }
 
+const MAX_CANONICAL_ADAPTER_VERSION = '1.0.0-spec-225';
+
+function isCanonicalProjectionFacts(facts) {
+  return Boolean(
+    facts &&
+      facts._projection_metadata &&
+      facts._projection_metadata.source_snapshot_id
+  );
+}
+
+function labelFromCanonicalValue(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return presentText(value);
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return presentText(String(value));
+  }
+  if (typeof value !== 'object') return '';
+  return presentText(value.name || value.label || value.canonical_label || value.value || '');
+}
+
+function canonicalList(value) {
+  return (Array.isArray(value) ? value : value ? [value] : [])
+    .map(labelFromCanonicalValue)
+    .filter(Boolean);
+}
+
+function canonicalServiceLabel(service) {
+  if (!service || typeof service !== 'object') return labelFromCanonicalValue(service);
+  const name = labelFromCanonicalValue(service);
+  const variants = canonicalList(service.variants);
+  return variants.length ? `${name} (${joinNatural(variants)})` : name;
+}
+
+function canonicalCustomerLabel(facts) {
+  const parts = [labelFromCanonicalValue(facts.ideal_customers)];
+  if (facts.ideal_customers_role) parts.push(labelFromCanonicalValue(facts.ideal_customers_role));
+  if (facts.ideal_customers_stage) parts.push(labelFromCanonicalValue(facts.ideal_customers_stage));
+  if (facts.ideal_customers_employee_range) parts.push(labelFromCanonicalValue(facts.ideal_customers_employee_range));
+  if (facts.ideal_customers_geography) parts.push(labelFromCanonicalValue(facts.ideal_customers_geography));
+  return joinNatural(parts.filter(Boolean));
+}
+
+function legacyFallbackValue(legacyFacts, field) {
+  if (!legacyFacts || typeof legacyFacts !== 'object') return '';
+  return legacyFacts[field];
+}
+
+function buildSourceDescriptor(source, details = {}) {
+  return { source, ...details };
+}
+
+function canonicalSourceDescriptor(facts, field) {
+  const meta = facts._projection_metadata || {};
+  const trace = facts._canonical_trace || {};
+  return buildSourceDescriptor('CANONICAL', {
+    field,
+    canonical_snapshot_id: meta.source_snapshot_id || null,
+    projection_version: meta.version || null,
+    adapter_version: MAX_CANONICAL_ADAPTER_VERSION,
+    epistemic_state: (trace.unresolved_fields || []).includes(field)
+      ? 'UNRESOLVED'
+      : 'KNOWN',
+    canonical_entity_ids: trace.entity_ids || [],
+    canonical_fact_ids: trace.fact_ids || [],
+  });
+}
+
+function legacySourceDescriptor(field) {
+  return buildSourceDescriptor('LEGACY_FALLBACK', { field });
+}
+
+function unavailableSourceDescriptor(field) {
+  return buildSourceDescriptor('UNAVAILABLE', { field });
+}
+
+function hasSemanticValue(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === 'object') return Object.keys(value).length > 0;
+  return Boolean(value);
+}
+
+function semanticFieldsFromCanonicalProjectionFacts(facts, legacyFacts = null) {
+  const fieldSources = {};
+  const legacyFallbackFields = [];
+  const unavailableFields = [];
+
+  function canonicalField(outputField, canonicalFieldName, value) {
+    if (value) fieldSources[outputField] = canonicalSourceDescriptor(facts, canonicalFieldName);
+    else {
+      fieldSources[outputField] = unavailableSourceDescriptor(canonicalFieldName);
+      unavailableFields.push(outputField);
+    }
+    return value;
+  }
+
+  function legacyField(outputField, legacyFieldName, transform = presentText) {
+    const raw = legacyFallbackValue(legacyFacts, legacyFieldName);
+    const value = transform(raw);
+    if (hasSemanticValue(value)) {
+      fieldSources[outputField] = legacySourceDescriptor(legacyFieldName);
+      legacyFallbackFields.push(outputField);
+    } else {
+      fieldSources[outputField] = unavailableSourceDescriptor(legacyFieldName);
+      unavailableFields.push(outputField);
+    }
+    return value;
+  }
+
+  const serviceList = (Array.isArray(facts.services) ? facts.services : [])
+    .map(canonicalServiceLabel)
+    .filter(Boolean);
+  const idealCustomers = canonicalCustomerLabel(facts);
+  const idealCustomerList = idealCustomers ? [idealCustomers] : [];
+  const outcomeList = canonicalList(facts.ninety_day_outcomes);
+
+  const businessName = canonicalField(
+    'businessName',
+    'business_name',
+    labelFromCanonicalValue(facts.business_name) || null
+  );
+  const services = canonicalField('services', 'services', joinNatural(serviceList));
+  const targetMarkets = canonicalField(
+    'targetMarkets',
+    'target_markets',
+    labelFromCanonicalValue(facts.target_markets)
+  );
+  const differentiation = canonicalField(
+    'competitiveAdvantages',
+    'differentiation',
+    labelFromCanonicalValue(facts.differentiation)
+  );
+
+  const avoidCustomers = labelFromCanonicalValue(facts.avoid_customers);
+  fieldSources.avoidCustomers = avoidCustomers
+    ? canonicalSourceDescriptor(facts, 'avoid_customers')
+    : unavailableSourceDescriptor('avoid_customers');
+  if (!avoidCustomers) unavailableFields.push('avoidCustomers');
+
+  const campaignGoals = outcomeList.length
+    ? canonicalField('campaignGoals', 'ninety_day_outcomes', joinNatural(outcomeList))
+    : legacyField('campaignGoals', 'ninety_day_outcomes', goalPhraseFromFacts);
+
+  const growthFocus = legacyField('growthFocus', 'growth_focus');
+  const brandVoice = legacyField('brandVoice', 'brand_voice', (value) =>
+    presentText(String(value || '').replace(/[.]+$/, ''))
+  );
+  const successMetricList = legacyField('successMetricList', 'success_metrics', (value) =>
+    (Array.isArray(value) ? value : value ? [value] : [])
+      .map((item) => presentText(String(item || '').replace(/[.]+$/, '')))
+      .filter(Boolean)
+  );
+  const businessFacts = legacyField('businessFacts', 'business_facts', (value) => value || {});
+
+  fieldSources.identity = fieldSources.businessName;
+  fieldSources.geography = fieldSources.targetMarkets;
+  fieldSources.idealCustomers = idealCustomers
+    ? canonicalSourceDescriptor(facts, 'ideal_customers')
+    : unavailableSourceDescriptor('ideal_customers');
+  if (!idealCustomers) unavailableFields.push('idealCustomers');
+  fieldSources.commercialPreference = unavailableSourceDescriptor('commercialPreference');
+  unavailableFields.push('commercialPreference');
+
+  return {
+    businessName,
+    identity: businessName || '',
+    services: sanitizeFactSummary(services),
+    serviceList,
+    idealCustomers: sanitizeFactSummary(idealCustomers),
+    idealCustomerList,
+    avoidCustomers: sanitizeFactSummary(avoidCustomers),
+    targetMarkets: sanitizeFactSummary(targetMarkets),
+    geography: sanitizeFactSummary(targetMarkets),
+    growthFocus: sanitizeFactSummary(growthFocus),
+    commercialPreference: false,
+    competitiveAdvantages: sanitizeFactSummary(differentiation),
+    brandVoice: sanitizeFactSummary(brandVoice),
+    campaignGoals: sanitizeFactSummary(campaignGoals),
+    successMetrics: sanitizeFactSummary(joinNatural(successMetricList)),
+    successMetricList,
+    businessFacts,
+    semanticSource: 'canonical_projection',
+    semanticAuthority: 'CANONICAL',
+    canonicalSnapshotId: facts._projection_metadata.source_snapshot_id || null,
+    projectionVersion: facts._projection_metadata.version || null,
+    adapterVersion: MAX_CANONICAL_ADAPTER_VERSION,
+    fieldSources,
+    legacyFallbackFields: [...new Set(legacyFallbackFields)].sort(),
+    unavailableFields: [...new Set(unavailableFields)].sort(),
+    canonicalTrace: facts._canonical_trace || null,
+  };
+}
+
 /**
  * Build Max reasoning/recall context from structured normalizedFacts.
  * These are semantic values — not rendered Blueprint explanations.
  */
 function semanticFieldsFromNormalizedFacts(facts) {
   if (!facts || typeof facts !== 'object') return null;
+
+  if (isCanonicalProjectionFacts(facts)) {
+    return semanticFieldsFromCanonicalProjectionFacts(facts, facts._legacy_fallback_facts || null);
+  }
 
   const businessName = presentText(facts.business_name || '') || null;
   const description = presentText(
@@ -380,6 +576,9 @@ function normalizeBlueprintSummary(blueprint) {
     blueprint.normalizedFacts ||
     blueprint.normalized_facts ||
     null;
+  if (facts && isCanonicalProjectionFacts(facts) && blueprint._legacyFallbackFacts) {
+    facts._legacy_fallback_facts = blueprint._legacyFallbackFacts;
+  }
   const semantic =
     semanticFieldsFromNormalizedFacts(facts) ||
     semanticFieldsFromSections(sections);
@@ -412,6 +611,18 @@ function normalizeBlueprintSummary(blueprint) {
     successMetricList: semantic.successMetricList || [],
     businessFacts: facts && facts.business_facts ? facts.business_facts : blueprint.epistemicFacts || {},
     semanticSource: semantic.semanticSource || null,
+    semanticAuthority: semantic.semanticAuthority || blueprint._semantic_authority || null,
+    canonicalSnapshotId:
+      semantic.canonicalSnapshotId ||
+      blueprint.canonicalSnapshotId ||
+      blueprint.canonical_snapshot_id ||
+      null,
+    projectionVersion: semantic.projectionVersion || null,
+    semanticAdapterVersion: semantic.adapterVersion || null,
+    fieldSources: semantic.fieldSources || {},
+    legacyFallbackFields: semantic.legacyFallbackFields || [],
+    unavailableFields: semantic.unavailableFields || [],
+    canonicalTrace: semantic.canonicalTrace || null,
     unknowns,
     confidence,
     playbookId: blueprint.playbookId || blueprint.playbook_id || null,

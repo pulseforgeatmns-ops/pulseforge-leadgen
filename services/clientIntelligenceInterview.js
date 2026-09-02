@@ -6102,46 +6102,56 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
     bp.epistemicFacts = durableFacts;
   }
 
-  // SPEC-224: Prefer canonical projection if available (new authority model)
-  // Falls back to session normalizedFacts (legacy, archival)
+  async function loadLegacySessionFacts() {
+    const sessionId = bp.sessionId || approved[0].session_id;
+    if (!sessionId) return null;
+    const session = await store.getSession(sessionId);
+    const facts =
+      session &&
+      session.interview_state &&
+      session.interview_state.normalizedFacts;
+    return facts && typeof facts === 'object' ? cloneNormalizedFacts(facts) : null;
+  }
+
+  // SPEC-225: snapshot-backed Blueprints read through SPEC-223C. Projection
+  // failure must fail closed rather than silently reverting to session facts.
   if (approved[0].canonical_snapshot_id && approved[0].canonical_snapshot_tenant_id) {
-    try {
-      const { deriveBlueprintCompatibility } = require('../lib/canonicalProjection');
-      const pool = opts.pool || defaultPool;
-      const canonicalFacts = await deriveBlueprintCompatibility({
-        tenant_id: approved[0].canonical_snapshot_tenant_id,
-        snapshot_id: approved[0].canonical_snapshot_id,
-        pool,
-      });
-      if (
-        canonicalFacts &&
-        canonicalFacts._projection_metadata &&
-        canonicalFacts._projection_metadata.completeness !== 'UNAVAILABLE'
-      ) {
-        bp.normalizedFacts = canonicalFacts;
-        bp._canonical_authority = approved[0].canonical_snapshot_id;
-        return bp;
-      }
-    } catch (err) {
-      console.error('[SPEC-224] Canonical projection failed:', err.message);
-      // Fall through to legacy normalizedFacts
+    const { deriveBlueprintCompatibility } = require('../lib/canonicalProjection');
+    const pool = opts.pool || defaultPool;
+    const canonicalFacts = await deriveBlueprintCompatibility({
+      tenant_id: approved[0].canonical_snapshot_tenant_id,
+      snapshot_id: approved[0].canonical_snapshot_id,
+      pool,
+    });
+    if (
+      !canonicalFacts ||
+      !canonicalFacts._projection_metadata ||
+      canonicalFacts._projection_metadata.completeness === 'UNAVAILABLE'
+    ) {
+      throw new ClientIntelligenceError(
+        'CANONICAL_PROJECTION_FAILURE',
+        `Canonical snapshot ${approved[0].canonical_snapshot_id} could not be reconstructed for Max business understanding`,
+        500
+      );
     }
+    bp.normalizedFacts = canonicalFacts;
+    bp._canonical_authority = approved[0].canonical_snapshot_id;
+    bp._semantic_authority = 'CANONICAL';
+    try {
+      bp._legacyFallbackFacts = await loadLegacySessionFacts();
+    } catch (_) {
+      bp._legacyFallbackFacts = null;
+    }
+    return bp;
   }
 
   // SPEC-103A — attach structured normalizedFacts for Max semantic reasoning.
   // Section summaries remain precomposed Blueprint prose; Max must not nest them.
   try {
-    const sessionId = bp.sessionId || approved[0].session_id;
-    if (sessionId) {
-      const session = await store.getSession(sessionId);
-      const facts =
-        session &&
-        session.interview_state &&
-        session.interview_state.normalizedFacts;
-      if (facts && typeof facts === 'object') {
-        bp.normalizedFacts = cloneNormalizedFacts(facts);
-        bp._semantic_authority = 'session_archival'; // Mark as legacy authority
-      }
+    const facts = await loadLegacySessionFacts();
+    if (facts) {
+      bp.normalizedFacts = facts;
+      bp._semantic_authority = 'session_archival'; // Mark as legacy authority
     }
   } catch (_) {
     /* fail soft — Max falls back to peeled section substance */
@@ -8351,7 +8361,9 @@ async function approveBlueprint(blueprintId, opts = {}) {
 
   let canonicalSnapshotId = null;
   let canonicalTenantId = null;
-  const commitCanonicalOpts = opts.canonicalCommit !== false;
+  const commitCanonicalOpts =
+    opts.canonicalCommit !== false &&
+    (store.kind !== 'memory' || opts.canonicalCommit === true);
 
   if (commitCanonicalOpts) {
     try {
