@@ -1395,6 +1395,30 @@ function stripLeadingWeAre(text) {
     .replace(/^(we are|we're|i am|i'm|this is|our company is|the business is)\s+/i, '');
 }
 
+/**
+ * SPEC-228 — business_description is a description-only slot. Downstream
+ * identity synthesis prepends business_name ("${name} is a ${description}"),
+ * so a description that already carries a "<name> is a ..." wrap causes
+ * accumulating duplication across refinement rounds. Strip that wrap here so
+ * business_description never becomes an opaque prose accumulator.
+ */
+function sanitizeIdentityDescription(name, description) {
+  let desc = String(description || '').trim();
+  if (!desc) return desc;
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return normalizeBusinessPhrase(desc);
+  const escapedName = escapeRegExp(cleanName);
+  const wrapRe = new RegExp(`^${escapedName}\\s+(?:is|are)\\s+(?:a|an)\\s+`, 'i');
+  const bareRe = new RegExp(`^${escapedName}\\s*[:,\\-—–]?\\s+`, 'i');
+  for (let i = 0; i < 6; i += 1) {
+    const before = desc;
+    if (wrapRe.test(desc)) desc = desc.replace(wrapRe, '').trim();
+    else if (bareRe.test(desc)) desc = desc.replace(bareRe, '').trim();
+    if (desc === before) break;
+  }
+  return normalizeBusinessPhrase(desc);
+}
+
 function titleCaseWords(text) {
   return String(text || '')
     .split(/(\s+)/)
@@ -2297,6 +2321,7 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
         }
       }
       next.business_name = sanitizeBusinessName(next.business_name);
+      next.business_description = sanitizeIdentityDescription(next.business_name, next.business_description);
       if (/commercial/i.test(cleaned)) next.growth_focus = 'commercial cleaning';
       if (/residential/i.test(cleaned) && !next.vertical_focus) {
         next.vertical_focus = /commercial/i.test(cleaned)
@@ -2535,7 +2560,7 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       next.success_metrics = uniquePush([], splitListItems(substance));
       break;
     case 'identity': {
-      next.business_description = substance;
+      next.business_description = sanitizeIdentityDescription(next.business_name, substance);
       break;
     }
     default:
@@ -2546,6 +2571,18 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
 
 function normalizedSemanticValue(value) {
   return normalizeBusinessPhrase(String(value || '')).replace(/[.!?]+$/, '').trim().toLowerCase();
+}
+
+/**
+ * SPEC-228 — detect raw correction-instruction prose that must never survive
+ * as active business meaning (a metric, a geography value, a differentiation
+ * claim, etc). Correction history may keep the operator's original language;
+ * active projection may not.
+ */
+function containsCorrectionInstructionLeakage(text) {
+  return /\bdo not interpret\b|\bnot a (?:success\s+)?metric\b|\bnot a standalone metric\b|\bnot a (?:separate\s+)?service\b|\bdid not establish\b|\bnot established\b|\bremove that assumption\b/i.test(
+    String(text || '')
+  );
 }
 
 function sameSemanticValue(left, right) {
@@ -2571,8 +2608,8 @@ function reviewCorrectionOperations(text, state, turnId) {
   const sentences = String(text || '').split(/(?<=[.!?])\s+|\n+/).map((item) => item.trim()).filter(Boolean);
   for (const sentence of sentences) {
     const lower = sentence.toLowerCase();
-    if (/geograph(?:y|ic).{0,50}\b(?:not|no longer|isn't|is not).{0,40}\b(constrained|primary|restricted)\b/.test(lower)) {
-      add('RETRACT', 'geography', null, { previous_value: (state.normalizedFacts?.geography || []).join(', '), negation: true, epistemic_state: EPISTEMIC_STATES.UNKNOWN, source_text: sentence });
+    if (/geograph(?:y|ic).{0,50}\b(?:not|no longer|isn't|is not).{0,60}\b(constrained|constraint|primary|restricted)\b/.test(lower)) {
+      add('RETRACT', 'geography', null, { previous_value: (state.normalizedFacts?.geography || []).join(', '), negation: true, epistemic_state: EPISTEMIC_STATES.NOT_APPLICABLE, source_text: sentence });
     }
     if (/\b(?:lead|raw)\s+volume\b.{0,60}\bnot\s+(?:a\s+)?(?:success\s+)?metric\b/.test(lower)) {
       add('RETRACT', 'success_metrics', 'raw lead volume', { negation: true, source_text: sentence });
@@ -2580,31 +2617,51 @@ function reviewCorrectionOperations(text, state, turnId) {
     if (/\bpremium\s+positioning\b.{0,60}\b(?:never|not|did not|didn't).{0,40}\b(?:establish|established|validated|confirm)/.test(lower) || /\b(?:never|not|did not|didn't).{0,40}\b(?:establish|established|validated|confirm).{0,60}\bpremium\s+positioning\b/.test(lower)) {
       add('RETRACT', 'differentiation', 'premium positioning', { negation: true, source_text: sentence });
     }
-    const pain = sentence.match(/\b(.+?)\s+is\s+(?:a\s+)?pain\s*,?\s+not\s+(?:a\s+)?metric\b/i);
+    const pain = sentence.match(/\b(.+?)\s+(?:is|are)\s+(?:a\s+)?pains?\s*,?\s+not\s+(?:a\s+)?metrics?\b/i);
     if (pain) add('RECLASSIFY', 'pains', pain[1], { previous_value: pain[1], classification: 'PAIN', negation: true, source_text: sentence });
-    const outcome = sentence.match(/\b(.+?)\s+is\s+(?:an?\s+)?(?:outcome|transformation area)\s*,?\s+not\s+(?:a\s+)?(?:separate\s+)?service\b/i);
-    if (outcome) add('RECLASSIFY', 'transformation_areas', outcome[1], { previous_value: outcome[1], classification: 'OUTCOME', negation: true, source_text: sentence });
-    const offer = sentence.match(/\b(?:one\s+)?(?:primary\s+)?offer\s+(?:is|=)\s+(?:the\s+)?([^.;]+)/i);
+    const outcome = sentence.match(/^(.+?)\s+(?:is|are)\s+(?:an?\s+)?(?:outcomes?|transformation areas?)(?:\s+or\s+(?:outcomes?|transformation areas?))?\s*,?\s+not\s+(?:a\s+)?(?:separate\s+)?services?\b/i);
+    if (outcome) {
+      for (const item of splitListItems(outcome[1])) {
+        add('RECLASSIFY', 'transformation_areas', item, { previous_value: item, classification: 'OUTCOME', negation: true, source_text: sentence });
+      }
+    }
+    const offer = sentence.match(/\b(?:one\s+)?(?:primary\s+)?offer\s*(?:is|=|:)\s*(?:the\s+)?([^.;]+)/i);
     if (offer) add('CORRECT', 'services', offer[1], { source_text: sentence });
-    if (/\b(?:existing\s+)?operating\s+small\s+business\b/i.test(sentence) && /\b(?:icp|ideal customer|founder)\b/i.test(sentence)) {
+    if (/\b(?:existing\s+)?operating\s+small\s+business(?:es)?\b/i.test(sentence) && /\b(?:icp|ideal customer|founder)\b/i.test(sentence)) {
       add('CORRECT', 'ideal_customers', 'existing operating small business', { source_text: sentence });
-      const segments = sentence.match(/cleaning\/?home services|e-commerce|fitness/gi) || [];
-      for (const segment of segments) add('ASSERT', 'ideal_customers', segment, { source_text: sentence });
+    }
+    if (/\b(?:segments?|verticals?)\s+to\s+test\b/i.test(sentence) || /\binitial\s+(?:test\s+)?segments?\b/i.test(sentence)) {
+      if (/\bcleaning\b/i.test(sentence) && /\bhome services\b/i.test(sentence)) {
+        add('ASSERT', 'ideal_customers', 'cleaning/home services', { source_text: sentence });
+      } else if (/\bcleaning\b/i.test(sentence)) {
+        add('ASSERT', 'ideal_customers', 'cleaning', { source_text: sentence });
+      }
+      if (/\be-commerce\b/i.test(sentence)) add('ASSERT', 'ideal_customers', 'e-commerce', { source_text: sentence });
+      if (/\bfitness\b/i.test(sentence)) add('ASSERT', 'ideal_customers', 'fitness', { source_text: sentence });
     }
     if (/\b(?:fewer than|under|less than)\s+10\s+employees\b/i.test(sentence)) {
       add('ASSERT', 'ideal_customer_traits', 'generally fewer than 10 employees', { source_text: sentence });
     }
-    if (/\bfounder operational bottleneck\b/i.test(sentence)) {
+    if (/\bfounder operational bottleneck\b/i.test(sentence) || /\bfounder\b.{0,30}\btoo central to operations\b/i.test(sentence)) {
       add('ASSERT', 'ideal_customer_traits', 'founder operational bottleneck', { source_text: sentence });
     }
-    const metricMatches = sentence.match(/qualified founder conversations|icp-qualified conversations|serious program conversations|paid enrollments|discovery\s*(?:to|->|→)\s*enrollment conversion/gi) || [];
+    const metricMatches = sentence.match(/qualified founder conversations|icp-qualified conversations|serious program conversations|paid enrollments|discovery[\s-]*(?:to|->|→)[\s-]*enrollment conversion/gi) || [];
     for (const metric of metricMatches) add('ASSERT', 'success_metrics', metric, { source_text: sentence });
-    const signalMatches = sentence.match(/pain[- ]pattern frequency|segment[- ]response patterns/gi) || [];
+    const signalMatches = sentence.match(/pain[- ]patterns?(?:\s+frequency)?|segment[- ]response patterns/gi) || [];
     for (const signal of signalMatches) add('ASSERT', 'learning_signals', signal, { classification: 'LEARNING_SIGNAL', source_text: sentence });
     const painMatches = /\b(?:pains?|learning signals?)\b/i.test(sentence) ? (sentence.match(/employee problems|lack of owner time|founder dependence|revenue pressure/gi) || []) : [];
     for (const item of painMatches) add('ASSERT', 'pains', item, { classification: 'PAIN', source_text: sentence });
     if (/\bdifferentiation\b/.test(lower) && /\b(?:hypothesis|unvalidated|not established)\b/.test(lower)) {
-      const value = sentence.replace(/^.*?\bdifferentiation\b\s*(?:is|:)?\s*/i, '').replace(/\b(?:is|remains)?\s*(?:a\s+)?hypothesis.*$/i, '').trim();
+      let value = sentence;
+      const colonMatch = sentence.match(/:\s*(.+)$/);
+      if (colonMatch) {
+        value = colonMatch[1];
+      } else {
+        value = sentence
+          .replace(/^.*?\bdifferentiation\b\s*(?:is|remains)?\s*(?:still\s+)?(?:a\s+)?\s*/i, '')
+          .replace(/\bhypothesis\b\s*[:,]?\s*/i, '');
+      }
+      value = value.trim();
       add('CORRECT', 'differentiation', value || 'practical transformation-focused 12-week approach', { epistemic_state: EPISTEMIC_STATES.HYPOTHESIS, source_text: sentence });
     }
   }
@@ -2621,17 +2678,24 @@ function projectWorkingSemanticOperations(facts, operations) {
     if (kind === 'RETRACT') {
       if (slot === 'geography') {
         next.geography = [];
-        next.epistemic_states.geography = EPISTEMIC_STATES.UNKNOWN;
+        next.epistemic_states.geography = operation.epistemic_state || EPISTEMIC_STATES.UNKNOWN;
       } else if (slot === 'success_metrics') {
         next.success_metrics = withoutSemanticValue(next.success_metrics, value);
         next.excluded_metrics = uniquePush(next.excluded_metrics, [value]);
       } else if (slot === 'differentiation') {
         if (sameSemanticValue(next.differentiation, value)) next.differentiation = null;
+        if (sameSemanticValue(next.brand_voice, value)) next.brand_voice = null;
         delete next.hypotheses.differentiation;
       }
       continue;
     }
     if (kind === 'CORRECT' && slot === 'services') {
+      // SPEC-228: a corrected primary offer must also displace a stale
+      // business_description that duplicates the offer confusion being corrected.
+      const previousServices = facts.services || [];
+      if (previousServices.some((prev) => sameSemanticValue(next.business_description, prev))) {
+        next.business_description = value;
+      }
       next.services = [value];
       continue;
     }
@@ -2658,6 +2722,25 @@ function projectWorkingSemanticOperations(facts, operations) {
       next.success_metrics = uniquePush(next.success_metrics, [value]);
     }
   }
+  // SPEC-228 invariant: business_description is description-only and must never
+  // carry a self-referential "<name> is a ..." wrap, regardless of which slots
+  // the correction operations targeted.
+  next.business_description = sanitizeIdentityDescription(next.business_name, next.business_description);
+  // SPEC-228 invariant: raw correction-instruction prose (negation sentences,
+  // literal "not a metric" text, etc.) must never remain active business
+  // meaning even if it entered a slot before the correction operation model
+  // understood that slot.
+  next.success_metrics = next.success_metrics.filter((item) => {
+    if (!containsCorrectionInstructionLeakage(item)) return true;
+    next.excluded_metrics = uniquePush(
+      next.excluded_metrics,
+      [/lead volume/i.test(item) ? 'raw lead volume' : item]
+    );
+    return false;
+  });
+  next.geography = next.geography.filter((item) => !containsCorrectionInstructionLeakage(item));
+  if (containsCorrectionInstructionLeakage(next.differentiation)) next.differentiation = null;
+  if (containsCorrectionInstructionLeakage(next.brand_voice)) next.brand_voice = null;
   return next;
 }
 
@@ -2866,9 +2949,11 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
         ].join(' ')
       : f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS
         ? `Current hypothesis: target markets center on ${f.hypotheses?.geography || f.evidence_statements?.geography || 'under evaluation'}.`
-        : f.epistemic_states?.geography === EPISTEMIC_STATES.UNKNOWN
-          ? 'Target markets: Not yet defined.'
-          : prior.targetMarkets?.summary || '',
+        : f.epistemic_states?.geography === EPISTEMIC_STATES.NOT_APPLICABLE
+          ? 'Geography is not currently a meaningful targeting constraint; targeting is based on business stage and characteristics instead.'
+          : f.epistemic_states?.geography === EPISTEMIC_STATES.UNKNOWN
+            ? 'Target markets: Not yet defined.'
+            : prior.targetMarkets?.summary || '',
   };
 
   sections.competitiveAdvantages = {
