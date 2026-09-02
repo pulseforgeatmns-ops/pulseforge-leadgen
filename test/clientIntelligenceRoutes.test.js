@@ -156,6 +156,14 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /Blueprint approved/);
     assert.match(uiSource, /els\.blueprintActions\.hidden\s*=\s*true/);
   });
+
+  it('shows a Blueprint Review refine action that reuses the resume route', () => {
+    assert.match(uiSource, /Refine with Max/);
+    assert.match(uiSource, /id="refineWithMaxBtn"/);
+    assert.match(uiSource, /resumeConversation\(\)/);
+    assert.match(uiSource, /\/api\/v1\/interview\/.*\/resume/);
+    assert.match(uiSource, /refineWithMaxBtn.*resumeConversation|resumeConversation.*refineWithMaxBtn/);
+  });
 });
 
 describe('clientIntelligence routes (http smoke)', () => {
