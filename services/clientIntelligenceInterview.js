@@ -2811,6 +2811,67 @@ function projectWorkingSemanticOperations(facts, operations) {
   return next;
 }
 
+/**
+ * Reconcile historical persisted state with the active semantic contract before
+ * it is used to resume an unapproved interview or synthesize a Blueprint.
+ */
+function normalizeRecoveredInterviewState(interviewState) {
+  const state = { ...(interviewState || {}) };
+  const facts = cloneNormalizedFacts(state.normalizedFacts);
+  const sectionState = { ...(state.sectionState || {}) };
+  const fieldToSection = Object.fromEntries(
+    Object.entries(SECTION_TO_PRIMARY_FIELD).map(([section, field]) => [field, section])
+  );
+  const slots = new Set([
+    ...Object.keys(facts.epistemic_states || {}),
+    ...Object.keys(facts.hypotheses || {}),
+    ...Object.keys(facts.evidence_statements || {}),
+  ]);
+
+  for (const slot of slots) {
+    if (!Object.prototype.hasOwnProperty.call(facts, slot)) continue;
+    const value = facts[slot];
+    const hasValue = Array.isArray(value) ? value.length > 0 : value != null && value !== '';
+    const stateValue = facts.epistemic_states[slot];
+    const invalidValue = typeof value === 'string' && containsCorrectionInstructionLeakage(value);
+    const invalidHypothesis = containsCorrectionInstructionLeakage(facts.hypotheses[slot]);
+    const invalidEvidence = containsCorrectionInstructionLeakage(facts.evidence_statements[slot]);
+
+    if (invalidValue) {
+      facts[slot] = null;
+      facts.epistemic_states[slot] = EPISTEMIC_STATES.UNKNOWN;
+    }
+
+    const invalidated = invalidValue ||
+      (!hasValue && [EPISTEMIC_STATES.UNKNOWN, EPISTEMIC_STATES.NOT_APPLICABLE].includes(stateValue));
+    if (invalidated) {
+      delete facts.hypotheses[slot];
+      if (invalidEvidence || !hasValue) delete facts.evidence_statements[slot];
+      facts.superseded_slots = uniquePush(facts.superseded_slots, [slot]);
+    } else if (facts.epistemic_states[slot] === EPISTEMIC_STATES.HYPOTHESIS) {
+      // An active hypothesis must be represented by its active proposition.
+      if (!facts.hypotheses[slot] || !sameSemanticValue(facts.hypotheses[slot], facts[slot])) {
+        facts.hypotheses[slot] = facts[slot];
+      }
+      if (invalidEvidence) facts.evidence_statements[slot] = facts[slot];
+    } else if (invalidHypothesis) {
+      delete facts.hypotheses[slot];
+    }
+
+    const sectionKey = fieldToSection[slot];
+    if (sectionKey && facts.superseded_slots.includes(slot)) {
+      const prior = sectionState[sectionKey];
+      if (prior && prior.summary) {
+        sectionState[sectionKey] = { ...prior, summary: '' };
+      }
+    }
+  }
+
+  state.normalizedFacts = facts;
+  state.sectionState = sectionState;
+  return state;
+}
+
 async function applyRefinementSemanticCorrections(store, session, state, text, turnId) {
   const operations = reviewCorrectionOperations(text, state, turnId);
   if (!operations.length) return { operations, evidenceIds: [] };
@@ -6529,6 +6590,11 @@ async function startClientInterview(input = {}, opts = {}) {
   if (!restart && !forceNew && !notes) {
     const existing = await findActiveInterviewForClient(clientId, opts);
     if (existing) {
+      const recoveredState = normalizeRecoveredInterviewState(existing.interview_state);
+      if (JSON.stringify(recoveredState) !== JSON.stringify(existing.interview_state || {})) {
+        existing.interview_state = recoveredState;
+        await store.updateSession(existing.id, { interview_state: recoveredState });
+      }
       const detail = await getInterview(existing.id, opts);
       const q = currentQuestion(existing.interview_state);
       const memory = ensureReasoningMemory(existing.interview_state || {});
@@ -8323,6 +8389,7 @@ async function reviseBlueprint(blueprintId, revisions = {}, opts = {}) {
   if (!session) {
     throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
   }
+  session.interview_state = normalizeRecoveredInterviewState(session.interview_state);
 
   const sections = buildSectionsFromState(current.sections);
   const sectionEdits = revisions.sections || revisions;
@@ -8475,7 +8542,7 @@ async function resumeInterview(sessionId, opts = {}) {
 
   advanceStatus(session, 'DISCOVERY');
   const state = {
-    ...(session.interview_state || initialInterviewState()),
+    ...normalizeRecoveredInterviewState(session.interview_state || initialInterviewState()),
     done: false,
     refinementPass: true,
   };
@@ -10407,6 +10474,7 @@ module.exports = {
   looksLikeSupplementalContext,
   reviewCorrectionOperations,
   projectWorkingSemanticOperations,
+  normalizeRecoveredInterviewState,
   containsMetaInstructionLanguage,
   containsRawPromptFragment,
   partitionUserResponse,
