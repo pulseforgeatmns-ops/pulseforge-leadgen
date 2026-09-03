@@ -2717,10 +2717,17 @@ function projectWorkingSemanticOperations(facts, operations) {
         next.success_metrics = withoutSemanticValue(next.success_metrics, value);
         next.excluded_metrics = uniquePush(next.excluded_metrics, [value]);
       } else if (slot === 'differentiation') {
-        if (sameSemanticValue(next.differentiation, value)) next.differentiation = null;
-        if (sameSemanticValue(next.brand_voice, value)) next.brand_voice = null;
-        next.superseded_slots = uniquePush(next.superseded_slots, ['brand_voice']);
-        delete next.hypotheses.differentiation;
+        if (value == null) {
+          next.differentiation = null;
+          next.epistemic_states.differentiation = EPISTEMIC_STATES.UNKNOWN;
+          delete next.hypotheses.differentiation;
+          delete next.evidence_statements.differentiation;
+        } else if (sameSemanticValue(next.differentiation, value)) {
+          next.differentiation = null;
+          next.epistemic_states.differentiation = operation.epistemic_state || EPISTEMIC_STATES.UNKNOWN;
+          delete next.hypotheses.differentiation;
+          delete next.evidence_statements.differentiation;
+        }
       }
       continue;
     }
@@ -2737,7 +2744,12 @@ function projectWorkingSemanticOperations(facts, operations) {
     if (kind === 'CORRECT' && slot === 'differentiation') {
       next.differentiation = value;
       next.epistemic_states.differentiation = operation.epistemic_state;
-      if (operation.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS) next.hypotheses.differentiation = value;
+      next.evidence_statements.differentiation = value;
+      if (operation.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS) {
+        next.hypotheses.differentiation = value;
+      } else {
+        delete next.hypotheses.differentiation;
+      }
       continue;
     }
     if (kind === 'CORRECT' && slot === 'campaignGoals') {
@@ -2790,6 +2802,11 @@ function projectWorkingSemanticOperations(facts, operations) {
     next.epistemic_states.ninety_day_outcomes = next.ninety_day_outcomes
       ? EPISTEMIC_STATES.KNOWN
       : EPISTEMIC_STATES.UNKNOWN;
+  }
+  for (const [slot, epistemicState] of Object.entries(next.epistemic_states)) {
+    if (epistemicState === EPISTEMIC_STATES.HYPOTHESIS && !next.hypotheses?.[slot]) {
+      throw new Error(`Semantic projection incoherent: ${slot} is HYPOTHESIS without an active hypothesis`);
+    }
   }
   return next;
 }
