@@ -2842,9 +2842,12 @@ function normalizeRecoveredInterviewState(interviewState) {
       facts.epistemic_states[slot] = EPISTEMIC_STATES.UNKNOWN;
     }
 
+    const orphanedHypothesis = stateValue === EPISTEMIC_STATES.HYPOTHESIS && !hasValue;
     const invalidated = invalidValue ||
+      orphanedHypothesis ||
       (!hasValue && [EPISTEMIC_STATES.UNKNOWN, EPISTEMIC_STATES.NOT_APPLICABLE].includes(stateValue));
     if (invalidated) {
+      if (orphanedHypothesis) facts.epistemic_states[slot] = EPISTEMIC_STATES.UNKNOWN;
       delete facts.hypotheses[slot];
       if (invalidEvidence || !hasValue) delete facts.evidence_statements[slot];
       facts.superseded_slots = uniquePush(facts.superseded_slots, [slot]);
