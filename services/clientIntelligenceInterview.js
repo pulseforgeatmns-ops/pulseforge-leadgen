@@ -6804,7 +6804,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     throw new ClientIntelligenceError('empty_message', 'message is required');
   }
 
-  const state = session.interview_state || initialInterviewState();
+  const state = normalizeRecoveredInterviewState(session.interview_state || initialInterviewState());
   const q = currentQuestion(state);
 
   // Refinement pass after resume: free-form note updates then regenerate blueprint.
