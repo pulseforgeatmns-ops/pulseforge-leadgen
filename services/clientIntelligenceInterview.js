@@ -2163,6 +2163,7 @@ function emptyNormalizedFacts() {
     pains: [],
     learning_signals: [],
     excluded_metrics: [],
+    superseded_slots: [],
   };
 }
 
@@ -2202,6 +2203,7 @@ function cloneNormalizedFacts(facts) {
     pains: [...(src.pains || [])],
     learning_signals: [...(src.learning_signals || [])],
     excluded_metrics: [...(src.excluded_metrics || [])],
+    superseded_slots: [...(src.superseded_slots || [])],
   };
 }
 
@@ -2585,6 +2587,29 @@ function containsCorrectionInstructionLeakage(text) {
   );
 }
 
+function containsObjectiveCorrectionLeakage(text) {
+  return containsCorrectionInstructionLeakage(text) ||
+    /\b(?:pain|pains|learning signals?)\b[\s\S]{0,100}\b(?:not|rather than)\b[\s\S]{0,40}\b(?:metric|objective|goal|outcome)s?\b/i.test(
+      String(text || '')
+    );
+}
+
+function authoritativeObjectiveFromFacts(facts) {
+  const factRows = [
+    ...(facts?.business_facts?.ninety_day_outcomes || []),
+    ...(facts?.business_facts?.growth_focus || []),
+  ];
+  const factValue = factRows.find(
+    (fact) => fact && fact.epistemic_state === EPISTEMIC_STATES.KNOWN && fact.value &&
+      !containsObjectiveCorrectionLeakage(fact.value)
+  );
+  if (factValue) return normalizeBusinessPhrase(factValue.value);
+  if (facts?.growth_focus && !containsObjectiveCorrectionLeakage(facts.growth_focus)) {
+    return normalizeBusinessPhrase(facts.growth_focus);
+  }
+  return null;
+}
+
 function sameSemanticValue(left, right) {
   const a = normalizedSemanticValue(left);
   const b = normalizedSemanticValue(right);
@@ -2664,6 +2689,12 @@ function reviewCorrectionOperations(text, state, turnId) {
       value = value.trim();
       add('CORRECT', 'differentiation', value || 'practical transformation-focused 12-week approach', { epistemic_state: EPISTEMIC_STATES.HYPOTHESIS, source_text: sentence });
     }
+    const objective = sentence.match(
+      /\b(?:near-term|90-day|ninety-day)\s+(?:objective|goal|outcome|priority)(?:s)?\s*(?:is|are|:|=)\s*(.+)$/i
+    );
+    if (objective && !containsObjectiveCorrectionLeakage(objective[1])) {
+      add('CORRECT', 'campaignGoals', objective[1], { source_text: sentence });
+    }
   }
   if (!operations.length && /\b(?:correction|correct|retract|remove|not a metric|not a service|not established|not constrained|reclassify)\b/i.test(text)) {
     add('CLARIFY', 'unresolved', null, { epistemic_state: EPISTEMIC_STATES.UNRESOLVED });
@@ -2675,6 +2706,9 @@ function projectWorkingSemanticOperations(facts, operations) {
   const next = cloneNormalizedFacts(facts);
   for (const operation of operations || []) {
     const { operation: kind, slot, value } = operation;
+    if (slot && slot !== 'unresolved') {
+      next.superseded_slots = uniquePush(next.superseded_slots, [slot]);
+    }
     if (kind === 'RETRACT') {
       if (slot === 'geography') {
         next.geography = [];
@@ -2685,6 +2719,7 @@ function projectWorkingSemanticOperations(facts, operations) {
       } else if (slot === 'differentiation') {
         if (sameSemanticValue(next.differentiation, value)) next.differentiation = null;
         if (sameSemanticValue(next.brand_voice, value)) next.brand_voice = null;
+        next.superseded_slots = uniquePush(next.superseded_slots, ['brand_voice']);
         delete next.hypotheses.differentiation;
       }
       continue;
@@ -2703,6 +2738,11 @@ function projectWorkingSemanticOperations(facts, operations) {
       next.differentiation = value;
       next.epistemic_states.differentiation = operation.epistemic_state;
       if (operation.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS) next.hypotheses.differentiation = value;
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'campaignGoals') {
+      next.ninety_day_outcomes = value;
+      next.epistemic_states.ninety_day_outcomes = operation.epistemic_state;
       continue;
     }
     if (kind === 'RECLASSIFY') {
@@ -2740,7 +2780,17 @@ function projectWorkingSemanticOperations(facts, operations) {
   });
   next.geography = next.geography.filter((item) => !containsCorrectionInstructionLeakage(item));
   if (containsCorrectionInstructionLeakage(next.differentiation)) next.differentiation = null;
-  if (containsCorrectionInstructionLeakage(next.brand_voice)) next.brand_voice = null;
+  if (containsCorrectionInstructionLeakage(next.brand_voice)) {
+    next.brand_voice = null;
+    next.epistemic_states.brand_voice = EPISTEMIC_STATES.UNKNOWN;
+    next.superseded_slots = uniquePush(next.superseded_slots, ['brand_voice']);
+  }
+  if (containsObjectiveCorrectionLeakage(next.ninety_day_outcomes)) {
+    next.ninety_day_outcomes = authoritativeObjectiveFromFacts(facts);
+    next.epistemic_states.ninety_day_outcomes = next.ninety_day_outcomes
+      ? EPISTEMIC_STATES.KNOWN
+      : EPISTEMIC_STATES.UNKNOWN;
+  }
   return next;
 }
 
@@ -2847,6 +2897,11 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   const prior = priorSections || emptySections();
   const sections = emptySections();
   const name = sanitizeBusinessName(f.business_name || '');
+  const priorSummary = (key, slot) => {
+    const summary = String(prior[key]?.summary || '').trim();
+    if (!summary || f.superseded_slots.includes(slot) || containsCorrectionInstructionLeakage(summary)) return '';
+    return summary;
+  };
 
   const identityBits = [];
   if (name && f.business_description) {
@@ -2872,7 +2927,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           ensurePeriod(identityBits[0]),
           'This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
         ].join(' ')
-      : prior.identity?.summary || '',
+      : priorSummary('identity', 'business_description'),
   };
 
   sections.services = {
@@ -2911,13 +2966,13 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.UNKNOWN) {
         return 'Ideal customers: Not yet defined.';
       }
-      const priorSummary = String(prior.idealCustomers?.summary || '').trim();
+      const priorIdealSummary = String(prior.idealCustomers?.summary || '').trim();
       if (
-        priorSummary &&
-        !isLiteralUncertaintyPhrase(priorSummary) &&
-        !/\bi don'?t know\b|\bnot sure\b|\bhaven'?t figured\b/i.test(priorSummary)
+        priorIdealSummary &&
+        !isLiteralUncertaintyPhrase(priorIdealSummary) &&
+        !/\bi don'?t know\b|\bnot sure\b|\bhaven'?t figured\b/i.test(priorIdealSummary)
       ) {
-        return priorSummary;
+        return priorSummary('idealCustomers', 'ideal_customers');
       }
       return '';
     })(),
@@ -2933,7 +2988,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
         ].join(' ')
       : f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.UNKNOWN
         ? 'Disqualified customers: Not yet defined.'
-        : prior.avoidCustomers?.summary || '',
+        : priorSummary('avoidCustomers', 'disqualified_customers'),
   };
 
   const marketBits = [];
@@ -2953,7 +3008,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           ? 'Geography is not currently a meaningful targeting constraint; targeting is based on business stage and characteristics instead.'
           : f.epistemic_states?.geography === EPISTEMIC_STATES.UNKNOWN
             ? 'Target markets: Not yet defined.'
-            : prior.targetMarkets?.summary || '',
+            : priorSummary('targetMarkets', 'geography'),
   };
 
   sections.competitiveAdvantages = {
@@ -2970,7 +3025,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
         ? `Current hypothesis: competitive advantage around ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'under evaluation'}.`
         : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN
           ? 'Differentiation: Not yet defined.'
-          : prior.competitiveAdvantages?.summary || '',
+          : priorSummary('competitiveAdvantages', 'differentiation'),
   };
 
   sections.brandVoice = {
@@ -2985,17 +3040,18 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
         ? `Current hypothesis: brand voice tone may align with ${f.hypotheses?.brand_voice || f.evidence_statements?.brand_voice || 'under evaluation'}.`
         : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.UNKNOWN
           ? 'Brand voice: Not yet defined.'
-          : prior.brandVoice?.summary || '',
+          : priorSummary('brandVoice', 'brand_voice'),
   };
 
   sections.campaignGoals = {
     ...(prior.campaignGoals || emptySection()),
+    epistemic_state: getEpistemicState('ninety_day_outcomes', Boolean(f.ninety_day_outcomes)),
     summary: f.ninety_day_outcomes
       ? [
           ensurePeriod(`Near-term growth goals focus on ${f.ninety_day_outcomes}`),
           'These are desired business outcomes for the next phase of work, not execution tactics.',
         ].join(' ')
-      : prior.campaignGoals?.summary || '',
+      : priorSummary('campaignGoals', 'ninety_day_outcomes'),
   };
 
   sections.successMetrics = {
@@ -3005,7 +3061,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           ensurePeriod(`Success will be judged by ${f.success_metrics.join(', ')}`),
           'These signals define whether the engagement is working from the client\'s perspective.',
         ].join(' ')
-      : prior.successMetrics?.summary || '',
+      : priorSummary('successMetrics', 'success_metrics'),
   };
 
   // Preserve confidence / evidenceIds / unknowns from prior when present.
