@@ -3100,10 +3100,8 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           ensurePeriod(`Competitive edge is described as ${f.differentiation}`),
           'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
         ].join(' ')
-      : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN && f.hypotheses?.differentiation
-        ? `Actual customer reason-to-choose: Not yet established. Current hypothesis: ${f.hypotheses.differentiation}.`
-        : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
-        ? `Current hypothesis: competitive advantage around ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'under evaluation'}.`
+      : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
+        ? `The current differentiation hypothesis is that ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'the buying decision may be influenced by an as-yet unarticulated advantage'}.`
         : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN
           ? 'Differentiation: Not yet defined.'
           : priorSummary('competitiveAdvantages', 'differentiation'),
@@ -3118,7 +3116,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           'Tone guidance constrains later language without choosing channels or campaigns.',
         ].join(' ')
       : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.HYPOTHESIS
-        ? `Current hypothesis: brand voice tone may align with ${f.hypotheses?.brand_voice || f.evidence_statements?.brand_voice || 'under evaluation'}.`
+        ? `The current brand voice hypothesis is that the tone may align with ${f.hypotheses?.brand_voice || f.evidence_statements?.brand_voice || 'an as-yet undefined direction'}.`
         : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.UNKNOWN
           ? 'Brand voice: Not yet defined.'
           : priorSummary('brandVoice', 'brand_voice'),
@@ -3315,6 +3313,12 @@ function businessSubject(name, { possessive = false } = {}) {
  * Never concatenates raw interview text into Mad-Lib templates.
  */
 function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
+  if (
+    opts.epistemicState === EPISTEMIC_STATES.UNKNOWN ||
+    opts.epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE
+  ) {
+    return '';
+  }
   const name = opts.businessName || '';
   const subject = businessSubject(name);
   const possessive = businessSubject(name, { possessive: true });
@@ -3340,7 +3344,7 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
 
   // Peel Blueprint wrapper prefixes then clean.
   claim = claim.replace(
-    /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as|Progress will be judged by|Ideal customers include|Geographic focus centers on|The business declines|Brand voice should feel|Near-term growth priorities center on|Customers choose this business because(?:\s+of)?|Services include)\s+/i,
+    /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as|Progress will be judged by|Ideal customers include|Geographic focus centers on|The business declines|Brand voice should feel|Near-term growth priorities center on|Customers choose this business because(?:\s+of)?|Services include|The current differentiation hypothesis is that|The current brand voice hypothesis is that the tone may align with)\s+/i,
     ''
   );
   let substance = cleanRawAnswer(sectionKey, claim);
@@ -3424,39 +3428,43 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
     }
     case 'advantages': {
       let edge = substance.trim();
+      const presentAdvantage = (sentence) =>
+        opts.epistemicState === EPISTEMIC_STATES.HYPOTHESIS
+          ? `${subject}'s current differentiation hypothesis is that ${midSentence(edge)}`
+          : sentence;
       // "trust — responsive..." / "trust: ..." → full consultant clause
       const trustDash = edge.match(/^trust\s*[—–\-:]\s*(.+)$/i);
       if (trustDash) {
         edge = `they trust the team to be ${trustDash[1].trim()}`;
-        return `Customers choose ${subject} because ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
       }
       if (/^trust\b/i.test(edge) && /\b(responsive|consistent|accountab|chase|show|communicate)\b/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`);
       }
       // Normalize "customers trust..." → "they trust..." when we already name the chooser.
       edge = edge.replace(/^(?:customers?|clients?)\s+(trust|choose|prefer)\b/i, 'they $1');
       // If the answer is already a "trust / show up / communicate" clause, keep it natural.
       if (/^(they|customers?|clients?)\s+/i.test(edge)) {
-        return `Customers choose ${subject} because ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
       }
       if (/^(trust|show|communicate|solve|make|be)\b/i.test(edge)) {
         const clause = /^trust\b/i.test(edge)
           ? edge.replace(/^trust\b/i, 'they trust')
           : `they ${edge}`;
-        return `Customers choose ${subject} because ${midSentence(clause)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(clause)}`);
       }
       if (/\btrust\b/i.test(edge) && /\b(responsive|consistent|accountab|chase)\b/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`);
       }
       // Adjective list left after stripping "trust —"
       if (/^(responsive|consistent|accountab)/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be ${midSentence(edge)}`);
       }
       // Noun-phrase differentiation (e.g. "reliable crews")
       if (!/\b(because|that|who|to)\b/i.test(edge) && edge.split(/\s+/).length <= 8) {
-        return `Customers choose ${subject} for ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} for ${midSentence(edge)}`);
       }
-      return `Customers choose ${subject} because ${midSentence(edge)}`;
+      return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
     }
     case 'voice': {
       let tone = normalizeBrandVoiceTone(substance);
@@ -3464,7 +3472,10 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
       if (!tone || /^(?:anchor|the business)\b/i.test(tone)) return '';
       const cleanName = sanitizeBusinessName(name) || name;
       const voicePossessive = businessSubject(cleanName || 'the business', { possessive: true });
-      return `${voicePossessive} brand voice should feel ${tone}`;
+      const sentence = `${voicePossessive} brand voice should feel ${tone}`;
+      return opts.epistemicState === EPISTEMIC_STATES.HYPOTHESIS
+        ? `${voicePossessive} current brand voice hypothesis is that the tone may be ${tone}`
+        : sentence;
     }
     case 'goals': {
       let outcome = normalizeGoalOutcomePhrase(substance);
@@ -3975,8 +3986,14 @@ function composeWhoYouServe(ideal, avoid, markets, opts = {}) {
 
 function composeWhyChooseYou(advantages, brandVoice, opts = {}) {
   const businessName = opts.businessName || '';
-  const adv = normalizeClaim('advantages', advantages, { businessName });
-  const voice = normalizeClaim('voice', brandVoice, { businessName });
+  const adv = normalizeClaim('advantages', advantages, {
+    businessName,
+    epistemicState: opts.differentiationState,
+  });
+  const voice = normalizeClaim('voice', brandVoice, {
+    businessName,
+    epistemicState: opts.brandVoiceState,
+  });
   const sentences = [];
   if (adv) sentences.push(adv);
   if (voice) sentences.push(voice);
@@ -4570,7 +4587,12 @@ function buildExecutiveSummary(sections, opts = {}) {
     (normalizedFacts && normalizedFacts.business_name) ||
       extractBusinessName(s('identity').summary)
   );
-  const briefOpts = { businessName, normalizedFacts };
+  const briefOpts = {
+    businessName,
+    normalizedFacts,
+    differentiationState: normalizedFacts?.epistemic_states?.differentiation,
+    brandVoiceState: normalizedFacts?.epistemic_states?.brand_voice,
+  };
   const unknownLabels = collectUnknownLabels(clean);
   const learnMoreItems = composeLearnMoreItems(unknownLabels, { normalizedFacts });
   const observations = composeObservations(clean, normalizedFacts);
@@ -4716,14 +4738,17 @@ function buildExecutiveSummary(sections, opts = {}) {
     }
     if (f.brand_voice) {
       const adv =
-        synthesizeNormalizedFact('advantages', s('competitiveAdvantages').summary, briefOpts) ||
+        synthesizeNormalizedFact('advantages', s('competitiveAdvantages').summary, {
+          ...briefOpts,
+          epistemicState: briefOpts.differentiationState,
+        }) ||
         (f.differentiation
           ? `Customers choose ${businessName || 'this business'} because ${midSentence(f.differentiation)}`
           : '');
       const voice = synthesizeNormalizedFact(
         'voice',
         `Brand voice should read as ${f.brand_voice}`,
-        briefOpts
+        { ...briefOpts, epistemicState: briefOpts.brandVoiceState }
       );
       whyChooseYou = joinPolished(
         [adv, voice, 'Differentiation and tone must reinforce each other so the market experiences the same promise the business actually keeps.'].filter(
