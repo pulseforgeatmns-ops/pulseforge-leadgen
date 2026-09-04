@@ -1581,6 +1581,46 @@ function composeCustomerConstraintPresentation(businessName, rawConstraint) {
   const raw = normalizeMechanicalTypos(String(rawConstraint || '').trim());
   if (!raw) return '';
 
+  const stripTerminalPunctuation = (value) => String(value || '').replace(/[.!?;]+$/, '').trim();
+  const isFramedStatement = (value) =>
+    /^(?:(?:i|we)(?:['’]d|\s+(?:would|prefer|do not|don't|will not|won't|avoid|exclude))\s+|(?:the|this) business\s+(?:avoids?|excludes?|prefers?\s+(?:not|to\s+avoid)|does not|doesn't|would rather not|will not|won't)\s+)/i.test(
+      value
+    );
+  const preserveFramedStatement = (value) => {
+    const cleaned = stripTerminalPunctuation(value);
+    if (/^(?:we|i)(?:['’]d)\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)(?:['’]d)\s+/i, `${subject} would `);
+    }
+    if (/^(?:we|i)\s+prefer\s+not\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+prefer\s+not\s+/i, `${subject} prefers not `);
+    }
+    if (/^(?:we|i)\s+do not\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+do not\s+/i, `${subject} does not `);
+    }
+    if (/^(?:we|i)\s+don't\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+don't\s+/i, `${subject} doesn't `);
+    }
+    if (/^(?:we|i)\s+(?:would|will not|won't|avoid|exclude)\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+/i, `${subject} `);
+    }
+    return cleaned.replace(/^(?:the|this) business\s+/i, `${subject} `);
+  };
+
+  const clauses = raw
+    .split(/\s*;\s*/)
+    .map(stripTerminalPunctuation)
+    .filter(Boolean);
+  if (clauses.length > 1 || isFramedStatement(raw)) {
+    return clauses
+      .map((clause) =>
+        isFramedStatement(clause)
+          ? preserveFramedStatement(clause)
+          : composeCustomerConstraintPresentation(businessName, clause)
+      )
+      .filter(Boolean)
+      .join('; ');
+  }
+
   // Price-first disqualification stays categorical (existing behavior).
   if (/lowest price|cheap|bargain|price.?first/i.test(raw)) {
     return `${subject} deliberately avoids customers who prioritize the lowest price over reliability, professionalism, and accountability`;
