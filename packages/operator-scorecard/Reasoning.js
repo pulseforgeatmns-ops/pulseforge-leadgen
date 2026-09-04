@@ -236,9 +236,11 @@ function toRecommendation(entry, understanding, extra = {}) {
     businessOutcome: extra.businessOutcome || entry.businessOutcome,
     whyItBelongs:
       extra.whyItBelongs ||
-      `Max recommends ${extra.name || entry.name} because it measures progress toward ${
-        extra.businessOutcome || entry.businessOutcome
-      } for a ${understanding.stage.replace(/_/g, ' ')} ${understanding.profile.replace(/_/g, ' ')} business.`,
+      (extra.source === METRIC_SOURCE.OPERATOR
+        ? `The operator named ${extra.name || entry.name} as a success signal.`
+        : `Max recommends ${extra.name || entry.name} because it measures progress toward ${
+            extra.businessOutcome || entry.businessOutcome
+          } for a ${understanding.stage.replace(/_/g, ' ')} ${understanding.profile.replace(/_/g, ' ')} business.`),
     status: extra.status || METRIC_STATUS.RECOMMENDED,
     source: extra.source || METRIC_SOURCE.MAX,
     sortOrder: extra.sortOrder != null ? extra.sortOrder : 0,
@@ -272,6 +274,8 @@ function generateDraftScorecard(input = {}) {
     if (matched && metrics.some((row) => row.key === matched.key)) {
       const existing = metrics.find((row) => row.key === matched.key);
       existing.reason = `${existing.reason} The operator already named this as a success signal (${stated}).`;
+      existing.source = METRIC_SOURCE.OPERATOR;
+      existing.whyItBelongs = `The operator named ${stated} as a success signal.`;
       continue;
     }
     if (matched && !metrics.some((row) => row.key === matched.key)) {
@@ -292,10 +296,10 @@ function generateDraftScorecard(input = {}) {
           indicator: 'lagging',
           defaultConfidence: 0.82,
           reason: `The operator named "${stated}" as a way to judge progress. Max is recommending it so the scorecard stays faithful to that intent.`,
-          businessOutcome: understanding.businessGoal,
+          businessOutcome: 'Operator-defined success',
         },
         understanding,
-        { sortOrder: metrics.length }
+        { sortOrder: metrics.length, source: METRIC_SOURCE.OPERATOR }
       )
     );
   }
