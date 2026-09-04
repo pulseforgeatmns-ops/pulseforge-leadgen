@@ -4676,7 +4676,7 @@ function buildExecutiveSummary(sections, opts = {}) {
             `${businessName || 'The business'} prefers to avoid ${constraintRaw}`
         );
       }
-      if (f.geography.length) {
+      if (f.geography.length && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN) {
         const towns = f.geography.filter((g) => !/^Greater (?:Manchester|Toronto Area)$/i.test(g));
         const hasGM = f.geography.some((g) => /Greater Manchester/i.test(g));
         const hasGTA = f.geography.some((g) => /Greater Toronto|GTA/i.test(g));
@@ -4695,8 +4695,19 @@ function buildExecutiveSummary(sections, opts = {}) {
             `${businessSubject(businessName || 'the business', { possessive: true })} near-term geography centers on ${f.geography.join(', ')}`
           );
         }
+      } else if (f.geography.length && f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS) {
+        sentences.push(
+          `Current hypothesis: target markets center on ${
+            f.hypotheses?.geography || f.evidence_statements?.geography || f.geography.join(', ')
+          }`
+        );
       }
-      if (sentences.length >= 2 && cleanIdeal.length) {
+      if (
+        sentences.length >= 2 &&
+        cleanIdeal.length &&
+        f.geography.length &&
+        f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
+      ) {
         sentences.push(
           'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
         );
