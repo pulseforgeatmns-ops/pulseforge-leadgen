@@ -2660,6 +2660,122 @@ function withoutSemanticValue(values, value) {
   return (values || []).filter((entry) => !sameSemanticValue(entry, value));
 }
 
+/**
+ * SPEC-238: Detect if a sentence is purely a control/refinement directive.
+ * Control directives describe HOW state should be preserved/treated, not WHAT
+ * the business proposition is.
+ *
+ * Returns true if sentence is purely control language without semantic content.
+ */
+function isPureControlDirective(sentence) {
+  const lower = sentence.toLowerCase();
+
+  // Pattern 1: "preserve/keep differentiation as hypothesis/non-applicable/unknown"
+  // This is control language without a new proposition
+  if (/\b(?:preserve|keep)\s+(?:the\s+)?differentiation\s+(?:as|as a)\s+(?:a\s+)?(?:hypothesis|non-applicable|unknown|unvalidated|undefined)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 2: "keep geography non-applicable"
+  if (/\b(?:keep|preserve)\s+(?:the\s+)?geography\s+(?:non-applicable|as\s+non-applicable)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 3: standalone "do not (add|infer|change|invent|approve)"
+  if (/^\s*(?:do not|don't)\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 4: "regenerate using current understanding" - pure control
+  if (/\bregenerate\b.{0,80}\b(?:using|from)\s+(?:the\s+)?current\s+(?:corrected\s+)?understanding\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 5: "present X naturally" without actual content changes
+  if (/\bpresent\s+(?:customer\s+)?(?:exclusions?|customers?)\s+naturally\s+without\s+(?:duplicating|reframing)/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 6: "preserve operator-defined metrics separately"
+  if (/\bpreserve\s+operator-defined\s+(?:metrics|success metrics)\s+(?:separately|apart)\s+from/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 7: "This is a refinement only"
+  if (/\b(?:this is|this\s+is\s+just)\s+(?:a\s+)?refinement\s+only\b/i.test(lower)) {
+    return true;
+  }
+
+  return false;
+}
+
+
+/**
+ * SPEC-238A: Extract control language from a captured value.
+ *
+ * Structural isolation: identify clause boundaries (punctuation or conjunctions)
+ * and detect control clauses by their leading keywords.
+ *
+ * When extracting a value (e.g., from a differentiation sentence), strip out
+ * any trailing control/refinement clauses that were inadvertently captured.
+ *
+ * Returns the cleaned value, or null if the value is purely control language.
+ *
+ * Handles:
+ * - "proposition, do not approve" → "proposition"
+ * - "proposition; keep x unchanged" → "proposition"
+ * - "proposition and do not approve" → "proposition"
+ * - "proposition but keep x unchanged" → "proposition"
+ * - "proposition or do not approve" → "proposition"
+ * - "preserve x and change y" → "preserve x and change y" (legitimate conjunction)
+ */
+function stripControlLanguageFromValue(value) {
+  if (!value) return value;
+
+  const str = String(value).trim();
+
+  const isControlClause = (clause) => {
+    const normalized = clause.trim().toLowerCase();
+    if (/^(?:do\s+not|don't|shouldn't)\b/.test(normalized)) return true;
+    if (/^(?:regenerate|present)\b/.test(normalized)) return true;
+    if (/^(?:separately|apart)\s+from\b/.test(normalized)) return true;
+    return /^(?:keep|preserve)\b/.test(normalized) &&
+      /\b(?:brand voice|epistemic|status|facts?|state|understanding|exclusions?|blueprint)\b/.test(normalized);
+  };
+
+  // Scan clause boundaries, then classify the clause after each boundary.
+  // A conjunction itself never causes truncation; only a following control clause does.
+  const boundaryPattern = /[,;]|\b(?:and|but|or)\b/gi;
+  let boundary;
+  while ((boundary = boundaryPattern.exec(str))) {
+    const trailingClause = str.slice(boundaryPattern.lastIndex).trim();
+    if (!isControlClause(trailingClause)) continue;
+
+    let cleaned = str.slice(0, boundary.index).trim();
+
+    cleaned = cleaned.replace(/[,;]\s*$/, '').trim();
+
+    if (!cleaned || /^\s*(?:a|an|the)[\s,]*$/.test(cleaned)) {
+      return null;
+    }
+
+    return cleaned;
+  }
+
+  // No control clause detected; check for other purely-control patterns
+  // Pattern: "as a rather than" or similar control constructs
+  if (/^as\s+(?:a|an)\s+(?:rather than|rather than an?)/.test(str)) {
+    return null;
+  }
+
+  // If what remains is empty or only punctuation/articles, it's purely control
+  if (!str || /^\s*(?:rather\s+than|as\s+(?:a|an)|a|an|the)[\s,]*$/.test(str)) {
+    return null;
+  }
+
+  return str;
+}
+
 function reviewCorrectionOperations(text, state, turnId) {
   const operations = [];
   const add = (operation, slot, value, extra = {}) => operations.push({
@@ -2716,18 +2832,29 @@ function reviewCorrectionOperations(text, state, turnId) {
     for (const signal of signalMatches) add('ASSERT', 'learning_signals', signal, { classification: 'LEARNING_SIGNAL', source_text: sentence });
     const painMatches = /\b(?:pains?|learning signals?)\b/i.test(sentence) ? (sentence.match(/employee problems|lack of owner time|founder dependence|revenue pressure/gi) || []) : [];
     for (const item of painMatches) add('ASSERT', 'pains', item, { classification: 'PAIN', source_text: sentence });
+
     if (/\bdifferentiation\b/.test(lower) && /\b(?:hypothesis|unvalidated|not established)\b/.test(lower)) {
-      let value = sentence;
-      const colonMatch = sentence.match(/:\s*(.+)$/);
-      if (colonMatch) {
-        value = colonMatch[1];
+      // SPEC-238: Skip pure control directives (e.g., "preserve differentiation as a hypothesis")
+      if (isPureControlDirective(sentence)) {
+        // Do not generate any operation - this is refinement control, not a semantic correction
       } else {
-        value = sentence
-          .replace(/^.*?\bdifferentiation\b\s*(?:is|remains)?\s*(?:still\s+)?(?:a\s+)?\s*/i, '')
-          .replace(/\bhypothesis\b\s*[:,]?\s*/i, '');
+        let value = sentence;
+        const colonMatch = sentence.match(/:\s*(.+)$/);
+        if (colonMatch) {
+          value = colonMatch[1];
+        } else {
+          value = sentence
+            .replace(/^.*?\bdifferentiation\b\s*(?:is|remains)?\s*(?:still\s+)?(?:a\s+)?\s*/i, '')
+            .replace(/\bhypothesis\b\s*[:,]?\s*/i, '');
+        }
+        value = value.trim();
+
+        const cleanedValue = stripControlLanguageFromValue(value);
+
+        if (cleanedValue) {
+          add('CORRECT', 'differentiation', cleanedValue, { epistemic_state: EPISTEMIC_STATES.HYPOTHESIS, source_text: sentence });
+        }
       }
-      value = value.trim();
-      add('CORRECT', 'differentiation', value || 'practical transformation-focused 12-week approach', { epistemic_state: EPISTEMIC_STATES.HYPOTHESIS, source_text: sentence });
     }
     const objective = sentence.match(
       /\b(?:near-term|90-day|ninety-day)\s+(?:objective|goal|outcome|priority)(?:s)?\s*(?:is|are|:|=)\s*(.+)$/i
