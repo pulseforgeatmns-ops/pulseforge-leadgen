@@ -2622,8 +2622,9 @@ function normalizedSemanticValue(value) {
  * active projection may not.
  */
 function containsCorrectionInstructionLeakage(text) {
-  return /\bdo not interpret\b|\bnot a (?:success\s+)?metric\b|\bnot a standalone metric\b|\bnot a (?:separate\s+)?service\b|\bdid not establish\b|\bnot established\b|\bremove that assumption\b/i.test(
-    String(text || '')
+  const value = String(text || '');
+  return (
+    /\bdo not interpret\b|\bnot a (?:success\s+)?metric\b|\bnot a standalone metric\b|\bnot a (?:separate\s+)?service\b|\bdid not establish\b|\bnot established\b|\bremove that assumption\b|\bdon't\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b|\bdo not\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b|\b(?:preserve|keep)\s+(?:the\s+)?(?:current\s+)?(?:epistemic|differentiation|brand voice|geography|success metrics|operator-defined)\b.*\b(?:rather than|separately from|if it is currently unknown|without duplicating|without reframing)\b|\b(?:present|display)\s+(?:customer\s+)?(?:exclusions?|customers?)\s+naturally\s+without\s+(?:duplicating|reframing)\b|\brather than an established buying reason\b|\bdo not invent a brand voice\b|\bdo not approve the Blueprint\b|\bthis is a refinement only\b/i.test(value)
   );
 }
 
@@ -2982,6 +2983,35 @@ function projectWorkingSemanticOperations(facts, operations) {
  * Reconcile historical persisted state with the active semantic contract before
  * it is used to resume an unapproved interview or synthesize a Blueprint.
  */
+function isStructurallyIncompleteRecoveredCustomerFragment(slot, value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return true;
+
+  if (slot === 'ideal_customer_traits') {
+    const words = raw.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) return true;
+    if (/^(?:delegate|operate|manage|run|change|improve|grow|scale|build)\b/i.test(raw)) return true;
+    if (/^is\s+willing\s+to\s+change\s+how\s+they\s+manage\b/i.test(raw)) return true;
+    if (/^willing\s+to\s+change\s+how\s+they\s+manage\b/i.test(raw)) return true;
+    if (/^\s*(?:is|are|be|would|could|should|will)\s+(?:willing|ready|open|able)\b/i.test(raw) && words.length <= 8) {
+      return true;
+    }
+    return false;
+  }
+
+  if (slot === 'ideal_customers' || slot === 'disqualified_customers') {
+    const words = raw.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) return true;
+    if (/^(?:customers?|clients?|people|owners?|teams?|businesses?|segments?)$/i.test(raw)) return true;
+    if (/^(?:ideally|perhaps|maybe|likely|generally)\b/i.test(raw)) return true;
+    if (/^(?:delegate|operate|manage|run|change|improve|grow)\b/i.test(raw)) return true;
+    if (/^(?:who|what|which|when|how|why|where)\b/i.test(raw)) return true;
+    return false;
+  }
+
+  return false;
+}
+
 function normalizeRecoveredInterviewState(interviewState) {
   const state = { ...(interviewState || {}) };
   const facts = cloneNormalizedFacts(state.normalizedFacts);
@@ -2993,6 +3023,7 @@ function normalizeRecoveredInterviewState(interviewState) {
     ...Object.keys(facts.epistemic_states || {}),
     ...Object.keys(facts.hypotheses || {}),
     ...Object.keys(facts.evidence_statements || {}),
+    ...Object.keys(facts || {}),
   ]);
 
   for (const slot of slots) {
@@ -3003,6 +3034,16 @@ function normalizeRecoveredInterviewState(interviewState) {
     const invalidValue = typeof value === 'string' && containsCorrectionInstructionLeakage(value);
     const invalidHypothesis = containsCorrectionInstructionLeakage(facts.hypotheses[slot]);
     const invalidEvidence = containsCorrectionInstructionLeakage(facts.evidence_statements[slot]);
+
+    if (Array.isArray(value)) {
+      const originalCount = value.length;
+      const cleaned = value.filter((entry) => !isStructurallyIncompleteRecoveredCustomerFragment(slot, entry));
+      if (cleaned.length !== originalCount) {
+        facts[slot] = cleaned;
+        facts.epistemic_states[slot] = cleaned.length ? facts.epistemic_states[slot] || EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNKNOWN;
+        facts.superseded_slots = uniquePush(facts.superseded_slots, [slot]);
+      }
+    }
 
     if (invalidValue) {
       facts[slot] = null;
