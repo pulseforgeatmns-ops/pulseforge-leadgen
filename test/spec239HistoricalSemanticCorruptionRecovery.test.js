@@ -99,7 +99,7 @@ describe('SPEC-239: Historical Semantic Corruption Recovery Integrity', () => {
     const normalized = normalizeRecoveredInterviewState(state);
     assert.deepEqual(normalized.normalizedFacts.disqualified_customers, ['idea-stage businesses']);
     assert.deepEqual(normalized.normalizedFacts.ideal_customers, ['existing operating small businesses']);
-    assert.deepEqual(normalized.normalizedFacts.ideal_customer_traits, ['has a small team']);
+    assert.deepEqual(normalized.normalizedFacts.ideal_customer_traits, ['is willing to change how they manage', 'has a small team']);
   });
 
   it('does not synthesize replacement customer facts', () => {

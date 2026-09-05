@@ -2991,9 +2991,7 @@ function isStructurallyIncompleteRecoveredCustomerFragment(slot, value) {
     const words = raw.split(/\s+/).filter(Boolean);
     if (words.length <= 1) return true;
     if (/^(?:delegate|operate|manage|run|change|improve|grow|scale|build)\b/i.test(raw)) return true;
-    if (/^is\s+willing\s+to\s+change\s+how\s+they\s+manage\b/i.test(raw)) return true;
-    if (/^willing\s+to\s+change\s+how\s+they\s+manage\b/i.test(raw)) return true;
-    if (/^\s*(?:is|are|be|would|could|should|will)\s+(?:willing|ready|open|able)\b/i.test(raw) && words.length <= 8) {
+    if (/^\s*(?:is|are|be|would|could|should|will)\s+(?:ready|open|able)\b/i.test(raw) && words.length <= 8) {
       return true;
     }
     return false;
@@ -3010,6 +3008,42 @@ function isStructurallyIncompleteRecoveredCustomerFragment(slot, value) {
   }
 
   return false;
+}
+
+function isRecoveredCustomerSlotRoleValid(slot, value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw || containsMetaInstructionLanguage(raw) || isMetaConsultantSentence(raw)) return false;
+
+  const isPositiveFitTrait = (text) =>
+    /^(?:(?:the\s+)?(?:customer|owner|founder|business)\s+)?(?:(?:is|are)\s+)?(?:willing|ready|open|able|recognizes?|has|remain(?:s)? involved)\b/i.test(
+      text
+    );
+  const isPositiveFitStatement = (text) =>
+    isPositiveFitTrait(text) || /\b(?:is designed for|already have functioning operations)\b/i.test(text);
+  const isExplicitExclusion = (text) =>
+    /\b(?:avoid|exclude|rather not work|do not want|don'?t want|will not|won'?t|not a fit|idea[\s-]?stage|early[\s-]?stage|pre[\s-]?revenue|only looking|only seeking|expecting someone else|do not yet|does not yet|without functioning|not ready)\b/i.test(
+      text
+    );
+  const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
+
+  if (slot === 'ideal_customers') {
+    return !isPositiveFitTrait(raw);
+  }
+
+  if (slot === 'ideal_customer_traits') {
+    return !isExplicitExclusion(raw);
+  }
+
+  if (slot === 'disqualified_customers') {
+    if (!isExplicitExclusion(raw) || isPositiveFitTrait(raw)) return false;
+    return !(
+      sentences.length > 1 &&
+      sentences.some(isExplicitExclusion) &&
+      sentences.some(isPositiveFitStatement)
+    );
+  }
+
+  return true;
 }
 
 function normalizeRecoveredInterviewState(interviewState) {
@@ -3037,7 +3071,11 @@ function normalizeRecoveredInterviewState(interviewState) {
 
     if (Array.isArray(value)) {
       const originalCount = value.length;
-      const cleaned = value.filter((entry) => !isStructurallyIncompleteRecoveredCustomerFragment(slot, entry));
+      const cleaned = value.filter(
+        (entry) =>
+          !isStructurallyIncompleteRecoveredCustomerFragment(slot, entry) &&
+          isRecoveredCustomerSlotRoleValid(slot, entry)
+      );
       if (cleaned.length !== originalCount) {
         facts[slot] = cleaned;
         facts.epistemic_states[slot] = cleaned.length ? facts.epistemic_states[slot] || EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNKNOWN;
