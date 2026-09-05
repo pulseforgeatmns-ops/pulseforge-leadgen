@@ -178,8 +178,8 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.equal(turn.progress.completed, 3);
   });
 
-  it('resumes CLIENT_REVIEW into discovery for refinement', async () => {
-    const { opts } = withStore();
+  it('resumes CLIENT_REVIEW into conversational refinement across multiple turns', async () => {
+    const { opts, store } = withStore();
     const { turn } = await completeInterview(opts);
     assert.equal(turn.status, 'CLIENT_REVIEW');
     await assert.rejects(
@@ -197,11 +197,68 @@ describe('clientIntelligenceInterview lifecycle', () => {
       'Our ideal customers are boutique hotel owners along the coast.',
       opts
     );
-    assert.equal(refined.status, 'CLIENT_REVIEW');
-    assert.ok(refined.blueprint);
-    assert.ok(refined.executiveSummary);
+    assert.equal(refined.status, 'DISCOVERY');
+    assert.equal(refined.nextAction, 'ASK');
+    assert.equal(refined.question, null);
+    assert.equal(refined.blueprint, null);
+    assert.match(refined.message, /updated my working understanding/i);
+
+    let session = await store.getSession(turn.interviewId);
+    assert.equal(session.interview_state.refinementPass, true);
     assert.match(
-      refined.blueprint.sections.idealCustomers.summary,
+      session.interview_state.sectionState.idealCustomers.summary,
+      /boutique hotel|ideal customers/i
+    );
+
+    const secondRefinement = await postInterviewMessage(
+      turn.interviewId,
+      'Differentiation is a hypothesis: practical, transformation-focused 12-week approach.',
+      opts
+    );
+    assert.equal(secondRefinement.status, 'DISCOVERY');
+    assert.equal(secondRefinement.nextAction, 'ASK');
+    assert.equal(secondRefinement.blueprint, null);
+
+    session = await store.getSession(turn.interviewId);
+    assert.equal(session.interview_state.refinementPass, true);
+    assert.match(
+      session.interview_state.sectionState.competitiveAdvantages.summary,
+      /hypothesis|transformation-focused|12-week/i
+    );
+  });
+
+  it('explicit refinement regeneration transitions to Blueprint review without approval', async () => {
+    const { opts } = withStore();
+    const { turn } = await completeInterview(opts);
+    await resumeInterview(turn.interviewId, opts);
+
+    const review = await postInterviewMessage(
+      turn.interviewId,
+      'Show me the updated Blueprint.',
+      opts
+    );
+    assert.equal(review.status, 'CLIENT_REVIEW');
+    assert.equal(review.nextAction, 'GENERATE_BLUEPRINT');
+    assert.ok(review.blueprint);
+    assert.equal(review.blueprint.status, 'in_review');
+  });
+
+  it('mixed refinement update plus explicit regeneration persists update first', async () => {
+    const { opts } = withStore();
+    const { turn } = await completeInterview(opts);
+    await resumeInterview(turn.interviewId, opts);
+
+    const review = await postInterviewMessage(
+      turn.interviewId,
+      'Our ideal customers are boutique hotel owners along the coast. Regenerate the brief.',
+      opts
+    );
+    assert.equal(review.status, 'CLIENT_REVIEW');
+    assert.equal(review.nextAction, 'GENERATE_BLUEPRINT');
+    assert.ok(review.blueprint);
+    assert.equal(review.blueprint.status, 'in_review');
+    assert.match(
+      review.blueprint.sections.idealCustomers.summary,
       /boutique hotel|ideal customers/i
     );
   });
