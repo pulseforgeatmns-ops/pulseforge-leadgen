@@ -269,6 +269,9 @@ const DOMAIN_POINTER_RE =
 const REFINEMENT_INTENT_RE =
   /\b(please\s+refine|this\s+revision|max\s+is\s+treating|regenerate(?:\s+the\s+brief)?|turn\s+the\s+raw\s+(?:interview\s+)?answers|instructions?\s+to\s+max|not\s+facts?\s+about(?:\s+\w+)?|refinement\s+feedback|revision\s+guidance|the\s+brief\s+is\s+treating|please\s+regenerate|this\s+still\s+sounds\s+weird|sentences?\s+don'?t\s+make\s+sense|max\s+isn'?t\s+understanding|brief\s+should\s+be\s+more\s+conversational|this\s+needs\s+to\s+be\s+fixed)\b/i;
 
+const EXPLICIT_BLUEPRINT_REGENERATION_RE =
+  /\b(regenerate|generate|rebuild|update|show|review|rerun|redo)\b.{0,80}\b(brief|blueprint|executive\s+business\s+brief|executive\s+summary)\b|\b(brief|blueprint|executive\s+business\s+brief|executive\s+summary)\b.{0,80}\b(regenerate|generated|rebuilt|updated|review|again)\b|\blet'?s\s+review\s+(?:it|the\s+(?:brief|blueprint))\b/i;
+
 /** Supplemental / out-of-order context markers (start-anchored). */
 const SUPPLEMENTAL_CONTEXT_RE =
   /^\s*(?:i\s+also\s+forgot(?:\s+to\s+mention)?|also\s+forgot(?:\s+to\s+mention)?|i\s+forgot(?:\s+to\s+mention)?|forgot\s+to\s+mention|also|one more thing|add this|for context|another thing|not for this question,? but|this might matter|btw|by the way|oh,? and|additionally|worth noting)\b/i;
@@ -618,6 +621,10 @@ function looksLikeRefinementFeedback(text) {
     return true;
   }
   return false;
+}
+
+function hasExplicitBlueprintRegenerationIntent(text) {
+  return EXPLICIT_BLUEPRINT_REGENERATION_RE.test(String(text || '').trim());
 }
 
 function looksLikeCorrection(text) {
@@ -7089,7 +7096,8 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   const state = normalizeRecoveredInterviewState(session.interview_state || initialInterviewState());
   const q = currentQuestion(state);
 
-  // Refinement pass after resume: free-form note updates then regenerate blueprint.
+  // Refinement pass after resume: free-form note updates stay conversational
+  // unless the operator explicitly asks to regenerate/review the Blueprint.
   // Refinement instructions are stored as revision guidance — never as business facts.
   if (!q && state.refinementPass) {
     const clientTurn = await store.insertTurn({
@@ -7121,6 +7129,16 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       ];
     }
     const evidenceIds = [...correctionResult.evidenceIds];
+    const primaryFieldToSection = Object.fromEntries(
+      Object.entries(SECTION_TO_PRIMARY_FIELD).map(([section, field]) => [field, section])
+    );
+    const updatedSections = correctionResult.operations
+      .map((operation) =>
+        BLUEPRINT_SECTIONS.includes(operation.slot)
+          ? operation.slot
+          : primaryFieldToSection[operation.slot]
+      )
+      .filter(Boolean);
     const sectionsToUpdate = Object.keys(mapped);
     // Only apply when we extracted real business facts — never default the whole
     // refinement message into identity.
@@ -7135,17 +7153,71 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         'EXPLICIT',
         clientTurn.id
       );
-      if (!skippedAsGuidance && evidenceRow) evidenceIds.push(evidenceRow.id);
+      if (!skippedAsGuidance && evidenceRow) {
+        evidenceIds.push(evidenceRow.id);
+        updatedSections.push(section);
+      }
     }
     await store.updateTurn(clientTurn.id, { derived_evidence: evidenceIds });
-    state.refinementPass = false;
-    state.done = true;
+    const explicitRegeneration = hasExplicitBlueprintRegenerationIntent(text);
+    if (explicitRegeneration) {
+      state.refinementPass = false;
+      state.done = true;
+    } else {
+      state.refinementPass = true;
+      state.done = false;
+    }
     session.interview_state = state;
     await store.updateSession(session.id, {
       status: 'DISCOVERY',
       interview_state: state,
       current_stage: 'Refinement',
     });
+
+    if (!explicitRegeneration) {
+      const sectionNames = updatedSections.map((section) => SECTION_TITLES[section] || section);
+      const ack =
+        sectionNames.length
+          ? `Got it. I've updated my working understanding for ${sectionNames.join(', ')}.`
+          : guidance.length
+            ? "Understood. I'll treat that as refinement guidance for Max, not as business evidence."
+            : "Got it. I've kept this as refinement context.";
+      const assistantMessage = `${ack}\n\nYou can add another refinement, or ask me to show the updated Blueprint when you're ready to review it.`;
+
+      await store.insertTurn({
+        id: newId(),
+        session_id: session.id,
+        speaker: 'assistant',
+        message: assistantMessage,
+        goal: 'Continue refinement of Business Blueprint understanding',
+        asked_because:
+          'Client refinement updated working understanding; conversational Max/CIE still owns the turn.',
+        derived_evidence: [],
+        created_at: new Date(),
+      });
+
+      return withExperienceFields(await store.getSession(session.id), {
+        interviewId: session.id,
+        ...publicSession(await store.getSession(session.id)),
+        nextAction: 'ASK',
+        messageType: guidance.length && !sectionsToUpdate.length
+          ? MESSAGE_TYPES.REFINEMENT_FEEDBACK
+          : MESSAGE_TYPES.ADD_ON,
+        answerDisposition: evidenceIds.length
+          ? ANSWER_DISPOSITIONS.ACCEPTED
+          : null,
+        question: null,
+        message: assistantMessage,
+        evidence: null,
+        contradiction: false,
+        blueprint: null,
+        reflection: null,
+        supplementalContext: state.supplementalContext || [],
+        reasoningMemory: state.reasoningMemory || null,
+        refinementPass: true,
+      });
+    }
+
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
     return withExperienceFields(await store.getSession(session.id), {
       interviewId: session.id,
