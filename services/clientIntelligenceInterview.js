@@ -12,6 +12,7 @@
  */
 
 const crypto = require('crypto');
+const { hash: canonicalEvidenceDigest } = require('../lib/canonicalSemanticWrite');
 const defaultPool = require('../db');
 const {
   createPlaybookFromApprovedBlueprint,
@@ -5619,7 +5620,11 @@ function createMemoryStore() {
       return (turnsBySession.get(String(sessionId)) || []).map((t) => ({ ...t }));
     },
     async insertEvidence(row) {
-      const copy = { ...row };
+      const copy = {
+        ...row,
+        source_text_sha256: canonicalEvidenceDigest(row.statement),
+        immutable_at: row.created_at || new Date().toISOString(),
+      };
       evidence.set(copy.id, copy);
       const list = evidenceBySession.get(copy.session_id) || [];
       list.push(copy);
@@ -5838,8 +5843,8 @@ function createPostgresStore(pool) {
       const result = await pool.query(
         `INSERT INTO cie_evidence (
            id, client_id, session_id, source, source_turn_id, category,
-           statement, confidence, type, created_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,NOW()))
+           statement, confidence, type, created_at, source_text_sha256, immutable_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,NOW()),$11,COALESCE($10,NOW()))
          RETURNING *`,
         [
           row.id,
@@ -5852,6 +5857,7 @@ function createPostgresStore(pool) {
           row.confidence,
           row.type,
           row.created_at || null,
+          canonicalEvidenceDigest(row.statement),
         ]
       );
       return normalizeEvidenceRow(result.rows[0]);

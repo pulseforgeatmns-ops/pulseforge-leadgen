@@ -55,13 +55,10 @@ describe('SPEC-224 -- CIE Blueprint approval as first canonical producer', () =>
   });
 
   async function insertEvidence(clientId, sessionId, category, statement) {
-    const digest = crypto.createHash('sha256').update(statement).digest('hex');
-    const result = await pool.query(
-      `INSERT INTO cie_evidence (client_id, session_id, category, statement, source_text_sha256, immutable_at)
-       VALUES ($1,$2,$3,$4,$5,NOW()) RETURNING *`,
-      [clientId, sessionId, category, statement, digest]
-    );
-    return result.rows[0];
+    return clientIntelligenceInterview.createPostgresStore(pool).insertEvidence({
+      id: crypto.randomUUID(), client_id: clientId, session_id: sessionId,
+      source: 'interview', category, statement, confidence: 0.9, type: 'EXPLICIT',
+    });
   }
 
   async function insertSession(clientId, normalizedFacts) {
@@ -272,6 +269,25 @@ describe('SPEC-224 -- CIE Blueprint approval as first canonical producer', () =>
       assert.equal(projected._projection_metadata.completeness, 'UNAVAILABLE');
       assert.ok(projected._projection_metadata.error);
     });
+  });
+
+  it('SPEC-245A: historical backfilled evidence commits through canonical validation', async () => {
+    const session = await insertSession(2, {});
+    const evidence = (await pool.query(
+      `INSERT INTO cie_evidence (client_id,session_id,category,statement)
+       VALUES (2,$1,'identity','  HistoricalCo evidence.  ') RETURNING *`, [session.id]
+    )).rows[0];
+    await pool.query(fs.readFileSync(path.join(__dirname, '../migrations/2026-09-06-spec-245a-evidence-immutability.sql'), 'utf8'));
+    const repaired = (await pool.query('SELECT * FROM cie_evidence WHERE id=$1', [evidence.id])).rows[0];
+    const batch = CIECanonicalAdapter.buildBatch({
+      tenant_id: 'tenant:other', client_id: 2,
+      blueprint: { normalizedFacts: { business_name: 'HistoricalCo' } },
+      blueprint_id: 'historical-backfill', blueprint_version: '1.0',
+      cie_evidence_records: [repaired], registry_artifact: await getRegistry(),
+      interpreter_id: 'spec-245-test', interpreter_version: '1.0.0',
+    });
+    const result = await commitCanonicalSemanticBatch(pool, batch);
+    assert.ok(result.snapshot_id);
   });
 
   describe('4. approveBlueprint() end-to-end authority order', () => {
