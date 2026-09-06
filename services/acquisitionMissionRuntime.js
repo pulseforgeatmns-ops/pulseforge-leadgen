@@ -189,6 +189,17 @@ function createAcquisitionMissionRuntime(opts = {}) {
         for (const row of loaded.predictions || []) if (row) state.engine.store.addPrediction(row);
         for (const row of loaded.evaluations || []) if (row) state.engine.store.addEvaluation(row);
         for (const row of loaded.outcomeLearnings || []) if (row) state.engine.store.addOutcomeLearning(row);
+        if (typeof state.engine.store.replaceAcquisitionKnowledge === 'function') {
+          try {
+            const { loadTenantKnowledge } = require('./acquisitionKnowledgePersistence');
+            const knowledge = await loadTenantKnowledge(tenantId, effectivePool, { limit: 100 });
+            state.engine.store.replaceAcquisitionKnowledge(knowledge);
+          } catch (knowledgeErr) {
+            if (!/relation .* does not exist/i.test(String(knowledgeErr.message))) {
+              console.error('[amo] hydrate acquisition knowledge:', knowledgeErr.message);
+            }
+          }
+        }
       } catch (err) {
         if (!/relation .* does not exist/i.test(String(err.message))) {
           console.error('[amo] hydrate:', err.message);

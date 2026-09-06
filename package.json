@@ -74,6 +74,7 @@
     "scout:places:diagnostic": "node scripts/diagnoseScoutPlaces.js",
     "gmail:token": "node getGmailToken.js",
     "intel:seed:libraries": "node scripts/seedIntelligenceLibraries.js",
+    "acquisition:knowledge:import": "node scripts/importAcquisitionKnowledge.js",
     "test:anchor-phone-setter:postgres": "ANCHOR_PHONE_SETTER_TEST_POSTGRES=true node --test test/anchorPhoneSetterPostgres.test.js",
     "revenue:rebuild": "node scripts/rebuildRevenueProjections.js",
     "revenue:phase16:preflight": "node scripts/preflightRevenuePhase16.js",
