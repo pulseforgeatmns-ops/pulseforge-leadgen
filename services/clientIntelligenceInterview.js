@@ -2784,6 +2784,89 @@ function stripControlLanguageFromValue(value) {
   return str;
 }
 
+function isEpistemicQualificationOnly(value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return true;
+  const lower = raw.toLowerCase();
+  if (/^(?:still\s+)?(?:only\s+|just\s+)?(?:a\s+)?[.\s]*$/.test(lower)) return true;
+  if (!/\b(?:hypothesis|hypotheses|established|proven|validated|tentative|uncertain|assumption|working theory|buying reason)\b/.test(lower)) {
+    return false;
+  }
+  if (
+    /^(?:still\s+)?(?:only\s+|just\s+)?(?:a\s+)?(?:hypothesis|tentative|uncertain|current assumption|working theory)\b/.test(lower) ||
+    /^(?:not|not yet|is not|isn't|has not been|hasn't been)\s+(?:an?\s+)?(?:established|proven|validated)/.test(lower) ||
+    /^(?:not|not yet)\s+(?:an?\s+)?established\s+buying\s+reason\b/.test(lower) ||
+    /^(?:unproven|unvalidated|not validated|not proven)\b/.test(lower)
+  ) {
+    return true;
+  }
+  const contentSignals = /\b(?:because|more compelling|outperform|better|different|approach|model|program|service|agency|serve|customers?|owners?|business|transformation|consulting|education)\b/.test(lower);
+  return !contentSignals;
+}
+
+function inferEpistemicStateFromText(text, fallback = EPISTEMIC_STATES.KNOWN) {
+  const lower = String(text || '').toLowerCase();
+  if (/\b(?:hypothesis|unvalidated|not\s+(?:yet\s+)?validated|not\s+(?:yet\s+)?proven|not\s+(?:yet\s+)?established|tentative|uncertain|current assumption|working theory|we\s+(?:think|believe|suspect)|may|might|could)\b/.test(lower)) {
+    return EPISTEMIC_STATES.HYPOTHESIS;
+  }
+  return fallback;
+}
+
+function stripEpistemicLeadIn(value) {
+  let out = String(value || '').trim();
+  for (let i = 0; i < 4; i += 1) {
+    const before = out;
+    out = out
+      .replace(/^(?:we\s+(?:think|believe|suspect|hypothesize)\s+(?:that\s+)?)/i, '')
+      .replace(/^(?:our\s+)?(?:current\s+)?(?:differentiation\s+)?hypothesis\s+(?:is|:)\s*/i, '')
+      .replace(/^(?:the\s+)?(?:current\s+)?differentiation\s+(?:hypothesis\s+)?(?:is|:)\s*/i, '')
+      .replace(/^(?:this\s+is\s+)?(?:not\s+yet\s+)?(?:proven|validated|established)\s*:\s*/i, '');
+    if (out === before) break;
+  }
+  return out.trim();
+}
+
+function substantiveDifferentiationCandidate(value) {
+  const controlCleaned = stripControlLanguageFromValue(stripEpistemicLeadIn(value));
+  if (!controlCleaned || isEpistemicQualificationOnly(controlCleaned)) return null;
+  return controlCleaned;
+}
+
+function extractDifferentiationProposition(text, focusSentence = '') {
+  const raw = String(text || '').trim();
+  const sentences = raw
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const candidates = [];
+  const push = (value) => {
+    const candidate = substantiveDifferentiationCandidate(value);
+    if (candidate) candidates.push(candidate);
+  };
+
+  for (const sentence of [focusSentence, ...sentences].filter(Boolean)) {
+    const colon = sentence.match(/:\s*(.+)$/);
+    if (colon && /\b(?:differentiation|hypothesis|proven|validated|established|assumption|working theory)\b/i.test(sentence)) {
+      push(colon[1]);
+    }
+
+    const explicit = sentence.match(/\b(?:change|update|set|correct)\s+(?:the\s+)?(?:current\s+)?differentiation(?:\s+hypothesis)?\s+(?:to|as)\s*:?\s*(.+)$/i);
+    if (explicit) push(explicit[1]);
+
+    const hypothesis = sentence.match(/\b(?:our\s+)?(?:current\s+)?(?:differentiation\s+)?hypothesis\s+(?:is|:)\s*(.+)$/i);
+    if (hypothesis) push(hypothesis[1]);
+
+    const thought = sentence.match(/\bwe\s+(?:think|believe|suspect|hypothesize)\s+(?:that\s+)?(.+)$/i);
+    if (thought) push(thought[1]);
+
+    if (/\b(?:may|might|could)\b/i.test(sentence) && /\b(?:compelling|outperform|differentiat|advantage|because|better)\b/i.test(sentence)) {
+      push(sentence);
+    }
+  }
+
+  return candidates[0] || null;
+}
+
 function reviewCorrectionOperations(text, state, turnId) {
   const operations = [];
   const add = (operation, slot, value, extra = {}) => operations.push({
@@ -2841,16 +2924,16 @@ function reviewCorrectionOperations(text, state, turnId) {
     const painMatches = /\b(?:pains?|learning signals?)\b/i.test(sentence) ? (sentence.match(/employee problems|lack of owner time|founder dependence|revenue pressure/gi) || []) : [];
     for (const item of painMatches) add('ASSERT', 'pains', item, { classification: 'PAIN', source_text: sentence });
 
-    if (/\bdifferentiation\b/.test(lower) && /\b(?:hypothesis|unvalidated|not established)\b/.test(lower)) {
+    if (/\bdifferentiation\b/.test(lower) && /\b(?:hypothesis|unvalidated|not established|not\s+(?:yet\s+)?(?:proven|validated|established)|tentative|uncertain|working theory|current assumption)\b/.test(lower)) {
       // SPEC-238: Skip pure control directives (e.g., "preserve differentiation as a hypothesis")
       if (isPureControlDirective(sentence)) {
         // Do not generate any operation - this is refinement control, not a semantic correction
       } else {
-        let value = sentence;
+        let value = extractDifferentiationProposition(text, sentence) || sentence;
         const colonMatch = sentence.match(/:\s*(.+)$/);
-        if (colonMatch) {
+        if (!value || value === sentence && colonMatch) {
           value = colonMatch[1];
-        } else {
+        } else if (value === sentence) {
           value = sentence
             .replace(/^.*?\bdifferentiation\b\s*(?:is|remains)?\s*(?:still\s+)?(?:a\s+)?\s*/i, '')
             .replace(/\bhypothesis\b\s*[:,]?\s*/i, '');
@@ -2859,8 +2942,16 @@ function reviewCorrectionOperations(text, state, turnId) {
 
         const cleanedValue = stripControlLanguageFromValue(value);
 
-        if (cleanedValue) {
+        if (cleanedValue && !isEpistemicQualificationOnly(cleanedValue)) {
           add('CORRECT', 'differentiation', cleanedValue, { epistemic_state: EPISTEMIC_STATES.HYPOTHESIS, source_text: sentence });
+        } else {
+          const existing = state.normalizedFacts?.differentiation;
+          if (existing && /\b(?:hypothesis|unvalidated|not established|not\s+(?:yet\s+)?proven|not\s+(?:yet\s+)?validated|tentative|uncertain)\b/i.test(sentence)) {
+            add('CORRECT', 'differentiation', existing, {
+              epistemic_state: inferEpistemicStateFromText(sentence, EPISTEMIC_STATES.HYPOTHESIS),
+              source_text: sentence,
+            });
+          }
         }
       }
     }
