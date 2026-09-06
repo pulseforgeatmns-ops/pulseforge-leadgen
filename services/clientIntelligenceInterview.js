@@ -6497,9 +6497,25 @@ function extractNotesIntoSections(notes) {
     .map((s) => s.trim())
     .filter(Boolean)
     .filter((s) => isBusinessFactStatement(s));
+  const hasAvoidancePolarity = (sentence) =>
+    /\b(?:avoid|never|does\s+not|do\s+not|don'?t|would\s+rather\s+not|should\s+not|not\s+a\s+fit|excludes?|disqualif(?:y|ies)|no\s+longer|won'?t|will\s+not)\b/i.test(sentence);
+  const hasCustomerAvoidanceObject = (sentence) =>
+    /\b(?:serve|serving|work\s+with|take\s+on|fit)\b.{0,140}\b(?:customers?|clients?|prospects?|accounts?|people|owners?|founders?|businesses?|companies|restaurants?|daycares?|facilities|managers?|offices?)\b/i.test(sentence) ||
+    /\b(?:customers?|clients?|prospects?|accounts?|people|owners?|founders?|businesses?|companies|restaurants?|daycares?|facilities|managers?|offices?)\b.{0,140}\b(?:fit|expect(?:ing)?|looking\s+only|quick\s+lead[-\s]?generation|cheapest|lowest\s+price|idea[-\s]?stage|outside)\b/i.test(sentence) ||
+    /\b(?:avoid|never|does\s+not|do\s+not|don'?t|would\s+rather\s+not|won'?t|will\s+not)\b.{0,80}\b(?:restaurants?|daycares?|facilities|offices?|companies|businesses?|owners?|founders?|customers?|clients?|prospects?|accounts?)\b/i.test(sentence);
+  const hasCommunicationObject = (sentence) =>
+    /\b(?:brand\s+voice|voice|tone|sound|sounds?|sounding|style|language|wording|phrasing|copy|messag(?:e|es|ing)|communication|claims?|promises?|rhetoric|presentation|polish|jargon|hype|salesy|fluffy|corporate|passive|active|direct|grounded|experienced|practical|confident|encouraging|challenge)\b/i.test(sentence);
   const isCustomerExclusion = (sentence) =>
-    /\b(?:does\s+not|do\s+not|don'?t|would\s+rather\s+not|should\s+not|not\s+a\s+fit|excludes?|disqualif(?:y|ies)|no\s+longer|won'?t|will\s+not)\b.{0,120}\b(?:serve|work\s+with|take\s+on|fit|customers?|clients?|people|owners?|founders?|businesses?|restaurants?|expect(?:ing)?|looking\s+only|quick\s+lead[-\s]?generation)\b/i.test(sentence) ||
-    /\b(?:customers?|clients?|people|owners?|founders?|businesses?).{0,120}\b(?:are|is)\s+not\s+(?:a\s+)?(?:fit|suitable)\b/i.test(sentence);
+    hasAvoidancePolarity(sentence) &&
+    hasCustomerAvoidanceObject(sentence) &&
+    !/\b(?:language|wording|phrasing|copy|messag(?:e|es|ing)|brand\s+voice|tone|voice|sound|sounds?|sounding|claims?|promises?|rhetoric|presentation|polish)\b/i.test(sentence);
+  const isBrandCommunicationGuidance = (sentence, previousSection = null) =>
+    /\b(?:brand\s+)?voice\s+should\b/i.test(sentence) ||
+    /\b(?:don'?t|do\s+not|never|avoid)\b.{0,120}\b(?:sound|sounds?|sounding|use|say|claim|promise|language|wording|phrasing|copy|messag(?:e|es|ing)|jargon|hype|salesy|fluffy|corporate|polish|passive)\b/i.test(sentence) ||
+    /\b(?:avoid|never)\b.{0,120}\b(?:jargon|hype|salesy|fluffy|corporate|polish|claims?|promises?|language|wording|phrasing|copy|messag(?:e|es|ing)|passive)\b/i.test(sentence) ||
+    (previousSection === 'brandVoice' &&
+      hasCommunicationObject(sentence) &&
+      !hasCustomerAvoidanceObject(sentence));
   const isPositiveFitTrait = (sentence) =>
     /\b(?:right|ideal|great[-\s]?fit|best[-\s]?fit)\s+(?:customer|client|owner|founder|business)\b.{0,80}\b(?:needs?|requires?|must|should|has\s+to|is|are)\b.{0,120}\b(?:willing|prepared|ready|open|able|committed|comfortable|recognizes?|has|operat(?:e|es|ing)|manage|delegate|change|involved)\b/i.test(sentence) ||
     /\b(?:customer|client|owner|founder|business)\b.{0,80}\b(?:needs?|requires?|must|should|has\s+to)\s+(?:to\s+)?be\s+(?:willing|prepared|ready|open|able|committed|comfortable)\b/i.test(sentence) ||
@@ -6514,7 +6530,8 @@ function extractNotesIntoSections(notes) {
     /\b(?:is|are|helps?|provides?|offers?|delivers?|does|builds?|sells?|called|dba)\b/i.test(sentence) &&
     !/\b(?:customers?|clients?|people|owners?|founders?|businesses?)\b.{0,80}\b(?:avoid|not\s+a\s+fit|would\s+rather\s+not|should\s+not|do\s+not|don't|expecting|looking\s+only)\b/i.test(sentence) &&
     !isPositiveFitTrait(sentence);
-  const classifyFallbackSection = (sentence) => {
+  const classifyFallbackSection = (sentence, previousSection = null) => {
+    if (isBrandCommunicationGuidance(sentence, previousSection)) return 'brandVoice';
     if (isCustomerExclusion(sentence)) return 'avoidCustomers';
     if (isPositiveFitTrait(sentence)) return 'idealCustomerTraits';
     if (isCustomerCategory(sentence)) return 'idealCustomers';
@@ -6538,17 +6555,23 @@ function extractNotesIntoSections(notes) {
     { re: /\b(metric|kpi|measure|success|roi|close rate)\b/i, section: 'successMetrics' },
   ];
   const assigned = {};
+  let previousSection = null;
   for (const sentence of sentences) {
-    const semanticSection = classifyFallbackSection(sentence);
-    if (semanticSection && !assigned[semanticSection]) {
-      assigned[semanticSection] = sentence;
+    const semanticSection = classifyFallbackSection(sentence, previousSection);
+    if (semanticSection) {
+      assigned[semanticSection] = assigned[semanticSection]
+        ? `${assigned[semanticSection]} ${sentence}`
+        : sentence;
+      previousSection = semanticSection;
       continue;
     }
     for (const p of patterns) {
+      if (p.section === 'avoidCustomers' && !isCustomerExclusion(sentence)) continue;
       if (p.section === 'idealCustomers' && (isPositiveFitTrait(sentence) || isCustomerExclusion(sentence))) continue;
       if (assigned[p.section]) continue;
       if (p.re.test(sentence)) {
         assigned[p.section] = sentence;
+        previousSection = p.section;
         break;
       }
     }
