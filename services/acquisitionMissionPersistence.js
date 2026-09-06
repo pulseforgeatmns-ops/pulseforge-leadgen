@@ -16,6 +16,10 @@ const {
   diffCanonicalMissionProjections,
 } = require('../packages/acquisition-mission/CanonicalMissionProjection');
 const { persistOutboundExecution, ensureOutboundExecutionSchema } = require('./acquisitionMissionOutboundPersistence');
+const {
+  ensureAcquisitionKnowledgeSchema,
+  persistLearningCandidatesForStageCommit,
+} = require('./acquisitionKnowledgePersistence');
 
 function defaultPool() {
   return require('../db');
@@ -443,6 +447,7 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     await ensureAcquisitionMissionSchema(pool);
     await ensureExecutionAuditSchema(pool);
     await ensureOutboundExecutionSchema(pool);
+    await ensureAcquisitionKnowledgeSchema(pool);
   }
 
   const lockPool = opts.lockPool || pool;
@@ -479,6 +484,9 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     }
     if (bundle.audit) {
       await persistExecutionAudit(bundle.audit, client, writeOpts);
+    }
+    if ((bundle.outcomes || []).length || mission.stage === 'learn' || mission.stage === 'improve') {
+      await persistLearningCandidatesForStageCommit(bundle, client, writeOpts);
     }
     await client.query('COMMIT');
   } catch (err) {
