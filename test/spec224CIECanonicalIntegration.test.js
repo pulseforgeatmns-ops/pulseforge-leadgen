@@ -291,6 +291,33 @@ describe('SPEC-224 -- CIE Blueprint approval as first canonical producer', () =>
   });
 
   describe('4. approveBlueprint() end-to-end authority order', () => {
+    it('SPEC-246: AUDIT-133 customer collection passes real approval and persists scalar labels', async () => {
+      await pool.query(`INSERT INTO clients VALUES (246, 'SPEC-246 collection replay');
+        INSERT INTO tenant_workspaces VALUES (246, 'tenant:spec246');`);
+      const customers = ['existing operating small business', 'cleaning/home services'];
+      const session = await insertSession(246, {
+        business_name: 'SPEC-246 collection replay',
+        services: ['Coaching'],
+        ideal_customers: [...customers, customers[0]],
+      });
+      await insertEvidence(246, session.id, 'customer', customers.join('; '));
+      const blueprint = await insertBlueprint(246, session.id);
+      const result = await clientIntelligenceInterview.approveBlueprint(blueprint.id, { pool });
+      assert.equal(result.ok, true);
+      assert.ok(result.canonicalSnapshotId);
+      const labels = (await pool.query(`SELECT l.label
+        FROM canonical_entity_label_assertions l
+        JOIN canonical_business_entities e ON e.id = l.entity_id AND e.tenant_id = l.tenant_id
+        WHERE e.tenant_id = 'tenant:spec246' AND e.entity_type = 'CUSTOMER_PROFILE'
+        ORDER BY l.label`)).rows.map(row => row.label);
+      assert.deepEqual(labels, [...customers].sort());
+      const facts = (await pool.query(`SELECT object_value FROM canonical_business_facts
+        WHERE tenant_id = 'tenant:spec246' AND predicate = 'targets_customer_profile'`)).rows;
+      assert.equal(facts.length, 2);
+      assert.ok(facts.every(row => row.object_value.type === 'ENTITY_REF'
+        && typeof row.object_value.value === 'string'));
+    });
+
     it('A/B/K: canonical snapshot exists before playbook is created', async () => {
       const session = await insertSession(7, {
         business_name: 'OrderCo',
