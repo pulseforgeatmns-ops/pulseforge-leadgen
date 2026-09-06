@@ -342,6 +342,7 @@ const SECTION_TITLES = Object.freeze({
   identity: 'Identity',
   services: 'Services',
   idealCustomers: 'Ideal Customers',
+  idealCustomerTraits: 'Ideal Customer Traits',
   avoidCustomers: 'Customers to Avoid',
   targetMarkets: 'Target Markets',
   competitiveAdvantages: 'Competitive Advantages',
@@ -2278,6 +2279,7 @@ const SECTION_TO_PRIMARY_FIELD = Object.freeze({
   identity: 'business_description',
   services: 'services',
   idealCustomers: 'ideal_customers',
+  idealCustomerTraits: 'ideal_customer_traits',
   avoidCustomers: 'disqualified_customers',
   targetMarkets: 'geography',
   competitiveAdvantages: 'differentiation',
@@ -2427,6 +2429,17 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
       );
       break;
     }
+    case 'idealCustomerTraits': {
+      next.ideal_customer_traits = uniquePush(
+        next.ideal_customer_traits,
+        [normalizeBusinessPhrase(stripBusinessNameLeadIn(cleaned))]
+          .filter((item) => item && !isLiteralUncertaintyPhrase(item))
+      );
+      next.epistemic_states.ideal_customer_traits = next.ideal_customer_traits.length
+        ? EPISTEMIC_STATES.KNOWN
+        : next.epistemic_states.ideal_customer_traits;
+      break;
+    }
     case 'avoidCustomers': {
       next.disqualified_customers = uniquePush(
         [],
@@ -2560,6 +2573,15 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       );
       break;
     }
+    case 'idealCustomerTraits':
+      next.ideal_customer_traits = uniquePush(
+        next.ideal_customer_traits,
+        [normalizeBusinessPhrase(stripBusinessNameLeadIn(substance))]
+      );
+      next.epistemic_states.ideal_customer_traits = next.ideal_customer_traits.length
+        ? EPISTEMIC_STATES.KNOWN
+        : next.epistemic_states.ideal_customer_traits;
+      break;
     case 'avoidCustomers':
       next.disqualified_customers = uniquePush(
         next.disqualified_customers,
@@ -3908,6 +3930,11 @@ function summarizeSection(sectionKey, statements) {
       return [
         ensurePeriod(`Ideal customers are ${latest}`),
         'This ICP picture prioritizes fit over volume.',
+      ].join(' ');
+    case 'idealCustomerTraits':
+      return [
+        ensurePeriod(`Great-fit customers need ${latest}`),
+        'These fit requirements describe readiness and behavior, not a separate audience category.',
       ].join(' ');
     case 'avoidCustomers':
       return [
@@ -6470,12 +6497,41 @@ function extractNotesIntoSections(notes) {
     .map((s) => s.trim())
     .filter(Boolean)
     .filter((s) => isBusinessFactStatement(s));
+  const isCustomerExclusion = (sentence) =>
+    /\b(?:does\s+not|do\s+not|don'?t|would\s+rather\s+not|should\s+not|not\s+a\s+fit|excludes?|disqualif(?:y|ies)|no\s+longer|won'?t|will\s+not)\b.{0,120}\b(?:serve|work\s+with|take\s+on|fit|customers?|clients?|people|owners?|founders?|businesses?|restaurants?|expect(?:ing)?|looking\s+only|quick\s+lead[-\s]?generation)\b/i.test(sentence) ||
+    /\b(?:customers?|clients?|people|owners?|founders?|businesses?).{0,120}\b(?:are|is)\s+not\s+(?:a\s+)?(?:fit|suitable)\b/i.test(sentence);
+  const isPositiveFitTrait = (sentence) =>
+    /\b(?:right|ideal|great[-\s]?fit|best[-\s]?fit)\s+(?:customer|client|owner|founder|business)\b.{0,80}\b(?:needs?|requires?|must|should|has\s+to|is|are)\b.{0,120}\b(?:willing|prepared|ready|open|able|committed|comfortable|recognizes?|has|operat(?:e|es|ing)|manage|delegate|change|involved)\b/i.test(sentence) ||
+    /\b(?:customer|client|owner|founder|business)\b.{0,80}\b(?:needs?|requires?|must|should|has\s+to)\s+(?:to\s+)?be\s+(?:willing|prepared|ready|open|able|committed|comfortable)\b/i.test(sentence) ||
+    /\b(?:needs?|requires?|must|should|has\s+to)\s+(?:to\s+)?be\s+(?:willing|prepared|ready|open|able|committed|comfortable)\b/i.test(sentence) ||
+    /\b(?:works?\s+well|best\s+fit)\s+for\s+(?:customers?|clients?|owners?|founders?|businesses?)\s+who\b.{0,140}\b(?:are|will|can|have|recognize|delegate|manage|change|operate)\b/i.test(sentence);
+  const isCustomerCategory = (sentence) =>
+    /\b(?:work\s+with|serve|ideal\s+customers?\s+(?:are|include)|customers?\s+(?:are|include)|clients?\s+(?:are|include)|audience\s+(?:is|includes))\b.{0,160}\b(?:owners?|founders?|businesses?|companies|managers?|offices?|restaurants?|daycares?|facilities|segments?|verticals?)\b/i.test(sentence) &&
+    !isPositiveFitTrait(sentence) &&
+    !isCustomerExclusion(sentence);
+  const isBusinessIdentity = (sentence) =>
+    /\b(?:we\s+are|we're|company|business|dba|called|program|practice|agency|firm)\b/i.test(sentence) &&
+    /\b(?:is|are|helps?|provides?|offers?|delivers?|does|builds?|sells?|called|dba)\b/i.test(sentence) &&
+    !/\b(?:customers?|clients?|people|owners?|founders?|businesses?)\b.{0,80}\b(?:avoid|not\s+a\s+fit|would\s+rather\s+not|should\s+not|do\s+not|don't|expecting|looking\s+only)\b/i.test(sentence) &&
+    !isPositiveFitTrait(sentence);
+  const classifyFallbackSection = (sentence) => {
+    if (isCustomerExclusion(sentence)) return 'avoidCustomers';
+    if (isPositiveFitTrait(sentence)) return 'idealCustomerTraits';
+    if (isCustomerCategory(sentence)) return 'idealCustomers';
+    if (isBusinessIdentity(sentence)) return 'identity';
+    if (/\b(services?|offers?|provide|sell|product)\b/i.test(sentence)) return 'services';
+    if (/\b(markets?|geo|regions?|city|cities|county|counties|verticals?)\b/i.test(sentence)) return 'targetMarkets';
+    if (/\b(advantage|differen|better|unique|moat)\b/i.test(sentence)) return 'competitiveAdvantages';
+    if (/\b(voice|tone|sound|brand|professional|friendly|premium)\b/i.test(sentence)) return 'brandVoice';
+    if (/\b(goal|grow|book|appointments|revenue|pipeline)\b/i.test(sentence)) return 'campaignGoals';
+    if (/\b(metric|kpi|measure|success|roi|close rate)\b/i.test(sentence)) return 'successMetrics';
+    return null;
+  };
   const patterns = [
-    { re: /\b(we are|company|business|dba|called)\b/i, section: 'identity' },
-    { re: /\b(service|offer|provide|sell|product)\b/i, section: 'services' },
+    { re: /\b(services?|offers?|provide|sell|product)\b/i, section: 'services' },
     { re: /\b(ideal|icp|customer|clientele|buyer)\b/i, section: 'idealCustomers' },
     { re: /\b(avoid|not a fit|do not want|no longer serve)\b/i, section: 'avoidCustomers' },
-    { re: /\b(market|geo|region|city|county|vertical)\b/i, section: 'targetMarkets' },
+    { re: /\b(markets?|geo|regions?|city|cities|county|counties|verticals?)\b/i, section: 'targetMarkets' },
     { re: /\b(advantage|differen|better|unique|moat)\b/i, section: 'competitiveAdvantages' },
     { re: /\b(voice|tone|sound|brand|professional|friendly|premium)\b/i, section: 'brandVoice' },
     { re: /\b(goal|grow|book|appointments|revenue|pipeline)\b/i, section: 'campaignGoals' },
@@ -6483,17 +6539,19 @@ function extractNotesIntoSections(notes) {
   ];
   const assigned = {};
   for (const sentence of sentences) {
+    const semanticSection = classifyFallbackSection(sentence);
+    if (semanticSection && !assigned[semanticSection]) {
+      assigned[semanticSection] = sentence;
+      continue;
+    }
     for (const p of patterns) {
+      if (p.section === 'idealCustomers' && (isPositiveFitTrait(sentence) || isCustomerExclusion(sentence))) continue;
       if (assigned[p.section]) continue;
       if (p.re.test(sentence)) {
         assigned[p.section] = sentence;
         break;
       }
     }
-  }
-  // leftover sentences fill identity if missing — but never with refinement guidance
-  if (!assigned.identity && sentences[0] && isBusinessFactStatement(sentences[0])) {
-    assigned.identity = sentences[0];
   }
   return { assigned, guidance: partitioned.guidance };
 }
@@ -7247,6 +7305,8 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       if (!skippedAsGuidance && evidenceRow) {
         evidenceIds.push(evidenceRow.id);
         updatedSections.push(section);
+        state.normalizedFacts = session.interview_state?.normalizedFacts || state.normalizedFacts;
+        state.sectionState = session.interview_state?.sectionState || state.sectionState;
       }
     }
     await store.updateTurn(clientTurn.id, { derived_evidence: evidenceIds });
