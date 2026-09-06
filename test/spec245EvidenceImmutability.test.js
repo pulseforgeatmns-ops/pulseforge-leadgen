@@ -23,7 +23,7 @@ before(async () => {
 });
 after(async () => { await pool?.end(); await postgres?.stop(); });
 const input = statement => ({ id: randomUUID(), client_id: 1, session_id: sessionId,
-  source: 'interview', category: 'identity', statement, confidence: 0.8, type: 'fact' });
+  source: 'interview', category: 'identity', statement, confidence: 0.8, type: 'EXPLICIT' });
 it('fresh writes hash exact Unicode and whitespace, deterministically, in both stores', async () => {
   for (const store of [createPostgresStore(pool), createMemoryStore()]) {
     const statements = ['  café\t😀\r\n', 'café\t😀\r\n', '  café\t😀\r\n'];

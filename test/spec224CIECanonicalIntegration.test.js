@@ -57,7 +57,7 @@ describe('SPEC-224 -- CIE Blueprint approval as first canonical producer', () =>
   async function insertEvidence(clientId, sessionId, category, statement) {
     return clientIntelligenceInterview.createPostgresStore(pool).insertEvidence({
       id: crypto.randomUUID(), client_id: clientId, session_id: sessionId,
-      source: 'interview', category, statement, confidence: 0.9, type: 'fact',
+      source: 'interview', category, statement, confidence: 0.9, type: 'EXPLICIT',
     });
   }
 
