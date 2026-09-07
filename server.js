@@ -212,6 +212,7 @@ app.use('/', require('./routes/outcomeIntelligence'));
 app.use('/', require('./routes/contentOutcomeIntelligence'));
 app.use('/', require('./routes/contentLearning'));
 app.use('/', require('./routes/knowledgeAdmin'));
+app.use('/', require('./routes/acquisitionKnowledge'));
 app.use('/', require('./routes/marketIntelligence'));
 app.use('/', require('./routes/relationshipIntelligence'));
 app.use('/', require('./routes/clientIntelligence'));

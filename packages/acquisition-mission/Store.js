@@ -19,6 +19,7 @@ function createMemoryAmoStore(opts = {}) {
   const outcomeLearnings = [];
   const executionRecords = [];
   const interpretations = [];
+  const acquisitionKnowledge = [];
 
   function putMission(mission) {
     const missionContributions = contributions.filter((row) => row.missionId === mission.id);
@@ -218,6 +219,41 @@ function createMemoryAmoStore(opts = {}) {
     return interpretations.filter((row) => row.missionId === missionId).map(clone);
   }
 
+  function putAcquisitionKnowledge(row) {
+    if (!row || !row.id) return null;
+    const idx = acquisitionKnowledge.findIndex((existing) => existing.id === row.id);
+    const copy = clone(row);
+    if (idx >= 0) acquisitionKnowledge[idx] = copy;
+    else acquisitionKnowledge.push(copy);
+    return clone(copy);
+  }
+
+  function replaceAcquisitionKnowledge(rows = []) {
+    acquisitionKnowledge.length = 0;
+    for (const row of rows || []) {
+      if (row && row.id) acquisitionKnowledge.push(clone(row));
+    }
+    return acquisitionKnowledge.map(clone);
+  }
+
+  function listAcquisitionKnowledge(tenantId, filter = {}) {
+    let rows = acquisitionKnowledge.map(clone);
+    if (tenantId != null && tenantId !== '') {
+      const key = String(tenantId);
+      rows = rows.filter((row) => String(row.tenantId || '') === key);
+    }
+    if (filter.missionId) {
+      rows = rows.filter((row) => !row.missionId || row.missionId === filter.missionId);
+    }
+    if (filter.objectType) {
+      rows = rows.filter((row) => row.objectType === filter.objectType);
+    }
+    if (filter.state) {
+      rows = rows.filter((row) => row.state === filter.state);
+    }
+    return rows;
+  }
+
   function snapshot() {
     return {
       missions: [...missions.entries()].map(([id, row]) => [id, clone(row)]),
@@ -231,6 +267,7 @@ function createMemoryAmoStore(opts = {}) {
       outcomeLearnings: outcomeLearnings.map(clone),
       executionRecords: executionRecords.map(clone),
       interpretations: interpretations.map(clone),
+      acquisitionKnowledge: acquisitionKnowledge.map(clone),
     };
   }
 
@@ -255,6 +292,7 @@ function createMemoryAmoStore(opts = {}) {
     replaceArray(outcomeLearnings, snap.outcomeLearnings);
     replaceArray(executionRecords, snap.executionRecords);
     replaceArray(interpretations, snap.interpretations);
+    replaceArray(acquisitionKnowledge, snap.acquisitionKnowledge);
   }
 
   for (const extra of opts.seeds || []) putMission(extra);
@@ -287,6 +325,9 @@ function createMemoryAmoStore(opts = {}) {
     findExecutionRecordByIdentity,
     addInterpretation,
     listInterpretations,
+    putAcquisitionKnowledge,
+    replaceAcquisitionKnowledge,
+    listAcquisitionKnowledge,
     snapshot,
     restore,
   };

@@ -22,6 +22,9 @@ const {
 } = require('./SpecialistInputs');
 const { buildSharedContext } = require('./Context');
 const { buildMemoryContextWithPriorLearning } = require('./OutcomeLearningRetrieval');
+const {
+  canonicalContextForSpecialist,
+} = require('../acquisition-knowledge');
 
 const EXECUTION_STATUSES = Object.freeze({
   SUCCESS: 'SUCCESS',
@@ -290,6 +293,12 @@ function buildExecutionInput(input = {}) {
   const plan = mission.structuredMission || mission.missionPlanDraft || null;
   const contributions = Array.isArray(input.contributions) ? input.contributions : [];
   const sharedContext = buildSharedContext(mission, contributions);
+  const storeKnowledge = input.store && typeof input.store.listAcquisitionKnowledge === 'function'
+    ? input.store.listAcquisitionKnowledge(mission.tenantId || mission.clientId, { missionId: mission.id })
+    : [];
+  const acquisitionKnowledge = Array.isArray(input.acquisitionKnowledge)
+    ? input.acquisitionKnowledge
+    : storeKnowledge;
 
   return Object.freeze({
     spec: 'SPEC-132',
@@ -309,7 +318,10 @@ function buildExecutionInput(input = {}) {
       || (plan && (plan.evidence || plan.evidencePolicy))
       || {}
     ),
-    memoryContext: buildMemoryContextWithPriorLearning(input, mission, specialist),
+    memoryContext: {
+      ...buildMemoryContextWithPriorLearning(input, mission, specialist),
+      acquisitionKnowledge: canonicalContextForSpecialist(acquisitionKnowledge, specialist),
+    },
     operatorPreferences: clone(input.operatorPreferences || {}),
     specialistInput: specialistInputFor(specialist, mission, input),
     structuredOnly: true,
