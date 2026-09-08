@@ -24,6 +24,8 @@ const SCOPES = Object.freeze({
 
 const EPISTEMIC_KINDS = Object.freeze({
   OBSERVED_FACT: 'observed_fact',
+  INFERRED: 'inferred',
+  UNKNOWN: 'unknown',
   OPERATOR_PREFERENCE: 'operator_preference',
   STAKEHOLDER_PREFERENCE: 'stakeholder_preference',
   HYPOTHESIS: 'hypothesis',
@@ -42,6 +44,8 @@ const VALIDATION_STATES = Object.freeze({
   STAKEHOLDER_VALIDATED: 'STAKEHOLDER_VALIDATED',
   MARKET_VALIDATED: 'MARKET_VALIDATED',
 });
+
+const VALIDATION_STATUS = VALIDATION_STATES;
 
 const LIFECYCLE_STATES = Object.freeze({
   HYPOTHESIS: 'HYPOTHESIS',
@@ -203,9 +207,10 @@ function normalizeEpistemicState(value, legacy = {}) {
     EPISTEMIC_KINDS.STAKEHOLDER_PREFERENCE, EPISTEMIC_KINDS.CANONICAL_TRUTH].includes(kind)) {
     return EPISTEMIC_STATES.OBSERVED;
   }
-  if ([EPISTEMIC_KINDS.HYPOTHESIS, EPISTEMIC_KINDS.VALIDATED_FINDING].includes(kind)) {
+  if ([EPISTEMIC_KINDS.INFERRED, EPISTEMIC_KINDS.HYPOTHESIS, EPISTEMIC_KINDS.VALIDATED_FINDING].includes(kind)) {
     return EPISTEMIC_STATES.INFERRED;
   }
+  if (kind === EPISTEMIC_KINDS.UNKNOWN) return EPISTEMIC_STATES.UNKNOWN;
   return EPISTEMIC_STATES.UNKNOWN;
 }
 
@@ -459,6 +464,7 @@ function normalizeKnowledgeObject(input = {}, opts = {}) {
     content,
     epistemicState,
     validationState,
+    validationStatus: validationState,
     epistemicKind: normalizeEpistemicKind(input.epistemicKind || input.kind, state),
     state,
     status: normalizeStatus({ ...input, objectType, state }),
@@ -504,6 +510,9 @@ function matchesQuery(row, query = {}) {
   if (query.missionId != null && row.missionId && String(row.missionId) !== String(query.missionId)) return false;
   if (query.objectType && row.objectType !== normalizeObjectType(query.objectType)) return false;
   if (query.state && row.state !== normalizeLifecycleState(query.state)) return false;
+  if (query.epistemicState && row.epistemicState !== normalizeEpistemicState(query.epistemicState)) return false;
+  if (query.validationState && row.validationState !== normalizeValidationState(query.validationState)) return false;
+  if (query.validationStatus && row.validationStatus !== normalizeValidationState(query.validationStatus)) return false;
   if (query.status && row.status !== asText(query.status).toLowerCase()) return false;
   if (query.scope && row.scope !== asText(query.scope).toLowerCase()) return false;
   if (query.channel && row.channel !== asText(query.channel)) return false;
@@ -529,6 +538,7 @@ function explainRecommendation(input = {}) {
       title: row.title,
       epistemicState: row.epistemicState,
       validationState: row.validationState,
+      validationStatus: row.validationStatus || row.validationState,
       state: row.state,
       epistemicKind: row.epistemicKind,
       derivation: row.derivation || null,
@@ -581,6 +591,7 @@ module.exports = {
   EPISTEMIC_KINDS,
   EPISTEMIC_STATES,
   VALIDATION_STATES,
+  VALIDATION_STATUS,
   LIFECYCLE_STATES,
   LIFECYCLE_ORDER,
   EVIDENCE_TYPES,

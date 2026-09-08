@@ -116,6 +116,7 @@ function rowFromDb(row = {}) {
     content: row.content || {},
     epistemicState: row.epistemic_state || ak.normalizeEpistemicState(null, row),
     validationState: row.validation_state || ak.normalizeValidationState(null, row),
+    validationStatus: row.validation_state || ak.normalizeValidationState(null, row),
     epistemicKind: row.epistemic_kind,
     state: row.lifecycle_state,
     status: row.status,
@@ -334,6 +335,14 @@ async function queryKnowledgeObjects(query = {}, pool = defaultPool()) {
     params.push(ak.normalizeLifecycleState(query.state));
     where.push(`lifecycle_state = $${params.length}`);
   }
+  if (query.epistemicState) {
+    params.push(ak.normalizeEpistemicState(query.epistemicState));
+    where.push(`epistemic_state = $${params.length}`);
+  }
+  if (query.validationState || query.validationStatus) {
+    params.push(ak.normalizeValidationState(query.validationState || query.validationStatus));
+    where.push(`validation_state = $${params.length}`);
+  }
   if (query.scope) {
     params.push(ak.normalizeScope(query.scope));
     where.push(`scope = $${params.length}`);
@@ -360,6 +369,8 @@ async function queryKnowledgeObjects(query = {}, pool = defaultPool()) {
       LOWER(title) LIKE $${params.length}
       OR LOWER(object_type) LIKE $${params.length}
       OR LOWER(epistemic_kind) LIKE $${params.length}
+      OR LOWER(epistemic_state) LIKE $${params.length}
+      OR LOWER(validation_state) LIKE $${params.length}
       OR LOWER(content::text) LIKE $${params.length}
       OR LOWER(evidence::text) LIKE $${params.length}
     )`);

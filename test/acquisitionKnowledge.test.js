@@ -103,6 +103,8 @@ function createFakePool() {
         let rows = [...state.objects].filter((row) => row.tenant_id === params[0]);
         if (/object_type = \$/i.test(sql)) rows = rows.filter((row) => params.includes(row.object_type));
         if (/lifecycle_state = \$/i.test(sql)) rows = rows.filter((row) => params.includes(row.lifecycle_state));
+        if (/epistemic_state = \$/i.test(sql)) rows = rows.filter((row) => params.includes(row.epistemic_state));
+        if (/validation_state = \$/i.test(sql)) rows = rows.filter((row) => params.includes(row.validation_state));
         if (/status = \$/i.test(sql)) rows = rows.filter((row) => params.includes(row.status));
         if (/\( LOWER\(title\)/i.test(sql)) {
           const q = String(params.find((param) => typeof param === 'string' && param.startsWith('%')) || '')
@@ -352,6 +354,7 @@ test('SPEC-247A observed unvalidated claim preserves provenance on round trip', 
     assert.equal(roundTrip.id, claim.id);
     assert.equal(roundTrip.epistemicState, ak.EPISTEMIC_STATES.OBSERVED);
     assert.equal(roundTrip.validationState, ak.VALIDATION_STATES.UNVALIDATED);
+    assert.equal(roundTrip.validationStatus, ak.VALIDATION_STATUS.UNVALIDATED);
     assert.equal(roundTrip.evidence[0].source.ref, 'call_hugo_1');
     assert.equal(roundTrip.provenance.sourceRef, 'call_hugo_1');
   });
@@ -395,6 +398,7 @@ test('SPEC-247A UNKNOWN remains UNKNOWN through normalization and legacy kinds',
   assert.equal(ak.normalizeKnowledgeObject(base).epistemicState, ak.EPISTEMIC_STATES.UNKNOWN);
   assert.equal(ak.normalizeKnowledgeObject({ ...base, kind: ak.EPISTEMIC_KINDS.HYPOTHESIS }).epistemicState, ak.EPISTEMIC_STATES.UNKNOWN);
   assert.equal(ak.normalizeKnowledgeObject({ ...base, kind: ak.EPISTEMIC_KINDS.VALIDATED_FINDING }).epistemicState, ak.EPISTEMIC_STATES.UNKNOWN);
+  assert.equal(ak.normalizeKnowledgeObject({ ...base, validationStatus: ak.VALIDATION_STATUS.UNVALIDATED }).validationState, ak.VALIDATION_STATES.UNVALIDATED);
 });
 
 test('SPEC-247A validation rejects missing required provenance', () => {
