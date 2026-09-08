@@ -298,6 +298,60 @@ test('SPEC-247 import validates by default and writes only with apply=true', asy
   });
 });
 
+test('SPEC-248A revision JSONB payload and evidence serialize at persistence boundary', async () => {
+  await withPool(async (pool) => {
+    const nestedEvidence = [{
+      id: 'e_nested_1',
+      type: ak.EVIDENCE_TYPES.OBSERVED,
+      statement: 'Nested source evidence round-trips unchanged.',
+      source: { kind: 'operator_note', ref: 'note_nested_1' },
+      payload: { nested: { values: ['one', 'two'] } },
+    }];
+
+    await ak.createKnowledge({
+      tenantId: '10',
+      objectType: ak.OBJECT_TYPES.PLAYBOOK,
+      title: 'Revision serialization with nested evidence',
+      content: { statement: 'Persist revision payload and evidence as JSONB.' },
+      evidence: nestedEvidence,
+      provenance: { sourceType: 'test', sourceRef: 'spec-248a' },
+    }, { pool, actor: { id: 'operator', role: 'operator' } });
+
+    assert.equal(pool.state.revisions.length, 1);
+    const revisionParams = pool.state.revisions[0];
+    assert.equal(typeof revisionParams[6], 'string');
+    assert.equal(typeof revisionParams[7], 'string');
+
+    const payload = JSON.parse(revisionParams[6]);
+    const evidence = JSON.parse(revisionParams[7]);
+
+    assert.equal(payload.title, 'Revision serialization with nested evidence');
+    assert.equal(payload.content.statement, 'Persist revision payload and evidence as JSONB.');
+    assert.equal(Array.isArray(evidence), true);
+    assert.deepEqual(evidence[0].source, { kind: 'operator_note', ref: 'note_nested_1' });
+    assert.deepEqual(evidence[0].payload, { nested: { values: ['one', 'two'] } });
+  });
+});
+
+test('SPEC-248A revision JSONB evidence persists empty arrays as JSON arrays', async () => {
+  await withPool(async (pool) => {
+    await ak.createKnowledge({
+      tenantId: '10',
+      objectType: ak.OBJECT_TYPES.PLAYBOOK,
+      title: 'Revision serialization with empty evidence',
+      content: { statement: 'Empty evidence arrays remain JSON arrays.' },
+    }, { pool, actor: { id: 'operator', role: 'operator' } });
+
+    assert.equal(pool.state.revisions.length, 1);
+    const revisionParams = pool.state.revisions[0];
+    const payload = JSON.parse(revisionParams[6]);
+    const evidence = JSON.parse(revisionParams[7]);
+
+    assert.equal(payload.title, 'Revision serialization with empty evidence');
+    assert.deepEqual(evidence, []);
+  });
+});
+
 test('SPEC-247 AMO outcome commit creates reviewable learning candidates atomically', async () => {
   await withPool(async (pool) => {
     const mission = missionFixture();
