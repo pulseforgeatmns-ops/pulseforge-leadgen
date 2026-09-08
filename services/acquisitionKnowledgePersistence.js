@@ -18,6 +18,8 @@ async function ensureAcquisitionKnowledgeSchema(pool = defaultPool()) {
       object_type TEXT NOT NULL,
       title TEXT NOT NULL,
       content JSONB NOT NULL DEFAULT '{}'::jsonb,
+      epistemic_state TEXT NOT NULL DEFAULT 'UNKNOWN',
+      validation_state TEXT NOT NULL DEFAULT 'UNVALIDATED',
       epistemic_kind TEXT NOT NULL,
       lifecycle_state TEXT NOT NULL,
       status TEXT NOT NULL,
@@ -27,6 +29,8 @@ async function ensureAcquisitionKnowledgeSchema(pool = defaultPool()) {
       confidence DOUBLE PRECISION,
       evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
       provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+      derivation JSONB,
+      relationships JSONB NOT NULL DEFAULT '[]'::jsonb,
       approved_by TEXT,
       created_from TEXT,
       created_by TEXT,
@@ -36,6 +40,35 @@ async function ensureAcquisitionKnowledgeSchema(pool = defaultPool()) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE (tenant_id, external_key)
     )
+  `);
+  await pool.query(`ALTER TABLE acquisition_knowledge_objects ADD COLUMN IF NOT EXISTS epistemic_state TEXT`);
+  await pool.query(`ALTER TABLE acquisition_knowledge_objects ADD COLUMN IF NOT EXISTS validation_state TEXT`);
+  await pool.query(`ALTER TABLE acquisition_knowledge_objects ADD COLUMN IF NOT EXISTS derivation JSONB`);
+  await pool.query(`ALTER TABLE acquisition_knowledge_objects ADD COLUMN IF NOT EXISTS relationships JSONB NOT NULL DEFAULT '[]'::jsonb`);
+  await pool.query(`
+    UPDATE acquisition_knowledge_objects
+    SET epistemic_state = CASE
+      WHEN epistemic_kind IN ('observed_fact', 'operator_preference', 'stakeholder_preference', 'canonical_truth') THEN 'OBSERVED'
+      WHEN epistemic_kind IN ('hypothesis', 'validated_finding') THEN 'INFERRED'
+      ELSE 'UNKNOWN'
+    END
+    WHERE epistemic_state IS NULL OR btrim(epistemic_state) = ''
+  `);
+  await pool.query(`
+    UPDATE acquisition_knowledge_objects
+    SET validation_state = CASE
+      WHEN lifecycle_state = 'STAKEHOLDER_VALIDATED' THEN 'STAKEHOLDER_VALIDATED'
+      WHEN lifecycle_state IN ('MARKET_VALIDATED', 'CANONICAL') THEN 'MARKET_VALIDATED'
+      ELSE 'UNVALIDATED'
+    END
+    WHERE validation_state IS NULL OR btrim(validation_state) = ''
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_knowledge_objects
+      ALTER COLUMN epistemic_state SET DEFAULT 'UNKNOWN',
+      ALTER COLUMN epistemic_state SET NOT NULL,
+      ALTER COLUMN validation_state SET DEFAULT 'UNVALIDATED',
+      ALTER COLUMN validation_state SET NOT NULL
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS acquisition_knowledge_revisions (
@@ -81,6 +114,9 @@ function rowFromDb(row = {}) {
     objectType: row.object_type,
     title: row.title,
     content: row.content || {},
+    epistemicState: row.epistemic_state || ak.normalizeEpistemicState(null, row),
+    validationState: row.validation_state || ak.normalizeValidationState(null, row),
+    validationStatus: row.validation_state || ak.normalizeValidationState(null, row),
     epistemicKind: row.epistemic_kind,
     state: row.lifecycle_state,
     status: row.status,
@@ -90,6 +126,8 @@ function rowFromDb(row = {}) {
     confidence: row.confidence == null ? null : Number(row.confidence),
     evidence: row.evidence || [],
     provenance: row.provenance || {},
+    derivation: row.derivation || null,
+    relationships: row.relationships || [],
     approvedBy: row.approved_by || null,
     createdFrom: row.created_from || null,
     createdBy: row.created_by || null,
@@ -141,15 +179,17 @@ async function upsertKnowledgeObject(input = {}, pool = defaultPool(), opts = {}
     const saved = await client.query(
       `INSERT INTO acquisition_knowledge_objects (
         id, external_key, tenant_id, client_id, mission_id, scope, object_type, title, content,
-        epistemic_kind, lifecycle_state, status, channel, experiment_id, tags, confidence,
-        evidence, provenance, approved_by, created_from, created_by, version, supersedes_id,
+        epistemic_state, validation_state, epistemic_kind, lifecycle_state, status, channel, experiment_id, tags, confidence,
+        evidence, provenance, derivation, relationships, approved_by, created_from, created_by, version, supersedes_id,
         created_at, updated_at
       ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29
       )
       ON CONFLICT (id) DO UPDATE SET
         title = EXCLUDED.title,
         content = EXCLUDED.content,
+        epistemic_state = EXCLUDED.epistemic_state,
+        validation_state = EXCLUDED.validation_state,
         epistemic_kind = EXCLUDED.epistemic_kind,
         lifecycle_state = EXCLUDED.lifecycle_state,
         status = EXCLUDED.status,
@@ -159,6 +199,8 @@ async function upsertKnowledgeObject(input = {}, pool = defaultPool(), opts = {}
         confidence = EXCLUDED.confidence,
         evidence = EXCLUDED.evidence,
         provenance = EXCLUDED.provenance,
+        derivation = EXCLUDED.derivation,
+        relationships = EXCLUDED.relationships,
         approved_by = EXCLUDED.approved_by,
         created_from = EXCLUDED.created_from,
         created_by = EXCLUDED.created_by,
@@ -176,6 +218,8 @@ async function upsertKnowledgeObject(input = {}, pool = defaultPool(), opts = {}
         row.objectType,
         row.title,
         row.content,
+        row.epistemicState,
+        row.validationState,
         row.epistemicKind,
         row.state,
         row.status,
@@ -185,6 +229,8 @@ async function upsertKnowledgeObject(input = {}, pool = defaultPool(), opts = {}
         row.confidence,
         JSON.stringify(row.evidence || []),
         row.provenance,
+        row.derivation,
+        JSON.stringify(row.relationships || []),
         row.approvedBy,
         row.createdFrom,
         row.createdBy,
@@ -231,19 +277,27 @@ async function promoteKnowledgeObject(id, input = {}, pool = defaultPool(), opts
     const mergedEvidence = [...(existing.evidence || []), ...evidence];
     const version = existing.version + 1;
     const nextEpistemic = ak.normalizeEpistemicKind(input.epistemicKind, nextState);
+    const nextValidationState = ak.normalizeValidationState(input.validationState || nextState, input);
+    ak.assertCanonicalSemantics({
+      ...existing,
+      validationState: nextValidationState,
+      evidence: mergedEvidence,
+    });
     const updated = await client.query(
       `UPDATE acquisition_knowledge_objects
        SET lifecycle_state = $1,
-           epistemic_kind = $2,
-           status = $3,
-           evidence = $4,
-           approved_by = $5,
-           version = $6,
+           validation_state = $2,
+           epistemic_kind = $3,
+           status = $4,
+           evidence = $5,
+           approved_by = $6,
+           version = $7,
            updated_at = NOW()
-       WHERE id = $7 AND tenant_id = $8
+       WHERE id = $8 AND tenant_id = $9
        RETURNING *`,
       [
         nextState,
+        nextValidationState,
         nextEpistemic,
         nextState === ak.LIFECYCLE_STATES.CANONICAL ? 'canonical' : 'validated',
         JSON.stringify(mergedEvidence),
@@ -281,6 +335,14 @@ async function queryKnowledgeObjects(query = {}, pool = defaultPool()) {
     params.push(ak.normalizeLifecycleState(query.state));
     where.push(`lifecycle_state = $${params.length}`);
   }
+  if (query.epistemicState) {
+    params.push(ak.normalizeEpistemicState(query.epistemicState));
+    where.push(`epistemic_state = $${params.length}`);
+  }
+  if (query.validationState || query.validationStatus) {
+    params.push(ak.normalizeValidationState(query.validationState || query.validationStatus));
+    where.push(`validation_state = $${params.length}`);
+  }
   if (query.scope) {
     params.push(ak.normalizeScope(query.scope));
     where.push(`scope = $${params.length}`);
@@ -307,6 +369,8 @@ async function queryKnowledgeObjects(query = {}, pool = defaultPool()) {
       LOWER(title) LIKE $${params.length}
       OR LOWER(object_type) LIKE $${params.length}
       OR LOWER(epistemic_kind) LIKE $${params.length}
+      OR LOWER(epistemic_state) LIKE $${params.length}
+      OR LOWER(validation_state) LIKE $${params.length}
       OR LOWER(content::text) LIKE $${params.length}
       OR LOWER(evidence::text) LIKE $${params.length}
     )`);
@@ -400,6 +464,8 @@ function extractLearningCandidateRows(bundle = {}) {
     title,
     state: ak.LIFECYCLE_STATES.HYPOTHESIS,
     epistemicKind: ak.EPISTEMIC_KINDS.HYPOTHESIS,
+    epistemicState: ak.EPISTEMIC_STATES.INFERRED,
+    validationState: ak.VALIDATION_STATES.UNVALIDATED,
     status: 'learning_candidate',
     content: {
       statement: hasCampaignSignal
@@ -419,6 +485,12 @@ function extractLearningCandidateRows(bundle = {}) {
       observedAt: row.at || row.createdAt || new Date().toISOString(),
       payload: row,
     })),
+    derivation: {
+      kind: 'campaign_learning_candidate',
+      explanation: 'Campaign outcomes and specialist contributions imply a reviewable learning candidate.',
+      basedOn: [mission.id, ...(contributions.map((row) => row.id).filter(Boolean))],
+      evidenceRefs: outcomes.map((row, index) => row.id || `outcome_${index + 1}`),
+    },
     tags: ['campaign_outcome', 'operator_review_required'],
     createdFrom: 'acquisition_mission_stage_commit',
     createdBy: 'max',
