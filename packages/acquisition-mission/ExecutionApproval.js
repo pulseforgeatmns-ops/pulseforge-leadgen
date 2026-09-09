@@ -325,6 +325,9 @@ function buildPendingExecutionDecision(mission, contributions = []) {
 
 function canAdvertiseExecutionApproval(mission, contributions = [], extras = {}) {
   if (!mission || mission.stage !== STAGES.READY) return false;
+  const { latestApproachDecision } = require('./AcquisitionApproach');
+  const approach = latestApproachDecision(contributions);
+  if (approach && approach.selected !== 'outbound' && approach.selected !== 'both') return false;
   const by = (specialist, kind) =>
     contributions.some((row) => row.specialist === specialist && row.kind === kind);
   const paigeComplete = by(SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS) || extras.paigeComplete;
