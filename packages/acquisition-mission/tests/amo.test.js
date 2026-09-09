@@ -67,10 +67,21 @@ function toPrepare(amoEngine, missionId) {
       timing: 'Fall',
       recommendations: ['Prioritize law firms with recent ops hires'],
       constraints: ['Operator voice', 'Commercial only', 'Veteran discount available'],
-      delegation: { paige: 'variants', emmett: 'capacity' },
     },
   });
   amoEngine.progress(missionId, { role: 'max' }, { stage: STAGES.PLAN });
+  amoEngine.contribute(missionId, {
+    specialist: SPECIALISTS.MAX,
+    kind: 'acquisition_approach',
+    at: '2026-08-19T09:09:00.000Z',
+    payload: amo.createAcquisitionApproachPayload({
+      selectedApproach: 'outbound',
+      rationale: 'Outbound preparation is the supported first acquisition path for this fixture.',
+      confidence: { overall: 0.72 },
+      evidence: [{ label: 'Max prioritization complete', source: 'test_fixture' }],
+      decidedAt: '2026-08-19T09:09:00.000Z',
+    }),
+  });
   amoEngine.progress(missionId, { role: 'max' }, { stage: STAGES.PREPARE });
   return amoEngine.inspect(missionId);
 }
@@ -167,7 +178,7 @@ describe('SPEC-118 workspace', () => {
     assert.equal(snapshot.workspace.progressPercent, 68);
     assert.match(snapshot.workspace.bar, /█/);
     assert.equal(snapshot.workspace.scout.label, 'Discovery Complete');
-    assert.equal(snapshot.workspace.max.label, 'Prioritization Complete');
+    assert.equal(snapshot.workspace.max.label, 'Approach Selected');
     assert.equal(snapshot.workspace.paige.label, 'Generating Variants');
     assert.equal(snapshot.workspace.emmett.label, 'Waiting');
     assert.equal(snapshot.workspace.operator.label, 'Waiting');

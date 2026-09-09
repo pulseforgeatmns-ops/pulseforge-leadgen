@@ -29,6 +29,7 @@ const {
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   advanceEmmettCapacity,
   advanceExecutionAfterApproval,
@@ -73,6 +74,12 @@ describe('Canonical READY transition & execution approval', () => {
       question: 'Approved prioritization.',
     });
     await advanceMaxPrioritization({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      allowFixtureFallback: true,
+    });
+    await advanceAcquisitionApproach({
       engine,
       mission: engine.get(mission.id, '10'),
       tenantId: '10',
@@ -223,6 +230,9 @@ describe('Canonical READY transition & execution approval', () => {
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved.',
     });
     await advanceMaxPrioritization({
+      engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
+    });
+    await advanceAcquisitionApproach({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
     await advancePaigeVariants({

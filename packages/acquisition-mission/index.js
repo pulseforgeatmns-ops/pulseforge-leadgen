@@ -61,6 +61,7 @@ const learnProgression = require('./LearnProgression');
 const improveProgression = require('./ImproveProgression');
 const meaningfulLearning = require('./MeaningfulLearning');
 const outcomeLearningRetrieval = require('./OutcomeLearningRetrieval');
+const acquisitionApproach = require('./AcquisitionApproach');
 
 module.exports = {
   ...types,
@@ -125,4 +126,5 @@ module.exports = {
   ...improveProgression,
   ...meaningfulLearning,
   ...outcomeLearningRetrieval,
+  ...acquisitionApproach,
 };

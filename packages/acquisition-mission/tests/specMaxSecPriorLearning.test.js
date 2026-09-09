@@ -250,7 +250,8 @@ describe('AUDIT-078 Max SEC prior learning influence', () => {
     assert.ok(payload.timing);
     assert.ok(Array.isArray(payload.recommendations));
     assert.ok(Array.isArray(payload.constraints));
-    assert.deepEqual(payload.delegation, { paige: 'variants', emmett: 'capacity' });
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, 'delegation'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(payload, 'acquisitionApproach'), false);
     assert.doesNotThrow(() => amo.assertContract(SPECIALISTS.MAX, payload));
     assert.ok(!Object.prototype.hasOwnProperty.call(result.contributions, 'learningInfluence'));
   });

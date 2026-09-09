@@ -80,6 +80,10 @@ const BLOCKER_KINDS = Object.freeze({
   WAITING_FOR_EMMETT: 'waiting_for_emmett',
   WAITING_FOR_SCOUT: 'waiting_for_scout',
   WAITING_FOR_MAX: 'waiting_for_max',
+  WAITING_FOR_ACQUISITION_APPROACH: 'waiting_for_acquisition_approach',
+  ACQUISITION_APPROACH_DEFERRED: 'acquisition_approach_deferred',
+  ACQUISITION_APPROACH_BLOCKED: 'acquisition_approach_blocked',
+  UNSUPPORTED_ACQUISITION_APPROACH: 'unsupported_acquisition_approach',
   WAITING_FOR_DOMAIN_WARMUP: 'waiting_for_domain_warmup',
   WAITING_FOR_MORE_PROSPECTS: 'waiting_for_more_prospects',
   PAUSED_DELIVERABILITY_RISK: 'paused_deliverability_risk',
@@ -92,6 +96,10 @@ const BLOCKER_LABELS = Object.freeze({
   [BLOCKER_KINDS.WAITING_FOR_EMMETT]: 'Waiting for Emmett',
   [BLOCKER_KINDS.WAITING_FOR_SCOUT]: 'Waiting for Scout',
   [BLOCKER_KINDS.WAITING_FOR_MAX]: 'Waiting for Max',
+  [BLOCKER_KINDS.WAITING_FOR_ACQUISITION_APPROACH]: 'Waiting for Acquisition Approach',
+  [BLOCKER_KINDS.ACQUISITION_APPROACH_DEFERRED]: 'Acquisition Approach Deferred',
+  [BLOCKER_KINDS.ACQUISITION_APPROACH_BLOCKED]: 'Acquisition Approach Blocked',
+  [BLOCKER_KINDS.UNSUPPORTED_ACQUISITION_APPROACH]: 'Unsupported Acquisition Approach',
   [BLOCKER_KINDS.WAITING_FOR_DOMAIN_WARMUP]: 'Waiting for Domain Warm-up',
   [BLOCKER_KINDS.WAITING_FOR_MORE_PROSPECTS]: 'Waiting for More Prospects',
   [BLOCKER_KINDS.PAUSED_DELIVERABILITY_RISK]: 'Paused — Deliverability Risk',
@@ -117,6 +125,7 @@ const EVENT_KINDS = Object.freeze({
 const CONTRIBUTION_KINDS = Object.freeze({
   DISCOVERY: 'discovery',
   PRIORITIZATION: 'prioritization',
+  ACQUISITION_APPROACH: 'acquisition_approach',
   VARIANTS: 'variants',
   CAPACITY: 'capacity',
   APPROVAL: 'approval',
@@ -124,6 +133,14 @@ const CONTRIBUTION_KINDS = Object.freeze({
   OBJECTIVE: 'objective',
   CONSTRAINTS: 'constraints',
   MISSION_PLAN: 'mission_plan',
+});
+
+const ACQUISITION_APPROACHES = Object.freeze({
+  OUTBOUND: 'outbound',
+  PAID: 'paid',
+  BOTH: 'both',
+  DEFER: 'defer',
+  BLOCKED: 'blocked',
 });
 
 /** SPEC-130 — operator decision kinds before specialist execution. */
@@ -251,6 +268,7 @@ module.exports = {
   BLOCKER_LABELS,
   EVENT_KINDS,
   CONTRIBUTION_KINDS,
+  ACQUISITION_APPROACHES,
   OPERATOR_DECISION_KINDS,
   SPECIALIST_STATES,
   HEALTH_LABELS,
