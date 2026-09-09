@@ -54,6 +54,10 @@ const {
   fixturePaigeVariantsResult,
 } = require('./PaigeVariantsExecutor');
 const {
+  runPennyPaidAcquisition,
+  runPennyForAmoMission,
+} = require('./PennyPaidAcquisitionExecutor');
+const {
   runScoutForAmoMission: runScoutForAmoMissionSec,
   mapScoutIntelligenceToDiscoveryPayload: mapScoutPayloadFromExecutor,
 } = require('./ScoutDiscoveryExecutor');
@@ -1489,6 +1493,16 @@ function findPaigeVariants(contributions = []) {
     );
 }
 
+function findPennyPaidAcquisitionRecommendation(contributions = []) {
+  return [...contributions]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.PENNY &&
+        row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+    );
+}
+
 function buildMaxPrioritizationPayload(mission, contributions = []) {
   const scout = findLatestScoutDiscovery(contributions);
   const scoutPayload = scout?.payload || {};
@@ -1601,6 +1615,63 @@ function validatePaigeOutput(output, ctx = {}) {
   output.executionResult = executionResult;
 }
 
+function validatePennyPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete) {
+    throw planningError('tme_max_incomplete', 'Max prioritization is required before Penny paid assessment.');
+  }
+  if (!ctx.acquisitionApproachComplete) {
+    throw planningError('tme_approach_missing', 'Acquisition approach decision is required before Penny paid assessment.');
+  }
+  if (!['paid', 'both'].includes(ctx.acquisitionApproach)) {
+    throw planningError('tme_paid_not_selected', 'Penny paid assessment requires a paid or both acquisition approach.');
+  }
+  if (ctx.paidAcquisitionComplete) {
+    throw planningError('tme_already_executed', 'Penny paid acquisition recommendation already committed.');
+  }
+  if (mission.stage !== STAGES.PLAN) {
+    throw planningError('tme_wrong_stage', `Penny paid assessment requires stage ${STAGES.PLAN}.`);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    structuredPlanApproved: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function validatePennyOutput(output, ctx = {}) {
+  if (!output || !output.paidAcquisitionPayload) {
+    throw validationError('tme_contribution_missing', 'Penny paid acquisition contribution is missing.');
+  }
+  const payload = output.paidAcquisitionPayload;
+  assertContributionContract(SPECIALISTS.PENNY, payload);
+  const recommendation = payload.paidAcquisitionRecommendation;
+  if (!recommendation || !recommendation.viability) {
+    throw validationError('tme_penny_recommendation_invalid', 'Penny recommendation must include viability.');
+  }
+  if (recommendation.noExternalMutation !== true) {
+    throw validationError('tme_penny_mutation_boundary', 'Penny V1 must not authorize external mutation.');
+  }
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.PENNY,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.PENNY,
+    requireContributions: true,
+    requireEvidence: false,
+  });
+  output.executionResult = executionResult;
+}
+
 function commitMaxPrioritizationStage({
   engine,
   mission,
@@ -1694,6 +1765,56 @@ function commitAcquisitionApproachStage({
   });
   return {
     approach: contribution.contribution,
+    snapshot,
+  };
+}
+
+function commitPennyPaidAcquisitionStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { paidAcquisitionPayload } = output;
+  const payload = { ...paidAcquisitionPayload, transactionId };
+
+  const contribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.PENNY,
+      kind: CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION,
+      payload,
+    },
+    { tenantId }
+  );
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.PENNY,
+    label: 'Penny paid acquisition recommendation committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      contributionId: contribution.contribution.id,
+      viability: payload.paidAcquisitionRecommendation?.viability || payload.viability,
+      preferredChannel: payload.paidAcquisitionRecommendation?.preferredChannel || null,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    paidAcquisition: contribution.contribution,
     snapshot,
   };
 }
@@ -1973,6 +2094,83 @@ async function advanceAcquisitionApproach(input = {}) {
     transactionId: staged.transactionId,
     missionVersion: staged.missionVersion,
     maxResult: staged.output.maxResult,
+  };
+}
+
+/**
+ * Execute Penny at PLAN via SEC and commit PAID_ACQUISITION_RECOMMENDATION.
+ * Canonical path: CER → router → executeMissionStage → executeSpecialist('penny') → PAID_ACQUISITION_RECOMMENDATION.
+ * @param {object} input
+ * @returns {Promise<object>}
+ */
+async function advancePennyPaidAcquisition(input = {}) {
+  const { engine, mission, tenantId, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const currentMission = ensureStageForAcquisitionApproach(engine, mission.id, tenantId);
+  const snapshot = engine.inspect(currentMission.id, { tenantId });
+  const existing = findPennyPaidAcquisitionRecommendation(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      paidAcquisition: existing,
+      snapshot: engine.inspect(currentMission.id, { tenantId }),
+      executionOutcome: 'completed',
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: currentMission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.PENNY,
+    stage: STAGES.PLAN,
+    operatorId,
+    validatePreconditions: (ctx) => validatePennyPreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const contributions = engine.inspect(current.id, { tenantId }).contributions || [];
+      const pennyResult = await runPennyForAmoMission(current, {
+        ...input,
+        contributions,
+        transactionId,
+        executionContext: {
+          stage: STAGES.PLAN,
+          missionId: current.id,
+          tenantId,
+          executionRequestId: input.executionRequest?.id || null,
+        },
+      });
+      const executionResult = pennyResult && pennyResult.spec === 'SPEC-132'
+        ? pennyResult
+        : await executeSpecialist({
+          mission: current,
+          contributions,
+          specialist: SPECIALISTS.PENNY,
+          transactionId,
+          store: engine?.store,
+          run: () => runPennyPaidAcquisition(pennyResult),
+        });
+
+      return {
+        paidAcquisitionPayload: executionResult.contributions,
+        executionResult,
+        missionId: current.id,
+      };
+    },
+    validateOutput: validatePennyOutput,
+    commit: (ctx) => commitPennyPaidAcquisitionStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  return {
+    alreadyExecuted: false,
+    paidAcquisition: staged.commitResult.paidAcquisition,
+    snapshot: staged.commitResult.snapshot,
+    executionOutcome: 'completed',
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    executionResult: staged.output.executionResult,
   };
 }
 
@@ -2648,6 +2846,7 @@ module.exports = {
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
   advanceAcquisitionApproach,
+  advancePennyPaidAcquisition,
   advancePaigeVariants,
   advanceEmmettCapacity,
   advancePreparedOutreachRevision,
@@ -2661,11 +2860,14 @@ module.exports = {
   fixturePaigeVariantsResult,
   findMaxPrioritization,
   findPaigeVariants,
+  findPennyPaidAcquisitionRecommendation,
   runMaxPrioritizationForAmoMission,
   runMaxApproachForAmoMission,
+  runPennyForAmoMission,
   runPaigeForAmoMission,
   buildMaxPrioritizationPayload,
   buildAcquisitionApproachPayload,
+  runPennyPaidAcquisition,
   buildPaigeVariantsPayload,
   ensureStagesForPaige,
   ensureStageForAcquisitionApproach,

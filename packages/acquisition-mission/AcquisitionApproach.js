@@ -20,6 +20,16 @@ const SUPPORTED_PREPARATION_APPROACHES = new Set([
   ACQUISITION_APPROACHES.BOTH,
 ]);
 
+function findLatestPaidAcquisitionRecommendation(contributions = []) {
+  return [...(contributions || [])]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.PENNY &&
+        row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+    ) || null;
+}
+
 function normalizeApproach(value) {
   const key = asText(value).toLowerCase();
   if (key === 'email' || key === 'outreach' || key === 'outbound_email') {
@@ -65,10 +75,11 @@ function approachPermitsOutbound(contributions = []) {
 function approachRequiresUnsupportedCapability(contributions = []) {
   const parsed = latestApproachDecision(contributions);
   if (!parsed) return false;
-  return parsed.selected === ACQUISITION_APPROACHES.PAID;
+  return parsed.selected === ACQUISITION_APPROACHES.PAID &&
+    !findLatestPaidAcquisitionRecommendation(contributions);
 }
 
-function buildApproachBlocker(decision) {
+function buildApproachBlocker(decision, contributions = []) {
   if (!decision || !decision.selected) {
     return {
       kind: BLOCKER_KINDS.WAITING_FOR_ACQUISITION_APPROACH,
@@ -77,10 +88,11 @@ function buildApproachBlocker(decision) {
     };
   }
   if (decision.selected === ACQUISITION_APPROACHES.PAID) {
+    if (findLatestPaidAcquisitionRecommendation(contributions)) return null;
     return {
-      kind: BLOCKER_KINDS.UNSUPPORTED_ACQUISITION_APPROACH,
-      specialist: SPECIALISTS.MAX,
-      reason: 'Paid acquisition preparation is not implemented for this mission yet.',
+      kind: BLOCKER_KINDS.WAITING_FOR_PENNY,
+      specialist: SPECIALISTS.PENNY,
+      reason: 'Penny paid acquisition assessment is required before paid setup or spend.',
     };
   }
   if (decision.selected === ACQUISITION_APPROACHES.DEFER) {
@@ -109,10 +121,10 @@ function summarizeApproachNextStep(selected) {
     return 'Proceed to outbound preparation.';
   }
   if (selected === ACQUISITION_APPROACHES.BOTH) {
-    return 'Proceed to outbound preparation; paid preparation remains unsupported until a later capability is added.';
+    return 'Proceed to outbound preparation and request Penny paid acquisition assessment before any paid spend.';
   }
   if (selected === ACQUISITION_APPROACHES.PAID) {
-    return 'Stop before outbound preparation; paid preparation is not implemented yet.';
+    return 'Request Penny paid acquisition assessment before any paid setup or spend.';
   }
   if (selected === ACQUISITION_APPROACHES.DEFER) {
     return 'Stop before channel-specific preparation until more evidence or operator direction exists.';
@@ -129,7 +141,7 @@ function createAcquisitionApproachPayload(input = {}) {
       : selected === ACQUISITION_APPROACHES.BOTH
         ? 'Mission evidence supports outbound now while preserving paid acquisition as a future parallel path.'
         : selected === ACQUISITION_APPROACHES.PAID
-          ? 'Mission evidence points to paid acquisition, but paid preparation is not implemented yet.'
+          ? 'Mission evidence points to paid acquisition; Penny assessment is required before paid setup or spend.'
           : selected === ACQUISITION_APPROACHES.DEFER
             ? 'Current evidence does not justify channel-specific preparation yet.'
             : 'Current evidence is insufficient or blocked.'
@@ -158,12 +170,7 @@ function createAcquisitionApproachPayload(input = {}) {
       blockers,
       unknowns,
       requiresSpecialistEvidence,
-      unsupportedCapabilities: (
-        selected === ACQUISITION_APPROACHES.PAID ||
-        selected === ACQUISITION_APPROACHES.BOTH
-      )
-        ? ['paid_preparation']
-        : [],
+      unsupportedCapabilities: [],
       decidedAt: input.decidedAt || nowIso(),
       nextStep: asText(input.nextStep) || summarizeApproachNextStep(selected),
     },
@@ -187,6 +194,7 @@ module.exports = {
   latestApproachDecision,
   approachPermitsOutbound,
   approachRequiresUnsupportedCapability,
+  findLatestPaidAcquisitionRecommendation,
   buildApproachBlocker,
   summarizeApproachNextStep,
   createAcquisitionApproachPayload,

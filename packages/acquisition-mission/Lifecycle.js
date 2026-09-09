@@ -77,6 +77,11 @@ function specialistContext(contributions = [], extras = {}) {
   const by = (specialist, kinds) =>
     rows.some((row) => row.specialist === specialist && (!kinds || kinds.includes(row.kind)));
   const emmett = [...rows].reverse().find((row) => row.specialist === SPECIALISTS.EMMETT);
+  const penny = [...rows].reverse().find(
+    (row) =>
+      row.specialist === SPECIALISTS.PENNY &&
+      row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+  );
   const governor = emmett && emmett.payload && emmett.payload.governor;
   const deliverabilityPaused = extras.deliverabilityPaused === true
     || Boolean(governor && (governor.outcome === 'pause' || governor.outcome === 'emergency'));
@@ -101,6 +106,7 @@ function specialistContext(contributions = [], extras = {}) {
     acquisitionApproachDecision: approachDecision ? approachDecision.decision : extras.acquisitionApproachDecision || null,
     acquisitionApproachPermitsOutbound:
       approachPermitsOutbound(rows) || extras.acquisitionApproachPermitsOutbound === true,
+    paidAcquisitionComplete: Boolean(penny) || extras.paidAcquisitionComplete === true,
     maxHasObjectives: by(SPECIALISTS.MAX, [CONTRIBUTION_KINDS.OBJECTIVE, CONTRIBUTION_KINDS.CONSTRAINTS]),
     paigeComplete: by(SPECIALISTS.PAIGE, [CONTRIBUTION_KINDS.VARIANTS]) || extras.paigeComplete,
     paigeGenerating: extras.paigeGenerating === true,
@@ -141,6 +147,7 @@ function progressPercent(stage, ctx = {}) {
   let bonus = 0;
   if (ctx.scoutComplete) bonus += 12;
   if (ctx.maxComplete) bonus += 8;
+  if (ctx.paidAcquisitionComplete) bonus += 4;
   if (ctx.paigeComplete) bonus += 8;
   else if (ctx.paigeGenerating) bonus += 0;
   if (ctx.emmettComplete) bonus += 6;
@@ -161,6 +168,18 @@ function specialistState(specialist, ctx, mission) {
     return ctx.acquisitionApproachComplete
       ? { state: SPECIALIST_STATES.COMPLETE, label: 'Approach Selected' }
       : { state: SPECIALIST_STATES.IN_PROGRESS, label: 'Prioritization Complete' };
+  }
+  if (specialist === SPECIALISTS.PENNY) {
+    if (ctx.paidAcquisitionComplete) {
+      return { state: SPECIALIST_STATES.COMPLETE, label: 'Paid Assessment Complete' };
+    }
+    if (
+      ctx.acquisitionApproach === 'paid' ||
+      ctx.acquisitionApproach === 'both'
+    ) {
+      return { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
+    }
+    return { state: SPECIALIST_STATES.PENDING, label: 'Not Required' };
   }
   if (specialist === SPECIALISTS.PAIGE) {
     if (ctx.paigeComplete) return { state: SPECIALIST_STATES.COMPLETE, label: 'Variants Ready' };

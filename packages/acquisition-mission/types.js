@@ -68,6 +68,7 @@ const SPECIALISTS = Object.freeze({
   SCOUT: 'scout',
   MAX: 'max',
   PAIGE: 'paige',
+  PENNY: 'penny',
   EMMETT: 'emmett',
   VERA: 'vera',
   REX: 'rex',
@@ -77,6 +78,7 @@ const SPECIALISTS = Object.freeze({
 const BLOCKER_KINDS = Object.freeze({
   WAITING_FOR_OPERATOR: 'waiting_for_operator',
   WAITING_FOR_PAIGE: 'waiting_for_paige',
+  WAITING_FOR_PENNY: 'waiting_for_penny',
   WAITING_FOR_EMMETT: 'waiting_for_emmett',
   WAITING_FOR_SCOUT: 'waiting_for_scout',
   WAITING_FOR_MAX: 'waiting_for_max',
@@ -93,6 +95,7 @@ const BLOCKER_KINDS = Object.freeze({
 const BLOCKER_LABELS = Object.freeze({
   [BLOCKER_KINDS.WAITING_FOR_OPERATOR]: 'Waiting for Operator',
   [BLOCKER_KINDS.WAITING_FOR_PAIGE]: 'Waiting for Paige',
+  [BLOCKER_KINDS.WAITING_FOR_PENNY]: 'Waiting for Penny',
   [BLOCKER_KINDS.WAITING_FOR_EMMETT]: 'Waiting for Emmett',
   [BLOCKER_KINDS.WAITING_FOR_SCOUT]: 'Waiting for Scout',
   [BLOCKER_KINDS.WAITING_FOR_MAX]: 'Waiting for Max',
@@ -126,6 +129,7 @@ const CONTRIBUTION_KINDS = Object.freeze({
   DISCOVERY: 'discovery',
   PRIORITIZATION: 'prioritization',
   ACQUISITION_APPROACH: 'acquisition_approach',
+  PAID_ACQUISITION_RECOMMENDATION: 'paid_acquisition_recommendation',
   VARIANTS: 'variants',
   CAPACITY: 'capacity',
   APPROVAL: 'approval',

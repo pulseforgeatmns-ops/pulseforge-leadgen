@@ -13,7 +13,14 @@ function bar(percent) {
 }
 
 function buildWorkspace(mission, ctx) {
-  const specialists = [SPECIALISTS.SCOUT, SPECIALISTS.MAX, SPECIALISTS.PAIGE, SPECIALISTS.EMMETT, SPECIALISTS.OPERATOR]
+  const specialists = [
+    SPECIALISTS.SCOUT,
+    SPECIALISTS.MAX,
+    SPECIALISTS.PENNY,
+    SPECIALISTS.PAIGE,
+    SPECIALISTS.EMMETT,
+    SPECIALISTS.OPERATOR,
+  ]
     .map((id) => {
       const state = specialistState(id, ctx, mission);
       return { id, ...state };
@@ -30,6 +37,7 @@ function buildWorkspace(mission, ctx) {
     specialists,
     scout: specialists.find((row) => row.id === SPECIALISTS.SCOUT),
     max: specialists.find((row) => row.id === SPECIALISTS.MAX),
+    penny: specialists.find((row) => row.id === SPECIALISTS.PENNY),
     paige: specialists.find((row) => row.id === SPECIALISTS.PAIGE),
     emmett: specialists.find((row) => row.id === SPECIALISTS.EMMETT),
     operator: specialists.find((row) => row.id === SPECIALISTS.OPERATOR),
