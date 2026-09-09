@@ -1575,6 +1575,112 @@ function validateAcquisitionApproachPreconditions({ mission, engine, tenantId })
   };
 }
 
+function stageDownstreamOfPlan(stage) {
+  return [
+    STAGES.PREPARE,
+    STAGES.READY,
+    STAGES.EXECUTE,
+    STAGES.OBSERVE,
+    STAGES.LEARN,
+    STAGES.IMPROVE,
+  ].includes(stage);
+}
+
+function canonicalWorkForLegacyReconciliation(contributions = [], stage) {
+  const rows = contributions || [];
+  const ctx = specialistContext(rows);
+  const hasScout = ctx.scoutComplete;
+  const hasMax = ctx.maxComplete;
+  const hasPaige = ctx.paigeComplete;
+  const hasEmmett = ctx.emmettComplete;
+  const hasApproval = rows.some(
+    (row) => row.specialist === SPECIALISTS.OPERATOR && row.kind === CONTRIBUTION_KINDS.APPROVAL
+  );
+
+  if (!hasScout || !hasMax) return null;
+  if (stage === STAGES.PREPARE) {
+    return {
+      scoutComplete: hasScout,
+      maxComplete: hasMax,
+      paigeComplete: hasPaige,
+      emmettComplete: hasEmmett,
+      operatorApprovalPresent: hasApproval,
+    };
+  }
+  if (stage === STAGES.READY) {
+    if (!hasPaige || !hasEmmett) return null;
+    return {
+      scoutComplete: hasScout,
+      maxComplete: hasMax,
+      paigeComplete: hasPaige,
+      emmettComplete: hasEmmett,
+      operatorApprovalPresent: hasApproval,
+    };
+  }
+  if (stageDownstreamOfPlan(stage)) {
+    if (!hasPaige || !hasEmmett || !hasApproval) return null;
+    return {
+      scoutComplete: hasScout,
+      maxComplete: hasMax,
+      paigeComplete: hasPaige,
+      emmettComplete: hasEmmett,
+      operatorApprovalPresent: hasApproval,
+    };
+  }
+  return null;
+}
+
+function validateLegacyAcquisitionApproachReconciliationPreconditions({
+  mission,
+  engine,
+  tenantId,
+  executionRequest,
+}) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const explicit =
+    executionRequest?.intent === amo.EXECUTION_INTENTS.RECONCILE_ACQUISITION_APPROACH ||
+    executionRequest?.payload?.reconciliation === true ||
+    executionRequest?.payload?.backfill === true;
+  if (!explicit) {
+    throw planningError(
+      'tme_reconciliation_not_explicit',
+      'Legacy acquisition approach reconciliation must be explicit.'
+    );
+  }
+
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const contributions = snapshot.contributions || [];
+  if (findLatestAcquisitionApproach(contributions)) {
+    throw planningError('tme_already_executed', 'Acquisition approach already committed.');
+  }
+  if (!stageDownstreamOfPlan(mission.stage)) {
+    throw planningError(
+      'tme_not_legacy_downstream',
+      'Legacy acquisition approach reconciliation requires a mission downstream of Plan.'
+    );
+  }
+  const historicalWork = canonicalWorkForLegacyReconciliation(contributions, mission.stage);
+  if (!historicalWork) {
+    throw planningError(
+      'tme_legacy_evidence_missing',
+      'Legacy acquisition approach reconciliation requires canonical downstream mission work.'
+    );
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+    legacyReconciliationEligible: true,
+    originalStage: mission.stage,
+    historicalWork,
+  };
+}
+
 function validateAcquisitionApproachOutput(output, ctx = {}) {
   if (!output || !output.approachPayload) {
     throw validationError('tme_contribution_missing', 'Acquisition approach contribution is missing.');
@@ -2094,6 +2200,101 @@ async function advanceAcquisitionApproach(input = {}) {
     transactionId: staged.transactionId,
     missionVersion: staged.missionVersion,
     maxResult: staged.output.maxResult,
+  };
+}
+
+async function reconcileLegacyAcquisitionApproach(input = {}) {
+  const { engine, mission, tenantId, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const existing = findLatestAcquisitionApproach(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      approach: existing,
+      snapshot,
+      reconciliation: {
+        alreadyReconciled: true,
+        originalStage: mission.stage,
+      },
+    };
+  }
+
+  const originalStage = mission.stage;
+  const staged = await executeMissionStage({
+    engine,
+    missionId: mission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.MAX,
+    stage: 'legacy_reconciliation',
+    operatorId,
+    validatePreconditions: (ctx) => validateLegacyAcquisitionApproachReconciliationPreconditions({
+      ...ctx,
+      executionRequest: input.executionRequest,
+    }),
+    execute: async ({ mission: current, transactionId }) => {
+      const maxResult = await runMaxApproachForAmoMission(current, {
+        ...input,
+        transactionId,
+        approach:
+          input.approach ||
+          input.selectedApproach ||
+          input.executionRequest?.payload?.approach ||
+          input.executionRequest?.payload?.selectedApproach ||
+          null,
+      });
+      const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+        ? maxResult
+        : executionResultFromStageOutput(
+          { maxResult, approachPayload: maxResult && maxResult.contributions },
+          { specialist: SPECIALISTS.MAX, transactionId }
+        );
+      const approachPayload =
+        maxResult
+        && maxResult.contributions
+        && Object.keys(maxResult.contributions).length
+          ? acquisitionApproachPayloadFromMaxResult(maxResult)
+          : null;
+      return {
+        maxResult,
+        approachPayload: approachPayload
+          ? {
+            ...approachPayload,
+            legacyReconciliation: {
+              spec: 'SPEC-250',
+              mode: 'legacy_acquisition_approach_reconciliation',
+              originalStage,
+              reconciledAt: new Date().toISOString(),
+              historicalPreparationPreserved: true,
+              lifecycleRewound: false,
+              externalAction: false,
+            },
+          }
+          : null,
+        executionResult,
+        missionId: current.id,
+      };
+    },
+    validateOutput: validateAcquisitionApproachOutput,
+    commit: (ctx) => commitAcquisitionApproachStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  return {
+    alreadyExecuted: false,
+    approach: staged.commitResult.approach,
+    snapshot: staged.commitResult.snapshot,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    maxResult: staged.output.maxResult,
+    reconciliation: {
+      spec: 'SPEC-250',
+      originalStage,
+      stageAfter: staged.commitResult.snapshot.mission.stage,
+      lifecycleRewound: staged.commitResult.snapshot.mission.stage !== originalStage,
+    },
   };
 }
 
@@ -2846,6 +3047,7 @@ module.exports = {
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
   advanceAcquisitionApproach,
+  reconcileLegacyAcquisitionApproach,
   advancePennyPaidAcquisition,
   advancePaigeVariants,
   advanceEmmettCapacity,
@@ -2871,4 +3073,6 @@ module.exports = {
   buildPaigeVariantsPayload,
   ensureStagesForPaige,
   ensureStageForAcquisitionApproach,
+  validateLegacyAcquisitionApproachReconciliationPreconditions,
+  canonicalWorkForLegacyReconciliation,
 };

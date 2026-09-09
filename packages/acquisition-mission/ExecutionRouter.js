@@ -136,6 +136,8 @@ function defaultHandlers() {
     }),
     [EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH]: (ctx) =>
       approval.advanceAcquisitionApproach(ctx),
+    [EXECUTION_INTENTS.RECONCILE_ACQUISITION_APPROACH]: (ctx) =>
+      approval.reconcileLegacyAcquisitionApproach(ctx),
     [EXECUTION_INTENTS.ASSESS_PAID_ACQUISITION]: (ctx) =>
       approval.advancePennyPaidAcquisition(ctx),
     [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),

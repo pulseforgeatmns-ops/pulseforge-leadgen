@@ -49,7 +49,16 @@ function collectEvidence(mission, contributions = [], extras = {}) {
   if (approach && approach.decision) {
     const selected = approach.selected;
     const rationale = approach.decision.rationale;
+    const reconciliation = approach.payload && approach.payload.legacyReconciliation;
+    if (reconciliation) {
+      reasons.push(
+        `This mission originated before canonical acquisition-approach selection was required; Max reconciled the missing planning decision while preserving historical ${reconciliation.originalStage || 'downstream'} work.`
+      );
+    }
     reasons.push(`Max selected ${selected} as the acquisition approach.${rationale ? ` ${rationale}` : ''}`);
+    if (reconciliation) {
+      reasons.push('Historical preparation remains evidence and is only actionable when the selected approach and current approval rules permit it.');
+    }
   }
 
   const paidRecommendation = penny?.payload?.paidAcquisitionRecommendation;

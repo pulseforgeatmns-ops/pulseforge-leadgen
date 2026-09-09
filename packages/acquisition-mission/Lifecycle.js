@@ -217,6 +217,7 @@ function derivePendingOperatorDecisionForStage(mission, targetStage, contributio
   if (targetStage === STAGES.READY) {
     const ctx = specialistContext(contributions, { missionId: mission.id });
     if (!ctx.paigeComplete || !ctx.emmettComplete || ctx.deliverabilityPaused) return null;
+    if (!ctx.acquisitionApproachPermitsOutbound) return null;
     if (isExecutionApproved(contributions, mission.id, ctx)) return null;
     return buildPendingExecutionDecision(mission, contributions);
   }

@@ -191,9 +191,7 @@ function refresh(store, mission) {
       mission.pendingOperatorDecision = null;
     } else {
       const pending = derivePendingOperatorDecisionForStage(mission, STAGES.READY, contributions);
-      if (pending) {
-        mission.pendingOperatorDecision = pending;
-      }
+      mission.pendingOperatorDecision = pending || null;
     }
   }
   const refreshedCtx = specialistContext(contributions, missionExtras);
