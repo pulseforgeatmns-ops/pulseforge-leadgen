@@ -150,8 +150,8 @@ async function insertRevision(client, row, operation, opts = {}) {
       operation,
       opts.actorId || row.createdBy || null,
       opts.actorRole || null,
-      row,
-      row.evidence || [],
+      JSON.stringify(row),
+      JSON.stringify(row.evidence || []),
       opts.rationale || null,
     ]
   );
