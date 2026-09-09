@@ -4,13 +4,17 @@
  * SPEC-118 — "Why is this mission here?" answered from evidence, never opinion.
  */
 
-const { SPECIALISTS, round2 } = require('./types');
+const { SPECIALISTS, CONTRIBUTION_KINDS, round2 } = require('./types');
+const { latestApproachDecision } = require('./AcquisitionApproach');
 
 function collectEvidence(mission, contributions = [], extras = {}) {
   const reasons = [];
   const scout = [...contributions].reverse().find((row) => row.specialist === SPECIALISTS.SCOUT);
-  const max = [...contributions].reverse().find((row) => row.specialist === SPECIALISTS.MAX);
+  const max = [...contributions]
+    .reverse()
+    .find((row) => row.specialist === SPECIALISTS.MAX && row.kind === CONTRIBUTION_KINDS.PRIORITIZATION);
   const emmett = [...contributions].reverse().find((row) => row.specialist === SPECIALISTS.EMMETT);
+  const approach = latestApproachDecision(contributions);
 
   const objectiveReason =
     (max && max.payload && (max.payload.objectiveReason || (max.payload.objectives && max.payload.objectives[0])))
@@ -33,6 +37,12 @@ function collectEvidence(mission, contributions = [], extras = {}) {
     || 0;
   if (qualified) {
     reasons.push(`Scout identified ${qualified} qualified firms.`);
+  }
+
+  if (approach && approach.decision) {
+    const selected = approach.selected;
+    const rationale = approach.decision.rationale;
+    reasons.push(`Max selected ${selected} as the acquisition approach.${rationale ? ` ${rationale}` : ''}`);
   }
 
   const capacity = extras.capacityAvailable

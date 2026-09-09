@@ -8,6 +8,7 @@
 const { asText, SPECIALISTS, CONTRIBUTION_KINDS, clone } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const { buildSharedContext } = require('./Context');
+const { latestApproachDecision } = require('./AcquisitionApproach');
 
 function latestContribution(contributions = [], specialist, kind) {
   return [...contributions]
@@ -83,6 +84,7 @@ function paigeInput(mission, extras = {}) {
     || (contributions.length ? buildSharedContext(mission, contributions) : null);
   const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
   const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+  const approachDecision = latestApproachDecision(contributions);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
   const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
@@ -101,6 +103,7 @@ function paigeInput(mission, extras = {}) {
     structuredMission: plan,
     scoutDiscovery: scoutPayload,
     maxPrioritization: maxPayload,
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
     priorities: maxPayload.priorities || [],
     objectives: maxPayload.objectives || [],
     objectiveReason: maxPayload.objectiveReason || null,
@@ -152,6 +155,7 @@ function emmettInput(mission, extras = {}) {
   const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
   const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
   const paigeRow = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+  const approachDecision = latestApproachDecision(contributions);
   const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
@@ -182,6 +186,7 @@ function emmettInput(mission, extras = {}) {
     structuredMission: plan,
     scoutDiscovery: scoutPayload,
     maxPrioritization: maxPayload,
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
     paigeReadiness,
     rankedTargets: maxPayload.rankedTargets || maxPayload.priorities || [],
     priorities: maxPayload.priorities || [],
@@ -270,6 +275,8 @@ function maxInput(mission, extras = {}) {
       : [],
     evidence: discoveryPayload ? clone(discoveryPayload.evidence || []) : [],
     buyingSignals: discoveryPayload ? clone(discoveryPayload.buyingSignals || []) : [],
+    maxPrioritization: latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION)?.payload || null,
+    acquisitionApproach: latestApproachDecision(contributions)?.decision || null,
     operatorPrioritizationApproval: operatorApproval ? clone(operatorApproval.payload || {}) : null,
     constraints: (plan.constraints || []).slice(),
     observations: clone(extras.observations || []),

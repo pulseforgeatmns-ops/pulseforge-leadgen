@@ -134,6 +134,8 @@ function defaultHandlers() {
       runEmmett: ctx.runEmmett,
       infrastructureSnapshot: ctx.infrastructureSnapshot,
     }),
+    [EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH]: (ctx) =>
+      approval.advanceAcquisitionApproach(ctx),
     [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
     [EXECUTION_INTENTS.GENERATE_CAPACITY]: (ctx) => approval.advanceEmmettCapacity(ctx),
     [EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH]: (ctx) => approval.advancePreparedOutreachRevision(ctx),
@@ -246,6 +248,7 @@ function handlerContext(request, context, mission, runtimeOwner) {
     runScout: context.runScout,
     runPaige: context.runPaige,
     runMax: context.runMax,
+    runMaxApproach: context.runMaxApproach,
     runEmmett: context.runEmmett,
     infrastructureSnapshot: context.infrastructureSnapshot,
     scoutCompanies: context.scoutCompanies,

@@ -28,6 +28,7 @@ const {
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   advanceEmmettCapacity,
 } = require('../../max/workspace/AmoOperatorApproval');
@@ -75,6 +76,12 @@ describe('SPEC-068 — Canonical Emmett PREPARE Dispatch', () => {
       question: 'Approved prioritization.',
     });
     await advanceMaxPrioritization({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      allowFixtureFallback: true,
+    });
+    await advanceAcquisitionApproach({
       engine,
       mission: engine.get(mission.id, '10'),
       tenantId: '10',

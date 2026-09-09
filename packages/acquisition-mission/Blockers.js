@@ -64,6 +64,16 @@ function inferBlockers(mission, ctx) {
   if (mission.stage === STAGES.PLAN && !ctx.maxComplete && !ctx.maxHasObjectives) {
     blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_MAX, specialist: 'max' }));
   }
+  if (mission.stage === STAGES.PLAN && ctx.maxComplete && !ctx.acquisitionApproachComplete) {
+    blockers.push(createBlocker({
+      kind: BLOCKER_KINDS.WAITING_FOR_ACQUISITION_APPROACH,
+      specialist: 'max',
+      reason: 'Max acquisition approach decision is required before channel-specific preparation.',
+    }));
+  }
+  if (mission.stage === STAGES.PLAN && ctx.acquisitionApproachBlocker) {
+    blockers.push(createBlocker(ctx.acquisitionApproachBlocker));
+  }
   if (mission.stage === STAGES.PREPARE && !ctx.paigeComplete) {
     blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_PAIGE, specialist: 'paige' }));
   }

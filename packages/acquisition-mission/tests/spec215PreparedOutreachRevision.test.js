@@ -20,6 +20,7 @@ const {
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   advanceEmmettCapacity,
   advanceExecutionAfterApproval,
@@ -38,6 +39,9 @@ async function preparedRuntime() {
     engine, mission: engine.get(mission.id, '10'), tenantId: '10', question: 'Approved prioritization.',
   });
   await advanceMaxPrioritization({
+    engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
+  });
+  await advanceAcquisitionApproach({
     engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
   });
   await advancePaigeVariants({
