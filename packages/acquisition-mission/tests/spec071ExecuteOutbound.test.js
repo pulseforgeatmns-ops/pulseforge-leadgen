@@ -30,6 +30,7 @@ const {
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   advanceEmmettCapacity,
   advanceExecutionAfterApproval,
@@ -107,6 +108,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     await advanceMaxPrioritization({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
+    await advanceAcquisitionApproach({
+      engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
+    });
     await advancePaigeVariants({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
@@ -133,7 +137,11 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
             return {
               ...item,
               candidateId,
-              paige: variant,
+              paige: {
+                ...variant,
+                candidateId,
+                bindingScope: variant?.bindingScope || 'mission',
+              },
             };
           }),
         },
@@ -307,6 +315,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     await advanceMaxPrioritization({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
+    await advanceAcquisitionApproach({
+      engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
+    });
     await advancePaigeVariants({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
@@ -321,7 +332,15 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
             email: 'alex@harborlaw.com',
             position: 1,
             sendable: true,
-            paige: { variantLabel: 'Primary', author: 'paige', source: 'paige', ready: true, sendable: true },
+            paige: {
+              candidateId: 'co-harbor',
+              bindingScope: 'mission',
+              variantLabel: 'Primary',
+              author: 'paige',
+              source: 'paige',
+              ready: true,
+              sendable: true,
+            },
           }],
         },
         deliverability: { status: 'healthy' },

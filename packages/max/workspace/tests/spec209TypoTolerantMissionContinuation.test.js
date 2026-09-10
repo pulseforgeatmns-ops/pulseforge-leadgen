@@ -129,7 +129,7 @@ describe('SPEC-209 — Typo-Tolerant Mission Continuation', () => {
         assert.equal(intent.via, 'mission_continuation');
         assert.equal(
           intent.missionContinuation.intent,
-          EXECUTION_INTENTS.GENERATE_VARIANTS
+          EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH
         );
       });
     }
@@ -203,7 +203,7 @@ describe('SPEC-209 — Typo-Tolerant Mission Continuation', () => {
   });
 
   describe('analyzeOperatorIntent — end-to-end typo continuation', () => {
-    it('continuee requests GENERATE_VARIANTS when one eligible progression exists', async () => {
+    it('continuee requests DECIDE_ACQUISITION_APPROACH when one eligible progression exists', async () => {
       const engine = amo.createAcquisitionMissionEngine();
       const mission = engine.create({
         tenantId: '10',
@@ -223,7 +223,7 @@ describe('SPEC-209 — Typo-Tolerant Mission Continuation', () => {
       assert.equal(intent.conversationIntent.via, 'mission_continuation');
       assert.equal(
         intent.conversationIntent.missionContinuation.intent,
-        EXECUTION_INTENTS.GENERATE_VARIANTS
+        EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH
       );
     });
 

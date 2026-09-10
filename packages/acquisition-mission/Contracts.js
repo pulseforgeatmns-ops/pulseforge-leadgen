@@ -41,6 +41,7 @@ const PRODUCES = Object.freeze({
   [SPECIALISTS.MAX]: [
     'priorities', 'objectives', 'timing', 'recommendations',
     'constraints', 'delegation', 'structuredMission',
+    'acquisitionApproach', 'approachDecision', 'selectedApproach', 'approach',
   ],
   [SPECIALISTS.PAIGE]: [
     'messaging', 'experiments', 'variants', 'subjects', 'subject',

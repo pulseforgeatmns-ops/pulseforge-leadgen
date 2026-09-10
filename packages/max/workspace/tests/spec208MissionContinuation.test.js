@@ -14,6 +14,7 @@ const {
   OPERATOR_DECISION_KINDS,
   EXECUTION_INTENTS,
   resolveMissionContinuation,
+  canAutoAdvanceAcquisitionApproach,
   canAutoAdvanceOutreachToPaige,
 } = amo;
 const {
@@ -74,7 +75,7 @@ async function seedUnderstandMaxComplete(engine, mission) {
 
 describe('SPEC-208 — State-Aware Conversational Mission Continuation', () => {
   describe('MissionProgression.resolveMissionContinuation', () => {
-    it('returns execute with GENERATE_VARIANTS when Paige is the sole eligible step', async () => {
+    it('returns execute with DECIDE_ACQUISITION_APPROACH when Max prioritization is complete', async () => {
       const engine = amo.createAcquisitionMissionEngine();
       const mission = engine.create({
         tenantId: '10',
@@ -86,13 +87,15 @@ describe('SPEC-208 — State-Aware Conversational Mission Continuation', () => {
 
       assert.equal(snapshot.mission.stage, STAGES.UNDERSTAND);
       assert.equal(ctx.maxComplete, true);
+      assert.equal(ctx.acquisitionApproachComplete, false);
       assert.ok(!ctx.paigeComplete);
-      assert.equal(canAutoAdvanceOutreachToPaige(snapshot), true);
+      assert.equal(canAutoAdvanceAcquisitionApproach(snapshot), true);
+      assert.equal(canAutoAdvanceOutreachToPaige(snapshot), false);
 
       const resolution = resolveMissionContinuation(snapshot);
       assert.equal(resolution.kind, 'execute');
-      assert.equal(resolution.progression.intent, EXECUTION_INTENTS.GENERATE_VARIANTS);
-      assert.equal(resolution.progression.action, 'generate_variants');
+      assert.equal(resolution.progression.intent, EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH);
+      assert.equal(resolution.progression.action, 'decide_acquisition_approach');
     });
 
     it('returns pending_decision when a consumable pending decision exists', () => {
@@ -140,7 +143,7 @@ describe('SPEC-208 — State-Aware Conversational Mission Continuation', () => {
 
       assert.equal(intent.intent, THINKING_MODES.EXECUTE);
       assert.equal(intent.via, 'mission_continuation');
-      assert.equal(intent.missionContinuation.intent, EXECUTION_INTENTS.GENERATE_VARIANTS);
+      assert.equal(intent.missionContinuation.intent, EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH);
     });
 
     it('preserves read-only conversational continue without an active mission snapshot', () => {
@@ -168,7 +171,7 @@ describe('SPEC-208 — State-Aware Conversational Mission Continuation', () => {
     });
   });
 
-  describe('production regression — understand stage → Paige variants', () => {
+  describe('production regression — understand stage → acquisition approach decision', () => {
     let engine;
     let mission;
     let runtime;
@@ -202,11 +205,11 @@ describe('SPEC-208 — State-Aware Conversational Mission Continuation', () => {
       assert.equal(intent.conversationIntent.via, 'mission_continuation');
       assert.equal(
         intent.conversationIntent.missionContinuation.intent,
-        EXECUTION_INTENTS.GENERATE_VARIANTS
+        EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH
       );
     });
 
-    it('detectExecutionAction routes to generate_variants', async () => {
+    it('detectExecutionAction routes to decide_acquisition_approach', async () => {
       const intent = await analyzeOperatorIntent({
         question: 'continue',
         mission: snapshot.mission,
@@ -214,10 +217,10 @@ describe('SPEC-208 — State-Aware Conversational Mission Continuation', () => {
         resolveMission: false,
       });
       const action = detectExecutionAction('continue', snapshot, intent);
-      assert.equal(action, 'generate_variants');
+      assert.equal(action, 'decide_acquisition_approach');
     });
 
-    it('maybeHandleAcquisitionMissionExecution runs Paige via canonical CER', async () => {
+    it('maybeHandleAcquisitionMissionExecution runs Max approach decision via canonical CER', async () => {
       const intent = await analyzeOperatorIntent({
         question: 'continue',
         mission: snapshot.mission,
@@ -240,12 +243,13 @@ describe('SPEC-208 — State-Aware Conversational Mission Continuation', () => {
       });
 
       assert.ok(turn);
-      assert.equal(turn.action, 'generate_variants');
-      assert.equal(turn.executionRequest.intent, EXECUTION_INTENTS.GENERATE_VARIANTS);
+      assert.equal(turn.action, 'decide_acquisition_approach');
+      assert.equal(turn.executionRequest.intent, EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH);
 
       const after = engine.inspect(mission.id, { tenantId: '10' });
       const ctx = specialistContext(after.contributions || []);
-      assert.equal(ctx.paigeComplete, true);
+      assert.equal(ctx.acquisitionApproachComplete, true);
+      assert.ok(!ctx.paigeComplete);
     });
 
     it('WorkspaceEngine.ask does not fall back to today\'s briefing', async () => {
@@ -280,7 +284,9 @@ describe('SPEC-208 — State-Aware Conversational Mission Continuation', () => {
       assert.doesNotMatch(result.prose, /command deck/i);
 
       const after = engine.inspect(mission.id, { tenantId: '10' });
-      assert.equal(specialistContext(after.contributions || []).paigeComplete, true);
+      const ctx = specialistContext(after.contributions || []);
+      assert.equal(ctx.acquisitionApproachComplete, true);
+      assert.ok(!ctx.paigeComplete);
     });
 
     it('active mission owns the turn through workspace ownership', async () => {

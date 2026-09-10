@@ -42,6 +42,12 @@ const {
   buildPrioritizationPayload,
 } = require('./MaxPrioritizationExecutor');
 const {
+  runMaxApproachForAmoMission,
+  acquisitionApproachPayloadFromMaxResult,
+  buildAcquisitionApproachPayload,
+  findLatestAcquisitionApproach,
+} = require('./MaxAcquisitionApproachExecutor');
+const {
   buildPaigeVariantsPayload,
   runPaigeVariants,
   runPaigeForAmoMission,
@@ -1530,6 +1536,53 @@ function validateMaxPrioritizationOutput(output, ctx = {}) {
   output.executionResult = executionResult;
 }
 
+function validateAcquisitionApproachPreconditions({ mission, engine, tenantId }) {
+  if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
+  if (mission.planCancelled === true || /cancelled/i.test(String(mission.status || ''))) {
+    throw planningError('tme_mission_inactive', 'Mission is not active.');
+  }
+  const snapshot = engine.inspect(mission.id, { tenantId });
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete) {
+    throw planningError('tme_max_incomplete', 'Max prioritization is required before acquisition approach selection.');
+  }
+  if (findLatestAcquisitionApproach(snapshot.contributions || [])) {
+    throw planningError('tme_already_executed', 'Acquisition approach already committed.');
+  }
+  if (mission.stage !== STAGES.PLAN) {
+    throw planningError('tme_wrong_stage', `Acquisition approach selection requires stage ${STAGES.PLAN}.`);
+  }
+  return {
+    missionExists: true,
+    missionActive: true,
+    missionLocked: true,
+    specialistAvailable: true,
+    requiredEvidencePresent: true,
+  };
+}
+
+function validateAcquisitionApproachOutput(output, ctx = {}) {
+  if (!output || !output.approachPayload) {
+    throw validationError('tme_contribution_missing', 'Acquisition approach contribution is missing.');
+  }
+  const payload = output.approachPayload;
+  assertContributionContract(SPECIALISTS.MAX, payload);
+  assertConfidenceValid(payload.confidence, { required: false });
+  if (!payload.acquisitionApproach || !payload.acquisitionApproach.selectedApproach) {
+    throw validationError('tme_approach_invalid', 'Acquisition approach decision must include selectedApproach.');
+  }
+  const executionResult = output.executionResult || executionResultFromStageOutput(output, {
+    specialist: SPECIALISTS.MAX,
+    transactionId: ctx.transactionId,
+  });
+  assertExecutionResult(executionResult, {
+    specialist: SPECIALISTS.MAX,
+    requireContributions: true,
+    requireEvidence: false,
+  });
+  output.executionResult = executionResult;
+}
+
 function validatePaigeOutput(output, ctx = {}) {
   if (!output || !output.variantsPayload) {
     throw validationError('tme_contribution_missing', 'Paige variants contribution is missing.');
@@ -1592,6 +1645,55 @@ function commitMaxPrioritizationStage({
   });
   return {
     prioritization: contribution.contribution,
+    snapshot,
+  };
+}
+
+function commitAcquisitionApproachStage({
+  engine,
+  mission,
+  tenantId,
+  output,
+  transactionId,
+  missionVersion,
+}) {
+  const missionId = (mission && mission.id) || output.missionId;
+  const { approachPayload } = output;
+  const payload = { ...approachPayload, transactionId };
+
+  const contribution = engine.contribute(
+    missionId,
+    {
+      specialist: SPECIALISTS.MAX,
+      kind: CONTRIBUTION_KINDS.ACQUISITION_APPROACH,
+      payload,
+    },
+    { tenantId }
+  );
+
+  const updated = engine.get(missionId, tenantId);
+  bumpMissionVersion(updated, transactionId);
+  engine.store.putMission(updated);
+  engine.store.addEvent(createEvent({
+    missionId,
+    kind: EVENT_KINDS.EXECUTION_COMMITTED,
+    specialist: SPECIALISTS.MAX,
+    label: 'Max acquisition approach committed',
+    payload: {
+      transactionId,
+      missionVersion: updated.version,
+      priorVersion: missionVersion,
+      contributionId: contribution.contribution.id,
+      selectedApproach: payload.acquisitionApproach?.selectedApproach || payload.selectedApproach,
+    },
+  }));
+
+  const snapshot = engine.inspect(missionId, { tenantId });
+  assertMissionStateConsistent(snapshot.mission, {
+    contributions: snapshot.contributions,
+  });
+  return {
+    approach: contribution.contribution,
     snapshot,
   };
 }
@@ -1715,13 +1817,26 @@ function ensureStagesForPaige(engine, missionId, tenantId) {
 
   const afterPlan = engine.inspect(missionId, { tenantId });
   const ctxAfterPlan = specialistContext(afterPlan.contributions || []);
-  if (mission.stage === STAGES.PLAN && ctxAfterPlan.maxComplete) {
+  if (mission.stage === STAGES.PLAN && ctxAfterPlan.maxComplete && ctxAfterPlan.acquisitionApproachComplete) {
     const prepareGate = canEnter(STAGES.PREPARE, ctxAfterPlan);
     if (!prepareGate.ok) throw planningError('tme_stage_blocked', prepareGate.reason);
     engine.progress(missionId, { role: 'max' }, { tenantId, stage: STAGES.PREPARE });
     mission = engine.get(missionId, tenantId);
   }
 
+  return mission;
+}
+
+function ensureStageForAcquisitionApproach(engine, missionId, tenantId) {
+  let mission = engine.get(missionId, tenantId);
+  if (mission.stage === STAGES.UNDERSTAND) {
+    const snapshot = engine.inspect(missionId, { tenantId });
+    const ctx = specialistContext(snapshot.contributions || []);
+    const planGate = canEnter(STAGES.PLAN, ctx);
+    if (!planGate.ok) throw planningError('tme_stage_blocked', planGate.reason);
+    engine.progress(missionId, { role: 'max' }, { tenantId, stage: STAGES.PLAN });
+    mission = engine.get(missionId, tenantId);
+  }
   return mission;
 }
 
@@ -1789,6 +1904,75 @@ async function advanceMaxPrioritization(input = {}) {
     snapshot: staged.commitResult.snapshot,
     transactionId: staged.transactionId,
     missionVersion: staged.missionVersion,
+  };
+}
+
+async function advanceAcquisitionApproach(input = {}) {
+  const { engine, mission, tenantId, operatorId } = input;
+  if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const currentMission = ensureStageForAcquisitionApproach(engine, mission.id, tenantId);
+  const snapshot = engine.inspect(currentMission.id, { tenantId });
+  const existing = findLatestAcquisitionApproach(snapshot.contributions || []);
+  if (existing) {
+    return {
+      alreadyExecuted: true,
+      approach: existing,
+      snapshot: engine.inspect(currentMission.id, { tenantId }),
+    };
+  }
+
+  const staged = await executeMissionStage({
+    engine,
+    missionId: currentMission.id,
+    tenantId,
+    pool: input.pool,
+    specialist: SPECIALISTS.MAX,
+    stage: STAGES.PLAN,
+    operatorId,
+    validatePreconditions: (ctx) => validateAcquisitionApproachPreconditions(ctx),
+    execute: async ({ mission: current, transactionId }) => {
+      const maxResult = await runMaxApproachForAmoMission(current, {
+        ...input,
+        transactionId,
+        approach:
+          input.approach ||
+          input.selectedApproach ||
+          input.executionRequest?.payload?.approach ||
+          input.executionRequest?.payload?.selectedApproach ||
+          null,
+      });
+      const executionResult = maxResult && maxResult.spec === 'SPEC-132'
+        ? maxResult
+        : executionResultFromStageOutput(
+          { maxResult, approachPayload: maxResult && maxResult.contributions },
+          { specialist: SPECIALISTS.MAX, transactionId }
+        );
+      const approachPayload =
+        maxResult
+        && maxResult.contributions
+        && Object.keys(maxResult.contributions).length
+          ? acquisitionApproachPayloadFromMaxResult(maxResult)
+          : null;
+      return {
+        maxResult,
+        approachPayload,
+        executionResult,
+        missionId: current.id,
+      };
+    },
+    validateOutput: validateAcquisitionApproachOutput,
+    commit: (ctx) => commitAcquisitionApproachStage(ctx),
+    persistDurable: bindPersistDurable(input, engine, tenantId),
+  });
+
+  return {
+    alreadyExecuted: false,
+    approach: staged.commitResult.approach,
+    snapshot: staged.commitResult.snapshot,
+    transactionId: staged.transactionId,
+    missionVersion: staged.missionVersion,
+    maxResult: staged.output.maxResult,
   };
 }
 
@@ -2463,6 +2647,7 @@ module.exports = {
   advanceDiscoveryInvestigationAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   advanceEmmettCapacity,
   advancePreparedOutreachRevision,
@@ -2477,8 +2662,11 @@ module.exports = {
   findMaxPrioritization,
   findPaigeVariants,
   runMaxPrioritizationForAmoMission,
+  runMaxApproachForAmoMission,
   runPaigeForAmoMission,
   buildMaxPrioritizationPayload,
+  buildAcquisitionApproachPayload,
   buildPaigeVariantsPayload,
   ensureStagesForPaige,
+  ensureStageForAcquisitionApproach,
 };
