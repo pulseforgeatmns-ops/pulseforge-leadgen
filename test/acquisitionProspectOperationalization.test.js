@@ -7,6 +7,7 @@ const {
   operationalizeAcquisitionProspect,
   getAcquisitionProspectProjection,
   projectionIdFor,
+  resolveOperationalVertical,
 } = require('../services/acquisitionProspectOperationalization');
 
 function now() {
@@ -64,6 +65,10 @@ function createFakePool(seed = {}) {
     companies: seed.companies || [],
     prospects: seed.prospects || [],
     projections: seed.projections || [],
+    clients: seed.clients || [
+      { id: 13, target_verticals: [], vertical_tiers: {} },
+      { id: 10, target_verticals: [{ vertical: 'property_manager' }], vertical_tiers: { property_manager: 'A' } },
+    ],
     statements: [],
     companySeq: 1,
     prospectSeq: 1,
@@ -98,6 +103,13 @@ function createFakePool(seed = {}) {
         return {
           rows: state.knowledge
             .filter((row) => row.tenant_id === params[0] && row.object_type === 'outreach_asset' && row.lifecycle_state !== 'archived')
+            .map(clone),
+        };
+      }
+      if (/SELECT target_verticals, vertical_tiers FROM clients WHERE id = \$1/i.test(normalized)) {
+        return {
+          rows: state.clients
+            .filter((row) => row.id === params[0])
             .map(clone),
         };
       }
@@ -230,9 +242,53 @@ test('operationalizes an AK prospect into a tenant-scoped prospect without fabri
   assert.deepEqual(result.linkedOutreachAssetIds, ['ak_babrun_outreach_final_01']);
   assert.equal(result.fabricatedEmail, false);
   assert.equal(pool.state.prospects[0].email, null);
+  assert.equal(pool.state.prospects[0].vertical, null);
   assert.equal(pool.state.prospects[0].acquisition_knowledge_object_id, 'ak_babrun_prospect_p001');
+  assert.equal(pool.state.prospects[0].acquisition_metadata.sourceIndustry, 'Cleaning / home services');
+  assert.equal(pool.state.prospects[0].acquisition_metadata.sourceAkObjectId, 'ak_babrun_prospect_p001');
+  assert.equal(pool.state.prospects[0].acquisition_metadata.verticalResolution.reason, 'no_safe_canonical_mapping');
   assert.equal(pool.state.projections[0].epistemic_state, 'UNKNOWN');
   assert.equal(pool.state.projections[0].validation_state, 'UNVALIDATED');
+});
+
+test('resolves free-form industry with known canonical mapping', () => {
+  assert.deepEqual(resolveOperationalVertical('Home services'), {
+    sourceIndustry: 'Home services',
+    vertical: 'home_services',
+    matched: true,
+    reason: 'already_canonical_or_exact_supported_slug',
+  });
+});
+
+test('unknown free-form industry resolves to null', () => {
+  assert.deepEqual(resolveOperationalVertical('Founder-led specialty trades with bespoke crews'), {
+    sourceIndustry: 'Founder-led specialty trades with bespoke crews',
+    vertical: null,
+    matched: false,
+    reason: 'no_safe_canonical_mapping',
+  });
+});
+
+test('already-canonical vertical passes through only when supported', () => {
+  assert.deepEqual(resolveOperationalVertical('commercial_cleaning'), {
+    sourceIndustry: 'commercial_cleaning',
+    vertical: 'commercial_cleaning',
+    matched: true,
+    reason: 'already_canonical_or_exact_supported_slug',
+  });
+});
+
+test('free-form slash industry never becomes an invented prospect vertical', async () => {
+  const pool = createFakePool();
+  await operationalizeAcquisitionProspect({
+    tenantId: 13,
+    acquisitionKnowledgeObjectId: 'ak_babrun_prospect_p001',
+    apply: true,
+  }, { pool });
+
+  assert.equal(pool.state.prospects[0].vertical, null);
+  assert.notEqual(pool.state.prospects[0].vertical, 'cleaning_home_services');
+  assert.equal(pool.state.prospects[0].acquisition_metadata.sourceIndustry, 'Cleaning / home services');
 });
 
 test('operationalization is idempotent and retry-safe', async () => {
