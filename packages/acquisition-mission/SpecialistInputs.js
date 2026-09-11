@@ -8,6 +8,7 @@
 const { asText, SPECIALISTS, CONTRIBUTION_KINDS, clone } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const { buildSharedContext } = require('./Context');
+const { latestApproachDecision } = require('./AcquisitionApproach');
 
 function latestContribution(contributions = [], specialist, kind) {
   return [...contributions]
@@ -83,6 +84,7 @@ function paigeInput(mission, extras = {}) {
     || (contributions.length ? buildSharedContext(mission, contributions) : null);
   const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
   const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+  const approachDecision = latestApproachDecision(contributions);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
   const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
@@ -101,6 +103,7 @@ function paigeInput(mission, extras = {}) {
     structuredMission: plan,
     scoutDiscovery: scoutPayload,
     maxPrioritization: maxPayload,
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
     priorities: maxPayload.priorities || [],
     objectives: maxPayload.objectives || [],
     objectiveReason: maxPayload.objectiveReason || null,
@@ -113,6 +116,62 @@ function paigeInput(mission, extras = {}) {
     operatorApproval: prioritizationApproval
       ? { consumed: prioritizationApproval.payload?.consumed === true }
       : null,
+    workspaceContext: sharedContext ? {
+      objective: sharedContext.objective,
+      missionUnderstanding: sharedContext.mission?.missionUnderstanding || null,
+    } : null,
+    structuredOnly: true,
+    missionBound: true,
+  };
+}
+
+/**
+ * Penny receives mission-bound paid acquisition context. She evaluates paid
+ * viability and test design; she does not source business truth from ad accounts.
+ */
+function pennyInput(mission, extras = {}) {
+  const plan = requireStructuredMission(mission);
+  const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
+  const sharedContext = extras.sharedContext
+    || (contributions.length ? buildSharedContext(mission, contributions) : null);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+  const approachDecision = latestApproachDecision(contributions);
+  const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
+  const maxPayload = maxRow?.payload || sharedContext?.max || {};
+
+  return {
+    tenantId: String(mission.tenantId || mission.clientId || ''),
+    missionId: mission.id,
+    objective: plan.objective || mission.objective,
+    successMetric: { ...(plan.successMetric || plan.success || {}) },
+    targetSegment: plan.market?.label || plan.market?.segment || mission.targetSegment || null,
+    market: { ...(plan.market || {}) },
+    buyer: plan.market?.buyer || null,
+    geography: { ...(plan.geography || {}) },
+    constraints: [
+      ...(plan.constraints || []).slice(),
+      ...((maxPayload.constraints || []).filter(Boolean)),
+      ...((extras.constraints || []).filter(Boolean)),
+    ],
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
+    maxPrioritization: maxPayload,
+    scoutDiscovery: scoutPayload,
+    priorities: maxPayload.priorities || maxPayload.rankedTargets || [],
+    evidence: [
+      ...(Array.isArray(scoutPayload.evidence) ? scoutPayload.evidence : []),
+      ...(Array.isArray(maxPayload.evidence) ? maxPayload.evidence : []),
+      ...(Array.isArray(extras.acquisitionEvidence) ? extras.acquisitionEvidence : []),
+    ],
+    knownAcquisitionHistory: extras.knownAcquisitionHistory || extras.acquisitionHistory || null,
+    conversionReadiness: extras.conversionReadiness || extras.conversionInfrastructure || null,
+    measurementReadiness: extras.measurementReadiness || extras.trackingReadiness || null,
+    candidatePaidChannels: Array.isArray(extras.candidatePaidChannels)
+      ? extras.candidatePaidChannels.slice()
+      : [],
+    platformEvidence: Array.isArray(extras.platformEvidence) ? extras.platformEvidence.slice() : [],
+    availableBudget: extras.availableBudget || extras.budgetConstraint || null,
+    operatorPreferences: extras.operatorPreferences || {},
     workspaceContext: sharedContext ? {
       objective: sharedContext.objective,
       missionUnderstanding: sharedContext.mission?.missionUnderstanding || null,
@@ -152,6 +211,7 @@ function emmettInput(mission, extras = {}) {
   const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
   const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
   const paigeRow = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+  const approachDecision = latestApproachDecision(contributions);
   const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
@@ -182,6 +242,7 @@ function emmettInput(mission, extras = {}) {
     structuredMission: plan,
     scoutDiscovery: scoutPayload,
     maxPrioritization: maxPayload,
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
     paigeReadiness,
     rankedTargets: maxPayload.rankedTargets || maxPayload.priorities || [],
     priorities: maxPayload.priorities || [],
@@ -270,6 +331,8 @@ function maxInput(mission, extras = {}) {
       : [],
     evidence: discoveryPayload ? clone(discoveryPayload.evidence || []) : [],
     buyingSignals: discoveryPayload ? clone(discoveryPayload.buyingSignals || []) : [],
+    maxPrioritization: latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION)?.payload || null,
+    acquisitionApproach: latestApproachDecision(contributions)?.decision || null,
     operatorPrioritizationApproval: operatorApproval ? clone(operatorApproval.payload || {}) : null,
     constraints: (plan.constraints || []).slice(),
     observations: clone(extras.observations || []),
@@ -322,6 +385,7 @@ module.exports = {
   scoutInput,
   maxInput,
   paigeInput,
+  pennyInput,
   veraInput,
   rexInput,
   emmettInput,

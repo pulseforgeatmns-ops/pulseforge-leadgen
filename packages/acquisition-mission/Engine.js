@@ -81,6 +81,10 @@ const { isStructuredMissionApproved } = require('./StructuredMission');
 const { buildPostDiscoveryPendingDecision } = require('./DecisionReadiness');
 const { buildExecutionReview, isExecutionApproved } = require('./ExecutionApproval');
 const { hasMeaningfulLearning, learningEligibilityFromStore } = require('./MeaningfulLearning');
+const {
+  latestApproachDecision,
+  buildApproachBlocker,
+} = require('./AcquisitionApproach');
 
 function actorRole(actor) {
   if (!actor) return '';
@@ -93,6 +97,10 @@ function contributionLabel(specialist, kind, payload = {}) {
   if (specialist === SPECIALISTS.MAX && kind === CONTRIBUTION_KINDS.PRIORITIZATION) {
     return 'Max ranked prospects';
   }
+  if (specialist === SPECIALISTS.MAX && kind === CONTRIBUTION_KINDS.ACQUISITION_APPROACH) {
+    return 'Max selected acquisition approach';
+  }
+  if (specialist === SPECIALISTS.PENNY) return 'Penny assessed paid acquisition';
   if (specialist === SPECIALISTS.PAIGE) {
     const variant = payload.variantLabel || payload.variant || (payload.variants && payload.variants[0] && payload.variants[0].label);
     return variant ? `Paige generated ${variant}` : 'Paige generated variants';
@@ -112,6 +120,12 @@ function extrasFrom(store, mission) {
   const outcomes = store.listOutcomes(mission.id);
   const events = store.listEvents(mission.id);
   const meaningfulLearning = hasMeaningfulLearning(store, mission);
+  const approachDecision = latestApproachDecision(contributions);
+  const penny = [...contributions].reverse().find(
+    (row) =>
+      row.specialist === SPECIALISTS.PENNY &&
+      row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+  );
   const emmett = [...contributions].reverse().find((row) => row.specialist === SPECIALISTS.EMMETT);
   const capacity = emmett && emmett.payload && emmett.payload.capacity;
   const warmup = emmett && emmett.payload && (emmett.payload.warmup || emmett.payload.deliverability);
@@ -135,6 +149,15 @@ function extrasFrom(store, mission) {
     meetings,
     capacityRemaining: capacity && (capacity.remaining != null ? capacity.remaining : capacity.recommended),
     capacityAvailable: Boolean(capacity && (capacity.recommended || capacity.available)),
+    acquisitionApproachComplete: Boolean(approachDecision),
+    acquisitionApproach: approachDecision ? approachDecision.selected : null,
+    acquisitionApproachDecision: approachDecision ? approachDecision.decision : null,
+    acquisitionApproachPermitsOutbound: approachDecision
+      ? (approachDecision.selected === 'outbound' || approachDecision.selected === 'both')
+      : false,
+    paidAcquisitionComplete: Boolean(penny),
+    paidAcquisitionRecommendation: penny ? penny.payload?.paidAcquisitionRecommendation || penny.payload : null,
+    acquisitionApproachBlocker: buildApproachBlocker(approachDecision, contributions),
     qualifiedCount: null,
     missionId: mission.id,
   };
@@ -168,9 +191,7 @@ function refresh(store, mission) {
       mission.pendingOperatorDecision = null;
     } else {
       const pending = derivePendingOperatorDecisionForStage(mission, STAGES.READY, contributions);
-      if (pending) {
-        mission.pendingOperatorDecision = pending;
-      }
+      mission.pendingOperatorDecision = pending || null;
     }
   }
   const refreshedCtx = specialistContext(contributions, missionExtras);
@@ -700,6 +721,12 @@ function createAcquisitionMissionEngine(opts = {}) {
     const timeline = formatTimeline(store.listEvents(mission.id));
     const why = explainWhy(mission, contributions, explainExtras);
     const discoveryContribution = findLatestDiscoveryContribution(contributions);
+    const acquisitionApproach = latestApproachDecision(contributions);
+    const paidAcquisition = [...contributions].reverse().find(
+      (row) =>
+        row.specialist === SPECIALISTS.PENNY &&
+        row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+    );
     const discoveryArtifact = discoveryContribution
       ? presentationFromDiscoveryPayload(discoveryContribution.payload || {})
       : null;
@@ -744,6 +771,10 @@ function createAcquisitionMissionEngine(opts = {}) {
         : [],
       blocker: currentBlocker(mission.blockers),
       discoveryArtifact,
+      acquisitionApproach: acquisitionApproach ? acquisitionApproach.decision : null,
+      paidAcquisitionRecommendation: paidAcquisition
+        ? paidAcquisition.payload?.paidAcquisitionRecommendation || paidAcquisition.payload
+        : null,
       progression: progressionSnapshot.progression,
     };
   }

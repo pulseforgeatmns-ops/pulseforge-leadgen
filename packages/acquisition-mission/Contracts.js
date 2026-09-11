@@ -20,6 +20,14 @@ const FORBIDDEN = Object.freeze({
     'recipients', 'recipientIds', 'recipient_ids', 'sendTo', 'send_to',
     'whoReceives', 'who_receives', 'queue', 'sendList', 'send_list',
   ],
+  [SPECIALISTS.PENNY]: [
+    'campaignCreation', 'campaign_creation', 'campaignLaunch', 'campaign_launch',
+    'campaignPause', 'campaign_pause', 'budgetMutation', 'budget_mutation',
+    'bidMutation', 'bid_mutation', 'keywordMutation', 'keyword_mutation',
+    'targetingMutation', 'targeting_mutation', 'creativeMutation', 'creative_mutation',
+    'billingMutation', 'billing_mutation', 'externalSpend', 'external_spend',
+    'authorizeSpend', 'authorize_spend', 'adCopy', 'ad_copy',
+  ],
   [SPECIALISTS.EMMETT]: [
     'subject', 'subjects', 'body', 'cta', 'variant', 'variants',
     'messaging', 'copy', 'emailBody', 'email_body', 'hypothesis', 'hypotheses',
@@ -41,10 +49,20 @@ const PRODUCES = Object.freeze({
   [SPECIALISTS.MAX]: [
     'priorities', 'objectives', 'timing', 'recommendations',
     'constraints', 'delegation', 'structuredMission',
+    'acquisitionApproach', 'approachDecision', 'selectedApproach', 'approach',
   ],
   [SPECIALISTS.PAIGE]: [
     'messaging', 'experiments', 'variants', 'subjects', 'subject',
     'cta', 'hypotheses', 'hypothesis',
+  ],
+  [SPECIALISTS.PENNY]: [
+    'paidAcquisitionRecommendation', 'paid_acquisition_recommendation',
+    'viability', 'channelAssessments', 'channel_assessments',
+    'recommendedTest', 'recommended_test', 'measurementRequirements',
+    'measurement_requirements', 'budgetConstraints', 'budget_constraints',
+    'stopConditions', 'stop_conditions', 'continueConditions',
+    'continue_conditions', 'scaleConditions', 'scale_conditions',
+    'evidence', 'confidence', 'unknowns', 'blockers',
   ],
   [SPECIALISTS.EMMETT]: [
     'capacity', 'queue', 'sendRecommendations', 'send_recommendations',

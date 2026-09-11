@@ -21,6 +21,10 @@ const {
   isExecutionApproved,
   buildPendingExecutionDecision,
 } = require('./ExecutionApproval');
+const {
+  latestApproachDecision,
+  approachPermitsOutbound,
+} = require('./AcquisitionApproach');
 
 const PREREQUISITES = Object.freeze({
   [STAGES.UNDERSTAND]: (ctx) =>
@@ -28,7 +32,13 @@ const PREREQUISITES = Object.freeze({
   [STAGES.PLAN]: (ctx) =>
     ctx.maxHasObjectives || ctx.maxComplete ? null : 'Max objectives or prioritization are required before Plan.',
   [STAGES.PREPARE]: (ctx) =>
-    ctx.maxComplete ? null : 'Max prioritization is required before Prepare.',
+    !ctx.maxComplete
+      ? 'Max prioritization is required before Prepare.'
+      : !ctx.acquisitionApproachComplete
+        ? 'Acquisition approach decision is required before Prepare.'
+        : !ctx.acquisitionApproachPermitsOutbound
+          ? 'Selected acquisition approach does not permit outbound preparation.'
+          : null,
   [STAGES.READY]: (ctx) => {
     if (!ctx.paigeComplete) return 'Paige variants are required before Ready.';
     if (!ctx.emmettComplete) return 'Emmett capacity is required before Ready.';
@@ -67,10 +77,16 @@ function specialistContext(contributions = [], extras = {}) {
   const by = (specialist, kinds) =>
     rows.some((row) => row.specialist === specialist && (!kinds || kinds.includes(row.kind)));
   const emmett = [...rows].reverse().find((row) => row.specialist === SPECIALISTS.EMMETT);
+  const penny = [...rows].reverse().find(
+    (row) =>
+      row.specialist === SPECIALISTS.PENNY &&
+      row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+  );
   const governor = emmett && emmett.payload && emmett.payload.governor;
   const deliverabilityPaused = extras.deliverabilityPaused === true
     || Boolean(governor && (governor.outcome === 'pause' || governor.outcome === 'emergency'));
   const scout = rows.filter((row) => row.specialist === SPECIALISTS.SCOUT);
+  const approachDecision = latestApproachDecision(rows);
   const prospectCount = scout.reduce((sum, row) => {
     const payload = row.payload || {};
     if (payload.qualifiedCount != null && Number.isFinite(Number(payload.qualifiedCount))) {
@@ -84,6 +100,13 @@ function specialistContext(contributions = [], extras = {}) {
   return {
     scoutComplete: by(SPECIALISTS.SCOUT, [CONTRIBUTION_KINDS.DISCOVERY]) || extras.scoutComplete,
     maxComplete: by(SPECIALISTS.MAX, [CONTRIBUTION_KINDS.PRIORITIZATION]) || extras.maxComplete,
+    acquisitionApproachComplete:
+      Boolean(approachDecision) || extras.acquisitionApproachComplete === true,
+    acquisitionApproach: approachDecision ? approachDecision.selected : extras.acquisitionApproach || null,
+    acquisitionApproachDecision: approachDecision ? approachDecision.decision : extras.acquisitionApproachDecision || null,
+    acquisitionApproachPermitsOutbound:
+      approachPermitsOutbound(rows) || extras.acquisitionApproachPermitsOutbound === true,
+    paidAcquisitionComplete: Boolean(penny) || extras.paidAcquisitionComplete === true,
     maxHasObjectives: by(SPECIALISTS.MAX, [CONTRIBUTION_KINDS.OBJECTIVE, CONTRIBUTION_KINDS.CONSTRAINTS]),
     paigeComplete: by(SPECIALISTS.PAIGE, [CONTRIBUTION_KINDS.VARIANTS]) || extras.paigeComplete,
     paigeGenerating: extras.paigeGenerating === true,
@@ -124,6 +147,7 @@ function progressPercent(stage, ctx = {}) {
   let bonus = 0;
   if (ctx.scoutComplete) bonus += 12;
   if (ctx.maxComplete) bonus += 8;
+  if (ctx.paidAcquisitionComplete) bonus += 4;
   if (ctx.paigeComplete) bonus += 8;
   else if (ctx.paigeGenerating) bonus += 0;
   if (ctx.emmettComplete) bonus += 6;
@@ -140,9 +164,22 @@ function specialistState(specialist, ctx, mission) {
       : { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
   }
   if (specialist === SPECIALISTS.MAX) {
-    return ctx.maxComplete
-      ? { state: SPECIALIST_STATES.COMPLETE, label: 'Prioritization Complete' }
-      : { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
+    if (!ctx.maxComplete) return { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
+    return ctx.acquisitionApproachComplete
+      ? { state: SPECIALIST_STATES.COMPLETE, label: 'Approach Selected' }
+      : { state: SPECIALIST_STATES.IN_PROGRESS, label: 'Prioritization Complete' };
+  }
+  if (specialist === SPECIALISTS.PENNY) {
+    if (ctx.paidAcquisitionComplete) {
+      return { state: SPECIALIST_STATES.COMPLETE, label: 'Paid Assessment Complete' };
+    }
+    if (
+      ctx.acquisitionApproach === 'paid' ||
+      ctx.acquisitionApproach === 'both'
+    ) {
+      return { state: SPECIALIST_STATES.WAITING, label: 'Waiting' };
+    }
+    return { state: SPECIALIST_STATES.PENDING, label: 'Not Required' };
   }
   if (specialist === SPECIALISTS.PAIGE) {
     if (ctx.paigeComplete) return { state: SPECIALIST_STATES.COMPLETE, label: 'Variants Ready' };
@@ -180,6 +217,7 @@ function derivePendingOperatorDecisionForStage(mission, targetStage, contributio
   if (targetStage === STAGES.READY) {
     const ctx = specialistContext(contributions, { missionId: mission.id });
     if (!ctx.paigeComplete || !ctx.emmettComplete || ctx.deliverabilityPaused) return null;
+    if (!ctx.acquisitionApproachPermitsOutbound) return null;
     if (isExecutionApproved(contributions, mission.id, ctx)) return null;
     return buildPendingExecutionDecision(mission, contributions);
   }
