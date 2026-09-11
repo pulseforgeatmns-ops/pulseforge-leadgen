@@ -76,8 +76,8 @@ function referencesSpecialistState(question) {
   const q = String(question || '').trim().toLowerCase();
   if (!q) return false;
   return (
-    /\bwhy did (?:scout|paige|emmett|max)\b/.test(q) ||
-    /\bwhy (?:has|hasn't|did|didn't) (?:scout|paige|emmett|max)\b/.test(q) ||
+    /\bwhy did (?:scout|paige|penny|emmett|max)\b/.test(q) ||
+    /\bwhy (?:has|hasn't|did|didn't) (?:scout|paige|penny|emmett|max)\b/.test(q) ||
     /\bwhy (?:did|has) scout (?:stop|pause|halt|fail)\b/.test(q)
   );
 }
@@ -166,6 +166,12 @@ function resolveExecutor(ctx, mission) {
   if (!ctx.scoutComplete) return { current: 'ScoutDiscoveryExecutor', next: 'ScoutDiscoveryExecutor' };
   if (!ctx.maxComplete && mission.stage === STAGES.PLAN) {
     return { current: 'MaxPrioritizationExecutor', next: 'MaxPrioritizationExecutor' };
+  }
+  if (
+    !ctx.paidAcquisitionComplete &&
+    (ctx.acquisitionApproach === 'paid' || ctx.acquisitionApproach === 'both')
+  ) {
+    return { current: 'PennyPaidAcquisitionExecutor', next: 'PennyPaidAcquisitionExecutor' };
   }
   if (!ctx.paigeComplete && (mission.stage === STAGES.PREPARE || mission.stage === STAGES.PLAN)) {
     return { current: 'PaigeVariantExecutor', next: 'PaigeVariantExecutor' };
@@ -410,6 +416,8 @@ function explainSpecialistStop(snapshot, question = '') {
   const blocker = snapshot.blocker || currentBlocker(mission.blockers || []);
   const specialist = /\bpaige\b/.test(q)
     ? 'Paige'
+    : /\bpenny\b/.test(q)
+      ? 'Penny'
     : /\bemmett\b/.test(q)
       ? 'Emmett'
       : 'Scout';

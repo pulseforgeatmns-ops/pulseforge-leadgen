@@ -15,6 +15,13 @@ function collectEvidence(mission, contributions = [], extras = {}) {
     .find((row) => row.specialist === SPECIALISTS.MAX && row.kind === CONTRIBUTION_KINDS.PRIORITIZATION);
   const emmett = [...contributions].reverse().find((row) => row.specialist === SPECIALISTS.EMMETT);
   const approach = latestApproachDecision(contributions);
+  const penny = [...contributions]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.PENNY &&
+        row.kind === CONTRIBUTION_KINDS.PAID_ACQUISITION_RECOMMENDATION
+    );
 
   const objectiveReason =
     (max && max.payload && (max.payload.objectiveReason || (max.payload.objectives && max.payload.objectives[0])))
@@ -42,7 +49,26 @@ function collectEvidence(mission, contributions = [], extras = {}) {
   if (approach && approach.decision) {
     const selected = approach.selected;
     const rationale = approach.decision.rationale;
+    const reconciliation = approach.payload && approach.payload.legacyReconciliation;
+    if (reconciliation) {
+      reasons.push(
+        `This mission originated before canonical acquisition-approach selection was required; Max reconciled the missing planning decision while preserving historical ${reconciliation.originalStage || 'downstream'} work.`
+      );
+    }
     reasons.push(`Max selected ${selected} as the acquisition approach.${rationale ? ` ${rationale}` : ''}`);
+    if (reconciliation) {
+      reasons.push('Historical preparation remains evidence and is only actionable when the selected approach and current approval rules permit it.');
+    }
+  }
+
+  const paidRecommendation = penny?.payload?.paidAcquisitionRecommendation;
+  if (paidRecommendation) {
+    const channel = paidRecommendation.preferredChannel
+      ? ` Preferred channel: ${paidRecommendation.preferredChannel}.`
+      : '';
+    reasons.push(
+      `Penny assessed paid acquisition as ${paidRecommendation.viability}.${channel} ${paidRecommendation.rationale || ''}`.trim()
+    );
   }
 
   const capacity = extras.capacityAvailable

@@ -71,7 +71,10 @@ function inferBlockers(mission, ctx) {
       reason: 'Max acquisition approach decision is required before channel-specific preparation.',
     }));
   }
-  if (mission.stage === STAGES.PLAN && ctx.acquisitionApproachBlocker) {
+  if (
+    (mission.stage === STAGES.PLAN || mission.stage === STAGES.PREPARE || mission.stage === STAGES.READY) &&
+    ctx.acquisitionApproachBlocker
+  ) {
     blockers.push(createBlocker(ctx.acquisitionApproachBlocker));
   }
   if (mission.stage === STAGES.PREPARE && !ctx.paigeComplete) {
@@ -80,7 +83,11 @@ function inferBlockers(mission, ctx) {
   if (mission.stage === STAGES.PREPARE && ctx.paigeComplete && !ctx.emmettComplete) {
     blockers.push(createBlocker({ kind: BLOCKER_KINDS.WAITING_FOR_EMMETT, specialist: 'emmett' }));
   }
-  if (mission.stage === STAGES.READY && !ctx.executionApproved) {
+  if (
+    mission.stage === STAGES.READY &&
+    !ctx.executionApproved &&
+    (!ctx.acquisitionApproachComplete || ctx.acquisitionApproachPermitsOutbound)
+  ) {
     blockers.push(createBlocker({
       kind: BLOCKER_KINDS.WAITING_FOR_OPERATOR,
       specialist: 'operator',

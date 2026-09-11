@@ -136,6 +136,10 @@ function defaultHandlers() {
     }),
     [EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH]: (ctx) =>
       approval.advanceAcquisitionApproach(ctx),
+    [EXECUTION_INTENTS.RECONCILE_ACQUISITION_APPROACH]: (ctx) =>
+      approval.reconcileLegacyAcquisitionApproach(ctx),
+    [EXECUTION_INTENTS.ASSESS_PAID_ACQUISITION]: (ctx) =>
+      approval.advancePennyPaidAcquisition(ctx),
     [EXECUTION_INTENTS.GENERATE_VARIANTS]: (ctx) => approval.advancePaigeVariants(ctx),
     [EXECUTION_INTENTS.GENERATE_CAPACITY]: (ctx) => approval.advanceEmmettCapacity(ctx),
     [EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH]: (ctx) => approval.advancePreparedOutreachRevision(ctx),
@@ -238,6 +242,7 @@ function handlerContext(request, context, mission, runtimeOwner) {
   const question = (request.payload && request.payload.question)
     || context.question
     || request.intent;
+  const payload = request.payload || {};
   const owner = runtimeOwner || request.runtimeOwner || resolveMissionRuntimeOwner(mission);
   return {
     engine: context.engine,
@@ -249,8 +254,16 @@ function handlerContext(request, context, mission, runtimeOwner) {
     runPaige: context.runPaige,
     runMax: context.runMax,
     runMaxApproach: context.runMaxApproach,
+    runPenny: context.runPenny,
     runEmmett: context.runEmmett,
     infrastructureSnapshot: context.infrastructureSnapshot,
+    acquisitionEvidence: context.acquisitionEvidence || payload.acquisitionEvidence,
+    knownAcquisitionHistory: context.knownAcquisitionHistory || payload.knownAcquisitionHistory,
+    conversionReadiness: context.conversionReadiness || payload.conversionReadiness,
+    measurementReadiness: context.measurementReadiness || payload.measurementReadiness,
+    candidatePaidChannels: context.candidatePaidChannels || payload.candidatePaidChannels,
+    platformEvidence: context.platformEvidence || payload.platformEvidence,
+    availableBudget: context.availableBudget || payload.availableBudget,
     scoutCompanies: context.scoutCompanies,
     scoutPeople: context.scoutPeople,
     allowFixtureFallback: context.allowFixtureFallback,

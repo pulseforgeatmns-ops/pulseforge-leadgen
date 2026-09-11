@@ -126,6 +126,62 @@ function paigeInput(mission, extras = {}) {
 }
 
 /**
+ * Penny receives mission-bound paid acquisition context. She evaluates paid
+ * viability and test design; she does not source business truth from ad accounts.
+ */
+function pennyInput(mission, extras = {}) {
+  const plan = requireStructuredMission(mission);
+  const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
+  const sharedContext = extras.sharedContext
+    || (contributions.length ? buildSharedContext(mission, contributions) : null);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+  const approachDecision = latestApproachDecision(contributions);
+  const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
+  const maxPayload = maxRow?.payload || sharedContext?.max || {};
+
+  return {
+    tenantId: String(mission.tenantId || mission.clientId || ''),
+    missionId: mission.id,
+    objective: plan.objective || mission.objective,
+    successMetric: { ...(plan.successMetric || plan.success || {}) },
+    targetSegment: plan.market?.label || plan.market?.segment || mission.targetSegment || null,
+    market: { ...(plan.market || {}) },
+    buyer: plan.market?.buyer || null,
+    geography: { ...(plan.geography || {}) },
+    constraints: [
+      ...(plan.constraints || []).slice(),
+      ...((maxPayload.constraints || []).filter(Boolean)),
+      ...((extras.constraints || []).filter(Boolean)),
+    ],
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
+    maxPrioritization: maxPayload,
+    scoutDiscovery: scoutPayload,
+    priorities: maxPayload.priorities || maxPayload.rankedTargets || [],
+    evidence: [
+      ...(Array.isArray(scoutPayload.evidence) ? scoutPayload.evidence : []),
+      ...(Array.isArray(maxPayload.evidence) ? maxPayload.evidence : []),
+      ...(Array.isArray(extras.acquisitionEvidence) ? extras.acquisitionEvidence : []),
+    ],
+    knownAcquisitionHistory: extras.knownAcquisitionHistory || extras.acquisitionHistory || null,
+    conversionReadiness: extras.conversionReadiness || extras.conversionInfrastructure || null,
+    measurementReadiness: extras.measurementReadiness || extras.trackingReadiness || null,
+    candidatePaidChannels: Array.isArray(extras.candidatePaidChannels)
+      ? extras.candidatePaidChannels.slice()
+      : [],
+    platformEvidence: Array.isArray(extras.platformEvidence) ? extras.platformEvidence.slice() : [],
+    availableBudget: extras.availableBudget || extras.budgetConstraint || null,
+    operatorPreferences: extras.operatorPreferences || {},
+    workspaceContext: sharedContext ? {
+      objective: sharedContext.objective,
+      missionUnderstanding: sharedContext.mission?.missionUnderstanding || null,
+    } : null,
+    structuredOnly: true,
+    missionBound: true,
+  };
+}
+
+/**
  * Vera receives market, companies, buyer, review policy.
  */
 function veraInput(mission, companies = []) {
@@ -329,6 +385,7 @@ module.exports = {
   scoutInput,
   maxInput,
   paigeInput,
+  pennyInput,
   veraInput,
   rexInput,
   emmettInput,

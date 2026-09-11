@@ -403,8 +403,23 @@ function canAutoAdvanceOutreachToPaige(snapshot) {
   if (hasPendingPrioritizationApproval(snapshot)) return false;
   const ctx = specialistContext(snapshot.contributions || []);
   if (!ctx.maxComplete || ctx.paigeComplete) return false;
+  if (
+    !ctx.paidAcquisitionComplete &&
+    (ctx.acquisitionApproach === 'paid' || ctx.acquisitionApproach === 'both')
+  ) {
+    return false;
+  }
   if (!ctx.acquisitionApproachComplete || !ctx.acquisitionApproachPermitsOutbound) return false;
   return [STAGES.UNDERSTAND, STAGES.PLAN, STAGES.PREPARE].includes(mission.stage);
+}
+
+function canAutoAdvancePennyPaidAcquisition(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete || !ctx.acquisitionApproachComplete || ctx.paidAcquisitionComplete) return false;
+  if (ctx.acquisitionApproach !== 'paid' && ctx.acquisitionApproach !== 'both') return false;
+  return [STAGES.UNDERSTAND, STAGES.PLAN].includes(mission.stage);
 }
 
 function canAutoAdvanceOutreachToEmmett(snapshot) {
@@ -666,6 +681,31 @@ async function runAutonomousProgression(input = {}) {
       }
     }
 
+    if (canAutoAdvancePennyPaidAcquisition(snapshot)) {
+      try {
+        const advancePennyPaidAcquisition = deps.advancePennyPaidAcquisition
+          || require('../max/workspace/AmoOperatorApproval').advancePennyPaidAcquisition;
+        await advancePennyPaidAcquisition({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          ...input,
+        });
+        transitions.push(createStageTransition({
+          from: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          trigger: 'Penny paid acquisition assessment committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
     if (canAutoAdvanceOutreachToPaige(snapshot)) {
       try {
         const beforeStage = snapshot.mission.stage;
@@ -852,6 +892,11 @@ const CANONICAL_PROGRESSION_CHECKS = Object.freeze([
     label: 'Decide acquisition approach',
   },
   {
+    check: canAutoAdvancePennyPaidAcquisition,
+    intent: EXECUTION_INTENTS.ASSESS_PAID_ACQUISITION,
+    label: 'Assess paid acquisition',
+  },
+  {
     check: canAutoAdvanceOutreachToPaige,
     intent: EXECUTION_INTENTS.GENERATE_VARIANTS,
     label: 'Generate outreach variants',
@@ -942,6 +987,7 @@ module.exports = {
   canAutoAdvanceDiscovery,
   canAutoAdvanceMaxPrioritization,
   canAutoAdvanceAcquisitionApproach,
+  canAutoAdvancePennyPaidAcquisition,
   canAutoAdvanceOutreachToPaige,
   canAutoAdvanceOutreachToEmmett,
   buildDiscoveryPipelineStatus,

@@ -89,9 +89,9 @@ function buildAcquisitionApproachPayload(executionInput = {}) {
   const rationale = selected === ACQUISITION_APPROACHES.OUTBOUND
     ? `Prioritized target evidence supports outbound preparation for ${targetName}.`
     : selected === ACQUISITION_APPROACHES.BOTH
-      ? `Prioritized target evidence supports outbound preparation now while preserving paid acquisition as an unsupported future path.`
+      ? `Prioritized target evidence supports outbound preparation now while Penny assesses the paid acquisition path.`
       : selected === ACQUISITION_APPROACHES.PAID
-        ? 'Max selected paid acquisition as the next approach; paid preparation is not implemented yet.'
+        ? 'Max selected paid acquisition as the next approach; Penny assessment is required before paid setup or spend.'
         : selected === ACQUISITION_APPROACHES.DEFER
           ? 'Max deferred channel-specific preparation until stronger evidence or operator direction exists.'
           : 'Max cannot select an acquisition approach from the available prioritization evidence.';

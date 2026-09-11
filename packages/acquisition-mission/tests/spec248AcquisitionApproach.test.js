@@ -130,12 +130,13 @@ describe('SPEC-248 — Canonical acquisition approach decision', () => {
     assert.equal(engine.inspect(mission.id, { tenantId: '10' }).mission.stage, STAGES.READY);
   });
 
-  it('BOTH permits outbound preparation and records paid preparation as unsupported', async () => {
+  it('BOTH permits outbound preparation and requests Penny paid assessment', async () => {
     await decideApproach(ACQUISITION_APPROACHES.BOTH);
     const snapshot = engine.inspect(mission.id, { tenantId: '10' });
 
     assert.equal(snapshot.acquisitionApproach.selectedApproach, ACQUISITION_APPROACHES.BOTH);
-    assert.deepEqual(snapshot.acquisitionApproach.unsupportedCapabilities, ['paid_preparation']);
+    assert.deepEqual(snapshot.acquisitionApproach.unsupportedCapabilities, []);
+    assert.match(snapshot.acquisitionApproach.nextStep, /Penny paid acquisition assessment/i);
     assert.equal(specialistContext(snapshot.contributions).acquisitionApproachPermitsOutbound, true);
 
     const paige = await advancePaigeVariants({
@@ -147,7 +148,7 @@ describe('SPEC-248 — Canonical acquisition approach decision', () => {
     assert.equal(paige.executionOutcome, 'completed');
   });
 
-  it('PAID does not invoke Paige or Emmett and exposes unsupported paid preparation', async () => {
+  it('PAID does not invoke Paige or Emmett and waits for Penny paid assessment', async () => {
     const routed = await decideApproach(ACQUISITION_APPROACHES.PAID);
     const snapshot = routed.snapshot;
     const ctx = specialistContext(snapshot.contributions);
@@ -156,7 +157,8 @@ describe('SPEC-248 — Canonical acquisition approach decision', () => {
     assert.equal(snapshot.acquisitionApproach.selectedApproach, ACQUISITION_APPROACHES.PAID);
     assert.equal(ctx.acquisitionApproachPermitsOutbound, false);
     assert.ok(snapshot.blocker);
-    assert.match(snapshot.blocker.reason, /Paid acquisition preparation is not implemented/i);
+    assert.equal(snapshot.blocker.specialist, SPECIALISTS.PENNY);
+    assert.match(snapshot.blocker.reason, /Penny paid acquisition assessment is required/i);
     assert.equal(snapshot.contributions.some((row) => row.specialist === SPECIALISTS.PAIGE), false);
     assert.equal(snapshot.contributions.some((row) => row.specialist === SPECIALISTS.EMMETT), false);
   });
@@ -219,7 +221,7 @@ describe('SPEC-248 — Canonical acquisition approach decision', () => {
     assert.ok(Array.isArray(snapshot.acquisitionApproach.evidence));
     assert.ok(Array.isArray(snapshot.acquisitionApproach.blockers));
     assert.ok(Array.isArray(snapshot.acquisitionApproach.unknowns));
-    assert.match(snapshot.acquisitionApproach.nextStep, /paid preparation is not implemented/i);
+    assert.match(snapshot.acquisitionApproach.nextStep, /Penny paid acquisition assessment/i);
     assert.ok(snapshot.why.reasons.some((row) => /Max selected paid/i.test(row)));
     assert.ok(snapshot.blocker);
   });

@@ -16,6 +16,7 @@ const {
   scoutInput,
   maxInput,
   paigeInput,
+  pennyInput,
   veraInput,
   rexInput,
   emmettInput,
@@ -268,6 +269,8 @@ function specialistInputFor(specialist, mission, extras = {}) {
       return maxInput(mission, extras);
     case SPECIALISTS.PAIGE:
       return paigeInput(mission, extras);
+    case SPECIALISTS.PENNY:
+      return pennyInput(mission, extras);
     case SPECIALISTS.VERA:
       return veraInput(mission, extras.companies || []);
     case SPECIALISTS.REX:
