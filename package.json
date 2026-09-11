@@ -75,6 +75,7 @@
     "gmail:token": "node getGmailToken.js",
     "intel:seed:libraries": "node scripts/seedIntelligenceLibraries.js",
     "acquisition:knowledge:import": "node scripts/importAcquisitionKnowledge.js",
+    "acquisition:prospects:operationalize": "node scripts/operationalizeAcquisitionProspects.js",
     "acquisition:mailbox:verify": "node scripts/acquisitionMailbox.js verify",
     "acquisition:mailbox:test-send": "node scripts/acquisitionMailbox.js test-send",
     "acquisition:mailbox:poll": "node scripts/acquisitionMailbox.js poll",
