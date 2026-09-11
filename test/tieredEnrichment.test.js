@@ -1,6 +1,7 @@
 const assert = require('assert');
 const pool = require('../db');
 const {
+  parseArgs,
   _test: {
     buildEmailCandidates,
     deriveNameFromVerifiedEmail,
@@ -113,6 +114,21 @@ async function run() {
     email_status: 'valid',
     email_verification_method: 'mx_lookup',
   }), false);
+
+  assert.deepStrictEqual(parseArgs([
+    '--client_id=13',
+    '--prospect-id=4d160148-5c7c-4343-96b5-899c97984615',
+    '--prospect-ids=706287f2-13e7-4171-9c3c-444ecb553ba1,613d82ea-da5f-4100-a059-afcd88cbcc58',
+    '--dry-run',
+  ]), {
+    client_id: '13',
+    prospectIds: [
+      '4d160148-5c7c-4343-96b5-899c97984615',
+      '706287f2-13e7-4171-9c3c-444ecb553ba1',
+      '613d82ea-da5f-4100-a059-afcd88cbcc58',
+    ],
+    dryRun: true,
+  });
 
   console.log('tieredEnrichment tests passed');
 }
