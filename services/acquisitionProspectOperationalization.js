@@ -1,6 +1,81 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { normalizeVertical } = require('../utils/verticalTiers');
+
+const ESTABLISHED_OPERATIONAL_VERTICALS = new Set([
+  'accounting',
+  'architecture_engineering',
+  'auto',
+  'auto_repair',
+  'b2b_accounting',
+  'cleaning',
+  'cleaning_company_overflow',
+  'cleaning_residential',
+  'commercial_cleaning',
+  'commercial_electrical',
+  'commercial_hvac',
+  'commercial_insurance',
+  'commercial_landscaping',
+  'commercial_mechanical',
+  'commercial_office',
+  'commercial_roofing',
+  'commercial_real_estate',
+  'decks',
+  'equipment_rental',
+  'exterior_remodeling',
+  'facility_services',
+  'fire_protection',
+  'fitness',
+  'freight_brokerage',
+  'hoa_management',
+  'home_renovation',
+  'home_services',
+  'insurance_restoration',
+  'interior_renovation',
+  'investor_flipper',
+  'janitorial',
+  'landscaping',
+  'landscaping_residential',
+  'law_firm',
+  'lead_gen_agency',
+  'listing_agent',
+  'low_voltage_security',
+  'marketing_agency',
+  'med_spa',
+  'medical_office',
+  'msp_it_services',
+  'probate_attorney',
+  'property',
+  'property_management',
+  'property_manager',
+  'real_estate_developer',
+  'realtor',
+  'renovation_lender',
+  'restaurant',
+  'restoration',
+  'restoration_remodeling_partner',
+  'salon',
+  'siding',
+  'staffing_recruiting',
+  'str_manager',
+  'unknown',
+  'wholesale_distribution',
+  'windows',
+]);
+
+const OPERATIONAL_VERTICAL_ALIASES = Object.freeze({
+  'accounting firm': 'accounting',
+  'auto repair': 'auto_repair',
+  'commercial cleaning': 'commercial_cleaning',
+  'home service': 'home_services',
+  'home services': 'home_services',
+  'law firm': 'law_firm',
+  'managed it services': 'msp_it_services',
+  'med spa': 'med_spa',
+  'property management': 'property_management',
+  'short term rental manager': 'str_manager',
+});
 
 function defaultPool() {
   return require('../db');
@@ -39,6 +114,52 @@ function asJson(value, fallback) {
 
 function clean(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function canonicalVerticalSet(extra = []) {
+  const values = new Set(ESTABLISHED_OPERATIONAL_VERTICALS);
+  for (const value of extra || []) {
+    const normalized = normalizeVertical(value);
+    if (normalized) values.add(normalized);
+  }
+  return values;
+}
+
+function resolveOperationalVertical(value, opts = {}) {
+  const sourceIndustry = clean(value);
+  if (!sourceIndustry) {
+    return {
+      sourceIndustry: null,
+      vertical: null,
+      matched: false,
+      reason: 'missing_source_industry',
+    };
+  }
+  const canonicalValues = canonicalVerticalSet(opts.canonicalVerticals);
+  const normalized = normalizeVertical(sourceIndustry);
+  if (canonicalValues.has(normalized)) {
+    return {
+      sourceIndustry,
+      vertical: normalized,
+      matched: true,
+      reason: 'already_canonical_or_exact_supported_slug',
+    };
+  }
+  const aliasTarget = OPERATIONAL_VERTICAL_ALIASES[sourceIndustry.toLowerCase()];
+  if (aliasTarget && canonicalValues.has(aliasTarget)) {
+    return {
+      sourceIndustry,
+      vertical: aliasTarget,
+      matched: true,
+      reason: 'known_existing_alias',
+    };
+  }
+  return {
+    sourceIndustry,
+    vertical: null,
+    matched: false,
+    reason: 'no_safe_canonical_mapping',
+  };
 }
 
 function parsePersonName(name) {
@@ -155,6 +276,29 @@ async function loadAcquisitionKnowledgeObject(client, tenantId, id) {
     [id, tenantId]
   );
   return result.rows[0] ? akRowFromDb(result.rows[0]) : null;
+}
+
+async function loadTenantOperationalVerticals(client, clientId) {
+  const result = await client.query(
+    `SELECT target_verticals, vertical_tiers
+     FROM clients
+     WHERE id = $1
+     LIMIT 1`,
+    [clientId]
+  );
+  const row = result.rows[0] || {};
+  const verticals = [];
+  const tiers = asJson(row.vertical_tiers, {});
+  if (tiers && typeof tiers === 'object' && !Array.isArray(tiers)) {
+    verticals.push(...Object.keys(tiers));
+  }
+  const targets = asJson(row.target_verticals, []);
+  if (Array.isArray(targets)) {
+    for (const target of targets) {
+      if (target?.vertical) verticals.push(target.vertical);
+    }
+  }
+  return verticals;
 }
 
 async function findLinkedOutreachAssets(client, tenantId, akObjectId) {
@@ -297,7 +441,7 @@ async function createProspectProjection(client, clientId, companyId, personIdent
       personIdentity.firstName,
       personIdentity.lastName,
       personIdentity.role,
-      companyIdentity.industry,
+      metadata.operationalVertical || null,
       metadata.acquisitionKnowledgeObjectId,
       metadata.projectionId,
       JSON.stringify(metadata),
@@ -380,6 +524,10 @@ async function operationalizeAcquisitionProspect(input = {}, opts = {}) {
     const knowledge = await loadAcquisitionKnowledgeObject(client, tenantId, akObjectId);
     assertEligibleProspect(knowledge);
     const { companyIdentity, personIdentity } = extractIdentity(knowledge);
+    const tenantOperationalVerticals = await loadTenantOperationalVerticals(client, clientId);
+    const verticalResolution = resolveOperationalVertical(companyIdentity.industry, {
+      canonicalVerticals: tenantOperationalVerticals,
+    });
     const linkedOutreachAssetIds = await findLinkedOutreachAssets(client, tenantId, akObjectId);
     const projectionId = projectionIdFor(tenantId, akObjectId);
     const provenance = {
@@ -394,6 +542,10 @@ async function operationalizeAcquisitionProspect(input = {}, opts = {}) {
       projectionId,
       tenantId,
       acquisitionKnowledgeObjectId: akObjectId,
+      sourceAkObjectId: akObjectId,
+      sourceIndustry: verticalResolution.sourceIndustry,
+      operationalVertical: verticalResolution.vertical,
+      verticalResolution,
       epistemicState: knowledge.epistemicState,
       validationState: knowledge.validationState,
       linkedOutreachAssetIds,
@@ -445,6 +597,9 @@ async function operationalizeAcquisitionProspect(input = {}, opts = {}) {
         matchStrategy: matchStrategy || 'new_projection',
         acquisitionKnowledgeObjectId: akObjectId,
         companyIdentity,
+        sourceIndustry: verticalResolution.sourceIndustry,
+        operationalVertical: verticalResolution.vertical,
+        verticalResolution,
         personIdentity,
         linkedOutreachAssetIds,
         epistemicState: knowledge.epistemicState,
@@ -536,5 +691,6 @@ module.exports = {
   getAcquisitionProspectProjection,
   extractIdentity,
   projectionIdFor,
+  resolveOperationalVertical,
   operationalizationError,
 };
