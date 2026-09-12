@@ -11,6 +11,9 @@ const {
 const { runScoutExpansionCron } = require('../scoutExpansion');
 const { createMaxDecayCronHandler } = require('../utils/maxDecayCron');
 const { diagnoseScoutPlaces } = require('../services/scoutPlacesDiagnostic');
+const {
+  diagnoseStrGreaterManchesterPlacesWorkload,
+} = require('../services/scoutPlacesWorkloadDiagnostic');
 
 const anthropic = new Anthropic();
 
@@ -399,13 +402,22 @@ async function handleScoutPlacesDiagnostic(req, res) {
       if (['1', 'true', 'yes', 'on'].includes(s)) comparePlacesNew = true;
     }
 
-    const report = await diagnoseScoutPlaces({
-      comparePlacesNew,
-      query:
-        req.query.query || req.body?.query
-          ? String(req.query.query || req.body.query)
-          : undefined,
-    });
+    const workload =
+      req.query.workload || req.body?.workload
+        ? String(req.query.workload || req.body.workload).trim().toLowerCase()
+        : null;
+
+    const report =
+      workload === 'str_greater_manchester' ||
+      workload === 'str-greater-manchester'
+        ? await diagnoseStrGreaterManchesterPlacesWorkload()
+        : await diagnoseScoutPlaces({
+            comparePlacesNew,
+            query:
+              req.query.query || req.body?.query
+                ? String(req.query.query || req.body.query)
+                : undefined,
+          });
 
     res.set('Cache-Control', 'no-store');
     return res.status(report.ok ? 200 : 422).json({
