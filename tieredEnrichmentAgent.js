@@ -936,6 +936,15 @@ async function run(params = {}) {
   const clientId = normalizeClientId(params.client_id || params.clientId || process.env.ACTIVE_CLIENT_ID || 1);
   const dryRun = Boolean(params.dryRun);
   const bucketAOnly = Boolean(params.bucketAOnly);
+  const prospectIds = Array.isArray(params.prospectIds)
+    ? [...new Set(params.prospectIds.map(id => String(id || '').trim()).filter(Boolean))]
+    : [];
+  const queryParams = [clientId];
+  let scopedProspectSql = '';
+  if (prospectIds.length) {
+    queryParams.push(prospectIds);
+    scopedProspectSql = `AND p.id = ANY($${queryParams.length}::uuid[])`;
+  }
   const result = await pool.query(`
     SELECT
       p.id AS prospect_id,
@@ -968,6 +977,7 @@ async function run(params = {}) {
       ON c.id = p.company_id
       AND c.client_id = p.client_id
     WHERE p.client_id = $1
+      ${scopedProspectSql}
       AND (
         NULLIF(TRIM(COALESCE(p.first_name, '')), '') IS NULL
         OR NULLIF(TRIM(COALESCE(p.email, '')), '') IS NULL
@@ -975,7 +985,7 @@ async function run(params = {}) {
         OR COALESCE(p.email_verification_method, '') <> 'bouncer'
       )
     ORDER BY p.created_at ASC, p.id ASC
-  `, [clientId]);
+  `, queryParams);
 
   const outcomes = [];
   for (const row of result.rows) {
@@ -983,13 +993,19 @@ async function run(params = {}) {
     outcomes.push(outcome);
   }
   const summary = summarize(outcomes);
-  await logAgentAction(clientId, { dry_run: dryRun, bucket_a_only: bucketAOnly, summary }, 'success');
+  await logAgentAction(clientId, {
+    dry_run: dryRun,
+    bucket_a_only: bucketAOnly,
+    scoped_prospect_ids: prospectIds,
+    summary,
+  }, 'success');
   console.log(`[tiered_enrichment] client_id=${clientId} ${JSON.stringify(summary)}`);
-  return { client_id: clientId, dry_run: dryRun, summary, outcomes };
+  return { client_id: clientId, dry_run: dryRun, prospect_ids: prospectIds, summary, outcomes };
 }
 
 module.exports = {
   run,
+  parseArgs,
   _test: {
     buildEmailCandidates,
     deriveNameFromVerifiedEmail,
@@ -1004,14 +1020,26 @@ module.exports = {
   },
 };
 
-if (require.main === module) {
-  const args = process.argv.slice(2);
+function parseArgs(args = process.argv.slice(2)) {
   const params = {};
   for (const arg of args) {
     if (arg.startsWith('--client_id=')) params.client_id = arg.split('=')[1];
+    if (arg.startsWith('--prospect-id=')) {
+      params.prospectIds = params.prospectIds || [];
+      params.prospectIds.push(arg.split('=')[1]);
+    }
+    if (arg.startsWith('--prospect-ids=')) {
+      params.prospectIds = params.prospectIds || [];
+      params.prospectIds.push(...arg.split('=')[1].split(','));
+    }
     if (arg === '--dry-run') params.dryRun = true;
     if (arg === '--bucket-a-only') params.bucketAOnly = true;
   }
+  return params;
+}
+
+if (require.main === module) {
+  const params = parseArgs(process.argv.slice(2));
   run(params).catch(err => {
     console.error(`[tiered_enrichment] Fatal: ${err.stack || err.message}`);
     process.exit(1);
