@@ -124,6 +124,15 @@
     .mast-phone{display:inline-flex;align-items:center;min-height:44px;border:1.5px solid var(--brass);border-bottom-width:1.5px;padding:6px 12px}
   }
 </style>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-LCOWW1SO7N"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-LCOWW1SO7N');
+</script>
 </head>
 <body>
 <header>
@@ -275,10 +284,9 @@
   </div>
 </footer>
 <script>
-  // Replace these IDs in Google Ads / GA4 before launching paid traffic.
-  // Leave blank until the accounts exist — events still fire on dataLayer.
+  // GA4 measurement ID is installed in <head>. Paste Google Ads IDs before paid traffic.
   window.ANCHOR_ANALYTICS = {
-    ga4: '',          // e.g. G-XXXXXXXXXX
+    ga4: 'G-LCOWW1SO7N',
     ads: '',          // e.g. AW-XXXXXXXXXX
     formConversion: '', // Google Ads conversion label for form submits
     callConversion: ''  // Google Ads conversion label for click-to-call
@@ -293,12 +301,20 @@
       return id && !/X{4,}/.test(id);
     });
     if (!ids.length) return;
-    var s = document.createElement('script');
-    s.async = true;
-    s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(ids[0]);
-    document.head.appendChild(s);
-    gtag('js', new Date());
-    ids.forEach(function (id) { gtag('config', id); });
+    // Head already ships the GA4 snippet; only inject/config IDs that are not loaded yet.
+    var loaded = Array.prototype.slice.call(
+      document.querySelectorAll('script[src*="googletagmanager.com/gtag/js"]')
+    ).map(function (el) { return el.src; }).join(' ');
+    var missing = ids.filter(function (id) { return loaded.indexOf('id=' + id) === -1; });
+    if (!missing.length) return;
+    if (!loaded) {
+      var s = document.createElement('script');
+      s.async = true;
+      s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(missing[0]);
+      document.head.appendChild(s);
+      gtag('js', new Date());
+    }
+    missing.forEach(function (id) { gtag('config', id); });
   })();
 
   function track(eventName, params) {

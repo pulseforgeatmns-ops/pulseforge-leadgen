@@ -1,10 +1,16 @@
 # Anchor Cleaning website
 
-Source for [goanchorcleaning.com](https://goanchorcleaning.com/). Live hosting is GitHub Pages on `pulseforgeatmns-ops/anchor-cleaning` (`main` → `/`).
+Source copy of [goanchorcleaning.com](https://goanchorcleaning.com/). The live site is GitHub Pages on `pulseforgeatmns-ops/anchor-cleaning` (`main` → `/`).
 
 ## Deploy
 
-Copy `index.html` over the Pages repo `index.html` and merge to `main`. Do not add `/commercial-cleaning-manchester-nh` until the first Search campaign has data.
+Commit and push `index.html` to `pulseforgeatmns-ops/anchor-cleaning` on `main`. That repo is the deploy. Do not ask anyone to copy files in the GitHub UI.
+
+This directory stays in sync as the working copy. A site change is not shipped until it is pushed to the Pages repo.
+
+The Cursor GitHub App must include `pulseforgeatmns-ops/anchor-cleaning`. If `cursor[bot]` gets a 403, add that repo to the app installation and push — do not fall back to a manual copy.
+
+Do not add `/commercial-cleaning-manchester-nh` until the first Search campaign has data.
 
 ## Phone
 
@@ -16,13 +22,13 @@ The form POSTs to `POST /api/public/walkthrough` on the Pulseforge app. Submissi
 
 If the API is unreachable, the page falls back to a prefilled mailto.
 
-## Tracking before ads
+## Tracking
 
-Paste real IDs into `window.ANCHOR_ANALYTICS` in `index.html`:
+GA4 measurement ID `G-LCOWW1SO7N` is installed as the official gtag snippet in `<head>`. Paste remaining Ads IDs into `window.ANCHOR_ANALYTICS`:
 
 | Field | What to paste |
 |---|---|
-| `ga4` | GA4 measurement ID (`G-…`) |
+| `ga4` | Already set (`G-LCOWW1SO7N`) |
 | `ads` | Google Ads tag ID (`AW-…`) |
 | `formConversion` | Ads conversion label for form submits |
 | `callConversion` | Ads conversion label for click-to-call |
