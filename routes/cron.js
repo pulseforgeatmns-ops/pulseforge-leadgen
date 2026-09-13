@@ -149,6 +149,25 @@ async function runCronAgent(agent, res, query = {}) {
   }
 }
 
+async function handleExecuteAnchorOneOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/executeAnchorOneOutbound');
+    const report = await run({ confirmProduction: true });
+    const ok = report.verdict && report.verdict.startsWith('one real');
+    return res.status(ok ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] execute-anchor-one-outbound error:', err.message);
+    return res.status(err.code === 'pre_send_not_green' ? 409 : 500).json({
+      error: { code: err.code || null, message: err.message, sent: err.sent || null },
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
 async function handleSeedDirectMailAoCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
@@ -442,6 +461,8 @@ router.post('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
 router.get('/cron/scout_places_diagnostic', handleScoutPlacesDiagnostic);
 router.post('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
 router.get('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
+router.post('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
+router.get('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {
@@ -471,5 +492,6 @@ router.get('/cron/:agent', async (req, res) => {
 module.exports = router;
 module.exports.handleScoutPlacesDiagnostic = handleScoutPlacesDiagnostic;
 module.exports.handleSeedDirectMailAoCron = handleSeedDirectMailAoCron;
+module.exports.handleExecuteAnchorOneOutboundCron = handleExecuteAnchorOneOutboundCron;
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;
