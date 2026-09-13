@@ -111,6 +111,54 @@ function verdictOf(firstBlocker) {
   return 'SPEC-212 and sender readiness passed. Operator APPROVE_EXECUTION then EXECUTE_OUTBOUND still required. Autosend stays off.';
 }
 
+function unwrapMissionPayload(rowOrPayload) {
+  if (!rowOrPayload || typeof rowOrPayload !== 'object') return {};
+  if (rowOrPayload.payload && typeof rowOrPayload.payload === 'object' && rowOrPayload.payload.objective) {
+    return rowOrPayload.payload;
+  }
+  return rowOrPayload;
+}
+
+function isSupersededContribution(storedRow) {
+  const body = storedRow?.payload ?? storedRow;
+  if (!body || typeof body !== 'object') return false;
+  if (body.superseded === true) return true;
+  if (body.payload?.superseded === true) return true;
+  return false;
+}
+
+function activeCapacityPointer(missionBody = {}) {
+  const revisionId = missionBody.revisionState?.emmettContributionId;
+  if (revisionId) return String(revisionId);
+  const pendingId = missionBody.pendingOperatorDecision?.executionReview
+    ?.artifactBinding?.emmettContributionId;
+  if (pendingId) return String(pendingId);
+  return null;
+}
+
+/**
+ * Canonical active CAPACITY selection for readiness probes.
+ * 1. Exclude superseded contributions.
+ * 2. Prefer mission revision / pending executionReview pointer when present.
+ * 3. Otherwise newest non-superseded row by durable contribution.at.
+ */
+function selectActiveCapacityContribution(missionBody, capacityRows = []) {
+  const active = capacityRows.filter((row) => !isSupersededContribution(row));
+  if (!active.length) return null;
+
+  const pointer = activeCapacityPointer(missionBody);
+  if (pointer) {
+    const bound = active.find((row) => String(row.capacity_id || row.id) === pointer);
+    if (bound) return bound;
+  }
+
+  return [...active].sort((a, b) => {
+    const byAt = new Date(b.at).getTime() - new Date(a.at).getTime();
+    if (byAt !== 0) return byAt;
+    return String(a.capacity_id || a.id).localeCompare(String(b.capacity_id || b.id));
+  })[0];
+}
+
 function buildReport({
   missionId = null,
   capacityContributionId = null,
@@ -156,21 +204,38 @@ function buildReport({
 }
 
 async function loadUsableReadyCapacity(db) {
-  const result = await db.query(
-    `SELECT m.id AS mission_id, c.id AS capacity_id, c.payload, c.at
-       FROM acquisition_missions m
-       JOIN acquisition_mission_contributions c
-         ON c.mission_id = m.id
-        AND c.tenant_id = m.tenant_id
-      WHERE m.tenant_id = $1
-        AND m.stage = 'ready'
-        AND c.specialist = 'emmett'
-        AND c.kind = 'capacity'
-      ORDER BY c.at DESC, m.updated_at DESC
-      LIMIT 1`,
+  const missions = await db.query(
+    `SELECT id AS mission_id, payload, updated_at
+       FROM acquisition_missions
+      WHERE tenant_id = $1
+        AND stage = 'ready'
+      ORDER BY updated_at DESC`,
     [TENANT_ID]
   );
-  return result.rows[0] || null;
+
+  for (const missionRow of missions.rows) {
+    const capacities = await db.query(
+      `SELECT id AS capacity_id, payload, at
+         FROM acquisition_mission_contributions
+        WHERE tenant_id = $1
+          AND mission_id = $2
+          AND specialist = 'emmett'
+          AND kind = 'capacity'`,
+      [TENANT_ID, missionRow.mission_id]
+    );
+    const missionBody = unwrapMissionPayload(missionRow.payload);
+    const selected = selectActiveCapacityContribution(missionBody, capacities.rows);
+    if (selected) {
+      return {
+        mission_id: missionRow.mission_id,
+        capacity_id: selected.capacity_id,
+        payload: selected.payload,
+        at: selected.at,
+      };
+    }
+  }
+
+  return null;
 }
 
 async function run(options = {}) {
@@ -243,6 +308,10 @@ module.exports = {
   inspectSpec212,
   firstBlockerOf,
   buildReport,
+  isSupersededContribution,
+  activeCapacityPointer,
+  selectActiveCapacityContribution,
+  loadUsableReadyCapacity,
   run,
 };
 
