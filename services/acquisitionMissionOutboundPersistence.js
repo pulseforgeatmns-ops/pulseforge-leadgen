@@ -217,6 +217,18 @@ async function findOutboundExecutionByProviderMessageId(providerMessageId, pool 
   return executionRecordFromRow(result.rows[0]);
 }
 
+async function listOutboundExecutionsForMission(missionId, pool = defaultPool(), opts = {}) {
+  if (!missionId) return [];
+  if (opts.skipEnsure !== true) await ensureOutboundExecutionSchema(pool);
+  const result = await pool.query(
+    `SELECT * FROM acquisition_mission_outbound_executions
+     WHERE mission_id = $1
+     ORDER BY attempted_at ASC NULLS LAST, created_at ASC`,
+    [String(missionId)]
+  );
+  return result.rows.map(executionRecordFromRow);
+}
+
 async function findOutboundExecutionByMissionBinding(
   { missionId, prospectId, preparedArtifactRevision },
   pool = defaultPool(),
@@ -344,6 +356,7 @@ module.exports = {
   providerEventFromRow,
   persistOutboundExecution,
   findOutboundExecutionByProviderMessageId,
+  listOutboundExecutionsForMission,
   findOutboundExecutionByMissionBinding,
   deriveProviderEventDedupeKey,
   buildProviderEventId,

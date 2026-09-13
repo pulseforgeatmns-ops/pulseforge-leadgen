@@ -184,6 +184,66 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     assert.equal(providerCalls[0].requireExplicitSender, true);
   });
 
+  it('EXECUTE_OUTBOUND maxSends=1 sends one queue item and replay is suppressed', async () => {
+    await throughExecutionApproved();
+    const providerCalls = [];
+    const sendEmail = mockSendEmailFactory(providerCalls);
+
+    const first = createExecutionRequest({
+      source: EXECUTION_SOURCES.API,
+      intent: EXECUTION_INTENTS.EXECUTE_OUTBOUND,
+      missionId: mission.id,
+      operatorId: 'operator-1',
+      stage: STAGES.EXECUTE,
+      payload: { maxSends: 1 },
+    });
+    const routed = await routeExecutionRequest(first, {
+      engine,
+      tenantId: '10',
+      sendEmail,
+      resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
+      maxSends: 1,
+    });
+
+    assert.equal(routed.executionResult.executionOutcome, 'completed');
+    assert.equal(providerCalls.length, 1);
+    assert.equal(routed.executionResult.summary.sent, 1);
+    const sent = routed.executionResult.records.find(
+      (row) => row.status === EXECUTION_RECORD_STATUS.SENT
+    );
+    assert.ok(sent);
+    assert.ok(sent.idempotencyKey);
+    assert.ok(sent.providerMessageId);
+    const firstProspectId = sent.prospectId;
+
+    const replay = createExecutionRequest({
+      source: EXECUTION_SOURCES.API,
+      intent: EXECUTION_INTENTS.EXECUTE_OUTBOUND,
+      missionId: mission.id,
+      operatorId: 'operator-1',
+      stage: STAGES.EXECUTE,
+      payload: { maxSends: 1 },
+    });
+    const replayed = await routeExecutionRequest(replay, {
+      engine,
+      tenantId: '10',
+      sendEmail,
+      resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
+      maxSends: 1,
+    });
+    assert.equal(providerCalls.length, 1);
+    assert.ok((replayed.executionResult.records || []).some((row) => row.deduplicated === true));
+    assert.ok(
+      (replayed.executionResult.records || []).every(
+        (row) => row.prospectId === firstProspectId || row.deduplicated === true
+      )
+    );
+  });
+
   it('matching artifact revision allows execution', async () => {
     const snapshot = await throughExecutionApproved();
     const bundleResult = buildExecutionBundle({
