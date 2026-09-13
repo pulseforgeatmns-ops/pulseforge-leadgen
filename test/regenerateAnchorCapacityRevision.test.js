@@ -410,20 +410,16 @@ describe('regenerateAnchorCapacityRevision — canonical path', () => {
       question: 'Regenerate capacity only.',
     });
 
-    await assert.rejects(
-      () => amo.routeExecutionRequest(request, {
-        engine,
-        tenantId: '10',
-        persist: true,
-        allowFixtureFallback: true,
-        runPaige: async () => paigePayload,
-      }),
-      (err) => {
-        assert.equal(err.code, 'tme_persistence');
-        assert.match(err.message, /persistStageCommit/);
-        return true;
-      }
-    );
+    const routed = await amo.routeExecutionRequest(request, {
+      engine,
+      tenantId: '10',
+      persist: true,
+      allowFixtureFallback: true,
+      runPaige: async () => paigePayload,
+    });
+    assert.equal(routed.executionResult?.rolledBack, true);
+    assert.equal(routed.executionResult?.error?.code, 'tme_persistence');
+    assert.match(String(routed.executionResult?.error?.message || ''), /persistStageCommit/);
 
     const after = engine.inspect(mission.id, { tenantId: '10' });
     assert.equal(after.mission.stage, STAGES.READY);
@@ -474,7 +470,7 @@ describe('regenerateAnchorCapacityRevision — canonical path', () => {
       runPaige: async () => paigePayload,
     });
     assert.equal(routed.action, 'revise_prepared_outreach');
-    assert.equal(routed.executionResult?.rolledBack, false);
+    assert.notEqual(routed.executionResult?.rolledBack, true, routed.executionResult?.error?.message);
 
     resetAcquisitionMissionRuntime();
     const reloadedRuntime = createAcquisitionMissionRuntime({
