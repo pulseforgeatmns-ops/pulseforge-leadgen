@@ -225,7 +225,9 @@ function emmettInput(mission, extras = {}) {
   if (!missionCandidates && contributions.length) {
     try {
       const { buildMissionBoundCandidates, buildPaigeReadinessMetadata } = require('../max/workspace/EmmettMissionCandidates');
-      missionCandidates = buildMissionBoundCandidates(mission, contributions);
+      missionCandidates = buildMissionBoundCandidates(mission, contributions, {
+        crmByProspectId: extras.crmByProspectId || null,
+      });
       paigeReadiness = buildPaigeReadinessMetadata(paigePayload);
     } catch (_) {
       missionCandidates = [];

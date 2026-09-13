@@ -7,6 +7,7 @@
  */
 
 const { SPECIALISTS, CONTRIBUTION_KINDS, asText } = require('../../acquisition-mission/types');
+const { resolveMissionBoundRecipientEmail } = require('./MissionBoundCrmResolver');
 
 function latestContribution(contributions = [], specialist, kind) {
   return [...contributions]
@@ -75,7 +76,8 @@ function findBoundVariant(variants = [], candidateId) {
  * Build queue candidates strictly from mission contributions — never client-wide CRM.
  * SPEC-212: Each candidate receives the message variant bound to its candidateId.
  */
-function buildMissionBoundCandidates(mission, contributions = []) {
+function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
+  const crmByProspectId = opts.crmByProspectId || null;
   const scoutRow = findLatestScoutDiscovery(contributions);
   const maxRow = findMaxPrioritization(contributions);
   const paigeRow = findPaigeVariants(contributions);
@@ -128,10 +130,15 @@ function buildMissionBoundCandidates(mission, contributions = []) {
     // SPEC-212: Use target's own ID as candidateId
     const candidateId = target.id || target.companyId || prospect?.id || `mission-target-${rank}`;
 
+    const prospectId = prospect?.id || null;
     const row = {
       id: candidateId,
-      prospectId: prospect?.id || null,
-      email: prospect?.email || null,
+      prospectId,
+      email: resolveMissionBoundRecipientEmail({
+        discoveryEmail: prospect?.email,
+        prospectId,
+        crmByProspectId,
+      }),
       company: name || opp.name || prospect?.company || `Target ${rank}`,
       vertical: String(vertical).toLowerCase(),
       maxPriority,
@@ -201,6 +208,16 @@ function buildMissionBoundCandidates(mission, contributions = []) {
   return candidates;
 }
 
+/** Prospect IDs for the current mission-bound candidate set (for CRM batch load). */
+function listMissionBoundProspectIds(mission, contributions = [], opts = {}) {
+  return [...new Set(
+    buildMissionBoundCandidates(mission, contributions, opts)
+      .map((row) => row.prospectId)
+      .filter(Boolean)
+      .map(String)
+  )];
+}
+
 module.exports = {
   latestContribution,
   findLatestScoutDiscovery,
@@ -209,4 +226,5 @@ module.exports = {
   buildPaigeReadinessMetadata,
   findBoundVariant,
   buildMissionBoundCandidates,
+  listMissionBoundProspectIds,
 };
