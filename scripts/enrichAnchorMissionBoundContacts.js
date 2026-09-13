@@ -29,7 +29,7 @@ const {
   isExcludedCompany,
   loadMissionBoundProspects,
   enrichProspectRow,
-} = require('./enrichAnchorMissionBoundProspects');
+} = require('./lib/anchorMissionBoundEnrichment');
 
 const RAILWAY_COMMAND = [
   'node scripts/enrichAnchorMissionBoundContacts.js --confirm-production \\',

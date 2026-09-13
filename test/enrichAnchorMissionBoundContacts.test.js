@@ -14,9 +14,12 @@ const {
   missingCrmResult,
   run,
 } = require('../scripts/enrichAnchorMissionBoundContacts');
+const { persistProviderChainEmail } = require('../scripts/lib/anchorMissionBoundEnrichment');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'enrichAnchorMissionBoundContacts.js');
+const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'anchorMissionBoundEnrichment.js');
 const source = fs.readFileSync(SCRIPT, 'utf8');
+const libSource = fs.readFileSync(LIB, 'utf8');
 
 describe('enrichAnchorMissionBoundContacts', () => {
   it('requires --confirm-production and defaults to the Anchor mission', () => {
@@ -37,10 +40,11 @@ describe('enrichAnchorMissionBoundContacts', () => {
   });
 
   it('does not send mail, revise CAPACITY, enable autosend, or change enabled_agents', () => {
-    assert.doesNotMatch(source, /regenerateAnchorCapacityRevision/);
+    assert.doesNotMatch(source, /require\(['"]\.\/regenerateAnchorCapacityRevision['"]\)/);
+    assert.doesNotMatch(source, /require\(['"]\.\/auditAnchorCapacitySendability['"]\)/);
+    assert.doesNotMatch(source, /require\(['"]\.\/executeAnchorOneOutbound['"]\)/);
     assert.doesNotMatch(source, /REVISE_PREPARED_OUTREACH/);
     assert.doesNotMatch(source, /GENERATE_CAPACITY/);
-    assert.doesNotMatch(source, /executeAnchorOneOutbound/);
     assert.doesNotMatch(source, /EXECUTE_OUTBOUND/);
     assert.doesNotMatch(source, /APPROVE_EXECUTION/);
     assert.doesNotMatch(source, /routeExecutionRequest/);
@@ -52,6 +56,50 @@ describe('enrichAnchorMissionBoundContacts', () => {
     assert.match(source, /Never regenerates CAPACITY/);
     assert.match(source, /isProjectableCrmProspect/);
     assert.match(source, /invalidOutreachEmailReason/);
+    assert.doesNotMatch(libSource, /require\(['"]\.\/regenerateAnchorCapacityRevision['"]\)/);
+    assert.doesNotMatch(libSource, /REVISE_PREPARED_OUTREACH/);
+    assert.doesNotMatch(libSource, /UPDATE\s+clients/i);
+  });
+
+  it('does not persist emails that fail verification or outreach gates', async () => {
+    const queries = [];
+    const db = {
+      query: async (sql) => {
+        queries.push(sql);
+        return { rows: [] };
+      },
+    };
+    const unverified = await persistProviderChainEmail(db, {
+      prospect_id: 'p-1',
+      client_id: 10,
+    }, { email: 'partner@kluglaw.com', source: ['prospeo'] }, {
+      emailVerified: false,
+      emailStatus: 'unknown',
+      doNotContact: false,
+    }, false);
+    assert.equal(unverified.persisted, false);
+    assert.equal(unverified.reason, 'failed_safety_gates');
+
+    const dnc = await persistProviderChainEmail(db, {
+      prospect_id: 'p-1',
+      client_id: 10,
+    }, { email: 'partner@kluglaw.com', source: ['prospeo'] }, {
+      emailVerified: true,
+      emailStatus: 'valid',
+      doNotContact: true,
+    }, false);
+    assert.equal(dnc.persisted, false);
+
+    const invented = await persistProviderChainEmail(db, {
+      prospect_id: 'p-1',
+      client_id: 10,
+    }, { email: 'not-an-email', source: ['guess'] }, {
+      emailVerified: true,
+      emailStatus: 'valid',
+      doNotContact: false,
+    }, false);
+    assert.equal(invented.persisted, false);
+    assert.equal(queries.length, 0);
   });
 
   it('excludes Deliverability Test from CAPACITY eligibility even with a verified email', () => {
