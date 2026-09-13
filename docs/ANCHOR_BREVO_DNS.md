@@ -2,15 +2,21 @@
 
 ## Current status
 
-Checked June 28, 2026:
+DNS rechecked 2026-09-13 (read-only; no Brevo send):
 
-- `goanchorcleaning.com` is not registered in the connected Brevo account. The read-only Brevo domain lookup returns 404.
-- `jacob@goanchorcleaning.com` is not present in Brevo's sender list.
-- Authoritative nameservers are `dns1.registrar-servers.com` and `dns2.registrar-servers.com`.
-- Existing root SPF TXT: `v=spf1 include:_spf.google.com ~all`
-- Existing DMARC TXT at `_dmarc`: `v=DMARC1; p=none; rua=mailto:jacob@goanchorcleaning.com`
+- Public TXT `@` now includes `brevo-code:bb22f3a79e20f15330ea1d92ad899bad` — the domain **is** registered in a Brevo account.
+- `brevo1._domainkey` and `brevo2._domainkey` CNAMEs resolve to Brevo DKIM hosts and publish DKIM TXT.
+- Authoritative nameservers remain `dns1.registrar-servers.com` and `dns2.registrar-servers.com`.
+- Existing root SPF TXT: `v=spf1 include:_spf.google.com ~all` (unchanged; do not add a second SPF).
+- Existing DMARC TXT at `_dmarc`: `v=DMARC1; p=none; rua=mailto:jacob@goanchorcleaning.com`.
+- Brevo API `verified`/`authenticated` and sender `jacob@goanchorcleaning.com` `active` were **not** confirmed from the Cloud Agent (no `BREVO_API_KEY`). Run `scripts/probeAnchorEmmettOutboundReadiness.js --confirm-production` on Railway.
 
-No API call should create the domain or sender. Jacob must complete the Brevo and registrar steps below.
+June 28, 2026 (superseded for DNS; kept for the original handoff):
+
+- `goanchorcleaning.com` was not yet registered; domain lookup returned 404.
+- `jacob@goanchorcleaning.com` was not in the sender list.
+
+No API call should create the domain or sender. If Brevo still shows pending authentication, finish the registrar/verify steps below.
 
 ## Why the final Brevo values are not printed yet
 
