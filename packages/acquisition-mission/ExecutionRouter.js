@@ -280,6 +280,9 @@ function handlerContext(request, context, mission, runtimeOwner) {
     persist: context.persist,
     pool: context.pool,
     persistStage: context.persistStage,
+    maxSends: context.maxSends || payload.maxSends,
+    prospectId: context.prospectId || payload.prospectId || null,
+    prospectIds: context.prospectIds || payload.prospectIds || null,
     context: context.planningContext || context.context,
     executionRequest: request,
     // ADR-089 / SPEC-170 — AMO-owned missions never receive Mission Engine.

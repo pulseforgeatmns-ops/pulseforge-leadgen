@@ -22,10 +22,24 @@ const {
 
 const EXECUTION_APPROVAL_ACTION = 'execution_approved';
 
+function isSupersededContribution(row) {
+  return row?.payload?.superseded === true;
+}
+
 function findLatestContribution(contributions = [], specialist, kind) {
   return [...contributions]
     .reverse()
     .find((row) => row.specialist === specialist && row.kind === kind) || null;
+}
+
+function findLatestActiveContribution(contributions = [], specialist, kind) {
+  return [...contributions]
+    .reverse()
+    .find((row) =>
+      row.specialist === specialist
+      && row.kind === kind
+      && !isSupersededContribution(row)
+    ) || null;
 }
 
 function findMaxPrioritization(contributions = []) {
@@ -33,11 +47,13 @@ function findMaxPrioritization(contributions = []) {
 }
 
 function findPaigeVariants(contributions = []) {
-  return findLatestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+  return findLatestActiveContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS)
+    || findLatestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
 }
 
 function findEmmettCapacity(contributions = []) {
-  return findLatestContribution(contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY);
+  return findLatestActiveContribution(contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY)
+    || findLatestContribution(contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY);
 }
 
 function findLatestScoutDiscovery(contributions = []) {

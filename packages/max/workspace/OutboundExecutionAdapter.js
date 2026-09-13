@@ -54,6 +54,8 @@ async function executeOutboundBundle(input = {}) {
     resolveProspectAttributes,
     existingRecords = [],
     persistExecutionRecord,
+    executionRequest,
+    maxSends: maxSendsInput,
   } = input;
 
   const resolvedSender = await resolveExecuteSender(input);
@@ -125,6 +127,13 @@ async function executeOutboundBundle(input = {}) {
 
   const { bundle } = bundleResult;
   const records = [];
+  const requestedMax = Number(
+    maxSendsInput
+    ?? (executionRequest && executionRequest.payload && executionRequest.payload.maxSends)
+  );
+  const maxSends = Number.isFinite(requestedMax) && requestedMax > 0 ? requestedMax : null;
+  const prospectFilter = resolveProspectFilter(input, executionRequest);
+  let sendableConsidered = 0;
   const approvalMeta = bundle.executionApproval;
   const explicitSender = {
     email: bundle.provider.senderIdentity,
@@ -142,6 +151,10 @@ async function executeOutboundBundle(input = {}) {
   }
 
   for (const send of bundle.sends) {
+    if (prospectFilter.size && !prospectFilter.has(String(send.prospectId || ''))) {
+      continue;
+    }
+
     if (send.status === EXECUTION_RECORD_STATUS.BLOCKED) {
       const blockedRecord = buildExecutionRecord({
         missionId: bundle.missionId,
@@ -165,6 +178,13 @@ async function executeOutboundBundle(input = {}) {
       }
       continue;
     }
+
+    // Count sendable items toward the cap before send or dedup. Replay of
+    // maxSends=1 must not advance to the next unsent queue item.
+    if (maxSends != null && sendableConsidered >= maxSends) {
+      continue;
+    }
+    sendableConsidered += 1;
 
     const priorSuccess = findSuccessfulExecutionRecord(
       [...existingRecords, ...records],
@@ -243,6 +263,18 @@ async function executeOutboundBundle(input = {}) {
     records,
     summary: summarizeExecutionRecords(records),
   };
+}
+
+function resolveProspectFilter(input = {}, executionRequest = null) {
+  const payload = (executionRequest && executionRequest.payload) || {};
+  const values = []
+    .concat(input.prospectId || [])
+    .concat(input.prospectIds || [])
+    .concat(payload.prospectId || [])
+    .concat(payload.prospectIds || [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  return new Set(values);
 }
 
 module.exports = {
