@@ -83,8 +83,10 @@ function buildScoutDiscoverOpts(mission, executionInput = {}, opts = {}) {
     priorOutcomeLearnings,
     priorLearningRetrievalWarning:
       executionInput.memoryContext?.priorLearningRetrievalWarning || null,
-    store: opts.engine?.store || opts.store,
-    memoryStore: opts.memoryStore || opts.engine?.store || opts.store,
+    // SPEC-143 memory store only. AMO engine.store is the mission/outcome-learning
+    // store and does not implement loadForMarket — never inject it here.
+    store: opts.memoryStore || opts.store,
+    memoryStore: opts.memoryStore || opts.store,
   };
 
   if (opts.investigationContinuation === true && opts.engine) {
