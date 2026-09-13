@@ -2,6 +2,11 @@ name: Execute Anchor One Outbound
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/executeAnchorOneOutbound.js
+      - .github/workflows/execute-anchor-one-outbound.yml
 
 jobs:
   execute:
