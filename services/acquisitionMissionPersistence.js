@@ -261,7 +261,11 @@ async function persistContribution(row, tenantId, pool = defaultPool(), opts = {
   await pool.query(
     `INSERT INTO acquisition_mission_contributions (id, mission_id, tenant_id, specialist, kind, payload, at)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (id) DO NOTHING`,
+     ON CONFLICT (id) DO UPDATE SET
+       specialist = EXCLUDED.specialist,
+       kind = EXCLUDED.kind,
+       payload = EXCLUDED.payload,
+       at = EXCLUDED.at`,
     [row.id, row.missionId, String(tenantId), row.specialist, row.kind, row, row.at]
   );
   return row;
