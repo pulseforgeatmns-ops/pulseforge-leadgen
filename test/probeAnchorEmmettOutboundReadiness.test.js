@@ -10,6 +10,8 @@ const {
   inspectSpec212,
   firstBlockerOf,
   buildReport,
+  isSupersededContribution,
+  selectActiveCapacityContribution,
   run,
 } = require('../scripts/probeAnchorEmmettOutboundReadiness');
 const { MESSAGE_BINDING_SCOPES } = require('../packages/acquisition-mission/types');
@@ -99,6 +101,73 @@ describe('probeAnchorEmmettOutboundReadiness', () => {
     });
     assert.equal(stripped.valid, false);
     assert.match(String(stripped.blocker), /binding/i);
+  });
+
+  it('selects the active non-superseded CAPACITY contribution', () => {
+    const oldId = 'contrib_78f321cf-405f-4a76-a2e1-9c0fbeb5696c';
+    const newId = 'contrib_bf84cba9-eb76-4ff8-8179-3b0f2e3e99b8';
+    const staleCapacity = {
+      capacity_id: oldId,
+      at: '2026-09-13T20:00:00.000Z',
+      payload: {
+        id: oldId,
+        specialist: 'emmett',
+        kind: 'capacity',
+        payload: {
+          superseded: true,
+          supersededBy: newId,
+          queue: {
+            items: [{
+              id: 'co-harbor',
+              paige: { author: 'paige', source: 'paige', ready: true },
+            }],
+          },
+        },
+      },
+    };
+    const freshCapacity = {
+      capacity_id: newId,
+      at: '2026-09-13T19:00:00.000Z',
+      payload: {
+        id: newId,
+        specialist: 'emmett',
+        kind: 'capacity',
+        payload: boundCapacityPayload(),
+      },
+    };
+
+    assert.equal(isSupersededContribution(staleCapacity), true);
+    assert.equal(isSupersededContribution(freshCapacity), false);
+
+    const byPointer = selectActiveCapacityContribution({
+      revisionState: { emmettContributionId: newId },
+    }, [staleCapacity, freshCapacity]);
+    assert.equal(byPointer.capacity_id, newId);
+
+    const byTimestamp = selectActiveCapacityContribution({}, [staleCapacity, freshCapacity]);
+    assert.equal(byTimestamp.capacity_id, newId);
+
+    const staleWinsWithoutFilter = [...[staleCapacity, freshCapacity]]
+      .sort((a, b) => new Date(b.at) - new Date(a.at))[0];
+    assert.equal(staleWinsWithoutFilter.capacity_id, oldId);
+
+    const report = buildReport({
+      missionId: 'mission_ad7753b0-6def-441d-bb1a-3764656f5750',
+      capacityContributionId: byPointer.capacity_id,
+      spec212: inspectSpec212(freshCapacity.payload),
+      senderReadiness: { sendable: true, blocker: null },
+      brevo: {
+        keyPresent: true,
+        domainVerified: true,
+        domainAuthenticated: true,
+        senderActive: true,
+      },
+      autosendEnabled: false,
+      enabledAgents: ['scout'],
+    });
+    assert.equal(report.capacityContributionId, newId);
+    assert.equal(report.spec212.valid, true);
+    assert.equal(report.firstBlocker, null);
   });
 
   it('reports the first blocker in the requested concise JSON shape', () => {
