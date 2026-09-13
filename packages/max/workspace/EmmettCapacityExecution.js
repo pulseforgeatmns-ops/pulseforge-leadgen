@@ -100,18 +100,43 @@ async function resolveInfrastructureSnapshot(executionInput = {}, opts = {}) {
   throw validationError('tme_infrastructure_missing', 'Infrastructure snapshot is required for Emmett execution.');
 }
 
+function cleanText(value) {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim()
+    : '';
+}
+
+/**
+ * Persist Paige-derived SPEC-212 attribution only.
+ * Copy (subject/body/cta) stays forbidden on Emmett CAPACITY — EXECUTE
+ * resolves message text from the Paige VARIANTS contribution.
+ */
+function sanitizePaigeBinding(value = {}) {
+  const paige = {
+    author: value.author || 'paige',
+    source: value.source || 'paige',
+    ready: value.ready === true,
+    variantLabel: value.variantLabel || null,
+    sendable: value.sendable === true,
+  };
+  const candidateId = cleanText(value.candidateId);
+  if (candidateId) paige.candidateId = candidateId;
+  const bindingScope = cleanText(value.bindingScope);
+  if (bindingScope) paige.bindingScope = bindingScope;
+  if (value.attributableIntelligence && typeof value.attributableIntelligence === 'object') {
+    paige.attributableIntelligence = { ...value.attributableIntelligence };
+  }
+  const variantId = cleanText(value.variantId);
+  if (variantId) paige.variantId = variantId;
+  return paige;
+}
+
 function sanitizeQueueItem(item = {}) {
   const clean = {};
   for (const [key, value] of Object.entries(item)) {
     if (FORBIDDEN_QUEUE_KEYS.has(key)) continue;
     if (key === 'paige' && value && typeof value === 'object') {
-      clean.paige = {
-        author: value.author || 'paige',
-        source: value.source || 'paige',
-        ready: value.ready === true,
-        variantLabel: value.variantLabel || null,
-        sendable: value.sendable === true,
-      };
+      clean.paige = sanitizePaigeBinding(value);
       continue;
     }
     clean[key] = value;
@@ -485,4 +510,5 @@ module.exports = {
   validateEmmettCapacityOutput,
   commitEmmettCapacityStage,
   sanitizeQueueItem,
+  sanitizePaigeBinding,
 };
