@@ -21,11 +21,11 @@ const pool = require('../db');
 const { unwrapContributionPayload } = require('./validateAnchorCanonicalMission');
 const { sendableQueueItems } = require('./executeAnchorOneOutbound');
 const { invalidOutreachEmailReason } = require('../utils/emailGuard');
+const { loadActiveCapacityForMission } = require('./lib/activeCapacitySelection');
 
 const TENANT_ID = '10';
 const CLIENT_ID = 10;
-const MISSION_ID = 'mission_ad7753b0-6def-441d-bb1a-3764656f5750';
-const CAPACITY_ID = 'contrib_55e11312-3837-4485-b95a-58134dcd7601';
+const DEFAULT_MISSION_ID = 'mission_ad7753b0-6def-441d-bb1a-3764656f5750';
 const VERIFIED_EMAIL_STATUSES = new Set(['valid', 'verified']);
 
 const SENDABLE_PREDICATE = Object.freeze({
@@ -53,10 +53,27 @@ const EXECUTE_PREDICATE = Object.freeze({
 
 function parseArgs(argv = process.argv.slice(2)) {
   const confirmProduction = argv.includes('--confirm-production');
+  const missionIdx = argv.indexOf('--mission-id');
+  const missionId = missionIdx >= 0 ? argv[missionIdx + 1] : DEFAULT_MISSION_ID;
+  const unknown = argv.filter(
+    (arg, i) =>
+      arg !== '--confirm-production'
+      && arg !== '--mission-id'
+      && (missionIdx < 0 || i !== missionIdx + 1)
+  );
   if (!confirmProduction) {
     throw Object.assign(new Error('Refusing without --confirm-production.'), { code: 'confirm_production_required' });
   }
-  return { confirmProduction };
+  if (!missionId || missionId.startsWith('--')) {
+    throw Object.assign(new Error('--mission-id requires a mission id value.'), { code: 'mission_id_required' });
+  }
+  if (unknown.length) {
+    throw Object.assign(
+      new Error(`Unknown argument(s): ${unknown.join(', ')}.`),
+      { code: 'unknown_args' }
+    );
+  }
+  return { confirmProduction, missionId };
 }
 
 function spec212ItemValid(item, index, validation) {
@@ -96,27 +113,31 @@ async function loadProspect(db, prospectId) {
 }
 
 async function run(options = {}) {
-  parseArgs();
-  if (!process.env.DATABASE_URL) {
+  const args = options.missionId != null || options.confirmProduction
+    ? { missionId: options.missionId || DEFAULT_MISSION_ID }
+    : parseArgs();
+  if (!options.confirmProduction && !args.confirmProduction) {
+    throw Object.assign(new Error('Refusing without --confirm-production.'), { code: 'confirm_production_required' });
+  }
+  if (!process.env.DATABASE_URL && !options.pool) {
     throw Object.assign(new Error('Missing DATABASE_URL'), { code: 'runtime_env_missing' });
   }
 
   const db = options.pool || pool;
-  const cap = await db.query(
-    `SELECT id, payload, at
-       FROM acquisition_mission_contributions
-      WHERE id = $1 AND tenant_id = $2 AND mission_id = $3
-        AND specialist = 'emmett' AND kind = 'capacity'`,
-    [CAPACITY_ID, TENANT_ID, MISSION_ID]
-  );
-  if (!cap.rows.length) {
-    throw Object.assign(new Error(`CAPACITY ${CAPACITY_ID} not found.`), { code: 'capacity_not_found' });
+  const missionId = args.missionId;
+  const active = await loadActiveCapacityForMission(db, TENANT_ID, missionId);
+  if (!active) {
+    throw Object.assign(
+      new Error(`No active non-superseded CAPACITY for mission ${missionId}.`),
+      { code: 'capacity_not_found' }
+    );
   }
 
-  const body = unwrapContributionPayload(cap.rows[0].payload) || {};
+  const capacityContributionId = active.capacity_id;
+  const body = unwrapContributionPayload(active.payload) || {};
   const items = Array.isArray(body.queue?.items) ? body.queue.items : [];
   const spec212 = validateProspectMessageBindings(body);
-  const sendable = sendableQueueItems(cap.rows[0].payload);
+  const sendable = sendableQueueItems(active.payload);
 
   const rows = [];
   for (let i = 0; i < items.length; i += 1) {
@@ -164,8 +185,8 @@ async function run(options = {}) {
   const projected = rows.some((r) => r.emailOnQueueItem);
 
   return {
-    missionId: MISSION_ID,
-    capacityContributionId: CAPACITY_ID,
+    missionId,
+    capacityContributionId,
     sendablePredicate: SENDABLE_PREDICATE,
     executePredicate: EXECUTE_PREDICATE,
     queueItemCount: items.length,
@@ -197,7 +218,14 @@ async function run(options = {}) {
   };
 }
 
-module.exports = { run, SENDABLE_PREDICATE, scriptRejectReason };
+module.exports = {
+  run,
+  parseArgs,
+  SENDABLE_PREDICATE,
+  scriptRejectReason,
+  TENANT_ID,
+  DEFAULT_MISSION_ID,
+};
 
 if (require.main === module) {
   run()
