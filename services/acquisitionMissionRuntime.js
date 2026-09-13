@@ -159,6 +159,9 @@ function createAcquisitionMissionRuntime(opts = {}) {
 
       try {
         const loaded = await loadTenantMissions(tenantId, effectivePool);
+        // Contributions must hydrate before missions: putMission runs SPEC-136
+        // consistency checks (e.g. execution_approval requires Paige + Emmett rows).
+        for (const row of loaded.contributions) if (row) state.engine.store.addContribution(row);
         for (const mission of loaded.missions) {
           try {
             state.engine.store.putMission(mission);
@@ -182,7 +185,6 @@ function createAcquisitionMissionRuntime(opts = {}) {
             payload: payload.payload || {},
           });
         }
-        for (const row of loaded.contributions) if (row) state.engine.store.addContribution(row);
         for (const row of loaded.observations) if (row) state.engine.store.addObservation(row);
         for (const row of loaded.outcomes) if (row) state.engine.store.addOutcome(row);
         for (const row of loaded.learning) if (row) state.engine.store.addLearning(row);
