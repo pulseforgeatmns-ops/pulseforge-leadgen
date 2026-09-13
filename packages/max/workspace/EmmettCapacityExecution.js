@@ -345,6 +345,24 @@ async function runEmmettForAmoMission(mission, opts = {}) {
   const contributions = opts.contributions
     || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
     || [];
+  const {
+    listMissionBoundProspectIds,
+  } = require('./EmmettMissionCandidates');
+  const { loadCrmProspectsByIds } = require('./MissionBoundCrmResolver');
+
+  let crmByProspectId = opts.crmByProspectId || null;
+  if (!crmByProspectId && opts.pool) {
+    const clientId = Number(mission.clientId || mission.tenantId || opts.tenantId);
+    const prospectIds = listMissionBoundProspectIds(mission, contributions);
+    if (prospectIds.length) {
+      crmByProspectId = await loadCrmProspectsByIds({
+        clientId,
+        prospectIds,
+        pool: opts.pool,
+      });
+    }
+  }
+
   const executionInput = buildExecutionInput({
     mission,
     contributions,
@@ -353,6 +371,7 @@ async function runEmmettForAmoMission(mission, opts = {}) {
     executionContext: opts.executionContext,
     infrastructureSnapshot: opts.infrastructureSnapshot,
     store: opts.engine?.store,
+    crmByProspectId,
   });
   const { payload, assessed, infrastructureSnapshot, candidates } = await buildEmmettCapacityPayload(
     executionInput,
