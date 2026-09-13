@@ -314,10 +314,13 @@ function persistOpts(context = {}) {
     return { persist: false, pool: context.pool, persistStage: context.persistStage };
   }
   if (typeof context.persistStage === 'function') {
-    return { persistStage: context.persistStage, pool: context.pool };
+    return { persistStage: context.persistStage, pool: context.pool, persist: context.persist };
   }
   if (context.pool) {
     return { persist: true, pool: context.pool };
+  }
+  if (context.persist === true) {
+    return { persist: true, pool: context.pool || null };
   }
   return {};
 }

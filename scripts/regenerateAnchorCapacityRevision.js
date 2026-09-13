@@ -32,7 +32,7 @@ const {
 } = amo;
 const pool = require('../db');
 const { getAcquisitionMissionRuntime } = require('../services/acquisitionMissionRuntime');
-const { inspectMission } = require('../services/acquisitionMission');
+const { loadMissionSnapshot } = require('../services/acquisitionMissionPersistence');
 const { unwrapContributionPayload } = require('./validateAnchorCanonicalMission');
 const probe = require('./probeAnchorEmmettOutboundReadiness');
 
@@ -162,8 +162,7 @@ async function ensureExecutionApproval({ runtime, engine, missionId, mission, te
     engine,
     tenantId,
     operatorId: OPERATOR_ID,
-    pool: runtime.pool,
-    persist: true,
+    ...runtime.persistOpts({ persist: true }),
   });
 
   return {
@@ -189,8 +188,7 @@ async function runRevision({ runtime, engine, missionId, mission, tenantId, paig
     engine,
     tenantId,
     operatorId: OPERATOR_ID,
-    pool: runtime.pool,
-    persist: true,
+    ...runtime.persistOpts({ persist: true }),
     runPaige: async () => paigePayload,
   });
 }
@@ -255,14 +253,42 @@ async function run(options = {}) {
     paigePayload,
   });
 
-  const afterSnapshot = revisionResult.snapshot || engine.inspect(missionId, { tenantId: TENANT_ID });
-  const newPaige = findLatestContribution(afterSnapshot.contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
-  const newCapacity = activeCapacityRow(afterSnapshot.contributions || [])
-    || findLatestContribution(afterSnapshot.contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY);
-  const afterSpec212 = newCapacity
-    ? inspectCapacitySpec212(newCapacity.payload)
-    : { valid: false, blocker: 'capacity_missing', violationCount: 0, violations: [] };
+  const persistOpts = runtime.persistOpts({ persist: true });
+  const durableSnapshot = persistOpts.pool
+    ? await loadMissionSnapshot(missionId, TENANT_ID, persistOpts.pool)
+    : null;
+  if (!durableSnapshot || !durableSnapshot.mission) {
+    const err = new Error('Revision committed in memory but durable mission snapshot is missing.');
+    err.code = 'tme_persistence_verify';
+    throw err;
+  }
 
+  const durableCapacities = (durableSnapshot.contributions || []).filter(
+    (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
+  );
+  const durableOld = oldCapacity
+    ? durableCapacities.find((row) => row.id === oldCapacity.id)
+    : null;
+  const durableNew = activeCapacityRow(durableSnapshot.contributions || [])
+    || findLatestContribution(durableSnapshot.contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY);
+  const durablePaige = findLatestContribution(
+    durableSnapshot.contributions,
+    SPECIALISTS.PAIGE,
+    CONTRIBUTION_KINDS.VARIANTS
+  );
+
+  if (!durableNew || durableNew.id === oldCapacity?.id) {
+    const err = new Error('Revised CAPACITY was not inserted into acquisition_mission_contributions.');
+    err.code = 'tme_persistence_verify';
+    throw err;
+  }
+  if (durableOld && durableOld.payload?.superseded !== true) {
+    const err = new Error('Old CAPACITY was not durably marked superseded.');
+    err.code = 'tme_persistence_verify';
+    throw err;
+  }
+
+  const afterSpec212 = inspectCapacitySpec212(durableNew.payload);
   const probeReport = await probe.run({ confirmProduction: true, pool });
 
   return {
@@ -285,14 +311,16 @@ async function run(options = {}) {
     },
     contributions: {
       supersededCapacityId: oldCapacity?.id || null,
-      newCapacityId: newCapacity?.id || null,
+      newCapacityId: durableNew.id,
       reusedPaigeSourceId: findLatestContribution(
         beforeSnapshot.contributions,
         SPECIALISTS.PAIGE,
         CONTRIBUTION_KINDS.VARIANTS
       )?.id || null,
-      newPaigeId: newPaige?.id || null,
+      newPaigeId: durablePaige?.id || null,
       paigeVariantsReused: true,
+      durableSuperseded: durableOld?.payload?.superseded === true,
+      durableReload: true,
     },
     spec212: {
       before: beforeSpec212,
@@ -303,7 +331,8 @@ async function run(options = {}) {
       afterSpec212.valid === true
       && probeReport.senderReadiness?.sendable === true
       && probeReport.firstBlocker == null
-      && afterSnapshot.mission?.stage === STAGES.READY,
+      && durableSnapshot.mission?.stage === STAGES.READY
+      && probeReport.capacityContributionId === durableNew.id,
     completedAt: new Date().toISOString(),
   };
 }

@@ -31,6 +31,7 @@ const {
   bumpMissionVersion,
   planningError,
   validationError,
+  persistenceError,
   buildMissionExecutionContext,
   executeSpecialist,
   buildExecutionInput,
@@ -2628,6 +2629,14 @@ async function advancePreparedOutreachRevision(input = {}) {
     throw planningError('tme_revision_no_approval', 'No current execution approval is available to revise.');
   }
 
+  const persistDurable = bindPersistDurable(input, engine, tenantId);
+  if (input.persist === true && typeof persistDurable !== 'function') {
+    throw persistenceError(
+      'tme_persistence',
+      'Prepared outreach revision with persist=true requires persistStageCommit (pool or persistStage).'
+    );
+  }
+
   const preparing = engine.get(current.id, tenantId);
   const contributions = snapshot.contributions || [];
   applyStageTransition(preparing, STAGES.PREPARE, { contributions });
@@ -2810,7 +2819,7 @@ async function advancePreparedOutreachRevision(input = {}) {
           snapshot: commitEngine.inspect(missionId, { tenantId: commitTenantId }),
         };
       },
-      persistDurable: bindPersistDurable(input, engine, tenantId),
+      persistDurable,
     });
     return {
       alreadyExecuted: false,

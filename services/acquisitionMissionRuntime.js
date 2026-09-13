@@ -113,6 +113,10 @@ function createAcquisitionMissionRuntime(opts = {}) {
       return state.engine.store;
     },
 
+    get pool() {
+      return pool;
+    },
+
     persistOpts(overrides = {}) {
       const mergedPool = overrides.pool || pool;
       let mergedPersist;
