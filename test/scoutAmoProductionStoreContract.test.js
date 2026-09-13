@@ -36,20 +36,29 @@ const OBJECTIVE =
   'Acquire recurring commercial cleaning customers from law firms in Greater Manchester, NH.';
 
 function productionCandidates() {
+  const now = new Date().toISOString();
   return [
     {
       id: 'co-harbor',
+      tenantId: TENANT_ID,
       name: 'Harbor Law Group',
+      companyName: 'Harbor Law Group',
       industry: 'law_firm',
       location: 'Manchester, NH',
+      address: '100 Elm St, Manchester, NH',
       website: 'https://harborlaw.example',
+      phone: '603-555-0100',
+      placeId: 'place-harbor',
       icpScore: 84,
+      updatedAt: now,
+      lastEvaluatedAt: now,
+      discoveredAt: now,
       signals: [
         {
           type: 'hiring',
           label: 'Hiring operations manager',
           source: 'job_board',
-          observedAt: '2026-09-01T00:00:00.000Z',
+          observedAt: now,
         },
       ],
       evidence: [
@@ -63,17 +72,25 @@ function productionCandidates() {
     },
     {
       id: 'co-granite',
+      tenantId: TENANT_ID,
       name: 'Granite Legal Partners',
+      companyName: 'Granite Legal Partners',
       industry: 'law_firm',
       location: 'Bedford, NH',
+      address: '22 Bedford Center Rd, Bedford, NH',
       website: 'https://granitelegal.example',
+      phone: '603-555-0144',
+      placeId: 'place-granite',
       icpScore: 78,
+      updatedAt: now,
+      lastEvaluatedAt: now,
+      discoveredAt: now,
       signals: [
         {
           type: 'hiring',
           label: 'Hiring office coordinator',
           source: 'linkedin',
-          observedAt: '2026-09-02T00:00:00.000Z',
+          observedAt: now,
         },
       ],
       evidence: [
@@ -86,6 +103,23 @@ function productionCandidates() {
       people: [{ name: 'Jordan Hale', jobTitle: 'Office Manager' }],
     },
   ];
+}
+
+function operationalPlacesProvider(candidates) {
+  return {
+    id: 'google_places',
+    available: () => true,
+    lastExecution: {
+      providerId: 'google_places',
+      executed: true,
+      abortReason: null,
+      queries: [{ city: 'Manchester', status: 'OK' }],
+      totals: { queries: 1, results: candidates.length, retries: 0, latencyMs: 1 },
+      errors: [],
+    },
+    collectEvidence: async () => candidates,
+    search: async () => candidates,
+  };
 }
 
 function createProductionMission(engine, overrides = {}) {
@@ -148,9 +182,10 @@ describe('AMO Scout production store contract', () => {
       { mission },
       {
         engine,
+        scoutCompanies: candidates,
         discover: async () => candidates,
-        companies: candidates,
-        enablePlaces: false,
+        enablePlaces: true,
+        placesProvider: operationalPlacesProvider(candidates),
         allowFixtureFallback: false,
       }
     );
@@ -179,7 +214,8 @@ describe('AMO Scout production store contract', () => {
       allowFixtureFallback: false,
       discover: async () => candidates,
       scoutCompanies: candidates,
-      enablePlaces: false,
+      enablePlaces: true,
+      placesProvider: operationalPlacesProvider(candidates),
     });
 
     assert.equal(discoveryResult.executionOutcome, 'completed');
