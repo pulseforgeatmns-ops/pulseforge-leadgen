@@ -149,13 +149,52 @@ async function assertContributionPersisted(missionId, specialist, kind) {
   return rows[rows.length - 1];
 }
 
+/**
+ * Durable AMO contributions store the full contribution row in the payload column.
+ * Unwrap to the canonical discovery/prioritization payload contract.
+ * @param {object} rowOrPayload
+ * @returns {object}
+ */
+function unwrapContributionPayload(rowOrPayload) {
+  if (!rowOrPayload || typeof rowOrPayload !== 'object') return rowOrPayload || {};
+  const outer = rowOrPayload.payload && typeof rowOrPayload.payload === 'object'
+    ? rowOrPayload.payload
+    : rowOrPayload;
+  if (
+    outer.payload &&
+    typeof outer.payload === 'object' &&
+    (outer.specialist || outer.kind || outer.missionId)
+  ) {
+    return outer.payload;
+  }
+  return outer;
+}
+
 function scoutCandidateCount(payload) {
-  if (!payload || typeof payload !== 'object') return null;
-  if (payload.candidateUniverseCount != null) return Number(payload.candidateUniverseCount);
-  if (Array.isArray(payload.candidateUniverse)) return payload.candidateUniverse.length;
-  if (payload.qualifiedCount != null) return Number(payload.qualifiedCount);
-  if (Array.isArray(payload.opportunities)) return payload.opportunities.length;
-  if (Array.isArray(payload.rankedProspects)) return payload.rankedProspects.length;
+  const body = unwrapContributionPayload(payload);
+  if (!body || typeof body !== 'object') return null;
+  if (body.qualifiedCount != null && Number.isFinite(Number(body.qualifiedCount))) {
+    return Number(body.qualifiedCount);
+  }
+  if (body.candidateUniverseCount != null && Number.isFinite(Number(body.candidateUniverseCount))) {
+    return Number(body.candidateUniverseCount);
+  }
+  if (Array.isArray(body.candidateUniverse) && body.candidateUniverse.length) {
+    return body.candidateUniverse.length;
+  }
+  if (body.rankedProspectCount != null && Number.isFinite(Number(body.rankedProspectCount))) {
+    return Number(body.rankedProspectCount);
+  }
+  if (Array.isArray(body.rankedProspects) && body.rankedProspects.length) {
+    return body.rankedProspects.length;
+  }
+  if (Array.isArray(body.opportunities) && body.opportunities.length) {
+    return body.opportunities.length;
+  }
+  const artifact = body.discoveryArtifact;
+  if (artifact && artifact.rankedProspects && artifact.rankedProspects.length) {
+    return artifact.rankedProspects.length;
+  }
   return null;
 }
 
@@ -173,24 +212,25 @@ function itemUsesFixture(item) {
 }
 
 function discoveryUsedFixture(payload) {
-  if (!payload || typeof payload !== 'object') return false;
+  const body = unwrapContributionPayload(payload);
+  if (!body || typeof body !== 'object') return false;
   if (
-    payload.fixtureFallback === true
-    || payload.usedFixtureFallback === true
-    || payload.source === 'fixture'
-    || payload.provenance?.fixture === true
+    body.fixtureFallback === true
+    || body.usedFixtureFallback === true
+    || body.source === 'fixture'
+    || body.provenance?.fixture === true
   ) {
     return true;
   }
 
   const collections = [
-    payload.evidence,
-    payload.opportunities,
-    payload.companies,
-    payload.providerExecution,
-    payload.rankedProspects,
-    payload.discoveryArtifact?.evidence,
-    payload.discoveryArtifact?.opportunities,
+    body.evidence,
+    body.opportunities,
+    body.companies,
+    body.providerExecution,
+    body.rankedProspects,
+    body.discoveryArtifact?.evidence,
+    body.discoveryArtifact?.opportunities,
   ];
 
   return collections.some((items) => Array.isArray(items) && items.some(itemUsesFixture));
@@ -432,8 +472,10 @@ module.exports = {
   STEPS,
   parseArgs,
   run,
+  unwrapContributionPayload,
   scoutCandidateCount,
   discoveryUsedFixture,
+  buildVerdict,
 };
 
 if (require.main === module) {
