@@ -6,6 +6,11 @@ const { verifyEmail } = require('./utils/emailVerifier');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
 const { ensureTieredEnrichmentSchema } = require('./utils/tieredEnrichmentSchema');
 const { safeIngestEnrichmentOutcome } = require('./utils/maxSignalIngestion');
+const {
+  crawlWebsite,
+  resolveEnrichmentDomain,
+  extractRelevantLinks,
+} = require('./utils/websiteEnrichmentCrawl');
 
 const AGENT_NAME = 'tiered_enrichment';
 const DEFAULT_FETCH_DELAY_MS = 750;
@@ -500,67 +505,34 @@ function robotsAllows(url, disallow) {
   return !disallow.some(rule => rule !== '/' && path.startsWith(rule));
 }
 
-function extractRelevantLinks(html, baseUrl, domain) {
-  const links = new Set();
-  const relevant = /\b(?:about|team|staff|attorney|attorneys|people|professionals|contact|firm|our-firm|practice)\b/i;
-  for (const match of String(html || '').matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
-    const href = decodeHtml(match[1]);
-    const label = htmlToText(match[2]);
-    if (!relevant.test(`${href} ${label}`)) continue;
-    try {
-      const url = new URL(href, baseUrl);
-      if (normalizeDomain(url.hostname) === normalizeDomain(domain)) links.add(url.toString().split('#')[0]);
-    } catch {
-      // Ignore malformed links.
-    }
-  }
-  return [...links];
-}
-
 async function scrapeWebsite(row, options = {}) {
-  const domain = normalizeDomain(row.domain || row.website || row.website_url);
+  const domain = resolveEnrichmentDomain(row);
   if (!domain) return { names: [], emails: [], practice_area: null, firm_size: null, pages: [], errors: ['no_domain'] };
 
   const disallow = await getRobots(domain);
-  const homepage = buildUrl(domain, '/');
-  const seedPaths = ['/', '/about', '/about-us', '/team', '/staff', '/attorneys', '/our-firm', '/contact'];
-  const urls = new Set(seedPaths.map(path => buildUrl(domain, path)).filter(Boolean));
-  urls.add(homepage);
-
-  const pages = [];
-  const errors = [];
   const fetchDelayMs = Number.isFinite(Number(options.fetchDelayMs)) ? Number(options.fetchDelayMs) : DEFAULT_FETCH_DELAY_MS;
+  const fetchImpl = typeof options.fetchPage === 'function' ? options.fetchPage : fetchWithTimeout;
+  const crawlResult = await crawlWebsite(domain, fetchImpl, {
+    maxSuccessfulPages: MAX_WEBSITE_PAGES,
+    fetchDelayMs,
+    robotsAllows: (url) => robotsAllows(url, disallow),
+  });
+  const pages = crawlResult.pages.map((page) => ({
+    ok: true,
+    status: page.status,
+    url: page.url,
+    text: page.text,
+  }));
+  const errors = crawlResult.errors;
 
-  for (const url of [...urls]) {
-    if (pages.length >= MAX_WEBSITE_PAGES) break;
-    if (!robotsAllows(url, disallow)) {
-      errors.push(`robots_disallow:${new URL(url).pathname}`);
-      continue;
-    }
-    try {
-      const response = await fetchWithTimeout(url);
-      if (!response.ok || !/html|text/i.test(response.text.slice(0, 300))) {
-        errors.push(`fetch_${response.status}:${url}`);
-        continue;
-      }
-      pages.push(response);
-      if (url === homepage || new URL(url).pathname === '/') {
-        for (const link of extractRelevantLinks(response.text, response.url, domain)) urls.add(link);
-      }
-      if (fetchDelayMs > 0) await delay(fetchDelayMs);
-    } catch (err) {
-      errors.push(`${err.name === 'AbortError' ? 'timeout' : 'fetch_error'}:${url}`);
-    }
-  }
-
-  const allHtml = pages.map(page => page.text).join('\n');
+  const allHtml = pages.map((page) => page.text).join('\n');
   const allText = htmlToText(allHtml);
   return {
     names: extractNamesFromText(allText, 'website_pages'),
     emails: extractEmailsFromHtml(allHtml, domain),
     practice_area: inferPracticeArea(allText, row.vertical || row.industry),
     firm_size: inferFirmSize(allText),
-    pages: pages.map(page => page.url),
+    pages: pages.map((page) => page.url),
     errors,
   };
 }
@@ -873,7 +845,7 @@ async function processProspect(row, options = {}) {
     existingEmail: working.email,
     foundEmails: website.emails,
     names: rankNames(outcome.names),
-    domain: normalizeDomain(working.domain || working.website || working.website_url),
+    domain: resolveEnrichmentDomain(working),
   });
 
   for (const candidate of emailCandidates) {
@@ -1012,11 +984,14 @@ module.exports = {
     emailMatchesName,
     extractEmailsFromHtml,
     extractNamesFromText,
+    extractRelevantLinks,
     hasResolvingEmail,
     parseNameFromCompany,
     passesDataBar,
     processProspect,
     rankNames,
+    scrapeWebsite,
+    verifyCandidate,
   },
 };
 
