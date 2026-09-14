@@ -2781,8 +2781,6 @@ async function advancePreparedOutreachRevision(input = {}) {
       commit: ({ engine: commitEngine, mission: commitMission, tenantId: commitTenantId, output, transactionId }) => {
         const missionId = commitMission.id;
         const before = commitEngine.inspect(missionId, { tenantId: commitTenantId }).contributions || [];
-        const oldPaige = findPaigeVariants(before);
-        const oldEmmett = findEmmettCapacity(before);
         const paige = commitEngine.contribute(missionId, {
           specialist: SPECIALISTS.PAIGE,
           kind: CONTRIBUTION_KINDS.VARIANTS,
@@ -2793,16 +2791,20 @@ async function advancePreparedOutreachRevision(input = {}) {
           kind: CONTRIBUTION_KINDS.CAPACITY,
           payload: { ...output.capacityPayload, transactionId, revision: 'replacement' },
         }, { tenantId: commitTenantId }).contribution;
-        if (oldPaige) {
-          commitEngine.store.updateContribution(oldPaige.id, (row) =>
-            amo.markContributionSuperseded(row, paige.id)
-          );
-        }
-        if (oldEmmett) {
-          commitEngine.store.updateContribution(oldEmmett.id, (row) =>
-            amo.markContributionSuperseded(row, emmett.id)
-          );
-        }
+        amo.supersedeAllActiveContributions(
+          commitEngine.store,
+          before,
+          SPECIALISTS.PAIGE,
+          CONTRIBUTION_KINDS.VARIANTS,
+          paige.id
+        );
+        amo.supersedeAllActiveContributions(
+          commitEngine.store,
+          before,
+          SPECIALISTS.EMMETT,
+          CONTRIBUTION_KINDS.CAPACITY,
+          emmett.id
+        );
         const updated = commitEngine.get(missionId, commitTenantId);
         const all = commitEngine.inspect(missionId, { tenantId: commitTenantId }).contributions || [];
         applyStageTransition(updated, STAGES.READY, { contributions: all });

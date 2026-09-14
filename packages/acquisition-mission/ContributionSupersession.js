@@ -66,10 +66,37 @@ function markContributionSuperseded(row, supersededBy) {
   };
 }
 
+/** All non-superseded rows for a specialist/kind pair (insertion order preserved). */
+function listActiveContributions(contributions = [], specialist, kind) {
+  return contributions.filter(
+    (row) =>
+      row.specialist === specialist
+      && row.kind === kind
+      && !isSupersededContribution(row)
+  );
+}
+
+/**
+ * Durably mark every active predecessor superseded. Used when revision replaces
+ * prepared artifacts so orphan rows from failed prior revisions cannot remain active.
+ */
+function supersedeAllActiveContributions(store, contributions, specialist, kind, supersededBy) {
+  if (!store || typeof store.updateContribution !== 'function') {
+    throw new Error('supersedeAllActiveContributions requires a contribution store.');
+  }
+  const active = listActiveContributions(contributions, specialist, kind);
+  for (const row of active) {
+    store.updateContribution(row.id, (existing) => markContributionSuperseded(existing, supersededBy));
+  }
+  return active.map((row) => row.id);
+}
+
 module.exports = {
   contributionPayloadBody,
   hasNestedSpecialistPayload,
   unwrapSpecialistPayload,
   isSupersededContribution,
   markContributionSuperseded,
+  listActiveContributions,
+  supersedeAllActiveContributions,
 };

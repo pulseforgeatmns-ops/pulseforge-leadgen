@@ -6,6 +6,8 @@ const {
   isSupersededContribution,
   markContributionSuperseded,
   unwrapSpecialistPayload,
+  listActiveContributions,
+  supersedeAllActiveContributions,
 } = require('../ContributionSupersession');
 
 describe('ContributionSupersession — nested production CAPACITY JSONB', () => {
@@ -74,5 +76,37 @@ describe('ContributionSupersession — nested production CAPACITY JSONB', () => 
     assert.equal(marked.payload.supersededBy, newId);
     assert.equal(marked.payload.payload, undefined);
     assert.equal(isSupersededContribution(marked), true);
+  });
+
+  it('supersedeAllActiveContributions marks every active predecessor, not only the latest', () => {
+    const orphanId = 'contrib_orphan_capacity';
+    const latestId = 'contrib_latest_capacity';
+    const replacementId = 'contrib_replacement_capacity';
+    const contributions = [
+      productionNestedCapacity(orphanId),
+      productionNestedCapacity(latestId),
+    ];
+    assert.equal(listActiveContributions(contributions, 'emmett', 'capacity').length, 2);
+
+    const store = {
+      rows: new Map(contributions.map((row) => [row.id, { ...row }])),
+      updateContribution(id, updater) {
+        const existing = this.rows.get(id);
+        this.rows.set(id, updater(existing));
+      },
+    };
+
+    const supersededIds = supersedeAllActiveContributions(
+      store,
+      contributions,
+      'emmett',
+      'capacity',
+      replacementId
+    );
+    assert.deepEqual(supersededIds.sort(), [latestId, orphanId].sort());
+    for (const id of [orphanId, latestId]) {
+      assert.equal(isSupersededContribution(store.rows.get(id)), true);
+      assert.equal(store.rows.get(id).payload.supersededBy, replacementId);
+    }
   });
 });
