@@ -6,6 +6,32 @@ function defaultPool() {
   return require('../db');
 }
 
+/**
+ * Resolve a pg client for persistence helpers.
+ *
+ * Ownership contract:
+ * - opts.client or a checked-out client (has release()) → caller-owned; no connect/release here
+ * - Pool (connect(), no release) → checkout once; helper releases on exit
+ * - opts.inTransaction === true → caller owns BEGIN/COMMIT/ROLLBACK
+ */
+async function resolvePersistenceClient(dbOrPool, opts = {}) {
+  if (opts.client) {
+    return { client: opts.client, ownsClient: false };
+  }
+  if (dbOrPool && typeof dbOrPool.release === 'function') {
+    return { client: dbOrPool, ownsClient: false };
+  }
+  if (dbOrPool && typeof dbOrPool.connect === 'function') {
+    const client = await dbOrPool.connect();
+    return { client, ownsClient: true };
+  }
+  return { client: dbOrPool, ownsClient: false };
+}
+
+function ownsPersistenceTransaction(opts = {}) {
+  return opts.inTransaction !== true;
+}
+
 async function ensureAcquisitionKnowledgeSchema(pool = defaultPool()) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS acquisition_knowledge_objects (
@@ -158,13 +184,13 @@ async function insertRevision(client, row, operation, opts = {}) {
 }
 
 async function upsertKnowledgeObject(input = {}, pool = defaultPool(), opts = {}) {
-  await ensureAcquisitionKnowledgeSchema(pool);
+  const schemaTarget = opts.client || pool;
+  await ensureAcquisitionKnowledgeSchema(schemaTarget);
   const normalized = ak.normalizeKnowledgeObject(input, opts);
-  const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
-  const ownsClient = client !== pool && typeof client.release === 'function';
-  const inTransaction = opts.inTransaction === true;
+  const { client, ownsClient } = await resolvePersistenceClient(pool, opts);
+  const ownsTransaction = ownsPersistenceTransaction(opts);
   try {
-    if (!inTransaction) await client.query('BEGIN');
+    if (ownsTransaction) await client.query('BEGIN');
     let existing = null;
     if (normalized.externalKey) {
       const found = await client.query(
@@ -242,10 +268,10 @@ async function upsertKnowledgeObject(input = {}, pool = defaultPool(), opts = {}
     );
     const output = rowFromDb(saved.rows[0]);
     await insertRevision(client, output, existing ? 'update' : 'create', opts);
-    if (!inTransaction) await client.query('COMMIT');
+    if (ownsTransaction) await client.query('COMMIT');
     return output;
   } catch (err) {
-    if (!inTransaction) {
+    if (ownsTransaction) {
       try { await client.query('ROLLBACK'); } catch (_) {}
     }
     throw err;
@@ -255,17 +281,18 @@ async function upsertKnowledgeObject(input = {}, pool = defaultPool(), opts = {}
 }
 
 async function promoteKnowledgeObject(id, input = {}, pool = defaultPool(), opts = {}) {
-  await ensureAcquisitionKnowledgeSchema(pool);
+  const schemaTarget = opts.client || pool;
+  await ensureAcquisitionKnowledgeSchema(schemaTarget);
   const actorRole = ak.normalizeRole(opts.actorRole || input.actorRole);
   if (!ak.actorCanPromote(actorRole)) {
     throw ak.knowledgeError('ak_promotion_forbidden', 'Only an operator may promote acquisition knowledge.');
   }
   const tenantId = ak.assertTenant(input.tenantId || opts.tenantId);
   const evidence = ak.normalizeEvidence(input.evidence);
-  const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
-  const ownsClient = client !== pool && typeof client.release === 'function';
+  const { client, ownsClient } = await resolvePersistenceClient(pool, opts);
+  const ownsTransaction = ownsPersistenceTransaction(opts);
   try {
-    await client.query('BEGIN');
+    if (ownsTransaction) await client.query('BEGIN');
     const current = await client.query(
       `SELECT * FROM acquisition_knowledge_objects WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
       [id, tenantId]
@@ -312,10 +339,12 @@ async function promoteKnowledgeObject(id, input = {}, pool = defaultPool(), opts
       ...opts,
       rationale: input.rationale || `Promoted ${existing.state} to ${nextState}.`,
     });
-    await client.query('COMMIT');
+    if (ownsTransaction) await client.query('COMMIT');
     return output;
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch (_) {}
+    if (ownsTransaction) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
     throw err;
   } finally {
     if (ownsClient) client.release();
@@ -323,12 +352,13 @@ async function promoteKnowledgeObject(id, input = {}, pool = defaultPool(), opts
 }
 
 async function canonicalizeOutreachAssetContent(id, input = {}, pool = defaultPool(), opts = {}) {
-  await ensureAcquisitionKnowledgeSchema(pool);
+  const schemaTarget = opts.client || pool;
+  await ensureAcquisitionKnowledgeSchema(schemaTarget);
   const tenantId = ak.assertTenant(input.tenantId || opts.tenantId);
-  const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
-  const ownsClient = client !== pool && typeof client.release === 'function';
+  const { client, ownsClient } = await resolvePersistenceClient(pool, opts);
+  const ownsTransaction = ownsPersistenceTransaction(opts);
   try {
-    await client.query('BEGIN');
+    if (ownsTransaction) await client.query('BEGIN');
     const current = await client.query(
       `SELECT * FROM acquisition_knowledge_objects
        WHERE id = $1 AND tenant_id = $2 AND object_type = 'outreach_asset'
@@ -341,7 +371,7 @@ async function canonicalizeOutreachAssetContent(id, input = {}, pool = defaultPo
     const existing = rowFromDb(current.rows[0]);
     const result = ak.canonicalizeOutreachAssetContent(existing.content || {});
     if (!result.changed) {
-      await client.query('COMMIT');
+      if (ownsTransaction) await client.query('COMMIT');
       return {
         ...existing,
         canonicalization: {
@@ -371,7 +401,7 @@ async function canonicalizeOutreachAssetContent(id, input = {}, pool = defaultPo
       rationale: input.rationale
         || 'SPEC-247B: structured executable copy canonicalized from sourceText (not new stakeholder approval).',
     });
-    await client.query('COMMIT');
+    if (ownsTransaction) await client.query('COMMIT');
     return {
       ...output,
       canonicalization: {
@@ -383,7 +413,9 @@ async function canonicalizeOutreachAssetContent(id, input = {}, pool = defaultPo
       },
     };
   } catch (err) {
-    try { await client.query('ROLLBACK'); } catch (_) {}
+    if (ownsTransaction) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+    }
     throw err;
   } finally {
     if (ownsClient) client.release();
@@ -584,6 +616,8 @@ async function persistLearningCandidatesForStageCommit(bundle = {}, client, opts
 
 module.exports = {
   ensureAcquisitionKnowledgeSchema,
+  resolvePersistenceClient,
+  ownsPersistenceTransaction,
   upsertKnowledgeObject,
   promoteKnowledgeObject,
   canonicalizeOutreachAssetContent,

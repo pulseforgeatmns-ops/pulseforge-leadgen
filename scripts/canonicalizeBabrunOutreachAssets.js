@@ -99,10 +99,10 @@ async function main() {
 
       const saved = await canonicalizeOutreachAssetContent(row.id, {
         tenantId: args.tenantId,
-      }, client, {
+      }, pool, {
+        client,
         actorId: 'spec247b_backfill',
         actorRole: 'operator',
-        inTransaction: false,
       });
 
       if (saved.canonicalization?.changed) {
