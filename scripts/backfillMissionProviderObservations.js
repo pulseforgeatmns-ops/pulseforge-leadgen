@@ -66,7 +66,10 @@ if (require.main === module) {
   run()
     .then((report) => {
       console.log(JSON.stringify(report, null, 2));
-      process.exitCode = report.observationsCreated > 0 || report.providerEventCount === 0 ? 0 : 2;
+      const ok = report.observationsCreated > 0
+        || report.observationsLinked >= report.providerEventCount
+        || report.providerEventCount === 0;
+      process.exitCode = ok ? 0 : 2;
     })
     .catch((err) => {
       console.log(JSON.stringify({ error: { code: err.code, message: err.message } }, null, 2));

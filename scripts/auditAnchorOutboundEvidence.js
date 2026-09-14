@@ -13,6 +13,7 @@
  *   --execution-id <amo_send_...>
  *   --recipient <email>
  *   --message-id '<brevo-message-id>'
+ *   --repair  Backfill mission observations from existing provider events (no resend)
  */
 
 require('dotenv').config();
@@ -86,7 +87,7 @@ function parseArgs(argv = process.argv.slice(2)) {
   };
 
   const unknown = argv.filter((arg, i) => {
-    if (arg === '--confirm-production') return false;
+    if (arg === '--confirm-production' || arg === '--repair') return false;
     if (arg.startsWith('--')) {
       const valueIdx = i + 1;
       const value = argv[valueIdx];
@@ -112,6 +113,7 @@ function parseArgs(argv = process.argv.slice(2)) {
 
   return {
     confirmProduction,
+    repair: argv.includes('--repair'),
     missionId: readOpt('--mission-id') || DEFAULTS.MISSION_ID,
     executionId: readOpt('--execution-id') || DEFAULTS.EXECUTION_ID,
     recipientEmail: (readOpt('--recipient') || DEFAULTS.RECIPIENT_EMAIL).trim().toLowerCase(),
@@ -447,14 +449,28 @@ async function run(options = {}) {
       brevoMessageId: options.brevoMessageId || DEFAULTS.BREVO_MESSAGE_ID,
       clientId: options.clientId || DEFAULTS.CLIENT_ID,
       tenantId: options.tenantId || DEFAULTS.TENANT_ID,
+      repair: options.repair === true,
     }
-    : parseArgs();
+    : parseArgs(options.argv || process.argv.slice(2));
 
   if (!options.confirmProduction && !options.missionId && !process.argv.includes('--confirm-production')) {
     throw Object.assign(new Error('Refusing without --confirm-production.'), { code: 'confirm_production_required' });
   }
 
   const db = options.pool || pool;
+  let repairReport = null;
+  if (args.repair) {
+    const { backfillMissionObservationsFromProviderEvents } = require('../services/acquisitionMissionProviderObservation');
+    repairReport = await backfillMissionObservationsFromProviderEvents({
+      missionId: args.missionId,
+      executionRecordId: args.executionId,
+      tenantId: args.tenantId,
+    }, db, {
+      persist: true,
+      skipStageSideEffects: true,
+    });
+  }
+
   const messageIds = normalizeMessageId(args.brevoMessageId);
 
   const tablePresence = {};
@@ -689,7 +705,11 @@ async function run(options = {}) {
     evidenceChainChecks: checks,
     firstMissingLink: missingLink,
     chainStatus,
-    railwayCommand: 'node scripts/auditAnchorOutboundEvidence.js --confirm-production',
+    repair: repairReport,
+    railwayCommand: args.repair
+      ? 'node scripts/auditAnchorOutboundEvidence.js --confirm-production --repair'
+      : 'node scripts/auditAnchorOutboundEvidence.js --confirm-production',
+    backfillCommand: 'node scripts/backfillMissionProviderObservations.js --confirm-production',
     completedAt: new Date().toISOString(),
   };
 }
@@ -700,6 +720,8 @@ module.exports = {
   DEFAULTS,
   PERSISTENCE_MODEL,
   normalizeMessageId,
+  queryObservations,
+  summarizeObservation,
 };
 
 if (require.main === module) {

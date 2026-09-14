@@ -19,6 +19,47 @@ function defaultPool() {
   return require('../db');
 }
 
+async function enrichProviderEventForObservation(providerEvent = {}, pool = defaultPool(), fallbacks = {}) {
+  const event = { ...providerEvent };
+  if (event.tenantId != null && event.tenantId !== '') {
+    event.tenantId = String(event.tenantId);
+  } else if (fallbacks.tenantId != null && fallbacks.tenantId !== '') {
+    event.tenantId = String(fallbacks.tenantId);
+  }
+
+  if (event.executionRecordId && (!event.tenantId || !event.missionId)) {
+    try {
+      const exec = await pool.query(
+        `SELECT tenant_id, mission_id, prospect_id, prepared_artifact_revision, provider_message_id
+         FROM acquisition_mission_outbound_executions
+         WHERE id = $1
+         LIMIT 1`,
+        [event.executionRecordId]
+      );
+      const row = exec.rows[0];
+      if (row) {
+        if (!event.tenantId && row.tenant_id != null) event.tenantId = String(row.tenant_id);
+        if (!event.missionId && row.mission_id) event.missionId = row.mission_id;
+        if (!event.prospectId && row.prospect_id != null) event.prospectId = String(row.prospect_id);
+        if (!event.preparedArtifactRevision && row.prepared_artifact_revision) {
+          event.preparedArtifactRevision = row.prepared_artifact_revision;
+        }
+        if (!event.providerMessageId && row.provider_message_id) {
+          event.providerMessageId = row.provider_message_id;
+        }
+      }
+    } catch (_) {
+      /* best-effort enrichment */
+    }
+  }
+
+  if (!event.tenantId && fallbacks.clientId != null) {
+    event.tenantId = String(fallbacks.clientId);
+  }
+
+  return event;
+}
+
 function providerEventResultFromInput(input = {}) {
   if (!input) return null;
   if (input.event) return input;
@@ -286,8 +327,14 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
     };
   }
 
-  const persistResult = await persistProviderCommunicationObservation(
+  const enrichedEvent = await enrichProviderEventForObservation(
     providerEvent,
+    opts.pool || pool,
+    { tenantId, ...opts.fallbacks }
+  );
+
+  const persistResult = await persistProviderCommunicationObservation(
+    enrichedEvent,
     opts.pool || pool,
     opts
   );
@@ -296,9 +343,9 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
   }
 
   const sideEffects = await tryMissionStageSideEffects({
-    providerEvent,
+    providerEvent: enrichedEvent,
     observation: persistResult.observation,
-    tenantId,
+    tenantId: enrichedEvent.tenantId || tenantId,
     missionId,
     pool,
     opts,
@@ -337,10 +384,8 @@ async function backfillMissionObservationsFromProviderEvents(input = {}, pool = 
     params.push(executionRecordId);
     clauses.push(`execution_record_id = $${params.length}`);
   }
-  if (tenantId) {
-    params.push(tenantId);
-    clauses.push(`tenant_id = $${params.length}`);
-  }
+  // Do not filter provider rows by tenant_id — production rows may have tenant_id NULL while
+  // still canonically bound via execution_record_id (audit provider query matches the same way).
 
   const providerRows = (await pool.query(`
     SELECT *
@@ -351,30 +396,54 @@ async function backfillMissionObservationsFromProviderEvents(input = {}, pool = 
 
   const results = [];
   for (const row of providerRows) {
-    const event = providerEventFromRow(row);
-    const consumed = await consumeMissionProviderEvent(
-      { event, inserted: false, duplicate: true },
+    const event = await enrichProviderEventForObservation(
+      providerEventFromRow(row),
       pool,
-      { ...opts, skipInterpretation: opts.skipInterpretation !== false }
+      { tenantId, clientId: tenantId, missionId, executionRecordId }
     );
+    const consumed = await persistProviderCommunicationObservation(event, pool, opts);
+    if (consumed.skipped) {
+      results.push({
+        providerEventId: row.id,
+        eventType: row.event_type,
+        observationId: null,
+        inserted: false,
+        duplicate: false,
+        skipped: true,
+        reason: consumed.reason || null,
+      });
+      continue;
+    }
+    if (opts.persist !== false && opts.skipStageSideEffects !== true) {
+      await tryMissionStageSideEffects({
+        providerEvent: event,
+        observation: consumed.observation,
+        tenantId: event.tenantId,
+        missionId: event.missionId,
+        pool,
+        opts,
+      });
+    }
     results.push({
       providerEventId: row.id,
       eventType: row.event_type,
       observationId: consumed.observation?.id || consumed.observationId || null,
       inserted: consumed.inserted === true,
       duplicate: consumed.duplicate === true,
-      skipped: consumed.skipped === true,
-      reason: consumed.reason || null,
+      skipped: false,
+      reason: null,
     });
   }
 
   const created = results.filter((row) => row.inserted === true);
+  const linked = results.filter((row) => row.observationId && !row.skipped);
   return {
     missionId,
     executionRecordId,
     tenantId,
     providerEventCount: providerRows.length,
     observationsCreated: created.length,
+    observationsLinked: linked.length,
     results,
   };
 }
@@ -388,4 +457,5 @@ module.exports = {
   extrasFromStore,
   providerEventResultFromInput,
   syncObservationToEngine,
+  enrichProviderEventForObservation,
 };
