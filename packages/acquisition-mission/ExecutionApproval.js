@@ -26,6 +26,10 @@ const {
 
 const EXECUTION_APPROVAL_ACTION = 'execution_approved';
 
+function isSupersededContribution(row) {
+  return row?.payload?.superseded === true;
+}
+
 function findLatestContribution(contributions = [], specialist, kind) {
   return [...contributions]
     .reverse()
