@@ -9,12 +9,15 @@ const {
   buildOperationalSyncMetadata,
   formatOperationalSyncNoteText,
   pickEffectiveHumanOpenReaction,
+  resolveMissionBoundCrmProspect,
   syncObserveReactionOperationalFollowUp,
 } = require('../services/observeReactionOperationalSync');
 
 const MISSION_ID = 'mission_backus';
 const EXECUTION_ID = 'amo_send_backus';
-const PROSPECT_ID = '001c9b7e-5659-4a54-892c-05493a148f9b';
+const MISSION_BOUND_KEY = '001c9b7e-5659-4a54-892c-05493a148f9b';
+const CRM_PROSPECT_ID = '7adbb294-b94c-45c0-85df-e040f027ece0';
+const CRM_COMPANY_ID = '001c9b7e-5659-4a54-892c-05493a148f9b';
 const ANNOTATION_ID = 'cadence_ann_backus';
 const LEAD_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const OWNER_ID = 42;
@@ -38,7 +41,7 @@ function createMemoryPool(seed = {}) {
       [EXECUTION_ID, {
         id: EXECUTION_ID,
         mission_id: MISSION_ID,
-        prospect_id: PROSPECT_ID,
+        prospect_id: MISSION_BOUND_KEY,
         prepared_artifact_revision: 'rev-backus-capacity-1',
         execution_approval_contribution_id: 'approval-backus',
       }],
@@ -55,10 +58,18 @@ function createMemoryPool(seed = {}) {
     ]),
     acquisition_mission_contributions: new Map(),
     prospects: new Map([
-      [PROSPECT_ID, { id: PROSPECT_ID, client_id: 10, company_id: 'company-backus' }],
+      [CRM_PROSPECT_ID, {
+        id: CRM_PROSPECT_ID,
+        prospect_id: CRM_PROSPECT_ID,
+        client_id: 10,
+        company_id: CRM_COMPANY_ID,
+        company_name: 'Backus, Meyer & Branch, LLP',
+        icp_score: 88,
+        is_synthetic: false,
+      }],
     ]),
     companies: new Map([
-      ['company-backus', { id: 'company-backus', name: 'Backus, Meyer & Branch, LLP' }],
+      [CRM_COMPANY_ID, { id: CRM_COMPANY_ID, name: 'Backus, Meyer & Branch, LLP' }],
     ]),
     ao_leads: new Map([
       [LEAD_ID, {
@@ -117,10 +128,29 @@ function createMemoryPool(seed = {}) {
       }
 
       if (/FROM prospects p/i.test(text)) {
+        if (/company_id::text = \$2/i.test(text)) {
+          const missionBoundKey = String(params[1]);
+          const matches = [...tables.prospects.values()]
+            .filter((row) => (
+              row.client_id === params[0]
+              && (
+                String(row.company_id) === missionBoundKey
+                || String(row.id) === missionBoundKey
+                || String(row.prospect_id) === missionBoundKey
+              )
+            ))
+            .sort((a, b) => {
+              const aCompanyMatch = String(a.company_id) === missionBoundKey ? 0 : 1;
+              const bCompanyMatch = String(b.company_id) === missionBoundKey ? 0 : 1;
+              if (aCompanyMatch !== bCompanyMatch) return aCompanyMatch - bCompanyMatch;
+              return (b.icp_score || 0) - (a.icp_score || 0);
+            });
+          return { rows: matches.slice(0, 1) };
+        }
         const prospect = tables.prospects.get(params[0]);
         if (!prospect) return { rows: [] };
         const company = tables.companies.get(prospect.company_id);
-        return { rows: [{ company_name: company?.name || null }] };
+        return { rows: [{ company_name: company?.name || prospect.company_name || company?.name || null }] };
       }
 
       if (/FROM ao_leads/i.test(text)) {
@@ -258,9 +288,9 @@ function seedReactions(pool) {
     reevaluation_trigger_id: ANNOTATION_ID,
     at: '2026-09-14T13:00:00.000Z',
   });
-  pool.tables.acquisition_mission_candidate_observe_state.set(`${MISSION_ID}:${PROSPECT_ID}`, {
+  pool.tables.acquisition_mission_candidate_observe_state.set(`${MISSION_ID}:${MISSION_BOUND_KEY}`, {
     mission_id: MISSION_ID,
-    prospect_id: PROSPECT_ID,
+    prospect_id: MISSION_BOUND_KEY,
     disposition: 'seen',
     evidence_strength: 'engagement',
     recommended_next_action: 'wait',
@@ -282,7 +312,8 @@ describe('observeReactionOperationalSync', () => {
     const metadata = buildOperationalSyncMetadata({
       missionId: MISSION_ID,
       executionId: EXECUTION_ID,
-      prospectId: PROSPECT_ID,
+      missionBoundKey: MISSION_BOUND_KEY,
+      crmProspectId: CRM_PROSPECT_ID,
       effectiveReaction: {
         id: 'obsrx_reeval',
         observationId: 'obs_human_open',
@@ -346,7 +377,19 @@ describe('observeReactionOperationalSync', () => {
     assert.equal(picked.recommendedTiming.waitDays, 4);
   });
 
-  it('sync creates AO follow-up, links CRM prospect, and writes research note', async () => {
+  it('resolveMissionBoundCrmProspect maps company/candidate key to canonical CRM contact', async () => {
+    resetLifecycleSchemaCache();
+    const pool = createMemoryPool();
+    const resolved = await resolveMissionBoundCrmProspect(pool, {
+      clientId: 10,
+      missionBoundKey: MISSION_BOUND_KEY,
+    });
+    assert.equal(resolved.crmProspectId, CRM_PROSPECT_ID);
+    assert.equal(resolved.crmCompanyId, CRM_COMPANY_ID);
+    assert.notEqual(resolved.crmProspectId, MISSION_BOUND_KEY);
+  });
+
+  it('sync creates AO follow-up, links canonical CRM prospect, and writes research note', async () => {
     resetLifecycleSchemaCache();
     const pool = createMemoryPool();
     seedReactions(pool);
@@ -358,21 +401,27 @@ describe('observeReactionOperationalSync', () => {
       businessName: 'Backus, Meyer & Branch, LLP',
     });
 
+    assert.equal(report.missionBoundKey, MISSION_BOUND_KEY);
+    assert.equal(report.crmProspectId, CRM_PROSPECT_ID);
+    assert.notEqual(report.missionBoundKey, report.crmProspectId);
     assert.equal(report.actions.leadUpdated, true);
-    assert.equal(report.aoLead.crm_prospect_id, PROSPECT_ID);
+    assert.equal(report.aoLead.crm_prospect_id, CRM_PROSPECT_ID);
     assert.equal(report.actions.crmProspectLinked, true);
     assert.equal(report.actions.taskCreated, true);
     assert.equal(report.actions.noteCreated, true);
     assert.equal(report.aoLead.status, 'needs_follow_up');
     assert.equal(report.aoLead.interest_level, 'high');
-    assert.equal(report.aoLead.crm_prospect_id, PROSPECT_ID);
     assert.equal(report.task.priority, 'warm');
     assert.equal(report.task.next_action, OPERATIONAL_TASK_NEXT_ACTION);
     assert.equal(report.task.due_date, '2026-09-18');
     assert.equal(report.note.note_type, 'research');
+    assert.equal(report.note.prospect_id, CRM_PROSPECT_ID);
     assert.equal(report.note.source, buildOperationalSyncNoteSource(ANNOTATION_ID));
 
     const notePayload = JSON.parse(report.note.text);
+    assert.equal(notePayload.missionBoundKey, MISSION_BOUND_KEY);
+    assert.equal(notePayload.crmProspectId, CRM_PROSPECT_ID);
+    assert.equal(notePayload.prospectId, MISSION_BOUND_KEY);
     assert.equal(notePayload.recommendedTiming.waitDays, 4);
     assert.equal(notePayload.recommendedTiming.kind, 'wait_until');
   });
@@ -392,7 +441,7 @@ describe('observeReactionOperationalSync', () => {
     assert.equal(first.actions.taskCreated, true);
 
     const lead = pool.tables.ao_leads.get(LEAD_ID);
-    lead.crm_prospect_id = PROSPECT_ID;
+    lead.crm_prospect_id = CRM_PROSPECT_ID;
 
     const second = await syncObserveReactionOperationalFollowUp(pool, {
       missionId: MISSION_ID,
@@ -408,5 +457,43 @@ describe('observeReactionOperationalSync', () => {
     assert.equal(second.actions.crmProspectLinked, false);
     assert.equal(pool.tables.prospect_notes.size, 1);
     assert.equal(pool.tables.ao_follow_up_tasks.size, 1);
+  });
+
+  it('rolls back all writes when ao_leads CRM FK would fail', async () => {
+    resetLifecycleSchemaCache();
+    const pool = createMemoryPool();
+    seedReactions(pool);
+
+    const originalConnect = pool.connect.bind(pool);
+    pool.connect = async () => {
+      const client = await originalConnect();
+      const originalQuery = client.query.bind(client);
+      client.query = async (sql, params = []) => {
+        const text = String(sql).replace(/\s+/g, ' ').trim();
+        if (/UPDATE ao_leads/i.test(text) && params[1] === CRM_PROSPECT_ID) {
+          const err = new Error('insert or update on table "ao_leads" violates foreign key constraint "ao_leads_crm_prospect_id_fkey"');
+          err.code = '23503';
+          throw err;
+        }
+        return originalQuery(sql, params);
+      };
+      return client;
+    };
+
+    await assert.rejects(
+      () => syncObserveReactionOperationalFollowUp(pool, {
+        missionId: MISSION_ID,
+        executionId: EXECUTION_ID,
+        clientId: 10,
+        businessName: 'Backus, Meyer & Branch, LLP',
+      }),
+      (err) => err.code === '23503'
+    );
+
+    const lead = pool.tables.ao_leads.get(LEAD_ID);
+    assert.equal(lead.status, 'new_visit');
+    assert.equal(lead.crm_prospect_id, null);
+    assert.equal(pool.tables.ao_follow_up_tasks.size, 0);
+    assert.equal(pool.tables.prospect_notes.size, 0);
   });
 });

@@ -15,6 +15,7 @@ const { findPreparedCadenceAnnotation } = require('./preparedCadenceAnnotationPe
 const { loadPreparedOutreachCadence } = require('./preparedOutreachArtifactLoader');
 const { ensureLifecycleSchema } = require('../utils/lifecycleSchema');
 const { normalizeDueDate } = require('../utils/aoQueueFormat');
+const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
 
 const OPERATIONAL_TASK_NEXT_ACTION = 'spec252_warm_email_open';
 
@@ -30,7 +31,8 @@ function buildOperationalSyncMetadata(input = {}) {
     annotation = null,
     missionId = null,
     executionId = null,
-    prospectId = null,
+    missionBoundKey = null,
+    crmProspectId = null,
   } = input;
 
   const timing = effectiveReaction?.recommendedTiming || candidateState?.recommendedTiming || {};
@@ -42,7 +44,9 @@ function buildOperationalSyncMetadata(input = {}) {
     spec: 'SPEC-252',
     missionId,
     executionId,
-    prospectId,
+    missionBoundKey,
+    crmProspectId,
+    prospectId: missionBoundKey,
     reactionId: effectiveReaction?.id || null,
     observationId: effectiveReaction?.observationId || null,
     evaluationKind: effectiveReaction?.evaluationKind || null,
@@ -110,16 +114,37 @@ async function resolveProspectCompanyName(db, prospectId) {
   return result.rows[0]?.company_name || null;
 }
 
-async function findAoLeadForProspect(db, { clientId, prospectId, businessName = null }) {
-  const byCrm = await db.query(
-    `SELECT * FROM ao_leads
-     WHERE client_id = $1 AND crm_prospect_id = $2
-     LIMIT 1`,
-    [clientId, prospectId]
-  );
-  if (byCrm.rows[0]) return byCrm.rows[0];
+async function resolveMissionBoundCrmProspect(db, { clientId, missionBoundKey }) {
+  const crm = await loadBestCrmProspectForMissionBoundKey({
+    pool: db,
+    clientId,
+    missionBoundKey,
+  });
+  if (!crm) return null;
+  return {
+    crmProspectId: String(crm.prospect_id || crm.id),
+    crmCompanyId: crm.company_id != null ? String(crm.company_id) : null,
+    companyName: crm.company_name || null,
+  };
+}
 
-  const resolvedName = businessName || await resolveProspectCompanyName(db, prospectId);
+async function findAoLeadForProspect(db, {
+  clientId,
+  crmProspectId = null,
+  businessName = null,
+}) {
+  if (crmProspectId) {
+    const byCrm = await db.query(
+      `SELECT * FROM ao_leads
+       WHERE client_id = $1 AND crm_prospect_id = $2
+       LIMIT 1`,
+      [clientId, crmProspectId]
+    );
+    if (byCrm.rows[0]) return byCrm.rows[0];
+  }
+
+  const resolvedName = businessName
+    || (crmProspectId ? await resolveProspectCompanyName(db, crmProspectId) : null);
   if (!resolvedName) return null;
 
   const byName = await db.query(
@@ -180,12 +205,22 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
     throw Object.assign(new Error(`Execution not found: ${executionId}`), { code: 'execution_not_found' });
   }
 
-  const prospectId = prospectIdOverride || execution.prospect_id;
-  if (!prospectId) {
-    throw Object.assign(new Error('Prospect id could not be resolved from execution.'), {
+  const missionBoundKey = String(prospectIdOverride || execution.prospect_id || '').trim();
+  if (!missionBoundKey) {
+    throw Object.assign(new Error('Mission-bound prospect key could not be resolved from execution.'), {
       code: 'prospect_not_found',
     });
   }
+
+  const crmResolution = await resolveMissionBoundCrmProspect(db, { clientId, missionBoundKey });
+  if (!crmResolution?.crmProspectId) {
+    throw Object.assign(new Error(`No canonical CRM contact found for mission-bound key: ${missionBoundKey}`), {
+      code: 'crm_prospect_not_found',
+      missionBoundKey,
+      clientId,
+    });
+  }
+  const { crmProspectId, crmCompanyId } = crmResolution;
 
   const reactions = await loadEffectiveObserveReactions(missionId, db, { skipEnsure: true });
   const effectiveHumanOpen = pickEffectiveHumanOpenReaction(reactions);
@@ -203,7 +238,7 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
     });
   }
 
-  const candidateRow = await loadCandidateObserveState(db, missionId, prospectId);
+  const candidateRow = await loadCandidateObserveState(db, missionId, missionBoundKey);
   const candidateState = candidateRow
     ? {
       disposition: candidateRow.disposition,
@@ -226,7 +261,7 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
     preparedArtifactRevision: execution.prepared_artifact_revision,
     executionApprovalContributionId: execution.execution_approval_contribution_id,
     executionRecordId: execution.id,
-    prospectId,
+    prospectId: missionBoundKey,
   }, db);
 
   const metadata = buildOperationalSyncMetadata({
@@ -236,7 +271,8 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
     annotation,
     missionId,
     executionId,
-    prospectId,
+    missionBoundKey,
+    crmProspectId,
   });
 
   const noteSource = buildOperationalSyncNoteSource(annotationId);
@@ -247,11 +283,16 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
     'Engagement evidence — not buying intent.',
   ].join(' ');
 
-  const lead = await findAoLeadForProspect(db, { clientId, prospectId, businessName });
+  const lead = await findAoLeadForProspect(db, {
+    clientId,
+    crmProspectId,
+    businessName: businessName || crmResolution.companyName,
+  });
   if (!lead) {
     throw Object.assign(new Error('AO lead not found for prospect.'), {
       code: 'ao_lead_not_found',
-      prospectId,
+      missionBoundKey,
+      crmProspectId,
       businessName,
     });
   }
@@ -262,7 +303,9 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
     missionId,
     executionId,
     clientId,
-    prospectId,
+    missionBoundKey,
+    crmProspectId,
+    crmCompanyId,
     annotationId,
     noteSource,
     effectiveReaction: {
@@ -303,7 +346,7 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
            updated_at = NOW()
        WHERE id = $1
        RETURNING id, status, interest_level, crm_prospect_id, next_follow_up_date`,
-      [lead.id, prospectId, taskDueDate]
+      [lead.id, crmProspectId, taskDueDate]
     );
     report.actions.leadUpdated = true;
     report.actions.crmProspectLinked = linkedCrmProspect;
@@ -338,7 +381,7 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
 
     const existingNote = await findExistingProspectNote(client, {
       clientId,
-      prospectId,
+      prospectId: crmProspectId,
       source: noteSource,
     });
     if (existingNote) {
@@ -351,7 +394,7 @@ async function syncObserveReactionOperationalFollowUp(db, options = {}) {
           client_id, prospect_id, note_type, text, author_name, source
         ) VALUES ($1, $2, 'research', $3, 'SPEC-252 observe sync', $4)
         RETURNING *`,
-        [clientId, prospectId, noteText, noteSource]
+        [clientId, crmProspectId, noteText, noteSource]
       );
       report.actions.noteCreated = true;
       report.note = noteInsert.rows[0];
@@ -373,5 +416,6 @@ module.exports = {
   buildOperationalSyncMetadata,
   formatOperationalSyncNoteText,
   pickEffectiveHumanOpenReaction,
+  resolveMissionBoundCrmProspect,
   syncObserveReactionOperationalFollowUp,
 };
