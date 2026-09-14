@@ -17,6 +17,7 @@
     y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
   })(window, document, "clarity", "script", "yhnafqbr5k");
 </script>
+<script>!function(w,d,s,u){if(w.oaiq)return;var q=function(){q.q.push(arguments)};q.q=[];w.oaiq=q;var j=d.createElement(s);j.async=1;j.src=u;var f=d.getElementsByTagName(s)[0];f.parentNode.insertBefore(j,f)}(window,document,"script","https://bzrcdn.openai.com/sdk/oaiq.min.js");oaiq("init",{pixelId:"QtVasj1GCLfpLWsTwpYTBC",debug:true});</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -322,6 +323,13 @@
     gtag('event', 'conversion', { send_to: ads + '/' + label });
   }
 
+  function trackOpenAiLeadCreated(alreadyTracked) {
+    if (alreadyTracked.value) return;
+    if (typeof window.oaiq !== 'function') return;
+    alreadyTracked.value = true;
+    window.oaiq('measure', 'lead_created', { type: 'customer_action' });
+  }
+
   document.querySelectorAll('.js-phone').forEach(function (el) {
     el.addEventListener('click', function () {
       track('phone_click', { event_category: 'contact', method: 'tel' });
@@ -342,6 +350,7 @@
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var btn = form.querySelector('button[type="submit"]');
+    var openAiLeadTracked = { value: false };
     var data = {
       name: form.name.value.trim(),
       business_name: form.business_name.value.trim(),
@@ -372,6 +381,9 @@
     }).then(function (json) {
       track('walkthrough_form_submit', { event_category: 'lead' });
       sendAdsConversion(window.ANCHOR_ANALYTICS.formConversion);
+      if (json && json.submission_id) {
+        trackOpenAiLeadCreated(openAiLeadTracked);
+      }
       form.reset();
       statusEl.className = 'form-status ok';
       statusEl.textContent = (json && json.message) || SUCCESS;
