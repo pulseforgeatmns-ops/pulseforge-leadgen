@@ -29,6 +29,7 @@ const {
   routeExecutionRequest,
   findValidExecutionApproval,
   validateProspectMessageBindings,
+  isSupersededContribution,
 } = amo;
 const pool = require('../db');
 const { getAcquisitionMissionRuntime } = require('../services/acquisitionMissionRuntime');
@@ -108,7 +109,7 @@ function activePaigePayload(contributions) {
   const rows = (contributions || []).filter(
     (row) => row.specialist === SPECIALISTS.PAIGE
       && row.kind === CONTRIBUTION_KINDS.VARIANTS
-      && row.payload?.superseded !== true
+      && !isSupersededContribution(row)
   );
   const latest = rows.at(-1) || findLatestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
   if (!latest) return null;
@@ -119,7 +120,7 @@ function activeCapacityRow(contributions) {
   const rows = (contributions || []).filter(
     (row) => row.specialist === SPECIALISTS.EMMETT
       && row.kind === CONTRIBUTION_KINDS.CAPACITY
-      && row.payload?.superseded !== true
+      && !isSupersededContribution(row)
   );
   return rows.at(-1) || findLatestContribution(contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY);
 }
@@ -252,6 +253,13 @@ async function run(options = {}) {
     tenantId: TENANT_ID,
     paigePayload,
   });
+  if (revisionResult.executionResult?.rolledBack === true) {
+    const err = new Error(
+      revisionResult.executionResult?.error?.message || 'Prepared outreach revision rolled back.'
+    );
+    err.code = revisionResult.executionResult?.error?.code || 'tme_persistence';
+    throw err;
+  }
 
   const persistOpts = runtime.persistOpts({ persist: true });
   const durableSnapshot = persistOpts.pool
@@ -282,8 +290,29 @@ async function run(options = {}) {
     err.code = 'tme_persistence_verify';
     throw err;
   }
-  if (durableOld && durableOld.payload?.superseded !== true) {
+  if (durableOld && !isSupersededContribution(durableOld)) {
     const err = new Error('Old CAPACITY was not durably marked superseded.');
+    err.code = 'tme_persistence_verify';
+    throw err;
+  }
+
+  const activeDurableCapacities = durableCapacities.filter((row) => !isSupersededContribution(row));
+  if (activeDurableCapacities.length !== 1) {
+    const err = new Error(
+      `Expected exactly one active CAPACITY after revision; found ${activeDurableCapacities.length}.`
+    );
+    err.code = 'tme_persistence_verify';
+    err.details = {
+      activeCapacityIds: activeDurableCapacities.map((row) => row.id),
+      allCapacityIds: durableCapacities.map((row) => ({
+        id: row.id,
+        superseded: isSupersededContribution(row),
+      })),
+    };
+    throw err;
+  }
+  if (activeDurableCapacities[0].id !== durableNew.id) {
+    const err = new Error('Active CAPACITY pointer does not match the newly inserted revision row.');
     err.code = 'tme_persistence_verify';
     throw err;
   }
@@ -319,7 +348,8 @@ async function run(options = {}) {
       )?.id || null,
       newPaigeId: durablePaige?.id || null,
       paigeVariantsReused: true,
-      durableSuperseded: durableOld?.payload?.superseded === true,
+      durableSuperseded: durableOld ? isSupersededContribution(durableOld) : null,
+      activeCapacityCount: activeDurableCapacities.length,
       durableReload: true,
     },
     spec212: {
