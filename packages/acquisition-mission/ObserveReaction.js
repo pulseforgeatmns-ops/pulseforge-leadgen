@@ -4,8 +4,18 @@
  * SPEC-251 — Observe reaction types, disposition fold, and reaction row factory.
  */
 
+const crypto = require('crypto');
 const { asText, nowIso, clone } = require('./types');
 const { INTERPRETATION_TYPES } = require('./ObservationInterpretation');
+
+const EVALUATION_KINDS = Object.freeze({
+  INITIAL: 'initial',
+  CADENCE_REEVALUATION: 'cadence_reevaluation',
+});
+
+const REEVALUATION_TRIGGER_KINDS = Object.freeze({
+  HISTORICAL_CADENCE_ANNOTATION: 'historical_cadence_annotation',
+});
 
 const EVIDENCE_TYPES = Object.freeze({
   SENT: 'sent',
@@ -265,6 +275,40 @@ function buildObserveReactionId(observationId) {
   return `obsrx_${asText(observationId)}`;
 }
 
+function buildObserveReactionReevaluationId(observationId, reevaluationTriggerId) {
+  const seed = `${asText(observationId)}:${asText(reevaluationTriggerId)}`;
+  const hash = crypto.createHash('sha256').update(seed).digest('hex').slice(0, 16);
+  return `obsrx_${asText(observationId)}_reeval_${hash}`;
+}
+
+function compareObserveReactionPrecedence(a, b) {
+  const seqDiff = (Number(b?.evaluationSequence) || 0) - (Number(a?.evaluationSequence) || 0);
+  if (seqDiff !== 0) return seqDiff;
+  return String(b?.at || '').localeCompare(String(a?.at || ''));
+}
+
+function pickEffectiveObserveReaction(reactions = []) {
+  if (!Array.isArray(reactions) || !reactions.length) return null;
+  return [...reactions].sort(compareObserveReactionPrecedence)[0];
+}
+
+function listEffectiveObserveReactions(reactions = [], missionId = null) {
+  const scoped = missionId != null
+    ? reactions.filter((row) => row?.missionId === missionId)
+    : reactions.filter(Boolean);
+  const byObservation = new Map();
+  for (const row of scoped) {
+    const observationId = asText(row.observationId);
+    if (!observationId) continue;
+    const existing = byObservation.get(observationId);
+    byObservation.set(
+      observationId,
+      existing ? pickEffectiveObserveReaction([existing, row]) : row
+    );
+  }
+  return [...byObservation.values()].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
 function createObserveReaction(input = {}) {
   const observationId = asText(input.observationId);
   if (!observationId) return null;
@@ -272,6 +316,11 @@ function createObserveReaction(input = {}) {
   const payload = clone(input);
   return {
     id: buildObserveReactionId(observationId),
+    evaluationKind: EVALUATION_KINDS.INITIAL,
+    evaluationSequence: 0,
+    reevaluationTriggerKind: null,
+    reevaluationTriggerId: null,
+    supersedesReactionId: null,
     observationId,
     missionId: input.missionId,
     tenantId: input.tenantId != null ? String(input.tenantId) : null,
@@ -299,6 +348,36 @@ function createObserveReaction(input = {}) {
     at: input.at || nowIso(),
     payload,
   };
+}
+
+function createObserveReactionReevaluation(input = {}) {
+  const observationId = asText(input.observationId);
+  const reevaluationTriggerId = asText(input.reevaluationTriggerId);
+  if (!observationId || !reevaluationTriggerId) return null;
+
+  const base = createObserveReaction(input);
+  if (!base) return null;
+
+  const reevaluation = {
+    ...base,
+    id: buildObserveReactionReevaluationId(observationId, reevaluationTriggerId),
+    evaluationKind: EVALUATION_KINDS.CADENCE_REEVALUATION,
+    evaluationSequence: Number(input.evaluationSequence) > 0 ? Number(input.evaluationSequence) : 1,
+    reevaluationTriggerKind: input.reevaluationTriggerKind
+      || REEVALUATION_TRIGGER_KINDS.HISTORICAL_CADENCE_ANNOTATION,
+    reevaluationTriggerId,
+    supersedesReactionId: input.supersedesReactionId || buildObserveReactionId(observationId),
+    payload: {
+      ...base.payload,
+      evaluationKind: EVALUATION_KINDS.CADENCE_REEVALUATION,
+      evaluationSequence: Number(input.evaluationSequence) > 0 ? Number(input.evaluationSequence) : 1,
+      reevaluationTriggerKind: input.reevaluationTriggerKind
+        || REEVALUATION_TRIGGER_KINDS.HISTORICAL_CADENCE_ANNOTATION,
+      reevaluationTriggerId,
+      supersedesReactionId: input.supersedesReactionId || buildObserveReactionId(observationId),
+    },
+  };
+  return reevaluation;
 }
 
 function buildMissionObserveAssessment(input = {}) {
@@ -357,6 +436,8 @@ module.exports = {
   ACTIVE_DISPOSITIONS,
   TERMINAL_DISPOSITIONS,
   NEXT_ACTIONS,
+  EVALUATION_KINDS,
+  REEVALUATION_TRIGGER_KINDS,
   EVIDENCE_TYPE_TO_STRENGTH,
   strengthIndex,
   maxEvidenceStrength,
@@ -366,6 +447,11 @@ module.exports = {
   dispositionFromEvidence,
   foldCandidateObserveState,
   buildObserveReactionId,
+  buildObserveReactionReevaluationId,
+  compareObserveReactionPrecedence,
+  pickEffectiveObserveReaction,
+  listEffectiveObserveReactions,
   createObserveReaction,
+  createObserveReactionReevaluation,
   buildMissionObserveAssessment,
 };

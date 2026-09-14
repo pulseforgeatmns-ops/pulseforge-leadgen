@@ -134,7 +134,7 @@ async function ensureObserveReactionSchema(pool = defaultPool()) {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS acquisition_mission_observe_reactions (
       id TEXT PRIMARY KEY,
-      observation_id TEXT NOT NULL UNIQUE,
+      observation_id TEXT NOT NULL,
       mission_id TEXT NOT NULL REFERENCES acquisition_missions(id) ON DELETE CASCADE,
       tenant_id TEXT NOT NULL,
       prospect_id TEXT,
@@ -150,9 +150,48 @@ async function ensureObserveReactionSchema(pool = defaultPool()) {
       human_approval_required BOOLEAN NOT NULL DEFAULT FALSE,
       external_action_permitted BOOLEAN NOT NULL DEFAULT FALSE,
       cadence_source TEXT NOT NULL DEFAULT 'unresolved',
+      evaluation_kind TEXT NOT NULL DEFAULT 'initial',
+      evaluation_sequence INTEGER NOT NULL DEFAULT 0,
+      reevaluation_trigger_kind TEXT,
+      reevaluation_trigger_id TEXT,
+      supersedes_reaction_id TEXT,
       payload JSONB NOT NULL DEFAULT '{}'::jsonb,
       at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS evaluation_kind TEXT NOT NULL DEFAULT 'initial'
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS evaluation_sequence INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS reevaluation_trigger_kind TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS reevaluation_trigger_id TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS supersedes_reaction_id TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      DROP CONSTRAINT IF EXISTS acquisition_mission_observe_reactions_observation_id_key
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS acquisition_mission_observe_reactions_initial_uidx
+      ON acquisition_mission_observe_reactions (observation_id)
+      WHERE evaluation_kind = 'initial'
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS acquisition_mission_observe_reactions_reeval_uidx
+      ON acquisition_mission_observe_reactions (observation_id, reevaluation_trigger_id)
+      WHERE reevaluation_trigger_id IS NOT NULL
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS acquisition_mission_observe_reactions_mission_idx
@@ -409,8 +448,50 @@ function observeReactionFromRow(row) {
     humanApprovalRequired: row.human_approval_required === true,
     externalActionPermitted: row.external_action_permitted === true,
     cadenceSource: row.cadence_source,
+    evaluationKind: row.evaluation_kind || payload.evaluationKind || 'initial',
+    evaluationSequence: row.evaluation_sequence != null
+      ? Number(row.evaluation_sequence)
+      : (payload.evaluationSequence != null ? Number(payload.evaluationSequence) : 0),
+    reevaluationTriggerKind: row.reevaluation_trigger_kind || payload.reevaluationTriggerKind || null,
+    reevaluationTriggerId: row.reevaluation_trigger_id || payload.reevaluationTriggerId || null,
+    supersedesReactionId: row.supersedes_reaction_id || payload.supersedesReactionId || null,
     at: row.at,
   };
+}
+
+async function findInitialObserveReaction(observationId, pool = defaultPool()) {
+  if (!observationId) return null;
+  const result = await pool.query(
+    `SELECT * FROM acquisition_mission_observe_reactions
+     WHERE observation_id = $1 AND evaluation_kind = 'initial'
+     LIMIT 1`,
+    [String(observationId)]
+  );
+  return result.rows[0] ? observeReactionFromRow(result.rows[0]) : null;
+}
+
+async function findObserveReactionReevaluation(observationId, reevaluationTriggerId, pool = defaultPool()) {
+  if (!observationId || !reevaluationTriggerId) return null;
+  const result = await pool.query(
+    `SELECT * FROM acquisition_mission_observe_reactions
+     WHERE observation_id = $1 AND reevaluation_trigger_id = $2
+     LIMIT 1`,
+    [String(observationId), String(reevaluationTriggerId)]
+  );
+  return result.rows[0] ? observeReactionFromRow(result.rows[0]) : null;
+}
+
+async function loadEffectiveObserveReactions(missionId, pool = defaultPool(), opts = {}) {
+  if (!missionId) return [];
+  if (opts.skipEnsure !== true) await ensureObserveReactionSchema(pool);
+  const result = await pool.query(
+    `SELECT DISTINCT ON (observation_id) *
+     FROM acquisition_mission_observe_reactions
+     WHERE mission_id = $1
+     ORDER BY observation_id, evaluation_sequence DESC, at DESC`,
+    [String(missionId)]
+  );
+  return result.rows.map(observeReactionFromRow);
 }
 
 function candidateObserveStateFromRow(row) {
@@ -432,22 +513,7 @@ function candidateObserveStateFromRow(row) {
   };
 }
 
-async function persistObserveReaction(row, pool = defaultPool(), opts = {}) {
-  if (!row?.id || !row.observationId) return null;
-  if (opts.skipEnsure !== true) await ensureObserveReactionSchema(pool);
-
-  const existing = await pool.query(
-    'SELECT id FROM acquisition_mission_observe_reactions WHERE observation_id = $1 LIMIT 1',
-    [row.observationId]
-  );
-  if (existing.rows.length) {
-    const loaded = await pool.query(
-      'SELECT * FROM acquisition_mission_observe_reactions WHERE observation_id = $1 LIMIT 1',
-      [row.observationId]
-    );
-    return observeReactionFromRow(loaded.rows[0]);
-  }
-
+async function insertObserveReactionRow(row, pool = defaultPool(), opts = {}) {
   await pool.query(
     `INSERT INTO acquisition_mission_observe_reactions (
       id, observation_id, mission_id, tenant_id, prospect_id,
@@ -455,10 +521,12 @@ async function persistObserveReaction(row, pool = defaultPool(), opts = {}) {
       prior_disposition, updated_disposition, mission_evidence_tier,
       recommended_next_action, recommended_timing, rationale,
       human_approval_required, external_action_permitted, cadence_source,
+      evaluation_kind, evaluation_sequence, reevaluation_trigger_kind,
+      reevaluation_trigger_id, supersedes_reaction_id,
       payload, at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
-    ) ON CONFLICT (observation_id) DO NOTHING`,
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+    )`,
     [
       row.id,
       row.observationId,
@@ -477,11 +545,81 @@ async function persistObserveReaction(row, pool = defaultPool(), opts = {}) {
       row.humanApprovalRequired === true,
       false,
       row.cadenceSource || row.recommendedTiming?.cadenceSource || 'unresolved',
+      row.evaluationKind || 'initial',
+      row.evaluationSequence != null ? Number(row.evaluationSequence) : 0,
+      row.reevaluationTriggerKind || null,
+      row.reevaluationTriggerId || null,
+      row.supersedesReactionId || null,
       JSON.stringify(row),
       row.at,
     ]
   );
   return row;
+}
+
+async function persistObserveReactionReevaluation(row, pool = defaultPool(), opts = {}) {
+  if (!row?.id || !row.observationId) return null;
+  if (opts.skipEnsure !== true) await ensureObserveReactionSchema(pool);
+
+  const triggerId = opts.reevaluationTriggerId || row.reevaluationTriggerId;
+  if (!triggerId) {
+    throw Object.assign(new Error('reevaluationTriggerId is required for cadence re-evaluation.'), {
+      code: 'reevaluation_trigger_required',
+    });
+  }
+
+  const existing = await findObserveReactionReevaluation(row.observationId, triggerId, pool);
+  if (existing) return existing;
+
+  const initial = await findInitialObserveReaction(row.observationId, pool);
+  const reevaluationRow = {
+    ...row,
+    evaluationKind: row.evaluationKind || 'cadence_reevaluation',
+    evaluationSequence: row.evaluationSequence != null ? Number(row.evaluationSequence) : 1,
+    reevaluationTriggerKind: row.reevaluationTriggerKind
+      || opts.reevaluationTriggerKind
+      || 'historical_cadence_annotation',
+    reevaluationTriggerId: triggerId,
+    supersedesReactionId: row.supersedesReactionId || initial?.id || null,
+  };
+
+  try {
+    await insertObserveReactionRow(reevaluationRow, pool, opts);
+    return reevaluationRow;
+  } catch (err) {
+    if (err.code === '23505') {
+      const loaded = await findObserveReactionReevaluation(row.observationId, triggerId, pool);
+      if (loaded) return loaded;
+    }
+    throw err;
+  }
+}
+
+async function persistObserveReaction(row, pool = defaultPool(), opts = {}) {
+  if (!row?.id || !row.observationId) return null;
+  if (opts.skipEnsure !== true) await ensureObserveReactionSchema(pool);
+
+  if (opts.reevaluate === true) {
+    return persistObserveReactionReevaluation(row, pool, opts);
+  }
+
+  const existing = await findInitialObserveReaction(row.observationId, pool);
+  if (existing) return existing;
+
+  try {
+    await insertObserveReactionRow({
+      ...row,
+      evaluationKind: row.evaluationKind || 'initial',
+      evaluationSequence: row.evaluationSequence != null ? Number(row.evaluationSequence) : 0,
+    }, pool, opts);
+    return row;
+  } catch (err) {
+    if (err.code === '23505') {
+      const loaded = await findInitialObserveReaction(row.observationId, pool);
+      if (loaded) return loaded;
+    }
+    throw err;
+  }
 }
 
 async function upsertCandidateObserveState(row, pool = defaultPool(), opts = {}) {
@@ -548,6 +686,7 @@ async function persistObserveReactionFromObservation(input = {}, pool = defaultP
   } = require('../packages/acquisition-mission/ObserveEvaluator');
   const {
     foldCandidateObserveState,
+    createObserveReactionReevaluation,
   } = require('../packages/acquisition-mission/ObserveReaction');
 
   let preparedCadence = input.preparedCadence || null;
@@ -598,31 +737,42 @@ async function persistObserveReactionFromObservation(input = {}, pool = defaultP
     return evaluated;
   }
 
-  const reaction = await persistObserveReaction(evaluated.reaction, pool, opts);
-  const folded = foldCandidateObserveState(priorState || {}, reaction);
-  await upsertCandidateObserveState({
+  const isReevaluate = opts.reevaluate === true && opts.reevaluationTriggerId;
+  let reactionToPersist = evaluated.reaction;
+  if (isReevaluate) {
+    const initial = await findInitialObserveReaction(observation.id, pool);
+    reactionToPersist = createObserveReactionReevaluation({
+      ...evaluated.reaction,
+      supersedesReactionId: initial?.id || null,
+      reevaluationTriggerId: opts.reevaluationTriggerId,
+      reevaluationTriggerKind: opts.reevaluationTriggerKind || 'historical_cadence_annotation',
+    }) || evaluated.reaction;
+  }
+
+  const reaction = await persistObserveReaction(reactionToPersist, pool, opts);
+  const reactionForFold = isReevaluate || reaction.id === reactionToPersist.id
+    ? reactionToPersist
+    : reaction;
+  const folded = foldCandidateObserveState(priorState || {}, reactionForFold);
+  const candidateState = {
     missionId: mission.id,
     tenantId: mission.tenantId,
     prospectId: observation.prospectId,
     ...folded,
-    updatedAt: reaction.at,
-  }, pool, opts);
+    updatedAt: reactionForFold.at,
+  };
+  await upsertCandidateObserveState(candidateState, pool, opts);
 
   if (store.addObserveReaction) store.addObserveReaction(reaction);
   if (store.putCandidateObserveState) {
-    store.putCandidateObserveState({
-      missionId: mission.id,
-      tenantId: mission.tenantId,
-      prospectId: observation.prospectId,
-      ...folded,
-      updatedAt: reaction.at,
-    });
+    store.putCandidateObserveState(candidateState);
   }
 
   return {
     reaction,
-    candidateState: evaluated.candidateState,
-    duplicate: reaction.id !== evaluated.reaction.id,
+    candidateState,
+    duplicate: reaction.id !== reactionToPersist.id,
+    reevaluated: isReevaluate === true,
   };
 }
 
@@ -1160,6 +1310,10 @@ module.exports = {
   persistProviderCommunicationObservation,
   ensureObserveReactionSchema,
   persistObserveReaction,
+  persistObserveReactionReevaluation,
+  findInitialObserveReaction,
+  findObserveReactionReevaluation,
+  loadEffectiveObserveReactions,
   upsertCandidateObserveState,
   persistObserveReactionFromObservation,
   persistOutcome,
