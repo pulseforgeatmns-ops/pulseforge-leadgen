@@ -125,9 +125,10 @@ function isEligibleForCapacityProjection(row = {}) {
   });
 }
 
-function missingCrmResult(prospectId) {
+function missingCrmResult(missionBoundKey) {
   return {
-    prospectId: String(prospectId),
+    prospectId: String(missionBoundKey),
+    missionBoundCompanyId: String(missionBoundKey),
     company: null,
     excluded: false,
     verified: false,
@@ -198,14 +199,13 @@ async function run(options = {}) {
   await ensureEmailVerificationColumns();
   await ensureTieredEnrichmentSchema();
 
-  const { rows, prospectIds } = await loadMissionBoundProspects(db, missionId);
-  const byId = new Map(rows.map((row) => [String(row.prospect_id), row]));
+  const { companyIds, rowsByCompanyId } = await loadMissionBoundProspects(db, missionId);
   const contacts = [];
 
-  for (const prospectId of prospectIds) {
-    const row = byId.get(String(prospectId));
+  for (const companyId of companyIds) {
+    const row = rowsByCompanyId.get(String(companyId));
     if (!row) {
-      contacts.push(missingCrmResult(prospectId));
+      contacts.push(missingCrmResult(companyId));
       continue;
     }
     contacts.push(await enrichProspectRow(row, {
@@ -222,7 +222,8 @@ async function run(options = {}) {
     clientId: CLIENT_ID,
     missionId,
     dryRun,
-    missionBoundProspectIds: prospectIds,
+    missionBoundProspectIds: companyIds,
+    missionBoundCompanyIds: companyIds,
     contacts,
     eligibleForCapacityProjection,
     railwayCommand: RAILWAY_COMMAND,

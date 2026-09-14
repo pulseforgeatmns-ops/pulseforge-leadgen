@@ -208,11 +208,27 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   return candidates;
 }
 
-/** Prospect IDs for the current mission-bound candidate set (for CRM batch load). */
+/**
+ * Scout contact / CRM prospect row IDs when discovery attached a separate people record.
+ * May be null when only company-level targets exist; do not use as the mission universe key.
+ */
 function listMissionBoundProspectIds(mission, contributions = [], opts = {}) {
   return [...new Set(
     buildMissionBoundCandidates(mission, contributions, opts)
       .map((row) => row.prospectId)
+      .filter(Boolean)
+      .map(String)
+  )];
+}
+
+/**
+ * Canonical mission-bound company/candidate IDs (Max rankedTargets.id / companyId).
+ * Queue items expose this value as prospectId for SPEC-212 compatibility — it is not prospects.id.
+ */
+function listMissionBoundCompanyIds(mission, contributions = [], opts = {}) {
+  return [...new Set(
+    buildMissionBoundCandidates(mission, contributions, opts)
+      .map((row) => row.id)
       .filter(Boolean)
       .map(String)
   )];
@@ -227,4 +243,5 @@ module.exports = {
   findBoundVariant,
   buildMissionBoundCandidates,
   listMissionBoundProspectIds,
+  listMissionBoundCompanyIds,
 };

@@ -6,8 +6,11 @@
  */
 
 const { getAcquisitionMissionRuntime } = require('../../services/acquisitionMissionRuntime');
-const { listMissionBoundProspectIds } = require('../../packages/max/workspace/EmmettMissionCandidates');
-const { isProjectableCrmProspect } = require('../../packages/max/workspace/MissionBoundCrmResolver');
+const { listMissionBoundCompanyIds } = require('../../packages/max/workspace/EmmettMissionCandidates');
+const {
+  isProjectableCrmProspect,
+  loadCrmProspectsForMissionBoundCompanies,
+} = require('../../packages/max/workspace/MissionBoundCrmResolver');
 const {
   configureScoringContext,
   runEnrichmentChain,
@@ -35,43 +38,12 @@ function crmProjectionRow(row = {}) {
 }
 
 async function loadProspectRow(db, clientId, prospectId) {
-  const { rows } = await db.query(
-    `SELECT
-       p.id AS prospect_id,
-       p.company_id,
-       p.client_id,
-       p.first_name,
-       p.last_name,
-       p.email,
-       p.email_status,
-       p.email_verified,
-       p.email_verification_method,
-       p.do_not_contact,
-       p.notes,
-       p.vertical,
-       p.website_url,
-       p.employee_count_estimate,
-       p.practice_area,
-       p.firm_size,
-       p.enrichment_provenance,
-       c.name AS company_name,
-       c.website,
-       c.domain,
-       c.industry,
-       c.size AS company_size,
-       c.location,
-       c.practice_area AS company_practice_area,
-       c.firm_size AS company_firm_size
-     FROM prospects p
-     LEFT JOIN companies c
-       ON c.id = p.company_id
-      AND c.client_id = p.client_id
-    WHERE p.client_id = $1
-      AND p.id::text = $2
-    LIMIT 1`,
-    [clientId, String(prospectId)]
-  );
-  return rows[0] || null;
+  const { loadBestCrmProspectForMissionBoundKey } = require('../../packages/max/workspace/MissionBoundCrmResolver');
+  return loadBestCrmProspectForMissionBoundKey({
+    pool: db,
+    clientId,
+    missionBoundKey: prospectId,
+  });
 }
 
 async function loadMissionBoundProspects(db, missionId) {
@@ -83,13 +55,24 @@ async function loadMissionBoundProspects(db, missionId) {
     throw Object.assign(new Error(`Mission ${missionId} not found.`), { code: 'mission_not_found' });
   }
   const snapshot = engine.inspect(missionId, { tenantId: TENANT_ID });
-  const prospectIds = listMissionBoundProspectIds(mission, snapshot.contributions || []);
-  const rows = [];
-  for (const prospectId of prospectIds) {
-    const row = await loadProspectRow(db, CLIENT_ID, prospectId);
-    if (row) rows.push(row);
-  }
-  return { mission, snapshot, prospectIds, rows };
+  const companyIds = listMissionBoundCompanyIds(mission, snapshot.contributions || []);
+  const rowsByCompanyId = await loadCrmProspectsForMissionBoundCompanies({
+    pool: db,
+    clientId: CLIENT_ID,
+    companyIds,
+  });
+  const rows = companyIds
+    .map((companyId) => rowsByCompanyId.get(String(companyId)))
+    .filter(Boolean);
+  return {
+    mission,
+    snapshot,
+    companyIds,
+    // Legacy report field: mission-bound keys (company/candidate IDs), not CRM prospects.id.
+    prospectIds: companyIds,
+    rowsByCompanyId,
+    rows,
+  };
 }
 
 async function persistProviderChainEmail(db, row, enriched, verification, dryRun) {
@@ -164,6 +147,7 @@ async function enrichProspectRow(row, options = {}) {
   const company = row.company_name || row.company || null;
   const base = {
     prospectId: String(row.prospect_id),
+    missionBoundCompanyId: row.company_id != null ? String(row.company_id) : null,
     company,
     excluded: false,
     verified: false,

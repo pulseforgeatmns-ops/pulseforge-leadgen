@@ -197,6 +197,14 @@ describe('enrichAnchorMissionBoundContacts', () => {
     assert.equal(row.email, null);
     assert.equal(row.persisted, false);
     assert.equal(row.reason, 'not_found_in_crm');
+    assert.equal(row.missionBoundCompanyId, 'missing-1');
     assert.equal(isEligibleForCapacityProjection(row), false);
+  });
+
+  it('resolves enrichment through company_id when mission keys differ from contact ids', () => {
+    assert.match(libSource, /listMissionBoundCompanyIds/);
+    assert.match(libSource, /loadCrmProspectsForMissionBoundCompanies/);
+    assert.doesNotMatch(libSource, /listMissionBoundProspectIds/);
+    assert.doesNotMatch(libSource, /p\.id::text = \$2/);
   });
 });

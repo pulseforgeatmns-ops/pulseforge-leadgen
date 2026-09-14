@@ -9,6 +9,7 @@ const {
 const { validateProspectMessageBindings } = require('../../../acquisition-mission/ExecutionApproval');
 const {
   buildMissionBoundCandidates,
+  listMissionBoundCompanyIds,
   listMissionBoundProspectIds,
 } = require('../EmmettMissionCandidates');
 const {
@@ -156,6 +157,7 @@ describe('mission-bound CRM email projection at PREPARE', () => {
     assert.equal(candidates.length, 2);
     assert.ok(!candidates.some((row) => row.prospectId === 999 || row.prospectId === '999'));
     assert.deepEqual(listMissionBoundProspectIds(MISSION, buildContributions()), ['101', '102']);
+    assert.deepEqual(listMissionBoundCompanyIds(MISSION, buildContributions()), ['co-harbor', 'co-granite']);
   });
 
   it('resolveMissionBoundRecipientEmail reuses discovery email when present', () => {
