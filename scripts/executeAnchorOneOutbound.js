@@ -39,11 +39,16 @@ const {
 const { unwrapContributionPayload } = require('./validateAnchorCanonicalMission');
 const probe = require('./probeAnchorEmmettOutboundReadiness');
 const { sendEmail: brevoSendEmail } = require('../packages/providers/brevo/sendEmail');
+const {
+  loadActiveCapacityForMission,
+  selectActiveCapacityContribution,
+  loadCapacityRowsForMission,
+  unwrapMissionPayload,
+} = require('./lib/activeCapacitySelection');
 
 const TENANT_ID = '10';
 const CLIENT_ID = 10;
 const MISSION_ID = 'mission_ad7753b0-6def-441d-bb1a-3764656f5750';
-const EXPECTED_CAPACITY_ID = 'contrib_55e11312-3837-4485-b95a-58134dcd7601';
 const OPERATOR_ID = 'anchor-one-outbound';
 
 function parseArgs(argv = process.argv.slice(2)) {
@@ -123,13 +128,40 @@ function abortIfNotGreen(report, label, baseline = null) {
   }
 }
 
-function activeCapacityRow(contributions) {
-  const rows = (contributions || []).filter(
-    (row) => row.specialist === SPECIALISTS.EMMETT
-      && row.kind === CONTRIBUTION_KINDS.CAPACITY
-      && row.payload?.superseded !== true
-  );
-  return rows.at(-1) || null;
+function assertCapacitySelectionMatch({ expected, actual, context }) {
+  if (String(expected) !== String(actual)) {
+    const err = new Error(`${context}: expected ${expected}, got ${actual}.`);
+    err.code = 'capacity_mismatch';
+    throw err;
+  }
+}
+
+async function resolveCanonicalActiveCapacity(db, tenantId, missionId) {
+  const active = await loadActiveCapacityForMission(db, tenantId, missionId);
+  if (!active?.capacity_id) {
+    const err = new Error(`No active non-superseded CAPACITY for mission ${missionId}.`);
+    err.code = 'capacity_not_found';
+    throw err;
+  }
+  return active;
+}
+
+async function verifyEngineCapacityMatches(db, engine, tenantId, missionId, expectedCapacityId) {
+  const snapshot = engine.inspect(missionId, { tenantId });
+  const capacityRows = await loadCapacityRowsForMission(db, tenantId, missionId);
+  const missionBody = unwrapMissionPayload(snapshot.mission);
+  const selected = selectActiveCapacityContribution(missionBody, capacityRows);
+  if (!selected?.capacity_id) {
+    const err = new Error('Engine could not select active CAPACITY.');
+    err.code = 'capacity_not_found';
+    throw err;
+  }
+  assertCapacitySelectionMatch({
+    expected: expectedCapacityId,
+    actual: selected.capacity_id,
+    context: 'Engine CAPACITY selection vs canonical durable state',
+  });
+  return selected;
 }
 
 function activePaigeRow(contributions) {
@@ -238,13 +270,14 @@ async function run(options = {}) {
     err.code = 'mission_mismatch';
     throw err;
   }
-  if (probeBefore.capacityContributionId !== EXPECTED_CAPACITY_ID) {
-    const err = new Error(
-      `Probe selected ${probeBefore.capacityContributionId}, expected ${EXPECTED_CAPACITY_ID}.`
-    );
-    err.code = 'capacity_mismatch';
-    throw err;
-  }
+
+  const durableActive = await resolveCanonicalActiveCapacity(pool, TENANT_ID, MISSION_ID);
+  const canonicalCapacityId = durableActive.capacity_id;
+  assertCapacitySelectionMatch({
+    expected: canonicalCapacityId,
+    actual: probeBefore.capacityContributionId,
+    context: 'Probe CAPACITY selection vs canonical durable state',
+  });
 
   const runtime = getAcquisitionMissionRuntime({ production: true, persist: true, pool });
   await runtime.hydrate(TENANT_ID, { pool, production: true });
@@ -261,24 +294,20 @@ async function run(options = {}) {
     throw err;
   }
 
+  await verifyEngineCapacityMatches(pool, engine, TENANT_ID, MISSION_ID, canonicalCapacityId);
+
   const snapshot = engine.inspect(MISSION_ID, { tenantId: TENANT_ID });
-  const capacity = activeCapacityRow(snapshot.contributions || []);
   const paige = activePaigeRow(snapshot.contributions || []);
-  if (!capacity || capacity.id !== EXPECTED_CAPACITY_ID) {
-    const err = new Error(
-      `Active CAPACITY is ${capacity?.id || 'missing'}, expected ${EXPECTED_CAPACITY_ID}.`
-    );
-    err.code = 'capacity_mismatch';
-    throw err;
-  }
-  const spec212 = validateProspectMessageBindings(unwrapContributionPayload(capacity.payload) || {});
+  const spec212 = validateProspectMessageBindings(
+    unwrapContributionPayload(durableActive.payload) || {}
+  );
   if (spec212.valid !== true) {
     const err = new Error(spec212.blockerReason || 'SPEC-212 failed on active CAPACITY.');
     err.code = 'tme_message_binding_contamination';
     throw err;
   }
 
-  const sendable = sendableQueueItems(capacity.payload);
+  const sendable = sendableQueueItems(durableActive.payload);
   if (!sendable.length) {
     const err = new Error('Active CAPACITY has no sendable queue item.');
     err.code = 'empty_capacity_queue';
@@ -310,6 +339,11 @@ async function run(options = {}) {
 
   const probeAfterHydrate = await probe.run({ confirmProduction: true, pool });
   abortIfNotGreen(probeAfterHydrate, 'post-hydrate probe', agentsBaseline);
+  assertCapacitySelectionMatch({
+    expected: canonicalCapacityId,
+    actual: probeAfterHydrate.capacityContributionId,
+    context: 'Post-hydrate probe CAPACITY selection vs canonical durable state',
+  });
 
   const approvalStep = await routeIntent({
     runtime,
@@ -333,19 +367,21 @@ async function run(options = {}) {
     err.code = 'tme_execution_not_approved';
     throw err;
   }
-  if (
-    approval.payload?.emmettContributionId
-    && approval.payload.emmettContributionId !== EXPECTED_CAPACITY_ID
-  ) {
-    const err = new Error(
-      `Approval bound CAPACITY ${approval.payload.emmettContributionId}, expected ${EXPECTED_CAPACITY_ID}.`
-    );
-    err.code = 'capacity_mismatch';
-    throw err;
+  if (approval.payload?.emmettContributionId) {
+    assertCapacitySelectionMatch({
+      expected: canonicalCapacityId,
+      actual: approval.payload.emmettContributionId,
+      context: 'Fresh APPROVE_EXECUTION artifact binding vs canonical CAPACITY',
+    });
   }
 
   const probeAfterApprove = await probe.run({ confirmProduction: true, pool });
   abortIfNotGreen(probeAfterApprove, 'post-approval probe', agentsBaseline);
+  assertCapacitySelectionMatch({
+    expected: canonicalCapacityId,
+    actual: probeAfterApprove.capacityContributionId,
+    context: 'Post-approval probe CAPACITY selection vs canonical durable state',
+  });
 
   const provider = createProviderCounter(brevoSendEmail);
   const executeStep = await routeIntent({
@@ -444,7 +480,7 @@ async function run(options = {}) {
     tenantId: TENANT_ID,
     clientId: CLIENT_ID,
     missionId: MISSION_ID,
-    capacityContributionId: EXPECTED_CAPACITY_ID,
+    capacityContributionId: canonicalCapacityId,
     approvalId: approval.id,
     executionTransactionId: executeResult.transactionId || executeStep.routed.audit?.transactionId || null,
     executionRequestId: executeStep.request.id,
@@ -456,7 +492,7 @@ async function run(options = {}) {
     recipient: sent.payload?.email || sentItem?.email || provider.calls[0]?.toEmail || null,
     messageBinding: {
       paigeContributionId: paige?.id || approval.payload?.paigeContributionId || null,
-      emmettContributionId: EXPECTED_CAPACITY_ID,
+      emmettContributionId: canonicalCapacityId,
       candidateId: sentItem?.paige?.candidateId || null,
       variantId: sentItem?.paige?.variantId || variant?.id || null,
       variantLabel: sentItem?.paige?.variantLabel || variant?.label || null,
@@ -493,10 +529,12 @@ async function run(options = {}) {
 module.exports = {
   TENANT_ID,
   MISSION_ID,
-  EXPECTED_CAPACITY_ID,
   parseArgs,
   run,
   sendableQueueItems,
+  assertCapacitySelectionMatch,
+  resolveCanonicalActiveCapacity,
+  verifyEngineCapacityMatches,
 };
 
 if (require.main === module) {
