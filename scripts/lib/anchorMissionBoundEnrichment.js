@@ -19,6 +19,7 @@ const {
   normalizeDomain,
 } = require('../../leadgen');
 const tiered = require('../../tieredEnrichmentAgent');
+const { resolveEnrichmentDomain } = require('../../utils/websiteEnrichmentCrawl');
 
 const TENANT_ID = '10';
 const CLIENT_ID = 10;
@@ -237,7 +238,7 @@ async function enrichProspectRow(row, options = {}) {
     };
   }
 
-  const domain = normalizeDomain(row.domain || row.website || row.website_url);
+  const domain = resolveEnrichmentDomain(row) || normalizeDomain(row.domain || row.website || row.website_url);
   if (!domain) {
     return {
       ...base,
