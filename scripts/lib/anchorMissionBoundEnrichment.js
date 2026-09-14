@@ -11,7 +11,10 @@ const {
   loadActiveCapacityForMission,
   listProspectIdsFromCapacityPayload,
 } = require('./activeCapacitySelection');
-const { isProjectableCrmProspect } = require('../../packages/max/workspace/MissionBoundCrmResolver');
+const {
+  isProjectableCrmProspect,
+  normalizeProspectIds,
+} = require('../../packages/max/workspace/MissionBoundCrmResolver');
 const {
   configureScoringContext,
   runEnrichmentChain,
@@ -39,9 +42,7 @@ function crmProjectionRow(row = {}) {
   };
 }
 
-async function loadProspectRow(db, clientId, prospectId) {
-  const { rows } = await db.query(
-    `SELECT
+const PROSPECT_ENRICHMENT_SELECT = `
        p.id AS prospect_id,
        p.company_id,
        p.client_id,
@@ -66,17 +67,31 @@ async function loadProspectRow(db, clientId, prospectId) {
        c.size AS company_size,
        c.location,
        c.practice_area AS company_practice_area,
-       c.firm_size AS company_firm_size
+       c.firm_size AS company_firm_size`;
+
+async function loadProspectRowsByIds(db, clientId, prospectIds) {
+  const ids = normalizeProspectIds(prospectIds);
+  if (!ids.length) return [];
+
+  const { rows } = await db.query(
+    `SELECT
+${PROSPECT_ENRICHMENT_SELECT}
      FROM prospects p
      LEFT JOIN companies c
        ON c.id = p.company_id
       AND c.client_id = p.client_id
     WHERE p.client_id = $1
-      AND p.id::text = $2
-    LIMIT 1`,
-    [clientId, String(prospectId)]
+      AND p.id = ANY($2::uuid[])`,
+    [clientId, ids]
   );
-  return rows[0] || null;
+
+  const byId = new Map(rows.map((row) => [String(row.prospect_id).toLowerCase(), row]));
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
+async function loadProspectRow(db, clientId, prospectId) {
+  const [row] = await loadProspectRowsByIds(db, clientId, [prospectId]);
+  return row || null;
 }
 
 async function loadMissionBoundProspects(db, missionId) {
@@ -95,11 +110,7 @@ async function loadMissionBoundProspects(db, missionId) {
   if (!prospectIds.length) {
     prospectIds = listMissionBoundProspectIds(mission, snapshot.contributions || []);
   }
-  const rows = [];
-  for (const prospectId of prospectIds) {
-    const row = await loadProspectRow(db, CLIENT_ID, prospectId);
-    if (row) rows.push(row);
-  }
+  const rows = await loadProspectRowsByIds(db, CLIENT_ID, prospectIds);
   return { mission, snapshot, prospectIds, rows };
 }
 
@@ -313,6 +324,7 @@ module.exports = {
   isExcludedCompany,
   crmProjectionRow,
   loadProspectRow,
+  loadProspectRowsByIds,
   loadMissionBoundProspects,
   persistProviderChainEmail,
   enrichProspectRow,
