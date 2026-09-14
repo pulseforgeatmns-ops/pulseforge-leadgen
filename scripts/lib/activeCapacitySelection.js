@@ -7,20 +7,14 @@
  * 3. Otherwise newest non-superseded row by durable contribution.at.
  */
 
+const { isSupersededContribution } = require('../../packages/acquisition-mission/ContributionSupersession');
+
 function unwrapMissionPayload(rowOrPayload) {
   if (!rowOrPayload || typeof rowOrPayload !== 'object') return {};
   if (rowOrPayload.payload && typeof rowOrPayload.payload === 'object' && rowOrPayload.payload.objective) {
     return rowOrPayload.payload;
   }
   return rowOrPayload;
-}
-
-function isSupersededContribution(storedRow) {
-  const body = storedRow?.payload ?? storedRow;
-  if (!body || typeof body !== 'object') return false;
-  if (body.superseded === true) return true;
-  if (body.payload?.superseded === true) return true;
-  return false;
 }
 
 function activeCapacityPointer(missionBody = {}) {

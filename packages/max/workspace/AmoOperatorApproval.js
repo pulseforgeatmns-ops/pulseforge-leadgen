@@ -2793,14 +2793,16 @@ async function advancePreparedOutreachRevision(input = {}) {
           kind: CONTRIBUTION_KINDS.CAPACITY,
           payload: { ...output.capacityPayload, transactionId, revision: 'replacement' },
         }, { tenantId: commitTenantId }).contribution;
-        if (oldPaige) commitEngine.store.updateContribution(oldPaige.id, (row) => ({
-          ...row,
-          payload: { ...(row.payload || {}), superseded: true, supersededBy: paige.id },
-        }));
-        if (oldEmmett) commitEngine.store.updateContribution(oldEmmett.id, (row) => ({
-          ...row,
-          payload: { ...(row.payload || {}), superseded: true, supersededBy: emmett.id },
-        }));
+        if (oldPaige) {
+          commitEngine.store.updateContribution(oldPaige.id, (row) =>
+            amo.markContributionSuperseded(row, paige.id)
+          );
+        }
+        if (oldEmmett) {
+          commitEngine.store.updateContribution(oldEmmett.id, (row) =>
+            amo.markContributionSuperseded(row, emmett.id)
+          );
+        }
         const updated = commitEngine.get(missionId, commitTenantId);
         const all = commitEngine.inspect(missionId, { tenantId: commitTenantId }).contributions || [];
         applyStageTransition(updated, STAGES.READY, { contributions: all });

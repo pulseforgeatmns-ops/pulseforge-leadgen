@@ -19,12 +19,12 @@ const {
 const {
   extractCapacitySenderIdentity,
 } = require('../../utils/canonicalSenderIdentity');
+const {
+  isSupersededContribution,
+  unwrapSpecialistPayload,
+} = require('./ContributionSupersession');
 
 const EXECUTION_APPROVAL_ACTION = 'execution_approved';
-
-function isSupersededContribution(row) {
-  return row?.payload?.superseded === true;
-}
 
 function findLatestContribution(contributions = [], specialist, kind) {
   return [...contributions]
@@ -67,7 +67,7 @@ function computePreparedArtifactBinding(missionId, contributions = []) {
   const max = findMaxPrioritization(contributions);
   const paige = findPaigeVariants(contributions);
   const emmett = findEmmettCapacity(contributions);
-  const emmettPayload = (emmett && emmett.payload) || {};
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
   const queue = emmettPayload.queue || {};
   const queueItems = Array.isArray(queue.items) ? queue.items : [];
   const governor = emmettPayload.governor || {};
@@ -228,7 +228,7 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
   const binding = computePreparedArtifactBinding(mission.id, contributions);
   const revision = computePreparedArtifactRevision(mission.id, contributions);
   const emmett = findEmmettCapacity(contributions);
-  const emmettPayload = (emmett && emmett.payload) || {};
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
   const queueItems = Array.isArray(emmettPayload.queue?.items) ? emmettPayload.queue.items : [];
 
   // SPEC-212: Validate message bindings before approval
@@ -265,8 +265,8 @@ function buildExecutionReview(mission, contributions = []) {
   const emmett = findEmmettCapacity(contributions);
   const scout = findLatestScoutDiscovery(contributions);
   const maxPayload = (max && max.payload) || {};
-  const paigePayload = (paige && paige.payload) || {};
-  const emmettPayload = (emmett && emmett.payload) || {};
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
   const scoutPayload = (scout && scout.payload) || {};
   const variant = (Array.isArray(paigePayload.variants) && paigePayload.variants[0]) || {};
   const queue = emmettPayload.queue || {};
@@ -350,7 +350,7 @@ function canAdvertiseExecutionApproval(mission, contributions = [], extras = {})
   const emmettComplete = by(SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY) || extras.emmettComplete;
   if (!paigeComplete || !emmettComplete) return false;
   const emmett = findEmmettCapacity(contributions);
-  const governor = emmett && emmett.payload && emmett.payload.governor;
+  const governor = emmett ? unwrapSpecialistPayload(emmett).governor : null;
   const deliverabilityPaused = extras.deliverabilityPaused === true
     || Boolean(governor && (governor.outcome === 'pause' || governor.outcome === 'emergency'));
   if (deliverabilityPaused) return false;

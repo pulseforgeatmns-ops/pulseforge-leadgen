@@ -27,6 +27,7 @@ const {
   inspectCapacitySpec212,
   activePaigePayload,
 } = require('../scripts/regenerateAnchorCapacityRevision');
+const { isSupersededContribution } = amo;
 const {
   persistStageCommit,
   loadMissionSnapshot,
@@ -73,11 +74,28 @@ async function preparedReadyMission() {
   return { engine, mission: engine.get(mission.id, '10') };
 }
 
-function simulatePreSpec212Persist(engine, missionId, tenantId) {
-  const snapshot = engine.inspect(missionId, { tenantId });
-  const emmett = snapshot.contributions.find(
+function findEmmettCapacityContribution(engine, missionId) {
+  return engine.store.listContributions(missionId).find(
     (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
-  );
+  ) || null;
+}
+
+function simulateProductionNestedCapacityPersist(engine, missionId) {
+  const emmett = findEmmettCapacityContribution(engine, missionId);
+  assert.ok(emmett, 'expected emmett capacity');
+  engine.store.updateContribution(emmett.id, (row) => ({
+    ...row,
+    payload: {
+      id: row.id,
+      specialist: row.specialist,
+      kind: row.kind,
+      payload: { ...(row.payload || {}) },
+    },
+  }));
+}
+
+function simulatePreSpec212Persist(engine, missionId) {
+  const emmett = findEmmettCapacityContribution(engine, missionId);
   assert.ok(emmett, 'expected emmett capacity');
   const body = { ...(emmett.payload || {}) };
   const items = Array.isArray(body.queue?.items) ? body.queue.items : [];
@@ -343,7 +361,7 @@ describe('regenerateAnchorCapacityRevision — canonical path', () => {
 
   it('REVISE_PREPARED_OUTREACH clears pre-SPEC-212 contamination when Paige variants are reused', async () => {
     const { engine, mission } = await preparedReadyMission();
-    simulatePreSpec212Persist(engine, mission.id, '10');
+    simulatePreSpec212Persist(engine, mission.id);
 
     const before = engine.inspect(mission.id, { tenantId: '10' });
     const oldCapacity = before.contributions.find(
@@ -432,7 +450,7 @@ describe('regenerateAnchorCapacityRevision — canonical path', () => {
   it('revision inserts a new durable CAPACITY and marks the old row superseded after reload', async () => {
     const pool = createRevisionMemoryPool();
     const { engine, mission } = await preparedReadyMission();
-    simulatePreSpec212Persist(engine, mission.id, '10');
+    simulatePreSpec212Persist(engine, mission.id);
     await persistEngineMission(engine, mission.id, '10', pool);
 
     const before = engine.inspect(mission.id, { tenantId: '10' });
@@ -517,5 +535,57 @@ describe('regenerateAnchorCapacityRevision — canonical path', () => {
     assert.equal(inspectCapacitySpec212(hydratedNew.payload).valid, true);
     assert.equal(reloaded.mission.stage, STAGES.READY);
     assert.equal(reloaded.mission.revisionState?.emmettContributionId, persistedNew.id);
+  });
+
+  it('durable supersede verification passes for production nested CAPACITY JSONB', async () => {
+    const pool = createRevisionMemoryPool();
+    const { engine, mission } = await preparedReadyMission();
+    simulateProductionNestedCapacityPersist(engine, mission.id);
+    simulatePreSpec212Persist(engine, mission.id);
+    await persistEngineMission(engine, mission.id, '10', pool);
+
+    const contributionsBefore = engine.store.listContributions(mission.id);
+    const oldCapacity = findEmmettCapacityContribution(engine, mission.id);
+    const paigePayload = activePaigePayload(contributionsBefore);
+    assert.ok(oldCapacity);
+    assert.equal(isSupersededContribution(oldCapacity), false);
+
+    const request = amo.createExecutionRequest({
+      source: amo.EXECUTION_SOURCES.API,
+      intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
+      missionId: mission.id,
+      mission: engine.get(mission.id, '10'),
+      operatorId: 'operator-1',
+      stage: STAGES.READY,
+      question: 'Regenerate capacity only.',
+    });
+
+    const routed = await amo.routeExecutionRequest(request, {
+      engine,
+      tenantId: '10',
+      persist: true,
+      pool,
+      allowFixtureFallback: true,
+      runPaige: async () => paigePayload,
+    });
+    assert.equal(routed.action, 'revise_prepared_outreach');
+    assert.notEqual(routed.executionResult?.rolledBack, true, routed.executionResult?.error?.message);
+
+    const durable = await loadMissionSnapshot(mission.id, '10', pool);
+    const capacities = (durable.contributions || []).filter(
+      (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
+    );
+    const persistedOld = capacities.find((row) => row.id === oldCapacity.id);
+    const persistedNew = capacities.find((row) => row.id !== oldCapacity.id);
+    assert.ok(persistedOld);
+    assert.ok(persistedNew);
+    assert.equal(isSupersededContribution(persistedOld), true);
+    assert.equal(persistedOld.payload.superseded, true);
+    assert.equal(persistedOld.payload.payload.superseded, true);
+    assert.equal(isSupersededContribution(persistedNew), false);
+    assert.equal(
+      capacities.filter((row) => !isSupersededContribution(row)).length,
+      1
+    );
   });
 });
