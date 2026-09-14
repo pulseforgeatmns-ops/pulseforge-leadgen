@@ -122,6 +122,8 @@ function isEligibleForCapacityProjection(row = {}) {
     email_verified: row.verified === true || row.email_verified === true,
     email_status: row.emailStatus || row.email_status,
     do_not_contact: row.dnc === true || row.do_not_contact === true,
+    verificationSource: row.verificationSource,
+    enrichment_provenance: row.enrichment_provenance,
   });
 }
 

@@ -5,6 +5,8 @@
  * Discovered internal links are prioritized over guessed seed paths.
  */
 
+const { resolveOfficialEnrichmentDomain } = require('./canonicalEmailEligibility');
+
 const RELEVANT_LINK_RE = /\b(?:about|team|staff|attorney|attorneys|people|professionals|contacts?|firm|our-firm|practice|profile|profiles)\b/i;
 
 const GUESSED_SEED_PATHS = Object.freeze([
@@ -63,12 +65,12 @@ function canonicalizeUrl(url) {
 }
 
 /**
- * Prefer provider-backed website / website_url over derived domain field.
+ * Prefer an official company domain; never use social/directory hosts for enrichment.
  * @param {object|null} row
  * @returns {string|null}
  */
 function resolveEnrichmentDomain(row) {
-  return normalizeDomain(row?.website || row?.website_url || row?.domain);
+  return resolveOfficialEnrichmentDomain(row);
 }
 
 function isSameSiteDomain(hostname, domain) {

@@ -6,6 +6,7 @@
  */
 
 const { invalidOutreachEmailReason } = require('../../../utils/emailGuard');
+const { canonicalOutboundEmailIneligibilityReason } = require('../../../utils/canonicalEmailEligibility');
 
 const VERIFIED_EMAIL_STATUSES = new Set(['valid', 'verified']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,6 +40,7 @@ function isProjectableCrmProspect(row) {
   if (row.email_verified !== true) return false;
   const status = String(row.email_status || '').toLowerCase();
   if (!VERIFIED_EMAIL_STATUSES.has(status)) return false;
+  if (canonicalOutboundEmailIneligibilityReason(row)) return false;
   return true;
 }
 

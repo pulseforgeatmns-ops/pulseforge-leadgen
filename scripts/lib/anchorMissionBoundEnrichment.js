@@ -33,12 +33,14 @@ function isExcludedCompany(name) {
   return EXCLUDED_COMPANY_RE.test(String(name || '').trim());
 }
 
-function crmProjectionRow(row = {}) {
+function crmProjectionRow(row = {}, extras = {}) {
   return {
     email: row.email,
     email_verified: row.email_verified,
     email_status: row.email_status,
     do_not_contact: row.do_not_contact,
+    enrichment_provenance: row.enrichment_provenance,
+    verificationSource: extras.verificationSource || row.verificationSource || null,
   };
 }
 
@@ -132,6 +134,7 @@ async function persistProviderChainEmail(db, row, enriched, verification, dryRun
   const firstName = contactParts[0] || null;
   const lastName = contactParts.length > 1 ? contactParts.slice(1).join(' ') : null;
 
+  const providerSource = (enriched.source || ['provider_chain']).join('+');
   await db.query(
     `UPDATE prospects
         SET email = $1,
@@ -144,9 +147,10 @@ async function persistProviderChainEmail(db, row, enriched, verification, dryRun
             verifier_checked_at = NOW(),
             verifier_response = $7::jsonb,
             do_not_contact = CASE WHEN $8 THEN true ELSE do_not_contact END,
+            enrichment_provenance = COALESCE(enrichment_provenance, '{}'::jsonb) || $9::jsonb,
             updated_at = NOW()
-      WHERE id = $9
-        AND client_id = $10`,
+      WHERE id = $10
+        AND client_id = $11`,
     [
       candidate.email,
       firstName,
@@ -156,6 +160,16 @@ async function persistProviderChainEmail(db, row, enriched, verification, dryRun
       verification.emailStatus,
       JSON.stringify(verification.verifierResponse || null),
       verification.doNotContact === true,
+      JSON.stringify({
+        email: {
+          tier: 1,
+          source: providerSource,
+          confidence: 0.9,
+          verifier: verification.emailVerificationMethod || 'bouncer',
+          status: verification.emailStatus,
+          resolved_at: new Date().toISOString(),
+        },
+      }),
       row.prospect_id,
       row.client_id,
     ]
@@ -207,7 +221,7 @@ async function enrichProspectRow(row, options = {}) {
     };
   }
 
-  if (isProjectableCrmProspect(crmProjectionRow(row))) {
+  if (isProjectableCrmProspect(crmProjectionRow(row, { verificationSource: 'existing_crm' }))) {
     return {
       ...base,
       verified: true,
@@ -230,7 +244,8 @@ async function enrichProspectRow(row, options = {}) {
     ? row
     : await loadProspectRow(options.db, row.client_id, row.prospect_id);
 
-  if (reloaded && isProjectableCrmProspect(crmProjectionRow(reloaded))) {
+  const tieredVerificationSource = tieredOutcome.selectedEmail?.source || 'tiered_enrichment';
+  if (reloaded && isProjectableCrmProspect(crmProjectionRow(reloaded, { verificationSource: tieredVerificationSource }))) {
     return {
       ...base,
       verified: true,
@@ -239,7 +254,7 @@ async function enrichProspectRow(row, options = {}) {
       email: String(reloaded.email).trim(),
       emailStatus: reloaded.email_status,
       emailVerificationMethod: reloaded.email_verification_method,
-      verificationSource: tieredOutcome.selectedEmail?.source || 'tiered_enrichment',
+      verificationSource: tieredVerificationSource,
       reason: tieredOutcome.resolved ? 'tiered_resolved' : 'tiered_email_persisted',
       tiered: {
         resolved: tieredOutcome.resolved,
@@ -249,7 +264,7 @@ async function enrichProspectRow(row, options = {}) {
     };
   }
 
-  const domain = resolveEnrichmentDomain(row) || normalizeDomain(row.domain || row.website || row.website_url);
+  const domain = resolveEnrichmentDomain(row);
   if (!domain) {
     return {
       ...base,
@@ -292,7 +307,9 @@ async function enrichProspectRow(row, options = {}) {
 
     return {
       ...base,
-      verified: isProjectableCrmProspect(crmProjectionRow(finalRow)),
+      verified: isProjectableCrmProspect(crmProjectionRow(finalRow, {
+        verificationSource: (enriched.source || ['provider_chain']).join('+'),
+      })),
       persisted: persistResult.persisted === true,
       path: 'provider_chain',
       email: String(finalRow.email || enriched.email).trim(),
