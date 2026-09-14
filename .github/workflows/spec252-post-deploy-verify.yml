@@ -40,6 +40,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       - name: SPEC-252 verify and schedule Babrun canary
+        if: ${{ secrets.DATABASE_URL != '' && secrets.CRON_SECRET != '' }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -52,3 +53,6 @@ jobs:
           if [ "${SCHEDULE_ENABLED}" = "true" ]; then ARGS+=(--schedule); fi
           if [ -n "${EXPECTED_PRODUCTION_SHA:-}" ]; then ARGS+=(--expected-sha="${EXPECTED_PRODUCTION_SHA}"); fi
           node scripts/verifySpec252PostDeployAndScheduleBabrunCanary.js "${ARGS[@]}"
+      - name: Skip — production secrets not configured in GitHub Actions
+        if: ${{ secrets.DATABASE_URL == '' || secrets.CRON_SECRET == '' }}
+        run: echo "DATABASE_URL and CRON_SECRET must be configured to run post-deploy verification."
