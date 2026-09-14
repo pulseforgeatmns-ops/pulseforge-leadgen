@@ -20,7 +20,7 @@ const http = require('node:http');
 const pool = require('../db');
 const {
   authorizeScheduledOutreachSend,
-  evaluateSendEligibility,
+  evaluateSchedulingEligibility,
   buildIdempotencyKey,
   PostgresScheduleStore,
   PAST_DUE_POLICY,
@@ -364,7 +364,7 @@ async function loadOutreachAsset(client, tenantId, assetId) {
   };
 }
 
-async function revalidateKaylee(client, scheduledForIso, asset) {
+async function validateSchedulingEligibility(client, scheduledForIso, asset) {
   const scheduleStore = new PostgresScheduleStore(client);
   const mailboxStore = new PostgresTenantMailboxStore(client);
   const schedule = {
@@ -377,7 +377,6 @@ async function revalidateKaylee(client, scheduledForIso, asset) {
     sequenceStep: 1,
     scheduledFor: scheduledForIso,
     timezone: BUSINESS_TZ,
-    status: 'SCHEDULED',
     pastDuePolicy: PAST_DUE_POLICY.EXECUTE_WITHIN_WINDOW,
     maxLatenessMinutes: 30,
     authorizationSnapshot: {
@@ -392,10 +391,9 @@ async function revalidateKaylee(client, scheduledForIso, asset) {
       body: asset.body,
     },
   };
-  return evaluateSendEligibility(schedule, {
+  return evaluateSchedulingEligibility(schedule, {
     scheduleStore,
     mailboxStore,
-    now: new Date(),
   });
 }
 
@@ -461,11 +459,11 @@ async function main() {
 
   const window = nextSuitableBusinessWindow(new Date(), BUSINESS_TZ);
   const asset = await loadOutreachAsset(pool, BABRUN.tenantId, BABRUN.outreachAssetId);
-  const revalidation = await revalidateKaylee(pool, window.scheduledForIso, asset);
-  report.revalidation = revalidation;
+  const schedulingEligibility = await validateSchedulingEligibility(pool, window.scheduledForIso, asset);
+  report.schedulingEligibility = schedulingEligibility;
 
-  if (!revalidation.eligible) {
-    report.verdict = 'KAYLEE REVALIDATION FAILED';
+  if (!schedulingEligibility.eligible) {
+    report.verdict = 'SCHEDULING ELIGIBILITY FAILED';
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
     process.exitCode = 3;
     return;

@@ -18,6 +18,8 @@ const {
   MemoryScheduleStore,
   authorizeScheduledOutreachSend,
   cancelScheduledOutreachSend,
+  evaluateSchedulingEligibility,
+  evaluateSendEligibility,
   executeScheduledSend,
   executeDueScheduledSends,
   buildIdempotencyKey,
@@ -339,6 +341,24 @@ describe('SPEC-252 tenant outreach scheduling', () => {
 
   it('reply before scheduled follow-up prevents send', async () => {
     const seeded = await seedScheduler();
+    await seeded.scheduleStore.saveSchedule({
+      tenantId: 'tenant-a',
+      prospectId: 'prospect-1',
+      outreachAssetId: 'asset-1',
+      sendingIdentityId: seeded.identity.id,
+      recipientEmail: 'buyer@example.com',
+      scheduledFor: dueSoon('2026-09-14T14:00:00.000Z', 60),
+      timezone: 'America/New_York',
+      status: SCHEDULE_STATUS.SENT,
+      authorizationSource: 'test',
+      authorizedBy: 'op',
+      authorizedAt: '2026-09-12T12:00:00.000Z',
+      authorizationSnapshot: { subject: 'Step 1', body: 'Body', recipientEmail: 'buyer@example.com' },
+      idempotencyKey: 'step-1-for-reply-test',
+      sequenceStep: 1,
+      outboundMessageId: 'tom_step1_reply',
+      executedAt: '2026-09-13T14:00:00.000Z',
+    });
     const thread = await seeded.store.saveThread({
       tenantId: 'tenant-a',
       prospectId: 'prospect-1',
@@ -626,5 +646,235 @@ describe('SPEC-252 tenant outreach scheduling', () => {
     };
     assert.equal(isPastDueWindowExceeded(schedule, '2026-09-14T14:20:00.000Z'), false);
     assert.equal(isPastDueWindowExceeded(schedule, '2026-09-14T14:45:00.000Z'), true);
+  });
+});
+
+describe('SPEC-252 scheduling vs execution eligibility phases', () => {
+  const FUTURE_SEND = '2026-09-16T14:00:00.000Z';
+  const EXECUTION_NOW = '2026-09-14T14:00:00.000Z';
+
+  async function futureScheduleFixture(overrides = {}) {
+    const seeded = overrides.seeded || await seedScheduler(overrides);
+    const scheduledFor = overrides.scheduledFor || FUTURE_SEND;
+    const auth = await authorizeScheduledOutreachSend({
+      tenantId: overrides.tenantId || 'tenant-a',
+      prospectId: overrides.prospectId || 'prospect-1',
+      outreachAssetId: overrides.outreachAssetId || 'asset-1',
+      sendingIdentityId: seeded.identity.id,
+      recipientEmail: overrides.recipientEmail || 'buyer@example.com',
+      scheduledFor,
+      timezone: 'America/New_York',
+      subject: overrides.subject || 'Worth a look?',
+      body: overrides.body || 'Hello from outreach.',
+      authorizationSource: 'operator_test',
+      authorizedBy: 'operator@test.com',
+      sequenceStep: overrides.sequenceStep || 1,
+      idempotencyKey: overrides.idempotencyKey,
+      threadId: overrides.threadId,
+      pastDuePolicy: overrides.pastDuePolicy,
+      maxLatenessMinutes: overrides.maxLatenessMinutes,
+    }, {
+      scheduleStore: seeded.scheduleStore,
+      mailboxStore: seeded.store,
+      now: '2026-09-14T12:00:00.000Z',
+    });
+    return { ...seeded, auth, scheduledFor };
+  }
+
+  // TEST A — future authorized send can be scheduled
+  it('TEST A: future authorized send passes scheduling eligibility and creates SCHEDULED row', async () => {
+    const fixture = await futureScheduleFixture();
+    const scheduling = await evaluateSchedulingEligibility(fixture.auth.schedule, {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+    });
+    assert.equal(scheduling.eligible, true);
+    assert.equal(scheduling.action, 'schedule');
+    assert.equal(fixture.auth.created, true);
+    assert.equal(fixture.auth.schedule.status, SCHEDULE_STATUS.SCHEDULED);
+  });
+
+  // TEST B — future scheduled send returns not_due when executor runs early
+  it('TEST B: executor running early returns not_due deferral', async () => {
+    const fixture = await futureScheduleFixture();
+    const execution = await evaluateSendEligibility(fixture.auth.schedule, {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+      now: EXECUTION_NOW,
+    });
+    assert.equal(execution.eligible, false);
+    assert.equal(execution.action, 'defer');
+    assert.equal(execution.reason, 'not_due');
+  });
+
+  // TEST C — not_due does not mutate schedule to FAILED/SKIPPED
+  it('TEST C: not_due deferral leaves schedule status SCHEDULED', async () => {
+    const fixture = await futureScheduleFixture();
+    const before = await fixture.scheduleStore.getSchedule('tenant-a', fixture.auth.schedule.id);
+    const outcome = await executeScheduledSend(before, {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+      transport: fakeTransport(),
+      secretResolver: fakeSecretResolver,
+      now: EXECUTION_NOW,
+    });
+    assert.equal(outcome.result, 'defer');
+    assert.equal(outcome.reason, 'not_due');
+    const after = await fixture.scheduleStore.getSchedule('tenant-a', fixture.auth.schedule.id);
+    assert.equal(after.status, SCHEDULE_STATUS.SCHEDULED);
+    assert.notEqual(after.status, SCHEDULE_STATUS.FAILED);
+    assert.notEqual(after.status, SCHEDULE_STATUS.SKIPPED);
+  });
+
+  // TEST D — executor sends once scheduled_for <= now
+  it('TEST D: executor sends when scheduled_for <= now', async () => {
+    const fixture = await futureScheduleFixture({ scheduledFor: dueSoon(EXECUTION_NOW, 5) });
+    const transport = fakeTransport();
+    const claimed = await fixture.scheduleStore.claimDueSchedules({
+      now: EXECUTION_NOW,
+      limit: 1,
+      claimToken: 'claim-due',
+    });
+    assert.equal(claimed.length, 1);
+    const outcome = await executeScheduledSend(claimed[0], {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+      transport,
+      secretResolver: fakeSecretResolver,
+      now: EXECUTION_NOW,
+    });
+    assert.equal(outcome.result, 'sent');
+    assert.equal(outcome.schedule.status, SCHEDULE_STATUS.SENT);
+    assert.equal(transport.calls.length, 1);
+  });
+
+  // TEST E — suppression appearing after scheduling prevents execution
+  it('TEST E: suppression added after scheduling blocks execution at due time', async () => {
+    const fixture = await futureScheduleFixture({ scheduledFor: dueSoon(EXECUTION_NOW, 5) });
+    const scheduling = await evaluateSchedulingEligibility(fixture.auth.schedule, {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+    });
+    assert.equal(scheduling.eligible, true);
+
+    await fixture.store.suppress({
+      tenantId: 'tenant-a',
+      email: 'buyer@example.com',
+      reason: 'unsubscribe',
+      source: 'operator',
+    });
+
+    const claimed = await fixture.scheduleStore.claimDueSchedules({
+      now: EXECUTION_NOW,
+      limit: 1,
+      claimToken: 'claim-suppress',
+    });
+    const outcome = await executeScheduledSend(claimed[0], {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+      transport: fakeTransport(),
+      secretResolver: fakeSecretResolver,
+      now: EXECUTION_NOW,
+    });
+    assert.equal(outcome.result, 'skipped');
+    assert.equal(outcome.schedule.skipReason, 'suppressed');
+  });
+
+  // TEST F — reply appearing after scheduling prevents execution (not scheduling)
+  it('TEST F: reply after scheduling blocks execution but not scheduling eligibility', async () => {
+    const seeded = await seedScheduler();
+    const thread = await seeded.store.saveThread({
+      tenantId: 'tenant-a',
+      prospectId: 'prospect-1',
+      sequenceState: SEQUENCE_STATE.NOT_YET_SENT,
+      replyState: 'none',
+      currentStatus: 'active',
+    });
+    const fixture = await futureScheduleFixture({
+      seeded,
+      threadId: thread.id,
+      scheduledFor: dueSoon(EXECUTION_NOW, 5),
+    });
+
+    const schedulingBeforeReply = await evaluateSchedulingEligibility(fixture.auth.schedule, {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+    });
+    assert.equal(schedulingBeforeReply.eligible, true);
+
+    await seeded.store.saveThread({
+      ...thread,
+      sequenceState: SEQUENCE_STATE.PAUSED,
+      replyState: 'reply_received',
+      currentStatus: 'replied',
+    });
+
+    const claimed = await fixture.scheduleStore.claimDueSchedules({
+      now: EXECUTION_NOW,
+      limit: 1,
+      claimToken: 'claim-reply-after',
+    });
+    const outcome = await executeScheduledSend(claimed[0], {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+      transport: fakeTransport(),
+      secretResolver: fakeSecretResolver,
+      now: EXECUTION_NOW,
+    });
+    assert.equal(outcome.result, 'skipped');
+    assert.ok(['thread_replied', 'thread_sequence_paused'].includes(outcome.schedule.skipReason));
+  });
+
+  // TEST G — past/expired authorization does not silently fire unless policy allows
+  it('TEST G: past scheduled send skipped when policy is skip_past_due', async () => {
+    const missed = await futureScheduleFixture({
+      scheduledFor: BABRUN_CANARY.missedScheduledFor,
+      pastDuePolicy: PAST_DUE_POLICY.SKIP_PAST_DUE,
+    });
+    const scheduling = await evaluateSchedulingEligibility(missed.auth.schedule, {
+      scheduleStore: missed.scheduleStore,
+      mailboxStore: missed.store,
+    });
+    assert.equal(scheduling.eligible, true, 'scheduling eligibility ignores past due window');
+
+    const claimed = await missed.scheduleStore.claimDueSchedules({
+      now: '2026-09-14T18:00:00.000Z',
+      limit: 1,
+      claimToken: 'claim-past',
+    });
+    const outcome = await executeScheduledSend(claimed[0], {
+      scheduleStore: missed.scheduleStore,
+      mailboxStore: missed.store,
+      transport: fakeTransport(),
+      secretResolver: fakeSecretResolver,
+      now: '2026-09-14T18:00:00.000Z',
+    });
+    assert.equal(outcome.result, 'skipped');
+    assert.equal(outcome.schedule.skipReason, 'missed_execution_window');
+  });
+
+  // TEST H — schedule creation remains idempotent
+  it('TEST H: schedule creation is idempotent for identical authorization', async () => {
+    const fixture = await futureScheduleFixture({ idempotencyKey: 'canary-idempotent' });
+    const duplicate = await authorizeScheduledOutreachSend({
+      tenantId: 'tenant-a',
+      prospectId: 'prospect-1',
+      outreachAssetId: 'asset-1',
+      sendingIdentityId: fixture.identity.id,
+      recipientEmail: 'buyer@example.com',
+      scheduledFor: FUTURE_SEND,
+      subject: 'Worth a look?',
+      body: 'Hello from outreach.',
+      authorizationSource: 'operator_test',
+      authorizedBy: 'operator@test.com',
+      idempotencyKey: 'canary-idempotent',
+    }, {
+      scheduleStore: fixture.scheduleStore,
+      mailboxStore: fixture.store,
+    });
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(duplicate.created, false);
+    assert.equal(duplicate.schedule.id, fixture.auth.schedule.id);
+    assert.equal(duplicate.schedule.status, SCHEDULE_STATUS.SCHEDULED);
   });
 });

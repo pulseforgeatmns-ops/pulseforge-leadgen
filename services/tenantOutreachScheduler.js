@@ -665,6 +665,106 @@ const BLOCKED_SEQUENCE_STATES = new Set([
   SEQUENCE_STATE.QUALIFIED_HANDOFF,
 ]);
 
+/**
+ * Authorization/scheduling-time eligibility.
+ *
+ * Validates safety gates before creating a durable SCHEDULED row. Does NOT
+ * require scheduled_for <= now — future sends are expected to be not_due until
+ * their window arrives (executor handles that separately).
+ */
+async function evaluateSchedulingEligibility(schedule, opts = {}) {
+  const store = opts.scheduleStore;
+  const mailboxStore = opts.mailboxStore;
+
+  if (!schedule.scheduledFor) {
+    return { eligible: false, action: 'reject', reason: 'scheduled_for_required' };
+  }
+
+  const tenantActive = await store.getTenantActive(schedule.tenantId);
+  if (!tenantActive) {
+    return { eligible: false, action: 'reject', reason: 'tenant_inactive' };
+  }
+
+  const identity = await mailboxStore.getIdentity(schedule.tenantId, schedule.sendingIdentityId);
+  if (!identity || identity.status !== IDENTITY_STATUS.ACTIVE) {
+    return { eligible: false, action: 'reject', reason: 'sending_identity_inactive' };
+  }
+  const integration = await mailboxStore.getIntegration(schedule.tenantId, identity.mailboxIntegrationId);
+  if (!integration || integration.status !== MAILBOX_STATUS.ACTIVE) {
+    return { eligible: false, action: 'reject', reason: 'mailbox_inactive' };
+  }
+  if (identity.tenantId !== schedule.tenantId) {
+    return { eligible: false, action: 'reject', reason: 'sending_identity_tenant_mismatch' };
+  }
+
+  const prospect = await store.getProspectEligibility(schedule.tenantId, schedule.prospectId);
+  const snapshotEmail = lower(schedule.authorizationSnapshot?.recipientEmail || schedule.recipientEmail);
+  if (!prospect.exists) {
+    return { eligible: false, action: 'reject', reason: 'prospect_not_found' };
+  }
+  if (prospect.doNotContact) {
+    return { eligible: false, action: 'reject', reason: 'prospect_dnc' };
+  }
+  if (prospect.booked) {
+    return { eligible: false, action: 'reject', reason: 'prospect_booked' };
+  }
+  if (prospect.email && prospect.email !== snapshotEmail) {
+    return { eligible: false, action: 'reject', reason: 'recipient_changed' };
+  }
+  if (!snapshotEmail) {
+    return { eligible: false, action: 'reject', reason: 'recipient_missing' };
+  }
+
+  const suppression = await mailboxStore.findSuppression(schedule.tenantId, snapshotEmail);
+  if (suppression) {
+    const reason = suppression.reason === 'bounce' ? 'hard_bounce' : 'suppressed';
+    return { eligible: false, action: 'reject', reason };
+  }
+
+  const priorStep = await store.findPriorSequenceStep(schedule.tenantId, schedule.prospectId, schedule.sequenceStep);
+  if (!priorStep.satisfied) {
+    return { eligible: false, action: 'reject', reason: priorStep.reason || 'sequence_order_blocked' };
+  }
+
+  const asset = await store.getOutreachAsset(schedule.tenantId, schedule.outreachAssetId);
+  if (!asset) {
+    return { eligible: false, action: 'reject', reason: 'outreach_asset_not_found' };
+  }
+  if (['archived', 'retired'].includes(lower(asset.lifecycleState))) {
+    return { eligible: false, action: 'reject', reason: 'outreach_asset_invalid' };
+  }
+
+  const idempotencyKey = schedule.idempotencyKey
+    || buildIdempotencyKey(schedule);
+  const sentSchedule = await store.findSentScheduleByIdempotency(schedule.tenantId, idempotencyKey);
+  if (sentSchedule) {
+    return {
+      eligible: false,
+      action: 'reject',
+      reason: 'already_sent',
+      outboundMessageId: sentSchedule.outboundMessageId,
+    };
+  }
+
+  const alreadySentMessage = await mailboxStore.findSentByIdempotencyKey(schedule.tenantId, idempotencyKey);
+  if (alreadySentMessage) {
+    return {
+      eligible: false,
+      action: 'reject',
+      reason: 'provider_message_exists',
+      outboundMessageId: alreadySentMessage.id,
+    };
+  }
+
+  return { eligible: true, action: 'schedule', recipientEmail: snapshotEmail };
+}
+
+/**
+ * Execution-time eligibility.
+ *
+ * Extends scheduling gates with due-state and thread checks. `not_due` defers
+ * execution without mutating the schedule row — it is never a scheduling rejection.
+ */
 async function evaluateSendEligibility(schedule, opts = {}) {
   const store = opts.scheduleStore;
   const mailboxStore = opts.mailboxStore;
@@ -683,44 +783,21 @@ async function evaluateSendEligibility(schedule, opts = {}) {
     return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'missed_execution_window' };
   }
 
-  const tenantActive = await store.getTenantActive(schedule.tenantId);
-  if (!tenantActive) {
-    return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'tenant_inactive' };
-  }
-
-  const identity = await mailboxStore.getIdentity(schedule.tenantId, schedule.sendingIdentityId);
-  if (!identity || identity.status !== IDENTITY_STATUS.ACTIVE) {
-    return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'sending_identity_inactive' };
-  }
-  const integration = await mailboxStore.getIntegration(schedule.tenantId, identity.mailboxIntegrationId);
-  if (!integration || integration.status !== MAILBOX_STATUS.ACTIVE) {
-    return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'mailbox_inactive' };
-  }
-  if (identity.tenantId !== schedule.tenantId) {
-    return { eligible: false, action: SCHEDULE_STATUS.FAILED, reason: 'sending_identity_tenant_mismatch' };
-  }
-
-  const prospect = await store.getProspectEligibility(schedule.tenantId, schedule.prospectId);
-  const snapshotEmail = lower(schedule.authorizationSnapshot?.recipientEmail || schedule.recipientEmail);
-  if (prospect.exists) {
-    if (prospect.doNotContact) {
-      return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'prospect_dnc' };
+  const scheduling = await evaluateSchedulingEligibility(schedule, { scheduleStore: store, mailboxStore });
+  if (!scheduling.eligible) {
+    if (scheduling.reason === 'already_sent' || scheduling.reason === 'provider_message_exists') {
+      return {
+        eligible: false,
+        action: 'recover_sent',
+        reason: scheduling.reason,
+        outboundMessageId: scheduling.outboundMessageId,
+      };
     }
-    if (prospect.booked) {
-      return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'prospect_booked' };
-    }
-    if (prospect.email && prospect.email !== snapshotEmail) {
-      return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'recipient_changed' };
-    }
-  }
-  if (!snapshotEmail) {
-    return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'recipient_missing' };
-  }
-
-  const suppression = await mailboxStore.findSuppression(schedule.tenantId, snapshotEmail);
-  if (suppression) {
-    const reason = suppression.reason === 'bounce' ? 'hard_bounce' : 'suppressed';
-    return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason };
+    return {
+      eligible: false,
+      action: SCHEDULE_STATUS.SKIPPED,
+      reason: scheduling.reason,
+    };
   }
 
   if (schedule.threadId) {
@@ -735,32 +812,7 @@ async function evaluateSendEligibility(schedule, opts = {}) {
     }
   }
 
-  const priorStep = await store.findPriorSequenceStep(schedule.tenantId, schedule.prospectId, schedule.sequenceStep);
-  if (!priorStep.satisfied) {
-    return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: priorStep.reason || 'sequence_order_blocked' };
-  }
-
-  const asset = await store.getOutreachAsset(schedule.tenantId, schedule.outreachAssetId);
-  if (asset && ['archived', 'retired'].includes(lower(asset.lifecycleState))) {
-    return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: 'outreach_asset_invalid' };
-  }
-
-  const sentSchedule = await store.findSentScheduleByIdempotency(schedule.tenantId, schedule.idempotencyKey);
-  if (sentSchedule) {
-    return { eligible: false, action: 'recover_sent', reason: 'already_sent', outboundMessageId: sentSchedule.outboundMessageId };
-  }
-
-  const alreadySentMessage = await mailboxStore.findSentByIdempotencyKey(schedule.tenantId, schedule.idempotencyKey);
-  if (alreadySentMessage) {
-    return {
-      eligible: false,
-      action: 'recover_sent',
-      reason: 'provider_message_exists',
-      outboundMessageId: alreadySentMessage.id,
-    };
-  }
-
-  return { eligible: true, action: 'send', recipientEmail: snapshotEmail };
+  return { eligible: true, action: 'send', recipientEmail: scheduling.recipientEmail };
 }
 
 async function finalizeSkipped(scheduleStore, schedule, reason, opts = {}) {
@@ -967,6 +1019,7 @@ module.exports = {
   ensureSchedulerSchema,
   authorizeScheduledOutreachSend,
   cancelScheduledOutreachSend,
+  evaluateSchedulingEligibility,
   evaluateSendEligibility,
   executeScheduledSend,
   executeDueScheduledSends,
