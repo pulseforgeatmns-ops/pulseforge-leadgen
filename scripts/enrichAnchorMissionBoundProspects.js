@@ -30,6 +30,7 @@ const {
   resolveEmailVerification,
   normalizeDomain,
 } = require('../leadgen');
+const { resolveEnrichmentDomain } = require('../utils/websiteEnrichmentCrawl');
 const tiered = require('../tieredEnrichmentAgent');
 const regenerate = require('./regenerateAnchorCapacityRevision');
 const audit = require('./auditAnchorCapacitySendability');
@@ -299,7 +300,7 @@ async function enrichProspectRow(row, options = {}) {
     };
   }
 
-  const domain = normalizeDomain(row.domain || row.website || row.website_url);
+  const domain = resolveEnrichmentDomain(row) || normalizeDomain(row.domain || row.website || row.website_url);
   if (!domain) {
     return {
       ...base,
