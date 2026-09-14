@@ -18,6 +18,9 @@ const {
   evaluatePaigePriorLearningInfluence,
   applyPaigePriorLearningAdjustments,
 } = require('./PaigePriorLearningInfluence');
+const {
+  resolveOutreachSequenceAtPrepare,
+} = require('../../acquisition-mission/PreparedOutreachSequence');
 
 function asText(value) {
   if (value == null) return '';
@@ -180,6 +183,17 @@ function buildPaigeVariantsPayload(executionInput = {}) {
   // TODO: Refactor applyPaigePriorLearningAdjustments to apply per-prospect
   // For now, apply only to first variant to avoid contamination
   payload = applyPaigePriorLearningAdjustments(payload, priorLearningEvaluation, plan);
+
+  const outreachSequence = resolveOutreachSequenceAtPrepare({
+    mission: executionInput.mission || {},
+    contributions: executionInput.contributions || [],
+    clientId: executionInput.mission?.clientId ?? Number(executionInput.mission?.tenantId),
+    variants: payload.variants || [],
+    crmByProspectId: executionInput.crmByProspectId || executionInput.specialistInput?.crmByProspectId || null,
+  });
+  if (outreachSequence) {
+    payload.outreachSequence = outreachSequence;
+  }
 
   return {
     payload,

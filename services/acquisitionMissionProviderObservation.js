@@ -390,7 +390,9 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
         interpretation: interpretationResult?.interpretation || null,
         executionRecord: executionRecord
           ? {
+            id: executionRecord.id,
             preparedArtifactRevision: executionRecord.prepared_artifact_revision,
+            executionApprovalContributionId: executionRecord.execution_approval_contribution_id,
             payload: executionRecord.payload,
           }
           : null,

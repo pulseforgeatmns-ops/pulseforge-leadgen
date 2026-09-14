@@ -23,6 +23,11 @@ const {
   isSupersededContribution,
   unwrapSpecialistPayload,
 } = require('./ContributionSupersession');
+const {
+  extractOutreachSequenceSteps,
+  outreachSequenceForRevisionHash,
+  freezeOutreachSequenceForApproval,
+} = require('./PreparedOutreachSequence');
 
 const EXECUTION_APPROVAL_ACTION = 'execution_approved';
 
@@ -72,6 +77,7 @@ function computePreparedArtifactBinding(missionId, contributions = []) {
   const queueItems = Array.isArray(queue.items) ? queue.items : [];
   const governor = emmettPayload.governor || {};
   const senderIdentity = extractCapacitySenderIdentity(emmettPayload);
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
 
   return {
     missionId,
@@ -87,6 +93,7 @@ function computePreparedArtifactBinding(missionId, contributions = []) {
     governorOutcome: governor.outcome || null,
     senderEmail: senderIdentity.senderEmail || null,
     sendingDomain: senderIdentity.sendingDomain || null,
+    outreachSequenceSteps: outreachSequenceForRevisionHash(paigePayload.outreachSequence),
   };
 }
 
@@ -228,8 +235,11 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
   const binding = computePreparedArtifactBinding(mission.id, contributions);
   const revision = computePreparedArtifactRevision(mission.id, contributions);
   const emmett = findEmmettCapacity(contributions);
+  const paige = findPaigeVariants(contributions);
   const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
   const queueItems = Array.isArray(emmettPayload.queue?.items) ? emmettPayload.queue.items : [];
+  const frozenOutreachSequence = freezeOutreachSequenceForApproval(paigePayload.outreachSequence);
 
   // SPEC-212: Validate message bindings before approval
   const bindingValidation = validateProspectMessageBindings(emmettPayload);
@@ -256,6 +266,7 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
     transactionId: input.transactionId || null,
     // SPEC-212: Include binding validation in approval payload
     bindingValidation,
+    ...(frozenOutreachSequence ? { outreachSequence: frozenOutreachSequence } : {}),
   };
 }
 
@@ -309,6 +320,15 @@ function buildExecutionReview(mission, contributions = []) {
       cta: variant.cta || paigePayload.cta || null,
       selectedVariant: variant.label || 'Primary',
       variantCount: Array.isArray(paigePayload.variants) ? paigePayload.variants.length : 0,
+      outreachSequence: (() => {
+        const steps = extractOutreachSequenceSteps(paigePayload);
+        if (!steps.length) return null;
+        return {
+          stepCount: steps.length,
+          nextStepDay: steps[1]?.day ?? null,
+          steps: steps.map(({ step, day, channel }) => ({ step, day, channel })),
+        };
+      })(),
     },
     infrastructure: {
       queue: queueItems,

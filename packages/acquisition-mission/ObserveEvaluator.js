@@ -8,6 +8,7 @@ const { asText, nowIso } = require('./types');
 const { INTERPRETATION_TYPES } = require('./ObservationInterpretation');
 const { isCommunicationObservation } = require('./CommunicationObservation');
 const { resolveObserveCadence } = require('./ObserveCadence');
+const { CADENCE_PROVENANCE } = require('./PreparedOutreachSequence');
 const {
   EVIDENCE_TYPES,
   EVIDENCE_TYPE_TO_STRENGTH,
@@ -108,6 +109,19 @@ function buildRationale(evidenceType, updatedDisposition, opts = {}) {
   }
 }
 
+function timingFromCadence(cadence = {}, overrides = {}) {
+  return {
+    kind: overrides.kind ?? cadence.kind ?? 'unresolved',
+    dueAt: overrides.dueAt ?? cadence.dueAt ?? null,
+    waitDays: overrides.waitDays ?? cadence.waitDays ?? null,
+    cadenceSource: overrides.cadenceSource ?? cadence.cadenceSource ?? 'unresolved',
+    clockStart: overrides.clockStart ?? cadence.clockStart ?? null,
+    businessDays: false,
+    cadenceProvenance: overrides.cadenceProvenance ?? cadence.cadenceProvenance ?? null,
+    reconstructed: overrides.reconstructed ?? cadence.reconstructed === true,
+  };
+}
+
 function resolveNextActionAndTiming(input = {}) {
   const {
     evidenceType,
@@ -123,14 +137,7 @@ function resolveNextActionAndTiming(input = {}) {
   ].includes(evidenceType)) {
     return {
       recommendedNextAction: NEXT_ACTIONS.NONE,
-      recommendedTiming: {
-        kind: 'none',
-        dueAt: null,
-        waitDays: null,
-        cadenceSource: cadence.cadenceSource || 'unresolved',
-        clockStart: cadence.clockStart || null,
-        businessDays: false,
-      },
+      recommendedTiming: timingFromCadence(cadence, { kind: 'none', waitDays: null, dueAt: null }),
       humanApprovalRequired: false,
     };
   }
@@ -142,14 +149,7 @@ function resolveNextActionAndTiming(input = {}) {
   ].includes(evidenceType)) {
     return {
       recommendedNextAction: NEXT_ACTIONS.PROPOSE_END_CANDIDATE,
-      recommendedTiming: {
-        kind: 'none',
-        dueAt: null,
-        waitDays: null,
-        cadenceSource: cadence.cadenceSource || 'unresolved',
-        clockStart: cadence.clockStart || null,
-        businessDays: false,
-      },
+      recommendedTiming: timingFromCadence(cadence, { kind: 'none', waitDays: null, dueAt: null }),
       humanApprovalRequired: false,
     };
   }
@@ -158,41 +158,20 @@ function resolveNextActionAndTiming(input = {}) {
     if (rileyClassification === 'ambiguous') {
       return {
         recommendedNextAction: NEXT_ACTIONS.REVIEW_REPLY,
-        recommendedTiming: {
-          kind: 'none',
-          dueAt: null,
-          waitDays: null,
-          cadenceSource: cadence.cadenceSource || 'unresolved',
-          clockStart: cadence.clockStart || null,
-          businessDays: false,
-        },
+        recommendedTiming: timingFromCadence(cadence, { kind: 'none', waitDays: null, dueAt: null }),
         humanApprovalRequired: false,
       };
     }
     if (rileyClassification === 'not_now') {
       return {
         recommendedNextAction: NEXT_ACTIONS.NONE,
-        recommendedTiming: {
-          kind: 'none',
-          dueAt: null,
-          waitDays: null,
-          cadenceSource: cadence.cadenceSource || 'unresolved',
-          clockStart: cadence.clockStart || null,
-          businessDays: false,
-        },
+        recommendedTiming: timingFromCadence(cadence, { kind: 'none', waitDays: null, dueAt: null }),
         humanApprovalRequired: false,
       };
     }
     return {
       recommendedNextAction: NEXT_ACTIONS.WAIT,
-      recommendedTiming: {
-        kind: 'wait_until',
-        dueAt: cadence.dueAt || null,
-        waitDays: cadence.waitDays,
-        cadenceSource: cadence.cadenceSource || 'unresolved',
-        clockStart: cadence.clockStart || null,
-        businessDays: false,
-      },
+      recommendedTiming: timingFromCadence(cadence, { kind: 'wait_until' }),
       humanApprovalRequired: false,
     };
   }
@@ -200,14 +179,7 @@ function resolveNextActionAndTiming(input = {}) {
   if (cadence.sequenceExhausted && engagementWithoutReply(evidenceType) && !hasReply) {
     return {
       recommendedNextAction: NEXT_ACTIONS.PROPOSE_END_CANDIDATE,
-      recommendedTiming: {
-        kind: 'none',
-        dueAt: null,
-        waitDays: null,
-        cadenceSource: cadence.cadenceSource || 'unresolved',
-        clockStart: cadence.clockStart || null,
-        businessDays: false,
-      },
+      recommendedTiming: timingFromCadence(cadence, { kind: 'none', waitDays: null, dueAt: null }),
       humanApprovalRequired: false,
     };
   }
@@ -216,41 +188,25 @@ function resolveNextActionAndTiming(input = {}) {
     if (cadence.cadenceSource === 'unresolved') {
       return {
         recommendedNextAction: NEXT_ACTIONS.WAIT,
-        recommendedTiming: {
+        recommendedTiming: timingFromCadence(cadence, {
           kind: 'unresolved',
           dueAt: null,
           waitDays: null,
           cadenceSource: 'unresolved',
-          clockStart: cadence.clockStart || null,
-          businessDays: false,
-        },
+        }),
         humanApprovalRequired: false,
       };
     }
     if (cadence.cadenceElapsed) {
       return {
         recommendedNextAction: NEXT_ACTIONS.PROPOSE_FOLLOW_UP,
-        recommendedTiming: {
-          kind: 'due',
-          dueAt: cadence.dueAt,
-          waitDays: cadence.waitDays,
-          cadenceSource: cadence.cadenceSource,
-          clockStart: cadence.clockStart || null,
-          businessDays: false,
-        },
+        recommendedTiming: timingFromCadence(cadence, { kind: 'due' }),
         humanApprovalRequired: true,
       };
     }
     return {
       recommendedNextAction: NEXT_ACTIONS.WAIT,
-      recommendedTiming: {
-        kind: 'wait_until',
-        dueAt: cadence.dueAt,
-        waitDays: cadence.waitDays,
-        cadenceSource: cadence.cadenceSource,
-        clockStart: cadence.clockStart || null,
-        businessDays: false,
-      },
+      recommendedTiming: timingFromCadence(cadence, { kind: 'wait_until' }),
       humanApprovalRequired: false,
     };
   }
@@ -258,30 +214,26 @@ function resolveNextActionAndTiming(input = {}) {
   if ([EVIDENCE_TYPES.SENT, EVIDENCE_TYPES.DELIVERED, EVIDENCE_TYPES.SOFT_BOUNCE].includes(evidenceType)) {
     return {
       recommendedNextAction: NEXT_ACTIONS.WAIT,
-      recommendedTiming: {
+      recommendedTiming: timingFromCadence(cadence, {
         kind: cadence.cadenceSource === 'unresolved' ? 'unresolved' : 'wait_until',
-        dueAt: cadence.dueAt || null,
-        waitDays: cadence.waitDays,
-        cadenceSource: cadence.cadenceSource || 'unresolved',
-        clockStart: cadence.clockStart || null,
-        businessDays: false,
-      },
+      }),
       humanApprovalRequired: false,
     };
   }
 
   return {
     recommendedNextAction: NEXT_ACTIONS.WAIT,
-    recommendedTiming: {
-      kind: 'wait_until',
-      dueAt: cadence.dueAt || null,
-      waitDays: cadence.waitDays,
-      cadenceSource: cadence.cadenceSource || 'unresolved',
-      clockStart: cadence.clockStart || null,
-      businessDays: false,
-    },
+    recommendedTiming: timingFromCadence(cadence, { kind: 'wait_until' }),
     humanApprovalRequired: false,
   };
+}
+
+function appendCadenceProvenanceRationale(baseRationale, cadence = {}) {
+  if (cadence.cadenceProvenance !== CADENCE_PROVENANCE.HISTORICAL_ANNOTATION
+    && cadence.reconstructed !== true) {
+    return baseRationale;
+  }
+  return `${baseRationale} Follow-up timing was reconstructed post-execution from the client template catalog; it was not operator-approved at the original send time.`;
 }
 
 /**
@@ -296,6 +248,7 @@ function evaluateObserveReaction(input = {}) {
     store = {},
     outcomes = [],
     executionRecord = null,
+    preparedCadence = null,
     now = new Date(),
   } = input;
 
@@ -326,6 +279,7 @@ function evaluateObserveReaction(input = {}) {
     store,
     executionRecord,
     preparedArtifactRevision,
+    preparedCadence,
     sequenceStepSent,
     clockStart,
     now,
@@ -357,7 +311,10 @@ function evaluateObserveReaction(input = {}) {
     missionEvidenceTier: evidenceStrength,
     recommendedNextAction: actionBundle.recommendedNextAction,
     recommendedTiming: actionBundle.recommendedTiming,
-    rationale: buildRationale(evidenceType, updatedDisposition, { rileyClassification }),
+    rationale: appendCadenceProvenanceRationale(
+      buildRationale(evidenceType, updatedDisposition, { rileyClassification }),
+      cadence
+    ),
     humanApprovalRequired: actionBundle.humanApprovalRequired,
     externalActionPermitted: false,
     cadenceSource: actionBundle.recommendedTiming?.cadenceSource || cadence.cadenceSource,
@@ -402,6 +359,8 @@ module.exports = {
   evaluateObserveReaction,
   buildObserveAssessmentForMission,
   resolveNextActionAndTiming,
+  timingFromCadence,
+  appendCadenceProvenanceRationale,
   buildRationale,
   clockStartForEvidence,
   rileyClassificationFromInterpretation,

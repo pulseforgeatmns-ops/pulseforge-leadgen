@@ -1,13 +1,17 @@
 'use strict';
 
 /**
- * SPEC-251 — Derived follow-up cadence from prepared sequence artifacts only.
+ * SPEC-251 / SPEC-252 — Derived follow-up cadence from prepared sequence artifacts only.
  */
 
 const { asText } = require('./types');
 const { SPECIALISTS, CONTRIBUTION_KINDS } = require('./types');
 const { findEmmettCapacity, findPaigeVariants } = require('./ExecutionApproval');
 const { unwrapSpecialistPayload } = require('./ContributionSupersession');
+const {
+  extractOutreachSequenceSteps,
+  CADENCE_PROVENANCE,
+} = require('./PreparedOutreachSequence');
 
 const CADENCE_SOURCES = Object.freeze({
   PREPARED_SEQUENCE: 'prepared_sequence',
@@ -15,33 +19,20 @@ const CADENCE_SOURCES = Object.freeze({
 });
 
 function normalizeSteps(raw) {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((step, index) => ({
-      day: Number(step?.day),
-      index,
-      step: step?.step != null ? Number(step.step) : index,
-    }))
-    .filter((row) => Number.isFinite(row.day))
-    .sort((a, b) => a.day - b.day || a.index - b.index);
+  return extractOutreachSequenceSteps({ steps: raw }).map((row, index) => ({
+    day: row.day,
+    index,
+    step: row.step != null ? row.step : index,
+  }));
 }
 
 function extractStepsFromObject(obj = {}) {
-  if (!obj || typeof obj !== 'object') return [];
-  const candidates = [
-    obj.steps,
-    obj.sequence,
-    obj.preparedSequence,
-    obj.outreachSequence,
-    obj.preparedOutreach?.steps,
-    obj.prepared?.steps,
-    obj.sequenceSteps,
-  ];
-  for (const raw of candidates) {
-    const steps = normalizeSteps(raw);
-    if (steps.length) return steps;
-  }
-  return [];
+  const steps = extractOutreachSequenceSteps(obj);
+  return steps.map((row, index) => ({
+    day: row.day,
+    index,
+    step: row.step != null ? row.step : index,
+  }));
 }
 
 function extractPreparedSequenceSteps(input = {}) {
@@ -50,11 +41,30 @@ function extractPreparedSequenceSteps(input = {}) {
     store = {},
     executionRecord = null,
     preparedArtifactRevision = null,
+    preparedCadence = null,
   } = input;
+
+  if (preparedCadence?.steps?.length) {
+    return {
+      steps: preparedCadence.steps.map((row, index) => ({
+        day: row.day,
+        index,
+        step: row.step != null ? row.step : index,
+      })),
+      source: CADENCE_SOURCES.PREPARED_SEQUENCE,
+      cadenceProvenance: preparedCadence.cadenceProvenance || null,
+      reconstructed: preparedCadence.reconstructed === true,
+    };
+  }
 
   const fromExecution = extractStepsFromObject(executionRecord?.payload || {});
   if (fromExecution.length) {
-    return { steps: fromExecution, source: CADENCE_SOURCES.PREPARED_SEQUENCE };
+    return {
+      steps: fromExecution,
+      source: CADENCE_SOURCES.PREPARED_SEQUENCE,
+      cadenceProvenance: CADENCE_PROVENANCE.IN_MEMORY_STORE,
+      reconstructed: false,
+    };
   }
 
   const contributions = store.listContributions
@@ -68,12 +78,22 @@ function extractPreparedSequenceSteps(input = {}) {
 
   const emmettSteps = extractStepsFromObject(emmettPayload);
   if (emmettSteps.length) {
-    return { steps: emmettSteps, source: CADENCE_SOURCES.PREPARED_SEQUENCE };
+    return {
+      steps: emmettSteps,
+      source: CADENCE_SOURCES.PREPARED_SEQUENCE,
+      cadenceProvenance: CADENCE_PROVENANCE.IN_MEMORY_STORE,
+      reconstructed: false,
+    };
   }
 
   const paigeSteps = extractStepsFromObject(paigePayload);
   if (paigeSteps.length) {
-    return { steps: paigeSteps, source: CADENCE_SOURCES.PREPARED_SEQUENCE };
+    return {
+      steps: paigeSteps,
+      source: CADENCE_SOURCES.PREPARED_SEQUENCE,
+      cadenceProvenance: CADENCE_PROVENANCE.PAIGE_CONTRIBUTION,
+      reconstructed: false,
+    };
   }
 
   if (preparedArtifactRevision && store.listExecutionRecords) {
@@ -83,16 +103,25 @@ function extractPreparedSequenceSteps(input = {}) {
     );
     const recordSteps = extractStepsFromObject(match?.payload || {});
     if (recordSteps.length) {
-      return { steps: recordSteps, source: CADENCE_SOURCES.PREPARED_SEQUENCE };
+      return {
+        steps: recordSteps,
+        source: CADENCE_SOURCES.PREPARED_SEQUENCE,
+        cadenceProvenance: CADENCE_PROVENANCE.IN_MEMORY_STORE,
+        reconstructed: false,
+      };
     }
   }
 
-  return { steps: [], source: CADENCE_SOURCES.UNRESOLVED };
+  return {
+    steps: [],
+    source: CADENCE_SOURCES.UNRESOLVED,
+    cadenceProvenance: null,
+    reconstructed: false,
+  };
 }
 
 /**
  * Resolve wait delta from current sent step to next unsent step.
- * @returns {{ cadenceSource: string, waitDays: number|null, currentStepDay: number|null, nextStepDay: number|null }}
  */
 function resolveObserveCadence(input = {}) {
   const {
@@ -100,17 +129,20 @@ function resolveObserveCadence(input = {}) {
     store = {},
     executionRecord = null,
     preparedArtifactRevision = null,
+    preparedCadence = null,
     sequenceStepSent = 0,
     clockStart = null,
     now = new Date(),
   } = input;
 
-  const { steps, source } = extractPreparedSequenceSteps({
+  const extracted = extractPreparedSequenceSteps({
     mission,
     store,
     executionRecord,
     preparedArtifactRevision,
+    preparedCadence,
   });
+  const { steps, source, cadenceProvenance, reconstructed } = extracted;
 
   if (!steps.length) {
     return {
@@ -122,6 +154,8 @@ function resolveObserveCadence(input = {}) {
       kind: 'unresolved',
       clockStart: clockStart || null,
       businessDays: false,
+      cadenceProvenance: null,
+      reconstructed: false,
     };
   }
 
@@ -140,6 +174,8 @@ function resolveObserveCadence(input = {}) {
       clockStart: clockStart || null,
       businessDays: false,
       sequenceExhausted: true,
+      cadenceProvenance,
+      reconstructed: reconstructed === true,
     };
   }
 
@@ -167,6 +203,8 @@ function resolveObserveCadence(input = {}) {
     businessDays: false,
     cadenceElapsed,
     sequenceExhausted: false,
+    cadenceProvenance,
+    reconstructed: reconstructed === true,
   };
 }
 
