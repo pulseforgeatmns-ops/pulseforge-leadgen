@@ -23,6 +23,7 @@ const WORKSPACE_MODES = Object.freeze({
   DISCOVERY_REVIEW: 'discovery_review',
   OUTREACH: 'outreach',
   EXECUTION: 'execution',
+  OBSERVING: 'observing',
   COMPLETE: 'complete',
   /** @deprecated Use MISSION_PLANNING */
   UNDERSTANDING: 'mission_planning',
@@ -46,6 +47,7 @@ const WORKSPACE_MODE_LABELS = Object.freeze({
   [WORKSPACE_MODES.DISCOVERY_REVIEW]: 'Discovery Review',
   [WORKSPACE_MODES.OUTREACH]: 'Outreach',
   [WORKSPACE_MODES.EXECUTION]: 'Execution',
+  [WORKSPACE_MODES.OBSERVING]: 'Observing',
   [WORKSPACE_MODES.COMPLETE]: 'Complete',
 });
 
@@ -56,6 +58,7 @@ const INSPECT_LIKE_MODES = Object.freeze([
   WORKSPACE_MODES.DISCOVERY_REVIEW,
   WORKSPACE_MODES.OUTREACH,
   WORKSPACE_MODES.EXECUTION,
+  WORKSPACE_MODES.OBSERVING,
   WORKSPACE_MODES.COMPLETE,
 ]);
 
@@ -78,6 +81,7 @@ const COMPONENTS = Object.freeze({
       WORKSPACE_MODES.DISCOVERY_REVIEW,
       WORKSPACE_MODES.OUTREACH,
       WORKSPACE_MODES.EXECUTION,
+      WORKSPACE_MODES.OBSERVING,
       WORKSPACE_MODES.COMPLETE,
     ],
   },
@@ -145,7 +149,7 @@ const PROGRESSION_TO_WORKSPACE = Object.freeze({
   [PROGRESSION_STAGES.EXECUTION]: WORKSPACE_MODES.EXECUTION,
 });
 
-const TERMINAL_STAGES = Object.freeze([STAGES.OBSERVE, STAGES.LEARN, STAGES.IMPROVE]);
+const TERMINAL_STAGES = Object.freeze([STAGES.LEARN, STAGES.IMPROVE]);
 
 function deriveRenderMode(workspaceMode) {
   if (workspaceMode === WORKSPACE_MODES.CREATE) return RENDER_MODES.CREATE;
@@ -175,6 +179,9 @@ function deriveWorkspaceMode(input = {}) {
   }
   if (TERMINAL_STAGES.includes(mission.stage)) {
     return WORKSPACE_MODES.COMPLETE;
+  }
+  if (mission.stage === STAGES.OBSERVE) {
+    return WORKSPACE_MODES.OBSERVING;
   }
 
   const progressionStage = (snapshot.progression && snapshot.progression.stage)

@@ -10,7 +10,10 @@ const { STAGES, EVENT_KINDS } = require('../packages/acquisition-mission/types')
 const { canEnter } = require('../packages/acquisition-mission/Lifecycle');
 const { isCommunicationEvidenceEventType, buildCommunicationObservationId } = require('../packages/acquisition-mission/CommunicationObservation');
 const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
-const { persistProviderCommunicationObservation } = require('./acquisitionMissionPersistence');
+const {
+  persistProviderCommunicationObservation,
+  persistObserveReactionFromObservation,
+} = require('./acquisitionMissionPersistence');
 const { providerEventFromRow } = require('./acquisitionMissionOutboundPersistence');
 const { isGlobalLockHeld } = require('../packages/acquisition-mission/TransactionalPersistence');
 const { tryProgressToLearn, shouldProgressToLearn } = require('../packages/acquisition-mission/LearnProgression');
@@ -342,6 +345,62 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
     return persistResult;
   }
 
+  let observeReactionResult = null;
+  if (opts.persist !== false && persistResult.observation) {
+    try {
+      const missionRow = await (opts.pool || pool).query(
+        'SELECT * FROM acquisition_missions WHERE id = $1 LIMIT 1',
+        [enrichedEvent.missionId]
+      );
+      const mission = missionRow.rows[0]
+        ? {
+          id: missionRow.rows[0].id,
+          tenantId: missionRow.rows[0].tenant_id,
+          stage: missionRow.rows[0].stage,
+          confidence: missionRow.rows[0].confidence,
+        }
+        : {
+          id: enrichedEvent.missionId,
+          tenantId: enrichedEvent.tenantId,
+        };
+
+      let executionRecord = null;
+      if (enrichedEvent.executionRecordId) {
+        const exec = await (opts.pool || pool).query(
+          'SELECT * FROM acquisition_mission_outbound_executions WHERE id = $1 LIMIT 1',
+          [enrichedEvent.executionRecordId]
+        );
+        executionRecord = exec.rows[0] || null;
+      }
+
+      const {
+        interpretMissionObservation,
+        buildMissionInterpretationContext,
+      } = require('../packages/acquisition-mission/ObservationInterpretation');
+      const interpretationResult = interpretMissionObservation({
+        missionId: mission.id,
+        prospectId: persistResult.observation.prospectId,
+        observation: persistResult.observation,
+        missionContext: {},
+      });
+
+      observeReactionResult = await persistObserveReactionFromObservation({
+        mission,
+        observation: persistResult.observation,
+        interpretation: interpretationResult?.interpretation || null,
+        executionRecord: executionRecord
+          ? {
+            preparedArtifactRevision: executionRecord.prepared_artifact_revision,
+            payload: executionRecord.payload,
+          }
+          : null,
+        store: opts.runtime?.engine?.()?.store || {},
+      }, opts.pool || pool, opts);
+    } catch (err) {
+      observeReactionResult = { skipped: true, reason: err.code || err.message };
+    }
+  }
+
   const sideEffects = await tryMissionStageSideEffects({
     providerEvent: enrichedEvent,
     observation: persistResult.observation,
@@ -359,6 +418,7 @@ async function consumeMissionProviderEvent(providerEventResult, pool = defaultPo
     persisted: persistResult.persisted === true,
     providerEventInserted: result.inserted === true,
     providerEventDuplicate: result.duplicate === true,
+    observeReaction: observeReactionResult,
     ...sideEffects,
   };
 }
