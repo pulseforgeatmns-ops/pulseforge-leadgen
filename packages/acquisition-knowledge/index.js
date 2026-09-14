@@ -431,6 +431,18 @@ function normalizeStatus(input = {}) {
   return input.state === LIFECYCLE_STATES.CANONICAL ? 'approved' : 'learning_candidate';
 }
 
+function enrichOutreachAssetContent(content = {}) {
+  const base = content && typeof content === 'object' ? clone(content) : {};
+  if (hasStructuredExecutableCopy(base)) return base;
+  const sourceText = asText(base.sourceText);
+  if (!sourceText) return base;
+  const parsed = tryParseOutreachSourceText(sourceText);
+  if (!parsed.ok) return base;
+  if (!asText(base.subject)) base.subject = parsed.subject;
+  if (!asText(base.statement)) base.statement = parsed.statement;
+  return base;
+}
+
 function normalizeKnowledgeObject(input = {}, opts = {}) {
   const tenantId = assertTenant(input.tenantId || opts.tenantId);
   const objectType = normalizeObjectType(input.objectType || input.type);
@@ -449,9 +461,12 @@ function normalizeKnowledgeObject(input = {}, opts = {}) {
   }
   const title = asText(input.title || input.name || input.statement);
   if (!title) throw knowledgeError('ak_title_required', 'Knowledge title is required.');
-  const content = input.content && typeof input.content === 'object'
+  let content = input.content && typeof input.content === 'object'
     ? clone(input.content)
     : { statement: asText(input.statement || input.description || title) };
+  if (objectType === OBJECT_TYPES.OUTREACH_ASSET) {
+    content = enrichOutreachAssetContent(content);
+  }
   const normalized = {
     id: asText(input.id) || newId('ak'),
     externalKey: asText(input.externalKey || input.createdFrom || input.sourceKey) || null,
@@ -584,6 +599,12 @@ function canonicalContextForSpecialist(rows = [], specialist = 'max') {
 }
 
 const resolveOutreachAssetMessage = require('./resolveOutreachAssetMessage');
+const { tryParseOutreachSourceText, parseOutreachSourceText } = require('./parseOutreachSourceText');
+const {
+  hasStructuredExecutableCopy,
+  canonicalizeOutreachAssetContent,
+  auditOutreachAssetContent,
+} = require('./canonicalizeOutreachAssetContent');
 
 module.exports = {
   SPEC,
@@ -622,5 +643,11 @@ module.exports = {
   matchesQuery,
   explainRecommendation,
   canonicalContextForSpecialist,
+  enrichOutreachAssetContent,
+  tryParseOutreachSourceText,
+  parseOutreachSourceText,
+  hasStructuredExecutableCopy,
+  canonicalizeOutreachAssetContent,
+  auditOutreachAssetContent,
   ...resolveOutreachAssetMessage,
 };
