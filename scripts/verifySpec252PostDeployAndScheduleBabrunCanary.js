@@ -26,6 +26,7 @@ const {
   PAST_DUE_POLICY,
 } = require('../services/tenantOutreachScheduler');
 const { PostgresTenantMailboxStore } = require('../services/tenantMailbox');
+const { resolveOutreachAssetMessage } = require('../packages/acquisition-knowledge/resolveOutreachAssetMessage');
 
 const BABRUN = Object.freeze({
   tenantId: '13',
@@ -45,9 +46,10 @@ const BUSINESS_END_HOUR = 16;
 const MIN_LEAD_MINUTES = 10;
 
 function parseArgs(argv = process.argv.slice(2)) {
-  const args = { schedule: false, expectedSha: null };
+  const args = { schedule: false, inspectAsset: false, expectedSha: null };
   for (const arg of argv) {
     if (arg === '--schedule') args.schedule = true;
+    else if (arg === '--inspect-asset') args.inspectAsset = true;
     else if (arg.startsWith('--expected-sha=')) args.expectedSha = arg.split('=')[1];
   }
   return args;
@@ -299,36 +301,66 @@ function nextSuitableBusinessWindow(now = new Date(), timeZone = BUSINESS_TZ) {
   throw new Error('No suitable business-hours window found today.');
 }
 
-function extractOutreachCopy(content = {}) {
-  const payload = content.content || content.payload || content.message || content.email || content;
-  const subject = payload.subject || payload.emailSubject || payload.title || content.title || null;
-  const body = payload.body || payload.emailBody || payload.text || payload.html || payload.message || null;
-  return { subject, body, raw: content };
-}
-
-async function loadOutreachAsset(client, tenantId, assetId) {
+async function fetchOutreachAssetRow(client, tenantId, assetId) {
   const res = await client.query(
-    `SELECT id, lifecycle_state, content, updated_at
+    `SELECT id, object_type, title, channel, lifecycle_state, validation_state, status,
+            content, provenance, relationships, version, updated_at
      FROM acquisition_knowledge_objects
      WHERE tenant_id = $1 AND id = $2 AND object_type = 'outreach_asset'
      LIMIT 1`,
     [tenantId, assetId]
   );
-  if (!res.rows[0]) {
+  return res.rows[0] || null;
+}
+
+async function inspectOutreachAsset(client, tenantId, assetId) {
+  const row = await fetchOutreachAssetRow(client, tenantId, assetId);
+  if (!row) {
     throw Object.assign(new Error(`Outreach asset not found: ${assetId}`), { code: 'outreach_asset_not_found' });
   }
-  const copy = extractOutreachCopy(res.rows[0].content || {});
-  if (!copy.subject || !copy.body) {
-    throw Object.assign(new Error(`Outreach asset ${assetId} missing subject/body in content`), {
-      code: 'outreach_asset_copy_missing',
-      contentKeys: Object.keys(res.rows[0].content || {}),
-    });
+  let resolved = null;
+  let resolveError = null;
+  try {
+    resolved = resolveOutreachAssetMessage(row, { requireStakeholderValidated: true });
+  } catch (err) {
+    resolveError = {
+      code: err.code || 'resolve_failed',
+      message: String(err.message || err),
+      contentKeys: err.contentKeys || Object.keys(row.content || {}),
+    };
   }
   return {
-    lifecycleState: res.rows[0].lifecycle_state,
-    outreachAssetVersion: res.rows[0].updated_at ? new Date(res.rows[0].updated_at).toISOString() : null,
-    subject: String(copy.subject),
-    body: String(copy.body),
+    objectType: row.object_type,
+    lifecycleState: row.lifecycle_state,
+    validationState: row.validation_state,
+    status: row.status,
+    channel: row.channel,
+    title: row.title,
+    version: row.version,
+    updatedAt: row.updated_at,
+    content: row.content,
+    provenance: row.provenance,
+    relationships: row.relationships,
+    resolved,
+    resolveError,
+  };
+}
+
+async function loadOutreachAsset(client, tenantId, assetId) {
+  const row = await fetchOutreachAssetRow(client, tenantId, assetId);
+  if (!row) {
+    throw Object.assign(new Error(`Outreach asset not found: ${assetId}`), { code: 'outreach_asset_not_found' });
+  }
+  const resolved = resolveOutreachAssetMessage(row, { requireStakeholderValidated: true });
+  return {
+    lifecycleState: row.lifecycle_state,
+    validationState: row.validation_state,
+    outreachAssetVersion: resolved.revision,
+    subject: resolved.subject,
+    body: resolved.body,
+    channel: resolved.channel,
+    copySource: resolved.source,
+    assetVersion: resolved.version,
   };
 }
 
@@ -369,7 +401,13 @@ async function revalidateKaylee(client, scheduledForIso, asset) {
 
 async function main() {
   const args = parseArgs();
-  const databaseUrl = requireEnv('DATABASE_URL');
+  requireEnv('DATABASE_URL');
+  if (args.inspectAsset) {
+    const inspection = await inspectOutreachAsset(pool, BABRUN.tenantId, BABRUN.outreachAssetId);
+    process.stdout.write(`${JSON.stringify(inspection, null, 2)}\n`);
+    if (inspection.resolveError) process.exitCode = 1;
+    return;
+  }
   const cronSecret = requireEnv('CRON_SECRET');
   const appUrl = process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app';
 
@@ -461,9 +499,18 @@ async function main() {
     status: auth.schedule.status,
     recipientEmail: auth.schedule.recipientEmail,
     outreachAssetId: auth.schedule.outreachAssetId,
+    outreachAssetVersion: asset.outreachAssetVersion,
+    frozenCopySource: asset.copySource,
     idempotencyKey: auth.schedule.idempotencyKey,
+    executorCadence: EXECUTOR_CADENCE,
     created: auth.created,
     duplicate: auth.duplicate,
+  };
+  report.authorizationSnapshot = {
+    subject: auth.schedule.authorizationSnapshot?.subject,
+    bodyLength: String(auth.schedule.authorizationSnapshot?.body || '').length,
+    outreachAssetId: auth.schedule.authorizationSnapshot?.outreachAssetId,
+    outreachAssetVersion: auth.schedule.authorizationSnapshot?.outreachAssetVersion,
   };
   report.verdict = 'BABRUN CANARY 001 DURABLY SCHEDULED';
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -488,4 +535,6 @@ module.exports = {
   checkCronExecutor,
   checkSpec252Ancestry,
   checkProductionShaIncludesSpec252,
+  loadOutreachAsset,
+  inspectOutreachAsset,
 };

@@ -583,6 +583,8 @@ function canonicalContextForSpecialist(rows = [], specialist = 'max') {
   };
 }
 
+const resolveOutreachAssetMessage = require('./resolveOutreachAssetMessage');
+
 module.exports = {
   SPEC,
   OBJECT_TYPES,
@@ -620,4 +622,5 @@ module.exports = {
   matchesQuery,
   explainRecommendation,
   canonicalContextForSpecialist,
+  ...resolveOutreachAssetMessage,
 };
