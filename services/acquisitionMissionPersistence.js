@@ -297,8 +297,14 @@ async function persistProviderCommunicationObservation(providerEvent = {}, pool 
     buildCommunicationObservationId,
   } = require('../packages/acquisition-mission/CommunicationObservation');
 
-  if (!providerEvent?.missionId || !providerEvent?.tenantId) {
-    return { skipped: true, reason: 'missing_mission_or_tenant' };
+  if (!providerEvent?.missionId) {
+    return { skipped: true, reason: 'missing_mission' };
+  }
+  const tenantId = providerEvent.tenantId != null && providerEvent.tenantId !== ''
+    ? String(providerEvent.tenantId)
+    : null;
+  if (!tenantId) {
+    return { skipped: true, reason: 'missing_tenant' };
   }
   if (!isCommunicationEvidenceEventType(providerEvent.eventType)) {
     return { skipped: true, reason: 'unsupported_event_type', eventType: providerEvent.eventType };
@@ -318,7 +324,7 @@ async function persistProviderCommunicationObservation(providerEvent = {}, pool 
   );
   const duplicate = existing.rows.length > 0;
   if (!duplicate) {
-    await persistObservation(observation, providerEvent.tenantId, pool, {
+    await persistObservation(observation, tenantId, pool, {
       skipEnsure: true,
       providerWebhookSideEffect: true,
     });

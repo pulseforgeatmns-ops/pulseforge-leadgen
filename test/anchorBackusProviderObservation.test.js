@@ -7,7 +7,11 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { DEFAULTS } = require('../scripts/auditAnchorOutboundEvidence');
+const {
+  DEFAULTS,
+  queryObservations,
+  summarizeObservation,
+} = require('../scripts/auditAnchorOutboundEvidence');
 const { insertBrevoEvent } = require('../utils/brevoEvents');
 const {
   consumeMissionProviderEvent,
@@ -128,6 +132,10 @@ function createBackusPool() {
         return { rows: [] };
       }
 
+      if (/to_regclass/i.test(text)) {
+        return { rows: [{ present: true }] };
+      }
+
       if (/FROM clients WHERE id/i.test(text)) {
         const row = tables.clients.get(Number(params[0]));
         return { rows: row ? [{ sending_domain: row.sending_domain }] : [] };
@@ -146,6 +154,11 @@ function createBackusPool() {
       if (/FROM acquisition_mission_outbound_executions/i.test(text) && /provider_message_id = \$1/i.test(text)) {
         const match = [...tables.executions.values()].find((row) => row.provider_message_id === params[0]);
         return { rows: match ? [match] : [] };
+      }
+
+      if (/FROM acquisition_mission_outbound_executions/i.test(text) && /WHERE id = \$1/i.test(text)) {
+        const row = tables.executions.get(params[0]);
+        return { rows: row ? [row] : [] };
       }
 
       if (/INSERT INTO acquisition_mission_provider_events/i.test(text)) {
@@ -258,7 +271,18 @@ function createBackusPool() {
         return { rows: [] };
       }
 
-      if (/SELECT id, mission_id, specialist, observation, payload, at FROM acquisition_mission_observations/i.test(text)) {
+      if (/FROM acquisition_mission_observations/i.test(text) && /SELECT id, mission_id/i.test(text)) {
+        if (/payload->'evidence'->>'executionRecordId'/i.test(text)) {
+          const [missionId, executionId, messageIds] = params;
+          const rows = [...tables.acquisition_mission_observations.values()].filter((row) => {
+            if (row.mission_id !== missionId) return false;
+            const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+            const evidence = payload.evidence && typeof payload.evidence === 'object' ? payload.evidence : {};
+            return evidence.executionRecordId === executionId
+              || (Array.isArray(messageIds) && messageIds.includes(evidence.providerMessageId));
+          });
+          return { rows };
+        }
         const tenantId = String(params[0]);
         return {
           rows: [...tables.acquisition_mission_observations.values()].filter(
@@ -445,6 +469,75 @@ describe('Anchor Backus provider observation path', () => {
     assert.equal(second.duplicate, true);
     assert.equal(pool.tables.acquisition_mission_observations.size, 1);
     assert.equal(first.observation.id, second.observation.id);
+  });
+
+  it('backfills when provider events have NULL tenant_id (production shape)', async () => {
+    const pool = createBackusPool();
+    pool.tables.executions.set(BACKUS.executionId, {
+      ...pool.tables.executions.get(BACKUS.executionId),
+      tenant_id: BACKUS.tenantId,
+    });
+    pool.tables.providerEvents.set('dedupe-backus-sent-null-tenant', {
+      id: 'amo_pe_backus_sent_null_tenant',
+      dedupe_key: 'dedupe-backus-sent-null-tenant',
+      mission_id: BACKUS.missionId,
+      tenant_id: null,
+      prospect_id: BACKUS.prospectId,
+      execution_record_id: BACKUS.executionId,
+      prepared_artifact_revision: BACKUS.preparedArtifactRevision,
+      provider: 'brevo',
+      provider_message_id: BACKUS.brevoMessageId,
+      event_type: 'sent',
+      event_category: 'delivery',
+      raw_event_type: 'request',
+      provider_event_id: 'brevo-backus-sent-null-tenant',
+      occurred_at: '2026-09-14T12:25:00.000Z',
+      payload: {},
+      created_at: '2026-09-14T12:25:01.000Z',
+    });
+
+    const report = await backfillMissionObservationsFromProviderEvents({
+      missionId: BACKUS.missionId,
+      executionRecordId: BACKUS.executionId,
+      tenantId: BACKUS.tenantId,
+    }, pool, { persist: true, skipStageSideEffects: true });
+
+    assert.equal(report.providerEventCount, 1);
+    assert.equal(report.observationsCreated, 1);
+    const row = pool.tables.acquisition_mission_observations.get('obs_amo_pe_backus_sent_null_tenant');
+    assert.ok(row);
+    assert.equal(row.tenant_id, BACKUS.tenantId);
+  });
+
+  it('audit queryObservations finds backfilled rows by execution and message id', async () => {
+    const pool = createBackusPool();
+    const sent = backusProviderEvent({ id: 'amo_pe_audit_sent', dedupeKey: 'dedupe-audit-sent' });
+    await consumeMissionProviderEvent({ event: sent, inserted: false, duplicate: true }, pool, { persist: true });
+
+    const opened = backusProviderEvent({
+      id: 'amo_pe_audit_opened',
+      dedupeKey: 'dedupe-audit-opened',
+      eventType: 'opened',
+      eventCategory: 'engagement',
+      rawEventType: 'opened',
+      providerEventId: 'brevo-audit-opened',
+      occurredAt: '2026-09-14T12:35:00.000Z',
+    });
+    await consumeMissionProviderEvent({ event: opened, inserted: false, duplicate: true }, pool, { persist: true });
+
+    const rows = await queryObservations(pool, {
+      missionId: BACKUS.missionId,
+      executionId: BACKUS.executionId,
+      messageIds: { variants: [BACKUS.brevoMessageId, BACKUS.brevoMessageId.replace(/^<|>$/g, '')] },
+    });
+
+    assert.equal(rows.length, 2);
+    const summaries = rows.map(summarizeObservation);
+    assert.deepEqual(summaries.map((row) => row.event_type).sort(), ['opened', 'sent']);
+    for (const summary of summaries) {
+      assert.equal(summary.execution_record_id, BACKUS.executionId);
+      assert.equal(summary.provider_message_id, BACKUS.brevoMessageId);
+    }
   });
 
   it('backfills observations from existing provider events without resending mail', async () => {
