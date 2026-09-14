@@ -322,6 +322,74 @@ async function promoteKnowledgeObject(id, input = {}, pool = defaultPool(), opts
   }
 }
 
+async function canonicalizeOutreachAssetContent(id, input = {}, pool = defaultPool(), opts = {}) {
+  await ensureAcquisitionKnowledgeSchema(pool);
+  const tenantId = ak.assertTenant(input.tenantId || opts.tenantId);
+  const client = typeof pool.connect === 'function' ? await pool.connect() : pool;
+  const ownsClient = client !== pool && typeof client.release === 'function';
+  try {
+    await client.query('BEGIN');
+    const current = await client.query(
+      `SELECT * FROM acquisition_knowledge_objects
+       WHERE id = $1 AND tenant_id = $2 AND object_type = 'outreach_asset'
+       FOR UPDATE`,
+      [id, tenantId]
+    );
+    if (!current.rows[0]) {
+      throw ak.knowledgeError('ak_not_found', `Outreach asset not found: ${id}`);
+    }
+    const existing = rowFromDb(current.rows[0]);
+    const result = ak.canonicalizeOutreachAssetContent(existing.content || {});
+    if (!result.changed) {
+      await client.query('COMMIT');
+      return {
+        ...existing,
+        canonicalization: {
+          changed: false,
+          skipped: true,
+          reason: result.reason,
+        },
+      };
+    }
+
+    const version = existing.version + 1;
+    const nextContent = result.content;
+    const updated = await client.query(
+      `UPDATE acquisition_knowledge_objects
+       SET content = $1,
+           version = $2,
+           updated_at = NOW()
+       WHERE id = $3 AND tenant_id = $4
+       RETURNING *`,
+      [nextContent, version, id, tenantId]
+    );
+    const output = rowFromDb(updated.rows[0]);
+    await insertRevision(client, output, 'canonicalize', {
+      ...opts,
+      actorId: opts.actorId || 'spec247b_backfill',
+      actorRole: opts.actorRole || 'operator',
+      rationale: input.rationale
+        || 'SPEC-247B: structured executable copy canonicalized from sourceText (not new stakeholder approval).',
+    });
+    await client.query('COMMIT');
+    return {
+      ...output,
+      canonicalization: {
+        changed: true,
+        skipped: false,
+        reason: result.reason,
+        subject: result.subject,
+        statement: result.statement,
+      },
+    };
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw err;
+  } finally {
+    if (ownsClient) client.release();
+  }
+}
+
 async function queryKnowledgeObjects(query = {}, pool = defaultPool()) {
   await ensureAcquisitionKnowledgeSchema(pool);
   const tenantId = ak.assertTenant(query.tenantId);
@@ -518,6 +586,7 @@ module.exports = {
   ensureAcquisitionKnowledgeSchema,
   upsertKnowledgeObject,
   promoteKnowledgeObject,
+  canonicalizeOutreachAssetContent,
   queryKnowledgeObjects,
   recordRecommendationExplanation,
   loadTenantKnowledge,
