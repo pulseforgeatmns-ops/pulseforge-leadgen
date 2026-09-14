@@ -55,6 +55,7 @@ const CRON_MODULES = {
   warm_routing: '../warmRoutingAgent',
   max_decay: '../maxDecayAgent',
   paige_reflection: '../agents/reflection/run',
+  tenant_outreach_executor: '../tenantOutreachSchedulerCron',
 };
 
 async function runCronAgent(agent, res, query = {}) {
@@ -463,6 +464,27 @@ router.post('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
 router.get('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
 router.post('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
 router.get('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
+
+async function handleTenantOutreachExecutorCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { executeDueScheduledSends } = require('../services/tenantOutreachScheduler');
+    const result = await executeDueScheduledSends({
+      limit: Number(req.query.limit || req.body?.limit || 20),
+    });
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[cron] tenant-outreach-executor error:', err.message);
+    return res.status(500).json({ error: err.message, success: false });
+  }
+}
+
+router.post('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
+router.get('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {

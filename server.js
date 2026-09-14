@@ -223,6 +223,7 @@ app.use('/', require('./routes/acquisitionIntelligenceModel'));
 app.use('/', require('./routes/acquisitionIntelligenceCompiler'));
 app.use('/', require('./routes/operatorScorecard'));
 app.use('/', require('./routes/emmettOutbound'));
+app.use('/', require('./routes/tenantOutreach'));
 app.use('/', require('./routes/acquisitionMissions'));
 app.use('/', require('./routes/tenantWorkspace'));
 app.use('/', require('./routes/registration'));
