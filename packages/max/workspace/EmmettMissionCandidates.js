@@ -62,6 +62,12 @@ function isCompanyLevelTarget(target, segmentLabel) {
  * SPEC-212 — Find the variant bound to this specific candidateId.
  * Variants are bound to prospect intelligence and must not be cross-assigned.
  */
+function prospectIdentity(row = {}) {
+  if (!row || typeof row !== 'object') return null;
+  const id = row.id ?? row.prospectId;
+  return id != null && String(id).trim() ? String(id).trim() : null;
+}
+
 function findBoundVariant(variants = [], candidateId) {
   if (!candidateId || !Array.isArray(variants)) return null;
   const candidateIdStr = String(candidateId);
@@ -117,9 +123,13 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
       (target.companyId && row.companyId === target.companyId)
       || (name && row.company === name)
       || (name && row.name && String(row.name).includes(String(name).split(' ')[0])))
-      || prospects.find((row) => !usedProspectIds.has(row.id));
+      || prospects.find((row) => {
+        const identity = prospectIdentity(row);
+        return identity && !usedProspectIds.has(identity);
+      });
 
-    if (prospect?.id) usedProspectIds.add(prospect.id);
+    const resolvedProspectId = prospectIdentity(prospect);
+    if (resolvedProspectId) usedProspectIds.add(resolvedProspectId);
 
     const rank = Number(target.rank || index + 1);
     const fit = target.fit != null ? Number(target.fit) : (opp.fit != null ? Number(opp.fit) : 0.7);
@@ -130,7 +140,7 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
     // SPEC-212: Use target's own ID as candidateId
     const candidateId = target.id || target.companyId || prospect?.id || `mission-target-${rank}`;
 
-    const prospectId = prospect?.id || null;
+    const prospectId = resolvedProspectId;
     const row = {
       id: candidateId,
       prospectId,
@@ -240,6 +250,7 @@ module.exports = {
   findMaxPrioritization,
   findPaigeVariants,
   buildPaigeReadinessMetadata,
+  prospectIdentity,
   findBoundVariant,
   buildMissionBoundCandidates,
   listMissionBoundProspectIds,

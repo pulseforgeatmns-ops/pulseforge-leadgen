@@ -2,13 +2,27 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 const {
   isExcludedCompany,
   enrichProspectRow,
   EXCLUDED_COMPANY_RE,
 } = require('../scripts/enrichAnchorMissionBoundProspects');
 
+const SCRIPT = path.join(__dirname, '..', 'scripts', 'enrichAnchorMissionBoundProspects.js');
+const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'anchorMissionBoundEnrichment.js');
+
 describe('enrichAnchorMissionBoundProspects', () => {
+  it('loads the runner module without duplicate top-level helper declarations', () => {
+    const scriptSource = fs.readFileSync(SCRIPT, 'utf8');
+    const libSource = fs.readFileSync(LIB, 'utf8');
+    assert.doesNotThrow(() => require('../scripts/enrichAnchorMissionBoundProspects'));
+    assert.equal((scriptSource.match(/function isExcludedCompany/g) || []).length, 0);
+    assert.equal((libSource.match(/function isExcludedCompany/g) || []).length, 1);
+    assert.match(scriptSource, /require\('\.\/lib\/anchorMissionBoundEnrichment'\)/);
+  });
+
   it('excludes Deliverability Test from enrichment', () => {
     assert.match('Deliverability Test', EXCLUDED_COMPANY_RE);
     assert.equal(isExcludedCompany('Deliverability Test'), true);

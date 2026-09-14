@@ -87,6 +87,42 @@ async function loadActiveCapacityForMission(db, tenantId, missionId) {
   };
 }
 
+/**
+ * Extract mission-bound prospect IDs from a persisted Emmett CAPACITY payload.
+ * Canonical source: queue.items[].prospectId (fallback item.id for legacy rows).
+ * Does not expand the universe — only IDs already on the active queue.
+ */
+function listProspectIdsFromCapacityPayload(capacityPayload, unwrap = unwrapCapacityPayload) {
+  const body = unwrap(capacityPayload) || {};
+  const items = Array.isArray(body.queue?.items) ? body.queue.items : [];
+  return [...new Set(
+    items
+      .map((item) => String(item?.prospectId || item?.id || '').trim())
+      .filter(Boolean)
+  )];
+}
+
+function unwrapCapacityPayload(rowOrPayload) {
+  if (!rowOrPayload || typeof rowOrPayload !== 'object') return {};
+  const outer = rowOrPayload.payload && typeof rowOrPayload.payload === 'object'
+    ? rowOrPayload.payload
+    : rowOrPayload;
+  if (
+    outer.payload &&
+    typeof outer.payload === 'object' &&
+    (outer.specialist || outer.kind || outer.queue || outer.capacity)
+  ) {
+    return outer.payload;
+  }
+  return outer;
+}
+
+function listProspectIdsFromActiveCapacity(missionBody, capacityRows = []) {
+  const selected = selectActiveCapacityContribution(missionBody, capacityRows);
+  if (!selected) return [];
+  return listProspectIdsFromCapacityPayload(selected.payload);
+}
+
 async function loadUsableReadyCapacity(db, tenantId) {
   const missions = await db.query(
     `SELECT id AS mission_id, payload, updated_at
@@ -116,9 +152,12 @@ async function loadUsableReadyCapacity(db, tenantId) {
 
 module.exports = {
   unwrapMissionPayload,
+  unwrapCapacityPayload,
   isSupersededContribution,
   activeCapacityPointer,
   selectActiveCapacityContribution,
+  listProspectIdsFromCapacityPayload,
+  listProspectIdsFromActiveCapacity,
   loadCapacityRowsForMission,
   loadActiveCapacityForMission,
   loadUsableReadyCapacity,
