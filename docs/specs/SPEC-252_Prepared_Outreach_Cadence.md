@@ -75,3 +75,16 @@ node scripts/validateBackusObserveReaction.js --confirm-production \
 ```
 
 Success: `validation.effectiveHumanOpenTiming.waitDays = 4`, `kind = wait_until`, `cadenceSource = prepared_sequence`, and `usesEffectiveReevaluation = true` when re-eval rows exist.
+
+Operational follow-up (after re-eval):
+
+- AO lead status `needs_follow_up` + warm open task due on `recommendedTiming.dueAt`
+- `prospect_notes` row `note_type = research` with exact timing metadata JSON (`source = spec252_observe_reeval:<annotationId>`)
+
+```bash
+node scripts/syncBackusObserveOperationalFollowUp.js --confirm-production \
+  --mission-id mission_ad7753b0-6def-441d-bb1a-3764656f5750 \
+  --execution-id amo_send_37a03a00-2686-4804-8360-9cf93edb52ba
+```
+
+`--reEvaluateReactions` on the cadence backfill script runs this sync automatically when re-evaluation completes.

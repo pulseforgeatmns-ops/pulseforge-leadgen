@@ -32,6 +32,10 @@ const { evaluateObserveReaction } = require('../packages/acquisition-mission/Obs
 const { interpretMissionObservation } = require('../packages/acquisition-mission/ObservationInterpretation');
 const { isCommunicationObservation } = require('../packages/acquisition-mission/CommunicationObservation');
 const { loadPreparedOutreachCadence } = require('../services/preparedOutreachArtifactLoader');
+const {
+  syncObserveReactionOperationalFollowUp,
+  BACKUS_BUSINESS_NAME,
+} = require('../services/observeReactionOperationalSync');
 
 function parseArgs(argv = process.argv.slice(2)) {
   const confirmProduction = argv.includes('--confirm-production');
@@ -262,6 +266,21 @@ async function run(options = {}) {
       }
     }
     report.reEvaluated = reEvaluated;
+
+    report.operationalFollowUp = await syncObserveReactionOperationalFollowUp({
+      mission,
+      execution,
+      preparedCadence: await loadPreparedOutreachCadence({
+        missionId: mission.id,
+        preparedArtifactRevision: execution.prepared_artifact_revision,
+        executionApprovalContributionId: execution.execution_approval_contribution_id,
+        executionRecordId: execution.id,
+        prospectId: execution.prospect_id,
+      }, pool),
+      annotation,
+      clientId: args.clientId,
+      businessName: BACKUS_BUSINESS_NAME,
+    }, pool);
   }
 
   console.log(JSON.stringify(report, null, 2));
