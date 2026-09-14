@@ -53,7 +53,7 @@ const PRODUCES = Object.freeze({
   ],
   [SPECIALISTS.PAIGE]: [
     'messaging', 'experiments', 'variants', 'subjects', 'subject',
-    'cta', 'hypotheses', 'hypothesis',
+    'cta', 'hypotheses', 'hypothesis', 'outreachSequence', 'outreach_sequence',
   ],
   [SPECIALISTS.PENNY]: [
     'paidAcquisitionRecommendation', 'paid_acquisition_recommendation',

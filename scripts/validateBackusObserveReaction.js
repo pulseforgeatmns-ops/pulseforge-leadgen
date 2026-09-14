@@ -23,6 +23,7 @@ const {
   persistObserveReactionFromObservation,
 } = require('../services/acquisitionMissionPersistence');
 const { evaluateObserveReaction } = require('../packages/acquisition-mission/ObserveEvaluator');
+const { loadPreparedOutreachCadence } = require('../services/preparedOutreachArtifactLoader');
 const { interpretMissionObservation } = require('../packages/acquisition-mission/ObservationInterpretation');
 const { isCommunicationObservation } = require('../packages/acquisition-mission/CommunicationObservation');
 
@@ -154,7 +155,9 @@ async function run(options = {}) {
         interpretation: interpretation?.interpretation || null,
         executionRecord: execution
           ? {
+            id: execution.id,
             preparedArtifactRevision: execution.prepared_artifact_revision,
+            executionApprovalContributionId: execution.execution_approval_contribution_id,
             payload: execution.payload,
           }
           : null,
@@ -188,6 +191,16 @@ async function run(options = {}) {
     }
     : {};
 
+  const preparedCadence = execution
+    ? await loadPreparedOutreachCadence({
+      missionId: args.missionId,
+      preparedArtifactRevision: execution.prepared_artifact_revision,
+      executionApprovalContributionId: execution.execution_approval_contribution_id,
+      executionRecordId: execution.id,
+      prospectId: execution.prospect_id,
+    }, pool)
+    : null;
+
   for (const observation of observations) {
     const interpretation = interpretMissionObservation({
       missionId: mission.id,
@@ -204,10 +217,13 @@ async function run(options = {}) {
       outcomes: [],
       executionRecord: execution
         ? {
+          id: execution.id,
           preparedArtifactRevision: execution.prepared_artifact_revision,
+          executionApprovalContributionId: execution.execution_approval_contribution_id,
           payload: execution.payload,
         }
         : null,
+      preparedCadence,
     });
     if (evaluated.reaction) {
       dryRun.push({
@@ -267,6 +283,14 @@ async function run(options = {}) {
       externalActionPermitted: false,
       recommendedNextAction: ['wait', 'propose_follow_up'],
     },
+    preparedCadence: preparedCadence
+      ? {
+        cadenceSource: preparedCadence.cadenceSource,
+        cadenceProvenance: preparedCadence.cadenceProvenance,
+        reconstructed: preparedCadence.reconstructed === true,
+        stepDays: preparedCadence.steps?.map((row) => row.day) || [],
+      }
+      : null,
     validation: {
       hasHumanOpenReaction: reactions.some((row) => row.evidence_type === 'human_open')
         || dryRun.some((row) => row.evidenceType === 'human_open'),
@@ -274,6 +298,10 @@ async function run(options = {}) {
       noExternalAction: reactions.every((row) => row.external_action_permitted === false),
       missionConfidenceUnchanged: true,
       missionRemainsObserve: missionRow.stage === 'observe',
+      cadenceResolved: preparedCadence?.cadenceSource === 'prepared_sequence',
+      cadenceWaitDays: latestReaction?.recommended_timing?.waitDays
+        ?? candidateState?.recommended_timing?.waitDays
+        ?? null,
     },
   };
 

@@ -189,16 +189,19 @@ describe('SPEC-251 Observe Reaction Policy', () => {
     assert.equal(buildObserveReactionId(obs.id), first.reaction.id);
   });
 
-  it('cadence derived from prepared sequence steps when present', () => {
+  it('cadence derived from prepared outreachSequence when present', () => {
     const mission = setupObserveMission(engine);
     engine.store.addContribution({
-      id: 'contrib-emmett-cap',
+      id: 'contrib-paige-var',
       missionId: mission.id,
-      specialist: SPECIALISTS.EMMETT,
-      kind: 'capacity',
+      specialist: SPECIALISTS.PAIGE,
+      kind: 'variants',
       at: '2026-09-01T00:00:00.000Z',
       payload: {
-        steps: [{ day: 0 }, { day: 4 }, { day: 8 }],
+        variants: [{ label: 'Primary', subject: 'Hi', body: 'Body' }],
+        outreachSequence: {
+          steps: [{ step: 0, day: 0 }, { step: 1, day: 4 }, { step: 2, day: 8 }],
+        },
       },
     });
 
@@ -214,6 +217,21 @@ describe('SPEC-251 Observe Reaction Policy', () => {
     assert.equal(cadence.waitDays, 4);
     assert.equal(cadence.kind, 'wait_until');
     assert.ok(cadence.dueAt);
+  });
+
+  it('historical annotation cadence resolves via preparedCadence input', () => {
+    const cadence = resolveObserveCadence({
+      preparedCadence: {
+        steps: [{ step: 0, day: 0 }, { step: 1, day: 4 }],
+        cadenceProvenance: 'historical_annotation',
+        reconstructed: true,
+      },
+      sequenceStepSent: 0,
+      clockStart: '2026-09-14T12:25:57.000Z',
+      now: new Date('2026-09-14T12:26:00.000Z'),
+    });
+    assert.equal(cadence.waitDays, 4);
+    assert.equal(cadence.reconstructed, true);
   });
 
   it('cadence unresolved when no sequence artifact exists', () => {

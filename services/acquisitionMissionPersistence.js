@@ -550,6 +550,22 @@ async function persistObserveReactionFromObservation(input = {}, pool = defaultP
     foldCandidateObserveState,
   } = require('../packages/acquisition-mission/ObserveReaction');
 
+  let preparedCadence = input.preparedCadence || null;
+  if (!preparedCadence && pool && executionRecord?.preparedArtifactRevision) {
+    try {
+      const { loadPreparedOutreachCadence } = require('./preparedOutreachArtifactLoader');
+      preparedCadence = await loadPreparedOutreachCadence({
+        missionId: mission.id,
+        preparedArtifactRevision: executionRecord.preparedArtifactRevision,
+        executionApprovalContributionId: executionRecord.executionApprovalContributionId,
+        executionRecordId: executionRecord.id || observation.evidence?.executionRecordId || null,
+        prospectId: observation.prospectId,
+      }, pool);
+    } catch (_) {
+      preparedCadence = null;
+    }
+  }
+
   let priorState = input.priorState || null;
   if (!priorState && observation.prospectId != null) {
     try {
@@ -574,6 +590,7 @@ async function persistObserveReactionFromObservation(input = {}, pool = defaultP
     store,
     outcomes,
     executionRecord,
+    preparedCadence,
     now: opts.now,
   });
 

@@ -60,6 +60,7 @@ const observationInterpretation = require('./ObservationInterpretation');
 const observeReaction = require('./ObserveReaction');
 const observeEvaluator = require('./ObserveEvaluator');
 const observeCadence = require('./ObserveCadence');
+const preparedOutreachSequence = require('./PreparedOutreachSequence');
 const learnProgression = require('./LearnProgression');
 const improveProgression = require('./ImproveProgression');
 const meaningfulLearning = require('./MeaningfulLearning');
@@ -129,6 +130,7 @@ module.exports = {
   ...observeReaction,
   ...observeEvaluator,
   ...observeCadence,
+  ...preparedOutreachSequence,
   ...learnProgression,
   ...improveProgression,
   ...meaningfulLearning,
