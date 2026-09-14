@@ -18,6 +18,8 @@ const CANONICAL_PROJECTION_KEYS = Object.freeze([
   'pendingOperatorDecision',
   'contributions',
   'observations',
+  'observeReactions',
+  'candidateObserveStates',
   'outcomes',
   'events',
 ]);
@@ -154,6 +156,8 @@ function unwrapSnapshot(snapshot) {
       contributions: [],
       events: [],
       observations: [],
+      observeReactions: [],
+      candidateObserveStates: [],
       outcomes: [],
     };
   }
@@ -173,6 +177,10 @@ function unwrapSnapshot(snapshot) {
     contributions: Array.isArray(snapshot.contributions) ? snapshot.contributions : [],
     events,
     observations: Array.isArray(snapshot.observations) ? snapshot.observations : [],
+    observeReactions: Array.isArray(snapshot.observeReactions) ? snapshot.observeReactions : [],
+    candidateObserveStates: Array.isArray(snapshot.candidateObserveStates)
+      ? snapshot.candidateObserveStates
+      : [],
     outcomes: Array.isArray(snapshot.outcomes) ? snapshot.outcomes : [],
   };
 }
@@ -198,6 +206,8 @@ function buildCanonicalMissionProjection(snapshot) {
     pendingOperatorDecision: mission ? mission.pendingOperatorDecision ?? null : null,
     contributions: sortRecords(unwrapped.contributions.map(canonicalizeContribution)),
     observations: sortRecords(unwrapped.observations.map(canonicalizeObservation)),
+    observeReactions: sortRecords(unwrapped.observeReactions.map(canonicalizeOutcome)),
+    candidateObserveStates: sortRecords(unwrapped.candidateObserveStates.map(canonicalizeOutcome)),
     outcomes: sortRecords(unwrapped.outcomes.map(canonicalizeOutcome)),
     events: sortRecords(unwrapped.events.map(canonicalizeEvent)),
   };
@@ -227,6 +237,12 @@ function snapshotFromEngine(engine, missionId, tenantId) {
       : [],
     observations: store && typeof store.listObservations === 'function'
       ? store.listObservations(missionId)
+      : [],
+    observeReactions: store && typeof store.listObserveReactions === 'function'
+      ? store.listObserveReactions(missionId)
+      : [],
+    candidateObserveStates: store && typeof store.listCandidateObserveStates === 'function'
+      ? store.listCandidateObserveStates(missionId)
       : [],
     outcomes: store && typeof store.listOutcomes === 'function'
       ? store.listOutcomes(missionId)

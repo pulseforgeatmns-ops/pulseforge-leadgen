@@ -57,6 +57,9 @@ const executionApproval = require('./ExecutionApproval');
 const outboundExecution = require('./OutboundExecution');
 const communicationObservation = require('./CommunicationObservation');
 const observationInterpretation = require('./ObservationInterpretation');
+const observeReaction = require('./ObserveReaction');
+const observeEvaluator = require('./ObserveEvaluator');
+const observeCadence = require('./ObserveCadence');
 const learnProgression = require('./LearnProgression');
 const improveProgression = require('./ImproveProgression');
 const meaningfulLearning = require('./MeaningfulLearning');
@@ -123,6 +126,9 @@ module.exports = {
   ...outboundExecution,
   ...communicationObservation,
   ...observationInterpretation,
+  ...observeReaction,
+  ...observeEvaluator,
+  ...observeCadence,
   ...learnProgression,
   ...improveProgression,
   ...meaningfulLearning,
