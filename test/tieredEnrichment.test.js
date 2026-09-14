@@ -114,6 +114,19 @@ async function run() {
     email_status: 'valid',
     email_verification_method: 'mx_lookup',
   }), false);
+  assert.strictEqual(passesDataBar({
+    first_name: 'Peter',
+    email: 'peter@solomonlawfirm.com',
+    email_status: 'valid',
+    email_verification_method: 'bouncer',
+    enrichment_provenance: { email: { source: 'pattern_first' } },
+  }), false);
+  assert.strictEqual(passesDataBar({
+    first_name: 'Michael',
+    email: 'michael@linkedin.com',
+    email_status: 'valid',
+    email_verification_method: 'bouncer',
+  }), false);
 
   assert.deepStrictEqual(parseArgs([
     '--client_id=13',

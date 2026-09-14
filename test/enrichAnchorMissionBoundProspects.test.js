@@ -33,8 +33,8 @@ describe('enrichAnchorMissionBoundProspects', () => {
     const row = {
       prospect_id: 'p-1',
       client_id: 10,
-      company_name: 'Klug Law Offices, PLLC',
-      email: 'partner@kluglaw.com',
+      company_name: 'Backus, Meyer & Branch',
+      email: 'jmeyer@backusmeyer.com',
       email_verified: true,
       email_status: 'verified',
       do_not_contact: false,
@@ -43,7 +43,29 @@ describe('enrichAnchorMissionBoundProspects', () => {
     assert.equal(result.excluded, false);
     assert.equal(result.verified, true);
     assert.equal(result.path, 'existing_crm');
-    assert.equal(result.email, 'partner@kluglaw.com');
+    assert.equal(result.email, 'jmeyer@backusmeyer.com');
+    assert.equal(result.verificationSource, 'existing_crm');
+  });
+
+  it('keeps DNC Klug ineligible even with a verified CRM email', async () => {
+    const result = await enrichProspectRow({
+      prospect_id: 'p-klug',
+      client_id: 10,
+      company_name: 'Klug Law Offices, PLLC',
+      email: 'aklug@kluglawoffices.com',
+      email_verified: true,
+      email_status: 'verified',
+      do_not_contact: true,
+      enrichment_provenance: { email: { source: 'hunter' } },
+    }, {
+      db: {},
+      dryRun: true,
+      processProspect: async () => ({ selectedEmail: null, resolved: false, errors: [] }),
+      runEnrichmentChain: async () => null,
+    });
+    assert.equal(result.dnc, true);
+    assert.equal(result.verified, false);
+    assert.notEqual(result.path, 'existing_crm');
   });
 
   it('marks Deliverability Test as excluded without calling providers', async () => {

@@ -8,8 +8,12 @@ const {
   isContaminatedEmailDomain,
   isInferredPatternProvenance,
   isObservedEmailProvenance,
+  isReadPathProvenanceLabel,
   isSendableVerifiedCandidate,
   isAllowedObservedWebsiteEmail,
+  resolveEmailProvenanceSource,
+  planTaintedCrmEmailRemediation,
+  TAINTED_EMAIL_ACTIONS,
   resolveOfficialEnrichmentDomain,
   classifyCompanyUrl,
 } = require('../utils/canonicalEmailEligibility');
@@ -70,6 +74,44 @@ describe('canonicalEmailEligibility', () => {
     });
     assert.equal(isCanonicallyOutboundEligible(row), true);
     assert.equal(isProjectableCrmProspect(row), true);
+  });
+
+  it('does not let existing_crm overwrite stored pattern_first provenance', () => {
+    const row = verifiedRow({
+      email: 'peter@solomonlawfirm.com',
+      verificationSource: 'existing_crm',
+      enrichment_provenance: {
+        email: { source: 'pattern_first', original_source: 'pattern_first', verifier: 'bouncer', status: 'valid' },
+      },
+    });
+    assert.equal(isReadPathProvenanceLabel('existing_crm'), true);
+    assert.equal(resolveEmailProvenanceSource(row), 'pattern_first');
+    assert.equal(canonicalOutboundEmailIneligibilityReason(row), 'inferred_pattern_provenance');
+    assert.equal(isProjectableCrmProspect(row), false);
+    assert.equal(isCanonicallyOutboundEligible({
+      ...row,
+      verificationSource: 'existing_crm',
+    }), false);
+  });
+
+  it('plans preserve-not-delete for pattern_first and invalidate for social-domain contamination', () => {
+    assert.deepEqual(planTaintedCrmEmailRemediation(verifiedRow({
+      email: 'peter@solomonlawfirm.com',
+      enrichment_provenance: { email: { source: 'pattern_first' } },
+    })), {
+      action: TAINTED_EMAIL_ACTIONS.PRESERVE_UNTRUSTED_PROVENANCE,
+      reason: 'inferred_pattern_provenance',
+      email: 'peter@solomonlawfirm.com',
+      provenance: 'pattern_first',
+    });
+    assert.equal(planTaintedCrmEmailRemediation(verifiedRow({
+      email: 'michael@linkedin.com',
+      verificationSource: 'existing_crm',
+    })).action, TAINTED_EMAIL_ACTIONS.INVALIDATE_CONTAMINATED);
+    assert.equal(planTaintedCrmEmailRemediation(verifiedRow({
+      email: 'jmeyer@backusmeyer.com',
+      verificationSource: 'existing_crm',
+    })).action, TAINTED_EMAIL_ACTIONS.NONE);
   });
 
   it('keeps observed personal-provider email from a company page eligible when verified', () => {

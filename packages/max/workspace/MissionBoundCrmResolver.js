@@ -96,7 +96,8 @@ async function loadCrmProspectsByIds(input = {}) {
   if (!clientId || !pool || !ids.length) return map;
 
   const { rows } = await pool.query(
-    `SELECT id, email, email_status, email_verified, do_not_contact
+    `SELECT id, email, email_status, email_verified, do_not_contact,
+            enrichment_provenance
        FROM prospects
       WHERE client_id = $1
         AND id = ANY($2::uuid[])`,
