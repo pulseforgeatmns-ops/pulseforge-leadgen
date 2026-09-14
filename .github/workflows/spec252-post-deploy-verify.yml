@@ -20,6 +20,8 @@ on:
     paths:
       - '.github/workflows/spec252-post-deploy-verify.yml'
       - 'scripts/verifySpec252PostDeployAndScheduleBabrunCanary.js'
+      - 'scripts/canonicalizeBabrunOutreachAssets.js'
+      - 'packages/acquisition-knowledge/**'
 
 jobs:
   verify:
@@ -39,6 +41,22 @@ jobs:
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: SPEC-247B canonicalize Babrun outreach assets
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "DATABASE_URL must be configured to run outreach asset canonicalization."
+            exit 1
+          fi
+          node scripts/canonicalizeBabrunOutreachAssets.js --apply
+      - name: SPEC-252 inspect Kaylee outreach asset
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          node scripts/verifySpec252PostDeployAndScheduleBabrunCanary.js --inspect-asset
       - name: SPEC-252 verify and schedule Babrun canary
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
