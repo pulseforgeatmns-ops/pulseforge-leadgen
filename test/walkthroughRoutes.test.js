@@ -212,6 +212,11 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, /walkthrough_form_submit/);
     assert.match(html, /phone_click/);
     assert.match(html, /email_click/);
+    assert.match(html, /if\(w\.oaiq\)return/);
+    assert.match(html, /QtVasj1GCLfpLWsTwpYTBC/);
+    assert.match(html, /trackOpenAiLeadCreated/);
+    assert.match(html, /lead_created/);
+    assert.match(html, /json\.submission_id/);
     assert.match(html, /\/api\/public\/walkthrough/);
     assert.match(html, /Thanks\. I'll reach out to set up a quick facilities assessment and give you a clear monthly quote\./);
   });
