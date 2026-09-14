@@ -10,6 +10,10 @@
 const crypto = require('crypto');
 const dns = require('node:dns').promises;
 const defaultPool = require('../db');
+const {
+  createIpv4PreferringSmtpGetSocket,
+  genericSmtpImapTlsOptions,
+} = require('../utils/mailNetwork');
 
 const PROVIDER_TYPES = Object.freeze({
   GENERIC_SMTP_IMAP: 'GENERIC_SMTP_IMAP',
@@ -999,7 +1003,7 @@ function createSmtpTransport(integration, secret, opts = {}) {
   if (opts.transport) return opts.transport;
   const nodemailer = opts.nodemailer || require('nodemailer');
   const secure = clean(integration.smtpTlsMode).toUpperCase() === 'SSL_TLS' || Number(integration.smtpPort) === 465;
-  return nodemailer.createTransport({
+  const transportOptions = {
     host: integration.smtpHost,
     port: Number(integration.smtpPort || 587),
     secure,
@@ -1007,7 +1011,20 @@ function createSmtpTransport(integration, secret, opts = {}) {
       user: integration.mailboxAddress,
       pass: secret,
     },
-  });
+  };
+
+  if (integration.providerType === PROVIDER_TYPES.GENERIC_SMTP_IMAP) {
+    const tlsOptions = genericSmtpImapTlsOptions(integration.smtpHost);
+    if (tlsOptions) transportOptions.tls = tlsOptions;
+    transportOptions.getSocket = opts.smtpGetSocket || createIpv4PreferringSmtpGetSocket(integration.smtpHost, {
+      resolveIpv4Addresses: opts.resolveIpv4Addresses,
+      connectIpv4Socket: opts.connectIpv4Socket,
+      netConnect: opts.netConnect,
+      tlsConnect: opts.tlsConnect,
+    });
+  }
+
+  return nodemailer.createTransport(transportOptions);
 }
 
 async function loadImapMessages(integration, secret, state, opts = {}) {
@@ -1023,10 +1040,15 @@ async function loadImapMessages(integration, secret, state, opts = {}) {
       'IMAP polling requires an injected imapAdapter or the optional imapflow runtime dependency.'
     );
   }
+  const imapTlsOptions = integration.providerType === PROVIDER_TYPES.GENERIC_SMTP_IMAP
+    ? genericSmtpImapTlsOptions(integration.imapHost)
+    : null;
   const client = new ImapFlow({
     host: integration.imapHost,
     port: Number(integration.imapPort || 993),
     secure: clean(integration.imapTlsMode).toUpperCase() === 'SSL_TLS' || Number(integration.imapPort) === 993,
+    servername: imapTlsOptions?.servername || undefined,
+    tls: imapTlsOptions || undefined,
     auth: {
       user: integration.mailboxAddress,
       pass: secret,
@@ -1476,6 +1498,7 @@ module.exports = {
   MemoryTenantMailboxStore,
   PostgresTenantMailboxStore,
   ensureTenantMailboxSchema,
+  createSmtpTransport,
   publicIntegration,
   publicIdentity,
   resolveSecretRef,
