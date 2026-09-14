@@ -14,7 +14,7 @@ const {
   missingCrmResult,
   run,
 } = require('../scripts/enrichAnchorMissionBoundContacts');
-const { persistProviderChainEmail } = require('../scripts/lib/anchorMissionBoundEnrichment');
+const { persistProviderChainEmail, enrichProspectRow } = require('../scripts/lib/anchorMissionBoundEnrichment');
 
 const SCRIPT = path.join(__dirname, '..', 'scripts', 'enrichAnchorMissionBoundContacts.js');
 const LIB = path.join(__dirname, '..', 'scripts', 'lib', 'anchorMissionBoundEnrichment.js');
@@ -133,6 +133,86 @@ describe('enrichAnchorMissionBoundContacts', () => {
       verificationSource: 'existing_crm',
       dnc: false,
     }), true);
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'cde8f588-6969-47c3-8219-3f539b2b23cc',
+      company: 'Solomon Law Firm',
+      excluded: false,
+      verified: true,
+      email: 'peter@solomonlawfirm.com',
+      emailStatus: 'valid',
+      verificationSource: 'existing_crm',
+      enrichment_provenance: {
+        email: { source: 'pattern_first', original_source: 'pattern_first' },
+      },
+      dnc: false,
+    }), false);
+  });
+
+  it('does not trust a pattern_first email merely because a later read labels it existing_crm', async () => {
+    const persistedRunN = {
+      prospect_id: 'cde8f588-6969-47c3-8219-3f539b2b23cc',
+      client_id: 10,
+      company_name: 'Solomon Law Firm',
+      email: 'peter@solomonlawfirm.com',
+      email_verified: true,
+      email_status: 'valid',
+      email_verification_method: 'bouncer',
+      do_not_contact: false,
+      enrichment_provenance: {
+        email: { source: 'pattern_first', verifier: 'bouncer', status: 'valid' },
+      },
+    };
+
+    const runNPlusOne = await enrichProspectRow(persistedRunN, {
+      db: {},
+      dryRun: true,
+      processProspect: async () => ({
+        selectedEmail: null,
+        resolved: false,
+        errors: [],
+      }),
+      runEnrichmentChain: async () => null,
+    });
+
+    assert.notEqual(runNPlusOne.verificationSource, 'existing_crm');
+    assert.equal(runNPlusOne.verificationSource, 'pattern_first');
+    assert.notEqual(runNPlusOne.path, 'existing_crm');
+    assert.equal(runNPlusOne.verified, false);
+    assert.equal(isEligibleForCapacityProjection({
+      ...runNPlusOne,
+      company: persistedRunN.company_name,
+      verified: runNPlusOne.verified,
+      dnc: runNPlusOne.dnc,
+    }), false);
+  });
+
+  it('invalidates persisted social-domain contamination without treating it as existing_crm', async () => {
+    const result = await enrichProspectRow({
+      prospect_id: '5418dbf1-0ed1-4dab-854b-df9a4dfcf8d3',
+      client_id: 10,
+      company_name: 'Law Offices of Michael R. St. Louis',
+      email: 'michael@linkedin.com',
+      email_verified: true,
+      email_status: 'valid',
+      email_verification_method: 'bouncer',
+      do_not_contact: false,
+      notes: null,
+      enrichment_provenance: {
+        email: { source: 'pattern_first' },
+      },
+    }, {
+      db: {},
+      dryRun: true,
+      processProspect: async () => ({ selectedEmail: null, resolved: false, errors: [] }),
+      runEnrichmentChain: async () => null,
+    });
+    assert.equal(result.path, 'provider_chain');
+    assert.equal(result.email, null);
+    assert.equal(result.remediation.action, 'invalidate_contaminated');
+    assert.equal(isEligibleForCapacityProjection({
+      ...result,
+      company: 'Law Offices of Michael R. St. Louis',
+    }), false);
   });
 
   it('excludes Deliverability Test from CAPACITY eligibility even with a verified email', () => {

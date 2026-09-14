@@ -131,6 +131,12 @@ const OBSERVED_EMAIL_SOURCE_PREFIXES = [
   'tier0_email_localpart',
 ];
 
+const READ_PATH_PROVENANCE_LABELS = new Set([
+  'existing_crm',
+  'existing_prospect_email',
+  'existing_bouncer_verified_email',
+]);
+
 function normalizeDomain(value) {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -227,6 +233,10 @@ function normalizeProvenanceSource(source) {
   return String(source || '').trim().toLowerCase();
 }
 
+function isReadPathProvenanceLabel(source) {
+  return READ_PATH_PROVENANCE_LABELS.has(normalizeProvenanceSource(source));
+}
+
 function isObservedEmailProvenance(source) {
   const normalized = normalizeProvenanceSource(source);
   if (!normalized) return false;
@@ -234,12 +244,56 @@ function isObservedEmailProvenance(source) {
   return OBSERVED_EMAIL_SOURCE_PREFIXES.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}+`) || normalized.includes(`+${prefix}`) || normalized.endsWith(`+${prefix}`));
 }
 
+function storedOriginalProvenanceSources(row = {}) {
+  return [
+    row.email_provenance_source,
+    row.enrichment_provenance?.email?.original_source,
+    row.enrichment_provenance?.email?.source,
+  ]
+    .map(normalizeProvenanceSource)
+    .filter((source) => source && !isReadPathProvenanceLabel(source));
+}
+
+/**
+ * Resolve the original acquisition/enrichment source.
+ * Read-path labels such as existing_crm cannot erase or upgrade stored provenance.
+ */
 function resolveEmailProvenanceSource(row = {}) {
-  if (row.email_provenance_source) return normalizeProvenanceSource(row.email_provenance_source);
-  if (row.verificationSource) return normalizeProvenanceSource(row.verificationSource);
-  const provenanceSource = row.enrichment_provenance?.email?.source;
-  if (provenanceSource) return normalizeProvenanceSource(provenanceSource);
-  return null;
+  const storedOriginal = storedOriginalProvenanceSources(row);
+  if (storedOriginal.length) return storedOriginal[0];
+
+  const fallback = [
+    row.email_provenance_source,
+    row.enrichment_provenance?.email?.source,
+    row.verificationSource,
+  ]
+    .map(normalizeProvenanceSource)
+    .filter(Boolean);
+  return fallback[0] || null;
+}
+
+function stampEmailProvenance(existingProvenance, source, extra = {}) {
+  const previous = existingProvenance && typeof existingProvenance === 'object'
+    ? (existingProvenance.email || {})
+    : {};
+  const incoming = normalizeProvenanceSource(source);
+  const previousOriginal = normalizeProvenanceSource(previous.original_source || previous.source);
+  const originalSource = !isReadPathProvenanceLabel(previousOriginal)
+    ? previousOriginal
+    : (!isReadPathProvenanceLabel(incoming) ? incoming : '');
+  const currentSource = incoming && !isReadPathProvenanceLabel(incoming)
+    ? incoming
+    : (originalSource || incoming || null);
+
+  return {
+    ...(existingProvenance && typeof existingProvenance === 'object' ? existingProvenance : {}),
+    email: {
+      ...previous,
+      ...extra,
+      source: currentSource,
+      original_source: originalSource || currentSource || null,
+    },
+  };
 }
 
 /**
@@ -291,25 +345,68 @@ function isSendableVerifiedCandidate(candidate = {}) {
   if (!candidate.verified) return false;
   if (isContaminatedEmailDomain(emailDomain(candidate.email))) return false;
   if (isInferredPatternProvenance(candidate.source)) return false;
+  if (isInferredPatternProvenance(resolveEmailProvenanceSource(candidate))) return false;
   return true;
+}
+
+const TAINTED_EMAIL_ACTIONS = Object.freeze({
+  INVALIDATE_CONTAMINATED: 'invalidate_contaminated',
+  PRESERVE_UNTRUSTED_PROVENANCE: 'preserve_untrusted_provenance',
+  NONE: 'none',
+});
+
+/**
+ * Plan CRM remediation for an already-persisted email.
+ * Contaminated social/directory addresses are invalidated.
+ * Inferred pattern_first addresses keep the historical value but stay untrusted.
+ */
+function planTaintedCrmEmailRemediation(row = {}) {
+  const email = String(row.email || '').trim();
+  if (!email) {
+    return { action: TAINTED_EMAIL_ACTIONS.NONE, reason: 'no_email' };
+  }
+
+  const provenance = resolveEmailProvenanceSource(row);
+  if (isContaminatedEmailDomain(emailDomain(email))) {
+    return {
+      action: TAINTED_EMAIL_ACTIONS.INVALIDATE_CONTAMINATED,
+      reason: 'contaminated_email_domain',
+      email,
+      provenance,
+    };
+  }
+  if (isInferredPatternProvenance(provenance)) {
+    return {
+      action: TAINTED_EMAIL_ACTIONS.PRESERVE_UNTRUSTED_PROVENANCE,
+      reason: 'inferred_pattern_provenance',
+      email,
+      provenance,
+    };
+  }
+  return { action: TAINTED_EMAIL_ACTIONS.NONE, reason: 'legitimate_or_unknown', email, provenance };
 }
 
 module.exports = {
   VERIFIED_EMAIL_STATUSES,
   CONTAMINATED_EMAIL_DOMAINS,
   PERSONAL_EMAIL_PROVIDER_DOMAINS,
+  READ_PATH_PROVENANCE_LABELS,
+  TAINTED_EMAIL_ACTIONS,
   classifyCompanyUrl,
   resolveOfficialEnrichmentDomain,
   isContaminatedEmailDomain,
   isPersonalEmailProviderDomain,
   isHostedBuilderDomain,
   isInferredPatternProvenance,
+  isReadPathProvenanceLabel,
   isObservedEmailProvenance,
   resolveEmailProvenanceSource,
+  stampEmailProvenance,
   isAllowedObservedWebsiteEmail,
   canonicalOutboundEmailIneligibilityReason,
   isCanonicallyOutboundEligible,
   isSendableVerifiedCandidate,
+  planTaintedCrmEmailRemediation,
   normalizeDomain,
   emailDomain,
 };

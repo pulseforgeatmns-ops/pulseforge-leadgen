@@ -123,6 +123,7 @@ function isEligibleForCapacityProjection(row = {}) {
     email_status: row.emailStatus || row.email_status,
     do_not_contact: row.dnc === true || row.do_not_contact === true,
     verificationSource: row.verificationSource,
+    email_provenance_source: row.email_provenance_source,
     enrichment_provenance: row.enrichment_provenance,
   });
 }
