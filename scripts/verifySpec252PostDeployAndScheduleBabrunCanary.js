@@ -88,6 +88,23 @@ async function resolveProductionSha() {
   return null;
 }
 
+const REQUIRED_SCHEDULE_COLUMNS = Object.freeze([
+  'id', 'tenant_id', 'prospect_id', 'outreach_asset_id', 'sending_identity_id',
+  'recipient_email', 'scheduled_for', 'status', 'idempotency_key', 'authorization_snapshot',
+]);
+
+/**
+ * Normalize a catalog row to a column name.
+ * information_schema.columns exposes `column_name`; pg_attribute exposes `attname`.
+ * Never read `column_name` from a source that does not define or alias it.
+ */
+function columnNameFromCatalogRow(row) {
+  if (!row || typeof row !== 'object') return null;
+  if (typeof row.column_name === 'string' && row.column_name) return row.column_name;
+  if (typeof row.attname === 'string' && row.attname) return row.attname;
+  return null;
+}
+
 async function checkMigrationApplied(client) {
   const regclass = await client.query(`
     SELECT
@@ -98,26 +115,19 @@ async function checkMigrationApplied(client) {
   const relation = regclass.rows[0]?.relation || null;
   const tableExists = relation === 'tenant_outreach_scheduled_sends';
 
+  // Qualified public schema only — do not interpolate current_schema() into SQL.
   const cols = tableExists
     ? await client.query(`
         SELECT column_name
-        FROM pg_catalog.pg_attribute a
-        JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
-        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND c.relname = 'tenant_outreach_scheduled_sends'
-          AND a.attnum > 0
-          AND NOT a.attisdropped
-        ORDER BY a.attnum
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'tenant_outreach_scheduled_sends'
+        ORDER BY ordinal_position
       `)
     : { rows: [] };
 
-  const required = [
-    'id', 'tenant_id', 'prospect_id', 'outreach_asset_id', 'sending_identity_id',
-    'recipient_email', 'scheduled_for', 'status', 'idempotency_key', 'authorization_snapshot',
-  ];
-  const present = new Set(cols.rows.map((row) => row.column_name));
-  const missing = required.filter((name) => !present.has(name));
+  const present = new Set(cols.rows.map((row) => columnNameFromCatalogRow(row)).filter(Boolean));
+  const missing = REQUIRED_SCHEDULE_COLUMNS.filter((name) => !present.has(name));
   return {
     tableExists,
     relation,
@@ -126,6 +136,7 @@ async function checkMigrationApplied(client) {
     searchPath: regclass.rows[0]?.search_path || null,
     columnCount: cols.rows.length,
     missingColumns: missing,
+    migrationApplied: tableExists && missing.length === 0,
     migrationFile: SPEC252_MIGRATION,
   };
 }
@@ -377,7 +388,7 @@ async function main() {
   report.productionSha = sha || null;
 
   const migration = await checkMigrationApplied(pool);
-  report.checks.migrationApplied = migration.tableExists && migration.missingColumns.length === 0;
+  report.checks.migrationApplied = migration.migrationApplied;
   report.checks.tenantOutreachScheduledSendsExists = migration.tableExists;
   report.migration = migration;
 
@@ -470,7 +481,9 @@ if (require.main === module) {
 
 module.exports = {
   BABRUN,
+  REQUIRED_SCHEDULE_COLUMNS,
   nextSuitableBusinessWindow,
+  columnNameFromCatalogRow,
   checkMigrationApplied,
   checkCronExecutor,
   checkSpec252Ancestry,
