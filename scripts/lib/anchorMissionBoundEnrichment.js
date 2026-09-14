@@ -6,14 +6,10 @@
  */
 
 const { getAcquisitionMissionRuntime } = require('../../services/acquisitionMissionRuntime');
-const { listMissionBoundProspectIds } = require('../../packages/max/workspace/EmmettMissionCandidates');
-const {
-  loadActiveCapacityForMission,
-  listProspectIdsFromCapacityPayload,
-} = require('./activeCapacitySelection');
+const { listMissionBoundCompanyIds } = require('../../packages/max/workspace/EmmettMissionCandidates');
 const {
   isProjectableCrmProspect,
-  normalizeProspectIds,
+  loadCrmProspectsForMissionBoundCompanies,
 } = require('../../packages/max/workspace/MissionBoundCrmResolver');
 const {
   configureScoringContext,
@@ -42,56 +38,13 @@ function crmProjectionRow(row = {}) {
   };
 }
 
-const PROSPECT_ENRICHMENT_SELECT = `
-       p.id AS prospect_id,
-       p.company_id,
-       p.client_id,
-       p.first_name,
-       p.last_name,
-       p.email,
-       p.email_status,
-       p.email_verified,
-       p.email_verification_method,
-       p.do_not_contact,
-       p.notes,
-       p.vertical,
-       p.website_url,
-       p.employee_count_estimate,
-       p.practice_area,
-       p.firm_size,
-       p.enrichment_provenance,
-       c.name AS company_name,
-       c.website,
-       c.domain,
-       c.industry,
-       c.size AS company_size,
-       c.location,
-       c.practice_area AS company_practice_area,
-       c.firm_size AS company_firm_size`;
-
-async function loadProspectRowsByIds(db, clientId, prospectIds) {
-  const ids = normalizeProspectIds(prospectIds);
-  if (!ids.length) return [];
-
-  const { rows } = await db.query(
-    `SELECT
-${PROSPECT_ENRICHMENT_SELECT}
-     FROM prospects p
-     LEFT JOIN companies c
-       ON c.id = p.company_id
-      AND c.client_id = p.client_id
-    WHERE p.client_id = $1
-      AND p.id = ANY($2::uuid[])`,
-    [clientId, ids]
-  );
-
-  const byId = new Map(rows.map((row) => [String(row.prospect_id).toLowerCase(), row]));
-  return ids.map((id) => byId.get(id)).filter(Boolean);
-}
-
 async function loadProspectRow(db, clientId, prospectId) {
-  const [row] = await loadProspectRowsByIds(db, clientId, [prospectId]);
-  return row || null;
+  const { loadBestCrmProspectForMissionBoundKey } = require('../../packages/max/workspace/MissionBoundCrmResolver');
+  return loadBestCrmProspectForMissionBoundKey({
+    pool: db,
+    clientId,
+    missionBoundKey: prospectId,
+  });
 }
 
 async function loadMissionBoundProspects(db, missionId) {
@@ -103,15 +56,24 @@ async function loadMissionBoundProspects(db, missionId) {
     throw Object.assign(new Error(`Mission ${missionId} not found.`), { code: 'mission_not_found' });
   }
   const snapshot = engine.inspect(missionId, { tenantId: TENANT_ID });
-  const activeCapacity = await loadActiveCapacityForMission(db, TENANT_ID, missionId);
-  let prospectIds = activeCapacity
-    ? listProspectIdsFromCapacityPayload(activeCapacity.payload)
-    : [];
-  if (!prospectIds.length) {
-    prospectIds = listMissionBoundProspectIds(mission, snapshot.contributions || []);
-  }
-  const rows = await loadProspectRowsByIds(db, CLIENT_ID, prospectIds);
-  return { mission, snapshot, prospectIds, rows };
+  const companyIds = listMissionBoundCompanyIds(mission, snapshot.contributions || []);
+  const rowsByCompanyId = await loadCrmProspectsForMissionBoundCompanies({
+    pool: db,
+    clientId: CLIENT_ID,
+    companyIds,
+  });
+  const rows = companyIds
+    .map((companyId) => rowsByCompanyId.get(String(companyId)))
+    .filter(Boolean);
+  return {
+    mission,
+    snapshot,
+    companyIds,
+    // Legacy report field: mission-bound keys (company/candidate IDs), not CRM prospects.id.
+    prospectIds: companyIds,
+    rowsByCompanyId,
+    rows,
+  };
 }
 
 async function persistProviderChainEmail(db, row, enriched, verification, dryRun) {
@@ -186,6 +148,7 @@ async function enrichProspectRow(row, options = {}) {
   const company = row.company_name || row.company || null;
   const base = {
     prospectId: String(row.prospect_id),
+    missionBoundCompanyId: row.company_id != null ? String(row.company_id) : null,
     company,
     excluded: false,
     verified: false,

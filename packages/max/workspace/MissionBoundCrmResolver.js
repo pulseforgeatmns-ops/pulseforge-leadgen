@@ -106,6 +106,120 @@ async function loadCrmProspectsByIds(input = {}) {
   return map;
 }
 
+const CRM_ENRICHMENT_PROSPECT_SELECT = `
+       p.id AS prospect_id,
+       p.company_id,
+       p.client_id,
+       p.first_name,
+       p.last_name,
+       p.email,
+       p.email_status,
+       p.email_verified,
+       p.email_verification_method,
+       p.do_not_contact,
+       p.notes,
+       p.vertical,
+       p.website_url,
+       p.employee_count_estimate,
+       p.practice_area,
+       p.firm_size,
+       p.enrichment_provenance,
+       c.name AS company_name,
+       c.website,
+       c.domain,
+       c.industry,
+       c.size AS company_size,
+       c.location,
+       c.practice_area AS company_practice_area,
+       c.firm_size AS company_firm_size`;
+
+/**
+ * Resolve the best CRM contact row for one mission-bound key.
+ * Keys are company/candidate IDs from Max prioritization; falls back to prospects.id
+ * when the key already matches a contact row (legacy fixtures / integer IDs).
+ * @param {object} input
+ * @returns {Promise<object|null>}
+ */
+async function loadBestCrmProspectForMissionBoundKey(input = {}) {
+  const clientId = normalizeClientId(input.clientId);
+  const pool = input.pool;
+  const missionBoundKey = String(input.missionBoundKey || input.companyId || '').trim();
+  if (!clientId || !pool || !missionBoundKey) return null;
+
+  const { rows } = await pool.query(
+    `SELECT
+${CRM_ENRICHMENT_PROSPECT_SELECT}
+     FROM prospects p
+     LEFT JOIN companies c
+       ON c.id = p.company_id
+      AND c.client_id = p.client_id
+    WHERE p.client_id = $1
+      AND (
+        p.company_id::text = $2
+        OR p.id::text = $2
+      )
+      AND COALESCE(p.is_synthetic, false) = false
+    ORDER BY
+      CASE WHEN p.company_id::text = $2 THEN 0 ELSE 1 END,
+      p.icp_score DESC NULLS LAST,
+      p.created_at ASC,
+      p.id ASC
+    LIMIT 1`,
+    [clientId, missionBoundKey]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Batch-resolve mission-bound company/candidate keys to canonical CRM contact rows.
+ * Preserves the input key universe — never adds companies outside the supplied list.
+ * @param {object} input
+ * @returns {Promise<Map<string, object>>}
+ */
+async function loadCrmProspectsForMissionBoundCompanies(input = {}) {
+  const clientId = normalizeClientId(input.clientId);
+  const pool = input.pool;
+  const companyIds = [...new Set(
+    (Array.isArray(input.companyIds) ? input.companyIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  )];
+  const map = new Map();
+  if (!clientId || !pool || !companyIds.length) return map;
+
+  const { rows } = await pool.query(
+    `WITH mission_keys AS (
+       SELECT unnest($2::text[]) AS mission_bound_key
+     )
+     SELECT DISTINCT ON (k.mission_bound_key)
+       k.mission_bound_key,
+${CRM_ENRICHMENT_PROSPECT_SELECT}
+     FROM mission_keys k
+     JOIN prospects p
+       ON p.client_id = $1
+      AND (
+        p.company_id::text = k.mission_bound_key
+        OR p.id::text = k.mission_bound_key
+      )
+     LEFT JOIN companies c
+       ON c.id = p.company_id
+      AND c.client_id = p.client_id
+    WHERE COALESCE(p.is_synthetic, false) = false
+    ORDER BY
+      k.mission_bound_key,
+      CASE WHEN p.company_id::text = k.mission_bound_key THEN 0 ELSE 1 END,
+      p.icp_score DESC NULLS LAST,
+      p.created_at ASC,
+      p.id ASC`,
+    [clientId, companyIds]
+  );
+
+  for (const row of rows) {
+    map.set(String(row.mission_bound_key), row);
+  }
+  return map;
+}
+
 module.exports = {
   VERIFIED_EMAIL_STATUSES,
   normalizeProspectIds,
@@ -113,4 +227,6 @@ module.exports = {
   projectableEmailFromCrmRecord,
   resolveMissionBoundRecipientEmail,
   loadCrmProspectsByIds,
+  loadBestCrmProspectForMissionBoundKey,
+  loadCrmProspectsForMissionBoundCompanies,
 };
