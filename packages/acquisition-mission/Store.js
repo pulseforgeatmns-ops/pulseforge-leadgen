@@ -19,6 +19,8 @@ function createMemoryAmoStore(opts = {}) {
   const outcomeLearnings = [];
   const executionRecords = [];
   const interpretations = [];
+  const observeReactions = [];
+  const candidateObserveStates = new Map();
   const acquisitionKnowledge = [];
 
   function putMission(mission) {
@@ -219,6 +221,51 @@ function createMemoryAmoStore(opts = {}) {
     return interpretations.filter((row) => row.missionId === missionId).map(clone);
   }
 
+  function candidateObserveKey(missionId, prospectId) {
+    return `${asText(missionId)}::${asText(prospectId)}`;
+  }
+
+  function addObserveReaction(row) {
+    if (!row?.id) return null;
+    const existing = observeReactions.find((item) => item.id === row.id || item.observationId === row.observationId);
+    if (existing) return clone(existing);
+    observeReactions.push(clone(row));
+    return clone(row);
+  }
+
+  function listObserveReactions(missionId) {
+    return observeReactions
+      .filter((row) => row.missionId === missionId)
+      .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+      .map(clone);
+  }
+
+  function getObserveReactionByObservationId(observationId) {
+    const found = observeReactions.find((row) => row.observationId === observationId);
+    return found ? clone(found) : null;
+  }
+
+  function getCandidateObserveState(missionId, prospectId) {
+    const key = candidateObserveKey(missionId, prospectId);
+    const found = candidateObserveStates.get(key);
+    return found ? clone(found) : null;
+  }
+
+  function putCandidateObserveState(row) {
+    if (!row?.missionId || row.prospectId == null) return null;
+    const key = candidateObserveKey(row.missionId, row.prospectId);
+    const copy = clone(row);
+    candidateObserveStates.set(key, copy);
+    return clone(copy);
+  }
+
+  function listCandidateObserveStates(missionId) {
+    const prefix = `${asText(missionId)}::`;
+    return [...candidateObserveStates.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, row]) => clone(row));
+  }
+
   function putAcquisitionKnowledge(row) {
     if (!row || !row.id) return null;
     const idx = acquisitionKnowledge.findIndex((existing) => existing.id === row.id);
@@ -267,6 +314,8 @@ function createMemoryAmoStore(opts = {}) {
       outcomeLearnings: outcomeLearnings.map(clone),
       executionRecords: executionRecords.map(clone),
       interpretations: interpretations.map(clone),
+      observeReactions: observeReactions.map(clone),
+      candidateObserveStates: [...candidateObserveStates.entries()],
       acquisitionKnowledge: acquisitionKnowledge.map(clone),
     };
   }
@@ -292,6 +341,11 @@ function createMemoryAmoStore(opts = {}) {
     replaceArray(outcomeLearnings, snap.outcomeLearnings);
     replaceArray(executionRecords, snap.executionRecords);
     replaceArray(interpretations, snap.interpretations);
+    replaceArray(observeReactions, snap.observeReactions);
+    candidateObserveStates.clear();
+    for (const [key, row] of snap.candidateObserveStates || []) {
+      candidateObserveStates.set(key, clone(row));
+    }
     replaceArray(acquisitionKnowledge, snap.acquisitionKnowledge);
   }
 
@@ -325,6 +379,12 @@ function createMemoryAmoStore(opts = {}) {
     findExecutionRecordByIdentity,
     addInterpretation,
     listInterpretations,
+    addObserveReaction,
+    listObserveReactions,
+    getObserveReactionByObservationId,
+    getCandidateObserveState,
+    putCandidateObserveState,
+    listCandidateObserveStates,
     putAcquisitionKnowledge,
     replaceAcquisitionKnowledge,
     listAcquisitionKnowledge,

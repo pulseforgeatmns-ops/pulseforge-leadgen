@@ -190,6 +190,14 @@ function createAcquisitionMissionRuntime(opts = {}) {
           });
         }
         for (const row of loaded.observations) if (row) state.engine.store.addObservation(row);
+        for (const row of loaded.observeReactions || []) {
+          if (row && state.engine.store.addObserveReaction) state.engine.store.addObserveReaction(row);
+        }
+        for (const row of loaded.candidateObserveStates || []) {
+          if (row && state.engine.store.putCandidateObserveState) {
+            state.engine.store.putCandidateObserveState(row);
+          }
+        }
         for (const row of loaded.outcomes) if (row) state.engine.store.addOutcome(row);
         for (const row of loaded.learning) if (row) state.engine.store.addLearning(row);
         for (const row of loaded.predictions || []) if (row) state.engine.store.addPrediction(row);

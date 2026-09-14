@@ -53,6 +53,13 @@ const {
   isCommunicationObservation,
 } = require('./CommunicationObservation');
 const {
+  evaluateObserveReaction,
+  buildObserveAssessmentForMission,
+} = require('./ObserveEvaluator');
+const {
+  foldCandidateObserveState,
+} = require('./ObserveReaction');
+const {
   buildMissionInterpretationContext,
   interpretMissionObservation,
   interpretRileyReply,
@@ -518,6 +525,18 @@ function createAcquisitionMissionEngine(opts = {}) {
       }, applyOpts);
     }
 
+    if (result.observationId) {
+      const observation = store.listObservations(mission.id)
+        .find((row) => row.id === result.observationId);
+      if (observation) {
+        applyObserveReaction({
+          missionId: mission.id,
+          observation,
+          interpretation: result.interpretation,
+        }, applyOpts);
+      }
+    }
+
     return { interpretation: interpretationRow, outcome };
   }
 
@@ -532,6 +551,78 @@ function createAcquisitionMissionEngine(opts = {}) {
     });
     if (!result) return null;
     return applyInterpretationResult(result, interpOpts);
+  }
+
+  function applyObserveReaction(input = {}, reactOpts = {}) {
+    const missionId = input.missionId;
+    const observation = input.observation;
+    if (!missionId || !observation?.id) {
+      return { skipped: true, reason: 'missing_observation' };
+    }
+
+    const mission = requireMission(missionId, reactOpts.tenantId);
+    const existing = store.getObserveReactionByObservationId
+      ? store.getObserveReactionByObservationId(observation.id)
+      : null;
+    if (existing) {
+      return { reaction: existing, duplicate: true };
+    }
+
+    const prospectId = observation.prospectId != null ? String(observation.prospectId) : null;
+    const priorState = prospectId && store.getCandidateObserveState
+      ? (store.getCandidateObserveState(mission.id, prospectId) || {})
+      : {};
+
+    const executionRecords = store.listExecutionRecords
+      ? store.listExecutionRecords(mission.id, { prospectId })
+      : [];
+    const executionRecord = executionRecords.length
+      ? executionRecords[executionRecords.length - 1]
+      : null;
+
+    const evaluated = evaluateObserveReaction({
+      mission,
+      observation,
+      interpretation: input.interpretation || null,
+      priorState,
+      store,
+      outcomes: store.listOutcomes(mission.id),
+      executionRecord,
+      now: reactOpts.now,
+    });
+
+    if (evaluated.skipped || !evaluated.reaction) {
+      return evaluated;
+    }
+
+    const reaction = store.addObserveReaction(evaluated.reaction);
+    if (prospectId && store.putCandidateObserveState) {
+      const folded = foldCandidateObserveState(priorState, reaction);
+      store.putCandidateObserveState({
+        missionId: mission.id,
+        tenantId: mission.tenantId,
+        prospectId,
+        ...folded,
+        updatedAt: reaction.at,
+      });
+    }
+
+    store.addEvent(createEvent({
+      missionId: mission.id,
+      kind: EVENT_KINDS.OBSERVATION,
+      specialist: SPECIALISTS.MAX,
+      at: reaction.at,
+      label: `Observe reaction: ${reaction.evidenceType}`,
+      payload: {
+        observeReactionId: reaction.id,
+        observationId: reaction.observationId,
+        evidenceType: reaction.evidenceType,
+        updatedDisposition: reaction.updatedDisposition,
+        recommendedNextAction: reaction.recommendedNextAction,
+      },
+    }));
+
+    return { reaction, candidateState: evaluated.candidateState, duplicate: false };
   }
 
   function applyRileyReplyInterpretation(input = {}, applyOpts = {}) {
@@ -747,9 +838,20 @@ function createAcquisitionMissionEngine(opts = {}) {
       missionId: mission.id,
       snapshot: progressionSnapshot,
     });
+    const observeReactions = store.listObserveReactions
+      ? store.listObserveReactions(mission.id)
+      : [];
+    const candidateObserveStates = store.listCandidateObserveStates
+      ? store.listCandidateObserveStates(mission.id)
+      : [];
+    const observeAssessment = buildObserveAssessmentForMission(mission, store);
+
     return {
       spec: 'SPEC-118',
       mission,
+      observeReactions,
+      candidateObserveStates,
+      observeAssessment,
       lifecycleLearning: learningEligibilityFromStore(store, mission),
       workspaceContext,
       executableDecision: presentableOperatorDecision({ mission, contributions }),
@@ -919,6 +1021,7 @@ function createAcquisitionMissionEngine(opts = {}) {
     recordInterpretation,
     applyInterpretationResult,
     applyCommunicationObservationInterpretation,
+    applyObserveReaction,
     applyRileyReplyInterpretation,
     applyBookingInterpretation,
     recordOutcome,
