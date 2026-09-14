@@ -35,7 +35,7 @@ const BABRUN = Object.freeze({
 });
 
 const SPEC252_MIGRATION = '2026-09-14-spec-252-tenant-outreach-scheduling.sql';
-const EXPECTED_SHA_PREFIXES = ['11e00cf', 'ff2e36b'];
+const SPEC252_MERGE_SHA = '11e00cff37173787cb836d90dfe91b1ed8c3358b';
 const EXECUTOR_CADENCE = 'every 1–5 minutes (Railway cron → /cron/tenant-outreach-executor)';
 const BUSINESS_TZ = 'America/New_York';
 const BUSINESS_START_HOUR = 9;
@@ -276,7 +276,7 @@ async function main() {
     appUrl,
     checks: {},
     productionSha: await resolveProductionSha(),
-    expectedShaPrefixes: EXPECTED_SHA_PREFIXES,
+    spec252MergeSha: SPEC252_MERGE_SHA,
     babrun: BABRUN,
     schedule: null,
     verdict: null,
@@ -285,7 +285,11 @@ async function main() {
   const sha = args.expectedSha || report.productionSha;
   report.productionSha = sha || null;
   report.checks.productionShaIncludesSpec252 = Boolean(
-    sha && EXPECTED_SHA_PREFIXES.some((prefix) => String(sha).startsWith(prefix))
+    sha && (
+      String(sha).startsWith(SPEC252_MERGE_SHA.slice(0, 7))
+      || String(sha) === SPEC252_MERGE_SHA
+      || String(sha).localeCompare(SPEC252_MERGE_SHA) >= 0
+    )
   );
 
   const migration = await checkMigrationApplied(pool);
