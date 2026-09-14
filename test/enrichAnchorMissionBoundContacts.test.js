@@ -102,6 +102,39 @@ describe('enrichAnchorMissionBoundContacts', () => {
     assert.equal(queries.length, 0);
   });
 
+  it('rejects inferred pattern_first and contaminated social-domain emails for CAPACITY projection', () => {
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-solomon',
+      company: 'Solomon Law Firm',
+      excluded: false,
+      verified: true,
+      email: 'peter@solomonlawfirm.com',
+      emailStatus: 'valid',
+      verificationSource: 'pattern_first',
+      dnc: false,
+    }), false);
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-stlouis',
+      company: 'Law Offices of Michael R. St. Louis',
+      excluded: false,
+      verified: true,
+      email: 'michael@linkedin.com',
+      emailStatus: 'valid',
+      verificationSource: 'pattern_first',
+      dnc: false,
+    }), false);
+    assert.equal(isEligibleForCapacityProjection({
+      prospectId: 'p-backus',
+      company: 'Backus, Meyer & Branch',
+      excluded: false,
+      verified: true,
+      email: 'jmeyer@backusmeyer.com',
+      emailStatus: 'valid',
+      verificationSource: 'existing_crm',
+      dnc: false,
+    }), true);
+  });
+
   it('excludes Deliverability Test from CAPACITY eligibility even with a verified email', () => {
     assert.equal(isEligibleForCapacityProjection({
       prospectId: 'p-test',

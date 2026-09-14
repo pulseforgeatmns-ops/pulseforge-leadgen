@@ -4,6 +4,10 @@ const pool = require('./db');
 const { normalizeClientId } = require('./utils/clientContext');
 const { verifyEmail } = require('./utils/emailVerifier');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
+const {
+  isAllowedObservedWebsiteEmail,
+  isSendableVerifiedCandidate,
+} = require('./utils/canonicalEmailEligibility');
 const { ensureTieredEnrichmentSchema } = require('./utils/tieredEnrichmentSchema');
 const { safeIngestEnrichmentOutcome } = require('./utils/maxSignalIngestion');
 const {
@@ -306,7 +310,7 @@ function extractEmailsFromHtml(html, domain) {
   const decoded = decodeHtml(html).replace(/\s*\[at\]\s*|\s*\(at\)\s*/gi, '@').replace(/\s*\[dot\]\s*|\s*\(dot\)\s*/gi, '.');
   for (const match of decoded.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)) {
     const email = match[0].replace(/[).,;:]+$/g, '').toLowerCase();
-    if (!invalidOutreachEmailReason(email) && (!normalizedDomain || emailDomain(email) === normalizedDomain)) {
+    if (isAllowedObservedWebsiteEmail(email, normalizedDomain)) {
       emails.add(email);
     }
   }
@@ -853,12 +857,14 @@ async function processProspect(row, options = {}) {
       ? { ...candidate, verified: true, status: working.email_status, method: working.email_verification_method }
       : await verifyCandidate(candidate, options.verifyEmail || verifyEmail);
     outcome.emails.push(verified);
-    if (!outcome.selectedEmail && verified.verified) {
+    if (!outcome.selectedEmail && isSendableVerifiedCandidate(verified)) {
       outcome.selectedEmail = verified;
       working.email = verified.email;
       working.email_status = verified.status;
       working.email_verification_method = verified.method;
       working.email_verified = true;
+    } else if (verified.verified && !isSendableVerifiedCandidate(verified)) {
+      outcome.errors.push(`non_sendable_verified_candidate:${verified.source}:${verified.email}`);
     }
     if (passesDataBar(working)) break;
   }

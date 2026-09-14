@@ -51,13 +51,29 @@ describe('websiteEnrichmentCrawl', () => {
     assert.equal(isSameSiteDomain('www.kluglawoffices.com', 'kluglawoffices.com'), true);
   });
 
-  it('prefers provider-backed website_url over derived domain field', () => {
+  it('prefers official company domain over hosted-builder website_url', () => {
     assert.equal(
       resolveEnrichmentDomain({
         domain: 'lawofficeofmichaelstlouis.com',
         website_url: 'https://lawofficeofmichaelstlouis-com.webnode.page/',
       }),
-      'lawofficeofmichaelstlouis-com.webnode.page'
+      'lawofficeofmichaelstlouis.com'
+    );
+  });
+
+  it('skips LinkedIn profile URLs when resolving enrichment domain', () => {
+    assert.equal(
+      resolveEnrichmentDomain({
+        website_url: 'https://www.linkedin.com/in/michael-stlouis/',
+        domain: 'lawofficeofmichaelstlouis.com',
+      }),
+      'lawofficeofmichaelstlouis.com'
+    );
+    assert.equal(
+      resolveEnrichmentDomain({
+        website_url: 'https://www.linkedin.com/in/michael-stlouis/',
+      }),
+      null
     );
   });
 
