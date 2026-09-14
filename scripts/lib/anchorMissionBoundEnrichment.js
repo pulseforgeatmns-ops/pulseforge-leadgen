@@ -7,6 +7,10 @@
 
 const { getAcquisitionMissionRuntime } = require('../../services/acquisitionMissionRuntime');
 const { listMissionBoundProspectIds } = require('../../packages/max/workspace/EmmettMissionCandidates');
+const {
+  loadActiveCapacityForMission,
+  listProspectIdsFromCapacityPayload,
+} = require('./activeCapacitySelection');
 const { isProjectableCrmProspect } = require('../../packages/max/workspace/MissionBoundCrmResolver');
 const {
   configureScoringContext,
@@ -83,7 +87,13 @@ async function loadMissionBoundProspects(db, missionId) {
     throw Object.assign(new Error(`Mission ${missionId} not found.`), { code: 'mission_not_found' });
   }
   const snapshot = engine.inspect(missionId, { tenantId: TENANT_ID });
-  const prospectIds = listMissionBoundProspectIds(mission, snapshot.contributions || []);
+  const activeCapacity = await loadActiveCapacityForMission(db, TENANT_ID, missionId);
+  let prospectIds = activeCapacity
+    ? listProspectIdsFromCapacityPayload(activeCapacity.payload)
+    : [];
+  if (!prospectIds.length) {
+    prospectIds = listMissionBoundProspectIds(mission, snapshot.contributions || []);
+  }
   const rows = [];
   for (const prospectId of prospectIds) {
     const row = await loadProspectRow(db, CLIENT_ID, prospectId);
