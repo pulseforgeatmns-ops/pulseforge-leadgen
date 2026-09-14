@@ -58,6 +58,8 @@ describe('MissionBoundCrmResolver UUID CRM load', () => {
     assert.equal(calls.length, 1);
     assert.match(calls[0].sql, /client_id = \$1/);
     assert.match(calls[0].sql, /id = ANY\(\$2::uuid\[\]\)/);
+    assert.match(calls[0].sql, /enrichment_provenance/);
+    assert.match(calls[0].sql, /email_verified/);
     assert.doesNotMatch(calls[0].sql, /int\[\]/);
     assert.equal(calls[0].params[0], 10);
     assert.deepEqual(calls[0].params[1], [...PRODUCTION_UUIDS]);
