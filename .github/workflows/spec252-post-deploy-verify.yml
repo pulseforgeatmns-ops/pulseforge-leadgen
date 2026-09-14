@@ -15,6 +15,11 @@ on:
         description: 'Expected production SHA prefix (optional override)'
         required: false
         type: string
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/spec252-post-deploy-verify.yml'
+      - 'scripts/verifySpec252PostDeployAndScheduleBabrunCanary.js'
 
 jobs:
   verify:
@@ -39,10 +44,11 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           APP_URL: https://pulseforge-leadgen-production.up.railway.app
-          EXPECTED_PRODUCTION_SHA: ${{ inputs.expected_sha || steps.sha.outputs.sha }}
+          EXPECTED_PRODUCTION_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || steps.sha.outputs.sha }}
+          SCHEDULE_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.schedule || 'true' }}
         run: |
           set -euo pipefail
           ARGS=()
-          if [ "${{ inputs.schedule }}" = "true" ]; then ARGS+=(--schedule); fi
+          if [ "${SCHEDULE_ENABLED}" = "true" ]; then ARGS+=(--schedule); fi
           if [ -n "${EXPECTED_PRODUCTION_SHA:-}" ]; then ARGS+=(--expected-sha="${EXPECTED_PRODUCTION_SHA}"); fi
           node scripts/verifySpec252PostDeployAndScheduleBabrunCanary.js "${ARGS[@]}"
