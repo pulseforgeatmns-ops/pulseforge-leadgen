@@ -6,10 +6,18 @@
  */
 
 const { invalidOutreachEmailReason } = require('../../../utils/emailGuard');
-const { canonicalOutboundEmailIneligibilityReason } = require('../../../utils/canonicalEmailEligibility');
+const {
+  canonicalOutboundEmailIneligibilityReason,
+  resolveEmailProvenanceSource,
+} = require('../../../utils/canonicalEmailEligibility');
 
 const VERIFIED_EMAIL_STATUSES = new Set(['valid', 'verified']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const EXCLUDED_COMPANY_RE = /deliverability\s*test/i;
+
+function isExcludedDeliverabilityTestCompany(name) {
+  return EXCLUDED_COMPANY_RE.test(String(name || '').trim());
+}
 
 function normalizeClientId(value) {
   const n = Number(value);
@@ -61,11 +69,13 @@ function projectableEmailFromCrmRecord(row) {
 function resolveMissionBoundRecipientEmail({
   discoveryEmail,
   prospectId,
+  missionBoundKey,
   crmByProspectId,
 } = {}) {
   const fromDiscovery = String(discoveryEmail || '').trim();
   if (fromDiscovery) return fromDiscovery;
-  return projectableEmailFromCrmRecord(crmLookup(crmByProspectId, prospectId));
+  const key = missionBoundKey ?? prospectId;
+  return projectableEmailFromCrmRecord(crmLookup(crmByProspectId, key));
 }
 
 /**
@@ -223,12 +233,74 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
   return map;
 }
 
+/**
+ * Read-only CRM inspection for one mission-bound queue key (company/candidate ID).
+ * Never infers addresses; preserves provenance and safety gates.
+ */
+async function inspectMissionBoundCrmForQueueItem(input = {}) {
+  const clientId = normalizeClientId(input.clientId);
+  const pool = input.pool;
+  const missionBoundKey = String(input.missionBoundKey || '').trim();
+  const companyName = input.companyName || null;
+
+  const base = {
+    missionBoundKey: missionBoundKey || null,
+    crmContactId: null,
+    crmCompanyId: null,
+    crmEmailPresent: false,
+    crmProjectable: false,
+    crmEmailVerified: false,
+    crmEmailStatus: null,
+    projectionBlockReason: missionBoundKey ? 'no_crm_contact' : 'missing_mission_bound_key',
+    emailProvenanceSource: null,
+    deliverabilityTestExcluded: false,
+  };
+
+  if (isExcludedDeliverabilityTestCompany(companyName)) {
+    return {
+      ...base,
+      projectionBlockReason: 'deliverability_test_excluded',
+      deliverabilityTestExcluded: true,
+    };
+  }
+
+  if (!clientId || !pool || !missionBoundKey) return base;
+
+  const crm = await loadBestCrmProspectForMissionBoundKey({
+    pool,
+    clientId,
+    missionBoundKey,
+  });
+  if (!crm) return base;
+
+  const crmEmail = crm.email ? String(crm.email).trim() : null;
+  const provenance = resolveEmailProvenanceSource(crm);
+  const ineligibility = canonicalOutboundEmailIneligibilityReason(crm);
+  const projectable = isProjectableCrmProspect(crm);
+
+  return {
+    missionBoundKey,
+    crmContactId: crm.prospect_id || crm.id || null,
+    crmCompanyId: crm.company_id != null ? String(crm.company_id) : null,
+    crmEmailPresent: Boolean(crmEmail),
+    crmProjectable: projectable,
+    crmEmailVerified: projectable,
+    crmEmailStatus: crm.email_status || null,
+    projectionBlockReason: projectable ? null : (ineligibility || 'not_projectable'),
+    emailProvenanceSource: provenance || null,
+    deliverabilityTestExcluded: false,
+  };
+}
+
 module.exports = {
   VERIFIED_EMAIL_STATUSES,
+  EXCLUDED_COMPANY_RE,
   normalizeProspectIds,
+  isExcludedDeliverabilityTestCompany,
   isProjectableCrmProspect,
   projectableEmailFromCrmRecord,
   resolveMissionBoundRecipientEmail,
+  inspectMissionBoundCrmForQueueItem,
   loadCrmProspectsByIds,
   loadBestCrmProspectForMissionBoundKey,
   loadCrmProspectsForMissionBoundCompanies,

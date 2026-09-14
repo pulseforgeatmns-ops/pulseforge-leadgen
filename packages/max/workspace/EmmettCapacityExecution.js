@@ -346,18 +346,18 @@ async function runEmmettForAmoMission(mission, opts = {}) {
     || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
     || [];
   const {
-    listMissionBoundProspectIds,
+    listMissionBoundCompanyIds,
   } = require('./EmmettMissionCandidates');
-  const { loadCrmProspectsByIds } = require('./MissionBoundCrmResolver');
+  const { loadCrmProspectsForMissionBoundCompanies } = require('./MissionBoundCrmResolver');
 
   let crmByProspectId = opts.crmByProspectId || null;
   if (!crmByProspectId && opts.pool) {
     const clientId = Number(mission.clientId || mission.tenantId || opts.tenantId);
-    const prospectIds = listMissionBoundProspectIds(mission, contributions);
-    if (prospectIds.length) {
-      crmByProspectId = await loadCrmProspectsByIds({
+    const companyIds = listMissionBoundCompanyIds(mission, contributions);
+    if (companyIds.length) {
+      crmByProspectId = await loadCrmProspectsForMissionBoundCompanies({
         clientId,
-        prospectIds,
+        companyIds,
         pool: opts.pool,
       });
     }

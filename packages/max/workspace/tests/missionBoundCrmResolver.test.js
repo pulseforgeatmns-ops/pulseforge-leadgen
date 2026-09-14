@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const {
   normalizeProspectIds,
   loadCrmProspectsByIds,
+  loadBestCrmProspectForMissionBoundKey,
+  inspectMissionBoundCrmForQueueItem,
 } = require('../MissionBoundCrmResolver');
 
 const PRODUCTION_UUIDS = Object.freeze([
@@ -81,5 +83,80 @@ describe('MissionBoundCrmResolver UUID CRM load', () => {
     });
     assert.equal(queried, false);
     assert.equal(map.size, 0);
+  });
+
+  it('loadBestCrmProspectForMissionBoundKey resolves company_id, not prospects.id', async () => {
+    const companyId = PRODUCTION_UUIDS[4];
+    const contactId = '7adbb294-b94c-45c0-85df-e040f027ece0';
+    const calls = [];
+    const pool = {
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        return {
+          rows: [{
+            prospect_id: contactId,
+            company_id: companyId,
+            client_id: 10,
+            email: 'jmeyer@backusmeyer.com',
+            email_status: 'verified',
+            email_verified: true,
+            do_not_contact: false,
+            enrichment_provenance: { email: { source: 'provider_chain' } },
+          }],
+        };
+      },
+    };
+
+    const row = await loadBestCrmProspectForMissionBoundKey({
+      clientId: 10,
+      pool,
+      missionBoundKey: companyId,
+    });
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].sql, /company_id::text = \$2/);
+    assert.equal(calls[0].params[1], companyId);
+    assert.equal(row.prospect_id, contactId);
+    assert.equal(row.email, 'jmeyer@backusmeyer.com');
+  });
+
+  it('inspectMissionBoundCrmForQueueItem marks Backus projectable and Deliverability Test excluded', async () => {
+    const backusCompany = PRODUCTION_UUIDS[4];
+    const pool = {
+      query: async (_sql, params) => {
+        if (params[1] === backusCompany) {
+          return {
+            rows: [{
+              prospect_id: '7adbb294-b94c-45c0-85df-e040f027ece0',
+              company_id: backusCompany,
+              email: 'jmeyer@backusmeyer.com',
+              email_status: 'verified',
+              email_verified: true,
+              do_not_contact: false,
+              enrichment_provenance: { email: { source: 'provider_chain' } },
+            }],
+          };
+        }
+        return { rows: [] };
+      },
+    };
+
+    const backus = await inspectMissionBoundCrmForQueueItem({
+      pool,
+      clientId: 10,
+      missionBoundKey: backusCompany,
+      companyName: 'Backus Meyer',
+    });
+    assert.equal(backus.crmEmailPresent, true);
+    assert.equal(backus.crmProjectable, true);
+    assert.equal(backus.projectionBlockReason, null);
+
+    const deliverability = await inspectMissionBoundCrmForQueueItem({
+      pool,
+      clientId: 10,
+      missionBoundKey: '392b9b51-e202-4700-8c34-5feeee952bf0',
+      companyName: 'Deliverability Test Firm',
+    });
+    assert.equal(deliverability.deliverabilityTestExcluded, true);
+    assert.equal(deliverability.projectionBlockReason, 'deliverability_test_excluded');
   });
 });

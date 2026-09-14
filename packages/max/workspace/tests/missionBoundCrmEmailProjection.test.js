@@ -121,7 +121,7 @@ function capacityFromCandidates(candidates) {
 describe('mission-bound CRM email projection at PREPARE', () => {
   it('projects verified CRM email when discovery email is null', () => {
     const crmByProspectId = new Map([
-      ['101', verifiedCrm(101, 'partner@harborlaw.com')],
+      ['co-harbor', verifiedCrm('contact-harbor', 'partner@harborlaw.com')],
     ]);
     const candidates = buildMissionBoundCandidates(MISSION, buildContributions(), { crmByProspectId });
     const harbor = candidates.find((row) => row.id === 'co-harbor');
@@ -132,8 +132,8 @@ describe('mission-bound CRM email projection at PREPARE', () => {
 
   it('does not project invalid or unverified CRM email', () => {
     const crmByProspectId = new Map([
-      ['101', { id: 101, email: 'bad@example.com', email_status: 'invalid', email_verified: false, do_not_contact: false }],
-      ['102', { id: 102, email: 'ops@granitelegal.com', email_status: 'risky', email_verified: true, do_not_contact: false }],
+      ['co-harbor', { id: 'contact-harbor', email: 'bad@example.com', email_status: 'invalid', email_verified: false, do_not_contact: false }],
+      ['co-granite', { id: 'contact-granite', email: 'ops@granitelegal.com', email_status: 'risky', email_verified: true, do_not_contact: false }],
     ]);
     const candidates = buildMissionBoundCandidates(MISSION, buildContributions(), { crmByProspectId });
     assert.equal(candidates.find((row) => row.id === 'co-harbor').email, null);
@@ -142,7 +142,7 @@ describe('mission-bound CRM email projection at PREPARE', () => {
 
   it('does not project email from DNC CRM records', () => {
     const crmByProspectId = new Map([
-      ['101', { ...verifiedCrm(101, 'partner@harborlaw.com'), do_not_contact: true }],
+      ['co-harbor', { ...verifiedCrm('contact-harbor', 'partner@harborlaw.com'), do_not_contact: true }],
     ]);
     const candidates = buildMissionBoundCandidates(MISSION, buildContributions(), { crmByProspectId });
     assert.equal(candidates.find((row) => row.id === 'co-harbor').email, null);
@@ -150,8 +150,8 @@ describe('mission-bound CRM email projection at PREPARE', () => {
 
   it('never introduces CRM-only prospects outside the mission-bound set', () => {
     const crmByProspectId = new Map([
-      ['101', verifiedCrm(101, 'partner@harborlaw.com')],
-      ['999', verifiedCrm(999, 'stranger@otherfirm.com')],
+      ['co-harbor', verifiedCrm('contact-harbor', 'partner@harborlaw.com')],
+      ['co-stranger', verifiedCrm('contact-stranger', 'stranger@otherfirm.com')],
     ]);
     const candidates = buildMissionBoundCandidates(MISSION, buildContributions(), { crmByProspectId });
     assert.equal(candidates.length, 2);
@@ -164,8 +164,8 @@ describe('mission-bound CRM email projection at PREPARE', () => {
     assert.equal(
       resolveMissionBoundRecipientEmail({
         discoveryEmail: 'legacy@discovery.com',
-        prospectId: 101,
-        crmByProspectId: new Map([['101', verifiedCrm(101, 'crm@harborlaw.com')]]),
+        missionBoundKey: 'co-harbor',
+        crmByProspectId: new Map([['co-harbor', verifiedCrm('contact-harbor', 'crm@harborlaw.com')]]),
       }),
       'legacy@discovery.com'
     );
@@ -179,7 +179,7 @@ describe('mission-bound CRM email projection at PREPARE', () => {
 
   it('SPEC-212 still passes after CAPACITY persist/reload with projected CRM email', () => {
     const crmByProspectId = new Map([
-      ['101', verifiedCrm(101, 'partner@harborlaw.com')],
+      ['co-harbor', verifiedCrm('contact-harbor', 'partner@harborlaw.com')],
     ]);
     const candidates = buildMissionBoundCandidates(MISSION, buildContributions(), { crmByProspectId });
     const capacity = capacityFromCandidates(candidates);
@@ -195,14 +195,14 @@ describe('mission-bound CRM email projection at PREPARE', () => {
     const validation = validateProspectMessageBindings(reloaded);
     assert.equal(validation.valid, true);
     assert.equal(validation.result, BINDING_VALIDATION_RESULTS.VALID);
-    const harborItem = items.find((row) => String(row.prospectId) === '101' || String(row.prospectId) === 'co-harbor');
+    const harborItem = items.find((row) => String(row.prospectId) === 'co-harbor');
     assert.ok(harborItem);
     assert.equal(harborItem.email, 'partner@harborlaw.com');
   });
 
   it('sendableQueueItems sees eligible item when verified CRM email was projected', () => {
     const crmByProspectId = new Map([
-      ['101', verifiedCrm(101, 'partner@harborlaw.com')],
+      ['co-harbor', verifiedCrm('contact-harbor', 'partner@harborlaw.com')],
     ]);
     const candidates = buildMissionBoundCandidates(MISSION, buildContributions(), { crmByProspectId });
     const capacity = capacityFromCandidates(candidates);
