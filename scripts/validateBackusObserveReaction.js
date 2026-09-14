@@ -22,6 +22,7 @@ const {
   ensureObserveReactionSchema,
   persistObserveReactionFromObservation,
 } = require('../services/acquisitionMissionPersistence');
+const { listEffectiveObserveReactions } = require('../packages/acquisition-mission/ObserveReaction');
 const { evaluateObserveReaction } = require('../packages/acquisition-mission/ObserveEvaluator');
 const { loadPreparedOutreachCadence } = require('../services/preparedOutreachArtifactLoader');
 const { interpretMissionObservation } = require('../packages/acquisition-mission/ObservationInterpretation');
@@ -239,6 +240,31 @@ async function run(options = {}) {
     }
   }
 
+  const effectiveReactions = listEffectiveObserveReactions(
+    reactions.map((row) => ({
+      id: row.id,
+      observationId: row.observation_id,
+      missionId: row.mission_id,
+      evidenceType: row.evidence_type,
+      evidenceStrength: row.evidence_strength,
+      updatedDisposition: row.updated_disposition,
+      recommendedNextAction: row.recommended_next_action,
+      recommendedTiming: row.recommended_timing,
+      evaluationKind: row.evaluation_kind,
+      evaluationSequence: row.evaluation_sequence,
+      reevaluationTriggerKind: row.reevaluation_trigger_kind,
+      reevaluationTriggerId: row.reevaluation_trigger_id,
+      supersedesReactionId: row.supersedes_reaction_id,
+      at: row.at,
+    })),
+    args.missionId
+  );
+  const latestEffectiveReaction = effectiveReactions.length
+    ? effectiveReactions[effectiveReactions.length - 1]
+    : null;
+  const latestHumanOpenEffective = [...effectiveReactions]
+    .reverse()
+    .find((row) => row.evidenceType === 'human_open') || null;
   const latestReaction = reactions.length ? reactions[reactions.length - 1] : null;
   const report = {
     spec: 'SPEC-251',
@@ -249,7 +275,22 @@ async function run(options = {}) {
     missionConfidence: missionRow.confidence,
     observationCount: observations.length,
     persistedReactionCount: reactions.length,
+    effectiveReactionCount: effectiveReactions.length,
     backfill: args.backfill ? backfillResults : undefined,
+    latestEffectiveReaction: latestEffectiveReaction
+      ? {
+        id: latestEffectiveReaction.id,
+        observationId: latestEffectiveReaction.observationId,
+        evidenceType: latestEffectiveReaction.evidenceType,
+        evidenceStrength: latestEffectiveReaction.evidenceStrength,
+        updatedDisposition: latestEffectiveReaction.updatedDisposition,
+        recommendedNextAction: latestEffectiveReaction.recommendedNextAction,
+        recommendedTiming: latestEffectiveReaction.recommendedTiming,
+        evaluationKind: latestEffectiveReaction.evaluationKind,
+        reevaluationTriggerKind: latestEffectiveReaction.reevaluationTriggerKind,
+        supersedesReactionId: latestEffectiveReaction.supersedesReactionId,
+      }
+      : null,
     latestPersistedReaction: latestReaction
       ? {
         id: latestReaction.id,
@@ -299,9 +340,20 @@ async function run(options = {}) {
       missionConfidenceUnchanged: true,
       missionRemainsObserve: missionRow.stage === 'observe',
       cadenceResolved: preparedCadence?.cadenceSource === 'prepared_sequence',
-      cadenceWaitDays: latestReaction?.recommended_timing?.waitDays
+      effectiveHumanOpenTiming: latestHumanOpenEffective?.recommendedTiming || null,
+      cadenceWaitDays: latestHumanOpenEffective?.recommendedTiming?.waitDays
         ?? candidateState?.recommended_timing?.waitDays
+        ?? latestReaction?.recommended_timing?.waitDays
         ?? null,
+      effectiveTimingKind: latestHumanOpenEffective?.recommendedTiming?.kind
+        ?? candidateState?.recommended_timing?.kind
+        ?? latestReaction?.recommended_timing?.kind
+        ?? null,
+      effectiveCadenceSource: latestHumanOpenEffective?.recommendedTiming?.cadenceSource
+        ?? candidateState?.recommended_timing?.cadenceSource
+        ?? latestReaction?.recommended_timing?.cadenceSource
+        ?? null,
+      usesEffectiveReevaluation: latestHumanOpenEffective?.evaluationKind === 'cadence_reevaluation',
     },
   };
 

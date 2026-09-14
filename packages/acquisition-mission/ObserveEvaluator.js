@@ -344,9 +344,9 @@ function buildObserveAssessmentForMission(mission, store = {}) {
   const candidateStates = store.listCandidateObserveStates
     ? store.listCandidateObserveStates(mission.id)
     : [];
-  const reactions = store.listObserveReactions
-    ? store.listObserveReactions(mission.id)
-    : [];
+  const reactions = store.listEffectiveObserveReactions
+    ? store.listEffectiveObserveReactions(mission.id)
+    : (store.listObserveReactions ? store.listObserveReactions(mission.id) : []);
   const latestReaction = reactions.length ? reactions[reactions.length - 1] : null;
   return buildMissionObserveAssessment({
     mission,

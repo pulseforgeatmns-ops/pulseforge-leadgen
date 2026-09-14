@@ -227,8 +227,26 @@ function createMemoryAmoStore(opts = {}) {
 
   function addObserveReaction(row) {
     if (!row?.id) return null;
-    const existing = observeReactions.find((item) => item.id === row.id || item.observationId === row.observationId);
-    if (existing) return clone(existing);
+    const existingById = observeReactions.find((item) => item.id === row.id);
+    if (existingById) return clone(existingById);
+
+    const evaluationKind = row.evaluationKind || 'initial';
+    if (evaluationKind === 'initial') {
+      const existingInitial = observeReactions.find(
+        (item) => item.observationId === row.observationId
+          && (item.evaluationKind || 'initial') === 'initial'
+      );
+      if (existingInitial) return clone(existingInitial);
+    }
+
+    if (row.reevaluationTriggerId) {
+      const existingReeval = observeReactions.find(
+        (item) => item.observationId === row.observationId
+          && item.reevaluationTriggerId === row.reevaluationTriggerId
+      );
+      if (existingReeval) return clone(existingReeval);
+    }
+
     observeReactions.push(clone(row));
     return clone(row);
   }
@@ -240,8 +258,15 @@ function createMemoryAmoStore(opts = {}) {
       .map(clone);
   }
 
+  function listEffectiveObserveReactions(missionId) {
+    const { listEffectiveObserveReactions: pickEffectiveRows } = require('./ObserveReaction');
+    return pickEffectiveRows(observeReactions, missionId);
+  }
+
   function getObserveReactionByObservationId(observationId) {
-    const found = observeReactions.find((row) => row.observationId === observationId);
+    const { pickEffectiveObserveReaction } = require('./ObserveReaction');
+    const matches = observeReactions.filter((row) => row.observationId === observationId);
+    const found = pickEffectiveObserveReaction(matches);
     return found ? clone(found) : null;
   }
 
@@ -381,6 +406,7 @@ function createMemoryAmoStore(opts = {}) {
     listInterpretations,
     addObserveReaction,
     listObserveReactions,
+    listEffectiveObserveReactions,
     getObserveReactionByObservationId,
     getCandidateObserveState,
     putCandidateObserveState,

@@ -229,7 +229,7 @@ async function run(options = {}) {
       });
 
       if (evaluated.reaction) {
-        await persistObserveReactionFromObservation({
+        const persisted = await persistObserveReactionFromObservation({
           mission,
           observation,
           interpretation: interpretation?.interpretation || null,
@@ -241,14 +241,24 @@ async function run(options = {}) {
             payload: execution.payload,
           },
           preparedCadence,
-        }, pool, { persist: true, now: observation.at || observation.occurredAt });
+        }, pool, {
+          persist: true,
+          now: observation.at || observation.occurredAt,
+          reevaluate: true,
+          reevaluationTriggerId: annotation.id,
+          reevaluationTriggerKind: 'historical_cadence_annotation',
+        });
         reEvaluated.push({
           observationId: observation.id,
           eventType: observation.eventType,
           recommendedTiming: evaluated.reaction.recommendedTiming,
           rationale: evaluated.reaction.rationale,
+          reactionId: persisted.reaction?.id || null,
+          reevaluated: persisted.reevaluated === true,
+          duplicate: persisted.duplicate === true,
+          evaluationKind: persisted.reaction?.evaluationKind || null,
         });
-        priorState = evaluated.candidateState || priorState;
+        priorState = persisted.candidateState || evaluated.candidateState || priorState;
       }
     }
     report.reEvaluated = reEvaluated;
