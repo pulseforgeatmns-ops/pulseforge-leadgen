@@ -537,6 +537,86 @@ describe('regenerateAnchorCapacityRevision — canonical path', () => {
     assert.equal(reloaded.mission.revisionState?.emmettContributionId, persistedNew.id);
   });
 
+  it('revision supersedes all active CAPACITY rows when a prior failed revision left an orphan', async () => {
+    const pool = createRevisionMemoryPool();
+    const { engine, mission } = await preparedReadyMission();
+    simulatePreSpec212Persist(engine, mission.id);
+
+    const before = engine.inspect(mission.id, { tenantId: '10' });
+    const originalCapacity = before.contributions.find(
+      (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
+    );
+    assert.ok(originalCapacity);
+
+    const orphanCapacity = engine.contribute(mission.id, {
+      specialist: SPECIALISTS.EMMETT,
+      kind: CONTRIBUTION_KINDS.CAPACITY,
+      payload: {
+        ...(originalCapacity.payload || {}),
+        transactionId: 'txn_failed_prior_revision',
+        revision: 'replacement',
+      },
+    }, { tenantId: '10' }).contribution;
+    assert.notEqual(orphanCapacity.id, originalCapacity.id);
+
+    const afterOrphan = engine.inspect(mission.id, { tenantId: '10' });
+    const activeBefore = afterOrphan.contributions.filter(
+      (row) => row.specialist === SPECIALISTS.EMMETT
+        && row.kind === CONTRIBUTION_KINDS.CAPACITY
+        && !isSupersededContribution(row)
+    );
+    assert.equal(activeBefore.length, 2, 'orphan scenario requires two active CAPACITY rows');
+
+    await advanceExecutionAfterApproval({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      operatorId: 'operator-1',
+      question: 'Re-authorize bundle with orphan CAPACITY present (production preflight).',
+    });
+
+    await persistEngineMission(engine, mission.id, '10', pool);
+    const paigePayload = activePaigePayload(afterOrphan.contributions);
+
+    const request = amo.createExecutionRequest({
+      source: amo.EXECUTION_SOURCES.API,
+      intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
+      missionId: mission.id,
+      mission: engine.get(mission.id, '10'),
+      operatorId: 'operator-1',
+      stage: STAGES.READY,
+      question: 'Regenerate capacity after orphan cleanup.',
+    });
+
+    const routed = await amo.routeExecutionRequest(request, {
+      engine,
+      tenantId: '10',
+      persist: true,
+      pool,
+      allowFixtureFallback: true,
+      runPaige: async () => paigePayload,
+    });
+    assert.equal(routed.action, 'revise_prepared_outreach');
+    assert.notEqual(routed.executionResult?.rolledBack, true, routed.executionResult?.error?.message);
+
+    const durable = await loadMissionSnapshot(mission.id, '10', pool);
+    const capacities = (durable.contributions || []).filter(
+      (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
+    );
+    assert.equal(capacities.length, 3, 'history preserves original, orphan, and replacement rows');
+
+    const activeCapacities = capacities.filter((row) => !isSupersededContribution(row));
+    assert.equal(activeCapacities.length, 1, 'exactly one active CAPACITY after revision');
+
+    assert.equal(isSupersededContribution(
+      capacities.find((row) => row.id === originalCapacity.id)
+    ), true);
+    assert.equal(isSupersededContribution(
+      capacities.find((row) => row.id === orphanCapacity.id)
+    ), true);
+    assert.equal(activeCapacities[0].id, durable.mission.revisionState?.emmettContributionId);
+  });
+
   it('durable supersede verification passes for production nested CAPACITY JSONB', async () => {
     const pool = createRevisionMemoryPool();
     const { engine, mission } = await preparedReadyMission();

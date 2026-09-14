@@ -40,15 +40,23 @@ function parseArgs(argv = process.argv.slice(2)) {
   return { confirmProduction, repair, help, missionId };
 }
 
-function summarizeCapacityRow(row) {
+function summarizeCapacityRow(row, missionBody = {}) {
   const body = row.payload || {};
+  const id = row.id || row.capacity_id;
+  const revisionPointer = missionBody.revisionState?.emmettContributionId || null;
+  const pendingPointer = missionBody.pendingOperatorDecision?.executionReview
+    ?.artifactBinding?.emmettContributionId || null;
   return {
-    id: row.id || row.capacity_id,
+    id,
     at: row.at,
     topLevelSuperseded: body.superseded === true,
     nestedSuperseded: body.payload?.superseded === true,
     canonicalSuperseded: isSupersededContribution(row),
     supersededBy: body.supersededBy || body.payload?.supersededBy || null,
+    revisionBinding: body.revision || body.payload?.revision || null,
+    transactionId: body.transactionId || body.payload?.transactionId || null,
+    referencedByRevisionPointer: revisionPointer ? String(revisionPointer) === String(id) : false,
+    referencedByPendingExecutionApproval: pendingPointer ? String(pendingPointer) === String(id) : false,
   };
 }
 
@@ -86,18 +94,27 @@ async function run(options = {}) {
   const activeRows = contributions.filter((row) => !isSupersededContribution(row));
   const staleRows = contributions.filter((row) => isSupersededContribution(row));
 
+  const activeCapacityIds = activeRows.map((row) => row.id);
   const report = {
     tenantId: TENANT_ID,
     missionId,
     stage: durable.mission.stage,
     revisionPointer: missionBody.revisionState?.emmettContributionId || null,
-    capacityRows: contributions.map(summarizeCapacityRow),
+    pendingExecutionApprovalPointer:
+      missionBody.pendingOperatorDecision?.executionReview?.artifactBinding?.emmettContributionId || null,
+    capacityRows: contributions.map((row) => summarizeCapacityRow(row, missionBody)),
+    activeCapacityIds,
+    canonicalActiveCapacityId: active?.capacity_id || active?.id || null,
     activeCapacityId: active?.capacity_id || active?.id || null,
     activeNonSupersededCount: activeRows.length,
     staleCount: staleRows.length,
     requiresRepair: activeRows.length !== 1,
     repairPerformed: false,
     repairedRowIds: [],
+    orphanHypothesis:
+      activeRows.length > 1
+        ? 'Multiple non-superseded CAPACITY rows — likely a prior failed revision left an orphan while only the latest predecessor was superseded.'
+        : null,
   };
 
   if (options.repair && report.requiresRepair && active?.capacity_id) {
@@ -132,7 +149,15 @@ async function run(options = {}) {
       (row) => !isSupersededContribution(row)
     ).length;
     report.requiresRepair = report.activeNonSupersededCount !== 1;
-    report.capacityRows = reloadedCapacities.map(summarizeCapacityRow);
+    const reloadedMissionBody = unwrapMissionPayload(reloaded.mission);
+    report.capacityRows = reloadedCapacities.map((row) => summarizeCapacityRow(row, reloadedMissionBody));
+    report.activeCapacityIds = reloadedCapacities
+      .filter((row) => !isSupersededContribution(row))
+      .map((row) => row.id);
+    report.canonicalActiveCapacityId = selectActiveCapacityContribution(
+      reloadedMissionBody,
+      reloadedCapacities.map((row) => ({ ...row, capacity_id: row.id }))
+    )?.capacity_id || null;
   }
 
   return report;
