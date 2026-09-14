@@ -11,9 +11,11 @@ const {
   MESSAGE_STATUS,
   EVENT_TYPES,
   SEQUENCE_STATE,
+  PROVIDER_TYPES,
   babrunMailboxConfig,
   publicIntegration,
   publicIdentity,
+  createSmtpTransport,
   sendTenantEmail,
   pollTenantMailbox,
   markTenantSuppression,
@@ -352,6 +354,69 @@ describe('SPEC-248 tenant mailbox safety', () => {
     assert.equal(cfg.integration.imapPassword, undefined);
     assert.equal(cfg.integration.password, undefined);
     assert.match(JSON.stringify(cfg), /BABRUN_MAILBOX_SMTP_PASSWORD/);
+  });
+
+  it('TEST SPEC-248: IPv4 SMTP failure does not mark message sent and retry remains idempotent', async () => {
+    const { store, identity } = await seedStore();
+    const transport = {
+      calls: [],
+      async sendMail(payload) {
+        this.calls.push(payload);
+        if (this.calls.length === 1) {
+          throw Object.assign(new Error('connect ENETUNREACH 2a06:6440:0:2c13::1:465'), { code: 'ESOCKET' });
+        }
+        return { messageId: '<ipv4-retry@example.com>' };
+      },
+    };
+    const input = {
+      tenantId: 'tenant-a',
+      sendingIdentityId: identity.id,
+      to: 'buyer@example.com',
+      subject: 'x',
+      body: 'x',
+      metadata: { idempotencyKey: 'ipv4-network-failure' },
+    };
+
+    await assert.rejects(
+      () => sendTenantEmail(input, { store, transport, secretResolver: fakeSecretResolver }),
+      (err) => err.code === 'ESOCKET'
+    );
+    const failed = [...store.messages.values()].find((msg) => msg.metadata.idempotencyKey === 'ipv4-network-failure');
+    assert.equal(failed.status, MESSAGE_STATUS.FAILED);
+    assert.equal(failed.sentAt, null);
+    assert.equal(failed.metadata.providerAccepted, false);
+
+    const retry = await sendTenantEmail(input, { store, transport, secretResolver: fakeSecretResolver });
+    assert.equal(retry.sent, true);
+    assert.equal(retry.duplicate, false);
+    assert.equal(retry.message.status, MESSAGE_STATUS.SENT);
+    assert.equal(transport.calls.length, 2);
+
+    const duplicate = await sendTenantEmail(input, { store, transport, secretResolver: fakeSecretResolver });
+    assert.equal(duplicate.duplicate, true);
+    assert.equal(transport.calls.length, 2);
+  });
+
+  it('TEST SPEC-248: GENERIC_SMTP_IMAP transport uses provider hostname for TLS servername', () => {
+    const captured = { options: null };
+    createSmtpTransport({
+      providerType: PROVIDER_TYPES.GENERIC_SMTP_IMAP,
+      smtpHost: 'mail.adm.tools',
+      smtpPort: 465,
+      smtpTlsMode: 'SSL_TLS',
+      mailboxAddress: 'hello@example.com',
+    }, 'dummy-smtp-password', {
+      nodemailer: {
+        createTransport(options) {
+          captured.options = options;
+          return {};
+        },
+      },
+      smtpGetSocket: () => {},
+    });
+    assert.equal(captured.options.host, 'mail.adm.tools');
+    assert.equal(captured.options.tls.servername, 'mail.adm.tools');
+    assert.equal(captured.options.auth.pass, 'dummy-smtp-password');
   });
 
   it('TEST Q: Mailbox verification exposes SMTP and IMAP verification state', async () => {
