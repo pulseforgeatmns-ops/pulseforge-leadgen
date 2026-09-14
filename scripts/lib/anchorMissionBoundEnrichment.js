@@ -287,7 +287,6 @@ module.exports = {
   isExcludedCompany,
   crmProjectionRow,
   loadProspectRow,
-  loadProspectRowsByIds,
   loadMissionBoundProspects,
   persistProviderChainEmail,
   enrichProspectRow,
