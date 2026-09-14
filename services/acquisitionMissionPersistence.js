@@ -273,7 +273,9 @@ async function persistContribution(row, tenantId, pool = defaultPool(), opts = {
 
 async function persistObservation(row, tenantId, pool = defaultPool(), opts = {}) {
   if (!row?.id) return null;
-  if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistObservation');
+  if (opts.internalStageCommit !== true && opts.providerWebhookSideEffect !== true) {
+    assertExclusiveMissionWriter('persistObservation');
+  }
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_observations (id, mission_id, tenant_id, specialist, observation, payload, at)
@@ -282,6 +284,53 @@ async function persistObservation(row, tenantId, pool = defaultPool(), opts = {}
     [row.id, row.missionId, String(tenantId), row.specialist, row.observation, row, row.at]
   );
   return row;
+}
+
+/**
+ * Durable provider webhook observation — idempotent on observation id (obs_<provider_event_row_id>).
+ * Does not require mission hydration or stage-commit locks (ADR-099 continuity for Brevo evidence).
+ */
+async function persistProviderCommunicationObservation(providerEvent = {}, pool = defaultPool(), opts = {}) {
+  const {
+    createCommunicationObservation,
+    isCommunicationEvidenceEventType,
+    buildCommunicationObservationId,
+  } = require('../packages/acquisition-mission/CommunicationObservation');
+
+  if (!providerEvent?.missionId || !providerEvent?.tenantId) {
+    return { skipped: true, reason: 'missing_mission_or_tenant' };
+  }
+  if (!isCommunicationEvidenceEventType(providerEvent.eventType)) {
+    return { skipped: true, reason: 'unsupported_event_type', eventType: providerEvent.eventType };
+  }
+
+  const observation = createCommunicationObservation(providerEvent);
+  if (!observation) {
+    return { skipped: true, reason: 'observation_not_created' };
+  }
+
+  const observationId = buildCommunicationObservationId(providerEvent);
+  if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
+
+  const existing = await pool.query(
+    'SELECT id FROM acquisition_mission_observations WHERE id = $1 LIMIT 1',
+    [observationId]
+  );
+  const duplicate = existing.rows.length > 0;
+  if (!duplicate) {
+    await persistObservation(observation, providerEvent.tenantId, pool, {
+      skipEnsure: true,
+      providerWebhookSideEffect: true,
+    });
+  }
+
+  return {
+    observation,
+    observationId,
+    inserted: !duplicate,
+    duplicate,
+    persisted: true,
+  };
 }
 
 async function persistOutcome(row, pool = defaultPool(), opts = {}) {
@@ -781,6 +830,7 @@ module.exports = {
   persistEvent,
   persistContribution,
   persistObservation,
+  persistProviderCommunicationObservation,
   persistOutcome,
   persistLearning,
   persistPrediction,
