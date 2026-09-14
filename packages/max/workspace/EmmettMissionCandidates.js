@@ -146,7 +146,7 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
       prospectId,
       email: resolveMissionBoundRecipientEmail({
         discoveryEmail: prospect?.email,
-        prospectId,
+        missionBoundKey: candidateId,
         crmByProspectId,
       }),
       company: name || opp.name || prospect?.company || `Target ${rank}`,

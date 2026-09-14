@@ -22,11 +22,11 @@ const { unwrapContributionPayload } = require('./validateAnchorCanonicalMission'
 const { sendableQueueItems } = require('./executeAnchorOneOutbound');
 const { invalidOutreachEmailReason } = require('../utils/emailGuard');
 const { loadActiveCapacityForMission } = require('./lib/activeCapacitySelection');
+const { inspectMissionBoundCrmForQueueItem } = require('../packages/max/workspace/MissionBoundCrmResolver');
 
 const TENANT_ID = '10';
 const CLIENT_ID = 10;
 const DEFAULT_MISSION_ID = 'mission_ad7753b0-6def-441d-bb1a-3764656f5750';
-const VERIFIED_EMAIL_STATUSES = new Set(['valid', 'verified']);
 
 const SENDABLE_PREDICATE = Object.freeze({
   script: 'executeAnchorOneOutbound.sendableQueueItems',
@@ -96,22 +96,6 @@ function scriptRejectReason(item) {
   return null;
 }
 
-async function loadProspect(db, prospectId) {
-  if (!prospectId) return null;
-  const { rows } = await db.query(
-    `SELECT p.id, p.email, p.email_status, p.email_verified, p.do_not_contact,
-            p.first_name, p.last_name, p.phone, p.vertical,
-            c.id AS company_id, c.name AS company_name
-       FROM prospects p
-       LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
-      WHERE p.client_id = $1
-        AND p.id::text = $2
-      LIMIT 1`,
-    [CLIENT_ID, String(prospectId)]
-  );
-  return rows[0] || null;
-}
-
 async function run(options = {}) {
   const args = options.missionId != null || options.confirmProduction
     ? { missionId: options.missionId || DEFAULT_MISSION_ID }
@@ -142,31 +126,38 @@ async function run(options = {}) {
   const rows = [];
   for (let i = 0; i < items.length; i += 1) {
     const item = items[i];
-    const prospectId = String(item.prospectId || item.id || '').trim() || null;
-    const crm = await loadProspect(db, prospectId);
+    const missionBoundKey = String(item.prospectId || item.id || '').trim() || null;
+    const companyName = item.company || item.name || null;
+    const crmInspect = await inspectMissionBoundCrmForQueueItem({
+      pool: db,
+      clientId: CLIENT_ID,
+      missionBoundKey,
+      companyName,
+    });
     const emailOnItem = String(item.email || '').trim() || null;
     const emailGuard = emailOnItem ? invalidOutreachEmailReason(emailOnItem) : 'missing_email';
-    const crmEmail = crm?.email ? String(crm.email).trim() : null;
-    const crmVerified = crm
-      && crm.do_not_contact !== true
-      && VERIFIED_EMAIL_STATUSES.has(String(crm.email_status || '').toLowerCase())
-      && crm.email_verified === true
-      && Boolean(crmEmail)
-      && !invalidOutreachEmailReason(crmEmail);
     const reject = scriptRejectReason(item);
     rows.push({
       index: i,
-      prospectId,
-      company: item.company || item.name || crm?.company_name || null,
+      prospectId: missionBoundKey,
+      missionBoundKey,
+      missionBoundKeySemantics: 'company/candidate ID from Max prioritization — not prospects.id',
+      crmContactId: crmInspect.crmContactId,
+      crmCompanyId: crmInspect.crmCompanyId,
+      company: companyName,
       itemSendable: item.sendable,
       paigeSendable: item.paige?.sendable ?? null,
       emailOnQueueItem: emailOnItem,
       emailGuardOnItem: emailGuard,
-      dnc: item.dnc === true || crm?.do_not_contact === true,
+      dnc: item.dnc === true || crmInspect.projectionBlockReason === 'do_not_contact',
       spec212: spec212ItemValid(item, i, spec212),
-      crmEmailPresent: Boolean(crmEmail),
-      crmEmailVerified: crmVerified,
-      crmEmailStatus: crm?.email_status || null,
+      crmEmailPresent: crmInspect.crmEmailPresent,
+      crmEmailVerified: crmInspect.crmEmailVerified,
+      crmProjectable: crmInspect.crmProjectable,
+      crmEmailStatus: crmInspect.crmEmailStatus,
+      projectionBlockReason: crmInspect.projectionBlockReason,
+      emailProvenanceSource: crmInspect.emailProvenanceSource,
+      deliverabilityTestExcluded: crmInspect.deliverabilityTestExcluded,
       scriptRejectReason: reject,
       sendableByScript: reject == null,
     });
@@ -181,8 +172,11 @@ async function run(options = {}) {
     return top ? top[0] : 'unknown';
   })();
 
-  const upstreamExists = rows.some((r) => r.crmEmailVerified === true);
+  const upstreamExists = rows.some((r) => r.crmProjectable === true);
   const projected = rows.some((r) => r.emailOnQueueItem);
+  const projectableNotOnQueue = rows.filter(
+    (r) => r.crmProjectable === true && !r.emailOnQueueItem
+  );
 
   return {
     missionId,
@@ -204,12 +198,17 @@ async function run(options = {}) {
             : 'See per-item reject reasons.',
     upstreamVerifiedEmailExists: upstreamExists,
     upstreamProjectedIntoCapacity: projected,
+    projectableCrmNotProjectedCount: projectableNotOnQueue.length,
+    projectableCrmNotProjectedKeys: projectableNotOnQueue.map((r) => r.missionBoundKey),
+    crmResolver: 'loadBestCrmProspectForMissionBoundKey (company_id::text = missionBoundKey)',
     smallestCanonicalFix:
-      firstBlocker === 'missing_recipient_email_on_queue_item' && upstreamExists
-        ? 'At PREPARE/REVISE, project verified CRM recipient email onto each mission-bound queue item (prospectId join to prospects where email_status in valid|verified, email_verified=true, do_not_contact=false). Then REVISE_PREPARED_OUTREACH to regenerate CAPACITY. Do not weaken sendable predicate or bypass verification.'
-        : firstBlocker === 'missing_recipient_email_on_queue_item'
-          ? 'Enrich mission-bound prospects to verified email in CRM, ensure Scout DISCOVERY snapshot includes email on matched prospects, then REVISE_PREPARED_OUTREACH to regenerate CAPACITY with projected emails.'
-          : 'Regenerate CAPACITY after fixing the firstBlocker condition at PREPARE inputs.',
+      firstBlocker === 'missing_recipient_email_on_queue_item' && projectableNotOnQueue.length
+        ? 'PREPARE must resolve mission-bound company/candidate IDs through loadCrmProspectsForMissionBoundCompanies and project verified CRM email onto queue items. Run one REVISE_PREPARED_OUTREACH after PREPARE projection is fixed. Do not weaken sendable predicate or bypass verification.'
+        : firstBlocker === 'missing_recipient_email_on_queue_item' && upstreamExists
+          ? 'At PREPARE/REVISE, project verified CRM recipient email onto each mission-bound queue item via company→contact resolver (email_status in valid|verified, email_verified=true, legitimate provenance, do_not_contact=false). Then REVISE_PREPARED_OUTREACH to regenerate CAPACITY.'
+          : firstBlocker === 'missing_recipient_email_on_queue_item'
+            ? 'Enrich mission-bound companies to a projectable CRM contact, then REVISE_PREPARED_OUTREACH to regenerate CAPACITY with projected emails.'
+            : 'Regenerate CAPACITY after fixing the firstBlocker condition at PREPARE inputs.',
     scriptRerunUnchanged:
       firstBlocker === 'missing_recipient_email_on_queue_item'
         ? 'No — regenerate CAPACITY (REVISE_PREPARED_OUTREACH) after email projection fix; then executeAnchorOneOutbound.js can rerun unchanged.'
