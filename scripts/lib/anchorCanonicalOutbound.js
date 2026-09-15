@@ -19,6 +19,7 @@ const { evaluatePrioritizationReadiness } = require('../../packages/acquisition-
 const { unwrapContributionPayload, scoutCandidateCount } = require('../validateAnchorCanonicalMission');
 const { sendableQueueItems } = require('../executeAnchorOneOutbound');
 const { selectActiveCapacityContribution } = require('./activeCapacitySelection');
+const { findBoundVariant } = require('../../packages/max/workspace/EmmettMissionCandidates');
 
 const TENANT_ID = '10';
 const CLIENT_ID = 10;
@@ -85,8 +86,22 @@ function maxRankedCount(payload) {
   return 0;
 }
 
-function classifyQueueItems(capacityPayload) {
+function queueItemHasPaigeCopy(item, variants = []) {
+  if (item?.paige?.subject && item?.paige?.body) return true;
+  const bound = findBoundVariant(variants, [
+    item?.paige?.candidateId,
+    item?.candidateId,
+    item?.id,
+    item?.companyId,
+    item?.prospectId,
+  ]);
+  return Boolean(bound?.subject && bound?.body);
+}
+
+function classifyQueueItems(capacityPayload, paigePayload) {
   const body = unwrapContributionPayload(capacityPayload) || {};
+  const paige = unwrapContributionPayload(paigePayload) || {};
+  const variants = Array.isArray(paige.variants) ? paige.variants : [];
   const items = Array.isArray(body.queue?.items) ? body.queue.items : [];
   const sendable = sendableQueueItems(body);
   const sendableIds = new Set(sendable.map((row) => String(row.prospectId || row.id || row.candidateId || '')));
@@ -99,11 +114,13 @@ function classifyQueueItems(capacityPayload) {
         if (item.sendable === false) reasons.push('sendable_false');
         if (item.dnc === true) reasons.push('dnc');
         if (!String(item.email || '').trim()) reasons.push('missing_recipient_email_on_queue_item');
-        if (!item.paige?.subject || !item.paige?.body) reasons.push('missing_paige_copy');
+        if (!queueItemHasPaigeCopy(item, variants)) reasons.push('missing_paige_copy');
       }
       return {
         prospectId: item?.prospectId || null,
-        candidateId: item?.id || item?.candidateId || null,
+        candidateId: item?.candidateId || item?.id || item?.paige?.candidateId || null,
+        companyId: item?.companyId || null,
+        crmProspectId: item?.crmProspectId || null,
         company: item?.company || null,
         reasons,
       };
@@ -142,7 +159,7 @@ function summarizeContributions(contributions = [], mission = {}) {
   const discoveryReadiness = scoutPayload
     ? evaluatePrioritizationReadiness(scoutPayload)
     : null;
-  const queue = selectedCapacity ? classifyQueueItems(selectedCapacity.payload) : {
+  const queue = selectedCapacity ? classifyQueueItems(selectedCapacity.payload, paige) : {
     queueCount: 0,
     sendableCount: 0,
     blockedCount: 0,
@@ -328,6 +345,18 @@ function discoveryInvestigationBlocker(summary = {}) {
   };
 }
 
+const BLOCKED_QUEUE_OPERATOR_ACTION =
+  'Resolve blocked recipient/copy requirements before execution approval.';
+
+function blockedCapacityQueueDecision() {
+  return {
+    intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
+    stop: false,
+    reason: 'capacity_queue_blocked',
+    operatorAction: BLOCKED_QUEUE_OPERATOR_ACTION,
+  };
+}
+
 function chooseNextRecoveryIntent(summary = {}) {
   const pendingIntent = summary.pendingIntent || null;
   const stage = summary.stage;
@@ -345,11 +374,7 @@ function chooseNextRecoveryIntent(summary = {}) {
           'APPROVE_EXECUTION for the current prepared artifacts, then EXECUTE_OUTBOUND. Autosend stays off.',
       };
     }
-    return {
-      intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
-      stop: false,
-      reason: 'execution_approval_without_sendable_queue',
-    };
+    return blockedCapacityQueueDecision();
   }
 
   if (stage === STAGES.READY && sendable > 0) {
@@ -425,12 +450,8 @@ function chooseNextRecoveryIntent(summary = {}) {
   if (!summary.contributions?.emmett) {
     return { intent: EXECUTION_INTENTS.GENERATE_CAPACITY, stop: false, reason: 'missing_capacity' };
   }
-  if (Number(summary.sendableCount || 0) === 0 && Number(summary.capacityItemCount || 0) >= 0) {
-    return {
-      intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
-      stop: false,
-      reason: 'capacity_not_sendable',
-    };
+  if (Number(summary.sendableCount || 0) === 0) {
+    return blockedCapacityQueueDecision();
   }
   return {
     intent: null,
@@ -494,6 +515,7 @@ module.exports = {
   isStrOutboundObjective,
   latestContribution,
   classifyQueueItems,
+  queueItemHasPaigeCopy,
   summarizeContributions,
   summarizeMissionSnapshot,
   pickCanonicalStrMission,

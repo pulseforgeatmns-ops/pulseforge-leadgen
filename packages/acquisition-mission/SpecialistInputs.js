@@ -9,11 +9,17 @@ const { asText, SPECIALISTS, CONTRIBUTION_KINDS, clone } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const { buildSharedContext } = require('./Context');
 const { latestApproachDecision } = require('./AcquisitionApproach');
+const { unwrapSpecialistPayload } = require('./ContributionSupersession');
 
 function latestContribution(contributions = [], specialist, kind) {
   return [...contributions]
     .reverse()
     .find((row) => row.specialist === specialist && (!kind || row.kind === kind));
+}
+
+function unwrappedPayload(row, fallback = {}) {
+  if (!row) return fallback;
+  return unwrapSpecialistPayload(row) || fallback;
 }
 
 function findLatestScoutDiscovery(contributions = []) {
@@ -85,8 +91,8 @@ function paigeInput(mission, extras = {}) {
   const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
   const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
   const approachDecision = latestApproachDecision(contributions);
-  const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
-  const maxPayload = maxRow?.payload || sharedContext?.max || {};
+  const scoutPayload = unwrappedPayload(scoutRow, sharedContext?.scout || {});
+  const maxPayload = unwrappedPayload(maxRow, sharedContext?.max || {});
   const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
 
   return {
@@ -224,9 +230,9 @@ function emmettInput(mission, extras = {}) {
   const paigeRow = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
   const approachDecision = latestApproachDecision(contributions);
   const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
-  const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
-  const maxPayload = maxRow?.payload || sharedContext?.max || {};
-  const paigePayload = paigeRow?.payload || {};
+  const scoutPayload = unwrappedPayload(scoutRow, sharedContext?.scout || {});
+  const maxPayload = unwrappedPayload(maxRow, sharedContext?.max || {});
+  const paigePayload = unwrappedPayload(paigeRow, {});
 
   let missionCandidates = extras.missionCandidates || null;
   let paigeReadiness = {

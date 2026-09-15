@@ -365,6 +365,51 @@ describe('Anchor STR canonical outbound recovery', () => {
     assert.equal(chosen.stop, false);
   });
 
+  it('does not request execution approval when sendableCount is 0', () => {
+    const chosen = chooseNextRecoveryIntent({
+      stage: 'ready',
+      pendingIntent: 'APPROVE_EXECUTION',
+      sendableCount: 0,
+      capacityItemCount: 5,
+      scoutCandidateCount: 15,
+      contributions: { scout: {}, max: {}, paige: {}, emmett: {} },
+    });
+    assert.equal(chosen.reason, 'capacity_queue_blocked');
+    assert.notEqual(chosen.intent, 'APPROVE_EXECUTION');
+    assert.notEqual(chosen.intent, 'EXECUTE_OUTBOUND');
+    assert.match(chosen.operatorAction, /Resolve blocked recipient\/copy requirements/);
+  });
+
+  it('classifies sanitized CAPACITY items as having Paige copy via variant join', () => {
+    const classified = classifyQueueItems(
+      {
+        queue: {
+          items: [{
+            prospectId: 'ChIJ43Z_V2dP4okRCRcDHefV8OU',
+            candidateId: 'ChIJ43Z_V2dP4okRCRcDHefV8OU',
+            email: '',
+            sendable: true,
+            paige: {
+              candidateId: 'ChIJ43Z_V2dP4okRCRcDHefV8OU',
+              variantLabel: 'Primary - Blue Door Living Property Management',
+            },
+          }],
+        },
+      },
+      {
+        variants: [{
+          candidateId: 'ChIJ43Z_V2dP4okRCRcDHefV8OU',
+          subject: 'Walkthrough for Blue Door',
+          body: 'Prepared copy',
+        }],
+      }
+    );
+    assert.equal(classified.sendableCount, 0);
+    assert.equal(classified.blocked[0].reasons.includes('missing_recipient_email_on_queue_item'), true);
+    assert.equal(classified.blocked[0].reasons.includes('missing_paige_copy'), false);
+    assert.equal(classified.blocked[0].candidateId, 'ChIJ43Z_V2dP4okRCRcDHefV8OU');
+  });
+
   it('classifies sendable vs missing-email queue items without inventing recipients', () => {
     const classified = classifyQueueItems({
       queue: {
@@ -404,6 +449,8 @@ describe('Anchor STR canonical outbound recovery', () => {
     assert.match(LIB_SRC, /approved_empty_discovery/);
     assert.match(LIB_SRC, /CONTINUE_INVESTIGATION/);
     assert.doesNotMatch(LIB_SRC, /attachEmmettCapacity/);
+    assert.match(LIB_SRC, /capacity_queue_blocked/);
+    assert.doesNotMatch(LIB_SRC, /execution_approval_without_sendable_queue/);
     const workflowSrc = fs.readFileSync(
       path.join(__dirname, '../.github/workflows/anchor-canonical-outbound.yml'),
       'utf8'
