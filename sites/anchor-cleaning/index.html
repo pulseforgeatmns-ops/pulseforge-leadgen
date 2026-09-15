@@ -323,11 +323,103 @@
     gtag('event', 'conversion', { send_to: ads + '/' + label });
   }
 
-  function trackOpenAiLeadCreated(alreadyTracked) {
+  var ATTRIBUTION_STORAGE_KEY = 'anchor_first_party_attribution';
+  var ATTRIBUTION_QUERY_KEYS = [
+    'campaign_id', 'ad_group_id', 'ad_id', 'ad_account_id', 'oppref', 'opref',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'
+  ];
+  var ATTRIBUTION_MAX = {
+    campaign_id: 128, ad_group_id: 128, ad_id: 128, ad_account_id: 128,
+    oppref: 256, opref: 256, utm_source: 128, utm_medium: 128,
+    utm_campaign: 256, utm_content: 256, utm_term: 256,
+    landing_page_url: 2048, referrer: 2048
+  };
+
+  function cleanAttributionValue(value, max) {
+    if (value == null || typeof value === 'object') return '';
+    var text = String(value).replace(/[\0-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
+    return text ? text.slice(0, max) : '';
+  }
+
+  function hasPaidAttributionSignals(raw) {
+    if (!raw) return false;
+    return Boolean(
+      raw.campaign_id || raw.ad_group_id || raw.ad_id || raw.ad_account_id ||
+      raw.oppref || raw.opref || raw.utm_source || raw.utm_medium || raw.utm_campaign
+    );
+  }
+
+  function sanitizeAttributionObject(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    var out = {};
+    var keys = ATTRIBUTION_QUERY_KEYS.concat(['landing_page_url', 'referrer']);
+    keys.forEach(function (key) {
+      var cleaned = cleanAttributionValue(input[key], ATTRIBUTION_MAX[key]);
+      if (cleaned) out[key] = cleaned;
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
+  function parseLandingAttributionFromQuery() {
+    var params = new URLSearchParams(window.location.search || '');
+    var raw = {};
+    ATTRIBUTION_QUERY_KEYS.forEach(function (key) {
+      if (params.has(key)) raw[key] = params.get(key);
+    });
+    return sanitizeAttributionObject(raw);
+  }
+
+  function mergeSessionAttribution(existing, incoming) {
+    var existingSan = sanitizeAttributionObject(existing);
+    var incomingSan = sanitizeAttributionObject(incoming);
+    if (!existingSan) return incomingSan;
+    if (!incomingSan) return existingSan;
+    var existingPaid = hasPaidAttributionSignals(existingSan);
+    var incomingPaid = hasPaidAttributionSignals(incomingSan);
+    if (existingPaid && !incomingPaid) return existingSan;
+    if (!existingPaid && incomingPaid) return Object.assign({}, existingSan, incomingSan);
+    return Object.assign({}, incomingSan, existingSan, {
+      landing_page_url: existingSan.landing_page_url || incomingSan.landing_page_url,
+      referrer: existingSan.referrer || incomingSan.referrer
+    });
+  }
+
+  function readStoredAttribution() {
+    try {
+      var raw = sessionStorage.getItem(ATTRIBUTION_STORAGE_KEY);
+      return raw ? sanitizeAttributionObject(JSON.parse(raw)) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function persistLandingAttribution() {
+    var incoming = parseLandingAttributionFromQuery() || {};
+    incoming.landing_page_url = cleanAttributionValue(
+      String(window.location.href || '').split('#')[0],
+      ATTRIBUTION_MAX.landing_page_url
+    );
+    incoming.referrer = cleanAttributionValue(document.referrer || '', ATTRIBUTION_MAX.referrer);
+    var merged = mergeSessionAttribution(readStoredAttribution(), sanitizeAttributionObject(incoming));
+    if (merged) {
+      try { sessionStorage.setItem(ATTRIBUTION_STORAGE_KEY, JSON.stringify(merged)); } catch (_) {}
+    }
+    return merged;
+  }
+
+  function getSubmissionAttribution() {
+    return readStoredAttribution() || persistLandingAttribution();
+  }
+
+  persistLandingAttribution();
+
+  function trackOpenAiLeadCreated(alreadyTracked, submissionId) {
     if (alreadyTracked.value) return;
     if (typeof window.oaiq !== 'function') return;
     alreadyTracked.value = true;
-    window.oaiq('measure', 'lead_created', { type: 'customer_action' });
+    var payload = { type: 'customer_action' };
+    if (submissionId) payload.submission_id = submissionId;
+    window.oaiq('measure', 'lead_created', payload);
   }
 
   document.querySelectorAll('.js-phone').forEach(function (el) {
@@ -360,6 +452,8 @@
       space_type: form.space_type.value,
       company_website: form.company_website.value
     };
+    var attribution = getSubmissionAttribution();
+    if (attribution) data.attribution = attribution;
     if (!data.name || !data.business_name || !data.phone || !data.email || !data.city || !data.space_type) {
       statusEl.className = 'form-status err';
       statusEl.textContent = 'Please fill in every field.';
@@ -382,7 +476,7 @@
       track('walkthrough_form_submit', { event_category: 'lead' });
       sendAdsConversion(window.ANCHOR_ANALYTICS.formConversion);
       if (json && json.submission_id) {
-        trackOpenAiLeadCreated(openAiLeadTracked);
+        trackOpenAiLeadCreated(openAiLeadTracked, json.submission_id);
       }
       form.reset();
       statusEl.className = 'form-status ok';

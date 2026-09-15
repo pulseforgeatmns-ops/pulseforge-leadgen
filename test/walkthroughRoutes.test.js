@@ -6,6 +6,7 @@ const path = require('node:path');
 const pool = require('../db');
 const { validateWalkthroughPayload, SPACE_TYPES } = require('../lib/walkthroughValidate');
 const { captureWalkthroughLead, ANCHOR_CLIENT_ID, ACTION_TYPE } = require('../lib/walkthroughCapture');
+const { SOURCE_KIND } = require('../lib/walkthroughAttribution');
 const walkthroughRouter = require('../routes/walkthrough');
 
 const SITE = path.join(__dirname, '..', 'sites', 'anchor-cleaning', 'index.html');
@@ -169,6 +170,33 @@ describe('walkthrough public route', () => {
     }));
     assert.equal(res.status, 204);
     assert.equal(res.json, null);
+  });
+
+  it('accepts optional first-party attribution on walkthrough POST', async () => {
+    let insertPayload = null;
+    pool.query = async (sql, params) => {
+      if (/INSERT INTO agent_actions/i.test(sql)) {
+        insertPayload = JSON.parse(params[4]);
+        return { rows: [{ id: 8802 }] };
+      }
+      throw new Error(`Unexpected query in walkthrough route test: ${sql}`);
+    };
+    const res = await request(harness.base, 'POST', '/api/public/walkthrough', basePayload({
+      attribution: {
+        oppref: 'paid-token',
+        landing_page_url: 'https://goanchorcleaning.com/?oppref=paid-token',
+        referrer: 'https://chatgpt.com/',
+        evil: 'ignored',
+      },
+    }));
+    assert.equal(res.status, 201);
+    assert.equal(res.json.submission_id, 8802);
+    assert.equal(insertPayload.source, 'website_walkthrough');
+    assert.equal(insertPayload.attribution.raw.oppref, 'paid-token');
+    assert.equal(insertPayload.attribution.normalized.lead_source, 'chatgpt_ads');
+    assert.equal(insertPayload.attribution.provenance.sourceKind, SOURCE_KIND);
+    assert.notEqual(insertPayload.attribution.provenance.sourceKind, 'PLATFORM_API');
+    assert.equal(insertPayload.attribution.raw.evil, undefined);
   });
 });
 
