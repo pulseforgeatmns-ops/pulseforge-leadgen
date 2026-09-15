@@ -2,10 +2,16 @@
 
 /**
  * SPEC-249 — Canonical Penny V1.
+ * SPEC-252 — Live read-only platform evidence bridge.
  * Mission-aware paid acquisition intelligence. Read, reason, recommend only.
  */
 
 const amo = require('../../acquisition-mission');
+const {
+  collectPaidPlatformEvidence,
+  mergePlatformEvidence,
+  AVAILABILITY,
+} = require('../../penny-paid-acquisition');
 const {
   ACQUISITION_APPROACHES,
   CONTRIBUTION_KINDS,
@@ -177,6 +183,27 @@ function collectBaseEvidence(input = {}, budget, conversion, measurement) {
       asText(row.kind || row.sourceKind) || 'upstream_evidence'
     ));
   }
+  for (const [index, row] of array(specialistInput.platformEvidence).entries()) {
+    const channel = normalizedChannelName(row);
+    if (row.availability === AVAILABILITY.AVAILABLE) {
+      const agg = row.aggregates || {};
+      evidence.push(evidenceItem(
+        `ev_penny_platform_${index}`,
+        `Live ${channel} platform observations (${agg.impressions ?? 'n/a'} impressions, ${agg.clicks ?? 'n/a'} clicks, platformConversions=${agg.platformConversions ?? 'n/a'})`,
+        asText(row.provenance?.source || row.platform) || 'platform_api',
+        0.88,
+        'platform_observation'
+      ));
+    } else {
+      evidence.push(evidenceItem(
+        `ev_penny_platform_${index}`,
+        `${channel} platform read unavailable (${asText(row.reason || row.error) || 'unknown'})`,
+        asText(row.provenance?.source || row.platform) || 'platform_read',
+        0.7,
+        'platform_unavailable'
+      ));
+    }
+  }
   return evidence;
 }
 
@@ -234,7 +261,21 @@ function scoreChannel(channel = {}, context = {}) {
     score -= 0.25;
     risks.push('Channel readiness is not established.');
   }
-  if (!array(channel.evidence).length && !array(channel.platformEvidence).length) {
+  const platformRows = array(channel.platformEvidence);
+  const liveObservation = platformRows.find((row) => row.availability === AVAILABILITY.AVAILABLE);
+  if (liveObservation) {
+    score += 0.1;
+    reasons.push('Live platform observations are available for this channel.');
+    if (liveObservation.aggregates?.platformConversions > 0) {
+      reasons.push('Platform-reported conversions exist; downstream business outcomes still require separate measurement.');
+    }
+  }
+  for (const row of platformRows) {
+    if (row.availability === AVAILABILITY.UNAVAILABLE || row.availability === AVAILABILITY.ERROR) {
+      unknowns.push(`${name} live read unavailable (${asText(row.reason || row.error) || 'unknown'}).`);
+    }
+  }
+  if (!array(channel.evidence).length && !platformRows.length) {
     unknowns.push('No channel-specific performance or access evidence supplied.');
   }
 
@@ -470,6 +511,7 @@ function buildPaidAcquisitionRecommendationPayload(executionInput = {}) {
       ],
       unknowns: viabilityResult.unknowns,
       blockers: viabilityResult.blockers,
+      platformEvidence: array(si.platformEvidence).slice(),
       stopConditions: recommendedTest?.stopConditions || [],
       continueConditions: recommendedTest?.continueConditions || [],
       scaleConditions: recommendedTest?.scaleConditions || [],
@@ -535,10 +577,38 @@ async function runPennyPaidAcquisition(executionInput = {}) {
   });
 }
 
+async function resolvePlatformEvidenceForPenny(mission, opts = {}) {
+  if (opts.skipPlatformEvidenceCollection === true) {
+    return array(opts.platformEvidence);
+  }
+
+  const clientId = Number(mission.tenantId || mission.clientId || opts.tenantId);
+  if (!Number.isInteger(clientId) || clientId <= 0) {
+    return array(opts.platformEvidence);
+  }
+
+  const channels = array(opts.candidatePaidChannels).length
+    ? opts.candidatePaidChannels
+    : DEFAULT_PAID_CHANNELS;
+
+  const observed = await collectPaidPlatformEvidence({
+    tenantId: String(clientId),
+    clientId,
+    channels,
+    pool: opts.pool,
+    resolveAccounts: opts.resolveAccounts,
+    window: opts.observationWindow,
+    http: opts.http,
+  });
+
+  return mergePlatformEvidence(opts.platformEvidence, observed);
+}
+
 async function runPennyForAmoMission(mission, opts = {}) {
   const contributions = opts.contributions
     || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
     || [];
+  const platformEvidence = await resolvePlatformEvidenceForPenny(mission, opts);
   const executionInput = buildExecutionInput({
     mission,
     contributions,
@@ -551,7 +621,7 @@ async function runPennyForAmoMission(mission, opts = {}) {
     conversionReadiness: opts.conversionReadiness,
     measurementReadiness: opts.measurementReadiness,
     candidatePaidChannels: opts.candidatePaidChannels,
-    platformEvidence: opts.platformEvidence,
+    platformEvidence,
     availableBudget: opts.availableBudget,
     operatorPreferences: opts.operatorPreferences,
   });
@@ -594,6 +664,7 @@ module.exports = {
   CHANNEL_FIT,
   DEFAULT_PAID_CHANNELS,
   buildPaidAcquisitionRecommendationPayload,
+  resolvePlatformEvidenceForPenny,
   runPennyPaidAcquisition,
   runPennyForAmoMission,
 };

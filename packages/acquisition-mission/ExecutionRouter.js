@@ -263,6 +263,11 @@ function handlerContext(request, context, mission, runtimeOwner) {
     measurementReadiness: context.measurementReadiness || payload.measurementReadiness,
     candidatePaidChannels: context.candidatePaidChannels || payload.candidatePaidChannels,
     platformEvidence: context.platformEvidence || payload.platformEvidence,
+    resolveAccounts: context.resolveAccounts || payload.resolveAccounts,
+    observationWindow: context.observationWindow || payload.observationWindow,
+    http: context.http || payload.http,
+    skipPlatformEvidenceCollection: context.skipPlatformEvidenceCollection
+      ?? payload.skipPlatformEvidenceCollection,
     availableBudget: context.availableBudget || payload.availableBudget,
     scoutCompanies: context.scoutCompanies,
     scoutPeople: context.scoutPeople,
