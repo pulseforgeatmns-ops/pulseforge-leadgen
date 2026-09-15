@@ -18,9 +18,7 @@ const { routeOutcome, learningForSink } = require('./Learning');
 const { buildDashboard } = require('./Dashboard');
 const { createMemoryEoiStore } = require('./Store');
 const { createOutboundEngine, localDateOf } = require('./Engine');
-const authEvidence = require('./AuthEvidence');
-const bootstrap = require('./Bootstrap');
-const { buildCapacityEnvelope, buildDecisiveReasoning } = require('./CapacityEnvelope');
+const tenantMailboxCapacity = require('./TenantMailboxCapacity');
 
 module.exports = {
   ...types,
@@ -48,8 +46,5 @@ module.exports = {
   createMemoryEoiStore,
   createOutboundEngine,
   localDateOf,
-  ...authEvidence,
-  ...bootstrap,
-  buildCapacityEnvelope,
-  buildDecisiveReasoning,
+  ...tenantMailboxCapacity,
 };
