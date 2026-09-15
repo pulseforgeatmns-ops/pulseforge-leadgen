@@ -48,6 +48,7 @@ const {
 const {
   inferTargetSegmentFromObjective,
   deriveMissionTitle,
+  marketScopesCompatible,
 } = require('../../acquisition-mission/MissionNaming');
 const { formatMissionUnderstandingProse, formatCanonicalObjectiveDisplay } = require('../../acquisition-mission/StructuredMission');
 const { resolveCanonicalObjective, canonicalObjectiveText } = require('./ResolvedObjective');

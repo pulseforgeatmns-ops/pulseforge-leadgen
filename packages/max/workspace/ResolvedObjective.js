@@ -25,7 +25,12 @@ const {
   extractCountObjective,
   applyResolutions,
 } = require('../../acquisition-mission/MissionPlanner');
-const { extractGeography, inferTargetSegmentFromObjective } = require('../../acquisition-mission/MissionNaming');
+const {
+  extractGeography,
+  inferTargetSegmentFromObjective,
+  resolveMarketScopeFromObjective,
+  isBroadCommercialPropertyObjective,
+} = require('../../acquisition-mission/MissionNaming');
 const { asText } = require('../../acquisition-mission/types');
 
 const MISSION_COMMAND_RES = [
@@ -123,7 +128,10 @@ function classifyMessageLines(question) {
 
 function inferSubtype(text, segmentKey) {
   const hay = asText(text).toLowerCase();
-  if (/\bcommercial cleaning\b/.test(hay) || segmentKey === 'short_term_rental') {
+  if (/\bcommercial cleaning\b/.test(hay) || isBroadCommercialPropertyObjective(hay)) {
+    return 'commercial_cleaning';
+  }
+  if (segmentKey === 'short_term_rental') {
     return 'commercial_cleaning';
   }
   if (/\blaw firm\b/.test(hay) || segmentKey === 'law_firm') return 'law_firm';
@@ -358,7 +366,10 @@ function resolveCanonicalObjective(input = {}) {
     resolutions: input.resolutions,
   });
 
-  const market = segmentMeta(extracted.segmentKey, extracted.segmentLabel);
+  const market = {
+    ...segmentMeta(extracted.segmentKey, extracted.segmentLabel),
+    eligibleSubsegments: marketScope.eligibleSubsegments || [],
+  };
   const evidence = inferEvidence(text, input);
   const successTarget = extractCountObjective(text);
   const successType = /recurr/i.test(text) ? 'recurring_clients' : 'customers';
@@ -387,6 +398,7 @@ function resolveCanonicalObjective(input = {}) {
     intent,
     segmentKey: extracted.segmentKey,
     segmentLabel: extracted.segmentLabel,
+    marketScope,
     geographySource: extracted.geographySource || 'operator',
     provenanceSource: text,
   };

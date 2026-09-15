@@ -80,11 +80,15 @@ function normalizeSuccessMetric(input = {}) {
 }
 
 function normalizeMarket(input = {}) {
+  const eligibleSubsegments = Array.isArray(input.eligibleSubsegments)
+    ? [...new Set(input.eligibleSubsegments.map(asText).filter(Boolean))]
+    : [];
   return {
     segment: asText(input.segment) || null,
     industry: asText(input.industry) || null,
     buyer: asText(input.buyer) || null,
     label: asText(input.label) || null,
+    eligibleSubsegments,
   };
 }
 
