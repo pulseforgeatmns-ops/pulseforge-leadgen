@@ -14,13 +14,15 @@ Use **facility assessment** / **Facility Assessment** in prose and CTAs as gramm
 
 ## Brand identity
 
-**Canonical brand mark:** approved gold polo logo (`assets/brand/anchor-polo-logo-source.png`)
+**Primary brand identity:** full gold Anchor Cleaning lockup (header, OG preview, social profile avatars)
 
-Derived assets (favicon, apple-touch, manifest icons, Open Graph preview, JSON-LD `logo`, header lockup) are generated from this exact artwork — see `assets/brand/CANONICAL_BRAND_ASSETS.md`.
+**Secondary compact icon:** anchor symbol only (favicon, Apple touch, manifest icons)
+
+Derived assets are generated from the approved polo logo — see `assets/brand/CANONICAL_BRAND_ASSETS.md`.
 
 **Cache busting:** `?v=20260916` on all brand asset URLs. Bump when replacing artwork.
 
-**Platform profile avatars** (Facebook, Instagram, LinkedIn, GBP, Yelp) must be updated manually on each platform.
+**Platform profile avatars** (Facebook, Instagram, LinkedIn, GBP, Yelp): upload `social-avatar-v20260916.png` (full lockup on navy — not symbol-only).
 
 ## Pages
 

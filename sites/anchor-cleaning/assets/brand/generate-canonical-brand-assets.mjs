@@ -108,6 +108,11 @@ async function onNavySquare(input, size, paddingRatio = 0.14) {
     .png();
 }
 
+/** Social profile avatar: full lockup on navy (Facebook, Instagram, LinkedIn, GBP, Yelp). */
+async function buildSocialAvatar(lockupPath) {
+  return onNavySquare(sharp(lockupPath), 512, 0.09);
+}
+
 async function writeIcoFromPng(pngBuffer, path) {
   await sharp(pngBuffer).resize(32, 32).toFile(path);
 }
@@ -148,7 +153,7 @@ async function main() {
   const anchorPath = join(__dirname, 'anchor-symbol-canonical.png');
   await anchorSymbol.toFile(anchorPath);
 
-  const avatar512 = await onNavySquare(sharp(anchorPath), 512, 0.16);
+  const avatar512 = await buildSocialAvatar(lockupPath);
   await avatar512.toFile(join(__dirname, `social-avatar-v${VERSION}.png`));
 
   const fav32 = await onNavySquare(sharp(anchorPath), 32, 0.12);
