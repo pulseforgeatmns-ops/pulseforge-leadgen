@@ -12,17 +12,19 @@ const runnerSource = fs.readFileSync(RUNNER_PATH, 'utf8');
 
 const STALE_SYMBOLS = Object.freeze([
   'loadProspectRowsByIds',
-  'listMissionBoundProspectIds',
   'listProspectIdsFromCapacityPayload',
   'loadActiveCapacityForMission',
-  'normalizeProspectIds',
   'PROSPECT_ENRICHMENT_SELECT',
 ]);
 
 const CANONICAL_SYMBOLS = Object.freeze([
   'listMissionBoundCompanyIds',
+  'listMissionBoundProspectIds',
+  'listMissionBoundCrmLookupKeys',
   'loadCrmProspectsForMissionBoundCompanies',
+  'loadCrmProspectsByIds',
   'loadBestCrmProspectForMissionBoundKey',
+  'aliasCrmMapToIdentities',
 ]);
 
 function exportBlock(source) {
@@ -81,6 +83,10 @@ describe('anchor mission-bound enrichment module load regression', () => {
 
     const db = {
       query: async (sql, params) => {
+        if (/id = ANY\(\$2::uuid\[\]\)/.test(sql)) {
+          assert.deepEqual(params[1], [COMPANY_KLUG.toLowerCase()]);
+          return { rows: [] };
+        }
         assert.match(sql, /p\.company_id::text = \$2/);
         assert.equal(params[1], COMPANY_KLUG);
         return {
