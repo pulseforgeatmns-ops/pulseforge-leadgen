@@ -6,6 +6,16 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- Anchor STR canonical outbound recovery (tenant 10)
+  - Inspects every Anchor acquisition mission and selects the short-term-rental operator objective without duplicating the law-firm mission
+  - Recovers Scout → Max → Paige → Emmett → READY on the canonical AMO path only
+  - Stops before `APPROVE_EXECUTION` / `EXECUTE_OUTBOUND`; autosend stays off
+  - Refuses Scout `CONTINUE_INVESTIGATION` when a healthy candidate set already exists
+  - Railway cron: `GET/POST /cron/inspect-anchor-canonical-outbound` (read-only) and `/cron/recover-anchor-canonical-outbound?recover=true` (READY only)
+
+
+### Added
+
 - AUDIT-066 Max Post-Discovery Dispatch ([AUDIT-066](docs/architecture/AUDIT-066_Max_Post_Discovery_Dispatch.md))
   - Operator `PRIORITIZATION_APPROVAL` now executes Max through SEC/TME and commits a validated `PRIORITIZATION` contribution atomically
   - `MaxPrioritizationExecutor` builds mission-bound Max input from locked structured mission + Scout discovery (MIR, ranked prospects, evidence)
