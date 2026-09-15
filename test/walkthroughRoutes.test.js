@@ -8,6 +8,7 @@ const { validateWalkthroughPayload, SPACE_TYPES } = require('../lib/walkthroughV
 const { captureWalkthroughLead, ANCHOR_CLIENT_ID, ACTION_TYPE } = require('../lib/walkthroughCapture');
 const { SOURCE_KIND } = require('../lib/walkthroughAttribution');
 const walkthroughRouter = require('../routes/walkthrough');
+const { createWalkthroughCaptureMockPool } = require('./helpers/walkthroughCaptureMockPool');
 
 const SITE = path.join(__dirname, '..', 'sites', 'anchor-cleaning', 'index.html');
 
@@ -97,27 +98,24 @@ describe('walkthrough validation', () => {
 describe('walkthrough capture', () => {
   it('writes a pending agent_actions row for Anchor', async () => {
     const original = pool.query;
-    let insert = null;
-    pool.query = async (sql, params) => {
-      if (/INSERT INTO agent_actions/i.test(sql)) {
-        insert = { sql, params };
-        return { rows: [{ id: 77 }] };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    };
+    const mock = createWalkthroughCaptureMockPool({ nextActionId: 77 });
+    pool.query = mock.query.bind(mock);
     try {
       const validated = validateWalkthroughPayload(basePayload());
       const stored = await captureWalkthroughLead(validated.values);
       assert.equal(stored.id, 77);
       assert.equal(stored.client_id, ANCHOR_CLIENT_ID);
+      assert.ok(stored.prospect_id);
+      const insert = mock.state.agentActions[0];
       assert.equal(insert.params[0], 'website');
       assert.equal(insert.params[1], ACTION_TYPE);
       assert.equal(insert.params[2], 'Facilities assessment request — Riverside Law');
       assert.equal(insert.params[5], 10);
-      const payload = JSON.parse(insert.params[4]);
+      const payload = insert.payload;
       assert.equal(payload.source, 'website_walkthrough');
       assert.equal(payload.contact.business_name, 'Riverside Law');
       assert.equal(payload.contact.space_type, 'law_office');
+      assert.equal(payload.prospect_id, stored.prospect_id);
     } finally {
       pool.query = original;
     }
@@ -130,12 +128,8 @@ describe('walkthrough public route', () => {
 
   before(async () => {
     originalQuery = pool.query;
-    pool.query = async (sql) => {
-      if (/INSERT INTO agent_actions/i.test(sql)) {
-        return { rows: [{ id: 8801 }] };
-      }
-      throw new Error(`Unexpected query in walkthrough route test: ${sql}`);
-    };
+    const mock = createWalkthroughCaptureMockPool({ nextActionId: 8801 });
+    pool.query = mock.query.bind(mock);
     const app = express();
     app.use(express.json());
     app.use('/', walkthroughRouter);
@@ -173,14 +167,8 @@ describe('walkthrough public route', () => {
   });
 
   it('accepts optional first-party attribution on walkthrough POST', async () => {
-    let insertPayload = null;
-    pool.query = async (sql, params) => {
-      if (/INSERT INTO agent_actions/i.test(sql)) {
-        insertPayload = JSON.parse(params[4]);
-        return { rows: [{ id: 8802 }] };
-      }
-      throw new Error(`Unexpected query in walkthrough route test: ${sql}`);
-    };
+    const mock = createWalkthroughCaptureMockPool({ nextActionId: 8802 });
+    pool.query = mock.query.bind(mock);
     const res = await request(harness.base, 'POST', '/api/public/walkthrough', basePayload({
       attribution: {
         oppref: 'paid-token',
@@ -191,12 +179,14 @@ describe('walkthrough public route', () => {
     }));
     assert.equal(res.status, 201);
     assert.equal(res.json.submission_id, 8802);
+    const insertPayload = mock.state.agentActions[0].payload;
     assert.equal(insertPayload.source, 'website_walkthrough');
     assert.equal(insertPayload.attribution.raw.oppref, 'paid-token');
     assert.equal(insertPayload.attribution.normalized.lead_source, 'chatgpt_ads');
     assert.equal(insertPayload.attribution.provenance.sourceKind, SOURCE_KIND);
     assert.notEqual(insertPayload.attribution.provenance.sourceKind, 'PLATFORM_API');
     assert.equal(insertPayload.attribution.raw.evil, undefined);
+    assert.ok(insertPayload.prospect_id);
   });
 });
 
