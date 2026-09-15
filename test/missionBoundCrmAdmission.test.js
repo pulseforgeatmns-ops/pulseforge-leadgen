@@ -9,7 +9,13 @@ const {
   admitMissionBoundCandidates,
   hasSufficientAdmissionIdentity,
   resolveExistingCompany,
+  resolveMissionBoundCrmVertical,
+  ADMISSION_SOURCE,
 } = require('../packages/max/workspace/MissionBoundCrmAdmission');
+const {
+  isCanonicalBusinessVertical,
+  CANONICAL_BUSINESS_VERTICALS,
+} = require('../utils/canonicalVerticals');
 const {
   buildMissionBoundCandidates,
 } = require('../packages/max/workspace/EmmettMissionCandidates');
@@ -193,7 +199,9 @@ function createMockDb(seed = {}) {
         const row = {
           id,
           company_id: params[0],
+          source: params[1],
           client_id: params[4],
+          vertical: params[3],
           email: null,
           email_verified: false,
           email_status: null,
@@ -727,7 +735,109 @@ describe('MissionBoundCrmAdmission', () => {
     assert.equal(db.prospects.size, 1);
   });
 
-  it('20. mission-bound enrichment path proceeds after admission without send actions', async () => {
+  it('20. STR mission-bound admission inserts property_management vertical (not segment label)', async () => {
+    const db = createMockDb();
+    const candidate = buildMissionBoundCandidates(MISSION, strContributions())[0];
+    assert.equal(candidate.vertical, 'short-term rental operators');
+
+    const resolved = resolveMissionBoundCrmVertical(MISSION, candidate);
+    assert.equal(resolved, 'property_management');
+    assert.equal(isCanonicalBusinessVertical(resolved), true);
+
+    const result = await admitMissionBoundCandidate(db, candidate, {
+      missionId: MISSION_ID,
+      clientId: CLIENT_ID,
+      mission: MISSION,
+    });
+    assert.equal(result.blocked, false);
+    const prospect = db.prospects.get(String(result.crmProspectId));
+    assert.equal(prospect.vertical, 'property_management');
+    assert.equal(prospect.source, ADMISSION_SOURCE);
+    assert.notEqual(prospect.vertical, candidate.vertical);
+  });
+
+  it('21. inserted vertical satisfies prospects_vertical_canonical_chk allow-list', () => {
+    const allowed = new Set(CANONICAL_BUSINESS_VERTICALS.map((entry) => entry.value));
+    const candidate = buildMissionBoundCandidates(MISSION, strContributions())[0];
+    const vertical = resolveMissionBoundCrmVertical(MISSION, candidate);
+    assert.ok(allowed.has(vertical));
+  });
+
+  it('22. existing prospect reuse preserves stored vertical without overwrite', async () => {
+    const db = createMockDb({
+      companies: [{
+        id: COMPANY_EXISTING,
+        name: 'Blue Door Living Property Management',
+        domain: 'bluedoorliving.com',
+        google_place_id: PLACE_BLUE,
+        client_id: 10,
+      }],
+      prospects: [{
+        id: PROSPECT_EXISTING,
+        company_id: COMPANY_EXISTING,
+        client_id: 10,
+        email: null,
+        icp_score: 90,
+        vertical: 'commercial_cleaning',
+        is_synthetic: false,
+      }],
+    });
+    const candidate = buildMissionBoundCandidates(MISSION, strContributions())[0];
+    const result = await admitMissionBoundCandidate(db, candidate, {
+      missionId: MISSION_ID,
+      clientId: CLIENT_ID,
+      mission: MISSION,
+    });
+    assert.equal(result.crmProspectId, PROSPECT_EXISTING);
+    assert.equal(db.prospects.get(PROSPECT_EXISTING).vertical, 'commercial_cleaning');
+    assert.equal(db.prospects.size, 1);
+  });
+
+  it('23. invalid free-form vertical blocks admission before DB write', async () => {
+    const db = createMockDb();
+    const candidate = {
+      id: PLACE_BLUE,
+      candidateId: PLACE_BLUE,
+      placeId: PLACE_BLUE,
+      company: 'Mystery Co',
+      domain: 'mystery.example',
+      vertical: 'founder_led_agencies',
+    };
+    const mission = {
+      targetSegment: 'Founder-led agencies',
+      structuredMission: { market: { label: 'Founder-led agencies', segment: 'founder_led_agencies' } },
+    };
+    assert.equal(resolveMissionBoundCrmVertical(mission, candidate), null);
+    const result = await admitMissionBoundCandidate(db, candidate, {
+      missionId: MISSION_ID,
+      clientId: CLIENT_ID,
+      mission,
+    });
+    assert.equal(result.blocked, true);
+    assert.equal(result.detail, 'non_canonical_vertical');
+    assert.equal(db.prospects.size, 0);
+    assert.equal(db.companies.size, 0);
+  });
+
+  it('24. repeat admission creates no duplicate prospect after vertical fix', async () => {
+    const db = createMockDb();
+    const candidate = buildMissionBoundCandidates(MISSION, strContributions())[0];
+    const first = await admitMissionBoundCandidate(db, candidate, {
+      missionId: MISSION_ID,
+      clientId: CLIENT_ID,
+      mission: MISSION,
+    });
+    const second = await admitMissionBoundCandidate(db, candidate, {
+      missionId: MISSION_ID,
+      clientId: CLIENT_ID,
+      mission: MISSION,
+    });
+    assert.equal(first.crmProspectId, second.crmProspectId);
+    assert.equal(db.prospects.size, 1);
+    assert.equal(db.prospects.get(String(first.crmProspectId)).source, ADMISSION_SOURCE);
+  });
+
+  it('25. mission-bound enrichment path proceeds after admission without send actions', async () => {
     const db = createMockDb();
     const contributions = strContributions();
     const candidates = buildMissionBoundCandidates(MISSION, contributions);

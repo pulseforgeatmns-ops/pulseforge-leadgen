@@ -17,6 +17,11 @@ const {
 } = require('./CanonicalOutboundIdentity');
 const { ensureMissionBoundCrmSchema } = require('../../../utils/missionBoundCrmSchema');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../../../utils/businessNameShort');
+const { normalizeVertical } = require('../../../utils/normalize');
+const {
+  isCanonicalBusinessVertical,
+  resolveMissionBoundCrmVertical,
+} = require('../../../utils/canonicalVerticals');
 const {
   buildMissionBoundCandidates,
   listMissionBoundCompanyIds,
@@ -118,7 +123,7 @@ async function resolveExistingProspect(pool, clientId, companyId, candidate = {}
 
   if (crmProspectId) {
     const { rows } = await pool.query(
-      `SELECT id, company_id, client_id, email, email_verified, email_status, do_not_contact
+      `SELECT id, company_id, client_id, email, email_verified, email_status, do_not_contact, vertical
          FROM prospects
         WHERE client_id = $1
           AND id = $2::uuid
@@ -130,7 +135,7 @@ async function resolveExistingProspect(pool, clientId, companyId, candidate = {}
   }
 
   const { rows } = await pool.query(
-    `SELECT id, company_id, client_id, email, email_verified, email_status, do_not_contact
+    `SELECT id, company_id, client_id, email, email_verified, email_status, do_not_contact, vertical
        FROM prospects
       WHERE client_id = $1
         AND company_id = $2::uuid
@@ -179,7 +184,7 @@ async function linkCompanyExternalIdentity(pool, company, candidate, missionId, 
   return rows[0] || company;
 }
 
-async function createCompanyFromCandidate(pool, candidate, missionId, clientId, dryRun) {
+async function createCompanyFromCandidate(pool, candidate, missionId, clientId, dryRun, crmVertical = null) {
   const name = String(candidate.company || '').trim();
   const placeId = candidate.placeId || (isGooglePlaceId(candidate.id) ? candidate.id : null);
   const domain = normalizeDomain(candidate.domain);
@@ -227,7 +232,7 @@ async function createCompanyFromCandidate(pool, candidate, missionId, clientId, 
       domain,
       website,
       placeId,
-      candidate.vertical || null,
+      crmVertical,
       candidate.location || null,
       clientId,
       JSON.stringify(provenance),
@@ -237,7 +242,7 @@ async function createCompanyFromCandidate(pool, candidate, missionId, clientId, 
   return { company: rows[0], created: true, matchType: 'created' };
 }
 
-async function createProspectForCompany(pool, companyId, candidate, clientId, dryRun) {
+async function createProspectForCompany(pool, companyId, candidate, clientId, dryRun, crmVertical = null) {
   if (dryRun) {
     return {
       prospect: {
@@ -261,7 +266,7 @@ async function createProspectForCompany(pool, companyId, candidate, clientId, dr
       companyId,
       ADMISSION_SOURCE,
       candidate.icpScore || 0,
-      candidate.vertical || null,
+      crmVertical,
       clientId,
       candidate.website || candidate.website_url || null,
       'mission_bound',
@@ -301,6 +306,7 @@ async function logAdmission(pool, candidate, result, clientId, dryRun) {
 async function admitMissionBoundCandidate(pool, candidate, {
   missionId,
   clientId,
+  mission = null,
   dryRun = false,
 } = {}) {
   const base = {
@@ -337,22 +343,57 @@ async function admitMissionBoundCandidate(pool, candidate, {
   let matchType = companyResult?.matchType || null;
   let created = false;
 
+  let prospectResult = company
+    ? await resolveExistingProspect(pool, clientId, company.id, candidate)
+    : null;
+  let prospect = prospectResult?.prospect || null;
+  const crmVertical = prospect?.vertical && isCanonicalBusinessVertical(prospect.vertical)
+    ? normalizeVertical(prospect.vertical)
+    : resolveMissionBoundCrmVertical(mission || {}, candidate);
+
+  if (!prospect && !crmVertical) {
+    return {
+      ...base,
+      blocked: true,
+      reason: 'identity_admission_blocked',
+      detail: 'non_canonical_vertical',
+      attemptedVertical: candidate.vertical || null,
+    };
+  }
+
   if (company) {
     company = await linkCompanyExternalIdentity(pool, company, candidate, missionId, clientId, dryRun);
   } else {
-    const createdResult = await createCompanyFromCandidate(pool, candidate, missionId, clientId, dryRun);
+    const createdResult = await createCompanyFromCandidate(
+      pool,
+      candidate,
+      missionId,
+      clientId,
+      dryRun,
+      crmVertical
+    );
     if (createdResult.blocked) return { ...base, ...createdResult };
     company = createdResult.company;
     matchType = createdResult.matchType;
     created = true;
   }
 
-  let prospectResult = await resolveExistingProspect(pool, clientId, company.id, candidate);
-  let prospect = prospectResult?.prospect || null;
+  if (!prospect) {
+    prospectResult = await resolveExistingProspect(pool, clientId, company.id, candidate);
+    prospect = prospectResult?.prospect || null;
+  }
+
   let prospectCreated = false;
 
   if (!prospect) {
-    const createdProspect = await createProspectForCompany(pool, company.id, candidate, clientId, dryRun);
+    const createdProspect = await createProspectForCompany(
+      pool,
+      company.id,
+      candidate,
+      clientId,
+      dryRun,
+      crmVertical
+    );
     prospect = createdProspect.prospect;
     prospectCreated = true;
     if (!matchType || matchType === 'created') {
@@ -410,6 +451,7 @@ async function admitMissionBoundCandidates(pool, mission, contributions = [], op
     const result = await admitMissionBoundCandidate(pool, candidate, {
       missionId,
       clientId,
+      mission,
       dryRun,
     });
     results.push(result);
@@ -427,6 +469,7 @@ module.exports = {
   hasSufficientAdmissionIdentity,
   resolveExistingCompany,
   resolveExistingProspect,
+  resolveMissionBoundCrmVertical,
   admitMissionBoundCandidate,
   admitMissionBoundCandidates,
   ensureMissionBoundCrmSchema,
