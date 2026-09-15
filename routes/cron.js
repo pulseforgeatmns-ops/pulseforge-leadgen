@@ -169,6 +169,49 @@ async function handleExecuteAnchorOneOutboundCron(req, res) {
   }
 }
 
+async function handleInspectAnchorCanonicalOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/inspectAnchorCanonicalOutbound');
+    const report = await run({ confirmProduction: true });
+    return res.json(report);
+  } catch (err) {
+    console.error('[cron] inspect-anchor-canonical-outbound error:', err.message);
+    return res.status(500).json({
+      error: { code: err.code || null, message: err.message },
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
+async function handleRecoverAnchorCanonicalOutboundCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const recover = ['1', 'true', 'yes'].includes(
+    String(req.query.recover || req.body?.recover || '').toLowerCase()
+  );
+  try {
+    const { run } = require('../scripts/recoverAnchorCanonicalOutbound');
+    if (!recover) {
+      const report = await run({ confirmProduction: true, inspectOnly: true });
+      return res.json({ ...report, recover_hint: 'POST recover=true to advance to READY without sending' });
+    }
+    const report = await run({ confirmProduction: true });
+    return res.status(report.success ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] recover-anchor-canonical-outbound error:', err.message);
+    return res.status(500).json({
+      error: { code: err.code || null, message: err.message, sent: false },
+      completedAt: new Date().toISOString(),
+    });
+  }
+}
+
 async function handleSeedDirectMailAoCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
@@ -464,6 +507,10 @@ router.post('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
 router.get('/cron/seed-direct-mail-ao', handleSeedDirectMailAoCron);
 router.post('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
 router.get('/cron/execute-anchor-one-outbound', handleExecuteAnchorOneOutboundCron);
+router.post('/cron/inspect-anchor-canonical-outbound', handleInspectAnchorCanonicalOutboundCron);
+router.get('/cron/inspect-anchor-canonical-outbound', handleInspectAnchorCanonicalOutboundCron);
+router.post('/cron/recover-anchor-canonical-outbound', handleRecoverAnchorCanonicalOutboundCron);
+router.get('/cron/recover-anchor-canonical-outbound', handleRecoverAnchorCanonicalOutboundCron);
 
 async function handleTenantOutreachExecutorCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
@@ -515,5 +562,7 @@ module.exports = router;
 module.exports.handleScoutPlacesDiagnostic = handleScoutPlacesDiagnostic;
 module.exports.handleSeedDirectMailAoCron = handleSeedDirectMailAoCron;
 module.exports.handleExecuteAnchorOneOutboundCron = handleExecuteAnchorOneOutboundCron;
+module.exports.handleInspectAnchorCanonicalOutboundCron = handleInspectAnchorCanonicalOutboundCron;
+module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCanonicalOutboundCron;
 module.exports.isScoutPlacesDiagnosticAgent = isScoutPlacesDiagnosticAgent;
 module.exports.CRON_SPECIAL_HANDLERS = CRON_SPECIAL_HANDLERS;

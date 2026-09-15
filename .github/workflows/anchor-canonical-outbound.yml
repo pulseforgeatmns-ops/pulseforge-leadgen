@@ -1,0 +1,80 @@
+name: Anchor Canonical Outbound Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: inspect (read-only) or recover-to-ready (no send)
+        required: true
+        default: recover-to-ready
+        type: choice
+        options:
+          - inspect
+          - recover-to-ready
+  pull_request:
+    paths:
+      - 'scripts/lib/anchorCanonicalOutbound.js'
+      - 'scripts/inspectAnchorCanonicalOutbound.js'
+      - 'scripts/recoverAnchorCanonicalOutbound.js'
+      - 'test/anchorCanonicalOutboundRecovery.test.js'
+      - 'routes/cron.js'
+      - '.github/workflows/anchor-canonical-outbound.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/lib/anchorCanonicalOutbound.js'
+      - 'scripts/inspectAnchorCanonicalOutbound.js'
+      - 'scripts/recoverAnchorCanonicalOutbound.js'
+      - 'test/anchorCanonicalOutboundRecovery.test.js'
+      - 'routes/cron.js'
+      - '.github/workflows/anchor-canonical-outbound.yml'
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Focused recovery tests
+        run: node --test test/anchorCanonicalOutboundRecovery.test.js
+
+  production:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: charming-trust / production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Guard required production secrets
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "DATABASE_URL is not available on GitHub environment charming-trust / production."
+            exit 1
+          fi
+      - name: Inspect or recover Anchor STR outbound to READY
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GOOGLE_PLACES_KEY: ${{ secrets.GOOGLE_PLACES_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'recover-to-ready' }}
+        run: |
+          set -euo pipefail
+          if [ "${MODE}" = "inspect" ]; then
+            node scripts/inspectAnchorCanonicalOutbound.js --confirm-production
+          else
+            node scripts/recoverAnchorCanonicalOutbound.js --confirm-production
+          fi
