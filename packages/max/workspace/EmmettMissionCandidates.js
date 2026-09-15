@@ -167,19 +167,20 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
       fallbackId: `mission-target-${rank}`,
     });
     const candidateId = identity.candidateId || `mission-target-${rank}`;
+    const crmProspectId = identity.crmProspectId || resolvedProspectId || null;
 
     const row = {
       id: candidateId,
       candidateId,
       placeId: identity.placeId,
       crmCompanyId: identity.crmCompanyId,
-      crmProspectId: identity.crmProspectId || resolvedProspectId,
+      crmProspectId,
       prospectId: candidateId,
       email: resolveMissionBoundRecipientEmail({
         discoveryEmail: prospect?.email,
         missionBoundKey: candidateId,
         prospectId: crmProspectId,
-        companyId: identity.companyId,
+        companyId: identity.crmCompanyId,
         domain: identity.domain,
         crmByProspectId,
       }),
