@@ -1,35 +1,27 @@
 'use strict';
 
 /**
- * SPEC-254 — Tenant-mailbox outbound observability for Emmett.
- * Builds identity-scoped snapshots from tenant SMTP evidence.
- * SMTP provider acceptance remains distinct from delivery.
+ * SPEC-255 — build Emmett inbox snapshot from tenant mailbox canonical evidence.
  */
 
 const { localDateOf } = require('../packages/emmett-outbound');
+const { authenticationFromVerificationState } = require('../packages/emmett-outbound/AuthEvidence');
 const { resolveInboxAge } = require('./emmettOutboundSnapshot');
-const {
-  classifyOutreachContactType,
-  isRoleContactType,
-  OUTREACH_CONTACT_TYPE,
-} = require('../utils/outreachContactType');
+const { resolveWarmupDailyCap } = require('../utils/sendWarmup');
+const MAILBOX_STATUS = Object.freeze({ ACTIVE: 'active' });
+const IDENTITY_STATUS = Object.freeze({ ACTIVE: 'active' });
 
-const EVIDENCE_UNKNOWN = 'UNKNOWN';
-
-function tenantKey(value) {
-  if (value == null || value === '') return '';
-  return String(value);
+function tenantMailboxStore(pool) {
+  const { PostgresTenantMailboxStore } = require('./tenantMailbox');
+  return new PostgresTenantMailboxStore(pool);
 }
 
-function lower(value) {
-  return typeof value === 'string' ? value.trim().toLowerCase() : '';
-}
-
-function extractDomain(email) {
-  const normalized = lower(email);
-  if (!normalized.includes('@')) return null;
-  return normalized.split('@')[1] || null;
-}
+const DEFAULT_WARMUP_STAGES = Object.freeze([
+  { afterSendDays: 0, dailyCap: 3 },
+  { afterSendDays: 3, dailyCap: 5 },
+  { afterSendDays: 7, dailyCap: 10 },
+  { afterSendDays: 14, dailyCap: 20 },
+]);
 
 async function querySafe(pool, sql, params, fallback) {
   try {
@@ -40,120 +32,8 @@ async function querySafe(pool, sql, params, fallback) {
   }
 }
 
-function pct(part, whole) {
-  const w = Number(whole || 0);
-  if (w <= 0) return null;
-  const rate = Number(part || 0) / w;
-  return Number.isFinite(rate) ? rate : null;
-}
-
-const TENANT_WARMUP_STAGES = Object.freeze([
-  { afterSendDays: 0, dailyCap: 3 },
-  { afterSendDays: 3, dailyCap: 5 },
-  { afterSendDays: 7, dailyCap: 8 },
-  { afterSendDays: 14, dailyCap: 12 },
-  { afterSendDays: 21, dailyCap: 20 },
-  { afterSendDays: 30, dailyCap: 35 },
-]);
-
-function resolveWarmupDailyCap(stages, activeSendDays) {
-  let cap = stages[0]?.dailyCap || 3;
-  for (const stage of stages) {
-    if (activeSendDays >= stage.afterSendDays) cap = stage.dailyCap;
-  }
-  return cap;
-}
-
-function resolveWarmupStatus(activeSendDays, dailyCap, providerCeiling) {
-  if (activeSendDays <= 0) return 'warming';
-  if (dailyCap >= providerCeiling) return 'healthy';
-  if (activeSendDays < 14) return 'warming';
-  return 'healthy';
-}
-
-/**
- * Build tenant-mailbox snapshot scoped to one sending identity.
- */
-async function buildTenantMailboxSnapshot(tenantId, sendingIdentityId, opts = {}) {
-  const pool = opts.pool;
-  const now = opts.now instanceof Date ? opts.now : new Date(opts.now || Date.now());
-  const timeZone = opts.timeZone || 'America/New_York';
-  const localDate = opts.localDate || localDateOf(now, timeZone);
-  const tid = tenantKey(tenantId);
-  const sid = tenantKey(sendingIdentityId);
-
-  const identityRes = await querySafe(
-    pool,
-    `SELECT si.*, mi.mailbox_address, mi.status AS mailbox_status, mi.created_at AS mailbox_created_at,
-            mi.verification_state AS mailbox_verification_state
-       FROM tenant_sending_identities si
-       JOIN tenant_mailbox_integrations mi ON mi.id = si.mailbox_integration_id AND mi.tenant_id = si.tenant_id
-      WHERE si.tenant_id = $1 AND si.id = $2
-      LIMIT 1`,
-    [tid, sid],
-    { rows: [] }
-  );
-  const row = identityRes.rows[0];
-  if (!row) {
-    throw Object.assign(new Error('Sending identity not found for tenant-mailbox snapshot.'), {
-      code: 'sending_identity_not_found',
-    });
-  }
-
-  const senderEmail = lower(row.sender_email);
-  const sendingDomain = extractDomain(senderEmail);
-  const mailboxIntegrationId = row.mailbox_integration_id;
-
-  const messageStats = await querySafe(
-    pool,
-    `SELECT
-        COUNT(*) FILTER (WHERE direction = 'OUTBOUND' AND status = 'sent')::int AS successful_sends,
-        COUNT(*) FILTER (WHERE direction = 'OUTBOUND' AND status = 'failed')::int AS failed_sends,
-        COUNT(*) FILTER (WHERE direction = 'INBOUND')::int AS inbound_messages,
-        MIN(sent_at) FILTER (WHERE direction = 'OUTBOUND' AND status = 'sent') AS first_sent_at
-       FROM tenant_outreach_messages
-      WHERE tenant_id = $1 AND sending_identity_id = $2`,
-    [tid, sid],
-    { rows: [{ successful_sends: 0, failed_sends: 0, inbound_messages: 0, first_sent_at: null }] }
-  );
-  const msgStats = messageStats.rows[0] || {};
-
-  const replyRes = await querySafe(
-    pool,
-    `SELECT COUNT(*)::int AS reply_count
-       FROM tenant_outreach_events e
-       JOIN tenant_outreach_messages m ON m.id = e.message_id AND m.tenant_id = e.tenant_id
-      WHERE e.tenant_id = $1
-        AND m.sending_identity_id = $2
-        AND e.event_type = 'TENANT_OUTREACH_REPLY_RECEIVED'
-        AND e.created_at >= NOW() - INTERVAL '7 days'`,
-    [tid, sid],
-    { rows: [{ reply_count: 0 }] }
-  );
-
-  const suppressionRes = await querySafe(
-    pool,
-    `SELECT COUNT(*)::int AS suppression_count,
-        COUNT(*) FILTER (WHERE reason = 'bounce')::int AS hard_bounce_count
-       FROM tenant_outreach_suppressions
-      WHERE tenant_id = $1 AND revoked_at IS NULL`,
-    [tid],
-    { rows: [{ suppression_count: 0, hard_bounce_count: 0 }] }
-  );
-
-  const scheduledRes = await querySafe(
-    pool,
-    `SELECT COUNT(*)::int AS scheduled_count
-       FROM tenant_outreach_scheduled_sends
-      WHERE tenant_id = $1
-        AND sending_identity_id = $2
-        AND status IN ('SCHEDULED', 'EXECUTING')
-        AND (scheduled_for AT TIME ZONE $4)::date = $3::date`,
-    [tid, sid, localDate, timeZone],
-    { rows: [{ scheduled_count: 0 }] }
-  );
-
-  const sentTodayRes = await querySafe(
+async function countTenantSends(pool, tenantId, sendingIdentityId, timeZone, localDate) {
+  const todayRes = await querySafe(
     pool,
     `SELECT COUNT(*)::int AS sent_today
        FROM tenant_outreach_messages
@@ -162,11 +42,11 @@ async function buildTenantMailboxSnapshot(tenantId, sendingIdentityId, opts = {}
         AND direction = 'OUTBOUND'
         AND status = 'sent'
         AND (sent_at AT TIME ZONE $4)::date = $3::date`,
-    [tid, sid, localDate, timeZone],
+    [String(tenantId), sendingIdentityId, localDate, timeZone],
     { rows: [{ sent_today: 0 }] }
   );
 
-  const sentYesterdayRes = await querySafe(
+  const yesterdayRes = await querySafe(
     pool,
     `SELECT COUNT(*)::int AS sent_yesterday
        FROM tenant_outreach_messages
@@ -175,43 +55,23 @@ async function buildTenantMailboxSnapshot(tenantId, sendingIdentityId, opts = {}
         AND direction = 'OUTBOUND'
         AND status = 'sent'
         AND (sent_at AT TIME ZONE $4)::date = ($3::date - INTERVAL '1 day')`,
-    [tid, sid, localDate, timeZone],
+    [String(tenantId), sendingIdentityId, localDate, timeZone],
     { rows: [{ sent_yesterday: 0 }] }
   );
 
-  const avgRes = await querySafe(
+  const totalRes = await querySafe(
     pool,
-    `SELECT COALESCE(AVG(daily_count), 0)::float AS historical_daily_avg
-       FROM (
-         SELECT COUNT(*)::int AS daily_count
-           FROM tenant_outreach_messages
-          WHERE tenant_id = $1
-            AND sending_identity_id = $2
-            AND direction = 'OUTBOUND'
-            AND status = 'sent'
-            AND sent_at >= NOW() - INTERVAL '14 days'
-          GROUP BY (sent_at AT TIME ZONE $3)::date
-       ) days`,
-    [tid, sid, timeZone],
-    { rows: [{ historical_daily_avg: 0 }] }
-  );
-
-  const recentTimestampsRes = await querySafe(
-    pool,
-    `SELECT sent_at, recipients
+    `SELECT COUNT(*)::int AS total_sends
        FROM tenant_outreach_messages
       WHERE tenant_id = $1
         AND sending_identity_id = $2
         AND direction = 'OUTBOUND'
-        AND status = 'sent'
-        AND sent_at >= NOW() - INTERVAL '7 days'
-      ORDER BY sent_at DESC
-      LIMIT 50`,
-    [tid, sid],
-    { rows: [] }
+        AND status = 'sent'`,
+    [String(tenantId), sendingIdentityId],
+    { rows: [{ total_sends: 0 }] }
   );
 
-  const activeSendDaysRes = await querySafe(
+  const activeDaysRes = await querySafe(
     pool,
     `SELECT COUNT(DISTINCT (sent_at AT TIME ZONE $3)::date)::int AS active_send_days
        FROM tenant_outreach_messages
@@ -219,122 +79,180 @@ async function buildTenantMailboxSnapshot(tenantId, sendingIdentityId, opts = {}
         AND sending_identity_id = $2
         AND direction = 'OUTBOUND'
         AND status = 'sent'`,
-    [tid, sid, timeZone],
+    [String(tenantId), sendingIdentityId, timeZone],
     { rows: [{ active_send_days: 0 }] }
   );
 
-  const successfulSends = Number(msgStats.successful_sends || 0);
-  const failedSends = Number(msgStats.failed_sends || 0);
-  const recentSends = successfulSends + failedSends;
-  const hardBounces = Number(suppressionRes.rows[0]?.hard_bounce_count || 0);
-  const replies = Number(replyRes.rows[0]?.reply_count || 0);
+  const firstSendRes = await querySafe(
+    pool,
+    `SELECT MIN(sent_at) AS first_sent_at
+       FROM tenant_outreach_messages
+      WHERE tenant_id = $1
+        AND sending_identity_id = $2
+        AND direction = 'OUTBOUND'
+        AND status = 'sent'`,
+    [String(tenantId), sendingIdentityId],
+    { rows: [{ first_sent_at: null }] }
+  );
 
-  let founderReplies = 0;
-  let roleReplies = 0;
-  for (const msgRow of recentTimestampsRes.rows) {
-    const recipients = Array.isArray(msgRow.recipients) ? msgRow.recipients : [];
-    for (const recipient of recipients) {
-      const email = lower(recipient.email || recipient);
-      if (!email) continue;
-      const contactType = classifyOutreachContactType(email);
-      if (contactType === OUTREACH_CONTACT_TYPE.VERIFIED_ROLE_EMAIL) roleReplies += 1;
-      else if (contactType === OUTREACH_CONTACT_TYPE.VERIFIED_FOUNDER_EMAIL) founderReplies += 1;
+  const scheduledRes = await querySafe(
+    pool,
+    `SELECT COUNT(*)::int AS scheduled_today
+       FROM tenant_outreach_scheduled_sends
+      WHERE tenant_id = $1
+        AND sending_identity_id = $2
+        AND status = 'SCHEDULED'
+        AND (scheduled_for AT TIME ZONE $4)::date = $3::date`,
+    [String(tenantId), sendingIdentityId, localDate, timeZone],
+    { rows: [{ scheduled_today: 0 }] }
+  );
+
+  const bounceRes = await querySafe(
+    pool,
+    `SELECT COUNT(*)::int AS hard_bounces
+       FROM tenant_outreach_messages
+      WHERE tenant_id = $1
+        AND sending_identity_id = $2
+        AND status = 'failed'
+        AND failure_code IN ('hard_bounce', 'bounce', '550', 'smtp_rejected')`,
+    [String(tenantId), sendingIdentityId],
+    { rows: [{ hard_bounces: 0 }] }
+  );
+
+  return {
+    sentToday: Number(todayRes.rows[0]?.sent_today || 0),
+    sentYesterday: Number(yesterdayRes.rows[0]?.sent_yesterday || 0),
+    totalOperationalSends: Number(totalRes.rows[0]?.total_sends || 0),
+    activeSendDays: Number(activeDaysRes.rows[0]?.active_send_days || 0),
+    firstSentAt: firstSendRes.rows[0]?.first_sent_at || null,
+    scheduledToday: Number(scheduledRes.rows[0]?.scheduled_today || 0),
+    hardBounceCount: Number(bounceRes.rows[0]?.hard_bounces || 0),
+  };
+}
+
+async function buildTenantMailboxInboxSnapshot(input = {}, opts = {}) {
+  const tenantId = String(input.tenantId);
+  const sendingIdentityId = input.sendingIdentityId;
+  const mailboxIntegrationId = input.mailboxIntegrationId || null;
+  const pool = opts.pool;
+  const now = opts.now instanceof Date ? opts.now : new Date(opts.now || Date.now());
+  const timeZone = opts.timeZone || 'America/New_York';
+  const localDate = opts.localDate || localDateOf(now, timeZone);
+  const store = opts.mailboxStore || (pool ? tenantMailboxStore(pool) : null);
+
+  let integration = input.integration || null;
+  let identity = input.identity || null;
+
+  if (store && sendingIdentityId) {
+    identity = identity || await store.getIdentity(tenantId, sendingIdentityId);
+    if (identity) {
+      integration = integration || await store.getIntegration(
+        tenantId,
+        mailboxIntegrationId || identity.mailboxIntegrationId
+      );
     }
   }
 
+  const verificationState = integration?.verificationState || integration?.verification_state || {};
+  const authentication = input.authentication
+    || authenticationFromVerificationState(verificationState);
+
+  const warmupStages = opts.warmupStages || input.warmupStages || DEFAULT_WARMUP_STAGES;
+  let sendStats = {
+    sentToday: 0,
+    sentYesterday: 0,
+    totalOperationalSends: 0,
+    activeSendDays: 0,
+    firstSentAt: null,
+    scheduledToday: 0,
+    hardBounceCount: 0,
+  };
+  if (pool && sendingIdentityId) {
+    sendStats = await countTenantSends(pool, tenantId, sendingIdentityId, timeZone, localDate);
+  } else if (input.sendStats) {
+    sendStats = { ...sendStats, ...input.sendStats };
+  }
+
+  const warmupCap = resolveWarmupDailyCap(warmupStages, sendStats.activeSendDays);
+  let warmupStatus = 'warming';
+  if (sendStats.activeSendDays >= 14 && warmupCap >= (opts.providerCeiling || 20)) {
+    warmupStatus = 'healthy';
+  } else if (sendStats.activeSendDays === 0 && !sendStats.firstSentAt) {
+    warmupStatus = 'warming';
+  }
+
   const { inboxAgeDays, inboxAgeSource, inboxAgeAnchor } = resolveInboxAge({
-    firstSentAt: msgStats.first_sent_at || row.created_at || row.mailbox_created_at,
-    warmupStartDate: null,
-    createdAt: row.created_at || row.mailbox_created_at,
+    firstSentAt: sendStats.firstSentAt,
+    warmupStartDate: integration?.createdAt || identity?.createdAt || null,
+    createdAt: integration?.createdAt || identity?.createdAt || null,
     now,
     fallbackAgeDays: 0,
   });
 
-  const providerCeiling = Number(opts.providerCeiling || 35);
-  const activeSendDays = Number(activeSendDaysRes.rows[0]?.active_send_days || 0);
-  const warmupCap = resolveWarmupDailyCap(opts.warmupStages || TENANT_WARMUP_STAGES, activeSendDays);
-  const warmupStatus = resolveWarmupStatus(activeSendDays, warmupCap, providerCeiling);
-
-  const bounceRate = recentSends >= 5 && hardBounces > 0
-    ? pct(hardBounces, recentSends)
-    : null;
-  const replyRate = successfulSends >= 3
-    ? pct(replies, successfulSends)
-    : null;
-  const founderReplyRate = successfulSends >= 3 && founderReplies > 0
-    ? pct(founderReplies, successfulSends)
-    : null;
-
-  const unknownEvidence = [];
-  if (successfulSends < 5) unknownEvidence.push('delivery_rate');
-  if (recentSends < 5) unknownEvidence.push('bounce_rate');
-  if (successfulSends < 3) unknownEvidence.push('reply_rate');
-  unknownEvidence.push('open_rate', 'complaint_rate', 'inbox_placement');
+  const domain = (identity?.senderEmail || integration?.mailboxAddress || '').split('@')[1] || null;
+  let suppressed = false;
+  if (store && input.checkSuppression !== false) {
+    // Suppression is recipient-scoped; snapshot only flags tenant-level hard bounce evidence.
+    suppressed = false;
+  }
 
   return {
-    channel: 'tenant_mailbox_smtp',
-    spec: 'SPEC-254',
-    tenantId: tid,
-    sendingIdentityId: sid,
-    mailboxIntegrationId,
-    senderEmail,
-    sendingDomain,
-    inboxId: senderEmail,
-    domain: sendingDomain,
+    tenantId,
+    clientId: Number.isFinite(Number(tenantId)) ? Number(tenantId) : null,
+    sendingIdentityId,
+    mailboxIntegrationId: integration?.id || mailboxIntegrationId,
+    inboxId: identity?.senderEmail || sendingIdentityId,
+    domain,
     localDate,
     timeZone,
-    mailboxStatus: row.mailbox_status || row.status,
-    identityStatus: row.status,
-    mailboxActivationAt: row.mailbox_created_at || row.created_at || null,
     inboxAgeDays,
     inboxAgeSource,
     inboxAgeAnchor,
-    providerCeiling,
-    authentication: {
-      spf: EVIDENCE_UNKNOWN,
-      dkim: EVIDENCE_UNKNOWN,
-      dmarc: EVIDENCE_UNKNOWN,
-    },
+    providerCeiling: Number(opts.providerCeiling || warmupCap || 3),
+    mailboxStatus: integration?.status || null,
+    identityStatus: identity?.status || null,
+    authentication,
+    verificationState,
     warmup: {
       status: warmupStatus,
-      dailyCap: warmupCap,
-      activeSendDays,
-      reset: activeSendDays <= 0,
-      rampStage: activeSendDays < 7 ? 'early' : activeSendDays < 21 ? 'mid' : 'mature',
+      dailyCap: warmupCap || warmupStages[0]?.dailyCap || 3,
+      activeSendDays: sendStats.activeSendDays,
+      reset: sendStats.activeSendDays === 0 && !sendStats.firstSentAt,
     },
-    successfulSends,
-    failedSends,
-    scheduledSends: Number(scheduledRes.rows[0]?.scheduled_count || 0),
-    suppressions: Number(suppressionRes.rows[0]?.suppression_count || 0),
-    hardBounces,
-    replies,
-    founderReplies,
-    roleReplies,
-    bounceRate,
-    replyRate,
-    founderReplyRate,
+    warmupStages,
+    deliverabilityObservability: 'limited',
+    bounceRate: sendStats.hardBounceCount > 0 && sendStats.totalOperationalSends > 0
+      ? sendStats.hardBounceCount / sendStats.totalOperationalSends
+      : 0,
+    replyRate: null,
     openRate: null,
-    complaintRate: null,
-    deliveryRate: null,
-    unknownEvidence,
-    blacklist: { listed: false, sources: [] },
-    sentToday: Number(sentTodayRes.rows[0]?.sent_today || 0),
-    sentYesterday: Number(sentYesterdayRes.rows[0]?.sent_yesterday || 0),
-    historicalDailyAvg: Number(avgRes.rows[0]?.historical_daily_avg || 0),
-    recentSends,
-    recentSendTimestamps: recentTimestampsRes.rows.map((r) => r.sent_at).filter(Boolean),
+    complaintRate: 0,
+    hardBounceCount: sendStats.hardBounceCount,
+    blacklist: opts.blacklist || { listed: false, sources: [] },
+    sentToday: sendStats.sentToday,
+    sentYesterday: sendStats.sentYesterday,
+    scheduledToday: sendStats.scheduledToday,
+    historicalDailyAvg: sendStats.totalOperationalSends > 0
+      ? sendStats.totalOperationalSends / Math.max(sendStats.activeSendDays, 1)
+      : 0,
+    recentSends: sendStats.totalOperationalSends,
+    totalOperationalSends: sendStats.totalOperationalSends,
+    suppressed,
     operatorOverride: opts.operatorOverride || null,
-    contactTypeEvidence: {
-      founderReplies,
-      roleReplies,
-      roleEmailsExcludedFromFounderEvidence: true,
-    },
+    replyByWeekday: {},
+    bootstrapEnabled: opts.bootstrapEnabled !== false,
+    businessHours: opts.businessHours || { startHour: 9, endHour: 16 },
   };
 }
 
+function isTenantMailboxOperational(integration, identity) {
+  return integration?.status === MAILBOX_STATUS.ACTIVE
+    && identity?.status === IDENTITY_STATUS.ACTIVE;
+}
+
 module.exports = {
-  buildTenantMailboxSnapshot,
-  TENANT_WARMUP_STAGES,
-  EVIDENCE_UNKNOWN,
-  isRoleContactType,
+  DEFAULT_WARMUP_STAGES,
+  buildTenantMailboxInboxSnapshot,
+  countTenantSends,
+  isTenantMailboxOperational,
 };
