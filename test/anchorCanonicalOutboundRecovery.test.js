@@ -248,6 +248,12 @@ describe('Anchor STR canonical outbound recovery', () => {
     assert.match(LIB_SRC, /approved_empty_discovery/);
     assert.match(LIB_SRC, /CONTINUE_INVESTIGATION/);
     assert.doesNotMatch(LIB_SRC, /attachEmmettCapacity/);
+    const workflowSrc = fs.readFileSync(
+      path.join(__dirname, '../.github/workflows/anchor-canonical-outbound.yml'),
+      'utf8'
+    );
+    assert.doesNotMatch(workflowSrc, /environment:\s*charming-trust/);
+    assert.match(workflowSrc, /github.event_name == 'workflow_dispatch'/);
     const cronSrc = fs.readFileSync(path.join(__dirname, '../routes/cron.js'), 'utf8');
     assert.match(cronSrc, /inspect-anchor-canonical-outbound/);
     assert.match(cronSrc, /recover-anchor-canonical-outbound/);

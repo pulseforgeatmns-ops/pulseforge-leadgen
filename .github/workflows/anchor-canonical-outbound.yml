@@ -43,12 +43,15 @@ jobs:
       - name: Focused recovery tests
         run: node --test test/anchorCanonicalOutboundRecovery.test.js
 
+  # Manual only. Never attach to GitHub environment "charming-trust / production"
+  # (that name is Railway's deployment environment; a failed Actions job there
+  # marks the Railway GitHub deployment failed). GitHub repo secrets have been
+  # empty; live recovery runs on Railway with --confirm-production.
   production:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch'
     needs: unit
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment: charming-trust / production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -56,23 +59,18 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Guard required production secrets
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${DATABASE_URL:-}" ]; then
-            echo "DATABASE_URL is not available on GitHub environment charming-trust / production."
-            exit 1
-          fi
-      - name: Inspect or recover Anchor STR outbound to READY
+      - name: Recover only when production DATABASE_URL is present
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           GOOGLE_PLACES_KEY: ${{ secrets.GOOGLE_PLACES_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'recover-to-ready' }}
+          MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "::error::DATABASE_URL is not configured in GitHub Actions secrets. Run on Railway: node scripts/recoverAnchorCanonicalOutbound.js --confirm-production"
+            exit 1
+          fi
           if [ "${MODE}" = "inspect" ]; then
             node scripts/inspectAnchorCanonicalOutbound.js --confirm-production
           else
