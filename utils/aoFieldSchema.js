@@ -129,6 +129,9 @@ async function ensureAoFieldSchemaOnce() {
         CHECK (mode IN (${MAX_MODES.map(m => `'${m}'`).join(', ')})),
       step_index INTEGER NOT NULL DEFAULT 0,
       payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      mission_id TEXT,
+      tenant_id TEXT,
+      canonical_ingestion_status TEXT DEFAULT 'pending',
       completed BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -207,6 +210,15 @@ async function ensureAoFieldSchemaOnce() {
   await pool.query(`
     ALTER TABLE ao_max_sessions ADD CONSTRAINT ao_max_sessions_mode_check
       CHECK (mode IN (${MAX_MODES.map(m => `'${m}'`).join(', ')}))
+  `);
+  await pool.query(`
+    ALTER TABLE ao_max_sessions ADD COLUMN IF NOT EXISTS mission_id TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE ao_max_sessions ADD COLUMN IF NOT EXISTS tenant_id TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE ao_max_sessions ADD COLUMN IF NOT EXISTS canonical_ingestion_status TEXT DEFAULT 'pending'
   `);
   await pool.query(`
     ALTER TABLE ao_escalations ADD COLUMN IF NOT EXISTS probe_answers JSONB
