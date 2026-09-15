@@ -771,8 +771,14 @@ function fromScoutLegacyOutput(raw = {}, ctx = {}) {
     nextActions,
     durationMs: ctx.durationMs,
     reason: blocked ? (payload.blockReason || raw.summary) : null,
-    requiredPrecondition: blocked ? 'discovery_evidence' : null,
-    recommendedAction: blocked ? 'Adjust mission criteria or expand search.' : null,
+    requiredPrecondition: blocked
+      ? (payload.blockerCode === 'discovery_provider_failed' ? 'discovery_provider' : 'discovery_evidence')
+      : null,
+    recommendedAction: blocked
+      ? (payload.blockerCode === 'discovery_provider_failed'
+        ? (payload.blockReason || 'External discovery provider failed. Retry after provider recovery.')
+        : 'Adjust mission criteria or expand search.')
+      : null,
   });
 
   return result;

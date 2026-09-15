@@ -145,12 +145,30 @@ function buildDiscoveryExecutionReport(mission, scoutPayload = null, scoutDiscov
   const providerWarnings = warnings.filter((w) =>
     /provider|GOOGLE_PLACES|fixture|search provider/i.test(String(w))
   );
+  const providerReports =
+    (scoutDiscoveryMeta && scoutDiscoveryMeta.providerReports) ||
+    (outputs.discoveryPayload && outputs.discoveryPayload.providerExecution) ||
+    (outputs.payload && outputs.payload.providerExecution) ||
+    [];
+  const providerExecutionAttempted = Array.isArray(providerReports)
+    && providerReports.some(
+      (row) =>
+        row &&
+        row.providerId &&
+        !/existing_pf|repository/i.test(String(row.providerId)) &&
+        (row.status === 'completed' ||
+          row.status === 'empty' ||
+          row.status === 'failed' ||
+          row.status === 'partial' ||
+          (row.execution && row.execution.executed === true))
+    );
   const externalAttempted =
-    profileResolved &&
-    !profileBlocked &&
-    (prospectCount > 0 ||
-      providerWarnings.length > 0 ||
-      Boolean(outputs.summary && outputs.summary.discovered != null));
+    providerExecutionAttempted ||
+    (profileResolved &&
+      !profileBlocked &&
+      (prospectCount > 0 ||
+        providerWarnings.length > 0 ||
+        Boolean(outputs.summary && outputs.summary.discovered != null)));
   const externalUnavailable =
     providerWarnings.some((w) => /No discovery providers available/i.test(String(w))) ||
     errors.some((e) => /provider/i.test(String(e)));

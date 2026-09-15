@@ -24,6 +24,11 @@ const {
 } = require('../../max/workspace/AmoOperatorApproval');
 const { normalizeScoutDiscoveryPayload } = require('../DiscoveryPayload');
 const { assertEvidenceAttached } = require('../TransactionalExecution');
+const { buildScoutDiscoveryArtifact } = require('../../scout/adapters/ScoutDiscoveryArtifact');
+const { buildQueriesForEvidence } = require('../../capabilities/discovery/providers/PlacesProvider');
+const { INVESTIGATIVE_EVIDENCE } = require('../../scout/coverage/EvidenceRequirements');
+const { buildMarketDefinition } = require('../../scout/intelligence/MarketUnderstanding');
+const { scoutDelegationFromMission } = require('../SpecialistInputs');
 const { findResumableMission } = require('../../max/workspace/AcquisitionOwnership');
 const { resetEngine } = require('../../../services/acquisitionMission');
 
@@ -175,6 +180,70 @@ describe('Anchor fresh mission audit', () => {
     assert.ok(discoveryResult.discovery.payload.buyingSignals.length > 0);
     assert.doesNotThrow(() =>
       assertEvidenceAttached(discoveryResult.discovery.payload, { required: true })
+    );
+  });
+
+  it('8a — property-manager Places queries use canonical segment without null tokens', () => {
+    const planned = planFromObjective(BROAD_ANCHOR_OBJECTIVE);
+    const mission = {
+      id: 'mission-pm-queries',
+      tenantId: '10',
+      objective: BROAD_ANCHOR_OBJECTIVE,
+      structuredMission: freezeStructuredMission(planned.draft, { approvedBy: 'operator' }),
+    };
+    const delegation = scoutDelegationFromMission(mission);
+    const market = buildMarketDefinition({ mission, delegation });
+
+    const queries = buildQueriesForEvidence({
+      segment: market.segments[0],
+      evidenceType: INVESTIGATIVE_EVIDENCE.IDENTITY,
+      cities: ['Manchester', 'Hooksett', 'Bedford', 'Goffstown', 'Londonderry', 'Auburn'],
+      state: 'NH',
+    });
+
+    assert.equal(market.segments[0], 'property_management');
+    assert.ok(queries.length >= 2);
+    assert.ok(queries.some((q) => /property management company Manchester NH/i.test(q)));
+    assert.ok(queries.every((q) => typeof q === 'string' && q.length > 0));
+    assert.ok(!queries.some((q) => /null|undefined/i.test(q)));
+  });
+
+  it('8b — candidate universe > 0 with incomplete coverage does not hard-block discovery_evidence', () => {
+    const scoutResult = {
+      status: 'partial',
+      payload: {
+        opportunities: [],
+        fitCandidates: [],
+        qualifiedCount: 0,
+        discoveryStatus: 'incomplete',
+        candidateUniverse: [{
+          candidate_id: 'pm-1',
+          name: 'Granite Property Management',
+          placeId: 'place-1',
+          address: '100 Main St, Manchester NH',
+          evidenceRefs: [{
+            id: 'ev-1',
+            label: 'Discovered via google_places',
+            snapshot: { source: 'google_places', companyName: 'Granite Property Management' },
+          }],
+        }],
+        providerExecution: [{
+          providerId: 'google_maps',
+          status: 'completed',
+          rawResultCount: 2,
+          evidenceProduced: ['identity'],
+        }],
+      },
+    };
+
+    const artifact = buildScoutDiscoveryArtifact(scoutResult);
+    const payload = normalizeScoutDiscoveryPayload(scoutResult, { discoveryArtifact: artifact });
+
+    assert.equal(artifact.blocked, false);
+    assert.equal(payload.blocked, false);
+    assert.ok(artifact.evidence.length > 0);
+    assert.doesNotThrow(() =>
+      assertEvidenceAttached(payload, { required: true })
     );
   });
 
