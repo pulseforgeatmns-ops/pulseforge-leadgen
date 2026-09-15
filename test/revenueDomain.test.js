@@ -108,6 +108,10 @@ test('amounts must be safe integer cents', () => {
   assert.throws(() => calculateRevenue({ quotedAmountCents: -1 }), { code: 'INVALID_AMOUNT' });
 });
 
+test('chatgpt_ads is an accepted revenue lead source', () => {
+  assert.equal(normalizeLeadSource('chatgpt_ads'), 'chatgpt_ads');
+});
+
 test('attribution preserves explicit uncertainty and controlled taxonomy', () => {
   assert.equal(normalizeLeadSource('YELP'), 'yelp');
   assert.equal(normalizeAttributionStatus(undefined, true), 'deterministic');

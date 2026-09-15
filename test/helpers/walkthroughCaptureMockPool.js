@@ -2,6 +2,7 @@
 
 const PROSPECT_ID = '11111111-1111-4111-8111-111111111111';
 const ACTION_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const REVIEW_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 function createWalkthroughCaptureMockPool(initial = {}) {
   const state = {
@@ -11,8 +12,38 @@ function createWalkthroughCaptureMockPool(initial = {}) {
     phase3d: initial.phase3d !== false,
     nextProspectId: initial.nextProspectId || PROSPECT_ID,
     nextActionId: initial.nextActionId || ACTION_ID,
+    nextReviewId: initial.nextReviewId || REVIEW_ID,
     actionIdCounter: 0,
+    reviewIdCounter: 0,
   };
+
+  function pushAgentAction(params) {
+    state.actionIdCounter += 1;
+    const actionType = params[1];
+    let id;
+    if (actionType === 'lead_qualification_review') {
+      state.reviewIdCounter += 1;
+      id = state.reviewIdCounter === 1 ? state.nextReviewId : `${state.nextReviewId}-2`;
+    } else {
+      id = state.actionIdCounter === 1 ? state.nextActionId : `${state.nextActionId}-2`;
+    }
+    const row = {
+      id,
+      payload: JSON.parse(params[4]),
+      params,
+      action_type: actionType,
+      status: 'pending',
+      client_id: params[5],
+      created_by: params[0],
+      title: params[2],
+      description: params[3],
+      executed_at: null,
+      created_at: new Date().toISOString(),
+      result: null,
+    };
+    state.agentActions.push(row);
+    return { rows: [{ id, payload: row.payload }] };
+  }
 
   const db = {
     state,
@@ -70,6 +101,11 @@ function createWalkthroughCaptureMockPool(initial = {}) {
         };
       }
 
+      if (/SELECT id, client_id, setter_status FROM prospects WHERE id = \$1 LIMIT 1/i.test(text)) {
+        const row = state.prospects.find((p) => p.id === params[0]);
+        return { rows: row ? [{ id: row.id, client_id: row.client_id, setter_status: row.setter_status }] : [] };
+      }
+
       if (/SELECT status, setter_status FROM prospects WHERE id = \$1 AND client_id = \$2/i.test(text)) {
         const row = state.prospects.find((p) => p.id === params[0] && p.client_id === params[1]);
         return { rows: row ? [{ status: row.status, setter_status: row.setter_status }] : [] };
@@ -122,11 +158,58 @@ function createWalkthroughCaptureMockPool(initial = {}) {
       }
 
       if (/INSERT INTO agent_actions/i.test(text)) {
-        state.actionIdCounter += 1;
-        const id = state.actionIdCounter === 1 ? state.nextActionId : `${state.nextActionId}-2`;
-        const payload = JSON.parse(params[4]);
-        state.agentActions.push({ id, payload, params });
-        return { rows: [{ id }] };
+        return pushAgentAction(params);
+      }
+
+      if (/SELECT id, payload, status[\s\S]*FROM agent_actions[\s\S]*action_type = \$2[\s\S]*payload->>'prospect_id'/i.test(text)) {
+        const [clientId, actionType, prospectId] = params;
+        const row = state.agentActions.find((a) =>
+          Number(a.client_id) === Number(clientId)
+          && a.action_type === actionType
+          && a.status === 'pending'
+          && String(a.payload?.prospect_id) === String(prospectId));
+        return { rows: row ? [{ id: row.id, payload: row.payload, status: row.status }] : [] };
+      }
+
+      if (/SELECT id, client_id, action_type, payload[\s\S]*FROM agent_actions[\s\S]*WHERE id = \$1/i.test(text)) {
+        const row = state.agentActions.find((a) => a.id === params[0]);
+        return {
+          rows: row
+            ? [{ id: row.id, client_id: row.client_id, action_type: row.action_type, payload: row.payload }]
+            : [],
+        };
+      }
+
+      if (/SELECT id, payload, status, client_id, action_type[\s\S]*FROM agent_actions[\s\S]*WHERE id = \$1/i.test(text)) {
+        const row = state.agentActions.find((a) => a.id === params[0]);
+        return {
+          rows: row
+            ? [{
+              id: row.id,
+              payload: row.payload,
+              status: row.status,
+              client_id: row.client_id,
+              action_type: row.action_type,
+            }]
+            : [],
+        };
+      }
+
+      if (/UPDATE agent_actions[\s\S]*SET payload = \$2::jsonb[\s\S]*status = 'executed'/i.test(text)) {
+        const row = state.agentActions.find((a) => a.id === params[0] && Number(a.client_id) === Number(params[4]) && a.status === 'pending');
+        if (row) {
+          row.payload = JSON.parse(params[1]);
+          row.status = 'executed';
+          row.executed_at = params[2];
+          row.result = params[3];
+        }
+        return { rowCount: row ? 1 : 0 };
+      }
+
+      if (/UPDATE agent_actions[\s\S]*SET payload = \$2::jsonb[\s\S]*WHERE id = \$1 AND client_id = \$3 AND status = 'pending'/i.test(text)) {
+        const row = state.agentActions.find((a) => a.id === params[0] && Number(a.client_id) === Number(params[2]) && a.status === 'pending');
+        if (row) row.payload = JSON.parse(params[1]);
+        return { rowCount: row ? 1 : 0 };
       }
 
       if (/INSERT INTO prospect_lifecycle_events/i.test(text)) {
@@ -147,8 +230,19 @@ function createWalkthroughCaptureMockPool(initial = {}) {
   return db;
 }
 
+function walkthroughActions(state) {
+  return state.agentActions.filter((a) => a.action_type === 'walkthrough_request');
+}
+
+function qualificationReviews(state) {
+  return state.agentActions.filter((a) => a.action_type === 'lead_qualification_review');
+}
+
 module.exports = {
   createWalkthroughCaptureMockPool,
+  walkthroughActions,
+  qualificationReviews,
   WALKTHROUGH_MOCK_PROSPECT_ID: PROSPECT_ID,
   WALKTHROUGH_MOCK_ACTION_ID: ACTION_ID,
+  WALKTHROUGH_MOCK_REVIEW_ID: REVIEW_ID,
 };

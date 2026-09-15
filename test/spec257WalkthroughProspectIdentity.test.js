@@ -25,6 +25,8 @@ const { validateWalkthroughPayload } = require('../lib/walkthroughValidate');
 const pool = require('../db');
 const {
   createWalkthroughCaptureMockPool,
+  walkthroughActions,
+  qualificationReviews,
   WALKTHROUGH_MOCK_PROSPECT_ID: PROSPECT_A,
   WALKTHROUGH_MOCK_ACTION_ID: ACTION_1,
 } = require('./helpers/walkthroughCaptureMockPool');
@@ -152,8 +154,9 @@ describe('SPEC-257 — captureWalkthroughLead identity bridge', () => {
 
     assert.equal(stored.prospect_id, PROSPECT_A);
     assert.equal(stored.prospect_link_status, PROSPECT_LINK_STATUS.LINKED_NEW);
-    assert.equal(db.state.agentActions.length, 1);
-    const payload = db.state.agentActions[0].payload;
+    assert.equal(walkthroughActions(db.state).length, 1);
+    assert.equal(qualificationReviews(db.state).length, 1);
+    const payload = walkthroughActions(db.state)[0].payload;
     assert.equal(payload.prospect_id, PROSPECT_A);
     assert.equal(payload.identity.prospectLinkStatus, PROSPECT_LINK_STATUS.LINKED_NEW);
     assert.match(payload.identity.linkedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -176,8 +179,9 @@ describe('SPEC-257 — captureWalkthroughLead identity bridge', () => {
 
     assert.equal(stored.prospect_id, null);
     assert.equal(stored.prospect_link_status, PROSPECT_LINK_STATUS.UNRESOLVED);
-    assert.equal(db.state.agentActions.length, 1);
-    const payload = db.state.agentActions[0].payload;
+    assert.equal(walkthroughActions(db.state).length, 1);
+    assert.equal(qualificationReviews(db.state).length, 0);
+    const payload = walkthroughActions(db.state)[0].payload;
     assert.equal(payload.prospect_id, null);
     assert.equal(payload.identity.prospectLinkStatus, PROSPECT_LINK_STATUS.UNRESOLVED);
     assert.equal(payload.identity.unresolvedReason, UNRESOLVED_REASON.EMAIL_TENANT_CONFLICT);
@@ -208,10 +212,11 @@ describe('SPEC-257 — captureWalkthroughLead identity bridge', () => {
     assert.equal(second.prospect_id, PROSPECT_A);
     assert.equal(second.prospect_link_status, PROSPECT_LINK_STATUS.LINKED_EXISTING);
     assert.equal(db.state.prospects.length, 1);
-    assert.equal(db.state.agentActions.length, 2);
-    assert.equal(db.state.agentActions[0].payload.attribution.raw.campaign_id, 'camp-first');
-    assert.equal(db.state.agentActions[1].payload.attribution.raw.campaign_id, 'camp-second');
-    assert.equal(db.state.agentActions[1].payload.identity.prospectLinkStatus, PROSPECT_LINK_STATUS.LINKED_EXISTING);
+    assert.equal(walkthroughActions(db.state).length, 2);
+    assert.equal(qualificationReviews(db.state).length, 1);
+    assert.equal(walkthroughActions(db.state)[0].payload.attribution.raw.campaign_id, 'camp-first');
+    assert.equal(walkthroughActions(db.state)[1].payload.attribution.raw.campaign_id, 'camp-second');
+    assert.equal(walkthroughActions(db.state)[1].payload.identity.prospectLinkStatus, PROSPECT_LINK_STATUS.LINKED_EXISTING);
     assert.equal(db.state.prospects[0].status, 'contacted');
     assert.equal(db.state.prospects[0].source, 'website_walkthrough');
     assert.equal(db.state.prospects[0].acquisition_metadata.keep, true);
@@ -223,7 +228,7 @@ describe('SPEC-257 — captureWalkthroughLead identity bridge', () => {
     const record = attributionRecord();
     const values = validateWalkthroughPayload(basePayload()).values;
     await captureWalkthroughLead(values, record);
-    const payload = db.state.agentActions[0].payload;
+    const payload = walkthroughActions(db.state)[0].payload;
     assert.equal(payload.attribution.provenance.sourceKind, SOURCE_KIND);
     assert.equal(payload.attribution.raw.campaign_id, 'camp-257');
     assert.equal(payload.attribution.raw.ad_group_id, 'ag-257');
