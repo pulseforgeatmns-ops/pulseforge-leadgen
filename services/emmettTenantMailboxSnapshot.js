@@ -7,6 +7,7 @@
  */
 
 const { localDateOf } = require('../packages/emmett-outbound');
+const { authenticationFromVerificationState } = require('../packages/emmett-outbound/AuthEvidence');
 const { resolveInboxAge } = require('./emmettOutboundSnapshot');
 const {
   classifyOutreachContactType,
@@ -290,11 +291,15 @@ async function buildTenantMailboxSnapshot(tenantId, sendingIdentityId, opts = {}
     inboxAgeSource,
     inboxAgeAnchor,
     providerCeiling,
-    authentication: {
-      spf: EVIDENCE_UNKNOWN,
-      dkim: EVIDENCE_UNKNOWN,
-      dmarc: EVIDENCE_UNKNOWN,
-    },
+    authentication: row.mailbox_verification_state
+      ? authenticationFromVerificationState(row.mailbox_verification_state)
+      : {
+        spf: EVIDENCE_UNKNOWN,
+        dkim: EVIDENCE_UNKNOWN,
+        dmarc: EVIDENCE_UNKNOWN,
+      },
+    deliverabilityObservability: 'limited',
+    mailboxKind: 'tenant_smtp',
     warmup: {
       status: warmupStatus,
       dailyCap: warmupCap,
@@ -332,8 +337,70 @@ async function buildTenantMailboxSnapshot(tenantId, sendingIdentityId, opts = {}
   };
 }
 
+async function buildTenantMailboxInboxSnapshot(input = {}, opts = {}) {
+  if (input.integration && input.identity) {
+    const verificationState = input.integration.verificationState
+      || input.integration.verification_state
+      || {};
+    const authentication = input.authentication
+      || authenticationFromVerificationState(verificationState);
+    const createdAt = input.integration.createdAt || input.identity.createdAt || null;
+    const now = opts.now instanceof Date ? opts.now : new Date(opts.now || Date.now());
+    const timeZone = opts.timeZone || 'America/New_York';
+    const sendStats = input.sendStats || {};
+    const { inboxAgeDays, inboxAgeSource, inboxAgeAnchor } = resolveInboxAge({
+      firstSentAt: sendStats.firstSentAt || null,
+      warmupStartDate: createdAt,
+      createdAt,
+      now,
+      fallbackAgeDays: 0,
+    });
+    return {
+      tenantId: String(input.tenantId),
+      clientId: Number.isFinite(Number(input.tenantId)) ? Number(input.tenantId) : null,
+      sendingIdentityId: input.sendingIdentityId || input.identity.id,
+      mailboxIntegrationId: input.integration.id,
+      inboxId: input.identity.senderEmail,
+      domain: extractDomain(input.identity.senderEmail || input.integration.mailboxAddress),
+      localDate: opts.localDate || localDateOf(now, timeZone),
+      timeZone,
+      inboxAgeDays,
+      inboxAgeSource,
+      inboxAgeAnchor,
+      providerCeiling: Number(opts.providerCeiling || 3),
+      mailboxStatus: input.integration.status || null,
+      identityStatus: input.identity.status || null,
+      authentication,
+      verificationState,
+      warmup: {
+        status: 'warming',
+        dailyCap: 3,
+        activeSendDays: Number(sendStats.activeSendDays || 0),
+        reset: !sendStats.firstSentAt && !sendStats.activeSendDays,
+      },
+      deliverabilityObservability: 'limited',
+      mailboxKind: 'tenant_smtp',
+      bounceRate: 0,
+      replyRate: null,
+      openRate: null,
+      complaintRate: 0,
+      hardBounceCount: Number(sendStats.hardBounceCount || 0),
+      blacklist: { listed: false, sources: [] },
+      sentToday: Number(sendStats.sentToday || 0),
+      sentYesterday: Number(sendStats.sentYesterday || 0),
+      scheduledToday: Number(sendStats.scheduledToday || 0),
+      recentSends: Number(sendStats.totalOperationalSends || 0),
+      totalOperationalSends: Number(sendStats.totalOperationalSends || 0),
+      bootstrapEnabled: opts.bootstrapEnabled !== false,
+      businessHours: opts.businessHours || { startHour: 9, endHour: 16 },
+    };
+  }
+  return buildTenantMailboxSnapshot(input.tenantId, input.sendingIdentityId, opts);
+}
+
 module.exports = {
   buildTenantMailboxSnapshot,
+  buildTenantMailboxInboxSnapshot,
   TENANT_WARMUP_STAGES,
   EVIDENCE_UNKNOWN,
   isRoleContactType,
