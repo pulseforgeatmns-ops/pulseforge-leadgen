@@ -36,12 +36,15 @@ const FORBIDDEN_QUEUE_KEYS = new Set([
   'messaging', 'copy', 'emailBody', 'email_body', 'hypothesis', 'hypotheses',
 ]);
 
-function findEmmettCapacity(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
-    );
+const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
+
+function findEmmettCapacity(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: SPECIALISTS.EMMETT,
+    kind: CONTRIBUTION_KINDS.CAPACITY,
+    mission,
+  });
 }
 
 function fixtureInfrastructureSnapshot(tenantId) {

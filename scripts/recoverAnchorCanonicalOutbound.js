@@ -244,6 +244,10 @@ async function run(options = {}) {
       stepRecord.alreadyExecuted = routed.executionResult?.alreadyExecuted === true
         || routed.audit?.outcome === 'already_executed';
       stepRecord.rolledBack = routed.executionResult?.rolledBack === true;
+      stepRecord.rollbackReason = routed.executionResult?.rollbackReason
+        || routed.executionResult?.error?.rollbackReason
+        || routed.executionResult?.error?.message
+        || null;
       if (
         stepRecord.alreadyExecuted
         && chosen.intent === 'APPROVE_DISCOVERY'

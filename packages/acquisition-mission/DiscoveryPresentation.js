@@ -10,6 +10,7 @@ const {
   normalizeProviderExecution,
   formatProviderExecutionLines,
 } = require('../scout/coverage/ProviderExecution');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
 
 /**
  * @param {unknown} item
@@ -378,10 +379,13 @@ function formatDiscoveryResultsProse(payload) {
  * @param {object[]} contributions
  * @returns {object|null}
  */
-function findLatestDiscoveryContribution(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find((row) => row.specialist === 'scout' && row.kind === 'discovery') || null;
+function findLatestDiscoveryContribution(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: 'scout',
+    kind: 'discovery',
+    mission,
+  });
 }
 
 module.exports = {

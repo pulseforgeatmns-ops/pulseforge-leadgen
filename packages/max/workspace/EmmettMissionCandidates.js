@@ -7,31 +7,33 @@
  */
 
 const { SPECIALISTS, CONTRIBUTION_KINDS, asText, MESSAGE_BINDING_SCOPES } = require('../../acquisition-mission/types');
-const { unwrapSpecialistPayload } = require('../../acquisition-mission/ContributionSupersession');
+const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
 const { resolveMissionBoundRecipientEmail } = require('./MissionBoundCrmResolver');
+const { resolveMissionBoundIdentity } = require('./MissionBoundIdentity');
 const {
-  isGooglePlaceId,
   prospectIdentity,
   identityKeysFrom,
-  canonicalOutboundIdentity,
 } = require('./CanonicalOutboundIdentity');
 
-function latestContribution(contributions = [], specialist, kind) {
-  return [...contributions]
-    .reverse()
-    .find((row) => row.specialist === specialist && (!kind || row.kind === kind));
+function latestContribution(contributions = [], specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
 }
 
-function findLatestScoutDiscovery(contributions = []) {
-  return latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
 }
 
-function findMaxPrioritization(contributions = []) {
-  return latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+function findMaxPrioritization(contributions = [], mission = null) {
+  return latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
 }
 
-function findPaigeVariants(contributions = []) {
-  return latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+function findPaigeVariants(contributions = [], mission = null) {
+  return latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS, mission);
 }
 
 function signalObservedAt(signals = []) {
@@ -107,12 +109,12 @@ function contributionBody(row) {
 
 function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   const crmByProspectId = opts.crmByProspectId || null;
-  const scoutRow = findLatestScoutDiscovery(contributions);
-  const maxRow = findMaxPrioritization(contributions);
-  const paigeRow = findPaigeVariants(contributions);
-  const scoutPayload = contributionBody(scoutRow);
-  const maxPayload = contributionBody(maxRow);
-  const paigePayload = contributionBody(paigeRow);
+  const scoutRow = findLatestScoutDiscovery(contributions, mission);
+  const maxRow = findMaxPrioritization(contributions, mission);
+  const paigeRow = findPaigeVariants(contributions, mission);
+  const scoutPayload = scoutRow?.payload || {};
+  const maxPayload = maxRow?.payload || {};
+  const paigePayload = paigeRow?.payload || {};
   const paigeReady = buildPaigeReadinessMetadata(paigePayload);
   const plan = mission.structuredMission || mission.missionPlanDraft || {};
   const segmentLabel = plan.market?.label || plan.market?.segment || mission.targetSegment;
@@ -158,29 +160,27 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
     const signals = target.signals || opp.signals || [];
     const maxPriority = Math.max(0.1, 1 - (rank - 1) * 0.12);
 
-    const identity = canonicalOutboundIdentity(target, {
-      placeId: opp.placeId || opp.place_id || prospect?.placeId,
-      prospect: prospect || {},
-      website: opp.website || opp.url || prospect?.website || prospect?.url,
+    const identity = resolveMissionBoundIdentity({
+      target,
+      opp,
+      prospect,
       fallbackId: `mission-target-${rank}`,
     });
-    const candidateId = identity.candidateId;
+    const candidateId = identity.candidateId || `mission-target-${rank}`;
     const crmProspectId = identity.crmProspectId || resolvedProspectId || null;
-    const queueProspectId = candidateId;
 
     const row = {
       id: candidateId,
       candidateId,
-      companyId: identity.companyId || candidateId,
-      placeId: identity.placeId || (isGooglePlaceId(candidateId) ? candidateId : null),
+      placeId: identity.placeId,
+      crmCompanyId: identity.crmCompanyId,
       crmProspectId,
-      prospectId: queueProspectId,
-      domain: identity.domain || null,
+      prospectId: candidateId,
       email: resolveMissionBoundRecipientEmail({
         discoveryEmail: prospect?.email,
         missionBoundKey: candidateId,
         prospectId: crmProspectId,
-        companyId: identity.companyId,
+        companyId: identity.crmCompanyId,
         domain: identity.domain,
         crmByProspectId,
       }),
