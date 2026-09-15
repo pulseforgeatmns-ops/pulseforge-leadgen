@@ -6,6 +6,7 @@
 const express = require('express');
 const { validateWalkthroughPayload } = require('../lib/walkthroughValidate');
 const { captureWalkthroughLead } = require('../lib/walkthroughCapture');
+const { buildAttributionRecord } = require('../lib/walkthroughAttribution');
 
 const router = express.Router();
 
@@ -52,7 +53,12 @@ router.post('/api/public/walkthrough', async (req, res) => {
       return res.status(400).json({ error: 'Validation failed', details: validated.errors });
     }
 
-    const stored = await captureWalkthroughLead(validated.values);
+    const serverReferer = String(req.headers.referer || req.headers.referrer || '').trim() || null;
+    const attributionRecord = validated.values.attribution
+      ? buildAttributionRecord(validated.values.attribution, { serverReferer })
+      : null;
+
+    const stored = await captureWalkthroughLead(validated.values, attributionRecord);
     return res.status(201).json({
       ok: true,
       submission_id: stored.id,
