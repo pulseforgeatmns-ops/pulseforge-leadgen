@@ -265,6 +265,12 @@ describe('Anchor landing page attribution contract', () => {
     assert.match(html, /ATTRIBUTION_QUERY_KEYS\.forEach/);
   });
 
+  it('loads Microsoft Clarity once in global head', () => {
+    assert.match(html, /https:\/\/www\.clarity\.ms\/tag\/"\+i/);
+    assert.match(html, /"yhnafqbr5k"/);
+    assert.equal((html.match(/yhnafqbr5k/g) || []).length, 1);
+  });
+
   it('fires OpenAI lead_created only after successful submission and optionally passes submission_id', () => {
     assert.match(html, /trackOpenAiLeadCreated\(openAiLeadTracked, json\.submission_id\)/);
     assert.match(html, /if \(json && json\.submission_id\)/);
