@@ -1114,7 +1114,9 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
     [key]
   )).rows;
   const contributions = (await pool.query(
-    `SELECT payload FROM acquisition_mission_contributions WHERE tenant_id = $1`,
+    `SELECT payload FROM acquisition_mission_contributions
+      WHERE tenant_id = $1
+      ORDER BY at ASC, id ASC`,
     [key]
   )).rows.map((row) => row.payload);
   const observations = (await pool.query(

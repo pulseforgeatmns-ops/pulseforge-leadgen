@@ -16,6 +16,8 @@ const {
   intentFromPendingDecision,
 } = amo;
 const { evaluatePrioritizationReadiness } = require('../../packages/acquisition-mission/DecisionReadiness');
+const { selectCanonicalContribution } = require('../../packages/acquisition-mission/CanonicalContributionSelection');
+const { evaluateUpstreamArtifactCoherence } = require('../../packages/acquisition-mission/UpstreamArtifactCoherence');
 const { unwrapContributionPayload, scoutCandidateCount } = require('../validateAnchorCanonicalMission');
 const { sendableQueueItems } = require('../executeAnchorOneOutbound');
 const { selectActiveCapacityContribution } = require('./activeCapacitySelection');
@@ -60,10 +62,13 @@ function isStrOutboundObjective(text) {
   return hasCleaning && hasStr && hasGeo;
 }
 
-function latestContribution(contributions, specialist, kind) {
-  return [...(contributions || [])]
-    .reverse()
-    .find((row) => row.specialist === specialist && (!kind || row.kind === kind)) || null;
+function latestContribution(contributions, specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions || [], {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
 }
 
 function paigeVariantCount(payload) {
@@ -104,6 +109,9 @@ function classifyQueueItems(capacityPayload) {
       return {
         prospectId: item?.prospectId || null,
         candidateId: item?.id || item?.candidateId || null,
+        placeId: item?.placeId || null,
+        crmCompanyId: item?.crmCompanyId || null,
+        crmProspectId: item?.crmProspectId || null,
         company: item?.company || null,
         reasons,
       };
@@ -118,9 +126,9 @@ function classifyQueueItems(capacityPayload) {
 }
 
 function summarizeContributions(contributions = [], mission = {}) {
-  const scout = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
-  const max = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
-  const paige = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+  const scout = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const max = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
+  const paige = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS, mission);
   const capacityRows = (contributions || []).filter(
     (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
   );
@@ -223,6 +231,7 @@ function summarizeMissionSnapshot(snapshot = {}, extras = {}) {
   const pending = mission.pendingOperatorDecision || null;
   const pendingIntent = intentFromPendingDecision(pending);
   const health = snapshot.health || {};
+  const upstreamCoherence = evaluateUpstreamArtifactCoherence(mission, contributions);
   return {
     id: mission.id || null,
     title: mission.title || null,
@@ -248,6 +257,8 @@ function summarizeMissionSnapshot(snapshot = {}, extras = {}) {
     scoutCandidateCount: summarized.scout?.candidateCount || 0,
     discoveryReadiness: summarized.discoveryReadiness || null,
     prioritizationReady: summarized.discoveryReadiness?.sufficient === true,
+    upstreamCoherent: upstreamCoherence.coherent === true,
+    upstreamBlockers: upstreamCoherence.blockers || [],
     prioritizedCandidateCount: summarized.max?.rankedCount || 0,
     paigeVariantCount: summarized.paige?.variantCount || 0,
     capacityItemCount: summarized.emmett?.queueCount || 0,
@@ -313,6 +324,35 @@ function canIssuePrioritizationApproval(summary = {}) {
   return prioritizationApprovalPending(summary) || summary.prioritizationReady === true;
 }
 
+function isRecoverySummaryIncoherent(summary = {}) {
+  if (summary.upstreamCoherent === false) return true;
+  const scoutCount = Number(summary.scoutCandidateCount || 0);
+  const rankedCount = Number(summary.prioritizedCandidateCount || summary.contributions?.max?.rankedCount || 0);
+  if (rankedCount > 0 && scoutCount <= 0) return true;
+  if (summary.prioritizationReady === false && scoutCount > 0) return true;
+  if (summary.discoveryReadiness && summary.discoveryReadiness.sufficient === false && scoutCount > 0) {
+    return true;
+  }
+  return false;
+}
+
+function upstreamIncoherentStop(summary = {}) {
+  const readiness = summary.discoveryReadiness || {};
+  const blocker = readiness.primaryBlocker || null;
+  return {
+    intent: null,
+    stop: true,
+    reason: 'upstream_artifact_incoherent',
+    operatorAction:
+      blocker?.reason
+      || (Number(summary.scoutCandidateCount || 0) <= 0
+        ? 'Canonical Scout discovery is stale or empty; re-hydrate the latest committed Scout contribution before execution approval.'
+        : 'Upstream artifact chain is incoherent; fix canonical Scout hydration before APPROVE_EXECUTION.'),
+    blocker,
+    upstreamBlockers: summary.upstreamBlockers || [],
+  };
+}
+
 function discoveryInvestigationBlocker(summary = {}) {
   const readiness = summary.discoveryReadiness || {};
   const blocker = readiness.primaryBlocker || null;
@@ -336,6 +376,9 @@ function chooseNextRecoveryIntent(summary = {}) {
 
   const sendable = Number(summary.sendableCount || 0);
   if (FORBIDDEN_SEND_INTENT_SET.has(pendingIntent)) {
+    if (isRecoverySummaryIncoherent(summary)) {
+      return upstreamIncoherentStop(summary);
+    }
     if (sendable > 0) {
       return {
         intent: null,
@@ -353,6 +396,9 @@ function chooseNextRecoveryIntent(summary = {}) {
   }
 
   if (stage === STAGES.READY && sendable > 0) {
+    if (isRecoverySummaryIncoherent(summary)) {
+      return upstreamIncoherentStop(summary);
+    }
     return {
       intent: null,
       stop: true,
@@ -500,6 +546,8 @@ module.exports = {
   prioritizationApprovalPending,
   canIssuePrioritizationApproval,
   discoveryInvestigationBlocker,
+  isRecoverySummaryIncoherent,
+  upstreamIncoherentStop,
   chooseNextRecoveryIntent,
   payloadForIntent,
   questionForIntent,

@@ -18,6 +18,7 @@ const {
   isExecutionApproved,
   canAdvertiseExecutionApproval,
 } = require('./ExecutionApproval');
+const { isUpstreamArtifactChainCoherent } = require('./UpstreamArtifactCoherence');
 
 const MISSION_STATE_INCONSISTENT = 'MISSION_STATE_INCONSISTENT';
 
@@ -350,6 +351,17 @@ function assertMissionStateConsistent(missionOrSnapshot, extras = {}) {
   if (hasPendingPlanClarification(snapshot) && kind !== OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION) {
     throw missionStateInconsistent(
       'hasPendingPlanClarification is true but pendingOperatorDecision does not match.',
+      details
+    );
+  }
+
+  if (
+    stage === STAGES.READY
+    && kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
+    && !isUpstreamArtifactChainCoherent(mission, snapshot.contributions || contributionsFrom(snapshot, extras))
+  ) {
+    throw missionStateInconsistent(
+      'Execution approval is advertised while canonical upstream artifacts are incoherent.',
       details
     );
   }

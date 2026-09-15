@@ -9,19 +9,24 @@ const { asText, SPECIALISTS, CONTRIBUTION_KINDS, clone } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const { buildSharedContext } = require('./Context');
 const { latestApproachDecision } = require('./AcquisitionApproach');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
 
-function latestContribution(contributions = [], specialist, kind) {
-  return [...contributions]
-    .reverse()
-    .find((row) => row.specialist === specialist && (!kind || row.kind === kind));
+function latestContribution(contributions = [], specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
 }
 
-function findLatestScoutDiscovery(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
-    );
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: SPECIALISTS.SCOUT,
+    kind: CONTRIBUTION_KINDS.DISCOVERY,
+    mission,
+  });
 }
 
 function findLatestOperatorPrioritizationApproval(contributions = []) {
@@ -82,12 +87,12 @@ function paigeInput(mission, extras = {}) {
   const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
   const sharedContext = extras.sharedContext
     || (contributions.length ? buildSharedContext(mission, contributions) : null);
-  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
-  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
   const approachDecision = latestApproachDecision(contributions);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
-  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
+  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL, mission);
 
   return {
     audience: plan.market.label || plan.market.segment,
@@ -134,8 +139,8 @@ function pennyInput(mission, extras = {}) {
   const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
   const sharedContext = extras.sharedContext
     || (contributions.length ? buildSharedContext(mission, contributions) : null);
-  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
-  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
   const approachDecision = latestApproachDecision(contributions);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
@@ -219,11 +224,11 @@ function emmettInput(mission, extras = {}) {
   const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
   const sharedContext = extras.sharedContext
     || (contributions.length ? buildSharedContext(mission, contributions) : null);
-  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
-  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
-  const paigeRow = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
+  const paigeRow = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS, mission);
   const approachDecision = latestApproachDecision(contributions);
-  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
+  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL, mission);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
   const paigePayload = paigeRow?.payload || {};
@@ -324,7 +329,7 @@ function maxInput(mission, extras = {}) {
   const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
   const scoutDiscovery = extras.discovery
     ? { payload: extras.discovery }
-    : findLatestScoutDiscovery(contributions);
+    : findLatestScoutDiscovery(contributions, mission);
   const discoveryPayload = scoutDiscovery ? clone(scoutDiscovery.payload || {}) : null;
   const operatorApproval = extras.operatorApproval || findLatestOperatorPrioritizationApproval(contributions);
 
@@ -344,7 +349,12 @@ function maxInput(mission, extras = {}) {
       : [],
     evidence: discoveryPayload ? clone(discoveryPayload.evidence || []) : [],
     buyingSignals: discoveryPayload ? clone(discoveryPayload.buyingSignals || []) : [],
-    maxPrioritization: latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION)?.payload || null,
+    maxPrioritization: latestContribution(
+      contributions,
+      SPECIALISTS.MAX,
+      CONTRIBUTION_KINDS.PRIORITIZATION,
+      mission
+    )?.payload || null,
     acquisitionApproach: latestApproachDecision(contributions)?.decision || null,
     operatorPrioritizationApproval: operatorApproval ? clone(operatorApproval.payload || {}) : null,
     constraints: (plan.constraints || []).slice(),

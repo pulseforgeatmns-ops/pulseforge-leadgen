@@ -1540,12 +1540,14 @@ function findMaxPrioritization(contributions = []) {
   return findLatestMaxPrioritization(contributions);
 }
 
-function findPaigeVariants(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.PAIGE && row.kind === CONTRIBUTION_KINDS.VARIANTS
-    );
+function findPaigeVariants(contributions = [], mission = null) {
+  const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: SPECIALISTS.PAIGE,
+    kind: CONTRIBUTION_KINDS.VARIANTS,
+    mission,
+  });
 }
 
 function findPennyPaidAcquisitionRecommendation(contributions = []) {
@@ -2679,8 +2681,18 @@ async function advancePreparedOutreachRevision(input = {}) {
   if (!current || current.stage !== STAGES.READY) {
     throw planningError('tme_revision_wrong_stage', 'Prepared outreach revision requires READY.');
   }
-  if (!findValidExecutionApproval(snapshot.contributions || [], current.id)) {
-    throw planningError('tme_revision_no_approval', 'No current execution approval is available to revise.');
+  const paigePrepared = findPaigeVariants(snapshot.contributions || [], current);
+  const emmettPrepared = findEmmettCapacity(snapshot.contributions || [], current);
+  const canRevise = Boolean(paigePrepared && emmettPrepared)
+    && (
+      findValidExecutionApproval(snapshot.contributions || [], current.id)
+      || hasPendingExecutionApproval(snapshot)
+    );
+  if (!canRevise) {
+    throw planningError(
+      'tme_revision_no_prepared_artifacts',
+      'Prepared outreach revision requires READY with active Paige and Emmett artifacts and a pending or valid execution approval boundary.'
+    );
   }
 
   const persistDurable = bindPersistDurable(input, engine, tenantId);

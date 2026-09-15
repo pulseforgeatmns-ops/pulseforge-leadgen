@@ -7,24 +7,29 @@
  */
 
 const { SPECIALISTS, CONTRIBUTION_KINDS, asText } = require('../../acquisition-mission/types');
+const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
 const { resolveMissionBoundRecipientEmail } = require('./MissionBoundCrmResolver');
+const { resolveMissionBoundIdentity } = require('./MissionBoundIdentity');
 
-function latestContribution(contributions = [], specialist, kind) {
-  return [...contributions]
-    .reverse()
-    .find((row) => row.specialist === specialist && (!kind || row.kind === kind));
+function latestContribution(contributions = [], specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
 }
 
-function findLatestScoutDiscovery(contributions = []) {
-  return latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
 }
 
-function findMaxPrioritization(contributions = []) {
-  return latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+function findMaxPrioritization(contributions = [], mission = null) {
+  return latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
 }
 
-function findPaigeVariants(contributions = []) {
-  return latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+function findPaigeVariants(contributions = [], mission = null) {
+  return latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS, mission);
 }
 
 function signalObservedAt(signals = []) {
@@ -84,9 +89,9 @@ function findBoundVariant(variants = [], candidateId) {
  */
 function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   const crmByProspectId = opts.crmByProspectId || null;
-  const scoutRow = findLatestScoutDiscovery(contributions);
-  const maxRow = findMaxPrioritization(contributions);
-  const paigeRow = findPaigeVariants(contributions);
+  const scoutRow = findLatestScoutDiscovery(contributions, mission);
+  const maxRow = findMaxPrioritization(contributions, mission);
+  const paigeRow = findPaigeVariants(contributions, mission);
   const scoutPayload = scoutRow?.payload || {};
   const maxPayload = maxRow?.payload || {};
   const paigePayload = paigeRow?.payload || {};
@@ -137,13 +142,21 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
     const signals = target.signals || opp.signals || [];
     const maxPriority = Math.max(0.1, 1 - (rank - 1) * 0.12);
 
-    // SPEC-212: Use target's own ID as candidateId
-    const candidateId = target.id || target.companyId || prospect?.id || `mission-target-${rank}`;
+    const identity = resolveMissionBoundIdentity({
+      target,
+      opp,
+      prospect,
+      fallbackId: `mission-target-${rank}`,
+    });
+    const candidateId = identity.candidateId || `mission-target-${rank}`;
 
-    const prospectId = resolvedProspectId;
     const row = {
       id: candidateId,
-      prospectId,
+      candidateId,
+      placeId: identity.placeId,
+      crmCompanyId: identity.crmCompanyId,
+      crmProspectId: identity.crmProspectId || resolvedProspectId,
+      prospectId: candidateId,
       email: resolveMissionBoundRecipientEmail({
         discoveryEmail: prospect?.email,
         missionBoundKey: candidateId,

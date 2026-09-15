@@ -20,9 +20,10 @@ const {
   extractCapacitySenderIdentity,
 } = require('../../utils/canonicalSenderIdentity');
 const {
-  isSupersededContribution,
   unwrapSpecialistPayload,
 } = require('./ContributionSupersession');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
+const { isUpstreamArtifactChainCoherent } = require('./UpstreamArtifactCoherence');
 const {
   extractOutreachSequenceSteps,
   outreachSequenceForRevisionHash,
@@ -31,47 +32,65 @@ const {
 
 const EXECUTION_APPROVAL_ACTION = 'execution_approved';
 
-function findLatestContribution(contributions = [], specialist, kind) {
-  return [...contributions]
-    .reverse()
-    .find((row) => row.specialist === specialist && row.kind === kind) || null;
+function missionFromContributions(contributions = [], missionId = null) {
+  if (missionId) return { id: missionId };
+  const row = contributions.find((entry) => entry && entry.missionId);
+  return row ? { id: row.missionId } : null;
 }
 
-function findLatestActiveContribution(contributions = [], specialist, kind) {
-  return [...contributions]
-    .reverse()
-    .find((row) =>
-      row.specialist === specialist
-      && row.kind === kind
-      && !isSupersededContribution(row)
-    ) || null;
+function findLatestContribution(contributions = [], specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
 }
 
-function findMaxPrioritization(contributions = []) {
-  return findLatestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+function findMaxPrioritization(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.MAX,
+    CONTRIBUTION_KINDS.PRIORITIZATION,
+    mission || missionFromContributions(contributions)
+  );
 }
 
-function findPaigeVariants(contributions = []) {
-  return findLatestActiveContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS)
-    || findLatestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+function findPaigeVariants(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.PAIGE,
+    CONTRIBUTION_KINDS.VARIANTS,
+    mission || missionFromContributions(contributions)
+  );
 }
 
-function findEmmettCapacity(contributions = []) {
-  return findLatestActiveContribution(contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY)
-    || findLatestContribution(contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY);
+function findEmmettCapacity(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.EMMETT,
+    CONTRIBUTION_KINDS.CAPACITY,
+    mission || missionFromContributions(contributions)
+  );
 }
 
-function findLatestScoutDiscovery(contributions = []) {
-  return findLatestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.SCOUT,
+    CONTRIBUTION_KINDS.DISCOVERY,
+    mission || missionFromContributions(contributions)
+  );
 }
 
 /**
  * Deterministic revision from canonical contribution IDs and prepared queue state.
  */
-function computePreparedArtifactBinding(missionId, contributions = []) {
-  const max = findMaxPrioritization(contributions);
-  const paige = findPaigeVariants(contributions);
-  const emmett = findEmmettCapacity(contributions);
+function computePreparedArtifactBinding(missionId, contributions = [], mission = null) {
+  const missionRef = mission || { id: missionId };
+  const max = findMaxPrioritization(contributions, missionRef);
+  const paige = findPaigeVariants(contributions, missionRef);
+  const emmett = findEmmettCapacity(contributions, missionRef);
   const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
   const queue = emmettPayload.queue || {};
   const queueItems = Array.isArray(queue.items) ? queue.items : [];
@@ -361,15 +380,15 @@ function buildPendingExecutionDecision(mission, contributions = []) {
 
 function canAdvertiseExecutionApproval(mission, contributions = [], extras = {}) {
   if (!mission || mission.stage !== STAGES.READY) return false;
+  if (!isUpstreamArtifactChainCoherent(mission, contributions)) return false;
   const { latestApproachDecision } = require('./AcquisitionApproach');
   const approach = latestApproachDecision(contributions);
   if (approach && approach.selected !== 'outbound' && approach.selected !== 'both') return false;
-  const by = (specialist, kind) =>
-    contributions.some((row) => row.specialist === specialist && row.kind === kind);
-  const paigeComplete = by(SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS) || extras.paigeComplete;
-  const emmettComplete = by(SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY) || extras.emmettComplete;
+  const paige = findPaigeVariants(contributions, mission);
+  const emmett = findEmmettCapacity(contributions, mission);
+  const paigeComplete = Boolean(paige) || extras.paigeComplete;
+  const emmettComplete = Boolean(emmett) || extras.emmettComplete;
   if (!paigeComplete || !emmettComplete) return false;
-  const emmett = findEmmettCapacity(contributions);
   const governor = emmett ? unwrapSpecialistPayload(emmett).governor : null;
   const deliverabilityPaused = extras.deliverabilityPaused === true
     || Boolean(governor && (governor.outcome === 'pause' || governor.outcome === 'emergency'));
