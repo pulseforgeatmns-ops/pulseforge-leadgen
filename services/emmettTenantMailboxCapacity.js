@@ -2,6 +2,7 @@
 
 /**
  * SPEC-254 — Emmett tenant-mailbox capacity envelope producer and gate.
+ * SPEC-256 — temporally correct spacing + single capacity-accounting contract.
  */
 
 const crypto = require('crypto');
@@ -13,6 +14,14 @@ const {
   evaluateCapacityAuthorization,
   evaluateCapacityExecution,
 } = require('../packages/emmett-outbound/TenantMailboxCapacity');
+const {
+  findPriorSendAnchor,
+  findScheduleSpacingConflicts,
+  findInFlightSpacingConflicts,
+  accountCapacityUnits,
+  LIVE_SCHEDULE_STATUSES,
+  LIVE_RESERVATION_STATUSES,
+} = require('../packages/emmett-outbound/TenantMailboxSpacing');
 const { GOVERNOR_OUTCOMES } = require('../packages/emmett-outbound');
 
 const ADVISORY_LOCK_NAMESPACE = 702254;
@@ -225,9 +234,189 @@ async function produceTenantMailboxCapacityEnvelope(tenantId, sendingIdentityId,
   return { snapshot, assessment, envelope };
 }
 
-async function refreshEnvelopeAccounting(tenantId, sendingIdentityId, envelopeId, client, timeZone = 'America/New_York') {
+function reservationIdForSchedule(tenantId, scheduleId) {
+  return `res_${crypto.createHash('sha256').update(`${tenantKey(tenantId)}:${scheduleId}`).digest('hex').slice(0, 24)}`;
+}
+
+const CANONICAL_ACCOUNTING_SQL = `
+  WITH sent AS (
+    SELECT m.id, s.id AS schedule_id
+      FROM tenant_outreach_messages m
+      LEFT JOIN tenant_outreach_scheduled_sends s
+        ON s.tenant_id = m.tenant_id
+       AND s.outbound_message_id = m.id
+     WHERE m.tenant_id = $1 AND m.sending_identity_id = $2
+       AND m.direction = 'OUTBOUND' AND m.status = 'sent'
+       AND (m.sent_at AT TIME ZONE $4)::date = $3::date
+  ),
+  live_schedules AS (
+    SELECT id, status, outbound_message_id, scheduled_for
+      FROM tenant_outreach_scheduled_sends
+     WHERE tenant_id = $1 AND sending_identity_id = $2
+       AND status IN ('SCHEDULED', 'EXECUTING', 'SENT')
+       AND (scheduled_for AT TIME ZONE $4)::date = $3::date
+  ),
+  live_reservations AS (
+    SELECT id, schedule_id, status, scheduled_for
+      FROM emmett_tenant_mailbox_capacity_reservations
+     WHERE tenant_id = $1 AND sending_identity_id = $2
+       AND status IN ('scheduled', 'executing', 'sent')
+       AND (scheduled_for AT TIME ZONE $4)::date = $3::date
+  )
+  SELECT
+    (SELECT COALESCE(json_agg(json_build_object('id', id, 'scheduleId', schedule_id)), '[]'::json) FROM sent) AS sent_messages,
+    (SELECT COALESCE(json_agg(json_build_object(
+        'id', id, 'status', status, 'outboundMessageId', outbound_message_id
+      )), '[]'::json) FROM live_schedules) AS schedules,
+    (SELECT COALESCE(json_agg(json_build_object(
+        'id', id, 'scheduleId', schedule_id, 'status', status
+      )), '[]'::json) FROM live_reservations) AS reservations
+`;
+
+function parseJsonArray(value) {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_err) {
+      return [];
+    }
+  }
+  return [];
+}
+
+async function queryCanonicalCapacityAccounting(tenantId, sendingIdentityId, localDate, timeZone, client) {
+  const res = await client.query(CANONICAL_ACCOUNTING_SQL, [
+    tenantKey(tenantId),
+    tenantKey(sendingIdentityId),
+    localDate,
+    timeZone || 'America/New_York',
+  ]);
+  const row = res.rows[0] || {};
+  return accountCapacityUnits({
+    sentMessages: parseJsonArray(row.sent_messages),
+    schedules: parseJsonArray(row.schedules),
+    reservations: parseJsonArray(row.reservations),
+  });
+}
+
+async function loadLiveCommitments(tenantId, sendingIdentityId, client) {
   const tid = tenantKey(tenantId);
   const sid = tenantKey(sendingIdentityId);
+  const messages = await client.query(
+    `SELECT id, sent_at, 'SENT' AS status
+       FROM tenant_outreach_messages
+      WHERE tenant_id = $1 AND sending_identity_id = $2
+        AND direction = 'OUTBOUND' AND status = 'sent'`,
+    [tid, sid]
+  );
+  const schedules = await client.query(
+    `SELECT id, scheduled_for, status, outbound_message_id
+       FROM tenant_outreach_scheduled_sends
+      WHERE tenant_id = $1 AND sending_identity_id = $2
+        AND status = ANY($3::text[])`,
+    [tid, sid, LIVE_SCHEDULE_STATUSES]
+  );
+  const reservations = await client.query(
+    `SELECT id, schedule_id, scheduled_for, status
+       FROM emmett_tenant_mailbox_capacity_reservations
+      WHERE tenant_id = $1 AND sending_identity_id = $2
+        AND status = ANY($3::text[])`,
+    [tid, sid, LIVE_RESERVATION_STATUSES]
+  );
+
+  return [
+    ...messages.rows.map((row) => ({
+      id: row.id,
+      messageId: row.id,
+      sentAt: row.sent_at,
+      status: 'SENT',
+      kind: 'message',
+    })),
+    ...schedules.rows.map((row) => ({
+      id: row.id,
+      scheduleId: row.id,
+      scheduledFor: row.scheduled_for,
+      status: row.status,
+      outboundMessageId: row.outbound_message_id,
+      kind: 'schedule',
+    })),
+    ...reservations.rows.map((row) => ({
+      id: row.id,
+      reservationId: row.id,
+      scheduleId: row.schedule_id,
+      scheduledFor: row.scheduled_for,
+      status: row.status,
+      kind: 'reservation',
+    })),
+  ];
+}
+
+async function queryPriorSendAnchor(tenantId, sendingIdentityId, evaluatedScheduledFor, client, opts = {}) {
+  const commitments = await loadLiveCommitments(tenantId, sendingIdentityId, client);
+  return findPriorSendAnchor(commitments, evaluatedScheduledFor, opts);
+}
+
+async function queryScheduleSpacingConflicts(tenantId, sendingIdentityId, requestedScheduledFor, minSpacingMinutes, client, opts = {}) {
+  const commitments = await loadLiveCommitments(tenantId, sendingIdentityId, client);
+  return findScheduleSpacingConflicts(requestedScheduledFor, commitments, minSpacingMinutes, opts);
+}
+
+async function queryInFlightSpacingConflicts(tenantId, sendingIdentityId, requestedScheduledFor, minSpacingMinutes, client, opts = {}) {
+  const commitments = await loadLiveCommitments(tenantId, sendingIdentityId, client);
+  return findInFlightSpacingConflicts(requestedScheduledFor, commitments, minSpacingMinutes, opts);
+}
+
+async function scheduleAlreadyConsumesCapacity(schedule, client) {
+  const tid = tenantKey(schedule.tenantId);
+  const scheduleId = schedule.id;
+  if (!scheduleId) return false;
+  const res = await client.query(
+    `SELECT
+        EXISTS (
+          SELECT 1 FROM tenant_outreach_scheduled_sends
+           WHERE tenant_id = $1 AND id = $2
+             AND status IN ('SCHEDULED', 'EXECUTING', 'SENT')
+        ) OR EXISTS (
+          SELECT 1 FROM emmett_tenant_mailbox_capacity_reservations
+           WHERE tenant_id = $1 AND schedule_id = $2
+             AND status IN ('scheduled', 'executing', 'sent')
+        ) AS consumed`,
+    [tid, scheduleId]
+  );
+  return res.rows[0]?.consumed === true;
+}
+
+async function reconcileLegacyReservations(tenantId, sendingIdentityId, envelopeId, client) {
+  const tid = tenantKey(tenantId);
+  const sid = tenantKey(sendingIdentityId);
+  const live = await client.query(
+    `SELECT id, status, scheduled_for
+       FROM tenant_outreach_scheduled_sends
+      WHERE tenant_id = $1
+        AND sending_identity_id = $2
+        AND status IN ('SCHEDULED', 'EXECUTING')`,
+    [tid, sid]
+  );
+  let created = 0;
+  for (const row of live.rows) {
+    const reservationId = reservationIdForSchedule(tid, row.id);
+    const mapped = row.status === 'EXECUTING' ? 'executing' : 'scheduled';
+    const inserted = await client.query(
+      `INSERT INTO emmett_tenant_mailbox_capacity_reservations (
+          id, envelope_id, tenant_id, sending_identity_id, schedule_id, status, scheduled_for, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+        ON CONFLICT (id) DO NOTHING
+        RETURNING id`,
+      [reservationId, envelopeId, tid, sid, row.id, mapped, row.scheduled_for]
+    );
+    if (inserted.rowCount) created += 1;
+  }
+  return { created, examined: live.rows.length };
+}
+
+async function refreshEnvelopeAccounting(tenantId, sendingIdentityId, envelopeId, client, timeZone = 'America/New_York') {
   const envRes = await client.query(
     `SELECT * FROM emmett_tenant_mailbox_capacity_envelopes WHERE id = $1 FOR UPDATE`,
     [envelopeId]
@@ -235,31 +424,15 @@ async function refreshEnvelopeAccounting(tenantId, sendingIdentityId, envelopeId
   const envelope = normalizeEnvelope(envRes.rows[0]);
   if (!envelope) return null;
 
-  const sentRes = await client.query(
-    `SELECT COUNT(*)::int AS sent_count
-       FROM tenant_outreach_messages
-      WHERE tenant_id = $1 AND sending_identity_id = $2
-        AND direction = 'OUTBOUND' AND status = 'sent'
-        AND (sent_at AT TIME ZONE $4)::date = $3::date`,
-    [tid, sid, envelope.localDate, timeZone]
+  await reconcileLegacyReservations(tenantId, sendingIdentityId, envelopeId, client);
+  const accounting = await queryCanonicalCapacityAccounting(
+    tenantId,
+    sendingIdentityId,
+    envelope.localDate,
+    timeZone,
+    client
   );
-  const scheduledRes = await client.query(
-    `SELECT COUNT(*)::int AS scheduled_count
-       FROM emmett_tenant_mailbox_capacity_reservations
-      WHERE envelope_id = $1 AND status = 'scheduled'`,
-    [envelopeId]
-  );
-  const executingRes = await client.query(
-    `SELECT COUNT(*)::int AS executing_count
-       FROM emmett_tenant_mailbox_capacity_reservations
-      WHERE envelope_id = $1 AND status = 'executing'`,
-    [envelopeId]
-  );
-
-  const sent = Number(sentRes.rows[0]?.sent_count || 0);
-  const scheduled = Number(scheduledRes.rows[0]?.scheduled_count || 0);
-  const executing = Number(executingRes.rows[0]?.executing_count || 0);
-  const remaining = Math.max(0, envelope.maxSendsPerDay - sent - scheduled - executing);
+  const remaining = accounting.remainingFor(envelope.maxSendsPerDay);
 
   await client.query(
     `UPDATE emmett_tenant_mailbox_capacity_envelopes
@@ -269,33 +442,16 @@ async function refreshEnvelopeAccounting(tenantId, sendingIdentityId, envelopeId
             remaining_capacity = $5,
             updated_at = NOW()
       WHERE id = $1`,
-    [envelopeId, sent, scheduled, executing, remaining]
+    [envelopeId, accounting.sent, accounting.scheduled, accounting.executing, remaining]
   );
 
   return normalizeEnvelope({
     ...envRes.rows[0],
-    current_sent_count: sent,
-    current_scheduled_count: scheduled,
-    current_executing_count: executing,
+    current_sent_count: accounting.sent,
+    current_scheduled_count: accounting.scheduled,
+    current_executing_count: accounting.executing,
     remaining_capacity: remaining,
   });
-}
-
-async function queryLastSendAt(tenantId, sendingIdentityId, pool) {
-  const res = await pool.query(
-    `SELECT GREATEST(
-        COALESCE((SELECT MAX(scheduled_for) FROM tenant_outreach_scheduled_sends
-                   WHERE tenant_id = $1 AND sending_identity_id = $2
-                     AND status IN ('SCHEDULED','EXECUTING','SENT')), 'epoch'::timestamptz),
-        COALESCE((SELECT MAX(sent_at) FROM tenant_outreach_messages
-                   WHERE tenant_id = $1 AND sending_identity_id = $2
-                     AND direction = 'OUTBOUND' AND status = 'sent'), 'epoch'::timestamptz)
-      ) AS last_send_at`,
-    [tenantKey(tenantId), tenantKey(sendingIdentityId)]
-  );
-  const last = res.rows[0]?.last_send_at;
-  if (!last || new Date(last).getTime() <= 0) return null;
-  return last;
 }
 
 async function authorizeTenantMailboxCapacity(input = {}, opts = {}) {
@@ -311,12 +467,6 @@ async function authorizeTenantMailboxCapacity(input = {}, opts = {}) {
     envelope = produced.envelope;
   }
 
-  const lastSendAt = await queryLastSendAt(tenantId, sendingIdentityId, pool);
-  const authCheck = evaluateCapacityAuthorization(envelope, { scheduledFor, lastSendAt }, { now });
-  if (!authCheck.allowed) {
-    throw capacityError(authCheck.code, authCheck.reason, { envelope });
-  }
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -325,24 +475,47 @@ async function authorizeTenantMailboxCapacity(input = {}, opts = {}) {
       advisoryLockKey(tenantId, sendingIdentityId),
     ]);
 
-    envelope = await refreshEnvelopeAccounting(tenantId, sendingIdentityId, envelope.envelopeId, client, envelope.allowedSendWindow?.timezone);
-    const recheck = evaluateCapacityAuthorization(envelope, { scheduledFor, lastSendAt }, { now });
+    envelope = await refreshEnvelopeAccounting(
+      tenantId,
+      sendingIdentityId,
+      envelope.envelopeId,
+      client,
+      envelope.allowedSendWindow?.timezone
+    );
+    const scheduleConflicts = await queryScheduleSpacingConflicts(
+      tenantId,
+      sendingIdentityId,
+      scheduledFor,
+      envelope.minimumSpacingMinutes,
+      client,
+      { excludeScheduleId: input.excludeScheduleId || input.scheduleId || null }
+    );
+    const recheck = evaluateCapacityAuthorization(envelope, {
+      scheduledFor,
+      scheduleConflicts,
+    }, { now });
     if (!recheck.allowed) {
       throw capacityError(recheck.code, recheck.reason, { envelope });
     }
 
+    const pendingReservationId = `pend_${crypto.randomBytes(12).toString('hex')}`;
     await client.query(
-      `UPDATE emmett_tenant_mailbox_capacity_envelopes
-          SET current_scheduled_count = current_scheduled_count + 1,
-              remaining_capacity = GREATEST(0, remaining_capacity - 1),
-              updated_at = NOW()
-        WHERE id = $1`,
-      [envelope.envelopeId]
+      `INSERT INTO emmett_tenant_mailbox_capacity_reservations (
+          id, envelope_id, tenant_id, sending_identity_id, schedule_id, status, scheduled_for, updated_at
+        ) VALUES ($1,$2,$3,$4,NULL,'scheduled',$5,NOW())`,
+      [pendingReservationId, envelope.envelopeId, tenantId, sendingIdentityId, scheduledFor]
+    );
+
+    envelope = await refreshEnvelopeAccounting(
+      tenantId,
+      sendingIdentityId,
+      envelope.envelopeId,
+      client,
+      envelope.allowedSendWindow?.timezone
     );
 
     await client.query('COMMIT');
-    envelope = await loadLatestEnvelope(tenantId, sendingIdentityId, pool, now);
-    return { envelope, reserved: true };
+    return { envelope, reserved: true, pendingReservationId };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
@@ -353,7 +526,7 @@ async function authorizeTenantMailboxCapacity(input = {}, opts = {}) {
 
 async function reserveCapacityForSchedule(schedule, envelopeId, opts = {}) {
   const pool = opts.pool || defaultPool;
-  const reservationId = `res_${crypto.createHash('sha256').update(`${schedule.tenantId}:${schedule.id}`).digest('hex').slice(0, 24)}`;
+  const reservationId = reservationIdForSchedule(schedule.tenantId, schedule.id);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -362,6 +535,21 @@ async function reserveCapacityForSchedule(schedule, envelopeId, opts = {}) {
       advisoryLockKey(schedule.tenantId, schedule.sendingIdentityId),
     ]);
 
+    await client.query(
+      `DELETE FROM emmett_tenant_mailbox_capacity_reservations
+        WHERE id IN (
+          SELECT id FROM emmett_tenant_mailbox_capacity_reservations
+           WHERE tenant_id = $1
+             AND sending_identity_id = $2
+             AND schedule_id IS NULL
+             AND status = 'scheduled'
+             AND scheduled_for = $3::timestamptz
+           ORDER BY created_at ASC
+           LIMIT 1
+        )`,
+      [tenantKey(schedule.tenantId), tenantKey(schedule.sendingIdentityId), schedule.scheduledFor]
+    );
+
     const envelope = await refreshEnvelopeAccounting(
       schedule.tenantId,
       schedule.sendingIdentityId,
@@ -369,9 +557,18 @@ async function reserveCapacityForSchedule(schedule, envelopeId, opts = {}) {
       client,
       schedule.timezone
     );
+    const scheduleConflicts = await queryScheduleSpacingConflicts(
+      schedule.tenantId,
+      schedule.sendingIdentityId,
+      schedule.scheduledFor,
+      envelope.minimumSpacingMinutes,
+      client,
+      { excludeScheduleId: schedule.id }
+    );
     const recheck = evaluateCapacityAuthorization(envelope, {
       scheduledFor: schedule.scheduledFor,
-      lastSendAt: await queryLastSendAt(schedule.tenantId, schedule.sendingIdentityId, client),
+      scheduleConflicts,
+      alreadyConsumesCapacity: true,
     }, { now: opts.now });
     if (!recheck.allowed) {
       throw capacityError(recheck.code, recheck.reason, { envelope });
@@ -381,7 +578,7 @@ async function reserveCapacityForSchedule(schedule, envelopeId, opts = {}) {
       `INSERT INTO emmett_tenant_mailbox_capacity_reservations (
           id, envelope_id, tenant_id, sending_identity_id, schedule_id, status, scheduled_for, updated_at
         ) VALUES ($1,$2,$3,$4,$5,'scheduled',$6,NOW())
-        ON CONFLICT DO NOTHING`,
+        ON CONFLICT (id) DO NOTHING`,
       [
         reservationId,
         envelopeId,
@@ -422,52 +619,130 @@ async function validateExecutionCapacity(schedule, opts = {}) {
       { ...opts, now, pool }
     );
     envelope = produced.envelope;
-  } else {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      envelope = await refreshEnvelopeAccounting(
-        schedule.tenantId,
-        schedule.sendingIdentityId,
-        envelope.envelopeId,
-        client,
-        schedule.timezone
-      );
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+      ADVISORY_LOCK_NAMESPACE,
+      advisoryLockKey(schedule.tenantId, schedule.sendingIdentityId),
+    ]);
+
+    envelope = await refreshEnvelopeAccounting(
+      schedule.tenantId,
+      schedule.sendingIdentityId,
+      envelope.envelopeId,
+      client,
+      schedule.timezone
+    );
+    const alreadyConsumesCapacity = await scheduleAlreadyConsumesCapacity(schedule, client);
+    const prior = await queryPriorSendAnchor(
+      schedule.tenantId,
+      schedule.sendingIdentityId,
+      schedule.scheduledFor,
+      client,
+      { excludeScheduleId: schedule.id }
+    );
+    const inFlightConflicts = await queryInFlightSpacingConflicts(
+      schedule.tenantId,
+      schedule.sendingIdentityId,
+      schedule.scheduledFor,
+      envelope.minimumSpacingMinutes,
+      client,
+      { excludeScheduleId: schedule.id }
+    );
+    const check = evaluateCapacityExecution(envelope, {
+      scheduledFor: schedule.scheduledFor,
+      lastSendAt: prior?.lastSendAt || null,
+      inFlightConflicts,
+      alreadyConsumesCapacity,
+    }, { now });
+
+    if (!check.allowed) {
       await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
+      return {
+        eligible: false,
+        action: 'SKIPPED',
+        reason: check.code,
+        message: check.reason,
+        envelope,
+      };
     }
-  }
 
-  const lastSendAt = await queryLastSendAt(schedule.tenantId, schedule.sendingIdentityId, pool);
-  const check = evaluateCapacityExecution(envelope, {
-    scheduledFor: schedule.scheduledFor,
-    lastSendAt,
-  }, { now });
-
-  if (!check.allowed) {
-    return {
-      eligible: false,
-      action: 'SKIPPED',
-      reason: check.code,
-      message: check.reason,
-      envelope,
-    };
+    await upsertExecutingReservation(schedule, envelope.envelopeId, client);
+    await client.query('COMMIT');
+    return { eligible: true, action: 'send', envelope };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
-  return { eligible: true, action: 'send', envelope };
+}
+
+async function upsertExecutingReservation(schedule, envelopeId, client) {
+  const reservationId = reservationIdForSchedule(schedule.tenantId, schedule.id);
+  await client.query(
+    `INSERT INTO emmett_tenant_mailbox_capacity_reservations (
+        id, envelope_id, tenant_id, sending_identity_id, schedule_id, status, scheduled_for, updated_at
+      ) VALUES ($1,$2,$3,$4,$5,'executing',$6,NOW())
+      ON CONFLICT (id) DO UPDATE
+        SET status = 'executing',
+            envelope_id = EXCLUDED.envelope_id,
+            scheduled_for = EXCLUDED.scheduled_for,
+            updated_at = NOW()`,
+    [
+      reservationId,
+      envelopeId,
+      tenantKey(schedule.tenantId),
+      tenantKey(schedule.sendingIdentityId),
+      schedule.id,
+      schedule.scheduledFor,
+    ]
+  );
 }
 
 async function markReservationExecuting(schedule, opts = {}) {
   const pool = opts.pool || defaultPool;
-  await pool.query(
-    `UPDATE emmett_tenant_mailbox_capacity_reservations
-        SET status = 'executing', updated_at = NOW()
-      WHERE tenant_id = $1 AND schedule_id = $2 AND status = 'scheduled'`,
-    [tenantKey(schedule.tenantId), schedule.id]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+      ADVISORY_LOCK_NAMESPACE,
+      advisoryLockKey(schedule.tenantId, schedule.sendingIdentityId),
+    ]);
+    let envelopeId = opts.envelopeId;
+    if (!envelopeId) {
+      const existing = await client.query(
+        `SELECT envelope_id FROM emmett_tenant_mailbox_capacity_reservations
+          WHERE tenant_id = $1 AND schedule_id = $2
+          LIMIT 1`,
+        [tenantKey(schedule.tenantId), schedule.id]
+      );
+      envelopeId = existing.rows[0]?.envelope_id;
+    }
+    if (!envelopeId) {
+      const latest = await loadLatestEnvelope(schedule.tenantId, schedule.sendingIdentityId, pool, opts.now || new Date());
+      envelopeId = latest?.envelopeId;
+    }
+    if (envelopeId) {
+      await upsertExecutingReservation(schedule, envelopeId, client);
+    } else {
+      await client.query(
+        `UPDATE emmett_tenant_mailbox_capacity_reservations
+            SET status = 'executing', updated_at = NOW()
+          WHERE tenant_id = $1 AND schedule_id = $2 AND status = 'scheduled'`,
+        [tenantKey(schedule.tenantId), schedule.id]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function finalizeReservation(schedule, status, opts = {}) {
@@ -543,54 +818,202 @@ function createPermissiveEnvelope(tenantId, sendingIdentityId, opts = {}) {
 function createMemoryCapacityGate(seed = {}) {
   const envelopes = new Map();
   const reservations = new Map();
+  const commitments = [...(seed.commitments || [])];
+  const sentMessages = [...(seed.sentMessages || [])];
+  let lock = Promise.resolve();
+
   for (const envelope of seed.envelopes || []) {
     envelopes.set(`${envelope.tenantId}:${envelope.sendingIdentityId}`, envelope);
   }
 
+  function identityKey(tenantId, sendingIdentityId) {
+    return `${tenantKey(tenantId)}:${tenantKey(sendingIdentityId)}`;
+  }
+
+  function withLock(fn) {
+    const run = lock.then(fn, fn);
+    lock = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  function scopedCommitments(tenantId, sendingIdentityId) {
+    const tid = tenantKey(tenantId);
+    const sid = tenantKey(sendingIdentityId);
+    return [
+      ...sentMessages.filter((row) => (!row.tenantId || tenantKey(row.tenantId) === tid)
+        && (!row.sendingIdentityId || tenantKey(row.sendingIdentityId) === sid)),
+      ...commitments.filter((row) => (!row.tenantId || tenantKey(row.tenantId) === tid)
+        && (!row.sendingIdentityId || tenantKey(row.sendingIdentityId) === sid)),
+      ...[...reservations.values()].filter((row) => tenantKey(row.tenantId) === tid
+        && tenantKey(row.sendingIdentityId) === sid),
+    ];
+  }
+
+  function refreshEnvelopeFromLedger(envelope) {
+    const accounting = accountCapacityUnits({
+      sentMessages: sentMessages.filter((row) => tenantKey(row.tenantId || envelope.tenantId) === envelope.tenantId
+        && tenantKey(row.sendingIdentityId || envelope.sendingIdentityId) === envelope.sendingIdentityId),
+      schedules: commitments.filter((row) => tenantKey(row.tenantId || envelope.tenantId) === envelope.tenantId
+        && tenantKey(row.sendingIdentityId || envelope.sendingIdentityId) === envelope.sendingIdentityId),
+      reservations: [...reservations.values()].filter((row) => tenantKey(row.tenantId) === envelope.tenantId
+        && tenantKey(row.sendingIdentityId) === envelope.sendingIdentityId),
+    });
+    envelope.currentSentCount = accounting.sent;
+    envelope.currentScheduledCount = accounting.scheduled;
+    envelope.currentExecutingCount = accounting.executing;
+    envelope.remainingCapacity = accounting.remainingFor(envelope.maxSendsPerDay);
+    return envelope;
+  }
+
   return {
     async authorize(input = {}, opts = {}) {
-      const key = `${tenantKey(input.tenantId)}:${tenantKey(input.sendingIdentityId)}`;
-      let envelope = envelopes.get(key);
-      if (!envelope) envelope = createPermissiveEnvelope(input.tenantId, input.sendingIdentityId, opts);
-      const lastSendAt = seed.lastSendAt || null;
-      const authCheck = evaluateCapacityAuthorization(envelope, {
-        scheduledFor: input.scheduledFor,
-        lastSendAt,
-      }, opts);
-      if (!authCheck.allowed) {
-        throw capacityError(authCheck.code, authCheck.reason, { envelope });
-      }
-      envelopes.set(key, envelope);
-      return { envelope };
-    },
-    async reserve(schedule, envelopeId) {
-      reservations.set(schedule.id, { envelopeId, status: 'scheduled' });
-      const key = `${tenantKey(schedule.tenantId)}:${tenantKey(schedule.sendingIdentityId)}`;
-      const envelope = envelopes.get(key);
-      if (envelope) {
+      return withLock(async () => {
+        const key = identityKey(input.tenantId, input.sendingIdentityId);
+        let envelope = envelopes.get(key);
+        if (!envelope) envelope = createPermissiveEnvelope(input.tenantId, input.sendingIdentityId, opts);
+        refreshEnvelopeFromLedger(envelope);
+        const scheduleConflicts = findScheduleSpacingConflicts(
+          input.scheduledFor,
+          scopedCommitments(input.tenantId, input.sendingIdentityId),
+          envelope.minimumSpacingMinutes
+        );
+        const authCheck = evaluateCapacityAuthorization(envelope, {
+          scheduledFor: input.scheduledFor,
+          scheduleConflicts: scheduleConflicts.length ? scheduleConflicts : undefined,
+          lastSendAt: seed.lastSendAt || null,
+        }, opts);
+        if (!authCheck.allowed) {
+          throw capacityError(authCheck.code, authCheck.reason, { envelope });
+        }
         envelope.currentScheduledCount += 1;
         envelope.remainingCapacity = Math.max(0, envelope.remainingCapacity - 1);
+        commitments.push({
+          id: input.scheduleId || `pending_${commitments.length + 1}`,
+          scheduleId: input.scheduleId || null,
+          tenantId: tenantKey(input.tenantId),
+          sendingIdentityId: tenantKey(input.sendingIdentityId),
+          scheduledFor: input.scheduledFor,
+          status: 'SCHEDULED',
+          pending: true,
+        });
         envelopes.set(key, envelope);
-      }
-      return { reservationId: `res_${schedule.id}`, envelopeId };
+        return { envelope };
+      });
+    },
+    async reserve(schedule, envelopeId) {
+      return withLock(async () => {
+        const key = identityKey(schedule.tenantId, schedule.sendingIdentityId);
+        reservations.set(schedule.id, {
+          id: reservationIdForSchedule(schedule.tenantId, schedule.id),
+          envelopeId,
+          tenantId: tenantKey(schedule.tenantId),
+          sendingIdentityId: tenantKey(schedule.sendingIdentityId),
+          scheduleId: schedule.id,
+          status: 'scheduled',
+          scheduledFor: schedule.scheduledFor,
+        });
+        const pending = commitments.find((row) => row.pending && tenantKey(row.tenantId) === tenantKey(schedule.tenantId)
+          && tenantKey(row.sendingIdentityId) === tenantKey(schedule.sendingIdentityId)
+          && !row.scheduleId);
+        if (pending) {
+          pending.id = schedule.id;
+          pending.scheduleId = schedule.id;
+          pending.scheduledFor = schedule.scheduledFor;
+          pending.pending = false;
+        } else if (!commitments.some((row) => row.scheduleId === schedule.id || row.id === schedule.id)) {
+          commitments.push({
+            id: schedule.id,
+            scheduleId: schedule.id,
+            tenantId: tenantKey(schedule.tenantId),
+            sendingIdentityId: tenantKey(schedule.sendingIdentityId),
+            scheduledFor: schedule.scheduledFor,
+            status: 'SCHEDULED',
+          });
+        }
+        const envelope = envelopes.get(key);
+        if (envelope) refreshEnvelopeFromLedger(envelope);
+        return { reservationId: reservationIdForSchedule(schedule.tenantId, schedule.id), envelopeId };
+      });
     },
     async validateExecution(schedule, opts = {}) {
-      const key = `${tenantKey(schedule.tenantId)}:${tenantKey(schedule.sendingIdentityId)}`;
-      const envelope = envelopes.get(key) || createPermissiveEnvelope(schedule.tenantId, schedule.sendingIdentityId, opts);
-      const check = evaluateCapacityExecution(envelope, { scheduledFor: schedule.scheduledFor }, opts);
-      if (!check.allowed) {
-        return { eligible: false, action: 'SKIPPED', reason: check.code, message: check.reason, envelope };
-      }
-      return { eligible: true, action: 'send', envelope };
+      return withLock(async () => {
+        const key = identityKey(schedule.tenantId, schedule.sendingIdentityId);
+        const envelope = envelopes.get(key) || createPermissiveEnvelope(schedule.tenantId, schedule.sendingIdentityId, opts);
+        refreshEnvelopeFromLedger(envelope);
+        const scoped = scopedCommitments(schedule.tenantId, schedule.sendingIdentityId);
+        const prior = findPriorSendAnchor(scoped, schedule.scheduledFor, { excludeScheduleId: schedule.id });
+        const inFlightConflicts = findInFlightSpacingConflicts(
+          schedule.scheduledFor,
+          scoped,
+          envelope.minimumSpacingMinutes,
+          { excludeScheduleId: schedule.id }
+        );
+        const alreadyConsumesCapacity = scoped.some((row) => (
+          row.scheduleId === schedule.id || row.id === schedule.id
+        ) && (LIVE_SCHEDULE_STATUSES.includes(String(row.status || '').toUpperCase())
+          || LIVE_RESERVATION_STATUSES.includes(String(row.status || '').toLowerCase())));
+        const check = evaluateCapacityExecution(envelope, {
+          scheduledFor: schedule.scheduledFor,
+          lastSendAt: prior?.lastSendAt || seed.lastSendAt || null,
+          inFlightConflicts,
+          alreadyConsumesCapacity,
+        }, opts);
+        if (!check.allowed) {
+          return { eligible: false, action: 'SKIPPED', reason: check.code, message: check.reason, envelope };
+        }
+        const reservation = reservations.get(schedule.id);
+        if (reservation) reservation.status = 'executing';
+        const commitment = commitments.find((row) => row.scheduleId === schedule.id || row.id === schedule.id);
+        if (commitment) commitment.status = 'EXECUTING';
+        refreshEnvelopeFromLedger(envelope);
+        envelopes.set(key, envelope);
+        return { eligible: true, action: 'send', envelope };
+      });
     },
-    async markExecuting() {},
-    async finalize() {},
+    async markExecuting(schedule) {
+      return withLock(async () => {
+        const reservation = reservations.get(schedule.id);
+        if (reservation) reservation.status = 'executing';
+        const commitment = commitments.find((row) => row.scheduleId === schedule.id || row.id === schedule.id);
+        if (commitment) commitment.status = 'EXECUTING';
+      });
+    },
+    async finalize(schedule, status) {
+      return withLock(async () => {
+        const mapped = status === 'SENT' ? 'sent' : status === 'SKIPPED' ? 'skipped' : 'released';
+        const reservation = reservations.get(schedule.id);
+        if (reservation) reservation.status = mapped;
+        const commitment = commitments.find((row) => row.scheduleId === schedule.id || row.id === schedule.id);
+        if (commitment) {
+          commitment.status = status;
+          if (status === 'SENT') {
+            commitment.sentAt = schedule.sentAt || schedule.scheduledFor;
+            sentMessages.push({
+              id: schedule.outboundMessageId || `msg_${schedule.id}`,
+              tenantId: tenantKey(schedule.tenantId),
+              sendingIdentityId: tenantKey(schedule.sendingIdentityId),
+              sentAt: commitment.sentAt,
+              scheduleId: schedule.id,
+            });
+          }
+        }
+        const key = identityKey(schedule.tenantId, schedule.sendingIdentityId);
+        const envelope = envelopes.get(key);
+        if (envelope) refreshEnvelopeFromLedger(envelope);
+      });
+    },
     async ingestOutcome() {},
     setEnvelope(tenantId, sendingIdentityId, envelope) {
-      envelopes.set(`${tenantKey(tenantId)}:${tenantKey(sendingIdentityId)}`, envelope);
+      envelopes.set(identityKey(tenantId, sendingIdentityId), envelope);
     },
     getEnvelope(tenantId, sendingIdentityId) {
-      return envelopes.get(`${tenantKey(tenantId)}:${tenantKey(sendingIdentityId)}`) || null;
+      return envelopes.get(identityKey(tenantId, sendingIdentityId)) || null;
+    },
+    getReservations() {
+      return [...reservations.values()];
+    },
+    getCommitments() {
+      return commitments;
     },
   };
 }
@@ -628,6 +1051,39 @@ function resolveCapacityGate(opts = {}) {
   return createPostgresCapacityGate(opts);
 }
 
+async function reconcileTenantMailboxCapacityReservations(tenantId, sendingIdentityId, opts = {}) {
+  const pool = opts.pool || defaultPool;
+  const now = opts.now instanceof Date ? opts.now : new Date(opts.now || Date.now());
+  let envelope = opts.envelope || await loadLatestEnvelope(tenantId, sendingIdentityId, pool, now);
+  if (!envelope) {
+    const produced = await produceTenantMailboxCapacityEnvelope(tenantId, sendingIdentityId, { ...opts, now, pool });
+    envelope = produced.envelope;
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock($1, $2)', [
+      ADVISORY_LOCK_NAMESPACE,
+      advisoryLockKey(tenantId, sendingIdentityId),
+    ]);
+    const result = await reconcileLegacyReservations(tenantId, sendingIdentityId, envelope.envelopeId, client);
+    const accounting = await refreshEnvelopeAccounting(
+      tenantId,
+      sendingIdentityId,
+      envelope.envelopeId,
+      client,
+      envelope.allowedSendWindow?.timezone
+    );
+    await client.query('COMMIT');
+    return { ...result, envelope: accounting, idempotent: true };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   ensureCapacitySchema,
   buildTenantMailboxSnapshot,
@@ -639,6 +1095,13 @@ module.exports = {
   markReservationExecuting,
   finalizeReservation,
   ingestTenantMailboxOutcome,
+  reconcileTenantMailboxCapacityReservations,
+  reconcileLegacyReservations,
+  queryCanonicalCapacityAccounting,
+  queryPriorSendAnchor,
+  queryScheduleSpacingConflicts,
+  queryInFlightSpacingConflicts,
+  reservationIdForSchedule,
   evaluateCapacityAuthorization,
   evaluateCapacityExecution,
   createPermissiveEnvelope,
@@ -647,4 +1110,5 @@ module.exports = {
   resolveCapacityGate,
   GOVERNOR_OUTCOMES,
   normalizeEnvelope,
+  ADVISORY_LOCK_NAMESPACE,
 };

@@ -9,6 +9,11 @@ const { scoreInboxHealth } = require('./InboxHealth');
 const { recommendCapacity } = require('./Capacity');
 const { evaluateGovernor } = require('./Governor');
 const { GOVERNOR_OUTCOMES, WARMUP_STATUS, clamp, newId, nowIso } = require('./types');
+const {
+  evaluateAuthorizationSpacing,
+  evaluateExecutionSpacing,
+  evaluateCapacityBudget,
+} = require('./TenantMailboxSpacing');
 
 const DEFAULT_MIN_SPACING_MINUTES = 30;
 const DEFAULT_SEND_WINDOW = Object.freeze({ startHour: 9, endHour: 17 });
@@ -193,35 +198,40 @@ function evaluateCapacityAuthorization(envelope, input = {}, opts = {}) {
   if (envelope.governorState === GOVERNOR_OUTCOMES.PAUSE || envelope.governorState === GOVERNOR_OUTCOMES.EMERGENCY) {
     return blocked(`emmett_governor_${envelope.governorState}`, `Emmett governor is ${envelope.governorState}. Operator authorization cannot override capacity.`);
   }
-  if (Number(envelope.remainingCapacity || 0) <= 0) {
-    return blocked('emmett_capacity_exhausted', 'Daily Emmett capacity is exhausted for this sending identity.');
-  }
+  const budget = evaluateCapacityBudget(envelope, input);
+  if (!budget.allowed) return budget;
   if (scheduledFor && !isWithinAllowedWindow(scheduledFor, envelope.allowedSendWindow, envelope.allowedSendWindow?.timezone)) {
     return blocked('emmett_outside_send_window', 'Requested send time is outside the allowed send window.');
   }
-  if (scheduledFor && input.lastSendAt) {
-    const spacing = Math.floor((scheduledFor.getTime() - new Date(input.lastSendAt).getTime()) / 60000);
-    const minSpacing = Number(envelope.minimumSpacingMinutes || DEFAULT_MIN_SPACING_MINUTES);
-    if (spacing < minSpacing) {
-      return blocked('emmett_spacing_violation', `Minimum spacing of ${minSpacing} minutes is required between sends.`);
-    }
-  }
+  const spacing = evaluateAuthorizationSpacing(envelope, input);
+  if (!spacing.allowed) return spacing;
   return { allowed: true, envelope };
 }
 
 function evaluateCapacityExecution(envelope, input = {}, opts = {}) {
-  const auth = evaluateCapacityAuthorization(envelope, input, opts);
-  if (!auth.allowed) return auth;
   const now = opts.now instanceof Date ? opts.now : new Date(opts.now || Date.now());
+
+  if (!envelope) {
+    return blocked('emmett_envelope_missing', 'No Emmett capacity envelope exists for this sending identity.');
+  }
   if (new Date(envelope.validUntil).getTime() <= now.getTime()) {
     return blocked('emmett_envelope_expired', 'Emmett capacity envelope expired before execution.');
   }
   if (envelope.governorState === GOVERNOR_OUTCOMES.PAUSE || envelope.governorState === GOVERNOR_OUTCOMES.EMERGENCY) {
     return blocked(`emmett_governor_${envelope.governorState}`, `Emmett governor moved to ${envelope.governorState} after authorization.`);
   }
-  if (Number(envelope.remainingCapacity || 0) <= 0) {
+  const budget = evaluateCapacityBudget(envelope, {
+    alreadyConsumesCapacity: input.alreadyConsumesCapacity === true,
+  });
+  if (!budget.allowed) {
     return blocked('emmett_capacity_exhausted', 'Capacity exhausted since authorization.');
   }
+  const scheduledFor = input.scheduledFor ? new Date(input.scheduledFor) : null;
+  if (scheduledFor && !isWithinAllowedWindow(scheduledFor, envelope.allowedSendWindow, envelope.allowedSendWindow?.timezone)) {
+    return blocked('emmett_outside_send_window', 'Requested send time is outside the allowed send window.');
+  }
+  const spacing = evaluateExecutionSpacing(envelope, input);
+  if (!spacing.allowed) return spacing;
   return { allowed: true, envelope, action: 'send' };
 }
 
@@ -239,4 +249,5 @@ module.exports = {
   minutesSinceLastSend,
   DEFAULT_MIN_SPACING_MINUTES,
   DEFAULT_SEND_WINDOW,
+  ...require('./TenantMailboxSpacing'),
 };
