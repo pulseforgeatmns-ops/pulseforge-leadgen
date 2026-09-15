@@ -66,8 +66,12 @@ function normalizeDomain(value) {
 function collectIdentitySignals(raw = {}) {
   const signals = [];
 
-  if (raw.place_id) {
-    signals.push({ type: 'place_id', value: String(raw.place_id), weight: 1.0 });
+  if (raw.place_id || raw.placeId) {
+    signals.push({
+      type: 'place_id',
+      value: String(raw.place_id || raw.placeId),
+      weight: 1.0,
+    });
   }
 
   const name = String(raw.company || raw.name || '').trim();

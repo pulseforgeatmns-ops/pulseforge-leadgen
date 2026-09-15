@@ -321,6 +321,75 @@ describe('Anchor fresh mission audit', () => {
     assert.ok(!JSON.stringify(discoveryResult.snapshot).includes('EXECUTE_OUTBOUND'));
   });
 
+  it('8d — production Scout path: Places location-only rows do not hard-block discovery_evidence', async () => {
+    const engine = amo.createAcquisitionMissionEngine();
+    const mission = engine.create({
+      tenantId: '10',
+      objective: BROAD_ANCHOR_OBJECTIVE,
+      resolvedObjective: resolveCanonicalObjective({ question: BROAD_ANCHOR_OBJECTIVE }),
+    });
+
+    const planResult = await advancePlanAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved. Proceed with this plan.',
+    });
+
+    const placesCandidates = [
+      {
+        id: 'pm-granite',
+        tenantId: '10',
+        name: 'Granite Property Management',
+        industry: 'property_management',
+        placeId: 'ChIJGranitePM',
+        location: 'Manchester, NH',
+      },
+    ];
+
+    const placesProvider = {
+      id: 'public_business_places',
+      available: () => true,
+      lastExecution: {
+        providerId: 'google_places',
+        totals: { queries: 1, results: placesCandidates.length },
+      },
+      async discover() {
+        return {
+          source: 'public_business_places',
+          candidates: placesCandidates,
+          coverage: { queries: 1 },
+          execution: this.lastExecution,
+        };
+      },
+      collectEvidence: async () => placesCandidates,
+    };
+
+    const discoveryResult = await advanceDiscoveryAfterApproval({
+      engine,
+      mission: planResult.snapshot.mission,
+      tenantId: '10',
+      question: 'Approved. Begin Discovery.',
+      allowFixtureFallback: false,
+      enablePlaces: true,
+      placesProvider,
+    });
+
+    const payload = discoveryResult.discovery.payload;
+    const artifact = buildScoutDiscoveryArtifact(discoveryResult.scoutResult || {});
+
+    assert.equal(discoveryResult.executionOutcome, 'completed');
+    assert.equal(payload.blocked, false);
+    assert.equal(artifact.blocked, false);
+    assert.ok((payload.candidateUniverse || []).length > 0);
+    assert.ok((payload.providerExecution || []).length > 0);
+    assert.equal(payload.discoveryStatus, 'incomplete');
+    assert.equal(payload.qualifiedCount, 0);
+    assert.doesNotThrow(() => assertEvidenceAttached(payload, { required: true }));
+    assert.equal(artifact.blockedDecisionReason, 'discovery_committed');
+    assert.ok(artifact.attachableEvidenceCountAtResolve > 0);
+  });
+
   it('8 — zero-result Scout with provider telemetry is blocked, not evidence-validation failure', () => {
     const payload = normalizeScoutDiscoveryPayload({
       status: 'completed',
