@@ -14,6 +14,7 @@ const {
   createIpv4PreferringSmtpGetSocket,
   genericSmtpImapTlsOptions,
 } = require('../utils/mailNetwork');
+const { normalizeImapFlowFetchMessage } = require('../utils/mailHeaders');
 
 const PROVIDER_TYPES = Object.freeze({
   GENERIC_SMTP_IMAP: 'GENERIC_SMTP_IMAP',
@@ -1109,23 +1110,12 @@ async function loadImapMessages(integration, secret, state, opts = {}) {
         source: true,
         headers: true,
       }, { uid: true })) {
-        const headers = msg.headers;
-        const getHeader = (name) => {
-          const value = headers?.get(name.toLowerCase()) || headers?.get(name);
-          return Array.isArray(value) ? value.join(' ') : value || null;
-        };
-        messages.push({
-          uid: msg.uid,
-          providerMessageId: String(msg.uid),
-          rfcMessageId: getHeader('message-id'),
-          inReplyTo: getHeader('in-reply-to'),
-          referencesHeader: getHeader('references'),
-          subject: msg.envelope?.subject || getHeader('subject') || '',
-          from: msg.envelope?.from?.[0]?.address || '',
-          to: (msg.envelope?.to || []).map((row) => row.address),
-          receivedAt: msg.envelope?.date ? new Date(msg.envelope.date).toISOString() : nowIso(opts),
-          body: msg.source ? msg.source.toString('utf8') : '',
-        });
+        try {
+          const normalized = normalizeImapFlowFetchMessage(msg, opts);
+          if (normalized) messages.push(normalized);
+        } catch (_err) {
+          // Malformed fetch records must not abort the whole poll.
+        }
       }
     } finally {
       lock.release();
