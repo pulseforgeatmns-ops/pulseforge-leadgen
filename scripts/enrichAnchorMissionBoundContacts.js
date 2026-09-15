@@ -2,18 +2,18 @@
 'use strict';
 
 /**
- * Anchor tenant 10 — production enrichment runner for existing mission-bound
- * contacts on mission_ad7753b0-6def-441d-bb1a-3764656f5750.
+ * Anchor tenant 10 — production enrichment runner for mission-bound contacts on
+ * mission_82e8102f-249c-4f44-b88e-2de76b13898e (Anchor STR).
  *
- * Uses canonical enrichment/provider paths only (tiered website+Bouncer, then
- * Prospeo → Hunter → scrape + verifyEmail). Never invents addresses.
+ * Canonical path: CRM admission for prioritized Scout candidates → tiered
+ * enrichment → provider chain. Never invents addresses.
  * Never expands the mission candidate universe. Never sends mail.
  * Never enables autosend. Never changes enabled_agents.
  * Never regenerates CAPACITY — PREPARE revision stays a separate step.
  *
  * Railway:
  *   node scripts/enrichAnchorMissionBoundContacts.js --confirm-production \
- *     --mission-id mission_ad7753b0-6def-441d-bb1a-3764656f5750
+ *     --mission-id mission_82e8102f-249c-4f44-b88e-2de76b13898e
  */
 
 require('dotenv').config();
@@ -72,7 +72,7 @@ Usage:
   node scripts/enrichAnchorMissionBoundContacts.js --confirm-production [--mission-id <id>] [--dry-run]
 
 Canonical path:
-  Existing mission-bound prospect IDs only → tiered enrichment → provider chain
+  Mission-bound CRM admission → tiered enrichment → provider chain
   Persist only when email_verified=true, email_status in {valid, verified},
   do_not_contact=false, and invalidOutreachEmailReason passes.
 
@@ -147,15 +147,20 @@ function missingCrmResult(missionBoundKey) {
 }
 
 function formatContactLine(row) {
-  return [
+  const lines = [
     `Prospect ID: ${row.prospectId}`,
+    `CRM company UUID: ${row.crmCompanyId || '(none)'}`,
+    `CRM prospect UUID: ${row.crmProspectUuid || '(none)'}`,
     `Company: ${row.company || '(not found in CRM)'}`,
     `Discovered email: ${displayEmail(row.email)}`,
     `Verification status/source: ${displayVerification(row)}`,
     `Persisted to CRM: ${yesNo(row.persisted === true && row.path !== 'existing_crm')}`,
     `DNC state: ${row.dnc == null ? '(unknown)' : String(row.dnc)}`,
     `Eligible for CAPACITY projection: ${yesNo(isEligibleForCapacityProjection(row))}`,
-  ].join('\n');
+  ];
+  if (row.admissionReason) lines.splice(3, 0, `CRM admission: ${row.admissionReason}`);
+  if (row.admissionBlocked) lines.splice(3, 0, `CRM admission blocked: ${row.admissionBlocked}`);
+  return lines.join('\n');
 }
 
 function printReport(report) {
@@ -202,20 +207,37 @@ async function run(options = {}) {
   await ensureEmailVerificationColumns();
   await ensureTieredEnrichmentSchema();
 
-  const { companyIds, rowsByCompanyId } = await loadMissionBoundProspects(db, missionId);
+  const { companyIds, rowsByCompanyId, admission } = await loadMissionBoundProspects(db, missionId, { dryRun });
+  const admissionByCandidate = admission?.byCandidateId || new Map();
   const contacts = [];
 
   for (const companyId of companyIds) {
+    const admissionResult = admissionByCandidate.get(String(companyId)) || null;
     const row = rowsByCompanyId.get(String(companyId));
     if (!row) {
-      contacts.push(missingCrmResult(companyId));
+      if (admissionResult?.blocked) {
+        contacts.push({
+          ...missingCrmResult(companyId),
+          reason: admissionResult.reason || 'identity_admission_blocked',
+          admissionBlocked: admissionResult.detail || admissionResult.reason,
+        });
+      } else {
+        contacts.push(missingCrmResult(companyId));
+      }
       continue;
     }
-    contacts.push(await enrichProspectRow(row, {
+    const enriched = await enrichProspectRow(row, {
       db,
       dryRun,
       fetchDelayMs: options.fetchDelayMs,
-    }));
+    });
+    contacts.push({
+      ...enriched,
+      crmCompanyId: row.company_id != null ? String(row.company_id) : admissionResult?.companyId || null,
+      crmProspectUuid: row.prospect_id != null ? String(row.prospect_id) : admissionResult?.prospectId || null,
+      admissionReason: admissionResult?.reason || null,
+      admissionBlocked: admissionResult?.blocked ? (admissionResult.detail || admissionResult.reason) : null,
+    });
   }
 
   const eligibleForCapacityProjection = contacts.filter(isEligibleForCapacityProjection).length;
@@ -227,6 +249,7 @@ async function run(options = {}) {
     dryRun,
     missionBoundProspectIds: companyIds,
     missionBoundCompanyIds: companyIds,
+    admission: admission?.results || [],
     contacts,
     eligibleForCapacityProjection,
     railwayCommand: RAILWAY_COMMAND,

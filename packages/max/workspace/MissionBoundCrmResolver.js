@@ -146,6 +146,7 @@ const CRM_ENRICHMENT_PROSPECT_SELECT = `
        c.name AS company_name,
        c.website,
        c.domain,
+       c.google_place_id,
        c.industry,
        c.size AS company_size,
        c.location,
@@ -179,6 +180,10 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
         OR (
           c.domain IS NOT NULL
           AND lower(c.domain) = lower($2)
+        )
+        OR (
+          c.google_place_id IS NOT NULL
+          AND c.google_place_id = $2
         )
       )
       AND COALESCE(p.is_synthetic, false) = false
@@ -230,6 +235,10 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
       OR (
         c.domain IS NOT NULL
         AND lower(c.domain) = lower(k.mission_bound_key)
+      )
+      OR (
+        c.google_place_id IS NOT NULL
+        AND c.google_place_id = k.mission_bound_key
       )
     ORDER BY
       k.mission_bound_key,

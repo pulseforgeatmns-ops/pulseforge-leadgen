@@ -22,6 +22,9 @@ const {
   loadCrmProspectsByIds,
 } = require('../../packages/max/workspace/MissionBoundCrmResolver');
 const {
+  admitMissionBoundCandidates,
+} = require('../../packages/max/workspace/MissionBoundCrmAdmission');
+const {
   configureScoringContext,
   runEnrichmentChain,
   resolveEmailVerification,
@@ -37,7 +40,7 @@ const { persistableEmailSource, remediateTaintedCrmEmail } = require('../../util
 
 const TENANT_ID = '10';
 const CLIENT_ID = 10;
-const DEFAULT_MISSION_ID = 'mission_ad7753b0-6def-441d-bb1a-3764656f5750';
+const DEFAULT_MISSION_ID = 'mission_82e8102f-249c-4f44-b88e-2de76b13898e';
 const EXCLUDED_COMPANY_RE = /deliverability\s*test/i;
 
 function isExcludedCompany(name) {
@@ -71,7 +74,7 @@ async function loadProspectRow(db, clientId, prospectId) {
   });
 }
 
-async function loadMissionBoundProspects(db, missionId) {
+async function loadMissionBoundProspects(db, missionId, opts = {}) {
   const runtime = getAcquisitionMissionRuntime({ production: true, persist: true, pool: db });
   await runtime.hydrate(TENANT_ID, { pool: db, production: true });
   const engine = runtime.engine();
@@ -81,6 +84,13 @@ async function loadMissionBoundProspects(db, missionId) {
   }
   const snapshot = engine.inspect(missionId, { tenantId: TENANT_ID });
   const contributions = snapshot.contributions || [];
+
+  const admission = await admitMissionBoundCandidates(db, mission, contributions, {
+    clientId: CLIENT_ID,
+    missionId,
+    dryRun: Boolean(opts.dryRun),
+  });
+
   const candidates = buildMissionBoundCandidates(mission, contributions);
   const companyIds = listMissionBoundCompanyIds(mission, contributions);
   const lookupKeys = listMissionBoundCrmLookupKeys(mission, contributions);
@@ -120,6 +130,7 @@ async function loadMissionBoundProspects(db, missionId) {
     snapshot,
     companyIds,
     candidates,
+    admission,
     // Legacy report field: mission-bound keys (company/candidate IDs), not CRM prospects.id.
     prospectIds: companyIds,
     rowsByCompanyId,
@@ -231,6 +242,7 @@ async function enrichProspectRow(row, options = {}) {
   ));
   const runProviders = options.runEnrichmentChain || runEnrichmentChain;
   const verifyEmailFn = options.resolveEmailVerification || resolveEmailVerification;
+  const configureContext = options.configureScoringContext || configureScoringContext;
   let working = { ...row };
   const base = {
     prospectId: String(row.prospect_id),
@@ -360,7 +372,7 @@ async function enrichProspectRow(row, options = {}) {
     };
   }
 
-  await configureScoringContext({ client_id: working.client_id || CLIENT_ID });
+  await configureContext({ client_id: working.client_id || CLIENT_ID });
   const enriched = await runProviders(domain, 'owner');
   if (!enriched?.email) {
     return {
@@ -441,6 +453,7 @@ module.exports = {
   crmProjectionRow,
   loadProspectRow,
   loadMissionBoundProspects,
+  admitMissionBoundCandidates,
   persistProviderChainEmail,
   enrichProspectRow,
   reportProvenanceFields,

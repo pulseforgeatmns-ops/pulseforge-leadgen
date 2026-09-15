@@ -129,6 +129,7 @@ function mockDb(rows = crmRows()) {
           String(row.company_id) === String(key)
           || String(row.prospect_id) === String(key)
           || (row.domain && String(row.domain).toLowerCase() === String(key).toLowerCase())
+          || (row.google_place_id && String(row.google_place_id) === String(key))
         );
       });
       const ranked = keys.flatMap((key) => {
@@ -137,6 +138,7 @@ function mockDb(rows = crmRows()) {
             String(row.company_id) === String(key)
             || String(row.prospect_id) === String(key)
             || (row.domain && String(row.domain).toLowerCase() === String(key).toLowerCase())
+            || (row.google_place_id && String(row.google_place_id) === String(key))
           )
           .sort((a, b) => {
             const aCompanyMatch = String(a.company_id) === String(key) ? 0 : 1;
@@ -246,6 +248,31 @@ describe('mission-bound company → CRM contact resolution', () => {
     assert.equal(map.size, 1);
     assert.equal(String(map.get('bluedoorliving.com').prospect_id), CONTACT_KLUG);
     assert.ok(!map.has(placeId));
+  });
+
+  it('resolves CRM contact via google_place_id on company when candidate key is a Place ID', async () => {
+    const placeId = 'ChIJ43Z_V2dP4okRCRcDHefV8OU';
+    const map = await loadCrmProspectsForMissionBoundCompanies({
+      pool: mockDb([
+        {
+          prospect_id: CONTACT_KLUG,
+          company_id: COMPANY_KLUG,
+          client_id: 10,
+          company_name: 'Blue Door Living Property Management',
+          google_place_id: placeId,
+          domain: 'bluedoorliving.com',
+          email: 'ops@bluedoorliving.com',
+          email_verified: true,
+          email_status: 'verified',
+          icp_score: 90,
+          is_synthetic: false,
+        },
+      ]),
+      clientId: 10,
+      companyIds: [placeId],
+    });
+    assert.equal(map.size, 1);
+    assert.equal(String(map.get(placeId).prospect_id), CONTACT_KLUG);
   });
 
   it('still resolves when mission key equals CRM prospect id (legacy integer fixtures)', async () => {

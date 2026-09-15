@@ -25,6 +25,7 @@ const CANONICAL_SYMBOLS = Object.freeze([
   'loadCrmProspectsByIds',
   'loadBestCrmProspectForMissionBoundKey',
   'aliasCrmMapToIdentities',
+  'admitMissionBoundCandidates',
 ]);
 
 function exportBlock(source) {
@@ -46,7 +47,7 @@ describe('anchor mission-bound enrichment module load regression', () => {
     const runner = require('../scripts/enrichAnchorMissionBoundContacts');
     assert.equal(typeof runner.run, 'function');
     assert.equal(typeof runner.parseArgs, 'function');
-    assert.equal(runner.DEFAULT_MISSION_ID, 'mission_ad7753b0-6def-441d-bb1a-3764656f5750');
+    assert.equal(runner.DEFAULT_MISSION_ID, 'mission_82e8102f-249c-4f44-b88e-2de76b13898e');
   });
 
   it('keeps only canonical post-#585 identity symbols in the enrichment lib source', () => {
