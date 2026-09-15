@@ -12,6 +12,7 @@ All notable changes to this project are documented here. Format inspired by [Kee
   - Stops before `APPROVE_EXECUTION` / `EXECUTE_OUTBOUND`; autosend stays off
   - Refuses Scout `CONTINUE_INVESTIGATION` when a healthy candidate set already exists
   - Railway cron: `GET/POST /cron/inspect-anchor-canonical-outbound` (read-only) and `/cron/recover-anchor-canonical-outbound?recover=true` (READY only)
+  - GitHub Actions production job is workflow_dispatch only and does not use Railway's `charming-trust / production` GitHub environment
 
 
 ### Added
