@@ -341,6 +341,15 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
         rolledBack: routed.executionResult.rolledBack === true,
         executionOutcome: routed.executionResult.executionOutcome || null,
         transactionId: routed.executionResult.transactionId || null,
+        rollbackReason: routed.executionResult.rollbackReason || null,
+        blockReason:
+          (routed.executionResult.error && routed.executionResult.error.message) ||
+          routed.executionResult.rollbackReason ||
+          null,
+        errorClass:
+          (routed.executionResult.error && routed.executionResult.error.tmeClass) ||
+          routed.executionResult.errorClass ||
+          null,
       },
     });
   } catch (err) {

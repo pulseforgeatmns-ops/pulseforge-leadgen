@@ -68,6 +68,15 @@ const COMMUNICATION_POLICY_LINE_RES = [
 ];
 
 const OBJECTIVE_PREFIX_RE = /^(?:objective|goal|target)\s*:\s*/i;
+const MISSION_RESUME_PREFIX_RE =
+  /^(?:resume(?:\s+the)?(?:\s+existing)?\s+mission(?:\s+for)?|continue(?:\s+(?:the|with))?(?:\s+active)?\s+mission(?:\s+for)?)\s+/i;
+
+function stripMissionResumePrefix(text) {
+  return normalizeText(text)
+    .replace(MISSION_RESUME_PREFIX_RE, '')
+    .replace(OBJECTIVE_PREFIX_RE, '')
+    .trim();
+}
 
 function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
@@ -98,6 +107,12 @@ function classifyMessageLines(question) {
   const ignoredLines = [];
 
   for (const segment of segments) {
+    const normalizedSegment = normalizeText(segment);
+    if (MISSION_RESUME_PREFIX_RE.test(normalizedSegment)) {
+      const stripped = stripMissionResumePrefix(segment);
+      if (stripped) objectiveLines.push(stripped);
+      continue;
+    }
     const kind = classifyLine(segment);
     if (kind === 'objective') {
       objectiveLines.push(segment.replace(OBJECTIVE_PREFIX_RE, '').trim());
@@ -303,10 +318,24 @@ function resolveCanonicalObjective(input = {}) {
   const text = businessText;
   const intent = analyzeIntent(text, { missionType: input.missionType || input.type });
   const marketScope = resolveMarketScopeFromObjective(text);
-  const segmentLabel = asText(input.targetSegment) || marketScope.segmentLabel || inferTargetSegmentFromObjective(text);
-  let segmentKey = input.resolutions && input.resolutions.segment
-    ? input.resolutions.segment
-    : marketScope.primarySegment || inferSegmentKey(text, segmentLabel);
+  const {
+    isMultiSegmentObjective,
+    detectMentionedSegments,
+  } = require('./MissionResumeCompatibility');
+  let segmentLabel = asText(input.targetSegment) || inferTargetSegmentFromObjective(text);
+  let segmentKey = inferSegmentKey(text, segmentLabel);
+  if (isMultiSegmentObjective(text)) {
+    const mentioned = detectMentionedSegments(text);
+    if (mentioned.includes('property_management')) {
+      segmentKey = 'property_management';
+      segmentLabel = mentioned.includes('commercial')
+        ? 'Commercial & Property Management'
+        : 'Property Management';
+    } else if (mentioned.includes('commercial')) {
+      segmentKey = 'commercial';
+      segmentLabel = 'Commercial';
+    }
+  }
   const geographyMention = extractGeography(text) || asText(input.geography) || '';
   let extracted = {
     intent,
@@ -386,6 +415,7 @@ module.exports = {
   canonicalObjectiveText,
   classifyMessageLines,
   classifyLine,
+  stripMissionResumePrefix,
   buildExecutionPolicy,
   buildCommunicationPolicy,
   buildEvaluationPolicy,
