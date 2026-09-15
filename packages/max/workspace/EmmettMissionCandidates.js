@@ -6,10 +6,14 @@
  * SPEC-212 — Candidates matched to bound message variants by candidateId.
  */
 
-const { SPECIALISTS, CONTRIBUTION_KINDS, asText } = require('../../acquisition-mission/types');
+const { SPECIALISTS, CONTRIBUTION_KINDS, asText, MESSAGE_BINDING_SCOPES } = require('../../acquisition-mission/types');
 const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
 const { resolveMissionBoundRecipientEmail } = require('./MissionBoundCrmResolver');
 const { resolveMissionBoundIdentity } = require('./MissionBoundIdentity');
+const {
+  prospectIdentity,
+  identityKeysFrom,
+} = require('./CanonicalOutboundIdentity');
 
 function latestContribution(contributions = [], specialist, kind, mission = null) {
   return selectCanonicalContribution(contributions, {
