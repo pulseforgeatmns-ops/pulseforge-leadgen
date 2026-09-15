@@ -16,7 +16,7 @@ Use **facility assessment** / **Facility Assessment** in prose and CTAs as gramm
 
 **Canonical brand mark:** approved gold polo logo (`assets/brand/anchor-polo-logo-source.png`)
 
-Derived assets (favicon, apple-touch, manifest icons, Open Graph preview, JSON-LD `logo`, header lockup) are generated from this exact artwork — see `assets/brand/CANONICAL_LOGO_PENDING.md`.
+Derived assets (favicon, apple-touch, manifest icons, Open Graph preview, JSON-LD `logo`, header lockup) are generated from this exact artwork — see `assets/brand/CANONICAL_BRAND_ASSETS.md`.
 
 **Cache busting:** `?v=20260916` on all brand asset URLs. Bump when replacing artwork.
 
