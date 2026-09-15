@@ -354,6 +354,7 @@ async function dispatch(request, context, mission, handlers, runtimeOwner) {
       return {
         executionResult: {
           rolledBack: true,
+          rollbackReason: err.rollbackReason || err.message || null,
           error: err,
           snapshot,
           transactionId: err.transactionId,

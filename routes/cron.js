@@ -187,6 +187,34 @@ async function handleInspectAnchorCanonicalOutboundCron(req, res) {
   }
 }
 
+async function handleContinueAnchorStrScoutInvestigationCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { run } = require('../scripts/continueAnchorStrScoutInvestigation');
+    const missionId = String(
+      req.query.mission_id
+      || req.query.missionId
+      || req.body?.mission_id
+      || req.body?.missionId
+      || ''
+    ).trim() || undefined;
+    const report = await run({ confirmProduction: true, missionId });
+    const ok = report.candidatesPreserved !== false && report.rolledBack !== true;
+    return res.status(ok ? 200 : 422).json(report);
+  } catch (err) {
+    console.error('[cron] continue-anchor-str-scout-investigation error:', err.message);
+    return res.status(err.code === 'no_pending_investigation' ? 409 : 500).json({
+      error: { code: err.code || null, message: err.message },
+      before: err.before || null,
+      completedAt: new Date().toISOString(),
+      sent: false,
+    });
+  }
+}
+
 async function handleRecoverAnchorCanonicalOutboundCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
@@ -511,6 +539,8 @@ router.post('/cron/inspect-anchor-canonical-outbound', handleInspectAnchorCanoni
 router.get('/cron/inspect-anchor-canonical-outbound', handleInspectAnchorCanonicalOutboundCron);
 router.post('/cron/recover-anchor-canonical-outbound', handleRecoverAnchorCanonicalOutboundCron);
 router.get('/cron/recover-anchor-canonical-outbound', handleRecoverAnchorCanonicalOutboundCron);
+router.post('/cron/continue-anchor-str-scout-investigation', handleContinueAnchorStrScoutInvestigationCron);
+router.get('/cron/continue-anchor-str-scout-investigation', handleContinueAnchorStrScoutInvestigationCron);
 
 async function handleTenantOutreachExecutorCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
@@ -532,6 +562,26 @@ async function handleTenantOutreachExecutorCron(req, res) {
 
 router.post('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
 router.get('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
+
+async function handleTenantMailboxPollCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { executeTenantMailboxPolls } = require('../services/tenantMailboxPollExecutor');
+    const result = await executeTenantMailboxPolls();
+    res.set('Cache-Control', 'no-store');
+    const status = result.success ? 200 : 207;
+    return res.status(status).json(result);
+  } catch (err) {
+    console.error('[cron] tenant-mailbox-poll error:', err.message);
+    return res.status(500).json({ success: false, error: err.message, failed: 1 });
+  }
+}
+
+router.post('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
+router.get('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {

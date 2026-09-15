@@ -222,6 +222,31 @@ function looksLikeStopSignal(message = {}) {
   return /\b(unsubscribe|do not contact|don't contact|stop emailing|remove me|opt out|opt-out)\b/.test(`${subject} ${body}`);
 }
 
+function isImapConfigured(integration) {
+  if (!integration) return false;
+  return Boolean(
+    clean(integration.imapHost)
+    && integration.imapPort != null
+    && (integration.imapSecretRef || integration.sharedSecretRef)
+  );
+}
+
+function isPollableIntegration(integration) {
+  if (!integration) return false;
+  return integration.status === MAILBOX_STATUS.ACTIVE && isImapConfigured(integration);
+}
+
+function canResolveImapCredential(integration, opts = {}) {
+  const ref = integration?.imapSecretRef || integration?.sharedSecretRef;
+  if (!ref) return false;
+  try {
+    resolveSecretRef(ref, opts);
+    return true;
+  } catch (_err) {
+    return false;
+  }
+}
+
 function normalizeIntegration(row = null) {
   if (!row) return null;
   return {
@@ -351,6 +376,10 @@ class MemoryTenantMailboxStore {
 
   async listIntegrations(tenantId) {
     return [...this.integrations.values()].filter((row) => row.tenantId === tenantKey(tenantId));
+  }
+
+  async listPollableIntegrations() {
+    return [...this.integrations.values()].filter(isPollableIntegration);
   }
 
   async saveIdentity(input) {
@@ -561,6 +590,20 @@ class PostgresTenantMailboxStore {
     const res = await this.pool.query(
       `SELECT * FROM tenant_mailbox_integrations WHERE tenant_id = $1 ORDER BY created_at`,
       [tenantKey(tenantId)]
+    );
+    return res.rows.map(normalizeIntegration);
+  }
+
+  async listPollableIntegrations() {
+    await this.ensureSchema();
+    const res = await this.pool.query(
+      `SELECT * FROM tenant_mailbox_integrations
+       WHERE status = $1
+         AND imap_host IS NOT NULL
+         AND imap_port IS NOT NULL
+         AND (imap_secret_ref IS NOT NULL OR shared_secret_ref IS NOT NULL)
+       ORDER BY tenant_id, created_at`,
+      [MAILBOX_STATUS.ACTIVE]
     );
     return res.rows.map(normalizeIntegration);
   }
@@ -1502,6 +1545,10 @@ module.exports = {
   publicIntegration,
   publicIdentity,
   resolveSecretRef,
+  sanitizeErrorMessage,
+  isImapConfigured,
+  isPollableIntegration,
+  canResolveImapCredential,
   sendTenantEmail,
   pollTenantMailbox,
   markTenantSuppression,

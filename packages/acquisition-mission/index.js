@@ -67,6 +67,8 @@ const meaningfulLearning = require('./MeaningfulLearning');
 const outcomeLearningRetrieval = require('./OutcomeLearningRetrieval');
 const acquisitionApproach = require('./AcquisitionApproach');
 const contributionSupersession = require('./ContributionSupersession');
+const canonicalContributionSelection = require('./CanonicalContributionSelection');
+const upstreamArtifactCoherence = require('./UpstreamArtifactCoherence');
 
 module.exports = {
   ...types,
@@ -137,4 +139,6 @@ module.exports = {
   ...outcomeLearningRetrieval,
   ...acquisitionApproach,
   ...contributionSupersession,
+  ...canonicalContributionSelection,
+  ...upstreamArtifactCoherence,
 };

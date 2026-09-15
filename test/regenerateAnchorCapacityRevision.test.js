@@ -314,6 +314,8 @@ function createRevisionMemoryPool() {
     if (/SELECT payload FROM acquisition_mission_predictions/i.test(sql)) return { rows: [] };
     if (/SELECT payload FROM acquisition_mission_outcome_evaluations/i.test(sql)) return { rows: [] };
     if (/SELECT payload FROM acquisition_mission_outcome_learnings/i.test(sql)) return { rows: [] };
+    if (/WITH mission_keys AS/i.test(sql)) return { rows: [] };
+    if (/FROM prospects(\s|$)/i.test(sql)) return { rows: [] };
 
     throw new Error(`Unhandled SQL in revision memory pool: ${trimmed.split('\n')[0]}`);
   }

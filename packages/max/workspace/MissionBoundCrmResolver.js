@@ -70,12 +70,18 @@ function resolveMissionBoundRecipientEmail({
   discoveryEmail,
   prospectId,
   missionBoundKey,
+  companyId,
+  domain,
   crmByProspectId,
 } = {}) {
   const fromDiscovery = String(discoveryEmail || '').trim();
   if (fromDiscovery) return fromDiscovery;
-  const key = missionBoundKey ?? prospectId;
-  return projectableEmailFromCrmRecord(crmLookup(crmByProspectId, key));
+  const keys = [missionBoundKey, prospectId, companyId, domain].filter((key) => key != null && String(key).trim());
+  for (const key of keys) {
+    const email = projectableEmailFromCrmRecord(crmLookup(crmByProspectId, key));
+    if (email) return email;
+  }
+  return null;
 }
 
 /**
@@ -140,6 +146,7 @@ const CRM_ENRICHMENT_PROSPECT_SELECT = `
        c.name AS company_name,
        c.website,
        c.domain,
+       c.google_place_id,
        c.industry,
        c.size AS company_size,
        c.location,
@@ -170,6 +177,14 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
       AND (
         p.company_id::text = $2
         OR p.id::text = $2
+        OR (
+          c.domain IS NOT NULL
+          AND lower(c.domain) = lower($2)
+        )
+        OR (
+          c.google_place_id IS NOT NULL
+          AND c.google_place_id = $2
+        )
       )
       AND COALESCE(p.is_synthetic, false) = false
     ORDER BY
@@ -210,14 +225,21 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
      FROM mission_keys k
      JOIN prospects p
        ON p.client_id = $1
-      AND (
-        p.company_id::text = k.mission_bound_key
-        OR p.id::text = k.mission_bound_key
-      )
+      AND COALESCE(p.is_synthetic, false) = false
      LEFT JOIN companies c
        ON c.id = p.company_id
       AND c.client_id = p.client_id
-    WHERE COALESCE(p.is_synthetic, false) = false
+    WHERE
+      p.company_id::text = k.mission_bound_key
+      OR p.id::text = k.mission_bound_key
+      OR (
+        c.domain IS NOT NULL
+        AND lower(c.domain) = lower(k.mission_bound_key)
+      )
+      OR (
+        c.google_place_id IS NOT NULL
+        AND c.google_place_id = k.mission_bound_key
+      )
     ORDER BY
       k.mission_bound_key,
       CASE WHEN p.company_id::text = k.mission_bound_key THEN 0 ELSE 1 END,

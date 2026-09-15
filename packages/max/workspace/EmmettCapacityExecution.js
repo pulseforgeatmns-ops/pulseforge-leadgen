@@ -36,12 +36,15 @@ const FORBIDDEN_QUEUE_KEYS = new Set([
   'messaging', 'copy', 'emailBody', 'email_body', 'hypothesis', 'hypotheses',
 ]);
 
-function findEmmettCapacity(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
-    );
+const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
+
+function findEmmettCapacity(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: SPECIALISTS.EMMETT,
+    kind: CONTRIBUTION_KINDS.CAPACITY,
+    mission,
+  });
 }
 
 function fixtureInfrastructureSnapshot(tenantId) {
@@ -346,20 +349,43 @@ async function runEmmettForAmoMission(mission, opts = {}) {
     || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
     || [];
   const {
-    listMissionBoundCompanyIds,
+    buildMissionBoundCandidates,
+    listMissionBoundCrmLookupKeys,
+    listMissionBoundProspectIds,
   } = require('./EmmettMissionCandidates');
-  const { loadCrmProspectsForMissionBoundCompanies } = require('./MissionBoundCrmResolver');
+  const {
+    loadCrmProspectsForMissionBoundCompanies,
+    loadCrmProspectsByIds,
+  } = require('./MissionBoundCrmResolver');
+  const { aliasCrmMapToIdentities } = require('./CanonicalOutboundIdentity');
 
   let crmByProspectId = opts.crmByProspectId || null;
   if (!crmByProspectId && opts.pool) {
-    const clientId = Number(mission.clientId || mission.tenantId || opts.tenantId);
-    const companyIds = listMissionBoundCompanyIds(mission, contributions);
-    if (companyIds.length) {
-      crmByProspectId = await loadCrmProspectsForMissionBoundCompanies({
-        clientId,
-        companyIds,
-        pool: opts.pool,
-      });
+    try {
+      const clientId = Number(mission.clientId || mission.tenantId || opts.tenantId);
+      const identities = buildMissionBoundCandidates(mission, contributions);
+      const companyIds = listMissionBoundCrmLookupKeys(mission, contributions);
+      const prospectIds = listMissionBoundProspectIds(mission, contributions);
+      const maps = [];
+      if (companyIds.length) {
+        maps.push(await loadCrmProspectsForMissionBoundCompanies({
+          clientId,
+          companyIds,
+          pool: opts.pool,
+        }));
+      }
+      if (prospectIds.length) {
+        maps.push(await loadCrmProspectsByIds({
+          clientId,
+          prospectIds,
+          pool: opts.pool,
+        }));
+      }
+      if (maps.length) {
+        crmByProspectId = aliasCrmMapToIdentities(maps, identities);
+      }
+    } catch (_) {
+      crmByProspectId = null;
     }
   }
 

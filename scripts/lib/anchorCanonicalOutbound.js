@@ -12,11 +12,16 @@ const {
   STAGES,
   SPECIALISTS,
   CONTRIBUTION_KINDS,
+  OPERATOR_DECISION_KINDS,
   intentFromPendingDecision,
 } = amo;
+const { evaluatePrioritizationReadiness } = require('../../packages/acquisition-mission/DecisionReadiness');
+const { selectCanonicalContribution } = require('../../packages/acquisition-mission/CanonicalContributionSelection');
+const { evaluateUpstreamArtifactCoherence } = require('../../packages/acquisition-mission/UpstreamArtifactCoherence');
 const { unwrapContributionPayload, scoutCandidateCount } = require('../validateAnchorCanonicalMission');
 const { sendableQueueItems } = require('../executeAnchorOneOutbound');
 const { selectActiveCapacityContribution } = require('./activeCapacitySelection');
+const { findBoundVariant } = require('../../packages/max/workspace/EmmettMissionCandidates');
 
 const TENANT_ID = '10';
 const CLIENT_ID = 10;
@@ -30,6 +35,11 @@ const FORBIDDEN_SEND_INTENTS = Object.freeze([
 ]);
 
 const FORBIDDEN_SEND_INTENT_SET = new Set(FORBIDDEN_SEND_INTENTS);
+
+/** READY mission that currently fails SPEC-136 inspect; never treat as the STR canonical mission. */
+const EXCLUDED_MISSION_IDS = Object.freeze([
+  'mission_30b36f10-20ce-4e41-8780-c3d8822e2c8e',
+]);
 
 function asText(value) {
   return value == null ? '' : String(value).trim();
@@ -53,10 +63,13 @@ function isStrOutboundObjective(text) {
   return hasCleaning && hasStr && hasGeo;
 }
 
-function latestContribution(contributions, specialist, kind) {
-  return [...(contributions || [])]
-    .reverse()
-    .find((row) => row.specialist === specialist && (!kind || row.kind === kind)) || null;
+function latestContribution(contributions, specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions || [], {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
 }
 
 function paigeVariantCount(payload) {
@@ -78,8 +91,22 @@ function maxRankedCount(payload) {
   return 0;
 }
 
-function classifyQueueItems(capacityPayload) {
+function queueItemHasPaigeCopy(item, variants = []) {
+  if (item?.paige?.subject && item?.paige?.body) return true;
+  const bound = findBoundVariant(variants, [
+    item?.paige?.candidateId,
+    item?.candidateId,
+    item?.id,
+    item?.companyId,
+    item?.prospectId,
+  ]);
+  return Boolean(bound?.subject && bound?.body);
+}
+
+function classifyQueueItems(capacityPayload, paigePayload) {
   const body = unwrapContributionPayload(capacityPayload) || {};
+  const paige = unwrapContributionPayload(paigePayload) || {};
+  const variants = Array.isArray(paige.variants) ? paige.variants : [];
   const items = Array.isArray(body.queue?.items) ? body.queue.items : [];
   const sendable = sendableQueueItems(body);
   const sendableIds = new Set(sendable.map((row) => String(row.prospectId || row.id || row.candidateId || '')));
@@ -92,11 +119,14 @@ function classifyQueueItems(capacityPayload) {
         if (item.sendable === false) reasons.push('sendable_false');
         if (item.dnc === true) reasons.push('dnc');
         if (!String(item.email || '').trim()) reasons.push('missing_recipient_email_on_queue_item');
-        if (!item.paige?.subject || !item.paige?.body) reasons.push('missing_paige_copy');
+        if (!queueItemHasPaigeCopy(item, variants)) reasons.push('missing_paige_copy');
       }
       return {
         prospectId: item?.prospectId || null,
         candidateId: item?.id || item?.candidateId || null,
+        placeId: item?.placeId || null,
+        crmCompanyId: item?.crmCompanyId || null,
+        crmProspectId: item?.crmProspectId || null,
         company: item?.company || null,
         reasons,
       };
@@ -111,16 +141,31 @@ function classifyQueueItems(capacityPayload) {
 }
 
 function summarizeContributions(contributions = [], mission = {}) {
-  const scout = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
-  const max = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
-  const paige = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+  const scout = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const max = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
+  const paige = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS, mission);
   const capacityRows = (contributions || []).filter(
     (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
   );
   const selectedCapacity = selectActiveCapacityContribution(mission, capacityRows);
   const approach = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.ACQUISITION_APPROACH);
+  const discoveryApproval = [...(contributions || [])]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.OPERATOR
+        && row.kind === CONTRIBUTION_KINDS.APPROVAL
+        && (
+          row.payload?.action === 'discovery_approved'
+          || row.payload?.kind === 'discovery_approval'
+        )
+    ) || null;
   const scoutCount = scout ? scoutCandidateCount(scout) : 0;
-  const queue = selectedCapacity ? classifyQueueItems(selectedCapacity.payload) : {
+  const scoutPayload = scout ? unwrapContributionPayload(scout) : null;
+  const discoveryReadiness = scoutPayload
+    ? evaluatePrioritizationReadiness(scoutPayload)
+    : null;
+  const queue = selectedCapacity ? classifyQueueItems(selectedCapacity.payload, paige) : {
     queueCount: 0,
     sendableCount: 0,
     blockedCount: 0,
@@ -134,6 +179,21 @@ function summarizeContributions(contributions = [], mission = {}) {
         id: scout.id || null,
         at: scout.at || null,
         candidateCount: scoutCount,
+        payload: scoutPayload,
+      }
+      : null,
+    discoveryReadiness: discoveryReadiness
+      ? {
+        sufficient: discoveryReadiness.sufficient === true,
+        primaryBlocker: discoveryReadiness.primaryBlocker
+          ? {
+            code: discoveryReadiness.primaryBlocker.code || null,
+            label: discoveryReadiness.primaryBlocker.label || null,
+            reason: discoveryReadiness.primaryBlocker.reason || null,
+            recommendedAction: discoveryReadiness.primaryBlocker.recommendedAction || null,
+            waitingOn: discoveryReadiness.primaryBlocker.waitingOn || null,
+          }
+          : null,
       }
       : null,
     max: max
@@ -166,6 +226,10 @@ function summarizeContributions(contributions = [], mission = {}) {
         ...queue,
       }
       : null,
+    discoveryApproval: discoveryApproval
+      ? { id: discoveryApproval.id || null, at: discoveryApproval.at || null }
+      : null,
+    discoveryApproved: Boolean(discoveryApproval || scout),
     latest: (contributions || []).slice(-8).map((row) => ({
       id: row.id || null,
       specialist: row.specialist,
@@ -182,6 +246,7 @@ function summarizeMissionSnapshot(snapshot = {}, extras = {}) {
   const pending = mission.pendingOperatorDecision || null;
   const pendingIntent = intentFromPendingDecision(pending);
   const health = snapshot.health || {};
+  const upstreamCoherence = evaluateUpstreamArtifactCoherence(mission, contributions);
   return {
     id: mission.id || null,
     title: mission.title || null,
@@ -203,7 +268,12 @@ function summarizeMissionSnapshot(snapshot = {}, extras = {}) {
     isStrObjective: isStrOutboundObjective(mission.objective),
     isLawFirmObjective: isLawFirmObjective(mission.objective),
     contributions: summarized,
+    discoveryApproved: summarized.discoveryApproved === true,
     scoutCandidateCount: summarized.scout?.candidateCount || 0,
+    discoveryReadiness: summarized.discoveryReadiness || null,
+    prioritizationReady: summarized.discoveryReadiness?.sufficient === true,
+    upstreamCoherent: upstreamCoherence.coherent === true,
+    upstreamBlockers: upstreamCoherence.blockers || [],
     prioritizedCandidateCount: summarized.max?.rankedCount || 0,
     paigeVariantCount: summarized.paige?.variantCount || 0,
     capacityItemCount: summarized.emmett?.queueCount || 0,
@@ -223,7 +293,11 @@ function summarizeMissionSnapshot(snapshot = {}, extras = {}) {
 }
 
 function pickCanonicalStrMission(summaries = []) {
-  const matches = (summaries || []).filter((row) => row && row.isStrObjective === true);
+  const matches = (summaries || []).filter((row) =>
+    row
+    && row.isStrObjective === true
+    && !EXCLUDED_MISSION_IDS.includes(row.id)
+  );
   if (!matches.length) return null;
   const rank = (row) => {
     const stage = String(row.stage || '');
@@ -243,13 +317,95 @@ function pickCanonicalStrMission(summaries = []) {
   return matches.slice().sort((a, b) => rank(b) - rank(a))[0];
 }
 
+function hasScoutDiscovery(summary = {}) {
+  return Boolean(summary.contributions && summary.contributions.scout);
+}
+
+function discoveryApprovalAbsent(summary = {}) {
+  if (summary.discoveryApproved === true) return false;
+  if (hasScoutDiscovery(summary)) return false;
+  return true;
+}
+
+function prioritizationApprovalPending(summary = {}) {
+  const pending = summary.pendingOperatorDecision || null;
+  if (summary.pendingIntent === EXECUTION_INTENTS.APPROVE_PRIORITIZATION) return true;
+  return pending?.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL;
+}
+
+function canIssuePrioritizationApproval(summary = {}) {
+  if (!Number(summary.scoutCandidateCount || 0)) return false;
+  if (summary.contributions?.max) return false;
+  return prioritizationApprovalPending(summary) || summary.prioritizationReady === true;
+}
+
+function isRecoverySummaryIncoherent(summary = {}) {
+  if (summary.upstreamCoherent === false) return true;
+  const scoutCount = Number(summary.scoutCandidateCount || 0);
+  const rankedCount = Number(summary.prioritizedCandidateCount || summary.contributions?.max?.rankedCount || 0);
+  if (rankedCount > 0 && scoutCount <= 0) return true;
+  if (summary.prioritizationReady === false && scoutCount > 0) return true;
+  if (summary.discoveryReadiness && summary.discoveryReadiness.sufficient === false && scoutCount > 0) {
+    return true;
+  }
+  return false;
+}
+
+function upstreamIncoherentStop(summary = {}) {
+  const readiness = summary.discoveryReadiness || {};
+  const blocker = readiness.primaryBlocker || null;
+  return {
+    intent: null,
+    stop: true,
+    reason: 'upstream_artifact_incoherent',
+    operatorAction:
+      blocker?.reason
+      || (Number(summary.scoutCandidateCount || 0) <= 0
+        ? 'Canonical Scout discovery is stale or empty; re-hydrate the latest committed Scout contribution before execution approval.'
+        : 'Upstream artifact chain is incoherent; fix canonical Scout hydration before APPROVE_EXECUTION.'),
+    blocker,
+    upstreamBlockers: summary.upstreamBlockers || [],
+  };
+}
+
+function discoveryInvestigationBlocker(summary = {}) {
+  const readiness = summary.discoveryReadiness || {};
+  const blocker = readiness.primaryBlocker || null;
+  return {
+    intent: null,
+    stop: true,
+    reason: 'discovery_investigation_required',
+    operatorAction:
+      blocker?.reason
+      || summary.waitingReason
+      || 'Discovery evidence is insufficient for prioritization.',
+    blocker,
+  };
+}
+
+const BLOCKED_QUEUE_OPERATOR_ACTION =
+  'Resolve blocked recipient/copy requirements before execution approval.';
+
+function blockedCapacityQueueDecision() {
+  return {
+    intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
+    stop: false,
+    reason: 'capacity_queue_blocked',
+    operatorAction: BLOCKED_QUEUE_OPERATOR_ACTION,
+  };
+}
+
 function chooseNextRecoveryIntent(summary = {}) {
   const pendingIntent = summary.pendingIntent || null;
   const stage = summary.stage;
   const scoutCount = Number(summary.scoutCandidateCount || 0);
+  const healthyScout = scoutCount > 0;
 
   const sendable = Number(summary.sendableCount || 0);
   if (FORBIDDEN_SEND_INTENT_SET.has(pendingIntent)) {
+    if (isRecoverySummaryIncoherent(summary)) {
+      return upstreamIncoherentStop(summary);
+    }
     if (sendable > 0) {
       return {
         intent: null,
@@ -259,14 +415,13 @@ function chooseNextRecoveryIntent(summary = {}) {
           'APPROVE_EXECUTION for the current prepared artifacts, then EXECUTE_OUTBOUND. Autosend stays off.',
       };
     }
-    return {
-      intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
-      stop: false,
-      reason: 'execution_approval_without_sendable_queue',
-    };
+    return blockedCapacityQueueDecision();
   }
 
   if (stage === STAGES.READY && sendable > 0) {
+    if (isRecoverySummaryIncoherent(summary)) {
+      return upstreamIncoherentStop(summary);
+    }
     return {
       intent: null,
       stop: true,
@@ -276,19 +431,24 @@ function chooseNextRecoveryIntent(summary = {}) {
     };
   }
 
-  if (pendingIntent === EXECUTION_INTENTS.CONTINUE_INVESTIGATION) {
-    if (scoutCount > 0) {
+  if (pendingIntent === EXECUTION_INTENTS.CONTINUE_INVESTIGATION && healthyScout) {
+    if (prioritizationApprovalPending(summary)) {
       return {
-        intent: null,
-        stop: true,
-        reason: 'skip_destructive_continuation',
-        operatorAction:
-          'Healthy Scout candidates exist. Do not CONTINUE_INVESTIGATION. Consume or dismiss the discovery-investigation decision, then APPROVE_PRIORITIZATION.',
+        intent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
+        stop: false,
+        reason: 'prioritization_ready_after_discovery',
+        operatorAction: null,
       };
     }
+    return discoveryInvestigationBlocker(summary);
   }
 
-  if (pendingIntent && !FORBIDDEN_SEND_INTENT_SET.has(pendingIntent)) {
+  const skipPendingFollow = !pendingIntent
+    || FORBIDDEN_SEND_INTENT_SET.has(pendingIntent)
+    || (pendingIntent === EXECUTION_INTENTS.APPROVE_DISCOVERY && !discoveryApprovalAbsent(summary))
+    || (pendingIntent === EXECUTION_INTENTS.CONTINUE_INVESTIGATION && healthyScout);
+
+  if (pendingIntent && !skipPendingFollow) {
     return {
       intent: pendingIntent,
       stop: false,
@@ -297,14 +457,28 @@ function chooseNextRecoveryIntent(summary = {}) {
     };
   }
 
-  if (!summary.contributions?.scout) {
+  if (discoveryApprovalAbsent(summary)) {
     return { intent: EXECUTION_INTENTS.APPROVE_DISCOVERY, stop: false, reason: 'missing_discovery' };
   }
-  if (scoutCount <= 0) {
-    return { intent: EXECUTION_INTENTS.APPROVE_DISCOVERY, stop: false, reason: 'empty_discovery' };
+  if (!healthyScout) {
+    return {
+      intent: EXECUTION_INTENTS.CONTINUE_INVESTIGATION,
+      stop: false,
+      reason: 'approved_empty_discovery',
+      operatorAction: null,
+    };
   }
   if (!summary.contributions?.max) {
-    return { intent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION, stop: false, reason: 'missing_prioritization' };
+    if (canIssuePrioritizationApproval(summary)) {
+      return {
+        intent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
+        stop: false,
+        reason: 'missing_prioritization',
+      };
+    }
+    if (healthyScout && summary.prioritizationReady !== true) {
+      return discoveryInvestigationBlocker(summary);
+    }
   }
   if (!summary.contributions?.approach) {
     return {
@@ -320,12 +494,8 @@ function chooseNextRecoveryIntent(summary = {}) {
   if (!summary.contributions?.emmett) {
     return { intent: EXECUTION_INTENTS.GENERATE_CAPACITY, stop: false, reason: 'missing_capacity' };
   }
-  if (Number(summary.sendableCount || 0) === 0 && Number(summary.capacityItemCount || 0) >= 0) {
-    return {
-      intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
-      stop: false,
-      reason: 'capacity_not_sendable',
-    };
+  if (Number(summary.sendableCount || 0) === 0) {
+    return blockedCapacityQueueDecision();
   }
   return {
     intent: null,
@@ -349,6 +519,10 @@ function questionForIntent(intent) {
       return 'Approved.';
     case EXECUTION_INTENTS.APPROVE_DISCOVERY:
       return 'Approved. Begin Discovery.';
+    case EXECUTION_INTENTS.CONTINUE_INVESTIGATION:
+      return 'Continue investigation. Run Scout discovery for short-term rental operators.';
+    case EXECUTION_INTENTS.START_DISCOVERY:
+      return 'Begin Scout discovery.';
     case EXECUTION_INTENTS.APPROVE_PRIORITIZATION:
       return 'Approved prioritization.';
     case EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH:
@@ -379,14 +553,21 @@ module.exports = {
   CLIENT_ID,
   STR_OBJECTIVE,
   FORBIDDEN_SEND_INTENTS,
+  EXCLUDED_MISSION_IDS,
   normalizeObjective,
   isLawFirmObjective,
   isStrOutboundObjective,
   latestContribution,
   classifyQueueItems,
+  queueItemHasPaigeCopy,
   summarizeContributions,
   summarizeMissionSnapshot,
   pickCanonicalStrMission,
+  prioritizationApprovalPending,
+  canIssuePrioritizationApproval,
+  discoveryInvestigationBlocker,
+  isRecoverySummaryIncoherent,
+  upstreamIncoherentStop,
   chooseNextRecoveryIntent,
   payloadForIntent,
   questionForIntent,

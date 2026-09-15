@@ -8,6 +8,7 @@
  */
 
 const { isSupersededContribution } = require('../../packages/acquisition-mission/ContributionSupersession');
+const { selectCanonicalContribution } = require('../../packages/acquisition-mission/CanonicalContributionSelection');
 
 function unwrapMissionPayload(rowOrPayload) {
   if (!rowOrPayload || typeof rowOrPayload !== 'object') return {};
@@ -27,6 +28,15 @@ function activeCapacityPointer(missionBody = {}) {
 }
 
 function selectActiveCapacityContribution(missionBody, capacityRows = []) {
+  const missionId = missionBody?.id || missionBody?.missionId || null;
+  const selected = selectCanonicalContribution(capacityRows, {
+    missionId,
+    specialist: 'emmett',
+    kind: 'capacity',
+    mission: missionBody,
+  });
+  if (selected) return selected;
+
   const active = capacityRows.filter((row) => !isSupersededContribution(row));
   if (!active.length) return null;
 
