@@ -170,6 +170,17 @@ function pennyInput(mission, extras = {}) {
       ? extras.candidatePaidChannels.slice()
       : [],
     platformEvidence: Array.isArray(extras.platformEvidence) ? extras.platformEvidence.slice() : [],
+    firstPartyAttributionEvidence: Array.isArray(extras.firstPartyAttributionEvidence)
+      ? extras.firstPartyAttributionEvidence.slice()
+      : (Array.isArray(extras.acquisitionEvidence)
+        ? extras.acquisitionEvidence.filter((row) => row?.kind === 'first_party_attributed_lead')
+        : []),
+    firstPartyAttributionRetrieval: extras.firstPartyAttributionRetrieval || null,
+    campaignLeadEconomics: Array.isArray(extras.campaignLeadEconomics)
+      ? extras.campaignLeadEconomics.slice()
+      : [],
+    unmatchedFirstPartyAttribution: extras.unmatchedFirstPartyAttribution || null,
+    observationWindow: extras.observationWindow || null,
     availableBudget: extras.availableBudget || extras.budgetConstraint || null,
     operatorPreferences: extras.operatorPreferences || {},
     workspaceContext: sharedContext ? {
