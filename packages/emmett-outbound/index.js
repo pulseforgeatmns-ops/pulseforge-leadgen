@@ -17,6 +17,7 @@ const { routeOutcome, learningForSink } = require('./Learning');
 const { buildDashboard } = require('./Dashboard');
 const { createMemoryEoiStore } = require('./Store');
 const { createOutboundEngine, localDateOf } = require('./Engine');
+const tenantMailboxCapacity = require('./TenantMailboxCapacity');
 
 module.exports = {
   ...types,
@@ -43,4 +44,5 @@ module.exports = {
   createMemoryEoiStore,
   createOutboundEngine,
   localDateOf,
+  ...tenantMailboxCapacity,
 };

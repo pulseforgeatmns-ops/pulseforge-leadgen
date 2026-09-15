@@ -19,6 +19,7 @@ const {
   MAILBOX_STATUS,
   IDENTITY_STATUS,
 } = require('./tenantMailbox');
+const { resolveCapacityGate } = require('./emmettTenantMailboxCapacity');
 
 const SCHEDULE_STATUS = Object.freeze({
   SCHEDULED: 'SCHEDULED',
@@ -604,6 +605,13 @@ async function authorizeScheduledOutreachSend(input = {}, opts = {}) {
   const identity = await mailboxStore.getIdentity(tenantId, input.sendingIdentityId);
   if (!identity) throw schedulerError('sending_identity_tenant_mismatch', 'Sending identity does not belong to this tenant.');
 
+  const capacityGate = resolveCapacityGate(opts);
+  const capacityAuth = await capacityGate.authorize({
+    tenantId,
+    sendingIdentityId: input.sendingIdentityId,
+    scheduledFor: input.scheduledFor,
+  }, opts);
+
   const idempotencyKey = buildIdempotencyKey(input);
   const existing = await store.findByIdempotencyKey(tenantId, idempotencyKey);
   if (existing) {
@@ -635,7 +643,11 @@ async function authorizeScheduledOutreachSend(input = {}, opts = {}) {
     idempotencyKey,
   });
 
-  return { schedule, duplicate: false, created: true };
+  if (capacityAuth?.envelope?.envelopeId) {
+    await capacityGate.reserve(schedule, capacityAuth.envelope.envelopeId, opts);
+  }
+
+  return { schedule, duplicate: false, created: true, capacityEnvelope: capacityAuth?.envelope || null };
 }
 
 async function cancelScheduledOutreachSend(input = {}, opts = {}) {
@@ -812,6 +824,17 @@ async function evaluateSendEligibility(schedule, opts = {}) {
     }
   }
 
+  const capacityGate = resolveCapacityGate(opts);
+  const capacityCheck = await capacityGate.validateExecution(schedule, { ...opts, now });
+  if (!capacityCheck.eligible) {
+    return {
+      eligible: false,
+      action: SCHEDULE_STATUS.SKIPPED,
+      reason: capacityCheck.reason || 'emmett_capacity_blocked',
+      message: capacityCheck.message,
+    };
+  }
+
   return { eligible: true, action: 'send', recipientEmail: scheduling.recipientEmail };
 }
 
@@ -866,9 +889,14 @@ async function executeScheduledSend(schedule, opts = {}) {
     return { schedule: updated, result: 'recovered_sent', reason: eligibility.reason };
   }
   if (!eligibility.eligible) {
+    const capacityGate = resolveCapacityGate(opts);
+    await capacityGate.finalize(schedule, SCHEDULE_STATUS.SKIPPED, opts).catch(() => {});
     const updated = await finalizeSkipped(scheduleStore, schedule, eligibility.reason, opts);
     return { schedule: updated, result: 'skipped', reason: eligibility.reason };
   }
+
+  const capacityGate = resolveCapacityGate(opts);
+  await capacityGate.markExecuting(schedule, opts).catch(() => {});
 
   const snapshot = schedule.authorizationSnapshot || {};
   try {
@@ -912,6 +940,13 @@ async function executeScheduledSend(schedule, opts = {}) {
       sendResult.message.threadId,
       opts
     );
+    await capacityGate.finalize(updated, SCHEDULE_STATUS.SENT, opts).catch(() => {});
+    await capacityGate.ingestOutcome({
+      tenantId: schedule.tenantId,
+      sendingIdentityId: schedule.sendingIdentityId,
+      outcome: 'sent',
+      scheduleId: schedule.id,
+    }, opts).catch(() => {});
     return { schedule: updated, result: 'sent', message: sendResult.message };
   } catch (err) {
     if (err.outboundMessage?.status === 'sent' || err.code === 'duplicate') {
@@ -925,6 +960,13 @@ async function executeScheduledSend(schedule, opts = {}) {
       return { schedule: updated, result: 'recovered_sent', reason: err.code };
     }
     const updated = await finalizeFailed(scheduleStore, schedule, err, opts);
+    await capacityGate.finalize(updated, SCHEDULE_STATUS.FAILED, opts).catch(() => {});
+    await capacityGate.ingestOutcome({
+      tenantId: schedule.tenantId,
+      sendingIdentityId: schedule.sendingIdentityId,
+      outcome: 'failed',
+      scheduleId: schedule.id,
+    }, opts).catch(() => {});
     return { schedule: updated, result: 'failed', error: err };
   }
 }
