@@ -2,12 +2,13 @@
 
 /**
  * SPEC-117 — Emmett Outbound Infrastructure Intelligence.
+ * SPEC-255 — tenant mailbox auth bridge + bootstrap capacity.
  * Reputation is capital. Emmett protects it.
  */
 
 const types = require('./types');
 const { scoreInboxHealth, healthLabel, FACTOR_MAX } = require('./InboxHealth');
-const { recommendCapacity } = require('./Capacity');
+const { recommendCapacity, recommendCapacityNormal } = require('./Capacity');
 const { evaluateGovernor, evaluateSend, acknowledgeHalt, actorIsOperator } = require('./Governor');
 const { buildTodayQueue, queueScore } = require('./Queue');
 const { paceVerticals, pacingWarning } = require('./Pacing');
@@ -25,6 +26,7 @@ module.exports = {
   healthLabel,
   FACTOR_MAX,
   recommendCapacity,
+  recommendCapacityNormal,
   evaluateGovernor,
   evaluateSend,
   acknowledgeHalt,

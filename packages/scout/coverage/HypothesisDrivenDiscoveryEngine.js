@@ -99,12 +99,16 @@ function scopedSearchForTask(searchDefinition, task, marketDefinition) {
 }
 
 function normalizeCandidateRow(row) {
+  const location = row.location || row.geography || row.discoveryCity || null;
   return {
     ...row,
     place_id: row.place_id || row.placeId,
+    placeId: row.placeId || row.place_id,
     company: row.company || row.name,
     name: row.name || row.company,
-    formatted_address: row.formatted_address || row.address,
+    location,
+    address: row.address || row.formatted_address || location,
+    formatted_address: row.formatted_address || row.address || location,
     formatted_phone_number: row.formatted_phone_number || row.phone,
     url: row.url || row.website,
     website: row.website || row.url,
@@ -112,15 +116,23 @@ function normalizeCandidateRow(row) {
   };
 }
 
+function lowerText(value) {
+  return (asText(value) || '').toLowerCase();
+}
+
+function candidateAddressText(row = {}) {
+  return asText(row.address || row.formatted_address || row.location || row.geography || row.discoveryCity);
+}
+
 function candidateMatchKey(row) {
   const normalized = normalizeCandidateRow(row);
   const identity = establishBusinessIdentity(normalized);
   if (identity.identityKey) return identity.identityKey;
 
-  const name = asText(normalized.name || normalized.company).toLowerCase();
-  const address = asText(normalized.address || normalized.formatted_address).toLowerCase();
+  const name = lowerText(normalized.name || normalized.company);
+  const address = lowerText(candidateAddressText(normalized));
   if (name && address) return `nameaddr:${name}|${address}`;
-  return asText(normalized.id || name).toLowerCase();
+  return lowerText(normalized.id || name);
 }
 
 /**
@@ -144,9 +156,9 @@ function mergeIdentities(candidates = []) {
       byKey.set(key, fuseCandidateRecords(existing, row, identity));
     } else {
       // Secondary match: try name+address against existing entries
-      const nameAddrKey = `nameaddr:${asText(row.name || row.company).toLowerCase()}|${asText(row.address || row.formatted_address).toLowerCase()}`;
+      const nameAddrKey = `nameaddr:${lowerText(row.name || row.company)}|${lowerText(candidateAddressText(row))}`;
       const byNameAddr = [...byKey.entries()].find(([k, v]) => {
-        const vKey = `nameaddr:${asText(v.name || v.company).toLowerCase()}|${asText(v.address || v.formatted_address).toLowerCase()}`;
+        const vKey = `nameaddr:${lowerText(v.name || v.company)}|${lowerText(candidateAddressText(v))}`;
         return vKey === nameAddrKey && nameAddrKey !== 'nameaddr:|';
       });
 
