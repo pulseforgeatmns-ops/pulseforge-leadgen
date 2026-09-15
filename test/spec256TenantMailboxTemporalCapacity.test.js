@@ -17,7 +17,13 @@ const {
 const {
   evaluateCapacityAuthorization,
   evaluateCapacityExecution,
+  assessTenantMailboxCapacity,
+  buildCapacityEnvelope,
 } = require('../packages/emmett-outbound/TenantMailboxCapacity');
+const {
+  authenticationFromVerificationState,
+  BOOTSTRAP_MODE,
+} = require('../packages/emmett-outbound');
 const {
   createPermissiveEnvelope,
   createMemoryCapacityGate,
@@ -159,6 +165,44 @@ describe('SPEC-256 temporal spacing contract', () => {
       inFlightConflicts: conflicts,
     });
     assert.equal(check.allowed, false);
+  });
+});
+
+describe('SPEC-256 preserves SPEC-255 bootstrap spacing on durable envelopes', () => {
+  it('bootstrap-active assessment persists 240-minute spacing, not ramp 60', () => {
+    const snapshot = {
+      tenantId: '13',
+      sendingIdentityId: BABRUN.sendingIdentityId,
+      mailboxKind: 'tenant_smtp',
+      deliverabilityObservability: 'limited',
+      inboxAgeDays: 2,
+      providerCeiling: 3,
+      mailboxStatus: 'active',
+      identityStatus: 'active',
+      authentication: authenticationFromVerificationState({
+        smtp: { status: 'verified' },
+        spf: { status: 'present' },
+        dkim: { status: 'present' },
+        dmarc: { status: 'present' },
+      }),
+      warmup: { status: 'warming', dailyCap: 3, activeSendDays: 0, rampStage: 'early', reset: true },
+      bounceRate: 0,
+      replyRate: null,
+      openRate: null,
+      complaintRate: 0,
+      sentToday: 0,
+      scheduledSends: 2,
+      recentSends: 0,
+      totalOperationalSends: 0,
+      blacklist: { listed: false },
+    };
+    const assessment = assessTenantMailboxCapacity(snapshot);
+    assert.equal(assessment.capacity.mode, BOOTSTRAP_MODE);
+    assert.equal(assessment.minimumSpacingMinutes, 240);
+    assert.equal(assessment.allowedSendWindow.startHour, 9);
+    assert.equal(assessment.allowedSendWindow.endHour, 16);
+    const envelope = buildCapacityEnvelope(snapshot, assessment, { now: new Date('2026-09-16T12:00:00.000Z') });
+    assert.equal(envelope.minimumSpacingMinutes, 240);
   });
 });
 
