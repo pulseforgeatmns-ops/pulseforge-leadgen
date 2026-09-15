@@ -199,9 +199,9 @@ async function run(options = {}) {
       if (revisedOnce) {
         steps.push({
           label: 'STOP',
-          reason: 'revise_did_not_create_sendable_queue',
+          reason: 'capacity_queue_blocked',
           operatorAction:
-            'Emmett CAPACITY was revised once and still has no sendable recipient email. Enrich verified CRM emails, then REVISE_PREPARED_OUTREACH again. Do not send.',
+            'Resolve blocked recipient/copy requirements before execution approval.',
         });
         break;
       }
@@ -278,6 +278,30 @@ async function run(options = {}) {
   const finalChoice = chooseNextRecoveryIntent(summary);
   const ready = summary.stage === 'ready';
   const sendable = Number(summary.sendableCount || 0) > 0;
+  let stopReason = finalChoice.reason;
+  let operatorAction = finalChoice.operatorAction || null;
+  if (!sendable) {
+    if (
+      stopReason === 'ready_awaiting_execution_approval'
+      || stopReason === 'execution_approval_without_sendable_queue'
+      || stopReason === 'capacity_not_sendable'
+      || stopReason === 'revise_did_not_create_sendable_queue'
+    ) {
+      stopReason = 'capacity_queue_blocked';
+    }
+    if (
+      !operatorAction
+      || /execution authorization required before send/i.test(String(operatorAction))
+      || /APPROVE_EXECUTION/i.test(String(operatorAction))
+    ) {
+      operatorAction = 'Resolve blocked recipient/copy requirements before execution approval.';
+    }
+  } else {
+    operatorAction = operatorAction
+      || (ready
+        ? 'APPROVE_EXECUTION for the current prepared artifacts, then EXECUTE_OUTBOUND. Autosend stays off.'
+        : summary.waitingReason);
+  }
   return {
     tenantId: TENANT_ID,
     missionId: resolved.missionId,
@@ -289,11 +313,8 @@ async function run(options = {}) {
     autosendEnabled: client.autosend_enabled === true,
     steps,
     final: summary,
-    stopReason: finalChoice.reason,
-    operatorAction: finalChoice.operatorAction
-      || (ready && sendable
-        ? 'APPROVE_EXECUTION for the current prepared artifacts, then EXECUTE_OUTBOUND. Autosend stays off.'
-        : summary.waitingReason),
+    stopReason,
+    operatorAction,
   };
 }
 

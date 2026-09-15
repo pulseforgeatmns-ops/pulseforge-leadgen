@@ -314,10 +314,12 @@ describe('enrichAnchorMissionBoundContacts', () => {
     assert.equal(isEligibleForCapacityProjection(row), false);
   });
 
-  it('resolves enrichment through company_id when mission keys differ from contact ids', () => {
+  it('resolves enrichment through place id, domain, and scout CRM prospect UUID', () => {
     assert.match(libSource, /listMissionBoundCompanyIds/);
+    assert.match(libSource, /listMissionBoundCrmLookupKeys/);
+    assert.match(libSource, /listMissionBoundProspectIds/);
     assert.match(libSource, /loadCrmProspectsForMissionBoundCompanies/);
-    assert.doesNotMatch(libSource, /listMissionBoundProspectIds/);
-    assert.doesNotMatch(libSource, /p\.id::text = \$2/);
+    assert.match(libSource, /loadCrmProspectsByIds/);
+    assert.match(libSource, /aliasCrmMapToIdentities/);
   });
 });

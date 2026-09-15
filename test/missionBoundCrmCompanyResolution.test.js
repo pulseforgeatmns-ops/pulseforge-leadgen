@@ -126,12 +126,20 @@ function mockDb(rows = crmRows()) {
         if (row.client_id !== clientId) return false;
         if (row.is_synthetic) return false;
         return keys.some((key) =>
-          String(row.company_id) === String(key) || String(row.prospect_id) === String(key)
+          String(row.company_id) === String(key)
+          || String(row.prospect_id) === String(key)
+          || (row.domain && String(row.domain).toLowerCase() === String(key).toLowerCase())
+          || (row.google_place_id && String(row.google_place_id) === String(key))
         );
       });
       const ranked = keys.flatMap((key) => {
         const candidates = matches
-          .filter((row) => String(row.company_id) === String(key) || String(row.prospect_id) === String(key))
+          .filter((row) =>
+            String(row.company_id) === String(key)
+            || String(row.prospect_id) === String(key)
+            || (row.domain && String(row.domain).toLowerCase() === String(key).toLowerCase())
+            || (row.google_place_id && String(row.google_place_id) === String(key))
+          )
           .sort((a, b) => {
             const aCompanyMatch = String(a.company_id) === String(key) ? 0 : 1;
             const bCompanyMatch = String(b.company_id) === String(key) ? 0 : 1;
@@ -171,7 +179,8 @@ describe('mission-bound company → CRM contact resolution', () => {
     const candidates = buildMissionBoundCandidates(MISSION, buildAnchorContributions());
     const klug = candidates.find((row) => row.company.includes('Klug'));
     assert.equal(klug.id, COMPANY_KLUG);
-    assert.equal(klug.prospectId, CONTACT_KLUG);
+    assert.equal(klug.candidateId, COMPANY_KLUG);
+    assert.equal(klug.crmProspectId, CONTACT_KLUG);
   });
 
   it('loadCrmProspectsForMissionBoundCompanies resolves via prospects.company_id', async () => {
@@ -214,6 +223,56 @@ describe('mission-bound company → CRM contact resolution', () => {
     assert.equal(map.size, 1);
     assert.ok(map.has(COMPANY_KLUG));
     assert.ok(!map.has('outside-universe'));
+  });
+
+  it('resolves verified CRM contact via exact company domain when candidate key is a Place ID', async () => {
+    const placeId = 'ChIJ43Z_V2dP4okRCRcDHefV8OU';
+    const map = await loadCrmProspectsForMissionBoundCompanies({
+      pool: mockDb([
+        {
+          prospect_id: CONTACT_KLUG,
+          company_id: COMPANY_KLUG,
+          client_id: 10,
+          company_name: 'Blue Door Living Property Management',
+          domain: 'bluedoorliving.com',
+          email: 'ops@bluedoorliving.com',
+          email_verified: true,
+          email_status: 'verified',
+          icp_score: 90,
+          is_synthetic: false,
+        },
+      ]),
+      clientId: 10,
+      companyIds: [placeId, 'bluedoorliving.com'],
+    });
+    assert.equal(map.size, 1);
+    assert.equal(String(map.get('bluedoorliving.com').prospect_id), CONTACT_KLUG);
+    assert.ok(!map.has(placeId));
+  });
+
+  it('resolves CRM contact via google_place_id on company when candidate key is a Place ID', async () => {
+    const placeId = 'ChIJ43Z_V2dP4okRCRcDHefV8OU';
+    const map = await loadCrmProspectsForMissionBoundCompanies({
+      pool: mockDb([
+        {
+          prospect_id: CONTACT_KLUG,
+          company_id: COMPANY_KLUG,
+          client_id: 10,
+          company_name: 'Blue Door Living Property Management',
+          google_place_id: placeId,
+          domain: 'bluedoorliving.com',
+          email: 'ops@bluedoorliving.com',
+          email_verified: true,
+          email_status: 'verified',
+          icp_score: 90,
+          is_synthetic: false,
+        },
+      ]),
+      clientId: 10,
+      companyIds: [placeId],
+    });
+    assert.equal(map.size, 1);
+    assert.equal(String(map.get(placeId).prospect_id), CONTACT_KLUG);
   });
 
   it('still resolves when mission key equals CRM prospect id (legacy integer fixtures)', async () => {

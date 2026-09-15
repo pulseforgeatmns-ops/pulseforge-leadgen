@@ -6,11 +6,24 @@
  */
 
 const { getAcquisitionMissionRuntime } = require('../../services/acquisitionMissionRuntime');
-const { listMissionBoundCompanyIds } = require('../../packages/max/workspace/EmmettMissionCandidates');
+const {
+  buildMissionBoundCandidates,
+  listMissionBoundCompanyIds,
+  listMissionBoundCrmLookupKeys,
+  listMissionBoundProspectIds,
+} = require('../../packages/max/workspace/EmmettMissionCandidates');
+const {
+  aliasCrmMapToIdentities,
+  identityKeysFrom,
+} = require('../../packages/max/workspace/CanonicalOutboundIdentity');
 const {
   isProjectableCrmProspect,
   loadCrmProspectsForMissionBoundCompanies,
+  loadCrmProspectsByIds,
 } = require('../../packages/max/workspace/MissionBoundCrmResolver');
+const {
+  admitMissionBoundCandidates,
+} = require('../../packages/max/workspace/MissionBoundCrmAdmission');
 const {
   configureScoringContext,
   runEnrichmentChain,
@@ -27,7 +40,7 @@ const { persistableEmailSource, remediateTaintedCrmEmail } = require('../../util
 
 const TENANT_ID = '10';
 const CLIENT_ID = 10;
-const DEFAULT_MISSION_ID = 'mission_ad7753b0-6def-441d-bb1a-3764656f5750';
+const DEFAULT_MISSION_ID = 'mission_82e8102f-249c-4f44-b88e-2de76b13898e';
 const EXCLUDED_COMPANY_RE = /deliverability\s*test/i;
 
 function isExcludedCompany(name) {
@@ -48,6 +61,12 @@ function crmProjectionRow(row = {}, extras = {}) {
 
 async function loadProspectRow(db, clientId, prospectId) {
   const { loadBestCrmProspectForMissionBoundKey } = require('../../packages/max/workspace/MissionBoundCrmResolver');
+  const byId = await loadCrmProspectsByIds({
+    pool: db,
+    clientId,
+    prospectIds: [prospectId],
+  });
+  if (byId.size) return byId.values().next().value;
   return loadBestCrmProspectForMissionBoundKey({
     pool: db,
     clientId,
@@ -55,7 +74,7 @@ async function loadProspectRow(db, clientId, prospectId) {
   });
 }
 
-async function loadMissionBoundProspects(db, missionId) {
+async function loadMissionBoundProspects(db, missionId, opts = {}) {
   const runtime = getAcquisitionMissionRuntime({ production: true, persist: true, pool: db });
   await runtime.hydrate(TENANT_ID, { pool: db, production: true });
   const engine = runtime.engine();
@@ -64,12 +83,45 @@ async function loadMissionBoundProspects(db, missionId) {
     throw Object.assign(new Error(`Mission ${missionId} not found.`), { code: 'mission_not_found' });
   }
   const snapshot = engine.inspect(missionId, { tenantId: TENANT_ID });
-  const companyIds = listMissionBoundCompanyIds(mission, snapshot.contributions || []);
-  const rowsByCompanyId = await loadCrmProspectsForMissionBoundCompanies({
-    pool: db,
+  const contributions = snapshot.contributions || [];
+
+  const admission = await admitMissionBoundCandidates(db, mission, contributions, {
     clientId: CLIENT_ID,
-    companyIds,
+    missionId,
+    dryRun: Boolean(opts.dryRun),
   });
+
+  const candidates = buildMissionBoundCandidates(mission, contributions);
+  const companyIds = listMissionBoundCompanyIds(mission, contributions);
+  const lookupKeys = listMissionBoundCrmLookupKeys(mission, contributions);
+  const crmProspectIds = listMissionBoundProspectIds(mission, contributions);
+  const maps = [];
+  if (lookupKeys.length) {
+    maps.push(await loadCrmProspectsForMissionBoundCompanies({
+      pool: db,
+      clientId: CLIENT_ID,
+      companyIds: lookupKeys,
+    }));
+  }
+  if (crmProspectIds.length) {
+    maps.push(await loadCrmProspectsByIds({
+      pool: db,
+      clientId: CLIENT_ID,
+      prospectIds: crmProspectIds,
+    }));
+  }
+  const crmByIdentity = maps.length
+    ? aliasCrmMapToIdentities(maps, candidates)
+    : new Map();
+  const rowsByCompanyId = new Map();
+  for (const candidate of candidates) {
+    let row = null;
+    for (const key of identityKeysFrom(candidate)) {
+      row = crmByIdentity.get(String(key));
+      if (row) break;
+    }
+    if (row) rowsByCompanyId.set(String(candidate.id), row);
+  }
   const rows = companyIds
     .map((companyId) => rowsByCompanyId.get(String(companyId)))
     .filter(Boolean);
@@ -77,6 +129,8 @@ async function loadMissionBoundProspects(db, missionId) {
     mission,
     snapshot,
     companyIds,
+    candidates,
+    admission,
     // Legacy report field: mission-bound keys (company/candidate IDs), not CRM prospects.id.
     prospectIds: companyIds,
     rowsByCompanyId,
@@ -188,6 +242,7 @@ async function enrichProspectRow(row, options = {}) {
   ));
   const runProviders = options.runEnrichmentChain || runEnrichmentChain;
   const verifyEmailFn = options.resolveEmailVerification || resolveEmailVerification;
+  const configureContext = options.configureScoringContext || configureScoringContext;
   let working = { ...row };
   const base = {
     prospectId: String(row.prospect_id),
@@ -317,7 +372,7 @@ async function enrichProspectRow(row, options = {}) {
     };
   }
 
-  await configureScoringContext({ client_id: working.client_id || CLIENT_ID });
+  await configureContext({ client_id: working.client_id || CLIENT_ID });
   const enriched = await runProviders(domain, 'owner');
   if (!enriched?.email) {
     return {
@@ -398,6 +453,7 @@ module.exports = {
   crmProjectionRow,
   loadProspectRow,
   loadMissionBoundProspects,
+  admitMissionBoundCandidates,
   persistProviderChainEmail,
   enrichProspectRow,
   reportProvenanceFields,

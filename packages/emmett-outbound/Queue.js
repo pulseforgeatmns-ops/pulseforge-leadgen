@@ -42,7 +42,13 @@ function buildTodayQueue(input = {}) {
   const prospects = Array.isArray(input.prospects) ? input.prospects : [];
   const scored = prospects.map((prospect) => {
     const parts = queueScore(prospect, now);
+    const candidateId = prospect.candidateId || prospect.id || null;
     return {
+      id: candidateId,
+      candidateId,
+      companyId: prospect.companyId || null,
+      placeId: prospect.placeId || prospect.place_id || null,
+      crmProspectId: prospect.crmProspectId || null,
       prospectId: prospect.id || prospect.prospectId,
       email: prospect.email,
       vertical: String(prospect.vertical || 'unknown').toLowerCase(),

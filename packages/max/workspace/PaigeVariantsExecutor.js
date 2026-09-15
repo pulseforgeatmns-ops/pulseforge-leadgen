@@ -14,6 +14,10 @@ const {
   EXECUTION_STATUSES,
   MESSAGE_BINDING_SCOPES,
 } = amo;
+const { unwrapSpecialistPayload } = require('../../acquisition-mission/ContributionSupersession');
+const {
+  canonicalOutboundIdentity,
+} = require('./CanonicalOutboundIdentity');
 const {
   evaluatePaigePriorLearningInfluence,
   applyPaigePriorLearningAdjustments,
@@ -52,7 +56,8 @@ function buildPerProspectVariants(input = {}) {
   const variants = [];
 
   for (const candidate of candidates) {
-    const candidateId = candidate.id || candidate.companyId || candidate.name;
+    const identity = canonicalOutboundIdentity(candidate);
+    const candidateId = identity.candidateId || candidate.name;
     const companyName = candidate.name || candidate.label || 'Company';
 
     // SPEC-212: Extract ONLY this candidate's intelligence
@@ -69,8 +74,10 @@ function buildPerProspectVariants(input = {}) {
     ].filter(Boolean).join('\n\n');
 
     variants.push({
-      // SPEC-212: Explicit prospect binding
+      // SPEC-212: Explicit prospect binding — candidate/company/place stay distinct from CRM UUIDs
       candidateId: String(candidateId),
+      companyId: identity.companyId || String(candidateId),
+      placeId: identity.placeId || null,
       companyName,
       bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
       variantId: `paige_v_${String(candidateId).replace(/\W/g, '_')}`,
@@ -133,6 +140,7 @@ function buildBasePaigeVariantsPayload(input = {}) {
   return {
     variants,
     subjects,
+    messaging: variants[0]?.body || null,
     cta: 'Reply to schedule a walkthrough',
     hypotheses: [
       max.objectiveReason || 'Prioritized targets respond to timing-specific outreach.',
@@ -151,10 +159,24 @@ function buildBasePaigeVariantsPayload(input = {}) {
   };
 }
 
+function unwrapMaxPayload(raw = {}) {
+  if (!raw || typeof raw !== 'object') return {};
+  if ((Array.isArray(raw.rankedTargets) && raw.rankedTargets.length)
+    || (Array.isArray(raw.priorities) && raw.priorities.length)) {
+    return raw;
+  }
+  return unwrapSpecialistPayload(raw) || raw;
+}
+
 function extractPaigeUpstreamContext(executionInput = {}) {
-  const max = executionInput.workspaceContext?.max
+  const max = unwrapMaxPayload(
+    executionInput.workspaceContext?.max
     || executionInput.specialistInput?.maxPrioritization
-    || {};
+    || {}
+  );
+  if (!max.rankedTargets?.length && executionInput.specialistInput?.rankedTargets?.length) {
+    max.rankedTargets = executionInput.specialistInput.rankedTargets;
+  }
   const scout = executionInput.workspaceContext?.scout
     || executionInput.specialistInput?.scoutDiscovery
     || {};

@@ -64,29 +64,45 @@ function isCompanyLevelTarget(target, segmentLabel) {
 }
 
 /**
- * SPEC-212 — Find the variant bound to this specific candidateId.
+ * SPEC-212 — Find the variant bound to this specific candidate identity.
  * Variants are bound to prospect intelligence and must not be cross-assigned.
+ * Place IDs / company IDs / candidate IDs are aliases of the same Max identity.
  */
-function prospectIdentity(row = {}) {
-  if (!row || typeof row !== 'object') return null;
-  const id = row.id ?? row.prospectId;
-  return id != null && String(id).trim() ? String(id).trim() : null;
+function variantIdentityKeys(variant = {}) {
+  return identityKeysFrom({
+    candidateId: variant.candidateId,
+    id: variant.id,
+    companyId: variant.companyId,
+    placeId: variant.placeId,
+  });
 }
 
 function findBoundVariant(variants = [], candidateId) {
-  if (!candidateId || !Array.isArray(variants)) return null;
-  const candidateIdStr = String(candidateId);
-  // First, try exact candidateId match
-  const exactMatch = variants.find((v) => String(v.candidateId || '') === candidateIdStr);
-  if (exactMatch) return exactMatch;
-  // Fallback to first variant if no explicit binding (shouldn't happen with SPEC-212)
-  return variants[0] || null;
+  if (!Array.isArray(variants) || !variants.length) return null;
+  const keys = Array.isArray(candidateId)
+    ? candidateId.map((value) => String(value || '').trim()).filter(Boolean)
+    : [String(candidateId || '').trim()].filter(Boolean);
+  if (keys.length) {
+    const keySet = new Set(keys);
+    const exactMatch = variants.find((variant) =>
+      variantIdentityKeys(variant).some((key) => keySet.has(key))
+    );
+    if (exactMatch) return exactMatch;
+  }
+  if (variants.length === 1 && variants[0].bindingScope === MESSAGE_BINDING_SCOPES.MISSION) {
+    return variants[0];
+  }
+  return null;
 }
 
 /**
  * Build queue candidates strictly from mission contributions — never client-wide CRM.
  * SPEC-212: Each candidate receives the message variant bound to its candidateId.
  */
+function contributionBody(row) {
+  return unwrapSpecialistPayload(row) || {};
+}
+
 function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   const crmByProspectId = opts.crmByProspectId || null;
   const scoutRow = findLatestScoutDiscovery(contributions, mission);
@@ -110,31 +126,29 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   for (const opp of opportunities) {
     if (opp.companyId) oppByKey.set(String(opp.companyId), opp);
     if (opp.id) oppByKey.set(String(opp.id), opp);
+    if (opp.placeId) oppByKey.set(String(opp.placeId), opp);
     if (opp.name) oppByKey.set(String(opp.name).toLowerCase(), opp);
   }
 
   const vertical = segmentLabel || 'unknown';
 
-  const usedProspectIds = new Set();
   const candidates = [];
 
   const addCandidate = (target, index) => {
     const name = target.name || target.segment || target.label;
     const opp = oppByKey.get(String(target.companyId || ''))
       || oppByKey.get(String(target.id || ''))
+      || oppByKey.get(String(target.placeId || ''))
       || (name ? oppByKey.get(String(name).toLowerCase()) : null)
       || {};
     const prospect = prospects.find((row) =>
       (target.companyId && row.companyId === target.companyId)
+      || (target.id && (row.companyId === target.id || row.id === target.id))
+      || (target.placeId && (row.placeId === target.placeId || row.id === target.placeId))
       || (name && row.company === name)
-      || (name && row.name && String(row.name).includes(String(name).split(' ')[0])))
-      || prospects.find((row) => {
-        const identity = prospectIdentity(row);
-        return identity && !usedProspectIds.has(identity);
-      });
+      || (name && row.name && String(row.name).includes(String(name).split(' ')[0])));
 
     const resolvedProspectId = prospectIdentity(prospect);
-    if (resolvedProspectId) usedProspectIds.add(resolvedProspectId);
 
     const rank = Number(target.rank || index + 1);
     const fit = target.fit != null ? Number(target.fit) : (opp.fit != null ? Number(opp.fit) : 0.7);
@@ -160,6 +174,9 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
       email: resolveMissionBoundRecipientEmail({
         discoveryEmail: prospect?.email,
         missionBoundKey: candidateId,
+        prospectId: crmProspectId,
+        companyId: identity.companyId,
+        domain: identity.domain,
         crmByProspectId,
       }),
       company: name || opp.name || prospect?.company || `Target ${rank}`,
@@ -175,8 +192,10 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
     };
 
     if (paigeReady.ready && paigePayload.variants?.length) {
-      // SPEC-212: Find the variant bound to this specific candidate
-      const boundVariant = findBoundVariant(paigePayload.variants, candidateId);
+      const boundVariant = findBoundVariant(
+        paigePayload.variants,
+        identity.keys
+      );
       if (boundVariant) {
         row.paige = {
           author: 'paige',
@@ -185,7 +204,6 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
           variantLabel: boundVariant.label || 'Primary',
           subject: boundVariant.subject || null,
           body: boundVariant.body || null,
-          // SPEC-212: Explicit binding preservation
           candidateId: boundVariant.candidateId || String(candidateId),
           variantId: boundVariant.variantId || null,
           bindingScope: boundVariant.bindingScope || 'prospect',
@@ -204,27 +222,36 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   } else if (scoutPayload.rankedProspects?.length) {
     scoutPayload.rankedProspects.forEach((row, index) => addCandidate({
       rank: row.rank || index + 1,
-      companyId: row.id,
+      id: row.id || row.companyId || row.placeId,
+      companyId: row.companyId || row.id,
+      placeId: row.placeId || row.place_id,
       name: row.name,
       fit: row.fit,
       timing: row.timing,
       signals: row.signals,
       rationale: row.rationale,
+      website: row.website || row.url,
     }, index));
   } else if (opportunities.length) {
     opportunities.forEach((opp, index) => addCandidate({
       rank: index + 1,
+      id: opp.id || opp.companyId || opp.placeId,
       companyId: opp.companyId || opp.id,
+      placeId: opp.placeId || opp.place_id,
       name: opp.name,
       fit: opp.fit,
       timing: opp.timing,
       signals: opp.signals,
+      website: opp.website || opp.url,
     }, index));
   } else if (scoutPayload.companies?.length) {
     scoutPayload.companies.forEach((company, index) => addCandidate({
       rank: index + 1,
+      id: company.id || company.placeId,
       companyId: company.id,
+      placeId: company.placeId || company.place_id,
       name: company.name,
+      website: company.website || company.url,
     }, index));
   }
 
@@ -238,7 +265,16 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
 function listMissionBoundProspectIds(mission, contributions = [], opts = {}) {
   return [...new Set(
     buildMissionBoundCandidates(mission, contributions, opts)
-      .map((row) => row.prospectId)
+      .map((row) => row.crmProspectId)
+      .filter(Boolean)
+      .map(String)
+  )];
+}
+
+function listMissionBoundCrmLookupKeys(mission, contributions = [], opts = {}) {
+  return [...new Set(
+    buildMissionBoundCandidates(mission, contributions, opts)
+      .flatMap((row) => identityKeysFrom(row))
       .filter(Boolean)
       .map(String)
   )];
@@ -268,4 +304,5 @@ module.exports = {
   buildMissionBoundCandidates,
   listMissionBoundProspectIds,
   listMissionBoundCompanyIds,
+  listMissionBoundCrmLookupKeys,
 };
