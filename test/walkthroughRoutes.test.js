@@ -230,8 +230,12 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, /walkthrough_form_submit/);
     assert.match(html, /phone_click/);
     assert.match(html, /email_click/);
+    assert.match(html, /https:\/\/www\.clarity\.ms\/tag\/"\+i/);
+    assert.match(html, /"yhnafqbr5k"/);
+    assert.equal((html.match(/yhnafqbr5k/g) || []).length, 1);
     assert.match(html, /if\(w\.oaiq\)return/);
     assert.match(html, /QtVasj1GCLfpLWsTwpYTBC/);
+    assert.match(html, /bzrcdn\.openai\.com\/sdk\/oaiq\.min\.js/);
     assert.match(html, /trackOpenAiLeadCreated/);
     assert.match(html, /lead_created/);
     assert.match(html, /json\.submission_id/);

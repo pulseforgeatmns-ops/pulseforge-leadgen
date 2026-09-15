@@ -6,6 +6,13 @@ Source for [goanchorcleaning.com](https://goanchorcleaning.com/). Live hosting i
 
 Copy `index.html` over the Pages repo `index.html` and merge to `main`. Do not add `/commercial-cleaning-manchester-nh` until the first Search campaign has data.
 
+After copying, confirm the deployed `<head>` includes **both** tracking snippets exactly once:
+
+- Microsoft Clarity: `https://www.clarity.ms/tag/yhnafqbr5k` (PR #569)
+- OpenAI Ads pixel: `bzrcdn.openai.com/sdk/oaiq.min.js` plus `trackOpenAiLeadCreated` / `lead_created` (PR #609)
+
+Quick check: `curl -sL https://goanchorcleaning.com/ | rg 'yhnafqbr5k|oaiq'`
+
 ## Phone
 
 Public number: `(603) 420-2430` → `tel:+16034202430`
