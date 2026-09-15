@@ -194,6 +194,14 @@ describe('SPEC-256 canonical capacity accounting', () => {
     });
     assert.equal(accounting.sent, 1);
     assert.equal(accounting.consumed, 1);
+
+    const unlinkedMessage = accountCapacityUnits({
+      sentMessages: [{ id: 'msg_1' }],
+      schedules: [{ id: BABRUN.schedule0900, status: 'SENT', outboundMessageId: 'msg_1' }],
+      reservations: [{ id: 'res_1', scheduleId: BABRUN.schedule0900, status: 'sent' }],
+    });
+    assert.equal(unlinkedMessage.sent, 1);
+    assert.equal(unlinkedMessage.consumed, 1);
   });
 
   it('FAILED, SKIPPED, and CANCELLED release capacity', () => {
@@ -406,11 +414,15 @@ describe('SPEC-256 postgres accounting and reconciliation', () => {
       `INSERT INTO emmett_tenant_mailbox_capacity_envelopes (
           id, tenant_id, mailbox_integration_id, sending_identity_id, sender_email, sending_domain,
           local_date, computed_at, valid_from, valid_until, max_sends_per_day, minimum_spacing_minutes,
-          allowed_send_window, governor_state
+          allowed_send_window, governor_state, remaining_capacity
         ) VALUES ($1,$2,'tmi_13_babrun_hello',$3,'hello@babrun.com','babrun.com',
-          '2026-09-16', NOW(), NOW(), NOW() + INTERVAL '6 hours', 2, 240,
-          '{"startHour":9,"endHour":16,"timezone":"America/New_York"}'::jsonb, 'slow')
-        ON CONFLICT (id) DO UPDATE SET max_sends_per_day = 2`,
+          '2026-09-16', '2026-09-16T12:00:00Z', '2026-09-16T12:00:00Z', '2026-09-17T00:00:00Z',
+          2, 240,
+          '{"startHour":9,"endHour":16,"timezone":"America/New_York"}'::jsonb, 'slow', 2)
+        ON CONFLICT (id) DO UPDATE SET
+          valid_until = EXCLUDED.valid_until,
+          max_sends_per_day = EXCLUDED.max_sends_per_day,
+          remaining_capacity = EXCLUDED.remaining_capacity`,
       [envelopeId, BABRUN.tenantId, BABRUN.sendingIdentityId]
     );
     return envelopeId;
@@ -491,7 +503,11 @@ describe('SPEC-256 postgres accounting and reconciliation', () => {
     ]);
     const accepted = attempts.filter((row) => row.status === 'fulfilled');
     const rejected = attempts.filter((row) => row.status === 'rejected');
-    assert.equal(accepted.length, 1);
+    assert.equal(
+      accepted.length,
+      1,
+      rejected.map((row) => row.reason && (row.reason.code || row.reason.message)).join(', ')
+    );
     assert.equal(rejected.length, 1);
   });
 

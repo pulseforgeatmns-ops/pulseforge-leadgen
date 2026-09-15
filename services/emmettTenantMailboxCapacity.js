@@ -240,11 +240,14 @@ function reservationIdForSchedule(tenantId, scheduleId) {
 
 const CANONICAL_ACCOUNTING_SQL = `
   WITH sent AS (
-    SELECT id, NULL::text AS schedule_id
-      FROM tenant_outreach_messages
-     WHERE tenant_id = $1 AND sending_identity_id = $2
-       AND direction = 'OUTBOUND' AND status = 'sent'
-       AND (sent_at AT TIME ZONE $4)::date = $3::date
+    SELECT m.id, s.id AS schedule_id
+      FROM tenant_outreach_messages m
+      LEFT JOIN tenant_outreach_scheduled_sends s
+        ON s.tenant_id = m.tenant_id
+       AND s.outbound_message_id = m.id
+     WHERE m.tenant_id = $1 AND m.sending_identity_id = $2
+       AND m.direction = 'OUTBOUND' AND m.status = 'sent'
+       AND (m.sent_at AT TIME ZONE $4)::date = $3::date
   ),
   live_schedules AS (
     SELECT id, status, outbound_message_id, scheduled_for
@@ -261,7 +264,7 @@ const CANONICAL_ACCOUNTING_SQL = `
        AND (scheduled_for AT TIME ZONE $4)::date = $3::date
   )
   SELECT
-    (SELECT COALESCE(json_agg(json_build_object('id', id)), '[]'::json) FROM sent) AS sent_messages,
+    (SELECT COALESCE(json_agg(json_build_object('id', id, 'scheduleId', schedule_id)), '[]'::json) FROM sent) AS sent_messages,
     (SELECT COALESCE(json_agg(json_build_object(
         'id', id, 'status', status, 'outboundMessageId', outbound_message_id
       )), '[]'::json) FROM live_schedules) AS schedules,
@@ -301,29 +304,27 @@ async function queryCanonicalCapacityAccounting(tenantId, sendingIdentityId, loc
 async function loadLiveCommitments(tenantId, sendingIdentityId, client) {
   const tid = tenantKey(tenantId);
   const sid = tenantKey(sendingIdentityId);
-  const [messages, schedules, reservations] = await Promise.all([
-    client.query(
-      `SELECT id, sent_at, 'SENT' AS status
-         FROM tenant_outreach_messages
-        WHERE tenant_id = $1 AND sending_identity_id = $2
-          AND direction = 'OUTBOUND' AND status = 'sent'`,
-      [tid, sid]
-    ),
-    client.query(
-      `SELECT id, scheduled_for, status, outbound_message_id
-         FROM tenant_outreach_scheduled_sends
-        WHERE tenant_id = $1 AND sending_identity_id = $2
-          AND status = ANY($3::text[])`,
-      [tid, sid, LIVE_SCHEDULE_STATUSES]
-    ),
-    client.query(
-      `SELECT id, schedule_id, scheduled_for, status
-         FROM emmett_tenant_mailbox_capacity_reservations
-        WHERE tenant_id = $1 AND sending_identity_id = $2
-          AND status = ANY($3::text[])`,
-      [tid, sid, LIVE_RESERVATION_STATUSES]
-    ),
-  ]);
+  const messages = await client.query(
+    `SELECT id, sent_at, 'SENT' AS status
+       FROM tenant_outreach_messages
+      WHERE tenant_id = $1 AND sending_identity_id = $2
+        AND direction = 'OUTBOUND' AND status = 'sent'`,
+    [tid, sid]
+  );
+  const schedules = await client.query(
+    `SELECT id, scheduled_for, status, outbound_message_id
+       FROM tenant_outreach_scheduled_sends
+      WHERE tenant_id = $1 AND sending_identity_id = $2
+        AND status = ANY($3::text[])`,
+    [tid, sid, LIVE_SCHEDULE_STATUSES]
+  );
+  const reservations = await client.query(
+    `SELECT id, schedule_id, scheduled_for, status
+       FROM emmett_tenant_mailbox_capacity_reservations
+      WHERE tenant_id = $1 AND sending_identity_id = $2
+        AND status = ANY($3::text[])`,
+    [tid, sid, LIVE_RESERVATION_STATUSES]
+  );
 
   return [
     ...messages.rows.map((row) => ({
@@ -497,18 +498,24 @@ async function authorizeTenantMailboxCapacity(input = {}, opts = {}) {
       throw capacityError(recheck.code, recheck.reason, { envelope });
     }
 
+    const pendingReservationId = `pend_${crypto.randomBytes(12).toString('hex')}`;
     await client.query(
-      `UPDATE emmett_tenant_mailbox_capacity_envelopes
-          SET current_scheduled_count = current_scheduled_count + 1,
-              remaining_capacity = GREATEST(0, remaining_capacity - 1),
-              updated_at = NOW()
-        WHERE id = $1`,
-      [envelope.envelopeId]
+      `INSERT INTO emmett_tenant_mailbox_capacity_reservations (
+          id, envelope_id, tenant_id, sending_identity_id, schedule_id, status, scheduled_for, updated_at
+        ) VALUES ($1,$2,$3,$4,NULL,'scheduled',$5,NOW())`,
+      [pendingReservationId, envelope.envelopeId, tenantId, sendingIdentityId, scheduledFor]
+    );
+
+    envelope = await refreshEnvelopeAccounting(
+      tenantId,
+      sendingIdentityId,
+      envelope.envelopeId,
+      client,
+      envelope.allowedSendWindow?.timezone
     );
 
     await client.query('COMMIT');
-    envelope = await loadLatestEnvelope(tenantId, sendingIdentityId, pool, now);
-    return { envelope, reserved: true };
+    return { envelope, reserved: true, pendingReservationId };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
@@ -527,6 +534,21 @@ async function reserveCapacityForSchedule(schedule, envelopeId, opts = {}) {
       ADVISORY_LOCK_NAMESPACE,
       advisoryLockKey(schedule.tenantId, schedule.sendingIdentityId),
     ]);
+
+    await client.query(
+      `DELETE FROM emmett_tenant_mailbox_capacity_reservations
+        WHERE id IN (
+          SELECT id FROM emmett_tenant_mailbox_capacity_reservations
+           WHERE tenant_id = $1
+             AND sending_identity_id = $2
+             AND schedule_id IS NULL
+             AND status = 'scheduled'
+             AND scheduled_for = $3::timestamptz
+           ORDER BY created_at ASC
+           LIMIT 1
+        )`,
+      [tenantKey(schedule.tenantId), tenantKey(schedule.sendingIdentityId), schedule.scheduledFor]
+    );
 
     const envelope = await refreshEnvelopeAccounting(
       schedule.tenantId,

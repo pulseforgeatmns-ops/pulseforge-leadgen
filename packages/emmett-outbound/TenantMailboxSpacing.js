@@ -282,7 +282,10 @@ function accountCapacityUnits({
     const key = logicalCapacityKey({ ...schedule, kind: 'schedule', scheduleId: schedule.id || schedule.scheduleId }, 'sched');
     if (status === 'SENT') {
       const messageKey = schedule.outboundMessageId ? `msg:${schedule.outboundMessageId}` : null;
-      if (messageKey && consumedKeys.has(messageKey)) continue;
+      if (messageKey && consumedKeys.has(messageKey)) {
+        consumedKeys.add(key);
+        continue;
+      }
       consume(key, 'sent');
     } else if (status === 'EXECUTING') {
       consume(key, 'executing');
