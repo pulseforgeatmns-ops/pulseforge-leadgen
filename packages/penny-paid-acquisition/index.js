@@ -3,12 +3,14 @@
 /**
  * SPEC-252 / SPEC-253 — Penny paid acquisition platform evidence package.
  * SPEC-255 — First-party paid attribution evidence retrieval.
+ * SPEC-256 — Campaign-to-lead economics alignment.
  */
 
 const types = require('./types');
 const accountResolution = require('./accountResolution');
 const collector = require('./PaidPlatformEvidenceCollector');
 const firstPartyAttribution = require('./FirstPartyAttributionEvidence');
+const campaignLeadEconomics = require('./CampaignLeadEconomics');
 const googleAds = require('./adapters/googleAds');
 const metaAds = require('./adapters/metaAds');
 const chatgptAds = require('./adapters/chatgptAds');
@@ -19,6 +21,7 @@ module.exports = {
   ...accountResolution,
   ...collector,
   ...firstPartyAttribution,
+  ...campaignLeadEconomics,
   googleAds,
   metaAds,
   chatgptAds,
