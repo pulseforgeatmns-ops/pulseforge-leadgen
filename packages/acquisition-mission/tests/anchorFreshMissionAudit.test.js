@@ -8,6 +8,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const amo = require('../index');
+const { OPERATOR_DECISION_KINDS } = amo;
 const {
   resolveMarketScopeFromObjective,
   marketScopesCompatible,
@@ -245,6 +246,79 @@ describe('Anchor fresh mission audit', () => {
     assert.doesNotThrow(() =>
       assertEvidenceAttached(payload, { required: true })
     );
+  });
+
+  it('8c — full TME path: incomplete discovery with candidates commits and advertises investigation', async () => {
+    const engine = amo.createAcquisitionMissionEngine();
+    const mission = engine.create({
+      tenantId: '10',
+      objective: BROAD_ANCHOR_OBJECTIVE,
+      resolvedObjective: resolveCanonicalObjective({ question: BROAD_ANCHOR_OBJECTIVE }),
+    });
+
+    const planResult = await advancePlanAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved. Proceed with this plan.',
+    });
+    assert.equal(planResult.snapshot.mission.structuredMissionApproved, true);
+
+    const discoveryResult = await advanceDiscoveryAfterApproval({
+      engine,
+      mission: planResult.snapshot.mission,
+      tenantId: '10',
+      question: 'Approved. Begin Discovery.',
+      runScout: async () => ({
+        status: 'partial',
+        payload: {
+          opportunities: [],
+          fitCandidates: [],
+          qualifiedCount: 0,
+          discoveryStatus: 'incomplete',
+          candidateUniverse: [{
+            candidate_id: 'pm-granite',
+            name: 'Granite Property Management',
+            placeId: 'place-granite',
+            address: '100 Main St, Manchester NH',
+            evidenceRefs: [{
+              id: 'ev-granite',
+              label: 'Discovered via google_places',
+              snapshot: { source: 'google_places', companyName: 'Granite Property Management' },
+            }],
+          }],
+          providerExecution: [{
+            providerId: 'google_maps',
+            status: 'completed',
+            rawResultCount: 2,
+            evidenceProduced: ['identity'],
+          }],
+        },
+      }),
+    });
+
+    const payload = discoveryResult.discovery.payload;
+    const pending = discoveryResult.snapshot.mission.pendingOperatorDecision;
+
+    assert.equal(discoveryResult.alreadyExecuted, false);
+    assert.equal(discoveryResult.executionOutcome, 'completed');
+    assert.equal(payload.blocked, false);
+    assert.equal(payload.discoveryStatus, 'incomplete');
+    assert.ok((payload.candidateUniverse || []).length > 0);
+    assert.ok(payload.evidence.length > 0);
+    assert.doesNotThrow(() => assertEvidenceAttached(payload, { required: true }));
+
+    assert.ok(
+      pending.kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION
+        || pending.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
+    );
+    if (pending.kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION) {
+      assert.match(pending.recommendedAction || '', /Continue investigation/i);
+      assert.ok(!/Adjust mission criteria or expand search/i.test(pending.reason || ''));
+    }
+
+    assert.ok(!JSON.stringify(discoveryResult.snapshot).includes('APPROVE_EXECUTION'));
+    assert.ok(!JSON.stringify(discoveryResult.snapshot).includes('EXECUTE_OUTBOUND'));
   });
 
   it('8 — zero-result Scout with provider telemetry is blocked, not evidence-validation failure', () => {
