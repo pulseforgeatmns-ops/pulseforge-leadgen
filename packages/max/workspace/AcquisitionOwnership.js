@@ -48,6 +48,7 @@ const {
 const {
   inferTargetSegmentFromObjective,
   deriveMissionTitle,
+  marketScopesCompatible,
 } = require('../../acquisition-mission/MissionNaming');
 const { formatMissionUnderstandingProse, formatCanonicalObjectiveDisplay } = require('../../acquisition-mission/StructuredMission');
 const { resolveCanonicalObjective, canonicalObjectiveText } = require('./ResolvedObjective');
@@ -149,9 +150,11 @@ function buildClientIntelligenceMissionEvidence(summary) {
 }
 
 function findResumableMission(missions, objective) {
+  const compatible = (row) =>
+    marketScopesCompatible(row.objective, objective) && objectivesSimilar(row.objective, objective);
   const active = missions.find((row) => row.stage !== 'improve');
-  if (active && objectivesSimilar(active.objective, objective)) return active;
-  return missions.find((row) => objectivesSimilar(row.objective, objective)) || null;
+  if (active && compatible(active)) return active;
+  return missions.find((row) => compatible(row)) || null;
 }
 
 function inferTargetSegment(objective) {

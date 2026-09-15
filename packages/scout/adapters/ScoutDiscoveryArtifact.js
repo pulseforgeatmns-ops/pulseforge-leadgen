@@ -423,6 +423,26 @@ function resolveExplainabilityProjection(scoutResult = {}, opts = {}) {
   return serializeForAmo(graph);
 }
 
+function hasAttachableScoutEvidence(payload = {}) {
+  const buckets = [
+    ...(payload.opportunities || []),
+    ...(payload.acquisitionOpportunities || []),
+    ...(payload.fitCandidates || []),
+    ...(payload.watchCandidates || []),
+    ...(payload.candidateUniverse || []),
+  ];
+  for (const row of buckets) {
+    if (!row || typeof row !== 'object') continue;
+    if (Array.isArray(row.evidenceRefs) && row.evidenceRefs.length) return true;
+    if (Array.isArray(row.evidence) && row.evidence.length) return true;
+    if (Array.isArray(row.signals) && row.signals.length) return true;
+  }
+  if (Array.isArray(payload.evidence) && payload.evidence.length) return true;
+  if (Array.isArray(payload.evidenceRefs) && payload.evidenceRefs.length) return true;
+  if (Array.isArray(payload.buyingSignals) && payload.buyingSignals.length) return true;
+  return false;
+}
+
 function resolveBlocked(resolved = {}, payload = {}) {
   const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
   const qualifiedCount =
@@ -437,10 +457,13 @@ function resolveBlocked(resolved = {}, payload = {}) {
     return true;
   }
 
+  const noAttachableEvidence = !hasAttachableScoutEvidence(payload);
+
   return (
     resolved.status === 'blocked'
     || payload.outcome === 'blocked'
     || (qualifiedCount <= 0 && payload.discoveryStatus === 'incomplete')
+    || (qualifiedCount <= 0 && noAttachableEvidence)
   );
 }
 
