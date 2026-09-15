@@ -18,7 +18,15 @@ const { routeOutcome, learningForSink } = require('./Learning');
 const { buildDashboard } = require('./Dashboard');
 const { createMemoryEoiStore } = require('./Store');
 const { createOutboundEngine, localDateOf } = require('./Engine');
+const authEvidence = require('./AuthEvidence');
+const bootstrap = require('./Bootstrap');
+const { buildCapacityEnvelope, buildDecisiveReasoning } = require('./CapacityEnvelope');
 const tenantMailboxCapacity = require('./TenantMailboxCapacity');
+
+const {
+  buildCapacityEnvelope: buildTenantMailboxDurableEnvelope,
+  ...tenantMailboxCapacityRest
+} = tenantMailboxCapacity;
 
 module.exports = {
   ...types,
@@ -46,5 +54,10 @@ module.exports = {
   createMemoryEoiStore,
   createOutboundEngine,
   localDateOf,
-  ...tenantMailboxCapacity,
+  ...authEvidence,
+  ...bootstrap,
+  ...tenantMailboxCapacityRest,
+  buildCapacityEnvelope,
+  buildDecisiveReasoning,
+  buildTenantMailboxDurableEnvelope,
 };

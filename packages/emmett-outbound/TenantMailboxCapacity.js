@@ -14,6 +14,10 @@ const {
   evaluateExecutionSpacing,
   evaluateCapacityBudget,
 } = require('./TenantMailboxSpacing');
+const {
+  DEFAULT_MIN_SPACING_MINUTES: BOOTSTRAP_MIN_SPACING_MINUTES,
+  DEFAULT_BUSINESS_HOURS: BOOTSTRAP_BUSINESS_HOURS,
+} = require('./Bootstrap');
 
 const DEFAULT_MIN_SPACING_MINUTES = 30;
 const DEFAULT_SEND_WINDOW = Object.freeze({ startHour: 9, endHour: 17 });
@@ -55,16 +59,25 @@ function buildRiskFlags(snapshot, health, capacity, governor) {
   return flags;
 }
 
-function resolveMinimumSpacing(snapshot) {
+function resolveMinimumSpacing(snapshot, capacity = {}) {
+  if (capacity.bootstrap?.active && capacity.bootstrap.minSpacingMinutes != null) {
+    return Number(capacity.bootstrap.minSpacingMinutes);
+  }
+  if (capacity.mode === 'bootstrap') {
+    return Number(capacity.bootstrap?.minSpacingMinutes || BOOTSTRAP_MIN_SPACING_MINUTES);
+  }
   const ramp = snapshot.warmup?.rampStage;
   if (ramp === 'early') return 60;
   if (ramp === 'mid') return 45;
   return DEFAULT_MIN_SPACING_MINUTES;
 }
 
-function resolveAllowedSendWindow(snapshot, opts = {}) {
+function resolveAllowedSendWindow(snapshot, opts = {}, capacity = {}) {
+  const bootstrapWindow = capacity.bootstrap?.active
+    ? (capacity.bootstrap.businessHours || BOOTSTRAP_BUSINESS_HOURS)
+    : null;
   return {
-    ...(opts.allowedSendWindow || DEFAULT_SEND_WINDOW),
+    ...(opts.allowedSendWindow || bootstrapWindow || DEFAULT_SEND_WINDOW),
     timezone: snapshot.timeZone || opts.timeZone || 'America/New_York',
   };
 }
@@ -94,11 +107,11 @@ function minutesSinceLastSend(recentTimestamps = [], now) {
 function assessTenantMailboxCapacity(snapshot = {}, opts = {}) {
   const adapted = snapshotForEmmettCognition(snapshot);
   const health = scoreInboxHealth(adapted);
-  const capacity = recommendCapacity(adapted, health);
+  const capacity = recommendCapacity(snapshot, health);
   const governor = evaluateGovernor(adapted, health, capacity);
   const riskFlags = buildRiskFlags(snapshot, health, capacity, governor);
-  const minimumSpacingMinutes = resolveMinimumSpacing(snapshot);
-  const allowedSendWindow = resolveAllowedSendWindow(snapshot, opts);
+  const minimumSpacingMinutes = resolveMinimumSpacing(snapshot, capacity);
+  const allowedSendWindow = resolveAllowedSendWindow(snapshot, opts, capacity);
 
   let maxSendsPerDay = Number(capacity.recommended || 0);
   if (governor.outcome === GOVERNOR_OUTCOMES.SLOW && governor.slowCap != null) {
