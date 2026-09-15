@@ -11,6 +11,7 @@ All notable changes to this project are documented here. Format inspired by [Kee
   - Recovers Scout → Max → Paige → Emmett → READY on the canonical AMO path only
   - Stops before `APPROVE_EXECUTION` / `EXECUTE_OUTBOUND`; autosend stays off
   - Refuses Scout `CONTINUE_INVESTIGATION` when a healthy candidate set already exists
+  - If discovery is already approved and Scout candidates are empty, runs canonical Scout continuation instead of looping `APPROVE_DISCOVERY`
   - Railway cron: `GET/POST /cron/inspect-anchor-canonical-outbound` (read-only) and `/cron/recover-anchor-canonical-outbound?recover=true` (READY only)
 
 

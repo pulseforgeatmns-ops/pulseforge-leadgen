@@ -31,6 +31,11 @@ const FORBIDDEN_SEND_INTENTS = Object.freeze([
 
 const FORBIDDEN_SEND_INTENT_SET = new Set(FORBIDDEN_SEND_INTENTS);
 
+/** READY mission that currently fails SPEC-136 inspect; never treat as the STR canonical mission. */
+const EXCLUDED_MISSION_IDS = Object.freeze([
+  'mission_30b36f10-20ce-4e41-8780-c3d8822e2c8e',
+]);
+
 function asText(value) {
   return value == null ? '' : String(value).trim();
 }
@@ -119,6 +124,17 @@ function summarizeContributions(contributions = [], mission = {}) {
   );
   const selectedCapacity = selectActiveCapacityContribution(mission, capacityRows);
   const approach = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.ACQUISITION_APPROACH);
+  const discoveryApproval = [...(contributions || [])]
+    .reverse()
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.OPERATOR
+        && row.kind === CONTRIBUTION_KINDS.APPROVAL
+        && (
+          row.payload?.action === 'discovery_approved'
+          || row.payload?.kind === 'discovery_approval'
+        )
+    ) || null;
   const scoutCount = scout ? scoutCandidateCount(scout) : 0;
   const queue = selectedCapacity ? classifyQueueItems(selectedCapacity.payload) : {
     queueCount: 0,
@@ -166,6 +182,10 @@ function summarizeContributions(contributions = [], mission = {}) {
         ...queue,
       }
       : null,
+    discoveryApproval: discoveryApproval
+      ? { id: discoveryApproval.id || null, at: discoveryApproval.at || null }
+      : null,
+    discoveryApproved: Boolean(discoveryApproval || scout),
     latest: (contributions || []).slice(-8).map((row) => ({
       id: row.id || null,
       specialist: row.specialist,
@@ -203,6 +223,7 @@ function summarizeMissionSnapshot(snapshot = {}, extras = {}) {
     isStrObjective: isStrOutboundObjective(mission.objective),
     isLawFirmObjective: isLawFirmObjective(mission.objective),
     contributions: summarized,
+    discoveryApproved: summarized.discoveryApproved === true,
     scoutCandidateCount: summarized.scout?.candidateCount || 0,
     prioritizedCandidateCount: summarized.max?.rankedCount || 0,
     paigeVariantCount: summarized.paige?.variantCount || 0,
@@ -223,7 +244,11 @@ function summarizeMissionSnapshot(snapshot = {}, extras = {}) {
 }
 
 function pickCanonicalStrMission(summaries = []) {
-  const matches = (summaries || []).filter((row) => row && row.isStrObjective === true);
+  const matches = (summaries || []).filter((row) =>
+    row
+    && row.isStrObjective === true
+    && !EXCLUDED_MISSION_IDS.includes(row.id)
+  );
   if (!matches.length) return null;
   const rank = (row) => {
     const stage = String(row.stage || '');
@@ -243,10 +268,21 @@ function pickCanonicalStrMission(summaries = []) {
   return matches.slice().sort((a, b) => rank(b) - rank(a))[0];
 }
 
+function hasScoutDiscovery(summary = {}) {
+  return Boolean(summary.contributions && summary.contributions.scout);
+}
+
+function discoveryApprovalAbsent(summary = {}) {
+  if (summary.discoveryApproved === true) return false;
+  if (hasScoutDiscovery(summary)) return false;
+  return true;
+}
+
 function chooseNextRecoveryIntent(summary = {}) {
   const pendingIntent = summary.pendingIntent || null;
   const stage = summary.stage;
   const scoutCount = Number(summary.scoutCandidateCount || 0);
+  const healthyScout = scoutCount > 0;
 
   const sendable = Number(summary.sendableCount || 0);
   if (FORBIDDEN_SEND_INTENT_SET.has(pendingIntent)) {
@@ -276,19 +312,24 @@ function chooseNextRecoveryIntent(summary = {}) {
     };
   }
 
-  if (pendingIntent === EXECUTION_INTENTS.CONTINUE_INVESTIGATION) {
-    if (scoutCount > 0) {
+  if (pendingIntent === EXECUTION_INTENTS.CONTINUE_INVESTIGATION && healthyScout) {
+    if (!summary.contributions?.max) {
       return {
-        intent: null,
-        stop: true,
+        intent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
+        stop: false,
         reason: 'skip_destructive_continuation',
         operatorAction:
-          'Healthy Scout candidates exist. Do not CONTINUE_INVESTIGATION. Consume or dismiss the discovery-investigation decision, then APPROVE_PRIORITIZATION.',
+          'Healthy Scout candidates exist. Skipping CONTINUE_INVESTIGATION and advancing to Max prioritization.',
       };
     }
   }
 
-  if (pendingIntent && !FORBIDDEN_SEND_INTENT_SET.has(pendingIntent)) {
+  const skipPendingFollow = !pendingIntent
+    || FORBIDDEN_SEND_INTENT_SET.has(pendingIntent)
+    || (pendingIntent === EXECUTION_INTENTS.APPROVE_DISCOVERY && !discoveryApprovalAbsent(summary))
+    || (pendingIntent === EXECUTION_INTENTS.CONTINUE_INVESTIGATION && healthyScout);
+
+  if (pendingIntent && !skipPendingFollow) {
     return {
       intent: pendingIntent,
       stop: false,
@@ -297,11 +338,16 @@ function chooseNextRecoveryIntent(summary = {}) {
     };
   }
 
-  if (!summary.contributions?.scout) {
+  if (discoveryApprovalAbsent(summary)) {
     return { intent: EXECUTION_INTENTS.APPROVE_DISCOVERY, stop: false, reason: 'missing_discovery' };
   }
-  if (scoutCount <= 0) {
-    return { intent: EXECUTION_INTENTS.APPROVE_DISCOVERY, stop: false, reason: 'empty_discovery' };
+  if (!healthyScout) {
+    return {
+      intent: EXECUTION_INTENTS.CONTINUE_INVESTIGATION,
+      stop: false,
+      reason: 'approved_empty_discovery',
+      operatorAction: null,
+    };
   }
   if (!summary.contributions?.max) {
     return { intent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION, stop: false, reason: 'missing_prioritization' };
@@ -349,6 +395,10 @@ function questionForIntent(intent) {
       return 'Approved.';
     case EXECUTION_INTENTS.APPROVE_DISCOVERY:
       return 'Approved. Begin Discovery.';
+    case EXECUTION_INTENTS.CONTINUE_INVESTIGATION:
+      return 'Continue investigation. Run Scout discovery for short-term rental operators.';
+    case EXECUTION_INTENTS.START_DISCOVERY:
+      return 'Begin Scout discovery.';
     case EXECUTION_INTENTS.APPROVE_PRIORITIZATION:
       return 'Approved prioritization.';
     case EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH:
@@ -379,6 +429,7 @@ module.exports = {
   CLIENT_ID,
   STR_OBJECTIVE,
   FORBIDDEN_SEND_INTENTS,
+  EXCLUDED_MISSION_IDS,
   normalizeObjective,
   isLawFirmObjective,
   isStrOutboundObjective,

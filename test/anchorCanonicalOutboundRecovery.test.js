@@ -65,7 +65,7 @@ describe('Anchor STR canonical outbound recovery', () => {
     );
   });
 
-  it('picks the STR mission and does not silently prefer the law-firm mission', () => {
+  it('picks the STR mission and does not silently prefer the law-firm or excluded READY mission', () => {
     const canonical = pickCanonicalStrMission([
       {
         id: 'mission_law',
@@ -76,15 +76,23 @@ describe('Anchor STR canonical outbound recovery', () => {
         status: 'active',
       },
       {
-        id: 'mission_str',
+        id: 'mission_30b36f10-20ce-4e41-8780-c3d8822e2c8e',
         isStrObjective: true,
         isLawFirmObjective: false,
-        stage: 'prepare',
-        scoutCandidateCount: 12,
+        stage: 'ready',
+        scoutCandidateCount: 8,
         status: 'active',
       },
+      {
+        id: 'mission_82e8102f-249c-4f44-b88e-2de76b13898e',
+        isStrObjective: true,
+        isLawFirmObjective: false,
+        stage: 'understand',
+        scoutCandidateCount: 0,
+        status: 'Understanding',
+      },
     ]);
-    assert.equal(canonical.id, 'mission_str');
+    assert.equal(canonical.id, 'mission_82e8102f-249c-4f44-b88e-2de76b13898e');
     assert.equal(pickCanonicalStrMission([{ id: 'law', isStrObjective: false }]), null);
   });
 
@@ -112,17 +120,77 @@ describe('Anchor STR canonical outbound recovery', () => {
     assert.deepEqual(FORBIDDEN_SEND_INTENTS, ['APPROVE_EXECUTION', 'EXECUTE_OUTBOUND']);
   });
 
-  it('refuses destructive Scout continuation when candidates already exist', () => {
+  it('issues APPROVE_DISCOVERY only when discovery approval is absent', () => {
+    const chosen = chooseNextRecoveryIntent({
+      stage: 'discover',
+      pendingIntent: 'APPROVE_DISCOVERY',
+      scoutCandidateCount: 0,
+      sendableCount: 0,
+      discoveryApproved: false,
+      contributions: { scout: null },
+    });
+    assert.equal(chosen.intent, 'APPROVE_DISCOVERY');
+    assert.equal(chosen.reason, 'pending_operator_decision');
+    assert.equal(chosen.stop, false);
+  });
+
+  it('approved discovery + empty candidate set executes Scout continuation, not another approval', () => {
+    const summary = {
+      stage: 'understand',
+      pendingIntent: null,
+      scoutCandidateCount: 0,
+      sendableCount: 0,
+      discoveryApproved: true,
+      contributions: { scout: { candidateCount: 0 } },
+    };
+    const first = chooseNextRecoveryIntent(summary);
+    assert.equal(first.intent, 'CONTINUE_INVESTIGATION');
+    assert.equal(first.reason, 'approved_empty_discovery');
+    assert.notEqual(first.intent, 'APPROVE_DISCOVERY');
+    const second = chooseNextRecoveryIntent(summary);
+    assert.equal(second.intent, 'CONTINUE_INVESTIGATION');
+    assert.notEqual(second.intent, 'APPROVE_DISCOVERY');
+  });
+
+  it('does not re-issue APPROVE_DISCOVERY when pending approval is stale and Scout is empty', () => {
+    const chosen = chooseNextRecoveryIntent({
+      stage: 'understand',
+      pendingIntent: 'APPROVE_DISCOVERY',
+      scoutCandidateCount: 0,
+      sendableCount: 0,
+      discoveryApproved: true,
+      contributions: { scout: { candidateCount: 0 } },
+    });
+    assert.equal(chosen.intent, 'CONTINUE_INVESTIGATION');
+    assert.equal(chosen.reason, 'approved_empty_discovery');
+  });
+
+  it('refuses destructive Scout continuation when a healthy candidate set already exists', () => {
     const chosen = chooseNextRecoveryIntent({
       stage: 'discover',
       pendingIntent: 'CONTINUE_INVESTIGATION',
       scoutCandidateCount: 24,
       sendableCount: 0,
+      discoveryApproved: true,
       contributions: { scout: { candidateCount: 24 } },
     });
-    assert.equal(chosen.intent, null);
-    assert.equal(chosen.stop, true);
+    assert.notEqual(chosen.intent, 'CONTINUE_INVESTIGATION');
     assert.equal(chosen.reason, 'skip_destructive_continuation');
+    assert.equal(chosen.intent, 'APPROVE_PRIORITIZATION');
+    assert.equal(chosen.stop, false);
+  });
+
+  it('does not continue investigation when healthy candidates exist without a pending investigation', () => {
+    const chosen = chooseNextRecoveryIntent({
+      stage: 'understand',
+      pendingIntent: null,
+      scoutCandidateCount: 12,
+      sendableCount: 0,
+      discoveryApproved: true,
+      contributions: { scout: { candidateCount: 12 } },
+    });
+    assert.notEqual(chosen.intent, 'CONTINUE_INVESTIGATION');
+    assert.equal(chosen.intent, 'APPROVE_PRIORITIZATION');
   });
 
   it('dispatches GENERATE_CAPACITY when Paige is complete and Emmett is not', () => {
@@ -177,6 +245,8 @@ describe('Anchor STR canonical outbound recovery', () => {
     assert.match(RECOVER_SRC, /assertNotSendingIntent/);
     assert.match(RECOVER_SRC, /allowFixtureFallback:\s*false/);
     assert.match(LIB_SRC, /skip_destructive_continuation/);
+    assert.match(LIB_SRC, /approved_empty_discovery/);
+    assert.match(LIB_SRC, /CONTINUE_INVESTIGATION/);
     assert.doesNotMatch(LIB_SRC, /attachEmmettCapacity/);
     const cronSrc = fs.readFileSync(path.join(__dirname, '../routes/cron.js'), 'utf8');
     assert.match(cronSrc, /inspect-anchor-canonical-outbound/);

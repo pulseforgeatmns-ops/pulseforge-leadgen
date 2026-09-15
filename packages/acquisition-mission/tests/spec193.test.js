@@ -293,6 +293,84 @@ describe('SPEC-193 — Post-Discovery Readiness Enforcement', () => {
     assertPrioritizationPending(continued.snapshot, 'investigation handler after Scout rerun');
   });
 
+  it('empty approved discovery at understand re-runs Scout via continuation instead of short-circuiting', async () => {
+    let scoutRuns = 0;
+    const first = await runDiscovery(async () => {
+      scoutRuns += 1;
+      return {
+        status: 'completed',
+        summary: 'No qualified prospects yet.',
+        payload: {
+          opportunities: [],
+          qualifiedCount: 0,
+          candidateUniverseCount: 0,
+          evidence: [{ label: 'Google Places search', source: 'google_places' }],
+        },
+        discoveryStatus: 'complete',
+      };
+    });
+    assertInvestigationPending(first.snapshot, 'premature understand initial');
+
+    const stuck = engine.get(mission.id, '10');
+    stuck.stage = STAGES.UNDERSTAND;
+    stuck.status = 'Understanding';
+    stuck.pendingOperatorDecision = null;
+    engine.store.putMission(stuck);
+
+    const shortCircuit = await advanceDiscoveryAfterApproval({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      question: 'Approved. Begin Discovery.',
+      allowFixtureFallback: false,
+      runScout: async () => {
+        scoutRuns += 1;
+        return strongDiscoveryPayload();
+      },
+    });
+    assert.equal(shortCircuit.alreadyExecuted, true, 'APPROVE_DISCOVERY must not re-run Scout after approval');
+    assert.equal(scoutRuns, 1);
+
+    const continued = await advanceDiscoveryInvestigationAfterApproval({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      question: 'Continue investigation.',
+      allowFixtureFallback: false,
+      runScout: async () => {
+        scoutRuns += 1;
+        return strongDiscoveryPayload();
+      },
+    });
+
+    assert.equal(continued.alreadyExecuted, false);
+    assert.equal(continued.investigationContinuation, true);
+    assert.equal(scoutRuns, 2);
+    assert.equal(engine.get(mission.id, '10').stage, STAGES.DISCOVER);
+    assertPrioritizationPending(continued.snapshot, 'after empty-discovery continuation from understand');
+  });
+
+  it('healthy candidate set is not continued destructively without a pending investigation', async () => {
+    const first = await runDiscovery(async () => strongDiscoveryPayload());
+    assertPrioritizationPending(first.snapshot, 'healthy discovery');
+
+    await assert.rejects(
+      () =>
+        advanceDiscoveryInvestigationAfterApproval({
+          engine,
+          mission: engine.get(mission.id, '10'),
+          tenantId: '10',
+          question: 'Continue investigation.',
+          allowFixtureFallback: false,
+          runScout: async () => ({
+            status: 'completed',
+            payload: { opportunities: [], qualifiedCount: 0 },
+          }),
+        }),
+      (err) => err.code === 'tme_no_pending_investigation'
+    );
+  });
+
   it('DecisionReadiness and validatePrioritizationPreconditions stay aligned across fixtures', () => {
     const fixtures = [
       {
