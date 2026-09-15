@@ -20,6 +20,7 @@ const {
   SPECIALISTS,
   CONTRIBUTION_KINDS,
   EVENT_KINDS,
+  STAGE_LABELS,
 } = amo;
 const {
   executeMissionStage,
@@ -479,6 +480,58 @@ function findLatestScoutDiscovery(contributions = []) {
     .find(
       (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
     );
+}
+
+function discoveryHasCandidates(contribution) {
+  if (!contribution) return false;
+  const outer = contribution.payload || contribution;
+  const nested = outer && typeof outer === 'object' ? outer.payload : null;
+  const body = nested && typeof nested === 'object'
+    && (
+      nested.opportunities
+      || nested.qualifiedCount != null
+      || nested.rankedProspects
+      || nested.candidateUniverse
+      || nested.candidateUniverseCount != null
+    )
+    ? nested
+    : outer;
+  if (!body || typeof body !== 'object') return false;
+  if ([body.qualifiedCount, body.candidateUniverseCount, body.rankedProspectCount]
+    .some((n) => Number(n) > 0)) {
+    return true;
+  }
+  if (Array.isArray(body.opportunities) && body.opportunities.length) return true;
+  if (Array.isArray(body.rankedProspects) && body.rankedProspects.length) return true;
+  if (Array.isArray(body.candidateUniverse) && body.candidateUniverse.length) return true;
+  if (Array.isArray(body.discoveryArtifact?.rankedProspects)
+    && body.discoveryArtifact.rankedProspects.length) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Production can reach UNDERSTAND with an already-approved empty Scout contribution
+ * and no pending investigation (stage advanced, pending cleared). CONTINUE_INVESTIGATION
+ * must still be able to re-run Scout. Healthy non-zero candidate sets are not repaired
+ * so they cannot be continued destructively.
+ */
+function repairEmptyDiscoveryInvestigationGate(engine, mission, tenantId, snapshot) {
+  if (hasPendingDiscoveryInvestigation(snapshot)) return snapshot;
+  const discovery = findLatestScoutDiscovery(snapshot.contributions || []);
+  if (!discovery || discoveryHasCandidates(discovery)) return snapshot;
+
+  const current = engine.get(mission.id, tenantId);
+  if (!current) return snapshot;
+  current.stage = STAGES.DISCOVER;
+  current.status = STAGE_LABELS[STAGES.DISCOVER] || 'Discovering';
+  current.pendingOperatorDecision = buildPostDiscoveryPendingDecision(discovery.payload || {});
+  engine.store.putMission(current);
+
+  const next = engine.inspect(mission.id, { tenantId });
+  assertMissionStateConsistent(next.mission, { contributions: next.contributions });
+  return next;
 }
 
 function findDiscoveryApproval(contributions = []) {
@@ -1063,6 +1116,7 @@ async function advanceDiscoveryInvestigationAfterApproval(input = {}) {
   }
 
   let snapshot = engine.inspect(mission.id, { tenantId });
+  snapshot = repairEmptyDiscoveryInvestigationGate(engine, mission, tenantId, snapshot);
   if (!hasPendingDiscoveryInvestigation(snapshot)) {
     throw planningError(
       'tme_no_pending_investigation',

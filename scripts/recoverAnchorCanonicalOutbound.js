@@ -11,6 +11,8 @@
  *
  * Stops before APPROVE_EXECUTION / EXECUTE_OUTBOUND.
  * Never enables autosend. Never continues Scout when candidates already exist.
+ * If discovery is already approved and Scout has zero candidates, continues
+ * investigation (canonical Scout path) instead of re-issuing APPROVE_DISCOVERY.
  *
  *   node scripts/recoverAnchorCanonicalOutbound.js --confirm-production
  */
@@ -72,6 +74,7 @@ Safety:
   Refuses without --confirm-production.
   Never APPROVE_EXECUTION or EXECUTE_OUTBOUND.
   Never CONTINUE_INVESTIGATION when Scout already has candidates.
+  If discovery is already approved and candidates are empty, runs Scout continuation instead of re-approving discovery.
   Never enables autosend. Never uses fixtures.
 `);
 }
@@ -230,8 +233,19 @@ async function run(options = {}) {
       }, { pool: db, production: true });
       stepRecord.completedAt = new Date().toISOString();
       stepRecord.action = routed.action || null;
-      stepRecord.executionOutcome = routed.executionResult?.executionOutcome || routed.executionOutcome || null;
+      stepRecord.executionOutcome = routed.executionResult?.executionOutcome
+        || routed.audit?.outcome
+        || routed.executionOutcome
+        || null;
+      stepRecord.alreadyExecuted = routed.executionResult?.alreadyExecuted === true
+        || routed.audit?.outcome === 'already_executed';
       stepRecord.rolledBack = routed.executionResult?.rolledBack === true;
+      if (
+        stepRecord.alreadyExecuted
+        && chosen.intent === 'APPROVE_DISCOVERY'
+      ) {
+        stepRecord.note = 'Discovery approval already executed; next step uses Scout continuation, not another approval.';
+      }
     } catch (err) {
       stepRecord.error = { code: err.code || null, message: err.message };
       summary = await inspectSummary(db, resolved.missionId).catch(() => summary);
