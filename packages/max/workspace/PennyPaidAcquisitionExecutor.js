@@ -5,6 +5,7 @@
  * SPEC-252 — Live read-only platform evidence bridge.
  * SPEC-253 — ChatGPT Ads live read evidence arrives through the same collector.
  * SPEC-255 — First-party walkthrough attribution retrieval into acquisitionEvidence.
+ * SPEC-256 — Deterministic campaign-to-lead economics alignment.
  * Mission-aware paid acquisition intelligence. Read, reason, recommend only.
  */
 
@@ -15,6 +16,10 @@ const {
   loadFirstPartyAttributionEvidence,
   mergeAcquisitionEvidence,
   unavailableFirstPartyAttributionEvidence,
+  resolveSharedObservationWindow,
+  buildFirstPartyAttributionRetrieval,
+  extractFirstPartyAttributionEvidence,
+  deriveCampaignLeadEconomics,
   AVAILABILITY,
 } = require('../../penny-paid-acquisition');
 const {
@@ -517,6 +522,16 @@ function buildPaidAcquisitionRecommendationPayload(executionInput = {}) {
       unknowns: viabilityResult.unknowns,
       blockers: viabilityResult.blockers,
       platformEvidence: array(si.platformEvidence).slice(),
+      firstPartyAttributionEvidence: array(si.firstPartyAttributionEvidence).slice(),
+      firstPartyAttributionRetrieval: si.firstPartyAttributionRetrieval
+        ? clone(si.firstPartyAttributionRetrieval)
+        : null,
+      campaignLeadEconomics: array(si.campaignLeadEconomics).slice(),
+      unmatchedFirstPartyAttribution: si.unmatchedFirstPartyAttribution
+        ? clone(si.unmatchedFirstPartyAttribution)
+        : null,
+      observationWindow: si.observationWindow ? clone(si.observationWindow) : null,
+      platformConversionsAreSeparateFromFirstPartyLeads: true,
       stopConditions: recommendedTest?.stopConditions || [],
       continueConditions: recommendedTest?.continueConditions || [],
       scaleConditions: recommendedTest?.scaleConditions || [],
@@ -609,9 +624,19 @@ async function resolvePlatformEvidenceForPenny(mission, opts = {}) {
   return mergePlatformEvidence(opts.platformEvidence, observed);
 }
 
-async function loadFirstPartyAttributionEvidenceForPenny(mission, opts = {}) {
+async function loadFirstPartyAttributionBundleForPenny(mission, opts = {}) {
   if (opts.skipFirstPartyAttributionRetrieval === true) {
-    return mergeAcquisitionEvidence(opts.acquisitionEvidence, []);
+    const acquisitionEvidence = mergeAcquisitionEvidence(opts.acquisitionEvidence, []);
+    return {
+      acquisitionEvidence,
+      firstPartyAttributionEvidence: extractFirstPartyAttributionEvidence(acquisitionEvidence),
+      firstPartyAttributionRetrieval: buildFirstPartyAttributionRetrieval({
+        availability: AVAILABILITY.AVAILABLE,
+        observedCount: extractFirstPartyAttributionEvidence(acquisitionEvidence).length,
+        observationWindow: opts.observationWindow || null,
+      }),
+      rawResult: null,
+    };
   }
 
   const clientId = Number(mission.tenantId || mission.clientId || opts.tenantId);
@@ -621,7 +646,21 @@ async function loadFirstPartyAttributionEvidenceForPenny(mission, opts = {}) {
       reason: 'INVALID_CLIENT_ID',
       observationWindow: opts.observationWindow || null,
     });
-    return mergeAcquisitionEvidence(opts.acquisitionEvidence, [unavailable], { includeUnavailable: true });
+    const acquisitionEvidence = mergeAcquisitionEvidence(
+      opts.acquisitionEvidence,
+      [unavailable],
+      { includeUnavailable: true }
+    );
+    return {
+      acquisitionEvidence,
+      firstPartyAttributionEvidence: [],
+      firstPartyAttributionRetrieval: buildFirstPartyAttributionRetrieval({
+        availability: AVAILABILITY.UNAVAILABLE,
+        reason: 'INVALID_CLIENT_ID',
+        observationWindow: opts.observationWindow || null,
+      }),
+      rawResult: null,
+    };
   }
 
   const result = await loadFirstPartyAttributionEvidence({
@@ -635,18 +674,52 @@ async function loadFirstPartyAttributionEvidenceForPenny(mission, opts = {}) {
 
   if (result.availability !== AVAILABILITY.AVAILABLE) {
     const blocker = unavailableFirstPartyAttributionEvidence(result);
-    return mergeAcquisitionEvidence(opts.acquisitionEvidence, [blocker], { includeUnavailable: true });
+    const acquisitionEvidence = mergeAcquisitionEvidence(
+      opts.acquisitionEvidence,
+      [blocker],
+      { includeUnavailable: true }
+    );
+    return {
+      acquisitionEvidence,
+      firstPartyAttributionEvidence: [],
+      firstPartyAttributionRetrieval: buildFirstPartyAttributionRetrieval(result),
+      rawResult: result,
+    };
   }
 
-  return mergeAcquisitionEvidence(opts.acquisitionEvidence, result.evidence);
+  const acquisitionEvidence = mergeAcquisitionEvidence(opts.acquisitionEvidence, result.evidence);
+  return {
+    acquisitionEvidence,
+    firstPartyAttributionEvidence: result.evidence.slice(),
+    firstPartyAttributionRetrieval: buildFirstPartyAttributionRetrieval(result),
+    rawResult: result,
+  };
+}
+
+async function loadFirstPartyAttributionEvidenceForPenny(mission, opts = {}) {
+  const bundle = await loadFirstPartyAttributionBundleForPenny(mission, opts);
+  return bundle.acquisitionEvidence;
 }
 
 async function runPennyForAmoMission(mission, opts = {}) {
   const contributions = opts.contributions
     || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
     || [];
-  const platformEvidence = await resolvePlatformEvidenceForPenny(mission, opts);
-  const acquisitionEvidence = await loadFirstPartyAttributionEvidenceForPenny(mission, opts);
+  const observationWindow = resolveSharedObservationWindow(opts);
+  const platformEvidence = await resolvePlatformEvidenceForPenny(mission, {
+    ...opts,
+    observationWindow,
+  });
+  const firstPartyBundle = await loadFirstPartyAttributionBundleForPenny(mission, {
+    ...opts,
+    observationWindow,
+  });
+  const economics = deriveCampaignLeadEconomics({
+    platformEvidence,
+    firstPartyAttributionEvidence: firstPartyBundle.firstPartyAttributionEvidence,
+    firstPartyAttributionRetrieval: firstPartyBundle.firstPartyAttributionRetrieval,
+    observationWindow,
+  });
   const executionInput = buildExecutionInput({
     mission,
     contributions,
@@ -654,7 +727,12 @@ async function runPennyForAmoMission(mission, opts = {}) {
     transactionId: opts.transactionId,
     executionContext: opts.executionContext,
     store: opts.engine?.store,
-    acquisitionEvidence,
+    acquisitionEvidence: firstPartyBundle.acquisitionEvidence,
+    firstPartyAttributionEvidence: firstPartyBundle.firstPartyAttributionEvidence,
+    firstPartyAttributionRetrieval: firstPartyBundle.firstPartyAttributionRetrieval,
+    campaignLeadEconomics: economics.campaignLeadEconomics,
+    unmatchedFirstPartyAttribution: economics.unmatchedFirstPartyAttribution,
+    observationWindow,
     knownAcquisitionHistory: opts.knownAcquisitionHistory,
     conversionReadiness: opts.conversionReadiness,
     measurementReadiness: opts.measurementReadiness,
@@ -704,6 +782,7 @@ module.exports = {
   buildPaidAcquisitionRecommendationPayload,
   resolvePlatformEvidenceForPenny,
   loadFirstPartyAttributionEvidenceForPenny,
+  loadFirstPartyAttributionBundleForPenny,
   runPennyPaidAcquisition,
   runPennyForAmoMission,
 };
