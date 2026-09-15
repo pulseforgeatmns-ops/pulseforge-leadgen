@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * SPEC-252 — Explicit unavailable adapters for unsupported live reads.
+ * SPEC-252 / SPEC-253 — Explicit unavailable adapters for unsupported live reads.
+ * ChatGPT Ads live reads moved to adapters/chatgptAds.js. Yelp remains stubbed.
  */
 
 const { PLATFORM, unavailableEvidence, UNAVAILABLE_REASON } = require('../types');

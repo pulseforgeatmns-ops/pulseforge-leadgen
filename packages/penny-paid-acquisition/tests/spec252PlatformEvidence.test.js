@@ -199,19 +199,23 @@ describe('SPEC-252 — Paid platform evidence collector', () => {
     assert.equal(evidence[0].reason, UNAVAILABLE_REASON.NO_LINKED_ACCOUNT);
   });
 
-  it('reports ChatGPT Ads and Yelp as unavailable adapters, not zero spend', async () => {
+  it('reports Yelp as an unavailable stub and ChatGPT Ads as an unlinked account, not zero spend', async () => {
     const evidence = await collectPaidPlatformEvidence({
       clientId: 10,
       channels: ['ChatGPT Ads', 'Yelp'],
       resolveAccounts: () => [],
     });
     assert.equal(evidence.length, 2);
-    for (const row of evidence) {
-      assert.equal(row.availability, AVAILABILITY.UNAVAILABLE);
-      assert.equal(row.reason, UNAVAILABLE_REASON.PLATFORM_ADAPTER_NOT_IMPLEMENTED);
-      assert.equal(row.campaigns.length, 0);
-      assert.notEqual(row.aggregates?.spend, 0);
-    }
+    const chatgpt = evidence.find((row) => row.platform === PLATFORM.CHATGPT_ADS);
+    const yelp = evidence.find((row) => row.platform === PLATFORM.YELP);
+    assert.equal(chatgpt.availability, AVAILABILITY.UNAVAILABLE);
+    assert.equal(chatgpt.reason, UNAVAILABLE_REASON.CHATGPT_ADS_ACCOUNT_NOT_LINKED);
+    assert.equal(chatgpt.campaigns.length, 0);
+    assert.notEqual(chatgpt.aggregates?.spend, 0);
+    assert.equal(yelp.availability, AVAILABILITY.UNAVAILABLE);
+    assert.equal(yelp.reason, UNAVAILABLE_REASON.PLATFORM_ADAPTER_NOT_IMPLEMENTED);
+    assert.equal(yelp.campaigns.length, 0);
+    assert.notEqual(yelp.aggregates?.spend, 0);
   });
 
   it('keeps observed API evidence primary over operator-supplied metrics', () => {
@@ -294,7 +298,10 @@ describe('SPEC-252 — Canonical Penny integration', () => {
     );
 
     assert.ok(evidence.some((row) => row.platform === PLATFORM.GOOGLE_ADS && row.availability === AVAILABILITY.AVAILABLE));
-    assert.ok(evidence.some((row) => row.channel === 'ChatGPT Ads' && row.reason === UNAVAILABLE_REASON.PLATFORM_ADAPTER_NOT_IMPLEMENTED));
+    assert.ok(evidence.some((row) =>
+      row.channel === 'ChatGPT Ads'
+      && row.reason === UNAVAILABLE_REASON.CHATGPT_ADS_ACCOUNT_NOT_LINKED
+    ));
   });
 
   it('persists observed platform evidence on Penny contribution for client 10', async () => {

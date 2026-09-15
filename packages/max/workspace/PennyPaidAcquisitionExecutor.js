@@ -3,6 +3,7 @@
 /**
  * SPEC-249 — Canonical Penny V1.
  * SPEC-252 — Live read-only platform evidence bridge.
+ * SPEC-253 — ChatGPT Ads live read evidence arrives through the same collector.
  * Mission-aware paid acquisition intelligence. Read, reason, recommend only.
  */
 

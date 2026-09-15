@@ -106,11 +106,18 @@ function sanitizeAccountRow(row) {
 }
 
 function accountUnavailableReason(account, platform) {
-  if (!account) return UNAVAILABLE_REASON.NO_LINKED_ACCOUNT;
+  if (!account) {
+    return platform === 'chatgpt_ads'
+      ? UNAVAILABLE_REASON.CHATGPT_ADS_ACCOUNT_NOT_LINKED
+      : UNAVAILABLE_REASON.NO_LINKED_ACCOUNT;
+  }
   if (platform === 'google_ads' && !account.refresh_token) {
     return UNAVAILABLE_REASON.MISSING_CREDENTIALS;
   }
   if (platform === 'meta_ads' && !account.access_token) {
+    return UNAVAILABLE_REASON.MISSING_CREDENTIALS;
+  }
+  if (platform === 'chatgpt_ads' && !account.access_token) {
     return UNAVAILABLE_REASON.MISSING_CREDENTIALS;
   }
   return null;
