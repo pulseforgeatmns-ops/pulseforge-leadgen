@@ -57,6 +57,7 @@ const MISSION = {
 function strContributions({ includeDomain = true, includeProspectUuid = false } = {}) {
   return [
     {
+      missionId: MISSION_ID,
       specialist: 'scout',
       kind: 'discovery',
       payload: {
@@ -78,6 +79,7 @@ function strContributions({ includeDomain = true, includeProspectUuid = false } 
       },
     },
     {
+      missionId: MISSION_ID,
       specialist: 'max',
       kind: 'prioritization',
       payload: {
@@ -494,6 +496,7 @@ describe('MissionBoundCrmAdmission', () => {
     const contributions = [
       ...strContributions(),
       {
+        missionId: MISSION_ID,
         specialist: 'paige',
         kind: 'variants',
         payload: {
@@ -542,6 +545,7 @@ describe('MissionBoundCrmAdmission', () => {
     const contributions = [
       ...strContributions(),
       {
+        missionId: MISSION_ID,
         specialist: 'paige',
         kind: 'variants',
         payload: {
@@ -649,5 +653,129 @@ describe('MissionBoundCrmAdmission', () => {
     assert.equal(results.length, 2);
     assert.equal(db.companies.size, 2);
     assert.equal(db.prospects.size, 2);
+  });
+
+  it('16. buildMissionBoundCandidates does not ReferenceError on crmProspectId', () => {
+    assert.doesNotThrow(() => {
+      const candidates = buildMissionBoundCandidates(MISSION, strContributions());
+      assert.ok(candidates.length >= 2);
+      for (const row of candidates) {
+        assert.ok(Object.prototype.hasOwnProperty.call(row, 'crmProspectId'));
+        assert.ok(Object.prototype.hasOwnProperty.call(row, 'candidateId'));
+        assert.ok(Object.prototype.hasOwnProperty.call(row, 'placeId'));
+        assert.ok(Object.prototype.hasOwnProperty.call(row, 'crmCompanyId'));
+      }
+    });
+  });
+
+  it('17. admission returns explicit identity fields with crmProspectId defined (nullable)', async () => {
+    const db = createMockDb();
+    const candidate = buildMissionBoundCandidates(MISSION, strContributions())[0];
+    const result = await admitMissionBoundCandidate(db, candidate, {
+      missionId: MISSION_ID,
+      clientId: CLIENT_ID,
+    });
+    assert.equal(result.blocked, false);
+    assert.ok(Object.prototype.hasOwnProperty.call(result, 'candidateId'));
+    assert.ok(Object.prototype.hasOwnProperty.call(result, 'placeId'));
+    assert.ok(Object.prototype.hasOwnProperty.call(result, 'crmCompanyId'));
+    assert.ok(Object.prototype.hasOwnProperty.call(result, 'crmProspectId'));
+    assert.ok(result.crmCompanyId);
+    assert.ok(result.crmProspectId);
+    assert.equal(result.crmCompanyId, result.companyId);
+    assert.equal(result.crmProspectId, result.prospectId);
+  });
+
+  it('18. preserves existing CRM prospect UUID on admission', async () => {
+    const db = createMockDb({
+      companies: [{
+        id: COMPANY_EXISTING,
+        name: 'Blue Door Living Property Management',
+        domain: 'bluedoorliving.com',
+        google_place_id: PLACE_BLUE,
+        client_id: 10,
+      }],
+      prospects: [{
+        id: PROSPECT_EXISTING,
+        company_id: COMPANY_EXISTING,
+        client_id: 10,
+        email: null,
+        icp_score: 90,
+        is_synthetic: false,
+      }],
+    });
+    const candidate = buildMissionBoundCandidates(MISSION, strContributions())[0];
+    const result = await admitMissionBoundCandidate(db, candidate, {
+      missionId: MISSION_ID,
+      clientId: CLIENT_ID,
+    });
+    assert.equal(result.crmProspectId, PROSPECT_EXISTING);
+    assert.equal(result.prospectId, PROSPECT_EXISTING);
+    assert.equal(db.prospects.size, 1);
+  });
+
+  it('19. returns newly created placeholder prospect UUID when admission creates one', async () => {
+    const db = createMockDb();
+    const candidate = buildMissionBoundCandidates(MISSION, strContributions({ includeDomain: false }))[1];
+    const result = await admitMissionBoundCandidate(db, candidate, {
+      missionId: MISSION_ID,
+      clientId: CLIENT_ID,
+    });
+    assert.equal(result.blocked, false);
+    assert.ok(result.crmProspectId);
+    assert.equal(result.crmProspectId, result.prospectId);
+    assert.equal(db.prospects.size, 1);
+  });
+
+  it('20. mission-bound enrichment path proceeds after admission without send actions', async () => {
+    const db = createMockDb();
+    const contributions = strContributions();
+    const candidates = buildMissionBoundCandidates(MISSION, contributions);
+    assert.ok(candidates.length >= 1);
+
+    const admission = await admitMissionBoundCandidates(db, MISSION, contributions, {
+      clientId: CLIENT_ID,
+      missionId: MISSION_ID,
+    });
+    const candidate = candidates[0];
+    const admissionResult = admission.byCandidateId.get(String(candidate.id));
+    assert.ok(admissionResult);
+    assert.ok(admissionResult.crmProspectId);
+
+    const crmRow = {
+      prospect_id: admissionResult.crmProspectId,
+      company_id: admissionResult.crmCompanyId,
+      client_id: 10,
+      company_name: candidate.company,
+      domain: 'bluedoorliving.com',
+      website: 'https://bluedoorliving.com',
+      email: null,
+      email_verified: false,
+      email_status: null,
+      do_not_contact: false,
+    };
+    const enriched = await enrichProspectRow(crmRow, {
+      db,
+      dryRun: true,
+      configureScoringContext: async () => {},
+      processProspect: async () => ({ selectedEmail: null, resolved: false, errors: [] }),
+      runEnrichmentChain: async () => ({
+        email: 'ops@bluedoorliving.com',
+        source: ['prospeo'],
+        contact: 'Ops Team',
+      }),
+      resolveEmailVerification: async () => ({
+        emailVerified: true,
+        emailStatus: 'valid',
+        doNotContact: false,
+        emailVerificationMethod: 'bouncer',
+      }),
+    });
+    assert.equal(enriched.path, 'provider_chain');
+    assert.equal(enriched.email, 'ops@bluedoorliving.com');
+    assert.doesNotMatch(
+      fs.readFileSync(path.join(__dirname, '..', 'scripts', 'lib', 'anchorMissionBoundEnrichment.js'), 'utf8'),
+      /sendEmail\s*\(/
+    );
   });
 });

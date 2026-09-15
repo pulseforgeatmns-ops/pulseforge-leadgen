@@ -28,6 +28,7 @@ const CONTACT_SOLOMON = 'b2222222-4444-4444-8444-444444444444';
 function buildAnchorContributions() {
   return [
     {
+      missionId: MISSION.id,
       specialist: 'scout',
       kind: 'discovery',
       payload: {
@@ -52,6 +53,7 @@ function buildAnchorContributions() {
       },
     },
     {
+      missionId: MISSION.id,
       specialist: 'max',
       kind: 'prioritization',
       payload: {
