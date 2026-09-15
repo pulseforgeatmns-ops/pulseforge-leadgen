@@ -2,6 +2,7 @@
 
 /**
  * SPEC-252 — Canonical read-only paid platform evidence collector.
+ * SPEC-253 — ChatGPT Ads routes through the live read adapter; Yelp remains stubbed.
  */
 
 const {
@@ -10,12 +11,14 @@ const {
   CHANNEL_BY_PLATFORM,
   AVAILABILITY,
   UNAVAILABLE_REASON,
+  PRODUCTION_READINESS,
   unavailableEvidence,
 } = require('./types');
 const { resolveAdAccountsForClient, accountUnavailableReason } = require('./accountResolution');
 const { readGoogleAdsEvidence } = require('./adapters/googleAds');
 const { readMetaAdsEvidence } = require('./adapters/metaAds');
-const { readChatGptAdsEvidence, readYelpAdsEvidence } = require('./adapters/stubPlatform');
+const { readChatGptAdsEvidence } = require('./adapters/chatgptAds');
+const { readYelpAdsEvidence } = require('./adapters/stubPlatform');
 
 const DEFAULT_CHANNELS = Object.freeze([
   'Google Search',
@@ -30,6 +33,9 @@ const PLATFORM_DB_ALIASES = Object.freeze({
   meta_ads: PLATFORM.META_ADS,
   meta: PLATFORM.META_ADS,
   facebook: PLATFORM.META_ADS,
+  chatgpt_ads: PLATFORM.CHATGPT_ADS,
+  chatgpt: PLATFORM.CHATGPT_ADS,
+  openai_ads: PLATFORM.CHATGPT_ADS,
 });
 
 function asText(value) {
@@ -66,7 +72,7 @@ function stripSecrets(value) {
   if (Array.isArray(value)) return value.map(stripSecrets);
   const out = {};
   for (const [key, val] of Object.entries(value)) {
-    if (/token|secret|password|credential|refresh_token|access_token/i.test(key)) continue;
+    if (/token|secret|password|credential|refresh_token|access_token|api[_-]?key|authorization|bearer/i.test(key)) continue;
     out[key] = stripSecrets(val);
   }
   return out;
@@ -79,7 +85,13 @@ async function readPlatformEvidence(platform, account, opts = {}) {
     case PLATFORM.META_ADS:
       return readMetaAdsEvidence({ account, window: opts.window, windowDays: opts.windowDays, http: opts.http });
     case PLATFORM.CHATGPT_ADS:
-      return readChatGptAdsEvidence();
+      return readChatGptAdsEvidence({
+        account,
+        window: opts.window,
+        windowDays: opts.windowDays,
+        http: opts.http,
+        clientId: opts.clientId,
+      });
     case PLATFORM.YELP:
       return readYelpAdsEvidence();
     default:
@@ -124,25 +136,34 @@ async function collectPaidPlatformEvidence(input = {}) {
   const results = [];
   for (const platform of platforms) {
     const account = accountsByPlatform.get(platform);
-    if ([PLATFORM.CHATGPT_ADS, PLATFORM.YELP].includes(platform)) {
+    if (platform === PLATFORM.YELP) {
       results.push(stripSecrets(await readPlatformEvidence(platform, null, input)));
       continue;
     }
 
     if (!account) {
-      results.push(stripSecrets(unavailableEvidence(platform, UNAVAILABLE_REASON.NO_LINKED_ACCOUNT, {
-        clientId,
-      })));
+      const reason = platform === PLATFORM.CHATGPT_ADS
+        ? UNAVAILABLE_REASON.CHATGPT_ADS_ACCOUNT_NOT_LINKED
+        : UNAVAILABLE_REASON.NO_LINKED_ACCOUNT;
+      const extra = { clientId };
+      if (platform === PLATFORM.CHATGPT_ADS) {
+        extra.productionReadiness = PRODUCTION_READINESS.BLOCKED_MISSING_CHATGPT_ADS_CREDENTIAL;
+      }
+      results.push(stripSecrets(unavailableEvidence(platform, reason, extra)));
       continue;
     }
 
     const missingReason = accountUnavailableReason(account, dbPlatformForCanonical(platform));
     if (missingReason) {
-      results.push(stripSecrets(unavailableEvidence(platform, missingReason, { clientId })));
+      const extra = { clientId };
+      if (platform === PLATFORM.CHATGPT_ADS) {
+        extra.productionReadiness = PRODUCTION_READINESS.BLOCKED_MISSING_CHATGPT_ADS_CREDENTIAL;
+      }
+      results.push(stripSecrets(unavailableEvidence(platform, missingReason, extra)));
       continue;
     }
 
-    const evidence = await readPlatformEvidence(platform, account, input);
+    const evidence = await readPlatformEvidence(platform, account, { ...input, clientId });
     results.push(stripSecrets(evidence));
   }
 
