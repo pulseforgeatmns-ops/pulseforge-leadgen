@@ -4,6 +4,7 @@
  * SPEC-249 — Canonical Penny V1.
  * SPEC-252 — Live read-only platform evidence bridge.
  * SPEC-253 — ChatGPT Ads live read evidence arrives through the same collector.
+ * SPEC-255 — First-party walkthrough attribution retrieval into acquisitionEvidence.
  * Mission-aware paid acquisition intelligence. Read, reason, recommend only.
  */
 
@@ -11,6 +12,9 @@ const amo = require('../../acquisition-mission');
 const {
   collectPaidPlatformEvidence,
   mergePlatformEvidence,
+  loadFirstPartyAttributionEvidence,
+  mergeAcquisitionEvidence,
+  unavailableFirstPartyAttributionEvidence,
   AVAILABILITY,
 } = require('../../penny-paid-acquisition');
 const {
@@ -605,11 +609,44 @@ async function resolvePlatformEvidenceForPenny(mission, opts = {}) {
   return mergePlatformEvidence(opts.platformEvidence, observed);
 }
 
+async function loadFirstPartyAttributionEvidenceForPenny(mission, opts = {}) {
+  if (opts.skipFirstPartyAttributionRetrieval === true) {
+    return mergeAcquisitionEvidence(opts.acquisitionEvidence, []);
+  }
+
+  const clientId = Number(mission.tenantId || mission.clientId || opts.tenantId);
+  if (!Number.isInteger(clientId) || clientId <= 0) {
+    const unavailable = unavailableFirstPartyAttributionEvidence({
+      availability: AVAILABILITY.UNAVAILABLE,
+      reason: 'INVALID_CLIENT_ID',
+      observationWindow: opts.observationWindow || null,
+    });
+    return mergeAcquisitionEvidence(opts.acquisitionEvidence, [unavailable], { includeUnavailable: true });
+  }
+
+  const result = await loadFirstPartyAttributionEvidence({
+    clientId,
+    pool: opts.pool,
+    window: opts.observationWindow,
+    windowDays: opts.observationWindowDays,
+    limit: opts.firstPartyAttributionLimit,
+    queryRows: opts.queryWalkthroughAttribution,
+  });
+
+  if (result.availability !== AVAILABILITY.AVAILABLE) {
+    const blocker = unavailableFirstPartyAttributionEvidence(result);
+    return mergeAcquisitionEvidence(opts.acquisitionEvidence, [blocker], { includeUnavailable: true });
+  }
+
+  return mergeAcquisitionEvidence(opts.acquisitionEvidence, result.evidence);
+}
+
 async function runPennyForAmoMission(mission, opts = {}) {
   const contributions = opts.contributions
     || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
     || [];
   const platformEvidence = await resolvePlatformEvidenceForPenny(mission, opts);
+  const acquisitionEvidence = await loadFirstPartyAttributionEvidenceForPenny(mission, opts);
   const executionInput = buildExecutionInput({
     mission,
     contributions,
@@ -617,7 +654,7 @@ async function runPennyForAmoMission(mission, opts = {}) {
     transactionId: opts.transactionId,
     executionContext: opts.executionContext,
     store: opts.engine?.store,
-    acquisitionEvidence: opts.acquisitionEvidence,
+    acquisitionEvidence,
     knownAcquisitionHistory: opts.knownAcquisitionHistory,
     conversionReadiness: opts.conversionReadiness,
     measurementReadiness: opts.measurementReadiness,
@@ -666,6 +703,7 @@ module.exports = {
   DEFAULT_PAID_CHANNELS,
   buildPaidAcquisitionRecommendationPayload,
   resolvePlatformEvidenceForPenny,
+  loadFirstPartyAttributionEvidenceForPenny,
   runPennyPaidAcquisition,
   runPennyForAmoMission,
 };
