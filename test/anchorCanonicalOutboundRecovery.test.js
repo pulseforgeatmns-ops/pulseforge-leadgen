@@ -5,11 +5,18 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const {
+  EXECUTION_INTENTS,
+  OPERATOR_DECISION_KINDS,
+} = require('../packages/acquisition-mission');
+const { evaluatePrioritizationReadiness } = require('../packages/acquisition-mission/DecisionReadiness');
+const { normalizeScoutDiscoveryPayload } = require('../packages/acquisition-mission/DiscoveryPayload');
+const {
   STR_OBJECTIVE,
   isStrOutboundObjective,
   isLawFirmObjective,
   pickCanonicalStrMission,
   chooseNextRecoveryIntent,
+  canIssuePrioritizationApproval,
   classifyQueueItems,
   assertNotSendingIntent,
   FORBIDDEN_SEND_INTENTS,
@@ -165,32 +172,179 @@ describe('Anchor STR canonical outbound recovery', () => {
     assert.equal(chosen.reason, 'approved_empty_discovery');
   });
 
-  it('refuses destructive Scout continuation when a healthy candidate set already exists', () => {
+  it('does not call APPROVE_PRIORITIZATION when investigation is pending and readiness is insufficient', () => {
+    const incompletePayload = {
+      summary: '15 qualified STR operators found with partial city coverage.',
+      discoveryStatus: 'incomplete',
+      qualifiedCount: 15,
+      rankedProspects: Array.from({ length: 15 }, (_, index) => ({
+        rank: index + 1,
+        name: `Summit STR ${index + 1}`,
+        readinessState: 'unknown',
+      })),
+      buyingSignals: [{
+        label: 'Hiring cleaning operations coordinator',
+        type: 'hiring',
+      }],
+      evidence: [{
+        label: 'Google Places search result',
+        source: 'google_places',
+      }],
+      coverage: {
+        complete: false,
+        cities: { searched: 1, planned: 6 },
+        warnings: ['Only 1 / 6 cities searched.', 'Discovery coverage is incomplete.'],
+      },
+    };
+    const readiness = evaluatePrioritizationReadiness(incompletePayload);
+    assert.equal(readiness.sufficient, false);
+
     const chosen = chooseNextRecoveryIntent({
       stage: 'discover',
-      pendingIntent: 'CONTINUE_INVESTIGATION',
-      scoutCandidateCount: 24,
+      pendingIntent: EXECUTION_INTENTS.CONTINUE_INVESTIGATION,
+      pendingOperatorDecision: {
+        kind: OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION,
+        prompt: 'Continue investigation?',
+        reason: 'Discovery coverage is incomplete.',
+      },
+      scoutCandidateCount: 15,
+      prioritizationReady: false,
+      discoveryReadiness: {
+        sufficient: readiness.sufficient,
+        primaryBlocker: readiness.primaryBlocker,
+      },
       sendableCount: 0,
       discoveryApproved: true,
-      contributions: { scout: { candidateCount: 24 } },
+      waitingReason: 'Discovery coverage is incomplete.',
+      contributions: { scout: { candidateCount: 15, payload: incompletePayload } },
     });
-    assert.notEqual(chosen.intent, 'CONTINUE_INVESTIGATION');
-    assert.equal(chosen.reason, 'skip_destructive_continuation');
-    assert.equal(chosen.intent, 'APPROVE_PRIORITIZATION');
-    assert.equal(chosen.stop, false);
+
+    assert.notEqual(chosen.intent, EXECUTION_INTENTS.CONTINUE_INVESTIGATION);
+    assert.notEqual(chosen.intent, EXECUTION_INTENTS.APPROVE_PRIORITIZATION);
+    assert.equal(chosen.stop, true);
+    assert.equal(chosen.reason, 'discovery_investigation_required');
+    assert.match(String(chosen.operatorAction), /coverage is incomplete|Discovery coverage is incomplete/i);
   });
 
-  it('does not continue investigation when healthy candidates exist without a pending investigation', () => {
+  it('invokes APPROVE_PRIORITIZATION only after prioritization approval is legitimately pending', () => {
+    const strongPayload = normalizeScoutDiscoveryPayload({
+      status: 'completed',
+      summary: '1 prospect matches mission objective.',
+      discoveryStatus: 'complete',
+      payload: {
+        opportunities: [{
+          companyId: 'co-1',
+          name: 'Summit STR Management',
+          fit: 0.84,
+          timing: 0.72,
+          confidence: 0.81,
+          signals: [{
+            type: 'hiring',
+            label: 'Hiring cleaning operations coordinator',
+            source: 'job_board',
+          }],
+          evidenceRefs: [{
+            label: 'Job posting: cleaning operations coordinator',
+            snapshot: { source: 'job_board', companyName: 'Summit STR Management' },
+          }],
+        }],
+        qualifiedCount: 1,
+      },
+    }, { missionObjective: STR_OBJECTIVE });
+    const readiness = evaluatePrioritizationReadiness(strongPayload);
+    assert.equal(readiness.sufficient, true);
+
     const chosen = chooseNextRecoveryIntent({
-      stage: 'understand',
-      pendingIntent: null,
-      scoutCandidateCount: 12,
+      stage: 'discover',
+      pendingIntent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
+      pendingOperatorDecision: {
+        kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL,
+        prompt: 'Approve prioritization?',
+      },
+      scoutCandidateCount: 1,
+      prioritizationReady: true,
+      discoveryReadiness: {
+        sufficient: readiness.sufficient,
+        primaryBlocker: readiness.primaryBlocker,
+      },
       sendableCount: 0,
       discoveryApproved: true,
-      contributions: { scout: { candidateCount: 12 } },
+      contributions: { scout: { candidateCount: 1, payload: strongPayload } },
     });
-    assert.notEqual(chosen.intent, 'CONTINUE_INVESTIGATION');
-    assert.equal(chosen.intent, 'APPROVE_PRIORITIZATION');
+
+    assert.equal(chosen.intent, EXECUTION_INTENTS.APPROVE_PRIORITIZATION);
+    assert.equal(chosen.reason, 'pending_operator_decision');
+    assert.equal(chosen.stop, false);
+    assert.equal(canIssuePrioritizationApproval({
+      scoutCandidateCount: 1,
+      prioritizationReady: true,
+      pendingIntent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
+      pendingOperatorDecision: { kind: OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL },
+      contributions: {},
+    }), true);
+  });
+
+  it('does not continue investigation or force Max when healthy candidates exist without prioritization pending', () => {
+    const chosen = chooseNextRecoveryIntent({
+      stage: 'discover',
+      pendingIntent: EXECUTION_INTENTS.CONTINUE_INVESTIGATION,
+      scoutCandidateCount: 15,
+      prioritizationReady: false,
+      discoveryReadiness: {
+        sufficient: false,
+        primaryBlocker: {
+          code: 'coverage_incomplete',
+          reason: 'Discovery coverage is incomplete.',
+        },
+      },
+      sendableCount: 0,
+      discoveryApproved: true,
+      contributions: { scout: { candidateCount: 15 } },
+    });
+    assert.notEqual(chosen.intent, EXECUTION_INTENTS.CONTINUE_INVESTIGATION);
+    assert.notEqual(chosen.intent, EXECUTION_INTENTS.APPROVE_PRIORITIZATION);
+    assert.equal(chosen.stop, true);
+  });
+
+  it('does not enter an APPROVE_PRIORITIZATION intent loop after a failed prioritization attempt', () => {
+    const summary = {
+      stage: 'discover',
+      pendingIntent: EXECUTION_INTENTS.CONTINUE_INVESTIGATION,
+      scoutCandidateCount: 15,
+      prioritizationReady: false,
+      discoveryReadiness: {
+        sufficient: false,
+        primaryBlocker: { code: 'coverage_incomplete', reason: 'Discovery coverage is incomplete.' },
+      },
+      sendableCount: 0,
+      discoveryApproved: true,
+      contributions: { scout: { candidateCount: 15 } },
+    };
+    const first = chooseNextRecoveryIntent(summary);
+    const second = chooseNextRecoveryIntent(summary);
+    assert.equal(first.intent, null);
+    assert.equal(second.intent, null);
+    assert.notEqual(first.intent, EXECUTION_INTENTS.APPROVE_PRIORITIZATION);
+    assert.notEqual(second.intent, EXECUTION_INTENTS.APPROVE_PRIORITIZATION);
+  });
+
+  it('preserves healthy candidate counts in the recovery summary contract', () => {
+    const summary = {
+      stage: 'discover',
+      pendingIntent: EXECUTION_INTENTS.CONTINUE_INVESTIGATION,
+      scoutCandidateCount: 15,
+      prioritizationReady: false,
+      discoveryReadiness: {
+        sufficient: false,
+        primaryBlocker: { reason: 'Discovery coverage is incomplete.' },
+      },
+      contributions: { scout: { candidateCount: 15 } },
+    };
+    assert.equal(summary.scoutCandidateCount, 15);
+    assert.equal(summary.contributions.scout.candidateCount, 15);
+    const chosen = chooseNextRecoveryIntent(summary);
+    assert.equal(chosen.stop, true);
+    assert.notEqual(chosen.intent, EXECUTION_INTENTS.CONTINUE_INVESTIGATION);
   });
 
   it('dispatches GENERATE_CAPACITY when Paige is complete and Emmett is not', () => {
@@ -244,7 +398,9 @@ describe('Anchor STR canonical outbound recovery', () => {
     assert.doesNotMatch(RECOVER_SRC, /intent:\s*EXECUTION_INTENTS\.EXECUTE_OUTBOUND/);
     assert.match(RECOVER_SRC, /assertNotSendingIntent/);
     assert.match(RECOVER_SRC, /allowFixtureFallback:\s*false/);
-    assert.match(LIB_SRC, /skip_destructive_continuation/);
+    assert.match(LIB_SRC, /discovery_investigation_required/);
+    assert.match(LIB_SRC, /prioritizationApprovalPending/);
+    assert.doesNotMatch(LIB_SRC, /skip_destructive_continuation/);
     assert.match(LIB_SRC, /approved_empty_discovery/);
     assert.match(LIB_SRC, /CONTINUE_INVESTIGATION/);
     assert.doesNotMatch(LIB_SRC, /attachEmmettCapacity/);

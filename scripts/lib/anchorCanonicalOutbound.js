@@ -12,8 +12,10 @@ const {
   STAGES,
   SPECIALISTS,
   CONTRIBUTION_KINDS,
+  OPERATOR_DECISION_KINDS,
   intentFromPendingDecision,
 } = amo;
+const { evaluatePrioritizationReadiness } = require('../../packages/acquisition-mission/DecisionReadiness');
 const { unwrapContributionPayload, scoutCandidateCount } = require('../validateAnchorCanonicalMission');
 const { sendableQueueItems } = require('../executeAnchorOneOutbound');
 const { selectActiveCapacityContribution } = require('./activeCapacitySelection');
@@ -136,6 +138,10 @@ function summarizeContributions(contributions = [], mission = {}) {
         )
     ) || null;
   const scoutCount = scout ? scoutCandidateCount(scout) : 0;
+  const scoutPayload = scout ? unwrapContributionPayload(scout) : null;
+  const discoveryReadiness = scoutPayload
+    ? evaluatePrioritizationReadiness(scoutPayload)
+    : null;
   const queue = selectedCapacity ? classifyQueueItems(selectedCapacity.payload) : {
     queueCount: 0,
     sendableCount: 0,
@@ -150,6 +156,21 @@ function summarizeContributions(contributions = [], mission = {}) {
         id: scout.id || null,
         at: scout.at || null,
         candidateCount: scoutCount,
+        payload: scoutPayload,
+      }
+      : null,
+    discoveryReadiness: discoveryReadiness
+      ? {
+        sufficient: discoveryReadiness.sufficient === true,
+        primaryBlocker: discoveryReadiness.primaryBlocker
+          ? {
+            code: discoveryReadiness.primaryBlocker.code || null,
+            label: discoveryReadiness.primaryBlocker.label || null,
+            reason: discoveryReadiness.primaryBlocker.reason || null,
+            recommendedAction: discoveryReadiness.primaryBlocker.recommendedAction || null,
+            waitingOn: discoveryReadiness.primaryBlocker.waitingOn || null,
+          }
+          : null,
       }
       : null,
     max: max
@@ -225,6 +246,8 @@ function summarizeMissionSnapshot(snapshot = {}, extras = {}) {
     contributions: summarized,
     discoveryApproved: summarized.discoveryApproved === true,
     scoutCandidateCount: summarized.scout?.candidateCount || 0,
+    discoveryReadiness: summarized.discoveryReadiness || null,
+    prioritizationReady: summarized.discoveryReadiness?.sufficient === true,
     prioritizedCandidateCount: summarized.max?.rankedCount || 0,
     paigeVariantCount: summarized.paige?.variantCount || 0,
     capacityItemCount: summarized.emmett?.queueCount || 0,
@@ -278,6 +301,33 @@ function discoveryApprovalAbsent(summary = {}) {
   return true;
 }
 
+function prioritizationApprovalPending(summary = {}) {
+  const pending = summary.pendingOperatorDecision || null;
+  if (summary.pendingIntent === EXECUTION_INTENTS.APPROVE_PRIORITIZATION) return true;
+  return pending?.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL;
+}
+
+function canIssuePrioritizationApproval(summary = {}) {
+  if (!Number(summary.scoutCandidateCount || 0)) return false;
+  if (summary.contributions?.max) return false;
+  return prioritizationApprovalPending(summary) || summary.prioritizationReady === true;
+}
+
+function discoveryInvestigationBlocker(summary = {}) {
+  const readiness = summary.discoveryReadiness || {};
+  const blocker = readiness.primaryBlocker || null;
+  return {
+    intent: null,
+    stop: true,
+    reason: 'discovery_investigation_required',
+    operatorAction:
+      blocker?.reason
+      || summary.waitingReason
+      || 'Discovery evidence is insufficient for prioritization.',
+    blocker,
+  };
+}
+
 function chooseNextRecoveryIntent(summary = {}) {
   const pendingIntent = summary.pendingIntent || null;
   const stage = summary.stage;
@@ -313,15 +363,15 @@ function chooseNextRecoveryIntent(summary = {}) {
   }
 
   if (pendingIntent === EXECUTION_INTENTS.CONTINUE_INVESTIGATION && healthyScout) {
-    if (!summary.contributions?.max) {
+    if (prioritizationApprovalPending(summary)) {
       return {
         intent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
         stop: false,
-        reason: 'skip_destructive_continuation',
-        operatorAction:
-          'Healthy Scout candidates exist. Skipping CONTINUE_INVESTIGATION and advancing to Max prioritization.',
+        reason: 'prioritization_ready_after_discovery',
+        operatorAction: null,
       };
     }
+    return discoveryInvestigationBlocker(summary);
   }
 
   const skipPendingFollow = !pendingIntent
@@ -350,7 +400,16 @@ function chooseNextRecoveryIntent(summary = {}) {
     };
   }
   if (!summary.contributions?.max) {
-    return { intent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION, stop: false, reason: 'missing_prioritization' };
+    if (canIssuePrioritizationApproval(summary)) {
+      return {
+        intent: EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
+        stop: false,
+        reason: 'missing_prioritization',
+      };
+    }
+    if (healthyScout && summary.prioritizationReady !== true) {
+      return discoveryInvestigationBlocker(summary);
+    }
   }
   if (!summary.contributions?.approach) {
     return {
@@ -438,6 +497,9 @@ module.exports = {
   summarizeContributions,
   summarizeMissionSnapshot,
   pickCanonicalStrMission,
+  prioritizationApprovalPending,
+  canIssuePrioritizationApproval,
+  discoveryInvestigationBlocker,
   chooseNextRecoveryIntent,
   payloadForIntent,
   questionForIntent,
