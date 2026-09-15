@@ -37,7 +37,7 @@ const {
   logClientIntelligenceContribution,
   buildAcquisitionOwnershipTrace,
 } = require('./audit/AcquisitionOwnershipAudit');
-const { objectivesSimilar } = require('../scoutAcquisition/NeedAssessment');
+const { assessMissionResumeCompatibility } = require('./MissionResumeCompatibility');
 const { detectAcquisitionObjective, normalizeObjectiveText } = require('./AcquisitionObjectiveDetection');
 const { detectMissionExecutionLanguage } = require('./ExecutionLanguageDetection');
 const {
@@ -148,13 +148,28 @@ function buildClientIntelligenceMissionEvidence(summary) {
   };
 }
 
-function findResumableMission(missions, objective) {
+function findResumableMission(missions, objective, opts = {}) {
+  const assess = (row) =>
+    assessMissionResumeCompatibility(row, objective, {
+      resolvedObjective: opts.resolvedObjective || null,
+    });
+
   const active = missions.find((row) => row.stage !== 'improve');
-  if (active && objectivesSimilar(active.objective, objective)) return active;
-  return missions.find((row) => objectivesSimilar(row.objective, objective)) || null;
+  if (active && assess(active).compatible) return active;
+  return missions.find((row) => assess(row).compatible) || null;
 }
 
 function inferTargetSegment(objective) {
+  const { isMultiSegmentObjective, detectMentionedSegments } = require('./MissionResumeCompatibility');
+  if (isMultiSegmentObjective(objective)) {
+    const segments = detectMentionedSegments(objective);
+    const labels = [];
+    if (segments.includes('commercial')) labels.push('Commercial');
+    if (segments.includes('property_management')) labels.push('Property Management');
+    if (labels.length) return labels.join(' & ');
+    if (segments.includes('short_term_rental')) return 'Commercial & Property Management';
+    return inferTargetSegmentFromObjective(objective);
+  }
   return inferTargetSegmentFromObjective(objective);
 }
 
@@ -384,26 +399,31 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   let mission = null;
   let created = false;
 
+  const targetSegment = inferTargetSegment(question);
+  const resolvedObjective =
+    input.resolvedObjective ||
+    (input.session && input.session.context && input.session.context.resolvedObjective) ||
+    resolveCanonicalObjective({
+      question,
+      executionContract: input.executionContract,
+      objectiveResolution: input.objectiveResolution,
+      context: {
+        blueprint: ciEvidence.strategicEvidence || null,
+      },
+      targetSegment,
+    });
+
   if (lifecycleIntent === MissionLifecycleIntent.CREATE_NEW) {
     mission = null;
   } else {
-    mission = findResumableMission(missions, question);
+    mission = findResumableMission(
+      missions,
+      canonicalObjectiveText(resolvedObjective) || question,
+      { resolvedObjective }
+    );
   }
 
   if (!mission) {
-    const targetSegment = inferTargetSegment(question);
-    const resolvedObjective =
-      input.resolvedObjective ||
-      (input.session && input.session.context && input.session.context.resolvedObjective) ||
-      resolveCanonicalObjective({
-        question,
-        executionContract: input.executionContract,
-        objectiveResolution: input.objectiveResolution,
-        context: {
-          blueprint: ciEvidence.strategicEvidence || null,
-        },
-        targetSegment,
-      });
     const canonicalObjective = canonicalObjectiveText(resolvedObjective) || question;
 
     mission = await runtime.create(
