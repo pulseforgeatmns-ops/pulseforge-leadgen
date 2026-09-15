@@ -374,13 +374,20 @@ function scoutDelegationFromMission(mission) {
     plan.geography.region ||
     (plan.geography.cities && plan.geography.cities.length ? plan.geography.cities.join(', ') : null);
 
+  const eligibleSubsegments =
+    (plan.market.eligibleSubsegments && plan.market.eligibleSubsegments.length)
+      ? plan.market.eligibleSubsegments.slice()
+      : [plan.market.segment];
+  const scoutSegments = [...new Set(eligibleSubsegments.filter(Boolean))];
+
   return {
     tenantId: String(mission.tenantId || mission.clientId || ''),
     missionId: mission.id,
     targetContext: {
       geography: geographyLabel,
       cities: (plan.geography.cities || []).slice(),
-      segments: [plan.market.segment],
+      segments: scoutSegments,
+      primarySegment: plan.market.segment,
       industry: plan.market.industry,
       buyer: plan.market.buyer,
       businessType: plan.market.segment,
@@ -389,7 +396,7 @@ function scoutDelegationFromMission(mission) {
     },
     businessContext: {
       serviceGeography: geographyLabel,
-      preferredSegments: [plan.market.segment],
+      preferredSegments: scoutSegments,
       operatorDirection: plan.objective,
       missionObjectiveImmutable: true,
       commercialCapability: (plan.constraints || []).includes('commercial_only')
