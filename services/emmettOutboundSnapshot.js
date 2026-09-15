@@ -6,6 +6,7 @@
 
 const { getWarmupProgress, resolveWarmupDailyCap } = require('../utils/sendWarmup');
 const { localDateOf } = require('../packages/emmett-outbound');
+const { authenticationFromVerificationState } = require('../packages/emmett-outbound/AuthEvidence');
 const { ensureSenderIdentityEventSchema } = require('../utils/emailEventIdentitySchema');
 
 function pct(part, whole) {
@@ -194,11 +195,15 @@ async function buildInboxSnapshot(clientId, opts = {}) {
     fallbackAgeDays: opts.inboxAgeDays,
   });
 
-  const auth = opts.authentication || {
-    spf: Boolean(client.sending_domain),
-    dkim: Boolean(client.sending_domain),
-    dmarc: client.sending_domain ? 'none' : false,
-  };
+  const auth = opts.authentication
+    || (opts.verificationState
+      ? authenticationFromVerificationState(opts.verificationState)
+      : null)
+    || {
+      spf: Boolean(client.sending_domain),
+      dkim: Boolean(client.sending_domain),
+      dmarc: client.sending_domain ? 'none' : false,
+    };
 
   const sends = Number(stats.sends || 0);
   return {
