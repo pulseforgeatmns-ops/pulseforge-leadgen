@@ -38,6 +38,7 @@ function createWalkthroughCaptureMockPool(initial = {}) {
       title: params[2],
       description: params[3],
       executed_at: null,
+      created_at: new Date().toISOString(),
       result: null,
     };
     state.agentActions.push(row);
