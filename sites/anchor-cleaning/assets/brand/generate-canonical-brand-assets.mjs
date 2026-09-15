@@ -35,30 +35,42 @@ function makeTransparentLockup({ data, width, height }) {
   return sharp(out, { raw: { width, height, channels: 4 } }).png();
 }
 
-function rowGoldDensity(data, width, y) {
+function rowGoldStats(data, width, y) {
   let count = 0;
+  let left = width;
+  let right = 0;
   for (let x = 0; x < width; x++) {
     const o = (y * width + x) * 4;
-    if (luminance(data[o], data[o + 1], data[o + 2]) > 40) count++;
+    if (luminance(data[o], data[o + 1], data[o + 2]) > 40) {
+      count++;
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+    }
   }
-  return count / width;
+  return {
+    density: count / width,
+    span: right >= left ? right - left + 1 : 0,
+    left,
+    right,
+  };
 }
 
 function findAnchorCrop({ data, width, height }) {
-  const densities = [];
-  for (let y = 0; y < height; y++) densities.push(rowGoldDensity(data, width, y));
+  const wordmarkSpanMin = Math.max(350, Math.round(width * 0.32));
 
   let top = 0;
-  while (top < height && densities[top] < 0.01) top++;
+  while (top < height && rowGoldStats(data, width, top).density < 0.01) top++;
 
   let textStart = height;
-  for (let y = 550; y < height - 4; y++) {
-    if (densities[y] > 0.12 && densities[y + 1] > 0.12 && densities[y + 2] > 0.12 && densities[y + 3] > 0.12) {
+  for (let y = top + 40; y < height - 4; y++) {
+    const row = rowGoldStats(data, width, y);
+    if (row.span >= wordmarkSpanMin && row.density > 0.05) {
       textStart = y;
       break;
     }
   }
-  let contentEnd = Math.max(top, textStart - 40);
+
+  let contentEnd = Math.max(top, textStart - 8);
 
   let left = width;
   let right = 0;
@@ -72,7 +84,7 @@ function findAnchorCrop({ data, width, height }) {
     }
   }
 
-  const pad = Math.round((right - left) * 0.05);
+  const pad = Math.round((right - left) * 0.06);
   return {
     left: Math.max(0, left - pad),
     top: Math.max(0, top - pad),
