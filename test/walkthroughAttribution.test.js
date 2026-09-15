@@ -1,4 +1,5 @@
 const { describe, it } = require('node:test');
+const { createWalkthroughCaptureMockPool } = require('./helpers/walkthroughCaptureMockPool');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -164,45 +165,35 @@ describe('walkthrough attribution normalization + persistence', () => {
 
   it('stores raw + normalized attribution on agent_actions payload', async () => {
     const original = pool.query;
-    let insert = null;
-    pool.query = async (sql, params) => {
-      if (/INSERT INTO agent_actions/i.test(sql)) {
-        insert = { sql, params };
-        return { rows: [{ id: 901 }] };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    };
+    const mock = createWalkthroughCaptureMockPool();
+    pool.query = mock.query.bind(mock);
     try {
       const record = buildAttributionRecord({ opref: 'abc', landing_page_url: 'https://goanchorcleaning.com/' });
       const validated = validateWalkthroughPayload(basePayload({ attribution: record.raw }));
       await captureWalkthroughLead(validated.values, record);
-      const payload = JSON.parse(insert.params[4]);
+      const payload = mock.state.agentActions[0].payload;
       assert.equal(payload.source, 'website_walkthrough');
       assert.equal(payload.attribution.raw.opref, 'abc');
       assert.equal(payload.attribution.normalized.lead_source, 'chatgpt_ads');
       assert.equal(payload.attribution.provenance.sourceKind, SOURCE_KIND);
       assert.notEqual(payload.attribution.provenance.sourceKind, 'PLATFORM_API');
+      assert.ok(payload.prospect_id);
+      assert.equal(payload.identity.prospectLinkStatus, 'LINKED_NEW');
     } finally {
       pool.query = original;
     }
   });
 
-  it('mirrors attribution into prospects.acquisition_metadata without clobbering existing metadata', async () => {
+  it('mirrors attribution into prospects.acquisition_metadata when prospect resolves', async () => {
     const original = pool.query;
-    const updates = [];
-    pool.query = async (sql, params) => {
-      if (/INSERT INTO agent_actions/i.test(sql)) return { rows: [{ id: 902 }] };
-      if (/UPDATE prospects/i.test(sql) && /acquisition_metadata/i.test(sql)) {
-        updates.push({ sql, params });
-        return { rowCount: 1 };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    };
+    const mock = createWalkthroughCaptureMockPool();
+    pool.query = mock.query.bind(mock);
     try {
       const record = buildAttributionRecord({ oppref: 'tok', landing_page_url: 'https://goanchorcleaning.com/' });
       const validated = validateWalkthroughPayload(basePayload({ attribution: record.raw }));
       await captureWalkthroughLead(validated.values, record);
-      assert.equal(updates.length, 0);
+      assert.equal(mock.state.prospects.length, 1);
+      assert.equal(mock.state.prospects[0].acquisition_metadata.attribution.normalized.lead_source, 'chatgpt_ads');
     } finally {
       pool.query = original;
     }
@@ -236,19 +227,13 @@ describe('walkthrough attribution normalization + persistence', () => {
 
   it('preserves website_walkthrough source semantics on stored payloads', async () => {
     const original = pool.query;
-    let insert = null;
-    pool.query = async (sql, params) => {
-      if (/INSERT INTO agent_actions/i.test(sql)) {
-        insert = params;
-        return { rows: [{ id: 904 }] };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    };
+    const mock = createWalkthroughCaptureMockPool();
+    pool.query = mock.query.bind(mock);
     try {
       const record = buildAttributionRecord({ campaign_id: 'only-id' });
       const validated = validateWalkthroughPayload(basePayload({ attribution: record.raw }));
       await captureWalkthroughLead(validated.values, record);
-      const payload = JSON.parse(insert[4]);
+      const payload = mock.state.agentActions[0].payload;
       assert.equal(payload.source, 'website_walkthrough');
       assert.equal(payload.attribution.normalized.lead_source, 'unknown');
     } finally {
