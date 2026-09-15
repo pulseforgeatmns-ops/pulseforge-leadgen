@@ -229,6 +229,9 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, /Documented service standards/);
     assert.match(html, /Same standard every visit/);
     assert.match(html, /id="assessment-form"/);
+    assert.match(html, /social-preview-v20260916\.jpg\?v=20260916/);
+    assert.match(html, /anchor-logo-canonical\.png\?v=20260916/);
+    assert.match(html, /"logo": "https:\/\/goanchorcleaning.com\/assets\/brand\/anchor-logo-canonical.png\?v=20260916"/);
     assert.match(html, /walkthrough_form_submit/);
     assert.match(html, /phone_click/);
     assert.match(html, /email_click/);
