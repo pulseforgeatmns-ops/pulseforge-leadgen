@@ -11,7 +11,7 @@ const { buildAttributionRecord } = require('../lib/walkthroughAttribution');
 const router = express.Router();
 
 const SUCCESS_MESSAGE =
-  "Thanks. I'll reach out to set up a quick facilities assessment and give you a clear monthly quote.";
+  "Thank you. We'll be in touch to arrange your Facility Assessment.";
 
 const rateBuckets = new Map();
 const RATE_WINDOW_MS = 60 * 60 * 1000;

@@ -3,6 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="https://goanchorcleaning.com/assets/brand/favicon-v20260915.ico?v=20260915" sizes="any">
+<link rel="icon" type="image/svg+xml" href="https://goanchorcleaning.com/assets/brand/favicon-v20260915.svg?v=20260915">
+<link rel="icon" type="image/png" sizes="32x32" href="https://goanchorcleaning.com/assets/brand/favicon-32x32-v20260915.png?v=20260915">
+<link rel="icon" type="image/png" sizes="16x16" href="https://goanchorcleaning.com/assets/brand/favicon-16x16-v20260915.png?v=20260915">
+<link rel="apple-touch-icon" sizes="180x180" href="https://goanchorcleaning.com/assets/brand/apple-touch-icon-v20260915.png?v=20260915">
+<link rel="manifest" href="https://goanchorcleaning.com/assets/brand/site.webmanifest?v=20260915">
+<meta name="theme-color" content="#07131F">
 <title>Commercial Cleaning in Manchester, NH | Anchor Cleaning</title>
 <meta name="description" content="Premium recurring commercial cleaning for offices, professional facilities and property managers throughout Greater Manchester, NH. Request a facility assessment with Anchor Cleaning.">
 <link rel="canonical" href="https://goanchorcleaning.com/">
@@ -10,14 +17,17 @@
 <meta property="og:description" content="Premium recurring commercial cleaning for offices, professional facilities and property managers throughout Greater Manchester, NH.">
 <meta property="og:url" content="https://goanchorcleaning.com/">
 <meta property="og:type" content="website">
-<meta property="og:image" content="https://goanchorcleaning.com/assets/og-social-preview.jpg">
+<meta property="og:site_name" content="Anchor Cleaning">
+<meta property="og:image" content="https://goanchorcleaning.com/assets/brand/social-preview-v20260915.jpg?v=20260915">
+<meta property="og:image:secure_url" content="https://goanchorcleaning.com/assets/brand/social-preview-v20260915.jpg?v=20260915">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Anchor Cleaning — premium commercial and residential cleaning in Greater Manchester, New Hampshire">
+<meta property="og:image:alt" content="Anchor Cleaning wordmark on deep navy — premium commercial and residential cleaning in Greater Manchester, New Hampshire">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Commercial Cleaning in Manchester, NH | Anchor Cleaning">
 <meta name="twitter:description" content="Premium recurring commercial cleaning for offices, professional facilities and property managers throughout Greater Manchester, NH.">
-<meta name="twitter:image" content="https://goanchorcleaning.com/assets/og-social-preview.jpg">
+<meta name="twitter:image" content="https://goanchorcleaning.com/assets/brand/social-preview-v20260915.jpg?v=20260915">
+<meta name="twitter:image:alt" content="Anchor Cleaning wordmark on deep navy — premium commercial and residential cleaning in Greater Manchester, New Hampshire">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -655,8 +665,8 @@
       <div class="lbl rv">Next step</div>
       <h2 class="rv">Request Your Facility Assessment</h2>
       <p class="rv">Tell us about your facility and we will arrange a facility assessment to understand your space, document your service standard, and prepare a facility-specific cleaning plan.</p>
-      <div class="consult-steps rv" aria-label="Facility assessment details">
-        <span><b>01</b>Facility assessments take about ten minutes on site.</span>
+      <div class="consult-steps rv" aria-label="Facility Assessment details">
+        <span><b>01</b>A Facility Assessment takes about ten minutes on site.</span>
         <span><b>02</b>No pressure, no open-ended contract to start.</span>
         <span><b>03</b>Your cleaning plan is built around your facility and recurring schedule.</span>
       </div>
@@ -668,7 +678,7 @@
       <span>Greater Manchester, NH</span>
     </div>
       <div class="contact-links rv">
-        <a class="em js-email" href="mailto:jacob@goanchorcleaning.com?subject=Facility%20assessment%20request%20%E2%80%94%20office%20cleaning">jacob@goanchorcleaning.com</a>
+        <a class="em js-email" href="mailto:jacob@goanchorcleaning.com?subject=Facility%20Assessment%20request%20%E2%80%94%20office%20cleaning">jacob@goanchorcleaning.com</a>
         <a class="em js-phone" href="tel:+16034202430">(603) 420-2430</a>
       </div>
     </div>
@@ -871,7 +881,7 @@
   var form = document.getElementById('assessment-form');
   var statusEl = document.getElementById('form-status');
   var ENDPOINT = 'https://pulseforge-leadgen-production.up.railway.app/api/public/walkthrough';
-  var SUCCESS = "Thank you. We'll be in touch to arrange your facility assessment.";
+  var SUCCESS = "Thank you. We'll be in touch to arrange your Facility Assessment.";
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
@@ -916,7 +926,7 @@
       statusEl.className = 'form-status ok';
       statusEl.textContent = (json && json.message) || SUCCESS;
     }).catch(function () {
-      var subject = encodeURIComponent('Facility assessment request — office cleaning');
+      var subject = encodeURIComponent('Facility Assessment request — office cleaning');
       var body = encodeURIComponent(
         'Name: ' + data.name + '\nBusiness: ' + data.business_name +
         '\nPhone: ' + data.phone + '\nEmail: ' + data.email +
