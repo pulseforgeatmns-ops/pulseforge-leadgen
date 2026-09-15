@@ -40,6 +40,8 @@ const {
   READ_ONLY_OPERATIONS,
   FORBIDDEN_OPENAI_ADS_MUTATIONS,
   OPENAI_ADS_BASE_URL,
+  DELIVERY_INSIGHT_FIELDS,
+  deliveryInsightsTimeRange,
   resolveOpenAiAdsReadOperation,
   assertOpenAiAdsMutationRejected,
   isForbiddenMutation,
@@ -67,8 +69,6 @@ const ANCHOR_INSIGHT = {
   ctr: 0.03,
   cpc: 1.34,
   cpm: 40.2,
-  conversions: 4,
-  order_created_attributed_sales: 12.5,
 };
 
 const ANCHOR_CONVERSION = {
@@ -76,6 +76,7 @@ const ANCHOR_CONVERSION = {
   conversions: 4,
   click_through_conversions: 4,
   view_through_conversions: 1,
+  order_created_attributed_sales: 12.5,
 };
 
 function chatgptAccountsForClient(clientId) {
@@ -271,6 +272,93 @@ describe('SPEC-253 — ChatGPT Ads tenant binding and readiness', () => {
     assert.equal(ready.status, PRODUCTION_READINESS.READY);
     assert.equal(ready.linkedAccountId, 'adacct_anchor');
     assert.doesNotMatch(JSON.stringify(ready), new RegExp(ANCHOR_API_KEY));
+  });
+});
+
+describe('SPEC-253 — account insights request shape', () => {
+  it('uses singular time_range instead of time_ranges[] on GET /ad_account/insights', async () => {
+    const http = mockChatGptHttp();
+    await readChatGptAdsEvidence({
+      account: chatgptAccountsForClient(10)[0],
+      http,
+    });
+    const insightsCall = http.calls.find((call) => call.url.endsWith('/ad_account/insights'));
+    assert.ok(insightsCall);
+    assert.equal(insightsCall.method, 'GET');
+    assert.ok(insightsCall.params.time_range);
+    assert.equal(insightsCall.params['time_ranges[]'], undefined);
+    assert.equal(insightsCall.params.time_ranges, undefined);
+  });
+
+  it('requests a supported relative_interval time_range for the observation window', async () => {
+    const http = mockChatGptHttp();
+    await readChatGptAdsEvidence({
+      account: chatgptAccountsForClient(10)[0],
+      window: { start: '2026-09-01', end: '2026-09-08', days: 7, label: 'LAST_7_DAYS' },
+      http,
+    });
+    const insightsCall = http.calls.find((call) => call.url.endsWith('/ad_account/insights'));
+    assert.deepEqual(insightsCall.params.time_range, deliveryInsightsTimeRange({ days: 7 }));
+    assert.deepEqual(insightsCall.params.time_range, {
+      type: 'relative_interval',
+      unit: 'day',
+      start_ago: 7,
+      end_ago: 0,
+    });
+  });
+
+  it('requests delivery-only fields and excludes conversion-only metrics', async () => {
+    const http = mockChatGptHttp();
+    await readChatGptAdsEvidence({
+      account: chatgptAccountsForClient(10)[0],
+      http,
+    });
+    const insightsCall = http.calls.find((call) => call.url.endsWith('/ad_account/insights'));
+    assert.deepEqual(insightsCall.params['fields[]'], DELIVERY_INSIGHT_FIELDS);
+    assert.doesNotMatch(JSON.stringify(insightsCall.params['fields[]']), /conversions/);
+    assert.doesNotMatch(JSON.stringify(insightsCall.params['fields[]']), /order_created_attributed_sales/);
+  });
+
+  it('keeps conversion insights on POST /conversions/insights', async () => {
+    const http = mockChatGptHttp();
+    await readChatGptAdsEvidence({
+      account: chatgptAccountsForClient(10)[0],
+      http,
+    });
+    const conversionCall = http.calls.find(
+      (call) => call.method === 'POST' && call.url.endsWith('/conversions/insights')
+    );
+    assert.ok(conversionCall);
+    assert.deepEqual(conversionCall.body.entity_ids, ['cmpn_anchor_1']);
+  });
+
+  it('normalizes delivery metrics from account insights without delivery conversion fields', async () => {
+    const http = mockChatGptHttp({
+      insights: [{
+        campaign_id: 'cmpn_anchor_1',
+        campaign_name: 'Anchor ChatGPT Commercial',
+        campaign_status: 'active',
+        impressions: 1000,
+        clicks: 25,
+        spend: 40,
+        ctr: 0.025,
+        cpc: 1.6,
+        cpm: 40,
+      }],
+      conversions: [],
+    });
+    const evidence = await readChatGptAdsEvidence({
+      account: chatgptAccountsForClient(10)[0],
+      http,
+    });
+    const campaign = evidence.campaigns[0];
+    assert.equal(campaign.impressions, 1000);
+    assert.equal(campaign.clicks, 25);
+    assert.equal(campaign.spend, 40);
+    assert.equal(campaign.averageCpc, 1.6);
+    assert.equal(campaign.platformConversions, null);
+    assert.equal(campaign.clickThroughConversions, null);
+    assert.equal(campaign.viewThroughConversions, null);
   });
 });
 

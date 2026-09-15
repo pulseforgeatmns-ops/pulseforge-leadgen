@@ -73,7 +73,7 @@ const CHATGPT_ADS_OPERATOR_SETUP = Object.freeze([
   'Confirm the returned account identity matches the linked Anchor account.',
 ]);
 
-const INSIGHT_FIELDS = Object.freeze([
+const DELIVERY_INSIGHT_FIELDS = Object.freeze([
   'campaign.id',
   'campaign.name',
   'campaign.status',
@@ -83,9 +83,17 @@ const INSIGHT_FIELDS = Object.freeze([
   'ctr',
   'cpc',
   'cpm',
-  'conversions',
-  'order_created_attributed_sales',
 ]);
+
+function deliveryInsightsTimeRange(window) {
+  const days = window?.days || DEFAULT_WINDOW_DAYS;
+  return {
+    type: 'relative_interval',
+    unit: 'day',
+    start_ago: days,
+    end_ago: 0,
+  };
+}
 
 function observationWindowFromDays(days = DEFAULT_WINDOW_DAYS) {
   const end = new Date();
@@ -286,8 +294,6 @@ function aggregateInsightRows(rows) {
       spend: 0,
       impressions: 0,
       clicks: 0,
-      platformConversions: 0,
-      platformConversionValue: 0,
       cpcSum: 0,
       cpcWeight: 0,
       cpmSum: 0,
@@ -300,8 +306,6 @@ function aggregateInsightRows(rows) {
     current.spend += asNumber(row.spend) || 0;
     current.impressions += asNumber(row.impressions) || 0;
     current.clicks += asNumber(row.clicks) || 0;
-    current.platformConversions += asNumber(row.conversions) || 0;
-    current.platformConversionValue += asNumber(row.order_created_attributed_sales) || 0;
     const cpc = asNumber(row.cpc);
     const clicks = asNumber(row.clicks) || 0;
     if (cpc != null && clicks > 0) {
@@ -332,12 +336,15 @@ function normalizeCampaignEvidence(campaign, insight, conversion, currency) {
     : (impressions > 0 ? (spend / impressions) * 1000 : null);
   const platformConversions = conversion?.conversions != null
     ? asNumber(conversion.conversions)
-    : (insight?.platformConversions ?? null);
+    : null;
   const clickThroughConversions = conversion?.click_through_conversions != null
     ? asNumber(conversion.click_through_conversions)
     : platformConversions;
   const viewThroughConversions = conversion?.view_through_conversions != null
     ? asNumber(conversion.view_through_conversions)
+    : null;
+  const platformConversionValue = conversion?.order_created_attributed_sales != null
+    ? asNumber(conversion.order_created_attributed_sales)
     : null;
 
   return {
@@ -351,7 +358,7 @@ function normalizeCampaignEvidence(campaign, insight, conversion, currency) {
     averageCpc,
     cpm,
     platformConversions,
-    platformConversionValue: insight?.platformConversionValue || null,
+    platformConversionValue,
     clickThroughConversions,
     viewThroughConversions,
     budget: budgetFromCampaign(campaign, currency),
@@ -406,12 +413,8 @@ async function readAccountInsights({ apiKey, http, window }) {
     query: {
       aggregation_level: 'campaign',
       time_granularity: 'none',
-      'time_ranges[]': JSON.stringify({
-        type: 'date_range',
-        since: window.start,
-        until: window.end,
-      }),
-      'fields[]': INSIGHT_FIELDS.slice(),
+      time_range: deliveryInsightsTimeRange(window),
+      'fields[]': DELIVERY_INSIGHT_FIELDS.slice(),
       'includes[]': 'zero_impression_items',
       limit: 200,
     },
@@ -611,6 +614,8 @@ module.exports = {
   FORBIDDEN_OPENAI_ADS_MUTATIONS,
   CHATGPT_ADS_OPERATOR_SETUP,
   observationWindowFromDays,
+  deliveryInsightsTimeRange,
+  DELIVERY_INSIGHT_FIELDS,
   resolveOpenAiAdsReadOperation,
   assertOpenAiAdsMutationRejected,
   isForbiddenMutation,
