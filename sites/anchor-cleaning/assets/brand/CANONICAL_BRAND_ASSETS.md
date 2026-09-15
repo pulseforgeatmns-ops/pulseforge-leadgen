@@ -13,7 +13,7 @@ npm install sharp --no-save
 node assets/brand/generate-canonical-brand-assets.mjs
 ```
 
-Then bump `?v=` query strings and versioned filenames in `index.html`, `residential/index.html`, and `site.webmanifest`.
+Then rebuild `anchor-cleaning-brand-assets.zip` from the derived files in this folder, and bump `?v=` query strings and versioned filenames in `index.html`, `residential/index.html`, and `site.webmanifest`.
 
 ## Derived files
 
