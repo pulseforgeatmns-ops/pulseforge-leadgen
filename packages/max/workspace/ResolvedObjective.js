@@ -317,6 +317,7 @@ function resolveCanonicalObjective(input = {}) {
 
   const text = businessText;
   const intent = analyzeIntent(text, { missionType: input.missionType || input.type });
+  const marketScope = resolveMarketScopeFromObjective(text);
   const {
     isMultiSegmentObjective,
     detectMentionedSegments,
