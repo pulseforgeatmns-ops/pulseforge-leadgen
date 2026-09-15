@@ -10,7 +10,10 @@
  *   → Emmett CAPACITY → READY
  *
  * Stops before APPROVE_EXECUTION / EXECUTE_OUTBOUND.
- * Never enables autosend. Never continues Scout when candidates already exist.
+ * Never enables autosend. Never issues APPROVE_PRIORITIZATION unless
+ * prioritization approval is actually pending. When healthy Scout candidates
+ * exist but discovery readiness is still insufficient, stops with the exact
+ * canonical blocker instead of looping destructive investigation or forcing Max.
  * If discovery is already approved and Scout has zero candidates, continues
  * investigation (canonical Scout path) instead of re-issuing APPROVE_DISCOVERY.
  *
@@ -73,7 +76,8 @@ Usage:
 Safety:
   Refuses without --confirm-production.
   Never APPROVE_EXECUTION or EXECUTE_OUTBOUND.
-  Never CONTINUE_INVESTIGATION when Scout already has candidates.
+  Never APPROVE_PRIORITIZATION unless prioritization approval is pending.
+  Never loops destructive Scout continuation when healthy candidates exist but discovery is not prioritization-ready.
   If discovery is already approved and candidates are empty, runs Scout continuation instead of re-approving discovery.
   Never enables autosend. Never uses fixtures.
 `);
