@@ -249,6 +249,7 @@ app.use('/admin/field-visits', require('./routes/aoAdmin'));
 // Public marketing funnel — no session auth (see routes/scorecard.js)
 app.use('/', require('./routes/scorecard'));
 app.use('/', require('./routes/walkthrough'));
+app.use('/', require('./routes/leadQualificationReviews'));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
 // curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.
