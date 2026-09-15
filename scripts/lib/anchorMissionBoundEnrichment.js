@@ -6,10 +6,20 @@
  */
 
 const { getAcquisitionMissionRuntime } = require('../../services/acquisitionMissionRuntime');
-const { listMissionBoundCompanyIds } = require('../../packages/max/workspace/EmmettMissionCandidates');
+const {
+  buildMissionBoundCandidates,
+  listMissionBoundCompanyIds,
+  listMissionBoundCrmLookupKeys,
+  listMissionBoundProspectIds,
+} = require('../../packages/max/workspace/EmmettMissionCandidates');
+const {
+  aliasCrmMapToIdentities,
+  identityKeysFrom,
+} = require('../../packages/max/workspace/CanonicalOutboundIdentity');
 const {
   isProjectableCrmProspect,
   loadCrmProspectsForMissionBoundCompanies,
+  loadCrmProspectsByIds,
 } = require('../../packages/max/workspace/MissionBoundCrmResolver');
 const {
   configureScoringContext,
@@ -48,6 +58,12 @@ function crmProjectionRow(row = {}, extras = {}) {
 
 async function loadProspectRow(db, clientId, prospectId) {
   const { loadBestCrmProspectForMissionBoundKey } = require('../../packages/max/workspace/MissionBoundCrmResolver');
+  const byId = await loadCrmProspectsByIds({
+    pool: db,
+    clientId,
+    prospectIds: [prospectId],
+  });
+  if (byId.size) return byId.values().next().value;
   return loadBestCrmProspectForMissionBoundKey({
     pool: db,
     clientId,
@@ -64,12 +80,38 @@ async function loadMissionBoundProspects(db, missionId) {
     throw Object.assign(new Error(`Mission ${missionId} not found.`), { code: 'mission_not_found' });
   }
   const snapshot = engine.inspect(missionId, { tenantId: TENANT_ID });
-  const companyIds = listMissionBoundCompanyIds(mission, snapshot.contributions || []);
-  const rowsByCompanyId = await loadCrmProspectsForMissionBoundCompanies({
-    pool: db,
-    clientId: CLIENT_ID,
-    companyIds,
-  });
+  const contributions = snapshot.contributions || [];
+  const candidates = buildMissionBoundCandidates(mission, contributions);
+  const companyIds = listMissionBoundCompanyIds(mission, contributions);
+  const lookupKeys = listMissionBoundCrmLookupKeys(mission, contributions);
+  const crmProspectIds = listMissionBoundProspectIds(mission, contributions);
+  const maps = [];
+  if (lookupKeys.length) {
+    maps.push(await loadCrmProspectsForMissionBoundCompanies({
+      pool: db,
+      clientId: CLIENT_ID,
+      companyIds: lookupKeys,
+    }));
+  }
+  if (crmProspectIds.length) {
+    maps.push(await loadCrmProspectsByIds({
+      pool: db,
+      clientId: CLIENT_ID,
+      prospectIds: crmProspectIds,
+    }));
+  }
+  const crmByIdentity = maps.length
+    ? aliasCrmMapToIdentities(maps, candidates)
+    : new Map();
+  const rowsByCompanyId = new Map();
+  for (const candidate of candidates) {
+    let row = null;
+    for (const key of identityKeysFrom(candidate)) {
+      row = crmByIdentity.get(String(key));
+      if (row) break;
+    }
+    if (row) rowsByCompanyId.set(String(candidate.id), row);
+  }
   const rows = companyIds
     .map((companyId) => rowsByCompanyId.get(String(companyId)))
     .filter(Boolean);
@@ -77,6 +119,7 @@ async function loadMissionBoundProspects(db, missionId) {
     mission,
     snapshot,
     companyIds,
+    candidates,
     // Legacy report field: mission-bound keys (company/candidate IDs), not CRM prospects.id.
     prospectIds: companyIds,
     rowsByCompanyId,
