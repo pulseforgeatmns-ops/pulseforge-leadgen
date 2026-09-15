@@ -46,3 +46,10 @@ All public URLs use absolute paths on `https://goanchorcleaning.com/assets/brand
 ## Platform profile avatars
 
 Upload `social-avatar-v20260916.png` manually on each platform (full lockup on navy — not symbol-only).
+
+## Download bundle
+
+All canonical derived assets plus usage notes:
+
+- **Zip:** `anchor-cleaning-brand-assets.zip` (same folder)
+- **After deploy:** https://goanchorcleaning.com/assets/brand/anchor-cleaning-brand-assets.zip
