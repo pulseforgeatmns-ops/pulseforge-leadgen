@@ -562,6 +562,26 @@ async function handleTenantOutreachExecutorCron(req, res) {
 
 router.post('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
 router.get('/cron/tenant-outreach-executor', handleTenantOutreachExecutorCron);
+
+async function handleTenantMailboxPollCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { executeTenantMailboxPolls } = require('../services/tenantMailboxPollExecutor');
+    const result = await executeTenantMailboxPolls();
+    res.set('Cache-Control', 'no-store');
+    const status = result.success ? 200 : 207;
+    return res.status(status).json(result);
+  } catch (err) {
+    console.error('[cron] tenant-mailbox-poll error:', err.message);
+    return res.status(500).json({ success: false, error: err.message, failed: 1 });
+  }
+}
+
+router.post('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
+router.get('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {
