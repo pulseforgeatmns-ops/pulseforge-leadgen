@@ -8,6 +8,7 @@ const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const amo = require('../index');
+const { OPERATOR_DECISION_KINDS } = amo;
 const {
   resolveMarketScopeFromObjective,
   marketScopesCompatible,
@@ -24,6 +25,11 @@ const {
 } = require('../../max/workspace/AmoOperatorApproval');
 const { normalizeScoutDiscoveryPayload } = require('../DiscoveryPayload');
 const { assertEvidenceAttached } = require('../TransactionalExecution');
+const { buildScoutDiscoveryArtifact } = require('../../scout/adapters/ScoutDiscoveryArtifact');
+const { buildQueriesForEvidence } = require('../../capabilities/discovery/providers/PlacesProvider');
+const { INVESTIGATIVE_EVIDENCE } = require('../../scout/coverage/EvidenceRequirements');
+const { buildMarketDefinition } = require('../../scout/intelligence/MarketUnderstanding');
+const { scoutDelegationFromMission } = require('../SpecialistInputs');
 const { findResumableMission } = require('../../max/workspace/AcquisitionOwnership');
 const { resetEngine } = require('../../../services/acquisitionMission');
 
@@ -176,6 +182,143 @@ describe('Anchor fresh mission audit', () => {
     assert.doesNotThrow(() =>
       assertEvidenceAttached(discoveryResult.discovery.payload, { required: true })
     );
+  });
+
+  it('8a — property-manager Places queries use canonical segment without null tokens', () => {
+    const planned = planFromObjective(BROAD_ANCHOR_OBJECTIVE);
+    const mission = {
+      id: 'mission-pm-queries',
+      tenantId: '10',
+      objective: BROAD_ANCHOR_OBJECTIVE,
+      structuredMission: freezeStructuredMission(planned.draft, { approvedBy: 'operator' }),
+    };
+    const delegation = scoutDelegationFromMission(mission);
+    const market = buildMarketDefinition({ mission, delegation });
+
+    const queries = buildQueriesForEvidence({
+      segment: market.segments[0],
+      evidenceType: INVESTIGATIVE_EVIDENCE.IDENTITY,
+      cities: ['Manchester', 'Hooksett', 'Bedford', 'Goffstown', 'Londonderry', 'Auburn'],
+      state: 'NH',
+    });
+
+    assert.equal(market.segments[0], 'property_management');
+    assert.ok(queries.length >= 2);
+    assert.ok(queries.some((q) => /property management company Manchester NH/i.test(q)));
+    assert.ok(queries.every((q) => typeof q === 'string' && q.length > 0));
+    assert.ok(!queries.some((q) => /null|undefined/i.test(q)));
+  });
+
+  it('8b — candidate universe > 0 with incomplete coverage does not hard-block discovery_evidence', () => {
+    const scoutResult = {
+      status: 'partial',
+      payload: {
+        opportunities: [],
+        fitCandidates: [],
+        qualifiedCount: 0,
+        discoveryStatus: 'incomplete',
+        candidateUniverse: [{
+          candidate_id: 'pm-1',
+          name: 'Granite Property Management',
+          placeId: 'place-1',
+          address: '100 Main St, Manchester NH',
+          evidenceRefs: [{
+            id: 'ev-1',
+            label: 'Discovered via google_places',
+            snapshot: { source: 'google_places', companyName: 'Granite Property Management' },
+          }],
+        }],
+        providerExecution: [{
+          providerId: 'google_maps',
+          status: 'completed',
+          rawResultCount: 2,
+          evidenceProduced: ['identity'],
+        }],
+      },
+    };
+
+    const artifact = buildScoutDiscoveryArtifact(scoutResult);
+    const payload = normalizeScoutDiscoveryPayload(scoutResult, { discoveryArtifact: artifact });
+
+    assert.equal(artifact.blocked, false);
+    assert.equal(payload.blocked, false);
+    assert.ok(artifact.evidence.length > 0);
+    assert.doesNotThrow(() =>
+      assertEvidenceAttached(payload, { required: true })
+    );
+  });
+
+  it('8c — full TME path: incomplete discovery with candidates commits and advertises investigation', async () => {
+    const engine = amo.createAcquisitionMissionEngine();
+    const mission = engine.create({
+      tenantId: '10',
+      objective: BROAD_ANCHOR_OBJECTIVE,
+      resolvedObjective: resolveCanonicalObjective({ question: BROAD_ANCHOR_OBJECTIVE }),
+    });
+
+    const planResult = await advancePlanAfterApproval({
+      engine,
+      mission,
+      tenantId: '10',
+      question: 'Approved. Proceed with this plan.',
+    });
+    assert.equal(planResult.snapshot.mission.structuredMissionApproved, true);
+
+    const discoveryResult = await advanceDiscoveryAfterApproval({
+      engine,
+      mission: planResult.snapshot.mission,
+      tenantId: '10',
+      question: 'Approved. Begin Discovery.',
+      runScout: async () => ({
+        status: 'partial',
+        payload: {
+          opportunities: [],
+          fitCandidates: [],
+          qualifiedCount: 0,
+          discoveryStatus: 'incomplete',
+          candidateUniverse: [{
+            candidate_id: 'pm-granite',
+            name: 'Granite Property Management',
+            placeId: 'place-granite',
+            address: '100 Main St, Manchester NH',
+            evidenceRefs: [{
+              id: 'ev-granite',
+              label: 'Discovered via google_places',
+              snapshot: { source: 'google_places', companyName: 'Granite Property Management' },
+            }],
+          }],
+          providerExecution: [{
+            providerId: 'google_maps',
+            status: 'completed',
+            rawResultCount: 2,
+            evidenceProduced: ['identity'],
+          }],
+        },
+      }),
+    });
+
+    const payload = discoveryResult.discovery.payload;
+    const pending = discoveryResult.snapshot.mission.pendingOperatorDecision;
+
+    assert.equal(discoveryResult.alreadyExecuted, false);
+    assert.equal(discoveryResult.executionOutcome, 'completed');
+    assert.equal(payload.blocked, false);
+    assert.equal(payload.discoveryStatus, 'incomplete');
+    assert.ok((payload.candidateUniverse || []).length > 0);
+    assert.ok(payload.evidence.length > 0);
+    assert.doesNotThrow(() => assertEvidenceAttached(payload, { required: true }));
+
+    assert.ok(
+      pending.kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION
+        || pending.kind === OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL
+    );
+    if (pending.kind === OPERATOR_DECISION_KINDS.DISCOVERY_INVESTIGATION) {
+      assert.match(pending.recommendedAction || '', /Continue investigation/i);
+      assert.ok(!/Adjust mission criteria or expand search/i.test(pending.reason || ''));
+    }
+
+    assert.ok(!JSON.stringify(discoveryResult.snapshot).includes('APPROVE_EXECUTION'));
+    assert.ok(!JSON.stringify(discoveryResult.snapshot).includes('EXECUTE_OUTBOUND'));
   });
 
   it('8 — zero-result Scout with provider telemetry is blocked, not evidence-validation failure', () => {

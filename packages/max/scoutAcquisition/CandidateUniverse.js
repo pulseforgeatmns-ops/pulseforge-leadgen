@@ -312,7 +312,9 @@ async function constructCandidateUniverse(input = {}) {
               : `Canonical hypothesis-driven discovery (SPEC-180): ${(engineResult.executedTasks || []).length} investigation tasks executed; identity ${engineResult.identityComplete ? 'complete' : 'pending'}.`,
         });
       } else {
-        result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters);
+        result = await executeCoveragePlan(discoveryPlan, searchDefinition, marketAdapters, {
+          marketDefinition: input.marketDefinition,
+        });
         coverageMetrics = result.coverage;
         actionsTaken.push({
           text: `Executed coverage plan: ${coverageMetrics.searches.addressed}/${coverageMetrics.searches.planned} searches across ${coverageMetrics.cities.planned} cities and ${coverageMetrics.concepts.planned} concepts.`,

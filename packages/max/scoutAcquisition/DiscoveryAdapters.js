@@ -317,8 +317,10 @@ function createWebsiteInvestigationAdapter(opts = {}) {
         return adapterResult({
           source: 'company_websites',
           sourceType: SOURCE_TYPES.COMPANY_WEBSITES,
-          available: false,
-          errors: [{ code: 'missing_website', message: 'Candidate website URL required for website investigation.' }],
+          candidates: [],
+          coverage: { skipped: true, reason: 'no_target_website' },
+          errors: [],
+          available: true,
         });
       }
 

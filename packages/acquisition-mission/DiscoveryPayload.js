@@ -519,6 +519,8 @@ function normalizeScoutDiscoveryPayload(result = {}, opts = {}) {
     readinessNotReadyCount: payload.readinessNotReadyCount != null ? Number(payload.readinessNotReadyCount) : 0,
     outcome: artifact.outcome || (blocked ? 'blocked' : 'completed'),
     blocked,
+    blockerCode: artifact.blockerCode || payload.blockerCode || null,
+    blockReason: artifact.blockReason || payload.blockReason || null,
     summary,
     missionObjective,
     approvalConsumed: Boolean(artifact.approvalConsumed ?? opts.approvalConsumed),

@@ -282,7 +282,8 @@ function expandSearchStrategies(hypothesis, geo = {}, opts = {}) {
  * @returns {string[]}
  */
 function expandPlacesQueriesForVertical(verticalKey, geo = {}) {
-  const hypothesis = resolveMarketHypothesis(verticalKey);
+  const hypothesis =
+    resolveMarketHypothesisBySegmentKey(verticalKey) || resolveMarketHypothesis(verticalKey);
   if (!hypothesis) return [];
   const workloads = expandSearchStrategies(hypothesis, geo, {
     sources: [SEARCH_SOURCES.GOOGLE_PLACES, SEARCH_SOURCES.PUBLIC_BUSINESS_DATA],

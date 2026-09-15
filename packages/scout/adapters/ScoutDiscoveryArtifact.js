@@ -423,6 +423,18 @@ function resolveExplainabilityProjection(scoutResult = {}, opts = {}) {
   return serializeForAmo(graph);
 }
 
+function candidateHasDiscoveryProof(row = {}) {
+  if (!row || typeof row !== 'object') return false;
+  if (Array.isArray(row.evidenceRefs) && row.evidenceRefs.length) return true;
+  if (Array.isArray(row.evidence) && row.evidence.length) return true;
+  if (Array.isArray(row.signals) && row.signals.length) return true;
+  const name = asText(row.name);
+  const placeId = asText(row.placeId || row.place_id);
+  const website = asText(row.website || row.url);
+  const address = asText(row.address || row.location);
+  return Boolean(name && (placeId || website || address));
+}
+
 function hasAttachableScoutEvidence(payload = {}) {
   const buckets = [
     ...(payload.opportunities || []),
@@ -432,15 +444,45 @@ function hasAttachableScoutEvidence(payload = {}) {
     ...(payload.candidateUniverse || []),
   ];
   for (const row of buckets) {
-    if (!row || typeof row !== 'object') continue;
-    if (Array.isArray(row.evidenceRefs) && row.evidenceRefs.length) return true;
-    if (Array.isArray(row.evidence) && row.evidence.length) return true;
-    if (Array.isArray(row.signals) && row.signals.length) return true;
+    if (candidateHasDiscoveryProof(row)) return true;
   }
   if (Array.isArray(payload.evidence) && payload.evidence.length) return true;
   if (Array.isArray(payload.evidenceRefs) && payload.evidenceRefs.length) return true;
   if (Array.isArray(payload.buyingSignals) && payload.buyingSignals.length) return true;
   return false;
+}
+
+function countCandidateUniverse(payload = {}) {
+  if (payload.candidateUniverseCount != null) {
+    return Number(payload.candidateUniverseCount);
+  }
+  return Array.isArray(payload.candidateUniverse) ? payload.candidateUniverse.length : 0;
+}
+
+function providerExecutionHasResults(reports = []) {
+  if (!Array.isArray(reports)) return false;
+  return reports.some((row) => {
+    if (!row || typeof row !== 'object') return false;
+    const raw =
+      row.rawResultCount != null
+        ? Number(row.rawResultCount)
+        : row.execution && row.execution.totals && row.execution.totals.results != null
+          ? Number(row.execution.totals.results)
+          : Array.isArray(row.candidates)
+            ? row.candidates.length
+            : 0;
+    if (raw > 0) return true;
+    return row.status === 'completed' && Array.isArray(row.evidenceProduced) && row.evidenceProduced.length > 0;
+  });
+}
+
+function allProviderExecutionsFailed(reports = []) {
+  if (!Array.isArray(reports) || !reports.length) return false;
+  const external = reports.filter(
+    (row) => row && row.providerId && !/existing_pf|repository/i.test(String(row.providerId))
+  );
+  if (!external.length) return false;
+  return external.every((row) => row.status === 'failed' || row.available === false);
 }
 
 function resolveBlocked(resolved = {}, payload = {}) {
@@ -457,7 +499,24 @@ function resolveBlocked(resolved = {}, payload = {}) {
     return true;
   }
 
+  const providerReports = payload.providerExecution || payload.providerReports || [];
+  const candidateUniverseCount = countCandidateUniverse(payload);
+  const providerHasResults = providerExecutionHasResults(providerReports);
   const noAttachableEvidence = !hasAttachableScoutEvidence(payload);
+  const discoveryCommitted =
+    candidateUniverseCount > 0 || providerHasResults || !noAttachableEvidence;
+
+  if (
+    allProviderExecutionsFailed(providerReports) &&
+    candidateUniverseCount === 0 &&
+    !providerHasResults
+  ) {
+    return true;
+  }
+
+  if (discoveryCommitted) {
+    return resolved.status === 'blocked' || payload.outcome === 'blocked';
+  }
 
   return (
     resolved.status === 'blocked'
@@ -480,6 +539,18 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
   const evidence = collectCanonicalScoutEvidence(scoutResult);
   assertScoutEvidenceCoverage(scoutResult, evidence);
   const blocked = resolveBlocked(resolved, payload);
+  const providerReports = payload.providerExecution || payload.providerReports || [];
+  const providerFailureBlocked =
+    blocked &&
+    allProviderExecutionsFailed(providerReports) &&
+    countCandidateUniverse(payload) === 0;
+  const blockReason = providerFailureBlocked
+    ? asText(
+        providerReports.find((row) => row && row.error)?.error
+        || providerReports.find((row) => row && row.limitations && row.limitations[0])?.limitations?.[0]
+        || 'External discovery provider failed before candidates could be collected.'
+      )
+    : null;
   const mir = resolved.missionIntelligenceReport || null;
   const cognitiveTrace = resolveExplainabilityProjection(scoutResult, opts);
 
@@ -507,10 +578,14 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
     opportunities,
     outcome: resolved.status || (blocked ? 'blocked' : 'completed'),
     blocked,
+    blockerCode: providerFailureBlocked ? 'discovery_provider_failed' : payload.blockerCode || null,
+    blockReason: blockReason || payload.blockReason || null,
     summary:
       asText(resolved.summary)
       || asText(payload.summary)
-      || (blocked ? 'Discovery blocked under current criteria.' : 'Scout discovery completed.'),
+      || (blocked
+        ? (blockReason || 'Discovery blocked under current criteria.')
+        : 'Scout discovery completed.'),
     missionObjective: opts.missionObjective || payload.missionObjective || null,
     discoveryReport: payload.discoveryReport || null,
     discoveryStatus: payload.discoveryStatus || payload.discoveryReport?.status || null,
