@@ -10,16 +10,10 @@
 module.exports = Object.freeze({
   CLIENT_ID: 10,
   BATCH_SLUG: 'ao-assignment-2026-09-16-jake-dogfood',
-  JAKE_EMAIL_CANDIDATES: Object.freeze([
-    process.env.JAKE_EMAIL,
+  JAKE_PRODUCTION_EMAIL: 'jzmaynard7@gmail.com',
+  JAKE_LEGACY_EMAIL_CANDIDATES: Object.freeze([
     'jacob@gopulseforge.com',
     'jacob@goanchorcleaning.com',
-  ].filter(Boolean)),
-  OTHER_AO_NAME_PATTERNS: Object.freeze([
-    '%Zack%',
-    '%Rory%',
-    '%Tony%',
-    '%Mike%',
   ]),
   PROSPECTS: Object.freeze([
     // Property management / development (5)

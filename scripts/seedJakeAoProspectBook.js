@@ -27,25 +27,10 @@ const aoField = require('../services/aoFieldService');
 const {
   CLIENT_ID,
   BATCH_SLUG,
-  OTHER_AO_NAME_PATTERNS,
   PROSPECTS,
 } = require('./data/jakeAoProspectBook');
 
 const APPLY_CONFIRMATION = 'client_10-jake-ao-dogfood-2026-09-16';
-
-async function resolveOtherAoOwners(clientId) {
-  const owners = [];
-  for (const pattern of OTHER_AO_NAME_PATTERNS) {
-    const row = await aoField.resolveAoOwnerByName(pattern, clientId);
-    if (row) owners.push(row);
-  }
-  const seen = new Set();
-  return owners.filter(o => {
-    if (seen.has(o.id)) return false;
-    seen.add(o.id);
-    return true;
-  });
-}
 
 function aoFieldModeReady(user) {
   if (!user) return { ready: false, reason: 'user_not_found' };
@@ -206,12 +191,13 @@ async function run({ apply = false, enableAoFieldMode = false } = {}) {
   const jake = await aoField.resolveJakeAoOwner(CLIENT_ID);
   if (!jake) {
     throw new Error(
-      'Jake AO identity not found — verify jacob@gopulseforge.com exists and is active',
+      'Jake AO identity not found — verify an active client_id=10 AO user exists '
+      + '(jzmaynard7@gmail.com or JAKE_EMAIL override)',
     );
   }
 
   const fieldMode = aoFieldModeReady(jake);
-  const otherAos = await resolveOtherAoOwners(CLIENT_ID);
+  const otherAos = await aoField.listActiveAoOwners(CLIENT_ID, { excludeUserId: jake.id });
   const otherAoIds = otherAos.map(o => o.id);
   const beforeCounts = await aoField.countAoLeadsByOwnerIds(
     [...otherAoIds, jake.id],
