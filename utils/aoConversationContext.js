@@ -33,6 +33,10 @@ const PRONOUN_ACCOUNT_PATTERNS = [
   /\b(?:them|they|their|that account|this account|the account we(?:'re| are) discussing)\b/i,
 ];
 
+function matchesAnyPattern(patterns, text) {
+  return patterns.some(pattern => pattern.test(text));
+}
+
 function normalizeText(text) {
   return String(text || '').trim().replace(/\s+/g, ' ');
 }
@@ -109,7 +113,7 @@ function resolveActiveAccount(message, context, assignedAccounts = []) {
     if (resolution.status === 'resolved') return resolution.account;
   }
 
-  if (PRONOUN_ACCOUNT_PATTERNS.test(text) && context?.prioritized_accounts?.[0]) {
+  if (matchesAnyPattern(PRONOUN_ACCOUNT_PATTERNS, text) && context?.prioritized_accounts?.[0]) {
     return context.prioritized_accounts[0];
   }
 
@@ -228,7 +232,7 @@ function resolveConversationIntent(message, context = {}, assignedAccounts = [])
   const classified = classifyAoMaxIntent(text);
   if (classified.intent === 'coaching' && resolveActiveAccount(text, context, assignedAccounts)) {
     const account = resolveActiveAccount(text, context, assignedAccounts);
-    if (account && PRONOUN_ACCOUNT_PATTERNS.some(pattern => pattern.test(text))) {
+    if (account && matchesAnyPattern(PRONOUN_ACCOUNT_PATTERNS, text)) {
       return { intent: 'coaching', account, briefingTarget: account.business_name };
     }
   }

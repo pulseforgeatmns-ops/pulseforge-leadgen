@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   resolveConversationIntent,
+  resolveActiveAccount,
   buildWhyPrioritizedReply,
   trimHistory,
   mergeConversationContext,
@@ -51,6 +52,30 @@ test('resolveConversationIntent handles contact follow-up without restating comp
   const resolved = resolveConversationIntent('Who should I ask for?', sampleContext);
   assert.equal(resolved.intent, 'account_contacts');
   assert.equal(resolved.briefingTarget, 'Anagnost Companies');
+});
+
+test('resolveConversationIntent does not throw for coaching focus question without prior context', () => {
+  assert.doesNotThrow(() => {
+    const resolved = resolveConversationIntent('who should I focus on?', {});
+    assert.equal(resolved.intent, 'coaching');
+    assert.equal(resolved.account, null);
+  });
+});
+
+test('resolveActiveAccount resolves pronoun references to top prioritized account', () => {
+  const account = resolveActiveAccount('how should I approach them?', sampleContext);
+  assert.equal(account.business_name, 'Anagnost Companies');
+});
+
+test('resolveConversationIntent resolves ordinal follow-up against prioritized accounts', () => {
+  const resolved = resolveConversationIntent('what about the first one?', sampleContext);
+  assert.equal(resolved.intent, 'coaching');
+  assert.equal(resolved.account.business_name, 'Anagnost Companies');
+});
+
+test('aoConversationContext has no outbound send side effects', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'utils', 'aoConversationContext.js'), 'utf8');
+  assert.doesNotMatch(src, /brevo|twilio|sendEmail|sendSms|autosend|nodemailer/i);
 });
 
 test('buildWhyPrioritizedReply explains top account ranking', () => {
