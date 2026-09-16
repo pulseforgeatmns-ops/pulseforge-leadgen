@@ -15,6 +15,19 @@ const {
   buildDraftRows,
 } = require('./SocialContent');
 const {
+  createSocialContentApprovalService,
+  DECISIONS,
+  normalizeDecision,
+} = require('./SocialContentApproval');
+const {
+  createSocialContentPublishCapability,
+  buildPendingCommentMirror,
+} = require('./SocialContentPublish');
+const {
+  PAIGE_SOCIAL_PUBLISH_CHANNELS,
+  isPaigeSocialPublishChannel,
+} = require('./channels');
+const {
   createInMemorySocialContentStore,
   createPostgresSocialContentStore,
   ensureSocialContentArtifactsTable,
@@ -26,11 +39,18 @@ module.exports = {
   CAPABILITY_VERSION,
   ARTIFACT_TYPE,
   APPROVAL_STATES,
+  DECISIONS,
+  PAIGE_SOCIAL_PUBLISH_CHANNELS,
   buildProvenance,
   buildSocialContentArtifact,
+  buildPendingCommentMirror,
   createSocialContentCapability,
+  createSocialContentApprovalService,
+  createSocialContentPublishCapability,
+  normalizeDecision,
   assertTenantScope,
   buildDraftRows,
+  isPaigeSocialPublishChannel,
   createInMemorySocialContentStore,
   createPostgresSocialContentStore,
   ensureSocialContentArtifactsTable,

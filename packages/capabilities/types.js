@@ -62,6 +62,8 @@ const BUILTIN_IDS = Object.freeze({
   DISCOVERY_DIAGNOSTICS: 'discovery_diagnostics',
   /** SPEC-256 — canonical Paige social content generation */
   SOCIAL_CONTENT: 'social_content',
+  /** SPEC-256 — canonical Paige social content publication (requires APPROVED artifact) */
+  SOCIAL_CONTENT_PUBLISH: 'social_content_publish',
 });
 
 /**
