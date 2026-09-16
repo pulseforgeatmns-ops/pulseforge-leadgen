@@ -6,6 +6,7 @@ const {
   buildAmbiguityReply,
   isContextReference,
 } = require('./aoAccountResolution');
+const { formatAccountContactsReply } = require('./aoAccountBriefing');
 
 const MAX_HISTORY_TURNS = 20;
 
@@ -273,6 +274,15 @@ function buildWhyPrioritizedReply(account, context) {
   const rank = (context?.prioritized_accounts || []).findIndex(
     a => String(a.business_name || '').toLowerCase() === String(account.business_name).toLowerCase(),
   );
+  const sameScore = (context?.prioritized_accounts || []).filter(a => (
+    fromList?.rank_score != null
+    && a.rank_score != null
+    && a.rank_score === fromList.rank_score
+  ));
+
+  if (sameScore.length > 1 && rank === 0) {
+    return `${account.business_name} is listed first among accounts tied on current operational priority. Ranking uses due date, then name, when scores match.`;
+  }
 
   const rankLine = rank === 0
     ? `${account.business_name} is first on your list`
@@ -282,30 +292,7 @@ function buildWhyPrioritizedReply(account, context) {
 }
 
 function buildAccountContactsReply(lead) {
-  if (!lead) {
-    return 'I could not find that account in your assigned list.';
-  }
-
-  const lines = [`Contacts — ${lead.business_name}`, ''];
-
-  if (lead.contact_name) {
-    const role = lead.is_decision_maker ? 'decision-maker' : 'contact';
-    lines.push(`Primary contact: ${lead.contact_name}${lead.contact_title ? ` (${lead.contact_title})` : ''} · ${role}`);
-  } else {
-    lines.push('No contact captured yet — ask for the office manager or owner who handles cleaning decisions.');
-  }
-
-  if (lead.is_decision_maker) {
-    lines.push('Ask for them directly — they are the decision-maker on file.');
-  } else if (lead.contact_name) {
-    lines.push(`Ask for the cleaning decision-maker; if unavailable, leave a message for ${lead.contact_name}.`);
-  }
-
-  if (lead.contact_phone) {
-    lines.push(`Phone on file: ${lead.contact_phone}`);
-  }
-
-  return lines.join('\n');
+  return formatAccountContactsReply(lead);
 }
 
 function mergeConversationContext(payload, turnResult) {
@@ -321,6 +308,7 @@ function mergeConversationContext(payload, turnResult) {
       why_now: a.why_now,
       status_label: a.status_label,
       next_step: a.next_step,
+      rank_score: a.rank_score,
     }));
   }
 
