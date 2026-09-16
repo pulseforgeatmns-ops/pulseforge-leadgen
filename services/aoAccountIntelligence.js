@@ -147,6 +147,69 @@ async function buildAccountPrioritizationReply({ aoOwnerId, clientId }) {
   };
 }
 
+async function listAssignedAccountSummaries({ aoOwnerId, clientId }) {
+  const { rows } = await pool.query(`
+    SELECT l.id AS lead_id, l.business_name
+    FROM ao_leads l
+    WHERE l.ao_owner_id = $1
+      AND l.client_id = $2
+      AND l.status NOT IN ('not_a_fit', 'do_not_contact', 'closed_lost', 'converted_to_crm')
+    ORDER BY l.updated_at DESC
+  `, [aoOwnerId, clientId]);
+
+  return rows.map(row => ({
+    lead_id: row.lead_id,
+    business_name: row.business_name,
+  }));
+}
+
+async function findAssignedLeadById({ aoOwnerId, clientId, leadId }) {
+  if (!leadId) return null;
+
+  const { rows } = await pool.query(`
+    SELECT
+      l.*,
+      c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email,
+      c.is_decision_maker,
+      t.id AS open_task_id,
+      t.status AS open_task_status,
+      t.next_action AS open_next_action,
+      t.due_date AS open_task_due,
+      t.suggested_message,
+      t.waiting_on_jake,
+      t.last_interaction_summary,
+      e.id AS open_escalation_id,
+      e.status AS open_escalation_status,
+      e.reason AS open_escalation_reason,
+      e.summary AS open_escalation_summary
+    FROM ao_leads l
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_contacts
+      WHERE lead_id = l.id
+      ORDER BY is_decision_maker DESC, created_at ASC
+      LIMIT 1
+    ) c ON true
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_follow_up_tasks
+      WHERE lead_id = l.id AND status = 'open'
+      ORDER BY due_date ASC, created_at ASC
+      LIMIT 1
+    ) t ON true
+    LEFT JOIN LATERAL (
+      SELECT * FROM ao_escalations
+      WHERE lead_id = l.id AND status NOT IN ('resolved', 'ignored')
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) e ON true
+    WHERE l.ao_owner_id = $1
+      AND l.client_id = $2
+      AND l.id = $3
+    LIMIT 1
+  `, [aoOwnerId, clientId, leadId]);
+
+  return rows[0] || null;
+}
+
 async function findAssignedLeadByName({ aoOwnerId, clientId, businessNameQuery }) {
   const query = String(businessNameQuery || '').trim();
   if (!query) return null;
@@ -198,8 +261,10 @@ async function findAssignedLeadByName({ aoOwnerId, clientId, businessNameQuery }
   return rows[0] || null;
 }
 
-async function buildAccountBriefingReply({ aoOwnerId, clientId, businessNameQuery }) {
-  const lead = await findAssignedLeadByName({ aoOwnerId, clientId, businessNameQuery });
+async function buildAccountBriefingReply({ aoOwnerId, clientId, businessNameQuery, leadId = null }) {
+  const lead = leadId
+    ? await findAssignedLeadById({ aoOwnerId, clientId, leadId })
+    : await findAssignedLeadByName({ aoOwnerId, clientId, businessNameQuery });
   if (!lead) {
     return {
       intent: 'account_briefing',
@@ -238,7 +303,9 @@ async function handleAoMaxQuestion({ aoOwnerId, clientId, message }) {
 
 module.exports = {
   fetchAssignedAccountRows,
+  findAssignedLeadById,
   findAssignedLeadByName,
+  listAssignedAccountSummaries,
   listPrioritizedAccounts,
   buildAccountPrioritizationReply,
   buildAccountBriefingReply,

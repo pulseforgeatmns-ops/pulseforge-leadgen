@@ -1,6 +1,11 @@
 'use strict';
 
 const { classifyAoMaxIntent, extractBriefingTarget } = require('./aoMaxIntent');
+const {
+  resolveAccountReference,
+  buildAmbiguityReply,
+  isContextReference,
+} = require('./aoAccountResolution');
 
 const MAX_HISTORY_TURNS = 20;
 
@@ -36,24 +41,14 @@ function trimHistory(messages, limit = MAX_HISTORY_TURNS) {
   return messages.slice(-limit);
 }
 
-function findAccountByName(name, context) {
-  const query = normalizeText(name).toLowerCase();
-  if (!query) return null;
-
-  const accounts = context?.prioritized_accounts || [];
-  const exact = accounts.find(a => String(a.business_name || '').toLowerCase() === query);
-  if (exact) return exact;
-
-  const partial = accounts.find(a => String(a.business_name || '').toLowerCase().includes(query));
-  if (partial) return partial;
-
-  if (context?.selected_account) {
-    const selectedName = String(context.selected_account.business_name || '').toLowerCase();
-    if (selectedName.includes(query) || query.includes(selectedName)) {
-      return context.selected_account;
-    }
-  }
-
+function findAccountByName(name, context, assignedAccounts = []) {
+  const resolution = resolveAccountReference({
+    query: name,
+    message: '',
+    context,
+    assignedAccounts,
+  });
+  if (resolution.status === 'resolved') return resolution.account;
   return null;
 }
 
@@ -67,8 +62,9 @@ function extractWhyTarget(message, context) {
     return whyMatch[1].replace(/\?+$/, '').trim();
   }
 
-  if (/\b(the )?first one\b/i.test(text) && context?.prioritized_accounts?.[0]) {
-    return context.prioritized_accounts[0].business_name;
+  if (isContextReference(text)) {
+    const contextual = resolveAccountReference({ message: text, context }).account;
+    if (contextual?.business_name) return contextual.business_name;
   }
 
   if (context?.selected_account?.business_name) {
@@ -82,24 +78,36 @@ function extractWhyTarget(message, context) {
   return null;
 }
 
-function resolveActiveAccount(message, context) {
-  if (context?.selected_account?.business_name) {
-    return context.selected_account;
+function resolveActiveAccount(message, context, assignedAccounts = []) {
+  const text = normalizeText(message);
+
+  if (isContextReference(text)) {
+    const contextual = resolveAccountReference({ message: text, context, assignedAccounts });
+    if (contextual.status === 'resolved') return contextual.account;
   }
 
   const briefingTarget = extractBriefingTarget(message);
   if (briefingTarget) {
-    const fromList = findAccountByName(briefingTarget, context);
-    if (fromList) return fromList;
+    const resolution = resolveAccountReference({
+      query: briefingTarget,
+      message: text,
+      context,
+      assignedAccounts,
+    });
+    if (resolution.status === 'resolved') return resolution.account;
   }
 
   const whyTarget = extractWhyTarget(message, context);
   if (whyTarget) {
-    const fromWhy = findAccountByName(whyTarget, context);
-    if (fromWhy) return fromWhy;
+    const resolution = resolveAccountReference({
+      query: whyTarget,
+      message: text,
+      context,
+      assignedAccounts,
+    });
+    if (resolution.status === 'resolved') return resolution.account;
   }
 
-  const text = normalizeText(message);
   if (PRONOUN_ACCOUNT_PATTERNS.test(text) && context?.prioritized_accounts?.[0]) {
     return context.prioritized_accounts[0];
   }
@@ -111,14 +119,77 @@ function resolveActiveAccount(message, context) {
   return null;
 }
 
-function resolveConversationIntent(message, context = {}) {
+function isImplicitContactReference(message, context) {
+  const text = normalizeText(message);
+  if (!text) return false;
+  if (isContextReference(text)) return true;
+  if (CONTEXT_CONTACT_PATTERNS.some(pattern => pattern.test(text)) && !extractBriefingTarget(text)) {
+    return Boolean(context?.selected_account?.business_name || context?.prioritized_accounts?.[0]);
+  }
+  return false;
+}
+
+function resolveNamedAccountTarget({ message, context, query, assignedAccounts = [] }) {
+  if (!query && isImplicitContactReference(message, context)) {
+    const contextual = context?.selected_account || context?.prioritized_accounts?.[0] || null;
+    if (contextual?.business_name) {
+      return {
+        account: contextual,
+        briefingTarget: contextual.business_name,
+        ambiguous: false,
+        ambiguityReply: null,
+      };
+    }
+    return null;
+  }
+
+  if (!query) {
+    return null;
+  }
+
+  const resolution = resolveAccountReference({
+    query,
+    message,
+    context,
+    assignedAccounts,
+  });
+
+  if (resolution.status === 'resolved') {
+    return {
+      account: resolution.account,
+      briefingTarget: resolution.account.business_name,
+      ambiguous: false,
+      ambiguityReply: null,
+    };
+  }
+
+  if (resolution.status === 'ambiguous') {
+    return {
+      account: null,
+      briefingTarget: query,
+      ambiguous: true,
+      ambiguityReply: buildAmbiguityReply(resolution.query, resolution.candidates),
+    };
+  }
+
+  return {
+    account: null,
+    briefingTarget: query,
+    ambiguous: false,
+    ambiguityReply: null,
+  };
+}
+
+function resolveConversationIntent(message, context = {}, assignedAccounts = []) {
   const text = normalizeText(message);
   if (!text) return null;
 
   for (const pattern of WHY_FIRST_PATTERNS) {
     if (pattern.test(text)) {
       const targetName = extractWhyTarget(text, context);
-      const account = targetName ? findAccountByName(targetName, context) : resolveActiveAccount(text, context);
+      const account = targetName
+        ? findAccountByName(targetName, context, assignedAccounts)
+        : resolveActiveAccount(text, context, assignedAccounts);
       return {
         intent: 'why_prioritized',
         account,
@@ -129,32 +200,52 @@ function resolveConversationIntent(message, context = {}) {
 
   for (const pattern of CONTEXT_BRIEFING_PATTERNS) {
     if (pattern.test(text)) {
-      const account = resolveActiveAccount(text, context);
-      if (account?.business_name) {
-        return { intent: 'account_briefing', briefingTarget: account.business_name, account };
+      const resolved = resolveNamedAccountTarget({ message: text, context, assignedAccounts });
+      if (resolved?.account?.business_name) {
+        return {
+          intent: 'account_briefing',
+          briefingTarget: resolved.briefingTarget,
+          account: resolved.account,
+        };
       }
     }
   }
 
   for (const pattern of CONTEXT_CONTACT_PATTERNS) {
     if (pattern.test(text) && !extractBriefingTarget(text)) {
-      const account = resolveActiveAccount(text, context);
-      if (account?.business_name) {
-        return { intent: 'account_contacts', briefingTarget: account.business_name, account };
+      const resolved = resolveNamedAccountTarget({ message: text, context, assignedAccounts });
+      if (resolved?.account?.business_name) {
+        return {
+          intent: 'account_contacts',
+          briefingTarget: resolved.briefingTarget,
+          account: resolved.account,
+        };
       }
     }
   }
 
   const classified = classifyAoMaxIntent(text);
-  if (classified.intent === 'coaching' && resolveActiveAccount(text, context)) {
-    const account = resolveActiveAccount(text, context);
-    if (account && PRONOUN_ACCOUNT_PATTERNS.test(text)) {
+  if (classified.intent === 'coaching' && resolveActiveAccount(text, context, assignedAccounts)) {
+    const account = resolveActiveAccount(text, context, assignedAccounts);
+    if (account && PRONOUN_ACCOUNT_PATTERNS.some(pattern => pattern.test(text))) {
       return { intent: 'coaching', account, briefingTarget: account.business_name };
     }
   }
 
   if (classified.intent === 'account_briefing' && classified.briefingTarget) {
-    return { intent: 'account_briefing', briefingTarget: classified.briefingTarget };
+    const resolved = resolveNamedAccountTarget({
+      message: text,
+      context,
+      query: classified.briefingTarget,
+      assignedAccounts,
+    });
+    return {
+      intent: 'account_briefing',
+      briefingTarget: resolved.briefingTarget,
+      account: resolved.account,
+      ambiguous: resolved.ambiguous,
+      ambiguityReply: resolved.ambiguityReply,
+    };
   }
 
   if (classified.intent === 'account_prioritization') {
@@ -162,7 +253,7 @@ function resolveConversationIntent(message, context = {}) {
   }
 
   if (classified.intent === 'coaching') {
-    const account = resolveActiveAccount(text, context);
+    const account = resolveActiveAccount(text, context, assignedAccounts);
     return { intent: 'coaching', account: account || null };
   }
 
@@ -254,6 +345,7 @@ module.exports = {
   trimHistory,
   resolveConversationIntent,
   resolveActiveAccount,
+  resolveNamedAccountTarget,
   buildWhyPrioritizedReply,
   buildAccountContactsReply,
   mergeConversationContext,
