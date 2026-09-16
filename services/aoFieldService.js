@@ -800,7 +800,7 @@ async function createAoAssignmentLead({
         client_id, business_name, address, business_type, status, interest_level,
         ao_owner_id, attribution_source, original_visit_note,
         next_follow_up_date, next_follow_up_owner_id, crm_prospect_id
-      ) VALUES ($1,$2,$3,$4,'needs_follow_up','low',$5,'ao_field_visit',$6,$7,$5,$8)
+      ) VALUES ($1,$2,$3,$4,'needs_follow_up',NULL,$5,'ao_field_visit',$6,$7,$5,$8)
       RETURNING *
     `, [
       clientId,

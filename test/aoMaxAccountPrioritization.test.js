@@ -107,7 +107,7 @@ test('overdue follow-up outranks untouched low-priority account', () => {
     business_name: 'Untouched Firm',
     due_date: '2026-09-20',
     priority: 'normal',
-    interest_level: 'low',
+    interest_level: null,
     lead_status: 'new_visit',
     last_interaction_summary: null,
     original_visit_note: null,
