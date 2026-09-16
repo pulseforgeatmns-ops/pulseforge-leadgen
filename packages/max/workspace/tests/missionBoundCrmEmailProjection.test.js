@@ -36,6 +36,7 @@ const MISSION = {
 function buildContributions() {
   return [
     {
+      missionId: MISSION.id,
       specialist: 'scout',
       kind: 'discovery',
       payload: {
@@ -46,6 +47,7 @@ function buildContributions() {
       },
     },
     {
+      missionId: MISSION.id,
       specialist: 'max',
       kind: 'prioritization',
       payload: {
@@ -70,6 +72,7 @@ function buildContributions() {
       },
     },
     {
+      missionId: MISSION.id,
       specialist: 'paige',
       kind: 'variants',
       payload: {
