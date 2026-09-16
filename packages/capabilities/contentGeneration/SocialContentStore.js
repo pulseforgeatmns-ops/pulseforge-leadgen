@@ -50,6 +50,28 @@ function createInMemorySocialContentStore() {
       row.updatedAt = new Date().toISOString();
       return clone(row);
     },
+    async getByPendingCommentId(pendingCommentId, tenantId, clientId) {
+      const row = [...artifacts.values()].find(
+        (a) =>
+          a.pendingCommentId === pendingCommentId &&
+          a.tenantId === String(tenantId) &&
+          a.clientId === Number(clientId)
+      );
+      return row ? clone(row) : null;
+    },
+    async transitionApprovalState(id, tenantId, clientId, toState, { allowedFrom = [] } = {}) {
+      const row = artifacts.get(id);
+      if (!row) return { ok: false, reason: 'artifact_not_found' };
+      if (row.tenantId !== String(tenantId) || row.clientId !== Number(clientId)) {
+        return { ok: false, reason: 'tenant_scope_mismatch' };
+      }
+      if (!allowedFrom.includes(row.approvalState)) {
+        return { ok: false, reason: 'invalid_transition', from: row.approvalState, to: toState };
+      }
+      row.approvalState = toState;
+      row.updatedAt = new Date().toISOString();
+      return { ok: true, artifact: clone(row) };
+    },
     _resetForTests() {
       artifacts.clear();
     },
@@ -176,6 +198,37 @@ function createPostgresSocialContentStore(pool) {
         [id, String(tenantId), Number(clientId), pendingCommentId]
       );
       return mapRow(result.rows[0]);
+    },
+    async getByPendingCommentId(pendingCommentId, tenantId, clientId) {
+      const result = await db.query(
+        `SELECT * FROM paige_social_content_artifacts
+         WHERE pending_comment_id = $1 AND tenant_id = $2 AND client_id = $3
+         LIMIT 1`,
+        [pendingCommentId, String(tenantId), Number(clientId)]
+      );
+      return mapRow(result.rows[0]);
+    },
+    async transitionApprovalState(id, tenantId, clientId, toState, { allowedFrom = [], client: txClient } = {}) {
+      const conn = txClient || db;
+      const result = await conn.query(
+        `UPDATE paige_social_content_artifacts
+         SET approval_state = $4, updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2 AND client_id = $3
+           AND approval_state = ANY($5::text[])
+         RETURNING *`,
+        [id, String(tenantId), Number(clientId), toState, allowedFrom]
+      );
+      if (!result.rows[0]) {
+        const existing = await this.getById(id, tenantId, clientId);
+        if (!existing) return { ok: false, reason: 'artifact_not_found' };
+        return {
+          ok: false,
+          reason: 'invalid_transition',
+          from: existing.approvalState,
+          to: toState,
+        };
+      }
+      return { ok: true, artifact: mapRow(result.rows[0]) };
     },
   };
 }
