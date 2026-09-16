@@ -160,6 +160,36 @@ function looksLikeAssignmentNote(text) {
     || INTERNAL_METADATA_KEYS.some(key => value.includes(`"${key}"`));
 }
 
+const PROVENANCE_NOTE_PATTERNS = Object.freeze([
+  /received direct mail before ao visit/i,
+  /seeded for campaign/i,
+  /direct mail follow-up logged/i,
+  /route follow-up logged/i,
+]);
+
+function looksLikeProvenanceNote(text) {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  if (looksLikeAssignmentNote(value)) return true;
+  return PROVENANCE_NOTE_PATTERNS.some(pattern => pattern.test(value));
+}
+
+function normalizeContactLabel(value) {
+  return humanizeEnum(value).toLowerCase();
+}
+
+function equivalentContactLabels(a, b) {
+  const left = normalizeContactLabel(a);
+  const right = normalizeContactLabel(b);
+  if (!left || !right) return false;
+  return left === right;
+}
+
+function contactRoleLabel(contactTitle, intel) {
+  if (intel.contact_role === 'decision_maker') return 'decision-maker';
+  return contactTitle || 'contact on file';
+}
+
 function isPlaybookRecipe(text) {
   const value = String(text || '').trim();
   if (!value) return false;
@@ -319,20 +349,28 @@ function stripOwnerAttributionLine(text, businessName, ownerName) {
     .trim();
 }
 
-function conversationNote(row, metadata) {
-  const raw = row.last_interaction_summary || row.original_visit_note || '';
-  if (!raw || looksLikeAssignmentNote(raw)) {
-    const seedNote = String(row.original_visit_note || '').trim();
-    if (seedNote && !looksLikeAssignmentNote(seedNote) && !/received direct mail before ao visit/i.test(seedNote)) {
-      return usableHumanText(seedNote);
-    }
+function resolveLoggedInteractionSummary(row) {
+  const summary = String(row.last_interaction_summary || '').trim();
+  if (!summary || looksLikeProvenanceNote(summary)) return null;
+
+  const seedNote = String(row.original_visit_note || '').trim();
+  if (seedNote && looksLikeProvenanceNote(seedNote) && summary === seedNote) {
     return null;
   }
+
+  return summary;
+}
+
+function conversationNote(row, metadata) {
+  const raw = resolveLoggedInteractionSummary(row);
+  if (!raw) return null;
+
   let cleaned = usableHumanText(raw);
   cleaned = stripOwnerAttributionLine(cleaned, row.business_name, metadata.owner);
   cleaned = usableHumanText(cleaned);
   if (!cleaned) return null;
   if (isPlaybookRecipe(cleaned)) return null;
+  if (looksLikeProvenanceNote(cleaned)) return null;
   return cleaned;
 }
 
@@ -353,14 +391,17 @@ function conversationTopic(note, contactName) {
   const name = String(contactName || '').trim();
   if (name) {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    topic = topic.replace(new RegExp(`^spoke with\\s+${escaped}\\s+about\\s+`, 'i'), '');
     topic = topic.replace(new RegExp(`^${escaped}\\s+`, 'i'), '');
     const firstName = name.split(/\s+/)[0];
     if (firstName && firstName.length > 1) {
       const escapedFirst = firstName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      topic = topic.replace(new RegExp(`^spoke with\\s+${escapedFirst}\\s+about\\s+`, 'i'), '');
       topic = topic.replace(new RegExp(`^${escapedFirst}\\s+`, 'i'), '');
     }
   }
-  topic = topic.replace(/^(asked|mentioned|requested|said|wanted)\s+(?:about\s+|for\s+)?/i, '');
+  topic = topic.replace(/^(?:spoke with\s+[\w.]+\s+about\s+)/i, '');
+  topic = topic.replace(/^(asked|mentioned|requested|said|wanted|spoke)\s+(?:with\s+[\w.]+\s+)?(?:about\s+|for\s+)?/i, '');
   return topic || firstSentence(note);
 }
 
@@ -507,10 +548,13 @@ function deriveFieldNextAction(view) {
   if (view.has_contact && !view.has_conversation) {
     const who = contactName || 'the main office';
     const via = view.contact_phone ? ` at ${view.contact_phone}` : '';
+    if (contactName && !view.source_row.is_decision_maker) {
+      return `Reconnect with ${who}${via}, ask for the ${lanePhrase}, and confirm whether backup/overflow support is still relevant.`;
+    }
     if (contactName) {
       return `Call ${contactName}${via} and introduce Anchor as a reliable backup/overflow cleaning resource.`;
     }
-    return `Call ${who}${via} and introduce Anchor as a reliable backup/overflow cleaning resource.`;
+    return `Reconnect with the ${lanePhrase}${via} and confirm whether backup/overflow support is still relevant.`;
   }
 
   if (view.has_conversation && (view.follow_up.kind === 'overdue' || view.follow_up.kind === 'today' || view.follow_up.kind === 'future')) {
@@ -555,19 +599,24 @@ function deriveFieldNextAction(view) {
   return 'Log the visit or follow-up outcome with Max.';
 }
 
+function assignedAccountPhrase(laneLabel) {
+  if (laneLabel) return `${laneLabel} account assigned to you`;
+  return 'account assigned to you';
+}
+
 function buildWhyItMatters(view) {
   const priority = view.priority;
   const laneLabel = view.lane.confidence === 'high' ? view.lane.label : null;
   const priorityPrefix = (priority === 'high' || priority === 'warm')
     ? (priority === 'warm' ? 'Warm' : 'High-priority')
     : null;
-  const accountNoun = laneLabel ? `${laneLabel} account` : 'account assigned to you';
+  const accountPhrase = assignedAccountPhrase(laneLabel);
 
   if (priorityPrefix && view.follow_up.kind === 'overdue' && !view.has_contact) {
-    return `${priorityPrefix} ${accountNoun} with an overdue follow-up and no decision-maker identified yet.`;
+    return `${priorityPrefix} ${accountPhrase} with an overdue follow-up and no decision-maker identified yet.`;
   }
   if (priorityPrefix && view.follow_up.kind === 'overdue') {
-    return `${priorityPrefix} ${accountNoun} assigned to you. Follow-up is overdue.`;
+    return `${priorityPrefix} ${accountPhrase}. Follow-up is overdue.`;
   }
   if (view.follow_up.kind === 'overdue' && !view.has_contact) {
     return `Follow-up is overdue and no decision-maker is identified yet.`;
@@ -590,7 +639,7 @@ function buildWhyItMatters(view) {
     return 'High-interest conversation needs your next touch.';
   }
   if (priorityPrefix) {
-    return `${priorityPrefix} ${accountNoun} in your assigned portfolio.`;
+    return `${priorityPrefix} ${accountPhrase} in your assigned portfolio.`;
   }
   if (view.operational_state === 'not_started') {
     return 'Assigned account with no visit logged yet.';
@@ -599,6 +648,14 @@ function buildWhyItMatters(view) {
     return `Next follow-up ${view.follow_up.label.replace(/^Due /, 'due ')}.`;
   }
   return 'Assigned account in your queue.';
+}
+
+function deriveCampaignContext(row) {
+  const note = String(row.original_visit_note || row.last_interaction_summary || '').trim();
+  if (!/received direct mail before ao visit/i.test(note)) return null;
+  const campaign = String(row.campaign_name || '').trim();
+  if (campaign) return `Context: Received prior ${campaign} outreach`;
+  return 'Context: Received prior Anchor outreach';
 }
 
 function buildKnownFacts(view) {
@@ -611,6 +668,7 @@ function buildKnownFacts(view) {
   if (view.priority === 'high') known.push('High priority');
   if (view.priority === 'warm') known.push('Warm priority');
   if (view.assignment_provenance) known.push(view.assignment_provenance);
+  if (!view.has_conversation && view.campaign_context) known.push(view.campaign_context);
   if (!view.has_contact) known.push('No decision-maker captured yet');
   if (view.has_contact && view.contact_name) {
     const title = view.contact_title ? ` (${view.contact_title})` : '';
@@ -639,17 +697,19 @@ function buildUnknownFacts(view) {
 
 function whoToAskFor(view) {
   if (view.contact_name) {
-    const role = view.intel.contact_role === 'decision_maker'
-      ? 'decision-maker'
-      : (view.contact_title || 'contact on file');
+    const role = contactRoleLabel(view.contact_title, view.intel);
+    const showTitleInName = view.contact_title
+      && view.intel.contact_role !== 'decision_maker'
+      && !equivalentContactLabels(view.contact_title, role);
     const title = view.contact_title && view.intel.contact_role === 'decision_maker'
+      && !equivalentContactLabels(view.contact_title, role)
       ? ` (${view.contact_title})`
       : '';
     const phone = view.contact_phone ? ` Phone on file: ${view.contact_phone}.` : '';
     if (view.intel.contact_role === 'decision_maker') {
       return `${view.contact_name}${title} · ${role}. Ask for them directly.${phone}`;
     }
-    return `${view.contact_name}${view.contact_title ? ` (${view.contact_title})` : ''} · ${role}. ${contactRoleGuidance(view.lane)}${phone}`;
+    return `${view.contact_name}${showTitleInName ? ` (${view.contact_title})` : ''} · ${role}. ${contactRoleGuidance(view.lane)}${phone}`;
   }
   if (view.intel.decision_maker_name) {
     return `${view.intel.decision_maker_name}. Ask for them directly.`;
@@ -714,6 +774,7 @@ function buildAoAccountView(row, { today, now, timeZone } = {}) {
     || looksLikeAssignmentNote(source.last_interaction_summary)
     || looksLikeAssignmentNote(source.original_visit_note);
   const assignmentProvenance = assignedThroughBatch ? 'Assigned through Anchor AO batch' : null;
+  const campaignContext = deriveCampaignContext(source);
 
   const view = {
     business_name: source.business_name,
@@ -736,6 +797,7 @@ function buildAoAccountView(row, { today, now, timeZone } = {}) {
     raw_next_action: source.next_action,
     suggested_message: source.suggested_message,
     assignment_provenance: assignmentProvenance,
+    campaign_context: campaignContext,
     source_row: source,
   };
 
@@ -851,6 +913,9 @@ module.exports = {
   todayISOInZone,
   extractAssignmentMetadata,
   sanitizeAoFacingText,
+  looksLikeProvenanceNote,
+  equivalentContactLabels,
+  resolveLoggedInteractionSummary,
   classifyAccountLane,
   contactRoleGuidance,
   formatFollowUpTiming,
