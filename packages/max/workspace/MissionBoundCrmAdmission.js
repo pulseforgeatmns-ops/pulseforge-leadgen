@@ -26,26 +26,41 @@ const {
   buildMissionBoundCandidates,
   listMissionBoundCompanyIds,
 } = require('./EmmettMissionCandidates');
+const { candidateWebsiteFields } = require('./MissionBoundWebsiteIntel');
 
 const ADMISSION_SOURCE = 'mission_bound_admission';
 
 function admissionProvenance(candidate, missionId) {
+  const websiteFields = candidateWebsiteFields(candidate);
   return {
     mission_bound_admission: {
-      source: 'scout',
+      source: 'mission_bound_discovery',
       mission_id: missionId,
       candidate_id: candidate.candidateId || candidate.id || null,
       place_id: candidate.placeId || (isGooglePlaceId(candidate.id) ? candidate.id : null),
       company_name: candidate.company || null,
-      domain: candidate.domain || null,
+      domain: websiteFields.domain,
+      website: websiteFields.website,
+      website_source: websiteFields.websiteSource,
+      website_field_path: websiteFields.websiteFieldPath,
+      evidence_refs: websiteFields.websiteEvidenceRefs,
       admitted_at: new Date().toISOString(),
     },
   };
 }
 
+function resolvedCandidateWebsite(candidate = {}) {
+  const { domain, website } = candidateWebsiteFields(candidate);
+  return {
+    domain,
+    website,
+    hasWebsite: Boolean(domain || website),
+  };
+}
+
 function hasSufficientAdmissionIdentity(candidate = {}) {
   const placeId = candidate.placeId || (isGooglePlaceId(candidate.id) ? candidate.id : null);
-  const domain = normalizeDomain(candidate.domain);
+  const domain = resolvedCandidateWebsite(candidate).domain;
   const companyUuid = isUuid(candidate.companyId) ? String(candidate.companyId) : null;
   const prospectUuid = candidate.crmProspectId && isUuid(candidate.crmProspectId)
     ? String(candidate.crmProspectId)
@@ -59,7 +74,7 @@ function hasSufficientAdmissionIdentity(candidate = {}) {
  */
 async function resolveExistingCompany(pool, clientId, candidate = {}) {
   const placeId = candidate.placeId || (isGooglePlaceId(candidate.id) ? candidate.id : null);
-  const domain = normalizeDomain(candidate.domain);
+  const domain = resolvedCandidateWebsite(candidate).domain;
   const companyUuid = isUuid(candidate.companyId) ? String(candidate.companyId) : null;
 
   const hits = [];
@@ -150,8 +165,7 @@ async function resolveExistingProspect(pool, clientId, companyId, candidate = {}
 
 async function linkCompanyExternalIdentity(pool, company, candidate, missionId, clientId, dryRun) {
   const placeId = candidate.placeId || (isGooglePlaceId(candidate.id) ? candidate.id : null);
-  const domain = normalizeDomain(candidate.domain);
-  const website = candidate.website || candidate.website_url || null;
+  const { domain, website } = resolvedCandidateWebsite(candidate);
   const provenance = admissionProvenance(candidate, missionId);
 
   if (dryRun) {
@@ -187,8 +201,7 @@ async function linkCompanyExternalIdentity(pool, company, candidate, missionId, 
 async function createCompanyFromCandidate(pool, candidate, missionId, clientId, dryRun, crmVertical = null) {
   const name = String(candidate.company || '').trim();
   const placeId = candidate.placeId || (isGooglePlaceId(candidate.id) ? candidate.id : null);
-  const domain = normalizeDomain(candidate.domain);
-  const website = candidate.website || candidate.website_url || null;
+  const { domain, website } = resolvedCandidateWebsite(candidate);
 
   if (!name) {
     return { blocked: true, reason: 'identity_admission_blocked', detail: 'missing_company_name' };
@@ -242,13 +255,52 @@ async function createCompanyFromCandidate(pool, candidate, missionId, clientId, 
   return { company: rows[0], created: true, matchType: 'created' };
 }
 
+async function linkProspectWebsiteFields(pool, prospect, candidate, missionId, clientId, dryRun) {
+  const { website, hasWebsite } = resolvedCandidateWebsite(candidate);
+  if (!website) return prospect;
+
+  const provenance = admissionProvenance(candidate, missionId);
+  if (dryRun) {
+    return {
+      ...prospect,
+      website_url: prospect.website_url || website,
+      has_website: prospect.has_website || hasWebsite,
+    };
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE prospects
+        SET website_url = COALESCE(NULLIF(TRIM(website_url), ''), $1),
+            has_website = CASE
+              WHEN COALESCE(has_website, false) = true THEN has_website
+              ELSE $2
+            END,
+            enrichment_provenance = COALESCE(enrichment_provenance, '{}'::jsonb) || $3::jsonb,
+            updated_at = NOW()
+      WHERE id = $4
+        AND client_id = $5
+      RETURNING id, company_id, client_id, email, email_verified, email_status, do_not_contact, website_url, has_website`,
+    [
+      website,
+      hasWebsite,
+      JSON.stringify(provenance),
+      prospect.id,
+      clientId,
+    ]
+  );
+  return rows[0] || prospect;
+}
+
 async function createProspectForCompany(pool, companyId, candidate, clientId, dryRun, crmVertical = null) {
+  const { website, hasWebsite } = resolvedCandidateWebsite(candidate);
   if (dryRun) {
     return {
       prospect: {
         id: 'dry-run-prospect-id',
         company_id: companyId,
         client_id: clientId,
+        website_url: website,
+        has_website: hasWebsite,
       },
       created: true,
       matchType: 'created',
@@ -261,16 +313,16 @@ async function createProspectForCompany(pool, companyId, candidate, clientId, dr
        vertical, client_id, website_url, discovery_method, has_website
      )
      VALUES ($1, NULL, NULL, NULL, 'cold', $2, $3, $4, $5, $6, $7, $8)
-     RETURNING id, company_id, client_id, email, email_verified, email_status, do_not_contact`,
+     RETURNING id, company_id, client_id, email, email_verified, email_status, do_not_contact, website_url, has_website`,
     [
       companyId,
       ADMISSION_SOURCE,
       candidate.icpScore || 0,
       crmVertical,
       clientId,
-      candidate.website || candidate.website_url || null,
+      website,
       'mission_bound',
-      Boolean(normalizeDomain(candidate.domain) || candidate.website),
+      hasWebsite,
     ]
   );
 
@@ -312,7 +364,7 @@ async function admitMissionBoundCandidate(pool, candidate, {
   const base = {
     candidateId: candidate.candidateId || candidate.id,
     placeId: candidate.placeId || (isGooglePlaceId(candidate.id) ? candidate.id : null),
-    domain: normalizeDomain(candidate.domain),
+    domain: resolvedCandidateWebsite(candidate).domain,
     companyName: candidate.company || null,
     companyId: null,
     crmCompanyId: null,
@@ -399,6 +451,15 @@ async function admitMissionBoundCandidate(pool, candidate, {
     if (!matchType || matchType === 'created') {
       matchType = created ? 'created' : `${matchType}+prospect_created`;
     }
+  } else if (!prospectCreated) {
+    prospect = await linkProspectWebsiteFields(
+      pool,
+      prospect,
+      candidate,
+      missionId,
+      clientId,
+      dryRun
+    );
   }
 
   const result = {
@@ -407,7 +468,7 @@ async function admitMissionBoundCandidate(pool, candidate, {
     crmCompanyId: String(company.id),
     prospectId: String(prospect.id),
     crmProspectId: String(prospect.id),
-    domain: normalizeDomain(company.domain || candidate.domain),
+    domain: normalizeDomain(company.domain || resolvedCandidateWebsite(candidate).domain),
     linked: !created && !prospectCreated,
     created: created || prospectCreated,
     blocked: false,
@@ -466,9 +527,11 @@ async function admitMissionBoundCandidates(pool, mission, contributions = [], op
 module.exports = {
   ADMISSION_SOURCE,
   admissionProvenance,
+  resolvedCandidateWebsite,
   hasSufficientAdmissionIdentity,
   resolveExistingCompany,
   resolveExistingProspect,
+  linkProspectWebsiteFields,
   resolveMissionBoundCrmVertical,
   admitMissionBoundCandidate,
   admitMissionBoundCandidates,
