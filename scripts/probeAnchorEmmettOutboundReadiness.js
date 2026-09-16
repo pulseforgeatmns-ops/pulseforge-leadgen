@@ -61,12 +61,37 @@ function assertRuntimeEnv() {
   }
 }
 
+function isEmailBearingSendable(item) {
+  if (!item) return false;
+  if (item.sendable === false || item.dnc === true) return false;
+  return Boolean(String(item.email || '').trim());
+}
+
 function inspectSpec212(emmettPayload) {
   const body = unwrapContributionPayload(emmettPayload) || {};
   const queueItems = Array.isArray(body.queue?.items) ? body.queue.items : [];
   const validation = validateProspectMessageBindings(body);
+
+  let sendableCount = 0;
+  let emailBearingSendableCount = 0;
+  let missingRecipientEmailCount = 0;
+
+  for (const item of queueItems) {
+    if (!item) continue;
+    if (item.sendable === false || item.dnc === true) continue;
+    sendableCount += 1;
+    if (Boolean(String(item.email || '').trim())) {
+      emailBearingSendableCount += 1;
+    } else {
+      missingRecipientEmailCount += 1;
+    }
+  }
+
   return {
     queueCount: queueItems.length,
+    sendableCount,
+    emailBearingSendableCount,
+    missingRecipientEmailCount,
     valid: validation.valid === true,
     blocker: validation.valid === true
       ? null
@@ -92,6 +117,9 @@ function firstBlockerOf({
   if (!spec212.queueCount) {
     return 'empty_capacity_queue';
   }
+  if (!spec212.emailBearingSendableCount) {
+    return 'no_sendable_recipient_email';
+  }
   if (senderReadiness.sendable !== true) {
     return senderReadiness.code || 'canonical_sender_not_ready';
   }
@@ -111,6 +139,9 @@ function verdictOf(firstBlocker) {
   if (firstBlocker === 'empty_capacity_queue') {
     return 'CAPACITY queue is empty. Do not execute outbound.';
   }
+  if (firstBlocker === 'no_sendable_recipient_email') {
+    return 'CAPACITY has no email-bearing sendable queue item. Run mission-bound enrichment and regenerate CAPACITY. Do not execute outbound.';
+  }
   if (firstBlocker) {
     return 'Canonical sender is not ready. Do not execute outbound.';
   }
@@ -120,7 +151,14 @@ function verdictOf(firstBlocker) {
 function buildReport({
   missionId = null,
   capacityContributionId = null,
-  spec212 = { valid: false, blocker: 'not_inspected', queueCount: 0 },
+  spec212 = {
+    valid: false,
+    blocker: 'not_inspected',
+    queueCount: 0,
+    sendableCount: 0,
+    emailBearingSendableCount: 0,
+    missingRecipientEmailCount: 0,
+  },
   senderReadiness = { sendable: false, blocker: 'not_inspected', code: null },
   brevo = {
     keyPresent: false,
@@ -143,6 +181,10 @@ function buildReport({
     spec212: {
       valid: spec212.valid === true,
       blocker: spec212.valid === true ? null : (spec212.blocker || null),
+      queueCount: spec212.queueCount ?? 0,
+      sendableCount: spec212.sendableCount ?? 0,
+      emailBearingSendableCount: spec212.emailBearingSendableCount ?? 0,
+      missingRecipientEmailCount: spec212.missingRecipientEmailCount ?? 0,
     },
     senderReadiness: {
       sendable: senderReadiness.sendable === true,
@@ -203,7 +245,14 @@ async function run(options = {}) {
   const usable = await loadUsableReadyCapacity(db, TENANT_ID);
   const spec212 = usable
     ? inspectSpec212(usable.payload)
-    : { valid: false, blocker: 'capacity_not_inspected', queueCount: 0 };
+    : {
+      valid: false,
+      blocker: 'capacity_not_inspected',
+      queueCount: 0,
+      sendableCount: 0,
+      emailBearingSendableCount: 0,
+      missingRecipientEmailCount: 0,
+    };
 
   return buildReport({
     missionId: usable?.mission_id || null,
@@ -228,6 +277,7 @@ async function run(options = {}) {
 module.exports = {
   TENANT_ID,
   parseArgs,
+  isEmailBearingSendable,
   inspectSpec212,
   firstBlockerOf,
   buildReport,

@@ -21,25 +21,28 @@ const source = fs.readFileSync(SCRIPT, 'utf8');
 const dockerfile = fs.readFileSync(path.join(__dirname, '..', 'Dockerfile'), 'utf8');
 const dockerignore = fs.readFileSync(path.join(__dirname, '..', '.dockerignore'), 'utf8');
 
-function boundCapacityPayload() {
+function boundQueueItem(overrides = {}) {
   return {
-    capacity: { recommended: 1 },
-    queue: {
-      items: [{
-        prospectId: 'co-harbor',
-        email: 'alex@harborlaw.com',
-        sendable: true,
-        paige: {
-          author: 'paige',
-          source: 'paige',
-          ready: true,
-          variantLabel: 'Primary - Harbor Law',
-          candidateId: 'co-harbor',
-          bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
-          attributableIntelligence: { companyName: 'Harbor Law' },
-        },
-      }],
+    prospectId: 'co-harbor',
+    email: 'alex@harborlaw.com',
+    sendable: true,
+    paige: {
+      author: 'paige',
+      source: 'paige',
+      ready: true,
+      variantLabel: 'Primary - Harbor Law',
+      candidateId: 'co-harbor',
+      bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
+      attributableIntelligence: { companyName: 'Harbor Law' },
     },
+    ...overrides,
+  };
+}
+
+function boundCapacityPayload(queueItems = [boundQueueItem()]) {
+  return {
+    capacity: { recommended: queueItems.length },
+    queue: { items: queueItems },
     governor: { outcome: 'proceed' },
   };
 }
@@ -90,6 +93,9 @@ describe('probeAnchorEmmettOutboundReadiness', () => {
     assert.equal(spec212.valid, true);
     assert.equal(spec212.blocker, null);
     assert.equal(spec212.queueCount, 1);
+    assert.equal(spec212.sendableCount, 1);
+    assert.equal(spec212.emailBearingSendableCount, 1);
+    assert.equal(spec212.missingRecipientEmailCount, 0);
 
     const stripped = inspectSpec212({
       queue: {
@@ -174,7 +180,14 @@ describe('probeAnchorEmmettOutboundReadiness', () => {
     const ready = buildReport({
       missionId: 'mission_ready',
       capacityContributionId: 'contrib_capacity',
-      spec212: { valid: true, blocker: null, queueCount: 1 },
+      spec212: {
+        valid: true,
+        blocker: null,
+        queueCount: 1,
+        sendableCount: 1,
+        emailBearingSendableCount: 1,
+        missingRecipientEmailCount: 0,
+      },
       senderReadiness: { sendable: true, blocker: null },
       brevo: {
         keyPresent: true,
@@ -201,19 +214,182 @@ describe('probeAnchorEmmettOutboundReadiness', () => {
     assert.deepEqual(ready.enabledAgents, ['scout']);
     assert.equal(ready.brevo.keyPresent, true);
     assert.equal(ready.spec212.valid, true);
+    assert.equal(ready.spec212.queueCount, 1);
+    assert.equal(ready.spec212.sendableCount, 1);
+    assert.equal(ready.spec212.emailBearingSendableCount, 1);
+    assert.equal(ready.spec212.missingRecipientEmailCount, 0);
 
     assert.equal(firstBlockerOf({
       missionId: 'mission_ready',
       capacityContributionId: 'contrib_capacity',
-      spec212: { valid: false, blocker: 'missing_message_binding', queueCount: 1 },
+      spec212: { valid: false, blocker: 'missing_message_binding', queueCount: 1, emailBearingSendableCount: 1 },
       senderReadiness: { sendable: true },
     }), 'tme_message_binding_contamination');
 
     assert.equal(firstBlockerOf({
       missionId: 'mission_ready',
       capacityContributionId: 'contrib_capacity',
-      spec212: { valid: true, queueCount: 1 },
+      spec212: { valid: true, queueCount: 1, emailBearingSendableCount: 1 },
       senderReadiness: { sendable: false, code: 'canonical_sender_not_ready' },
     }), 'canonical_sender_not_ready');
+  });
+
+  it('1. five queue items with zero emails → no_sendable_recipient_email', () => {
+    const items = Array.from({ length: 5 }, (_, i) => {
+      const prospectId = `co-firm-${i}`;
+      return boundQueueItem({
+        prospectId,
+        email: null,
+        sendable: true,
+        sendBlocker: 'missing_recipient_email',
+        paige: {
+          author: 'paige',
+          source: 'paige',
+          ready: true,
+          variantLabel: `Primary - Firm ${i}`,
+          candidateId: prospectId,
+          bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
+          attributableIntelligence: { companyName: `Firm ${i}` },
+        },
+      });
+    });
+    const spec212 = inspectSpec212({ payload: boundCapacityPayload(items) });
+    assert.equal(spec212.queueCount, 5);
+    assert.equal(spec212.sendableCount, 5);
+    assert.equal(spec212.emailBearingSendableCount, 0);
+    assert.equal(spec212.missingRecipientEmailCount, 5);
+
+    const report = buildReport({
+      missionId: 'mission_ready',
+      capacityContributionId: 'contrib_capacity',
+      spec212,
+      senderReadiness: { sendable: true, blocker: null },
+      brevo: {
+        keyPresent: true,
+        domainVerified: true,
+        domainAuthenticated: true,
+        senderActive: true,
+      },
+      autosendEnabled: false,
+      enabledAgents: ['scout'],
+    });
+    assert.equal(report.firstBlocker, 'no_sendable_recipient_email');
+    assert.match(
+      report.verdict,
+      /no email-bearing sendable queue item.*mission-bound enrichment/i
+    );
+    assert.equal(report.spec212.emailBearingSendableCount, 0);
+    assert.equal(report.spec212.missingRecipientEmailCount, 5);
+  });
+
+  it('2. one verified email-bearing sendable item → green', () => {
+    const spec212 = inspectSpec212({ payload: boundCapacityPayload([boundQueueItem()]) });
+    const report = buildReport({
+      missionId: 'mission_ready',
+      capacityContributionId: 'contrib_capacity',
+      spec212,
+      senderReadiness: { sendable: true, blocker: null },
+      brevo: {
+        keyPresent: true,
+        domainVerified: true,
+        domainAuthenticated: true,
+        senderActive: true,
+      },
+      autosendEnabled: false,
+      enabledAgents: ['scout'],
+    });
+    assert.equal(spec212.emailBearingSendableCount, 1);
+    assert.equal(report.firstBlocker, null);
+    assert.match(report.verdict, /SPEC-212 and sender readiness passed/);
+  });
+
+  it('3. email present but sendable=false is not counted as email-bearing sendable', () => {
+    const spec212 = inspectSpec212({
+      payload: boundCapacityPayload([boundQueueItem({
+        email: 'blocked@harborlaw.com',
+        sendable: false,
+        sendBlocker: 'missing_recipient_email',
+      })]),
+    });
+    assert.equal(spec212.queueCount, 1);
+    assert.equal(spec212.sendableCount, 0);
+    assert.equal(spec212.emailBearingSendableCount, 0);
+    assert.equal(spec212.missingRecipientEmailCount, 0);
+
+    assert.equal(firstBlockerOf({
+      missionId: 'mission_ready',
+      capacityContributionId: 'contrib_capacity',
+      spec212,
+      senderReadiness: { sendable: true },
+    }), 'no_sendable_recipient_email');
+  });
+
+  it('4. dnc=true is not counted as email-bearing sendable', () => {
+    const spec212 = inspectSpec212({
+      payload: boundCapacityPayload([boundQueueItem({
+        email: 'dnc@harborlaw.com',
+        dnc: true,
+      })]),
+    });
+    assert.equal(spec212.sendableCount, 0);
+    assert.equal(spec212.emailBearingSendableCount, 0);
+
+    assert.equal(firstBlockerOf({
+      missionId: 'mission_ready',
+      capacityContributionId: 'contrib_capacity',
+      spec212,
+      senderReadiness: { sendable: true },
+    }), 'no_sendable_recipient_email');
+  });
+
+  it('5. empty queue → empty_capacity_queue', () => {
+    const spec212 = inspectSpec212({ payload: boundCapacityPayload([]) });
+    assert.equal(spec212.queueCount, 0);
+    assert.equal(spec212.emailBearingSendableCount, 0);
+
+    assert.equal(firstBlockerOf({
+      missionId: 'mission_ready',
+      capacityContributionId: 'contrib_capacity',
+      spec212,
+      senderReadiness: { sendable: true },
+    }), 'empty_capacity_queue');
+  });
+
+  it('6. SPEC-212 failure still takes precedence over recipient readiness', () => {
+    assert.equal(firstBlockerOf({
+      missionId: 'mission_ready',
+      capacityContributionId: 'contrib_capacity',
+      spec212: {
+        valid: false,
+        blocker: 'missing_message_binding',
+        queueCount: 5,
+        emailBearingSendableCount: 0,
+      },
+      senderReadiness: { sendable: true },
+    }), 'tme_message_binding_contamination');
+  });
+
+  it('7. sender failure is reported after recipient readiness passes', () => {
+    assert.equal(firstBlockerOf({
+      missionId: 'mission_ready',
+      capacityContributionId: 'contrib_capacity',
+      spec212: {
+        valid: true,
+        queueCount: 1,
+        emailBearingSendableCount: 1,
+      },
+      senderReadiness: { sendable: false, code: 'canonical_sender_not_ready' },
+    }), 'canonical_sender_not_ready');
+
+    assert.equal(firstBlockerOf({
+      missionId: 'mission_ready',
+      capacityContributionId: 'contrib_capacity',
+      spec212: {
+        valid: true,
+        queueCount: 1,
+        emailBearingSendableCount: 0,
+      },
+      senderReadiness: { sendable: false, code: 'canonical_sender_not_ready' },
+    }), 'no_sendable_recipient_email');
   });
 });
