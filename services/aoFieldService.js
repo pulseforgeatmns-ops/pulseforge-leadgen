@@ -2,6 +2,12 @@ const axios = require('axios');
 const pool = require('../db');
 const { buildSuggestedMessage, buildDirectMailOpening, normalizeNextAction, parseContactRole, formatDecisionMakerStatus, resolveNextActionOwner } = require('../utils/aoMessageTemplates');
 const { normalizeDueDate } = require('../utils/aoQueueFormat');
+const {
+  buildAssignmentNote,
+  isJakeAssignmentBatchNote,
+  laneInitialNextAction,
+  normalizeAoBusinessKey,
+} = require('../utils/aoAssignment');
 
 function mapLead(row) {
   return {
@@ -670,6 +676,181 @@ async function resolveAoOwnerByName(namePattern, clientId) {
   return rows[0] || null;
 }
 
+const JAKE_EMAIL_CANDIDATES = Object.freeze([
+  process.env.JAKE_EMAIL,
+  'jacob@gopulseforge.com',
+  'jacob@goanchorcleaning.com',
+].filter(Boolean));
+
+async function resolveJakeAoOwner(clientId = 10) {
+  for (const email of JAKE_EMAIL_CANDIDATES) {
+    const { rows } = await pool.query(`
+      SELECT id, name, email, client_id, role, active
+      FROM users
+      WHERE lower(email) = lower($1)
+        AND active = true
+      LIMIT 1
+    `, [email]);
+    if (rows[0]) return rows[0];
+  }
+
+  const { rows } = await pool.query(`
+    SELECT id, name, email, client_id, role, active
+    FROM users
+    WHERE active = true
+      AND role IN ('ao', 'admin', 'manager')
+      AND (
+        name ILIKE '%Jacob Maynard%'
+        OR name ILIKE '%Jake Maynard%'
+        OR (name ILIKE '%Jake%' AND email ILIKE '%gopulseforge%')
+      )
+    ORDER BY CASE WHEN client_id = $1 THEN 0 ELSE 1 END, id ASC
+    LIMIT 1
+  `, [clientId]);
+  return rows[0] || null;
+}
+
+async function findAoLeadByBusinessName(clientId, businessName) {
+  const { rows } = await pool.query(`
+    SELECT l.*, u.name AS ao_owner_name, u.email AS ao_owner_email
+    FROM ao_leads l
+    LEFT JOIN users u ON u.id = l.ao_owner_id
+    WHERE l.client_id = $1
+      AND lower(regexp_replace(l.business_name, '[^a-z0-9]', '', 'g'))
+        = lower(regexp_replace($2, '[^a-z0-9]', '', 'g'))
+    LIMIT 1
+  `, [clientId, businessName]);
+  return rows[0] || null;
+}
+
+async function findCrmLinkForBusiness(clientId, businessName) {
+  const { rows } = await pool.query(`
+    SELECT
+      p.id AS crm_prospect_id,
+      c.id AS crm_company_id,
+      c.name AS company_name,
+      p.email,
+      p.phone,
+      p.status AS prospect_status
+    FROM companies c
+    LEFT JOIN prospects p ON p.company_id = c.id AND p.client_id = c.client_id
+    WHERE c.client_id = $1
+      AND lower(regexp_replace(c.name, '[^a-z0-9]', '', 'g'))
+        = lower(regexp_replace($2, '[^a-z0-9]', '', 'g'))
+    ORDER BY p.created_at DESC NULLS LAST
+    LIMIT 1
+  `, [clientId, businessName]);
+  return rows[0] || null;
+}
+
+async function findJakeAssignmentLead(clientId, businessName, batchSlug) {
+  const existing = await findAoLeadByBusinessName(clientId, businessName);
+  if (!existing) return null;
+  const note = existing.original_visit_note || '';
+  if (isJakeAssignmentBatchNote(note, batchSlug)) return existing;
+  return null;
+}
+
+async function createAoAssignmentLead({
+  clientId,
+  aoOwnerId,
+  aoOwnerName,
+  businessName,
+  address = null,
+  businessType = null,
+  lane,
+  priority = 'high',
+  pipelineStage = 'research',
+  initialNextAction = null,
+  dueDate,
+  batchSlug,
+  crmProspectId = null,
+  crmCompanyId = null,
+}) {
+  const existingBatchLead = await findJakeAssignmentLead(clientId, businessName, batchSlug);
+  if (existingBatchLead) {
+    return {
+      skipped: true,
+      reason: 'already_assigned_in_batch',
+      lead: mapLead(existingBatchLead),
+    };
+  }
+
+  const actionText = initialNextAction || laneInitialNextAction(lane);
+  const assignmentNote = buildAssignmentNote({
+    batchSlug,
+    company: businessName,
+    ownerName: aoOwnerName,
+    lane,
+    priority: priority === 'high' ? 'High' : 'Normal',
+    pipelineStage,
+    initialNextAction: actionText,
+    dueDate,
+    aoOwnerId,
+    crmProspectId,
+    crmCompanyId,
+  });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const { rows: leadRows } = await client.query(`
+      INSERT INTO ao_leads (
+        client_id, business_name, address, business_type, status, interest_level,
+        ao_owner_id, attribution_source, original_visit_note,
+        next_follow_up_date, next_follow_up_owner_id, crm_prospect_id
+      ) VALUES ($1,$2,$3,$4,'needs_follow_up','low',$5,'ao_field_visit',$6,$7,$5,$8)
+      RETURNING *
+    `, [
+      clientId,
+      businessName,
+      address,
+      businessType || lane,
+      aoOwnerId,
+      assignmentNote,
+      dueDate,
+      crmProspectId,
+    ]);
+    const lead = leadRows[0];
+
+    const { rows: taskRows } = await client.query(`
+      INSERT INTO ao_follow_up_tasks (
+        lead_id, ao_owner_id, due_date, priority, next_action,
+        last_interaction_summary
+      ) VALUES ($1,$2,$3,$4,'research',$5)
+      RETURNING *
+    `, [lead.id, aoOwnerId, dueDate, priority, actionText]);
+
+    await client.query('COMMIT');
+    return {
+      skipped: false,
+      lead: mapLead(lead),
+      task: mapTask({
+        ...taskRows[0],
+        business_name: businessName,
+        attribution_source: 'ao_field_visit',
+      }),
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function countAoLeadsByOwnerIds(ownerIds, clientId = 10) {
+  if (!ownerIds.length) return {};
+  const { rows } = await pool.query(`
+    SELECT ao_owner_id, COUNT(*)::int AS lead_count
+    FROM ao_leads
+    WHERE client_id = $1 AND ao_owner_id = ANY($2::int[])
+    GROUP BY ao_owner_id
+  `, [clientId, ownerIds]);
+  return Object.fromEntries(rows.map(r => [r.ao_owner_id, r.lead_count]));
+}
+
 function mapAdminVisit(row) {
   return {
     id: row.id,
@@ -1147,6 +1328,13 @@ module.exports = {
   getTaskForFollowUp,
   findDirectMailLead,
   resolveAoOwnerByName,
+  resolveJakeAoOwner,
+  findAoLeadByBusinessName,
+  findCrmLinkForBusiness,
+  findJakeAssignmentLead,
+  createAoAssignmentLead,
+  countAoLeadsByOwnerIds,
+  normalizeAoBusinessKey,
   endOfBusinessWeekISO,
   updateTask,
   escalateTask,
