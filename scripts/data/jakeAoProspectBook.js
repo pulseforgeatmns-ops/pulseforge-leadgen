@@ -15,12 +15,6 @@ module.exports = Object.freeze({
     'jacob@gopulseforge.com',
     'jacob@goanchorcleaning.com',
   ]),
-  OTHER_AO_NAME_PATTERNS: Object.freeze([
-    '%Zack%',
-    '%Rory%',
-    '%Tony%',
-    '%Mike%',
-  ]),
   PROSPECTS: Object.freeze([
     // Property management / development (5)
     {
