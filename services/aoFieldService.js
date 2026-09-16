@@ -676,6 +676,25 @@ async function resolveAoOwnerByName(namePattern, clientId) {
   return rows[0] || null;
 }
 
+async function listActiveAoOwners(clientId, { excludeUserId = null } = {}) {
+  const params = [clientId];
+  let excludeClause = '';
+  if (excludeUserId != null) {
+    params.push(excludeUserId);
+    excludeClause = 'AND id <> $2';
+  }
+  const { rows } = await pool.query(`
+    SELECT id, name, email, client_id, role
+    FROM users
+    WHERE client_id = $1
+      AND role = 'ao'
+      AND active = true
+      ${excludeClause}
+    ORDER BY id ASC
+  `, params);
+  return rows;
+}
+
 const JAKE_PRODUCTION_EMAIL = 'jzmaynard7@gmail.com';
 
 const JAKE_LEGACY_EMAIL_CANDIDATES = Object.freeze([
@@ -1354,6 +1373,7 @@ module.exports = {
   getTaskForFollowUp,
   findDirectMailLead,
   resolveAoOwnerByName,
+  listActiveAoOwners,
   resolveJakeAoOwner,
   findAoLeadByBusinessName,
   findCrmLinkForBusiness,
