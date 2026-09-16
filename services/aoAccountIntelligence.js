@@ -28,6 +28,7 @@ async function fetchAssignedAccountRows({ aoOwnerId, clientId }) {
       l.client_id,
       l.business_name,
       l.address,
+      l.business_type,
       l.status AS lead_status,
       l.interest_level,
       l.attribution_source,
@@ -40,12 +41,14 @@ async function fetchAssignedAccountRows({ aoOwnerId, clientId }) {
       c.phone AS contact_phone,
       c.is_decision_maker,
       e.id AS open_escalation_id,
-      e.status AS open_escalation_status
+      e.status AS open_escalation_status,
+      e.reason AS open_escalation_reason,
+      e.summary AS open_escalation_summary
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
     LEFT JOIN ao_contacts c ON c.id = t.contact_id
     LEFT JOIN LATERAL (
-      SELECT id, status
+      SELECT id, status, reason, summary
       FROM ao_escalations
       WHERE lead_id = l.id AND status NOT IN ('resolved', 'ignored')
       ORDER BY created_at DESC
@@ -76,6 +79,7 @@ async function fetchAssignedLeadWithoutOpenTask({ aoOwnerId, clientId }) {
       l.client_id,
       l.business_name,
       l.address,
+      l.business_type,
       l.status AS lead_status,
       l.interest_level,
       l.attribution_source,
@@ -88,11 +92,13 @@ async function fetchAssignedLeadWithoutOpenTask({ aoOwnerId, clientId }) {
       c.phone AS contact_phone,
       c.is_decision_maker,
       e.id AS open_escalation_id,
-      e.status AS open_escalation_status
+      e.status AS open_escalation_status,
+      e.reason AS open_escalation_reason,
+      e.summary AS open_escalation_summary
     FROM ao_leads l
     LEFT JOIN ao_contacts c ON c.lead_id = l.id
     LEFT JOIN LATERAL (
-      SELECT id, status
+      SELECT id, status, reason, summary
       FROM ao_escalations
       WHERE lead_id = l.id AND status NOT IN ('resolved', 'ignored')
       ORDER BY created_at DESC
@@ -175,6 +181,7 @@ async function findAssignedLeadById({ aoOwnerId, clientId, leadId }) {
       t.status AS open_task_status,
       t.next_action AS open_next_action,
       t.due_date AS open_task_due,
+      t.priority AS task_priority,
       t.suggested_message,
       t.waiting_on_jake,
       t.last_interaction_summary,
@@ -223,6 +230,7 @@ async function findAssignedLeadByName({ aoOwnerId, clientId, businessNameQuery }
       t.status AS open_task_status,
       t.next_action AS open_next_action,
       t.due_date AS open_task_due,
+      t.priority AS task_priority,
       t.suggested_message,
       t.waiting_on_jake,
       t.last_interaction_summary,
