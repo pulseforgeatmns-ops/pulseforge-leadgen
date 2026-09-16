@@ -111,14 +111,30 @@ async function runCronAgent(agent, res, query = {}) {
       mod.run({ client_id: clientId, scheduled: true }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
-    } else if (agent === 'paige' && typeof mod.run === 'function') {
-      mod.run({
+    } else if (agent === 'paige') {
+      const { routePaigeSocialContentExecution } = require('../services/paigeSocialContentExecution');
+      routePaigeSocialContentExecution({
         client_id: clientId,
+        tenantId: String(clientId),
         dryRun: query.dryRun ?? query.dry_run ?? query['dry-run'],
         channel: query.channel,
+        platform: query.platform || query.channel,
         format: query.format,
         count: query.count,
         simulateMiraUnavailable: query.simulateMiraUnavailable ?? query.simulate_mira_unavailable,
+        contentObjective: query.contentObjective || query.content_objective,
+        workspaceContext: query.workspaceContext || query.workspace_context,
+        missionContext: query.missionContext || query.mission_context,
+        evidence: (() => {
+          if (!query.evidence) return undefined;
+          try {
+            return JSON.parse(String(query.evidence));
+          } catch (_) {
+            return undefined;
+          }
+        })(),
+        cadenceContext: query.cadenceContext || query.cadence_context,
+        source: 'cron',
       }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });

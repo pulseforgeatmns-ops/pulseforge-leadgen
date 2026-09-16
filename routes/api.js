@@ -2959,13 +2959,21 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
         : agent === 'emmett'
           ? await mod.run({ client_id: clientId, triggered_by: 'dashboard' })
           : agent === 'paige'
-            ? await mod.run({
+            ? await require('../services/paigeSocialContentExecution').routePaigeSocialContentExecution({
                 client_id: clientId,
+                tenantId: String(clientId),
                 dryRun: req.body?.dryRun ?? req.body?.dry_run,
                 channel: req.body?.channel,
+                platform: req.body?.platform || req.body?.channel,
                 format: req.body?.format,
                 count: req.body?.count,
                 simulateMiraUnavailable: req.body?.simulateMiraUnavailable,
+                contentObjective: req.body?.contentObjective || req.body?.content_objective,
+                workspaceContext: req.body?.workspaceContext || req.body?.workspace_context,
+                missionContext: req.body?.missionContext || req.body?.mission_context,
+                evidence: req.body?.evidence,
+                cadenceContext: req.body?.cadenceContext || req.body?.cadence_context,
+                source: 'dashboard',
               })
           : agent === 'paige_reflection'
             ? await mod.run({

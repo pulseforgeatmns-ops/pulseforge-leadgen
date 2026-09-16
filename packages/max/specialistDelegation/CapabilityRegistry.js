@@ -45,6 +45,15 @@ const DEFAULT_CAPABILITIES = Object.freeze([
     description:
       'Paige content strategy. Existing SPEC-094 path remains; SPEC-098 adapter not wired.',
   },
+  {
+    specialist: 'paige',
+    capability: 'social_content',
+    authoritySupported: Object.freeze(['draft']),
+    callable: true,
+    adapter: 'paige_social_content',
+    description:
+      'SPEC-256 canonical Paige social content generation — tenant-scoped drafts only.',
+  },
 ]);
 
 function capabilityKey(specialist, capability) {
