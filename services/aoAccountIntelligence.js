@@ -5,10 +5,12 @@ const { classifyAoMaxIntent } = require('../utils/aoMaxIntent');
 const {
   todayISO,
   mapAccountRow,
+  comparePrioritizedAccounts,
   formatPrioritizationResponse,
   formatAccountBriefing,
   buildCoachingReply,
 } = require('../utils/aoAccountPrioritization');
+const { normalizeDueDate } = require('../utils/aoQueueFormat');
 
 async function fetchAssignedAccountRows({ aoOwnerId, clientId }) {
   const { rows } = await pool.query(`
@@ -125,13 +127,7 @@ async function listPrioritizedAccounts({ aoOwnerId, clientId, limit = 5 }) {
 
   const actionable = combined
     .filter(row => !['disqualified', 'converted_to_crm'].includes(row.operational_state))
-    .sort((a, b) => {
-      if (b.rank_score !== a.rank_score) return b.rank_score - a.rank_score;
-      const dueA = a.due_date || '9999-12-31';
-      const dueB = b.due_date || '9999-12-31';
-      if (dueA !== dueB) return dueA.localeCompare(dueB);
-      return a.business_name.localeCompare(b.business_name);
-    });
+    .sort(comparePrioritizedAccounts);
 
   return actionable.slice(0, limit);
 }
@@ -139,7 +135,10 @@ async function listPrioritizedAccounts({ aoOwnerId, clientId, limit = 5 }) {
 async function buildAccountPrioritizationReply({ aoOwnerId, clientId }) {
   const today = todayISO();
   const allRows = await fetchAssignedAccountRows({ aoOwnerId, clientId });
-  const hasOverdue = allRows.some(row => row.due_date && row.due_date < today);
+  const hasOverdue = allRows.some(row => {
+    const due = normalizeDueDate(row.due_date);
+    return due && due < today;
+  });
   const accounts = await listPrioritizedAccounts({ aoOwnerId, clientId, limit: 5 });
   return {
     intent: 'account_prioritization',

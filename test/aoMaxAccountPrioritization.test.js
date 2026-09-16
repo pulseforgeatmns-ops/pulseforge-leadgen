@@ -6,6 +6,7 @@ const { classifyAoMaxIntent, extractBriefingTarget } = require('../utils/aoMaxIn
 const {
   mapAccountRow,
   computeRankScore,
+  comparePrioritizedAccounts,
   formatPrioritizationResponse,
   buildCoachingReply,
 } = require('../utils/aoAccountPrioritization');

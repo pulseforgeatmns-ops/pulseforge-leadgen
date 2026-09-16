@@ -6,6 +6,9 @@ const {
   OUTCOME_LABELS,
 } = require('./aoOperationalState');
 const { safeGuidance } = require('./aoMessageTemplates');
+const { normalizeDueDate } = require('./aoQueueFormat');
+
+const NO_DUE_DATE_SORT_KEY = '9999-12-31';
 
 const TASK_PRIORITY_WEIGHT = Object.freeze({
   warm: 3,
@@ -79,8 +82,20 @@ function buildNextAction(row, state) {
   return 'Log the visit or follow-up outcome with Max.';
 }
 
+function dueDateSortKey(value) {
+  return normalizeDueDate(value) || NO_DUE_DATE_SORT_KEY;
+}
+
+function comparePrioritizedAccounts(a, b) {
+  if (b.rank_score !== a.rank_score) return b.rank_score - a.rank_score;
+  const dueA = dueDateSortKey(a.due_date);
+  const dueB = dueDateSortKey(b.due_date);
+  if (dueA !== dueB) return dueA.localeCompare(dueB);
+  return String(a.business_name || '').localeCompare(String(b.business_name || ''));
+}
+
 function buildWhyNow(row, state, today) {
-  const dueDate = row.due_date || row.open_task_due || null;
+  const dueDate = normalizeDueDate(row.due_date || row.open_task_due || null);
   if (dueDate && dueDate < today) {
     return `Follow-up is overdue (due ${dueDate}).`;
   }
@@ -110,7 +125,7 @@ function buildWhyNow(row, state, today) {
 
 function computeRankScore(row, state, today) {
   let score = 0;
-  const dueDate = row.due_date || row.open_task_due || null;
+  const dueDate = normalizeDueDate(row.due_date || row.open_task_due || null);
 
   if (dueDate && dueDate < today) score += 10000;
   else if (dueDate && dueDate === today) score += 5000;
@@ -148,7 +163,7 @@ function mapAccountRow(row, today) {
     task_id: row.task_id,
     business_name: row.business_name,
     address: row.address,
-    due_date: row.due_date || row.open_task_due || null,
+    due_date: normalizeDueDate(row.due_date || row.open_task_due || null),
     priority: row.priority,
     interest_level: row.interest_level,
     next_action: row.next_action || row.open_next_action,
@@ -271,6 +286,8 @@ function buildCoachingReply(message) {
 
 module.exports = {
   todayISO,
+  dueDateSortKey,
+  comparePrioritizedAccounts,
   mapAccountRow,
   computeRankScore,
   formatPrioritizationResponse,
