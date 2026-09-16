@@ -206,7 +206,8 @@ async function run({ apply = false, enableAoFieldMode = false } = {}) {
   const jake = await aoField.resolveJakeAoOwner(CLIENT_ID);
   if (!jake) {
     throw new Error(
-      'Jake AO identity not found — verify jacob@gopulseforge.com exists and is active',
+      'Jake AO identity not found — verify an active client_id=10 AO user exists '
+      + '(jzmaynard7@gmail.com or JAKE_EMAIL override)',
     );
   }
 
