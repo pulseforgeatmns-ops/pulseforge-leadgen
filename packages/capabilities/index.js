@@ -107,6 +107,7 @@ module.exports = {
   directMailExecution: require('./directMailExecution'),
   outcomeIntelligence: require('./outcomeIntelligence'),
   operatorInbox: require('./operatorInbox'),
+  contentGeneration: require('./contentGeneration'),
 };
 
 // Re-export production capabilities at top level for convenience
@@ -132,6 +133,8 @@ module.exports.createOutcomeIntelligenceCapability =
   require('./outcomeIntelligence').createOutcomeIntelligenceCapability;
 module.exports.createOperatorInboxCapability =
   require('./operatorInbox').createOperatorInboxCapability;
+module.exports.createSocialContentCapability =
+  require('./contentGeneration').createSocialContentCapability;
 module.exports.buildBusinessSignalsForProspect =
   require('./signals').buildBusinessSignalsForProspect;
 module.exports.buildBusinessSignalsStage =
