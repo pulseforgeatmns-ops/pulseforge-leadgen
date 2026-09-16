@@ -84,6 +84,14 @@ const CAPABILITY_ARTIFACT_CONTRACTS = Object.freeze({
       'MissionDiagnostics',
     ],
   }),
+  [BUILTIN_IDS.SOCIAL_CONTENT]: Object.freeze({
+    requires: [],
+    produces: ['social_content_draft'],
+  }),
+  [BUILTIN_IDS.SOCIAL_CONTENT_PUBLISH]: Object.freeze({
+    requires: ['social_content_draft'],
+    produces: ['social_content_published'],
+  }),
 });
 
 /**
@@ -161,6 +169,17 @@ const CAPABILITY_MISSION_ALIASES = Object.freeze({
     'Discovery Diagnostics',
     'Diagnose Discovery',
     'Discovery Diagnostic',
+  ]),
+  [BUILTIN_IDS.SOCIAL_CONTENT]: Object.freeze([
+    'Social Content Generation',
+    'Generate Social Content',
+    'Paige Social Content',
+    'Content Generation',
+  ]),
+  [BUILTIN_IDS.SOCIAL_CONTENT_PUBLISH]: Object.freeze([
+    'Social Content Publication',
+    'Publish Social Content',
+    'Paige Social Publish',
   ]),
 });
 

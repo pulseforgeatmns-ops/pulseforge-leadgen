@@ -2491,6 +2491,22 @@ async function logContentFailed(company, channel, contentType, quality, regenera
   }
 }
 
+async function mirrorSocialContentToPendingComments(draft = {}) {
+  const company = draft.meta?.company || draft.company || {
+    name: draft.companyName || draft.company?.name,
+    industry: draft.meta?.industry || 'Local Business',
+    id: draft.meta?.companyId || null,
+  };
+  if (!company.name || !draft.body || !draft.platform) return null;
+  return saveToPendingApprovals(
+    company,
+    draft.body,
+    draft.contentType || draft.content_type || 'promotional',
+    draft.platform,
+    draft.meta || null
+  );
+}
+
 async function saveToPendingApprovals(company, content, contentType, channel, meta = null) {
   const channelLabel = {
     facebook_page:   'Facebook Page',
@@ -2644,7 +2660,9 @@ async function completeRegenerateTrigger(triggerId, status = 'success') {
 }
 
 // Max quality-gate triggers — run before normal generation
-async function processRegenerateTriggers() {
+async function processRegenerateTriggers(options = {}) {
+  const skipCanonicalPersist = Boolean(options.skipCanonicalPersist);
+  const drafts = Array.isArray(options.drafts) ? options.drafts : null;
   const triggers = await pool.query(`
     SELECT id, payload
     FROM agent_log
@@ -2688,11 +2706,25 @@ async function processRegenerateTriggers() {
       try {
         const postResult = await producePost(company, contentType, channel);
         if (postResult.failed) continue;
-        const id = await saveToPendingApprovals(company, postResult.content, contentType, channel, postResult.meta);
-        if (id) {
+        if (skipCanonicalPersist && drafts) {
+          drafts.push({
+            company,
+            content: postResult.content,
+            contentType,
+            channel,
+            meta: postResult.meta || null,
+            quality: postResult.quality || null,
+          });
           await logQualityScore(channel, postResult.quality, true, postResult.content, postResult.regenerationAttempts);
-          console.log(`  ✓ regenerated (${id.slice(0, 8)})`);
+          console.log('  ✓ regenerated (draft)');
           regenerated++;
+        } else {
+          const id = await saveToPendingApprovals(company, postResult.content, contentType, channel, postResult.meta);
+          if (id) {
+            await logQualityScore(channel, postResult.quality, true, postResult.content, postResult.regenerationAttempts);
+            console.log(`  ✓ regenerated (${id.slice(0, 8)})`);
+            regenerated++;
+          }
         }
       } catch (err) {
         console.error(`  ✗ regenerate ${company.name}/${channel}: ${err.message}`);
@@ -2729,17 +2761,20 @@ async function logChannelError(company, channel, err) {
   }
 }
 
-async function run(options = {}) {
+async function generateSocialContent(options = {}) {
   const requestedClientId = Number(options.client_id || options.clientId || CLI_OPTIONS.client_id || CLIENT_ID);
   if (requestedClientId !== CLIENT_ID) {
-    throw new Error(`Paige was loaded for client ${CLIENT_ID}, but run() received client ${requestedClientId}. Set ACTIVE_CLIENT_ID before requiring paigeAgent.`);
+    throw new Error(`Paige was loaded for client ${CLIENT_ID}, but generateSocialContent() received client ${requestedClientId}. Set ACTIVE_CLIENT_ID before requiring paigeAgent.`);
   }
   const dryRun = isTruthyOption(options.dryRun ?? options.dry_run ?? CLI_OPTIONS.dryRun);
-  const requestedChannel = options.channel || CLI_OPTIONS.channel || null;
+  const skipCanonicalPersist = Boolean(options.skipCanonicalPersist);
+  const requestedChannel = options.channel || options.platform || CLI_OPTIONS.channel || null;
   const forcedFormat = options.format || CLI_OPTIONS.format || null;
   const simulateMiraUnavailable = isTruthyOption(options.simulateMiraUnavailable ?? CLI_OPTIONS.simulateMiraUnavailable);
   const count = Math.max(1, Math.min(10, Number(options.count || CLI_OPTIONS.count || 1)));
-  if (!dryRun && count !== 1) throw new Error('Paige --count is available only in dry-run mode');
+  if (!dryRun && !skipCanonicalPersist && count !== 1) {
+    throw new Error('Paige --count is available only in dry-run mode');
+  }
   if (forcedFormat && !LINKEDIN_FORMATS.includes(forcedFormat)) {
     throw new Error(`Unknown LinkedIn format: ${forcedFormat}`);
   }
@@ -2751,13 +2786,13 @@ async function run(options = {}) {
     if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
     if (CLIENT_ID === ANCHOR_CLIENT_ID && !dryRun) {
       console.log('[Paige] Anchor remains Scout-only; production content generation is disabled.');
-      return { success: false, skipped: true, reason: 'anchor_dry_run_only', client_id: CLIENT_ID };
+      return { success: false, skipped: true, reason: 'anchor_dry_run_only', client_id: CLIENT_ID, drafts: [], outputs: [] };
     }
-    if (!dryRun) await ensurePendingCommentsLinkedInColumns();
+    if (!dryRun && !skipCanonicalPersist) await ensurePendingCommentsLinkedInColumns();
     if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
       console.log('MSHI Facebook page is not connected yet; Paige will still queue Facebook, Google Business, and blog drafts for approval.');
     }
-    if (!dryRun) {
+    if (!dryRun && !skipCanonicalPersist) {
       console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
       console.log(`DELETE FROM pending_comments
 WHERE id NOT IN (
@@ -2779,7 +2814,10 @@ AND status = 'pending';`);
     const clients = getGenerationClients(allClients);
     console.log(`Found ${clients.length} client${clients.length !== 1 ? 's' : ''}.\n`);
 
-    const regenerateResult = dryRun ? { triggers: 0, regenerated: 0 } : await processRegenerateTriggers();
+    const drafts = [];
+    const regenerateResult = dryRun
+      ? { triggers: 0, regenerated: 0 }
+      : await processRegenerateTriggers({ skipCanonicalPersist, drafts });
     if (regenerateResult.triggers) {
       console.log(`[Paige] Regenerate pass: ${regenerateResult.regenerated} post(s) from ${regenerateResult.triggers} trigger(s)\n`);
     }
@@ -2793,7 +2831,7 @@ AND status = 'pending';`);
         max_regenerate_triggers: regenerateResult.triggers,
         max_regenerated: regenerateResult.regenerated,
       });
-      return { success: true, dry_run: dryRun, client_id: CLIENT_ID, outputs: [] };
+      return { success: true, dry_run: dryRun, client_id: CLIENT_ID, outputs: [], drafts };
     }
 
     let generated = 0;
@@ -2827,7 +2865,16 @@ AND status = 'pending';`);
           }
           const content = postResult.content;
           if (postResult.meta?.format) RUN_CONTEXT.sessionFormats.add(postResult.meta.format);
-          if (dryRun) {
+          if (dryRun || skipCanonicalPersist) {
+            const draft = {
+              company,
+              content,
+              contentType,
+              channel,
+              meta: postResult.meta || null,
+              quality: postResult.quality || null,
+            };
+            drafts.push(draft);
             outputs.push({
               client_id: CLIENT_ID,
               company: company.name,
@@ -2838,7 +2885,11 @@ AND status = 'pending';`);
               meta: postResult.meta || null,
             });
             generated++;
-            console.log(`\n--- DRY RUN: ${company.name} / ${channel} ---\n${content}\n--- END DRY RUN ---\n`);
+            if (dryRun) {
+              console.log(`\n--- DRY RUN: ${company.name} / ${channel} ---\n${content}\n--- END DRY RUN ---\n`);
+            } else {
+              console.log(`  ✓ draft generated (${company.name}/${channel})\n`);
+            }
           } else {
             const id = await saveToPendingApprovals(company, content, contentType, channel, postResult.meta);
             if (!id) continue;
@@ -2853,7 +2904,7 @@ AND status = 'pending';`);
           await logChannelError(company, channel, err);
         }
 
-        if (!dryRun) await new Promise(r => setTimeout(r, 1500));
+        if (!dryRun && !skipCanonicalPersist) await new Promise(r => setTimeout(r, 1500));
       }
     }
 
@@ -2865,8 +2916,9 @@ AND status = 'pending';`);
       pulseforge_pending_rejected: rejectedPulseforgePending,
       max_regenerate_triggers: regenerateResult.triggers,
       max_regenerated: regenerateResult.regenerated,
+      canonical_persist: skipCanonicalPersist,
     });
-    console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} ${dryRun ? 'generated without saving' : 'queued'}, ${channelsFailed.length} channel${channelsFailed.length !== 1 ? 's' : ''} failed.`);
+    console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} ${dryRun ? 'generated without saving' : skipCanonicalPersist ? 'drafted for canonical persist' : 'queued'}, ${channelsFailed.length} channel${channelsFailed.length !== 1 ? 's' : ''} failed.`);
     if (channelsFailed.length) console.log(`  Failed: ${channelsFailed.join(', ')}`);
     return {
       success: channelsFailed.length === 0,
@@ -2875,16 +2927,30 @@ AND status = 'pending';`);
       posts_generated: generated,
       channels_failed: channelsFailed,
       outputs,
+      drafts,
     };
   } catch (err) {
     console.error('Paige error:', err.message);
     await logRun('failed', { error: err.message }).catch(() => {});
-    return { success: false, dry_run: dryRun, client_id: CLIENT_ID, error: err.message, outputs: [] };
+    return { success: false, dry_run: dryRun, client_id: CLIENT_ID, error: err.message, outputs: [], drafts: [] };
   }
+}
+
+async function run(options = {}) {
+  const { routePaigeSocialContentExecution } = require('./services/paigeSocialContentExecution');
+  const clientId = Number(options.client_id || options.clientId || CLI_OPTIONS.client_id || CLIENT_ID);
+  return routePaigeSocialContentExecution({
+    ...options,
+    client_id: clientId,
+    tenantId: String(clientId),
+    source: options.source || options.invocationSource || 'cli',
+  });
 }
 
 module.exports = {
   run,
+  generateSocialContent,
+  mirrorSocialContentToPendingComments,
   _test: {
     getBrandForChannel,
     buildLinkedInRules,

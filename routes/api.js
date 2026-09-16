@@ -8,15 +8,6 @@ const { workspaceDisplayName } = require('../utils/clientFacingPresentation');
 const { featuresFromFlag } = require('../utils/pipelineExperience');
 const { ensureCloserSchema } = require('../utils/closerSchema');
 const { buildMiraContext } = require('../utils/miraContext');
-const { publishBlogPost } = require('../utils/blogPublisher');
-const {
-  publishToGoogleBusiness,
-  publishToFacebookPage,
-  publishFayeComment,
-  publishToLinkedInPage,
-  publishToLinkedInPersonal,
-  publishLinkComment,
-} = require('../utils/publishPipeline');
 const { normalizeVertical } = require('../utils/normalize');
 const { setSetterVisibility } = require('../utils/setterVisibility');
 const { ensureTieredEnrichmentSchema } = require('../utils/tieredEnrichmentSchema');
@@ -690,30 +681,28 @@ router.post('/api/approvals/:id', requireOperator, async (req, res) => {
   }
   try {
     const clientId = getRequestClientId(req);
-    const result = await pool.query(
-      'UPDATE pending_comments SET status = $1 WHERE id = $2 AND client_id = $3 RETURNING *',
-      [action, id, clientId]
-    );
-    res.json({ success: true, id, action });
-
-    const item = result.rows[0];
-    if (item && action === 'approved') {
-      const publishers = {
-        blog:             () => publishBlogPost(item),
-        google_business:  () => publishToGoogleBusiness(item),
-        facebook_page:    () => publishToFacebookPage(item),
-        facebook:         () => publishFayeComment(item),
-        linkedin_page:    () => publishToLinkedInPage(item),
-        linkedin_personal:() => publishToLinkedInPersonal(item),
-        linkedin:         () => publishLinkComment(item),
-      };
-      const publish = publishers[item.channel];
-      if (publish) {
-        publish().catch(err =>
-          console.error(`[Publisher:${item.channel}] Unhandled error:`, err.message)
-        );
-      }
+    const { applyPendingCommentApprovalAction } = require('../services/paigeSocialContentApprovalFlow');
+    const result = await applyPendingCommentApprovalAction({
+      clientId,
+      pendingCommentId: id,
+      action,
+      source: 'dashboard_api',
+    });
+    if (!result.ok) {
+      return res.status(result.statusCode || 500).json({
+        error: result.error || 'approval_failed',
+        message: result.message || null,
+        mode: result.mode || null,
+      });
     }
+    res.json({
+      success: true,
+      id,
+      action,
+      mode: result.mode,
+      artifact_id: result.artifact?.id || null,
+      publication: result.publication || null,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2959,13 +2948,21 @@ router.post('/api/run/:agent', requireOperator, async (req, res) => {
         : agent === 'emmett'
           ? await mod.run({ client_id: clientId, triggered_by: 'dashboard' })
           : agent === 'paige'
-            ? await mod.run({
+            ? await require('../services/paigeSocialContentExecution').routePaigeSocialContentExecution({
                 client_id: clientId,
+                tenantId: String(clientId),
                 dryRun: req.body?.dryRun ?? req.body?.dry_run,
                 channel: req.body?.channel,
+                platform: req.body?.platform || req.body?.channel,
                 format: req.body?.format,
                 count: req.body?.count,
                 simulateMiraUnavailable: req.body?.simulateMiraUnavailable,
+                contentObjective: req.body?.contentObjective || req.body?.content_objective,
+                workspaceContext: req.body?.workspaceContext || req.body?.workspace_context,
+                missionContext: req.body?.missionContext || req.body?.mission_context,
+                evidence: req.body?.evidence,
+                cadenceContext: req.body?.cadenceContext || req.body?.cadence_context,
+                source: 'dashboard',
               })
           : agent === 'paige_reflection'
             ? await mod.run({
