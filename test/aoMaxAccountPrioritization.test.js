@@ -52,6 +52,16 @@ test('classifyAoMaxIntent routes account prioritization questions', () => {
     'Who needs attention?',
     'What follow-ups are most important?',
     'What should I do next?',
+    'who should I focus on?',
+    'who should I focus on today?',
+    'who should I work on?',
+    'who should I contact first?',
+    'who should I call first?',
+    'where should I start?',
+    'which account should I start with?',
+    'which prospect should I focus on?',
+    'who is my top priority?',
+    'who should I visit?',
   ];
   for (const question of samples) {
     const result = classifyAoMaxIntent(question);
@@ -59,10 +69,31 @@ test('classifyAoMaxIntent routes account prioritization questions', () => {
   }
 });
 
+test('classifyAoMaxIntent does not misroute contact-role questions as prioritization', () => {
+  const negatives = [
+    'who should I ask for there?',
+    'who should I speak to at Brady?',
+    'who should I ask for at this account?',
+    'who should I talk to about pricing?',
+    'how should I handle this gatekeeper?',
+    'what should I say when they already have a cleaner?',
+  ];
+  for (const question of negatives) {
+    const result = classifyAoMaxIntent(question);
+    assert.notEqual(result.intent, 'account_prioritization', question);
+  }
+});
+
 test('classifyAoMaxIntent routes coaching questions', () => {
   assert.equal(classifyAoMaxIntent('How should I handle a gatekeeper?').intent, 'coaching');
   assert.equal(classifyAoMaxIntent('What should I say when they already have a cleaner?').intent, 'coaching');
   assert.equal(classifyAoMaxIntent('Help me with this conversation').intent, 'coaching');
+});
+
+test('classifyAoMaxIntent routes named-account contact questions to briefing', () => {
+  const result = classifyAoMaxIntent('who should I ask for at Brady Sullivan Properties?');
+  assert.equal(result.intent, 'account_briefing');
+  assert.equal(result.briefingTarget, 'Brady Sullivan Properties');
 });
 
 test('classifyAoMaxIntent routes account briefing questions', () => {

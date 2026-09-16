@@ -54,11 +54,10 @@ test('resolveConversationIntent handles contact follow-up without restating comp
   assert.equal(resolved.briefingTarget, 'Anagnost Companies');
 });
 
-test('resolveConversationIntent does not throw for coaching focus question without prior context', () => {
+test('resolveConversationIntent routes natural prioritization question without prior context', () => {
   assert.doesNotThrow(() => {
     const resolved = resolveConversationIntent('who should I focus on?', {});
-    assert.equal(resolved.intent, 'coaching');
-    assert.equal(resolved.account, null);
+    assert.equal(resolved.intent, 'account_prioritization');
   });
 });
 
