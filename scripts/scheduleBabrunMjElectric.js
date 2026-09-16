@@ -246,30 +246,73 @@ async function loadValidatedAsset(client) {
   };
 }
 
-async function loadSuppression(client) {
-  const mailboxStore = new PostgresTenantMailboxStore(client);
+function extractRecipientEmail(recipients) {
+  const list = Array.isArray(recipients) ? recipients : [];
+  for (const entry of list) {
+    if (typeof entry === 'string' && entry.includes('@')) {
+      return entry.trim().toLowerCase();
+    }
+    if (entry && typeof entry === 'object') {
+      const email = entry.email || entry.address;
+      if (typeof email === 'string' && email.includes('@')) {
+        return email.trim().toLowerCase();
+      }
+    }
+  }
+  return null;
+}
+
+function deriveScheduleIdFromMessage(row) {
+  if (!row || typeof row !== 'object') return null;
+  if (row.schedule_id) return row.schedule_id;
+  const metadata = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+  if (typeof metadata.scheduleId === 'string' && metadata.scheduleId) return metadata.scheduleId;
+  if (typeof metadata.schedule_id === 'string' && metadata.schedule_id) return metadata.schedule_id;
+  return null;
+}
+
+function normalizeLatestSuccessfulSend(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    prospectId: row.prospect_id,
+    sentAt: row.sent_at,
+    recipients: row.recipients,
+    recipientEmail: extractRecipientEmail(row.recipients),
+    outreachAssetId: row.outreach_asset_id,
+    threadId: row.thread_id,
+    status: row.status,
+    scheduleId: deriveScheduleIdFromMessage(row),
+  };
+}
+
+async function loadSuppression(db = pool) {
+  const mailboxStore = new PostgresTenantMailboxStore(db);
   return mailboxStore.findSuppression(MJ_ELECTRIC.tenantId, MJ_ELECTRIC.recipientEmail);
 }
 
-async function loadProspectEligibility(client) {
-  const scheduleStore = new PostgresScheduleStore(client);
+async function loadProspectEligibility(db = pool) {
+  const scheduleStore = new PostgresScheduleStore(db);
   return scheduleStore.getProspectEligibility(MJ_ELECTRIC.tenantId, MJ_ELECTRIC.prospectId);
 }
 
-async function loadMissionId(client) {
-  const res = await client.query(
-    `SELECT mission_id
-       FROM acquisition_prospect_projections
-      WHERE tenant_id = $1
-        AND prospect_id::text = $2
+async function loadMissionId(db = pool) {
+  const res = await db.query(
+    `SELECT ako.mission_id
+       FROM acquisition_prospect_projections app
+       JOIN acquisition_knowledge_objects ako
+         ON ako.id = app.acquisition_knowledge_object_id
+        AND ako.tenant_id = app.tenant_id
+      WHERE app.tenant_id = $1
+        AND app.prospect_id::text = $2
       LIMIT 1`,
     [MJ_ELECTRIC.tenantId, MJ_ELECTRIC.prospectId]
   );
   return res.rows[0]?.mission_id || null;
 }
 
-async function loadActiveSchedules(client) {
-  const res = await client.query(
+async function loadActiveSchedules(db = pool) {
+  const res = await db.query(
     `SELECT id, status, scheduled_for, recipient_email, prospect_id, skip_reason
        FROM tenant_outreach_scheduled_sends
       WHERE tenant_id = $1
@@ -281,8 +324,8 @@ async function loadActiveSchedules(client) {
   return res.rows;
 }
 
-async function loadActiveReservations(client) {
-  const res = await client.query(
+async function loadActiveReservations(db = pool) {
+  const res = await db.query(
     `SELECT id, schedule_id, status, scheduled_for
        FROM emmett_tenant_mailbox_capacity_reservations
       WHERE tenant_id = $1
@@ -294,23 +337,35 @@ async function loadActiveReservations(client) {
   return res.rows;
 }
 
-async function loadLatestSuccessfulSend(client) {
-  const res = await client.query(
-    `SELECT id, sent_at, recipient_email, schedule_id
-       FROM tenant_outreach_messages
-      WHERE tenant_id = $1
-        AND sending_identity_id = $2
-        AND direction = 'OUTBOUND'
-        AND status = 'sent'
-      ORDER BY sent_at DESC
+async function loadLatestSuccessfulSend(db = pool) {
+  const res = await db.query(
+    `SELECT
+       m.id,
+       m.prospect_id,
+       m.sent_at,
+       m.recipients,
+       m.outreach_asset_id,
+       m.thread_id,
+       m.status,
+       m.metadata,
+       s.id AS schedule_id
+       FROM tenant_outreach_messages m
+      LEFT JOIN tenant_outreach_scheduled_sends s
+        ON s.tenant_id = m.tenant_id
+       AND s.outbound_message_id = m.id
+      WHERE m.tenant_id = $1
+        AND m.sending_identity_id = $2
+        AND m.direction = 'OUTBOUND'
+        AND m.status = 'sent'
+      ORDER BY m.sent_at DESC
       LIMIT 1`,
     [MJ_ELECTRIC.tenantId, MJ_ELECTRIC.sendingIdentityId]
   );
-  return res.rows[0] || null;
+  return normalizeLatestSuccessfulSend(res.rows[0] || null);
 }
 
-async function loadPriorSkippedSchedule(client) {
-  const res = await client.query(
+async function loadPriorSkippedSchedule(db = pool) {
+  const res = await db.query(
     `SELECT id, status, skip_reason, scheduled_for, updated_at
        FROM tenant_outreach_scheduled_sends
       WHERE tenant_id = $1 AND id = $2
@@ -320,7 +375,7 @@ async function loadPriorSkippedSchedule(client) {
   return res.rows[0] || null;
 }
 
-async function loadCapacityEnvelope(client, now) {
+async function loadCapacityEnvelope(now) {
   await ensureCapacitySchema(pool);
   let envelope = await loadLatestEnvelope(
     MJ_ELECTRIC.tenantId,
@@ -452,14 +507,14 @@ async function runPreflight(client, asset, now) {
     priorSkippedSchedule,
     missionId,
   ] = await Promise.all([
-    loadCapacityEnvelope(client, now),
-    loadProspectEligibility(client),
-    loadSuppression(client),
-    loadLatestSuccessfulSend(client),
-    loadActiveSchedules(client),
-    loadActiveReservations(client),
-    loadPriorSkippedSchedule(client),
-    loadMissionId(client),
+    loadCapacityEnvelope(now),
+    loadProspectEligibility(pool),
+    loadSuppression(pool),
+    loadLatestSuccessfulSend(pool),
+    loadActiveSchedules(pool),
+    loadActiveReservations(pool),
+    loadPriorSkippedSchedule(pool),
+    loadMissionId(pool),
   ]);
 
   const schedulingBlocked = [];
@@ -484,8 +539,8 @@ async function runPreflight(client, asset, now) {
 
   let schedulingEligibility = null;
   if (eligibleTime.scheduledForIso && !eligibleTime.blocked) {
-    const scheduleStore = new PostgresScheduleStore(client);
-    const mailboxStore = new PostgresTenantMailboxStore(client);
+    const scheduleStore = new PostgresScheduleStore(pool);
+    const mailboxStore = new PostgresTenantMailboxStore(pool);
     schedulingEligibility = await evaluateSchedulingEligibility({
       tenantId: MJ_ELECTRIC.tenantId,
       prospectId: MJ_ELECTRIC.prospectId,
@@ -728,6 +783,14 @@ if (require.main === module) {
 module.exports = {
   MJ_ELECTRIC,
   PRIOR_SKIPPED_SCHEDULE_ID,
+  extractRecipientEmail,
+  deriveScheduleIdFromMessage,
+  normalizeLatestSuccessfulSend,
+  loadLatestSuccessfulSend,
+  loadActiveSchedules,
+  loadActiveReservations,
+  loadPriorSkippedSchedule,
+  loadMissionId,
   findEligibleScheduleTime,
   runPreflight,
   buildReport,
