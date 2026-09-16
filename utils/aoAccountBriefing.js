@@ -6,6 +6,7 @@ const {
   parseProbeAnswers,
 } = require('./aoOperationalState');
 const { normalizeDueDate } = require('./aoQueueFormat');
+const { normalizeObservedInterestLevel } = require('./aoInterestLevel');
 
 const DEFAULT_AO_TIMEZONE = 'America/New_York';
 
@@ -668,7 +669,7 @@ function normalizeAccountInput(row) {
     business_type: row.business_type || metadata.lane || null,
     status: row.lead_status || row.status,
     lead_status: row.lead_status || row.status,
-    interest_level: String(row.interest_level || metadata.interest_level || 'medium').toLowerCase(),
+    interest_level: normalizeObservedInterestLevel(row.interest_level ?? metadata.interest_level),
     priority: normalizePriority(row.priority || row.task_priority || metadata.priority),
     due_date: row.due_date || row.open_task_due || row.next_follow_up_date || metadata.due_date,
     next_action: row.next_action || row.open_next_action || metadata.next_action || metadata.initial_next_action,

@@ -1,6 +1,7 @@
 'use strict';
 
 const { deriveOperationalState } = require('./aoOperationalState');
+const { observedInterestRankWeight } = require('./aoInterestLevel');
 const { safeGuidance } = require('./aoMessageTemplates');
 const { normalizeDueDate } = require('./aoQueueFormat');
 const {
@@ -17,12 +18,6 @@ const TASK_PRIORITY_WEIGHT = Object.freeze({
   warm: 3,
   high: 2,
   normal: 1,
-});
-
-const INTEREST_WEIGHT = Object.freeze({
-  high: 3,
-  medium: 2,
-  low: 1,
 });
 
 const STATE_ACTION_PRIORITY = Object.freeze({
@@ -66,7 +61,7 @@ function computeRankScore(row, state, today) {
   score += (100 - stateRank) * 10;
 
   score += (TASK_PRIORITY_WEIGHT[row.priority] || 1) * 100;
-  score += (INTEREST_WEIGHT[String(row.interest_level || 'medium').toLowerCase()] || 1) * 20;
+  score += observedInterestRankWeight(row.interest_level) * 20;
 
   if (row.waiting_on_jake) score -= 500;
 

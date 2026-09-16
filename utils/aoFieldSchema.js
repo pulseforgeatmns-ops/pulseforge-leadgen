@@ -53,8 +53,8 @@ async function ensureAoFieldSchemaOnce() {
       business_type TEXT,
       status TEXT NOT NULL DEFAULT 'new_visit'
         CHECK (status IN (${LEAD_STATUSES.map(s => `'${s}'`).join(', ')})),
-      interest_level TEXT NOT NULL DEFAULT 'medium'
-        CHECK (interest_level IN ('low', 'medium', 'high')),
+      interest_level TEXT DEFAULT NULL
+        CHECK (interest_level IS NULL OR interest_level IN ('low', 'medium', 'high')),
       ao_owner_id INTEGER NOT NULL REFERENCES users(id),
       first_contact_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       last_contact_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -184,6 +184,16 @@ async function ensureAoFieldSchemaOnce() {
   await pool.query(`
     ALTER TABLE ao_leads ADD CONSTRAINT ao_leads_status_check
       CHECK (status IN (${LEAD_STATUSES.map(s => `'${s}'`).join(', ')}))
+  `);
+
+  await pool.query(`ALTER TABLE ao_leads ALTER COLUMN interest_level DROP NOT NULL`);
+  await pool.query(`ALTER TABLE ao_leads ALTER COLUMN interest_level DROP DEFAULT`);
+  await pool.query(`
+    ALTER TABLE ao_leads DROP CONSTRAINT IF EXISTS ao_leads_interest_level_check
+  `);
+  await pool.query(`
+    ALTER TABLE ao_leads ADD CONSTRAINT ao_leads_interest_level_check
+      CHECK (interest_level IS NULL OR interest_level IN ('low', 'medium', 'high'))
   `);
 
   await pool.query(`
