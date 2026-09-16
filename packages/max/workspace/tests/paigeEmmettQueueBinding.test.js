@@ -98,15 +98,15 @@ function contributions({ discoveryEmail = null, nestedPayload = true } = {}) {
   const paigePayload = { variants, subjects: variants.map((row) => row.subject) };
   if (!nestedPayload) {
     return [
-      { specialist: 'scout', kind: 'discovery', payload: scoutPayload },
-      { specialist: 'max', kind: 'prioritization', payload: maxPayload },
-      { specialist: 'paige', kind: 'variants', payload: paigePayload },
+      { missionId: MISSION.id, specialist: 'scout', kind: 'discovery', payload: scoutPayload },
+      { missionId: MISSION.id, specialist: 'max', kind: 'prioritization', payload: maxPayload },
+      { missionId: MISSION.id, specialist: 'paige', kind: 'variants', payload: paigePayload },
     ];
   }
   return [
-    nested('scout', 'discovery', scoutPayload),
-    nested('max', 'prioritization', maxPayload),
-    nested('paige', 'variants', paigePayload),
+    { ...nested('scout', 'discovery', scoutPayload), missionId: MISSION.id },
+    { ...nested('max', 'prioritization', maxPayload), missionId: MISSION.id },
+    { ...nested('paige', 'variants', paigePayload), missionId: MISSION.id },
   ];
 }
 

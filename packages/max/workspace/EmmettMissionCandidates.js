@@ -8,6 +8,7 @@
 
 const { SPECIALISTS, CONTRIBUTION_KINDS, asText, MESSAGE_BINDING_SCOPES } = require('../../acquisition-mission/types');
 const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
+const { unwrapSpecialistPayload } = require('../../acquisition-mission/ContributionSupersession');
 const { resolveMissionBoundRecipientEmail } = require('./MissionBoundCrmResolver');
 const { resolveMissionBoundIdentity } = require('./MissionBoundIdentity');
 const {
@@ -112,9 +113,9 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   const scoutRow = findLatestScoutDiscovery(contributions, mission);
   const maxRow = findMaxPrioritization(contributions, mission);
   const paigeRow = findPaigeVariants(contributions, mission);
-  const scoutPayload = scoutRow?.payload || {};
-  const maxPayload = maxRow?.payload || {};
-  const paigePayload = paigeRow?.payload || {};
+  const scoutPayload = scoutRow ? contributionBody(scoutRow) : {};
+  const maxPayload = maxRow ? contributionBody(maxRow) : {};
+  const paigePayload = paigeRow ? contributionBody(paigeRow) : {};
   const paigeReady = buildPaigeReadinessMetadata(paigePayload);
   const plan = mission.structuredMission || mission.missionPlanDraft || {};
   const segmentLabel = plan.market?.label || plan.market?.segment || mission.targetSegment;
@@ -172,9 +173,11 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
     const row = {
       id: candidateId,
       candidateId,
+      companyId: identity.companyId || candidateId,
       placeId: identity.placeId,
       crmCompanyId: identity.crmCompanyId,
       crmProspectId,
+      domain: identity.domain || null,
       prospectId: candidateId,
       email: resolveMissionBoundRecipientEmail({
         discoveryEmail: prospect?.email,
