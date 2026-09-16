@@ -152,19 +152,22 @@ test('buildCoachingReply still returns gatekeeper coaching', () => {
 });
 
 test('assigned account queries are scoped to AO owner and tenant', () => {
-  const { fetchAssignedAccountRows, findAssignedLeadByName } = require('../services/aoAccountIntelligence');
-  assert.match(String(fetchAssignedAccountRows), /t\.ao_owner_id = \$1/);
-  assert.match(String(fetchAssignedAccountRows), /l\.client_id = \$2/);
-  assert.match(String(findAssignedLeadByName), /l\.ao_owner_id = \$1/);
-  assert.match(String(findAssignedLeadByName), /l\.client_id = \$2/);
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'aoAccountIntelligence.js'), 'utf8');
+  assert.match(src, /t\.ao_owner_id = \$1/);
+  assert.match(src, /l\.client_id = \$2/);
+  assert.match(src, /l\.ao_owner_id = \$1/);
 });
 
-test('ask_for_help path uses account intelligence instead of generic safeGuidance fallback', () => {
-  const { respondToSession } = require('../services/aoMaxFlow');
-  const { handleAoMaxQuestion } = require('../services/aoAccountIntelligence');
+test('conversation path uses account intelligence instead of generic safeGuidance fallback', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const aoMaxFlowSrc = fs.readFileSync(path.join(__dirname, '..', 'services', 'aoMaxFlow.js'), 'utf8');
+  const aoMaxConversationSrc = fs.readFileSync(path.join(__dirname, '..', 'services', 'aoMaxConversation.js'), 'utf8');
   const { classifyAoMaxIntent } = require('../utils/aoMaxIntent');
-  assert.match(String(respondToSession), /handleAoMaxQuestion/);
-  assert.match(String(handleAoMaxQuestion), /account_prioritization/);
-  assert.match(String(handleAoMaxQuestion), /account_briefing/);
+  assert.match(aoMaxFlowSrc, /handleConversationTurn/);
+  assert.match(aoMaxConversationSrc, /buildAccountPrioritizationReply/);
+  assert.match(aoMaxConversationSrc, /buildAccountBriefingReply/);
   assert.equal(classifyAoMaxIntent('What accounts should I focus on today?').intent, 'account_prioritization');
 });

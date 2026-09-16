@@ -24,7 +24,8 @@ const TASK_STATUSES = ['open', 'done', 'rescheduled', 'escalated', 'cancelled'];
 const TASK_PRIORITIES = ['normal', 'high', 'warm'];
 const ATTRIBUTION_SOURCES = ['ao_field_visit', 'direct_mail_campaign'];
 const ESCALATION_STATUSES = ['new', 'seen', 'in_progress', 'resolved', 'ignored'];
-const MAX_MODES = ['log_visit', 'follow_up', 'direct_mail_follow_up', 'route_follow_up', 'phone_follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help'];
+const MAX_MODES = ['log_visit', 'follow_up', 'direct_mail_follow_up', 'route_follow_up', 'phone_follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help', 'conversation'];
+const REPORT_STATUSES = ['new', 'reviewed', 'resolved'];
 const ROUTE_SORT_MODES = ['farthest_first', 'closest_first', 'shortest_route', 'manual'];
 const ROUTE_START_POINT_TYPES = ['current_location', 'anchor_office', 'custom'];
 const ROUTE_STATUSES = ['active', 'completed', 'cancelled'];
@@ -250,6 +251,29 @@ async function ensureAoFieldSchemaOnce() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS ao_max_conversation_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      ao_owner_id INTEGER NOT NULL REFERENCES users(id),
+      session_id UUID NOT NULL REFERENCES ao_max_sessions(id),
+      category TEXT NOT NULL DEFAULT 'user_report',
+      note TEXT,
+      transcript_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      context_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'new'
+        CHECK (status IN (${REPORT_STATUSES.map(s => `'${s}'`).join(', ')})),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ao_max_reports_client_created
+      ON ao_max_conversation_reports(client_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ao_max_reports_session
+      ON ao_max_conversation_reports(session_id);
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_ao_leads_owner ON ao_leads(ao_owner_id, client_id);
     CREATE INDEX IF NOT EXISTS idx_ao_leads_next_follow_up ON ao_leads(next_follow_up_date);
     CREATE INDEX IF NOT EXISTS idx_ao_tasks_owner_due ON ao_follow_up_tasks(ao_owner_id, due_date, status);
@@ -282,6 +306,7 @@ module.exports = {
   ATTRIBUTION_SOURCES,
   ESCALATION_STATUSES,
   MAX_MODES,
+  REPORT_STATUSES,
   ROUTE_SORT_MODES,
   ROUTE_START_POINT_TYPES,
   ROUTE_STATUSES,
