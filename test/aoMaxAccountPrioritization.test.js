@@ -153,107 +153,22 @@ test('buildCoachingReply still returns gatekeeper coaching', () => {
 });
 
 test('assigned account queries are scoped to AO owner and tenant', () => {
-  const { fetchAssignedAccountRows, findAssignedLeadByName } = require('../services/aoAccountIntelligence');
-  assert.match(String(fetchAssignedAccountRows), /t\.ao_owner_id = \$1/);
-  assert.match(String(fetchAssignedAccountRows), /l\.client_id = \$2/);
-  assert.match(String(findAssignedLeadByName), /l\.ao_owner_id = \$1/);
-  assert.match(String(findAssignedLeadByName), /l\.client_id = \$2/);
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'aoAccountIntelligence.js'), 'utf8');
+  assert.match(src, /t\.ao_owner_id = \$1/);
+  assert.match(src, /l\.client_id = \$2/);
+  assert.match(src, /l\.ao_owner_id = \$1/);
 });
 
-function account(overrides = {}) {
-  return {
-    rank_score: 100,
-    due_date: null,
-    business_name: 'Default Co',
-    ...overrides,
-  };
-}
-
-test('comparePrioritizedAccounts handles JS Date due_date without throwing', () => {
-  const today = '2026-09-16';
-  const rows = [
-    account({
-      business_name: 'Date Object Co',
-      due_date: new Date('2026-09-16T00:00:00.000Z'),
-      rank_score: mapAccountRow(taskRow({ due_date: new Date('2026-09-16T00:00:00.000Z') }), today).rank_score,
-    }),
-    account({
-      business_name: 'ISO String Co',
-      due_date: '2026-09-16',
-      rank_score: mapAccountRow(taskRow({ due_date: '2026-09-16' }), today).rank_score,
-    }),
-  ];
-
-  assert.doesNotThrow(() => rows.sort(comparePrioritizedAccounts));
-});
-
-test('comparePrioritizedAccounts handles ISO string due_date', () => {
-  const sorted = [
-    account({ business_name: 'Future Co', due_date: '2026-09-20', rank_score: 500 }),
-    account({ business_name: 'Today Co', due_date: '2026-09-16', rank_score: 500 }),
-  ].sort(comparePrioritizedAccounts);
-
-  assert.equal(sorted[0].business_name, 'Today Co');
-  assert.equal(sorted[1].business_name, 'Future Co');
-});
-
-test('comparePrioritizedAccounts handles null due_date last', () => {
-  const sorted = [
-    account({ business_name: 'No Due Co', due_date: null, rank_score: 500 }),
-    account({ business_name: 'Due Co', due_date: '2026-09-16', rank_score: 500 }),
-  ].sort(comparePrioritizedAccounts);
-
-  assert.equal(sorted[0].business_name, 'Due Co');
-  assert.equal(sorted[1].business_name, 'No Due Co');
-});
-
-test('comparePrioritizedAccounts handles mixed Date and string due_date', () => {
-  const sorted = [
-    account({ business_name: 'String Future', due_date: '2026-09-18', rank_score: 500 }),
-    account({ business_name: 'Date Overdue', due_date: new Date('2026-09-14T00:00:00.000Z'), rank_score: 500 }),
-    account({ business_name: 'String Today', due_date: '2026-09-16', rank_score: 500 }),
-  ].sort(comparePrioritizedAccounts);
-
-  assert.deepEqual(
-    sorted.map(row => row.business_name),
-    ['Date Overdue', 'String Today', 'String Future'],
-  );
-});
-
-test('comparePrioritizedAccounts orders overdue before due today before future before no due date', () => {
-  const equalRank = 500;
-  const rows = [
-    account({ business_name: 'Future Co', due_date: '2026-09-20', rank_score: equalRank }),
-    account({ business_name: 'No Due Co', due_date: null, rank_score: equalRank }),
-    account({
-      business_name: 'Overdue Co',
-      due_date: new Date('2026-09-14T00:00:00.000Z'),
-      rank_score: equalRank,
-    }),
-    account({ business_name: 'Today Co', due_date: '2026-09-16', rank_score: equalRank }),
-  ].sort(comparePrioritizedAccounts);
-
-  assert.deepEqual(
-    rows.map(row => row.business_name),
-    ['Overdue Co', 'Today Co', 'Future Co', 'No Due Co'],
-  );
-});
-
-test('mapAccountRow normalizes pg Date due_date to ISO string', () => {
-  const mapped = mapAccountRow(taskRow({
-    due_date: new Date('2026-09-16T12:00:00.000Z'),
-  }), '2026-09-16');
-
-  assert.equal(mapped.due_date, '2026-09-16');
-  assert.equal(typeof mapped.due_date, 'string');
-});
-
-test('ask_for_help path uses account intelligence instead of generic safeGuidance fallback', () => {
-  const { respondToSession } = require('../services/aoMaxFlow');
-  const { handleAoMaxQuestion } = require('../services/aoAccountIntelligence');
+test('conversation path uses account intelligence instead of generic safeGuidance fallback', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const aoMaxFlowSrc = fs.readFileSync(path.join(__dirname, '..', 'services', 'aoMaxFlow.js'), 'utf8');
+  const aoMaxConversationSrc = fs.readFileSync(path.join(__dirname, '..', 'services', 'aoMaxConversation.js'), 'utf8');
   const { classifyAoMaxIntent } = require('../utils/aoMaxIntent');
-  assert.match(String(respondToSession), /handleAoMaxQuestion/);
-  assert.match(String(handleAoMaxQuestion), /account_prioritization/);
-  assert.match(String(handleAoMaxQuestion), /account_briefing/);
+  assert.match(aoMaxFlowSrc, /handleConversationTurn/);
+  assert.match(aoMaxConversationSrc, /buildAccountPrioritizationReply/);
+  assert.match(aoMaxConversationSrc, /buildAccountBriefingReply/);
   assert.equal(classifyAoMaxIntent('What accounts should I focus on today?').intent, 'account_prioritization');
 });

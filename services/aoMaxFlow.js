@@ -31,7 +31,11 @@ const {
   depositEscalationAction,
 } = require('./aoFieldService');
 const { advanceRouteAfterVisit, buildNextWorkDebrief } = require('./aoRouteService');
-const { handleAoMaxQuestion } = require('./aoAccountIntelligence');
+const {
+  handleConversationTurn,
+  appendConversationEvent,
+  createConversationSession,
+} = require('./aoMaxConversation');
 
 const LOG_VISIT_STEPS = [
   { key: 'business_name', question: 'What business did you visit?' },
@@ -147,13 +151,46 @@ function getSteps(mode) {
   return [];
 }
 
-async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
+async function maybeResumeConversationAfterWizard({
+  conversationSessionId,
+  aoOwnerId,
+  reply,
+  meta = {},
+}) {
+  if (!conversationSessionId) return;
+  try {
+    await appendConversationEvent({
+      sessionId: conversationSessionId,
+      aoOwnerId,
+      role: 'max',
+      content: reply,
+      intent: meta.intent || 'wizard_completion',
+      meta,
+    });
+  } catch (err) {
+    console.error('[ao] conversation resume failed:', err.message);
+  }
+}
+
+async function startMode({ aoOwnerId, clientId, mode, aoName, taskId, conversationSessionId = null }) {
   if (mode === 'follow_up') {
     return {
       completed: false,
       reply: 'Open your follow-up queue below — tap any direct mail task to log the visit with Max.',
       mode,
       show_queue: true,
+    };
+  }
+
+  if (mode === 'ask_for_help') {
+    const session = conversationSessionId
+      ? { id: conversationSessionId }
+      : await createConversationSession({ aoOwnerId, clientId });
+    return {
+      session_id: session.id,
+      mode: 'conversation',
+      completed: false,
+      reply: 'How can I help? Ask about your accounts, a briefing, or coaching for a conversation.',
     };
   }
 
@@ -176,6 +213,7 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
         lead_id: task.lead_id,
         business_name: task.business_name,
         campaign_name: task.campaign_name,
+        conversation_session_id: conversationSessionId || null,
       },
     });
     const opening = buildDirectMailOpening(aoName);
@@ -215,6 +253,7 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
         lead_id: task.lead_id,
         business_name: task.business_name,
         address: task.address,
+        conversation_session_id: conversationSessionId || null,
       },
     });
     const steps = getSteps(mode);
@@ -255,6 +294,7 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
         business_name: task.business_name,
         contact_phone: task.contact_phone,
         campaign_name: task.campaign_name,
+        conversation_session_id: conversationSessionId || null,
       },
     });
     const steps = getSteps(mode);
@@ -276,7 +316,12 @@ async function startMode({ aoOwnerId, clientId, mode, aoName, taskId }) {
     };
   }
 
-  const session = await createSession({ aoOwnerId, clientId, mode });
+  const session = await createSession({
+    aoOwnerId,
+    clientId,
+    mode,
+    initialPayload: conversationSessionId ? { conversation_session_id: conversationSessionId } : {},
+  });
   const steps = getSteps(mode);
   const greeting = mode === 'log_visit'
     ? 'Let\'s log that visit.'
@@ -435,6 +480,19 @@ async function finalizeVisitSession({
     ? await appendNextWorkDebrief({ reply, aoOwnerId, clientId, aoName, taskId: payload.task_id })
     : { reply: reply + await buildNextWorkDebrief({ aoOwnerId, clientId, aoName }), route: null, next_stop: null };
 
+  await maybeResumeConversationAfterWizard({
+    conversationSessionId: payload.conversation_session_id,
+    aoOwnerId,
+    reply: debrief.reply,
+    meta: {
+      intent: 'wizard_completion',
+      wizard_mode: session.mode,
+      account: result.lead
+        ? { business_name: result.lead.business_name, lead_id: result.lead.id }
+        : null,
+    },
+  });
+
   return {
     session_id: sessionId,
     mode: session.mode,
@@ -446,6 +504,7 @@ async function finalizeVisitSession({
     next_action_owner: nextActionOwner,
     route: debrief.route,
     next_stop: debrief.next_stop,
+    conversation_session_id: payload.conversation_session_id || null,
   };
 }
 
@@ -511,6 +570,19 @@ async function finalizeDirectMailSession({
     ? await appendNextWorkDebrief({ reply, aoOwnerId, clientId, aoName, taskId: payload.task_id })
     : { reply: reply + await buildNextWorkDebrief({ aoOwnerId, clientId, aoName }), route: null, next_stop: null };
 
+  await maybeResumeConversationAfterWizard({
+    conversationSessionId: payload.conversation_session_id,
+    aoOwnerId,
+    reply: debrief.reply,
+    meta: {
+      intent: 'wizard_completion',
+      wizard_mode: session.mode,
+      account: result.lead
+        ? { business_name: result.lead.business_name, lead_id: result.lead.id }
+        : null,
+    },
+  });
+
   return {
     session_id: sessionId,
     mode: session.mode,
@@ -521,6 +593,7 @@ async function finalizeDirectMailSession({
     escalated: Boolean(result.escalation),
     route: debrief.route,
     next_stop: debrief.next_stop,
+    conversation_session_id: payload.conversation_session_id || null,
   };
 }
 
@@ -585,6 +658,19 @@ async function finalizeRouteFollowUpSession({
     ? await appendNextWorkDebrief({ reply, aoOwnerId, clientId, aoName, taskId: payload.task_id })
     : { reply: reply + await buildNextWorkDebrief({ aoOwnerId, clientId, aoName }), route: null, next_stop: null };
 
+  await maybeResumeConversationAfterWizard({
+    conversationSessionId: payload.conversation_session_id,
+    aoOwnerId,
+    reply: debrief.reply,
+    meta: {
+      intent: 'wizard_completion',
+      wizard_mode: session.mode,
+      account: result.lead
+        ? { business_name: result.lead.business_name, lead_id: result.lead.id }
+        : null,
+    },
+  });
+
   return {
     session_id: sessionId,
     mode: session.mode,
@@ -595,6 +681,7 @@ async function finalizeRouteFollowUpSession({
     escalated: Boolean(result.escalation),
     route: debrief.route,
     next_stop: debrief.next_stop,
+    conversation_session_id: payload.conversation_session_id || null,
   };
 }
 
@@ -655,17 +742,32 @@ async function finalizePhoneFollowUpSession({
   });
 
   const workDebrief = await buildNextWorkDebrief({ aoOwnerId, clientId, aoName });
+  const fullReply = reply + workDebrief;
+
+  await maybeResumeConversationAfterWizard({
+    conversationSessionId: payload.conversation_session_id,
+    aoOwnerId,
+    reply: fullReply,
+    meta: {
+      intent: 'wizard_completion',
+      wizard_mode: session.mode,
+      account: result.lead
+        ? { business_name: result.lead.business_name, lead_id: result.lead.id }
+        : null,
+    },
+  });
 
   return {
     session_id: sessionId,
     mode: session.mode,
     completed: true,
-    reply: reply + workDebrief,
+    reply: fullReply,
     lead: result.lead,
     task: result.task,
     escalated: Boolean(result.escalation),
     route: null,
     next_stop: null,
+    conversation_session_id: payload.conversation_session_id || null,
   };
 }
 
@@ -678,27 +780,22 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
   let stepIndex = session.step_index;
   let probeState = initProbeState(payload);
 
-  if (session.mode === 'ask_for_help') {
-    const result = await handleAoMaxQuestion({
+  if (session.mode === 'conversation') {
+    return handleConversationTurn({
+      sessionId,
       aoOwnerId,
       clientId,
       message,
     });
-    await completeSession(sessionId, {
-      stepIndex: stepIndex + 1,
-      payload: { ...payload, question: message, intent: result.intent },
+  }
+
+  if (session.mode === 'ask_for_help') {
+    return handleConversationTurn({
+      sessionId: payload.conversation_session_id || sessionId,
+      aoOwnerId,
+      clientId,
+      message,
     });
-    return {
-      session_id: sessionId,
-      mode: session.mode,
-      completed: true,
-      intent: result.intent,
-      reply: result.reply,
-      accounts: result.accounts || null,
-      account: result.account || null,
-      escalate: result.escalate || false,
-      escalation_reason: result.escalation_reason || null,
-    };
   }
 
   if (session.mode === 'log_visit' && probeState.in_probe_mode) {
@@ -852,20 +949,34 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
         : 'Solid day — keep the momentum.',
     ].filter(Boolean);
 
+    const debriefReply = parts.join('\n');
+    await maybeResumeConversationAfterWizard({
+      conversationSessionId: payload.conversation_session_id,
+      aoOwnerId,
+      reply: debriefReply,
+      meta: { intent: 'wizard_completion', wizard_mode: session.mode },
+    });
+
     return {
       session_id: sessionId,
       mode: session.mode,
       completed: true,
-      reply: parts.join('\n'),
+      reply: debriefReply,
       debrief: payload,
+      conversation_session_id: payload.conversation_session_id || null,
     };
   }
 
   return { session_id: sessionId, mode: session.mode, completed: true, reply: 'Done.' };
 }
 
-async function askMax({ aoOwnerId, clientId, message }) {
-  return handleAoMaxQuestion({ aoOwnerId, clientId, message });
+async function askMax({ aoOwnerId, clientId, message, sessionId = null }) {
+  return handleConversationTurn({
+    sessionId,
+    aoOwnerId,
+    clientId,
+    message,
+  });
 }
 
 module.exports = {
