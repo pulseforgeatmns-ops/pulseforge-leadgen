@@ -103,8 +103,8 @@ describe('SPEC-256 — Canonical Paige Social Content Approval', () => {
     const store = createInMemorySocialContentStore();
     const cap = createSocialContentPublishCapability({
       socialContentStore: store,
-      publishers: {
-        publishToLinkedInPage: async () => {},
+      publicationService: {
+        publishApprovedArtifact: async () => ({ success: true, externalPlatform: 'linkedin_page' }),
       },
     });
 
@@ -135,9 +135,14 @@ describe('SPEC-256 — Canonical Paige Social Content Approval', () => {
     const published = [];
     const cap = createSocialContentPublishCapability({
       socialContentStore: store,
-      publishers: {
-        publishToLinkedInPage: async (item) => {
-          published.push(item);
+      publicationService: {
+        publishApprovedArtifact: async ({ artifact }) => {
+          published.push(artifact);
+          return {
+            success: true,
+            externalPlatform: 'linkedin_page',
+            externalPostId: 'buf-123',
+          };
         },
       },
     });
@@ -161,7 +166,8 @@ describe('SPEC-256 — Canonical Paige Social Content Approval', () => {
 
     assert.equal(result.status, 'completed');
     assert.equal(published.length, 1);
-    assert.equal(published[0].id, 'pc-4');
+    assert.equal(published[0].pendingCommentId, 'pc-4');
+    assert.equal(result.outputs.externalPostId, 'buf-123');
     const row = await store.getById('art-4', '4', 4);
     assert.equal(row.approvalState, APPROVAL_STATES.PUBLISHED);
   });
@@ -176,8 +182,11 @@ describe('SPEC-256 — Canonical Paige Social Content Approval', () => {
     });
     const publishCap = createSocialContentPublishCapability({
       socialContentStore: store,
-      publishers: {
-        publishToGoogleBusiness: async (item) => published.push(item),
+      publicationService: {
+        publishApprovedArtifact: async ({ artifact }) => {
+          published.push(artifact);
+          return { success: true, externalPlatform: 'google_business' };
+        },
       },
     });
 

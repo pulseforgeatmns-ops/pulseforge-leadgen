@@ -21,8 +21,8 @@ const {
 } = require('./SocialContentApproval');
 const {
   createSocialContentPublishCapability,
-  buildPendingCommentMirror,
 } = require('./SocialContentPublish');
+const { buildPendingCommentMirror } = require('../contentPublication/artifactMirror');
 const {
   PAIGE_SOCIAL_PUBLISH_CHANNELS,
   isPaigeSocialPublishChannel,

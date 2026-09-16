@@ -1,10 +1,11 @@
 'use strict';
 
 /**
- * SPEC-256 — Canonical Paige social content publication.
- * Requires an APPROVED tenant-scoped artifact; never bypasses approval authority.
+ * SPEC-256 / SPEC-259A — Canonical Paige social content publication.
+ * Requires an APPROVED tenant-scoped artifact; delegates to PublicationService + adapters.
  */
 
+const crypto = require('crypto');
 const {
   CAPABILITY_CATEGORIES,
   BUILTIN_IDS,
@@ -19,22 +20,11 @@ const {
   ensureSocialContentArtifactsTable,
 } = require('./SocialContentStore');
 const { isPaigeSocialPublishChannel } = require('./channels');
-
-function buildPendingCommentMirror(artifact = {}) {
-  const meta = artifact.meta && typeof artifact.meta === 'object' ? artifact.meta : {};
-  const company = meta.company && typeof meta.company === 'object' ? meta.company : {};
-  return {
-    id: artifact.pendingCommentId,
-    client_id: artifact.clientId,
-    channel: artifact.platform,
-    author_name: artifact.companyName || company.name || null,
-    author_title: company.industry || 'Local Business',
-    post_content: artifact.label,
-    comment: artifact.body,
-    post_url: null,
-    status: 'approved',
-  };
-}
+const {
+  buildPendingCommentMirror,
+  createPublicationService,
+  createDefaultAdapterRegistry,
+} = require('../contentPublication');
 
 /**
  * @param {object} [deps]
@@ -44,18 +34,14 @@ function createSocialContentPublishCapability(deps = {}) {
   const store =
     deps.socialContentStore ||
     (pool ? createPostgresSocialContentStore(pool) : createInMemorySocialContentStore());
-  const publishers =
-    deps.publishers ||
-    require('../../../utils/publishPipeline');
-  const publishBlogPost = deps.publishBlogPost || require('../../../utils/blogPublisher').publishBlogPost;
-
-  const publisherByChannel = {
-    blog: publishBlogPost,
-    google_business: publishers.publishToGoogleBusiness,
-    facebook_page: publishers.publishToFacebookPage,
-    linkedin_page: publishers.publishToLinkedInPage,
-    linkedin_personal: publishers.publishToLinkedInPersonal,
-  };
+  const adapterRegistry =
+    deps.adapterRegistry || createDefaultAdapterRegistry(deps);
+  const publicationService =
+    deps.publicationService ||
+    createPublicationService({
+      adapterRegistry,
+      credentialResolver: deps.credentialResolver,
+    });
 
   return {
     id: BUILTIN_IDS.SOCIAL_CONTENT_PUBLISH,
@@ -148,17 +134,7 @@ function createSocialContentPublishCapability(deps = {}) {
         });
       }
 
-      const publish = publisherByChannel[artifact.platform];
-      if (!publish) {
-        return buildCapabilityResult({
-          status: CAPABILITY_RESULT_STATUS.FAILED,
-          errors: [{ message: 'publisher_not_configured', channel: artifact.platform }],
-          duration: Date.now() - started,
-        });
-      }
-
-      const pendingMirror = buildPendingCommentMirror(artifact);
-      if (!pendingMirror.id) {
+      if (!artifact.pendingCommentId) {
         return buildCapabilityResult({
           status: CAPABILITY_RESULT_STATUS.FAILED,
           errors: [{ message: 'pending_comment_mirror_missing' }],
@@ -172,20 +148,32 @@ function createSocialContentPublishCapability(deps = {}) {
           outputs: {
             artifact,
             dryRun: true,
-            pendingMirror,
             channel: artifact.platform,
+            adapter: artifact.platform,
           },
           duration: Date.now() - started,
         });
       }
 
-      try {
-        await publish(pendingMirror);
-      } catch (err) {
+      const publishResult = await publicationService.publishApprovedArtifact({
+        artifact,
+        tenantId,
+        clientId,
+        correlationId: crypto.randomUUID(),
+      });
+
+      if (!publishResult.success) {
         return buildCapabilityResult({
           status: CAPABILITY_RESULT_STATUS.FAILED,
-          outputs: { artifact, channel: artifact.platform },
-          errors: [{ message: err.message || 'publish_failed' }],
+          outputs: {
+            artifact,
+            channel: artifact.platform,
+            publishResult,
+          },
+          errors: [{
+            message: publishResult.errorMessage || publishResult.errorCode || 'publish_failed',
+            code: publishResult.errorCode || 'publish_failed',
+          }],
           duration: Date.now() - started,
         });
       }
@@ -201,7 +189,7 @@ function createSocialContentPublishCapability(deps = {}) {
       if (!published.ok) {
         return buildCapabilityResult({
           status: CAPABILITY_RESULT_STATUS.FAILED,
-          outputs: { artifact, channel: artifact.platform },
+          outputs: { artifact, channel: artifact.platform, publishResult },
           errors: [{ message: published.reason || 'publish_state_transition_failed' }],
           duration: Date.now() - started,
         });
@@ -214,6 +202,9 @@ function createSocialContentPublishCapability(deps = {}) {
           published: true,
           channel: artifact.platform,
           pendingCommentId: artifact.pendingCommentId,
+          externalPostId: publishResult.externalPostId || null,
+          externalUrl: publishResult.externalUrl || null,
+          externalAccountId: publishResult.externalAccountId || null,
         },
         artifacts: [{
           type: ARTIFACT_TYPE,
