@@ -295,6 +295,23 @@ router.post('/api/max/respond', requireAoWrite, refreshAoSession, wrapAoHandler(
   res.json(result);
 }));
 
+router.post('/api/max/ask', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { message } = req.body || {};
+  if (!message || !String(message).trim()) {
+    return res.status(400).json({ error: 'message required' });
+  }
+
+  const result = await aoMax.askMax({
+    aoOwnerId,
+    clientId,
+    message: String(message).trim(),
+  });
+  res.json(result);
+}));
+
 router.get('/api/escalations', requireJakeRead, wrapAoHandler(async (req, res) => {
   const clientId = aoClientId(req);
   const status = req.query.status ? String(req.query.status) : null;

@@ -31,6 +31,7 @@ const {
   depositEscalationAction,
 } = require('./aoFieldService');
 const { advanceRouteAfterVisit, buildNextWorkDebrief } = require('./aoRouteService');
+const { handleAoMaxQuestion } = require('./aoAccountIntelligence');
 
 const LOG_VISIT_STEPS = [
   { key: 'business_name', question: 'What business did you visit?' },
@@ -678,15 +679,25 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
   let probeState = initProbeState(payload);
 
   if (session.mode === 'ask_for_help') {
-    const guidance = safeGuidance(message);
-    await completeSession(sessionId, { stepIndex: stepIndex + 1, payload: { ...payload, question: message } });
+    const result = await handleAoMaxQuestion({
+      aoOwnerId,
+      clientId,
+      message,
+    });
+    await completeSession(sessionId, {
+      stepIndex: stepIndex + 1,
+      payload: { ...payload, question: message, intent: result.intent },
+    });
     return {
       session_id: sessionId,
       mode: session.mode,
       completed: true,
-      reply: guidance.guidance,
-      escalate: guidance.escalate,
-      escalation_reason: guidance.reason || null,
+      intent: result.intent,
+      reply: result.reply,
+      accounts: result.accounts || null,
+      account: result.account || null,
+      escalate: result.escalate || false,
+      escalation_reason: result.escalation_reason || null,
     };
   }
 
@@ -853,6 +864,10 @@ async function respondToSession({ sessionId, aoOwnerId, clientId, aoName, messag
   return { session_id: sessionId, mode: session.mode, completed: true, reply: 'Done.' };
 }
 
+async function askMax({ aoOwnerId, clientId, message }) {
+  return handleAoMaxQuestion({ aoOwnerId, clientId, message });
+}
+
 module.exports = {
   LOG_VISIT_STEPS,
   DIRECT_MAIL_FOLLOW_UP_STEPS,
@@ -860,6 +875,7 @@ module.exports = {
   PHONE_FOLLOW_UP_STEPS,
   startMode,
   respondToSession,
+  askMax,
   detectEscalation,
   finalizeDirectMailSession,
   finalizeRouteFollowUpSession,

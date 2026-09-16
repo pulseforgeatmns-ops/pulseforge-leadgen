@@ -1263,6 +1263,14 @@ async function startMode(mode) {
   }
 }
 
+async function askMaxFreeform(text) {
+  const result = await api('/api/max/ask', {
+    method: 'POST',
+    body: JSON.stringify({ message: text.trim() }),
+  });
+  addMsg(result.reply, 'max');
+}
+
 async function sendMessage(text) {
   if (!text.trim()) return;
   addMsg(text.trim(), 'user');
@@ -1271,8 +1279,12 @@ async function sendMessage(text) {
   if (!sessionId) {
     if (visitJustCompleted) {
       addMsg('Log another visit or open Queue to follow up.', 'system');
-    } else {
-      addMsg('Pick a mode above to start talking with Max.', 'system');
+      return;
+    }
+    try {
+      await askMaxFreeform(text);
+    } catch (err) {
+      addMsg(err.message, 'system');
     }
     return;
   }
