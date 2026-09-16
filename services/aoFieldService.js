@@ -676,37 +676,63 @@ async function resolveAoOwnerByName(namePattern, clientId) {
   return rows[0] || null;
 }
 
-const JAKE_EMAIL_CANDIDATES = Object.freeze([
-  process.env.JAKE_EMAIL,
+const JAKE_PRODUCTION_EMAIL = 'jzmaynard7@gmail.com';
+
+const JAKE_LEGACY_EMAIL_CANDIDATES = Object.freeze([
   'jacob@gopulseforge.com',
   'jacob@goanchorcleaning.com',
-].filter(Boolean));
+]);
+
+const JAKE_AO_CAPABLE_ROLES = Object.freeze(['ao', 'admin', 'manager']);
+
+async function lookupActiveTenantAoUser({ email, clientId, roles = JAKE_AO_CAPABLE_ROLES }) {
+  const { rows } = await pool.query(`
+    SELECT id, name, email, client_id, role, active
+    FROM users
+    WHERE lower(email) = lower($1)
+      AND active = true
+      AND client_id = $2
+      AND role = ANY($3::text[])
+    LIMIT 1
+  `, [email, clientId, roles]);
+  return rows[0] || null;
+}
 
 async function resolveJakeAoOwner(clientId = 10) {
-  for (const email of JAKE_EMAIL_CANDIDATES) {
-    const { rows } = await pool.query(`
-      SELECT id, name, email, client_id, role, active
-      FROM users
-      WHERE lower(email) = lower($1)
-        AND active = true
-      LIMIT 1
-    `, [email]);
-    if (rows[0]) return rows[0];
+  if (process.env.JAKE_EMAIL) {
+    const envMatch = await lookupActiveTenantAoUser({
+      email: process.env.JAKE_EMAIL,
+      clientId,
+    });
+    if (envMatch) return envMatch;
+  }
+
+  const productionMatch = await lookupActiveTenantAoUser({
+    email: JAKE_PRODUCTION_EMAIL,
+    clientId,
+    roles: ['ao'],
+  });
+  if (productionMatch) return productionMatch;
+
+  for (const email of JAKE_LEGACY_EMAIL_CANDIDATES) {
+    const legacyMatch = await lookupActiveTenantAoUser({ email, clientId });
+    if (legacyMatch) return legacyMatch;
   }
 
   const { rows } = await pool.query(`
     SELECT id, name, email, client_id, role, active
     FROM users
     WHERE active = true
-      AND role IN ('ao', 'admin', 'manager')
+      AND client_id = $1
+      AND role = ANY($2::text[])
       AND (
         name ILIKE '%Jacob Maynard%'
         OR name ILIKE '%Jake Maynard%'
-        OR (name ILIKE '%Jake%' AND email ILIKE '%gopulseforge%')
+        OR trim(name) ILIKE 'Jake'
       )
-    ORDER BY CASE WHEN client_id = $1 THEN 0 ELSE 1 END, id ASC
+    ORDER BY CASE WHEN role = 'ao' THEN 0 ELSE 1 END, id ASC
     LIMIT 1
-  `, [clientId]);
+  `, [clientId, JAKE_AO_CAPABLE_ROLES]);
   return rows[0] || null;
 }
 
