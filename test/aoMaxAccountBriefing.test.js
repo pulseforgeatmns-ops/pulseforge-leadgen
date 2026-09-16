@@ -7,12 +7,16 @@ const test = require('node:test');
 const {
   formatPrioritizationResponse,
   mapAccountRow,
+  computeRankScore,
 } = require('../utils/aoAccountPrioritization');
 const {
   formatAccountBriefing,
   formatAccountContactsReply,
   formatFollowUpTiming,
   sanitizeAoFacingText,
+  buildAoAccountView,
+  looksLikeProvenanceNote,
+  equivalentContactLabels,
 } = require('../utils/aoAccountBriefing');
 const { resolveConversationIntent } = require('../utils/aoConversationContext');
 const { extractBriefingTarget } = require('../utils/aoMaxIntent');
@@ -155,7 +159,7 @@ test('research-stage account with no contact gets a specific decision-maker acti
   assert.match(reply, /Assigned through Anchor AO batch/);
 });
 
-test('contact identified with no conversation gets a specific outreach action', () => {
+test('contact identified with no conversation gets reconnect action without provenance topic', () => {
   const reply = formatAccountBriefing(leadFixture({
     contact_name: 'Pat Hale',
     contact_title: 'Office Manager',
@@ -165,8 +169,9 @@ test('contact identified with no conversation gets a specific outreach action', 
     open_next_action: 'research',
   }), { today: TODAY });
 
-  assert.match(reply, /Call Pat Hale at 603-555-0100/i);
-  assert.match(reply, /backup\/overflow cleaning resource/i);
+  assert.match(reply, /Reconnect with Pat Hale at 603-555-0100/i);
+  assert.match(reply, /backup\/overflow support is still relevant/i);
+  assert.doesNotMatch(reply, /Follow up with Pat Hale about/i);
   assert.doesNotMatch(reply, /Next:\s*Research\b/);
   assertNoInternalLeak(reply);
 });
@@ -368,4 +373,99 @@ test('sanitizeAoFacingText strips assignment JSON while keeping persistence call
   assert.doesNotMatch(cleaned, /batch_id/);
   assert.doesNotMatch(cleaned, /crm_company_id/);
   assert.match(raw, /crm_prospect_id/);
+});
+
+function lodgismFixture(overrides = {}) {
+  return {
+    business_name: 'Lodgism',
+    address: '65 Middle St, Manchester NH',
+    business_type: 'short_term_rental',
+    status: 'needs_follow_up',
+    interest_level: 'medium',
+    priority: 'warm',
+    contact_name: 'Main Office',
+    contact_title: 'Main line',
+    contact_phone: '(866) 563-4476',
+    is_decision_maker: false,
+    open_next_action: 'in_person_revisit',
+    open_task_due: '2026-09-14',
+    waiting_on_jake: false,
+    last_interaction_summary: 'Received direct mail before AO visit',
+    original_visit_note: 'Received direct mail before AO visit',
+    attribution_source: 'direct_mail_campaign',
+    campaign_name: 'Campaign 001',
+    probe_answers: null,
+    open_escalation_id: null,
+    open_escalation_status: null,
+    ao_owner_id: 26,
+    ...overrides,
+  };
+}
+
+test('warm overdue why line does not duplicate assigned-to-you phrasing', () => {
+  const view = buildAoAccountView(lodgismFixture(), { today: TODAY });
+  assert.equal(view.why_it_matters, 'Warm account assigned to you. Follow-up is overdue.');
+  assert.doesNotMatch(view.why_it_matters, /assigned to you assigned to you/i);
+});
+
+test('equivalent contact title and role collapse to one label', () => {
+  assert.equal(equivalentContactLabels('Main line', 'Main line'), true);
+  const view = buildAoAccountView(lodgismFixture(), { today: TODAY });
+  assert.match(view.who_to_ask_for, /^Main Office · Main line\./);
+  assert.doesNotMatch(view.who_to_ask_for, /Main Office \(Main line\) · Main line/);
+});
+
+test('direct mail provenance is not rendered as last conversation', () => {
+  assert.equal(looksLikeProvenanceNote('Received direct mail before AO visit'), true);
+  const reply = formatAccountBriefing(lodgismFixture(), { today: TODAY });
+  assert.match(reply, /No recent conversation logged/);
+  assert.match(reply, /Context: Received prior Campaign 001 outreach/);
+  assert.doesNotMatch(reply, /Last conversation: Received direct mail/i);
+  assert.doesNotMatch(reply, /Follow up with Main Office about Received direct mail/i);
+});
+
+test('actual logged visit summary renders as last conversation and drives follow-up topic', () => {
+  const reply = formatAccountBriefing(lodgismFixture({
+    last_interaction_summary: 'Spoke with Alex about turnover cleaning gaps before peak season.',
+    original_visit_note: 'Received direct mail before AO visit',
+    contact_name: 'Alex Rivera',
+    contact_title: 'Operations Manager',
+    is_decision_maker: true,
+    open_next_action: 'phone_follow_up',
+    open_task_due: TODAY,
+  }), { today: TODAY });
+
+  assert.match(reply, /Last conversation: Spoke with Alex about turnover cleaning gaps/i);
+  assert.match(reply, /Follow up with Alex Rivera about turnover cleaning gaps/i);
+  assert.doesNotMatch(reply, /Received direct mail before AO visit/i);
+});
+
+test('briefing semantic cleanup does not change ranking or ownership fields', () => {
+  const row = {
+    task_id: 'task-lodgism',
+    lead_id: 'lead-lodgism',
+    ao_owner_id: 26,
+    client_id: 10,
+    business_name: 'Lodgism',
+    lead_status: 'needs_follow_up',
+    priority: 'warm',
+    interest_level: 'medium',
+    due_date: '2026-09-14',
+    next_action: 'in_person_revisit',
+    waiting_on_jake: false,
+    task_status: 'open',
+    last_interaction_summary: 'Received direct mail before AO visit',
+    original_visit_note: 'Received direct mail before AO visit',
+    contact_name: 'Main Office',
+    contact_title: 'Main line',
+    is_decision_maker: false,
+    attribution_source: 'direct_mail_campaign',
+    campaign_name: 'Campaign 001',
+  };
+
+  const mapped = mapAccountRow(row, TODAY);
+  assert.equal(mapped.ao_owner_id, 26);
+  assert.equal(mapped.rank_score, computeRankScore(row, mapped.operational_state, TODAY));
+  assert.match(mapped.next_step, /Reconnect with Main Office/i);
+  assert.doesNotMatch(mapped.next_step, /Received direct mail/i);
 });
