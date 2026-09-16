@@ -17,7 +17,9 @@ const {
 const {
   buildAccountPrioritizationReply,
   buildAccountBriefingReply,
+  findAssignedLeadById,
   findAssignedLeadByName,
+  listAssignedAccountSummaries,
 } = require('./aoAccountIntelligence');
 const { buildCoachingReply } = require('../utils/aoAccountPrioritization');
 
@@ -77,8 +79,29 @@ function appendMessage(payload, { role, content, intent = null, meta = null }) {
   return { ...payload, messages };
 }
 
+async function resolveIntentWithAssignedAccounts({ aoOwnerId, clientId, message, context }) {
+  let resolved = resolveConversationIntent(message, context);
+
+  const needsAccountLookup = resolved?.intent === 'account_briefing' || resolved?.intent === 'account_contacts';
+  if (needsAccountLookup && !resolved.account && !resolved.ambiguous) {
+    const assignedAccounts = await listAssignedAccountSummaries({ aoOwnerId, clientId });
+    resolved = resolveConversationIntent(message, context, assignedAccounts);
+  }
+
+  return resolved;
+}
+
 async function executeConversationIntent({ aoOwnerId, clientId, message, context }) {
-  const resolved = resolveConversationIntent(message, context);
+  const resolved = await resolveIntentWithAssignedAccounts({ aoOwnerId, clientId, message, context });
+
+  if (resolved.ambiguous && resolved.ambiguityReply) {
+    return {
+      intent: resolved.intent,
+      reply: resolved.ambiguityReply,
+      account: null,
+      accounts: null,
+    };
+  }
 
   if (resolved.intent === 'why_prioritized') {
     const reply = buildWhyPrioritizedReply(resolved.account, context);
@@ -95,26 +118,44 @@ async function executeConversationIntent({ aoOwnerId, clientId, message, context
   }
 
   if (resolved.intent === 'account_briefing') {
+    if (!resolved.account?.business_name) {
+      return {
+        intent: 'account_briefing',
+        reply: `I couldn't find "${resolved.briefingTarget || message}" in your assigned accounts. Double-check the name or open Queue to browse your list.`,
+        account: null,
+      };
+    }
+
     const result = await buildAccountBriefingReply({
       aoOwnerId,
       clientId,
-      businessNameQuery: resolved.briefingTarget,
+      businessNameQuery: resolved.account.business_name,
+      leadId: resolved.account.lead_id || null,
     });
     return result;
   }
 
   if (resolved.intent === 'account_contacts') {
-    const lead = await findAssignedLeadByName({
-      aoOwnerId,
-      clientId,
-      businessNameQuery: resolved.briefingTarget,
-    });
+    const lead = resolved.account?.lead_id
+      ? await findAssignedLeadById({
+        aoOwnerId,
+        clientId,
+        leadId: resolved.account.lead_id,
+      })
+      : resolved.account?.business_name
+        ? await findAssignedLeadByName({
+          aoOwnerId,
+          clientId,
+          businessNameQuery: resolved.account.business_name,
+        })
+        : null;
+
     return {
       intent: 'account_contacts',
       reply: buildAccountContactsReply(lead),
       account: lead
         ? { business_name: lead.business_name, lead_id: lead.id }
-        : null,
+        : resolved.account || null,
     };
   }
 
