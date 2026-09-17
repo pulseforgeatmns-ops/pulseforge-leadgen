@@ -1,0 +1,130 @@
+'use strict';
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  BLOCKER,
+  validateCustomerFacingCopy,
+  validatePaigeVariantCopy,
+  validatePaigeVariantsPayload,
+} = require('../PaigeCopySafety');
+const { buildPerProspectVariants } = require('../PaigeVariantsExecutor');
+const { resolveQueueSendability } = require('../../../emmett-outbound/Queue');
+
+const PLACE_BLUE = 'ChIJ43Z_V2dP4okRCRcDHefV8OU';
+
+function strScenario() {
+  return {
+    max: {
+      rankedTargets: [{
+        id: PLACE_BLUE,
+        companyId: PLACE_BLUE,
+        placeId: PLACE_BLUE,
+        name: 'Blue Door Living Property Management',
+        fit: 0.28,
+        timing: 0.2,
+        rationale: 'fit 0.28 · timing 0.20 · 6 unknowns',
+      }],
+      objectives: [{ text: 'Achieve 1 recurring_clients.' }],
+      recommendations: ['Prioritize Blue Door Living as the first acquisition focus.'],
+    },
+    plan: {
+      market: { label: 'Short-term rental operators', segment: 'str' },
+      geography: { label: 'Manchester' },
+    },
+    mission: {
+      tenantId: '10',
+      clientId: 10,
+      targetSegment: 'Short-term rental operators',
+      objective: 'Acquire one recurring commercial cleaning client from a short-term rental operator in Greater Manchester area.',
+    },
+  };
+}
+
+describe('Paige customer-facing copy safety', () => {
+  it('rejects Mission focus: Achieve 1 recurring_clients', () => {
+    const result = validateCustomerFacingCopy('Mission focus: Achieve 1 recurring_clients');
+    assert.equal(result.safe, false);
+    assert.equal(result.blocker, BLOCKER);
+  });
+
+  it('rejects fit 0.28 · timing 0.20 · 6 unknowns score tuples', () => {
+    const result = validateCustomerFacingCopy('Why now: fit 0.28 · timing 0.20 · 6 unknowns');
+    assert.equal(result.safe, false);
+    assert.equal(result.blocker, BLOCKER);
+  });
+
+  it('rejects verbatim Max recommendation prioritization language', () => {
+    const result = validateCustomerFacingCopy(
+      'Why now: Prioritize Blue Door Living as the first acquisition focus.'
+    );
+    assert.equal(result.safe, false);
+    assert.equal(result.blocker, BLOCKER);
+  });
+
+  it('accepts safe customer-facing Anchor STR copy', () => {
+    const variants = buildPerProspectVariants(strScenario());
+    assert.equal(variants.length, 1);
+    const safety = validatePaigeVariantCopy(variants[0]);
+    assert.equal(safety.safe, true, JSON.stringify(safety.violations));
+    assert.ok(variants[0].subject.includes('Blue Door Living Property Management'));
+    assert.ok(variants[0].body);
+    assert.ok(variants[0].cta);
+    assert.match(variants[0].body, /backup|overflow/i);
+    assert.doesNotMatch(variants[0].body, /Mission focus/i);
+    assert.doesNotMatch(variants[0].body, /recurring_clients/i);
+    assert.doesNotMatch(variants[0].body, /fit 0\./i);
+  });
+
+  it('unsafe Paige variant cannot become sendable CAPACITY queue item', () => {
+    const unsafe = resolveQueueSendability({
+      email: 'sales@example.com',
+      contentSource: 'paige',
+      paige: {
+        author: 'paige',
+        source: 'paige',
+        subject: 'Hello',
+        body: 'Mission focus: Achieve 1 recurring_clients',
+      },
+    });
+    assert.equal(unsafe.sendable, false);
+    assert.equal(unsafe.sendBlocker, BLOCKER);
+
+    const safe = resolveQueueSendability({
+      email: 'sales@example.com',
+      contentSource: 'paige',
+      paige: buildPerProspectVariants(strScenario())[0],
+    });
+    assert.equal(safe.sendable, true);
+    assert.equal(safe.sendBlocker, null);
+  });
+
+  it('preserves candidate binding on regenerated variants', () => {
+    const variants = buildPerProspectVariants(strScenario());
+    assert.equal(variants[0].candidateId, PLACE_BLUE);
+    assert.equal(variants[0].placeId, PLACE_BLUE);
+    assert.equal(variants[0].companyId, PLACE_BLUE);
+    assert.ok(variants[0].attributableIntelligence?.rationale);
+    assert.equal(
+      variants[0].body.includes(variants[0].attributableIntelligence.rationale),
+      false,
+      'internal rationale must not appear in customer body'
+    );
+  });
+
+  it('validatePaigeVariantsPayload fails closed on any unsafe variant', () => {
+    const payload = {
+      variants: [{
+        candidateId: 'x',
+        subject: 'Hi',
+        body: 'Mission focus: Achieve 1 recurring_clients',
+        cta: 'Reply',
+      }],
+      subjects: ['Hi'],
+      cta: 'Reply',
+    };
+    const result = validatePaigeVariantsPayload(payload);
+    assert.equal(result.safe, false);
+    assert.equal(result.blocker, BLOCKER);
+  });
+});

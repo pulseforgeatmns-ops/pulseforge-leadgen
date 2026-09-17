@@ -89,8 +89,6 @@ function buildPerProspectVariants(input = {}) {
     return buildFallbackMissionLevelVariant(input);
   }
 
-  const objective = max.objectives?.[0]?.text || plan.objective || null;
-  const marketLabel = plan.market?.label || 'local offices';
   const variants = [];
 
   for (const candidate of candidates) {
@@ -98,7 +96,7 @@ function buildPerProspectVariants(input = {}) {
     const candidateId = identity.candidateId || candidate.name;
     const companyName = candidate.name || candidate.label || 'Company';
 
-    // SPEC-212: Extract ONLY this candidate's intelligence
+    // SPEC-212: Extract ONLY this candidate's intelligence — stored for operator review, never in body
     const candidateRationale = candidate.rationale || candidate.reason || null;
     const candidateFit = candidate.fit != null ? Number(candidate.fit) : 0.7;
     const candidateTiming = candidate.timing != null ? Number(candidate.timing) : 0.5;
@@ -141,9 +139,9 @@ function buildPerProspectVariants(input = {}) {
       bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
       variantId: `paige_v_${String(candidateId).replace(/\W/g, '_')}`,
       label: `Primary - ${companyName}`,
-      subject,
-      body,
-      cta: 'Reply to schedule a walkthrough',
+      subject: copy.subject,
+      body: copy.body,
+      cta: copy.cta,
       // SPEC-212: Store attributable intelligence for this prospect only
       attributableIntelligence: {
         rationale: candidateRationale,
@@ -167,27 +165,26 @@ function buildFallbackMissionLevelVariant(input = {}) {
   const max = input.max || {};
   const scout = input.scout || {};
   const plan = input.plan || {};
+  const mission = input.mission || {};
   const topTarget = max.rankedTargets?.[0]?.name
     || max.priorities?.[0]?.name
     || scout.companies?.[0]?.name
     || scout.rankedProspects?.[0]?.name
     || plan.market?.label
     || 'your office';
-  const objective = max.objectives?.[0]?.text || plan.objective || null;
-  const subject = `Commercial cleaning walkthrough for ${topTarget}`;
-  const body = [
-    `Hi — we help ${plan.market?.label || 'local offices'} maintain spotless workspaces.`,
-    objective ? `Mission focus: ${objective}` : null,
-    max.recommendations?.[0] ? `Why now: ${max.recommendations[0]}` : null,
-  ].filter(Boolean).join('\n\n');
+  const copy = buildCustomerFacingVariantCopy({
+    companyName: topTarget,
+    plan,
+    mission,
+  });
 
   return [{
     bindingScope: MESSAGE_BINDING_SCOPES.MISSION,
     variantId: 'paige_v_mission_fallback',
     label: 'Primary - Mission Level',
-    subject,
-    body,
-    cta: 'Reply to schedule a walkthrough',
+    subject: copy.subject,
+    body: copy.body,
+    cta: copy.cta,
     attributableIntelligence: null,
   }];
 }
@@ -255,6 +252,7 @@ function extractPaigeUpstreamContext(executionInput = {}) {
 
 function buildPaigeVariantsPayload(executionInput = {}) {
   const { max, scout, plan } = extractPaigeUpstreamContext(executionInput);
+  const mission = executionInput.mission || {};
   const priorLearning = executionInput.memoryContext?.priorLearning || [];
   const clientId = Number(
     executionInput.mission?.clientId
@@ -321,6 +319,22 @@ async function runPaigeVariants(executionInput = {}) {
   }
 
   const { payload, learningInfluence } = buildPaigeVariantsPayload(executionInput);
+  const copySafety = validatePaigeVariantsPayload(payload);
+  if (!copySafety.safe) {
+    return createExecutionResult({
+      specialist: SPECIALISTS.PAIGE,
+      transactionId,
+      status: EXECUTION_STATUSES.BLOCKED,
+      reason: 'Paige generated customer-facing copy containing internal mission or scoring language.',
+      requiredPrecondition: COPY_SAFETY_BLOCKER,
+      blockers: [{
+        code: COPY_SAFETY_BLOCKER,
+        label: 'Internal reasoning leakage in customer-facing copy',
+        violations: copySafety.violations,
+      }],
+    });
+  }
+
   const unknowns = [];
   if (executionInput.memoryContext?.priorLearningRetrievalWarning) {
     unknowns.push({
