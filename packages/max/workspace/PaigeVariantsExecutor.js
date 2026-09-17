@@ -25,10 +25,44 @@ const {
 const {
   resolveOutreachSequenceAtPrepare,
 } = require('../../acquisition-mission/PreparedOutreachSequence');
+const {
+  ANCHOR_CLIENT_ID,
+  buildAnchorLifecycleVariant,
+} = require('../../../utils/anchorLifecycleEmail');
+
+function lookupCrmRecord(crmByProspectId, prospectId) {
+  if (!crmByProspectId || prospectId == null) return null;
+  if (crmByProspectId instanceof Map) {
+    return crmByProspectId.get(String(prospectId)) || null;
+  }
+  if (typeof crmByProspectId === 'object') {
+    return crmByProspectId[String(prospectId)] || crmByProspectId[prospectId] || null;
+  }
+  return null;
+}
 
 function asText(value) {
   if (value == null) return '';
   return String(value).trim();
+}
+
+function resolveCandidateCrmRecord(candidate = {}, identity = {}, crmByProspectId = null) {
+  const keys = [
+    identity.candidateId,
+    identity.companyId,
+    identity.placeId,
+    candidate.prospectId,
+    candidate.id,
+  ].filter(Boolean);
+  for (const key of keys) {
+    const row = lookupCrmRecord(crmByProspectId, key);
+    if (row) return row;
+  }
+  return null;
+}
+
+function resolveAnchorSenderName(plan = {}, mission = {}) {
+  return asText(plan.senderName || mission.senderName || 'Jacob Maynard') || 'Jacob Maynard';
 }
 
 /**
@@ -39,6 +73,10 @@ function buildPerProspectVariants(input = {}) {
   const max = input.max || {};
   const scout = input.scout || {};
   const plan = input.plan || {};
+  const clientId = Number(input.clientId || plan.clientId || 0);
+  const crmByProspectId = input.crmByProspectId || null;
+  const senderName = resolveAnchorSenderName(plan, input.mission || {});
+  const useAnchorLifecycle = clientId === ANCHOR_CLIENT_ID;
 
   // SPEC-212: Use ALL ranked targets, not just [0]
   const candidates = max.rankedTargets || [];
@@ -65,13 +103,34 @@ function buildPerProspectVariants(input = {}) {
     const candidateFit = candidate.fit != null ? Number(candidate.fit) : 0.7;
     const candidateTiming = candidate.timing != null ? Number(candidate.timing) : 0.5;
 
-    // SPEC-212: Build prospect-specific subject and body
-    const subject = `Commercial cleaning walkthrough for ${companyName}`;
-    const body = [
-      `Hi — we help ${marketLabel} maintain spotless workspaces.`,
-      objective ? `Mission focus: ${objective}` : null,
-      candidateRationale ? `Why now: ${candidateRationale}` : null,
-    ].filter(Boolean).join('\n\n');
+    let subject;
+    let body;
+    let usedPersonalization = false;
+    let scoutPersonalization = null;
+
+    if (useAnchorLifecycle) {
+      const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
+      const lifecycle = buildAnchorLifecycleVariant({
+        candidate: {
+          ...candidate,
+          name: companyName,
+          scoutPersonalization: candidate.scoutPersonalization || candidate.scout_personalization || null,
+        },
+        crmRecord,
+        senderName,
+      });
+      subject = lifecycle.subject;
+      body = lifecycle.body;
+      usedPersonalization = lifecycle.usedPersonalization;
+      scoutPersonalization = lifecycle.evidence || null;
+    } else {
+      subject = `Commercial cleaning walkthrough for ${companyName}`;
+      body = [
+        `Hi — we help ${marketLabel} maintain spotless workspaces.`,
+        objective ? `Mission focus: ${objective}` : null,
+        candidateRationale ? `Why now: ${candidateRationale}` : null,
+      ].filter(Boolean).join('\n\n');
+    }
 
     variants.push({
       // SPEC-212: Explicit prospect binding — candidate/company/place stay distinct from CRM UUIDs
@@ -91,6 +150,8 @@ function buildPerProspectVariants(input = {}) {
         fit: candidateFit,
         timing: candidateTiming,
         companyName,
+        scoutPersonalization,
+        usedPersonalization,
       },
     });
   }
@@ -136,14 +197,20 @@ function buildBasePaigeVariantsPayload(input = {}) {
   const subjects = variants.map((v) => v.subject);
   const max = input.max || {};
   const scout = input.scout || {};
+  const usedPersonalization = variants.some((variant) => variant.attributableIntelligence?.usedPersonalization);
 
   return {
     variants,
     subjects,
     messaging: variants[0]?.body || null,
-    cta: 'Reply to schedule a walkthrough',
+    cta: usedPersonalization || Number(input.clientId) === ANCHOR_CLIENT_ID
+      ? 'Reply if a written quote would be useful'
+      : 'Reply to schedule a walkthrough',
     hypotheses: [
       max.objectiveReason || 'Prioritized targets respond to timing-specific outreach.',
+      usedPersonalization
+        ? 'Scout-supported business facts improve first-touch relevance when evidence is strong.'
+        : null,
       scout.buyingSignals?.[0]
         ? `Signal: ${typeof scout.buyingSignals[0] === 'string'
           ? scout.buyingSignals[0]
@@ -189,8 +256,24 @@ function extractPaigeUpstreamContext(executionInput = {}) {
 function buildPaigeVariantsPayload(executionInput = {}) {
   const { max, scout, plan } = extractPaigeUpstreamContext(executionInput);
   const priorLearning = executionInput.memoryContext?.priorLearning || [];
+  const clientId = Number(
+    executionInput.mission?.clientId
+    ?? executionInput.mission?.tenantId
+    ?? plan.clientId
+    ?? 0
+  );
+  const crmByProspectId = executionInput.crmByProspectId
+    || executionInput.specialistInput?.crmByProspectId
+    || null;
 
-  let payload = buildBasePaigeVariantsPayload({ max, scout, plan });
+  let payload = buildBasePaigeVariantsPayload({
+    max,
+    scout,
+    plan,
+    clientId,
+    crmByProspectId,
+    mission: executionInput.mission || {},
+  });
 
   // SPEC-212: Apply prior learning evaluations to all variants
   // Prior learning is mission-level, but we evaluate against each prospect's context
