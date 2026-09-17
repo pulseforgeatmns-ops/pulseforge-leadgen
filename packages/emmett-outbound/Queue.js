@@ -7,6 +7,10 @@
 
 const { clone } = require('./types');
 const { paceVerticals } = require('./Pacing');
+const {
+  validatePaigeVariantCopy,
+  BLOCKER: COPY_SAFETY_BLOCKER,
+} = require('../max/workspace/PaigeCopySafety');
 
 function daysSince(value, now) {
   if (!value) return 999;
@@ -51,6 +55,10 @@ function resolveQueueSendability(item = {}) {
   );
   if (!hasPaigeCopy) {
     return { sendable: false, sendBlocker: 'missing_paige_copy' };
+  }
+  const copySafety = validatePaigeVariantCopy(item.paige || {});
+  if (!copySafety.safe) {
+    return { sendable: false, sendBlocker: COPY_SAFETY_BLOCKER };
   }
   const email = String(item.email || '').trim();
   if (!email) {

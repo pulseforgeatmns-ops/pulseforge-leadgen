@@ -56,6 +56,10 @@ const {
   fixturePaigeVariantsResult,
 } = require('./PaigeVariantsExecutor');
 const {
+  validatePaigeVariantsPayload,
+  BLOCKER: PAIGE_COPY_SAFETY_BLOCKER,
+} = require('./PaigeCopySafety');
+const {
   runPennyPaidAcquisition,
   runPennyForAmoMission,
 } = require('./PennyPaidAcquisitionExecutor');
@@ -1766,6 +1770,14 @@ function validatePaigeOutput(output, ctx = {}) {
   }
   const payload = output.variantsPayload;
   assertContributionContract(SPECIALISTS.PAIGE, payload);
+  const copySafety = validatePaigeVariantsPayload(payload);
+  if (!copySafety.safe) {
+    throw validationError(
+      PAIGE_COPY_SAFETY_BLOCKER,
+      'Paige variants contain internal mission or scoring language in customer-facing copy.',
+      { violations: copySafety.violations }
+    );
+  }
   const executionResult = output.executionResult || executionResultFromStageOutput(output, {
     specialist: SPECIALISTS.PAIGE,
     transactionId: ctx.transactionId,
