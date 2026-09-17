@@ -78,15 +78,33 @@ const PRODUCES = Object.freeze({
   ],
 });
 
-function walkKeys(value, acc = []) {
+const EMMETT_PAIGE_COPY_KEYS = new Set(['subject', 'body', 'cta']);
+
+function isEmmettPaigeBoundCopyPath(path = []) {
+  const paigeIdx = path.lastIndexOf('paige');
+  if (paigeIdx < 1) return false;
+  const parent = path[paigeIdx - 1];
+  const grandparent = path[paigeIdx - 2];
+  return parent === 'items' || (typeof parent === 'number' && grandparent === 'items');
+}
+
+function walkKeys(value, acc = [], path = [], specialist = null) {
   if (!value || typeof value !== 'object') return acc;
   if (Array.isArray(value)) {
-    for (const item of value) walkKeys(item, acc);
+    for (let i = 0; i < value.length; i += 1) {
+      walkKeys(value[i], acc, [...path, i], specialist);
+    }
     return acc;
   }
   for (const [key, child] of Object.entries(value)) {
-    acc.push(key);
-    walkKeys(child, acc);
+    const nextPath = [...path, key];
+    const allowNestedPaigeCopy = specialist === SPECIALISTS.EMMETT
+      && EMMETT_PAIGE_COPY_KEYS.has(key)
+      && isEmmettPaigeBoundCopyPath(nextPath);
+    if (!allowNestedPaigeCopy) {
+      acc.push(key);
+    }
+    walkKeys(child, acc, nextPath, specialist);
   }
   return acc;
 }
@@ -100,7 +118,7 @@ function assertContract(specialist, payload = {}) {
     throw amoError('amo_unknown_specialist', `Unknown capability: ${specialist}`);
   }
 
-  const keys = new Set(walkKeys(payload));
+  const keys = new Set(walkKeys(payload, [], [], who));
   const violated = forbidden.filter((key) => keys.has(key));
   if (violated.length) {
     throw amoError(

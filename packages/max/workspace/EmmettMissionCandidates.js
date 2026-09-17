@@ -216,20 +216,24 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
         })
       );
       if (boundVariant) {
+        const companyName = name || opp.name || prospect?.company || null;
         row.paige = {
           author: 'paige',
           source: 'paige',
           ready: true,
           variantLabel: boundVariant.label || 'Primary',
+          label: boundVariant.label || 'Primary',
           subject: boundVariant.subject || null,
           body: boundVariant.body || null,
+          cta: boundVariant.cta || paigePayload.cta || 'Reply to schedule a walkthrough',
           candidateId: boundVariant.candidateId || String(candidateId),
           variantId: boundVariant.variantId || null,
+          companyName,
           bindingScope: boundVariant.bindingScope || 'prospect',
           attributableIntelligence: boundVariant.attributableIntelligence || null,
         };
         row.contentSource = 'paige';
-        row.cta = boundVariant.cta || paigePayload.cta || 'Reply to schedule a walkthrough';
+        row.cta = row.paige.cta;
       }
     }
 

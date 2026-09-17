@@ -37,6 +37,8 @@ const FORBIDDEN_QUEUE_KEYS = new Set([
 ]);
 
 const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
+const { validatePaigeVariantCopy, BLOCKER: COPY_SAFETY_BLOCKER } = require('./PaigeCopySafety');
+const { resolveQueueSendability } = require('../../emmett-outbound/Queue');
 
 function findEmmettCapacity(contributions = [], mission = null) {
   return selectCanonicalContribution(contributions, {
@@ -110,17 +112,15 @@ function cleanText(value) {
 }
 
 /**
- * Persist Paige-derived SPEC-212 attribution only.
- * Copy (subject/body/cta) stays forbidden on Emmett CAPACITY — EXECUTE
- * resolves message text from the Paige VARIANTS contribution.
+ * Project bound Paige variant copy into CAPACITY queue items.
+ * Copy must pass PaigeCopySafety; internal rationale never renders into fields.
  */
 function sanitizePaigeBinding(value = {}) {
   const paige = {
     author: value.author || 'paige',
     source: value.source || 'paige',
     ready: value.ready === true,
-    variantLabel: value.variantLabel || null,
-    sendable: value.sendable === true,
+    variantLabel: value.variantLabel || value.label || null,
   };
   const candidateId = cleanText(value.candidateId);
   if (candidateId) paige.candidateId = candidateId;
@@ -131,10 +131,33 @@ function sanitizePaigeBinding(value = {}) {
   }
   const variantId = cleanText(value.variantId);
   if (variantId) paige.variantId = variantId;
+  const companyName = cleanText(value.companyName);
+  if (companyName) paige.companyName = companyName;
+
+  const subject = cleanText(value.subject);
+  const body = cleanText(value.body);
+  const cta = cleanText(value.cta);
+  if (subject) paige.subject = subject;
+  if (body) paige.body = body;
+  if (cta) paige.cta = cta;
+
+  const copySafety = validatePaigeVariantCopy(paige);
+  if (!copySafety.safe) {
+    delete paige.subject;
+    delete paige.body;
+    delete paige.cta;
+  }
+
   return paige;
 }
 
 function sanitizeQueueItem(item = {}) {
+  const rawPaige = item.paige && typeof item.paige === 'object' ? item.paige : null;
+  const unsafeCopyAttempt = rawPaige
+    && cleanText(rawPaige.subject)
+    && cleanText(rawPaige.body)
+    && !validatePaigeVariantCopy(rawPaige).safe;
+
   const clean = {};
   for (const [key, value] of Object.entries(item)) {
     if (FORBIDDEN_QUEUE_KEYS.has(key)) continue;
@@ -143,6 +166,17 @@ function sanitizeQueueItem(item = {}) {
       continue;
     }
     clean[key] = value;
+  }
+  if (unsafeCopyAttempt) {
+    clean.sendable = false;
+    clean.sendBlocker = COPY_SAFETY_BLOCKER;
+  } else {
+    const sendability = resolveQueueSendability({
+      ...clean,
+      contentSource: clean.contentSource || clean.paige?.source || null,
+    });
+    clean.sendable = sendability.sendable;
+    clean.sendBlocker = sendability.sendBlocker;
   }
   return clean;
 }
