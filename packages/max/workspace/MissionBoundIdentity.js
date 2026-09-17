@@ -5,6 +5,7 @@
  */
 
 const { asText } = require('../../acquisition-mission/types');
+const { normalizeDomain, identityKeysFrom } = require('./CanonicalOutboundIdentity');
 
 function isGooglePlaceId(value) {
   const text = asText(value);
@@ -20,7 +21,15 @@ function isUuid(value) {
 
 /**
  * Resolve mission-bound candidate identity without overloading companyId.
- * @returns {{ candidateId: string, placeId: string|null, crmCompanyId: string|null, crmProspectId: string|null }}
+ * @returns {{
+ *   candidateId: string,
+ *   placeId: string|null,
+ *   companyId: string|null,
+ *   crmCompanyId: string|null,
+ *   crmProspectId: string|null,
+ *   domain: string|null,
+ *   keys: string[],
+ * }}
  */
 function resolveMissionBoundIdentity({
   target = {},
@@ -69,13 +78,37 @@ function resolveMissionBoundIdentity({
   ) || null;
 
   const candidateId = crmCompanyId || placeId || rawId || fallbackId;
+  const companyId = crmCompanyId || placeId || (rawId ? String(rawId) : null) || (candidateId ? String(candidateId) : null);
+  const domain = normalizeDomain(
+    target.domain
+    || target.website
+    || target.url
+    || opp.domain
+    || opp.website
+    || opp.url
+    || prospect?.domain
+    || prospect?.website
+    || prospect?.website_url
+  );
 
-  return {
+  const resolved = {
     candidateId: candidateId ? String(candidateId) : null,
     placeId: placeId ? String(placeId) : null,
+    companyId: companyId ? String(companyId) : null,
     crmCompanyId: crmCompanyId ? String(crmCompanyId) : null,
     crmProspectId: crmProspectId ? String(crmProspectId) : null,
+    domain,
+    keys: identityKeysFrom({
+      candidateId,
+      id: candidateId,
+      companyId,
+      placeId,
+      crmProspectId,
+      domain,
+    }),
   };
+
+  return resolved;
 }
 
 module.exports = {

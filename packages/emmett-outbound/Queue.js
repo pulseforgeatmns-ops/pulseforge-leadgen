@@ -36,6 +36,29 @@ function round3(value) {
   return Math.round(value * 1000) / 1000;
 }
 
+function resolveQueueSendability(item = {}) {
+  if (item.dnc === true) {
+    return { sendable: false, sendBlocker: 'dnc' };
+  }
+  const hasPaigeCopy = Boolean(
+    item.paige?.subject
+    && item.paige?.body
+    && (
+      item.contentSource === 'paige'
+      || item.paige?.author === 'paige'
+      || item.paige?.source === 'paige'
+    )
+  );
+  if (!hasPaigeCopy) {
+    return { sendable: false, sendBlocker: 'missing_paige_copy' };
+  }
+  const email = String(item.email || '').trim();
+  if (!email) {
+    return { sendable: false, sendBlocker: 'missing_recipient_email' };
+  }
+  return { sendable: true, sendBlocker: null };
+}
+
 function buildTodayQueue(input = {}) {
   const now = input.now || new Date();
   const recommended = Math.max(0, Number(input.recommendedCapacity ?? input.capacity?.recommended ?? 0));
@@ -46,9 +69,11 @@ function buildTodayQueue(input = {}) {
     return {
       id: candidateId,
       candidateId,
-      companyId: prospect.companyId || null,
+      companyId: prospect.companyId || prospect.candidateId || prospect.placeId || null,
       placeId: prospect.placeId || prospect.place_id || null,
+      crmCompanyId: prospect.crmCompanyId || null,
       crmProspectId: prospect.crmProspectId || null,
+      domain: prospect.domain || null,
       prospectId: prospect.id || prospect.prospectId,
       email: prospect.email,
       vertical: String(prospect.vertical || 'unknown').toLowerCase(),
@@ -67,11 +92,15 @@ function buildTodayQueue(input = {}) {
 
   scored.sort((a, b) => b.ranking.total - a.ranking.total);
   const paced = paceVerticals(scored);
-  const selected = paced.slice(0, recommended).map((item, index) => ({
-    ...clone(item),
-    position: index + 1,
-    sendable: Boolean(item.paige?.subject && item.paige?.body && !item.dnc && (item.contentSource === 'paige' || item.paige?.author === 'paige' || item.paige?.source === 'paige')),
-  }));
+  const selected = paced.slice(0, recommended).map((item, index) => {
+    const sendability = resolveQueueSendability(item);
+    return {
+      ...clone(item),
+      position: index + 1,
+      sendable: sendability.sendable,
+      sendBlocker: sendability.sendBlocker,
+    };
+  });
 
   return {
     kind: 'today_queue',
@@ -91,4 +120,5 @@ module.exports = {
   buildTodayQueue,
   queueScore,
   daysSince,
+  resolveQueueSendability,
 };

@@ -178,9 +178,11 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
     const row = applyWebsiteIntelToCandidate({
       id: candidateId,
       candidateId,
+      companyId: identity.companyId || candidateId,
       placeId: identity.placeId,
       crmCompanyId: identity.crmCompanyId,
       crmProspectId,
+      domain: identity.domain || null,
       prospectId: candidateId,
       email: resolveMissionBoundRecipientEmail({
         discoveryEmail: prospect?.email,
