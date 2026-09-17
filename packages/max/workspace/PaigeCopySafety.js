@@ -75,30 +75,16 @@ function validatePaigeVariantCopy(variant = {}) {
 
 function validatePaigeVariantsPayload(payload = {}) {
   const variants = Array.isArray(payload.variants) ? payload.variants : [];
-  const fieldViolations = [];
+  const violations = [];
   for (const variant of variants) {
     const result = validatePaigeVariantCopy(variant);
     if (!result.safe) {
-      fieldViolations.push({
+      violations.push({
         candidateId: variant.candidateId || variant.companyId || variant.variantId || null,
         violations: result.violations,
       });
     }
   }
-
-  const topLevelFields = [
-    asText(payload.messaging),
-    asText(payload.cta),
-    ...(Array.isArray(payload.subjects) ? payload.subjects.map(asText) : []),
-  ].filter(Boolean);
-  const topLevelViolations = [];
-  for (const field of topLevelFields) {
-    for (const hit of findInternalCopyViolations(field)) {
-      topLevelViolations.push(hit);
-    }
-  }
-
-  const violations = [...fieldViolations, ...topLevelViolations];
   return {
     safe: violations.length === 0,
     blocker: violations.length ? BLOCKER : null,

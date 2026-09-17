@@ -1775,7 +1775,7 @@ function validatePaigeOutput(output, ctx = {}) {
     throw validationError(
       PAIGE_COPY_SAFETY_BLOCKER,
       'Paige variants contain internal mission or scoring language in customer-facing copy.',
-      { violations: copySafety.violations }
+      { details: { violations: copySafety.violations } }
     );
   }
   const executionResult = output.executionResult || executionResultFromStageOutput(output, {
@@ -1788,6 +1788,49 @@ function validatePaigeOutput(output, ctx = {}) {
     requireEvidence: false,
   });
   output.executionResult = executionResult;
+}
+
+function buildPaigeRevisionFailureDetails(paigeExecution = {}, mission = {}) {
+  const executionResult = paigeExecution && typeof paigeExecution === 'object'
+    ? paigeExecution
+    : null;
+  const variantsPayload = executionResult?.contributions
+    && typeof executionResult.contributions === 'object'
+    ? executionResult.contributions
+    : null;
+  const variants = Array.isArray(variantsPayload?.variants) ? variantsPayload.variants : [];
+  const copySafety = variantsPayload ? validatePaigeVariantsPayload(variantsPayload) : null;
+
+  return {
+    status: executionResult?.status || null,
+    blocker: executionResult?.blocker
+      || executionResult?.blocked?.requiredPrecondition
+      || null,
+    reason: executionResult?.reason
+      || executionResult?.blocked?.reason
+      || null,
+    error: executionResult?.error || null,
+    errors: Array.isArray(executionResult?.errors) ? executionResult.errors : null,
+    validation: executionResult?.validation
+      || (!copySafety || copySafety.safe ? null : { copySafety }),
+    executionResult,
+    copySafetyViolations: copySafety?.safe === false ? copySafety.violations : [],
+    candidateCount: variants.filter(
+      (variant) => variant && (variant.candidateId || variant.companyId || variant.placeId)
+    ).length,
+    variantCount: variants.length,
+    missionStage: mission?.stage || null,
+    missionState: mission?.revisionState?.status || mission?.status || null,
+  };
+}
+
+function throwPaigeRevisionFailed(paigeExecution, mission) {
+  const details = buildPaigeRevisionFailureDetails(paigeExecution, mission);
+  throw validationError(
+    'tme_paige_revision_failed',
+    details.reason || 'Paige revision did not complete.',
+    { details }
+  );
 }
 
 function validatePennyPreconditions({ mission, engine, tenantId }) {
@@ -2801,7 +2844,7 @@ async function advancePreparedOutreachRevision(input = {}) {
           });
         }
         if (paigeExecution.status !== EXECUTION_STATUSES.SUCCESS) {
-          throw validationError('tme_paige_revision_failed', 'Paige revision did not complete.');
+          throwPaigeRevisionFailed(paigeExecution, preparedMission);
         }
         const variantsPayload = paigeExecution.contributions;
         validatePaigeOutput({ variantsPayload, executionResult: paigeExecution }, { transactionId });
@@ -3162,6 +3205,7 @@ module.exports = {
   buildAcquisitionApproachPayload,
   runPennyPaidAcquisition,
   buildPaigeVariantsPayload,
+  buildPaigeRevisionFailureDetails,
   ensureStagesForPaige,
   ensureStageForAcquisitionApproach,
   validateLegacyAcquisitionApproachReconciliationPreconditions,
