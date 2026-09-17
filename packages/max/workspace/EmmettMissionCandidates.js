@@ -15,6 +15,10 @@ const {
   prospectIdentity,
   identityKeysFrom,
 } = require('./CanonicalOutboundIdentity');
+const {
+  resolveMissionBoundWebsiteIntel,
+  applyWebsiteIntelToCandidate,
+} = require('./MissionBoundWebsiteIntel');
 
 function latestContribution(contributions = [], specialist, kind, mission = null) {
   return selectCanonicalContribution(contributions, {
@@ -113,9 +117,9 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   const scoutRow = findLatestScoutDiscovery(contributions, mission);
   const maxRow = findMaxPrioritization(contributions, mission);
   const paigeRow = findPaigeVariants(contributions, mission);
-  const scoutPayload = scoutRow ? contributionBody(scoutRow) : {};
-  const maxPayload = maxRow ? contributionBody(maxRow) : {};
-  const paigePayload = paigeRow ? contributionBody(paigeRow) : {};
+  const scoutPayload = contributionBody(scoutRow);
+  const maxPayload = contributionBody(maxRow);
+  const paigePayload = contributionBody(paigeRow);
   const paigeReady = buildPaigeReadinessMetadata(paigePayload);
   const plan = mission.structuredMission || mission.missionPlanDraft || {};
   const segmentLabel = plan.market?.label || plan.market?.segment || mission.targetSegment;
@@ -169,8 +173,9 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
     });
     const candidateId = identity.candidateId || `mission-target-${rank}`;
     const crmProspectId = identity.crmProspectId || resolvedProspectId || null;
+    const websiteIntel = resolveMissionBoundWebsiteIntel({ target, opp, prospect });
 
-    const row = {
+    const row = applyWebsiteIntelToCandidate({
       id: candidateId,
       candidateId,
       companyId: identity.companyId || candidateId,
@@ -184,7 +189,7 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
         missionBoundKey: candidateId,
         prospectId: crmProspectId,
         companyId: identity.crmCompanyId,
-        domain: identity.domain,
+        domain: websiteIntel.domain || identity.domain,
         crmByProspectId,
       }),
       company: name || opp.name || prospect?.company || `Target ${rank}`,
@@ -197,12 +202,18 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
       missionBound: true,
       scoutRank: rank,
       source: 'mission_intelligence',
-    };
+      location: target.location || opp.location || prospect?.location || null,
+    }, websiteIntel);
 
     if (paigeReady.ready && paigePayload.variants?.length) {
       const boundVariant = findBoundVariant(
         paigePayload.variants,
-        identity.keys
+        identityKeysFrom({
+          candidateId,
+          id: candidateId,
+          companyId: identity.crmCompanyId || candidateId,
+          placeId: identity.placeId,
+        })
       );
       if (boundVariant) {
         row.paige = {
@@ -313,4 +324,6 @@ module.exports = {
   listMissionBoundProspectIds,
   listMissionBoundCompanyIds,
   listMissionBoundCrmLookupKeys,
+  resolveMissionBoundWebsiteIntel,
+  applyWebsiteIntelToCandidate,
 };
