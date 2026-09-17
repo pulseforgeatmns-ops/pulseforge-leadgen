@@ -26,6 +26,13 @@ const {
   resolveOutreachSequenceAtPrepare,
 } = require('../../acquisition-mission/PreparedOutreachSequence');
 const {
+  buildCustomerFacingVariantCopy,
+} = require('./PaigeCustomerCopy');
+const {
+  validatePaigeVariantsPayload,
+  BLOCKER: COPY_SAFETY_BLOCKER,
+} = require('./PaigeCopySafety');
+const {
   ANCHOR_CLIENT_ID,
   buildAnchorLifecycleVariant,
 } = require('../../../utils/anchorLifecycleEmail');
@@ -101,8 +108,7 @@ function buildPerProspectVariants(input = {}) {
     const candidateFit = candidate.fit != null ? Number(candidate.fit) : 0.7;
     const candidateTiming = candidate.timing != null ? Number(candidate.timing) : 0.5;
 
-    let subject;
-    let body;
+    let copy;
     let usedPersonalization = false;
     let scoutPersonalization = null;
 
@@ -117,17 +123,19 @@ function buildPerProspectVariants(input = {}) {
         crmRecord,
         senderName,
       });
-      subject = lifecycle.subject;
-      body = lifecycle.body;
+      copy = {
+        subject: lifecycle.subject,
+        body: lifecycle.body,
+        cta: 'Reply if a written quote would be useful',
+      };
       usedPersonalization = lifecycle.usedPersonalization;
       scoutPersonalization = lifecycle.evidence || null;
     } else {
-      subject = `Commercial cleaning walkthrough for ${companyName}`;
-      body = [
-        `Hi — we help ${marketLabel} maintain spotless workspaces.`,
-        objective ? `Mission focus: ${objective}` : null,
-        candidateRationale ? `Why now: ${candidateRationale}` : null,
-      ].filter(Boolean).join('\n\n');
+      copy = buildCustomerFacingVariantCopy({
+        companyName,
+        plan,
+        mission: input.mission || {},
+      });
     }
 
     variants.push({
@@ -325,6 +333,7 @@ async function runPaigeVariants(executionInput = {}) {
       specialist: SPECIALISTS.PAIGE,
       transactionId,
       status: EXECUTION_STATUSES.BLOCKED,
+      contributions: payload,
       reason: 'Paige generated customer-facing copy containing internal mission or scoring language.',
       requiredPrecondition: COPY_SAFETY_BLOCKER,
       blockers: [{

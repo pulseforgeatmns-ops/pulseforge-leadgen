@@ -8,7 +8,10 @@ const {
   validatePaigeVariantCopy,
   validatePaigeVariantsPayload,
 } = require('../PaigeCopySafety');
-const { buildPerProspectVariants } = require('../PaigeVariantsExecutor');
+const {
+  buildPerProspectVariants,
+  runPaigeVariants,
+} = require('../PaigeVariantsExecutor');
 const { resolveQueueSendability } = require('../../../emmett-outbound/Queue');
 
 const PLACE_BLUE = 'ChIJ43Z_V2dP4okRCRcDHefV8OU';
@@ -76,6 +79,27 @@ describe('Paige customer-facing copy safety', () => {
     assert.doesNotMatch(variants[0].body, /fit 0\./i);
   });
 
+  it('runPaigeVariants returns SUCCESS for safe Anchor revision payload', async () => {
+    const scenario = strScenario();
+    const result = await runPaigeVariants({
+      mission: scenario.mission,
+      missionPlan: scenario.plan,
+      workspaceContext: {
+        max: scenario.max,
+        scout: scenario.scout || {},
+      },
+      transactionId: 'tx-paige-safe',
+    });
+
+    assert.equal(result.status, 'SUCCESS');
+    assert.equal(Array.isArray(result.contributions?.variants), true);
+    assert.equal(result.contributions.variants.length, 1);
+    assert.equal(result.contributions.variants[0].candidateId, PLACE_BLUE);
+    assert.equal(result.contributions.variants[0].placeId, PLACE_BLUE);
+    assert.equal(result.contributions.variants[0].companyId, PLACE_BLUE);
+    assert.equal(result.contributions.variants[0].cta, 'Reply if a written quote would be useful');
+  });
+
   it('unsafe Paige variant cannot become sendable CAPACITY queue item', () => {
     const unsafe = resolveQueueSendability({
       email: 'sales@example.com',
@@ -110,6 +134,47 @@ describe('Paige customer-facing copy safety', () => {
       false,
       'internal rationale must not appear in customer body'
     );
+  });
+
+  it('permits unsafe-looking internal metadata when rendered copy is safe', () => {
+    const payload = {
+      variants: [{
+        candidateId: PLACE_BLUE,
+        subject: 'Cleaning for Blue Door Living Property Management',
+        body: 'Would it be useful for us to put a quote together for Blue Door Living Property Management?',
+        cta: 'Reply if a written quote would be useful',
+        attributableIntelligence: {
+          rationale: 'Mission focus: Achieve 1 recurring_clients',
+          objectiveReason: 'fit 0.28 · timing 0.20 · 6 unknowns',
+        },
+      }],
+      messaging: 'Mission focus: Achieve 1 recurring_clients',
+      subjects: ['Mission focus: Achieve 1 recurring_clients'],
+      cta: 'Mission focus: Achieve 1 recurring_clients',
+    };
+
+    const result = validatePaigeVariantsPayload(payload);
+    assert.equal(result.safe, true);
+    assert.equal(result.blocker, null);
+  });
+
+  it('blocks internal metadata when it is rendered into customer-facing body copy', () => {
+    const rationale = 'Mission focus: Achieve 1 recurring_clients';
+    const payload = {
+      variants: [{
+        candidateId: PLACE_BLUE,
+        subject: 'Cleaning for Blue Door Living Property Management',
+        body: `Would it be useful for us to put a quote together for Blue Door Living Property Management?\n\n${rationale}`,
+        cta: 'Reply if a written quote would be useful',
+        attributableIntelligence: { rationale },
+      }],
+    };
+
+    const result = validatePaigeVariantsPayload(payload);
+    assert.equal(result.safe, false);
+    assert.equal(result.blocker, BLOCKER);
+    assert.equal(result.violations.length, 1);
+    assert.equal(result.violations[0].candidateId, PLACE_BLUE);
   });
 
   it('validatePaigeVariantsPayload fails closed on any unsafe variant', () => {
