@@ -32,6 +32,8 @@ const {
   FORBIDDEN_SEND_INTENTS,
 } = require('../../../../scripts/lib/anchorCanonicalOutbound');
 const eoi = require('../../../emmett-outbound');
+const { resolveQueueSendability } = require('../../../emmett-outbound/Queue');
+const { BLOCKER: COPY_SAFETY_BLOCKER } = require('../PaigeCopySafety');
 
 const PLACE_BLUE = 'ChIJ43Z_V2dP4okRCRcDHefV8OU';
 const PLACE_MILL = 'ChIJgyDf-cxO4okRSlEJCi27f94';
@@ -147,22 +149,24 @@ describe('Paige → Emmett sendable queue binding', () => {
     assert.equal(findBoundVariant(variants, PLACE_MILL).candidateId, PLACE_MILL);
   });
 
-  it('Paige variant copy projects into Emmett queue even when CAPACITY copy is sanitized', () => {
+  it('Paige variant copy projects subject/body/cta into persisted CAPACITY queue items', () => {
     const rows = contributions();
     const candidates = buildMissionBoundCandidates(MISSION, rows);
     assert.equal(candidates.length, 2);
     for (const candidate of candidates) {
       assert.ok(candidate.paige?.subject);
       assert.ok(candidate.paige?.body);
+      assert.ok(candidate.paige?.cta);
       assert.equal(candidate.paige.candidateId, candidate.candidateId);
     }
     const capacity = capacityFromCandidates(candidates);
     const persisted = JSON.parse(JSON.stringify(capacity));
-    const items = (persisted.queue?.items || []).map(sanitizeQueueItem);
+    const items = persisted.queue?.items || [];
     assert.equal(items.length, 2);
     for (const item of items) {
-      assert.equal(item.paige?.subject, undefined);
-      assert.equal(item.paige?.body, undefined);
+      assert.ok(item.paige?.subject);
+      assert.ok(item.paige?.body);
+      assert.ok(item.paige?.cta);
       assert.ok(item.candidateId || item.id);
       assert.equal(item.paige.candidateId, item.candidateId || item.id);
     }
@@ -314,5 +318,94 @@ describe('Paige → Emmett sendable queue binding', () => {
     const blue = candidates.find((row) => row.candidateId === PLACE_BLUE);
     assert.equal(blue.email, 'ops@bluedoorliving.com');
     assert.equal(blue.domain, 'bluedoorliving.com');
+  });
+
+  it('unsafe copy is blocked by internal_reasoning_leakage at sanitize time', () => {
+    const unsafe = sanitizeQueueItem({
+      email: 'sales@example.com',
+      contentSource: 'paige',
+      paige: {
+        author: 'paige',
+        source: 'paige',
+        ready: true,
+        candidateId: PLACE_BLUE,
+        subject: 'Hello',
+        body: 'Mission focus: Achieve 1 recurring_clients',
+        cta: 'Reply',
+        bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
+        attributableIntelligence: { rationale: 'internal only' },
+      },
+    });
+    assert.equal(unsafe.paige.subject, undefined);
+    assert.equal(unsafe.paige.body, undefined);
+    assert.equal(unsafe.sendable, false);
+    assert.equal(unsafe.sendBlocker, COPY_SAFETY_BLOCKER);
+  });
+
+  it('missing subject/body still blocked after projection', () => {
+    const blocked = sanitizeQueueItem({
+      email: 'sales@example.com',
+      contentSource: 'paige',
+      paige: {
+        author: 'paige',
+        source: 'paige',
+        ready: true,
+        candidateId: PLACE_BLUE,
+        bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
+        attributableIntelligence: { companyName: 'Blue Door' },
+      },
+    });
+    assert.equal(blocked.sendable, false);
+    assert.equal(blocked.sendBlocker, 'missing_paige_copy');
+  });
+
+  it('no email still blocked when copy is present', () => {
+    const variants = paigeVariantsFromMax();
+    const blocked = resolveQueueSendability({
+      email: null,
+      contentSource: 'paige',
+      paige: variants[0],
+    });
+    assert.equal(blocked.sendable, false);
+    assert.equal(blocked.sendBlocker, 'missing_recipient_email');
+  });
+
+  it('DNC still blocked when copy and email are present', () => {
+    const variants = paigeVariantsFromMax();
+    const blocked = resolveQueueSendability({
+      email: 'sales@bluedoorliving.org',
+      dnc: true,
+      contentSource: 'paige',
+      paige: variants[0],
+    });
+    assert.equal(blocked.sendable, false);
+    assert.equal(blocked.sendBlocker, 'dnc');
+  });
+
+  it('preserves attributableIntelligence without rendering into copy', () => {
+    const candidates = buildMissionBoundCandidates(MISSION, contributions());
+    const blue = candidates.find((row) => row.candidateId === PLACE_BLUE);
+    assert.ok(blue.paige.attributableIntelligence);
+    assert.equal(
+      blue.paige.body.includes(blue.paige.attributableIntelligence.rationale || '___none___'),
+      false
+    );
+    const capacity = capacityFromCandidates(candidates);
+    const item = capacity.queue.items.find((row) => String(row.prospectId) === PLACE_BLUE);
+    assert.ok(item.paige.attributableIntelligence);
+    assert.ok(item.paige.subject);
+    assert.ok(!item.paige.body.includes('fit 0.'));
+  });
+
+  it('candidate binding by Place ID preserved with projected copy', () => {
+    const candidates = buildMissionBoundCandidates(MISSION, contributions());
+    const blue = candidates.find((row) => row.candidateId === PLACE_BLUE);
+    assert.equal(blue.placeId, PLACE_BLUE);
+    assert.equal(blue.paige.candidateId, PLACE_BLUE);
+    const capacity = capacityFromCandidates(candidates);
+    const item = capacity.queue.items.find((row) => String(row.prospectId) === PLACE_BLUE);
+    assert.equal(item.placeId, PLACE_BLUE);
+    assert.equal(item.paige.candidateId, PLACE_BLUE);
+    assert.ok(item.paige.subject);
   });
 });

@@ -80,12 +80,13 @@ describe('SPEC-212 — CAPACITY persistence preserves message bindings', () => {
     return engine.inspect(mission.id, { tenantId: '10' });
   }
 
-  it('sanitizeQueueItem keeps Paige SPEC-212 fields and still strips copy', () => {
+  it('sanitizeQueueItem keeps Paige SPEC-212 fields and projects safe copy', () => {
     const before = {
       prospectId: 'co-harbor',
       email: 'alex@harborlaw.com',
       sendable: true,
       subject: 'must-not-persist',
+      contentSource: 'paige',
       paige: {
         author: 'paige',
         source: 'paige',
@@ -112,9 +113,11 @@ describe('SPEC-212 — CAPACITY persistence preserves message bindings', () => {
     });
     assert.equal(after.paige.variantId, 'paige_v_co_harbor');
     assert.equal(after.paige.variantLabel, 'Primary - Harbor Law');
-    assert.equal(after.paige.subject, undefined);
-    assert.equal(after.paige.body, undefined);
-    assert.equal(after.paige.cta, undefined);
+    assert.equal(after.paige.subject, 'Harbor Law walkthrough');
+    assert.equal(after.paige.body, 'Alex, Harbor Law intake is up.');
+    assert.equal(after.paige.cta, 'Reply');
+    assert.equal(after.sendable, true);
+    assert.equal(after.sendBlocker, null);
     assert.equal(sanitizePaigeBinding(before.paige).candidateId, 'co-harbor');
   });
 
@@ -145,9 +148,9 @@ describe('SPEC-212 — CAPACITY persistence preserves message bindings', () => {
       assert.equal(item.subject, undefined);
       assert.equal(item.body, undefined);
       assert.equal(item.cta, undefined);
-      assert.equal(item.paige?.subject, undefined);
-      assert.equal(item.paige?.body, undefined);
-      assert.equal(item.paige?.cta, undefined);
+      assert.ok(item.paige?.subject, 'persisted paige.subject');
+      assert.ok(item.paige?.body, 'persisted paige.body');
+      assert.ok(item.paige?.cta, 'persisted paige.cta');
       assert.ok(item.paige?.candidateId, 'persisted paige.candidateId');
       assert.equal(item.paige.bindingScope, MESSAGE_BINDING_SCOPES.PROSPECT);
       assert.ok(item.paige.attributableIntelligence, 'persisted attributableIntelligence');
