@@ -63,6 +63,10 @@ const {
   leadHasEstablishedIdentity,
 } = require('./packages/scout/identity/BusinessIdentity');
 const { expandPlacesQueriesForVertical } = require('./packages/scout/hypothesis/MarketHypothesisRegistry');
+const {
+  collectScoutPersonalizationEvidence,
+  persistScoutPersonalizationEvidence,
+} = require('./utils/scoutPersonalizationEvidence');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -2629,6 +2633,25 @@ async function saveToDatabase(leads, {
       }
       saved++;
       const prospectId = insert.rows[0].id;
+
+      if (isCleaningBuyerProfile()) {
+        try {
+          const scoutPersonalization = await collectScoutPersonalizationEvidence({
+            ...lead,
+            vertical: CONFIG.vertical,
+            company: companyName,
+          });
+          lead.scoutPersonalization = scoutPersonalization;
+          await persistScoutPersonalizationEvidence(
+            pool,
+            prospectId,
+            scoutPersonalization,
+            CONFIG.clientId
+          );
+        } catch (personalizationErr) {
+          console.error(`[Scout] Personalization evidence failed for ${companyName}: ${personalizationErr.message}`);
+        }
+      }
 
       await safeIngestScoutLifecycleSignal({
         prospectId,
