@@ -100,9 +100,13 @@ async function routePaigeSocialContentPublication(input = {}) {
   };
 }
 
+/** Alias matching canonical publisher contract name. */
+const publishApprovedPaigeSocialArtifact = routePaigeSocialContentPublication;
+
 module.exports = {
   CAPABILITY_ID,
   routePaigeSocialContentPublication,
+  publishApprovedPaigeSocialArtifact,
   resetPaigeSocialContentPublicationForTests,
   getRegistry,
   getRunner,

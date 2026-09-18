@@ -672,6 +672,22 @@ router.get('/api/approvals', requireOperator, async (req, res) => {
   }
 });
 
+// Paige canonical social content inspection (database-backed status)
+router.get('/api/paige/social-content/status', requireAuth, async (req, res) => {
+  try {
+    const clientId = getRequestClientId(req);
+    const { inspectPaigeSocialContentStatus } = require('../services/paigeSocialContentInspection');
+    const status = await inspectPaigeSocialContentStatus({
+      clientId,
+      tenantId: String(clientId),
+      missionId: req.query.mission_id || req.query.missionId || null,
+    });
+    res.json(status);
+  } catch (err) {
+    res.status(err.message === 'tenant_scope_required' ? 400 : 500).json({ error: err.message });
+  }
+});
+
 // Approve or reject a comment
 router.post('/api/approvals/:id', requireOperator, async (req, res) => {
   const { id } = req.params;

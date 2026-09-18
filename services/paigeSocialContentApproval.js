@@ -104,9 +104,28 @@ async function routePaigeSocialContentApproval(input = {}) {
   };
 }
 
+/**
+ * Canonical approval action — records operator decision on artifact state only.
+ * Publication is optional and routed separately when publishOnApprove is true.
+ */
+async function applyPaigeSocialArtifactApprovalAction(input = {}) {
+  const { tenantId, clientId } = assertTenantInput(input);
+  const action = input.action === 'APPROVE' || input.action === 'REJECT'
+    ? input.action.toLowerCase()
+    : (input.action || input.decision);
+  return routePaigeSocialContentApproval({
+    ...input,
+    tenantId,
+    clientId,
+    action,
+    publishOnApprove: input.publishOnApprove ?? false,
+  });
+}
+
 module.exports = {
   resolveCanonicalSocialContentArtifact,
   routePaigeSocialContentApproval,
+  applyPaigeSocialArtifactApprovalAction,
   resetPaigeSocialContentApprovalForTests,
   isPaigeSocialPublishChannel,
 };

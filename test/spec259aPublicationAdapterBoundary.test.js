@@ -16,6 +16,7 @@ const {
   createSocialContentPublishCapability,
   createInMemorySocialContentStore,
   APPROVAL_STATES,
+  PUBLISH_STATES,
   buildSocialContentArtifact,
 } = require('../packages/capabilities/contentGeneration');
 
@@ -176,5 +177,7 @@ describe('SPEC-259A — Publication adapter boundary', () => {
     assert.equal(result.errors[0].message, 'buffer_down');
     const row = await store.getById('art-c', '2', 2);
     assert.equal(row.approvalState, APPROVAL_STATES.APPROVED);
+    assert.equal(row.publishState, PUBLISH_STATES.FAILED);
+    assert.equal(row.publishError, 'buffer_down');
   });
 });

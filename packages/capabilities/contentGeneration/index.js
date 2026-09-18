@@ -6,6 +6,8 @@ const {
   CAPABILITY_VERSION,
   ARTIFACT_TYPE,
   APPROVAL_STATES,
+  PUBLISH_STATES,
+  SOURCE_TYPES,
   buildProvenance,
   buildSocialContentArtifact,
 } = require('./types');
@@ -39,6 +41,8 @@ module.exports = {
   CAPABILITY_VERSION,
   ARTIFACT_TYPE,
   APPROVAL_STATES,
+  PUBLISH_STATES,
+  SOURCE_TYPES,
   DECISIONS,
   PAIGE_SOCIAL_PUBLISH_CHANNELS,
   buildProvenance,

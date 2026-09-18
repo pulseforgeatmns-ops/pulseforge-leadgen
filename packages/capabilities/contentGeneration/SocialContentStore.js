@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const {
   APPROVAL_STATES,
+  PUBLISH_STATES,
   buildSocialContentArtifact,
 } = require('./types');
 
@@ -12,6 +13,23 @@ function clone(value) {
 
 function newId() {
   return crypto.randomUUID();
+}
+
+function applyArtifactPatch(row, patch = {}) {
+  const now = new Date().toISOString();
+  if (patch.approvalState != null) row.approvalState = patch.approvalState;
+  if (patch.publishState != null) row.publishState = patch.publishState;
+  if (patch.rejectionReason !== undefined) row.rejectionReason = patch.rejectionReason;
+  if (patch.publishError !== undefined) row.publishError = patch.publishError;
+  if (patch.publishedUrl !== undefined) row.publishedUrl = patch.publishedUrl;
+  if (patch.approvedAt !== undefined) row.approvedAt = patch.approvedAt;
+  if (patch.rejectedAt !== undefined) row.rejectedAt = patch.rejectedAt;
+  if (patch.publishedAt !== undefined) row.publishedAt = patch.publishedAt;
+  if (patch.sourceType != null) row.sourceType = patch.sourceType;
+  if (patch.businessId !== undefined) row.businessId = patch.businessId;
+  if (patch.mediaRefs !== undefined) row.mediaRefs = patch.mediaRefs;
+  row.updatedAt = now;
+  return row;
 }
 
 function createInMemorySocialContentStore() {
@@ -25,15 +43,19 @@ function createInMemorySocialContentStore() {
       void client;
       const inserted = [];
       for (const row of rows) {
-        const artifact = buildSocialContentArtifact(row);
+        const artifact = buildSocialContentArtifact({ ...row, id: row.id || newId() });
         artifacts.set(artifact.id, clone(artifact));
         inserted.push(clone(artifact));
       }
       return inserted;
     },
-    async listByTenant(tenantId, clientId) {
+    async listByTenant(tenantId, clientId, { missionId } = {}) {
       return [...artifacts.values()]
-        .filter((a) => a.tenantId === String(tenantId) && a.clientId === Number(clientId))
+        .filter((a) => {
+          if (a.tenantId !== String(tenantId) || a.clientId !== Number(clientId)) return false;
+          if (missionId && a.missionId !== missionId) return false;
+          return true;
+        })
         .map(clone);
     },
     async getById(id, tenantId, clientId) {
@@ -72,6 +94,26 @@ function createInMemorySocialContentStore() {
       row.updatedAt = new Date().toISOString();
       return { ok: true, artifact: clone(row) };
     },
+    async transitionPublishState(id, tenantId, clientId, toState, { allowedFrom = [] } = {}) {
+      const row = artifacts.get(id);
+      if (!row) return { ok: false, reason: 'artifact_not_found' };
+      if (row.tenantId !== String(tenantId) || row.clientId !== Number(clientId)) {
+        return { ok: false, reason: 'tenant_scope_mismatch' };
+      }
+      if (!allowedFrom.includes(row.publishState)) {
+        return { ok: false, reason: 'invalid_publish_transition', from: row.publishState, to: toState };
+      }
+      row.publishState = toState;
+      row.updatedAt = new Date().toISOString();
+      return { ok: true, artifact: clone(row) };
+    },
+    async updateArtifactMetadata(id, tenantId, clientId, patch = {}) {
+      const row = artifacts.get(id);
+      if (!row) return null;
+      if (row.tenantId !== String(tenantId) || row.clientId !== Number(clientId)) return null;
+      applyArtifactPatch(row, patch);
+      return clone(row);
+    },
     _resetForTests() {
       artifacts.clear();
     },
@@ -84,6 +126,8 @@ function mapRow(row) {
     id: row.id,
     tenantId: row.tenant_id,
     clientId: row.client_id,
+    sourceType: row.source_type,
+    businessId: row.business_id,
     platform: row.platform,
     contentObjective: row.content_objective,
     missionId: row.mission_id,
@@ -91,12 +135,20 @@ function mapRow(row) {
     contentType: row.content_type,
     label: row.label,
     body: row.body,
+    mediaRefs: row.media_refs,
     meta: row.meta || {},
     provenance: row.provenance || {},
     approvalState: row.approval_state,
+    publishState: row.publish_state,
+    rejectionReason: row.rejection_reason,
+    publishError: row.publish_error,
+    publishedUrl: row.published_url,
     pendingCommentId: row.pending_comment_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    approvedAt: row.approved_at,
+    rejectedAt: row.rejected_at,
+    publishedAt: row.published_at,
   });
 }
 
@@ -123,6 +175,29 @@ async function ensureSocialContentArtifactsTable(db) {
         CHECK (approval_state IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'REJECTED', 'PUBLISHED'))
     );
   `);
+
+  await db.query(`
+    ALTER TABLE paige_social_content_artifacts
+      ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'unknown',
+      ADD COLUMN IF NOT EXISTS business_id TEXT,
+      ADD COLUMN IF NOT EXISTS media_refs JSONB,
+      ADD COLUMN IF NOT EXISTS publish_state TEXT NOT NULL DEFAULT 'NOT_PUBLISHED',
+      ADD COLUMN IF NOT EXISTS rejection_reason TEXT,
+      ADD COLUMN IF NOT EXISTS publish_error TEXT,
+      ADD COLUMN IF NOT EXISTS published_url TEXT,
+      ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ;
+  `);
+
+  await db.query(`
+    UPDATE paige_social_content_artifacts
+       SET approval_state = 'APPROVED',
+           publish_state = 'PUBLISHED',
+           published_at = COALESCE(published_at, updated_at)
+     WHERE approval_state = 'PUBLISHED';
+  `);
+
   await db.query(`
     CREATE INDEX IF NOT EXISTS paige_social_content_artifacts_tenant_client_idx
       ON paige_social_content_artifacts (tenant_id, client_id, created_at DESC);
@@ -143,16 +218,18 @@ function createPostgresSocialContentStore(pool) {
         const artifact = buildSocialContentArtifact({ ...row, id: row.id || newId() });
         const result = await conn.query(
           `INSERT INTO paige_social_content_artifacts (
-            id, tenant_id, client_id, platform, content_objective, mission_id,
-            company_name, content_type, label, body, meta, provenance,
-            approval_state, pending_comment_id, created_at, updated_at
+            id, tenant_id, client_id, source_type, business_id, platform, content_objective, mission_id,
+            company_name, content_type, label, body, media_refs, meta, provenance,
+            approval_state, publish_state, pending_comment_id, created_at, updated_at
           ) VALUES (
-            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15,$16
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15::jsonb,$16,$17,$18,$19,$20
           ) RETURNING *`,
           [
             artifact.id,
             artifact.tenantId,
             artifact.clientId,
+            artifact.sourceType,
+            artifact.businessId,
             artifact.platform,
             artifact.contentObjective,
             artifact.missionId,
@@ -160,9 +237,11 @@ function createPostgresSocialContentStore(pool) {
             artifact.contentType,
             artifact.label,
             artifact.body,
+            artifact.mediaRefs ? JSON.stringify(artifact.mediaRefs) : null,
             JSON.stringify(artifact.meta || {}),
             JSON.stringify(artifact.provenance || {}),
             artifact.approvalState || APPROVAL_STATES.PENDING_APPROVAL,
+            artifact.publishState || PUBLISH_STATES.NOT_PUBLISHED,
             artifact.pendingCommentId,
             artifact.createdAt,
             artifact.updatedAt,
@@ -172,13 +251,16 @@ function createPostgresSocialContentStore(pool) {
       }
       return inserted;
     },
-    async listByTenant(tenantId, clientId) {
-      const result = await db.query(
-        `SELECT * FROM paige_social_content_artifacts
-         WHERE tenant_id = $1 AND client_id = $2
-         ORDER BY created_at DESC`,
-        [String(tenantId), Number(clientId)]
-      );
+    async listByTenant(tenantId, clientId, { missionId } = {}) {
+      const params = [String(tenantId), Number(clientId)];
+      let sql = `SELECT * FROM paige_social_content_artifacts
+         WHERE tenant_id = $1 AND client_id = $2`;
+      if (missionId) {
+        params.push(missionId);
+        sql += ` AND mission_id = $${params.length}`;
+      }
+      sql += ' ORDER BY created_at DESC';
+      const result = await db.query(sql, params);
       return result.rows.map(mapRow);
     },
     async getById(id, tenantId, clientId) {
@@ -229,6 +311,67 @@ function createPostgresSocialContentStore(pool) {
         };
       }
       return { ok: true, artifact: mapRow(result.rows[0]) };
+    },
+    async transitionPublishState(id, tenantId, clientId, toState, { allowedFrom = [], client: txClient } = {}) {
+      const conn = txClient || db;
+      const result = await conn.query(
+        `UPDATE paige_social_content_artifacts
+         SET publish_state = $4, updated_at = NOW()
+         WHERE id = $1 AND tenant_id = $2 AND client_id = $3
+           AND publish_state = ANY($5::text[])
+         RETURNING *`,
+        [id, String(tenantId), Number(clientId), toState, allowedFrom]
+      );
+      if (!result.rows[0]) {
+        const existing = await this.getById(id, tenantId, clientId);
+        if (!existing) return { ok: false, reason: 'artifact_not_found' };
+        return {
+          ok: false,
+          reason: 'invalid_publish_transition',
+          from: existing.publishState,
+          to: toState,
+        };
+      }
+      return { ok: true, artifact: mapRow(result.rows[0]) };
+    },
+    async updateArtifactMetadata(id, tenantId, clientId, patch = {}, { client: txClient } = {}) {
+      const conn = txClient || db;
+      const sets = [];
+      const params = [id, String(tenantId), Number(clientId)];
+      let idx = 4;
+
+      const fieldMap = [
+        ['rejectionReason', 'rejection_reason'],
+        ['publishError', 'publish_error'],
+        ['publishedUrl', 'published_url'],
+        ['approvedAt', 'approved_at'],
+        ['rejectedAt', 'rejected_at'],
+        ['publishedAt', 'published_at'],
+        ['sourceType', 'source_type'],
+        ['businessId', 'business_id'],
+      ];
+      for (const [jsKey, col] of fieldMap) {
+        if (patch[jsKey] !== undefined) {
+          sets.push(`${col} = $${idx++}`);
+          params.push(patch[jsKey]);
+        }
+      }
+      if (patch.mediaRefs !== undefined) {
+        sets.push(`media_refs = $${idx++}::jsonb`);
+        params.push(patch.mediaRefs ? JSON.stringify(patch.mediaRefs) : null);
+      }
+      if (!sets.length) {
+        return this.getById(id, tenantId, clientId);
+      }
+      sets.push('updated_at = NOW()');
+      const result = await conn.query(
+        `UPDATE paige_social_content_artifacts
+         SET ${sets.join(', ')}
+         WHERE id = $1 AND tenant_id = $2 AND client_id = $3
+         RETURNING *`,
+        params
+      );
+      return mapRow(result.rows[0]);
     },
   };
 }

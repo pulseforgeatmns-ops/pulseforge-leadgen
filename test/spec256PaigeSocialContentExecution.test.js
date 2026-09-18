@@ -9,6 +9,7 @@ const {
   createSocialContentCapability,
   createInMemorySocialContentStore,
   APPROVAL_STATES,
+  PUBLISH_STATES,
   CAPABILITY_ID,
 } = require('../packages/capabilities/contentGeneration');
 const {
@@ -146,6 +147,7 @@ describe('SPEC-256 — Canonical Paige Social Content Execution', () => {
     const artifacts = await store.listByTenant('1', 1);
     assert.equal(artifacts.length, 1);
     assert.equal(artifacts[0].approvalState, APPROVAL_STATES.PENDING_APPROVAL);
+    assert.equal(artifacts[0].publishState, PUBLISH_STATES.NOT_PUBLISHED);
     assert.equal(artifacts[0].provenance.capabilityId, CAPABILITY_ID);
     assert.equal(artifacts[0].provenance.tenantId, '1');
     assert.equal(artifacts[0].provenance.platform, 'linkedin_page');

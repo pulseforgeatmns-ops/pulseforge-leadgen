@@ -5,7 +5,7 @@
  * Records operator decisions against tenant-scoped artifacts only.
  */
 
-const { APPROVAL_STATES } = require('./types');
+const { APPROVAL_STATES, PUBLISH_STATES } = require('./types');
 const {
   createInMemorySocialContentStore,
   createPostgresSocialContentStore,
@@ -32,6 +32,11 @@ function targetStateForDecision(decision) {
 
 function mirrorPendingCommentStatus(decision) {
   return decision === DECISIONS.APPROVE ? 'approved' : 'rejected';
+}
+
+function isPublishedArtifact(artifact) {
+  return artifact.publishState === PUBLISH_STATES.PUBLISHED
+    || artifact.approvalState === APPROVAL_STATES.PUBLISHED;
 }
 
 /**
@@ -84,6 +89,53 @@ function createSocialContentApprovalService(deps = {}) {
     const decision = normalizeDecision(input.decision || input.action);
     const { tenantId, clientId, artifact } = await resolveArtifact(input);
     const toState = targetStateForDecision(decision);
+    const now = new Date().toISOString();
+
+    if (decision === DECISIONS.REJECT && isPublishedArtifact(artifact)) {
+      const err = new Error('cannot_reject_published_artifact');
+      err.code = 'cannot_reject_published_artifact';
+      throw err;
+    }
+
+    if (
+      decision === DECISIONS.APPROVE
+      && artifact.approvalState === APPROVAL_STATES.REJECTED
+      && !input.allowRestore
+    ) {
+      const err = new Error('rejected_artifact_requires_restore');
+      err.code = 'rejected_artifact_requires_restore';
+      throw err;
+    }
+
+    if (artifact.approvalState === toState) {
+      const mirrored = artifact.pendingCommentId
+        ? await mirrorPendingComment(
+          artifact.pendingCommentId,
+          mirrorPendingCommentStatus(decision),
+          clientId
+        )
+        : null;
+      return {
+        ok: true,
+        idempotent: true,
+        decision,
+        artifact: { ...artifact, approvalState: toState },
+        pendingComment: mirrored,
+      };
+    }
+
+    if (decision === DECISIONS.APPROVE && isPublishedArtifact(artifact)) {
+      const mirrored = artifact.pendingCommentId
+        ? await mirrorPendingComment(artifact.pendingCommentId, 'approved', clientId)
+        : null;
+      return {
+        ok: true,
+        idempotent: true,
+        decision,
+        artifact,
+        pendingComment: mirrored,
+      };
+    }
 
     const transition = await store.transitionApprovalState(
       artifact.id,
@@ -120,6 +172,19 @@ function createSocialContentApprovalService(deps = {}) {
       throw err;
     }
 
+    const metadataPatch = decision === DECISIONS.APPROVE
+      ? { approvedAt: now, rejectionReason: null }
+      : {
+        rejectedAt: now,
+        rejectionReason: input.rejectionReason || input.rejection_reason || null,
+      };
+    const updated = await store.updateArtifactMetadata(
+      artifact.id,
+      tenantId,
+      clientId,
+      metadataPatch
+    );
+
     const mirrored = transition.artifact.pendingCommentId
       ? await mirrorPendingComment(
         transition.artifact.pendingCommentId,
@@ -132,7 +197,7 @@ function createSocialContentApprovalService(deps = {}) {
       ok: true,
       idempotent: false,
       decision,
-      artifact: transition.artifact,
+      artifact: updated || transition.artifact,
       pendingComment: mirrored,
     };
   }
@@ -151,5 +216,6 @@ module.exports = {
   normalizeDecision,
   targetStateForDecision,
   mirrorPendingCommentStatus,
+  isPublishedArtifact,
   createSocialContentApprovalService,
 };
