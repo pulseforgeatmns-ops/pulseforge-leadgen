@@ -220,7 +220,7 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     }
   };
 
-  return executeOutboundBundle({
+  const result = await executeOutboundBundle({
     mission,
     contributions,
     approval,
@@ -229,6 +229,7 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     executionRequest,
     executionRequestId: executionRequest?.id || null,
     maxSends: input.maxSends,
+    governedEnvelopeId: input.governedEnvelopeId,
     prospectId: input.prospectId,
     prospectIds: input.prospectIds,
     sendEmail,
@@ -244,6 +245,22 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     existingRecords,
     persistExecutionRecord,
   });
+  const envelope = approval?.payload?.dailyEnvelope;
+  if (envelope && !result.blocked) {
+    // A one-message tick is not completion of a multi-message mission. Provider
+    // observations must not advance this mission to OBSERVE while work remains.
+    const aggregate = new Map([...existingRecords, ...(result.records || [])].map(row => [row.id, row]));
+    result.summary = summarizeExecutionRecords([...aggregate.values()]);
+    result.summary.complete = result.summary.complete && aggregate.size >= envelope.candidateIds.length;
+    if (input.pool && input.persist !== false) {
+      const ledger = (await input.pool.query(`SELECT status,count(*)::int AS n FROM acquisition_outbound_items
+        WHERE envelope_id=$1 AND tenant_id=$2 GROUP BY status`, [envelope.id, String(tenantId)])).rows;
+      const counts = Object.fromEntries(ledger.map(row => [row.status, row.n]));
+      result.summary.complete = ledger.length > 0 && !counts.pending && !counts.attempted && !counts.uncertain;
+      result.summary.governedEnvelope = { id: envelope.id, counts };
+    }
+  }
+  return result;
 }
 
 /**

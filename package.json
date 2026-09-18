@@ -92,7 +92,8 @@
     "test:revenue:phase16b": "node --test test/revenuePhase16b.test.js test/revenuePhase16bFinalizer.test.js",
     "test:postgres:harness": "node --test test/disposablePostgresHarness.test.js",
     "test:ci:application": "node --test packages/max/workspace/tests/missionRouting.test.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:anchor-outbound": "DATABASE_URL=postgresql://localhost:1/pulseforge_test_only DATABASE_SSL=false ANCHOR_OUTBOUND_TEST_POSTGRES=true node --test test/anchorDailyOutbound*.test.js"
   },
   "repository": {
     "type": "git",

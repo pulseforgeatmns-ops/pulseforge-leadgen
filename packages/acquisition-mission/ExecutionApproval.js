@@ -285,6 +285,7 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
     transactionId: input.transactionId || null,
     // SPEC-212: Include binding validation in approval payload
     bindingValidation,
+    ...(input.dailyEnvelope ? { dailyEnvelope: input.dailyEnvelope } : {}),
     ...(frozenOutreachSequence ? { outreachSequence: frozenOutreachSequence } : {}),
   };
 }

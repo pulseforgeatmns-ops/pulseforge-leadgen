@@ -273,6 +273,8 @@ function handlerContext(request, context, mission, runtimeOwner) {
     scoutPeople: context.scoutPeople,
     allowFixtureFallback: context.allowFixtureFallback,
     sendEmail: context.sendEmail,
+    governedApproval: context.governedApproval,
+    governedEnvelopeId: context.governedEnvelopeId,
     resolveProspectAttributes: context.resolveProspectAttributes,
     senderIdentity: context.senderIdentity,
     canonicalSender: context.canonicalSender,
