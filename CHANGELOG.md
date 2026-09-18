@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Anchor one-send runner (`scripts/executeAnchorOneOutbound.js`) accepts `--mission-id`
+  - Default remains the conservative historical law-firm mission id
+  - Production execution must pass the READY STR mission explicitly
+  - Requires tenant 10, stage READY, readiness-probe match, and active non-superseded CAPACITY
+  - Sends the highest-ranked sendable email-bearing queue item only (`maxSends=1`)
+  - Prints recipient / company / subject / body before execute; autosend and enabled_agents stay unchanged
+
 ### Added
 
 - Anchor STR canonical outbound recovery (tenant 10)
