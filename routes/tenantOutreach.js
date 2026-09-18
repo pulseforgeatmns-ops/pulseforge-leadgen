@@ -157,4 +157,22 @@ router.post('/api/v1/tenant-outreach/schedules/:id/cancel', requireOperator, asy
   }
 });
 
+const requireAnchorOperator = [requireAuth, requireRole('admin', 'manager')];
+function anchorOperation(operation) {
+  return async (req, res) => {
+    if (actorTenantId(req) !== '10') return res.status(403).json({ error: 'anchor_tenant_required' });
+    try {
+      const service = require('../services/governedOutbound').productionService(pool);
+      const result = await operation(service, req, actorFrom(req));
+      noStore(res);
+      return res.json(result);
+    } catch (e) { return res.status(409).json({ error: e.code || 'governed_outbound_failed' }); }
+  };
+}
+router.get('/api/v1/tenant-outreach/anchor-program', requireAnchorOperator,
+  anchorOperation(service => service.status()));
+router.post('/api/v1/tenant-outreach/anchor-program/authorize', requireAnchorOperator,
+  anchorOperation((service, req, actor) => service.authorize(req.body || {}, actor)));
+router.post('/api/v1/tenant-outreach/anchor-program/:id/mode', requireAnchorOperator,
+  anchorOperation((service, req, actor) => service.setMode(req.params.id, req.body?.mode, req.body?.policyHash, actor)));
 module.exports = router;
