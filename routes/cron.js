@@ -173,7 +173,14 @@ async function handleExecuteAnchorOneOutboundCron(req, res) {
   }
   try {
     const { run } = require('../scripts/executeAnchorOneOutbound');
-    const report = await run({ confirmProduction: true });
+    const missionId = String(
+      req.query.mission_id
+      || req.query.missionId
+      || req.body?.mission_id
+      || req.body?.missionId
+      || ''
+    ).trim() || undefined;
+    const report = await run({ confirmProduction: true, missionId });
     const ok = report.verdict && report.verdict.startsWith('one real');
     return res.status(ok ? 200 : 422).json(report);
   } catch (err) {
