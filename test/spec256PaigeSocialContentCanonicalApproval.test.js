@@ -11,6 +11,7 @@ const {
   createSocialContentPublishCapability,
   createInMemorySocialContentStore,
   APPROVAL_STATES,
+  PUBLISH_STATES,
   buildSocialContentArtifact,
 } = require('../packages/capabilities/contentGeneration');
 const {
@@ -169,7 +170,8 @@ describe('SPEC-256 — Canonical Paige Social Content Approval', () => {
     assert.equal(published[0].pendingCommentId, 'pc-4');
     assert.equal(result.outputs.externalPostId, 'buf-123');
     const row = await store.getById('art-4', '4', 4);
-    assert.equal(row.approvalState, APPROVAL_STATES.PUBLISHED);
+    assert.equal(row.approvalState, APPROVAL_STATES.APPROVED);
+    assert.equal(row.publishState, PUBLISH_STATES.PUBLISHED);
   });
 
   test('approval router chains canonical publication after approve', async () => {
@@ -223,7 +225,9 @@ describe('SPEC-256 — Canonical Paige Social Content Approval', () => {
     });
     assert.equal(pub.result.status, 'completed');
     assert.equal(published.length, 1);
-    assert.equal((await store.getById('art-5', '5', 5)).approvalState, APPROVAL_STATES.PUBLISHED);
+    const row5 = await store.getById('art-5', '5', 5);
+    assert.equal(row5.approvalState, APPROVAL_STATES.APPROVED);
+    assert.equal(row5.publishState, PUBLISH_STATES.PUBLISHED);
   });
 
   test('Paige social channel without canonical artifact is rejected fail-closed', async () => {
