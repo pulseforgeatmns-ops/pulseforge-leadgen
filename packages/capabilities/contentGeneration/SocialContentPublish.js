@@ -13,7 +13,7 @@ const {
   buildCapabilityEstimate,
   CAPABILITY_RESULT_STATUS,
 } = require('../types');
-const { APPROVAL_STATES, ARTIFACT_TYPE } = require('./types');
+const { APPROVAL_STATES, ARTIFACT_TYPE, PUBLISH_STATES } = require('./types');
 const {
   createInMemorySocialContentStore,
   createPostgresSocialContentStore,
@@ -106,11 +106,19 @@ function createSocialContentPublishCapability(deps = {}) {
         });
       }
 
-      if (artifact.approvalState === APPROVAL_STATES.PUBLISHED) {
+      if (artifact.publishState === PUBLISH_STATES.PUBLISHED) {
         return buildCapabilityResult({
           status: CAPABILITY_RESULT_STATUS.COMPLETED,
           outputs: { artifact, idempotent: true, published: true },
-          artifacts: [{ type: ARTIFACT_TYPE, id: artifact.id, approvalState: artifact.approvalState }],
+          artifacts: [{ type: ARTIFACT_TYPE, id: artifact.id, publishState: artifact.publishState }],
+          duration: Date.now() - started,
+        });
+      }
+
+      if (artifact.publishState === PUBLISH_STATES.PUBLISHING) {
+        return buildCapabilityResult({
+          status: CAPABILITY_RESULT_STATUS.FAILED,
+          errors: [{ message: 'publish_in_progress', publishState: artifact.publishState }],
           duration: Date.now() - started,
         });
       }
@@ -150,7 +158,31 @@ function createSocialContentPublishCapability(deps = {}) {
             dryRun: true,
             channel: artifact.platform,
             adapter: artifact.platform,
+            publishReady: true,
           },
+          duration: Date.now() - started,
+        });
+      }
+
+      const publishing = await store.transitionPublishState(
+        artifact.id,
+        tenantId,
+        clientId,
+        PUBLISH_STATES.PUBLISHING,
+        { allowedFrom: [PUBLISH_STATES.NOT_PUBLISHED, PUBLISH_STATES.FAILED] }
+      );
+      if (!publishing.ok) {
+        if (publishing.from === PUBLISH_STATES.PUBLISHED) {
+          const current = await store.getById(artifactId, tenantId, clientId);
+          return buildCapabilityResult({
+            status: CAPABILITY_RESULT_STATUS.COMPLETED,
+            outputs: { artifact: current, idempotent: true, published: true },
+            duration: Date.now() - started,
+          });
+        }
+        return buildCapabilityResult({
+          status: CAPABILITY_RESULT_STATUS.FAILED,
+          errors: [{ message: publishing.reason || 'publish_state_transition_failed' }],
           duration: Date.now() - started,
         });
       }
@@ -163,27 +195,38 @@ function createSocialContentPublishCapability(deps = {}) {
       });
 
       if (!publishResult.success) {
+        const failed = await store.transitionPublishState(
+          artifact.id,
+          tenantId,
+          clientId,
+          PUBLISH_STATES.FAILED,
+          { allowedFrom: [PUBLISH_STATES.PUBLISHING] }
+        );
+        const errorMessage = publishResult.errorMessage || publishResult.errorCode || 'publish_failed';
+        await store.updateArtifactMetadata(artifact.id, tenantId, clientId, {
+          publishError: errorMessage,
+        });
         return buildCapabilityResult({
           status: CAPABILITY_RESULT_STATUS.FAILED,
           outputs: {
-            artifact,
+            artifact: failed.artifact || publishing.artifact,
             channel: artifact.platform,
             publishResult,
           },
           errors: [{
-            message: publishResult.errorMessage || publishResult.errorCode || 'publish_failed',
+            message: errorMessage,
             code: publishResult.errorCode || 'publish_failed',
           }],
           duration: Date.now() - started,
         });
       }
 
-      const published = await store.transitionApprovalState(
+      const published = await store.transitionPublishState(
         artifact.id,
         tenantId,
         clientId,
-        APPROVAL_STATES.PUBLISHED,
-        { allowedFrom: [APPROVAL_STATES.APPROVED] }
+        PUBLISH_STATES.PUBLISHED,
+        { allowedFrom: [PUBLISH_STATES.PUBLISHING] }
       );
 
       if (!published.ok) {
@@ -195,10 +238,17 @@ function createSocialContentPublishCapability(deps = {}) {
         });
       }
 
+      const now = new Date().toISOString();
+      const finalArtifact = await store.updateArtifactMetadata(artifact.id, tenantId, clientId, {
+        publishedAt: now,
+        publishedUrl: publishResult.externalUrl || publishResult.external_url || null,
+        publishError: null,
+      });
+
       return buildCapabilityResult({
         status: CAPABILITY_RESULT_STATUS.COMPLETED,
         outputs: {
-          artifact: published.artifact,
+          artifact: finalArtifact || published.artifact,
           published: true,
           channel: artifact.platform,
           pendingCommentId: artifact.pendingCommentId,
@@ -209,7 +259,7 @@ function createSocialContentPublishCapability(deps = {}) {
         artifacts: [{
           type: ARTIFACT_TYPE,
           id: published.artifact.id,
-          approvalState: published.artifact.approvalState,
+          publishState: PUBLISH_STATES.PUBLISHED,
         }],
         duration: Date.now() - started,
       });
