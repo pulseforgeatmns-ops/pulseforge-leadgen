@@ -2733,8 +2733,17 @@ async function advancePreparedOutreachRevision(input = {}) {
 
   const current = engine.get(mission.id, tenantId);
   const snapshot = engine.inspect(mission.id, { tenantId });
-  if (!current || current.stage !== STAGES.READY) {
-    throw planningError('tme_revision_wrong_stage', 'Prepared outreach revision requires READY.');
+  const returnToStage = input.returnToStage === STAGES.EXECUTE ? STAGES.EXECUTE : STAGES.READY;
+  const allowedStartStages = returnToStage === STAGES.EXECUTE
+    ? [STAGES.READY, STAGES.EXECUTE]
+    : [STAGES.READY];
+  if (!current || !allowedStartStages.includes(current.stage)) {
+    throw planningError(
+      'tme_revision_wrong_stage',
+      returnToStage === STAGES.EXECUTE
+        ? 'Prepared outreach revision requires READY or EXECUTE when returnToStage is EXECUTE.'
+        : 'Prepared outreach revision requires READY.'
+    );
   }
   const paigePrepared = findPaigeVariants(snapshot.contributions || [], current);
   const emmettPrepared = findEmmettCapacity(snapshot.contributions || [], current);
@@ -2742,6 +2751,7 @@ async function advancePreparedOutreachRevision(input = {}) {
     && (
       findValidExecutionApproval(snapshot.contributions || [], current.id)
       || hasPendingExecutionApproval(snapshot)
+      || (current.stage === STAGES.EXECUTE && returnToStage === STAGES.EXECUTE)
     );
   if (!canRevise) {
     throw planningError(
@@ -2928,7 +2938,7 @@ async function advancePreparedOutreachRevision(input = {}) {
         );
         const updated = commitEngine.get(missionId, commitTenantId);
         const all = commitEngine.inspect(missionId, { tenantId: commitTenantId }).contributions || [];
-        applyStageTransition(updated, STAGES.READY, { contributions: all });
+        applyStageTransition(updated, returnToStage, { contributions: all });
         updated.revisionState = {
           ...(updated.revisionState || {}),
           status: 'completed',
