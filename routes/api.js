@@ -673,7 +673,7 @@ router.get('/api/approvals', requireOperator, async (req, res) => {
 });
 
 // Paige canonical social content inspection (database-backed status)
-router.get('/api/paige/social-content/status', requireAuth, async (req, res) => {
+router.get('/api/paige/social-content/status', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
     const { inspectPaigeSocialContentStatus } = require('../services/paigeSocialContentInspection');
