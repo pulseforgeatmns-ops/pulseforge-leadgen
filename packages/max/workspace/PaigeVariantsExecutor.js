@@ -36,6 +36,10 @@ const {
   ANCHOR_CLIENT_ID,
   buildAnchorLifecycleVariant,
 } = require('../../../utils/anchorLifecycleEmail');
+const {
+  validateAnchorCopyDoctrine,
+  DOCTRINE_BLOCKER,
+} = require('../../../utils/anchorCopyDoctrine');
 
 function lookupCrmRecord(crmByProspectId, prospectId) {
   if (!crmByProspectId || prospectId == null) return null;
@@ -80,9 +84,16 @@ function buildPerProspectVariants(input = {}) {
   const max = input.max || {};
   const scout = input.scout || {};
   const plan = input.plan || {};
-  const clientId = Number(input.clientId || plan.clientId || 0);
+  const mission = input.mission || {};
+  const clientId = Number(
+    input.clientId
+    || plan.clientId
+    || mission.clientId
+    || mission.tenantId
+    || 0
+  );
   const crmByProspectId = input.crmByProspectId || null;
-  const senderName = resolveAnchorSenderName(plan, input.mission || {});
+  const senderName = resolveAnchorSenderName(plan, mission);
   const useAnchorLifecycle = clientId === ANCHOR_CLIENT_ID;
 
   // SPEC-212: Use ALL ranked targets, not just [0]
@@ -122,11 +133,13 @@ function buildPerProspectVariants(input = {}) {
         },
         crmRecord,
         senderName,
+        plan,
+        mission,
       });
       copy = {
         subject: lifecycle.subject,
         body: lifecycle.body,
-        cta: 'Reply if a written quote would be useful',
+        cta: lifecycle.cta || 'Want me to send over what we\'d need for a quote?',
       };
       usedPersonalization = lifecycle.usedPersonalization;
       scoutPersonalization = lifecycle.evidence || null;
@@ -208,8 +221,8 @@ function buildBasePaigeVariantsPayload(input = {}) {
     variants,
     subjects,
     messaging: variants[0]?.body || null,
-    cta: usedPersonalization || Number(input.clientId) === ANCHOR_CLIENT_ID
-      ? 'Reply if a written quote would be useful'
+    cta: Number(input.clientId || plan.clientId || input.mission?.clientId || input.mission?.tenantId) === ANCHOR_CLIENT_ID
+      ? (variants[0]?.cta || 'Want me to send over what we\'d need for a quote?')
       : 'Reply to schedule a walkthrough',
     hypotheses: [
       max.objectiveReason || 'Prioritized targets respond to timing-specific outreach.',
@@ -342,6 +355,44 @@ async function runPaigeVariants(executionInput = {}) {
         violations: copySafety.violations,
       }],
     });
+  }
+
+  const clientId = Number(
+    executionInput.mission?.clientId
+    ?? executionInput.mission?.tenantId
+    ?? plan.clientId
+    ?? 0
+  );
+  if (clientId === ANCHOR_CLIENT_ID) {
+    const doctrineViolations = [];
+    for (const variant of payload.variants || []) {
+      const doctrine = validateAnchorCopyDoctrine({
+        subject: variant.subject,
+        body: variant.body,
+        cta: variant.cta,
+      });
+      if (!doctrine.ok) {
+        doctrineViolations.push({
+          candidateId: variant.candidateId || variant.companyId || variant.variantId || null,
+          violations: doctrine.violations,
+        });
+      }
+    }
+    if (doctrineViolations.length) {
+      return createExecutionResult({
+        specialist: SPECIALISTS.PAIGE,
+        transactionId,
+        status: EXECUTION_STATUSES.BLOCKED,
+        contributions: payload,
+        reason: 'Paige generated Anchor copy that violates the Anchor Copy Doctrine.',
+        requiredPrecondition: DOCTRINE_BLOCKER,
+        blockers: [{
+          code: DOCTRINE_BLOCKER,
+          label: 'Anchor copy doctrine violation',
+          violations: doctrineViolations,
+        }],
+      });
+    }
   }
 
   const unknowns = [];
