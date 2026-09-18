@@ -19,16 +19,17 @@ function ensurePendingCommentPublishSchema() {
 }
 
 // Check do not contact before any agent acts
-async function checkDNC(prospectId) {
-  const clientId = getRuntimeClientId();
-  if (await isPhase3dSetterSchemaPresent(pool)) {
-    const res = await pool.query(
+async function checkDNC(prospectId, options = {}) {
+  const clientId = options.clientId || getRuntimeClientId();
+  const db = options.pool || pool;
+  if (await isPhase3dSetterSchemaPresent(db)) {
+    const res = await db.query(
       'SELECT do_not_contact, is_synthetic FROM prospects WHERE id = $1 AND client_id = $2',
       [prospectId, clientId]
     );
     return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic) : true;
   }
-  const res = await pool.query(
+  const res = await db.query(
     'SELECT do_not_contact FROM prospects WHERE id = $1 AND client_id = $2',
     [prospectId, clientId]
   );

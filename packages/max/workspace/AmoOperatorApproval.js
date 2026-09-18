@@ -3022,6 +3022,7 @@ function commitExecutionApprovalStage({
           operatorId: output.operatorId,
           executionRequestId: executionRequest?.id || null,
           transactionId,
+          dailyEnvelope: output.dailyEnvelope,
         }),
       },
       { tenantId }
@@ -3085,6 +3086,7 @@ async function advanceExecutionAfterApproval(input = {}) {
       question,
       missionId: current.id,
       operatorId,
+      dailyEnvelope: input.governedApproval || null,
     }),
     commit: (ctx) => commitExecutionApprovalStage({
       ...ctx,

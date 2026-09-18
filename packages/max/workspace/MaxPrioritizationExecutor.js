@@ -48,7 +48,11 @@ function buildPrioritiesFromDiscovery(discoveryPayload, plan) {
   const segment = asText(plan && plan.market && (plan.market.segment || plan.market.label))
     || 'target segment';
 
-  return source.slice(0, 5).map((row, index) => ({
+  const eligibility = discoveryPayload.dailyOutboundEligibility;
+  const eligible = eligibility
+    ? source.filter(row => eligibility[String(row.id || row.companyId)]?.eligible === true)
+    : source;
+  return eligible.slice(0, 5).map((row, index) => ({
     rank: index + 1,
     segment,
     companyId: row.id || row.companyId || null,

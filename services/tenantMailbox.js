@@ -840,6 +840,11 @@ class PostgresTenantMailboxStore {
 
   async findSuppression(tenantId, email) {
     await this.ensureSchema();
+    if (tenantKey(tenantId) === '10' && await require('./governedOutboundReplies').installed(this.pool)) {
+      const governed = await this.pool.query(`SELECT state AS reason FROM acquisition_outbound_lifecycle
+        WHERE tenant_id='10' AND email=$1 AND suppressed LIMIT 1`, [lower(email)]);
+      if (governed.rows[0]) return governed.rows[0];
+    }
     const res = await this.pool.query(
       `SELECT * FROM tenant_outreach_suppressions
        WHERE tenant_id = $1 AND email = $2 AND revoked_at IS NULL
@@ -1103,7 +1108,12 @@ async function loadImapMessages(integration, secret, state, opts = {}) {
   try {
     const lock = await client.getMailboxLock('INBOX');
     try {
-      const sinceUid = Number(state?.lastUid || 0) + 1;
+      const sinceUid = Number(state?.lastUid || state?.last_uid || 0) + 1;
+      const previousUidValidity = state?.lastUidValidity || state?.last_uid_validity;
+      if (opts.strictInbound && previousUidValidity && String(client.mailbox.uidValidity) !== String(previousUidValidity)) {
+        throw mailboxError('imap_uidvalidity_changed', 'Mailbox UID validity changed; reset the reply checkpoint after review.');
+      }
+      messages.uidValidity = String(client.mailbox.uidValidity || '');
       for await (const msg of client.fetch(`${sinceUid}:*`, {
         uid: true,
         envelope: true,
@@ -1113,7 +1123,9 @@ async function loadImapMessages(integration, secret, state, opts = {}) {
         try {
           const normalized = normalizeImapFlowFetchMessage(msg, opts);
           if (normalized) messages.push(normalized);
+          else if (opts.strictInbound) throw mailboxError('imap_message_parse_failed', 'Could not parse an inbound message.');
         } catch (_err) {
+          if (opts.strictInbound) throw _err;
           // Malformed fetch records must not abort the whole poll.
         }
       }
@@ -1156,6 +1168,13 @@ async function sendTenantEmail(input = {}, opts = {}) {
   const store = opts.store || new PostgresTenantMailboxStore(opts.pool || defaultPool);
   const tenantId = tenantKey(input.tenantId);
   if (!tenantId) throw mailboxError('tenant_required', 'tenantId is required.');
+  // A standing Anchor delegation owns automated outbound exclusively. The
+  // generic scheduler cannot bypass its daily envelope via the mailbox path.
+  if (tenantId === '10' && input.metadata?.scheduleId && store instanceof PostgresTenantMailboxStore
+    && await require('./governedOutboundReplies').installed(store.pool)) {
+    const program = await store.pool.query("SELECT 1 FROM acquisition_outbound_programs WHERE tenant_id='10' AND mode<>'revoked'");
+    if (program.rows.length) throw mailboxError('governed_executor_required', 'Anchor scheduled outbound requires its daily envelope.');
+  }
   if (!input.sendingIdentityId) throw mailboxError('sending_identity_required', 'sendingIdentityId is required.');
   const recipients = normalizeRecipients(input.to);
   if (!recipients.length) throw mailboxError('recipient_required', 'At least one recipient is required.');
@@ -1378,22 +1397,30 @@ async function pollTenantMailbox(input = {}, opts = {}) {
 
   const state = await store.getPollState(tenantId, integration.id);
   const imapSecret = resolveSecretRef(integration.imapSecretRef || integration.sharedSecretRef, opts);
-  const rawMessages = await loadImapMessages(integration, imapSecret, state, opts);
+  const rawMessages = await loadImapMessages(integration, imapSecret, state, {
+    ...opts, strictInbound: opts.strictInbound || (store instanceof PostgresTenantMailboxStore && tenantId === '10'),
+  });
   const results = [];
   let maxUid = Number(state.lastUid || state.last_uid || 0);
   for (const raw of rawMessages || []) {
+    if (store instanceof PostgresTenantMailboxStore && tenantId === '10') {
+      await require('./governedOutboundReplies').captureRaw(opts.pool || defaultPool, integration, raw);
+    }
     const result = await ingestInboundMessage(store, tenantId, integration, raw, opts);
     results.push(result);
     if (raw.uid != null) maxUid = Math.max(maxUid, Number(raw.uid));
   }
-  if (maxUid > Number(state.lastUid || state.last_uid || 0)) {
+  if (maxUid > Number(state.lastUid || state.last_uid || 0) || rawMessages.uidValidity) {
     await store.savePollState({
       tenantId,
       integrationId: integration.id,
-      lastUidValidity: input.lastUidValidity || state.lastUidValidity || state.last_uid_validity || null,
+      lastUidValidity: rawMessages.uidValidity || input.lastUidValidity || state.lastUidValidity || state.last_uid_validity || null,
       lastUid: maxUid,
       lastSeenAt: nowIso(opts),
     });
+  }
+  if (store instanceof PostgresTenantMailboxStore && tenantId === '10') {
+    await require('./governedOutboundReplies').markHealthy(opts.pool || defaultPool, integration);
   }
   return {
     integration: publicIntegration(integration),
