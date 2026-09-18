@@ -11,6 +11,10 @@ const variants = buildPerProspectVariants({
       rationale: 'High fit property manager',
     }],
   },
+  plan: {
+    market: { label: 'property management', segment: 'property_management' },
+    geography: { label: 'Manchester' },
+  },
   crmByProspectId: {
     'co-mill': {
       first_name: 'Alex',
@@ -34,9 +38,10 @@ const variants = buildPerProspectVariants({
 });
 
 assert.equal(variants.length, 1);
-assert.match(variants[0].subject, /Cleaning for the managed properties/i);
-assert.match(variants[0].body, /I saw Mill City Property Management serves multiple rental portfolios/i);
-assert.match(variants[0].body, /after seeing the space, we put the work, frequency and price in writing/i);
+assert.match(variants[0].subject, /Cleaning for Mill City Property Management/i);
+assert.match(variants[0].body, /Managed properties often need recurring cleaning/i);
+assert.doesNotMatch(variants[0].body, /I saw /i);
+assert.match(variants[0].body, /walk the space, agree on the areas and frequency/i);
 assert.equal(variants[0].attributableIntelligence.usedPersonalization, true);
 
 const fallbackVariants = buildPerProspectVariants({
@@ -65,6 +70,7 @@ const fallbackVariants = buildPerProspectVariants({
 
 assert.equal(fallbackVariants[0].subject, 'Cleaning for Plain Office LLC');
 assert.doesNotMatch(fallbackVariants[0].body, /I saw /);
+assert.match(fallbackVariants[0].body, /Want me to send over what we'd need to price the office properly/i);
 assert.equal(fallbackVariants[0].attributableIntelligence.usedPersonalization, false);
 
 const nonAnchor = buildPerProspectVariants({
@@ -73,6 +79,6 @@ const nonAnchor = buildPerProspectVariants({
     rankedTargets: [{ name: 'Pulseforge Cafe', candidateId: 'co-cafe' }],
   },
 });
-assert.match(nonAnchor[0].subject, /Commercial cleaning walkthrough/i);
+assert.match(nonAnchor[0].subject, /Commercial cleaning for Pulseforge Cafe/i);
 
 console.log('anchor paige variant tests passed');
