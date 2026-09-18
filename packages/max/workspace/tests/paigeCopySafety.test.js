@@ -66,17 +66,20 @@ describe('Paige customer-facing copy safety', () => {
   });
 
   it('accepts safe customer-facing Anchor STR copy', () => {
-    const variants = buildPerProspectVariants(strScenario());
+    const scenario = strScenario();
+    const variants = buildPerProspectVariants({ ...scenario, clientId: 10 });
     assert.equal(variants.length, 1);
     const safety = validatePaigeVariantCopy(variants[0]);
     assert.equal(safety.safe, true, JSON.stringify(safety.violations));
     assert.ok(variants[0].subject.includes('Blue Door Living Property Management'));
     assert.ok(variants[0].body);
     assert.ok(variants[0].cta);
-    assert.match(variants[0].body, /backup|overflow/i);
+    assert.match(variants[0].body, /Property managers often need recurring cleaning|Managed properties often need recurring cleaning/i);
+    assert.match(variants[0].cta, /quote on one property first|price the office properly/i);
     assert.doesNotMatch(variants[0].body, /Mission focus/i);
     assert.doesNotMatch(variants[0].body, /recurring_clients/i);
     assert.doesNotMatch(variants[0].body, /fit 0\./i);
+    assert.doesNotMatch(variants[0].body, /I saw /i);
   });
 
   it('runPaigeVariants returns SUCCESS for safe Anchor revision payload', async () => {
@@ -97,7 +100,7 @@ describe('Paige customer-facing copy safety', () => {
     assert.equal(result.contributions.variants[0].candidateId, PLACE_BLUE);
     assert.equal(result.contributions.variants[0].placeId, PLACE_BLUE);
     assert.equal(result.contributions.variants[0].companyId, PLACE_BLUE);
-    assert.equal(result.contributions.variants[0].cta, 'Reply if a written quote would be useful');
+    assert.match(result.contributions.variants[0].cta, /Want me to send over/i);
   });
 
   it('unsafe Paige variant cannot become sendable CAPACITY queue item', () => {
@@ -141,8 +144,8 @@ describe('Paige customer-facing copy safety', () => {
       variants: [{
         candidateId: PLACE_BLUE,
         subject: 'Cleaning for Blue Door Living Property Management',
-        body: 'Would it be useful for us to put a quote together for Blue Door Living Property Management?',
-        cta: 'Reply if a written quote would be useful',
+        body: 'Want me to send over what we\'d need for a quote on one property first?',
+        cta: 'Want me to send over what we\'d need for a quote on one property first?',
         attributableIntelligence: {
           rationale: 'Mission focus: Achieve 1 recurring_clients',
           objectiveReason: 'fit 0.28 · timing 0.20 · 6 unknowns',

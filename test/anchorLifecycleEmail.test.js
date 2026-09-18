@@ -5,10 +5,7 @@ const {
 } = require('../utils/scoutPersonalizationEvidence');
 const {
   buildAnchorLifecycleEmail,
-  buildContextualBridge,
-  shouldUsePersonalization,
   validateAnchorLifecycleCopy,
-  ANCHOR_DIFFERENTIATOR,
 } = require('../utils/anchorLifecycleEmail');
 
 const supportedEvidence = {
@@ -21,25 +18,16 @@ const supportedEvidence = {
   checked_at: '2026-09-17T12:00:00.000Z',
 };
 
-assert.ok(
-  shouldUsePersonalization(supportedEvidence),
-  'supported evidence with bridge should be usable'
-);
-assert.match(
-  buildContextualBridge(supportedEvidence),
-  /wasn't sure whether cleaning is handled centrally/i
-);
-
 const personalized = buildAnchorLifecycleEmail({
   prospect: { first_name: 'Sarah', company_name: 'Harbor Law Group' },
   company: { name: 'Harbor Law Group' },
   evidence: supportedEvidence,
 });
-assert.match(personalized.subject, /Cleaning for the locations/i);
-assert.match(personalized.body, /I saw your firm lists multiple locations/i);
-assert.match(personalized.body, /wasn't sure whether cleaning is handled centrally/i);
-assert.match(personalized.body, /after seeing the space, we put the work, frequency and price in writing/i);
-assert.match(personalized.body, /Would it be useful for us to put a quote together for Harbor Law Group/i);
+assert.match(personalized.subject, /Cleaning for Harbor Law Group/i);
+assert.match(personalized.body, /multiple locations/i);
+assert.doesNotMatch(personalized.body, /I saw /i);
+assert.match(personalized.body, /walk the space, agree on the areas and frequency/i);
+assert.match(personalized.body, /Want me to send over what we'd need to price the office properly/i);
 assert.equal(personalized.usedPersonalization, true);
 
 const generic = buildAnchorLifecycleEmail({
@@ -49,7 +37,7 @@ const generic = buildAnchorLifecycleEmail({
 });
 assert.equal(generic.subject, 'Cleaning for Harbor Law Group');
 assert.doesNotMatch(generic.body, /I saw /);
-assert.ok(generic.body.includes("If you're comparing cleaners, we try to make the decision easier"));
+assert.match(generic.body, /vague on what actually gets done/i);
 assert.equal(generic.usedPersonalization, false);
 
 const houseGreeting = buildAnchorLifecycleEmail({
