@@ -5,17 +5,13 @@
  * Anchor tenant 10 — regenerate Paige VARIANTS + Emmett CAPACITY with fresh
  * customer-facing copy (does NOT reuse prior Paige payload).
  *
- * Uses REVISE_PREPARED_OUTREACH without runPaige hook so runPaigeVariants()
- * executes with the current copy generator and copy safety validator.
+ * Classifies each candidate mission (READY, EXECUTE pre-send, inconsistent approval)
+ * and revises independently. Never EXECUTE_OUTBOUND. Never sends mail.
  *
  * Railway:
+ *   node scripts/regenerateAnchorPaigeCopyRevision.js --confirm-production
  *   node scripts/regenerateAnchorPaigeCopyRevision.js --confirm-production \
  *     --mission-id mission_82e8102f-249c-4f44-b88e-2de76b13898e
- *
- * Then:
- *   node scripts/probeAnchorEmmettOutboundReadiness.js --confirm-production
- *
- * Never EXECUTE_OUTBOUND. Never sends mail.
  */
 
 require('dotenv').config();
@@ -27,32 +23,47 @@ const {
   STAGES,
   SPECIALISTS,
   CONTRIBUTION_KINDS,
+  OPERATOR_DECISION_KINDS,
   createExecutionRequest,
   routeExecutionRequest,
   findValidExecutionApproval,
   validateProspectMessageBindings,
   isSupersededContribution,
+  createEvent,
+  EVENT_KINDS,
 } = amo;
 const pool = require('../db');
 const { getAcquisitionMissionRuntime } = require('../services/acquisitionMissionRuntime');
 const { loadMissionSnapshot } = require('../services/acquisitionMissionPersistence');
 const { unwrapContributionPayload } = require('./validateAnchorCanonicalMission');
 const {
-  validatePaigeVariantCopy,
   validatePaigeVariantsPayload,
 } = require('../packages/max/workspace/PaigeCopySafety');
-const probe = require('./probeAnchorEmmettOutboundReadiness');
+const {
+  TENANT_ID,
+  CLIENT_ID,
+  activeContribution,
+  activePaigePayload,
+  detectCustomerSend,
+  classifyMissionEligibility,
+  listAnchorCandidateMissions,
+  seedMissionIntoEngine,
+  validatePaigeVariantsDoctrine,
+  buildAuditEvent,
+} = require('./lib/anchorPaigeCopyRevision');
+const {
+  validateAnchorCopyDoctrine,
+  DOCTRINE_BLOCKER,
+} = require('../utils/anchorCopyDoctrine');
 
-const TENANT_ID = '10';
 const DEFAULT_MISSION_ID = 'mission_82e8102f-249c-4f44-b88e-2de76b13898e';
 const OPERATOR_ID = 'anchor-paige-copy-revision';
-const BLUE_DOOR_PLACE_ID = 'ChIJ43Z_V2dP4okRCRcDHefV8OU';
 
 function parseArgs(argv = process.argv.slice(2)) {
   const confirmProduction = argv.includes('--confirm-production');
   const help = argv.includes('--help') || argv.includes('-h');
   const missionIdx = argv.indexOf('--mission-id');
-  const missionId = missionIdx >= 0 ? argv[missionIdx + 1] : DEFAULT_MISSION_ID;
+  const missionId = missionIdx >= 0 ? argv[missionIdx + 1] : null;
   const unknown = argv.filter(
     (arg, i) =>
       arg !== '--confirm-production'
@@ -66,7 +77,7 @@ function parseArgs(argv = process.argv.slice(2)) {
       `Unknown argument(s): ${unknown.join(', ')}. Usage: node scripts/regenerateAnchorPaigeCopyRevision.js --confirm-production [--mission-id <id>]`
     );
   }
-  if (!missionId || missionId.startsWith('--')) {
+  if (missionIdx >= 0 && (!missionId || missionId.startsWith('--'))) {
     throw new Error('--mission-id requires a mission id value.');
   }
   return { confirmProduction, help, missionId };
@@ -78,12 +89,15 @@ function printUsage() {
 Usage:
   node scripts/regenerateAnchorPaigeCopyRevision.js --confirm-production [--mission-id <id>]
 
+Without --mission-id, revises all eligible Anchor missions.
+
 Canonical path:
   REVISE_PREPARED_OUTREACH → runPaigeVariants() → runEmmettForAmoMission()
   Prior Paige VARIANTS and CAPACITY contributions are superseded, not mutated.
 
 Safety:
   Refuses without --confirm-production.
+  Skips missions with customer-facing sends.
   Never EXECUTE_OUTBOUND. Never enables autosend.
 `);
 }
@@ -102,21 +116,11 @@ function assertRuntimeEnv() {
     err.code = 'fixture_fallback_env';
     throw err;
   }
-}
-
-function findLatestContribution(contributions, specialist, kind) {
-  return [...(contributions || [])]
-    .reverse()
-    .find((row) => row.specialist === specialist && row.kind === kind) || null;
-}
-
-function activeContribution(contributions, specialist, kind) {
-  const rows = (contributions || []).filter(
-    (row) => row.specialist === specialist
-      && row.kind === kind
-      && !isSupersededContribution(row)
-  );
-  return rows.at(-1) || findLatestContribution(contributions, specialist, kind);
+  if (typeof validateAnchorCopyDoctrine !== 'function') {
+    const err = new Error('anchorCopyDoctrine validation module is unavailable.');
+    err.code = 'doctrine_module_unavailable';
+    throw err;
+  }
 }
 
 function inspectCapacitySpec212(payload) {
@@ -128,18 +132,13 @@ function inspectCapacitySpec212(payload) {
   };
 }
 
-function findBlueDoorVariant(paigePayload) {
-  const variants = Array.isArray(paigePayload?.variants) ? paigePayload.variants : [];
-  return variants.find(
-    (row) => String(row.candidateId || row.placeId || '') === BLUE_DOOR_PLACE_ID
-      || /blue door/i.test(String(row.companyName || ''))
-  ) || null;
-}
-
 async function ensureExecutionApproval({ runtime, engine, missionId, mission, tenantId }) {
   const snapshot = engine.inspect(missionId, { tenantId });
   if (findValidExecutionApproval(snapshot.contributions || [], missionId)) {
     return { alreadyApproved: true, snapshot };
+  }
+  if (snapshot.mission.pendingOperatorDecision?.kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL) {
+    return { alreadyPending: true, snapshot };
   }
 
   const request = createExecutionRequest({
@@ -167,15 +166,22 @@ async function ensureExecutionApproval({ runtime, engine, missionId, mission, te
   };
 }
 
-async function runRevision({ runtime, engine, missionId, mission, tenantId }) {
+async function runRevision({
+  runtime,
+  engine,
+  missionId,
+  mission,
+  tenantId,
+  returnToStage = STAGES.READY,
+}) {
   const request = createExecutionRequest({
     source: EXECUTION_SOURCES.API,
     intent: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
     missionId,
     mission,
     operatorId: OPERATOR_ID,
-    stage: STAGES.READY,
-    question: 'Regenerate Paige variants with customer-facing copy safety and rebuild CAPACITY. Do not send.',
+    stage: mission.stage === STAGES.EXECUTE ? STAGES.EXECUTE : STAGES.READY,
+    question: 'Regenerate Paige variants with Anchor copy doctrine and rebuild CAPACITY. Do not send.',
     permissions: { canExecute: true, role: 'operator' },
   });
 
@@ -183,51 +189,65 @@ async function runRevision({ runtime, engine, missionId, mission, tenantId }) {
     engine,
     tenantId,
     operatorId: OPERATOR_ID,
+    returnToStage,
     ...runtime.persistOpts({ persist: true }),
   });
 }
 
-async function run(options = {}) {
-  if (options.help) {
-    printUsage();
-    return { help: true };
-  }
-  if (!options.confirmProduction) {
-    const err = new Error('Refusing to run without --confirm-production.');
-    err.code = 'confirm_production_required';
-    throw err;
-  }
+function recordAuditEvent(engine, missionId, auditKind, extras = {}) {
+  const event = createEvent({
+    missionId,
+    kind: EVENT_KINDS.OPERATOR_EDIT,
+    specialist: SPECIALISTS.OPERATOR,
+    label: auditKind,
+    payload: buildAuditEvent(auditKind, missionId, extras).payload,
+  });
+  engine.store.addEvent(event);
+  return event;
+}
 
-  assertRuntimeEnv();
+async function reviseOneMission({
+  runtime,
+  engine,
+  candidate,
+  eligibility,
+  pool,
+}) {
+  const { mission, contributions } = candidate;
+  const missionId = mission.id;
+  const returnToStage = eligibility.status === 'execute_revision_allowed'
+    ? STAGES.EXECUTE
+    : STAGES.READY;
 
-  const runtime = getAcquisitionMissionRuntime({ production: true, persist: true, pool });
-  await runtime.hydrate(TENANT_ID, { pool, production: true });
-  const engine = runtime.engine();
-
-  const missionId = options.missionId;
-  const mission = engine.get(missionId, TENANT_ID);
-  if (!mission) {
-    const err = new Error(`Mission ${missionId} not found for tenant ${TENANT_ID}.`);
-    err.code = 'mission_not_found';
-    throw err;
-  }
-  if (mission.stage !== STAGES.READY) {
-    const err = new Error(`Mission ${missionId} is at stage ${mission.stage}; revision requires READY.`);
-    err.code = 'tme_revision_wrong_stage';
+  seedMissionIntoEngine(engine, { mission, contributions });
+  const hydrated = engine.get(missionId, TENANT_ID);
+  if (!hydrated) {
+    const err = new Error(`Mission ${missionId} could not be loaded into runtime.`);
+    err.code = 'mission_not_hydrated';
     throw err;
   }
 
   const beforeSnapshot = engine.inspect(missionId, { tenantId: TENANT_ID });
-  const oldPaige = activeContribution(beforeSnapshot.contributions || [], SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
-  const oldCapacity = activeContribution(beforeSnapshot.contributions || [], SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY);
+  const oldPaige = activeContribution(
+    beforeSnapshot.contributions || [],
+    SPECIALISTS.PAIGE,
+    CONTRIBUTION_KINDS.VARIANTS
+  );
+  const oldCapacity = activeContribution(
+    beforeSnapshot.contributions || [],
+    SPECIALISTS.EMMETT,
+    CONTRIBUTION_KINDS.CAPACITY
+  );
 
-  const approvalStep = await ensureExecutionApproval({
-    runtime,
-    engine,
-    missionId,
-    mission: engine.get(missionId, TENANT_ID),
-    tenantId: TENANT_ID,
-  });
+  if (returnToStage === STAGES.READY) {
+    await ensureExecutionApproval({
+      runtime,
+      engine,
+      missionId,
+      mission: engine.get(missionId, TENANT_ID),
+      tenantId: TENANT_ID,
+    });
+  }
 
   const revisionResult = await runRevision({
     runtime,
@@ -235,7 +255,9 @@ async function run(options = {}) {
     missionId,
     mission: engine.get(missionId, TENANT_ID),
     tenantId: TENANT_ID,
+    returnToStage,
   });
+
   if (revisionResult.executionResult?.rolledBack === true) {
     const err = new Error(
       revisionResult.executionResult?.error?.message || 'Prepared outreach revision rolled back.'
@@ -278,56 +300,196 @@ async function run(options = {}) {
 
   const paigePayload = unwrapContributionPayload(newPaige.payload || newPaige);
   const copySafety = validatePaigeVariantsPayload(paigePayload);
-  const blueDoor = findBlueDoorVariant(paigePayload);
-  const blueDoorSafety = blueDoor ? validatePaigeVariantCopy(blueDoor) : null;
+  const doctrine = validatePaigeVariantsDoctrine(paigePayload);
+  if (!doctrine.ok) {
+    const err = new Error(`Regenerated copy failed Anchor copy doctrine: ${JSON.stringify(doctrine.violations)}`);
+    err.code = DOCTRINE_BLOCKER;
+    err.violations = doctrine.violations;
+    throw err;
+  }
+
   const spec212 = inspectCapacitySpec212(newCapacity.payload || newCapacity);
-  const probeReport = await probe.run({ confirmProduction: true, pool });
+  const auditKind = eligibility.status === 'repairable_inconsistent_approval'
+    ? 'anchor_paige_copy_inconsistent_approval_repaired'
+    : (returnToStage === STAGES.EXECUTE
+      ? 'anchor_paige_copy_revised_in_execute_before_send'
+      : 'anchor_paige_copy_revised_at_ready');
+  recordAuditEvent(engine, missionId, auditKind, {
+    reason: eligibility.reason,
+    return_to_stage: returnToStage,
+    new_paige_id: newPaige.id,
+    new_capacity_id: newCapacity.id,
+  });
+
+  const afterMission = durableSnapshot.mission;
+  const pendingApproval = afterMission.pendingOperatorDecision?.kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
+    || findValidExecutionApproval(durableSnapshot.contributions, missionId) == null;
 
   return {
-    tenantId: TENANT_ID,
-    missionId,
-    sent: false,
-    approvalPreflight: {
-      alreadyApproved: approvalStep.alreadyApproved === true,
-      action: approvalStep.action || null,
-    },
+    mission_id: missionId,
+    stage: afterMission.stage,
+    status: eligibility.status,
+    result: pendingApproval ? 'revised_pending_approval' : 'revised',
     revision: {
       action: revisionResult.action,
       transactionId: revisionResult.executionResult?.transactionId || null,
-      rolledBack: revisionResult.executionResult?.rolledBack === true,
+      returnToStage,
     },
     contributions: {
       supersededPaigeId: oldPaige?.id || null,
       newPaigeId: newPaige.id,
       supersededCapacityId: oldCapacity?.id || null,
       newCapacityId: newCapacity.id,
-      paigeVariantsRegenerated: true,
     },
     copySafety: {
       payloadSafe: copySafety.safe === true,
+      doctrineOk: doctrine.ok === true,
       blocker: copySafety.safe ? null : copySafety.blocker,
-      blueDoorBound: Boolean(blueDoor),
-      blueDoorCandidateId: blueDoor?.candidateId || null,
-      blueDoorSafe: blueDoorSafety?.safe === true,
     },
-    blueDoor: blueDoor ? {
-      subject: blueDoor.subject,
-      body: blueDoor.body,
-      cta: blueDoor.cta,
-    } : null,
     spec212,
-    probe: probeReport,
+    auditEvent: auditKind,
+  };
+}
+
+function emptySummary() {
+  return {
+    ready_revised: 0,
+    execute_revised_before_send: 0,
+    approval_repaired: 0,
+    skipped_sent: 0,
+    skipped_wrong_stage: 0,
+    skipped_inconsistent: 0,
+    failed: 0,
+  };
+}
+
+function bumpSummary(summary, result) {
+  if (result.outcome === 'revised') {
+    if (result.eligibilityStatus === 'ready_revision_allowed') summary.ready_revised += 1;
+    else if (result.eligibilityStatus === 'execute_revision_allowed') summary.execute_revised_before_send += 1;
+    else if (result.eligibilityStatus === 'repairable_inconsistent_approval') summary.approval_repaired += 1;
+    return;
+  }
+  if (result.outcome === 'skipped') {
+    if (result.eligibilityStatus === 'skip_sent') summary.skipped_sent += 1;
+    else if (result.eligibilityStatus === 'skip_wrong_stage') summary.skipped_wrong_stage += 1;
+    else if (result.eligibilityStatus === 'skip_inconsistent_approval') summary.skipped_inconsistent += 1;
+    return;
+  }
+  if (result.outcome === 'failed') summary.failed += 1;
+}
+
+async function run(options = {}) {
+  if (options.help) {
+    printUsage();
+    return { help: true };
+  }
+  if (!options.confirmProduction) {
+    const err = new Error('Refusing to run without --confirm-production.');
+    err.code = 'confirm_production_required';
+    throw err;
+  }
+
+  assertRuntimeEnv();
+
+  const db = options.pool || pool;
+  const runtime = getAcquisitionMissionRuntime({ production: true, persist: true, pool: db });
+  await runtime.hydrate(TENANT_ID, { pool: db, production: true });
+  const engine = runtime.engine();
+
+  const candidates = await listAnchorCandidateMissions(db, options.missionId || null);
+  if (options.missionId && !candidates.length) {
+    const err = new Error(`Mission ${options.missionId} not found for tenant ${TENANT_ID}.`);
+    err.code = 'mission_not_found';
+    throw err;
+  }
+
+  const summary = emptySummary();
+  const missions = [];
+
+  for (const candidate of candidates) {
+    const { mission, contributions } = candidate;
+    const customerSend = await detectCustomerSend(mission.id, db);
+    const eligibility = classifyMissionEligibility({ mission, contributions, customerSend });
+    const baseRecord = {
+      mission_id: mission.id,
+      stage: mission.stage,
+      status: eligibility.status,
+      reason: eligibility.reason,
+    };
+
+    if (
+      eligibility.status === 'skip_sent'
+      || eligibility.status === 'skip_wrong_stage'
+      || eligibility.status === 'skip_inconsistent_approval'
+    ) {
+      bumpSummary(summary, { outcome: 'skipped', eligibilityStatus: eligibility.status });
+      missions.push({
+        ...baseRecord,
+        result: 'skipped',
+        message: eligibility.message || null,
+        safetyFailures: eligibility.safetyFailures || null,
+        sentRecords: eligibility.sentRecords || null,
+      });
+      continue;
+    }
+
+    if (
+      eligibility.status !== 'ready_revision_allowed'
+      && eligibility.status !== 'execute_revision_allowed'
+      && eligibility.status !== 'repairable_inconsistent_approval'
+    ) {
+      bumpSummary(summary, { outcome: 'skipped', eligibilityStatus: 'skip_wrong_stage' });
+      missions.push({ ...baseRecord, result: 'skipped' });
+      continue;
+    }
+
+    try {
+      const revised = await reviseOneMission({
+        runtime,
+        engine,
+        candidate,
+        eligibility,
+        pool: db,
+      });
+      bumpSummary(summary, { outcome: 'revised', eligibilityStatus: eligibility.status });
+      missions.push(revised);
+    } catch (err) {
+      bumpSummary(summary, { outcome: 'failed' });
+      missions.push({
+        ...baseRecord,
+        result: 'failed',
+        error: {
+          code: err.code || null,
+          message: err.message,
+          violations: err.violations || null,
+        },
+      });
+    }
+  }
+
+  return {
     completedAt: new Date().toISOString(),
+    client_id: CLIENT_ID,
+    tenantId: TENANT_ID,
+    missionFilter: options.missionId || null,
+    summary,
+    missions,
   };
 }
 
 module.exports = {
   TENANT_ID,
+  CLIENT_ID,
   DEFAULT_MISSION_ID,
-  BLUE_DOOR_PLACE_ID,
+  OPERATOR_ID,
   parseArgs,
   run,
-  findBlueDoorVariant,
+  classifyMissionEligibility,
+  detectCustomerSend,
+  validatePaigeVariantsDoctrine,
+  reviseOneMission,
+  assertRuntimeEnv,
 };
 
 if (require.main === module) {
@@ -336,11 +498,7 @@ if (require.main === module) {
     .then((report) => {
       if (report.help) return;
       console.log(JSON.stringify(report, null, 2));
-      process.exitCode = (
-        report.copySafety?.payloadSafe === true
-        && report.copySafety?.blueDoorSafe === true
-        && report.probe?.firstBlocker == null
-      ) ? 0 : 2;
+      process.exitCode = report.summary.failed > 0 ? 1 : 0;
     })
     .catch((err) => {
       console.log(JSON.stringify({

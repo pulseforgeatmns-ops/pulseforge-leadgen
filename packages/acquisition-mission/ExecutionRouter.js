@@ -288,6 +288,7 @@ function handlerContext(request, context, mission, runtimeOwner) {
     pool: context.pool,
     persistStage: context.persistStage,
     maxSends: context.maxSends || payload.maxSends,
+    returnToStage: context.returnToStage || payload.returnToStage || null,
     prospectId: context.prospectId || payload.prospectId || null,
     prospectIds: context.prospectIds || payload.prospectIds || null,
     context: context.planningContext || context.context,
