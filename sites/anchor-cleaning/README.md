@@ -56,6 +56,13 @@ Quick check: `curl -sL https://goanchorcleaning.com/ | rg 'yhnafqbr5k|oaiq|lead_
 - `sitemap.xml` — `/` and `/residential/`
 - `assets/brand/site.webmanifest` — PWA manifest
 
+After copying, confirm the deployed `<head>` includes **both** tracking snippets exactly once:
+
+- Microsoft Clarity: `https://www.clarity.ms/tag/yhnafqbr5k` (PR #569)
+- OpenAI Ads pixel: `bzrcdn.openai.com/sdk/oaiq.min.js` plus `trackOpenAiLeadCreated` / `lead_created` (PR #609)
+
+Quick check: `curl -sL https://goanchorcleaning.com/ | rg 'yhnafqbr5k|oaiq'`
+
 ## Phone
 
 Public number: `(603) 420-2430` → `tel:+16034202430`
