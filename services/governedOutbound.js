@@ -104,7 +104,7 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
         || await store.suppression(item.snapshot, envelope.mission_id);
       if (reason) { await store.finish(item, 'suppressed', reason); fail(reason); }
       await adapters.liveGate(current, item, prepared, now());
-      await store.claim(item, current, clock(now()).day);
+      await store.claim(item, current, clock(now()).day, now());
       claimed = true;
     };
     const guardedSend = async command => {

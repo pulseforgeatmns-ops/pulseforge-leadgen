@@ -86,7 +86,7 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   }
   async function activate() { await svc.setMode(program.id, 'active', program.policy_hash, actor); }
   async function ageAttempts() {
-    await pool.query("UPDATE acquisition_outbound_items SET attempted_at=now()-interval '61 minutes' WHERE attempted_at IS NOT NULL");
+    await pool.query("UPDATE acquisition_outbound_items SET attempted_at=attempted_at-interval '61 minutes' WHERE attempted_at IS NOT NULL");
   }
   await t.test('shadow freezes exactly five, creates no execution approval and never invokes transport', async () => {
     await reset(); const result = await svc.tick();

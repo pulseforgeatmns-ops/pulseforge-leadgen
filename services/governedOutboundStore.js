@@ -144,7 +144,7 @@ class GovernedOutboundStore {
       await db.query('COMMIT');
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
   }
-  async claim(item, program, day) {
+  async claim(item, program, day, at = new Date()) {
     // All counters and the final enabled/suppression checks share this short transaction.
     // The durable attempted marker commits BEFORE the irreversible provider call.
     const db = await this.pool.connect();
@@ -158,11 +158,11 @@ class GovernedOutboundStore {
         FROM acquisition_outbound_items i JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
         WHERE i.tenant_id='10' AND i.attempted_at IS NOT NULL`, [p.id, day])).rows[0];
       if (counts.today >= p.policy.dailyCap || counts.total >= p.policy.totalCap || counts.uncertain) fail('budget_or_uncertain_block');
-      if (counts.last_attempt && Date.now() - +new Date(counts.last_attempt) < p.policy.spacingMinutes * 60000) fail('spacing');
-      const row = (await db.query(`UPDATE acquisition_outbound_items i SET status='attempted',attempted_at=now()
+      if (counts.last_attempt && +at - +new Date(counts.last_attempt) < p.policy.spacingMinutes * 60000) fail('spacing');
+      const row = (await db.query(`UPDATE acquisition_outbound_items i SET status='attempted',attempted_at=$2
         WHERE i.id=$1 AND i.status='pending' AND NOT EXISTS
         (SELECT 1 FROM acquisition_outbound_lifecycle s WHERE s.tenant_id=i.tenant_id AND s.suppressed
-          AND (s.email=i.email OR s.company_id=i.company_id)) RETURNING *`, [item.id])).rows[0];
+          AND (s.email=i.email OR s.company_id=i.company_id)) RETURNING *`, [item.id, at])).rows[0];
       if (!row) fail('suppressed_or_claimed');
       await this.event('send_attempted', item.id, { itemId: item.id, envelopeId: item.envelope_id }, db);
       await db.query('COMMIT');
