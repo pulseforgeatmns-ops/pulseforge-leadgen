@@ -80,6 +80,11 @@
     "acquisition:mailbox:verify": "node scripts/acquisitionMailbox.js verify",
     "acquisition:mailbox:test-send": "node scripts/acquisitionMailbox.js test-send",
     "acquisition:mailbox:poll": "node scripts/acquisitionMailbox.js poll",
+    "anchor:mailbox:oauth": "node getAnchorMailboxToken.js",
+    "anchor:mailbox:configure": "node scripts/anchorMailbox.js configure",
+    "anchor:mailbox:verify": "node scripts/anchorMailbox.js verify",
+    "anchor:mailbox:poll": "node scripts/anchorMailbox.js poll",
+    "anchor:mailbox:apply": "node scripts/anchorMailbox.js apply --confirm=anchor-mailbox-oauth-2026-09-19",
     "test:anchor-phone-setter:postgres": "ANCHOR_PHONE_SETTER_TEST_POSTGRES=true node --test test/anchorPhoneSetterPostgres.test.js",
     "revenue:rebuild": "node scripts/rebuildRevenueProjections.js",
     "revenue:phase16:preflight": "node scripts/preflightRevenuePhase16.js",
@@ -93,7 +98,8 @@
     "test:postgres:harness": "node --test test/disposablePostgresHarness.test.js",
     "test:ci:application": "node --test packages/max/workspace/tests/missionRouting.test.js",
     "start": "node server.js",
-    "test:anchor-outbound": "DATABASE_URL=postgresql://localhost:1/pulseforge_test_only DATABASE_SSL=false ANCHOR_OUTBOUND_TEST_POSTGRES=true node --test test/anchorDailyOutbound*.test.js"
+    "test:anchor-outbound": "DATABASE_URL=postgresql://localhost:1/pulseforge_test_only DATABASE_SSL=false ANCHOR_OUTBOUND_TEST_POSTGRES=true node --test test/anchorDailyOutbound*.test.js",
+    "test:anchor-mailbox-oauth": "node --test test/googleMailboxOAuth.test.js test/anchorMailboxOAuth.test.js test/anchorDailyOutboundMailboxPoll.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js test/tenantMailboxPollExecutor.test.js"
   },
   "repository": {
     "type": "git",
