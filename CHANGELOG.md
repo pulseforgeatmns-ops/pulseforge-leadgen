@@ -15,6 +15,12 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- [SPEC-JEV-002 Decision Shadow Review](docs/specs/SPEC-JEV-002_Decision_Shadow_Review.md):
+  best-effort Postgres copies of complete shadow events, isolated bounded writes,
+  and `npm run decision:review` for the latest 50 evaluations, mismatch patterns,
+  and provider errors. Includes an idempotent migration and failure-isolation
+  tests; Jev has no production routing authority.
+
 - Anchor STR canonical outbound recovery (tenant 10)
   - Inspects every Anchor acquisition mission and selects the short-term-rental operator objective without duplicating the law-firm mission
   - Recovers Scout → Max → Paige → Emmett → READY on the canonical AMO path only

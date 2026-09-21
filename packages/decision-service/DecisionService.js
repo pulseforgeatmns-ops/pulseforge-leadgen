@@ -7,6 +7,7 @@ const { snapshotInput, missionSnapshot, redactText } = require('./privacy');
 const { observedRoute } = require('./observedRoute');
 const { JevProvider } = require('./providers/JevProvider');
 const { NoopProvider } = require('./providers/NoopProvider');
+const { createShadowEventSink, getDefaultShadowEventSink } = require('./ShadowEventSink');
 
 function boundedInteger(value, fallback, min, max) {
   const n = Number(value);
@@ -46,11 +47,13 @@ function safeError(error) {
 
 /** Observation only: no method can execute or return a production route. */
 class DecisionService {
-  constructor({ env = process.env, provider, audit = defaultAudit, fetchImpl } = {}) {
+  constructor({ env = process.env, provider, audit = defaultAudit, persistence, fetchImpl } = {}) {
     this.config = readConfig(env);
     /** @type {import('./types').DecisionProvider} */
     this.provider = provider || selectProvider(this.config, fetchImpl);
     this._audit = audit;
+    this._persistence = persistence || (env === process.env
+      ? getDefaultShadowEventSink() : createShadowEventSink({ env }));
     this._pending = new Set();
   }
 
@@ -94,6 +97,11 @@ class DecisionService {
   }
 
   _write(row) {
+    if (!this.config.enabled) return;
+    // Independent sinks: a failed stdout logger cannot suppress persistence,
+    // and persistence never returns anything to the production route.
+    try { Promise.resolve(this._persistence.write(row)).catch(() => {}); }
+    catch (_) { /* best-effort persistence */ }
     try {
       // Custom asynchronous sinks must handle durability themselves. Rejection
       // cannot become an unhandled rejection or a routing error.
@@ -167,7 +175,11 @@ class DecisionService {
   }
 
   /** Tests/shutdown callers may drain; production routing never awaits this. */
-  async drain() { await Promise.all([...this._pending]); }
+  async drain() {
+    await Promise.all([...this._pending]);
+    try { await this._persistence.drain?.(); }
+    catch (_) { /* shutdown/test diagnostics cannot become routing errors */ }
+  }
 }
 
 function beginShadow(service, input, session, source) {

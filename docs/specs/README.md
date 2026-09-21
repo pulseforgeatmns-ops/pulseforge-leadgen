@@ -6,6 +6,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 
 | Spec | Title | Status | Release |
 |---|---|---|---|
+| [SPEC-JEV-002](SPEC-JEV-002_Decision_Shadow_Review.md) | Decision Shadow Review + Mismatch Audit | Implemented; migration pending deployment | Unreleased |
 | [SPEC-000](SPEC-000_Repository_Foundation.md) | Repository Foundation & Source of Truth | Done | v0.7.0 |
 | [SPEC-001A](SPEC-001A_Knowledge_Layer_Foundation.md) | Knowledge Layer Foundation | Done | v0.7.1 |
 | [SPEC-001B](SPEC-001B_Graph_Synchronization_Engine.md) | Graph Synchronization Engine | Done | v0.7.2 |
