@@ -4,7 +4,8 @@
 
 DecisionService observes accepted operator turns and records a Jev recommendation.
 It never selects a production route, modifies a session/mission, consumes an
-approval, executes a specialist, or changes a response. All flags default off.
+approval, executes a specialist, or changes a response. Shadow evaluation and
+Jev provider flags default off.
 There is deliberately no live routing mode or confidence threshold for execution.
 Coverage is the Max/workspace, mission, and AO operator-message entry points.
 Structured UI approval buttons, onboarding forms, and intelligence interviews
@@ -32,7 +33,8 @@ do not enter this mission-routing message stream.
   canonical route produce unavailable comparisons.
 - Existing ownership, mission-inspection, and approval audits emit structured
   JSON console events. DecisionService uses the same log transport with a
-  dedicated `DECISION_SHADOW_EVALUATED` event and no new database dependency.
+  dedicated `DECISION_SHADOW_EVALUATED` event. SPEC-JEV-002 adds an independent,
+  best-effort Postgres copy for review; production routing has no dependency on it.
 
 ## Integration and lifecycle
 
@@ -57,11 +59,13 @@ fetch and race even a provider that ignores abort. There are no automatic retrie
 and no fallback LLM calls. Failures fall back to a noop observation with null
 recommendation fields; current routing continues independently.
 
-Logs are best-effort process logs, not a durable job queue. Process termination
-can lose in-flight observations; a failed log sink can lose an event. Configure
-deployment log retention for analysis. No unbounded in-memory audit history is
-kept. `DecisionService.drain()` is available for tests or graceful shutdown;
-normal routing must not await it.
+Stdout logs remain best-effort process logs. The
+[SPEC-JEV-002 review path](SPEC-JEV-002_Decision_Shadow_Review.md) independently
+copies events into Postgres and provides `npm run decision:review`. Successfully
+inserted rows are durable; failed writes or process termination can still lose
+observations. No unbounded in-memory audit history is kept.
+`DecisionService.drain()` waits for evaluations and persistence for tests or
+graceful shutdown; normal routing must not await it.
 
 ## Configuration
 
@@ -83,6 +87,10 @@ both evaluations and their logs. Configuration is read when each service is
 constructed; restart the application after environment changes. Existing
 in-flight evaluations can finish during shutdown. No flags or keys are enabled
 or provisioned by this implementation.
+
+SPEC-JEV-002 storage defaults on when shadow mode is enabled and DATABASE_URL is
+configured, after applying its migration. Set `DECISION_SHADOW_PERSIST_ENABLED=false`
+to keep stdout-only observation. Disabled shadow mode also disables persistence.
 
 ## Provider contract and validation
 
