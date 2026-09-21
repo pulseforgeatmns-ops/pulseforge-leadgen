@@ -7,6 +7,7 @@ const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const { TEMPLATES } = require('../utils/aoMessageTemplates');
 const aoField = require('../services/aoFieldService');
 const aoMax = require('../services/aoMaxFlow');
+const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
 const aoMaxConversation = require('../services/aoMaxConversation');
 const aoRoute = require('../services/aoRouteService');
 const { buildTelUrl } = require('../utils/aoRoutePlanner');
@@ -289,6 +290,7 @@ router.post('/api/max/respond', requireAoWrite, refreshAoSession, wrapAoHandler(
   const aoOwnerId = effectiveAoOwnerId(req);
   const { session_id: sessionId, message } = req.body || {};
   if (!sessionId || !message) return res.status(400).json({ error: 'session_id and message required' });
+  observeOperatorHttp(req, res, { clientId, sessionId, source: 'ao_respond' });
 
   const result = await aoMax.respondToSession({
     sessionId,
@@ -310,6 +312,7 @@ router.post('/api/max/ask', requireAoWrite, refreshAoSession, wrapAoHandler(asyn
     return res.status(400).json({ error: 'message required' });
   }
 
+  observeOperatorHttp(req, res, { clientId, sessionId, source: 'ao_ask' });
   const result = await aoMax.askMax({
     aoOwnerId,
     clientId,
