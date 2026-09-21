@@ -23,9 +23,18 @@ function insertShadowEvent(db, row) {
   return db.query(INSERT, values);
 }
 
+function normalizeShadowEvent(row) {
+  return {
+    ...row,
+    timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
+  };
+}
+
 function reviewOptions({ limit = 50, tenantId = null, filter = 'all' } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('limit must be an integer from 1 to 500');
-  if (!['all', 'mismatches', 'errors'].includes(filter)) throw new Error('filter must be all, mismatches, or errors');
+  if (!['all', 'mismatches', 'errors', 'warnings'].includes(filter)) {
+    throw new Error('filter must be all, mismatches, errors, or warnings');
+  }
   if (tenantId !== null && (typeof tenantId !== 'string' || !tenantId.trim() || tenantId.length > 80)) {
     throw new Error('tenant must be a nonempty identifier of at most 80 characters');
   }
@@ -39,11 +48,16 @@ async function listShadowEvents(db, options) {
   if (tenantId !== null) { values.push(tenantId); where.push(`tenant_id = $${values.length}`); }
   if (filter === 'mismatches') where.push("comparison = 'mismatch'");
   if (filter === 'errors') where.push("(status = 'error' OR jsonb_array_length(errors) > 0)");
+  if (filter === 'warnings') where.push(`status = 'evaluated' AND provider = 'jev' AND comparison = 'mismatch'
+    AND current_route->>'failed' IS DISTINCT FROM 'true'
+    AND (current_route->>'route' = 'conversation' OR current_route->>'raw_route' = 'intelligence')
+    AND (intent = 'status_check' OR recommended_route = 'inspection')
+    AND (confidence >= 0.85 OR inspection_probability >= 0.85)`);
   values.push(limit);
   const result = await db.query(`SELECT ${FIELDS.join(', ')} FROM decision_shadow_events
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY timestamp DESC, decision_id DESC LIMIT $${values.length}`, values);
-  return result.rows;
+  return result.rows.map(normalizeShadowEvent);
 }
 
-module.exports = { FIELDS, insertShadowEvent, listShadowEvents, reviewOptions };
+module.exports = { FIELDS, insertShadowEvent, listShadowEvents, normalizeShadowEvent, reviewOptions };

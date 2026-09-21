@@ -8,6 +8,7 @@ const { observedRoute } = require('./observedRoute');
 const { JevProvider } = require('./providers/JevProvider');
 const { NoopProvider } = require('./providers/NoopProvider');
 const { createShadowEventSink, getDefaultShadowEventSink } = require('./ShadowEventSink');
+const { buildRoutingWarning } = require('./shadowRoutingWarning');
 
 function boundedInteger(value, fallback, min, max) {
   const n = Number(value);
@@ -37,6 +38,9 @@ function selectProvider(config, fetchImpl) {
 function defaultAudit(row) {
   console.info('[DECISION_SHADOW_EVALUATED]', JSON.stringify(row));
 }
+function defaultWarningAudit(warning) {
+  console.warn('[DECISION_SHADOW_ROUTING_WARNING]', JSON.stringify(warning));
+}
 function safeError(error) {
   const codes = ['invalid_response', 'http_error', 'timeout'];
   return {
@@ -47,11 +51,13 @@ function safeError(error) {
 
 /** Observation only: no method can execute or return a production route. */
 class DecisionService {
-  constructor({ env = process.env, provider, audit = defaultAudit, persistence, fetchImpl } = {}) {
+  constructor({ env = process.env, provider, audit = defaultAudit, warningAudit = defaultWarningAudit,
+    persistence, fetchImpl } = {}) {
     this.config = readConfig(env);
     /** @type {import('./types').DecisionProvider} */
     this.provider = provider || selectProvider(this.config, fetchImpl);
     this._audit = audit;
+    this._warningAudit = warningAudit;
     this._persistence = persistence || (env === process.env
       ? getDefaultShadowEventSink() : createShadowEventSink({ env }));
     this._pending = new Set();
@@ -107,6 +113,10 @@ class DecisionService {
       // cannot become an unhandled rejection or a routing error.
       Promise.resolve(this._audit(row)).catch(() => {});
     } catch (_) { /* best-effort audit, same isolation as the provider */ }
+    try {
+      const warning = buildRoutingWarning(row);
+      if (warning) Promise.resolve(this._warningAudit(warning)).catch(() => {});
+    } catch (_) { /* warning annotations are observational only */ }
   }
 
   _schedule(base, state) {

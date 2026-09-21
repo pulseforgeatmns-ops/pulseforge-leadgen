@@ -117,6 +117,7 @@ From the repository with the intended `DATABASE_URL` available:
 npm run decision:review
 npm run decision:review -- --tenant 10 --limit 50
 npm run decision:review -- --tenant 10 --mismatches --json
+npm run decision:review -- --tenant 10 --warnings --json
 npm run decision:review -- --tenant 10 --errors --json
 ```
 
@@ -124,13 +125,15 @@ In an existing Railway service shell, the same commands use its environment.
 The default is the latest 50 stored evaluations across tenants, ordered by event
 timestamp and decision ID. Limits are 1–500. `--tenant` restricts every returned
 row and count. `--mismatches`/`--errors` filter **before** the limit so newer
-successful turns cannot hide older mismatches/errors. Missing migrations or DB
+successful turns cannot hide older mismatches/errors. `--warnings` returns the
+latest rows matching the SPEC-JEV-003 likely mission-inspection warning
+predicate. Missing migrations or DB
 access fail the report with a nonzero exit, rather than returning a false empty
 report. `--help` needs no database connection.
 
 Text output contains a summary and per-row review table. `--json` includes all
-fields in `evaluations`, plus `mismatches`, `likely_mission_inspections`, and
-`errors`. Summary counts cover only the returned sample, not all history. The
+fields in `evaluations`, plus `mismatches`, `likely_mission_inspections`,
+`operator_warnings`, and `errors`. Summary counts cover only the returned sample, not all history. The
 mismatch rate denominator includes only comparable match/mismatch rows; fallback,
 skipped, and error/unavailable rows are not treated as matches. Empty samples
 have a null mismatch rate. Status and error-code breakdowns keep failures visible.

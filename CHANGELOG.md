@@ -15,6 +15,11 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ### Added
 
+- [SPEC-JEV-003 Shadow Routing Warning](docs/specs/SPEC-JEV-003_Shadow_Routing_Warning.md):
+  emits `[DECISION_SHADOW_ROUTING_WARNING]` for the validated high-confidence
+  mission-inspection mismatch and adds `npm run decision:review -- --warnings`.
+  Jev remains observer-only and warning failures cannot affect routing.
+
 - [SPEC-JEV-002 Decision Shadow Review](docs/specs/SPEC-JEV-002_Decision_Shadow_Review.md):
   best-effort Postgres copies of complete shadow events, isolated bounded writes,
   and `npm run decision:review` for the latest 50 evaluations, mismatch patterns,
