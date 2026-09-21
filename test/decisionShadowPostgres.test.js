@@ -86,7 +86,7 @@ test('real PostgreSQL: migration, full round trip, duplicate safety, review filt
     const latest = await queryShadowReview(db, { tenantId: '10' });
     assert.equal(latest.evaluations.length, 50);
     assert.equal(latest.summary.mismatches, 0);
-    assert.equal(latest.evaluations[0].timestamp.toISOString(), '2026-10-01T00:00:54.000Z');
+    assert.equal(latest.evaluations[0].timestamp, '2026-10-01T00:00:54.000Z');
     const mismatches = await queryShadowReview(db, { tenantId: '10', filter: 'mismatches' });
     assert.equal(mismatches.summary.mismatches, 1);
     assert.equal(mismatches.summary.likely_mission_inspections, 1);

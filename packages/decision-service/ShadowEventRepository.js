@@ -23,6 +23,13 @@ function insertShadowEvent(db, row) {
   return db.query(INSERT, values);
 }
 
+function normalizeShadowEvent(row) {
+  return {
+    ...row,
+    timestamp: row.timestamp instanceof Date ? row.timestamp.toISOString() : row.timestamp,
+  };
+}
+
 function reviewOptions({ limit = 50, tenantId = null, filter = 'all' } = {}) {
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error('limit must be an integer from 1 to 500');
   if (!['all', 'mismatches', 'errors', 'warnings'].includes(filter)) {
@@ -50,7 +57,7 @@ async function listShadowEvents(db, options) {
   const result = await db.query(`SELECT ${FIELDS.join(', ')} FROM decision_shadow_events
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
     ORDER BY timestamp DESC, decision_id DESC LIMIT $${values.length}`, values);
-  return result.rows;
+  return result.rows.map(normalizeShadowEvent);
 }
 
-module.exports = { FIELDS, insertShadowEvent, listShadowEvents, reviewOptions };
+module.exports = { FIELDS, insertShadowEvent, listShadowEvents, normalizeShadowEvent, reviewOptions };
