@@ -8,6 +8,7 @@ const { getMissionEngine, missionEnabled } = require('../utils/missionRuntime');
 const { detectConversationSubject } = require('../packages/max/workspace/ConversationSubject');
 const { maybeHandleIdentityTurn } = require('../packages/max/workspace/IdentityConversationContext');
 const { LEGACY_CHAT_SYSTEM } = require('../packages/max/identity/MaxIdentity');
+const { observeLegacyChat } = require('../packages/decision-service/httpObserver');
 
 function shouldRouteAoQuestion(question) {
   return /\b(ao|anchor|mike|field visit|campaign 001|direct mail|walkthrough|escalation|ao lead|who do i need to call|what happened today|what needs my attention|hottest ao|current cleaner|objection|promot.*crm)\b/i.test(question);
@@ -157,6 +158,7 @@ router.post('/api/max/ask', requireDashboardAuth, async (req, res) => {
     if (!question) return res.status(400).json({ error: 'Question is required' });
 
     const clientId = getRequestClientId(req);
+    observeLegacyChat(req, res, undefined, clientId);
 
     const conversationSubject = detectConversationSubject(question);
     if (conversationSubject.subject === 'identity') {

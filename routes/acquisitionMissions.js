@@ -25,6 +25,7 @@ const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { resolveActiveTenantId } = require('../packages/max/workspace/TenantContextResolver');
 const pool = require('../db');
+const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
 const {
   createMission,
   inspectMission,
@@ -315,6 +316,9 @@ router.post('/api/v1/amo/missions/:id/execute', requireActor, async (req, res) =
       return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
     }
     const actor = actorFrom(req);
+    observeOperatorHttp(req, res, {
+      clientId: tenantId, missionId: req.params.id, source: 'amo_execute', routeHint: 'mission',
+    });
     const routed = await executeCanonical({
       tenantId,
       missionId: req.params.id,
@@ -364,6 +368,9 @@ router.post('/api/v1/amo/ask', requireActor, async (req, res) => {
     if (tenantId == null) {
       return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
     }
+    observeOperatorHttp(req, res, {
+      clientId: tenantId, missionId: req.body?.missionId, source: 'amo_ask', routeHint: 'inspection',
+    });
     const answered = await answerOperator(req.body?.question, {
       tenantId,
       missionId: req.body?.missionId,
