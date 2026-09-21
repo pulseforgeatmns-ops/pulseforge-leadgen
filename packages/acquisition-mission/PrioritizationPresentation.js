@@ -75,7 +75,7 @@ function presentationFromPrioritizationPayload(payload = {}) {
     : [];
   const delegation = payload.delegation && typeof payload.delegation === 'object'
     ? payload.delegation
-    : { paige: 'variants', emmett: 'capacity' };
+    : {};
   const evidence = Array.isArray(payload.evidence) ? payload.evidence : [];
   const buyingSignals = Array.isArray(payload.buyingSignals) ? payload.buyingSignals : [];
 
@@ -115,8 +115,11 @@ function resolvePrioritizationApprovedNextStep(snapshot = {}, mission = {}) {
   }
 
   const progressionStage = deriveProgressionStage(merged);
-  if (progressionStage === PROGRESSION_STAGES.OUTREACH_PLANNING) {
-    return 'Continue to outreach planning.';
+  if (
+    progressionStage === PROGRESSION_STAGES.ACQUISITION_PLANNING ||
+    progressionStage === PROGRESSION_STAGES.OUTREACH_PLANNING
+  ) {
+    return 'Continue to acquisition approach planning.';
   }
 
   const label = PROGRESSION_STAGE_LABELS[progressionStage];

@@ -10,6 +10,8 @@
 const { expandGeography } = require('../../acquisition-mission/MissionPlanner');
 const { MANCHESTER_GEO } = require('../../capabilities/discovery/seedProfiles');
 const { expandConcepts } = require('./ConceptLibrary');
+const { scopeSearchDefinitionForTask } = require('./EvidenceRequest');
+const { INVESTIGATIVE_EVIDENCE } = require('./EvidenceRequirements');
 const { parseGeographyList } = require('../../max/scoutAcquisition/InvestigationProvenance');
 const { asText, nowIso, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
 const { enforceCandidateMinimumContract } = require('./CandidateMinimumContract');
@@ -177,17 +179,61 @@ function buildDiscoveryPlan(searchDefinition = {}, opts = {}) {
   };
 }
 
-function scopedSearchDefinition(searchDefinition, workload) {
+function scopedSearchDefinition(searchDefinition, workload, marketDefinition = null) {
   const cityToken = asText(workload.city).split(/\s+/)[0];
-  return {
+  const state =
+    asText(searchDefinition.geography && searchDefinition.geography.state) ||
+    inferStateFromLabel(workload.city) ||
+    null;
+  const canonicalSegment =
+    (Array.isArray(searchDefinition.segments) && searchDefinition.segments[0]) ||
+    asText(workload.concept).replace(/\s+/g, '_').toLowerCase();
+
+  const base = {
     ...searchDefinition,
     geography: {
       ...(searchDefinition.geography || {}),
       label: workload.city,
       cities: [cityToken],
+      state,
     },
-    segments: [workload.concept],
+    segments: [canonicalSegment],
     _coverageWorkload: workload,
+  };
+
+  const task = {
+    id: `task:coverage:${workload.id || `${workload.city}|${workload.concept}|${workload.source}`}`,
+    evidenceType: INVESTIGATIVE_EVIDENCE.IDENTITY,
+    providers: [{ providerId: 'google_maps' }],
+  };
+
+  return scopeSearchDefinitionForTask(
+    base,
+    task,
+    marketDefinition || { segments: searchDefinition.segments }
+  );
+}
+
+function buildDiscoveryEvidenceRef(row = {}, workload = {}) {
+  const name = asText(row.name);
+  const placeId = asText(row.placeId || row.place_id);
+  const website = asText(row.website || row.url);
+  const address = asText(row.address || row.location);
+  if (!name && !placeId) return null;
+
+  const source = row.discoverySource || row.source || workload.source || 'public_business_data';
+  return {
+    id: `ev-places-${placeId || name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    label: `Discovered via ${String(source).replace(/_/g, ' ')}`,
+    snapshot: {
+      source: /places|google/i.test(String(source)) ? 'google_places' : source,
+      companyName: name || null,
+      placeId: placeId || null,
+      website: website || null,
+      address: address || null,
+      city: row.discoveryCity || workload.city || null,
+      concept: workload.concept || row.discoveryConcept || null,
+    },
   };
 }
 
@@ -196,6 +242,7 @@ function scopedSearchDefinition(searchDefinition, workload) {
  * @returns {Promise<object>}
  */
 async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts = {}) {
+  const marketDefinition = opts.marketDefinition || null;
   const executed = [];
   const errors = [];
   const candidates = [];
@@ -217,7 +264,7 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
       continue;
     }
 
-    const scoped = scopedSearchDefinition(searchDefinition, workload);
+    const scoped = scopedSearchDefinition(searchDefinition, workload, marketDefinition);
     try {
       const report = await adapter.discover(scoped);
       const rows = report.candidates || [];
@@ -417,8 +464,17 @@ function buildCandidateUniverseRecords(candidates = [], opts = {}) {
       confidence: row.icpScore != null ? clamp01(Number(row.icpScore) / 100) : 0.55,
       dedupeStatus,
       name: row.name || null,
+      website: row.website || row.url || null,
+      phone: row.phone || null,
+      address: row.address || row.location || null,
+      placeId: row.placeId || row.place_id || null,
       concept: workload.concept || row.discoveryConcept || null,
     };
+    const evidenceRef = buildDiscoveryEvidenceRef(row, workload);
+    if (evidenceRef) {
+      record.evidenceRefs = [evidenceRef];
+      record.evidence = [evidenceRef];
+    }
     if (row.qualification) record.qualification = row.qualification;
     if (row.readiness) record.readiness = row.readiness;
     if (row.evaluation) record.evaluation = row.evaluation;

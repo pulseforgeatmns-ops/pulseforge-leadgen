@@ -4,6 +4,28 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Anchor one-send runner (`scripts/executeAnchorOneOutbound.js`) accepts `--mission-id`
+  - Default remains the conservative historical law-firm mission id
+  - Production execution must pass the READY STR mission explicitly
+  - Requires tenant 10, stage READY, readiness-probe match, and active non-superseded CAPACITY
+  - Sends the highest-ranked sendable email-bearing queue item only (`maxSends=1`)
+  - Prints recipient / company / subject / body before execute; autosend and enabled_agents stay unchanged
+
+### Added
+
+- Anchor STR canonical outbound recovery (tenant 10)
+  - Inspects every Anchor acquisition mission and selects the short-term-rental operator objective without duplicating the law-firm mission
+  - Recovers Scout → Max → Paige → Emmett → READY on the canonical AMO path only
+  - Stops before `APPROVE_EXECUTION` / `EXECUTE_OUTBOUND`; autosend stays off
+  - Refuses Scout `CONTINUE_INVESTIGATION` when a healthy candidate set already exists
+  - Stops cleanly at the Scout → Max boundary when discovery readiness is insufficient instead of looping invalid `APPROVE_PRIORITIZATION`
+  - If discovery is already approved and Scout candidates are empty, runs canonical Scout continuation instead of looping `APPROVE_DISCOVERY`
+  - Railway cron: `GET/POST /cron/inspect-anchor-canonical-outbound` (read-only) and `/cron/recover-anchor-canonical-outbound?recover=true` (READY only)
+  - GitHub Actions production job is workflow_dispatch only and does not use Railway's `charming-trust / production` GitHub environment
+
+
 ### Added
 
 - AUDIT-066 Max Post-Discovery Dispatch ([AUDIT-066](docs/architecture/AUDIT-066_Max_Post_Discovery_Dispatch.md))

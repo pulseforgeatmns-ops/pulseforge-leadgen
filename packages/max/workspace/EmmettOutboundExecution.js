@@ -18,6 +18,7 @@ const {
   bumpMissionVersion,
   planningError,
   validationError,
+  persistenceError,
   EXECUTION_STATUSES,
 } = require('../../acquisition-mission');
 const { specialistContext } = require('../../acquisition-mission/Lifecycle');
@@ -34,7 +35,11 @@ const {
 const { assertMissionStateConsistent } = require('../../acquisition-mission/PendingOperatorDecision');
 const { createEvent } = require('../../acquisition-mission/Timeline');
 const { executeOutboundBundle } = require('./OutboundExecutionAdapter');
-const { persistOutboundExecution } = require('../../../services/acquisitionMissionOutboundPersistence');
+const {
+  persistOutboundExecution,
+  listOutboundExecutionsForMission,
+} = require('../../../services/acquisitionMissionOutboundPersistence');
+const { bindStagePersistDurable } = require('../../../services/acquisitionMissionPersistence');
 
 function validateExecuteOutboundPreconditions({ mission, engine, tenantId }) {
   if (!mission) throw planningError('tme_mission_missing', 'Mission does not exist.');
@@ -64,11 +69,15 @@ function validateExecuteOutboundPreconditions({ mission, engine, tenantId }) {
     );
   }
 
-  // SPEC-212: Validate message binding integrity before execution (fail closed)
+  // SPEC-212: Validate the active (non-superseded) CAPACITY before execution.
   const emmettContribution = contributions
     .slice()
     .reverse()
-    .find((row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY);
+    .find((row) =>
+      row.specialist === SPECIALISTS.EMMETT
+      && row.kind === CONTRIBUTION_KINDS.CAPACITY
+      && row.payload?.superseded !== true
+    );
   if (emmettContribution && emmettContribution.payload) {
     const bindingValidation = validateProspectMessageBindings(emmettContribution.payload);
     if (!bindingValidation.valid) {
@@ -184,9 +193,18 @@ async function runExecuteOutboundForAmoMission(input = {}) {
   const snapshot = engine.inspect(mission.id, { tenantId });
   const contributions = snapshot.contributions || [];
   const approval = findValidExecutionApproval(contributions, mission.id);
-  const existingRecords = engine.store.listExecutionRecords
+  let existingRecords = engine.store.listExecutionRecords
     ? engine.store.listExecutionRecords(mission.id)
     : [];
+  if (input.pool && input.persist !== false) {
+    const durable = await listOutboundExecutionsForMission(mission.id, input.pool);
+    const seen = new Set(existingRecords.map((row) => row && row.id).filter(Boolean));
+    for (const row of durable) {
+      if (!row || seen.has(row.id)) continue;
+      existingRecords.push(row);
+      if (engine.store.addExecutionRecord) engine.store.addExecutionRecord(row);
+    }
+  }
 
   const persistExecutionRecord = async (record) => {
     if (engine.store.addExecutionRecord) {
@@ -202,13 +220,18 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     }
   };
 
-  return executeOutboundBundle({
+  const result = await executeOutboundBundle({
     mission,
     contributions,
     approval,
     tenantId,
     transactionId,
+    executionRequest,
     executionRequestId: executionRequest?.id || null,
+    maxSends: input.maxSends,
+    governedEnvelopeId: input.governedEnvelopeId,
+    prospectId: input.prospectId,
+    prospectIds: input.prospectIds,
     sendEmail,
     resolveProspectAttributes,
     senderIdentity,
@@ -222,6 +245,22 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     existingRecords,
     persistExecutionRecord,
   });
+  const envelope = approval?.payload?.dailyEnvelope;
+  if (envelope && !result.blocked) {
+    // A one-message tick is not completion of a multi-message mission. Provider
+    // observations must not advance this mission to OBSERVE while work remains.
+    const aggregate = new Map([...existingRecords, ...(result.records || [])].map(row => [row.id, row]));
+    result.summary = summarizeExecutionRecords([...aggregate.values()]);
+    result.summary.complete = result.summary.complete && aggregate.size >= envelope.candidateIds.length;
+    if (input.pool && input.persist !== false) {
+      const ledger = (await input.pool.query(`SELECT status,count(*)::int AS n FROM acquisition_outbound_items
+        WHERE envelope_id=$1 AND tenant_id=$2 GROUP BY status`, [envelope.id, String(tenantId)])).rows;
+      const counts = Object.fromEntries(ledger.map(row => [row.status, row.n]));
+      result.summary.complete = ledger.length > 0 && !counts.pending && !counts.attempted && !counts.uncertain;
+      result.summary.governedEnvelope = { id: envelope.id, counts };
+    }
+  }
+  return result;
 }
 
 /**
@@ -232,6 +271,16 @@ async function runExecuteOutboundForAmoMission(input = {}) {
 async function advanceExecuteOutbound(input = {}) {
   const { engine, mission, tenantId, operatorId, executionRequest } = input;
   if (!engine || !mission) throw new Error('engine and mission are required');
+
+  const persistDurable = typeof input.persistDurable === 'function'
+    ? input.persistDurable
+    : bindStagePersistDurable(input, engine, tenantId);
+  if (input.persist === true && typeof persistDurable !== 'function') {
+    throw persistenceError(
+      'tme_persistence',
+      'EXECUTE_OUTBOUND with persist=true requires persistStageCommit (pool or persistStage).'
+    );
+  }
 
   const staged = await executeMissionStage({
     engine,
@@ -312,7 +361,7 @@ async function advanceExecuteOutbound(input = {}) {
       }
       return commitExecuteOutboundStage(ctx);
     },
-    persistDurable: input.persistDurable,
+    persistDurable,
   });
 
   return {

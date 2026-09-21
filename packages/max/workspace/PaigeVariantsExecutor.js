@@ -14,14 +14,66 @@ const {
   EXECUTION_STATUSES,
   MESSAGE_BINDING_SCOPES,
 } = amo;
+const { unwrapSpecialistPayload } = require('../../acquisition-mission/ContributionSupersession');
+const {
+  canonicalOutboundIdentity,
+} = require('./CanonicalOutboundIdentity');
 const {
   evaluatePaigePriorLearningInfluence,
   applyPaigePriorLearningAdjustments,
 } = require('./PaigePriorLearningInfluence');
+const {
+  resolveOutreachSequenceAtPrepare,
+} = require('../../acquisition-mission/PreparedOutreachSequence');
+const {
+  buildCustomerFacingVariantCopy,
+} = require('./PaigeCustomerCopy');
+const {
+  validatePaigeVariantsPayload,
+  BLOCKER: COPY_SAFETY_BLOCKER,
+} = require('./PaigeCopySafety');
+const {
+  ANCHOR_CLIENT_ID,
+  buildAnchorLifecycleVariant,
+} = require('../../../utils/anchorLifecycleEmail');
+const {
+  validateAnchorCopyDoctrine,
+  DOCTRINE_BLOCKER,
+} = require('../../../utils/anchorCopyDoctrine');
+
+function lookupCrmRecord(crmByProspectId, prospectId) {
+  if (!crmByProspectId || prospectId == null) return null;
+  if (crmByProspectId instanceof Map) {
+    return crmByProspectId.get(String(prospectId)) || null;
+  }
+  if (typeof crmByProspectId === 'object') {
+    return crmByProspectId[String(prospectId)] || crmByProspectId[prospectId] || null;
+  }
+  return null;
+}
 
 function asText(value) {
   if (value == null) return '';
   return String(value).trim();
+}
+
+function resolveCandidateCrmRecord(candidate = {}, identity = {}, crmByProspectId = null) {
+  const keys = [
+    identity.candidateId,
+    identity.companyId,
+    identity.placeId,
+    candidate.prospectId,
+    candidate.id,
+  ].filter(Boolean);
+  for (const key of keys) {
+    const row = lookupCrmRecord(crmByProspectId, key);
+    if (row) return row;
+  }
+  return null;
+}
+
+function resolveAnchorSenderName(plan = {}, mission = {}) {
+  return asText(plan.senderName || mission.senderName || 'Jacob Maynard') || 'Jacob Maynard';
 }
 
 /**
@@ -32,6 +84,17 @@ function buildPerProspectVariants(input = {}) {
   const max = input.max || {};
   const scout = input.scout || {};
   const plan = input.plan || {};
+  const mission = input.mission || {};
+  const clientId = Number(
+    input.clientId
+    || plan.clientId
+    || mission.clientId
+    || mission.tenantId
+    || 0
+  );
+  const crmByProspectId = input.crmByProspectId || null;
+  const senderName = resolveAnchorSenderName(plan, mission);
+  const useAnchorLifecycle = clientId === ANCHOR_CLIENT_ID;
 
   // SPEC-212: Use ALL ranked targets, not just [0]
   const candidates = max.rankedTargets || [];
@@ -44,43 +107,70 @@ function buildPerProspectVariants(input = {}) {
     return buildFallbackMissionLevelVariant(input);
   }
 
-  const objective = max.objectives?.[0]?.text || plan.objective || null;
-  const marketLabel = plan.market?.label || 'local offices';
   const variants = [];
 
   for (const candidate of candidates) {
-    const candidateId = candidate.id || candidate.companyId || candidate.name;
+    const identity = canonicalOutboundIdentity(candidate);
+    const candidateId = identity.candidateId || candidate.name;
     const companyName = candidate.name || candidate.label || 'Company';
 
-    // SPEC-212: Extract ONLY this candidate's intelligence
+    // SPEC-212: Extract ONLY this candidate's intelligence — stored for operator review, never in body
     const candidateRationale = candidate.rationale || candidate.reason || null;
     const candidateFit = candidate.fit != null ? Number(candidate.fit) : 0.7;
     const candidateTiming = candidate.timing != null ? Number(candidate.timing) : 0.5;
 
-    // SPEC-212: Build prospect-specific subject and body
-    const subject = `Commercial cleaning walkthrough for ${companyName}`;
-    const body = [
-      `Hi — we help ${marketLabel} maintain spotless workspaces.`,
-      objective ? `Mission focus: ${objective}` : null,
-      candidateRationale ? `Why now: ${candidateRationale}` : null,
-    ].filter(Boolean).join('\n\n');
+    let copy;
+    let usedPersonalization = false;
+    let scoutPersonalization = null;
+
+    if (useAnchorLifecycle) {
+      const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
+      const lifecycle = buildAnchorLifecycleVariant({
+        candidate: {
+          ...candidate,
+          name: companyName,
+          scoutPersonalization: candidate.scoutPersonalization || candidate.scout_personalization || null,
+        },
+        crmRecord,
+        senderName,
+        plan,
+        mission,
+      });
+      copy = {
+        subject: lifecycle.subject,
+        body: lifecycle.body,
+        cta: lifecycle.cta || 'Want me to send over what we\'d need for a quote?',
+      };
+      usedPersonalization = lifecycle.usedPersonalization;
+      scoutPersonalization = lifecycle.evidence || null;
+    } else {
+      copy = buildCustomerFacingVariantCopy({
+        companyName,
+        plan,
+        mission: input.mission || {},
+      });
+    }
 
     variants.push({
-      // SPEC-212: Explicit prospect binding
+      // SPEC-212: Explicit prospect binding — candidate/company/place stay distinct from CRM UUIDs
       candidateId: String(candidateId),
+      companyId: identity.companyId || String(candidateId),
+      placeId: identity.placeId || null,
       companyName,
       bindingScope: MESSAGE_BINDING_SCOPES.PROSPECT,
       variantId: `paige_v_${String(candidateId).replace(/\W/g, '_')}`,
       label: `Primary - ${companyName}`,
-      subject,
-      body,
-      cta: 'Reply to schedule a walkthrough',
+      subject: copy.subject,
+      body: copy.body,
+      cta: copy.cta,
       // SPEC-212: Store attributable intelligence for this prospect only
       attributableIntelligence: {
         rationale: candidateRationale,
         fit: candidateFit,
         timing: candidateTiming,
         companyName,
+        scoutPersonalization,
+        usedPersonalization,
       },
     });
   }
@@ -96,27 +186,26 @@ function buildFallbackMissionLevelVariant(input = {}) {
   const max = input.max || {};
   const scout = input.scout || {};
   const plan = input.plan || {};
+  const mission = input.mission || {};
   const topTarget = max.rankedTargets?.[0]?.name
     || max.priorities?.[0]?.name
     || scout.companies?.[0]?.name
     || scout.rankedProspects?.[0]?.name
     || plan.market?.label
     || 'your office';
-  const objective = max.objectives?.[0]?.text || plan.objective || null;
-  const subject = `Commercial cleaning walkthrough for ${topTarget}`;
-  const body = [
-    `Hi — we help ${plan.market?.label || 'local offices'} maintain spotless workspaces.`,
-    objective ? `Mission focus: ${objective}` : null,
-    max.recommendations?.[0] ? `Why now: ${max.recommendations[0]}` : null,
-  ].filter(Boolean).join('\n\n');
+  const copy = buildCustomerFacingVariantCopy({
+    companyName: topTarget,
+    plan,
+    mission,
+  });
 
   return [{
     bindingScope: MESSAGE_BINDING_SCOPES.MISSION,
     variantId: 'paige_v_mission_fallback',
     label: 'Primary - Mission Level',
-    subject,
-    body,
-    cta: 'Reply to schedule a walkthrough',
+    subject: copy.subject,
+    body: copy.body,
+    cta: copy.cta,
     attributableIntelligence: null,
   }];
 }
@@ -126,13 +215,20 @@ function buildBasePaigeVariantsPayload(input = {}) {
   const subjects = variants.map((v) => v.subject);
   const max = input.max || {};
   const scout = input.scout || {};
+  const usedPersonalization = variants.some((variant) => variant.attributableIntelligence?.usedPersonalization);
 
   return {
     variants,
     subjects,
-    cta: 'Reply to schedule a walkthrough',
+    messaging: variants[0]?.body || null,
+    cta: Number(input.clientId || plan.clientId || input.mission?.clientId || input.mission?.tenantId) === ANCHOR_CLIENT_ID
+      ? (variants[0]?.cta || 'Want me to send over what we\'d need for a quote?')
+      : 'Reply to schedule a walkthrough',
     hypotheses: [
       max.objectiveReason || 'Prioritized targets respond to timing-specific outreach.',
+      usedPersonalization
+        ? 'Scout-supported business facts improve first-touch relevance when evidence is strong.'
+        : null,
       scout.buyingSignals?.[0]
         ? `Signal: ${typeof scout.buyingSignals[0] === 'string'
           ? scout.buyingSignals[0]
@@ -148,10 +244,24 @@ function buildBasePaigeVariantsPayload(input = {}) {
   };
 }
 
+function unwrapMaxPayload(raw = {}) {
+  if (!raw || typeof raw !== 'object') return {};
+  if ((Array.isArray(raw.rankedTargets) && raw.rankedTargets.length)
+    || (Array.isArray(raw.priorities) && raw.priorities.length)) {
+    return raw;
+  }
+  return unwrapSpecialistPayload(raw) || raw;
+}
+
 function extractPaigeUpstreamContext(executionInput = {}) {
-  const max = executionInput.workspaceContext?.max
+  const max = unwrapMaxPayload(
+    executionInput.workspaceContext?.max
     || executionInput.specialistInput?.maxPrioritization
-    || {};
+    || {}
+  );
+  if (!max.rankedTargets?.length && executionInput.specialistInput?.rankedTargets?.length) {
+    max.rankedTargets = executionInput.specialistInput.rankedTargets;
+  }
   const scout = executionInput.workspaceContext?.scout
     || executionInput.specialistInput?.scoutDiscovery
     || {};
@@ -163,9 +273,26 @@ function extractPaigeUpstreamContext(executionInput = {}) {
 
 function buildPaigeVariantsPayload(executionInput = {}) {
   const { max, scout, plan } = extractPaigeUpstreamContext(executionInput);
+  const mission = executionInput.mission || {};
   const priorLearning = executionInput.memoryContext?.priorLearning || [];
+  const clientId = Number(
+    executionInput.mission?.clientId
+    ?? executionInput.mission?.tenantId
+    ?? plan.clientId
+    ?? 0
+  );
+  const crmByProspectId = executionInput.crmByProspectId
+    || executionInput.specialistInput?.crmByProspectId
+    || null;
 
-  let payload = buildBasePaigeVariantsPayload({ max, scout, plan });
+  let payload = buildBasePaigeVariantsPayload({
+    max,
+    scout,
+    plan,
+    clientId,
+    crmByProspectId,
+    mission: executionInput.mission || {},
+  });
 
   // SPEC-212: Apply prior learning evaluations to all variants
   // Prior learning is mission-level, but we evaluate against each prospect's context
@@ -180,6 +307,17 @@ function buildPaigeVariantsPayload(executionInput = {}) {
   // TODO: Refactor applyPaigePriorLearningAdjustments to apply per-prospect
   // For now, apply only to first variant to avoid contamination
   payload = applyPaigePriorLearningAdjustments(payload, priorLearningEvaluation, plan);
+
+  const outreachSequence = resolveOutreachSequenceAtPrepare({
+    mission: executionInput.mission || {},
+    contributions: executionInput.contributions || [],
+    clientId: executionInput.mission?.clientId ?? Number(executionInput.mission?.tenantId),
+    variants: payload.variants || [],
+    crmByProspectId: executionInput.crmByProspectId || executionInput.specialistInput?.crmByProspectId || null,
+  });
+  if (outreachSequence) {
+    payload.outreachSequence = outreachSequence;
+  }
 
   return {
     payload,
@@ -202,6 +340,61 @@ async function runPaigeVariants(executionInput = {}) {
   }
 
   const { payload, learningInfluence } = buildPaigeVariantsPayload(executionInput);
+  const copySafety = validatePaigeVariantsPayload(payload);
+  if (!copySafety.safe) {
+    return createExecutionResult({
+      specialist: SPECIALISTS.PAIGE,
+      transactionId,
+      status: EXECUTION_STATUSES.BLOCKED,
+      contributions: payload,
+      reason: 'Paige generated customer-facing copy containing internal mission or scoring language.',
+      requiredPrecondition: COPY_SAFETY_BLOCKER,
+      blockers: [{
+        code: COPY_SAFETY_BLOCKER,
+        label: 'Internal reasoning leakage in customer-facing copy',
+        violations: copySafety.violations,
+      }],
+    });
+  }
+
+  const clientId = Number(
+    executionInput.mission?.clientId
+    ?? executionInput.mission?.tenantId
+    ?? plan.clientId
+    ?? 0
+  );
+  if (clientId === ANCHOR_CLIENT_ID) {
+    const doctrineViolations = [];
+    for (const variant of payload.variants || []) {
+      const doctrine = validateAnchorCopyDoctrine({
+        subject: variant.subject,
+        body: variant.body,
+        cta: variant.cta,
+      });
+      if (!doctrine.ok) {
+        doctrineViolations.push({
+          candidateId: variant.candidateId || variant.companyId || variant.variantId || null,
+          violations: doctrine.violations,
+        });
+      }
+    }
+    if (doctrineViolations.length) {
+      return createExecutionResult({
+        specialist: SPECIALISTS.PAIGE,
+        transactionId,
+        status: EXECUTION_STATUSES.BLOCKED,
+        contributions: payload,
+        reason: 'Paige generated Anchor copy that violates the Anchor Copy Doctrine.',
+        requiredPrecondition: DOCTRINE_BLOCKER,
+        blockers: [{
+          code: DOCTRINE_BLOCKER,
+          label: 'Anchor copy doctrine violation',
+          violations: doctrineViolations,
+        }],
+      });
+    }
+  }
+
   const unknowns = [];
   if (executionInput.memoryContext?.priorLearningRetrievalWarning) {
     unknowns.push({

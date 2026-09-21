@@ -75,6 +75,42 @@ function findDiscoveryStepResult(mission) {
 }
 
 /**
+ * Resolve prospect count for audit/reporting. Legacy mission-engine step outputs
+ * use prospectCount; canonical AMO Scout discovery uses qualifiedCount on the
+ * intelligence payload when no mission step result exists.
+ * @param {object} outputs
+ * @param {object|null} scoutDiscoveryMeta
+ * @returns {number}
+ */
+function resolveDiscoveryProspectCount(outputs = {}, scoutDiscoveryMeta = null) {
+  if (outputs.prospectCount != null) {
+    return Number(outputs.prospectCount);
+  }
+  if (Array.isArray(outputs.prospects) && outputs.prospects.length) {
+    return outputs.prospects.length;
+  }
+
+  const intel = scoutDiscoveryMeta && scoutDiscoveryMeta.intelligenceResult;
+  const payload = intel && intel.payload;
+  if (payload && payload.qualifiedCount != null) {
+    return Number(payload.qualifiedCount);
+  }
+  if (payload && Array.isArray(payload.opportunities)) {
+    return (
+      payload.opportunities.length +
+      (Array.isArray(payload.fitCandidates) ? payload.fitCandidates.length : 0)
+    );
+  }
+
+  const pipeline = scoutDiscoveryMeta && scoutDiscoveryMeta.pipeline;
+  if (pipeline && pipeline.qualifiedCount != null) {
+    return Number(pipeline.qualifiedCount);
+  }
+
+  return 0;
+}
+
+/**
  * @param {object} mission
  * @param {object} [scoutPayload]
  * @param {object} [scoutDiscoveryMeta] - SPEC-123 unified discovery metadata
@@ -93,12 +129,7 @@ function buildDiscoveryExecutionReport(mission, scoutPayload = null, scoutDiscov
     (mission.progress && mission.progress.stageOutcome) ||
     (step && step.outcome) ||
     null;
-  const prospectCount =
-    outputs.prospectCount != null
-      ? Number(outputs.prospectCount)
-      : Array.isArray(outputs.prospects)
-        ? outputs.prospects.length
-        : 0;
+  const prospectCount = resolveDiscoveryProspectCount(outputs, scoutDiscoveryMeta);
 
   const profileResolved = Boolean(
     outputs.discoveryProfile ||
@@ -114,12 +145,30 @@ function buildDiscoveryExecutionReport(mission, scoutPayload = null, scoutDiscov
   const providerWarnings = warnings.filter((w) =>
     /provider|GOOGLE_PLACES|fixture|search provider/i.test(String(w))
   );
+  const providerReports =
+    (scoutDiscoveryMeta && scoutDiscoveryMeta.providerReports) ||
+    (outputs.discoveryPayload && outputs.discoveryPayload.providerExecution) ||
+    (outputs.payload && outputs.payload.providerExecution) ||
+    [];
+  const providerExecutionAttempted = Array.isArray(providerReports)
+    && providerReports.some(
+      (row) =>
+        row &&
+        row.providerId &&
+        !/existing_pf|repository/i.test(String(row.providerId)) &&
+        (row.status === 'completed' ||
+          row.status === 'empty' ||
+          row.status === 'failed' ||
+          row.status === 'partial' ||
+          (row.execution && row.execution.executed === true))
+    );
   const externalAttempted =
-    profileResolved &&
-    !profileBlocked &&
-    (prospectCount > 0 ||
-      providerWarnings.length > 0 ||
-      Boolean(outputs.summary && outputs.summary.discovered != null));
+    providerExecutionAttempted ||
+    (profileResolved &&
+      !profileBlocked &&
+      (prospectCount > 0 ||
+        providerWarnings.length > 0 ||
+        Boolean(outputs.summary && outputs.summary.discovered != null)));
   const externalUnavailable =
     providerWarnings.some((w) => /No discovery providers available/i.test(String(w))) ||
     errors.some((e) => /provider/i.test(String(e)));
@@ -491,6 +540,7 @@ function emitDiscoveryAuditEvents(report, audit) {
 module.exports = {
   EVIDENCE_SOURCE_IDS,
   findDiscoveryStepResult,
+  resolveDiscoveryProspectCount,
   buildDiscoveryExecutionReport,
   formatDiscoveryOperatorResponse,
   emitDiscoveryAuditEvents,

@@ -16,6 +16,10 @@ const {
   diffCanonicalMissionProjections,
 } = require('../packages/acquisition-mission/CanonicalMissionProjection');
 const { persistOutboundExecution, ensureOutboundExecutionSchema } = require('./acquisitionMissionOutboundPersistence');
+const {
+  ensureAcquisitionKnowledgeSchema,
+  persistLearningCandidatesForStageCommit,
+} = require('./acquisitionKnowledgePersistence');
 
 function defaultPool() {
   return require('../db');
@@ -123,6 +127,94 @@ async function ensureAcquisitionMissionSchema(pool = defaultPool()) {
     )
   `);
   await ensureOutcomeLearningSchema(pool);
+  await ensureObserveReactionSchema(pool);
+}
+
+async function ensureObserveReactionSchema(pool = defaultPool()) {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS acquisition_mission_observe_reactions (
+      id TEXT PRIMARY KEY,
+      observation_id TEXT NOT NULL,
+      mission_id TEXT NOT NULL REFERENCES acquisition_missions(id) ON DELETE CASCADE,
+      tenant_id TEXT NOT NULL,
+      prospect_id TEXT,
+      evidence_type TEXT NOT NULL,
+      evidence_strength TEXT NOT NULL,
+      interpretation_type TEXT,
+      prior_disposition TEXT,
+      updated_disposition TEXT NOT NULL,
+      mission_evidence_tier TEXT,
+      recommended_next_action TEXT NOT NULL,
+      recommended_timing JSONB NOT NULL DEFAULT '{}'::jsonb,
+      rationale TEXT NOT NULL DEFAULT '',
+      human_approval_required BOOLEAN NOT NULL DEFAULT FALSE,
+      external_action_permitted BOOLEAN NOT NULL DEFAULT FALSE,
+      cadence_source TEXT NOT NULL DEFAULT 'unresolved',
+      evaluation_kind TEXT NOT NULL DEFAULT 'initial',
+      evaluation_sequence INTEGER NOT NULL DEFAULT 0,
+      reevaluation_trigger_kind TEXT,
+      reevaluation_trigger_id TEXT,
+      supersedes_reaction_id TEXT,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS evaluation_kind TEXT NOT NULL DEFAULT 'initial'
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS evaluation_sequence INTEGER NOT NULL DEFAULT 0
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS reevaluation_trigger_kind TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS reevaluation_trigger_id TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      ADD COLUMN IF NOT EXISTS supersedes_reaction_id TEXT
+  `);
+  await pool.query(`
+    ALTER TABLE acquisition_mission_observe_reactions
+      DROP CONSTRAINT IF EXISTS acquisition_mission_observe_reactions_observation_id_key
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS acquisition_mission_observe_reactions_initial_uidx
+      ON acquisition_mission_observe_reactions (observation_id)
+      WHERE evaluation_kind = 'initial'
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS acquisition_mission_observe_reactions_reeval_uidx
+      ON acquisition_mission_observe_reactions (observation_id, reevaluation_trigger_id)
+      WHERE reevaluation_trigger_id IS NOT NULL
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS acquisition_mission_observe_reactions_mission_idx
+      ON acquisition_mission_observe_reactions (mission_id, at ASC)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS acquisition_mission_candidate_observe_state (
+      mission_id TEXT NOT NULL REFERENCES acquisition_missions(id) ON DELETE CASCADE,
+      prospect_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      disposition TEXT NOT NULL,
+      evidence_strength TEXT,
+      last_observation_id TEXT,
+      last_evidence_type TEXT,
+      last_reaction_id TEXT,
+      recommended_next_action TEXT,
+      recommended_timing JSONB NOT NULL DEFAULT '{}'::jsonb,
+      sequence_step_sent INTEGER,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (mission_id, prospect_id)
+    )
+  `);
 }
 
 async function ensureOutcomeLearningSchema(pool = defaultPool()) {
@@ -257,7 +349,11 @@ async function persistContribution(row, tenantId, pool = defaultPool(), opts = {
   await pool.query(
     `INSERT INTO acquisition_mission_contributions (id, mission_id, tenant_id, specialist, kind, payload, at)
      VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (id) DO NOTHING`,
+     ON CONFLICT (id) DO UPDATE SET
+       specialist = EXCLUDED.specialist,
+       kind = EXCLUDED.kind,
+       payload = EXCLUDED.payload,
+       at = EXCLUDED.at`,
     [row.id, row.missionId, String(tenantId), row.specialist, row.kind, row, row.at]
   );
   return row;
@@ -265,7 +361,9 @@ async function persistContribution(row, tenantId, pool = defaultPool(), opts = {
 
 async function persistObservation(row, tenantId, pool = defaultPool(), opts = {}) {
   if (!row?.id) return null;
-  if (opts.internalStageCommit !== true) assertExclusiveMissionWriter('persistObservation');
+  if (opts.internalStageCommit !== true && opts.providerWebhookSideEffect !== true) {
+    assertExclusiveMissionWriter('persistObservation');
+  }
   if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
   await pool.query(
     `INSERT INTO acquisition_mission_observations (id, mission_id, tenant_id, specialist, observation, payload, at)
@@ -274,6 +372,408 @@ async function persistObservation(row, tenantId, pool = defaultPool(), opts = {}
     [row.id, row.missionId, String(tenantId), row.specialist, row.observation, row, row.at]
   );
   return row;
+}
+
+/**
+ * Durable provider webhook observation — idempotent on observation id (obs_<provider_event_row_id>).
+ * Does not require mission hydration or stage-commit locks (ADR-099 continuity for Brevo evidence).
+ */
+async function persistProviderCommunicationObservation(providerEvent = {}, pool = defaultPool(), opts = {}) {
+  const {
+    createCommunicationObservation,
+    isCommunicationEvidenceEventType,
+    buildCommunicationObservationId,
+  } = require('../packages/acquisition-mission/CommunicationObservation');
+
+  if (!providerEvent?.missionId) {
+    return { skipped: true, reason: 'missing_mission' };
+  }
+  const tenantId = providerEvent.tenantId != null && providerEvent.tenantId !== ''
+    ? String(providerEvent.tenantId)
+    : null;
+  if (!tenantId) {
+    return { skipped: true, reason: 'missing_tenant' };
+  }
+  if (!isCommunicationEvidenceEventType(providerEvent.eventType)) {
+    return { skipped: true, reason: 'unsupported_event_type', eventType: providerEvent.eventType };
+  }
+
+  const observation = createCommunicationObservation(providerEvent);
+  if (!observation) {
+    return { skipped: true, reason: 'observation_not_created' };
+  }
+
+  const observationId = buildCommunicationObservationId(providerEvent);
+  if (opts.skipEnsure !== true) await ensureAcquisitionMissionSchema(pool);
+
+  const existing = await pool.query(
+    'SELECT id FROM acquisition_mission_observations WHERE id = $1 LIMIT 1',
+    [observationId]
+  );
+  const duplicate = existing.rows.length > 0;
+  if (!duplicate) {
+    await persistObservation(observation, tenantId, pool, {
+      skipEnsure: true,
+      providerWebhookSideEffect: true,
+    });
+  }
+
+  return {
+    observation,
+    observationId,
+    inserted: !duplicate,
+    duplicate,
+    persisted: true,
+  };
+}
+
+function observeReactionFromRow(row) {
+  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  return {
+    ...payload,
+    id: row.id,
+    observationId: row.observation_id,
+    missionId: row.mission_id,
+    tenantId: row.tenant_id,
+    prospectId: row.prospect_id,
+    evidenceType: row.evidence_type,
+    evidenceStrength: row.evidence_strength,
+    interpretationType: row.interpretation_type,
+    priorDisposition: row.prior_disposition,
+    updatedDisposition: row.updated_disposition,
+    missionEvidenceTier: row.mission_evidence_tier,
+    recommendedNextAction: row.recommended_next_action,
+    recommendedTiming: row.recommended_timing || {},
+    rationale: row.rationale,
+    humanApprovalRequired: row.human_approval_required === true,
+    externalActionPermitted: row.external_action_permitted === true,
+    cadenceSource: row.cadence_source,
+    evaluationKind: row.evaluation_kind || payload.evaluationKind || 'initial',
+    evaluationSequence: row.evaluation_sequence != null
+      ? Number(row.evaluation_sequence)
+      : (payload.evaluationSequence != null ? Number(payload.evaluationSequence) : 0),
+    reevaluationTriggerKind: row.reevaluation_trigger_kind || payload.reevaluationTriggerKind || null,
+    reevaluationTriggerId: row.reevaluation_trigger_id || payload.reevaluationTriggerId || null,
+    supersedesReactionId: row.supersedes_reaction_id || payload.supersedesReactionId || null,
+    at: row.at,
+  };
+}
+
+async function findInitialObserveReaction(observationId, pool = defaultPool()) {
+  if (!observationId) return null;
+  const result = await pool.query(
+    `SELECT * FROM acquisition_mission_observe_reactions
+     WHERE observation_id = $1 AND evaluation_kind = 'initial'
+     LIMIT 1`,
+    [String(observationId)]
+  );
+  return result.rows[0] ? observeReactionFromRow(result.rows[0]) : null;
+}
+
+async function findObserveReactionReevaluation(observationId, reevaluationTriggerId, pool = defaultPool()) {
+  if (!observationId || !reevaluationTriggerId) return null;
+  const result = await pool.query(
+    `SELECT * FROM acquisition_mission_observe_reactions
+     WHERE observation_id = $1 AND reevaluation_trigger_id = $2
+     LIMIT 1`,
+    [String(observationId), String(reevaluationTriggerId)]
+  );
+  return result.rows[0] ? observeReactionFromRow(result.rows[0]) : null;
+}
+
+async function loadEffectiveObserveReactions(missionId, pool = defaultPool(), opts = {}) {
+  if (!missionId) return [];
+  if (opts.skipEnsure !== true) await ensureObserveReactionSchema(pool);
+  const result = await pool.query(
+    `SELECT DISTINCT ON (observation_id) *
+     FROM acquisition_mission_observe_reactions
+     WHERE mission_id = $1
+     ORDER BY observation_id, evaluation_sequence DESC, at DESC`,
+    [String(missionId)]
+  );
+  return result.rows.map(observeReactionFromRow);
+}
+
+function candidateObserveStateFromRow(row) {
+  const payload = row.payload && typeof row.payload === 'object' ? row.payload : {};
+  return {
+    ...payload,
+    missionId: row.mission_id,
+    prospectId: row.prospect_id,
+    tenantId: row.tenant_id,
+    disposition: row.disposition,
+    evidenceStrength: row.evidence_strength,
+    lastObservationId: row.last_observation_id,
+    lastEvidenceType: row.last_evidence_type,
+    lastReactionId: row.last_reaction_id,
+    recommendedNextAction: row.recommended_next_action,
+    recommendedTiming: row.recommended_timing || {},
+    sequenceStepSent: row.sequence_step_sent,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function insertObserveReactionRow(row, pool = defaultPool(), opts = {}) {
+  await pool.query(
+    `INSERT INTO acquisition_mission_observe_reactions (
+      id, observation_id, mission_id, tenant_id, prospect_id,
+      evidence_type, evidence_strength, interpretation_type,
+      prior_disposition, updated_disposition, mission_evidence_tier,
+      recommended_next_action, recommended_timing, rationale,
+      human_approval_required, external_action_permitted, cadence_source,
+      evaluation_kind, evaluation_sequence, reevaluation_trigger_kind,
+      reevaluation_trigger_id, supersedes_reaction_id,
+      payload, at
+    ) VALUES (
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+    )`,
+    [
+      row.id,
+      row.observationId,
+      row.missionId,
+      String(row.tenantId),
+      row.prospectId != null ? String(row.prospectId) : null,
+      row.evidenceType,
+      row.evidenceStrength,
+      row.interpretationType || null,
+      row.priorDisposition || null,
+      row.updatedDisposition,
+      row.missionEvidenceTier || row.evidenceStrength,
+      row.recommendedNextAction,
+      JSON.stringify(row.recommendedTiming || {}),
+      row.rationale || '',
+      row.humanApprovalRequired === true,
+      false,
+      row.cadenceSource || row.recommendedTiming?.cadenceSource || 'unresolved',
+      row.evaluationKind || 'initial',
+      row.evaluationSequence != null ? Number(row.evaluationSequence) : 0,
+      row.reevaluationTriggerKind || null,
+      row.reevaluationTriggerId || null,
+      row.supersedesReactionId || null,
+      JSON.stringify(row),
+      row.at,
+    ]
+  );
+  return row;
+}
+
+async function persistObserveReactionReevaluation(row, pool = defaultPool(), opts = {}) {
+  if (!row?.id || !row.observationId) return null;
+  if (opts.skipEnsure !== true) await ensureObserveReactionSchema(pool);
+
+  const triggerId = opts.reevaluationTriggerId || row.reevaluationTriggerId;
+  if (!triggerId) {
+    throw Object.assign(new Error('reevaluationTriggerId is required for cadence re-evaluation.'), {
+      code: 'reevaluation_trigger_required',
+    });
+  }
+
+  const existing = await findObserveReactionReevaluation(row.observationId, triggerId, pool);
+  if (existing) return existing;
+
+  const initial = await findInitialObserveReaction(row.observationId, pool);
+  const reevaluationRow = {
+    ...row,
+    evaluationKind: row.evaluationKind || 'cadence_reevaluation',
+    evaluationSequence: row.evaluationSequence != null ? Number(row.evaluationSequence) : 1,
+    reevaluationTriggerKind: row.reevaluationTriggerKind
+      || opts.reevaluationTriggerKind
+      || 'historical_cadence_annotation',
+    reevaluationTriggerId: triggerId,
+    supersedesReactionId: row.supersedesReactionId || initial?.id || null,
+  };
+
+  try {
+    await insertObserveReactionRow(reevaluationRow, pool, opts);
+    return reevaluationRow;
+  } catch (err) {
+    if (err.code === '23505') {
+      const loaded = await findObserveReactionReevaluation(row.observationId, triggerId, pool);
+      if (loaded) return loaded;
+    }
+    throw err;
+  }
+}
+
+async function persistObserveReaction(row, pool = defaultPool(), opts = {}) {
+  if (!row?.id || !row.observationId) return null;
+  if (opts.skipEnsure !== true) await ensureObserveReactionSchema(pool);
+
+  if (opts.reevaluate === true) {
+    return persistObserveReactionReevaluation(row, pool, opts);
+  }
+
+  const existing = await findInitialObserveReaction(row.observationId, pool);
+  if (existing) return existing;
+
+  try {
+    await insertObserveReactionRow({
+      ...row,
+      evaluationKind: row.evaluationKind || 'initial',
+      evaluationSequence: row.evaluationSequence != null ? Number(row.evaluationSequence) : 0,
+    }, pool, opts);
+    return row;
+  } catch (err) {
+    if (err.code === '23505') {
+      const loaded = await findInitialObserveReaction(row.observationId, pool);
+      if (loaded) return loaded;
+    }
+    throw err;
+  }
+}
+
+async function upsertCandidateObserveState(row, pool = defaultPool(), opts = {}) {
+  if (!row?.missionId || row.prospectId == null) return null;
+  if (opts.skipEnsure !== true) await ensureObserveReactionSchema(pool);
+
+  await pool.query(
+    `INSERT INTO acquisition_mission_candidate_observe_state (
+      mission_id, prospect_id, tenant_id, disposition, evidence_strength,
+      last_observation_id, last_evidence_type, last_reaction_id,
+      recommended_next_action, recommended_timing, sequence_step_sent,
+      payload, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    ON CONFLICT (mission_id, prospect_id) DO UPDATE SET
+      tenant_id = EXCLUDED.tenant_id,
+      disposition = EXCLUDED.disposition,
+      evidence_strength = EXCLUDED.evidence_strength,
+      last_observation_id = EXCLUDED.last_observation_id,
+      last_evidence_type = EXCLUDED.last_evidence_type,
+      last_reaction_id = EXCLUDED.last_reaction_id,
+      recommended_next_action = EXCLUDED.recommended_next_action,
+      recommended_timing = EXCLUDED.recommended_timing,
+      sequence_step_sent = EXCLUDED.sequence_step_sent,
+      payload = EXCLUDED.payload,
+      updated_at = EXCLUDED.updated_at`,
+    [
+      row.missionId,
+      String(row.prospectId),
+      String(row.tenantId),
+      row.disposition,
+      row.evidenceStrength || null,
+      row.lastObservationId || null,
+      row.lastEvidenceType || null,
+      row.lastReactionId || null,
+      row.recommendedNextAction || null,
+      JSON.stringify(row.recommendedTiming || {}),
+      row.sequenceStepSent != null ? row.sequenceStepSent : null,
+      JSON.stringify(row),
+      row.updatedAt || new Date().toISOString(),
+    ]
+  );
+  return row;
+}
+
+/**
+ * Evaluate + persist observe reaction immediately after durable observation write.
+ */
+async function persistObserveReactionFromObservation(input = {}, pool = defaultPool(), opts = {}) {
+  const {
+    mission = {},
+    observation,
+    interpretation = null,
+    executionRecord = null,
+    store = {},
+    outcomes = [],
+  } = input;
+
+  if (!observation?.id || !mission?.id) {
+    return { skipped: true, reason: 'missing_observation_or_mission' };
+  }
+
+  const {
+    evaluateObserveReaction,
+  } = require('../packages/acquisition-mission/ObserveEvaluator');
+  const {
+    foldCandidateObserveState,
+    createObserveReactionReevaluation,
+  } = require('../packages/acquisition-mission/ObserveReaction');
+
+  let preparedCadence = input.preparedCadence || null;
+  if (!preparedCadence && pool && executionRecord?.preparedArtifactRevision) {
+    try {
+      const { loadPreparedOutreachCadence } = require('./preparedOutreachArtifactLoader');
+      preparedCadence = await loadPreparedOutreachCadence({
+        missionId: mission.id,
+        preparedArtifactRevision: executionRecord.preparedArtifactRevision,
+        executionApprovalContributionId: executionRecord.executionApprovalContributionId,
+        executionRecordId: executionRecord.id || observation.evidence?.executionRecordId || null,
+        prospectId: observation.prospectId,
+      }, pool);
+    } catch (_) {
+      preparedCadence = null;
+    }
+  }
+
+  let priorState = input.priorState || null;
+  if (!priorState && observation.prospectId != null) {
+    try {
+      const prior = await pool.query(
+        `SELECT * FROM acquisition_mission_candidate_observe_state
+         WHERE mission_id = $1 AND prospect_id = $2 LIMIT 1`,
+        [mission.id, String(observation.prospectId)]
+      );
+      priorState = prior.rows[0] ? candidateObserveStateFromRow(prior.rows[0]) : {};
+    } catch (_) {
+      priorState = store.getCandidateObserveState
+        ? (store.getCandidateObserveState(mission.id, observation.prospectId) || {})
+        : {};
+    }
+  }
+
+  const evaluated = evaluateObserveReaction({
+    mission,
+    observation,
+    interpretation,
+    priorState: priorState || {},
+    store,
+    outcomes,
+    executionRecord,
+    preparedCadence,
+    now: opts.now,
+  });
+
+  if (evaluated.skipped || !evaluated.reaction) {
+    return evaluated;
+  }
+
+  const isReevaluate = opts.reevaluate === true && opts.reevaluationTriggerId;
+  let reactionToPersist = evaluated.reaction;
+  if (isReevaluate) {
+    const initial = await findInitialObserveReaction(observation.id, pool);
+    reactionToPersist = createObserveReactionReevaluation({
+      ...evaluated.reaction,
+      supersedesReactionId: initial?.id || null,
+      reevaluationTriggerId: opts.reevaluationTriggerId,
+      reevaluationTriggerKind: opts.reevaluationTriggerKind || 'historical_cadence_annotation',
+    }) || evaluated.reaction;
+  }
+
+  const reaction = await persistObserveReaction(reactionToPersist, pool, opts);
+  const reactionForFold = isReevaluate || reaction.id === reactionToPersist.id
+    ? reactionToPersist
+    : reaction;
+  const folded = foldCandidateObserveState(priorState || {}, reactionForFold);
+  const candidateState = {
+    missionId: mission.id,
+    tenantId: mission.tenantId,
+    prospectId: observation.prospectId,
+    ...folded,
+    updatedAt: reactionForFold.at,
+  };
+  await upsertCandidateObserveState(candidateState, pool, opts);
+
+  if (store.addObserveReaction) store.addObserveReaction(reaction);
+  if (store.putCandidateObserveState) {
+    store.putCandidateObserveState(candidateState);
+  }
+
+  return {
+    reaction,
+    candidateState,
+    duplicate: reaction.id !== reactionToPersist.id,
+    reevaluated: isReevaluate === true,
+  };
 }
 
 async function persistOutcome(row, pool = defaultPool(), opts = {}) {
@@ -443,6 +943,7 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     await ensureAcquisitionMissionSchema(pool);
     await ensureExecutionAuditSchema(pool);
     await ensureOutboundExecutionSchema(pool);
+    await ensureAcquisitionKnowledgeSchema(pool);
   }
 
   const lockPool = opts.lockPool || pool;
@@ -479,6 +980,9 @@ async function persistStageCommit(bundle = {}, pool = defaultPool(), opts = {}) 
     }
     if (bundle.audit) {
       await persistExecutionAudit(bundle.audit, client, writeOpts);
+    }
+    if ((bundle.outcomes || []).length || mission.stage === 'learn' || mission.stage === 'improve') {
+      await persistLearningCandidatesForStageCommit(bundle, client, writeOpts);
     }
     await client.query('COMMIT');
   } catch (err) {
@@ -610,7 +1114,9 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
     [key]
   )).rows;
   const contributions = (await pool.query(
-    `SELECT payload FROM acquisition_mission_contributions WHERE tenant_id = $1`,
+    `SELECT payload FROM acquisition_mission_contributions
+      WHERE tenant_id = $1
+      ORDER BY at ASC, id ASC`,
     [key]
   )).rows.map((row) => row.payload);
   const observations = (await pool.query(
@@ -647,10 +1153,40 @@ async function loadTenantMissions(tenantId, pool = defaultPool()) {
     `SELECT payload FROM acquisition_mission_outcome_learnings WHERE tenant_id = $1`,
     [key]
   )).rows.map((row) => row.payload);
-  return { missions, events, contributions, observations, outcomes, learning, predictions, evaluations, outcomeLearnings };
+
+  let observeReactions = [];
+  let candidateObserveStates = [];
+  try {
+    observeReactions = (await pool.query(
+      `SELECT * FROM acquisition_mission_observe_reactions WHERE tenant_id = $1 ORDER BY at ASC`,
+      [key]
+    )).rows.map(observeReactionFromRow);
+    candidateObserveStates = (await pool.query(
+      `SELECT * FROM acquisition_mission_candidate_observe_state WHERE tenant_id = $1`,
+      [key]
+    )).rows.map(candidateObserveStateFromRow);
+  } catch (_) {
+    /* tables may not exist on older deployments until migration runs */
+  }
+
+  return {
+    missions,
+    events,
+    contributions,
+    observations,
+    outcomes,
+    learning,
+    predictions,
+    evaluations,
+    outcomeLearnings,
+    observeReactions,
+    candidateObserveStates,
+  };
 }
 
 const AMO_TABLES = Object.freeze([
+  'acquisition_mission_candidate_observe_state',
+  'acquisition_mission_observe_reactions',
   'acquisition_mission_provider_events',
   'acquisition_mission_outbound_executions',
   'acquisition_mission_outcome_learnings',
@@ -704,6 +1240,8 @@ async function deleteAllAmoData(tenantId = null, pool = defaultPool()) {
       await client.query('DELETE FROM acquisition_mission_learning WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_mission_outcomes WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_mission_observations WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_mission_observe_reactions WHERE tenant_id = $1', [tenantKey]);
+      await client.query('DELETE FROM acquisition_mission_candidate_observe_state WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_mission_contributions WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_mission_events WHERE tenant_id = $1', [tenantKey]);
       await client.query('DELETE FROM acquisition_missions WHERE tenant_id = $1', [tenantKey]);
@@ -714,6 +1252,8 @@ async function deleteAllAmoData(tenantId = null, pool = defaultPool()) {
       await client.query('DELETE FROM acquisition_mission_learning');
       await client.query('DELETE FROM acquisition_mission_outcomes');
       await client.query('DELETE FROM acquisition_mission_observations');
+      await client.query('DELETE FROM acquisition_mission_observe_reactions');
+      await client.query('DELETE FROM acquisition_mission_candidate_observe_state');
       await client.query('DELETE FROM acquisition_mission_contributions');
       await client.query('DELETE FROM acquisition_mission_events');
       await client.query('DELETE FROM acquisition_missions');
@@ -769,6 +1309,15 @@ module.exports = {
   persistEvent,
   persistContribution,
   persistObservation,
+  persistProviderCommunicationObservation,
+  ensureObserveReactionSchema,
+  persistObserveReaction,
+  persistObserveReactionReevaluation,
+  findInitialObserveReaction,
+  findObserveReactionReevaluation,
+  loadEffectiveObserveReactions,
+  upsertCandidateObserveState,
+  persistObserveReactionFromObservation,
   persistOutcome,
   persistLearning,
   persistPrediction,

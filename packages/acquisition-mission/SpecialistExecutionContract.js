@@ -16,12 +16,16 @@ const {
   scoutInput,
   maxInput,
   paigeInput,
+  pennyInput,
   veraInput,
   rexInput,
   emmettInput,
 } = require('./SpecialistInputs');
 const { buildSharedContext } = require('./Context');
 const { buildMemoryContextWithPriorLearning } = require('./OutcomeLearningRetrieval');
+const {
+  canonicalContextForSpecialist,
+} = require('../acquisition-knowledge');
 
 const EXECUTION_STATUSES = Object.freeze({
   SUCCESS: 'SUCCESS',
@@ -265,6 +269,8 @@ function specialistInputFor(specialist, mission, extras = {}) {
       return maxInput(mission, extras);
     case SPECIALISTS.PAIGE:
       return paigeInput(mission, extras);
+    case SPECIALISTS.PENNY:
+      return pennyInput(mission, extras);
     case SPECIALISTS.VERA:
       return veraInput(mission, extras.companies || []);
     case SPECIALISTS.REX:
@@ -290,6 +296,12 @@ function buildExecutionInput(input = {}) {
   const plan = mission.structuredMission || mission.missionPlanDraft || null;
   const contributions = Array.isArray(input.contributions) ? input.contributions : [];
   const sharedContext = buildSharedContext(mission, contributions);
+  const storeKnowledge = input.store && typeof input.store.listAcquisitionKnowledge === 'function'
+    ? input.store.listAcquisitionKnowledge(mission.tenantId || mission.clientId, { missionId: mission.id })
+    : [];
+  const acquisitionKnowledge = Array.isArray(input.acquisitionKnowledge)
+    ? input.acquisitionKnowledge
+    : storeKnowledge;
 
   return Object.freeze({
     spec: 'SPEC-132',
@@ -309,7 +321,10 @@ function buildExecutionInput(input = {}) {
       || (plan && (plan.evidence || plan.evidencePolicy))
       || {}
     ),
-    memoryContext: buildMemoryContextWithPriorLearning(input, mission, specialist),
+    memoryContext: {
+      ...buildMemoryContextWithPriorLearning(input, mission, specialist),
+      acquisitionKnowledge: canonicalContextForSpecialist(acquisitionKnowledge, specialist),
+    },
     operatorPreferences: clone(input.operatorPreferences || {}),
     specialistInput: specialistInputFor(specialist, mission, input),
     structuredOnly: true,
@@ -756,8 +771,14 @@ function fromScoutLegacyOutput(raw = {}, ctx = {}) {
     nextActions,
     durationMs: ctx.durationMs,
     reason: blocked ? (payload.blockReason || raw.summary) : null,
-    requiredPrecondition: blocked ? 'discovery_evidence' : null,
-    recommendedAction: blocked ? 'Adjust mission criteria or expand search.' : null,
+    requiredPrecondition: blocked
+      ? (payload.blockerCode === 'discovery_provider_failed' ? 'discovery_provider' : 'discovery_evidence')
+      : null,
+    recommendedAction: blocked
+      ? (payload.blockerCode === 'discovery_provider_failed'
+        ? (payload.blockReason || 'External discovery provider failed. Retry after provider recovery.')
+        : 'Adjust mission criteria or expand search.')
+      : null,
   });
 
   return result;

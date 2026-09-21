@@ -59,6 +59,30 @@ function collectObjectives(input = {}) {
   });
 }
 
+function canonicalMetricName(name) {
+  const compact = asText(name)
+    .toLowerCase()
+    .replace(/[→⟶➜]/g, ' to ')
+    .replace(/[‐‑‒–—-]/g, ' ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (/^(?:icp|ideal customer) qualified conversations$/.test(compact)) {
+    return 'ICP-Qualified Conversations';
+  }
+  if (/^discovery to enrollment conversion$/.test(compact)) {
+    return 'Discovery-to-Enrollment Conversion';
+  }
+  return asText(name).trim().replace(/[.!?]+$/, '').replace(/\s+/g, ' ');
+}
+
+function canonicalMetricKey(name) {
+  const normalized = canonicalMetricName(name).toLowerCase();
+  if (normalized === 'icp-qualified conversations') return 'icp_qualified_conversations';
+  if (normalized === 'discovery-to-enrollment conversion') return 'discovery_enrollment_conversion';
+  return slugify(normalized);
+}
+
 function inferBusinessStage(input = {}, objectives = []) {
   if (input.businessStage && Object.values(BUSINESS_STAGES).includes(input.businessStage)) {
     return input.businessStage;
@@ -110,8 +134,8 @@ function operatorStatedMetrics(input = {}) {
   const fromInput = asList(input.operatorMetrics);
   const merged = [...fromFacts, ...fromSection, ...fromInput];
   const seen = new Set();
-  return merged.filter((item) => {
-    const key = item.toLowerCase();
+  return merged.map(canonicalMetricName).filter((item) => {
+    const key = canonicalMetricKey(item);
     if (seen.has(key)) return false;
     if (/i don'?t know|not sure|tbd/i.test(item)) return false;
     seen.add(key);
@@ -120,8 +144,10 @@ function operatorStatedMetrics(input = {}) {
 }
 
 function matchCatalogForOperatorMetric(name) {
+  const key = canonicalMetricKey(name);
   const blob = asText(name).toLowerCase();
   return (
+    CATALOG.find((row) => canonicalMetricKey(row.name) === key || row.key === key) ||
     CATALOG.find((row) => blob.includes(row.name.toLowerCase()) || row.name.toLowerCase().includes(blob)) ||
     CATALOG.find((row) => blob.includes(row.key.replace(/_/g, ' '))) ||
     null
@@ -210,9 +236,11 @@ function toRecommendation(entry, understanding, extra = {}) {
     businessOutcome: extra.businessOutcome || entry.businessOutcome,
     whyItBelongs:
       extra.whyItBelongs ||
-      `Max recommends ${extra.name || entry.name} because it measures progress toward ${
-        extra.businessOutcome || entry.businessOutcome
-      } for a ${understanding.stage.replace(/_/g, ' ')} ${understanding.profile.replace(/_/g, ' ')} business.`,
+      (extra.source === METRIC_SOURCE.OPERATOR
+        ? `The operator named ${extra.name || entry.name} as a success signal.`
+        : `Max recommends ${extra.name || entry.name} because it measures progress toward ${
+            extra.businessOutcome || entry.businessOutcome
+          } for a ${understanding.stage.replace(/_/g, ' ')} ${understanding.profile.replace(/_/g, ' ')} business.`),
     status: extra.status || METRIC_STATUS.RECOMMENDED,
     source: extra.source || METRIC_SOURCE.MAX,
     sortOrder: extra.sortOrder != null ? extra.sortOrder : 0,
@@ -246,6 +274,8 @@ function generateDraftScorecard(input = {}) {
     if (matched && metrics.some((row) => row.key === matched.key)) {
       const existing = metrics.find((row) => row.key === matched.key);
       existing.reason = `${existing.reason} The operator already named this as a success signal (${stated}).`;
+      existing.source = METRIC_SOURCE.OPERATOR;
+      existing.whyItBelongs = `The operator named ${stated} as a success signal.`;
       continue;
     }
     if (matched && !metrics.some((row) => row.key === matched.key)) {
@@ -266,10 +296,10 @@ function generateDraftScorecard(input = {}) {
           indicator: 'lagging',
           defaultConfidence: 0.82,
           reason: `The operator named "${stated}" as a way to judge progress. Max is recommending it so the scorecard stays faithful to that intent.`,
-          businessOutcome: understanding.businessGoal,
+          businessOutcome: 'Operator-defined success',
         },
         understanding,
-        { sortOrder: metrics.length }
+        { sortOrder: metrics.length, source: METRIC_SOURCE.OPERATOR }
       )
     );
   }
@@ -370,5 +400,7 @@ module.exports = {
   assertNotRuntime,
   getRuntimeScorecard,
   operatorStatedMetrics,
+  canonicalMetricName,
+  canonicalMetricKey,
   clone,
 };

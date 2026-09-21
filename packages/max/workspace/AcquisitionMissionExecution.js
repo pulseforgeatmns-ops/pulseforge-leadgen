@@ -7,6 +7,7 @@
 
 const amo = require('../../acquisition-mission');
 const { formatRollbackProse } = amo;
+const { resolveExecutionBlocker } = require('./ExecutionBlockerPresentation');
 const {
   EXECUTION_INTENTS,
   createExecutionRequestFromChat,
@@ -363,9 +364,15 @@ function buildExecutionMissionResponse({
       (err.details && Array.isArray(err.details.providerExecution) && err.details.providerExecution.length)
         ? formatProviderExecutionProse(err.details.providerExecution)
         : null;
+    const blocker = resolveExecutionBlocker({
+      error: err,
+      rollbackReason: executionResult.rollbackReason,
+      executionResult,
+      stageName,
+    });
     const evidenceStatus = providerDiagnostics
-      ? `${err.message || err.rollbackReason || formatRollbackProse(stageName)}\n\n${providerDiagnostics}`
-      : err.rollbackReason || err.message || formatRollbackProse(stageName);
+      ? `${blocker.message}\n\n${providerDiagnostics}`
+      : blocker.message;
     const comm = buildMissionCommunication({
       headline: `${stageName} could not execute`,
       mission: mission.title || mission.id,
@@ -373,8 +380,8 @@ function buildExecutionMissionResponse({
       status: 'Unchanged',
       stage: stageName,
       progress,
-      waitingOn: 'Resolve the blocker',
-      nextStep: 'Resolve the blocker and retry.',
+      waitingOn: blocker.waitingOn,
+      nextStep: blocker.nextStep,
       operatorDecision: action === 'plan_approved'
         ? 'Approve mission plan?'
         : action === 'prioritization_approved'
@@ -385,8 +392,8 @@ function buildExecutionMissionResponse({
       includeReasoningMarker: false,
     });
     const prose = providerDiagnostics
-      ? `${formatRollbackProse(stageName)}\n\n${providerDiagnostics}`
-      : formatRollbackProse(stageName);
+      ? `${blocker.message}\n\n${providerDiagnostics}`
+      : blocker.message;
     const structured = applyMissionCommunication(
       buildStructuredResponse({
         answer: prose,
@@ -545,6 +552,9 @@ function buildExecutionMissionResponse({
     const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
     const blocked = executionResult.executionOutcome === 'blocked';
     const sufficientEvidence = hasSufficientEvidenceForPrioritization(discoveryResults);
+    const discoveryBlocker = blocked
+      ? resolveExecutionBlocker({ scoutPayload, stageName: 'Discovery' })
+      : null;
     const comm = buildMissionCommunication({
       headline: 'Mission Updated',
       mission: mission.title || mission.id,
@@ -554,7 +564,7 @@ function buildExecutionMissionResponse({
       progress,
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
       waitingOn: blocked
-        ? 'Discovery blocker'
+        ? (discoveryBlocker && discoveryBlocker.waitingOn) || 'Discovery blocker'
         : sufficientEvidence
           ? 'Prioritization approval'
           : 'Evidence review',
@@ -564,7 +574,7 @@ function buildExecutionMissionResponse({
           : mission.confidence,
       confidenceBreakdown: discoveryResults.confidenceBreakdown,
       nextStep: blocked
-        ? 'Resolve the discovery blocker, then retry Discovery.'
+        ? (discoveryBlocker && discoveryBlocker.nextStep) || 'Resolve the discovery blocker, then retry Discovery.'
         : sufficientEvidence
           ? 'Review discovered prospects and approve prioritization to continue.'
           : 'Review discovery evidence. Scout must surface attributable signals before prioritization.',
@@ -574,7 +584,9 @@ function buildExecutionMissionResponse({
           ? 'Approve prioritization?'
           : 'Request more discovery evidence?',
       discoveryResults: executionResult.discovery ? discoveryResults : null,
-      evidenceStatus: 'Mission state',
+      evidenceStatus: blocked
+        ? (discoveryBlocker && discoveryBlocker.message) || scoutPayload.summary || 'Discovery blocked.'
+        : scoutPayload.summary || 'Discovery complete.',
       sources: ['acquisition_mission', 'scout'],
       reasoningEvidence: buildReasoningEvidence({
         known: [`Mission ${mission.id} executed Discovery after operator approval.`],

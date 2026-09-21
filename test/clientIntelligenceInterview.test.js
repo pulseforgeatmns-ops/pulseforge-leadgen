@@ -37,6 +37,8 @@ const {
   sanitizeSummaryForBrief,
   synthesizeNormalizedFact,
   stripInterviewQuestionEcho,
+  reviewCorrectionOperations,
+  projectWorkingSemanticOperations,
 } = require('../services/clientIntelligenceInterview');
 
 const {
@@ -176,8 +178,8 @@ describe('clientIntelligenceInterview lifecycle', () => {
     assert.equal(turn.progress.completed, 3);
   });
 
-  it('resumes CLIENT_REVIEW into discovery for refinement', async () => {
-    const { opts } = withStore();
+  it('resumes CLIENT_REVIEW into conversational refinement across multiple turns', async () => {
+    const { opts, store } = withStore();
     const { turn } = await completeInterview(opts);
     assert.equal(turn.status, 'CLIENT_REVIEW');
     await assert.rejects(
@@ -195,11 +197,68 @@ describe('clientIntelligenceInterview lifecycle', () => {
       'Our ideal customers are boutique hotel owners along the coast.',
       opts
     );
-    assert.equal(refined.status, 'CLIENT_REVIEW');
-    assert.ok(refined.blueprint);
-    assert.ok(refined.executiveSummary);
+    assert.equal(refined.status, 'DISCOVERY');
+    assert.equal(refined.nextAction, 'ASK');
+    assert.equal(refined.question, null);
+    assert.equal(refined.blueprint, null);
+    assert.match(refined.message, /updated my working understanding/i);
+
+    let session = await store.getSession(turn.interviewId);
+    assert.equal(session.interview_state.refinementPass, true);
     assert.match(
-      refined.blueprint.sections.idealCustomers.summary,
+      session.interview_state.sectionState.idealCustomers.summary,
+      /boutique hotel|ideal customers/i
+    );
+
+    const secondRefinement = await postInterviewMessage(
+      turn.interviewId,
+      'Differentiation is a hypothesis: practical, transformation-focused 12-week approach.',
+      opts
+    );
+    assert.equal(secondRefinement.status, 'DISCOVERY');
+    assert.equal(secondRefinement.nextAction, 'ASK');
+    assert.equal(secondRefinement.blueprint, null);
+
+    session = await store.getSession(turn.interviewId);
+    assert.equal(session.interview_state.refinementPass, true);
+    assert.match(
+      session.interview_state.sectionState.competitiveAdvantages.summary,
+      /hypothesis|transformation-focused|12-week/i
+    );
+  });
+
+  it('explicit refinement regeneration transitions to Blueprint review without approval', async () => {
+    const { opts } = withStore();
+    const { turn } = await completeInterview(opts);
+    await resumeInterview(turn.interviewId, opts);
+
+    const review = await postInterviewMessage(
+      turn.interviewId,
+      'Show me the updated Blueprint.',
+      opts
+    );
+    assert.equal(review.status, 'CLIENT_REVIEW');
+    assert.equal(review.nextAction, 'GENERATE_BLUEPRINT');
+    assert.ok(review.blueprint);
+    assert.equal(review.blueprint.status, 'in_review');
+  });
+
+  it('mixed refinement update plus explicit regeneration persists update first', async () => {
+    const { opts } = withStore();
+    const { turn } = await completeInterview(opts);
+    await resumeInterview(turn.interviewId, opts);
+
+    const review = await postInterviewMessage(
+      turn.interviewId,
+      'Our ideal customers are boutique hotel owners along the coast. Regenerate the brief.',
+      opts
+    );
+    assert.equal(review.status, 'CLIENT_REVIEW');
+    assert.equal(review.nextAction, 'GENERATE_BLUEPRINT');
+    assert.ok(review.blueprint);
+    assert.equal(review.blueprint.status, 'in_review');
+    assert.match(
+      review.blueprint.sections.idealCustomers.summary,
       /boutique hotel|ideal customers/i
     );
   });
@@ -222,6 +281,357 @@ describe('clientIntelligenceInterview lifecycle', () => {
       /^We are Aji Home Services\.?$/i.test(started.blueprint.sections.identity.summary),
       false
     );
+  });
+});
+
+describe('SPEC-226 Blueprint refinement semantic corrections', () => {
+  it('persists inspectable correction history through the resumed Blueprint review path', async () => {
+    const { opts, store } = withStore();
+    const { started } = await completeInterview(opts);
+    await resumeInterview(started.interviewId, opts);
+    await postInterviewMessage(
+      started.interviewId,
+      'One primary offer = 12-week transformation program. Geography is not currently constrained. Lead volume is not a success metric.',
+      opts
+    );
+
+    const session = await store.getSession(started.interviewId);
+    const history = session.interview_state.workingSemanticCorrections;
+    assert.ok(history.length >= 3);
+    assert.ok(history.every((item) => item.evidence_ref && item.created_at));
+    assert.deepEqual(session.interview_state.normalizedFacts.services, ['12-week transformation program']);
+    assert.equal(session.interview_state.normalizedFacts.geography.length, 0);
+    assert.equal(session.interview_state.normalizedFacts.success_metrics.some((item) => /lead volume/i.test(item)), false);
+  });
+
+  it('projects the Babrun correction turn into active beliefs without stale instruction text', () => {
+    const prior = {
+      business_name: 'Babrun',
+      business_description: 'coaching programs for founders',
+      services: ['delegation', 'premium positioning', '12-week coaching'],
+      ideal_customers: ['any small business'],
+      geography: ['United States'],
+      differentiation: 'premium positioning',
+      success_metrics: ['raw lead volume', 'founder dependence'],
+      epistemic_states: { differentiation: 'KNOWN', geography: 'KNOWN' },
+    };
+    const correction = [
+      'One primary offer = 12-week transformation program.',
+      'Delegation is an outcome, not a separate service.',
+      'ICP is an existing operating small business, generally fewer than 10 employees, with a founder operational bottleneck; initial segments are cleaning/home services, e-commerce, and fitness.',
+      'Geography is not currently constrained.',
+      'Differentiation is practical transformation-focused 12-week approach and remains a hypothesis, unvalidated.',
+      'Qualified founder conversations, ICP-qualified conversations, serious program conversations, paid enrollments, and discovery to enrollment conversion are metrics.',
+      'Pain-pattern frequency and segment-response patterns are learning signals.',
+      'Employee problems, lack of owner time, founder dependence, and revenue pressure are pains or learning signals.',
+      'Lead volume is not a success metric.',
+      'We did not establish premium positioning.',
+    ].join('\n');
+
+    const operations = reviewCorrectionOperations(correction, { normalizedFacts: prior }, 'turn-babrun');
+    const active = projectWorkingSemanticOperations(prior, operations);
+
+    assert.ok(operations.length >= 12);
+    assert.ok(operations.some((item) => item.operation === 'CORRECT'));
+    assert.ok(operations.some((item) => item.operation === 'RETRACT'));
+    assert.ok(operations.some((item) => item.operation === 'RECLASSIFY'));
+    assert.deepEqual(active.services, ['12-week transformation program']);
+    assert.ok(active.transformation_areas.some((item) => /delegation/i.test(item)));
+    assert.ok(active.ideal_customers.some((item) => /existing operating small business/i.test(item)));
+    assert.ok(active.ideal_customers.some((item) => /e-commerce/i.test(item)));
+    assert.equal(active.geography.length, 0);
+    // SPEC-228: an explicit "geography isn't a meaningful constraint" retraction
+    // is NOT_APPLICABLE (deliberately unconstrained), not UNKNOWN (unresolved).
+    assert.equal(active.epistemic_states.geography, 'NOT_APPLICABLE');
+    assert.equal(active.epistemic_states.differentiation, 'HYPOTHESIS');
+    assert.match(active.differentiation, /practical transformation-focused/i);
+    assert.equal(active.success_metrics.some((item) => /lead volume|founder dependence/i.test(item)), false);
+    assert.equal(active.excluded_metrics.some((item) => /lead volume/i.test(item)), true);
+    assert.ok(active.pains.some((item) => /founder dependence/i.test(item)));
+    assert.equal(/Do not interpret|not a success metric|did not establish premium positioning/i.test(JSON.stringify(active)), false);
+
+    const brief = buildExecutiveSummary({
+      identity: { summary: 'Babrun is a coaching business.', confidence: 0.7 },
+      services: { summary: '', confidence: 0.7 },
+      idealCustomers: { summary: '', confidence: 0.7 },
+      targetMarkets: { summary: '', confidence: 0.7 },
+      competitiveAdvantages: { summary: '', confidence: 0.7 },
+      successMetrics: { summary: '', confidence: 0.7 },
+    }, { normalizedFacts: active, clientId: 1 });
+    const rendered = JSON.stringify(brief);
+    assert.match(rendered, /12-week transformation program/i);
+    assert.match(rendered, /qualified founder conversations/i);
+    assert.equal(/lead volume|premium positioning|not a success metric|did not establish/i.test(rendered), false);
+  });
+
+  it('fails closed for an unresolved correction-like proposition', () => {
+    const operations = reviewCorrectionOperations(
+      'Correction: move that ambiguous thing to the right category.',
+      { normalizedFacts: {} },
+      'turn-ambiguous'
+    );
+    assert.deepEqual(operations.map((item) => item.operation), ['CLARIFY']);
+    assert.equal(projectWorkingSemanticOperations({ success_metrics: ['existing metric'] }, operations).success_metrics[0], 'existing metric');
+  });
+});
+
+describe('SPEC-228 complete pre-approval correction projection', () => {
+  const { sectionsFromNormalizedFacts } = require('../services/clientIntelligenceInterview');
+
+  // Production-equivalent contamination: identity accumulation, stale
+  // services/metric confusion, literal correction prose stored as data, and
+  // a prior Blueprint section state capable of stale fallback.
+  const CONTAMINATED_PRIOR = {
+    business_name: 'Babrun',
+    business_description: 'Babrun is a coaching programs for founders',
+    services: ['delegation', 'premium positioning', '12-week coaching'],
+    ideal_customers: ['any small business', 'ICP-qualified conversations'],
+    ideal_customer_traits: [],
+    disqualified_customers: [],
+    geography: ["Do not interpret geography isn't the primary constraint as a geographic market"],
+    vertical_focus: null,
+    differentiation: 'premium positioning',
+    brand_voice: null,
+    ninety_day_outcomes: null,
+    success_metrics: [
+      'raw lead volume',
+      'founder dependence',
+      'lead volume is explicitly not a success metric',
+    ],
+    epistemic_states: {
+      business_description: 'KNOWN',
+      services: 'KNOWN',
+      ideal_customers: 'KNOWN',
+      geography: 'KNOWN',
+      differentiation: 'KNOWN',
+    },
+    hypotheses: {},
+    evidence_statements: {},
+    business_facts: {},
+    transformation_areas: [],
+    pains: [],
+    learning_signals: [],
+    excluded_metrics: [],
+  };
+
+  const PRIOR_SECTIONS = {
+    identity: {
+      summary: 'Babrun is a Babrun is a coaching programs for founders. This identity framing is how the operator describes the business today.',
+      confidence: 0.7,
+      evidenceIds: [],
+      unknowns: [],
+    },
+    successMetrics: {
+      summary: 'Success will be judged by raw lead volume, lead volume is explicitly not a success metric.',
+      confidence: 0.7,
+      evidenceIds: [],
+      unknowns: [],
+    },
+  };
+
+  const PRIOR_CORRECTIONS = [
+    {
+      operation: 'ASSERT',
+      slot: 'services',
+      value: '12-week coaching',
+      evidence_ref: 'turn-prior',
+      created_at: '2026-08-01T00:00:00.000Z',
+      source_text: 'Add 12-week coaching as a service.',
+    },
+  ];
+
+  const PRODUCTION_CORRECTION_TEXT = [
+    'Before I approve this, I need to correct a few parts of your understanding.',
+    '',
+    'Babrun has one primary offer: the 12-week transformation program. Managing employees, delegation, reducing founder dependence, and reducing the owner\'s day-to-day operational burden are transformation areas or outcomes, not separate services.',
+    '',
+    'Geography isn\'t currently a meaningful targeting constraint. We\'re primarily targeting by business stage and characteristics: operating small businesses, generally fewer than 10 employees, where the founder is still too central to operations. Cleaning and other home services, e-commerce, and fitness are initial segments to test.',
+    '',
+    'Our differentiation is still a hypothesis: the practical, transformation-focused 12-week approach may be more compelling than generic business education or open-ended advice because it changes how the owner actually operates. We have not validated that as a consistent buying reason yet.',
+    '',
+    'The core measures I actually want to watch are qualified founder conversations, ICP-qualified conversations, serious program conversations, paid enrollments, and discovery-to-enrollment conversion.',
+    '',
+    'Pain patterns and segment response patterns are learning signals. Lack of owner time, founder dependence, employee problems, and revenue pressure are pain categories, not standalone metrics. Raw lead volume is explicitly not a success metric.',
+    '',
+    'We have not established premium positioning for Babrun.',
+    '',
+    'Please update your understanding from these corrections and regenerate the Executive Business Brief for my review. Do not approve the Blueprint yet.',
+  ].join('\n');
+
+  function runCorrectionRound(priorFacts, priorSections) {
+    const operations = reviewCorrectionOperations(
+      PRODUCTION_CORRECTION_TEXT,
+      { normalizedFacts: priorFacts },
+      'turn-babrun-228'
+    );
+    const active = projectWorkingSemanticOperations(priorFacts, operations);
+    const sections = sectionsFromNormalizedFacts(active, priorSections);
+    return { operations, active, sections };
+  }
+
+  it('eliminates business_description identity accumulation from a contaminated prior', () => {
+    const { active } = runCorrectionRound(CONTAMINATED_PRIOR, PRIOR_SECTIONS);
+    assert.equal(active.business_name, 'Babrun');
+    assert.equal(/babrun is a babrun/i.test(active.business_description || ''), false);
+    assert.equal(/^babrun is a/i.test(active.business_description || ''), false);
+  });
+
+  it('passes the SPEC-228 hard normalizedFacts state gate', () => {
+    const { operations, active } = runCorrectionRound(CONTAMINATED_PRIOR, PRIOR_SECTIONS);
+
+    // OFFER
+    assert.deepEqual(active.services, ['12-week transformation program']);
+    for (const term of ['managing employees', 'delegation', 'founder dependence', 'operational burden']) {
+      assert.ok(
+        active.transformation_areas.some((item) => new RegExp(term, 'i').test(item)),
+        `expected transformation_areas to contain "${term}"`
+      );
+    }
+    assert.equal(active.services.some((item) => /delegation|premium positioning|employee/i.test(item)), false);
+
+    // ICP
+    assert.ok(active.ideal_customers.some((item) => /existing operating small business/i.test(item)));
+    assert.ok(active.ideal_customers.some((item) => /cleaning/i.test(item)));
+    assert.ok(active.ideal_customers.some((item) => /e-commerce/i.test(item)));
+    assert.ok(active.ideal_customers.some((item) => /fitness/i.test(item)));
+    assert.ok(active.ideal_customer_traits.some((item) => /fewer than 10 employees/i.test(item)));
+    assert.ok(active.ideal_customer_traits.some((item) => /founder operational bottleneck/i.test(item)));
+    assert.equal(active.ideal_customers.some((item) => /conversations|enrollments/i.test(item)), false);
+
+    // GEOGRAPHY
+    assert.equal(active.geography.length, 0);
+    assert.equal(active.epistemic_states.geography, 'NOT_APPLICABLE');
+    assert.equal(active.geography.some((item) => /do not interpret/i.test(item)), false);
+
+    // DIFFERENTIATION
+    assert.match(active.differentiation, /practical.*transformation-focused 12-week approach/i);
+    assert.equal(active.epistemic_states.differentiation, 'HYPOTHESIS');
+    assert.equal(/premium positioning/i.test(active.differentiation || ''), false);
+
+    // PAINS
+    for (const pain of ['lack of owner time', 'founder dependence', 'employee problems', 'revenue pressure']) {
+      assert.ok(active.pains.some((item) => new RegExp(pain, 'i').test(item)), `expected pains to contain "${pain}"`);
+    }
+
+    // METRICS
+    for (const metric of [
+      'qualified founder conversations',
+      'icp-qualified conversations',
+      'serious program conversations',
+      'paid enrollments',
+      'discovery-to-enrollment conversion',
+    ]) {
+      assert.ok(
+        active.success_metrics.some((item) => new RegExp(metric, 'i').test(item)),
+        `expected success_metrics to contain "${metric}"`
+      );
+    }
+    for (const excluded of ['raw lead volume', 'lack of owner time', 'founder dependence', 'employee problems', 'revenue pressure']) {
+      assert.equal(
+        active.success_metrics.some((item) => new RegExp(excluded, 'i').test(item)),
+        false,
+        `expected success_metrics to NOT contain "${excluded}"`
+      );
+    }
+    assert.ok(active.excluded_metrics.some((item) => /raw lead volume/i.test(item)));
+
+    // CORRECTION INSTRUCTION LEAKAGE
+    assert.equal(
+      /do not interpret|not a success metric|not a standalone metric|did not establish|not established/i.test(JSON.stringify(active)),
+      false
+    );
+
+    assert.ok(operations.some((item) => item.operation === 'CORRECT'));
+    assert.ok(operations.some((item) => item.operation === 'RETRACT'));
+    assert.ok(operations.some((item) => item.operation === 'RECLASSIFY'));
+  });
+
+  it('passes the SPEC-228 Blueprint regeneration gate', () => {
+    const { active, sections } = runCorrectionRound(CONTAMINATED_PRIOR, PRIOR_SECTIONS);
+    const brief = buildExecutiveSummary(sections, { normalizedFacts: active, clientId: 1 });
+    const rendered = JSON.stringify(brief);
+
+    assert.equal(/babrun is a babrun/i.test(rendered), false);
+    assert.match(rendered, /12-week transformation program/i);
+    assert.match(rendered, /qualified founder conversations/i);
+    assert.equal(
+      /premium positioning|lead volume is explicitly not a success metric|do not interpret|did not establish|not a standalone metric/i.test(rendered),
+      false
+    );
+  });
+
+  it('does not reintroduce stale identity/metric prose from prior sections when active state is clean', () => {
+    const { sections } = runCorrectionRound(CONTAMINATED_PRIOR, PRIOR_SECTIONS);
+    assert.equal(/babrun is a babrun/i.test(sections.identity.summary), false);
+    assert.equal(/lead volume is explicitly not a success metric/i.test(sections.successMetrics.summary), false);
+  });
+
+  it('runs stably across three refinement cycles without re-accumulating stale beliefs', () => {
+    let facts = CONTAMINATED_PRIOR;
+    let sections = PRIOR_SECTIONS;
+    let corrections = [...PRIOR_CORRECTIONS];
+    for (let round = 0; round < 3; round += 1) {
+      const operations = reviewCorrectionOperations(
+        PRODUCTION_CORRECTION_TEXT,
+        { normalizedFacts: facts },
+        `turn-babrun-228-round-${round}`
+      );
+      corrections = [...corrections, ...operations];
+      facts = projectWorkingSemanticOperations(facts, operations);
+      sections = sectionsFromNormalizedFacts(facts, sections);
+      assert.equal(/babrun is a babrun/i.test(facts.business_description || ''), false);
+      assert.equal(/babrun is a babrun/i.test(sections.identity.summary || ''), false);
+      assert.deepEqual(facts.services, ['12-week transformation program']);
+      assert.equal(facts.geography.length, 0);
+    }
+    assert.ok(corrections.length > PRIOR_CORRECTIONS.length);
+  });
+
+  it('fails closed (CLARIFY, no mutation) for an ambiguous negation target', () => {
+    const priorMetrics = ['existing metric'];
+    const operations = reviewCorrectionOperations(
+      'Correction: that is not a metric, remove it.',
+      { normalizedFacts: { success_metrics: priorMetrics } },
+      'turn-ambiguous-negation'
+    );
+    assert.ok(operations.some((item) => item.operation === 'CLARIFY'));
+    const active = projectWorkingSemanticOperations({ success_metrics: priorMetrics }, operations);
+    assert.deepEqual(active.success_metrics, priorMetrics);
+  });
+
+  it('fails closed (CLARIFY, no mutation) when a reclassification target is missing', () => {
+    const priorServices = ['existing service'];
+    const operations = reviewCorrectionOperations(
+      'Reclassify that into the right bucket.',
+      { normalizedFacts: { services: priorServices } },
+      'turn-ambiguous-reclassify'
+    );
+    assert.ok(operations.some((item) => item.operation === 'CLARIFY'));
+    const active = projectWorkingSemanticOperations({ services: priorServices }, operations);
+    assert.deepEqual(active.services, priorServices);
+  });
+
+  it('keeps structured Save Edits and conversational refinement producing one coherent state', () => {
+    const { applyCorrectionToNormalizedFacts } = require('../services/clientIntelligenceInterview');
+
+    // A structured Save Edit on the identity field, typed the way an operator
+    // naturally would (including the business name).
+    let facts = applyCorrectionToNormalizedFacts(CONTAMINATED_PRIOR, {
+      section: 'identity',
+      substance: 'Babrun is a coaching company for small business founders',
+    });
+    assert.equal(/babrun is a babrun/i.test(facts.business_description || ''), false);
+
+    // Structured edits must not be routed through reviewCorrectionOperations —
+    // that free-form path stays a separate boundary.
+    const structuredOps = reviewCorrectionOperations('', { normalizedFacts: facts }, 'turn-structured');
+    assert.deepEqual(structuredOps, []);
+
+    // Conversational refinement afterward must still produce one coherent state.
+    const { operations, active } = runCorrectionRound(facts, PRIOR_SECTIONS);
+    assert.equal(/babrun is a babrun/i.test(active.business_description || ''), false);
+    assert.deepEqual(active.services, ['12-week transformation program']);
+    assert.ok(operations.length > 0);
   });
 });
 

@@ -212,6 +212,7 @@ app.use('/', require('./routes/outcomeIntelligence'));
 app.use('/', require('./routes/contentOutcomeIntelligence'));
 app.use('/', require('./routes/contentLearning'));
 app.use('/', require('./routes/knowledgeAdmin'));
+app.use('/', require('./routes/acquisitionKnowledge'));
 app.use('/', require('./routes/marketIntelligence'));
 app.use('/', require('./routes/relationshipIntelligence'));
 app.use('/', require('./routes/clientIntelligence'));
@@ -222,7 +223,9 @@ app.use('/', require('./routes/acquisitionIntelligenceModel'));
 app.use('/', require('./routes/acquisitionIntelligenceCompiler'));
 app.use('/', require('./routes/operatorScorecard'));
 app.use('/', require('./routes/emmettOutbound'));
+app.use('/', require('./routes/tenantOutreach'));
 app.use('/', require('./routes/acquisitionMissions'));
+app.use('/', require('./routes/operatorJudgments'));
 app.use('/', require('./routes/tenantWorkspace'));
 app.use('/', require('./routes/registration'));
 app.use('/', require('./routes/pilotOnboarding'));
@@ -246,6 +249,7 @@ app.use('/admin/field-visits', require('./routes/aoAdmin'));
 // Public marketing funnel — no session auth (see routes/scorecard.js)
 app.use('/', require('./routes/scorecard'));
 app.use('/', require('./routes/walkthrough'));
+app.use('/', require('./routes/leadQualificationReviews'));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
 // curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.

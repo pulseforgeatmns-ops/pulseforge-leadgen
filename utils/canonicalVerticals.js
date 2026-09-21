@@ -11,6 +11,21 @@
  */
 
 const { normalizeVertical } = require('./normalize');
+const { segmentToSearchKey } = require('../packages/acquisition-mission/MissionNaming');
+
+/**
+ * Mission segment keys (AIM / Scout) → CRM prospect vertical (PEC-116 registry).
+ * Target segments are not CRM verticals; admission must project before INSERT.
+ */
+const MISSION_SEGMENT_TO_CRM_VERTICAL = Object.freeze({
+  short_term_rental: 'property_management',
+  str_manager: 'property_management',
+  str: 'property_management',
+  property_manager: 'property_management',
+  law_firm: 'legal',
+  facility_management: 'facility_services',
+  auto_repair: 'auto',
+});
 
 /** @type {ReadonlyArray<{ value: string, label: string }>} */
 const CANONICAL_BUSINESS_VERTICALS = Object.freeze([
@@ -96,6 +111,40 @@ function assertCanonicalBusinessVertical(rawValue) {
   return normalized;
 }
 
+function resolveMissionBoundCrmVertical(mission = {}, candidate = {}) {
+  const plan = mission.structuredMission || mission.missionPlanDraft || {};
+  const candidates = [
+    plan.market?.segment,
+    plan.market?.label,
+    mission.targetSegment,
+    candidate.vertical,
+  ].filter(Boolean);
+
+  for (const raw of candidates) {
+    if (isCanonicalBusinessVertical(raw)) {
+      return normalizeVertical(raw);
+    }
+
+    const segmentKey = segmentToSearchKey(raw);
+    if (segmentKey && MISSION_SEGMENT_TO_CRM_VERTICAL[segmentKey]) {
+      return MISSION_SEGMENT_TO_CRM_VERTICAL[segmentKey];
+    }
+    if (segmentKey && isCanonicalBusinessVertical(segmentKey)) {
+      return normalizeVertical(segmentKey);
+    }
+
+    const normalized = normalizeVertical(raw);
+    if (normalized && MISSION_SEGMENT_TO_CRM_VERTICAL[normalized]) {
+      return MISSION_SEGMENT_TO_CRM_VERTICAL[normalized];
+    }
+    if (normalized && isCanonicalBusinessVertical(normalized)) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
 function mapVerticalConstraintError(err) {
   if (err && err.code === '23514' && /vertical_canonical_chk/.test(err.constraint || '')) {
     const mapped = new Error('The selected business vertical is not currently supported.');
@@ -110,8 +159,12 @@ function sqlInList(values) {
   return values.map((value) => `'${String(value).replace(/'/g, "''")}'`).join(', ');
 }
 
+function canonicalVerticalSqlInList() {
+  return sqlInList(CANONICAL_BUSINESS_VERTICALS.map((entry) => entry.value));
+}
+
 async function ensureCanonicalVerticalConstraint(pool) {
-  const allowed = CANONICAL_BUSINESS_VERTICALS.map((entry) => entry.value);
+  const allowedList = canonicalVerticalSqlInList();
   await pool.query(`
     DO $$
     BEGIN
@@ -122,7 +175,25 @@ async function ensureCanonicalVerticalConstraint(pool) {
           AND conrelid = 'clients'::regclass
       ) THEN
         ALTER TABLE clients ADD CONSTRAINT clients_vertical_canonical_chk
-          CHECK (vertical IS NULL OR vertical IN (${sqlInList(allowed)}));
+          CHECK (vertical IS NULL OR vertical IN (${allowedList}));
+      END IF;
+    END $$;
+  `);
+}
+
+async function ensureProspectsCanonicalVerticalConstraint(pool) {
+  const allowedList = canonicalVerticalSqlInList();
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'prospects_vertical_canonical_chk'
+          AND conrelid = 'prospects'::regclass
+      ) THEN
+        ALTER TABLE prospects ADD CONSTRAINT prospects_vertical_canonical_chk
+          CHECK (vertical IS NULL OR vertical IN (${allowedList}));
       END IF;
     END $$;
   `);
@@ -130,11 +201,14 @@ async function ensureCanonicalVerticalConstraint(pool) {
 
 module.exports = {
   CANONICAL_BUSINESS_VERTICALS,
+  MISSION_SEGMENT_TO_CRM_VERTICAL,
   listCanonicalBusinessVerticals,
   isCanonicalBusinessVertical,
   labelForBusinessVertical,
   unsupportedVerticalMessage,
   assertCanonicalBusinessVertical,
+  resolveMissionBoundCrmVertical,
   mapVerticalConstraintError,
   ensureCanonicalVerticalConstraint,
+  ensureProspectsCanonicalVerticalConstraint,
 };

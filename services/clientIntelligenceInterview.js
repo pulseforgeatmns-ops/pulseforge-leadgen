@@ -12,6 +12,7 @@
  */
 
 const crypto = require('crypto');
+const { hash: canonicalEvidenceDigest } = require('../lib/canonicalSemanticWrite');
 const defaultPool = require('../db');
 const {
   createPlaybookFromApprovedBlueprint,
@@ -55,6 +56,14 @@ const {
   applyScoutExecutionResult,
   executeScoutWorkRequest,
 } = require('./clientIntelligenceCampaignPlanning');
+const {
+  EPISTEMIC_STATES,
+  classifyEpistemicState,
+  createBusinessFact,
+  preserveEpistemicState,
+  extractBusinessFacts,
+  projectBusinessFacts,
+} = require('./clientIntelligenceEpistemic');
 const {
   MESSAGE_CLASSES,
   ARTIFACT_KINDS,
@@ -261,6 +270,9 @@ const DOMAIN_POINTER_RE =
 const REFINEMENT_INTENT_RE =
   /\b(please\s+refine|this\s+revision|max\s+is\s+treating|regenerate(?:\s+the\s+brief)?|turn\s+the\s+raw\s+(?:interview\s+)?answers|instructions?\s+to\s+max|not\s+facts?\s+about(?:\s+\w+)?|refinement\s+feedback|revision\s+guidance|the\s+brief\s+is\s+treating|please\s+regenerate|this\s+still\s+sounds\s+weird|sentences?\s+don'?t\s+make\s+sense|max\s+isn'?t\s+understanding|brief\s+should\s+be\s+more\s+conversational|this\s+needs\s+to\s+be\s+fixed)\b/i;
 
+const EXPLICIT_BLUEPRINT_REGENERATION_RE =
+  /\b(regenerate|generate|rebuild|update|show|review|rerun|redo)\b.{0,80}\b(brief|blueprint|executive\s+business\s+brief|executive\s+summary)\b|\b(brief|blueprint|executive\s+business\s+brief|executive\s+summary)\b.{0,80}\b(regenerate|generated|rebuilt|updated|review|again)\b|\blet'?s\s+review\s+(?:it|the\s+(?:brief|blueprint))\b/i;
+
 /** Supplemental / out-of-order context markers (start-anchored). */
 const SUPPLEMENTAL_CONTEXT_RE =
   /^\s*(?:i\s+also\s+forgot(?:\s+to\s+mention)?|also\s+forgot(?:\s+to\s+mention)?|i\s+forgot(?:\s+to\s+mention)?|forgot\s+to\s+mention|also|one more thing|add this|for context|another thing|not for this question,? but|this might matter|btw|by the way|oh,? and|additionally|worth noting)\b/i;
@@ -331,6 +343,7 @@ const SECTION_TITLES = Object.freeze({
   identity: 'Identity',
   services: 'Services',
   idealCustomers: 'Ideal Customers',
+  idealCustomerTraits: 'Ideal Customer Traits',
   avoidCustomers: 'Customers to Avoid',
   targetMarkets: 'Target Markets',
   competitiveAdvantages: 'Competitive Advantages',
@@ -511,6 +524,10 @@ function looksLikeExplicitUnknown(text) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return true;
+  const epistemicState = classifyEpistemicState(text);
+  if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
+    return true;
+  }
   if (
     /^(n\/?a|none|no|nothing|nope|nil|unknown|not sure|unsure|idk|tbd|-)$/i.test(s)
   ) {
@@ -606,6 +623,10 @@ function looksLikeRefinementFeedback(text) {
     return true;
   }
   return false;
+}
+
+function hasExplicitBlueprintRegenerationIntent(text) {
+  return EXPLICIT_BLUEPRINT_REGENERATION_RE.test(String(text || '').trim());
 }
 
 function looksLikeCorrection(text) {
@@ -1383,6 +1404,30 @@ function stripLeadingWeAre(text) {
     .replace(/^(we are|we're|i am|i'm|this is|our company is|the business is)\s+/i, '');
 }
 
+/**
+ * SPEC-228 — business_description is a description-only slot. Downstream
+ * identity synthesis prepends business_name ("${name} is a ${description}"),
+ * so a description that already carries a "<name> is a ..." wrap causes
+ * accumulating duplication across refinement rounds. Strip that wrap here so
+ * business_description never becomes an opaque prose accumulator.
+ */
+function sanitizeIdentityDescription(name, description) {
+  let desc = String(description || '').trim();
+  if (!desc) return desc;
+  const cleanName = String(name || '').trim();
+  if (!cleanName) return normalizeBusinessPhrase(desc);
+  const escapedName = escapeRegExp(cleanName);
+  const wrapRe = new RegExp(`^${escapedName}\\s+(?:is|are)\\s+(?:a|an)\\s+`, 'i');
+  const bareRe = new RegExp(`^${escapedName}\\s*[:,\\-—–]?\\s+`, 'i');
+  for (let i = 0; i < 6; i += 1) {
+    const before = desc;
+    if (wrapRe.test(desc)) desc = desc.replace(wrapRe, '').trim();
+    else if (bareRe.test(desc)) desc = desc.replace(bareRe, '').trim();
+    if (desc === before) break;
+  }
+  return normalizeBusinessPhrase(desc);
+}
+
 function titleCaseWords(text) {
   return String(text || '')
     .split(/(\s+)/)
@@ -1544,6 +1589,46 @@ function composeCustomerConstraintPresentation(businessName, rawConstraint) {
   const subject = businessSubject(businessName || 'The business');
   const raw = normalizeMechanicalTypos(String(rawConstraint || '').trim());
   if (!raw) return '';
+
+  const stripTerminalPunctuation = (value) => String(value || '').replace(/[.!?;]+$/, '').trim();
+  const isFramedStatement = (value) =>
+    /^(?:(?:i|we)(?:['’]d|\s+(?:would|prefer|do not|don't|will not|won't|avoid|exclude))\s+|(?:the|this) business\s+(?:avoids?|excludes?|prefers?\s+(?:not|to\s+avoid)|does not|doesn't|would rather not|will not|won't)\s+)/i.test(
+      value
+    );
+  const preserveFramedStatement = (value) => {
+    const cleaned = stripTerminalPunctuation(value);
+    if (/^(?:we|i)(?:['’]d)\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)(?:['’]d)\s+/i, `${subject} would `);
+    }
+    if (/^(?:we|i)\s+prefer\s+not\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+prefer\s+not\s+/i, `${subject} prefers not `);
+    }
+    if (/^(?:we|i)\s+do not\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+do not\s+/i, `${subject} does not `);
+    }
+    if (/^(?:we|i)\s+don't\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+don't\s+/i, `${subject} doesn't `);
+    }
+    if (/^(?:we|i)\s+(?:would|will not|won't|avoid|exclude)\s+/i.test(cleaned)) {
+      return cleaned.replace(/^(?:we|i)\s+/i, `${subject} `);
+    }
+    return cleaned.replace(/^(?:the|this) business\s+/i, `${subject} `);
+  };
+
+  const clauses = raw
+    .split(/\s*;\s*/)
+    .map(stripTerminalPunctuation)
+    .filter(Boolean);
+  if (clauses.length > 1 || isFramedStatement(raw)) {
+    return clauses
+      .map((clause) =>
+        isFramedStatement(clause)
+          ? preserveFramedStatement(clause)
+          : composeCustomerConstraintPresentation(businessName, clause)
+      )
+      .filter(Boolean)
+      .join('; ');
+  }
 
   // Price-first disqualification stays categorical (existing behavior).
   if (/lowest price|cheap|bargain|price.?first/i.test(raw)) {
@@ -2107,6 +2192,27 @@ function emptyNormalizedFacts() {
     brand_voice: null,
     ninety_day_outcomes: null,
     success_metrics: [],
+    epistemic_states: {
+      business_name: EPISTEMIC_STATES.UNRESOLVED,
+      business_description: EPISTEMIC_STATES.UNRESOLVED,
+      services: EPISTEMIC_STATES.UNRESOLVED,
+      growth_focus: EPISTEMIC_STATES.UNRESOLVED,
+      ideal_customers: EPISTEMIC_STATES.UNRESOLVED,
+      disqualified_customers: EPISTEMIC_STATES.UNRESOLVED,
+      geography: EPISTEMIC_STATES.UNRESOLVED,
+      differentiation: EPISTEMIC_STATES.UNRESOLVED,
+      brand_voice: EPISTEMIC_STATES.UNRESOLVED,
+      ninety_day_outcomes: EPISTEMIC_STATES.UNRESOLVED,
+      success_metrics: EPISTEMIC_STATES.UNRESOLVED,
+    },
+    hypotheses: {},
+    evidence_statements: {},
+    business_facts: {},
+    transformation_areas: [],
+    pains: [],
+    learning_signals: [],
+    excluded_metrics: [],
+    superseded_slots: [],
   };
 }
 
@@ -2126,6 +2232,27 @@ function cloneNormalizedFacts(facts) {
     brand_voice: src.brand_voice || null,
     ninety_day_outcomes: src.ninety_day_outcomes || null,
     success_metrics: [...(src.success_metrics || [])],
+    epistemic_states: {
+      ...(emptyNormalizedFacts().epistemic_states),
+      ...(src.epistemic_states || {}),
+    },
+    hypotheses: {
+      ...(src.hypotheses || {}),
+    },
+    evidence_statements: {
+      ...(src.evidence_statements || {}),
+    },
+    business_facts: Object.fromEntries(
+      Object.entries(src.business_facts || {}).map(([key, facts]) => [
+        key,
+        Array.isArray(facts) ? facts.map((fact) => ({ ...fact })) : [],
+      ])
+    ),
+    transformation_areas: [...(src.transformation_areas || [])],
+    pains: [...(src.pains || [])],
+    learning_signals: [...(src.learning_signals || [])],
+    excluded_metrics: [...(src.excluded_metrics || [])],
+    superseded_slots: [...(src.superseded_slots || [])],
   };
 }
 
@@ -2149,16 +2276,61 @@ function extractPlaces(text) {
   return places;
 }
 
+const SECTION_TO_PRIMARY_FIELD = Object.freeze({
+  identity: 'business_description',
+  services: 'services',
+  idealCustomers: 'ideal_customers',
+  idealCustomerTraits: 'ideal_customer_traits',
+  avoidCustomers: 'disqualified_customers',
+  targetMarkets: 'geography',
+  competitiveAdvantages: 'differentiation',
+  brandVoice: 'brand_voice',
+  campaignGoals: 'ninety_day_outcomes',
+  successMetrics: 'success_metrics',
+});
+
 /**
  * Ingest a direct answer into normalized evidence for a Blueprint section.
- * SPEC-099: explicit unknowns never become factual values; prior known facts survive.
+ * SPEC-099/SPEC-221: explicit unknowns and hypotheses never become factual values;
+ * epistemic state is recorded explicitly.
  */
-function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
+function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}) {
   const next = cloneNormalizedFacts(facts);
   const cleaned = cleanRawAnswer(sectionKey, stripInterviewQuestionEcho(rawAnswer));
   if (!cleaned) return next;
+
+  const primaryField = SECTION_TO_PRIMARY_FIELD[sectionKey] || sectionKey;
+  const extractedFacts = extractBusinessFacts(rawAnswer, {
+    section: sectionKey,
+    subject: primaryField,
+    provenance: opts.provenance || null,
+  });
+  const existingFacts = next.business_facts[primaryField] || [];
+  next.business_facts[primaryField] = [
+    ...existingFacts,
+    ...extractedFacts.filter((fact) => !existingFacts.some((prior) => prior.id === fact.id)),
+  ];
+  const projection = projectBusinessFacts(next.business_facts[primaryField], primaryField);
+  const epistemicState = projection.epistemicState;
+
+  next.epistemic_states[primaryField] = epistemicState;
+  next.evidence_statements[primaryField] = projection.evidence || String(rawAnswer || cleaned);
+
+  if (projection.hypothesisValue) {
+    next.hypotheses[primaryField] = projection.hypothesisValue;
+  }
+
+  if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
+    return next;
+  }
+  if (epistemicState === EPISTEMIC_STATES.HYPOTHESIS) {
+    next.hypotheses[primaryField] = cleaned;
+    return next;
+  }
+
   // Explicit unknowns leave the section unset rather than storing uncertainty phrases.
   if (looksLikeExplicitUnknown(cleaned) || isLiteralUncertaintyPhrase(cleaned)) {
+    next.epistemic_states[primaryField] = EPISTEMIC_STATES.UNKNOWN;
     return next;
   }
 
@@ -2201,6 +2373,7 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
         }
       }
       next.business_name = sanitizeBusinessName(next.business_name);
+      next.business_description = sanitizeIdentityDescription(next.business_name, next.business_description);
       if (/commercial/i.test(cleaned)) next.growth_focus = 'commercial cleaning';
       if (/residential/i.test(cleaned) && !next.vertical_focus) {
         next.vertical_focus = /commercial/i.test(cleaned)
@@ -2255,6 +2428,17 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer) {
         next.ideal_customer_traits,
         extractValueTraits(String(rawAnswer || cleaned))
       );
+      break;
+    }
+    case 'idealCustomerTraits': {
+      next.ideal_customer_traits = uniquePush(
+        next.ideal_customer_traits,
+        [normalizeBusinessPhrase(stripBusinessNameLeadIn(cleaned))]
+          .filter((item) => item && !isLiteralUncertaintyPhrase(item))
+      );
+      next.epistemic_states.ideal_customer_traits = next.ideal_customer_traits.length
+        ? EPISTEMIC_STATES.KNOWN
+        : next.epistemic_states.ideal_customer_traits;
       break;
     }
     case 'avoidCustomers': {
@@ -2390,6 +2574,15 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       );
       break;
     }
+    case 'idealCustomerTraits':
+      next.ideal_customer_traits = uniquePush(
+        next.ideal_customer_traits,
+        [normalizeBusinessPhrase(stripBusinessNameLeadIn(substance))]
+      );
+      next.epistemic_states.ideal_customer_traits = next.ideal_customer_traits.length
+        ? EPISTEMIC_STATES.KNOWN
+        : next.epistemic_states.ideal_customer_traits;
+      break;
     case 'avoidCustomers':
       next.disqualified_customers = uniquePush(
         next.disqualified_customers,
@@ -2439,13 +2632,634 @@ function applyCorrectionToNormalizedFacts(facts, correction) {
       next.success_metrics = uniquePush([], splitListItems(substance));
       break;
     case 'identity': {
-      next.business_description = substance;
+      next.business_description = sanitizeIdentityDescription(next.business_name, substance);
       break;
     }
     default:
       break;
   }
   return next;
+}
+
+function normalizedSemanticValue(value) {
+  return normalizeBusinessPhrase(String(value || '')).replace(/[.!?]+$/, '').trim().toLowerCase();
+}
+
+/**
+ * SPEC-228 — detect raw correction-instruction prose that must never survive
+ * as active business meaning (a metric, a geography value, a differentiation
+ * claim, etc). Correction history may keep the operator's original language;
+ * active projection may not.
+ */
+function containsCorrectionInstructionLeakage(text) {
+  const value = String(text || '');
+  return (
+    /\bdo not interpret\b|\bnot a (?:success\s+)?metric\b|\bnot a standalone metric\b|\bnot a (?:separate\s+)?service\b|\bdid not establish\b|\bnot established\b|\bremove that assumption\b|\bdon't\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b|\bdo not\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b|\b(?:preserve|keep)\s+(?:the\s+)?(?:current\s+)?(?:epistemic|differentiation|brand voice|geography|success metrics|operator-defined)\b.*\b(?:rather than|separately from|if it is currently unknown|without duplicating|without reframing)\b|\b(?:present|display)\s+(?:customer\s+)?(?:exclusions?|customers?)\s+naturally\s+without\s+(?:duplicating|reframing)\b|\brather than an established buying reason\b|\bdo not invent a brand voice\b|\bdo not approve the Blueprint\b|\bthis is a refinement only\b/i.test(value)
+  );
+}
+
+function containsObjectiveCorrectionLeakage(text) {
+  return containsCorrectionInstructionLeakage(text) ||
+    /\b(?:pain|pains|learning signals?)\b[\s\S]{0,100}\b(?:not|rather than)\b[\s\S]{0,40}\b(?:metric|objective|goal|outcome)s?\b/i.test(
+      String(text || '')
+    );
+}
+
+function authoritativeObjectiveFromFacts(facts) {
+  const factRows = [
+    ...(facts?.business_facts?.ninety_day_outcomes || []),
+    ...(facts?.business_facts?.growth_focus || []),
+  ];
+  const factValue = factRows.find(
+    (fact) => fact && fact.epistemic_state === EPISTEMIC_STATES.KNOWN && fact.value &&
+      !containsObjectiveCorrectionLeakage(fact.value)
+  );
+  if (factValue) return normalizeBusinessPhrase(factValue.value);
+  if (facts?.growth_focus && !containsObjectiveCorrectionLeakage(facts.growth_focus)) {
+    return normalizeBusinessPhrase(facts.growth_focus);
+  }
+  return null;
+}
+
+function sameSemanticValue(left, right) {
+  const a = normalizedSemanticValue(left);
+  const b = normalizedSemanticValue(right);
+  return Boolean(a && b && (a === b || a.includes(b) || b.includes(a)));
+}
+
+function withoutSemanticValue(values, value) {
+  return (values || []).filter((entry) => !sameSemanticValue(entry, value));
+}
+
+/**
+ * SPEC-238: Detect if a sentence is purely a control/refinement directive.
+ * Control directives describe HOW state should be preserved/treated, not WHAT
+ * the business proposition is.
+ *
+ * Returns true if sentence is purely control language without semantic content.
+ */
+function isPureControlDirective(sentence) {
+  const lower = sentence.toLowerCase();
+
+  // Pattern 1: "preserve/keep differentiation as hypothesis/non-applicable/unknown"
+  // This is control language without a new proposition
+  if (/\b(?:preserve|keep)\s+(?:the\s+)?differentiation\s+(?:as|as a)\s+(?:a\s+)?(?:hypothesis|non-applicable|unknown|unvalidated|undefined)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 2: "keep geography non-applicable"
+  if (/\b(?:keep|preserve)\s+(?:the\s+)?geography\s+(?:non-applicable|as\s+non-applicable)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 3: standalone "do not (add|infer|change|invent|approve)"
+  if (/^\s*(?:do not|don't)\s+(?:add|infer|change|invent|approve|duplicate|reframe)\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 4: "regenerate using current understanding" - pure control
+  if (/\bregenerate\b.{0,80}\b(?:using|from)\s+(?:the\s+)?current\s+(?:corrected\s+)?understanding\b/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 5: "present X naturally" without actual content changes
+  if (/\bpresent\s+(?:customer\s+)?(?:exclusions?|customers?)\s+naturally\s+without\s+(?:duplicating|reframing)/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 6: "preserve operator-defined metrics separately"
+  if (/\bpreserve\s+operator-defined\s+(?:metrics|success metrics)\s+(?:separately|apart)\s+from/i.test(lower)) {
+    return true;
+  }
+
+  // Pattern 7: "This is a refinement only"
+  if (/\b(?:this is|this\s+is\s+just)\s+(?:a\s+)?refinement\s+only\b/i.test(lower)) {
+    return true;
+  }
+
+  return false;
+}
+
+
+/**
+ * SPEC-238A: Extract control language from a captured value.
+ *
+ * Structural isolation: identify clause boundaries (punctuation or conjunctions)
+ * and detect control clauses by their leading keywords.
+ *
+ * When extracting a value (e.g., from a differentiation sentence), strip out
+ * any trailing control/refinement clauses that were inadvertently captured.
+ *
+ * Returns the cleaned value, or null if the value is purely control language.
+ *
+ * Handles:
+ * - "proposition, do not approve" → "proposition"
+ * - "proposition; keep x unchanged" → "proposition"
+ * - "proposition and do not approve" → "proposition"
+ * - "proposition but keep x unchanged" → "proposition"
+ * - "proposition or do not approve" → "proposition"
+ * - "preserve x and change y" → "preserve x and change y" (legitimate conjunction)
+ */
+function stripControlLanguageFromValue(value) {
+  if (!value) return value;
+
+  const str = String(value).trim();
+
+  const isControlClause = (clause) => {
+    const normalized = clause.trim().toLowerCase();
+    if (/^(?:do\s+not|don't|shouldn't)\b/.test(normalized)) return true;
+    if (/^(?:regenerate|present)\b/.test(normalized)) return true;
+    if (/^(?:separately|apart)\s+from\b/.test(normalized)) return true;
+    return /^(?:keep|preserve)\b/.test(normalized) &&
+      /\b(?:brand voice|epistemic|status|facts?|state|understanding|exclusions?|blueprint)\b/.test(normalized);
+  };
+
+  // Scan clause boundaries, then classify the clause after each boundary.
+  // A conjunction itself never causes truncation; only a following control clause does.
+  const boundaryPattern = /[,;]|\b(?:and|but|or)\b/gi;
+  let boundary;
+  while ((boundary = boundaryPattern.exec(str))) {
+    const trailingClause = str.slice(boundaryPattern.lastIndex).trim();
+    if (!isControlClause(trailingClause)) continue;
+
+    let cleaned = str.slice(0, boundary.index).trim();
+
+    cleaned = cleaned.replace(/[,;]\s*$/, '').trim();
+
+    if (!cleaned || /^\s*(?:a|an|the)[\s,]*$/.test(cleaned)) {
+      return null;
+    }
+
+    return cleaned;
+  }
+
+  // No control clause detected; check for other purely-control patterns
+  // Pattern: "as a rather than" or similar control constructs
+  if (/^as\s+(?:a|an)\s+(?:rather than|rather than an?)/.test(str)) {
+    return null;
+  }
+
+  // If what remains is empty or only punctuation/articles, it's purely control
+  if (!str || /^\s*(?:rather\s+than|as\s+(?:a|an)|a|an|the)[\s,]*$/.test(str)) {
+    return null;
+  }
+
+  return str;
+}
+
+function isEpistemicQualificationOnly(value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return true;
+  const lower = raw.toLowerCase();
+  if (/^(?:still\s+)?(?:only\s+|just\s+)?(?:a\s+)?[.\s]*$/.test(lower)) return true;
+  if (!/\b(?:hypothesis|hypotheses|established|proven|validated|tentative|uncertain|assumption|working theory|buying reason)\b/.test(lower)) {
+    return false;
+  }
+  if (
+    /^(?:still\s+)?(?:only\s+|just\s+)?(?:a\s+)?(?:hypothesis|tentative|uncertain|current assumption|working theory)\b/.test(lower) ||
+    /^(?:not|not yet|is not|isn't|has not been|hasn't been)\s+(?:an?\s+)?(?:established|proven|validated)/.test(lower) ||
+    /^(?:not|not yet)\s+(?:an?\s+)?established\s+buying\s+reason\b/.test(lower) ||
+    /^(?:unproven|unvalidated|not validated|not proven)\b/.test(lower)
+  ) {
+    return true;
+  }
+  const contentSignals = /\b(?:because|more compelling|outperform|better|different|approach|model|program|service|agency|serve|customers?|owners?|business|transformation|consulting|education)\b/.test(lower);
+  return !contentSignals;
+}
+
+function inferEpistemicStateFromText(text, fallback = EPISTEMIC_STATES.KNOWN) {
+  const lower = String(text || '').toLowerCase();
+  if (/\b(?:hypothesis|unvalidated|not\s+(?:yet\s+)?validated|not\s+(?:yet\s+)?proven|not\s+(?:yet\s+)?established|tentative|uncertain|current assumption|working theory|we\s+(?:think|believe|suspect)|may|might|could)\b/.test(lower)) {
+    return EPISTEMIC_STATES.HYPOTHESIS;
+  }
+  return fallback;
+}
+
+function stripEpistemicLeadIn(value) {
+  let out = String(value || '').trim();
+  for (let i = 0; i < 4; i += 1) {
+    const before = out;
+    out = out
+      .replace(/^(?:we\s+(?:think|believe|suspect|hypothesize)\s+(?:that\s+)?)/i, '')
+      .replace(/^(?:our\s+)?(?:current\s+)?(?:differentiation\s+)?hypothesis\s+(?:is|:)\s*/i, '')
+      .replace(/^(?:the\s+)?(?:current\s+)?differentiation\s+(?:hypothesis\s+)?(?:is|:)\s*/i, '')
+      .replace(/^(?:this\s+is\s+)?(?:not\s+yet\s+)?(?:proven|validated|established)\s*:\s*/i, '');
+    if (out === before) break;
+  }
+  return out.trim();
+}
+
+function substantiveDifferentiationCandidate(value) {
+  const controlCleaned = stripControlLanguageFromValue(stripEpistemicLeadIn(value));
+  if (!controlCleaned || isEpistemicQualificationOnly(controlCleaned)) return null;
+  return controlCleaned;
+}
+
+function extractDifferentiationProposition(text, focusSentence = '') {
+  const raw = String(text || '').trim();
+  const sentences = raw
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const candidates = [];
+  const push = (value) => {
+    const candidate = substantiveDifferentiationCandidate(value);
+    if (candidate) candidates.push(candidate);
+  };
+
+  for (const sentence of [focusSentence, ...sentences].filter(Boolean)) {
+    const colon = sentence.match(/:\s*(.+)$/);
+    if (colon && /\b(?:differentiation|hypothesis|proven|validated|established|assumption|working theory)\b/i.test(sentence)) {
+      push(colon[1]);
+    }
+
+    const explicit = sentence.match(/\b(?:change|update|set|correct)\s+(?:the\s+)?(?:current\s+)?differentiation(?:\s+hypothesis)?\s+(?:to|as)\s*:?\s*(.+)$/i);
+    if (explicit) push(explicit[1]);
+
+    const hypothesis = sentence.match(/\b(?:our\s+)?(?:current\s+)?(?:differentiation\s+)?hypothesis\s+(?:is|:)\s*(.+)$/i);
+    if (hypothesis) push(hypothesis[1]);
+
+    const thought = sentence.match(/\bwe\s+(?:think|believe|suspect|hypothesize)\s+(?:that\s+)?(.+)$/i);
+    if (thought) push(thought[1]);
+
+    if (/\b(?:may|might|could)\b/i.test(sentence) && /\b(?:compelling|outperform|differentiat|advantage|because|better)\b/i.test(sentence)) {
+      push(sentence);
+    }
+  }
+
+  return candidates[0] || null;
+}
+
+function reviewCorrectionOperations(text, state, turnId) {
+  const operations = [];
+  const add = (operation, slot, value, extra = {}) => operations.push({
+    operation, slot, target_key: normalizedSemanticValue(value) || slot,
+    previous_value: extra.previous_value || null,
+    value: value == null ? null : normalizeBusinessPhrase(value),
+    classification: extra.classification || null, negation: Boolean(extra.negation),
+    epistemic_state: extra.epistemic_state || EPISTEMIC_STATES.KNOWN,
+    evidence_ref: turnId, created_at: nowIso(), source_text: extra.source_text || text,
+  });
+  const sentences = String(text || '').split(/(?<=[.!?])\s+|\n+/).map((item) => item.trim()).filter(Boolean);
+  for (const sentence of sentences) {
+    const lower = sentence.toLowerCase();
+    if (/geograph(?:y|ic).{0,50}\b(?:not|no longer|isn't|is not).{0,60}\b(constrained|constraint|primary|restricted)\b/.test(lower)) {
+      add('RETRACT', 'geography', null, { previous_value: (state.normalizedFacts?.geography || []).join(', '), negation: true, epistemic_state: EPISTEMIC_STATES.NOT_APPLICABLE, source_text: sentence });
+    }
+    if (/\b(?:lead|raw)\s+volume\b.{0,60}\bnot\s+(?:a\s+)?(?:success\s+)?metric\b/.test(lower)) {
+      add('RETRACT', 'success_metrics', 'raw lead volume', { negation: true, source_text: sentence });
+    }
+    if (/\bpremium\s+positioning\b.{0,60}\b(?:never|not|did not|didn't).{0,40}\b(?:establish|established|validated|confirm)/.test(lower) || /\b(?:never|not|did not|didn't).{0,40}\b(?:establish|established|validated|confirm).{0,60}\bpremium\s+positioning\b/.test(lower)) {
+      add('RETRACT', 'differentiation', 'premium positioning', { negation: true, source_text: sentence });
+    }
+    const pain = sentence.match(/\b(.+?)\s+(?:is|are)\s+(?:a\s+)?pains?\s*,?\s+not\s+(?:a\s+)?metrics?\b/i);
+    if (pain) add('RECLASSIFY', 'pains', pain[1], { previous_value: pain[1], classification: 'PAIN', negation: true, source_text: sentence });
+    const outcome = sentence.match(/^(.+?)\s+(?:is|are)\s+(?:an?\s+)?(?:outcomes?|transformation areas?)(?:\s+or\s+(?:outcomes?|transformation areas?))?\s*,?\s+not\s+(?:a\s+)?(?:separate\s+)?services?\b/i);
+    if (outcome) {
+      for (const item of splitListItems(outcome[1])) {
+        add('RECLASSIFY', 'transformation_areas', item, { previous_value: item, classification: 'OUTCOME', negation: true, source_text: sentence });
+      }
+    }
+    const offer = sentence.match(/\b(?:one\s+)?(?:primary\s+)?offer\s*(?:is|=|:)\s*(?:the\s+)?([^.;]+)/i);
+    if (offer) add('CORRECT', 'services', offer[1], { source_text: sentence });
+    if (/\b(?:existing\s+)?operating\s+small\s+business(?:es)?\b/i.test(sentence) && /\b(?:icp|ideal customer|founder)\b/i.test(sentence)) {
+      add('CORRECT', 'ideal_customers', 'existing operating small business', { source_text: sentence });
+    }
+    if (/\b(?:segments?|verticals?)\s+to\s+test\b/i.test(sentence) || /\binitial\s+(?:test\s+)?segments?\b/i.test(sentence)) {
+      if (/\bcleaning\b/i.test(sentence) && /\bhome services\b/i.test(sentence)) {
+        add('ASSERT', 'ideal_customers', 'cleaning/home services', { source_text: sentence });
+      } else if (/\bcleaning\b/i.test(sentence)) {
+        add('ASSERT', 'ideal_customers', 'cleaning', { source_text: sentence });
+      }
+      if (/\be-commerce\b/i.test(sentence)) add('ASSERT', 'ideal_customers', 'e-commerce', { source_text: sentence });
+      if (/\bfitness\b/i.test(sentence)) add('ASSERT', 'ideal_customers', 'fitness', { source_text: sentence });
+    }
+    if (/\b(?:fewer than|under|less than)\s+10\s+employees\b/i.test(sentence)) {
+      add('ASSERT', 'ideal_customer_traits', 'generally fewer than 10 employees', { source_text: sentence });
+    }
+    if (/\bfounder operational bottleneck\b/i.test(sentence) || /\bfounder\b.{0,30}\btoo central to operations\b/i.test(sentence)) {
+      add('ASSERT', 'ideal_customer_traits', 'founder operational bottleneck', { source_text: sentence });
+    }
+    const metricMatches = sentence.match(/qualified founder conversations|icp-qualified conversations|serious program conversations|paid enrollments|discovery[\s-]*(?:to|->|→)[\s-]*enrollment conversion/gi) || [];
+    for (const metric of metricMatches) add('ASSERT', 'success_metrics', metric, { source_text: sentence });
+    const signalMatches = sentence.match(/pain[- ]patterns?(?:\s+frequency)?|segment[- ]response patterns/gi) || [];
+    for (const signal of signalMatches) add('ASSERT', 'learning_signals', signal, { classification: 'LEARNING_SIGNAL', source_text: sentence });
+    const painMatches = /\b(?:pains?|learning signals?)\b/i.test(sentence) ? (sentence.match(/employee problems|lack of owner time|founder dependence|revenue pressure/gi) || []) : [];
+    for (const item of painMatches) add('ASSERT', 'pains', item, { classification: 'PAIN', source_text: sentence });
+
+    if (/\bdifferentiation\b/.test(lower) && /\b(?:hypothesis|unvalidated|not established|not\s+(?:yet\s+)?(?:proven|validated|established)|tentative|uncertain|working theory|current assumption)\b/.test(lower)) {
+      // SPEC-238: Skip pure control directives (e.g., "preserve differentiation as a hypothesis")
+      if (isPureControlDirective(sentence)) {
+        // Do not generate any operation - this is refinement control, not a semantic correction
+      } else {
+        let value = extractDifferentiationProposition(text, sentence) || sentence;
+        const colonMatch = sentence.match(/:\s*(.+)$/);
+        if (!value || value === sentence && colonMatch) {
+          value = colonMatch[1];
+        } else if (value === sentence) {
+          value = sentence
+            .replace(/^.*?\bdifferentiation\b\s*(?:is|remains)?\s*(?:still\s+)?(?:a\s+)?\s*/i, '')
+            .replace(/\bhypothesis\b\s*[:,]?\s*/i, '');
+        }
+        value = value.trim();
+
+        const cleanedValue = stripControlLanguageFromValue(value);
+
+        if (cleanedValue && !isEpistemicQualificationOnly(cleanedValue)) {
+          add('CORRECT', 'differentiation', cleanedValue, { epistemic_state: EPISTEMIC_STATES.HYPOTHESIS, source_text: sentence });
+        } else {
+          const existing = state.normalizedFacts?.differentiation;
+          if (existing && /\b(?:hypothesis|unvalidated|not established|not\s+(?:yet\s+)?proven|not\s+(?:yet\s+)?validated|tentative|uncertain)\b/i.test(sentence)) {
+            add('CORRECT', 'differentiation', existing, {
+              epistemic_state: inferEpistemicStateFromText(sentence, EPISTEMIC_STATES.HYPOTHESIS),
+              source_text: sentence,
+            });
+          }
+        }
+      }
+    }
+    const objective = sentence.match(
+      /\b(?:near-term|90-day|ninety-day)\s+(?:objective|goal|outcome|priority)(?:s)?\s*(?:is|are|:|=)\s*(.+)$/i
+    );
+    if (objective && !containsObjectiveCorrectionLeakage(objective[1])) {
+      add('CORRECT', 'campaignGoals', objective[1], { source_text: sentence });
+    }
+  }
+  if (!operations.length && /\b(?:correction|correct|retract|remove|not a metric|not a service|not established|not constrained|reclassify)\b/i.test(text)) {
+    add('CLARIFY', 'unresolved', null, { epistemic_state: EPISTEMIC_STATES.UNRESOLVED });
+  }
+  return operations;
+}
+
+function projectWorkingSemanticOperations(facts, operations) {
+  const next = cloneNormalizedFacts(facts);
+  for (const operation of operations || []) {
+    const { operation: kind, slot, value } = operation;
+    if (slot && slot !== 'unresolved') {
+      next.superseded_slots = uniquePush(next.superseded_slots, [slot]);
+    }
+    if (kind === 'RETRACT') {
+      if (slot === 'geography') {
+        next.geography = [];
+        next.epistemic_states.geography = operation.epistemic_state || EPISTEMIC_STATES.UNKNOWN;
+      } else if (slot === 'success_metrics') {
+        next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+        next.excluded_metrics = uniquePush(next.excluded_metrics, [value]);
+      } else if (slot === 'differentiation') {
+        if (value == null) {
+          next.differentiation = null;
+          next.epistemic_states.differentiation = EPISTEMIC_STATES.UNKNOWN;
+          delete next.hypotheses.differentiation;
+          delete next.evidence_statements.differentiation;
+        } else if (sameSemanticValue(next.differentiation, value)) {
+          next.differentiation = null;
+          next.epistemic_states.differentiation = operation.epistemic_state || EPISTEMIC_STATES.UNKNOWN;
+          delete next.hypotheses.differentiation;
+          delete next.evidence_statements.differentiation;
+        }
+      }
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'services') {
+      // SPEC-228: a corrected primary offer must also displace a stale
+      // business_description that duplicates the offer confusion being corrected.
+      const previousServices = facts.services || [];
+      if (previousServices.some((prev) => sameSemanticValue(next.business_description, prev))) {
+        next.business_description = value;
+      }
+      next.services = [value];
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'differentiation') {
+      next.differentiation = value;
+      next.epistemic_states.differentiation = operation.epistemic_state;
+      next.evidence_statements.differentiation = value;
+      if (operation.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS) {
+        next.hypotheses.differentiation = value;
+      } else {
+        delete next.hypotheses.differentiation;
+      }
+      continue;
+    }
+    if (kind === 'CORRECT' && slot === 'campaignGoals') {
+      next.ninety_day_outcomes = value;
+      next.epistemic_states.ninety_day_outcomes = operation.epistemic_state;
+      continue;
+    }
+    if (kind === 'RECLASSIFY') {
+      next.services = withoutSemanticValue(next.services, value);
+      next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+    }
+    if (['pains', 'transformation_areas', 'learning_signals'].includes(slot)) {
+      next[slot] = uniquePush(next[slot], [value]);
+      if (slot === 'pains') next.success_metrics = withoutSemanticValue(next.success_metrics, value);
+    } else if (slot === 'ideal_customers') {
+      next.ideal_customers = kind === 'CORRECT'
+        ? [value]
+        : uniquePush(next.ideal_customers, [value]);
+    } else if (slot === 'ideal_customer_traits') {
+      next.ideal_customer_traits = uniquePush(next.ideal_customer_traits, [value]);
+    } else if (slot === 'success_metrics' && !next.excluded_metrics.some((item) => sameSemanticValue(item, value))) {
+      next.success_metrics = uniquePush(next.success_metrics, [value]);
+    }
+  }
+  // SPEC-228 invariant: business_description is description-only and must never
+  // carry a self-referential "<name> is a ..." wrap, regardless of which slots
+  // the correction operations targeted.
+  next.business_description = sanitizeIdentityDescription(next.business_name, next.business_description);
+  // SPEC-228 invariant: raw correction-instruction prose (negation sentences,
+  // literal "not a metric" text, etc.) must never remain active business
+  // meaning even if it entered a slot before the correction operation model
+  // understood that slot.
+  next.success_metrics = next.success_metrics.filter((item) => {
+    if (!containsCorrectionInstructionLeakage(item)) return true;
+    next.excluded_metrics = uniquePush(
+      next.excluded_metrics,
+      [/lead volume/i.test(item) ? 'raw lead volume' : item]
+    );
+    return false;
+  });
+  next.geography = next.geography.filter((item) => !containsCorrectionInstructionLeakage(item));
+  if (containsCorrectionInstructionLeakage(next.differentiation)) next.differentiation = null;
+  if (containsCorrectionInstructionLeakage(next.brand_voice)) {
+    next.brand_voice = null;
+    next.epistemic_states.brand_voice = EPISTEMIC_STATES.UNKNOWN;
+    next.superseded_slots = uniquePush(next.superseded_slots, ['brand_voice']);
+  }
+  if (containsObjectiveCorrectionLeakage(next.ninety_day_outcomes)) {
+    next.ninety_day_outcomes = authoritativeObjectiveFromFacts(facts);
+    next.epistemic_states.ninety_day_outcomes = next.ninety_day_outcomes
+      ? EPISTEMIC_STATES.KNOWN
+      : EPISTEMIC_STATES.UNKNOWN;
+  }
+  for (const [slot, epistemicState] of Object.entries(next.epistemic_states)) {
+    if (epistemicState === EPISTEMIC_STATES.HYPOTHESIS && !next.hypotheses?.[slot]) {
+      throw new Error(`Semantic projection incoherent: ${slot} is HYPOTHESIS without an active hypothesis`);
+    }
+  }
+  return next;
+}
+
+/**
+ * Reconcile historical persisted state with the active semantic contract before
+ * it is used to resume an unapproved interview or synthesize a Blueprint.
+ */
+function isStructurallyIncompleteRecoveredCustomerFragment(slot, value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return true;
+
+  if (slot === 'ideal_customer_traits') {
+    const words = raw.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) return true;
+    if (/^(?:delegate|operate|manage|run|change|improve|grow|scale|build)\b/i.test(raw)) return true;
+    if (/^\s*(?:is|are|be|would|could|should|will)\s+(?:ready|open|able)\b/i.test(raw) && words.length <= 8) {
+      return true;
+    }
+    return false;
+  }
+
+  if (slot === 'ideal_customers' || slot === 'disqualified_customers') {
+    const words = raw.split(/\s+/).filter(Boolean);
+    if (words.length <= 1) return true;
+    if (/^(?:customers?|clients?|people|owners?|teams?|businesses?|segments?)$/i.test(raw)) return true;
+    if (/^(?:ideally|perhaps|maybe|likely|generally)\b/i.test(raw)) return true;
+    if (/^(?:delegate|operate|manage|run|change|improve|grow)\b/i.test(raw)) return true;
+    if (/^(?:who|what|which|when|how|why|where)\b/i.test(raw)) return true;
+    return false;
+  }
+
+  return false;
+}
+
+function isRecoveredCustomerSlotRoleValid(slot, value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw || containsMetaInstructionLanguage(raw) || isMetaConsultantSentence(raw)) return false;
+
+  const isPositiveFitTrait = (text) =>
+    /^(?:(?:the\s+)?(?:customer|owner|founder|business)\s+)?(?:(?:is|are)\s+)?(?:willing|ready|open|able|recognizes?|has|remain(?:s)? involved)\b/i.test(
+      text
+    );
+  const isPositiveFitStatement = (text) =>
+    isPositiveFitTrait(text) || /\b(?:is designed for|already have functioning operations)\b/i.test(text);
+  const isExplicitExclusion = (text) =>
+    /\b(?:avoid|exclude|rather not work|do not want|don'?t want|will not|won'?t|not a fit|idea[\s-]?stage|early[\s-]?stage|pre[\s-]?revenue|only looking|only seeking|expecting someone else|do not yet|does not yet|without functioning|not ready)\b/i.test(
+      text
+    );
+  const sentences = raw.split(/(?<=[.!?])\s+/).filter(Boolean);
+
+  if (slot === 'ideal_customers') {
+    return !isPositiveFitTrait(raw);
+  }
+
+  if (slot === 'ideal_customer_traits') {
+    return !isExplicitExclusion(raw);
+  }
+
+  if (slot === 'disqualified_customers') {
+    if (!isExplicitExclusion(raw) || isPositiveFitTrait(raw)) return false;
+    return !(
+      sentences.length > 1 &&
+      sentences.some(isExplicitExclusion) &&
+      sentences.some(isPositiveFitStatement)
+    );
+  }
+
+  return true;
+}
+
+function normalizeRecoveredInterviewState(interviewState) {
+  const state = { ...(interviewState || {}) };
+  const facts = cloneNormalizedFacts(state.normalizedFacts);
+  const sectionState = { ...(state.sectionState || {}) };
+  const fieldToSection = Object.fromEntries(
+    Object.entries(SECTION_TO_PRIMARY_FIELD).map(([section, field]) => [field, section])
+  );
+  const slots = new Set([
+    ...Object.keys(facts.epistemic_states || {}),
+    ...Object.keys(facts.hypotheses || {}),
+    ...Object.keys(facts.evidence_statements || {}),
+    ...Object.keys(facts || {}),
+  ]);
+
+  for (const slot of slots) {
+    if (!Object.prototype.hasOwnProperty.call(facts, slot)) continue;
+    const value = facts[slot];
+    const hasValue = Array.isArray(value) ? value.length > 0 : value != null && value !== '';
+    const stateValue = facts.epistemic_states[slot];
+    const invalidValue = typeof value === 'string' && containsCorrectionInstructionLeakage(value);
+    const invalidHypothesis = containsCorrectionInstructionLeakage(facts.hypotheses[slot]);
+    const invalidEvidence = containsCorrectionInstructionLeakage(facts.evidence_statements[slot]);
+
+    if (Array.isArray(value)) {
+      const originalCount = value.length;
+      const cleaned = value.filter(
+        (entry) =>
+          !isStructurallyIncompleteRecoveredCustomerFragment(slot, entry) &&
+          isRecoveredCustomerSlotRoleValid(slot, entry)
+      );
+      if (cleaned.length !== originalCount) {
+        facts[slot] = cleaned;
+        facts.epistemic_states[slot] = cleaned.length ? facts.epistemic_states[slot] || EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNKNOWN;
+        facts.superseded_slots = uniquePush(facts.superseded_slots, [slot]);
+      }
+    }
+
+    if (invalidValue) {
+      facts[slot] = null;
+      facts.epistemic_states[slot] = EPISTEMIC_STATES.UNKNOWN;
+    }
+
+    const orphanedHypothesis = stateValue === EPISTEMIC_STATES.HYPOTHESIS && !hasValue;
+    const invalidated = invalidValue ||
+      orphanedHypothesis ||
+      (!hasValue && [EPISTEMIC_STATES.UNKNOWN, EPISTEMIC_STATES.NOT_APPLICABLE].includes(stateValue));
+    if (invalidated) {
+      if (orphanedHypothesis) facts.epistemic_states[slot] = EPISTEMIC_STATES.UNKNOWN;
+      delete facts.hypotheses[slot];
+      if (invalidEvidence || !hasValue) delete facts.evidence_statements[slot];
+      facts.superseded_slots = uniquePush(facts.superseded_slots, [slot]);
+    } else if (facts.epistemic_states[slot] === EPISTEMIC_STATES.HYPOTHESIS) {
+      // An active hypothesis must be represented by its active proposition.
+      if (!facts.hypotheses[slot] || !sameSemanticValue(facts.hypotheses[slot], facts[slot])) {
+        facts.hypotheses[slot] = facts[slot];
+      }
+      if (invalidEvidence) facts.evidence_statements[slot] = facts[slot];
+    } else if (invalidHypothesis) {
+      delete facts.hypotheses[slot];
+    }
+
+    const sectionKey = fieldToSection[slot];
+    if (sectionKey && facts.superseded_slots.includes(slot)) {
+      const prior = sectionState[sectionKey];
+      if (prior && prior.summary) {
+        sectionState[sectionKey] = { ...prior, summary: '' };
+      }
+    }
+  }
+
+  state.normalizedFacts = facts;
+  state.sectionState = sectionState;
+  return state;
+}
+
+async function applyRefinementSemanticCorrections(store, session, state, text, turnId) {
+  const operations = reviewCorrectionOperations(text, state, turnId);
+  if (!operations.length) return { operations, evidenceIds: [] };
+  state.workingSemanticCorrections = [...(state.workingSemanticCorrections || []), ...operations];
+  state.normalizedFacts = projectWorkingSemanticOperations(state.normalizedFacts, operations);
+  const evidenceIds = [];
+  for (const operation of operations) {
+    const evidence = await store.insertEvidence({
+      id: newId(), client_id: session.client_id, session_id: session.id,
+      source: 'Blueprint refinement', source_turn_id: turnId, category: 'refinement',
+      statement: operation.source_text, confidence: EXPLICIT_CONFIDENCE,
+      type: 'CLIENT_EDITED', created_at: new Date(),
+    });
+    evidenceIds.push(evidence.id);
+  }
+  state.sectionState = sectionsFromNormalizedFacts(state.normalizedFacts, state.sectionState);
+  session.interview_state = state;
+  return { operations, evidenceIds };
 }
 
 function normalizeBrandVoiceTone(text) {
@@ -2531,6 +3345,11 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   const prior = priorSections || emptySections();
   const sections = emptySections();
   const name = sanitizeBusinessName(f.business_name || '');
+  const priorSummary = (key, slot) => {
+    const summary = String(prior[key]?.summary || '').trim();
+    if (!summary || f.superseded_slots.includes(slot) || containsCorrectionInstructionLeakage(summary)) return '';
+    return summary;
+  };
 
   const identityBits = [];
   if (name && f.business_description) {
@@ -2544,28 +3363,37 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       `The business is understood as ${normalizeBusinessPhrase(firstSentence(f.business_description))}`
     );
   }
+  const getEpistemicState = (fieldKey, hasValue) => {
+    return f.epistemic_states?.[fieldKey] || (hasValue ? EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNRESOLVED);
+  };
+
   sections.identity = {
     ...(prior.identity || emptySection()),
+    epistemic_state: getEpistemicState('business_description', identityBits.length > 0),
     summary: identityBits.length
       ? [
           ensurePeriod(identityBits[0]),
           'This identity framing is how the operator describes the business today, and it anchors every other Blueprint section.',
         ].join(' ')
-      : prior.identity?.summary || '',
+      : priorSummary('identity', 'business_description'),
   };
 
   sections.services = {
     ...(prior.services || emptySection()),
-    summary: f.services.length
+    epistemic_state: getEpistemicState('services', f.services.length > 0),
+    summary: f.services.length && f.epistemic_states?.services === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`Today the business delivers ${f.services.join(', ')}`),
           'Service understanding reflects what is actually sold now, not aspirational packaging.',
         ].join(' ')
-      : prior.services?.summary || '',
+      : f.epistemic_states?.services === EPISTEMIC_STATES.UNKNOWN
+        ? 'Services: Not yet defined.'
+        : prior.services?.summary || '',
   };
 
   sections.idealCustomers = {
     ...(prior.idealCustomers || emptySection()),
+    epistemic_state: getEpistemicState('ideal_customers', (f.ideal_customers || []).length > 0),
     summary: (() => {
       const cleanIdeal = (f.ideal_customers || []).filter(
         (item) =>
@@ -2574,19 +3402,25 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           !isValueTraitPhrase(item) &&
           !isConversationalFiller(item)
       );
-      if (cleanIdeal.length) {
+      if (cleanIdeal.length && f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.KNOWN) {
         return [
           ensurePeriod(`Ideal customers are ${cleanIdeal.join(', ')}`),
           'This ICP picture prioritizes fit over volume.',
         ].join(' ');
       }
-      const priorSummary = String(prior.idealCustomers?.summary || '').trim();
+      if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.HYPOTHESIS) {
+        return `Current hypothesis: target audience may be ${f.hypotheses?.ideal_customers || f.evidence_statements?.ideal_customers || 'under evaluation'}.`;
+      }
+      if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.UNKNOWN) {
+        return 'Ideal customers: Not yet defined.';
+      }
+      const priorIdealSummary = String(prior.idealCustomers?.summary || '').trim();
       if (
-        priorSummary &&
-        !isLiteralUncertaintyPhrase(priorSummary) &&
-        !/\bi don'?t know\b|\bnot sure\b|\bhaven'?t figured\b/i.test(priorSummary)
+        priorIdealSummary &&
+        !isLiteralUncertaintyPhrase(priorIdealSummary) &&
+        !/\bi don'?t know\b|\bnot sure\b|\bhaven'?t figured\b/i.test(priorIdealSummary)
       ) {
-        return priorSummary;
+        return priorSummary('idealCustomers', 'ideal_customers');
       }
       return '';
     })(),
@@ -2594,12 +3428,15 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
 
   sections.avoidCustomers = {
     ...(prior.avoidCustomers || emptySection()),
-    summary: f.disqualified_customers.length
+    epistemic_state: getEpistemicState('disqualified_customers', f.disqualified_customers.length > 0),
+    summary: f.disqualified_customers.length && f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`The business prefers to avoid ${f.disqualified_customers.join(', ')}`),
           'These constraints protect targeting quality and should stay visible in the Blueprint.',
         ].join(' ')
-      : prior.avoidCustomers?.summary || '',
+      : f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.UNKNOWN
+        ? 'Disqualified customers: Not yet defined.'
+        : priorSummary('avoidCustomers', 'disqualified_customers'),
   };
 
   const marketBits = [];
@@ -2607,42 +3444,60 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   if (f.growth_focus) marketBits.push(`with a near-term growth focus on ${f.growth_focus}`);
   sections.targetMarkets = {
     ...(prior.targetMarkets || emptySection()),
-    summary: marketBits.length
+    epistemic_state: getEpistemicState('geography', marketBits.length > 0),
+    summary: marketBits.length && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`Priority markets center on ${marketBits.join(' ')}`),
           'Geography and vertical focus here bound where discovery should concentrate first.',
         ].join(' ')
-      : prior.targetMarkets?.summary || '',
+      : f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS
+        ? `Current hypothesis: target markets center on ${f.hypotheses?.geography || f.evidence_statements?.geography || 'under evaluation'}.`
+        : f.epistemic_states?.geography === EPISTEMIC_STATES.NOT_APPLICABLE
+          ? 'Geography is not currently a meaningful targeting constraint; targeting is based on business stage and characteristics instead.'
+          : f.epistemic_states?.geography === EPISTEMIC_STATES.UNKNOWN
+            ? 'Target markets: Not yet defined.'
+            : priorSummary('targetMarkets', 'geography'),
   };
 
   sections.competitiveAdvantages = {
     ...(prior.competitiveAdvantages || emptySection()),
-    summary: f.differentiation
+    epistemic_state: getEpistemicState('differentiation', Boolean(f.differentiation)),
+    summary: f.differentiation && f.epistemic_states?.differentiation === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`Competitive edge is described as ${f.differentiation}`),
           'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
         ].join(' ')
-      : prior.competitiveAdvantages?.summary || '',
+      : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
+        ? `The current differentiation hypothesis is that ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'the buying decision may be influenced by an as-yet unarticulated advantage'}.`
+        : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN
+          ? 'Differentiation: Not yet defined.'
+          : priorSummary('competitiveAdvantages', 'differentiation'),
   };
 
   sections.brandVoice = {
     ...(prior.brandVoice || emptySection()),
-    summary: f.brand_voice
+    epistemic_state: getEpistemicState('brand_voice', Boolean(f.brand_voice)),
+    summary: f.brand_voice && f.epistemic_states?.brand_voice === EPISTEMIC_STATES.KNOWN
       ? [
           ensurePeriod(`Brand voice should read as ${f.brand_voice}`),
           'Tone guidance constrains later language without choosing channels or campaigns.',
         ].join(' ')
-      : prior.brandVoice?.summary || '',
+      : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.HYPOTHESIS
+        ? `The current brand voice hypothesis is that the tone may align with ${f.hypotheses?.brand_voice || f.evidence_statements?.brand_voice || 'an as-yet undefined direction'}.`
+        : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.UNKNOWN
+          ? 'Brand voice: Not yet defined.'
+          : priorSummary('brandVoice', 'brand_voice'),
   };
 
   sections.campaignGoals = {
     ...(prior.campaignGoals || emptySection()),
+    epistemic_state: getEpistemicState('ninety_day_outcomes', Boolean(f.ninety_day_outcomes)),
     summary: f.ninety_day_outcomes
       ? [
           ensurePeriod(`Near-term growth goals focus on ${f.ninety_day_outcomes}`),
           'These are desired business outcomes for the next phase of work, not execution tactics.',
         ].join(' ')
-      : prior.campaignGoals?.summary || '',
+      : priorSummary('campaignGoals', 'ninety_day_outcomes'),
   };
 
   sections.successMetrics = {
@@ -2652,16 +3507,19 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           ensurePeriod(`Success will be judged by ${f.success_metrics.join(', ')}`),
           'These signals define whether the engagement is working from the client\'s perspective.',
         ].join(' ')
-      : prior.successMetrics?.summary || '',
+      : priorSummary('successMetrics', 'success_metrics'),
   };
 
   // Preserve confidence / evidenceIds / unknowns from prior when present.
   for (const key of BLUEPRINT_SECTIONS) {
     const p = prior[key] || emptySection();
     const hasSummary =
+      (sections[key].epistemic_state === EPISTEMIC_STATES.KNOWN ||
+       sections[key].epistemic_state === EPISTEMIC_STATES.HYPOTHESIS ||
+       !sections[key].epistemic_state) &&
       Boolean(String(sections[key].summary || '').trim()) &&
       !answerLooksEmpty(sections[key].summary) &&
-      !/\bi don'?t know\b|\bnot sure yet\b/i.test(String(sections[key].summary || ''));
+      !/\bi don'?t know\b|\bnot sure yet\b|\bNot yet defined\b|\bNot applicable\b/i.test(String(sections[key].summary || ''));
     const unknowns = hasSummary
       ? []
       : [...(p.unknowns || [])];
@@ -2678,10 +3536,12 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       }
     }
     sections[key] = {
-      summary: hasSummary ? sections[key].summary : '',
+      ...sections[key],
+      summary: sections[key].summary || '',
       confidence: p.confidence || (hasSummary ? EXPLICIT_CONFIDENCE : UNKNOWN_CONFIDENCE),
       evidenceIds: [...(p.evidenceIds || [])],
       unknowns,
+      epistemic_state: sections[key].epistemic_state || p.epistemic_state || EPISTEMIC_STATES.UNRESOLVED,
     };
   }
   return sections;
@@ -2820,6 +3680,12 @@ function businessSubject(name, { possessive = false } = {}) {
  * Never concatenates raw interview text into Mad-Lib templates.
  */
 function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
+  if (
+    opts.epistemicState === EPISTEMIC_STATES.UNKNOWN ||
+    opts.epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE
+  ) {
+    return '';
+  }
   const name = opts.businessName || '';
   const subject = businessSubject(name);
   const possessive = businessSubject(name, { possessive: true });
@@ -2845,7 +3711,7 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
 
   // Peel Blueprint wrapper prefixes then clean.
   claim = claim.replace(
-    /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as|Progress will be judged by|Ideal customers include|Geographic focus centers on|The business declines|Brand voice should feel|Near-term growth priorities center on|Customers choose this business because(?:\s+of)?|Services include)\s+/i,
+    /^(Today the business delivers|Ideal customers are|The business prefers to avoid|Priority markets center on|Competitive edge is described as|Brand voice should read as|Near-term growth goals focus on|Success will be judged by|The business is understood as|Progress will be judged by|Ideal customers include|Geographic focus centers on|The business declines|Brand voice should feel|Near-term growth priorities center on|Customers choose this business because(?:\s+of)?|Services include|The current differentiation hypothesis is that|The current brand voice hypothesis is that the tone may align with)\s+/i,
     ''
   );
   let substance = cleanRawAnswer(sectionKey, claim);
@@ -2929,39 +3795,43 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
     }
     case 'advantages': {
       let edge = substance.trim();
+      const presentAdvantage = (sentence) =>
+        opts.epistemicState === EPISTEMIC_STATES.HYPOTHESIS
+          ? `${subject}'s current differentiation hypothesis is that ${midSentence(edge)}`
+          : sentence;
       // "trust — responsive..." / "trust: ..." → full consultant clause
       const trustDash = edge.match(/^trust\s*[—–\-:]\s*(.+)$/i);
       if (trustDash) {
         edge = `they trust the team to be ${trustDash[1].trim()}`;
-        return `Customers choose ${subject} because ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
       }
       if (/^trust\b/i.test(edge) && /\b(responsive|consistent|accountab|chase|show|communicate)\b/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`);
       }
       // Normalize "customers trust..." → "they trust..." when we already name the chooser.
       edge = edge.replace(/^(?:customers?|clients?)\s+(trust|choose|prefer)\b/i, 'they $1');
       // If the answer is already a "trust / show up / communicate" clause, keep it natural.
       if (/^(they|customers?|clients?)\s+/i.test(edge)) {
-        return `Customers choose ${subject} because ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
       }
       if (/^(trust|show|communicate|solve|make|be)\b/i.test(edge)) {
         const clause = /^trust\b/i.test(edge)
           ? edge.replace(/^trust\b/i, 'they trust')
           : `they ${edge}`;
-        return `Customers choose ${subject} because ${midSentence(clause)}`;
+        return presentAdvantage(`Customers choose ${subject} because ${midSentence(clause)}`);
       }
       if (/\btrust\b/i.test(edge) && /\b(responsive|consistent|accountab|chase)\b/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be responsive, consistent, and accountable without needing to chase the work`);
       }
       // Adjective list left after stripping "trust —"
       if (/^(responsive|consistent|accountab)/i.test(edge)) {
-        return `Customers choose ${subject} because they trust the team to be ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} because they trust the team to be ${midSentence(edge)}`);
       }
       // Noun-phrase differentiation (e.g. "reliable crews")
       if (!/\b(because|that|who|to)\b/i.test(edge) && edge.split(/\s+/).length <= 8) {
-        return `Customers choose ${subject} for ${midSentence(edge)}`;
+        return presentAdvantage(`Customers choose ${subject} for ${midSentence(edge)}`);
       }
-      return `Customers choose ${subject} because ${midSentence(edge)}`;
+      return presentAdvantage(`Customers choose ${subject} because ${midSentence(edge)}`);
     }
     case 'voice': {
       let tone = normalizeBrandVoiceTone(substance);
@@ -2969,7 +3839,10 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
       if (!tone || /^(?:anchor|the business)\b/i.test(tone)) return '';
       const cleanName = sanitizeBusinessName(name) || name;
       const voicePossessive = businessSubject(cleanName || 'the business', { possessive: true });
-      return `${voicePossessive} brand voice should feel ${tone}`;
+      const sentence = `${voicePossessive} brand voice should feel ${tone}`;
+      return opts.epistemicState === EPISTEMIC_STATES.HYPOTHESIS
+        ? `${voicePossessive} current brand voice hypothesis is that the tone may be ${tone}`
+        : sentence;
     }
     case 'goals': {
       let outcome = normalizeGoalOutcomePhrase(substance);
@@ -3058,6 +3931,11 @@ function summarizeSection(sectionKey, statements) {
       return [
         ensurePeriod(`Ideal customers are ${latest}`),
         'This ICP picture prioritizes fit over volume.',
+      ].join(' ');
+    case 'idealCustomerTraits':
+      return [
+        ensurePeriod(`Great-fit customers need ${latest}`),
+        'These fit requirements describe readiness and behavior, not a separate audience category.',
       ].join(' ');
     case 'avoidCustomers':
       return [
@@ -3480,8 +4358,14 @@ function composeWhoYouServe(ideal, avoid, markets, opts = {}) {
 
 function composeWhyChooseYou(advantages, brandVoice, opts = {}) {
   const businessName = opts.businessName || '';
-  const adv = normalizeClaim('advantages', advantages, { businessName });
-  const voice = normalizeClaim('voice', brandVoice, { businessName });
+  const adv = normalizeClaim('advantages', advantages, {
+    businessName,
+    epistemicState: opts.differentiationState,
+  });
+  const voice = normalizeClaim('voice', brandVoice, {
+    businessName,
+    epistemicState: opts.brandVoiceState,
+  });
   const sentences = [];
   if (adv) sentences.push(adv);
   if (voice) sentences.push(voice);
@@ -3692,7 +4576,14 @@ function composeObservations(sections, normalizedFacts = null) {
           ''
         )
     );
-    if (edge && !containsRawPromptFragment(edge) && edge.split(/\s+/).length <= 40) {
+    if (
+      edge &&
+      !containsRawPromptFragment(edge) &&
+      edge.split(/\s+/).length <= 40 &&
+      !/Not yet defined|Not applicable/i.test(edge) &&
+      facts.epistemic_states?.differentiation !== EPISTEMIC_STATES.UNKNOWN &&
+      facts.epistemic_states?.differentiation !== EPISTEMIC_STATES.NOT_APPLICABLE
+    ) {
       observations.push(
         `${possessiveShort} differentiation centers on ${edge}.`
       );
@@ -3748,9 +4639,15 @@ function composeObservations(sections, normalizedFacts = null) {
     );
   }
 
-  if (facts.brand_voice) {
-    const tone = normalizeBrandVoiceTone(facts.brand_voice);
-    if (tone && !/anchor/i.test(tone)) {
+  if (facts.brand_voice || coreClaim(s('brandVoice').summary)) {
+    const tone = normalizeBrandVoiceTone(facts.brand_voice || coreClaim(s('brandVoice').summary));
+    if (
+      tone &&
+      !/anchor/i.test(tone) &&
+      !/Not yet defined|Not applicable/i.test(tone) &&
+      facts.epistemic_states?.brand_voice !== EPISTEMIC_STATES.UNKNOWN &&
+      facts.epistemic_states?.brand_voice !== EPISTEMIC_STATES.NOT_APPLICABLE
+    ) {
       observations.push(
         `${possessiveShort} brand voice reinforces its positioning by sounding ${tone}.`
       );
@@ -3877,6 +4774,20 @@ function composeAssessment(sections, opts = {}) {
     if (!hasNamedIdeal) marketFocusStars = Math.min(marketFocusStars, 2);
   }
 
+  const diffEpistemic = facts?.epistemic_states?.differentiation || s('competitiveAdvantages')?.epistemic_state || (facts?.differentiation ? EPISTEMIC_STATES.KNOWN : EPISTEMIC_STATES.UNRESOLVED);
+
+  let diffStars = starsFromConfidence(diff);
+  let diffExplanation;
+  if (diffEpistemic === EPISTEMIC_STATES.UNKNOWN || diffEpistemic === EPISTEMIC_STATES.UNRESOLVED || !advClaim || answerLooksEmpty(advClaim) || /Not yet defined/i.test(advClaim)) {
+    diffStars = 1;
+    diffExplanation = 'Competitive reason-to-choose is not yet defined and remains an open area to investigate.';
+  } else if (diffEpistemic === EPISTEMIC_STATES.HYPOTHESIS) {
+    diffStars = Math.min(diffStars, 2);
+    diffExplanation = `Supported by a working hypothesis around ${softenClaim(advClaim)}; requires market validation.`;
+  } else {
+    diffExplanation = `Supported by stated advantages around ${softenClaim(advClaim)}.`;
+  }
+
   const ratings = [
     {
       label: 'Business Clarity',
@@ -3892,10 +4803,8 @@ function composeAssessment(sections, opts = {}) {
     },
     {
       label: 'Differentiation',
-      stars: starsFromConfidence(diff),
-      explanation: advClaim
-        ? `Supported by stated advantages around ${softenClaim(advClaim)}.`
-        : 'Competitive reason-to-choose is not yet evidenced with enough specificity.',
+      stars: diffStars,
+      explanation: diffExplanation,
     },
     {
       label: 'Growth Readiness',
@@ -3928,7 +4837,7 @@ function composeConversationStarters(sections, learnMoreItems) {
   }
   if (sectionFilled(s('competitiveAdvantages'))) {
     starters.push(
-      'Whether your pricing reflects the premium positioning you described.'
+      'Whether your pricing reinforces the differentiation you want the market to recognize.'
     );
   }
   if (sectionFilled(s('avoidCustomers')) || sectionFilled(s('idealCustomers'))) {
@@ -4011,6 +4920,13 @@ function buildOperatorScorecardBriefSections(sections, opts = {}) {
       outcomes: opts.outcomes || null,
       learning: opts.scorecardLearning || null,
     });
+    if (facts && facts.excluded_metrics && facts.excluded_metrics.length) {
+      draft.metrics = draft.metrics.filter((metric) =>
+        !facts.excluded_metrics.some((excluded) =>
+          sameSemanticValue(metric.name, excluded) || sameSemanticValue(metric.key, excluded)
+        )
+      );
+    }
     return buildBriefScorecardSections(draft);
   } catch (_err) {
     return buildBriefScorecardSections({
@@ -4043,7 +4959,12 @@ function buildExecutiveSummary(sections, opts = {}) {
     (normalizedFacts && normalizedFacts.business_name) ||
       extractBusinessName(s('identity').summary)
   );
-  const briefOpts = { businessName, normalizedFacts };
+  const briefOpts = {
+    businessName,
+    normalizedFacts,
+    differentiationState: normalizedFacts?.epistemic_states?.differentiation,
+    brandVoiceState: normalizedFacts?.epistemic_states?.brand_voice,
+  };
   const unknownLabels = collectUnknownLabels(clean);
   const learnMoreItems = composeLearnMoreItems(unknownLabels, { normalizedFacts });
   const observations = composeObservations(clean, normalizedFacts);
@@ -4149,7 +5070,7 @@ function buildExecutiveSummary(sections, opts = {}) {
             `${businessName || 'The business'} prefers to avoid ${constraintRaw}`
         );
       }
-      if (f.geography.length) {
+      if (f.geography.length && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN) {
         const towns = f.geography.filter((g) => !/^Greater (?:Manchester|Toronto Area)$/i.test(g));
         const hasGM = f.geography.some((g) => /Greater Manchester/i.test(g));
         const hasGTA = f.geography.some((g) => /Greater Toronto|GTA/i.test(g));
@@ -4168,8 +5089,19 @@ function buildExecutiveSummary(sections, opts = {}) {
             `${businessSubject(businessName || 'the business', { possessive: true })} near-term geography centers on ${f.geography.join(', ')}`
           );
         }
+      } else if (f.geography.length && f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS) {
+        sentences.push(
+          `Current hypothesis: target markets center on ${
+            f.hypotheses?.geography || f.evidence_statements?.geography || f.geography.join(', ')
+          }`
+        );
       }
-      if (sentences.length >= 2 && cleanIdeal.length) {
+      if (
+        sentences.length >= 2 &&
+        cleanIdeal.length &&
+        f.geography.length &&
+        f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
+      ) {
         sentences.push(
           'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
         );
@@ -4178,20 +5110,33 @@ function buildExecutiveSummary(sections, opts = {}) {
     }
     if (f.brand_voice) {
       const adv =
-        synthesizeNormalizedFact('advantages', s('competitiveAdvantages').summary, briefOpts) ||
+        synthesizeNormalizedFact('advantages', s('competitiveAdvantages').summary, {
+          ...briefOpts,
+          epistemicState: briefOpts.differentiationState,
+        }) ||
         (f.differentiation
           ? `Customers choose ${businessName || 'this business'} because ${midSentence(f.differentiation)}`
           : '');
       const voice = synthesizeNormalizedFact(
         'voice',
         `Brand voice should read as ${f.brand_voice}`,
-        briefOpts
+        { ...briefOpts, epistemicState: briefOpts.brandVoiceState }
       );
       whyChooseYou = joinPolished(
         [adv, voice, 'Differentiation and tone must reinforce each other so the market experiences the same promise the business actually keeps.'].filter(
           Boolean
         )
       );
+    }
+    const differentiationFacts = f.business_facts?.differentiation || [];
+    const unknownReason = differentiationFacts.find(
+      (fact) => fact.subject === 'customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.UNKNOWN
+    );
+    const candidateReason = differentiationFacts.find(
+      (fact) => fact.subject === 'candidate_customer_buying_reason' && fact.epistemic_state === EPISTEMIC_STATES.HYPOTHESIS
+    );
+    if (unknownReason && candidateReason) {
+      whyChooseYou = `Actual customer reason-to-choose: Not yet established. Current hypothesis: ${candidateReason.hypothesis_value}.`;
     }
   }
 
@@ -4589,6 +5534,7 @@ function initialInterviewState({ notes } = {}) {
     normalizedFacts: emptyNormalizedFacts(),
     /** SPEC-090 — session-level conversational reasoning memory. */
     reasoningMemory: emptyReasoningMemory(),
+    workingSemanticCorrections: [],
     notes: notes ? String(notes) : null,
     blueprintId: null,
     lastReflectionAt: 0,
@@ -4674,7 +5620,11 @@ function createMemoryStore() {
       return (turnsBySession.get(String(sessionId)) || []).map((t) => ({ ...t }));
     },
     async insertEvidence(row) {
-      const copy = { ...row };
+      const copy = {
+        ...row,
+        source_text_sha256: canonicalEvidenceDigest(row.statement),
+        immutable_at: row.created_at || new Date().toISOString(),
+      };
       evidence.set(copy.id, copy);
       const list = evidenceBySession.get(copy.session_id) || [];
       list.push(copy);
@@ -4893,8 +5843,8 @@ function createPostgresStore(pool) {
       const result = await pool.query(
         `INSERT INTO cie_evidence (
            id, client_id, session_id, source, source_turn_id, category,
-           statement, confidence, type, created_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,NOW()))
+           statement, confidence, type, created_at, source_text_sha256, immutable_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,NOW()),$11,COALESCE($10,NOW()))
          RETURNING *`,
         [
           row.id,
@@ -4907,6 +5857,7 @@ function createPostgresStore(pool) {
           row.confidence,
           row.type,
           row.created_at || null,
+          canonicalEvidenceDigest(row.statement),
         ]
       );
       return normalizeEvidenceRow(result.rows[0]);
@@ -4970,6 +5921,8 @@ function createPostgresStore(pool) {
         playbook_id: 'playbook_id',
         playbook_version: 'playbook_version',
         section_provenance: 'section_provenance',
+        canonical_snapshot_id: 'canonical_snapshot_id',
+        canonical_snapshot_tenant_id: 'canonical_snapshot_tenant_id',
       };
       for (const [key, col] of Object.entries(map)) {
         if (Object.prototype.hasOwnProperty.call(patch, key)) {
@@ -5084,6 +6037,11 @@ function normalizeEvidenceRow(r) {
     statement: r.statement,
     confidence: Number(r.confidence),
     type: r.type,
+    // SPEC-224: preserved so callers (CIECanonicalAdapter) can build a
+    // canonical batch whose idempotency key matches what commitCanonicalSemanticBatch
+    // re-derives from cie_evidence directly.
+    source_text_sha256: r.source_text_sha256 || null,
+    immutable_at: r.immutable_at || null,
     created_at: r.created_at,
   };
 }
@@ -5109,6 +6067,8 @@ function normalizeBlueprintRow(r) {
         ? JSON.parse(r.section_provenance)
         : r.section_provenance || {},
     parent_blueprint_id: r.parent_blueprint_id,
+    canonical_snapshot_id: r.canonical_snapshot_id || null,
+    canonical_snapshot_tenant_id: r.canonical_snapshot_tenant_id || null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -5149,6 +6109,8 @@ function publicBlueprint(bp) {
     playbookVersion: bp.playbook_version,
     sectionProvenance: bp.section_provenance,
     parentBlueprintId: bp.parent_blueprint_id,
+    canonicalSnapshotId: bp.canonical_snapshot_id || null,
+    canonicalSnapshotTenantId: bp.canonical_snapshot_tenant_id || null,
     readiness: bp.readiness || null,
     createdAt: bp.created_at,
     updatedAt: bp.updated_at,
@@ -5293,7 +6255,8 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
       state.normalizedFacts = ingestAnswerIntoNormalizedFacts(
         state.normalizedFacts || emptyNormalizedFacts(),
         sectionKey,
-        rawStatement
+        rawStatement,
+        { provenance: turnId }
       );
     }
     const fromFacts = sectionsFromNormalizedFacts(state.normalizedFacts, sectionState);
@@ -5465,7 +6428,9 @@ async function generateBlueprint(store, session) {
     confidence_summary,
     playbook_id: null,
     playbook_version: null,
-    section_provenance: {},
+    section_provenance: {
+      business_facts: state.normalizedFacts?.business_facts || {},
+    },
     parent_blueprint_id: null,
     readiness: {
       ready: readiness.ready,
@@ -5538,30 +6503,84 @@ function extractNotesIntoSections(notes) {
     .map((s) => s.trim())
     .filter(Boolean)
     .filter((s) => isBusinessFactStatement(s));
+  const hasAvoidancePolarity = (sentence) =>
+    /\b(?:avoid|never|does\s+not|do\s+not|don'?t|would\s+rather\s+not|should\s+not|not\s+a\s+fit|excludes?|disqualif(?:y|ies)|no\s+longer|won'?t|will\s+not)\b/i.test(sentence);
+  const hasCustomerAvoidanceObject = (sentence) =>
+    /\b(?:serve|serving|work\s+with|take\s+on|fit)\b.{0,140}\b(?:customers?|clients?|prospects?|accounts?|people|owners?|founders?|businesses?|companies|restaurants?|daycares?|facilities|managers?|offices?)\b/i.test(sentence) ||
+    /\b(?:customers?|clients?|prospects?|accounts?|people|owners?|founders?|businesses?|companies|restaurants?|daycares?|facilities|managers?|offices?)\b.{0,140}\b(?:fit|expect(?:ing)?|looking\s+only|quick\s+lead[-\s]?generation|cheapest|lowest\s+price|idea[-\s]?stage|outside)\b/i.test(sentence) ||
+    /\b(?:avoid|never|does\s+not|do\s+not|don'?t|would\s+rather\s+not|won'?t|will\s+not)\b.{0,80}\b(?:restaurants?|daycares?|facilities|offices?|companies|businesses?|owners?|founders?|customers?|clients?|prospects?|accounts?)\b/i.test(sentence);
+  const hasCommunicationObject = (sentence) =>
+    /\b(?:brand\s+voice|voice|tone|sound|sounds?|sounding|style|language|wording|phrasing|copy|messag(?:e|es|ing)|communication|claims?|promises?|rhetoric|presentation|polish|jargon|hype|salesy|fluffy|corporate|passive|active|direct|grounded|experienced|practical|confident|encouraging|challenge)\b/i.test(sentence);
+  const isCustomerExclusion = (sentence) =>
+    hasAvoidancePolarity(sentence) &&
+    hasCustomerAvoidanceObject(sentence) &&
+    !/\b(?:language|wording|phrasing|copy|messag(?:e|es|ing)|brand\s+voice|tone|voice|sound|sounds?|sounding|claims?|promises?|rhetoric|presentation|polish)\b/i.test(sentence);
+  const isBrandCommunicationGuidance = (sentence, previousSection = null) =>
+    /\b(?:brand\s+)?voice\s+should\b/i.test(sentence) ||
+    /\b(?:don'?t|do\s+not|never|avoid)\b.{0,120}\b(?:sound|sounds?|sounding|use|say|claim|promise|language|wording|phrasing|copy|messag(?:e|es|ing)|jargon|hype|salesy|fluffy|corporate|polish|passive)\b/i.test(sentence) ||
+    /\b(?:avoid|never)\b.{0,120}\b(?:jargon|hype|salesy|fluffy|corporate|polish|claims?|promises?|language|wording|phrasing|copy|messag(?:e|es|ing)|passive)\b/i.test(sentence) ||
+    (previousSection === 'brandVoice' &&
+      hasCommunicationObject(sentence) &&
+      !hasCustomerAvoidanceObject(sentence));
+  const isPositiveFitTrait = (sentence) =>
+    /\b(?:right|ideal|great[-\s]?fit|best[-\s]?fit)\s+(?:customer|client|owner|founder|business)\b.{0,80}\b(?:needs?|requires?|must|should|has\s+to|is|are)\b.{0,120}\b(?:willing|prepared|ready|open|able|committed|comfortable|recognizes?|has|operat(?:e|es|ing)|manage|delegate|change|involved)\b/i.test(sentence) ||
+    /\b(?:customer|client|owner|founder|business)\b.{0,80}\b(?:needs?|requires?|must|should|has\s+to)\s+(?:to\s+)?be\s+(?:willing|prepared|ready|open|able|committed|comfortable)\b/i.test(sentence) ||
+    /\b(?:needs?|requires?|must|should|has\s+to)\s+(?:to\s+)?be\s+(?:willing|prepared|ready|open|able|committed|comfortable)\b/i.test(sentence) ||
+    /\b(?:works?\s+well|best\s+fit)\s+for\s+(?:customers?|clients?|owners?|founders?|businesses?)\s+who\b.{0,140}\b(?:are|will|can|have|recognize|delegate|manage|change|operate)\b/i.test(sentence);
+  const isCustomerCategory = (sentence) =>
+    /\b(?:work\s+with|serve|ideal\s+customers?\s+(?:are|include)|customers?\s+(?:are|include)|clients?\s+(?:are|include)|audience\s+(?:is|includes))\b.{0,160}\b(?:owners?|founders?|businesses?|companies|managers?|offices?|restaurants?|daycares?|facilities|segments?|verticals?)\b/i.test(sentence) &&
+    !isPositiveFitTrait(sentence) &&
+    !isCustomerExclusion(sentence);
+  const isBusinessIdentity = (sentence) =>
+    /\b(?:we\s+are|we're|company|business|dba|called|program|practice|agency|firm)\b/i.test(sentence) &&
+    /\b(?:is|are|helps?|provides?|offers?|delivers?|does|builds?|sells?|called|dba)\b/i.test(sentence) &&
+    !/\b(?:customers?|clients?|people|owners?|founders?|businesses?)\b.{0,80}\b(?:avoid|not\s+a\s+fit|would\s+rather\s+not|should\s+not|do\s+not|don't|expecting|looking\s+only)\b/i.test(sentence) &&
+    !isPositiveFitTrait(sentence);
+  const classifyFallbackSection = (sentence, previousSection = null) => {
+    if (isBrandCommunicationGuidance(sentence, previousSection)) return 'brandVoice';
+    if (isCustomerExclusion(sentence)) return 'avoidCustomers';
+    if (isPositiveFitTrait(sentence)) return 'idealCustomerTraits';
+    if (isCustomerCategory(sentence)) return 'idealCustomers';
+    if (isBusinessIdentity(sentence)) return 'identity';
+    if (/\b(services?|offers?|provide|sell|product)\b/i.test(sentence)) return 'services';
+    if (/\b(markets?|geo|regions?|city|cities|county|counties|verticals?)\b/i.test(sentence)) return 'targetMarkets';
+    if (/\b(advantage|differen|better|unique|moat)\b/i.test(sentence)) return 'competitiveAdvantages';
+    if (/\b(voice|tone|sound|brand|professional|friendly|premium)\b/i.test(sentence)) return 'brandVoice';
+    if (/\b(goal|grow|book|appointments|revenue|pipeline)\b/i.test(sentence)) return 'campaignGoals';
+    if (/\b(metric|kpi|measure|success|roi|close rate)\b/i.test(sentence)) return 'successMetrics';
+    return null;
+  };
   const patterns = [
-    { re: /\b(we are|company|business|dba|called)\b/i, section: 'identity' },
-    { re: /\b(service|offer|provide|sell|product)\b/i, section: 'services' },
+    { re: /\b(services?|offers?|provide|sell|product)\b/i, section: 'services' },
     { re: /\b(ideal|icp|customer|clientele|buyer)\b/i, section: 'idealCustomers' },
     { re: /\b(avoid|not a fit|do not want|no longer serve)\b/i, section: 'avoidCustomers' },
-    { re: /\b(market|geo|region|city|county|vertical)\b/i, section: 'targetMarkets' },
+    { re: /\b(markets?|geo|regions?|city|cities|county|counties|verticals?)\b/i, section: 'targetMarkets' },
     { re: /\b(advantage|differen|better|unique|moat)\b/i, section: 'competitiveAdvantages' },
     { re: /\b(voice|tone|sound|brand|professional|friendly|premium)\b/i, section: 'brandVoice' },
     { re: /\b(goal|grow|book|appointments|revenue|pipeline)\b/i, section: 'campaignGoals' },
     { re: /\b(metric|kpi|measure|success|roi|close rate)\b/i, section: 'successMetrics' },
   ];
   const assigned = {};
+  let previousSection = null;
   for (const sentence of sentences) {
+    const semanticSection = classifyFallbackSection(sentence, previousSection);
+    if (semanticSection) {
+      assigned[semanticSection] = assigned[semanticSection]
+        ? `${assigned[semanticSection]} ${sentence}`
+        : sentence;
+      previousSection = semanticSection;
+      continue;
+    }
     for (const p of patterns) {
+      if (p.section === 'avoidCustomers' && !isCustomerExclusion(sentence)) continue;
+      if (p.section === 'idealCustomers' && (isPositiveFitTrait(sentence) || isCustomerExclusion(sentence))) continue;
       if (assigned[p.section]) continue;
       if (p.re.test(sentence)) {
         assigned[p.section] = sentence;
+        previousSection = p.section;
         break;
       }
     }
-  }
-  // leftover sentences fill identity if missing — but never with refinement guidance
-  if (!assigned.identity && sentences[0] && isBusinessFactStatement(sentences[0])) {
-    assigned.identity = sentences[0];
   }
   return { assigned, guidance: partitioned.guidance };
 }
@@ -5920,22 +6939,70 @@ async function getApprovedClientBlueprint(clientId, opts = {}) {
     );
   }
   const bp = publicBlueprint(approved[0]);
+  const durableFacts = bp.sectionProvenance?.business_facts || {};
+  if (Object.keys(durableFacts).length) {
+    bp.epistemicFacts = durableFacts;
+  }
+
+  async function loadLegacySessionFacts() {
+    const sessionId = bp.sessionId || approved[0].session_id;
+    if (!sessionId) return null;
+    const session = await store.getSession(sessionId);
+    const facts =
+      session &&
+      session.interview_state &&
+      session.interview_state.normalizedFacts;
+    return facts && typeof facts === 'object' ? cloneNormalizedFacts(facts) : null;
+  }
+
+  // SPEC-225: snapshot-backed Blueprints read through SPEC-223C. Projection
+  // failure must fail closed rather than silently reverting to session facts.
+  if (approved[0].canonical_snapshot_id && approved[0].canonical_snapshot_tenant_id) {
+    const { deriveBlueprintCompatibility } = require('../lib/canonicalProjection');
+    const pool = opts.pool || defaultPool;
+    const canonicalFacts = await deriveBlueprintCompatibility({
+      tenant_id: approved[0].canonical_snapshot_tenant_id,
+      snapshot_id: approved[0].canonical_snapshot_id,
+      pool,
+    });
+    if (
+      !canonicalFacts ||
+      !canonicalFacts._projection_metadata ||
+      canonicalFacts._projection_metadata.completeness === 'UNAVAILABLE'
+    ) {
+      throw new ClientIntelligenceError(
+        'CANONICAL_PROJECTION_FAILURE',
+        `Canonical snapshot ${approved[0].canonical_snapshot_id} could not be reconstructed for Max business understanding`,
+        500
+      );
+    }
+    bp.normalizedFacts = canonicalFacts;
+    bp._canonical_authority = approved[0].canonical_snapshot_id;
+    bp._semantic_authority = 'CANONICAL';
+    try {
+      bp._legacyFallbackFacts = await loadLegacySessionFacts();
+    } catch (_) {
+      bp._legacyFallbackFacts = null;
+    }
+    return bp;
+  }
+
   // SPEC-103A — attach structured normalizedFacts for Max semantic reasoning.
   // Section summaries remain precomposed Blueprint prose; Max must not nest them.
   try {
-    const sessionId = bp.sessionId || approved[0].session_id;
-    if (sessionId) {
-      const session = await store.getSession(sessionId);
-      const facts =
-        session &&
-        session.interview_state &&
-        session.interview_state.normalizedFacts;
-      if (facts && typeof facts === 'object') {
-        bp.normalizedFacts = cloneNormalizedFacts(facts);
-      }
+    const facts = await loadLegacySessionFacts();
+    if (facts) {
+      bp.normalizedFacts = facts;
+      bp._semantic_authority = 'session_archival'; // Mark as legacy authority
     }
   } catch (_) {
     /* fail soft — Max falls back to peeled section substance */
+  }
+  if (!bp.normalizedFacts && Object.keys(durableFacts).length) {
+    const projected = emptyNormalizedFacts();
+    projected.business_facts = cloneNormalizedFacts({ business_facts: durableFacts }).business_facts;
+    bp.normalizedFacts = projected;
+    bp._semantic_authority = 'section_provenance';
   }
   return bp;
 }
@@ -5993,6 +7060,11 @@ async function startClientInterview(input = {}, opts = {}) {
   if (!restart && !forceNew && !notes) {
     const existing = await findActiveInterviewForClient(clientId, opts);
     if (existing) {
+      const recoveredState = normalizeRecoveredInterviewState(existing.interview_state);
+      if (JSON.stringify(recoveredState) !== JSON.stringify(existing.interview_state || {})) {
+        existing.interview_state = recoveredState;
+        await store.updateSession(existing.id, { interview_state: recoveredState });
+      }
       const detail = await getInterview(existing.id, opts);
       const q = currentQuestion(existing.interview_state);
       const memory = ensureReasoningMemory(existing.interview_state || {});
@@ -6199,10 +7271,11 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     throw new ClientIntelligenceError('empty_message', 'message is required');
   }
 
-  const state = session.interview_state || initialInterviewState();
+  const state = normalizeRecoveredInterviewState(session.interview_state || initialInterviewState());
   const q = currentQuestion(state);
 
-  // Refinement pass after resume: free-form note updates then regenerate blueprint.
+  // Refinement pass after resume: free-form note updates stay conversational
+  // unless the operator explicitly asks to regenerate/review the Blueprint.
   // Refinement instructions are stored as revision guidance — never as business facts.
   if (!q && state.refinementPass) {
     const clientTurn = await store.insertTurn({
@@ -6215,7 +7288,13 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       derived_evidence: [],
       created_at: new Date(),
     });
-    const { assigned: mapped, guidance } = extractNotesIntoSections(text);
+    const correctionResult = await applyRefinementSemanticCorrections(
+      store, session, state, text, clientTurn.id
+    );
+    const extracted = correctionResult.operations.length
+      ? { assigned: {}, guidance: [] }
+      : extractNotesIntoSections(text);
+    const { assigned: mapped, guidance } = extracted;
     if (guidance.length) {
       state.revisionGuidance = [
         ...(state.revisionGuidance || []),
@@ -6227,7 +7306,17 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         })),
       ];
     }
-    const evidenceIds = [];
+    const evidenceIds = [...correctionResult.evidenceIds];
+    const primaryFieldToSection = Object.fromEntries(
+      Object.entries(SECTION_TO_PRIMARY_FIELD).map(([section, field]) => [field, section])
+    );
+    const updatedSections = correctionResult.operations
+      .map((operation) =>
+        BLUEPRINT_SECTIONS.includes(operation.slot)
+          ? operation.slot
+          : primaryFieldToSection[operation.slot]
+      )
+      .filter(Boolean);
     const sectionsToUpdate = Object.keys(mapped);
     // Only apply when we extracted real business facts — never default the whole
     // refinement message into identity.
@@ -6242,17 +7331,73 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         'EXPLICIT',
         clientTurn.id
       );
-      if (!skippedAsGuidance && evidenceRow) evidenceIds.push(evidenceRow.id);
+      if (!skippedAsGuidance && evidenceRow) {
+        evidenceIds.push(evidenceRow.id);
+        updatedSections.push(section);
+        state.normalizedFacts = session.interview_state?.normalizedFacts || state.normalizedFacts;
+        state.sectionState = session.interview_state?.sectionState || state.sectionState;
+      }
     }
     await store.updateTurn(clientTurn.id, { derived_evidence: evidenceIds });
-    state.refinementPass = false;
-    state.done = true;
+    const explicitRegeneration = hasExplicitBlueprintRegenerationIntent(text);
+    if (explicitRegeneration) {
+      state.refinementPass = false;
+      state.done = true;
+    } else {
+      state.refinementPass = true;
+      state.done = false;
+    }
     session.interview_state = state;
     await store.updateSession(session.id, {
       status: 'DISCOVERY',
       interview_state: state,
       current_stage: 'Refinement',
     });
+
+    if (!explicitRegeneration) {
+      const sectionNames = updatedSections.map((section) => SECTION_TITLES[section] || section);
+      const ack =
+        sectionNames.length
+          ? `Got it. I've updated my working understanding for ${sectionNames.join(', ')}.`
+          : guidance.length
+            ? "Understood. I'll treat that as refinement guidance for Max, not as business evidence."
+            : "Got it. I've kept this as refinement context.";
+      const assistantMessage = `${ack}\n\nYou can add another refinement, or ask me to show the updated Blueprint when you're ready to review it.`;
+
+      await store.insertTurn({
+        id: newId(),
+        session_id: session.id,
+        speaker: 'assistant',
+        message: assistantMessage,
+        goal: 'Continue refinement of Business Blueprint understanding',
+        asked_because:
+          'Client refinement updated working understanding; conversational Max/CIE still owns the turn.',
+        derived_evidence: [],
+        created_at: new Date(),
+      });
+
+      return withExperienceFields(await store.getSession(session.id), {
+        interviewId: session.id,
+        ...publicSession(await store.getSession(session.id)),
+        nextAction: 'ASK',
+        messageType: guidance.length && !sectionsToUpdate.length
+          ? MESSAGE_TYPES.REFINEMENT_FEEDBACK
+          : MESSAGE_TYPES.ADD_ON,
+        answerDisposition: evidenceIds.length
+          ? ANSWER_DISPOSITIONS.ACCEPTED
+          : null,
+        question: null,
+        message: assistantMessage,
+        evidence: null,
+        contradiction: false,
+        blueprint: null,
+        reflection: null,
+        supplementalContext: state.supplementalContext || [],
+        reasoningMemory: state.reasoningMemory || null,
+        refinementPass: true,
+      });
+    }
+
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
     return withExperienceFields(await store.getSession(session.id), {
       interviewId: session.id,
@@ -7781,6 +8926,7 @@ async function reviseBlueprint(blueprintId, revisions = {}, opts = {}) {
   if (!session) {
     throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
   }
+  session.interview_state = normalizeRecoveredInterviewState(session.interview_state);
 
   const sections = buildSectionsFromState(current.sections);
   const sectionEdits = revisions.sections || revisions;
@@ -7933,7 +9079,7 @@ async function resumeInterview(sessionId, opts = {}) {
 
   advanceStatus(session, 'DISCOVERY');
   const state = {
-    ...(session.interview_state || initialInterviewState()),
+    ...normalizeRecoveredInterviewState(session.interview_state || initialInterviewState()),
     done: false,
     refinementPass: true,
   };
@@ -8122,19 +9268,157 @@ async function approveBlueprint(blueprintId, opts = {}) {
     );
   }
 
+  // =====================================================================
+  // SPEC-224 Execution Order: Canonical Authority BEFORE Downstream Artifacts
+  // =====================================================================
+  // A. Load session + frozen approval interpretation (done above)
+  // B. Construct CanonicalSemanticBatch from normalizedFacts + evidence
+  // C. Commit through SPEC-223B (returns immutable canonical snapshot)
+  // D. Reconstruct through SPEC-223C projection (if enabled)
+  // E. Derive Blueprint-compatible representation from canonical projection
+  // F. Persist Blueprint as approved with canonical snapshot association
+  // G. Mark session approved
+  // H. Create playbook / perform downstream handoff
+
+  let canonicalSnapshotId = null;
+  let canonicalTenantId = null;
+  const commitCanonicalOpts =
+    opts.canonicalCommit !== false &&
+    (store.kind !== 'memory' || opts.canonicalCommit === true);
+
+  if (commitCanonicalOpts) {
+    try {
+      // Step B+C: Build and commit canonical semantic batch
+      const { CIECanonicalAdapter } = require('../lib/cieCanonicalAdapter');
+      const { commitCanonicalSemanticBatch } = require('../lib/canonicalSemanticWrite');
+      const pool = opts.pool || defaultPool;
+
+      // Resolve the tenant workspace binding for this client (SPEC-223 authority check
+      // requires an existing tenant_workspaces row; tenant_id cannot be fabricated).
+      const clientId = current.client_id;
+      const tenantRow = (
+        await pool.query(
+          `SELECT tenant_key FROM tenant_workspaces WHERE client_id = $1`,
+          [clientId]
+        )
+      ).rows[0];
+      if (!tenantRow) {
+        throw new ClientIntelligenceError(
+          'missing_tenant_workspace',
+          `No tenant workspace bound to client ${clientId}`
+        );
+      }
+      canonicalTenantId = tenantRow.tenant_key;
+
+      // Retrieve frozen evidence records for this session
+      const sessionEvidence = await store.listEvidence(current.session_id);
+
+      // Retrieve approved SPEC-222 registry artifact
+      const registryArtifact = await getApprovedCanonicalRegistry({ ...opts, pool });
+      if (!registryArtifact) {
+        throw new ClientIntelligenceError(
+          'missing_registry',
+          'SPEC-222 canonical registry artifact not seeded (SPEC-224 blocker)'
+        );
+      }
+
+      // Build CanonicalSemanticBatch from approved Blueprint interpretation.
+      // normalizedFacts lives only in session.interview_state (frozen at approval);
+      // the Blueprint row itself carries no normalizedFacts column.
+      const canonicalBatch = CIECanonicalAdapter.buildBatch({
+        tenant_id: canonicalTenantId,
+        client_id: clientId,
+        blueprint: {
+          ...current,
+          normalizedFacts:
+            (session.interview_state && session.interview_state.normalizedFacts) || {},
+        },
+        blueprint_id: current.id,
+        blueprint_version: current.version,
+        cie_evidence_records: sessionEvidence,
+        registry_artifact: registryArtifact,
+        interpreter_id: 'cie-approval-interpreter',
+        interpreter_version: '1.0.0-spec-224',
+        session_id: current.session_id,
+      });
+
+      // Commit canonical batch (with SPEC-223B atomicity)
+      const commitResult = await commitCanonicalSemanticBatch(pool, canonicalBatch);
+      canonicalSnapshotId = commitResult.snapshot_id;
+
+      console.log(
+        `[SPEC-224] Approved Blueprint ${current.id} committed to canonical snapshot ${canonicalSnapshotId}`
+      );
+
+      // Step D+E: Reconstruct through SPEC-223C and derive the Blueprint-compatible
+      // representation BEFORE persisting approval. A projection failure here must
+      // block approval -- a committed snapshot that cannot be reconstructed must
+      // not be presented to the operator as an approved Blueprint.
+      const { deriveBlueprintCompatibility } = require('../lib/canonicalProjection');
+      const projected = await deriveBlueprintCompatibility({
+        tenant_id: canonicalTenantId,
+        snapshot_id: canonicalSnapshotId,
+        pool,
+      });
+      if (!projected || !projected._projection_metadata || projected._projection_metadata.completeness === 'UNAVAILABLE') {
+        throw new ClientIntelligenceError(
+          'projection_failed',
+          `Canonical snapshot ${canonicalSnapshotId} could not be reconstructed into a Blueprint-compatible projection`
+        );
+      }
+    } catch (err) {
+      // Step H (failure behavior): If canonical commit or projection fails, Blueprint remains unapproved
+      console.error('[SPEC-224] Canonical commit or projection failed; approval aborted:', err.message);
+      throw new ClientIntelligenceError(
+        err.code === 'projection_failed' ? 'projection_failed' : 'canonical_commit_failed',
+        `Canonical semantic authority could not be established: ${err.message}`
+      );
+    }
+  }
+
+  // =====================================================================
+  // Step F: Persist Blueprint as approved with canonical snapshot association
+  // (before playbook, per SPEC-224 order)
+  // =====================================================================
+  const approved = await store.updateBlueprint(current.id, current.version, {
+    status: 'approved',
+    canonical_snapshot_id: canonicalSnapshotId, // NEW: Link to canonical authority
+    canonical_snapshot_tenant_id: canonicalTenantId,
+    section_provenance: current.section_provenance,
+  });
+  await store.supersedeBlueprints(current.id, current.version);
+
+  // =====================================================================
+  // Step H: Create playbook / perform downstream handoff
+  // (AFTER canonical authority established, per SPEC-224 order)
+  // =====================================================================
   const handoffOpts = { ...opts };
   if (store.kind === 'memory' && !handoffOpts.playbookStore) {
     handoffOpts.useMemoryPlaybookStore = true;
   }
-  const handoff = await createPlaybookFromApprovedBlueprint(current, handoffOpts);
-  const approved = await store.updateBlueprint(current.id, current.version, {
-    status: 'approved',
-    playbook_id: handoff.playbook.id,
-    playbook_version: handoff.playbook.version,
-    section_provenance: handoff.sectionProvenance,
-  });
-  await store.supersedeBlueprints(current.id, current.version);
+  let handoff;
+  try {
+    handoff = await createPlaybookFromApprovedBlueprint(approved, handoffOpts);
+    // Link playbook to approved Blueprint
+    await store.updateBlueprint(approved.id, approved.version, {
+      playbook_id: handoff.playbook.id,
+      playbook_version: handoff.playbook.version,
+      section_provenance: handoff.sectionProvenance,
+    });
+  } catch (err) {
+    // Step H (failure behavior): Surface playbook failure separately
+    console.error('[SPEC-224] Playbook creation failed (after canonical approval):', err.message);
+    // Blueprint is already approved + canonical snapshot linked; don't revert
+    // Playbook handoff is a downstream concern, not an approval blocker
+    throw new ClientIntelligenceError(
+      'playbook_creation_failed',
+      `Playbook handoff failed after approval: ${err.message}`
+    );
+  }
 
+  // =====================================================================
+  // Growth direction (independent of canonical authority)
+  // =====================================================================
   const initialGrowthDirection = buildInitialGrowthDirection(approved, {
     normalizedFacts:
       (session.interview_state && session.interview_state.normalizedFacts) || null,
@@ -8158,18 +9442,22 @@ async function approveBlueprint(blueprintId, opts = {}) {
     ARTIFACT_KINDS.GROWTH_DIRECTION
   );
 
+  // =====================================================================
+  // Step G: Mark session approved
+  // =====================================================================
   advanceStatus(session, 'APPROVED');
   session.completed_at = new Date();
   await store.updateSession(session.id, {
     status: 'APPROVED',
     completed_at: session.completed_at,
-    summary: `Approved Business Blueprint ${approved.id}@${approved.version}`,
+    summary: `Approved Business Blueprint ${approved.id}@${approved.version} (canonical snapshot: ${canonicalSnapshotId || 'N/A'})`,
     interview_state: {
       ...session.interview_state,
       blueprintId: approved.id,
       blueprintVersion: approved.version,
       playbookId: handoff.playbook.id,
       playbookVersion: handoff.playbook.version,
+      canonicalSnapshotId, // NEW: Link for reference
       approvedAt: session.completed_at.toISOString(),
       initialGrowthDirection,
       growthConversation: null,
@@ -8189,10 +9477,32 @@ async function approveBlueprint(blueprintId, opts = {}) {
     message: 'approved',
     blueprint: publicBlueprint(approved),
     playbook: handoff.playbook,
+    canonicalSnapshotId, // NEW: Expose canonical authority link to caller
     initialGrowthDirection,
     sectionProvenance: handoff.sectionProvenance,
     alreadyApproved: false,
   };
+}
+
+/**
+ * Retrieve the approved SPEC-222 canonical registry artifact.
+ * Per SPEC-224: must exist and be seeded by production registry migration.
+ */
+async function getApprovedCanonicalRegistry(opts) {
+  try {
+    const pool = opts.pool || require('../db');
+    const result = await pool.query(
+      `SELECT id, registry_version, entity_vocabulary, predicate_definitions, content_digest
+       FROM canonical_registry_artifacts
+       WHERE registry_version LIKE '1.0.0-spec-222%'
+       ORDER BY created_at DESC
+       LIMIT 1`
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('[SPEC-224] Failed to retrieve canonical registry artifact:', err.message);
+    return null;
+  }
 }
 
 /**
@@ -9621,6 +10931,9 @@ async function postCampaignPlanningMessage(sessionId, message, opts = {}) {
 }
 
 module.exports = {
+  EPISTEMIC_STATES,
+  classifyEpistemicState,
+  composeAssessment,
   SESSION_STATUSES,
   ALLOWED_TRANSITIONS,
   BLUEPRINT_SECTIONS,
@@ -9696,6 +11009,9 @@ module.exports = {
   looksLikeRefinementFeedback,
   looksLikeCorrection,
   looksLikeSupplementalContext,
+  reviewCorrectionOperations,
+  projectWorkingSemanticOperations,
+  normalizeRecoveredInterviewState,
   containsMetaInstructionLanguage,
   containsRawPromptFragment,
   partitionUserResponse,

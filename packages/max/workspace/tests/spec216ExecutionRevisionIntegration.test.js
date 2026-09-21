@@ -49,9 +49,12 @@ const {
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   advanceEmmettCapacity,
   advanceExecutionAfterApproval,
+  advancePreparedOutreachRevision,
+  buildPaigeRevisionFailureDetails,
 } = require('../AmoOperatorApproval');
 
 const OBJECTIVE = 'Acquire commercial cleaning customers in Manchester NH.';
@@ -81,6 +84,9 @@ async function preparedRuntime() {
     engine, mission: engine.get(created.id, '10'), tenantId: '10', question: 'Approved prioritization.',
   });
   await advanceMaxPrioritization({
+    engine, mission: engine.get(created.id, '10'), tenantId: '10', allowFixtureFallback: true,
+  });
+  await advanceAcquisitionApproach({
     engine, mission: engine.get(created.id, '10'), tenantId: '10', allowFixtureFallback: true,
   });
   await advancePaigeVariants({
@@ -309,6 +315,10 @@ describe('SPEC-217 — Prepared outreach revision executes in the canonical path
     assert.equal(routerAudit[0].action, 'revise_prepared_outreach');
     assert.notEqual(p2.id, p1Id);
     assert.notEqual(e2.id, e1Id);
+    assert.equal(after.contributions.find((row) => row.id === p1Id).payload.superseded, true);
+    assert.equal(after.contributions.find((row) => row.id === p1Id).payload.supersededBy, p2.id);
+    assert.equal(after.contributions.find((row) => row.id === e1Id).payload.superseded, true);
+    assert.equal(after.contributions.find((row) => row.id === e1Id).payload.supersededBy, e2.id);
     assert.equal(after.executionReview.artifactBinding.paigeContributionId, p2.id);
     assert.equal(after.executionReview.artifactBinding.emmettContributionId, e2.id);
     assert.equal(after.mission.revisionState.paigeContributionId, p2.id);
@@ -320,6 +330,85 @@ describe('SPEC-217 — Prepared outreach revision executes in the canonical path
     );
     assert.equal(request.intent === EXECUTION_INTENTS.APPROVE_EXECUTION, false);
     assert.equal(request.intent === EXECUTION_INTENTS.EXECUTE_OUTBOUND, false);
+    assert.equal(sent.length, 0);
+  });
+
+  it('Paige non-success exposes blocker details for rollback diagnostics', () => {
+    const details = buildPaigeRevisionFailureDetails({
+      status: amo.EXECUTION_STATUSES.BLOCKED,
+      blocked: {
+        reason: 'Paige generated customer-facing copy containing internal mission or scoring language.',
+        requiredPrecondition: 'internal_reasoning_leakage',
+      },
+      contributions: {
+        variants: [{
+          candidateId: 'ChIJ43Z_V2dP4okRCRcDHefV8OU',
+          subject: 'Cleaning for Blue Door Living Property Management',
+          body: 'Mission focus: Achieve 1 recurring_clients',
+          cta: 'Reply if a written quote would be useful',
+        }],
+      },
+    }, {
+      stage: STAGES.PREPARE,
+      revisionState: { status: 'running' },
+    });
+
+    assert.equal(details.status, amo.EXECUTION_STATUSES.BLOCKED);
+    assert.equal(details.blocker, 'internal_reasoning_leakage');
+    assert.match(details.reason, /customer-facing copy/i);
+    assert.equal(details.variantCount, 1);
+    assert.equal(details.candidateCount, 1);
+    assert.equal(details.missionStage, STAGES.PREPARE);
+    assert.equal(details.missionState, 'running');
+    assert.equal(details.copySafetyViolations.length, 1);
+  });
+
+  it('failed Paige revision rolls back without outbound side effects', async () => {
+    const { engine, mission } = await preparedRuntime();
+    const before = engine.inspect(mission.id, { tenantId: '10' });
+    const beforeIds = before.contributions.map((row) => row.id);
+    const sent = [];
+
+    await assert.rejects(
+      () => advancePreparedOutreachRevision({
+        engine,
+        mission: before.mission,
+        tenantId: '10',
+        operatorId: 'operator-1',
+        question: 'Regenerate the outreach before execution.',
+        sendEmail: async (...args) => sent.push(args),
+        runPaige: async () => ({
+          variants: [{
+            candidateId: 'ChIJ43Z_V2dP4okRCRcDHefV8OU',
+            companyId: 'ChIJ43Z_V2dP4okRCRcDHefV8OU',
+            placeId: 'ChIJ43Z_V2dP4okRCRcDHefV8OU',
+            companyName: 'Blue Door Living Property Management',
+            bindingScope: 'prospect',
+            variantId: 'paige_v_blue_door',
+            label: 'Primary - Blue Door Living Property Management',
+            subject: 'Cleaning for Blue Door Living Property Management',
+            body: 'Mission focus: Achieve 1 recurring_clients',
+            cta: 'Reply if a written quote would be useful',
+          }],
+          subjects: ['Cleaning for Blue Door Living Property Management'],
+          messaging: 'Mission focus: Achieve 1 recurring_clients',
+          cta: 'Reply if a written quote would be useful',
+          hypotheses: ['Prospect-bound messages with prospect-specific intelligence increase engagement.'],
+          experiments: [],
+          bindingScope: 'prospect',
+        }),
+      }),
+      (err) => {
+        assert.equal(err.code, 'internal_reasoning_leakage');
+        assert.equal(err.rollback, true);
+        assert.equal(err.commitStatus, 'rolled_back');
+        assert.match(err.message, /customer-facing copy/i);
+        return true;
+      }
+    );
+
+    const after = engine.inspect(mission.id, { tenantId: '10' });
+    assert.deepEqual(after.contributions.map((row) => row.id), beforeIds);
     assert.equal(sent.length, 0);
   });
 });

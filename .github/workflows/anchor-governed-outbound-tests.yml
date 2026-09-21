@@ -1,0 +1,29 @@
+name: Anchor governed outbound safety
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  governed-outbound:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - run: npm run test:anchor-outbound
+      - name: Mailbox and scheduling regressions
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: >-
+          node --test test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js
+          test/tenantMailboxPollExecutor.test.js test/tenantOutreachScheduler.test.js
+          test/emmettTenantMailboxCapacity.test.js test/mailHeaders.test.js
+          packages/acquisition-mission/tests/spec215PreparedOutreachRevision.test.js

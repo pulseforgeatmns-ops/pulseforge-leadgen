@@ -63,6 +63,10 @@ const {
   leadHasEstablishedIdentity,
 } = require('./packages/scout/identity/BusinessIdentity');
 const { expandPlacesQueriesForVertical } = require('./packages/scout/hypothesis/MarketHypothesisRegistry');
+const {
+  collectScoutPersonalizationEvidence,
+  persistScoutPersonalizationEvidence,
+} = require('./utils/scoutPersonalizationEvidence');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -736,43 +740,48 @@ async function enrichWithHunter(domain) {
 // ─────────────────────────────────────────────────────────────────────
 // STEP 2c: Scrape website for contact email (fallback for Places leads)
 // ─────────────────────────────────────────────────────────────────────
-async function scrapeWebsiteEmail(domain) {
-  const pages = [
-    `https://${domain}/contact`,
-    `https://${domain}/contact-us`,
-    `https://${domain}/about`,
-    `https://www.${domain}/contact`,
-    `https://www.${domain}`
-  ];
+function filterScrapedWebsiteEmails(html) {
+  const emailMatch = String(html || '').match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
+  if (!emailMatch) return [];
+  return emailMatch.filter((email) =>
+    !email.includes('noreply')
+    && !email.includes('no-reply')
+    && !email.includes('example.com')
+    && !email.includes('sentry')
+    && !email.includes('wix')
+    && !email.includes('squarespace')
+    && !email.includes('.png')
+    && !email.includes('.jpg')
+  );
+}
 
-  for (const url of pages) {
+async function scrapeWebsiteEmail(domain) {
+  const { crawlWebsite, normalizeDomain: crawlNormalizeDomain } = require('./utils/websiteEnrichmentCrawl');
+  const normalizedDomain = crawlNormalizeDomain(domain);
+  if (!normalizedDomain) return null;
+
+  const { pages } = await crawlWebsite(normalizedDomain, async (url) => {
     try {
       const res = await axios.get(url, {
         timeout: 5000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+        validateStatus: () => true,
       });
-      const html = res.data;
+      return {
+        ok: res.status >= 200 && res.status < 400,
+        status: res.status,
+        text: res.data,
+        url: res.request?.res?.responseUrl || url,
+      };
+    } catch (err) {
+      throw err;
+    }
+  }, { maxSuccessfulPages: 8 });
 
-      // Extract email from page
-      const emailMatch = html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
-      if (emailMatch) {
-        // Filter out noreply, info@, support@ — prefer personal emails
-        const filtered = emailMatch.filter(e =>
-          !e.includes('noreply') &&
-          !e.includes('no-reply') &&
-          !e.includes('example.com') &&
-          !e.includes('sentry') &&
-          !e.includes('wix') &&
-          !e.includes('squarespace') &&
-          !e.includes('.png') &&
-          !e.includes('.jpg')
-        );
-        if (filtered.length > 0) {
-          return { email: filtered[0], contact: '', title: '' };
-        }
-      }
-    } catch(err) {
-      // try next page
+  for (const page of pages) {
+    const filtered = filterScrapedWebsiteEmails(page.text);
+    if (filtered.length > 0) {
+      return { email: filtered[0], contact: '', title: '' };
     }
   }
   return null;
@@ -2625,6 +2634,25 @@ async function saveToDatabase(leads, {
       saved++;
       const prospectId = insert.rows[0].id;
 
+      if (isCleaningBuyerProfile()) {
+        try {
+          const scoutPersonalization = await collectScoutPersonalizationEvidence({
+            ...lead,
+            vertical: CONFIG.vertical,
+            company: companyName,
+          });
+          lead.scoutPersonalization = scoutPersonalization;
+          await persistScoutPersonalizationEvidence(
+            pool,
+            prospectId,
+            scoutPersonalization,
+            CONFIG.clientId
+          );
+        } catch (personalizationErr) {
+          console.error(`[Scout] Personalization evidence failed for ${companyName}: ${personalizationErr.message}`);
+        }
+      }
+
       await safeIngestScoutLifecycleSignal({
         prospectId,
         clientId: CONFIG.clientId,
@@ -3358,6 +3386,7 @@ module.exports = {
   enrichWithProspeo,
   enrichWithHunter,
   scrapeWebsiteEmail,
+  filterScrapedWebsiteEmails,
   normalizeDomain,
   resolveEmailVerification,
   runEnrichmentChain,
@@ -3379,6 +3408,7 @@ module.exports = {
     saveToDatabase,
     CLIENT_SCOUT_PLANS,
     CLIENT_SCOUT_CITY_STATE_OVERRIDES,
+    filterScrapedWebsiteEmails,
   },
 };
 

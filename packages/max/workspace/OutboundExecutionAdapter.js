@@ -14,6 +14,7 @@ const {
   summarizeExecutionRecords,
 } = require('../../acquisition-mission/OutboundExecution');
 const { nowIso } = require('../../acquisition-mission/types');
+const { findValidExecutionApproval } = require('../../acquisition-mission/ExecutionApproval');
 const {
   BLOCK_CODES,
   resolveCanonicalSenderIdentity,
@@ -43,6 +44,18 @@ async function resolveExecuteSender(input = {}) {
  * @returns {Promise<object>}
  */
 async function executeOutboundBundle(input = {}) {
+  let governedProgram = null;
+  if (input.pool && String(input.tenantId) === '10') {
+    const installed = await input.pool.query("SELECT to_regclass('acquisition_outbound_programs') AS installed");
+    if (installed.rows[0]?.installed) {
+      const program = await input.pool.query("SELECT id FROM acquisition_outbound_programs WHERE tenant_id='10' AND mode<>'revoked'");
+      governedProgram = program.rows[0] || null;
+      if (program.rows.length && !input.governedEnvelopeId) {
+        return { blocked: true, blockReason: 'Anchor outbound is controlled by its daily program.',
+          blockCode: 'governed_executor_required', records: [], summary: summarizeExecutionRecords([]) };
+      }
+    }
+  }
   const {
     mission,
     contributions = [],
@@ -54,6 +67,8 @@ async function executeOutboundBundle(input = {}) {
     resolveProspectAttributes,
     existingRecords = [],
     persistExecutionRecord,
+    executionRequest,
+    maxSends: maxSendsInput,
   } = input;
 
   const resolvedSender = await resolveExecuteSender(input);
@@ -124,7 +139,29 @@ async function executeOutboundBundle(input = {}) {
   }
 
   const { bundle } = bundleResult;
+  // A delegated daily approval cannot escape its durable scheduler via manual CER,
+  // replay, a stale one-send runner, or a caller-supplied prospect filter.
+  const governedApproval = (approval || findValidExecutionApproval(contributions, mission.id))?.payload?.dailyEnvelope;
+  if (governedProgram && (!governedApproval || governedApproval.programId !== governedProgram.id)) {
+    return { blocked: true, blockReason: 'Approval does not belong to the active Anchor program.',
+      blockCode: 'governed_executor_required', bundle, records: [], summary: summarizeExecutionRecords([]) };
+  }
+  if (governedApproval) {
+    const envelope = governedApproval;
+    if (!input.governedEnvelopeId || input.governedEnvelopeId !== envelope.id || typeof sendEmail.beforeAttempt !== 'function') {
+      return { blocked: true, blockReason: 'Governed daily envelope requires its guarded executor.',
+        blockCode: 'governed_executor_required', bundle, records: [], summary: summarizeExecutionRecords([]) };
+    }
+    bundle.sends = bundle.sends.filter(row => envelope.candidateIds.includes(String(row.prospectId)));
+  }
   const records = [];
+  const requestedMax = Number(
+    maxSendsInput
+    ?? (executionRequest && executionRequest.payload && executionRequest.payload.maxSends)
+  );
+  const maxSends = Number.isFinite(requestedMax) && requestedMax > 0 ? requestedMax : null;
+  const prospectFilter = resolveProspectFilter(input, executionRequest);
+  let sendableConsidered = 0;
   const approvalMeta = bundle.executionApproval;
   const explicitSender = {
     email: bundle.provider.senderIdentity,
@@ -142,6 +179,10 @@ async function executeOutboundBundle(input = {}) {
   }
 
   for (const send of bundle.sends) {
+    if (prospectFilter.size && !prospectFilter.has(String(send.prospectId || ''))) {
+      continue;
+    }
+
     if (send.status === EXECUTION_RECORD_STATUS.BLOCKED) {
       const blockedRecord = buildExecutionRecord({
         missionId: bundle.missionId,
@@ -166,6 +207,13 @@ async function executeOutboundBundle(input = {}) {
       continue;
     }
 
+    // Count sendable items toward the cap before send or dedup. Replay of
+    // maxSends=1 must not advance to the next unsent queue item.
+    if (maxSends != null && sendableConsidered >= maxSends) {
+      continue;
+    }
+    sendableConsidered += 1;
+
     const priorSuccess = findSuccessfulExecutionRecord(
       [...existingRecords, ...records],
       send.executionIdentity
@@ -175,6 +223,12 @@ async function executeOutboundBundle(input = {}) {
       continue;
     }
 
+    const command = {
+      toEmail: send.email, toName: send.toName, subject: send.message.subject, body: send.message.body,
+      tags: [`mission:${bundle.missionId}`, `prospect:${send.prospectId}`, `revision:${approvalMeta.preparedArtifactRevision}`],
+      idempotencyKey: send.idempotencyKey, sender: explicitSender, requireExplicitSender: true,
+    };
+    if (governedApproval) await sendEmail.beforeAttempt(command);
     const attemptedAt = nowIso();
     const pendingRecord = buildExecutionRecord({
       missionId: bundle.missionId,
@@ -201,20 +255,7 @@ async function executeOutboundBundle(input = {}) {
       await persistExecutionRecord(pendingRecord);
     }
 
-    const providerResult = await sendEmail({
-      toEmail: send.email,
-      toName: send.toName,
-      subject: send.message.subject,
-      body: send.message.body,
-      tags: [
-        `mission:${bundle.missionId}`,
-        `prospect:${send.prospectId}`,
-        `revision:${approvalMeta.preparedArtifactRevision}`,
-      ],
-      idempotencyKey: send.idempotencyKey,
-      sender: explicitSender,
-      requireExplicitSender: true,
-    });
+    const providerResult = await sendEmail(command);
 
     const sentAt = nowIso();
     const finalRecord = buildExecutionRecord({
@@ -243,6 +284,18 @@ async function executeOutboundBundle(input = {}) {
     records,
     summary: summarizeExecutionRecords(records),
   };
+}
+
+function resolveProspectFilter(input = {}, executionRequest = null) {
+  const payload = (executionRequest && executionRequest.payload) || {};
+  const values = []
+    .concat(input.prospectId || [])
+    .concat(input.prospectIds || [])
+    .concat(payload.prospectId || [])
+    .concat(payload.prospectIds || [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  return new Set(values);
 }
 
 module.exports = {

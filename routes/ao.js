@@ -7,6 +7,7 @@ const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const { TEMPLATES } = require('../utils/aoMessageTemplates');
 const aoField = require('../services/aoFieldService');
 const aoMax = require('../services/aoMaxFlow');
+const aoMaxConversation = require('../services/aoMaxConversation');
 const aoRoute = require('../services/aoRouteService');
 const { buildTelUrl } = require('../utils/aoRoutePlanner');
 
@@ -263,7 +264,11 @@ router.post('/api/max/start', requireAoWrite, refreshAoSession, wrapAoHandler(as
   const clientId = requireAoClient(req, res);
   if (!clientId) return;
   const aoOwnerId = effectiveAoOwnerId(req);
-  const { mode, task_id: taskId } = req.body || {};
+  const {
+    mode,
+    task_id: taskId,
+    conversation_session_id: conversationSessionId,
+  } = req.body || {};
   if (!mode) return res.status(400).json({ error: 'mode required' });
 
   const result = await aoMax.startMode({
@@ -272,6 +277,7 @@ router.post('/api/max/start', requireAoWrite, refreshAoSession, wrapAoHandler(as
     mode,
     aoName: req.user.name,
     taskId,
+    conversationSessionId: conversationSessionId || null,
   });
   if (result.status) return res.status(result.status).json({ error: result.error });
   res.json(result);
@@ -293,6 +299,70 @@ router.post('/api/max/respond', requireAoWrite, refreshAoSession, wrapAoHandler(
   });
   if (result.status) return res.status(result.status).json({ error: result.error });
   res.json(result);
+}));
+
+router.post('/api/max/ask', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { message, session_id: sessionId } = req.body || {};
+  if (!message || !String(message).trim()) {
+    return res.status(400).json({ error: 'message required' });
+  }
+
+  const result = await aoMax.askMax({
+    aoOwnerId,
+    clientId,
+    message: String(message).trim(),
+    sessionId: sessionId || null,
+  });
+  res.json(result);
+}));
+
+router.post('/api/max/new-conversation', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { previous_session_id: previousSessionId } = req.body || {};
+
+  const result = await aoMaxConversation.startNewConversation({
+    aoOwnerId,
+    clientId,
+    previousSessionId: previousSessionId || null,
+  });
+  res.json(result);
+}));
+
+router.post('/api/max/report', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { session_id: sessionId, note, category } = req.body || {};
+  if (!sessionId) return res.status(400).json({ error: 'session_id required' });
+
+  const result = await aoMaxConversation.reportConversation({
+    sessionId,
+    aoOwnerId,
+    clientId,
+    note,
+    category,
+  });
+  if (result.status) return res.status(result.status).json({ error: result.error });
+  res.json(result);
+}));
+
+router.get('/api/max/reports', requireJakeRead, wrapAoHandler(async (req, res) => {
+  const clientId = aoClientId(req);
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const reports = await aoMaxConversation.listConversationReports({ clientId, limit });
+  res.json({ reports });
+}));
+
+router.get('/api/max/reports/:id', requireJakeRead, wrapAoHandler(async (req, res) => {
+  const clientId = aoClientId(req);
+  const report = await aoMaxConversation.getConversationReport(req.params.id, { clientId });
+  if (!report) return res.status(404).json({ error: 'Report not found' });
+  res.json(report);
 }));
 
 router.get('/api/escalations', requireJakeRead, wrapAoHandler(async (req, res) => {

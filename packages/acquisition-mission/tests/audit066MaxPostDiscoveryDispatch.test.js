@@ -77,10 +77,8 @@ describe('AUDIT-066 — Canonical Max Post-Discovery Dispatch', () => {
     assert.ok(result.prioritization.payload.timing);
     assert.ok(Array.isArray(result.prioritization.payload.recommendations));
     assert.ok(Array.isArray(result.prioritization.payload.constraints));
-    assert.deepEqual(result.prioritization.payload.delegation, {
-      paige: 'variants',
-      emmett: 'capacity',
-    });
+    assert.equal(Object.prototype.hasOwnProperty.call(result.prioritization.payload, 'delegation'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(result.prioritization.payload, 'acquisitionApproach'), false);
     assert.equal(result.maxResult.status, EXECUTION_STATUSES.SUCCESS);
 
     const snapshot = engine.inspect(mission.id, { tenantId: '10' });

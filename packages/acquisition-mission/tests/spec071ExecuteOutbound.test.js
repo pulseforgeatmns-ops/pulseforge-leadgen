@@ -30,6 +30,7 @@ const {
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   advanceEmmettCapacity,
   advanceExecutionAfterApproval,
@@ -107,38 +108,15 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     await advanceMaxPrioritization({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
+    await advanceAcquisitionApproach({
+      engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
+    });
     await advancePaigeVariants({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
     await advanceEmmettCapacity({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
-    const prepared = engine.inspect(mission.id, { tenantId: '10' });
-    const paige = prepared.contributions
-      .slice().reverse()
-      .find((row) => row.specialist === SPECIALISTS.PAIGE && row.kind === CONTRIBUTION_KINDS.VARIANTS);
-    const emmett = prepared.contributions
-      .slice().reverse()
-      .find((row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY);
-    const variants = paige?.payload?.variants || [];
-    engine.store.updateContribution(emmett.id, (row) => ({
-      ...row,
-      payload: {
-        ...row.payload,
-        queue: {
-          ...row.payload.queue,
-          items: (row.payload.queue?.items || []).map((item, index) => {
-            const candidateId = item.candidateId || item.prospectId || item.id || item.companyId;
-            const variant = variants.find((entry) => entry.candidateId === candidateId) || variants[index];
-            return {
-              ...item,
-              candidateId,
-              paige: variant,
-            };
-          }),
-        },
-      },
-    }));
     await advanceExecutionAfterApproval({
       engine,
       mission: engine.get(mission.id, '10'),
@@ -204,6 +182,66 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
       name: CANONICAL_SENDER.senderName,
     });
     assert.equal(providerCalls[0].requireExplicitSender, true);
+  });
+
+  it('EXECUTE_OUTBOUND maxSends=1 sends one queue item and replay is suppressed', async () => {
+    await throughExecutionApproved();
+    const providerCalls = [];
+    const sendEmail = mockSendEmailFactory(providerCalls);
+
+    const first = createExecutionRequest({
+      source: EXECUTION_SOURCES.API,
+      intent: EXECUTION_INTENTS.EXECUTE_OUTBOUND,
+      missionId: mission.id,
+      operatorId: 'operator-1',
+      stage: STAGES.EXECUTE,
+      payload: { maxSends: 1 },
+    });
+    const routed = await routeExecutionRequest(first, {
+      engine,
+      tenantId: '10',
+      sendEmail,
+      resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
+      maxSends: 1,
+    });
+
+    assert.equal(routed.executionResult.executionOutcome, 'completed');
+    assert.equal(providerCalls.length, 1);
+    assert.equal(routed.executionResult.summary.sent, 1);
+    const sent = routed.executionResult.records.find(
+      (row) => row.status === EXECUTION_RECORD_STATUS.SENT
+    );
+    assert.ok(sent);
+    assert.ok(sent.idempotencyKey);
+    assert.ok(sent.providerMessageId);
+    const firstProspectId = sent.prospectId;
+
+    const replay = createExecutionRequest({
+      source: EXECUTION_SOURCES.API,
+      intent: EXECUTION_INTENTS.EXECUTE_OUTBOUND,
+      missionId: mission.id,
+      operatorId: 'operator-1',
+      stage: STAGES.EXECUTE,
+      payload: { maxSends: 1 },
+    });
+    const replayed = await routeExecutionRequest(replay, {
+      engine,
+      tenantId: '10',
+      sendEmail,
+      resolveProspectAttributes,
+      canonicalSender: CANONICAL_SENDER,
+      senderReadiness: READY_SENDER,
+      maxSends: 1,
+    });
+    assert.equal(providerCalls.length, 1);
+    assert.ok((replayed.executionResult.records || []).some((row) => row.deduplicated === true));
+    assert.ok(
+      (replayed.executionResult.records || []).every(
+        (row) => row.prospectId === firstProspectId || row.deduplicated === true
+      )
+    );
   });
 
   it('matching artifact revision allows execution', async () => {
@@ -307,6 +345,9 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
     await advanceMaxPrioritization({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
+    await advanceAcquisitionApproach({
+      engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
+    });
     await advancePaigeVariants({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
@@ -321,7 +362,15 @@ describe('SPEC-071 — Canonical EXECUTE Outbound Adapter', () => {
             email: 'alex@harborlaw.com',
             position: 1,
             sendable: true,
-            paige: { variantLabel: 'Primary', author: 'paige', source: 'paige', ready: true, sendable: true },
+            paige: {
+              candidateId: 'co-harbor',
+              bindingScope: 'mission',
+              variantLabel: 'Primary',
+              author: 'paige',
+              source: 'paige',
+              ready: true,
+              sendable: true,
+            },
           }],
         },
         deliverability: { status: 'healthy' },

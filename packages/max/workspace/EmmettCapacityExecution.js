@@ -36,12 +36,17 @@ const FORBIDDEN_QUEUE_KEYS = new Set([
   'messaging', 'copy', 'emailBody', 'email_body', 'hypothesis', 'hypotheses',
 ]);
 
-function findEmmettCapacity(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
-    );
+const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
+const { validatePaigeVariantCopy, BLOCKER: COPY_SAFETY_BLOCKER } = require('./PaigeCopySafety');
+const { resolveQueueSendability } = require('../../emmett-outbound/Queue');
+
+function findEmmettCapacity(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: SPECIALISTS.EMMETT,
+    kind: CONTRIBUTION_KINDS.CAPACITY,
+    mission,
+  });
 }
 
 function fixtureInfrastructureSnapshot(tenantId) {
@@ -100,21 +105,78 @@ async function resolveInfrastructureSnapshot(executionInput = {}, opts = {}) {
   throw validationError('tme_infrastructure_missing', 'Infrastructure snapshot is required for Emmett execution.');
 }
 
+function cleanText(value) {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim()
+    : '';
+}
+
+/**
+ * Project bound Paige variant copy into CAPACITY queue items.
+ * Copy must pass PaigeCopySafety; internal rationale never renders into fields.
+ */
+function sanitizePaigeBinding(value = {}) {
+  const paige = {
+    author: value.author || 'paige',
+    source: value.source || 'paige',
+    ready: value.ready === true,
+    variantLabel: value.variantLabel || value.label || null,
+  };
+  const candidateId = cleanText(value.candidateId);
+  if (candidateId) paige.candidateId = candidateId;
+  const bindingScope = cleanText(value.bindingScope);
+  if (bindingScope) paige.bindingScope = bindingScope;
+  if (value.attributableIntelligence && typeof value.attributableIntelligence === 'object') {
+    paige.attributableIntelligence = { ...value.attributableIntelligence };
+  }
+  const variantId = cleanText(value.variantId);
+  if (variantId) paige.variantId = variantId;
+  const companyName = cleanText(value.companyName);
+  if (companyName) paige.companyName = companyName;
+
+  const subject = cleanText(value.subject);
+  const body = cleanText(value.body);
+  const cta = cleanText(value.cta);
+  if (subject) paige.subject = subject;
+  if (body) paige.body = body;
+  if (cta) paige.cta = cta;
+
+  const copySafety = validatePaigeVariantCopy(paige);
+  if (!copySafety.safe) {
+    delete paige.subject;
+    delete paige.body;
+    delete paige.cta;
+  }
+
+  return paige;
+}
+
 function sanitizeQueueItem(item = {}) {
+  const rawPaige = item.paige && typeof item.paige === 'object' ? item.paige : null;
+  const unsafeCopyAttempt = rawPaige
+    && cleanText(rawPaige.subject)
+    && cleanText(rawPaige.body)
+    && !validatePaigeVariantCopy(rawPaige).safe;
+
   const clean = {};
   for (const [key, value] of Object.entries(item)) {
     if (FORBIDDEN_QUEUE_KEYS.has(key)) continue;
     if (key === 'paige' && value && typeof value === 'object') {
-      clean.paige = {
-        author: value.author || 'paige',
-        source: value.source || 'paige',
-        ready: value.ready === true,
-        variantLabel: value.variantLabel || null,
-        sendable: value.sendable === true,
-      };
+      clean.paige = sanitizePaigeBinding(value);
       continue;
     }
     clean[key] = value;
+  }
+  if (unsafeCopyAttempt) {
+    clean.sendable = false;
+    clean.sendBlocker = COPY_SAFETY_BLOCKER;
+  } else {
+    const sendability = resolveQueueSendability({
+      ...clean,
+      contentSource: clean.contentSource || clean.paige?.source || null,
+    });
+    clean.sendable = sendability.sendable;
+    clean.sendBlocker = sendability.sendBlocker;
   }
   return clean;
 }
@@ -320,6 +382,43 @@ async function runEmmettForAmoMission(mission, opts = {}) {
   const contributions = opts.contributions
     || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
     || [];
+  const {
+    buildMissionBoundCandidates,
+    listMissionBoundCrmLookupKeys,
+    listMissionBoundProspectIds,
+  } = require('./EmmettMissionCandidates');
+  const {
+    loadCrmProspectsForMissionBoundCompanies,
+    loadCrmProspectsByIds,
+  } = require('./MissionBoundCrmResolver');
+  const { aliasCrmMapToIdentities } = require('./CanonicalOutboundIdentity');
+
+  let crmByProspectId = opts.crmByProspectId || null;
+  if (!crmByProspectId && opts.pool) {
+    const clientId = Number(mission.clientId || mission.tenantId || opts.tenantId);
+    const identities = buildMissionBoundCandidates(mission, contributions);
+    const companyIds = listMissionBoundCrmLookupKeys(mission, contributions);
+    const prospectIds = listMissionBoundProspectIds(mission, contributions);
+    const maps = [];
+    if (companyIds.length) {
+      maps.push(await loadCrmProspectsForMissionBoundCompanies({
+        clientId,
+        companyIds,
+        pool: opts.pool,
+      }));
+    }
+    if (prospectIds.length) {
+      maps.push(await loadCrmProspectsByIds({
+        clientId,
+        prospectIds,
+        pool: opts.pool,
+      }));
+    }
+    if (maps.length) {
+      crmByProspectId = aliasCrmMapToIdentities(maps, identities);
+    }
+  }
+
   const executionInput = buildExecutionInput({
     mission,
     contributions,
@@ -328,6 +427,7 @@ async function runEmmettForAmoMission(mission, opts = {}) {
     executionContext: opts.executionContext,
     infrastructureSnapshot: opts.infrastructureSnapshot,
     store: opts.engine?.store,
+    crmByProspectId,
   });
   const { payload, assessed, infrastructureSnapshot, candidates } = await buildEmmettCapacityPayload(
     executionInput,
@@ -485,4 +585,5 @@ module.exports = {
   validateEmmettCapacityOutput,
   commitEmmettCapacityStage,
   sanitizeQueueItem,
+  sanitizePaigeBinding,
 };

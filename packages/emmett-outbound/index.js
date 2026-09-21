@@ -2,12 +2,13 @@
 
 /**
  * SPEC-117 — Emmett Outbound Infrastructure Intelligence.
+ * SPEC-255 — tenant mailbox auth bridge + bootstrap capacity.
  * Reputation is capital. Emmett protects it.
  */
 
 const types = require('./types');
 const { scoreInboxHealth, healthLabel, FACTOR_MAX } = require('./InboxHealth');
-const { recommendCapacity } = require('./Capacity');
+const { recommendCapacity, recommendCapacityNormal } = require('./Capacity');
 const { evaluateGovernor, evaluateSend, acknowledgeHalt, actorIsOperator } = require('./Governor');
 const { buildTodayQueue, queueScore } = require('./Queue');
 const { paceVerticals, pacingWarning } = require('./Pacing');
@@ -17,6 +18,15 @@ const { routeOutcome, learningForSink } = require('./Learning');
 const { buildDashboard } = require('./Dashboard');
 const { createMemoryEoiStore } = require('./Store');
 const { createOutboundEngine, localDateOf } = require('./Engine');
+const authEvidence = require('./AuthEvidence');
+const bootstrap = require('./Bootstrap');
+const { buildCapacityEnvelope, buildDecisiveReasoning } = require('./CapacityEnvelope');
+const tenantMailboxCapacity = require('./TenantMailboxCapacity');
+
+const {
+  buildCapacityEnvelope: buildTenantMailboxDurableEnvelope,
+  ...tenantMailboxCapacityRest
+} = tenantMailboxCapacity;
 
 module.exports = {
   ...types,
@@ -24,6 +34,7 @@ module.exports = {
   healthLabel,
   FACTOR_MAX,
   recommendCapacity,
+  recommendCapacityNormal,
   evaluateGovernor,
   evaluateSend,
   acknowledgeHalt,
@@ -43,4 +54,10 @@ module.exports = {
   createMemoryEoiStore,
   createOutboundEngine,
   localDateOf,
+  ...authEvidence,
+  ...bootstrap,
+  ...tenantMailboxCapacityRest,
+  buildCapacityEnvelope,
+  buildDecisiveReasoning,
+  buildTenantMailboxDurableEnvelope,
 };

@@ -423,25 +423,188 @@ function resolveExplainabilityProjection(scoutResult = {}, opts = {}) {
   return serializeForAmo(graph);
 }
 
-function resolveBlocked(resolved = {}, payload = {}) {
+function candidateHasDiscoveryProof(row = {}) {
+  if (!row || typeof row !== 'object') return false;
+  if (Array.isArray(row.evidenceRefs) && row.evidenceRefs.length) return true;
+  if (Array.isArray(row.evidence) && row.evidence.length) return true;
+  if (Array.isArray(row.signals) && row.signals.length) return true;
+  const name = asText(row.name);
+  const placeId = asText(row.placeId || row.place_id);
+  const website = asText(row.website || row.url);
+  const address = asText(row.address || row.location);
+  return Boolean(name && (placeId || website || address));
+}
+
+function hasAttachableScoutEvidence(payload = {}) {
+  const buckets = [
+    ...(payload.opportunities || []),
+    ...(payload.acquisitionOpportunities || []),
+    ...(payload.fitCandidates || []),
+    ...(payload.watchCandidates || []),
+    ...(payload.candidateUniverse || []),
+  ];
+  for (const row of buckets) {
+    if (candidateHasDiscoveryProof(row)) return true;
+  }
+  if (Array.isArray(payload.evidence) && payload.evidence.length) return true;
+  if (Array.isArray(payload.evidenceRefs) && payload.evidenceRefs.length) return true;
+  if (Array.isArray(payload.buyingSignals) && payload.buyingSignals.length) return true;
+  return false;
+}
+
+function countCandidateUniverse(payload = {}) {
+  if (payload.candidateUniverseCount != null) {
+    return Number(payload.candidateUniverseCount);
+  }
+  return Array.isArray(payload.candidateUniverse) ? payload.candidateUniverse.length : 0;
+}
+
+function providerExecutionHasResults(reports = []) {
+  if (!Array.isArray(reports)) return false;
+  return reports.some((row) => {
+    if (!row || typeof row !== 'object') return false;
+    const raw =
+      row.rawResultCount != null
+        ? Number(row.rawResultCount)
+        : row.execution && row.execution.totals && row.execution.totals.results != null
+          ? Number(row.execution.totals.results)
+          : Array.isArray(row.candidates)
+            ? row.candidates.length
+            : 0;
+    if (raw > 0) return true;
+    return row.status === 'completed' && Array.isArray(row.evidenceProduced) && row.evidenceProduced.length > 0;
+  });
+}
+
+function allProviderExecutionsFailed(reports = []) {
+  if (!Array.isArray(reports) || !reports.length) return false;
+  const external = reports.filter(
+    (row) => row && row.providerId && !/existing_pf|repository/i.test(String(row.providerId))
+  );
+  if (!external.length) return false;
+  return external.every((row) => row.status === 'failed' || row.available === false);
+}
+
+function countAttachableScoutEvidence(payload = {}) {
+  if (!hasAttachableScoutEvidence(payload)) return 0;
+  const buckets = [
+    ...(payload.opportunities || []),
+    ...(payload.acquisitionOpportunities || []),
+    ...(payload.fitCandidates || []),
+    ...(payload.watchCandidates || []),
+    ...(payload.candidateUniverse || []),
+  ];
+  let count = 0;
+  for (const row of buckets) {
+    if (candidateHasDiscoveryProof(row)) count += 1;
+  }
+  if (Array.isArray(payload.evidence) && payload.evidence.length) count += payload.evidence.length;
+  if (Array.isArray(payload.evidenceRefs) && payload.evidenceRefs.length) {
+    count += payload.evidenceRefs.length;
+  }
+  if (Array.isArray(payload.buyingSignals) && payload.buyingSignals.length) {
+    count += payload.buyingSignals.length;
+  }
+  return count;
+}
+
+function resolveBlockedDecision(resolved = {}, payload = {}) {
   const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
   const qualifiedCount =
     payload.qualifiedCount != null
       ? Number(payload.qualifiedCount)
       : opportunities.length + (payload.fitCandidates || []).length;
+  const providerReports = payload.providerExecution || payload.providerReports || [];
+  const candidateUniverseCount = countCandidateUniverse(payload);
+  const providerReportCount = Array.isArray(providerReports) ? providerReports.length : 0;
+  const providerHasResults = providerExecutionHasResults(providerReports);
+  const attachableEvidenceCount = countAttachableScoutEvidence(payload);
+  const noAttachableEvidence = attachableEvidenceCount === 0;
+  const discoveryCommitted =
+    candidateUniverseCount > 0 || providerHasResults || !noAttachableEvidence;
+
+  const diagnostics = {
+    artifactPath: 'packages/scout/adapters/ScoutDiscoveryArtifact.buildScoutDiscoveryArtifact',
+    candidateUniverseCountAtResolve: candidateUniverseCount,
+    providerReportCountAtResolve: providerReportCount,
+    attachableEvidenceCountAtResolve: attachableEvidenceCount,
+    blockedDecisionSource: 'ScoutDiscoveryArtifact.resolveBlocked',
+  };
 
   if (
     payload.capabilityBlocked === true ||
     payload.blockerCode === 'external_discovery_capability_unavailable'
   ) {
-    return true;
+    return {
+      ...diagnostics,
+      blocked: true,
+      blockedDecisionReason: 'capability_blocked',
+    };
   }
 
-  return (
-    resolved.status === 'blocked'
-    || payload.outcome === 'blocked'
-    || (qualifiedCount <= 0 && payload.discoveryStatus === 'incomplete')
-  );
+  if (
+    allProviderExecutionsFailed(providerReports) &&
+    candidateUniverseCount === 0 &&
+    !providerHasResults
+  ) {
+    return {
+      ...diagnostics,
+      blocked: true,
+      blockedDecisionReason: 'all_external_providers_failed',
+    };
+  }
+
+  if (discoveryCommitted) {
+    if (
+      payload.outcome === 'blocked' &&
+      payload.blockerCode === 'external_discovery_capability_unavailable'
+    ) {
+      return {
+        ...diagnostics,
+        blocked: true,
+        blockedDecisionReason: 'explicit_terminal_outcome',
+      };
+    }
+    return {
+      ...diagnostics,
+      blocked: false,
+      blockedDecisionReason: 'discovery_committed',
+    };
+  }
+
+  if (resolved.status === 'blocked' || payload.outcome === 'blocked') {
+    return {
+      ...diagnostics,
+      blocked: true,
+      blockedDecisionReason: 'scout_status_blocked_without_commit',
+    };
+  }
+
+  if (qualifiedCount <= 0 && payload.discoveryStatus === 'incomplete') {
+    return {
+      ...diagnostics,
+      blocked: true,
+      blockedDecisionReason: 'incomplete_without_commit',
+    };
+  }
+
+  if (qualifiedCount <= 0 && noAttachableEvidence) {
+    return {
+      ...diagnostics,
+      blocked: true,
+      blockedDecisionReason: 'no_attachable_evidence',
+    };
+  }
+
+  return {
+    ...diagnostics,
+    blocked: false,
+    blockedDecisionReason: 'discovery_not_blocked',
+  };
+}
+
+function resolveBlocked(resolved = {}, payload = {}) {
+  return resolveBlockedDecision(resolved, payload).blocked;
 }
 
 /**
@@ -456,7 +619,20 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
   const opportunities = payload.opportunities || payload.acquisitionOpportunities || [];
   const evidence = collectCanonicalScoutEvidence(scoutResult);
   assertScoutEvidenceCoverage(scoutResult, evidence);
-  const blocked = resolveBlocked(resolved, payload);
+  const blockedDecision = resolveBlockedDecision(resolved, payload);
+  const blocked = blockedDecision.blocked === true;
+  const providerReports = payload.providerExecution || payload.providerReports || [];
+  const providerFailureBlocked =
+    blocked &&
+    allProviderExecutionsFailed(providerReports) &&
+    countCandidateUniverse(payload) === 0;
+  const blockReason = providerFailureBlocked
+    ? asText(
+        providerReports.find((row) => row && row.error)?.error
+        || providerReports.find((row) => row && row.limitations && row.limitations[0])?.limitations?.[0]
+        || 'External discovery provider failed before candidates could be collected.'
+      )
+    : null;
   const mir = resolved.missionIntelligenceReport || null;
   const cognitiveTrace = resolveExplainabilityProjection(scoutResult, opts);
 
@@ -482,12 +658,26 @@ function buildScoutDiscoveryArtifact(scoutResult = {}, opts = {}) {
     fitCandidates: payload.fitCandidates || [],
     watchCandidates: payload.watchCandidates || [],
     opportunities,
-    outcome: resolved.status || (blocked ? 'blocked' : 'completed'),
+    outcome: blocked
+      ? 'blocked'
+      : resolved.status === 'partial' || payload.discoveryStatus === 'incomplete'
+        ? 'partial'
+        : resolved.status || payload.outcome || 'completed',
     blocked,
+    blockerCode: providerFailureBlocked ? 'discovery_provider_failed' : payload.blockerCode || null,
+    blockReason: blockReason || payload.blockReason || null,
+    artifactPath: blockedDecision.artifactPath,
+    candidateUniverseCountAtResolve: blockedDecision.candidateUniverseCountAtResolve,
+    providerReportCountAtResolve: blockedDecision.providerReportCountAtResolve,
+    attachableEvidenceCountAtResolve: blockedDecision.attachableEvidenceCountAtResolve,
+    blockedDecisionReason: blockedDecision.blockedDecisionReason,
+    blockedDecisionSource: blockedDecision.blockedDecisionSource,
     summary:
       asText(resolved.summary)
       || asText(payload.summary)
-      || (blocked ? 'Discovery blocked under current criteria.' : 'Scout discovery completed.'),
+      || (blocked
+        ? (blockReason || 'Discovery blocked under current criteria.')
+        : 'Scout discovery completed.'),
     missionObjective: opts.missionObjective || payload.missionObjective || null,
     discoveryReport: payload.discoveryReport || null,
     discoveryStatus: payload.discoveryStatus || payload.discoveryReport?.status || null,

@@ -41,6 +41,7 @@ const PROGRESSION_STAGES = Object.freeze({
   DISCOVERY_RUNNING: 'discovery_running',
   DISCOVERY_REVIEW: 'discovery_review',
   OUTREACH_PLANNING: 'outreach_planning',
+  ACQUISITION_PLANNING: 'acquisition_planning',
   EXECUTION: 'execution',
   /** @deprecated Use MISSION_PLANNING */
   UNDERSTANDING: 'mission_planning',
@@ -54,6 +55,7 @@ const PROGRESSION_STAGE_LABELS = Object.freeze({
   [PROGRESSION_STAGES.DISCOVERY_RUNNING]: 'Discovery Running',
   [PROGRESSION_STAGES.DISCOVERY_REVIEW]: 'Discovery Review',
   [PROGRESSION_STAGES.OUTREACH_PLANNING]: 'Outreach Planning',
+  [PROGRESSION_STAGES.ACQUISITION_PLANNING]: 'Acquisition Planning',
   [PROGRESSION_STAGES.EXECUTION]: 'Execution',
 });
 
@@ -101,14 +103,14 @@ const MISSION_STAGE_CONTRACTS = Object.freeze({
     executesAutomatically: false,
     requiresHumanDecision: true,
     completionCriteria: 'Operator approves findings before outreach planning.',
-    nextStage: PROGRESSION_STAGES.OUTREACH_PLANNING,
+    nextStage: PROGRESSION_STAGES.ACQUISITION_PLANNING,
   },
-  [PROGRESSION_STAGES.OUTREACH_PLANNING]: {
-    stage: PROGRESSION_STAGES.OUTREACH_PLANNING,
+  [PROGRESSION_STAGES.ACQUISITION_PLANNING]: {
+    stage: PROGRESSION_STAGES.ACQUISITION_PLANNING,
     amoStage: STAGES.PLAN,
     executesAutomatically: true,
     requiresHumanDecision: false,
-    completionCriteria: 'Outreach plan drafted.',
+    completionCriteria: 'Acquisition approach decision committed.',
     nextStage: PROGRESSION_STAGES.EXECUTION,
   },
   [PROGRESSION_STAGES.EXECUTION]: {
@@ -187,7 +189,7 @@ function deriveProgressionStage(snapshot = {}) {
     return PROGRESSION_STAGES.DISCOVERY_RUNNING;
   }
   if (mission.stage === STAGES.UNDERSTAND || mission.stage === STAGES.PLAN) {
-    return PROGRESSION_STAGES.OUTREACH_PLANNING;
+    return PROGRESSION_STAGES.ACQUISITION_PLANNING;
   }
   if (mission.stage === STAGES.EXECUTE || mission.stage === STAGES.READY) {
     return PROGRESSION_STAGES.EXECUTION;
@@ -320,10 +322,10 @@ function deriveExecutionBlock(snapshot = {}, err = null) {
     });
   }
 
-  const gate = canEnter(STAGES.UNDERSTAND, specialistContext(snapshot.contributions || []));
-  if (progressionStage === PROGRESSION_STAGES.OUTREACH_PLANNING && !gate.ok) {
+  const gate = canEnter(STAGES.PREPARE, specialistContext(snapshot.contributions || []));
+  if (progressionStage === PROGRESSION_STAGES.ACQUISITION_PLANNING && !gate.ok) {
     return createExecutionBlock({
-      stage: PROGRESSION_STAGES.OUTREACH_PLANNING,
+      stage: PROGRESSION_STAGES.ACQUISITION_PLANNING,
       unmetPrecondition: gate.reason,
       blockingComponent: 'Mission Lifecycle',
       recommendedAction: 'Complete prior stage prerequisites.',
@@ -387,13 +389,37 @@ function canAutoAdvanceMaxPrioritization(snapshot) {
   return Boolean(findPrioritizationApproval(snapshot.contributions || []));
 }
 
+function canAutoAdvanceAcquisitionApproach(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete || ctx.acquisitionApproachComplete) return false;
+  return [STAGES.UNDERSTAND, STAGES.PLAN].includes(mission.stage);
+}
+
 function canAutoAdvanceOutreachToPaige(snapshot) {
   const mission = snapshot.mission || snapshot;
   if (!mission || mission.planCancelled) return false;
   if (hasPendingPrioritizationApproval(snapshot)) return false;
   const ctx = specialistContext(snapshot.contributions || []);
   if (!ctx.maxComplete || ctx.paigeComplete) return false;
+  if (
+    !ctx.paidAcquisitionComplete &&
+    (ctx.acquisitionApproach === 'paid' || ctx.acquisitionApproach === 'both')
+  ) {
+    return false;
+  }
+  if (!ctx.acquisitionApproachComplete || !ctx.acquisitionApproachPermitsOutbound) return false;
   return [STAGES.UNDERSTAND, STAGES.PLAN, STAGES.PREPARE].includes(mission.stage);
+}
+
+function canAutoAdvancePennyPaidAcquisition(snapshot) {
+  const mission = snapshot.mission || snapshot;
+  if (!mission || mission.planCancelled) return false;
+  const ctx = specialistContext(snapshot.contributions || []);
+  if (!ctx.maxComplete || !ctx.acquisitionApproachComplete || ctx.paidAcquisitionComplete) return false;
+  if (ctx.acquisitionApproach !== 'paid' && ctx.acquisitionApproach !== 'both') return false;
+  return [STAGES.UNDERSTAND, STAGES.PLAN].includes(mission.stage);
 }
 
 function canAutoAdvanceOutreachToEmmett(snapshot) {
@@ -504,6 +530,8 @@ async function runAutonomousProgression(input = {}) {
     || require('../max/workspace/AmoOperatorApproval').advanceDiscoveryAfterApproval;
   const advanceMaxPrioritization = deps.advanceMaxPrioritization
     || require('../max/workspace/AmoOperatorApproval').advanceMaxPrioritization;
+  const advanceAcquisitionApproach = deps.advanceAcquisitionApproach
+    || require('../max/workspace/AmoOperatorApproval').advanceAcquisitionApproach;
   const advancePaigeVariants = deps.advancePaigeVariants
     || require('../max/workspace/AmoOperatorApproval').advancePaigeVariants;
   const advanceEmmettCapacity = deps.advanceEmmettCapacity
@@ -618,9 +646,57 @@ async function runAutonomousProgression(input = {}) {
           ...input,
         });
         transitions.push(createStageTransition({
-          from: PROGRESSION_STAGES.OUTREACH_PLANNING,
-          to: PROGRESSION_STAGES.OUTREACH_PLANNING,
+          from: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
           trigger: 'Max prioritization committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvanceAcquisitionApproach(snapshot)) {
+      try {
+        await advanceAcquisitionApproach({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          ...input,
+        });
+        transitions.push(createStageTransition({
+          from: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          trigger: 'Max acquisition approach committed.',
+        }));
+        recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
+        continue;
+      } catch (err) {
+        lastError = err;
+        break;
+      }
+    }
+
+    if (canAutoAdvancePennyPaidAcquisition(snapshot)) {
+      try {
+        const advancePennyPaidAcquisition = deps.advancePennyPaidAcquisition
+          || require('../max/workspace/AmoOperatorApproval').advancePennyPaidAcquisition;
+        await advancePennyPaidAcquisition({
+          engine,
+          mission: engine.get(missionId, tenantId),
+          tenantId,
+          operatorId,
+          allowFixtureFallback,
+          ...input,
+        });
+        transitions.push(createStageTransition({
+          from: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          trigger: 'Penny paid acquisition assessment committed.',
         }));
         recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
         continue;
@@ -662,9 +738,9 @@ async function runAutonomousProgression(input = {}) {
         const after = engine.inspect(missionId, { tenantId });
         transitions.push(createStageTransition({
           from: beforeStage === STAGES.PREPARE
-            ? PROGRESSION_STAGES.OUTREACH_PLANNING
-            : PROGRESSION_STAGES.OUTREACH_PLANNING,
-          to: PROGRESSION_STAGES.OUTREACH_PLANNING,
+            ? PROGRESSION_STAGES.ACQUISITION_PLANNING
+            : PROGRESSION_STAGES.ACQUISITION_PLANNING,
+          to: PROGRESSION_STAGES.ACQUISITION_PLANNING,
           trigger: 'Paige variants committed.',
         }));
         recordStageTransition(engine, missionId, transitions[transitions.length - 1], { tenantId });
@@ -708,8 +784,8 @@ async function runAutonomousProgression(input = {}) {
         const after = engine.inspect(missionId, { tenantId });
         transitions.push(createStageTransition({
           from: beforeStage === STAGES.PREPARE
-            ? PROGRESSION_STAGES.OUTREACH_PLANNING
-            : PROGRESSION_STAGES.OUTREACH_PLANNING,
+            ? PROGRESSION_STAGES.ACQUISITION_PLANNING
+            : PROGRESSION_STAGES.ACQUISITION_PLANNING,
           to: PROGRESSION_STAGES.EXECUTION,
           trigger: 'Emmett capacity committed.',
         }));
@@ -811,6 +887,16 @@ const CANONICAL_PROGRESSION_CHECKS = Object.freeze([
     label: 'Run Max prioritization',
   },
   {
+    check: canAutoAdvanceAcquisitionApproach,
+    intent: EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH,
+    label: 'Decide acquisition approach',
+  },
+  {
+    check: canAutoAdvancePennyPaidAcquisition,
+    intent: EXECUTION_INTENTS.ASSESS_PAID_ACQUISITION,
+    label: 'Assess paid acquisition',
+  },
+  {
     check: canAutoAdvanceOutreachToPaige,
     intent: EXECUTION_INTENTS.GENERATE_VARIANTS,
     label: 'Generate outreach variants',
@@ -900,6 +986,8 @@ module.exports = {
   canAutoAdvanceUnderstanding,
   canAutoAdvanceDiscovery,
   canAutoAdvanceMaxPrioritization,
+  canAutoAdvanceAcquisitionApproach,
+  canAutoAdvancePennyPaidAcquisition,
   canAutoAdvanceOutreachToPaige,
   canAutoAdvanceOutreachToEmmett,
   buildDiscoveryPipelineStatus,

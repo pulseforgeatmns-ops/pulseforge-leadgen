@@ -20,6 +20,7 @@ const {
   findMaxPrioritization,
   computePreparedArtifactRevision,
 } = require('./ExecutionApproval');
+const { unwrapSpecialistPayload } = require('./ContributionSupersession');
 const { specialistContext } = require('./Lifecycle');
 const {
   BLOCK_CODES,
@@ -51,16 +52,39 @@ function deriveIdempotencyKey(executionIdentity) {
   return `exec_${String(executionIdentity || '').slice(0, 32)}`;
 }
 
-function resolvePaigeVariant(paigePayload = {}, variantLabel = 'Primary') {
+function resolvePaigeVariant(paigePayload = {}, variantLabelOrOpts = 'Primary') {
   const variants = Array.isArray(paigePayload.variants) ? paigePayload.variants : [];
-  const label = asText(variantLabel) || 'Primary';
-  const match = variants.find((row) => asText(row.label) === label) || variants[0] || null;
+  const opts = variantLabelOrOpts && typeof variantLabelOrOpts === 'object'
+    ? variantLabelOrOpts
+    : { variantLabel: variantLabelOrOpts };
+  const identityKeys = [
+    opts.candidateId,
+    opts.companyId,
+    opts.placeId,
+    opts.id,
+  ].map((value) => asText(value)).filter(Boolean);
+  if (identityKeys.length) {
+    const { findBoundVariant } = require('../max/workspace/EmmettMissionCandidates');
+    const bound = findBoundVariant(variants, identityKeys);
+    if (bound && asText(bound.subject) && asText(bound.body)) {
+      return {
+        variantLabel: bound.label || opts.variantLabel || 'Primary',
+        subject: bound.subject,
+        body: bound.body,
+        cta: bound.cta || paigePayload.cta || null,
+        candidateId: bound.candidateId || identityKeys[0],
+      };
+    }
+  }
+  const label = asText(opts.variantLabel || variantLabelOrOpts) || 'Primary';
+  const match = variants.find((row) => asText(row.label) === label) || null;
   if (!match || !asText(match.subject) || !asText(match.body)) return null;
   return {
     variantLabel: match.label || label,
     subject: match.subject,
     body: match.body,
     cta: match.cta || paigePayload.cta || null,
+    candidateId: match.candidateId || null,
   };
 }
 
@@ -145,7 +169,8 @@ function buildExecutionBundle(input = {}) {
   const max = findMaxPrioritization(contributions);
   const paige = findPaigeVariants(contributions);
   const emmett = findEmmettCapacity(contributions);
-  const emmettPayload = emmett?.payload || {};
+  const emmettPayload = unwrapSpecialistPayload(emmett);
+  const paigePayload = unwrapSpecialistPayload(paige);
   const capacityIdentity = extractCapacitySenderIdentity(emmettPayload);
   const capacityBind = assertCapacityMatchesCanonical(emmettPayload, resolvedSender.identity);
   if (!capacityBind.ok) {
@@ -156,7 +181,6 @@ function buildExecutionBundle(input = {}) {
       blockCode: capacityBind.code,
     };
   }
-  const paigePayload = paige?.payload || {};
   const queueItems = Array.isArray(emmettPayload.queue?.items) ? emmettPayload.queue.items : [];
 
   if (validApproval.payload?.emmettContributionId && emmett?.id !== validApproval.payload.emmettContributionId) {
@@ -197,7 +221,13 @@ function buildExecutionBundle(input = {}) {
     }
 
     const variantLabel = item.paige?.variantLabel || 'Primary';
-    const message = resolvePaigeVariant(paigePayload, variantLabel);
+    const message = resolvePaigeVariant(paigePayload, {
+      variantLabel,
+      candidateId: item.paige?.candidateId || item.candidateId || item.id,
+      companyId: item.companyId,
+      placeId: item.placeId,
+      id: item.id,
+    });
 
     const governor = {
       outcome: emmettPayload.governor?.outcome || 'proceed',

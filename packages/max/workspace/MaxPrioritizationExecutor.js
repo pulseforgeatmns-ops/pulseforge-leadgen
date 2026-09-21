@@ -48,7 +48,11 @@ function buildPrioritiesFromDiscovery(discoveryPayload, plan) {
   const segment = asText(plan && plan.market && (plan.market.segment || plan.market.label))
     || 'target segment';
 
-  return source.slice(0, 5).map((row, index) => ({
+  const eligibility = discoveryPayload.dailyOutboundEligibility;
+  const eligible = eligibility
+    ? source.filter(row => eligibility[String(row.id || row.companyId)]?.eligible === true)
+    : source;
+  return eligible.slice(0, 5).map((row, index) => ({
     rank: index + 1,
     segment,
     companyId: row.id || row.companyId || null,
@@ -88,7 +92,7 @@ function buildRecommendationsFromDiscovery(discoveryPayload) {
     ? discoveryPayload.rankedProspects
     : [];
   if (ranked[0] && ranked[0].name) {
-    recs.push(`Prioritize ${ranked[0].name} in the first outreach wave.`);
+    recs.push(`Prioritize ${ranked[0].name} as the first acquisition focus.`);
   }
   for (const signal of (discoveryPayload.buyingSignals || []).slice(0, 3)) {
     const label = typeof signal === 'string' ? signal : signal && signal.label;
@@ -125,7 +129,6 @@ function buildPrioritizationPayload(mission, discoveryPayload, plan) {
     timing: buildTimingFromPlan(plan, mission),
     recommendations,
     constraints: buildConstraintsFromPlan(plan, discoveryPayload),
-    delegation: { paige: 'variants', emmett: 'capacity' },
     confidence: discoveryPayload.confidence != null ? discoveryPayload.confidence : null,
     evidence: discoveryPayload.evidence || [],
     buyingSignals: discoveryPayload.buyingSignals || [],
@@ -212,7 +215,7 @@ async function runMaxPrioritization(executionInput = {}) {
       text,
     })),
     unknowns,
-    nextActions: [{ kind: 'advance_stage', label: 'Advance toward Plan and Prepare.' }],
+    nextActions: [{ kind: 'advance_stage', label: 'Advance toward acquisition approach planning.' }],
     learningInfluence,
   });
 }

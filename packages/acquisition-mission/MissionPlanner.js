@@ -12,6 +12,8 @@
 const { asText } = require('./types');
 const {
   inferTargetSegmentFromObjective,
+  inferSegmentKeyFromObjective,
+  resolveMarketScopeFromObjective,
   extractGeography,
   segmentToSearchKey,
   BEACHHEAD_PATTERNS,
@@ -107,12 +109,11 @@ function cleanObjective(text) {
 }
 
 function inferSegmentKey(text, targetSegment) {
+  const scope = resolveMarketScopeFromObjective(text);
+  if (scope.primarySegment) return scope.primarySegment;
   const segmentLabel = asText(targetSegment) || inferTargetSegmentFromObjective(text);
   if (segmentLabel) return segmentToSearchKey(segmentLabel);
-  for (const { re } of BEACHHEAD_PATTERNS) {
-    if (re.test(text)) return segmentToSearchKey(text.match(re)[0]);
-  }
-  return null;
+  return inferSegmentKeyFromObjective(text);
 }
 
 function inferConstraints(text) {
@@ -236,6 +237,9 @@ function isAmbiguousPropertyManager(text, segmentKey) {
   if (!/\bproperty managers?\b/.test(hay) && segmentKey !== 'property_management') return false;
   if (/\bshort[- ]term rental|\bstr\b|\bairbnb|\bvrbo|\bvacation rental/.test(hay)) return false;
   if (/\bresidential\b/.test(hay) || /\bcommercial\b/.test(hay) || /\bmixed\b/.test(hay)) return false;
+  if (/\boutsource cleaning\b|\bcleaning client\b|\bcleaning service\b|\bjanitorial\b|\bproperty[- ]management opportunities\b/.test(hay)) {
+    return false;
+  }
   return /\bproperty managers?\b/.test(hay);
 }
 
@@ -414,18 +418,33 @@ function planMission(resolvedObjective, opts = {}) {
 
   const segmentKey = resolvedObjective.segmentKey || resolvedObjective.market;
   const segmentLabel = resolvedObjective.segmentLabel || null;
+  const marketScope = resolvedObjective.marketScope || resolveMarketScopeFromObjective(objective);
   if (segmentKey) {
     const isStr = segmentKey === 'short_term_rental';
+    const isBroadCommercial = segmentKey === 'property_management'
+      && (marketScope.eligibleSubsegments || []).length > 1;
     addProvenance(
       provenance,
       'market.segment',
       segmentKey,
       isStr ? 0.96 : 0.9,
-      isStr
-        ? 'Matched STR operator taxonomy.'
-        : `Matched ${segmentKey} taxonomy.`,
+      isBroadCommercial
+        ? 'Broad commercial/property-management objective; STR is an eligible subsegment only.'
+        : isStr
+          ? 'Matched STR operator taxonomy.'
+          : `Matched ${segmentKey} taxonomy.`,
       'operator'
     );
+    if (marketScope.eligibleSubsegments && marketScope.eligibleSubsegments.length > 1) {
+      addProvenance(
+        provenance,
+        'market.eligibleSubsegments',
+        marketScope.eligibleSubsegments.join(', '),
+        0.92,
+        'Operator objective names multiple eligible commercial subsegments.',
+        'operator'
+      );
+    }
   }
 
   const extractedGeography = resolvedObjective.geography || { region: null, cities: [] };
@@ -443,7 +462,10 @@ function planMission(resolvedObjective, opts = {}) {
     );
   }
 
-  const market = resolvedObjective.marketMeta || segmentMeta(segmentKey, segmentLabel);
+  const market = resolvedObjective.marketMeta || {
+    ...segmentMeta(segmentKey, segmentLabel),
+    eligibleSubsegments: marketScope.eligibleSubsegments || [],
+  };
   if (market.industry) {
     addProvenance(provenance, 'market.industry', market.industry, 0.9, 'Derived from segment taxonomy.', 'general_knowledge');
   }

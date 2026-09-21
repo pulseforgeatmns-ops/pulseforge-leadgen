@@ -221,6 +221,32 @@ body {
   min-height: var(--pf-touch-target);
 }
 .ao-compose input:focus { border-color: var(--pf-gold); }
+.ao-conv-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+.ao-conv-actions button {
+  flex: 1;
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+.ao-conv-actions button.primary {
+  border-color: var(--pf-gold);
+  color: var(--pf-gold-strong);
+}
+.ao-conv-actions button.danger {
+  border-color: rgba(179,38,30,0.35);
+  color: var(--pf-red);
+}
 .ao-send {
   width: var(--pf-touch-target);
   height: var(--pf-touch-target);
@@ -768,6 +794,10 @@ body {
       <button class="ao-mode-btn" data-mode="daily_debrief">Daily Debrief</button>
       <button class="ao-mode-btn" data-mode="ask_for_help">Ask for Help</button>
     </div>
+    <div class="ao-conv-actions" id="convActions">
+      <button type="button" id="newConversationBtn">New conversation</button>
+      <button type="button" class="danger" id="flagConversationBtn">Flag conversation</button>
+    </div>
     <div class="ao-chat" id="chat" role="log" aria-live="polite"></div>
     <form class="ao-compose" id="composeForm">
       <input id="messageInput" type="text" placeholder="Reply to Max…" autocomplete="off" enterkeyhint="send">
@@ -933,6 +963,20 @@ body {
   </div>
 </div>
 
+<div class="ao-modal-overlay" id="flagReportModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="flagReportTitle">
+    <h3 id="flagReportTitle">Flag conversation</h3>
+    <p style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      Capture this Max thread for operator review. Optional note:
+    </p>
+    <textarea class="ao-addr-input" id="flagReportNote" rows="3" placeholder="What went wrong?" style="resize:vertical;min-height:72px"></textarea>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="flagReportCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="flagReportSubmit">Submit report</button>
+    </div>
+  </div>
+</div>
+
 <div class="ao-modal-overlay" id="callModal">
   <div class="ao-modal" role="dialog" aria-labelledby="callModalTitle">
     <h3 id="callModalTitle">Call Instead</h3>
@@ -944,10 +988,10 @@ body {
 <script>
 const chat = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
-let sessionId = null;
+let conversationSessionId = null;
+let wizardSessionId = null;
 let activeMode = null;
 let queueFilter = 'today';
-let visitJustCompleted = false;
 let activeRoute = null;
 let routeSortMode = localStorage.getItem('ao_route_sort') || 'closest_first';
 let routeStartType = localStorage.getItem('ao_route_start') || 'current_location';
@@ -1037,9 +1081,16 @@ function addMsg(text, role) {
 
 function clearChat() {
   chat.innerHTML = '';
-  sessionId = null;
+  wizardSessionId = null;
   activeMode = null;
-  visitJustCompleted = false;
+}
+
+function activeSessionId() {
+  return wizardSessionId || conversationSessionId;
+}
+
+function isConversationMode() {
+  return !wizardSessionId && Boolean(conversationSessionId);
 }
 
 function setGreeting(profile) {
@@ -1067,20 +1118,22 @@ async function loadMetrics() {
 }
 
 async function startPhoneFollowUp(taskId) {
-  clearChat();
   activeMode = 'phone_follow_up';
-  visitJustCompleted = false;
   messageInput.placeholder = 'Reply to Max…';
   switchTab('max');
   addMsg('Starting phone follow-up log…', 'system');
   try {
     const result = await api('/api/max/start', {
       method: 'POST',
-      body: JSON.stringify({ mode: 'phone_follow_up', task_id: taskId }),
+      body: JSON.stringify({
+        mode: 'phone_follow_up',
+        task_id: taskId,
+        conversation_session_id: conversationSessionId,
+      }),
     });
     chat.lastChild.remove();
     addMsg(result.reply, 'max');
-    sessionId = result.session_id || null;
+    wizardSessionId = result.session_id || null;
   } catch (err) {
     chat.lastChild.remove();
     addMsg(err.message, 'system');
@@ -1218,9 +1271,7 @@ document.getElementById('callModal').addEventListener('click', async e => {
 });
 
 async function startRouteFollowUp(taskId, isDirectMail) {
-  clearChat();
   activeMode = isDirectMail ? 'direct_mail_follow_up' : 'route_follow_up';
-  visitJustCompleted = false;
   messageInput.placeholder = 'Reply to Max…';
   switchTab('max');
   addMsg('Starting route stop log…', 'system');
@@ -1228,11 +1279,15 @@ async function startRouteFollowUp(taskId, isDirectMail) {
     const mode = isDirectMail ? 'direct_mail_follow_up' : 'route_follow_up';
     const result = await api('/api/max/start', {
       method: 'POST',
-      body: JSON.stringify({ mode, task_id: taskId }),
+      body: JSON.stringify({
+        mode,
+        task_id: taskId,
+        conversation_session_id: conversationSessionId,
+      }),
     });
     chat.lastChild.remove();
     addMsg(result.reply, 'max');
-    sessionId = result.session_id || null;
+    wizardSessionId = result.session_id || null;
   } catch (err) {
     chat.lastChild.remove();
     addMsg(err.message, 'system');
@@ -1244,16 +1299,27 @@ async function startDirectMailFollowUp(taskId) {
 }
 
 async function startMode(mode) {
-  clearChat();
   activeMode = mode;
-  visitJustCompleted = false;
   messageInput.placeholder = 'Reply to Max…';
-  addMsg('Starting…', 'system');
+  if (mode !== 'follow_up') {
+    addMsg('Starting…', 'system');
+  }
   try {
-    const result = await api('/api/max/start', { method: 'POST', body: JSON.stringify({ mode }) });
-    chat.lastChild.remove();
+    const result = await api('/api/max/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        mode,
+        conversation_session_id: conversationSessionId,
+      }),
+    });
+    if (mode !== 'follow_up') chat.lastChild.remove();
     addMsg(result.reply, 'max');
-    sessionId = result.session_id || null;
+    if (result.mode === 'conversation') {
+      conversationSessionId = result.session_id || null;
+      wizardSessionId = null;
+    } else {
+      wizardSessionId = result.session_id || null;
+    }
     if (result.show_queue) {
       switchTab('queue');
     }
@@ -1263,39 +1329,98 @@ async function startMode(mode) {
   }
 }
 
+async function askMaxFreeform(text) {
+  const result = await api('/api/max/ask', {
+    method: 'POST',
+    body: JSON.stringify({
+      message: text.trim(),
+      session_id: conversationSessionId,
+    }),
+  });
+  conversationSessionId = result.session_id || conversationSessionId;
+  addMsg(result.reply, 'max');
+}
+
 async function sendMessage(text) {
   if (!text.trim()) return;
   addMsg(text.trim(), 'user');
   messageInput.value = '';
 
-  if (!sessionId) {
-    if (visitJustCompleted) {
-      addMsg('Log another visit or open Queue to follow up.', 'system');
-    } else {
-      addMsg('Pick a mode above to start talking with Max.', 'system');
+  if (wizardSessionId) {
+    try {
+      const result = await api('/api/max/respond', {
+        method: 'POST',
+        body: JSON.stringify({ session_id: wizardSessionId, message: text.trim() }),
+      });
+      addMsg(result.reply, 'max');
+      if (result.completed) {
+        wizardSessionId = null;
+        if (result.conversation_session_id) {
+          conversationSessionId = result.conversation_session_id;
+        }
+        messageInput.placeholder = 'Ask Max a follow-up…';
+        loadMetrics();
+        loadQueue();
+        if (result.route) {
+          activeRoute = result.route;
+          renderRouteView();
+        } else {
+          loadActiveRoute();
+        }
+      }
+    } catch (err) {
+      addMsg(err.message, 'system');
     }
     return;
   }
 
   try {
-    const result = await api('/api/max/respond', {
+    await askMaxFreeform(text);
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+async function startNewConversation() {
+  try {
+    const result = await api('/api/max/new-conversation', {
       method: 'POST',
-      body: JSON.stringify({ session_id: sessionId, message: text.trim() }),
+      body: JSON.stringify({ previous_session_id: conversationSessionId }),
     });
+    conversationSessionId = result.session_id;
+    wizardSessionId = null;
+    activeMode = 'conversation';
+    chat.innerHTML = '';
     addMsg(result.reply, 'max');
-    if (result.completed) {
-      sessionId = null;
-      visitJustCompleted = true;
-      messageInput.placeholder = 'Tap a mode above for another visit…';
-      loadMetrics();
-      loadQueue();
-      if (result.route) {
-        activeRoute = result.route;
-        renderRouteView();
-      } else {
-        loadActiveRoute();
-      }
-    }
+    messageInput.placeholder = 'Ask Max anything…';
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+function showFlagReportModal() {
+  if (!conversationSessionId) {
+    addMsg('Start a conversation with Max before flagging a report.', 'system');
+    return;
+  }
+  document.getElementById('flagReportNote').value = '';
+  document.getElementById('flagReportModal').classList.add('open');
+}
+
+function hideFlagReportModal() {
+  document.getElementById('flagReportModal').classList.remove('open');
+}
+
+async function submitFlagReport() {
+  if (!conversationSessionId) return;
+  const note = document.getElementById('flagReportNote').value.trim();
+  try {
+    const result = await api('/api/max/report', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: conversationSessionId, note }),
+    });
+    hideFlagReportModal();
+    addMsg(`Report saved (${result.report_id}). An operator can review the transcript.`, 'system');
   } catch (err) {
     addMsg(err.message, 'system');
   }
@@ -1555,8 +1680,16 @@ document.querySelectorAll('.ao-tab').forEach(tab => {
 
 document.getElementById('scriptLogVisit').addEventListener('click', () => {
   switchTab('max');
-  if (activeMode === 'log_visit' && sessionId) return;
+  if (activeMode === 'log_visit' && wizardSessionId) return;
   startMode('log_visit');
+});
+
+document.getElementById('newConversationBtn').addEventListener('click', startNewConversation);
+document.getElementById('flagConversationBtn').addEventListener('click', showFlagReportModal);
+document.getElementById('flagReportCancel').addEventListener('click', hideFlagReportModal);
+document.getElementById('flagReportSubmit').addEventListener('click', submitFlagReport);
+document.getElementById('flagReportModal').addEventListener('click', e => {
+  if (e.target.id === 'flagReportModal') hideFlagReportModal();
 });
 
 document.getElementById('startRouteBtn').addEventListener('click', showRouteModal);
@@ -1733,7 +1866,8 @@ async function bootDashboard() {
 }
 bootDashboard();
 
-addMsg('Pick a mode above to get started. I remember every visit.', 'max');
+addMsg('Ask me about your accounts, log a visit, or pick a mode above. I remember every visit.', 'max');
+messageInput.placeholder = 'Ask Max anything…';
 </script>
 </body>
 </html>

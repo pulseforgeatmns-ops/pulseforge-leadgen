@@ -25,6 +25,7 @@ const {
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   advanceEmmettCapacity,
   advanceExecutionAfterApproval,
@@ -122,6 +123,9 @@ describe('SPEC-186 — Canonical single-sender enforcement', () => {
     await advanceMaxPrioritization({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
+    await advanceAcquisitionApproach({
+      engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
+    });
     await advancePaigeVariants({
       engine, mission: engine.get(mission.id, '10'), tenantId: '10', allowFixtureFallback: true,
     });
@@ -132,6 +136,38 @@ describe('SPEC-186 — Canonical single-sender enforcement', () => {
       allowFixtureFallback: true,
       infrastructureSnapshot: infrastructureFor(sender),
     });
+    const prepared = engine.inspect(mission.id, { tenantId: '10' });
+    const paige = prepared.contributions
+      .slice()
+      .reverse()
+      .find((row) => row.specialist === SPECIALISTS.PAIGE && row.kind === CONTRIBUTION_KINDS.VARIANTS);
+    const emmett = prepared.contributions
+      .slice()
+      .reverse()
+      .find((row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY);
+    const variants = paige?.payload?.variants || [];
+    engine.store.updateContribution(emmett.id, (row) => ({
+      ...row,
+      payload: {
+        ...row.payload,
+        queue: {
+          ...row.payload.queue,
+          items: (row.payload.queue?.items || []).map((item, index) => {
+            const candidateId = item.candidateId || item.prospectId || item.id || item.companyId;
+            const variant = variants.find((entry) => entry.candidateId === candidateId) || variants[index];
+            return {
+              ...item,
+              candidateId,
+              paige: {
+                ...variant,
+                candidateId,
+                bindingScope: variant?.bindingScope || 'mission',
+              },
+            };
+          }),
+        },
+      },
+    }));
     await advanceExecutionAfterApproval({
       engine,
       mission: engine.get(mission.id, '10'),

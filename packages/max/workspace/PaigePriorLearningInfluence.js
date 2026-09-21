@@ -500,6 +500,9 @@ function applyPaigePriorLearningAdjustments(payload = {}, evaluation = {}, plan 
       adjustments.bodyAngleNote,
       plan
     );
+  }
+
+  if (result.variants[0]?.body) {
     result.messaging = result.variants[0].body;
   }
 

@@ -55,8 +55,7 @@ function samplePrioritizationPayload() {
     ],
     objectives: [{ text: 'Book 3 walkthroughs with law firms in Manchester NH.' }],
     objectiveReason: 'Harbor Law Group leads on fit and timing for the first outreach wave.',
-    recommendations: ['Prioritize Harbor Law Group in the first outreach wave.'],
-    delegation: { paige: 'variants', emmett: 'capacity' },
+    recommendations: ['Prioritize Harbor Law Group as the first acquisition focus.'],
     confidence: 0.72,
     evidence: [{ label: 'Operations manager job posting', source: 'job_board' }],
     buyingSignals: [{ label: 'Hiring operations manager', type: 'hiring' }],
@@ -69,8 +68,8 @@ describe('SPEC-207 — Post-Prioritization Presentation Projection', () => {
     assert.equal(presentation.priorities.length, 3);
     assert.equal(presentation.priorities[0].name, 'Harbor Law Group');
     assert.match(presentation.objectiveReason, /Harbor Law Group/i);
-    assert.equal(presentation.recommendations[0], 'Prioritize Harbor Law Group in the first outreach wave.');
-    assert.deepEqual(presentation.delegation, { paige: 'variants', emmett: 'capacity' });
+    assert.equal(presentation.recommendations[0], 'Prioritize Harbor Law Group as the first acquisition focus.');
+    assert.deepEqual(presentation.delegation, {});
     assert.equal(presentation.confidence, 0.72);
   });
 
@@ -82,9 +81,9 @@ describe('SPEC-207 — Post-Prioritization Presentation Projection', () => {
     assert.match(prose, /2\. Granite Legal Partners/);
     assert.match(prose, /Why these targets/i);
     assert.match(prose, /Recommended Next Action/i);
-    assert.match(prose, /Delegation/i);
-    assert.match(prose, /Paige: variants/i);
-    assert.match(prose, /Emmett: capacity/i);
+    assert.doesNotMatch(prose, /Delegation/i);
+    assert.doesNotMatch(prose, /Paige: variants/i);
+    assert.doesNotMatch(prose, /Emmett: capacity/i);
     assert.doesNotMatch(prose, /Scout Discovery/i);
   });
 
@@ -108,7 +107,7 @@ describe('SPEC-207 — Post-Prioritization Presentation Projection', () => {
     assert.equal(row.payload.priorities[0].name, 'Harbor Law Group');
   });
 
-  it('resolvePrioritizationApprovedNextStep points to outreach planning after understand', () => {
+  it('resolvePrioritizationApprovedNextStep points to acquisition approach planning after understand', () => {
     const nextStep = resolvePrioritizationApprovedNextStep(
       {
         mission: { id: 'm-1', stage: STAGES.UNDERSTAND, pendingOperatorDecision: null },
@@ -122,7 +121,7 @@ describe('SPEC-207 — Post-Prioritization Presentation Projection', () => {
       },
       { id: 'm-1', stage: STAGES.UNDERSTAND }
     );
-    assert.equal(nextStep, 'Continue to outreach planning.');
+    assert.equal(nextStep, 'Continue to acquisition approach planning.');
   });
 
   it('buildExecutionMissionResponse renders Max prioritization after approval', async () => {
@@ -180,7 +179,7 @@ describe('SPEC-207 — Post-Prioritization Presentation Projection', () => {
     assert.match(response.prose, /Max Prioritization/i);
     assert.match(response.prose, /Harbor Law Group/i);
     assert.match(response.prose, /Why these targets/i);
-    assert.match(response.prose, /Continue to outreach planning/i);
+    assert.match(response.prose, /Continue to acquisition approach planning/i);
     assert.doesNotMatch(response.prose, /Scout Discovery/i);
     assert.doesNotMatch(response.prose, /Stale Prospect Only/i);
     assert.doesNotMatch(response.prose, /Review mission workspace for Max prioritization/i);
@@ -215,7 +214,7 @@ describe('SPEC-207 — Post-Prioritization Presentation Projection', () => {
 
     assert.equal(turn.action, 'prioritization_approved');
     assert.match(turn.prose, /Max Prioritization/i);
-    assert.match(turn.prose, /Continue to outreach planning/i);
+    assert.match(turn.prose, /Continue to acquisition approach planning/i);
     assert.doesNotMatch(turn.prose, /Scout Discovery/i);
   });
 });

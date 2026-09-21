@@ -25,7 +25,12 @@ const {
   extractCountObjective,
   applyResolutions,
 } = require('../../acquisition-mission/MissionPlanner');
-const { extractGeography, inferTargetSegmentFromObjective } = require('../../acquisition-mission/MissionNaming');
+const {
+  extractGeography,
+  inferTargetSegmentFromObjective,
+  resolveMarketScopeFromObjective,
+  isBroadCommercialPropertyObjective,
+} = require('../../acquisition-mission/MissionNaming');
 const { asText } = require('../../acquisition-mission/types');
 
 const MISSION_COMMAND_RES = [
@@ -63,6 +68,15 @@ const COMMUNICATION_POLICY_LINE_RES = [
 ];
 
 const OBJECTIVE_PREFIX_RE = /^(?:objective|goal|target)\s*:\s*/i;
+const MISSION_RESUME_PREFIX_RE =
+  /^(?:resume(?:\s+the)?(?:\s+existing)?\s+mission(?:\s+for)?|continue(?:\s+(?:the|with))?(?:\s+active)?\s+mission(?:\s+for)?)\s+/i;
+
+function stripMissionResumePrefix(text) {
+  return normalizeText(text)
+    .replace(MISSION_RESUME_PREFIX_RE, '')
+    .replace(OBJECTIVE_PREFIX_RE, '')
+    .trim();
+}
 
 function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
@@ -93,6 +107,12 @@ function classifyMessageLines(question) {
   const ignoredLines = [];
 
   for (const segment of segments) {
+    const normalizedSegment = normalizeText(segment);
+    if (MISSION_RESUME_PREFIX_RE.test(normalizedSegment)) {
+      const stripped = stripMissionResumePrefix(segment);
+      if (stripped) objectiveLines.push(stripped);
+      continue;
+    }
     const kind = classifyLine(segment);
     if (kind === 'objective') {
       objectiveLines.push(segment.replace(OBJECTIVE_PREFIX_RE, '').trim());
@@ -108,7 +128,10 @@ function classifyMessageLines(question) {
 
 function inferSubtype(text, segmentKey) {
   const hay = asText(text).toLowerCase();
-  if (/\bcommercial cleaning\b/.test(hay) || segmentKey === 'short_term_rental') {
+  if (/\bcommercial cleaning\b/.test(hay) || isBroadCommercialPropertyObjective(hay)) {
+    return 'commercial_cleaning';
+  }
+  if (segmentKey === 'short_term_rental') {
     return 'commercial_cleaning';
   }
   if (/\blaw firm\b/.test(hay) || segmentKey === 'law_firm') return 'law_firm';
@@ -294,8 +317,25 @@ function resolveCanonicalObjective(input = {}) {
 
   const text = businessText;
   const intent = analyzeIntent(text, { missionType: input.missionType || input.type });
-  const segmentLabel = asText(input.targetSegment) || inferTargetSegmentFromObjective(text);
+  const marketScope = resolveMarketScopeFromObjective(text);
+  const {
+    isMultiSegmentObjective,
+    detectMentionedSegments,
+  } = require('./MissionResumeCompatibility');
+  let segmentLabel = asText(input.targetSegment) || inferTargetSegmentFromObjective(text);
   let segmentKey = inferSegmentKey(text, segmentLabel);
+  if (isMultiSegmentObjective(text)) {
+    const mentioned = detectMentionedSegments(text);
+    if (mentioned.includes('property_management')) {
+      segmentKey = 'property_management';
+      segmentLabel = mentioned.includes('commercial')
+        ? 'Commercial & Property Management'
+        : 'Property Management';
+    } else if (mentioned.includes('commercial')) {
+      segmentKey = 'commercial';
+      segmentLabel = 'Commercial';
+    }
+  }
   const geographyMention = extractGeography(text) || asText(input.geography) || '';
   let extracted = {
     intent,
@@ -327,7 +367,10 @@ function resolveCanonicalObjective(input = {}) {
     resolutions: input.resolutions,
   });
 
-  const market = segmentMeta(extracted.segmentKey, extracted.segmentLabel);
+  const market = {
+    ...segmentMeta(extracted.segmentKey, extracted.segmentLabel),
+    eligibleSubsegments: marketScope.eligibleSubsegments || [],
+  };
   const evidence = inferEvidence(text, input);
   const successTarget = extractCountObjective(text);
   const successType = /recurr/i.test(text) ? 'recurring_clients' : 'customers';
@@ -356,6 +399,7 @@ function resolveCanonicalObjective(input = {}) {
     intent,
     segmentKey: extracted.segmentKey,
     segmentLabel: extracted.segmentLabel,
+    marketScope,
     geographySource: extracted.geographySource || 'operator',
     provenanceSource: text,
   };
@@ -371,6 +415,7 @@ module.exports = {
   canonicalObjectiveText,
   classifyMessageLines,
   classifyLine,
+  stripMissionResumePrefix,
   buildExecutionPolicy,
   buildCommunicationPolicy,
   buildEvaluationPolicy,

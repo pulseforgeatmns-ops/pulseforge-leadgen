@@ -83,8 +83,10 @@ function buildScoutDiscoverOpts(mission, executionInput = {}, opts = {}) {
     priorOutcomeLearnings,
     priorLearningRetrievalWarning:
       executionInput.memoryContext?.priorLearningRetrievalWarning || null,
-    store: opts.engine?.store || opts.store,
-    memoryStore: opts.memoryStore || opts.engine?.store || opts.store,
+    // SPEC-143 memory store only. AMO engine.store is the mission/outcome-learning
+    // store and does not implement loadForMarket — never inject it here.
+    store: opts.memoryStore || opts.store,
+    memoryStore: opts.memoryStore || opts.store,
   };
 
   if (opts.investigationContinuation === true && opts.engine) {
@@ -266,11 +268,16 @@ async function runScoutForAmoMission(mission, opts = {}) {
 
     if (executionResult.status === EXECUTION_STATUSES.BLOCKED
       || executionResult.status === EXECUTION_STATUSES.FAILED) {
-      const err = new Error(
-        executionResult.blocked?.reason ||
-          executionResult.audit?.reason ||
-          'Scout discovery blocked.'
-      );
+      const blockedReason = executionResult.blocked?.reason;
+      const auditReason = executionResult.audit?.reason;
+      const specificReason =
+        (blockedReason && !/^execution blocked\.?$/i.test(String(blockedReason).trim()))
+          ? blockedReason
+          : auditReason ||
+            executionResult.blocked?.recommendedAction ||
+            executionResult.recommendations?.[0]?.text ||
+            'Scout discovery blocked.';
+      const err = new Error(specificReason);
       err.code = executionResult.blocked?.requiredPrecondition || 'scout_blocked';
       if (opts.allowFixtureFallback === true && typeof opts.fixtureScoutDiscoveryResult === 'function') {
         return opts.fixtureScoutDiscoveryResult();

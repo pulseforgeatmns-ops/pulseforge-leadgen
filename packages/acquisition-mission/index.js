@@ -57,10 +57,18 @@ const executionApproval = require('./ExecutionApproval');
 const outboundExecution = require('./OutboundExecution');
 const communicationObservation = require('./CommunicationObservation');
 const observationInterpretation = require('./ObservationInterpretation');
+const observeReaction = require('./ObserveReaction');
+const observeEvaluator = require('./ObserveEvaluator');
+const observeCadence = require('./ObserveCadence');
+const preparedOutreachSequence = require('./PreparedOutreachSequence');
 const learnProgression = require('./LearnProgression');
 const improveProgression = require('./ImproveProgression');
 const meaningfulLearning = require('./MeaningfulLearning');
 const outcomeLearningRetrieval = require('./OutcomeLearningRetrieval');
+const acquisitionApproach = require('./AcquisitionApproach');
+const contributionSupersession = require('./ContributionSupersession');
+const canonicalContributionSelection = require('./CanonicalContributionSelection');
+const upstreamArtifactCoherence = require('./UpstreamArtifactCoherence');
 
 module.exports = {
   ...types,
@@ -121,8 +129,16 @@ module.exports = {
   ...outboundExecution,
   ...communicationObservation,
   ...observationInterpretation,
+  ...observeReaction,
+  ...observeEvaluator,
+  ...observeCadence,
+  ...preparedOutreachSequence,
   ...learnProgression,
   ...improveProgression,
   ...meaningfulLearning,
   ...outcomeLearningRetrieval,
+  ...acquisitionApproach,
+  ...contributionSupersession,
+  ...canonicalContributionSelection,
+  ...upstreamArtifactCoherence,
 };

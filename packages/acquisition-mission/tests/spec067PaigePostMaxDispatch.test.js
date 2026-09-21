@@ -27,6 +27,7 @@ const {
   advanceDiscoveryAfterApproval,
   advancePrioritizationAfterApproval,
   advanceMaxPrioritization,
+  advanceAcquisitionApproach,
   advancePaigeVariants,
   fixturePaigeVariantsResult,
 } = require('../../max/workspace/AmoOperatorApproval');
@@ -91,11 +92,19 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
     const afterMax = engine.inspect(mission.id, { tenantId: '10' });
     const ctxAfterMax = specialistContext(afterMax.contributions || []);
     assert.equal(ctxAfterMax.maxComplete, true);
+    assert.equal(ctxAfterMax.acquisitionApproachComplete, false);
     assert.ok(!ctxAfterMax.paigeComplete);
+
+    await advanceAcquisitionApproach({
+      engine,
+      mission: afterMax.mission,
+      tenantId: '10',
+      allowFixtureFallback: true,
+    });
 
     const paigeResult = await advancePaigeVariants({
       engine,
-      mission: afterMax.mission,
+      mission: engine.get(mission.id, '10'),
       tenantId: '10',
       allowFixtureFallback: true,
       question: 'Generate variants.',
@@ -148,6 +157,12 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
       tenantId: '10',
       allowFixtureFallback: true,
     });
+    await advanceAcquisitionApproach({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      allowFixtureFallback: true,
+    });
 
     const afterMax = engine.inspect(mission.id, { tenantId: '10' });
     const secInput = buildExecutionInput({
@@ -161,6 +176,7 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
     assert.ok(paige.structuredMission);
     assert.ok(paige.scoutDiscovery);
     assert.ok(paige.maxPrioritization);
+    assert.equal(paige.acquisitionApproach?.selectedApproach, 'outbound');
     assert.ok(paige.priorities?.length || paige.rankedTargets?.length);
     assert.ok(paige.objectives?.length);
     assert.ok(paige.objectiveReason);
@@ -176,6 +192,12 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
     await advanceMaxPrioritization({
       engine,
       mission: snapshot.mission,
+      tenantId: '10',
+      allowFixtureFallback: true,
+    });
+    await advanceAcquisitionApproach({
+      engine,
+      mission: engine.get(mission.id, '10'),
       tenantId: '10',
       allowFixtureFallback: true,
     });
@@ -203,8 +225,13 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
       tenantId: '10',
       allowFixtureFallback: true,
     });
+    await advanceAcquisitionApproach({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      allowFixtureFallback: true,
+    });
     const afterMax = engine.inspect(mission.id, { tenantId: '10' });
-    engine.progress(mission.id, { role: 'max' }, { tenantId: '10', stage: STAGES.PLAN });
     engine.progress(mission.id, { role: 'max' }, { tenantId: '10', stage: STAGES.PREPARE });
 
     await assert.rejects(
@@ -240,6 +267,12 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
       tenantId: '10',
       allowFixtureFallback: true,
     });
+    await advanceAcquisitionApproach({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      allowFixtureFallback: true,
+    });
 
     await assert.rejects(
       () => advancePaigeVariants({
@@ -266,6 +299,12 @@ describe('AUDIT-067 — Canonical Paige Post-Max Dispatch', () => {
   it('GENERATE_VARIANTS CER routes through ExecutionRouter to Paige', async () => {
     await throughUnderstand();
     await advanceMaxPrioritization({
+      engine,
+      mission: engine.get(mission.id, '10'),
+      tenantId: '10',
+      allowFixtureFallback: true,
+    });
+    await advanceAcquisitionApproach({
       engine,
       mission: engine.get(mission.id, '10'),
       tenantId: '10',

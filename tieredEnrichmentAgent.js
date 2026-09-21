@@ -4,8 +4,23 @@ const pool = require('./db');
 const { normalizeClientId } = require('./utils/clientContext');
 const { verifyEmail } = require('./utils/emailVerifier');
 const { invalidOutreachEmailReason } = require('./utils/emailGuard');
+const {
+  isAllowedObservedWebsiteEmail,
+  isSendableVerifiedCandidate,
+  isCanonicallyOutboundEligible,
+  isInferredPatternProvenance,
+  isReadPathProvenanceLabel,
+  resolveEmailProvenanceSource,
+  stampEmailProvenance,
+} = require('./utils/canonicalEmailEligibility');
+const { persistableEmailSource } = require('./utils/crmEmailProvenance');
 const { ensureTieredEnrichmentSchema } = require('./utils/tieredEnrichmentSchema');
 const { safeIngestEnrichmentOutcome } = require('./utils/maxSignalIngestion');
+const {
+  crawlWebsite,
+  resolveEnrichmentDomain,
+  extractRelevantLinks,
+} = require('./utils/websiteEnrichmentCrawl');
 
 const AGENT_NAME = 'tiered_enrichment';
 const DEFAULT_FETCH_DELAY_MS = 750;
@@ -196,7 +211,11 @@ function hasResolvingName(row) {
 }
 
 function hasResolvingEmail(row) {
-  return Boolean(clean(row?.email)) && isBouncerVerified(row);
+  if (!clean(row?.email) || !isBouncerVerified(row)) return false;
+  return isCanonicallyOutboundEligible({
+    ...row,
+    email_verified: true,
+  });
 }
 
 function passesDataBar(row) {
@@ -301,7 +320,7 @@ function extractEmailsFromHtml(html, domain) {
   const decoded = decodeHtml(html).replace(/\s*\[at\]\s*|\s*\(at\)\s*/gi, '@').replace(/\s*\[dot\]\s*|\s*\(dot\)\s*/gi, '.');
   for (const match of decoded.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)) {
     const email = match[0].replace(/[).,;:]+$/g, '').toLowerCase();
-    if (!invalidOutreachEmailReason(email) && (!normalizedDomain || emailDomain(email) === normalizedDomain)) {
+    if (isAllowedObservedWebsiteEmail(email, normalizedDomain)) {
       emails.add(email);
     }
   }
@@ -420,10 +439,25 @@ function candidateFromPattern(name, domain, pattern) {
   return locals[pattern] ? `${locals[pattern]}@${domain}` : null;
 }
 
-function buildEmailCandidates({ existingEmail, foundEmails, names, domain }) {
+function buildEmailCandidates({ existingEmail, foundEmails, names, domain, row }) {
   const candidates = [];
-  if (existingEmail && !invalidOutreachEmailReason(existingEmail)) {
-    candidates.push({ email: clean(existingEmail).toLowerCase(), tier: 0, source: 'existing_prospect_email', confidence: 0.8 });
+  const existingSource = resolveEmailProvenanceSource(row || { email: existingEmail });
+  if (
+    existingEmail
+    && !invalidOutreachEmailReason(existingEmail)
+    && isSendableVerifiedCandidate({
+      email: clean(existingEmail).toLowerCase(),
+      verified: true,
+      source: existingSource || 'existing_prospect_email',
+      enrichment_provenance: row?.enrichment_provenance,
+    })
+  ) {
+    candidates.push({
+      email: clean(existingEmail).toLowerCase(),
+      tier: 0,
+      source: persistableEmailSource(existingSource) || 'existing_prospect_email',
+      confidence: 0.8,
+    });
   }
   for (const found of foundEmails) candidates.push(found);
 
@@ -500,67 +534,34 @@ function robotsAllows(url, disallow) {
   return !disallow.some(rule => rule !== '/' && path.startsWith(rule));
 }
 
-function extractRelevantLinks(html, baseUrl, domain) {
-  const links = new Set();
-  const relevant = /\b(?:about|team|staff|attorney|attorneys|people|professionals|contact|firm|our-firm|practice)\b/i;
-  for (const match of String(html || '').matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
-    const href = decodeHtml(match[1]);
-    const label = htmlToText(match[2]);
-    if (!relevant.test(`${href} ${label}`)) continue;
-    try {
-      const url = new URL(href, baseUrl);
-      if (normalizeDomain(url.hostname) === normalizeDomain(domain)) links.add(url.toString().split('#')[0]);
-    } catch {
-      // Ignore malformed links.
-    }
-  }
-  return [...links];
-}
-
 async function scrapeWebsite(row, options = {}) {
-  const domain = normalizeDomain(row.domain || row.website || row.website_url);
+  const domain = resolveEnrichmentDomain(row);
   if (!domain) return { names: [], emails: [], practice_area: null, firm_size: null, pages: [], errors: ['no_domain'] };
 
   const disallow = await getRobots(domain);
-  const homepage = buildUrl(domain, '/');
-  const seedPaths = ['/', '/about', '/about-us', '/team', '/staff', '/attorneys', '/our-firm', '/contact'];
-  const urls = new Set(seedPaths.map(path => buildUrl(domain, path)).filter(Boolean));
-  urls.add(homepage);
-
-  const pages = [];
-  const errors = [];
   const fetchDelayMs = Number.isFinite(Number(options.fetchDelayMs)) ? Number(options.fetchDelayMs) : DEFAULT_FETCH_DELAY_MS;
+  const fetchImpl = typeof options.fetchPage === 'function' ? options.fetchPage : fetchWithTimeout;
+  const crawlResult = await crawlWebsite(domain, fetchImpl, {
+    maxSuccessfulPages: MAX_WEBSITE_PAGES,
+    fetchDelayMs,
+    robotsAllows: (url) => robotsAllows(url, disallow),
+  });
+  const pages = crawlResult.pages.map((page) => ({
+    ok: true,
+    status: page.status,
+    url: page.url,
+    text: page.text,
+  }));
+  const errors = crawlResult.errors;
 
-  for (const url of [...urls]) {
-    if (pages.length >= MAX_WEBSITE_PAGES) break;
-    if (!robotsAllows(url, disallow)) {
-      errors.push(`robots_disallow:${new URL(url).pathname}`);
-      continue;
-    }
-    try {
-      const response = await fetchWithTimeout(url);
-      if (!response.ok || !/html|text/i.test(response.text.slice(0, 300))) {
-        errors.push(`fetch_${response.status}:${url}`);
-        continue;
-      }
-      pages.push(response);
-      if (url === homepage || new URL(url).pathname === '/') {
-        for (const link of extractRelevantLinks(response.text, response.url, domain)) urls.add(link);
-      }
-      if (fetchDelayMs > 0) await delay(fetchDelayMs);
-    } catch (err) {
-      errors.push(`${err.name === 'AbortError' ? 'timeout' : 'fetch_error'}:${url}`);
-    }
-  }
-
-  const allHtml = pages.map(page => page.text).join('\n');
+  const allHtml = pages.map((page) => page.text).join('\n');
   const allText = htmlToText(allHtml);
   return {
     names: extractNamesFromText(allText, 'website_pages'),
     emails: extractEmailsFromHtml(allHtml, domain),
     practice_area: inferPracticeArea(allText, row.vertical || row.industry),
     firm_size: inferFirmSize(allText),
-    pages: pages.map(page => page.url),
+    pages: pages.map((page) => page.url),
     errors,
   };
 }
@@ -630,28 +631,37 @@ async function persistOutcome(row, outcome, dryRun = false) {
       }, updates, provenance);
     }
   }
-  if (outcome.selectedEmail?.verified) {
-    maybeSetField(row, 'email', {
-      value: outcome.selectedEmail.email,
-      tier: outcome.selectedEmail.tier,
-      source: outcome.selectedEmail.source,
-      confidence: outcome.selectedEmail.confidence,
-    }, updates, provenance);
-    updates.email_verified = true;
-    updates.email_verification_method = 'bouncer';
-    updates.email_status = outcome.selectedEmail.status;
-    updates.verified_at = new Date();
-    updates.verifier_checked_at = new Date();
-    updates.verifier_response = outcome.selectedEmail.verifier_response || null;
-    provenance.email = {
-      ...(provenance.email || {}),
-      tier: outcome.selectedEmail.tier,
-      source: outcome.selectedEmail.source,
-      confidence: outcome.selectedEmail.confidence,
-      verifier: 'bouncer',
-      status: outcome.selectedEmail.status,
-      resolved_at: new Date().toISOString(),
-    };
+  if (
+    outcome.selectedEmail?.verified
+    && isSendableVerifiedCandidate({
+      ...outcome.selectedEmail,
+      enrichment_provenance: row.enrichment_provenance,
+    })
+  ) {
+    const persistSource = persistableEmailSource(outcome.selectedEmail.source)
+      || persistableEmailSource(resolveEmailProvenanceSource(row));
+    if (persistSource && !isReadPathProvenanceLabel(persistSource) && !isInferredPatternProvenance(persistSource)) {
+      maybeSetField(row, 'email', {
+        value: outcome.selectedEmail.email,
+        tier: outcome.selectedEmail.tier,
+        source: persistSource,
+        confidence: outcome.selectedEmail.confidence,
+      }, updates, provenance);
+      updates.email_verified = true;
+      updates.email_verification_method = 'bouncer';
+      updates.email_status = outcome.selectedEmail.status;
+      updates.verified_at = new Date();
+      updates.verifier_checked_at = new Date();
+      updates.verifier_response = outcome.selectedEmail.verifier_response || null;
+      const stamped = stampEmailProvenance(provenance, persistSource, {
+        tier: outcome.selectedEmail.tier,
+        confidence: outcome.selectedEmail.confidence,
+        verifier: 'bouncer',
+        status: outcome.selectedEmail.status,
+        resolved_at: new Date().toISOString(),
+      });
+      provenance.email = stamped.email;
+    }
   }
   if (outcome.practice_area && !clean(row.practice_area)) {
     updates.practice_area = outcome.practice_area;
@@ -817,10 +827,12 @@ async function processProspect(row, options = {}) {
     working.last_name = tier0Name.last_name;
   }
   if (hasResolvingEmail(working)) {
+    const existingSource = persistableEmailSource(resolveEmailProvenanceSource(working))
+      || 'existing_bouncer_verified_email';
     outcome.selectedEmail = {
       email: working.email,
       tier: 0,
-      source: 'existing_bouncer_verified_email',
+      source: existingSource,
       confidence: 0.95,
       verified: true,
       status: working.email_status,
@@ -873,7 +885,8 @@ async function processProspect(row, options = {}) {
     existingEmail: working.email,
     foundEmails: website.emails,
     names: rankNames(outcome.names),
-    domain: normalizeDomain(working.domain || working.website || working.website_url),
+    domain: resolveEnrichmentDomain(working),
+    row: working,
   });
 
   for (const candidate of emailCandidates) {
@@ -881,12 +894,14 @@ async function processProspect(row, options = {}) {
       ? { ...candidate, verified: true, status: working.email_status, method: working.email_verification_method }
       : await verifyCandidate(candidate, options.verifyEmail || verifyEmail);
     outcome.emails.push(verified);
-    if (!outcome.selectedEmail && verified.verified) {
+    if (!outcome.selectedEmail && isSendableVerifiedCandidate(verified)) {
       outcome.selectedEmail = verified;
       working.email = verified.email;
       working.email_status = verified.status;
       working.email_verification_method = verified.method;
       working.email_verified = true;
+    } else if (verified.verified && !isSendableVerifiedCandidate(verified)) {
+      outcome.errors.push(`non_sendable_verified_candidate:${verified.source}:${verified.email}`);
     }
     if (passesDataBar(working)) break;
   }
@@ -936,6 +951,15 @@ async function run(params = {}) {
   const clientId = normalizeClientId(params.client_id || params.clientId || process.env.ACTIVE_CLIENT_ID || 1);
   const dryRun = Boolean(params.dryRun);
   const bucketAOnly = Boolean(params.bucketAOnly);
+  const prospectIds = Array.isArray(params.prospectIds)
+    ? [...new Set(params.prospectIds.map(id => String(id || '').trim()).filter(Boolean))]
+    : [];
+  const queryParams = [clientId];
+  let scopedProspectSql = '';
+  if (prospectIds.length) {
+    queryParams.push(prospectIds);
+    scopedProspectSql = `AND p.id = ANY($${queryParams.length}::uuid[])`;
+  }
   const result = await pool.query(`
     SELECT
       p.id AS prospect_id,
@@ -968,6 +992,7 @@ async function run(params = {}) {
       ON c.id = p.company_id
       AND c.client_id = p.client_id
     WHERE p.client_id = $1
+      ${scopedProspectSql}
       AND (
         NULLIF(TRIM(COALESCE(p.first_name, '')), '') IS NULL
         OR NULLIF(TRIM(COALESCE(p.email, '')), '') IS NULL
@@ -975,7 +1000,7 @@ async function run(params = {}) {
         OR COALESCE(p.email_verification_method, '') <> 'bouncer'
       )
     ORDER BY p.created_at ASC, p.id ASC
-  `, [clientId]);
+  `, queryParams);
 
   const outcomes = [];
   for (const row of result.rows) {
@@ -983,35 +1008,56 @@ async function run(params = {}) {
     outcomes.push(outcome);
   }
   const summary = summarize(outcomes);
-  await logAgentAction(clientId, { dry_run: dryRun, bucket_a_only: bucketAOnly, summary }, 'success');
+  await logAgentAction(clientId, {
+    dry_run: dryRun,
+    bucket_a_only: bucketAOnly,
+    scoped_prospect_ids: prospectIds,
+    summary,
+  }, 'success');
   console.log(`[tiered_enrichment] client_id=${clientId} ${JSON.stringify(summary)}`);
-  return { client_id: clientId, dry_run: dryRun, summary, outcomes };
+  return { client_id: clientId, dry_run: dryRun, prospect_ids: prospectIds, summary, outcomes };
 }
 
 module.exports = {
   run,
+  parseArgs,
   _test: {
     buildEmailCandidates,
     deriveNameFromVerifiedEmail,
     emailMatchesName,
     extractEmailsFromHtml,
     extractNamesFromText,
+    extractRelevantLinks,
     hasResolvingEmail,
     parseNameFromCompany,
     passesDataBar,
     processProspect,
     rankNames,
+    scrapeWebsite,
+    verifyCandidate,
   },
 };
 
-if (require.main === module) {
-  const args = process.argv.slice(2);
+function parseArgs(args = process.argv.slice(2)) {
   const params = {};
   for (const arg of args) {
     if (arg.startsWith('--client_id=')) params.client_id = arg.split('=')[1];
+    if (arg.startsWith('--prospect-id=')) {
+      params.prospectIds = params.prospectIds || [];
+      params.prospectIds.push(arg.split('=')[1]);
+    }
+    if (arg.startsWith('--prospect-ids=')) {
+      params.prospectIds = params.prospectIds || [];
+      params.prospectIds.push(...arg.split('=')[1].split(','));
+    }
     if (arg === '--dry-run') params.dryRun = true;
     if (arg === '--bucket-a-only') params.bucketAOnly = true;
   }
+  return params;
+}
+
+if (require.main === module) {
+  const params = parseArgs(process.argv.slice(2));
   run(params).catch(err => {
     console.error(`[tiered_enrichment] Fatal: ${err.stack || err.message}`);
     process.exit(1);
