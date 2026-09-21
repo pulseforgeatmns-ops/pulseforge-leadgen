@@ -3,10 +3,11 @@
 
 const { reviewOptions } = require('../packages/decision-service/ShadowEventRepository');
 const { queryShadowReview } = require('../packages/decision-service/shadowReview');
-const HELP = `Usage: npm run decision:review -- [--limit 50] [--tenant 10] [--mismatches | --errors] [--json]
+const HELP = `Usage: npm run decision:review -- [--limit 50] [--tenant 10] [--mismatches | --errors | --warnings] [--json]
 Read-only admin/developer report; requires DATABASE_URL. Defaults to the latest 50
 stored evaluations across tenants. Counts summarize only the returned sample.
 --mismatches selects the latest mismatches; --errors selects error-bearing rows.
+--warnings selects high-confidence likely mission-inspection routing warnings.
 No routing, approvals, or configuration is changed.`;
 
 function parseArgs(args) {
@@ -20,8 +21,8 @@ function parseArgs(args) {
       if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
       if (arg === '--limit') options.limit = Number(value);
       else options.tenantId = value;
-    } else if (arg === '--mismatches' || arg === '--errors') {
-      if (options.filter !== 'all') throw new Error('Use only one of --mismatches or --errors');
+    } else if (arg === '--mismatches' || arg === '--errors' || arg === '--warnings') {
+      if (options.filter !== 'all') throw new Error('Use only one of --mismatches, --errors, or --warnings');
       options.filter = arg.slice(2);
     } else throw new Error(`Unknown option: ${arg}`);
   }
@@ -42,7 +43,7 @@ async function main(args = process.argv.slice(2)) {
     if (options.json) console.log(JSON.stringify(report, null, 2));
     else {
       console.log(`Jev shadow review: latest ${options.limit} ${options.filter}; tenant ${options.tenantId || 'all'}`);
-      console.log('Counts cover returned rows only. Mismatches are observations for human review.');
+      console.log('Counts cover returned rows only. Warnings are observations for human review.');
       console.log(JSON.stringify(report.summary, null, 2));
       const likely = new Set(report.likely_mission_inspections.map(row => row.decision_id));
       console.table(report.evaluations.map(row => ({

@@ -15,13 +15,13 @@ const input = { question: 'What is the current status and confidence of the Anch
 const result = { route: 'intelligence', workspaceOwnership: { owner: 'reasoning' },
   routingTrace: { pipeline: 'ClientIntelligence' }, answer: 'unchanged production answer' };
 function setup(options = {}) {
-  const logs = [];
+  const logs = [], warnings = [];
   const service = new DecisionService({ env: ENV,
     provider: { name: 'jev', evaluate: async () => ({ decision, model: 'jev-test' }) },
-    audit: row => logs.push(row), ...options });
+    audit: row => logs.push(row), warningAudit: warning => warnings.push(warning), ...options });
   const workspace = createWorkspaceEngine({ decisionService: service, disableLlm: true });
   workspace._askProduction = async () => result;
-  return { service, workspace, logs };
+  return { service, workspace, logs, warnings };
 }
 
 test('throwing and rejecting persistence cannot change workspace result or original production error', async () => {
@@ -97,4 +97,31 @@ test('stdout failure does not prevent durable sink dispatch', async () => {
   await service.drain();
   assert.equal(rows.length, 1);
   assert.equal(buildShadowReview(rows).summary.likely_mission_inspections, 1);
+});
+
+test('SPEC-JEV-003 warning annotates the known mismatch without changing the workspace response', async () => {
+  const { workspace, service, logs, warnings } = setup();
+  assert.strictEqual(await workspace.ask(input), result);
+  await service.drain();
+  assert.equal(logs.length, 1);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].event, 'DECISION_SHADOW_ROUTING_WARNING');
+  assert.equal(warnings[0].spec, 'SPEC-JEV-003');
+  assert.equal(warnings[0].reason, 'likely_mission_inspection');
+  assert.equal(warnings[0].action, 'review_current_route_without_changing_routing');
+  assert.equal(warnings[0].decision_id, logs[0].decision_id);
+  assert.equal(warnings[0].recommended_route, 'inspection');
+});
+
+test('SPEC-JEV-003 warning failures cannot affect routing or persistence', async () => {
+  const rows = [];
+  const { workspace, service, logs } = setup({
+    warningAudit: () => { throw Error('warning failed'); },
+    persistence: { write: row => rows.push(row) },
+  });
+  assert.strictEqual(await workspace.ask(input), result);
+  await service.drain();
+  assert.equal(logs.length, 1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].comparison, 'mismatch');
 });

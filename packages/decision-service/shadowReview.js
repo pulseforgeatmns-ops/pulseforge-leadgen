@@ -1,17 +1,7 @@
 'use strict';
 
 const { listShadowEvents, reviewOptions } = require('./ShadowEventRepository');
-const THRESHOLD = 0.85;
-const high = value => typeof value === 'number' && Number.isFinite(value) && value >= THRESHOLD;
-
-// Audit heuristic only. This module is never imported by production routing.
-function likelyMissionInspection(row) {
-  return row.status === 'evaluated' && row.provider === 'jev' && row.comparison === 'mismatch'
-    && row.current_route?.failed !== true
-    && (row.current_route?.route === 'conversation' || row.current_route?.raw_route === 'intelligence')
-    && (row.intent === 'status_check' || row.recommended_route === 'inspection')
-    && (high(row.confidence) || high(row.inspection_probability));
-}
+const { THRESHOLD, likelyMissionInspection } = require('./shadowRoutingWarning');
 
 function buildShadowReview(rows, options) {
   const scope = reviewOptions(options);
@@ -34,7 +24,8 @@ function buildShadowReview(rows, options) {
       likely_mission_inspections: likely.length, errors: errors.length,
       by_status: count(rows, 'status'), mismatch_intents: count(mismatches, 'intent'),
       error_codes: count(errors.flatMap(row => row.errors || []), 'code') },
-    evaluations: rows, mismatches, likely_mission_inspections: likely, errors,
+    evaluations: scope.filter === 'warnings' ? likely : rows,
+    mismatches, likely_mission_inspections: likely, operator_warnings: likely, errors,
   };
 }
 

@@ -91,6 +91,10 @@ test('real PostgreSQL: migration, full round trip, duplicate safety, review filt
     assert.equal(mismatches.summary.mismatches, 1);
     assert.equal(mismatches.summary.likely_mission_inspections, 1);
     assert.equal(mismatches.mismatches[0].decision_id, fixture.decision_id);
+    const warningsReport = await queryShadowReview(db, { tenantId: '10', filter: 'warnings' });
+    assert.equal(warningsReport.summary.likely_mission_inspections, 1);
+    assert.deepEqual(warningsReport.evaluations, [fixture]);
+    assert.deepEqual(warningsReport.operator_warnings, [fixture]);
     assert.equal((await queryShadowReview(db, { tenantId: "10' OR true --" })).summary.total, 0);
 
     // A database with only SELECT privileges is sufficient for the command.
@@ -104,6 +108,12 @@ test('real PostgreSQL: migration, full round trip, duplicate safety, review filt
     const report = JSON.parse(cli.stdout);
     assert.equal(report.summary.likely_mission_inspections, 1);
     assert.deepEqual(report.mismatches, [fixture]);
+    const warningCli = await execFileAsync(process.execPath,
+      ['scripts/reviewDecisionShadow.js', '--tenant', '10', '--warnings', '--json'], {
+        cwd: root, env: { ...process.env, DATABASE_URL: readUrl, DATABASE_SSL: 'false' },
+      });
+    const warningReport = JSON.parse(warningCli.stdout);
+    assert.deepEqual(warningReport.operator_warnings, [fixture]);
     const textCli = await execFileAsync(process.execPath, ['scripts/reviewDecisionShadow.js', '--errors'], {
       cwd: root, env: { ...process.env, DATABASE_URL: readUrl, DATABASE_SSL: 'false' },
     });

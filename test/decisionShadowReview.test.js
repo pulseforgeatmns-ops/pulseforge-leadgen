@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const { FIELDS, insertShadowEvent, listShadowEvents } = require('../packages/decision-service/ShadowEventRepository');
 const { createShadowEventSink, createShadowPool } = require('../packages/decision-service/ShadowEventSink');
 const { buildShadowReview, likelyMissionInspection } = require('../packages/decision-service/shadowReview');
+const { buildRoutingWarning } = require('../packages/decision-service/shadowRoutingWarning');
 const { parseArgs } = require('../scripts/reviewDecisionShadow');
 const fixture = require('./fixtures/decisionShadowEvent.json');
 const ENV = { DECISION_SHADOW_ENABLED: 'true', DATABASE_URL: 'postgresql://test.invalid/test' };
@@ -25,6 +26,27 @@ test('repository preserves every field and nested data with bound parameters and
 
 test('known production mismatch is prominent; confidence thresholds do not fabricate unavailable or error cases', () => {
   assert.equal(likelyMissionInspection(fixture), true);
+  assert.deepEqual(buildRoutingWarning(fixture), {
+    event: 'DECISION_SHADOW_ROUTING_WARNING',
+    spec: 'SPEC-JEV-003',
+    schema_version: 1,
+    mode: 'shadow_warning',
+    severity: 'review',
+    reason: 'likely_mission_inspection',
+    decision_id: fixture.decision_id,
+    source: fixture.source,
+    session_id: fixture.session_id,
+    tenant_id: fixture.tenant_id,
+    mission_id: fixture.mission_id,
+    timestamp: fixture.timestamp,
+    current_route: fixture.current_route,
+    intent: fixture.intent,
+    confidence: fixture.confidence,
+    inspection_probability: fixture.inspection_probability,
+    recommended_route: fixture.recommended_route,
+    comparison: fixture.comparison,
+    action: 'review_current_route_without_changing_routing',
+  });
   for (const current_route of [{ route: 'conversation' }, { route: 'other', raw_route: 'intelligence' }]) {
     assert.equal(likelyMissionInspection({ ...fixture, current_route, confidence: 0.2, inspection_probability: 0.85 }), true);
   }
@@ -49,7 +71,9 @@ test('known production mismatch is prominent; confidence thresholds do not fabri
   assert.equal(report.summary.errors, 1);
   assert.equal(report.summary.error_codes.http_error, 1);
   assert.equal(report.likely_mission_inspections[0].decision_id, fixture.decision_id);
+  assert.equal(report.operator_warnings[0].decision_id, fixture.decision_id);
   assert.equal(buildShadowReview([]).summary.mismatch_rate, null);
+  assert.equal(buildRoutingWarning({ ...fixture, comparison: 'match' }), null);
 });
 
 test('read query validates bounds, scopes tenants, and applies mismatch/error filters before LIMIT', async () => {
@@ -62,9 +86,13 @@ test('read query validates bounds, scopes tenants, and applies mismatch/error fi
   assert.match(calls[0].sql, /tenant_id = \$1 AND comparison = 'mismatch'[\s\S]*LIMIT \$2/);
   await listShadowEvents(db, { filter: 'errors' });
   assert.match(calls[1].sql, /status = 'error' OR jsonb_array_length\(errors\) > 0/);
+  await listShadowEvents(db, { filter: 'warnings' });
+  assert.match(calls[2].sql, /provider = 'jev' AND comparison = 'mismatch'/);
+  assert.match(calls[2].sql, /current_route->>'route' = 'conversation'/);
+  assert.match(calls[2].sql, /confidence >= 0\.85 OR inspection_probability >= 0\.85/);
   for (const limit of [0, 501, -1, NaN, 1.5, '50']) await assert.rejects(listShadowEvents(db, { limit }));
   await assert.rejects(listShadowEvents(db, { filter: 'anything' }));
-  assert.equal(calls.length, 2, 'invalid options never reach the database');
+  assert.equal(calls.length, 3, 'invalid options never reach the database');
 });
 
 test('disabled persistence never creates a pool or writes, including explicit rollback switch', async () => {
@@ -139,8 +167,10 @@ test('review CLI defaults to 50 and accepts bounded filters without writes', () 
   assert.deepEqual(parseArgs([]), { limit: 50, tenantId: null, filter: 'all', json: false });
   assert.deepEqual(parseArgs(['--tenant', '10', '--limit', '20', '--mismatches', '--json']),
     { limit: 20, tenantId: '10', filter: 'mismatches', json: true });
+  assert.deepEqual(parseArgs(['--warnings']), { limit: 50, tenantId: null, filter: 'warnings', json: false });
   assert.equal(parseArgs(['--help']).help, true);
-  for (const args of [['--limit'], ['--tenant'], ['--limit', '501'], ['--mismatches', '--errors'], ['--apply']]) {
+  for (const args of [['--limit'], ['--tenant'], ['--limit', '501'], ['--mismatches', '--errors'],
+    ['--warnings', '--errors'], ['--apply']]) {
     assert.throws(() => parseArgs(args));
   }
 });
