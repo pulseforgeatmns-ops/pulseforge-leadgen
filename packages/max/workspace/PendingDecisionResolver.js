@@ -17,6 +17,11 @@ const {
   normalizePendingDecisionTypos,
   levenshtein,
 } = require('./BoundedTypoNormalization');
+const {
+  CAPTURE_INTENTS,
+  safeClassifyPendingDecisionCaptureIntent,
+  logPendingDecisionCaptureGuarded,
+} = require('./pendingDecisionCaptureGuard');
 
 const RESOLUTION_OUTCOMES = Object.freeze({
   AFFIRM: 'affirm',
@@ -80,8 +85,9 @@ function pendingFromMission(mission) {
 
 function isHoldOrDefer(q) {
   return (
-    /\b(?:hold on|wait a(?: minute| sec)|not yet|pause for now)\b/i.test(q) &&
-    !/\b(?:stop the mission|cancel)\b/i.test(q)
+    /\b(?:hold on|hold off|wait a(?: minute| sec)|not yet|pause(?: for now)?)\b/i.test(
+      q
+    ) && !/\b(?:stop the mission|cancel)\b/i.test(q)
   );
 }
 
@@ -366,13 +372,42 @@ function pendingDecisionOwnsTurn(resolution) {
   return true;
 }
 
+function guardedUnresolved(mission, pending, outcome, captureIntent, options = {}) {
+  try {
+    if (
+      outcome === RESOLUTION_OUTCOMES.UNRELATED &&
+      captureIntent &&
+      captureIntent !== CAPTURE_INTENTS.DECISION_RESPONSE &&
+      captureIntent !== CAPTURE_INTENTS.AMBIGUOUS_SHORT_RESPONSE
+    ) {
+      logPendingDecisionCaptureGuarded({
+        sessionId: options.sessionId || null,
+        tenantId: options.tenantId || null,
+        missionId: mission && mission.id ? mission.id : null,
+        pendingDecision: pending,
+        classification: captureIntent,
+        messageChars: options.messageChars || 0,
+        jevReason: Boolean(options.jevGuarded),
+      });
+    }
+  } catch (_) {
+    /* audit cannot break pending-decision resolution */
+  }
+  const resolution = buildUnresolvedResolution(mission, pending, outcome);
+  if (captureIntent) resolution.captureIntent = captureIntent;
+  if (options.captureGuarded) resolution.captureGuarded = true;
+  return resolution;
+}
+
 /**
  * Resolve operator utterance against an active pending operator decision.
+ * SPEC-JEV-004 — capture only when the message plausibly answers the decision.
  * @param {string} question
  * @param {object|null} mission
+ * @param {object} [options]
  * @returns {object}
  */
-function resolvePendingOperatorDecision(question, mission) {
+function resolvePendingOperatorDecision(question, mission, options = {}) {
   const pending = pendingFromMission(mission);
   if (!pending || !pending.kind) {
     return { resolved: false };
@@ -382,6 +417,16 @@ function resolvePendingOperatorDecision(question, mission) {
   if (!raw) return { resolved: false };
 
   const q = normalizePendingDecisionTypos(raw);
+  const captureInput = {
+    message: q,
+    pendingDecision: pending,
+    shadowDecision: options.shadowDecision || null,
+    sessionId: options.sessionId || null,
+    tenantId: options.tenantId || null,
+    missionId: mission && mission.id ? mission.id : null,
+  };
+  const captureIntent = safeClassifyPendingDecisionCaptureIntent(captureInput);
+  const messageChars = q.length;
 
   if (isHoldOrDefer(q)) {
     return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS);
@@ -391,16 +436,55 @@ function resolvePendingOperatorDecision(question, mission) {
     return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.UNRELATED);
   }
 
-  if (isQuestionAboutDecision(q)) {
+  if (
+    captureIntent === CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION ||
+    isQuestionAboutDecision(q)
+  ) {
     return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.QUESTION);
   }
 
-  const classification = classifyByKind(pending.kind, q);
-  if (!classification) {
+  if (
+    captureIntent === CAPTURE_INTENTS.INSPECTION_OR_STATUS_QUESTION ||
+    captureIntent === CAPTURE_INTENTS.UNRELATED_OR_QUESTION ||
+    captureIntent === CAPTURE_INTENTS.AMBIGUOUS
+  ) {
+    return guardedUnresolved(
+      mission,
+      pending,
+      RESOLUTION_OUTCOMES.UNRELATED,
+      captureIntent,
+      { ...options, messageChars, captureGuarded: true }
+    );
+  }
+
+  // Weak fillers are not explicit approve/reject even though they are short.
+  if (
+    captureIntent === CAPTURE_INTENTS.AMBIGUOUS_SHORT_RESPONSE &&
+    /^(?:sure|ok(?:ay)?|maybe|hmm|uh|um)\.?$/i.test(q)
+  ) {
     return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS);
   }
 
-  return buildResolution(mission, pending, classification, question);
+  const classification = classifyByKind(pending.kind, q);
+  if (classification) {
+    return buildResolution(mission, pending, classification, question);
+  }
+
+  if (captureIntent === CAPTURE_INTENTS.DECISION_RESPONSE) {
+    return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS);
+  }
+
+  if (captureIntent === CAPTURE_INTENTS.AMBIGUOUS_SHORT_RESPONSE || captureIntent == null) {
+    return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS);
+  }
+
+  return guardedUnresolved(
+    mission,
+    pending,
+    RESOLUTION_OUTCOMES.UNRELATED,
+    captureIntent || CAPTURE_INTENTS.AMBIGUOUS,
+    { ...options, messageChars, captureGuarded: true }
+  );
 }
 
 function pendingDecisionRequestsExecution(resolution) {

@@ -372,7 +372,15 @@ async function analyzeOperatorIntent(input = {}) {
   let conversationSubject = detectConversationSubject(question, null, session);
 
   const pendingDecisionResolution = mission
-    ? resolvePendingOperatorDecision(question, mission)
+    ? resolvePendingOperatorDecision(question, mission, {
+        sessionId: session && session.id,
+        tenantId: resolveTenantId({ session, context }),
+        shadowDecision:
+          input.shadowDecision ||
+          (context && context.shadowDecision) ||
+          (session && session.context && session.context.shadowDecision) ||
+          null,
+      })
     : { resolved: false };
 
   let conversationIntent = buildPendingDecisionConversationIntent(pendingDecisionResolution);
