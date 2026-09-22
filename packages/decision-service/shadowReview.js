@@ -1,13 +1,14 @@
 'use strict';
 
 const { listShadowEvents, reviewOptions } = require('./ShadowEventRepository');
-const { THRESHOLD, likelyMissionInspection } = require('./shadowRoutingWarning');
+const { INSPECTION_THRESHOLD, classifyDecisionMismatch } = require('./mismatchClassifier');
+const { likelyMissionInspection } = require('./shadowRoutingWarning');
 
 function buildShadowReview(rows, options) {
   const scope = reviewOptions(options);
   const mismatches = rows.filter(row => row.comparison === 'mismatch');
   const errors = rows.filter(row => row.status === 'error' || row.errors?.length > 0);
-  const likely = rows.filter(likelyMissionInspection);
+  const likely = rows.filter(row => classifyDecisionMismatch(row) != null);
   const count = (items, key) => items.reduce((result, row) => {
     const label = row[key] ?? 'unknown';
     result[label] = (result[label] || 0) + 1;
@@ -18,7 +19,10 @@ function buildShadowReview(rows, options) {
     spec: 'SPEC-JEV-002', mode: 'shadow_review',
     scope: { latest: scope.limit, tenant_id: scope.tenantId, filter: scope.filter,
       summary_basis: 'returned rows only' },
-    thresholds: { confidence_or_inspection_probability: THRESHOLD },
+    thresholds: {
+      confidence: 0.9,
+      inspection_probability: INSPECTION_THRESHOLD,
+    },
     summary: { total: rows.length, comparable, mismatches: mismatches.length,
       mismatch_rate: comparable ? mismatches.length / comparable : null,
       likely_mission_inspections: likely.length, errors: errors.length,

@@ -43,7 +43,7 @@ const PIPELINE_RETRIEVAL = 'Retrieval';
 function looksLikeAcquisitionMissionQuestion(question) {
   const q = String(question || '').trim();
   if (!q) return false;
-  return /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace|where are we\b|mission progress|mission status/i.test(
+  return /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is outreach|mission health|how is (?:the )?mission\b|what(?:'s| is) blocking (?:the )?mission|mission workspace|where are we\b|mission progress|mission status|current status|status and confidence/i.test(
     q
   );
 }

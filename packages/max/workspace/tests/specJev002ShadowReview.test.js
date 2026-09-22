@@ -105,9 +105,10 @@ test('SPEC-JEV-003 warning annotates the known mismatch without changing the wor
   await service.drain();
   assert.equal(logs.length, 1);
   assert.equal(warnings.length, 1);
-  assert.equal(warnings[0].event, 'DECISION_SHADOW_ROUTING_WARNING');
+  assert.equal(warnings[0].event, 'DECISION_SHADOW_WARNING');
   assert.equal(warnings[0].spec, 'SPEC-JEV-003');
-  assert.equal(warnings[0].reason, 'likely_mission_inspection');
+  assert.equal(warnings[0].warning_type, 'likely_mission_inspection_misroute');
+  assert.match(warnings[0].reason, /mission inspection\/status routing/);
   assert.equal(warnings[0].action, 'review_current_route_without_changing_routing');
   assert.equal(warnings[0].decision_id, logs[0].decision_id);
   assert.equal(warnings[0].recommended_route, 'inspection');
