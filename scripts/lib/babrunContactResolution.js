@@ -649,6 +649,9 @@ async function resolveTarget(target, options = {}) {
   const websiteDiscovery = await discoverWebsiteEmails(target, domainEvidence);
   let candidates = websiteDiscovery.candidates;
   candidates = appendPublicSourceCandidates(target, candidates);
+  if (Array.isArray(options.extraCandidates) && options.extraCandidates.length) {
+    candidates = [...options.extraCandidates, ...candidates];
+  }
   if (options.prospect) {
     candidates = [...crmExistingCandidates(options.prospect, domains), ...candidates];
   }
@@ -731,4 +734,5 @@ module.exports = {
   attributionRank,
   isLikelyTypoDomain,
   isInvalidVerification,
+  candidateRecord,
 };
