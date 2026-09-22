@@ -69,6 +69,8 @@ const acquisitionApproach = require('./AcquisitionApproach');
 const contributionSupersession = require('./ContributionSupersession');
 const canonicalContributionSelection = require('./CanonicalContributionSelection');
 const upstreamArtifactCoherence = require('./UpstreamArtifactCoherence');
+const resolveInspectionMission = require('./resolveInspectionMission');
+const missionInspectionSnapshot = require('./MissionInspectionSnapshot');
 
 module.exports = {
   ...types,
@@ -141,4 +143,6 @@ module.exports = {
   ...contributionSupersession,
   ...canonicalContributionSelection,
   ...upstreamArtifactCoherence,
+  ...resolveInspectionMission,
+  ...missionInspectionSnapshot,
 };
