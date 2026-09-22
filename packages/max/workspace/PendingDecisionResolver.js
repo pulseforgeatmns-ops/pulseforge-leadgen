@@ -85,9 +85,8 @@ function pendingFromMission(mission) {
 
 function isHoldOrDefer(q) {
   return (
-    /\b(?:hold on|hold off|wait a(?: minute| sec)|not yet|pause(?: for now)?)\b/i.test(
-      q
-    ) && !/\b(?:stop the mission|cancel)\b/i.test(q)
+    /\b(?:hold on|hold off|wait a(?: minute| sec)|not yet|pause for now)\b/i.test(q) &&
+    !/\b(?:stop the mission|cancel)\b/i.test(q)
   );
 }
 

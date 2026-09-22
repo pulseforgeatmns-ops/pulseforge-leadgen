@@ -30,7 +30,7 @@ const { createWorkspaceEngine } = require('../WorkspaceEngine');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
 
 const ANCHOR_OBJECTIVE =
-  'Acquire one recurring commercial cleaning client from Anchor STR / property managers.';
+  'Acquire one recurring commercial cleaning client from Anchor STR property managers in Manchester NH.';
 const STATUS_QUESTION =
   'What is the current status and confidence of the Anchor STR mission?';
 const YES_NO_COPY = "I didn't catch a clear yes or no";
@@ -279,8 +279,12 @@ describe('SPEC-JEV-004 — Pending Decision Capture Guard', () => {
         context: { tenantId: '10', missionId: mission.id },
       });
 
+      assert.ok(turn && typeof turn.prose === 'string' && turn.prose.length > 0);
       assert.doesNotMatch(turn.prose, new RegExp(YES_NO_COPY, 'i'));
-      assert.notEqual(turn.resolution.reason, 'pending_decision_turn_ownership');
+      assert.notEqual(
+        turn.resolution && turn.resolution.reason,
+        'pending_decision_turn_ownership'
+      );
       assert.doesNotMatch(turn.prose, /^Approve discovery\?\s*$/i);
 
       const after = engine.inspect(mission.id, { tenantId: '10' });
@@ -372,7 +376,11 @@ describe('SPEC-JEV-004 — Pending Decision Capture Guard', () => {
         context: { tenantId: '10', missionId: mission.id },
       });
 
-      assert.notEqual(turn.resolution.reason, 'pending_decision_turn_ownership');
+      assert.ok(turn && typeof turn.prose === 'string' && turn.prose.length > 0);
+      assert.notEqual(
+        turn.resolution && turn.resolution.reason,
+        'pending_decision_turn_ownership'
+      );
       assert.doesNotMatch(turn.prose, new RegExp(YES_NO_COPY, 'i'));
       const after = engine.inspect(mission.id, { tenantId: '10' });
       assert.equal(
