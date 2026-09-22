@@ -161,6 +161,10 @@ Flag **likely mission inspection** when all of these apply:
 
 This is a review-only threshold, not a production routing threshold. It catches
 the production Anchor STR observation: `status_check`, confidence `0.99`,
+
+SPEC-JEV-005 (mission inspection state consistency) builds on this routing fix:
+once Jev routes to `inspection`, the answer layer resolves canonical missions and
+validates snapshot consistency before generating status/confidence prose.
 inspection probability `0.93`, recommendation `inspection`, and current route
 `conversation / intelligence / ClientIntelligence`. Lower-confidence mismatches
 still appear in the general mismatch list. Null/unknown comparisons and provider

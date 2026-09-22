@@ -18,6 +18,7 @@ const {
   repetitionPreface,
 } = require('./ConversationMemory');
 const { buildMissionContext } = require('../../acquisition-mission/Inspection');
+const { formatMissionInspectionProse } = require('../../acquisition-mission/MissionInspectionSnapshot');
 
 const SPECIALIST_KNOWLEDGE = Object.freeze({
   scout:
@@ -124,7 +125,19 @@ function buildInternalReasoning(facts, intent) {
 function composeExplainLead(facts, reasoning, opts = {}) {
   const specialist = opts.specialist || 'Scout';
   if (facts.pending && facts.pending.prompt) {
-    return `${specialist} finished its pass, but the mission is waiting on you — ${facts.pending.prompt}`;
+    if (facts.pending.kind === 'discovery_approval') {
+      return `The mission is waiting on you to approve discovery — ${facts.pending.prompt}`;
+    }
+    if (facts.pending.kind === 'plan_approval' || facts.pending.kind === 'plan_clarification') {
+      return `The mission is waiting on you to approve the plan — ${facts.pending.prompt}`;
+    }
+    const scoutFinishedDiscovery =
+      facts.discoveryCount > 0 ||
+      (facts.scout && facts.scout.state === 'complete' && facts.pending.kind === 'prioritization_approval');
+    if (scoutFinishedDiscovery) {
+      return `${specialist} finished its pass, but the mission is waiting on you — ${facts.pending.prompt}`;
+    }
+    return `The mission is waiting on you — ${facts.pending.prompt}`;
   }
   if (facts.discoveryCount === 0 && facts.scout.state === 'complete') {
     return `${specialist} finished discovery successfully, but nothing met our evidence threshold on this pass.`;
@@ -257,6 +270,10 @@ function composeLead(intent, facts, reasoning, question) {
   }
 }
 
+function factsInspectionProperty(answered = {}) {
+  return (answered.inspection && answered.inspection.property) || null;
+}
+
 function composeExpansion(intent, facts, reasoning, explicitReasoning) {
   if (!explicitReasoning && intent !== THINKING_MODES.EXPLAIN && intent !== THINKING_MODES.STRATEGY) {
     return '';
@@ -268,10 +285,19 @@ function composeExpansion(intent, facts, reasoning, explicitReasoning) {
       parts.push(`Here's why: ${coverage}`);
     }
   }
-  if (reasoning.length > 1) {
-    parts.push(`Here's why: ${reasoning.slice(1).join(' ')}`);
-  } else if (reasoning.length === 1 && explicitReasoning) {
-    parts.push(`Here's why: ${reasoning[0]}`);
+  const expansionReasons = reasoning.filter((line) => {
+    if (facts.pending && facts.pending.kind === 'discovery_approval') {
+      return !/waiting for scout/i.test(String(line));
+    }
+    if (facts.pending && facts.pending.prompt && /waiting for scout/i.test(String(line))) {
+      return false;
+    }
+    return true;
+  });
+  if (expansionReasons.length > 1) {
+    parts.push(`Here's why: ${expansionReasons.slice(1).join(' ')}`);
+  } else if (expansionReasons.length === 1 && explicitReasoning) {
+    parts.push(`Here's why: ${expansionReasons[0]}`);
   }
   const reflection = composeSelfReflection(facts, intent);
   if (reflection && explicitReasoning) {
@@ -299,6 +325,44 @@ function composeConversationalResponse(input = {}) {
   const session = input.session || null;
   const explicitReasoning =
     input.explicitReasoning === true || looksLikeReasoningRequest(question);
+  const inspectionSnapshot = input.inspectionSnapshot || null;
+  const inspectionValidation = input.inspectionValidation || null;
+
+  if (inspectionSnapshot) {
+    const snapshotProse = formatMissionInspectionProse(
+      inspectionSnapshot,
+      inspectionValidation || { ok: true, warnings: [] }
+    );
+    const memory = ensureConversationMemory(session);
+    const topicKey = deriveTopicKey({
+      intent,
+      inspectionProperty: factsInspectionProperty(answered),
+      stage: inspectionSnapshot.stage,
+      specialist: specialistFromQuestion(question),
+    });
+    const preface = repetitionPreface(memory, topicKey);
+    const paragraphs = [];
+    if (preface) paragraphs.push(preface.trim());
+    paragraphs.push(snapshotProse);
+    const prose = paragraphs.join('\n\n').trim();
+    const relationshipMode = inferRelationshipMode(conversationIntent, memory);
+    if (session) {
+      recordExplanation(session, {
+        topicKey,
+        summary: snapshotProse.slice(0, 200),
+        intent,
+        relationshipMode,
+      });
+    }
+    return {
+      prose,
+      topicKey,
+      relationshipMode,
+      reasoning: [],
+      explicitReasoning,
+      inspectionSnapshot: true,
+    };
+  }
 
   const memory = ensureConversationMemory(session);
   const facts = extractMissionFacts(snapshot, answered);
