@@ -28,10 +28,43 @@ const {
 const askPathTrace = require('./audit/AskPathTrace');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
 const { resolveAcquisitionMissionRuntime } = require('./WorkspaceMissionInspection');
+const { logPendingDecisionCaptureGuardError } = require('./pendingDecisionCaptureGuard');
 
 function contextualPendingAnswer(question, resolution, snapshot) {
   const q = String(question || '').trim();
   const mission = snapshot && snapshot.mission ? snapshot.mission : null;
+  const prompt =
+    resolution.prompt ||
+    (mission && mission.pendingOperatorDecision && mission.pendingOperatorDecision.prompt) ||
+    'the pending decision';
+
+  if (
+    /\bwhat exactly am i approv/i.test(q) ||
+    /\bwhat does\b.*\bapprov/i.test(q) ||
+    /\bwhat(?:'s| is) (?:this|the) (?:pending )?decision\b/i.test(q)
+  ) {
+    if (resolution.decisionKind === 'discovery_approval') {
+      return (
+        'You are deciding whether to approve Scout discovery for this mission. ' +
+        'Approval would allow Scout to begin prospect discovery. I still need an explicit ' +
+        'approve, hold, or reject before executing it.'
+      );
+    }
+    return (
+      `You are deciding: ${prompt} I still need an explicit approve, hold, or reject ` +
+      'before executing it.'
+    );
+  }
+
+  if (/\bwhy\b.*\bapprov/i.test(q) || /\bwhy should i approve\b/i.test(q)) {
+    if (resolution.decisionKind === 'discovery_approval') {
+      return (
+        'Discovery is the next step because the mission needs qualified prospects before outreach. ' +
+        'Approval would not send outreach yet; it only begins discovery.'
+      );
+    }
+    return 'This approval is the next operator gate before the mission can advance.';
+  }
 
   if (/\bwhat(?:'s| is| are) the (?:biggest )?risks?\b/i.test(q)) {
     if (resolution.decisionKind === 'discovery_approval') {
@@ -155,6 +188,27 @@ function buildPendingDecisionStructured(prose, resolution, snapshot, mission) {
  * @returns {Promise<object|null>}
  */
 async function maybeHandlePendingDecisionTurn(input = {}) {
+  try {
+    return await handlePendingDecisionTurn(input);
+  } catch (error) {
+    try {
+      const resolution =
+        input.operatorIntent && input.operatorIntent.pendingDecisionResolution
+          ? input.operatorIntent.pendingDecisionResolution
+          : null;
+      logPendingDecisionCaptureGuardError(error, {
+        sessionId: input.session && input.session.id,
+        tenantId: input.context && input.context.tenantId,
+        missionId: resolution && resolution.missionId,
+      });
+    } catch (_) {
+      /* guard failure cannot break routing */
+    }
+    return null;
+  }
+}
+
+async function handlePendingDecisionTurn(input = {}) {
   const operatorIntent = input.operatorIntent || null;
   const resolution =
     operatorIntent && operatorIntent.pendingDecisionResolution

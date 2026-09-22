@@ -100,7 +100,7 @@ function referencesMissionState(question) {
     /\bwhat changed\b|\bwhat(?:'s| has) changed\b/.test(q) ||
     /\bwhat happens next\b|\bnext step\b|\bwhat(?:'s| is) next\b/.test(q) ||
     /\bwhy this recommendation\b/.test(q) ||
-    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status/.test(q)
+    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status|current status|status and confidence/.test(q)
   );
 }
 
@@ -164,7 +164,11 @@ function classifyInspectionQuestion(question) {
   ) {
     return INSPECTION_PROPERTIES.OUTCOME_LEARNING;
   }
-  if (/mission workspace|mission status|mission progress|where are we\b/.test(q)) {
+  if (
+    /mission workspace|mission status|mission progress|where are we\b|current status|status and confidence/.test(
+      q
+    )
+  ) {
     return INSPECTION_PROPERTIES.WORKSPACE;
   }
   return null;

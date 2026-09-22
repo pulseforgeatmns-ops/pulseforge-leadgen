@@ -5,7 +5,7 @@
   "main": "leadgen.js",
   "scripts": {
     "test": "node --test test/*.test.js",
-    "test:decision": "node --test test/decisionService.test.js test/decisionShadowReview.test.js test/decisionMismatchClassifier.test.js packages/max/workspace/tests/specJev001ShadowRouting.test.js packages/max/workspace/tests/specJev002ShadowReview.test.js",
+    "test:decision": "node --test test/decisionService.test.js test/decisionShadowReview.test.js packages/max/workspace/tests/specJev001ShadowRouting.test.js packages/max/workspace/tests/specJev002ShadowReview.test.js packages/max/workspace/tests/specJev004PendingDecisionCaptureGuard.test.js",
     "test:decision:postgres": "node --test test/decisionShadowPostgres.test.js",
     "decision:review": "node scripts/reviewDecisionShadow.js",
     "decision:review:warnings": "node scripts/reviewDecisionShadowWarnings.js",
