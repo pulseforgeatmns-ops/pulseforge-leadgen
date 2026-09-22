@@ -6,7 +6,7 @@ Implementation contracts for Pulseforge. Specs are the bridge between vision and
 
 | Spec | Title | Status | Release |
 |---|---|---|---|
-| [SPEC-JEV-003](SPEC-JEV-003_Shadow_Routing_Warning.md) | Shadow Routing Warning | Implemented | Unreleased |
+| [SPEC-JEV-003](SPEC-JEV-003_Operator_Visible_Routing_Mismatch_Warnings.md) | Operator-Visible Routing Mismatch Warnings | Implemented | Unreleased |
 | [SPEC-JEV-002](SPEC-JEV-002_Decision_Shadow_Review.md) | Decision Shadow Review + Mismatch Audit | Implemented; migration pending deployment | Unreleased |
 | [SPEC-000](SPEC-000_Repository_Foundation.md) | Repository Foundation & Source of Truth | Done | v0.7.0 |
 | [SPEC-001A](SPEC-001A_Knowledge_Layer_Foundation.md) | Knowledge Layer Foundation | Done | v0.7.1 |
