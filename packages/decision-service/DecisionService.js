@@ -9,6 +9,7 @@ const { JevProvider } = require('./providers/JevProvider');
 const { NoopProvider } = require('./providers/NoopProvider');
 const { createShadowEventSink, getDefaultShadowEventSink } = require('./ShadowEventSink');
 const { buildRoutingWarning } = require('./shadowRoutingWarning');
+const { classifyDecisionMismatch } = require('./mismatchClassifier');
 
 function boundedInteger(value, fallback, min, max) {
   const n = Number(value);
@@ -39,7 +40,7 @@ function defaultAudit(row) {
   console.info('[DECISION_SHADOW_EVALUATED]', JSON.stringify(row));
 }
 function defaultWarningAudit(warning) {
-  console.warn('[DECISION_SHADOW_ROUTING_WARNING]', JSON.stringify(warning));
+  console.warn('[DECISION_SHADOW_WARNING]', JSON.stringify(warning));
 }
 function safeError(error) {
   const codes = ['invalid_response', 'http_error', 'timeout'];
@@ -52,12 +53,13 @@ function safeError(error) {
 /** Observation only: no method can execute or return a production route. */
 class DecisionService {
   constructor({ env = process.env, provider, audit = defaultAudit, warningAudit = defaultWarningAudit,
-    persistence, fetchImpl } = {}) {
+    persistence, fetchImpl, classifyMismatch = classifyDecisionMismatch } = {}) {
     this.config = readConfig(env);
     /** @type {import('./types').DecisionProvider} */
     this.provider = provider || selectProvider(this.config, fetchImpl);
     this._audit = audit;
     this._warningAudit = warningAudit;
+    this._classifyMismatch = classifyMismatch;
     this._persistence = persistence || (env === process.env
       ? getDefaultShadowEventSink() : createShadowEventSink({ env }));
     this._pending = new Set();
@@ -114,8 +116,8 @@ class DecisionService {
       Promise.resolve(this._audit(row)).catch(() => {});
     } catch (_) { /* best-effort audit, same isolation as the provider */ }
     try {
-      const warning = buildRoutingWarning(row);
-      if (warning) Promise.resolve(this._warningAudit(warning)).catch(() => {});
+      const payload = buildRoutingWarning(row, this._classifyMismatch);
+      if (payload) Promise.resolve(this._warningAudit(payload)).catch(() => {});
     } catch (_) { /* warning annotations are observational only */ }
   }
 

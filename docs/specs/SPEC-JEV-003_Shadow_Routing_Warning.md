@@ -14,7 +14,7 @@ The first warning case is the Anchor STR pattern observed in production:
 - Current route: `conversation` with raw route `intelligence`.
 - Jev intent: `status_check`.
 - Jev recommendation: `inspection`.
-- Confidence or inspection probability at least `0.85`.
+- Confidence at least `0.90` and inspection probability at least `0.85`.
 - Comparison: `mismatch`.
 
 ## Runtime behavior
@@ -24,7 +24,7 @@ When a completed shadow row matches the high-confidence mission-inspection
 heuristic, the observer emits a second structured stdout row:
 
 ```text
-[DECISION_SHADOW_ROUTING_WARNING] {...}
+[DECISION_SHADOW_WARNING] {...}
 ```
 
 The warning payload is a safe projection of the shadow event:
@@ -40,15 +40,20 @@ does not contain the operator message, Max response, prompt, provider raw body,
 credentials, SQL, or stack traces. If the warning sink throws or rejects, the
 shadow row and production response still complete.
 
-The warning is intentionally generated from the stored-review heuristic in
+The warning is derived by `classifyDecisionMismatch()` in
+`packages/decision-service/mismatchClassifier.js` and emitted through
 `packages/decision-service/shadowRoutingWarning.js`. Production routing does not
-import it, and no method returns a Jev route to the workspace.
+import the classifier, and no method returns a Jev route to the workspace.
+
+See also [SPEC-JEV-003 Operator-Visible Routing Mismatch Warnings](SPEC-JEV-003_Operator_Visible_Routing_Mismatch_Warnings.md).
 
 ## Review command
 
 The SPEC-JEV-002 review command now has a warnings filter:
 
 ```sh
+npm run decision:review:warnings -- --limit 50
+node scripts/reviewDecisionShadowWarnings.js --tenant 10 --json
 npm run decision:review -- --warnings --limit 50
 npm run decision:review -- --tenant 10 --warnings --json
 ```
@@ -69,8 +74,8 @@ Rollback options:
   stop durable review writes.
 - Set `DECISION_SHADOW_ENABLED=false` to stop shadow evaluation, persistence, and
   warning emission.
-- Revert this code to remove `[DECISION_SHADOW_ROUTING_WARNING]` rows while
-  keeping SPEC-JEV-002 persistence.
+- Revert this code to remove `[DECISION_SHADOW_WARNING]` rows while keeping
+  SPEC-JEV-002 persistence.
 
 Do not add an automatic routing flag for this spec. The next graduation step, if
 approved, should be a separately reviewed operator-facing UI annotation or a
