@@ -100,7 +100,8 @@ function referencesMissionState(question) {
     /\bwhat changed\b|\bwhat(?:'s| has) changed\b/.test(q) ||
     /\bwhat happens next\b|\bnext step\b|\bwhat(?:'s| is) next\b/.test(q) ||
     /\bwhy this recommendation\b/.test(q) ||
-    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status/.test(q)
+    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status/.test(q) ||
+    /\b(?:current\s+)?status\s+and\s+confidence\b|\bwhat(?:'s| is)\s+(?:the\s+)?(?:current\s+)?status\b.*\bmission\b|\bmission\b.*\b(?:current\s+)?status\s+and\s+confidence\b/.test(q)
   );
 }
 
@@ -163,6 +164,11 @@ function classifyInspectionQuestion(question) {
     /what have we learned|organizational learning|prediction accuracy|outcome learning|what surprised us|what prediction failed|what should change|what should never happen again/.test(q)
   ) {
     return INSPECTION_PROPERTIES.OUTCOME_LEARNING;
+  }
+  if (
+    /\b(?:current\s+)?status\s+and\s+confidence\b|\bwhat(?:'s| is)\s+(?:the\s+)?(?:current\s+)?status\b.*\bmission\b/.test(q)
+  ) {
+    return INSPECTION_PROPERTIES.WORKSPACE;
   }
   if (/mission workspace|mission status|mission progress|where are we\b/.test(q)) {
     return INSPECTION_PROPERTIES.WORKSPACE;

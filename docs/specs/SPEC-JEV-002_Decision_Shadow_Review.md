@@ -119,7 +119,12 @@ npm run decision:review -- --tenant 10 --limit 50
 npm run decision:review -- --tenant 10 --mismatches --json
 npm run decision:review -- --tenant 10 --warnings --json
 npm run decision:review -- --tenant 10 --errors --json
+npm run decision:review:warnings -- --limit 50
+node scripts/reviewDecisionShadowWarnings.js --tenant 10 --json
 ```
+
+Warning candidates are derived at query time by `classifyDecisionMismatch()`; see
+[SPEC-JEV-003](SPEC-JEV-003_Operator_Visible_Routing_Mismatch_Warnings.md).
 
 In an existing Railway service shell, the same commands use its environment.
 The default is the latest 50 stored evaluations across tenants, ordered by event
@@ -151,10 +156,15 @@ Flag **likely mission inspection** when all of these apply:
 - The row is an evaluated Jev mismatch and the observed production route did not fail.
 - `current_route.route='conversation'` or `current_route.raw_route='intelligence'`.
 - `intent='status_check'` or `recommended_route='inspection'`.
-- `confidence >= 0.85` or `inspection_probability >= 0.85`.
+- `confidence >= 0.90` and `inspection_probability >= 0.85` (see
+  [SPEC-JEV-003](SPEC-JEV-003_Operator_Visible_Routing_Mismatch_Warnings.md)).
 
 This is a review-only threshold, not a production routing threshold. It catches
 the production Anchor STR observation: `status_check`, confidence `0.99`,
+
+SPEC-JEV-005 (mission inspection state consistency) builds on this routing fix:
+once Jev routes to `inspection`, the answer layer resolves canonical missions and
+validates snapshot consistency before generating status/confidence prose.
 inspection probability `0.93`, recommendation `inspection`, and current route
 `conversation / intelligence / ClientIntelligence`. Lower-confidence mismatches
 still appear in the general mismatch list. Null/unknown comparisons and provider

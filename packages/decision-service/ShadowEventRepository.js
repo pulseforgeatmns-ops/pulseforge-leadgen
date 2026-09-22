@@ -48,11 +48,15 @@ async function listShadowEvents(db, options) {
   if (tenantId !== null) { values.push(tenantId); where.push(`tenant_id = $${values.length}`); }
   if (filter === 'mismatches') where.push("comparison = 'mismatch'");
   if (filter === 'errors') where.push("(status = 'error' OR jsonb_array_length(errors) > 0)");
-  if (filter === 'warnings') where.push(`status = 'evaluated' AND provider = 'jev' AND comparison = 'mismatch'
+  if (filter === 'warnings') where.push(`status = 'evaluated' AND provider = 'jev'
+    AND (comparison = 'mismatch' OR route_matches = false)
     AND current_route->>'failed' IS DISTINCT FROM 'true'
-    AND (current_route->>'route' = 'conversation' OR current_route->>'raw_route' = 'intelligence')
-    AND (intent = 'status_check' OR recommended_route = 'inspection')
-    AND (confidence >= 0.85 OR inspection_probability >= 0.85)`);
+    AND (current_route->>'route' = 'conversation'
+      OR current_route->>'raw_route' = 'intelligence'
+      OR current_route->>'pipeline' = 'ClientIntelligence')
+    AND recommended_route = 'inspection'
+    AND (intent IN ('status_check', 'inspection', 'mission_inspection') OR recommended_route = 'inspection')
+    AND confidence >= 0.9 AND inspection_probability >= 0.85`);
   values.push(limit);
   const result = await db.query(`SELECT ${FIELDS.join(', ')} FROM decision_shadow_events
     ${where.length ? `WHERE ${where.join(' AND ')}` : ''}

@@ -5,8 +5,9 @@ const assert = require('node:assert/strict');
 const { FIELDS, insertShadowEvent, listShadowEvents } = require('../packages/decision-service/ShadowEventRepository');
 const { createShadowEventSink, createShadowPool } = require('../packages/decision-service/ShadowEventSink');
 const { buildShadowReview, likelyMissionInspection } = require('../packages/decision-service/shadowReview');
-const { buildRoutingWarning } = require('../packages/decision-service/shadowRoutingWarning');
+const { buildRoutingWarning, classifyDecisionMismatch } = require('../packages/decision-service/shadowRoutingWarning');
 const { parseArgs } = require('../scripts/reviewDecisionShadow');
+const { parseArgs: parseWarningArgs } = require('../scripts/reviewDecisionShadowWarnings');
 const fixture = require('./fixtures/decisionShadowEvent.json');
 const ENV = { DECISION_SHADOW_ENABLED: 'true', DATABASE_URL: 'postgresql://test.invalid/test' };
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -26,43 +27,38 @@ test('repository preserves every field and nested data with bound parameters and
 
 test('known production mismatch is prominent; confidence thresholds do not fabricate unavailable or error cases', () => {
   assert.equal(likelyMissionInspection(fixture), true);
-  assert.deepEqual(buildRoutingWarning(fixture), {
-    event: 'DECISION_SHADOW_ROUTING_WARNING',
-    spec: 'SPEC-JEV-003',
-    schema_version: 1,
-    mode: 'shadow_warning',
-    severity: 'review',
-    reason: 'likely_mission_inspection',
-    decision_id: fixture.decision_id,
-    source: fixture.source,
-    session_id: fixture.session_id,
-    tenant_id: fixture.tenant_id,
-    mission_id: fixture.mission_id,
-    timestamp: fixture.timestamp,
-    current_route: fixture.current_route,
-    intent: fixture.intent,
-    confidence: fixture.confidence,
-    inspection_probability: fixture.inspection_probability,
-    recommended_route: fixture.recommended_route,
-    comparison: fixture.comparison,
-    action: 'review_current_route_without_changing_routing',
-  });
-  for (const current_route of [{ route: 'conversation' }, { route: 'other', raw_route: 'intelligence' }]) {
-    assert.equal(likelyMissionInspection({ ...fixture, current_route, confidence: 0.2, inspection_probability: 0.85 }), true);
+  const warning = buildRoutingWarning(fixture);
+  assert.equal(warning.event, 'DECISION_SHADOW_WARNING');
+  assert.equal(warning.spec, 'SPEC-JEV-003');
+  assert.equal(warning.warning_type, 'likely_mission_inspection_misroute');
+  assert.equal(warning.severity, 'review');
+  assert.equal(warning.decision_id, fixture.decision_id);
+  assert.equal(warning.recommended_route, 'inspection');
+  assert.equal(warning.action, 'review_current_route_without_changing_routing');
+  for (const current_route of [
+    { route: 'conversation' },
+    { route: 'other', raw_route: 'intelligence' },
+    { pipeline: 'ClientIntelligence' },
+  ]) {
+    assert.ok(classifyDecisionMismatch({ ...fixture, current_route }));
   }
-  assert.equal(likelyMissionInspection({ ...fixture, confidence: 0.85, inspection_probability: 0.1 }), true);
+  assert.equal(classifyDecisionMismatch({ ...fixture, confidence: 0.2, inspection_probability: 0.93 }), null);
+  assert.equal(classifyDecisionMismatch({ ...fixture, confidence: 0.85, inspection_probability: 0.1 }), null);
+  assert.equal(classifyDecisionMismatch({ ...fixture, confidence: 0.849, inspection_probability: 0.849 }), null);
   for (const patch of [
-    { confidence: 0.849, inspection_probability: 0.849 },
     { confidence: null, inspection_probability: null },
     { confidence: '0.99', inspection_probability: '0.99' },
-    { current_route: { route: 'mission' } }, { status: 'error' }, { provider: 'noop' },
+    { current_route: { route: 'mission' } },
+    { current_route: { route: 'inspection' } },
+    { status: 'error' },
     { current_route: { ...fixture.current_route, failed: true } },
-    { comparison: 'unavailable' }, { comparison: 'match' },
+    { comparison: 'unavailable', route_matches: null },
+    { comparison: 'match', route_matches: true },
     { intent: 'approval', recommended_route: 'approval' },
-  ]) assert.equal(likelyMissionInspection({ ...fixture, ...patch }), false, JSON.stringify(patch));
+  ]) assert.equal(classifyDecisionMismatch({ ...fixture, ...patch }), null, JSON.stringify(patch));
   const error = { ...fixture, status: 'error', comparison: 'unavailable', intent: null,
     errors: [{ code: 'http_error', http_status: 401 }] };
-  const report = buildShadowReview([fixture, error, { ...fixture, comparison: 'match' },
+  const report = buildShadowReview([fixture, error, { ...fixture, comparison: 'match', route_matches: true },
     { ...fixture, status: 'fallback', comparison: 'unavailable' }]);
   assert.equal(report.summary.total, 4);
   assert.equal(report.summary.mismatches, 1);
@@ -73,7 +69,7 @@ test('known production mismatch is prominent; confidence thresholds do not fabri
   assert.equal(report.likely_mission_inspections[0].decision_id, fixture.decision_id);
   assert.equal(report.operator_warnings[0].decision_id, fixture.decision_id);
   assert.equal(buildShadowReview([]).summary.mismatch_rate, null);
-  assert.equal(buildRoutingWarning({ ...fixture, comparison: 'match' }), null);
+  assert.equal(buildRoutingWarning({ ...fixture, comparison: 'match', route_matches: true }), null);
 });
 
 test('read query validates bounds, scopes tenants, and applies mismatch/error filters before LIMIT', async () => {
@@ -87,9 +83,9 @@ test('read query validates bounds, scopes tenants, and applies mismatch/error fi
   await listShadowEvents(db, { filter: 'errors' });
   assert.match(calls[1].sql, /status = 'error' OR jsonb_array_length\(errors\) > 0/);
   await listShadowEvents(db, { filter: 'warnings' });
-  assert.match(calls[2].sql, /provider = 'jev' AND comparison = 'mismatch'/);
-  assert.match(calls[2].sql, /current_route->>'route' = 'conversation'/);
-  assert.match(calls[2].sql, /confidence >= 0\.85 OR inspection_probability >= 0\.85/);
+  assert.match(calls[2].sql, /recommended_route = 'inspection'/);
+  assert.match(calls[2].sql, /confidence >= 0\.9 AND inspection_probability >= 0\.85/);
+  assert.match(calls[2].sql, /ClientIntelligence/);
   for (const limit of [0, 501, -1, NaN, 1.5, '50']) await assert.rejects(listShadowEvents(db, { limit }));
   await assert.rejects(listShadowEvents(db, { filter: 'anything' }));
   assert.equal(calls.length, 3, 'invalid options never reach the database');
@@ -173,4 +169,6 @@ test('review CLI defaults to 50 and accepts bounded filters without writes', () 
     ['--warnings', '--errors'], ['--apply']]) {
     assert.throws(() => parseArgs(args));
   }
+  assert.deepEqual(parseWarningArgs([]), { limit: 50, tenantId: null, json: false });
+  assert.deepEqual(parseWarningArgs(['--tenant', '10', '--limit', '25']), { limit: 25, tenantId: '10', json: false });
 });
