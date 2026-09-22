@@ -41,6 +41,7 @@ const { ensureCallDispositionSchema } = require('./calBatchAgent');
 const { ensureMiraSchema } = require('./utils/miraSchema');
 const { ensureLifecycleSchema } = require('./utils/lifecycleSchema');
 const { ensureAoFieldSchema } = require('./utils/aoFieldSchema');
+const { ensureAoProspectRoutingSchema } = require('./utils/aoProspectRoutingSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
@@ -59,6 +60,7 @@ ensureClientArchitecture()
   .then(() => ensureEmmettAutosendSchema())
   .then(enforceMiraClientState)
   .then(() => ensureAoFieldSchema())
+  .then(() => ensureAoProspectRoutingSchema())
   .catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
@@ -245,6 +247,7 @@ app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
 app.use('/sales', require('./routes/sales'));
 app.use('/ao', require('./routes/ao'));
+app.use('/', require('./routes/aoProspectRouting'));
 app.use('/admin/field-visits', require('./routes/aoAdmin'));
 // Public marketing funnel — no session auth (see routes/scorecard.js)
 app.use('/', require('./routes/scorecard'));
