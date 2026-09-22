@@ -204,7 +204,15 @@ function candidateRecord(email, discoveryMethod, discoverySource, extras = {}) {
 function classifyCandidate(candidate, verification, founder) {
   if (!candidate?.email) return CONTACT_FINAL_STATE.UNRESOLVED;
   if (!verification?.verified) {
-    if (verification?.deliverability === 'unknown' || verification?.deliverability === 'timeout') {
+    if (verification?.deliverability === 'invalid') {
+      return CONTACT_FINAL_STATE.UNRESOLVED;
+    }
+    if (
+      verification?.deliverability === 'unknown'
+      || verification?.deliverability === 'timeout'
+      || verification?.deliverability === 'risky'
+      || verification?.deliverability === 'catchall'
+    ) {
       return CONTACT_FINAL_STATE.REVIEW_REQUIRED;
     }
     return CONTACT_FINAL_STATE.UNRESOLVED;
@@ -346,28 +354,90 @@ function appendPatternCandidates(target, candidates, domains) {
   return out;
 }
 
-function pickBestCandidate(evaluated) {
+/** VALID > RISKY/CATCHALL > UNKNOWN/TIMEOUT > INVALID */
+function verificationDeliverabilityRank(verification = {}) {
+  const deliverability = clean(verification.deliverability).toLowerCase();
+  if (deliverability === 'valid' || verification.verified === true) return 0;
+  if (deliverability === 'risky' || deliverability === 'catchall') return 1;
+  if (deliverability === 'unknown' || deliverability === 'timeout') return 2;
+  if (deliverability === 'invalid') return 3;
+  return 2;
+}
+
+function isInvalidVerification(verification = {}) {
+  return verificationDeliverabilityRank(verification) >= 3;
+}
+
+/** Stronger attribution wins within equivalent verification quality. */
+function attributionRank(candidate = {}) {
+  if (candidate.founderAttribution && candidate.firstParty) return 0;
+  if (candidate.publicFounderSource && candidate.founderAttribution) return 1;
+  if (candidate.firstParty && (candidate.roleGeneric || isGenericRoleEmail(candidate.email))) return 2;
+  if (candidate.firstParty && candidate.discoveryMethod !== 'pattern_candidate') return 2;
+  if (candidate.discoveryMethod === 'crm_existing') return 3;
+  if (!candidate.patternGenerated && !candidate.firstParty) return 3;
+  return 4;
+}
+
+function levenshteinDistance(a, b) {
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const matrix = Array.from({ length: rows }, () => Array(cols).fill(0));
+  for (let i = 0; i < rows; i += 1) matrix[i][0] = i;
+  for (let j = 0; j < cols; j += 1) matrix[0][j] = j;
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+/** Preserve typo-domain candidates distinctly; penalize in ranking only. */
+function isLikelyTypoDomain(candidateDomain, officialDomain) {
+  const candidate = normalizeDomain(candidateDomain);
+  const official = normalizeDomain(officialDomain);
+  if (!candidate || !official || candidate === official) return false;
+  if (Math.abs(candidate.length - official.length) > 1) return false;
+  return levenshteinDistance(candidate, official) === 1;
+}
+
+function typoDomainPenalty(candidate, officialDomain) {
+  if (!officialDomain) return 0;
+  return isLikelyTypoDomain(emailDomain(candidate.email), officialDomain) ? 1 : 0;
+}
+
+function pickBestCandidate(evaluated, options = {}) {
   const classRank = {
     [CONTACT_FINAL_STATE.VERIFIED_FOUNDER_EMAIL]: 0,
     [CONTACT_FINAL_STATE.VERIFIED_ROLE_EMAIL]: 1,
     [CONTACT_FINAL_STATE.REVIEW_REQUIRED]: 2,
     [CONTACT_FINAL_STATE.UNRESOLVED]: 3,
   };
-  const methodRank = {
-    first_party_website: 0,
-    public_founder_source: 1,
-    crm_existing: 2,
-    pattern_candidate: 3,
-  };
+  const officialDomain = options.officialDomain ? normalizeDomain(options.officialDomain) : null;
   const usable = evaluated.filter((row) => !isNoiseEmail(row.email));
-  const observed = usable.filter((row) => row.discoveryMethod !== 'pattern_candidate');
-  const pool = observed.length ? observed : usable.filter((row) => row.discoveryMethod === 'pattern_candidate');
+  const nonInvalid = usable.filter((row) => !isInvalidVerification(row.verification));
+  const pool = nonInvalid.length ? nonInvalid : usable;
+
   return [...pool].sort((a, b) => {
-    const method = (methodRank[a.discoveryMethod] || 9) - (methodRank[b.discoveryMethod] || 9);
-    if (method !== 0) return method;
+    const verificationDelta = verificationDeliverabilityRank(a.verification)
+      - verificationDeliverabilityRank(b.verification);
+    if (verificationDelta !== 0) return verificationDelta;
+
+    const typoDelta = typoDomainPenalty(a, officialDomain) - typoDomainPenalty(b, officialDomain);
+    if (typoDelta !== 0) return typoDelta;
+
+    const attributionDelta = attributionRank(a) - attributionRank(b);
+    if (attributionDelta !== 0) return attributionDelta;
+
     const cls = classRank[a.classification] - classRank[b.classification];
     if (cls !== 0) return cls;
-    if (a.verification.verified !== b.verification.verified) return a.verification.verified ? -1 : 1;
+
     const pathDepth = (url) => {
       try {
         return new URL(url).pathname.split('/').filter(Boolean).length;
@@ -593,7 +663,7 @@ async function resolveTarget(target, options = {}) {
   }
 
   const evaluated = await evaluateCandidates(deduped, target.founder, options.verifyEmail || verifyEmail);
-  const best = pickBestCandidate(evaluated);
+  const best = pickBestCandidate(evaluated, { officialDomain: domainEvidence.domain });
   const finalState = best?.classification || CONTACT_FINAL_STATE.UNRESOLVED;
 
   const pageSample = await fetchText(buildUrl(domainEvidence.domain, '/'));
@@ -657,4 +727,8 @@ module.exports = {
   mapVerificationResult,
   isFounderLocalPartMatch,
   pickBestCandidate,
+  verificationDeliverabilityRank,
+  attributionRank,
+  isLikelyTypoDomain,
+  isInvalidVerification,
 };
