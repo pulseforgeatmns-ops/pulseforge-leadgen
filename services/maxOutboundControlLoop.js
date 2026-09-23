@@ -1,11 +1,13 @@
 'use strict';
 
-const { canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
+const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('../utils/canonicalEmailEligibility');
+const { normalizeVertical } = require('../utils/normalize');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { adapters: createGovernedAdapters } = require('./governedOutboundAdapters');
 
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
+const MAX_ENRICHMENT_BATCHES_PER_CYCLE = 3;
 
 function boundedInt(value, fallback, min = 1, max = 100) {
   const n = Number(value);
@@ -45,9 +47,48 @@ function buildControlPlan({
   };
 }
 
-async function loadCleanInventory(pool, store) {
+function sourceScope(source) {
+  const payload = source?.payload || source || {};
+  const structured = payload.structuredMission || {};
+  const market = structured.market || {};
+  const geography = structured.geography || {};
+  return {
+    segment: normalizeVertical(market.segment || payload.targetSegment || ''),
+    industry: normalizeVertical(market.industry || ''),
+    region: geography.region || null,
+    cities: Array.isArray(geography.cities) ? geography.cities.map(x => String(x).toLowerCase()) : [],
+  };
+}
+
+function segmentAliases(scope) {
+  const aliases = new Set([scope.segment, scope.industry].filter(Boolean));
+  if (scope.segment === 'short_term_rental' || scope.segment === 'short_term_rental_operators') {
+    ['short_term_rental', 'str_manager', 'property_manager', 'property_management', 'hospitality']
+      .forEach(x => aliases.add(x));
+  }
+  return aliases;
+}
+
+function missionCandidateReason(row, scope) {
+  if (row.service_area_match !== true) return 'service_area_not_confirmed';
+  const vertical = normalizeVertical(row.vertical || row.industry || '');
+  const aliases = segmentAliases(scope);
+  if (aliases.size && (!vertical || !aliases.has(vertical))) return 'mission_segment_mismatch';
+  return null;
+}
+
+async function loadSource(pool, program) {
+  return (await pool.query(
+    "SELECT id,objective,target_segment,payload FROM acquisition_missions WHERE tenant_id='10' AND id=$1",
+    [program.source_mission_id]
+  )).rows[0] || null;
+}
+
+async function loadCleanInventory(pool, store, source) {
+  const scope = sourceScope(source);
   const { rows } = await pool.query(`
-    SELECT p.*, c.name AS company_name, c.domain AS company_domain, c.website AS company_website
+    SELECT p.*, c.name AS company_name, c.domain AS company_domain, c.website AS company_website,
+      c.industry AS industry, c.location AS company_location
     FROM prospects p
     JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
     WHERE p.client_id=10
@@ -59,7 +100,8 @@ async function loadCleanInventory(pool, store) {
   const clean = [];
   const excluded = [];
   for (const row of rows) {
-    const reason = canonicalOutboundEmailIneligibilityReason(row);
+    const missionReason = missionCandidateReason(row, scope);
+    const emailReason = missionReason ? null : canonicalOutboundEmailIneligibilityReason(row);
     const candidate = {
       candidateId: String(row.id),
       prospectId: String(row.id),
@@ -69,25 +111,26 @@ async function loadCleanInventory(pool, store) {
       website: row.company_website,
       email: String(row.email || '').toLowerCase(),
     };
-    const ownership = reason ? null : await store.candidateOwnership(candidate);
-    const suppression = reason || ownership ? null : await store.suppression(candidate, '__max_inventory_buffer__');
-    const blocked = reason || ownership || suppression;
+    const ownership = missionReason || emailReason ? null : await store.candidateOwnership(candidate);
+    const suppression = missionReason || emailReason || ownership
+      ? null
+      : await store.suppression(candidate, '__max_inventory_buffer__');
+    const blocked = missionReason || emailReason || ownership || suppression;
     if (blocked) excluded.push({ prospectId: candidate.prospectId, reason: blocked });
     else clean.push(candidate);
   }
-  return { clean, excluded };
+  return { clean, excluded, scope };
 }
 
 function scoutInput(program, source, plan) {
-  const structured = source?.payload?.structuredMission || source?.structuredMission || {};
-  const geography = structured.geography || {};
-  const market = structured.market || {};
-  const cities = Array.isArray(geography.cities) ? geography.cities : [];
-  const region = geography.region || cities.join(', ') || 'Greater Manchester';
-  const segment = market.segment || 'short_term_rental';
+  const scope = sourceScope(source);
+  const payload = source?.payload || {};
+  const region = scope.region || scope.cities.join(', ') || 'Greater Manchester';
+  const segment = scope.segment || 'short_term_rental';
   return {
     authorizedTenantId: '10',
     tenantId: '10',
+    missionId: program.source_mission_id,
     question: `Max needs Scout to replenish verified outbound inventory for ${segment} in ${region}.`,
     objective: `Find enough net-new, in-scope prospects to close an outbound inventory deficit of ${plan.deficit} while preserving ownership, prior-contact, DNC and suppression boundaries.`,
     reason: `Emmett safe daily capacity is ${plan.safeDailyCapacity}; Max requires a ${plan.targetDays}-day buffer of ${plan.targetInventory}, but only ${plan.cleanInventory} clean prospects are currently available.`,
@@ -97,8 +140,8 @@ function scoutInput(program, source, plan) {
       serviceGeography: region,
       commercialCapability: 'commercial_cleaning',
       preferredSegments: [segment],
-      acquisitionDirection: source?.objective || source?.payload?.objective || null,
-      exclusions: source?.payload?.constraints || [],
+      acquisitionDirection: source?.objective || payload.objective || null,
+      exclusions: payload.constraints || [],
     },
     targetContext: {
       geography: region,
@@ -110,21 +153,75 @@ function scoutInput(program, source, plan) {
   };
 }
 
+async function persistDiscoveredCompanies(pool, { companies = [] }) {
+  let inserted = 0;
+  for (const company of companies) {
+    const name = String(company.name || '').trim();
+    const website = String(company.website || '').trim() || null;
+    const domain = normalizeDomain(company.domain || website);
+    if (!name || !domain) continue;
+    const result = await pool.query(`
+      INSERT INTO scout_unenriched (
+        client_id, company, website_url, domain, vertical, location, source,
+        enrichment_attempts, last_attempt_at, notes
+      )
+      SELECT 10,$1,$2,$3,$4,$5,'max_buffer_replenishment',0,NULL,$6
+      WHERE NOT EXISTS (
+        SELECT 1 FROM scout_unenriched
+        WHERE client_id=10 AND (
+          lower(domain)=lower($3) OR lower(trim(company))=lower(trim($1))
+        )
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM companies
+        WHERE client_id=10 AND (
+          lower(COALESCE(domain,''))=lower($3) OR lower(trim(name))=lower(trim($1))
+        )
+      )
+      RETURNING id
+    `, [
+      name,
+      website || `https://${domain}`,
+      domain,
+      normalizeVertical(company.industry || 'short_term_rental'),
+      company.location || null,
+      'Discovered by Max-directed Scout inventory replenishment; no contact performed.',
+    ]);
+    inserted += result.rowCount;
+  }
+  return { inserted };
+}
+
+async function runEnrichmentBatches(enrichment, pool, requested) {
+  const summaries = [];
+  let promoted = 0;
+  const batches = Math.min(
+    MAX_ENRICHMENT_BATCHES_PER_CYCLE,
+    Math.ceil(Math.max(0, requested) / DEFAULT_ENRICHMENT_BATCH)
+  );
+  for (let i = 0; i < batches; i += 1) {
+    const remaining = Math.max(1, requested - promoted);
+    const summary = await enrichment.run({
+      client_id: 10,
+      limit: Math.min(DEFAULT_ENRICHMENT_BATCH, remaining),
+      retryHours: 1,
+      db: pool,
+    });
+    summaries.push(summary);
+    promoted += Number(summary?.promoted || 0);
+    if (!summary?.considered) break;
+  }
+  return { promoted, summaries };
+}
+
 async function defaultScoutRamp({ pool, program, source, plan, logger = console }) {
   const enrichment = require('../scoutUnenrichedEnrichmentAgent');
-  const enrichmentLimit = Math.min(
-    DEFAULT_ENRICHMENT_BATCH,
-    Math.max(1, plan.deficit)
-  );
-  const promoted = await enrichment.run({
-    client_id: 10,
-    limit: enrichmentLimit,
-    retryHours: 1,
-    db: pool,
-  });
-
+  const first = await runEnrichmentBatches(enrichment, pool, plan.deficit);
+  let promoted = first.promoted;
   let discovery = null;
-  if (plan.deficit > Number(promoted?.promoted || 0)) {
+  let persisted = { inserted: 0 };
+
+  if (promoted < plan.deficit) {
     discovery = await require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(
       scoutInput(program, source, plan),
       {
@@ -145,16 +242,33 @@ async function defaultScoutRamp({ pool, program, source, plan, logger = console 
             updatedAt: row.updated_at,
           }));
         },
+        persistCompanies: async input => {
+          persisted = await persistDiscoveredCompanies(pool, input);
+          return persisted;
+        },
         enablePlaces: true,
       }
     );
+
+    if (persisted.inserted > 0 && promoted < plan.deficit) {
+      const second = await runEnrichmentBatches(enrichment, pool, plan.deficit - promoted);
+      promoted += second.promoted;
+      first.summaries.push(...second.summaries);
+    }
   }
+
   logger.log?.('[max-outbound-control] Scout ramp', JSON.stringify({
     requested: plan.deficit,
-    promoted: promoted?.promoted || 0,
+    promoted,
+    discoveredQueued: persisted.inserted,
     discovery: discovery?.kind || null,
   }));
-  return { promoted, discovery };
+  return {
+    promoted,
+    enrichmentBatches: first.summaries,
+    discoveredQueued: persisted.inserted,
+    discovery,
+  };
 }
 
 async function runMaxOutboundControlLoop(options = {}) {
@@ -166,11 +280,14 @@ async function runMaxOutboundControlLoop(options = {}) {
     return { halted: 'no_enabled_program' };
   }
 
+  const source = options.source || await loadSource(pool, program);
+  if (!source) return { halted: 'source_mission_missing', programId: program.id };
+
   const governedAdapters = options.governedAdapters || createGovernedAdapters(pool);
   const infrastructure = options.infrastructure
     || await governedAdapters.infrastructure(program);
   const inventoryBefore = options.inventory
-    || await loadCleanInventory(pool, store);
+    || await loadCleanInventory(pool, store, source);
   const sentToday = Number(infrastructure?.snapshot?.sentToday || 0);
   const plan = buildControlPlan({
     dailyCap: program.policy.dailyCap,
@@ -182,17 +299,13 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   let scout = null;
   if (plan.shouldReplenish && options.execute !== false) {
-    const sourceRow = (await pool.query(
-      "SELECT id,objective,payload FROM acquisition_missions WHERE tenant_id='10' AND id=$1",
-      [program.source_mission_id]
-    )).rows[0];
     const ramp = options.scoutRamp || defaultScoutRamp;
-    scout = await ramp({ pool, program, source: sourceRow, plan, logger });
+    scout = await ramp({ pool, program, source, plan, logger });
   }
 
   const inventoryAfter = options.inventoryAfter
     || (plan.shouldReplenish && options.execute !== false
-      ? await loadCleanInventory(pool, store)
+      ? await loadCleanInventory(pool, store, source)
       : inventoryBefore);
   const finalPlan = buildControlPlan({
     dailyCap: program.policy.dailyCap,
@@ -209,6 +322,7 @@ async function runMaxOutboundControlLoop(options = {}) {
   ], {
     programId: program.id,
     policyHash: program.policy_hash,
+    sourceMissionId: program.source_mission_id,
     emmettCapacity: infrastructure.cap,
     sentToday,
     bufferTarget: finalPlan.targetInventory,
@@ -217,6 +331,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     deficit: finalPlan.deficit,
     state: finalPlan.state,
     scoutInvoked: Boolean(scout),
+    scoutPromoted: Number(scout?.promoted || 0),
+    scoutQueued: Number(scout?.discoveredQueued || 0),
   });
 
   return {
@@ -230,13 +346,21 @@ async function runMaxOutboundControlLoop(options = {}) {
     plan: finalPlan,
     scout,
     excludedCount: inventoryAfter.excluded.length,
+    sourceScope: inventoryAfter.scope,
   };
 }
 
 module.exports = {
   DEFAULT_TARGET_DAYS,
+  MAX_ENRICHMENT_BATCHES_PER_CYCLE,
   buildControlPlan,
+  sourceScope,
+  missionCandidateReason,
   loadCleanInventory,
   runMaxOutboundControlLoop,
-  _test: { scoutInput },
+  _test: {
+    scoutInput,
+    persistDiscoveredCompanies,
+    runEnrichmentBatches,
+  },
 };
