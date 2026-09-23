@@ -135,7 +135,8 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
         || review.sourceMissionHash !== hash(sourceProjection)
         || reserved.missionId !== `mission_daily_${hash([program.id,day,'replenishment',input.reviewHash]).slice(0,24)}`
         || progress?.mission_id !== reserved.missionId || progress.attempts !== review.nextAttempt
-        || progress.attempts > program.policy.preparationAttemptsPerDay || progress.last_error) fail('reserved_preparation_changed');
+        || progress.attempts > program.policy.preparationAttemptsPerDay
+        || (progress.last_error && !['Query read timeout','Connection terminated unexpectedly'].includes(progress.last_error))) fail('reserved_preparation_changed');
       if (await store.one("SELECT id FROM acquisition_missions WHERE tenant_id='10' AND id=$1",[reserved.missionId])) fail('reserved_mission_already_created');
       if (await store.envelope(day)) fail('replenishment_envelope_exists');
       const counts = await store.counts(program,day);

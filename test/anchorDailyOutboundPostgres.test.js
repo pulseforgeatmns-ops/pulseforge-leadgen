@@ -346,6 +346,9 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     await recovery.reserveReplenishment(svc.store,plan,clock);
     const command={programId:program.id,reviewHash:plan.reviewHash};
     await assert.rejects(svc.resumeReservedPreparation({...command,reviewHash:'changed'},actor),{code:'reserved_preparation_changed'});
+    await pool.query("UPDATE acquisition_outbound_preparation SET last_error='verified_inventory_shortfall'");
+    await assert.rejects(svc.resumeReservedPreparation(command,actor),{code:'reserved_preparation_changed'});
+    await pool.query("UPDATE acquisition_outbound_preparation SET last_error='Connection terminated unexpectedly'");
     const result=await svc.resumeReservedPreparation(command,actor);
     assert.equal(result.planned,1);assert.equal(result.sent,0);
     assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts,2);
