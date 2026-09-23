@@ -94,6 +94,9 @@ test('production preparation runs Scout, enrichment, Max, Paige and Emmett throu
   const source = engine.create({ tenantId: '10', objective: 'Acquire commercial cleaning customers in Manchester NH for law firms.', targetSegment: 'Law Firms' });
   await steps.advancePlanAfterApproval({ engine, mission: source, tenantId: '10', question: 'Approved.' });
   const snapshot = engine.inspect(source.id, { tenantId: '10' });
+  // Legacy approved missions predate the optional resolvedObjective property.
+  // The daily mission factory materializes its absence as null.
+  delete snapshot.mission.resolvedObjective;
   const sender = { ...emmett.FIXTURE_CANONICAL_SENDER, tenantId: '10', clientId: 10 };
   const program = { id: 'test-program', authorized_by: 'jake', scope_hash: hash(missionScope(snapshot.mission)),
     policy: { enrichmentLimit: 15, preparationAttemptsPerDay: 3, senderEmail: sender.senderEmail } };
@@ -103,27 +106,49 @@ test('production preparation runs Scout, enrichment, Max, Paige and Emmett throu
   }]));
   let enriched = 0;
   const events = [];
-  const adapter = adapters({ query: async () => ({ rows: [] }) }, {
+  const queries = [];
+  let researchSeen = null;
+  const adapter = adapters({ query: async sql => { queries.push(sql); return { rows: [] }; } }, {
     persist: false,
     runtime: { engine: () => engine, create: async input => engine.create(input) },
     loadMission: async id => engine.inspect(id, { tenantId: '10' }),
     contact: async id => contacts[id],
     tenant: async () => ({ sender }),
     infrastructure: async () => ({ snapshot: emmett.fixtureInfrastructureSnapshot('10') }),
-    runScout: async () => steps.fixtureScoutDiscoveryResult(),
+    runScout: async (_mission, opts) => { researchSeen = opts.scoutCompanies; return steps.fixtureScoutDiscoveryResult(); },
     admission: { ensureMissionBoundCrmSchema: async () => {}, admitMissionBoundCandidate: async () => {} },
     enrich: async () => { enriched++; },
     runEmmett: (mission, opts) => emmett.runEmmettForAmoMission(mission, { ...opts, runEmmett: undefined, crmByProspectId: contacts }),
   });
   const store = { one: async () => ({ attempts: 0 }), suppression: async () => null,
     event: async (type, _key, data) => events.push({ type, ...data }) };
+  store.ensurePreparation = async () => ({ created: false, progress: await store.one() });
   const daily = await adapter.prepare(program, snapshot, '2026-09-18', store);
   assert.equal(daily.mission.stage, 'ready');
+  assert.equal(daily.mission.resolvedObjective, null);
   assert.equal(enriched, 2);
   const ready = await adapter.prepared(daily, program);
   assert.equal(ready.candidates.length, 2);
   assert.ok(ready.candidates.every(row => candidateReason(row.item, contacts[row.candidateId], row.message) === null));
   assert.equal(events.find(row => row.type === 'inventory_replenished').eligible, 2);
+  const oldMission = structuredClone(engine.get(daily.mission.id, '10'));
+  const recovery = { nextMissionId: 'mission_recovery_test', review: { nextAttempt: 2, research: [
+    { name: 'Research Host', domain: 'host.example', website: 'https://host.example/', operatingCity: 'Manchester',
+      headquarters: 'Worcester MA', evidence: [{ kind: 'property', url: 'https://host.example/property', summary: 'Observed property', observedAt: new Date().toISOString() }] },
+  ] } };
+  store.one = async () => ({ attempts: 2, mission_id: recovery.nextMissionId, last_attempt_at: new Date() });
+  const incrementsBefore = queries.filter(sql => sql.includes('SET attempts=attempts+1')).length;
+  const fresh = await adapter.prepare(program, snapshot, '2026-09-18', store, recovery);
+  assert.equal(fresh.mission.stage, 'ready');
+  assert.equal(fresh.mission.id, recovery.nextMissionId);
+  assert.equal(hash(missionScope(fresh.mission)), program.scope_hash);
+  assert.equal(researchSeen[0].id, 'host.example');
+  assert.deepEqual(researchSeen[0].signals, []);
+  assert.deepEqual(engine.get(daily.mission.id, '10'), oldMission);
+  assert.equal(queries.filter(sql => sql.includes('SET attempts=attempts+1')).length, incrementsBefore, 'Reserved recovery cannot consume twice');
+  assert.equal((await adapter.prepare(program, snapshot, '2026-09-18', store)).mission.id, recovery.nextMissionId);
+  store.one = async () => ({ attempts: 2, mission_id: 'mission_crashed_recovery', last_attempt_at: new Date() });
+  await assert.rejects(adapter.prepare(program, snapshot, '2026-09-18', store), { code: 'replenishment_requires_operator_review' });
 });
 
 test('cron rejects missing or wrong secrets, exposes only POST, and awaits the bounded worker', async () => {

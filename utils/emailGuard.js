@@ -9,6 +9,7 @@ function normalizeEmailAddress(value) {
 function invalidOutreachEmailReason(value) {
   const email = normalizeEmailAddress(value);
   if (!email) return 'missing_email';
+  if (/^(?:user@domain\.com|example@mysite\.com)$/i.test(email)) return 'placeholder_address';
   if (URL_ENCODED_RE.test(email)) return 'url_encoded_chars';
   if (/\s/.test(email)) return 'contains_spaces';
   if (ASSET_EXTENSION_RE.test(email)) return 'asset_extension';

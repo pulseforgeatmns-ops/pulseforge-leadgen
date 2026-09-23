@@ -430,7 +430,7 @@ async function admitMissionBoundCandidate(pool, candidate, {
     created = true;
   }
 
-  if (!prospect) {
+  if (!prospect && !(dryRun && created)) {
     prospectResult = await resolveExistingProspect(pool, clientId, company.id, candidate);
     prospect = prospectResult?.prospect || null;
   }

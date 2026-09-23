@@ -102,16 +102,22 @@ function adapters(pool, dependencies = {}) {
       if (attempts >= program.policy.enrichmentLimit) { eligible[id] = { eligible: false, reason: 'enrichment_budget' }; continue; }
       try {
         let crm = await contact(id);
-        if (crm?.email && await store.suppression({ candidateId: id, prospectId: crm.prospect_id,
-          companyId: crm.company_id, email: crm.email })) {
+        const ownership = store.candidateOwnership && await store.candidateOwnership(candidate);
+        if (ownership || (crm && await store.suppression({ candidateId: id, prospectId: crm.prospect_id,
+          companyId: crm.company_id, email: String(crm.email || '') }))) {
           eligible[id] = { eligible: false, reason: 'prior_contact_or_human_owned' }; continue;
         }
         attempts++;
-        await admission.admitMissionBoundCandidate(pool, candidate, { missionId: mission.id, clientId: 10, mission });
+        const admitted = await admission.admitMissionBoundCandidate(pool, candidate, { missionId: mission.id, clientId: 10, mission });
+        if (admitted?.blocked) {
+          eligible[id] = { eligible: false, reason: admitted.reason, detail: admitted.detail || null }; continue;
+        }
         crm = await contact(id);
         if (crm) await enrichProspectRow(crm, { db: pool, dryRun: false });
         crm = await contact(id);
-        const reason = canonicalOutboundEmailIneligibilityReason(crm);
+        const reason = canonicalOutboundEmailIneligibilityReason(crm)
+          || await store.suppression({ candidateId: id, prospectId: crm.prospect_id,
+            companyId: crm.company_id, email: crm.email });
         eligible[id] = { eligible: !reason, reason, prospectId: crm?.prospect_id || null };
       } catch (e) {
         // A conflicting company/contact (including Stewart duplicates) quarantines
@@ -125,18 +131,25 @@ function adapters(pool, dependencies = {}) {
     if (!Object.values(eligible).some(x => x.eligible)) fail('verified_inventory_shortfall');
     return result;
   }
-  async function prepare(program, source, day, store) {
+  async function prepare(program, source, day, store, recovery = null) {
     const runtime = await runtimeFor();
     const engine = runtime.engine();
-    const missionId = `mission_daily_${hash([program.id, day]).slice(0, 24)}`;
-    await pool.query(`INSERT INTO acquisition_outbound_preparation(program_id,local_day,mission_id)
-      VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, [program.id, day, missionId]);
-    const progress = await store.one('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2', [program.id, day]);
+    const defaultMissionId = `mission_daily_${hash([program.id, day]).slice(0, 24)}`;
+    const { progress } = await store.ensurePreparation(program, day);
+    const missionId = progress.mission_id || defaultMissionId;
     let mission = engine.get(missionId, '10');
     if (mission?.stage === 'ready') return loadMission(missionId);
-    if (progress.attempts >= program.policy.preparationAttemptsPerDay) fail('preparation_retry_budget');
-    if (progress.last_attempt_at && Date.now() - +new Date(progress.last_attempt_at) < 60 * 60000) fail('preparation_backoff');
-    await pool.query('UPDATE acquisition_outbound_preparation SET attempts=attempts+1,last_attempt_at=now() WHERE program_id=$1 AND local_day=$2', [program.id, day]);
+    if (recovery) {
+      if (missionId !== recovery.nextMissionId || progress.attempts !== recovery.review.nextAttempt
+        || progress.attempts > program.policy.preparationAttemptsPerDay || mission) fail('replenishment_reservation_changed');
+    } else {
+      // A crashed recovery cannot silently spend another attempt or lose its
+      // reviewed research inputs through an ordinary scheduled tick.
+      if (missionId !== defaultMissionId) fail('replenishment_requires_operator_review');
+      if (progress.attempts >= program.policy.preparationAttemptsPerDay) fail('preparation_retry_budget');
+      if (progress.last_attempt_at && Date.now() - +new Date(progress.last_attempt_at) < 60 * 60000) fail('preparation_backoff');
+      await pool.query('UPDATE acquisition_outbound_preparation SET attempts=attempts+1,last_attempt_at=now() WHERE program_id=$1 AND local_day=$2', [program.id, day]);
+    }
     try {
       if (!mission) {
         const input = { ...missionScope(source.mission), id: missionId, tenantId: '10', clientId: 10,
@@ -160,7 +173,8 @@ function adapters(pool, dependencies = {}) {
         await route(runtime, missionId, program, intent, {
           infrastructureSnapshot: infra.snapshot,
           runEmmett: dependencies.runEmmett,
-          runScout: (m, o) => scoutWithEligibility(m, o, program, store),
+          runScout: (m, o) => scoutWithEligibility(m, { ...o,
+            ...(recovery ? { scoutCompanies: require('./governedOutboundReplenishment').scoutCompanies(recovery.review.research) } : {}) }, program, store),
         });
       }
       fail('preparation_step_budget');

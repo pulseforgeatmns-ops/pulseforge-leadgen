@@ -10,7 +10,7 @@ function parse(argv) {
     if (!rest[i].startsWith('--') || !rest[i + 1] || rest[i + 1].startsWith('--')) throw new Error('Expected --key value');
     options[rest[i].slice(2)] = rest[i + 1];
   }
-  if (!['status','review','authorize','mode','tick','poll','reconcile'].includes(command)) throw new Error('Unknown command');
+  if (!['status','review','authorize','mode','tick','poll','reconcile','preparation-init','replenish-review','replenish'].includes(command)) throw new Error('Unknown command');
   return { command, options };
 }
 async function run(argv = process.argv.slice(2)) {
@@ -31,6 +31,12 @@ async function run(argv = process.argv.slice(2)) {
     if (command === 'mode') return await service.setMode(options.id, options.mode, options['policy-hash'], actor);
     if (command === 'reconcile') return await service.reconcile(options.item, options.outcome, options['provider-message-id'], options.evidence, actor);
     const input = JSON.parse(require('fs').readFileSync(options.file, 'utf8'));
+    if (command === 'preparation-init') return await service.initializePreparation(input, actor);
+    if (command === 'replenish-review') return await service.replenish(input, actor, false);
+    if (command === 'replenish') {
+      if (options.confirm !== 'bounded-anchor-preparation') throw new Error('replenish requires --confirm bounded-anchor-preparation');
+      return await service.replenish(input, actor, true);
+    }
     if (command === 'review') delete input.reviewHash;
     return await service.authorize(input, actor);
   } finally { await pool.end(); }
