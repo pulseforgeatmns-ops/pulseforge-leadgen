@@ -23,7 +23,7 @@ function baseDebrief(overrides = {}) {
     recommended_next_step: null,
     recommended_message: null,
     follow_up_due_at: null,
-    next_owner: 'ao',
+    next_owner: '7',
     prescribed_before_diagnosing: false,
     real_reason_to_continue: false,
     specific_dated_next_step: false,
@@ -137,4 +137,48 @@ test('guardrail blocks facilities assessment without real need', () => {
     problem_or_risk: null,
   });
   assert.equal(shouldBookAssessment(debrief), false);
+});
+
+test('strong opportunity strength cannot bypass missing diagnosis', () => {
+  const evaluation = evaluateDebrief(baseDebrief({
+    problem_or_risk: null,
+    opportunity_timing: null,
+    opportunity_type: null,
+    opportunity_strength: 'strong',
+    recommended_next_step: 'Book facilities assessment',
+    follow_up_due_at: '2026-10-01T14:00:00.000Z',
+  }));
+  assert.equal(evaluation.next_action, 'NEEDS_RESEARCH');
+  assert.equal(evaluation.incomplete, true);
+  assert.ok(evaluation.missing_sections.includes('diagnose'));
+});
+
+test('dated-step checkbox cannot replace a valid timestamp', () => {
+  const evaluation = evaluateDebrief(baseDebrief({
+    problem_or_risk: 'Needs backup coverage during turnovers.',
+    opportunity_timing: 'later',
+    opportunity_type: 'backup_overflow',
+    opportunity_strength: 'moderate',
+    recommended_next_step: 'Follow up next month.',
+    follow_up_due_at: null,
+    specific_dated_next_step: true,
+    real_reason_to_continue: true,
+  }));
+  assert.equal(evaluation.next_action, 'NEEDS_RESEARCH');
+  assert.equal(evaluation.follow_up_due_at, null);
+  assert.ok(evaluation.missing_sections.includes('dated_next_step'));
+});
+
+test('incumbent coverage does not suppress an explicit backup opportunity', () => {
+  const evaluation = evaluateDebrief(baseDebrief({
+    stated_context: 'Already covered by an incumbent, but need backup for missed turnovers.',
+    problem_or_risk: 'Need backup coverage when the incumbent misses a turnover.',
+    opportunity_timing: 'later',
+    opportunity_type: 'backup_overflow',
+    opportunity_strength: 'moderate',
+    recommended_next_step: 'Follow up about backup coverage.',
+    follow_up_due_at: '2026-10-15T14:00:00.000Z',
+    real_reason_to_continue: true,
+  }));
+  assert.equal(evaluation.next_action, 'AO_FOLLOW_UP');
 });

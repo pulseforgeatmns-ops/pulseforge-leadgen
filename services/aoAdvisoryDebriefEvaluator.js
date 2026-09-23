@@ -14,10 +14,30 @@ function hasText(value) {
   return normalize(value).length > 0;
 }
 
+function validDate(value) {
+  if (!value) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp);
+}
+
+function accountableOwner(value) {
+  const owner = normalize(value).toLowerCase();
+  return /^\d+$/.test(owner) || owner === 'jake';
+}
+
 function diagnosisPresent(debrief) {
   return hasText(debrief.problem_or_risk)
     || hasText(debrief.opportunity_type)
     || hasText(debrief.opportunity_timing);
+}
+
+function diagnosedNeedPresent(debrief) {
+  const type = mapOpportunityType(debrief.opportunity_type);
+  const timing = normalize(debrief.opportunity_timing).toLowerCase();
+  return hasText(debrief.problem_or_risk)
+    && Boolean(type)
+    && type !== 'not_a_fit'
+    && ['now', 'later'].includes(timing);
 }
 
 function discoverPresent(debrief) {
@@ -29,12 +49,15 @@ function discoverPresent(debrief) {
 
 function assessDebriefCompleteness(debrief) {
   const missing = [];
+  const terminal = mapOpportunityType(debrief.opportunity_type) === 'not_a_fit'
+    || normalize(debrief.opportunity_timing).toLowerCase() === 'not_at_all';
   if (!discoverPresent(debrief)) missing.push('discover');
   if (!diagnosisPresent(debrief)) missing.push('diagnose');
   if (!hasText(debrief.recommended_next_step)) missing.push('advise_next_step');
-  if (debrief.specific_dated_next_step !== true && !debrief.follow_up_due_at) {
+  if (!terminal && !validDate(debrief.follow_up_due_at)) {
     missing.push('dated_next_step');
   }
+  if (!terminal && !accountableOwner(debrief.next_owner)) missing.push('accountable_next_owner');
   if (debrief.real_reason_to_continue !== true && !hasText(debrief.problem_or_risk)) {
     missing.push('reason_to_continue');
   }
@@ -62,7 +85,7 @@ function shouldBookAssessment(debrief) {
   const timing = normalize(debrief.opportunity_timing).toLowerCase();
   const strength = mapOpportunityStrength(debrief.opportunity_strength);
   const type = mapOpportunityType(debrief.opportunity_type);
-  if (type === 'not_a_fit') return false;
+  if (!diagnosedNeedPresent(debrief) || type === 'not_a_fit') return false;
   if (timing === 'not_at_all') return false;
   if (strength === 'weak' || strength === 'unclear') return false;
   const text = [
@@ -73,7 +96,7 @@ function shouldBookAssessment(debrief) {
   ].join(' ').toLowerCase();
   const activeNeed = /need|dissatisf|miss|gap|problem|turnover|backup|overload|unhappy|switch|urgent|now/.test(text);
   const vendorRisk = /backup|overflow|miss|unreliable|coverage|turnover/.test(text);
-  return (timing === 'now' && (activeNeed || vendorRisk)) || strength === 'strong';
+  return timing === 'now' && (activeNeed || vendorRisk) && ['moderate', 'strong'].includes(strength);
 }
 
 function shouldEscalateJake(debrief) {
@@ -95,7 +118,10 @@ function classifyNextAction(debrief) {
     debrief.recommended_next_step,
   ].join(' ').toLowerCase();
 
-  if (type === 'not_a_fit' || /not a fit|no need|already covered|all set/.test(text)) {
+  const backupOpportunity = type === 'backup_overflow'
+    || /need(?:s|ed)? backup|backup (?:option|coverage|vendor)|missed turnover|overflow/.test(text);
+  if (type === 'not_a_fit'
+    || (/not a fit|no need|already covered|all set/.test(text) && !backupOpportunity)) {
     return {
       next_action: 'SUPPRESS',
       reason: 'Account is not a fit or has no commercial cleaning need.',
@@ -174,9 +200,28 @@ function buildCoachingFeedback(debrief, evaluation) {
   return notes.join(' ');
 }
 
-function evaluateDebrief(debrief) {
-  const missing = assessDebriefCompleteness(debrief);
-  const classification = classifyNextAction(debrief);
+function evaluateDebrief(debrief, options = {}) {
+  const initial = classifyNextAction(debrief);
+  const effective = {
+    ...debrief,
+    next_owner: accountableOwner(debrief.next_owner)
+      ? normalize(debrief.next_owner).toLowerCase()
+      : initial.next_action === 'JAKE_REVIEW'
+        ? 'jake'
+        : options.defaultOwnerId ? String(options.defaultOwnerId) : debrief.next_owner,
+  };
+  const missing = assessDebriefCompleteness(effective);
+  let classification = initial;
+  const progression = new Set(['BOOK_ASSESSMENT', 'JAKE_REVIEW', 'AO_FOLLOW_UP', 'SEND_INFO']);
+  if (progression.has(classification.next_action)
+      && (missing.length > 0
+        || (['BOOK_ASSESSMENT', 'JAKE_REVIEW'].includes(classification.next_action)
+          && !diagnosedNeedPresent(effective)))) {
+    classification = {
+      next_action: 'NEEDS_RESEARCH',
+      reason: 'Complete diagnosis, accountable ownership, and a valid dated next step before progression.',
+    };
+  }
   const opportunity_type = mapOpportunityType(debrief.opportunity_type);
   const opportunity_strength = mapOpportunityStrength(debrief.opportunity_strength);
 
@@ -185,15 +230,16 @@ function evaluateDebrief(debrief) {
   else if (missing.length > 0) debrief_quality = 'incomplete';
 
   const incomplete = missing.length > 0 || debrief.prescribed_before_diagnosing === true;
-  const next_action_owner = normalize(debrief.next_owner)
-    || (classification.next_action === 'JAKE_REVIEW' ? 'jake' : 'ao');
+  const next_action_owner = accountableOwner(effective.next_owner)
+    ? normalize(effective.next_owner).toLowerCase()
+    : null;
 
   const evaluation = {
     next_action: classification.next_action,
     opportunity_type,
     opportunity_strength,
     next_action_owner,
-    follow_up_due_at: debrief.follow_up_due_at || null,
+    follow_up_due_at: validDate(debrief.follow_up_due_at) ? new Date(debrief.follow_up_due_at).toISOString() : null,
     coaching_feedback: buildCoachingFeedback(debrief, classification),
     debrief_quality,
     incomplete,
@@ -215,4 +261,6 @@ module.exports = {
   evaluateDebrief,
   shouldBookAssessment,
   diagnosisPresent,
+  diagnosedNeedPresent,
+  validDate,
 };

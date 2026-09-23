@@ -116,6 +116,29 @@ test('do_not_contact forces SUPPRESS regardless of score', () => {
     availableAos: [{ id: 7, name: 'Rory', active: true }],
   });
   assert.equal(routing.recommended_motion, 'SUPPRESS');
+  assert.match(routing.recommended_first_action, /Stop outreach/);
+  assert.equal(routing.recommended_ao_id, null);
+});
+
+test('persisted suppression cannot be revived by an attractive score', () => {
+  const p = prospect({ icp_score: 95, status: 'hot' });
+  const routing = routeProspect({
+    prospect: p,
+    company: company(),
+    availableAos: [{ id: 7, name: 'Rory', active: true }],
+    existingAssignment: { ...p, prospect_motion: 'SUPPRESS' },
+  });
+  assert.equal(routing.recommended_motion, 'SUPPRESS');
+  assert.equal(routing.recommended_ao_id, null);
+});
+
+test('unknown location is not assumed to be Manchester', () => {
+  const routing = routeProspect({
+    prospect: prospect({ service_area_match: null, icp_score: 90 }),
+    company: company({ location: null }),
+    availableAos: [{ id: 7, name: 'Rory', active: true }],
+  });
+  assert.equal(routing.recommended_motion, 'SUPPRESS');
 });
 
 test('AO task format includes required advisory fields', () => {

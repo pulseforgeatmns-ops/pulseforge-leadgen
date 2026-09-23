@@ -1,5 +1,7 @@
 BEGIN;
 
+SELECT pg_advisory_xact_lock(20260922, 696);
+
 ALTER TABLE prospects
   ADD COLUMN IF NOT EXISTS prospect_motion TEXT,
   ADD COLUMN IF NOT EXISTS ao_fit_score INTEGER,
@@ -41,8 +43,8 @@ ALTER TABLE prospects ADD CONSTRAINT prospects_next_action_check
 CREATE TABLE IF NOT EXISTS ao_prospect_tasks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id INTEGER NOT NULL REFERENCES clients(id),
-  prospect_id UUID NOT NULL REFERENCES prospects(id),
-  assigned_ao_id INTEGER NOT NULL REFERENCES users(id),
+  prospect_id UUID NOT NULL,
+  assigned_ao_id INTEGER NOT NULL,
   assignment_category TEXT NOT NULL
     CHECK (assignment_category IN (
       'UNFAIR_ADVANTAGE', 'HIGH_VALUE_ICP', 'ROUTE_CLUSTER',
@@ -72,9 +74,9 @@ CREATE TABLE IF NOT EXISTS ao_prospect_tasks (
 CREATE TABLE IF NOT EXISTS ao_advisory_debriefs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id INTEGER NOT NULL REFERENCES clients(id),
-  prospect_id UUID NOT NULL REFERENCES prospects(id),
-  task_id UUID REFERENCES ao_prospect_tasks(id) ON DELETE SET NULL,
-  ao_owner_id INTEGER NOT NULL REFERENCES users(id),
+  prospect_id UUID NOT NULL,
+  task_id UUID,
+  ao_owner_id INTEGER NOT NULL,
   person_spoken_to TEXT,
   role TEXT,
   decision_maker TEXT,
@@ -114,5 +116,84 @@ CREATE INDEX IF NOT EXISTS idx_ao_advisory_debriefs_prospect
 
 CREATE INDEX IF NOT EXISTS idx_ao_advisory_debriefs_owner
   ON ao_advisory_debriefs(ao_owner_id, client_id, created_at DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_client_id_id_ao_routing_uidx
+  ON users(client_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS prospects_client_id_id_ao_routing_uidx
+  ON prospects(client_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS ao_tasks_relationship_ao_routing_uidx
+  ON ao_prospect_tasks(client_id, id, prospect_id, assigned_ao_id);
+
+ALTER TABLE prospects
+  DROP CONSTRAINT IF EXISTS prospects_tenant_assigned_ao_fkey,
+  ADD CONSTRAINT prospects_tenant_assigned_ao_fkey
+    FOREIGN KEY (client_id, assigned_ao_id) REFERENCES users(client_id, id);
+
+WITH ranked AS (
+  SELECT id, ROW_NUMBER() OVER (
+    PARTITION BY client_id, prospect_id
+    ORDER BY created_at DESC, id DESC
+  ) AS position
+  FROM ao_prospect_tasks
+  WHERE status IN ('open', 'in_progress')
+)
+UPDATE ao_prospect_tasks t
+SET status = 'cancelled', completed_at = NOW()
+FROM ranked r
+WHERE t.id = r.id AND r.position > 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ao_prospect_tasks_one_active_per_prospect
+  ON ao_prospect_tasks(client_id, prospect_id)
+  WHERE status IN ('open', 'in_progress');
+CREATE UNIQUE INDEX IF NOT EXISTS ao_advisory_debriefs_one_per_task
+  ON ao_advisory_debriefs(task_id)
+  WHERE task_id IS NOT NULL;
+
+UPDATE ao_prospect_tasks t
+SET status = 'cancelled', completed_at = NOW()
+FROM prospects p
+WHERE p.client_id = t.client_id
+  AND p.id = t.prospect_id
+  AND t.status IN ('open', 'in_progress')
+  AND (COALESCE(p.do_not_contact, false) = true OR p.prospect_motion = 'SUPPRESS');
+
+CREATE OR REPLACE FUNCTION ao_cancel_suppressed_prospect_tasks()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  IF COALESCE(NEW.do_not_contact, false) = true OR NEW.prospect_motion = 'SUPPRESS' THEN
+    UPDATE ao_prospect_tasks
+    SET status = 'cancelled', completed_at = NOW()
+    WHERE client_id = NEW.client_id
+      AND prospect_id = NEW.id
+      AND status IN ('open', 'in_progress');
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS ao_cancel_suppressed_tasks ON prospects;
+CREATE TRIGGER ao_cancel_suppressed_tasks
+AFTER UPDATE OF do_not_contact, prospect_motion ON prospects
+FOR EACH ROW EXECUTE FUNCTION ao_cancel_suppressed_prospect_tasks();
+
+ALTER TABLE ao_prospect_tasks
+  DROP CONSTRAINT IF EXISTS ao_tasks_tenant_prospect_fkey,
+  DROP CONSTRAINT IF EXISTS ao_tasks_tenant_owner_fkey,
+  ADD CONSTRAINT ao_tasks_tenant_prospect_fkey
+    FOREIGN KEY (client_id, prospect_id) REFERENCES prospects(client_id, id),
+  ADD CONSTRAINT ao_tasks_tenant_owner_fkey
+    FOREIGN KEY (client_id, assigned_ao_id) REFERENCES users(client_id, id);
+
+ALTER TABLE ao_advisory_debriefs
+  DROP CONSTRAINT IF EXISTS ao_debriefs_tenant_prospect_fkey,
+  DROP CONSTRAINT IF EXISTS ao_debriefs_tenant_owner_fkey,
+  DROP CONSTRAINT IF EXISTS ao_debriefs_task_relationship_fkey,
+  ADD CONSTRAINT ao_debriefs_tenant_prospect_fkey
+    FOREIGN KEY (client_id, prospect_id) REFERENCES prospects(client_id, id),
+  ADD CONSTRAINT ao_debriefs_tenant_owner_fkey
+    FOREIGN KEY (client_id, ao_owner_id) REFERENCES users(client_id, id),
+  ADD CONSTRAINT ao_debriefs_task_relationship_fkey
+    FOREIGN KEY (client_id, task_id, prospect_id, ao_owner_id)
+    REFERENCES ao_prospect_tasks(client_id, id, prospect_id, assigned_ao_id);
 
 COMMIT;

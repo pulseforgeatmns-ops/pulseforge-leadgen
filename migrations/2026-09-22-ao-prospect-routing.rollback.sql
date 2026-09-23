@@ -1,5 +1,7 @@
 BEGIN;
 
+DROP TRIGGER IF EXISTS ao_cancel_suppressed_tasks ON prospects;
+DROP FUNCTION IF EXISTS ao_cancel_suppressed_prospect_tasks();
 DROP TABLE IF EXISTS ao_advisory_debriefs;
 DROP TABLE IF EXISTS ao_prospect_tasks;
 
@@ -20,7 +22,12 @@ ALTER TABLE prospects
   DROP COLUMN IF EXISTS advisory_stage,
   DROP COLUMN IF EXISTS last_debrief_status,
   DROP COLUMN IF EXISTS next_action,
-  DROP COLUMN IF EXISTS next_action_owner,
-  DROP COLUMN IF EXISTS next_action_due_at;
+  DROP COLUMN IF EXISTS next_action_owner;
+
+-- next_action_due_at and prospects_next_action_idx belong to the pre-existing
+-- Max orchestration migration and must survive this rollback.
+DROP INDEX IF EXISTS ao_tasks_relationship_ao_routing_uidx;
+DROP INDEX IF EXISTS prospects_client_id_id_ao_routing_uidx;
+DROP INDEX IF EXISTS users_client_id_id_ao_routing_uidx;
 
 COMMIT;

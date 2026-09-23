@@ -34,7 +34,8 @@ function wrap(handler) {
       await handler(req, res, next);
     } catch (err) {
       console.error('[ao-prospect-routing]', req.method, req.originalUrl, err.message);
-      if (!res.headersSent) res.status(500).json({ error: err.message || 'AO prospect routing failed' });
+      const status = Number(err.statusCode) || 500;
+      if (!res.headersSent) res.status(status).json({ error: err.code || err.message || 'AO prospect routing failed' });
     }
   };
 }
@@ -47,6 +48,9 @@ router.post('/api/v1/ao/routing/evaluate', requireAuth, requireRole('admin', 'ma
 
   const bundle = await taskService.fetchProspectBundle(prospectId, clientId);
   if (!bundle) return res.status(404).json({ error: 'Prospect not found' });
+  if (req.user.role === 'ao' && Number(bundle.prospect.assigned_ao_id) !== Number(req.user.id)) {
+    return res.status(403).json({ error: 'Prospect is not assigned to this AO' });
+  }
 
   const availableAos = await taskService.fetchAvailableAos(clientId);
   const routing = routingService.routeProspect({
@@ -69,6 +73,13 @@ router.post('/api/v1/ao/routing/route', requireAuth, requireRole('admin', 'manag
   if (!clientId) return res.status(400).json({ error: 'client_id required' });
   const { prospect_id: prospectId, ao_name: aoName } = req.body || {};
   if (!prospectId) return res.status(400).json({ error: 'prospect_id required' });
+  if (req.user.role === 'ao') {
+    const bundle = await taskService.fetchProspectBundle(prospectId, clientId);
+    if (!bundle) return res.status(404).json({ error: 'Prospect not found' });
+    if (Number(bundle.prospect.assigned_ao_id) !== Number(req.user.id)) {
+      return res.status(403).json({ error: 'Prospect is not assigned to this AO' });
+    }
+  }
   const result = await taskService.routeAndPersistProspect({ clientId, prospectId, aoName });
   if (!result) return res.status(404).json({ error: 'Prospect not found' });
   res.json(result);
@@ -93,7 +104,10 @@ router.get('/api/v1/ao/tasks', requireAuth, requireRole('admin', 'manager', 'ao'
 router.get('/api/v1/ao/tasks/:id', requireAuth, requireRole('admin', 'manager', 'ao'), wrap(async (req, res) => {
   const clientId = resolveClientId(req);
   if (!clientId) return res.status(400).json({ error: 'client_id required' });
-  const task = await taskService.getTaskById(req.params.id, { clientId });
+  const task = await taskService.getTaskById(req.params.id, {
+    clientId,
+    aoOwnerId: effectiveAoOwnerId(req),
+  });
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
 }));
@@ -137,7 +151,12 @@ router.get('/api/v1/ao/inspection/work-today', requireAuth, requireRole('admin',
 router.get('/api/v1/ao/inspection/assignment/:prospectId', requireAuth, requireRole('admin', 'manager', 'ao'), wrap(async (req, res) => {
   const clientId = resolveClientId(req);
   if (!clientId) return res.status(400).json({ error: 'client_id required' });
-  const item = await inspection.explainAssignment(req.params.prospectId, clientId);
+  const item = await inspection.explainAssignment(
+    req.params.prospectId,
+    clientId,
+    undefined,
+    effectiveAoOwnerId(req)
+  );
   if (!item) return res.status(404).json({ error: 'Prospect not found' });
   res.json(item);
 }));
