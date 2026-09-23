@@ -79,6 +79,7 @@ startMiraRouterWorker();
 startMiraDigestScheduler();
 startWarmRoutingScheduler();
 startAnchorUnenrichedEnrichmentScheduler();
+require('./services/anchorGovernedScheduler').startAnchorGovernedScheduler({ pool });
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),

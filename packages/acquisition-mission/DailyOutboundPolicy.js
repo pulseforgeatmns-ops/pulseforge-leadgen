@@ -13,9 +13,11 @@ const hash = value => crypto.createHash('sha256').update(JSON.stringify(canonica
 const fail = code => { throw Object.assign(new Error(code), { code }); };
 
 function missionScope(mission) {
+  // Legacy sources omit this optional field; the daily mission factory adds null.
+  // Keep the legacy hash while still binding every non-null resolved objective.
   return { tenantId: String(mission.tenantId), objective: mission.objective,
     targetSegment: mission.targetSegment, structuredMission: mission.structuredMission,
-    constraints: mission.constraints, resolvedObjective: mission.resolvedObjective };
+    constraints: mission.constraints, resolvedObjective: mission.resolvedObjective ?? undefined };
 }
 
 function policy(input, now = new Date()) {

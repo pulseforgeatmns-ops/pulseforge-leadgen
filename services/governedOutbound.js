@@ -37,8 +37,8 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
     await store.mode(program, mode, String(actor.id));
     return store.status();
   }
-  async function prepare(program, source, day) {
-    const snapshot = await adapters.prepare(program, source, day, store);
+  async function prepare(program, source, day, recovery = null) {
+    const snapshot = await adapters.prepare(program, source, day, store, recovery);
     if (snapshot.mission.stage !== 'ready') fail('daily_mission_not_ready');
     const prepared = await adapters.prepared(snapshot, program);
     const selected = [];
@@ -60,7 +60,84 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
     }
     await store.event('batch_eligibility', [program.id, day, prepared.revision], { programId: program.id, selected: selected.length, excluded });
     if (!selected.length) fail('verified_inventory_shortfall');
-    return store.freeze(program, day, snapshot.mission.id, prepared.revision, selected);
+    if (recovery) {
+      const current = await store.program();
+      if (enabled() || current?.id !== program.id || current.mode !== 'shadow'
+        || current.policy_hash !== program.policy_hash || clock(now()).day !== day) fail('replenishment_grant_changed');
+      await validateProgram(current);
+    }
+    return store.freeze(program, day, snapshot.mission.id, prepared.revision, selected, { requireShadow: Boolean(recovery) });
+  }
+  async function initializePreparation(input, actor) {
+    if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
+    const disabled = () => {
+      if (enabled() || process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED !== 'false') fail('preparation_requires_disabled_sending');
+    };
+    disabled();
+    return store.lock(async () => {
+      const db = await pool.connect();
+      try {
+        await db.query('BEGIN');
+        // Serialize with mode changes as well as ordinary preparation/recovery.
+        const program = (await db.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' AND mode<>'revoked' FOR UPDATE")).rows[0];
+        if (!program || program.id !== input.programId || program.mode !== 'shadow') fail('preparation_shadow_grant_required');
+        if (String(actor.id) !== program.authorized_by) fail('preparation_authorizing_operator_required');
+        if (program.policy_hash !== input.policyHash) fail('policy_changed');
+        if (program.scope_hash !== input.scopeHash || program.source_mission_id !== input.sourceMissionId
+          || program.policy.sourceMissionId !== program.source_mission_id) fail('source_scope_changed');
+        const source = await validateProgram(program);
+        if (!source.mission.structuredMission?.immutable || String(source.mission.tenantId) !== '10') fail('approved_source_mission_required');
+        const day = clock(now()).day;
+        if (input.localDay !== day) fail('preparation_day_changed');
+        const envelope = await store.one("SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id='10' AND (program_id=$1 OR local_day=$2::date) LIMIT 1", [program.id, day]);
+        if (envelope) fail('preparation_envelope_exists');
+        const counts = await store.counts(program, day);
+        if (counts.today || counts.total || counts.uncertain) fail('preparation_attempt_exists');
+        disabled();
+        const currentTime = now();
+        if (clock(currentTime).day !== day) fail('preparation_day_changed');
+        const reason = windowReason(program.policy, currentTime, true);
+        if (reason) fail(reason);
+        // Only the canonical empty row and its audit event are written. No
+        // runtime hydration, attempt reservation, mission creation or tick.
+        const { created, progress } = await store.ensurePreparation(program, day, db);
+        if (created) await store.event('preparation_initialized', [program.id, day], {
+          programId: program.id, localDay: day, missionId: progress.mission_id,
+          policyHash: program.policy_hash, scopeHash: program.scope_hash, actor: String(actor.id), attempts: 0,
+        }, db);
+        await db.query('COMMIT');
+        return { mode: 'shadow', initialized: created, programId: program.id, localDay: day,
+          missionId: progress.mission_id, attempts: progress.attempts,
+          preparationAttemptsPerDay: program.policy.preparationAttemptsPerDay,
+          lastAttemptAt: progress.last_attempt_at, lastError: progress.last_error,
+          preparationAttemptsReserved: 0, sent: 0 };
+      } catch (error) { await db.query('ROLLBACK'); throw error; }
+      finally { db.release(); }
+    });
+  }
+  async function replenish(input, actor, commit = false) {
+    return store.lock(async () => {
+      const recovery = require('./governedOutboundReplenishment');
+      const plan = await recovery.reviewReplenishment(store, input, actor, now(), enabled());
+      if (!commit) return { reviewRequired: true, reviewHash: plan.reviewHash, review: plan.review, nextMissionId: plan.nextMissionId };
+      if (input.reviewHash !== plan.reviewHash) fail('replenishment_review_changed');
+      await recovery.reserveReplenishment(store, plan, now());
+      try {
+        await adapters.validateTenant(plan.program);
+        const envelope = await prepare(plan.program, plan.source, plan.review.localDay, plan);
+        await store.health(plan.program);
+        await store.event('preparation_recovery_completed', plan.reviewHash,
+          { programId: plan.program.id, missionId: envelope.mission_id, envelopeId: envelope.id, reviewHash: plan.reviewHash });
+        return { mode: 'shadow', envelopeId: envelope.id, missionId: envelope.mission_id,
+          planned: envelope.manifest.length, sent: 0, preparationAttempt: plan.review.nextAttempt };
+      } catch (error) {
+        const reason = error.code || error.message;
+        await store.health(plan.program, reason);
+        await store.event('preparation_recovery_failed', plan.reviewHash,
+          { programId: plan.program.id, missionId: plan.nextMissionId, reason, reviewHash: plan.reviewHash });
+        return { mode: (await store.program())?.mode || null, halted: reason, sent: 0, preparationAttempt: plan.review.nextAttempt };
+      }
+    });
   }
   async function bindApproval(program, envelope) {
     if (hash(envelope.manifest) !== envelope.manifest_hash) fail('manifest_changed');
@@ -204,7 +281,7 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
       return { itemId, outcome, retryAllowed: false };
     });
   }
-  return { authorize, setMode, tick, reconcile, status: () => store.status(), store };
+  return { authorize, setMode, tick, reconcile, initializePreparation, replenish, status: () => store.status(), store };
 }
 
 function productionService(pool) {

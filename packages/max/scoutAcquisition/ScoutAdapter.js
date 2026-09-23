@@ -246,6 +246,8 @@ function classifySignals(company) {
 
   return {
     companyId: company.id,
+    website: company.website || null,
+    location: company.location || null,
     personIds: people.map((p) => p.id).filter(Boolean),
     fit: Number(fit.toFixed(2)),
     timing: Number(timing.toFixed(2)),

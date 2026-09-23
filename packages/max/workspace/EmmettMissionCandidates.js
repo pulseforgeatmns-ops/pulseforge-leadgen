@@ -124,7 +124,7 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
   const plan = mission.structuredMission || mission.missionPlanDraft || {};
   const segmentLabel = plan.market?.label || plan.market?.segment || mission.targetSegment;
 
-  const opportunities = scoutPayload.opportunities || [];
+  const opportunities = scoutPayload.opportunities || scoutPayload.rankedProspects || [];
   const prospects = scoutPayload.prospects || [];
   let rankedTargets = (maxPayload.rankedTargets || []).filter((row) => isCompanyLevelTarget(row, segmentLabel));
   if (!rankedTargets.length) {
@@ -254,6 +254,9 @@ function buildMissionBoundCandidates(mission, contributions = [], opts = {}) {
       signals: row.signals,
       rationale: row.rationale,
       website: row.website || row.url,
+      domain: row.domain,
+      location: row.location,
+      evidenceRefs: row.evidenceRefs,
     }, index));
   } else if (opportunities.length) {
     opportunities.forEach((opp, index) => addCandidate({

@@ -14,21 +14,25 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   const pool = new Pool({ connectionString: pg.connectionString });
   t.after(async () => { await pool.end(); await pg.stop(); });
   await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;
-    CREATE TABLE acquisition_missions(id TEXT PRIMARY KEY);
-    CREATE TABLE clients(id INT PRIMARY KEY);
+    CREATE TABLE acquisition_missions(id TEXT PRIMARY KEY,tenant_id TEXT,stage TEXT,status TEXT,objective TEXT,target_segment TEXT,payload JSONB);
+    CREATE TABLE acquisition_mission_contributions(id TEXT PRIMARY KEY, tenant_id TEXT, mission_id TEXT, payload JSONB);
+    CREATE TABLE clients(id INT PRIMARY KEY,active BOOLEAN DEFAULT true,autosend_enabled BOOLEAN DEFAULT false);
     CREATE TABLE users(id INT PRIMARY KEY,client_id INT,active BOOLEAN);
-    CREATE TABLE companies(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),client_id INT,name TEXT);
-    CREATE TABLE prospects(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),company_id UUID,client_id INT,email TEXT,do_not_contact BOOLEAN DEFAULT false,setter_status TEXT,closer_status TEXT);
+    CREATE TABLE companies(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),client_id INT,name TEXT,domain TEXT,website TEXT);
+    CREATE TABLE prospects(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),company_id UUID,client_id INT,email TEXT,do_not_contact BOOLEAN DEFAULT false,setter_status TEXT,closer_status TEXT,assigned_ao_id INT,last_contacted_at TIMESTAMPTZ,closer_id INT,last_reply_at TIMESTAMPTZ);
+    CREATE TABLE ao_prospect_tasks(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),client_id INT,prospect_id UUID,assigned_ao_id INT);
     CREATE TABLE touchpoints(id SERIAL PRIMARY KEY,prospect_id UUID,client_id INT,action_type TEXT);
     CREATE TABLE agent_actions(id SERIAL PRIMARY KEY,created_by TEXT,action_type TEXT,title TEXT,description TEXT,payload JSONB,status TEXT,client_id INT);
     CREATE TABLE agent_log(id SERIAL PRIMARY KEY,client_id INT,agent_name TEXT,action TEXT,ran_at TIMESTAMPTZ);
     CREATE TABLE ao_leads(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),client_id INT,business_name TEXT,ao_owner_id INT,crm_prospect_id UUID,attribution_source TEXT,original_visit_note TEXT);
+    CREATE TABLE ao_contacts(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),lead_id UUID,email TEXT);
     CREATE TABLE ao_follow_up_tasks(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),lead_id UUID,ao_owner_id INT,due_date DATE,next_action TEXT,last_interaction_summary TEXT,status TEXT DEFAULT 'open');
     CREATE TABLE acquisition_mission_outbound_executions(id TEXT PRIMARY KEY,tenant_id TEXT,mission_id TEXT,prospect_id TEXT,status TEXT,payload JSONB,attempted_at TIMESTAMPTZ,prepared_artifact_revision TEXT,provider_message_id TEXT,sent_at TIMESTAMPTZ,updated_at TIMESTAMPTZ);
     CREATE TABLE acquisition_mission_provider_events(id TEXT PRIMARY KEY,tenant_id TEXT,prospect_id TEXT,event_type TEXT,execution_record_id TEXT);
     CREATE TABLE tenant_outreach_messages(id TEXT PRIMARY KEY,tenant_id TEXT,prospect_id TEXT,direction TEXT,sender JSONB,status TEXT,sent_at TIMESTAMPTZ);
     CREATE TABLE tenant_outreach_scheduled_sends(id TEXT PRIMARY KEY,tenant_id TEXT,prospect_id TEXT,recipient_email TEXT,status TEXT,skip_reason TEXT,cancelled_at TIMESTAMPTZ);
     INSERT INTO users VALUES(7,10,true);
+    INSERT INTO clients(id) VALUES(10);
     INSERT INTO acquisition_missions VALUES('source'),('daily');`);
   const migration = fs.readFileSync(path.join(__dirname, '../migrations/2026-09-18-anchor-daily-outbound.sql'), 'utf8');
   await pool.query(migration);
@@ -44,11 +48,12 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   let contacts;
   let svc;
   let program;
-  async function reset() {
-    await pool.query(`TRUNCATE acquisition_outbound_events,acquisition_outbound_replies,acquisition_outbound_lifecycle,
+  let adapterSet;
+  async function reset(overrides = {}) {
+    await pool.query(`TRUNCATE acquisition_mission_contributions,acquisition_outbound_events,acquisition_outbound_replies,acquisition_outbound_lifecycle,
       acquisition_outbound_items,acquisition_outbound_envelopes,acquisition_outbound_preparation,acquisition_outbound_programs,
       acquisition_outbound_inbox_health,
-      ao_follow_up_tasks,ao_leads,agent_actions,agent_log,touchpoints,tenant_outreach_messages,tenant_outreach_scheduled_sends,
+      ao_prospect_tasks,ao_contacts,ao_follow_up_tasks,ao_leads,agent_actions,agent_log,touchpoints,tenant_outreach_messages,tenant_outreach_scheduled_sends,
       acquisition_mission_provider_events,acquisition_mission_outbound_executions,prospects,companies CASCADE`);
     clock = new Date('2026-09-18T14:00:00Z'); calls = 0; fault = null; liveHook = async () => {}; enabled = true;
     contacts = new Map();
@@ -75,9 +80,10 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
         return send(command);
       },
     };
+    adapterSet = adapters;
     svc = service({ pool, adapters, now: () => clock, enabled: () => enabled });
     const input = { sourceMissionId: 'source', senderEmail: 'sender@anchor.example', inboxIntegrationId: 'mailbox', aoOwnerIds: [7],
-      startsAt: '2026-09-18T00:00:00Z', expiresAt: '2026-10-01T00:00:00Z' };
+      startsAt: '2026-09-18T00:00:00Z', expiresAt: '2026-10-01T00:00:00Z', ...overrides };
     const review = await svc.authorize(input, actor);
     assert.equal(review.reviewRequired, true);
     assert.equal(await svc.store.program(), null);
@@ -207,4 +213,383 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     const today = await svc.store.items((await svc.store.envelope('2026-09-21')).id);
     assert.ok(today.every(x => x.email !== 'ops0@customer.example'));
   });
+
+  async function recoverySetup() {
+    source.targetSegment = 'Short-Term Rental Operators';
+    source.structuredMission = { immutable: true, market: { segment: 'short_term_rental' }, geography: { cities: ['Manchester'] } };
+    await reset({ dailyCap: 1, totalCap: 1 }); enabled = false;
+    for (const id of ['source', 'daily']) {
+      await pool.query("UPDATE acquisition_missions SET tenant_id='10',stage=$2,status=$2,objective=$3,target_segment=$4,payload=$5 WHERE id=$1",
+        [id, id === 'source' ? 'execute' : 'ready', source.objective, source.targetSegment, { ...source, id }]);
+    }
+    await pool.query("UPDATE acquisition_outbound_programs SET last_error='verified_inventory_shortfall' WHERE id=$1", [program.id]);
+    await pool.query("INSERT INTO acquisition_outbound_preparation(program_id,local_day,mission_id,attempts,last_attempt_at) VALUES($1,'2026-09-18','daily',1,'2026-09-18T12:00:00.123456Z')", [program.id]);
+    const input = { programId: program.id, policyHash: program.policy_hash, scopeHash: program.scope_hash,
+      fromMissionId: 'daily', localDay: '2026-09-18', research: [{ name: 'Research Host Co', website: 'https://host.example/',
+        operatingCity: 'Manchester', headquarters: 'Worcester, MA', evidence: ['property','services'].map(kind => ({
+          kind, url: `https://host.example/${kind}`, summary: `Observed ${kind} evidence; qualification pending.`, observedAt: '2026-09-18T12:00:00Z' })) }] };
+    adapterSet.prepare = async (_program, _source, _day, _store, plan) => {
+      const progress = (await pool.query('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1', [program.id])).rows[0];
+      assert.equal(progress.attempts, 2);
+      assert.equal(progress.mission_id, plan.nextMissionId);
+      await pool.query("INSERT INTO acquisition_missions(id,tenant_id,stage,payload) VALUES($1,'10','ready',$2) ON CONFLICT(id) DO NOTHING", [plan.nextMissionId, source]);
+      return { mission: { ...source, id: plan.nextMissionId, stage: 'ready' } };
+    };
+    adapterSet.approve = async () => { throw Error('Recovery must not approve execution'); };
+    adapterSet.execute = async () => { throw Error('Recovery must not execute outbound'); };
+    return input;
+  }
+  await t.test('replenishment review makes no writes; commit consumes one attempt and freezes one in shadow; replay is blocked', async () => {
+    const input = await recoverySetup();
+    const oldMission = (await pool.query("SELECT * FROM acquisition_missions WHERE id='daily'")).rows[0];
+    const beforeEvents = (await pool.query('SELECT count(*)::int AS n FROM acquisition_outbound_events')).rows[0].n;
+    const review = await svc.replenish(input, actor);
+    assert.equal(review.review.nextAttempt, 2);
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 1);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM acquisition_outbound_events')).rows[0].n, beforeEvents);
+    input.reviewHash = review.reviewHash;
+    const result = await svc.replenish(input, actor, true);
+    assert.equal(result.sent, 0); assert.equal(result.mode, 'shadow'); assert.equal(result.planned, 1);
+    assert.equal(result.preparationAttempt, 2); assert.equal(calls, 0);
+    assert.deepEqual((await pool.query("SELECT * FROM acquisition_missions WHERE id='daily'")).rows[0], oldMission);
+    assert.equal((await svc.store.envelope(input.localDay)).approval_id, null);
+    assert.equal((await svc.store.program()).policy_hash, input.policyHash);
+    await assert.rejects(svc.replenish(input, actor, true), { code: 'replenishment_preparation_changed' });
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 2);
+  });
+  await t.test('explicit immediate operator recovery is hashed, bounded, shadow-only and never sends', async () => {
+    const input = await recoverySetup();
+    await pool.query("UPDATE acquisition_outbound_preparation SET last_attempt_at='2026-09-18T13:59:00Z'");
+    await assert.rejects(svc.replenish(input, actor), { code: 'preparation_backoff' });
+    input.immediatePreparation = true;
+    await assert.rejects(svc.replenish(input, actor), { code: 'immediate_preparation_reason_required' });
+    input.operatorReason = 'Operator requested immediate evidenced inventory recovery.';
+    const review = await svc.replenish(input, actor);
+    assert.equal(review.review.immediatePreparation, true);
+    await assert.rejects(svc.replenish({...input,reviewHash:review.reviewHash,operatorReason:'Changed'}, actor,true), {code:'replenishment_review_changed'});
+    const result = await svc.replenish({...input,reviewHash:review.reviewHash},actor,true);
+    assert.equal(result.preparationAttempt,2); assert.equal(result.sent,0); assert.equal(calls,0);
+    assert.equal((await svc.store.program()).policy.spacingMinutes,60);
+  });
+  await t.test('new AO assignments, related company contacts and prior contact are excluded before freeze', async () => {
+    await reset();
+    const c=contacts.get('c0');
+    await pool.query('UPDATE prospects SET assigned_ao_id=19 WHERE id=$1',[c.id]);
+    assert.equal(await svc.store.candidateOwnership({companyId:c.company_id}),'prior_contact_or_human_owned');
+    await pool.query('UPDATE prospects SET assigned_ao_id=NULL,last_contacted_at=now() WHERE id=$1',[c.id]);
+    assert.equal(await svc.store.candidateOwnership({companyId:c.company_id}),'prior_contact_or_human_owned');
+    await pool.query('UPDATE prospects SET last_contacted_at=NULL WHERE id=$1',[c.id]);
+    await pool.query('INSERT INTO ao_prospect_tasks(client_id,prospect_id,assigned_ao_id) VALUES(10,$1,19)',[c.id]);
+    assert.equal(await svc.store.candidateOwnership({companyId:c.company_id}),'prior_contact_or_human_owned');
+    assert.equal(calls,0);
+  });
+  await t.test('replenishment fails closed on stale review, backoff, exhausted budget, active grant and owned alias', async () => {
+    let input = await recoverySetup();
+    const reviewed = await svc.replenish(input, actor);
+    input.reviewHash = reviewed.reviewHash;
+    input.research[0].evidence[0].summary = 'Changed research';
+    await assert.rejects(svc.replenish(input, actor, true), { code: 'replenishment_review_changed' });
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 1);
+    input = await recoverySetup();
+    await pool.query("UPDATE acquisition_outbound_preparation SET last_attempt_at='2026-09-18T13:30:00Z'");
+    await assert.rejects(svc.replenish(input, actor), { code: 'preparation_backoff' });
+    await pool.query('UPDATE acquisition_outbound_preparation SET attempts=3');
+    await assert.rejects(svc.replenish(input, actor), { code: 'preparation_retry_budget' });
+    input = await recoverySetup(); await activate();
+    await assert.rejects(svc.replenish(input, actor), { code: 'replenishment_shadow_grant_required' });
+    input = await recoverySetup();
+    await pool.query("INSERT INTO ao_leads(client_id,business_name,ao_owner_id) VALUES(10,'Research Host LLC',7)");
+    await assert.rejects(svc.replenish(input, actor), { code: 'research_candidate_ao_owned' });
+    assert.equal(calls, 0);
+  });
+  async function discoveryFailureSetup() {
+    const input = await recoverySetup();
+    const missionId = `mission_daily_${hash([program.id, input.localDay]).slice(0, 24)}`;
+    await pool.query('DELETE FROM acquisition_missions WHERE id=$1', [missionId]);
+    await pool.query("INSERT INTO acquisition_missions(id,tenant_id,stage,status,objective,target_segment,payload) VALUES($1,'10','discover','Discovering',$2,$3,$4)",
+      [missionId, source.objective, source.targetSegment, { ...source, id: missionId, stage: 'discover', version: 0,
+        lastTransactionId: null, structuredMissionApproved: true, orchestrationMissionId: 'source',
+        pendingOperatorDecision: { kind: 'discovery_approval' } }]);
+    await pool.query("UPDATE acquisition_outbound_preparation SET mission_id=$1,last_error='verified_inventory_shortfall'", [missionId]);
+    const payload = { programId: program.id, missionId, attempts: 2, eligible: 0,
+      candidates: { c0: { eligible: false, reason: 'invalid_outreach_email' }, c1: { eligible: false, reason: 'prior_contact_or_human_owned' } } };
+    await svc.store.event('inventory_replenished', [missionId, hash(payload.candidates)], payload);
+    await pool.query("UPDATE acquisition_outbound_events SET created_at='2026-09-18T12:00:30Z' WHERE event_type='inventory_replenished'");
+    return { ...input, fromMissionId: missionId };
+  }
+  await t.test('documented initial Scout shortfall is reviewable without changing Discovery, attempts or policy; one canonical reservation only', async () => {
+    const input = await discoveryFailureSetup();
+    const before = (await pool.query('SELECT * FROM acquisition_missions WHERE id=$1', [input.fromMissionId])).rows[0];
+    const beforeEvents = (await pool.query('SELECT * FROM acquisition_outbound_events ORDER BY id')).rows;
+    const grant = await svc.store.program();
+    const review = await svc.replenish(input, actor);
+    assert.ok(review.review.discoveryFailure.payloadHash);
+    assert.equal(review.review.nextAttempt, 2);
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 1);
+    assert.deepEqual((await pool.query('SELECT * FROM acquisition_outbound_events ORDER BY id')).rows, beforeEvents);
+    assert.deepEqual(await svc.store.program(), grant);
+    input.reviewHash = review.reviewHash;
+    const result = await svc.replenish(input, actor, true);
+    assert.equal(result.preparationAttempt, 2); assert.equal(result.sent, 0); assert.equal(calls, 0);
+    assert.equal(result.mode, 'shadow');
+    assert.deepEqual((await pool.query('SELECT * FROM acquisition_missions WHERE id=$1', [input.fromMissionId])).rows[0], before);
+    assert.equal((await svc.store.envelope(input.localDay)).approval_id, null);
+    assert.equal((await svc.store.program()).policy_hash, input.policyHash);
+    await assert.rejects(svc.replenish(input, actor, true), { code: 'replenishment_preparation_changed' });
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 2);
+  });
+  await t.test('a documented failed recovery permits only the remaining bounded attempt', async () => {
+    const input = await discoveryFailureSetup();
+    const review = await svc.replenish(input, actor);
+    const old = (await pool.query('SELECT * FROM acquisition_missions WHERE id=$1',[input.fromMissionId])).rows[0];
+    await pool.query('DELETE FROM acquisition_missions WHERE id=$1',[review.nextMissionId]);
+    await pool.query("INSERT INTO acquisition_missions(id,tenant_id,stage,status,objective,target_segment,payload) VALUES($1,'10','discover','Discovering',$2,$3,$4)",
+      [review.nextMissionId,old.objective,old.target_segment,{...old.payload,id:review.nextMissionId}]);
+    await svc.store.event('preparation_recovery_reserved',[program.id,review.reviewHash],{programId:program.id,missionId:review.nextMissionId,reviewHash:review.reviewHash,review:review.review});
+    await pool.query("UPDATE acquisition_outbound_preparation SET mission_id=$1,attempts=2,last_attempt_at='2026-09-18T13:00:00Z'",[review.nextMissionId]);
+    const payload={programId:program.id,missionId:review.nextMissionId,attempts:1,eligible:0,candidates:{c0:{eligible:false,reason:'missing_row'}}};
+    await svc.store.event('inventory_replenished',[review.nextMissionId,hash(payload)],payload);
+    await pool.query("UPDATE acquisition_outbound_events SET created_at='2026-09-18T13:00:01Z' WHERE payload->>'missionId'=$1",[review.nextMissionId]);
+    const next={...input,fromMissionId:review.nextMissionId,immediatePreparation:true,operatorReason:'Repair proven identity handoff defect.'};
+    assert.equal((await svc.replenish(next,actor)).review.nextAttempt,3);
+    await pool.query("UPDATE acquisition_outbound_events SET payload=jsonb_set(payload,'{reviewHash}','\"changed\"') WHERE event_type='preparation_recovery_reserved'");
+    await assert.rejects(svc.replenish(next,actor),{code:'replenishment_discovery_failure_unproven'});
+    assert.equal(calls,0);
+  });
+  await t.test('Discovery exception refuses undocumented, stale, successful, partially committed or noninitial attempts', async () => {
+    const changes = [
+      "DELETE FROM acquisition_outbound_events WHERE event_type='inventory_replenished'",
+      "UPDATE acquisition_outbound_events SET created_at='2026-09-18T11:59:59Z' WHERE event_type='inventory_replenished'",
+      "UPDATE acquisition_outbound_events SET created_at='2026-09-18T15:00:00Z' WHERE event_type='inventory_replenished'",
+      "UPDATE acquisition_outbound_events SET payload=jsonb_set(payload,'{eligible}','1') WHERE event_type='inventory_replenished'",
+      "UPDATE acquisition_outbound_events SET payload=jsonb_set(payload,'{candidates,c0,eligible}','true') WHERE event_type='inventory_replenished'",
+      "UPDATE acquisition_outbound_events SET payload=jsonb_set(payload,'{candidates}','{}') WHERE event_type='inventory_replenished'",
+      "UPDATE acquisition_outbound_events SET payload=jsonb_set(payload,'{attempts}','16') WHERE event_type='inventory_replenished'",
+      "UPDATE acquisition_outbound_preparation SET last_error=NULL",
+      "UPDATE acquisition_outbound_preparation SET attempts=2",
+      "UPDATE acquisition_missions SET payload=jsonb_set(payload,'{version}','1') WHERE stage='discover'",
+      "UPDATE acquisition_missions SET payload=payload-'orchestrationMissionId' WHERE stage='discover'",
+      "UPDATE acquisition_missions SET payload=payload-'pendingOperatorDecision' WHERE stage='discover'",
+      "UPDATE acquisition_missions SET stage='understand' WHERE stage='discover'",
+      "INSERT INTO acquisition_mission_contributions SELECT 'partial','10',mission_id,'{}' FROM acquisition_outbound_preparation",
+    ];
+    for (const sql of changes) {
+      const input = await discoveryFailureSetup();
+      await pool.query(sql);
+      const attempts = (await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts;
+      await assert.rejects(svc.replenish(input, actor), { code: 'replenishment_discovery_failure_unproven' }, sql);
+      assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, attempts);
+      assert.equal(await svc.store.envelope(input.localDay), null);
+    }
+    assert.equal(calls, 0);
+  });
+  await t.test('Discovery failure does not bypass backoff, original actor, hashes, disabled sending, execution or envelope checks', async () => {
+    let input = await discoveryFailureSetup();
+    clock = new Date('2026-09-18T12:59:59Z');
+    await assert.rejects(svc.replenish(input, actor), { code: 'preparation_backoff' });
+    clock = new Date('2026-09-18T13:00:00.124Z');
+    assert.ok((await svc.replenish(input, actor)).reviewHash);
+    await assert.rejects(svc.replenish(input, { ...actor, id: 'other' }), { code: 'replenishment_authorizing_operator_required' });
+    await assert.rejects(svc.replenish({ ...input, policyHash: 'changed' }, actor), { code: 'policy_changed' });
+    enabled = true;
+    await assert.rejects(svc.replenish(input, actor), { code: 'replenishment_requires_disabled_sending' });
+    enabled = false;
+    await pool.query("INSERT INTO acquisition_mission_outbound_executions(id,tenant_id,mission_id,status) VALUES('unexpected','10',$1,'attempted')", [input.fromMissionId]);
+    await assert.rejects(svc.replenish(input, actor), { code: 'replenishment_execution_exists' });
+    input = await discoveryFailureSetup();
+    await svc.store.freeze(program, input.localDay, input.fromMissionId, 'existing', []);
+    await assert.rejects(svc.replenish(input, actor), { code: 'replenishment_envelope_exists' });
+    assert.equal(calls, 0);
+  });
+  await t.test('Discovery failure receipt is review-bound and rechecked in the reservation transaction', async () => {
+    const recovery = require('../services/governedOutboundReplenishment');
+    let input = await discoveryFailureSetup();
+    input.reviewHash = (await svc.replenish(input, actor)).reviewHash;
+    await pool.query("UPDATE acquisition_outbound_events SET payload=jsonb_set(payload,'{candidates,c0,reason}','\"email_not_verified\"') WHERE event_type='inventory_replenished'");
+    await assert.rejects(svc.replenish(input, actor, true), { code: 'replenishment_review_changed' });
+    input = await discoveryFailureSetup();
+    let plan = await recovery.reviewReplenishment(svc.store, input, actor, clock, false);
+    await pool.query("UPDATE acquisition_missions SET payload=jsonb_set(payload,'{version}','1') WHERE id=$1", [input.fromMissionId]);
+    await assert.rejects(recovery.reserveReplenishment(svc.store, plan, clock), { code: 'replenishment_preparation_changed' });
+    input = await discoveryFailureSetup();
+    plan = await recovery.reviewReplenishment(svc.store, input, actor, clock, false);
+    await pool.query("DELETE FROM acquisition_outbound_events WHERE event_type='inventory_replenished'");
+    await assert.rejects(recovery.reserveReplenishment(svc.store, plan, clock), { code: 'replenishment_discovery_failure_unproven' });
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 1);
+    assert.equal(calls, 0);
+  });
+  await t.test('grant activation during preparation cannot freeze a recovery envelope or call a sender', async () => {
+    const input = await recoverySetup();
+    input.reviewHash = (await svc.replenish(input, actor)).reviewHash;
+    const originalPrepare = adapterSet.prepare;
+    adapterSet.prepare = async (...args) => { const result = await originalPrepare(...args); await activate(); return result; };
+    const result = await svc.replenish(input, actor, true);
+    assert.equal(result.halted, 'replenishment_grant_changed');
+    assert.equal(await svc.store.envelope(input.localDay), null);
+    assert.equal(calls, 0);
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 2);
+  });
+  await t.test('replenishment binds the operator, day, policy, source scope and zero-execution state', async () => {
+    let input = await recoverySetup();
+    await assert.rejects(svc.replenish(input, { ...actor, id: 'other' }), { code: 'replenishment_authorizing_operator_required' });
+    await assert.rejects(svc.replenish({ ...input, localDay: '2026-09-17' }, actor), { code: 'replenishment_day_changed' });
+    await assert.rejects(svc.replenish({ ...input, policyHash: 'changed' }, actor), { code: 'policy_changed' });
+    await pool.query("UPDATE acquisition_missions SET objective='Changed scope' WHERE id='source'");
+    await assert.rejects(svc.replenish(input, actor), { code: 'source_scope_changed' });
+    input = await recoverySetup();
+    await pool.query("INSERT INTO acquisition_mission_outbound_executions(id,tenant_id,mission_id,status) VALUES('prior','10','daily','attempted')");
+    await assert.rejects(svc.replenish(input, actor), { code: 'replenishment_execution_exists' });
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 1);
+    assert.equal(calls, 0);
+  });
+  await t.test('shadow requirement is checked again inside the freeze transaction', async () => {
+    await recoverySetup();
+    await activate();
+    await assert.rejects(svc.store.freeze(program, '2026-09-18', 'daily', 'revision1', [], { requireShadow: true }),
+      { code: 'replenishment_grant_changed' });
+    assert.equal(await svc.store.envelope('2026-09-18'), null);
+    assert.equal(calls, 0);
+  });
+  await t.test('Lot 202 naming variants and AO contact domains remain suppressed without CRM links', async () => {
+    await reset();
+    await pool.query("INSERT INTO ao_leads(client_id,business_name,ao_owner_id) VALUES(10,'Lot 202 LLC',7)");
+    assert.equal(await svc.store.candidateOwnership({ company: 'Lot 202 - Property Management Company' }), 'ao_owned_alias');
+    assert.equal(await svc.store.candidateOwnership({ company: 'Completely Different' }), null);
+    const lead = (await pool.query('SELECT id FROM ao_leads')).rows[0];
+    await pool.query('INSERT INTO ao_contacts(lead_id,email) VALUES($1,$2)', [lead.id, 'owner@brand.example']);
+    assert.equal(await svc.store.candidateOwnership({ company: 'Different Legal Name', domain: 'brand.example' }), 'ao_owned_alias');
+  });
+  async function initializationSetup() {
+    const input = await recoverySetup();
+    clock = new Date('2026-09-22T15:54:26Z');
+    await pool.query("UPDATE acquisition_outbound_preparation SET local_day='2026-09-21',last_attempt_at='2026-09-21T13:57:13.228Z'");
+    for (const name of ['prepare', 'prepared', 'contact', 'approve', 'execute', 'send', 'complete']) {
+      adapterSet[name] = async () => { throw Error(`Initialization must not call ${name}`); };
+    }
+    adapterSet.validateTenant = async () => {
+      const client = (await pool.query('SELECT * FROM clients WHERE id=10')).rows[0];
+      if (!client.active || client.autosend_enabled !== false) throw Object.assign(Error(), { code: 'tenant_inactive_or_legacy_autosend_enabled' });
+    };
+    return { ...input, sourceMissionId: 'source', localDay: '2026-09-22' };
+  }
+  const savedEnabledEnv = process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED;
+  process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED = 'false';
+  t.after(() => {
+    if (savedEnabledEnv === undefined) delete process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED;
+    else process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED = savedEnabledEnv;
+  });
+  async function preparationRows() {
+    return (await pool.query('SELECT * FROM acquisition_outbound_preparation ORDER BY local_day')).rows;
+  }
+  await t.test('September 22 initialization creates only a 0-attempt row and one audit event; yesterday and grant stay unchanged', async () => {
+    const input = await initializationSetup();
+    const yesterday = (await preparationRows())[0];
+    const grant = await svc.store.program();
+    const missions = (await pool.query('SELECT * FROM acquisition_missions ORDER BY id')).rows;
+    const result = await svc.initializePreparation(input, actor);
+    assert.deepEqual(result, { mode: 'shadow', initialized: true, programId: program.id, localDay: input.localDay,
+      missionId: `mission_daily_${hash([program.id, input.localDay]).slice(0, 24)}`, attempts: 0,
+      preparationAttemptsPerDay: 3, lastAttemptAt: null, lastError: null, preparationAttemptsReserved: 0, sent: 0 });
+    const rows = await preparationRows();
+    assert.equal(rows.length, 2); assert.deepEqual(rows[0], yesterday);
+    assert.equal(rows[1].attempts, 0); assert.equal(rows[1].last_attempt_at, null);
+    assert.deepEqual(await svc.store.program(), grant);
+    assert.deepEqual((await pool.query('SELECT * FROM acquisition_missions ORDER BY id')).rows, missions);
+    for (const table of ['acquisition_outbound_envelopes', 'acquisition_outbound_items', 'acquisition_mission_outbound_executions']) {
+      assert.equal((await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n, 0);
+    }
+    assert.equal(calls, 0);
+    const again = await svc.initializePreparation(input, actor);
+    assert.deepEqual(again, { ...result, initialized: false });
+    assert.deepEqual(await preparationRows(), rows);
+    const events = (await pool.query("SELECT * FROM acquisition_outbound_events WHERE event_type='preparation_initialized'")).rows;
+    assert.equal(events.length, 1); assert.equal(events[0].payload.actor, actor.id);
+    // Neither an empty row nor substituting today's mission ID fabricates a
+    // same-day failed attempt, so the old recovery gate deliberately still fails.
+    await assert.rejects(svc.replenish(input, actor), { code: 'replenishment_preparation_changed' });
+    await assert.rejects(svc.replenish({ ...input, fromMissionId: result.missionId }, actor), { code: 'replenishment_preparation_changed' });
+  });
+  await t.test('initialization preserves a consumed recovery reservation and its error without resets', async () => {
+    const input = await initializationSetup();
+    await pool.query("INSERT INTO acquisition_outbound_preparation VALUES($1,'2026-09-22','reviewed-recovery',2,'2026-09-22T14:00:00.123456Z','preparation_failed')", [program.id]);
+    const before = await preparationRows();
+    const result = await svc.initializePreparation(input, actor);
+    assert.equal(result.initialized, false); assert.equal(result.attempts, 2); assert.equal(result.missionId, 'reviewed-recovery');
+    assert.equal(result.lastError, 'preparation_failed'); assert.deepEqual(await preparationRows(), before);
+  });
+  await t.test('initialization binds the operator, grant, day, hashes and source and requires explicit disabled sending', async () => {
+    const input = await initializationSetup();
+    const before = await preparationRows();
+    for (const [change, error] of [
+      [{ programId: 'other' }, 'preparation_shadow_grant_required'],
+      [{ localDay: '2026-09-21' }, 'preparation_day_changed'],
+      [{ policyHash: 'changed' }, 'policy_changed'],
+      [{ scopeHash: 'changed' }, 'source_scope_changed'],
+      [{ sourceMissionId: 'daily' }, 'source_scope_changed'],
+    ]) await assert.rejects(svc.initializePreparation({ ...input, ...change }, actor), { code: error });
+    await assert.rejects(svc.initializePreparation(input, { ...actor, id: 'other' }), { code: 'preparation_authorizing_operator_required' });
+    await assert.rejects(svc.initializePreparation(input, { ...actor, role: 'viewer' }), { code: 'operator_required' });
+    for (const value of ['true', '', undefined]) {
+      if (value === undefined) delete process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED;
+      else process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED = value;
+      await assert.rejects(svc.initializePreparation(input, actor), { code: 'preparation_requires_disabled_sending' });
+    }
+    process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED = 'false';
+    enabled = true;
+    await assert.rejects(svc.initializePreparation(input, actor), { code: 'preparation_requires_disabled_sending' });
+    enabled = false;
+    await pool.query('UPDATE clients SET autosend_enabled=true WHERE id=10');
+    await assert.rejects(svc.initializePreparation(input, actor), { code: 'tenant_inactive_or_legacy_autosend_enabled' });
+    await pool.query('UPDATE clients SET autosend_enabled=false WHERE id=10');
+    adapterSet.loadMission = async () => ({ mission: { ...source, objective: 'changed' } });
+    await assert.rejects(svc.initializePreparation(input, actor), { code: 'source_scope_changed' });
+    assert.deepEqual(await preparationRows(), before); assert.equal(calls, 0);
+  });
+  await t.test('initialization rejects active, paused, revoked, expired and out-of-hours grants without creating a row', async () => {
+    for (const mode of ['active', 'paused', 'revoked']) {
+      const input = await initializationSetup();
+      await svc.setMode(program.id, mode, program.policy_hash, actor);
+      await assert.rejects(svc.initializePreparation(input, actor), { code: 'preparation_shadow_grant_required' });
+      assert.equal((await preparationRows()).length, 1);
+    }
+    const input = await initializationSetup();
+    for (const [time, error] of [
+      ['2026-09-22T21:00:00Z', 'outside_business_hours'],
+      ['2026-10-01T14:00:00Z', 'authorization_expired'],
+    ]) {
+      clock = new Date(time);
+      await assert.rejects(svc.initializePreparation(input, actor), { code: error });
+    }
+    assert.equal((await preparationRows()).length, 1);
+  });
+  await t.test('initialization detects day rollover and disabled-state changes during validation', async () => {
+    let input = await initializationSetup();
+    adapterSet.validateTenant = async () => { clock = new Date('2026-09-23T04:00:00Z'); };
+    await assert.rejects(svc.initializePreparation(input, actor), { code: 'preparation_day_changed' });
+    input = await initializationSetup();
+    adapterSet.validateTenant = async () => { enabled = true; };
+    await assert.rejects(svc.initializePreparation(input, actor), { code: 'preparation_requires_disabled_sending' });
+    assert.equal((await preparationRows()).length, 1);
+  });
+  await t.test('initialization refuses envelopes and provider attempts, and rolls back the row if auditing fails', async () => {
+    let input = await initializationSetup();
+    await svc.store.freeze(program, input.localDay, 'daily', 'revision1', []);
+    await assert.rejects(svc.initializePreparation(input, actor), { code: 'preparation_envelope_exists' });
+    input = await initializationSetup();
+    svc.store.counts = async () => ({ today: 0, total: 1, uncertain: 0 });
+    await assert.rejects(svc.initializePreparation(input, actor), { code: 'preparation_attempt_exists' });
+    input = await initializationSetup();
+    svc.store.event = async () => { throw Error('Audit unavailable'); };
+    await assert.rejects(svc.initializePreparation(input, actor), /Audit unavailable/);
+    assert.equal((await preparationRows()).length, 1);
+  });
+  await t.test('overlapping initialization calls converge on one empty row without spending an attempt', async () => {
+    const input = await initializationSetup();
+    const results = await Promise.all([svc.initializePreparation(input, actor), svc.initializePreparation(input, actor)]);
+    assert.equal(results.filter(x => x.initialized).length, 1);
+    assert.ok(results.every(x => x.initialized || x.initialized === false || x.halted === 'overlap'));
+    assert.equal((await preparationRows()).length, 2);
+    assert.equal((await preparationRows())[1].attempts, 0); assert.equal(calls, 0);
+  });
+
 });

@@ -2,6 +2,20 @@
 
 const { hash, fail } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 
+// Conservative ownership matching: a likely alias is held for review, never
+// used to merge CRM records or to transfer an AO's account.
+function ownershipNameKey(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
+    .filter(word => word && !['llc','inc','incorporated','ltd','limited','corp','corporation','co','company','properties','property','management'].includes(word)).join('');
+}
+function ownershipDomain(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return null;
+  if (text.includes('@') && !text.includes('://')) return text.split('@').pop();
+  try { return new URL(text.includes('://') ? text : `https://${text}`).hostname.replace(/^www\./, ''); }
+  catch { return null; }
+}
+
 class GovernedOutboundStore {
   constructor(pool) { this.pool = pool; }
   async one(sql, args = []) { return (await this.pool.query(sql, args)).rows[0] || null; }
@@ -59,11 +73,24 @@ class GovernedOutboundStore {
   async items(id) {
     return (await this.pool.query('SELECT * FROM acquisition_outbound_items WHERE envelope_id=$1 ORDER BY id', [id])).rows;
   }
-  async freeze(program, day, missionId, revision, manifest) {
+  async ensurePreparation(program, day, db = this.pool) {
+    const missionId = `mission_daily_${hash([program.id, day]).slice(0, 24)}`;
+    const inserted = await db.query(`INSERT INTO acquisition_outbound_preparation(program_id,local_day,mission_id)
+      VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING *`, [program.id, day, missionId]);
+    const progress = inserted.rows[0] || (await db.query(
+      'SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2', [program.id, day])).rows[0];
+    return { created: inserted.rows.length === 1, progress };
+  }
+  async freeze(program, day, missionId, revision, manifest, options = {}) {
     const id = `daily_${hash(['10', day]).slice(0, 24)}`;
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
+      if (options.requireShadow) {
+        const current = (await db.query('SELECT mode,policy_hash,scope_hash FROM acquisition_outbound_programs WHERE id=$1 FOR UPDATE', [program.id])).rows[0];
+        if (current?.mode !== 'shadow' || current.policy_hash !== program.policy_hash
+          || current.scope_hash !== program.scope_hash) fail('replenishment_grant_changed');
+      }
       await db.query(`INSERT INTO acquisition_outbound_envelopes
         (id,program_id,tenant_id,local_day,mission_id,revision,manifest,manifest_hash,status)
         VALUES($1,$2,'10',$3,$4,$5,$6,$7,'frozen')`, [id, program.id, day, missionId, revision, JSON.stringify(manifest), hash(manifest)]);
@@ -107,6 +134,35 @@ class GovernedOutboundStore {
       FROM acquisition_outbound_items i JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
       WHERE i.tenant_id='10' AND i.attempted_at IS NOT NULL`, [program.id, day]);
   }
+  async candidateOwnership(candidate) {
+    const company = candidate.companyId
+      ? await this.one("SELECT name,to_jsonb(c)->>'domain' AS domain,to_jsonb(c)->>'website' AS website FROM companies c WHERE client_id=10 AND id::text=$1", [String(candidate.companyId)])
+      : null;
+    const names = new Set([candidate.company, company?.name].map(ownershipNameKey).filter(Boolean));
+    const domains = new Set([candidate.domain, candidate.website, candidate.email, company?.domain, company?.website].map(ownershipDomain).filter(Boolean));
+    const related = await this.pool.query(`SELECT p.id,p.company_id,p.email,p.assigned_ao_id,p.last_contacted_at,
+      p.do_not_contact,p.closer_id,p.last_reply_at,c.name,c.domain,c.website,
+      EXISTS(SELECT 1 FROM ao_prospect_tasks t WHERE t.client_id=10 AND t.prospect_id=p.id) AS has_ao_task,
+      EXISTS(SELECT 1 FROM touchpoints t WHERE t.client_id=10 AND t.prospect_id=p.id
+        AND t.action_type IN ('email_sent','sent','outbound_email','call','call_attempt','inbound_reply','reply','email_reply','reply_received')) AS prior_touch
+      FROM prospects p JOIN companies c ON c.id=p.company_id AND c.client_id=10
+      WHERE p.client_id=10 AND (p.assigned_ao_id IS NOT NULL OR p.last_contacted_at IS NOT NULL
+        OR p.do_not_contact OR p.closer_id IS NOT NULL OR p.last_reply_at IS NOT NULL
+        OR EXISTS(SELECT 1 FROM ao_prospect_tasks t WHERE t.client_id=10 AND t.prospect_id=p.id)
+        OR EXISTS(SELECT 1 FROM touchpoints t WHERE t.client_id=10 AND t.prospect_id=p.id
+          AND t.action_type IN ('email_sent','sent','outbound_email','call','call_attempt','inbound_reply','reply','email_reply','reply_received')))`);
+    if (related.rows.some(row => String(row.id) === String(candidate.prospectId || '')
+      || String(row.company_id) === String(candidate.companyId || '') || names.has(ownershipNameKey(row.name))
+      || [row.email,row.domain,row.website].some(value => domains.has(ownershipDomain(value))))) return 'prior_contact_or_human_owned';
+    const { rows } = await this.pool.query(`SELECT l.id,l.business_name,p.email,c.name AS linked_company,
+      to_jsonb(c)->>'domain' AS domain,to_jsonb(c)->>'website' AS website,
+      COALESCE((SELECT jsonb_agg(a.email) FROM ao_contacts a WHERE a.lead_id=l.id AND a.email IS NOT NULL),'[]'::jsonb) AS emails
+      FROM ao_leads l LEFT JOIN prospects p ON p.id=l.crm_prospect_id AND p.client_id=10
+      LEFT JOIN companies c ON c.id=p.company_id AND c.client_id=10 WHERE l.client_id=10`);
+    return rows.some(row => names.has(ownershipNameKey(row.business_name)) || names.has(ownershipNameKey(row.linked_company))
+      || [row.email, row.domain, row.website, ...(row.emails || [])].some(value => domains.has(ownershipDomain(value))))
+      ? 'ao_owned_alias' : null;
+  }
   async suppression(item, ignoreMissionId = '') {
     const hit = await this.one(`SELECT state FROM acquisition_outbound_lifecycle WHERE tenant_id='10' AND suppressed=true
       AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId)]);
@@ -132,7 +188,7 @@ class GovernedOutboundStore {
         AND lower(trim(c.name))=lower(trim(l.business_name))))
       WHERE l.client_id=10 AND p.client_id=10 AND (p.id::text=$1 OR p.company_id::text=$2) LIMIT 1`,
     [String(item.prospectId), String(item.companyId)]);
-    return ao ? 'ao_owned' : null;
+    return ao ? 'ao_owned' : this.candidateOwnership(item);
   }
   async finish(item, status, reason, providerMessageId = null) {
     const db = await this.pool.connect();
@@ -181,4 +237,4 @@ class GovernedOutboundStore {
     return { program, envelopes, events, inboxHealth, replyBacklog };
   }
 }
-module.exports = { GovernedOutboundStore };
+module.exports = { GovernedOutboundStore, ownershipNameKey, ownershipDomain };
