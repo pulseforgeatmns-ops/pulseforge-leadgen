@@ -115,6 +115,41 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
       finally { db.release(); }
     });
   }
+  async function resumeReservedPreparation(input, actor) {
+    return store.lock(async () => {
+      if (enabled() || !actor?.id || !['admin','manager'].includes(actor.role)) fail('reserved_resume_requires_disabled_operator');
+      const program = await store.program();
+      if (program?.mode !== 'shadow' || program.id !== input.programId || program.authorized_by !== String(actor.id)) fail('replenishment_shadow_grant_required');
+      const source = await validateProgram(program);
+      const day = clock(now()).day;
+      const sourceRow = await store.one("SELECT * FROM acquisition_missions WHERE tenant_id='10' AND id=$1",[program.source_mission_id]);
+      const sourceProjection = { ...sourceRow.payload, id:sourceRow.id, tenantId:sourceRow.tenant_id,stage:sourceRow.stage,
+        status:sourceRow.status,objective:sourceRow.objective,targetSegment:sourceRow.target_segment };
+      const receipt = await store.one(`SELECT payload FROM acquisition_outbound_events WHERE tenant_id='10'
+        AND program_id=$1 AND event_type='preparation_recovery_reserved' AND payload->>'reviewHash'=$2`, [program.id,input.reviewHash]);
+      const reserved = receipt?.payload;
+      const review = reserved?.review;
+      const progress = await store.one('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2',[program.id,day]);
+      if (!review || hash(review) !== input.reviewHash || review.localDay !== day || review.policyHash !== program.policy_hash
+        || review.scopeHash !== program.scope_hash || review.operator !== String(actor.id)
+        || review.sourceMissionHash !== hash(sourceProjection)
+        || reserved.missionId !== `mission_daily_${hash([program.id,day,'replenishment',input.reviewHash]).slice(0,24)}`
+        || progress?.mission_id !== reserved.missionId || progress.attempts !== review.nextAttempt
+        || progress.attempts > program.policy.preparationAttemptsPerDay || progress.last_error) fail('reserved_preparation_changed');
+      if (await store.one("SELECT id FROM acquisition_missions WHERE tenant_id='10' AND id=$1",[reserved.missionId])) fail('reserved_mission_already_created');
+      if (await store.envelope(day)) fail('replenishment_envelope_exists');
+      const counts = await store.counts(program,day);
+      if (counts.today || counts.total || counts.uncertain) fail('replenishment_attempt_exists');
+      for (const candidate of review.research) if (await store.candidateOwnership({company:candidate.name,domain:candidate.domain})) fail('research_candidate_ao_owned');
+      const plan = {program,source,progress,review,reviewHash:input.reviewHash,nextMissionId:reserved.missionId};
+      await store.event('preparation_recovery_resumed',[program.id,input.reviewHash],{programId:program.id,missionId:reserved.missionId,reviewHash:input.reviewHash,actor:String(actor.id),reason:'Resume reserved preparation after interrupted connection before mission creation; no additional attempt.'});
+      try {
+        const envelope = await prepare(program,source,day,plan);
+        await store.health(program);
+        return {mode:'shadow',envelopeId:envelope.id,missionId:envelope.mission_id,planned:envelope.manifest.length,sent:0,preparationAttempt:progress.attempts};
+      } catch(error) { await store.health(program,error.code || error.message); throw error; }
+    });
+  }
   async function replenish(input, actor, commit = false) {
     return store.lock(async () => {
       const recovery = require('./governedOutboundReplenishment');
@@ -281,7 +316,7 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
       return { itemId, outcome, retryAllowed: false };
     });
   }
-  return { authorize, setMode, tick, reconcile, initializePreparation, replenish, status: () => store.status(), store };
+  return { authorize, setMode, tick, reconcile, initializePreparation, replenish, resumeReservedPreparation, status: () => store.status(), store };
 }
 
 function productionService(pool) {

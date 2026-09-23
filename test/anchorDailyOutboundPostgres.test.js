@@ -338,6 +338,20 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     await assert.rejects(svc.replenish(input, actor, true), { code: 'replenishment_preparation_changed' });
     assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts, 2);
   });
+  await t.test('interrupted reservation resumes without spending another attempt, and refuses changed receipt or created mission', async () => {
+    const recovery=require('../services/governedOutboundReplenishment');
+    const input=await discoveryFailureSetup();
+    const plan=await recovery.reviewReplenishment(svc.store,input,actor,clock,false);
+    await pool.query('DELETE FROM acquisition_missions WHERE id=$1',[plan.nextMissionId]);
+    await recovery.reserveReplenishment(svc.store,plan,clock);
+    const command={programId:program.id,reviewHash:plan.reviewHash};
+    await assert.rejects(svc.resumeReservedPreparation({...command,reviewHash:'changed'},actor),{code:'reserved_preparation_changed'});
+    const result=await svc.resumeReservedPreparation(command,actor);
+    assert.equal(result.planned,1);assert.equal(result.sent,0);
+    assert.equal((await pool.query('SELECT attempts FROM acquisition_outbound_preparation')).rows[0].attempts,2);
+    assert.equal(calls,0);
+    await assert.rejects(svc.resumeReservedPreparation(command,actor),{code:'reserved_mission_already_created'});
+  });
   await t.test('a documented failed recovery permits only the remaining bounded attempt', async () => {
     const input = await discoveryFailureSetup();
     const review = await svc.replenish(input, actor);
