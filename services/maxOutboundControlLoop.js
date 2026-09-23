@@ -130,7 +130,6 @@ function scoutInput(program, source, plan) {
   return {
     authorizedTenantId: '10',
     tenantId: '10',
-    missionId: program.source_mission_id,
     question: `Max needs Scout to replenish verified outbound inventory for ${segment} in ${region}.`,
     objective: `Find enough net-new, in-scope prospects to close an outbound inventory deficit of ${plan.deficit} while preserving ownership, prior-contact, DNC and suppression boundaries.`,
     reason: `Emmett safe daily capacity is ${plan.safeDailyCapacity}; Max requires a ${plan.targetDays}-day buffer of ${plan.targetInventory}, but only ${plan.cleanInventory} clean prospects are currently available.`,
@@ -153,13 +152,15 @@ function scoutInput(program, source, plan) {
   };
 }
 
-async function persistDiscoveredCompanies(pool, { companies = [] }) {
+async function persistDiscoveredCompanies(pool, store, { companies = [] }) {
   let inserted = 0;
   for (const company of companies) {
     const name = String(company.name || '').trim();
     const website = String(company.website || '').trim() || null;
     const domain = normalizeDomain(company.domain || website);
     if (!name || !domain) continue;
+    const ownership = await store.candidateOwnership({ company: name, domain, website });
+    if (ownership) continue;
     const result = await pool.query(`
       INSERT INTO scout_unenriched (
         client_id, company, website_url, domain, vertical, location, source,
@@ -170,12 +171,6 @@ async function persistDiscoveredCompanies(pool, { companies = [] }) {
         SELECT 1 FROM scout_unenriched
         WHERE client_id=10 AND (
           lower(domain)=lower($3) OR lower(trim(company))=lower(trim($1))
-        )
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM companies
-        WHERE client_id=10 AND (
-          lower(COALESCE(domain,''))=lower($3) OR lower(trim(name))=lower(trim($1))
         )
       )
       RETURNING id
@@ -214,7 +209,7 @@ async function runEnrichmentBatches(enrichment, pool, requested) {
   return { promoted, summaries };
 }
 
-async function defaultScoutRamp({ pool, program, source, plan, logger = console }) {
+async function defaultScoutRamp({ pool, store, program, source, plan, logger = console }) {
   const enrichment = require('../scoutUnenrichedEnrichmentAgent');
   const first = await runEnrichmentBatches(enrichment, pool, plan.deficit);
   let promoted = first.promoted;
@@ -243,7 +238,7 @@ async function defaultScoutRamp({ pool, program, source, plan, logger = console 
           }));
         },
         persistCompanies: async input => {
-          persisted = await persistDiscoveredCompanies(pool, input);
+          persisted = await persistDiscoveredCompanies(pool, store, input);
           return persisted;
         },
         enablePlaces: true,
@@ -300,7 +295,7 @@ async function runMaxOutboundControlLoop(options = {}) {
   let scout = null;
   if (plan.shouldReplenish && options.execute !== false) {
     const ramp = options.scoutRamp || defaultScoutRamp;
-    scout = await ramp({ pool, program, source, plan, logger });
+    scout = await ramp({ pool, store, program, source, plan, logger });
   }
 
   const inventoryAfter = options.inventoryAfter
