@@ -5,13 +5,12 @@ const { ensureAoProspectRoutingSchema } = require('../utils/aoProspectRoutingSch
 const { companyName, locationText } = require('./aoProspectTaskService');
 
 async function prospectsToWorkToday({ clientId, aoOwnerId = null, db = pool }) {
-  await ensureAoProspectRoutingSchema();
-  const today = new Date().toISOString().slice(0, 10);
-  const params = [clientId, today];
+  await ensureAoProspectRoutingSchema(db);
+  const params = [clientId];
   let ownerClause = '';
   if (aoOwnerId) {
     params.push(aoOwnerId);
-    ownerClause = `AND (t.assigned_ao_id = $${params.length} OR p.assigned_ao_id = $${params.length})`;
+    ownerClause = `AND t.assigned_ao_id = $${params.length}`;
   }
 
   const { rows } = await db.query(`
@@ -23,22 +22,27 @@ async function prospectsToWorkToday({ clientId, aoOwnerId = null, db = pool }) {
       p.assigned_ao_id,
       p.next_action,
       p.next_action_due_at,
+      p.advisory_stage,
       t.id AS task_id,
+      t.status AS task_status,
       t.deadline,
       t.priority,
       t.account_name,
+      c.name AS company_name,
       u.name AS assigned_ao_name
     FROM prospects p
-    LEFT JOIN ao_prospect_tasks t
+    JOIN ao_prospect_tasks t
       ON t.prospect_id = p.id
       AND t.client_id = p.client_id
       AND t.status IN ('open', 'in_progress')
+    LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     LEFT JOIN users u ON u.id = COALESCE(t.assigned_ao_id, p.assigned_ao_id)
     WHERE p.client_id = $1
       AND COALESCE(p.prospect_motion, '') NOT IN ('SUPPRESS', 'EMAIL_LED')
+      AND COALESCE(p.do_not_contact, false) = false
       AND (
-        t.deadline <= $2::date
-        OR p.next_action_due_at::date <= $2::date
+        t.deadline <= (NOW() AT TIME ZONE 'America/New_York')::date
+        OR p.next_action_due_at::date <= (NOW() AT TIME ZONE 'America/New_York')::date
         OR (t.status IN ('open', 'in_progress') AND t.deadline IS NULL)
       )
       ${ownerClause}
@@ -50,18 +54,28 @@ async function prospectsToWorkToday({ clientId, aoOwnerId = null, db = pool }) {
 
   return rows.map(row => ({
     prospect_id: row.prospect_id,
-    account: row.account_name,
+    account: row.account_name || row.company_name,
     assigned_ao: row.assigned_ao_name,
     motion: row.prospect_motion,
     priority: row.priority || 'normal',
     task_id: row.task_id,
+    task_status: row.task_status,
+    prospect_status: row.advisory_stage,
     due: row.deadline || row.next_action_due_at,
     next_action: row.next_action,
   }));
 }
 
-async function explainAssignment(prospectId, clientId, db = pool) {
-  await ensureAoProspectRoutingSchema();
+async function explainAssignment(prospectId, clientId, db = pool, aoOwnerId = null) {
+  await ensureAoProspectRoutingSchema(db);
+  const params = [prospectId, clientId];
+  const ownerClause = aoOwnerId ? `AND (
+    p.assigned_ao_id = $${params.push(aoOwnerId)} OR EXISTS (
+      SELECT 1 FROM ao_prospect_tasks owned
+      WHERE owned.client_id = p.client_id AND owned.prospect_id = p.id
+        AND owned.assigned_ao_id = $${params.length}
+    )
+  )` : '';
   const { rows } = await db.query(`
     SELECT
       p.*,
@@ -72,8 +86,9 @@ async function explainAssignment(prospectId, clientId, db = pool) {
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     LEFT JOIN users u ON u.id = p.assigned_ao_id
     WHERE p.id = $1 AND p.client_id = $2
+      ${ownerClause}
     LIMIT 1
-  `, [prospectId, clientId]);
+  `, params);
   if (!rows[0]) return null;
   const p = rows[0];
   return {
@@ -97,7 +112,7 @@ async function followUpRequired({ clientId, aoOwnerId = null, db = pool }) {
   let ownerClause = '';
   if (aoOwnerId) {
     params.push(aoOwnerId);
-    ownerClause = `AND (p.assigned_ao_id = $${params.length} OR p.next_action_owner = $${params.length}::text)`;
+    ownerClause = `AND p.assigned_ao_id = $${params.length}`;
   }
   const { rows } = await db.query(`
     SELECT
@@ -113,6 +128,8 @@ async function followUpRequired({ clientId, aoOwnerId = null, db = pool }) {
     LEFT JOIN users u ON u.id = p.assigned_ao_id
     WHERE p.client_id = $1
       AND p.next_action IN ('AO_FOLLOW_UP', 'SEND_INFO', 'NEEDS_RESEARCH')
+      AND COALESCE(p.do_not_contact, false) = false
+      AND p.prospect_motion IS DISTINCT FROM 'SUPPRESS'
       ${ownerClause}
     ORDER BY p.next_action_due_at ASC NULLS LAST
     LIMIT 100
@@ -120,7 +137,9 @@ async function followUpRequired({ clientId, aoOwnerId = null, db = pool }) {
   return rows;
 }
 
-async function accountsReadyForJake({ clientId, db = pool }) {
+async function accountsReadyForJake({ clientId, aoOwnerId = null, db = pool }) {
+  const params = [clientId];
+  const ownerClause = aoOwnerId ? `AND p.assigned_ao_id = $${params.push(aoOwnerId)}` : '';
   const { rows } = await db.query(`
     SELECT
       p.id AS prospect_id,
@@ -143,13 +162,22 @@ async function accountsReadyForJake({ clientId, db = pool }) {
     ) d ON true
     WHERE p.client_id = $1
       AND p.next_action IN ('JAKE_REVIEW', 'BOOK_ASSESSMENT')
+      AND p.advisory_stage = 'debrief_complete'
+      AND d.debrief_quality = 'complete'
+      AND COALESCE((d.evaluation->>'incomplete')::boolean, true) = false
+      AND NULLIF(BTRIM(d.problem_or_risk), '') IS NOT NULL
+      AND COALESCE(p.do_not_contact, false) = false
+      AND p.prospect_motion IS DISTINCT FROM 'SUPPRESS'
+      ${ownerClause}
     ORDER BY p.next_action_due_at ASC NULLS LAST
     LIMIT 100
-  `, [clientId]);
+  `, params);
   return rows;
 }
 
-async function weakDebriefs({ clientId, db = pool }) {
+async function weakDebriefs({ clientId, aoOwnerId = null, db = pool }) {
+  const params = [clientId];
+  const ownerClause = aoOwnerId ? `AND d.ao_owner_id = $${params.push(aoOwnerId)}` : '';
   const { rows } = await db.query(`
     SELECT
       d.id,
@@ -169,13 +197,16 @@ async function weakDebriefs({ clientId, db = pool }) {
         d.debrief_quality IN ('weak', 'incomplete')
         OR d.prescribed_before_diagnosing = true
       )
+      ${ownerClause}
     ORDER BY d.created_at DESC
     LIMIT 100
-  `, [clientId]);
+  `, params);
   return rows;
 }
 
-async function prescribingBeforeDiagnosing({ clientId, db = pool }) {
+async function prescribingBeforeDiagnosing({ clientId, aoOwnerId = null, db = pool }) {
+  const params = [clientId];
+  const ownerClause = aoOwnerId ? `AND d.ao_owner_id = $${params.push(aoOwnerId)}` : '';
   const { rows } = await db.query(`
     SELECT
       d.id,
@@ -190,14 +221,15 @@ async function prescribingBeforeDiagnosing({ clientId, db = pool }) {
     JOIN users u ON u.id = d.ao_owner_id
     WHERE d.client_id = $1
       AND d.prescribed_before_diagnosing = true
+      ${ownerClause}
     ORDER BY d.created_at DESC
     LIMIT 100
-  `, [clientId]);
+  `, params);
   return rows;
 }
 
-async function nextBestAction(prospectId, clientId, db = pool) {
-  const assignment = await explainAssignment(prospectId, clientId, db);
+async function nextBestAction(prospectId, clientId, db = pool, aoOwnerId = null) {
+  const assignment = await explainAssignment(prospectId, clientId, db, aoOwnerId);
   if (!assignment) return null;
   const debrief = (await db.query(`
     SELECT next_action, recommended_next_step, recommended_message, follow_up_due_at, coaching_feedback
@@ -222,29 +254,29 @@ async function answerInspectionQuestion(question, { clientId, aoOwnerId = null, 
     return { intent: 'work_today', items: await prospectsToWorkToday({ clientId, aoOwnerId, db }) };
   }
   if (/why.*assign|why did .* get/.test(q) && prospectId) {
-    return { intent: 'assignment_explanation', item: await explainAssignment(prospectId, clientId, db) };
+    return { intent: 'assignment_explanation', item: await explainAssignment(prospectId, clientId, db, aoOwnerId) };
   }
   if (/follow[- ]?up/.test(q)) {
     return { intent: 'follow_up_required', items: await followUpRequired({ clientId, aoOwnerId, db }) };
   }
   if (/jake|ready for jake|owner review/.test(q)) {
-    return { intent: 'jake_review', items: await accountsReadyForJake({ clientId, db }) };
+    return { intent: 'jake_review', items: await accountsReadyForJake({ clientId, aoOwnerId, db }) };
   }
   if (/weak debrief|incomplete debrief/.test(q)) {
-    return { intent: 'weak_debriefs', items: await weakDebriefs({ clientId, db }) };
+    return { intent: 'weak_debriefs', items: await weakDebriefs({ clientId, aoOwnerId, db }) };
   }
   if (/prescrib.*before diagnos/.test(q)) {
-    return { intent: 'prescribed_before_diagnosing', items: await prescribingBeforeDiagnosing({ clientId, db }) };
+    return { intent: 'prescribed_before_diagnosing', items: await prescribingBeforeDiagnosing({ clientId, aoOwnerId, db }) };
   }
   if (/next best action|next action for/.test(q) && prospectId) {
-    return { intent: 'next_best_action', item: await nextBestAction(prospectId, clientId, db) };
+    return { intent: 'next_best_action', item: await nextBestAction(prospectId, clientId, db, aoOwnerId) };
   }
   return {
     intent: 'overview',
     work_today: await prospectsToWorkToday({ clientId, aoOwnerId, db }),
     follow_up_required: await followUpRequired({ clientId, aoOwnerId, db }),
-    jake_review: await accountsReadyForJake({ clientId, db }),
-    weak_debriefs: await weakDebriefs({ clientId, db }),
+    jake_review: await accountsReadyForJake({ clientId, aoOwnerId, db }),
+    weak_debriefs: await weakDebriefs({ clientId, aoOwnerId, db }),
   };
 }
 

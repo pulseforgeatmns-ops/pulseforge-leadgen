@@ -10,6 +10,22 @@ const {
 const { ensureAoProspectRoutingSchema } = require('../utils/aoProspectRoutingSchema');
 const { formatAoTask } = require('../utils/aoProspectTaskFormat');
 
+async function inTransaction(db, work) {
+  if (typeof db.connect !== 'function') return work(db);
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function fetchProspectBundle(prospectId, clientId, db = pool) {
   const { rows } = await db.query(`
     SELECT
@@ -68,7 +84,7 @@ async function fetchAvailableAos(clientId, db = pool) {
 }
 
 async function persistRouting(prospectId, clientId, routing, db = pool) {
-  await db.query(`
+  const result = await db.query(`
     UPDATE prospects SET
       prospect_motion = $3,
       ao_fit_score = $4,
@@ -78,6 +94,9 @@ async function persistRouting(prospectId, clientId, routing, db = pool) {
       ao_assignment_category = $8,
       recommended_angle = $9,
       recommended_first_action = $10,
+      next_action = CASE WHEN $3 = 'SUPPRESS' THEN 'SUPPRESS' ELSE next_action END,
+      next_action_owner = CASE WHEN $3 = 'SUPPRESS' THEN NULL ELSE next_action_owner END,
+      next_action_due_at = CASE WHEN $3 = 'SUPPRESS' THEN NULL ELSE next_action_due_at END,
       advisory_stage = CASE
         WHEN $3 = 'SUPPRESS' THEN 'closed'
         WHEN advisory_stage IN ('debrief_pending', 'debrief_complete') THEN advisory_stage
@@ -85,6 +104,7 @@ async function persistRouting(prospectId, clientId, routing, db = pool) {
       END,
       updated_at = NOW()
     WHERE id = $1 AND client_id = $2
+    RETURNING id
   `, [
     prospectId,
     clientId,
@@ -97,6 +117,15 @@ async function persistRouting(prospectId, clientId, routing, db = pool) {
     routing.recommended_angle,
     routing.recommended_first_action,
   ]);
+  if (!result.rows[0]) return false;
+  if (routing.recommended_motion === 'SUPPRESS') {
+    await db.query(`
+      UPDATE ao_prospect_tasks
+      SET status = 'cancelled', completed_at = NOW()
+      WHERE client_id = $1 AND prospect_id = $2 AND status IN ('open', 'in_progress')
+    `, [clientId, prospectId]);
+  }
+  return true;
 }
 
 async function createTaskFromRouting({
@@ -119,6 +148,25 @@ async function createTaskFromRouting({
       $12, $13, $14, $15,
       $16::jsonb, $17, $18, $19::jsonb
     )
+    ON CONFLICT (client_id, prospect_id) WHERE status IN ('open', 'in_progress')
+    DO UPDATE SET
+      assigned_ao_id = EXCLUDED.assigned_ao_id,
+      assignment_category = EXCLUDED.assignment_category,
+      motion = EXCLUDED.motion,
+      priority = EXCLUDED.priority,
+      account_name = EXCLUDED.account_name,
+      segment = EXCLUDED.segment,
+      location = EXCLUDED.location,
+      why_account_matters = EXCLUDED.why_account_matters,
+      recommended_angle = EXCLUDED.recommended_angle,
+      first_action = EXCLUDED.first_action,
+      discovery_objective = EXCLUDED.discovery_objective,
+      suggested_opener = EXCLUDED.suggested_opener,
+      desired_next_outcome = EXCLUDED.desired_next_outcome,
+      required_log_fields = EXCLUDED.required_log_fields,
+      deadline = EXCLUDED.deadline,
+      required_debrief = EXCLUDED.required_debrief,
+      routing_snapshot = EXCLUDED.routing_snapshot
     RETURNING *
   `, [
     clientId,
@@ -151,35 +199,32 @@ async function createTaskFromRouting({
 }
 
 async function routeAndPersistProspect({ clientId, prospectId, aoName, db = pool }) {
-  await ensureAoProspectRoutingSchema();
-  const bundle = await fetchProspectBundle(prospectId, clientId, db);
-  if (!bundle) return null;
-
-  const availableAos = await fetchAvailableAos(clientId, db);
-  const routing = routeProspect({
-    prospect: bundle.prospect,
-    company: bundle.company,
-    touchpoints: bundle.touchpoints,
-    availableAos,
-    aoName,
-    existingAssignment: bundle.prospect,
+  await ensureAoProspectRoutingSchema(db);
+  return inTransaction(db, async client => {
+    const bundle = await fetchProspectBundle(prospectId, clientId, client);
+    if (!bundle) return null;
+    const availableAos = await fetchAvailableAos(clientId, client);
+    const routing = routeProspect({
+      prospect: bundle.prospect,
+      company: bundle.company,
+      touchpoints: bundle.touchpoints,
+      availableAos,
+      aoName,
+      existingAssignment: bundle.prospect,
+    });
+    await persistRouting(prospectId, clientId, routing, client);
+    return { prospect_id: prospectId, routing, formatted_task: formatAoTask(routing) };
   });
-
-  await persistRouting(prospectId, clientId, routing, db);
-  return {
-    prospect_id: prospectId,
-    routing,
-    formatted_task: formatAoTask(routing),
-  };
 }
 
 async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }) {
-  await ensureAoProspectRoutingSchema();
-  const availableAos = await fetchAvailableAos(clientId, db);
+  await ensureAoProspectRoutingSchema(db);
+  return inTransaction(db, async client => {
+    const availableAos = await fetchAvailableAos(clientId, client);
 
-  let ids = prospectIds;
-  if (!ids) {
-    const { rows } = await db.query(`
+    let ids = prospectIds;
+    if (!ids) {
+      const { rows } = await client.query(`
       SELECT p.id
       FROM prospects p
       WHERE p.client_id = $1
@@ -189,12 +234,12 @@ async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }
       ORDER BY p.icp_score DESC NULLS LAST, p.created_at DESC
       LIMIT 200
     `, [clientId]);
-    ids = rows.map(r => r.id);
-  }
+      ids = rows.map(r => r.id);
+    }
 
   const routed = [];
   for (const prospectId of ids) {
-    const bundle = await fetchProspectBundle(prospectId, clientId, db);
+    const bundle = await fetchProspectBundle(prospectId, clientId, client);
     if (!bundle) continue;
     const routing = routeProspect({
       prospect: bundle.prospect,
@@ -204,11 +249,13 @@ async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }
       existingAssignment: bundle.prospect,
     });
     if (routing.recommended_motion === 'SUPPRESS' || routing.recommended_motion === 'EMAIL_LED') {
-      await persistRouting(prospectId, clientId, routing, db);
+      await persistRouting(prospectId, clientId, routing, client);
       continue;
     }
     if (!routing.recommended_ao_id) continue;
     routed.push({ prospectId, routing });
+    const selectedAo = availableAos.find(ao => Number(ao.id) === Number(routing.recommended_ao_id));
+    if (selectedAo) selectedAo.open_task_count = Number(selectedAo.open_task_count || 0) + 1;
   }
 
   const weekly = buildWeeklyListMix(routed);
@@ -217,28 +264,32 @@ async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }
     const prospectId = entry.prospectId;
     if (!prospectId || !entry.recommended_ao_id) continue;
     const { prospectId: _ignored, deadline, required_debrief, ...routing } = entry;
-    await persistRouting(prospectId, clientId, routing, db);
+    await persistRouting(prospectId, clientId, routing, client);
     const result = await createTaskFromRouting({
       clientId,
       prospectId,
       routing,
       deadline,
-      db,
+      db: client,
     });
     created.push(result);
   }
 
-  return { created_count: created.length, tasks: created };
+    return { created_count: created.length, tasks: created };
+  });
 }
 
-async function getTaskById(taskId, { clientId, db = pool }) {
+async function getTaskById(taskId, { clientId, aoOwnerId = null, db = pool }) {
+  const params = [taskId, clientId];
+  const ownerClause = aoOwnerId ? `AND t.assigned_ao_id = $${params.push(aoOwnerId)}` : '';
   const { rows } = await db.query(`
     SELECT t.*, u.name AS assigned_ao_name
     FROM ao_prospect_tasks t
     JOIN users u ON u.id = t.assigned_ao_id
     WHERE t.id = $1 AND t.client_id = $2
+      ${ownerClause}
     LIMIT 1
-  `, [taskId, clientId]);
+  `, params);
   if (!rows[0]) return null;
   const task = rows[0];
   return {
@@ -275,6 +326,8 @@ async function listOpenTasks({ clientId, aoOwnerId = null, db = pool }) {
     JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
     WHERE t.client_id = $1
       AND t.status IN ('open', 'in_progress')
+      AND COALESCE(p.do_not_contact, false) = false
+      AND p.prospect_motion IS DISTINCT FROM 'SUPPRESS'
       ${ownerClause}
     ORDER BY
       CASE t.priority WHEN 'warm' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,
@@ -296,4 +349,5 @@ module.exports = {
   listOpenTasks,
   companyName,
   locationText,
+  inTransaction,
 };

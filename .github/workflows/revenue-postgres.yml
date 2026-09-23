@@ -87,6 +87,9 @@ jobs:
       - name: Test — Anchor Phone Setter disposable PostgreSQL rehearsal
         run: npm run test:anchor-phone-setter:postgres
 
+      - name: Test — AO prospect routing authorization and PostgreSQL invariants
+        run: npm run test:ao-prospect-routing
+
       - name: Test — mission routing workspace regression suite
         run: npm run test:ci:application
 

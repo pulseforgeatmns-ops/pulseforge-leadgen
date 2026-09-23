@@ -35,13 +35,14 @@ function companyName(prospect, company) {
 function locationText(prospect, company) {
   return normalizeText(prospect?.service_area_match)
     || normalizeText(company?.location)
-    || 'Greater Manchester, NH';
+    || 'Unknown location';
 }
 
 function inServiceArea(prospect, company, serviceAreas = ANCHOR_SERVICE_AREA) {
   if (prospect?.service_area_match === false) return false;
-  const hay = `${locationText(prospect, company)} ${company?.location || ''}`.trim();
-  if (!hay) return true;
+  const knownLocation = normalizeText(prospect?.service_area_match) || normalizeText(company?.location);
+  if (!knownLocation) return false;
+  const hay = `${knownLocation} ${company?.location || ''}`.trim();
   return Boolean(matchServiceAreaFromLocation(hay, serviceAreas));
 }
 
@@ -143,12 +144,15 @@ function computeAoFitScore({ prospect, company, touchpoints = [], serviceAreas =
   };
 }
 
-function classifyMotion({ prospect, company, aoFitScore, touchpoints = [], serviceAreas = ANCHOR_SERVICE_AREA }) {
+function classifyMotion({ prospect, company, aoFitScore, touchpoints = [], serviceAreas = ANCHOR_SERVICE_AREA, existingAssignment = null }) {
   const vertical = normalizeText(prospect?.vertical);
   const icp = Number(prospect?.icp_score || 0);
 
   if (prospect?.do_not_contact) {
     return { recommended_motion: 'SUPPRESS', motion_reason: 'Marked do not contact' };
+  }
+  if (existingAssignment?.prospect_motion === 'SUPPRESS') {
+    return { recommended_motion: 'SUPPRESS', motion_reason: 'Persisted suppression requires an explicit authorized release' };
   }
   if (!inServiceArea(prospect, company, serviceAreas)) {
     return { recommended_motion: 'SUPPRESS', motion_reason: 'Outside Anchor service area' };
@@ -275,6 +279,7 @@ function buildRecommendedAngle({ prospect, motion }) {
 }
 
 function buildFirstAction({ prospect, motion }) {
+  if (motion === 'SUPPRESS') return 'Stop outreach. Cancel active AO work and require an authorized suppression release before rerouting.';
   if (motion === 'EMAIL_LED') return 'Send intro email to identify who handles cleaning vendors.';
   if (motion === 'HYBRID') return 'Call the office. If no answer, send intro email. If nearby, walk in with a leave-behind.';
   if (motion === 'NURTURE') return 'Add to nurture queue — no active outreach until timing changes.';
@@ -334,16 +339,17 @@ function pickRecommendedAo({ availableAos = [], assignmentCategory, prospect, ex
   const active = availableAos.filter(ao => ao.active !== false);
   if (!active.length) return null;
 
-  const territory = normalizeText(prospect?.service_area_match || '').toLowerCase();
-  const territoryMatch = active.find(ao => normalizeText(ao.territory).toLowerCase()
-    && territory.includes(normalizeText(ao.territory).toLowerCase()));
-  if (territoryMatch) return territoryMatch;
-
-  const sorted = [...active].sort((a, b) => {
+  const byLoad = (a, b) => {
     const loadA = Number(a.open_task_count || 0);
     const loadB = Number(b.open_task_count || 0);
-    return loadA - loadB;
-  });
+    return loadA - loadB || Number(a.id) - Number(b.id);
+  };
+  const territory = normalizeText(prospect?.service_area_match || '').toLowerCase();
+  const territoryMatches = active.filter(ao => normalizeText(ao.territory).toLowerCase()
+    && territory.includes(normalizeText(ao.territory).toLowerCase())).sort(byLoad);
+  if (territoryMatches.length) return territoryMatches[0];
+
+  const sorted = [...active].sort(byLoad);
   if (assignmentCategory === 'UNFAIR_ADVANTAGE') return sorted[0];
   return sorted[0];
 }
@@ -370,6 +376,7 @@ function routeProspect({
     aoFitScore: ao_fit_score,
     touchpoints,
     serviceAreas,
+    existingAssignment,
   });
   const { assignment_category, category_reason } = classifyAssignmentCategory({
     prospect,
@@ -380,7 +387,7 @@ function routeProspect({
     existingAssignment,
   });
 
-  const recommended_ao = pickRecommendedAo({
+  const recommended_ao = ['SUPPRESS', 'EMAIL_LED'].includes(recommended_motion) ? null : pickRecommendedAo({
     availableAos,
     assignmentCategory: assignment_category,
     prospect,

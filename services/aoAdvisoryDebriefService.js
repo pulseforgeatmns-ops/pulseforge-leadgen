@@ -3,6 +3,14 @@
 const pool = require('../db');
 const { evaluateDebrief } = require('./aoAdvisoryDebriefEvaluator');
 const { ensureAoProspectRoutingSchema } = require('../utils/aoProspectRoutingSchema');
+const { inTransaction } = require('./aoProspectTaskService');
+
+function debriefError(code, statusCode = 409) {
+  const error = new Error(code);
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
 
 function mapDebriefRow(row) {
   if (!row) return null;
@@ -19,11 +27,40 @@ async function submitDebrief({
   aoOwnerId,
   debrief,
   db = pool,
+  ensureSchema = true,
 }) {
-  await ensureAoProspectRoutingSchema();
-  const evaluation = evaluateDebrief(debrief);
+  if (ensureSchema) await ensureAoProspectRoutingSchema(db);
+  return inTransaction(db, async client => {
+  const prospect = (await client.query(`
+    SELECT id, client_id, assigned_ao_id, prospect_motion, do_not_contact
+    FROM prospects
+    WHERE id = $1 AND client_id = $2
+    FOR UPDATE
+  `, [prospectId, clientId])).rows[0];
+  if (!prospect) throw debriefError('prospect_not_found', 404);
+  if (Number(prospect.assigned_ao_id) !== Number(aoOwnerId)) {
+    throw debriefError('prospect_not_owned_by_ao', 403);
+  }
+  if (prospect.do_not_contact || prospect.prospect_motion === 'SUPPRESS') {
+    throw debriefError('prospect_suppressed', 409);
+  }
+  const owner = (await client.query(`
+    SELECT id FROM users
+    WHERE id = $1 AND client_id = $2 AND role = 'ao' AND active = true
+  `, [aoOwnerId, clientId])).rows[0];
+  if (!owner) throw debriefError('ao_owner_not_active_for_tenant', 403);
+  if (taskId) {
+    const task = (await client.query(`
+      SELECT id FROM ao_prospect_tasks
+      WHERE id = $1 AND client_id = $2 AND prospect_id = $3 AND assigned_ao_id = $4
+        AND status IN ('open', 'in_progress')
+      FOR UPDATE
+    `, [taskId, clientId, prospectId, aoOwnerId])).rows[0];
+    if (!task) throw debriefError('task_not_owned_or_mismatched', 403);
+  }
+  const evaluation = evaluateDebrief(debrief, { defaultOwnerId: aoOwnerId });
 
-  const { rows } = await db.query(`
+  const { rows } = await client.query(`
     INSERT INTO ao_advisory_debriefs (
       client_id, prospect_id, task_id, ao_owner_id,
       person_spoken_to, role, decision_maker, current_cleaning_solution, stated_context,
@@ -57,11 +94,11 @@ async function submitDebrief({
     debrief.blocker || null,
     debrief.recommended_next_step || null,
     debrief.recommended_message || null,
-    debrief.follow_up_due_at || evaluation.follow_up_due_at || null,
-    debrief.next_owner || evaluation.next_action_owner || null,
+    evaluation.follow_up_due_at,
+    evaluation.next_action_owner,
     debrief.prescribed_before_diagnosing ?? null,
     debrief.real_reason_to_continue ?? null,
-    debrief.specific_dated_next_step ?? Boolean(debrief.follow_up_due_at),
+    Boolean(evaluation.follow_up_due_at),
     evaluation.next_action,
     evaluation.coaching_feedback,
     evaluation.debrief_quality,
@@ -70,7 +107,7 @@ async function submitDebrief({
 
   const saved = mapDebriefRow(rows[0]);
 
-  await db.query(`
+  const prospectUpdate = await client.query(`
     UPDATE prospects SET
       last_debrief_status = $3,
       next_action = $4,
@@ -87,7 +124,8 @@ async function submitDebrief({
         ELSE prospect_motion
       END,
       updated_at = NOW()
-    WHERE id = $1 AND client_id = $2
+    WHERE id = $1 AND client_id = $2 AND assigned_ao_id = $8
+    RETURNING id
   `, [
     prospectId,
     clientId,
@@ -96,15 +134,25 @@ async function submitDebrief({
     evaluation.next_action_owner,
     saved.follow_up_due_at,
     evaluation.incomplete,
+    aoOwnerId,
   ]);
+  if (!prospectUpdate.rows[0]) throw debriefError('prospect_ownership_changed', 409);
 
   if (taskId) {
-    await db.query(`
+    const taskUpdate = await client.query(`
       UPDATE ao_prospect_tasks SET
-        status = CASE WHEN $3 = true THEN 'in_progress' ELSE 'completed' END,
-        completed_at = CASE WHEN $3 = true THEN NULL ELSE NOW() END
-      WHERE id = $1 AND client_id = $2
-    `, [taskId, clientId, evaluation.incomplete]);
+        status = CASE WHEN $3 = 'SUPPRESS' THEN 'cancelled' WHEN $4 = true THEN 'in_progress' ELSE 'completed' END,
+        completed_at = CASE WHEN $4 = true AND $3 <> 'SUPPRESS' THEN NULL ELSE NOW() END
+      WHERE id = $1 AND client_id = $2 AND prospect_id = $5 AND assigned_ao_id = $6
+      RETURNING id
+    `, [taskId, clientId, evaluation.next_action, evaluation.incomplete, prospectId, aoOwnerId]);
+    if (!taskUpdate.rows[0]) throw debriefError('task_ownership_changed', 409);
+  }
+  if (evaluation.next_action === 'SUPPRESS') {
+    await client.query(`
+      UPDATE ao_prospect_tasks SET status = 'cancelled', completed_at = NOW()
+      WHERE client_id = $1 AND prospect_id = $2 AND status IN ('open', 'in_progress')
+    `, [clientId, prospectId]);
   }
 
   return {
@@ -119,6 +167,7 @@ async function submitDebrief({
       debrief_quality: evaluation.debrief_quality,
     },
   };
+  });
 }
 
 async function getLatestDebrief(prospectId, clientId, db = pool) {
@@ -157,4 +206,5 @@ module.exports = {
   getLatestDebrief,
   listDebriefs,
   evaluateDebrief,
+  debriefError,
 };
