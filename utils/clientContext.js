@@ -321,6 +321,36 @@ async function ensureClientArchitecture() {
 
   await pool.query(`SELECT setval(pg_get_serial_sequence('clients', 'id'), GREATEST((SELECT MAX(id) FROM clients), 1))`);
 
+  // SPEC-WEB-001 — Maynard Web tenant (slug-resolved; no fixed id)
+  await pool.query(`
+    INSERT INTO clients (
+      name, slug, business_name, vertical, email, primary_contact,
+      country, timezone, industry, service_area, verticals, target_clients,
+      scoring_profile, enabled_agents, active, notes
+    ) VALUES (
+      'Maynard Web',
+      'maynard-web',
+      'Maynard Web',
+      'web_design',
+      'jacob@gopulseforge.com',
+      'Jacob Maynard',
+      'United States',
+      'America/New_York',
+      'Website design and development',
+      ARRAY['United States'],
+      ARRAY['professional_services','legal','accounting','home_services','dental','fitness','restaurant','salon','hvac','roofing','landscaping','med_spa'],
+      'Established SMBs in the United States where website credibility and customer acquisition plausibly depend on web presence',
+      'web_design',
+      ARRAY['scout','max'],
+      true,
+      'SPEC-WEB-001 — neutral working identity; NO outbound until explicitly authorized.'
+    )
+    ON CONFLICT (slug) DO UPDATE SET
+      scoring_profile = EXCLUDED.scoring_profile,
+      enabled_agents = EXCLUDED.enabled_agents,
+      notes = EXCLUDED.notes
+  `);
+
   await pool.query(`
     INSERT INTO clients (name, slug, email, city, state, active)
     VALUES ('McLeod Legal Services', 'mcleod', 'ashley@mcleodlegal.com',

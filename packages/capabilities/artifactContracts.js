@@ -92,6 +92,10 @@ const CAPABILITY_ARTIFACT_CONTRACTS = Object.freeze({
     requires: ['social_content_draft'],
     produces: ['social_content_published'],
   }),
+  [BUILTIN_IDS.WEBSITE_OPPORTUNITY_INTELLIGENCE]: Object.freeze({
+    requires: ['domain'],
+    produces: ['website_opportunity_assessment'],
+  }),
 });
 
 /**
@@ -180,6 +184,11 @@ const CAPABILITY_MISSION_ALIASES = Object.freeze({
     'Social Content Publication',
     'Publish Social Content',
     'Paige Social Publish',
+  ]),
+  [BUILTIN_IDS.WEBSITE_OPPORTUNITY_INTELLIGENCE]: Object.freeze([
+    'Website Opportunity Intelligence',
+    'Website Audit',
+    'Website Opportunity Assessment',
   ]),
 });
 
