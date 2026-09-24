@@ -8,6 +8,17 @@ const { getActiveGuardrails } = require('./utils/agentLessons');
 const client = new Anthropic();
 const AGENT_NAME = 'paige';
 
+function resolvePaigeWriterModel(env = process.env) {
+  return env.PAIGE_WRITER_MODEL || 'claude-opus-5-5';
+}
+
+function resolvePaigeEvaluatorModel(env = process.env) {
+  return env.PAIGE_EVALUATOR_MODEL || 'claude-sonnet-4-6';
+}
+
+const PAIGE_WRITER_MODEL = resolvePaigeWriterModel();
+const PAIGE_EVALUATOR_MODEL = resolvePaigeEvaluatorModel();
+
 const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-scenes', 'community'];
 const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
 const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
@@ -1780,7 +1791,7 @@ function validateLinkedInDraft(postBody, grounding = {}) {
 
 async function createLinkedInDraft(prompt, systemPrompt) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: PAIGE_WRITER_MODEL,
     max_tokens: 900,
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }],
@@ -2055,7 +2066,7 @@ async function getLastContentType(companyName, channel) {
 
 async function createDraft(prompt, systemPrompt, channel) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: PAIGE_WRITER_MODEL,
     max_tokens: channel === 'blog' ? 1000 : channel === 'linkedin_page' || channel === 'linkedin_personal' ? 450 : 300,
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }]
@@ -2097,7 +2108,7 @@ function parseScoreJson(text) {
 
 async function scoreDraft(draft, recentPublishedAngles = []) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: PAIGE_EVALUATOR_MODEL,
     max_tokens: 220,
     messages: [{
       role: 'user',
@@ -2801,6 +2812,9 @@ async function generateSocialContent(options = {}) {
     if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
       console.log('MSHI Facebook page is not connected yet; Paige will still queue Facebook, Google Business, and blog drafts for approval.');
     }
+    console.log(`[Paige] writer_model=${PAIGE_WRITER_MODEL}`);
+    console.log(`[Paige] evaluator_model=${PAIGE_EVALUATOR_MODEL}`);
+
     if (!dryRun && !skipCanonicalPersist) {
       console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
       console.log(`DELETE FROM pending_comments
@@ -2975,6 +2989,10 @@ module.exports = {
     chooseLinkedInFormat,
     hasMiraSourceAnchor,
     LINKEDIN_FORMATS,
+    resolvePaigeWriterModel,
+    resolvePaigeEvaluatorModel,
+    PAIGE_WRITER_MODEL,
+    PAIGE_EVALUATOR_MODEL,
   },
 };
 
