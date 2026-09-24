@@ -16,6 +16,8 @@ const {
   buildForwardableBlurb,
   buildEvidenceEnhancedEmail,
   validateAnchorCopyDoctrine,
+  validateAnchorSocialCopy,
+  buildAnchorCopyDoctrineViolationError,
   LIFECYCLE_STAGES,
   SEGMENTS,
 } = require('../utils/anchorCopyDoctrine');
@@ -117,5 +119,26 @@ describe('Anchor Copy Doctrine', () => {
     });
     const validation = validateAnchorCopyDoctrine(copy);
     assert.equal(validation.ok, true, JSON.stringify(validation.violations));
+  });
+
+  it('validateAnchorSocialCopy composes doctrine and social-only rules', () => {
+    const doctrineOnly = validateAnchorSocialCopy('I wanted to reach out about cleaning.');
+    assert.equal(doctrineOnly.ok, false);
+    assert.ok(doctrineOnly.violations.some((v) => v.source === 'anchor_copy_doctrine' && v.patternId === 'wanted_to_reach_out'));
+
+    const socialOnly = validateAnchorSocialCopy('Book a walkthrough for the office.');
+    assert.equal(socialOnly.ok, false);
+    assert.ok(socialOnly.violations.some((v) => v.source === 'anchor_social_rule' && v.patternId === 'walkthrough'));
+
+    const compliant = validateAnchorSocialCopy('A facilities assessment gives Manchester office managers a written scope before cleaning starts.');
+    assert.equal(compliant.ok, true, JSON.stringify(compliant.violations));
+  });
+
+  it('buildAnchorCopyDoctrineViolationError exposes code and violations', () => {
+    const violations = [{ source: 'anchor_copy_doctrine', patternId: 'em_dash', match: '—' }];
+    const err = buildAnchorCopyDoctrineViolationError(violations);
+    assert.equal(err.message, 'anchor_copy_doctrine_violation');
+    assert.equal(err.code, 'anchor_copy_doctrine_violation');
+    assert.deepEqual(err.violations, violations);
   });
 });

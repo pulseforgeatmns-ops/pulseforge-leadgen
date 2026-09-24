@@ -4,6 +4,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { buildMiraContext } = require('./utils/miraContext');
 const { getActiveGuardrails } = require('./utils/agentLessons');
+const { validateAnchorSocialCopy } = require('./utils/anchorCopyDoctrine');
 
 const client = new Anthropic();
 const AGENT_NAME = 'paige';
@@ -1886,20 +1887,23 @@ ${buildLinkedInRules(brand, format)}`;
 
     const score = await scoreDraft(parsed.post_body, recentPublishedAngles);
     const issues = validateLinkedInDraft(parsed.post_body, { context: miraContext, brand });
+    const doctrineViolations = brand === 'anchor' ? getAnchorSocialDoctrineViolations(parsed.post_body) : [];
     logQualityGateComparison(`linkedin_${brand}_${attempts === 0 ? 'initial' : 'attempt_' + attempts}`, score);
 
     if (!best || score.total > best.score.total) best = { parsed, score };
 
-    if (!issues.length && passesQualityGate(score, channel)) {
+    if (!issues.length && !doctrineViolations.length && passesQualityGate(score, channel)) {
       best = { parsed, score };
       break;
     }
     if (attempts === maxAttempts) break;
+    if (doctrineViolations.length) logAnchorDoctrineBlocked(doctrineViolations);
 
     prompt = [
       basePrompt,
       '',
       issues.length ? `Your previous draft broke these hard rules: ${issues.join('; ')}. Fix every one.` : '',
+      brand === 'anchor' && doctrineViolations.length ? buildAnchorDoctrineRegenBlock(doctrineViolations) : '',
       `Your previous draft scored ${score.total}/30 (specificity ${score.specificity}, originality ${score.originality}, hook ${score.hook_strength}). Reason: ${score.reason}.`,
       `Rewrite it. Keep the ${format} format and the ${brand} brand voice, stay under ${LINKEDIN_FORMAT_SPECS[format].maxWords} words, anchor every claim to the canonical source material, and return the same strict JSON shape.`,
     ].filter(Boolean).join('\n');
@@ -1908,7 +1912,9 @@ ${buildLinkedInRules(brand, format)}`;
   if (!best) return { content: null, failed: true };
 
   const finalIssues = validateLinkedInDraft(best.parsed.post_body, { context: miraContext, brand });
-  if (!hasMiraSourceAnchor(best.parsed.source_anchors) || finalIssues.length || !passesQualityGate(best.score, channel)) {
+  const finalDoctrineViolations = brand === 'anchor' ? getAnchorSocialDoctrineViolations(best.parsed.post_body) : [];
+  if (!hasMiraSourceAnchor(best.parsed.source_anchors) || finalIssues.length || finalDoctrineViolations.length || !passesQualityGate(best.score, channel)) {
+    if (finalDoctrineViolations.length) logAnchorDoctrineBlocked(finalDoctrineViolations);
     await logContentFailed(company, channel, format, best.score, attempts, best.parsed.post_body);
     console.log(`  [linkedin] failed gate after ${attempts} attempt(s): ${finalIssues.join(', ') || 'best score ' + best.score.total + '/30'}; skipping ${channel}`);
     if (RUN_CONTEXT.dryRun) console.log(`  [linkedin] rejected draft:\n${best.parsed.post_body}`);
@@ -2177,6 +2183,27 @@ function validateDraftForClient(draft, channel, miraContext = null) {
   return issues;
 }
 
+function getAnchorSocialDoctrineViolations(text) {
+  return validateAnchorSocialCopy(text).violations;
+}
+
+function logAnchorDoctrineBlocked(violations) {
+  if (!violations.length) return;
+  console.log('[Paige] Anchor doctrine blocked draft:');
+  for (const violation of violations) {
+    console.log(`- ${violation.patternId}: ${violation.match ?? '(detected)'}`);
+  }
+}
+
+function buildAnchorDoctrineRegenBlock(violations) {
+  if (!violations.length) return '';
+  return [
+    'Your previous draft violated Anchor copy doctrine. Correct every listed violation:',
+    ...violations.map((violation) => `- ${violation.patternId}: ${violation.match ?? '(detected)'}`),
+    'Remove em dashes, AI-tell phrasing, generic closers, unsupported claims, and social-banned phrases such as "walkthrough" or "What do you think?".',
+  ].join('\n');
+}
+
 function passesQualityGate(score, channel) {
   const minTotal = CHANNEL_MIN_SCORES[channel] || MIN_QUALITY_SCORE;
   return score.total >= minTotal &&
@@ -2313,6 +2340,7 @@ async function generatePost(company, contentType, channel) {
   let finalDraft = null;
   let finalScore = null;
   let finalValidationIssues = [];
+  let finalDoctrineViolations = [];
   let regenerated = false;
   let regenerationAttempts = 0;
   const maxAttempts = maxRegenerationAttempts();
@@ -2321,17 +2349,24 @@ async function generatePost(company, contentType, channel) {
     draft = await createDraft(prompt, systemPrompt, channel);
     score = await scoreDraft(draft, recentPublishedAngles);
     validationIssues = validateDraftForClient(draft, channel, miraContext);
+    let doctrineViolations = isAnchor ? getAnchorSocialDoctrineViolations(draft) : [];
     finalDraft = draft;
     finalScore = score;
     finalValidationIssues = validationIssues;
+    finalDoctrineViolations = doctrineViolations;
 
     logQualityGateComparison('initial', score);
 
-    while ((validationIssues.length || !passesQualityGate(score, channel)) && regenerationAttempts < maxAttempts) {
+    while ((validationIssues.length || doctrineViolations.length || !passesQualityGate(score, channel)) && regenerationAttempts < maxAttempts) {
       regenerated = true;
       regenerationAttempts++;
+      if (doctrineViolations.length) {
+        logAnchorDoctrineBlocked(doctrineViolations);
+      }
       if (validationIssues.length) {
         console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${maxAttempts} for client rules: ${validationIssues.join(', ')}`);
+      } else if (doctrineViolations.length) {
+        console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${maxAttempts} for Anchor doctrine: ${doctrineViolations.map(v => v.patternId).join(', ')}`);
       } else {
         console.log(`  [quality] Score ${score.total}/30, regenerating attempt ${regenerationAttempts}/${maxAttempts} for ${score.weak_dimension}`);
       }
@@ -2355,6 +2390,7 @@ async function generatePost(company, contentType, channel) {
             prompt,
             '',
             validationIssues.length ? `Your previous draft broke these hard validation rules: ${validationIssues.join('; ')}. Fix every one.` : '',
+            isAnchor && doctrineViolations.length ? buildAnchorDoctrineRegenBlock(doctrineViolations) : '',
             `Your previous draft scored ${score.total}/30 total, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
             '',
             'A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:',
@@ -2381,13 +2417,15 @@ async function generatePost(company, contentType, channel) {
       draft = await createDraft(regenPrompt, systemPrompt, channel);
       score = await scoreDraft(draft, recentPublishedAngles);
       validationIssues = validateDraftForClient(draft, channel, miraContext);
+      doctrineViolations = isAnchor ? getAnchorSocialDoctrineViolations(draft) : [];
 
       logQualityGateComparison(`attempt_${regenerationAttempts}`, score);
 
-      if (!validationIssues.length && (finalValidationIssues.length || score.total > finalScore.total)) {
+      if (!validationIssues.length && !doctrineViolations.length && (finalValidationIssues.length || finalDoctrineViolations.length || score.total > finalScore.total)) {
         finalDraft = draft;
         finalScore = score;
         finalValidationIssues = validationIssues;
+        finalDoctrineViolations = doctrineViolations;
       }
     }
   } catch (err) {
@@ -2402,9 +2440,13 @@ async function generatePost(company, contentType, channel) {
     throw err;
   }
 
-  if (finalValidationIssues.length) {
+  if (finalValidationIssues.length || finalDoctrineViolations.length) {
+    if (finalDoctrineViolations.length) logAnchorDoctrineBlocked(finalDoctrineViolations);
     await logContentFailed(company, channel, contentType, finalScore, regenerationAttempts, finalDraft);
-    console.log(`  [validation] Failed after ${regenerationAttempts} regeneration attempt(s): ${finalValidationIssues.join(', ')}; skipping ${channel}`);
+    const failureReason = finalValidationIssues.length
+      ? finalValidationIssues.join(', ')
+      : finalDoctrineViolations.map(v => v.patternId).join(', ');
+    console.log(`  [validation] Failed after ${regenerationAttempts} regeneration attempt(s): ${failureReason}; skipping ${channel}`);
     return { content: null, quality: finalScore, regenerated, failed: true, regenerationAttempts };
   }
 
@@ -2968,6 +3010,9 @@ module.exports = {
     validateLinkedInDraft,
     validateGroundedTimeClaims,
     validateAnchorClaims,
+    getAnchorSocialDoctrineViolations,
+    buildAnchorDoctrineRegenBlock,
+    logAnchorDoctrineBlocked,
     validatePulseforgeClaims,
     usesMiraGrounding,
     buildMiraGroundingBlock,
