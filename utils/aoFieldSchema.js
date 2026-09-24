@@ -26,6 +26,17 @@ const ATTRIBUTION_SOURCES = ['ao_field_visit', 'direct_mail_campaign'];
 const ESCALATION_STATUSES = ['new', 'seen', 'in_progress', 'resolved', 'ignored'];
 const MAX_MODES = ['log_visit', 'follow_up', 'direct_mail_follow_up', 'route_follow_up', 'phone_follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help', 'conversation'];
 const REPORT_STATUSES = ['new', 'reviewed', 'resolved'];
+const CONVERSATION_STATUSES = ['active', 'done', 'archived', 'closed', 'reopened'];
+const ROUTING_ISSUE_TYPES = [
+  'wrong_route',
+  'wrong_prospect',
+  'wrong_mission',
+  'lost_context',
+  'should_have_opened_brief',
+  'should_have_opened_conversation',
+  'treated_as_done_incorrectly',
+  'other',
+];
 const ROUTE_SORT_MODES = ['farthest_first', 'closest_first', 'shortest_route', 'manual'];
 const ROUTE_START_POINT_TYPES = ['current_location', 'anchor_office', 'custom'];
 const ROUTE_STATUSES = ['active', 'completed', 'cancelled'];
@@ -284,6 +295,61 @@ async function ensureAoFieldSchemaOnce() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS ao_routing_issue_flags (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      ao_user_id TEXT,
+      session_id TEXT,
+      conversation_id TEXT,
+      message_id TEXT,
+      prospect_id TEXT,
+      mission_id TEXT,
+      route_observed JSONB,
+      route_expected TEXT,
+      issue_type TEXT NOT NULL
+        CHECK (issue_type IN (${ROUTING_ISSUE_TYPES.map(t => `'${t}'`).join(', ')})),
+      notes TEXT,
+      decision_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_max_sessions
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
+      ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS reopened_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS closed_by TEXT,
+      ADD COLUMN IF NOT EXISTS reopened_by TEXT,
+      ADD COLUMN IF NOT EXISTS prospect_id TEXT,
+      ADD COLUMN IF NOT EXISTS mission_id TEXT
+  `);
+
+  await pool.query(`
+    UPDATE ao_max_sessions
+    SET status = CASE WHEN completed = true THEN 'done' ELSE 'active' END
+    WHERE status = 'active' AND completed = true
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_max_sessions DROP CONSTRAINT IF EXISTS ao_max_sessions_status_check
+  `);
+  await pool.query(`
+    ALTER TABLE ao_max_sessions ADD CONSTRAINT ao_max_sessions_status_check
+      CHECK (status IN (${CONVERSATION_STATUSES.map(s => `'${s}'`).join(', ')}))
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ao_routing_flags_tenant_created
+      ON ao_routing_issue_flags (tenant_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ao_max_sessions_owner_status
+      ON ao_max_sessions (ao_owner_id, client_id, status, updated_at DESC)
+      WHERE mode = 'conversation'
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_ao_leads_owner ON ao_leads(ao_owner_id, client_id);
     CREATE INDEX IF NOT EXISTS idx_ao_leads_next_follow_up ON ao_leads(next_follow_up_date);
     CREATE INDEX IF NOT EXISTS idx_ao_tasks_owner_due ON ao_follow_up_tasks(ao_owner_id, due_date, status);
@@ -321,5 +387,7 @@ module.exports = {
   ROUTE_START_POINT_TYPES,
   ROUTE_STATUSES,
   ROUTE_STOP_STATUSES,
+  CONVERSATION_STATUSES,
+  ROUTING_ISSUE_TYPES,
   ensureAoFieldSchema,
 };

@@ -9,6 +9,8 @@ const aoField = require('../services/aoFieldService');
 const aoMax = require('../services/aoMaxFlow');
 const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
 const aoMaxConversation = require('../services/aoMaxConversation');
+const aoRoutingIssueFlags = require('../services/aoRoutingIssueFlags');
+const { AO_ROUTING_ISSUE_TYPES } = require('../utils/aoRoutingIssueTypes');
 const aoRoute = require('../services/aoRouteService');
 const { buildTelUrl } = require('../utils/aoRoutePlanner');
 
@@ -319,6 +321,143 @@ router.post('/api/max/ask', requireAoWrite, refreshAoSession, wrapAoHandler(asyn
     message: String(message).trim(),
     sessionId: sessionId || null,
   });
+  res.json(result);
+}));
+
+router.post('/api/max/prospect-brief', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    prospect_id: prospectId,
+    lead_id: leadId,
+    session_id: sessionId,
+    source = 'prospect_card_brief_button',
+  } = req.body || {};
+
+  if (!prospectId && !leadId) {
+    return res.status(400).json({ error: 'prospect_id or lead_id required' });
+  }
+
+  observeOperatorHttp(req, res, {
+    clientId,
+    sessionId,
+    source: 'ao_prospect_brief',
+    routeHint: 'prospect_brief',
+  });
+
+  const result = await aoMaxConversation.handleProspectBriefAction({
+    sessionId: sessionId || null,
+    aoOwnerId,
+    clientId,
+    prospectId: prospectId || null,
+    leadId: leadId || null,
+    source,
+  });
+  if (result.status) return res.status(result.status).json({ error: result.error });
+  res.json(result);
+}));
+
+router.post('/api/max/flag-routing', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    session_id: sessionId,
+    conversation_id: conversationId,
+    message_id: messageId,
+    prospect_id: prospectId,
+    mission_id: missionId,
+    route_observed: routeObserved,
+    route_expected: routeExpected,
+    issue_type: issueType,
+    notes,
+    decision_id: decisionId,
+  } = req.body || {};
+
+  if (!issueType) {
+    return res.status(400).json({ error: 'issue_type required', issue_types: AO_ROUTING_ISSUE_TYPES });
+  }
+
+  const result = await aoRoutingIssueFlags.createRoutingIssueFlag({
+    tenantId: clientId,
+    aoUserId: aoOwnerId,
+    sessionId: sessionId || conversationId || null,
+    conversationId: conversationId || sessionId || null,
+    messageId: messageId || null,
+    prospectId: prospectId || null,
+    missionId: missionId || null,
+    routeObserved: routeObserved || null,
+    routeExpected: routeExpected || null,
+    issueType,
+    notes,
+    decisionId: decisionId || null,
+  });
+  if (result.status) return res.status(result.status).json({ error: result.error });
+  res.json(result);
+}));
+
+router.get('/api/max/conversations/active', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const conversation = await aoMaxConversation.getActiveOrRestorableConversation({ aoOwnerId, clientId });
+  res.json({ conversation });
+}));
+
+router.get('/api/max/conversations', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const status = req.query.status ? String(req.query.status) : null;
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const conversations = await aoMaxConversation.listConversations({
+    aoOwnerId,
+    clientId,
+    status,
+    limit,
+  });
+  res.json({ conversations });
+}));
+
+router.get('/api/max/conversations/:id', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const conversation = await aoMaxConversation.getConversationDetail({
+    sessionId: req.params.id,
+    aoOwnerId,
+    clientId,
+  });
+  if (!conversation) return res.status(404).json({ error: 'Conversation not found' });
+  res.json({ conversation });
+}));
+
+router.post('/api/max/conversations/:id/reopen', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const result = await aoMaxConversation.reopenConversation({
+    sessionId: req.params.id,
+    aoOwnerId,
+    clientId,
+    reopenedBy: aoOwnerId,
+  });
+  if (result.status) return res.status(result.status).json({ error: result.error });
+  res.json(result);
+}));
+
+router.post('/api/max/conversations/:id/done', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const result = await aoMaxConversation.markConversationDone({
+    sessionId: req.params.id,
+    aoOwnerId,
+    clientId,
+    closedBy: aoOwnerId,
+  });
+  if (result.status) return res.status(result.status).json({ error: result.error });
   res.json(result);
 }));
 
