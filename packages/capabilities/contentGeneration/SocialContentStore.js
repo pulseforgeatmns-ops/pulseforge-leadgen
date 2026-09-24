@@ -17,6 +17,8 @@ function newId() {
 
 function applyArtifactPatch(row, patch = {}) {
   const now = new Date().toISOString();
+  if (patch.approvalBinding !== undefined) row.approvalBinding = clone(patch.approvalBinding);
+  if (patch.publication !== undefined) row.publication = clone(patch.publication);
   if (patch.approvalState != null) row.approvalState = patch.approvalState;
   if (patch.publishState != null) row.publishState = patch.publishState;
   if (patch.rejectionReason !== undefined) row.rejectionReason = patch.rejectionReason;
@@ -35,9 +37,22 @@ function applyArtifactPatch(row, patch = {}) {
 function createInMemorySocialContentStore() {
   /** @type {Map<string, object>} */
   const artifacts = new Map();
+  const locks = new Map();
 
   return {
     kind: 'memory',
+    async withLockedArtifact(id, tenantId, clientId, fn) {
+      const previous = locks.get(id) || Promise.resolve();
+      let release;
+      const current = new Promise(resolve => { release = resolve; });
+      locks.set(id, current);
+      await previous;
+      try {
+        const artifact = await this.getById(id, tenantId, clientId);
+        if (!artifact) throw new Error('artifact_not_found');
+        return await fn(artifact, this);
+      } finally { release(); if (locks.get(id) === current) locks.delete(id); }
+    },
     async ensureSchema() {},
     async insertBatch(rows, { client } = {}) {
       void client;
@@ -139,6 +154,8 @@ function mapRow(row) {
     meta: row.meta || {},
     provenance: row.provenance || {},
     approvalState: row.approval_state,
+    approvalBinding: row.approval_binding,
+    publication: row.publication,
     publishState: row.publish_state,
     rejectionReason: row.rejection_reason,
     publishError: row.publish_error,
@@ -178,6 +195,8 @@ async function ensureSocialContentArtifactsTable(db) {
 
   await db.query(`
     ALTER TABLE paige_social_content_artifacts
+      ADD COLUMN IF NOT EXISTS approval_binding JSONB,
+      ADD COLUMN IF NOT EXISTS publication JSONB NOT NULL DEFAULT '{}'::jsonb,
       ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'unknown',
       ADD COLUMN IF NOT EXISTS business_id TEXT,
       ADD COLUMN IF NOT EXISTS media_refs JSONB,
@@ -208,6 +227,18 @@ function createPostgresSocialContentStore(pool) {
   const db = pool;
   return {
     kind: 'postgres',
+    async withLockedArtifact(id, tenantId, clientId, fn) {
+      const conn = await pool.connect();
+      try {
+        await conn.query('BEGIN');
+        const result = await conn.query('SELECT * FROM paige_social_content_artifacts WHERE id=$1 AND tenant_id=$2 AND client_id=$3 FOR UPDATE', [id, String(tenantId), Number(clientId)]);
+        if (!result.rows[0]) throw new Error('artifact_not_found');
+        const output = await fn(mapRow(result.rows[0]), createPostgresSocialContentStore(conn));
+        await conn.query('COMMIT');
+        return output;
+      } catch (err) { await conn.query('ROLLBACK'); throw err; }
+      finally { conn.release(); }
+    },
     ensureSchema(client) {
       return ensureSocialContentArtifactsTable(client || db);
     },
@@ -271,8 +302,8 @@ function createPostgresSocialContentStore(pool) {
       );
       return mapRow(result.rows[0]);
     },
-    async attachPendingCommentId(id, tenantId, clientId, pendingCommentId) {
-      const result = await db.query(
+    async attachPendingCommentId(id, tenantId, clientId, pendingCommentId, { client: txClient } = {}) {
+      const result = await (txClient || db).query(
         `UPDATE paige_social_content_artifacts
          SET pending_comment_id = $4, updated_at = NOW()
          WHERE id = $1 AND tenant_id = $2 AND client_id = $3
@@ -341,6 +372,8 @@ function createPostgresSocialContentStore(pool) {
       let idx = 4;
 
       const fieldMap = [
+        ['approvalState', 'approval_state'],
+        ['publishState', 'publish_state'],
         ['rejectionReason', 'rejection_reason'],
         ['publishError', 'publish_error'],
         ['publishedUrl', 'published_url'],
@@ -355,6 +388,9 @@ function createPostgresSocialContentStore(pool) {
           sets.push(`${col} = $${idx++}`);
           params.push(patch[jsKey]);
         }
+      }
+      for (const [key, column] of [['approvalBinding', 'approval_binding'], ['publication', 'publication']]) {
+        if (patch[key] !== undefined) { sets.push(`${column} = $${idx++}::jsonb`); params.push(JSON.stringify(patch[key])); }
       }
       if (patch.mediaRefs !== undefined) {
         sets.push(`media_refs = $${idx++}::jsonb`);

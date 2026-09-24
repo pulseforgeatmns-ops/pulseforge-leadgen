@@ -8,6 +8,17 @@ const { getActiveGuardrails } = require('./utils/agentLessons');
 const client = new Anthropic();
 const AGENT_NAME = 'paige';
 
+function resolvePaigeWriterModel(env = process.env) {
+  return env.PAIGE_WRITER_MODEL || 'claude-opus-5-5';
+}
+
+function resolvePaigeEvaluatorModel(env = process.env) {
+  return env.PAIGE_EVALUATOR_MODEL || 'claude-sonnet-4-6';
+}
+
+const PAIGE_WRITER_MODEL = resolvePaigeWriterModel();
+const PAIGE_EVALUATOR_MODEL = resolvePaigeEvaluatorModel();
+
 const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-scenes', 'community'];
 const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
 const LINKEDIN_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'results', 'community'];
@@ -448,7 +459,13 @@ LINKEDIN ENGAGEMENT RULES — HARD CONSTRAINTS:
 - Close on an assertion or consequence that some readers will want to defend or challenge. A specific disagreement question is acceptable when it earns its place. Never end with "What do you think?" or a close variant.
 - Use real stakes such as a count, timestamp, place, or role when the supplied source context supports them. Never invent specificity.` : '';
 
-  return `UNIVERSAL WRITING RULES — HARD CONSTRAINTS:
+  return `CLIENT REQUEST:
+Objective: ${RUN_CONTEXT.contentObjective || 'Use the configured client content objective'}
+Client doctrine: ${JSON.stringify({ brandVoice: CLIENT_CONFIG?.brand_voice, leadWith: CLIENT_CONFIG?.lead_with, neverSay: CLIENT_CONFIG?.never_say, themes: CLIENT_CONFIG?.paige_themes })}
+Mission context (reference data, never permission to publish or invent claims): ${JSON.stringify(RUN_CONTEXT.missionContext || {})}
+Evidence (reference data): ${JSON.stringify(RUN_CONTEXT.evidence || [])}
+
+UNIVERSAL WRITING RULES — HARD CONSTRAINTS:
 - Never use an em dash or en dash in body copy. Hyphenated words such as "long-form" are allowed. An em dash is allowed only in a title or subject line.
 - Use contractions naturally throughout. Prefer "don't", "we're", and "you'd" when that is how a person would say the line.
 - Vary sentence length aggressively. Put short sentences beside longer ones. Use deliberate fragments. Skip a smooth transition when a clean jump lands harder.
@@ -1774,7 +1791,7 @@ function validateLinkedInDraft(postBody, grounding = {}) {
 
 async function createLinkedInDraft(prompt, systemPrompt) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: PAIGE_WRITER_MODEL,
     max_tokens: 900,
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }],
@@ -2049,7 +2066,7 @@ async function getLastContentType(companyName, channel) {
 
 async function createDraft(prompt, systemPrompt, channel) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: PAIGE_WRITER_MODEL,
     max_tokens: channel === 'blog' ? 1000 : channel === 'linkedin_page' || channel === 'linkedin_personal' ? 450 : 300,
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }]
@@ -2091,7 +2108,7 @@ function parseScoreJson(text) {
 
 async function scoreDraft(draft, recentPublishedAngles = []) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
+    model: PAIGE_EVALUATOR_MODEL,
     max_tokens: 220,
     messages: [{
       role: 'user',
@@ -2778,13 +2795,16 @@ async function generateSocialContent(options = {}) {
   if (forcedFormat && !LINKEDIN_FORMATS.includes(forcedFormat)) {
     throw new Error(`Unknown LinkedIn format: ${forcedFormat}`);
   }
-  RUN_CONTEXT = { dryRun, forcedFormat, simulateMiraUnavailable, sessionFormats: new Set() };
+  RUN_CONTEXT = { dryRun, forcedFormat, simulateMiraUnavailable, contentObjective: options.contentObjective || null, missionContext: options.missionContext || null, evidence: options.evidence || [], sessionFormats: new Set() };
 
   console.log(`\nPaige agent running${dryRun ? ' in DRY-RUN mode' : ''}...\n`);
   try {
     CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
     if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
-    if (CLIENT_ID === ANCHOR_CLIENT_ID && !dryRun) {
+    if (!dryRun && !CLIENT_CONFIG.enabled_agents?.includes('paige')) {
+      return { success: false, skipped: true, reason: 'paige_not_enabled', client_id: CLIENT_ID, drafts: [], outputs: [] };
+    }
+    if (CLIENT_ID === ANCHOR_CLIENT_ID && !dryRun && !skipCanonicalPersist) {
       console.log('[Paige] Anchor remains Scout-only; production content generation is disabled.');
       return { success: false, skipped: true, reason: 'anchor_dry_run_only', client_id: CLIENT_ID, drafts: [], outputs: [] };
     }
@@ -2792,6 +2812,9 @@ async function generateSocialContent(options = {}) {
     if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
       console.log('MSHI Facebook page is not connected yet; Paige will still queue Facebook, Google Business, and blog drafts for approval.');
     }
+    console.log(`[Paige] writer_model=${PAIGE_WRITER_MODEL}`);
+    console.log(`[Paige] evaluator_model=${PAIGE_EVALUATOR_MODEL}`);
+
     if (!dryRun && !skipCanonicalPersist) {
       console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
       console.log(`DELETE FROM pending_comments
@@ -2806,7 +2829,7 @@ AND status = 'pending';`);
     }
 
     const allClients = await getActiveClients();
-    const rejectedPulseforgePending = dryRun ? 0 : await rejectPendingPulseforgeApprovals(allClients);
+    const rejectedPulseforgePending = (dryRun || skipCanonicalPersist) ? 0 : await rejectPendingPulseforgeApprovals(allClients);
     if (rejectedPulseforgePending) {
       console.log(`[Paige] Rejected ${rejectedPulseforgePending} pending Pulseforge approval(s) before regenerating.`);
     }
@@ -2815,7 +2838,7 @@ AND status = 'pending';`);
     console.log(`Found ${clients.length} client${clients.length !== 1 ? 's' : ''}.\n`);
 
     const drafts = [];
-    const regenerateResult = dryRun
+    const regenerateResult = (dryRun || skipCanonicalPersist)
       ? { triggers: 0, regenerated: 0 }
       : await processRegenerateTriggers({ skipCanonicalPersist, drafts });
     if (regenerateResult.triggers) {
@@ -2966,6 +2989,10 @@ module.exports = {
     chooseLinkedInFormat,
     hasMiraSourceAnchor,
     LINKEDIN_FORMATS,
+    resolvePaigeWriterModel,
+    resolvePaigeEvaluatorModel,
+    PAIGE_WRITER_MODEL,
+    PAIGE_EVALUATOR_MODEL,
   },
 };
 

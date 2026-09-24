@@ -6,7 +6,6 @@
  */
 
 const pool = require('../db');
-const { normalizeClientId } = require('../utils/clientContext');
 const {
   createSocialContentApprovalService,
   isPaigeSocialPublishChannel,
@@ -29,9 +28,9 @@ function resetPaigeSocialContentApprovalForTests() {
 }
 
 function assertTenantInput(input = {}) {
-  const clientId = normalizeClientId(input.client_id ?? input.clientId ?? input.tenantId);
+  const clientId = Number(input.client_id ?? input.clientId ?? input.tenantId);
   const tenantId = String(input.tenantId ?? input.tenant_id ?? clientId ?? '').trim();
-  if (!tenantId || clientId == null) {
+  if (!tenantId || !Number.isInteger(clientId) || clientId < 1) {
     throw new Error('tenant_scope_required');
   }
   if (tenantId !== String(clientId)) {
@@ -69,7 +68,7 @@ async function resolveCanonicalSocialContentArtifact(input = {}) {
 async function routePaigeSocialContentApproval(input = {}) {
   const { tenantId, clientId } = assertTenantInput(input);
   const decision = normalizeDecision(input.decision || input.action);
-  const publishOnApprove = input.publishOnApprove !== false;
+  const publishOnApprove = input.publishOnApprove === true;
 
   const approval = await getApprovalService().recordDecision({
     tenantId,
@@ -77,6 +76,8 @@ async function routePaigeSocialContentApproval(input = {}) {
     artifactId: input.artifactId || input.artifact_id,
     pendingCommentId: input.pendingCommentId || input.pending_comment_id || input.id,
     decision,
+    expectedApprovalHash: input.expectedApprovalHash, accountId: input.accountId, approvedBy: input.approvedBy,
+    rejectionReason: input.rejectionReason,
   });
 
   let publication = null;
@@ -123,6 +124,7 @@ async function applyPaigeSocialArtifactApprovalAction(input = {}) {
 }
 
 module.exports = {
+  getApprovalService,
   resolveCanonicalSocialContentArtifact,
   routePaigeSocialContentApproval,
   applyPaigeSocialArtifactApprovalAction,

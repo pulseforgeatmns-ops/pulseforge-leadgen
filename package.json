@@ -109,7 +109,8 @@
     "test:ci:application": "node --test packages/max/workspace/tests/missionRouting.test.js",
     "start": "node server.js",
     "test:anchor-outbound": "DATABASE_URL=postgresql://localhost:1/pulseforge_test_only DATABASE_SSL=false ANCHOR_OUTBOUND_TEST_POSTGRES=true node --test test/anchorDailyOutbound*.test.js",
-    "test:anchor-mailbox-oauth": "node --test test/googleMailboxOAuth.test.js test/anchorMailboxOAuth.test.js test/anchorDailyOutboundMailboxPoll.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js test/tenantMailboxPollExecutor.test.js"
+    "test:anchor-mailbox-oauth": "node --test test/googleMailboxOAuth.test.js test/anchorMailboxOAuth.test.js test/anchorDailyOutboundMailboxPoll.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js test/tenantMailboxPollExecutor.test.js",
+    "test:paige": "node --test test/paige*.test.js test/spec256Paige*.test.js test/spec259aPublicationAdapterBoundary.test.js test/anchorCopyDoctrine.test.js test/anchorPaigeLifecycleVariants.test.js test/contentOutcome*.test.js test/contentLearning*.test.js test/maxPaigeCampaignDelegation.test.js packages/max/workspace/tests/paige*.test.js"
   },
   "repository": {
     "type": "git",

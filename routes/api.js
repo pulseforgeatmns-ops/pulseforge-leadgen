@@ -28,6 +28,8 @@ const {
 } = require('../utils/tenantAuthorization');
 const { getTenantWorkspace } = require('../services/tenantWorkspace');
 
+router.use(require('./paigeSocial').createPaigeSocialRouter());
+
 const requireOperator = [sessionAuth, requireRole('admin', 'manager')];
 const requireDashboardRead = [sessionAuth, requireRole('admin', 'manager', 'viewer', 'client')];
 let prospectSetterAssignmentSchemaPromise;
@@ -676,6 +678,8 @@ router.get('/api/approvals', requireOperator, async (req, res) => {
 router.get('/api/paige/social-content/status', requireDashboardRead, async (req, res) => {
   try {
     const clientId = getRequestClientId(req);
+    const access = assertAuthorizedClientSwitch(req.user, clientId);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
     const { inspectPaigeSocialContentStatus } = require('../services/paigeSocialContentInspection');
     const status = await inspectPaigeSocialContentStatus({
       clientId,

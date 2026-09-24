@@ -5,7 +5,6 @@
  */
 
 const pool = require('../db');
-const { normalizeClientId } = require('../utils/clientContext');
 const {
   BUILTIN_IDS,
   buildCapabilityContext,
@@ -40,9 +39,9 @@ function resetPaigeSocialContentPublicationForTests() {
 }
 
 function assertTenantInput(input = {}) {
-  const clientId = normalizeClientId(input.client_id ?? input.clientId ?? input.tenantId);
+  const clientId = Number(input.client_id ?? input.clientId ?? input.tenantId);
   const tenantId = String(input.tenantId ?? input.tenant_id ?? clientId ?? '').trim();
-  if (!tenantId || clientId == null) {
+  if (!tenantId || !Number.isInteger(clientId) || clientId < 1) {
     throw new Error('tenant_scope_required');
   }
   if (tenantId !== String(clientId)) {
@@ -71,6 +70,7 @@ async function routePaigeSocialContentPublication(input = {}) {
         clientId,
         artifactId,
         dryRun,
+        reconcilePostId: input.reconcilePostId, reconciledBy: input.reconciledBy, reconciliationReason: input.reconciliationReason,
         invocationSource: input.invocationSource || input.source || 'canonical_router',
       },
     }),
@@ -91,6 +91,8 @@ async function routePaigeSocialContentPublication(input = {}) {
     artifact: capabilityResult.outputs?.artifact || null,
     channel: capabilityResult.outputs?.channel || null,
     idempotent: capabilityResult.outputs?.idempotent === true,
+    publication: capabilityResult.outputs?.artifact?.publication || null,
+    published: capabilityResult.outputs?.published === true,
     error: capabilityResult.errors?.[0]?.message || null,
     execution: {
       capabilityId: CAPABILITY_ID,

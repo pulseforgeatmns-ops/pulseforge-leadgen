@@ -23,6 +23,8 @@ const PUBLISH_STATES = Object.freeze({
   PUBLISHING: 'PUBLISHING',
   PUBLISHED: 'PUBLISHED',
   FAILED: 'FAILED',
+  VERIFYING: 'VERIFYING',
+  UNKNOWN: 'UNKNOWN',
 });
 
 const SOURCE_TYPES = Object.freeze({
@@ -118,6 +120,8 @@ function buildSocialContentArtifact(partial = {}) {
     provenance: buildProvenance(partial.provenance || partial),
     approvalState,
     publishState,
+    approvalBinding: partial.approvalBinding || null,
+    publication: partial.publication || {},
     rejectionReason: partial.rejectionReason || partial.rejection_reason || null,
     publishError: partial.publishError || partial.publish_error || null,
     publishedUrl: partial.publishedUrl || partial.published_url || null,
