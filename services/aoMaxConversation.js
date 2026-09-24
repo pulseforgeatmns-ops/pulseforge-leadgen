@@ -22,30 +22,71 @@ const {
   listAssignedAccountSummaries,
 } = require('./aoAccountIntelligence');
 const { buildCoachingReply } = require('../utils/aoAccountPrioritization');
+const { isActiveConversationStatus } = require('../utils/aoRoutingIssueTypes');
+const { logAoAuditEvent } = require('../utils/aoAuditEvents');
+const { requestProspectBrief } = require('./aoProspectBriefService');
 
-async function createConversationSession({ aoOwnerId, clientId, initialPayload = {} }) {
+function conversationPreview(payload = {}) {
+  const messages = payload.messages || [];
+  const last = messages[messages.length - 1];
+  if (!last) return '';
+  const text = String(last.content || '').trim();
+  return text.length > 120 ? `${text.slice(0, 117)}…` : text;
+}
+
+function prospectLabel(payload = {}, session = {}) {
+  const account = payload.selected_account;
+  if (account?.business_name) return account.business_name;
+  if (session.prospect_id) return `Prospect ${session.prospect_id}`;
+  return 'General conversation';
+}
+
+async function createConversationSession({
+  aoOwnerId,
+  clientId,
+  initialPayload = {},
+  prospectId = null,
+  missionId = null,
+}) {
   const payload = {
     messages: [],
     ...initialPayload,
   };
   const { rows } = await pool.query(`
-    INSERT INTO ao_max_sessions (ao_owner_id, client_id, mode, step_index, payload)
-    VALUES ($1, $2, 'conversation', 0, $3::jsonb)
+    INSERT INTO ao_max_sessions (
+      ao_owner_id, client_id, mode, step_index, payload, status, prospect_id, mission_id
+    )
+    VALUES ($1, $2, 'conversation', 0, $3::jsonb, 'active', $4, $5)
     RETURNING *
-  `, [aoOwnerId, clientId, JSON.stringify(payload)]);
+  `, [aoOwnerId, clientId, JSON.stringify(payload), prospectId, missionId]);
   return rows[0];
 }
 
-async function getActiveConversationSession(sessionId, aoOwnerId) {
-  const { rows } = await pool.query(`
-    SELECT * FROM ao_max_sessions
+async function getConversationSession(sessionId, aoOwnerId, { clientId = null } = {}) {
+  const params = [sessionId, aoOwnerId];
+  let where = `
     WHERE id = $1
       AND ao_owner_id = $2
       AND mode = 'conversation'
-      AND completed = false
+  `;
+  if (clientId != null) {
+    params.push(clientId);
+    where += ` AND client_id = $${params.length}`;
+  }
+
+  const { rows } = await pool.query(`
+    SELECT * FROM ao_max_sessions
+    ${where}
     LIMIT 1
-  `, [sessionId, aoOwnerId]);
+  `, params);
   return rows[0] || null;
+}
+
+async function getActiveConversationSession(sessionId, aoOwnerId, options = {}) {
+  const session = await getConversationSession(sessionId, aoOwnerId, options);
+  if (!session) return null;
+  if (!isActiveConversationStatus(session.status) || session.completed) return null;
+  return session;
 }
 
 async function persistConversationPayload(sessionId, payload) {
@@ -56,12 +97,43 @@ async function persistConversationPayload(sessionId, payload) {
   `, [sessionId, JSON.stringify(payload)]);
 }
 
-async function completeConversationSession(sessionId) {
+async function markConversationDone({ sessionId, aoOwnerId, clientId, closedBy }) {
+  const session = await getConversationSession(sessionId, aoOwnerId, { clientId });
+  if (!session) return { error: 'Conversation not found', status: 404 };
+  if (Number(session.client_id) !== Number(clientId)) {
+    return { error: 'Conversation tenant mismatch', status: 403 };
+  }
+
   await pool.query(`
     UPDATE ao_max_sessions
-    SET completed = true, updated_at = NOW()
+    SET
+      completed = true,
+      status = 'done',
+      closed_at = NOW(),
+      closed_by = $2,
+      updated_at = NOW()
     WHERE id = $1
-  `, [sessionId]);
+  `, [sessionId, String(closedBy)]);
+
+  return {
+    ok: true,
+    session_id: sessionId,
+    status: 'done',
+    previous_status: session.status,
+  };
+}
+
+async function completeConversationSession(sessionId, closedBy = null) {
+  await pool.query(`
+    UPDATE ao_max_sessions
+    SET
+      completed = true,
+      status = 'done',
+      closed_at = COALESCE(closed_at, NOW()),
+      closed_by = COALESCE(closed_by, $2),
+      updated_at = NOW()
+    WHERE id = $1
+  `, [sessionId, closedBy != null ? String(closedBy) : null]);
 }
 
 function appendMessage(payload, { role, content, intent = null, meta = null }) {
@@ -168,7 +240,7 @@ async function executeConversationIntent({ aoOwnerId, clientId, message, context
 
 async function handleConversationTurn({ sessionId, aoOwnerId, clientId, message }) {
   let session = sessionId
-    ? await getActiveConversationSession(sessionId, aoOwnerId)
+    ? await getActiveConversationSession(sessionId, aoOwnerId, { clientId })
     : null;
 
   if (!session) {
@@ -214,9 +286,9 @@ async function handleConversationTurn({ sessionId, aoOwnerId, clientId, message 
 
 async function startNewConversation({ aoOwnerId, clientId, previousSessionId = null }) {
   if (previousSessionId) {
-    const previous = await getActiveConversationSession(previousSessionId, aoOwnerId);
+    const previous = await getActiveConversationSession(previousSessionId, aoOwnerId, { clientId });
     if (previous) {
-      await completeConversationSession(previousSessionId);
+      await completeConversationSession(previousSessionId, aoOwnerId);
     }
   }
 
@@ -225,7 +297,235 @@ async function startNewConversation({ aoOwnerId, clientId, previousSessionId = n
     session_id: session.id,
     mode: 'conversation',
     completed: false,
+    status: 'active',
     reply: 'New conversation started. What do you need help with?',
+  };
+}
+
+async function reopenConversation({ sessionId, aoOwnerId, clientId, reopenedBy }) {
+  const session = await getConversationSession(sessionId, aoOwnerId, { clientId });
+  if (!session) return { error: 'Conversation not found', status: 404 };
+  if (Number(session.client_id) !== Number(clientId)) {
+    return { error: 'Conversation tenant mismatch', status: 403 };
+  }
+
+  const previousStatus = session.status;
+  await pool.query(`
+    UPDATE ao_max_sessions
+    SET
+      completed = false,
+      status = 'reopened',
+      reopened_at = NOW(),
+      reopened_by = $2,
+      updated_at = NOW()
+    WHERE id = $1
+  `, [sessionId, String(reopenedBy)]);
+
+  await logAoAuditEvent({
+    event: 'AO_CONVERSATION_REOPENED',
+    clientId,
+    aoUserId: reopenedBy,
+    prospectId: session.prospect_id || null,
+    missionId: session.mission_id || null,
+    payload: {
+      conversation_id: sessionId,
+      previous_status: previousStatus,
+      reason: 'manual_reopen',
+    },
+  });
+
+  const payload = session.payload || {};
+  return {
+    ok: true,
+    session_id: sessionId,
+    status: 'reopened',
+    previous_status: previousStatus,
+    messages: payload.messages || [],
+    prospect_label: prospectLabel(payload, session),
+    reply: 'Conversation reopened. I still have the prior context — what do you need next?',
+  };
+}
+
+async function listConversations({ aoOwnerId, clientId, status = null, limit = 50 }) {
+  const params = [aoOwnerId, clientId];
+  let where = `
+    WHERE ao_owner_id = $1
+      AND client_id = $2
+      AND mode = 'conversation'
+  `;
+  if (status) {
+    params.push(status);
+    where += ` AND status = $${params.length}`;
+  }
+  params.push(Math.min(Number(limit) || 50, 200));
+
+  const { rows } = await pool.query(`
+    SELECT id, status, prospect_id, mission_id, payload, created_at, updated_at, closed_at, reopened_at
+    FROM ao_max_sessions
+    ${where}
+    ORDER BY updated_at DESC
+    LIMIT $${params.length}
+  `, params);
+
+  return rows.map(row => ({
+    conversation_id: row.id,
+    status: row.status,
+    prospect_id: row.prospect_id,
+    mission_id: row.mission_id,
+    prospect_label: prospectLabel(row.payload || {}, row),
+    last_message_preview: conversationPreview(row.payload || {}),
+    message_count: (row.payload?.messages || []).length,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    closed_at: row.closed_at,
+    reopened_at: row.reopened_at,
+  }));
+}
+
+async function getConversationDetail({ sessionId, aoOwnerId, clientId }) {
+  const session = await getConversationSession(sessionId, aoOwnerId, { clientId });
+  if (!session) return null;
+
+  const payload = session.payload || {};
+  return {
+    conversation_id: session.id,
+    session_id: session.id,
+    status: session.status,
+    messages: payload.messages || [],
+    prospect_id: session.prospect_id,
+    mission_id: session.mission_id,
+    prospect_label: prospectLabel(payload, session),
+    selected_account: payload.selected_account || null,
+    created_at: session.created_at,
+    updated_at: session.updated_at,
+    closed_at: session.closed_at,
+    reopened_at: session.reopened_at,
+  };
+}
+
+async function getActiveOrRestorableConversation({ aoOwnerId, clientId }) {
+  const { rows } = await pool.query(`
+    SELECT *
+    FROM ao_max_sessions
+    WHERE ao_owner_id = $1
+      AND client_id = $2
+      AND mode = 'conversation'
+      AND status IN ('active', 'reopened')
+      AND completed = false
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `, [aoOwnerId, clientId]);
+
+  const session = rows[0];
+  if (!session) return null;
+
+  const payload = session.payload || {};
+  return {
+    session_id: session.id,
+    status: session.status,
+    messages: payload.messages || [],
+    prospect_id: session.prospect_id,
+    mission_id: session.mission_id,
+    prospect_label: prospectLabel(payload, session),
+    selected_account: payload.selected_account || null,
+  };
+}
+
+async function handleProspectBriefAction({
+  sessionId = null,
+  aoOwnerId,
+  clientId,
+  prospectId = null,
+  leadId = null,
+  source = 'prospect_card_brief_button',
+}) {
+  const briefResult = await requestProspectBrief({
+    clientId,
+    aoOwnerId,
+    prospectId,
+    leadId,
+    source,
+  });
+  if (briefResult.status) return briefResult;
+
+  let session = sessionId
+    ? await getActiveConversationSession(sessionId, aoOwnerId, { clientId })
+    : null;
+
+  if (!session) {
+    session = await createConversationSession({
+      aoOwnerId,
+      clientId,
+      prospectId: briefResult.prospect_id,
+      missionId: briefResult.mission_id,
+      initialPayload: {},
+    });
+  }
+
+  let payload = { ...(session.payload || {}) };
+  if (briefResult.lead_id || briefResult.business_name) {
+    payload.selected_account = {
+      business_name: briefResult.business_name || 'Assigned account',
+      lead_id: briefResult.lead_id || null,
+      prospect_id: briefResult.prospect_id || null,
+    };
+  }
+  if (briefResult.prospect_id) {
+    payload.prospect_id = briefResult.prospect_id;
+  }
+  if (briefResult.mission_id) {
+    payload.mission_id = briefResult.mission_id;
+  }
+
+  payload = appendMessage(payload, {
+    role: 'user',
+    content: 'Give me the AO brief for this prospect.',
+    intent: 'prospect_brief',
+    meta: {
+      action: 'prospect_brief',
+      source,
+      prospect_id: briefResult.prospect_id,
+      lead_id: briefResult.lead_id,
+    },
+  });
+  payload = appendMessage(payload, {
+    role: 'max',
+    content: briefResult.brief,
+    intent: 'prospect_brief',
+    meta: {
+      prospect_id: briefResult.prospect_id,
+      lead_id: briefResult.lead_id,
+    },
+  });
+
+  await pool.query(`
+    UPDATE ao_max_sessions
+    SET
+      payload = $2::jsonb,
+      prospect_id = COALESCE($3, prospect_id),
+      mission_id = COALESCE($4, mission_id),
+      updated_at = NOW()
+    WHERE id = $1
+  `, [
+    session.id,
+    JSON.stringify(payload),
+    briefResult.prospect_id || null,
+    briefResult.mission_id || null,
+  ]);
+
+  return {
+    ok: true,
+    session_id: session.id,
+    mode: 'conversation',
+    completed: false,
+    status: session.status,
+    intent: 'prospect_brief',
+    reply: briefResult.brief,
+    action: 'prospect_brief',
+    prospect_id: briefResult.prospect_id,
+    lead_id: briefResult.lead_id,
+    mission_id: briefResult.mission_id,
+    account: payload.selected_account || null,
   };
 }
 
@@ -237,7 +537,7 @@ async function appendConversationEvent({
   intent = null,
   meta = null,
 }) {
-  const session = await getActiveConversationSession(sessionId, aoOwnerId);
+  const session = await getActiveConversationSession(sessionId, aoOwnerId, {});
   if (!session) return null;
 
   let payload = { ...(session.payload || {}) };
@@ -265,9 +565,9 @@ async function reportConversation({
   note = '',
   category = 'user_report',
 }) {
-  const session = await getActiveConversationSession(sessionId, aoOwnerId);
+  const session = await getConversationSession(sessionId, aoOwnerId, { clientId });
   if (!session) {
-    return { error: 'Active conversation not found', status: 404 };
+    return { error: 'Conversation not found', status: 404 };
   }
 
   if (Number(session.client_id) !== Number(clientId)) {
@@ -357,11 +657,20 @@ async function getConversationReport(reportId, { clientId = null } = {}) {
 
 module.exports = {
   createConversationSession,
+  getConversationSession,
   getActiveConversationSession,
   handleConversationTurn,
+  handleProspectBriefAction,
   startNewConversation,
+  markConversationDone,
+  reopenConversation,
+  listConversations,
+  getActiveOrRestorableConversation,
+  getConversationDetail,
   appendConversationEvent,
   reportConversation,
   listConversationReports,
   getConversationReport,
+  conversationPreview,
+  prospectLabel,
 };
