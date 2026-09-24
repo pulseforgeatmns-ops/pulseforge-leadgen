@@ -247,6 +247,93 @@ body {
   border-color: rgba(179,38,30,0.35);
   color: var(--pf-red);
 }
+.ao-history-list {
+  padding: 0 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ao-history-item {
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: var(--pf-radius-lg);
+  padding: 12px;
+}
+.ao-history-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ao-history-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.ao-history-status {
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+.ao-history-preview {
+  font-size: 0.82rem;
+  color: var(--pf-text-dim);
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+.ao-history-meta {
+  font-size: 0.72rem;
+  color: var(--pf-text-muted);
+  margin-bottom: 8px;
+}
+.ao-history-actions {
+  display: flex;
+  gap: 8px;
+}
+.ao-history-actions button {
+  flex: 1;
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--pf-text-dim);
+  cursor: pointer;
+}
+.ao-history-actions button.primary {
+  border-color: var(--pf-gold);
+  color: var(--pf-gold-strong);
+}
+.ao-done-banner {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--pf-border);
+  background: rgba(109, 91, 208, 0.08);
+  font-size: 0.85rem;
+  color: var(--pf-text-dim);
+}
+.ao-done-banner-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.ao-done-banner-actions button {
+  flex: 1;
+  min-height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--pf-border);
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
 .ao-send {
   width: var(--pf-touch-target);
   height: var(--pf-touch-target);
@@ -783,6 +870,7 @@ body {
   <div class="ao-tabs">
     <button class="ao-tab active" data-tab="max">Max</button>
     <button class="ao-tab" data-tab="queue">Queue</button>
+    <button class="ao-tab" data-tab="history">History</button>
     <button class="ao-tab" data-tab="script">Script</button>
   </div>
 
@@ -796,7 +884,16 @@ body {
     </div>
     <div class="ao-conv-actions" id="convActions">
       <button type="button" id="newConversationBtn">New conversation</button>
+      <button type="button" id="markConversationDoneBtn">Mark done</button>
+      <button type="button" id="flagRoutingBtn">Flag routing issue</button>
       <button type="button" class="danger" id="flagConversationBtn">Flag conversation</button>
+    </div>
+    <div class="ao-done-banner" id="doneBanner" style="display:none">
+      <div id="doneBannerText">Conversation marked done.</div>
+      <div class="ao-done-banner-actions">
+        <button type="button" id="reopenConversationBtn">Reopen</button>
+        <button type="button" id="viewHistoryBtn">View history</button>
+      </div>
     </div>
     <div class="ao-chat" id="chat" role="log" aria-live="polite"></div>
     <form class="ao-compose" id="composeForm">
@@ -825,6 +922,12 @@ body {
     </div>
     <div class="ao-queue-list" id="queueList"></div>
     <div class="ao-queue-list" id="routeList" style="display:none"></div>
+  </section>
+
+  <section class="ao-panel" id="panel-history">
+    <div class="ao-history-list" id="historyList">
+      <div class="ao-empty">Loading conversation history…</div>
+    </div>
   </section>
 
   <section class="ao-panel" id="panel-script">
@@ -963,6 +1066,33 @@ body {
   </div>
 </div>
 
+<div class="ao-modal-overlay" id="flagRoutingModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="flagRoutingTitle">
+    <h3 id="flagRoutingTitle">Flag routing issue</h3>
+    <p style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      Tell us what Max routed wrong. Issue type is required.
+    </p>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Issue type</div>
+      <select class="ao-addr-input" id="flagRoutingIssueType" style="margin-bottom:10px">
+        <option value="wrong_route">Wrong route</option>
+        <option value="wrong_prospect">Wrong prospect</option>
+        <option value="wrong_mission">Wrong mission</option>
+        <option value="lost_context">Lost context</option>
+        <option value="should_have_opened_brief">Should have opened brief</option>
+        <option value="should_have_opened_conversation">Should have opened conversation</option>
+        <option value="treated_as_done_incorrectly">Treated as done incorrectly</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <textarea class="ao-addr-input" id="flagRoutingNote" rows="3" placeholder="What went wrong?" style="resize:vertical;min-height:72px"></textarea>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="flagRoutingCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="flagRoutingSubmit">Submit flag</button>
+    </div>
+  </div>
+</div>
+
 <div class="ao-modal-overlay" id="flagReportModal">
   <div class="ao-modal" role="dialog" aria-labelledby="flagReportTitle">
     <h3 id="flagReportTitle">Flag conversation</h3>
@@ -989,6 +1119,7 @@ body {
 const chat = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
 let conversationSessionId = null;
+let lastDoneConversationId = null;
 let wizardSessionId = null;
 let activeMode = null;
 let queueFilter = 'today';
@@ -1054,6 +1185,185 @@ function switchTab(tabName) {
   if (tabName === 'queue') {
     loadQueue();
     loadActiveRoute();
+  }
+  if (tabName === 'history') {
+    loadConversationHistory();
+  }
+}
+
+function hideDoneBanner() {
+  document.getElementById('doneBanner').style.display = 'none';
+}
+
+function showDoneBanner(conversationId) {
+  lastDoneConversationId = conversationId;
+  document.getElementById('doneBannerText').textContent = 'Conversation marked done.';
+  document.getElementById('doneBanner').style.display = 'block';
+}
+
+function renderChatMessages(messages = []) {
+  chat.innerHTML = '';
+  messages.forEach(msg => {
+    if (!msg?.content) return;
+    addMsg(msg.content, msg.role === 'user' ? 'user' : msg.role === 'max' ? 'max' : 'system');
+  });
+}
+
+async function hydrateActiveConversation() {
+  try {
+    const result = await api('/api/max/conversations/active');
+    const conversation = result.conversation;
+    if (!conversation?.session_id) return;
+
+    conversationSessionId = conversation.session_id;
+    wizardSessionId = null;
+    activeMode = 'conversation';
+    renderChatMessages(conversation.messages || []);
+    hideDoneBanner();
+    if (!conversation.messages?.length) {
+      addMsg('Ask me about your accounts, log a visit, or pick a mode above. I remember every visit.', 'max');
+    }
+    messageInput.placeholder = 'Ask Max anything…';
+  } catch (err) {
+    console.error('[ao] active conversation hydrate failed:', err);
+  }
+}
+
+async function requestProspectBrief({ leadId = null, prospectId = null, businessName = '' }) {
+  switchTab('max');
+  hideDoneBanner();
+  addMsg(businessName ? `Brief requested for ${businessName}…` : 'Brief requested…', 'system');
+  try {
+    const result = await api('/api/max/prospect-brief', {
+      method: 'POST',
+      body: JSON.stringify({
+        lead_id: leadId || undefined,
+        prospect_id: prospectId || undefined,
+        session_id: conversationSessionId,
+        source: 'prospect_card_brief_button',
+      }),
+    });
+    chat.lastChild.remove();
+    conversationSessionId = result.session_id || conversationSessionId;
+    wizardSessionId = null;
+    activeMode = 'conversation';
+    addMsg('Give me the AO brief for this prospect.', 'user');
+    addMsg(result.reply, 'max');
+    messageInput.placeholder = 'Ask Max a follow-up…';
+  } catch (err) {
+    chat.lastChild.remove();
+    addMsg(err.message, 'system');
+  }
+}
+
+function historyItemCard(item) {
+  const updated = item.updated_at ? new Date(item.updated_at).toLocaleString() : '';
+  return `
+    <article class="ao-history-item" data-conversation-id="${item.conversation_id}">
+      <div class="ao-history-head">
+        <div class="ao-history-title">${escapeHtml(item.prospect_label || 'Conversation')}</div>
+        <div class="ao-history-status">${escapeHtml(item.status || 'unknown')}</div>
+      </div>
+      <div class="ao-history-preview">${escapeHtml(item.last_message_preview || 'No messages yet')}</div>
+      <div class="ao-history-meta">${updated}${item.message_count ? ` · ${item.message_count} messages` : ''}</div>
+      <div class="ao-history-actions">
+        ${item.status === 'done' || item.status === 'closed' || item.status === 'archived'
+          ? `<button type="button" class="primary" data-reopen-conversation="${item.conversation_id}">Reopen</button>`
+          : `<button type="button" data-open-conversation="${item.conversation_id}">Open</button>`}
+      </div>
+    </article>
+  `;
+}
+
+async function loadConversationHistory() {
+  const list = document.getElementById('historyList');
+  list.innerHTML = '<div class="ao-empty">Loading conversation history…</div>';
+  try {
+    const result = await api('/api/max/conversations?limit=50');
+    const conversations = result.conversations || [];
+    if (!conversations.length) {
+      list.innerHTML = '<div class="ao-empty">No conversations yet.</div>';
+      return;
+    }
+    list.innerHTML = conversations.map(historyItemCard).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="ao-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function openConversation(conversationId, { reopen = false } = {}) {
+  try {
+    const result = reopen
+      ? await api('/api/max/conversations/' + conversationId + '/reopen', { method: 'POST' })
+      : await api('/api/max/conversations/' + conversationId);
+    const conversation = reopen ? result : result.conversation;
+    conversationSessionId = conversation.session_id || conversation.conversation_id;
+    wizardSessionId = null;
+    activeMode = 'conversation';
+    switchTab('max');
+    renderChatMessages(conversation.messages || []);
+    if (reopen && conversation.reply) addMsg(conversation.reply, 'max');
+    hideDoneBanner();
+    messageInput.placeholder = 'Ask Max a follow-up…';
+    loadConversationHistory();
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+async function reopenConversation(conversationId) {
+  return openConversation(conversationId, { reopen: true });
+}
+
+async function markConversationDone() {
+  if (!conversationSessionId) {
+    addMsg('Start a conversation with Max before marking it done.', 'system');
+    return;
+  }
+  try {
+    const doneId = conversationSessionId;
+    await api('/api/max/conversations/' + doneId + '/done', { method: 'POST' });
+    showDoneBanner(doneId);
+    conversationSessionId = null;
+    addMsg('Conversation marked done. You can reopen it from History anytime.', 'system');
+    loadConversationHistory();
+  } catch (err) {
+    addMsg(err.message, 'system');
+  }
+}
+
+function showFlagRoutingModal() {
+  if (!conversationSessionId) {
+    addMsg('Start a conversation with Max before flagging a routing issue.', 'system');
+    return;
+  }
+  document.getElementById('flagRoutingIssueType').value = 'wrong_route';
+  document.getElementById('flagRoutingNote').value = '';
+  document.getElementById('flagRoutingModal').classList.add('open');
+}
+
+function hideFlagRoutingModal() {
+  document.getElementById('flagRoutingModal').classList.remove('open');
+}
+
+async function submitFlagRouting() {
+  if (!conversationSessionId) return;
+  const issueType = document.getElementById('flagRoutingIssueType').value;
+  const notes = document.getElementById('flagRoutingNote').value.trim();
+  try {
+    const result = await api('/api/max/flag-routing', {
+      method: 'POST',
+      body: JSON.stringify({
+        session_id: conversationSessionId,
+        conversation_id: conversationSessionId,
+        issue_type: issueType,
+        notes,
+      }),
+    });
+    hideFlagRoutingModal();
+    addMsg(`Routing issue flagged (${result.flag.id}).`, 'system');
+  } catch (err) {
+    addMsg(err.message, 'system');
   }
 }
 
@@ -1391,8 +1701,10 @@ async function startNewConversation() {
     wizardSessionId = null;
     activeMode = 'conversation';
     chat.innerHTML = '';
+    hideDoneBanner();
     addMsg(result.reply, 'max');
     messageInput.placeholder = 'Ask Max anything…';
+    loadConversationHistory();
   } catch (err) {
     addMsg(err.message, 'system');
   }
@@ -1468,6 +1780,7 @@ function taskCard(task) {
       <div class="ao-task-meta">${escapeHtml(task.contact_name || 'No contact')} · ${escapeHtml(task.next_action || 'Follow up')}</div>
       ${task.suggested_message ? `<div class="ao-task-msg">"${escapeHtml(task.suggested_message)}"</div>` : ''}
       <div class="ao-task-actions">
+        <button data-brief-lead="${task.lead_id || ''}" data-brief-name="${escapeHtml(task.business_name || '')}">Brief</button>
         ${callNowBtn}
         ${logBtn}
         ${callInsteadBtn}
@@ -1503,6 +1816,7 @@ function stopCard(stop, isCurrent) {
       <div class="ao-stop-brief">${escapeHtml(stop.brief)}</div>
       <div class="ao-stop-opening">"${escapeHtml(stop.opening)}"</div>
       <div class="ao-stop-actions">
+        <button data-brief-lead="${stop.lead_id || ''}" data-brief-name="${escapeHtml(stop.business_name || '')}">Brief</button>
         ${navBtn}
         <button data-route-log="${stop.task_id}" data-direct-mail="${isDirectMail ? '1' : '0'}" class="primary">Log with Max</button>
         <button data-call-instead="${stop.task_id}">Call Instead</button>
@@ -1685,6 +1999,28 @@ document.getElementById('scriptLogVisit').addEventListener('click', () => {
 });
 
 document.getElementById('newConversationBtn').addEventListener('click', startNewConversation);
+document.getElementById('markConversationDoneBtn').addEventListener('click', markConversationDone);
+document.getElementById('flagRoutingBtn').addEventListener('click', showFlagRoutingModal);
+document.getElementById('flagRoutingCancel').addEventListener('click', hideFlagRoutingModal);
+document.getElementById('flagRoutingSubmit').addEventListener('click', submitFlagRouting);
+document.getElementById('flagRoutingModal').addEventListener('click', e => {
+  if (e.target.id === 'flagRoutingModal') hideFlagRoutingModal();
+});
+document.getElementById('reopenConversationBtn').addEventListener('click', () => {
+  if (lastDoneConversationId) reopenConversation(lastDoneConversationId);
+});
+document.getElementById('viewHistoryBtn').addEventListener('click', () => switchTab('history'));
+document.getElementById('historyList').addEventListener('click', async e => {
+  const reopenId = e.target.dataset.reopenConversation;
+  const openId = e.target.dataset.openConversation;
+  if (reopenId) {
+    await reopenConversation(reopenId);
+    return;
+  }
+  if (openId) {
+    await openConversation(openId, { reopen: false });
+  }
+});
 document.getElementById('flagConversationBtn').addEventListener('click', showFlagReportModal);
 document.getElementById('flagReportCancel').addEventListener('click', hideFlagReportModal);
 document.getElementById('flagReportSubmit').addEventListener('click', submitFlagReport);
@@ -1747,6 +2083,7 @@ document.getElementById('endRouteBtn').addEventListener('click', async () => {
 
 document.getElementById('routeList').addEventListener('click', async e => {
   const navigateBtn = e.target.closest('[data-navigate]');
+  const briefLeadId = e.target.dataset.briefLead;
   const logTaskId = e.target.dataset.routeLog;
   const callInsteadTask = e.target.dataset.callInstead;
   const doneStop = e.target.dataset.routeDone;
@@ -1756,6 +2093,13 @@ document.getElementById('routeList').addEventListener('click', async e => {
   const saveAddr = e.target.dataset.addrSave;
 
   try {
+    if (briefLeadId) {
+      await requestProspectBrief({
+        leadId: briefLeadId,
+        businessName: e.target.dataset.briefName || '',
+      });
+      return;
+    }
     if (navigateBtn) {
       openNavigate(navigateBtn.dataset.navigate);
       return;
@@ -1803,6 +2147,7 @@ document.getElementById('queueFilters').addEventListener('click', e => {
 });
 
 document.getElementById('queueList').addEventListener('click', async e => {
+  const briefLeadId = e.target.dataset.briefLead;
   const logFollowUpId = e.target.dataset.logFollowUp;
   const logPhoneId = e.target.dataset.logPhone;
   const callInsteadId = e.target.dataset.callInstead;
@@ -1810,6 +2155,13 @@ document.getElementById('queueList').addEventListener('click', async e => {
   const rescheduleId = e.target.dataset.reschedule;
   const escalateId = e.target.dataset.escalate;
   try {
+    if (briefLeadId) {
+      await requestProspectBrief({
+        leadId: briefLeadId,
+        businessName: e.target.dataset.briefName || '',
+      });
+      return;
+    }
     if (logFollowUpId) {
       await startDirectMailFollowUp(logFollowUpId);
       return;
@@ -1862,12 +2214,14 @@ async function bootDashboard() {
     console.error('[ao] metrics load failed:', err);
     addMsg(`Metrics error: ${err.message}`, 'system');
   }
+  await hydrateActiveConversation();
+  if (!conversationSessionId) {
+    addMsg('Ask me about your accounts, log a visit, or pick a mode above. I remember every visit.', 'max');
+  }
+  messageInput.placeholder = 'Ask Max anything…';
   loadActiveRoute();
 }
 bootDashboard();
-
-addMsg('Ask me about your accounts, log a visit, or pick a mode above. I remember every visit.', 'max');
-messageInput.placeholder = 'Ask Max anything…';
 </script>
 </body>
 </html>
