@@ -130,6 +130,8 @@ function scoutInput(program, source, plan) {
   return {
     authorizedTenantId: '10',
     tenantId: '10',
+    workflow: 'outbound_inventory_replenishment',
+    inventoryDeficit: plan.deficit,
     question: `Max needs Scout to replenish verified outbound inventory for ${segment} in ${region}.`,
     objective: `Find enough net-new, in-scope prospects to close an outbound inventory deficit of ${plan.deficit} while preserving ownership, prior-contact, DNC and suppression boundaries.`,
     reason: `Emmett safe daily capacity is ${plan.safeDailyCapacity}; Max requires a ${plan.targetDays}-day buffer of ${plan.targetInventory}, but only ${plan.cleanInventory} clean prospects are currently available.`,
@@ -187,6 +189,29 @@ async function persistDiscoveredCompanies(pool, store, { companies = [] }) {
   return { inserted };
 }
 
+function mapReuseCompanyRows(rows) {
+  return rows.map(row => ({
+    id: String(row.id),
+    tenantId: '10',
+    name: row.name,
+    website: row.website || (row.domain ? `https://${row.domain}` : null),
+    industry: row.vertical || 'short_term_rental',
+    location: row.location || null,
+    icpScore: row.icp_score,
+    updatedAt: row.updated_at,
+  }));
+}
+
+async function loadReuseCompanies(pool) {
+  const { rows } = await pool.query(`
+    SELECT c.id,c.name,c.domain,c.website,c.location,p.vertical,p.icp_score,p.updated_at
+    FROM companies c
+    LEFT JOIN prospects p ON p.company_id=c.id AND p.client_id=c.client_id
+    WHERE c.client_id=10
+  `);
+  return mapReuseCompanyRows(rows);
+}
+
 async function runEnrichmentBatches(enrichment, pool, requested) {
   const summaries = [];
   let promoted = 0;
@@ -220,23 +245,7 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
     discovery = await require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(
       scoutInput(program, source, plan),
       {
-        loadCompanies: async () => {
-          const { rows } = await pool.query(`
-            SELECT c.id,c.name,c.domain,c.website,p.vertical,p.icp_score,p.updated_at
-            FROM companies c
-            LEFT JOIN prospects p ON p.company_id=c.id AND p.client_id=c.client_id
-            WHERE c.client_id=10
-          `);
-          return rows.map(row => ({
-            id: String(row.id),
-            tenantId: '10',
-            name: row.name,
-            website: row.website || (row.domain ? `https://${row.domain}` : null),
-            industry: row.vertical || 'short_term_rental',
-            icpScore: row.icp_score,
-            updatedAt: row.updated_at,
-          }));
-        },
+        loadCompanies: async () => loadReuseCompanies(pool),
         persistCompanies: async input => {
           persisted = await persistDiscoveredCompanies(pool, store, input);
           return persisted;
@@ -355,6 +364,8 @@ module.exports = {
   runMaxOutboundControlLoop,
   _test: {
     scoutInput,
+    mapReuseCompanyRows,
+    loadReuseCompanies,
     persistDiscoveredCompanies,
     runEnrichmentBatches,
   },
