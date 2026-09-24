@@ -108,6 +108,13 @@ function objectivesSimilar(a, b) {
   return overlap / denom >= 0.5;
 }
 
+function isOutboundInventoryReplenishment(input = {}) {
+  return (
+    input.workflow === 'outbound_inventory_replenishment' &&
+    Number(input.inventoryDeficit) > 0
+  );
+}
+
 /**
  * @param {object} input
  * @returns {{ needed: boolean, reason: string, reuse: object|null }}
@@ -115,8 +122,12 @@ function objectivesSimilar(a, b) {
 function assessScoutNeed(input = {}) {
   const question = String(input.question || '');
   const existing = input.existingIntelligence || null;
+  const replenishmentRequired = isOutboundInventoryReplenishment(input);
   const mode = classifyCognitiveMode(question, { context: input.context });
-  if (!mayCreateDelegation(mode, { question, context: input.context, force: input.force })) {
+  if (
+    !mayCreateDelegation(mode, { question, context: input.context, force: input.force }) &&
+    !replenishmentRequired
+  ) {
     if (looksLikeExplainPriority(question)) {
       return {
         needed: false,
@@ -223,7 +234,18 @@ function assessScoutNeed(input = {}) {
     };
   }
 
-  if (!looksLikeAcquisitionQuestion(question, input.context) && !input.force) {
+  if (replenishmentRequired && existing && existing.sufficient !== true) {
+    return {
+      needed: true,
+      reason:
+        asText(input.reason) ||
+        'Reusable inventory is insufficient for the outbound buffer deficit — fresh discovery is required.',
+      reuse: null,
+      kind: 'investigate',
+    };
+  }
+
+  if (!looksLikeAcquisitionQuestion(question, input.context) && !input.force && !replenishmentRequired) {
     return {
       needed: false,
       reason: 'Question is not an acquisition intelligence need.',
@@ -253,5 +275,6 @@ module.exports = {
   looksLikeInvestigationInspection,
   looksLikeFindMoreLike,
   objectivesSimilar,
+  isOutboundInventoryReplenishment,
   assessScoutNeed,
 };
