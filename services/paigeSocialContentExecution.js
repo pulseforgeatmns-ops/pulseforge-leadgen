@@ -6,7 +6,6 @@
  */
 
 const pool = require('../db');
-const { normalizeClientId } = require('../utils/clientContext');
 const {
   BUILTIN_IDS,
   buildCapabilityContext,
@@ -41,9 +40,9 @@ function resetPaigeSocialContentExecutionForTests() {
 }
 
 function assertTenantInput(input = {}) {
-  const clientId = normalizeClientId(input.client_id ?? input.clientId ?? input.tenantId);
+  const clientId = Number(input.client_id ?? input.clientId ?? input.tenantId);
   const tenantId = String(input.tenantId ?? input.tenant_id ?? clientId ?? '').trim();
-  if (!tenantId || clientId == null) {
+  if (!tenantId || !Number.isInteger(clientId) || clientId < 1) {
     throw new Error('tenant_scope_required');
   }
   if (tenantId !== String(clientId)) {
@@ -75,6 +74,7 @@ async function routePaigeSocialContentExecution(input = {}) {
         contentObjective: input.contentObjective || input.objective || null,
         workspaceContext: input.workspaceContext || input.workspace_context || null,
         missionContext: input.missionContext || input.mission_context || null,
+        campaignId: input.campaignId || input.campaign_id || null,
         missionId: input.missionId || input.mission_id || null,
         evidence: input.evidence || [],
         cadenceContext: input.cadenceContext || input.cadence_context || null,

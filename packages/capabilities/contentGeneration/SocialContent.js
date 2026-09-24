@@ -44,8 +44,10 @@ function assertTenantScope(context) {
 function loadPaigeAgent(clientId) {
   const paigePath = require.resolve('../../../paigeAgent');
   delete require.cache[paigePath];
+  const previous = process.env.ACTIVE_CLIENT_ID;
   process.env.ACTIVE_CLIENT_ID = String(clientId);
-  return require('../../../paigeAgent');
+  try { return require('../../../paigeAgent'); }
+  finally { if (previous === undefined) delete process.env.ACTIVE_CLIENT_ID; else process.env.ACTIVE_CLIENT_ID = previous; }
 }
 
 function buildDraftRows(generationResult, context, inputs) {
@@ -97,6 +99,7 @@ function buildDraftRows(generationResult, context, inputs) {
       body: row.content,
       meta: {
         ...(row.meta || {}),
+        campaignId: inputs.campaignId || null,
         quality: row.quality || null,
         company: row.company || null,
       },
@@ -118,10 +121,13 @@ function createSocialContentCapability(deps = {}) {
   const runGeneration =
     deps.runGeneration ||
     ((options) => loadPaigeAgent(options.client_id).generateSocialContent(options));
-  const mirrorPendingComment =
-    deps.mirrorPendingComment ||
-    ((draft, clientId) =>
-      loadPaigeAgent(clientId).mirrorSocialContentToPendingComments(draft));
+  const mirrorPendingComment = deps.mirrorPendingComment || (async (draft, clientId, tx) => {
+    const result = await (tx || deps.pool).query(`INSERT INTO pending_comments
+      (author_name, author_title, post_content, comment, channel, status, client_id)
+      VALUES ($1,$2,$3,$4,$5,'pending',$6) RETURNING id`,
+    [draft.companyName || 'Paige', draft.meta?.company?.industry || 'Client content', draft.label, draft.body, draft.platform, clientId]);
+    return result.rows[0].id;
+  });
 
   return {
     id: BUILTIN_IDS.SOCIAL_CONTENT,
@@ -160,6 +166,14 @@ function createSocialContentCapability(deps = {}) {
         message: 'Running Paige social content generation',
       });
 
+      let learnings = [];
+      if (deps.pool || deps.getLearnings) {
+        try {
+          const getLearnings = deps.getLearnings || require('../../../services/contentLearning').getRelevantContentLearnings;
+          learnings = await getLearnings({ clientId, objective: inputs.contentObjective || context.objective,
+            channel: { linkedin_page: 'linkedin', linkedin_personal: 'linkedin', facebook_page: 'facebook', google_business: 'gbp' }[inputs.platform || inputs.channel], limit: 5 });
+        } catch (_) { /* Missing learning history never invents evidence or blocks a draft. */ }
+      }
       const generationResult = await runGeneration({
         client_id: clientId,
         dryRun,
@@ -169,7 +183,7 @@ function createSocialContentCapability(deps = {}) {
         simulateMiraUnavailable: inputs.simulateMiraUnavailable,
         contentObjective: inputs.contentObjective || context.objective || null,
         workspaceContext: inputs.workspaceContext || null,
-        missionContext: inputs.missionContext || null,
+        missionContext: { ...(inputs.missionContext || {}), advisoryLearnings: learnings.map(l => ({ id: l.id, statement: l.statement, confidence: l.confidence, status: l.status })) },
         evidence: inputs.evidence || [],
         cadenceContext: inputs.cadenceContext || null,
         invocationSource: inputs.invocationSource || inputs.source || 'capability',
@@ -200,6 +214,9 @@ function createSocialContentCapability(deps = {}) {
       }
 
       const draftRows = buildDraftRows(generationResult, context, inputs);
+      for (const draft of draftRows) {
+        if (draft.platform !== 'blog') require('../contentPublication/approvalBinding').assertSocialCopy(draft);
+      }
       if (!draftRows.length) {
         return buildCapabilityResult({
           status: generationResult?.success ? CAPABILITY_RESULT_STATUS.COMPLETED : CAPABILITY_RESULT_STATUS.FAILED,
@@ -245,13 +262,14 @@ function createSocialContentCapability(deps = {}) {
           committed = await store.insertBatch(draftRows, { client });
           for (let i = 0; i < committed.length; i++) {
             const draft = draftRows[i];
-            const pendingCommentId = await mirrorPendingComment(draft, clientId);
+            const pendingCommentId = await mirrorPendingComment(draft, clientId, client);
             if (pendingCommentId) {
               committed[i] = await store.attachPendingCommentId(
                 committed[i].id,
                 tenantId,
                 clientId,
-                pendingCommentId
+                pendingCommentId,
+                { client }
               );
             }
           }

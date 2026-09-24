@@ -82,7 +82,7 @@ require.cache[anthropicPath] = {
   exports: FakeAnthropic,
 };
 
-const { run } = require('../paigeAgent');
+const { run, generateSocialContent } = require('../paigeAgent');
 
 test('Paige dry-run generates Anchor content without any database write', async () => {
   const result = await run({ client_id: 10, dryRun: true, channel: 'linkedin_page', format: 'dialogue' });
@@ -97,9 +97,9 @@ test('Paige dry-run generates Anchor content without any database write', async 
 });
 
 test('Anchor production generation remains blocked while enabled_agents is Scout-only', async () => {
-  const result = await run({ client_id: 10, dryRun: false, channel: 'linkedin_page' });
+  const result = await generateSocialContent({ client_id: 10, dryRun: false, channel: 'linkedin_page' });
   assert.equal(result.skipped, true);
-  assert.equal(result.reason, 'anchor_dry_run_only');
+  assert.equal(result.reason, 'paige_not_enabled');
   assert.deepEqual(writes, []);
 });
 

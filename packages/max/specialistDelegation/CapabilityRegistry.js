@@ -10,6 +10,10 @@ const { AUTHORITY_LEVELS, asText, clone } = require('./Types');
 
 const DEFAULT_CAPABILITIES = Object.freeze([
   {
+    specialist: 'paige', capability: 'social_content_publish', authoritySupported: Object.freeze(['execute_after_approval']),
+    callable: true, adapter: 'paige_social_publication', description: 'Publish or verify one canonical artifact with an exact human approval binding.',
+  },
+  {
     specialist: 'test_intelligence',
     capability: 'acquisition_assessment',
     authoritySupported: Object.freeze(['observe']),
