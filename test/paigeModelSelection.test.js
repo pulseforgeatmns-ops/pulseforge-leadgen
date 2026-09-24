@@ -1,9 +1,10 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { test, describe, beforeEach, afterEach } = require('node:test');
+const { test, describe, afterEach } = require('node:test');
 
 const PAIGE_AGENT_PATH = require.resolve('../paigeAgent');
+const PAIGE_EXEC_PATH = require.resolve('../services/paigeSocialContentExecution');
 const DB_PATH = require.resolve('../db');
 const ANTHROPIC_PATH = require.resolve('@anthropic-ai/sdk');
 
@@ -18,6 +19,7 @@ function loadPaigeAgent({ env = {}, anthropicFactory } = {}) {
   }
 
   delete require.cache[PAIGE_AGENT_PATH];
+  delete require.cache[PAIGE_EXEC_PATH];
   delete require.cache[DB_PATH];
   delete require.cache[ANTHROPIC_PATH];
 
@@ -110,8 +112,14 @@ function restoreEnv(savedEnv) {
     else process.env[key] = value;
   }
   delete require.cache[PAIGE_AGENT_PATH];
+  delete require.cache[PAIGE_EXEC_PATH];
   delete require.cache[DB_PATH];
   delete require.cache[ANTHROPIC_PATH];
+  try {
+    require('../services/paigeSocialContentExecution').resetPaigeSocialContentExecutionForTests();
+  } catch (_) {
+    // module may not be loaded yet
+  }
 }
 
 describe('Paige writer/evaluator model selection', () => {
@@ -122,28 +130,32 @@ describe('Paige writer/evaluator model selection', () => {
   });
 
   test('resolvePaigeWriterModel defaults to claude-opus-5-5', () => {
-    const { paigeAgent } = loadPaigeAgent({ env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null } });
-    savedEnv = { ACTIVE_CLIENT_ID: process.env.ACTIVE_CLIENT_ID, PAIGE_WRITER_MODEL: process.env.PAIGE_WRITER_MODEL, PAIGE_EVALUATOR_MODEL: process.env.PAIGE_EVALUATOR_MODEL };
+    const { paigeAgent, savedEnv: originalEnv } = loadPaigeAgent({
+      env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null },
+    });
+    savedEnv = originalEnv;
     assert.equal(paigeAgent._test.resolvePaigeWriterModel({}), 'claude-opus-5-5');
     assert.equal(paigeAgent._test.PAIGE_WRITER_MODEL, 'claude-opus-5-5');
   });
 
   test('resolvePaigeEvaluatorModel defaults to claude-sonnet-4-6', () => {
-    const { paigeAgent } = loadPaigeAgent({ env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null } });
-    savedEnv = { ACTIVE_CLIENT_ID: process.env.ACTIVE_CLIENT_ID, PAIGE_WRITER_MODEL: process.env.PAIGE_WRITER_MODEL, PAIGE_EVALUATOR_MODEL: process.env.PAIGE_EVALUATOR_MODEL };
+    const { paigeAgent, savedEnv: originalEnv } = loadPaigeAgent({
+      env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null },
+    });
+    savedEnv = originalEnv;
     assert.equal(paigeAgent._test.resolvePaigeEvaluatorModel({}), 'claude-sonnet-4-6');
     assert.equal(paigeAgent._test.PAIGE_EVALUATOR_MODEL, 'claude-sonnet-4-6');
   });
 
   test('PAIGE_WRITER_MODEL overrides writer only', () => {
-    const { paigeAgent, modelsUsed } = loadPaigeAgent({
+    const { paigeAgent, modelsUsed, savedEnv: originalEnv } = loadPaigeAgent({
       env: {
         ACTIVE_CLIENT_ID: '10',
         PAIGE_WRITER_MODEL: 'claude-custom-writer',
         PAIGE_EVALUATOR_MODEL: null,
       },
     });
-    savedEnv = { ACTIVE_CLIENT_ID: process.env.ACTIVE_CLIENT_ID, PAIGE_WRITER_MODEL: process.env.PAIGE_WRITER_MODEL, PAIGE_EVALUATOR_MODEL: process.env.PAIGE_EVALUATOR_MODEL };
+    savedEnv = originalEnv;
     assert.equal(paigeAgent._test.PAIGE_WRITER_MODEL, 'claude-custom-writer');
     assert.equal(paigeAgent._test.PAIGE_EVALUATOR_MODEL, 'claude-sonnet-4-6');
     return paigeAgent.run({ client_id: 10, dryRun: true, channel: 'linkedin_page', format: 'dialogue' }).then(result => {
@@ -154,14 +166,14 @@ describe('Paige writer/evaluator model selection', () => {
   });
 
   test('PAIGE_EVALUATOR_MODEL overrides evaluator only', () => {
-    const { paigeAgent, modelsUsed } = loadPaigeAgent({
+    const { paigeAgent, modelsUsed, savedEnv: originalEnv } = loadPaigeAgent({
       env: {
         ACTIVE_CLIENT_ID: '10',
         PAIGE_WRITER_MODEL: null,
         PAIGE_EVALUATOR_MODEL: 'claude-custom-evaluator',
       },
     });
-    savedEnv = { ACTIVE_CLIENT_ID: process.env.ACTIVE_CLIENT_ID, PAIGE_WRITER_MODEL: process.env.PAIGE_WRITER_MODEL, PAIGE_EVALUATOR_MODEL: process.env.PAIGE_EVALUATOR_MODEL };
+    savedEnv = originalEnv;
     assert.equal(paigeAgent._test.PAIGE_WRITER_MODEL, 'claude-opus-5-5');
     assert.equal(paigeAgent._test.PAIGE_EVALUATOR_MODEL, 'claude-custom-evaluator');
     return paigeAgent.run({ client_id: 10, dryRun: true, channel: 'linkedin_page', format: 'dialogue' }).then(result => {
@@ -172,8 +184,10 @@ describe('Paige writer/evaluator model selection', () => {
   });
 
   test('logs writer and evaluator models once per generation invocation', async () => {
-    const { paigeAgent } = loadPaigeAgent({ env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null } });
-    savedEnv = { ACTIVE_CLIENT_ID: process.env.ACTIVE_CLIENT_ID, PAIGE_WRITER_MODEL: process.env.PAIGE_WRITER_MODEL, PAIGE_EVALUATOR_MODEL: process.env.PAIGE_EVALUATOR_MODEL };
+    const { paigeAgent, savedEnv: originalEnv } = loadPaigeAgent({
+      env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null },
+    });
+    savedEnv = originalEnv;
     const logs = [];
     const originalLog = console.log;
     console.log = (...args) => {
@@ -187,5 +201,39 @@ describe('Paige writer/evaluator model selection', () => {
     }
     assert.equal(logs.filter(line => line === '[Paige] writer_model=claude-opus-5-5').length, 1);
     assert.equal(logs.filter(line => line === '[Paige] evaluator_model=claude-sonnet-4-6').length, 1);
+  });
+
+  test('SPEC-256 canonical route uses writer/evaluator models without publishing', async () => {
+    const { paigeAgent, modelsUsed, savedEnv: originalEnv } = loadPaigeAgent({
+      env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null },
+    });
+    savedEnv = originalEnv;
+
+    const { routePaigeSocialContentExecution, resetPaigeSocialContentExecutionForTests } = require('../services/paigeSocialContentExecution');
+    resetPaigeSocialContentExecutionForTests();
+
+    const result = await routePaigeSocialContentExecution({
+      client_id: 10,
+      tenantId: '10',
+      dryRun: true,
+      channel: 'linkedin_page',
+      format: 'dialogue',
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.spec, 'SPEC-256');
+    assert.equal(result.client_id, 10);
+    assert.equal(result.tenant_id, '10');
+    assert.equal(result.dry_run, true);
+    assert.equal(result.capability_id, 'social_content');
+    assert.ok(modelsUsed.writer.includes(paigeAgent._test.PAIGE_WRITER_MODEL));
+    assert.ok(modelsUsed.evaluator.includes(paigeAgent._test.PAIGE_EVALUATOR_MODEL));
+    assert.ok(Array.isArray(result.artifacts));
+    for (const artifact of result.artifacts) {
+      assert.notEqual(artifact.publishState, 'PUBLISHED');
+      assert.notEqual(artifact.approvalState, 'APPROVED');
+    }
+    assert.equal(result.execution?.status, 'completed');
+    assert.equal(result.execution?.publish, undefined);
   });
 });
