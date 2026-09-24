@@ -5,6 +5,8 @@
  * Records operator decisions against tenant-scoped artifacts only.
  */
 
+const { approvalHash, contentHash, assertSocialCopy } = require('../contentPublication/approvalBinding');
+const { resolveSocialAccount } = require('../contentPublication/socialAccounts');
 const { APPROVAL_STATES, PUBLISH_STATES } = require('./types');
 const {
   createInMemorySocialContentStore,
@@ -85,127 +87,53 @@ function createSocialContentApprovalService(deps = {}) {
     return { tenantId, clientId, artifact };
   }
 
+  const accountResolver = deps.accountResolver || resolveSocialAccount;
+
+  async function preview(input = {}) {
+    const { tenantId, clientId, artifact } = await resolveArtifact(input);
+    const { account } = await accountResolver({ tenantId, clientId, platform: artifact.platform, accountId: input.accountId || artifact.approvalBinding?.account.id });
+    assertSocialCopy(artifact);
+    return { artifact, account, contentHash: contentHash(artifact), approvalHash: approvalHash(artifact, account) };
+  }
+
   async function recordDecision(input = {}) {
     const decision = normalizeDecision(input.decision || input.action);
     const { tenantId, clientId, artifact } = await resolveArtifact(input);
-    const toState = targetStateForDecision(decision);
-    const now = new Date().toISOString();
-
-    if (decision === DECISIONS.REJECT && isPublishedArtifact(artifact)) {
-      const err = new Error('cannot_reject_published_artifact');
-      err.code = 'cannot_reject_published_artifact';
-      throw err;
-    }
-
-    if (
-      decision === DECISIONS.APPROVE
-      && artifact.approvalState === APPROVAL_STATES.REJECTED
-      && !input.allowRestore
-    ) {
-      const err = new Error('rejected_artifact_requires_restore');
-      err.code = 'rejected_artifact_requires_restore';
-      throw err;
-    }
-
-    if (artifact.approvalState === toState) {
-      const mirrored = artifact.pendingCommentId
-        ? await mirrorPendingComment(
-          artifact.pendingCommentId,
-          mirrorPendingCommentStatus(decision),
-          clientId
-        )
-        : null;
-      return {
-        ok: true,
-        idempotent: true,
-        decision,
-        artifact: { ...artifact, approvalState: toState },
-        pendingComment: mirrored,
-      };
-    }
-
-    if (decision === DECISIONS.APPROVE && isPublishedArtifact(artifact)) {
-      const mirrored = artifact.pendingCommentId
-        ? await mirrorPendingComment(artifact.pendingCommentId, 'approved', clientId)
-        : null;
-      return {
-        ok: true,
-        idempotent: true,
-        decision,
-        artifact,
-        pendingComment: mirrored,
-      };
-    }
-
-    const transition = await store.transitionApprovalState(
-      artifact.id,
-      tenantId,
-      clientId,
-      toState,
-      { allowedFrom: [APPROVAL_STATES.PENDING_APPROVAL] }
-    );
-
-    if (!transition.ok) {
-      if (
-        transition.reason === 'invalid_transition' &&
-        artifact.approvalState === toState
-      ) {
-        const mirrored = artifact.pendingCommentId
-          ? await mirrorPendingComment(
-            artifact.pendingCommentId,
-            mirrorPendingCommentStatus(decision),
-            clientId
-          )
-          : null;
-        return {
-          ok: true,
-          idempotent: true,
-          decision,
-          artifact: { ...artifact, approvalState: toState },
-          pendingComment: mirrored,
-        };
+    const saved = await store.withLockedArtifact(artifact.id, tenantId, clientId, async (current, tx) => {
+      if (['PUBLISHING', 'VERIFYING', 'UNKNOWN', 'PUBLISHED'].includes(current.publishState)) {
+        if (decision === 'approve' && current.approvalState === 'APPROVED') return { artifact: current, idempotent: true };
+        throw new Error('cannot_reject_published_artifact');
       }
-      const err = new Error(transition.reason || 'approval_transition_failed');
-      err.code = transition.reason || 'approval_transition_failed';
-      err.from = transition.from;
-      err.to = toState;
-      throw err;
-    }
-
-    const metadataPatch = decision === DECISIONS.APPROVE
-      ? { approvedAt: now, rejectionReason: null }
-      : {
-        rejectedAt: now,
-        rejectionReason: input.rejectionReason || input.rejection_reason || null,
-      };
-    const updated = await store.updateArtifactMetadata(
-      artifact.id,
-      tenantId,
-      clientId,
-      metadataPatch
-    );
-
-    const mirrored = transition.artifact.pendingCommentId
-      ? await mirrorPendingComment(
-        transition.artifact.pendingCommentId,
-        mirrorPendingCommentStatus(decision),
-        clientId
-      )
-      : null;
-
-    return {
-      ok: true,
-      idempotent: false,
-      decision,
-      artifact: updated || transition.artifact,
-      pendingComment: mirrored,
-    };
+      if (decision === 'approve' && current.approvalState === 'REJECTED') throw new Error('rejected_artifact_requires_restore');
+      const patch = {};
+      if (decision === 'approve') {
+        if (!input.approvedBy || !input.expectedApprovalHash) throw new Error('explicit_artifact_approval_required');
+        const { account } = await accountResolver({ tenantId, clientId, platform: current.platform, accountId: input.accountId });
+        assertSocialCopy(current);
+        const digest = approvalHash(current, account);
+        if (input.expectedApprovalHash !== digest) throw new Error('approval_preview_changed');
+        if (current.approvalBinding && current.approvalBinding.hash !== digest) throw new Error('approved_artifact_or_account_changed');
+        patch.approvalBinding = current.approvalBinding || { version: 1, hash: digest, contentHash: contentHash(current), account,
+          approvedBy: String(input.approvedBy), approvedAt: new Date().toISOString() };
+        patch.approvedAt = patch.approvalBinding.approvedAt;
+        patch.rejectionReason = null;
+      } else {
+        patch.rejectedAt = new Date().toISOString();
+        patch.rejectionReason = input.rejectionReason || null;
+      }
+      patch.approvalState = targetStateForDecision(decision);
+      return { artifact: await tx.updateArtifactMetadata(current.id, tenantId, clientId, patch), idempotent: current.approvalState === patch.approvalState };
+    });
+    const mirrored = saved.artifact.pendingCommentId
+      ? await mirrorPendingComment(saved.artifact.pendingCommentId, saved.artifact.publishState === 'PUBLISHED' ? 'posted' : mirrorPendingCommentStatus(decision), clientId) : null;
+    return { ok: true, ...saved, decision, pendingComment: mirrored };
   }
 
   return {
     DECISIONS,
     normalizeDecision,
     recordDecision,
+    preview,
     resolveArtifact,
     store,
   };

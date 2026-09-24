@@ -1,183 +1,69 @@
 'use strict';
-
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { test, describe } = require('node:test');
+const { test } = require('node:test');
+const { createSocialPlatformAdapters, providerFailure } = require('../packages/capabilities/contentPublication/adapters/SocialPlatformAdapters');
+const { createPublicationService } = require('../packages/capabilities/contentPublication/PublicationService');
+const { PlatformAdapterRegistry } = require('../packages/capabilities/contentPublication/PlatformAdapterRegistry');
+const { fixture } = require('./helpers/paigeSocialFixture');
 
-const {
-  PlatformAdapterRegistry,
-  createPublicationService,
-  createLegacyPlatformAdapter,
-  createDefaultAdapterRegistry,
-  buildPublishSuccess,
-} = require('../packages/capabilities/contentPublication');
-const {
-  createSocialContentPublishCapability,
-  createInMemorySocialContentStore,
-  APPROVAL_STATES,
-  PUBLISH_STATES,
-  buildSocialContentArtifact,
-} = require('../packages/capabilities/contentGeneration');
+test('Buffer uses variables, exact approved text, bound account, and distinct read-back query', async () => {
+  const calls = [];
+  const http = { post: async (url, data, config) => { calls.push({ url, data, config }); return data.query.startsWith('mutation')
+    ? { data: { data: { createPost: { post: { id: 'buffer-id' } } } } }
+    : { data: { data: { post: { id: 'buffer-id', text: 'Exact "copy"\nnext', status: 'sent', sentAt: '2026-09-24T03:00:00Z', externalLink: 'https://linkedin.com/post', channel: { id: 'bound', service: 'linkedin' } } } } }; } };
+  const adapter = createSocialPlatformAdapters({ http })[0];
+  const input = { artifact: { body: 'Exact "copy"\nnext' }, account: { externalAccountId: 'bound' }, credentials: { accessToken: 'test-token' } };
+  const receipt = await adapter.publish(input); const verify = await adapter.readBack({ ...input, receipt });
+  assert.equal(receipt.externalPostId, 'buffer-id'); assert.equal(verify.published, true); assert.equal(verify.platformMatches, true);
+  assert.equal(calls[0].data.variables.input.text, input.artifact.body); assert.equal(calls[0].data.variables.input.channelId, 'bound');
+  assert.equal(calls[0].data.variables.input.mode, 'shareNow'); assert.equal(calls[1].data.variables.input.id, 'buffer-id');
+  assert.equal(calls[0].config.timeout, 30000); assert.equal(calls[0].config.headers.Authorization, 'Bearer test-token');
+});
 
-describe('SPEC-259A — Publication adapter boundary', () => {
-  test('SocialContentPublish does not import publishPipeline directly', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '../packages/capabilities/contentGeneration/SocialContentPublish.js'),
-      'utf8'
-    );
-    assert.doesNotMatch(source, /require\(['"].*publishPipeline/);
-    assert.doesNotMatch(source, /require\(['"].*blogPublisher/);
-    assert.match(source, /createPublicationService/);
-    assert.match(source, /createDefaultAdapterRegistry/);
-  });
+test('Buffer mutation errors are definite rejection; GraphQL transport errors remain ambiguous', async () => {
+  for (const [data, definite] of [[{ data: { createPost: { message: 'Rejected' } } }, true], [{ errors: [{ message: 'server failed' }] }, false]]) {
+    const adapter = createSocialPlatformAdapters({ http: { post: async () => ({ data }) } })[0];
+    const result = await adapter.publish({ artifact: { body: 'text' }, account: { externalAccountId: 'a' }, credentials: { accessToken: 'secret' } });
+    assert.equal(result.success, false); assert.equal(result.definitelyNotPublished === true, definite); assert.doesNotMatch(JSON.stringify(result), /secret|server failed/);
+  }
+});
 
-  test('registry resolves adapter by artifact platform', () => {
-    const registry = new PlatformAdapterRegistry();
-    const calls = [];
-    registry.register(createLegacyPlatformAdapter('linkedin_page', async () => {
-      calls.push('linkedin');
-      return buildPublishSuccess({ externalPlatform: 'linkedin_page', externalPostId: 'x' });
-    }));
+test('Facebook uses exact text and page-specific credentials and verifies page/post/text/status', async () => {
+  const calls = []; const http = {
+    post: async (...args) => { calls.push(args); return { data: { id: '10_20' } }; },
+    get: async (...args) => { calls.push(args); return { data: { id: '10_20', from: { id: '10' }, message: 'Exact copy', is_published: true, created_time: '2026-09-24T03:00:00Z', permalink_url: 'https://facebook.com/10_20' } }; },
+  };
+  const adapter = createSocialPlatformAdapters({ http }).find(a => a.platform === 'facebook_page');
+  const input = { artifact: { body: 'Exact copy' }, account: { externalAccountId: '10', apiVersion: 'v25.0' }, credentials: { accessToken: 'token-10' } };
+  const receipt = await adapter.publish(input); const verify = await adapter.readBack({ ...input, receipt });
+  assert.equal(verify.externalAccountId, '10'); assert.equal(verify.published, true); assert.deepEqual(calls[0][1], { message: 'Exact copy' });
+  assert.equal(calls[0][0], 'https://graph.facebook.com/v25.0/10/feed');
+  await assert.rejects(adapter.readBack({ ...input, receipt: { externalPostId: '../other' } }), /invalid_provider_post_id/);
+});
 
-    const adapter = registry.resolve('linkedin_page');
-    assert.equal(adapter.platform, 'linkedin_page');
-    assert.throws(() => registry.resolve('unknown'), /unsupported_platform/);
-  });
+test('GBP uses bound location and never treats PROCESSING as LIVE', async () => {
+  const calls = []; const name = 'accounts/10/locations/20/localPosts/30';
+  const adapter = createSocialPlatformAdapters({ googleAuthFactory: () => ({ setCredentials: c => calls.push(c), request: async r => {
+    calls.push(r); return { data: { name, summary: 'Exact copy', state: 'PROCESSING', createTime: '2026-09-24T03:00:00Z' } };
+  } }) }).find(a => a.platform === 'google_business');
+  const input = { artifact: { body: 'Exact copy' }, account: { externalAccountId: 'accounts/10/locations/20' }, credentials: { clientId: 'google', clientSecret: 'test', refreshToken: 'refresh' } };
+  const receipt = await adapter.publish(input); const verify = await adapter.readBack({ ...input, receipt });
+  assert.equal(verify.published, false); assert.equal(verify.status, 'PROCESSING'); assert.equal(calls[1].retry, false);
+  assert.equal(calls[1].data.summary, 'Exact copy');
+  await assert.rejects(adapter.readBack({ ...input, receipt: { externalPostId: 'accounts/11/locations/20/localPosts/30' } }), /invalid_provider_post_id/);
+});
 
-  test('duplicate platform registration throws', () => {
-    const registry = new PlatformAdapterRegistry();
-    registry.register(createLegacyPlatformAdapter('blog', async () => buildPublishSuccess({ externalPlatform: 'blog' })));
-    assert.throws(
-      () => registry.register(createLegacyPlatformAdapter('blog', async () => buildPublishSuccess({ externalPlatform: 'blog' }))),
-      /adapter_already_registered/
-    );
-  });
+test('unknown errors are not retryable, and no error body or token is retained', () => {
+  assert.equal(providerFailure({ response: { status: 503, data: 'secret' } }).definitelyNotPublished, false);
+  assert.equal(providerFailure({ response: { status: 429 } }).definitelyNotPublished, true);
+  assert.doesNotMatch(JSON.stringify(providerFailure({ message: 'secret' })), /secret/);
+});
 
-  test('default registry registers all Paige publish platforms', () => {
-    const registry = createDefaultAdapterRegistry({
-      publishers: {
-        publishToGoogleBusiness: async () => ({ success: true, externalPlatform: 'google_business' }),
-        publishToFacebookPage: async () => ({ success: true, externalPlatform: 'facebook_page' }),
-        publishToLinkedInPage: async () => ({ success: true, externalPlatform: 'linkedin_page' }),
-        publishToLinkedInPersonal: async () => ({ success: true, externalPlatform: 'linkedin_personal' }),
-      },
-      publishBlogPost: async () => ({ success: true, externalPlatform: 'blog' }),
-    });
-    const platforms = registry.listPlatforms();
-    assert.deepEqual(platforms, [
-      'blog',
-      'facebook_page',
-      'google_business',
-      'linkedin_page',
-      'linkedin_personal',
-    ]);
-  });
-
-  test('adapter receives canonical artifact not pending mirror at service boundary', async () => {
-    const store = createInMemorySocialContentStore();
-    const received = [];
-    const registry = new PlatformAdapterRegistry();
-    registry.register({
-      platform: 'linkedin_page',
-      version: '1.0.0',
-      validateCredentials: () => ({ ok: true }),
-      async publish({ artifact }) {
-        received.push(artifact);
-        return buildPublishSuccess({
-          externalPlatform: 'linkedin_page',
-          externalPostId: 'post-1',
-        });
-      },
-    });
-
-    const cap = createSocialContentPublishCapability({
-      socialContentStore: store,
-      adapterRegistry: registry,
-      credentialResolver: () => ({ ok: true, credentials: { platform: 'linkedin_page' } }),
-    });
-
-    await store.insertBatch([buildSocialContentArtifact({
-      id: 'art-a',
-      tenantId: '1',
-      clientId: 1,
-      platform: 'linkedin_page',
-      label: 'LinkedIn Page · Punch',
-      body: 'Hello',
-      pendingCommentId: 'pc-a',
-      approvalState: APPROVAL_STATES.APPROVED,
-    })]);
-
-    const result = await cap.execute({
-      tenantId: '1',
-      clientId: 1,
-      inputs: { artifactId: 'art-a' },
-    });
-
-    assert.equal(result.status, 'completed');
-    assert.equal(received.length, 1);
-    assert.equal(received[0].id, 'art-a');
-    assert.equal(received[0].body, 'Hello');
-    assert.equal(received[0].platform, 'linkedin_page');
-    assert.equal(result.outputs.externalPostId, 'post-1');
-  });
-
-  test('publication service fails closed on unsupported platform', async () => {
-    const registry = new PlatformAdapterRegistry();
-    const service = createPublicationService({ adapterRegistry: registry });
-    const result = await service.publishApprovedArtifact({
-      tenantId: '1',
-      clientId: 1,
-      artifact: buildSocialContentArtifact({
-        id: 'art-b',
-        tenantId: '1',
-        clientId: 1,
-        platform: 'linkedin_page',
-        label: 'Test',
-        body: 'Body',
-        pendingCommentId: 'pc-b',
-      }),
-    });
-    assert.equal(result.success, false);
-    assert.match(result.errorMessage, /unsupported_platform/);
-  });
-
-  test('adapter publish failure prevents PUBLISHED transition', async () => {
-    const store = createInMemorySocialContentStore();
-    const cap = createSocialContentPublishCapability({
-      socialContentStore: store,
-      publicationService: {
-        publishApprovedArtifact: async () => ({
-          success: false,
-          errorCode: 'publish_failed',
-          errorMessage: 'buffer_down',
-          retryable: true,
-        }),
-      },
-    });
-
-    await store.insertBatch([buildSocialContentArtifact({
-      id: 'art-c',
-      tenantId: '2',
-      clientId: 2,
-      platform: 'facebook_page',
-      label: 'Facebook · Promo',
-      body: 'Body',
-      pendingCommentId: 'pc-c',
-      approvalState: APPROVAL_STATES.APPROVED,
-    })]);
-
-    const result = await cap.execute({
-      tenantId: '2',
-      clientId: 2,
-      inputs: { artifactId: 'art-c' },
-    });
-
-    assert.equal(result.status, 'failed');
-    assert.equal(result.errors[0].message, 'buffer_down');
-    const row = await store.getById('art-c', '2', 2);
-    assert.equal(row.approvalState, APPROVAL_STATES.APPROVED);
-    assert.equal(row.publishState, PUBLISH_STATES.FAILED);
-    assert.equal(row.publishError, 'buffer_down');
-  });
+test('service refuses legacy adapters without read-back and validates approval even when called directly', async () => {
+  const f = await fixture(); const registry = new PlatformAdapterRegistry(); let sent = false;
+  registry.register({ platform: 'linkedin_page', publish: async () => { sent = true; } });
+  const service = createPublicationService({ adapterRegistry: registry, accountResolver: f.accountResolver });
+  await assert.rejects(service.publishApprovedArtifact({ ...f.scope, artifact: await f.current() }), /requires_approved/);
+  await f.approve(); await assert.rejects(service.publishApprovedArtifact({ ...f.scope, artifact: await f.current() }), /verified_publish_adapter_required/);
+  assert.equal(sent, false);
 });

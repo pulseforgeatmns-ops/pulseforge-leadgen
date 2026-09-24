@@ -1,293 +1,58 @@
 'use strict';
-
+const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const { test, describe, beforeEach } = require('node:test');
+const { fixture } = require('./helpers/paigeSocialFixture');
+const { approvalHash } = require('../packages/capabilities/contentPublication/approvalBinding');
+const { resolveSocialAccount } = require('../packages/capabilities/contentPublication/socialAccounts');
 
-const {
-  createSocialContentCapability,
-  createSocialContentApprovalService,
-  createSocialContentPublishCapability,
-  createInMemorySocialContentStore,
-  APPROVAL_STATES,
-  PUBLISH_STATES,
-  buildSocialContentArtifact,
-} = require('../packages/capabilities/contentGeneration');
-const {
-  routePaigeSocialContentApproval,
-  resetPaigeSocialContentApprovalForTests,
-} = require('../services/paigeSocialContentApproval');
-const {
-  routePaigeSocialContentPublication,
-  resetPaigeSocialContentPublicationForTests,
-} = require('../services/paigeSocialContentPublication');
-const { applyPendingCommentApprovalAction } = require('../services/paigeSocialContentApprovalFlow');
-const { BUILTIN_IDS } = require('../packages/capabilities/types');
+test('unapproved and legacy approval flag without a binding cannot publish', async () => {
+  const f = await fixture(); assert.equal((await f.publish()).status, 'failed');
+  await f.store.updateArtifactMetadata(f.artifact.id, '10', 10, { approvalState: 'APPROVED' });
+  assert.equal((await f.publish()).errors[0].message, 'approval_binding_required'); assert.equal(f.counts().sends, 0);
+});
 
-describe('SPEC-256 — Canonical Paige Social Content Approval', () => {
-  beforeEach(() => {
-    resetPaigeSocialContentApprovalForTests();
-    resetPaigeSocialContentPublicationForTests();
-  });
+test('human preview hash and actor are required; stale preview is rejected', async () => {
+  const f = await fixture();
+  const input = { ...f.scope, artifactId: f.artifact.id, decision: 'approve', accountId: f.account.id };
+  await assert.rejects(f.approval.recordDecision(input), /explicit_artifact_approval_required/);
+  await assert.rejects(f.approval.recordDecision({ ...input, approvedBy: 'operator:7', expectedApprovalHash: 'stale' }), /approval_preview_changed/);
+  assert.equal((await f.current()).approvalState, 'PENDING_APPROVAL');
+});
 
-  test('approval handlers route through canonical approval flow module', () => {
-    const apiSource = fs.readFileSync(path.join(__dirname, '../routes/api.js'), 'utf8');
-    const clientSource = fs.readFileSync(path.join(__dirname, '../routes/client.js'), 'utf8');
-    const approvalsSource = fs.readFileSync(path.join(__dirname, '../routes/approvals.js'), 'utf8');
+test('content, media, objective, mission, campaign, account mutations invalidate approved artifact', async () => {
+  for (const mutate of [a => { a.body += ' changed'; }, a => { a.mediaRefs = ['https://example.com/pic']; }, a => { a.contentObjective = 'other'; },
+    a => { a.missionId = 'other'; }, a => { a.meta.campaignId = 'other'; }, a => { a.platform = 'facebook_page'; }]) {
+    const f = await fixture(); await f.approve(); const a = await f.current(); mutate(a); await f.store.insertBatch([a]);
+    assert.equal((await f.publish()).status, 'failed'); assert.equal(f.counts().sends, 0);
+  }
+  const f = await fixture(); await f.approve(); f.account.externalAccountId = 'other-account';
+  assert.equal((await f.publish()).errors[0].message, 'approved_artifact_or_account_changed'); assert.equal(f.counts().sends, 0);
+});
 
-    assert.match(apiSource, /applyPendingCommentApprovalAction/);
-    assert.match(clientSource, /applyPendingCommentApprovalAction/);
-    assert.match(approvalsSource, /applyPendingCommentApprovalAction/);
-    assert.doesNotMatch(apiSource, /publishToLinkedInPage\(item\)/);
-    assert.doesNotMatch(clientSource, /publishToFacebookPage\(item\)/);
-  });
+test('canonical tenant and account checks fail closed without using global credentials', async () => {
+  const f = await fixture(); await f.approve();
+  await assert.rejects(f.approval.preview({ clientId: 11, tenantId: '11', artifactId: f.artifact.id }), /artifact_not_found/);
+  const r = await f.cap.execute({ tenantId: '11', clientId: 11, inputs: { artifactId: f.artifact.id } }); assert.equal(r.status, 'failed');
+  assert.throws(() => resolveSocialAccount({ clientId: 10, tenantId: '10', platform: 'linkedin_page' }, { BUFFER_ACCESS_TOKEN: 'global' }), /not_connected/);
+  const env = { PAIGE_SOCIAL_ACCOUNTS: JSON.stringify([{ ...f.account, credentialEnv: { accessToken: 'ANCHOR_TOKEN' } }]), ANCHOR_TOKEN: 'test' };
+  assert.throws(() => resolveSocialAccount({ clientId: 11, tenantId: '11', platform: 'linkedin_page', accountId: f.account.id }, env), /not_connected/);
+  assert.throws(() => resolveSocialAccount({ clientId: 10, tenantId: '11', platform: 'linkedin_page' }, env), /tenant_scope_required/);
+  const resolved = resolveSocialAccount({ ...f.scope, platform: 'linkedin_page' }, env);
+  assert.equal(resolved.account.externalAccountId, 'channel-10'); assert.doesNotMatch(JSON.stringify(resolved.account), /test|TOKEN/);
+});
 
-  test('approve records APPROVED on canonical artifact and mirrors pending_comments', async () => {
-    const store = createInMemorySocialContentStore();
-    const mirrored = [];
-    const approval = createSocialContentApprovalService({
-      socialContentStore: store,
-      mirrorPendingComment: async (pendingCommentId, status) => {
-        mirrored.push({ pendingCommentId, status });
-        return { id: pendingCommentId, status };
-      },
-    });
+test('Anchor doctrine blocks AI tells, generic closers, body em dashes and walkthrough terminology', async () => {
+  for (const body of ['I wanted to reach out about a facilities assessment.', 'Cleaning — made easy.', 'Would you be open to a quick call?', 'Book a walkthrough.']) {
+    const f = await fixture(); const a = await f.current(); a.body = body; await f.store.insertBatch([a]);
+    await assert.rejects(f.approval.preview({ ...f.scope, artifactId: a.id }), /anchor_copy_doctrine_violation/);
+    assert.notEqual(approvalHash(a, f.account), approvalHash(f.artifact, f.account));
+  }
+});
 
-    const artifact = buildSocialContentArtifact({
-      id: 'art-1',
-      tenantId: '1',
-      clientId: 1,
-      platform: 'linkedin_page',
-      label: 'LinkedIn Page · Dialogue',
-      body: 'Draft body',
-      pendingCommentId: 'pc-1',
-      approvalState: APPROVAL_STATES.PENDING_APPROVAL,
-    });
-    await store.insertBatch([artifact]);
-
-    const result = await approval.recordDecision({
-      tenantId: '1',
-      clientId: 1,
-      artifactId: 'art-1',
-      decision: 'approve',
-    });
-
-    assert.equal(result.ok, true);
-    assert.equal(result.artifact.approvalState, APPROVAL_STATES.APPROVED);
-    assert.deepEqual(mirrored, [{ pendingCommentId: 'pc-1', status: 'approved' }]);
-  });
-
-  test('reject records REJECTED without publication eligibility', async () => {
-    const store = createInMemorySocialContentStore();
-    const approval = createSocialContentApprovalService({ socialContentStore: store });
-    await store.insertBatch([buildSocialContentArtifact({
-      id: 'art-2',
-      tenantId: '2',
-      clientId: 2,
-      platform: 'facebook_page',
-      label: 'Facebook Page · Promotional',
-      body: 'Body',
-      pendingCommentId: 'pc-2',
-    })]);
-
-    const result = await approval.recordDecision({
-      tenantId: '2',
-      clientId: 2,
-      artifactId: 'art-2',
-      decision: 'reject',
-    });
-    assert.equal(result.artifact.approvalState, APPROVAL_STATES.REJECTED);
-  });
-
-  test('publication fails closed when artifact is still PENDING_APPROVAL', async () => {
-    const store = createInMemorySocialContentStore();
-    const cap = createSocialContentPublishCapability({
-      socialContentStore: store,
-      publicationService: {
-        publishApprovedArtifact: async () => ({ success: true, externalPlatform: 'linkedin_page' }),
-      },
-    });
-
-    await store.insertBatch([buildSocialContentArtifact({
-      id: 'art-3',
-      tenantId: '3',
-      clientId: 3,
-      platform: 'linkedin_page',
-      label: 'LinkedIn Page · Punch',
-      body: 'Body',
-      pendingCommentId: 'pc-3',
-    })]);
-
-    const result = await cap.execute({
-      tenantId: '3',
-      clientId: 3,
-      inputs: { artifactId: 'art-3' },
-    });
-
-    assert.equal(result.status, 'failed');
-    assert.equal(result.errors[0].message, 'publication_requires_approved_artifact');
-    const row = await store.getById('art-3', '3', 3);
-    assert.equal(row.approvalState, APPROVAL_STATES.PENDING_APPROVAL);
-  });
-
-  test('publication requires APPROVED artifact and marks PUBLISHED on success', async () => {
-    const store = createInMemorySocialContentStore();
-    const published = [];
-    const cap = createSocialContentPublishCapability({
-      socialContentStore: store,
-      publicationService: {
-        publishApprovedArtifact: async ({ artifact }) => {
-          published.push(artifact);
-          return {
-            success: true,
-            externalPlatform: 'linkedin_page',
-            externalPostId: 'buf-123',
-          };
-        },
-      },
-    });
-
-    await store.insertBatch([buildSocialContentArtifact({
-      id: 'art-4',
-      tenantId: '4',
-      clientId: 4,
-      platform: 'linkedin_page',
-      label: 'LinkedIn Page · Numbers',
-      body: 'POST: Hello world',
-      pendingCommentId: 'pc-4',
-      approvalState: APPROVAL_STATES.APPROVED,
-    })]);
-
-    const result = await cap.execute({
-      tenantId: '4',
-      clientId: 4,
-      inputs: { artifactId: 'art-4' },
-    });
-
-    assert.equal(result.status, 'completed');
-    assert.equal(published.length, 1);
-    assert.equal(published[0].pendingCommentId, 'pc-4');
-    assert.equal(result.outputs.externalPostId, 'buf-123');
-    const row = await store.getById('art-4', '4', 4);
-    assert.equal(row.approvalState, APPROVAL_STATES.APPROVED);
-    assert.equal(row.publishState, PUBLISH_STATES.PUBLISHED);
-  });
-
-  test('approval router chains canonical publication after approve', async () => {
-    const store = createInMemorySocialContentStore();
-    const published = [];
-
-    const approvalService = createSocialContentApprovalService({
-      socialContentStore: store,
-      mirrorPendingComment: async () => ({ id: 'pc-5', status: 'approved' }),
-    });
-    const publishCap = createSocialContentPublishCapability({
-      socialContentStore: store,
-      publicationService: {
-        publishApprovedArtifact: async ({ artifact }) => {
-          published.push(artifact);
-          return { success: true, externalPlatform: 'google_business' };
-        },
-      },
-    });
-
-    await store.insertBatch([buildSocialContentArtifact({
-      id: 'art-5',
-      tenantId: '5',
-      clientId: 5,
-      platform: 'google_business',
-      label: 'Google Business · Educational',
-      body: 'GBP post',
-      pendingCommentId: 'pc-5',
-    })]);
-
-    const { createCapabilityRunner, createCapabilityRegistry } = require('../packages/capabilities');
-    const registry = createCapabilityRegistry();
-    registry.register(publishCap);
-    const runner = createCapabilityRunner({ registry });
-
-    const approval = await approvalService.recordDecision({
-      tenantId: '5',
-      clientId: 5,
-      artifactId: 'art-5',
-      decision: 'approve',
-    });
-    assert.equal(approval.artifact.approvalState, APPROVAL_STATES.APPROVED);
-
-    const pub = await runner.run({
-      capabilityId: BUILTIN_IDS.SOCIAL_CONTENT_PUBLISH,
-      context: {
-        tenantId: '5',
-        clientId: 5,
-        inputs: { artifactId: 'art-5' },
-      },
-    });
-    assert.equal(pub.result.status, 'completed');
-    assert.equal(published.length, 1);
-    const row5 = await store.getById('art-5', '5', 5);
-    assert.equal(row5.approvalState, APPROVAL_STATES.APPROVED);
-    assert.equal(row5.publishState, PUBLISH_STATES.PUBLISHED);
-  });
-
-  test('Paige social channel without canonical artifact is rejected fail-closed', async () => {
-    const originalQuery = require('../db').query;
-    require('../db').query = async (sql, params) => {
-      if (sql.includes('FROM pending_comments')) {
-        return {
-          rows: [{
-            id: params[0],
-            client_id: params[1],
-            status: 'pending',
-            channel: 'linkedin_page',
-            comment: 'Body',
-          }],
-        };
-      }
-      if (sql.includes('paige_social_content_artifacts')) {
-        return { rows: [] };
-      }
-      return originalQuery(sql, params);
-    };
-
-    try {
-      const result = await applyPendingCommentApprovalAction({
-        clientId: 1,
-        pendingCommentId: 'missing-artifact',
-        action: 'approved',
-      });
-      assert.equal(result.ok, false);
-      assert.equal(result.mode, 'canonical_required');
-      assert.equal(result.statusCode, 409);
-    } finally {
-      require('../db').query = originalQuery;
-    }
-  });
-
-  test('generation capability remains draft-only after approval boundary', async () => {
-    const store = createInMemorySocialContentStore();
-    const cap = createSocialContentCapability({
-      socialContentStore: store,
-      runGeneration: async () => ({
-        success: true,
-        drafts: [{
-          company: { name: 'Acme' },
-          content: 'Draft',
-          contentType: 'educational',
-          channel: 'linkedin_page',
-          meta: { format: 'dialogue' },
-        }],
-      }),
-      mirrorPendingComment: async () => 'pc-gen',
-    });
-
-    const result = await cap.execute({
-      tenantId: '7',
-      clientId: 7,
-      inputs: { dryRun: false },
-    });
-    assert.equal(result.status, 'completed');
-    const artifacts = await store.listByTenant('7', 7);
-    assert.equal(artifacts[0].approvalState, APPROVAL_STATES.PENDING_APPROVAL);
-  });
+test('approval repeat is idempotent and rejection cannot restore or cancel an in-flight post', async () => {
+  const f = await fixture(); await f.approve(); const timestamp = (await f.current()).approvedAt;
+  assert.equal((await f.approve()).idempotent, true); assert.equal((await f.current()).approvedAt, timestamp);
+  await f.publish(); await assert.rejects(f.approval.recordDecision({ ...f.scope, artifactId: f.artifact.id, decision: 'reject' }), /cannot_reject_published_artifact/);
+  const g = await fixture(); await g.approval.recordDecision({ ...g.scope, artifactId: g.artifact.id, decision: 'reject' });
+  await assert.rejects(g.approve(), /rejected_artifact_requires_restore/);
 });

@@ -5,7 +5,6 @@
  */
 
 const pool = require('../db');
-const { normalizeClientId } = require('../utils/clientContext');
 const {
   createPostgresSocialContentStore,
   APPROVAL_STATES,
@@ -35,9 +34,9 @@ function resetPaigeSocialContentInspectionForTests() {
 }
 
 function assertTenantInput(input = {}) {
-  const clientId = normalizeClientId(input.client_id ?? input.clientId ?? input.tenantId);
+  const clientId = Number(input.client_id ?? input.clientId ?? input.tenantId);
   const tenantId = String(input.tenantId ?? input.tenant_id ?? clientId ?? '').trim();
-  if (!tenantId || clientId == null) {
+  if (!tenantId || !Number.isInteger(clientId) || clientId < 1) {
     throw new Error('tenant_scope_required');
   }
   if (tenantId !== String(clientId)) {
@@ -55,11 +54,14 @@ function summarizeCounts(artifacts) {
     notPublished: artifacts.filter((a) => a.publishState === PUBLISH_STATES.NOT_PUBLISHED).length,
     publishing: artifacts.filter((a) => a.publishState === PUBLISH_STATES.PUBLISHING).length,
     published: artifacts.filter((a) => a.publishState === PUBLISH_STATES.PUBLISHED).length,
+    verifying: artifacts.filter(a => a.publishState === PUBLISH_STATES.VERIFYING).length,
+    unknown: artifacts.filter(a => a.publishState === PUBLISH_STATES.UNKNOWN).length,
     failed: artifacts.filter((a) => a.publishState === PUBLISH_STATES.FAILED).length,
   };
 }
 
 function deriveStatusKind(counts) {
+  if (counts.unknown > 0 || counts.verifying > 0 || counts.publishing > 0) return STATUS_KINDS.MIXED;
   if (counts.total === 0) return STATUS_KINDS.NO_DRAFTS;
   if (counts.failed > 0 && counts.pendingApproval === 0 && counts.approved === 0) {
     return STATUS_KINDS.FAILED;
@@ -130,9 +132,9 @@ function buildNarrative(statusKind, counts, artifacts) {
     default:
       return {
         summary: 'Paige has multiple social content states in flight.',
-        nextAction: 'review pending approvals, approved drafts, and failed publishes.',
+        nextAction: counts.unknown > 0 ? 'reconcile uncertain sends with the provider; do not create another post.' : counts.verifying > 0 ? 'read back accepted posts until publication is verified.' : 'review pending approvals, approved drafts, and failed publishes.',
         ready: true,
-        waitingOnOperator: counts.pendingApproval > 0 || counts.failed > 0,
+        waitingOnOperator: counts.pendingApproval > 0 || counts.failed > 0 || counts.unknown > 0 || counts.verifying > 0 || counts.publishing > 0,
       };
   }
 }
@@ -183,6 +185,7 @@ async function inspectPaigeSocialContentStatus(input = {}) {
     narrative,
     pendingArtifacts,
     publishedArtifacts,
+    publicationAttempts: artifacts.filter(a => Object.keys(a.publication || {}).length).map(a => ({ artifactId: a.id, publishState: a.publishState, ...a.publication })),
     failedArtifacts: artifacts
       .filter((a) => a.publishState === PUBLISH_STATES.FAILED)
       .map((a) => ({ id: a.id, platform: a.platform, publishError: a.publishError })),

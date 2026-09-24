@@ -783,6 +783,16 @@ router.get('/:clientId/api/approvals', requireClient, async (req, res) => {
   }
 });
 
+// Client PIN sessions may review and approve their own exact canonical artifact.
+router.get('/:clientId/api/approvals/:id/preview', requireClient, async (req, res) => {
+  try {
+    const approval = require('../services/paigeSocialContentApproval').getApprovalService();
+    res.set('Cache-Control', 'no-store');
+    res.json(await approval.preview({ tenantId: String(req.client.id), clientId: req.client.id,
+      pendingCommentId: req.params.id, accountId: req.query.account_id }));
+  } catch (err) { res.status(409).json({ error: err.message }); }
+});
+
 router.post('/:clientId/api/approvals/:id', requireClient, async (req, res) => {
   const { action } = req.body;
   if (!['approved', 'rejected'].includes(action)) {
@@ -796,6 +806,7 @@ router.post('/:clientId/api/approvals/:id', requireClient, async (req, res) => {
       pendingCommentId: req.params.id,
       action,
       source: 'client_portal',
+      accountId: req.body.accountId, expectedApprovalHash: req.body.expectedApprovalHash, approvedBy: `client_pin:${req.client.id}`,
     });
     if (!result.ok) {
       return res.status(result.statusCode || 500).json({

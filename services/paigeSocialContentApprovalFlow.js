@@ -75,12 +75,17 @@ async function applyPendingCommentApprovalAction(input = {}) {
     channel: item.channel,
   });
 
+  if (artifact && action === 'approved' && !input.expectedApprovalHash) {
+    return { ok: false, statusCode: 409, mode: 'canonical_review_required', error: 'explicit_artifact_approval_required',
+      message: 'Review the exact draft and destination account in Paige social review before approval.',
+      reviewUrl: `/paige-social?client_id=${clientId}` };
+  }
   if (artifact) {
     const canonical = await routePaigeSocialContentApproval({
       clientId,
       tenantId: String(clientId),
       pendingCommentId: item.id,
-      action,
+      action, expectedApprovalHash: input.expectedApprovalHash, accountId: input.accountId, approvedBy: input.approvedBy, publishOnApprove: false,
       invocationSource: input.invocationSource || input.source || 'approval_flow',
     });
     return {
