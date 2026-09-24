@@ -348,6 +348,12 @@ async function runDeterministicAudit(domain, deps = {}) {
 
   const pagespeed = await fetchPageSpeedMetrics(normalized, deps);
   if (pagespeed.findings.length) findings.push(...pagespeed.findings);
+  const psiTelemetry = pagespeed.telemetry || {
+    psi_attempted: 0,
+    psi_success: 0,
+    psi_failed: 0,
+    psi_unknown: 0,
+  };
 
   if (deps.usePuppeteer !== false && html) {
     const domFindings = await observeDomStructure(url, deps);
@@ -370,7 +376,9 @@ async function runDeterministicAudit(domain, deps = {}) {
       technical_health: byCategory.technical_health || [],
       conversion_structure: byCategory.conversion_structure || [],
       pagespeed: pagespeed.raw || null,
+      psi_telemetry: psiTelemetry,
     },
+    psi_telemetry: psiTelemetry,
   };
 }
 

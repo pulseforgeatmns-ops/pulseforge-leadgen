@@ -52,6 +52,25 @@ const PROHIBITED_CLAIM_PATTERNS = Object.freeze([
   /\bcustomers are abandoning\b/i,
 ]);
 
+const DIAGNOSIS_CLASS = Object.freeze({
+  HEALTHY_SITE: 'HEALTHY_SITE',
+  TARGETED_REMEDIATION: 'TARGETED_REMEDIATION',
+  REDESIGN_CANDIDATE: 'REDESIGN_CANDIDATE',
+  INSUFFICIENT_EVIDENCE: 'INSUFFICIENT_EVIDENCE',
+});
+
+const ECONOMIC_CONFIDENCE = Object.freeze({
+  HIGH: 'HIGH',
+  MEDIUM: 'MEDIUM',
+  LOW: 'LOW',
+  UNKNOWN: 'UNKNOWN',
+});
+
+const BUYING_SIGNAL_RESEARCH = Object.freeze({
+  RESEARCHED: 'researched',
+  NOT_RESEARCHED: 'not_researched',
+});
+
 const WEB_EVENT_TYPES = Object.freeze({
   PROSPECT_DISCOVERED: 'WEB_PROSPECT_DISCOVERED',
   AUDIT_STARTED: 'WEB_AUDIT_STARTED',
@@ -75,6 +94,7 @@ function buildFinding(partial = {}) {
     confidence: Number.isFinite(Number(partial.confidence)) ? Number(partial.confidence) : null,
     measurement: partial.measurement ?? null,
     ref: partial.ref || null,
+    derived_from: Array.isArray(partial.derived_from) ? partial.derived_from : null,
   };
 }
 
@@ -104,6 +124,9 @@ module.exports = {
   SCORE_MAX,
   DEFAULT_ECONOMICS_CONFIG,
   PROHIBITED_CLAIM_PATTERNS,
+  DIAGNOSIS_CLASS,
+  ECONOMIC_CONFIDENCE,
+  BUYING_SIGNAL_RESEARCH,
   WEB_EVENT_TYPES,
   buildFinding,
   buildAssessmentOutput,

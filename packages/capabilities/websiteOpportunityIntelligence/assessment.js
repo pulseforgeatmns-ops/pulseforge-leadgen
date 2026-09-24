@@ -23,10 +23,10 @@ function buildWebsiteOpportunityAssessment({
   }
   if (!executive.length) executive.push('Insufficient verified evidence for executive summary');
 
-  const commercialImplications = (commercial_diagnosis.commercially_important || [])
+  const commercialImplications = (commercial_diagnosis.bounded_inferences || [])
     .slice(0, 5)
-    .map((line) => assertConservativeLanguage(
-      line.includes('may') || line.includes('measured') ? line : `${line}. Impact depends on how customers use the site.`
+    .map((entry) => assertConservativeLanguage(
+      typeof entry === 'string' ? entry : entry.summary
     ));
 
   const remediation = commercial_diagnosis.advise_first || [];
@@ -55,7 +55,12 @@ function buildWebsiteOpportunityAssessment({
     verified_findings: verified,
     commercial_implications: commercialImplications,
     recommended_remediation: remediation,
-    opportunity_economics: economics,
+    opportunity_economics: {
+      default_planning: economics.default_planning_economics,
+      prospect_specific: economics.prospect_specific_economics,
+      economic_confidence: economics.economic_confidence,
+      display: economics,
+    },
     opportunity_score: {
       total: scoring.opportunity_score,
       components: scoring.score_components,

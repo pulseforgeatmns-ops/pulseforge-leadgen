@@ -19,6 +19,7 @@ const { computeProjectEconomics } = require('./economics');
 const { buildCommercialDiagnosis } = require('./diagnosis');
 const { buildWebsiteOpportunityAssessment } = require('./assessment');
 const { mergeFindings } = require('./evidence');
+const { buildInferredFindings, assertInferredIntegrity } = require('./inference');
 const { emitWebEvent } = require('./observability');
 
 function createWebsiteOpportunityIntelligenceCapability(deps = {}) {
@@ -107,30 +108,40 @@ function createWebsiteOpportunityIntelligenceCapability(deps = {}) {
         domain: audit.domain,
       });
 
-      const findings = mergeFindings(audit.findings, businessFindings);
+      const auditFindings = mergeFindings(audit.findings, businessFindings);
+      const inferredFindings = buildInferredFindings(auditFindings);
+      assertInferredIntegrity(
+        auditFindings.filter((f) => f.evidence_class === 'MEASURED' || f.evidence_class === 'OBSERVED'),
+        inferredFindings
+      );
+      const findings = mergeFindings(auditFindings, inferredFindings);
+
       emit('Computing economics', 55);
       const economics = computeProjectEconomics({
-        findings,
+        findings: auditFindings,
         business,
         config: input.economicsConfig || deps.economicsConfig,
       });
 
       emit('Scoring opportunity', 70);
-      const scoring = computeOpportunityScore({ findings, business, economics, audit });
+      const scoring = computeOpportunityScore({ findings: auditFindings, business, economics, audit });
+
+      emit('Building commercial diagnosis', 80);
+      const commercial_diagnosis = buildCommercialDiagnosis({
+        findings: auditFindings,
+        business,
+        economics,
+        score: scoring,
+        inferredFindings,
+      });
+
       const recommendation = recommendAction({
         opportunity_score: scoring.opportunity_score,
         score_components: scoring.score_components,
         confidence: scoring.confidence,
         deficiency_only_risk: scoring.deficiency_only_risk,
         economics,
-      });
-
-      emit('Building commercial diagnosis', 85);
-      const commercial_diagnosis = buildCommercialDiagnosis({
-        findings,
-        business,
-        economics,
-        score: scoring,
+        diagnosis_class: commercial_diagnosis.diagnosis_class,
       });
 
       await emitWebEvent(WEB_EVENT_TYPES.DIAGNOSIS_COMPLETED, eventCtx, deps);

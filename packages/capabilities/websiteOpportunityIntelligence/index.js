@@ -16,12 +16,27 @@ const {
   createWebsiteOpportunityIntelligenceCapability,
 } = require('./WebsiteOpportunityIntelligence');
 const { runDeterministicAudit, normalizeDomain } = require('./audit/deterministicAudit');
-const { computeOpportunityScore, recommendAction } = require('./scoring');
+const {
+  computeOpportunityScore,
+  recommendAction,
+  scoreWebsiteDeficiency,
+  scoreBuyingSignals,
+  scoreProjectEconomics,
+} = require('./scoring');
 const { computeProjectEconomics } = require('./economics');
 const { gatherBusinessEvidence } = require('./businessEvidence');
 const { buildCommercialDiagnosis } = require('./diagnosis');
 const { buildWebsiteOpportunityAssessment } = require('./assessment');
-const { mergeFindings, enforceEvidenceIntegrity, topFindings } = require('./evidence');
+const { mergeFindings, enforceEvidenceIntegrity, topFindings, partitionEvidence } = require('./evidence');
+const {
+  buildInferredFindings,
+  assertInferredIntegrity,
+  isDuplicateOfSource,
+} = require('./inference');
+const {
+  evaluateCohortAdmission,
+  assembleStratifiedCohort,
+} = require('./discoveryAdmission');
 const { emitWebEvent, buildWebEvent } = require('./observability');
 
 async function assessWebsiteOpportunity(input = {}, deps = {}) {
@@ -56,6 +71,9 @@ module.exports = {
   normalizeDomain,
   computeOpportunityScore,
   recommendAction,
+  scoreWebsiteDeficiency,
+  scoreBuyingSignals,
+  scoreProjectEconomics,
   computeProjectEconomics,
   gatherBusinessEvidence,
   buildCommercialDiagnosis,
@@ -63,6 +81,12 @@ module.exports = {
   mergeFindings,
   enforceEvidenceIntegrity,
   topFindings,
+  partitionEvidence,
+  buildInferredFindings,
+  assertInferredIntegrity,
+  isDuplicateOfSource,
+  evaluateCohortAdmission,
+  assembleStratifiedCohort,
   emitWebEvent,
   buildWebEvent,
 };
