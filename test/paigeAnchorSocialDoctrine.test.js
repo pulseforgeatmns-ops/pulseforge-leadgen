@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { describe, test, beforeEach } = require('node:test');
+const { describe, test, beforeEach, afterEach } = require('node:test');
 const {
   validateAnchorSocialCopy,
   buildAnchorCopyDoctrineViolationError,
@@ -22,6 +22,37 @@ const PASSING_SCORE = {
   weak_dimension: 'none',
   reason: 'Specific, grounded, and direct.',
 };
+
+const ISOLATED_MODULE_PATHS = [
+  require.resolve('../db'),
+  require.resolve('@anthropic-ai/sdk'),
+  require.resolve('../paigeAgent'),
+];
+
+function snapshotTestIsolation() {
+  return {
+    activeClientId: process.env.ACTIVE_CLIENT_ID,
+    cache: Object.fromEntries(
+      ISOLATED_MODULE_PATHS.map((modulePath) => [modulePath, require.cache[modulePath]])
+    ),
+  };
+}
+
+function restoreTestIsolation(snapshot) {
+  if (snapshot.activeClientId === undefined) {
+    delete process.env.ACTIVE_CLIENT_ID;
+  } else {
+    process.env.ACTIVE_CLIENT_ID = snapshot.activeClientId;
+  }
+
+  for (const modulePath of ISOLATED_MODULE_PATHS) {
+    if (snapshot.cache[modulePath] === undefined) {
+      delete require.cache[modulePath];
+    } else {
+      require.cache[modulePath] = snapshot.cache[modulePath];
+    }
+  }
+}
 
 function buildPaigeHarness({ draftSequence = [] } = {}) {
   process.env.ACTIVE_CLIENT_ID = '10';
@@ -184,12 +215,14 @@ describe('Paige Anchor social doctrine reconciliation', () => {
   });
 
   describe('generation-time doctrine regeneration', () => {
+    let isolationSnapshot;
+
     beforeEach(() => {
-      for (const key of Object.keys(require.cache)) {
-        if (key.endsWith('paigeAgent.js') || key.endsWith('db.js') || key.includes('@anthropic-ai/sdk')) {
-          delete require.cache[key];
-        }
-      }
+      isolationSnapshot = snapshotTestIsolation();
+    });
+
+    afterEach(() => {
+      restoreTestIsolation(isolationSnapshot);
     });
 
     test('em dash draft is regenerated before returning content', async () => {
