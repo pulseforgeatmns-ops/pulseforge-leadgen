@@ -403,6 +403,119 @@ async function getConversationDetail({ sessionId, aoOwnerId, clientId }) {
   };
 }
 
+async function continueConversationForProspect({
+  aoOwnerId,
+  clientId,
+  prospectId = null,
+  leadId = null,
+  source = 'command_center',
+  reopenIfDone = true,
+}) {
+  const params = [aoOwnerId, clientId];
+  let prospectClause = '';
+  if (prospectId) {
+    params.push(String(prospectId));
+    prospectClause = `AND prospect_id = $${params.length}`;
+  } else if (leadId) {
+    const { rows: leadRows } = await pool.query(`
+      SELECT crm_prospect_id
+      FROM ao_leads
+      WHERE id = $1::uuid AND ao_owner_id = $2 AND client_id = $3
+      LIMIT 1
+    `, [leadId, aoOwnerId, clientId]);
+    const linkedProspectId = leadRows[0]?.crm_prospect_id;
+    if (linkedProspectId) {
+      params.push(String(linkedProspectId));
+      prospectClause = `AND prospect_id = $${params.length}`;
+    } else {
+      params.push(String(leadId));
+      prospectClause = `AND payload->'selected_account'->>'lead_id' = $${params.length}`;
+    }
+  } else {
+    return { error: 'prospect_id or lead_id required', status: 400 };
+  }
+
+  const { rows } = await pool.query(`
+    SELECT *
+    FROM ao_max_sessions
+    WHERE ao_owner_id = $1
+      AND client_id = $2
+      AND mode = 'conversation'
+      ${prospectClause}
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `, params);
+
+  let session = rows[0] || null;
+
+  if (session && isActiveConversationStatus(session.status) && !session.completed) {
+    await logAoAuditEvent({
+      event: 'AO_COMMAND_CENTER_CONTINUE_CLICKED',
+      clientId,
+      aoUserId: aoOwnerId,
+      prospectId: session.prospect_id || prospectId || null,
+      payload: { source, session_id: session.id, action: 'resume_active' },
+    });
+    const payload = session.payload || {};
+    return {
+      ok: true,
+      action: 'resume',
+      session_id: session.id,
+      status: session.status,
+      messages: payload.messages || [],
+      prospect_id: session.prospect_id,
+      prospect_label: prospectLabel(payload, session),
+    };
+  }
+
+  if (session && session.status === 'done' && reopenIfDone) {
+    const reopened = await reopenConversation({
+      sessionId: session.id,
+      aoOwnerId,
+      clientId,
+      reopenedBy: aoOwnerId,
+    });
+    if (reopened.status) return reopened;
+    await logAoAuditEvent({
+      event: 'AO_COMMAND_CENTER_CONTINUE_CLICKED',
+      clientId,
+      aoUserId: aoOwnerId,
+      prospectId: session.prospect_id || prospectId || null,
+      payload: { source, session_id: session.id, action: 'reopened_done' },
+    });
+    return { ...reopened, action: 'reopened' };
+  }
+
+  const resolvedProspectId = prospectId || (rows[0]?.prospect_id) || null;
+  session = await createConversationSession({
+    aoOwnerId,
+    clientId,
+    prospectId: resolvedProspectId,
+    initialPayload: leadId ? {
+      selected_account: { lead_id: leadId, prospect_id: resolvedProspectId },
+    } : {},
+  });
+
+  await logAoAuditEvent({
+    event: 'AO_COMMAND_CENTER_CONTINUE_CLICKED',
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: resolvedProspectId,
+    payload: { source, session_id: session.id, action: 'created_new' },
+  });
+
+  return {
+    ok: true,
+    action: 'created',
+    session_id: session.id,
+    status: 'active',
+    messages: [],
+    prospect_id: resolvedProspectId,
+    prospect_label: prospectLabel(session.payload || {}, session),
+    reply: 'Started a new conversation for this prospect. What do you need?',
+  };
+}
+
 async function getActiveOrRestorableConversation({ aoOwnerId, clientId }) {
   const { rows } = await pool.query(`
     SELECT *
@@ -663,6 +776,7 @@ module.exports = {
   handleProspectBriefAction,
   startNewConversation,
   markConversationDone,
+  continueConversationForProspect,
   reopenConversation,
   listConversations,
   getActiveOrRestorableConversation,

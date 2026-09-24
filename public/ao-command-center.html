@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#10203c">
+<title>Command Center — PulseForge AO</title>
+<link rel="icon" href="/favicon.ico">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  min-height: 100%;
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  font-family: var(--pf-font-body);
+}
+body {
+  max-width: 720px;
+  margin: 0 auto;
+  border-left: 1px solid var(--pf-border);
+  border-right: 1px solid var(--pf-border);
+  padding-bottom: 80px;
+}
+.cc-header {
+  background: var(--pf-nav-bg);
+  color: var(--pf-nav-text);
+  padding: 16px;
+  border-bottom: 2px solid var(--pf-gold);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.cc-title {
+  font-family: var(--pf-font-display);
+  font-size: 1.6rem;
+  letter-spacing: 2px;
+}
+.cc-sub {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-nav-muted);
+  margin-top: 4px;
+}
+.cc-greeting {
+  margin-top: 8px;
+  font-size: 0.95rem;
+  color: var(--pf-gold);
+}
+.cc-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.cc-nav a {
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-nav-muted);
+  text-decoration: none;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+.cc-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 8px;
+  padding: 12px 16px;
+  background: var(--pf-bg-raised);
+  border-bottom: 1px solid var(--pf-border);
+}
+.cc-card {
+  background: var(--pf-surface);
+  border: 1px solid var(--pf-border);
+  border-radius: 8px;
+  padding: 10px;
+  text-align: center;
+}
+.cc-card-val {
+  font-family: var(--pf-font-display);
+  font-size: 1.4rem;
+  color: var(--pf-navy);
+  line-height: 1;
+}
+.cc-card-lbl {
+  font-family: var(--pf-font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+  margin-top: 4px;
+}
+.cc-section {
+  padding: 12px 16px;
+}
+.cc-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.cc-section-title {
+  font-family: var(--pf-font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--pf-text-muted);
+}
+.cc-section-toggle {
+  background: none;
+  border: none;
+  color: var(--pf-text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.cc-empty {
+  padding: 16px;
+  border: 1px dashed var(--pf-border);
+  border-radius: 8px;
+  color: var(--pf-text-muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.cc-row {
+  border: 1px solid var(--pf-border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: var(--pf-surface);
+}
+.cc-row-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+.cc-row-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.cc-row-meta {
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  color: var(--pf-text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+.cc-badge {
+  font-family: var(--pf-font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgba(201, 162, 39, 0.15);
+  color: var(--pf-gold-dark, #8a6d1a);
+  white-space: nowrap;
+}
+.cc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.cc-btn {
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  border: 1px solid var(--pf-border);
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  min-height: 36px;
+}
+.cc-btn.primary {
+  background: var(--pf-navy);
+  color: #fff;
+  border-color: var(--pf-navy);
+}
+.cc-btn.warn {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+.cc-loading, .cc-error {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--pf-text-muted);
+}
+.cc-error { color: #c0392b; }
+.cc-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+}
+.cc-modal-backdrop.open { display: flex; }
+.cc-modal {
+  background: var(--pf-surface);
+  border-radius: 12px 12px 0 0;
+  width: 100%;
+  max-width: 720px;
+  max-height: 85vh;
+  overflow: auto;
+  padding: 16px;
+}
+.cc-modal h3 {
+  font-family: var(--pf-font-display);
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+.cc-field { margin-bottom: 12px; }
+.cc-field label {
+  display: block;
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--pf-text-muted);
+  margin-bottom: 4px;
+}
+.cc-field select, .cc-field input, .cc-field textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--pf-border);
+  border-radius: 6px;
+  font-family: var(--pf-font-body);
+  font-size: 0.9rem;
+  background: var(--pf-bg);
+  color: var(--pf-text);
+}
+.cc-field textarea { min-height: 80px; resize: vertical; }
+.cc-modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+.cc-brief-body {
+  white-space: pre-wrap;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  max-height: 50vh;
+  overflow: auto;
+  background: var(--pf-bg);
+  border: 1px solid var(--pf-border);
+  border-radius: 8px;
+  padding: 12px;
+}
+</style>
+</head>
+<body>
+<header class="cc-header">
+  <div class="cc-title">Today's Command Center</div>
+  <div class="cc-sub">Your priority accounts, follow-ups, and conversations for today.</div>
+  <div class="cc-greeting" id="greeting"></div>
+  <nav class="cc-nav">
+    <a href="/ao/field">Field Mode</a>
+    <a href="/logout">Logout</a>
+  </nav>
+</header>
+
+<div class="cc-summary" id="summary"></div>
+<div id="content" class="cc-loading">Loading your command center…</div>
+
+<div class="cc-modal-backdrop" id="modal-backdrop">
+  <div class="cc-modal" id="modal"></div>
+</div>
+
+<script>
+const OUTCOME_TYPES = [
+  'called_no_answer', 'left_voicemail', 'sent_email', 'spoke_gatekeeper',
+  'spoke_decision_maker', 'booked_assessment', 'not_interested', 'not_fit',
+  'follow_up_later', 'needs_research', 'other',
+];
+const ISSUE_TYPES = [
+  'wrong_route', 'wrong_prospect', 'wrong_mission', 'lost_context',
+  'should_have_opened_brief', 'should_have_opened_conversation',
+  'treated_as_done_incorrectly', 'other',
+];
+
+let state = { data: null, sessionId: null };
+
+function fmtDate(value) {
+  if (!value) return '—';
+  return new Date(value).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function fmtScore(score) {
+  if (score == null) return '';
+  return `${Math.round(score * 100)}% fit`;
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  return body;
+}
+
+function closeModal() {
+  document.getElementById('modal-backdrop').classList.remove('open');
+  document.getElementById('modal').innerHTML = '';
+}
+
+function openModal(html) {
+  document.getElementById('modal').innerHTML = html;
+  document.getElementById('modal-backdrop').classList.add('open');
+}
+
+function renderSummary(summary) {
+  const cards = [
+    ['Priority Accounts', summary.priority_accounts],
+    ['Follow-ups Due', summary.followups_due],
+    ['Conversations', summary.conversations_to_continue],
+    ['Flags Open', summary.routing_flags_open],
+    ['Updates Needed', summary.updates_needed],
+  ];
+  document.getElementById('summary').innerHTML = cards.map(([lbl, val]) => `
+    <div class="cc-card">
+      <div class="cc-card-val">${val}</div>
+      <div class="cc-card-lbl">${lbl}</div>
+    </div>
+  `).join('');
+}
+
+function actionButtons(item, context = 'prospect') {
+  const pid = item.prospect_id;
+  const sid = item.latest_session_id || item.session_id;
+  if (context === 'conversation') {
+    return `
+      <button class="cc-btn primary" data-action="open-conv" data-session="${item.session_id}">Open</button>
+      ${item.can_reopen ? `<button class="cc-btn" data-action="reopen-conv" data-session="${item.session_id}">Reopen</button>` : ''}
+      ${item.prospect_id ? `<button class="cc-btn" data-action="brief" data-prospect="${item.prospect_id}">Brief</button>` : ''}
+    `;
+  }
+  return `
+    <button class="cc-btn primary" data-action="brief" data-prospect="${pid}" ${item.lead_id ? `data-lead="${item.lead_id}"` : ''}>Brief</button>
+    <button class="cc-btn" data-action="continue" data-prospect="${pid}" ${item.lead_id ? `data-lead="${item.lead_id}"` : ''}>Continue</button>
+    <button class="cc-btn" data-action="log-update" data-prospect="${pid}">Log Update</button>
+    <button class="cc-btn" data-action="follow-up" data-prospect="${pid}">Mark Follow-Up</button>
+    <button class="cc-btn warn" data-action="flag" data-prospect="${pid}" data-session="${sid || ''}">Flag Issue</button>
+    ${sid ? `<button class="cc-btn" data-action="done" data-session="${sid}">Done</button>` : ''}
+  `;
+}
+
+function renderProspectRow(item) {
+  return `
+    <div class="cc-row" data-prospect="${item.prospect_id}">
+      <div class="cc-row-head">
+        <div>
+          <div class="cc-row-name">${item.company_name}</div>
+          <div class="cc-row-meta">
+            ${item.segment || item.prospect_motion || '—'}
+            ${item.ao_fit_score != null ? ` · ${fmtScore(item.ao_fit_score)}` : ''}
+            ${item.ao_assignment_category ? ` · ${item.ao_assignment_category}` : ''}
+          </div>
+          ${item.recommended_angle ? `<div class="cc-row-meta">${item.recommended_angle}</div>` : ''}
+          ${item.next_action ? `<div class="cc-row-meta">Next: ${item.next_action}${item.next_action_due_at ? ` · due ${fmtDate(item.next_action_due_at)}` : ''}</div>` : ''}
+          ${item.conversation_status ? `<div class="cc-row-meta">Conversation: ${item.conversation_status}</div>` : ''}
+        </div>
+        ${item.priority_score != null ? `<span class="cc-badge">P${item.priority_score}</span>` : ''}
+      </div>
+      <div class="cc-actions">${actionButtons(item)}</div>
+    </div>
+  `;
+}
+
+function renderConversationRow(item) {
+  return `
+    <div class="cc-row">
+      <div class="cc-row-head">
+        <div>
+          <div class="cc-row-name">${item.prospect_label || 'Conversation'}</div>
+          <div class="cc-row-meta">${item.conversation_status} · updated ${fmtDate(item.last_updated)}</div>
+          ${item.last_message_preview ? `<div class="cc-row-meta">"${item.last_message_preview}"</div>` : ''}
+        </div>
+      </div>
+      <div class="cc-actions">${actionButtons(item, 'conversation')}</div>
+    </div>
+  `;
+}
+
+function renderFlagRow(item) {
+  return `
+    <div class="cc-row">
+      <div class="cc-row-name">${item.issue_type.replace(/_/g, ' ')}</div>
+      <div class="cc-row-meta">${fmtDate(item.created_at)} · ${item.company_name || item.prospect_id || 'General'}</div>
+      ${item.notes ? `<div class="cc-row-meta">${item.notes}</div>` : ''}
+      <div class="cc-actions">
+        ${item.prospect_id ? `<button class="cc-btn" data-action="continue" data-prospect="${item.prospect_id}">View Context</button>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderSection(title, items, renderFn, emptyText, collapsible = false) {
+  const id = title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  const hidden = collapsible && title.includes('Flags') ? ' hidden' : '';
+  return `
+    <section class="cc-section" id="section-${id}">
+      <div class="cc-section-head">
+        <div class="cc-section-title">${title} (${items.length})</div>
+        ${collapsible ? `<button class="cc-section-toggle" data-toggle="${id}">Toggle</button>` : ''}
+      </div>
+      <div class="cc-section-body"${hidden}>
+        ${items.length ? items.map(renderFn).join('') : `<div class="cc-empty">${emptyText}</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderAll(data) {
+  const s = data.sections;
+  document.getElementById('greeting').textContent = data.ao_user?.greeting || '';
+  renderSummary(data.summary);
+  document.getElementById('content').innerHTML = [
+    renderSection('Today\'s Priority Accounts', s.priority_accounts, renderProspectRow,
+      'No priority accounts due today. Check Recently Assigned or ask Max for a brief on a prospect.'),
+    renderSection('Follow-ups Due', s.followups_due, renderProspectRow,
+      'No follow-ups due today.'),
+    renderSection('Conversations to Continue', s.conversations_to_continue, renderConversationRow,
+      'No active conversations to continue.'),
+    renderSection('Recently Assigned', s.recently_assigned, renderProspectRow,
+      'No recently assigned prospects.'),
+    renderSection('Routing Issues / Flags', s.routing_issues, renderFlagRow,
+      'No recent routing issues flagged.', true),
+    renderSection('Updates Needed', s.updates_needed, renderProspectRow,
+      'All caught up — no debriefs due.'),
+  ].join('');
+}
+
+async function loadCommandCenter() {
+  try {
+    state.data = await api('/ao/api/command-center');
+    renderAll(state.data);
+  } catch (err) {
+    document.getElementById('content').innerHTML = `<div class="cc-error">${err.message}</div>`;
+  }
+}
+
+async function handleBrief(prospectId, leadId) {
+  try {
+    const result = await api('/ao/api/max/prospect-brief', {
+      method: 'POST',
+      body: JSON.stringify({
+        prospect_id: prospectId || undefined,
+        lead_id: leadId || undefined,
+        session_id: state.sessionId,
+        source: 'command_center_brief_button',
+      }),
+    });
+    state.sessionId = result.session_id;
+    openModal(`
+      <h3>Prospect Brief</h3>
+      <div class="cc-brief-body">${result.reply || result.brief || 'Brief loaded.'}</div>
+      <div class="cc-modal-actions">
+        <button class="cc-btn primary" onclick="window.location.href='/ao/field'">Open in Max</button>
+        <button class="cc-btn" id="modal-close">Close</button>
+      </div>
+    `);
+    document.getElementById('modal-close').onclick = closeModal;
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function handleContinue(prospectId, leadId) {
+  try {
+    const result = await api('/ao/api/max/conversations/continue', {
+      method: 'POST',
+      body: JSON.stringify({
+        prospect_id: prospectId || undefined,
+        lead_id: leadId || undefined,
+        source: 'command_center',
+      }),
+    });
+    state.sessionId = result.session_id;
+    window.location.href = `/ao/field?session=${encodeURIComponent(result.session_id)}`;
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function showLogUpdateModal(prospectId, preset = {}) {
+  openModal(`
+    <h3>Log Update</h3>
+    <div class="cc-field">
+      <label>Outcome</label>
+      <select id="log-outcome">${OUTCOME_TYPES.map(t => `<option value="${t}" ${preset.outcome === t ? 'selected' : ''}>${t.replace(/_/g, ' ')}</option>`).join('')}</select>
+    </div>
+    <div class="cc-field">
+      <label>Notes</label>
+      <textarea id="log-notes" placeholder="What happened?">${preset.notes || ''}</textarea>
+    </div>
+    <div class="cc-field">
+      <label>Next action (optional)</label>
+      <input id="log-next-action" value="${preset.next_action || ''}" placeholder="Follow up Friday">
+    </div>
+    <div class="cc-field">
+      <label>Due at (optional)</label>
+      <input id="log-due" type="datetime-local">
+    </div>
+    <div class="cc-modal-actions">
+      <button class="cc-btn primary" id="log-save">Save</button>
+      <button class="cc-btn" id="modal-close">Cancel</button>
+    </div>
+  `);
+  document.getElementById('modal-close').onclick = closeModal;
+  document.getElementById('log-save').onclick = async () => {
+    try {
+      const dueRaw = document.getElementById('log-due').value;
+      await api(`/ao/api/prospects/${prospectId}/log-update`, {
+        method: 'POST',
+        body: JSON.stringify({
+          outcome_type: document.getElementById('log-outcome').value,
+          notes: document.getElementById('log-notes').value,
+          next_action: document.getElementById('log-next-action').value || undefined,
+          next_action_due_at: dueRaw ? new Date(dueRaw).toISOString() : undefined,
+          source: 'command_center',
+        }),
+      });
+      closeModal();
+      await loadCommandCenter();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
+function showFlagModal(prospectId, sessionId) {
+  openModal(`
+    <h3>Flag Routing Issue</h3>
+    <div class="cc-field">
+      <label>Issue type</label>
+      <select id="flag-type">${ISSUE_TYPES.map(t => `<option value="${t}">${t.replace(/_/g, ' ')}</option>`).join('')}</select>
+    </div>
+    <div class="cc-field">
+      <label>Notes</label>
+      <textarea id="flag-notes" placeholder="What went wrong?"></textarea>
+    </div>
+    <div class="cc-modal-actions">
+      <button class="cc-btn primary" id="flag-save">Submit Flag</button>
+      <button class="cc-btn" id="modal-close">Cancel</button>
+    </div>
+  `);
+  document.getElementById('modal-close').onclick = closeModal;
+  document.getElementById('flag-save').onclick = async () => {
+    try {
+      await api('/ao/api/max/flag-routing', {
+        method: 'POST',
+        body: JSON.stringify({
+          prospect_id: prospectId || undefined,
+          session_id: sessionId || undefined,
+          issue_type: document.getElementById('flag-type').value,
+          notes: `[command_center] ${document.getElementById('flag-notes').value}`.trim(),
+        }),
+      });
+      closeModal();
+      await loadCommandCenter();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
+async function handleDone(sessionId) {
+  if (!confirm('Mark this conversation done? You can reopen it from history.')) return;
+  try {
+    await api(`/ao/api/max/conversations/${sessionId}/done`, { method: 'POST', body: '{}' });
+    await loadCommandCenter();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+async function handleReopen(sessionId) {
+  try {
+    await api(`/ao/api/max/conversations/${sessionId}/reopen`, { method: 'POST', body: '{}' });
+    window.location.href = `/ao/field?session=${encodeURIComponent(sessionId)}`;
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+document.getElementById('content').addEventListener('click', async (event) => {
+  const btn = event.target.closest('[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const prospectId = btn.dataset.prospect;
+  const leadId = btn.dataset.lead;
+  const sessionId = btn.dataset.session;
+
+  if (action === 'brief') return handleBrief(prospectId, leadId);
+  if (action === 'continue') return handleContinue(prospectId, leadId);
+  if (action === 'log-update') return showLogUpdateModal(prospectId);
+  if (action === 'follow-up') return showLogUpdateModal(prospectId, { outcome: 'follow_up_later', next_action: 'AO_FOLLOW_UP' });
+  if (action === 'flag') return showFlagModal(prospectId, sessionId);
+  if (action === 'done') return handleDone(sessionId);
+  if (action === 'open-conv') {
+    window.location.href = `/ao/field?session=${encodeURIComponent(sessionId)}`;
+    return;
+  }
+  if (action === 'reopen-conv') return handleReopen(sessionId);
+});
+
+document.getElementById('content').addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-toggle]');
+  if (!toggle) return;
+  const body = toggle.closest('.cc-section')?.querySelector('.cc-section-body');
+  if (body) body.hidden = !body.hidden;
+});
+
+document.getElementById('modal-backdrop').addEventListener('click', (event) => {
+  if (event.target.id === 'modal-backdrop') closeModal();
+});
+
+loadCommandCenter();
+</script>
+</body>
+</html>
