@@ -152,6 +152,9 @@ describe('Scout SearchGeography cycle break', () => {
       const { createInjectedDiscoverAdapter } = require(${JSON.stringify(
         path.join(ROOT, 'packages/max/scoutAcquisition/DiscoveryAdapters')
       )});
+      const { buildAcquisitionSearchDefinition } = require(${JSON.stringify(
+        path.join(ROOT, 'packages/max/scoutAcquisition/SearchDefinition')
+      )});
       const { INVESTIGATIVE_EVIDENCE } = require(${JSON.stringify(
         path.join(ROOT, 'packages/scout/coverage/EvidenceRequirements')
       )});
@@ -160,18 +163,23 @@ describe('Scout SearchGeography cycle break', () => {
 
       (async () => {
         const received = [];
-        const adapter = createInjectedDiscoverAdapter(async (searchDefinition) => {
-          received.push(searchDefinition);
-          assert.ok(searchDefinition.evidenceRequest);
-          assert.ok(Array.isArray(searchDefinition.evidenceRequest.geography.cities));
+        const adapter = createInjectedDiscoverAdapter(async (input) => {
+          received.push(input);
+          assert.ok(input.evidenceRequest || (input.searchDefinition && input.searchDefinition.evidenceRequest));
+          const request = input.evidenceRequest || input.searchDefinition.evidenceRequest;
+          assert.ok(Array.isArray(request.geography.cities));
           return [{ id: 'disc-1', name: 'Granite PM', location: 'Manchester, NH' }];
         });
 
-        const searchDefinition = {
+        const searchDefinition = buildAcquisitionSearchDefinition({
           tenantId: '10',
-          geography: { label: 'Greater Manchester NH', state: 'NH' },
-          segments: ['property_management'],
-        };
+          targetContext: { geography: 'Greater Manchester', segments: ['property_management'] },
+          businessContext: {
+            serviceGeography: 'Greater Manchester',
+            commercialCapability: 'commercial_cleaning',
+            preferredSegments: ['property_management'],
+          },
+        });
         const plan = buildDiscoveryPlan(searchDefinition, { adapters: [adapter] });
         const result = await executeCoveragePlan(plan, searchDefinition, [adapter], {
           marketDefinition: { segments: ['property_management'] },
