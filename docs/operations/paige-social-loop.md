@@ -56,6 +56,15 @@ No automatic publishing scheduler was added. Existing Paige scheduling remains d
 7. Read back until PUBLISHED. A Buffer scheduled/sending post or GBP PROCESSING post is not yet verified. For UNKNOWN/PUBLISHING after a crash, check the provider dashboard. Reconcile only an existing exact post ID with an operator reason; fresh-send unlock is intentionally unavailable. A live PUBLISHING claim cannot be reconciled for five minutes.
 8. Open `/content-outcomes?client_id=10`, select the linked publication ID and record engagement/outcomes. Evaluate with `POST /api/content-learning/evaluate/:publicationId?client_id=10` to produce advisory learning. Any strategy change still requires the established human process.
 
+Model selection env vars (no secrets):
+
+```bash
+PAIGE_WRITER_MODEL=claude-opus-5-5
+PAIGE_EVALUATOR_MODEL=claude-sonnet-4-6
+```
+
+The writer model controls public-facing draft generation and regeneration. The evaluator model controls quality scoring only. Separate variables allow quality/cost tuning independently without changing Paige safeguards, approval flow, or publication behavior.
+
 Configuration example (references only, no secrets):
 
 ```json
