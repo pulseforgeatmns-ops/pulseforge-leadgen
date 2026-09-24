@@ -44,7 +44,15 @@ test('canonical tenant and account checks fail closed without using global crede
 test('Anchor doctrine blocks AI tells, generic closers, body em dashes and walkthrough terminology', async () => {
   for (const body of ['I wanted to reach out about a facilities assessment.', 'Cleaning — made easy.', 'Would you be open to a quick call?', 'Book a walkthrough.']) {
     const f = await fixture(); const a = await f.current(); a.body = body; await f.store.insertBatch([a]);
-    await assert.rejects(f.approval.preview({ ...f.scope, artifactId: a.id }), /anchor_copy_doctrine_violation/);
+    try {
+      await f.approval.preview({ ...f.scope, artifactId: a.id });
+      assert.fail(`expected doctrine rejection for body: ${body}`);
+    } catch (err) {
+      assert.match(err.message, /anchor_copy_doctrine_violation/);
+      assert.equal(err.code, 'anchor_copy_doctrine_violation');
+      assert.ok(Array.isArray(err.violations));
+      assert.ok(err.violations.every((v) => v.patternId && v.source));
+    }
     assert.notEqual(approvalHash(a, f.account), approvalHash(f.artifact, f.account));
   }
 });

@@ -1,5 +1,9 @@
 'use strict';
 const { createHash } = require('crypto');
+const {
+  validateAnchorSocialCopy,
+  buildAnchorCopyDoctrineViolationError,
+} = require('../../../utils/anchorCopyDoctrine');
 
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
@@ -25,8 +29,7 @@ function assertSocialCopy(a) {
   // Text-only adapters must never silently discard approved media or auxiliary content.
   if ((a.mediaRefs && (!Array.isArray(a.mediaRefs) || a.mediaRefs.length)) || a.meta?.firstComment || a.meta?.first_comment) throw new Error('unsupported_social_media_or_first_comment');
   if (Number(a.clientId) !== 10) return;
-  const { validateAnchorCopyDoctrine } = require('../../../utils/anchorCopyDoctrine');
-  const check = validateAnchorCopyDoctrine({ body: a.body });
-  if (!check.ok || /\bwalk[- ]?throughs?\b|that's how i think about|that loop is becoming more interesting|what do you think\?/i.test(a.body)) throw new Error('anchor_copy_doctrine_violation');
+  const check = validateAnchorSocialCopy(a.body);
+  if (!check.ok) throw buildAnchorCopyDoctrineViolationError(check.violations);
 }
 module.exports = { hash, contentSnapshot, contentHash, approvalHash, assertApproval, assertSocialCopy };

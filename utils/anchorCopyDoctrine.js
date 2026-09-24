@@ -487,6 +487,41 @@ function validateAnchorCopyDoctrine({ subject = '', body = '', cta = '' } = {}) 
   };
 }
 
+const ANCHOR_SOCIAL_RULES = Object.freeze([
+  { id: 'walkthrough', re: /\bwalk[- ]?throughs?\b/i },
+  { id: 'aphorism_closer_thats_how', re: /that's how i think about/i },
+  { id: 'aphorism_closer_loop', re: /that loop is becoming more interesting/i },
+  { id: 'engagement_bait_question', re: /what do you think\?/i },
+]);
+
+function validateAnchorSocialCopy(body = '') {
+  const doctrine = validateAnchorCopyDoctrine({ body });
+  const doctrineViolations = doctrine.violations.map((violation) => ({
+    source: 'anchor_copy_doctrine',
+    patternId: violation.patternId,
+    match: violation.match,
+  }));
+  const socialViolations = findPatternViolations(body, ANCHOR_SOCIAL_RULES).map((violation) => ({
+    source: 'anchor_social_rule',
+    patternId: violation.patternId,
+    match: violation.match,
+  }));
+  const violations = [...doctrineViolations, ...socialViolations];
+
+  return {
+    ok: violations.length === 0,
+    blocker: violations.length ? DOCTRINE_BLOCKER : null,
+    violations,
+  };
+}
+
+function buildAnchorCopyDoctrineViolationError(violations = []) {
+  const err = new Error(DOCTRINE_BLOCKER);
+  err.code = DOCTRINE_BLOCKER;
+  err.violations = violations;
+  return err;
+}
+
 module.exports = {
   ANCHOR_CLIENT_ID,
   ANCHOR_COPY_OWNER,
@@ -518,4 +553,7 @@ module.exports = {
   buildEvidenceEnhancedEmail,
   buildAnchorCopy,
   validateAnchorCopyDoctrine,
+  ANCHOR_SOCIAL_RULES,
+  validateAnchorSocialCopy,
+  buildAnchorCopyDoctrineViolationError,
 };
