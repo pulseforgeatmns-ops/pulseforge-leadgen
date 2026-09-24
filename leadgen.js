@@ -636,6 +636,10 @@ function isCleaningBuyerProfile() {
   return CONFIG.scoringProfile === 'cleaning_buyer';
 }
 
+function isWebDesignProfile() {
+  return CONFIG.scoringProfile === 'web_design';
+}
+
 function validCleaningEmailOrNull(email) {
   const raw = typeof email === 'string' ? email.trim() : '';
   if (!raw || raw === '—') return null;
@@ -2653,6 +2657,39 @@ async function saveToDatabase(leads, {
         }
       }
 
+      if (isWebDesignProfile() && domain) {
+        try {
+          const { assessDiscoveredBusiness, mapOpportunityScoreToIcp } = require('./services/webDesignScout');
+          const webAssessment = await assessDiscoveredBusiness({
+            client_id: CONFIG.clientId,
+            prospect_id: prospectId,
+            company: companyName,
+            domain,
+            url: websiteUrl,
+            industry: CONFIG.vertical,
+            location: lead.address || CONFIG.location,
+            email,
+            phone,
+            contact: lead.contact,
+            google_rating: googleRating,
+            google_review_count: googleReviewCount,
+            skipPuppeteer: true,
+          }, { pool, skipPuppeteer: true });
+          if (webAssessment?.opportunity_score != null) {
+            const mapped = mapOpportunityScoreToIcp(
+              webAssessment.opportunity_score,
+              webAssessment.recommended_action
+            );
+            await pool.query(
+              `UPDATE prospects SET icp_score = $1 WHERE id = $2 AND client_id = $3`,
+              [mapped, prospectId, CONFIG.clientId]
+            );
+          }
+        } catch (webErr) {
+          console.error(`[Scout] Website opportunity assessment failed for ${companyName}: ${webErr.message}`);
+        }
+      }
+
       await safeIngestScoutLifecycleSignal({
         prospectId,
         clientId: CONFIG.clientId,
@@ -3394,6 +3431,8 @@ module.exports = {
   scoreCleaningLead,
   scoreLead,
   configureScoringContext,
+  getSearchQueriesForTarget,
+  searchGooglePlaces,
   _test: {
     searchGoogle,
     normalizeSourceMode,

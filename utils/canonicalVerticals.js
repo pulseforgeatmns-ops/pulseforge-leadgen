@@ -62,6 +62,7 @@ const CANONICAL_BUSINESS_VERTICALS = Object.freeze([
   { value: 'roofing', label: 'Roofing' },
   { value: 'salon', label: 'Salon' },
   { value: 'staffing_recruiting', label: 'Staffing & Recruiting' },
+  { value: 'web_design', label: 'Web Design & Development' },
   { value: 'wholesale_distribution', label: 'Wholesale Distribution' },
 ]);
 

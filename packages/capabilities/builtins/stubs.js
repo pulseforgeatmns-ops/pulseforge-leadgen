@@ -555,6 +555,12 @@ function registerBuiltinCapabilities(registry, options = {}) {
   register(
     createSocialContentCapability(options.socialContent || {})
   );
+  const {
+    createWebsiteOpportunityIntelligenceCapability,
+  } = require('../websiteOpportunityIntelligence');
+  register(
+    createWebsiteOpportunityIntelligenceCapability(options.websiteOpportunityIntelligence || {})
+  );
   return registry;
 }
 

@@ -64,6 +64,8 @@ const BUILTIN_IDS = Object.freeze({
   SOCIAL_CONTENT: 'social_content',
   /** SPEC-256 — canonical Paige social content publication (requires APPROVED artifact) */
   SOCIAL_CONTENT_PUBLISH: 'social_content_publish',
+  /** SPEC-WEB-001 — website audit + commercial opportunity intelligence */
+  WEBSITE_OPPORTUNITY_INTELLIGENCE: 'website_opportunity_intelligence',
 });
 
 /**
