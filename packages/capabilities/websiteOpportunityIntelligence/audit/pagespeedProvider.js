@@ -9,7 +9,18 @@ async function fetchPageSpeedMetrics(domain, deps = {}) {
   const raw = { mobile: null, desktop: null, skipped: null };
 
   if (!apiKey || deps.skipPageSpeed) {
-    raw.skipped = 'no_api_key';
+    raw.skipped = deps.skipPageSpeed ? 'skipped_by_caller' : 'no_api_key';
+    findings.push(buildFinding({
+      id: 'psi_unavailable',
+      evidence_class: EVIDENCE_CLASS.UNKNOWN,
+      category: 'performance',
+      summary: deps.skipPageSpeed
+        ? 'PageSpeed Insights skipped by caller'
+        : 'PageSpeed Insights unavailable (no API key configured)',
+      source: 'pagespeed_insights',
+      observed_at: new Date().toISOString(),
+      ref: 'pagespeed:unavailable',
+    }));
     return { findings, raw };
   }
 

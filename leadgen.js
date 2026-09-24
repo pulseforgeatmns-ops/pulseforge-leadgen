@@ -3431,6 +3431,8 @@ module.exports = {
   scoreCleaningLead,
   scoreLead,
   configureScoringContext,
+  getSearchQueriesForTarget,
+  searchGooglePlaces,
   _test: {
     searchGoogle,
     normalizeSourceMode,

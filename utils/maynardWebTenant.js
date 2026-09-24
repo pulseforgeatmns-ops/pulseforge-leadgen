@@ -19,6 +19,7 @@ const WEB_MISSION_CONSTRAINTS = Object.freeze({
 });
 
 async function findMaynardWebClient(db = pool) {
+  if (!db) return null;
   const res = await db.query(
     `SELECT * FROM clients WHERE slug = $1 LIMIT 1`,
     [MAYNARD_WEB_SLUG]
