@@ -265,6 +265,49 @@ function recordReplenishmentRejection(counters, reason) {
   counters.rejected[reason] = (counters.rejected[reason] || 0) + 1;
 }
 
+function isCanonicalEnrichableVertical(vertical) {
+  const normalized = normalizeVertical(vertical);
+  return Boolean(normalized && ENRICHABLE_SCOUT_VERTICALS.includes(normalized));
+}
+
+/** Pre-#711 replenishment rows with query-slug verticals must not block fresh canonical admission. */
+function isLegacyMalformedReplenishmentOwnership(row = {}) {
+  if (String(row.source || '') !== 'max_buffer_replenishment') return false;
+  if (Number(row.enrichment_attempts || 0) !== 0) return false;
+  return !isCanonicalEnrichableVertical(row.vertical);
+}
+
+const LEGACY_RECONCILIATION_REMOVE_REASONS = Object.freeze([
+  'outside_geography',
+  'contradictory_business_type',
+]);
+
+function isLegacyReconciliationRemoveReason(reason) {
+  return LEGACY_RECONCILIATION_REMOVE_REASONS.includes(reason);
+}
+
+function resolveLegacyReconciliationOutcome(admission = {}) {
+  if (admission.admitted) {
+    return {
+      outcome: 'canonicalize',
+      vertical: admission.vertical,
+    };
+  }
+  const reason = admission.reason || 'unclassifiable_vertical';
+  if (isLegacyReconciliationRemoveReason(reason)) {
+    return {
+      outcome: 'remove',
+      reason,
+      detail: admission.detail || null,
+    };
+  }
+  return {
+    outcome: 'hold',
+    reason,
+    detail: admission.detail || null,
+  };
+}
+
 module.exports = {
   ENRICHABLE_SCOUT_VERTICALS,
   resolveReplenishmentVertical,
@@ -274,6 +317,11 @@ module.exports = {
   missionCompatibleVerticals,
   createReplenishmentAdmissionCounters,
   recordReplenishmentRejection,
+  isCanonicalEnrichableVertical,
+  isLegacyMalformedReplenishmentOwnership,
+  LEGACY_RECONCILIATION_REMOVE_REASONS,
+  isLegacyReconciliationRemoveReason,
+  resolveLegacyReconciliationOutcome,
   _test: {
     classificationHaystack,
     isSearchDerivedField,
