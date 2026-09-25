@@ -2,6 +2,7 @@ const pool = require('./db');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { promoteRecord } = require('./scripts/promoteUnenriched');
+const { ENRICHABLE_SCOUT_VERTICALS } = require('./utils/replenishmentVertical');
 
 const AGENT_NAME = 'scout_unenriched_enrichment';
 const ANCHOR_CLIENT_ID = 10;
@@ -9,7 +10,7 @@ const DEFAULT_LIMIT = 5;
 const DEFAULT_RETRY_HOURS = 7 * 24;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const SCHEDULED_HOUR_ET = 17;
-const ANCHOR_PRIORITY_VERTICALS = ['property_manager', 'str_manager', 'commercial_office'];
+const ANCHOR_PRIORITY_VERTICALS = ENRICHABLE_SCOUT_VERTICALS;
 
 function easternParts(now = new Date()) {
   const values = new Intl.DateTimeFormat('en-CA', {
