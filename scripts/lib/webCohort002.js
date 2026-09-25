@@ -19,6 +19,9 @@ const { assessDiscoveredBusiness } = require('../../services/webDesignScout');
 const { insertWebsiteOpportunityEvent } = require('../../services/websiteOpportunityPersistence');
 const { emitWebEvent, WEB_EVENT_TYPES } = require('../../packages/capabilities/websiteOpportunityIntelligence/observability');
 const {
+  evaluateCohortAdmission,
+} = require('../../packages/capabilities/websiteOpportunityIntelligence/discoveryAdmission');
+const {
   formatCohortRow,
   attachMaxPriority,
   countDistribution,
@@ -73,6 +76,7 @@ async function discoverCandidatesViaScout(clientId, { targetSize = COHORT_SIZE }
   const { _test: { searchGoogle } } = require('../../leadgen');
   const candidates = [];
   const seenDomains = new Set();
+  const seenCompanies = new Set();
   const discoveryLog = [];
 
   for (const pass of DISCOVERY_ROTATION) {
@@ -127,13 +131,14 @@ async function discoverCandidatesViaScout(clientId, { targetSize = COHORT_SIZE }
       }
 
       for (const { lead, discovery } of batch) {
-        const domain = normalizeDomain(lead.url);
-        if (!domain || seenDomains.has(domain)) continue;
-        seenDomains.add(domain);
+        const admission = evaluateCohortAdmission(lead, { seenDomains, seenCompanies });
+        if (!admission.admitted) continue;
+        seenDomains.add(admission.domain);
+        seenCompanies.add(String(lead.company || '').toLowerCase().replace(/\s+/g, ' ').trim());
 
         candidates.push({
           company: lead.company,
-          domain,
+          domain: admission.domain,
           url: lead.url,
           industry: pass.industry,
           vertical: pass.vertical,
@@ -153,7 +158,7 @@ async function discoverCandidatesViaScout(clientId, { targetSize = COHORT_SIZE }
 
         discoveryLog.push({
           business: lead.company,
-          domain,
+          domain: admission.domain,
           ...discovery,
         });
 

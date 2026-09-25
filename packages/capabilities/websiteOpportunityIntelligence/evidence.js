@@ -1,6 +1,7 @@
 'use strict';
 
 const { EVIDENCE_CLASS, buildFinding } = require('./types');
+const { isDuplicateOfSource, assertInferredIntegrity } = require('./inference');
 
 function assertEvidenceClass(value) {
   const normalized = String(value || '').toUpperCase();
@@ -46,6 +47,10 @@ function collectEvidenceRefs(findings) {
 
 function enforceEvidenceIntegrity(assessment, findings) {
   const measured = findings.filter(isMeasuredFinding);
+  const observed = findings.filter((f) => f.evidence_class === EVIDENCE_CLASS.OBSERVED);
+  const inferred = findings.filter((f) => f.evidence_class === EVIDENCE_CLASS.INFERRED);
+  const sourceFindings = [...measured, ...observed];
+
   for (const m of measured) {
     if (m.measurement == null && m.detail == null) {
       throw new Error(`MEASURED finding missing measurement: ${m.id || m.summary}`);
@@ -56,6 +61,15 @@ function enforceEvidenceIntegrity(assessment, findings) {
       throw new Error(`UNKNOWN evidence cannot carry negative sales assertion: ${f.summary}`);
     }
   }
+  if (inferred.length) {
+    assertInferredIntegrity(sourceFindings, inferred);
+  }
+  for (const inf of inferred) {
+    if (isDuplicateOfSource(inf.summary, sourceFindings)) {
+      throw new Error(`INFERRED duplicates MEASURED/OBSERVED unchanged: ${inf.summary}`);
+    }
+  }
+
   return {
     ...assessment,
     evidence_refs: collectEvidenceRefs(findings),
@@ -74,6 +88,15 @@ function topFindings(findings, limit = 3) {
     .slice(0, limit);
 }
 
+function partitionEvidence(findings = []) {
+  return {
+    measured: findings.filter((f) => f.evidence_class === EVIDENCE_CLASS.MEASURED),
+    observed: findings.filter((f) => f.evidence_class === EVIDENCE_CLASS.OBSERVED),
+    inferred: findings.filter((f) => f.evidence_class === EVIDENCE_CLASS.INFERRED),
+    unknown: findings.filter((f) => f.evidence_class === EVIDENCE_CLASS.UNKNOWN),
+  };
+}
+
 module.exports = {
   assertEvidenceClass,
   isMeasuredFinding,
@@ -82,4 +105,5 @@ module.exports = {
   collectEvidenceRefs,
   enforceEvidenceIntegrity,
   topFindings,
+  partitionEvidence,
 };

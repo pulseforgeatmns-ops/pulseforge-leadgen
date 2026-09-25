@@ -186,19 +186,20 @@ function buildTopFiveDetail(rows) {
       evidence: {
         measured: classified.measured.map((f) => f.summary),
         observed: classified.observed.map((f) => f.summary),
-        inferred: [
-          ...(diagnosis.commercially_important || []),
-          ...(diagnosis.advise_first || []),
-        ],
+        inferred: (diagnosis.bounded_inferences || classified.inferred).map((f) =>
+          typeof f === 'string' ? f : f.summary
+        ),
         unknown: classified.unknown.map((f) => f.summary),
       },
+      diagnosis_class: diagnosis.diagnosis_class || null,
       economics: {
+        default_planning: row.raw_payload.economics?.default_planning_economics,
+        prospect_specific: row.raw_payload.economics?.prospect_specific_economics,
+        economic_confidence: row.raw_payload.economics?.economic_confidence,
         estimated_project_range: row.estimated_project_range,
         estimated_operator_hours: row.estimated_operator_hours,
-        operator_hourly_rate: 50,
-        estimated_direct_costs: row.raw_payload.economics?.estimated_direct_costs,
         estimated_contribution: row.estimated_contribution,
-        label: 'estimate',
+        label: row.raw_payload.economics?.label || 'estimate',
       },
       prioritization: {
         component_scores: row.raw_payload.score_components,
