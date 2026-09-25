@@ -1,0 +1,278 @@
+# Studio Substral — implementation record
+
+How `DOCTRINE.md` was translated into the built site, what was measured, and
+where implementation had to adapt. The doctrine is the creative source of
+truth; this file is the engineering account of it.
+
+`test/studioSubstralDoctrine.test.js` enforces the mechanically checkable parts
+of what follows. If you change the site and a doctrine test fails, the test is
+probably right.
+
+---
+
+## Palette (§6)
+
+Values are fixed, not eyeballed. Every pairing used for text clears WCAG AA for
+small text (4.5:1), which the doctrine requires under §21 and the test suite
+recomputes from the stylesheet on every run.
+
+| Token | Value | Role |
+|---|---|---|
+| `--substral-black` | `#11110F` | Warm charcoal environment |
+| `--graphite` | `#1C1B18` | Dimensional surface |
+| `--graphite-raised` | `#26241F` | Raised material |
+| `--mineral` | `#F0EDE5` | Warm architectural off-white |
+| `--mineral-sunk` | `#E4E0D5` | Secondary paper |
+| `--patina` | `#7FA890` | Accent on dark |
+| `--patina-deep` | `#3D6B57` | Accent on mineral |
+
+Measured contrast:
+
+| Foreground | Background | Ratio |
+|---|---|---|
+| `#F0EDE5` mineral | `#11110F` black | 16.16:1 |
+| `#C9C4B6` body | `#11110F` black | 10.85:1 |
+| `#8A8578` structural | `#11110F` black | 5.14:1 |
+| `#7FA890` patina | `#11110F` black | 7.12:1 |
+| `#7FA890` patina | `#1C1B18` graphite | 6.48:1 |
+| `#11110F` black | `#F0EDE5` mineral | 16.16:1 |
+| `#3A382F` body | `#F0EDE5` mineral | 10.05:1 |
+| `#5E5A4F` structural | `#F0EDE5` mineral | 5.88:1 |
+| `#3D6B57` patina-deep | `#F0EDE5` mineral | 5.22:1 |
+
+**One accent family, two tints.** The doctrine asks for one accent *family* and
+forbids large accent fills. A single value cannot clear AA on both `#11110F`
+and `#F0EDE5`, so the accent resolves per environment through `--accent` inside
+`.env-dark` / `.env-mineral`. Both tints sit in the same green hue, which the
+test verifies, so this is one family rather than two brand colours. The accent
+is never used as a fill larger than 16px; the test walks every rule that paints
+it and requires an explicit small size.
+
+---
+
+## Typography (§7)
+
+| Voice | Family | Why |
+|---|---|---|
+| Editorial grotesk | **Archivo** (variable, weight 100–900, width 62–125%) | Precise rather than friendly, excellent uppercase, holds together at extreme display sizes, and the width axis lets the hero be set slightly expanded so it reads architectural rather than merely large. Not geometric, not startup-soft. |
+| Technical mono | **IBM Plex Mono** | An engineering voice rather than a coding-nostalgia one. Carries the evidence classes, measurements and section numbering. |
+
+Both are SIL OFL and **self-hosted** as Latin `woff2` subsets in
+`assets/fonts/` (see `assets/fonts/LICENSE.txt`). Self-hosting removes two
+third-party connections from the critical path, which matters more here than
+the convenience of the Google Fonts CDN.
+
+The mono voice is restricted to evidence, metadata and labels. The test asserts
+that `.prose` is never set in mono.
+
+---
+
+## The dimensional object (§11, §18)
+
+There are **two implementations of the same object**, and that is deliberate.
+
+**Baseline — CSS 3D.** Six plates in a `preserve-3d` stack, smoked faces with
+an etched graticule, a light rim on the lower edge, and separation driven by a
+single `--sep` custom property. It needs no WebGL, no JavaScript to be present
+and composed, and costs nothing. On viewports under 600px this is not a
+fallback — it *is* the intended treatment (§17: fewer simultaneous objects,
+simplified lighting).
+
+**Enhancement — Three.js.** `src/dimensional.js` builds six extruded plates
+with `MeshPhysicalMaterial` (clearcoat, low metalness, 0.44 opacity,
+`depthWrite: false` so the layers read through each other), rims built from the
+plate silhouette, an additively blended graticule per layer, and a small
+procedural equirectangular environment so the acrylic and aluminium have
+something to reflect.
+
+Adaptations, and why:
+
+- **No `transmission`.** Real refractive transmission on six overlapping plates
+  needs a render target per frame and is the single most expensive thing in the
+  scene. Opacity plus clearcoat plus an environment reads as smoked acrylic at
+  this scale for a fraction of the cost. §26 permits adapting implementation to
+  preserve performance; the material character is preserved.
+- **Procedural environment, not an HDR asset.** A 256×128 canvas gradient with
+  two soft bands, run through `PMREMGenerator`. Nothing to download.
+- **Rims built by hand, not `EdgesGeometry`.** `EdgesGeometry` on a plate with
+  rounded corners produces either tessellation noise or gaps depending on the
+  threshold. Two closed loops from the silhouette give exactly the machined
+  outline intended.
+- **Loaded last, and conditionally.** Dynamically imported, gated on WebGL
+  support, `prefers-reduced-motion`, viewport width, `saveData` and
+  `deviceMemory`, and then deferred again to `requestIdleCallback`. It cannot
+  affect LCP.
+
+Both stages keep the canvas `aria-hidden="true"`. Every layer name, question
+and evidence class lives in the document, so the narrative survives with the
+object switched off entirely (§18, §21).
+
+---
+
+## Motion (§13)
+
+No `@keyframes` anywhere in the stylesheet. All narrative motion is weighted
+interpolation toward a target, in a `requestAnimationFrame` loop that **stops
+as soon as nothing is moving** — there is no ambient motion competing for
+attention.
+
+- Separation damping factor `0.075`; camera `0.05`; pointer `0.035`.
+- Pointer parallax amplitude is 0.05 rad of yaw and 0.022 rad of pitch. The
+  test caps these, because the doctrine wants the visitor to half-wonder
+  whether they caused the shift rather than to see a mouse-follower.
+- No easing curve has a negative control point, so nothing can overshoot.
+- The CSS transition on `.plate` transform was deliberately **removed**:
+  transitioning a property the script already interpolates reads as lag, not
+  mass.
+
+Scroll is never intercepted. There is no wheel listener, no `scrollTo`, no
+scroll-snap. Sticky positioning does all the pinning, so the scrollbar always
+means what it says.
+
+---
+
+## Reduced motion (§19)
+
+Not a degraded version. Reduced-motion visitors get:
+
+- the object presented **already decomposed** at a fixed separation, which is
+  the state the narrative actually needs to make its point;
+- the canvas suppressed entirely (`display: none`) and the Three.js module
+  never requested;
+- the six converged names aligned rather than drifting;
+- the sticky stages released to normal flow at a fixed height;
+- all revealed content visible.
+
+The preference is read through `matchMedia` and **re-checked on change**, so
+turning it on mid-session takes effect without a reload.
+
+---
+
+## Performance (§20)
+
+The site publishes its own budget in the footer colophon, and the test suite
+holds it to it.
+
+| Budget | Enforced by |
+|---|---|
+| Eager JavaScript under 10 KB gzip | `studioSubstralDoctrine.test.js` gzips `substral.js` + `assessment.js` |
+| Deferred dimensional bundle under 170 KB gzip | same test, and `build/build.mjs` fails the build |
+| No render-blocking script in `<head>` | test asserts no `<script src>` in head |
+| No third-party origin on the critical path | test enumerates hosts in `<head>` |
+| Targets: LCP < 2.0s, CLS < 0.05, INP < 100ms | stated as commitments, not measurements |
+
+Current measured sizes: eager JS ~4 KB gzip, dimensional bundle 143 KB gzip /
+118 KB brotli (561 KB raw). three.js is tree-shaken and minified by
+`build/build.mjs` rather than shipped whole.
+
+Layout stability: the one raster image carries explicit `width`/`height`, fonts
+use `font-display: swap` with preload so the swap happens early, and an inline
+`<style>` in `<head>` paints the dark environment before the stylesheet
+resolves so the hero never flashes as a light page.
+
+The budget numbers in the colophon are **commitments**, not claimed
+measurements. Published measured figures would go stale in static HTML, and
+§16's integrity rules apply to our own claims as much as to a client's report.
+
+---
+
+## Assessment integrity (§16)
+
+This is where the site is load-bearing rather than decorative.
+
+The four evidence classes on the page are the same four the assessment engine
+emits (`packages/capabilities/websiteOpportunityIntelligence/types.js`:
+`MEASURED`, `OBSERVED`, `INFERRED`, `UNKNOWN`). The four conclusions in Act III
+are that engine's actual `DIAGNOSIS_CLASS` values — `REDESIGN_CANDIDATE`,
+`TARGETED_REMEDIATION`, `HEALTHY_SITE`, `INSUFFICIENT_EVIDENCE`. The test reads
+both enums from the engine and asserts the page matches, so the marketing
+surface cannot drift away from what the product can actually produce.
+
+The engine already refuses a list of claims via
+`PROHIBITED_CLAIM_PATTERNS`. **The test runs those same regexes against the
+page copy and against the intake's response messages.** The studio's website is
+held to the standard the studio's product enforces.
+
+Act IV is a real intake, not a decorative form:
+
+- `POST /api/public/website-assessment` → `routes/substralAssessment.js`
+- validation and capture → `lib/substralAssessmentIntake.js`
+- writes one `pending` `agent_actions` row so a request reaches the operator
+  queue rather than an inbox
+- the payload is stamped `stage: 'requested'`, and a test asserts no
+  score/diagnosis/evidence key can ride along on an intake row
+
+Domain admission reuses the engine's own `discoveryAdmission` rules, so a
+search engine, directory or social profile is rejected with the same logic the
+discovery pipeline uses. If the endpoint is unreachable the browser hands the
+visitor a `mailto:` carrying their input, so a request is never silently lost.
+
+**No score is produced anywhere.** The page says so out loud, and the test
+asserts no `nn/100` pattern exists.
+
+---
+
+## Work (§14 Act V)
+
+The published case study is **Anchor Cleaning**, a real site in this repository
+(`sites/anchor-cleaning/`), written up in the doctrine's five movements:
+Context, Diagnosis, Decision, Experience, Outcome.
+
+Every claim in it is checkable against that source: the two-page audience
+split, the inlined stylesheet, the six-field form that confirms in place, the
+`ProfessionalService` structured data and explicit service-area list, and the
+submissions that write into `agent_actions` through
+`lib/walkthroughCapture.js`.
+
+The Outcome section reports that the site is instrumented and **explicitly
+declines to publish conversion figures** until there is a full quarter of data
+and client approval. Under §10 and §16 a plausible-sounding number would be a
+fabricated metric, and inventing one on our own case study would be the exact
+failure the assessment promises not to commit.
+
+The screenshot is generated by `build/generate-assets.mjs` from the canonical
+source in this repository, served over a temporary local HTTP server so its
+root-relative asset paths resolve. It is **not** captured from
+`goanchorcleaning.com`, because the live deployment currently lags behind
+`main` and still shows retired "walkthrough" copy that the Anchor README
+explicitly bars from customer-facing use.
+
+The doctrine names MCFO Services as a possible first case study *if approved
+for public use*. It is not approved, so it is not published and it is not
+named. The "Publication standard" note states that a second engagement is
+waiting on approval, which is true and is also the point.
+
+---
+
+## Where the doctrine was adapted
+
+Per §26, the concept is preserved and only the implementation adapts. The
+complete list:
+
+1. **Accent split into two tints** — required to clear AA in both
+   environments. One hue family preserved.
+2. **No refractive transmission on the plates** — performance. Material
+   character preserved through clearcoat, opacity and environment reflection.
+3. **WebGL off below 600px** — the CSS composition becomes the intended mobile
+   object rather than a degraded desktop one, which is what §17 asks for.
+4. **Colophon publishes budgets, not measurements** — a measured figure baked
+   into static HTML would become a false claim the first time it drifted.
+5. **Case study outcome withheld** — §16 integrity applied to our own work.
+
+Nothing in the narrative, the layer ordering, the evidence taxonomy or the
+refusals was simplified.
+
+---
+
+## Launch blockers
+
+These are placeholders in the committed source and must be settled before the
+site is pointed at a real domain.
+
+| Item | Current value | Needed |
+|---|---|---|
+| Domain | `studiosubstral.com` | Register, or replace throughout `index.html`, `robots.txt`, `sitemap.xml`, `assets/brand/site.webmanifest` |
+| Mailbox | `hello@studiosubstral.com` | Create, or replace in `index.html` and `assets/js/assessment.js` (`FALLBACK_MAILBOX`) |
+| Intake origin | `pulseforge-leadgen-production.up.railway.app` | Confirm this is the production host; it is the `ENDPOINT` constant in `assets/js/assessment.js` |
+| Operator queue | `client_id = 1` | Set `STUDIO_SUBSTRAL_CLIENT_ID` if Studio Substral should have its own tenant |
+| Second case study | withheld | Publish only with client approval and verifiable claims |

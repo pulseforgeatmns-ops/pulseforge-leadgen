@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en" data-js="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Studio Substral — Look beneath the surface</title>
+<meta name="description" content="Studio Substral measures what a website actually does before deciding what should change. Performance, accessibility, conversion, search and trust — diagnosed before design. Manchester, New Hampshire.">
+<link rel="canonical" href="https://studiosubstral.com/">
+
+<!-- Paint the correct environment before the stylesheet resolves, so the
+     hero never flashes as an unstyled light page. -->
+<style>html{background:#11110f;color:#f0ede5}</style>
+
+<link rel="preload" href="assets/fonts/archivo-var-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/plex-mono-400-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/css/substral.css" as="style">
+<link rel="stylesheet" href="assets/css/substral.css">
+
+<link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/brand/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+<link rel="manifest" href="assets/brand/site.webmanifest">
+<meta name="theme-color" content="#11110F">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Studio Substral">
+<meta property="og:title" content="Studio Substral — Look beneath the surface">
+<meta property="og:description" content="We measure what exists before deciding what should change. Website diagnosis before website design.">
+<meta property="og:url" content="https://studiosubstral.com/">
+<meta property="og:image" content="https://studiosubstral.com/assets/brand/social-preview.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="SUBSTRAL wordmark in warm off-white on warm charcoal, above the line Studio, Manchester, New Hampshire.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Studio Substral — Look beneath the surface">
+<meta name="twitter:description" content="We measure what exists before deciding what should change.">
+<meta name="twitter:image" content="https://studiosubstral.com/assets/brand/social-preview.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "ProfessionalService",
+  "name": "Studio Substral",
+  "url": "https://studiosubstral.com/",
+  "description": "Website diagnosis and design studio. Measures performance, accessibility, conversion, search and trust before recommending design work.",
+  "email": "hello@studiosubstral.com",
+  "areaServed": {
+    "@type": "Place",
+    "name": "United States"
+  },
+  "address": {
+    "@type": "PostalAddress",
+    "addressLocality": "Manchester",
+    "addressRegion": "NH",
+    "addressCountry": "US"
+  },
+  "knowsAbout": [
+    "Web performance measurement",
+    "Web accessibility auditing",
+    "Conversion path analysis",
+    "Technical SEO",
+    "Website diagnosis"
+  ]
+}
+</script>
+
+<script>document.documentElement.dataset.js = 'on';</script>
+</head>
+
+<body>
+<a class="skip" href="#surface">Skip to content</a>
+
+<header class="nav env-dark" data-nav>
+  <a class="wordmark" href="#surface" aria-label="Studio Substral, home">
+    <span class="wordmark__name">Substral</span>
+    <span class="wordmark__meta">Studio / Manchester, NH</span>
+  </a>
+
+  <nav class="nav__links" aria-label="Sections">
+    <a class="nav__link" href="#decomposition">Method</a>
+    <a class="nav__link" href="#diagnosis">Diagnosis</a>
+    <a class="nav__link" href="#assessment">Assessment</a>
+    <a class="nav__link" href="#work">Work</a>
+  </nav>
+</header>
+
+<main id="main">
+
+  <!-- ====================================================================
+       ACT I — SURFACE
+       ==================================================================== -->
+  <section class="act surface env-dark" id="surface" aria-labelledby="surface-title">
+    <div class="shell surface__grid">
+
+      <p class="surface__eyebrow mono">
+        <span>Studio Substral</span>
+        <span>Manchester, New Hampshire</span>
+        <span class="mono--accent">Website diagnosis &amp; design</span>
+      </p>
+
+      <div class="surface__head">
+        <h1 class="display" id="surface-title" data-reveal>
+          Look beneath<br>the surface.
+        </h1>
+
+        <div class="surface__support">
+          <p class="lede" data-reveal>
+            Your website is working.<br>But is it working for you?
+          </p>
+
+          <div class="surface__cta" data-reveal>
+            <a class="action action--primary" href="#assessment">
+              Start with an assessment
+              <span class="action__arrow" aria-hidden="true">&rarr;</span>
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <p class="surface__cue mono">
+        <span class="surface__cue-line" aria-hidden="true"></span>
+        <span>Scroll &mdash; the object separates</span>
+      </p>
+
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       ACT II — DECOMPOSITION
+       The stage is decorative and excluded from the accessibility tree.
+       Every layer name, question and evidence class lives in the document.
+       ==================================================================== -->
+  <section class="act decomposition env-dark" id="decomposition" aria-labelledby="decomposition-title">
+    <div class="shell">
+      <p class="act__marker">
+        <span class="mono">Act II</span>
+        <span class="mono mono--ink">Decomposition</span>
+      </p>
+
+      <h2 class="statement" id="decomposition-title" data-reveal>
+        A website is not<br>one thing.
+      </h2>
+      <p class="prose" style="margin-top:1.75rem" data-reveal>
+        It is six systems occupying the same rectangle. Most of them are
+        invisible to the person paying for it, and five of them decide whether
+        the sixth one matters.
+      </p>
+    </div>
+
+    <div class="shell decomposition__layout">
+
+      <div class="decomposition__stage">
+        <div class="stage" data-stage="decomposition" data-webgl="off">
+          <canvas class="stage__canvas" data-stage-canvas aria-hidden="true"></canvas>
+          <!-- Baseline dimensional composition. Requires no WebGL. -->
+          <div class="strata" aria-hidden="true">
+            <ol class="strata__stack">
+              <li class="plate" style="--i:0"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:1"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:2"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:3"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:4"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:5"><span class="plate__face"></span><span class="plate__edge"></span></li>
+            </ol>
+          </div>
+          <p class="decomposition__readout mono" aria-hidden="true">
+            <span data-readout-index>01</span>
+            <span data-readout-name>Performance</span>
+          </p>
+        </div>
+      </div>
+
+      <ol class="layers">
+
+        <li class="layer" id="layer-performance" data-layer="0">
+          <p class="layer__index">
+            <span class="layer__num">01 /</span>
+            <span class="layer__name">Performance</span>
+          </p>
+          <h3 class="section-title layer__question">
+            How quickly and reliably does the experience become useful?
+          </h3>
+          <div class="layer__body">
+            <div class="prose">
+              <p>
+                Speed is not a number in a report. It is the interval between
+                intent and usefulness. We measure that interval on the
+                connections and devices your customers actually have, then
+                establish which part of the stack owns it: the server, the
+                render path, the fonts, the images, or the third-party scripts
+                nobody remembers adding.
+              </p>
+            </div>
+            <dl class="manifest">
+              <dt>Measured</dt>
+              <dd>
+                LCP<br>CLS<br>INP<br>Time to first byte<br>Transfer weight<br>Render-blocking requests
+              </dd>
+            </dl>
+          </div>
+        </li>
+
+        <li class="layer" id="layer-accessibility" data-layer="1">
+          <p class="layer__index">
+            <span class="layer__num">02 /</span>
+            <span class="layer__name">Accessibility</span>
+          </p>
+          <h3 class="section-title layer__question">
+            Who can actually use it?
+          </h3>
+          <div class="layer__body">
+            <div class="prose">
+              <p>
+                Automated checks find a minority of real barriers. We report
+                what the tooling measured and what a person had to verify by
+                hand, and we keep those two things apart. A site can pass every
+                automated rule and still be unusable with a keyboard.
+              </p>
+            </div>
+            <dl class="manifest">
+              <dt>Measured</dt>
+              <dd>
+                Contrast ratios<br>Focus order<br>Form labelling<br>Landmark structure<br>Alternative text coverage<br>Target sizes
+              </dd>
+            </dl>
+          </div>
+        </li>
+
+        <li class="layer" id="layer-conversion" data-layer="2">
+          <p class="layer__index">
+            <span class="layer__num">03 /</span>
+            <span class="layer__name">Conversion</span>
+          </p>
+          <h3 class="section-title layer__question">
+            Does attention have somewhere useful to go?
+          </h3>
+          <div class="layer__body">
+            <div class="prose">
+              <p>
+                Most sites do not fail at persuasion. They fail at routing.
+                Someone arrives holding a specific intention and the page offers
+                no unambiguous next action &mdash; or it offers one that costs
+                more effort than the intention can carry.
+              </p>
+            </div>
+            <dl class="manifest">
+              <dt>Observed</dt>
+              <dd>
+                Primary action per template<br>Depth to contact<br>Form field count<br>Navigation clarity<br>Phone and email availability
+              </dd>
+            </dl>
+          </div>
+        </li>
+
+        <li class="layer" id="layer-search" data-layer="3">
+          <p class="layer__index">
+            <span class="layer__num">04 /</span>
+            <span class="layer__name">Search</span>
+          </p>
+          <h3 class="section-title layer__question">
+            Can the right people discover it?
+          </h3>
+          <div class="layer__body">
+            <div class="prose">
+              <p>
+                Discovery is structural before it is editorial. Whether a
+                crawler can resolve, render and index a page is a technical
+                fact. Whether the page answers what a person actually searched
+                for is a judgement &mdash; and we label it as one rather than
+                presenting it as a measurement.
+              </p>
+            </div>
+            <dl class="manifest">
+              <dt>Measured</dt>
+              <dd>
+                Indexability<br>Canonical integrity<br>Sitemap and robots<br>Title and description coverage<br>Structured data validity
+              </dd>
+            </dl>
+          </div>
+        </li>
+
+        <li class="layer" id="layer-trust" data-layer="4">
+          <p class="layer__index">
+            <span class="layer__num">05 /</span>
+            <span class="layer__name">Trust</span>
+          </p>
+          <h3 class="section-title layer__question">
+            Does the experience support confidence in the business behind it?
+          </h3>
+          <div class="layer__body">
+            <div class="prose">
+              <p>
+                Someone deciding whether to spend money reads signals the
+                business has stopped noticing: a certificate warning, a licence
+                number that appears nowhere, a copyright year three years stale,
+                a form that never confirms it was sent.
+              </p>
+            </div>
+            <dl class="manifest">
+              <dt>Observed</dt>
+              <dd>
+                Transport security<br>Contact verifiability<br>Licence and credential visibility<br>Content currency<br>Submission confirmation
+              </dd>
+            </dl>
+          </div>
+        </li>
+
+        <li class="layer" id="layer-design" data-layer="5">
+          <p class="layer__index">
+            <span class="layer__num">06 /</span>
+            <span class="layer__name">Design</span>
+          </p>
+          <h3 class="section-title layer__question">
+            Only after understanding the above do we decide what the experience should become.
+          </h3>
+          <div class="layer__body">
+            <div class="prose">
+              <p>
+                Design decides what the experience becomes. It cannot decide
+                what constrains it. When design runs first it inherits problems
+                it did not create and cannot see, which is how an expensive
+                rebuild ends up performing like the site it replaced.
+              </p>
+            </div>
+            <dl class="manifest">
+              <dt>Decided last</dt>
+              <dd>
+                Hierarchy<br>Narrative<br>Typography<br>Materiality<br>Interaction<br>Restraint
+              </dd>
+            </dl>
+          </div>
+        </li>
+
+      </ol>
+    </div>
+
+    <div class="shell">
+      <div class="ordering">
+        <p class="mono mono--lg mono--ink">Design is last.</p>
+        <p class="prose">
+          The order is not stylistic. Each layer above design constrains what
+          design is able to achieve, so each one is established first. A studio
+          that reverses this order is guessing, and charging for the guess.
+        </p>
+      </div>
+    </div>
+
+    <div class="shell" style="margin-top:var(--act)">
+      <div class="principle">
+        <p class="principle__mark mono mono--accent">Core principle</p>
+        <blockquote>
+          <p class="statement">
+            We measure what exists before deciding what should change.
+          </p>
+        </blockquote>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       ACT III — DIAGNOSIS
+       ==================================================================== -->
+  <div class="turn" aria-hidden="true"></div>
+
+  <section class="act diagnosis env-mineral" id="diagnosis" aria-labelledby="diagnosis-title">
+    <div class="shell">
+      <p class="act__marker">
+        <span class="mono">Act III</span>
+        <span class="mono mono--ink">Diagnosis</span>
+      </p>
+
+      <div class="diagnosis__head">
+        <h2 class="statement" id="diagnosis-title" data-reveal>
+          We diagnose<br>before we design.
+        </h2>
+        <p class="prose" data-reveal>
+          A prescription written before an examination is a sales technique, not
+          a professional opinion. The sequence below is the whole method, and it
+          is deliberately capable of concluding that we should do nothing.
+        </p>
+      </div>
+
+      <ol class="movements">
+        <li class="movement">
+          <p class="movement__step">
+            <span class="mono mono--accent">01</span>
+            <span class="mono">Discover</span>
+          </p>
+          <h3>Establish what exists.</h3>
+          <p class="prose">
+            The live site, the pages that carry traffic, the technical surface,
+            the commercial context around it. Nothing is diagnosed at this
+            stage and nothing is recommended.
+          </p>
+        </li>
+        <li class="movement">
+          <p class="movement__step">
+            <span class="mono mono--accent">02</span>
+            <span class="mono">Diagnose</span>
+          </p>
+          <h3>Separate what is wrong from what is merely dated.</h3>
+          <p class="prose">
+            Every finding is classified by how we know it, and the
+            classification travels with the finding for the rest of the
+            engagement. Measurements are not upgraded into conclusions on the
+            way to the report.
+          </p>
+        </li>
+        <li class="movement">
+          <p class="movement__step">
+            <span class="mono mono--accent">03</span>
+            <span class="mono">Advise</span>
+          </p>
+          <h3>State the recommendation and its limits.</h3>
+          <p class="prose">
+            What we would change, what we would leave alone, and what evidence
+            would change our answer. The recommendation is allowed to be small.
+          </p>
+        </li>
+      </ol>
+
+      <div class="conclusions">
+        <p class="act__marker">
+          <span class="mono">Four conclusions</span>
+          <span class="mono mono--ink">Diagnosis classes</span>
+        </p>
+
+        <div class="conclusion">
+          <p class="conclusion__class">Redesign candidate</p>
+          <p>
+            Material deficiencies across several layers, reinforcing each other.
+            Repairing them individually would cost more than rebuilding the
+            foundation properly once.
+          </p>
+        </div>
+        <div class="conclusion">
+          <p class="conclusion__class">Targeted remediation</p>
+          <p>
+            Specific, identified, bounded problems. The existing site is worth
+            repairing rather than replacing, and we will tell you which
+            repairs matter and which are cosmetic.
+          </p>
+        </div>
+        <div class="conclusion">
+          <p class="conclusion__class">Healthy site</p>
+          <p>
+            No material deficiency found. The site is doing its job. This is a
+            real outcome, we report it plainly, and we do not follow it with a
+            proposal.
+          </p>
+        </div>
+        <div class="conclusion">
+          <p class="conclusion__class">Insufficient evidence</p>
+          <p>
+            We could not gather enough to diagnose responsibly. We say so, and
+            we say what we would need, rather than filling the gap with
+            confident-sounding inference.
+          </p>
+        </div>
+      </div>
+
+      <div class="willingness">
+        <h3 class="section-title">
+          &ldquo;No redesign required&rdquo; is a conclusion we are willing to reach.
+        </h3>
+        <div class="prose">
+          <p>
+            Sometimes the answer is a rebuild. Sometimes it is targeted
+            remediation. Sometimes the existing website is doing its job and the
+            constraint on the business is somewhere else entirely.
+          </p>
+          <p>
+            A studio paid only to redesign will find a reason to redesign. We
+            would rather be the studio you call because the last answer we gave
+            you was accurate.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       ACT IV — ASSESSMENT
+       ==================================================================== -->
+  <section class="act assessment env-mineral" id="assessment" aria-labelledby="assessment-title">
+    <div class="shell">
+      <p class="act__marker">
+        <span class="mono">Act IV</span>
+        <span class="mono mono--ink">Assessment</span>
+      </p>
+
+      <div class="assessment__head">
+        <h2 class="statement" id="assessment-title" data-reveal>
+          See what we see.
+        </h2>
+        <p class="prose" style="margin-top:1.75rem" data-reveal>
+          Enter a domain. We run the measurement pass, a person reviews the
+          findings, and you receive the assessment by email. There is no instant
+          score page, because an instant score would be the part we do not
+          believe in.
+        </p>
+      </div>
+
+      <form class="instrument" data-assessment-form novalidate>
+        <div class="instrument__row">
+          <div class="instrument__field">
+            <label class="mono mono--accent" for="domain">Domain to assess</label>
+            <input
+              class="instrument__input"
+              id="domain"
+              name="domain"
+              type="text"
+              inputmode="url"
+              autocomplete="url"
+              spellcheck="false"
+              placeholder="yourbusiness.com"
+              aria-describedby="domain-hint"
+              required>
+            <p class="mono mono--plain" id="domain-hint">
+              Any form works &mdash; example.com or https://www.example.com/page
+            </p>
+          </div>
+
+          <button class="action action--primary" type="submit" data-assessment-submit>
+            Analyze
+            <span class="action__arrow" aria-hidden="true">&rarr;</span>
+          </button>
+        </div>
+
+        <div class="instrument__secondary">
+          <p class="field">
+            <label class="mono" for="email">Where to send it</label>
+            <input
+              class="field__input"
+              id="email"
+              name="email"
+              type="email"
+              autocomplete="email"
+              spellcheck="false"
+              placeholder="you@yourbusiness.com"
+              required>
+          </p>
+          <p class="field">
+            <label class="mono" for="context">What prompted this <span class="mono--plain">(optional)</span></label>
+            <input
+              class="field__input"
+              id="context"
+              name="context"
+              type="text"
+              maxlength="300"
+              placeholder="Considering a rebuild, traffic changed, not sure&hellip;">
+          </p>
+        </div>
+
+        <!-- Honeypot. Labelled for screen readers, positioned out of view. -->
+        <p class="field field--hidden" aria-hidden="true">
+          <label for="company_website">Leave this field empty</label>
+          <input id="company_website" name="company_website" type="text" tabindex="-1" autocomplete="off">
+        </p>
+
+        <p class="instrument__status" data-assessment-status role="status" aria-live="polite"></p>
+      </form>
+
+      <div class="taxonomy">
+        <div class="taxonomy__item">
+          <p class="taxonomy__class">Measured</p>
+          <p>
+            A value a machine produced, with the method and the time of
+            measurement recorded. Reproducible by you.
+          </p>
+        </div>
+        <div class="taxonomy__item">
+          <p class="taxonomy__class">Observed</p>
+          <p>
+            A structural fact about the site or the business. Present or absent.
+            Recorded without interpretation.
+          </p>
+        </div>
+        <div class="taxonomy__item">
+          <p class="taxonomy__class">Inferred</p>
+          <p>
+            Bounded interpretation, tied to the findings it derives from, and
+            marked as interpretation wherever it appears.
+          </p>
+        </div>
+        <div class="taxonomy__item">
+          <p class="taxonomy__class">Unknown</p>
+          <p>
+            We could not establish it. Recorded as a gap rather than quietly
+            omitted or filled in.
+          </p>
+        </div>
+      </div>
+
+      <div class="report">
+        <div class="report__section">
+          <p class="report__label">What we measured</p>
+          <p>
+            Deterministic technical evidence. Load behaviour, accessibility
+            checks, indexability, transport security. Each finding carries its
+            value, its source and its timestamp.
+          </p>
+        </div>
+        <div class="report__section">
+          <p class="report__label">What we observed</p>
+          <p>
+            Direct structural and business observations. Whether a primary
+            action exists. How many steps to reach a human. Whether the pages
+            state what the business does and where it does it.
+          </p>
+        </div>
+        <div class="report__section">
+          <p class="report__label">What it may mean</p>
+          <p>
+            Interpretation, bounded and attributed to the evidence beneath it.
+            This section is allowed to be short, and it is allowed to say that
+            the evidence does not yet support a conclusion.
+          </p>
+        </div>
+        <div class="report__section">
+          <p class="report__label">What we&rsquo;d investigate next</p>
+          <p>
+            The specific evidence that would raise or lower our confidence, what
+            it would take to get it, and which of our findings it would
+            overturn.
+          </p>
+        </div>
+      </div>
+
+      <div class="refusals">
+        <h3 class="section-title">What the assessment will never produce</h3>
+        <ul>
+          <li><span aria-hidden="true"></span><span>A score out of one hundred.</span></li>
+          <li><span aria-hidden="true"></span><span>A figure for revenue you are losing, when we do not have your revenue data.</span></li>
+          <li><span aria-hidden="true"></span><span>A claim that visitors are leaving because of your site, when we do not have your analytics.</span></li>
+          <li><span aria-hidden="true"></span><span>A legal compliance verdict derived from automated accessibility checks.</span></li>
+          <li><span aria-hidden="true"></span><span>A guarantee of search ranking or conversion improvement.</span></li>
+          <li><span aria-hidden="true"></span><span>Urgency the evidence does not support.</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       ACT V — WORK
+       ==================================================================== -->
+  <section class="act work env-mineral" id="work" aria-labelledby="work-title">
+    <div class="shell">
+      <p class="act__marker">
+        <span class="mono">Act V</span>
+        <span class="mono mono--ink">Work</span>
+      </p>
+
+      <div class="work__head">
+        <h2 class="statement" id="work-title" data-reveal>
+          Work, told as<br>a diagnosis.
+        </h2>
+        <p class="prose" style="margin-top:1.75rem" data-reveal>
+          Each engagement is written up the way it happened: what we found, what
+          we decided, what we built, and what we can honestly claim about the
+          result.
+        </p>
+      </div>
+
+      <article class="study" aria-labelledby="study-anchor">
+        <div class="study__head">
+          <div>
+            <h3 class="study__title" id="study-anchor">Anchor Cleaning</h3>
+          </div>
+          <div class="study__meta">
+            <p class="mono">Commercial cleaning</p>
+            <p class="mono">Manchester, New Hampshire</p>
+            <p class="mono mono--accent">Build &mdash; two-audience split</p>
+          </div>
+        </div>
+
+        <figure class="study__plate">
+          <img
+            src="assets/work/anchor-cleaning-home.webp"
+            width="1600" height="1000" loading="lazy" decoding="async"
+            alt="The Anchor Cleaning home page. A photographic interior of a glass-walled office fills the frame. Over it, in a large brass-and-white serif, the headline reads Commercial cleaning in Manchester, NH. A single brass button in the header reads Request a Facility Assessment.">
+          <figcaption class="study__caption">
+            <span class="mono">goanchorcleaning.com</span>
+            <span class="mono">Commercial landing, above the fold</span>
+          </figcaption>
+        </figure>
+
+        <div class="study__movements">
+          <div class="study__movement">
+            <h3>Context</h3>
+            <p>
+              Anchor Cleaning services professional offices &mdash; law firms,
+              accounting practices, medical suites &mdash; across Greater
+              Manchester. The site had to carry both paid and organic search
+              traffic and convert one narrow audience: the person inside a small
+              professional office who decides who cleans it.
+            </p>
+          </div>
+          <div class="study__movement">
+            <h3>Diagnosis</h3>
+            <p>
+              The constraint was not visual. It was routing and proof. A facility
+              manager comparing vendors needs the service area, what a visit
+              involves, and how to start &mdash; in that order. A quote form
+              asking for square footage and frequency demands information the
+              visitor does not have yet, so it collects nothing.
+            </p>
+            <p>
+              Two audiences were also competing for one page. Commercial
+              contracts and residential home cleaning have different buyers,
+              different language and different decisions, and a single page
+              serving both serves neither.
+            </p>
+          </div>
+          <div class="study__movement">
+            <h3>Decision</h3>
+            <p>
+              Split the audiences: commercial at the root carrying one primary
+              action, residential on its own page with its own vocabulary. Two
+              pages, no blog, nothing to maintain that does not earn its
+              maintenance. Static HTML with the stylesheet inlined, so the first
+              paint does not wait on a second network round trip.
+            </p>
+          </div>
+          <div class="study__movement">
+            <h3>Experience</h3>
+            <p>
+              A photographic hero establishes the standard being sold &mdash;
+              this buyer is purchasing consistency, and consistency has to look
+              like something. Below it the page turns to warm paper, a brass rule
+              system carrying the hierarchy, and one six-field form that confirms
+              in place rather than redirecting to a thank-you page.
+            </p>
+            <p>
+              Local search structure is part of the build rather than a later
+              addition: structured data for the service, an explicit
+              service-area list, sitemap and robots.
+            </p>
+          </div>
+          <div class="study__movement">
+            <h3>Outcome</h3>
+            <p>
+              The site is instrumented. Session recording and form-submission
+              events are live, and submissions write straight into the
+              operator&rsquo;s work queue rather than an inbox where they wait.
+            </p>
+            <p>
+              We are not publishing conversion figures yet. We publish outcome
+              numbers when we have a full quarter of data and the client has
+              approved the numbers &mdash; which is the same standard we hold
+              other people&rsquo;s case studies to.
+            </p>
+          </div>
+        </div>
+      </article>
+
+      <div class="publication">
+        <h3 class="section-title">Publication standard</h3>
+        <div class="prose">
+          <p>
+            A case study is published when the client has approved the material
+            and every claim in it is verifiable. A second engagement is complete
+            and waiting on that approval. It is not shown here until it has it.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================================
+       ACT VI — RECONSTRUCTION
+       ==================================================================== -->
+  <div class="turn turn--back" aria-hidden="true"></div>
+
+  <section class="act reconstruction env-dark" id="reconstruction" aria-labelledby="reconstruction-title">
+    <div class="shell">
+      <p class="act__marker">
+        <span class="mono">Act VI</span>
+        <span class="mono mono--ink">Reconstruction</span>
+      </p>
+    </div>
+
+    <div class="shell reconstruction__layout">
+
+      <div class="reconstruction__stage">
+        <div class="stage" data-stage="reconstruction" data-webgl="off">
+          <canvas class="stage__canvas" data-stage-canvas aria-hidden="true"></canvas>
+          <div class="strata" aria-hidden="true">
+            <ol class="strata__stack">
+              <li class="plate" style="--i:0"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:1"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:2"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:3"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:4"><span class="plate__face"></span><span class="plate__edge"></span></li>
+              <li class="plate" style="--i:5"><span class="plate__face"></span><span class="plate__edge"></span></li>
+            </ol>
+          </div>
+        </div>
+      </div>
+
+      <div class="converge">
+        <h2 class="statement" id="reconstruction-title" data-reveal>
+          Then it goes<br>back together.
+        </h2>
+        <p class="prose" style="margin-top:1.75rem" data-reveal>
+          Design arrives last and resolves the whole object &mdash; not because
+          it matters least, but because it is the only layer that can only be
+          decided once the others are understood.
+        </p>
+
+        <ol class="converge__list" data-converge>
+          <li class="converge__item" style="--drift:34">
+            <span class="converge__num">01</span>
+            <span>Performance</span>
+            <span class="converge__rule" aria-hidden="true"></span>
+            <span class="converge__state">Aligned</span>
+          </li>
+          <li class="converge__item" style="--drift:-22">
+            <span class="converge__num">02</span>
+            <span>Accessibility</span>
+            <span class="converge__rule" aria-hidden="true"></span>
+            <span class="converge__state">Aligned</span>
+          </li>
+          <li class="converge__item" style="--drift:41">
+            <span class="converge__num">03</span>
+            <span>Conversion</span>
+            <span class="converge__rule" aria-hidden="true"></span>
+            <span class="converge__state">Aligned</span>
+          </li>
+          <li class="converge__item" style="--drift:-31">
+            <span class="converge__num">04</span>
+            <span>Search</span>
+            <span class="converge__rule" aria-hidden="true"></span>
+            <span class="converge__state">Aligned</span>
+          </li>
+          <li class="converge__item" style="--drift:26">
+            <span class="converge__num">05</span>
+            <span>Trust</span>
+            <span class="converge__rule" aria-hidden="true"></span>
+            <span class="converge__state">Aligned</span>
+          </li>
+          <li class="converge__item" style="--drift:-38">
+            <span class="converge__num">06</span>
+            <span>Design</span>
+            <span class="converge__rule" aria-hidden="true"></span>
+            <span class="converge__state">Aligned</span>
+          </li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="shell closing">
+      <h2 class="display" data-reveal>
+        What&rsquo;s underneath<br>determines what<br>happens above it.
+      </h2>
+      <div class="closing__cta" data-reveal>
+        <a class="action action--primary" href="#assessment">
+          Start with an assessment
+          <span class="action__arrow" aria-hidden="true">&rarr;</span>
+        </a>
+        <p class="mono">Enter a domain. We&rsquo;ll show you what we find.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot env-dark">
+  <div class="shell">
+    <div class="foot__top">
+      <div class="foot__group">
+        <span class="wordmark__name">Substral</span>
+        <span class="wordmark__meta">Studio / Manchester, NH</span>
+      </div>
+
+      <div class="foot__group">
+        <p class="mono">Contact</p>
+        <p><a class="textlink" href="mailto:hello@studiosubstral.com">hello@studiosubstral.com</a></p>
+      </div>
+
+      <nav class="foot__group" aria-label="Footer">
+        <p class="mono">Sections</p>
+        <p><a href="#decomposition">Method</a></p>
+        <p><a href="#diagnosis">Diagnosis</a></p>
+        <p><a href="#assessment">Assessment</a></p>
+        <p><a href="#work">Work</a></p>
+      </nav>
+    </div>
+
+    <!-- The studio publishes the budget it holds itself to. A studio that
+         criticises slow websites should be measurable (doctrine §20). -->
+    <div class="colophon">
+      <p class="mono">Colophon &amp; budget</p>
+      <dl>
+        <dt>Typography</dt>
+        <dd>Archivo &middot; IBM Plex Mono &mdash; self-hosted, Latin subset</dd>
+        <dt>Critical path</dt>
+        <dd>One stylesheet, two fonts, no blocking script</dd>
+        <dt>JavaScript budget</dt>
+        <dd>Under 10 KB compressed before the dimensional object loads</dd>
+        <dt>Dimensional object</dt>
+        <dd>Deferred, skipped without WebGL and under reduced-motion</dd>
+        <dt>Targets</dt>
+        <dd>LCP under 2.0s &middot; CLS under 0.05 &middot; INP under 100ms</dd>
+      </dl>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/substral.js" type="module"></script>
+</body>
+</html>
