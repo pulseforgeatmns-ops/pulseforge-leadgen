@@ -91,6 +91,25 @@
        ACT I — SURFACE
        ==================================================================== -->
   <section class="act surface env-dark" id="surface" aria-labelledby="surface-title">
+
+    <!-- The object, assembled. It is one continuous specimen across the
+         narrative: whole here, separated in Act II, whole again in Act VI. -->
+    <div class="surface__object">
+      <div class="stage" data-stage="surface" data-webgl="off">
+        <canvas class="stage__canvas" data-stage-canvas aria-hidden="true"></canvas>
+        <div class="strata" aria-hidden="true">
+          <ol class="strata__stack">
+            <li class="plate" style="--i:0"><span class="plate__face"></span><span class="plate__edge"></span></li>
+            <li class="plate" style="--i:1"><span class="plate__face"></span><span class="plate__edge"></span></li>
+            <li class="plate" style="--i:2"><span class="plate__face"></span><span class="plate__edge"></span></li>
+            <li class="plate" style="--i:3"><span class="plate__face"></span><span class="plate__edge"></span></li>
+            <li class="plate" style="--i:4"><span class="plate__face"></span><span class="plate__edge"></span></li>
+            <li class="plate" style="--i:5"><span class="plate__face"></span><span class="plate__edge"></span></li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
     <div class="shell surface__grid">
 
       <p class="surface__eyebrow mono">
@@ -800,7 +819,7 @@
       </div>
 
       <div class="converge">
-        <h2 class="statement" id="reconstruction-title" data-reveal>
+        <h2 class="statement statement--column" id="reconstruction-title" data-reveal>
           Then it goes<br>back together.
         </h2>
         <p class="prose" style="margin-top:1.75rem" data-reveal>
@@ -851,7 +870,7 @@
     </div>
 
     <div class="shell closing">
-      <h2 class="display" data-reveal>
+      <h2 class="display display--closing" data-reveal>
         What&rsquo;s underneath<br>determines what<br>happens above it.
       </h2>
       <div class="closing__cta" data-reveal>

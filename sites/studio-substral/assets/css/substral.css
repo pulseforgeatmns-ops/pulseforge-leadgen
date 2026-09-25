@@ -63,9 +63,14 @@
   --mono: 'Plex Mono Substral', 'IBM Plex Mono', ui-monospace, 'SFMono-Regular',
     Menlo, Consolas, monospace;
 
-  /* Fluid measure. Extreme scale is intentional; see doctrine §7. */
-  --t-display: clamp(3.1rem, 11.6vw, 11.5rem);
-  --t-statement: clamp(2.1rem, 6.4vw, 5.6rem);
+  /* Fluid measure. Extreme scale is intentional (doctrine §7), but each size
+     is capped so the doctrine's own line breaks survive instead of rewrapping:
+     the hero must read LOOK BENEATH / THE SURFACE., not three ragged lines. */
+  --t-display: clamp(2.35rem, 10.8vw, 10.25rem);
+  --t-closing: clamp(1.7rem, 7.2vw, 6.5rem);
+  --t-statement: clamp(1.85rem, 6.4vw, 5.6rem);
+  /* A statement set inside a half-width column has half the measure. */
+  --t-statement-col: clamp(1.9rem, 4.4vw, 3.5rem);
   --t-section: clamp(1.6rem, 3.6vw, 2.9rem);
   --t-lede: clamp(1.15rem, 1.9vw, 1.65rem);
   --t-body: clamp(1rem, 1.05vw, 1.125rem);
@@ -78,6 +83,9 @@
   --act: clamp(6rem, 11vw + 3rem, 13.5rem);
   --measure: 34rem;
   --shell-max: 96rem;
+  /* Height the fixed nav occupies. Sticky stages reserve it so the top plate
+     of the specimen is never occluded by the bar. */
+  --nav-h: clamp(4.25rem, 2vw + 3.4rem, 5rem);
 
   /* Motion physics: objects have mass, nothing overshoots (doctrine §13) */
   --ease-weighted: cubic-bezier(0.22, 0.61, 0.21, 1);
@@ -221,7 +229,13 @@ ol {
   line-height: 0.85;
   letter-spacing: -0.028em;
   text-transform: uppercase;
-  text-wrap: balance;
+}
+
+/* The closing principle is three lines rather than two, so it is set a step
+   down from the hero to keep the same measure. */
+.display--closing {
+  font-size: var(--t-closing);
+  line-height: 0.88;
 }
 
 .statement {
@@ -232,6 +246,12 @@ ol {
   letter-spacing: -0.024em;
   text-transform: uppercase;
   text-wrap: balance;
+}
+
+/* For statements set beside the dimensional object rather than across the full
+   page. Declared after .statement so it wins on source order. */
+.statement--column {
+  font-size: var(--t-statement-col);
 }
 
 .section-title {
@@ -359,10 +379,11 @@ ol {
   border-bottom: 1px solid transparent;
 }
 
+/* Solid, not glassy. Translucency here let the narrative's large type ghost
+   through the bar and became a legibility problem; an opaque band with a
+   hairline rule is both clearer and more in character (doctrine §10, §21). */
 .nav[data-lifted='true'] {
   background: var(--bg);
-  background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: saturate(115%) blur(7px);
   border-bottom-color: var(--rule);
 }
 
@@ -512,11 +533,47 @@ ol {
   pointer-events: none;
 }
 
+/* The assembled specimen sits above the headline and behind the nav, filling
+   the space the bottom-aligned hero leaves. Smoked acrylic on warm charcoal is
+   quiet by nature, so the type stays dominant without dimming the object. */
+.surface__object {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: min(56svh, 34rem);
+  pointer-events: none;
+}
+
+.surface__object .strata {
+  perspective-origin: 50% 52%;
+}
+
+.surface__object .strata__stack {
+  width: min(38rem, 80%);
+  transform: rotateX(64deg) rotateZ(-38deg) scale(0.9)
+    translate3d(0, 0, calc(var(--lift, 0) * 1px));
+}
+
 .surface__grid {
   position: relative;
   display: grid;
   gap: clamp(2.5rem, 5vw, 4rem);
   grid-template-columns: 1fr;
+}
+
+@media (min-width: 62em) {
+  /* On wide viewports the specimen moves off-centre and crops against the
+     right edge, so the composition is asymmetric and the object reads as
+     larger than the frame rather than as a graphic floating in it (§9). */
+  .surface__object {
+    left: auto;
+    right: -7%;
+    width: min(68%, 64rem);
+    height: min(62svh, 40rem);
+  }
+
+  .surface__object .strata__stack {
+    width: min(44rem, 92%);
+  }
 }
 
 .surface__eyebrow {
@@ -693,7 +750,8 @@ ol {
   position: sticky;
   top: 0;
   z-index: 1;
-  height: 44svh;
+  height: calc(44svh + var(--nav-h));
+  padding-top: var(--nav-h);
   background: var(--bg);
   border-bottom: 1px solid var(--rule);
 }
@@ -797,6 +855,7 @@ ol {
 
   .decomposition__stage {
     height: 100svh;
+    padding-top: var(--nav-h);
     border-bottom: 0;
     border-right: 1px solid var(--rule);
   }
@@ -847,8 +906,11 @@ ol {
   margin-block: 0;
 }
 
-.principle blockquote {
-  max-width: 46ch;
+/* The measure is set on the statement itself, not the blockquote: `ch`
+   resolves against the element's own font size, and on the wrapper it would
+   compute from the inherited body size and crush the large type. */
+.principle blockquote .statement {
+  max-width: 22ch;
 }
 
 .principle__mark {
@@ -879,10 +941,21 @@ ol {
 }
 
 @media (min-width: 62em) {
+  /* The statement takes the full measure so WE DIAGNOSE / BEFORE WE DESIGN.
+     stays two lines; the supporting prose drops into the right column beneath
+     it, which also keeps the composition asymmetric. */
   .diagnosis__head {
-    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-    gap: clamp(3rem, 7vw, 7rem);
-    align-items: end;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: clamp(3rem, 7vw, 7rem);
+    row-gap: clamp(2rem, 4vw, 3.25rem);
+  }
+
+  .diagnosis__head h2 {
+    grid-column: 1 / -1;
+  }
+
+  .diagnosis__head .prose {
+    grid-column: 2;
   }
 }
 
@@ -1411,7 +1484,8 @@ ol {
 .reconstruction__stage {
   position: sticky;
   top: 0;
-  height: 46svh;
+  height: calc(46svh + var(--nav-h));
+  padding-top: var(--nav-h);
   border-bottom: 1px solid var(--rule);
   background: var(--bg);
 }
@@ -1428,6 +1502,19 @@ ol {
   display: grid;
   gap: 0;
   border-top: 1px solid var(--rule);
+  /* The scattered starting offsets are wider than the column. Clip them here
+     rather than letting the un-aligned state widen the document — the names
+     read as sliding into alignment, which is the point. */
+  overflow-x: clip;
+  /* Offsets scale down with the measure so narrow screens drift proportionally
+     rather than throwing the names off the page. */
+  --drift-scale: 0.45px;
+}
+
+@media (min-width: 48em) {
+  .converge__list {
+    --drift-scale: 1px;
+  }
 }
 
 .converge__item {
@@ -1443,7 +1530,7 @@ ol {
   color: var(--ink-structural);
   /* Offset starts scattered and resolves to 0 as the act progresses. The
      script interpolates --drift, so only colour transitions here. */
-  transform: translateX(calc(var(--drift, 0) * 1px));
+  transform: translateX(calc(var(--drift, 0) * var(--drift-scale, 1px)));
   transition: color var(--dur-mid) var(--ease-weighted);
 }
 
@@ -1495,6 +1582,7 @@ ol {
 
   .reconstruction__stage {
     height: 100svh;
+    padding-top: var(--nav-h);
     border-bottom: 0;
     border-left: 1px solid var(--rule);
     order: 2;
@@ -1631,10 +1719,12 @@ html[data-js='on'] [data-reveal][data-revealed='true'] {
     transform: none;
   }
 
+  /* Released from sticky: nothing travels, so nothing needs to be pinned. */
   .decomposition__stage,
   .reconstruction__stage {
     position: relative;
     height: clamp(20rem, 54svh, 34rem);
+    padding-top: 0;
   }
 
   .action__arrow {

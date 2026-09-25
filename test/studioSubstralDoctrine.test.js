@@ -428,10 +428,13 @@ describe('Typography (doctrine §7)', () => {
 
 describe('Progressive enhancement (doctrine §18)', () => {
   it('renders the dimensional composition without WebGL', () => {
+    // Act I whole, Act II separating, Act VI reassembling.
+    const modes = [...html.matchAll(/data-stage="([a-z]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(modes, ['surface', 'decomposition', 'reconstruction']);
     const stages = html.match(/class="strata"/g) || [];
-    assert.equal(stages.length, 2, 'both stages need a no-WebGL composition');
+    assert.equal(stages.length, 3, 'every stage needs a no-WebGL composition');
     const plates = html.match(/class="plate"/g) || [];
-    assert.equal(plates.length, 12, 'six plates per stage');
+    assert.equal(plates.length, 18, 'six plates per stage');
     assert.match(css, /\.strata__stack\s*\{[\s\S]*?transform-style:\s*preserve-3d/);
   });
 
@@ -456,7 +459,7 @@ describe('Progressive enhancement (doctrine §18)', () => {
 
   it('excludes the decorative canvas from the accessibility tree', () => {
     const canvases = [...html.matchAll(/<canvas[^>]*>/g)].map((m) => m[0]);
-    assert.equal(canvases.length, 2);
+    assert.equal(canvases.length, 3);
     for (const canvas of canvases) {
       assert.match(canvas, /aria-hidden="true"/);
     }

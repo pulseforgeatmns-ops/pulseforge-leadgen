@@ -35,6 +35,7 @@ import {
   Scene,
   Shape,
   SRGBColorSpace,
+  Vector3,
   WebGLRenderer,
 } from 'three';
 
@@ -52,6 +53,12 @@ const CORNER = 0.045; // Machined chamfer, not a rounded-rectangle style choice.
 
 const GAP_ASSEMBLED = 0.052;
 const GAP_SEPARATED = 0.6;
+
+const ASSEMBLY_YAW = -0.44;
+/** Camera height as a fraction of its distance. Fixes the viewing angle. */
+const VIEW_PITCH = 0.29;
+/** Fraction of the frame the object may occupy before it is considered clipped. */
+const SAFE_FRAME = 0.93;
 
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (n, min = 0, max = 1) => (n < min ? min : n > max ? max : n);
@@ -101,9 +108,28 @@ function rimGeometry(shape, thickness) {
 /* --------------------------------------------------------------------------
    Etched graticule. Each plate carries a different measurement pattern, so
    the layers are distinguishable as objects rather than as six copies.
+
+   The source canvases are built once and shared: three stages draw the same
+   six patterns, and there is no reason to rasterise them three times.
    -------------------------------------------------------------------------- */
 
+const graticuleCanvases = new Map();
+
+function graticuleCanvas(index) {
+  if (!graticuleCanvases.has(index)) {
+    graticuleCanvases.set(index, drawGraticule(index));
+  }
+  return graticuleCanvases.get(index);
+}
+
 function graticuleTexture(index) {
+  const texture = new CanvasTexture(graticuleCanvas(index));
+  texture.colorSpace = SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+function drawGraticule(index) {
   const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -154,10 +180,85 @@ function graticuleTexture(index) {
   ctx.fillStyle = 'rgba(127,168,144,0.85)';
   ctx.fillRect(Math.round(w * (0.08 + index * 0.145)), Math.round(h * 0.055), 26, 5);
 
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  texture.anisotropy = 4;
-  return texture;
+  return canvas;
+}
+
+/* --------------------------------------------------------------------------
+   Framing.
+
+   The three stages occupy very differently shaped boxes — a wide hero band, a
+   tall sticky column, another tall column — and the specimen is a broad flat
+   slab, so a single hand-tuned camera distance clips it in at least one of
+   them. Instead, solve for the distance at which the fully separated assembly
+   fits inside a safe frame, and let each stage dolly within that.
+   -------------------------------------------------------------------------- */
+
+function assemblyCorners(gap) {
+  const halfStack = ((LAYERS - 1) / 2) * gap + PLATE_T;
+  const cos = Math.cos(ASSEMBLY_YAW);
+  const sin = Math.sin(ASSEMBLY_YAW);
+  const corners = [];
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const x = (sx * PLATE_W) / 2;
+        const z = (sz * PLATE_H) / 2;
+        corners.push(
+          new Vector3(x * cos + z * sin, sy * halfStack, -x * sin + z * cos)
+        );
+      }
+    }
+  }
+  return corners;
+}
+
+function fitsAt(probe, corners, distance) {
+  probe.position.set(0, distance * VIEW_PITCH, distance);
+  probe.lookAt(0, -0.1, 0);
+  probe.updateMatrixWorld(true);
+  probe.updateProjectionMatrix();
+  for (const corner of corners) {
+    const ndc = corner.clone().project(probe);
+    if (Math.abs(ndc.x) > SAFE_FRAME || Math.abs(ndc.y) > SAFE_FRAME) return false;
+    if (ndc.z > 1) return false;
+  }
+  return true;
+}
+
+/** Smallest distance at which the assembly at this gap is fully framed. */
+function frameDistance(probe, gap) {
+  const corners = assemblyCorners(gap);
+  let low = 2;
+  let high = 60;
+  if (!fitsAt(probe, corners, high)) return high;
+  for (let i = 0; i < 22; i += 1) {
+    const mid = (low + high) / 2;
+    if (fitsAt(probe, corners, mid)) high = mid;
+    else low = mid;
+  }
+  return high;
+}
+
+const FIT_SAMPLES = 7;
+
+/**
+ * Fit distance sampled across the separation range, so the specimen fills its
+ * frame whether whole or apart and the camera simply withdraws as it opens.
+ * Solving per frame would cost far more than interpolating seven samples.
+ */
+function buildFitTable(probe, widestGap) {
+  const table = [];
+  for (let i = 0; i < FIT_SAMPLES; i += 1) {
+    const t = i / (FIT_SAMPLES - 1);
+    table.push(frameDistance(probe, lerp(GAP_ASSEMBLED, widestGap, t)));
+  }
+  return table;
+}
+
+function fitAt(table, t) {
+  const position = clamp(t) * (table.length - 1);
+  const index = Math.min(Math.floor(position), table.length - 2);
+  return lerp(table[index], table[index + 1], position - index);
 }
 
 /* --------------------------------------------------------------------------
@@ -198,6 +299,28 @@ function studioEnvironment(renderer) {
   pmrem.dispose();
   texture.dispose();
   return target.texture;
+}
+
+/* --------------------------------------------------------------------------
+   Shared geometry. Three stages render the same specimen, and three.js keeps
+   its GPU state per renderer, so the geometry itself is built once.
+   -------------------------------------------------------------------------- */
+
+let shared = null;
+
+function sharedGeometry() {
+  if (shared) return shared;
+  const shape = plateShape(PLATE_W, PLATE_H, CORNER);
+  shared = {
+    plate: new ExtrudeGeometry(shape, {
+      depth: PLATE_T,
+      bevelEnabled: false,
+      curveSegments: 4,
+    }),
+    rim: rimGeometry(shape, PLATE_T),
+    etch: new PlaneGeometry(PLATE_W * 0.94, PLATE_H * 0.94),
+  };
+  return shared;
 }
 
 /* --------------------------------------------------------------------------
@@ -243,14 +366,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   assembly.rotation.y = -0.44;
   scene.add(assembly);
 
-  const shape = plateShape(PLATE_W, PLATE_H, CORNER);
-  const plateGeometry = new ExtrudeGeometry(shape, {
-    depth: PLATE_T,
-    bevelEnabled: false,
-    curveSegments: 4,
-  });
-  const rim = rimGeometry(shape, PLATE_T);
-  const etchGeometry = new PlaneGeometry(PLATE_W * 0.94, PLATE_H * 0.94);
+  const geometry = sharedGeometry();
 
   const plates = [];
   for (let i = 0; i < LAYERS; i += 1) {
@@ -260,29 +376,29 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 
     const faceMaterial = new MeshPhysicalMaterial({
       color: new Color(SUBSTRAL_BLACK).lerp(new Color(MINERAL), 0.1),
-      metalness: 0.06,
-      roughness: 0.3,
+      metalness: 0.08,
+      roughness: 0.22,
       clearcoat: 1,
-      clearcoatRoughness: 0.16,
+      clearcoatRoughness: 0.12,
       transparent: true,
-      opacity: 0.44,
+      opacity: 0.46,
       depthWrite: false,
       side: DoubleSide,
-      envMapIntensity: 1.15,
+      envMapIntensity: 1.6,
       emissive: new Color(PATINA),
       emissiveIntensity: 0,
     });
 
-    const face = new Mesh(plateGeometry, faceMaterial);
+    const face = new Mesh(geometry.plate, faceMaterial);
     group.add(face);
 
     const rimMaterial = new LineBasicMaterial({
       color: new Color(MINERAL),
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.46,
       depthWrite: false,
     });
-    group.add(new LineSegments(rim, rimMaterial));
+    group.add(new LineSegments(geometry.rim, rimMaterial));
 
     const etchMaterial = new MeshBasicMaterial({
       map: graticuleTexture(i),
@@ -291,7 +407,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       blending: AdditiveBlending,
       depthWrite: false,
     });
-    const etch = new Mesh(etchGeometry, etchMaterial);
+    const etch = new Mesh(geometry.etch, etchMaterial);
     etch.position.z = PLATE_T + 0.0015;
     group.add(etch);
 
@@ -301,12 +417,19 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 
   /* --- State ------------------------------------------------------------ */
 
+  /* The widest state this stage ever reaches is what has to stay framed. */
+  const widestGap = mode === 'surface' ? 0.115 : GAP_SEPARATED;
+  const probe = new PerspectiveCamera(camera.fov, 1, camera.near, camera.far);
+  let fitTable = [8, 8];
+  let fitted = 8;
+
+  /* Act I opens on the whole object; Act VI opens on it separated. */
   const state = {
     gap: mode === 'reconstruct' ? GAP_SEPARATED : GAP_ASSEMBLED,
     yaw: 0,
     pitch: 0,
-    dolly: 7.4,
-    height: 1.95,
+    dolly: fitted,
+    height: fitted * VIEW_PITCH,
     active: -1,
     highlight: new Array(LAYERS).fill(0),
   };
@@ -324,6 +447,16 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
+
+    probe.aspect = camera.aspect;
+    fitTable = buildFitTable(probe, widestGap);
+    fitted = fitAt(fitTable, mode === 'reconstruct' ? 1 : 0);
+    if (!sized) {
+      state.dolly = fitted;
+      state.height = fitted * VIEW_PITCH;
+      target.dolly = state.dolly;
+      target.height = state.height;
+    }
     sized = true;
   }
 
@@ -346,7 +479,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       faceMaterial.emissiveIntensity = h * 0.16;
       faceMaterial.opacity = lerp(0.44, 0.56, h);
       rimMaterial.color.set(h > 0.02 ? new Color(MINERAL).lerp(new Color(PATINA), h) : MINERAL);
-      rimMaterial.opacity = lerp(0.34, 0.92, h);
+      rimMaterial.opacity = lerp(0.46, 0.95, h);
       etchMaterial.opacity = lerp(0.2, 0.46, h);
     }
 
@@ -393,12 +526,20 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       const p = clamp(progress);
       const separation = mode === 'reconstruct' ? 1 - p : p;
 
-      target.gap = lerp(GAP_ASSEMBLED, GAP_SEPARATED, separation);
+      /* Act I holds the specimen assembled and only lets the seams open far
+         enough to suggest that it comes apart. */
+      target.gap =
+        mode === 'surface'
+          ? lerp(GAP_ASSEMBLED, 0.115, p)
+          : lerp(GAP_ASSEMBLED, GAP_SEPARATED, separation);
 
-      /* Camera movement stays restrained: a small elevation and dolly, never
-         a travelling shot (doctrine §14, Act II). */
-      target.dolly = lerp(7.4, 6.7, separation);
-      target.height = lerp(1.8, 2.55, separation);
+      /* The camera withdraws only as far as the opening object requires, so the
+         specimen stays framed at every separation and the movement reads as a
+         consequence of the object rather than a travelling shot (§14, Act II).
+         A little elevation comes with it, and nothing else moves. */
+      fitted = fitAt(fitTable, separation);
+      target.dolly = fitted;
+      target.height = fitted * VIEW_PITCH * lerp(0.96, 1.1, separation);
 
       /* Pointer parallax below the threshold of obvious cause and effect. */
       target.yaw = pointer.x * 0.05;
@@ -420,10 +561,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
     },
 
     dispose() {
+      // Geometry is shared across stages and intentionally not disposed here.
       resizeObserver.disconnect();
-      plateGeometry.dispose();
-      rim.dispose();
-      etchGeometry.dispose();
       environment.dispose();
       for (const plate of plates) {
         plate.faceMaterial.dispose();

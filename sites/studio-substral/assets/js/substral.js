@@ -57,28 +57,49 @@ class Stage {
     this.readoutIndex = root.querySelector('[data-readout-index]');
     this.readoutName = root.querySelector('[data-readout-name]');
 
-    this.progress = mode === 'reconstruct' ? 0 : 0;
+    this.progress = 0;
     this.eased = this.progress;
     this.pointer = { x: 0, y: 0 };
     this.visible = false;
     this.activeIndex = -1;
+    /* Set by the layer observer when one is authoritative. Which layer the
+       reader is on is information, not motion, so it is never damped. */
+    this.reportedIndex = null;
     this.object = null;
     this.frame = null;
   }
 
-  /* Separation in px for the CSS baseline composition. Decomposition pulls
-     the plates apart; reconstruction brings them together. */
+  /* Separation in px for the CSS baseline composition. Act I holds the object
+     assembled and only hints at the seams; Act II pulls it apart; Act VI
+     brings it back together. */
   separation() {
     const t = this.eased;
-    return this.mode === 'reconstruct'
-      ? 4 + (1 - t) * 40
-      : 5 + t * 38;
+    if (this.mode === 'surface') return 4 + t * 7;
+    if (this.mode === 'reconstruct') return 4 + (1 - t) * 40;
+    return 5 + t * 38;
   }
 
-  /* Which of the six layers is currently under examination. */
+  /* Which of the six layers is currently under examination. Act I examines
+     nothing: the object is still whole.
+
+     This reads from the undamped progress — or, better, from whichever layer
+     the reader is actually looking at. A label that lags a second behind the
+     heading beside it is wrong, not weighted. */
   index() {
-    const t = this.mode === 'reconstruct' ? this.eased : this.eased;
-    return clamp(Math.floor(t * LAYER_NAMES.length), 0, LAYER_NAMES.length - 1);
+    if (this.mode === 'surface') return -1;
+    if (this.reportedIndex != null) return this.reportedIndex;
+    return clamp(
+      Math.floor(this.progress * LAYER_NAMES.length),
+      0,
+      LAYER_NAMES.length - 1
+    );
+  }
+
+  setReportedIndex(index) {
+    if (this.reportedIndex === index) return;
+    this.reportedIndex = index;
+    this.write();
+    this.request();
   }
 
   write() {
@@ -110,8 +131,10 @@ class Stage {
   }
 
   settle() {
-    // Static states only: no depth-based scroll animation (doctrine §19).
-    this.eased = this.mode === 'reconstruct' ? 1 : 1;
+    /* Static states only: no depth-based scroll animation (doctrine §19).
+       Each act settles on the state its narrative needs — Act I whole, Act II
+       already decomposed, Act VI whole again. */
+    this.eased = this.mode === 'surface' ? 0 : 1;
     this.pointer = { x: 0, y: 0 };
     this.write();
   }
@@ -125,7 +148,7 @@ class Stage {
 
     this.progress = regionProgress(this.region);
     const before = this.eased;
-    this.eased = approach(this.eased, this.progress, 0.075);
+    this.eased = approach(this.eased, this.progress, 0.1);
 
     this.write();
 
@@ -191,7 +214,7 @@ function observePointer(stages) {
    Act II — the layer currently being read gets the accent.
    -------------------------------------------------------------------------- */
 
-function observeLayers() {
+function observeLayers(stage) {
   const layers = [...document.querySelectorAll('[data-layer]')];
   if (!layers.length) return;
 
@@ -199,8 +222,13 @@ function observeLayers() {
     (entries) => {
       for (const entry of entries) {
         entry.target.dataset.active = String(entry.isIntersecting);
+        if (entry.isIntersecting) {
+          stage?.setReportedIndex(Number(entry.target.dataset.layer));
+        }
       }
     },
+    // A narrow band across the middle of the viewport, so exactly one layer is
+    // under examination at a time.
     { rootMargin: '-42% 0px -42% 0px' }
   );
 
@@ -415,6 +443,13 @@ function loadObject(stages) {
 function boot() {
   const stages = [];
 
+  const surface = document.querySelector('[data-stage="surface"]');
+  if (surface) {
+    stages.push(
+      new Stage(surface, { region: document.getElementById('surface'), mode: 'surface' })
+    );
+  }
+
   const decomposition = document.querySelector('[data-stage="decomposition"]');
   if (decomposition) {
     const region =
@@ -446,7 +481,7 @@ function boot() {
   });
 
   observePointer(stages);
-  observeLayers();
+  observeLayers(stages.find((stage) => stage.mode === 'decompose'));
   observeConvergence();
   observeReveals();
   observeNav();
