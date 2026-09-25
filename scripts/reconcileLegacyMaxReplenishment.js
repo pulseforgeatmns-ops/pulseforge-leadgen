@@ -17,6 +17,7 @@ const { normalizeVertical } = require('../utils/normalize');
 const {
   ENRICHABLE_SCOUT_VERTICALS,
   evaluateReplenishmentAdmission,
+  resolveLegacyReconciliationOutcome,
 } = require('../utils/replenishmentVertical');
 const { ensureScoutUnenrichedTable } = require('../utils/scoutUnenrichedSchema');
 
@@ -172,10 +173,12 @@ function planLegacyReconciliation(rows, admissionContext, options = {}) {
     dryRun: options.dryRun !== false,
     scanned: rows.length,
     canonicalize: [],
+    hold: [],
     remove: [],
     summary: {
       scanned: rows.length,
       canonicalize: 0,
+      hold: 0,
       remove: 0,
       rejected: {
         outside_geography: 0,
@@ -192,13 +195,15 @@ function planLegacyReconciliation(rows, admissionContext, options = {}) {
   for (const row of rows) {
     const candidate = rowToCandidate(row);
     const admission = evaluateReplenishmentAdmission(candidate, admissionContext);
-    if (admission.admitted) {
+    const decision = resolveLegacyReconciliationOutcome(admission);
+
+    if (decision.outcome === 'canonicalize') {
       const reconciliation = {
         runId,
         at,
         action: 'canonicalized',
         previousVertical: row.vertical,
-        canonicalVertical: admission.vertical,
+        canonicalVertical: decision.vertical,
         dryRun: plan.dryRun,
       };
       plan.canonicalize.push({
@@ -206,7 +211,7 @@ function planLegacyReconciliation(rows, admissionContext, options = {}) {
         company: row.company,
         domain: row.domain,
         previousVertical: row.vertical,
-        canonicalVertical: admission.vertical,
+        canonicalVertical: decision.vertical,
         notes: appendReconciliationNote(row.notes, reconciliation),
         reconciliation,
       });
@@ -214,15 +219,39 @@ function planLegacyReconciliation(rows, admissionContext, options = {}) {
       continue;
     }
 
-    const reason = admission.reason || 'unclassifiable_vertical';
+    const reason = decision.reason || 'unclassifiable_vertical';
     plan.summary.rejected[reason] = (plan.summary.rejected[reason] || 0) + 1;
+
+    if (decision.outcome === 'hold') {
+      const reconciliation = {
+        runId,
+        at,
+        action: 'hold',
+        previousVertical: row.vertical,
+        reason,
+        detail: decision.detail || null,
+        dryRun: plan.dryRun,
+      };
+      plan.hold.push({
+        id: row.id,
+        company: row.company,
+        domain: row.domain,
+        previousVertical: row.vertical,
+        reason,
+        detail: decision.detail || null,
+        reconciliation,
+      });
+      plan.summary.hold += 1;
+      continue;
+    }
+
     const reconciliation = {
       runId,
       at,
       action: 'removed',
       previousVertical: row.vertical,
       reason,
-      detail: admission.detail || null,
+      detail: decision.detail || null,
       dryRun: plan.dryRun,
     };
     plan.remove.push({
@@ -231,7 +260,7 @@ function planLegacyReconciliation(rows, admissionContext, options = {}) {
       domain: row.domain,
       previousVertical: row.vertical,
       reason,
-      detail: admission.detail || null,
+      detail: decision.detail || null,
       reconciliation,
     });
     plan.summary.remove += 1;
@@ -330,6 +359,7 @@ module.exports = {
   loadMissionAdmissionContext,
   planLegacyReconciliation,
   applyLegacyReconciliation,
+  resolveLegacyReconciliationOutcome,
   runLegacyMaxReplenishmentReconciliation,
 };
 
