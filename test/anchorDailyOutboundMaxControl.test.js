@@ -7,6 +7,7 @@ const {
   buildControlPlan,
   missionCandidateReason,
   runMaxOutboundControlLoop,
+  _test: { scoutInput, mapReuseCompanyRows },
 } = require('../services/maxOutboundControlLoop');
 const { startAnchorGovernedScheduler } = require('../services/anchorGovernedScheduler');
 
@@ -61,6 +62,59 @@ test('Max inventory requires confirmed service area and source-mission segment c
     missionCandidateReason({ service_area_match: true, vertical: 'property_management' }, scope),
     null
   );
+});
+
+test('Max scoutInput carries structured replenishment workflow fields', () => {
+  const plan = {
+    deficit: 15,
+    safeDailyCapacity: 5,
+    targetDays: 3,
+    targetInventory: 15,
+    cleanInventory: 0,
+  };
+  const input = scoutInput(
+    { source_mission_id: 'mission_source' },
+    {
+      payload: {
+        structuredMission: {
+          market: { segment: 'short_term_rental' },
+          geography: { region: 'Greater Manchester' },
+        },
+      },
+    },
+    plan
+  );
+  assert.equal(input.workflow, 'outbound_inventory_replenishment');
+  assert.equal(input.inventoryDeficit, 15);
+  assert.equal(input.authority, 'observe');
+  assert.match(input.operatorDirection, /Do not contact prospects/);
+});
+
+test('Max reuse loader preserves company geography without fabricating missing locations', () => {
+  const mapped = mapReuseCompanyRows([
+    {
+      id: 'company-1',
+      name: 'Example STR Manager',
+      domain: 'example.com',
+      website: 'https://example.com',
+      location: 'Bedford, NH',
+      vertical: 'str_manager',
+      icp_score: 85,
+      updated_at: '2026-09-01T00:00:00.000Z',
+    },
+    {
+      id: 'company-2',
+      name: 'Unknown Location Co',
+      domain: 'unknown.example',
+      website: null,
+      location: null,
+      vertical: null,
+      icp_score: null,
+      updated_at: null,
+    },
+  ]);
+  assert.equal(mapped[0].location, 'Bedford, NH');
+  assert.equal(mapped[1].location, null);
 });
 
 test('Max invokes Scout for a deficit and records the post-replenishment state without touching send authority', async () => {

@@ -17,7 +17,7 @@
  */
 
 const { asText } = require('../../max/scoutAcquisition/Types');
-const { expandCitiesFromSearchDefinition } = require('./DiscoveryCoverageEngine');
+const { expandCitiesFromSearchDefinition } = require('./SearchGeography');
 
 /**
  * @typedef {object} EvidenceRequest

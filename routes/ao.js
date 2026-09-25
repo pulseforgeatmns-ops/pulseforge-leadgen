@@ -13,6 +13,9 @@ const aoRoutingIssueFlags = require('../services/aoRoutingIssueFlags');
 const { AO_ROUTING_ISSUE_TYPES } = require('../utils/aoRoutingIssueTypes');
 const aoRoute = require('../services/aoRouteService');
 const { buildTelUrl } = require('../utils/aoRoutePlanner');
+const aoCommandCenter = require('../services/aoCommandCenterService');
+const aoProspectUpdate = require('../services/aoProspectUpdateService');
+const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
 
 const router = express.Router();
 
@@ -102,8 +105,95 @@ function requireAoClient(req, res) {
 }
 
 router.get('/', requireAoRead, (_req, res) => {
+  res.redirect('/ao/command-center');
+});
+
+router.get('/command-center', requireAoRead, (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ao-command-center.html'));
+});
+
+router.get('/field', requireAoRead, (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'ao-dashboard.html'));
 });
+
+router.get('/api/command-center', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const date = req.query.date ? String(req.query.date) : null;
+
+  if (req.user.role !== 'ao') {
+    const override = Number(req.query.ao_user_id || req.query.ao_owner_id);
+    if (!Number.isInteger(override) || override <= 0) {
+      return res.status(400).json({ error: 'ao_user_id required for admin/operator command center view' });
+    }
+  }
+
+  const profile = await aoField.getAoProfile(aoOwnerId);
+  const payload = await aoCommandCenter.getCommandCenter({
+    clientId,
+    aoUserId: aoOwnerId,
+    aoUserName: profile?.name || req.user.name,
+    date,
+    source: 'command_center',
+  });
+  res.json(payload);
+}));
+
+router.post('/api/prospects/:prospectId/log-update', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    outcome_type: outcomeType,
+    notes,
+    next_action: nextAction,
+    next_action_due_at: nextActionDueAt,
+    advisory_stage: advisoryStage,
+    source = 'command_center',
+  } = req.body || {};
+
+  if (!outcomeType) {
+    return res.status(400).json({ error: 'outcome_type required', outcome_types: AO_OUTCOME_TYPES });
+  }
+
+  const result = await aoProspectUpdate.logProspectUpdate({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    outcomeType,
+    notes,
+    nextAction,
+    nextActionDueAt,
+    advisoryStage,
+    source,
+  });
+  if (result.status) return res.status(result.status).json({ error: result.error });
+  res.json(result);
+}));
+
+router.post('/api/max/conversations/continue', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    prospect_id: prospectId,
+    lead_id: leadId,
+    source = 'command_center',
+    reopen_if_done: reopenIfDone = true,
+  } = req.body || {};
+
+  const result = await aoMaxConversation.continueConversationForProspect({
+    aoOwnerId,
+    clientId,
+    prospectId: prospectId || null,
+    leadId: leadId || null,
+    source,
+    reopenIfDone: reopenIfDone !== false,
+  });
+  if (result.status) return res.status(result.status).json({ error: result.error });
+  res.json(result);
+}));
 
 router.get('/api/profile', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
   const profile = await aoField.getAoProfile(req.user.id);
