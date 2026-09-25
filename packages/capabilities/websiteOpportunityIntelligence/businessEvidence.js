@@ -1,10 +1,26 @@
 'use strict';
 
-const { EVIDENCE_CLASS, buildFinding } = require('./types');
+const { EVIDENCE_CLASS, buildFinding, BUYING_SIGNAL_RESEARCH } = require('./types');
+
+function resolveBuyingSignalResearch(input = {}) {
+  if (input.buying_signal_research === BUYING_SIGNAL_RESEARCH.RESEARCHED) {
+    return BUYING_SIGNAL_RESEARCH.RESEARCHED;
+  }
+  if (input.buying_signal_research === BUYING_SIGNAL_RESEARCH.NOT_RESEARCHED) {
+    return BUYING_SIGNAL_RESEARCH.NOT_RESEARCHED;
+  }
+  const hasExplicitSignals = Boolean(
+    input.hiring_signal || input.recent_growth_signal || input.advertising_signal
+  );
+  if (hasExplicitSignals) return BUYING_SIGNAL_RESEARCH.RESEARCHED;
+  return BUYING_SIGNAL_RESEARCH.NOT_RESEARCHED;
+}
 
 function gatherBusinessEvidence(input = {}) {
   const observedAt = new Date().toISOString();
   const findings = [];
+  const buying_signal_research = resolveBuyingSignalResearch(input);
+
   const business = {
     business_name: input.business_name || input.company || input.companyName || null,
     domain: input.domain || input.url || null,
@@ -20,6 +36,7 @@ function gatherBusinessEvidence(input = {}) {
     hiring_signal: Boolean(input.hiring_signal),
     recent_growth_signal: Boolean(input.recent_growth_signal),
     advertising_signal: Boolean(input.advertising_signal),
+    buying_signal_research,
     website_platform: input.website_platform || null,
     service_value_proxy: input.service_value_proxy || null,
   };
@@ -60,21 +77,34 @@ function gatherBusinessEvidence(input = {}) {
     }));
   }
 
-  for (const [flag, label] of [
-    ['hiring_signal', 'Active hiring signal'],
-    ['recent_growth_signal', 'Recent growth/expansion signal'],
-    ['advertising_signal', 'Advertising/acquisition activity signal'],
-  ]) {
-    if (business[flag]) {
-      findings.push(buildFinding({
-        id: `biz_${flag}`,
-        evidence_class: EVIDENCE_CLASS.OBSERVED,
-        category: 'business',
-        summary: label,
-        source: 'scout_discovery',
-        observed_at: observedAt,
-        ref: `business:${flag}`,
-      }));
+  if (buying_signal_research === BUYING_SIGNAL_RESEARCH.NOT_RESEARCHED) {
+    findings.push(buildFinding({
+      id: 'biz_buying_signals_unknown',
+      evidence_class: EVIDENCE_CLASS.UNKNOWN,
+      category: 'business',
+      summary: 'Buying signal research not performed',
+      source: 'scout_discovery',
+      observed_at: observedAt,
+      ref: 'business:buying_signals:unknown',
+    }));
+  } else {
+    for (const [flag, label] of [
+      ['hiring_signal', 'Active hiring signal'],
+      ['recent_growth_signal', 'Recent growth/expansion signal'],
+      ['advertising_signal', 'Advertising/acquisition activity signal'],
+    ]) {
+      if (business[flag]) {
+        findings.push(buildFinding({
+          id: `biz_${flag}`,
+          evidence_class: EVIDENCE_CLASS.OBSERVED,
+          category: 'business',
+          summary: label,
+          source: 'scout_discovery',
+          observed_at: observedAt,
+          ref: `business:${flag}`,
+          detail: input[`${flag}_source`] || input[`${flag}_evidence`] || null,
+        }));
+      }
     }
   }
 
@@ -83,4 +113,5 @@ function gatherBusinessEvidence(input = {}) {
 
 module.exports = {
   gatherBusinessEvidence,
+  resolveBuyingSignalResearch,
 };

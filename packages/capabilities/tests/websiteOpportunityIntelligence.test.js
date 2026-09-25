@@ -114,7 +114,7 @@ describe('SPEC-WEB-001 Website Opportunity Intelligence', () => {
       economics.estimated_contribution,
       economics.estimated_contract_value - economics.estimated_operator_hours * 50 - economics.estimated_direct_costs
     );
-    assert.equal(economics.label, 'estimate');
+    assert.ok(['prospect_specific_estimate', 'default_planning_only'].includes(economics.label));
   });
 
   it('Paige context rejects prohibited claims', () => {
