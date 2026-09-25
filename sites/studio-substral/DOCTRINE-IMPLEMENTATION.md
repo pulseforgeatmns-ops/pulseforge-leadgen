@@ -69,7 +69,9 @@ that `.prose` is never set in mono.
 
 ## The dimensional object (§11, §18)
 
-There are **two implementations of the same object**, and that is deliberate.
+It is **one specimen across three acts** — whole in Act I, separated in Act II,
+whole again in Act VI — and there are **two implementations of it**, which is
+deliberate.
 
 **Baseline — CSS 3D.** Six plates in a `preserve-3d` stack, smoked faces with
 an etched graticule, a light rim on the lower edge, and separation driven by a
@@ -98,6 +100,17 @@ Adaptations, and why:
   rounded corners produces either tessellation noise or gaps depending on the
   threshold. Two closed loops from the silhouette give exactly the machined
   outline intended.
+- **Camera distance is solved, not authored.** The three stages occupy very
+  differently shaped boxes and the specimen is a broad flat slab, so any
+  hand-tuned distance clips it in at least one of them. `frameDistance()`
+  binary-searches the distance at which the assembly's projected corners all
+  sit inside a 93% safe frame, sampled across the separation range at resize
+  and interpolated per frame. The camera then withdraws exactly as far as the
+  opening object requires — which is both correct at any aspect ratio and a
+  better reading of §14's "restrained camera movement" than a scripted move.
+- **Geometry and graticule canvases are shared** across the three stages.
+  three.js keeps GPU state per renderer, so there is no reason to build the
+  same six plates or rasterise the same six patterns three times.
 - **Loaded last, and conditionally.** Dynamically imported, gated on WebGL
   support, `prefers-reduced-motion`, viewport width, `saveData` and
   `deviceMemory`, and then deferred again to `requestIdleCallback`. It cannot
@@ -128,6 +141,18 @@ attention.
 Scroll is never intercepted. There is no wheel listener, no `scrollTo`, no
 scroll-snap. Sticky positioning does all the pinning, so the scrollbar always
 means what it says.
+
+**Damping applies to mass, not to meaning.** Which layer the reader is on is
+information: the readout and the accented plate come from the layer observer,
+undamped, so the label always matches the heading beside it. Only the physical
+separation is interpolated. An earlier build derived both from the damped value
+and the readout named a layer up to two behind what was on screen.
+
+**Act VI aligns by indent, not by translation.** Each of the six names starts
+inset by a different amount and resolves to flush left, with the measurement
+rule between name and status absorbing the change. Translating the rows instead
+carried their ends outside the column — which both widened the document
+sideways on narrow viewports and clipped "ALIGNED" mid-word.
 
 ---
 
@@ -175,6 +200,49 @@ measurements. Published measured figures would go stale in static HTML, and
 §16's integrity rules apply to our own claims as much as to a client's report.
 
 ---
+
+## Responsive intent (§17)
+
+Single column is a designed treatment, not a narrowed desktop.
+
+The stage becomes a shallow band pinned under the nav — 28svh in Act II, 30svh
+in Act VI — sitting **above** the copy that scrolls beneath it and drawn with
+reduced layer depth (`--strata-scale`, `--sep-scale`). Two things were wrong
+before this was settled and both are worth recording, because both are easy to
+reintroduce:
+
+1. The band sat *below* the scrolling column in stacking order, so the specimen
+   and the prose rendered on top of one another. `studioSubstralDoctrine.test.js`
+   now asserts the band outranks its scrolling sibling and is opaque.
+2. The band was 44svh, which together with the nav left barely half the viewport
+   to read in.
+
+WebGL is off below 600px. On a phone the CSS composition is the intended
+object — fewer simultaneous objects, no lighting cost — rather than a fallback.
+
+## Verification
+
+`build/verify-layout.mjs` renders the built page and checks what source-level
+tests cannot see. It found every defect listed in this section, so it is part of
+the deliverable rather than scaffolding:
+
+- every authored line break, at thirteen widths from 360px to 1920px — a
+  doctrine headline that silently rewraps is a doctrine violation;
+- horizontal document overflow;
+- elements overflowing their container;
+- running text crushed into a sliver, which does not overflow and so is
+  invisible to the check above (a stray grid child once reduced the refusals
+  list to one word per line);
+- the three progressive-enhancement states;
+- the assessment instrument's rejections, normalisation and offline route.
+
+It exits non-zero on failure. Run it after any change to the stylesheet, the
+markup or the object.
+
+One defect it caught is worth naming because it is a general CSS trap: a `22ch`
+measure on a `<blockquote>` resolved against the *inherited body* font size
+rather than the large statement inside it, crushing an 89px pull quote into a
+423px column. The measure belongs on the element whose font size it refers to.
 
 ## Assessment integrity (§16)
 
@@ -258,6 +326,15 @@ complete list:
 4. **Colophon publishes budgets, not measurements** — a measured figure baked
    into static HTML would become a false claim the first time it drifted.
 5. **Case study outcome withheld** — §16 integrity applied to our own work.
+6. **Display sizes capped to the measure they sit in** — the doctrine's line
+   breaks (`LOOK BENEATH / THE SURFACE.`, `WE DIAGNOSE / BEFORE WE DESIGN.`)
+   are the specification, so type is sized to preserve them rather than set as
+   large as possible and left to rewrap. The diagnosis statement was given the
+   full page width, with its supporting prose dropped into the right column
+   beneath it, so that break holds without shrinking the type.
+7. **The lifted nav is opaque rather than blurred** — translucency let display
+   type ghost through the bar. This also leaves the stylesheet with no
+   glassmorphism at all, which §10 prefers anyway.
 
 Nothing in the narrative, the layer ordering, the evidence taxonomy or the
 refusals was simplified.

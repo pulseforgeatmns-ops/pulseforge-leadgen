@@ -140,19 +140,43 @@ if (run('layout')) {
       }
 
       const overflows = [];
-      for (const el of document.querySelectorAll('h1, h2, h3, p, dd, li, figure, img')) {
+      const crushed = [];
+      const fontSize = (el) => Number.parseFloat(getComputedStyle(el).fontSize) || 16;
+
+      for (const el of document.querySelectorAll(
+        'h1, h2, h3, p, dd, li, span, figure, img'
+      )) {
         const parent = el.parentElement;
         if (!parent || !parent.clientWidth) continue;
         // The honeypot is deliberately parked outside the layout.
         if (el.closest('.field--hidden')) continue;
+
         if (el.scrollWidth > parent.clientWidth + 2) {
           overflows.push(`${el.tagName}.${el.className}`.slice(0, 48));
+        }
+
+        /* A block of running text squeezed into a couple of characters' width
+           renders one word per line. It does not overflow, so the check above
+           never sees it, but it is catastrophic and easy to introduce with a
+           stray grid child. */
+        const words = (el.textContent || '').trim().split(/\s+/).filter(Boolean);
+        if (
+          words.length >= 4 &&
+          el.children.length === 0 &&
+          el.clientWidth > 0 &&
+          el.clientWidth < fontSize(el) * 6
+        ) {
+          crushed.push(
+            `${el.tagName}.${el.className}`.slice(0, 40) +
+              ` (${el.clientWidth}px for ${words.length} words)`
+          );
         }
       }
 
       return {
         headings,
         overflows,
+        crushed,
         scrollWidth: document.documentElement.scrollWidth,
         clientWidth: document.documentElement.clientWidth,
       };
@@ -172,12 +196,16 @@ if (run('layout')) {
     for (const overflow of report.overflows) {
       fail(`${label} ${overflow} overflows its container`);
     }
+    for (const crushed of report.crushed) {
+      fail(`${label} ${crushed} is crushed to a sliver`);
+    }
     if (
       report.scrollWidth <= report.clientWidth &&
       !report.overflows.length &&
+      !report.crushed.length &&
       report.headings.every((h) => h.actual === h.intended)
     ) {
-      pass(`${label} — ${report.headings.length} authored line breaks hold, nothing overflows`);
+      pass(`${label} — ${report.headings.length} authored line breaks hold, text is not crushed`);
     }
     await page.close();
   }

@@ -668,7 +668,7 @@ ol {
   width: min(34rem, 74%);
   aspect-ratio: 4 / 3;
   transform-style: preserve-3d;
-  transform: rotateX(62deg) rotateZ(-38deg) scale(0.92)
+  transform: rotateX(62deg) rotateZ(-38deg) scale(var(--strata-scale, 0.92))
     translate3d(0, 0, calc(var(--lift, 0) * 1px));
 }
 
@@ -676,10 +676,15 @@ ol {
   position: absolute;
   inset: 0;
   transform-style: preserve-3d;
-  /* --i is the layer index, --sep the scroll-driven separation in px.
+  /* --i is the layer index, --sep the scroll-driven separation in px, and
+     --sep-scale reduces the layer depth where the frame is shallow.
      No transform transition: the damping lives in the script's interpolation,
      and doubling it here would read as lag rather than mass. */
-  transform: translate3d(0, 0, calc((2.5 - var(--i)) * var(--sep, 6px)));
+  transform: translate3d(
+    0,
+    0,
+    calc((2.5 - var(--i)) * var(--sep, 6px) * var(--sep-scale, 1))
+  );
 }
 
 .plate__face {
@@ -746,14 +751,39 @@ ol {
   gap: 0;
 }
 
+/* On one column the stage is a band pinned under the nav and the layers read
+   beneath it, so it has to sit above them and be opaque — otherwise the
+   specimen and the prose occupy the same pixels. The band is kept shallow so
+   the reading area is not halved (doctrine §17: mobile usability first). */
 .decomposition__stage {
   position: sticky;
   top: 0;
-  z-index: 1;
-  height: calc(44svh + var(--nav-h));
+  z-index: 3;
+  height: calc(28svh + var(--nav-h));
   padding-top: var(--nav-h);
   background: var(--bg);
   border-bottom: 1px solid var(--rule);
+}
+
+.layer {
+  scroll-margin-top: calc(28svh + var(--nav-h));
+}
+
+/* The pinned bands are shallow, so the specimen is drawn smaller and with less
+   depth between layers. This is the doctrine's reduced layer depth for small
+   screens (§17), not an accident of scaling the desktop composition down. */
+.decomposition__stage .stage,
+.reconstruction__stage .stage {
+  --strata-scale: 0.62;
+  --sep-scale: 0.6;
+}
+
+@media (min-width: 62em) {
+  .decomposition__stage .stage,
+  .reconstruction__stage .stage {
+    --strata-scale: 0.92;
+    --sep-scale: 1;
+  }
 }
 
 .decomposition__readout {
@@ -853,11 +883,18 @@ ol {
     align-items: start;
   }
 
+  /* Two columns: the stage no longer covers the reading column, so it returns
+     to full height and stops needing to sit on top. */
   .decomposition__stage {
+    z-index: 1;
     height: 100svh;
     padding-top: var(--nav-h);
     border-bottom: 0;
     border-right: 1px solid var(--rule);
+  }
+
+  .layer {
+    scroll-margin-top: var(--nav-h);
   }
 
   .decomposition__readout {
@@ -1484,7 +1521,8 @@ ol {
 .reconstruction__stage {
   position: sticky;
   top: 0;
-  height: calc(46svh + var(--nav-h));
+  z-index: 3;
+  height: calc(30svh + var(--nav-h));
   padding-top: var(--nav-h);
   border-bottom: 1px solid var(--rule);
   background: var(--bg);
@@ -1502,13 +1540,11 @@ ol {
   display: grid;
   gap: 0;
   border-top: 1px solid var(--rule);
-  /* The scattered starting offsets are wider than the column. Clip them here
-     rather than letting the un-aligned state widen the document — the names
-     read as sliding into alignment, which is the point. */
+  /* Belt and braces: the offsets below cannot widen the document, but clipping
+     here means a future change to --drift cannot either. */
   overflow-x: clip;
-  /* Offsets scale down with the measure so narrow screens drift proportionally
-     rather than throwing the names off the page. */
-  --drift-scale: 0.45px;
+  /* Offsets scale with the measure so narrow screens drift proportionally. */
+  --drift-scale: 0.5px;
 }
 
 @media (min-width: 48em) {
@@ -1528,9 +1564,13 @@ ol {
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-structural);
-  /* Offset starts scattered and resolves to 0 as the act progresses. The
-     script interpolates --drift, so only colour transitions here. */
-  transform: translateX(calc(var(--drift, 0) * var(--drift-scale, 1px)));
+  /* Each row starts indented by a different amount and resolves to flush left
+     as the act progresses — so the six names visibly come into alignment. The
+     indent is an inset rather than a translation because a translation would
+     carry the row's ends outside the column and clip them mid-word. The rule
+     between name and status absorbs the change, so the status column never
+     moves. The script interpolates --drift; only colour transitions here. */
+  padding-left: calc(var(--drift, 0) * var(--drift-scale, 1px));
   transition: color var(--dur-mid) var(--ease-weighted);
 }
 
@@ -1581,6 +1621,7 @@ ol {
   }
 
   .reconstruction__stage {
+    z-index: 1;
     height: 100svh;
     padding-top: var(--nav-h);
     border-bottom: 0;

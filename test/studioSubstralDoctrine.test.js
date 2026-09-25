@@ -640,8 +640,38 @@ describe('Motion physics (doctrine §13)', () => {
 
 describe('Responsive intent (doctrine §17)', () => {
   it('designs the mobile treatment rather than scaling the desktop one', () => {
-    assert.match(css, /\.decomposition__stage\s*\{[\s\S]*?height:\s*44svh/);
-    assert.match(css, /@media \(min-width: 62em\)/);
+    // A shallow sticky band on small screens, a full-height column on wide ones.
+    assert.match(css, /\.decomposition__stage\s*\{[\s\S]*?height:\s*calc\(28svh/);
+    assert.match(css, /@media \(min-width: 62em\)[\s\S]*?height:\s*100svh/);
+  });
+
+  it('keeps the single-column sticky band above the copy it pins over', () => {
+    // On one column the stage covers the reading column. If it sits below the
+    // scrolling content, the specimen and the prose render on top of each
+    // other — which is exactly what happened before this was pinned down.
+    const band = (selector) => css.match(new RegExp(`\\${selector}\\s*\\{[^}]*\\}`))[0];
+    const scrollers = { '.decomposition__stage': '.layers', '.reconstruction__stage': '.converge' };
+    for (const [stage, scroller] of Object.entries(scrollers)) {
+      const rule = band(stage);
+      const stageZ = Number(rule.match(/z-index:\s*(\d+)/)?.[1] ?? 0);
+      const scrollerZ = Number(band(scroller).match(/z-index:\s*(\d+)/)?.[1] ?? 0);
+      assert.ok(
+        stageZ > scrollerZ,
+        `${stage} (z ${stageZ}) must stack above ${scroller} (z ${scrollerZ})`
+      );
+      assert.match(rule, /background:\s*var\(--bg\)/, `${stage} must be opaque`);
+    }
+  });
+
+  it('reserves the fixed nav height so sticky stages are not occluded', () => {
+    assert.match(css, /--nav-h:/);
+    for (const stage of ['decomposition__stage', 'reconstruction__stage']) {
+      assert.match(
+        css,
+        new RegExp(`\\.${stage}\\s*\\{[\\s\\S]*?padding-top:\\s*var\\(--nav-h\\)`),
+        `${stage} must reserve the nav height`
+      );
+    }
   });
 
   it('treats the CSS composition as the intended small-screen object', () => {

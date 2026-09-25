@@ -17,6 +17,8 @@ assets/css/substral.css        design system + all six acts
 assets/js/substral.js          narrative orchestration (eager, ~4 KB gzip)
 assets/js/assessment.js        the Act IV instrument
 assets/js/dimensional.js       GENERATED — three.js bundle, loaded on demand
+                               (three stages: Act I whole, Act II apart,
+                                Act VI whole again — one specimen)
 assets/fonts/                  self-hosted Archivo + IBM Plex Mono (Latin)
 assets/brand/                  favicon.svg is the source; rasters are generated
 assets/work/                   GENERATED — case-study capture
@@ -55,6 +57,9 @@ node generate-assets.mjs            # all
 node generate-assets.mjs icons      # from assets/brand/favicon.svg
 node generate-assets.mjs social     # open graph preview
 node generate-assets.mjs work       # Anchor Cleaning capture
+
+# rendered-layout verification (see Tests)
+node verify-layout.mjs all
 ```
 
 `generate-assets.mjs` uses the repository's puppeteer, so run `npm install` at
@@ -64,6 +69,8 @@ the repo root first if `node_modules` is absent.
 see the performance doctrine (§20).
 
 ## Tests
+
+Source, from the repository root:
 
 ```bash
 node --test test/studioSubstralDoctrine.test.js     # doctrine conformance
@@ -76,6 +83,19 @@ recomputed from the stylesheet, the accessibility floor, and the performance
 budget the footer publishes. It also runs the assessment engine's own
 `PROHIBITED_CLAIM_PATTERNS` against the page copy, so the site is held to the
 standard the product enforces.
+
+Rendered result, from `build/`:
+
+```bash
+node verify-layout.mjs all
+```
+
+This drives a real browser and is the check that matters after any change to
+the stylesheet, the markup or the object. It verifies every authored line break
+at thirteen widths from 360px to 1920px, catches horizontal overflow, container
+overflow and text crushed into a sliver, and exercises the three
+progressive-enhancement states and the assessment instrument. It exits non-zero
+on failure.
 
 ## The assessment form
 
