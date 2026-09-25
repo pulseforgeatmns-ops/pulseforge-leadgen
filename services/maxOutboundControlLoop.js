@@ -2,6 +2,13 @@
 
 const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('../utils/canonicalEmailEligibility');
 const { normalizeVertical } = require('../utils/normalize');
+const {
+  ENRICHABLE_SCOUT_VERTICALS,
+  evaluateReplenishmentAdmission,
+  formatProvenanceNotes,
+  createReplenishmentAdmissionCounters,
+  recordReplenishmentRejection,
+} = require('../utils/replenishmentVertical');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { adapters: createGovernedAdapters } = require('./governedOutboundAdapters');
 
@@ -154,15 +161,53 @@ function scoutInput(program, source, plan) {
   };
 }
 
-async function persistDiscoveredCompanies(pool, store, { companies = [] }) {
+async function persistDiscoveredCompanies(pool, store, {
+  companies = [],
+  searchDefinition = null,
+  scoutContext = {},
+} = {}) {
   let inserted = 0;
+  const counters = createReplenishmentAdmissionCounters();
+  counters.discovered = companies.length;
+
+  const scope = scoutContext.scope || {};
+  const admissionContext = {
+    missionSegment: scope.segment || (searchDefinition?.segments || [])[0] || null,
+    service_area: scoutContext.serviceAreas || null,
+    clientConfig: scoutContext.clientConfig || null,
+    discoveryQuery: scoutContext.discoveryQuery || null,
+    discoveryConcept: scoutContext.discoveryConcept || null,
+    discoveryCity: scoutContext.discoveryCity || null,
+    discoverySource: scoutContext.discoverySource || null,
+  };
+
   for (const company of companies) {
+    counters.evaluated += 1;
     const name = String(company.name || '').trim();
     const website = String(company.website || '').trim() || null;
     const domain = normalizeDomain(company.domain || website);
-    if (!name || !domain) continue;
+    if (!name || !domain) {
+      recordReplenishmentRejection(counters, 'insufficient_business_fit');
+      continue;
+    }
+
     const ownership = await store.candidateOwnership({ company: name, domain, website });
-    if (ownership) continue;
+    if (ownership) {
+      recordReplenishmentRejection(counters, 'owned_elsewhere');
+      continue;
+    }
+
+    const admission = evaluateReplenishmentAdmission(company, admissionContext);
+    if (!admission.admitted) {
+      recordReplenishmentRejection(counters, admission.reason);
+      continue;
+    }
+
+    counters.fit += 1;
+    const notes = formatProvenanceNotes(
+      'Discovered by Max-directed Scout inventory replenishment; no contact performed.',
+      admission.provenance
+    );
     const result = await pool.query(`
       INSERT INTO scout_unenriched (
         client_id, company, website_url, domain, vertical, location, source,
@@ -180,13 +225,15 @@ async function persistDiscoveredCompanies(pool, store, { companies = [] }) {
       name,
       website || `https://${domain}`,
       domain,
-      normalizeVertical(company.industry || 'short_term_rental'),
-      company.location || null,
-      'Discovered by Max-directed Scout inventory replenishment; no contact performed.',
+      admission.vertical,
+      company.location || admission.provenance?.discoveryCity || null,
+      notes,
     ]);
     inserted += result.rowCount;
+    if (result.rowCount) counters.admittedToEnrichment += 1;
   }
-  return { inserted };
+
+  return { inserted, admission: counters };
 }
 
 function mapReuseCompanyRows(rows) {
@@ -225,6 +272,7 @@ async function runEnrichmentBatches(enrichment, pool, requested) {
       client_id: 10,
       limit: Math.min(DEFAULT_ENRICHMENT_BATCH, remaining),
       retryHours: 1,
+      verticals: ENRICHABLE_SCOUT_VERTICALS,
       db: pool,
     });
     summaries.push(summary);
@@ -247,7 +295,13 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
       {
         loadCompanies: async () => loadReuseCompanies(pool),
         persistCompanies: async input => {
-          persisted = await persistDiscoveredCompanies(pool, store, input);
+          persisted = await persistDiscoveredCompanies(pool, store, {
+            ...input,
+            scoutContext: {
+              scope: sourceScope(source),
+              serviceAreas: ['Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn'],
+            },
+          });
           return persisted;
         },
         enablePlaces: true,
@@ -265,12 +319,14 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
     requested: plan.deficit,
     promoted,
     discoveredQueued: persisted.inserted,
+    admission: persisted.admission || null,
     discovery: discovery?.kind || null,
   }));
   return {
     promoted,
     enrichmentBatches: first.summaries,
     discoveredQueued: persisted.inserted,
+    admission: persisted.admission || null,
     discovery,
   };
 }
@@ -357,6 +413,7 @@ async function runMaxOutboundControlLoop(options = {}) {
 module.exports = {
   DEFAULT_TARGET_DAYS,
   MAX_ENRICHMENT_BATCHES_PER_CYCLE,
+  ENRICHABLE_SCOUT_VERTICALS,
   buildControlPlan,
   sourceScope,
   missionCandidateReason,
