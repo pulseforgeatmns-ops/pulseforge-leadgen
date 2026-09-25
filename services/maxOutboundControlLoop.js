@@ -215,9 +215,14 @@ async function persistDiscoveredCompanies(pool, store, {
       )
       SELECT 10,$1,$2,$3,$4,$5,'max_buffer_replenishment',0,NULL,$6
       WHERE NOT EXISTS (
-        SELECT 1 FROM scout_unenriched
-        WHERE client_id=10 AND (
-          lower(domain)=lower($3) OR lower(trim(company))=lower(trim($1))
+        SELECT 1 FROM scout_unenriched u
+        WHERE u.client_id=10 AND (
+          lower(u.domain)=lower($3) OR lower(trim(u.company))=lower(trim($1))
+        )
+        AND NOT (
+          u.source = 'max_buffer_replenishment'
+          AND COALESCE(u.enrichment_attempts, 0) = 0
+          AND NOT (lower(trim(u.vertical)) = ANY($7::text[]))
         )
       )
       RETURNING id
@@ -228,6 +233,7 @@ async function persistDiscoveredCompanies(pool, store, {
       admission.vertical,
       company.location || admission.provenance?.discoveryCity || null,
       notes,
+      ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
     ]);
     inserted += result.rowCount;
     if (result.rowCount) counters.admittedToEnrichment += 1;
