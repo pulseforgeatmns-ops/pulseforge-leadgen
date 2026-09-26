@@ -9,7 +9,8 @@ const input = { tenantId: '10', sourceMissionId: 'source', senderEmail: 'sender@
 test('authorization is finite and cannot widen tenant, caps, hours, sequence or spacing', () => {
   const p = policy(input, now);
   assert.equal(p.dailyCap, 5); assert.equal(p.totalCap, 100); assert.equal(p.maxSequenceStep, 1);
-  for (const change of [{ tenantId: '11' }, { dailyCap: 6 }, { totalCap: 101 }, { spacingMinutes: 0 },
+  assert.equal(policy({ ...input, dailyCap: 12 }, now).dailyCap, 12);
+  for (const change of [{ tenantId: '11' }, { dailyCap: 51 }, { totalCap: 101 }, { dailyCap: 20, totalCap: 10 }, { spacingMinutes: 0 },
     { dailyCap: 1.5 }, { expiresAt: '2027-01-01' }, { aoOwnerIds: [] }, { inboxIntegrationId: '' }]) {
     assert.throws(() => policy({ ...input, ...change }, now));
   }

@@ -34,8 +34,11 @@ function policy(input, now = new Date()) {
     maxSequenceStep: 1, enrichmentLimit: 15, preparationAttemptsPerDay: 3 };
   if (p.tenantId !== '10' || !p.sourceMissionId || !p.senderEmail.includes('@') || !p.inboxIntegrationId) fail('invalid_anchor_scope');
   if (!p.aoOwnerIds.length || p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) fail('ao_owners_required');
-  if (!Number.isInteger(p.dailyCap) || p.dailyCap < 1 || p.dailyCap > 5
+  // dailyCap is operator authorization, not Emmett operational capacity.
+  // Emmett may recommend more; the grant can now authorize up to the mailbox-scale ceiling.
+  if (!Number.isInteger(p.dailyCap) || p.dailyCap < 1 || p.dailyCap > 50
     || !Number.isInteger(p.totalCap) || p.totalCap < 1 || p.totalCap > 100
+    || p.dailyCap > p.totalCap
     || !Number.isInteger(p.spacingMinutes) || p.spacingMinutes < 60 || p.spacingMinutes > 240) fail('invalid_bounds');
   if (Date.parse(p.expiresAt) <= Date.parse(p.startsAt)
     || Date.parse(p.expiresAt) - Date.parse(p.startsAt) > 30 * 86400000

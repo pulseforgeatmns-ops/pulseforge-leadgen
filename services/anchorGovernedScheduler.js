@@ -31,7 +31,7 @@ function startAnchorGovernedScheduler(options = {}) {
         const result = await cron.run({ pool: options.pool });
         logger.log('[anchor-governed]', JSON.stringify(result));
       }
-      if (maxControlEnabled && current % 60 === 0) {
+      if (maxControlEnabled && current % 15 === 0) {
         const control = await maxControl();
         logger.log('[anchor-max-control]', JSON.stringify(control));
       }

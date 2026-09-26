@@ -7,7 +7,7 @@ const { loadMissionSnapshot } = require('./acquisitionMissionPersistence');
 const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
 const { resolveCanonicalSenderIdentity, evaluateCanonicalSenderReadiness } = require('../utils/canonicalSenderIdentity');
 const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
-const { createOutboundEngine } = require('../packages/emmett-outbound');
+const { createOutboundEngine, assessOperatingCapacity } = require('../packages/emmett-outbound');
 const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
 const { canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
 
@@ -61,9 +61,19 @@ function adapters(pool, dependencies = {}) {
     Object.assign(snapshot, sender);
     const assessed = createOutboundEngine().assess({ tenantId: '10', snapshot, now });
     if (assessed.governor.halt || !['proceed', 'slow'].includes(assessed.governor.outcome)) fail('emmett_governor_halted');
-    const cap = Math.min(assessed.capacity.recommended, assessed.governor.slowCap || Infinity, program.policy.dailyCap);
+    const programTotals = await pool.query(`SELECT count(*)::int AS total
+      FROM acquisition_outbound_items i
+      JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
+      WHERE e.program_id=$1 AND i.attempted_at IS NOT NULL`, [program.id]).catch(() => ({ rows: [{ total: 0 }] }));
+    const operating = assessOperatingCapacity({
+      assessed,
+      policy: program.policy,
+      sentToday: snapshot.sentToday,
+      totalAttempted: programTotals.rows[0]?.total || 0,
+    });
+    const cap = operating.effectiveDailyCapacity;
     if (!Number.isFinite(cap) || cap <= snapshot.sentToday) fail('emmett_capacity_exhausted');
-    return { snapshot, assessed, cap, sender, lastAttempt: history.last_attempt };
+    return { snapshot, assessed, cap, operating, sender, lastAttempt: history.last_attempt };
   }
   async function runtimeFor() {
     if (dependencies.runtime) return dependencies.runtime;
