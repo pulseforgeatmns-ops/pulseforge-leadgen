@@ -75,56 +75,94 @@ deliberate.
 
 ### What the specimen is
 
-Read top to bottom:
+Six layers, six materials, on a block of stone. Read top to bottom:
 
-| | Layer | Physical treatment | What it draws |
-|---|---|---|---|
-| — | **Surface** | Polished acrylic, thinnest, brightest rim | A designed page: masthead, navigation, an oversized headline, one emphasised action, a framed media plate, three measures of copy, a footer |
-| 06 | **Design** | Clear acrylic, high clearcoat | Twelve-column and baseline grid, margin markers, a dimension callout, two type traces sitting on the system |
-| 05 | **Trust** | Slightly clouded, more metal in the cap | A struck seal, a closure mark, a credential plate, a verification ledger with one row still open |
-| 04 | **Search** | Lower clearcoat, more diffuse | A site hierarchy with elbow connectors, and an index with leader dots where one entry is unresolved |
-| 03 | **Conversion** | Diffuse acrylic | Nodes and paths converging on a single action — and one dashed route that simply stops |
-| 02 | **Accessibility** | **Frosted polymer**: roughness 0.42, clearcoat 0.32 — milky, not glassy | Landmark regions nested as a document outline, a heading-level ladder, and a focus-order path through numbered stops |
-| 01 | **Performance** | **Graphite composite**: thickest at 0.092, roughest, most metallic, least transparent | A request waterfall over a measured time axis with thresholds, and a sampled trace |
-| — | **Foundation** | **Mineral**: warm stone, procedurally grained and veined, wider than the plates, and it never moves | — |
+| | Layer | Material | How it is told apart | What it draws |
+|---|---|---|---|---|
+| 06 | **Design** | Precision surface | Near mirror-polished, the highest reflectivity in the stack, the brightest machined arris | The page itself: masthead, oversized headline, one emphasised action, a framed media plate, three measures of copy, a footer — traced over the grid it sits on |
+| 05 | **Trust** | Warm smoked glass | The **thickest** layer, with a broad soft highlight and a substantial edge. Mass is the signal | A struck seal, a closure mark, a credential plate, a ledger with one row still open |
+| 04 | **Search** | Etched architectural glass | The **clearest** body and the **thinnest** edge, with its markings driving roughness — so they only appear when light rakes across them | A site hierarchy with elbow connectors, and an index where one entry is unresolved |
+| 03 | **Conversion** | Smoked acrylic | Darkest of the glass layers and the most optically dense, with a tight bright specular against Trust's broad one | Nodes and paths converging on a single action — and one dashed route that simply stops |
+| 02 | **Accessibility** | Frosted polymer | The **lightest** material: milky, roughness 0.64, sheen for the diffuse halo, almost no clearcoat, a soft edge | Landmark regions nested as a document outline, a heading ladder, a focus-order path |
+| 01 | **Performance** | Graphite composite | The **darkest**, thickest and least transparent, brushed along one axis so it answers light directionally | A request waterfall over a measured axis with thresholds, and a sampled trace |
+| 00 | **Substrate** | Mineral | A block, not a plate — see below | — |
 
-Performance is deepest and design sits directly beneath the surface, which is
-the doctrine's closing principle stated physically: what is underneath
-determines what happens above it. The digital layers rise off the stone as the
-object opens.
+Performance is deepest and design is the visible surface, which is the
+doctrine's closing principle stated physically: what is underneath determines
+what happens above it.
 
-The surface plate is **not a seventh system**. It is the visible website the six
-explain, which is why its composition sits on the top face while every other
-drawing is embedded at mid-thickness and read *through* the material.
+### Why they are not six colours
 
-### Why seven materials instead of one
+The brief was explicit that six tinted panes would not do. The separation comes
+from thickness (a 2.5× range from the thinnest glass to the graphite), roughness
+(0.045 to 0.92), opacity (0.22 to 0.7), reflectivity (0.7 to 2.6
+`envMapIntensity`), edge treatment, internal markings and sheen. Tint is used
+only as a **value ladder** — graphite darkest, frosted polymer lightest, an
+eightfold spread — and exactly one layer departs from the palette at all: Trust
+takes a 9% warmth nudge toward mineral.
 
-Six identical slabs at different spacings communicate the idea and none of the
-material — that was the defect this stack replaced. Thickness, tint, opacity,
-roughness, clearcoat, metalness, rim alloy and rim finish all vary per layer,
-and the test suite asserts that at least six distinct values exist for
-thickness and finish and that all seven drawings differ.
+The test suite asserts all six differ on every one of those axes, that the
+thickness range is at least 2×, that the value ladder spans at least 8×, and
+that no more than one layer carries a warmth shift. The consequence is that the
+layers stay distinguishable in grayscale, which is the real test of whether the
+differentiation is material or cosmetic.
+
+### The substrate
+
+A **block, not a seventh pane.** A quarter of the object's width thick, a third
+wider than the layers it carries, and hewn in plan: `hewnShape()` walks the
+perimeter and displaces it with layered irrational frequencies, quantised into
+facets, so the silhouette is uneven straight cuts rather than a rounded
+rectangle. Deterministic, so the object is the same on every load.
+
+Two materials on one block, and the contrast between them is the point:
+
+- **Broken sides** — `roughness: 1`, a noise-derived normal map at nearly 2×
+  strength, the darkest albedo. `stoneNormalTexture()` builds five octaves of
+  value noise and converts the height field to normals, so the faces answer
+  light as fractured stone.
+- **Planed lids** — the same map at 0.3× with a trace of clearcoat, plus a
+  shallow machined pad (`seat`) with its own arris, cut into the top where the
+  engineered system seats into it.
+
+It is anchored: the layers rise off it as the object opens, and it never moves.
+It is visible in the hero, so the object reads as surface, systems, foundation
+at a glance, and it is still there in Act VI when the layers reassemble — the
+website is visibly built on something rather than floating.
+
+There is no giant SUBSTRATE word on the stone. A `00 / SUBSTRATE` annotation
+appears in the stage readout beneath the active layer, in the same restrained
+engineering-label language as the six chapters, and secondary to it. The block
+explains itself.
 
 ### Making a layer the subject
 
-When the reader reaches a layer, that layer physically becomes the subject.
-Four things respond together, none of them spacing:
+The brief ruled out doing this with opacity or colour, so it is done with light.
+Four things respond:
 
-1. **Lighting** — an examination `PointLight` travels to the subject's height
-   and lifts from zero. It is dark whenever no layer is under discussion.
-2. **Camera** — the aim rises to the subject's plane, the dolly closes about
-   six percent, and the viewing angle steepens so the subject turns its face
-   up. A second solved fit table for the steeper angle guarantees this cannot
-   push the specimen out of frame.
-3. **Material** — the subject gains opacity and emissive patina at its arris;
-   its machined wall catches more of the environment; everything else recedes.
-4. **Relief** — plates above the subject lift and those below settle, giving it
-   physical room. This is a consequence of the emphasis, not the mechanism.
+1. **A raking light** crosses the subject at a few degrees. This is the whole
+   mechanism: an etched, brushed or frosted surface cannot be read at all
+   without grazing light, so the same light that reveals the layer is what
+   proves its material.
+2. **Reflectivity** rises on the subject (2.1× its own `envMapIntensity`) and
+   falls to 0.45× on its neighbours.
+3. **Camera** — the aim rises to the subject's plane, the dolly closes, and the
+   viewing angle steepens against a second solved fit table so the specimen
+   cannot leave frame.
+4. **Relief** — plates above the subject lift and those below settle.
+
+The emissive tint that used to wash the whole active plate is gone. The accent
+survives only as a trace on the arris, and the tests assert that emphasis adds
+no opacity and no colour.
+
+The opening is eased and floored: the first chapter is reached at the very top of
+the act, where a linear mapping left the object still shut and the layer being
+described invisible inside the stack.
 
 ### The two implementations
 
-**Baseline — CSS 3D.** Seven plates and the substrate in a `preserve-3d` stack.
-Each plate paints its own drawing from flat gradient rectangles, so the seven
+**Baseline — CSS 3D.** Six plates and the substrate in a `preserve-3d` stack.
+Each plate paints its own drawing from flat gradient rectangles, so the six
 layers are distinguishable with **no requests and no images** — a page, a grid,
 marks, an index, a flow, a structure, a trace. Per-layer `--face-lift`,
 `--face-body` and `--face-edge` vary the material the same way the WebGL
@@ -144,7 +182,7 @@ depth falloff so the far side of the specimen recedes.
 
 Adaptations, and why:
 
-- **No `transmission`.** Real refractive transmission on seven overlapping
+- **No `transmission`.** Real refractive transmission on six overlapping
   plates needs a render target per frame and is the single most expensive thing
   in the scene. Cap opacity plus clearcoat plus a structured environment reads
   as smoked acrylic at this scale for a fraction of the cost. §26 permits
@@ -153,17 +191,17 @@ Adaptations, and why:
 - **Procedural environment, not an HDR asset.** A 512×256 canvas with two
   softboxes, warm bounce from below and a bright horizon strip for the machined
   arrises to catch, run through `PMREMGenerator`. Nothing to download.
-- **No shadow maps.** Seven translucent plates casting opaque shadow-map
+- **No shadow maps.** Six translucent plates casting opaque shadow-map
   shadows looks wrong and costs a second pass. A contact shadow on the
   substrate, scaled to the lift, is both cheaper and more accurate.
 - **Arrises built by hand, not `EdgesGeometry`.** `EdgesGeometry` on a plate
   with relieved corners produces either tessellation noise or gaps depending on
   the threshold. Two closed loops from the silhouette give exactly the machined
   outline intended.
-- **Artwork drawn to canvas, not loaded.** Seven procedural drawings, cached
-  and shared between the three stages, at 1024px for the surface and 512px for
-  the rest. No network cost, and the surface composition gets the resolution it
-  needs to read as a page.
+- **Artwork drawn to canvas, not loaded.** Six procedural drawings, cached
+  and shared between the three stages, at 1024px for Design and 512px for the
+  rest. No network cost, and the page composition gets the resolution it needs
+  to read as a page.
 - **Camera distance is solved, not authored.** The three stages occupy very
   differently shaped boxes and the specimen is a broad flat slab, so any
   hand-tuned distance clips it in at least one of them. `frameDistance()`

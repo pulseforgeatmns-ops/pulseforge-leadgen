@@ -17,8 +17,9 @@ assets/css/substral.css        design system + all six acts
 assets/js/substral.js          narrative orchestration (eager, ~4 KB gzip)
 assets/js/assessment.js        the Act IV instrument
 assets/js/dimensional.js       GENERATED — three.js bundle, loaded on demand
-                               (three stages: Act I whole, Act II apart,
-                                Act VI whole again — one specimen)
+                               (six materials on a mineral substrate; three
+                                stages: Act I whole, Act II apart, Act VI
+                                whole again — one specimen)
 assets/fonts/                  self-hosted Archivo + IBM Plex Mono (Latin)
 assets/brand/                  favicon.svg is the source; rasters are generated
 assets/work/                   GENERATED — case-study capture

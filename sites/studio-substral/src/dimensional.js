@@ -138,17 +138,17 @@ const STACK = [
        response, carrying discrete credibility marks instead of fine data. */
     key: 'trust',
     narrative: 4,
-    thickness: 0.104,
+    thickness: 0.112,
     tint: 0.145,
     warmth: 0.55,
     opacity: 0.44,
-    roughness: 0.1,
+    roughness: 0.17,
     clearcoat: 0.92,
-    clearcoatRoughness: 0.075,
+    clearcoatRoughness: 0.14,
     metalness: 0.09,
     envMapIntensity: 1.95,
-    wall: { colour: 0xd2c8b2, roughness: 0.27, metalness: 0.9 },
-    arris: 0.6,
+    wall: { colour: 0xd2c8b2, roughness: 0.34, metalness: 0.88 },
+    arris: 0.56,
     art: 'trust',
     artOpacity: 0.58,
   },
@@ -178,14 +178,14 @@ const STACK = [
     key: 'conversion',
     narrative: 2,
     thickness: 0.078,
-    tint: 0.048,
-    opacity: 0.62,
-    roughness: 0.11,
+    tint: 0.03,
+    opacity: 0.68,
+    roughness: 0.05,
     clearcoat: 1,
-    clearcoatRoughness: 0.09,
+    clearcoatRoughness: 0.035,
     metalness: 0.06,
-    envMapIntensity: 1.45,
-    wall: { colour: 0xa09a8b, roughness: 0.15, metalness: 0.89 },
+    envMapIntensity: 1.75,
+    wall: { colour: 0xa09a8b, roughness: 0.09, metalness: 0.94 },
     arris: 0.44,
     art: 'conversion',
     artOpacity: 0.52,
@@ -438,8 +438,8 @@ function drawDesign(resolution) {
 
   // Hero: a short headline set very large, a line of supporting copy, one CTA.
   const heroY = h * 0.225;
-  bar(ctx, m, heroY, col * 6.2, h * 0.062, 0.94);
-  bar(ctx, m, heroY + h * 0.085, col * 4.5, h * 0.062, 0.94);
+  bar(ctx, m, heroY, col * 6.2, h * 0.062, 0.78);
+  bar(ctx, m, heroY + h * 0.085, col * 4.5, h * 0.062, 0.78);
   textBlock(ctx, m, heroY + h * 0.2, col * 4.4, 2, h * 0.032, 0.4, 3);
 
   const ctaY = heroY + h * 0.29;
@@ -1497,7 +1497,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       );
       plate.artMaterial.opacity = lerp(
         layer.artOpacity * lerp(1, 0.5, state.focus),
-        Math.min(0.96, layer.artOpacity + 0.42),
+        Math.min(0.88, layer.artOpacity + 0.36),
         emphasis
       );
       plate.wallMaterial.envMapIntensity = lerp(
