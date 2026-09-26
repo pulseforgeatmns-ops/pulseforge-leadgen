@@ -13,26 +13,25 @@ const {
 const { adapters } = require('../services/governedOutboundAdapters');
 const { startAnchorGovernedScheduler } = require('../services/anchorGovernedScheduler');
 
-test('Max derives a three-day inventory target from the lower of policy and Emmett capacity', () => {
-  assert.deepEqual(
-    buildControlPlan({
-      dailyCap: 5,
-      emmettCapacity: 16,
-      sentToday: 1,
-      cleanInventory: 2,
-      targetDays: 3,
-    }),
-    {
-      state: 'critical',
-      safeDailyCapacity: 5,
-      todayRemaining: 4,
-      targetDays: 3,
-      targetInventory: 15,
-      cleanInventory: 2,
-      deficit: 13,
-      shouldReplenish: true,
-    }
-  );
+test('Max derives a three-day inventory target from Emmett effective capacity, exposing authorization as a limiter', () => {
+  const authorizationBound = buildControlPlan({
+    dailyCap: 5,
+    emmettCapacity: 16,
+    sentToday: 1,
+    cleanInventory: 2,
+    targetDays: 3,
+  });
+  assert.equal(authorizationBound.state, 'critical');
+  assert.equal(authorizationBound.safeDailyCapacity, 5);
+  assert.equal(authorizationBound.effectiveDailyCapacity, 5);
+  assert.equal(authorizationBound.recommendedSafeDailyCapacity, 16);
+  assert.equal(authorizationBound.limitingFactor, 'authorization_daily_cap');
+  assert.equal(authorizationBound.todayRemaining, 4);
+  assert.equal(authorizationBound.targetInventory, 15);
+  assert.equal(authorizationBound.cleanInventory, 2);
+  assert.equal(authorizationBound.deficit, 13);
+  assert.equal(authorizationBound.shouldReplenish, true);
+  assert.match(authorizationBound.capacityReason, /authorization limits daily sends to 5/i);
 
   const emmettBound = buildControlPlan({
     dailyCap: 10,
@@ -41,6 +40,9 @@ test('Max derives a three-day inventory target from the lower of policy and Emme
     targetDays: 3,
   });
   assert.equal(emmettBound.safeDailyCapacity, 3);
+  assert.equal(emmettBound.effectiveDailyCapacity, 3);
+  assert.equal(emmettBound.recommendedSafeDailyCapacity, 3);
+  assert.equal(emmettBound.limitingFactor, 'deliverability');
   assert.equal(emmettBound.targetInventory, 9);
   assert.equal(emmettBound.state, 'healthy');
   assert.equal(emmettBound.shouldReplenish, false);
@@ -194,10 +196,79 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
   assert.equal(result.plan.state, 'healthy');
   assert.equal(result.plan.cleanInventory, 15);
   assert.equal(result.emmett.safeCapacity, 5);
+  assert.equal(result.emmett.effectiveDailyCapacity, 5);
+  assert.equal(result.emmett.recommendedSafeDailyCapacity, 5);
+  assert.equal(result.plan.effectiveDailyCapacity, 5);
+  assert.equal(result.plan.targetInventory, 15);
   assert.equal(events.length, 1);
   assert.equal(events[0].type, 'max_outbound_control');
   assert.equal(events[0].payload.scoutInvoked, true);
   assert.equal(events[0].payload.bufferTarget, 15);
+});
+
+test('Max keeps replenishing on later cycles until the target is met', async () => {
+  const calls = [];
+  const program = {
+    id: 'outbound_test',
+    mode: 'active',
+    policy_hash: 'policy_hash',
+    source_mission_id: 'mission_source',
+    policy: { dailyCap: 12 },
+  };
+  const source = { id: 'mission_source', payload: {} };
+  const infrastructure = {
+    cap: 12,
+    operating: {
+      recommendedSafeDailyCapacity: 12,
+      effectiveDailyCapacity: 12,
+      limitingFactor: 'deliverability',
+      governor: 'proceed',
+      healthScore: 84,
+      capacityReason: 'Emmett recommends 12.',
+    },
+    snapshot: { sentToday: 0 },
+    assessed: { governor: { outcome: 'proceed' }, health: { score: 84 }, capacity: { recommended: 12 } },
+  };
+
+  const first = await runMaxOutboundControlLoop({
+    pool: {},
+    program,
+    source,
+    store: { event: async () => {} },
+    infrastructure,
+    inventory: { clean: Array.from({ length: 10 }, () => ({})), excluded: [], scope: {}, exclusionCounts: {} },
+    inventoryAfter: { clean: Array.from({ length: 20 }, () => ({})), excluded: [], scope: {}, exclusionCounts: {} },
+    timestamps: { lastSuccessfulReplenishmentAt: null, lastSuccessfulPromotionAt: null },
+    funnel: { discovered: 0, fit: 0, admittedToEnrichment: 0, enrichmentPending: 4, promotedVerified: 10, unresolved: 1, permanentlyRejected: 0 },
+    scoutRamp: async ({ plan }) => {
+      calls.push(plan.deficit);
+      return { promoted: 10, recovered: 0, discoveredQueued: 6, admission: { discovered: 12, evaluated: 12, fit: 8, admittedToEnrichment: 6, recovered: 0, rejected: {} } };
+    },
+  });
+  assert.equal(first.plan.state, 'replenish');
+  assert.equal(first.plan.targetInventory, 36);
+  assert.equal(first.shouldReplenish === true || first.plan.shouldReplenish, true);
+  assert.equal(calls[0], 26);
+
+  const second = await runMaxOutboundControlLoop({
+    pool: {},
+    program,
+    source,
+    store: { event: async () => {} },
+    infrastructure,
+    inventory: { clean: Array.from({ length: 20 }, () => ({})), excluded: [], scope: {}, exclusionCounts: {} },
+    inventoryAfter: { clean: Array.from({ length: 36 }, () => ({})), excluded: [], scope: {}, exclusionCounts: {} },
+    timestamps: { lastSuccessfulReplenishmentAt: first.lastSuccessfulReplenishmentAt, lastSuccessfulPromotionAt: first.lastSuccessfulPromotionAt },
+    funnel: first.funnel,
+    scoutRamp: async ({ plan }) => {
+      calls.push(plan.deficit);
+      return { promoted: 16, recovered: 0, discoveredQueued: 4, admission: { discovered: 8, evaluated: 8, fit: 5, admittedToEnrichment: 4, recovered: 0, rejected: {} } };
+    },
+  });
+  assert.equal(calls[1], 16);
+  assert.equal(second.plan.state, 'healthy');
+  assert.equal(second.plan.cleanInventory, 36);
+  assert.equal(second.plan.shouldReplenish, false);
 });
 
 test('Max observation can be disabled without invoking Scout', async () => {

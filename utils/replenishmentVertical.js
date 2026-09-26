@@ -15,31 +15,51 @@ const ENRICHABLE_SCOUT_VERTICALS = Object.freeze([
 
 const STR_EVIDENCE = [
   /\bshort[\s-]?term rental\b/i,
+  /\bshort[\s-]?term propert/i,
   /\bvacation rental\b/i,
+  /\bvacation homes?\b/i,
+  /\bholiday rental\b/i,
   /\bairbnb\b/i,
   /\bvrbo\b/i,
   /\bstr portfolio\b/i,
   /\bstr operator\b/i,
+  /\bstr manager\b/i,
+  /\bstr_manager\b/i,
   /\bvacation propert(?:y|ies) management\b/i,
   /\brental management\b/i,
+  /\bguest stay\b/i,
+  /\bco-?host(?:ing)?\b/i,
 ];
 
 const PROPERTY_MANAGER_EVIDENCE = [
   /\bproperty management\b/i,
   /\bproperty manager\b/i,
+  /\bproperty_manager\b/i,
+  /\bproperty mgmt\b/i,
+  /\bprop(?:erty)?\.?\s*mgmt\b/i,
   /\bresidential property management\b/i,
   /\bcommercial property management\b/i,
   /\brental property management\b/i,
   /\bmultifamily management\b/i,
   /\bapartment management\b/i,
+  /\bassoc(?:iation)? management\b/i,
+  /\bhoa management\b/i,
+  /\bcondo(?:minium)? management\b/i,
+  /\bleasing (?:office|agent|management)\b/i,
+  /\btenant management\b/i,
+  /\breal estate management\b/i,
 ];
 
 const COMMERCIAL_OFFICE_EVIDENCE = [
   /\bcommercial office\b/i,
+  /\bcommercial_office\b/i,
   /\boffice park\b/i,
   /\bbusiness center\b/i,
   /\boffice building management\b/i,
 ];
+
+const STR_PLACE_TYPES = new Set(['lodging', 'extended stay', 'vacation rental']);
+const PM_PLACE_TYPES = new Set(['real estate agency']);
 
 const CONTRADICTORY_BUSINESS_TYPES = [
   { pattern: /\bequipment rental\b/i, label: 'equipment rental' },
@@ -67,6 +87,10 @@ const MISSION_VERTICALS = Object.freeze({
 
 function asText(value) {
   return value == null ? '' : String(value).trim();
+}
+
+function asClassifyText(value) {
+  return asText(value).replace(/[_-]+/g, ' ');
 }
 
 function signalText(candidate = {}) {
@@ -104,21 +128,31 @@ function isSearchDerivedField(value, context = {}) {
   return geoHits.length >= 2 || (geoHits.length === 1 && tokens.length >= 4);
 }
 
+function declaredCanonicalVertical(candidate = {}, context = {}) {
+  for (const field of ['vertical', 'industry', 'segment']) {
+    const raw = candidate[field];
+    if (!raw || isSearchDerivedField(raw, context)) continue;
+    const normalized = normalizeVertical(raw);
+    if (ENRICHABLE_SCOUT_VERTICALS.includes(normalized)) return normalized;
+  }
+  return null;
+}
+
 function classificationHaystack(candidate = {}, context = {}) {
   const parts = [
-    candidate.name,
-    candidate.company,
-    candidate.description,
-    candidate.businessType,
-    candidate.snippet,
-    signalText(candidate),
-    placeTypeText(candidate),
+    asClassifyText(candidate.name),
+    asClassifyText(candidate.company),
+    asClassifyText(candidate.description),
+    asClassifyText(candidate.businessType),
+    asClassifyText(candidate.snippet),
+    asClassifyText(signalText(candidate)),
+    asClassifyText(placeTypeText(candidate)),
   ];
 
   for (const field of ['industry', 'vertical', 'segment', 'category']) {
     const value = candidate[field];
     if (!value || isSearchDerivedField(value, context)) continue;
-    parts.push(value);
+    parts.push(asClassifyText(value));
   }
 
   return parts.filter(Boolean).join(' ');
@@ -136,11 +170,25 @@ function detectContradictoryBusinessType(text) {
 }
 
 function resolveReplenishmentVertical(candidate = {}, context = {}) {
+  const declared = declaredCanonicalVertical(candidate, context);
+  if (declared) return declared;
+
   const text = classificationHaystack(candidate, context);
   if (!text) return null;
 
-  if (hasEvidence(text, STR_EVIDENCE)) return 'str_manager';
-  if (hasEvidence(text, PROPERTY_MANAGER_EVIDENCE)) return 'property_manager';
+  const placeTypes = asClassifyText(placeTypeText(candidate)).toLowerCase();
+  const lodgingSignal = [...STR_PLACE_TYPES].some(type => placeTypes.includes(type));
+  const realtySignal = [...PM_PLACE_TYPES].some(type => placeTypes.includes(type));
+
+  if (hasEvidence(text, STR_EVIDENCE) || (lodgingSignal && /\b(rental|vacation|property|host|str)\b/i.test(text))) {
+    return 'str_manager';
+  }
+  if (
+    hasEvidence(text, PROPERTY_MANAGER_EVIDENCE)
+    || (realtySignal && /\b(property|management|mgmt|leasing|multifamily|apartment)\b/i.test(text))
+  ) {
+    return 'property_manager';
+  }
   if (hasEvidence(text, COMMERCIAL_OFFICE_EVIDENCE)) return 'commercial_office';
   return null;
 }
@@ -271,8 +319,13 @@ function createReplenishmentAdmissionCounters() {
       unclassifiable_vertical: 0,
       suppressed: 0,
       owned_elsewhere: 0,
+      valid_ownership_collision: 0,
+      stale_ownership: 0,
+      same_company_different_contact: 0,
       insufficient_business_fit: 0,
     },
+    recovered: 0,
+    alreadyQueued: 0,
   };
 }
 

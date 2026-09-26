@@ -55,6 +55,44 @@ function matchesGeography(location, geography) {
   });
 }
 
+const RELATED_SEGMENT_ALIASES = Object.freeze({
+  'short term rental': [
+    'str',
+    'vacation rental',
+    'property management',
+    'property manager',
+    'str manager',
+    'hospitality',
+  ],
+  'short term rental operators': [
+    'str',
+    'vacation rental',
+    'property management',
+    'property manager',
+  ],
+  'property management': [
+    'property manager',
+    'short term rental',
+    'str',
+    'vacation rental',
+    'str manager',
+  ],
+  'property manager': [
+    'property management',
+    'short term rental',
+    'str',
+  ],
+});
+
+function segmentNeedles(segment) {
+  const needle = String(segment || '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  if (!needle) return [];
+  return [needle, ...(RELATED_SEGMENT_ALIASES[needle] || [])];
+}
+
 function matchesSegment(record, segments) {
   if (!segments || !segments.length) return true;
   const hay = [
@@ -67,17 +105,15 @@ function matchesSegment(record, segments) {
     .map((v) => String(v || '').toLowerCase().replace(/[_-]+/g, ' '))
     .join(' ');
   return segments.some((seg) => {
-    const needle = String(seg || '')
-      .toLowerCase()
-      .replace(/[_-]+/g, ' ')
-      .trim();
-    if (!needle) return false;
-    const compact = needle.replace(/\s+/g, '');
-    return (
-      hay.includes(needle) ||
-      hay.replace(/\s+/g, '').includes(compact) ||
-      (needle.includes('property') && hay.includes('property'))
-    );
+    return segmentNeedles(seg).some((needle) => {
+      if (!needle) return false;
+      const compact = needle.replace(/\s+/g, '');
+      return (
+        hay.includes(needle) ||
+        hay.replace(/\s+/g, '').includes(compact) ||
+        (needle.includes('property') && hay.includes('property'))
+      );
+    });
   });
 }
 
@@ -316,6 +352,7 @@ module.exports = {
   loadTenantRepository,
   matchesGeography,
   matchesSegment,
+  segmentNeedles,
   normalizeCompany,
   normalizePerson,
   signalLabel,

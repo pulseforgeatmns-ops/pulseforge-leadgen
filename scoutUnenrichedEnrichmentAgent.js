@@ -67,11 +67,28 @@ async function run(params = {}) {
     LIMIT $4
   `, [clientId, maxAttempts, retryHours, limit, verticals]);
 
-  const summary = { client_id: clientId, considered: rows.rows.length, promoted: 0, unresolved: 0, failed: 0, limit, retry_hours: retryHours, verticals };
+  const summary = {
+    client_id: clientId,
+    considered: rows.rows.length,
+    promoted: 0,
+    recovered: 0,
+    unresolved: 0,
+    failed: 0,
+    emailResolved: 0,
+    emailVerified: 0,
+    limit,
+    retry_hours: retryHours,
+    verticals,
+  };
   for (const record of rows.rows) {
     try {
-      const promoted = await promote(record, { db });
+      const result = await promote(record, { db });
+      const promoted = result === true || result?.promoted === true;
+      const recovered = result?.recovered === true;
+      if (result?.emailResolved) summary.emailResolved++;
+      if (result?.emailVerified) summary.emailVerified++;
       if (promoted) summary.promoted++;
+      else if (recovered) summary.recovered++;
       else summary.unresolved++;
     } catch (error) {
       summary.failed++;

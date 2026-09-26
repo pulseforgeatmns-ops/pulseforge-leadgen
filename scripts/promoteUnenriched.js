@@ -131,7 +131,7 @@ async function promoteRecord(record, {
   const serviceAreaMatch = promotionServiceAreaMatch(record, clientConfig);
   if (allowedServiceAreas.length > 0 && serviceAreaMatch === null) {
     console.log(`[promoteUnenriched] Out-of-area location rejected: ${record.location || 'no location'}`);
-    return false;
+    return { promoted: false, recovered: false, emailResolved: false, emailVerified: false, reason: 'outside_geography' };
   }
 
   console.log(`[promoteUnenriched] Re-enriching ${record.company || domain} (${domain})...`);
@@ -145,7 +145,7 @@ async function promoteRecord(record, {
       WHERE id = $1
     `, [record.id]);
     console.log('[promoteUnenriched] No email found — record updated, not promoted.');
-    return false;
+    return { promoted: false, recovered: false, emailResolved: false, emailVerified: false, reason: 'email_unresolved' };
   }
 
   const lead = {
@@ -157,7 +157,7 @@ async function promoteRecord(record, {
   const verification = await verify(enriched.email, lead);
   if (verification.reject) {
     console.log(`[promoteUnenriched] Email rejected (${verification.rejectReason}) — not promoted.`);
-    return false;
+    return { promoted: false, recovered: false, emailResolved: true, emailVerified: false, reason: verification.rejectReason || 'verification_rejected' };
   }
 
   const companyId = await findOrCreateCompanyForClient({
@@ -200,13 +200,79 @@ async function promoteRecord(record, {
   ]);
 
   if (!insert.rows.length) {
-    console.log('[promoteUnenriched] Prospect already exists for this email.');
-    return false;
+    const existing = await db.query(
+      `SELECT id, client_id, do_not_contact, email_verified, email_status
+       FROM prospects
+       WHERE lower(email) = lower($1)
+       LIMIT 1`,
+      [enriched.email]
+    );
+    const row = existing.rows[0];
+    if (!row || Number(row.client_id) !== Number(record.client_id)) {
+      await db.query(`
+        UPDATE scout_unenriched
+        SET enrichment_attempts = enrichment_attempts + 1,
+            last_attempt_at = NOW(),
+            notes = COALESCE(notes, '') || ' | email already owned by another tenant'
+        WHERE id = $1
+      `, [record.id]);
+      console.log('[promoteUnenriched] Prospect already exists for this email.');
+      return { promoted: false, recovered: false, emailResolved: true, emailVerified: verification.emailVerified === true, reason: 'email_owned_elsewhere' };
+    }
+    if (row.do_not_contact === true) {
+      await db.query(`
+        UPDATE scout_unenriched
+        SET enrichment_attempts = enrichment_attempts + 1,
+            last_attempt_at = NOW(),
+            notes = COALESCE(notes, '') || ' | existing canonical prospect is DNC'
+        WHERE id = $1
+      `, [record.id]);
+      return { promoted: false, recovered: false, emailResolved: true, emailVerified: verification.emailVerified === true, reason: 'existing_dnc' };
+    }
+    if (verification.emailVerified === true && row.email_verified !== true) {
+      await db.query(`
+        UPDATE prospects
+        SET email_verified = $2,
+            email_verification_method = $3,
+            verified_at = $4,
+            email_status = $5,
+            verifier_response = $6::jsonb,
+            verifier_checked_at = $7,
+            notes = COALESCE(notes, '') || $8
+        WHERE id = $1 AND client_id = $9
+      `, [
+        row.id,
+        verification.emailVerified,
+        verification.emailVerificationMethod,
+        verification.verifiedAt,
+        verification.emailStatus,
+        JSON.stringify(verification.verifierResponse || null),
+        verification.verifierCheckedAt,
+        ` | recovered by Scout replenishment from scout_unenriched (${record.id})`,
+        record.client_id,
+      ]);
+    }
+    await db.query('DELETE FROM scout_unenriched WHERE id = $1', [record.id]);
+    console.log(`[promoteUnenriched] Recovered existing prospect ${row.id} (${enriched.email})`);
+    return {
+      promoted: false,
+      recovered: true,
+      prospectId: row.id,
+      emailResolved: true,
+      emailVerified: verification.emailVerified === true || row.email_verified === true,
+      reason: 'existing_canonical_recovered',
+    };
   }
 
   await db.query('DELETE FROM scout_unenriched WHERE id = $1', [record.id]);
   console.log(`[promoteUnenriched] Promoted prospect ${insert.rows[0].id} (${enriched.email})`);
-  return true;
+  return {
+    promoted: true,
+    recovered: false,
+    prospectId: insert.rows[0].id,
+    emailResolved: true,
+    emailVerified: verification.emailVerified === true,
+  };
 }
 
 async function run() {
@@ -226,8 +292,8 @@ async function run() {
     process.exit(1);
   }
 
-  const ok = await promoteRecord(record);
-  process.exit(ok ? 0 : 2);
+  const result = await promoteRecord(record);
+  process.exit(result.promoted || result.recovered ? 0 : 2);
 }
 
 module.exports = { promoteRecord, promotionServiceAreaMatch };

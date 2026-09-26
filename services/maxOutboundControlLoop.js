@@ -11,6 +11,17 @@ const {
 } = require('../utils/replenishmentVertical');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { adapters: createGovernedAdapters } = require('./governedOutboundAdapters');
+const { assessOperatingCapacity } = require('../packages/emmett-outbound/OperatingCapacity');
+const {
+  buildReplenishmentYield,
+  emptyFunnel,
+  evaluateColdOutboundEligibility,
+  classifyInventoryOwnership,
+  OWNERSHIP_KINDS,
+  loadScoutFunnelStock,
+  loadInventoryTimestamps,
+  rejectedCount,
+} = require('./outboundInventory');
 const {
   isProspectServiceAreaConfirmed,
   resolveMissionAllowedCities,
@@ -26,35 +37,74 @@ function boundedInt(value, fallback, min = 1, max = 100) {
   return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
+function resolveOperatingCapacity({
+  operatingCapacity = null,
+  dailyCap,
+  emmettCapacity,
+  assessed = null,
+  sentToday = 0,
+  totalAttempted = 0,
+} = {}) {
+  if (operatingCapacity && operatingCapacity.effectiveDailyCapacity != null) {
+    return operatingCapacity;
+  }
+  return assessOperatingCapacity({
+    assessed: assessed || {
+      capacity: { recommended: emmettCapacity },
+      governor: { outcome: 'proceed', halt: false },
+      health: { score: 0 },
+    },
+    policy: { dailyCap },
+    sentToday,
+    totalAttempted,
+    emmettCapacity,
+  });
+}
+
 function buildControlPlan({
   dailyCap,
   emmettCapacity,
+  operatingCapacity = null,
+  assessed = null,
   sentToday = 0,
+  totalAttempted = 0,
   cleanInventory = 0,
   targetDays = DEFAULT_TARGET_DAYS,
 }) {
-  const policyCap = Math.max(0, Number(dailyCap || 0));
-  const infrastructureCap = Math.max(0, Number(emmettCapacity || 0));
-  const safeDailyCapacity = Math.min(policyCap, infrastructureCap);
-  const target = safeDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
+  const operating = resolveOperatingCapacity({
+    operatingCapacity,
+    dailyCap,
+    emmettCapacity,
+    assessed,
+    sentToday,
+    totalAttempted,
+  });
+  const effectiveDailyCapacity = Math.max(0, Number(operating.effectiveDailyCapacity || 0));
+  const target = effectiveDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
   const clean = Math.max(0, Number(cleanInventory || 0));
   const deficit = Math.max(0, target - clean);
-  const todayRemaining = Math.max(0, safeDailyCapacity - Math.max(0, Number(sentToday || 0)));
+  const todayRemaining = Math.max(0, effectiveDailyCapacity - Math.max(0, Number(sentToday || 0)));
 
   let state = 'healthy';
-  if (safeDailyCapacity <= 0) state = 'delivery_halted';
-  else if (clean < safeDailyCapacity) state = 'critical';
+  if (effectiveDailyCapacity <= 0) state = 'delivery_halted';
+  else if (clean < effectiveDailyCapacity) state = 'critical';
   else if (clean < target) state = 'replenish';
 
   return {
     state,
-    safeDailyCapacity,
+    safeDailyCapacity: effectiveDailyCapacity,
+    effectiveDailyCapacity,
+    recommendedSafeDailyCapacity: Number(operating.recommendedSafeDailyCapacity || 0),
+    limitingFactor: operating.limitingFactor || null,
+    capacityReason: operating.capacityReason || null,
+    governor: operating.governor || null,
+    healthScore: operating.healthScore ?? null,
     todayRemaining,
     targetDays: boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7),
     targetInventory: target,
     cleanInventory: clean,
     deficit,
-    shouldReplenish: deficit > 0 && safeDailyCapacity > 0,
+    shouldReplenish: deficit > 0 && effectiveDailyCapacity > 0,
   };
 }
 
@@ -133,15 +183,27 @@ async function loadCleanInventory(pool, store, source) {
       website: row.company_website,
       email: String(row.email || '').toLowerCase(),
     };
-    const ownership = missionReason || emailReason ? null : await store.candidateOwnership(candidate);
+    const ownership = missionReason || emailReason
+      ? null
+      : await store.candidateOwnership(candidate);
     const suppression = missionReason || emailReason || ownership
       ? null
       : await store.suppression(candidate, '__max_inventory_buffer__');
-    const blocked = missionReason || emailReason || ownership || suppression;
+    const eligibility = evaluateColdOutboundEligibility({
+      businessFit: missionReason === 'mission_segment_mismatch' ? 'not_qualified' : 'qualified',
+      geography: missionReason === 'service_area_not_confirmed' ? 'out_of_scope' : 'in_scope',
+      contactVerified: !emailReason,
+      dnc: row.do_not_contact === true,
+      suppression,
+      ownership: ownership || 'clear',
+      buyerReadiness: row.buyer_readiness || row.buyerReadiness || 'unknown',
+      emailReason,
+    });
+    const blocked = eligibility.eligible ? null : eligibility.reason;
     if (blocked) {
       excluded.push({ prospectId: candidate.prospectId, reason: blocked });
       bump(blocked);
-    } else clean.push(candidate);
+    } else clean.push({ ...candidate, buyerReadiness: eligibility.buyerReadiness });
   }
   return { clean, excluded, scope, exclusionCounts };
 }
@@ -185,7 +247,9 @@ async function persistDiscoveredCompanies(pool, store, {
 } = {}) {
   let inserted = 0;
   const counters = createReplenishmentAdmissionCounters();
-  counters.discovered = companies.length;
+    counters.discovered = companies.length;
+  counters.recovered = 0;
+  counters.alreadyQueued = 0;
 
   const scope = scoutContext.scope || {};
   const admissionContext = {
@@ -211,9 +275,24 @@ async function persistDiscoveredCompanies(pool, store, {
       continue;
     }
 
-    const ownership = await store.candidateOwnership({ company: name, domain, website });
-    if (ownership) {
+    const ownership = await classifyInventoryOwnership(store, { company: name, domain, website }, { pool });
+    if (ownership.kind === OWNERSHIP_KINDS.ALREADY_USABLE_CANONICAL) {
+      counters.recovered += 1;
+      continue;
+    }
+    if (ownership.kind === OWNERSHIP_KINDS.VALID_COLLISION
+      || ownership.kind === OWNERSHIP_KINDS.PRIOR_CONTACT
+      || ownership.kind === OWNERSHIP_KINDS.AO_OWNED) {
       recordReplenishmentRejection(counters, 'owned_elsewhere');
+      counters.rejected.valid_ownership_collision = (counters.rejected.valid_ownership_collision || 0) + 1;
+      continue;
+    }
+    if (ownership.kind === OWNERSHIP_KINDS.STALE) {
+      recordReplenishmentRejection(counters, 'stale_ownership');
+      continue;
+    }
+    if (ownership.kind === OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
+      recordReplenishmentRejection(counters, 'same_company_different_contact');
       continue;
     }
 
@@ -257,6 +336,7 @@ async function persistDiscoveredCompanies(pool, store, {
     ]);
     inserted += result.rowCount;
     if (result.rowCount) counters.admittedToEnrichment += 1;
+    else counters.alreadyQueued += 1;
   }
 
   return { inserted, admission: counters };
@@ -288,12 +368,16 @@ async function loadReuseCompanies(pool) {
 async function runEnrichmentBatches(enrichment, pool, requested) {
   const summaries = [];
   let promoted = 0;
+  let recovered = 0;
+  let emailResolved = 0;
+  let emailVerified = 0;
+  let considered = 0;
   const batches = Math.min(
     MAX_ENRICHMENT_BATCHES_PER_CYCLE,
     Math.ceil(Math.max(0, requested) / DEFAULT_ENRICHMENT_BATCH)
   );
   for (let i = 0; i < batches; i += 1) {
-    const remaining = Math.max(1, requested - promoted);
+    const remaining = Math.max(1, requested - promoted - recovered);
     const summary = await enrichment.run({
       client_id: 10,
       limit: Math.min(DEFAULT_ENRICHMENT_BATCH, remaining),
@@ -303,17 +387,21 @@ async function runEnrichmentBatches(enrichment, pool, requested) {
     });
     summaries.push(summary);
     promoted += Number(summary?.promoted || 0);
+    recovered += Number(summary?.recovered || 0);
+    emailResolved += Number(summary?.emailResolved || 0);
+    emailVerified += Number(summary?.emailVerified || 0);
+    considered += Number(summary?.considered || 0);
     if (!summary?.considered) break;
   }
-  return { promoted, summaries };
+  return { promoted, recovered, emailResolved, emailVerified, considered, summaries };
 }
 
 async function defaultScoutRamp({ pool, store, program, source, plan, logger = console }) {
   const enrichment = require('../scoutUnenrichedEnrichmentAgent');
   const first = await runEnrichmentBatches(enrichment, pool, plan.deficit);
-  let promoted = first.promoted;
+  let promoted = first.promoted + first.recovered;
   let discovery = null;
-  let persisted = { inserted: 0 };
+  let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
 
   if (promoted < plan.deficit) {
     const scope = sourceScope(source);
@@ -343,23 +431,37 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
 
     if (persisted.inserted > 0 && promoted < plan.deficit) {
       const second = await runEnrichmentBatches(enrichment, pool, plan.deficit - promoted);
-      promoted += second.promoted;
+      promoted += second.promoted + second.recovered;
+      first.promoted += second.promoted;
+      first.recovered += second.recovered;
+      first.emailResolved += second.emailResolved;
+      first.emailVerified += second.emailVerified;
+      first.considered += second.considered;
       first.summaries.push(...second.summaries);
     }
   }
+
+  const yieldReport = buildReplenishmentYield({
+    admission: persisted.admission || {},
+    enrichment: first,
+    recovered: first.recovered + Number(persisted.admission?.recovered || 0),
+  });
 
   logger.log?.('[max-outbound-control] Scout ramp', JSON.stringify({
     requested: plan.deficit,
     promoted,
     discoveredQueued: persisted.inserted,
     admission: persisted.admission || null,
+    yield: yieldReport,
     discovery: discovery?.kind || null,
   }));
   return {
     promoted,
+    recovered: first.recovered + Number(persisted.admission?.recovered || 0),
     enrichmentBatches: first.summaries,
     discoveredQueued: persisted.inserted,
     admission: persisted.admission || null,
+    yield: yieldReport,
     discovery,
   };
 }
@@ -382,10 +484,23 @@ async function runMaxOutboundControlLoop(options = {}) {
   const inventoryBefore = options.inventory
     || await loadCleanInventory(pool, store, source);
   const sentToday = Number(infrastructure?.snapshot?.sentToday || 0);
+  const operating = resolveOperatingCapacity({
+    operatingCapacity: infrastructure.operating,
+    dailyCap: program.policy.dailyCap,
+    emmettCapacity: infrastructure.cap,
+    assessed: infrastructure.assessed,
+    sentToday,
+    totalAttempted: infrastructure.totalAttempted,
+  });
+  const timestamps = options.timestamps || await loadInventoryTimestamps(pool);
+  const funnelStock = options.funnel || await loadScoutFunnelStock(pool);
   const plan = buildControlPlan({
     dailyCap: program.policy.dailyCap,
     emmettCapacity: infrastructure.cap,
+    operatingCapacity: operating,
+    assessed: infrastructure.assessed,
     sentToday,
+    totalAttempted: infrastructure.totalAttempted,
     cleanInventory: inventoryBefore.clean.length,
     targetDays: options.targetDays || process.env.ANCHOR_MAX_OUTBOUND_BUFFER_DAYS || DEFAULT_TARGET_DAYS,
   });
@@ -403,10 +518,37 @@ async function runMaxOutboundControlLoop(options = {}) {
   const finalPlan = buildControlPlan({
     dailyCap: program.policy.dailyCap,
     emmettCapacity: infrastructure.cap,
+    operatingCapacity: operating,
+    assessed: infrastructure.assessed,
     sentToday,
+    totalAttempted: infrastructure.totalAttempted,
     cleanInventory: inventoryAfter.clean.length,
     targetDays: plan.targetDays,
   });
+
+  const lastSuccessfulReplenishmentAt = scout && (scout.promoted || scout.discoveredQueued || scout.recovered)
+    ? new Date().toISOString()
+    : timestamps.lastSuccessfulReplenishmentAt;
+  const lastSuccessfulPromotionAt = scout && (scout.promoted || scout.recovered)
+    ? new Date().toISOString()
+    : timestamps.lastSuccessfulPromotionAt;
+
+  const cycleFunnel = emptyFunnel();
+  if (scout?.admission) {
+    cycleFunnel.discovered = Number(scout.admission.discovered || 0);
+    cycleFunnel.fit = Number(scout.admission.fit || 0);
+    cycleFunnel.admittedToEnrichment = Number(scout.admission.admittedToEnrichment || 0);
+    cycleFunnel.permanentlyRejected = rejectedCount(scout.admission);
+  }
+  cycleFunnel.promotedVerified = Number(scout?.promoted || 0);
+  const funnel = {
+    ...funnelStock,
+    discovered: Math.max(Number(funnelStock.discovered || 0), cycleFunnel.discovered),
+    fit: Number(funnelStock.fit || 0) + cycleFunnel.fit,
+    admittedToEnrichment: Number(funnelStock.admittedToEnrichment || 0) + cycleFunnel.admittedToEnrichment,
+    promotedVerified: Number(funnelStock.promotedVerified || 0),
+    permanentlyRejected: Number(funnelStock.permanentlyRejected || 0) + cycleFunnel.permanentlyRejected,
+  };
 
   await store.event('max_outbound_control', [
     program.id,
@@ -416,7 +558,11 @@ async function runMaxOutboundControlLoop(options = {}) {
     programId: program.id,
     policyHash: program.policy_hash,
     sourceMissionId: program.source_mission_id,
-    emmettCapacity: infrastructure.cap,
+    emmettCapacity: operating.effectiveDailyCapacity,
+    recommendedSafeDailyCapacity: finalPlan.recommendedSafeDailyCapacity,
+    effectiveDailyCapacity: finalPlan.effectiveDailyCapacity,
+    limitingFactor: finalPlan.limitingFactor,
+    capacityReason: finalPlan.capacityReason,
     sentToday,
     bufferTarget: finalPlan.targetInventory,
     cleanInventoryBefore: inventoryBefore.clean.length,
@@ -427,20 +573,38 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutInvoked: Boolean(scout),
     scoutPromoted: Number(scout?.promoted || 0),
     scoutQueued: Number(scout?.discoveredQueued || 0),
+    scoutRecovered: Number(scout?.recovered || 0),
+    yield: scout?.yield || null,
+    funnel,
+    lastSuccessfulReplenishmentAt,
+    lastSuccessfulPromotionAt,
   });
 
   return {
     programId: program.id,
     mode: program.mode,
     emmett: {
-      safeCapacity: infrastructure.cap,
-      governor: infrastructure.assessed?.governor?.outcome || null,
-      healthScore: infrastructure.assessed?.health?.score || null,
+      recommendedSafeDailyCapacity: finalPlan.recommendedSafeDailyCapacity,
+      effectiveDailyCapacity: finalPlan.effectiveDailyCapacity,
+      limitingFactor: finalPlan.limitingFactor,
+      capacityReason: finalPlan.capacityReason,
+      safeCapacity: finalPlan.effectiveDailyCapacity,
+      governor: finalPlan.governor || infrastructure.assessed?.governor?.outcome || null,
+      healthScore: finalPlan.healthScore ?? infrastructure.assessed?.health?.score ?? null,
     },
-    plan: finalPlan,
+    plan: {
+      ...finalPlan,
+      lastSuccessfulReplenishmentAt,
+      lastSuccessfulPromotionAt,
+      exclusionCounts: inventoryAfter.exclusionCounts || {},
+    },
     scout,
+    funnel,
+    yield: scout?.yield || null,
     excludedCount: inventoryAfter.excluded.length,
     cleanInventoryExclusions: inventoryAfter.exclusionCounts || {},
+    lastSuccessfulReplenishmentAt,
+    lastSuccessfulPromotionAt,
     sourceScope: inventoryAfter.scope,
   };
 }
@@ -450,6 +614,7 @@ module.exports = {
   MAX_ENRICHMENT_BATCHES_PER_CYCLE,
   ENRICHABLE_SCOUT_VERTICALS,
   buildControlPlan,
+  resolveOperatingCapacity,
   sourceScope,
   confirmedServiceAreaMatch,
   missionCandidateReason,
