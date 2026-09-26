@@ -235,12 +235,12 @@ if (run('states')) {
       ).size,
     }));
     if (state.webgl.some((v) => v !== 'off')) fail('WebGL reported on with no context available');
-    else if (state.plates !== 21) fail(`expected 21 CSS plates, found ${state.plates}`);
+    else if (state.plates !== 18) fail(`expected 18 CSS plates, found ${state.plates}`);
     else if (state.plinths !== 3) fail(`expected 3 substrates, found ${state.plinths}`);
-    else if (state.drawings !== 7) fail(`expected 7 distinct layer drawings, found ${state.drawings}`);
+    else if (state.drawings !== 6) fail(`expected 6 distinct layer drawings, found ${state.drawings}`);
     else if (state.labels.join() !== 'Performance,Accessibility,Conversion,Search,Trust,Design')
       fail(`layer labels wrong without WebGL: ${state.labels}`);
-    else pass('without WebGL: seven distinct plates, substrate, and all six labels');
+    else pass('without WebGL: six distinct plates, the substrate, and all six labels');
     if (page.problems.length) fail(`console errors without WebGL: ${page.problems[0]}`);
     await page.close();
   }

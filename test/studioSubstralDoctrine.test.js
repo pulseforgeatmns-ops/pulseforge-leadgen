@@ -487,21 +487,18 @@ describe('Progressive enhancement (doctrine §18)', () => {
     const stages = html.match(/class="strata"/g) || [];
     assert.equal(stages.length, 3, 'every stage needs a no-WebGL composition');
     const plates = html.match(/class="plate"/g) || [];
-    assert.equal(plates.length, 21, 'seven plates per stage');
+    assert.equal(plates.length, 18, 'six plates per stage');
     const plinths = html.match(/class="plinth"/g) || [];
     assert.equal(plinths.length, 3, 'every stage stands on the mineral substrate');
     assert.match(css, /\.strata__stack\s*\{[\s\S]*?transform-style:\s*preserve-3d/);
   });
 
-  it('stacks the surface over the six systems over the substrate', () => {
+  it('stacks the six systems over the substrate, design nearest the surface', () => {
     // The order is the doctrine's claim stated physically: performance is the
-    // deepest layer and design sits just under the visible surface, so what is
-    // underneath really is underneath.
-    const stack = [...html.matchAll(/data-art="([a-z]+)"/g)]
-      .map((m) => m[1])
-      .slice(0, 7);
+    // deepest layer and design is the visible surface, so what is underneath
+    // really is underneath.
+    const stack = [...html.matchAll(/data-art="([a-z]+)"/g)].map((m) => m[1]).slice(0, 6);
     assert.deepEqual(stack, [
-      'surface',
       'design',
       'trust',
       'search',
@@ -517,32 +514,81 @@ describe('Progressive enhancement (doctrine §18)', () => {
   });
 
   it('gives every layer its own material and its own drawing', () => {
-    // Seven identical slabs at different spacings communicate the idea and none
-    // of the material, which was the defect this stack replaced.
-    const blocks = dimensionalSrc.split(/key: '/).slice(1);
-    const seen = { thickness: new Set(), roughness: new Set(), art: new Set() };
+    /* Six near-identical glass panes at different spacings communicate the idea
+       and none of the material. Each layer must differ across the non-colour
+       axes: thickness, roughness, opacity, reflectivity and edge treatment. */
+    const blocks = dimensionalSrc.split(/\n  \{\n/).slice(1, 7);
+    const axes = {
+      thickness: new Set(),
+      roughness: new Set(),
+      opacity: new Set(),
+      envMapIntensity: new Set(),
+      arris: new Set(),
+      art: new Set(),
+    };
     for (const block of blocks) {
-      const body = block.slice(0, block.indexOf('},'));
-      for (const field of ['thickness', 'roughness']) {
-        const value = body.match(new RegExp(`${field}: ([\\d.]+)`))?.[1];
-        assert.ok(value, `a layer is missing ${field}`);
-        seen[field].add(value);
+      const body = block.slice(0, block.indexOf('\n  },'));
+      for (const axis of Object.keys(axes)) {
+        if (axis === 'art') {
+          axes.art.add(body.match(/art: '([a-z]+)'/)?.[1]);
+          continue;
+        }
+        const value = body.match(new RegExp(`\\b${axis}: ([\\d.]+)`))?.[1];
+        assert.ok(value, `a layer is missing ${axis}`);
+        axes[axis].add(value);
       }
-      seen.art.add(body.match(/art: '([a-z]+)'/)?.[1]);
     }
-    assert.equal(seen.art.size, 7, 'each layer needs its own drawing');
-    assert.ok(seen.thickness.size >= 6, 'layers must differ in thickness');
-    assert.ok(seen.roughness.size >= 6, 'layers must differ in surface finish');
-    // Performance is the thickest and roughest: graphite composite, not glass.
-    assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?thickness: 0\.09/);
+    assert.equal(axes.art.size, 6, 'each layer needs its own drawing');
+    for (const axis of ['thickness', 'roughness', 'opacity', 'envMapIntensity', 'arris']) {
+      assert.equal(axes[axis].size, 6, `all six layers must differ in ${axis}`);
+    }
+
+    // The thickness range has to be wide enough to see, not a rounding.
+    const thicknesses = [...axes.thickness].map(Number).sort((a, b) => a - b);
+    assert.ok(
+      thicknesses.at(-1) / thicknesses[0] >= 2,
+      `thickest layer is only ${(thicknesses.at(-1) / thicknesses[0]).toFixed(2)}x the thinnest`
+    );
+
     // And each layer draws something different in the CSS baseline too.
-    for (const key of seen.art) {
+    for (const key of axes.art) {
       assert.match(
         css,
         new RegExp(`\\.plate\\[data-art='${key}'\\] \\.plate__face::before`),
         `${key} has no drawing in the CSS composition`
       );
     }
+  });
+
+  it('separates the layers by material rather than by hue', () => {
+    /* The tint values are a value ladder, not a colour wheel: graphite darkest,
+       frosted polymer lightest. They must survive grayscale, so the only hue
+       departure allowed is the single warmth nudge on Trust. */
+    const tints = [...dimensionalSrc.matchAll(/\n    tint: ([\d.]+),/g)].map((m) =>
+      Number(m[1])
+    );
+    assert.equal(tints.length, 6);
+    assert.equal(new Set(tints).size, 6, 'every layer needs its own value');
+    assert.ok(
+      Math.max(...tints) / Math.min(...tints) >= 8,
+      'the value ladder is too compressed to read in grayscale'
+    );
+    const warmths = dimensionalSrc.match(/warmth:/g) || [];
+    assert.ok(warmths.length <= 1, `${warmths.length} layers depart from the palette`);
+  });
+
+  it('models each named material, not six variants of one', () => {
+    // Frosted polymer needs sheen and high roughness; graphite needs brushing;
+    // etched glass needs its markings to drive roughness rather than colour.
+    assert.match(dimensionalSrc, /key: 'accessibility'[\s\S]*?sheen: 0\.\d/);
+    assert.match(dimensionalSrc, /key: 'accessibility'[\s\S]*?roughness: 0\.6/);
+    assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?anisotropy: 0\.\d/);
+    assert.match(dimensionalSrc, /key: 'search'[\s\S]*?etched: true/);
+    assert.match(dimensionalSrc, /capMaterial\.roughnessMap = artTexture/);
+    assert.match(dimensionalSrc, /capMaterial\.anisotropy =/);
+    assert.match(dimensionalSrc, /capMaterial\.sheen =/);
+    // Performance is the thickest and least transparent: graphite, not glass.
+    assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?thickness: 0\.10/);
   });
 
   it('carries a mineral substrate beneath the digital layers', () => {
@@ -557,20 +603,35 @@ describe('Progressive enhancement (doctrine §18)', () => {
     // depth falloff — not a translucent rectangle (doctrine §11).
     assert.match(dimensionalSrc, /ior: 1\.49/);
     assert.match(dimensionalSrc, /clearcoat:/);
-    assert.match(dimensionalSrc, /rimMetalness/);
+    assert.match(dimensionalSrc, /wall: \{ colour:/);
     assert.match(dimensionalSrc, /\[capMaterial, wallMaterial\]/);
     assert.match(dimensionalSrc, /contactShadow/);
     assert.match(dimensionalSrc, /new Fog\(/);
     assert.match(dimensionalSrc, /function arrisGeometry/);
   });
 
-  it('makes the layer under discussion the subject, not just further apart', () => {
-    // Lighting, camera framing and material emphasis all respond.
+  it('makes the layer under discussion the subject through light, not paint', () => {
+    /* The brief is explicit: do not do this by increasing opacity or changing
+       colour. So a raking light crosses the subject, its reflectivity rises,
+       the camera reframes — and the emissive glow that used to tint the whole
+       plate is gone. */
+    assert.match(dimensionalSrc, /const graze = new DirectionalLight/);
+    assert.match(dimensionalSrc, /graze\.intensity = state\.focus/);
+    assert.match(dimensionalSrc, /grazeTarget\.position\.set/);
     assert.match(dimensionalSrc, /examine\.intensity = state\.focus/);
-    assert.match(dimensionalSrc, /examine\.position\.set/);
+    assert.match(dimensionalSrc, /capMaterial\.envMapIntensity = lerp\(/);
     assert.match(dimensionalSrc, /target\.lookAt = examining/);
     assert.match(dimensionalSrc, /examinePitch/);
-    assert.match(dimensionalSrc, /emphasis \* 0\.0?\d/);
+
+    // The active layer must not be made more opaque than it already is.
+    const opacityLine = dimensionalSrc.match(/plate\.capMaterial\.opacity = [^;]+;/)[0];
+    assert.doesNotMatch(opacityLine, /\+ 0\.\d/, 'emphasis must not add opacity');
+
+    // And it must not be recoloured: the accent survives only as an edge trace.
+    assert.match(dimensionalSrc, /emissiveIntensity: 0,/);
+    assert.doesNotMatch(dimensionalSrc, /emissiveIntensity = emphasis/);
+    const patinaUse = dimensionalSrc.match(/lerp\(patina, emphasis \* ([\d.]+)\)/);
+    assert.ok(patinaUse && Number(patinaUse[1]) <= 0.35, 'accent tint is doing too much work');
   });
 
   it('keeps every narrative label in the document, not in the canvas', () => {

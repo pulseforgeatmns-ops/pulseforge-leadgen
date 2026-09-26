@@ -705,7 +705,7 @@ ol {
   transform: translate3d(
     0,
     0,
-    calc((3 - var(--i)) * var(--sep, 6px) * var(--sep-scale, 1))
+    calc((2.5 - var(--i)) * var(--sep, 6px) * var(--sep-scale, 1))
   );
 }
 
@@ -725,7 +725,7 @@ ol {
       rgba(240, 237, 229, calc(var(--face-lift, 0.1) * 0.24)) 46%,
       rgba(17, 17, 15, 0.16)
     ),
-    rgba(30, 29, 25, var(--face-body, 0.5));
+    rgb(var(--face-tone, 30 29 25) / var(--face-body, 0.5));
   box-shadow: inset 0 1px 0 rgba(240, 237, 229, calc(var(--face-lift, 0.1) * 1.4));
 }
 
@@ -740,13 +740,17 @@ ol {
   opacity: var(--art-opacity, 0.9);
 }
 
-/* SURFACE — the visible website: masthead, headline, action, media, copy. */
-.plate[data-art='surface'] {
-  --face-lift: 0.15;
-  --face-body: 0.44;
-  --face-edge: 0.36;
+/* 06 DESIGN — the precision surface: masthead, headline, action, media, copy. */
+.plate[data-art='design'] {
+  /* Precision surface: crispest edge, brightest arris, densest markings. */
+  --face-lift: 0.17;
+  --face-body: 0.4;
+  --face-edge: 0.46;
+  --edge-h: 3px;
+  --edge-tint: 0.5;
+  --art-opacity: 0.95;
 }
-.plate[data-art='surface'] .plate__face::before {
+.plate[data-art='design'] .plate__face::before {
   background-image: linear-gradient(rgba(240, 237, 229, 0.82), rgba(240, 237, 229, 0.82)),
     repeating-linear-gradient(90deg, rgba(240, 237, 229, 0.34) 0 22%, transparent 22% 34%),
     linear-gradient(rgba(240, 237, 229, 0.5), rgba(240, 237, 229, 0.5)),
@@ -766,29 +770,16 @@ ol {
     7% 43%, 7% 56%, 57% 20%, 57% 42%, 7% 68%, 7% 74%, 7% 92%;
 }
 
-/* 06 DESIGN — the composition system the surface is built on. */
-.plate[data-art='design'] {
-  --face-lift: 0.12;
-  --face-body: 0.46;
-}
-.plate[data-art='design'] .plate__face::before {
-  background-image: repeating-linear-gradient(
-      90deg,
-      rgba(240, 237, 229, 0.16) 0 1px,
-      transparent 1px 8.33%
-    ),
-    repeating-linear-gradient(180deg, rgba(240, 237, 229, 0.09) 0 1px, transparent 1px 5.5%),
-    linear-gradient(rgba(127, 168, 144, 0.55), rgba(127, 168, 144, 0.55)),
-    linear-gradient(rgba(240, 237, 229, 0.34), rgba(240, 237, 229, 0.34)),
-    linear-gradient(rgba(240, 237, 229, 0.34), rgba(240, 237, 229, 0.34));
-  background-size: 86% 80%, 86% 80%, 42% 2px, 1px 88%, 1px 88%;
-  background-position: 7% 10%, 7% 10%, 7% 24%, 7% 6%, 93% 6%;
-}
-
 /* 05 TRUST — a seal, a credential plate, a verification ledger. */
 .plate[data-art='trust'] {
-  --face-lift: 0.1;
-  --face-body: 0.5;
+  /* Warm smoked glass: the thickest of the glass layers. */
+  --face-lift: 0.125;
+  --face-tone: 38 35 29;
+  --face-body: 0.46;
+  --face-edge: 0.34;
+  --edge-h: 5px;
+  --edge-tint: 0.4;
+  --art-opacity: 0.8;
 }
 .plate[data-art='trust'] .plate__face::before {
   background-image: radial-gradient(
@@ -814,9 +805,13 @@ ol {
 
 /* 04 SEARCH — a hierarchy on the left, an index on the right. */
 .plate[data-art='search'] {
-  --art-opacity: 0.78;
-  --face-lift: 0.095;
-  --face-body: 0.5;
+  /* Etched architectural glass: the clearest body, the brightest marks. */
+  --face-lift: 0.07;
+  --face-body: 0.28;
+  --face-edge: 0.4;
+  --edge-h: 3px;
+  --edge-tint: 0.46;
+  --art-opacity: 0.88;
 }
 .plate[data-art='search'] .plate__face::before {
   background-image: linear-gradient(rgba(240, 237, 229, 0.3), rgba(240, 237, 229, 0.3)),
@@ -837,9 +832,13 @@ ol {
 
 /* 03 CONVERSION — nodes, one converging path, one that stops. */
 .plate[data-art='conversion'] {
-  --art-opacity: 0.76;
-  --face-lift: 0.085;
-  --face-body: 0.5;
+  /* Smoked acrylic: dark, deep, polished, sparse marks. */
+  --face-lift: 0.09;
+  --face-body: 0.62;
+  --face-edge: 0.3;
+  --edge-h: 4px;
+  --edge-tint: 0.42;
+  --art-opacity: 0.7;
 }
 .plate[data-art='conversion'] .plate__face::before {
   background-image: radial-gradient(
@@ -859,10 +858,14 @@ ol {
 
 /* 02 ACCESSIBILITY — semantic regions and focus order, in frosted polymer. */
 .plate[data-art='accessibility'] {
-  --face-lift: 0.075;
-  --face-body: 0.58;
-  --face-edge: 0.2;
-  --art-opacity: 0.72;
+  /* Frosted polymer: milky and light, soft edge, diffuse markings. */
+  --face-lift: 0.28;
+  --face-tone: 150 146 134;
+  --face-body: 0.46;
+  --face-edge: 0.16;
+  --edge-h: 5px;
+  --edge-tint: 0.18;
+  --art-opacity: 0.4;
 }
 .plate[data-art='accessibility'] .plate__face::before {
   background-image: linear-gradient(rgba(240, 237, 229, 0.07), rgba(240, 237, 229, 0.07)),
@@ -878,10 +881,14 @@ ol {
 
 /* 01 PERFORMANCE — a request waterfall over a measured axis. */
 .plate[data-art='performance'] {
-  --art-opacity: 0.8;
-  --face-lift: 0.055;
-  --face-body: 0.66;
-  --face-edge: 0.3;
+  /* Graphite composite: darkest, densest, widest matte edge. */
+  --face-lift: 0.045;
+  --face-tone: 22 21 19;
+  --face-body: 0.85;
+  --face-edge: 0.26;
+  --edge-h: 7px;
+  --edge-tint: 0.24;
+  --art-opacity: 0.62;
 }
 .plate[data-art='performance'] .plate__face::before {
   background-image: linear-gradient(rgba(240, 237, 229, 0.32), rgba(240, 237, 229, 0.32)),
@@ -911,49 +918,100 @@ ol {
   height: var(--edge-h, 3px);
   background: linear-gradient(
     to right,
-    rgba(240, 237, 229, 0.06),
-    rgba(240, 237, 229, 0.44),
-    rgba(240, 237, 229, 0.06)
+    rgba(240, 237, 229, calc(var(--edge-tint, 0.42) * 0.14)),
+    rgba(240, 237, 229, var(--edge-tint, 0.42)),
+    rgba(240, 237, 229, calc(var(--edge-tint, 0.42) * 0.14))
   );
   transform: translateZ(calc(var(--edge-h, 3px) * -1));
 }
 
-.plate[data-art='performance'] {
-  --edge-h: 5px;
-}
+/* ==========================================================================
+   THE SUBSTRATE
 
-.plate[data-art='accessibility'] {
-  --edge-h: 4px;
-}
+   A cut block of dark mineral, not a seventh pane. It is wider than the layers,
+   irregular in plan, and built from three stacked faces so it reads as a block
+   with mass rather than a sheet. Its top is planed where the engineered system
+   seats into it; everything else is left broken.
+   ========================================================================== */
 
-/* The mineral substrate the layers are lifted out of. Warm stone, wider than
-   the plates, and it never moves — the digital layers rise off it. */
 .plinth {
   position: absolute;
-  inset: -7%;
+  inset: -14%;
   transform-style: preserve-3d;
   transform: translate3d(
     0,
     0,
-    calc((3 - 6.4) * var(--sep, 6px) * var(--sep-scale, 1) - 0.22rem)
+    calc((2.5 - 5.5) * var(--sep, 6px) * var(--sep-scale, 1) - 0.55rem)
   );
 }
 
-.plinth__face {
+/* An irregular plan, shared by every face of the block. Straight facets of
+   uneven length: quarried, not manufactured. */
+.plinth__face,
+.plinth__mass {
   position: absolute;
   inset: 0;
+  clip-path: polygon(
+    3% 9%,
+    16% 3%,
+    38% 6%,
+    61% 1%,
+    79% 7%,
+    94% 4%,
+    99% 21%,
+    96% 44%,
+    100% 63%,
+    93% 83%,
+    97% 96%,
+    74% 93%,
+    52% 99%,
+    29% 94%,
+    9% 98%,
+    2% 79%,
+    6% 57%,
+    0% 34%
+  );
+}
+
+/* The planed top of the block. */
+.plinth__face {
   background: radial-gradient(
       120% 90% at 26% 18%,
-      rgba(255, 250, 238, 0.16),
-      transparent 60%
+      rgba(255, 250, 238, 0.14),
+      transparent 58%
     ),
-    radial-gradient(38% 52% at 72% 64%, rgba(17, 17, 15, 0.3), transparent 70%),
-    radial-gradient(30% 44% at 22% 78%, rgba(255, 250, 238, 0.05), transparent 68%),
-    radial-gradient(54% 30% at 58% 12%, rgba(17, 17, 15, 0.2), transparent 72%),
-    linear-gradient(150deg, #615c53, #4a463e 56%, #37342e);
-  border: 1px solid rgba(240, 237, 229, 0.12);
-  box-shadow: inset 0 1px 0 rgba(255, 250, 238, 0.1),
-    0 0 1.75rem 0.5rem rgba(17, 17, 15, 0.5);
+    radial-gradient(38% 52% at 72% 64%, rgba(17, 17, 15, 0.42), transparent 70%),
+    radial-gradient(26% 40% at 20% 76%, rgba(255, 250, 238, 0.05), transparent 66%),
+    radial-gradient(54% 30% at 58% 12%, rgba(17, 17, 15, 0.26), transparent 72%),
+    repeating-linear-gradient(
+      98deg,
+      rgba(17, 17, 15, 0.09) 0 1px,
+      transparent 1px 5px
+    ),
+    linear-gradient(150deg, #4c483f, #3a372f 56%, #2b2822);
+}
+
+/* Two slabs beneath it, progressively darker and offset along the depth axis,
+   which is what gives the block its visible thickness. */
+.plinth__mass {
+  background: linear-gradient(150deg, #3b382f, #2e2b24 58%, #211f1a);
+  transform: translate3d(0, 0, -0.42rem);
+}
+
+.plinth__mass--deep {
+  background: linear-gradient(150deg, #2b2823, #201e19 58%, #171613);
+  transform: translate3d(0, 0, -0.9rem);
+}
+
+/* The machined pad where the layers seat into the stone: regular, because this
+   part has been worked. */
+.plinth__seat {
+  position: absolute;
+  inset: 20% 16%;
+  transform: translate3d(0, 0, 0.16rem);
+  background: linear-gradient(152deg, #5d584d, #4a463d 60%, #3b372f);
+  border: 1px solid rgba(240, 237, 229, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 250, 238, 0.13);
 }
 
 /* ==========================================================================
@@ -1005,13 +1063,25 @@ ol {
   }
 }
 
+/* The stage readout names what is visible: the layer under examination and,
+   secondary to it, the foundation. The same engineering-label language as the
+   six chapters — the block explains itself, this only annotates it. */
 .decomposition__readout {
   position: absolute;
   left: var(--gutter);
   bottom: 1rem;
+  display: grid;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+
+.decomposition__readout p {
   display: flex;
   gap: 1.25rem;
-  pointer-events: none;
+}
+
+.decomposition__readout-sub {
+  opacity: 0.45;
 }
 
 .layers {
@@ -2009,14 +2079,14 @@ html[data-js='on'] [data-reveal][data-revealed='true'] {
      substrate is placed with the same constant so it still sits directly
      beneath the deepest layer. */
   .plate {
-    transform: translate3d(0, 0, calc((3 - var(--i)) * 22px * var(--sep-scale, 1)));
+    transform: translate3d(0, 0, calc((2.5 - var(--i)) * 22px * var(--sep-scale, 1)));
   }
 
   .plinth {
     transform: translate3d(
       0,
       0,
-      calc((3 - 6.4) * 22px * var(--sep-scale, 1) - 0.22rem)
+      calc((2.5 - 5.5) * 22px * var(--sep-scale, 1) - 0.55rem)
     );
   }
 

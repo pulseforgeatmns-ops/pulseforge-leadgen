@@ -46,10 +46,12 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
+  Object3D,
   PMREMGenerator,
   PerspectiveCamera,
   PlaneGeometry,
   PointLight,
+  RepeatWrapping,
   Scene,
   Shape,
   SRGBColorSpace,
@@ -61,7 +63,7 @@ import {
 const SUBSTRAL_BLACK = 0x11110f;
 const MINERAL = 0xf0ede5;
 const PATINA = 0x7fa890;
-const STONE = 0x6f6a5d;
+const STONE = 0x5c5649;
 
 const PLATE_W = 3.05;
 const PLATE_H = 2.25;
@@ -71,12 +73,17 @@ const CORNER = 0.05; // A machined relief, not a rounded-rectangle style choice.
 const AIR_ASSEMBLED = 0.004;
 const AIR_SEPARATED = 0.52;
 /** Act I only opens the seams far enough to suggest the object comes apart. */
-const AIR_SURFACE_HINT = 0.062;
+const AIR_SURFACE_HINT = 0.1;
 
-const FOUNDATION_T = 0.34;
-const FOUNDATION_SCALE = 1.14;
+/* The substrate is a block, not a plate: a quarter of the object's width thick,
+   wider than the layers it carries, and irregular in plan. */
+const FOUNDATION_T = 0.86;
+const FOUNDATION_SCALE = 1.32;
 /** Air between the substrate and the deepest layer. */
-const FOUNDATION_CLEARANCE = 0.055;
+const FOUNDATION_CLEARANCE = 0.1;
+/** The planed pad where the engineered system seats into the stone. */
+const SEAT_T = 0.026;
+const SEAT_SCALE = 1.08;
 
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (n, min = 0, max = 1) => (n < min ? min : n > max ? max : n);
@@ -91,117 +98,140 @@ const clamp = (n, min = 0, max = 1) => (n < min ? min : n > max ? max : n);
    website the six explain rather than a seventh system.
    -------------------------------------------------------------------------- */
 
+/* --------------------------------------------------------------------------
+   The stack, top to bottom.
+
+   Six layers, six materials. The differentiation is deliberately NOT six
+   colours: it comes from roughness, opacity, thickness, edge treatment,
+   internal markings, reflectivity and how each one answers light. In grayscale
+   they still separate, because tint here is a value ladder — graphite darkest,
+   frosted polymer lightest — not a hue wheel.
+
+   `narrative` is the index the document uses (0 Performance … 5 Design).
+   -------------------------------------------------------------------------- */
+
 const STACK = [
   {
-    key: 'surface',
-    narrative: null,
-    thickness: 0.055,
-    tint: 0.2,
-    opacity: 0.6,
-    roughness: 0.06,
+    /* 06 DESIGN — precision surface. The most finished layer: laminated, near
+       mirror-polished, carrying the recognisable page composition on its face
+       with the grid it sits on traced faintly beneath. */
+    key: 'design',
+    narrative: 5,
+    thickness: 0.05,
+    tint: 0.21,
+    opacity: 0.56,
+    roughness: 0.045,
     clearcoat: 1,
-    metalness: 0.03,
-    rim: 0xdedacd,
-    rimRoughness: 0.2,
-    rimMetalness: 0.96,
-    art: 'surface',
+    clearcoatRoughness: 0.03,
+    metalness: 0.02,
+    envMapIntensity: 2.6,
+    wall: { colour: 0xe6e2d6, roughness: 0.13, metalness: 0.97 },
+    arris: 0.66,
+    art: 'design',
     artOnTop: true,
-    artOpacity: 0.62,
+    artOpacity: 0.68,
     artResolution: 1024,
   },
   {
-    key: 'design',
-    narrative: 5,
-    thickness: 0.052,
-    tint: 0.16,
-    opacity: 0.46,
-    roughness: 0.09,
-    clearcoat: 1,
-    metalness: 0.04,
-    rim: 0xd2cdc0,
-    rimRoughness: 0.24,
-    rimMetalness: 0.94,
-    art: 'design',
-    artOpacity: 0.4,
-  },
-  {
+    /* 05 TRUST — warm smoked glass. Substantial and refined rather than
+       technical: the thickest of the glass layers, a touch warmer in its
+       response, carrying discrete credibility marks instead of fine data. */
     key: 'trust',
     narrative: 4,
-    thickness: 0.064,
-    tint: 0.13,
-    opacity: 0.42,
-    roughness: 0.17,
-    clearcoat: 0.82,
-    metalness: 0.14,
-    rim: 0xc6c1b3,
-    rimRoughness: 0.3,
-    rimMetalness: 0.9,
+    thickness: 0.104,
+    tint: 0.145,
+    warmth: 0.55,
+    opacity: 0.44,
+    roughness: 0.1,
+    clearcoat: 0.92,
+    clearcoatRoughness: 0.075,
+    metalness: 0.09,
+    envMapIntensity: 1.95,
+    wall: { colour: 0xd2c8b2, roughness: 0.27, metalness: 0.9 },
+    arris: 0.6,
     art: 'trust',
-    artOpacity: 0.44,
+    artOpacity: 0.58,
   },
   {
+    /* 04 SEARCH — etched architectural glass. The body is the clearest and
+       smoothest in the stack; the index markings are cut into it, so the art
+       drives roughness and the marks only appear when light grazes them. */
     key: 'search',
     narrative: 3,
-    thickness: 0.058,
-    tint: 0.11,
-    opacity: 0.4,
-    roughness: 0.21,
-    clearcoat: 0.68,
-    metalness: 0.08,
-    rim: 0xbcb7a9,
-    rimRoughness: 0.33,
-    rimMetalness: 0.88,
+    thickness: 0.044,
+    tint: 0.08,
+    opacity: 0.22,
+    roughness: 0.92,
+    etched: true,
+    clearcoat: 0.8,
+    clearcoatRoughness: 0.05,
+    metalness: 0.04,
+    envMapIntensity: 2.35,
+    wall: { colour: 0xbdb8a6, roughness: 0.17, metalness: 0.93 },
+    arris: 0.34,
     art: 'search',
-    artOpacity: 0.42,
-  },
-  {
-    key: 'conversion',
-    narrative: 2,
-    thickness: 0.066,
-    tint: 0.1,
-    opacity: 0.39,
-    roughness: 0.25,
-    clearcoat: 0.58,
-    metalness: 0.09,
-    rim: 0xb5b0a2,
-    rimRoughness: 0.35,
-    rimMetalness: 0.86,
-    art: 'conversion',
     artOpacity: 0.44,
   },
   {
-    /* Frosted polymer: milky rather than glassy, so the structural layer reads
-       as a different material entirely. */
-    key: 'accessibility',
-    narrative: 1,
-    thickness: 0.074,
-    tint: 0.082,
-    opacity: 0.37,
-    roughness: 0.42,
-    clearcoat: 0.32,
-    metalness: 0.05,
-    rim: 0xaba695,
-    rimRoughness: 0.42,
-    rimMetalness: 0.82,
-    art: 'accessibility',
-    artOpacity: 0.34,
+    /* 03 CONVERSION — smoked acrylic. Dark with real optical depth, polished
+       edges, controlled internal reflection. Sparse bright nodes. */
+    key: 'conversion',
+    narrative: 2,
+    thickness: 0.078,
+    tint: 0.048,
+    opacity: 0.62,
+    roughness: 0.11,
+    clearcoat: 1,
+    clearcoatRoughness: 0.09,
+    metalness: 0.06,
+    envMapIntensity: 1.45,
+    wall: { colour: 0xa09a8b, roughness: 0.15, metalness: 0.89 },
+    arris: 0.44,
+    art: 'conversion',
+    artOpacity: 0.52,
   },
   {
-    /* Graphite composite: the thickest, darkest and least transparent layer,
-       carrying the measurement traces. */
+    /* 02 ACCESSIBILITY — frosted polymer. Milky rather than dark: the lightest
+       material in the stack, high roughness, sheen for the soft diffuse halo,
+       almost no clearcoat and a soft edge. Reads as frosted, not as glass at
+       low opacity. */
+    key: 'accessibility',
+    narrative: 1,
+    thickness: 0.09,
+    tint: 0.38,
+    opacity: 0.6,
+    roughness: 0.64,
+    clearcoat: 0.1,
+    clearcoatRoughness: 0.62,
+    metalness: 0,
+    envMapIntensity: 0.8,
+    sheen: 0.75,
+    sheenRoughness: 0.85,
+    wall: { colour: 0x9d978a, roughness: 0.74, metalness: 0.22 },
+    arris: 0.2,
+    art: 'accessibility',
+    artOpacity: 0.3,
+  },
+  {
+    /* 01 PERFORMANCE — graphite composite. The deepest, darkest, densest and
+       least transparent layer: brushed along one axis so it reads as an
+       engineered conductive material, with fine measurement traces cut in. */
     key: 'performance',
     narrative: 0,
-    thickness: 0.092,
-    tint: 0.055,
-    opacity: 0.52,
-    roughness: 0.46,
-    clearcoat: 0.22,
-    metalness: 0.34,
-    rim: 0x918c81,
-    rimRoughness: 0.46,
-    rimMetalness: 0.78,
+    thickness: 0.108,
+    tint: 0.014,
+    opacity: 0.7,
+    roughness: 0.52,
+    etched: true,
+    anisotropy: 0.85,
+    clearcoat: 0.3,
+    clearcoatRoughness: 0.4,
+    metalness: 0.44,
+    envMapIntensity: 0.7,
+    wall: { colour: 0x726c61, roughness: 0.56, metalness: 0.72 },
+    arris: 0.3,
     art: 'performance',
-    artOpacity: 0.4,
+    artOpacity: 0.46,
   },
 ];
 
@@ -244,6 +274,48 @@ function plateShape(w, h, r) {
   shape.quadraticCurveTo(-x, y, -x, y - r);
   shape.lineTo(-x, -y + r);
   shape.quadraticCurveTo(-x, -y, -x + r, -y);
+  return shape;
+}
+
+/* --------------------------------------------------------------------------
+   The substrate's silhouette. A hewn block: straight facets of uneven length
+   rather than a rounded rectangle, so it cannot be mistaken for another pane
+   even in outline. Deterministic, so the object is the same on every load.
+   -------------------------------------------------------------------------- */
+
+function hewnShape(w, h, facets = 38, amount = 0.075) {
+  const x = w / 2;
+  const y = h / 2;
+  const perimeter = [];
+  for (let i = 0; i < facets; i += 1) {
+    const t = i / facets;
+    // Walk the rectangle perimeter.
+    const side = t * 4;
+    let px;
+    let py;
+    if (side < 1) { px = -x + 2 * x * side; py = -y; }
+    else if (side < 2) { px = x; py = -y + 2 * y * (side - 1); }
+    else if (side < 3) { px = x - 2 * x * (side - 2); py = y; }
+    else { px = -x; py = y - 2 * y * (side - 3); }
+
+    /* Layered irrational frequencies give organic variation without noise
+       tables, and a coarse quantisation breaks it into facets rather than a
+       smooth lump. */
+    const wobble =
+      0.46 * Math.sin(t * 19.1 + 1.13) +
+      0.31 * Math.sin(t * 34.7 + 0.41) +
+      0.23 * Math.sin(t * 61.3 + 2.67);
+    const faceted = Math.round(wobble * 4) / 4;
+    const scale = 1 + faceted * amount;
+    perimeter.push([px * scale, py * scale]);
+  }
+
+  const shape = new Shape();
+  shape.moveTo(perimeter[0][0], perimeter[0][1]);
+  for (let i = 1; i < perimeter.length; i += 1) {
+    shape.lineTo(perimeter[i][0], perimeter[i][1]);
+  }
+  shape.closePath();
   return shape;
 }
 
@@ -340,12 +412,20 @@ function textBlock(ctx, x, y, width, lines, leading, alpha, seed = 1) {
   }
 }
 
-/* --- SURFACE — a designed website ---------------------------------------- */
+/* --- 06 DESIGN — the precision surface: a designed page on its own grid ---------------------------------------- */
 
-function drawSurface(resolution) {
+function drawDesign(resolution) {
   const { canvas, ctx, w, h } = artCanvas(resolution);
   const m = w * 0.072; // page margin
   const col = (w - m * 2) / 12;
+
+  // The system the page is set on, traced faintly beneath it.
+  for (let c = 1; c < 12; c += 1) {
+    rule(ctx, m + col * c, h * 0.05, m + col * c, h * 0.95, 0.055);
+  }
+  for (let r = 1; r < 16; r += 1) {
+    rule(ctx, m, (h / 16) * r, w - m, (h / 16) * r, 0.03);
+  }
 
   // Masthead: wordmark, navigation, one emphasised action.
   bar(ctx, m, h * 0.072, col * 1.35, h * 0.026, 0.86);
@@ -400,42 +480,6 @@ function drawSurface(resolution) {
   for (let i = 0; i < 3; i += 1) {
     bar(ctx, w - m - col * (1 + i * 1.3), h * 0.955, col * 0.9, h * 0.012, 0.22);
   }
-  return canvas;
-}
-
-/* --- 06 DESIGN — composition system -------------------------------------- */
-
-function drawDesign(resolution) {
-  const { canvas, ctx, w, h } = artCanvas(resolution);
-  const m = w * 0.072;
-  const col = (w - m * 2) / 12;
-
-  // Twelve columns with their gutters.
-  for (let c = 0; c < 12; c += 1) {
-    const x = m + c * col;
-    bar(ctx, x, h * 0.1, col * 0.82, h * 0.8, 0.045);
-    rule(ctx, x, h * 0.1, x, h * 0.9, 0.16);
-  }
-  // Baseline grid.
-  for (let r = 0; r <= 18; r += 1) {
-    const y = h * 0.1 + ((h * 0.8) / 18) * r;
-    rule(ctx, m, y, w - m, y, r % 3 === 0 ? 0.13 : 0.06);
-  }
-  // Margin markers and one dimension callout.
-  rule(ctx, m, h * 0.06, m, h * 0.94, 0.4);
-  rule(ctx, w - m, h * 0.06, w - m, h * 0.94, 0.4);
-  rule(ctx, m, h * 0.045, m + col * 4, h * 0.045, 0.5);
-  rule(ctx, m, h * 0.03, m, h * 0.06, 0.5);
-  rule(ctx, m + col * 4, h * 0.03, m + col * 4, h * 0.06, 0.5);
-
-  // Two type traces sitting on the grid, showing the system in use.
-  bar(ctx, m, h * 0.26, col * 5.1, h * 0.05, 0.4);
-  textBlock(ctx, m, h * 0.36, col * 4.2, 3, h * 0.04, 0.22, 7);
-  bar(ctx, m + col * 7, h * 0.26, col * 3.6, h * 0.026, 0.3);
-  textBlock(ctx, m + col * 7, h * 0.33, col * 3.6, 5, h * 0.036, 0.18, 11);
-
-  // The accent marks the active measure.
-  bar(ctx, m, h * 0.235, col * 5.1, 3, 0.5, ACCENT);
   return canvas;
 }
 
@@ -749,7 +793,6 @@ function drawPerformance(resolution) {
 }
 
 const ARTISTS = {
-  surface: drawSurface,
   design: drawDesign,
   trust: drawTrust,
   search: drawSearch,
@@ -786,7 +829,7 @@ function stoneTexture() {
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#7a7466';
+    ctx.fillStyle = '#5b5649';
     ctx.fillRect(0, 0, size, size);
 
     let n = 12345;
@@ -831,6 +874,79 @@ function stoneTexture() {
   }
   const texture = new CanvasTexture(stoneCanvas);
   texture.colorSpace = SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+/**
+ * A normal map for the substrate's hewn faces. Multi-octave value noise turned
+ * into surface normals, so the sides answer light as broken stone rather than
+ * as a flat extrusion. The planed top uses the same map at a fraction of the
+ * strength, which is what makes the contrast between worked and unworked stone.
+ */
+let stoneNormalCanvas = null;
+function stoneNormalTexture() {
+  if (!stoneNormalCanvas) {
+    const size = 256;
+    const height = new Float32Array(size * size);
+
+    const hash = (x, y) => {
+      const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+      return n - Math.floor(n);
+    };
+    const smooth = (t) => t * t * (3 - 2 * t);
+
+    for (let octave = 0; octave < 5; octave += 1) {
+      const frequency = 4 * 2 ** octave;
+      const amplitude = 1 / 2 ** octave;
+      const cell = size / frequency;
+      for (let y = 0; y < size; y += 1) {
+        for (let x = 0; x < size; x += 1) {
+          const fx = x / cell;
+          const fy = y / cell;
+          const x0 = Math.floor(fx);
+          const y0 = Math.floor(fy);
+          const tx = smooth(fx - x0);
+          const ty = smooth(fy - y0);
+          const wrap = (v) => ((v % frequency) + frequency) % frequency;
+          const a = hash(wrap(x0), wrap(y0));
+          const b = hash(wrap(x0 + 1), wrap(y0));
+          const c = hash(wrap(x0), wrap(y0 + 1));
+          const d = hash(wrap(x0 + 1), wrap(y0 + 1));
+          const top = a + (b - a) * tx;
+          const bottom = c + (d - c) * tx;
+          height[y * size + x] += (top + (bottom - top) * ty) * amplitude;
+        }
+      }
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const image = ctx.createImageData(size, size);
+    const strength = 5.5;
+    const at = (x, y) => height[((y + size) % size) * size + ((x + size) % size)];
+
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const dx = (at(x + 1, y) - at(x - 1, y)) * strength;
+        const dy = (at(x, y + 1) - at(x, y - 1)) * strength;
+        const length = Math.hypot(-dx, -dy, 1);
+        const index = (y * size + x) * 4;
+        image.data[index] = ((-dx / length) * 0.5 + 0.5) * 255;
+        image.data[index + 1] = ((-dy / length) * 0.5 + 0.5) * 255;
+        image.data[index + 2] = (1 / length) * 0.5 * 255 + 127.5;
+        image.data[index + 3] = 255;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    stoneNormalCanvas = canvas;
+  }
+
+  const texture = new CanvasTexture(stoneNormalCanvas);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
   texture.anisotropy = 4;
   return texture;
 }
@@ -1019,9 +1135,21 @@ function sharedGeometry() {
 
   shared = {
     plates,
+    /* The block: hewn in plan, a quarter of the object's width thick. Group 0
+       is its lids, group 1 its broken sides. */
     foundation: new ExtrudeGeometry(
-      plateShape(PLATE_W * FOUNDATION_SCALE, PLATE_H * FOUNDATION_SCALE, CORNER * 1.6),
-      { depth: FOUNDATION_T, bevelEnabled: false, curveSegments: 5 }
+      hewnShape(PLATE_W * FOUNDATION_SCALE, PLATE_H * FOUNDATION_SCALE),
+      { depth: FOUNDATION_T, bevelEnabled: false }
+    ),
+    /* The planed pad cut into the top of the block, where the engineered system
+       seats into it. Regular, because this part has been worked. */
+    seat: new ExtrudeGeometry(
+      plateShape(PLATE_W * SEAT_SCALE, PLATE_H * SEAT_SCALE, CORNER),
+      { depth: SEAT_T, bevelEnabled: false, curveSegments: 5 }
+    ),
+    seatArris: arrisGeometry(
+      plateShape(PLATE_W * SEAT_SCALE, PLATE_H * SEAT_SCALE, CORNER),
+      SEAT_T
     ),
     shadow: new PlaneGeometry(PLATE_W * 1.5, PLATE_H * 1.5),
   };
@@ -1054,7 +1182,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
      and VI sit lower and more architectural, but still high enough that each
      layer's own drawing is legible rather than foreshortened into a line.
      Examining a layer raises the angle further: the subject turns its face up. */
-  const basePitch = mode === 'surface' ? 0.6 : mode === 'reconstruct' ? 0.46 : 0.5;
+  const basePitch = mode === 'surface' ? 0.44 : mode === 'reconstruct' ? 0.44 : 0.5;
   const examinePitch = basePitch + 0.1;
   const baseYaw = mode === 'surface' ? -0.36 : -0.46;
 
@@ -1074,22 +1202,30 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   key.position.set(-3.6, 7.4, 3.2);
   scene.add(key);
 
-  const fill = new DirectionalLight(0xa8c0b4, 0.42);
+  const fill = new DirectionalLight(0xa8c0b4, 0.62);
   fill.position.set(4.8, 1.1, -3.4);
   scene.add(fill);
 
-  const back = new DirectionalLight(0xf0ede5, 0.55);
+  const back = new DirectionalLight(0xf0ede5, 0.8);
   back.position.set(1.4, -1.2, -4.6);
   scene.add(back);
 
-  /* The examination light. It travels to whichever layer is under discussion
-     and is dark the rest of the time. */
+  /* The examination lights. They travel to whichever layer is under discussion
+     and are dark the rest of the time. */
   const examine = new PointLight(0xfff6e8, 0, 3.4, 2);
   scene.add(examine);
 
   const assembly = new Group();
   assembly.rotation.y = baseYaw;
   scene.add(assembly);
+
+  /* The raking light lives inside the assembly so its direction stays fixed
+     relative to the plates rather than swinging with the pointer parallax. */
+  const grazeTarget = new Object3D();
+  assembly.add(grazeTarget);
+  const graze = new DirectionalLight(0xfff8ec, 0);
+  graze.target = grazeTarget;
+  assembly.add(graze);
 
   const geometry = sharedGeometry();
   const tintBase = new Color(SUBSTRAL_BLACK);
@@ -1098,20 +1234,72 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 
   /* --- Substrate -------------------------------------------------------- */
 
+  /* The substrate. Two materials on one block: the lids are planed stone, the
+     sides are left broken. The contrast between worked and unworked is the
+     whole point — a geological foundation under a precision-engineered system. */
   const stone = stoneTexture();
-  const foundationMaterial = new MeshPhysicalMaterial({
+  const stoneNormal = stoneNormalTexture();
+  const hewnNormal = stoneNormalTexture();
+  hewnNormal.repeat.set(2.4, 1.4);
+
+  const planedMaterial = new MeshPhysicalMaterial({
     color: new Color(STONE),
     map: stone,
     roughnessMap: stone,
-    roughness: 0.92,
-    metalness: 0.02,
-    clearcoat: 0.06,
-    envMapIntensity: 0.5,
+    normalMap: stoneNormal,
+    roughness: 0.74,
+    metalness: 0.04,
+    clearcoat: 0.14,
+    clearcoatRoughness: 0.6,
+    envMapIntensity: 0.72,
   });
-  const foundation = new Mesh(geometry.foundation, foundationMaterial);
+  planedMaterial.normalScale.set(0.3, 0.3);
+
+  const hewnMaterial = new MeshPhysicalMaterial({
+    color: new Color(STONE).multiplyScalar(0.94),
+    map: stone,
+    roughnessMap: stone,
+    normalMap: hewnNormal,
+    roughness: 1,
+    metalness: 0.02,
+    envMapIntensity: 0.6,
+  });
+  hewnMaterial.normalScale.set(1.9, 1.9);
+
+  const foundation = new Mesh(geometry.foundation, [planedMaterial, hewnMaterial]);
   foundation.rotation.x = -Math.PI / 2;
-  foundation.position.y = -FOUNDATION_CLEARANCE;
+  /* Extrusion runs along world +Y once the block is laid flat, so it is dropped
+     by its full thickness to put its planed top on the clearance line. */
+  foundation.position.y = -FOUNDATION_CLEARANCE - FOUNDATION_T;
   assembly.add(foundation);
+
+  /* The seat: a shallow machined pad on top of the block, with its own arris.
+     This is where the stone has been worked to receive the layers. */
+  const seatMaterial = new MeshPhysicalMaterial({
+    color: new Color(STONE).multiplyScalar(1.22),
+    map: stone,
+    roughness: 0.42,
+    metalness: 0.14,
+    clearcoat: 0.3,
+    clearcoatRoughness: 0.4,
+    envMapIntensity: 0.7,
+  });
+  const seat = new Mesh(geometry.seat, seatMaterial);
+  seat.rotation.x = -Math.PI / 2;
+  seat.position.y = -FOUNDATION_CLEARANCE;
+  assembly.add(seat);
+
+  const seatArrisMaterial = new MeshBasicMaterial({
+    color: mineral.clone(),
+    transparent: true,
+    opacity: 0.16,
+    depthWrite: false,
+    fog: false,
+  });
+  const seatArris = new Mesh(geometry.seatArris, seatArrisMaterial);
+  seatArris.rotation.x = -Math.PI / 2;
+  seatArris.position.y = seat.position.y;
+  assembly.add(seatArris);
 
   const shadowMaterial = new MeshBasicMaterial({
     map: shadowTexture(),
@@ -1121,7 +1309,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   });
   const contactShadow = new Mesh(geometry.shadow, shadowMaterial);
   contactShadow.rotation.x = -Math.PI / 2;
-  contactShadow.position.y = -FOUNDATION_CLEARANCE + 0.003;
+  contactShadow.position.y = -FOUNDATION_CLEARANCE + SEAT_T + 0.004;
   assembly.add(contactShadow);
 
   /* --- Plates ----------------------------------------------------------- */
@@ -1131,35 +1319,60 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
     // The plates lie flat: the extrusion axis becomes vertical thickness.
     group.rotation.x = -Math.PI / 2;
 
+    /* The value ladder, warmed very slightly for Trust. Warmth is a material
+       response, not a brand colour: it stays inside the mineral palette. */
+    const body = tintBase.clone().lerp(mineral, layer.tint);
+    if (layer.warmth) body.lerp(new Color(0xbfa98a), layer.warmth * 0.09);
+
     const capMaterial = new MeshPhysicalMaterial({
-      color: tintBase.clone().lerp(mineral, layer.tint),
+      color: body,
       metalness: layer.metalness,
       roughness: layer.roughness,
       clearcoat: layer.clearcoat,
-      clearcoatRoughness: 0.1 + layer.roughness * 0.3,
+      clearcoatRoughness: layer.clearcoatRoughness,
       ior: 1.49, // Acrylic.
       transparent: true,
       opacity: layer.opacity,
       depthWrite: false,
       side: DoubleSide,
-      envMapIntensity: 1.78,
+      envMapIntensity: layer.envMapIntensity,
       emissive: patina.clone(),
       emissiveIntensity: 0,
     });
 
+    /* Etched layers drive roughness from their own markings: the body stays
+       optically smooth and the cut marks are matte, so they only declare
+       themselves when light grazes across the plate. This is what makes Search
+       read as etched glass rather than as a printed decal. */
+    if (layer.etched) {
+      capMaterial.roughnessMap = artTexture(layer.art, layer.artResolution || 512);
+    }
+    if (layer.sheen) {
+      capMaterial.sheen = layer.sheen;
+      capMaterial.sheenRoughness = layer.sheenRoughness;
+      capMaterial.sheenColor = mineral.clone();
+    }
+    /* Brushed along one axis: the graphite layer answers light directionally. */
+    if (layer.anisotropy) {
+      capMaterial.anisotropy = layer.anisotropy;
+      capMaterial.anisotropyRotation = Math.PI / 2;
+    }
+
     const wallMaterial = new MeshPhysicalMaterial({
-      color: new Color(layer.rim),
-      metalness: layer.rimMetalness,
-      roughness: layer.rimRoughness,
+      color: new Color(layer.wall.colour),
+      metalness: layer.wall.metalness,
+      roughness: layer.wall.roughness,
       envMapIntensity: 1.35,
     });
 
     group.add(new Mesh(geometry.plates[index].body, [capMaterial, wallMaterial]));
 
+    /* Edge treatment is per layer too: a bright machined arris on the precision
+       surface, a soft one on the frosted polymer. */
     const arrisMaterial = new MeshBasicMaterial({
       color: mineral.clone(),
       transparent: true,
-      opacity: 0.4,
+      opacity: layer.arris,
       depthWrite: false,
       fog: false,
     });
@@ -1262,33 +1475,47 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       plate.group.position.y = base + relief;
       if (emphasis > 0.5) subjectY = plate.group.position.y;
 
-      /* Examining a layer is not a spacing change. The subject gains opacity,
-         its drawing comes up, its arris turns to patina and its machined wall
-         catches more of the environment, while everything else recedes. */
+      /* Examining a layer works through light, not through paint. The subject
+         is not made more opaque and it is not recoloured: a raking light
+         crosses it to reveal its own finish, its reflectivity rises, its
+         machined arris catches the environment, and its internal markings come
+         up out of the material. Adjacent layers lose reflectivity and recede. */
       const { layer } = plate;
-      plate.capMaterial.emissiveIntensity = emphasis * 0.085;
-      plate.capMaterial.opacity = lerp(
-        layer.opacity * lerp(1, 0.68, state.focus),
-        Math.min(0.82, layer.opacity + 0.24),
+      plate.capMaterial.envMapIntensity = lerp(
+        layer.envMapIntensity * lerp(1, 0.45, state.focus),
+        layer.envMapIntensity * 2.1,
         emphasis
       );
-      plate.arrisMaterial.color.copy(mineral).lerp(patina, emphasis * 0.8);
-      plate.arrisMaterial.opacity = lerp(lerp(0.4, 0.18, state.focus), 0.96, emphasis);
+      plate.capMaterial.opacity = layer.opacity * lerp(1, 0.84, state.focus - emphasis);
+      // The accent still marks the selected layer, but only as a trace on the
+      // edge — it is not how the layer is identified.
+      plate.arrisMaterial.color.copy(mineral).lerp(patina, emphasis * 0.3);
+      plate.arrisMaterial.opacity = lerp(
+        layer.arris * lerp(1, 0.4, state.focus),
+        Math.min(0.98, layer.arris + 0.42),
+        emphasis
+      );
       plate.artMaterial.opacity = lerp(
         layer.artOpacity * lerp(1, 0.5, state.focus),
-        Math.min(0.98, layer.artOpacity + 0.5),
+        Math.min(0.96, layer.artOpacity + 0.42),
         emphasis
       );
       plate.wallMaterial.envMapIntensity = lerp(
-        lerp(1.35, 0.85, state.focus),
-        2.5,
+        lerp(1.35, 0.7, state.focus),
+        2.9,
         emphasis
       );
     }
 
-    /* The examination light rides just above the subject. */
-    examine.position.set(-0.9, subjectY + 0.42, 1.1);
-    examine.intensity = state.focus * 3.2;
+    /* Two lights do the examining. A soft fill rides above the subject, and a
+       raking light crosses it at a few degrees — which is how you read an
+       etched, brushed or frosted surface at all. */
+    examine.position.set(-0.9, subjectY + 0.5, 1.1);
+    examine.intensity = state.focus * 1.7;
+
+    graze.position.set(2.85, subjectY + 0.3, 1.5);
+    grazeTarget.position.set(-0.4, subjectY, -0.2);
+    graze.intensity = state.focus * 4.4;
 
     // The shadow softens and shrinks as the stack lifts off the substrate.
     const lift = clamp((state.air - AIR_ASSEMBLED) / (AIR_SEPARATED - AIR_ASSEMBLED));
@@ -1345,10 +1572,14 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       const p = clamp(progress);
       const separation = mode === 'reconstruct' ? 1 - p : p;
 
+      /* Eased rather than linear: the first chapter is under examination very
+         early in the act, and a layer nobody can see yet is no use. The object
+         opens most of the way by the second chapter and settles after that. */
+      const opening = mode === 'surface' ? p : separation ** 0.62;
       target.air =
         mode === 'surface'
-          ? lerp(AIR_ASSEMBLED, AIR_SURFACE_HINT, p)
-          : lerp(AIR_ASSEMBLED, AIR_SEPARATED, separation);
+          ? lerp(AIR_ASSEMBLED, AIR_SURFACE_HINT, opening)
+          : lerp(AIR_ASSEMBLED, AIR_SEPARATED, opening);
 
       const subject = NARRATIVE_TO_INDEX.get(activeIndex);
       const examining = subject != null && separation > 0.1;
@@ -1361,8 +1592,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       /* The camera withdraws only as far as the opening object requires, then
          closes in and raises its aim to the layer under examination. */
       fitted = lerp(
-        fitAt(fitTables.base, separation),
-        fitAt(fitTables.examine, separation),
+        fitAt(fitTables.base, opening),
+        fitAt(fitTables.examine, opening),
         examining ? 1 : 0
       );
       target.dolly = fitted * (examining ? 0.94 : 1);
@@ -1389,8 +1620,12 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       // Geometry and source canvases are shared and intentionally kept.
       resizeObserver.disconnect();
       environment.dispose();
-      foundationMaterial.map?.dispose();
-      foundationMaterial.dispose();
+      for (const material of [planedMaterial, hewnMaterial, seatMaterial]) {
+        material.map?.dispose();
+        material.normalMap?.dispose();
+        material.dispose();
+      }
+      seatArrisMaterial.dispose();
       shadowMaterial.map?.dispose();
       shadowMaterial.dispose();
       for (const plate of plates) {
@@ -1406,4 +1641,5 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 }
 
 export const LAYER_STACK = STACK.map((layer) => layer.key);
+export const SUBSTRATE_THICKNESS = FOUNDATION_T;
 export const TOTAL_PLATE_SOLID = TOTAL_SOLID;

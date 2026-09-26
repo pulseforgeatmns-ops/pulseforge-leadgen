@@ -75,8 +75,12 @@ class Stage {
   separation() {
     const t = this.eased;
     if (this.mode === 'surface') return 4 + t * 7;
-    if (this.mode === 'reconstruct') return 4 + (1 - t) * 40;
-    return 5 + t * 38;
+    /* The same eased opening the dimensional object uses, so the CSS
+       composition and the WebGL one never disagree about how far apart the
+       layers are. A layer is discussed early in the act, so the object has to
+       be open by then. */
+    const opening = this.mode === 'reconstruct' ? (1 - t) ** 0.62 : t ** 0.62;
+    return 5 + opening * 38;
   }
 
   /* Which of the six layers is currently under examination. Act I examines
