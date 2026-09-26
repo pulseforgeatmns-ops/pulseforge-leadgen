@@ -11,6 +11,10 @@ const {
 } = require('../utils/replenishmentVertical');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { adapters: createGovernedAdapters } = require('./governedOutboundAdapters');
+const {
+  isProspectServiceAreaConfirmed,
+  resolveMissionAllowedCities,
+} = require('../utils/missionGeography');
 
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
@@ -83,9 +87,7 @@ function confirmedServiceAreaMatch(value) {
 }
 
 function missionCandidateReason(row, scope) {
-  if (!confirmedServiceAreaMatch(row.service_area_match)) {
-    return 'service_area_not_confirmed';
-  }
+  if (!isProspectServiceAreaConfirmed(row, scope)) return 'service_area_not_confirmed';
   const vertical = normalizeVertical(row.vertical || row.industry || '');
   const aliases = segmentAliases(scope);
   if (aliases.size && (!vertical || !aliases.has(vertical))) return 'mission_segment_mismatch';
@@ -114,6 +116,11 @@ async function loadCleanInventory(pool, store, source) {
 
   const clean = [];
   const excluded = [];
+  const exclusionCounts = {};
+  const bump = reason => {
+    if (!reason) return;
+    exclusionCounts[reason] = (exclusionCounts[reason] || 0) + 1;
+  };
   for (const row of rows) {
     const missionReason = missionCandidateReason(row, scope);
     const emailReason = missionReason ? null : canonicalOutboundEmailIneligibilityReason(row);
@@ -131,10 +138,12 @@ async function loadCleanInventory(pool, store, source) {
       ? null
       : await store.suppression(candidate, '__max_inventory_buffer__');
     const blocked = missionReason || emailReason || ownership || suppression;
-    if (blocked) excluded.push({ prospectId: candidate.prospectId, reason: blocked });
-    else clean.push(candidate);
+    if (blocked) {
+      excluded.push({ prospectId: candidate.prospectId, reason: blocked });
+      bump(blocked);
+    } else clean.push(candidate);
   }
-  return { clean, excluded, scope };
+  return { clean, excluded, scope, exclusionCounts };
 }
 
 function scoutInput(program, source, plan) {
@@ -181,6 +190,9 @@ async function persistDiscoveredCompanies(pool, store, {
   const scope = scoutContext.scope || {};
   const admissionContext = {
     missionSegment: scope.segment || (searchDefinition?.segments || [])[0] || null,
+    missionCities: scope.cities,
+    region: scope.region,
+    allowedCities: scoutContext.allowedCities || scoutContext.serviceAreas || null,
     service_area: scoutContext.serviceAreas || null,
     clientConfig: scoutContext.clientConfig || null,
     discoveryQuery: scoutContext.discoveryQuery || null,
@@ -304,6 +316,12 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
   let persisted = { inserted: 0 };
 
   if (promoted < plan.deficit) {
+    const scope = sourceScope(source);
+    const allowedCities = resolveMissionAllowedCities({
+      missionCities: scope.cities,
+      region: scope.region,
+      service_area: ['Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn'],
+    });
     discovery = await require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(
       scoutInput(program, source, plan),
       {
@@ -312,8 +330,9 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
           persisted = await persistDiscoveredCompanies(pool, store, {
             ...input,
             scoutContext: {
-              scope: sourceScope(source),
-              serviceAreas: ['Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn'],
+              scope,
+              allowedCities,
+              serviceAreas: allowedCities,
             },
           });
           return persisted;
@@ -402,6 +421,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     bufferTarget: finalPlan.targetInventory,
     cleanInventoryBefore: inventoryBefore.clean.length,
     cleanInventoryAfter: inventoryAfter.clean.length,
+    cleanInventoryExclusions: inventoryAfter.exclusionCounts || {},
     deficit: finalPlan.deficit,
     state: finalPlan.state,
     scoutInvoked: Boolean(scout),
@@ -420,6 +440,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     plan: finalPlan,
     scout,
     excludedCount: inventoryAfter.excluded.length,
+    cleanInventoryExclusions: inventoryAfter.exclusionCounts || {},
     sourceScope: inventoryAfter.scope,
   };
 }

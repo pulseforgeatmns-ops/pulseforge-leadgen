@@ -12,7 +12,12 @@ const { ensureScoutUnenrichedTable } = require('../utils/scoutUnenrichedSchema')
 const { normalizeVertical } = require('../utils/normalize');
 const { deriveBusinessNameShort, ensureBusinessNameShortColumns } = require('../utils/businessNameShort');
 const { getClientConfig } = require('../utils/clientContext');
-const { configuredServiceAreas, matchServiceAreaFromLocation } = require('../utils/serviceArea');
+const { configuredServiceAreas } = require('../utils/serviceArea');
+const {
+  isLocationInMissionGeography,
+  matchedMissionCity,
+  resolveMissionAllowedCities,
+} = require('../utils/missionGeography');
 
 function parseArg(name) {
   const prefix = `--${name}=`;
@@ -96,7 +101,19 @@ async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical
 }
 
 function promotionServiceAreaMatch(record, clientConfig) {
-  return matchServiceAreaFromLocation(record?.location, configuredServiceAreas(clientConfig));
+  const allowedCities = resolveMissionAllowedCities({ clientConfig });
+  if (!allowedCities.length) return true;
+  const inScope = isLocationInMissionGeography({
+    location: record?.location,
+    city: record?.city,
+    allowedCities,
+  });
+  if (!inScope) return null;
+  return matchedMissionCity({
+    location: record?.location,
+    city: record?.city,
+    allowedCities,
+  }) || true;
 }
 
 async function promoteRecord(record, {

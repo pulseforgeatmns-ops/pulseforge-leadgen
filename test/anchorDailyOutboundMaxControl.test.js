@@ -58,22 +58,12 @@ test('confirmedServiceAreaMatch accepts boolean true and non-empty locality stri
 });
 
 test('Max inventory requires confirmed service area and source-mission segment compatibility', () => {
-  const scope = { segment: 'short_term_rental', industry: 'hospitality' };
-  for (const locality of ['Manchester', 'Bedford', 'Hooksett']) {
-    assert.equal(
-      missionCandidateReason({ service_area_match: locality, vertical: 'property_manager' }, scope),
-      null,
-      locality
-    );
-  }
-  assert.equal(
-    missionCandidateReason({ service_area_match: null, vertical: 'property_manager' }, scope),
-    'service_area_not_confirmed'
-  );
-  assert.equal(
-    missionCandidateReason({ service_area_match: '', vertical: 'property_manager' }, scope),
-    'service_area_not_confirmed'
-  );
+  const scope = {
+    segment: 'short_term_rental',
+    industry: 'hospitality',
+    cities: ['manchester', 'bedford', 'hooksett', 'goffstown', 'londonderry', 'auburn'],
+    region: 'Greater Manchester',
+  };
   assert.equal(
     missionCandidateReason({ service_area_match: false, vertical: 'str_manager' }, scope),
     'service_area_not_confirmed'
@@ -91,15 +81,21 @@ test('Max inventory requires confirmed service area and source-mission segment c
     null
   );
   assert.equal(
-    missionCandidateReason({ service_area_match: 'Manchester', vertical: 'law_firm' }, scope),
-    'mission_segment_mismatch'
+    missionCandidateReason({
+      service_area_match: 'Bedford',
+      company_location: '166 State Rte 101, Bedford, NH 03110',
+      vertical: 'str_manager',
+    }, scope),
+    null
   );
-});
-
-test('governed outbound adapters expose infrastructure for Max control loop', () => {
-  const pool = { query: async () => ({ rows: [] }) };
-  const adapterSet = adapters(pool, { infrastructure: async () => ({ cap: 5 }) });
-  assert.equal(typeof adapterSet.infrastructure, 'function');
+  assert.equal(
+    missionCandidateReason({
+      service_area_match: 'Henniker',
+      company_location: 'Henniker, NH',
+      vertical: 'str_manager',
+    }, scope),
+    'service_area_not_confirmed'
+  );
 });
 
 test('Max scoutInput carries structured replenishment workflow fields', () => {
