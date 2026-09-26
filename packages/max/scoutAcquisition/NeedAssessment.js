@@ -195,6 +195,19 @@ function assessScoutNeed(input = {}) {
     };
   }
 
+  // Max measures verified, contactable inventory before requesting this work.
+  // Matching company intelligence or a recent search cannot satisfy that deficit.
+  if (replenishmentRequired) {
+    return {
+      needed: true,
+      reason:
+        asText(input.reason) ||
+        'Verified outbound inventory is below the buffer target — fresh discovery is required.',
+      reuse: null,
+      kind: 'investigate',
+    };
+  }
+
   const matching = recent.filter((row) => {
     if (!row) return false;
     if (row.specialist && row.specialist !== SCOUT_SPECIALIST) return false;
@@ -231,17 +244,6 @@ function assessScoutNeed(input = {}) {
       reason: 'Existing durable intelligence already answers the objective.',
       reuse: existing,
       kind: 'reuse',
-    };
-  }
-
-  if (replenishmentRequired && existing && existing.sufficient !== true) {
-    return {
-      needed: true,
-      reason:
-        asText(input.reason) ||
-        'Reusable inventory is insufficient for the outbound buffer deficit — fresh discovery is required.',
-      reuse: null,
-      kind: 'investigate',
     };
   }
 
