@@ -372,6 +372,23 @@ describe('Palette (doctrine §6)', () => {
     }
   });
 
+  it('keeps the rejection tone legible in both environments', () => {
+    // The instrument appears in the mineral act, so an error colour tuned only
+    // for the dark environment is unreadable exactly where it is used.
+    const scope = (name) => css.match(new RegExp(`\\.env-${name}\\s*\\{[\\s\\S]*?\\}`))[0];
+    const pairs = [
+      [scope('dark'), tokens['substral-black']],
+      [scope('mineral'), tokens.mineral],
+    ];
+    for (const [block, background] of pairs) {
+      const tone = block.match(/--tone-error:\s*(#[0-9a-f]{6})/i)?.[1];
+      assert.ok(tone, 'each environment must define --tone-error');
+      const ratio = contrast(tone, background);
+      assert.ok(ratio >= 4.5, `${tone} on ${background} is ${ratio.toFixed(2)}:1`);
+    }
+    assert.match(css, /\[data-tone='error'\]\s*\{[^}]*var\(--tone-error\)/);
+  });
+
   it('keeps the structural greys legible in both environments', () => {
     const dark = css.match(/\.env-dark\s*\{[\s\S]*?\}/)[0];
     const mineral = css.match(/\.env-mineral\s*\{[\s\S]*?\}/)[0];

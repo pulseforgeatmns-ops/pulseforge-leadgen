@@ -108,6 +108,9 @@
   --rule-strong: rgba(240, 237, 229, 0.26);
   --surface: var(--graphite);
   --field: rgba(240, 237, 229, 0.045);
+  /* Reserved for the instrument's rejection messages. Tuned per environment:
+     one value cannot clear AA on both charcoal and mineral. */
+  --tone-error: #e6a98c;
 }
 
 .env-mineral {
@@ -120,6 +123,7 @@
   --rule-strong: rgba(17, 17, 15, 0.34);
   --surface: var(--mineral-sunk);
   --field: rgba(17, 17, 15, 0.04);
+  --tone-error: #9c4a1e;
 }
 
 /* --- Reset --------------------------------------------------------------- */
@@ -690,17 +694,19 @@ ol {
 .plate__face {
   position: absolute;
   inset: 0;
-  border: 1px solid rgba(240, 237, 229, 0.17);
+  /* This is the object for anyone without WebGL and for every phone, so it
+     carries enough light to read as smoked acrylic rather than a grey plane. */
+  border: 1px solid rgba(240, 237, 229, 0.28);
   transition: border-color var(--dur-mid) var(--ease-weighted),
     box-shadow var(--dur-mid) var(--ease-weighted);
   background: linear-gradient(
       148deg,
-      rgba(240, 237, 229, 0.075),
-      rgba(240, 237, 229, 0.015) 46%,
-      rgba(17, 17, 15, 0.12)
+      rgba(240, 237, 229, 0.115),
+      rgba(240, 237, 229, 0.03) 46%,
+      rgba(17, 17, 15, 0.14)
     ),
-    rgba(28, 27, 24, 0.5);
-  box-shadow: inset 0 1px 0 rgba(240, 237, 229, 0.11);
+    rgba(30, 29, 25, 0.55);
+  box-shadow: inset 0 1px 0 rgba(240, 237, 229, 0.17);
 }
 
 /* Etched graticule: the plate carries measurement, not ornament. */
@@ -710,10 +716,10 @@ ol {
   inset: 8%;
   background-image: linear-gradient(
       to right,
-      rgba(240, 237, 229, 0.075) 1px,
+      rgba(240, 237, 229, 0.1) 1px,
       transparent 1px
     ),
-    linear-gradient(to bottom, rgba(240, 237, 229, 0.055) 1px, transparent 1px);
+    linear-gradient(to bottom, rgba(240, 237, 229, 0.075) 1px, transparent 1px);
   background-size: calc(100% / 7) calc(100% / 5);
   opacity: 0.75;
 }
@@ -730,9 +736,9 @@ ol {
   height: 3px;
   background: linear-gradient(
     to right,
-    rgba(240, 237, 229, 0.05),
-    rgba(240, 237, 229, 0.3),
-    rgba(240, 237, 229, 0.05)
+    rgba(240, 237, 229, 0.06),
+    rgba(240, 237, 229, 0.42),
+    rgba(240, 237, 229, 0.06)
   );
   transform: translateZ(-3px);
 }
@@ -1240,7 +1246,7 @@ ol {
 }
 
 .instrument__status[data-tone='error'] {
-  color: #e6a98c;
+  color: var(--tone-error);
 }
 
 .instrument__status[data-tone='ok'] {
