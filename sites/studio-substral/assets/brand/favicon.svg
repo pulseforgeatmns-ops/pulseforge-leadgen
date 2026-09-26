@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Studio Substral">
+  <!-- Six layers, stacked. The lowest is design, carried in the accent: the
+       selected layer, and the one decided last. Not a decorative logo  the
+       mark is the same structure the site is about. -->
+  <rect width="32" height="32" fill="#11110F"/>
+  <g fill="#F0EDE5">
+    <rect x="6" y="5"    width="20" height="2.6" opacity="0.42"/>
+    <rect x="6" y="9.4"  width="20" height="2.6" opacity="0.54"/>
+    <rect x="6" y="13.8" width="20" height="2.6" opacity="0.66"/>
+    <rect x="6" y="18.2" width="20" height="2.6" opacity="0.78"/>
+    <rect x="6" y="22.6" width="20" height="2.6" opacity="0.9"/>
+  </g>
+  <rect x="6" y="27" width="20" height="2.6" fill="#7FA890"/>
+</svg>

@@ -1,0 +1,915 @@
+'use strict';
+
+/**
+ * Studio Substral — Design & Experience Doctrine v1 conformance.
+ *
+ * The doctrine is the creative source of truth, and several of its rules are
+ * mechanically checkable: the layer ordering, the evidence taxonomy, the
+ * forbidden copy and visual patterns, the accessibility floor, and the
+ * performance budget the site publishes about itself in its own colophon.
+ *
+ * These are the checks that should fail loudly if a later edit quietly
+ * converts the site into "a premium dark website" (doctrine §26).
+ */
+
+const { describe, it } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { gzipSync } = require('node:zlib');
+
+const {
+  PROHIBITED_CLAIM_PATTERNS,
+  EVIDENCE_CLASS,
+  DIAGNOSIS_CLASS,
+} = require('../packages/capabilities/websiteOpportunityIntelligence/types');
+
+const SITE = path.join(__dirname, '..', 'sites', 'studio-substral');
+const read = (...parts) => fs.readFileSync(path.join(SITE, ...parts), 'utf8');
+
+const html = read('index.html');
+const css = read('assets', 'css', 'substral.css');
+const orchestration = read('assets', 'js', 'substral.js');
+const assessmentJs = read('assets', 'js', 'assessment.js');
+const dimensionalSrc = read('src', 'dimensional.js');
+
+/** Text content of the page with tags and entities stripped. */
+const copy = html
+  .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&[a-z]+;/gi, ' ')
+  .replace(/\s+/g, ' ');
+
+const head = html.slice(html.indexOf('<head'), html.indexOf('</head>'));
+
+/* -------------------------------------------------------------------------- */
+
+describe('Studio Substral — brand and narrative (doctrine §2, §3, §14)', () => {
+  it('leads with the core statement, not a marketing summary', () => {
+    assert.match(copy, /Look beneath\s*the surface\./i);
+    assert.match(copy, /Your website is working\./i);
+    assert.match(copy, /But is it working for you\?/i);
+  });
+
+  it('carries the core philosophy and the closing principle verbatim', () => {
+    assert.match(copy, /We measure what exists before deciding what should change\./i);
+    assert.match(
+      copy,
+      /What.{0,3}s underneath\s*determines what\s*happens above it\./i
+    );
+  });
+
+  it('uses SUBSTRAL as the wordmark with STUDIO as secondary metadata', () => {
+    assert.match(html, /class="wordmark__name">Substral</);
+    assert.match(html, /class="wordmark__meta">Studio \/ Manchester, NH</);
+  });
+
+  it('presents the primary CTA as an assessment', () => {
+    assert.match(copy, /Start with an assessment/);
+    assert.match(copy, /See what we see\./i);
+  });
+
+  it('runs all six acts in order', () => {
+    const acts = ['Act II', 'Act III', 'Act IV', 'Act V', 'Act VI'];
+    let cursor = html.indexOf('id="surface"');
+    assert.ok(cursor > -1, 'Act I (surface) is missing');
+    for (const act of acts) {
+      const next = html.indexOf(act, cursor);
+      assert.ok(next > cursor, `${act} is missing or out of sequence`);
+      cursor = next;
+    }
+  });
+
+  it('moves dark, to mineral, and back to dark', () => {
+    const scopes = [...html.matchAll(/class="act ([a-z]+) (env-dark|env-mineral)/g)].map(
+      (m) => m[2]
+    );
+    assert.deepEqual(scopes, [
+      'env-dark', // I surface
+      'env-dark', // II decomposition
+      'env-mineral', // III diagnosis
+      'env-mineral', // IV assessment
+      'env-mineral', // V work
+      'env-dark', // VI reconstruction
+    ]);
+  });
+});
+
+describe('The six layers (doctrine §12)', () => {
+  const EXPECTED = [
+    'Performance',
+    'Accessibility',
+    'Conversion',
+    'Search',
+    'Design',
+  ];
+
+  it('decomposes into exactly six layers', () => {
+    const layers = [...html.matchAll(/data-layer="(\d)"/g)].map((m) => Number(m[1]));
+    assert.deepEqual(layers, [0, 1, 2, 3, 4, 5]);
+  });
+
+  it('orders them Performance, Accessibility, Conversion, Search, Trust, Design', () => {
+    const names = [...html.matchAll(/class="layer__name">([^<]+)</g)].map((m) => m[1]);
+    assert.deepEqual(names, [
+      'Performance',
+      'Accessibility',
+      'Conversion',
+      'Search',
+      'Trust',
+      'Design',
+    ]);
+  });
+
+  it('keeps DESIGN last and says why the order is not aesthetic', () => {
+    assert.match(html, /id="layer-design"[\s\S]*?class="layer__name">Design</);
+    const designIndex = html.indexOf('id="layer-design"');
+    for (const earlier of EXPECTED.slice(0, 4)) {
+      assert.ok(
+        html.indexOf(`>${earlier}<`) < designIndex,
+        `${earlier} must precede Design`
+      );
+    }
+    assert.match(copy, /Design is last\./);
+    assert.match(copy, /The order is not stylistic/);
+  });
+
+  it('labels the reconstruction rows by how each layer is known', () => {
+    /* These read as a status column, so they must not assert a state that is
+       not true yet — every row claiming "Aligned" before anything has aligned
+       looked like leftover debug text. They carry the evidence class instead,
+       which is information and matches the Act II manifests. */
+    const states = [...html.matchAll(/class="converge__state">([^<]+)</g)].map((m) => m[1]);
+    assert.equal(states.length, 6);
+    const vocabulary = new Set(['Measured', 'Observed', 'Inferred', 'Decided']);
+    for (const state of states) {
+      assert.ok(vocabulary.has(state), `unexpected status word: ${state}`);
+    }
+    assert.equal(states.at(-1), 'Decided', 'design is decided, not measured');
+  });
+
+  it('reuses the same six names in the reconstruction act', () => {
+    const converge = html.slice(html.indexOf('data-converge'));
+    for (const name of ['Performance', 'Accessibility', 'Conversion', 'Search', 'Trust', 'Design']) {
+      assert.match(converge, new RegExp(`<span>${name}</span>`));
+    }
+  });
+});
+
+describe('Assessment integrity (doctrine §16)', () => {
+  it('states all four evidence classes', () => {
+    for (const cls of Object.keys(EVIDENCE_CLASS)) {
+      const label = cls[0] + cls.slice(1).toLowerCase();
+      assert.match(
+        html,
+        new RegExp(`class="taxonomy__class">${label}<`),
+        `evidence class ${cls} is not declared on the page`
+      );
+    }
+  });
+
+  it('separates the four report sections', () => {
+    const labels = [...html.matchAll(/class="report__label">([^<]+)</g)].map((m) =>
+      m[1].replace(/&rsquo;/g, "'")
+    );
+    assert.deepEqual(labels, [
+      'What we measured',
+      'What we observed',
+      'What it may mean',
+      "What we'd investigate next",
+    ]);
+  });
+
+  it('never presents a score', () => {
+    assert.doesNotMatch(copy, /\b\d{1,3}\s*\/\s*100\b/);
+    assert.doesNotMatch(copy, /\byour (website|site) score\b/i);
+    assert.doesNotMatch(copy, /\bgrade\b\s*[:=]/i);
+    // And it says out loud that it will not produce one.
+    assert.match(copy, /A score out of one hundred/i);
+  });
+
+  it('contains none of the claims the assessment engine itself prohibits', () => {
+    for (const pattern of PROHIBITED_CLAIM_PATTERNS) {
+      assert.doesNotMatch(
+        copy,
+        pattern,
+        `page copy trips the engine's prohibited-claim guard: ${pattern}`
+      );
+    }
+  });
+
+  it('refuses the specific manufactured-urgency claims by name', () => {
+    assert.match(copy, /revenue you are losing, when we do not have your revenue data/i);
+    assert.match(copy, /legal compliance verdict derived from automated accessibility checks/i);
+    assert.match(copy, /guarantee of search ranking or conversion improvement/i);
+    assert.match(copy, /Urgency the evidence does not support/i);
+  });
+
+  it('uses no fabricated metrics or counters anywhere', () => {
+    assert.doesNotMatch(copy, /\b\d+% (increase|more|faster|lift|growth|improvement)\b/i);
+    assert.doesNotMatch(copy, /\b\d+x (more|faster|better)\b/i);
+    assert.doesNotMatch(copy, /\b(happy clients|projects delivered|years of experience)\b/i);
+  });
+});
+
+describe('Discover → Diagnose → Advise (doctrine §15)', () => {
+  it('names the three movements in order', () => {
+    const steps = [...html.matchAll(/class="mono">(Discover|Diagnose|Advise)</g)].map(
+      (m) => m[1]
+    );
+    assert.deepEqual(steps, ['Discover', 'Diagnose', 'Advise']);
+  });
+
+  it('exposes the same four diagnosis classes the engine emits', () => {
+    const shown = [...html.matchAll(/class="conclusion__class">([^<]+)</g)].map((m) =>
+      m[1].toUpperCase().replace(/\s+/g, '_')
+    );
+    assert.deepEqual(shown.sort(), Object.keys(DIAGNOSIS_CLASS).sort());
+  });
+
+  it('is willing to conclude that no redesign is required', () => {
+    assert.match(copy, /No redesign required.{0,2} is a conclusion we are willing to reach/i);
+  });
+});
+
+describe('Copy doctrine (doctrine §8, §23)', () => {
+  const BANNED = [
+    /passionate about/i,
+    /cutting[- ]edge/i,
+    /innovative solutions?/i,
+    /elevate your brand/i,
+    /digital transformation/i,
+    /unlock your (potential|growth)/i,
+    /best[- ]in[- ]class/i,
+    /game[- ]chang(er|ing)/i,
+    /seamless(ly)?/i,
+    /synerg/i,
+    /world[- ]class/i,
+    /take your .* to the next level/i,
+    /we craft/i,
+    /bespoke digital/i,
+    /holistic approach/i,
+  ];
+
+  it('avoids agency cliché and hype', () => {
+    for (const pattern of BANNED) {
+      assert.doesNotMatch(copy, pattern, `banned marketing phrase present: ${pattern}`);
+    }
+  });
+
+  it('keeps the two hero statements short', () => {
+    const hero = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/)[1];
+    const words = hero.replace(/<[^>]+>/g, ' ').trim().split(/\s+/);
+    assert.ok(words.length <= 6, `hero headline is ${words.length} words`);
+  });
+
+  it('does not lean on rhetorical questions outside the layer questions', () => {
+    // The six layer questions are the intended use. Anything beyond a couple
+    // more is the "excessive rhetorical questions" the doctrine warns about.
+    const questions = copy.match(/\?/g) || [];
+    assert.ok(questions.length <= 8, `${questions.length} question marks in page copy`);
+  });
+});
+
+describe('Forbidden visual patterns (doctrine §10)', () => {
+  it('ships no neon, mesh or blob gradient decoration', () => {
+    assert.doesNotMatch(css, /conic-gradient/);
+    assert.doesNotMatch(css, /filter:\s*blur\(\s*[6-9]\d|filter:\s*blur\(\s*\d{3}/);
+    assert.doesNotMatch(css, /#0ff|#f0f|#00ffff|#ff00ff/i);
+
+    /* The layer drawings use radial gradients as hard-edged rings and nodes —
+       a seal, a set of conversion nodes — which is the opposite of a glowing
+       blob. What the doctrine forbids is the soft coloured wash, so only those
+       are counted: everything outside the layer art and the substrate. */
+    const decoration = css
+      .replace(/\.plate\[data-art='[a-z]+'\][^{]*\{[^}]*\}/g, '')
+      .replace(/\.plinth__face\s*\{[^}]*\}/g, '')
+      // The turn is a cut section of the substrate: the same stone mottling.
+      .replace(/\.turn(--back)?\s*\{[^}]*\}/g, '');
+    const washes = decoration.match(/radial-gradient/g) || [];
+    assert.ok(washes.length <= 2, `${washes.length} decorative radial washes`);
+
+    // And no radial anywhere may be a saturated glow.
+    for (const [, body] of css.matchAll(/radial-gradient\(([^;]*?)\)\s*[,;]/g)) {
+      assert.doesNotMatch(body, /rgba?\(\s*(?:\d+\s*,\s*)?(?:2[0-5]\d|1[89]\d)\s*,\s*[0-4]\d?\s*,/);
+    }
+  });
+
+  it('does not use glassmorphism as a general language', () => {
+    const blurs = css.match(/backdrop-filter/g) || [];
+    assert.ok(blurs.length <= 1, `${blurs.length} backdrop-filter declarations`);
+  });
+
+  it('does not use rounded rectangles as the default object language', () => {
+    const radii = css.match(/border-radius/g) || [];
+    assert.equal(radii.length, 0, 'border-radius is not part of this design language');
+  });
+
+  it('avoids drop shadow as decoration', () => {
+    /* What the doctrine forbids is the drop shadow used to lift things off the
+       page. Inset shadows are the opposite: they are the material highlight
+       along a machined edge, and the specimen is built out of them. */
+    const drops = [...css.matchAll(/box-shadow:\s*([^;]+);/g)]
+      .map((m) => m[1])
+      // Colour functions contain commas, so flatten them before splitting the
+      // shadow list on its own separators.
+      .map((value) => value.replace(/rgba?\([^)]*\)/g, 'C'))
+      .filter((value) => value.split(',').some((part) => !part.includes('inset')));
+    assert.ok(drops.length <= 2, `${drops.length} outer drop shadows: ${drops}`);
+    assert.doesNotMatch(css, /text-shadow/);
+  });
+
+  it('has no carousel, counter, marquee or parallax-background machinery', () => {
+    assert.doesNotMatch(html, /carousel|testimonial|slider/i);
+    assert.doesNotMatch(orchestration, /carousel|marquee|odometer|countUp/i);
+    assert.doesNotMatch(css, /background-attachment:\s*fixed/);
+  });
+
+  it('does not hijack scrolling or replace the cursor', () => {
+    assert.doesNotMatch(orchestration, /preventDefault\s*\(\s*\)[\s\S]{0,80}(wheel|scroll)/);
+    assert.doesNotMatch(orchestration, /addEventListener\(\s*['"]wheel/);
+    assert.doesNotMatch(orchestration, /scrollTo|scrollIntoView|scroll-snap/);
+    assert.doesNotMatch(css, /cursor:\s*(none|url\()/);
+  });
+
+  it('presents work as editorial stories rather than a portfolio grid', () => {
+    assert.match(html, /class="study__movements"/);
+    const movements = [...html.matchAll(/class="study__movement">\s*<h3>([^<]+)</g)].map(
+      (m) => m[1]
+    );
+    assert.deepEqual(movements, [
+      'Context',
+      'Diagnosis',
+      'Decision',
+      'Experience',
+      'Outcome',
+    ]);
+  });
+
+  it('shows real work rather than a device mockup', () => {
+    assert.doesNotMatch(html, /laptop|macbook|iphone|mockup|device-frame/i);
+    assert.match(html, /assets\/work\/anchor-cleaning-home\.webp/);
+  });
+});
+
+describe('Palette (doctrine §6)', () => {
+  const tokens = {};
+  for (const [, name, value] of css.matchAll(/--([a-z-]+):\s*(#[0-9a-f]{6})/gi)) {
+    tokens[name] = value;
+  }
+
+  const luminance = (hex) => {
+    const channels = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+    const [r, g, b] = channels.map((c) =>
+      c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+    );
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m);
+    return (x + 0.05) / (y + 0.05);
+  };
+
+  it('uses a warm charcoal and a warm mineral, never pure black or white', () => {
+    assert.equal(tokens['substral-black'], '#11110f');
+    assert.equal(tokens.mineral, '#f0ede5');
+    assert.notEqual(tokens['substral-black'], '#000000');
+    assert.notEqual(tokens.mineral, '#ffffff');
+  });
+
+  it('declares one accent family, in oxidized-copper territory', () => {
+    assert.equal(tokens.patina, '#7fa890');
+    assert.equal(tokens['patina-deep'], '#3d6b57');
+    // Both tints share the same green hue: one family, not two brand colours.
+    const hue = (hex) => {
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+      return Math.round(
+        (Math.atan2(Math.sqrt(3) * (g - b), 2 * r - g - b) * 180) / Math.PI
+      );
+    };
+    assert.ok(
+      Math.abs(hue(tokens.patina) - hue(tokens['patina-deep'])) < 18,
+      'accent tints must belong to one hue family'
+    );
+  });
+
+  it('clears WCAG AA for small text on every declared text pairing', () => {
+    const pairings = [
+      ['mineral', 'substral-black'],
+      ['patina', 'substral-black'],
+      ['patina', 'graphite'],
+      ['substral-black', 'mineral'],
+      ['patina-deep', 'mineral'],
+    ];
+    for (const [fg, bg] of pairings) {
+      const ratio = contrast(tokens[fg], tokens[bg]);
+      assert.ok(ratio >= 4.5, `${fg} on ${bg} is ${ratio.toFixed(2)}:1`);
+    }
+  });
+
+  it('keeps the rejection tone legible in both environments', () => {
+    // The instrument appears in the mineral act, so an error colour tuned only
+    // for the dark environment is unreadable exactly where it is used.
+    const scope = (name) => css.match(new RegExp(`\\.env-${name}\\s*\\{[\\s\\S]*?\\}`))[0];
+    const pairs = [
+      [scope('dark'), tokens['substral-black']],
+      [scope('mineral'), tokens.mineral],
+    ];
+    for (const [block, background] of pairs) {
+      const tone = block.match(/--tone-error:\s*(#[0-9a-f]{6})/i)?.[1];
+      assert.ok(tone, 'each environment must define --tone-error');
+      const ratio = contrast(tone, background);
+      assert.ok(ratio >= 4.5, `${tone} on ${background} is ${ratio.toFixed(2)}:1`);
+    }
+    assert.match(css, /\[data-tone='error'\]\s*\{[^}]*var\(--tone-error\)/);
+  });
+
+  it('keeps the structural greys legible in both environments', () => {
+    const dark = css.match(/\.env-dark\s*\{[\s\S]*?\}/)[0];
+    const mineral = css.match(/\.env-mineral\s*\{[\s\S]*?\}/)[0];
+    const structuralDark = dark.match(/--ink-structural:\s*(#[0-9a-f]{6})/i)[1];
+    const structuralMineral = mineral.match(/--ink-structural:\s*(#[0-9a-f]{6})/i)[1];
+    assert.ok(contrast(structuralDark, tokens['substral-black']) >= 4.5);
+    assert.ok(contrast(structuralMineral, tokens.mineral) >= 4.5);
+  });
+
+  it('does not paint large areas in the accent', () => {
+    // The accent marks measurement and state. Anywhere it is used as a fill,
+    // the rule must also constrain the element to a small, deliberate size.
+    for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      if (!/background(-color)?:\s*var\(--(accent|patina)/.test(body)) continue;
+      const sizes = [...body.matchAll(/(?:width|height):\s*([\d.]+)(rem|px)/g)];
+      assert.ok(
+        sizes.length > 0,
+        `accent fill with no size constraint: ${selector.trim()}`
+      );
+      for (const [, value, unit] of sizes) {
+        const px = unit === 'rem' ? Number(value) * 16 : Number(value);
+        assert.ok(
+          px <= 16,
+          `accent fill on ${selector.trim()} is ${px}px — too large for an accent`
+        );
+      }
+    }
+  });
+});
+
+describe('Typography (doctrine §7)', () => {
+  it('uses exactly two voices: an editorial grotesk and a technical mono', () => {
+    const families = [...css.matchAll(/@font-face[\s\S]*?font-family:\s*'([^']+)'/g)].map(
+      (m) => m[1]
+    );
+    assert.deepEqual([...new Set(families)].sort(), [
+      'Archivo Substral',
+      'Plex Mono Substral',
+    ]);
+  });
+
+  it('sets hero type at architectural scale', () => {
+    const display = css.match(/--t-display:\s*([^;]+);/)[1];
+    assert.match(display, /clamp\(/);
+    assert.match(display, /1[01](\.\d+)?rem/, 'hero should reach a very large size');
+  });
+
+  it('reserves the mono voice for evidence and metadata, not prose', () => {
+    // Prose blocks must not be set in mono.
+    assert.doesNotMatch(css, /\.prose\s*\{[^}]*var\(--mono\)/);
+    assert.match(css, /\.manifest dd\s*\{[^}]*var\(--mono\)/);
+  });
+});
+
+describe('Progressive enhancement (doctrine §18)', () => {
+  it('renders the dimensional composition without WebGL', () => {
+    // Act I whole, Act II separating, Act VI reassembling.
+    const modes = [...html.matchAll(/data-stage="([a-z]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(modes, ['surface', 'decomposition', 'reconstruction']);
+    const stages = html.match(/class="strata"/g) || [];
+    assert.equal(stages.length, 3, 'every stage needs a no-WebGL composition');
+    const plates = html.match(/class="plate"/g) || [];
+    assert.equal(plates.length, 18, 'six plates per stage');
+    const plinths = html.match(/class="plinth"/g) || [];
+    assert.equal(plinths.length, 3, 'every stage stands on the mineral substrate');
+    assert.match(css, /\.strata__stack\s*\{[\s\S]*?transform-style:\s*preserve-3d/);
+  });
+
+  it('stacks the six systems over the substrate, design nearest the surface', () => {
+    // The order is the doctrine's claim stated physically: performance is the
+    // deepest layer and design is the visible surface, so what is underneath
+    // really is underneath.
+    const stack = [...html.matchAll(/data-art="([a-z]+)"/g)].map((m) => m[1]).slice(0, 6);
+    assert.deepEqual(stack, [
+      'design',
+      'trust',
+      'search',
+      'conversion',
+      'accessibility',
+      'performance',
+    ]);
+    assert.deepEqual(
+      [...dimensionalSrc.matchAll(/key: '([a-z]+)'/g)].map((m) => m[1]),
+      stack,
+      'the WebGL stack and the CSS stack must agree'
+    );
+  });
+
+  it('gives every layer its own material and its own drawing', () => {
+    /* Six near-identical glass panes at different spacings communicate the idea
+       and none of the material. Each layer must differ across the non-colour
+       axes: thickness, roughness, opacity, reflectivity and edge treatment. */
+    const blocks = dimensionalSrc.split(/\n  \{\n/).slice(1, 7);
+    const axes = {
+      thickness: new Set(),
+      roughness: new Set(),
+      opacity: new Set(),
+      envMapIntensity: new Set(),
+      arris: new Set(),
+      art: new Set(),
+    };
+    for (const block of blocks) {
+      const body = block.slice(0, block.indexOf('\n  },'));
+      for (const axis of Object.keys(axes)) {
+        if (axis === 'art') {
+          axes.art.add(body.match(/art: '([a-z]+)'/)?.[1]);
+          continue;
+        }
+        const value = body.match(new RegExp(`\\b${axis}: ([\\d.]+)`))?.[1];
+        assert.ok(value, `a layer is missing ${axis}`);
+        axes[axis].add(value);
+      }
+    }
+    assert.equal(axes.art.size, 6, 'each layer needs its own drawing');
+    for (const axis of ['thickness', 'roughness', 'opacity', 'envMapIntensity', 'arris']) {
+      assert.equal(axes[axis].size, 6, `all six layers must differ in ${axis}`);
+    }
+
+    // The thickness range has to be wide enough to see, not a rounding.
+    const thicknesses = [...axes.thickness].map(Number).sort((a, b) => a - b);
+    assert.ok(
+      thicknesses.at(-1) / thicknesses[0] >= 2,
+      `thickest layer is only ${(thicknesses.at(-1) / thicknesses[0]).toFixed(2)}x the thinnest`
+    );
+
+    // And each layer draws something different in the CSS baseline too.
+    for (const key of axes.art) {
+      assert.match(
+        css,
+        new RegExp(`\\.plate\\[data-art='${key}'\\] \\.plate__face::before`),
+        `${key} has no drawing in the CSS composition`
+      );
+    }
+  });
+
+  it('separates the layers by material rather than by hue', () => {
+    /* The tint values are a value ladder, not a colour wheel: graphite darkest,
+       frosted polymer lightest. They must survive grayscale, so the only hue
+       departure allowed is the single warmth nudge on Trust. */
+    const tints = [...dimensionalSrc.matchAll(/\n    tint: ([\d.]+),/g)].map((m) =>
+      Number(m[1])
+    );
+    assert.equal(tints.length, 6);
+    assert.equal(new Set(tints).size, 6, 'every layer needs its own value');
+    assert.ok(
+      Math.max(...tints) / Math.min(...tints) >= 8,
+      'the value ladder is too compressed to read in grayscale'
+    );
+    const warmths = dimensionalSrc.match(/warmth:/g) || [];
+    assert.ok(warmths.length <= 1, `${warmths.length} layers depart from the palette`);
+  });
+
+  it('models each named material, not six variants of one', () => {
+    // Frosted polymer needs sheen and high roughness; graphite needs brushing;
+    // etched glass needs its markings to drive roughness rather than colour.
+    assert.match(dimensionalSrc, /key: 'accessibility'[\s\S]*?sheen: 0\.\d/);
+    assert.match(dimensionalSrc, /key: 'accessibility'[\s\S]*?roughness: 0\.6/);
+    assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?anisotropy: 0\.\d/);
+    assert.match(dimensionalSrc, /key: 'search'[\s\S]*?etched: true/);
+    assert.match(dimensionalSrc, /capMaterial\.roughnessMap = artTexture/);
+    assert.match(dimensionalSrc, /capMaterial\.anisotropy =/);
+    assert.match(dimensionalSrc, /capMaterial\.sheen =/);
+    // Performance is the thickest and least transparent: graphite, not glass.
+    assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?thickness: 0\.10/);
+  });
+
+  it('carries a mineral substrate beneath the digital layers', () => {
+    assert.match(dimensionalSrc, /FOUNDATION_T/);
+    assert.match(dimensionalSrc, /function stoneTexture/);
+    assert.match(dimensionalSrc, /roughnessMap: stone/);
+    assert.match(css, /\.plinth__face\s*\{/);
+  });
+
+  it('models the material the doctrine asked for', () => {
+    // Smoked acrylic caps, machined metal walls, environmental shadow and
+    // depth falloff — not a translucent rectangle (doctrine §11).
+    assert.match(dimensionalSrc, /ior: 1\.49/);
+    assert.match(dimensionalSrc, /clearcoat:/);
+    assert.match(dimensionalSrc, /wall: \{ colour:/);
+    assert.match(dimensionalSrc, /\[capMaterial, wallMaterial\]/);
+    assert.match(dimensionalSrc, /contactShadow/);
+    assert.match(dimensionalSrc, /new Fog\(/);
+    assert.match(dimensionalSrc, /function arrisGeometry/);
+  });
+
+  it('makes the layer under discussion the subject through light, not paint', () => {
+    /* The brief is explicit: do not do this by increasing opacity or changing
+       colour. So a raking light crosses the subject, its reflectivity rises,
+       the camera reframes — and the emissive glow that used to tint the whole
+       plate is gone. */
+    assert.match(dimensionalSrc, /const graze = new DirectionalLight/);
+    assert.match(dimensionalSrc, /graze\.intensity = state\.focus/);
+    assert.match(dimensionalSrc, /grazeTarget\.position\.set/);
+    assert.match(dimensionalSrc, /examine\.intensity = state\.focus/);
+    assert.match(dimensionalSrc, /capMaterial\.envMapIntensity = lerp\(/);
+    assert.match(dimensionalSrc, /target\.lookAt = examining/);
+    assert.match(dimensionalSrc, /examinePitch/);
+
+    // The active layer must not be made more opaque than it already is.
+    const opacityLine = dimensionalSrc.match(/plate\.capMaterial\.opacity = [^;]+;/)[0];
+    assert.doesNotMatch(opacityLine, /\+ 0\.\d/, 'emphasis must not add opacity');
+
+    // And it must not be recoloured: the accent survives only as an edge trace.
+    assert.match(dimensionalSrc, /emissiveIntensity: 0,/);
+    assert.doesNotMatch(dimensionalSrc, /emissiveIntensity = emphasis/);
+    const patinaUse = dimensionalSrc.match(/lerp\(patina, emphasis \* ([\d.]+)\)/);
+    assert.ok(patinaUse && Number(patinaUse[1]) <= 0.35, 'accent tint is doing too much work');
+  });
+
+  it('keeps every narrative label in the document, not in the canvas', () => {
+    for (const name of ['Performance', 'Accessibility', 'Conversion', 'Search', 'Trust', 'Design']) {
+      assert.ok(html.includes(`>${name}<`), `${name} must exist as document text`);
+    }
+  });
+
+  it('loads three.js only on demand', () => {
+    assert.doesNotMatch(html, /three(\.min)?\.js/);
+    assert.doesNotMatch(html, /dimensional\.js/);
+    assert.match(orchestration, /import\(\s*['"]\.\/dimensional\.js['"]\s*\)/);
+  });
+
+  it('gates the object on capability, motion preference and viewport', () => {
+    assert.match(orchestration, /reduceMotion\.matches/);
+    assert.match(orchestration, /getContext\('webgl2'\)/);
+    assert.match(orchestration, /innerWidth\s*<\s*600/);
+    assert.match(orchestration, /saveData/);
+  });
+
+  it('excludes the decorative canvas from the accessibility tree', () => {
+    const canvases = [...html.matchAll(/<canvas[^>]*>/g)].map((m) => m[0]);
+    assert.equal(canvases.length, 3);
+    for (const canvas of canvases) {
+      assert.match(canvas, /aria-hidden="true"/);
+    }
+    assert.match(html, /<div class="strata" aria-hidden="true">/);
+  });
+});
+
+describe('Reduced motion (doctrine §19)', () => {
+  it('declares a reduced-motion treatment in the stylesheet', () => {
+    assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+  });
+
+  it('presents the object already decomposed rather than animating depth', () => {
+    const blocks = css
+      .split('@media (prefers-reduced-motion: reduce)')
+      .slice(1)
+      .join('\n');
+    assert.match(blocks, /\.plate\s*\{[^}]*translate3d/);
+    assert.match(blocks, /\.stage__canvas\s*\{[^}]*display:\s*none/);
+    assert.match(blocks, /scroll-behavior:\s*auto/);
+  });
+
+  it('checks the preference at runtime and reacts to changes', () => {
+    assert.match(orchestration, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
+    assert.match(orchestration, /reduceMotion\.addEventListener\('change'/);
+  });
+
+  it('still reveals content when motion is reduced', () => {
+    assert.match(orchestration, /if \(reduceMotion\.matches\)[\s\S]{0,140}revealed = 'true'/);
+  });
+});
+
+describe('Accessibility doctrine (doctrine §21)', () => {
+  it('declares a language and a skip link', () => {
+    assert.match(html, /<html lang="en"/);
+    assert.match(html, /class="skip" href="#surface"/);
+  });
+
+  it('has exactly one h1', () => {
+    assert.equal((html.match(/<h1[\s>]/g) || []).length, 1);
+  });
+
+  it('labels every form control', () => {
+    const ids = [...html.matchAll(/<input[^>]*\sid="([^"]+)"/g)].map((m) => m[1]);
+    assert.ok(ids.length >= 4);
+    for (const id of ids) {
+      assert.match(html, new RegExp(`<label[^>]*for="${id}"`), `no label for #${id}`);
+    }
+  });
+
+  it('gives every image alternative text', () => {
+    for (const tag of html.match(/<img[^>]*>/g) || []) {
+      assert.match(tag, /\salt="[^"]+"/, `image without alt text: ${tag}`);
+    }
+  });
+
+  it('keeps focus visible and only suppresses the outline for pointer focus', () => {
+    assert.match(css, /:focus-visible\s*\{[^}]*outline:\s*2px solid/);
+    for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      if (!/outline:\s*(none|0)\b/.test(body)) continue;
+      assert.match(
+        selector,
+        /:not\(:focus-visible\)/,
+        `${selector.trim()} removes the focus outline for keyboard users`
+      );
+    }
+  });
+
+  it('announces assessment results to assistive technology', () => {
+    assert.match(html, /data-assessment-status[^>]*role="status"/);
+    assert.match(html, /aria-live="polite"/);
+  });
+
+  it('marks up the narrative with landmarks and labelled sections', () => {
+    assert.match(html, /<main id="main">/);
+    assert.match(html, /<footer/);
+    const sections = html.match(/<section class="act[^"]*"[^>]*>/g) || [];
+    assert.equal(sections.length, 6);
+    for (const section of sections) {
+      assert.match(section, /aria-labelledby="/, `unlabelled section: ${section}`);
+    }
+  });
+});
+
+describe('Performance doctrine (doctrine §20)', () => {
+  it('has no render-blocking script in the head', () => {
+    assert.doesNotMatch(head, /<script[^>]+src=/);
+  });
+
+  it('self-hosts the fonts and preloads the critical path', () => {
+    assert.doesNotMatch(html, /fonts\.googleapis\.com|fonts\.gstatic\.com/);
+    assert.match(head, /rel="preload"[^>]*archivo-var-latin\.woff2[^>]*as="font"/);
+    assert.match(head, /rel="preload"[^>]*substral\.css[^>]*as="style"/);
+    assert.match(css, /font-display:\s*swap/);
+  });
+
+  it('loads no third-party origin on the critical path', () => {
+    const origins = [...head.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)]
+      .map((m) => m[1].toLowerCase())
+      .filter(
+        (host) =>
+          !host.endsWith('studiosubstral.com') &&
+          host !== 'schema.org' &&
+          host !== 'www.w3.org'
+      );
+    assert.deepEqual(origins, [], `third-party origins in head: ${origins}`);
+  });
+
+  it('keeps the eager script inside the budget the colophon publishes', () => {
+    const budget = 10 * 1024;
+    const gz = gzipSync(orchestration + assessmentJs, { level: 9 }).length;
+    assert.ok(gz <= budget, `eager JS is ${(gz / 1024).toFixed(1)} KB gzip`);
+    assert.match(copy, /Under 10 KB compressed/);
+  });
+
+  it('keeps the deferred dimensional bundle inside its budget', () => {
+    const bundle = fs.readFileSync(
+      path.join(SITE, 'assets', 'js', 'dimensional.js')
+    );
+    const gz = gzipSync(bundle, { level: 9 }).length;
+    assert.ok(gz <= 170 * 1024, `dimensional bundle is ${(gz / 1024).toFixed(1)} KB gzip`);
+  });
+
+  it('reserves space for the only raster image, so it cannot shift layout', () => {
+    const img = html.match(/<img[^>]*anchor-cleaning-home[^>]*>/)[0];
+    assert.match(img, /width="\d+"/);
+    assert.match(img, /height="\d+"/);
+    assert.match(img, /loading="lazy"/);
+  });
+
+  it('keeps every image the page actually loads under 150 KB', () => {
+    for (const [, src] of html.matchAll(/<img[^>]*\ssrc="([^"]+)"/g)) {
+      const { size } = fs.statSync(path.join(SITE, src));
+      assert.ok(
+        size <= 150 * 1024,
+        `${src} is ${(size / 1024).toFixed(0)} KB — re-encode it`
+      );
+    }
+  });
+
+  it('keeps the whole publish set small enough to justify the critique', () => {
+    const weigh = (dir) =>
+      fs.readdirSync(dir, { withFileTypes: true }).reduce((total, entry) => {
+        const full = path.join(dir, entry.name);
+        return total + (entry.isDirectory() ? weigh(full) : fs.statSync(full).size);
+      }, 0);
+
+    const assets = weigh(path.join(SITE, 'assets'));
+    const page = fs.statSync(path.join(SITE, 'index.html')).size;
+    const total = (assets + page) / 1024;
+    assert.ok(total <= 1200, `publish set is ${total.toFixed(0)} KB`);
+  });
+
+  it('stops rendering when nothing is moving', () => {
+    assert.match(orchestration, /if \(this\.visible && moving\) this\.request\(\)/);
+    assert.match(dimensionalSrc, /function isMoving\(\)/);
+  });
+});
+
+describe('Motion physics (doctrine §13)', () => {
+  it('interpolates toward targets instead of playing keyframes', () => {
+    assert.match(orchestration, /const approach = \(current, target, factor\)/);
+    assert.doesNotMatch(css, /@keyframes/);
+  });
+
+  it('uses no elastic, bouncing or overshooting easing', () => {
+    assert.doesNotMatch(css, /cubic-bezier\(\s*[^)]*,\s*-\d/);
+    assert.doesNotMatch(css, /elastic|bounce|back(In|Out)/i);
+  });
+
+  it('keeps pointer response below obvious cause and effect', () => {
+    const yaw = dimensionalSrc.match(/target\.yaw = pointer\.x \* ([\d.]+)/)[1];
+    const pitch = dimensionalSrc.match(/target\.pitch = pointer\.y \* ([\d.]+)/)[1];
+    assert.ok(Number(yaw) <= 0.08, `pointer yaw amplitude ${yaw} is too large`);
+    assert.ok(Number(pitch) <= 0.05, `pointer pitch amplitude ${pitch} is too large`);
+  });
+});
+
+describe('Responsive intent (doctrine §17)', () => {
+  it('designs the mobile treatment rather than scaling the desktop one', () => {
+    // A shallow sticky band on small screens, a full-height column on wide ones.
+    assert.match(css, /\.decomposition__stage\s*\{[\s\S]*?height:\s*calc\(28svh/);
+    assert.match(css, /@media \(min-width: 62em\)[\s\S]*?height:\s*100svh/);
+  });
+
+  it('keeps the fixed nav opaque without waiting for an observer', () => {
+    /* The bar was transparent until an IntersectionObserver marked it lifted,
+       and under render load that callback arrived late enough for display type
+       to scroll straight through it. Opacity is now unconditional; only the
+       hairline rule depends on the observer. */
+    const base = css.match(/^\.nav \{[^}]*\}/m)[0];
+    assert.match(base, /background:\s*var\(--bg\)/);
+    const lifted = css.match(/\.nav\[data-lifted='true'\]\s*\{[^}]*\}/)[0];
+    assert.doesNotMatch(lifted, /background/);
+    assert.match(lifted, /border-bottom-color/);
+  });
+
+  it('keeps the single-column sticky band above the copy it pins over', () => {
+    // On one column the stage covers the reading column. If it sits below the
+    // scrolling content, the specimen and the prose render on top of each
+    // other — which is exactly what happened before this was pinned down.
+    const band = (selector) => css.match(new RegExp(`\\${selector}\\s*\\{[^}]*\\}`))[0];
+    const scrollers = { '.decomposition__stage': '.layers', '.reconstruction__stage': '.converge' };
+    for (const [stage, scroller] of Object.entries(scrollers)) {
+      const rule = band(stage);
+      const stageZ = Number(rule.match(/z-index:\s*(\d+)/)?.[1] ?? 0);
+      const scrollerZ = Number(band(scroller).match(/z-index:\s*(\d+)/)?.[1] ?? 0);
+      assert.ok(
+        stageZ > scrollerZ,
+        `${stage} (z ${stageZ}) must stack above ${scroller} (z ${scrollerZ})`
+      );
+      assert.match(rule, /background:\s*var\(--bg\)/, `${stage} must be opaque`);
+    }
+  });
+
+  it('reserves the fixed nav height so sticky stages are not occluded', () => {
+    assert.match(css, /--nav-h:/);
+    for (const stage of ['decomposition__stage', 'reconstruction__stage']) {
+      assert.match(
+        css,
+        new RegExp(`\\.${stage}\\s*\\{[\\s\\S]*?padding-top:\\s*var\\(--nav-h\\)`),
+        `${stage} must reserve the nav height`
+      );
+    }
+  });
+
+  it('treats the CSS composition as the intended small-screen object', () => {
+    assert.match(orchestration, /the CSS composition is the intended treatment/);
+  });
+});
+
+describe('Relationship to PulseForge (doctrine §24)', () => {
+  it('does not advertise the infrastructure behind the assessment', () => {
+    assert.doesNotMatch(copy, /PulseForge/i);
+    assert.doesNotMatch(html, /Pulseforge(?![-\w]*\.up\.railway\.app)/i);
+  });
+
+  it('keeps the intake endpoint out of the visible copy', () => {
+    assert.doesNotMatch(copy, /railway\.app/i);
+    assert.match(assessmentJs, /api\/public\/website-assessment/);
+  });
+});
+
+describe('Discoverability the studio would demand of a client', () => {
+  it('ships robots.txt and a sitemap that agree with the canonical URL', () => {
+    const canonical = html.match(/<link rel="canonical" href="([^"]+)"/)[1];
+    assert.match(read('robots.txt'), /Sitemap: https:\/\/studiosubstral\.com\/sitemap\.xml/);
+    assert.match(read('sitemap.xml'), new RegExp(`<loc>${canonical}</loc>`));
+  });
+
+  it('describes itself for sharing and for structured data', () => {
+    assert.match(head, /property="og:image"/);
+    assert.match(head, /property="og:image:alt"/);
+    assert.match(head, /"@type": "ProfessionalService"/);
+    assert.ok(fs.existsSync(path.join(SITE, 'assets', 'brand', 'social-preview.png')));
+  });
+});
