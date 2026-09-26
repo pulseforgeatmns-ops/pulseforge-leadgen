@@ -282,6 +282,33 @@ measurements. Published measured figures would go stale in static HTML, and
 
 ---
 
+## The turn into the mineral act (§14 Act III)
+
+The dark-to-mineral transition is **a cut section of the substrate**, not a
+fade: the dark environment stops at a machined arris, the reader passes through
+a short band of stone, and the paper begins at another arris. The first attempt
+was a 22vh soft gradient, and reviewing the recorded scroll-through it read as a
+rendering artifact — everything else on this site is a crisp physical edge, so a
+soft wipe broke the illusion the object works so hard to build. It is the same
+stone as the foundation, which makes the transition mean something: you go down
+through the mineral to reach the paper.
+
+The acts either side no longer add their full breathing room against it. The
+turn is itself a pause, and stacking three pauses together is what had produced
+a stretch of nothing before the next content arrived.
+
+## The fixed nav is unconditionally opaque
+
+Worth recording because it is a class of bug, not a detail. The bar used to be
+transparent until an `IntersectionObserver` marked it lifted. Under the render
+load of three WebGL stages that callback arrived **seconds** late, and the
+narrative's display type scrolled straight through the bar in the meantime.
+
+Legibility must never wait on a callback. The background is now unconditional —
+over Act I it is the same colour as the environment behind it, so it still reads
+as full bleed — and only the hairline separating rule depends on the observer,
+which is decoration and safe to arrive late.
+
 ## Responsive intent (§17)
 
 Single column is a designed treatment, not a narrowed desktop.

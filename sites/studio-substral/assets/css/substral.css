@@ -1177,9 +1177,10 @@ ol {
    ACT III — DIAGNOSIS
    ========================================================================== */
 
-/* The dark-to-mineral turn, passing through the colour of the substrate: you
-   go down through the stone to reach the paper. Kept short and tightly ramped
-   so it reads as a material seam rather than a long smear of brown. */
+/* The dark-to-mineral turn is a cut section of the substrate, not a fade: the
+   dark environment stops at a machined arris, you pass through a band of stone,
+   and the paper begins at another one. Everything else on this site is a crisp
+   physical edge, and a soft gradient wipe broke that illusion. */
 
 /* The turn is itself a pause, so the acts either side of it do not also need
    their full breathing room against it — that stacked up as a stretch of
@@ -1193,15 +1194,17 @@ ol {
 }
 
 .turn {
-  height: clamp(4.5rem, 9vh, 7rem);
-  background: linear-gradient(
-    to bottom,
-    var(--substral-black) 0%,
-    #33302a 26%,
-    #5f5a50 52%,
-    #a8a396 78%,
-    var(--mineral) 100%
-  );
+  height: clamp(2.5rem, 4.5vh, 3.75rem);
+  background: radial-gradient(
+      120% 240% at 24% 12%,
+      rgba(255, 250, 238, 0.15),
+      transparent 64%
+    ),
+    radial-gradient(60% 180% at 74% 82%, rgba(17, 17, 15, 0.3), transparent 70%),
+    radial-gradient(40% 160% at 46% 32%, rgba(255, 250, 238, 0.06), transparent 72%),
+    linear-gradient(172deg, #615c53, #4b473f 56%, #3a362f);
+  box-shadow: inset 0 1px 0 rgba(255, 250, 238, 0.26),
+    inset 0 -1px 0 rgba(17, 17, 15, 0.5);
 }
 
 .diagnosis__head {
@@ -1734,15 +1737,18 @@ ol {
    ACT VI — RECONSTRUCTION
    ========================================================================== */
 
+/* The same seam, lit from the other side. */
 .turn--back {
-  background: linear-gradient(
-    to bottom,
-    var(--mineral) 0%,
-    #a8a396 22%,
-    #5f5a50 48%,
-    #33302a 74%,
-    var(--substral-black) 100%
-  );
+  background: radial-gradient(
+      120% 240% at 76% 88%,
+      rgba(255, 250, 238, 0.12),
+      transparent 64%
+    ),
+    radial-gradient(60% 180% at 26% 16%, rgba(17, 17, 15, 0.34), transparent 70%),
+    radial-gradient(40% 160% at 54% 62%, rgba(255, 250, 238, 0.05), transparent 72%),
+    linear-gradient(8deg, #5a554d, #46423b 54%, #34312b);
+  box-shadow: inset 0 1px 0 rgba(17, 17, 15, 0.45),
+    inset 0 -1px 0 rgba(255, 250, 238, 0.14);
 }
 
 .reconstruction {

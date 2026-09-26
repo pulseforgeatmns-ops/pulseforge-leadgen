@@ -284,7 +284,9 @@ describe('Forbidden visual patterns (doctrine §10)', () => {
        are counted: everything outside the layer art and the substrate. */
     const decoration = css
       .replace(/\.plate\[data-art='[a-z]+'\][^{]*\{[^}]*\}/g, '')
-      .replace(/\.plinth__face\s*\{[^}]*\}/g, '');
+      .replace(/\.plinth__face\s*\{[^}]*\}/g, '')
+      // The turn is a cut section of the substrate: the same stone mottling.
+      .replace(/\.turn(--back)?\s*\{[^}]*\}/g, '');
     const washes = decoration.match(/radial-gradient/g) || [];
     assert.ok(washes.length <= 2, `${washes.length} decorative radial washes`);
 
@@ -305,8 +307,16 @@ describe('Forbidden visual patterns (doctrine §10)', () => {
   });
 
   it('avoids drop shadow as decoration', () => {
-    const shadows = css.match(/box-shadow:/g) || [];
-    assert.ok(shadows.length <= 3, `${shadows.length} box-shadow declarations`);
+    /* What the doctrine forbids is the drop shadow used to lift things off the
+       page. Inset shadows are the opposite: they are the material highlight
+       along a machined edge, and the specimen is built out of them. */
+    const drops = [...css.matchAll(/box-shadow:\s*([^;]+);/g)]
+      .map((m) => m[1])
+      // Colour functions contain commas, so flatten them before splitting the
+      // shadow list on its own separators.
+      .map((value) => value.replace(/rgba?\([^)]*\)/g, 'C'))
+      .filter((value) => value.split(',').some((part) => !part.includes('inset')));
+    assert.ok(drops.length <= 2, `${drops.length} outer drop shadows: ${drops}`);
     assert.doesNotMatch(css, /text-shadow/);
   });
 
