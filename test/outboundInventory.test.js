@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   buildReplenishmentYield,
+  computeCleanInventoryGrowth,
   classifyOwnershipRow,
   classifyInventoryOwnership,
   OWNERSHIP_KINDS,
@@ -13,17 +14,46 @@ const {
 const { _test: { persistDiscoveredCompanies } } = require('../services/maxOutboundControlLoop');
 const { promoteRecord } = require('../scripts/promoteUnenriched');
 
+test('recovery does not inflate clean inventory growth when canonical rows were already counted', () => {
+  const growth = computeCleanInventoryGrowth(
+    [{ prospectId: '1' }, { prospectId: '2' }, { prospectId: '3' }],
+    [{ prospectId: '1' }, { prospectId: '2' }, { prospectId: '3' }],
+  );
+  assert.equal(growth.netCleanInventoryDelta, 0);
+  assert.equal(growth.newCleanInventoryAdded, 0);
+  const report = buildReplenishmentYield({
+    admission: { evaluated: 14 },
+    enrichment: { promoted: 0, recovered: 9 },
+    recovered: 9,
+    inventoryGrowth: growth,
+  });
+  assert.equal(report.recoveredExisting, 9);
+  assert.equal(report.newCleanInventoryAdded, 0);
+  assert.equal(report.cleanInventoryAdded, 0);
+  assert.equal(report.rates.cleanInventoryYield, 0);
+});
+
 test('replenishment yield rates distinguish discovery vs verification loss', () => {
   const report = buildReplenishmentYield({
     admission: { discovered: 40, evaluated: 40, fit: 8, admittedToEnrichment: 6 },
     enrichment: { emailResolved: 3, emailVerified: 2, promoted: 2, recovered: 1 },
+    inventoryGrowth: {
+      preCycleCleanInventory: 3,
+      postCycleCleanInventory: 5,
+      newCleanInventoryAdded: 2,
+      netCleanInventoryDelta: 2,
+    },
   });
-  assert.equal(report.cleanInventoryAdded, 3);
+  assert.equal(report.newPromotions, 2);
+  assert.equal(report.recoveredExisting, 1);
+  assert.equal(report.newCleanInventoryAdded, 2);
+  assert.equal(report.netCleanInventoryDelta, 2);
+  assert.equal(report.cleanInventoryAdded, 2);
   assert.equal(report.rates.fitRate, 0.2);
   assert.equal(report.rates.enrichmentAdmissionRate, 0.75);
   assert.equal(report.rates.contactResolutionRate, 0.5);
   assert.equal(report.rates.verificationRate, 0.6667);
-  assert.equal(report.rates.cleanInventoryYield, 0.075);
+  assert.equal(report.rates.cleanInventoryYield, 0.05);
 });
 
 test('ownership classifier distinguishes stale, human-owned, and clear rows', () => {

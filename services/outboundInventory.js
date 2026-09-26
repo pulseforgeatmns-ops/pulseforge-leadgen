@@ -43,10 +43,110 @@ function rate(numerator, denominator) {
   return Number((n / d).toFixed(4));
 }
 
+const NET_CLEAN_LOSS_BUCKETS = Object.freeze([
+  'unclassifiable_vertical',
+  'insufficient_business_fit',
+  'owned_elsewhere',
+  'same_company_different_contact',
+  'enrichment_unresolved',
+  'email_not_verified',
+  'invalid_outreach_email',
+]);
+
+const LOSS_BUCKET_GUIDANCE = Object.freeze({
+  unclassifiable_vertical: {
+    exclusionCorrect: true,
+    recoverableWithoutWeakeningSafety: false,
+    producerFix: 'Improve vertical classification signals in discovery provenance and mission segment mapping.',
+  },
+  insufficient_business_fit: {
+    exclusionCorrect: true,
+    recoverableWithoutWeakeningSafety: false,
+    producerFix: 'Tighten Places/query seeds to mission ICP; reject thin or contradictory business descriptions upstream.',
+  },
+  owned_elsewhere: {
+    exclusionCorrect: true,
+    recoverableWithoutWeakeningSafety: false,
+    producerFix: 'Route to canonical prospect recovery instead of net-new admission when ownership is clear.',
+  },
+  same_company_different_contact: {
+    exclusionCorrect: true,
+    recoverableWithoutWeakeningSafety: true,
+    producerFix: 'Promote alternate verified contact only through canonical same-company enrichment, not duplicate prospects.',
+  },
+  enrichment_unresolved: {
+    exclusionCorrect: true,
+    recoverableWithoutWeakeningSafety: true,
+    producerFix: 'Retry enrichment with website/email discovery; widen Prospeo title filters only within ICP.',
+  },
+  email_not_verified: {
+    exclusionCorrect: true,
+    recoverableWithoutWeakeningSafety: true,
+    producerFix: 'Complete Bouncer verification before promotion; do not bypass verification gates.',
+  },
+  invalid_outreach_email: {
+    exclusionCorrect: true,
+    recoverableWithoutWeakeningSafety: false,
+    producerFix: 'Reject role/generic inboxes at enrichment; prefer owner or office-manager resolution.',
+  },
+});
+
+function computeCleanInventoryGrowth(cleanBefore = [], cleanAfter = []) {
+  const beforeIds = new Set((cleanBefore || []).map(row => String(row.prospectId || row.candidateId || row.id || '')).filter(Boolean));
+  const afterIds = new Set((cleanAfter || []).map(row => String(row.prospectId || row.candidateId || row.id || '')).filter(Boolean));
+  const newCleanInventoryAdded = [...afterIds].filter(id => !beforeIds.has(id)).length;
+  const netCleanInventoryDelta = afterIds.size - beforeIds.size;
+  return {
+    preCycleCleanInventory: beforeIds.size,
+    postCycleCleanInventory: afterIds.size,
+    newCleanInventoryAdded,
+    netCleanInventoryDelta,
+  };
+}
+
+function buildReplenishmentLossBuckets({
+  admission = {},
+  enrichment = {},
+  cleanExclusions = {},
+} = {}) {
+  const evaluated = Number(admission.evaluated || 0);
+  const rejected = admission.rejected || {};
+  const rawCounts = {
+    unclassifiable_vertical: Number(rejected.unclassifiable_vertical || 0),
+    insufficient_business_fit: Number(rejected.insufficient_business_fit || 0)
+      + Number(rejected.segment_mismatch || 0)
+      + Number(rejected.contradictory_business_type || 0),
+    owned_elsewhere: Number(rejected.owned_elsewhere || 0)
+      + Number(rejected.valid_ownership_collision || 0)
+      + Number(rejected.stale_ownership || 0),
+    same_company_different_contact: Number(rejected.same_company_different_contact || 0),
+    enrichment_unresolved: Number(enrichment.unresolved || 0),
+    email_not_verified: Number(cleanExclusions.email_not_verified || 0),
+    invalid_outreach_email: Number(cleanExclusions.invalid_outreach_email || 0),
+  };
+
+  const buckets = NET_CLEAN_LOSS_BUCKETS.map(key => {
+    const count = rawCounts[key] || 0;
+    const guidance = LOSS_BUCKET_GUIDANCE[key] || {};
+    return {
+      bucket: key,
+      count,
+      pctOfEvaluated: rate(count, evaluated),
+      exclusionCorrect: guidance.exclusionCorrect !== false,
+      recoverableWithoutWeakeningSafety: guidance.recoverableWithoutWeakeningSafety === true,
+      producerFix: guidance.producerFix || null,
+    };
+  });
+
+  const auditedTotal = buckets.reduce((sum, row) => sum + row.count, 0);
+  return { evaluated, buckets, auditedTotal };
+}
+
 function buildReplenishmentYield({
   admission = {},
   enrichment = {},
   recovered = 0,
+  inventoryGrowth = null,
 } = {}) {
   const candidatesDiscovered = Number(admission.discovered || 0);
   const evaluated = Number(admission.evaluated || 0);
@@ -54,9 +154,22 @@ function buildReplenishmentYield({
   const admittedToEnrichment = Number(admission.admittedToEnrichment || 0);
   const emailResolved = Number(enrichment.emailResolved || 0);
   const emailVerified = Number(enrichment.emailVerified || 0);
-  const promoted = Number(enrichment.promoted || 0);
-  const recoveredCount = Number(recovered || enrichment.recovered || 0);
-  const cleanInventoryAdded = promoted + recoveredCount;
+  const newPromotions = Number(enrichment.promoted || 0);
+  const recoveredExisting = Number(recovered || enrichment.recovered || 0);
+  const newVerifiedPromotions = Math.min(newPromotions, Number(enrichment.emailVerified || 0));
+  const growth = inventoryGrowth || {};
+  const preCycleCleanInventory = Number(
+    growth.preCycleCleanInventory ?? growth.preCycle ?? 0
+  );
+  const postCycleCleanInventory = Number(
+    growth.postCycleCleanInventory ?? growth.postCycle ?? preCycleCleanInventory
+  );
+  const netCleanInventoryDelta = growth.netCleanInventoryDelta != null
+    ? Number(growth.netCleanInventoryDelta)
+    : postCycleCleanInventory - preCycleCleanInventory;
+  const newCleanInventoryAdded = growth.newCleanInventoryAdded != null
+    ? Number(growth.newCleanInventoryAdded)
+    : Math.max(0, netCleanInventoryDelta);
 
   return {
     candidatesDiscovered,
@@ -65,15 +178,23 @@ function buildReplenishmentYield({
     admittedToEnrichment,
     emailResolved,
     emailVerified,
-    promoted,
-    recovered: recoveredCount,
-    cleanInventoryAdded,
+    newPromotions,
+    newVerifiedPromotions,
+    recoveredExisting,
+    newCleanInventoryAdded,
+    netCleanInventoryDelta,
+    preCycleCleanInventory,
+    postCycleCleanInventory,
+    promoted: newPromotions,
+    recovered: recoveredExisting,
+    cleanInventoryAdded: newCleanInventoryAdded,
     rates: {
       fitRate: rate(fit, evaluated),
       enrichmentAdmissionRate: rate(admittedToEnrichment, fit),
       contactResolutionRate: rate(emailResolved, admittedToEnrichment),
       verificationRate: rate(emailVerified, emailResolved),
-      cleanInventoryYield: rate(cleanInventoryAdded, evaluated),
+      cleanInventoryYield: rate(newCleanInventoryAdded, evaluated),
+      netCleanInventoryYield: rate(Math.max(0, netCleanInventoryDelta), evaluated),
     },
   };
 }
@@ -270,37 +391,68 @@ async function loadScoutFunnelStock(pool) {
 }
 
 async function loadInventoryTimestamps(pool) {
-  if (!pool?.query) {
-    return { lastSuccessfulReplenishmentAt: null, lastSuccessfulPromotionAt: null };
-  }
+  const empty = {
+    lastReplenishmentAttemptAt: null,
+    lastInventoryGrowthAt: null,
+    lastNewPromotionAt: null,
+    lastRecoveryAt: null,
+    lastSuccessfulReplenishmentAt: null,
+    lastSuccessfulPromotionAt: null,
+  };
+  if (!pool?.query) return empty;
   const events = await pool.query(`
     SELECT
       max(created_at) FILTER (
         WHERE event_type IN ('max_outbound_control','inventory_replenished')
-          AND COALESCE((payload->>'scoutQueued')::int,0)
-            + COALESCE((payload->>'scoutPromoted')::int,0)
-            + COALESCE((payload->>'eligible')::int,0) > 0
-      ) AS last_replenishment,
+          AND COALESCE((payload->>'scoutInvoked')::boolean,false) = true
+      ) AS last_attempt,
       max(created_at) FILTER (
         WHERE event_type IN ('max_outbound_control','inventory_replenished')
-          AND COALESCE((payload->>'scoutPromoted')::int,0) > 0
-      ) AS last_promotion
+          AND COALESCE((payload->>'netCleanInventoryDelta')::int,0) > 0
+      ) AS last_inventory_growth,
+      max(created_at) FILTER (
+        WHERE event_type IN ('max_outbound_control','inventory_replenished')
+          AND COALESCE((payload->>'newPromotions')::int,0) > 0
+      ) AS last_new_promotion,
+      max(created_at) FILTER (
+        WHERE event_type IN ('max_outbound_control','inventory_replenished')
+          AND COALESCE((payload->>'recoveredExisting')::int,0) > 0
+      ) AS last_recovery
     FROM acquisition_outbound_events
     WHERE tenant_id='10'
   `).catch(() => ({ rows: [{}] }));
   const row = events.rows[0] || {};
+  const lastInventoryGrowthAt = row.last_inventory_growth
+    ? new Date(row.last_inventory_growth).toISOString()
+    : null;
+  const lastNewPromotionAt = row.last_new_promotion
+    ? new Date(row.last_new_promotion).toISOString()
+    : null;
+  const lastRecoveryAt = row.last_recovery
+    ? new Date(row.last_recovery).toISOString()
+    : null;
+  const lastReplenishmentAttemptAt = row.last_attempt
+    ? new Date(row.last_attempt).toISOString()
+    : null;
   return {
-    lastSuccessfulReplenishmentAt: row.last_replenishment ? new Date(row.last_replenishment).toISOString() : null,
-    lastSuccessfulPromotionAt: row.last_promotion ? new Date(row.last_promotion).toISOString() : null,
+    lastReplenishmentAttemptAt,
+    lastInventoryGrowthAt,
+    lastNewPromotionAt,
+    lastRecoveryAt,
+    lastSuccessfulReplenishmentAt: lastInventoryGrowthAt,
+    lastSuccessfulPromotionAt: lastNewPromotionAt,
   };
 }
 
 module.exports = {
   FUNNEL_STAGES,
   OWNERSHIP_KINDS,
+  NET_CLEAN_LOSS_BUCKETS,
   STALE_OWNERSHIP_MS,
   emptyFunnel,
   buildReplenishmentYield,
+  buildReplenishmentLossBuckets,
+  computeCleanInventoryGrowth,
   mergeFunnel,
   rejectedCount,
   evaluateColdOutboundEligibility,

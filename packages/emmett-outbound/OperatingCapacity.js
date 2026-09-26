@@ -19,8 +19,30 @@ const LIMITING_FACTORS = Object.freeze({
   AUTHORIZATION_DAILY_CAP: 'authorization_daily_cap',
   AUTHORIZATION_REMAINING_TOTAL: 'authorization_remaining_total',
   SPACING_WINDOW: 'spacing_window',
+  SCHEDULE_WINDOW_SPACING: 'schedule_window_spacing',
   NONE: 'none',
 });
+
+const DEFAULT_SEND_WINDOW = Object.freeze({ startHour: 9, endHour: 17, timezone: 'America/New_York' });
+
+/**
+ * Count first-touch send slots that fit inside the allowed window with minimum spacing.
+ * Window bounds are whole-hour [startHour, endHour) in the configured timezone.
+ */
+function computeScheduleLimitedCapacity({
+  allowedSendWindow = DEFAULT_SEND_WINDOW,
+  minSpacingMinutes = 60,
+} = {}) {
+  const start = Number(allowedSendWindow?.startHour ?? DEFAULT_SEND_WINDOW.startHour);
+  const end = Number(allowedSendWindow?.endHour ?? DEFAULT_SEND_WINDOW.endHour);
+  const spacing = Number(minSpacingMinutes);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  const windowMinutes = (end - start) * 60;
+  if (!Number.isFinite(spacing) || spacing <= 0) {
+    return Math.max(0, Math.trunc(windowMinutes / 60));
+  }
+  return Math.max(0, Math.floor(windowMinutes / spacing));
+}
 
 function asNonNegInt(value, fallback = 0) {
   const n = Number(value);
@@ -99,6 +121,22 @@ function classifyEmmettLimiter(assessed = {}, recommended) {
  * @param {number} [input.totalAttempted]
  * @returns {object}
  */
+function resolveScheduleInput(input = {}) {
+  const schedule = input.schedule || {};
+  const snapshot = input.assessed?.snapshot || {};
+  const policy = input.policy || {};
+  const allowedSendWindow = schedule.allowedSendWindow
+    || policy.allowedSendWindow
+    || snapshot.allowedSendWindow
+    || DEFAULT_SEND_WINDOW;
+  const minSpacingMinutes = schedule.minSpacingMinutes != null
+    ? schedule.minSpacingMinutes
+    : (policy.minSpacingMinutes != null
+      ? policy.minSpacingMinutes
+      : (snapshot.minimumSpacingMinutes != null ? snapshot.minimumSpacingMinutes : 60));
+  return { allowedSendWindow, minSpacingMinutes };
+}
+
 function assessOperatingCapacity(input = {}) {
   const assessed = input.assessed || {};
   const policy = input.policy || {};
@@ -119,30 +157,47 @@ function assessOperatingCapacity(input = {}) {
     ? null
     : Math.max(0, authorizationTotalCap - totalAttempted);
 
-  let effective = emmett.recommendedSafeDailyCapacity;
+  let authorizationLimitedCapacity = emmett.recommendedSafeDailyCapacity;
   let limitingFactor = emmett.factor;
   let capacityReason = emmett.reason;
 
-  if (authorizationDailyCap != null && authorizationDailyCap < effective) {
-    effective = authorizationDailyCap;
+  if (authorizationDailyCap != null && authorizationDailyCap < authorizationLimitedCapacity) {
+    authorizationLimitedCapacity = authorizationDailyCap;
     limitingFactor = LIMITING_FACTORS.AUTHORIZATION_DAILY_CAP;
     capacityReason = `Operator authorization limits daily sends to ${authorizationDailyCap}; Emmett recommends ${emmett.recommendedSafeDailyCapacity}.`;
   }
 
-  if (remainingTotalAuthorization != null && remainingTotalAuthorization < effective) {
-    effective = remainingTotalAuthorization;
+  if (remainingTotalAuthorization != null && remainingTotalAuthorization < authorizationLimitedCapacity) {
+    authorizationLimitedCapacity = remainingTotalAuthorization;
     limitingFactor = LIMITING_FACTORS.AUTHORIZATION_REMAINING_TOTAL;
     capacityReason = `Remaining authorization budget is ${remainingTotalAuthorization}; Emmett recommends ${emmett.recommendedSafeDailyCapacity}.`;
   }
 
-  if (effective <= 0 && emmett.recommendedSafeDailyCapacity <= 0) {
+  const { allowedSendWindow, minSpacingMinutes } = resolveScheduleInput(input);
+  const scheduleLimitedCapacity = computeScheduleLimitedCapacity({
+    allowedSendWindow,
+    minSpacingMinutes,
+  });
+
+  let dispatchableDailyCapacity = authorizationLimitedCapacity;
+  if (scheduleLimitedCapacity < dispatchableDailyCapacity) {
+    dispatchableDailyCapacity = scheduleLimitedCapacity;
+    limitingFactor = LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING;
+    capacityReason = `Send window ${allowedSendWindow.startHour}:00–${allowedSendWindow.endHour}:00 with ${minSpacingMinutes}-minute spacing allows ${scheduleLimitedCapacity} dispatchable first-touch slots; Emmett recommends ${emmett.recommendedSafeDailyCapacity} and authorization permits ${authorizationLimitedCapacity}.`;
+  }
+
+  if (dispatchableDailyCapacity <= 0 && emmett.recommendedSafeDailyCapacity <= 0) {
     limitingFactor = emmett.factor;
     capacityReason = emmett.reason;
   }
 
   return {
     recommendedSafeDailyCapacity: emmett.recommendedSafeDailyCapacity,
-    effectiveDailyCapacity: effective,
+    authorizationLimitedCapacity,
+    scheduleLimitedCapacity,
+    dispatchableDailyCapacity,
+    /** @deprecated use authorizationLimitedCapacity for auth-bound volume; dispatchableDailyCapacity for Max/send planning */
+    effectiveDailyCapacity: authorizationLimitedCapacity,
     limitingFactor,
     healthScore,
     governor,
@@ -150,12 +205,15 @@ function assessOperatingCapacity(input = {}) {
     authorizationDailyCap,
     remainingTotalAuthorization,
     emmettRecommended: recommended,
+    allowedSendWindow,
+    minSpacingMinutes,
     silentCap: false,
   };
 }
 
 module.exports = {
   LIMITING_FACTORS,
+  computeScheduleLimitedCapacity,
   assessOperatingCapacity,
   governorOutcomeOf,
   emmettRecommended,
