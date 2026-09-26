@@ -263,9 +263,21 @@ describe('Forbidden visual patterns (doctrine §10)', () => {
     assert.doesNotMatch(css, /conic-gradient/);
     assert.doesNotMatch(css, /filter:\s*blur\(\s*[6-9]\d|filter:\s*blur\(\s*\d{3}/);
     assert.doesNotMatch(css, /#0ff|#f0f|#00ffff|#ff00ff/i);
-    // Exactly one restrained radial wash, anchored to the object.
-    const radials = css.match(/radial-gradient/g) || [];
-    assert.ok(radials.length <= 2, `${radials.length} radial gradients`);
+
+    /* The layer drawings use radial gradients as hard-edged rings and nodes —
+       a seal, a set of conversion nodes — which is the opposite of a glowing
+       blob. What the doctrine forbids is the soft coloured wash, so only those
+       are counted: everything outside the layer art and the substrate. */
+    const decoration = css
+      .replace(/\.plate\[data-art='[a-z]+'\][^{]*\{[^}]*\}/g, '')
+      .replace(/\.plinth__face\s*\{[^}]*\}/g, '');
+    const washes = decoration.match(/radial-gradient/g) || [];
+    assert.ok(washes.length <= 2, `${washes.length} decorative radial washes`);
+
+    // And no radial anywhere may be a saturated glow.
+    for (const [, body] of css.matchAll(/radial-gradient\(([^;]*?)\)\s*[,;]/g)) {
+      assert.doesNotMatch(body, /rgba?\(\s*(?:\d+\s*,\s*)?(?:2[0-5]\d|1[89]\d)\s*,\s*[0-4]\d?\s*,/);
+    }
   });
 
   it('does not use glassmorphism as a general language', () => {
@@ -451,8 +463,90 @@ describe('Progressive enhancement (doctrine §18)', () => {
     const stages = html.match(/class="strata"/g) || [];
     assert.equal(stages.length, 3, 'every stage needs a no-WebGL composition');
     const plates = html.match(/class="plate"/g) || [];
-    assert.equal(plates.length, 18, 'six plates per stage');
+    assert.equal(plates.length, 21, 'seven plates per stage');
+    const plinths = html.match(/class="plinth"/g) || [];
+    assert.equal(plinths.length, 3, 'every stage stands on the mineral substrate');
     assert.match(css, /\.strata__stack\s*\{[\s\S]*?transform-style:\s*preserve-3d/);
+  });
+
+  it('stacks the surface over the six systems over the substrate', () => {
+    // The order is the doctrine's claim stated physically: performance is the
+    // deepest layer and design sits just under the visible surface, so what is
+    // underneath really is underneath.
+    const stack = [...html.matchAll(/data-art="([a-z]+)"/g)]
+      .map((m) => m[1])
+      .slice(0, 7);
+    assert.deepEqual(stack, [
+      'surface',
+      'design',
+      'trust',
+      'search',
+      'conversion',
+      'accessibility',
+      'performance',
+    ]);
+    assert.deepEqual(
+      [...dimensionalSrc.matchAll(/key: '([a-z]+)'/g)].map((m) => m[1]),
+      stack,
+      'the WebGL stack and the CSS stack must agree'
+    );
+  });
+
+  it('gives every layer its own material and its own drawing', () => {
+    // Seven identical slabs at different spacings communicate the idea and none
+    // of the material, which was the defect this stack replaced.
+    const blocks = dimensionalSrc.split(/key: '/).slice(1);
+    const seen = { thickness: new Set(), roughness: new Set(), art: new Set() };
+    for (const block of blocks) {
+      const body = block.slice(0, block.indexOf('},'));
+      for (const field of ['thickness', 'roughness']) {
+        const value = body.match(new RegExp(`${field}: ([\\d.]+)`))?.[1];
+        assert.ok(value, `a layer is missing ${field}`);
+        seen[field].add(value);
+      }
+      seen.art.add(body.match(/art: '([a-z]+)'/)?.[1]);
+    }
+    assert.equal(seen.art.size, 7, 'each layer needs its own drawing');
+    assert.ok(seen.thickness.size >= 6, 'layers must differ in thickness');
+    assert.ok(seen.roughness.size >= 6, 'layers must differ in surface finish');
+    // Performance is the thickest and roughest: graphite composite, not glass.
+    assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?thickness: 0\.09/);
+    // And each layer draws something different in the CSS baseline too.
+    for (const key of seen.art) {
+      assert.match(
+        css,
+        new RegExp(`\\.plate\\[data-art='${key}'\\] \\.plate__face::before`),
+        `${key} has no drawing in the CSS composition`
+      );
+    }
+  });
+
+  it('carries a mineral substrate beneath the digital layers', () => {
+    assert.match(dimensionalSrc, /FOUNDATION_T/);
+    assert.match(dimensionalSrc, /function stoneTexture/);
+    assert.match(dimensionalSrc, /roughnessMap: stone/);
+    assert.match(css, /\.plinth__face\s*\{/);
+  });
+
+  it('models the material the doctrine asked for', () => {
+    // Smoked acrylic caps, machined metal walls, environmental shadow and
+    // depth falloff — not a translucent rectangle (doctrine §11).
+    assert.match(dimensionalSrc, /ior: 1\.49/);
+    assert.match(dimensionalSrc, /clearcoat:/);
+    assert.match(dimensionalSrc, /rimMetalness/);
+    assert.match(dimensionalSrc, /\[capMaterial, wallMaterial\]/);
+    assert.match(dimensionalSrc, /contactShadow/);
+    assert.match(dimensionalSrc, /new Fog\(/);
+    assert.match(dimensionalSrc, /function arrisGeometry/);
+  });
+
+  it('makes the layer under discussion the subject, not just further apart', () => {
+    // Lighting, camera framing and material emphasis all respond.
+    assert.match(dimensionalSrc, /examine\.intensity = state\.focus/);
+    assert.match(dimensionalSrc, /examine\.position\.set/);
+    assert.match(dimensionalSrc, /target\.lookAt = examining/);
+    assert.match(dimensionalSrc, /examinePitch/);
+    assert.match(dimensionalSrc, /emphasis \* 0\.0?\d/);
   });
 
   it('keeps every narrative label in the document, not in the canvas', () => {

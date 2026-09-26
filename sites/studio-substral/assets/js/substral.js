@@ -110,8 +110,11 @@ class Stage {
     const idx = this.index();
     if (idx !== this.activeIndex) {
       this.activeIndex = idx;
-      this.plates.forEach((plate, i) => {
-        plate.dataset.active = String(i === idx);
+      /* The stack runs surface, design, trust, search, conversion,
+         accessibility, performance — so a plate is matched by the layer it
+         carries, never by its position. */
+      this.plates.forEach((plate) => {
+        plate.dataset.active = String(Number(plate.dataset.narrative) === idx);
       });
       if (this.readoutIndex) {
         this.readoutIndex.textContent = String(idx + 1).padStart(2, '0');

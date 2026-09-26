@@ -150,6 +150,10 @@ if (run('layout')) {
         if (!parent || !parent.clientWidth) continue;
         // The honeypot is deliberately parked outside the layout.
         if (el.closest('.field--hidden')) continue;
+        /* The dimensional composition is a decorative 3D scene, clipped by its
+           stage. Its parts are meant to exceed their boxes — the substrate is
+           wider than the plates it carries — so layout rules do not apply. */
+        if (el.closest('.strata')) continue;
 
         if (el.scrollWidth > parent.clientWidth + 2) {
           overflows.push(`${el.tagName}.${el.className}`.slice(0, 48));
@@ -222,12 +226,21 @@ if (run('states')) {
       webgl: [...document.querySelectorAll('[data-stage]')].map((s) => s.dataset.webgl),
       labels: [...document.querySelectorAll('.layer__name')].map((e) => e.textContent),
       plates: document.querySelectorAll('.plate').length,
+      plinths: document.querySelectorAll('.plinth').length,
+      // Each plate must actually paint its own drawing, not inherit a default.
+      drawings: new Set(
+        [...document.querySelectorAll('.plate')].map(
+          (p) => getComputedStyle(p.querySelector('.plate__face'), '::before').backgroundImage
+        )
+      ).size,
     }));
     if (state.webgl.some((v) => v !== 'off')) fail('WebGL reported on with no context available');
-    else if (state.plates !== 18) fail(`expected 18 CSS plates, found ${state.plates}`);
+    else if (state.plates !== 21) fail(`expected 21 CSS plates, found ${state.plates}`);
+    else if (state.plinths !== 3) fail(`expected 3 substrates, found ${state.plinths}`);
+    else if (state.drawings !== 7) fail(`expected 7 distinct layer drawings, found ${state.drawings}`);
     else if (state.labels.join() !== 'Performance,Accessibility,Conversion,Search,Trust,Design')
       fail(`layer labels wrong without WebGL: ${state.labels}`);
-    else pass('without WebGL: CSS composition renders and all six labels remain');
+    else pass('without WebGL: seven distinct plates, substrate, and all six labels');
     if (page.problems.length) fail(`console errors without WebGL: ${page.problems[0]}`);
     await page.close();
   }

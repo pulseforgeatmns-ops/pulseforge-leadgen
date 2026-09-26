@@ -73,33 +73,97 @@ It is **one specimen across three acts** — whole in Act I, separated in Act II
 whole again in Act VI — and there are **two implementations of it**, which is
 deliberate.
 
-**Baseline — CSS 3D.** Six plates in a `preserve-3d` stack, smoked faces with
-an etched graticule, a light rim on the lower edge, and separation driven by a
-single `--sep` custom property. It needs no WebGL, no JavaScript to be present
-and composed, and costs nothing. On viewports under 600px this is not a
-fallback — it *is* the intended treatment (§17: fewer simultaneous objects,
-simplified lighting).
+### What the specimen is
 
-**Enhancement — Three.js.** `src/dimensional.js` builds six extruded plates
-with `MeshPhysicalMaterial` (clearcoat, low metalness, 0.44 opacity,
-`depthWrite: false` so the layers read through each other), rims built from the
-plate silhouette, an additively blended graticule per layer, and a small
-procedural equirectangular environment so the acrylic and aluminium have
-something to reflect.
+Read top to bottom:
+
+| | Layer | Physical treatment | What it draws |
+|---|---|---|---|
+| — | **Surface** | Polished acrylic, thinnest, brightest rim | A designed page: masthead, navigation, an oversized headline, one emphasised action, a framed media plate, three measures of copy, a footer |
+| 06 | **Design** | Clear acrylic, high clearcoat | Twelve-column and baseline grid, margin markers, a dimension callout, two type traces sitting on the system |
+| 05 | **Trust** | Slightly clouded, more metal in the cap | A struck seal, a closure mark, a credential plate, a verification ledger with one row still open |
+| 04 | **Search** | Lower clearcoat, more diffuse | A site hierarchy with elbow connectors, and an index with leader dots where one entry is unresolved |
+| 03 | **Conversion** | Diffuse acrylic | Nodes and paths converging on a single action — and one dashed route that simply stops |
+| 02 | **Accessibility** | **Frosted polymer**: roughness 0.42, clearcoat 0.32 — milky, not glassy | Landmark regions nested as a document outline, a heading-level ladder, and a focus-order path through numbered stops |
+| 01 | **Performance** | **Graphite composite**: thickest at 0.092, roughest, most metallic, least transparent | A request waterfall over a measured time axis with thresholds, and a sampled trace |
+| — | **Foundation** | **Mineral**: warm stone, procedurally grained and veined, wider than the plates, and it never moves | — |
+
+Performance is deepest and design sits directly beneath the surface, which is
+the doctrine's closing principle stated physically: what is underneath
+determines what happens above it. The digital layers rise off the stone as the
+object opens.
+
+The surface plate is **not a seventh system**. It is the visible website the six
+explain, which is why its composition sits on the top face while every other
+drawing is embedded at mid-thickness and read *through* the material.
+
+### Why seven materials instead of one
+
+Six identical slabs at different spacings communicate the idea and none of the
+material — that was the defect this stack replaced. Thickness, tint, opacity,
+roughness, clearcoat, metalness, rim alloy and rim finish all vary per layer,
+and the test suite asserts that at least six distinct values exist for
+thickness and finish and that all seven drawings differ.
+
+### Making a layer the subject
+
+When the reader reaches a layer, that layer physically becomes the subject.
+Four things respond together, none of them spacing:
+
+1. **Lighting** — an examination `PointLight` travels to the subject's height
+   and lifts from zero. It is dark whenever no layer is under discussion.
+2. **Camera** — the aim rises to the subject's plane, the dolly closes about
+   six percent, and the viewing angle steepens so the subject turns its face
+   up. A second solved fit table for the steeper angle guarantees this cannot
+   push the specimen out of frame.
+3. **Material** — the subject gains opacity and emissive patina at its arris;
+   its machined wall catches more of the environment; everything else recedes.
+4. **Relief** — plates above the subject lift and those below settle, giving it
+   physical room. This is a consequence of the emphasis, not the mechanism.
+
+### The two implementations
+
+**Baseline — CSS 3D.** Seven plates and the substrate in a `preserve-3d` stack.
+Each plate paints its own drawing from flat gradient rectangles, so the seven
+layers are distinguishable with **no requests and no images** — a page, a grid,
+marks, an index, a flow, a structure, a trace. Per-layer `--face-lift`,
+`--face-body` and `--face-edge` vary the material the same way the WebGL
+version does. It needs no WebGL and no JavaScript to be composed, and on
+viewports under 600px it is not a fallback — it *is* the intended treatment
+(§17), drawn at reduced scale and depth for the shallow pinned band.
+
+**Enhancement — Three.js.** `src/dimensional.js`. Each plate is one
+`ExtrudeGeometry` carrying **two materials**: group 0 is the smoked acrylic cap
+(`ior: 1.49`, clearcoat, `depthWrite: false` so the layers read through each
+other) and group 1 is the extruded side wall, which is opaque machined metal.
+That is where visible thickness and the metal arris come from. A hairline
+highlight follows the top and bottom arrises; the environment gives the metal
+and the clearcoat something to reflect; a contact shadow on the stone softens
+and shrinks as the stack lifts; and linear fog keyed to camera distance gives
+depth falloff so the far side of the specimen recedes.
 
 Adaptations, and why:
 
-- **No `transmission`.** Real refractive transmission on six overlapping plates
-  needs a render target per frame and is the single most expensive thing in the
-  scene. Opacity plus clearcoat plus an environment reads as smoked acrylic at
-  this scale for a fraction of the cost. §26 permits adapting implementation to
-  preserve performance; the material character is preserved.
-- **Procedural environment, not an HDR asset.** A 256×128 canvas gradient with
-  two soft bands, run through `PMREMGenerator`. Nothing to download.
-- **Rims built by hand, not `EdgesGeometry`.** `EdgesGeometry` on a plate with
-  rounded corners produces either tessellation noise or gaps depending on the
-  threshold. Two closed loops from the silhouette give exactly the machined
+- **No `transmission`.** Real refractive transmission on seven overlapping
+  plates needs a render target per frame and is the single most expensive thing
+  in the scene. Cap opacity plus clearcoat plus a structured environment reads
+  as smoked acrylic at this scale for a fraction of the cost. §26 permits
+  adapting implementation to preserve performance; the material character is
+  preserved.
+- **Procedural environment, not an HDR asset.** A 512×256 canvas with two
+  softboxes, warm bounce from below and a bright horizon strip for the machined
+  arrises to catch, run through `PMREMGenerator`. Nothing to download.
+- **No shadow maps.** Seven translucent plates casting opaque shadow-map
+  shadows looks wrong and costs a second pass. A contact shadow on the
+  substrate, scaled to the lift, is both cheaper and more accurate.
+- **Arrises built by hand, not `EdgesGeometry`.** `EdgesGeometry` on a plate
+  with relieved corners produces either tessellation noise or gaps depending on
+  the threshold. Two closed loops from the silhouette give exactly the machined
   outline intended.
+- **Artwork drawn to canvas, not loaded.** Seven procedural drawings, cached
+  and shared between the three stages, at 1024px for the surface and 512px for
+  the rest. No network cost, and the surface composition gets the resolution it
+  needs to read as a page.
 - **Camera distance is solved, not authored.** The three stages occupy very
   differently shaped boxes and the specimen is a broad flat slab, so any
   hand-tuned distance clips it in at least one of them. `frameDistance()`
@@ -121,6 +185,23 @@ and evidence class lives in the document, so the narrative survives with the
 object switched off entirely (§18, §21).
 
 ---
+
+## Hero composition (§14 Act I, §9)
+
+The statement and the specimen are **two competing masses that overlap**, not a
+headline with a graphic above it. On desktop the object is cropped off the right
+edge of the frame — so it reads as larger than the composition can contain —
+and `LOOK BENEATH THE SURFACE.` is set across it, the two interlocking rather
+than taking turns.
+
+The vertical composition was also rebuilt, because negative space has to create
+tension and an earlier pass left stretches of black that simply delayed the next
+section. The eyebrow is now pinned directly under the nav, the statement absorbs
+the slack and sits on the floor of the viewport, and the scroll cue follows
+immediately beneath it. The leftover height therefore collects **between** them,
+where the object is, instead of accumulating below the call to action as a band
+of nothing. In Act II the layer chapters were tightened from 82svh to 72svh for
+the same reason.
 
 ## Motion (§13)
 

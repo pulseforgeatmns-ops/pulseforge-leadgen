@@ -514,12 +514,17 @@ ol {
    ACT I — SURFACE
    ========================================================================== */
 
+/* Two masses: the statement and the specimen, overlapping rather than stacked.
+   The eyebrow is pinned up under the nav and the hero sits on the floor of the
+   viewport, so the space between them is occupied by the object instead of
+   being a stretch of black the reader waits through. */
 .surface {
   position: relative;
   min-height: 100svh;
   display: grid;
-  align-content: end;
-  padding-block: clamp(8rem, 18vh, 14rem) clamp(2rem, 5vh, 4rem);
+  align-content: stretch;
+  padding-block: calc(var(--nav-h) + clamp(0.5rem, 1.6vh, 1.5rem))
+    clamp(1.5rem, 4vh, 3rem);
   overflow: clip;
 }
 
@@ -543,7 +548,7 @@ ol {
 .surface__object {
   position: absolute;
   inset: 0 0 auto 0;
-  height: min(56svh, 34rem);
+  height: min(60svh, 36rem);
   pointer-events: none;
 }
 
@@ -559,9 +564,10 @@ ol {
 
 .surface__grid {
   position: relative;
-  display: grid;
-  gap: clamp(2.5rem, 5vw, 4rem);
-  grid-template-columns: 1fr;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: clamp(2rem, 5vh, 3.5rem);
 }
 
 @media (min-width: 62em) {
@@ -570,13 +576,13 @@ ol {
      larger than the frame rather than as a graphic floating in it (§9). */
   .surface__object {
     left: auto;
-    right: -7%;
-    width: min(68%, 64rem);
-    height: min(62svh, 40rem);
+    right: -6%;
+    width: min(74%, 72rem);
+    height: min(78svh, 48rem);
   }
 
   .surface__object .strata__stack {
-    width: min(44rem, 92%);
+    width: min(46rem, 86%);
   }
 }
 
@@ -585,6 +591,16 @@ ol {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.75rem 1.75rem;
+}
+
+/* The statement absorbs the slack and sits on the floor of the composition, so
+   the leftover height collects above it where the object is, not below it as a
+   band of nothing. */
+.surface__head {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 .surface__head h1 {
@@ -609,7 +625,7 @@ ol {
   display: flex;
   align-items: center;
   gap: 0.9rem;
-  margin-top: clamp(2.5rem, 6vh, 4.5rem);
+  margin-top: clamp(1.5rem, 3.4vh, 2.5rem);
 }
 
 .surface__cue-line {
@@ -670,7 +686,7 @@ ol {
 .strata__stack {
   position: relative;
   width: min(34rem, 74%);
-  aspect-ratio: 4 / 3;
+  aspect-ratio: 61 / 45;
   transform-style: preserve-3d;
   transform: rotateX(62deg) rotateZ(-38deg) scale(var(--strata-scale, 0.92))
     translate3d(0, 0, calc(var(--lift, 0) * 1px));
@@ -680,14 +696,15 @@ ol {
   position: absolute;
   inset: 0;
   transform-style: preserve-3d;
-  /* --i is the layer index, --sep the scroll-driven separation in px, and
-     --sep-scale reduces the layer depth where the frame is shallow.
-     No transform transition: the damping lives in the script's interpolation,
-     and doubling it here would read as lag rather than mass. */
+  /* --i is the position in the stack, 0 at the surface and 6 at performance.
+     --sep is the scroll-driven separation in px and --sep-scale reduces the
+     layer depth where the frame is shallow. No transform transition: the
+     damping lives in the script's interpolation, and doubling it here would
+     read as lag rather than mass. */
   transform: translate3d(
     0,
     0,
-    calc((2.5 - var(--i)) * var(--sep, 6px) * var(--sep-scale, 1))
+    calc((3 - var(--i)) * var(--sep, 6px) * var(--sep-scale, 1))
   );
 }
 
@@ -695,52 +712,247 @@ ol {
   position: absolute;
   inset: 0;
   /* This is the object for anyone without WebGL and for every phone, so it
-     carries enough light to read as smoked acrylic rather than a grey plane. */
-  border: 1px solid rgba(240, 237, 229, 0.28);
+     carries enough light to read as smoked acrylic rather than a grey plane.
+     --face-lift and --face-body vary per layer so the plates are seven
+     different materials rather than seven copies. */
+  border: 1px solid rgba(240, 237, 229, var(--face-edge, 0.26));
   transition: border-color var(--dur-mid) var(--ease-weighted),
     box-shadow var(--dur-mid) var(--ease-weighted);
   background: linear-gradient(
       148deg,
-      rgba(240, 237, 229, 0.115),
-      rgba(240, 237, 229, 0.03) 46%,
-      rgba(17, 17, 15, 0.14)
+      rgba(240, 237, 229, var(--face-lift, 0.1)),
+      rgba(240, 237, 229, calc(var(--face-lift, 0.1) * 0.24)) 46%,
+      rgba(17, 17, 15, 0.16)
     ),
-    rgba(30, 29, 25, 0.55);
-  box-shadow: inset 0 1px 0 rgba(240, 237, 229, 0.17);
+    rgba(30, 29, 25, var(--face-body, 0.5));
+  box-shadow: inset 0 1px 0 rgba(240, 237, 229, calc(var(--face-lift, 0.1) * 1.4));
 }
 
-/* Etched graticule: the plate carries measurement, not ornament. */
+/* The layer's own drawing, composed from flat gradient rectangles so it costs
+   no requests. Each layer draws something different: a page, a grid, marks, an
+   index, a flow, a structure, a trace. */
 .plate__face::before {
   content: '';
   position: absolute;
-  inset: 8%;
-  background-image: linear-gradient(
-      to right,
-      rgba(240, 237, 229, 0.1) 1px,
-      transparent 1px
+  inset: 0;
+  background-repeat: no-repeat;
+  opacity: var(--art-opacity, 0.9);
+}
+
+/* SURFACE — the visible website: masthead, headline, action, media, copy. */
+.plate[data-art='surface'] {
+  --face-lift: 0.15;
+  --face-body: 0.44;
+  --face-edge: 0.36;
+}
+.plate[data-art='surface'] .plate__face::before {
+  background-image: linear-gradient(rgba(240, 237, 229, 0.82), rgba(240, 237, 229, 0.82)),
+    repeating-linear-gradient(90deg, rgba(240, 237, 229, 0.34) 0 22%, transparent 22% 34%),
+    linear-gradient(rgba(240, 237, 229, 0.5), rgba(240, 237, 229, 0.5)),
+    linear-gradient(rgba(240, 237, 229, 0.2), rgba(240, 237, 229, 0.2)),
+    linear-gradient(rgba(240, 237, 229, 0.86), rgba(240, 237, 229, 0.86)),
+    linear-gradient(rgba(240, 237, 229, 0.86), rgba(240, 237, 229, 0.86)),
+    repeating-linear-gradient(180deg, rgba(240, 237, 229, 0.26) 0 2px, transparent 2px 9px),
+    linear-gradient(rgba(127, 168, 144, 0.5), rgba(127, 168, 144, 0.5)),
+    linear-gradient(152deg, rgba(240, 237, 229, 0.17), rgba(240, 237, 229, 0.02)),
+    linear-gradient(rgba(240, 237, 229, 0.26), rgba(240, 237, 229, 0.26)),
+    linear-gradient(rgba(240, 237, 229, 0.18), rgba(240, 237, 229, 0.18)),
+    repeating-linear-gradient(180deg, rgba(240, 237, 229, 0.2) 0 2px, transparent 2px 8px),
+    linear-gradient(rgba(240, 237, 229, 0.2), rgba(240, 237, 229, 0.2));
+  background-size: 11% 3%, 30% 2%, 86% 1px, 20% 4.4%, 48% 7%, 34% 7%, 27% 8%,
+    15% 4.6%, 37% 33%, 37% 1px, 86% 1px, 86% 14%, 86% 1px;
+  background-position: 7% 7.5%, 48% 8.6%, 7% 15%, 74% 6.6%, 7% 22%, 7% 31%,
+    7% 43%, 7% 56%, 57% 20%, 57% 42%, 7% 68%, 7% 74%, 7% 92%;
+}
+
+/* 06 DESIGN — the composition system the surface is built on. */
+.plate[data-art='design'] {
+  --face-lift: 0.12;
+  --face-body: 0.46;
+}
+.plate[data-art='design'] .plate__face::before {
+  background-image: repeating-linear-gradient(
+      90deg,
+      rgba(240, 237, 229, 0.16) 0 1px,
+      transparent 1px 8.33%
     ),
-    linear-gradient(to bottom, rgba(240, 237, 229, 0.075) 1px, transparent 1px);
-  background-size: calc(100% / 7) calc(100% / 5);
-  opacity: 0.75;
+    repeating-linear-gradient(180deg, rgba(240, 237, 229, 0.09) 0 1px, transparent 1px 5.5%),
+    linear-gradient(rgba(127, 168, 144, 0.55), rgba(127, 168, 144, 0.55)),
+    linear-gradient(rgba(240, 237, 229, 0.34), rgba(240, 237, 229, 0.34)),
+    linear-gradient(rgba(240, 237, 229, 0.34), rgba(240, 237, 229, 0.34));
+  background-size: 86% 80%, 86% 80%, 42% 2px, 1px 88%, 1px 88%;
+  background-position: 7% 10%, 7% 10%, 7% 24%, 7% 6%, 93% 6%;
+}
+
+/* 05 TRUST — a seal, a credential plate, a verification ledger. */
+.plate[data-art='trust'] {
+  --face-lift: 0.1;
+  --face-body: 0.5;
+}
+.plate[data-art='trust'] .plate__face::before {
+  background-image: radial-gradient(
+      closest-side circle,
+      transparent 0 62%,
+      rgba(240, 237, 229, 0.44) 62% 70%,
+      transparent 70%
+    ),
+    radial-gradient(
+      closest-side circle,
+      transparent 0 36%,
+      rgba(240, 237, 229, 0.22) 36% 42%,
+      transparent 42%
+    ),
+    linear-gradient(rgba(240, 237, 229, 0.05), rgba(240, 237, 229, 0.05)),
+    linear-gradient(rgba(240, 237, 229, 0.5), rgba(240, 237, 229, 0.5)),
+    repeating-linear-gradient(180deg, rgba(240, 237, 229, 0.24) 0 2px, transparent 2px 13%),
+    linear-gradient(rgba(240, 237, 229, 0.3), rgba(240, 237, 229, 0.3)),
+    linear-gradient(rgba(127, 168, 144, 0.5), rgba(127, 168, 144, 0.5));
+  background-size: 18% 24%, 18% 24%, 30% 22%, 14% 3%, 74% 32%, 80% 1px, 6% 2.4%;
+  background-position: 9% 18%, 9% 18%, 52% 17%, 55% 22%, 9% 58%, 9% 52%, 78% 26%;
+}
+
+/* 04 SEARCH — a hierarchy on the left, an index on the right. */
+.plate[data-art='search'] {
+  --art-opacity: 0.78;
+  --face-lift: 0.095;
+  --face-body: 0.5;
+}
+.plate[data-art='search'] .plate__face::before {
+  background-image: linear-gradient(rgba(240, 237, 229, 0.3), rgba(240, 237, 229, 0.3)),
+    linear-gradient(rgba(240, 237, 229, 0.24), rgba(240, 237, 229, 0.24)),
+    linear-gradient(rgba(240, 237, 229, 0.24), rgba(240, 237, 229, 0.24)),
+    linear-gradient(rgba(240, 237, 229, 0.24), rgba(240, 237, 229, 0.24)),
+    linear-gradient(rgba(240, 237, 229, 0.42), rgba(240, 237, 229, 0.42)),
+    linear-gradient(rgba(240, 237, 229, 0.36), rgba(240, 237, 229, 0.36)),
+    linear-gradient(rgba(240, 237, 229, 0.28), rgba(240, 237, 229, 0.28)),
+    linear-gradient(rgba(127, 168, 144, 0.5), rgba(127, 168, 144, 0.5)),
+    linear-gradient(rgba(240, 237, 229, 0.28), rgba(240, 237, 229, 0.28)),
+    repeating-linear-gradient(90deg, rgba(240, 237, 229, 0.2) 0 2px, transparent 2px 9px);
+  background-size: 1px 52%, 11% 1px, 11% 1px, 11% 1px, 16% 2.4%, 22% 2.4%, 13% 2.4%,
+    19% 2.4%, 16% 2.4%, 30% 30%;
+  background-position: 13% 24%, 13% 28%, 13% 50%, 13% 72%, 48% 22%, 48% 34%, 52% 46%,
+    48% 58%, 48% 70%, 68% 22%;
+}
+
+/* 03 CONVERSION — nodes, one converging path, one that stops. */
+.plate[data-art='conversion'] {
+  --art-opacity: 0.76;
+  --face-lift: 0.085;
+  --face-body: 0.5;
+}
+.plate[data-art='conversion'] .plate__face::before {
+  background-image: radial-gradient(
+      closest-side circle,
+      transparent 0 52%,
+      rgba(240, 237, 229, 0.42) 52% 66%,
+      transparent 66%
+    ),
+    linear-gradient(26deg, transparent 49.4%, rgba(240, 237, 229, 0.26) 49.4% 50.6%, transparent 50.6%),
+    linear-gradient(-26deg, transparent 49.4%, rgba(240, 237, 229, 0.26) 49.4% 50.6%, transparent 50.6%),
+    linear-gradient(rgba(127, 168, 144, 0.55), rgba(127, 168, 144, 0.55)),
+    repeating-linear-gradient(122deg, rgba(240, 237, 229, 0.22) 0 5px, transparent 5px 12px);
+  background-size: 8% 11%, 44% 30%, 44% 30%, 9% 9%, 22% 22%;
+  background-position: 9% 20%, 14% 22%, 14% 48%, 82% 45%, 50% 70%;
+  background-repeat: repeat-y, no-repeat, no-repeat, no-repeat, no-repeat;
+}
+
+/* 02 ACCESSIBILITY — semantic regions and focus order, in frosted polymer. */
+.plate[data-art='accessibility'] {
+  --face-lift: 0.075;
+  --face-body: 0.58;
+  --face-edge: 0.2;
+  --art-opacity: 0.72;
+}
+.plate[data-art='accessibility'] .plate__face::before {
+  background-image: linear-gradient(rgba(240, 237, 229, 0.07), rgba(240, 237, 229, 0.07)),
+    linear-gradient(rgba(240, 237, 229, 0.1), rgba(240, 237, 229, 0.1)),
+    linear-gradient(rgba(240, 237, 229, 0.06), rgba(240, 237, 229, 0.06)),
+    linear-gradient(rgba(240, 237, 229, 0.05), rgba(240, 237, 229, 0.05)),
+    repeating-linear-gradient(90deg, rgba(240, 237, 229, 0.08) 0 1px, transparent 1px 6%),
+    repeating-linear-gradient(180deg, rgba(240, 237, 229, 0.06) 0 1px, transparent 1px 8%),
+    repeating-linear-gradient(90deg, rgba(127, 168, 144, 0.42) 0 5px, transparent 5px 11px);
+  background-size: 86% 10%, 54% 42%, 28% 42%, 86% 22%, 86% 82%, 86% 82%, 74% 1px;
+  background-position: 7% 8%, 7% 22%, 65% 22%, 7% 68%, 7% 9%, 7% 9%, 7% 14%;
+}
+
+/* 01 PERFORMANCE — a request waterfall over a measured axis. */
+.plate[data-art='performance'] {
+  --art-opacity: 0.8;
+  --face-lift: 0.055;
+  --face-body: 0.66;
+  --face-edge: 0.3;
+}
+.plate[data-art='performance'] .plate__face::before {
+  background-image: linear-gradient(rgba(240, 237, 229, 0.32), rgba(240, 237, 229, 0.32)),
+    linear-gradient(rgba(240, 237, 229, 0.32), rgba(240, 237, 229, 0.32)),
+    linear-gradient(rgba(127, 168, 144, 0.55), rgba(127, 168, 144, 0.55)),
+    linear-gradient(rgba(240, 237, 229, 0.32), rgba(240, 237, 229, 0.32)),
+    linear-gradient(rgba(240, 237, 229, 0.32), rgba(240, 237, 229, 0.32)),
+    linear-gradient(rgba(240, 237, 229, 0.32), rgba(240, 237, 229, 0.32)),
+    linear-gradient(rgba(240, 237, 229, 0.32), rgba(240, 237, 229, 0.32)),
+    linear-gradient(rgba(240, 237, 229, 0.44), rgba(240, 237, 229, 0.44)),
+    repeating-linear-gradient(90deg, rgba(240, 237, 229, 0.26) 0 1px, transparent 1px 4.3%);
+  background-size: 14% 3%, 10% 3%, 30% 3%, 8% 3%, 22% 3%, 12% 3%, 26% 3%, 86% 1px, 86% 3%;
+  background-position: 7% 16%, 12% 24%, 16% 32%, 24% 40%, 28% 48%, 38% 56%, 44% 64%,
+    7% 76%, 7% 78%;
 }
 
 .plate[data-active='true'] .plate__face {
-  border-color: rgba(127, 168, 144, 0.62);
-  box-shadow: inset 0 1px 0 rgba(127, 168, 144, 0.3),
-    0 0 0 1px rgba(127, 168, 144, 0.16);
+  border-color: rgba(127, 168, 144, 0.68);
+  box-shadow: inset 0 1px 0 rgba(127, 168, 144, 0.34),
+    0 0 0 1px rgba(127, 168, 144, 0.18);
 }
 
+/* The machined arris: the glint along the plate's thickness. */
 .plate__edge {
   position: absolute;
   inset: auto 0 0 0;
-  height: 3px;
+  height: var(--edge-h, 3px);
   background: linear-gradient(
     to right,
     rgba(240, 237, 229, 0.06),
-    rgba(240, 237, 229, 0.42),
+    rgba(240, 237, 229, 0.44),
     rgba(240, 237, 229, 0.06)
   );
-  transform: translateZ(-3px);
+  transform: translateZ(calc(var(--edge-h, 3px) * -1));
+}
+
+.plate[data-art='performance'] {
+  --edge-h: 5px;
+}
+
+.plate[data-art='accessibility'] {
+  --edge-h: 4px;
+}
+
+/* The mineral substrate the layers are lifted out of. Warm stone, wider than
+   the plates, and it never moves — the digital layers rise off it. */
+.plinth {
+  position: absolute;
+  inset: -7%;
+  transform-style: preserve-3d;
+  transform: translate3d(
+    0,
+    0,
+    calc((3 - 6.4) * var(--sep, 6px) * var(--sep-scale, 1) - 0.22rem)
+  );
+}
+
+.plinth__face {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+      120% 90% at 26% 18%,
+      rgba(255, 250, 238, 0.16),
+      transparent 60%
+    ),
+    radial-gradient(38% 52% at 72% 64%, rgba(17, 17, 15, 0.3), transparent 70%),
+    radial-gradient(30% 44% at 22% 78%, rgba(255, 250, 238, 0.05), transparent 68%),
+    radial-gradient(54% 30% at 58% 12%, rgba(17, 17, 15, 0.2), transparent 72%),
+    linear-gradient(150deg, #615c53, #4a463e 56%, #37342e);
+  border: 1px solid rgba(240, 237, 229, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 250, 238, 0.1),
+    0 0 4rem 1.5rem rgba(17, 17, 15, 0.55);
 }
 
 /* ==========================================================================
@@ -780,8 +992,8 @@ ol {
    screens (§17), not an accident of scaling the desktop composition down. */
 .decomposition__stage .stage,
 .reconstruction__stage .stage {
-  --strata-scale: 0.62;
-  --sep-scale: 0.6;
+  --strata-scale: 0.54;
+  --sep-scale: 0.52;
 }
 
 @media (min-width: 62em) {
@@ -909,7 +1121,7 @@ ol {
   }
 
   .layer {
-    min-height: 82svh;
+    min-height: 72svh;
     display: flex;
     flex-direction: column;
     justify-content: center;
