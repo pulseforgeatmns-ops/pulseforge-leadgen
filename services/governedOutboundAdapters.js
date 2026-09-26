@@ -8,6 +8,7 @@ const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
 const { resolveCanonicalSenderIdentity, evaluateCanonicalSenderReadiness } = require('../utils/canonicalSenderIdentity');
 const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
 const { createOutboundEngine, assessOperatingCapacity } = require('../packages/emmett-outbound');
+const { assessTenantMailboxCapacity } = require('../packages/emmett-outbound/TenantMailboxCapacity');
 const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
 const { canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
 
@@ -65,13 +66,18 @@ function adapters(pool, dependencies = {}) {
       FROM acquisition_outbound_items i
       JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
       WHERE e.program_id=$1 AND i.attempted_at IS NOT NULL`, [program.id]).catch(() => ({ rows: [{ total: 0 }] }));
+    const mailboxAssessment = assessTenantMailboxCapacity(snapshot);
     const operating = assessOperatingCapacity({
       assessed,
       policy: program.policy,
       sentToday: snapshot.sentToday,
       totalAttempted: programTotals.rows[0]?.total || 0,
+      schedule: {
+        allowedSendWindow: mailboxAssessment.allowedSendWindow,
+        minSpacingMinutes: mailboxAssessment.minimumSpacingMinutes,
+      },
     });
-    const cap = operating.effectiveDailyCapacity;
+    const cap = operating.dispatchableDailyCapacity;
     if (!Number.isFinite(cap) || cap <= snapshot.sentToday) fail('emmett_capacity_exhausted');
     return { snapshot, assessed, cap, operating, sender, lastAttempt: history.last_attempt };
   }

@@ -325,6 +325,7 @@ function createReplenishmentAdmissionCounters() {
       insufficient_business_fit: 0,
     },
     recovered: 0,
+    recoveredExisting: 0,
     alreadyQueued: 0,
   };
 }

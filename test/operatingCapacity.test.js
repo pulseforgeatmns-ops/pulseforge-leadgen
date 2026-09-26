@@ -5,9 +5,37 @@ const assert = require('node:assert/strict');
 
 const {
   assessOperatingCapacity,
+  computeScheduleLimitedCapacity,
   LIMITING_FACTORS,
 } = require('../packages/emmett-outbound/OperatingCapacity');
 const { evaluateColdOutboundEligibility } = require('../services/outboundInventory');
+
+test('weekday 9–17 window with 60-minute spacing yields eight dispatchable slots', () => {
+  assert.equal(computeScheduleLimitedCapacity({
+    allowedSendWindow: { startHour: 9, endHour: 17 },
+    minSpacingMinutes: 60,
+  }), 8);
+});
+
+test('production policy binds Max demand on schedule before authorization headroom', () => {
+  const operating = assessOperatingCapacity({
+    assessed: {
+      capacity: { recommended: 16, statement: 'Based on today\'s reputation, I recommend 16.' },
+      governor: { outcome: 'proceed', halt: false },
+      health: { score: 82 },
+    },
+    policy: { dailyCap: 15, totalCap: 100 },
+    schedule: {
+      allowedSendWindow: { startHour: 9, endHour: 17, timezone: 'America/New_York' },
+      minSpacingMinutes: 60,
+    },
+  });
+  assert.equal(operating.recommendedSafeDailyCapacity, 16);
+  assert.equal(operating.authorizationLimitedCapacity, 15);
+  assert.equal(operating.scheduleLimitedCapacity, 8);
+  assert.equal(operating.dispatchableDailyCapacity, 8);
+  assert.equal(operating.limitingFactor, LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING);
+});
 
 test('Emmett recommended capacity is independent of authorization daily cap', () => {
   const operating = assessOperatingCapacity({
@@ -20,9 +48,12 @@ test('Emmett recommended capacity is independent of authorization daily cap', ()
     policy: { dailyCap: 5, totalCap: 100 },
     sentToday: 0,
     totalAttempted: 10,
+    schedule: { allowedSendWindow: { startHour: 0, endHour: 24 }, minSpacingMinutes: 30 },
   });
 
   assert.equal(operating.recommendedSafeDailyCapacity, 12);
+  assert.equal(operating.authorizationLimitedCapacity, 5);
+  assert.equal(operating.dispatchableDailyCapacity, 5);
   assert.equal(operating.effectiveDailyCapacity, 5);
   assert.equal(operating.limitingFactor, LIMITING_FACTORS.AUTHORIZATION_DAILY_CAP);
   assert.equal(operating.governor, 'proceed');
@@ -40,8 +71,10 @@ test('when authorization is higher, deliverability is the visible limiter', () =
       snapshot: { providerCeiling: 50 },
     },
     policy: { dailyCap: 20, totalCap: 100 },
+    schedule: { allowedSendWindow: { startHour: 0, endHour: 24 }, minSpacingMinutes: 30 },
   });
   assert.equal(operating.recommendedSafeDailyCapacity, 12);
+  assert.equal(operating.dispatchableDailyCapacity, 12);
   assert.equal(operating.effectiveDailyCapacity, 12);
   assert.equal(operating.limitingFactor, LIMITING_FACTORS.DELIVERABILITY);
 });
@@ -55,7 +88,9 @@ test('remaining total authorization can bind effective capacity', () => {
     },
     policy: { dailyCap: 20, totalCap: 100 },
     totalAttempted: 97,
+    schedule: { allowedSendWindow: { startHour: 0, endHour: 24 }, minSpacingMinutes: 30 },
   });
+  assert.equal(operating.dispatchableDailyCapacity, 3);
   assert.equal(operating.effectiveDailyCapacity, 3);
   assert.equal(operating.limitingFactor, LIMITING_FACTORS.AUTHORIZATION_REMAINING_TOTAL);
 });

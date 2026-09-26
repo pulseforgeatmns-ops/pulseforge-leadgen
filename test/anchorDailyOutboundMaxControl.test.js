@@ -23,6 +23,7 @@ test('Max derives a three-day inventory target from Emmett effective capacity, e
   });
   assert.equal(authorizationBound.state, 'critical');
   assert.equal(authorizationBound.safeDailyCapacity, 5);
+  assert.equal(authorizationBound.dispatchableDailyCapacity, 5);
   assert.equal(authorizationBound.effectiveDailyCapacity, 5);
   assert.equal(authorizationBound.recommendedSafeDailyCapacity, 16);
   assert.equal(authorizationBound.limitingFactor, 'authorization_daily_cap');
@@ -40,6 +41,7 @@ test('Max derives a three-day inventory target from Emmett effective capacity, e
     targetDays: 3,
   });
   assert.equal(emmettBound.safeDailyCapacity, 3);
+  assert.equal(emmettBound.dispatchableDailyCapacity, 3);
   assert.equal(emmettBound.effectiveDailyCapacity, 3);
   assert.equal(emmettBound.recommendedSafeDailyCapacity, 3);
   assert.equal(emmettBound.limitingFactor, 'deliverability');
@@ -153,6 +155,29 @@ test('Max reuse loader preserves company geography without fabricating missing l
   assert.equal(mapped[1].location, null);
 });
 
+test('Max inventory target uses dispatchable capacity when schedule is the bottleneck', () => {
+  const plan = buildControlPlan({
+    dailyCap: 15,
+    emmettCapacity: 16,
+    operatingCapacity: {
+      recommendedSafeDailyCapacity: 16,
+      authorizationLimitedCapacity: 15,
+      scheduleLimitedCapacity: 8,
+      dispatchableDailyCapacity: 8,
+      effectiveDailyCapacity: 15,
+      limitingFactor: 'schedule_window_spacing',
+      governor: 'proceed',
+    },
+    cleanInventory: 3,
+    targetDays: 3,
+  });
+  assert.equal(plan.dispatchableDailyCapacity, 8);
+  assert.equal(plan.targetInventory, 24);
+  assert.equal(plan.deficit, 21);
+  assert.equal(plan.limitingFactor, 'schedule_window_spacing');
+  assert.equal(plan.state, 'critical');
+});
+
 test('Max invokes Scout for a deficit and records the post-replenishment state without touching send authority', async () => {
   const events = [];
   let scoutPlan = null;
@@ -184,11 +209,19 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
       snapshot: { sentToday: 1 },
       assessed: { governor: { outcome: 'proceed' }, health: { score: 74 } },
     },
-    inventory: { clean: [{}, {}], excluded: [], scope: {} },
-    inventoryAfter: { clean: Array.from({ length: 15 }, () => ({})), excluded: [], scope: {} },
+    inventory: {
+      clean: [{ prospectId: '1' }, { prospectId: '2' }],
+      excluded: [],
+      scope: {},
+    },
+    inventoryAfter: {
+      clean: Array.from({ length: 15 }, (_, i) => ({ prospectId: String(i + 1) })),
+      excluded: [],
+      scope: {},
+    },
     scoutRamp: async ({ plan }) => {
       scoutPlan = plan;
-      return { promoted: 13, discoveredQueued: 13 };
+      return { promoted: 13, enrichmentPromoted: 13, discoveredQueued: 13 };
     },
   });
 
@@ -196,8 +229,11 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
   assert.equal(result.plan.state, 'healthy');
   assert.equal(result.plan.cleanInventory, 15);
   assert.equal(result.emmett.safeCapacity, 5);
+  assert.equal(result.emmett.dispatchableDailyCapacity, 5);
   assert.equal(result.emmett.effectiveDailyCapacity, 5);
   assert.equal(result.emmett.recommendedSafeDailyCapacity, 5);
+  assert.equal(result.inventoryGrowth.newCleanInventoryAdded, 13);
+  assert.equal(result.inventoryGrowth.netCleanInventoryDelta, 13);
   assert.equal(result.plan.effectiveDailyCapacity, 5);
   assert.equal(result.plan.targetInventory, 15);
   assert.equal(events.length, 1);
@@ -220,6 +256,9 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
     cap: 12,
     operating: {
       recommendedSafeDailyCapacity: 12,
+      authorizationLimitedCapacity: 12,
+      scheduleLimitedCapacity: 12,
+      dispatchableDailyCapacity: 12,
       effectiveDailyCapacity: 12,
       limitingFactor: 'deliverability',
       governor: 'proceed',
@@ -242,7 +281,13 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
     funnel: { discovered: 0, fit: 0, admittedToEnrichment: 0, enrichmentPending: 4, promotedVerified: 10, unresolved: 1, permanentlyRejected: 0 },
     scoutRamp: async ({ plan }) => {
       calls.push(plan.deficit);
-      return { promoted: 10, recovered: 0, discoveredQueued: 6, admission: { discovered: 12, evaluated: 12, fit: 8, admittedToEnrichment: 6, recovered: 0, rejected: {} } };
+      return {
+        promoted: 10,
+        enrichmentPromoted: 10,
+        recovered: 0,
+        discoveredQueued: 6,
+        admission: { discovered: 12, evaluated: 12, fit: 8, admittedToEnrichment: 6, recovered: 0, rejected: {} },
+      };
     },
   });
   assert.equal(first.plan.state, 'replenish');
@@ -262,7 +307,13 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
     funnel: first.funnel,
     scoutRamp: async ({ plan }) => {
       calls.push(plan.deficit);
-      return { promoted: 16, recovered: 0, discoveredQueued: 4, admission: { discovered: 8, evaluated: 8, fit: 5, admittedToEnrichment: 4, recovered: 0, rejected: {} } };
+      return {
+        promoted: 16,
+        enrichmentPromoted: 16,
+        recovered: 0,
+        discoveredQueued: 4,
+        admission: { discovered: 8, evaluated: 8, fit: 5, admittedToEnrichment: 4, recovered: 0, rejected: {} },
+      };
     },
   });
   assert.equal(calls[1], 16);
