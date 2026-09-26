@@ -30,7 +30,9 @@ class GovernedOutboundStore {
       [data.reason, { ...data, eventId: event.rows[0].id }]);
     }
   }
-  async program() { return this.one("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' AND mode<>'revoked'"); }
+  async program() {
+    return this.one("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' AND mode<>'revoked' ORDER BY authorized_at DESC LIMIT 1");
+  }
   async createProgram(p, scopeHash, actor) {
     const id = `outbound_${hash([p, scopeHash, actor]).slice(0, 24)}`;
     const row = await this.one(`INSERT INTO acquisition_outbound_programs

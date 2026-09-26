@@ -5,10 +5,12 @@ const assert = require('node:assert/strict');
 
 const {
   buildControlPlan,
+  confirmedServiceAreaMatch,
   missionCandidateReason,
   runMaxOutboundControlLoop,
   _test: { scoutInput, mapReuseCompanyRows },
 } = require('../services/maxOutboundControlLoop');
+const { adapters } = require('../services/governedOutboundAdapters');
 const { startAnchorGovernedScheduler } = require('../services/anchorGovernedScheduler');
 
 test('Max derives a three-day inventory target from the lower of policy and Emmett capacity', () => {
@@ -42,6 +44,17 @@ test('Max derives a three-day inventory target from the lower of policy and Emme
   assert.equal(emmettBound.targetInventory, 9);
   assert.equal(emmettBound.state, 'healthy');
   assert.equal(emmettBound.shouldReplenish, false);
+});
+
+test('confirmedServiceAreaMatch accepts boolean true and non-empty locality strings', () => {
+  assert.equal(confirmedServiceAreaMatch(true), true);
+  assert.equal(confirmedServiceAreaMatch('Manchester'), true);
+  assert.equal(confirmedServiceAreaMatch('Bedford'), true);
+  assert.equal(confirmedServiceAreaMatch('Hooksett'), true);
+  assert.equal(confirmedServiceAreaMatch(false), false);
+  assert.equal(confirmedServiceAreaMatch(null), false);
+  assert.equal(confirmedServiceAreaMatch(''), false);
+  assert.equal(confirmedServiceAreaMatch('   '), false);
 });
 
 test('Max inventory requires confirmed service area and source-mission segment compatibility', () => {

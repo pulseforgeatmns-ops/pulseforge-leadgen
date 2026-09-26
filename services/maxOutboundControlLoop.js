@@ -80,6 +80,12 @@ function segmentAliases(scope) {
   return aliases;
 }
 
+function confirmedServiceAreaMatch(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  return String(value).trim().length > 0;
+}
+
 function missionCandidateReason(row, scope) {
   if (!isProspectServiceAreaConfirmed(row, scope)) return 'service_area_not_confirmed';
   const vertical = normalizeVertical(row.vertical || row.industry || '');
@@ -445,6 +451,7 @@ module.exports = {
   ENRICHABLE_SCOUT_VERTICALS,
   buildControlPlan,
   sourceScope,
+  confirmedServiceAreaMatch,
   missionCandidateReason,
   loadCleanInventory,
   runMaxOutboundControlLoop,
