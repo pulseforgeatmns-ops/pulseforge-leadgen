@@ -76,8 +76,16 @@ function segmentAliases(scope) {
   return aliases;
 }
 
+function confirmedServiceAreaMatch(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  return String(value).trim().length > 0;
+}
+
 function missionCandidateReason(row, scope) {
-  if (row.service_area_match !== true) return 'service_area_not_confirmed';
+  if (!confirmedServiceAreaMatch(row.service_area_match)) {
+    return 'service_area_not_confirmed';
+  }
   const vertical = normalizeVertical(row.vertical || row.industry || '');
   const aliases = segmentAliases(scope);
   if (aliases.size && (!vertical || !aliases.has(vertical))) return 'mission_segment_mismatch';
@@ -422,6 +430,7 @@ module.exports = {
   ENRICHABLE_SCOUT_VERTICALS,
   buildControlPlan,
   sourceScope,
+  confirmedServiceAreaMatch,
   missionCandidateReason,
   loadCleanInventory,
   runMaxOutboundControlLoop,

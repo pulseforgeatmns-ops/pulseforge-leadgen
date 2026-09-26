@@ -5,10 +5,12 @@ const assert = require('node:assert/strict');
 
 const {
   buildControlPlan,
+  confirmedServiceAreaMatch,
   missionCandidateReason,
   runMaxOutboundControlLoop,
   _test: { scoutInput, mapReuseCompanyRows },
 } = require('../services/maxOutboundControlLoop');
+const { adapters } = require('../services/governedOutboundAdapters');
 const { startAnchorGovernedScheduler } = require('../services/anchorGovernedScheduler');
 
 test('Max derives a three-day inventory target from the lower of policy and Emmett capacity', () => {
@@ -44,8 +46,34 @@ test('Max derives a three-day inventory target from the lower of policy and Emme
   assert.equal(emmettBound.shouldReplenish, false);
 });
 
+test('confirmedServiceAreaMatch accepts boolean true and non-empty locality strings', () => {
+  assert.equal(confirmedServiceAreaMatch(true), true);
+  assert.equal(confirmedServiceAreaMatch('Manchester'), true);
+  assert.equal(confirmedServiceAreaMatch('Bedford'), true);
+  assert.equal(confirmedServiceAreaMatch('Hooksett'), true);
+  assert.equal(confirmedServiceAreaMatch(false), false);
+  assert.equal(confirmedServiceAreaMatch(null), false);
+  assert.equal(confirmedServiceAreaMatch(''), false);
+  assert.equal(confirmedServiceAreaMatch('   '), false);
+});
+
 test('Max inventory requires confirmed service area and source-mission segment compatibility', () => {
   const scope = { segment: 'short_term_rental', industry: 'hospitality' };
+  for (const locality of ['Manchester', 'Bedford', 'Hooksett']) {
+    assert.equal(
+      missionCandidateReason({ service_area_match: locality, vertical: 'property_manager' }, scope),
+      null,
+      locality
+    );
+  }
+  assert.equal(
+    missionCandidateReason({ service_area_match: null, vertical: 'property_manager' }, scope),
+    'service_area_not_confirmed'
+  );
+  assert.equal(
+    missionCandidateReason({ service_area_match: '', vertical: 'property_manager' }, scope),
+    'service_area_not_confirmed'
+  );
   assert.equal(
     missionCandidateReason({ service_area_match: false, vertical: 'str_manager' }, scope),
     'service_area_not_confirmed'
@@ -62,6 +90,16 @@ test('Max inventory requires confirmed service area and source-mission segment c
     missionCandidateReason({ service_area_match: true, vertical: 'property_management' }, scope),
     null
   );
+  assert.equal(
+    missionCandidateReason({ service_area_match: 'Manchester', vertical: 'law_firm' }, scope),
+    'mission_segment_mismatch'
+  );
+});
+
+test('governed outbound adapters expose infrastructure for Max control loop', () => {
+  const pool = { query: async () => ({ rows: [] }) };
+  const adapterSet = adapters(pool, { infrastructure: async () => ({ cap: 5 }) });
+  assert.equal(typeof adapterSet.infrastructure, 'function');
 });
 
 test('Max scoutInput carries structured replenishment workflow fields', () => {
