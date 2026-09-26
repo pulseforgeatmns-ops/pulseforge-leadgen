@@ -26,4 +26,5 @@ jobs:
           node --test test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js
           test/tenantMailboxPollExecutor.test.js test/tenantOutreachScheduler.test.js
           test/emmettTenantMailboxCapacity.test.js test/mailHeaders.test.js
+          test/maxScoutReplenishment.test.js
           packages/acquisition-mission/tests/spec215PreparedOutreachRevision.test.js
