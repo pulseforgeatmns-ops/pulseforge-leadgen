@@ -45,7 +45,12 @@ test('Max derives a three-day inventory target from the lower of policy and Emme
 });
 
 test('Max inventory requires confirmed service area and source-mission segment compatibility', () => {
-  const scope = { segment: 'short_term_rental', industry: 'hospitality' };
+  const scope = {
+    segment: 'short_term_rental',
+    industry: 'hospitality',
+    cities: ['manchester', 'bedford', 'hooksett', 'goffstown', 'londonderry', 'auburn'],
+    region: 'Greater Manchester',
+  };
   assert.equal(
     missionCandidateReason({ service_area_match: false, vertical: 'str_manager' }, scope),
     'service_area_not_confirmed'
@@ -61,6 +66,22 @@ test('Max inventory requires confirmed service area and source-mission segment c
   assert.equal(
     missionCandidateReason({ service_area_match: true, vertical: 'property_management' }, scope),
     null
+  );
+  assert.equal(
+    missionCandidateReason({
+      service_area_match: 'Bedford',
+      company_location: '166 State Rte 101, Bedford, NH 03110',
+      vertical: 'str_manager',
+    }, scope),
+    null
+  );
+  assert.equal(
+    missionCandidateReason({
+      service_area_match: 'Henniker',
+      company_location: 'Henniker, NH',
+      vertical: 'str_manager',
+    }, scope),
+    'service_area_not_confirmed'
   );
 });
 

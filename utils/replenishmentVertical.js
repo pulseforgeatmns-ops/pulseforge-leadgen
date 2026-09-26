@@ -1,7 +1,11 @@
 'use strict';
 
 const { normalizeVertical } = require('./normalize');
-const { matchServiceAreaFromLocation, configuredServiceAreas } = require('./serviceArea');
+const { configuredServiceAreas } = require('./serviceArea');
+const {
+  isLocationInMissionGeography,
+  resolveMissionAllowedCities,
+} = require('./missionGeography');
 
 const ENRICHABLE_SCOUT_VERTICALS = Object.freeze([
   'property_manager',
@@ -226,11 +230,23 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
     return { admitted: false, reason: 'segment_mismatch', vertical };
   }
 
-  const serviceAreas = configuredServiceAreas(context.clientConfig || context);
-  if (serviceAreas.length) {
-    const location = asText(candidate.location || candidate.address || provenance.discoveryCity);
-    const matched = matchServiceAreaFromLocation(location, serviceAreas);
-    if (!matched) {
+  const allowedCities = resolveMissionAllowedCities({
+    allowedCities: context.allowedCities,
+    missionCities: context.missionCities,
+    cities: context.cities,
+    geography: context.geography,
+    service_area: context.service_area,
+    clientConfig: context.clientConfig,
+    region: context.region || context.missionRegion,
+  });
+  if (allowedCities.length) {
+    const location = asText(candidate.location || candidate.address);
+    const inScope = isLocationInMissionGeography({
+      location,
+      city: candidate.city,
+      allowedCities,
+    });
+    if (!inScope) {
       return { admitted: false, reason: 'outside_geography', vertical };
     }
   }

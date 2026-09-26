@@ -76,6 +76,15 @@ function geographyFromLabel(label, profile) {
     state = profileGeo.state || null;
     radiusMiles = profileGeo.radiusMiles != null ? Number(profileGeo.radiusMiles) : null;
   }
+  if (/greater\s+manchester/i.test(text || '')) {
+    return {
+      label: text || MANCHESTER_GEO.label,
+      cities: MANCHESTER_GEO.cities.slice(),
+      state: state || 'NH',
+      radiusMiles: radiusMiles != null ? radiusMiles : MANCHESTER_GEO.radiusMiles,
+      permittedNearby: [],
+    };
+  }
   if (/manchester/i.test(text || '')) {
     return {
       label: text || MANCHESTER_GEO.label,
