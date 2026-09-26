@@ -377,17 +377,18 @@ ol {
   justify-content: space-between;
   gap: 1.5rem;
   padding: clamp(1.1rem, 2vw, 1.9rem) var(--gutter);
-  mix-blend-mode: normal;
-  transition: background var(--dur-mid) var(--ease-weighted),
-    border-color var(--dur-mid) var(--ease-weighted);
+  /* Opaque at all times. The bar must never let the narrative's large type
+     scroll through it, and an IntersectionObserver callback can be delayed by
+     rendering work — so legibility cannot depend on one firing. Over Act I it
+     is the same colour as the environment behind it and reads as full bleed. */
+  background: var(--bg);
+  transition: border-color var(--dur-mid) var(--ease-weighted);
   border-bottom: 1px solid transparent;
 }
 
-/* Solid, not glassy. Translucency here let the narrative's large type ghost
-   through the bar and became a legibility problem; an opaque band with a
-   hairline rule is both clearer and more in character (doctrine §10, §21). */
+/* Once the hero has passed, a hairline separates the bar from the page. This is
+   decoration, so it is safe for it to depend on an observer. */
 .nav[data-lifted='true'] {
-  background: var(--bg);
   border-bottom-color: var(--rule);
 }
 
@@ -952,7 +953,7 @@ ol {
     linear-gradient(150deg, #615c53, #4a463e 56%, #37342e);
   border: 1px solid rgba(240, 237, 229, 0.12);
   box-shadow: inset 0 1px 0 rgba(255, 250, 238, 0.1),
-    0 0 4rem 1.5rem rgba(17, 17, 15, 0.55);
+    0 0 1.75rem 0.5rem rgba(17, 17, 15, 0.5);
 }
 
 /* ==========================================================================
@@ -1121,7 +1122,7 @@ ol {
   }
 
   .layer {
-    min-height: 72svh;
+    min-height: 62svh;
     display: flex;
     flex-direction: column;
     justify-content: center;
@@ -1176,15 +1177,30 @@ ol {
    ACT III — DIAGNOSIS
    ========================================================================== */
 
-/* The dark-to-mineral turn. A material transition, not a fade-in effect. */
+/* The dark-to-mineral turn, passing through the colour of the substrate: you
+   go down through the stone to reach the paper. Kept short and tightly ramped
+   so it reads as a material seam rather than a long smear of brown. */
+
+/* The turn is itself a pause, so the acts either side of it do not also need
+   their full breathing room against it — that stacked up as a stretch of
+   nothing before the next content arrived. */
+.turn + .act {
+  padding-top: clamp(2.5rem, 4vw, 4.5rem);
+}
+
+.act:has(+ .turn) {
+  padding-bottom: clamp(2.5rem, 4vw, 4.5rem);
+}
 
 .turn {
-  height: clamp(9rem, 22vh, 16rem);
+  height: clamp(4.5rem, 9vh, 7rem);
   background: linear-gradient(
     to bottom,
-    var(--substral-black),
-    #39362f 62%,
-    var(--mineral)
+    var(--substral-black) 0%,
+    #33302a 26%,
+    #5f5a50 52%,
+    #a8a396 78%,
+    var(--mineral) 100%
   );
 }
 
@@ -1721,9 +1737,11 @@ ol {
 .turn--back {
   background: linear-gradient(
     to bottom,
-    var(--mineral),
-    #39362f 38%,
-    var(--substral-black)
+    var(--mineral) 0%,
+    #a8a396 22%,
+    #5f5a50 48%,
+    #33302a 74%,
+    var(--substral-black) 100%
   );
 }
 
@@ -1820,7 +1838,7 @@ ol {
 }
 
 .closing {
-  padding-top: clamp(4rem, 10vw, 8rem);
+  padding-top: clamp(2.5rem, 6vw, 5rem);
 }
 
 .closing__cta {
@@ -1847,9 +1865,15 @@ ol {
     order: 2;
   }
 
+  /* The column is long because the convergence needs scroll to happen in. The
+     content is centred in it so the reader is never looking at the empty end
+     of a tall block. */
   .converge {
-    min-height: 170svh;
-    padding-block: 16svh;
+    min-height: 130svh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-block: 6svh;
   }
 }
 

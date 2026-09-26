@@ -135,6 +135,20 @@ describe('The six layers (doctrine §12)', () => {
     assert.match(copy, /The order is not stylistic/);
   });
 
+  it('labels the reconstruction rows by how each layer is known', () => {
+    /* These read as a status column, so they must not assert a state that is
+       not true yet — every row claiming "Aligned" before anything has aligned
+       looked like leftover debug text. They carry the evidence class instead,
+       which is information and matches the Act II manifests. */
+    const states = [...html.matchAll(/class="converge__state">([^<]+)</g)].map((m) => m[1]);
+    assert.equal(states.length, 6);
+    const vocabulary = new Set(['Measured', 'Observed', 'Inferred', 'Decided']);
+    for (const state of states) {
+      assert.ok(vocabulary.has(state), `unexpected status word: ${state}`);
+    }
+    assert.equal(states.at(-1), 'Decided', 'design is decided, not measured');
+  });
+
   it('reuses the same six names in the reconstruction act', () => {
     const converge = html.slice(html.indexOf('data-converge'));
     for (const name of ['Performance', 'Accessibility', 'Conversion', 'Search', 'Trust', 'Design']) {
@@ -754,6 +768,18 @@ describe('Responsive intent (doctrine §17)', () => {
     // A shallow sticky band on small screens, a full-height column on wide ones.
     assert.match(css, /\.decomposition__stage\s*\{[\s\S]*?height:\s*calc\(28svh/);
     assert.match(css, /@media \(min-width: 62em\)[\s\S]*?height:\s*100svh/);
+  });
+
+  it('keeps the fixed nav opaque without waiting for an observer', () => {
+    /* The bar was transparent until an IntersectionObserver marked it lifted,
+       and under render load that callback arrived late enough for display type
+       to scroll straight through it. Opacity is now unconditional; only the
+       hairline rule depends on the observer. */
+    const base = css.match(/^\.nav \{[^}]*\}/m)[0];
+    assert.match(base, /background:\s*var\(--bg\)/);
+    const lifted = css.match(/\.nav\[data-lifted='true'\]\s*\{[^}]*\}/)[0];
+    assert.doesNotMatch(lifted, /background/);
+    assert.match(lifted, /border-bottom-color/);
   });
 
   it('keeps the single-column sticky band above the copy it pins over', () => {
