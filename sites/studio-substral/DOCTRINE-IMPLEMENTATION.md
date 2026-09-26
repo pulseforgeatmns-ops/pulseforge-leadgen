@@ -243,6 +243,11 @@ Not a degraded version. Reduced-motion visitors get:
 
 - the object presented **already decomposed** at a fixed separation, which is
   the state the narrative actually needs to make its point;
+- **a single column**, because with nothing pinned the two-column layout left an
+  empty gutter beside all six chapters once the specimen had scrolled past. The
+  specimen is shown once, whole and static, and the chapters read beneath it.
+  The harness asserts the column count, since this was a real defect and an easy
+  one to reintroduce;
 - the canvas suppressed entirely (`display: none`) and the Three.js module
   never requested;
 - the six converged names aligned rather than drifting;

@@ -2003,22 +2003,58 @@ html[data-js='on'] [data-reveal][data-revealed='true'] {
     transform: none;
   }
 
-  /* No camera travel, no depth-driven scroll animation: the object is
-     presented already decomposed, which is the state the narrative needs. */
+  /* No camera travel, no depth-driven scroll animation: the specimen is
+     presented already decomposed, which is the state the narrative needs. The
+     separation is a fixed value rather than the scroll-driven one, and the
+     substrate is placed with the same constant so it still sits directly
+     beneath the deepest layer. */
   .plate {
-    transform: translate3d(0, 0, calc((2.5 - var(--i)) * 26px));
+    transform: translate3d(0, 0, calc((3 - var(--i)) * 22px * var(--sep-scale, 1)));
+  }
+
+  .plinth {
+    transform: translate3d(
+      0,
+      0,
+      calc((3 - 6.4) * 22px * var(--sep-scale, 1) - 0.22rem)
+    );
   }
 
   .converge__item {
     transform: none;
   }
 
-  /* Released from sticky: nothing travels, so nothing needs to be pinned. */
+  /* Released from sticky: nothing travels, so nothing needs to be pinned.
+
+     And with nothing pinned, the two-column layout would leave the reader an
+     empty gutter beside six chapters once the object had scrolled past. So the
+     acts collapse to one column: the specimen is presented once, already
+     decomposed, and the chapters read beneath it. That is a composed reading of
+     the same narrative, not a degraded one (doctrine §19). */
+  .decomposition__layout,
+  .reconstruction__layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .decomposition__stage,
   .reconstruction__stage {
     position: relative;
     height: clamp(20rem, 54svh, 34rem);
     padding-top: 0;
+    border-right: 0;
+    border-left: 0;
+    border-bottom: 1px solid var(--rule);
+    order: 0;
+  }
+
+  .layer {
+    min-height: 0;
+    padding-right: 0;
+  }
+
+  .converge {
+    min-height: 0;
+    padding-block: clamp(2rem, 5vw, 4rem);
   }
 
   .action__arrow {

@@ -247,17 +247,25 @@ if (run('states')) {
 
   {
     const page = await open({ width: 1512, reduced: true });
-    const state = await page.evaluate(() => ({
-      canvas: getComputedStyle(document.querySelector('[data-stage-canvas]')).display,
-      revealed: [...document.querySelectorAll('[data-reveal]')].every(
-        (e) => e.dataset.revealed === 'true'
-      ),
-      sticky: getComputedStyle(document.querySelector('.decomposition__stage')).position,
-    }));
+    const state = await page.evaluate(() => {
+      const layout = document.querySelector('.decomposition__layout');
+      return {
+        canvas: getComputedStyle(document.querySelector('[data-stage-canvas]')).display,
+        revealed: [...document.querySelectorAll('[data-reveal]')].every(
+          (e) => e.dataset.revealed === 'true'
+        ),
+        sticky: getComputedStyle(document.querySelector('.decomposition__stage')).position,
+        // One column: with nothing pinned, two columns would leave an empty
+        // gutter beside every chapter once the object had scrolled past.
+        columns: getComputedStyle(layout).gridTemplateColumns.split(' ').length,
+      };
+    });
     if (state.canvas !== 'none') fail('reduced motion still shows the canvas');
     else if (!state.revealed) fail('reduced motion hides revealable content');
     else if (state.sticky !== 'relative') fail('reduced motion keeps the stage pinned');
-    else pass('reduced motion: canvas suppressed, stage released, all content visible');
+    else if (state.columns !== 1)
+      fail(`reduced motion leaves ${state.columns} columns and an empty gutter`);
+    else pass('reduced motion: canvas suppressed, single column, all content visible');
     await page.close();
   }
 
