@@ -6,7 +6,8 @@
   "scripts": {
     "test": "python3 -m pytest -q",
     "feature-report": "python3 -m kalshi_research.cli feature-report",
-    "diagnose-data": "python3 -m kalshi_research.cli diagnose-data"
+    "diagnose-data": "python3 -m kalshi_research.cli diagnose-data",
+    "evaluate-hypothesis": "python3 -m kalshi_research.cli evaluate-hypothesis"
   },
   "engines": {
     "node": ">=18"

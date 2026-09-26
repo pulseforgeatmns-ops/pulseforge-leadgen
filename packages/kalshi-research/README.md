@@ -36,6 +36,9 @@ python -m kalshi_research.cli diagnose-data
 # Deterministic feature distributions for resolved markets, split by train/test and
 # YES vs NO outcomes. Local/read-only — no network, no model training.
 python -m kalshi_research.cli feature-report --train-fraction 0.5
+# List immutable hypothesis/rule candidates, then evaluate H-005 (entry midpoint above).
+python -m kalshi_research.cli list-hypotheses
+python -m kalshi_research.cli evaluate-hypothesis --hypothesis-id H-005 --train-fraction 0.5
 # Resolve completed paper trades from Kalshi's public market data, then view P/L.
 python -m kalshi_research.cli resolve-settlements
 # Resolve outcomes for every captured market, then replay the threshold rule.
@@ -69,13 +72,16 @@ The illustrative threshold strategy is capped at one virtual contract per market
 
 `feature-report` is the first feature-research command. For every resolved market it extracts deterministic features from stored snapshots only (first yes ask/bid, spread, midpoint, time-to-close when available, snapshot count, ask move first→last, and BTC spot move over the same window when ticks exist), then prints mean/median/stdev/min/max distributions split by train vs test and by YES vs NO outcomes. It is read-only and local-only: no network calls, no writes, and no ML training. Use the YES−NO mean gaps to shortlist which features deserve a deterministic strategy-rule test next. Accepts `--train-fraction` (same chronological split as `replay-split` / `diagnose-data`).
 
+`evaluate-hypothesis` runs an immutable rule candidate end-to-end. **H-005 / BuyWhenEntryMidpointAbove** buys YES at `first_yes_ask` when entry midpoint is strictly above a threshold. Thresholds are swept on **train fee-adjusted P/L only** (candidate range 50–65c), then the selected cutoff is scored on the untouched test window, expanding-window walk-forward folds, and a sensitivity grid around the selected threshold. The report prints trades, win rate, gross P/L, fees, net P/L, max drawdown, and sign stability, then emits an explicit **promoted** or **probably_noise** verdict. Entry rules must not use path features (`ask_move_cents`, `btc_move_usd`). **H-001** (midpoint below 40) is retired and must not be retuned. Still paper/replay only — no ML and no live trading path.
+
 `replay`, `replay-sweep`, and `replay-split` all model fees using Kalshi's general taker-fee formula, `fee = ceil(rate * price * (1 - price))`, with a conservative default rate of 7% (`--fee-rate`, override per run). Every result reports P/L both fee-excluded and fee-adjusted so a barely-positive pre-fee result can be checked against a more realistic, fee-adjusted one; `replay-split` selects and reports thresholds using the fee-adjusted number. `--min-edge-cents` adds an optional, purely price-derived filter: an entry is only taken if its fee-adjusted best case (contract resolves YES) beats its fee-adjusted worst case (contract resolves NO) by at least that many cents. It defaults to 0 (disabled) and never invents a probability estimate — it only tightens the existing price threshold using numbers already in the trade. Fee-adjusted output is still in-sample or first-pass out-of-sample research, not evidence of a durable edge.
 
 ## Architecture
 
 - `data/kalshi.py`: read-only Kalshi REST abstraction.
 - `data/btc.py`: BTC price-feed interfaces plus a REST implementation.
-- `strategies/`: deterministic strategy protocol and an illustrative threshold strategy.
+- `strategies/`: deterministic strategy protocol, illustrative threshold strategy, and H-005 midpoint-above rule.
+- `hypotheses/`: immutable hypothesis registry plus fee-aware train/test, walk-forward, and sensitivity evaluation.
 - `engine/`: orchestration, virtual portfolio, paper fill simulation, and risk controls.
 - `storage/`: PostgreSQL-ready models and repository for market snapshots, BTC ticks, and paper trades.
 - `reporting/`: portfolio metrics, data-health, and data-quality/feature-readiness diagnostics.
