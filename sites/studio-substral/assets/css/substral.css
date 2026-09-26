@@ -1153,7 +1153,12 @@ ol {
   }
 }
 
-/* A philosophy line, set as a rule-anchored pull statement, not a card. */
+/* A philosophy line, set as a rule-anchored pull statement, not a card. The
+   statement needs space around it to land, but a full act's worth of margin on
+   top of its own padding turned a held beat into a wait. */
+.principle-shell {
+  margin-top: clamp(2.5rem, 5vw, 6rem);
+}
 
 .principle {
   border-top: 1px solid var(--rule-strong);
