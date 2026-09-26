@@ -145,6 +145,52 @@ describe('Max-directed outbound inventory replenishment', () => {
     assert.equal(need.kind, 'unrelated');
   });
 
+  it('does not let matching intelligence or a completed search satisfy a clean-inventory deficit', () => {
+    const input = replenishmentInput();
+    const evidence = {
+      existingIntelligence: { sufficient: true, counts: { matched: 27 } },
+      recentResults: [{
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        objective: input.objective,
+        evidenceRefs: [{ id: 'recent-search' }],
+      }],
+    };
+    const need = assessScoutNeed({ ...input, ...evidence });
+    assert.equal(need.needed, true);
+    assert.equal(need.kind, 'investigate');
+    const satisfied = assessScoutNeed({ ...input, ...evidence, inventoryDeficit: 0 });
+    assert.equal(satisfied.needed, false);
+  });
+
+  it('reaches discovery and admission on consecutive deficit cycles despite reusable company stock', async () => {
+    let discoveryCalls = 0;
+    let admissionCalls = 0;
+    const options = loopOpts(store, aoStore, {
+      loadCompanies: async () => Array.from({ length: 27 }, (_, i) => ({
+        id: `existing-${i}`, tenantId: ANCHOR_TENANT_ID,
+        name: `Existing Property Manager ${i}`, industry: 'property_management',
+        location: 'Manchester, NH', website: `https://existing-${i}.example`,
+        updatedAt: new Date().toISOString(),
+      })),
+      discover: async () => {
+        discoveryCalls += 1;
+        return [{ name: 'New STR Manager', website: 'https://new-str.example',
+          industry: 'str_manager', location: 'Bedford, NH', source: 'places' }];
+      },
+      persistCompanies: async () => { admissionCalls += 1; return { inserted: 1 }; },
+    });
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      const before = discoveryCalls;
+      const result = await runAcquisitionIntelligenceLoop(replenishmentInput(), options);
+      assert.equal(result.delegated, true);
+      assert.ok(discoveryCalls > before);
+      assert.equal(result.delegation.authority, 'observe');
+      assert.deepEqual(result.outboundInvoked, []);
+    }
+    assert.ok(admissionCalls >= 2);
+  });
+
   it('preserves governance: observe authority and no outbound contact from Scout', async () => {
     const result = await runAcquisitionIntelligenceLoop(
       replenishmentInput({ authority: 'observe' }),
