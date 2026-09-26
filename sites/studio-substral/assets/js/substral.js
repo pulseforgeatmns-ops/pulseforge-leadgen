@@ -75,11 +75,12 @@ class Stage {
   separation() {
     const t = this.eased;
     if (this.mode === 'surface') return 4 + t * 7;
-    /* The same eased opening the dimensional object uses, so the CSS
-       composition and the WebGL one never disagree about how far apart the
-       layers are. A layer is discussed early in the act, so the object has to
-       be open by then. */
-    const opening = this.mode === 'reconstruct' ? (1 - t) ** 0.62 : t ** 0.62;
+    /* The same eased opening, and the same floor, that the dimensional object
+       uses — so the CSS composition and the WebGL one never disagree about how
+       far apart the layers are. The floor matters because the first chapter is
+       reached at the very top of the act, where the object would still be shut. */
+    let opening = (this.mode === 'reconstruct' ? 1 - t : t) ** 0.62;
+    if (this.index() >= 0) opening = Math.max(opening, 0.46);
     return 5 + opening * 38;
   }
 
@@ -92,6 +93,9 @@ class Stage {
   index() {
     if (this.mode === 'surface') return -1;
     if (this.reportedIndex != null) return this.reportedIndex;
+    // Nothing is under examination before the act begins. Returning 0 here
+    // would open the object while the reader is still in the hero.
+    if (this.progress <= 0.01) return -1;
     return clamp(
       Math.floor(this.progress * LAYER_NAMES.length),
       0,

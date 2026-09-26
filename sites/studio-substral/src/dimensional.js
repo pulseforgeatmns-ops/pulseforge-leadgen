@@ -1572,18 +1572,21 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       const p = clamp(progress);
       const separation = mode === 'reconstruct' ? 1 - p : p;
 
-      /* Eased rather than linear: the first chapter is under examination very
-         early in the act, and a layer nobody can see yet is no use. The object
-         opens most of the way by the second chapter and settles after that. */
-      const opening = mode === 'surface' ? p : separation ** 0.62;
-      target.air =
-        mode === 'surface'
-          ? lerp(AIR_ASSEMBLED, AIR_SURFACE_HINT, opening)
-          : lerp(AIR_ASSEMBLED, AIR_SEPARATED, opening);
-
       const subject = NARRATIVE_TO_INDEX.get(activeIndex);
-      const examining = subject != null && separation > 0.1;
+      const examining = subject != null;
       target.focus = examining ? 1 : 0;
+
+      /* Eased rather than linear, and floored while a layer is under
+         examination. The first chapter is reached at the very top of the act,
+         where a linear mapping leaves the object still shut — and a layer
+         nobody can see is no use to the person reading about it. */
+      const widest = mode === 'surface' ? AIR_SURFACE_HINT : AIR_SEPARATED;
+      let air = lerp(AIR_ASSEMBLED, widest, (mode === 'surface' ? p : separation) ** 0.62);
+      if (examining) air = Math.max(air, AIR_ASSEMBLED + (widest - AIR_ASSEMBLED) * 0.46);
+      target.air = air;
+
+      /* Framing follows the air the object actually has, not the scroll. */
+      const opening = clamp((air - AIR_ASSEMBLED) / (widest - AIR_ASSEMBLED));
 
       for (let i = 0; i < PLATES; i += 1) {
         target.emphasis[i] = examining && i === subject ? 1 : 0;
