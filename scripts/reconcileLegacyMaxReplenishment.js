@@ -112,7 +112,7 @@ async function loadMissionAdmissionContext(db) {
     SELECT source_mission_id
     FROM acquisition_outbound_programs
     WHERE tenant_id = $1 AND mode <> 'revoked'
-    ORDER BY updated_at DESC NULLS LAST, id DESC
+    ORDER BY authorized_at DESC NULLS LAST, id DESC
     LIMIT 1
   `, [String(CLIENT_ID)])).rows[0];
 

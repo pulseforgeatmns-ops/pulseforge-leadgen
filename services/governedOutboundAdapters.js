@@ -216,7 +216,7 @@ function adapters(pool, dependencies = {}) {
     if (await require('../dbClient').checkDNC(item.prospect_id, { clientId: 10, pool })) fail('dnc');
   }
   return {
-    loadMission, contact, prepare, prepared, liveGate, validateTenant: tenant,
+    loadMission, contact, infrastructure, prepare, prepared, liveGate, validateTenant: tenant,
     complete: async envelope => {
       const runtime = await runtimeFor();
       const engine = runtime.engine();
