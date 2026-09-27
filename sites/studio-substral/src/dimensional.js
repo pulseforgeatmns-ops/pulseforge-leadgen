@@ -47,6 +47,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   MeshPhysicalMaterial,
+  NormalBlending,
   Object3D,
   PMREMGenerator,
   PCFShadowMap,
@@ -65,7 +66,7 @@ import {
 const SUBSTRAL_BLACK = 0x11110f;
 const MINERAL = 0xf0ede5;
 const PATINA = 0x7fa890;
-const STONE = 0x2a2721;
+const STONE = 0x5a5349;
 
 const PLATE_W = 3.05;
 const PLATE_H = 2.25;
@@ -82,9 +83,9 @@ const AIR_SURFACE_HINT = 0.1;
    varies across its extent and none of its walls are vertical. Dimensions here
    are the pre-displacement slab it starts from; the real extent is measured off
    the built geometry. */
-const SUBSTRATE_W = PLATE_W * 2.02;
-const SUBSTRATE_D = PLATE_H * 2.02;
-const SUBSTRATE_T = 1.5;
+const SUBSTRATE_W = PLATE_W * 2.62;
+const SUBSTRATE_D = PLATE_H * 2.62;
+const SUBSTRATE_T = 2.9;
 /** Air between the planed plateau and the deepest layer. */
 const FOUNDATION_CLEARANCE = 0.17;
 /* How far the camera's aim may travel toward the layer under examination, as a
@@ -125,23 +126,23 @@ const STACK = [
        with the grid it sits on traced faintly beneath. */
     key: 'design',
     narrative: 5,
-    thickness: 0.05,
-    tint: 0.21,
+    thickness: 0.048,
+    tint: 0.3,
     opacity: 0.56,
-    roughness: 0.045,
+    roughness: 0.028,
     clearcoat: 1,
-    clearcoatRoughness: 0.03,
+    clearcoatRoughness: 0.022,
     metalness: 0.02,
-    envMapIntensity: 2.6,
-    wall: { colour: 0xe6e2d6, roughness: 0.13, metalness: 0.97 },
-    arris: 0.66,
-    transmission: 0.14,
-    volume: 0.4,
+    envMapIntensity: 3.4,
+    wall: { colour: 0xe6e2d6, roughness: 0.1, metalness: 0.98 },
+    arris: 0.88,
+    transmission: 0.1,
+    volume: 0.3,
     attenuation: 1.5,
-    ior: 1.52,
+    ior: 1.57,
     art: 'design',
     artOnTop: true,
-    artOpacity: 0.68,
+    artOpacity: 0.72,
     artResolution: 1024,
   },
   {
@@ -150,21 +151,21 @@ const STACK = [
        response, carrying discrete credibility marks instead of fine data. */
     key: 'trust',
     narrative: 4,
-    thickness: 0.112,
-    tint: 0.145,
-    warmth: 0.55,
+    thickness: 0.118,
+    tint: 0.155,
+    warmth: 0.62,
     opacity: 0.44,
-    roughness: 0.17,
-    clearcoat: 0.92,
-    clearcoatRoughness: 0.14,
+    roughness: 0.23,
+    clearcoat: 0.88,
+    clearcoatRoughness: 0.19,
     metalness: 0.09,
-    envMapIntensity: 1.95,
-    wall: { colour: 0xd2c8b2, roughness: 0.34, metalness: 0.88 },
-    arris: 0.56,
-    transmission: 0.52,
-    volume: 1.7,
-    attenuation: 1.15,
-    ior: 1.5,
+    envMapIntensity: 1.9,
+    wall: { colour: 0xd2c8b2, roughness: 0.38, metalness: 0.86 },
+    arris: 0.62,
+    transmission: 0.42,
+    volume: 2.3,
+    attenuation: 1.05,
+    ior: 1.62,
     art: 'trust',
     artOpacity: 0.58,
   },
@@ -174,90 +175,103 @@ const STACK = [
        drives roughness and the marks only appear when light grazes them. */
     key: 'search',
     narrative: 3,
-    thickness: 0.044,
-    tint: 0.08,
+    thickness: 0.031,
+    tint: 0.075,
     opacity: 0.22,
     roughness: 0.92,
     etched: true,
     clearcoat: 0.8,
     clearcoatRoughness: 0.05,
     metalness: 0.04,
-    envMapIntensity: 2.35,
-    wall: { colour: 0xbdb8a6, roughness: 0.17, metalness: 0.93 },
-    arris: 0.34,
-    transmission: 0.93,
-    volume: 0.28,
-    attenuation: 4.5,
+    envMapIntensity: 2.6,
+    wall: { colour: 0xbdb8a6, roughness: 0.16, metalness: 0.94 },
+    arris: 0.46,
+    transmission: 0.98,
+    volume: 0.12,
+    attenuation: 9,
     ior: 1.52,
     art: 'search',
-    artOpacity: 0.44,
+    artOpacity: 0.4,
   },
   {
-    /* 03 CONVERSION — smoked acrylic. Dark with real optical depth, polished
-       edges, controlled internal reflection. Sparse bright nodes. */
+    /* 03 CONVERSION — smoked acrylic. Dark with real optical depth: a long
+       absorption path over a short attenuation distance, so light crossing it
+       arrives much darker than light crossing the glass above. Polished to a
+       mirror at the surface, which is the contradiction that makes smoked acrylic
+       recognisable — bright reflections over a nearly black interior. */
     key: 'conversion',
     narrative: 2,
-    thickness: 0.078,
+    thickness: 0.072,
     tint: 0.03,
     opacity: 0.68,
-    roughness: 0.05,
+    roughness: 0.038,
     clearcoat: 1,
-    clearcoatRoughness: 0.035,
+    clearcoatRoughness: 0.03,
     metalness: 0.06,
-    envMapIntensity: 1.75,
-    wall: { colour: 0xa09a8b, roughness: 0.09, metalness: 0.94 },
-    arris: 0.44,
-    transmission: 0.46,
-    volume: 2.7,
-    attenuation: 0.52,
+    envMapIntensity: 2.2,
+    wall: { colour: 0xa09a8b, roughness: 0.08, metalness: 0.95 },
+    arris: 0.34,
+    transmission: 0.62,
+    volume: 3.2,
+    attenuation: 0.45,
     ior: 1.49,
     art: 'conversion',
+    artOpacity: 0.56,
+  },
+  {
+    /* 02 ACCESSIBILITY — frosted polymer. The one pale material in the stack and
+       the only one that scatters rather than transmits: high roughness over high
+       transmission, a short absorption path so light entering it does not come
+       out the far side, strong sheen, almost no clearcoat and a soft edge. Its
+       markings are drawn into it in ink rather than lit through it. */
+    key: 'accessibility',
+    narrative: 1,
+    thickness: 0.096,
+    tint: 0.86,
+    opacity: 0.6,
+    roughness: 0.68,
+    clearcoat: 0.08,
+    clearcoatRoughness: 0.66,
+    metalness: 0,
+    envMapIntensity: 0.55,
+    sheen: 0.95,
+    sheenRoughness: 0.88,
+    wall: { colour: 0xcdc6b6, roughness: 0.82, metalness: 0.12 },
+    arris: 0.12,
+    /* The lowest transmission in the stack, on purpose. Scattering and
+       transmission trade against each other: the diffuse term is weighted by one
+       minus transmission, so a frosted material set to transmit freely has almost
+       no diffuse left and arrives as a dark window with a pale rim — which is
+       exactly what it did at 0.4, where the opaque graphite plate beneath it read
+       straight through. Four millimetres of heavily scattering polymer does not
+       show you what is behind it, and neither does this. */
+    transmission: 0.15,
+    volume: 0.45,
+    attenuation: 2.8,
+    ior: 1.42,
+    art: 'accessibility',
+    artInk: true,
     artOpacity: 0.52,
   },
   {
-    /* 02 ACCESSIBILITY — frosted polymer. Milky rather than dark: the lightest
-       material in the stack, high roughness, sheen for the soft diffuse halo,
-       almost no clearcoat and a soft edge. Reads as frosted, not as glass at
-       low opacity. */
-    key: 'accessibility',
-    narrative: 1,
-    thickness: 0.09,
-    tint: 0.38,
-    opacity: 0.6,
-    roughness: 0.64,
-    clearcoat: 0.1,
-    clearcoatRoughness: 0.62,
-    metalness: 0,
-    envMapIntensity: 0.8,
-    sheen: 0.75,
-    sheenRoughness: 0.85,
-    wall: { colour: 0x9d978a, roughness: 0.74, metalness: 0.22 },
-    arris: 0.2,
-    transmission: 0.66,
-    volume: 1.1,
-    attenuation: 2.2,
-    ior: 1.46,
-    art: 'accessibility',
-    artOpacity: 0.3,
-  },
-  {
-    /* 01 PERFORMANCE — graphite composite. The deepest, darkest, densest and
-       least transparent layer: brushed along one axis so it reads as an
-       engineered conductive material, with fine measurement traces cut in. */
+    /* 01 PERFORMANCE — graphite composite. The deepest, darkest and thickest
+       layer, and the only opaque one: nothing passes through it, which is what
+       separates a composite from the glass above it. Brushed along one axis so it
+       answers light directionally, with fine measurement traces cut in. */
     key: 'performance',
     narrative: 0,
-    thickness: 0.108,
+    thickness: 0.155,
     tint: 0.014,
-    opacity: 0.7,
-    roughness: 0.52,
+    opacity: 1,
+    roughness: 0.58,
     etched: true,
-    anisotropy: 0.85,
-    clearcoat: 0.3,
-    clearcoatRoughness: 0.4,
-    metalness: 0.44,
+    anisotropy: 0.92,
+    clearcoat: 0.26,
+    clearcoatRoughness: 0.46,
+    metalness: 0.52,
     envMapIntensity: 0.7,
-    wall: { colour: 0x726c61, roughness: 0.56, metalness: 0.72 },
-    arris: 0.3,
+    wall: { colour: 0x6b6559, roughness: 0.62, metalness: 0.7 },
+    arris: 0.24,
     transmission: 0,
     volume: 0,
     attenuation: 1,
@@ -345,13 +359,19 @@ function arrisGeometry(shape, thickness) {
 const INK = (a) => `rgba(240,237,229,${a})`;
 const ACCENT = (a) => `rgba(127,168,144,${a})`;
 
-function artCanvas(resolution) {
+/* Black ground by default, because these are added to the material: black adds
+   nothing, so the drawing reads as light inside a dark layer. The one drawing
+   that is inked into a pale material instead needs a clear ground, or normal
+   blending paints the whole face. */
+function artCanvas(resolution, clearGround = false) {
   const canvas = document.createElement('canvas');
   canvas.width = resolution;
   canvas.height = Math.round(resolution * (PLATE_H / PLATE_W));
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!clearGround) {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
   return { canvas, ctx, w: canvas.width, h: canvas.height };
 }
 
@@ -668,7 +688,7 @@ function drawConversion(resolution) {
 /* --- 02 ACCESSIBILITY — semantic structure and focus order --------------- */
 
 function drawAccessibility(resolution) {
-  const { canvas, ctx, w, h } = artCanvas(resolution);
+  const { canvas, ctx, w, h } = artCanvas(resolution, true);
   const m = w * 0.075;
   const iw = w - m * 2;
 
@@ -829,6 +849,22 @@ function hash3(x, y, z) {
   return n - Math.floor(n);
 }
 
+/* The lattice hash is separate from `hash3` because it is on a different kind of
+   hot path. `hash3` is called a few dozen times, for things like the orientation
+   of a cleavage plane, and a trigonometric hash is fine there. This one is
+   called several million times while the block is built, so it is integer
+   arithmetic, and it returns the whole 32 bits so one call can supply a site's
+   three jitter components from separate bit fields. */
+function lattice32(x, y, z) {
+  let h =
+    Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ Math.imul(z | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+  h = Math.imul(h ^ (h >>> 13), 0x297a2d39);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+const lattice = (x, y, z) => lattice32(x, y, z) / 4294967296;
+
 function valueNoise3(x, y, z) {
   const xi = Math.floor(x);
   const yi = Math.floor(y);
@@ -839,7 +875,7 @@ function valueNoise3(x, y, z) {
   const u = xf * xf * (3 - 2 * xf);
   const v = yf * yf * (3 - 2 * yf);
   const w = zf * zf * (3 - 2 * zf);
-  const corner = (dx, dy, dz) => hash3(xi + dx, yi + dy, zi + dz);
+  const corner = (dx, dy, dz) => lattice(xi + dx, yi + dy, zi + dz);
   const x00 = corner(0, 0, 0) + (corner(1, 0, 0) - corner(0, 0, 0)) * u;
   const x10 = corner(0, 1, 0) + (corner(1, 1, 0) - corner(0, 1, 0)) * u;
   const x01 = corner(0, 0, 1) + (corner(1, 0, 1) - corner(0, 0, 1)) * u;
@@ -868,21 +904,117 @@ const smoothstep = (edge0, edge1, x) => {
   return t * t * (3 - 2 * t);
 };
 
-/* Cleavage planes. Anything beyond one is projected onto it, leaving a flat
-   fracture face. Two near-horizontal planes cut the block flat top and bottom so
-   it is a slab rather than the lens the displaced sphere would otherwise be; the
-   rest come in around the sides at shallow angles, which is what gives the
-   angular, quarried silhouette. Deterministic, so it is the same rock every
-   load. */
+/* A crack field: the distance to the zero set of a noise function, which forms a
+   connected network of thin valleys rather than a field of rounded bumps. Smooth
+   noise, at any amplitude, only ever reads as erosion. Fracture reads as
+   fracture because of where the surface breaks, and that is a line, not a blob.
+   Returns 1 away from a crack and 0 along it. */
+function crack3(x, y, z, octaves = 3) {
+  let amplitude = 1;
+  let frequency = 1;
+  let sum = 0;
+  let norm = 0;
+  for (let i = 0; i < octaves; i += 1) {
+    const n = valueNoise3(x * frequency, y * frequency, z * frequency);
+    sum += amplitude * Math.abs(n * 2 - 1) ** 0.7;
+    norm += amplitude;
+    amplitude *= 0.56;
+    frequency *= 2.19;
+  }
+  return sum / norm;
+}
+
+/* Conchoidal fracture. Space is divided into jittered cells, each owning one
+   arbitrarily oriented plane; any point that pokes past its own cell's plane is
+   pushed back onto it. Points inside a cell land on the same plane, so the
+   result is a field of flat shards meeting along sharp arrises.
+
+   This is the step the previous pass did not have, and it is the one that
+   decides the reading. A displaced sphere, however deeply displaced, has
+   curvature everywhere, and curvature everywhere is what the eye calls a lump or
+   — once it is cut flat top and bottom — a polygonal plate. Stone is flat in
+   patches and sharp between them. */
+function shatter(out, o, cell, reach) {
+  const px = out[o];
+  const py = out[o + 1];
+  const pz = out[o + 2];
+  const inv = 1 / cell;
+  const gx = Math.floor(px * inv);
+  const gy = Math.floor(py * inv);
+  const gz = Math.floor(pz * inv);
+
+  let best = Infinity;
+  let sx = 0;
+  let sy = 0;
+  let sz = 0;
+  let seed = 0;
+
+  for (let dx = -1; dx <= 1; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dz = -1; dz <= 1; dz += 1) {
+        const cx = gx + dx;
+        const cy = gy + dy;
+        const cz = gz + dz;
+        const h = lattice32(cx, cy, cz);
+        // Three jitter components out of one hash, from separate bit fields.
+        const jx = (cx + (h & 1023) / 1024) * cell;
+        const jy = (cy + ((h >>> 10) & 1023) / 1024) * cell;
+        const jz = (cz + ((h >>> 20) & 1023) / 1024) * cell;
+        const d = (jx - px) ** 2 + (jy - py) ** 2 + (jz - pz) ** 2;
+        if (d < best) {
+          best = d;
+          sx = jx;
+          sy = jy;
+          sz = jz;
+          seed = h;
+        }
+      }
+    }
+  }
+
+  /* The cell's plane. Its normal is arbitrary and its offset from the site is a
+     fraction of the cell, so some cells clip deeply and others not at all.
+
+     The normal is turned to face away from the block's centre, which makes the
+     operation strictly erosive: projecting a point onto an arbitrarily oriented
+     plane can move it outward as easily as inward, and outward means a single
+     vertex left standing off the surface as a spike — and a block whose thickness
+     no longer has anything to do with the figure that states it. Turning it per
+     site rather than per point keeps every point in a cell on one plane, which is
+     the whole reason this produces facets. */
+  const a = ((seed >>> 4) & 2047) / 2048 * Math.PI * 2;
+  const b = ((seed >>> 15) & 2047) / 2048 * 2 - 1;
+  const r = Math.sqrt(Math.max(0, 1 - b * b));
+  let nx = Math.cos(a) * r;
+  let ny = b;
+  let nz = Math.sin(a) * r;
+  if (sx * nx + sy * ny + sz * nz < 0) {
+    nx = -nx;
+    ny = -ny;
+    nz = -nz;
+  }
+  const offset = cell * reach * (0.35 + ((seed >>> 26) & 63) / 63);
+
+  const over = (px - sx) * nx + (py - sy) * ny + (pz - sz) * nz - offset;
+  if (over <= 0) return 0;
+  out[o] = px - nx * over;
+  out[o + 1] = py - ny * over;
+  out[o + 2] = pz - nz * over;
+  return over;
+}
+
+/* Bedding and cleavage, at the scale of the whole block. Two near-horizontal
+   planes cut it flat-ish top and bottom so it reads as something quarried out of
+   a bed; the rest come in around the sides at shallow angles and at widely
+   varying distances, because evenly spaced planes produce a regular prism and a
+   regular prism is the shape that reads as manufactured. Deterministic, so it is
+   the same rock on every load. */
 const CLEAVAGE = (() => {
-  const planes = [
-    { n: [0.06, 0.99, -0.11], d: 0.6 },
-    { n: [-0.1, -0.98, 0.17], d: 0.64 },
-  ];
-  const sides = 13;
+  const planes = [];
+  const sides = 15;
   for (let i = 0; i < sides; i += 1) {
     const theta = i * 2.399963229728653;
-    const tilt = (hash3(i * 5.3, 2.1, 8.7) - 0.5) * 0.5;
+    const tilt = (hash3(i * 5.3, 2.1, 8.7) - 0.5) * 0.72;
     let nx = Math.cos(theta);
     let ny = tilt;
     let nz = Math.sin(theta);
@@ -890,8 +1022,14 @@ const CLEAVAGE = (() => {
     nx /= length;
     ny /= length;
     nz /= length;
-    planes.push({ n: [nx, ny, nz], d: 0.7 + hash3(i * 3.7, 11.3, 5.1) * 0.2 });
+    planes.push({ n: [nx, ny, nz], d: 0.52 + hash3(i * 3.7, 11.3, 5.1) * 0.58 });
   }
+  /* Bedding last, and the whole set applied twice. Clipping against one plane
+     can push a point back past another, so a single pass in one order does not
+     produce a solid that satisfies all of them — which is how the block's
+     thickness came loose from the figure that is supposed to state it. */
+  planes.push({ n: [0.06, 0.99, -0.11], d: 0.78 });
+  planes.push({ n: [-0.1, -0.98, 0.17], d: 0.74 });
   return planes;
 })();
 
@@ -900,64 +1038,114 @@ function buildSubstrate() {
   const halfD = SUBSTRATE_D / 2;
   const halfT = SUBSTRATE_T / 2;
 
-  const source = new IcosahedronGeometry(1, 3);
+  /* Tessellation is chosen for facet size rather than for smoothness. The eye
+     stops reading a faceted solid and starts reading broken rock somewhere around
+     a facet a fifteenth of the block's width; below that it reads as low-poly,
+     which is most of what was wrong before. three's polyhedron subdivides each of
+     the twenty faces into (detail + 1)² triangles, so detail 4 — the previous
+     value — was five hundred triangles in total, facets a third of a metre across
+     on a block eight across. */
+  const source = new IcosahedronGeometry(1, 22);
   const position = source.attributes.position;
   const count = position.count;
-  const points = [];
+  const points = new Float32Array(count * 3);
+  const recess = new Float32Array(count);
 
   for (let i = 0; i < count; i += 1) {
+    const o = i * 3;
     const ux = position.getX(i);
     const uy = position.getY(i);
     const uz = position.getZ(i);
 
-    /* Two octave sets: the first breaks the overall mass, the second roughens
-       it. Sampled on the unit sphere so the field is continuous across seams. */
-    const broad = fbm3(ux * 1.25 + 4.1, uy * 1.25 + 1.7, uz * 1.25 + 9.3, 4) - 0.5;
-    const rough = fbm3(ux * 3.4 + 21.3, uy * 3.4 + 5.9, uz * 3.4 + 13.1, 3) - 0.5;
-    const swell = 1 + broad * 0.38 + rough * 0.34;
+    /* One field, many scales. The first two octaves break the overall mass and
+       decide the plan outline; the rest roughen it. Sampled on the unit sphere so
+       the field stays continuous across the polyhedron's seams.
+
+       `fine` is kept separately because it is also the occlusion signal: a point
+       displaced inward relative to the local surface is, by definition, in a
+       hollow. Measuring it here costs nothing and is what puts the fracture
+       network into shadow. */
+    let coarse = 0;
+    let fine = 0;
+    let amplitude = 0.3;
+    let frequency = 1.05;
+    for (let o = 0; o < 5; o += 1) {
+      const n = valueNoise3(ux * frequency + 4.1, uy * frequency + 1.7, uz * frequency + 9.3) - 0.5;
+      if (o < 2) coarse += n * amplitude;
+      else fine += n * amplitude;
+      amplitude *= 0.66;
+      frequency *= 2.17;
+    }
+
+    /* Grooves along a crack network, cut inward. Stone breaks along lines. */
+    const seam = (1 - crack3(ux * 4.3 + 11.7, uy * 4.3 + 3.1, uz * 4.3 + 27.3, 3)) ** 1.5;
+    fine -= seam * 0.13;
+
+    const swell = 1 + coarse + fine;
 
     let x = ux * halfW * swell;
     let y = uy * halfT * swell;
     let z = uz * halfD * swell;
 
     // Thickness varies independently, so the profile is never a constant slab.
-    y *= 0.74 + (fbm3(ux * 1.9 + 31, 0.5, uz * 1.9 + 17, 3) - 0.5) * 1.15;
+    y *= 0.9 + (fbm3(ux * 1.9 + 31, 0.5, uz * 1.9 + 17, 3) - 0.5) * 1.0;
 
-    for (const plane of CLEAVAGE) {
-      const [nx, ny, nz] = plane.n;
-      // Planes are defined against the normalised slab so they cut evenly.
-      const px = x / halfW;
-      const py = y / halfT;
-      const pz = z / halfD;
-      const distance = px * nx + py * ny + pz * nz;
-      if (distance > plane.d) {
-        const over = distance - plane.d;
-        x -= nx * over * halfW;
-        y -= ny * over * halfT;
-        z -= nz * over * halfD;
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (const plane of CLEAVAGE) {
+        const [nx, ny, nz] = plane.n;
+        // Planes are defined against the normalised slab so they cut evenly.
+        const px = x / halfW;
+        const py = y / halfT;
+        const pz = z / halfD;
+        const distance = px * nx + py * ny + pz * nz;
+        if (distance > plane.d) {
+          const over = distance - plane.d;
+          x -= nx * over * halfW;
+          y -= ny * over * halfT;
+          z -= nz * over * halfD;
+        }
       }
     }
 
-    points.push([x, y, z]);
+    points[o] = x;
+    points[o + 1] = y;
+    points[o + 2] = z;
+
+    /* Fracture at two scales. The coarse pass cuts the large cleavage faces that
+       give the block its angular silhouette; the fine pass chips their arrises
+       down to the limit the tessellation can hold. One scale alone reads as
+       weathering rather than as breakage. */
+    const clipped = shatter(points, o, 1.45, 0.34) * 0.5 + shatter(points, o, 0.56, 0.52);
+    recess[i] = clamp(0.5 - fine * 3.4 + seam * 1.5 + clipped * 1.6, 0, 1);
   }
 
-  /* The planed interface: a shallow plateau across the middle of the top, which
-     fades out into natural stone well before the perimeter. */
-  const plateau = halfT * 0.74;
-  for (const p of points) {
-    if (p[1] <= plateau * 0.35) continue;
-    const radial = Math.hypot(p[0] / halfW, p[2] / halfD);
-    const worked = 1 - smoothstep(0.34, 0.72, radial);
-    p[1] = lerp(p[1], Math.min(p[1], plateau), worked);
-  }
+  /* The machined interface. One region of the crest is planed flat where the
+     engineered stack seats into the block, and nothing else on it is worked. It
+     is deliberately a patch cut off a high point rather than a plateau across the
+     middle: a plateau covering most of the top is precisely how this turned back
+     into a plate, and the brief is that natural stone stays dominant. */
+  const seatX = PLATE_W * 0.58;
+  const seatZ = PLATE_H * 0.58;
+  const seatOffsetX = PLATE_W * 0.07;
+  const seatOffsetZ = -PLATE_H * 0.09;
+  const inSeat = (o) =>
+    Math.abs(points[o] - seatOffsetX) < seatX && Math.abs(points[o + 2] - seatOffsetZ) < seatZ;
 
-  const flat = new Float32Array(count * 3);
+  let crest = -Infinity;
   for (let i = 0; i < count; i += 1) {
-    flat[i * 3] = points[i][0];
-    flat[i * 3 + 1] = points[i][1];
-    flat[i * 3 + 2] = points[i][2];
+    const o = i * 3;
+    if (points[o + 1] > crest && inSeat(o)) crest = points[o + 1];
   }
-  source.setAttribute('position', new BufferAttribute(flat, 3));
+  const plateau = crest * 0.88;
+  for (let i = 0; i < count; i += 1) {
+    const o = i * 3;
+    if (points[o + 1] <= plateau || !inSeat(o)) continue;
+    // A hard cut, so the planed face meets the broken stone along an arris.
+    points[o + 1] = plateau;
+    recess[i] = 0;
+  }
+
+  source.setAttribute('position', new BufferAttribute(points, 3));
 
   /* IcosahedronGeometry is already non-indexed, so every triangle owns its
      vertices and computeVertexNormals yields per-face normals — which is what
@@ -976,9 +1164,6 @@ function buildSubstrate() {
     minZ: Infinity, maxZ: -Infinity,
   };
 
-  const stone = new Color(STONE);
-  const vein = new Color(0xa9a293);
-
   for (let t = 0; t < triangles; t += 1) {
     const base = t * 3;
     /* Box projection from the face's dominant axis: the icosahedron's own UVs
@@ -988,6 +1173,15 @@ function buildSubstrate() {
     const ny = Math.abs(normal.getY(base));
     const nz = Math.abs(normal.getZ(base));
     const axis = ny > nx && ny > nz ? 1 : nx > nz ? 0 : 2;
+    const phaseU = hash3(t * 1.7, 3.3, 9.1) * 8.3;
+    const phaseV = hash3(t * 2.9, 7.7, 1.3) * 6.1;
+    const swap = hash3(t * 4.1, 0.9, 5.5) > 0.5;
+    const faceTone = 0.78 + hash3(t * 6.1, 4.4, 2.2) * 0.5;
+    /* Upward faces have caught the weather. Down-facing ones are in their own
+       shadow whatever the light does, which is most of how a heavy overhanging
+       mass declares that it is heavy. */
+    const aspect = normal.getY(base);
+    const facing = 0.42 + smoothstep(-0.7, 0.85, aspect) * 0.86;
 
     for (let v = 0; v < 3; v += 1) {
       const i = base + v;
@@ -995,29 +1189,40 @@ function buildSubstrate() {
       const y = finalPosition.getY(i);
       const z = finalPosition.getZ(i);
 
-      const scale = 0.55;
-      if (axis === 1) {
-        uv[i * 2] = x * scale;
-        uv[i * 2 + 1] = z * scale;
-      } else if (axis === 0) {
-        uv[i * 2] = z * scale;
-        uv[i * 2 + 1] = y * scale;
-      } else {
-        uv[i * 2] = x * scale;
-        uv[i * 2 + 1] = y * scale;
-      }
+      /* Box projection from the face's dominant axis, at a scale that puts the
+         coarsest feature of the grain map at about a quarter of a unit. The
+         previous pass repeated the map every 0.28 units, which made its whole
+         five octaves finer than a millimetre of real stone: it read as a sheen
+         rather than as a broken surface. */
+      const scale = 1.15;
+      const a = axis === 0 ? z : x;
+      const bAxis = axis === 1 ? z : y;
+      uv[i * 2] = (swap ? bAxis : a) * scale + phaseU;
+      uv[i * 2 + 1] = (swap ? a : bAxis) * scale + phaseV;
 
-      /* Mineral variation and crevice darkening baked per vertex, so the grain
-         does not depend on a UV-mapped albedo surviving the displacement. */
-      const grain = fbm3(x * 2.6, y * 2.6, z * 2.6, 4);
+      /* Mineral variation and occlusion baked per vertex, so neither depends on
+         a UV-mapped texture surviving the displacement.
+
+         These are multipliers, not colours. Vertex colours are consumed as
+         linear values and multiply the material colour, so writing a dark sRGB
+         hex here darkens twice — once through the sRGB-to-linear conversion and
+         again through the multiply — which is why an earlier pass produced a
+         block that sat almost black however hard it was lit. */
+      const grain = fbm3(x * 2.6, y * 2.6, z * 2.6, 2);
       const band = fbm3(x * 0.9 + 60, y * 0.9, z * 0.9 + 12, 2);
-      let value = 1.0 + (grain - 0.5) * 1.7 + (band - 0.5) * 0.8;
-      value = clamp(value, 0.28, 2.4);
-      const quartz = smoothstep(0.78, 0.9, fbm3(x * 5.1 + 3, y * 5.1, z * 5.1, 2));
-      const c = stone.clone().multiplyScalar(value).lerp(vein, quartz * 0.35);
-      colour[i * 3] = c.r;
-      colour[i * 3 + 1] = c.g;
-      colour[i * 3 + 2] = c.b;
+      const quartz = smoothstep(0.72, 0.86, valueNoise3(x * 5.1 + 3, y * 5.1, z * 5.1));
+      /* Occlusion. The shadow map catches what the key light cannot reach at the
+         scale of the whole block; this catches the fracture network, which is far
+         too fine for a 1024px shadow map and is most of why the reference reads as
+         stone at all — its cracks are nearly black while its broken high points
+         take the light. */
+      const shade = lerp(1, 0.13, recess[base + v] ** 1.35);
+      let value = 1.0 + (grain - 0.5) * 1.5 + (band - 0.5) * 0.7;
+      value = clamp(value, 0.3, 1.7) * faceTone * facing * shade * (1 + quartz * 0.75);
+      // A trace of warmth in the brighter grains, well inside the palette.
+      colour[i * 3] = value;
+      colour[i * 3 + 1] = value * 0.985;
+      colour[i * 3 + 2] = value * 0.95;
 
       if (x < bounds.minX) bounds.minX = x;
       if (x > bounds.maxX) bounds.maxX = x;
@@ -1044,53 +1249,81 @@ function buildSubstrate() {
   return { geometry, bounds, hull, plateau, relief: bounds.maxY - plateau };
 }
 
-/**
- * A normal map for the substrate's broken faces. Multi-octave value noise
- * turned into surface normals: the geometry supplies the cleavage, this
- * supplies the grain.
- */
+/* --------------------------------------------------------------------------
+   The grain. Geometry can only carry structure down to about twice its facet
+   size; below that it aliases. Everything finer than that — the chipping, the
+   pitting, the mineral mottling — comes from here, and the two have to meet at
+   the right scale or the block reads as a smooth solid wearing a sheen.
+
+   The height field is built from the distance to the zero set of a noise
+   function rather than from the noise itself, so it is a network of creases
+   between flattish chips instead of a field of dunes.
+   -------------------------------------------------------------------------- */
+
+let stoneGrainField = null;
+function stoneGrain() {
+  if (stoneGrainField) return stoneGrainField;
+
+  const size = 256;
+  const height = new Float32Array(size * size);
+
+  const hash = (x, y) => {
+    const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+    return n - Math.floor(n);
+  };
+  const smooth = (t) => t * t * (3 - 2 * t);
+
+  for (let octave = 0; octave < 5; octave += 1) {
+    const frequency = 4 * 2 ** octave;
+    const amplitude = 0.78 ** octave;
+    const cell = size / frequency;
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const fx = x / cell;
+        const fy = y / cell;
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const tx = smooth(fx - x0);
+        const ty = smooth(fy - y0);
+        const wrap = (v) => ((v % frequency) + frequency) % frequency;
+        const a = hash(wrap(x0), wrap(y0));
+        const b = hash(wrap(x0 + 1), wrap(y0));
+        const c = hash(wrap(x0), wrap(y0 + 1));
+        const d = hash(wrap(x0 + 1), wrap(y0 + 1));
+        const top = a + (b - a) * tx;
+        const bottom = c + (d - c) * tx;
+        const n = top + (bottom - top) * ty;
+        /* Creased, not smooth: |2n − 1| is zero along the contour where the noise
+           crosses its midpoint, which is a connected line across the plane. */
+        height[y * size + x] += Math.abs(n * 2 - 1) ** 0.65 * amplitude;
+      }
+    }
+  }
+
+  let min = Infinity;
+  let max = -Infinity;
+  for (const h of height) {
+    if (h < min) min = h;
+    if (h > max) max = h;
+  }
+  const span = max - min || 1;
+  for (let i = 0; i < height.length; i += 1) height[i] = (height[i] - min) / span;
+
+  stoneGrainField = { size, height };
+  return stoneGrainField;
+}
+
+/** Surface normals from the grain field. */
 let stoneNormalCanvas = null;
 function stoneNormalTexture() {
   if (!stoneNormalCanvas) {
-    const size = 256;
-    const height = new Float32Array(size * size);
-
-    const hash = (x, y) => {
-      const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
-      return n - Math.floor(n);
-    };
-    const smooth = (t) => t * t * (3 - 2 * t);
-
-    for (let octave = 0; octave < 5; octave += 1) {
-      const frequency = 4 * 2 ** octave;
-      const amplitude = 1 / 2 ** octave;
-      const cell = size / frequency;
-      for (let y = 0; y < size; y += 1) {
-        for (let x = 0; x < size; x += 1) {
-          const fx = x / cell;
-          const fy = y / cell;
-          const x0 = Math.floor(fx);
-          const y0 = Math.floor(fy);
-          const tx = smooth(fx - x0);
-          const ty = smooth(fy - y0);
-          const wrap = (v) => ((v % frequency) + frequency) % frequency;
-          const a = hash(wrap(x0), wrap(y0));
-          const b = hash(wrap(x0 + 1), wrap(y0));
-          const c = hash(wrap(x0), wrap(y0 + 1));
-          const d = hash(wrap(x0 + 1), wrap(y0 + 1));
-          const top = a + (b - a) * tx;
-          const bottom = c + (d - c) * tx;
-          height[y * size + x] += (top + (bottom - top) * ty) * amplitude;
-        }
-      }
-    }
-
+    const { size, height } = stoneGrain();
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d');
     const image = ctx.createImageData(size, size);
-    const strength = 5.5;
+    const strength = 11;
     const at = (x, y) => height[((y + size) % size) * size + ((x + size) % size)];
 
     for (let y = 0; y < size; y += 1) {
@@ -1110,6 +1343,77 @@ function stoneNormalTexture() {
   }
 
   const texture = new CanvasTexture(stoneNormalCanvas);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+/* Albedo from the same field, so what the normals say is broken and what the
+   surface says is dark agree. A normal map alone is only convincing under
+   moving light; correlated albedo is what makes relief hold still. */
+let stoneAlbedoCanvas = null;
+function stoneAlbedoTexture() {
+  if (!stoneAlbedoCanvas) {
+    const { size, height } = stoneGrain();
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const image = ctx.createImageData(size, size);
+
+    for (let i = 0; i < size * size; i += 1) {
+      const h = height[i];
+      /* Creases dark, chip faces light, with a few bright mineral grains. The
+         mean sits near the top of the range on purpose: this is a modulation of
+         the stone colour, and a map that averages half darkens the whole block
+         by a stop for nothing. */
+      const value = 0.42 + h * 0.62 + (h > 0.88 ? (h - 0.88) * 3 : 0);
+      const v = clamp(value) * 255;
+      const index = i * 4;
+      image.data[index] = v;
+      image.data[index + 1] = v * 0.99;
+      image.data[index + 2] = v * 0.96;
+      image.data[index + 3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+    stoneAlbedoCanvas = canvas;
+  }
+
+  const texture = new CanvasTexture(stoneAlbedoCanvas);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.colorSpace = SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+/* Roughness from the same field too: crease floors hold dust and read matte,
+   fresh chip faces are smoother and catch a glancing highlight. That variation
+   is a large part of how light reveals a broken surface. */
+let stoneRoughnessCanvas = null;
+function stoneRoughnessTexture() {
+  if (!stoneRoughnessCanvas) {
+    const { size, height } = stoneGrain();
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    const image = ctx.createImageData(size, size);
+
+    for (let i = 0; i < size * size; i += 1) {
+      const v = clamp(1.02 - height[i] * 0.42) * 255;
+      const index = i * 4;
+      image.data[index] = v;
+      image.data[index + 1] = v;
+      image.data[index + 2] = v;
+      image.data[index + 3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+    stoneRoughnessCanvas = canvas;
+  }
+
+  const texture = new CanvasTexture(stoneRoughnessCanvas);
   texture.wrapS = RepeatWrapping;
   texture.wrapT = RepeatWrapping;
   texture.anisotropy = 4;
@@ -1332,7 +1636,7 @@ function sharedGeometry() {
   shared = {
     plates,
     substrate,
-    shadow: new PlaneGeometry(PLATE_W * 1.35, PLATE_H * 1.35),
+    shadow: new PlaneGeometry(PLATE_W * 0.86, PLATE_H * 0.86),
   };
   return shared;
 }
@@ -1358,7 +1662,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = PCFShadowMap;
   renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 0.99;
   renderer.outputColorSpace = SRGBColorSpace;
 
   /* Act I looks down onto the specimen so the surface reads as a page. Act II
@@ -1384,31 +1688,31 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 
   /* Directional and restrained. One key, one cool fill, one low back light to
      catch the machined arrises. No coloured practicals, no rim theatrics. */
-  const key = new DirectionalLight(0xfff4e2, 2.5);
+  const key = new DirectionalLight(0xfff4e2, 3.4);
   key.position.set(-3.6, 7.4, 3.2);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
-  key.shadow.camera.left = -3.8;
-  key.shadow.camera.right = 3.8;
-  key.shadow.camera.top = 3.8;
-  key.shadow.camera.bottom = -3.8;
+  key.shadow.camera.left = -4.8;
+  key.shadow.camera.right = 4.8;
+  key.shadow.camera.top = 4.8;
+  key.shadow.camera.bottom = -4.8;
   key.shadow.camera.near = 0.5;
   key.shadow.camera.far = 22;
-  key.shadow.bias = -0.0016;
-  key.shadow.normalBias = 0.012;
+  key.shadow.bias = -0.0008;
+  key.shadow.normalBias = 0.07;
   scene.add(key);
 
-  const fill = new DirectionalLight(0xa8c0b4, 0.62);
+  const fill = new DirectionalLight(0xa8c0b4, 0.2);
   fill.position.set(4.8, 1.1, -3.4);
   scene.add(fill);
 
-  const back = new DirectionalLight(0xf0ede5, 0.8);
+  const back = new DirectionalLight(0xf0ede5, 0.32);
   back.position.set(1.4, -1.2, -4.6);
   scene.add(back);
 
   /* A low bounce from the front, so the substrate's near faces carry some
      detail instead of falling to black. */
-  const bounce = new DirectionalLight(0xe8dcc6, 0.5);
+  const bounce = new DirectionalLight(0xe8dcc6, 0.12);
   bounce.position.set(-1.2, -2.6, 4.2);
   scene.add(bounce);
 
@@ -1443,18 +1747,19 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
      into the stone itself, so there is nothing left here that could be mistaken
      for another pane. */
   const rock = geometry.substrate;
-  const grain = stoneNormalTexture();
 
   const stoneMaterial = new MeshPhysicalMaterial({
-    color: 0xffffff,
+    color: new Color(STONE),
     vertexColors: true,
-    normalMap: grain,
-    roughness: 0.96,
-    metalness: 0.03,
-    envMapIntensity: 0.5,
+    map: stoneAlbedoTexture(),
+    normalMap: stoneNormalTexture(),
+    roughnessMap: stoneRoughnessTexture(),
+    roughness: 0.94,
+    metalness: 0.02,
+    envMapIntensity: 0.26,
     flatShading: true,
   });
-  stoneMaterial.normalScale.set(1.15, 1.15);
+  stoneMaterial.normalScale.set(2.1, 2.1);
 
   const substrate = new Mesh(rock.geometry, stoneMaterial);
   substrate.position.y = substrateDrop();
@@ -1470,7 +1775,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   });
   const contactShadow = new Mesh(geometry.shadow, shadowMaterial);
   contactShadow.rotation.x = -Math.PI / 2;
-  contactShadow.position.y = substrateDrop() + rock.plateau + 0.008;
+  contactShadow.position.y = substrateDrop() + rock.plateau + 0.006;
   assembly.add(contactShadow);
 
   /* --- Plates ----------------------------------------------------------- */
@@ -1552,11 +1857,18 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
     });
     group.add(new Mesh(geometry.plates[index].arris, arrisMaterial));
 
+    /* Markings inside a dark material are read as light passing through it, so
+       they are added. The frosted polymer is the one pale material in the stack,
+       and adding light to it would only wash it out — its markings are drawn
+       into it instead, in the same ink as the page. Two different physical
+       relationships between a mark and the thing it is marked on, which is
+       another axis the layers separate along. */
     const artMaterial = new MeshBasicMaterial({
       map: artTexture(layer.art, layer.artResolution || 512),
       transparent: true,
       opacity: layer.artOpacity,
-      blending: AdditiveBlending,
+      color: layer.artInk ? tintBase.clone() : 0xffffff,
+      blending: layer.artInk ? NormalBlending : AdditiveBlending,
       depthWrite: false,
       fog: false,
     });
@@ -1694,7 +2006,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
     // The shadow softens and shrinks as the stack lifts off the substrate.
     const lift = clamp((state.air - AIR_ASSEMBLED) / (AIR_SEPARATED - AIR_ASSEMBLED));
     contactShadow.scale.setScalar(lerp(1, 0.82, lift));
-    shadowMaterial.opacity = lerp(0.92, 0.3, lift);
+    shadowMaterial.opacity = lerp(0.6, 0.12, lift);
 
     assembly.rotation.y = baseYaw + state.yaw;
     assembly.rotation.z = state.pitch;
@@ -1797,7 +2109,9 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       // Geometry and source canvases are shared and intentionally kept.
       resizeObserver.disconnect();
       environment.dispose();
+      stoneMaterial.map?.dispose();
       stoneMaterial.normalMap?.dispose();
+      stoneMaterial.roughnessMap?.dispose();
       stoneMaterial.dispose();
       shadowMaterial.map?.dispose();
       shadowMaterial.dispose();

@@ -611,8 +611,54 @@ describe('Progressive enhancement (doctrine §18)', () => {
     assert.match(dimensionalSrc, /capMaterial\.roughnessMap = artTexture/);
     assert.match(dimensionalSrc, /capMaterial\.anisotropy =/);
     assert.match(dimensionalSrc, /capMaterial\.sheen =/);
-    // Performance is the thickest and least transparent: graphite, not glass.
-    assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?thickness: 0\.10/);
+
+    /* Graphite is not glass. Performance has to be the thickest layer and the
+       only fully opaque one, and the frosted polymer has to be the pale one:
+       those two ends are what give the value ladder somewhere to run between. */
+    const layers = [...dimensionalSrc.matchAll(/key: '([a-z]+)',\n {4}narrative[\s\S]*?\n {2}\},/g)]
+      .map((m) => ({
+        key: m[1],
+        thickness: Number(m[0].match(/\bthickness: ([\d.]+)/)[1]),
+        tint: Number(m[0].match(/\btint: ([\d.]+)/)[1]),
+        transmission: Number(m[0].match(/\btransmission: ([\d.]+)/)[1]),
+      }));
+    assert.equal(layers.length, 6);
+    const thickest = layers.reduce((a, b) => (b.thickness > a.thickness ? b : a));
+    assert.equal(thickest.key, 'performance', 'graphite composite must be the thickest layer');
+    const opaque = layers.filter((l) => l.transmission === 0).map((l) => l.key);
+    assert.deepEqual(opaque, ['performance'], 'graphite composite must be the only opaque layer');
+    const palest = layers.reduce((a, b) => (b.tint > a.tint ? b : a));
+    assert.equal(palest.key, 'accessibility', 'frosted polymer must be the pale material');
+  });
+
+  it('separates the layers far enough apart to see', () => {
+    /* Two passes were told the layers still read as six of the same pane. The
+       reason the second pass did not fix it is that five of the six use
+       transmission, and a transmissive material ignores blended opacity — so the
+       axis the values varied along was inert. What actually decides how a
+       transmissive layer reads is the absorption it applies over the path through
+       it, and that has to vary by a lot, not by a rounding. */
+    const absorption = [...dimensionalSrc.matchAll(/\n {4}volume: ([\d.]+),[\s\S]{0,60}?\n {4}attenuation: ([\d.]+),/g)]
+      .map(([, volume, attenuation]) => Number(volume) / Number(attenuation));
+    assert.equal(absorption.length, 6, 'every layer needs a stated optical path');
+    const transmissive = absorption.filter((a) => a > 0).sort((a, b) => a - b);
+    assert.ok(
+      transmissive.at(-1) / transmissive[0] >= 50,
+      `the darkest optical path is only ${(transmissive.at(-1) / transmissive[0]).toFixed(1)}x ` +
+        'the clearest — the glass layers will look alike'
+    );
+
+    // And they must bend light differently, not merely absorb it differently.
+    const iors = [...dimensionalSrc.matchAll(/\n {4}ior: ([\d.]+),/g)].map((m) => Number(m[1]));
+    assert.ok(
+      Math.max(...iors) - Math.min(...iors) >= 0.12,
+      'the refractive indices are too close to distinguish the materials'
+    );
+
+    /* Markings sit in two different physical relationships to their material:
+       lit through the dark layers, drawn into the pale one. */
+    assert.match(dimensionalSrc, /blending: layer\.artInk \? NormalBlending : AdditiveBlending/);
+    assert.match(dimensionalSrc, /key: 'accessibility'[\s\S]*?artInk: true/);
   });
 
   it('builds the substrate as stone, not as an extruded plate', () => {
@@ -640,6 +686,75 @@ describe('Progressive enhancement (doctrine §18)', () => {
     // Enough fracture planes to read as quarried rather than as a lump.
     const sides = Number(dimensionalSrc.match(/const sides = (\d+);/)[1]);
     assert.ok(sides >= 10, `${sides} side fracture planes is too few`);
+  });
+
+  it('breaks the stone rather than only displacing it', () => {
+    /* A displaced sphere has curvature everywhere, and curvature everywhere is
+       what the eye calls a lump — or, once it has been cut flat top and bottom,
+       a polygonal plate. That was the note on the pass before this one. Stone is
+       flat in patches and sharp between them, so the surface is passed through a
+       fracture step that snaps neighbouring points onto shared planes, and the
+       displacement field itself is built from crack distances rather than from
+       smooth noise. */
+    assert.match(dimensionalSrc, /function shatter\(/);
+    assert.match(dimensionalSrc, /function crack3\(/);
+    assert.match(dimensionalSrc, /const clipped = shatter\(points, o,/);
+    assert.match(dimensionalSrc, /const seam = \(1 - crack3\(/);
+
+    /* Facets have to be small enough relative to the block to read as broken
+       stone. three's polyhedron subdivides each of twenty faces into
+       (detail + 1)² triangles, so the detail figure is the whole story: at 4 the
+       block was five hundred triangles and read as low-poly. */
+    const detail = Number(dimensionalSrc.match(/new IcosahedronGeometry\(1, (\d+)\)/)[1]);
+    assert.ok(detail >= 18, `icosahedron detail ${detail} gives facets too large for stone`);
+
+    /* Occlusion in the fracture network is most of why the reference reads as
+       stone: its cracks are nearly black while its broken high points take the
+       light. A 1024px shadow map cannot resolve that, so it is measured while the
+       surface is displaced and baked into the vertices. */
+    assert.match(dimensionalSrc, /const recess = new Float32Array\(count\)/);
+    assert.match(dimensionalSrc, /const shade = lerp\(1, 0\.\d+, recess\[/);
+
+    /* Geometry stops carrying structure at about twice its facet size. Below
+       that, the grain map has to take over — at a scale that reads as a broken
+       surface rather than as a sheen, which is what a map repeating every quarter
+       of a facet gave. */
+    const grainScale = Number(dimensionalSrc.match(/\n {6}const scale = ([\d.]+);/)[1]);
+    assert.ok(grainScale <= 1.6, `grain repeats every ${(1 / grainScale).toFixed(2)} units: too fine`);
+    const normalScale = Number(
+      dimensionalSrc.match(/stoneMaterial\.normalScale\.set\(([\d.]+)/)[1]
+    );
+    assert.ok(normalScale >= 1.8, `normal relief of ${normalScale} is too shallow to read`);
+
+    /* Normals, albedo and roughness all come off the same height field, so what
+       the surface says is broken, what it says is dark and what it says is matte
+       agree. A normal map on its own is only convincing under moving light. */
+    for (const map of ['stoneAlbedoTexture', 'stoneNormalTexture', 'stoneRoughnessTexture']) {
+      assert.match(dimensionalSrc, new RegExp(`function ${map}\\(`));
+      assert.match(dimensionalSrc, new RegExp(`${map}\\(\\),`));
+    }
+    assert.match(dimensionalSrc, /function stoneGrain\(\)/);
+  });
+
+  it('works only the part of the stone the stack sits on', () => {
+    /* The brief allows a planed region where the engineered system interfaces
+       with the block, and requires that natural stone stay dominant. The previous
+       pass planed a plateau out to seven tenths of the radius, which is most of
+       the top and is how it turned back into a plate. The worked region is now
+       bounded by the stack's own footprint — it is a patch cut off a high point,
+       not a terrace across the middle. */
+    assert.doesNotMatch(dimensionalSrc, /const plateau = halfT \*/);
+    const seatX = Number(dimensionalSrc.match(/const seatX = PLATE_W \* ([\d.]+);/)[1]);
+    const seatZ = Number(dimensionalSrc.match(/const seatZ = PLATE_H \* ([\d.]+);/)[1]);
+    const blockW = Number(dimensionalSrc.match(/const SUBSTRATE_W = PLATE_W \* ([\d.]+);/)[1]);
+    const blockD = Number(dimensionalSrc.match(/const SUBSTRATE_D = PLATE_H \* ([\d.]+);/)[1]);
+    const worked = ((2 * seatX) / blockW) * ((2 * seatZ) / blockD);
+    assert.ok(worked <= 0.35, `the planed region covers ${Math.round(worked * 100)}% of the top`);
+
+    // And it is offset, because a machined patch centred on the block reads as a
+    // feature of the design rather than as a cut made for a reason.
+    assert.match(dimensionalSrc, /const seatOffsetX = PLATE_W \* 0\.\d+;/);
+    assert.match(dimensionalSrc, /const seatOffsetZ = -PLATE_H \* 0\.\d+;/);
   });
 
   it('gives the substrate mass, and the layers none by comparison', () => {

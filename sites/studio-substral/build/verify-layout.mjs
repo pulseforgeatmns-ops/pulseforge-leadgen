@@ -12,9 +12,17 @@
  *
  *   node verify-layout.mjs            layout and typography across widths
  *   node verify-layout.mjs states     progressive enhancement and the instrument
+ *   node verify-layout.mjs object     what the rendered signature object measures
  *   node verify-layout.mjs all
  *
  * Exits non-zero on any failure, so it can gate a release.
+ *
+ * `object` renders through swiftshader and settles the scroll state, so it takes
+ * a couple of minutes. It is the only check that can see the thing the brief for
+ * the signature object is actually about: whether the substrate reads as stone
+ * and whether the six layers separate in grayscale. Neither is visible to a
+ * source assertion — the previous two passes both satisfied every source rule
+ * about material differentiation and still rendered six similar panes.
  */
 
 import puppeteer from 'puppeteer';
@@ -321,6 +329,174 @@ if (run('states')) {
     if (/\d{1,3}\s*\/\s*100/.test(message)) fail('the instrument produced a score');
     await page.close();
   }
+}
+
+/* --- The rendered object -------------------------------------------------- */
+
+if (run('object')) {
+  console.log('\nThe signature object, as rendered');
+
+  /* Pixels come back through a screenshot rather than off the canvas: the site's
+     renderer does not preserve its drawing buffer, and it should not have to for
+     a test. A second page decodes the PNG, which needs no dependency. */
+  const analyst = await browser.newPage();
+  await analyst.setContent('<!doctype html><canvas id=c></canvas>');
+  const sample = async (page, clip) => {
+    const png = await page.screenshot({ clip, encoding: 'base64' });
+    return analyst.evaluate(
+      async (data, w, h) =>
+        new Promise((resolve) => {
+          const image = new Image();
+          image.onload = () => {
+            const canvas = document.getElementById('c');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(image, 0, 0);
+            const { data: rgba } = ctx.getImageData(0, 0, w, h);
+            const luma = new Float32Array(w * h);
+            for (let i = 0; i < w * h; i += 1) {
+              luma[i] =
+                0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2];
+            }
+            resolve({ w, h, luma: Array.from(luma) });
+          };
+          image.src = `data:image/png;base64,${data}`;
+        }),
+      png,
+      Math.round(clip.width),
+      Math.round(clip.height)
+    );
+  };
+
+  /* Where the object's canvas is, in page coordinates. A screenshot clip is
+     measured from the top of the document, and the stage is pinned inside a
+     scrolled act, so its client rect has to be offset or the clip lands somewhere
+     else entirely — in the hero, as it happens, where the display type measures
+     as a very high-contrast surface indeed. */
+  const frame = (page, stage) =>
+    page.evaluate((name) => {
+      const canvas = document.querySelector(`[data-stage="${name}"] canvas`);
+      if (!canvas) return null;
+      const r = canvas.getBoundingClientRect();
+      return {
+        x: r.x + window.scrollX,
+        y: Math.max(0, r.y + window.scrollY),
+        width: r.width,
+        height: Math.min(r.height, document.documentElement.scrollHeight - (r.y + window.scrollY)),
+      };
+    }, stage);
+
+  const page = await open({ width: 1600, height: 900 });
+  // The end of the decomposition act: the widest the stack ever opens.
+  await page.evaluate(() => {
+    const region = document.querySelector('.decomposition__layout');
+    const r = region.getBoundingClientRect();
+    window.scrollTo(0, scrollY + r.top + r.height - window.innerHeight - 2);
+  });
+  // Damping is 0.06 a frame and this renders in software: it needs the time.
+  await new Promise((resolve) => setTimeout(resolve, 40000));
+
+  const box = await frame(page, 'decomposition');
+  if (!box || box.width < 100) {
+    fail('the decomposition canvas never appeared, so nothing could be measured');
+  } else {
+    const shot = await sample(page, box);
+    const { w, h, luma } = shot;
+    const at = (x, y) => luma[y * w + x];
+
+    /* The page's own background, read from a corner the object never reaches.
+       Everything below is measured against it rather than against a constant. */
+    let ground = 0;
+    for (let y = 2; y < 12; y += 1) for (let x = 2; x < 12; x += 1) ground += at(x, y);
+    ground /= 100;
+
+    /* The substrate occupies the lower part of the frame with the stack lifted
+       away above it. Measure the object's own pixels only: anything within a
+       couple of levels of the background is air. */
+    const top = Math.round(h * 0.55);
+    let lit = 0;
+    let texture = 0;
+    let pairs = 0;
+    const values = [];
+    for (let y = top; y < h - 1; y += 1) {
+      for (let x = 1; x < w - 1; x += 1) {
+        const v = at(x, y);
+        if (v - ground < 2.5) continue;
+        lit += 1;
+        values.push(v);
+        const right = at(x + 1, y);
+        if (right - ground >= 2.5) {
+          texture += Math.abs(v - right);
+          pairs += 1;
+        }
+      }
+    }
+
+    if (lit < w * h * 0.02) {
+      fail(`the substrate covers only ${((lit / (w * h)) * 100).toFixed(1)}% of the frame`);
+    } else {
+      values.sort((a, b) => a - b);
+      const at01 = values[Math.floor(values.length * 0.01)];
+      const at99 = values[Math.floor(values.length * 0.99)];
+      const range = at99 - at01;
+      const grain = texture / Math.max(pairs, 1);
+
+      /* A smooth extruded polygon is flat between its arrises, so neighbouring
+         pixels agree and this number collapses toward zero however dark the
+         surface is. Broken stone disagrees with itself everywhere. Both of the
+         previous substrates — the extruded plate and the low-poly block — sat
+         under 1.2 here. */
+      if (grain < 2.2) fail(`substrate grain is ${grain.toFixed(2)}: the surface is too smooth`);
+      else pass(`substrate grain ${grain.toFixed(2)} — the surface disagrees with itself`);
+
+      /* And it has to have somewhere to be dark. Directional light catching high
+         points over deep self-shadowing is a wide range; an evenly lit plate is a
+         narrow one. */
+      if (range < 45) fail(`substrate luminance range is ${range.toFixed(0)}: too even to read`);
+      else pass(`substrate luminance range ${range.toFixed(0)} — lit crests over dark fracture`);
+    }
+
+    /* The layers, in grayscale. Six materials that answer light differently
+       occupy many separated grey levels; six variants of one pane cluster into a
+       couple, whatever their stated properties say. Measured over the stack — the
+       upper part of the frame, above the block — as the number of 12-level
+       buckets carrying a real share of the object's pixels, and how far the bulk
+       of those pixels spread.
+
+       Identifying which band is which layer was tried first and is not worth it:
+       the plates are seen obliquely, they overlap, and reflections cross them, so
+       any per-plate attribution is guesswork. The distribution is not. */
+    const stack = [];
+    for (let y = 1; y < Math.round(h * 0.55); y += 1) {
+      for (let x = 1; x < w - 1; x += 1) {
+        const v = at(x, y);
+        if (v - ground >= 2.5) stack.push(v);
+      }
+    }
+    if (stack.length < 4000) {
+      fail(`the stack covers only ${stack.length} pixels: nothing to measure`);
+    } else {
+      const buckets = new Array(22).fill(0);
+      for (const v of stack) buckets[Math.min(21, Math.floor(v / 12))] += 1;
+      const occupied = buckets.filter((n) => n / stack.length >= 0.005).length;
+      stack.sort((a, b) => a - b);
+      const spread =
+        stack[Math.floor(stack.length * 0.95)] - stack[Math.floor(stack.length * 0.05)];
+
+      if (occupied < 6) fail(`the stack occupies only ${occupied} grey bands: the layers look alike`);
+      else if (spread < 55) fail(`the stack's values span only ${spread.toFixed(0)} levels`);
+      else
+        pass(
+          `the stack occupies ${occupied} grey bands over ${spread.toFixed(0)} levels — ` +
+            'the layers separate without colour'
+        );
+    }
+  }
+
+  if (page.problems.length) fail(`console errors with the object running: ${page.problems[0]}`);
+  await page.close();
+  await analyst.close();
 }
 
 await browser.close();
