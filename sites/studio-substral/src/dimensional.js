@@ -36,7 +36,6 @@ import {
   CanvasTexture,
   Color,
   DirectionalLight,
-  DoubleSide,
   EquirectangularReflectionMapping,
   ExtrudeGeometry,
   Fog,
@@ -128,7 +127,7 @@ const STACK = [
     narrative: 5,
     thickness: 0.048,
     tint: 0.3,
-    opacity: 0.56,
+    opacity: 0.38,
     roughness: 0.028,
     clearcoat: 1,
     clearcoatRoughness: 0.022,
@@ -137,8 +136,8 @@ const STACK = [
     wall: { colour: 0xe6e2d6, roughness: 0.1, metalness: 0.98 },
     arris: 0.88,
     transmission: 0.1,
-    volume: 0.3,
-    attenuation: 1.5,
+    volume: 0.058,
+    attenuation: 0.3,
     ior: 1.57,
     art: 'design',
     artOnTop: true,
@@ -154,7 +153,7 @@ const STACK = [
     thickness: 0.118,
     tint: 0.155,
     warmth: 0.62,
-    opacity: 0.44,
+    opacity: 0.46,
     roughness: 0.23,
     clearcoat: 0.88,
     clearcoatRoughness: 0.19,
@@ -163,8 +162,8 @@ const STACK = [
     wall: { colour: 0xd2c8b2, roughness: 0.38, metalness: 0.86 },
     arris: 0.62,
     transmission: 0.42,
-    volume: 2.3,
-    attenuation: 1.05,
+    volume: 0.142,
+    attenuation: 0.17,
     ior: 1.62,
     art: 'trust',
     artOpacity: 0.58,
@@ -177,7 +176,7 @@ const STACK = [
     narrative: 3,
     thickness: 0.031,
     tint: 0.075,
-    opacity: 0.22,
+    opacity: 0.18,
     roughness: 0.92,
     etched: true,
     clearcoat: 0.8,
@@ -187,8 +186,8 @@ const STACK = [
     wall: { colour: 0xbdb8a6, roughness: 0.16, metalness: 0.94 },
     arris: 0.46,
     transmission: 0.98,
-    volume: 0.12,
-    attenuation: 9,
+    volume: 0.037,
+    attenuation: 1.6,
     ior: 1.52,
     art: 'search',
     artOpacity: 0.4,
@@ -203,7 +202,7 @@ const STACK = [
     narrative: 2,
     thickness: 0.072,
     tint: 0.03,
-    opacity: 0.68,
+    opacity: 0.52,
     roughness: 0.038,
     clearcoat: 1,
     clearcoatRoughness: 0.03,
@@ -212,8 +211,8 @@ const STACK = [
     wall: { colour: 0xa09a8b, roughness: 0.08, metalness: 0.95 },
     arris: 0.34,
     transmission: 0.62,
-    volume: 3.2,
-    attenuation: 0.45,
+    volume: 0.086,
+    attenuation: 0.055,
     ior: 1.49,
     art: 'conversion',
     artOpacity: 0.56,
@@ -228,7 +227,7 @@ const STACK = [
     narrative: 1,
     thickness: 0.096,
     tint: 0.86,
-    opacity: 0.6,
+    opacity: 0.92,
     roughness: 0.68,
     clearcoat: 0.08,
     clearcoatRoughness: 0.66,
@@ -246,8 +245,8 @@ const STACK = [
        straight through. Four millimetres of heavily scattering polymer does not
        show you what is behind it, and neither does this. */
     transmission: 0.15,
-    volume: 0.45,
-    attenuation: 2.8,
+    volume: 0.115,
+    attenuation: 0.09,
     ior: 1.42,
     art: 'accessibility',
     artInk: true,
@@ -1774,6 +1773,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
     fog: false,
   });
   const contactShadow = new Mesh(geometry.shadow, shadowMaterial);
+  // Under everything: it belongs to the stone, not to the stack.
+  contactShadow.renderOrder = -1;
   contactShadow.rotation.x = -Math.PI / 2;
   contactShadow.position.y = substrateDrop() + rock.plateau + 0.006;
   assembly.add(contactShadow);
@@ -1800,23 +1801,50 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       transparent: true,
       opacity: layer.opacity,
       depthWrite: false,
-      side: DoubleSide,
+      /* Front faces only. The extrusion has a lid at each end, and with both
+         sides drawn a plate paints its own unlit underside over its own lit top
+         face — the two lids are offset in projection by the plate's thickness, so
+         what survives is a rim of the top face around a dark middle. On the pale
+         polymer that read as a white picture frame with nothing in it, and no
+         amount of adjusting the material could have fixed it, because the material
+         was never the problem. The camera looks down on the stack in every stage,
+         so the far lid is never the one being looked at. */
       envMapIntensity: layer.envMapIntensity,
       emissive: patina.clone(),
       emissiveIntensity: 0,
     });
 
-    /* Transmission gives these layers real refraction and real volumetric
-       absorption, so Search reads clear, Conversion reads deep, Trust reads
-       warm and thick, and Accessibility scatters instead of merely being
-       semi-opaque. Attenuation distance is what makes thickness mean something:
-       the same tint over a longer path arrives darker. */
+    /* Three separate things decide how a layer reads, and they are kept separate
+       deliberately.
+
+       `opacity` is how much of the layer's own surface you see rather than
+       whatever is behind it: one for graphite because it is opaque, high for
+       frosted polymer because it scatters, modest for the glass layers, because
+       glass you cannot see through is not glass. It carries more weight here than
+       it would in a scene with one object in it. The camera looks down on six
+       stacked plates, so a dark layer with high coverage does not read as a dark
+       layer — it reads as the last layer, and everything underneath it disappears.
+       The smoked acrylic was doing precisely that to the pale polymer below it,
+       which is most of why the stack looked like fewer materials than it has.
+
+       `transmission` is how much of what is behind arrives refracted rather than
+       merely blended through.
+
+       `volume` over `attenuation` is what the path through the material costs the
+       light, which is what makes thickness mean something. `volume` is that path
+       in world units, so it follows the plate's own thickness and is not a free
+       dial. It was set to forty times it, which put the smoked acrylic's
+       transmittance at eight ten-thousandths — no longer a dark material but an
+       occluder.
+
+       And opacity used to be forced to one here for every transmissive layer while
+       the animation loop wrote the layer's own figure back on every frame, so the
+       stated values applied only through a path that contradicted this one. */
     if (layer.transmission > 0) {
       capMaterial.transmission = layer.transmission;
       capMaterial.thickness = layer.volume;
       capMaterial.attenuationDistance = layer.attenuation;
       capMaterial.attenuationColor = body.clone();
-      capMaterial.opacity = 1;
     }
 
     /* Etched layers drive roughness from their own markings: the body stays
@@ -1844,7 +1872,21 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       envMapIntensity: 1.35,
     });
 
-    group.add(new Mesh(geometry.plates[index].body, [capMaterial, wallMaterial]));
+    /* Draw the stack from the substrate upward, and each plate's parts in the
+       order they are stacked within it.
+
+       These are blended surfaces that do not write depth, so what they look like
+       depends entirely on the order they are drawn in, and three's automatic sort
+       cannot get it right here: the plates are nearly coplanar in view depth, so
+       their centres are a few thousandths apart and the comparison is noise. The
+       symptom was the pale frosted layer arriving as a pale frame around a black
+       rectangle — the near-opaque graphite plate below it, painting over the top
+       of it. The camera looks down on the stack in every stage, so back to front
+       is always bottom to top, and that can simply be stated. */
+    const order = stackPosition(index) * 3;
+    const solid = new Mesh(geometry.plates[index].body, [capMaterial, wallMaterial]);
+    solid.renderOrder = order;
+    group.add(solid);
 
     /* Edge treatment is per layer too: a bright machined arris on the precision
        surface, a soft one on the frosted polymer. */
@@ -1855,7 +1897,9 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       depthWrite: false,
       fog: false,
     });
-    group.add(new Mesh(geometry.plates[index].arris, arrisMaterial));
+    const arris = new Mesh(geometry.plates[index].arris, arrisMaterial);
+    arris.renderOrder = order + 2;
+    group.add(arris);
 
     /* Markings inside a dark material are read as light passing through it, so
        they are added. The frosted polymer is the one pale material in the stack,
@@ -1873,6 +1917,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       fog: false,
     });
     const art = new Mesh(geometry.plates[index].art, artMaterial);
+    art.renderOrder = order + 1;
     /* The surface composition sits on the top face because it is what you are
        meant to see. Every other drawing is embedded at mid-thickness, read
        through the material. */

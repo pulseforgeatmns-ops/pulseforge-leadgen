@@ -28,6 +28,7 @@
 import puppeteer from 'puppeteer';
 import { createServer } from 'node:http';
 import { createReadStream, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -43,6 +44,24 @@ const fail = (message) => {
   console.log(`  FAIL  ${message}`);
 };
 const pass = (message) => console.log(`  ok    ${message}`);
+
+/* --- The bundle the page will actually load -------------------------------- */
+
+/* Nothing below this means anything if the committed bundle does not match the
+   source. It is easy to miss: a build failure inside a shell pipeline reports the
+   exit status of the pipeline, so a broken build looks like a quiet one, and every
+   render after it silently measures the previous version. Check it first. */
+{
+  const build = spawnSync(process.execPath, ['build.mjs', '--check'], {
+    cwd: path.dirname(fileURLToPath(import.meta.url)),
+    encoding: 'utf8',
+  });
+  if (build.status !== 0) {
+    console.log('\nThe committed object bundle does not match src/dimensional.js.');
+    console.log((build.stdout || '') + (build.stderr || ''));
+    process.exit(1);
+  }
+}
 
 /* --- Static server -------------------------------------------------------- */
 

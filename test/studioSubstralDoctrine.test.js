@@ -811,6 +811,12 @@ describe('Progressive enhancement (doctrine §18)', () => {
     const opacityLine = dimensionalSrc.match(/plate\.capMaterial\.opacity = [^;]+;/)[0];
     assert.doesNotMatch(opacityLine, /\+ 0\.\d/, 'emphasis must not add opacity');
 
+    /* And the stated coverage has to be the coverage. Setting it to a constant
+       anywhere means the figure in the layer table is decorative: it was, for the
+       five transmissive layers, and the animation loop wrote the real value back
+       every frame from a different place. */
+    assert.doesNotMatch(dimensionalSrc, /capMaterial\.opacity = 1;/);
+
     // And it must not be recoloured: the accent survives only as an edge trace.
     assert.match(dimensionalSrc, /emissiveIntensity: 0,/);
     assert.doesNotMatch(dimensionalSrc, /emissiveIntensity = emphasis/);
