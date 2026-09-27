@@ -98,6 +98,14 @@ overflow and text crushed into a sliver, and exercises the three
 progressive-enhancement states and the assessment instrument. It exits non-zero
 on failure.
 
+It also measures the signature object as rendered — the substrate's local
+contrast and luminance range, and how many separated grey bands the exploded
+stack occupies — which is the only check that can see whether the substrate reads
+as stone and whether the six layers read as six materials. Run it on its own
+with `node verify-layout.mjs object`; it renders through swiftshader and settles
+the scroll state, so it takes a couple of minutes. It checks the committed object
+bundle against `src/dimensional.js` first, and stops if they differ.
+
 ## The assessment form
 
 `POST /api/public/website-assessment` on the Pulseforge app

@@ -81,10 +81,10 @@ Six layers, six materials, on a block of stone. Read top to bottom:
 |---|---|---|---|---|
 | 06 | **Design** | Precision surface | Near mirror-polished, the highest reflectivity in the stack, the brightest machined arris, almost no transmission | The page itself: masthead, oversized headline, one emphasised action, a framed media plate, three measures of copy, a footer — traced over the grid it sits on |
 | 05 | **Trust** | Warm smoked glass | The **thickest** layer, with a broad soft highlight and a substantial edge. Mass is the signal | A struck seal, a closure mark, a credential plate, a ledger with one row still open |
-| 04 | **Search** | Etched architectural glass | The **clearest** body and **thinnest** edge — transmission 0.93 over a long attenuation distance — with its markings driving roughness, so they only appear when light rakes them | A site hierarchy with elbow connectors, and an index where one entry is unresolved |
-| 03 | **Conversion** | Smoked acrylic | The most optically dense: transmission over a short attenuation distance, so light arrives dark. A tight bright specular against Trust's broad one | Nodes and paths converging on a single action — and one dashed route that simply stops |
-| 02 | **Accessibility** | Frosted polymer | The **lightest** material: transmission at roughness 0.64, which scatters rather than merely dimming, plus sheen for the diffuse halo and a soft edge | Landmark regions nested as a document outline, a heading ladder, a focus-order path |
-| 01 | **Performance** | Graphite composite | The **darkest**, thickest and least transparent, brushed along one axis so it answers light directionally | A request waterfall over a measured axis with thresholds, and a sampled trace |
+| 04 | **Search** | Etched architectural glass | The **clearest** body and **thinnest** plate — transmission 0.98 over a long absorption path, at the lowest coverage in the stack — with its markings driving roughness, so they only appear when light rakes them | A site hierarchy with elbow connectors, and an index where one entry is unresolved |
+| 03 | **Conversion** | Smoked acrylic | The **most optically dense**: the shortest absorption distance, so light crossing it arrives about a fifth as bright. Polished to a mirror at the surface, which is the contradiction that makes smoked acrylic recognisable | Nodes and paths converging on a single action — and one dashed route that simply stops |
+| 02 | **Accessibility** | Frosted polymer | The **one pale material**, and the only one that scatters rather than transmits: the lowest transmission over the highest roughness, with sheen and a soft edge. Its markings are **inked into** it rather than lit through it | Landmark regions nested as a document outline, a heading ladder, a focus-order path |
+| 01 | **Performance** | Graphite composite | The **darkest** and **thickest**, and the only **opaque** one — nothing passes through it, which is what separates a composite from the glass above. Brushed along one axis so it answers light directionally | A request waterfall over a measured axis with thresholds, and a sampled trace |
 | 00 | **Substrate** | Mineral | A block, not a plate — see below | — |
 
 Performance is deepest and design is the visible surface, which is the
@@ -93,21 +93,44 @@ what happens above it.
 
 ### Why they are not six colours
 
-The brief was explicit that six tinted panes would not do. The separation comes
-from **transmission** (0 to 0.93) with per-layer **volumetric absorption**, so the
-same tint over a longer path arrives darker; **refractive index**, so they bend
-light differently; thickness (a 2.5× range from the thinnest glass to the
-graphite); roughness (0.045 to 0.92); reflectivity (0.7 to 2.6
-`envMapIntensity`); edge treatment; internal markings; and sheen. Tint is used
-only as a **value ladder** — graphite darkest, frosted polymer lightest, an
-eightfold spread — and exactly one layer departs from the palette at all: Trust
-takes a 9% warmth nudge toward mineral.
+The brief was explicit that six tinted panes would not do. Three separate
+properties decide how a layer reads, and they are kept separate:
+
+- **Coverage** (`opacity`, 0.18 to 1) — how much of the layer's own surface you
+  see rather than whatever is behind it. One for graphite because it is opaque,
+  high for frosted polymer because it scatters, modest for the glass, because
+  glass you cannot see through is not glass.
+- **Transmission** (0 to 0.98) — how much of what is behind arrives refracted
+  rather than merely blended through.
+- **Absorption** — `volume`, the optical path in world units, over
+  `attenuation`. This is what makes thickness mean something: the same tint over
+  a longer path arrives darker. The path follows each plate's own thickness, and
+  the ratio spans about seventy-fold from the etched glass to the smoked acrylic.
+
+On top of those: **refractive index** (1.42 to 1.62), so they bend light
+differently; thickness (a 5× range from the thinnest glass to the graphite);
+roughness (0.028 to 0.92); reflectivity (0.55 to 3.4 `envMapIntensity`); edge
+treatment; sheen; and whether the internal markings are lit through the material
+or inked into it. Tint is used only as a **value ladder** — graphite darkest,
+frosted polymer palest, a sixtyfold spread — and exactly one layer departs from
+the palette at all: Trust takes a 9% warmth nudge toward mineral.
 
 The test suite asserts all six differ on every one of those axes, that the
-thickness range is at least 2×, that the value ladder spans at least 8×, and
-that no more than one layer carries a warmth shift. The consequence is that the
-layers stay distinguishable in grayscale, which is the real test of whether the
-differentiation is material or cosmetic.
+thickness range is at least 2×, that the absorption range is at least 50×, that
+the value ladder spans at least 8×, and that no more than one layer carries a
+warmth shift. The browser harness then renders the exploded stack and counts how
+many separated grey bands it actually occupies, because the source assertions
+were all satisfied by a stack that rendered as far fewer materials than it had.
+
+**Two things were wrong for two passes, and neither was the material.** Every
+plate was drawn double-sided, so it painted its own unlit underside over its own
+lit top face; the two lids are offset in projection by the plate's thickness and
+neither writes depth, so what survived was a rim of the top face around a dark
+middle. The pale polymer arrived as a white picture frame with nothing in it.
+And the absorption path was set to forty times each plate's thickness, which put
+the smoked acrylic's transmittance at eight ten-thousandths — no longer a dark
+material but an occluder, blacking out the pale layer beneath it. The layers were
+not similar. Two of them were not visible.
 
 ### The substrate
 
@@ -117,34 +140,65 @@ reads that as a manufactured panel. A first attempt did exactly that — a hewn
 polygon pushed through `ExtrudeGeometry` with a normal map — and it still read as
 another plate. The category was wrong, not the finish.
 
-So the block is **displaced geometry**:
+A second attempt displaced a subdivided icosahedron instead, and that read as a
+**low-poly block** — which is on the list of things it must not be. Two reasons,
+both about scale. three's polyhedron subdivides each of its twenty faces into
+(detail + 1)² triangles, so at detail 4 the whole block was five hundred
+triangles: facets a third of a unit across on a block eight across. And the
+finest octave of its displacement had a wavelength of about a fifth of its width,
+so it had curvature everywhere and nowhere to be sharp. The grain map that was
+meant to rescue it repeated every 0.28 units, which made all five of its octaves
+finer than a millimetre of real stone — it read as a sheen, not as a surface.
 
-- A subdivided icosahedron is squashed into a slab and pushed around by several
-  octaves of value noise, with a separate field modulating **thickness**, so its
-  profile varies across its extent and no wall is vertical.
-- **Fifteen cleavage planes** cut it: two near-horizontal ones flatten it into a
-  slab rather than the lens a displaced sphere would give, and thirteen more come
-  in around the sides at shallow angles. Anything beyond a plane is projected
-  onto it, which leaves a flat fracture face. This is what produces the angular,
-  quarried silhouette.
-- **Flat shaded**, so every facet answers light on its own. The macro structure is
-  cleavage; `stoneNormalTexture()` supplies the grain on top so it does not read
-  as a low-poly prop.
-- **Vertex colours** carry the mineral variation and the crevice darkening, with a
-  value spread from 0.28 to 2.4 of a dark base. Box-projected UVs from each
-  face's dominant axis give the grain an even scale, since the icosahedron's own
-  UVs are useless after displacement.
-- **A real shadow map**, with the stone the only caster and receiver. Deep
-  self-shadowing in the crevices is most of what makes it read as rock. The
+So the block is **broken**, not merely displaced:
+
+- **Fracture.** Space is divided into jittered cells, each owning one
+  outward-facing plane; any point past its cell's plane is pushed back onto it.
+  Points inside a cell land on the same plane, so the result is flat shards
+  meeting along sharp arrises. Two scales: a coarse pass cuts the large cleavage
+  faces that give the silhouette its angles, a fine pass chips them. The planes
+  face outward so the operation only ever removes material — projecting onto an
+  arbitrarily oriented plane can move a point outward as easily as inward, and
+  outward means a vertex left standing off the surface as a spike.
+- **Creases, not dunes.** The displacement field is built from the distance to the
+  zero set of a noise function, which is a connected network of thin valleys
+  rather than a field of rounded bumps. Stone breaks along lines.
+- **Fifteen cleavage planes** at the scale of the whole block, applied twice so the
+  solid actually satisfies all of them: two near-horizontal ones flatten it into
+  something quarried out of a bed, thirteen more come in around the sides at
+  shallow angles and widely varying distances, because evenly spaced planes give a
+  regular prism and a regular prism reads as manufactured.
+- **Occlusion, measured.** A point displaced inward relative to the local surface
+  is by definition in a hollow, and that is measured while the surface is
+  displaced and baked into the vertices. A 1024px shadow map cannot resolve a
+  fracture network, and the network being nearly black while the broken high
+  points take the light is most of why stone reads as stone.
+- **One height field, three maps.** Normals, albedo and roughness all come off the
+  same crease field, so what the surface says is broken, what it says is dark and
+  what it says is matte agree. A normal map on its own is only convincing under
+  moving light. The field is scaled so its coarsest feature is about a quarter of
+  a unit — the point where the geometry stops carrying structure.
+- **Flat shaded**, so every facet answers light on its own, and **vertex colours**
+  carry the mineral variation, the occlusion and the fact that downward-facing
+  faces are in their own shadow whatever the light does.
+- **A real shadow map**, with the stone the only caster and receiver. The
   translucent plates stay out of it: opaque shadows cast by glass look wrong.
-- A shallow region of the top is **planed flat** where the engineered stack seats
-  into it, fading out into natural stone well before the perimeter.
+- The top is **planed** only where the stack seats into it — a patch cut off the
+  crest, bounded by the stack's own footprint and offset from centre. The previous
+  pass planed a plateau out to seven tenths of the radius, which is most of the
+  top, and is how it turned back into a plate.
 
-It is twice the plate width and roughly fourteen times the thickest engineered
-layer, so it overhangs the stack and anchors the object — the layers read as thin
-and precise *because* of the mass underneath them. It is anchored in place: the
-layers rise off it as the object opens, it is visible in the hero, and it is
-still there in Act VI when they reassemble.
+The block is about 6.6 × 4.4 × 2.4 units against a 3.05 × 2.25 plate: twice the
+plate width, fifteen times the thickest engineered layer, and roughly a third as
+thick as it is wide. It overhangs the stack and anchors the object — the layers
+read as thin and precise *because* of the mass underneath them. It is visible in
+the hero, the layers rise off it as the object opens, and it is still there in
+Act VI when they reassemble.
+
+Building it costs about 130ms, once, shared across all three stages, inside the
+idle callback that already defers the object. The tessellation is chosen for
+facet size rather than smoothness, so that figure is the ceiling on how fine the
+geometry can go before it has to hand over to the maps.
 
 There is no giant SUBSTRATE word on the stone. A `00 / SUBSTRATE` annotation
 appears in the stage readout beneath the active layer, in the same restrained
@@ -208,9 +262,10 @@ viewports under 600px it is not a fallback — it *is* the intended treatment
 (§17), drawn at reduced scale and depth for the shallow pinned band.
 
 **Enhancement — Three.js.** `src/dimensional.js`. Each plate is one
-`ExtrudeGeometry` carrying **two materials**: group 0 is the smoked acrylic cap
-(`ior: 1.49`, clearcoat, `depthWrite: false` so the layers read through each
-other) and group 1 is the extruded side wall, which is opaque machined metal.
+`ExtrudeGeometry` carrying **two materials**: group 0 is the cap (per-layer `ior`,
+clearcoat, `depthWrite: false` so the layers read through each other, front faces
+only so a plate does not paint its own underside over its own face) and group 1 is
+the extruded side wall, which is opaque machined metal.
 That is where visible thickness and the metal arris come from. A hairline
 highlight follows the top and bottom arrises; the environment gives the metal
 and the clearcoat something to reflect; a contact shadow on the stone softens
@@ -219,18 +274,21 @@ depth falloff so the far side of the specimen recedes.
 
 Adaptations, and why:
 
-- **No `transmission`.** Real refractive transmission on six overlapping
-  plates needs a render target per frame and is the single most expensive thing
-  in the scene. Cap opacity plus clearcoat plus a structured environment reads
-  as smoked acrylic at this scale for a fraction of the cost. §26 permits
-  adapting implementation to preserve performance; the material character is
-  preserved.
+- **Transmission, after all.** An earlier pass left it out on cost grounds —
+  refractive transmission needs a render target per frame — and relied on cap
+  opacity and clearcoat instead. That was the wrong economy: it is the axis that
+  makes etched glass read clear, smoked acrylic read deep and frosted polymer
+  scatter, and without it the six were opacity variants of one material, which is
+  what the brief kept coming back about. It is in, and the object stays inside its
+  frame budget and its bundle budget.
 - **Procedural environment, not an HDR asset.** A 512×256 canvas with two
   softboxes, warm bounce from below and a bright horizon strip for the machined
   arrises to catch, run through `PMREMGenerator`. Nothing to download.
-- **No shadow maps.** Six translucent plates casting opaque shadow-map
-  shadows looks wrong and costs a second pass. A contact shadow on the
-  substrate, scaled to the lift, is both cheaper and more accurate.
+- **One shadow map, for the stone only.** Six translucent plates casting opaque
+  shadow-map shadows looks wrong, so they do not cast: the plates' shadow on the
+  substrate is a contact decal, scaled to the lift, which is both cheaper and more
+  accurate. The stone does cast and receive, because self-shadowing across a
+  broken surface is not something a decal can fake.
 - **Arrises built by hand, not `EdgesGeometry`.** `EdgesGeometry` on a plate
   with relieved corners produces either tessellation noise or gaps depending on
   the threshold. Two closed loops from the silhouette give exactly the machined
@@ -422,7 +480,18 @@ the deliverable rather than scaffolding:
   invisible to the check above (a stray grid child once reduced the refusals
   list to one word per line);
 - the three progressive-enhancement states;
-- the assessment instrument's rejections, normalisation and offline route.
+- the assessment instrument's rejections, normalisation and offline route;
+- and, under `verify-layout.mjs object`, what the signature object actually
+  renders: the substrate's local contrast and luminance range, and how many
+  separated grey bands the exploded stack occupies. Both of the earlier substrates
+  — the extruded plate and the low-poly block — would have failed the first of
+  those, and a stack that satisfied every source rule about material
+  differentiation failed the second. Neither is visible to a source assertion.
+
+It checks the committed object bundle against its source before measuring
+anything, because a build failure inside a shell pipeline reports the exit status
+of the pipeline: a broken build looks like a quiet one, and every render after it
+silently measures the previous version. That happened, for several passes.
 
 It exits non-zero on failure. Run it after any change to the stylesheet, the
 markup or the object.
