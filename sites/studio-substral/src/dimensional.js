@@ -130,21 +130,21 @@ const clamp = (n, min = 0, max = 1) => (n < min ? min : n > max ? max : n);
 
 const STACK = [
   {
-    /* 06 DESIGN — precision surface. The most finished layer: laminated, near
-       mirror-polished, carrying the recognisable page composition on its face
+    /* 06 DESIGN — precision surface. The most finished layer: laminated and
+       polished, carrying the recognisable page composition on its face
        with the grid it sits on traced faintly beneath. */
     key: 'design',
     narrative: 5,
     thickness: 0.042,
     tint: 0.3,
     opacity: 0.38,
-    roughness: 0.022,
-    clearcoat: 1,
-    clearcoatRoughness: 0.015,
+    roughness: 0.045,
+    clearcoat: 0.86,
+    clearcoatRoughness: 0.045,
     metalness: 0.02,
-    envMapIntensity: 3.4,
-    wall: { colour: 0xf2efe6, roughness: 0.07, metalness: 0.99 },
-    arris: 0.9,
+    envMapIntensity: 2.7,
+    wall: { colour: 0xf2efe6, roughness: 0.17, metalness: 0.99, reflection: 1.1 },
+    arris: 0.74,
     edge: 0.013,
     transmission: 0.1,
     volume: 0.05,
@@ -165,13 +165,13 @@ const STACK = [
     tint: 0.155,
     warmth: 0.62,
     opacity: 0.46,
-    roughness: 0.26,
-    clearcoat: 0.82,
+    roughness: 0.3,
+    clearcoat: 0.62,
     clearcoatRoughness: 0.22,
     metalness: 0.09,
-    envMapIntensity: 1.9,
-    wall: { colour: 0xd8cdb4, roughness: 0.34, metalness: 0.9 },
-    arris: 0.62,
+    envMapIntensity: 1.5,
+    wall: { colour: 0xd8cdb4, roughness: 0.4, metalness: 0.9, reflection: 1.05 },
+    arris: 0.46,
     edge: 0.011,
     transmission: 0.42,
     volume: 0.156,
@@ -191,12 +191,13 @@ const STACK = [
     opacity: 0.18,
     roughness: 0.94,
     etched: true,
-    clearcoat: 0.86,
+    roughnessFloor: 0.09,
+    clearcoat: 0.62,
     clearcoatRoughness: 0.04,
     metalness: 0.04,
-    envMapIntensity: 2.6,
-    wall: { colour: 0xcfcabb, roughness: 0.12, metalness: 0.96 },
-    arris: 0.46,
+    envMapIntensity: 1.7,
+    wall: { colour: 0xcfcabb, roughness: 0.18, metalness: 0.96, reflection: 0.95 },
+    arris: 0.3,
     edge: 0.006,
     transmission: 0.98,
     volume: 0.029,
@@ -216,13 +217,13 @@ const STACK = [
     thickness: 0.075,
     tint: 0.03,
     opacity: 0.52,
-    roughness: 0.03,
-    clearcoat: 1,
-    clearcoatRoughness: 0.022,
+    roughness: 0.04,
+    clearcoat: 0.82,
+    clearcoatRoughness: 0.07,
     metalness: 0.06,
-    envMapIntensity: 2.2,
-    wall: { colour: 0x9a9486, roughness: 0.06, metalness: 0.97 },
-    arris: 0.34,
+    envMapIntensity: 1.6,
+    wall: { colour: 0x302f2b, roughness: 0.22, metalness: 0.12, reflection: 0.8 },
+    arris: 0.25,
     edge: 0.008,
     transmission: 0.62,
     volume: 0.09,
@@ -249,7 +250,7 @@ const STACK = [
     envMapIntensity: 0.55,
     sheen: 0.95,
     sheenRoughness: 0.88,
-    wall: { colour: 0xd6cfbf, roughness: 0.86, metalness: 0.1 },
+    wall: { colour: 0xd6cfbf, roughness: 0.86, metalness: 0.1, reflection: 0.55 },
     arris: 0.14,
     edge: 0.005,
     /* The lowest transmission in the stack, on purpose. Scattering and
@@ -279,13 +280,14 @@ const STACK = [
     opacity: 1,
     roughness: 0.62,
     etched: true,
+    roughnessFloor: 0.84,
     anisotropy: 0.92,
-    clearcoat: 0.2,
+    clearcoat: 0.12,
     clearcoatRoughness: 0.5,
     metalness: 0.52,
-    envMapIntensity: 0.7,
-    wall: { colour: 0x7a7367, roughness: 0.55, metalness: 0.78 },
-    arris: 0.24,
+    envMapIntensity: 0.45,
+    wall: { colour: 0x4c4b45, roughness: 0.68, metalness: 0.38, reflection: 0.65 },
+    arris: 0.18,
     edge: 0.009,
     transmission: 0,
     volume: 0,
@@ -870,9 +872,29 @@ function layerArt(key, resolution) {
   return artCache.get(key);
 }
 
-function artTexture(key, resolution) {
-  const texture = new CanvasTexture(layerArt(key, resolution));
-  texture.colorSpace = SRGBColorSpace;
+function artTexture(key, resolution, roughnessFloor = null) {
+  let canvas = layerArt(key, resolution);
+  if (roughnessFloor != null) {
+    /* Roughness is linear data, not ink. A black drawing background used
+       directly as a map erased the graphite's roughness between the marks,
+       turning its unmarked surface into a mirror. Preserve a material-specific
+       floor, then let the same engraved artwork increase the roughness. */
+    const source = canvas;
+    canvas = document.createElement('canvas');
+    canvas.width = source.width;
+    canvas.height = source.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(source, 0, 0);
+    const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    for (let i = 0; i < image.data.length; i += 4) {
+      const value = Math.round(lerp(roughnessFloor, 1, image.data[i + 1] / 255) * 255);
+      image.data[i] = image.data[i + 1] = image.data[i + 2] = value;
+      image.data[i + 3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+  }
+  const texture = new CanvasTexture(canvas);
+  if (roughnessFloor == null) texture.colorSpace = SRGBColorSpace;
   texture.anisotropy = 8;
   texture.magFilter = LinearFilter;
   texture.minFilter = LinearMipmapLinearFilter;
@@ -2121,7 +2143,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
        themselves when light grazes across the plate. This is what makes Search
        read as etched glass rather than as a printed decal. */
     if (layer.etched) {
-      capMaterial.roughnessMap = artTexture(layer.art, layer.artResolution || 512);
+      capMaterial.roughnessMap = artTexture(layer.art, layer.artResolution || 512, layer.roughnessFloor);
     }
     if (layer.sheen) {
       capMaterial.sheen = layer.sheen;
@@ -2138,7 +2160,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       color: new Color(layer.wall.colour),
       metalness: layer.wall.metalness,
       roughness: layer.wall.roughness,
-      envMapIntensity: 1.7,
+      envMapIntensity: layer.wall.reflection,
     });
 
     /* Draw the stack from the substrate upward, and each plate's parts in the
@@ -2306,8 +2328,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
         emphasis
       );
       plate.wallMaterial.envMapIntensity = lerp(
-        lerp(1.35, 0.7, state.focus),
-        2.9,
+        layer.wall.reflection * lerp(1, 0.52, state.focus),
+        layer.wall.reflection * 2.15,
         emphasis
       );
     }
