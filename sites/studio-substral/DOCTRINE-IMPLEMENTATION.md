@@ -108,10 +108,19 @@ properties decide how a layer reads, and they are kept separate:
   the ratio spans about seventy-fold from the etched glass to the smoked acrylic.
 
 On top of those: **refractive index** (1.42 to 1.62), so they bend light
-differently; thickness (a 5× range from the thinnest glass to the graphite);
-roughness (0.028 to 0.92); reflectivity (0.55 to 3.4 `envMapIntensity`); edge
-treatment; sheen; and whether the internal markings are lit through the material
-or inked into it. Tint is used only as a **value ladder** — graphite darkest,
+differently; thickness (an 8× range from the etched glass to the graphite);
+roughness (0.022 to 0.94); reflectivity (0.55 to 3.4 `envMapIntensity`); sheen;
+whether the internal markings are lit through the material or inked into it; and
+**edge treatment**, which is now a stated hairline width per layer across a range
+of more than two to one, plus a deliberate ladder of machined walls from bright
+aluminium on the precision surface to dark anodised graphite at the bottom.
+
+The arris used to be two vertices per edge drawn as triangles from consecutive
+triples — a chain of degenerate slivers whose apparent width is whatever the
+rasteriser lands on. It pinched at the relieved corners and came out a different
+weight on every plate for no reason anyone had chosen. It is a ribbon now, four
+vertices per segment with inward normals averaged across the corner, so the
+highlight holds its width and the width is a number in the layer table. Tint is used only as a **value ladder** — graphite darkest,
 frosted polymer palest, a sixtyfold spread — and exactly one layer departs from
 the palette at all: Trust takes a 9% warmth nudge toward mineral.
 
@@ -188,12 +197,63 @@ So the block is **broken**, not merely displaced:
   pass planed a plateau out to seven tenths of the radius, which is most of the
   top, and is how it turned back into a plate.
 
-The block is about 6.6 × 4.4 × 2.4 units against a 3.05 × 2.25 plate: twice the
-plate width, fifteen times the thickest engineered layer, and roughly a third as
-thick as it is wide. It overhangs the stack and anchors the object — the layers
-read as thin and precise *because* of the mass underneath them. It is visible in
+And three things at a larger scale, because none of the above decides a
+silhouette. Cleavage and fracture both trim every direction to roughly the same
+radius, so whatever they do to the surface the outline converges on an ellipsoid:
+
+- **Spurs.** Four unevenly weighted directions in which the block simply runs
+  further, roughened at their tips by the same fine field so a limb is broken
+  rather than moulded. Applied **after** the cleavage planes: a plane caps the
+  radius in its direction, so a spur folded into the displacement is clipped
+  straight back off. A spur is where the rock did not break along the bedding, so
+  it belongs outside the planes that describe the bedding.
+- **A keel.** The underside runs deeper along an off-centre, off-axis line, because
+  that is where the block parted and a break does not radiate from the middle of
+  one. Only the top is bedded; a plane under it flattened the break into a cut. A
+  radial version of this read as a cone, which is a different and much less
+  geological object.
+- **Bites.** Five spherical subtractions, stated as a direction, a radius and how
+  far into the block they reach. This is the only primitive here that produces a
+  genuinely *concave* face — displacement and clipping can only give a surface that
+  curves outward or is flat — so without them the deepest feature on the block is a
+  groove. They are carved along the ray from the block's centre, the way the rest of
+  the surface is defined; pushing points away from a sphere's centre, which is the
+  obvious reading of subtracting one, moves everything on its far side outward, so
+  the spheres inflated the block instead of carving it.
+
+Measured across twenty-four directions, the plan radius runs from 1.6 to 3.8
+units, against a near-constant radius before.
+
+**Warmth without neon.** The reference carries light inside its cracks.
+Reproduced literally that is glowing lava, which §10 rules out, so it is oxidised
+mineral instead: albedo, never emission — a dark warm ochre the key light happens
+to find. It is gated on a low-frequency field as well as on crevice depth, so it
+stains a few fractures rather than lining all of them, which is the difference
+between a mineral and a decoration, and it lifts a stained crevice only far enough
+to read as warm rather than as black. A test holds the lifted value below half
+that of lit stone, so it cannot drift into a glow.
+
+The block is about 6.5 × 4.1 units in plan against a 3.05 × 2.25 plate, with a
+body 2.2 deep and a keel running half a unit below that: twice the plate width,
+twelve times the thickest engineered layer, and a third as thick as it is wide,
+which is the reference's proportion. It overhangs the stack and anchors the object
+— the layers read as thin and precise *because* of the mass underneath them. A
+later pass had it at two and a half plate widths and it started to dwarf the
+stack; in the reference the rock is barely wider than the layers. It is visible in
 the hero, the layers rise off it as the object opens, and it is still there in
 Act VI when they reassemble.
+
+**The keel changed the framing.** A taller object is a smaller object once the
+camera has to fit it, so reserving frame for the keel meant a deeper keel produced
+a less imposing block — and centring on the keel tip aimed the camera low enough
+to ride the plates up until they clipped the top of the frame. So the composition
+is centred on the block's *body*, taken as the fourth percentile of its surface,
+and the keel is allowed past the bottom edge: hardest in the hero, where the lower
+two thirds of the frame is display type and the keel is behind it, and only
+slightly in the acts, where the block has to stay visible under the layers because
+that is the whole reason it is there. A plan-radius rule was tried for the body
+first and does not work — the block's rim dips nearly as deep as its keel, so it
+selected the same point.
 
 Building it costs about 130ms, once, shared across all three stages, inside the
 idle callback that already defers the object. The tessellation is chosen for
