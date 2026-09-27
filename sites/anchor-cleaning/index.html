@@ -225,10 +225,11 @@
   }
   body{background:var(--cream);color:#10202D}
   header{position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(5,13,22,.56),rgba(5,13,22,0));border-bottom:0;backdrop-filter:none}
-  .mast{min-height:112px}
+  .mast{min-height:112px;grid-template-columns:auto minmax(0,1fr) auto;gap:20px}
   .wordmark{color:#fff}
   .wordmark .brand-lockup{height:78px;width:auto}
-  .nav-links{gap:38px;color:rgba(255,255,255,.82);font-size:14px}
+  .nav-links{gap:12px 22px;flex-wrap:wrap;color:rgba(255,255,255,.82);font-size:14px}
+  .mast-cta{white-space:nowrap}
   .nav-links a:hover{color:#fff}
   .mast-phone{color:rgba(255,255,255,.88);font-size:15px}
   .mast-phone:hover{color:#fff}
@@ -419,7 +420,9 @@
   }
   /* SPEC-AC-021 final conversion refinement */
   .contact .doc{max-width:1440px}
-  .contact-grid{grid-template-columns:minmax(360px,480px) minmax(620px,1fr);gap:clamp(190px,12vw,240px)}
+  .contact-grid{grid-template-columns:minmax(0,480px) minmax(0,1fr);gap:clamp(190px,12vw,240px)}
+  .contact-grid > *{min-width:0}
+  .contact .em{max-width:100%;overflow-wrap:anywhere}
   .contact h2{font-size:clamp(54px,6.5vw,102px);line-height:.91;max-width:7.4ch;margin:16px 0 8px}
   .contact p{max-width:34ch}
   .consult-steps{margin-top:34px}
@@ -438,7 +441,7 @@
   }
   .assessment-form button{margin-top:2px;align-self:start}
   @media (max-width:1180px){
-    .contact-grid{grid-template-columns:minmax(330px,.7fr) minmax(520px,1fr);gap:120px}
+    .contact-grid{grid-template-columns:minmax(0,.7fr) minmax(0,1fr);gap:120px}
     .contact h2{font-size:clamp(52px,6.4vw,88px)}
   }
   @media (max-width:980px){
@@ -520,7 +523,8 @@
   .portal-feature-panel--cream{background:#FBF8F1}
   .portal-feature-panel h3{font-size:clamp(26px,2.8vw,36px);line-height:1.12;color:#10202D;max-width:16ch}
   .portal-feature-panel p{font-size:17px;line-height:1.72;color:#52606B;max-width:38ch}
-  .facility-assessment-cta{background:#08131F;color:#fff;padding:clamp(56px,6vw,88px) clamp(28px,4vw,48px);margin-left:calc((100vw - min(1240px,100vw)) / -2);margin-right:calc((100vw - min(1240px,100vw)) / -2);text-align:center;display:grid;justify-items:center;gap:22px}
+  .facility-assessment-cta{background:#08131F;color:#fff;padding:clamp(56px,6vw,88px) 0;text-align:center}
+  .facility-assessment-cta-inner{display:grid;justify-items:center;gap:22px}
   .facility-assessment-cta h2{font-size:clamp(34px,4.2vw,56px);line-height:1.05;max-width:16ch;color:#fff}
   .facility-assessment-cta p{font-size:18px;line-height:1.75;color:#CBD4DB;max-width:42ch}
   @media (max-width:980px){
@@ -557,7 +561,7 @@
   <div class="doc">
     <div class="mast">
       <a class="wordmark" href="/" aria-label="Anchor Cleaning home">
-        <img class="brand-lockup" src="/assets/brand/anchor-logo-canonical.png?v=20260916" alt="Anchor Cleaning" width="156" height="78" decoding="async">
+        <img class="brand-lockup" src="/assets/brand/anchor-logo-canonical.png?v=20260916" alt="Anchor Cleaning" width="1280" height="823" decoding="async">
       </a>
       <nav class="nav-links" aria-label="Primary navigation">
         <a href="#commercial">Commercial Cleaning</a>
@@ -640,60 +644,6 @@
     </div>
   </div>
   </section>
-  <section class="for" id="industries">
-    <div class="doc">
-      <div class="lbl rv">Industries</div>
-      <h2 class="rv">Professional offices where consistency shows.</h2>
-      <p class="industry-intro rv">Anchor provides recurring commercial cleaning and janitorial service for workplaces where clients, patients, tenants, and teams read the room before a word is said. Serving Manchester, Bedford, and businesses throughout Greater Manchester, New Hampshire.</p>
-      <div class="industry-grid">
-        <article class="industry-card rv" style="--img:url('assets/anchor-hero-v3.jpg')">
-          <div>
-            <div class="ref">Property management</div>
-            <h3>Common areas, suites, and turnover handled with one standard.</h3>
-            <p>Furnished units, tenant spaces, and managed properties cared for on a documented recurring plan with clear accountability.</p>
-          </div>
-        </article>
-        <article class="industry-card rv" style="--img:url('https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=1800&q=82')">
-          <div>
-            <div class="ref">Law firms</div>
-            <h3>Discretion, order, and a polished front.</h3>
-            <p>Reception, conference rooms, private offices, and common areas maintained without adding friction to the workday.</p>
-          </div>
-        </article>
-        <article class="industry-card rv" style="--img:url('https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1800&q=82')">
-          <div>
-            <div class="ref">CPA &amp; professional offices</div>
-            <h3>Ready when the office runs long.</h3>
-            <p>Recurring service for firms that need the same dependable baseline through busy seasons and normal weeks.</p>
-          </div>
-        </article>
-        <article class="industry-card rv" style="--img:url('https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1800&q=82')">
-          <div>
-            <div class="ref">Medical and managed spaces</div>
-            <h3>The standard is visible before anyone asks.</h3>
-            <p>Waiting areas, suites, tenant common spaces, and office environments cared for with a steady, documented rhythm.</p>
-          </div>
-        </article>
-      </div>
-    </div>
-  </section>
-<section class="editorial-break" aria-label="Reliability statement">
-  <div class="doc">
-    <p class="rv">Reliability becomes part of your workplace.</p>
-  </div>
-</section>
-<section class="note" id="about">
-  <div class="doc about-panel">
-    <div class="about-photo rv" role="img" aria-label="Quiet executive office interior with warm daylight"></div>
-    <div>
-      <div class="lbl rv">Why "Anchor"</div>
-      <h2 class="rv">An anchor's only job is to hold.</h2>
-      <p class="rv">I spent more than a decade running restaurants and a service company before this. The difference between an operation you can rely on and one you cannot is whether someone stays accountable when the standard starts to slip.</p>
-      <p class="rv">That's what Anchor sells. A clean office is the evidence that someone held the line.</p>
-      <div class="by rv">&mdash; Jacob, owner</div>
-    </div>
-  </div>
-</section>
 <section class="service-assurance" id="service-assurance" aria-labelledby="service-assurance-heading">
   <div class="service-assurance-hero doc">
     <div class="service-assurance-story">
@@ -701,7 +651,7 @@
         <p class="service-assurance-eyebrow rv">Service Assurance</p>
         <h2 class="rv" id="service-assurance-heading">How Anchor solves inconsistency</h2>
         <div class="service-assurance-body rv">
-          <p>A clean facility should not depend on who happened to show up that night.</p>
+          <p>The Anchor Standard is backed by a system. A clean facility should not depend on who happened to show up that night.</p>
           <p>Anchor&rsquo;s service system gives every location a defined scope, gives cleaners a clear way to document completion and exceptions, and gives clients visibility when something needs attention.</p>
           <p>The result is a cleaning program that is easier to manage, easier to correct, and far more accountable.</p>
         </div>
@@ -755,10 +705,66 @@
       <p>Clients can report an issue directly, see when Anchor acknowledges it, and follow the resolution through completion.</p>
     </article>
   </div>
-  <div class="facility-assessment-cta doc rv">
-    <h2>Want a cleaning program built around accountability?</h2>
-    <p>We&rsquo;ll walk your facility, understand where your current service is falling short, and build a scope around the standards that matter to your team.</p>
-    <a class="btn-primary" href="#contact">Book a Facility Assessment</a>
+  <div class="facility-assessment-cta">
+    <div class="facility-assessment-cta-inner doc rv">
+      <h2>Let&rsquo;s define the standard for your facility.</h2>
+      <p>We&rsquo;ll walk your facility, understand where your current service is falling short, and build a scope around the standards that matter to your team.</p>
+      <a class="btn-primary" href="#contact">Book a Facility Assessment</a>
+    </div>
+  </div>
+</section>
+  <section class="for" id="industries">
+    <div class="doc">
+      <div class="lbl rv">Industries</div>
+      <h2 class="rv">Professional offices where consistency shows.</h2>
+      <p class="industry-intro rv">Anchor provides recurring commercial cleaning and janitorial service for workplaces where clients, patients, tenants, and teams read the room before a word is said. Serving Manchester, Bedford, and businesses throughout Greater Manchester, New Hampshire.</p>
+      <div class="industry-grid">
+        <article class="industry-card rv" style="--img:url('assets/anchor-hero-v3.jpg')">
+          <div>
+            <div class="ref">Property management</div>
+            <h3>Common areas, suites, and turnover handled with one standard.</h3>
+            <p>Furnished units, tenant spaces, and managed properties cared for on a documented recurring plan with clear accountability.</p>
+          </div>
+        </article>
+        <article class="industry-card rv" style="--img:url('https://images.unsplash.com/photo-1497366811353-6870744d04b2?auto=format&fit=crop&w=1800&q=82')">
+          <div>
+            <div class="ref">Law firms</div>
+            <h3>Discretion, order, and a polished front.</h3>
+            <p>Reception, conference rooms, private offices, and common areas maintained without adding friction to the workday.</p>
+          </div>
+        </article>
+        <article class="industry-card rv" style="--img:url('https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1800&q=82')">
+          <div>
+            <div class="ref">CPA &amp; professional offices</div>
+            <h3>Ready when the office runs long.</h3>
+            <p>Recurring service for firms that need the same dependable baseline through busy seasons and normal weeks.</p>
+          </div>
+        </article>
+        <article class="industry-card rv" style="--img:url('https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1800&q=82')">
+          <div>
+            <div class="ref">Medical and managed spaces</div>
+            <h3>The standard is visible before anyone asks.</h3>
+            <p>Waiting areas, suites, tenant common spaces, and office environments cared for with a steady, documented rhythm.</p>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+<section class="editorial-break" aria-label="Reliability statement">
+  <div class="doc">
+    <p class="rv">Reliability becomes part of your workplace.</p>
+  </div>
+</section>
+<section class="note" id="about">
+  <div class="doc about-panel">
+    <div class="about-photo rv" role="img" aria-label="Quiet executive office interior with warm daylight"></div>
+    <div>
+      <div class="lbl rv">Why "Anchor"</div>
+      <h2 class="rv">An anchor's only job is to hold.</h2>
+      <p class="rv">I spent more than a decade running restaurants and a service company before this. The difference between an operation you can rely on and one you cannot is whether someone stays accountable when the standard starts to slip.</p>
+      <p class="rv">That's what Anchor sells. A clean office is the evidence that someone held the line.</p>
+      <div class="by rv">&mdash; Jacob, owner</div>
+    </div>
   </div>
 </section>
 <section class="contact" id="contact">

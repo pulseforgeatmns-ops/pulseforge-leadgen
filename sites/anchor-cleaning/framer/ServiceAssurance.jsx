@@ -93,18 +93,20 @@ export function PortalFeaturePanel({
 }
 
 export function FacilityAssessmentCTA({
-  headline = "Want a cleaning program built around accountability?",
+  headline = "Let’s define the standard for your facility.",
   body,
   buttonHref = "#contact",
   buttonLabel = "Book a Facility Assessment",
 }) {
   return (
-    <div className="facility-assessment-cta doc rv">
-      <h2>{headline}</h2>
-      <p>{body}</p>
-      <a className="btn-primary" href={buttonHref}>
-        {buttonLabel}
-      </a>
+    <div className="facility-assessment-cta">
+      <div className="facility-assessment-cta-inner doc rv">
+        <h2>{headline}</h2>
+        <p>{body}</p>
+        <a className="btn-primary" href={buttonHref}>
+          {buttonLabel}
+        </a>
+      </div>
     </div>
   );
 }
@@ -127,7 +129,7 @@ const DEFAULT_PROOF = [
 const DEFAULT_BODY = (
   <>
     <p>
-      A clean facility should not depend on who happened to show up that night.
+      The Anchor Standard is backed by a system. A clean facility should not depend on who happened to show up that night.
     </p>
     <p>
       Anchor&apos;s service system gives every location a defined scope, gives cleaners a clear way to document completion and exceptions, and gives clients visibility when something needs attention.

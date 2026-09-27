@@ -181,10 +181,11 @@
 .facility-assessment-cta {
   background: #08131f;
   color: #fff;
-  padding: clamp(56px, 6vw, 88px) clamp(28px, 4vw, 48px);
-  margin-left: calc((100vw - min(1240px, 100vw)) / -2);
-  margin-right: calc((100vw - min(1240px, 100vw)) / -2);
+  padding: clamp(56px, 6vw, 88px) 0;
   text-align: center;
+}
+
+.facility-assessment-cta-inner {
   display: grid;
   justify-items: center;
   gap: 22px;
