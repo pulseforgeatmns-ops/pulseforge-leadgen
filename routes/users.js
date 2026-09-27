@@ -155,7 +155,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
   </form>
 </div>
 <script>
-	const roles = ['admin','manager','viewer','client','ao','setter','closer','sales'];
+	const roles = ['admin','manager','viewer','client','ao','setter','closer','sales','cleaner','facility_client'];
 const msg = document.getElementById('msg');
 let resetUserId = null;
 let editUser = null;

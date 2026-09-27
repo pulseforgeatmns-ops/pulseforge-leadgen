@@ -11,7 +11,10 @@ const {
 } = require('../utils/replenishmentVertical');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { adapters: createGovernedAdapters } = require('./governedOutboundAdapters');
-const { assessOperatingCapacity } = require('../packages/emmett-outbound/OperatingCapacity');
+const {
+  assessOperatingCapacity,
+  computeScheduleLimitedCapacity,
+} = require('../packages/emmett-outbound/OperatingCapacity');
 const {
   buildReplenishmentYield,
   buildReplenishmentLossBuckets,
@@ -28,6 +31,11 @@ const {
   isProspectServiceAreaConfirmed,
   resolveMissionAllowedCities,
 } = require('../utils/missionGeography');
+const {
+  emptyAlternateContactTelemetry,
+  mergeAlternateTelemetry,
+  attemptSameCompanyAlternateRecovery,
+} = require('./sameCompanyContactRecovery');
 
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
@@ -46,23 +54,39 @@ function resolveOperatingCapacity({
   assessed = null,
   sentToday = 0,
   totalAttempted = 0,
+  policy = null,
+  now = new Date(),
 } = {}) {
   if (operatingCapacity && (
-    operatingCapacity.dispatchableDailyCapacity != null
+    operatingCapacity.planningDailyCapacity != null
+    || operatingCapacity.dispatchCapacityNow != null
+    || operatingCapacity.dispatchableDailyCapacity != null
     || operatingCapacity.effectiveDailyCapacity != null
   )) {
     return operatingCapacity;
   }
+  const grantPolicy = policy || { dailyCap };
   return assessOperatingCapacity({
     assessed: assessed || {
       capacity: { recommended: emmettCapacity },
       governor: { outcome: 'proceed', halt: false },
       health: { score: 0 },
     },
-    policy: { dailyCap },
+    policy: grantPolicy,
     sentToday,
     totalAttempted,
     emmettCapacity,
+    now,
+    schedule: grantPolicy.startHour != null || grantPolicy.spacingMinutes != null
+      ? {
+        allowedSendWindow: {
+          startHour: grantPolicy.startHour ?? 9,
+          endHour: grantPolicy.endHour ?? 17,
+          timezone: grantPolicy.timeZone || 'America/New_York',
+        },
+        minSpacingMinutes: grantPolicy.spacingMinutes ?? grantPolicy.minSpacingMinutes ?? 60,
+      }
+      : undefined,
   });
 }
 
@@ -75,6 +99,8 @@ function buildControlPlan({
   totalAttempted = 0,
   cleanInventory = 0,
   targetDays = DEFAULT_TARGET_DAYS,
+  policy = null,
+  now = new Date(),
 }) {
   const operating = resolveOperatingCapacity({
     operatingCapacity,
@@ -83,30 +109,50 @@ function buildControlPlan({
     assessed,
     sentToday,
     totalAttempted,
+    policy,
+    now,
   });
   const authorizationLimitedCapacity = Math.max(0, Number(
     operating.authorizationLimitedCapacity ?? operating.effectiveDailyCapacity ?? 0
   ));
-  const scheduleLimitedCapacity = Math.max(0, Number(operating.scheduleLimitedCapacity ?? authorizationLimitedCapacity));
-  const dispatchableDailyCapacity = Math.max(0, Number(
-    operating.dispatchableDailyCapacity ?? authorizationLimitedCapacity
+  const scheduleLimitedCapacity = operating.scheduleLimitedCapacity != null
+    ? Math.max(0, Number(operating.scheduleLimitedCapacity))
+    : (operating.allowedSendWindow && operating.minSpacingMinutes != null
+      ? computeScheduleLimitedCapacity({
+        allowedSendWindow: operating.allowedSendWindow,
+        minSpacingMinutes: operating.minSpacingMinutes,
+        dispatchDayAllowed: operating.dispatchDayAllowed !== false,
+      })
+      : 0);
+  const nextEligibleScheduleCapacity = Math.max(0, Number(
+    operating.nextEligibleScheduleCapacity ?? scheduleLimitedCapacity
   ));
-  const target = dispatchableDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
+  const dispatchCapacityNow = Math.max(0, Number(
+    operating.dispatchCapacityNow ?? operating.dispatchableDailyCapacity ?? 0
+  ));
+  const planningDailyCapacity = Math.max(0, Number(
+    operating.planningDailyCapacity ?? operating.dispatchableDailyCapacity ?? authorizationLimitedCapacity
+  ));
+  const dispatchableDailyCapacity = dispatchCapacityNow;
+  const target = planningDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
   const clean = Math.max(0, Number(cleanInventory || 0));
   const deficit = Math.max(0, target - clean);
-  const todayRemaining = Math.max(0, dispatchableDailyCapacity - Math.max(0, Number(sentToday || 0)));
+  const todayRemaining = Math.max(0, dispatchCapacityNow - Math.max(0, Number(sentToday || 0)));
 
   let state = 'healthy';
-  if (dispatchableDailyCapacity <= 0) state = 'delivery_halted';
-  else if (clean < dispatchableDailyCapacity) state = 'critical';
+  if (planningDailyCapacity <= 0) state = 'delivery_halted';
+  else if (clean < planningDailyCapacity) state = 'critical';
   else if (clean < target) state = 'replenish';
 
   return {
     state,
-    safeDailyCapacity: dispatchableDailyCapacity,
+    safeDailyCapacity: planningDailyCapacity,
+    planningDailyCapacity,
+    dispatchCapacityNow,
     dispatchableDailyCapacity,
     authorizationLimitedCapacity,
     scheduleLimitedCapacity,
+    nextEligibleScheduleCapacity,
     effectiveDailyCapacity: authorizationLimitedCapacity,
     recommendedSafeDailyCapacity: Number(operating.recommendedSafeDailyCapacity || 0),
     limitingFactor: operating.limitingFactor || null,
@@ -118,7 +164,8 @@ function buildControlPlan({
     targetInventory: target,
     cleanInventory: clean,
     deficit,
-    shouldReplenish: deficit > 0 && dispatchableDailyCapacity > 0,
+    shouldReplenish: deficit > 0 && planningDailyCapacity > 0,
+    dispatchUnavailableNow: dispatchCapacityNow <= 0,
   };
 }
 
@@ -234,7 +281,7 @@ function scoutInput(program, source, plan) {
     inventoryDeficit: plan.deficit,
     question: `Max needs Scout to replenish verified outbound inventory for ${segment} in ${region}.`,
     objective: `Find enough net-new, in-scope prospects to close an outbound inventory deficit of ${plan.deficit} while preserving ownership, prior-contact, DNC and suppression boundaries.`,
-    reason: `Dispatchable daily capacity is ${plan.dispatchableDailyCapacity ?? plan.safeDailyCapacity} (Emmett recommends ${plan.recommendedSafeDailyCapacity ?? plan.safeDailyCapacity}); Max requires a ${plan.targetDays}-day buffer of ${plan.targetInventory}, but only ${plan.cleanInventory} clean prospects are currently available.`,
+    reason: `Planning daily capacity is ${plan.planningDailyCapacity ?? plan.safeDailyCapacity} (dispatch now ${plan.dispatchCapacityNow ?? 0}; Emmett recommends ${plan.recommendedSafeDailyCapacity ?? plan.safeDailyCapacity}); Max requires a ${plan.targetDays}-day buffer of ${plan.targetInventory}, but only ${plan.cleanInventory} clean prospects are currently available.`,
     authority: 'observe',
     force: true,
     businessContext: {
@@ -264,6 +311,7 @@ async function persistDiscoveredCompanies(pool, store, {
     counters.discovered = companies.length;
   counters.recovered = 0;
   counters.alreadyQueued = 0;
+  mergeAlternateTelemetry(counters, emptyAlternateContactTelemetry());
 
   const scope = scoutContext.scope || {};
   const admissionContext = {
@@ -306,6 +354,17 @@ async function persistDiscoveredCompanies(pool, store, {
       continue;
     }
     if (ownership.kind === OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
+      const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
+        company,
+        scoutContext,
+        telemetry: counters,
+      });
+      mergeAlternateTelemetry(counters, recovery.telemetry || {});
+      if (recovery.ok) {
+        counters.recovered += 1;
+        counters.recoveredExisting = (counters.recoveredExisting || 0) + 1;
+        continue;
+      }
       recordReplenishmentRejection(counters, 'same_company_different_contact');
       continue;
     }
@@ -500,18 +559,21 @@ async function runMaxOutboundControlLoop(options = {}) {
   if (!source) return { halted: 'source_mission_missing', programId: program.id };
 
   const governedAdapters = options.governedAdapters || createGovernedAdapters(pool);
+  const controlNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const infrastructure = options.infrastructure
-    || await governedAdapters.infrastructure(program);
+    || await governedAdapters.infrastructure(program, controlNow, null, { mode: 'planning' });
   const inventoryBefore = options.inventory
     || await loadCleanInventory(pool, store, source);
   const sentToday = Number(infrastructure?.snapshot?.sentToday || 0);
   const operating = resolveOperatingCapacity({
     operatingCapacity: infrastructure.operating,
     dailyCap: program.policy.dailyCap,
+    policy: program.policy,
     emmettCapacity: infrastructure.cap,
     assessed: infrastructure.assessed,
     sentToday,
     totalAttempted: infrastructure.totalAttempted,
+    now: controlNow,
   });
   const timestamps = options.timestamps || await loadInventoryTimestamps(pool);
   const funnelStock = options.funnel || await loadScoutFunnelStock(pool);
@@ -524,6 +586,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     totalAttempted: infrastructure.totalAttempted,
     cleanInventory: inventoryBefore.clean.length,
     targetDays: options.targetDays || process.env.ANCHOR_MAX_OUTBOUND_BUFFER_DAYS || DEFAULT_TARGET_DAYS,
+    policy: program.policy,
+    now: controlNow,
   });
 
   let scout = null;
@@ -569,6 +633,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     totalAttempted: infrastructure.totalAttempted,
     cleanInventory: inventoryAfter.clean.length,
     targetDays: plan.targetDays,
+    policy: program.policy,
+    now: controlNow,
   });
 
   const nowIso = new Date().toISOString();
@@ -617,8 +683,12 @@ async function runMaxOutboundControlLoop(options = {}) {
     recommendedSafeDailyCapacity: finalPlan.recommendedSafeDailyCapacity,
     authorizationLimitedCapacity: finalPlan.authorizationLimitedCapacity,
     scheduleLimitedCapacity: finalPlan.scheduleLimitedCapacity,
+    nextEligibleScheduleCapacity: finalPlan.nextEligibleScheduleCapacity,
+    dispatchCapacityNow: finalPlan.dispatchCapacityNow,
+    planningDailyCapacity: finalPlan.planningDailyCapacity,
     dispatchableDailyCapacity: finalPlan.dispatchableDailyCapacity,
     effectiveDailyCapacity: finalPlan.effectiveDailyCapacity,
+    dispatchUnavailableNow: finalPlan.dispatchUnavailableNow,
     limitingFactor: finalPlan.limitingFactor,
     capacityReason: finalPlan.capacityReason,
     sentToday,
@@ -636,6 +706,12 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutPromoted: newPromotions,
     scoutQueued: Number(scout?.discoveredQueued || 0),
     scoutRecovered: recoveredExisting,
+    sameCompanyCandidatesAttempted: Number(scout?.admission?.sameCompanyCandidatesAttempted || 0),
+    alternateContactsResolved: Number(scout?.admission?.alternateContactsResolved || 0),
+    alternateContactsVerified: Number(scout?.admission?.alternateContactsVerified || 0),
+    alternateContactsRejected: Number(scout?.admission?.alternateContactsRejected || 0),
+    alternateContactsAddedToCleanInventory: Number(scout?.admission?.alternateContactsAddedToCleanInventory || 0),
+    alternateContactLossReasons: scout?.admission?.alternateContactLossReasons || null,
     yield: scout?.yield || null,
     lossBuckets: scout?.lossBuckets || null,
     funnel,
@@ -654,11 +730,15 @@ async function runMaxOutboundControlLoop(options = {}) {
       recommendedSafeDailyCapacity: finalPlan.recommendedSafeDailyCapacity,
       authorizationLimitedCapacity: finalPlan.authorizationLimitedCapacity,
       scheduleLimitedCapacity: finalPlan.scheduleLimitedCapacity,
+      nextEligibleScheduleCapacity: finalPlan.nextEligibleScheduleCapacity,
+      dispatchCapacityNow: finalPlan.dispatchCapacityNow,
+      planningDailyCapacity: finalPlan.planningDailyCapacity,
       dispatchableDailyCapacity: finalPlan.dispatchableDailyCapacity,
       effectiveDailyCapacity: finalPlan.effectiveDailyCapacity,
       limitingFactor: finalPlan.limitingFactor,
       capacityReason: finalPlan.capacityReason,
-      safeCapacity: finalPlan.dispatchableDailyCapacity,
+      safeCapacity: finalPlan.planningDailyCapacity,
+      dispatchUnavailableNow: finalPlan.dispatchUnavailableNow,
       governor: finalPlan.governor || infrastructure.assessed?.governor?.outcome || null,
       healthScore: finalPlan.healthScore ?? infrastructure.assessed?.health?.score ?? null,
     },

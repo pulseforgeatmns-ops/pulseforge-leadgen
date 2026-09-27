@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Anchor — Service Portal</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#111F2B;--ink-soft:#4A5863;--paper:#F8F5EE;--paper-2:#ECE6DA;
+  --line:#D9D1C2;--brass:#B99152;--brass-deep:#8A6534;
+  --navy:#0F1B27;--navy-2:#172839;--white:#fff;--ok:#1E6B45;--warn:#9A6B00;--bad:#9B2C3A;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--paper);color:var(--ink);line-height:1.5;min-height:100vh}
+h1,h2,h3{font-family:'Fraunces',Georgia,serif;font-weight:500;line-height:1.15}
+.shell{max-width:920px;margin:0 auto;padding:0 20px 48px}
+.top{background:rgba(248,245,238,.94);border-bottom:1px solid rgba(17,31,43,.12);position:sticky;top:0;z-index:10;backdrop-filter:blur(12px)}
+.top-inner{max-width:920px;margin:0 auto;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit}
+.brand-mark{width:26px;height:26px;border-radius:50%;border:2px solid var(--brass);background:var(--navy)}
+.brand-text{font-family:'Fraunces',serif;font-size:20px}
+.brand-sub{display:block;font-family:'Inter',sans-serif;font-size:10px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--brass-deep);margin-top:2px}
+.top-actions{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-soft)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:42px;padding:10px 16px;border-radius:4px;border:1px solid var(--navy);background:var(--navy);color:var(--paper);font-size:13px;font-weight:600;cursor:pointer;text-decoration:none}
+.btn:hover{background:var(--brass-deep);border-color:var(--brass-deep)}
+.btn.ghost{background:transparent;color:var(--navy)}
+.btn.ghost:hover{background:rgba(15,27,39,.06)}
+.btn.small{min-height:34px;padding:6px 12px;font-size:12px}
+.hero{padding:28px 0 8px}
+.hero h1{font-size:clamp(28px,5vw,40px);margin-bottom:6px}
+.hero p{color:var(--ink-soft);max-width:52ch;font-size:15px}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0 16px}
+.tab{padding:8px 14px;border:1px solid var(--line);background:var(--white);font-size:12px;font-weight:600;cursor:pointer;border-radius:999px;color:var(--ink-soft)}
+.tab.active{background:var(--navy);color:var(--paper);border-color:var(--navy)}
+.panel{background:var(--white);border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:14px}
+.panel h2{font-size:22px;margin-bottom:12px}
+.grid{display:grid;gap:12px}
+@media(min-width:720px){.grid.cols-2{grid-template-columns:1fr 1fr}}
+.stat-label{font-size:11px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--brass-deep);margin-bottom:4px}
+.stat-value{font-family:'Fraunces',serif;font-size:26px}
+.stat-note{font-size:13px;color:var(--ink-soft);margin-top:4px}
+.status-ok{color:var(--ok)}.status-warn{color:var(--warn)}
+.list{display:flex;flex-direction:column;gap:10px}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:none;padding-bottom:0}
+.badge{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:4px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.badge.open{color:var(--bad);border-color:rgba(155,44,58,.35);background:rgba(155,44,58,.06)}
+.badge.ack{color:var(--warn);border-color:rgba(154,107,0,.35);background:rgba(154,107,0,.08)}
+.badge.resolved{color:var(--ok);border-color:rgba(30,107,69,.35);background:rgba(30,107,69,.08)}
+.section-title{font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--brass-deep);margin:16px 0 8px}
+.check-item{border:1px solid var(--line);border-radius:6px;padding:12px;margin-bottom:8px;background:var(--paper)}
+.check-item h4{font-size:15px;margin-bottom:8px}
+.outcome-row{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:11px;font-weight:600;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:var(--white);cursor:pointer;color:var(--ink-soft)}
+.chip.on{background:var(--navy-2);color:var(--paper);border-color:var(--navy-2)}
+.chip.warn.on{background:var(--warn);border-color:var(--warn);color:var(--white)}
+textarea,input,select{width:100%;border:1px solid var(--line);border-radius:6px;padding:10px 12px;font:inherit;background:var(--white);margin-top:6px}
+textarea{min-height:80px;resize:vertical}
+label{font-size:12px;font-weight:600;color:var(--ink-soft)}
+.hidden{display:none!important}
+.msg{padding:10px 12px;border-radius:6px;font-size:13px;margin-bottom:12px}
+.msg.err{background:rgba(155,44,58,.08);border:1px solid rgba(155,44,58,.25);color:var(--bad)}
+.msg.ok{background:rgba(30,107,69,.08);border:1px solid rgba(30,107,69,.25);color:var(--ok)}
+.demo-banner{background:linear-gradient(90deg,var(--navy),var(--navy-2));color:var(--paper);padding:10px 14px;border-radius:6px;font-size:13px;margin-bottom:14px}
+.demo-banner b{color:var(--brass)}
+.scope-editor .sec{border:1px dashed var(--line);padding:12px;margin-bottom:10px;border-radius:6px}
+.muted{color:var(--ink-soft);font-size:13px}
+.footer-note{margin-top:24px;font-size:12px;color:var(--ink-soft);text-align:center}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="/portal/anchor">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span><span class="brand-text">Anchor</span><span class="brand-sub">Service visibility</span></span>
+    </a>
+    <div class="top-actions">
+      <span id="userLabel"></span>
+      <a class="btn ghost small" href="/logout">Sign out</a>
+    </div>
+  </div>
+</header>
+<main class="shell">
+  <div id="flash" class="msg hidden"></div>
+  <section class="hero">
+    <h1 id="pageTitle">Service portal</h1>
+    <p id="pageSubtitle">Anchor makes cleaning consistency visible — scope, completion, exceptions, and resolution in one place.</p>
+  </section>
+  <div id="demoBanner" class="demo-banner hidden"></div>
+  <nav class="tabs" id="tabs"></nav>
+  <div id="view"></div>
+  <p class="footer-note">Questions? Contact Anchor at jacob@goanchorcleaning.com</p>
+</main>
+<script>
+const state = { me: null, tab: 'home', locationId: null, visit: null, scope: null };
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function flash(text, kind) {
+  const el = document.getElementById('flash');
+  el.textContent = text;
+  el.className = 'msg ' + (kind || 'ok');
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 4500);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    headers: { Accept: 'application/json', ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.message || json.error || 'Request failed');
+  return json;
+}
+
+function cap(user) {
+  return state.me?.capabilities || {};
+}
+
+function locations() {
+  return state.me?.locations || [];
+}
+
+function ensureLocation() {
+  if (state.locationId) return state.locationId;
+  const locs = locations();
+  if (locs.length) state.locationId = locs[0].id;
+  return state.locationId;
+}
+
+function renderTabs() {
+  const tabs = document.getElementById('tabs');
+  const role = state.me?.user?.role;
+  const items = [];
+  if (cap().facility_client || role === 'admin' || role === 'manager') {
+    items.push(['home', 'Overview'], ['history', 'Visits'], ['scope', 'Scope'], ['issues', 'Issues'], ['report', 'Report issue']);
+  }
+  if (cap().cleaner) {
+    items.push(['visit', 'Today\'s visit']);
+  }
+  if (cap().operator) {
+    items.push(['operator', 'Assurance desk'], ['manage-scope', 'Edit scope']);
+  }
+  tabs.innerHTML = items.map(([id, label]) =>
+    `<button type="button" class="tab ${state.tab === id ? 'active' : ''}" data-tab="${id}">${label}</button>`
+  ).join('');
+  tabs.querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', () => {
+    state.tab = btn.dataset.tab;
+    render();
+  }));
+}
+
+function assuranceCards(home) {
+  return `<div class="grid cols-2">
+    <div class="panel"><div class="stat-label">Last service</div><div class="stat-value">${fmtDate(home.last_service)}</div></div>
+    <div class="panel"><div class="stat-label">Next service</div><div class="stat-value">${fmtDate(home.next_service)}</div></div>
+    <div class="panel"><div class="stat-label">Service status</div><div class="stat-value ${home.service_status.includes('All') ? 'status-ok' : 'status-warn'}">${home.service_status}</div></div>
+    <div class="panel"><div class="stat-label">Open issues</div><div class="stat-value">${home.open_issues_count}</div></div>
+  </div>
+  <div class="panel" style="margin-top:12px">
+    <div class="stat-label">Recent quality</div>
+    <p class="stat-note">Last ${home.recent_quality.visits_window} visits · ${home.recent_quality.visits_completed} completed · ${home.recent_quality.issues_reported_90d} issue(s) reported (90d) · ${home.recent_quality.issues_resolved_90d} resolved</p>
+  </div>`;
+}
+
+async function renderHome() {
+  const locId = ensureLocation();
+  const home = await api(`/api/anchor-portal/home?location_id=${locId}`);
+  document.getElementById('view').innerHTML = assuranceCards(home) + `
+    <div class="panel"><h2>Recent visits</h2><div class="list">${(home.recent_visits || []).map(v =>
+      `<div class="row"><div><strong>${v.status === 'completed' ? 'Completed' : 'Scheduled'}</strong><div class="muted">${fmtDate(v.completed_at || v.scheduled_at)}</div></div>
+      <span class="badge ${v.status === 'completed' ? 'resolved' : 'ack'}">${v.status}</span></div>`).join('') || '<p class="muted">No visits yet.</p>'}</div></div>`;
+}
+
+async function renderHistory() {
+  const locId = ensureLocation();
+  const { visits } = await api(`/api/anchor-portal/visits?location_id=${locId}&limit=15`);
+  document.getElementById('view').innerHTML = `<div class="panel"><h2>Service history</h2><div class="list">${visits.map(v =>
+    `<div class="row"><div><strong>${v.location_name}</strong><div class="muted">${fmtDate(v.completed_at || v.scheduled_at)} · ${v.cleaner_name || 'Anchor team'}</div></div>
+    <button class="btn ghost small" data-visit="${v.id}">Details</button></div>`).join('') || '<p class="muted">No visits recorded.</p>'}</div></div>`;
+  document.querySelectorAll('[data-visit]').forEach(btn => btn.addEventListener('click', async () => {
+    const { visit } = await api(`/api/anchor-portal/visits/${btn.dataset.visit}`);
+    showVisitModal(visit);
+  }));
+}
+
+function showVisitModal(visit) {
+  const html = `<div class="panel"><h2>Visit · ${fmtDate(visit.completed_at || visit.scheduled_at)}</h2>
+    <p class="muted">${visit.visit_notes || ''}</p>
+    ${visit.items.map(item => `<div class="check-item"><h4>${item.item_label}</h4><div class="muted">${item.section_title}</div>
+      <div style="margin-top:6px"><span class="badge ${item.outcome.includes('issue') || item.outcome.includes('unable') ? 'open' : 'resolved'}">${item.outcome.replace(/_/g,' ')}</span>
+      ${item.exception_reason ? `<div class="muted" style="margin-top:6px">${item.exception_reason}</div>` : ''}</div></div>`).join('')}
+    <button class="btn ghost small" id="closeModal">Close</button></div>`;
+  document.getElementById('view').insertAdjacentHTML('beforeend', html);
+  document.getElementById('closeModal').onclick = () => render();
+}
+
+async function renderScope() {
+  const locId = ensureLocation();
+  const { scope } = await api(`/api/anchor-portal/locations/${locId}/scope`);
+  document.getElementById('view').innerHTML = `<div class="panel"><h2>Location scope</h2>
+    ${scope.map(sec => `<div class="section-title">${sec.title}</div><ul class="list">${sec.items.map(i => `<li class="muted">· ${i.label}</li>`).join('')}</ul>`).join('')}</div>`;
+}
+
+async function renderIssues() {
+  const locId = ensureLocation();
+  const { issues } = await api(`/api/anchor-portal/issues?location_id=${locId}`);
+  document.getElementById('view').innerHTML = `<div class="panel"><h2>Issues & exceptions</h2><div class="list">${issues.map(i =>
+    `<div class="row"><div><strong>${i.title || i.description.slice(0, 60)}</strong><div class="muted">${fmtDate(i.created_at)} · ${i.room_category || 'General'}</div>
+    <div class="muted">${i.description}</div>${i.resolution ? `<div class="muted" style="margin-top:6px"><b>Resolution:</b> ${i.resolution}</div>` : ''}</div>
+    <span class="badge ${i.status}">${i.status}</span></div>`).join('') || '<p class="muted">No issues on record — a good sign.</p>'}</div></div>`;
+}
+
+function renderReportIssue() {
+  const locs = locations();
+  document.getElementById('view').innerHTML = `<div class="panel"><h2>Report a service issue</h2>
+    <label>Location<select id="issueLoc">${locs.map(l => `<option value="${l.id}">${l.name}</option>`).join('')}</select></label>
+    <label style="display:block;margin-top:10px">What did you notice?<textarea id="issueDesc" placeholder="Kitchen sink wasn't cleaned…"></textarea></label>
+    <label style="display:block;margin-top:10px">Area / room<input id="issueRoom" placeholder="Break room / kitchen"></label>
+    <label style="display:block;margin-top:10px">Optional photo<input type="file" id="issuePhoto" accept="image/*"></label>
+    <div style="margin-top:14px"><button class="btn" id="submitIssue">Submit issue</button></div></div>`;
+  document.getElementById('submitIssue').onclick = async () => {
+    let photo_data_url = '';
+    const file = document.getElementById('issuePhoto').files[0];
+    if (file) photo_data_url = await readFile(file);
+    await api('/api/anchor-portal/issues', { method: 'POST', body: {
+      location_id: Number(document.getElementById('issueLoc').value),
+      description: document.getElementById('issueDesc').value,
+      room_category: document.getElementById('issueRoom').value,
+      severity: 'medium',
+      photo_data_url,
+    }});
+    flash('Issue submitted. Anchor will acknowledge and track resolution.');
+    state.tab = 'issues';
+    render();
+  };
+}
+
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result || ''));
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function renderVisit() {
+  let { visit } = await api('/api/anchor-portal/visits/today');
+  if (!visit) {
+    document.getElementById('view').innerHTML = '<div class="panel"><h2>No visit assigned today</h2><p class="muted">Check back when a visit is scheduled for your location.</p></div>';
+    return;
+  }
+  if (visit.status === 'scheduled') {
+    await api(`/api/anchor-portal/visits/${visit.id}/start`, { method: 'POST' });
+    ({ visit } = await api(`/api/anchor-portal/visits/${visit.id}`));
+  }
+  state.visit = visit;
+  const grouped = {};
+  visit.items.forEach(item => {
+    grouped[item.section_title] = grouped[item.section_title] || [];
+    grouped[item.section_title].push(item);
+  });
+  document.getElementById('view').innerHTML = `<div class="panel"><h2>${visit.location_name}</h2><p class="muted">Scheduled ${fmtDate(visit.scheduled_at)}</p></div>
+    ${Object.entries(grouped).map(([title, items]) => `<div class="section-title">${title}</div>` + items.map(item => renderCheckItem(item, visit.id)).join('')).join('')}
+    <label style="display:block;margin:12px 0">Visit notes<textarea id="visitNotes">${visit.visit_notes || ''}</textarea></label>
+    <label>Optional photo evidence<input type="file" id="visitPhoto" accept="image/*"></label>
+    <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+      <button class="btn" id="completeVisit">Complete visit</button>
+      <button class="btn ghost" id="flagIssue">Flag location issue</button>
+    </div>`;
+  bindCheckItems(visit.id);
+  document.getElementById('completeVisit').onclick = async () => {
+    const file = document.getElementById('visitPhoto').files[0];
+    if (file) {
+      await api(`/api/anchor-portal/visits/${visit.id}/evidence`, { method: 'POST', body: { data_url: await readFile(file) } });
+    }
+    await api(`/api/anchor-portal/visits/${visit.id}/complete`, { method: 'POST', body: { visit_notes: document.getElementById('visitNotes').value } });
+    flash('Visit completed.');
+    render();
+  };
+  document.getElementById('flagIssue').onclick = () => { state.tab = 'report'; render(); };
+}
+
+function renderCheckItem(item, visitId) {
+  const outcomes = ['completed','unable_to_complete','issue_detected','not_applicable'];
+  return `<div class="check-item" data-item="${item.id}"><h4>${item.item_label}</h4>
+    <div class="outcome-row">${outcomes.map(o =>
+      `<button type="button" class="chip ${item.outcome === o ? 'on' : ''} ${o.includes('issue') || o.includes('unable') ? 'warn' : ''}" data-outcome="${o}">${o.replace(/_/g,' ')}</button>`).join('')}</div>
+    <textarea class="reason hidden" placeholder="Reason required for exceptions">${item.exception_reason || ''}</textarea></div>`;
+}
+
+function bindCheckItems(visitId) {
+  document.querySelectorAll('.check-item').forEach(block => {
+    const itemId = block.dataset.item;
+    const reasonEl = block.querySelector('.reason');
+    block.querySelectorAll('[data-outcome]').forEach(chip => chip.addEventListener('click', async () => {
+      const outcome = chip.dataset.outcome;
+      const needsReason = outcome === 'unable_to_complete' || outcome === 'issue_detected';
+      reasonEl.classList.toggle('hidden', !needsReason);
+      block.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.outcome === outcome));
+      if (needsReason && !reasonEl.value.trim()) {
+        reasonEl.focus();
+        return;
+      }
+      const { visit } = await api(`/api/anchor-portal/visits/${visitId}/items/${itemId}`, {
+        method: 'PATCH',
+        body: { outcome, exception_reason: reasonEl.value.trim() },
+      });
+      state.visit = visit;
+    }));
+  });
+}
+
+async function renderOperator() {
+  const summary = await api('/api/anchor-portal/operator/summary');
+  document.getElementById('view').innerHTML = `<div class="grid cols-2">
+    <div class="panel"><div class="stat-label">Locations</div><div class="stat-value">${summary.locations.length}</div></div>
+    <div class="panel"><div class="stat-label">Open client issues</div><div class="stat-value">${summary.open_issues.length}</div></div></div>
+    <div class="panel"><h2>Open issues</h2><div class="list">${summary.open_issues.concat(summary.acknowledged_issues).map(i => issueOperatorRow(i)).join('') || '<p class="muted">No open issues.</p>'}</div></div>
+    <div class="panel"><h2>Recent checklist exceptions (30d)</h2><div class="list">${summary.recent_exceptions.map(e =>
+      `<div class="row"><div><strong>${e.location_name}</strong><div class="muted">${e.section_title} · ${e.item_label}</div><div class="muted">${e.exception_reason || e.outcome}</div></div><span class="muted">${fmtDate(e.completed_at)}</span></div>`).join('') || '<p class="muted">No exceptions logged.</p>'}</div></div>`;
+  document.querySelectorAll('[data-issue]').forEach(btn => btn.addEventListener('click', () => updateIssue(btn.dataset.issue, btn.dataset.action)));
+}
+
+function issueOperatorRow(i) {
+  return `<div class="row"><div><strong>${i.title || i.description.slice(0,50)}</strong><div class="muted">${i.location_name} · ${fmtDate(i.created_at)}</div><div class="muted">${i.description}</div></div>
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+      <span class="badge ${i.status}">${i.status}</span>
+      ${i.status === 'open' ? `<button class="btn ghost small" data-issue="${i.id}" data-action="ack">Acknowledge</button>` : ''}
+      ${i.status !== 'resolved' ? `<button class="btn small" data-issue="${i.id}" data-action="resolve">Mark resolved</button>` : ''}
+    </div></div>`;
+}
+
+async function updateIssue(id, action) {
+  let body = {};
+  if (action === 'ack') body = { status: 'acknowledged' };
+  if (action === 'resolve') {
+    body = { status: 'resolved', resolution: prompt('Resolution note for client record:') || 'Resolved by Anchor operator.' };
+  }
+  await api(`/api/anchor-portal/issues/${id}`, { method: 'PATCH', body });
+  flash('Issue updated.');
+  render();
+}
+
+async function renderManageScope() {
+  const locId = ensureLocation();
+  const locs = locations();
+  const { scope } = await api(`/api/anchor-portal/locations/${locId}/scope`);
+  state.scope = scope;
+  document.getElementById('view').innerHTML = `<div class="panel scope-editor"><h2>Edit scope</h2>
+    <label>Location<select id="scopeLoc">${locs.map(l => `<option value="${l.id}" ${l.id===locId?'selected':''}>${l.name}</option>`).join('')}</select></label>
+    <div id="scopeSections" style="margin-top:12px">${scope.map((s, si) => scopeSectionEditor(s, si)).join('')}</div>
+    <button class="btn ghost small" id="addSection" type="button">+ Section</button>
+    <div style="margin-top:14px"><button class="btn" id="saveScope">Save scope</button></div></div>`;
+  document.getElementById('scopeLoc').onchange = async (e) => {
+    state.locationId = Number(e.target.value);
+    state.tab = 'manage-scope';
+    render();
+  };
+  document.getElementById('addSection').onclick = () => {
+    state.scope.push({ title: 'NEW AREA', items: [{ label: 'New task' }] });
+    document.getElementById('scopeSections').insertAdjacentHTML('beforeend', scopeSectionEditor(state.scope[state.scope.length - 1], state.scope.length - 1));
+  };
+  document.getElementById('saveScope').onclick = async () => {
+    const sections = [...document.querySelectorAll('.sec')].map(sec => ({
+      title: sec.querySelector('.sec-title').value,
+      items: [...sec.querySelectorAll('.sec-item')].map(inp => ({ label: inp.value })).filter(i => i.label.trim()),
+    }));
+    await api(`/api/anchor-portal/locations/${locId}/scope`, { method: 'PUT', body: { sections } });
+    flash('Scope updated for this location.');
+  };
+}
+
+function scopeSectionEditor(section, idx) {
+  return `<div class="sec" data-idx="${idx}"><input class="sec-title" value="${section.title.replace(/"/g,'&quot;')}">
+    ${section.items.map(it => `<input class="sec-item" value="${(it.label||it).replace(/"/g,'&quot;')}" style="margin-top:6px">`).join('')}
+    <button type="button" class="btn ghost small add-item" style="margin-top:6px">+ Item</button></div>`;
+}
+
+async function render() {
+  renderTabs();
+  try {
+    if (state.tab === 'home') await renderHome();
+    else if (state.tab === 'history') await renderHistory();
+    else if (state.tab === 'scope') await renderScope();
+    else if (state.tab === 'issues') await renderIssues();
+    else if (state.tab === 'report') renderReportIssue();
+    else if (state.tab === 'visit') await renderVisit();
+    else if (state.tab === 'operator') await renderOperator();
+    else if (state.tab === 'manage-scope') await renderManageScope();
+    else await renderHome();
+  } catch (err) {
+    document.getElementById('view').innerHTML = `<div class="msg err">${err.message}</div>`;
+  }
+}
+
+async function boot() {
+  state.me = await api('/api/anchor-portal/me');
+  const u = state.me.user;
+  document.getElementById('userLabel').textContent = u.name;
+  const demoLoc = locations().find(l => l.is_demo);
+  if (demoLoc) {
+    const banner = document.getElementById('demoBanner');
+    banner.classList.remove('hidden');
+    banner.innerHTML = '<b>Demo mode</b> — Riverside Law sample data for facility assessments. Sign in as <b>demo-client@goanchorcleaning.com</b> or <b>demo-cleaner@goanchorcleaning.com</b> (password set via ANCHOR_PORTAL_DEMO_PASSWORD).';
+  }
+  if (cap().cleaner && !cap().facility_client) state.tab = 'visit';
+  if (cap().operator && !cap().facility_client) state.tab = 'operator';
+  if (cap().facility_client) state.tab = 'home';
+  ensureLocation();
+  render();
+}
+
+boot().catch(err => {
+  document.getElementById('view').innerHTML = `<div class="msg err">${err.message}. <a href="/login">Sign in</a></div>`;
+});
+</script>
+</body>
+</html>
