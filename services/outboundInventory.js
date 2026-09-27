@@ -349,8 +349,10 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
   return {
     kind: OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT,
     reason: 'existing_company_without_blocking_ownership',
-    recoverable: false,
+    recoverable: true,
     sameCompany: true,
+    companyId: String(rows[0].company_id || ''),
+    existingProspectIds: rows.map(row => String(row.id)),
   };
 }
 

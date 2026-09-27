@@ -24,6 +24,7 @@ const LIMITING_FACTORS = Object.freeze({
 });
 
 const DEFAULT_SEND_WINDOW = Object.freeze({ startHour: 9, endHour: 17, timezone: 'America/New_York' });
+const DEFAULT_GRANT_WEEKDAYS = Object.freeze([1, 2, 3, 4, 5]);
 
 /**
  * Count first-touch send slots that fit inside the allowed window with minimum spacing.
@@ -32,16 +33,66 @@ const DEFAULT_SEND_WINDOW = Object.freeze({ startHour: 9, endHour: 17, timezone:
 function computeScheduleLimitedCapacity({
   allowedSendWindow = DEFAULT_SEND_WINDOW,
   minSpacingMinutes = 60,
+  dispatchDayAllowed = true,
 } = {}) {
-  const start = Number(allowedSendWindow?.startHour ?? DEFAULT_SEND_WINDOW.startHour);
-  const end = Number(allowedSendWindow?.endHour ?? DEFAULT_SEND_WINDOW.endHour);
-  const spacing = Number(minSpacingMinutes);
+  if (dispatchDayAllowed === false) return 0;
+  const start = Number(allowedSendWindow?.startHour);
+  const end = Number(allowedSendWindow?.endHour);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 0;
+  const spacing = Number(minSpacingMinutes);
   const windowMinutes = (end - start) * 60;
   if (!Number.isFinite(spacing) || spacing <= 0) {
     return Math.max(0, Math.trunc(windowMinutes / 60));
   }
   return Math.max(0, Math.floor(windowMinutes / spacing));
+}
+
+function grantWeekdayIndex(now = new Date(), timeZone = 'America/New_York') {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+  }).formatToParts(now).map(p => [p.type, p.value]));
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(parts.weekday);
+}
+
+function isGrantDispatchDay(policy = {}, now = new Date()) {
+  const weekdays = policy.weekdays;
+  if (!Array.isArray(weekdays) || !weekdays.length) return true;
+  const tz = policy.timeZone || policy.timezone || DEFAULT_SEND_WINDOW.timezone;
+  const weekday = grantWeekdayIndex(now, tz);
+  if (weekday < 0) return false;
+  return weekdays.includes(weekday);
+}
+
+function resolveGrantSendWindow(policy = {}, schedule = {}, snapshot = {}) {
+  const fromSchedule = schedule.allowedSendWindow;
+  const fromPolicy = policy.allowedSendWindow || (
+    policy.startHour != null || policy.endHour != null
+      ? {
+        startHour: policy.startHour,
+        endHour: policy.endHour,
+        timezone: policy.timeZone || policy.timezone,
+      }
+      : null
+  );
+  const allowedSendWindow = fromSchedule || fromPolicy || snapshot.allowedSendWindow || DEFAULT_SEND_WINDOW;
+  const start = Number(allowedSendWindow?.startHour);
+  const end = Number(allowedSendWindow?.endHour);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return null;
+  }
+  return {
+    startHour: start,
+    endHour: end,
+    timezone: allowedSendWindow.timezone || policy.timeZone || policy.timezone || DEFAULT_SEND_WINDOW.timezone,
+  };
+}
+
+function resolveGrantMinSpacingMinutes(policy = {}, schedule = {}) {
+  if (schedule.minSpacingMinutes != null) return Number(schedule.minSpacingMinutes);
+  if (policy.minSpacingMinutes != null) return Number(policy.minSpacingMinutes);
+  if (policy.spacingMinutes != null) return Number(policy.spacingMinutes);
+  return 60;
 }
 
 function asNonNegInt(value, fallback = 0) {
@@ -123,18 +174,11 @@ function classifyEmmettLimiter(assessed = {}, recommended) {
  */
 function resolveScheduleInput(input = {}) {
   const schedule = input.schedule || {};
-  const snapshot = input.assessed?.snapshot || {};
   const policy = input.policy || {};
-  const allowedSendWindow = schedule.allowedSendWindow
-    || policy.allowedSendWindow
-    || snapshot.allowedSendWindow
-    || DEFAULT_SEND_WINDOW;
-  const minSpacingMinutes = schedule.minSpacingMinutes != null
-    ? schedule.minSpacingMinutes
-    : (policy.minSpacingMinutes != null
-      ? policy.minSpacingMinutes
-      : (snapshot.minimumSpacingMinutes != null ? snapshot.minimumSpacingMinutes : 60));
-  return { allowedSendWindow, minSpacingMinutes };
+  const allowedSendWindow = resolveGrantSendWindow(policy, schedule, input.assessed?.snapshot || {});
+  const minSpacingMinutes = resolveGrantMinSpacingMinutes(policy, schedule);
+  const dispatchDayAllowed = isGrantDispatchDay(policy, input.now || new Date());
+  return { allowedSendWindow, minSpacingMinutes, dispatchDayAllowed };
 }
 
 function assessOperatingCapacity(input = {}) {
@@ -173,14 +217,23 @@ function assessOperatingCapacity(input = {}) {
     capacityReason = `Remaining authorization budget is ${remainingTotalAuthorization}; Emmett recommends ${emmett.recommendedSafeDailyCapacity}.`;
   }
 
-  const { allowedSendWindow, minSpacingMinutes } = resolveScheduleInput(input);
-  const scheduleLimitedCapacity = computeScheduleLimitedCapacity({
-    allowedSendWindow,
-    minSpacingMinutes,
-  });
+  const { allowedSendWindow, minSpacingMinutes, dispatchDayAllowed } = resolveScheduleInput(input);
+  const scheduleLimitedCapacity = allowedSendWindow
+    ? computeScheduleLimitedCapacity({
+      allowedSendWindow,
+      minSpacingMinutes,
+      dispatchDayAllowed,
+    })
+    : 0;
 
   let dispatchableDailyCapacity = authorizationLimitedCapacity;
-  if (scheduleLimitedCapacity < dispatchableDailyCapacity) {
+  if (!allowedSendWindow || !dispatchDayAllowed) {
+    dispatchableDailyCapacity = 0;
+    limitingFactor = LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING;
+    capacityReason = !allowedSendWindow
+      ? 'Operator send grant has no valid dispatch window; schedule-limited capacity is unavailable.'
+      : 'Operator send grant does not permit dispatch on this weekday; schedule-limited capacity is zero.';
+  } else if (scheduleLimitedCapacity < dispatchableDailyCapacity) {
     dispatchableDailyCapacity = scheduleLimitedCapacity;
     limitingFactor = LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING;
     capacityReason = `Send window ${allowedSendWindow.startHour}:00–${allowedSendWindow.endHour}:00 with ${minSpacingMinutes}-minute spacing allows ${scheduleLimitedCapacity} dispatchable first-touch slots; Emmett recommends ${emmett.recommendedSafeDailyCapacity} and authorization permits ${authorizationLimitedCapacity}.`;
@@ -205,8 +258,10 @@ function assessOperatingCapacity(input = {}) {
     authorizationDailyCap,
     remainingTotalAuthorization,
     emmettRecommended: recommended,
-    allowedSendWindow,
+    allowedSendWindow: allowedSendWindow || null,
     minSpacingMinutes,
+    dispatchDayAllowed,
+    scheduleUnavailable: !allowedSendWindow,
     silentCap: false,
   };
 }
@@ -215,6 +270,10 @@ module.exports = {
   LIMITING_FACTORS,
   computeScheduleLimitedCapacity,
   assessOperatingCapacity,
+  resolveScheduleInput,
+  resolveGrantSendWindow,
+  resolveGrantMinSpacingMinutes,
+  isGrantDispatchDay,
   governorOutcomeOf,
   emmettRecommended,
 };

@@ -67,14 +67,20 @@ function adapters(pool, dependencies = {}) {
       JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
       WHERE e.program_id=$1 AND i.attempted_at IS NOT NULL`, [program.id]).catch(() => ({ rows: [{ total: 0 }] }));
     const mailboxAssessment = assessTenantMailboxCapacity(snapshot);
+    const grantWindow = {
+      startHour: program.policy.startHour ?? 9,
+      endHour: program.policy.endHour ?? 17,
+      timezone: program.policy.timeZone || 'America/New_York',
+    };
     const operating = assessOperatingCapacity({
       assessed,
       policy: program.policy,
       sentToday: snapshot.sentToday,
       totalAttempted: programTotals.rows[0]?.total || 0,
+      now,
       schedule: {
-        allowedSendWindow: mailboxAssessment.allowedSendWindow,
-        minSpacingMinutes: mailboxAssessment.minimumSpacingMinutes,
+        allowedSendWindow: grantWindow,
+        minSpacingMinutes: program.policy.spacingMinutes ?? program.policy.minSpacingMinutes ?? 60,
       },
     });
     const cap = operating.dispatchableDailyCapacity;
