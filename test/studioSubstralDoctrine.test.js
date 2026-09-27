@@ -605,7 +605,6 @@ describe('Progressive enhancement (doctrine §18)', () => {
     // Frosted polymer needs sheen and high roughness; graphite needs brushing;
     // etched glass needs its markings to drive roughness rather than colour.
     assert.match(dimensionalSrc, /key: 'accessibility'[\s\S]*?sheen: 0\.\d/);
-    assert.match(dimensionalSrc, /key: 'accessibility'[\s\S]*?roughness: 0\.6/);
     assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?anisotropy: 0\.\d/);
     assert.match(dimensionalSrc, /key: 'search'[\s\S]*?etched: true/);
     assert.match(dimensionalSrc, /capMaterial\.roughnessMap = artTexture/);
@@ -621,6 +620,8 @@ describe('Progressive enhancement (doctrine §18)', () => {
         thickness: Number(m[0].match(/\bthickness: ([\d.]+)/)[1]),
         tint: Number(m[0].match(/\btint: ([\d.]+)/)[1]),
         transmission: Number(m[0].match(/\btransmission: ([\d.]+)/)[1]),
+        roughness: Number(m[0].match(/\broughness: ([\d.]+)/)[1]),
+        edge: Number(m[0].match(/\bedge: ([\d.]+)/)[1]),
       }));
     assert.equal(layers.length, 6);
     const thickest = layers.reduce((a, b) => (b.thickness > a.thickness ? b : a));
@@ -629,6 +630,34 @@ describe('Progressive enhancement (doctrine §18)', () => {
     assert.deepEqual(opaque, ['performance'], 'graphite composite must be the only opaque layer');
     const palest = layers.reduce((a, b) => (b.tint > a.tint ? b : a));
     assert.equal(palest.key, 'accessibility', 'frosted polymer must be the pale material');
+
+    /* Frosted polymer has to be matte. Asserting a literal figure here read as a
+       guard and was not one: the pattern searched forward from the layer's key, so
+       once its roughness moved it matched the next layer's instead and passed
+       without checking anything. */
+    const accessibility = layers.find((l) => l.key === 'accessibility');
+    assert.ok(
+      accessibility.roughness >= 0.6,
+      `frosted polymer at roughness ${accessibility.roughness} is not matte`
+    );
+    const polished = layers.filter((l) => l.roughness <= 0.05).map((l) => l.key);
+    assert.deepEqual(
+      polished.sort(),
+      ['conversion', 'design'],
+      'the precision surface and the smoked acrylic are the polished pair'
+    );
+
+    /* Edge treatment is specified per layer rather than emerging from whatever
+       the rasteriser does with a degenerate sliver, so it has to be a stated width
+       and the widths have to differ. */
+    assert.match(dimensionalSrc, /function arrisGeometry\(shape, thickness, width\)/);
+    assert.match(dimensionalSrc, /arrisGeometry\(shape, layer\.thickness, layer\.edge\)/);
+    assert.equal(new Set(layers.map((l) => l.edge)).size, 6, 'all six edges are the same weight');
+    const edges = layers.map((l) => l.edge).sort((a, b) => a - b);
+    assert.ok(
+      edges.at(-1) / edges[0] >= 2,
+      `the widest machined edge is only ${(edges.at(-1) / edges[0]).toFixed(1)}x the finest`
+    );
   });
 
   it('separates the layers far enough apart to see', () => {
@@ -734,6 +763,86 @@ describe('Progressive enhancement (doctrine §18)', () => {
       assert.match(dimensionalSrc, new RegExp(`${map}\\(\\),`));
     }
     assert.match(dimensionalSrc, /function stoneGrain\(\)/);
+  });
+
+  it('gives the block a silhouette rather than an outline', () => {
+    /* Cleavage and fracture work on the surface, and neither can stop the outline
+       converging on an ellipsoid, because both trim every direction to roughly the
+       same radius. That is what "credible but a little too polite" was about. Three
+       things at a larger scale fix it, and each does something the others cannot:
+       spurs run the block further in a few directions, a keel takes the underside
+       down to where it parted, and spherical bites are the only primitive here that
+       produces a genuinely concave face — displacement and clipping can only give a
+       surface that curves outward or is flat. */
+    assert.match(dimensionalSrc, /const SPURS = /);
+    assert.match(dimensionalSrc, /const GOUGES = /);
+    assert.match(dimensionalSrc, /for \(const s of SPURS\)/);
+    assert.match(dimensionalSrc, /for \(const g of GOUGES\)/);
+    assert.match(dimensionalSrc, /The keel\./);
+
+    /* A limb goes on after the quarrying. A cleavage plane caps the radius in its
+       direction, so a spur folded into the displacement is clipped straight back
+       off — which is what being trimmed looks like. */
+    const spurAt = dimensionalSrc.indexOf('if (spur > 0)');
+    const cleavageAt = dimensionalSrc.indexOf('for (const plane of CLEAVAGE)');
+    assert.ok(spurAt > cleavageAt, 'the cleavage planes will clip the spurs back off');
+
+    /* Few, and unevenly weighted. A ring of equal protrusions is a cog, and an
+       even scatter of equal bites is a golf ball. */
+    const table = (name) =>
+      dimensionalSrc.slice(
+        dimensionalSrc.indexOf(`const ${name} = `),
+        dimensionalSrc.indexOf('];', dimensionalSrc.indexOf(`const ${name} = `))
+      );
+    const reaches = [...table('SPURS').matchAll(/reach: ([\d.]+)/g)].map((m) => Number(m[1]));
+    assert.ok(reaches.length >= 3 && reaches.length <= 6, `${reaches.length} spurs`);
+    assert.equal(new Set(reaches).size, reaches.length, 'the spurs are all the same reach');
+    assert.ok(
+      Math.max(...reaches) / Math.min(...reaches) >= 2,
+      'the spurs are too evenly weighted to read as a break'
+    );
+    const gouges = table('GOUGES');
+    const radii = [...gouges.matchAll(/radius: ([\d.]+)/g)].map((m) => Number(m[1]));
+    const depths = [...gouges.matchAll(/depth: ([\d.]+)/g)].map((m) => Number(m[1]));
+    assert.ok(radii.length >= 3 && radii.length <= 8, `${radii.length} gouges`);
+    assert.equal(new Set(radii).size, radii.length, 'the gouges are all the same size');
+    assert.equal(depths.length, radii.length, 'every gouge needs a stated depth');
+    assert.ok(Math.max(...depths) <= 0.45, 'a gouge that deep would cut the block in half');
+
+    /* Carved along the ray from the block's centre. Pushing points away from the
+       sphere's centre instead moves everything on its far side outward, so the
+       spheres inflate the block rather than subtracting from it. */
+    assert.match(dimensionalSrc, /const near = toward - Math\.sqrt\(discriminant\)/);
+    assert.match(dimensionalSrc, /if \(near > 0 && near < limit\) limit = near;/);
+
+    // Only the top is bedded: a plane under it flattens the break into a cut.
+    const bedding = dimensionalSrc.match(/planes\.push\(\{ n: \[-?[\d.]/g) || [];
+    assert.equal(bedding.length, 1, 'the underside must not be planed off');
+  });
+
+  it('stains a few fractures without lighting any of them', () => {
+    /* The reference carries warmth inside its cracks. Reproduced literally that is
+       glowing lava, which §10 rules out, so it is oxidised mineral instead: albedo,
+       not emission — a dark warm ochre the key light happens to find. Gated on a
+       low-frequency field as well as on crevice depth, so it appears in some
+       fractures rather than along all of them. */
+    assert.match(dimensionalSrc, /const oxide =/);
+    assert.match(dimensionalSrc, /smoothstep\([\d.]+, [\d.]+, recess\[base \+ v\]\)/);
+
+    // Albedo only. Nothing about the stone may emit, and nothing may bloom.
+    const stone = dimensionalSrc.slice(dimensionalSrc.indexOf('const stoneMaterial'));
+    assert.doesNotMatch(stone.slice(0, 400), /emissive/);
+    assert.doesNotMatch(dimensionalSrc, /UnrealBloom|BloomPass|toneMappingExposure = [2-9]/);
+
+    /* And the stain has to stay a stain. It lifts a crevice, and a crevice is
+       already the darkest thing on the block, so the lift must not be large enough
+       to carry it past ordinary lit stone. */
+    const lift = Number(dimensionalSrc.match(/value \* \(1 \+ oxide \* ([\d.]+)\)/)[1]);
+    const floor = Number(dimensionalSrc.match(/const shade = lerp\(1, ([\d.]+), recess/)[1]);
+    assert.ok(
+      floor * (1 + lift) < 0.5,
+      `a stained crevice reaches ${(floor * (1 + lift)).toFixed(2)} of lit stone: that is a glow`
+    );
   });
 
   it('works only the part of the stone the stack sits on', () => {

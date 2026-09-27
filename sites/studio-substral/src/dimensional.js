@@ -36,6 +36,7 @@ import {
   CanvasTexture,
   Color,
   DirectionalLight,
+  DoubleSide,
   EquirectangularReflectionMapping,
   ExtrudeGeometry,
   Fog,
@@ -82,9 +83,9 @@ const AIR_SURFACE_HINT = 0.1;
    varies across its extent and none of its walls are vertical. Dimensions here
    are the pre-displacement slab it starts from; the real extent is measured off
    the built geometry. */
-const SUBSTRATE_W = PLATE_W * 2.62;
-const SUBSTRATE_D = PLATE_H * 2.62;
-const SUBSTRATE_T = 2.9;
+const SUBSTRATE_W = PLATE_W * 2.12;
+const SUBSTRATE_D = PLATE_H * 2.12;
+const SUBSTRATE_T = 2.3;
 /** Air between the planed plateau and the deepest layer. */
 const FOUNDATION_CLEARANCE = 0.17;
 /* How far the camera's aim may travel toward the layer under examination, as a
@@ -92,6 +93,15 @@ const FOUNDATION_CLEARANCE = 0.17;
    reserves room for it, otherwise raising the aim pushes the substrate out of
    the bottom of the frame — which is exactly what it did. */
 const AIM_TRAVEL = 0.22;
+/* How far past the bottom of the frame the keel may run, in normalised device
+   coordinates. The keel is by construction the lowest thing on the object and
+   nothing else in the composition is down there, so letting its tip kiss the edge
+   costs nothing and keeps the whole specimen the size it was before the keel
+   existed. Reserving room for it instead made a deeper keel produce a smaller
+   object, which is the opposite of the point. It is a small allowance on purpose:
+   at 1.26 the stone was being cropped out from under the exploded layers, and the
+   layers have to be standing on something. */
+const KEEL_BLEED = 1.1;
 
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (n, min = 0, max = 1) => (n < min ? min : n > max ? max : n);
@@ -125,18 +135,19 @@ const STACK = [
        with the grid it sits on traced faintly beneath. */
     key: 'design',
     narrative: 5,
-    thickness: 0.048,
+    thickness: 0.042,
     tint: 0.3,
     opacity: 0.38,
-    roughness: 0.028,
+    roughness: 0.022,
     clearcoat: 1,
-    clearcoatRoughness: 0.022,
+    clearcoatRoughness: 0.015,
     metalness: 0.02,
     envMapIntensity: 3.4,
-    wall: { colour: 0xe6e2d6, roughness: 0.1, metalness: 0.98 },
-    arris: 0.88,
+    wall: { colour: 0xf2efe6, roughness: 0.07, metalness: 0.99 },
+    arris: 0.9,
+    edge: 0.013,
     transmission: 0.1,
-    volume: 0.058,
+    volume: 0.05,
     attenuation: 0.3,
     ior: 1.57,
     art: 'design',
@@ -150,19 +161,20 @@ const STACK = [
        response, carrying discrete credibility marks instead of fine data. */
     key: 'trust',
     narrative: 4,
-    thickness: 0.118,
+    thickness: 0.13,
     tint: 0.155,
     warmth: 0.62,
     opacity: 0.46,
-    roughness: 0.23,
-    clearcoat: 0.88,
-    clearcoatRoughness: 0.19,
+    roughness: 0.26,
+    clearcoat: 0.82,
+    clearcoatRoughness: 0.22,
     metalness: 0.09,
     envMapIntensity: 1.9,
-    wall: { colour: 0xd2c8b2, roughness: 0.38, metalness: 0.86 },
+    wall: { colour: 0xd8cdb4, roughness: 0.34, metalness: 0.9 },
     arris: 0.62,
+    edge: 0.011,
     transmission: 0.42,
-    volume: 0.142,
+    volume: 0.156,
     attenuation: 0.17,
     ior: 1.62,
     art: 'trust',
@@ -174,19 +186,20 @@ const STACK = [
        drives roughness and the marks only appear when light grazes them. */
     key: 'search',
     narrative: 3,
-    thickness: 0.031,
+    thickness: 0.024,
     tint: 0.075,
     opacity: 0.18,
-    roughness: 0.92,
+    roughness: 0.94,
     etched: true,
-    clearcoat: 0.8,
-    clearcoatRoughness: 0.05,
+    clearcoat: 0.86,
+    clearcoatRoughness: 0.04,
     metalness: 0.04,
     envMapIntensity: 2.6,
-    wall: { colour: 0xbdb8a6, roughness: 0.16, metalness: 0.94 },
+    wall: { colour: 0xcfcabb, roughness: 0.12, metalness: 0.96 },
     arris: 0.46,
+    edge: 0.006,
     transmission: 0.98,
-    volume: 0.037,
+    volume: 0.029,
     attenuation: 1.6,
     ior: 1.52,
     art: 'search',
@@ -200,18 +213,19 @@ const STACK = [
        recognisable — bright reflections over a nearly black interior. */
     key: 'conversion',
     narrative: 2,
-    thickness: 0.072,
+    thickness: 0.075,
     tint: 0.03,
     opacity: 0.52,
-    roughness: 0.038,
+    roughness: 0.03,
     clearcoat: 1,
-    clearcoatRoughness: 0.03,
+    clearcoatRoughness: 0.022,
     metalness: 0.06,
     envMapIntensity: 2.2,
-    wall: { colour: 0xa09a8b, roughness: 0.08, metalness: 0.95 },
+    wall: { colour: 0x9a9486, roughness: 0.06, metalness: 0.97 },
     arris: 0.34,
+    edge: 0.008,
     transmission: 0.62,
-    volume: 0.086,
+    volume: 0.09,
     attenuation: 0.055,
     ior: 1.49,
     art: 'conversion',
@@ -225,18 +239,19 @@ const STACK = [
        markings are drawn into it in ink rather than lit through it. */
     key: 'accessibility',
     narrative: 1,
-    thickness: 0.096,
+    thickness: 0.105,
     tint: 0.86,
     opacity: 0.92,
-    roughness: 0.68,
-    clearcoat: 0.08,
-    clearcoatRoughness: 0.66,
+    roughness: 0.74,
+    clearcoat: 0.05,
+    clearcoatRoughness: 0.72,
     metalness: 0,
     envMapIntensity: 0.55,
     sheen: 0.95,
     sheenRoughness: 0.88,
-    wall: { colour: 0xcdc6b6, roughness: 0.82, metalness: 0.12 },
-    arris: 0.12,
+    wall: { colour: 0xd6cfbf, roughness: 0.86, metalness: 0.1 },
+    arris: 0.14,
+    edge: 0.005,
     /* The lowest transmission in the stack, on purpose. Scattering and
        transmission trade against each other: the diffuse term is weighted by one
        minus transmission, so a frosted material set to transmit freely has almost
@@ -245,7 +260,7 @@ const STACK = [
        straight through. Four millimetres of heavily scattering polymer does not
        show you what is behind it, and neither does this. */
     transmission: 0.15,
-    volume: 0.115,
+    volume: 0.126,
     attenuation: 0.09,
     ior: 1.42,
     art: 'accessibility',
@@ -259,18 +274,19 @@ const STACK = [
        answers light directionally, with fine measurement traces cut in. */
     key: 'performance',
     narrative: 0,
-    thickness: 0.155,
+    thickness: 0.19,
     tint: 0.014,
     opacity: 1,
-    roughness: 0.58,
+    roughness: 0.62,
     etched: true,
     anisotropy: 0.92,
-    clearcoat: 0.26,
-    clearcoatRoughness: 0.46,
+    clearcoat: 0.2,
+    clearcoatRoughness: 0.5,
     metalness: 0.52,
     envMapIntensity: 0.7,
-    wall: { colour: 0x6b6559, roughness: 0.62, metalness: 0.7 },
+    wall: { colour: 0x7a7367, roughness: 0.55, metalness: 0.78 },
     arris: 0.24,
+    edge: 0.009,
     transmission: 0,
     volume: 0,
     attenuation: 1,
@@ -322,18 +338,56 @@ function plateShape(w, h, r) {
   return shape;
 }
 
-/* A hairline highlight following the top and bottom arrises. The extruded side
-   wall carries the metal; this is the glint along its edge. */
-function arrisGeometry(shape, thickness) {
-  const points = shape.getPoints(12);
+/* The machined arris: a hairline of stated width, inset from the silhouette, at
+   the top and bottom of the wall. The extruded side wall carries the metal; this
+   is the glint along its edge.
+
+   It used to be two vertices per edge drawn as triangles from consecutive
+   triples, which gives a chain of degenerate slivers whose apparent width is
+   whatever the rasteriser lands on. The highlight pinched at the relieved corners
+   and came out a different weight on every plate for no reason anyone chose. A
+   ribbon costs four vertices per segment and has a width that can be specified
+   per layer, which is what makes the edge treatment a deliberate part of the
+   material rather than a by-product. */
+function arrisGeometry(shape, thickness, width) {
+  const points = shape.getPoints(24);
   if (points.length && points[0].equals(points[points.length - 1])) points.pop();
+  const count = points.length;
+
+  /* Inward normals, averaged across the two segments meeting at each point, so
+     the ribbon holds its width around a corner instead of narrowing into it. */
+  const inward = points.map((p, i) => {
+    const prev = points[(i - 1 + count) % count];
+    const next = points[(i + 1) % count];
+    let nx = 0;
+    let ny = 0;
+    for (const [a, b] of [
+      [prev, p],
+      [p, next],
+    ]) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const length = Math.hypot(dx, dy) || 1;
+      // The silhouette is wound counter-clockwise, so this faces the interior.
+      nx += -dy / length;
+      ny += dx / length;
+    }
+    const length = Math.hypot(nx, ny) || 1;
+    return [nx / length, ny / length];
+  });
 
   const positions = [];
   const pushLoop = (z) => {
-    for (let i = 0; i < points.length; i += 1) {
+    for (let i = 0; i < count; i += 1) {
+      const j = (i + 1) % count;
       const a = points[i];
-      const b = points[(i + 1) % points.length];
-      positions.push(a.x, a.y, z, b.x, b.y, z);
+      const b = points[j];
+      const ax = a.x + inward[i][0] * width;
+      const ay = a.y + inward[i][1] * width;
+      const bx = b.x + inward[j][0] * width;
+      const by = b.y + inward[j][1] * width;
+      positions.push(a.x, a.y, z, b.x, b.y, z, bx, by, z);
+      positions.push(a.x, a.y, z, bx, by, z, ax, ay, z);
     }
   };
   pushLoop(0.0006);
@@ -1026,10 +1080,62 @@ const CLEAVAGE = (() => {
   /* Bedding last, and the whole set applied twice. Clipping against one plane
      can push a point back past another, so a single pass in one order does not
      produce a solid that satisfies all of them — which is how the block's
-     thickness came loose from the figure that is supposed to state it. */
+     thickness came loose from the figure that is supposed to state it.
+
+     Only the top is bedded. The underside is where the block parted from what it
+     was attached to, so it is not the mirror of the top: a plane there flattened
+     it into something that had been cut to fit, and the keel replaces it. */
   planes.push({ n: [0.06, 0.99, -0.11], d: 0.78 });
-  planes.push({ n: [-0.1, -0.98, 0.17], d: 0.74 });
   return planes;
+})();
+
+/* Spurs and gouges, which are what decide a silhouette.
+
+   Cleavage and fracture work on the surface, and neither can stop the outline
+   converging on an ellipsoid, because both trim every direction to roughly the
+   same radius — and an outline trimmed evenly is what reads as polite. A chunk
+   broken out of a bed has limbs that ran along a weakness, and bites where
+   something else broke away from it.
+
+   There are few of them and they are unevenly weighted, because a ring of equal
+   protrusions is a cog. Deterministic, so it is the same rock on every load. */
+const SPURS = (() => {
+  const raw = [
+    { dir: [0.92, 0.1, 0.38], reach: 0.5, width: 0.56 },
+    { dir: [-0.74, -0.24, 0.64], reach: 0.34, width: 0.4 },
+    { dir: [0.21, -0.12, -0.97], reach: 0.26, width: 0.72 },
+    { dir: [-0.86, 0.06, -0.5], reach: 0.16, width: 0.32 },
+  ];
+  return raw.map(({ dir, reach, width }) => {
+    const length = Math.hypot(...dir) || 1;
+    return {
+      n: dir.map((c) => c / length),
+      reach,
+      // Angular half-width, expressed as the cosine the falloff runs out to.
+      cos: Math.cos(width),
+    };
+  });
+})();
+
+/* Bites taken out of it. Stated as a direction, a radius and how far into the
+   block the bite reaches, all in normalised slab coordinates so they scale with
+   it; the sphere's centre is then placed so its near face sits that far inside the
+   surface. Applied before the fracture passes, so their rims get chipped rather
+   than arriving as clean machined scallops. */
+const GOUGES = (() => {
+  const raw = [
+    { dir: [0.72, 0.5, -0.48], radius: 0.62, depth: 0.3 },
+    { dir: [-0.54, -0.68, -0.5], radius: 0.5, depth: 0.23 },
+    { dir: [0.16, 0.42, 0.9], radius: 0.4, depth: 0.19 },
+    { dir: [-0.95, 0.22, 0.2], radius: 0.34, depth: 0.26 },
+    { dir: [0.4, -0.5, 0.76], radius: 0.28, depth: 0.15 },
+  ];
+  return raw.map(({ dir, radius, depth }) => {
+    const length = Math.hypot(...dir) || 1;
+    const reach = 1 - depth + radius;
+    const c = dir.map((component) => (component / length) * reach);
+    return { c, r2: radius * radius, home: c[0] ** 2 + c[1] ** 2 + c[2] ** 2 };
+  });
 })();
 
 function buildSubstrate() {
@@ -1080,6 +1186,17 @@ function buildSubstrate() {
     const seam = (1 - crack3(ux * 4.3 + 11.7, uy * 4.3 + 3.1, uz * 4.3 + 27.3, 3)) ** 1.5;
     fine -= seam * 0.13;
 
+    /* Spurs: a few directions where the block simply runs further. Roughened at
+       their tips by the same fine field, so a limb is broken rather than moulded.
+       Applied after the cleavage planes rather than before — see below. */
+    let spur = 0;
+    for (const s of SPURS) {
+      const towards = ux * s.n[0] + uy * s.n[1] + uz * s.n[2];
+      if (towards <= s.cos) continue;
+      const t = (towards - s.cos) / (1 - s.cos);
+      spur += s.reach * t ** 1.6;
+    }
+
     const swell = 1 + coarse + fine;
 
     let x = ux * halfW * swell;
@@ -1103,6 +1220,73 @@ function buildSubstrate() {
           y -= ny * over * halfT;
           z -= nz * over * halfD;
         }
+      }
+    }
+
+    /* The limbs go on after the quarrying, not before it. A cleavage plane caps
+       the radius in its direction, so a spur folded into the displacement was
+       simply clipped back off again — which is exactly what "trimmed" looks like.
+       A spur is where the rock did not break along the bedding, so it belongs
+       outside the planes that describe the bedding. */
+    if (spur > 0) {
+      const push = 1 + spur * (1 + fine * 1.2);
+      x *= push;
+      y *= push;
+      z *= push;
+    }
+
+    /* The keel. The underside ran deeper and converged toward where the block
+       parted, rather than sitting flat: it is the difference between a specimen
+       resting on a surface and one that was pulled out of something.
+
+       Deepest along a line rather than at a point, and the line is off-centre and
+       off-axis, because a break does not radiate from the middle of a block. A
+       radial version of this read as a cone, which is a different and much less
+       geological object. */
+    if (y < 0) {
+      const px = x / halfW;
+      const pz = z / halfD;
+      const along = px * 0.82 + pz * 0.57;
+      const across = px * -0.57 + pz * 0.82;
+      const ridge =
+        Math.max(0, 1 - Math.abs(across + 0.24) * 1.45) *
+        Math.max(0, 1 - Math.abs(along - 0.28) * 0.8);
+      y *= 1.06 + 0.66 * ridge;
+    }
+
+    /* Bites. A spherical subtraction is the one primitive here that produces a
+       genuinely concave face — displacement and clipping can only ever give a
+       surface that curves outward or is flat. Without them the deepest feature on
+       the block is a groove.
+
+       The surface is defined radially from the block's centre, so the subtraction
+       is done the same way: walk out along the ray and stop at the first bite it
+       enters. Pushing points away from the sphere's centre instead — the obvious
+       reading of "subtract a sphere", and what this did first — moves everything on
+       the far side of the sphere outward, so the spheres inflated the block rather
+       than carving it, which is how its vertical extent stopped answering to the
+       figure that is supposed to set it. */
+    const qx = x / halfW;
+    const qy = y / halfT;
+    const qz = z / halfD;
+    const q = Math.hypot(qx, qy, qz);
+    if (q > 1e-6) {
+      const dx = qx / q;
+      const dy = qy / q;
+      const dz = qz / q;
+      let limit = q;
+      for (const g of GOUGES) {
+        const toward = dx * g.c[0] + dy * g.c[1] + dz * g.c[2];
+        const discriminant = toward * toward - (g.home - g.r2);
+        if (discriminant <= 0) continue;
+        const near = toward - Math.sqrt(discriminant);
+        if (near > 0 && near < limit) limit = near;
+      }
+      if (limit < q) {
+        const k = limit / q;
+        x *= k;
+        y *= k;
+        z *= k;
       }
     }
 
@@ -1218,10 +1402,24 @@ function buildSubstrate() {
       const shade = lerp(1, 0.13, recess[base + v] ** 1.35);
       let value = 1.0 + (grain - 0.5) * 1.5 + (band - 0.5) * 0.7;
       value = clamp(value, 0.3, 1.7) * faceTone * facing * shade * (1 + quartz * 0.75);
+
+      /* Oxidised mineral in some of the fractures. Iron staining in a crevice is
+         albedo, not light: a dark warm ochre the key light happens to find, never
+         a seam that emits. It is gated on a low-frequency field as well as on the
+         crevice depth, so it appears in a few fractures rather than along all of
+         them — which is the difference between a mineral and a decoration — and it
+         lifts a stained crevice only far enough to be read as warm rather than as
+         black. It stays well below the value of lit stone, so nothing here can
+         start looking like a glow. */
+      const oxide =
+        smoothstep(0.54, 0.79, fbm3(x * 0.72 + 88, y * 0.72 + 5.3, z * 0.72 + 41, 2)) *
+        smoothstep(0.34, 0.82, recess[base + v]);
+      const stained = value * (1 + oxide * 0.95);
+
       // A trace of warmth in the brighter grains, well inside the palette.
-      colour[i * 3] = value;
-      colour[i * 3 + 1] = value * 0.985;
-      colour[i * 3 + 2] = value * 0.95;
+      colour[i * 3] = stained;
+      colour[i * 3 + 1] = stained * (0.985 - oxide * 0.16);
+      colour[i * 3 + 2] = stained * (0.95 - oxide * 0.46);
 
       if (x < bounds.minX) bounds.minX = x;
       if (x > bounds.maxX) bounds.maxX = x;
@@ -1245,7 +1443,21 @@ function buildSubstrate() {
   geometry.setAttribute('color', new BufferAttribute(colour, 3));
   geometry.computeBoundingSphere();
 
-  return { geometry, bounds, hull, plateau, relief: bounds.maxY - plateau };
+  /* How deep the block's body goes, as distinct from how far its keel runs below
+     that: the fourth percentile of the surface, which is low enough to be the
+     underside and high enough to exclude a spine that only a few hundred vertices
+     occupy. The composition is centred on this and allowed to crop the rest.
+
+     Centring on the keel tip instead aims the camera low, which rides the plates
+     up against the top of the frame until they clip — and reserves room for a
+     spine nobody is looking at, so a deeper keel produces a smaller object. A
+     plan-radius rule was tried first and does not work: the block's rim dips
+     nearly as deep as its keel, so it selected the same point. */
+  const depths = Array.from({ length: finalPosition.count }, (_, i) => finalPosition.getY(i));
+  depths.sort((a, b) => a - b);
+  const body = depths[Math.floor(depths.length * 0.04)];
+
+  return { geometry, bounds, hull, plateau, body, relief: bounds.maxY - plateau };
 }
 
 /* --------------------------------------------------------------------------
@@ -1488,7 +1700,8 @@ function aimReach(air) {
 function assemblyCentre(air) {
   const rock = sharedGeometry().substrate;
   const top = plateBase(0, air) + STACK[0].thickness;
-  const bottom = substrateDrop() + rock.bounds.minY;
+  // The block's body, not its keel tip: see `body` where the block is built.
+  const bottom = substrateDrop() + rock.body;
   return (top + bottom) / 2;
 }
 
@@ -1497,7 +1710,7 @@ function assemblyCentre(air) {
    on width leaves the frame half empty and pushes the substrate down behind the
    statement. Cropping the far tips instead makes it read as larger than the
    composition can hold — which is the relationship the reference has. */
-function fitsAt(probe, corners, distance, pitch, xLimit = 0.94, aim = 0) {
+function fitsAt(probe, corners, distance, pitch, xLimit, aim, yBelow) {
   probe.position.set(0, distance * pitch, distance);
   probe.lookAt(0, 0, 0);
   probe.updateMatrixWorld(true);
@@ -1508,21 +1721,22 @@ function fitsAt(probe, corners, distance, pitch, xLimit = 0.94, aim = 0) {
   const yLimit = 0.94 - Math.min(0.45, aim / (distance * tanHalf));
   for (const corner of corners) {
     const ndc = corner.clone().project(probe);
-    if (Math.abs(ndc.x) > xLimit || Math.abs(ndc.y) > yLimit) return false;
+    if (Math.abs(ndc.x) > xLimit) return false;
+    if (ndc.y > yLimit || ndc.y < -yBelow) return false;
     if (ndc.z > 1) return false;
   }
   return true;
 }
 
-function frameDistance(probe, air, yaw, pitch, xLimit) {
+function frameDistance(probe, air, yaw, pitch, xLimit, yBelow) {
   const corners = assemblyCorners(air, yaw, assemblyCentre(air));
   const aim = aimReach(air);
   let low = 2;
   let high = 70;
-  if (!fitsAt(probe, corners, high, pitch, xLimit, aim)) return high;
+  if (!fitsAt(probe, corners, high, pitch, xLimit, aim, yBelow)) return high;
   for (let i = 0; i < 22; i += 1) {
     const mid = (low + high) / 2;
-    if (fitsAt(probe, corners, mid, pitch, xLimit, aim)) high = mid;
+    if (fitsAt(probe, corners, mid, pitch, xLimit, aim, yBelow)) high = mid;
     else low = mid;
   }
   return high;
@@ -1530,12 +1744,12 @@ function frameDistance(probe, air, yaw, pitch, xLimit) {
 
 const FIT_SAMPLES = 7;
 
-function buildFitTable(probe, widestAir, yaw, pitch, xLimit) {
+function buildFitTable(probe, widestAir, yaw, pitch, xLimit, yBelow) {
   const table = [];
   for (let i = 0; i < FIT_SAMPLES; i += 1) {
     const t = i / (FIT_SAMPLES - 1);
     table.push(
-      frameDistance(probe, lerp(AIR_ASSEMBLED, widestAir, t), yaw, pitch, xLimit)
+      frameDistance(probe, lerp(AIR_ASSEMBLED, widestAir, t), yaw, pitch, xLimit, yBelow)
     );
   }
   return table;
@@ -1626,7 +1840,7 @@ function sharedGeometry() {
       bevelEnabled: false,
       curveSegments: 5,
     }),
-    arris: arrisGeometry(shape, layer.thickness),
+    arris: arrisGeometry(shape, layer.thickness, layer.edge),
     art: new PlaneGeometry(PLATE_W * 0.9, PLATE_H * 0.9),
   }));
 
@@ -1674,6 +1888,11 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   /* The hero crops; the narrow sticky columns do not, where a cut edge would
      read as broken rather than as framing. */
   const frameCrop = mode === 'surface' ? 1.3 : 1.16;
+  /* And the hero crops downward hardest, because the bottom two thirds of it is
+     the statement: the keel is behind display type there, so reserving frame for
+     it only makes the specimen smaller. In the acts the block has to stay visible
+     under the layers, which is the whole point of it being there. */
+  const keelBleed = mode === 'surface' ? 1.34 : KEEL_BLEED;
 
   const scene = new Scene();
   const camera = new PerspectiveCamera(24, 1, 0.1, 140);
@@ -1869,7 +2088,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       color: new Color(layer.wall.colour),
       metalness: layer.wall.metalness,
       roughness: layer.wall.roughness,
-      envMapIntensity: 1.35,
+      envMapIntensity: 1.7,
     });
 
     /* Draw the stack from the substrate upward, and each plate's parts in the
@@ -1890,11 +2109,16 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 
     /* Edge treatment is per layer too: a bright machined arris on the precision
        surface, a soft one on the frosted polymer. */
+    /* Double-sided because it is a flat unlit ribbon: which way it faces then
+       depends on nothing, rather than on the silhouette's winding surviving every
+       future edit to the shape. It costs nothing for a material with no lighting
+       to compute. */
     const arrisMaterial = new MeshBasicMaterial({
       color: mineral.clone(),
       transparent: true,
       opacity: layer.arris,
       depthWrite: false,
+      side: DoubleSide,
       fog: false,
     });
     const arris = new Mesh(geometry.plates[index].arris, arrisMaterial);
@@ -1965,8 +2189,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 
     probe.aspect = camera.aspect;
     fitTables = {
-      base: buildFitTable(probe, widestAir, baseYaw, basePitch, frameCrop),
-      examine: buildFitTable(probe, widestAir, baseYaw, examinePitch, frameCrop),
+      base: buildFitTable(probe, widestAir, baseYaw, basePitch, frameCrop, keelBleed),
+      examine: buildFitTable(probe, widestAir, baseYaw, examinePitch, frameCrop, keelBleed),
     };
     fitted = fitAt(fitTables.base, mode === 'reconstruct' ? 1 : 0);
     if (!sized) {
