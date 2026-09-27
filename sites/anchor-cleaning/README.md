@@ -1,6 +1,6 @@
 # Anchor Cleaning website
 
-Source for [goanchorcleaning.com](https://goanchorcleaning.com/). GitHub Pages on `pulseforgeatmns-ops/anchor-cleaning` (`main` → `/`).
+Source for [goanchorcleaning.com](https://goanchorcleaning.com/). **Production deploy repo:** `pulseforgeatmns-ops/anchor-cleaning` (`main` → `/`, legacy GitHub Pages, CNAME `goanchorcleaning.com`). This monorepo path is the authoring source — sync into `anchor-cleaning` to publish (see `deploy/anchor-cleaning-pages/DEPLOY.md`).
 
 ## Terminology
 

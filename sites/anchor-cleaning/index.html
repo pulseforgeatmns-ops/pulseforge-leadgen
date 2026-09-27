@@ -509,6 +509,7 @@
   .service-assurance-proof li{padding-left:18px;border-left:2px solid var(--gold)}
   .service-assurance-cta{display:inline-flex}
   .portal-mockup-frame{margin:0;background:#fff;border:1px solid rgba(17,31,43,.1);border-radius:10px;box-shadow:0 32px 90px rgba(7,19,31,.11);padding:clamp(10px,1.2vw,14px);transition:transform 700ms var(--anchor-ease),box-shadow 700ms var(--anchor-ease)}
+  .portal-mockup-frame picture{display:block;width:100%}
   .portal-mockup-frame img{width:100%;height:auto;display:block;border-radius:6px}
   .portal-mockup-frame figcaption{margin-top:14px;padding:0 6px 4px;font-size:15px;line-height:1.55;color:#52606B}
   .portal-mockup-frame--primary{position:relative;top:-6px}
@@ -722,21 +723,33 @@
       <a class="btn-primary service-assurance-cta service-assurance-cta--inline rv" href="#contact">Book a Facility Assessment</a>
     </div>
     <figure class="portal-mockup-frame portal-mockup-frame--primary rv">
-      <img src="/assets/service-assurance/client-dashboard.png" width="1200" height="750" alt="Anchor Service Assurance Portal showing recent cleaning visits, service status, next service, open issues, and facility scope." loading="lazy" decoding="async">
+      <picture>
+        <source type="image/avif" srcset="/assets/service-assurance/client-dashboard-720w.avif 720w, /assets/service-assurance/client-dashboard-960w.avif 960w, /assets/service-assurance/client-dashboard-1200w.avif 1200w, /assets/service-assurance/client-dashboard-1448w.avif 1448w" sizes="(min-width: 980px) min(52vw, 680px), 92vw">
+        <source type="image/webp" srcset="/assets/service-assurance/client-dashboard-720w.webp 720w, /assets/service-assurance/client-dashboard-960w.webp 960w, /assets/service-assurance/client-dashboard-1200w.webp 1200w, /assets/service-assurance/client-dashboard-1448w.webp 1448w" sizes="(min-width: 980px) min(52vw, 680px), 92vw">
+        <img src="/assets/service-assurance/client-dashboard.png" width="1448" height="1086" alt="Anchor Service Assurance Portal showing recent cleaning visits, service status, next service, open issues, and facility scope." decoding="async" fetchpriority="high">
+      </picture>
       <figcaption>See completed visits, upcoming service, open issues, and the defined scope for your facility in one place.</figcaption>
     </figure>
   </div>
   <div class="service-assurance-panels doc" id="service-assurance-how">
     <article class="portal-feature-panel rv">
       <figure class="portal-mockup-frame portal-mockup-frame--device">
-        <img src="/assets/service-assurance/cleaner-checklist.png" width="390" height="844" alt="Anchor cleaner mobile checklist showing completed tasks, flagged issues, and visit exception documentation." loading="lazy" decoding="async">
+        <picture>
+          <source type="image/avif" srcset="/assets/service-assurance/cleaner-checklist-280w.avif 280w, /assets/service-assurance/cleaner-checklist-390w.avif 390w, /assets/service-assurance/cleaner-checklist-560w.avif 560w, /assets/service-assurance/cleaner-checklist-780w.avif 780w, /assets/service-assurance/cleaner-checklist-941w.avif 941w" sizes="(min-width: 980px) 320px, min(72vw, 390px)">
+          <source type="image/webp" srcset="/assets/service-assurance/cleaner-checklist-280w.webp 280w, /assets/service-assurance/cleaner-checklist-390w.webp 390w, /assets/service-assurance/cleaner-checklist-560w.webp 560w, /assets/service-assurance/cleaner-checklist-780w.webp 780w, /assets/service-assurance/cleaner-checklist-941w.webp 941w" sizes="(min-width: 980px) 320px, min(72vw, 390px)">
+          <img src="/assets/service-assurance/cleaner-checklist.png" width="941" height="1672" alt="Anchor cleaner mobile checklist showing completed tasks, flagged issues, and visit exception documentation." loading="lazy" decoding="async">
+        </picture>
       </figure>
       <h3>A clear scope for every visit</h3>
       <p>Cleaners work from location-specific checklists, document completion, and flag anything that needs attention before the visit is closed.</p>
     </article>
     <article class="portal-feature-panel portal-feature-panel--cream rv">
       <figure class="portal-mockup-frame">
-        <img src="/assets/service-assurance/issues-resolution.png" width="1200" height="750" alt="Anchor client portal issue-resolution screen showing a missed kitchen sink report progressing from open to resolved." loading="lazy" decoding="async">
+        <picture>
+          <source type="image/avif" srcset="/assets/service-assurance/issues-resolution-720w.avif 720w, /assets/service-assurance/issues-resolution-960w.avif 960w, /assets/service-assurance/issues-resolution-1200w.avif 1200w, /assets/service-assurance/issues-resolution-1448w.avif 1448w" sizes="(min-width: 980px) min(42vw, 560px), 92vw">
+          <source type="image/webp" srcset="/assets/service-assurance/issues-resolution-720w.webp 720w, /assets/service-assurance/issues-resolution-960w.webp 960w, /assets/service-assurance/issues-resolution-1200w.webp 1200w, /assets/service-assurance/issues-resolution-1448w.webp 1448w" sizes="(min-width: 980px) min(42vw, 560px), 92vw">
+          <img src="/assets/service-assurance/issues-resolution.png" width="1448" height="1086" alt="Anchor client portal issue-resolution screen showing a missed kitchen sink report progressing from open to resolved." loading="lazy" decoding="async">
+        </picture>
       </figure>
       <h3>When something is missed, it gets handled</h3>
       <p>Clients can report an issue directly, see when Anchor acknowledges it, and follow the resolution through completion.</p>

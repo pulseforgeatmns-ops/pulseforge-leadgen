@@ -1,6 +1,39 @@
 # Deploy to `pulseforgeatmns-ops/anchor-cleaning`
 
-Copy these files over the GitHub Pages repo and merge to `main`:
+## Production source (verified)
+
+**goanchorcleaning.com** is **not** served from this monorepo. GitHub Pages publishes:
+
+| Setting | Value |
+|---|---|
+| Repo | `pulseforgeatmns-ops/anchor-cleaning` |
+| Branch | `main` |
+| Path | `/` (repo root) |
+| Build | Legacy Pages (static HTML; no build step) |
+| Custom domain | `goanchorcleaning.com` |
+
+Authoritative commercial source in **pulseforge-leadgen**: `sites/anchor-cleaning/`. Sync that tree (or the paths below) into `anchor-cleaning` before merge.
+
+### Service Assurance section
+
+```bash
+rsync -a sites/anchor-cleaning/index.html /path/to/anchor-cleaning/
+rsync -a sites/anchor-cleaning/assets/service-assurance/ /path/to/anchor-cleaning/assets/service-assurance/
+rsync -a sites/anchor-cleaning/framer/ /path/to/anchor-cleaning/framer/
+# Hero JPGs if missing on Pages repo:
+rsync -a sites/anchor-cleaning/assets/*.jpg /path/to/anchor-cleaning/assets/
+```
+
+Verify after deploy:
+
+```bash
+curl -sL https://goanchorcleaning.com/ | rg 'service-assurance|Service Assurance'
+curl -sI https://goanchorcleaning.com/assets/service-assurance/client-dashboard-1200w.webp | head -3
+```
+
+---
+
+Copy these files over the GitHub Pages repo and merge to `main` (legacy Clarity patch flow):
 
 | Source | Destination |
 |---|---|
