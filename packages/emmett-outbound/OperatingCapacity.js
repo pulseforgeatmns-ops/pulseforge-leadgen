@@ -95,6 +95,60 @@ function resolveGrantMinSpacingMinutes(policy = {}, schedule = {}) {
   return 60;
 }
 
+function localHourInTimeZone(now = new Date(), timeZone = 'America/New_York') {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(now).map(p => [p.type, p.value]));
+  return Number(parts.hour);
+}
+
+function isWithinSendWindowAt(now = new Date(), allowedSendWindow = DEFAULT_SEND_WINDOW) {
+  const tz = allowedSendWindow?.timezone || DEFAULT_SEND_WINDOW.timezone;
+  const hour = localHourInTimeZone(now, tz);
+  const start = Number(allowedSendWindow?.startHour);
+  const end = Number(allowedSendWindow?.endHour);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return false;
+  return hour >= start && hour < end;
+}
+
+function grantCalendarPermitsDispatch(policy = {}, when = new Date()) {
+  const t = +when;
+  if (policy.startsAt && t < Date.parse(policy.startsAt)) return false;
+  if (policy.expiresAt && t >= Date.parse(policy.expiresAt)) return false;
+  return isGrantDispatchDay(policy, when);
+}
+
+/**
+ * First grant-authorized weekday on or after `now` (searches up to 370 days).
+ */
+function findNextEligibleDispatchDay(policy = {}, now = new Date()) {
+  for (let offset = 0; offset < 370; offset++) {
+    const candidate = new Date(+now + offset * 86400000);
+    if (!grantCalendarPermitsDispatch(policy, candidate)) continue;
+    return candidate;
+  }
+  return null;
+}
+
+function bindCapacityToSchedule(authorizationLimitedCapacity, allowedSendWindow, minSpacingMinutes, {
+  dispatchDayAllowed = true,
+  withinSendWindow = true,
+} = {}) {
+  if (!allowedSendWindow || !dispatchDayAllowed || !withinSendWindow) {
+    return { capacity: 0, scheduleLimitedCapacity: 0 };
+  }
+  const scheduleLimitedCapacity = computeScheduleLimitedCapacity({
+    allowedSendWindow,
+    minSpacingMinutes,
+    dispatchDayAllowed: true,
+  });
+  let capacity = authorizationLimitedCapacity;
+  if (scheduleLimitedCapacity < capacity) capacity = scheduleLimitedCapacity;
+  return { capacity, scheduleLimitedCapacity };
+}
+
 function asNonNegInt(value, fallback = 0) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -217,29 +271,69 @@ function assessOperatingCapacity(input = {}) {
     capacityReason = `Remaining authorization budget is ${remainingTotalAuthorization}; Emmett recommends ${emmett.recommendedSafeDailyCapacity}.`;
   }
 
-  const { allowedSendWindow, minSpacingMinutes, dispatchDayAllowed } = resolveScheduleInput(input);
-  const scheduleLimitedCapacity = allowedSendWindow
+  const now = input.now instanceof Date ? input.now : new Date(input.now || Date.now());
+  const { allowedSendWindow, minSpacingMinutes, dispatchDayAllowed } = resolveScheduleInput({
+    ...input,
+    now,
+  });
+  const grantActiveNow = grantCalendarPermitsDispatch(policy, now);
+  const withinSendWindowNow = allowedSendWindow
+    ? isWithinSendWindowAt(now, allowedSendWindow)
+    : false;
+
+  const todaySchedule = (!allowedSendWindow || !dispatchDayAllowed)
+    ? { capacity: 0, scheduleLimitedCapacity: 0 }
+    : bindCapacityToSchedule(
+      authorizationLimitedCapacity,
+      allowedSendWindow,
+      minSpacingMinutes,
+      { dispatchDayAllowed: true, withinSendWindow: true },
+    );
+  const scheduleLimitedCapacity = todaySchedule.scheduleLimitedCapacity;
+
+  const momentDispatch = bindCapacityToSchedule(
+    authorizationLimitedCapacity,
+    allowedSendWindow,
+    minSpacingMinutes,
+    {
+      dispatchDayAllowed: dispatchDayAllowed && grantActiveNow,
+      withinSendWindow: withinSendWindowNow,
+    },
+  );
+  const dispatchCapacityNow = momentDispatch.capacity;
+
+  const nextEligibleDispatchDay = findNextEligibleDispatchDay(policy, now);
+  const nextEligibleScheduleCapacity = nextEligibleDispatchDay && allowedSendWindow
     ? computeScheduleLimitedCapacity({
       allowedSendWindow,
       minSpacingMinutes,
-      dispatchDayAllowed,
+      dispatchDayAllowed: true,
     })
     : 0;
+  let planningDailyCapacity = 0;
+  if (nextEligibleDispatchDay && allowedSendWindow && authorizationLimitedCapacity > 0) {
+    planningDailyCapacity = Math.min(authorizationLimitedCapacity, nextEligibleScheduleCapacity);
+  }
 
-  let dispatchableDailyCapacity = authorizationLimitedCapacity;
-  if (!allowedSendWindow || !dispatchDayAllowed) {
-    dispatchableDailyCapacity = 0;
+  let dispatchableDailyCapacity = dispatchCapacityNow;
+
+  if (dispatchCapacityNow <= 0 && planningDailyCapacity > 0) {
+    // Schedule-only closure; operating capacity remains available for inventory planning.
+  } else if (!allowedSendWindow) {
     limitingFactor = LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING;
-    capacityReason = !allowedSendWindow
-      ? 'Operator send grant has no valid dispatch window; schedule-limited capacity is unavailable.'
-      : 'Operator send grant does not permit dispatch on this weekday; schedule-limited capacity is zero.';
-  } else if (scheduleLimitedCapacity < dispatchableDailyCapacity) {
-    dispatchableDailyCapacity = scheduleLimitedCapacity;
+    capacityReason = 'Operator send grant has no valid dispatch window; schedule-limited capacity is unavailable.';
+  } else if (!dispatchDayAllowed || !grantActiveNow) {
+    limitingFactor = LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING;
+    capacityReason = 'Operator send grant does not permit dispatch on this weekday; dispatch capacity is zero until the next eligible send day.';
+  } else if (!withinSendWindowNow) {
+    limitingFactor = LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING;
+    capacityReason = `Current time is outside the allowed send window (${allowedSendWindow.startHour}:00–${allowedSendWindow.endHour}:00 ${allowedSendWindow.timezone || 'America/New_York'}); dispatch capacity is zero until the window opens.`;
+  } else if (scheduleLimitedCapacity < authorizationLimitedCapacity) {
     limitingFactor = LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING;
     capacityReason = `Send window ${allowedSendWindow.startHour}:00–${allowedSendWindow.endHour}:00 with ${minSpacingMinutes}-minute spacing allows ${scheduleLimitedCapacity} dispatchable first-touch slots; Emmett recommends ${emmett.recommendedSafeDailyCapacity} and authorization permits ${authorizationLimitedCapacity}.`;
   }
 
-  if (dispatchableDailyCapacity <= 0 && emmett.recommendedSafeDailyCapacity <= 0) {
+  if (dispatchCapacityNow <= 0 && planningDailyCapacity <= 0 && emmett.recommendedSafeDailyCapacity <= 0) {
     limitingFactor = emmett.factor;
     capacityReason = emmett.reason;
   }
@@ -248,8 +342,11 @@ function assessOperatingCapacity(input = {}) {
     recommendedSafeDailyCapacity: emmett.recommendedSafeDailyCapacity,
     authorizationLimitedCapacity,
     scheduleLimitedCapacity,
+    nextEligibleScheduleCapacity,
+    dispatchCapacityNow,
+    planningDailyCapacity,
     dispatchableDailyCapacity,
-    /** @deprecated use authorizationLimitedCapacity for auth-bound volume; dispatchableDailyCapacity for Max/send planning */
+    /** @deprecated use dispatchCapacityNow for send gates; planningDailyCapacity for Max inventory */
     effectiveDailyCapacity: authorizationLimitedCapacity,
     limitingFactor,
     healthScore,
@@ -261,6 +358,9 @@ function assessOperatingCapacity(input = {}) {
     allowedSendWindow: allowedSendWindow || null,
     minSpacingMinutes,
     dispatchDayAllowed,
+    grantActiveNow,
+    withinSendWindowNow,
+    nextEligibleDispatchDay: nextEligibleDispatchDay ? nextEligibleDispatchDay.toISOString() : null,
     scheduleUnavailable: !allowedSendWindow,
     silentCap: false,
   };
@@ -274,6 +374,9 @@ module.exports = {
   resolveGrantSendWindow,
   resolveGrantMinSpacingMinutes,
   isGrantDispatchDay,
+  isWithinSendWindowAt,
+  grantCalendarPermitsDispatch,
+  findNextEligibleDispatchDay,
   governorOutcomeOf,
   emmettRecommended,
 };
