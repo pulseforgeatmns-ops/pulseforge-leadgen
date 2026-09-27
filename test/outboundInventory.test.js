@@ -202,7 +202,8 @@ test('classifyInventoryOwnership reports same-company different-contact without 
     email: 'ops@pm.example',
   });
   assert.equal(result.kind, OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT);
-  assert.equal(result.recoverable, false);
+  assert.equal(result.recoverable, true);
+  assert.equal(result.companyId, '3');
 });
 
 test('unknown buyer readiness stays eligible when fail-closed gates are clear', () => {

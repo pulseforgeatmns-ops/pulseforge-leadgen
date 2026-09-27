@@ -327,6 +327,12 @@ function createReplenishmentAdmissionCounters() {
     recovered: 0,
     recoveredExisting: 0,
     alreadyQueued: 0,
+    sameCompanyCandidatesAttempted: 0,
+    alternateContactsResolved: 0,
+    alternateContactsVerified: 0,
+    alternateContactsRejected: 0,
+    alternateContactsAddedToCleanInventory: 0,
+    alternateContactLossReasons: {},
   };
 }
 
