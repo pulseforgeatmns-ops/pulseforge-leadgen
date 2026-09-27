@@ -977,8 +977,20 @@ function crack3(x, y, z, octaves = 3) {
   return sum / norm;
 }
 
-/* Conchoidal fracture. Space is divided into jittered cells, each owning one
-   arbitrarily oriented plane; any point that pokes past its own cell's plane is
+/* Keep the original fracture scale and mass. A small bias toward related
+   bedding/cross-joint directions adds order without replacing each break. */
+const GEOLOGY_BLEND = 0.3;
+const JOINT_NORMALS = [
+  [0.12, 0.975, -0.186],
+  [0.91, 0.16, 0.38],
+  [-0.42, 0.11, 0.90],
+].map((n) => {
+  const length = Math.hypot(...n);
+  return n.map((component) => component / length);
+});
+
+/* Fracture. Space is divided into jittered cells, each owning one plane with a
+   restrained joint-family bias; points that poke past their cell's plane are
    pushed back onto it. Points inside a cell land on the same plane, so the
    result is a field of flat shards meeting along sharp arrises.
 
@@ -1041,6 +1053,25 @@ function shatter(out, o, cell, reach) {
   let nx = Math.cos(a) * r;
   let ny = b;
   let nz = Math.sin(a) * r;
+  /* Turn toward the nearest existing joint, never an unrelated random family.
+     Most of the original orientation survives; no larger cells or deeper cuts. */
+  let closest = JOINT_NORMALS[0];
+  let agreement = 0;
+  let sign = 1;
+  for (const joint of JOINT_NORMALS) {
+    const dot = nx * joint[0] + ny * joint[1] + nz * joint[2];
+    if (Math.abs(dot) <= agreement) continue;
+    closest = joint;
+    agreement = Math.abs(dot);
+    sign = Math.sign(dot);
+  }
+  nx = lerp(nx, closest[0] * sign, GEOLOGY_BLEND);
+  ny = lerp(ny, closest[1] * sign, GEOLOGY_BLEND);
+  nz = lerp(nz, closest[2] * sign, GEOLOGY_BLEND);
+  const normalLength = Math.hypot(nx, ny, nz);
+  nx /= normalLength;
+  ny /= normalLength;
+  nz /= normalLength;
   if (sx * nx + sy * ny + sz * nz < 0) {
     nx = -nx;
     ny = -ny;
@@ -1356,10 +1387,7 @@ function buildSubstrate() {
     const ny = Math.abs(normal.getY(base));
     const nz = Math.abs(normal.getZ(base));
     const axis = ny > nx && ny > nz ? 1 : nx > nz ? 0 : 2;
-    const phaseU = hash3(t * 1.7, 3.3, 9.1) * 8.3;
-    const phaseV = hash3(t * 2.9, 7.7, 1.3) * 6.1;
-    const swap = hash3(t * 4.1, 0.9, 5.5) > 0.5;
-    const faceTone = 0.78 + hash3(t * 6.1, 4.4, 2.2) * 0.5;
+    const faceTone = lerp(0.78 + hash3(t * 6.1, 4.4, 2.2) * 0.5, 1, GEOLOGY_BLEND);
     /* Upward faces have caught the weather. Down-facing ones are in their own
        shadow whatever the light does, which is most of how a heavy overhanging
        mass declares that it is heavy. */
@@ -1380,8 +1408,9 @@ function buildSubstrate() {
       const scale = 1.15;
       const a = axis === 0 ? z : x;
       const bAxis = axis === 1 ? z : y;
-      uv[i * 2] = (swap ? bAxis : a) * scale + phaseU;
-      uv[i * 2 + 1] = (swap ? a : bAxis) * scale + phaseV;
+      // Continuous across a face; changing a triangle must not shuffle its grain.
+      uv[i * 2] = a * scale;
+      uv[i * 2 + 1] = bAxis * scale;
 
       /* Mineral variation and occlusion baked per vertex, so neither depends on
          a UV-mapped texture surviving the displacement.
@@ -1392,7 +1421,12 @@ function buildSubstrate() {
          again through the multiply — which is why an earlier pass produced a
          block that sat almost black however hard it was lit. */
       const grain = fbm3(x * 2.6, y * 2.6, z * 2.6, 2);
-      const band = fbm3(x * 0.9 + 60, y * 0.9, z * 0.9 + 12, 2);
+      const bed = x * 0.12 + y * 0.975 - z * 0.186;
+      const band = lerp(
+        fbm3(x * 0.9 + 60, y * 0.9, z * 0.9 + 12, 2),
+        fbm3(x * 0.28 + 60, bed * 4.8, z * 0.28 + 12, 2),
+        GEOLOGY_BLEND
+      );
       const quartz = smoothstep(0.72, 0.86, valueNoise3(x * 5.1 + 3, y * 5.1, z * 5.1));
       /* Occlusion. The shadow map catches what the key light cannot reach at the
          scale of the whole block; this catches the fracture network, which is far
@@ -1412,9 +1446,13 @@ function buildSubstrate() {
          black. It stays well below the value of lit stone, so nothing here can
          start looking like a glow. */
       const oxide =
-        smoothstep(0.54, 0.79, fbm3(x * 0.72 + 88, y * 0.72 + 5.3, z * 0.72 + 41, 2)) *
+        smoothstep(0.54, 0.79, lerp(
+          fbm3(x * 0.72 + 88, y * 0.72 + 5.3, z * 0.72 + 41, 2),
+          fbm3(x * 0.42 + 88, bed * 2.4 + 5.3, z * 0.42 + 41, 2),
+          GEOLOGY_BLEND
+        )) *
         smoothstep(0.34, 0.82, recess[base + v]);
-      const stained = value * (1 + oxide * 0.95);
+      const stained = value * (1 + oxide * 0.8);
 
       // A trace of warmth in the brighter grains, well inside the palette.
       colour[i * 3] = stained;
@@ -1486,7 +1524,7 @@ function stoneGrain() {
 
   for (let octave = 0; octave < 5; octave += 1) {
     const frequency = 4 * 2 ** octave;
-    const amplitude = 0.78 ** octave;
+    const amplitude = lerp(0.78, 0.52, GEOLOGY_BLEND) ** octave;
     const cell = size / frequency;
     for (let y = 0; y < size; y += 1) {
       for (let x = 0; x < size; x += 1) {
@@ -1534,7 +1572,7 @@ function stoneNormalTexture() {
     canvas.height = size;
     const ctx = canvas.getContext('2d');
     const image = ctx.createImageData(size, size);
-    const strength = 11;
+    const strength = lerp(11, 4.5, GEOLOGY_BLEND);
     const at = (x, y) => height[((y + size) % size) * size + ((x + size) % size)];
 
     for (let y = 0; y < size; y += 1) {
@@ -1579,7 +1617,11 @@ function stoneAlbedoTexture() {
          mean sits near the top of the range on purpose: this is a modulation of
          the stone colour, and a map that averages half darkens the whole block
          by a stop for nothing. */
-      const value = 0.42 + h * 0.62 + (h > 0.88 ? (h - 0.88) * 3 : 0);
+      const value = lerp(
+        0.42 + h * 0.62 + (h > 0.88 ? (h - 0.88) * 3 : 0),
+        0.68 + h * 0.24,
+        GEOLOGY_BLEND
+      );
       const v = clamp(value) * 255;
       const index = i * 4;
       image.data[index] = v;
@@ -1613,7 +1655,7 @@ function stoneRoughnessTexture() {
     const image = ctx.createImageData(size, size);
 
     for (let i = 0; i < size * size; i += 1) {
-      const v = clamp(1.02 - height[i] * 0.42) * 255;
+      const v = clamp(lerp(1.02 - height[i] * 0.42, 1.0 - height[i] * 0.24, GEOLOGY_BLEND)) * 255;
       const index = i * 4;
       image.data[index] = v;
       image.data[index + 1] = v;
@@ -1933,6 +1975,14 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   const bounce = new DirectionalLight(0xe8dcc6, 0.12);
   bounce.position.set(-1.2, -2.6, 4.2);
   scene.add(bounce);
+
+  /* A second, very low mineral-warm bounce rakes the underside from the other
+     side. At less than 3% of the key it finds broken faces without filling the
+     baked crevice occlusion or competing with the stack. Reflected light only:
+     the oxide remains albedo, and the stone has no emission. */
+  const warmBounce = new DirectionalLight(0xd6a77d, 0.1);
+  warmBounce.position.set(3.6, -2.4, 3.2);
+  scene.add(warmBounce);
 
   /* The examination lights. They travel to whichever layer is under discussion
      and are dark the rest of the time. */
