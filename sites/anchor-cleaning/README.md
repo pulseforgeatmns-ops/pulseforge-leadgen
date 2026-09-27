@@ -1,6 +1,6 @@
 # Anchor Cleaning website
 
-Source for [goanchorcleaning.com](https://goanchorcleaning.com/). GitHub Pages on `pulseforgeatmns-ops/anchor-cleaning` (`main` → `/`).
+Source for [goanchorcleaning.com](https://goanchorcleaning.com/). **Production deploy repo:** `pulseforgeatmns-ops/anchor-cleaning` (`main` → `/`, legacy GitHub Pages, CNAME `goanchorcleaning.com`). This monorepo path is the authoring source — sync into `anchor-cleaning` to publish (see `deploy/anchor-cleaning-pages/DEPLOY.md`).
 
 ## Terminology
 
@@ -34,6 +34,12 @@ Derived assets are generated from this exact artwork — see `assets/brand/CANON
 |---|---|
 | `/` | Commercial cleaning — primary CTA: **Request a Facility Assessment** |
 | `/residential/` | Residential home cleaning — primary CTA: **Request Home Cleaning** |
+
+## Service Assurance section
+
+The commercial homepage includes a **Service Assurance** block (`#service-assurance`) after **Why Anchor** and before the facility assessment form. It uses three portal mockups under `assets/service-assurance/` (replace with production screenshots when the client portal is live; keep filenames or update `imageSrc` props only).
+
+Framer-ready React building blocks live in `framer/ServiceAssurance.jsx` with shared styles in `framer/service-assurance.css`. Components: `ServiceAssuranceSection`, `ServiceAssuranceHero`, `PortalMockupFrame`, `ServiceAssuranceProofPoints`, `PortalFeaturePanel`, `FacilityAssessmentCTA`.
 
 ## Lead forms
 
