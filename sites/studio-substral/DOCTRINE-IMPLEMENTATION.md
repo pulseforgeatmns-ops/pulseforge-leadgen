@@ -79,11 +79,11 @@ Six layers, six materials, on a block of stone. Read top to bottom:
 
 | | Layer | Material | How it is told apart | What it draws |
 |---|---|---|---|---|
-| 06 | **Design** | Precision surface | Near mirror-polished, the highest reflectivity in the stack, the brightest machined arris | The page itself: masthead, oversized headline, one emphasised action, a framed media plate, three measures of copy, a footer — traced over the grid it sits on |
+| 06 | **Design** | Precision surface | Near mirror-polished, the highest reflectivity in the stack, the brightest machined arris, almost no transmission | The page itself: masthead, oversized headline, one emphasised action, a framed media plate, three measures of copy, a footer — traced over the grid it sits on |
 | 05 | **Trust** | Warm smoked glass | The **thickest** layer, with a broad soft highlight and a substantial edge. Mass is the signal | A struck seal, a closure mark, a credential plate, a ledger with one row still open |
-| 04 | **Search** | Etched architectural glass | The **clearest** body and the **thinnest** edge, with its markings driving roughness — so they only appear when light rakes across them | A site hierarchy with elbow connectors, and an index where one entry is unresolved |
-| 03 | **Conversion** | Smoked acrylic | Darkest of the glass layers and the most optically dense, with a tight bright specular against Trust's broad one | Nodes and paths converging on a single action — and one dashed route that simply stops |
-| 02 | **Accessibility** | Frosted polymer | The **lightest** material: milky, roughness 0.64, sheen for the diffuse halo, almost no clearcoat, a soft edge | Landmark regions nested as a document outline, a heading ladder, a focus-order path |
+| 04 | **Search** | Etched architectural glass | The **clearest** body and **thinnest** edge — transmission 0.93 over a long attenuation distance — with its markings driving roughness, so they only appear when light rakes them | A site hierarchy with elbow connectors, and an index where one entry is unresolved |
+| 03 | **Conversion** | Smoked acrylic | The most optically dense: transmission over a short attenuation distance, so light arrives dark. A tight bright specular against Trust's broad one | Nodes and paths converging on a single action — and one dashed route that simply stops |
+| 02 | **Accessibility** | Frosted polymer | The **lightest** material: transmission at roughness 0.64, which scatters rather than merely dimming, plus sheen for the diffuse halo and a soft edge | Landmark regions nested as a document outline, a heading ladder, a focus-order path |
 | 01 | **Performance** | Graphite composite | The **darkest**, thickest and least transparent, brushed along one axis so it answers light directionally | A request waterfall over a measured axis with thresholds, and a sampled trace |
 | 00 | **Substrate** | Mineral | A block, not a plate — see below | — |
 
@@ -94,9 +94,11 @@ what happens above it.
 ### Why they are not six colours
 
 The brief was explicit that six tinted panes would not do. The separation comes
-from thickness (a 2.5× range from the thinnest glass to the graphite), roughness
-(0.045 to 0.92), opacity (0.22 to 0.7), reflectivity (0.7 to 2.6
-`envMapIntensity`), edge treatment, internal markings and sheen. Tint is used
+from **transmission** (0 to 0.93) with per-layer **volumetric absorption**, so the
+same tint over a longer path arrives darker; **refractive index**, so they bend
+light differently; thickness (a 2.5× range from the thinnest glass to the
+graphite); roughness (0.045 to 0.92); reflectivity (0.7 to 2.6
+`envMapIntensity`); edge treatment; internal markings; and sheen. Tint is used
 only as a **value ladder** — graphite darkest, frosted polymer lightest, an
 eightfold spread — and exactly one layer departs from the palette at all: Trust
 takes a 9% warmth nudge toward mineral.
@@ -109,31 +111,66 @@ differentiation is material or cosmetic.
 
 ### The substrate
 
-A **block, not a seventh pane.** A quarter of the object's width thick, a third
-wider than the layers it carries, and hewn in plan: `hewnShape()` walks the
-perimeter and displaces it with layered irrational frequencies, quantised into
-facets, so the silhouette is uneven straight cuts rather than a rounded
-rectangle. Deterministic, so the object is the same on every load.
+**It is not an extrusion, and that is the whole point.** An extruded polygon has
+a constant thickness and vertical sidewalls however it is textured, and the eye
+reads that as a manufactured panel. A first attempt did exactly that — a hewn
+polygon pushed through `ExtrudeGeometry` with a normal map — and it still read as
+another plate. The category was wrong, not the finish.
 
-Two materials on one block, and the contrast between them is the point:
+So the block is **displaced geometry**:
 
-- **Broken sides** — `roughness: 1`, a noise-derived normal map at nearly 2×
-  strength, the darkest albedo. `stoneNormalTexture()` builds five octaves of
-  value noise and converts the height field to normals, so the faces answer
-  light as fractured stone.
-- **Planed lids** — the same map at 0.3× with a trace of clearcoat, plus a
-  shallow machined pad (`seat`) with its own arris, cut into the top where the
-  engineered system seats into it.
+- A subdivided icosahedron is squashed into a slab and pushed around by several
+  octaves of value noise, with a separate field modulating **thickness**, so its
+  profile varies across its extent and no wall is vertical.
+- **Fifteen cleavage planes** cut it: two near-horizontal ones flatten it into a
+  slab rather than the lens a displaced sphere would give, and thirteen more come
+  in around the sides at shallow angles. Anything beyond a plane is projected
+  onto it, which leaves a flat fracture face. This is what produces the angular,
+  quarried silhouette.
+- **Flat shaded**, so every facet answers light on its own. The macro structure is
+  cleavage; `stoneNormalTexture()` supplies the grain on top so it does not read
+  as a low-poly prop.
+- **Vertex colours** carry the mineral variation and the crevice darkening, with a
+  value spread from 0.28 to 2.4 of a dark base. Box-projected UVs from each
+  face's dominant axis give the grain an even scale, since the icosahedron's own
+  UVs are useless after displacement.
+- **A real shadow map**, with the stone the only caster and receiver. Deep
+  self-shadowing in the crevices is most of what makes it read as rock. The
+  translucent plates stay out of it: opaque shadows cast by glass look wrong.
+- A shallow region of the top is **planed flat** where the engineered stack seats
+  into it, fading out into natural stone well before the perimeter.
 
-It is anchored: the layers rise off it as the object opens, and it never moves.
-It is visible in the hero, so the object reads as surface, systems, foundation
-at a glance, and it is still there in Act VI when the layers reassemble — the
-website is visibly built on something rather than floating.
+It is twice the plate width and roughly fourteen times the thickest engineered
+layer, so it overhangs the stack and anchors the object — the layers read as thin
+and precise *because* of the mass underneath them. It is anchored in place: the
+layers rise off it as the object opens, it is visible in the hero, and it is
+still there in Act VI when they reassemble.
 
 There is no giant SUBSTRATE word on the stone. A `00 / SUBSTRATE` annotation
 appears in the stage readout beneath the active layer, in the same restrained
-engineering-label language as the six chapters, and secondary to it. The block
-explains itself.
+engineering-label language as the six chapters, and secondary to it.
+
+### Framing a wide flat object
+
+Worth recording because it cost several passes. The specimen is five units wide
+and roughly one thick, which breaks two reasonable-looking shortcuts:
+
+1. **A bounding box is useless.** The block's extreme corners in plan sit at
+   mid-height, so a box reserves a great deal of vertical space nothing occupies
+   and the specimen floats at 40% of its frame. The fit now runs against a
+   decimated copy of the block's actual surface plus the plate stack's corners.
+2. **A wide lens diverges.** At 32° the block's near corner blew up and pushed the
+   camera back. It is now 21° — a long lens, which also reads as engineering
+   render rather than wide-angle drama, and matches the reference.
+
+The camera's aim travels toward the layer under examination, and that travel is
+reserved **in screen space inside the fit test**, where it actually applies.
+Inflating the geometry to reserve it over-reserves badly for a flat object, and
+not reserving it at all pushed the substrate out of the bottom of the frame.
+
+The hero is allowed to crop horizontally (`frameCrop`), because fitting a wide
+flat slab on width leaves the frame half empty and pushes the substrate down
+behind the statement. The narrow sticky columns crop only slightly.
 
 ### Making a layer the subject
 

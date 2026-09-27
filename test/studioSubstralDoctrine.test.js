@@ -560,6 +560,30 @@ describe('Progressive enhancement (doctrine §18)', () => {
     }
   });
 
+  it('separates the layers optically, through transmission and refraction', () => {
+    /* Blended opacity can only make a layer darker or fainter. Transmission with
+       volumetric absorption is what lets Search read genuinely clear, Conversion
+       genuinely deep, and Accessibility scatter rather than merely dim. */
+    const transmission = [...dimensionalSrc.matchAll(/\n    transmission: ([\d.]+),/g)].map(
+      (m) => Number(m[1])
+    );
+    const absorption = [...dimensionalSrc.matchAll(/\n    attenuation: ([\d.]+),/g)].map(
+      (m) => Number(m[1])
+    );
+    assert.equal(transmission.length, 6);
+    assert.equal(absorption.length, 6);
+    assert.ok(Math.max(...transmission) >= 0.85, 'no layer is genuinely clear');
+    assert.ok(Math.min(...transmission) === 0, 'no layer is genuinely opaque');
+    assert.ok(new Set(transmission).size >= 5, 'transmission barely varies');
+    assert.match(dimensionalSrc, /capMaterial\.attenuationDistance = layer\.attenuation/);
+    assert.match(dimensionalSrc, /capMaterial\.transmission = layer\.transmission/);
+
+    // Refractive index varies too, so the layers bend light differently.
+    const iors = [...dimensionalSrc.matchAll(/\n    ior: ([\d.]+),/g)].map((m) => Number(m[1]));
+    assert.equal(iors.length, 6);
+    assert.ok(new Set(iors).size >= 3, 'every layer refracts identically');
+  });
+
   it('separates the layers by material rather than by hue', () => {
     /* The tint values are a value ladder, not a colour wheel: graphite darkest,
        frosted polymer lightest. They must survive grayscale, so the only hue
@@ -591,17 +615,62 @@ describe('Progressive enhancement (doctrine §18)', () => {
     assert.match(dimensionalSrc, /key: 'performance'[\s\S]*?thickness: 0\.10/);
   });
 
-  it('carries a mineral substrate beneath the digital layers', () => {
-    assert.match(dimensionalSrc, /FOUNDATION_T/);
-    assert.match(dimensionalSrc, /function stoneTexture/);
-    assert.match(dimensionalSrc, /roughnessMap: stone/);
-    assert.match(css, /\.plinth__face\s*\{/);
+  it('builds the substrate as stone, not as an extruded plate', () => {
+    /* This is the distinction the whole object turns on. An extruded polygon has
+       a constant thickness and vertical walls however it is textured, and the eye
+       reads that as a manufactured panel. So the block is displaced geometry cut
+       by fracture planes, flat-shaded so each facet answers light on its own. */
+    assert.doesNotMatch(dimensionalSrc, /hewnShape/);
+    assert.match(dimensionalSrc, /new IcosahedronGeometry\(/);
+    assert.match(dimensionalSrc, /const CLEAVAGE = /);
+    assert.match(dimensionalSrc, /flatShading: true/);
+    assert.match(dimensionalSrc, /function fbm3\(/);
+    assert.match(dimensionalSrc, /function stoneNormalTexture\(/);
+    assert.match(dimensionalSrc, /vertexColors: true/);
+
+    // The substrate is the only thing in the scene that is not extruded.
+    const extrusions = dimensionalSrc.match(/new ExtrudeGeometry\(/g) || [];
+    assert.equal(extrusions.length, 1, 'only the plates are extruded');
+
+    /* Its thickness must vary across its extent — a constant-thickness solid is
+       a slab, and a slab is a plate. */
+    assert.match(dimensionalSrc, /Thickness varies independently/);
+    assert.match(dimensionalSrc, /y \*= 0\.\d+ \+ \(fbm3\(/);
+
+    // Enough fracture planes to read as quarried rather than as a lump.
+    const sides = Number(dimensionalSrc.match(/const sides = (\d+);/)[1]);
+    assert.ok(sides >= 10, `${sides} side fracture planes is too few`);
+  });
+
+  it('gives the substrate mass, and the layers none by comparison', () => {
+    const width = Number(dimensionalSrc.match(/const SUBSTRATE_W = PLATE_W \* ([\d.]+);/)[1]);
+    const thickness = Number(dimensionalSrc.match(/const SUBSTRATE_T = ([\d.]+);/)[1]);
+    assert.ok(width >= 1.6, `substrate is only ${width}x the plate width`);
+
+    // It must dwarf the thickest engineered layer, or it is just another plate.
+    const plate = Math.max(
+      ...[...dimensionalSrc.matchAll(/\n    thickness: ([\d.]+),/g)].map((m) => Number(m[1]))
+    );
+    assert.ok(
+      thickness / plate >= 8,
+      `substrate is only ${(thickness / plate).toFixed(1)}x the thickest layer`
+    );
+  });
+
+  it('self-shadows the stone, and only the stone', () => {
+    // Deep shadow in the crevices is most of what makes it read as rock. The
+    // translucent plates stay out of it: opaque shadows from glass look wrong.
+    assert.match(dimensionalSrc, /renderer\.shadowMap\.enabled = true/);
+    assert.match(dimensionalSrc, /key\.castShadow = true/);
+    assert.match(dimensionalSrc, /substrate\.castShadow = true/);
+    assert.match(dimensionalSrc, /substrate\.receiveShadow = true/);
+    assert.doesNotMatch(dimensionalSrc, /face\.castShadow|plate\.castShadow/);
   });
 
   it('models the material the doctrine asked for', () => {
     // Smoked acrylic caps, machined metal walls, environmental shadow and
     // depth falloff — not a translucent rectangle (doctrine §11).
-    assert.match(dimensionalSrc, /ior: 1\.49/);
+    assert.match(dimensionalSrc, /ior: layer\.ior/);
     assert.match(dimensionalSrc, /clearcoat:/);
     assert.match(dimensionalSrc, /wall: \{ colour:/);
     assert.match(dimensionalSrc, /\[capMaterial, wallMaterial\]/);

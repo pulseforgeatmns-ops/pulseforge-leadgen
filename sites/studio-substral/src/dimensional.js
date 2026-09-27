@@ -41,6 +41,7 @@ import {
   ExtrudeGeometry,
   Fog,
   Group,
+  IcosahedronGeometry,
   LinearFilter,
   LinearMipmapLinearFilter,
   Mesh,
@@ -48,6 +49,7 @@ import {
   MeshPhysicalMaterial,
   Object3D,
   PMREMGenerator,
+  PCFShadowMap,
   PerspectiveCamera,
   PlaneGeometry,
   PointLight,
@@ -63,7 +65,7 @@ import {
 const SUBSTRAL_BLACK = 0x11110f;
 const MINERAL = 0xf0ede5;
 const PATINA = 0x7fa890;
-const STONE = 0x5c5649;
+const STONE = 0x2a2721;
 
 const PLATE_W = 3.05;
 const PLATE_H = 2.25;
@@ -75,15 +77,21 @@ const AIR_SEPARATED = 0.52;
 /** Act I only opens the seams far enough to suggest the object comes apart. */
 const AIR_SURFACE_HINT = 0.1;
 
-/* The substrate is a block, not a plate: a quarter of the object's width thick,
-   wider than the layers it carries, and irregular in plan. */
-const FOUNDATION_T = 0.86;
-const FOUNDATION_SCALE = 1.32;
-/** Air between the substrate and the deepest layer. */
-const FOUNDATION_CLEARANCE = 0.1;
-/** The planed pad where the engineered system seats into the stone. */
-const SEAT_T = 0.026;
-const SEAT_SCALE = 1.08;
+/* The substrate is a chunk of stone, not a block and certainly not a plate. It
+   is displaced geometry with fracture planes cut through it, so its thickness
+   varies across its extent and none of its walls are vertical. Dimensions here
+   are the pre-displacement slab it starts from; the real extent is measured off
+   the built geometry. */
+const SUBSTRATE_W = PLATE_W * 2.02;
+const SUBSTRATE_D = PLATE_H * 2.02;
+const SUBSTRATE_T = 1.5;
+/** Air between the planed plateau and the deepest layer. */
+const FOUNDATION_CLEARANCE = 0.17;
+/* How far the camera's aim may travel toward the layer under examination, as a
+   fraction of the distance from the object's centre to its top. The fit table
+   reserves room for it, otherwise raising the aim pushes the substrate out of
+   the bottom of the frame — which is exactly what it did. */
+const AIM_TRAVEL = 0.22;
 
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp = (n, min = 0, max = 1) => (n < min ? min : n > max ? max : n);
@@ -127,6 +135,10 @@ const STACK = [
     envMapIntensity: 2.6,
     wall: { colour: 0xe6e2d6, roughness: 0.13, metalness: 0.97 },
     arris: 0.66,
+    transmission: 0.14,
+    volume: 0.4,
+    attenuation: 1.5,
+    ior: 1.52,
     art: 'design',
     artOnTop: true,
     artOpacity: 0.68,
@@ -149,6 +161,10 @@ const STACK = [
     envMapIntensity: 1.95,
     wall: { colour: 0xd2c8b2, roughness: 0.34, metalness: 0.88 },
     arris: 0.56,
+    transmission: 0.52,
+    volume: 1.7,
+    attenuation: 1.15,
+    ior: 1.5,
     art: 'trust',
     artOpacity: 0.58,
   },
@@ -169,6 +185,10 @@ const STACK = [
     envMapIntensity: 2.35,
     wall: { colour: 0xbdb8a6, roughness: 0.17, metalness: 0.93 },
     arris: 0.34,
+    transmission: 0.93,
+    volume: 0.28,
+    attenuation: 4.5,
+    ior: 1.52,
     art: 'search',
     artOpacity: 0.44,
   },
@@ -187,6 +207,10 @@ const STACK = [
     envMapIntensity: 1.75,
     wall: { colour: 0xa09a8b, roughness: 0.09, metalness: 0.94 },
     arris: 0.44,
+    transmission: 0.46,
+    volume: 2.7,
+    attenuation: 0.52,
+    ior: 1.49,
     art: 'conversion',
     artOpacity: 0.52,
   },
@@ -209,6 +233,10 @@ const STACK = [
     sheenRoughness: 0.85,
     wall: { colour: 0x9d978a, roughness: 0.74, metalness: 0.22 },
     arris: 0.2,
+    transmission: 0.66,
+    volume: 1.1,
+    attenuation: 2.2,
+    ior: 1.46,
     art: 'accessibility',
     artOpacity: 0.3,
   },
@@ -230,6 +258,10 @@ const STACK = [
     envMapIntensity: 0.7,
     wall: { colour: 0x726c61, roughness: 0.56, metalness: 0.72 },
     arris: 0.3,
+    transmission: 0,
+    volume: 0,
+    attenuation: 1,
+    ior: 1.49,
     art: 'performance',
     artOpacity: 0.46,
   },
@@ -274,48 +306,6 @@ function plateShape(w, h, r) {
   shape.quadraticCurveTo(-x, y, -x, y - r);
   shape.lineTo(-x, -y + r);
   shape.quadraticCurveTo(-x, -y, -x + r, -y);
-  return shape;
-}
-
-/* --------------------------------------------------------------------------
-   The substrate's silhouette. A hewn block: straight facets of uneven length
-   rather than a rounded rectangle, so it cannot be mistaken for another pane
-   even in outline. Deterministic, so the object is the same on every load.
-   -------------------------------------------------------------------------- */
-
-function hewnShape(w, h, facets = 38, amount = 0.075) {
-  const x = w / 2;
-  const y = h / 2;
-  const perimeter = [];
-  for (let i = 0; i < facets; i += 1) {
-    const t = i / facets;
-    // Walk the rectangle perimeter.
-    const side = t * 4;
-    let px;
-    let py;
-    if (side < 1) { px = -x + 2 * x * side; py = -y; }
-    else if (side < 2) { px = x; py = -y + 2 * y * (side - 1); }
-    else if (side < 3) { px = x - 2 * x * (side - 2); py = y; }
-    else { px = -x; py = y - 2 * y * (side - 3); }
-
-    /* Layered irrational frequencies give organic variation without noise
-       tables, and a coarse quantisation breaks it into facets rather than a
-       smooth lump. */
-    const wobble =
-      0.46 * Math.sin(t * 19.1 + 1.13) +
-      0.31 * Math.sin(t * 34.7 + 0.41) +
-      0.23 * Math.sin(t * 61.3 + 2.67);
-    const faceted = Math.round(wobble * 4) / 4;
-    const scale = 1 + faceted * amount;
-    perimeter.push([px * scale, py * scale]);
-  }
-
-  const shape = new Shape();
-  shape.moveTo(perimeter[0][0], perimeter[0][1]);
-  for (let i = 1; i < perimeter.length; i += 1) {
-    shape.lineTo(perimeter[i][0], perimeter[i][1]);
-  }
-  shape.closePath();
   return shape;
 }
 
@@ -816,73 +806,248 @@ function artTexture(key, resolution) {
   return texture;
 }
 
-/* --------------------------------------------------------------------------
-   Mineral substrate. Warm stone with fine grain and a few veins — the
-   physical material the digital layers are lifted out of.
-   -------------------------------------------------------------------------- */
+/* ==========================================================================
+   THE SUBSTRATE
 
-let stoneCanvas = null;
-function stoneTexture() {
-  if (!stoneCanvas) {
-    const size = 512;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#5b5649';
-    ctx.fillRect(0, 0, size, size);
+   An extruded polygon can never read as stone: however it is textured, its
+   silhouette is a constant-thickness prism with vertical walls, and the eye
+   reads that as a manufactured plate. So this is displaced geometry instead.
 
-    let n = 12345;
-    const next = () => ((n = (n * 1103515245 + 12345) % 2147483648) / 2147483648);
+   A subdivided icosahedron is squashed into a slab, pushed around by several
+   octaves of value noise so its thickness varies across its extent and no wall
+   is vertical, then cut by a handful of arbitrary planes which leave flat
+   fracture facets. Flat-shaded, so every facet answers light on its own — the
+   macro structure is cleavage, and the normal map supplies the grain on top.
 
-    // Mottling, coarse to fine.
-    for (let pass = 0; pass < 3; pass += 1) {
-      const r = size * (0.16 / (pass + 1));
-      for (let i = 0; i < 90 * (pass + 1); i += 1) {
-        const x = next() * size;
-        const y = next() * size;
-        const shade = next() > 0.5 ? 255 : 0;
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, `rgba(${shade},${shade},${shade},${0.035 + next() * 0.03})`);
-        g.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(x - r, y - r, r * 2, r * 2);
-      }
-    }
-    // Veins.
-    for (let v = 0; v < 5; v += 1) {
-      ctx.strokeStyle = `rgba(232,226,210,${0.05 + next() * 0.05})`;
-      ctx.lineWidth = 1 + next() * 2.5;
-      ctx.beginPath();
-      let x = next() * size;
-      let y = -10;
-      ctx.moveTo(x, y);
-      while (y < size + 10) {
-        x += (next() - 0.5) * size * 0.16;
-        y += size * 0.1;
-        ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    }
-    // Grain.
-    for (let i = 0; i < 9000; i += 1) {
-      const a = next() * 0.06;
-      ctx.fillStyle = next() > 0.5 ? `rgba(255,252,244,${a})` : `rgba(20,18,14,${a})`;
-      ctx.fillRect(next() * size, next() * size, 1, 1);
-    }
-    stoneCanvas = canvas;
+   A shallow region of the top is planed flat where the engineered stack seats
+   into it. Natural stone stays dominant everywhere else.
+   ========================================================================== */
+
+/** Deterministic 3D value noise. No tables, same rock on every load. */
+function hash3(x, y, z) {
+  const n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453123;
+  return n - Math.floor(n);
+}
+
+function valueNoise3(x, y, z) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const zi = Math.floor(z);
+  const xf = x - xi;
+  const yf = y - yi;
+  const zf = z - zi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const w = zf * zf * (3 - 2 * zf);
+  const corner = (dx, dy, dz) => hash3(xi + dx, yi + dy, zi + dz);
+  const x00 = corner(0, 0, 0) + (corner(1, 0, 0) - corner(0, 0, 0)) * u;
+  const x10 = corner(0, 1, 0) + (corner(1, 1, 0) - corner(0, 1, 0)) * u;
+  const x01 = corner(0, 0, 1) + (corner(1, 0, 1) - corner(0, 0, 1)) * u;
+  const x11 = corner(0, 1, 1) + (corner(1, 1, 1) - corner(0, 1, 1)) * u;
+  const y0 = x00 + (x10 - x00) * v;
+  const y1 = x01 + (x11 - x01) * v;
+  return y0 + (y1 - y0) * w;
+}
+
+function fbm3(x, y, z, octaves = 4) {
+  let amplitude = 1;
+  let frequency = 1;
+  let sum = 0;
+  let norm = 0;
+  for (let i = 0; i < octaves; i += 1) {
+    sum += amplitude * valueNoise3(x * frequency, y * frequency, z * frequency);
+    norm += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2.07;
   }
-  const texture = new CanvasTexture(stoneCanvas);
-  texture.colorSpace = SRGBColorSpace;
-  texture.anisotropy = 4;
-  return texture;
+  return sum / norm;
+}
+
+const smoothstep = (edge0, edge1, x) => {
+  const t = clamp((x - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+};
+
+/* Cleavage planes. Anything beyond one is projected onto it, leaving a flat
+   fracture face. Two near-horizontal planes cut the block flat top and bottom so
+   it is a slab rather than the lens the displaced sphere would otherwise be; the
+   rest come in around the sides at shallow angles, which is what gives the
+   angular, quarried silhouette. Deterministic, so it is the same rock every
+   load. */
+const CLEAVAGE = (() => {
+  const planes = [
+    { n: [0.06, 0.99, -0.11], d: 0.6 },
+    { n: [-0.1, -0.98, 0.17], d: 0.64 },
+  ];
+  const sides = 13;
+  for (let i = 0; i < sides; i += 1) {
+    const theta = i * 2.399963229728653;
+    const tilt = (hash3(i * 5.3, 2.1, 8.7) - 0.5) * 0.5;
+    let nx = Math.cos(theta);
+    let ny = tilt;
+    let nz = Math.sin(theta);
+    const length = Math.hypot(nx, ny, nz) || 1;
+    nx /= length;
+    ny /= length;
+    nz /= length;
+    planes.push({ n: [nx, ny, nz], d: 0.7 + hash3(i * 3.7, 11.3, 5.1) * 0.2 });
+  }
+  return planes;
+})();
+
+function buildSubstrate() {
+  const halfW = SUBSTRATE_W / 2;
+  const halfD = SUBSTRATE_D / 2;
+  const halfT = SUBSTRATE_T / 2;
+
+  const source = new IcosahedronGeometry(1, 3);
+  const position = source.attributes.position;
+  const count = position.count;
+  const points = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const ux = position.getX(i);
+    const uy = position.getY(i);
+    const uz = position.getZ(i);
+
+    /* Two octave sets: the first breaks the overall mass, the second roughens
+       it. Sampled on the unit sphere so the field is continuous across seams. */
+    const broad = fbm3(ux * 1.25 + 4.1, uy * 1.25 + 1.7, uz * 1.25 + 9.3, 4) - 0.5;
+    const rough = fbm3(ux * 3.4 + 21.3, uy * 3.4 + 5.9, uz * 3.4 + 13.1, 3) - 0.5;
+    const swell = 1 + broad * 0.38 + rough * 0.34;
+
+    let x = ux * halfW * swell;
+    let y = uy * halfT * swell;
+    let z = uz * halfD * swell;
+
+    // Thickness varies independently, so the profile is never a constant slab.
+    y *= 0.74 + (fbm3(ux * 1.9 + 31, 0.5, uz * 1.9 + 17, 3) - 0.5) * 1.15;
+
+    for (const plane of CLEAVAGE) {
+      const [nx, ny, nz] = plane.n;
+      // Planes are defined against the normalised slab so they cut evenly.
+      const px = x / halfW;
+      const py = y / halfT;
+      const pz = z / halfD;
+      const distance = px * nx + py * ny + pz * nz;
+      if (distance > plane.d) {
+        const over = distance - plane.d;
+        x -= nx * over * halfW;
+        y -= ny * over * halfT;
+        z -= nz * over * halfD;
+      }
+    }
+
+    points.push([x, y, z]);
+  }
+
+  /* The planed interface: a shallow plateau across the middle of the top, which
+     fades out into natural stone well before the perimeter. */
+  const plateau = halfT * 0.74;
+  for (const p of points) {
+    if (p[1] <= plateau * 0.35) continue;
+    const radial = Math.hypot(p[0] / halfW, p[2] / halfD);
+    const worked = 1 - smoothstep(0.34, 0.72, radial);
+    p[1] = lerp(p[1], Math.min(p[1], plateau), worked);
+  }
+
+  const flat = new Float32Array(count * 3);
+  for (let i = 0; i < count; i += 1) {
+    flat[i * 3] = points[i][0];
+    flat[i * 3 + 1] = points[i][1];
+    flat[i * 3 + 2] = points[i][2];
+  }
+  source.setAttribute('position', new BufferAttribute(flat, 3));
+
+  /* IcosahedronGeometry is already non-indexed, so every triangle owns its
+     vertices and computeVertexNormals yields per-face normals — which is what
+     gives the fracture facets rather than a smooth lump. */
+  const geometry = source;
+  geometry.computeVertexNormals();
+
+  const finalPosition = geometry.attributes.position;
+  const normal = geometry.attributes.normal;
+  const triangles = finalPosition.count / 3;
+  const uv = new Float32Array(finalPosition.count * 2);
+  const colour = new Float32Array(finalPosition.count * 3);
+  const bounds = {
+    minX: Infinity, maxX: -Infinity,
+    minY: Infinity, maxY: -Infinity,
+    minZ: Infinity, maxZ: -Infinity,
+  };
+
+  const stone = new Color(STONE);
+  const vein = new Color(0xa9a293);
+
+  for (let t = 0; t < triangles; t += 1) {
+    const base = t * 3;
+    /* Box projection from the face's dominant axis: the icosahedron's own UVs
+       are useless after displacement, and this gives the grain an even scale on
+       every facet with no stretching. */
+    const nx = Math.abs(normal.getX(base));
+    const ny = Math.abs(normal.getY(base));
+    const nz = Math.abs(normal.getZ(base));
+    const axis = ny > nx && ny > nz ? 1 : nx > nz ? 0 : 2;
+
+    for (let v = 0; v < 3; v += 1) {
+      const i = base + v;
+      const x = finalPosition.getX(i);
+      const y = finalPosition.getY(i);
+      const z = finalPosition.getZ(i);
+
+      const scale = 0.55;
+      if (axis === 1) {
+        uv[i * 2] = x * scale;
+        uv[i * 2 + 1] = z * scale;
+      } else if (axis === 0) {
+        uv[i * 2] = z * scale;
+        uv[i * 2 + 1] = y * scale;
+      } else {
+        uv[i * 2] = x * scale;
+        uv[i * 2 + 1] = y * scale;
+      }
+
+      /* Mineral variation and crevice darkening baked per vertex, so the grain
+         does not depend on a UV-mapped albedo surviving the displacement. */
+      const grain = fbm3(x * 2.6, y * 2.6, z * 2.6, 4);
+      const band = fbm3(x * 0.9 + 60, y * 0.9, z * 0.9 + 12, 2);
+      let value = 1.0 + (grain - 0.5) * 1.7 + (band - 0.5) * 0.8;
+      value = clamp(value, 0.28, 2.4);
+      const quartz = smoothstep(0.78, 0.9, fbm3(x * 5.1 + 3, y * 5.1, z * 5.1, 2));
+      const c = stone.clone().multiplyScalar(value).lerp(vein, quartz * 0.35);
+      colour[i * 3] = c.r;
+      colour[i * 3 + 1] = c.g;
+      colour[i * 3 + 2] = c.b;
+
+      if (x < bounds.minX) bounds.minX = x;
+      if (x > bounds.maxX) bounds.maxX = x;
+      if (y < bounds.minY) bounds.minY = y;
+      if (y > bounds.maxY) bounds.maxY = y;
+      if (z < bounds.minZ) bounds.minZ = z;
+      if (z > bounds.maxZ) bounds.maxZ = z;
+    }
+  }
+
+  /* A decimated copy of the surface, for framing. A bounding box is hopeless
+     here: the block is five units wide and one thick, and its extreme corners in
+     plan sit at mid-height, so a box reserves a great deal of vertical space
+     nothing occupies and the specimen ends up floating small in its frame. */
+  const hull = [];
+  for (let i = 0; i < finalPosition.count; i += 2) {
+    hull.push([finalPosition.getX(i), finalPosition.getY(i), finalPosition.getZ(i)]);
+  }
+
+  geometry.setAttribute('uv', new BufferAttribute(uv, 2));
+  geometry.setAttribute('color', new BufferAttribute(colour, 3));
+  geometry.computeBoundingSphere();
+
+  return { geometry, bounds, hull, plateau, relief: bounds.maxY - plateau };
 }
 
 /**
- * A normal map for the substrate's hewn faces. Multi-octave value noise turned
- * into surface normals, so the sides answer light as broken stone rather than
- * as a flat extrusion. The planed top uses the same map at a fraction of the
- * strength, which is what makes the contrast between worked and unworked stone.
+ * A normal map for the substrate's broken faces. Multi-octave value noise
+ * turned into surface normals: the geometry supplies the cleavage, this
+ * supplies the grain.
  */
 let stoneNormalCanvas = null;
 function stoneNormalTexture() {
@@ -979,55 +1144,82 @@ function shadowTexture() {
    in at least one of them. Solve for the distance instead.
    -------------------------------------------------------------------------- */
 
+/** Where the block sits: its highest point lands on the clearance line. */
+function substrateDrop() {
+  return -FOUNDATION_CLEARANCE - sharedGeometry().substrate.bounds.maxY;
+}
+
 function assemblyCorners(air, yaw, centre) {
   const cos = Math.cos(yaw);
   const sin = Math.sin(yaw);
+  const rock = sharedGeometry().substrate;
+  const drop = substrateDrop();
   const top = plateBase(0, air) + STACK[0].thickness;
-  const bottom = -(FOUNDATION_CLEARANCE + FOUNDATION_T);
-  const halfW = (PLATE_W * FOUNDATION_SCALE) / 2;
-  const halfD = (PLATE_H * FOUNDATION_SCALE) / 2;
 
-  const corners = [];
+  const points = [];
+  const add = (x, y, z) => {
+    points.push(new Vector3(x * cos + z * sin, y - centre, -x * sin + z * cos));
+  };
+
+  // The plate stack, which really is a box.
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
-      for (const y of [bottom, top]) {
-        const x = sx * halfW;
-        const z = sz * halfD;
-        corners.push(new Vector3(x * cos + z * sin, y - centre, -x * sin + z * cos));
+      for (const y of [plateBase(PLATES - 1, air), top]) {
+        add((sx * PLATE_W) / 2, y, (sz * PLATE_H) / 2);
       }
     }
   }
-  return corners;
+  // And the block's actual surface.
+  for (const p of rock.hull) add(p[0], p[1] + drop, p[2]);
+
+  return points;
+}
+
+/** How far the camera's aim may travel, in world units, for this air gap. */
+function aimReach(air) {
+  const top = plateBase(0, air) + STACK[0].thickness;
+  return (top - assemblyCentre(air)) * AIM_TRAVEL;
 }
 
 /** Vertical centre of the whole specimen, substrate included. */
 function assemblyCentre(air) {
+  const rock = sharedGeometry().substrate;
   const top = plateBase(0, air) + STACK[0].thickness;
-  const bottom = -(FOUNDATION_CLEARANCE + FOUNDATION_T);
+  const bottom = substrateDrop() + rock.bounds.minY;
   return (top + bottom) / 2;
 }
 
-function fitsAt(probe, corners, distance, pitch) {
+/* xLimit above 1 lets the object run past the left and right edges of the
+   frame. The hero wants that: the specimen is a wide flat slab, so fitting it
+   on width leaves the frame half empty and pushes the substrate down behind the
+   statement. Cropping the far tips instead makes it read as larger than the
+   composition can hold — which is the relationship the reference has. */
+function fitsAt(probe, corners, distance, pitch, xLimit = 0.94, aim = 0) {
   probe.position.set(0, distance * pitch, distance);
   probe.lookAt(0, 0, 0);
   probe.updateMatrixWorld(true);
   probe.updateProjectionMatrix();
+  /* Reserve the aim's travel where it applies — on screen — rather than by
+     inflating the object, which over-reserves badly for a wide flat block. */
+  const tanHalf = Math.tan((probe.fov * Math.PI) / 360);
+  const yLimit = 0.94 - Math.min(0.45, aim / (distance * tanHalf));
   for (const corner of corners) {
     const ndc = corner.clone().project(probe);
-    if (Math.abs(ndc.x) > 0.94 || Math.abs(ndc.y) > 0.94) return false;
+    if (Math.abs(ndc.x) > xLimit || Math.abs(ndc.y) > yLimit) return false;
     if (ndc.z > 1) return false;
   }
   return true;
 }
 
-function frameDistance(probe, air, yaw, pitch) {
+function frameDistance(probe, air, yaw, pitch, xLimit) {
   const corners = assemblyCorners(air, yaw, assemblyCentre(air));
+  const aim = aimReach(air);
   let low = 2;
   let high = 70;
-  if (!fitsAt(probe, corners, high, pitch)) return high;
+  if (!fitsAt(probe, corners, high, pitch, xLimit, aim)) return high;
   for (let i = 0; i < 22; i += 1) {
     const mid = (low + high) / 2;
-    if (fitsAt(probe, corners, mid, pitch)) high = mid;
+    if (fitsAt(probe, corners, mid, pitch, xLimit, aim)) high = mid;
     else low = mid;
   }
   return high;
@@ -1035,11 +1227,13 @@ function frameDistance(probe, air, yaw, pitch) {
 
 const FIT_SAMPLES = 7;
 
-function buildFitTable(probe, widestAir, yaw, pitch) {
+function buildFitTable(probe, widestAir, yaw, pitch, xLimit) {
   const table = [];
   for (let i = 0; i < FIT_SAMPLES; i += 1) {
     const t = i / (FIT_SAMPLES - 1);
-    table.push(frameDistance(probe, lerp(AIR_ASSEMBLED, widestAir, t), yaw, pitch));
+    table.push(
+      frameDistance(probe, lerp(AIR_ASSEMBLED, widestAir, t), yaw, pitch, xLimit)
+    );
   }
   return table;
 }
@@ -1133,25 +1327,12 @@ function sharedGeometry() {
     art: new PlaneGeometry(PLATE_W * 0.9, PLATE_H * 0.9),
   }));
 
+  const substrate = buildSubstrate();
+
   shared = {
     plates,
-    /* The block: hewn in plan, a quarter of the object's width thick. Group 0
-       is its lids, group 1 its broken sides. */
-    foundation: new ExtrudeGeometry(
-      hewnShape(PLATE_W * FOUNDATION_SCALE, PLATE_H * FOUNDATION_SCALE),
-      { depth: FOUNDATION_T, bevelEnabled: false }
-    ),
-    /* The planed pad cut into the top of the block, where the engineered system
-       seats into it. Regular, because this part has been worked. */
-    seat: new ExtrudeGeometry(
-      plateShape(PLATE_W * SEAT_SCALE, PLATE_H * SEAT_SCALE, CORNER),
-      { depth: SEAT_T, bevelEnabled: false, curveSegments: 5 }
-    ),
-    seatArris: arrisGeometry(
-      plateShape(PLATE_W * SEAT_SCALE, PLATE_H * SEAT_SCALE, CORNER),
-      SEAT_T
-    ),
-    shadow: new PlaneGeometry(PLATE_W * 1.5, PLATE_H * 1.5),
+    substrate,
+    shadow: new PlaneGeometry(PLATE_W * 1.35, PLATE_H * 1.35),
   };
   return shared;
 }
@@ -1174,6 +1355,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   }
 
   renderer.setClearAlpha(0);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = PCFShadowMap;
   renderer.toneMapping = ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.12;
   renderer.outputColorSpace = SRGBColorSpace;
@@ -1182,12 +1365,15 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
      and VI sit lower and more architectural, but still high enough that each
      layer's own drawing is legible rather than foreshortened into a line.
      Examining a layer raises the angle further: the subject turns its face up. */
-  const basePitch = mode === 'surface' ? 0.44 : mode === 'reconstruct' ? 0.44 : 0.5;
+  const basePitch = mode === 'surface' ? 0.35 : mode === 'reconstruct' ? 0.42 : 0.46;
   const examinePitch = basePitch + 0.1;
   const baseYaw = mode === 'surface' ? -0.36 : -0.46;
+  /* The hero crops; the narrow sticky columns do not, where a cut edge would
+     read as broken rather than as framing. */
+  const frameCrop = mode === 'surface' ? 1.3 : 1.16;
 
   const scene = new Scene();
-  const camera = new PerspectiveCamera(32, 1, 0.1, 120);
+  const camera = new PerspectiveCamera(24, 1, 0.1, 140);
 
   /* Depth falloff: the far side of the specimen recedes into the environment
      instead of staying uniformly lit to the edge of the frame. */
@@ -1200,6 +1386,16 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
      catch the machined arrises. No coloured practicals, no rim theatrics. */
   const key = new DirectionalLight(0xfff4e2, 2.5);
   key.position.set(-3.6, 7.4, 3.2);
+  key.castShadow = true;
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.left = -3.8;
+  key.shadow.camera.right = 3.8;
+  key.shadow.camera.top = 3.8;
+  key.shadow.camera.bottom = -3.8;
+  key.shadow.camera.near = 0.5;
+  key.shadow.camera.far = 22;
+  key.shadow.bias = -0.0016;
+  key.shadow.normalBias = 0.012;
   scene.add(key);
 
   const fill = new DirectionalLight(0xa8c0b4, 0.62);
@@ -1209,6 +1405,12 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   const back = new DirectionalLight(0xf0ede5, 0.8);
   back.position.set(1.4, -1.2, -4.6);
   scene.add(back);
+
+  /* A low bounce from the front, so the substrate's near faces carry some
+     detail instead of falling to black. */
+  const bounce = new DirectionalLight(0xe8dcc6, 0.5);
+  bounce.position.set(-1.2, -2.6, 4.2);
+  scene.add(bounce);
 
   /* The examination lights. They travel to whichever layer is under discussion
      and are dark the rest of the time. */
@@ -1234,72 +1436,31 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 
   /* --- Substrate -------------------------------------------------------- */
 
-  /* The substrate. Two materials on one block: the lids are planed stone, the
-     sides are left broken. The contrast between worked and unworked is the
-     whole point — a geological foundation under a precision-engineered system. */
-  const stone = stoneTexture();
-  const stoneNormal = stoneNormalTexture();
-  const hewnNormal = stoneNormalTexture();
-  hewnNormal.repeat.set(2.4, 1.4);
+  /* The substrate: one chunk of stone. Flat-shaded displaced geometry carries
+     the cleavage, the normal map carries the grain, vertex colours carry the
+     mineral variation, and a real shadow map carries the self-shadowing in its
+     crevices. No second material and no seat plate — the planed plateau is cut
+     into the stone itself, so there is nothing left here that could be mistaken
+     for another pane. */
+  const rock = geometry.substrate;
+  const grain = stoneNormalTexture();
 
-  const planedMaterial = new MeshPhysicalMaterial({
-    color: new Color(STONE),
-    map: stone,
-    roughnessMap: stone,
-    normalMap: stoneNormal,
-    roughness: 0.74,
-    metalness: 0.04,
-    clearcoat: 0.14,
-    clearcoatRoughness: 0.6,
-    envMapIntensity: 0.72,
+  const stoneMaterial = new MeshPhysicalMaterial({
+    color: 0xffffff,
+    vertexColors: true,
+    normalMap: grain,
+    roughness: 0.96,
+    metalness: 0.03,
+    envMapIntensity: 0.5,
+    flatShading: true,
   });
-  planedMaterial.normalScale.set(0.3, 0.3);
+  stoneMaterial.normalScale.set(1.15, 1.15);
 
-  const hewnMaterial = new MeshPhysicalMaterial({
-    color: new Color(STONE).multiplyScalar(0.94),
-    map: stone,
-    roughnessMap: stone,
-    normalMap: hewnNormal,
-    roughness: 1,
-    metalness: 0.02,
-    envMapIntensity: 0.6,
-  });
-  hewnMaterial.normalScale.set(1.9, 1.9);
-
-  const foundation = new Mesh(geometry.foundation, [planedMaterial, hewnMaterial]);
-  foundation.rotation.x = -Math.PI / 2;
-  /* Extrusion runs along world +Y once the block is laid flat, so it is dropped
-     by its full thickness to put its planed top on the clearance line. */
-  foundation.position.y = -FOUNDATION_CLEARANCE - FOUNDATION_T;
-  assembly.add(foundation);
-
-  /* The seat: a shallow machined pad on top of the block, with its own arris.
-     This is where the stone has been worked to receive the layers. */
-  const seatMaterial = new MeshPhysicalMaterial({
-    color: new Color(STONE).multiplyScalar(1.22),
-    map: stone,
-    roughness: 0.42,
-    metalness: 0.14,
-    clearcoat: 0.3,
-    clearcoatRoughness: 0.4,
-    envMapIntensity: 0.7,
-  });
-  const seat = new Mesh(geometry.seat, seatMaterial);
-  seat.rotation.x = -Math.PI / 2;
-  seat.position.y = -FOUNDATION_CLEARANCE;
-  assembly.add(seat);
-
-  const seatArrisMaterial = new MeshBasicMaterial({
-    color: mineral.clone(),
-    transparent: true,
-    opacity: 0.16,
-    depthWrite: false,
-    fog: false,
-  });
-  const seatArris = new Mesh(geometry.seatArris, seatArrisMaterial);
-  seatArris.rotation.x = -Math.PI / 2;
-  seatArris.position.y = seat.position.y;
-  assembly.add(seatArris);
+  const substrate = new Mesh(rock.geometry, stoneMaterial);
+  substrate.position.y = substrateDrop();
+  substrate.castShadow = true;
+  substrate.receiveShadow = true;
+  assembly.add(substrate);
 
   const shadowMaterial = new MeshBasicMaterial({
     map: shadowTexture(),
@@ -1309,7 +1470,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   });
   const contactShadow = new Mesh(geometry.shadow, shadowMaterial);
   contactShadow.rotation.x = -Math.PI / 2;
-  contactShadow.position.y = -FOUNDATION_CLEARANCE + SEAT_T + 0.004;
+  contactShadow.position.y = substrateDrop() + rock.plateau + 0.008;
   assembly.add(contactShadow);
 
   /* --- Plates ----------------------------------------------------------- */
@@ -1330,7 +1491,7 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       roughness: layer.roughness,
       clearcoat: layer.clearcoat,
       clearcoatRoughness: layer.clearcoatRoughness,
-      ior: 1.49, // Acrylic.
+      ior: layer.ior,
       transparent: true,
       opacity: layer.opacity,
       depthWrite: false,
@@ -1339,6 +1500,19 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       emissive: patina.clone(),
       emissiveIntensity: 0,
     });
+
+    /* Transmission gives these layers real refraction and real volumetric
+       absorption, so Search reads clear, Conversion reads deep, Trust reads
+       warm and thick, and Accessibility scatters instead of merely being
+       semi-opaque. Attenuation distance is what makes thickness mean something:
+       the same tint over a longer path arrives darker. */
+    if (layer.transmission > 0) {
+      capMaterial.transmission = layer.transmission;
+      capMaterial.thickness = layer.volume;
+      capMaterial.attenuationDistance = layer.attenuation;
+      capMaterial.attenuationColor = body.clone();
+      capMaterial.opacity = 1;
+    }
 
     /* Etched layers drive roughness from their own markings: the body stays
        optically smooth and the cut marks are matte, so they only declare
@@ -1434,8 +1608,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 
     probe.aspect = camera.aspect;
     fitTables = {
-      base: buildFitTable(probe, widestAir, baseYaw, basePitch),
-      examine: buildFitTable(probe, widestAir, baseYaw, examinePitch),
+      base: buildFitTable(probe, widestAir, baseYaw, basePitch, frameCrop),
+      examine: buildFitTable(probe, widestAir, baseYaw, examinePitch, frameCrop),
     };
     fitted = fitAt(fitTables.base, mode === 'reconstruct' ? 1 : 0);
     if (!sized) {
@@ -1599,9 +1773,9 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
         fitAt(fitTables.examine, opening),
         examining ? 1 : 0
       );
-      target.dolly = fitted * (examining ? 0.94 : 1);
+      target.dolly = fitted * (examining ? 0.97 : 1);
       target.lookAt = examining
-        ? plateBase(subject, target.air) - assemblyCentre(target.air)
+        ? (plateBase(subject, target.air) - assemblyCentre(target.air)) * AIM_TRAVEL
         : 0;
 
       /* Pointer parallax below the threshold of obvious cause and effect. */
@@ -1623,12 +1797,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
       // Geometry and source canvases are shared and intentionally kept.
       resizeObserver.disconnect();
       environment.dispose();
-      for (const material of [planedMaterial, hewnMaterial, seatMaterial]) {
-        material.map?.dispose();
-        material.normalMap?.dispose();
-        material.dispose();
-      }
-      seatArrisMaterial.dispose();
+      stoneMaterial.normalMap?.dispose();
+      stoneMaterial.dispose();
       shadowMaterial.map?.dispose();
       shadowMaterial.dispose();
       for (const plate of plates) {
@@ -1644,5 +1814,5 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
 }
 
 export const LAYER_STACK = STACK.map((layer) => layer.key);
-export const SUBSTRATE_THICKNESS = FOUNDATION_T;
+export const SUBSTRATE_THICKNESS = SUBSTRATE_T;
 export const TOTAL_PLATE_SOLID = TOTAL_SOLID;
