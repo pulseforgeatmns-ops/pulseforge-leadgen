@@ -17,6 +17,34 @@ test('weekday 9–17 window with 60-minute spacing yields eight dispatchable slo
   }), 8);
 });
 
+test('schedule slot regressions honor end-exclusive windows and spacing', () => {
+  const window = { startHour: 9, endHour: 17 };
+  assert.equal(computeScheduleLimitedCapacity({ allowedSendWindow: window, minSpacingMinutes: 120 }), 4);
+  assert.equal(computeScheduleLimitedCapacity({ allowedSendWindow: window, minSpacingMinutes: 30 }), 16);
+  assert.equal(computeScheduleLimitedCapacity({ allowedSendWindow: { startHour: 17, endHour: 9 }, minSpacingMinutes: 60 }), 0);
+});
+
+test('grant spacingMinutes binds schedule capacity independently of mailbox spacing defaults', () => {
+  const operating = assessOperatingCapacity({
+    assessed: {
+      capacity: { recommended: 16 },
+      governor: { outcome: 'proceed', halt: false },
+      snapshot: { minimumSpacingMinutes: 30 },
+    },
+    policy: {
+      dailyCap: 15,
+      spacingMinutes: 60,
+      startHour: 9,
+      endHour: 17,
+      timeZone: 'America/New_York',
+      weekdays: [1, 2, 3, 4, 5],
+    },
+    now: new Date('2026-09-28T15:00:00.000Z'),
+  });
+  assert.equal(operating.scheduleLimitedCapacity, 8);
+  assert.equal(operating.dispatchableDailyCapacity, 8);
+});
+
 test('production policy binds Max demand on schedule before authorization headroom', () => {
   const operating = assessOperatingCapacity({
     assessed: {

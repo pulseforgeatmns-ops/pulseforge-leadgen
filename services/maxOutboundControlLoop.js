@@ -11,7 +11,10 @@ const {
 } = require('../utils/replenishmentVertical');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { adapters: createGovernedAdapters } = require('./governedOutboundAdapters');
-const { assessOperatingCapacity } = require('../packages/emmett-outbound/OperatingCapacity');
+const {
+  assessOperatingCapacity,
+  computeScheduleLimitedCapacity,
+} = require('../packages/emmett-outbound/OperatingCapacity');
 const {
   buildReplenishmentYield,
   buildReplenishmentLossBuckets,
@@ -28,6 +31,11 @@ const {
   isProspectServiceAreaConfirmed,
   resolveMissionAllowedCities,
 } = require('../utils/missionGeography');
+const {
+  emptyAlternateContactTelemetry,
+  mergeAlternateTelemetry,
+  attemptSameCompanyAlternateRecovery,
+} = require('./sameCompanyContactRecovery');
 
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
@@ -46,6 +54,8 @@ function resolveOperatingCapacity({
   assessed = null,
   sentToday = 0,
   totalAttempted = 0,
+  policy = null,
+  now = new Date(),
 } = {}) {
   if (operatingCapacity && (
     operatingCapacity.dispatchableDailyCapacity != null
@@ -53,16 +63,28 @@ function resolveOperatingCapacity({
   )) {
     return operatingCapacity;
   }
+  const grantPolicy = policy || { dailyCap };
   return assessOperatingCapacity({
     assessed: assessed || {
       capacity: { recommended: emmettCapacity },
       governor: { outcome: 'proceed', halt: false },
       health: { score: 0 },
     },
-    policy: { dailyCap },
+    policy: grantPolicy,
     sentToday,
     totalAttempted,
     emmettCapacity,
+    now,
+    schedule: grantPolicy.startHour != null || grantPolicy.spacingMinutes != null
+      ? {
+        allowedSendWindow: {
+          startHour: grantPolicy.startHour ?? 9,
+          endHour: grantPolicy.endHour ?? 17,
+          timezone: grantPolicy.timeZone || 'America/New_York',
+        },
+        minSpacingMinutes: grantPolicy.spacingMinutes ?? grantPolicy.minSpacingMinutes ?? 60,
+      }
+      : undefined,
   });
 }
 
@@ -87,7 +109,15 @@ function buildControlPlan({
   const authorizationLimitedCapacity = Math.max(0, Number(
     operating.authorizationLimitedCapacity ?? operating.effectiveDailyCapacity ?? 0
   ));
-  const scheduleLimitedCapacity = Math.max(0, Number(operating.scheduleLimitedCapacity ?? authorizationLimitedCapacity));
+  const scheduleLimitedCapacity = operating.scheduleLimitedCapacity != null
+    ? Math.max(0, Number(operating.scheduleLimitedCapacity))
+    : (operating.allowedSendWindow && operating.minSpacingMinutes != null
+      ? computeScheduleLimitedCapacity({
+        allowedSendWindow: operating.allowedSendWindow,
+        minSpacingMinutes: operating.minSpacingMinutes,
+        dispatchDayAllowed: operating.dispatchDayAllowed !== false,
+      })
+      : 0);
   const dispatchableDailyCapacity = Math.max(0, Number(
     operating.dispatchableDailyCapacity ?? authorizationLimitedCapacity
   ));
@@ -264,6 +294,7 @@ async function persistDiscoveredCompanies(pool, store, {
     counters.discovered = companies.length;
   counters.recovered = 0;
   counters.alreadyQueued = 0;
+  mergeAlternateTelemetry(counters, emptyAlternateContactTelemetry());
 
   const scope = scoutContext.scope || {};
   const admissionContext = {
@@ -306,6 +337,17 @@ async function persistDiscoveredCompanies(pool, store, {
       continue;
     }
     if (ownership.kind === OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
+      const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
+        company,
+        scoutContext,
+        telemetry: counters,
+      });
+      mergeAlternateTelemetry(counters, recovery.telemetry || {});
+      if (recovery.ok) {
+        counters.recovered += 1;
+        counters.recoveredExisting = (counters.recoveredExisting || 0) + 1;
+        continue;
+      }
       recordReplenishmentRejection(counters, 'same_company_different_contact');
       continue;
     }
@@ -508,6 +550,7 @@ async function runMaxOutboundControlLoop(options = {}) {
   const operating = resolveOperatingCapacity({
     operatingCapacity: infrastructure.operating,
     dailyCap: program.policy.dailyCap,
+    policy: program.policy,
     emmettCapacity: infrastructure.cap,
     assessed: infrastructure.assessed,
     sentToday,
@@ -636,6 +679,12 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutPromoted: newPromotions,
     scoutQueued: Number(scout?.discoveredQueued || 0),
     scoutRecovered: recoveredExisting,
+    sameCompanyCandidatesAttempted: Number(scout?.admission?.sameCompanyCandidatesAttempted || 0),
+    alternateContactsResolved: Number(scout?.admission?.alternateContactsResolved || 0),
+    alternateContactsVerified: Number(scout?.admission?.alternateContactsVerified || 0),
+    alternateContactsRejected: Number(scout?.admission?.alternateContactsRejected || 0),
+    alternateContactsAddedToCleanInventory: Number(scout?.admission?.alternateContactsAddedToCleanInventory || 0),
+    alternateContactLossReasons: scout?.admission?.alternateContactLossReasons || null,
     yield: scout?.yield || null,
     lossBuckets: scout?.lossBuckets || null,
     funnel,
