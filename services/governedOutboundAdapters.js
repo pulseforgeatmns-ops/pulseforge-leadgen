@@ -45,8 +45,8 @@ function adapters(pool, dependencies = {}) {
     if (triggers.rows[0]?.n !== 6) fail('suppression_triggers_missing');
     return { client, sender: sender.identity };
   }
-  async function infrastructure(program, now = new Date(), ignoreItem = null) {
-    if (dependencies.infrastructure) return dependencies.infrastructure(program, now);
+  async function infrastructure(program, now = new Date(), ignoreItem = null, opts = {}) {
+    if (dependencies.infrastructure) return dependencies.infrastructure(program, now, ignoreItem, opts);
     const { client, sender } = await tenant(program);
     const readiness = await evaluateCanonicalSenderReadiness({ identity: sender, client, pool });
     if (!readiness.ready) fail(readiness.code || 'sender_not_ready');
@@ -83,9 +83,24 @@ function adapters(pool, dependencies = {}) {
         minSpacingMinutes: program.policy.spacingMinutes ?? program.policy.minSpacingMinutes ?? 60,
       },
     });
-    const cap = operating.dispatchableDailyCapacity;
-    if (!Number.isFinite(cap) || cap <= snapshot.sentToday) fail('emmett_capacity_exhausted');
-    return { snapshot, assessed, cap, operating, sender, lastAttempt: history.last_attempt };
+    const mode = opts.mode || 'planning';
+    const planningCap = operating.planningDailyCapacity;
+    const dispatchNow = operating.dispatchCapacityNow;
+    if (!Number.isFinite(planningCap) || planningCap <= 0) fail('emmett_capacity_exhausted');
+    if (mode === 'dispatch') {
+      if (!Number.isFinite(dispatchNow) || dispatchNow <= 0 || dispatchNow <= snapshot.sentToday) {
+        fail('dispatch_unavailable_now');
+      }
+    }
+    return {
+      snapshot,
+      assessed,
+      cap: planningCap,
+      operating,
+      sender,
+      lastAttempt: history.last_attempt,
+      dispatchUnavailableNow: dispatchNow <= 0 || dispatchNow <= snapshot.sentToday,
+    };
   }
   async function runtimeFor() {
     if (dependencies.runtime) return dependencies.runtime;
@@ -231,7 +246,7 @@ function adapters(pool, dependencies = {}) {
     const { rows } = await pool.query(`SELECT 1 FROM acquisition_outbound_inbox_health
       WHERE tenant_id='10' AND integration_id=$1 AND last_success_at>now()-interval '5 minutes'`, [program.policy.inboxIntegrationId]);
     if (!rows.length) fail('reply_poll_stale');
-    const infra = await infrastructure(program, now, item);
+    const infra = await infrastructure(program, now, item, { mode: 'dispatch' });
     if (infra.lastAttempt && +now - +new Date(infra.lastAttempt) < program.policy.spacingMinutes * 60000) {
       fail('cross_path_spacing');
     }

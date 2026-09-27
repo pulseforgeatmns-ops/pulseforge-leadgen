@@ -8,6 +8,25 @@ const {
   computeScheduleLimitedCapacity,
   LIMITING_FACTORS,
 } = require('../packages/emmett-outbound/OperatingCapacity');
+const { buildControlPlan } = require('../services/maxOutboundControlLoop');
+
+const PRODUCTION_GRANT_POLICY = {
+  dailyCap: 15,
+  totalCap: 100,
+  spacingMinutes: 60,
+  startHour: 9,
+  endHour: 17,
+  timeZone: 'America/New_York',
+  weekdays: [1, 2, 3, 4, 5],
+  startsAt: '2026-01-01T00:00:00.000Z',
+  expiresAt: '2026-12-31T23:59:59.000Z',
+};
+
+const PRODUCTION_ASSESSED = {
+  capacity: { recommended: 16, statement: 'Based on today\'s reputation, I recommend 16.' },
+  governor: { outcome: 'proceed', halt: false },
+  health: { score: 82 },
+};
 const { evaluateColdOutboundEligibility } = require('../services/outboundInventory');
 
 test('weekday 9–17 window with 60-minute spacing yields eight dispatchable slots', () => {
@@ -38,11 +57,64 @@ test('grant spacingMinutes binds schedule capacity independently of mailbox spac
       endHour: 17,
       timeZone: 'America/New_York',
       weekdays: [1, 2, 3, 4, 5],
+      startsAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-12-31T23:59:59.000Z',
     },
     now: new Date('2026-09-28T15:00:00.000Z'),
   });
   assert.equal(operating.scheduleLimitedCapacity, 8);
+  assert.equal(operating.dispatchCapacityNow, 8);
+  assert.equal(operating.planningDailyCapacity, 8);
   assert.equal(operating.dispatchableDailyCapacity, 8);
+});
+
+test('Sunday decouples dispatch-now zero from planning capacity on the next eligible weekday', () => {
+  const sunday = new Date('2026-09-27T15:00:00.000Z');
+  const operating = assessOperatingCapacity({
+    assessed: PRODUCTION_ASSESSED,
+    policy: PRODUCTION_GRANT_POLICY,
+    now: sunday,
+  });
+  assert.equal(operating.scheduleLimitedCapacity, 0);
+  assert.equal(operating.nextEligibleScheduleCapacity, 8);
+  assert.equal(operating.dispatchCapacityNow, 0);
+  assert.equal(operating.planningDailyCapacity, 8);
+  const plan = buildControlPlan({
+    operatingCapacity: operating,
+    cleanInventory: 3,
+    targetDays: 3,
+  });
+  assert.equal(plan.targetInventory, 24);
+  assert.equal(plan.deficit, 21);
+  assert.equal(plan.shouldReplenish, true);
+  assert.equal(plan.dispatchUnavailableNow, true);
+});
+
+test('weekday outside send hours keeps planning capacity while dispatch-now stays zero', () => {
+  const evening = new Date('2026-09-28T23:30:00.000Z');
+  const operating = assessOperatingCapacity({
+    assessed: PRODUCTION_ASSESSED,
+    policy: PRODUCTION_GRANT_POLICY,
+    now: evening,
+  });
+  assert.equal(operating.dispatchCapacityNow, 0);
+  assert.equal(operating.planningDailyCapacity, 8);
+  const plan = buildControlPlan({ operatingCapacity: operating, cleanInventory: 3, targetDays: 3 });
+  assert.equal(plan.shouldReplenish, true);
+});
+
+test('governor halt zeroes planning and dispatch-now capacity', () => {
+  const operating = assessOperatingCapacity({
+    assessed: {
+      capacity: { recommended: 12 },
+      governor: { outcome: 'pause', halt: true, reason: 'Reputation risk too high.' },
+      health: { score: 30 },
+    },
+    policy: PRODUCTION_GRANT_POLICY,
+    now: new Date('2026-09-28T15:00:00.000Z'),
+  });
+  assert.equal(operating.planningDailyCapacity, 0);
+  assert.equal(operating.dispatchCapacityNow, 0);
 });
 
 test('production policy binds Max demand on schedule before authorization headroom', () => {
@@ -61,6 +133,8 @@ test('production policy binds Max demand on schedule before authorization headro
   assert.equal(operating.recommendedSafeDailyCapacity, 16);
   assert.equal(operating.authorizationLimitedCapacity, 15);
   assert.equal(operating.scheduleLimitedCapacity, 8);
+  assert.equal(operating.dispatchCapacityNow, 8);
+  assert.equal(operating.planningDailyCapacity, 8);
   assert.equal(operating.dispatchableDailyCapacity, 8);
   assert.equal(operating.limitingFactor, LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING);
 });
