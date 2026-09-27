@@ -16,8 +16,17 @@ Authoritative commercial source in **pulseforge-leadgen**: `sites/anchor-cleanin
 
 ### Service Assurance section
 
+Use the sync script so the header logo and referenced brand assets are included:
+
+```bash
+bash deploy/anchor-cleaning-pages/sync-from-monorepo.sh /path/to/anchor-cleaning
+```
+
+For a manual sync, include the brand directory alongside the section assets:
+
 ```bash
 rsync -a sites/anchor-cleaning/index.html /path/to/anchor-cleaning/
+rsync -a sites/anchor-cleaning/assets/brand/ /path/to/anchor-cleaning/assets/brand/
 rsync -a sites/anchor-cleaning/assets/service-assurance/ /path/to/anchor-cleaning/assets/service-assurance/
 rsync -a sites/anchor-cleaning/framer/ /path/to/anchor-cleaning/framer/
 # Hero JPGs if missing on Pages repo:
