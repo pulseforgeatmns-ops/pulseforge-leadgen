@@ -11,11 +11,13 @@ function address(value) {
 }
 
 async function captureRaw(pool, integration, raw) {
-  if (String(integration.tenantId) !== '10' || !await installed(pool)) return;
-  const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' AND policy->>'inboxIntegrationId'=$1 ORDER BY authorized_at DESC LIMIT 1", [integration.id])).rows[0];
+  const tenantId = String(integration.tenantId);
+  if (!['10', '13'].includes(tenantId) || !await installed(pool)) return;
+  const clientId = Number(tenantId);
+  const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id=$1 AND policy->>'inboxIntegrationId'=$2 ORDER BY authorized_at DESC LIMIT 1", [tenantId, integration.id])).rows[0];
   if (!program || program.policy.inboxIntegrationId !== integration.id) return;
   const email = address(raw.from || raw.sender);
-  const contacts = (await pool.query('SELECT id,company_id FROM prospects WHERE client_id=10 AND lower(email)=$1', [email])).rows;
+  const contacts = (await pool.query('SELECT id,company_id FROM prospects WHERE client_id=$1 AND lower(email)=$2', [clientId, email])).rows;
   // From-address matching intentionally stops all generic contact to this account,
   // even if In-Reply-To is absent or a human responds on a new thread.
   for (const contact of contacts) {
@@ -23,10 +25,10 @@ async function captureRaw(pool, integration, raw) {
     const db = await pool.connect();
     try {
       await db.query('BEGIN');
-      await db.query("SELECT acquisition_outbound_suppress('10',$1,$2,$3,$4,'reply_received',$5)",
-        [email, String(contact.id), String(contact.company_id), id, { integrationId: integration.id }]);
+      await db.query('SELECT acquisition_outbound_suppress($1,$2,$3,$4,$5,$6,$7)',
+        [tenantId, email, String(contact.id), String(contact.company_id), id, 'reply_received', { integrationId: integration.id }]);
       await db.query(`INSERT INTO acquisition_outbound_replies(id,tenant_id,prospect_id,email,payload)
-        VALUES($1,'10',$2,$3,$4) ON CONFLICT DO NOTHING`, [id, String(contact.id), email,
+        VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, [id, tenantId, String(contact.id), email,
         { from: email, subject: raw.subject || '', body: raw.body || raw.text || '', inReplyTo: raw.inReplyTo || null }]);
       await db.query('COMMIT');
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
@@ -34,9 +36,10 @@ async function captureRaw(pool, integration, raw) {
 }
 
 async function markHealthy(pool, integration) {
-  if (String(integration.tenantId) !== '10' || !await installed(pool)) return;
+  const tenantId = String(integration.tenantId);
+  if (!['10', '13'].includes(tenantId) || !await installed(pool)) return;
   await pool.query(`INSERT INTO acquisition_outbound_inbox_health(integration_id,tenant_id,last_success_at)
-    VALUES($1,'10',now()) ON CONFLICT(integration_id) DO UPDATE SET last_success_at=now()`, [integration.id]);
+    VALUES($1,$2,now()) ON CONFLICT(integration_id) DO UPDATE SET last_success_at=now()`, [integration.id, tenantId]);
 }
 
 async function classifyPending(pool, options = {}) {

@@ -198,6 +198,10 @@ function segmentAliases(scope) {
     ['short_term_rental', 'str_manager', 'property_manager', 'property_management', 'hospitality']
       .forEach(x => aliases.add(x));
   }
+  if (['small_business_owner', 'small_business_owners', 'founder_led_smb', 'founder_led_small_business'].includes(scope.segment)) {
+    ['cleaning', 'home_services', 'landscaping', 'painting', 'hvac', 'restaurant', 'salon', 'fitness', 'auto', 'electrician']
+      .forEach(x => aliases.add(x));
+  }
   return aliases;
 }
 
@@ -215,25 +219,27 @@ function missionCandidateReason(row, scope) {
   return null;
 }
 
-async function loadSource(pool, program) {
+async function loadSource(pool, program, tenantId) {
+  const tid = String(tenantId || program.tenant_id || '10');
   return (await pool.query(
-    "SELECT id,objective,target_segment,payload FROM acquisition_missions WHERE tenant_id='10' AND id=$1",
-    [program.source_mission_id]
+    'SELECT id,objective,target_segment,payload FROM acquisition_missions WHERE tenant_id=$1 AND id=$2',
+    [tid, program.source_mission_id]
   )).rows[0] || null;
 }
 
-async function loadCleanInventory(pool, store, source) {
+async function loadCleanInventory(pool, store, source, clientId) {
+  const cid = Number(clientId || store.clientId || 10);
   const scope = sourceScope(source);
   const { rows } = await pool.query(`
     SELECT p.*, c.name AS company_name, c.domain AS company_domain, c.website AS company_website,
       c.industry AS industry, c.location AS company_location
     FROM prospects p
     JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
-    WHERE p.client_id=10
+    WHERE p.client_id=$1
       AND p.email IS NOT NULL
       AND COALESCE(p.do_not_contact,false)=false
     ORDER BY p.updated_at DESC NULLS LAST, p.id
-  `);
+  `, [cid]);
 
   const clean = [];
   const excluded = [];
@@ -282,11 +288,14 @@ async function loadCleanInventory(pool, store, source) {
 function scoutInput(program, source, plan) {
   const scope = sourceScope(source);
   const payload = source?.payload || {};
-  const region = scope.region || scope.cities.join(', ') || 'Greater Manchester';
-  const segment = scope.segment || 'short_term_rental';
+  const tenantId = String(program.tenant_id || '10');
+  const region = scope.region || scope.cities.join(', ') || (tenantId === '13' ? 'United States' : 'Greater Manchester');
+  const segment = scope.segment || (tenantId === '13' ? 'small_business_owner' : 'short_term_rental');
+  const commercialCapability = tenantId === '13' ? 'business_transformation' : 'commercial_cleaning';
+  const businessType = tenantId === '13' ? 'founder_led_smb' : 'commercial_cleaning';
   return {
-    authorizedTenantId: '10',
-    tenantId: '10',
+    authorizedTenantId: tenantId,
+    tenantId,
     workflow: 'outbound_inventory_replenishment',
     inventoryDeficit: plan.deficit,
     question: `Max needs Scout to replenish verified outbound inventory for ${segment} in ${region}.`,
@@ -296,7 +305,7 @@ function scoutInput(program, source, plan) {
     force: true,
     businessContext: {
       serviceGeography: region,
-      commercialCapability: 'commercial_cleaning',
+      commercialCapability,
       preferredSegments: [segment],
       acquisitionDirection: source?.objective || payload.objective || null,
       exclusions: payload.constraints || [],
@@ -304,7 +313,7 @@ function scoutInput(program, source, plan) {
     targetContext: {
       geography: region,
       segments: [segment],
-      businessType: 'commercial_cleaning',
+      businessType,
       desiredSignals: ['decision_maker', 'service_gap', 'portfolio_growth', 'turnover_support'],
     },
     operatorDirection: 'Maintain verified inventory ahead of governed outbound demand. Do not contact prospects.',
@@ -395,10 +404,10 @@ async function persistDiscoveredCompanies(pool, store, {
         client_id, company, website_url, domain, vertical, location, source,
         enrichment_attempts, last_attempt_at, notes
       )
-      SELECT 10,$1,$2,$3,$4,$5,'max_buffer_replenishment',0,NULL,$6
+      SELECT $7,$1,$2,$3,$4,$5,'max_buffer_replenishment',0,NULL,$6
       WHERE NOT EXISTS (
         SELECT 1 FROM scout_unenriched u
-        WHERE u.client_id=10 AND (
+        WHERE u.client_id=$7 AND (
           lower(u.domain)=lower($3) OR lower(trim(u.company))=lower(trim($1))
         )
         AND NOT (
@@ -416,6 +425,7 @@ async function persistDiscoveredCompanies(pool, store, {
       company.location || admission.provenance?.discoveryCity || null,
       notes,
       ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
+      Number(scoutContext.clientId || scoutContext.client_id || 10),
     ]);
     inserted += result.rowCount;
     if (result.rowCount) counters.admittedToEnrichment += 1;
@@ -428,7 +438,7 @@ async function persistDiscoveredCompanies(pool, store, {
 function mapReuseCompanyRows(rows) {
   return rows.map(row => ({
     id: String(row.id),
-    tenantId: '10',
+    tenantId: String(row.tenant_id || row.client_id || '10'),
     name: row.name,
     website: row.website || (row.domain ? `https://${row.domain}` : null),
     industry: row.vertical || 'short_term_rental',
@@ -438,13 +448,13 @@ function mapReuseCompanyRows(rows) {
   }));
 }
 
-async function loadReuseCompanies(pool) {
+async function loadReuseCompanies(pool, clientId = 10) {
   const { rows } = await pool.query(`
     SELECT c.id,c.name,c.domain,c.website,c.location,p.vertical,p.icp_score,p.updated_at
     FROM companies c
     LEFT JOIN prospects p ON p.company_id=c.id AND p.client_id=c.client_id
-    WHERE c.client_id=10
-  `);
+    WHERE c.client_id=$1
+  `, [Number(clientId)]);
   return mapReuseCompanyRows(rows);
 }
 
@@ -496,7 +506,7 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
     discovery = await require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(
       scoutInput(program, source, plan),
       {
-        loadCompanies: async () => loadReuseCompanies(pool),
+        loadCompanies: async () => loadReuseCompanies(pool, program.tenant_id || store.clientId),
         persistCompanies: async input => {
           persisted = await persistDiscoveredCompanies(pool, store, {
             ...input,
@@ -504,6 +514,7 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
               scope,
               allowedCities,
               serviceAreas: allowedCities,
+              clientId: program.tenant_id || store.clientId,
             },
           });
           return persisted;
@@ -559,21 +570,21 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
 async function runMaxOutboundControlLoop(options = {}) {
   const pool = options.pool || require('../db');
   const logger = options.logger || console;
-  const store = options.store || new GovernedOutboundStore(pool);
+  const store = options.store || new GovernedOutboundStore(pool, options.tenantId || '10');
   const program = options.program || await store.program();
   if (!program || ['paused', 'revoked'].includes(program.mode)) {
     return { halted: 'no_enabled_program' };
   }
 
-  const source = options.source || await loadSource(pool, program);
+  const source = options.source || await loadSource(pool, program, store.tenantId);
   if (!source) return { halted: 'source_mission_missing', programId: program.id };
 
-  const governedAdapters = options.governedAdapters || createGovernedAdapters(pool);
+  const governedAdapters = options.governedAdapters || createGovernedAdapters(pool, { tenantId: store.tenantId });
   const controlNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const infrastructure = options.infrastructure
     || await governedAdapters.infrastructure(program, controlNow, null, { mode: 'planning' });
   const inventoryBefore = options.inventory
-    || await loadCleanInventory(pool, store, source);
+    || await loadCleanInventory(pool, store, source, store.clientId);
   const sentToday = Number(infrastructure?.snapshot?.sentToday || 0);
   const operating = resolveOperatingCapacity({
     operatingCapacity: infrastructure.operating,
@@ -608,7 +619,7 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   const inventoryAfter = options.inventoryAfter
     || (plan.shouldReplenish && options.execute !== false
-      ? await loadCleanInventory(pool, store, source)
+      ? await loadCleanInventory(pool, store, source, store.clientId)
       : inventoryBefore);
 
   const inventoryGrowth = computeCleanInventoryGrowth(inventoryBefore.clean, inventoryAfter.clean);

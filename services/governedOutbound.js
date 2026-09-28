@@ -2,14 +2,15 @@
 
 const { hash, fail, policy, missionScope, clock, windowReason, candidateReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
+const { governedOutboundEnabledForTenant, governedOutboundSendingDisabledForTenant } = require('./governedOutboundTenant');
 
-function service({ pool, adapters, now = () => new Date(), enabled = () => process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED === 'true' }) {
-  const store = new GovernedOutboundStore(pool);
+function service({ pool, adapters, tenantId = '10', now = () => new Date(), enabled = () => governedOutboundEnabledForTenant(tenantId) }) {
+  const store = new GovernedOutboundStore(pool, tenantId);
   async function authorize(input, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
-    const p = policy({ ...input, tenantId: '10' }, now());
+    const p = policy({ ...input, tenantId: String(input.tenantId || tenantId) }, now());
     const source = await adapters.loadMission(p.sourceMissionId);
-    if (!source?.mission?.structuredMission?.immutable || String(source.mission.tenantId) !== '10') fail('approved_source_mission_required');
+    if (!source?.mission?.structuredMission?.immutable || String(source.mission.tenantId) !== p.tenantId) fail('approved_source_mission_required');
     const scopeHash = hash(missionScope(source.mission));
     const reviewHash = hash({ policy: p, scopeHash });
     if (input.reviewHash !== reviewHash) return { reviewRequired: true, reviewHash, policy: p, scopeHash };
@@ -71,7 +72,7 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
   async function initializePreparation(input, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
     const disabled = () => {
-      if (enabled() || process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED !== 'false') fail('preparation_requires_disabled_sending');
+      if (enabled() || !governedOutboundSendingDisabledForTenant(tenantId)) fail('preparation_requires_disabled_sending');
     };
     disabled();
     return store.lock(async () => {
@@ -79,17 +80,17 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
       try {
         await db.query('BEGIN');
         // Serialize with mode changes as well as ordinary preparation/recovery.
-        const program = (await db.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' AND mode<>'revoked' FOR UPDATE")).rows[0];
+        const program = (await db.query('SELECT * FROM acquisition_outbound_programs WHERE tenant_id=$1 AND mode<>\'revoked\' FOR UPDATE', [tenantId])).rows[0];
         if (!program || program.id !== input.programId || program.mode !== 'shadow') fail('preparation_shadow_grant_required');
         if (String(actor.id) !== program.authorized_by) fail('preparation_authorizing_operator_required');
         if (program.policy_hash !== input.policyHash) fail('policy_changed');
         if (program.scope_hash !== input.scopeHash || program.source_mission_id !== input.sourceMissionId
           || program.policy.sourceMissionId !== program.source_mission_id) fail('source_scope_changed');
         const source = await validateProgram(program);
-        if (!source.mission.structuredMission?.immutable || String(source.mission.tenantId) !== '10') fail('approved_source_mission_required');
+        if (!source.mission.structuredMission?.immutable || String(source.mission.tenantId) !== tenantId) fail('approved_source_mission_required');
         const day = clock(now()).day;
         if (input.localDay !== day) fail('preparation_day_changed');
-        const envelope = await store.one("SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id='10' AND (program_id=$1 OR local_day=$2::date) LIMIT 1", [program.id, day]);
+        const envelope = await store.one('SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id=$1 AND (program_id=$2 OR local_day=$3::date) LIMIT 1', [tenantId, program.id, day]);
         if (envelope) fail('preparation_envelope_exists');
         const counts = await store.counts(program, day);
         if (counts.today || counts.total || counts.uncertain) fail('preparation_attempt_exists');
@@ -122,11 +123,11 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
       if (program?.mode !== 'shadow' || program.id !== input.programId || program.authorized_by !== String(actor.id)) fail('replenishment_shadow_grant_required');
       const source = await validateProgram(program);
       const day = clock(now()).day;
-      const sourceRow = await store.one("SELECT * FROM acquisition_missions WHERE tenant_id='10' AND id=$1",[program.source_mission_id]);
+      const sourceRow = await store.one('SELECT * FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [tenantId, program.source_mission_id]);
       const sourceProjection = { ...sourceRow.payload, id:sourceRow.id, tenantId:sourceRow.tenant_id,stage:sourceRow.stage,
         status:sourceRow.status,objective:sourceRow.objective,targetSegment:sourceRow.target_segment };
-      const receipt = await store.one(`SELECT payload FROM acquisition_outbound_events WHERE tenant_id='10'
-        AND program_id=$1 AND event_type='preparation_recovery_reserved' AND payload->>'reviewHash'=$2`, [program.id,input.reviewHash]);
+      const receipt = await store.one(`SELECT payload FROM acquisition_outbound_events WHERE tenant_id=$1
+        AND program_id=$2 AND event_type='preparation_recovery_reserved' AND payload->>'reviewHash'=$3`, [tenantId, program.id, input.reviewHash]);
       const reserved = receipt?.payload;
       const review = reserved?.review;
       const progress = await store.one('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2',[program.id,day]);
@@ -137,7 +138,7 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
         || progress?.mission_id !== reserved.missionId || progress.attempts !== review.nextAttempt
         || progress.attempts > program.policy.preparationAttemptsPerDay
         || (progress.last_error && !['Query read timeout','Connection terminated unexpectedly'].includes(progress.last_error))) fail('reserved_preparation_changed');
-      if (await store.one("SELECT id FROM acquisition_missions WHERE tenant_id='10' AND id=$1",[reserved.missionId])) fail('reserved_mission_already_created');
+      if (await store.one('SELECT id FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [tenantId, reserved.missionId])) fail('reserved_mission_already_created');
       if (await store.envelope(day)) fail('replenishment_envelope_exists');
       const counts = await store.counts(program,day);
       if (counts.today || counts.total || counts.uncertain) fail('replenishment_attempt_exists');
@@ -220,6 +221,7 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
       await store.claim(item, current, clock(now()).day, now());
       claimed = true;
     };
+    const sendFn = adapters.sendFor ? adapters.sendFor(program) : adapters.send;
     const guardedSend = async command => {
       if (!claimed || called) fail('provider_call_budget_exceeded');
       called = true;
@@ -227,14 +229,14 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
       // the preceding live readiness calls were in flight.
       const finalProgram = await store.program();
       const finalItem = (await store.items(envelope.id)).find(x => x.id === item.id);
-      const stop = await store.one("SELECT 1 FROM acquisition_outbound_lifecycle WHERE tenant_id='10' AND suppressed AND (email=$1 OR company_id=$2) LIMIT 1", [item.email, item.company_id]);
+      const stop = await store.one('SELECT 1 FROM acquisition_outbound_lifecycle WHERE tenant_id=$1 AND suppressed AND (email=$2 OR company_id=$3) LIMIT 1', [tenantId, item.email, item.company_id]);
       if (!enabled() || finalProgram?.mode !== 'active' || finalItem?.status !== 'attempted'
         || stop || windowReason(program.policy, now(), true)) {
         await store.finish(item, 'suppressed', 'pre_provider_stop');
         fail('pre_provider_stop');
       }
       try {
-        const result = await adapters.send(command);
+        const result = await sendFn(command);
         const messageId = result?.providerMessageId || result?.messageId;
         // Transport failures include timeouts after acceptance. Never retry them.
         if (!result?.success || !messageId) {
@@ -320,8 +322,13 @@ function service({ pool, adapters, now = () => new Date(), enabled = () => proce
   return { authorize, setMode, tick, reconcile, initializePreparation, replenish, resumeReservedPreparation, status: () => store.status(), store };
 }
 
-function productionService(pool) {
+function productionService(pool, options = {}) {
   const db = pool || require('../db');
-  return service({ pool: db, adapters: require('./governedOutboundAdapters').adapters(db) });
+  const tenantId = String(options.tenantId || '10');
+  return service({
+    pool: db,
+    tenantId,
+    adapters: require('./governedOutboundAdapters').adapters(db, { tenantId }),
+  });
 }
 module.exports = { service, productionService };

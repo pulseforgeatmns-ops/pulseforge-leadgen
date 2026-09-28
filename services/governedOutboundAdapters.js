@@ -11,35 +11,43 @@ const { createOutboundEngine, assessOperatingCapacity } = require('../packages/e
 const { assessTenantMailboxCapacity } = require('../packages/emmett-outbound/TenantMailboxCapacity');
 const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
 const { canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
+const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
+const { buildTenantMailboxInboxSnapshot } = require('./emmettTenantMailboxSnapshot');
+const { createGovernedTenantMailboxSend } = require('../utils/governedOutboundTransport');
 
 
 // Count every known path; duplicate evidence conservatively consumes capacity.
-async function readOutboundHistory(pool, ignoreItem = null) {
+async function readOutboundHistory(pool, tenantId, clientId, ignoreItem = null) {
   const { rows } = await pool.query(`SELECT count(*)::int AS today,max(attempted_at) AS last_attempt FROM (
-      SELECT attempted_at FROM acquisition_mission_outbound_executions WHERE tenant_id='10' AND status IN ('sent','attempted','failed')
+      SELECT attempted_at FROM acquisition_mission_outbound_executions WHERE tenant_id=$3 AND status IN ('sent','attempted','failed')
         AND NOT (status='attempted' AND prospect_id=$1 AND prepared_artifact_revision=$2)
-      UNION ALL SELECT ran_at FROM agent_log WHERE client_id=10 AND agent_name='emmett' AND action='email_sent'
-      UNION ALL SELECT sent_at FROM tenant_outreach_messages WHERE tenant_id='10' AND direction='outbound' AND status='sent'
+      UNION ALL SELECT ran_at FROM agent_log WHERE client_id=$4 AND agent_name='emmett' AND action='email_sent'
+      UNION ALL SELECT sent_at FROM tenant_outreach_messages WHERE tenant_id=$3 AND direction='OUTBOUND' AND status='sent'
       ) evidence WHERE (attempted_at AT TIME ZONE 'America/New_York')::date=(now() AT TIME ZONE 'America/New_York')::date`,
-  [ignoreItem?.candidate_id || '', ignoreItem?.snapshot?.revision || '']);
+  [ignoreItem?.candidate_id || '', ignoreItem?.snapshot?.revision || '', tenantId, clientId]);
   return rows[0];
 }
 
 function adapters(pool, dependencies = {}) {
-  const loadMission = dependencies.loadMission || (id => loadMissionSnapshot(id, '10', pool));
-  const contact = dependencies.contact || (id => loadBestCrmProspectForMissionBoundKey({ pool, clientId: 10, missionBoundKey: id }));
+  const ctx = createGovernedOutboundTenantContext(dependencies.tenantId || '10');
+  const tenantId = ctx.tenantId;
+  const clientId = ctx.clientId;
+  const loadMission = dependencies.loadMission || (id => loadMissionSnapshot(id, tenantId, pool));
+  const contact = dependencies.contact || (id => loadBestCrmProspectForMissionBoundKey({ pool, clientId, missionBoundKey: id }));
   async function tenant(program) {
     if (dependencies.tenant) return dependencies.tenant(program);
-    const { rows } = await pool.query('SELECT * FROM clients WHERE id=10');
+    const { rows } = await pool.query('SELECT * FROM clients WHERE id=$1', [clientId]);
     const client = rows[0];
     if (!client || client.active !== true || client.autosend_enabled !== false) fail('tenant_inactive_or_legacy_autosend_enabled');
-    const sender = await resolveCanonicalSenderIdentity({ tenantId: '10', clientId: 10, client });
+    const sender = await resolveCanonicalSenderIdentity({ tenantId, clientId, client, pool });
     if (!sender.ok || sender.identity.senderEmail.toLowerCase() !== program.policy.senderEmail) fail('sender_changed');
     const { PostgresTenantMailboxStore } = require('./tenantMailbox');
-    const integration = await new PostgresTenantMailboxStore(pool).getIntegration('10', program.policy.inboxIntegrationId);
+    const integration = await new PostgresTenantMailboxStore(pool).getIntegration(tenantId, program.policy.inboxIntegrationId);
     if (!integration || integration.status !== 'active' || integration.mailboxAddress.toLowerCase() !== program.policy.senderEmail) fail('anchor_reply_mailbox_not_ready');
-    const owners = await pool.query('SELECT id FROM users WHERE client_id=10 AND active=true AND id=ANY($1::int[])', [program.policy.aoOwnerIds]);
-    if (!owners.rows.length) fail('ao_owner_unavailable');
+    if (ctx.requiresAoOwners) {
+      const owners = await pool.query('SELECT id FROM users WHERE client_id=$1 AND active=true AND id=ANY($2::int[])', [clientId, program.policy.aoOwnerIds]);
+      if (!owners.rows.length) fail('ao_owner_unavailable');
+    }
     const triggers = await pool.query(`SELECT count(*)::int AS n FROM pg_trigger
       WHERE tgname='acquisition_outbound_observe' AND tgenabled IN ('O','A') AND NOT tgisinternal`);
     if (triggers.rows[0]?.n !== 6) fail('suppression_triggers_missing');
@@ -48,19 +56,31 @@ function adapters(pool, dependencies = {}) {
   async function infrastructure(program, now = new Date(), ignoreItem = null, opts = {}) {
     if (dependencies.infrastructure) return dependencies.infrastructure(program, now, ignoreItem, opts);
     const { client, sender } = await tenant(program);
-    const readiness = await evaluateCanonicalSenderReadiness({ identity: sender, client, pool });
-    if (!readiness.ready) fail(readiness.code || 'sender_not_ready');
-    // The shared snapshot tolerates missing legacy tables. Governed execution
-    // must prove telemetry is readable before consuming that snapshot.
-    await pool.query('SELECT event_type,event_at,sender_identity_status FROM email_events WHERE client_id=10 LIMIT 1');
-    await pool.query('SELECT action,payload,ran_at FROM agent_log WHERE client_id=10 LIMIT 1');
-    const snapshot = await buildInboxSnapshot(10, { pool, now });
-    const history = await readOutboundHistory(pool, ignoreItem);
+    if (ctx.requiresLegacyEmailTelemetry) {
+      const readiness = await evaluateCanonicalSenderReadiness({ identity: sender, client, pool });
+      if (!readiness.ready) fail(readiness.code || 'sender_not_ready');
+    }
+    let snapshot;
+    if (ctx.requiresLegacyEmailTelemetry) {
+      await pool.query('SELECT event_type,event_at,sender_identity_status FROM email_events WHERE client_id=$1 LIMIT 1', [clientId]);
+      await pool.query('SELECT action,payload,ran_at FROM agent_log WHERE client_id=$1 LIMIT 1', [clientId]);
+      snapshot = await buildInboxSnapshot(clientId, { pool, now });
+    } else {
+      snapshot = await buildTenantMailboxInboxSnapshot({
+        tenantId,
+        sendingIdentityId: program.policy.sendingIdentityId,
+        mailboxIntegrationId: program.policy.inboxIntegrationId,
+      }, { pool, now });
+      if (!snapshot?.authentication?.smtp || snapshot.authentication.smtp.state === 'fail') {
+        fail('tenant_mailbox_not_ready');
+      }
+    }
+    const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
     snapshot.sentToday = Math.max(snapshot.sentToday, history.today);
     snapshot.inboxId = sender.senderEmail;
     snapshot.domain = sender.sendingDomain;
     Object.assign(snapshot, sender);
-    const assessed = createOutboundEngine().assess({ tenantId: '10', snapshot, now });
+    const assessed = createOutboundEngine().assess({ tenantId, snapshot, now });
     if (assessed.governor.halt || !['proceed', 'slow'].includes(assessed.governor.outcome)) fail('emmett_governor_halted');
     const programTotals = await pool.query(`SELECT count(*)::int AS total
       FROM acquisition_outbound_items i
@@ -105,18 +125,18 @@ function adapters(pool, dependencies = {}) {
   async function runtimeFor() {
     if (dependencies.runtime) return dependencies.runtime;
     const runtime = getAcquisitionMissionRuntime({ pool, persist: true });
-    await runtime.hydrate('10', { pool, persist: true });
+    await runtime.hydrate(tenantId, { pool, persist: true });
     return runtime;
   }
   async function route(runtime, missionId, program, intent, extra = {}) {
     const engine = runtime.engine();
-    const mission = engine.get(missionId, '10');
+    const mission = engine.get(missionId, tenantId);
     const request = amo.createExecutionRequest({ source: amo.EXECUTION_SOURCES.API, intent,
       missionId, mission, stage: mission.stage, operatorId: program.authorized_by,
       permissions: { canExecute: true, role: 'operator' },
       payload: { question: `Bounded delegation ${program.id}: ${intent}`, maxSends: 1,
         ...(extra.prospectId ? { prospectId: extra.prospectId } : {}) } });
-    const result = await amo.routeExecutionRequest(request, { engine, tenantId: '10',
+    const result = await amo.routeExecutionRequest(request, { engine, tenantId,
       pool: dependencies.persist === false ? undefined : pool, persist: dependencies.persist !== false,
       operatorId: program.authorized_by, allowFixtureFallback: false, ...extra });
     if (result.executionResult?.rolledBack) throw result.executionResult.error || new Error(result.executionResult.rollbackReason);
@@ -145,7 +165,7 @@ function adapters(pool, dependencies = {}) {
           eligible[id] = { eligible: false, reason: 'prior_contact_or_human_owned' }; continue;
         }
         attempts++;
-        const admitted = await admission.admitMissionBoundCandidate(pool, candidate, { missionId: mission.id, clientId: 10, mission });
+        const admitted = await admission.admitMissionBoundCandidate(pool, candidate, { missionId: mission.id, clientId, mission });
         if (admitted?.blocked) {
           eligible[id] = { eligible: false, reason: admitted.reason, detail: admitted.detail || null }; continue;
         }
@@ -174,7 +194,7 @@ function adapters(pool, dependencies = {}) {
     const defaultMissionId = `mission_daily_${hash([program.id, day]).slice(0, 24)}`;
     const { progress } = await store.ensurePreparation(program, day);
     const missionId = progress.mission_id || defaultMissionId;
-    let mission = engine.get(missionId, '10');
+    let mission = engine.get(missionId, tenantId);
     if (mission?.stage === 'ready') return loadMission(missionId);
     if (recovery) {
       if (missionId !== recovery.nextMissionId || progress.attempts !== recovery.review.nextAttempt
@@ -189,15 +209,15 @@ function adapters(pool, dependencies = {}) {
     }
     try {
       if (!mission) {
-        const input = { ...missionScope(source.mission), id: missionId, tenantId: '10', clientId: 10,
-          title: `Anchor daily outbound ${day}`, createdBy: 'max', orchestrationMissionId: source.mission.id };
+        const input = { ...missionScope(source.mission), id: missionId, tenantId, clientId,
+          title: `Governed daily outbound ${day}`, createdBy: 'max', orchestrationMissionId: source.mission.id };
         await runtime.create(input, { pool, persist: true });
       }
       const infra = await infrastructure(program);
       for (let steps = 0; steps < 8; steps++) {
-        mission = engine.get(missionId, '10');
+        mission = engine.get(missionId, tenantId);
         if (mission.stage === 'ready') return loadMission(missionId);
-        const snapshot = engine.inspect(missionId, { tenantId: '10' });
+        const snapshot = engine.inspect(missionId, { tenantId });
         const ctx = amo.specialistContext(snapshot.contributions || [], { missionId });
         let intent;
         if (mission.stage === 'discover') intent = amo.intentFromPendingDecision(mission.pendingOperatorDecision);
@@ -221,7 +241,7 @@ function adapters(pool, dependencies = {}) {
     }
   }
   async function prepared(snapshot, program) {
-    if (!snapshot?.mission || String(snapshot.mission.tenantId) !== '10'
+    if (!snapshot?.mission || String(snapshot.mission.tenantId) !== tenantId
       || snapshot.mission.planCancelled || !['ready', 'execute'].includes(snapshot.mission.stage)) fail('mission_not_executable');
     if (hash(missionScope(snapshot.mission)) !== program.scope_hash) fail('daily_mission_scope_changed');
     const contributions = snapshot.contributions;
@@ -244,20 +264,30 @@ function adapters(pool, dependencies = {}) {
   }
   async function liveGate(program, item, _prepared, now) {
     const { rows } = await pool.query(`SELECT 1 FROM acquisition_outbound_inbox_health
-      WHERE tenant_id='10' AND integration_id=$1 AND last_success_at>now()-interval '5 minutes'`, [program.policy.inboxIntegrationId]);
+      WHERE tenant_id=$1 AND integration_id=$2 AND last_success_at>now()-interval '5 minutes'`, [tenantId, program.policy.inboxIntegrationId]);
     if (!rows.length) fail('reply_poll_stale');
     const infra = await infrastructure(program, now, item, { mode: 'dispatch' });
     if (infra.lastAttempt && +now - +new Date(infra.lastAttempt) < program.policy.spacingMinutes * 60000) {
       fail('cross_path_spacing');
     }
-    if (await require('../dbClient').checkDNC(item.prospect_id, { clientId: 10, pool })) fail('dnc');
+    if (await require('../dbClient').checkDNC(item.prospect_id, { clientId, pool })) fail('dnc');
+  }
+  function sendFor(program) {
+    if (ctx.usesBrevoTransport) {
+      const brevoSend = command => require('../packages/providers/brevo/sendEmail').sendEmail(command);
+      brevoSend.beforeAttempt = null;
+      return brevoSend;
+    }
+    return createGovernedTenantMailboxSend({ ...program, tenant_id: tenantId, pool });
   }
   return {
-    loadMission, contact, infrastructure, prepare, prepared, liveGate, validateTenant: tenant,
+    tenantId,
+    clientId,
+    loadMission, contact, infrastructure, prepare, prepared, liveGate, validateTenant: tenant, sendFor,
     complete: async envelope => {
       const runtime = await runtimeFor();
       const engine = runtime.engine();
-      const mission = engine.get(envelope.mission_id, '10');
+      const mission = engine.get(envelope.mission_id, tenantId);
       if (!mission || !mission.executionSummary || mission.executionSummary.complete) return;
       mission.executionSummary.complete = true;
       engine.store.putMission(mission);
@@ -271,9 +301,10 @@ function adapters(pool, dependencies = {}) {
     },
     execute: async (envelope, item, program, sendEmail) => {
       const runtime = await runtimeFor();
+      const transport = sendEmail || sendFor(program);
       return route(runtime, envelope.mission_id, program, amo.EXECUTION_INTENTS.EXECUTE_OUTBOUND,
         { governedEnvelopeId: envelope.id, maxSends: 1, prospectId: item.candidate_id,
-          sendEmail, requireProviderReadiness: true });
+          sendEmail: transport, requireProviderReadiness: ctx.requiresLegacyEmailTelemetry });
     },
   };
 }
