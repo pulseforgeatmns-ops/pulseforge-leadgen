@@ -37,6 +37,9 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   const migration = fs.readFileSync(path.join(__dirname, '../migrations/2026-09-18-anchor-daily-outbound.sql'), 'utf8');
   await pool.query(migration);
   await pool.query(migration); // deploy/replay safe
+  const tenantMigration = fs.readFileSync(path.join(__dirname, '../migrations/2026-09-28-governed-outbound-tenants.sql'), 'utf8');
+  await pool.query(tenantMigration);
+  await pool.query(tenantMigration); // replay must preserve both supported tenants
   const source = { id: 'source', tenantId: '10', objective: 'Anchor approved scope', structuredMission: { immutable: true }, stage: 'execute' };
   let clock = new Date('2026-09-18T14:00:00Z');
   let prepared;
@@ -94,6 +97,43 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   async function ageAttempts() {
     await pool.query("UPDATE acquisition_outbound_items SET attempted_at=attempted_at-interval '61 minutes' WHERE attempted_at IS NOT NULL");
   }
+  await t.test('tenant 13 grants and database reply/provider suppression are durable and tenant scoped', async () => {
+    await reset(); await svc.tick();
+    const anchorItem = (await svc.store.items((await svc.store.envelope('2026-09-18')).id))[0];
+    const source13 = { ...source, id: 'source13', tenantId: '13', stage: 'ready' };
+    await pool.query("INSERT INTO acquisition_missions(id,tenant_id) VALUES('source13','13') ON CONFLICT DO NOTHING");
+    const svc13 = service({ pool, tenantId: '13', now: () => clock, adapters: { loadMission: async () => ({ mission: source13 }) } });
+    const input = { tenantId: '13', sourceMissionId: 'source13', senderEmail: 'sender@babrun.example',
+      inboxIntegrationId: 'mailbox13', sendingIdentityId: 'identity13', dailyCap: 1, totalCap: 1,
+      spacingMinutes: 240, startHour: 9, endHour: 16, expiresAt: '2026-10-01T00:00:00Z' };
+    const review = await svc13.authorize(input, actor);
+    const p13 = await svc13.authorize({ ...review.policy, reviewHash: review.reviewHash }, actor);
+    assert.equal(p13.tenant_id, '13');
+    const company = (await pool.query("INSERT INTO companies(client_id,name) VALUES(13,'Founder company') RETURNING id")).rows[0].id;
+    const prospect = (await pool.query('INSERT INTO prospects(company_id,client_id,email) VALUES($1,13,$2) RETURNING *', [company, anchorItem.email])).rows[0];
+    const env = await svc13.store.freeze(p13, '2026-09-18', 'source13', 'r13', [{
+      candidateId: company, companyId: company, prospectId: prospect.id, email: prospect.email,
+      message: { subject: 'Founder question', body: 'Would you be open to a conversation?' }, sender: {}, revision: 'r13',
+    }]);
+    await pool.query("INSERT INTO tenant_outreach_scheduled_sends VALUES('s13','13',$1,$2,'SCHEDULED',null,null),('s10','10',$1,$2,'SCHEDULED',null,null)", [prospect.id, prospect.email]);
+    // A mismatched touchpoint cannot borrow another tenant's prospect identity.
+    await pool.query("INSERT INTO touchpoints(prospect_id,client_id,action_type) VALUES($1,11,'reply')", [prospect.id]);
+    assert.equal((await svc13.store.items(env.id))[0].status, 'pending');
+    // Inbound ingestion stops execution immediately, before semantic classification.
+    await pool.query("INSERT INTO tenant_outreach_messages(id,tenant_id,direction,sender) VALUES('reply13','13','inbound',$1)", [{ email: prospect.email }]);
+    assert.equal((await svc13.store.items(env.id))[0].status, 'suppressed');
+    assert.equal((await svc.store.items(anchorItem.envelope_id))[0].status, 'pending');
+    assert.deepEqual((await pool.query('SELECT id,status FROM tenant_outreach_scheduled_sends ORDER BY id')).rows,
+      [{ id: 's10', status: 'SCHEDULED' }, { id: 's13', status: 'CANCELLED' }]);
+    const lifecycle = (await pool.query("SELECT * FROM acquisition_outbound_lifecycle WHERE tenant_id='13'")).rows[0];
+    assert.equal(lifecycle.company_id, company);
+    await pool.query("INSERT INTO acquisition_mission_outbound_executions(id,tenant_id,prospect_id,payload) VALUES('e13','13',$1,$2)", [prospect.id, { email: prospect.email }]);
+    await pool.query("INSERT INTO acquisition_mission_provider_events VALUES('p13','13',$1,'hard_bounce','e13')", [prospect.id]);
+    assert.equal((await pool.query("SELECT state FROM acquisition_outbound_lifecycle WHERE tenant_id='13'")).rows[0].state, 'dnc');
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM acquisition_outbound_learning_facts WHERE tenant_id='13' AND event_type='hard_bounce'")).rows[0].n, 2);
+    await assert.rejects(pool.query("INSERT INTO acquisition_outbound_programs(id,tenant_id,source_mission_id,policy,policy_hash,scope_hash,authorized_by) VALUES('unsupported','11','source','{}','p','s','test')"), { code: '23514' });
+    assert.equal(calls, 0);
+  });
   await t.test('shadow freezes exactly five, creates no execution approval and never invokes transport', async () => {
     await reset(); const result = await svc.tick();
     assert.equal(result.planned, 5); assert.equal(result.sent, 0); assert.equal(calls, 0);
