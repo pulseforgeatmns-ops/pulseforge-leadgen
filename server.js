@@ -42,6 +42,7 @@ const { ensureMiraSchema } = require('./utils/miraSchema');
 const { ensureLifecycleSchema } = require('./utils/lifecycleSchema');
 const { ensureAoFieldSchema } = require('./utils/aoFieldSchema');
 const { ensureAoProspectRoutingSchema } = require('./utils/aoProspectRoutingSchema');
+const { ensureAoCrmSchema } = require('./utils/aoCrmSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
@@ -62,6 +63,7 @@ ensureClientArchitecture()
   .then(enforceMiraClientState)
   .then(() => ensureAoFieldSchema())
   .then(() => ensureAoProspectRoutingSchema())
+  .then(() => ensureAoCrmSchema())
   .catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));

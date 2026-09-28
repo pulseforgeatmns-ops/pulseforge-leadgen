@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#10203c">
+<title>AO Accounts — PulseForge</title>
+<link rel="icon" href="/favicon.ico">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--pf-bg);
+  color: var(--pf-text);
+  font-family: var(--pf-font-body);
+  min-height: 100vh;
+  padding-bottom: 72px;
+}
+.hdr {
+  background: var(--pf-nav-bg);
+  color: var(--pf-nav-text);
+  padding: 14px 16px;
+  border-bottom: 2px solid var(--pf-gold);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.hdr h1 {
+  font-family: var(--pf-font-display);
+  letter-spacing: 2px;
+  font-size: 1.5rem;
+}
+.hdr-sub {
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--pf-nav-muted);
+  margin-top: 4px;
+}
+.hdr-nav { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.hdr-nav a {
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--pf-nav-muted);
+  text-decoration: none;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.tabs {
+  display: flex;
+  overflow-x: auto;
+  gap: 4px;
+  padding: 8px 12px;
+  background: var(--pf-bg-raised);
+  border-bottom: 1px solid var(--pf-border);
+}
+.tab {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 8px 10px;
+  color: var(--pf-text-muted);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.tab.active { color: var(--pf-navy); border-bottom-color: var(--pf-gold); font-weight: 600; }
+.panel { display: none; padding: 12px 16px; }
+.panel.active { display: block; }
+.row {
+  border: 1px solid var(--pf-border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: var(--pf-surface);
+}
+.row-name { font-weight: 600; font-size: 0.95rem; }
+.row-meta {
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  color: var(--pf-text-muted);
+  margin-top: 4px;
+  line-height: 1.45;
+}
+.row-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.btn {
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  border: 1px solid var(--pf-border);
+  background: var(--pf-bg);
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.btn.primary { background: var(--pf-navy); color: #fff; border-color: var(--pf-navy); }
+.empty {
+  border: 1px dashed var(--pf-border);
+  border-radius: 8px;
+  padding: 16px;
+  color: var(--pf-text-muted);
+  font-size: 0.85rem;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 20;
+  padding: 12px;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--pf-surface);
+  width: 100%;
+  max-width: 720px;
+  max-height: 90vh;
+  overflow: auto;
+  border-radius: 12px 12px 0 0;
+  padding: 16px;
+}
+.field { margin-bottom: 12px; }
+.field label {
+  display: block;
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--pf-text-muted);
+  margin-bottom: 4px;
+}
+.field select, .field input, .field textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--pf-border);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  background: var(--pf-bg);
+  color: var(--pf-text);
+}
+.field textarea { min-height: 72px; resize: vertical; }
+.detail-block { margin-bottom: 16px; }
+.detail-block h3 {
+  font-family: var(--pf-font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--pf-text-muted);
+  margin-bottom: 8px;
+}
+.hist-item {
+  border-left: 2px solid var(--pf-border);
+  padding: 8px 0 8px 10px;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+}
+</style>
+</head>
+<body>
+<header class="hdr">
+  <h1>My Accounts</h1>
+  <div class="hdr-sub">Durable AO CRM — queue is derived from account state</div>
+  <nav class="hdr-nav">
+    <a href="/ao/command-center">Command Center</a>
+    <a href="/ao/field">Field Mode</a>
+    <a href="/logout">Logout</a>
+  </nav>
+</header>
+
+<div class="tabs" id="tabs"></div>
+<div id="panels"></div>
+
+<div class="modal-backdrop" id="modal-backdrop">
+  <div class="modal" id="modal"></div>
+</div>
+
+<script>
+const SECTION_KEYS = [
+  ['today_queue', 'Today\'s Queue'],
+  ['my_accounts', 'My Accounts'],
+  ['overdue', 'Overdue'],
+  ['needs_help', 'Needs Help'],
+  ['warm_active', 'Warm / Active'],
+  ['recently_updated', 'Recently Updated'],
+];
+
+let state = { data: null, activeTab: 'today_queue', outcomes: [], nextActions: [] };
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  return body;
+}
+
+function fmtDate(v) {
+  if (!v) return '—';
+  return new Date(v).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function renderTabs() {
+  const tabs = document.getElementById('tabs');
+  tabs.innerHTML = SECTION_KEYS.map(([key, label]) => {
+    const count = state.data?.sections?.[key]?.length ?? 0;
+    return `<button class="tab ${state.activeTab === key ? 'active' : ''}" data-tab="${key}">${label} (${count})</button>`;
+  }).join('');
+}
+
+function renderRow(item) {
+  return `
+    <div class="row" data-prospect="${item.prospect_id}">
+      <div class="row-name">${item.company_name}</div>
+      <div class="row-meta">
+        ${item.current_status?.replace(/_/g, ' ') || '—'}
+        · ${item.priority || 'normal'}
+        ${item.help_requested ? ' · <strong>Help</strong>' : ''}
+      </div>
+      ${item.recommended_angle ? `<div class="row-meta">${item.recommended_angle}</div>` : ''}
+      <div class="row-meta">
+        Last touch: ${fmtDate(item.last_touch_at)}
+        · Next: ${item.next_action || '—'} ${item.next_action_date ? `(due ${item.next_action_date})` : ''}
+      </div>
+      ${item.latest_note_preview ? `<div class="row-meta">"${item.latest_note_preview.slice(0, 120)}"</div>` : ''}
+      <div class="row-actions">
+        <button class="btn" data-action="detail" data-prospect="${item.prospect_id}">Open</button>
+        <button class="btn primary" data-action="outcome" data-prospect="${item.prospect_id}" data-task="${item.open_task_id || ''}">Log outcome</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderPanels() {
+  const panels = document.getElementById('panels');
+  panels.innerHTML = SECTION_KEYS.map(([key]) => {
+    const items = state.data?.sections?.[key] || [];
+    return `
+      <div class="panel ${state.activeTab === key ? 'active' : ''}" id="panel-${key}">
+        ${items.length ? items.map(renderRow).join('') : '<div class="empty">Nothing in this section right now.</div>'}
+      </div>
+    `;
+  }).join('');
+}
+
+function closeModal() {
+  document.getElementById('modal-backdrop').classList.remove('open');
+  document.getElementById('modal').innerHTML = '';
+}
+
+function openOutcomeModal(prospectId, taskId) {
+  const outcomes = state.outcomes.length ? state.outcomes : [];
+  const nextActions = state.nextActions.length ? state.nextActions : [
+    'call','follow_up','visit','email','ask_jake','book_walkthrough','send_information','check_back_later','disqualify','no_action'
+  ];
+  document.getElementById('modal').innerHTML = `
+    <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;margin-bottom:12px;">What happened?</h2>
+    <p style="font-size:0.85rem;color:var(--pf-text-muted);margin-bottom:12px;">Completing an action updates the account, writes history, and removes it from today's queue — the account stays in My Accounts.</p>
+    <div class="field"><label>Outcome *</label>
+      <select id="outcome">${outcomes.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Notes *</label><textarea id="notes" placeholder="What happened on the call or visit?"></textarea></div>
+    <div class="field"><label>Next action *</label>
+      <select id="next-action">${nextActions.map(a => `<option value="${a}">${a.replace(/_/g, ' ')}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Next action date *</label><input id="next-date" type="date"></div>
+    <div class="field"><label>Help needed?</label>
+      <select id="help-needed"><option value="false">No</option><option value="true">Yes — ask Jake</option></select>
+    </div>
+    <div class="field"><label>Help reason (if yes)</label><input id="help-reason" placeholder="Optional"></div>
+    <div class="field"><label>Contact name (optional)</label><input id="contact-name"></div>
+    <div class="field"><label>Contact role (optional)</label><input id="contact-role"></div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button class="btn primary" id="save-outcome">Save &amp; update account</button>
+      <button class="btn" id="cancel-outcome">Cancel</button>
+    </div>
+  `;
+  document.getElementById('modal-backdrop').classList.add('open');
+  document.getElementById('cancel-outcome').onclick = closeModal;
+  document.getElementById('save-outcome').onclick = async () => {
+    try {
+      await api(`/ao/api/crm/accounts/${prospectId}/outcome`, {
+        method: 'POST',
+        body: JSON.stringify({
+          outcome: document.getElementById('outcome').value,
+          notes: document.getElementById('notes').value,
+          next_action: document.getElementById('next-action').value,
+          next_action_date: document.getElementById('next-date').value,
+          help_needed: document.getElementById('help-needed').value === 'true',
+          help_reason: document.getElementById('help-reason').value || undefined,
+          task_id: taskId || undefined,
+          contact_name: document.getElementById('contact-name').value || undefined,
+          contact_role: document.getElementById('contact-role').value || undefined,
+        }),
+      });
+      closeModal();
+      await loadDashboard();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
+async function showDetail(prospectId) {
+  const detail = await api(`/ao/api/crm/accounts/${prospectId}`);
+  const s = detail.summary;
+  const sales = detail.sales_state;
+  document.getElementById('modal').innerHTML = `
+    <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;">${s.company_name}</h2>
+    <div class="detail-block"><h3>Account summary</h3>
+      <div class="row-meta">${s.website || ''} ${s.address ? '· ' + s.address : ''}</div>
+      <div class="row-meta">${s.icp_category || ''} · ${s.ao_owner || 'Unassigned'}</div>
+      <div class="row-meta">${s.recommended_angle || ''}</div>
+      <div class="row-meta">${s.why_account_matters || ''}</div>
+    </div>
+    <div class="detail-block"><h3>Sales state</h3>
+      <div class="row-meta">Status: ${sales.current_status} · Stage: ${sales.opportunity_stage || '—'}</div>
+      <div class="row-meta">Next: ${sales.next_action || '—'} ${sales.next_action_date ? '(due ' + sales.next_action_date + ')' : ''}</div>
+      <div class="row-meta">Last: ${sales.last_outcome || '—'} · ${fmtDate(sales.last_touch_at)}</div>
+    </div>
+    <div class="detail-block"><h3>History</h3>
+      ${detail.history.length ? detail.history.map(h => `
+        <div class="hist-item">
+          <div><strong>${h.activity_type || h.kind}</strong> · ${fmtDate(h.created_at)}</div>
+          ${h.notes ? `<div>${h.notes}</div>` : ''}
+        </div>
+      `).join('') : '<div class="empty">No activity yet.</div>'}
+    </div>
+    <button class="btn primary" data-action="outcome" data-prospect="${prospectId}">Log outcome</button>
+    <button class="btn" id="detail-close" style="margin-left:8px;">Close</button>
+  `;
+  document.getElementById('modal-backdrop').classList.add('open');
+  document.getElementById('detail-close').onclick = closeModal;
+}
+
+async function loadDashboard() {
+  state.data = await api('/ao/api/crm/dashboard');
+  state.outcomes = state.data.outcomes || [];
+  renderTabs();
+  renderPanels();
+}
+
+document.getElementById('tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-tab]');
+  if (!tab) return;
+  state.activeTab = tab.dataset.tab;
+  renderTabs();
+  renderPanels();
+});
+
+document.body.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  if (btn.dataset.action === 'detail') {
+    try { await showDetail(btn.dataset.prospect); } catch (err) { alert(err.message); }
+  }
+  if (btn.dataset.action === 'outcome') {
+    openOutcomeModal(btn.dataset.prospect, btn.dataset.task);
+  }
+});
+
+document.getElementById('modal-backdrop').addEventListener('click', (e) => {
+  if (e.target.id === 'modal-backdrop') closeModal();
+});
+
+loadDashboard().catch(err => {
+  document.getElementById('panels').innerHTML = `<div class="empty">${err.message}</div>`;
+});
+</script>
+</body>
+</html>
