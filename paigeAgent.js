@@ -1607,6 +1607,21 @@ function extractMessageText(message, operation) {
   throw new Error(`${operation} returned no text (stop_reason=${stopReason})`);
 }
 
+function extractPaigeWriterResponseText(message) {
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const text = blocks
+    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('\n')
+    .trim();
+
+  if (!text) {
+    throw new Error('paige_writer_returned_no_text_block');
+  }
+
+  return text;
+}
+
 function bodyCopyForValidation(text, channel) {
   const value = String(text || '');
   if (channel !== 'blog') return value;
@@ -1814,7 +1829,7 @@ async function createLinkedInDraft(prompt, systemPrompt) {
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }],
   });
-  return extractMessageText(message, 'Paige LinkedIn generation');
+  return extractPaigeWriterResponseText(message);
 }
 
 async function logLinkedInSkip(company, channel, brand, format, reason) {
@@ -2097,7 +2112,7 @@ async function createDraft(prompt, systemPrompt, channel) {
     messages: [{ role: 'user', content: prompt }]
   });
 
-  return extractMessageText(message, 'Paige content generation');
+  return extractPaigeWriterResponseText(message);
 }
 
 function parseScoreJson(text) {
@@ -3058,6 +3073,7 @@ module.exports = {
     resolvePaigeWriterModel,
     resolvePaigeEvaluatorModel,
     extractMessageText,
+    extractPaigeWriterResponseText,
     PAIGE_WRITER_MODEL,
     PAIGE_EVALUATOR_MODEL,
   },
