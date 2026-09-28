@@ -140,7 +140,10 @@ function resolveMarketScopeFromObjective(objective) {
   const fromMatch = text.match(/\bfrom\s+(?:a|an|one\s+)?(.+?)(?:\.|$)/i);
   if (fromMatch) {
     const segment = fromMatch[1].trim();
-    if (segment.length <= 80) {
+    // References to an ICP or learning are not literal customer segments.
+    // Let the caller's approved target segment fill this unresolved field.
+    const referencesContext = /\b(?:target\s+icp|ideal\s+customer\s+profile|learning\s+from|(?:that|this|the)\s+(?:real\s+)?engagement)\b/i.test(segment);
+    if (segment.length <= 80 && !referencesContext) {
       const label = titleCaseSegment(segment);
       const key = segmentToSearchKey(label);
       return {
