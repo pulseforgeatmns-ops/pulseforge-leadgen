@@ -108,6 +108,23 @@ describe('SPEC-215 — transactional prepared-outreach revision', () => {
     assert.equal(findValidExecutionApproval(after.contributions, mission.id), null);
   });
 
+  it('builds the replacement Emmett queue from staged Paige copy, never its predecessor', async () => {
+    const { engine, mission } = await preparedRuntime();
+    const before = engine.inspect(mission.id, { tenantId: '10' });
+    const old = amo.findPaigeVariants(before.contributions, mission);
+    const payload = require('../ContributionSupersession').unwrapSpecialistPayload(old);
+    const variants = payload.variants.map(v => ({ ...v, subject: 'Updated approved question' }));
+    const result = await routeExecutionRequest(revisionRequest(mission), {
+      engine, tenantId: '10', allowFixtureFallback: true,
+      runPaige: async () => ({ ...payload, variants, subjects: variants.map(v => v.subject) }),
+    });
+    const after = result.snapshot;
+    const capacity = amo.findEmmettCapacity(after.contributions, after.mission);
+    const queue = require('../ContributionSupersession').unwrapSpecialistPayload(capacity).queue.items;
+    assert.ok(queue.length);
+    for (const item of queue) assert.equal(item.paige.subject, 'Updated approved question');
+  });
+
   it('rolls back both replacements when Emmett fails and stays retryable', async () => {
     const { engine, mission } = await preparedRuntime();
     const before = engine.inspect(mission.id, { tenantId: '10' });

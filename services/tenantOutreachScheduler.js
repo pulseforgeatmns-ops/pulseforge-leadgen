@@ -161,6 +161,7 @@ function buildAuthorizationSnapshot(input = {}) {
     missionId: input.missionId || null,
     threadId: input.threadId || null,
     authorizedAt: input.authorizedAt || nowIso(input),
+    ...(input.governed ? { governed: input.governed } : {}),
   };
 }
 
@@ -605,6 +606,12 @@ async function authorizeScheduledOutreachSend(input = {}, opts = {}) {
   const identity = await mailboxStore.getIdentity(tenantId, input.sendingIdentityId);
   if (!identity) throw schedulerError('sending_identity_tenant_mismatch', 'Sending identity does not belong to this tenant.');
 
+  const idempotencyKey = buildIdempotencyKey(input);
+  const existing = await store.findByIdempotencyKey(tenantId, idempotencyKey);
+  if (existing) {
+    return { schedule: existing, duplicate: true, created: false };
+  }
+
   const capacityGate = resolveCapacityGate(opts);
   const capacityAuth = await capacityGate.authorize({
     tenantId,
@@ -612,11 +619,6 @@ async function authorizeScheduledOutreachSend(input = {}, opts = {}) {
     scheduledFor: input.scheduledFor,
   }, opts);
 
-  const idempotencyKey = buildIdempotencyKey(input);
-  const existing = await store.findByIdempotencyKey(tenantId, idempotencyKey);
-  if (existing) {
-    return { schedule: existing, duplicate: true, created: false };
-  }
 
   const authorizedAt = input.authorizedAt || nowIso(opts);
   const snapshot = buildAuthorizationSnapshot({ ...input, authorizedAt });
@@ -824,6 +826,13 @@ async function evaluateSendEligibility(schedule, opts = {}) {
     }
   }
 
+  if (schedule.authorizationSource === 'governed_outbound' || schedule.authorizationSnapshot?.governed) {
+    try {
+      await require('./governedTenantSchedule').validateGovernedSchedule(schedule, { ...opts, now });
+    } catch (error) {
+      return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: error.code || 'governed_validation_failed' };
+    }
+  }
   const capacityGate = resolveCapacityGate(opts);
   const capacityCheck = await capacityGate.validateExecution(schedule, { ...opts, now });
   if (!capacityCheck.eligible) {
@@ -864,7 +873,7 @@ async function finalizeSent(scheduleStore, schedule, messageId, threadId, opts =
   });
 }
 
-async function executeScheduledSend(schedule, opts = {}) {
+async function executeScheduledSendImpl(schedule, opts = {}) {
   if (!schedule) throw schedulerError('schedule_required', 'schedule is required.');
   const scheduleStore = opts.scheduleStore;
   const mailboxStore = opts.mailboxStore;
@@ -896,10 +905,11 @@ async function executeScheduledSend(schedule, opts = {}) {
   }
 
   const capacityGate = resolveCapacityGate(opts);
-  await capacityGate.markExecuting(schedule, opts).catch(() => {});
+  await capacityGate.markExecuting(schedule, opts);
 
   const snapshot = schedule.authorizationSnapshot || {};
   try {
+    if (snapshot.governed) await require('./governedTenantSchedule').validateGovernedSchedule(schedule, { ...opts, now: new Date() });
     const sendResult = await sendTenantEmail({
       tenantId: schedule.tenantId,
       sendingIdentityId: schedule.sendingIdentityId,
@@ -915,6 +925,7 @@ async function executeScheduledSend(schedule, opts = {}) {
         idempotencyKey: schedule.idempotencyKey,
         scheduleId: schedule.id,
         outreachAssetVersion: schedule.outreachAssetVersion,
+        ...(schedule.authorizationSnapshot?.governed ? { governedProgramId: schedule.authorizationSnapshot.governed.programId } : {}),
       },
     }, {
       store: mailboxStore,
@@ -968,6 +979,38 @@ async function executeScheduledSend(schedule, opts = {}) {
       scheduleId: schedule.id,
     }, opts).catch(() => {});
     return { schedule: updated, result: 'failed', error: err };
+  }
+}
+
+async function executeScheduledSend(schedule, opts = {}) {
+  const result = await executeScheduledSendImpl(schedule, opts);
+  if (schedule.authorizationSnapshot?.governed && ['sent', 'recovered_sent', 'skipped', 'failed'].includes(result.result)) {
+    await require('./governedTenantSchedule').finishGovernedSchedule(result.schedule, result, opts);
+  }
+  return result;
+}
+
+// Uses the same durable scheduler and executor lock as recurring invocation.
+// A crash leaves a governed schedule that must pass identical durable checks.
+async function authorizeAndExecuteScheduledSend(input, opts = {}) {
+  const pool = opts.pool || defaultPool;
+  const db = await pool.connect();
+  let locked = false;
+  try {
+    locked = (await db.query('SELECT pg_try_advisory_lock($1,$2) AS locked', [EXECUTOR_LOCK_NAMESPACE, 0])).rows[0]?.locked;
+    if (!locked) throw schedulerError('scheduler_overlap');
+    const scheduleStore = new PostgresScheduleStore(pool);
+    const mailboxStore = new PostgresTenantMailboxStore(pool);
+    if (input.governed) await require('./governedTenantSchedule').validateGovernedSchedule({ ...input, authorizationSnapshot: buildAuthorizationSnapshot(input) }, { ...opts, now: new Date() });
+    const auth = await authorizeScheduledOutreachSend(input, { ...opts, scheduleStore, mailboxStore });
+    if (auth.schedule.status !== SCHEDULE_STATUS.SCHEDULED) throw schedulerError('schedule_not_pending');
+    const schedule = await scheduleStore.updateSchedule(auth.schedule.tenantId, auth.schedule.id, {
+      status: SCHEDULE_STATUS.EXECUTING, claimToken: prefixedId('claim'), claimedAt: new Date().toISOString(),
+    });
+    return await executeScheduledSend(schedule, { ...opts, scheduleStore, mailboxStore, now: new Date() });
+  } finally {
+    if (locked) await db.query('SELECT pg_advisory_unlock($1,$2)', [EXECUTOR_LOCK_NAMESPACE, 0]);
+    db.release();
   }
 }
 
@@ -1065,6 +1108,7 @@ module.exports = {
   evaluateSendEligibility,
   executeScheduledSend,
   executeDueScheduledSends,
+  authorizeAndExecuteScheduledSend,
   listScheduledOutreachSends,
   getScheduledOutreachSend,
   buildIdempotencyKey,

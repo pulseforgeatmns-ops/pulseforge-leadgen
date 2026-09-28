@@ -152,10 +152,10 @@ class GovernedOutboundStore {
     try {
       await db.query('BEGIN');
       const expired = await db.query(`UPDATE acquisition_outbound_items i SET status='expired',reason='day_expired'
-        FROM acquisition_outbound_envelopes e WHERE i.envelope_id=e.id AND e.local_day<$1::date AND i.status='pending' RETURNING i.*`, [day]);
-      await db.query("UPDATE acquisition_outbound_envelopes SET status='expired' WHERE local_day<$1::date AND status IN ('frozen','authorized')", [day]);
+        FROM acquisition_outbound_envelopes e WHERE i.envelope_id=e.id AND e.local_day<$1::date AND i.tenant_id=$2 AND i.status='pending' RETURNING i.*`, [day, this.tenantId]);
+      await db.query("UPDATE acquisition_outbound_envelopes SET status='expired' WHERE local_day<$1::date AND tenant_id=$2 AND status IN ('frozen','authorized')", [day, this.tenantId]);
       // An abandoned attempt is never returned to pending after a worker crash.
-      const abandoned = await db.query("UPDATE acquisition_outbound_items SET status='uncertain',reason='abandoned_attempt' WHERE status='attempted' AND attempted_at<now()-interval '5 minutes' RETURNING *");
+      const abandoned = await db.query("UPDATE acquisition_outbound_items SET status='uncertain',reason='abandoned_attempt' WHERE tenant_id=$1 AND status='attempted' AND attempted_at<now()-interval '5 minutes' RETURNING *", [this.tenantId]);
       for (const item of [...expired.rows, ...abandoned.rows]) {
         await this.event(`send_${item.status}`, item.id, { itemId: item.id, envelopeId: item.envelope_id, reason: item.reason }, db);
       }
@@ -200,12 +200,12 @@ class GovernedOutboundStore {
       || [row.email, row.domain, row.website, ...(row.emails || [])].some(value => domains.has(ownershipDomain(value))))
       ? 'ao_owned_alias' : null;
   }
-  async suppression(item, ignoreMissionId = '') {
+  async suppression(item, ignoreMissionId = '', ignoreItemId = '') {
     const hit = await this.one(`SELECT state FROM acquisition_outbound_lifecycle WHERE tenant_id=$3 AND suppressed=true
       AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId), this.tenantId]);
     if (hit) return hit.state;
     const prior = await this.one(`SELECT id FROM acquisition_outbound_items WHERE tenant_id=$3
-      AND attempted_at IS NOT NULL AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId), this.tenantId]);
+      AND attempted_at IS NOT NULL AND id<>$4 AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId), this.tenantId, ignoreItemId]);
     if (prior) return 'already_attempted';
     const canonical = await this.one(`SELECT id FROM acquisition_mission_outbound_executions WHERE tenant_id=$4
       AND status IN ('sent','attempted','failed') AND mission_id<>$3

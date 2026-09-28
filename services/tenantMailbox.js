@@ -922,9 +922,9 @@ class PostgresTenantMailboxStore {
 
   async findSuppression(tenantId, email) {
     await this.ensureSchema();
-    if (tenantKey(tenantId) === '10' && await require('./governedOutboundReplies').installed(this.pool)) {
+    if (require('./governedOutboundTenant').ALLOWED_GOVERNED_OUTBOUND_TENANTS.includes(tenantKey(tenantId)) && await require('./governedOutboundReplies').installed(this.pool)) {
       const governed = await this.pool.query(`SELECT state AS reason FROM acquisition_outbound_lifecycle
-        WHERE tenant_id='10' AND email=$1 AND suppressed LIMIT 1`, [lower(email)]);
+        WHERE tenant_id=$2 AND email=$1 AND suppressed LIMIT 1`, [lower(email), tenantKey(tenantId)]);
       if (governed.rows[0]) return governed.rows[0];
     }
     const res = await this.pool.query(
@@ -1285,6 +1285,15 @@ async function assertNotSuppressed(store, tenantId, recipients) {
 
 async function sendTenantEmail(input = {}, opts = {}) {
   const store = opts.store || new PostgresTenantMailboxStore(opts.pool || defaultPool);
+  if (input.metadata?.governedProgramId) {
+    if (!input.metadata.scheduleId || !(store instanceof PostgresTenantMailboxStore)) throw mailboxError('governed_scheduler_required');
+    const schedule = await require('./tenantOutreachScheduler').getScheduledOutreachSend(input.tenantId, input.metadata.scheduleId, { pool: store.pool });
+    if (!schedule || schedule.status !== 'EXECUTING' || schedule.authorizationSnapshot?.governed?.programId !== input.metadata.governedProgramId
+      || schedule.recipientEmail !== lower(input.to) || schedule.authorizationSnapshot.subject !== input.subject
+      || schedule.authorizationSnapshot.body !== input.body || schedule.sendingIdentityId !== input.sendingIdentityId
+      || schedule.prospectId !== input.prospectId || schedule.missionId !== input.missionId || schedule.outreachAssetId !== input.outreachAssetId) throw mailboxError('governed_scheduler_binding_changed');
+    await require('./governedTenantSchedule').validateGovernedSchedule(schedule, { pool: store.pool });
+  }
   const tenantId = tenantKey(input.tenantId);
   if (!tenantId) throw mailboxError('tenant_required', 'tenantId is required.');
   // A standing Anchor delegation owns automated outbound exclusively. The
@@ -1293,6 +1302,11 @@ async function sendTenantEmail(input = {}, opts = {}) {
     && await require('./governedOutboundReplies').installed(store.pool)) {
     const program = await store.pool.query("SELECT 1 FROM acquisition_outbound_programs WHERE tenant_id='10' AND mode<>'revoked'");
     if (program.rows.length) throw mailboxError('governed_executor_required', 'Anchor scheduled outbound requires its daily envelope.');
+  }
+  if (store instanceof PostgresTenantMailboxStore && require('./governedOutboundTenant').ALLOWED_GOVERNED_OUTBOUND_TENANTS.includes(tenantId)
+    && tenantId !== '10' && !input.metadata?.governedProgramId && await require('./governedOutboundReplies').installed(store.pool)) {
+    const standing = await store.pool.query("SELECT 1 FROM acquisition_outbound_programs WHERE tenant_id=$1 AND mode<>'revoked' LIMIT 1", [tenantId]);
+    if (standing.rows.length) throw mailboxError('governed_scheduler_required', 'A standing governed grant requires the durable governed scheduler.');
   }
   if (!input.sendingIdentityId) throw mailboxError('sending_identity_required', 'sendingIdentityId is required.');
   const recipients = normalizeRecipients(input.to);
@@ -1519,12 +1533,12 @@ async function pollTenantMailbox(input = {}, opts = {}) {
   const rawMessages = await loadImapMessages(integration, imapAuth, state, {
     ...opts,
     imapAuth,
-    strictInbound: opts.strictInbound || (store instanceof PostgresTenantMailboxStore && tenantId === '10'),
+    strictInbound: opts.strictInbound || (store instanceof PostgresTenantMailboxStore && require('./governedOutboundTenant').ALLOWED_GOVERNED_OUTBOUND_TENANTS.includes(tenantId)),
   });
   const results = [];
   let maxUid = Number(state.lastUid || state.last_uid || 0);
   for (const raw of rawMessages || []) {
-    if (store instanceof PostgresTenantMailboxStore && tenantId === '10') {
+    if (store instanceof PostgresTenantMailboxStore && require('./governedOutboundTenant').ALLOWED_GOVERNED_OUTBOUND_TENANTS.includes(tenantId)) {
       await require('./governedOutboundReplies').captureRaw(opts.pool || defaultPool, integration, raw);
     }
     const result = await ingestInboundMessage(store, tenantId, integration, raw, opts);
@@ -1540,7 +1554,7 @@ async function pollTenantMailbox(input = {}, opts = {}) {
       lastSeenAt: nowIso(opts),
     });
   }
-  if (store instanceof PostgresTenantMailboxStore && tenantId === '10') {
+  if (store instanceof PostgresTenantMailboxStore && require('./governedOutboundTenant').ALLOWED_GOVERNED_OUTBOUND_TENANTS.includes(tenantId)) {
     await require('./governedOutboundReplies').markHealthy(opts.pool || defaultPool, integration);
   }
   return {

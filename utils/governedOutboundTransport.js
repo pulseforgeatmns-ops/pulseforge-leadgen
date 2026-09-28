@@ -1,41 +1,34 @@
 'use strict';
+const { fail } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 
-const { sendTenantEmail } = require('../services/tenantMailbox');
-
-/**
- * Wrap tenant SMTP send for canonical EXECUTE_OUTBOUND (same guarded beforeAttempt contract as Brevo).
- */
-function createGovernedTenantMailboxSend(program = {}) {
-  const tenantId = String(program.tenant_id || program.policy?.tenantId || '');
-  const sendingIdentityId = program.policy?.sendingIdentityId || null;
-  const mailboxIntegrationId = program.policy?.inboxIntegrationId || null;
-
-  async function sendEmail(command = {}) {
-    if (typeof sendEmail.beforeAttempt === 'function') {
-      await sendEmail.beforeAttempt(command);
-    }
-    const result = await sendTenantEmail({
-      tenantId,
-      sendingIdentityId,
-      to: command.toEmail,
-      subject: command.subject,
-      body: command.body,
-      prospectId: command.prospectId,
-      metadata: {
-        governedProgramId: program.id,
-        idempotencyKey: command.idempotencyKey,
-      },
+// There is intentionally no direct SMTP dependency in governed transport.
+function createGovernedTenantMailboxSend(program = {}, binding = {}, dependencies = {}) {
+  return async function sendEmail(command = {}) {
+    const { envelope, item } = binding;
+    if (!envelope || !item || !program.pool) fail('governed_schedule_binding_required');
+    if (command.toEmail !== item.email || command.subject !== item.snapshot.message.subject
+      || command.body !== item.snapshot.message.body) fail('provider_payload_changed');
+    const bridge = dependencies.bridge || require('../services/governedTenantSchedule');
+    const scheduler = dependencies.scheduler || require('../services/tenantOutreachScheduler');
+    const asset = await bridge.createGovernedOutreachAsset(program, envelope, item, program.pool);
+    const result = await scheduler.authorizeAndExecuteScheduledSend({
+      tenantId: String(program.tenant_id), prospectId: item.prospect_id,
+      outreachAssetId: asset.id, outreachAssetVersion: asset.version,
+      sendingIdentityId: program.policy.sendingIdentityId, recipientEmail: item.email,
+      missionId: envelope.mission_id, scheduledFor: new Date().toISOString(), timezone: program.policy.timeZone,
+      subject: command.subject, body: command.body, sequenceStep: 1,
+      authorizationSource: 'governed_outbound', authorizedBy: program.authorized_by,
+      idempotencyKey: command.idempotencyKey,
+      governed: { programId: program.id, policyHash: program.policy_hash, envelopeId: envelope.id,
+        itemId: item.id, manifestHash: envelope.manifest_hash, approvalId: envelope.approval_id,
+        revision: envelope.revision, mailboxIntegrationId: program.policy.inboxIntegrationId, outreachAssetId: asset.id },
     }, { pool: program.pool });
-    const messageId = result?.providerResult?.messageId || result?.message?.providerMessageId;
-    return {
-      success: true,
-      messageId,
-      providerMessageId: messageId,
-    };
-  }
-
-  sendEmail.beforeAttempt = null;
-  return sendEmail;
+    if (!['sent', 'recovered_sent'].includes(result.result)) fail(result.reason || result.error?.code || 'governed_schedule_not_sent');
+    const message = result.message;
+    const messageId = message?.providerMessageId || message?.rfcMessageId;
+    if (!messageId) fail('provider_acceptance_unknown');
+    return { success: true, messageId, providerMessageId: messageId, scheduleId: result.schedule.id,
+      canonicalMessageId: message.id, rfcMessageId: message.rfcMessageId, threadId: message.threadId };
+  };
 }
-
 module.exports = { createGovernedTenantMailboxSend };

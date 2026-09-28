@@ -1,4 +1,5 @@
 'use strict';
+const { governedContactReason, founderFirst, contactEvidence } = require('../utils/governedContactEligibility');
 
 const { canonicalOutboundEmailIneligibilityReason, normalizeDomain } = require('../utils/canonicalEmailEligibility');
 const { normalizeVertical } = require('../utils/normalize');
@@ -157,7 +158,8 @@ function buildControlPlan({
     }
   }
   const dispatchableDailyCapacity = dispatchCapacityNow;
-  const target = planningDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
+  const buffer = planningDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
+  const target = policy?.totalCap != null ? Math.min(buffer, Math.max(0, policy.totalCap - Number(totalAttempted || 0))) : buffer;
   const clean = Math.max(0, Number(cleanInventory || 0));
   const deficit = Math.max(0, target - clean);
   const todayRemaining = Math.max(0, dispatchCapacityNow - Math.max(0, Number(sentToday || 0)));
@@ -240,7 +242,7 @@ async function loadSource(pool, program, tenantId) {
   )).rows[0] || null;
 }
 
-async function loadCleanInventory(pool, store, source, clientId) {
+async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
   const cid = Number(clientId || store.clientId || 10);
   const scope = sourceScope(source);
   const { rows } = await pool.query(`
@@ -254,6 +256,8 @@ async function loadCleanInventory(pool, store, source, clientId) {
     ORDER BY p.updated_at DESC NULLS LAST, p.id
   `, [cid]);
 
+  const knowledge = await require('./acquisitionMissionInventory').loadKnowledgeInventory(pool, { ...(source?.payload || source), tenantId: String(cid) }, policy);
+  const qualifiedKnowledge = new Set(knowledge.filter(r => !r.qualificationReason).map(r => String(r.id)));
   const clean = [];
   const excluded = [];
   const exclusionCounts = {};
@@ -261,9 +265,9 @@ async function loadCleanInventory(pool, store, source, clientId) {
     if (!reason) return;
     exclusionCounts[reason] = (exclusionCounts[reason] || 0) + 1;
   };
-  for (const row of rows) {
-    const missionReason = missionCandidateReason(row, scope);
-    const emailReason = missionReason ? null : canonicalOutboundEmailIneligibilityReason(row);
+  for (const row of rows.sort(founderFirst)) {
+    const missionReason = qualifiedKnowledge.has(String(row.id)) ? null : missionCandidateReason(row, scope);
+    const emailReason = missionReason ? null : governedContactReason(row, policy);
     const candidate = {
       candidateId: String(row.id),
       prospectId: String(row.id),
@@ -272,6 +276,7 @@ async function loadCleanInventory(pool, store, source, clientId) {
       domain: row.company_domain,
       website: row.company_website,
       email: String(row.email || '').toLowerCase(),
+      contactClassification: contactEvidence(row).classification,
     };
     const ownership = missionReason || emailReason
       ? null
@@ -666,7 +671,7 @@ async function runMaxOutboundControlLoop(options = {}) {
   const infrastructure = options.infrastructure
     || await governedAdapters.infrastructure(program, controlNow, null, { mode: 'planning' });
   const inventoryBefore = options.inventory
-    || await loadCleanInventory(pool, store, source, store.clientId);
+    || await loadCleanInventory(pool, store, source, store.clientId, program.policy);
   const sentToday = Number(infrastructure?.snapshot?.sentToday || 0);
   const operating = resolveOperatingCapacity({
     operatingCapacity: infrastructure.operating,
@@ -678,8 +683,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     totalAttempted: infrastructure.totalAttempted,
     now: controlNow,
   });
-  const timestamps = options.timestamps || await loadInventoryTimestamps(pool);
-  const funnelStock = options.funnel || await loadScoutFunnelStock(pool);
+  const timestamps = options.timestamps || await loadInventoryTimestamps(pool, store.tenantId);
+  const funnelStock = options.funnel || await loadScoutFunnelStock(pool, store.clientId);
   const plan = buildControlPlan({
     dailyCap: program.policy.dailyCap,
     emmettCapacity: infrastructure.cap,
@@ -701,7 +706,7 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   const inventoryAfter = options.inventoryAfter
     || (plan.shouldReplenish && options.execute !== false
-      ? await loadCleanInventory(pool, store, source, store.clientId)
+      ? await loadCleanInventory(pool, store, source, store.clientId, program.policy)
       : inventoryBefore);
 
   const inventoryGrowth = computeCleanInventoryGrowth(inventoryBefore.clean, inventoryAfter.clean);

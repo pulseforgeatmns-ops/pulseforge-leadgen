@@ -20,6 +20,8 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
     const p = policy({ ...input, tenantId: String(input.tenantId || tenantId) }, now());
     const source = await adapters.loadMission(p.sourceMissionId);
     if (!source?.mission?.structuredMission?.immutable || String(source.mission.tenantId) !== p.tenantId) fail('approved_source_mission_required');
+    if (require('./governedOutboundTenant').createGovernedOutboundTenantContext(p.tenantId).usesTenantMailboxTransport
+      && source.mission.stage !== 'ready') fail('ready_source_mission_required');
     const scopeHash = hash(missionScope(source.mission));
     const reviewHash = hash({ policy: p, scopeHash });
     if (input.reviewHash !== reviewHash) return { reviewRequired: true, reviewHash, policy: p, scopeHash };
@@ -56,7 +58,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
     const excluded = [];
     for (const row of prepared.candidates) {
       const crm = await adapters.contact(row.candidateId);
-      const reason = candidateReason(row.item, crm, row.message);
+      const reason = candidateReason(row.item, crm, row.message, program.policy);
       const entry = { candidateId: String(row.candidateId), prospectId: String(crm?.prospect_id || crm?.id || ''),
         companyId: String(crm?.company_id || ''), email: String(row.item.email || '').toLowerCase(),
         message: row.message, sender: prepared.sender, revision: prepared.revision };
@@ -68,7 +70,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       if (selected.length >= Math.min(program.policy.dailyCap, prepared.capacity, PREPARATION_BATCH_LIMIT)) break;
       selected.push(entry); emails.add(entry.email); companies.add(entry.companyId);
     }
-    await store.event('batch_eligibility', [program.id, day, prepared.revision], { programId: program.id, selected: selected.length, excluded });
+    await store.event('batch_eligibility', [program.id, day, prepared.revision, hash({ selected: selected.map(x => x.candidateId), excluded })], { programId: program.id, selected: selected.length, excluded });
     if (!selected.length) fail('verified_inventory_shortfall');
     if (recovery) {
       const current = await store.program();
@@ -234,7 +236,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       await store.claim(item, current, clock(now()).day, now());
       claimed = true;
     };
-    const sendFn = adapters.sendFor ? adapters.sendFor(program) : adapters.send;
+    const sendFn = adapters.sendFor ? adapters.sendFor(program, { envelope, item }) : adapters.send;
     const guardedSend = async command => {
       if (!claimed || called) fail('provider_call_budget_exceeded');
       called = true;
@@ -418,6 +420,8 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
         }
         const window = windowReason(program.policy, now(), true);
         if (window) fail(window);
+        if (envelope.status === 'frozen') envelope = await bindApproval(program, envelope);
+        if (envelope.status !== 'authorized') return { halted: envelope.status, envelopeId: envelope.id };
         if (counts.last_attempt && +now() - +new Date(counts.last_attempt) < program.policy.spacingMinutes * 60000) fail('spacing');
         const item = (await store.items(envelope.id)).find(x => x.status === 'pending');
         if (!item) {
