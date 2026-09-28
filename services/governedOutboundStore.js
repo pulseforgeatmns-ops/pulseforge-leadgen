@@ -171,12 +171,12 @@ class GovernedOutboundStore {
       || [row.email, row.domain, row.website, ...(row.emails || [])].some(value => domains.has(ownershipDomain(value))))
       ? 'ao_owned_alias' : null;
   }
-  async suppression(item, ignoreMissionId = '') {
+  async suppression(item, ignoreMissionId = '', ignoreItemId = '') {
     const hit = await this.one(`SELECT state FROM acquisition_outbound_lifecycle WHERE tenant_id=$3 AND suppressed=true
       AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId), this.tenantId]);
     if (hit) return hit.state;
     const prior = await this.one(`SELECT id FROM acquisition_outbound_items WHERE tenant_id=$3
-      AND attempted_at IS NOT NULL AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId), this.tenantId]);
+      AND attempted_at IS NOT NULL AND id<>$4 AND (email=$1 OR company_id=$2) LIMIT 1`, [item.email.toLowerCase(), String(item.companyId), this.tenantId, ignoreItemId]);
     if (prior) return 'already_attempted';
     const canonical = await this.one(`SELECT id FROM acquisition_mission_outbound_executions WHERE tenant_id=$4
       AND status IN ('sent','attempted','failed') AND mission_id<>$3

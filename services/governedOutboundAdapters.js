@@ -8,9 +8,8 @@ const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
 const { resolveCanonicalSenderIdentity, evaluateCanonicalSenderReadiness } = require('../utils/canonicalSenderIdentity');
 const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
 const { createOutboundEngine, assessOperatingCapacity } = require('../packages/emmett-outbound');
-const { assessTenantMailboxCapacity } = require('../packages/emmett-outbound/TenantMailboxCapacity');
 const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
-const { canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
+const { governedContactReason } = require('../utils/governedContactEligibility');
 const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
 const { buildTenantMailboxInboxSnapshot } = require('./emmettTenantMailboxSnapshot');
 const { createGovernedTenantMailboxSend } = require('../utils/governedOutboundTransport');
@@ -75,6 +74,28 @@ function adapters(pool, dependencies = {}) {
         fail('tenant_mailbox_not_ready');
       }
     }
+    if (ctx.usesTenantMailboxTransport) {
+      const produced = await require('./emmettTenantMailboxCapacity').produceTenantMailboxCapacityEnvelope(
+        tenantId, program.policy.sendingIdentityId, { pool, now });
+      const envelope = produced.envelope;
+      if (envelope.mailboxIntegrationId !== program.policy.inboxIntegrationId) fail('capacity_mailbox_changed');
+      const assessed = envelope.emmettContribution;
+      if (assessed.governor.halt || !['proceed', 'slow'].includes(envelope.governorState)) fail('emmett_governor_halted');
+      const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
+      const cap = Math.min(program.policy.dailyCap, envelope.maxSendsPerDay);
+      if (!(cap > 0)) fail('emmett_capacity_exhausted');
+      const inWindow = require('../packages/acquisition-mission/DailyOutboundPolicy').clock(now);
+      const available = envelope.remainingCapacity > 0 || Boolean(ignoreItem);
+      const dispatchNow = available && inWindow.hour >= envelope.allowedSendWindow.startHour
+        && inWindow.hour < envelope.allowedSendWindow.endHour && inWindow.weekday > 0 && inWindow.weekday < 6 ? cap : 0;
+      if (opts.mode === 'dispatch' && !dispatchNow) fail('dispatch_unavailable_now');
+      Object.assign(snapshot, sender, { sentToday: envelope.currentSentCount, inboxId: sender.senderEmail, domain: sender.sendingDomain });
+      return { snapshot, assessed, cap, sender, envelope, lastAttempt: history.last_attempt,
+        dispatchUnavailableNow: !dispatchNow,
+        operating: { planningDailyCapacity: cap, dispatchCapacityNow: dispatchNow,
+          effectiveDailyCapacity: cap, allowedSendWindow: envelope.allowedSendWindow,
+          minSpacingMinutes: Math.max(program.policy.spacingMinutes, envelope.minimumSpacingMinutes) } };
+    }
     const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
     snapshot.sentToday = Math.max(snapshot.sentToday, history.today);
     snapshot.inboxId = sender.senderEmail;
@@ -86,7 +107,7 @@ function adapters(pool, dependencies = {}) {
       FROM acquisition_outbound_items i
       JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
       WHERE e.program_id=$1 AND i.attempted_at IS NOT NULL`, [program.id]).catch(() => ({ rows: [{ total: 0 }] }));
-    const mailboxAssessment = assessTenantMailboxCapacity(snapshot);
+
     const grantWindow = {
       startHour: program.policy.startHour ?? 9,
       endHour: program.policy.endHour ?? 17,
@@ -164,6 +185,10 @@ function adapters(pool, dependencies = {}) {
           companyId: crm.company_id, email: String(crm.email || '') }))) {
           eligible[id] = { eligible: false, reason: 'prior_contact_or_human_owned' }; continue;
         }
+        if (ctx.usesTenantMailboxTransport && crm && !governedContactReason(crm, program.policy)) {
+          eligible[id] = { eligible: true, reason: null, prospectId: crm.prospect_id };
+          continue;
+        }
         attempts++;
         const admitted = await admission.admitMissionBoundCandidate(pool, candidate, { missionId: mission.id, clientId, mission });
         if (admitted?.blocked) {
@@ -172,7 +197,7 @@ function adapters(pool, dependencies = {}) {
         crm = await contact(id);
         if (crm) await enrichProspectRow(crm, { db: pool, dryRun: false });
         crm = await contact(id);
-        const reason = canonicalOutboundEmailIneligibilityReason(crm)
+        const reason = governedContactReason(crm, program.policy)
           || await store.suppression({ candidateId: id, prospectId: crm.prospect_id,
             companyId: crm.company_id, email: crm.email });
         eligible[id] = { eligible: !reason, reason, prospectId: crm?.prospect_id || null };
@@ -189,6 +214,10 @@ function adapters(pool, dependencies = {}) {
     return result;
   }
   async function prepare(program, source, day, store, recovery = null) {
+    if (ctx.usesTenantMailboxTransport && source?.mission?.stage === 'ready' && !recovery) {
+      await prepared(source, program);
+      return source;
+    }
     const runtime = await runtimeFor();
     const engine = runtime.engine();
     const defaultMissionId = `mission_daily_${hash([program.id, day]).slice(0, 24)}`;
@@ -267,18 +296,18 @@ function adapters(pool, dependencies = {}) {
       WHERE tenant_id=$1 AND integration_id=$2 AND last_success_at>now()-interval '5 minutes'`, [tenantId, program.policy.inboxIntegrationId]);
     if (!rows.length) fail('reply_poll_stale');
     const infra = await infrastructure(program, now, item, { mode: 'dispatch' });
-    if (infra.lastAttempt && +now - +new Date(infra.lastAttempt) < program.policy.spacingMinutes * 60000) {
+    if (infra.lastAttempt && +now - +new Date(infra.lastAttempt) < Math.max(program.policy.spacingMinutes, infra.envelope?.minimumSpacingMinutes || 0) * 60000) {
       fail('cross_path_spacing');
     }
     if (await require('../dbClient').checkDNC(item.prospect_id, { clientId, pool })) fail('dnc');
   }
-  function sendFor(program) {
+  function sendFor(program, binding = {}) {
     if (ctx.usesBrevoTransport) {
       const brevoSend = command => require('../packages/providers/brevo/sendEmail').sendEmail(command);
       brevoSend.beforeAttempt = null;
       return brevoSend;
     }
-    return createGovernedTenantMailboxSend({ ...program, tenant_id: tenantId, pool });
+    return createGovernedTenantMailboxSend({ ...program, tenant_id: tenantId, pool }, binding);
   }
   return {
     tenantId,

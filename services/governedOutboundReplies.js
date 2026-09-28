@@ -1,5 +1,6 @@
 'use strict';
 
+const { ALLOWED_GOVERNED_OUTBOUND_TENANTS, assertGovernedOutboundTenantId, createGovernedOutboundTenantContext, parseGovernedOutboundTenantIds } = require('./governedOutboundTenant');
 const { hash, nextAction } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 
 async function installed(pool) {
@@ -12,7 +13,7 @@ function address(value) {
 
 async function captureRaw(pool, integration, raw) {
   const tenantId = String(integration.tenantId);
-  if (!['10', '13'].includes(tenantId) || !await installed(pool)) return;
+  if (!ALLOWED_GOVERNED_OUTBOUND_TENANTS.includes(tenantId) || !await installed(pool)) return;
   const clientId = Number(tenantId);
   const program = (await pool.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id=$1 AND policy->>'inboxIntegrationId'=$2 ORDER BY authorized_at DESC LIMIT 1", [tenantId, integration.id])).rows[0];
   if (!program || program.policy.inboxIntegrationId !== integration.id) return;
@@ -37,40 +38,44 @@ async function captureRaw(pool, integration, raw) {
 
 async function markHealthy(pool, integration) {
   const tenantId = String(integration.tenantId);
-  if (!['10', '13'].includes(tenantId) || !await installed(pool)) return;
+  if (!ALLOWED_GOVERNED_OUTBOUND_TENANTS.includes(tenantId) || !await installed(pool)) return;
   await pool.query(`INSERT INTO acquisition_outbound_inbox_health(integration_id,tenant_id,last_success_at)
     VALUES($1,$2,now()) ON CONFLICT(integration_id) DO UPDATE SET last_success_at=now()`, [integration.id, tenantId]);
 }
 
-async function classifyPending(pool, options = {}) {
-  const classify = options.classify || (email => require('../rileyAgent').classifyReply(email, { anchor: true }));
+async function classifyTenantPending(pool, options = {}) {
+  const tenantId = assertGovernedOutboundTenantId(options.tenantId);
+  const clientId = Number(tenantId);
+  const ctx = createGovernedOutboundTenantContext(tenantId);
+  const classify = options.classify || (email => require('../rileyAgent').classifyReply(email, { anchor: ctx.requiresAoOwners, governed: true }));
   const db = await pool.connect();
   let locked = false;
   let classified = 0;
   try {
-    locked = (await db.query('SELECT pg_try_advisory_lock(261019,10) AS locked')).rows[0].locked;
+    locked = (await db.query('SELECT pg_try_advisory_lock(261019,$1) AS locked', [clientId])).rows[0].locked;
     if (!locked) return { classified, halted: 'overlap' };
-    const rows = (await db.query("SELECT * FROM acquisition_outbound_replies WHERE tenant_id='10' AND classified_at IS NULL AND attempts<3 ORDER BY created_at LIMIT 20")).rows;
+    const rows = (await db.query("SELECT * FROM acquisition_outbound_replies WHERE tenant_id=$1 AND classified_at IS NULL AND attempts<3 ORDER BY created_at LIMIT 20", [tenantId])).rows;
     for (const row of rows) {
       await db.query('UPDATE acquisition_outbound_replies SET attempts=attempts+1 WHERE id=$1', [row.id]);
       try {
         const result = await classify(row.payload);
-        const [state, action] = nextAction(result.classification);
+        const [state, proposedAction] = nextAction(result.classification);
+        const action = proposedAction === 'ao_handoff' && !ctx.requiresAoOwners ? 'operator_handoff' : proposedAction;
         await db.query('BEGIN');
         await db.query(`UPDATE acquisition_outbound_lifecycle SET
           state=CASE WHEN state='dnc' THEN state ELSE $2 END,
           next_action=CASE WHEN state='dnc' OR $2='dnc' THEN 'stop' WHEN next_action='ao_owned' THEN 'ao_owned' ELSE $3 END,
-          classification=$4,last_event_at=now(),suppressed=true WHERE tenant_id='10' AND email=$1`,
-        [row.email, state, action, result.classification]);
-        if (state === 'dnc') await db.query('UPDATE prospects SET do_not_contact=true WHERE client_id=10 AND lower(email)=$1', [row.email]);
-        const current = (await db.query("SELECT * FROM acquisition_outbound_lifecycle WHERE tenant_id='10' AND email=$1", [row.email])).rows[0];
+          classification=$4,last_event_at=now(),suppressed=true WHERE tenant_id=$5 AND email=$1`,
+        [row.email, state, action, result.classification, tenantId]);
+        if (state === 'dnc') await db.query('UPDATE prospects SET do_not_contact=true WHERE client_id=$2 AND lower(email)=$1', [row.email, clientId]);
+        const current = (await db.query("SELECT * FROM acquisition_outbound_lifecycle WHERE tenant_id=$2 AND email=$1", [row.email, tenantId])).rows[0];
         const next = current?.next_action || action;
         if (next !== 'stop') {
           await db.query(`INSERT INTO agent_actions(created_by,action_type,title,description,payload,status,client_id)
-            VALUES('max','governed_outbound_handoff',$1,$2,$3,'pending',10)`,
-          [`Anchor reply: ${result.classification}`, `Max next action: ${next}. Generic follow-up is suppressed.`,
-            { replyId: row.id, prospectId: row.prospect_id, email: row.email, classification: result.classification, nextAction: next }]);
-          if (next === 'ao_handoff') {
+            VALUES('max','governed_outbound_handoff',$1,$2,$3,'pending',$4)`,
+          [`Tenant ${tenantId} reply: ${result.classification}`, `Max next action: ${next}. Generic follow-up is suppressed.`,
+            { replyId: row.id, prospectId: row.prospect_id, email: row.email, classification: result.classification, nextAction: next }, clientId]);
+          if (ctx.requiresAoOwners && next === 'ao_handoff') {
             const program = (await db.query("SELECT * FROM acquisition_outbound_programs WHERE tenant_id='10' ORDER BY (mode<>'revoked') DESC,authorized_at DESC LIMIT 1")).rows[0];
             const existing = (await db.query('SELECT id,ao_owner_id FROM ao_leads WHERE client_id=10 AND crm_prospect_id::text=$1 LIMIT 1', [row.prospect_id])).rows[0];
             const owner = existing?.ao_owner_id || (await db.query(`SELECT id FROM users WHERE client_id=10 AND active=true
@@ -88,8 +93,8 @@ async function classifyPending(pool, options = {}) {
           }
         }
         await db.query(`INSERT INTO acquisition_outbound_events(id,tenant_id,event_type,payload)
-          VALUES($1,'10','reply_classified',$2) ON CONFLICT DO NOTHING`,
-        [`classified:${row.id}`, { replyId: row.id, prospectId: row.prospect_id, classification: result.classification, state: current?.state || state, nextAction: next }]);
+          VALUES($1,$3,'reply_classified',$2) ON CONFLICT DO NOTHING`,
+        [`classified:${row.id}`, { replyId: row.id, prospectId: row.prospect_id, classification: result.classification, state: current?.state || state, nextAction: next }, tenantId]);
         await db.query('UPDATE acquisition_outbound_replies SET classification=$2,classified_at=now(),last_error=NULL WHERE id=$1', [row.id, result.classification]);
         await db.query('COMMIT');
         classified++;
@@ -98,19 +103,26 @@ async function classifyPending(pool, options = {}) {
         await db.query('UPDATE acquisition_outbound_replies SET last_error=$2 WHERE id=$1', [row.id, e.code || 'classification_failed']);
         if (row.attempts >= 2) {
           const event = await db.query(`INSERT INTO acquisition_outbound_events(id,tenant_id,event_type,payload)
-            VALUES($1,'10','reply_classification_failed',$2) ON CONFLICT DO NOTHING RETURNING id`,
-          [`reply-failed:${row.id}`, { replyId: row.id, prospectId: row.prospect_id, reason: e.code || 'classification_failed' }]);
+            VALUES($1,$3,'reply_classification_failed',$2) ON CONFLICT DO NOTHING RETURNING id`,
+          [`reply-failed:${row.id}`, { replyId: row.id, prospectId: row.prospect_id, reason: e.code || 'classification_failed' }, tenantId]);
           if (event.rows.length) await db.query(`INSERT INTO agent_actions(created_by,action_type,title,description,payload,status,client_id)
-            VALUES('max','governed_outbound_attention','Anchor reply needs manual review',
-            'Riley classification failed three times. Contact remains suppressed.',$1,'pending',10)`, [{ replyId: row.id, prospectId: row.prospect_id }]);
+            VALUES('max','governed_outbound_attention','Governed reply needs manual review',
+            'Riley classification failed three times. Contact remains suppressed.',$1,'pending',$2)`, [{ replyId: row.id, prospectId: row.prospect_id }, clientId]);
         }
         // The reply remains suppressed even when Riley or AO projection fails.
       }
     }
     return { classified };
   } finally {
-    if (locked) await db.query('SELECT pg_advisory_unlock(261019,10)');
+    if (locked) await db.query('SELECT pg_advisory_unlock(261019,$1)', [clientId]);
     db.release();
   }
 }
-module.exports = { installed, address, captureRaw, markHealthy, classifyPending };
+async function classifyPending(pool, options = {}) {
+  const ids = options.tenantId ? [assertGovernedOutboundTenantId(options.tenantId)]
+    : (options.tenantIds || parseGovernedOutboundTenantIds()).map(assertGovernedOutboundTenantId);
+  const tenants = {};
+  for (const tenantId of [...new Set(ids)]) tenants[tenantId] = await classifyTenantPending(pool, { ...options, tenantId });
+  return { classified: Object.values(tenants).reduce((n, r) => n + r.classified, 0), tenants };
+}
+module.exports = { installed, address, captureRaw, markHealthy, classifyPending, classifyTenantPending };

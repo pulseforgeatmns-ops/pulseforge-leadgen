@@ -106,9 +106,8 @@ function evaluateIcp(candidate = {}) {
   const rejections = [];
   const signals = candidate.icpSignals || {};
 
-  if (signals.employeeCountMax && signals.employeeCountMax > BABRUN_ICP.employeeRange.max) {
-    rejections.push({ code: 'too_large', detail: `employee signal ${signals.employeeCountMax}` });
-  }
+  // The approved ICP allows larger founders with the same pains. Headcount
+  // is research context, not an invented exclusion.
   if (signals.preBusiness) rejections.push({ code: 'pre_business', detail: signals.preBusiness });
   if (signals.nationalChain) rejections.push({ code: 'national_chain', detail: signals.nationalChain });
   if (signals.leadGenOnly) rejections.push({ code: 'lead_gen_only', detail: signals.leadGenOnly });
@@ -130,7 +129,9 @@ function evaluateIcp(candidate = {}) {
     epistemicSummary: {
       observed: reasons.filter((r) => r.kind === 'OBSERVED').map((r) => r.text),
       inferred: reasons.filter((r) => r.kind === 'INFERRED').map((r) => r.text),
-      unknown: fit ? [] : ['ICP fit incomplete — rejected or insufficient evidence'],
+      unknown: ['Buyer intent, felt pain, willingness to discuss and budget are unconfirmed.',
+        ...(!signals.employeeCountMax ? ['Employee count is unknown.'] : []),
+        ...(!fit ? ['ICP fit incomplete — rejected or insufficient evidence'] : [])],
     },
   };
 }
@@ -213,7 +214,7 @@ async function fetchText(url, timeoutMs = 10000) {
 
 function inferIcpSignalsFromText(text, candidate) {
   const body = String(text || '').toLowerCase();
-  const signals = { ...(candidate.icpSignals || {}) };
+  const signals = {};
 
   if (/family[- ]owned|owner[- ]operated|founder|co-founder|started (?:this|the) (?:company|business)/i.test(body)) {
     signals.ownerOperated = true;
@@ -237,7 +238,7 @@ function inferIcpSignalsFromText(text, candidate) {
   if (/design[- ]build|multi[- ]crew|supervis|delegat|manage employees|our team/i.test(body)) {
     signals.growthComplexity = true;
   }
-  signals.serviceBusiness = signals.serviceBusiness !== false;
+  signals.serviceBusiness = /painting|landscap|cleaning|electrical|hvac|roofing|plumbing|contractor/i.test(body);
 
   return signals;
 }
@@ -247,14 +248,17 @@ async function enrichCandidateFromWebsite(candidate) {
   if (!domain) return candidate;
   const homepage = await fetchText(`https://${domain}/`);
   const about = await fetchText(`https://${domain}/about`);
-  const combined = [homepage.text, about.text].join('\n');
+  const sources = [homepage, about].filter(page => page.ok && page.text.length > 100);
+  const combined = sources.map(page => page.text.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]*>/g, ' ')).join('\n');
   const icpSignals = inferIcpSignalsFromText(combined, candidate);
-  if (!icpSignals.smallTeam && !icpSignals.employeeCountMax) icpSignals.smallTeam = true;
-  if (!icpSignals.ownerOperated && clean(candidate.founder)) icpSignals.ownerOperated = true;
+  const founderConfirmed = clean(candidate.founder).split(/\s+/).every(part => combined.toLowerCase().includes(part.toLowerCase()));
+  if (!founderConfirmed || !sources.length) icpSignals.ownerOperated = false;
   return {
     ...candidate,
+    founder: founderConfirmed ? candidate.founder : '',
     icpSignals,
-    sourceUrls: [...new Set([...(candidate.sourceUrls || []), homepage.url, about.url].filter(Boolean))],
+    sourceUrls: sources.map(page => page.url),
+    sourceVerification: { fetchedAt: new Date().toISOString(), founderConfirmed, successfulPages: sources.length },
   };
 }
 
@@ -548,6 +552,7 @@ function buildProspectIntelligenceObject(candidate, sequence, icpEval, resolutio
       discoveryMethod: candidate.discoveryMethod || 'public_research',
       sourceUrls: candidate.sourceUrls || [],
       createdBy: 'scout',
+      sourceVerification: candidate.sourceVerification || null,
     },
     tags: ['babrun', COHORT_TAG, candidate.vertical].filter(Boolean),
     epistemicState: 'OBSERVED',
@@ -682,6 +687,7 @@ async function runCohort002(options = {}) {
       continue;
     }
 
+    while (dedupe.akIds.has(cohortAkId(sequence))) sequence += 1;
     const target = {
       akId: cohortAkId(sequence),
       founder: candidate.founder,
