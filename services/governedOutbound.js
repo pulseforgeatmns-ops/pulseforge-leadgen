@@ -11,6 +11,8 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
     const p = policy({ ...input, tenantId: String(input.tenantId || tenantId) }, now());
     const source = await adapters.loadMission(p.sourceMissionId);
     if (!source?.mission?.structuredMission?.immutable || String(source.mission.tenantId) !== p.tenantId) fail('approved_source_mission_required');
+    if (require('./governedOutboundTenant').createGovernedOutboundTenantContext(p.tenantId).usesTenantMailboxTransport
+      && source.mission.stage !== 'ready') fail('ready_source_mission_required');
     const scopeHash = hash(missionScope(source.mission));
     const reviewHash = hash({ policy: p, scopeHash });
     if (input.reviewHash !== reviewHash) return { reviewRequired: true, reviewHash, policy: p, scopeHash };
@@ -47,7 +49,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
     const excluded = [];
     for (const row of prepared.candidates) {
       const crm = await adapters.contact(row.candidateId);
-      const reason = candidateReason(row.item, crm, row.message);
+      const reason = candidateReason(row.item, crm, row.message, program.policy);
       const entry = { candidateId: String(row.candidateId), prospectId: String(crm?.prospect_id || crm?.id || ''),
         companyId: String(crm?.company_id || ''), email: String(row.item.email || '').toLowerCase(),
         message: row.message, sender: prepared.sender, revision: prepared.revision };
@@ -214,14 +216,14 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       if (!selected || hash(selected.message) !== hash(item.snapshot.message)) fail('copy_changed');
       const crm = await adapters.contact(item.candidate_id);
       if (String(crm?.prospect_id || crm?.id) !== item.prospect_id || String(crm?.company_id) !== item.company_id) fail('crm_binding_changed');
-      const reason = candidateReason(selected.item, crm, selected.message)
+      const reason = candidateReason(selected.item, crm, selected.message, current.policy)
         || await store.suppression(item.snapshot, envelope.mission_id);
       if (reason) { await store.finish(item, 'suppressed', reason); fail(reason); }
       await adapters.liveGate(current, item, prepared, now());
       await store.claim(item, current, clock(now()).day, now());
       claimed = true;
     };
-    const sendFn = adapters.sendFor ? adapters.sendFor(program) : adapters.send;
+    const sendFn = adapters.sendFor ? adapters.sendFor(program, { envelope, item }) : adapters.send;
     const guardedSend = async command => {
       if (!claimed || called) fail('provider_call_budget_exceeded');
       called = true;

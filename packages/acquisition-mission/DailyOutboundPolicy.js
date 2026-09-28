@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const { validatePaigeVariantCopy } = require('../max/workspace/PaigeCopySafety');
-const { canonicalOutboundEmailIneligibilityReason } = require('../../utils/canonicalEmailEligibility');
+const { governedContactReason, SENDABLE_CLASSES } = require('../../utils/governedContactEligibility');
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -40,6 +40,8 @@ function policy(input, now = new Date()) {
       fail('ao_owners_required');
     }
   } else if (p.tenantId === '13') {
+    p.allowedContactClassifications = [...new Set(input.allowedContactClassifications || ['VERIFIED_FOUNDER_EMAIL'])];
+    if (!p.allowedContactClassifications.length || p.allowedContactClassifications.some(x => !SENDABLE_CLASSES.includes(x))) fail('invalid_contact_classifications');
     p.sendingIdentityId = String(input.sendingIdentityId || '').trim();
     if (!p.sendingIdentityId) fail('sending_identity_required');
     // Bind the reviewed mailbox window; Emmett still revalidates execution.
@@ -79,8 +81,8 @@ function windowReason(p, now = new Date(), sending = true) {
   return null;
 }
 
-function candidateReason(item, crm, message) {
-  const reason = canonicalOutboundEmailIneligibilityReason(crm);
+function candidateReason(item, crm, message, policy = {}) {
+  const reason = governedContactReason(crm, policy);
   if (reason) return reason;
   if (crm.is_synthetic === true) return 'synthetic_contact';
   if (String(item.email || '').toLowerCase() !== String(crm.email || '').toLowerCase()) return 'recipient_changed';
