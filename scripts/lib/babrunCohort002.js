@@ -115,8 +115,8 @@ function evaluateIcp(candidate = {}) {
   if (!clean(candidate.company)) rejections.push({ code: 'missing_company', detail: 'no company name' });
   if (!normalizeDomainKey(candidate.domain)) rejections.push({ code: 'missing_domain', detail: 'no verified domain' });
 
-  if (signals.ownerOperated) reasons.push({ kind: 'OBSERVED', text: 'Owner/founder visibly involved in operations' });
-  if (signals.smallTeam) reasons.push({ kind: 'OBSERVED', text: 'Small operating team (1–10 employee band)' });
+  if (signals.ownerOperated) reasons.push({ kind: 'OBSERVED', text: 'Website describes an owner/founder-led business' });
+  if (signals.smallTeam) reasons.push({ kind: 'OBSERVED', text: 'Website mentions a small team or crew; current headcount and timing are unconfirmed' });
   if (signals.serviceBusiness) reasons.push({ kind: 'OBSERVED', text: 'Service business where employee behavior affects outcomes' });
   if (signals.delegationPressure) reasons.push({ kind: 'INFERRED', text: 'Signals of founder dependency or delegation pressure' });
   if (signals.growthComplexity) reasons.push({ kind: 'INFERRED', text: 'Operational complexity consistent with Babrun ICP pain pattern' });
@@ -216,7 +216,7 @@ function inferIcpSignalsFromText(text, candidate) {
   const body = String(text || '').toLowerCase();
   const signals = {};
 
-  if (/family[- ]owned|owner[- ]operated|founder|co-founder|started (?:this|the) (?:company|business)/i.test(body)) {
+  if (/family[- ]owned|owner[- ]operated|about the owner|founder|co-founder|started (?:this|the) (?:company|business)/i.test(body)) {
     signals.ownerOperated = true;
   }
   if (/(?:1|2|3|4|5|6|7|8|9|10)[- ]?(?:person|people|employee|member) team|small team|small crew/i.test(body)) {
@@ -258,6 +258,7 @@ async function enrichCandidateFromWebsite(candidate) {
     founder: founderConfirmed ? candidate.founder : '',
     icpSignals,
     sourceUrls: sources.map(page => page.url),
+    sourcePassages: sources.map(page => ({ url: page.url, text: page.text.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 30000) })),
     sourceVerification: { fetchedAt: new Date().toISOString(), founderConfirmed, successfulPages: sources.length },
   };
 }
@@ -507,7 +508,8 @@ async function buildCandidateQueue(options = {}) {
 function buildProspectIntelligenceObject(candidate, sequence, icpEval, resolution) {
   const akId = candidate.akId || cohortAkId(sequence);
   const evidence = [
-    buildEvidenceItem('company_identity', `${candidate.company} — ${candidate.location}`, candidate.sourceUrls[0], 'OBSERVED'),
+    buildEvidenceItem('company_identity', candidate.company, candidate.sourceUrls[0], 'OBSERVED'),
+    buildEvidenceItem('research_location', `Research location (not refreshed): ${candidate.location}`, candidate.sourceUrls[0], 'INFERRED'),
     buildEvidenceItem('founder_identity', `${candidate.founder} (${candidate.founderRole})`, candidate.sourceUrls[0], 'OBSERVED'),
     buildEvidenceItem('domain_verification', `Official domain ${candidate.domain}`, candidate.sourceUrls[0], 'OBSERVED'),
   ];
@@ -555,6 +557,7 @@ function buildProspectIntelligenceObject(candidate, sequence, icpEval, resolutio
       sourceUrls: candidate.sourceUrls || [],
       createdBy: 'scout',
       sourceVerification: candidate.sourceVerification || null,
+      sourcePassages: candidate.sourcePassages || [],
     },
     tags: ['babrun', COHORT_TAG, candidate.vertical].filter(Boolean),
     epistemicState: 'OBSERVED',
@@ -576,12 +579,12 @@ function buildScoutLearningObject(acceptedCount, totals) {
       acceptedProspects: acceptedCount,
       classificationTotals: totals,
       pipeline: 'company_identity → official_domain → attributable_contact → bouncer_verification → classification → ak_persistence → operationalization',
-      note: 'Cohort 002 enforces canonical prospect completion before counting toward acquisition cohort size.',
+      note: 'Persisted research records retain contact classification. REVIEW_REQUIRED records are quarantined and are not sendable.',
     },
     evidence: [{
       id: 'cohort002_outcome',
       type: 'observed',
-      statement: `Cohort 002 accepted ${acceptedCount} contactable prospects with classification totals ${JSON.stringify(totals)}`,
+      statement: `Cohort 002 persisted ${acceptedCount} classified research records with classification totals ${JSON.stringify(totals)}`,
       source: { kind: 'scout_run', ref: COHORT_TAG },
       confidence: 0.9,
     }],

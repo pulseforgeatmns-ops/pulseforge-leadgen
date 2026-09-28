@@ -2861,7 +2861,11 @@ async function advancePreparedOutreachRevision(input = {}) {
 
         const emmettRun = await runEmmettForAmoMission(preparedMission, {
           ...input,
-          contributions: preparedContributions.concat([{
+          // The staged Paige result belongs to this mission and replaces all
+          // predecessor variants for this transaction's Emmett cognition.
+          contributions: preparedContributions.filter(row => !(row.specialist === SPECIALISTS.PAIGE
+            && row.kind === CONTRIBUTION_KINDS.VARIANTS)).concat([{
+            id: `${transactionId}:staged-paige`, missionId: preparedMission.id, at: new Date().toISOString(),
             specialist: SPECIALISTS.PAIGE,
             kind: CONTRIBUTION_KINDS.VARIANTS,
             payload: variantsPayload,
