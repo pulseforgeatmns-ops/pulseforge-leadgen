@@ -19,6 +19,26 @@ function anchorCron(method) {
 }
 router.post('/cron/anchor-daily-outbound', anchorCron('run'));
 router.post('/cron/anchor-outbound-replies', anchorCron('poll'));
+router.post('/cron/anchor-max-outbound-control', async (req, res) => {
+  const crypto = require('crypto');
+  const expected = Buffer.from(process.env.CRON_SECRET || '');
+  const supplied = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer /, ''));
+  if (!expected.length || expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const pool = require('../db');
+    const execute = String(req.query.execute || 'true').toLowerCase() !== 'false';
+    const result = await require('../services/maxOutboundControlLoop').runMaxOutboundControlLoop({
+      pool,
+      execute,
+      logger: console,
+    });
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (e) {
+    return res.status(500).json({ error: e.code || 'anchor_max_outbound_control_failed' });
+  }
+});
 const pool = require('../db');
 const { normalizeClientId } = require('../utils/clientContext');
 const {

@@ -103,6 +103,34 @@ test('weekday outside send hours keeps planning capacity while dispatch-now stay
   assert.equal(plan.shouldReplenish, true);
 });
 
+test('legacy operating snapshots without planningDailyCapacity still plan from schedule headroom', () => {
+  const preWindow = new Date('2026-09-28T12:51:00.000Z');
+  const plan = buildControlPlan({
+    dailyCap: 15,
+    emmettCapacity: 16,
+    operatingCapacity: {
+      recommendedSafeDailyCapacity: 16,
+      authorizationLimitedCapacity: 15,
+      scheduleLimitedCapacity: 8,
+      nextEligibleScheduleCapacity: 8,
+      dispatchCapacityNow: 0,
+      dispatchableDailyCapacity: 0,
+      effectiveDailyCapacity: 15,
+      limitingFactor: LIMITING_FACTORS.SCHEDULE_WINDOW_SPACING,
+      governor: 'proceed',
+      healthScore: 82,
+    },
+    cleanInventory: 3,
+    targetDays: 3,
+    now: preWindow,
+  });
+  assert.equal(plan.planningDailyCapacity, 8);
+  assert.equal(plan.targetInventory, 24);
+  assert.equal(plan.deficit, 21);
+  assert.equal(plan.shouldReplenish, true);
+  assert.equal(plan.dispatchCapacityNow, 0);
+});
+
 test('governor halt zeroes planning and dispatch-now capacity', () => {
   const operating = assessOperatingCapacity({
     assessed: {
@@ -125,6 +153,7 @@ test('production policy binds Max demand on schedule before authorization headro
       health: { score: 82 },
     },
     policy: { dailyCap: 15, totalCap: 100 },
+    now: new Date('2026-09-28T15:00:00.000Z'),
     schedule: {
       allowedSendWindow: { startHour: 9, endHour: 17, timezone: 'America/New_York' },
       minSpacingMinutes: 60,
