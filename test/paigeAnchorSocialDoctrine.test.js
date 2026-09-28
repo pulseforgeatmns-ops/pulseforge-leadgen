@@ -111,12 +111,12 @@ function buildPaigeHarness({ draftSequence = [] } = {}) {
         create: async (request) => {
           const prompt = request.messages?.[0]?.content || '';
           if (/Score this social media post/i.test(prompt)) {
-            return { content: [{ text: JSON.stringify(PASSING_SCORE) }] };
+            return { content: [{ type: 'text', text: JSON.stringify(PASSING_SCORE) }] };
           }
           generationCalls += 1;
           const queue = draftSequence.length ? [...draftSequence] : [COMPLIANT_BODY];
           const body = queue[Math.min(generationCalls - 1, queue.length - 1)];
-          return { content: [{ text: body }] };
+          return { content: [{ type: 'text', text: body }] };
         },
       };
     }
