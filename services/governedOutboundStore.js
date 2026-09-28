@@ -114,6 +114,35 @@ class GovernedOutboundStore {
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
     return this.envelope(day);
   }
+  async appendToEnvelope(envelope, extraManifest = [], revision = null) {
+    const current = Array.isArray(envelope.manifest) ? envelope.manifest : [];
+    const extra = Array.isArray(extraManifest) ? extraManifest : [];
+    if (!extra.length) return this.one('SELECT * FROM acquisition_outbound_envelopes WHERE id=$1', [envelope.id]);
+    const combined = [...current, ...extra];
+    const db = await this.pool.connect();
+    try {
+      await db.query('BEGIN');
+      const start = current.length;
+      for (const [n, item] of extra.entries()) {
+        await db.query(`INSERT INTO acquisition_outbound_items
+          (id,envelope_id,tenant_id,candidate_id,prospect_id,company_id,email,snapshot)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [`${envelope.id}_${start + n}`, envelope.id, this.tenantId, item.candidateId, item.prospectId, item.companyId, item.email, item]);
+      }
+      const nextRevision = revision || envelope.revision;
+      await db.query(`UPDATE acquisition_outbound_envelopes
+        SET manifest=$2::jsonb, manifest_hash=$3, revision=$4,
+            status=CASE WHEN status='complete' THEN 'authorized' ELSE status END
+        WHERE id=$1`,
+      [envelope.id, JSON.stringify(combined), hash(combined), nextRevision]);
+      await this.event('envelope_refilled', [envelope.id, extra.length, Date.now()], {
+        programId: envelope.program_id, envelopeId: envelope.id,
+        added: extra.length, revision: nextRevision, manifestHash: hash(combined),
+      }, db);
+      await db.query('COMMIT');
+    } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
+    return this.one('SELECT * FROM acquisition_outbound_envelopes WHERE id=$1', [envelope.id]);
+  }
   async approve(envelope, approvalId) {
     await this.pool.query("UPDATE acquisition_outbound_envelopes SET status='authorized',approval_id=$2 WHERE id=$1 AND status='frozen'", [envelope.id, approvalId]);
     await this.event('envelope_authorized', envelope.id, { envelopeId: envelope.id, approvalId });

@@ -304,6 +304,8 @@ function adapters(pool, dependencies = {}) {
       const transport = sendEmail || sendFor(program);
       return route(runtime, envelope.mission_id, program, amo.EXECUTION_INTENTS.EXECUTE_OUTBOUND,
         { governedEnvelopeId: envelope.id, maxSends: 1, prospectId: item.candidate_id,
+          governedManifestCandidateIds: (envelope.manifest || []).map(row => String(row.candidateId || '')).filter(Boolean),
+          governedRefillItem: item.snapshot?.refill === true ? item : null,
           sendEmail: transport, requireProviderReadiness: ctx.requiresLegacyEmailTelemetry });
     },
   };

@@ -958,19 +958,29 @@ async function callProspeoSearchPerson(domain) {
   return normalizeProspeoPersonRow(results[0]);
 }
 
-async function listProspeoContactsForDomain(domain, { excludeEmails = [] } = {}) {
-  if (process.env.PROSPEO_ENABLED !== 'true' || !PROSPEO_API_KEY) return [];
+async function searchProspeoContactsForDomain(domain, {
+  excludeEmails = [],
+  titleIncludes = null,
+} = {}) {
+  if (process.env.PROSPEO_ENABLED !== 'true' || !PROSPEO_API_KEY) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
   const quota = await checkProspeoQuota();
-  if (!quota.ok) return [];
+  if (!quota.ok) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
   await recordProspeoCall();
   try {
     await awaitProspeoSlot();
+    const titles = Array.isArray(titleIncludes) && titleIncludes.length
+      ? titleIncludes
+      : getProspeoTitleIncludes();
     const res = await axios.post('https://api.prospeo.io/search-person',
       {
         page: 1,
         filters: {
           company: { websites: { include: [domain] } },
-          person_job_title: { include: getProspeoTitleIncludes() },
+          person_job_title: { include: titles },
         },
       },
       {
@@ -988,10 +998,15 @@ async function listProspeoContactsForDomain(domain, { excludeEmails = [] } = {})
       if (!email || excluded.has(email)) continue;
       contacts.push(normalized);
     }
-    return contacts;
+    return { ok: true, reason: null, contacts };
   } catch (_err) {
-    return [];
+    return { ok: false, reason: 'provider_error', contacts: [] };
   }
+}
+
+async function listProspeoContactsForDomain(domain, opts = {}) {
+  const result = await searchProspeoContactsForDomain(domain, opts);
+  return result.contacts || [];
 }
 
 async function enrichWithProspeo(domain) {
@@ -3466,6 +3481,7 @@ module.exports = {
   resolveEmailVerification,
   runEnrichmentChain,
   listProspeoContactsForDomain,
+  searchProspeoContactsForDomain,
   normalizeVertical,
   scoreCleaningLead,
   scoreLead,
