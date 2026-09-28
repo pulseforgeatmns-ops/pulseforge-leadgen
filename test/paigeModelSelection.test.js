@@ -208,6 +208,7 @@ describe('Paige writer/evaluator model selection', () => {
     });
 
     assert.equal(result.success, false);
+    assert.equal(result.outputs.length, 0);
     assert.ok(result.channels_failed?.includes('Anchor Cleaning/linkedin_page'));
   });
 
