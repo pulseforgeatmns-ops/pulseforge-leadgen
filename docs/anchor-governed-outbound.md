@@ -167,6 +167,7 @@ Configure the existing production scheduler to make these authenticated POST req
 |---|---|---|
 | Anchor reply intake | Every minute, all days | `POST /cron/anchor-outbound-replies` |
 | Anchor bounded outbound | Every five minutes, all days | `POST /cron/anchor-daily-outbound` |
+| Max outbound inventory control (Scout replenishment) | Every 15 minutes while scheduler enabled, or on demand before 09:00 ET preflight | `POST /cron/anchor-max-outbound-control` |
 
 Header: `Authorization: Bearer <CRON_SECRET>`. These endpoints reject absent/invalid secrets and provide no GET mutation. Configure a request timeout sufficient for discovery/enrichment; a client timeout does not authorize another provider attempt. Overlapping retries return `overlap`. Polling remains enabled after the finite send grant ends.
 

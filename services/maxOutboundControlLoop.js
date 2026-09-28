@@ -57,9 +57,11 @@ function resolveOperatingCapacity({
   policy = null,
   now = new Date(),
 } = {}) {
+  if (operatingCapacity?.planningDailyCapacity != null) {
+    return operatingCapacity;
+  }
   if (operatingCapacity && (
-    operatingCapacity.planningDailyCapacity != null
-    || operatingCapacity.dispatchCapacityNow != null
+    operatingCapacity.dispatchCapacityNow != null
     || operatingCapacity.dispatchableDailyCapacity != null
     || operatingCapacity.effectiveDailyCapacity != null
   )) {
@@ -130,9 +132,17 @@ function buildControlPlan({
   const dispatchCapacityNow = Math.max(0, Number(
     operating.dispatchCapacityNow ?? operating.dispatchableDailyCapacity ?? 0
   ));
-  const planningDailyCapacity = Math.max(0, Number(
-    operating.planningDailyCapacity ?? operating.dispatchableDailyCapacity ?? authorizationLimitedCapacity
-  ));
+  let planningDailyCapacity = Math.max(0, Number(operating.planningDailyCapacity ?? NaN));
+  if (!Number.isFinite(planningDailyCapacity)) {
+    const legacyDispatchable = Math.max(0, Number(operating.dispatchableDailyCapacity ?? 0));
+    if (legacyDispatchable > 0) {
+      planningDailyCapacity = Math.min(authorizationLimitedCapacity, legacyDispatchable);
+    } else if (authorizationLimitedCapacity > 0 && nextEligibleScheduleCapacity > 0) {
+      planningDailyCapacity = Math.min(authorizationLimitedCapacity, nextEligibleScheduleCapacity);
+    } else {
+      planningDailyCapacity = Math.max(0, authorizationLimitedCapacity);
+    }
+  }
   const dispatchableDailyCapacity = dispatchCapacityNow;
   const target = planningDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
   const clean = Math.max(0, Number(cleanInventory || 0));
