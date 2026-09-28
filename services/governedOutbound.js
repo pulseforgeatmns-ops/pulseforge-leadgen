@@ -61,7 +61,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       if (selected.length >= Math.min(program.policy.dailyCap, prepared.capacity)) break;
       selected.push(entry); emails.add(entry.email); companies.add(entry.companyId);
     }
-    await store.event('batch_eligibility', [program.id, day, prepared.revision], { programId: program.id, selected: selected.length, excluded });
+    await store.event('batch_eligibility', [program.id, day, prepared.revision, hash({ selected: selected.map(x => x.candidateId), excluded })], { programId: program.id, selected: selected.length, excluded });
     if (!selected.length) fail('verified_inventory_shortfall');
     if (recovery) {
       const current = await store.program();

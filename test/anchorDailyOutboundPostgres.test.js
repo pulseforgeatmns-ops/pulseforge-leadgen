@@ -144,6 +144,16 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     await assert.rejects(pool.query("INSERT INTO acquisition_outbound_programs(id,tenant_id,source_mission_id,policy,policy_hash,scope_hash,authorized_by) VALUES('unsupported','11','source','{}','p','s','test')"), { code: '23514' });
     assert.equal(calls, 0);
   });
+  await t.test('corrected eligibility preserves the rejection and records the successful retry', async () => {
+    await reset();
+    for (const row of contacts.values()) row.do_not_contact = true;
+    assert.equal((await svc.tick()).halted, 'verified_inventory_shortfall');
+    contacts.get('c0').do_not_contact = false;
+    assert.equal((await svc.tick()).planned, 1);
+    const decisions = (await pool.query("SELECT payload FROM acquisition_outbound_events WHERE event_type='batch_eligibility' ORDER BY created_at")).rows;
+    assert.deepEqual(decisions.map(row => row.payload.selected), [0, 1]);
+    assert.equal(calls, 0);
+  });
   await t.test('shadow freezes exactly five, creates no execution approval and never invokes transport', async () => {
     await reset(); const result = await svc.tick();
     assert.equal(result.planned, 5); assert.equal(result.sent, 0); assert.equal(calls, 0);
