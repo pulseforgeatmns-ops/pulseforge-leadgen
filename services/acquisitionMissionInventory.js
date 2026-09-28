@@ -4,6 +4,7 @@
 // SEC boundary. A contactable research prospect is not a demonstrated buyer.
 const { governedContactReason, founderFirst } = require('../utils/governedContactEligibility');
 const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
+const { READINESS_STATES } = require('../packages/max/scoutAcquisition/Types');
 const norm = value => String(value || '').trim().toLowerCase().replace(/[ -]+/g, '_');
 
 function qualifyKnowledgeContact(row, mission, policy = {}) {
@@ -59,7 +60,7 @@ async function discoverKnowledgeInventory(mission, opts = {}) {
     const facts = row.knowledge_content.operatingEvidence;
     fitCandidates.push({ id: identity.companyId, companyId: identity.companyId, prospectId: identity.prospectId,
       name: row.company_name, website: row.company_website, location: `${facts.city}, ${facts.country}`,
-      readinessState: 'UNKNOWN', buyerReadiness: 'unknown',
+      readinessState: READINESS_STATES.UNKNOWN, buyerReadiness: 'unknown',
       evidenceRefs: [{ id: `${row.knowledge_id}_operating`, source: facts.sourceUrl,
         label: facts.observation, observedAt: facts.observedAt, entityId: identity.companyId,
         provenance: { kind: 'first_party_website', knowledgeId: row.knowledge_id } },

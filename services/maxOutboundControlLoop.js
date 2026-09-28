@@ -145,7 +145,8 @@ function buildControlPlan({
     }
   }
   const dispatchableDailyCapacity = dispatchCapacityNow;
-  const target = planningDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
+  const buffer = planningDailyCapacity * boundedInt(targetDays, DEFAULT_TARGET_DAYS, 1, 7);
+  const target = policy?.totalCap != null ? Math.min(buffer, Math.max(0, policy.totalCap - Number(totalAttempted || 0))) : buffer;
   const clean = Math.max(0, Number(cleanInventory || 0));
   const deficit = Math.max(0, target - clean);
   const todayRemaining = Math.max(0, dispatchCapacityNow - Math.max(0, Number(sentToday || 0)));
@@ -494,6 +495,12 @@ async function runEnrichmentBatches(enrichment, pool, requested) {
 }
 
 async function defaultScoutRamp({ pool, store, program, source, plan, logger = console }) {
+  if (require('./governedOutboundTenant').createGovernedOutboundTenantContext(store.tenantId).usesTenantMailboxTransport) {
+    const discovery = await require('./acquisitionMissionInventory').discoverKnowledgeInventory(
+      { ...source.payload, tenantId: store.tenantId, id: source.id }, { pool });
+    return { promoted: 0, recovered: 0, discoveredQueued: 0, discovery,
+      reason: 'canonical_knowledge_reused; additional source-backed research requires the tenant cohort runner' };
+  }
   const enrichment = require('../scoutUnenrichedEnrichmentAgent');
   const first = await runEnrichmentBatches(enrichment, pool, plan.deficit);
   let promoted = first.promoted + first.recovered;
@@ -600,8 +607,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     totalAttempted: infrastructure.totalAttempted,
     now: controlNow,
   });
-  const timestamps = options.timestamps || await loadInventoryTimestamps(pool);
-  const funnelStock = options.funnel || await loadScoutFunnelStock(pool);
+  const timestamps = options.timestamps || await loadInventoryTimestamps(pool, store.tenantId);
+  const funnelStock = options.funnel || await loadScoutFunnelStock(pool, store.clientId);
   const plan = buildControlPlan({
     dailyCap: program.policy.dailyCap,
     emmettCapacity: infrastructure.cap,

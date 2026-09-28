@@ -26,18 +26,19 @@ function startAnchorGovernedScheduler(options = {}) {
     busy = true;
     const current = cycles++;
     try {
-      await cron.poll({ pool: options.pool });
+      await cron.poll({ pool: options.pool, tenantIds: ['10'] });
       if (current % 5 === 0) {
-        const result = await cron.run({ pool: options.pool });
+        const result = await cron.run({ pool: options.pool, tenantIds: ['10'] });
         logger.log('[anchor-governed]', JSON.stringify(result));
       }
       if (maxControlEnabled && current % 15 === 0) {
         const control = options.maxControl
           ? await options.maxControl()
           : await (async () => {
-            const { parseGovernedOutboundTenantIds } = require('./governedOutboundTenant');
+            // This is Anchor's existing internal timer. Mailbox tenants are
+            // driven only by their external governed cron invocation.
             const out = {};
-            for (const tenantId of parseGovernedOutboundTenantIds()) {
+            for (const tenantId of ['10']) {
               out[tenantId] = await require('./maxOutboundControlLoop').runMaxOutboundControlLoop({
                 pool: options.pool,
                 tenantId,

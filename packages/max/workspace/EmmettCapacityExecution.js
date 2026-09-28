@@ -88,6 +88,16 @@ async function resolveInfrastructureSnapshot(executionInput = {}, opts = {}) {
   const tenantId = executionInput.executionContext?.tenantId
     || executionInput.specialistInput?.tenantId
     || opts.tenantId;
+  if (opts.pool && ['10','13'].includes(String(tenantId))
+    && require('../../../services/governedOutboundTenant').createGovernedOutboundTenantContext(tenantId).usesTenantMailboxTransport) {
+    const canonical = await require('../../../utils/canonicalSenderIdentity').resolveCanonicalSenderIdentity({ tenantId, pool: opts.pool });
+    if (!canonical.ok) throw validationError(canonical.code, canonical.blockReason);
+    const identities = await opts.pool.query(`SELECT id FROM tenant_sending_identities
+      WHERE tenant_id=$1 AND lower(sender_email)=lower($2) AND status='active'`, [String(tenantId), canonical.identity.senderEmail]);
+    if (identities.rows.length !== 1) throw validationError('mailbox_identity_ambiguous', 'One active canonical mailbox identity is required.');
+    const produced = await require('../../../services/emmettTenantMailboxCapacity').produceTenantMailboxCapacityEnvelope(tenantId, identities.rows[0].id, { pool: opts.pool, now: opts.now });
+    return { ...produced.snapshot, ...canonical.identity, capacityEnvelopeId: produced.envelope.envelopeId };
+  }
   if (opts.pool && tenantId) {
     try {
       const { buildInboxSnapshot } = require('../../../services/emmettOutboundSnapshot');
@@ -369,6 +379,12 @@ async function buildEmmettCapacityPayload(executionInput = {}, opts = {}) {
     timeZone: infrastructureSnapshot.timeZone || 'America/New_York',
   });
 
+  if (infrastructureSnapshot.mailboxKind === 'tenant_smtp') {
+    const mailbox = require('../../emmett-outbound/TenantMailboxCapacity').assessTenantMailboxCapacity(infrastructureSnapshot, opts);
+    Object.assign(assessed, { health: mailbox.health, capacity: mailbox.capacity, governor: mailbox.governor,
+      queue: eoi.buildTodayQueue({ prospects: candidates, recommendedCapacity: mailbox.maxSendsPerDay, capacity: mailbox.capacity, now: opts.now }),
+      recommendations: [] });
+  }
   const payload = mapAssessedToCapacityPayload(assessed, { infrastructureSnapshot });
   assertContract(SPECIALISTS.EMMETT, payload);
   payload._assessed = undefined;

@@ -90,10 +90,13 @@ function adapters(pool, dependencies = {}) {
         && inWindow.hour < envelope.allowedSendWindow.endHour && inWindow.weekday > 0 && inWindow.weekday < 6 ? cap : 0;
       if (opts.mode === 'dispatch' && !dispatchNow) fail('dispatch_unavailable_now');
       Object.assign(snapshot, sender, { sentToday: envelope.currentSentCount, inboxId: sender.senderEmail, domain: sender.sendingDomain });
-      return { snapshot, assessed, cap, sender, envelope, lastAttempt: history.last_attempt,
+      const counts = await new (require('./governedOutboundStore').GovernedOutboundStore)(pool, tenantId).counts(program, inWindow.day);
+      return { snapshot, assessed, cap, sender, envelope, totalAttempted: counts.total, lastAttempt: history.last_attempt,
         dispatchUnavailableNow: !dispatchNow,
         operating: { planningDailyCapacity: cap, dispatchCapacityNow: dispatchNow,
-          effectiveDailyCapacity: cap, allowedSendWindow: envelope.allowedSendWindow,
+          effectiveDailyCapacity: cap, recommendedSafeDailyCapacity: envelope.maxSendsPerDay,
+          governor: assessed.governor, healthScore: assessed.health?.score ?? null,
+          allowedSendWindow: envelope.allowedSendWindow,
           minSpacingMinutes: Math.max(program.policy.spacingMinutes, envelope.minimumSpacingMinutes) } };
     }
     const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);

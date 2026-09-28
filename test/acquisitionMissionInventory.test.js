@@ -14,7 +14,8 @@ test('existing AK passes canonical Scout evidence handoff without inventing read
  const pool={query:async sql=>({rows:sql.includes('SELECT p.*, p.id AS prospect_id')?[row()]:[]})};
  const discovery=await discoverKnowledgeInventory(mission,{pool});
  const payload=mapScoutIntelligenceToDiscoveryPayload(discovery,{missionObjective:'Acquire a qualified founder'});
- assert.equal(payload.qualifiedCount,1);assert.equal(payload.rankedProspects.length,1);assert.equal(payload.rankedProspects[0].id,'c');assert.equal(payload.rankedProspects[0].readinessState,'UNKNOWN');assert.ok(payload.evidence.length>=2);assert.equal(payload.buyingSignals.length,0);
+ assert.equal(payload.qualifiedCount,1);assert.equal(payload.rankedProspects.length,1);assert.equal(payload.rankedProspects[0].id,'c');assert.equal(payload.rankedProspects[0].readinessState,require('../packages/max/scoutAcquisition/Types').READINESS_STATES.UNKNOWN);
+ assert.equal(require('../packages/acquisition-mission/DecisionReadiness').evaluatePrioritizationReadiness(payload).sufficient,true);assert.ok(payload.evidence.length>=2);assert.equal(payload.buyingSignals.length,0);
 });
 test('Paige consumes only the exact prospect-bound approved asset',()=>{
  const input={mission,clientId:13,max:{priorities:[{companyId:'c',name:'Business'}]},approvedCopies:{c:row().approved_asset}};
