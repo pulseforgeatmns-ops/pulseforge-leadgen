@@ -356,7 +356,7 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
   };
 }
 
-async function loadScoutFunnelStock(pool) {
+async function loadScoutFunnelStock(pool, clientId = 10) {
   const funnel = emptyFunnel();
   if (!pool?.query) return funnel;
 
@@ -370,18 +370,18 @@ async function loadScoutFunnelStock(pool) {
       )::int AS pending,
       count(*) FILTER (WHERE COALESCE(enrichment_attempts,0)>=3)::int AS unresolved
     FROM scout_unenriched
-    WHERE client_id=10
+    WHERE client_id=$1
       AND source='max_buffer_replenishment'
-  `).catch(() => ({ rows: [{}] }));
+  `, [Number(clientId)]).catch(() => ({ rows: [{}] }));
 
   const promoted = await pool.query(`
     SELECT count(*)::int AS n
     FROM prospects
-    WHERE client_id=10
+    WHERE client_id=$1
       AND email IS NOT NULL
       AND email_verified=true
       AND COALESCE(do_not_contact,false)=false
-  `).catch(() => ({ rows: [{}] }));
+  `, [Number(clientId)]).catch(() => ({ rows: [{}] }));
 
   const row = unenriched.rows[0] || {};
   funnel.discovered = Number(row.discovered || 0);
@@ -392,7 +392,7 @@ async function loadScoutFunnelStock(pool) {
   return funnel;
 }
 
-async function loadInventoryTimestamps(pool) {
+async function loadInventoryTimestamps(pool, tenantId = '10') {
   const empty = {
     lastReplenishmentAttemptAt: null,
     lastInventoryGrowthAt: null,
@@ -421,8 +421,8 @@ async function loadInventoryTimestamps(pool) {
           AND COALESCE((payload->>'recoveredExisting')::int,0) > 0
       ) AS last_recovery
     FROM acquisition_outbound_events
-    WHERE tenant_id='10'
-  `).catch(() => ({ rows: [{}] }));
+    WHERE tenant_id=$1
+  `, [String(tenantId)]).catch(() => ({ rows: [{}] }));
   const row = events.rows[0] || {};
   const lastInventoryGrowthAt = row.last_inventory_growth
     ? new Date(row.last_inventory_growth).toISOString()

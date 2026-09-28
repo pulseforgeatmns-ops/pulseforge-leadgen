@@ -402,3 +402,7 @@ test('governed scheduler dispatches before Max replenishment on the control cycl
   scheduler.stop();
 });
 
+test('inventory buffer never exceeds the remaining reviewed total grant',()=>{
+ const plan=buildControlPlan({dailyCap:1,emmettCapacity:4,cleanInventory:2,targetDays:3,totalAttempted:0,policy:{dailyCap:1,totalCap:2},operatingCapacity:{planningDailyCapacity:1,dispatchCapacityNow:0,effectiveDailyCapacity:1}});
+ assert.equal(plan.targetInventory,2);assert.equal(plan.shouldReplenish,false);
+});
