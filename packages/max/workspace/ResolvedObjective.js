@@ -32,6 +32,7 @@ const {
   isBroadCommercialPropertyObjective,
 } = require('../../acquisition-mission/MissionNaming');
 const { asText } = require('../../acquisition-mission/types');
+const { extractCanonicalObjectiveEvidence } = require('./CanonicalObjectiveEvidence');
 
 const MISSION_COMMAND_RES = [
   /\bcreate (?:a )?(?:new )?(?:production )?(?:acquisition )?mission\b/i,
@@ -236,6 +237,10 @@ function buildSemanticAmbiguities(extracted, text, opts = {}) {
   return detectAmbiguities(extracted, text, opts);
 }
 
+function presentText(value) {
+  return asText(value).replace(/\s+/g, ' ').trim();
+}
+
 function normalizeBusinessObjective(text) {
   let objective = asText(text);
   objective = objective.replace(/\s+/g, ' ').trim();
@@ -294,6 +299,14 @@ function resolveCanonicalObjective(input = {}) {
     businessText = normalizeText(question);
   }
 
+  let canonicalEvidence = null;
+  if (!businessText) {
+    canonicalEvidence = extractCanonicalObjectiveEvidence(input.context || {});
+    if (canonicalEvidence && canonicalEvidence.text) {
+      businessText = presentText(canonicalEvidence.text);
+    }
+  }
+
   const executionPolicy = buildExecutionPolicy(executionContract);
   const communicationPolicy = buildCommunicationPolicy(executionContract);
   const evaluationPolicy = buildEvaluationPolicy(executionContract, objectiveResolution);
@@ -309,9 +322,10 @@ function resolveCanonicalObjective(input = {}) {
       executionPolicy,
       communicationPolicy,
       evaluationPolicy,
-      extractedFrom: { objectiveLines, policyLines, ignoredLines },
+      extractedFrom: { objectiveLines, policyLines, ignoredLines, canonicalEvidence: null },
       ambiguities: [buildMissingObjectiveAmbiguity()],
       ready: false,
+      objectiveProvenance: null,
     };
   }
 
@@ -393,7 +407,18 @@ function resolveCanonicalObjective(input = {}) {
     executionPolicy,
     communicationPolicy,
     evaluationPolicy,
-    extractedFrom: { objectiveLines, policyLines, ignoredLines },
+    extractedFrom: {
+      objectiveLines,
+      policyLines,
+      ignoredLines,
+      canonicalEvidence: canonicalEvidence
+        ? {
+            source: canonicalEvidence.source,
+            sourceId: canonicalEvidence.sourceId || null,
+            field: canonicalEvidence.field,
+          }
+        : null,
+    },
     ambiguities,
     ready: ambiguities.length === 0 && Boolean(normalizeBusinessObjective(text)),
     intent,
@@ -401,7 +426,20 @@ function resolveCanonicalObjective(input = {}) {
     segmentLabel: extracted.segmentLabel,
     marketScope,
     geographySource: extracted.geographySource || 'operator',
-    provenanceSource: text,
+    provenanceSource: canonicalEvidence
+      ? `${canonicalEvidence.source}:${canonicalEvidence.field}`
+      : text,
+    objectiveProvenance: canonicalEvidence
+      ? {
+          source: canonicalEvidence.source,
+          sourceId: canonicalEvidence.sourceId || null,
+          field: canonicalEvidence.field,
+          validationState: canonicalEvidence.validationState || null,
+          tenantId: input.context && input.context.tenantId != null
+            ? String(input.context.tenantId)
+            : null,
+        }
+      : null,
   };
 }
 
