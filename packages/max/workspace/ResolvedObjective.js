@@ -195,30 +195,14 @@ function isBareManchester(text, regionText) {
 }
 
 function applyContextPrecedence(extracted, context = {}) {
-  const next = { ...extracted, geography: { ...(extracted.geography || {}) } };
-  if (next.geography.region) return next;
-
-  const { pickByPrecedence } = require('../../acquisition-mission/ContextPrecedence');
-  const safeContext = context || {};
-  const blueprint = (safeContext && safeContext.blueprint) || {};
-  const raw = blueprint.geography || blueprint.region || blueprint.targetMarkets || null;
-  let blueprintGeo = null;
-  if (raw) {
-    blueprintGeo = typeof raw === 'object'
-      ? expandGeography(raw.region || '', JSON.stringify(raw))
-      : expandGeography(String(raw), String(raw));
-  }
-  const workspaceGeo = safeContext.workspace && (safeContext.workspace.geography || safeContext.workspace.region);
-  const picked = pickByPrecedence([
-    blueprintGeo && blueprintGeo.region ? { source: 'blueprint', value: blueprintGeo } : null,
-    workspaceGeo
-      ? { source: 'workspace', value: typeof workspaceGeo === 'object' ? workspaceGeo : expandGeography(workspaceGeo, workspaceGeo) }
-      : null,
-  ]);
-  if (picked && picked.value) {
-    next.contextGeography = { ...picked.value, source: picked.source };
-  }
-  return next;
+  const { applyContextPrecedence: applyPlannerContextPrecedence } =
+    require('../../acquisition-mission/MissionPlanner');
+  const safeContext = {
+    ...(context || {}),
+    summary: (context && (context.summary || context.clientIntelligence)) || null,
+    objectiveText: (context && context.objectiveText) || null,
+  };
+  return applyPlannerContextPrecedence(extracted, safeContext);
 }
 
 function inferEvidence(text, opts = {}) {
@@ -366,18 +350,25 @@ function resolveCanonicalObjective(input = {}) {
     extracted = applyResolutions(extracted, input.resolutions);
   }
 
-  extracted = applyContextPrecedence(extracted, input.context || {});
+  extracted = applyContextPrecedence(extracted, {
+    ...(input.context || {}),
+    objectiveText: text,
+  });
 
   const bareManchester = isBareManchester(text, extracted.geography && extracted.geography.region);
   if (bareManchester && !(input.resolutions && input.resolutions.geography)) {
     extracted.geography = { region: null, cities: [], mention: 'Manchester' };
   } else if (extracted.contextGeography && extracted.contextGeography.region) {
     extracted.geography = extracted.contextGeography;
-    extracted.geographySource = extracted.contextGeography.source || 'blueprint';
+    const ctxSource = extracted.contextGeography.source || 'blueprint';
+    extracted.geographySource = /^approved_blueprint_/i.test(ctxSource) ? 'blueprint' : ctxSource;
   }
 
   const ambiguities = buildSemanticAmbiguities(extracted, text, {
-    context: input.context,
+    context: {
+      ...(input.context || {}),
+      objectiveText: text,
+    },
     resolutions: input.resolutions,
   });
 
@@ -426,6 +417,31 @@ function resolveCanonicalObjective(input = {}) {
     segmentLabel: extracted.segmentLabel,
     marketScope,
     geographySource: extracted.geographySource || 'operator',
+    geographyProvenance: extracted.geographyEvidence
+      ? {
+          source: extracted.geographyEvidence.source,
+          sourceId: extracted.geographyEvidence.sourceId || null,
+          field: extracted.geographyEvidence.field,
+          validationState: extracted.geographyEvidence.validationState || null,
+          tenantId:
+            input.context && input.context.tenantId != null
+              ? String(input.context.tenantId)
+              : input.context && input.context.clientId != null
+                ? String(input.context.clientId)
+                : null,
+        }
+      : extracted.geographySource === 'blueprint' || extracted.geographySource === 'approved_blueprint_target_markets'
+        ? {
+            source: extracted.geographySource,
+            sourceId: null,
+            field: 'geography',
+            validationState: 'approved',
+            tenantId:
+              input.context && input.context.clientId != null
+                ? String(input.context.clientId)
+                : null,
+          }
+        : null,
     provenanceSource: canonicalEvidence
       ? `${canonicalEvidence.source}:${canonicalEvidence.field}`
       : text,

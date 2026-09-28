@@ -96,10 +96,12 @@ function normalizeGeography(input = {}) {
   const cities = Array.isArray(input.cities)
     ? input.cities.map(asText).filter(Boolean)
     : [];
+  const scope = asText(input.scope).toLowerCase() || null;
   return {
     region: asText(input.region) || null,
     cities,
     mention: asText(input.mention) || null,
+    scope: scope === 'nationwide' || scope === 'regional' || scope === 'local' ? scope : null,
   };
 }
 
