@@ -18,8 +18,8 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     CREATE TABLE acquisition_mission_contributions(id TEXT PRIMARY KEY, tenant_id TEXT, mission_id TEXT, payload JSONB);
     CREATE TABLE clients(id INT PRIMARY KEY,active BOOLEAN DEFAULT true,autosend_enabled BOOLEAN DEFAULT false);
     CREATE TABLE users(id INT PRIMARY KEY,client_id INT,active BOOLEAN);
-    CREATE TABLE companies(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),client_id INT,name TEXT,domain TEXT,website TEXT);
-    CREATE TABLE prospects(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),company_id UUID,client_id INT,email TEXT,do_not_contact BOOLEAN DEFAULT false,setter_status TEXT,closer_status TEXT,assigned_ao_id INT,last_contacted_at TIMESTAMPTZ,closer_id INT,last_reply_at TIMESTAMPTZ);
+    CREATE TABLE companies(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),client_id INT,name TEXT,domain TEXT,website TEXT,google_place_id TEXT,industry TEXT,size TEXT,location TEXT,practice_area TEXT,firm_size TEXT);
+    CREATE TABLE prospects(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),company_id UUID,client_id INT,email TEXT,do_not_contact BOOLEAN DEFAULT false,setter_status TEXT,closer_status TEXT,assigned_ao_id INT,last_contacted_at TIMESTAMPTZ,closer_id INT,last_reply_at TIMESTAMPTZ,first_name TEXT,last_name TEXT,email_status TEXT,email_verified BOOLEAN,email_verification_method TEXT,notes TEXT,vertical TEXT,website_url TEXT,employee_count_estimate INT,practice_area TEXT,firm_size TEXT,enrichment_provenance JSONB,acquisition_metadata JSONB,acquisition_knowledge_object_id TEXT,is_synthetic BOOLEAN,icp_score NUMERIC,created_at TIMESTAMPTZ DEFAULT now());
     CREATE TABLE ao_prospect_tasks(id UUID PRIMARY KEY DEFAULT gen_random_uuid(),client_id INT,prospect_id UUID,assigned_ao_id INT);
     CREATE TABLE touchpoints(id SERIAL PRIMARY KEY,prospect_id UUID,client_id INT,action_type TEXT);
     CREATE TABLE agent_actions(id SERIAL PRIMARY KEY,created_by TEXT,action_type TEXT,title TEXT,description TEXT,payload JSONB,status TEXT,client_id INT);
@@ -111,6 +111,16 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.equal(p13.tenant_id, '13');
     const company = (await pool.query("INSERT INTO companies(client_id,name) VALUES(13,'Founder company') RETURNING id")).rows[0].id;
     const prospect = (await pool.query('INSERT INTO prospects(company_id,client_id,email) VALUES($1,13,$2) RETURNING *', [company, anchorItem.email])).rows[0];
+    await pool.query("UPDATE prospects SET email_verified=true,email_status='valid',enrichment_provenance=$2,acquisition_metadata=$3 WHERE id=$1", [prospect.id,
+      { email: { source: 'website_email' } }, { contactResolution: { finalState: 'VERIFIED_FOUNDER_EMAIL', bestEmail: prospect.email } }]);
+    // Exercise the real SQL projection used by shadow admission and every dispatch.
+    const resolved = await require('../services/governedOutboundAdapters').adapters(pool, { tenantId: '13' }).contact(company);
+    const { governedContactReason } = require('../utils/governedContactEligibility');
+    assert.equal(governedContactReason(resolved, p13.policy), null);
+    assert.equal(resolved.prospect_id, prospect.id);
+    assert.equal(governedContactReason({ ...resolved, email: 'changed@business.example' }, p13.policy), 'contact_classification_email_changed');
+    const batch = await require('../packages/max/workspace/MissionBoundCrmResolver').loadCrmProspectsForMissionBoundCompanies({ pool, clientId: 13, companyIds: [company] });
+    assert.equal(governedContactReason(batch.get(company), p13.policy), null);
     const env = await svc13.store.freeze(p13, '2026-09-18', 'source13', 'r13', [{
       candidateId: company, companyId: company, prospectId: prospect.id, email: prospect.email,
       message: { subject: 'Founder question', body: 'Would you be open to a conversation?' }, sender: {}, revision: 'r13',
