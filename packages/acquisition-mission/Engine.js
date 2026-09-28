@@ -187,6 +187,11 @@ function maybeAutoAdvanceToReady(store, mission, contributions, ctx, extra) {
 }
 
 function refresh(store, mission) {
+  if (mission.planCancelled) {
+    mission.status = 'Cancelled';
+    mission.pendingOperatorDecision = null;
+    return { mission: store.putMission(mission), ctx: {}, contributions: store.listContributions(mission.id) };
+  }
   const contributions = store.listContributions(mission.id);
   const extra = extrasFrom(store, mission);
   const ctx = specialistContext(contributions, extra);

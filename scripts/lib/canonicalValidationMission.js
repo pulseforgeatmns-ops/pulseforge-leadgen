@@ -24,6 +24,10 @@ async function ensureValidationMission(input, deps) {
       throw Object.assign(new Error('An existing validation mission has committed work under a different scope.'), { code: 'validation_scope_changed' });
     }
     await deps.cancelMission(mission.id);
+    if (!(await deps.inspectMission(mission.id)).mission?.planCancelled) {
+      throw Object.assign(new Error('Canonical cancellation did not persist; refusing another active mission.'),
+        { code: 'validation_cancellation_not_persisted' });
+    }
   }
   if (matching.length) return matching[0];
   const id = `mission_validation_${hash([tenantId, createdBy, scopeHash]).slice(0, 24)}`;

@@ -27,6 +27,11 @@ test('committed scope cannot be silently replaced',async()=>{
 test('ambiguous evidence creates no mission',async()=>{
  const f=fixture();await assert.rejects(()=>ensureValidationMission({...input,resolvedObjective:{ready:false}},f.deps),{code:'canonical_plan_ambiguous'});assert.equal(f.missions.length,0);
 });
+test('failed durable cancellation cannot create another active mission',async()=>{
+ const f=fixture([{id:'stale',createdBy:'validator'}]);f.deps.cancelMission=async()=>{};
+ await assert.rejects(()=>ensureValidationMission(input,f.deps),{code:'validation_cancellation_not_persisted'});
+ assert.equal(f.missions.length,1);
+});
 test('Babrun documented CLI and default status preserve command and tenant',()=>{
  assert.deepEqual(parse(normalizeArgs(['tick','--tenant-id=13','--confirm','bounded-babrun-execution'])),{command:'tick',options:{'tenant-id':'13',confirm:'bounded-babrun-execution'}});
  assert.deepEqual(parse(normalizeArgs([])),{command:'status',options:{'tenant-id':'13'}});
