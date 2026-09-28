@@ -123,10 +123,10 @@ class GovernedOutboundStore {
     try {
       await db.query('BEGIN');
       const expired = await db.query(`UPDATE acquisition_outbound_items i SET status='expired',reason='day_expired'
-        FROM acquisition_outbound_envelopes e WHERE i.envelope_id=e.id AND e.local_day<$1::date AND i.status='pending' RETURNING i.*`, [day]);
-      await db.query("UPDATE acquisition_outbound_envelopes SET status='expired' WHERE local_day<$1::date AND status IN ('frozen','authorized')", [day]);
+        FROM acquisition_outbound_envelopes e WHERE i.envelope_id=e.id AND e.local_day<$1::date AND i.tenant_id=$2 AND i.status='pending' RETURNING i.*`, [day, this.tenantId]);
+      await db.query("UPDATE acquisition_outbound_envelopes SET status='expired' WHERE local_day<$1::date AND tenant_id=$2 AND status IN ('frozen','authorized')", [day, this.tenantId]);
       // An abandoned attempt is never returned to pending after a worker crash.
-      const abandoned = await db.query("UPDATE acquisition_outbound_items SET status='uncertain',reason='abandoned_attempt' WHERE status='attempted' AND attempted_at<now()-interval '5 minutes' RETURNING *");
+      const abandoned = await db.query("UPDATE acquisition_outbound_items SET status='uncertain',reason='abandoned_attempt' WHERE tenant_id=$1 AND status='attempted' AND attempted_at<now()-interval '5 minutes' RETURNING *", [this.tenantId]);
       for (const item of [...expired.rows, ...abandoned.rows]) {
         await this.event(`send_${item.status}`, item.id, { itemId: item.id, envelopeId: item.envelope_id, reason: item.reason }, db);
       }
