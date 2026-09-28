@@ -48,7 +48,8 @@ function resolveProfile(input = {}) {
     if (tenantId && Array.isArray(p.clientIds) && p.clientIds.length) {
       return p.clientIds.map(String).includes(String(tenantId));
     }
-    return true;
+    // Unscoped cleaning seeds are not canonical context for unrelated tenants.
+    return businessNeed === 'commercial_cleaning';
   });
   const preferProperty =
     segments.length === 1 && /property/.test(String(segments[0] || '').toLowerCase());
@@ -66,6 +67,10 @@ function resolveProfile(input = {}) {
 
 function geographyFromLabel(label, profile) {
   const text = asText(label);
+  if (/^(?:United States|USA|U\.S\.A?\.?)$/i.test(text)) {
+    return { label: 'United States', scope: 'nationwide', cities: [], state: null,
+      radiusMiles: null, permittedNearby: [] };
+  }
   const profileGeo = profile && profile.geography ? profile.geography : null;
   const cities = [];
   let state = null;
