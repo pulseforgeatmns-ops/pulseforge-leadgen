@@ -19,6 +19,16 @@ const BABRUN_CAMPAIGN_GOAL =
   'Book discovery calls with founder-led small business owners in the United States for Babrun\'s 12-week business transformation program.';
 
 describe('Canonical geography evidence (tenant-general)', () => {
+  it('retains operator confirmation only for the exact approved canonical snapshot', () => {
+    const context={tenantId:'13',summary:{approved:true,canonicalSnapshotId:'snapshot',geography:'United States'},blueprint:{status:'approved',canonicalSnapshotId:'snapshot',sectionProvenance:{targetMarkets:{origin:'operator_confirmation',actor_id:'operator',evidence_id:'evidence',canonical_snapshot_id:'snapshot',geography:{region:'United States'}}}}};
+    const evidence=extractCanonicalGeographyEvidence(context);
+    assert.equal(evidence.validationState,'operator_confirmed');
+    assert.equal(evidence.operatorConfirmation.evidenceId,'evidence');
+    const resolved=resolveCanonicalObjective({question:BABRUN_OBJECTIVE_NO_GEO,context});
+    assert.equal(resolved.geographyProvenance.operatorConfirmation.evidenceId,'evidence');
+    context.blueprint.sectionProvenance.targetMarkets.canonical_snapshot_id='stale';
+    assert.equal(extractCanonicalGeographyEvidence(context).operatorConfirmation,undefined);
+  });
   it('resolves United States from approved summary targetMarkets', () => {
     const evidence = extractCanonicalGeographyEvidence({
       tenantId: '13',

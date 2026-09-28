@@ -40,7 +40,13 @@ function policy(input, now = new Date()) {
       fail('ao_owners_required');
     }
   } else if (p.tenantId === '13') {
+    p.sendingIdentityId = String(input.sendingIdentityId || '').trim();
     if (!p.sendingIdentityId) fail('sending_identity_required');
+    // Bind the reviewed mailbox window; Emmett still revalidates execution.
+    p.startHour = input.startHour ?? p.startHour;
+    p.endHour = input.endHour ?? p.endHour;
+    if (!Number.isInteger(p.startHour) || !Number.isInteger(p.endHour)
+      || p.startHour < 9 || p.endHour > 17 || p.startHour >= p.endHour) fail('invalid_business_window');
     if (p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) fail('ao_owners_required');
   }
   // dailyCap is operator authorization, not Emmett operational capacity.

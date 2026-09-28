@@ -12,6 +12,16 @@ const {
   governedOutboundSendingDisabledForTenant,
 } = require('../services/governedOutboundTenant');
 const { readOutboundHistory } = require('../services/governedOutboundAdapters');
+const { policy } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+
+test('mailbox grant binds identity and the reviewed Emmett window', () => {
+  const now=new Date('2026-09-28T15:00:00Z');
+  const input={tenantId:'13',sourceMissionId:'mission',senderEmail:'hello@babrun.com',inboxIntegrationId:'mailbox',sendingIdentityId:'identity',dailyCap:1,totalCap:1,spacingMinutes:240,startHour:9,endHour:16,expiresAt:'2026-09-30T15:00:00Z'};
+  const grant=policy(input,now);
+  assert.equal(grant.sendingIdentityId,'identity');assert.equal(grant.endHour,16);assert.equal(grant.spacingMinutes,240);
+  assert.throws(()=>policy({...input,sendingIdentityId:''},now),{code:'sending_identity_required'});
+  assert.throws(()=>policy({...input,endHour:24},now),{code:'invalid_business_window'});
+});
 
 test('only tenants 10 and 13 are allowed for governed outbound', () => {
   assert.deepEqual(ALLOWED_GOVERNED_OUTBOUND_TENANTS, ['10', '13']);

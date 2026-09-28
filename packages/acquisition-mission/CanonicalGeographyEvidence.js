@@ -175,7 +175,23 @@ function extractCanonicalGeographyEvidence(context = {}) {
   ]);
 
   if (!candidates || !candidates.value) return null;
-  return buildEvidenceRow(candidates.value, context);
+  const evidence = buildEvidenceRow(candidates.value, context);
+  // Preserve explicit confirmation attached to this exact approved snapshot.
+  // A stale or draft Blueprint annotation cannot confer operator authority.
+  const confirmation = (blueprint?.sectionProvenance || blueprint?.section_provenance)?.targetMarkets;
+  const snapshotId = blueprint?.canonicalSnapshotId || blueprint?.canonical_snapshot_id;
+  if (evidence && summaryApproved(summary) && blueprint?.status === 'approved'
+    && confirmation?.origin === 'operator_confirmation' && confirmation.evidence_id
+    && snapshotId && confirmation.canonical_snapshot_id === snapshotId
+    && summary.canonicalSnapshotId === snapshotId
+    && confirmation.geography?.region === evidence.geography.region) {
+    evidence.validationState = 'operator_confirmed';
+    evidence.operatorConfirmation = {
+      source: 'operator_confirmation', actorId: confirmation.actor_id,
+      evidenceId: confirmation.evidence_id, canonicalSnapshotId: snapshotId,
+    };
+  }
+  return evidence;
 }
 
 function buildMissingGeographyAmbiguity(context = {}) {

@@ -423,6 +423,8 @@ function resolveCanonicalObjective(input = {}) {
           sourceId: extracted.geographyEvidence.sourceId || null,
           field: extracted.geographyEvidence.field,
           validationState: extracted.geographyEvidence.validationState || null,
+          ...(extracted.geographyEvidence.operatorConfirmation
+            ? { operatorConfirmation: extracted.geographyEvidence.operatorConfirmation } : {}),
           tenantId:
             input.context && input.context.tenantId != null
               ? String(input.context.tenantId)

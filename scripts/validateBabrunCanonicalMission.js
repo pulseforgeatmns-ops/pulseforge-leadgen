@@ -16,7 +16,8 @@ require('dotenv').config();
 
 const { EXECUTION_INTENTS, STAGES, CONTRIBUTION_KINDS } = require('../packages/acquisition-mission');
 const pool = require('../db');
-const { createMission, executeCanonical, inspectMission } = require('../services/acquisitionMission');
+const { createMission, executeCanonical, inspectMission, listMissions } = require('../services/acquisitionMission');
+const { ensureValidationMission } = require('./lib/canonicalValidationMission');
 const {
   resolveTenantCanonicalMissionObjective,
   insufficientObjectiveError,
@@ -50,7 +51,7 @@ const STEPS = Object.freeze([
   {
     label: 'DECIDE_ACQUISITION_APPROACH',
     intent: EXECUTION_INTENTS.DECIDE_ACQUISITION_APPROACH,
-    question: 'Proceed with outbound email for ranked law firm prospects.',
+    question: 'Proceed with outbound email for canonically qualified and ranked prospects.',
     payload: { approach: 'outbound' },
     assertContribution: { specialist: 'max', kind: CONTRIBUTION_KINDS.ACQUISITION_APPROACH },
   },
@@ -320,7 +321,7 @@ function buildVerdict(report) {
   };
 }
 
-async function run(options = {}) {
+async function runValidation(options = {}) {
   if (options.help) {
     printUsage();
     return { help: true };
@@ -367,7 +368,8 @@ async function run(options = {}) {
     report.resolvedObjective.planAmbiguities =
       objectiveResolution.resolvedObjective.ambiguities || [];
 
-    mission = await createMission({
+    const runtimeOpts = { tenantId: TENANT_ID, pool, production: true };
+    mission = await ensureValidationMission({
       tenantId: TENANT_ID,
       clientId: CLIENT_ID,
       objective: objectiveResolution.resolvedObjective.objective,
@@ -377,7 +379,14 @@ async function run(options = {}) {
       owner: 'Operator',
       planningContext: buildResolutionContext(objectiveResolution.context),
       title: 'Babrun canonical mission production validation',
-    }, { pool, production: true });
+    }, {
+      listMissions: () => listMissions(TENANT_ID, runtimeOpts),
+      inspectMission: id => inspectMission(id, runtimeOpts),
+      createMission: input => createMission(input, runtimeOpts),
+      cancelMission: id => executeCanonical({ tenantId: TENANT_ID, missionId: id,
+        intent: EXECUTION_INTENTS.CANCEL_PLAN, operatorId: OPERATOR_ID,
+        question: 'Retire failed validation draft superseded by current approved canonical evidence.' }, runtimeOpts),
+    });
 
     report.missionId = mission.id;
     report.objective = mission.objective;
@@ -389,6 +398,12 @@ async function run(options = {}) {
         startedAt: new Date().toISOString(),
       };
       report.steps.push(stepRecord);
+
+      const current = await inspectMission(mission.id, runtimeOpts);
+      const completed = step.assertContribution
+        ? current.contributions?.some(c => c.specialist === step.assertContribution.specialist && c.kind === step.assertContribution.kind)
+        : current.mission.structuredMission?.immutable;
+      if (completed) { stepRecord.reusedPersistedEvidence = true; continue; }
 
       let routed;
       try {
@@ -429,6 +444,7 @@ async function run(options = {}) {
           code: 'stage_rolled_back',
           message: 'Stage execution rolled back.',
         });
+        throw Object.assign(new Error('Canonical stage rolled back; validation stopped without downstream execution.'), { code: 'stage_rolled_back' });
       }
 
       const missionRow = await loadMissionRow(mission.id);
@@ -490,6 +506,22 @@ async function run(options = {}) {
     report.completedAt = new Date().toISOString();
     report.verdict = buildVerdict(report);
     throw Object.assign(err, { report });
+  }
+}
+
+async function run(options = {}) {
+  if (options.help || !options.confirmProduction) return runValidation(options);
+  assertRuntimeEnv();
+  const lock = await pool.connect();
+  let locked = false;
+  try {
+    locked = (await lock.query('SELECT pg_try_advisory_lock(hashtext($1)) AS locked',
+      [`canonical-validation:${TENANT_ID}:${OPERATOR_ID}`])).rows[0].locked;
+    if (!locked) throw Object.assign(new Error('Canonical validation is already running.'), { code: 'validation_running' });
+    return await runValidation(options);
+  } finally {
+    if (locked) await lock.query('SELECT pg_advisory_unlock(hashtext($1))', [`canonical-validation:${TENANT_ID}:${OPERATOR_ID}`]);
+    lock.release();
   }
 }
 
