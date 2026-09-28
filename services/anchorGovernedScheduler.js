@@ -32,8 +32,21 @@ function startAnchorGovernedScheduler(options = {}) {
         logger.log('[anchor-governed]', JSON.stringify(result));
       }
       if (maxControlEnabled && current % 15 === 0) {
-        const control = await maxControl();
-        logger.log('[anchor-max-control]', JSON.stringify(control));
+        const control = options.maxControl
+          ? await options.maxControl()
+          : await (async () => {
+            const { parseGovernedOutboundTenantIds } = require('./governedOutboundTenant');
+            const out = {};
+            for (const tenantId of parseGovernedOutboundTenantIds()) {
+              out[tenantId] = await require('./maxOutboundControlLoop').runMaxOutboundControlLoop({
+                pool: options.pool,
+                tenantId,
+                logger,
+              });
+            }
+            return out;
+          })();
+        logger.log('[governed-max-control]', JSON.stringify(control));
       }
     } catch (error) {
       logger.error('[anchor-governed]', error.code || error.message);

@@ -35,8 +35,8 @@ function researchCompanies(input, source, now) {
   });
 }
 
-function scoutCompanies(research) {
-  return research.map(row => ({ id: row.domain, tenantId: '10', name: row.name,
+function scoutCompanies(research, tenantId = '10') {
+  return research.map(row => ({ id: row.domain, tenantId, name: row.name,
     website: row.website, industry: 'short_term_rental',
     description: row.evidence.map(item => item.summary).join(' '), source: 'operator_research',
     location: `${row.operatingCity}, NH (managed property; headquarters: ${row.headquarters})`,
@@ -65,8 +65,8 @@ async function failedDiscoveryReceipt(store, program, progress, previous, now) {
     if (previous.id !== `mission_daily_${hash([program.id, day]).slice(0, 24)}`) reject();
   } else {
     const reserved = await store.one(`SELECT payload FROM acquisition_outbound_events
-      WHERE tenant_id='10' AND program_id=$1 AND event_type='preparation_recovery_reserved'
-      AND payload->>'missionId'=$2 ORDER BY created_at DESC LIMIT 1`, [program.id, previous.id]);
+      WHERE tenant_id=$3 AND program_id=$1 AND event_type='preparation_recovery_reserved'
+      AND payload->>'missionId'=$2 ORDER BY created_at DESC LIMIT 1`, [program.id, previous.id, store.tenantId]);
     const receipt = reserved?.payload;
     if (!receipt || receipt.reviewHash !== hash(receipt.review)
       || receipt.review.programId !== program.id || receipt.review.policyHash !== program.policy_hash
@@ -77,8 +77,8 @@ async function failedDiscoveryReceipt(store, program, progress, previous, now) {
       || previous.id !== `mission_daily_${hash([program.id, day, 'replenishment', receipt.reviewHash]).slice(0, 24)}`) reject();
   }
   const event = await store.one(`SELECT id,payload,created_at FROM acquisition_outbound_events
-    WHERE tenant_id='10' AND program_id=$1 AND event_type='inventory_replenished'
-      AND payload->>'missionId'=$2 ORDER BY created_at DESC LIMIT 1`, [program.id, previous.id]);
+    WHERE tenant_id=$3 AND program_id=$1 AND event_type='inventory_replenished'
+      AND payload->>'missionId'=$2 ORDER BY created_at DESC LIMIT 1`, [program.id, previous.id, store.tenantId]);
   const payload = event?.payload;
   const candidates = payload?.candidates;
   if (!event || payload.programId !== program.id || payload.missionId !== previous.id
@@ -89,7 +89,7 @@ async function failedDiscoveryReceipt(store, program, progress, previous, now) {
     || !Number.isFinite(+new Date(event.created_at))
     || +new Date(event.created_at) < +new Date(progress.last_attempt_at)
     || +new Date(event.created_at) > +now || clock(new Date(event.created_at)).day !== day) reject();
-  if (await store.one("SELECT id FROM acquisition_mission_contributions WHERE tenant_id='10' AND mission_id=$1 LIMIT 1", [previous.id])) reject();
+  if (await store.one('SELECT id FROM acquisition_mission_contributions WHERE tenant_id=$1 AND mission_id=$2 LIMIT 1', [store.tenantId, previous.id])) reject();
   return { id: event.id, payloadHash: hash(payload), createdAt: new Date(event.created_at).toISOString() };
 }
 
@@ -105,9 +105,9 @@ async function reviewReplenishment(store, input, actor, now, enabled) {
   if (reason) fail(reason);
   const day = clock(now).day;
   if (input.localDay !== day) fail('replenishment_day_changed');
-  const client = await store.one('SELECT active,autosend_enabled FROM clients WHERE id=10');
+  const client = await store.one('SELECT active,autosend_enabled FROM clients WHERE id=$1', [store.clientId]);
   if (client?.active !== true || client.autosend_enabled !== false) fail('tenant_inactive_or_legacy_autosend_enabled');
-  const source = project(await store.one("SELECT * FROM acquisition_missions WHERE tenant_id='10' AND id=$1", [program.source_mission_id]));
+  const source = project(await store.one('SELECT * FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [store.tenantId, program.source_mission_id]));
   if (hash(missionScope(source)) !== program.scope_hash || source.planCancelled || !source.structuredMission?.immutable) fail('source_scope_changed');
   const progress = await store.one('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2', [program.id, day]);
   if (!progress || progress.mission_id !== input.fromMissionId || progress.attempts < 1) fail('replenishment_preparation_changed');
@@ -115,16 +115,16 @@ async function reviewReplenishment(store, input, actor, now, enabled) {
   const immediate = input.immediatePreparation === true;
   if (immediate && !String(input.operatorReason || '').trim()) fail('immediate_preparation_reason_required');
   if (!progress.last_attempt_at || (!immediate && +now - +new Date(progress.last_attempt_at) < 60 * 60000)) fail('preparation_backoff');
-  const previous = project(await store.one("SELECT * FROM acquisition_missions WHERE tenant_id='10' AND id=$1", [progress.mission_id]));
+  const previous = project(await store.one('SELECT * FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [store.tenantId, progress.mission_id]));
   if (hash(missionScope(previous)) !== program.scope_hash || previous.planCancelled) fail('daily_mission_scope_changed');
   if (program.last_error !== 'verified_inventory_shortfall') fail('replenishment_requires_blocked_ready_batch');
   const discoveryFailure = previous.stage === 'ready' ? null
     : await failedDiscoveryReceipt(store, program, progress, previous, now);
-  const envelope = await store.one("SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id='10' AND (program_id=$1 OR local_day=$2::date) LIMIT 1", [program.id, day]);
+  const envelope = await store.one('SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id=$1 AND (program_id=$2 OR local_day=$3::date) LIMIT 1', [store.tenantId, program.id, day]);
   if (envelope) fail('replenishment_envelope_exists');
   const counts = await store.counts(program, day);
   if (counts.today || counts.total || counts.uncertain) fail('replenishment_attempt_exists');
-  const execution = await store.one("SELECT id FROM acquisition_mission_outbound_executions WHERE tenant_id='10' AND mission_id=$1 LIMIT 1", [previous.id]);
+  const execution = await store.one('SELECT id FROM acquisition_mission_outbound_executions WHERE tenant_id=$1 AND mission_id=$2 LIMIT 1', [store.tenantId, previous.id]);
   if (execution) fail('replenishment_execution_exists');
   const research = researchCompanies(input.research, source, now);
   for (const candidate of research) {
@@ -154,7 +154,7 @@ async function reserveReplenishment(store, plan, now = new Date()) {
       || program.scope_hash !== review.scopeHash) fail('replenishment_grant_changed');
     if (review.discoveryFailure) {
       const lockedStore = { one: async (sql, args) => (await db.query(sql, args)).rows[0] || null };
-      const previous = project(await lockedStore.one("SELECT * FROM acquisition_missions WHERE tenant_id='10' AND id=$1 FOR UPDATE", [review.fromMissionId]));
+      const previous = project(await lockedStore.one('SELECT * FROM acquisition_missions WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [store.tenantId, review.fromMissionId]));
       const progress = await lockedStore.one('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2 FOR UPDATE', [review.programId, review.localDay]);
       if (!progress || progress.mission_id !== review.fromMissionId || hash(previous) !== review.previousMissionHash
         || program.last_error !== 'verified_inventory_shortfall') fail('replenishment_preparation_changed');
@@ -165,8 +165,8 @@ async function reserveReplenishment(store, plan, now = new Date()) {
       SET attempts=attempts+1,last_attempt_at=now(),last_error=NULL,mission_id=$5
       WHERE program_id=$1 AND local_day=$2 AND mission_id=$3 AND attempts=$4
       AND date_trunc('milliseconds',last_attempt_at)=$6::timestamptz
-      AND NOT EXISTS (SELECT 1 FROM acquisition_outbound_envelopes WHERE tenant_id='10' AND (program_id=$1 OR local_day=$2::date))
-      RETURNING *`, [review.programId, review.localDay, review.fromMissionId, review.priorAttempts, nextMissionId, review.priorAttemptAt]);
+      AND NOT EXISTS (SELECT 1 FROM acquisition_outbound_envelopes WHERE tenant_id=$7 AND (program_id=$1 OR local_day=$2::date))
+      RETURNING *`, [review.programId, review.localDay, review.fromMissionId, review.priorAttempts, nextMissionId, review.priorAttemptAt, store.tenantId]);
     if (updated.rows.length !== 1) fail('replenishment_preparation_changed');
     await store.event('preparation_recovery_reserved', [review.programId, reviewHash],
       { programId: review.programId, missionId: nextMissionId, reviewHash, review }, db);

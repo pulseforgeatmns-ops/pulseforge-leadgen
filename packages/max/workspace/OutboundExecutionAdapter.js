@@ -45,13 +45,14 @@ async function resolveExecuteSender(input = {}) {
  */
 async function executeOutboundBundle(input = {}) {
   let governedProgram = null;
-  if (input.pool && String(input.tenantId) === '10') {
+  const governedTenantId = input.tenantId != null ? String(input.tenantId) : null;
+  if (input.pool && governedTenantId && ['10', '13'].includes(governedTenantId)) {
     const installed = await input.pool.query("SELECT to_regclass('acquisition_outbound_programs') AS installed");
     if (installed.rows[0]?.installed) {
-      const program = await input.pool.query("SELECT id FROM acquisition_outbound_programs WHERE tenant_id='10' AND mode<>'revoked'");
+      const program = await input.pool.query('SELECT id FROM acquisition_outbound_programs WHERE tenant_id=$1 AND mode<>\'revoked\'', [governedTenantId]);
       governedProgram = program.rows[0] || null;
       if (program.rows.length && !input.governedEnvelopeId) {
-        return { blocked: true, blockReason: 'Anchor outbound is controlled by its daily program.',
+        return { blocked: true, blockReason: 'Governed outbound is controlled by its daily program.',
           blockCode: 'governed_executor_required', records: [], summary: summarizeExecutionRecords([]) };
       }
     }
@@ -143,7 +144,7 @@ async function executeOutboundBundle(input = {}) {
   // replay, a stale one-send runner, or a caller-supplied prospect filter.
   const governedApproval = (approval || findValidExecutionApproval(contributions, mission.id))?.payload?.dailyEnvelope;
   if (governedProgram && (!governedApproval || governedApproval.programId !== governedProgram.id)) {
-    return { blocked: true, blockReason: 'Approval does not belong to the active Anchor program.',
+    return { blocked: true, blockReason: 'Approval does not belong to the active governed outbound program.',
       blockCode: 'governed_executor_required', bundle, records: [], summary: summarizeExecutionRecords([]) };
   }
   if (governedApproval) {

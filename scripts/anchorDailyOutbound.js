@@ -5,7 +5,7 @@
 // explicit command, environment gate, active program and artifact-bound envelope.
 function parse(argv) {
   const [command = 'status', ...rest] = argv;
-  const options = {};
+  const options = { 'tenant-id': process.env.GOVERNED_OUTBOUND_CLI_TENANT || '10' };
   for (let i = 0; i < rest.length; i += 2) {
     if (!rest[i].startsWith('--') || !rest[i + 1] || rest[i + 1].startsWith('--')) throw new Error('Expected --key value');
     options[rest[i].slice(2)] = rest[i + 1];
@@ -18,12 +18,16 @@ async function run(argv = process.argv.slice(2)) {
   require('dotenv').config({ quiet: true });
   const { command, options } = parse(argv);
   const pool = require('../db');
-  const service = require('../services/governedOutbound').productionService(pool);
+  const tenantId = String(options['tenant-id'] || '10');
+  const service = require('../services/governedOutbound').productionService(pool, { tenantId });
   try {
     if (command === 'status') return await service.status();
-    if (command === 'poll') return await require('../anchorDailyOutboundCron').poll({ pool });
+    if (command === 'poll') return await require('../anchorDailyOutboundCron').poll({ pool, tenantIds: [tenantId] });
     if (command === 'tick') {
-      if (options.confirm !== 'bounded-anchor-execution') throw new Error('tick requires --confirm bounded-anchor-execution');
+      const confirm = tenantId === '13' ? 'bounded-babrun-execution' : 'bounded-anchor-execution';
+      if (options.confirm !== confirm && options.confirm !== 'bounded-anchor-execution') {
+        throw new Error(`tick requires --confirm ${confirm}`);
+      }
       return await service.tick();
     }
     if (!options.operator) throw new Error('--operator is required for audited changes');

@@ -29,11 +29,27 @@ router.post('/cron/anchor-max-outbound-control', async (req, res) => {
   try {
     const pool = require('../db');
     const execute = String(req.query.execute || 'true').toLowerCase() !== 'false';
-    const result = await require('../services/maxOutboundControlLoop').runMaxOutboundControlLoop({
-      pool,
-      execute,
-      logger: console,
-    });
+    const tenantId = req.query.tenant_id || req.query.tenantId || null;
+    const result = tenantId
+      ? await require('../services/maxOutboundControlLoop').runMaxOutboundControlLoop({
+        pool,
+        execute,
+        logger: console,
+        tenantId: String(tenantId),
+      })
+      : await (async () => {
+        const { parseGovernedOutboundTenantIds } = require('../services/governedOutboundTenant');
+        const tenants = {};
+        for (const tid of parseGovernedOutboundTenantIds()) {
+          tenants[tid] = await require('../services/maxOutboundControlLoop').runMaxOutboundControlLoop({
+            pool,
+            execute,
+            logger: console,
+            tenantId: tid,
+          });
+        }
+        return { tenants };
+      })();
     return res.set('Cache-Control', 'no-store').json(result);
   } catch (e) {
     return res.status(500).json({ error: e.code || 'anchor_max_outbound_control_failed' });

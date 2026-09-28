@@ -32,8 +32,17 @@ function policy(input, now = new Date()) {
     weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17,
     // This phase authorizes first touches only. A reply can never restart a sequence.
     maxSequenceStep: 1, enrichmentLimit: 15, preparationAttemptsPerDay: 3 };
-  if (p.tenantId !== '10' || !p.sourceMissionId || !p.senderEmail.includes('@') || !p.inboxIntegrationId) fail('invalid_anchor_scope');
-  if (!p.aoOwnerIds.length || p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) fail('ao_owners_required');
+  if (!['10', '13'].includes(p.tenantId) || !p.sourceMissionId || !p.senderEmail.includes('@') || !p.inboxIntegrationId) {
+    fail('invalid_governed_outbound_scope');
+  }
+  if (p.tenantId === '10') {
+    if (!p.aoOwnerIds.length || p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) {
+      fail('ao_owners_required');
+    }
+  } else if (p.tenantId === '13') {
+    if (!p.sendingIdentityId) fail('sending_identity_required');
+    if (p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) fail('ao_owners_required');
+  }
   // dailyCap is operator authorization, not Emmett operational capacity.
   // Emmett may recommend more; the grant can now authorize up to the mailbox-scale ceiling.
   if (!Number.isInteger(p.dailyCap) || p.dailyCap < 1 || p.dailyCap > 50
