@@ -229,7 +229,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       const message = selected?.message || item.snapshot.message;
       const crm = await adapters.contact(item.candidate_id);
       if (String(crm?.prospect_id || crm?.id) !== item.prospect_id || String(crm?.company_id) !== item.company_id) fail('crm_binding_changed');
-      const reason = candidateReason(queueItem, crm, message)
+      const reason = candidateReason(queueItem, crm, message, current.policy)
         || await store.suppression(item.snapshot, envelope.mission_id);
       if (reason) { await store.finish(item, 'suppressed', reason); fail(reason); }
       await adapters.liveGate(current, item, prepared, now());
@@ -353,6 +353,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
           store,
           adapters,
           prepared,
+          program,
           existingItems: [...items, ...selected],
           limit: plan.prepareRequested - selected.length,
         });
@@ -399,7 +400,6 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
           return { mode: 'shadow', envelopeId: envelope.id, planned: envelope.manifest.length, sent: 0 };
         }
         if (!enabled()) fail('environment_kill_switch');
-        if (envelope.status === 'frozen') envelope = await bindApproval(program, envelope);
         let refill = { preparedAdded: 0, prepareSkippedReason: null };
         try {
           refill = await refillEnvelope(program, source, day, envelope, counts);
@@ -411,17 +411,16 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
             pendingPrepared: 0,
           };
         }
-        if (envelope.status !== 'authorized') {
-          if (envelope.status === 'complete') {
-            await store.health(program);
-            return { completed: true, envelopeId: envelope.id, sent: 0, ...refill };
-          }
-          return { halted: envelope.status, envelopeId: envelope.id, sent: 0, ...refill };
+        if (envelope.status === 'complete') {
+          await store.health(program);
+          return { completed: true, envelopeId: envelope.id, sent: 0, ...refill };
         }
         const window = windowReason(program.policy, now(), true);
         if (window) fail(window);
         if (envelope.status === 'frozen') envelope = await bindApproval(program, envelope);
-        if (envelope.status !== 'authorized') return { halted: envelope.status, envelopeId: envelope.id };
+        if (envelope.status !== 'authorized') {
+          return { halted: envelope.status, envelopeId: envelope.id, sent: 0, ...refill };
+        }
         if (counts.last_attempt && +now() - +new Date(counts.last_attempt) < program.policy.spacingMinutes * 60000) fail('spacing');
         const item = (await store.items(envelope.id)).find(x => x.status === 'pending');
         if (!item) {

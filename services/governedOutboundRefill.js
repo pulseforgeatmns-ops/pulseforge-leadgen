@@ -178,7 +178,7 @@ async function selectRefillEntries({
   for (const row of prepared.candidates || []) {
     if (selected.length >= limit) break;
     const crm = await adapters.contact(row.candidateId);
-    const reason = candidateReason(row.item, crm, row.message);
+    const reason = candidateReason(row.item, crm, row.message, program?.policy);
     const entry = {
       candidateId: String(row.candidateId),
       prospectId: String(crm?.prospect_id || crm?.id || ''),
@@ -237,6 +237,7 @@ async function selectInventoryRefillEntries({
   store,
   adapters,
   prepared,
+  program,
   existingItems = [],
   limit,
 } = {}) {
@@ -282,7 +283,7 @@ async function selectInventoryRefillEntries({
       paige: { candidateId },
       refill: true,
     };
-    const reason = candidateReason(queueItem, crm, message);
+    const reason = candidateReason(queueItem, crm, message, program?.policy);
     const entry = {
       candidateId,
       prospectId,
