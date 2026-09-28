@@ -34,6 +34,7 @@ describe('Canonical objective evidence (tenant-general)', () => {
   it('resolves tenant 13 objective from canonical Blueprint evidence', () => {
     const resolved = resolveCanonicalObjective({
       question: '',
+      targetSegment: 'Small Business Owners',
       context: {
         tenantId: '13',
         clientId: 13,
@@ -48,6 +49,8 @@ describe('Canonical objective evidence (tenant-general)', () => {
     assert.match(resolved.objective, /Book discovery calls/i);
     assert.equal(resolved.objectiveProvenance.source, 'approved_blueprint_campaign_goals');
     assert.equal(resolved.objectiveProvenance.validationState, 'approved');
+    assert.equal(resolved.geography.region, 'United States');
+    assert.equal(resolved.ready, true);
   });
 
   it('fails closed when canonical evidence is missing', () => {

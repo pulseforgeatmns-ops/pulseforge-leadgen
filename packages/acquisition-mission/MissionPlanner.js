@@ -28,6 +28,11 @@ const {
   EXECUTION_STATES,
 } = require('./StructuredMission');
 const { mayAssign, pickByPrecedence } = require('./ContextPrecedence');
+const {
+  extractCanonicalGeographyEvidence,
+  buildMissingGeographyAmbiguity,
+  tenantGeographyChoices,
+} = require('./CanonicalGeographyEvidence');
 
 const GREATER_MANCHESTER_CITIES = Object.freeze([
   'Manchester',
@@ -160,6 +165,14 @@ function expandGeography(rawGeography, text) {
 
   if (/nashville/.test(hay)) {
     return { region: 'Nashville TN', cities: ['Nashville'] };
+  }
+
+  if (
+    /^(?:united states(?:\s+of\s+america)?|u\.?\s?s\.?\s?a\.?|usa)$/i.test(regionText.trim())
+    || /\b(?:united states(?:\s+of\s+america)?|u\.?\s?s\.?\s?a\.?|usa)\b/i.test(hay)
+      && !/manchester|charleston|nashville|new hampshire|\bnh\b|\bwv\b/i.test(hay)
+  ) {
+    return { region: 'United States', cities: [], scope: 'nationwide' };
   }
 
   const cityMatches = regionText.split(/,|\band\b/i).map((part) => part.trim()).filter(Boolean);
@@ -305,25 +318,23 @@ function detectAmbiguities(extracted, text, opts = {}) {
 
   const geo = extracted.geography || {};
   if (!geo.region && !(geo.cities && geo.cities.length) && !isBareManchester(hay, geo.region)) {
-    const blueprintGeo = blueprintGeography(opts.context);
-    const choices = [];
-    if (blueprintGeo && blueprintGeo.region) {
-      choices.push({
-        id: 'blueprint_geography',
-        label: `${blueprintGeo.region} (from Blueprint)`,
-        value: blueprintGeo,
-      });
-    }
-    choices.push(
-      { id: 'manchester_nh', label: 'Greater Manchester NH', value: greaterManchesterGeography() },
-      { id: 'charleston_wv', label: 'Charleston WV', value: { region: 'Charleston WV', cities: ['Charleston', 'South Charleston', 'St. Albans'] } }
-    );
-    ambiguities.push({
-      field: 'geography.region',
-      question: 'Which region should this mission cover?',
-      choices,
-      reason: 'No geography was stated.',
+    const choices = tenantGeographyChoices({
+      ...(opts.context || {}),
+      objectiveText: hay,
     });
+    if (choices.length > 1) {
+      ambiguities.push({
+        field: 'geography.region',
+        question: 'Which region should this mission cover?',
+        choices,
+        reason: 'Multiple canonical geography sources disagree.',
+      });
+    } else if (!choices.length) {
+      ambiguities.push(buildMissingGeographyAmbiguity({
+        ...(opts.context || {}),
+        objectiveText: hay,
+      }));
+    }
   }
 
   if (!extracted.segmentKey && !resolutions.segment && !isAmbiguousPropertyManager(hay, extracted.segmentKey)) {
@@ -361,9 +372,23 @@ function applyResolutions(extracted, resolutions = {}) {
 
 function applyContextPrecedence(extracted, context = {}) {
   const next = { ...extracted, geography: { ...(extracted.geography || {}) } };
-  if (next.geography.region) return next;
+  if (next.geography.region || (next.geography.cities && next.geography.cities.length)) return next;
 
   const safeContext = context || {};
+  const canonicalEvidence = extractCanonicalGeographyEvidence({
+    ...safeContext,
+    summary: safeContext.summary || safeContext.clientIntelligence,
+    objectiveText: safeContext.objectiveText,
+  });
+  if (canonicalEvidence && canonicalEvidence.geography && canonicalEvidence.geography.region) {
+    next.contextGeography = {
+      ...canonicalEvidence.geography,
+      source: canonicalEvidence.source,
+    };
+    next.geographyEvidence = canonicalEvidence;
+    return next;
+  }
+
   const blueprintGeo = blueprintGeography(safeContext);
   const workspaceGeo = safeContext.workspace && (safeContext.workspace.geography || safeContext.workspace.region);
   const picked = pickByPrecedence([
@@ -636,6 +661,7 @@ module.exports = {
   applyClarification,
   applyEdits,
   applyResolutions,
+  applyContextPrecedence,
   matchChoice,
   inferSegmentKey,
   inferConstraints,

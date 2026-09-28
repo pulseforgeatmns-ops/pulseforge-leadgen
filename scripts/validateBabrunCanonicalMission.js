@@ -20,6 +20,7 @@ const { createMission, executeCanonical, inspectMission } = require('../services
 const {
   resolveTenantCanonicalMissionObjective,
   insufficientObjectiveError,
+  buildResolutionContext,
 } = require('../services/canonicalMissionObjective');
 const { TENANT_ID, CLIENT_ID, BABRUN_TARGET_SEGMENT } = require('./lib/babrunCanonicalOutbound');
 
@@ -352,6 +353,8 @@ async function run(options = {}) {
       objective: objectiveResolution.resolvedObjective.objective,
       ready: objectiveResolution.resolvedObjective.ready,
       provenance: objectiveResolution.resolvedObjective.objectiveProvenance || null,
+      geography: objectiveResolution.resolvedObjective.geography || null,
+      geographyProvenance: objectiveResolution.resolvedObjective.geographyProvenance || null,
       evidence: objectiveResolution.evidence || null,
     };
 
@@ -372,9 +375,7 @@ async function run(options = {}) {
       targetSegment: TARGET_SEGMENT,
       createdBy: OPERATOR_ID,
       owner: 'Operator',
-      planningContext: {
-        blueprint: objectiveResolution.context.strategicEvidence?.strategicEvidence || null,
-      },
+      planningContext: buildResolutionContext(objectiveResolution.context),
       title: 'Babrun canonical mission production validation',
     }, { pool, production: true });
 
