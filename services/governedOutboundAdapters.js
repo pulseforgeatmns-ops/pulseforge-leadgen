@@ -287,6 +287,16 @@ function adapters(pool, dependencies = {}) {
     const { sender } = await tenant(program);
     const binding = require('../utils/canonicalSenderIdentity').assertCapacityMatchesCanonical(capacity, sender);
     if (!binding.ok) fail('capacity_sender_changed');
+    if (ctx.usesTenantMailboxTransport) {
+      const inventory = await require('./acquisitionMissionInventory').loadKnowledgeInventory(pool, snapshot.mission, program.policy);
+      for (const item of capacity.queue?.items || []) {
+        const row = inventory.find(r => [String(r.company_id), String(r.id)].includes(String(item.prospectId || item.id)));
+        if (!row) continue;
+        const copy = amo.resolvePaigeVariant(variants, { candidateId: item.paige?.candidateId || item.id, variantLabel: item.paige?.variantLabel || 'Primary' });
+        const approved = row.approved_asset?.content;
+        if (!approved || copy?.subject !== approved.subject || copy?.body !== (approved.body || approved.statement)) fail('approved_copy_binding_mismatch');
+      }
+    }
     return { sender, revision: amo.computePreparedArtifactRevision(snapshot.mission.id, contributions),
       capacity: Number(capacity.capacity?.recommended || 0),
       candidates: (capacity.queue?.items || []).map(item => ({ item,
