@@ -262,7 +262,7 @@ async function enrichCandidateFromWebsite(candidate) {
   };
 }
 
-async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET) {
+async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET, deps = {}) {
   if (!apiKey) return [];
   const discovered = [];
   const seenDomains = new Set();
@@ -271,7 +271,8 @@ async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET) {
     if (discovered.length >= limit) break;
     let results;
     try {
-      results = await legacyTextSearch(seed.query, apiKey, { region: 'us' });
+      const response = await (deps.textSearch || legacyTextSearch)({ query: seed.query, apiKey, record: { clientId: CLIENT_ID, tenantId: TENANT_ID, caller: 'babrun_cohort_002' } });
+      results = response.ok && Array.isArray(response.data?.results) ? response.data.results : [];
     } catch {
       continue;
     }
@@ -280,7 +281,8 @@ async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET) {
       let details = hit;
       if (hit.place_id) {
         try {
-          details = await legacyPlaceDetails(hit.place_id, apiKey);
+          const response = await (deps.placeDetails || legacyPlaceDetails)({ placeId: hit.place_id, apiKey, fields: 'name,website,formatted_address,place_id', record: { clientId: CLIENT_ID, tenantId: TENANT_ID, caller: 'babrun_cohort_002' } });
+          details = response.ok && response.data?.result ? response.data.result : hit;
         } catch {
           details = hit;
         }
@@ -802,6 +804,7 @@ module.exports = {
   isDuplicate,
   loadDedupeIndex,
   buildCandidateQueue,
+  discoverViaPlaces,
   runCohort002,
   formatCohortTableRow,
   strongestProspectsByEvidence,

@@ -51,3 +51,8 @@ describe('babrun cohort 002', () => {
     assert.equal(cohortAkId(10), 'ak_babrun_cohort002_c010');
   });
 });
+
+it('Cohort Places adapter uses the structured API contract and tolerates empty results',async()=>{
+ const calls=[];const rows=await require('../scripts/lib/babrunCohort002').discoverViaPlaces('test-key',{companies:new Set(),domains:new Set(),akIds:new Set(),founders:new Set()},1,{textSearch:async input=>{calls.push(input);return {ok:true,data:{results:[]}};}});
+ assert.deepEqual(rows,[]);assert.ok(calls.length);assert.equal(calls[0].apiKey,'test-key');assert.equal(calls[0].record.clientId,13);assert.ok(calls[0].query);
+});
