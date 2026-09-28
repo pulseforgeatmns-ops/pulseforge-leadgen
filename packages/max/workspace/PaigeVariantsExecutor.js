@@ -215,13 +215,22 @@ function buildBasePaigeVariantsPayload(input = {}) {
   const subjects = variants.map((v) => v.subject);
   const max = input.max || {};
   const scout = input.scout || {};
+  const plan = input.plan || {};
+  const mission = input.mission || {};
+  const clientId = Number(
+    input.clientId
+    || plan.clientId
+    || mission.clientId
+    || mission.tenantId
+    || 0
+  );
   const usedPersonalization = variants.some((variant) => variant.attributableIntelligence?.usedPersonalization);
 
   return {
     variants,
     subjects,
     messaging: variants[0]?.body || null,
-    cta: Number(input.clientId || plan.clientId || input.mission?.clientId || input.mission?.tenantId) === ANCHOR_CLIENT_ID
+    cta: clientId === ANCHOR_CLIENT_ID
       ? (variants[0]?.cta || 'Want me to send over what we\'d need for a quote?')
       : 'Reply to schedule a walkthrough',
     hypotheses: [
