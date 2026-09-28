@@ -293,6 +293,7 @@ function adapters(pool, dependencies = {}) {
         const row = inventory.find(r => [String(r.company_id), String(r.id)].includes(String(item.prospectId || item.id)));
         if (!row) continue;
         const copy = amo.resolvePaigeVariant(variants, { candidateId: item.paige?.candidateId || item.id, variantLabel: item.paige?.variantLabel || 'Primary' });
+        if (item.paige?.subject !== copy?.subject || item.paige?.body !== copy?.body) fail('capacity_copy_binding_mismatch');
         const approved = row.approved_asset?.content;
         if (!approved || copy?.subject !== approved.subject || copy?.body !== (approved.body || approved.statement)) fail('approved_copy_binding_mismatch');
       }
