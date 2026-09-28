@@ -409,7 +409,12 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
       executionContract: input.executionContract,
       objectiveResolution: input.objectiveResolution,
       context: {
+        tenantId,
+        clientId: Number(tenantId) || tenantId,
         blueprint: ciEvidence.strategicEvidence || null,
+        summary: ciLoaded.summary || null,
+        clientIntelligence: ciLoaded.summary || null,
+        operatorObjectives: input.operatorObjectives || null,
       },
       targetSegment,
     });

@@ -17,12 +17,13 @@ require('dotenv').config();
 const { EXECUTION_INTENTS, STAGES, CONTRIBUTION_KINDS } = require('../packages/acquisition-mission');
 const pool = require('../db');
 const { createMission, executeCanonical, inspectMission } = require('../services/acquisitionMission');
+const {
+  resolveTenantCanonicalMissionObjective,
+  insufficientObjectiveError,
+} = require('../services/canonicalMissionObjective');
+const { TENANT_ID, CLIENT_ID, BABRUN_TARGET_SEGMENT } = require('./lib/babrunCanonicalOutbound');
 
-const TENANT_ID = '13';
-const CLIENT_ID = 13;
-const OBJECTIVE =
-  'Book discovery calls with founder-led small business owners in the United States for Babrun 12-week business transformation program.';
-const TARGET_SEGMENT = 'Small Business Owners';
+const TARGET_SEGMENT = BABRUN_TARGET_SEGMENT;
 const OPERATOR_ID = 'babrun-canonical-mission-validation';
 
 const STEPS = Object.freeze([
@@ -341,14 +342,40 @@ async function run(options = {}) {
 
   let mission;
   try {
+    const objectiveResolution = await resolveTenantCanonicalMissionObjective({
+      tenantId: TENANT_ID,
+      clientId: CLIENT_ID,
+      pool,
+      targetSegment: TARGET_SEGMENT,
+    });
+    report.resolvedObjective = {
+      objective: objectiveResolution.resolvedObjective.objective,
+      ready: objectiveResolution.resolvedObjective.ready,
+      provenance: objectiveResolution.resolvedObjective.objectiveProvenance || null,
+      evidence: objectiveResolution.evidence || null,
+    };
+
+    if (!objectiveResolution.resolvedObjective.objective) {
+      throw insufficientObjectiveError(
+        objectiveResolution.evidence,
+        objectiveResolution.context
+      );
+    }
+    report.resolvedObjective.planAmbiguities =
+      objectiveResolution.resolvedObjective.ambiguities || [];
+
     mission = await createMission({
       tenantId: TENANT_ID,
       clientId: CLIENT_ID,
-      objective: OBJECTIVE,
+      objective: objectiveResolution.resolvedObjective.objective,
+      resolvedObjective: objectiveResolution.resolvedObjective,
       targetSegment: TARGET_SEGMENT,
       createdBy: OPERATOR_ID,
       owner: 'Operator',
-      title: 'Babrun canonical mission production validation — law firms Greater Manchester NH',
+      planningContext: {
+        blueprint: objectiveResolution.context.strategicEvidence?.strategicEvidence || null,
+      },
+      title: 'Babrun canonical mission production validation',
     }, { pool, production: true });
 
     report.missionId = mission.id;
@@ -467,7 +494,6 @@ async function run(options = {}) {
 
 module.exports = {
   TENANT_ID,
-  OBJECTIVE,
   TARGET_SEGMENT,
   STEPS,
   parseArgs,
