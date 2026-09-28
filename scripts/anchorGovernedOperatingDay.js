@@ -293,6 +293,7 @@ if (require.main === module) {
 
 module.exports = {
   parseArgs,
+  nyLocalDayBounds,
   pickPreflightChecks,
   assertPreflight,
   runPreflight,
