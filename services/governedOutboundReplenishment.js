@@ -153,9 +153,10 @@ async function reserveReplenishment(store, plan, now = new Date()) {
     if (program?.mode !== 'shadow' || program.policy_hash !== review.policyHash || hash(program.policy) !== review.policyHash
       || program.scope_hash !== review.scopeHash) fail('replenishment_grant_changed');
     if (review.discoveryFailure) {
-      const lockedStore = { one: async (sql, args) => (await db.query(sql, args)).rows[0] || null };
-      const previous = project(await lockedStore.one('SELECT * FROM acquisition_missions WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [store.tenantId, review.fromMissionId]));
-      const progress = await lockedStore.one('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2 FOR UPDATE', [review.programId, review.localDay]);
+      const lockedOne = async (sql, args) => (await db.query(sql, args)).rows[0] || null;
+      const lockedStore = { ...store, one: lockedOne };
+      const previous = project(await lockedOne('SELECT * FROM acquisition_missions WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [store.tenantId, review.fromMissionId]));
+      const progress = await lockedOne('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2 FOR UPDATE', [review.programId, review.localDay]);
       if (!progress || progress.mission_id !== review.fromMissionId || hash(previous) !== review.previousMissionHash
         || program.last_error !== 'verified_inventory_shortfall') fail('replenishment_preparation_changed');
       const receipt = await failedDiscoveryReceipt(lockedStore, program, progress, previous, now);

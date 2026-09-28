@@ -197,9 +197,9 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   await t.test('capacity and spacing include canonical, legacy and mailbox sends before activation', async () => {
     await reset();
     await pool.query("INSERT INTO agent_log(client_id,agent_name,action,ran_at) VALUES(10,'emmett','email_sent',now()),(11,'emmett','email_sent',now())");
-    await pool.query("INSERT INTO tenant_outreach_messages(id,tenant_id,direction,status,sent_at) VALUES('m1','10','outbound','sent',now())");
+    await pool.query("INSERT INTO tenant_outreach_messages(id,tenant_id,direction,status,sent_at) VALUES('m1','10','OUTBOUND','sent',now())");
     await pool.query("INSERT INTO acquisition_mission_outbound_executions(id,tenant_id,prospect_id,status,prepared_artifact_revision,attempted_at) VALUES('e1','10','c5','sent','old',now())");
-    const history = await require('../services/governedOutboundAdapters').readOutboundHistory(pool);
+    const history = await require('../services/governedOutboundAdapters').readOutboundHistory(pool, '10', 10);
     assert.equal(history.today, 3);
     assert.ok(+new Date(history.last_attempt)>Date.now()-10000);
   });
