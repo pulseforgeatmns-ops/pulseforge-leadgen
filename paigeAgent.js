@@ -1592,6 +1592,21 @@ function parseLinkedInJson(text) {
   };
 }
 
+function extractMessageText(message, operation) {
+  const text = Array.isArray(message?.content)
+    ? message.content
+      .filter(block => typeof block?.text === 'string')
+      .map(block => block.text)
+      .join('\n')
+      .trim()
+    : '';
+
+  if (text) return text;
+
+  const stopReason = String(message?.stop_reason || 'unknown');
+  throw new Error(`${operation} returned no text (stop_reason=${stopReason})`);
+}
+
 function bodyCopyForValidation(text, channel) {
   const value = String(text || '');
   if (channel !== 'blog') return value;
@@ -1793,11 +1808,13 @@ function validateLinkedInDraft(postBody, grounding = {}) {
 async function createLinkedInDraft(prompt, systemPrompt) {
   const message = await client.messages.create({
     model: PAIGE_WRITER_MODEL,
-    max_tokens: 900,
+    max_tokens: 2048,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'low' },
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }],
   });
-  return message.content[0].text.trim();
+  return extractMessageText(message, 'Paige LinkedIn generation');
 }
 
 async function logLinkedInSkip(company, channel, brand, format, reason) {
@@ -2073,12 +2090,14 @@ async function getLastContentType(companyName, channel) {
 async function createDraft(prompt, systemPrompt, channel) {
   const message = await client.messages.create({
     model: PAIGE_WRITER_MODEL,
-    max_tokens: channel === 'blog' ? 1000 : channel === 'linkedin_page' || channel === 'linkedin_personal' ? 450 : 300,
+    max_tokens: channel === 'blog' ? 4096 : 2048,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'low' },
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }]
   });
 
-  return message.content[0].text.trim();
+  return extractMessageText(message, 'Paige content generation');
 }
 
 function parseScoreJson(text) {
@@ -2115,7 +2134,9 @@ function parseScoreJson(text) {
 async function scoreDraft(draft, recentPublishedAngles = []) {
   const message = await client.messages.create({
     model: PAIGE_EVALUATOR_MODEL,
-    max_tokens: 220,
+    max_tokens: 1024,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'low' },
     messages: [{
       role: 'user',
       content: `Score this social media post on three dimensions (1-10 each):
@@ -2152,7 +2173,7 @@ ${draft}`
     }]
   });
 
-  return parseScoreJson(message.content[0].text);
+  return parseScoreJson(extractMessageText(message, 'Paige quality scoring'));
 }
 
 function validateDraftForClient(draft, channel, miraContext = null) {
@@ -3036,6 +3057,7 @@ module.exports = {
     LINKEDIN_FORMATS,
     resolvePaigeWriterModel,
     resolvePaigeEvaluatorModel,
+    extractMessageText,
     PAIGE_WRITER_MODEL,
     PAIGE_EVALUATOR_MODEL,
   },
