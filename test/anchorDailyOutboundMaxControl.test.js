@@ -14,12 +14,14 @@ const { adapters } = require('../services/governedOutboundAdapters');
 const { startAnchorGovernedScheduler } = require('../services/anchorGovernedScheduler');
 
 test('Max derives a three-day inventory target from Emmett effective capacity, exposing authorization as a limiter', () => {
+  const inWindow = new Date('2026-09-28T15:00:00.000Z');
   const authorizationBound = buildControlPlan({
     dailyCap: 5,
     emmettCapacity: 16,
     sentToday: 1,
     cleanInventory: 2,
     targetDays: 3,
+    now: inWindow,
   });
   assert.equal(authorizationBound.state, 'critical');
   assert.equal(authorizationBound.safeDailyCapacity, 5);
@@ -39,6 +41,7 @@ test('Max derives a three-day inventory target from Emmett effective capacity, e
     emmettCapacity: 3,
     cleanInventory: 9,
     targetDays: 3,
+    now: inWindow,
   });
   assert.equal(emmettBound.safeDailyCapacity, 3);
   assert.equal(emmettBound.dispatchableDailyCapacity, 3);
@@ -208,6 +211,16 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
       cap: 5,
       snapshot: { sentToday: 1 },
       assessed: { governor: { outcome: 'proceed' }, health: { score: 74 } },
+      operating: {
+        recommendedSafeDailyCapacity: 5,
+        authorizationLimitedCapacity: 5,
+        scheduleLimitedCapacity: 5,
+        dispatchCapacityNow: 5,
+        planningDailyCapacity: 5,
+        dispatchableDailyCapacity: 5,
+        effectiveDailyCapacity: 5,
+        governor: 'proceed',
+      },
     },
     inventory: {
       clean: [{ prospectId: '1' }, { prospectId: '2' }],
