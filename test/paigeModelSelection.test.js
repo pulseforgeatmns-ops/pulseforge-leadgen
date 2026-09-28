@@ -147,6 +147,80 @@ describe('Paige writer/evaluator model selection', () => {
     assert.equal(paigeAgent._test.PAIGE_EVALUATOR_MODEL, 'claude-sonnet-4-6');
   });
 
+  test('extracts text blocks without assuming the first response block is text', () => {
+    const { paigeAgent, savedEnv: originalEnv } = loadPaigeAgent({
+      env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null },
+    });
+    savedEnv = originalEnv;
+
+    assert.equal(paigeAgent._test.extractMessageText({
+      stop_reason: 'end_turn',
+      content: [
+        { type: 'thinking', thinking: 'private reasoning' },
+        { type: 'text', text: '  public response  ' },
+      ],
+    }, 'test operation'), 'public response');
+    assert.throws(
+      () => paigeAgent._test.extractMessageText({
+        stop_reason: 'max_tokens',
+        content: [{ type: 'thinking', thinking: 'private reasoning' }],
+      }, 'test operation'),
+      /test operation returned no text \(stop_reason=max_tokens\)/
+    );
+  });
+
+  test('uses low-effort adaptive thinking for bounded writer and evaluator responses', async () => {
+    const inferenceControls = [];
+    class ThinkingAwareAnthropic {
+      constructor() {
+        this.messages = {
+          create: async request => {
+            inferenceControls.push({
+              thinking: request.thinking?.type || null,
+              effort: request.output_config?.effort || null,
+            });
+            const prompt = request.messages?.[0]?.content || '';
+            if (/Score this social media post/i.test(prompt)) {
+              return { content: [{ type: 'text', text: JSON.stringify({
+                specificity: 9,
+                originality: 9,
+                hook_strength: 9,
+                total: 27,
+                weak_dimension: 'none',
+                reason: 'Specific, grounded, and direct.',
+              }) }] };
+            }
+            return { content: [{ type: 'text', text: JSON.stringify({
+              format: 'dialogue',
+              post_body: 'Practice Manager: "Ten sends means the pipeline is fixed."\n\nMe: [pause] "Two replies means we have a signal, not a guarantee."\n\nPractice Manager: "So what changes?"\n\nMe: "We keep the scope narrow and own the NEXT step."',
+              hashtags: [],
+              source_anchors: ['Mira: 10 sends over the past 24 hours', 'Mira: 2 replies over the past 24 hours'],
+            }) }] };
+          },
+        };
+      }
+    }
+
+    const { paigeAgent, savedEnv: originalEnv } = loadPaigeAgent({
+      env: { ACTIVE_CLIENT_ID: '10', PAIGE_WRITER_MODEL: null, PAIGE_EVALUATOR_MODEL: null },
+      anthropicFactory: ThinkingAwareAnthropic,
+    });
+    savedEnv = originalEnv;
+
+    const result = await paigeAgent.run({
+      client_id: 10,
+      dryRun: true,
+      channel: 'linkedin_page',
+      format: 'dialogue',
+    });
+
+    assert.equal(result.success, true);
+    assert.ok(inferenceControls.length >= 2);
+    assert.ok(inferenceControls.every(control => (
+      control.thinking === 'adaptive' && control.effort === 'low'
+    )));
+  });
+
   test('PAIGE_WRITER_MODEL overrides writer only', () => {
     const { paigeAgent, modelsUsed, savedEnv: originalEnv } = loadPaigeAgent({
       env: {
