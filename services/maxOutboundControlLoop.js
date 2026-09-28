@@ -35,8 +35,21 @@ const {
 const {
   emptyAlternateContactTelemetry,
   mergeAlternateTelemetry,
+  clampCohortCounters,
   attemptSameCompanyAlternateRecovery,
 } = require('./sameCompanyContactRecovery');
+const {
+  retryUnverifiedEmails,
+  emptyVerificationRetryTelemetry,
+  mergeVerificationRetryTelemetry,
+} = require('./emailVerificationRecovery');
+const {
+  evaluatePreparationRefill,
+  remainingDispatchCapacity,
+  remainingScheduleSlots,
+  observabilityFromRefill,
+} = require('./governedOutboundRefill');
+const { clock } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
@@ -380,13 +393,13 @@ async function persistDiscoveredCompanies(pool, store, {
     if (ownership.kind === OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
       const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
         company,
+        ownership,
         scoutContext,
-        telemetry: counters,
+        sources: scoutContext.recoverySources,
       });
       mergeAlternateTelemetry(counters, recovery.telemetry || {});
       if (recovery.ok) {
         counters.recovered += 1;
-        counters.recoveredExisting = (counters.recoveredExisting || 0) + 1;
         continue;
       }
       recordReplenishmentRejection(counters, 'same_company_different_contact');
@@ -437,6 +450,7 @@ async function persistDiscoveredCompanies(pool, store, {
     else counters.alreadyQueued += 1;
   }
 
+  clampCohortCounters(counters);
   return { inserted, admission: counters };
 }
 
@@ -494,13 +508,7 @@ async function runEnrichmentBatches(enrichment, pool, requested) {
   return { promoted, recovered, emailResolved, emailVerified, considered, summaries };
 }
 
-async function defaultScoutRamp({ pool, store, program, source, plan, logger = console }) {
-  if (require('./governedOutboundTenant').createGovernedOutboundTenantContext(store.tenantId).usesTenantMailboxTransport) {
-    const discovery = await require('./acquisitionMissionInventory').discoverKnowledgeInventory(
-      { ...source.payload, tenantId: store.tenantId, id: source.id }, { pool });
-    return { promoted: 0, recovered: 0, discoveredQueued: 0, discovery,
-      reason: 'canonical_knowledge_reused; additional source-backed research requires the tenant cohort runner' };
-  }
+async function defaultScoutRamp({ pool, store, program, source, plan, logger = console, skipVerificationRetry = false }) {
   const enrichment = require('../scoutUnenrichedEnrichmentAgent');
   const first = await runEnrichmentBatches(enrichment, pool, plan.deficit);
   let promoted = first.promoted + first.recovered;
@@ -561,6 +569,10 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
     discovery: discovery?.kind || null,
   }));
   const recoveredExisting = first.recovered + Number(persisted.admission?.recovered || 0);
+  const verificationRetry = skipVerificationRetry
+    ? emptyVerificationRetryTelemetry()
+    : await retryUnverifiedEmails(pool, { clientId: Number(program.tenant_id || store.clientId || 10) });
+  if (persisted.admission) mergeVerificationRetryTelemetry(persisted.admission, verificationRetry);
   return {
     promoted,
     recovered: recoveredExisting,
@@ -575,7 +587,71 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
     admission: persisted.admission || null,
     yield: yieldReport,
     discovery,
+    verificationRetry,
   };
+}
+
+async function capturePreparationObservability({
+  store,
+  program,
+  operating = {},
+  sentToday = 0,
+  cleanInventory = 0,
+  now = new Date(),
+} = {}) {
+  let pendingPrepared = 0;
+  let lastSendAt = null;
+  try {
+    const day = clock(now).day;
+    const envelope = typeof store.envelope === 'function' ? await store.envelope(day) : null;
+    if (envelope && typeof store.items === 'function') {
+      const items = await store.items(envelope.id);
+      pendingPrepared = items.filter(row => row.status === 'pending').length;
+      for (const row of items) {
+        if (!row.attempted_at) continue;
+        const at = +new Date(row.attempted_at);
+        if (!lastSendAt || at > +lastSendAt) lastSendAt = new Date(at);
+      }
+    }
+  } catch (_err) {
+    pendingPrepared = 0;
+  }
+  const remainingCap = remainingDispatchCapacity({
+    dispatchCapacityNow: operating.dispatchCapacityNow ?? 0,
+    sentToday,
+  });
+  const remainingSlots = remainingScheduleSlots({
+    now,
+    lastSendAt,
+    allowedSendWindow: operating.allowedSendWindow || {
+      startHour: program?.policy?.startHour ?? 9,
+      endHour: program?.policy?.endHour ?? 17,
+      timezone: program?.policy?.timeZone || 'America/New_York',
+    },
+    minSpacingMinutes: operating.minSpacingMinutes ?? program?.policy?.spacingMinutes ?? 60,
+    dispatchDayAllowed: operating.dispatchDayAllowed !== false,
+  });
+  const dailyRemaining = Math.max(
+    0,
+    Number(operating.authorizationLimitedCapacity ?? program?.policy?.dailyCap ?? 0) - Number(sentToday || 0)
+  );
+  const plan = evaluatePreparationRefill({
+    pendingPreparedCount: pendingPrepared,
+    remainingDispatchCapacity: remainingCap,
+    remainingScheduleSlots: remainingSlots,
+    cleanInventory,
+    governor: operating.governor,
+    grantActive: true,
+    dailyAuthorizationRemaining: dailyRemaining,
+    totalAuthorizationRemaining: operating.remainingTotalAuthorization,
+  });
+  return observabilityFromRefill(plan, {
+    sentToday,
+    pendingPrepared,
+    remainingDispatchCapacity: remainingCap,
+    remainingScheduleSlots: remainingSlots,
+    cleanInventory,
+  });
 }
 
 async function runMaxOutboundControlLoop(options = {}) {
@@ -703,6 +779,19 @@ async function runMaxOutboundControlLoop(options = {}) {
     permanentlyRejected: Number(funnelStock.permanentlyRejected || 0) + cycleFunnel.permanentlyRejected,
   };
 
+  const preparation = await capturePreparationObservability({
+    store,
+    program,
+    operating,
+    sentToday,
+    cleanInventory: inventoryAfter.clean.length,
+    now: controlNow,
+  });
+  const sameCompanyDifferentContact = Number(
+    scout?.admission?.rejected?.same_company_different_contact || 0
+  );
+  const verificationRetry = scout?.verificationRetry || scout?.admission || {};
+
   await store.event('max_outbound_control', [
     program.id,
     new Date().toISOString().slice(0, 13),
@@ -724,6 +813,13 @@ async function runMaxOutboundControlLoop(options = {}) {
     limitingFactor: finalPlan.limitingFactor,
     capacityReason: finalPlan.capacityReason,
     sentToday,
+    pendingPrepared: preparation.pendingPrepared,
+    remainingDispatchCapacity: preparation.remainingDispatchCapacity,
+    remainingScheduleSlots: preparation.remainingScheduleSlots,
+    cleanInventory: preparation.cleanInventory,
+    prepareRequested: preparation.prepareRequested,
+    preparedAdded: preparation.preparedAdded,
+    prepareSkippedReason: preparation.prepareSkippedReason,
     bufferTarget: finalPlan.targetInventory,
     cleanInventoryBefore: inventoryBefore.clean.length,
     cleanInventoryAfter: inventoryAfter.clean.length,
@@ -739,11 +835,22 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutQueued: Number(scout?.discoveredQueued || 0),
     scoutRecovered: recoveredExisting,
     sameCompanyCandidatesAttempted: Number(scout?.admission?.sameCompanyCandidatesAttempted || 0),
+    sameCompanyDifferentContact,
     alternateContactsResolved: Number(scout?.admission?.alternateContactsResolved || 0),
     alternateContactsVerified: Number(scout?.admission?.alternateContactsVerified || 0),
     alternateContactsRejected: Number(scout?.admission?.alternateContactsRejected || 0),
     alternateContactsAddedToCleanInventory: Number(scout?.admission?.alternateContactsAddedToCleanInventory || 0),
     alternateContactLossReasons: scout?.admission?.alternateContactLossReasons || null,
+    emailNotVerified: Number(
+      verificationRetry.emailNotVerified
+      || inventoryAfter.exclusionCounts?.email_not_verified
+      || 0
+    ),
+    verificationRetryAttempted: Number(verificationRetry.verificationRetryAttempted || 0),
+    verificationRetryValid: Number(verificationRetry.verificationRetryValid || 0),
+    verificationRetryRisky: Number(verificationRetry.verificationRetryRisky || 0),
+    verificationRetryInvalid: Number(verificationRetry.verificationRetryInvalid || 0),
+    verificationRetryFailed: Number(verificationRetry.verificationRetryFailed || 0),
     yield: scout?.yield || null,
     lossBuckets: scout?.lossBuckets || null,
     funnel,
@@ -798,6 +905,15 @@ async function runMaxOutboundControlLoop(options = {}) {
     lastSuccessfulPromotionAt,
     lossBuckets: scout?.lossBuckets || null,
     sourceScope: inventoryAfter.scope,
+    ...preparation,
+    sameCompanyDifferentContact,
+    emailNotVerified: Number(
+      verificationRetry.emailNotVerified
+      || inventoryAfter.exclusionCounts?.email_not_verified
+      || 0
+    ),
+    verificationRetryValid: Number(verificationRetry.verificationRetryValid || 0),
+    verificationRetry: scout?.verificationRetry || null,
   };
 }
 
@@ -812,6 +928,7 @@ module.exports = {
   missionCandidateReason,
   loadCleanInventory,
   runMaxOutboundControlLoop,
+  capturePreparationObservability,
   _test: {
     scoutInput,
     mapReuseCompanyRows,

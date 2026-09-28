@@ -153,7 +153,26 @@ async function executeOutboundBundle(input = {}) {
       return { blocked: true, blockReason: 'Governed daily envelope requires its guarded executor.',
         blockCode: 'governed_executor_required', bundle, records: [], summary: summarizeExecutionRecords([]) };
     }
-    bundle.sends = bundle.sends.filter(row => envelope.candidateIds.includes(String(row.prospectId)));
+    const allowedIds = new Set((envelope.candidateIds || []).map((id) => String(id)));
+    for (const id of input.governedManifestCandidateIds || []) {
+      if (id) allowedIds.add(String(id));
+    }
+    bundle.sends = bundle.sends.filter(row => allowedIds.has(String(row.prospectId)));
+    const refillItem = input.governedRefillItem;
+    const refillProspectId = String(refillItem?.candidate_id || refillItem?.snapshot?.candidateId || '');
+    if (refillItem && refillProspectId && !bundle.sends.some(row => String(row.prospectId) === refillProspectId)) {
+      const snapshot = refillItem.snapshot || refillItem;
+      bundle.sends.push({
+        prospectId: refillProspectId,
+        companyId: String(snapshot.companyId || refillItem.company_id || ''),
+        email: String(snapshot.email || refillItem.email || ''),
+        toName: snapshot.toName || null,
+        queuePosition: bundle.sends.length + 1,
+        message: snapshot.message,
+        status: EXECUTION_RECORD_STATUS.QUEUED,
+        blockReason: null,
+      });
+    }
   }
   const records = [];
   const requestedMax = Number(

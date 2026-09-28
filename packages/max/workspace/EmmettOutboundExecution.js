@@ -230,6 +230,8 @@ async function runExecuteOutboundForAmoMission(input = {}) {
     executionRequestId: executionRequest?.id || null,
     maxSends: input.maxSends,
     governedEnvelopeId: input.governedEnvelopeId,
+    governedManifestCandidateIds: input.governedManifestCandidateIds,
+    governedRefillItem: input.governedRefillItem,
     prospectId: input.prospectId,
     prospectIds: input.prospectIds,
     sendEmail,

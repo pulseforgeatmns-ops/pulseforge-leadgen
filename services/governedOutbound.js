@@ -3,6 +3,15 @@
 const { hash, fail, policy, missionScope, clock, windowReason, candidateReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { governedOutboundEnabledForTenant, governedOutboundSendingDisabledForTenant } = require('./governedOutboundTenant');
+const {
+  evaluatePreparationRefill,
+  remainingDispatchCapacity,
+  remainingScheduleSlots,
+  selectRefillEntries,
+  selectInventoryRefillEntries,
+  observabilityFromRefill,
+  PREPARATION_BATCH_LIMIT,
+} = require('./governedOutboundRefill');
 
 function service({ pool, adapters, tenantId = '10', now = () => new Date(), enabled = () => governedOutboundEnabledForTenant(tenantId) }) {
   const store = new GovernedOutboundStore(pool, tenantId);
@@ -58,7 +67,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
         excluded.push({ candidateId: entry.candidateId, reason: reason || suppressed || 'duplicate_or_missing_company' });
         continue;
       }
-      if (selected.length >= Math.min(program.policy.dailyCap, prepared.capacity)) break;
+      if (selected.length >= Math.min(program.policy.dailyCap, prepared.capacity, PREPARATION_BATCH_LIMIT)) break;
       selected.push(entry); emails.add(entry.email); companies.add(entry.companyId);
     }
     await store.event('batch_eligibility', [program.id, day, prepared.revision, hash({ selected: selected.map(x => x.candidateId), excluded })], { programId: program.id, selected: selected.length, excluded });
@@ -213,10 +222,14 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       const prepared = await adapters.prepared(snapshot, current);
       if (prepared.revision !== envelope.revision) fail('artifacts_changed');
       const selected = prepared.candidates.find(x => x.candidateId === item.candidate_id);
-      if (!selected || hash(selected.message) !== hash(item.snapshot.message)) fail('copy_changed');
+      const refillBound = !selected && item.snapshot?.refill === true && item.snapshot.message;
+      if (selected && hash(selected.message) !== hash(item.snapshot.message)) fail('copy_changed');
+      if (!selected && !refillBound) fail('copy_changed');
+      const queueItem = selected?.item || item.snapshot;
+      const message = selected?.message || item.snapshot.message;
       const crm = await adapters.contact(item.candidate_id);
       if (String(crm?.prospect_id || crm?.id) !== item.prospect_id || String(crm?.company_id) !== item.company_id) fail('crm_binding_changed');
-      const reason = candidateReason(selected.item, crm, selected.message, current.policy)
+      const reason = candidateReason(queueItem, crm, message, current.policy)
         || await store.suppression(item.snapshot, envelope.mission_id);
       if (reason) { await store.finish(item, 'suppressed', reason); fail(reason); }
       await adapters.liveGate(current, item, prepared, now());
@@ -258,6 +271,116 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
     if (!called) fail('canonical_execution_did_not_dispatch');
     return result;
   }
+  async function refillEnvelope(program, source, day, envelope, counts) {
+    const items = await store.items(envelope.id);
+    const pendingPreparedCount = items.filter(row => row.status === 'pending').length;
+    const sentToday = Number(counts.today || 0);
+    if (pendingPreparedCount >= PREPARATION_BATCH_LIMIT) {
+      return observabilityFromRefill({
+        pendingPrepared: pendingPreparedCount,
+        remainingDispatchCapacity: Math.max(0, Number(program.policy.dailyCap || 0) - sentToday),
+        remainingScheduleSlots: 0,
+        cleanInventory: pendingPreparedCount,
+        prepareRequested: 0,
+        prepareSkippedReason: 'batch_limit_reached',
+      }, { sentToday });
+    }
+    let operating = null;
+    let governor = 'proceed';
+    try {
+      if (typeof adapters.infrastructure === 'function') {
+        const infra = await adapters.infrastructure(program, now(), null, { mode: 'planning' });
+        operating = infra.operating || null;
+        governor = infra.assessed?.governor?.outcome || infra.operating?.governor || 'proceed';
+      }
+    } catch (error) {
+      const code = error.code || error.message;
+      if (code === 'emmett_governor_halted') governor = 'halt';
+    }
+    const remainingCap = remainingDispatchCapacity({
+      dispatchCapacityNow: operating?.dispatchCapacityNow ?? program.policy.dailyCap,
+      sentToday,
+    });
+    const remainingSlots = remainingScheduleSlots({
+      now: now(),
+      lastSendAt: counts.last_attempt,
+      allowedSendWindow: operating?.allowedSendWindow || {
+        startHour: program.policy.startHour ?? 9,
+        endHour: program.policy.endHour ?? 17,
+        timezone: program.policy.timeZone || 'America/New_York',
+      },
+      minSpacingMinutes: operating?.minSpacingMinutes ?? program.policy.spacingMinutes ?? 60,
+      dispatchDayAllowed: operating?.dispatchDayAllowed !== false,
+    });
+    let cleanInventory = 0;
+    let cleanRows = [];
+    try {
+      const { loadCleanInventory } = require('./maxOutboundControlLoop');
+      const inventory = await loadCleanInventory(pool, store, source, store.clientId);
+      cleanRows = inventory.clean || [];
+      cleanInventory = cleanRows.length;
+    } catch (_err) {
+      cleanInventory = pendingPreparedCount;
+    }
+    const plan = evaluatePreparationRefill({
+      pendingPreparedCount,
+      remainingDispatchCapacity: remainingCap,
+      remainingScheduleSlots: remainingSlots,
+      cleanInventory,
+      governor,
+      grantActive: program.mode === 'active' && enabled(),
+      dailyAuthorizationRemaining: Math.max(0, Number(program.policy.dailyCap || 0) - sentToday),
+      totalAuthorizationRemaining: Math.max(0, Number(program.policy.totalCap || 0) - Number(counts.total || 0)),
+    });
+    if (!plan.shouldPrepare) return observabilityFromRefill(plan, { sentToday, preparedAdded: 0 });
+    if (!['authorized', 'complete', 'frozen'].includes(envelope.status)) {
+      return observabilityFromRefill({ ...plan, shouldPrepare: false, prepareSkippedReason: 'envelope_not_refillable' }, { sentToday });
+    }
+    const snapshot = await adapters.loadMission(envelope.mission_id);
+    const prepared = await adapters.prepared(snapshot, program);
+    let selected = await selectRefillEntries({
+      prepared,
+      program,
+      store,
+      adapters,
+      existingItems: items,
+      limit: plan.prepareRequested,
+    });
+    if (selected.length < plan.prepareRequested) {
+      try {
+        const inventoryEntries = await selectInventoryRefillEntries({
+          cleanRows,
+          store,
+          adapters,
+          prepared,
+          program,
+          existingItems: [...items, ...selected],
+          limit: plan.prepareRequested - selected.length,
+        });
+        selected = selected.concat(inventoryEntries);
+      } catch (_err) {
+        // Leftover prepared candidates still refill; inventory copy is best-effort.
+      }
+    }
+    if (!selected.length) {
+      return observabilityFromRefill({
+        ...plan,
+        shouldPrepare: false,
+        prepareSkippedReason: plan.cleanInventory > pendingPreparedCount
+          ? 'no_eligible_prepared_candidates'
+          : 'no_clean_inventory',
+      }, { sentToday, preparedAdded: 0 });
+    }
+    const updated = await store.appendToEnvelope(envelope, selected, prepared.revision);
+    return {
+      envelope: updated,
+      ...observabilityFromRefill({
+        ...plan,
+        preparedAdded: selected.length,
+        pendingPrepared: pendingPreparedCount + selected.length,
+      }, { sentToday, preparedAdded: selected.length }),
+    };
+  }
   async function tick() {
     return store.lock(async () => {
       const program = await store.program();
@@ -277,24 +400,41 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
           return { mode: 'shadow', envelopeId: envelope.id, planned: envelope.manifest.length, sent: 0 };
         }
         if (!enabled()) fail('environment_kill_switch');
+        let refill = { preparedAdded: 0, prepareSkippedReason: null };
+        try {
+          refill = await refillEnvelope(program, source, day, envelope, counts);
+          if (refill.envelope) envelope = refill.envelope;
+        } catch (error) {
+          refill = {
+            preparedAdded: 0,
+            prepareSkippedReason: error.code || error.message,
+            pendingPrepared: 0,
+          };
+        }
+        if (envelope.status === 'complete') {
+          await store.health(program);
+          return { completed: true, envelopeId: envelope.id, sent: 0, ...refill };
+        }
         const window = windowReason(program.policy, now(), true);
         if (window) fail(window);
         if (envelope.status === 'frozen') envelope = await bindApproval(program, envelope);
-        if (envelope.status !== 'authorized') return { halted: envelope.status, envelopeId: envelope.id };
+        if (envelope.status !== 'authorized') {
+          return { halted: envelope.status, envelopeId: envelope.id, sent: 0, ...refill };
+        }
         if (counts.last_attempt && +now() - +new Date(counts.last_attempt) < program.policy.spacingMinutes * 60000) fail('spacing');
         const item = (await store.items(envelope.id)).find(x => x.status === 'pending');
         if (!item) {
           if (adapters.complete) await adapters.complete(envelope);
           await pool.query("UPDATE acquisition_outbound_envelopes SET status='complete' WHERE id=$1", [envelope.id]);
           await store.health(program);
-          return { completed: true, envelopeId: envelope.id };
+          return { completed: true, envelopeId: envelope.id, sent: 0, ...refill };
         }
         await dispatch(program, envelope, item);
         if ((await store.items(envelope.id)).every(row => !['pending','attempted','uncertain'].includes(row.status))) {
           await pool.query("UPDATE acquisition_outbound_envelopes SET status='complete' WHERE id=$1", [envelope.id]);
         }
         await store.health(program);
-        return { envelopeId: envelope.id, itemId: item.id, sent: 1 };
+        return { envelopeId: envelope.id, itemId: item.id, sent: 1, ...refill };
       } catch (e) {
         const reason = e.code || e.message;
         await store.health(program, reason);
