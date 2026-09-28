@@ -63,12 +63,14 @@ function nyLocalDayBounds(now = new Date()) {
 function pickPreflightChecks(result) {
   const em = result.emmett || {};
   const plan = result.plan || {};
+  const admission = result.scout?.admission || {};
   return {
     recommendedSafeDailyCapacity: em.recommendedSafeDailyCapacity,
     authorizationLimitedCapacity: em.authorizationLimitedCapacity ?? plan.authorizationLimitedCapacity,
     scheduleLimitedCapacity: em.scheduleLimitedCapacity ?? plan.scheduleLimitedCapacity,
     dispatchCapacityNow: em.dispatchCapacityNow ?? plan.dispatchCapacityNow,
     planningDailyCapacity: em.planningDailyCapacity ?? plan.planningDailyCapacity,
+    targetDays: plan.targetDays,
     targetInventory: plan.targetInventory,
     cleanInventory: plan.cleanInventory,
     deficit: plan.deficit,
@@ -76,6 +78,12 @@ function pickPreflightChecks(result) {
     healthScore: em.healthScore ?? plan.healthScore,
     shouldReplenish: plan.shouldReplenish,
     scoutInvoked: Boolean(result.scout),
+    scoutReplenishmentExecuted: Boolean(result.scout),
+    netCleanInventoryDelta: result.inventoryGrowth?.netCleanInventoryDelta ?? null,
+    sameCompanyCandidatesAttempted: Number(admission.sameCompanyCandidatesAttempted || 0),
+    alternateContactsResolved: Number(admission.alternateContactsResolved || 0),
+    alternateContactsVerified: Number(admission.alternateContactsVerified || 0),
+    alternateContactsAddedToCleanInventory: Number(admission.alternateContactsAddedToCleanInventory || 0),
     scoutSummary: result.scout ? {
       promoted: result.scout.promoted,
       recoveredExisting: result.scout.recoveredExisting,
@@ -88,19 +96,31 @@ function pickPreflightChecks(result) {
   };
 }
 
-function assertPreflight(checks) {
+function assertPreflight(checks, options = {}) {
   const failures = [];
   if (Number(checks.planningDailyCapacity) !== 8) {
     failures.push(`planningDailyCapacity expected 8, got ${checks.planningDailyCapacity}`);
   }
+  if (Number(checks.targetDays) !== 3) {
+    failures.push(`targetDays expected 3, got ${checks.targetDays}`);
+  }
   if (Number(checks.targetInventory) !== 24) {
     failures.push(`targetInventory expected 24, got ${checks.targetInventory}`);
+  }
+  if (Number(checks.targetInventory) === 0) {
+    failures.push('targetInventory must not be 0');
   }
   if (Number(checks.cleanInventory) >= 24) {
     failures.push(`cleanInventory expected < 24 for replenishment day, got ${checks.cleanInventory}`);
   }
+  if (Number(checks.deficit) <= 0) {
+    failures.push(`deficit expected > 0, got ${checks.deficit}`);
+  }
   if (checks.shouldReplenish !== true) {
     failures.push(`shouldReplenish expected true, got ${checks.shouldReplenish}`);
+  }
+  if (options.requireScout && !checks.scoutInvoked) {
+    failures.push('Scout replenishment did not run (must not be gated on dispatchCapacityNow)');
   }
   if (Number(checks.planningDailyCapacity) === 0 && Number(checks.recommendedSafeDailyCapacity) > 0) {
     failures.push('planningDailyCapacity is 0 while Emmett recommends capacity (dispatch-closed regression)');
@@ -153,12 +173,13 @@ async function runPreflight(options) {
     return { halted: result.halted, result };
   }
   const checks = pickPreflightChecks(result);
-  const failures = assertPreflight(checks);
+  const failures = assertPreflight(checks, { requireScout: options.execute !== false });
   const status = await productionService(pool).status().catch(err => ({ error: err.code || err.message }));
   return {
     phase: 'preflight',
     ok: failures.length === 0,
     failures,
+    capture: checks,
     checks,
     programMode: result.mode,
     inventoryGrowth: result.inventoryGrowth,
