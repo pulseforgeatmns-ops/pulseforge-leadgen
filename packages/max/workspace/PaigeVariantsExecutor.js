@@ -341,7 +341,11 @@ function buildPaigeVariantsPayload(executionInput = {}) {
   };
 }
 
-async function runPaigeVariants(executionInput = {}) {
+async function runPaigeVariants(executionInput = {}, opts = {}) {
+  if (opts.pool && !executionInput.approvedCopies) {
+    const inventory = await require('../../../services/acquisitionMissionInventory').loadKnowledgeInventory(opts.pool, executionInput.mission || {});
+    if (inventory.length) executionInput = { ...executionInput, approvedCopies: Object.fromEntries(inventory.filter(r => !r.qualificationReason).map(r => [String(r.company_id), r.approved_asset])) };
+  }
   const transactionId = executionInput.transactionId;
   const { max, scout, plan } = extractPaigeUpstreamContext(executionInput);
 

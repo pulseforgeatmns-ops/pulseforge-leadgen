@@ -22,3 +22,8 @@ test('Paige consumes only the exact prospect-bound approved asset',()=>{
  const copy=buildPerProspectVariants(input)[0];assert.equal(copy.subject,'Question');assert.equal(copy.body,row().approved_asset.content.statement);assert.equal(copy.attributableIntelligence.scoutPersonalization.acquisitionKnowledgeAssetId,'asset');
  assert.throws(()=>buildPerProspectVariants({...input,approvedCopies:{other:row().approved_asset}}),{code:'approved_copy_missing'});
 });
+test('the canonical Paige SEC entry loads approved tenant assets from runtime dependencies',async()=>{
+ const pool={query:async()=>({rows:[row()]})};
+ const result=await require('../packages/max/workspace/PaigeVariantsExecutor').runPaigeVariants({mission,missionPlan:mission.structuredMission,workspaceContext:{max:{priorities:[{companyId:'c',name:'Business'}]},scout:{}}},{pool});
+ assert.equal(result.status,require('../packages/acquisition-mission').EXECUTION_STATUSES.SUCCESS);assert.equal(result.contributions.variants[0].subject,'Question');assert.equal(result.contributions.variants[0].body,row().approved_asset.content.statement);
+});

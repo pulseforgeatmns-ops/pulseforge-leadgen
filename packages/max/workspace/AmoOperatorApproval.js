@@ -2576,7 +2576,7 @@ async function advancePaigeVariants(input = {}) {
             ...secInput,
             ...executionInput,
             mission: current,
-          }),
+          }, { pool: input.pool }),
         });
       }
       const variantsPayload = executionResult.contributions;
@@ -2850,7 +2850,7 @@ async function advancePreparedOutreachRevision(input = {}) {
               ...secInput,
               ...paigeInput,
               mission: preparedMission,
-            }),
+            }, { pool: input.pool }),
           });
         }
         if (paigeExecution.status !== EXECUTION_STATUSES.SUCCESS) {
