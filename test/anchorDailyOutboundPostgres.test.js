@@ -154,6 +154,17 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.deepEqual(decisions.map(row => row.payload.selected), [0, 1]);
     assert.equal(calls, 0);
   });
+  await t.test('a closed business window does not consume the prepared mission execution approval', async () => {
+    await reset(); await svc.tick(); await activate();
+    let approvals = 0;
+    adapterSet.approve = async () => { approvals++; throw Error('approval must wait for the permitted window'); };
+    clock = new Date('2026-09-18T21:00:00Z');
+    assert.equal((await svc.tick()).halted, 'outside_business_hours');
+    const envelope = await svc.store.envelope('2026-09-18');
+    assert.equal(envelope.status, 'frozen');
+    assert.equal(envelope.approval_id, null);
+    assert.equal(approvals, 0); assert.equal(calls, 0);
+  });
   await t.test('shadow freezes exactly five, creates no execution approval and never invokes transport', async () => {
     await reset(); const result = await svc.tick();
     assert.equal(result.planned, 5); assert.equal(result.sent, 0); assert.equal(calls, 0);
