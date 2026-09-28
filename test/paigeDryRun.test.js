@@ -56,7 +56,7 @@ class FakeAnthropic {
       create: async request => {
         const prompt = request.messages?.[0]?.content || '';
         if (/Score this social media post/i.test(prompt)) {
-          return { content: [{ text: JSON.stringify({
+          return { content: [{ type: 'text', text: JSON.stringify({
             specificity: 9,
             originality: 9,
             hook_strength: 9,
@@ -65,7 +65,7 @@ class FakeAnthropic {
             reason: 'Specific, grounded, and direct.',
           }) }] };
         }
-        return { content: [{ text: JSON.stringify({
+        return { content: [{ type: 'text', text: JSON.stringify({
           format: 'dialogue',
           post_body: 'Practice Manager: "Ten sends means the pipeline is fixed."\n\nMe: [pause] "Two replies means we have a signal, not a guarantee."\n\nPractice Manager: "So what changes?"\n\nMe: "We keep the scope narrow and own the NEXT step."',
           hashtags: [],
