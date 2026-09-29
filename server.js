@@ -42,6 +42,7 @@ const { ensureMiraSchema } = require('./utils/miraSchema');
 const { ensureLifecycleSchema } = require('./utils/lifecycleSchema');
 const { ensureAoFieldSchema } = require('./utils/aoFieldSchema');
 const { ensureAoProspectRoutingSchema } = require('./utils/aoProspectRoutingSchema');
+const { ensureAoCrmSchema } = require('./utils/aoCrmSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
@@ -50,6 +51,7 @@ const { startWarmRoutingScheduler } = require('./warmRoutingAgent');
 const { startAnchorUnenrichedEnrichmentScheduler } = require('./scoutUnenrichedEnrichmentAgent');
 const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
 const { ensurePlacesAttributionSchema } = require('./utils/placesCostAttribution');
+const { ensureAnchorPortalSchema } = require('./utils/anchorPortalSchema');
 const stripeWebhookRouter = require('./routes/stripeWebhook');
 
 const app  = express();
@@ -61,6 +63,7 @@ ensureClientArchitecture()
   .then(enforceMiraClientState)
   .then(() => ensureAoFieldSchema())
   .then(() => ensureAoProspectRoutingSchema())
+  .then(() => ensureAoCrmSchema())
   .catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
@@ -73,6 +76,7 @@ ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
 ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
+ensureAnchorPortalSchema().catch(err => console.error('[anchorPortal] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
@@ -152,6 +156,12 @@ app.use((req, res, next) => {
     return requireAuth(req, res, err => {
       if (err) return next(err);
       return requireRole('admin', 'manager', 'sales', 'closer')(req, res, next);
+    });
+  }
+  if (req.path === '/public/anchor-portal.html' || req.path === '/anchor-portal.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'cleaner', 'facility_client')(req, res, next);
     });
   }
   return next();
@@ -255,6 +265,7 @@ app.use('/admin/field-visits', require('./routes/aoAdmin'));
 // Public marketing funnel — no session auth (see routes/scorecard.js)
 app.use('/', require('./routes/scorecard'));
 app.use('/', require('./routes/walkthrough'));
+app.use('/', require('./routes/anchorPortal'));
 app.use('/', require('./routes/leadQualificationReviews'));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
@@ -417,6 +428,7 @@ app.post('/login', async (req, res) => {
     if (user.role === 'closer') return res.redirect('/closer');
     if (user.role === 'sales') return res.redirect('/sales');
     if (user.role === 'ao') return res.redirect('/ao');
+    if (user.role === 'cleaner' || user.role === 'facility_client') return res.redirect('/portal/anchor');
     return res.redirect('/dashboard');
   }
 

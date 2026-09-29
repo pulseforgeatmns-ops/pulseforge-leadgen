@@ -305,6 +305,7 @@ function semanticFieldsFromCanonicalProjectionFacts(facts, legacyFacts = null) {
     'target_markets',
     labelFromCanonicalValue(facts.target_markets)
   );
+  const idealCustomersGeography = labelFromCanonicalValue(facts.ideal_customers_geography) || '';
   const differentiation = canonicalField(
     'competitiveAdvantages',
     'differentiation',
@@ -334,6 +335,9 @@ function semanticFieldsFromCanonicalProjectionFacts(facts, legacyFacts = null) {
 
   fieldSources.identity = fieldSources.businessName;
   fieldSources.geography = fieldSources.targetMarkets;
+  fieldSources.idealCustomersGeography = facts.ideal_customers_geography
+    ? canonicalSourceDescriptor(facts, 'ideal_customers_geography')
+    : unavailableSourceDescriptor('ideal_customers_geography');
   fieldSources.idealCustomers = idealCustomers
     ? canonicalSourceDescriptor(facts, 'ideal_customers')
     : unavailableSourceDescriptor('ideal_customers');
@@ -351,6 +355,7 @@ function semanticFieldsFromCanonicalProjectionFacts(facts, legacyFacts = null) {
     avoidCustomers: sanitizeFactSummary(avoidCustomers),
     targetMarkets: sanitizeFactSummary(targetMarkets),
     geography: sanitizeFactSummary(targetMarkets),
+    idealCustomersGeography: sanitizeFactSummary(idealCustomersGeography),
     growthFocus: sanitizeFactSummary(growthFocus),
     commercialPreference: false,
     competitiveAdvantages: sanitizeFactSummary(differentiation),
@@ -602,6 +607,7 @@ function normalizeBlueprintSummary(blueprint) {
     avoidCustomers: semantic.avoidCustomers,
     targetMarkets: semantic.targetMarkets,
     geography: semantic.geography || semantic.targetMarkets,
+    idealCustomersGeography: semantic.idealCustomersGeography || null,
     growthFocus: semantic.growthFocus || '',
     commercialPreference: Boolean(semantic.commercialPreference),
     competitiveAdvantages: semantic.competitiveAdvantages,

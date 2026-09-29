@@ -37,8 +37,11 @@ function normalizePriority(value) {
 }
 
 function planMissionFromInput(objective, input = {}) {
-  if (input.resolvedObjective) {
-    return planMission(input.resolvedObjective, {
+  const resolvedFromInput = input.resolvedObjective || null;
+  if (resolvedFromInput && !asText(resolvedFromInput.objective)) {
+    delete input.resolvedObjective;
+  } else if (resolvedFromInput) {
+    return planMission(resolvedFromInput, {
       targetSegment: asText(input.targetSegment || input.segment) || null,
       constraints: input.constraints,
       priority: input.priority,

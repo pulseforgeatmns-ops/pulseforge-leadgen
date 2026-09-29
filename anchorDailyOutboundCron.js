@@ -1,7 +1,17 @@
 'use strict';
 
 async function run(options = {}) {
-  return require('./services/governedOutbound').productionService(options.pool).tick();
+  const pool = options.pool || require('./db');
+  const { parseGovernedOutboundTenantIds } = require('./services/governedOutboundTenant');
+  const tenantIds = options.tenantIds || parseGovernedOutboundTenantIds();
+  if (tenantIds.length === 1 && !options.allTenants) {
+    return require('./services/governedOutbound').productionService(pool, { tenantId: tenantIds[0] }).tick();
+  }
+  const results = {};
+  for (const tenantId of tenantIds) {
+    results[tenantId] = await require('./services/governedOutbound').productionService(pool, { tenantId }).tick();
+  }
+  return { tenants: results };
 }
 const ANCHOR_DEFAULT_INBOX_INTEGRATION_ID = 'tmi_10_anchor_jacob';
 
@@ -38,9 +48,11 @@ async function poll(options = {}) {
   const pool = options.pool || require('./db');
   // Continue receiving replies after a pause, expiry or revocation, including
   // older inboxes if a later grant changes the bound integration.
-  const programs = (await pool.query(`SELECT DISTINCT ON (policy->>'inboxIntegrationId') *
-    FROM acquisition_outbound_programs WHERE tenant_id='10'
-    ORDER BY policy->>'inboxIntegrationId',authorized_at DESC`)).rows;
+  const { parseGovernedOutboundTenantIds } = require('./services/governedOutboundTenant');
+  const tenantIds = options.tenantIds || parseGovernedOutboundTenantIds();
+  const programs = (await pool.query(`SELECT DISTINCT ON (tenant_id, policy->>'inboxIntegrationId') *
+    FROM acquisition_outbound_programs WHERE tenant_id = ANY($1::text[])
+    ORDER BY tenant_id, policy->>'inboxIntegrationId', authorized_at DESC`, [tenantIds])).rows;
   if (!programs.length) {
     if (options.mailboxOnly === false) return { halted: 'no_program' };
     return pollAnchorMailboxOnly(pool, options);
@@ -48,7 +60,7 @@ async function poll(options = {}) {
   const { PostgresTenantMailboxStore } = require('./services/tenantMailbox');
   const results = [];
   for (const program of programs) {
-    const integration = await new PostgresTenantMailboxStore(pool).getIntegration('10', program.policy.inboxIntegrationId);
+    const integration = await new PostgresTenantMailboxStore(pool).getIntegration(String(program.tenant_id), program.policy.inboxIntegrationId);
     if (!integration || integration.mailboxAddress.toLowerCase() !== program.policy.senderEmail) {
       results.push({ halted: 'inbox_identity_mismatch', programId: program.id }); continue;
     }

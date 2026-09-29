@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AO Manager — Accounts</title>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/shell.css">
+<style>
+body { max-width: 960px; margin: 0 auto; padding: 16px; font-family: var(--pf-font-body); background: var(--pf-bg); color: var(--pf-text); }
+h1 { font-family: var(--pf-font-display); letter-spacing: 2px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.filters select, .filters input { padding: 8px; border: 1px solid var(--pf-border); border-radius: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+th, td { border-bottom: 1px solid var(--pf-border); padding: 8px; text-align: left; vertical-align: top; }
+th { font-family: var(--pf-font-mono); font-size: 0.58rem; text-transform: uppercase; letter-spacing: 1px; color: var(--pf-text-muted); }
+.nav a { margin-right: 12px; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>AO Manager View</h1>
+<p class="nav"><a href="/ao/crm">AO CRM</a><a href="/ao/command-center">Command Center</a><a href="/dashboard">Dashboard</a></p>
+
+<div class="filters">
+  <input id="ao-owner" type="number" placeholder="AO user id" min="1">
+  <select id="filter-status">
+    <option value="">All statuses</option>
+    <option value="warm">warm</option>
+    <option value="follow_up_needed">follow_up_needed</option>
+    <option value="walkthrough_booked">walkthrough_booked</option>
+    <option value="ready_to_call">ready_to_call</option>
+  </select>
+  <select id="filter-priority">
+    <option value="">All priorities</option>
+    <option value="normal">normal</option>
+    <option value="high">high</option>
+    <option value="warm">warm</option>
+  </select>
+  <label><input type="checkbox" id="f-help"> Help requested</label>
+  <label><input type="checkbox" id="f-overdue"> Overdue</label>
+  <label><input type="checkbox" id="f-warm"> Warm / opportunity</label>
+  <label><input type="checkbox" id="f-no-next"> No next action</label>
+  <label><input type="checkbox" id="f-recent"> Recently updated (7d)</label>
+  <button id="apply">Apply filters</button>
+</div>
+
+<div id="status"></div>
+<table>
+  <thead>
+    <tr>
+      <th>Company</th>
+      <th>AO</th>
+      <th>Status</th>
+      <th>Next action</th>
+      <th>Last touch</th>
+      <th>Help</th>
+    </tr>
+  </thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script>
+function qs() {
+  const p = new URLSearchParams();
+  const ao = document.getElementById('ao-owner').value;
+  if (ao) p.set('ao_owner_id', ao);
+  const st = document.getElementById('filter-status').value;
+  if (st) p.set('status', st);
+  const pr = document.getElementById('filter-priority').value;
+  if (pr) p.set('priority', pr);
+  if (document.getElementById('f-help').checked) p.set('help_requested', 'true');
+  if (document.getElementById('f-overdue').checked) p.set('overdue', 'true');
+  if (document.getElementById('f-warm').checked) p.set('warm', 'true');
+  if (document.getElementById('f-no-next').checked) p.set('no_next_action', 'true');
+  if (document.getElementById('f-recent').checked) p.set('recently_updated', 'true');
+  return p.toString();
+}
+
+async function load() {
+  document.getElementById('status').textContent = 'Loading…';
+  const res = await fetch(`/ao/api/crm/manager/accounts?${qs()}`, { credentials: 'same-origin' });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || 'Load failed');
+  const s = body.summary || {};
+  document.getElementById('status').textContent = [
+    `${body.accounts.length} accounts`,
+    s.touched_today != null ? `${s.touched_today} touched today` : '',
+    s.overdue != null ? `${s.overdue} overdue` : '',
+    s.help_requested != null ? `${s.help_requested} need help` : '',
+    s.no_next_action != null ? `${s.no_next_action} no next action` : '',
+  ].filter(Boolean).join(' · ');
+  document.getElementById('rows').innerHTML = body.accounts.map(a => `
+    <tr>
+      <td><a href="/ao/crm#${a.prospect_id}">${a.company_name}</a></td>
+      <td>${a.assigned_ao_name || a.assigned_ao_id || '—'}</td>
+      <td>${a.current_status}</td>
+      <td>${a.next_action || '—'} ${a.next_action_date || ''}</td>
+      <td>${a.last_touch_at ? new Date(a.last_touch_at).toLocaleString() : '—'}</td>
+      <td>${a.help_requested ? (a.help_reason || 'Yes') : '—'}</td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('apply').onclick = () => load().catch(err => {
+  document.getElementById('status').textContent = err.message;
+});
+load().catch(err => { document.getElementById('status').textContent = err.message; });
+</script>
+</body>
+</html>

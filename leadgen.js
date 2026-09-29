@@ -920,6 +920,15 @@ function getProspeoTitleIncludes() {
   return [CONFIG.jobTitle];
 }
 
+function normalizeProspeoPersonRow(match) {
+  const person = match?.person || {};
+  return {
+    contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
+    email: typeof person.email === 'object' ? person.email?.email || null : person.email || null,
+    title: person.job_title || null,
+  };
+}
+
 async function callProspeoSearchPerson(domain) {
   await awaitProspeoSlot();
 
@@ -946,14 +955,58 @@ async function callProspeoSearchPerson(domain) {
   const results = res.data?.results || [];
   if (!results.length) return null;
 
-  const match = results[0];
-  const person = match.person || {};
+  return normalizeProspeoPersonRow(results[0]);
+}
 
-  return {
-    contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
-    email: typeof person.email === 'object' ? person.email?.email || null : person.email || null,
-    title: person.job_title || null,
-  };
+async function searchProspeoContactsForDomain(domain, {
+  excludeEmails = [],
+  titleIncludes = null,
+} = {}) {
+  if (process.env.PROSPEO_ENABLED !== 'true' || !PROSPEO_API_KEY) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
+  const quota = await checkProspeoQuota();
+  if (!quota.ok) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
+  await recordProspeoCall();
+  try {
+    await awaitProspeoSlot();
+    const titles = Array.isArray(titleIncludes) && titleIncludes.length
+      ? titleIncludes
+      : getProspeoTitleIncludes();
+    const res = await axios.post('https://api.prospeo.io/search-person',
+      {
+        page: 1,
+        filters: {
+          company: { websites: { include: [domain] } },
+          person_job_title: { include: titles },
+        },
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-KEY': PROSPEO_API_KEY,
+        },
+      }
+    );
+    const excluded = new Set((excludeEmails || []).map(e => String(e || '').trim().toLowerCase()).filter(Boolean));
+    const contacts = [];
+    for (const row of res.data?.results || []) {
+      const normalized = normalizeProspeoPersonRow(row);
+      const email = String(normalized.email || '').trim().toLowerCase();
+      if (!email || excluded.has(email)) continue;
+      contacts.push(normalized);
+    }
+    return { ok: true, reason: null, contacts };
+  } catch (_err) {
+    return { ok: false, reason: 'provider_error', contacts: [] };
+  }
+}
+
+async function listProspeoContactsForDomain(domain, opts = {}) {
+  const result = await searchProspeoContactsForDomain(domain, opts);
+  return result.contacts || [];
 }
 
 async function enrichWithProspeo(domain) {
@@ -3427,6 +3480,8 @@ module.exports = {
   normalizeDomain,
   resolveEmailVerification,
   runEnrichmentChain,
+  listProspeoContactsForDomain,
+  searchProspeoContactsForDomain,
   normalizeVertical,
   scoreCleaningLead,
   scoreLead,

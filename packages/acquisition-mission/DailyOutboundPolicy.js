@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const { validatePaigeVariantCopy } = require('../max/workspace/PaigeCopySafety');
-const { canonicalOutboundEmailIneligibilityReason } = require('../../utils/canonicalEmailEligibility');
+const { governedContactReason, SENDABLE_CLASSES } = require('../../utils/governedContactEligibility');
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -32,10 +32,30 @@ function policy(input, now = new Date()) {
     weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17,
     // This phase authorizes first touches only. A reply can never restart a sequence.
     maxSequenceStep: 1, enrichmentLimit: 15, preparationAttemptsPerDay: 3 };
-  if (p.tenantId !== '10' || !p.sourceMissionId || !p.senderEmail.includes('@') || !p.inboxIntegrationId) fail('invalid_anchor_scope');
-  if (!p.aoOwnerIds.length || p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) fail('ao_owners_required');
-  if (!Number.isInteger(p.dailyCap) || p.dailyCap < 1 || p.dailyCap > 5
+  if (!['10', '13'].includes(p.tenantId) || !p.sourceMissionId || !p.senderEmail.includes('@') || !p.inboxIntegrationId) {
+    fail('invalid_governed_outbound_scope');
+  }
+  if (p.tenantId === '10') {
+    if (!p.aoOwnerIds.length || p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) {
+      fail('ao_owners_required');
+    }
+  } else if (p.tenantId === '13') {
+    p.allowedContactClassifications = [...new Set(input.allowedContactClassifications || ['VERIFIED_FOUNDER_EMAIL'])];
+    if (!p.allowedContactClassifications.length || p.allowedContactClassifications.some(x => !SENDABLE_CLASSES.includes(x))) fail('invalid_contact_classifications');
+    p.sendingIdentityId = String(input.sendingIdentityId || '').trim();
+    if (!p.sendingIdentityId) fail('sending_identity_required');
+    // Bind the reviewed mailbox window; Emmett still revalidates execution.
+    p.startHour = input.startHour ?? p.startHour;
+    p.endHour = input.endHour ?? p.endHour;
+    if (!Number.isInteger(p.startHour) || !Number.isInteger(p.endHour)
+      || p.startHour < 9 || p.endHour > 17 || p.startHour >= p.endHour) fail('invalid_business_window');
+    if (p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) fail('ao_owners_required');
+  }
+  // dailyCap is operator authorization, not Emmett operational capacity.
+  // Emmett may recommend more; the grant can now authorize up to the mailbox-scale ceiling.
+  if (!Number.isInteger(p.dailyCap) || p.dailyCap < 1 || p.dailyCap > 50
     || !Number.isInteger(p.totalCap) || p.totalCap < 1 || p.totalCap > 100
+    || p.dailyCap > p.totalCap
     || !Number.isInteger(p.spacingMinutes) || p.spacingMinutes < 60 || p.spacingMinutes > 240) fail('invalid_bounds');
   if (Date.parse(p.expiresAt) <= Date.parse(p.startsAt)
     || Date.parse(p.expiresAt) - Date.parse(p.startsAt) > 30 * 86400000
@@ -61,8 +81,8 @@ function windowReason(p, now = new Date(), sending = true) {
   return null;
 }
 
-function candidateReason(item, crm, message) {
-  const reason = canonicalOutboundEmailIneligibilityReason(crm);
+function candidateReason(item, crm, message, policy = {}) {
+  const reason = governedContactReason(crm, policy);
   if (reason) return reason;
   if (crm.is_synthetic === true) return 'synthetic_contact';
   if (String(item.email || '').toLowerCase() !== String(crm.email || '').toLowerCase()) return 'recipient_changed';

@@ -106,9 +106,8 @@ function evaluateIcp(candidate = {}) {
   const rejections = [];
   const signals = candidate.icpSignals || {};
 
-  if (signals.employeeCountMax && signals.employeeCountMax > BABRUN_ICP.employeeRange.max) {
-    rejections.push({ code: 'too_large', detail: `employee signal ${signals.employeeCountMax}` });
-  }
+  // The approved ICP allows larger founders with the same pains. Headcount
+  // is research context, not an invented exclusion.
   if (signals.preBusiness) rejections.push({ code: 'pre_business', detail: signals.preBusiness });
   if (signals.nationalChain) rejections.push({ code: 'national_chain', detail: signals.nationalChain });
   if (signals.leadGenOnly) rejections.push({ code: 'lead_gen_only', detail: signals.leadGenOnly });
@@ -116,8 +115,8 @@ function evaluateIcp(candidate = {}) {
   if (!clean(candidate.company)) rejections.push({ code: 'missing_company', detail: 'no company name' });
   if (!normalizeDomainKey(candidate.domain)) rejections.push({ code: 'missing_domain', detail: 'no verified domain' });
 
-  if (signals.ownerOperated) reasons.push({ kind: 'OBSERVED', text: 'Owner/founder visibly involved in operations' });
-  if (signals.smallTeam) reasons.push({ kind: 'OBSERVED', text: 'Small operating team (1–10 employee band)' });
+  if (signals.ownerOperated) reasons.push({ kind: 'OBSERVED', text: 'Website describes an owner/founder-led business' });
+  if (signals.smallTeam) reasons.push({ kind: 'OBSERVED', text: 'Website mentions a small team or crew; current headcount and timing are unconfirmed' });
   if (signals.serviceBusiness) reasons.push({ kind: 'OBSERVED', text: 'Service business where employee behavior affects outcomes' });
   if (signals.delegationPressure) reasons.push({ kind: 'INFERRED', text: 'Signals of founder dependency or delegation pressure' });
   if (signals.growthComplexity) reasons.push({ kind: 'INFERRED', text: 'Operational complexity consistent with Babrun ICP pain pattern' });
@@ -130,7 +129,9 @@ function evaluateIcp(candidate = {}) {
     epistemicSummary: {
       observed: reasons.filter((r) => r.kind === 'OBSERVED').map((r) => r.text),
       inferred: reasons.filter((r) => r.kind === 'INFERRED').map((r) => r.text),
-      unknown: fit ? [] : ['ICP fit incomplete — rejected or insufficient evidence'],
+      unknown: ['Buyer intent, felt pain, willingness to discuss and budget are unconfirmed.',
+        ...(!signals.employeeCountMax ? ['Employee count is unknown.'] : []),
+        ...(!fit ? ['ICP fit incomplete — rejected or insufficient evidence'] : [])],
     },
   };
 }
@@ -213,9 +214,9 @@ async function fetchText(url, timeoutMs = 10000) {
 
 function inferIcpSignalsFromText(text, candidate) {
   const body = String(text || '').toLowerCase();
-  const signals = { ...(candidate.icpSignals || {}) };
+  const signals = {};
 
-  if (/family[- ]owned|owner[- ]operated|founder|co-founder|started (?:this|the) (?:company|business)/i.test(body)) {
+  if (/family[- ]owned|owner[- ]operated|about the owner|founder|co-founder|started (?:this|the) (?:company|business)/i.test(body)) {
     signals.ownerOperated = true;
   }
   if (/(?:1|2|3|4|5|6|7|8|9|10)[- ]?(?:person|people|employee|member) team|small team|small crew/i.test(body)) {
@@ -237,7 +238,7 @@ function inferIcpSignalsFromText(text, candidate) {
   if (/design[- ]build|multi[- ]crew|supervis|delegat|manage employees|our team/i.test(body)) {
     signals.growthComplexity = true;
   }
-  signals.serviceBusiness = signals.serviceBusiness !== false;
+  signals.serviceBusiness = /painting|landscap|cleaning|electrical|hvac|roofing|plumbing|contractor/i.test(body);
 
   return signals;
 }
@@ -247,18 +248,22 @@ async function enrichCandidateFromWebsite(candidate) {
   if (!domain) return candidate;
   const homepage = await fetchText(`https://${domain}/`);
   const about = await fetchText(`https://${domain}/about`);
-  const combined = [homepage.text, about.text].join('\n');
+  const sources = [homepage, about].filter(page => page.ok && page.text.length > 100);
+  const combined = sources.map(page => page.text.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]*>/g, ' ')).join('\n');
   const icpSignals = inferIcpSignalsFromText(combined, candidate);
-  if (!icpSignals.smallTeam && !icpSignals.employeeCountMax) icpSignals.smallTeam = true;
-  if (!icpSignals.ownerOperated && clean(candidate.founder)) icpSignals.ownerOperated = true;
+  const founderConfirmed = clean(candidate.founder).split(/\s+/).every(part => combined.toLowerCase().includes(part.toLowerCase()));
+  if (!founderConfirmed || !sources.length) icpSignals.ownerOperated = false;
   return {
     ...candidate,
+    founder: founderConfirmed ? candidate.founder : '',
     icpSignals,
-    sourceUrls: [...new Set([...(candidate.sourceUrls || []), homepage.url, about.url].filter(Boolean))],
+    sourceUrls: sources.map(page => page.url),
+    sourcePassages: sources.map(page => ({ url: page.url, text: page.text.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 30000) })),
+    sourceVerification: { fetchedAt: new Date().toISOString(), founderConfirmed, successfulPages: sources.length },
   };
 }
 
-async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET) {
+async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET, deps = {}) {
   if (!apiKey) return [];
   const discovered = [];
   const seenDomains = new Set();
@@ -267,7 +272,8 @@ async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET) {
     if (discovered.length >= limit) break;
     let results;
     try {
-      results = await legacyTextSearch(seed.query, apiKey, { region: 'us' });
+      const response = await (deps.textSearch || legacyTextSearch)({ query: seed.query, apiKey, record: { clientId: CLIENT_ID, tenantId: TENANT_ID, caller: 'babrun_cohort_002' } });
+      results = response.ok && Array.isArray(response.data?.results) ? response.data.results : [];
     } catch {
       continue;
     }
@@ -276,7 +282,8 @@ async function discoverViaPlaces(apiKey, dedupe, limit = DISCOVERY_TARGET) {
       let details = hit;
       if (hit.place_id) {
         try {
-          details = await legacyPlaceDetails(hit.place_id, apiKey);
+          const response = await (deps.placeDetails || legacyPlaceDetails)({ placeId: hit.place_id, apiKey, fields: 'name,website,formatted_address,place_id', record: { clientId: CLIENT_ID, tenantId: TENANT_ID, caller: 'babrun_cohort_002' } });
+          details = response.ok && response.data?.result ? response.data.result : hit;
         } catch {
           details = hit;
         }
@@ -501,7 +508,8 @@ async function buildCandidateQueue(options = {}) {
 function buildProspectIntelligenceObject(candidate, sequence, icpEval, resolution) {
   const akId = candidate.akId || cohortAkId(sequence);
   const evidence = [
-    buildEvidenceItem('company_identity', `${candidate.company} — ${candidate.location}`, candidate.sourceUrls[0], 'OBSERVED'),
+    buildEvidenceItem('company_identity', candidate.company, candidate.sourceUrls[0], 'OBSERVED'),
+    buildEvidenceItem('research_location', `Research location (not refreshed): ${candidate.location}`, candidate.sourceUrls[0], 'INFERRED'),
     buildEvidenceItem('founder_identity', `${candidate.founder} (${candidate.founderRole})`, candidate.sourceUrls[0], 'OBSERVED'),
     buildEvidenceItem('domain_verification', `Official domain ${candidate.domain}`, candidate.sourceUrls[0], 'OBSERVED'),
   ];
@@ -548,6 +556,8 @@ function buildProspectIntelligenceObject(candidate, sequence, icpEval, resolutio
       discoveryMethod: candidate.discoveryMethod || 'public_research',
       sourceUrls: candidate.sourceUrls || [],
       createdBy: 'scout',
+      sourceVerification: candidate.sourceVerification || null,
+      sourcePassages: candidate.sourcePassages || [],
     },
     tags: ['babrun', COHORT_TAG, candidate.vertical].filter(Boolean),
     epistemicState: 'OBSERVED',
@@ -569,12 +579,12 @@ function buildScoutLearningObject(acceptedCount, totals) {
       acceptedProspects: acceptedCount,
       classificationTotals: totals,
       pipeline: 'company_identity → official_domain → attributable_contact → bouncer_verification → classification → ak_persistence → operationalization',
-      note: 'Cohort 002 enforces canonical prospect completion before counting toward acquisition cohort size.',
+      note: 'Persisted research records retain contact classification. REVIEW_REQUIRED records are quarantined and are not sendable.',
     },
     evidence: [{
       id: 'cohort002_outcome',
       type: 'observed',
-      statement: `Cohort 002 accepted ${acceptedCount} contactable prospects with classification totals ${JSON.stringify(totals)}`,
+      statement: `Cohort 002 persisted ${acceptedCount} classified research records with classification totals ${JSON.stringify(totals)}`,
       source: { kind: 'scout_run', ref: COHORT_TAG },
       confidence: 0.9,
     }],
@@ -682,6 +692,7 @@ async function runCohort002(options = {}) {
       continue;
     }
 
+    while (dedupe.akIds.has(cohortAkId(sequence))) sequence += 1;
     const target = {
       akId: cohortAkId(sequence),
       founder: candidate.founder,
@@ -796,6 +807,7 @@ module.exports = {
   isDuplicate,
   loadDedupeIndex,
   buildCandidateQueue,
+  discoverViaPlaces,
   runCohort002,
   formatCohortTableRow,
   strongestProspectsByEvidence,

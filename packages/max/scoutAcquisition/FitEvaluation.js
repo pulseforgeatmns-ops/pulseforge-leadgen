@@ -109,7 +109,8 @@ function evaluateBasicFit(candidate, searchDefinition = {}) {
     return evaluateAimBasicFit(candidate, searchDefinition.aim);
   }
   const reasons = [];
-  const geography = searchDefinition.geography && searchDefinition.geography.label;
+  const geographyBlock = searchDefinition.geography || null;
+  const geography = geographyBlock && geographyBlock.label;
   const segments = searchDefinition.segments || [];
   const exclusions = searchDefinition.exclusions || [];
   const text = haystack(candidate);
@@ -127,7 +128,7 @@ function evaluateBasicFit(candidate, searchDefinition = {}) {
     };
   }
 
-  if (geography && !matchesGeography(candidate.location || candidate.address, geography)) {
+  if (geographyBlock && !matchesGeography(candidate.location || candidate.address, geographyBlock)) {
     return {
       level: FIT_LEVELS.REJECTED,
       score: 0.2,

@@ -21,6 +21,7 @@ const { createOutboundEngine, localDateOf } = require('./Engine');
 const authEvidence = require('./AuthEvidence');
 const bootstrap = require('./Bootstrap');
 const { buildCapacityEnvelope, buildDecisiveReasoning } = require('./CapacityEnvelope');
+const { assessOperatingCapacity, LIMITING_FACTORS } = require('./OperatingCapacity');
 const tenantMailboxCapacity = require('./TenantMailboxCapacity');
 
 const {
@@ -59,5 +60,7 @@ module.exports = {
   ...tenantMailboxCapacityRest,
   buildCapacityEnvelope,
   buildDecisiveReasoning,
+  assessOperatingCapacity,
+  LIMITING_FACTORS,
   buildTenantMailboxDurableEnvelope,
 };

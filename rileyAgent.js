@@ -774,7 +774,7 @@ function normalizeReplyClassification(rawClassification) {
 
 async function classifyReply(email, options = {}) {
   const anchor = options.anchor === true;
-  const business = anchor ? 'Anchor Cleaning, a cleaning service business' : 'Pulseforge, an AI marketing agency run by Jacob Maynard in Manchester NH';
+  const business = options.governed ? 'the tenant business that sent this outreach' : anchor ? 'Anchor Cleaning, a cleaning service business' : 'Pulseforge, an AI marketing agency run by Jacob Maynard in Manchester NH';
   const prompt = `You are Riley, an inbound email triage agent for ${business}.
 
 Classify this email into exactly one category:
@@ -792,7 +792,7 @@ Subject: ${email.subject}
 Body: ${email.body}
 
 Respond with JSON only: { "classification": "interested|${anchor ? 'quote_request|incumbent_vendor|' : ''}not_now|negative|unsubscribe|wrong_person|out_of_office|unknown", "reason": "...", "suggested_reply": "..." }
-${anchor ? 'Leave suggested_reply blank. Max routes this conversation to a human; this classifier never authorizes a send.' : 'For suggested_reply: write a short, warm, human reply from Jacob if classification is interested or not_now. Leave blank for others.'}`;
+${(anchor || options.governed) ? 'Leave suggested_reply blank. Max routes this conversation to a human; this classifier never authorizes a send.' : 'For suggested_reply: write a short, warm, human reply from Jacob if classification is interested or not_now. Leave blank for others.'}`;
 
   console.log('[Riley] Classifying raw reply:', JSON.stringify({
     from: email.from,
@@ -812,6 +812,7 @@ ${anchor ? 'Leave suggested_reply blank. Max routes this conversation to a human
     if (match) {
       const parsed = JSON.parse(match[0]);
       parsed.classification = normalizeReplyClassification(parsed.classification);
+      if (options.governed) parsed.suggested_reply = '';
       console.log('[Riley] Classification result:', JSON.stringify(parsed));
       return parsed;
     }

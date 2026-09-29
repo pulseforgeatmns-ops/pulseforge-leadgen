@@ -7,79 +7,160 @@ const { loadMissionSnapshot } = require('./acquisitionMissionPersistence');
 const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
 const { resolveCanonicalSenderIdentity, evaluateCanonicalSenderReadiness } = require('../utils/canonicalSenderIdentity');
 const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
-const { createOutboundEngine } = require('../packages/emmett-outbound');
+const { createOutboundEngine, assessOperatingCapacity } = require('../packages/emmett-outbound');
 const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
-const { canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
+const { governedContactReason } = require('../utils/governedContactEligibility');
+const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
+const { buildTenantMailboxInboxSnapshot } = require('./emmettTenantMailboxSnapshot');
+const { createGovernedTenantMailboxSend } = require('../utils/governedOutboundTransport');
 
 
 // Count every known path; duplicate evidence conservatively consumes capacity.
-async function readOutboundHistory(pool, ignoreItem = null) {
+async function readOutboundHistory(pool, tenantId, clientId, ignoreItem = null) {
   const { rows } = await pool.query(`SELECT count(*)::int AS today,max(attempted_at) AS last_attempt FROM (
-      SELECT attempted_at FROM acquisition_mission_outbound_executions WHERE tenant_id='10' AND status IN ('sent','attempted','failed')
+      SELECT attempted_at FROM acquisition_mission_outbound_executions WHERE tenant_id=$3 AND status IN ('sent','attempted','failed')
         AND NOT (status='attempted' AND prospect_id=$1 AND prepared_artifact_revision=$2)
-      UNION ALL SELECT ran_at FROM agent_log WHERE client_id=10 AND agent_name='emmett' AND action='email_sent'
-      UNION ALL SELECT sent_at FROM tenant_outreach_messages WHERE tenant_id='10' AND direction='outbound' AND status='sent'
+      UNION ALL SELECT ran_at FROM agent_log WHERE client_id=$4 AND agent_name='emmett' AND action='email_sent'
+      UNION ALL SELECT sent_at FROM tenant_outreach_messages WHERE tenant_id=$3 AND direction='OUTBOUND' AND status='sent'
       ) evidence WHERE (attempted_at AT TIME ZONE 'America/New_York')::date=(now() AT TIME ZONE 'America/New_York')::date`,
-  [ignoreItem?.candidate_id || '', ignoreItem?.snapshot?.revision || '']);
+  [ignoreItem?.candidate_id || '', ignoreItem?.snapshot?.revision || '', tenantId, clientId]);
   return rows[0];
 }
 
 function adapters(pool, dependencies = {}) {
-  const loadMission = dependencies.loadMission || (id => loadMissionSnapshot(id, '10', pool));
-  const contact = dependencies.contact || (id => loadBestCrmProspectForMissionBoundKey({ pool, clientId: 10, missionBoundKey: id }));
+  const ctx = createGovernedOutboundTenantContext(dependencies.tenantId || '10');
+  const tenantId = ctx.tenantId;
+  const clientId = ctx.clientId;
+  const loadMission = dependencies.loadMission || (id => loadMissionSnapshot(id, tenantId, pool));
+  const contact = dependencies.contact || (id => loadBestCrmProspectForMissionBoundKey({ pool, clientId, missionBoundKey: id }));
   async function tenant(program) {
     if (dependencies.tenant) return dependencies.tenant(program);
-    const { rows } = await pool.query('SELECT * FROM clients WHERE id=10');
+    const { rows } = await pool.query('SELECT * FROM clients WHERE id=$1', [clientId]);
     const client = rows[0];
     if (!client || client.active !== true || client.autosend_enabled !== false) fail('tenant_inactive_or_legacy_autosend_enabled');
-    const sender = await resolveCanonicalSenderIdentity({ tenantId: '10', clientId: 10, client });
+    const sender = await resolveCanonicalSenderIdentity({ tenantId, clientId, client, pool });
     if (!sender.ok || sender.identity.senderEmail.toLowerCase() !== program.policy.senderEmail) fail('sender_changed');
     const { PostgresTenantMailboxStore } = require('./tenantMailbox');
-    const integration = await new PostgresTenantMailboxStore(pool).getIntegration('10', program.policy.inboxIntegrationId);
+    const integration = await new PostgresTenantMailboxStore(pool).getIntegration(tenantId, program.policy.inboxIntegrationId);
     if (!integration || integration.status !== 'active' || integration.mailboxAddress.toLowerCase() !== program.policy.senderEmail) fail('anchor_reply_mailbox_not_ready');
-    const owners = await pool.query('SELECT id FROM users WHERE client_id=10 AND active=true AND id=ANY($1::int[])', [program.policy.aoOwnerIds]);
-    if (!owners.rows.length) fail('ao_owner_unavailable');
+    if (ctx.requiresAoOwners) {
+      const owners = await pool.query('SELECT id FROM users WHERE client_id=$1 AND active=true AND id=ANY($2::int[])', [clientId, program.policy.aoOwnerIds]);
+      if (!owners.rows.length) fail('ao_owner_unavailable');
+    }
     const triggers = await pool.query(`SELECT count(*)::int AS n FROM pg_trigger
       WHERE tgname='acquisition_outbound_observe' AND tgenabled IN ('O','A') AND NOT tgisinternal`);
     if (triggers.rows[0]?.n !== 6) fail('suppression_triggers_missing');
     return { client, sender: sender.identity };
   }
-  async function infrastructure(program, now = new Date(), ignoreItem = null) {
-    if (dependencies.infrastructure) return dependencies.infrastructure(program, now);
+  async function infrastructure(program, now = new Date(), ignoreItem = null, opts = {}) {
+    if (dependencies.infrastructure) return dependencies.infrastructure(program, now, ignoreItem, opts);
     const { client, sender } = await tenant(program);
-    const readiness = await evaluateCanonicalSenderReadiness({ identity: sender, client, pool });
-    if (!readiness.ready) fail(readiness.code || 'sender_not_ready');
-    // The shared snapshot tolerates missing legacy tables. Governed execution
-    // must prove telemetry is readable before consuming that snapshot.
-    await pool.query('SELECT event_type,event_at,sender_identity_status FROM email_events WHERE client_id=10 LIMIT 1');
-    await pool.query('SELECT action,payload,ran_at FROM agent_log WHERE client_id=10 LIMIT 1');
-    const snapshot = await buildInboxSnapshot(10, { pool, now });
-    const history = await readOutboundHistory(pool, ignoreItem);
+    if (ctx.requiresLegacyEmailTelemetry) {
+      const readiness = await evaluateCanonicalSenderReadiness({ identity: sender, client, pool });
+      if (!readiness.ready) fail(readiness.code || 'sender_not_ready');
+    }
+    let snapshot;
+    if (ctx.requiresLegacyEmailTelemetry) {
+      await pool.query('SELECT event_type,event_at,sender_identity_status FROM email_events WHERE client_id=$1 LIMIT 1', [clientId]);
+      await pool.query('SELECT action,payload,ran_at FROM agent_log WHERE client_id=$1 LIMIT 1', [clientId]);
+      snapshot = await buildInboxSnapshot(clientId, { pool, now });
+    } else {
+      snapshot = await buildTenantMailboxInboxSnapshot({
+        tenantId,
+        sendingIdentityId: program.policy.sendingIdentityId,
+        mailboxIntegrationId: program.policy.inboxIntegrationId,
+      }, { pool, now });
+      if (!snapshot?.authentication?.smtp || snapshot.authentication.smtp.state === 'fail') {
+        fail('tenant_mailbox_not_ready');
+      }
+    }
+    if (ctx.usesTenantMailboxTransport) {
+      const produced = await require('./emmettTenantMailboxCapacity').produceTenantMailboxCapacityEnvelope(
+        tenantId, program.policy.sendingIdentityId, { pool, now });
+      const envelope = produced.envelope;
+      if (envelope.mailboxIntegrationId !== program.policy.inboxIntegrationId) fail('capacity_mailbox_changed');
+      const assessed = envelope.emmettContribution;
+      if (assessed.governor.halt || !['proceed', 'slow'].includes(envelope.governorState)) fail('emmett_governor_halted');
+      const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
+      const cap = Math.min(program.policy.dailyCap, envelope.maxSendsPerDay);
+      if (!(cap > 0)) fail('emmett_capacity_exhausted');
+      const inWindow = require('../packages/acquisition-mission/DailyOutboundPolicy').clock(now);
+      const available = envelope.remainingCapacity > 0 || Boolean(ignoreItem);
+      const dispatchNow = available && inWindow.hour >= envelope.allowedSendWindow.startHour
+        && inWindow.hour < envelope.allowedSendWindow.endHour && inWindow.weekday > 0 && inWindow.weekday < 6 ? cap : 0;
+      if (opts.mode === 'dispatch' && !dispatchNow) fail('dispatch_unavailable_now');
+      Object.assign(snapshot, sender, { sentToday: envelope.currentSentCount, inboxId: sender.senderEmail, domain: sender.sendingDomain });
+      const counts = await new (require('./governedOutboundStore').GovernedOutboundStore)(pool, tenantId).counts(program, inWindow.day);
+      return { snapshot, assessed, cap, sender, envelope, totalAttempted: counts.total, lastAttempt: history.last_attempt,
+        dispatchUnavailableNow: !dispatchNow,
+        operating: { planningDailyCapacity: cap, dispatchCapacityNow: dispatchNow,
+          effectiveDailyCapacity: cap, recommendedSafeDailyCapacity: envelope.maxSendsPerDay,
+          governor: assessed.governor, healthScore: assessed.health?.score ?? null,
+          allowedSendWindow: envelope.allowedSendWindow,
+          minSpacingMinutes: Math.max(program.policy.spacingMinutes, envelope.minimumSpacingMinutes) } };
+    }
+    const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
     snapshot.sentToday = Math.max(snapshot.sentToday, history.today);
     snapshot.inboxId = sender.senderEmail;
     snapshot.domain = sender.sendingDomain;
     Object.assign(snapshot, sender);
-    const assessed = createOutboundEngine().assess({ tenantId: '10', snapshot, now });
+    const assessed = createOutboundEngine().assess({ tenantId, snapshot, now });
     if (assessed.governor.halt || !['proceed', 'slow'].includes(assessed.governor.outcome)) fail('emmett_governor_halted');
-    const cap = Math.min(assessed.capacity.recommended, assessed.governor.slowCap || Infinity, program.policy.dailyCap);
-    if (!Number.isFinite(cap) || cap <= snapshot.sentToday) fail('emmett_capacity_exhausted');
-    return { snapshot, assessed, cap, sender, lastAttempt: history.last_attempt };
+    const programTotals = await pool.query(`SELECT count(*)::int AS total
+      FROM acquisition_outbound_items i
+      JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
+      WHERE e.program_id=$1 AND i.attempted_at IS NOT NULL`, [program.id]).catch(() => ({ rows: [{ total: 0 }] }));
+
+    const grantWindow = {
+      startHour: program.policy.startHour ?? 9,
+      endHour: program.policy.endHour ?? 17,
+      timezone: program.policy.timeZone || 'America/New_York',
+    };
+    const operating = assessOperatingCapacity({
+      assessed,
+      policy: program.policy,
+      sentToday: snapshot.sentToday,
+      totalAttempted: programTotals.rows[0]?.total || 0,
+      now,
+      schedule: {
+        allowedSendWindow: grantWindow,
+        minSpacingMinutes: program.policy.spacingMinutes ?? program.policy.minSpacingMinutes ?? 60,
+      },
+    });
+    const mode = opts.mode || 'planning';
+    const planningCap = operating.planningDailyCapacity;
+    const dispatchNow = operating.dispatchCapacityNow;
+    if (!Number.isFinite(planningCap) || planningCap <= 0) fail('emmett_capacity_exhausted');
+    if (mode === 'dispatch') {
+      if (!Number.isFinite(dispatchNow) || dispatchNow <= 0 || dispatchNow <= snapshot.sentToday) {
+        fail('dispatch_unavailable_now');
+      }
+    }
+    return {
+      snapshot,
+      assessed,
+      cap: planningCap,
+      operating,
+      sender,
+      lastAttempt: history.last_attempt,
+      dispatchUnavailableNow: dispatchNow <= 0 || dispatchNow <= snapshot.sentToday,
+    };
   }
   async function runtimeFor() {
     if (dependencies.runtime) return dependencies.runtime;
     const runtime = getAcquisitionMissionRuntime({ pool, persist: true });
-    await runtime.hydrate('10', { pool, persist: true });
+    await runtime.hydrate(tenantId, { pool, persist: true });
     return runtime;
   }
   async function route(runtime, missionId, program, intent, extra = {}) {
     const engine = runtime.engine();
-    const mission = engine.get(missionId, '10');
+    const mission = engine.get(missionId, tenantId);
     const request = amo.createExecutionRequest({ source: amo.EXECUTION_SOURCES.API, intent,
       missionId, mission, stage: mission.stage, operatorId: program.authorized_by,
       permissions: { canExecute: true, role: 'operator' },
       payload: { question: `Bounded delegation ${program.id}: ${intent}`, maxSends: 1,
         ...(extra.prospectId ? { prospectId: extra.prospectId } : {}) } });
-    const result = await amo.routeExecutionRequest(request, { engine, tenantId: '10',
+    const result = await amo.routeExecutionRequest(request, { engine, tenantId,
       pool: dependencies.persist === false ? undefined : pool, persist: dependencies.persist !== false,
       operatorId: program.authorized_by, allowFixtureFallback: false, ...extra });
     if (result.executionResult?.rolledBack) throw result.executionResult.error || new Error(result.executionResult.rollbackReason);
@@ -107,15 +188,19 @@ function adapters(pool, dependencies = {}) {
           companyId: crm.company_id, email: String(crm.email || '') }))) {
           eligible[id] = { eligible: false, reason: 'prior_contact_or_human_owned' }; continue;
         }
+        if (ctx.usesTenantMailboxTransport && crm && !governedContactReason(crm, program.policy)) {
+          eligible[id] = { eligible: true, reason: null, prospectId: crm.prospect_id };
+          continue;
+        }
         attempts++;
-        const admitted = await admission.admitMissionBoundCandidate(pool, candidate, { missionId: mission.id, clientId: 10, mission });
+        const admitted = await admission.admitMissionBoundCandidate(pool, candidate, { missionId: mission.id, clientId, mission });
         if (admitted?.blocked) {
           eligible[id] = { eligible: false, reason: admitted.reason, detail: admitted.detail || null }; continue;
         }
         crm = await contact(id);
         if (crm) await enrichProspectRow(crm, { db: pool, dryRun: false });
         crm = await contact(id);
-        const reason = canonicalOutboundEmailIneligibilityReason(crm)
+        const reason = governedContactReason(crm, program.policy)
           || await store.suppression({ candidateId: id, prospectId: crm.prospect_id,
             companyId: crm.company_id, email: crm.email });
         eligible[id] = { eligible: !reason, reason, prospectId: crm?.prospect_id || null };
@@ -132,12 +217,16 @@ function adapters(pool, dependencies = {}) {
     return result;
   }
   async function prepare(program, source, day, store, recovery = null) {
+    if (ctx.usesTenantMailboxTransport && source?.mission?.stage === 'ready' && !recovery) {
+      await prepared(source, program);
+      return source;
+    }
     const runtime = await runtimeFor();
     const engine = runtime.engine();
     const defaultMissionId = `mission_daily_${hash([program.id, day]).slice(0, 24)}`;
     const { progress } = await store.ensurePreparation(program, day);
     const missionId = progress.mission_id || defaultMissionId;
-    let mission = engine.get(missionId, '10');
+    let mission = engine.get(missionId, tenantId);
     if (mission?.stage === 'ready') return loadMission(missionId);
     if (recovery) {
       if (missionId !== recovery.nextMissionId || progress.attempts !== recovery.review.nextAttempt
@@ -152,15 +241,15 @@ function adapters(pool, dependencies = {}) {
     }
     try {
       if (!mission) {
-        const input = { ...missionScope(source.mission), id: missionId, tenantId: '10', clientId: 10,
-          title: `Anchor daily outbound ${day}`, createdBy: 'max', orchestrationMissionId: source.mission.id };
+        const input = { ...missionScope(source.mission), id: missionId, tenantId, clientId,
+          title: `Governed daily outbound ${day}`, createdBy: 'max', orchestrationMissionId: source.mission.id };
         await runtime.create(input, { pool, persist: true });
       }
       const infra = await infrastructure(program);
       for (let steps = 0; steps < 8; steps++) {
-        mission = engine.get(missionId, '10');
+        mission = engine.get(missionId, tenantId);
         if (mission.stage === 'ready') return loadMission(missionId);
-        const snapshot = engine.inspect(missionId, { tenantId: '10' });
+        const snapshot = engine.inspect(missionId, { tenantId });
         const ctx = amo.specialistContext(snapshot.contributions || [], { missionId });
         let intent;
         if (mission.stage === 'discover') intent = amo.intentFromPendingDecision(mission.pendingOperatorDecision);
@@ -184,7 +273,7 @@ function adapters(pool, dependencies = {}) {
     }
   }
   async function prepared(snapshot, program) {
-    if (!snapshot?.mission || String(snapshot.mission.tenantId) !== '10'
+    if (!snapshot?.mission || String(snapshot.mission.tenantId) !== tenantId
       || snapshot.mission.planCancelled || !['ready', 'execute'].includes(snapshot.mission.stage)) fail('mission_not_executable');
     if (hash(missionScope(snapshot.mission)) !== program.scope_hash) fail('daily_mission_scope_changed');
     const contributions = snapshot.contributions;
@@ -198,6 +287,17 @@ function adapters(pool, dependencies = {}) {
     const { sender } = await tenant(program);
     const binding = require('../utils/canonicalSenderIdentity').assertCapacityMatchesCanonical(capacity, sender);
     if (!binding.ok) fail('capacity_sender_changed');
+    if (ctx.usesTenantMailboxTransport) {
+      const inventory = await require('./acquisitionMissionInventory').loadKnowledgeInventory(pool, snapshot.mission, program.policy);
+      for (const item of capacity.queue?.items || []) {
+        const row = inventory.find(r => [String(r.company_id), String(r.id)].includes(String(item.prospectId || item.id)));
+        if (!row) continue;
+        const copy = amo.resolvePaigeVariant(variants, { candidateId: item.paige?.candidateId || item.id, variantLabel: item.paige?.variantLabel || 'Primary' });
+        if (item.paige?.subject !== copy?.subject || item.paige?.body !== copy?.body) fail('capacity_copy_binding_mismatch');
+        const approved = row.approved_asset?.content;
+        if (!approved || copy?.subject !== approved.subject || copy?.body !== (approved.body || approved.statement)) fail('approved_copy_binding_mismatch');
+      }
+    }
     return { sender, revision: amo.computePreparedArtifactRevision(snapshot.mission.id, contributions),
       capacity: Number(capacity.capacity?.recommended || 0),
       candidates: (capacity.queue?.items || []).map(item => ({ item,
@@ -207,20 +307,30 @@ function adapters(pool, dependencies = {}) {
   }
   async function liveGate(program, item, _prepared, now) {
     const { rows } = await pool.query(`SELECT 1 FROM acquisition_outbound_inbox_health
-      WHERE tenant_id='10' AND integration_id=$1 AND last_success_at>now()-interval '5 minutes'`, [program.policy.inboxIntegrationId]);
+      WHERE tenant_id=$1 AND integration_id=$2 AND last_success_at>now()-interval '5 minutes'`, [tenantId, program.policy.inboxIntegrationId]);
     if (!rows.length) fail('reply_poll_stale');
-    const infra = await infrastructure(program, now, item);
-    if (infra.lastAttempt && +now - +new Date(infra.lastAttempt) < program.policy.spacingMinutes * 60000) {
+    const infra = await infrastructure(program, now, item, { mode: 'dispatch' });
+    if (infra.lastAttempt && +now - +new Date(infra.lastAttempt) < Math.max(program.policy.spacingMinutes, infra.envelope?.minimumSpacingMinutes || 0) * 60000) {
       fail('cross_path_spacing');
     }
-    if (await require('../dbClient').checkDNC(item.prospect_id, { clientId: 10, pool })) fail('dnc');
+    if (await require('../dbClient').checkDNC(item.prospect_id, { clientId, pool })) fail('dnc');
+  }
+  function sendFor(program, binding = {}) {
+    if (ctx.usesBrevoTransport) {
+      const brevoSend = command => require('../packages/providers/brevo/sendEmail').sendEmail(command);
+      brevoSend.beforeAttempt = null;
+      return brevoSend;
+    }
+    return createGovernedTenantMailboxSend({ ...program, tenant_id: tenantId, pool }, binding);
   }
   return {
-    loadMission, contact, prepare, prepared, liveGate, validateTenant: tenant,
+    tenantId,
+    clientId,
+    loadMission, contact, infrastructure, prepare, prepared, liveGate, validateTenant: tenant, sendFor,
     complete: async envelope => {
       const runtime = await runtimeFor();
       const engine = runtime.engine();
-      const mission = engine.get(envelope.mission_id, '10');
+      const mission = engine.get(envelope.mission_id, tenantId);
       if (!mission || !mission.executionSummary || mission.executionSummary.complete) return;
       mission.executionSummary.complete = true;
       engine.store.putMission(mission);
@@ -234,9 +344,12 @@ function adapters(pool, dependencies = {}) {
     },
     execute: async (envelope, item, program, sendEmail) => {
       const runtime = await runtimeFor();
+      const transport = sendEmail || sendFor(program);
       return route(runtime, envelope.mission_id, program, amo.EXECUTION_INTENTS.EXECUTE_OUTBOUND,
         { governedEnvelopeId: envelope.id, maxSends: 1, prospectId: item.candidate_id,
-          sendEmail, requireProviderReadiness: true });
+          governedManifestCandidateIds: (envelope.manifest || []).map(row => String(row.candidateId || '')).filter(Boolean),
+          governedRefillItem: item.snapshot?.refill === true ? item : null,
+          sendEmail: transport, requireProviderReadiness: ctx.requiresLegacyEmailTelemetry });
     },
   };
 }

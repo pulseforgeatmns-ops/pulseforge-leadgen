@@ -11,3 +11,7 @@ test('governed scheduler is opt-in; polls before dispatch, avoids overlap and co
  cron.poll=async()=>{throw Error('poll failed');};await callback();assert.equal(calls.filter(c=>c==='tick').length,2);
  scheduler.stop();const before=calls.length;await callback();assert.equal(calls.length,before);
 });
+test('the existing Anchor timer never invokes externally clocked mailbox tenants',async()=>{
+ const seen=[];const scheduler=startAnchorGovernedScheduler({enabled:true,maxControlEnabled:false,cron:{poll:async o=>seen.push(o.tenantIds),run:async o=>seen.push(o.tenantIds)},logger:{log(){},error(){}},setInterval(){return{};},clearInterval(){}});
+ await new Promise(r=>setImmediate(r));scheduler.stop();assert.deepEqual(seen,[['10'],['10']]);
+});

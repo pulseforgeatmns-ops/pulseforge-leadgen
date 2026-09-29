@@ -123,7 +123,13 @@ function buildPerProspectVariants(input = {}) {
     let usedPersonalization = false;
     let scoutPersonalization = null;
 
-    if (useAnchorLifecycle) {
+    const approved = input.approvedCopies?.[String(candidateId)];
+    if (input.approvedCopies && !approved) throw Object.assign(new Error('Prospect-bound approved copy is missing'), { code: 'approved_copy_missing' });
+    if (approved) {
+      copy = { subject: approved.content.subject, body: approved.content.body || approved.content.statement, cta: 'Would you be open to a short conversation?' };
+      scoutPersonalization = { acquisitionKnowledgeAssetId: approved.id, version: approved.version, source: 'stakeholder_validated_outreach_asset' };
+      usedPersonalization = true;
+    } else if (useAnchorLifecycle) {
       const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
       const lifecycle = buildAnchorLifecycleVariant({
         candidate: {
@@ -215,13 +221,22 @@ function buildBasePaigeVariantsPayload(input = {}) {
   const subjects = variants.map((v) => v.subject);
   const max = input.max || {};
   const scout = input.scout || {};
+  const plan = input.plan || {};
+  const mission = input.mission || {};
+  const clientId = Number(
+    input.clientId
+    || plan.clientId
+    || mission.clientId
+    || mission.tenantId
+    || 0
+  );
   const usedPersonalization = variants.some((variant) => variant.attributableIntelligence?.usedPersonalization);
 
   return {
     variants,
     subjects,
     messaging: variants[0]?.body || null,
-    cta: Number(input.clientId || plan.clientId || input.mission?.clientId || input.mission?.tenantId) === ANCHOR_CLIENT_ID
+    cta: clientId === ANCHOR_CLIENT_ID
       ? (variants[0]?.cta || 'Want me to send over what we\'d need for a quote?')
       : 'Reply to schedule a walkthrough',
     hypotheses: [
@@ -291,6 +306,7 @@ function buildPaigeVariantsPayload(executionInput = {}) {
     plan,
     clientId,
     crmByProspectId,
+    approvedCopies: executionInput.approvedCopies,
     mission: executionInput.mission || {},
   });
 
@@ -306,7 +322,7 @@ function buildPaigeVariantsPayload(executionInput = {}) {
 
   // TODO: Refactor applyPaigePriorLearningAdjustments to apply per-prospect
   // For now, apply only to first variant to avoid contamination
-  payload = applyPaigePriorLearningAdjustments(payload, priorLearningEvaluation, plan);
+  if (!executionInput.approvedCopies) payload = applyPaigePriorLearningAdjustments(payload, priorLearningEvaluation, plan);
 
   const outreachSequence = resolveOutreachSequenceAtPrepare({
     mission: executionInput.mission || {},
@@ -325,7 +341,11 @@ function buildPaigeVariantsPayload(executionInput = {}) {
   };
 }
 
-async function runPaigeVariants(executionInput = {}) {
+async function runPaigeVariants(executionInput = {}, opts = {}) {
+  if (opts.pool && !executionInput.approvedCopies) {
+    const inventory = await require('../../../services/acquisitionMissionInventory').loadKnowledgeInventory(opts.pool, executionInput.mission || {});
+    if (inventory.length) executionInput = { ...executionInput, approvedCopies: Object.fromEntries(inventory.filter(r => !r.qualificationReason).map(r => [String(r.company_id), r.approved_asset])) };
+  }
   const transactionId = executionInput.transactionId;
   const { max, scout, plan } = extractPaigeUpstreamContext(executionInput);
 
@@ -441,6 +461,8 @@ async function runPaigeForAmoMission(mission, opts = {}) {
     store: opts.engine?.store,
   });
 
+  const inventory = opts.pool ? await require('../../../services/acquisitionMissionInventory').loadKnowledgeInventory(opts.pool, mission) : [];
+  const approvedCopies = inventory.length ? Object.fromEntries(inventory.filter(r => !r.qualificationReason).map(r => [String(r.company_id), r.approved_asset])) : undefined;
   const result = await executeSpecialist({
     specialist: SPECIALISTS.PAIGE,
     mission,
@@ -449,6 +471,7 @@ async function runPaigeForAmoMission(mission, opts = {}) {
     store: opts.engine?.store,
     run: () => runPaigeVariants({
       ...executionInput,
+      approvedCopies,
       mission,
     }),
     treatErrorsAsBlocked: opts.treatErrorsAsBlocked !== false,

@@ -7,6 +7,10 @@
 
 const { asText, clone, isPlainObject, normalizeSignal, REJECTION_REASONS } = require('./Types');
 const { parseGeographyList } = require('./InvestigationProvenance');
+const {
+  allowedCitiesFromGeographyLabel,
+  isLocationInMissionGeography,
+} = require('../../../utils/missionGeography');
 
 function tokenize(value) {
   return String(value || '')
@@ -17,12 +21,31 @@ function tokenize(value) {
     .filter((t) => t.length > 1);
 }
 
+function resolveGeographyAllowedCities(geography) {
+  if (!geography) return [];
+  if (Array.isArray(geography)) return geography.map(asText).filter(Boolean);
+  if (typeof geography === 'object') {
+    if (Array.isArray(geography.cities) && geography.cities.length) {
+      return geography.cities.map(asText).filter(Boolean);
+    }
+    return allowedCitiesFromGeographyLabel(geography.label);
+  }
+  return [
+    ...allowedCitiesFromGeographyLabel(geography),
+    ...parseGeographyList(geography),
+  ].filter(Boolean);
+}
+
 function matchesGeography(location, geography) {
   if (!geography) return true;
+  const allowedCities = resolveGeographyAllowedCities(geography);
+  if (allowedCities.length) {
+    return isLocationInMissionGeography({ location, allowedCities });
+  }
   const loc = String(location || '').toLowerCase();
   if (!loc) return false;
-  const parts = parseGeographyList(geography);
-  const haystacks = parts.length ? parts : [geography];
+  const parts = parseGeographyList(typeof geography === 'object' ? geography.label : geography);
+  const haystacks = parts.length ? parts : [typeof geography === 'object' ? geography.label : geography];
   return haystacks.some((part) => {
     const tokens = tokenize(part).filter(
       (t) => !['nh', 'tn', 'wv', 'area', 'greater', 'and'].includes(t)
@@ -30,6 +53,44 @@ function matchesGeography(location, geography) {
     if (!tokens.length) return loc.includes(String(part).toLowerCase());
     return tokens.some((t) => loc.includes(t));
   });
+}
+
+const RELATED_SEGMENT_ALIASES = Object.freeze({
+  'short term rental': [
+    'str',
+    'vacation rental',
+    'property management',
+    'property manager',
+    'str manager',
+    'hospitality',
+  ],
+  'short term rental operators': [
+    'str',
+    'vacation rental',
+    'property management',
+    'property manager',
+  ],
+  'property management': [
+    'property manager',
+    'short term rental',
+    'str',
+    'vacation rental',
+    'str manager',
+  ],
+  'property manager': [
+    'property management',
+    'short term rental',
+    'str',
+  ],
+});
+
+function segmentNeedles(segment) {
+  const needle = String(segment || '')
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  if (!needle) return [];
+  return [needle, ...(RELATED_SEGMENT_ALIASES[needle] || [])];
 }
 
 function matchesSegment(record, segments) {
@@ -44,17 +105,15 @@ function matchesSegment(record, segments) {
     .map((v) => String(v || '').toLowerCase().replace(/[_-]+/g, ' '))
     .join(' ');
   return segments.some((seg) => {
-    const needle = String(seg || '')
-      .toLowerCase()
-      .replace(/[_-]+/g, ' ')
-      .trim();
-    if (!needle) return false;
-    const compact = needle.replace(/\s+/g, '');
-    return (
-      hay.includes(needle) ||
-      hay.replace(/\s+/g, '').includes(compact) ||
-      (needle.includes('property') && hay.includes('property'))
-    );
+    return segmentNeedles(seg).some((needle) => {
+      if (!needle) return false;
+      const compact = needle.replace(/\s+/g, '');
+      return (
+        hay.includes(needle) ||
+        hay.replace(/\s+/g, '').includes(compact) ||
+        (needle.includes('property') && hay.includes('property'))
+      );
+    });
   });
 }
 
@@ -293,6 +352,7 @@ module.exports = {
   loadTenantRepository,
   matchesGeography,
   matchesSegment,
+  segmentNeedles,
   normalizeCompany,
   normalizePerson,
   signalLabel,

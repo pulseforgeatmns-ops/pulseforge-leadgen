@@ -170,7 +170,7 @@ async function executeCanonical(input = {}, opts = {}) {
     canonicalSender = resolved.identity;
   }
 
-  return amo.routeExecutionRequest(request, {
+  const routed = await amo.routeExecutionRequest(request, {
     engine,
     tenantId,
     question: input.question,
@@ -191,11 +191,17 @@ async function executeCanonical(input = {}, opts = {}) {
     senderReadiness: input.senderReadiness || opts.senderReadiness,
     requireProviderReadiness: input.requireProviderReadiness || opts.requireProviderReadiness,
   });
+  // Cancellation is an operator edit, not a specialist TME stage. Persist it
+  // through the runtime's canonical commit path before a subsequent hydration.
+  if (intent === amo.EXECUTION_INTENTS.CANCEL_PLAN && !routed.executionResult?.rolledBack) {
+    await runtime.persistMissionState(mission.id, opts);
+  }
+  return routed;
 }
 
 function activeMissionFor(tenantId, opts = {}) {
   const runtime = runtimeFromOpts(opts);
-  const missions = runtime.engine().list(tenantId);
+  const missions = runtime.engine().list(tenantId).filter(mission => !mission.planCancelled);
   return missions.find((row) => row.stage !== 'improve') || missions[0] || null;
 }
 

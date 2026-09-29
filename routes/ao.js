@@ -15,6 +15,9 @@ const aoRoute = require('../services/aoRouteService');
 const { buildTelUrl } = require('../utils/aoRoutePlanner');
 const aoCommandCenter = require('../services/aoCommandCenterService');
 const aoProspectUpdate = require('../services/aoProspectUpdateService');
+const aoCrm = require('../services/aoCrmService');
+const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
+const { AO_CRM_NEXT_ACTIONS } = require('../utils/aoCrmTypes');
 const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
 
 const router = express.Router();
@@ -105,16 +108,136 @@ function requireAoClient(req, res) {
 }
 
 router.get('/', requireAoRead, (_req, res) => {
-  res.redirect('/ao/command-center');
+  res.redirect('/ao/crm');
 });
 
 router.get('/command-center', requireAoRead, (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'ao-command-center.html'));
 });
 
+router.get('/crm', requireAoRead, (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ao-crm.html'));
+});
+
+router.get('/crm/manager', requireJakeRead, (_req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ao-crm-manager.html'));
+});
+
 router.get('/field', requireAoRead, (_req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'ao-dashboard.html'));
 });
+
+router.get('/api/crm/dashboard', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  if (req.user.role !== 'ao') {
+    const override = Number(req.query.ao_user_id || req.query.ao_owner_id);
+    if (!Number.isInteger(override) || override <= 0) {
+      return res.status(400).json({ error: 'ao_user_id required for admin/operator CRM view' });
+    }
+  }
+  const profile = await aoField.getAoProfile(aoOwnerId);
+  const payload = await aoCrm.getAoCrmDashboard({
+    clientId,
+    aoUserId: aoOwnerId,
+    aoUserName: profile?.name || req.user.name,
+    date: req.query.date ? String(req.query.date) : null,
+  });
+  res.json(payload);
+}));
+
+router.get('/api/crm/accounts/:prospectId', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = req.user.role === 'ao' ? effectiveAoOwnerId(req) : null;
+  const detail = await aoCrm.getAccountDetail({
+    clientId,
+    prospectId: req.params.prospectId,
+    aoUserId: aoOwnerId,
+  });
+  if (!detail) return res.status(404).json({ error: 'Account not found' });
+  res.json(detail);
+}));
+
+router.post('/api/crm/accounts/:prospectId/outcome', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const {
+    outcome,
+    notes,
+    next_action: nextAction,
+    next_action_date: nextActionDate,
+    help_needed: helpNeeded,
+    help_reason: helpReason,
+    status: statusOverride,
+    task_id: taskId,
+    follow_up_task_id: followUpTaskId,
+    contact_name: contactName,
+    contact_role: contactRole,
+    phone,
+    email,
+  } = req.body || {};
+
+  const result = await aoCrm.submitOutcome({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    outcome,
+    notes,
+    nextAction,
+    nextActionDate,
+    helpNeeded: helpNeeded === true || helpNeeded === 'true',
+    helpReason,
+    statusOverride,
+    taskId,
+    followUpTaskId,
+    contactPatch: { contact_name: contactName, contact_role: contactRole, phone, email },
+    source: 'ao_crm_outcome_form',
+  });
+  if (result.status) return res.status(result.status).json(result);
+  res.json(result);
+}));
+
+router.get('/api/crm/manager/accounts', requireJakeRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = Number(req.query.ao_owner_id);
+  const payload = await aoCrm.listManagerAccounts({
+    clientId,
+    filters: {
+      ao_owner_id: Number.isInteger(aoOwnerId) && aoOwnerId > 0 ? aoOwnerId : null,
+      status: req.query.status ? String(req.query.status) : null,
+      priority: req.query.priority ? String(req.query.priority) : null,
+      help_requested: req.query.help_requested ? String(req.query.help_requested) : null,
+      overdue: req.query.overdue ? String(req.query.overdue) : null,
+      warm: req.query.warm ? String(req.query.warm) : null,
+      no_next_action: req.query.no_next_action ? String(req.query.no_next_action) : null,
+      next_action_due: req.query.next_action_due ? String(req.query.next_action_due) : null,
+      recently_updated: req.query.recently_updated ? String(req.query.recently_updated) : null,
+      date: req.query.date ? String(req.query.date) : null,
+    },
+  });
+  res.json({ ...payload, next_actions: AO_CRM_NEXT_ACTIONS });
+}));
+
+router.post('/api/crm/accounts/:prospectId/resolve-help', requireJakeRead, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const { manager_note: managerNote } = req.body || {};
+  const result = await aoCrm.resolveHelp({
+    clientId,
+    prospectId: req.params.prospectId,
+    managerNote,
+  });
+  res.json(result);
+}));
 
 router.get('/api/command-center', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
   const clientId = requireAoClient(req, res);
@@ -232,8 +355,16 @@ router.patch('/api/tasks/:id', requireAoWrite, wrapAoHandler(async (req, res) =>
   }
   const aoOwnerId = effectiveAoOwnerId(req);
   const task = await aoField.updateTask(req.params.id, aoOwnerId, req.body || {});
+  if (task?.status && task.error) return res.status(task.status).json(task);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
+}));
+
+router.get('/api/tasks/:id/crm-context', requireAoRead, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const ctx = await aoField.getTaskCrmContext(req.params.id, aoOwnerId);
+  if (!ctx) return res.status(404).json({ error: 'Task not found' });
+  res.json(ctx);
 }));
 
 router.get('/api/routes/active', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {

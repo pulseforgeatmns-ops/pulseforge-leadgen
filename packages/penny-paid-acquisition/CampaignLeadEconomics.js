@@ -44,10 +44,14 @@ function normalizeCampaignId(id) {
 }
 
 function resolveSharedObservationWindow(opts = {}) {
-  if (opts.observationWindow && opts.observationWindow.start && opts.observationWindow.end) {
-    return resolveObservationWindow(opts.observationWindow, opts.observationWindowDays);
+  const explicit = opts.observationWindow || opts.window;
+  if (explicit && explicit.start && explicit.end) {
+    return resolveObservationWindow(
+      explicit,
+      opts.observationWindowDays ?? opts.windowDays
+    );
   }
-  return resolveObservationWindow(null, opts.observationWindowDays);
+  return resolveObservationWindow(null, opts.observationWindowDays ?? opts.windowDays);
 }
 
 function windowsMatch(a, b) {

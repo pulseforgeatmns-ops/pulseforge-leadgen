@@ -128,18 +128,33 @@ async function collectPaidPlatformEvidence(input = {}) {
   });
 
   const accountsByPlatform = new Map();
+  const accountsByPlatformAll = new Map();
   for (const account of accounts) {
     const canonical = PLATFORM_DB_ALIASES[asText(account.platform).toLowerCase()] || account.platform;
+    if (!accountsByPlatformAll.has(canonical)) accountsByPlatformAll.set(canonical, []);
+    accountsByPlatformAll.get(canonical).push(account);
     if (!accountsByPlatform.has(canonical)) accountsByPlatform.set(canonical, account);
   }
 
   const results = [];
   for (const platform of platforms) {
-    const account = accountsByPlatform.get(platform);
     if (platform === PLATFORM.YELP) {
       results.push(stripSecrets(await readPlatformEvidence(platform, null, input)));
       continue;
     }
+
+    const linkedForPlatform = accountsByPlatformAll.get(platform) || [];
+    if (platform === PLATFORM.GOOGLE_ADS && linkedForPlatform.length > 1 && !input.selectedAccountId) {
+      results.push(stripSecrets(unavailableEvidence(platform, UNAVAILABLE_REASON.MULTIPLE_LINKED_ACCOUNTS, {
+        clientId,
+        details: { linkedAccountCount: linkedForPlatform.length },
+      })));
+      continue;
+    }
+
+    const account = platform === PLATFORM.GOOGLE_ADS && input.selectedAccountId
+      ? linkedForPlatform.find((row) => row.id === input.selectedAccountId) || null
+      : accountsByPlatform.get(platform);
 
     if (!account) {
       const reason = platform === PLATFORM.CHATGPT_ADS

@@ -1,5 +1,6 @@
 const pool = require('../db');
 const { ensureClientArchitecture } = require('./clientContext');
+const { ROLE_CHECK } = require('./userRoles');
 
 async function ensureCloserSchema() {
   await ensureClientArchitecture();
@@ -23,7 +24,7 @@ async function ensureCloserSchema() {
     }
     await pool.query(`
       ALTER TABLE users ADD CONSTRAINT users_role_check
-      CHECK (role IN ('admin', 'manager', 'setter', 'closer', 'sales', 'viewer', 'client', 'ao'))
+      CHECK (role IN (${ROLE_CHECK}))
     `);
   } finally {
     await pool.query('SELECT pg_advisory_unlock(91720260517)');

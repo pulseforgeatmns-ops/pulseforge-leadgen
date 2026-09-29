@@ -41,6 +41,7 @@ function mapTask(row) {
   return {
     id: row.id,
     lead_id: row.lead_id,
+    crm_prospect_id: row.crm_prospect_id || null,
     contact_id: row.contact_id,
     ao_owner_id: row.ao_owner_id,
     due_date: normalizeDueDate(row.due_date),
@@ -98,6 +99,7 @@ async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
 
   const { rows } = await pool.query(`
     SELECT t.*, l.business_name, l.address, l.interest_level, l.attribution_source, l.campaign_name,
+      l.crm_prospect_id,
       c.contact_name, c.phone AS contact_phone
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
@@ -268,17 +270,71 @@ async function createVisitRecord({
   }
 }
 
+async function resolveTaskCrmProspectId(taskRow, clientId) {
+  if (taskRow.crm_prospect_id) return taskRow.crm_prospect_id;
+  const link = await findCrmLinkForBusiness(clientId, taskRow.business_name);
+  if (!link?.crm_prospect_id) return null;
+  await pool.query(`
+    UPDATE ao_leads SET crm_prospect_id = $1, updated_at = NOW()
+    WHERE id = $2 AND crm_prospect_id IS NULL
+  `, [link.crm_prospect_id, taskRow.lead_id]);
+  return link.crm_prospect_id;
+}
+
+async function getTaskCrmContext(taskId, aoOwnerId) {
+  const { rows } = await pool.query(`
+    SELECT t.id AS task_id, t.lead_id, t.status AS task_status,
+      l.client_id, l.business_name, l.crm_prospect_id,
+      c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email
+    FROM ao_follow_up_tasks t
+    JOIN ao_leads l ON l.id = t.lead_id
+    LEFT JOIN ao_contacts c ON c.id = t.contact_id
+    WHERE t.id = $1 AND t.ao_owner_id = $2
+    LIMIT 1
+  `, [taskId, aoOwnerId]);
+  const row = rows[0];
+  if (!row) return null;
+
+  const prospectId = await resolveTaskCrmProspectId(row, row.client_id);
+  return {
+    task_id: row.task_id,
+    lead_id: row.lead_id,
+    prospect_id: prospectId,
+    business_name: row.business_name,
+    task_status: row.task_status,
+    contact_name: row.contact_name || null,
+    contact_role: row.contact_title || null,
+    contact_phone: row.contact_phone || null,
+    contact_email: row.contact_email || null,
+  };
+}
+
+async function completeFollowUpTask(taskId, aoOwnerId, db = pool) {
+  const { rows } = await db.query(`
+    UPDATE ao_follow_up_tasks
+    SET status = 'done', completed_at = NOW()
+    WHERE id = $1 AND ao_owner_id = $2 AND status = 'open'
+    RETURNING id
+  `, [taskId, aoOwnerId]);
+  return Boolean(rows[0]);
+}
+
 async function updateTask(taskId, aoOwnerId, updates) {
+  if (updates.status === 'done') {
+    return {
+      error: 'Log a CRM outcome before marking this task done — the account stays in My Accounts.',
+      status: 409,
+      code: 'CRM_OUTCOME_REQUIRED',
+      crm_url: '/ao/crm',
+    };
+  }
+
   const fields = [];
   const values = [];
 
   if (updates.status) {
     values.push(updates.status);
     fields.push(`status = $${values.length}`);
-    if (updates.status === 'done') {
-      values.push(new Date());
-      fields.push(`completed_at = $${values.length}`);
-    }
   }
   if (updates.due_date) {
     values.push(updates.due_date);
@@ -1377,6 +1433,8 @@ module.exports = {
   resolveJakeAoOwner,
   findAoLeadByBusinessName,
   findCrmLinkForBusiness,
+  getTaskCrmContext,
+  completeFollowUpTask,
   findJakeAssignmentLead,
   createAoAssignmentLead,
   countAoLeadsByOwnerIds,

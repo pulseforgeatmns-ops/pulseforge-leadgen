@@ -225,10 +225,11 @@
   }
   body{background:var(--cream);color:#10202D}
   header{position:absolute;top:0;left:0;right:0;background:linear-gradient(180deg,rgba(5,13,22,.56),rgba(5,13,22,0));border-bottom:0;backdrop-filter:none}
-  .mast{min-height:112px}
+  .mast{min-height:112px;grid-template-columns:auto minmax(0,1fr) auto;gap:20px}
   .wordmark{color:#fff}
   .wordmark .brand-lockup{height:78px;width:auto}
-  .nav-links{gap:38px;color:rgba(255,255,255,.82);font-size:14px}
+  .nav-links{gap:12px 22px;flex-wrap:wrap;color:rgba(255,255,255,.82);font-size:14px}
+  .mast-cta{white-space:nowrap}
   .nav-links a:hover{color:#fff}
   .mast-phone{color:rgba(255,255,255,.88);font-size:15px}
   .mast-phone:hover{color:#fff}
@@ -419,7 +420,9 @@
   }
   /* SPEC-AC-021 final conversion refinement */
   .contact .doc{max-width:1440px}
-  .contact-grid{grid-template-columns:minmax(360px,480px) minmax(620px,1fr);gap:clamp(190px,12vw,240px)}
+  .contact-grid{grid-template-columns:minmax(0,480px) minmax(0,1fr);gap:clamp(190px,12vw,240px)}
+  .contact-grid > *{min-width:0}
+  .contact .em{max-width:100%;overflow-wrap:anywhere}
   .contact h2{font-size:clamp(54px,6.5vw,102px);line-height:.91;max-width:7.4ch;margin:16px 0 8px}
   .contact p{max-width:34ch}
   .consult-steps{margin-top:34px}
@@ -438,7 +441,7 @@
   }
   .assessment-form button{margin-top:2px;align-self:start}
   @media (max-width:1180px){
-    .contact-grid{grid-template-columns:minmax(330px,.7fr) minmax(520px,1fr);gap:120px}
+    .contact-grid{grid-template-columns:minmax(0,.7fr) minmax(0,1fr);gap:120px}
     .contact h2{font-size:clamp(52px,6.4vw,88px)}
   }
   @media (max-width:980px){
@@ -495,6 +498,53 @@
     .mast-cta,.btn-primary,.assessment-form button,.assessment-form,.industry-card,.about-photo,.editorial-break,.hero{transition:none;animation:none;transform:none}
     .mast-cta,.btn-primary,.assessment-form button{--mx:0px;--my:0px;--lift:0px;--btn-scale:1}
   }
+  /* Service Assurance portal section (Framer parity: sites/anchor-cleaning/framer/) */
+  .service-assurance{background:var(--cream);padding:clamp(96px,11vw,168px) 0 0;position:relative;color:#10202D}
+  .service-assurance::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);width:min(1240px,92vw);height:1px;background:linear-gradient(90deg,transparent,#C49A55 18%,#C49A55 82%,transparent);opacity:.65}
+  .service-assurance-hero{display:grid;grid-template-columns:minmax(280px,.94fr) minmax(320px,1.06fr);gap:clamp(40px,5.5vw,96px);align-items:start;margin-bottom:clamp(64px,7vw,112px)}
+  .service-assurance-eyebrow{display:flex;align-items:center;gap:14px;font-size:11px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#8A6534;margin-bottom:22px}
+  .service-assurance-eyebrow::before{content:"";width:28px;height:1px;background:var(--gold);flex-shrink:0}
+  .service-assurance-story h2{font-size:clamp(44px,5.4vw,82px);line-height:.98;max-width:11ch;margin-bottom:28px;color:#10202D}
+  .service-assurance-body{display:grid;gap:18px;font-size:18px;line-height:1.78;color:#46535F;max-width:38ch}
+  .service-assurance-proof{list-style:none;display:grid;gap:26px;margin:38px 0 42px;padding:0}
+  .service-assurance-proof h3{font-family:'Fraunces',Georgia,serif;font-size:clamp(22px,2.2vw,28px);font-weight:500;color:#10202D;margin-bottom:8px}
+  .service-assurance-proof p{font-size:16px;line-height:1.7;color:#52606B;max-width:36ch}
+  .service-assurance-proof li{padding-left:18px;border-left:2px solid var(--gold)}
+  .service-assurance-cta{display:inline-flex}
+  .portal-mockup-frame{margin:0;background:#fff;border:1px solid rgba(17,31,43,.1);border-radius:10px;box-shadow:0 32px 90px rgba(7,19,31,.11);padding:clamp(10px,1.2vw,14px);transition:transform 700ms var(--anchor-ease),box-shadow 700ms var(--anchor-ease)}
+  .portal-mockup-frame picture{display:block;width:100%}
+  .portal-mockup-frame img{width:100%;height:auto;display:block;border-radius:6px}
+  .portal-mockup-frame figcaption{margin-top:14px;padding:0 6px 4px;font-size:15px;line-height:1.55;color:#52606B}
+  .portal-mockup-frame--primary{position:relative;top:-6px}
+  .js-ready .portal-mockup-frame--primary.in{transform:translateY(-4px)}
+  .portal-mockup-frame--device{max-width:320px;margin-left:auto;margin-right:auto;box-shadow:0 36px 80px rgba(7,19,31,.14)}
+  .service-assurance-panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(20px,2.5vw,28px);margin-bottom:clamp(72px,8vw,120px)}
+  .portal-feature-panel{background:#fff;border:1px solid rgba(17,31,43,.08);padding:clamp(28px,3.5vw,44px);display:grid;gap:22px;align-content:start}
+  .portal-feature-panel--cream{background:#FBF8F1}
+  .portal-feature-panel h3{font-size:clamp(26px,2.8vw,36px);line-height:1.12;color:#10202D;max-width:16ch}
+  .portal-feature-panel p{font-size:17px;line-height:1.72;color:#52606B;max-width:38ch}
+  .facility-assessment-cta{background:#08131F;color:#fff;padding:clamp(56px,6vw,88px) 0;text-align:center}
+  .facility-assessment-cta-inner{display:grid;justify-items:center;gap:22px}
+  .facility-assessment-cta h2{font-size:clamp(34px,4.2vw,56px);line-height:1.05;max-width:16ch;color:#fff}
+  .facility-assessment-cta p{font-size:18px;line-height:1.75;color:#CBD4DB;max-width:42ch}
+  @media (max-width:980px){
+    .service-assurance-hero{grid-template-columns:1fr}
+    .portal-mockup-frame--primary{top:0}
+    .service-assurance-panels{grid-template-columns:1fr}
+    .portal-mockup-frame--device{max-width:280px}
+  }
+  @media (max-width:760px){
+    .service-assurance-hero{display:flex;flex-direction:column}
+    .service-assurance-story{display:contents}
+    .service-assurance-intro{order:1}
+    .portal-mockup-frame--primary{order:2}
+    .service-assurance-proof{order:3;margin-bottom:0}
+    .service-assurance-cta--inline{display:none}
+    .service-assurance-story h2{max-width:12ch}
+    .service-assurance-body{max-width:none}
+    .portal-feature-panel .portal-mockup-frame--device{max-width:min(280px,78vw)}
+  }
+  @media (prefers-reduced-motion:reduce){.portal-mockup-frame{transition:none}}
 </style>
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-LCOWW1SO7N"></script>
@@ -511,13 +561,14 @@
   <div class="doc">
     <div class="mast">
       <a class="wordmark" href="/" aria-label="Anchor Cleaning home">
-        <img class="brand-lockup" src="/assets/brand/anchor-logo-canonical.png?v=20260916" alt="Anchor Cleaning" width="156" height="78" decoding="async">
+        <img class="brand-lockup" src="/assets/brand/anchor-logo-canonical.png?v=20260916" alt="Anchor Cleaning" width="1280" height="823" decoding="async">
       </a>
       <nav class="nav-links" aria-label="Primary navigation">
         <a href="#commercial">Commercial Cleaning</a>
         <a href="#industries">Industries</a>
         <a href="#standard">Our Standard</a>
         <a href="#about">About</a>
+        <a href="#service-assurance">Service Assurance</a>
         <a href="/residential/">Residential</a>
       </nav>
       <div class="mast-actions">
@@ -593,6 +644,75 @@
     </div>
   </div>
   </section>
+<section class="service-assurance" id="service-assurance" aria-labelledby="service-assurance-heading">
+  <div class="service-assurance-hero doc">
+    <div class="service-assurance-story">
+      <div class="service-assurance-intro">
+        <p class="service-assurance-eyebrow rv">Service Assurance</p>
+        <h2 class="rv" id="service-assurance-heading">How Anchor solves inconsistency</h2>
+        <div class="service-assurance-body rv">
+          <p>The Anchor Standard is backed by a system. A clean facility should not depend on who happened to show up that night.</p>
+          <p>Anchor&rsquo;s service system gives every location a defined scope, gives cleaners a clear way to document completion and exceptions, and gives clients visibility when something needs attention.</p>
+          <p>The result is a cleaning program that is easier to manage, easier to correct, and far more accountable.</p>
+        </div>
+      </div>
+      <ul class="service-assurance-proof rv" aria-label="How service assurance works">
+        <li>
+          <h3>Defined service scope</h3>
+          <p>Every location has a clear, documented cleaning scope so expectations do not live in someone&rsquo;s memory.</p>
+        </li>
+        <li>
+          <h3>Cleaner accountability</h3>
+          <p>Cleaners work from visit-specific checklists and can flag exceptions, notes, and issues as they happen.</p>
+        </li>
+        <li>
+          <h3>Visible issue resolution</h3>
+          <p>Clients can report concerns, see when they&rsquo;ve been acknowledged, and follow the issue through resolution.</p>
+        </li>
+      </ul>
+      <a class="btn-primary service-assurance-cta service-assurance-cta--inline rv" href="#contact">Book a Facility Assessment</a>
+    </div>
+    <figure class="portal-mockup-frame portal-mockup-frame--primary rv">
+      <picture>
+        <source type="image/avif" srcset="/assets/service-assurance/client-dashboard-720w.avif 720w, /assets/service-assurance/client-dashboard-960w.avif 960w, /assets/service-assurance/client-dashboard-1200w.avif 1200w, /assets/service-assurance/client-dashboard-1448w.avif 1448w" sizes="(min-width: 980px) min(52vw, 680px), 92vw">
+        <source type="image/webp" srcset="/assets/service-assurance/client-dashboard-720w.webp 720w, /assets/service-assurance/client-dashboard-960w.webp 960w, /assets/service-assurance/client-dashboard-1200w.webp 1200w, /assets/service-assurance/client-dashboard-1448w.webp 1448w" sizes="(min-width: 980px) min(52vw, 680px), 92vw">
+        <img src="/assets/service-assurance/client-dashboard.png" width="1448" height="1086" alt="Anchor Service Assurance Portal showing recent cleaning visits, service status, next service, open issues, and facility scope." decoding="async" fetchpriority="high">
+      </picture>
+      <figcaption>See completed visits, upcoming service, open issues, and the defined scope for your facility in one place.</figcaption>
+    </figure>
+  </div>
+  <div class="service-assurance-panels doc" id="service-assurance-how">
+    <article class="portal-feature-panel rv">
+      <figure class="portal-mockup-frame portal-mockup-frame--device">
+        <picture>
+          <source type="image/avif" srcset="/assets/service-assurance/cleaner-checklist-280w.avif 280w, /assets/service-assurance/cleaner-checklist-390w.avif 390w, /assets/service-assurance/cleaner-checklist-560w.avif 560w, /assets/service-assurance/cleaner-checklist-780w.avif 780w, /assets/service-assurance/cleaner-checklist-941w.avif 941w" sizes="(min-width: 980px) 320px, min(72vw, 390px)">
+          <source type="image/webp" srcset="/assets/service-assurance/cleaner-checklist-280w.webp 280w, /assets/service-assurance/cleaner-checklist-390w.webp 390w, /assets/service-assurance/cleaner-checklist-560w.webp 560w, /assets/service-assurance/cleaner-checklist-780w.webp 780w, /assets/service-assurance/cleaner-checklist-941w.webp 941w" sizes="(min-width: 980px) 320px, min(72vw, 390px)">
+          <img src="/assets/service-assurance/cleaner-checklist.png" width="941" height="1672" alt="Anchor cleaner mobile checklist showing completed tasks, flagged issues, and visit exception documentation." loading="lazy" decoding="async">
+        </picture>
+      </figure>
+      <h3>A clear scope for every visit</h3>
+      <p>Cleaners work from location-specific checklists, document completion, and flag anything that needs attention before the visit is closed.</p>
+    </article>
+    <article class="portal-feature-panel portal-feature-panel--cream rv">
+      <figure class="portal-mockup-frame">
+        <picture>
+          <source type="image/avif" srcset="/assets/service-assurance/issues-resolution-720w.avif 720w, /assets/service-assurance/issues-resolution-960w.avif 960w, /assets/service-assurance/issues-resolution-1200w.avif 1200w, /assets/service-assurance/issues-resolution-1448w.avif 1448w" sizes="(min-width: 980px) min(42vw, 560px), 92vw">
+          <source type="image/webp" srcset="/assets/service-assurance/issues-resolution-720w.webp 720w, /assets/service-assurance/issues-resolution-960w.webp 960w, /assets/service-assurance/issues-resolution-1200w.webp 1200w, /assets/service-assurance/issues-resolution-1448w.webp 1448w" sizes="(min-width: 980px) min(42vw, 560px), 92vw">
+          <img src="/assets/service-assurance/issues-resolution.png" width="1448" height="1086" alt="Anchor client portal issue-resolution screen showing a missed kitchen sink report progressing from open to resolved." loading="lazy" decoding="async">
+        </picture>
+      </figure>
+      <h3>When something is missed, it gets handled</h3>
+      <p>Clients can report an issue directly, see when Anchor acknowledges it, and follow the resolution through completion.</p>
+    </article>
+  </div>
+  <div class="facility-assessment-cta">
+    <div class="facility-assessment-cta-inner doc rv">
+      <h2>Let&rsquo;s define the standard for your facility.</h2>
+      <p>We&rsquo;ll walk your facility, understand where your current service is falling short, and build a scope around the standards that matter to your team.</p>
+      <a class="btn-primary" href="#contact">Book a Facility Assessment</a>
+    </div>
+  </div>
+</section>
   <section class="for" id="industries">
     <div class="doc">
       <div class="lbl rv">Industries</div>
@@ -757,11 +877,14 @@
 
   var ATTRIBUTION_STORAGE_KEY = 'anchor_first_party_attribution';
   var ATTRIBUTION_QUERY_KEYS = [
-    'campaign_id', 'ad_group_id', 'ad_id', 'ad_account_id', 'oppref', 'opref',
+    'campaign_id', 'ad_group_id', 'ad_id', 'ad_account_id',
+    'gclid', 'gbraid', 'wbraid',
+    'oppref', 'opref',
     'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'
   ];
   var ATTRIBUTION_MAX = {
     campaign_id: 128, ad_group_id: 128, ad_id: 128, ad_account_id: 128,
+    gclid: 256, gbraid: 256, wbraid: 256,
     oppref: 256, opref: 256, utm_source: 128, utm_medium: 128,
     utm_campaign: 256, utm_content: 256, utm_term: 256,
     landing_page_url: 2048, referrer: 2048
@@ -777,6 +900,7 @@
     if (!raw) return false;
     return Boolean(
       raw.campaign_id || raw.ad_group_id || raw.ad_id || raw.ad_account_id ||
+      raw.gclid || raw.gbraid || raw.wbraid ||
       raw.oppref || raw.opref || raw.utm_source || raw.utm_medium || raw.utm_campaign
     );
   }

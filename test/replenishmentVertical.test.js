@@ -144,6 +144,7 @@ test('F. producer/consumer compatibility — persisted row is visible to enrichm
     scoutContext: {
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
+      clientId: 10,
     },
   });
 
@@ -177,7 +178,7 @@ test('F. producer/consumer compatibility — persisted row is visible to enrichm
     },
   };
 
-  const enrichmentResult = await runEnrichmentBatches(enrichment, pool, 1);
+  const enrichmentResult = await runEnrichmentBatches(enrichment, pool, 1, { clientId: 10 });
   assert.ok(enrichmentResult.summaries[0].considered >= 1);
   assert.deepEqual(enrichmentResult.summaries[0].verticals, ENRICHABLE_SCOUT_VERTICALS);
 });
@@ -227,6 +228,7 @@ test('persistDiscoveredCompanies rejects query-slug-only candidates', async () =
     scoutContext: {
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
+      clientId: 10,
     },
   });
 
@@ -265,6 +267,7 @@ test('admission counters track discovered/evaluated/fit/admitted/rejected', asyn
     scoutContext: {
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
+      clientId: 10,
     },
   });
 
@@ -273,4 +276,39 @@ test('admission counters track discovered/evaluated/fit/admitted/rejected', asyn
   assert.equal(result.admission.fit, 1);
   assert.equal(result.admission.admittedToEnrichment, 1);
   assert.equal(result.admission.rejected.contradictory_business_type, 1);
+});
+
+test('underscore industry property_management classifies as property_manager', () => {
+  const candidate = {
+    name: 'Harbor Homes',
+    industry: 'property_management',
+    location: 'Manchester, NH',
+    website: 'https://harborhomes.example',
+    domain: 'harborhomes.example',
+  };
+  assert.equal(resolveReplenishmentVertical(candidate, STR_MISSION), 'property_manager');
+  const admission = evaluateReplenishmentAdmission(candidate, STR_MISSION);
+  assert.equal(admission.admitted, true);
+  assert.equal(admission.vertical, 'property_manager');
+});
+
+test('vacation homes plus lodging place type classifies as str_manager', () => {
+  const candidate = {
+    name: 'Manchester Vacation Homes',
+    placeTypes: ['lodging', 'point_of_interest'],
+    location: 'Manchester, NH',
+    website: 'https://manchestervacationhomes.example',
+    domain: 'manchestervacationhomes.example',
+  };
+  assert.equal(resolveReplenishmentVertical(candidate, STR_MISSION), 'str_manager');
+});
+
+test('canonical declared vertical is trusted when not search-derived', () => {
+  assert.equal(resolveReplenishmentVertical({
+    name: 'Quiet Operator',
+    vertical: 'str_manager',
+    location: 'Bedford, NH',
+    website: 'https://quiet.example',
+    domain: 'quiet.example',
+  }, STR_MISSION), 'str_manager');
 });

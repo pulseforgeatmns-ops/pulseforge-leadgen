@@ -275,6 +275,8 @@ function handlerContext(request, context, mission, runtimeOwner) {
     sendEmail: context.sendEmail,
     governedApproval: context.governedApproval,
     governedEnvelopeId: context.governedEnvelopeId,
+    governedManifestCandidateIds: context.governedManifestCandidateIds,
+    governedRefillItem: context.governedRefillItem,
     resolveProspectAttributes: context.resolveProspectAttributes,
     senderIdentity: context.senderIdentity,
     canonicalSender: context.canonicalSender,

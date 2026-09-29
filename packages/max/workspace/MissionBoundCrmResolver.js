@@ -113,7 +113,8 @@ async function loadCrmProspectsByIds(input = {}) {
 
   const { rows } = await pool.query(
     `SELECT id, email, email_status, email_verified, do_not_contact,
-            enrichment_provenance
+            enrichment_provenance,
+            to_jsonb(prospects)->'acquisition_metadata' AS acquisition_metadata
        FROM prospects
       WHERE client_id = $1
         AND id = ANY($2::uuid[])`,
@@ -143,6 +144,8 @@ const CRM_ENRICHMENT_PROSPECT_SELECT = `
        p.practice_area,
        p.firm_size,
        p.enrichment_provenance,
+       to_jsonb(p)->'acquisition_metadata' AS acquisition_metadata,
+       to_jsonb(p)->>'acquisition_knowledge_object_id' AS acquisition_knowledge_object_id,
        c.name AS company_name,
        c.website,
        c.domain,
