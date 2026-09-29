@@ -4,7 +4,14 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { buildMiraContext } = require('./utils/miraContext');
 const { getActiveGuardrails } = require('./utils/agentLessons');
-const { validateAnchorSocialCopy } = require('./utils/anchorCopyDoctrine');
+const {
+  validateAnchorSocialCopy,
+  ANCHOR_FACILITY_ASSESSMENT_CTA_GUIDANCE,
+} = require('./utils/anchorCopyDoctrine');
+
+const ANCHOR_PUBLIC_CTA_DOCTRINE = ANCHOR_FACILITY_ASSESSMENT_CTA_GUIDANCE
+  .map((line) => `- ${line}`)
+  .join('\n');
 
 const client = new Anthropic();
 const AGENT_NAME = 'paige';
@@ -1086,6 +1093,9 @@ Requirements:
 - End naturally. A CTA is optional
 ${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
 
+FACILITY ASSESSMENT CTA (when inviting a next step):
+${ANCHOR_PUBLIC_CTA_DOCTRINE}
+
 Return only the post text.`;
 }
 
@@ -1104,6 +1114,9 @@ Requirements:
 - Do not mention another industry, company, technology, price, or invented customer result
 - End with an assertion or natural local invitation, never engagement bait
 ${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
+
+FACILITY ASSESSMENT CTA (when inviting a next step):
+${ANCHOR_PUBLIC_CTA_DOCTRINE}
 
 FINAL CHECK BEFORE RETURNING:
 - The only facts you may use are: Anchor Cleaning; Manchester, Bedford, Goffstown, Hooksett, Londonderry, and Auburn; law firms and CPA/accounting offices; a written scope; explicit access instructions; consistent follow-through; one accountable owner; Jacob's decade-plus service-business background; and the supplied content-safe Mira facts
@@ -1125,8 +1138,11 @@ Requirements:
 - Teach through professional-office details: written scope, access instructions, document areas, off-limits rooms, consistent follow-through, and one accountable owner
 - Sound like Jacob writing as an experienced service-business operator
 - Do not mention another industry, company, technology, price, or invented customer result
-- End with a practical assertion or invitation to discuss an office walkthrough, never engagement bait
+- End with a practical assertion or invitation to discuss a facility assessment and written scope, never engagement bait
 ${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
+
+FACILITY ASSESSMENT CTA (when inviting a next step):
+${ANCHOR_PUBLIC_CTA_DOCTRINE}
 
 Return only the markdown blog post.`;
 }
@@ -1259,6 +1275,7 @@ const ANCHOR_CANONICAL_SOURCE_MATERIAL = `ANCHOR CLEANING PUBLIC-SAFE FACTS
 - The operating promise is a written scope, consistent follow-through, and one accountable owner when something needs attention.
 - Jacob's service-business perspective comes from more than a decade operating restaurants and cleaning crews.
 - Professional offices have practical cleaning stakes around access instructions, document areas, off-limits rooms, and avoiding staff time spent supervising vendors.
+- Public CTAs invite a facility assessment (scope, access, and service-risk review), not a walkthrough or casual walk-the-space visit.
 
 Do not invent customers, results, quotes, employee counts, prices, or performance metrics. If current Mira context does not supply a real number, write without one.`;
 
@@ -1354,7 +1371,7 @@ At Anchor, the answer doesn't move between a dispatcher, a crew lead, and an inb
   stake: `Cheap cleaning gets expensive the moment a partner starts inspecting conference rooms.
 The real cost isn't a missed edge or an empty dispenser. It's professional staff spending billable time managing a vendor that was hired to remove work.`,
   decision_log: `Decision: Anchor's pilot stays limited to law firms and accounting offices around Manchester.
-The tradeoff is a smaller prospect pool. The metric that matters is whether a narrow written scope produces more consistent walkthroughs than a broad "we clean everything" offer.`,
+The tradeoff is a smaller prospect pool. The metric that matters is whether a narrow written scope produces more consistent facility assessments than a broad "we clean everything" offer.`,
   dialogue: `Practice Manager: "If the cleaning gets missed, I'll tell the crew tomorrow."
 
 Me: [pause] "Why did the correction become your job?"
@@ -2247,13 +2264,7 @@ function buildAnchorDoctrineRegenBlock(violations) {
   return [
     'Your previous draft violated Anchor copy doctrine. Correct every listed violation:',
     ...violations.map((violation) => `- ${violation.patternId}: ${violation.match ?? '(detected)'}`),
-    'Do not use:',
-    '- "I wanted to reach out"',
-    '- "worth a quick conversation"',
-    '- em dash or en dash characters',
-    'Must include:',
-    '- one concrete client-scoped Mira detail already supplied in context',
-    'Remove AI-tell phrasing, generic closers, unsupported claims, and social-banned phrases such as "walkthrough" or "What do you think?".',
+    'Remove em dashes, AI-tell phrasing, generic closers, unsupported claims, walkthrough or walk-the-space CTA language, and social-banned phrases such as "What do you think?". Use facility assessment language instead (review scope, access instructions, and service risks).',
   ].join('\n');
 }
 

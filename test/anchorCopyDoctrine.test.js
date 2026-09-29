@@ -130,8 +130,39 @@ describe('Anchor Copy Doctrine', () => {
     assert.equal(socialOnly.ok, false);
     assert.ok(socialOnly.violations.some((v) => v.source === 'anchor_social_rule' && v.patternId === 'walkthrough'));
 
-    const compliant = validateAnchorSocialCopy('A facilities assessment gives Manchester office managers a written scope before cleaning starts.');
+    const walkThroughHyphen = validateAnchorSocialCopy('We can schedule a walk-through next week.');
+    assert.equal(walkThroughHyphen.ok, false);
+    assert.ok(walkThroughHyphen.violations.some((v) => v.patternId === 'walkthrough'));
+
+    const walkThroughWords = validateAnchorSocialCopy('Happy to walk through the office with you.');
+    assert.equal(walkThroughWords.ok, false);
+    assert.ok(walkThroughWords.violations.some((v) => v.patternId === 'walkthrough'));
+
+    const compliant = validateAnchorSocialCopy(
+      'A facility assessment gives Manchester office managers a written scope, access instructions, and service risks before recurring cleaning starts.'
+    );
     assert.equal(compliant.ok, true, JSON.stringify(compliant.violations));
+  });
+
+  for (const [phrase, patternId] of [
+    ['we\'d be glad to walk the space with you', 'walk_the_space'],
+    ['happy to walk your space and review scope', 'walk_your_space'],
+    ['we can walk the building and note the scope', 'walk_the_building'],
+    ['we can walk it with you when convenient', 'walk_it_with_you'],
+    ['schedule a quick walk of the office', 'quick_walk'],
+    ['just a quick look around the office', 'quick_look_around'],
+  ]) {
+    it(`validateAnchorSocialCopy blocks walk CTA phrase: ${patternId}`, () => {
+      const check = validateAnchorSocialCopy(phrase);
+      assert.equal(check.ok, false, phrase);
+      assert.ok(check.violations.some((v) => v.source === 'anchor_social_rule' && v.patternId === patternId));
+    });
+  }
+
+  it('validateAnchorSocialCopy blocks walk the facility', () => {
+    const check = validateAnchorSocialCopy('We can walk the facility and document the scope.');
+    assert.equal(check.ok, false);
+    assert.ok(check.violations.some((v) => v.patternId === 'walk_the_facility'));
   });
 
   it('buildAnchorCopyDoctrineViolationError exposes code and violations', () => {

@@ -13,15 +13,7 @@ const {
 } = require('../packages/capabilities/contentGeneration');
 const { fixture } = require('./helpers/paigeSocialFixture');
 
-const COMPLIANT_BODY = [
-  'Over the past 24 hours, Mira logged 10 sends and 2 replies.',
-  '',
-  'That is useful signal, not proof the pipeline is fixed.',
-  '',
-  'For Anchor, the next step is still narrow: diagnose the facility, confirm what is written down, and make sure access instructions, off-limits rooms, and recurring scope are clear before service starts.',
-  '',
-  'If you manage an office in Greater Manchester, a facility assessment is where we would start.',
-].join('\n');
+const COMPLIANT_BODY = 'Ten sends over the past 24 hours moved through Manchester outreach. A facility assessment gives office managers a written scope before recurring service starts.';
 
 const DETERMINISTIC_CONTENT_SAFE_MIRA = Object.freeze({
   now: '2026-07-05T12:00:00.000Z',
@@ -127,6 +119,7 @@ function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false
   const writes = [];
   let generationCalls = 0;
   let providerCalls = 0;
+  const queue = draftSequence.length ? [...draftSequence] : [COMPLIANT_BODY];
 
   installDeterministicMiraContextMock();
 
@@ -172,8 +165,8 @@ function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false
             return writerTextBlock(JSON.stringify(PASSING_SCORE));
           }
           generationCalls += 1;
-          const queue = draftSequence.length ? [...draftSequence] : [COMPLIANT_BODY];
-          const body = queue[Math.min(generationCalls - 1, queue.length - 1)];
+          const idx = Math.min(generationCalls - 1, queue.length - 1);
+          const body = queue[idx];
           return writerTextBlock(body);
         },
       };

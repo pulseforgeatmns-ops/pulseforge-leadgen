@@ -487,8 +487,29 @@ function validateAnchorCopyDoctrine({ subject = '', body = '', cta = '' } = {}) 
   };
 }
 
-const ANCHOR_SOCIAL_RULES = Object.freeze([
+/** Walkthrough-adjacent CTAs read like vendor tours; Anchor public copy uses facility assessment. */
+const ANCHOR_WALK_CTA_PHRASES = Object.freeze([
   { id: 'walkthrough', re: /\bwalk[- ]?throughs?\b/i },
+  { id: 'walk_the_space', re: /\bwalk the space\b/i },
+  { id: 'walk_your_space', re: /\bwalk your space\b/i },
+  { id: 'walk_the_building', re: /\bwalk the building\b/i },
+  { id: 'walk_it_with_you', re: /\bwalk it with you\b/i },
+  { id: 'walk_the_facility', re: /\bwalk the facility\b/i },
+  { id: 'quick_walk', re: /\bquick walk\b/i },
+  { id: 'quick_look_around', re: /\bquick look around\b/i },
+]);
+
+const ANCHOR_FACILITY_ASSESSMENT_CTA_GUIDANCE = Object.freeze([
+  'Use "facility assessment" language for next-step invitations, not walkthrough or casual walk-the-space phrasing.',
+  'Preferred: assess the facility; review the facility and cleaning scope; review the space and scope.',
+  'Preferred: clarify the written scope, access instructions, and service risks before recurring service starts.',
+  'Example CTA: "We\'d be glad to do a facility assessment and review the cleaning scope with you."',
+  'Example CTA: "We\'d be glad to assess the facility and clarify what should be written down before service starts."',
+  'Example CTA: "A facility assessment is where we review the space, scope, access instructions, and service risks before anything is proposed."',
+]);
+
+const ANCHOR_SOCIAL_RULES = Object.freeze([
+  ...ANCHOR_WALK_CTA_PHRASES,
   { id: 'aphorism_closer_thats_how', re: /that's how i think about/i },
   { id: 'aphorism_closer_loop', re: /that loop is becoming more interesting/i },
   { id: 'engagement_bait_question', re: /what do you think\?/i },
@@ -553,6 +574,8 @@ module.exports = {
   buildEvidenceEnhancedEmail,
   buildAnchorCopy,
   validateAnchorCopyDoctrine,
+  ANCHOR_WALK_CTA_PHRASES,
+  ANCHOR_FACILITY_ASSESSMENT_CTA_GUIDANCE,
   ANCHOR_SOCIAL_RULES,
   validateAnchorSocialCopy,
   buildAnchorCopyDoctrineViolationError,
