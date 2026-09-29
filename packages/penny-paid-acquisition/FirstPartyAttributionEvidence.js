@@ -27,6 +27,34 @@ function asText(value) {
   return value == null ? '' : String(value).trim();
 }
 
+function normalizeEvidenceWindowInput(input = {}, windowDays = DEFAULT_WINDOW_DAYS) {
+  if (input == null) {
+    return { window: null, windowDays };
+  }
+  if (typeof input === 'object' && !Array.isArray(input)) {
+    if (input.observationWindow && input.observationWindow.start && input.observationWindow.end) {
+      return {
+        window: input.observationWindow,
+        windowDays: input.observationWindowDays ?? input.windowDays ?? windowDays,
+      };
+    }
+    if (input.window && input.window.start && input.window.end) {
+      return {
+        window: input.window,
+        windowDays: input.windowDays ?? input.observationWindowDays ?? windowDays,
+      };
+    }
+    if (input.start && input.end) {
+      return { window: input, windowDays: input.days ?? windowDays };
+    }
+    return {
+      window: null,
+      windowDays: input.windowDays ?? input.observationWindowDays ?? windowDays,
+    };
+  }
+  return { window: input, windowDays };
+}
+
 function resolveObservationWindow(window, windowDays = DEFAULT_WINDOW_DAYS) {
   if (window && window.start && window.end) {
     return {
@@ -34,17 +62,19 @@ function resolveObservationWindow(window, windowDays = DEFAULT_WINDOW_DAYS) {
       end: asText(window.end),
       days: window.days || windowDays,
       label: window.label || `LAST_${window.days || windowDays}_DAYS`,
+      includesToday: window.includesToday !== false,
     };
   }
   return observationWindowFromDays(windowDays);
 }
 
-function windowBounds(window, windowDays = DEFAULT_WINDOW_DAYS) {
+function windowBounds(window, windowDays = DEFAULT_WINDOW_DAYS, options = {}) {
   const resolved = resolveObservationWindow(window, windowDays);
+  const now = options.now instanceof Date ? options.now : null;
   const startAt = new Date(`${resolved.start}T00:00:00.000Z`);
-  const endExclusive = new Date(`${resolved.end}T23:59:59.999Z`);
+  const endExclusive = new Date(`${resolved.end}T00:00:00.000Z`);
   endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
-  return { resolved, startAt, endAt: endExclusive };
+  return { resolved, startAt, endAt: endExclusive, now };
 }
 
 function leadSourceLabel(leadSource) {
@@ -200,7 +230,12 @@ function mergeAcquisitionEvidence(operatorSupplied = [], observed = [], opts = {
  */
 async function loadFirstPartyAttributionEvidence(input = {}) {
   const clientId = Number(input.clientId);
-  const { resolved, startAt, endAt } = windowBounds(input.window || null, input.windowDays);
+  const normalizedWindow = normalizeEvidenceWindowInput(input, input.windowDays);
+  const { resolved, startAt, endAt } = windowBounds(
+    normalizedWindow.window,
+    normalizedWindow.windowDays,
+    { now: input.now }
+  );
   const limit = Number.isInteger(input.limit) && input.limit > 0
     ? input.limit
     : DEFAULT_LIMIT;
@@ -297,6 +332,8 @@ module.exports = {
   DEFAULT_LIMIT,
   FIRST_PARTY_UNAVAILABLE_REASON,
   resolveObservationWindow,
+  normalizeEvidenceWindowInput,
+  windowBounds,
   mapAgentActionToEvidence,
   unavailableFirstPartyAttributionEvidence,
   mergeAcquisitionEvidence,
