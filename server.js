@@ -104,6 +104,8 @@ function captureBrevoRawBody(req, _res, buf) {
   }
 }
 
+// This public form owns its body limit, CORS, and native-form responses.
+app.use('/', require('./routes/substralAssessment'));
 app.use(express.json({ verify: captureBrevoRawBody }));
 app.use(express.urlencoded({ extended: true, verify: captureBrevoRawBody }));
 app.use(cors());
