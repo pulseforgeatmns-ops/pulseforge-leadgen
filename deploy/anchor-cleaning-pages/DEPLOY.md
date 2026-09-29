@@ -63,6 +63,19 @@ git push -u origin cursor/deploy-clarity-tracking-6bcc
 
 **Clarity-only (recommended):** `0002-Add-Microsoft-Clarity-tracking-only.patch` — adds Microsoft Clarity (`yhnafqbr5k`) only; leaves OpenAI Ads unchanged.
 
+**Google click IDs (SPEC-ANCHOR-SITE-ATTRIBUTION-001):** `0003-Capture-Google-click-id-attribution.patch` — whitelists `gclid`, `gbraid`, and `wbraid` in `ATTRIBUTION_QUERY_KEYS` / `ATTRIBUTION_MAX` / `hasPaidAttributionSignals` on the commercial homepage only. No layout or copy changes. Or sync `sites/anchor-cleaning/index.html` via `sync-from-monorepo.sh`.
+
+```bash
+git clone https://github.com/pulseforgeatmns-ops/anchor-cleaning.git
+cd anchor-cleaning
+git checkout -b cursor/gclid-attribution-capture
+git apply ../path/to/0003-Capture-Google-click-id-attribution.patch
+git add index.html
+git commit -m "Capture gclid, gbraid, and wbraid in first-party attribution session"
+git push -u origin cursor/gclid-attribution-capture
+# merge to main → GitHub Pages publishes goanchorcleaning.com
+```
+
 **Legacy (includes OpenAI residential wiring):** `0001-Add-Clarity-OpenAI-tracking-to-homepage-and-resident.patch`
 
 ## Verify before merge
@@ -78,4 +91,6 @@ Each file should contain `yhnafqbr5k` exactly once.
 ```bash
 curl -sL https://goanchorcleaning.com/ | rg 'yhnafqbr5k|clarity\.ms|oaiq|lead_created'
 curl -sL https://goanchorcleaning.com/residential/ | rg 'yhnafqbr5k|clarity\.ms|oaiq|lead_created'
+curl -sL https://goanchorcleaning.com/ | rg "gclid|gbraid|wbraid|utm_source|landing_page_url|referrer"
+node scripts/verifyAnchorLiveAttributionCapture.js
 ```
