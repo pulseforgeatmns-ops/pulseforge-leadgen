@@ -13,7 +13,7 @@ const {
 } = require('../packages/capabilities/contentGeneration');
 const { fixture } = require('./helpers/paigeSocialFixture');
 
-const COMPLIANT_BODY = 'Ten sends over the past 24 hours moved through Manchester outreach. A facilities assessment gives office managers a written scope before recurring service starts.';
+const COMPLIANT_BODY = 'Ten sends over the past 24 hours moved through Manchester outreach. A facility assessment gives office managers a written scope before recurring service starts.';
 const PASSING_SCORE = {
   specificity: 8,
   originality: 8,
