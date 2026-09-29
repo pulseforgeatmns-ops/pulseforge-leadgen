@@ -176,6 +176,7 @@ router.post('/api/crm/accounts/:prospectId/outcome', requireAoWrite, refreshAoSe
     help_reason: helpReason,
     status: statusOverride,
     task_id: taskId,
+    follow_up_task_id: followUpTaskId,
     contact_name: contactName,
     contact_role: contactRole,
     phone,
@@ -194,6 +195,7 @@ router.post('/api/crm/accounts/:prospectId/outcome', requireAoWrite, refreshAoSe
     helpReason,
     statusOverride,
     taskId,
+    followUpTaskId,
     contactPatch: { contact_name: contactName, contact_role: contactRole, phone, email },
     source: 'ao_crm_outcome_form',
   });
@@ -353,8 +355,16 @@ router.patch('/api/tasks/:id', requireAoWrite, wrapAoHandler(async (req, res) =>
   }
   const aoOwnerId = effectiveAoOwnerId(req);
   const task = await aoField.updateTask(req.params.id, aoOwnerId, req.body || {});
+  if (task?.status && task.error) return res.status(task.status).json(task);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
+}));
+
+router.get('/api/tasks/:id/crm-context', requireAoRead, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const ctx = await aoField.getTaskCrmContext(req.params.id, aoOwnerId);
+  if (!ctx) return res.status(404).json({ error: 'Task not found' });
+  res.json(ctx);
 }));
 
 router.get('/api/routes/active', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
