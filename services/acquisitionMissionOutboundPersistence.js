@@ -161,6 +161,8 @@ async function ensureOutboundExecutionSchema(pool = defaultPool()) {
 
 async function persistOutboundExecution(record, pool = defaultPool(), opts = {}) {
   if (!record?.id) return null;
+  const { assertPersistableExecutionRecord } = require('../packages/acquisition-mission/OutboundExecution');
+  const persistable = assertPersistableExecutionRecord(record);
   if (opts.skipEnsure !== true) await ensureOutboundExecutionSchema(pool);
 
   await pool.query(
@@ -179,29 +181,29 @@ async function persistOutboundExecution(record, pool = defaultPool(), opts = {})
        payload = EXCLUDED.payload,
        updated_at = EXCLUDED.updated_at`,
     [
-      record.id,
-      record.missionId,
-      record.tenantId != null ? String(record.tenantId) : null,
-      String(record.prospectId),
-      record.preparedArtifactRevision,
-      record.executionApprovalContributionId || null,
-      record.provider || 'brevo',
-      record.providerMessageId || null,
-      record.status,
-      record.providerErrorCode || null,
-      record.providerErrorMessage || null,
-      record.executionRequestId || null,
-      record.transactionId || null,
-      record.executionIdentity,
-      record.idempotencyKey || null,
-      record.attemptedAt || null,
-      record.sentAt || null,
-      record.payload || {},
-      record.createdAt || new Date().toISOString(),
-      record.updatedAt || new Date().toISOString(),
+      persistable.id,
+      persistable.missionId,
+      persistable.tenantId != null ? String(persistable.tenantId) : null,
+      String(persistable.prospectId),
+      persistable.preparedArtifactRevision,
+      persistable.executionApprovalContributionId || null,
+      persistable.provider || 'brevo',
+      persistable.providerMessageId || null,
+      persistable.status,
+      persistable.providerErrorCode || null,
+      persistable.providerErrorMessage || null,
+      persistable.executionRequestId || null,
+      persistable.transactionId || null,
+      persistable.executionIdentity,
+      persistable.idempotencyKey || null,
+      persistable.attemptedAt || null,
+      persistable.sentAt || null,
+      persistable.payload || {},
+      persistable.createdAt || new Date().toISOString(),
+      persistable.updatedAt || new Date().toISOString(),
     ]
   );
-  return record;
+  return persistable;
 }
 
 async function findOutboundExecutionByProviderMessageId(providerMessageId, pool = defaultPool(), opts = {}) {
