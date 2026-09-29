@@ -8,6 +8,7 @@ const { isOverdue, isSameDay, endOfDay } = require('../utils/aoCommandCenterRank
 const { logProspectUpdate, ensureProspectAccess } = require('./aoProspectUpdateService');
 const {
   AO_CRM_OUTCOMES,
+  AO_CRM_NEXT_ACTIONS,
   OUTCOME_TO_STATUS,
   OUTCOME_TO_TOUCH_TYPE,
   CRM_NEXT_TO_LEGACY,
@@ -204,6 +205,7 @@ async function getAoCrmDashboard({ clientId, aoUserId, aoUserName, date = null, 
     tenant_id: String(clientId),
     ao_user: { id: String(aoUserId), name: aoUserName },
     outcomes: AO_CRM_OUTCOMES,
+    next_actions: AO_CRM_NEXT_ACTIONS,
     summary: {
       my_accounts: accounts.length,
       today_queue: todayQueue.length,
@@ -262,7 +264,21 @@ async function listManagerAccounts({
     accounts = accounts.filter(a => a.last_touch_at && new Date(a.last_touch_at) >= cutoff);
   }
 
-  return { date: dateStr, accounts, filters };
+  const startOfToday = new Date(`${dateStr}T00:00:00`);
+  const summary = {
+    total: accounts.length,
+    touched_today: accounts.filter(a => a.last_touch_at && new Date(a.last_touch_at) >= startOfToday).length,
+    overdue: accounts.filter(a => a.overdue).length,
+    help_requested: accounts.filter(a => a.help_requested).length,
+    warm: accounts.filter(a =>
+      WARM_STATUSES.has(a.current_status) || WARM_STAGES.has(a.opportunity_stage)
+    ).length,
+    no_next_action: accounts.filter(a =>
+      !a.next_action && !CLOSED_STATUSES.has(a.current_status) && !a.ao_paused
+    ).length,
+  };
+
+  return { date: dateStr, accounts, filters, summary };
 }
 
 async function getAccountDetail({ clientId, prospectId, aoUserId = null, db = pool }) {
@@ -422,6 +438,7 @@ async function submitOutcome({
   helpReason = null,
   statusOverride = null,
   taskId = null,
+  followUpTaskId = null,
   contactPatch = {},
   source = 'ao_crm',
   db = pool,
@@ -560,6 +577,11 @@ async function submitOutcome({
       WHERE client_id = $1 AND prospect_id = $2::uuid
         AND assigned_ao_id = $3 AND status IN ('open', 'in_progress')
     `, [clientId, prospectId, aoUserId]);
+  }
+
+  if (followUpTaskId) {
+    const aoField = require('./aoFieldService');
+    await aoField.completeFollowUpTask(followUpTaskId, aoUserId, db);
   }
 
   if (help) {

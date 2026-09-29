@@ -856,7 +856,10 @@ body {
       <div class="ao-brand">MAX</div>
       <div class="ao-sub" id="aoGreeting">Field follow-up</div>
     </div>
-    <a class="ao-logout" href="/logout">Logout</a>
+    <div style="display:flex;gap:8px;align-items:center">
+      <a class="ao-logout" href="/ao/crm" style="font-size:0.62rem">My Accounts</a>
+      <a class="ao-logout" href="/logout">Logout</a>
+    </div>
   </div>
   <div class="ao-metrics" id="metrics">
     <div class="ao-metric"><div class="ao-metric-val" id="mVisits">—</div><div class="ao-metric-lbl">Visits</div></div>
@@ -1115,6 +1118,20 @@ body {
   </div>
 </div>
 
+<div class="ao-modal-overlay" id="crmOutcomeModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="crmOutcomeTitle">
+    <h3 id="crmOutcomeTitle">What happened?</h3>
+    <p style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      Log the outcome before clearing today's queue. The account stays in <a href="/ao/crm">My Accounts</a>.
+    </p>
+    <div id="crmOutcomeBody"></div>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="crmOutcomeCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="crmOutcomeSave">Save &amp; update account</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const chat = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
@@ -1127,6 +1144,8 @@ let activeRoute = null;
 let routeSortMode = localStorage.getItem('ao_route_sort') || 'closest_first';
 let routeStartType = localStorage.getItem('ao_route_start') || 'current_location';
 let navAppPreference = localStorage.getItem('ao_nav_app') || 'google_maps';
+let crmOutcomeCache = { outcomes: [], nextActions: [] };
+let pendingCrmOutcome = null;
 let pendingNavigate = null;
 let callModalState = null;
 
@@ -1784,7 +1803,7 @@ function taskCard(task) {
         ${callNowBtn}
         ${logBtn}
         ${callInsteadBtn}
-        <button${isDirectMail || isPhoneFollowUp ? '' : ' class="primary"'} data-done="${task.id}">Done</button>
+        <button${isDirectMail || isPhoneFollowUp ? '' : ' class="primary"'} data-done="${task.id}" data-crm-prospect="${task.crm_prospect_id || ''}">Done</button>
         <button data-reschedule="${task.id}">+2 Days</button>
         <button class="danger" data-escalate="${task.id}">Escalate</button>
       </div>
@@ -1962,6 +1981,126 @@ function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 
+async function ensureCrmOutcomeMeta() {
+  if (crmOutcomeCache.outcomes.length) return crmOutcomeCache;
+  try {
+    const data = await api('/api/crm/dashboard');
+    crmOutcomeCache.outcomes = data.outcomes || [];
+    crmOutcomeCache.nextActions = data.next_actions || [
+      'call', 'follow_up', 'visit', 'email', 'ask_jake', 'book_walkthrough',
+      'send_information', 'check_back_later', 'disqualify', 'no_action',
+    ];
+  } catch (_err) {
+    crmOutcomeCache.outcomes = [
+      { value: 'no_answer', label: 'No answer' },
+      { value: 'left_voicemail', label: 'Left voicemail' },
+      { value: 'spoke_gatekeeper', label: 'Spoke with gatekeeper' },
+      { value: 'spoke_decision_maker', label: 'Spoke with decision-maker' },
+      { value: 'asked_to_follow_up', label: 'Asked to follow up' },
+      { value: 'interested', label: 'Interested' },
+      { value: 'not_interested', label: 'Not interested' },
+      { value: 'bad_fit', label: 'Bad fit' },
+      { value: 'booked_walkthrough', label: 'Booked walkthrough' },
+      { value: 'needs_jake', label: 'Needs Jake' },
+      { value: 'other', label: 'Other' },
+    ];
+  }
+  return crmOutcomeCache;
+}
+
+function hideCrmOutcomeModal() {
+  document.getElementById('crmOutcomeModal').classList.remove('open');
+  pendingCrmOutcome = null;
+}
+
+async function showCrmOutcomeModal(ctx) {
+  await ensureCrmOutcomeMeta();
+  pendingCrmOutcome = ctx;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const defaultDate = tomorrow.toISOString().slice(0, 10);
+  const outcomes = crmOutcomeCache.outcomes;
+  const nextActions = crmOutcomeCache.nextActions;
+  document.getElementById('crmOutcomeTitle').textContent = ctx.business_name
+    ? `What happened? — ${ctx.business_name}`
+    : 'What happened?';
+  document.getElementById('crmOutcomeBody').innerHTML = `
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Outcome *</div>
+      <select class="ao-addr-input" id="crm-outcome">${outcomes.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}</select>
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Notes *</div>
+      <textarea class="ao-addr-input" id="crm-notes" rows="3" placeholder="What happened on the call or visit?" style="resize:vertical;min-height:72px"></textarea>
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Next action *</div>
+      <select class="ao-addr-input" id="crm-next-action">${nextActions.map(a => `<option value="${a}">${String(a).replace(/_/g, ' ')}</option>`).join('')}</select>
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Next action date *</div>
+      <input class="ao-addr-input" id="crm-next-date" type="date" value="${defaultDate}">
+    </div>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Help needed?</div>
+      <select class="ao-addr-input" id="crm-help"><option value="false">No</option><option value="true">Yes — ask Jake</option></select>
+    </div>
+    ${ctx.contact_name ? `<div class="ao-modal-section"><div class="ao-modal-label">Contact</div><div style="font-size:0.85rem">${escapeHtml(ctx.contact_name)}</div></div>` : ''}
+  `;
+  document.getElementById('crmOutcomeModal').classList.add('open');
+}
+
+async function openOutcomeForFieldTask(taskId, presetProspectId) {
+  let prospectId = presetProspectId || null;
+  let ctx = { task_id: taskId, follow_up_task_id: taskId, business_name: null };
+  if (!prospectId) {
+    const resolved = await api('/api/tasks/' + taskId + '/crm-context');
+    prospectId = resolved.prospect_id;
+    ctx = { ...ctx, ...resolved, follow_up_task_id: taskId };
+  } else {
+    ctx.prospect_id = prospectId;
+  }
+  if (!prospectId) {
+    alert('This queue item is not linked to a CRM account yet. Open My Accounts or ask Jake to link the prospect.');
+    return;
+  }
+  ctx.prospect_id = prospectId;
+  await showCrmOutcomeModal(ctx);
+}
+
+async function submitCrmOutcomeFromField() {
+  if (!pendingCrmOutcome?.prospect_id) return;
+  const notes = document.getElementById('crm-notes').value.trim();
+  if (!notes) {
+    alert('Notes are required.');
+    return;
+  }
+  const nextDate = document.getElementById('crm-next-date').value;
+  if (!nextDate) {
+    alert('Next action date is required.');
+    return;
+  }
+  await api('/api/crm/accounts/' + pendingCrmOutcome.prospect_id + '/outcome', {
+    method: 'POST',
+    body: JSON.stringify({
+      outcome: document.getElementById('crm-outcome').value,
+      notes,
+      next_action: document.getElementById('crm-next-action').value,
+      next_action_date: nextDate,
+      help_needed: document.getElementById('crm-help').value === 'true',
+      follow_up_task_id: pendingCrmOutcome.follow_up_task_id || pendingCrmOutcome.task_id,
+      contact_name: pendingCrmOutcome.contact_name || undefined,
+      contact_role: pendingCrmOutcome.contact_role || undefined,
+      phone: pendingCrmOutcome.contact_phone || undefined,
+      email: pendingCrmOutcome.contact_email || undefined,
+    }),
+  });
+  hideCrmOutcomeModal();
+  loadQueue();
+  loadMetrics();
+  addMsg('Outcome saved — account updated in My Accounts.', 'system');
+}
+
 async function loadQueue() {
   const list = document.getElementById('queueList');
   list.innerHTML = '<div class="ao-empty">Loading…</div>';
@@ -2026,6 +2165,14 @@ document.getElementById('flagReportCancel').addEventListener('click', hideFlagRe
 document.getElementById('flagReportSubmit').addEventListener('click', submitFlagReport);
 document.getElementById('flagReportModal').addEventListener('click', e => {
   if (e.target.id === 'flagReportModal') hideFlagReportModal();
+});
+
+document.getElementById('crmOutcomeCancel').addEventListener('click', hideCrmOutcomeModal);
+document.getElementById('crmOutcomeSave').addEventListener('click', () => {
+  submitCrmOutcomeFromField().catch(err => alert(err.message));
+});
+document.getElementById('crmOutcomeModal').addEventListener('click', e => {
+  if (e.target.id === 'crmOutcomeModal') hideCrmOutcomeModal();
 });
 
 document.getElementById('startRouteBtn').addEventListener('click', showRouteModal);
@@ -2175,7 +2322,7 @@ document.getElementById('queueList').addEventListener('click', async e => {
       return;
     }
     if (doneId) {
-      await api('/api/tasks/' + doneId, { method: 'PATCH', body: JSON.stringify({ status: 'done' }) });
+      await openOutcomeForFieldTask(doneId, e.target.dataset.crmProspect || '');
     }
     if (rescheduleId) {
       const d = new Date();
