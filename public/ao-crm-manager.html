@@ -81,7 +81,14 @@ async function load() {
   const res = await fetch(`/ao/api/crm/manager/accounts?${qs()}`, { credentials: 'same-origin' });
   const body = await res.json();
   if (!res.ok) throw new Error(body.error || 'Load failed');
-  document.getElementById('status').textContent = `${body.accounts.length} accounts`;
+  const s = body.summary || {};
+  document.getElementById('status').textContent = [
+    `${body.accounts.length} accounts`,
+    s.touched_today != null ? `${s.touched_today} touched today` : '',
+    s.overdue != null ? `${s.overdue} overdue` : '',
+    s.help_requested != null ? `${s.help_requested} need help` : '',
+    s.no_next_action != null ? `${s.no_next_action} no next action` : '',
+  ].filter(Boolean).join(' · ');
   document.getElementById('rows').innerHTML = body.accounts.map(a => `
     <tr>
       <td><a href="/ao/crm#${a.prospect_id}">${a.company_name}</a></td>

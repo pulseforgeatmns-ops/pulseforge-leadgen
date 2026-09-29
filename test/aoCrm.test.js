@@ -35,7 +35,15 @@ test('ao routes expose SPEC-AO-CRM-001 endpoints', () => {
   assert.match(src, /\/api\/crm\/dashboard/);
   assert.match(src, /\/api\/crm\/accounts\/:prospectId\/outcome/);
   assert.match(src, /\/api\/crm\/manager\/accounts/);
+  assert.match(src, /\/api\/tasks\/:id\/crm-context/);
   assert.match(src, /\/crm/);
+});
+
+test('field queue cannot mark tasks done without CRM outcome', async () => {
+  const aoField = require('../services/aoFieldService');
+  const result = await aoField.updateTask('00000000-0000-4000-8000-000000000001', 1, { status: 'done' });
+  assert.equal(result.code, 'CRM_OUTCOME_REQUIRED');
+  assert.equal(result.status, 409);
 });
 
 test('CRM pages reference durable account views', () => {
