@@ -721,11 +721,14 @@
 
   var ATTRIBUTION_STORAGE_KEY = 'anchor_first_party_attribution';
   var ATTRIBUTION_QUERY_KEYS = [
-    'campaign_id', 'ad_group_id', 'ad_id', 'ad_account_id', 'oppref', 'opref',
+    'campaign_id', 'ad_group_id', 'ad_id', 'ad_account_id',
+    'gclid', 'gbraid', 'wbraid',
+    'oppref', 'opref',
     'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'
   ];
   var ATTRIBUTION_MAX = {
     campaign_id: 128, ad_group_id: 128, ad_id: 128, ad_account_id: 128,
+    gclid: 256, gbraid: 256, wbraid: 256,
     oppref: 256, opref: 256, utm_source: 128, utm_medium: 128,
     utm_campaign: 256, utm_content: 256, utm_term: 256,
     landing_page_url: 2048, referrer: 2048
@@ -741,6 +744,7 @@
     if (!raw) return false;
     return Boolean(
       raw.campaign_id || raw.ad_group_id || raw.ad_id || raw.ad_account_id ||
+      raw.gclid || raw.gbraid || raw.wbraid ||
       raw.oppref || raw.opref || raw.utm_source || raw.utm_medium || raw.utm_campaign
     );
   }
