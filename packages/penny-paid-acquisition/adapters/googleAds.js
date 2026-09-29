@@ -41,15 +41,28 @@ function resolveGoogleAdsApiVersion() {
 
 function requiredGoogleOAuthEnv() {
   return ['GOOGLE_ADS_CLIENT_ID', 'GOOGLE_ADS_CLIENT_SECRET']
-    .filter((key) => !process.env[key]);
+    .filter((key) => !asText(process.env[key]));
 }
 
+/** Required env keys for live Google Ads reads (OAuth client + tenant refresh token). */
 function requiredGoogleAdsEnv() {
-  const missing = requiredGoogleOAuthEnv();
-  if (!process.env.GOOGLE_ADS_DEVELOPER_TOKEN) {
-    missing.push('GOOGLE_ADS_DEVELOPER_TOKEN');
-  }
-  return missing;
+  return requiredGoogleOAuthEnv();
+}
+
+/** Post–Sept 2026: developer token is optional; OAuth project access replaces it. */
+function googleAdsDeveloperTokenWarnings() {
+  if (asText(process.env.GOOGLE_ADS_DEVELOPER_TOKEN)) return [];
+  return [
+    'GOOGLE_ADS_DEVELOPER_TOKEN is unset; proceeding with OAuth-only Google Ads API access (developer-token header omitted).',
+  ];
+}
+
+function mergeReadinessWarnings(readiness, extraWarnings = []) {
+  if (!extraWarnings.length) return readiness;
+  return {
+    ...readiness,
+    warnings: [...array(readiness.warnings), ...extraWarnings],
+  };
 }
 
 function normalizeCustomerId(raw) {
@@ -69,9 +82,12 @@ async function googleAdsToken(refreshToken, http = axios) {
 function googleAdsHeaders(token, account = null) {
   const headers = {
     Authorization: `Bearer ${token}`,
-    'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
     'Content-Type': 'application/json',
   };
+  const developerToken = asText(process.env.GOOGLE_ADS_DEVELOPER_TOKEN);
+  if (developerToken) {
+    headers['developer-token'] = developerToken;
+  }
   const loginCustomerId = asText(account?.manager_customer_id || account?.login_customer_id)
     || asText(process.env.GOOGLE_ADS_MANAGER_ACCOUNT_ID);
   if (loginCustomerId) {
@@ -359,7 +375,8 @@ async function readGoogleAdsEvidence(input = {}) {
           credentialStatus: READINESS_STATE.MISSING_CREDENTIALS,
           apiVersion: versionInfo.version,
           blockers: [`Missing Google Ads environment credentials: ${missingEnv.join(', ')}`],
-          nextRequiredAction: 'Configure GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_CLIENT_ID, and GOOGLE_ADS_CLIENT_SECRET.',
+          nextRequiredAction: 'Configure GOOGLE_ADS_CLIENT_ID and GOOGLE_ADS_CLIENT_SECRET.',
+          warnings: googleAdsDeveloperTokenWarnings(),
         }),
       }),
     };
@@ -467,7 +484,10 @@ async function readGoogleAdsEvidence(input = {}) {
         conversionEvidenceStatus,
         lastSuccessfulReadAt: observedAt,
         blockers: [],
-        warnings: conversionReadFailed ? ['Platform conversion metrics could not be read for all campaigns with spend.'] : [],
+        warnings: [
+          ...googleAdsDeveloperTokenWarnings(),
+          ...(conversionReadFailed ? ['Platform conversion metrics could not be read for all campaigns with spend.'] : []),
+        ],
         nextRequiredAction: '',
       }),
       platformMetricsAreEvidenceOnly: true,
@@ -490,7 +510,7 @@ async function readGoogleAdsEvidence(input = {}) {
           blockers: [mapped.message],
           nextRequiredAction: mapped.readiness === READINESS_STATE.AUTH_FAILED
             ? 'Refresh Google Ads OAuth credentials for the tenant-linked ad account.'
-            : 'Verify Google Ads customer id, manager login-customer-id, and developer token access.',
+            : 'Verify Google Ads customer id, manager login-customer-id, and OAuth project access.',
         }),
       }),
       availability: AVAILABILITY.ERROR,
@@ -531,9 +551,12 @@ async function assessGoogleAdsReadiness(input = {}) {
       credentialStatus: READINESS_STATE.MISSING_CREDENTIALS,
       apiVersion: versionInfo.version,
       blockers: missingEnv.map((key) => `Missing env ${key}`),
-      nextRequiredAction: 'Configure Google Ads developer token and OAuth client credentials.',
+      nextRequiredAction: 'Configure GOOGLE_ADS_CLIENT_ID and GOOGLE_ADS_CLIENT_SECRET.',
+      warnings: googleAdsDeveloperTokenWarnings(),
     });
   }
+
+  const devTokenWarnings = googleAdsDeveloperTokenWarnings();
 
   const accounts = await resolveAdAccountsForClient({
     clientId,
@@ -586,6 +609,7 @@ async function assessGoogleAdsReadiness(input = {}) {
       apiVersion: versionInfo.version,
       campaignEvidenceStatus: 'NOT_PROBED',
       conversionEvidenceStatus: 'NOT_PROBED',
+      warnings: devTokenWarnings,
       nextRequiredAction: '',
     });
   }
@@ -597,7 +621,7 @@ async function assessGoogleAdsReadiness(input = {}) {
     windowDays: input.windowDays,
   });
   if (evidence.availability !== AVAILABILITY.AVAILABLE) {
-    return evidence.readiness || buildGoogleAdsReadinessInspection({
+    const failed = evidence.readiness || buildGoogleAdsReadinessInspection({
       tenantId: clientId,
       accountStatus: READINESS_STATE.UNAVAILABLE,
       credentialStatus: READINESS_STATE.UNAVAILABLE,
@@ -606,8 +630,9 @@ async function assessGoogleAdsReadiness(input = {}) {
       blockers: [asText(evidence.error) || evidence.reason],
       nextRequiredAction: 'Fix Google Ads credentials or account access, then re-run readiness inspection.',
     });
+    return mergeReadinessWarnings(failed, devTokenWarnings);
   }
-  return evidence.readiness;
+  return mergeReadinessWarnings(evidence.readiness, devTokenWarnings);
 }
 
 /** @deprecated use resolveGoogleAdsApiVersion().version */
@@ -622,6 +647,9 @@ module.exports = {
   READINESS_STATE,
   resolveGoogleAdsApiVersion,
   requiredGoogleAdsEnv,
+  requiredGoogleOAuthEnv,
+  googleAdsDeveloperTokenWarnings,
+  googleAdsHeaders,
   observationWindowFromDays,
   resolveObservationWindow,
   buildGoogleAdsReadinessInspection,
