@@ -382,7 +382,14 @@ test('missing tenant context fails closed instead of defaulting to 10', async ()
   assert.throws(
     () => scoutInput(
       { source_mission_id: 'mission_source' },
-      ANCHOR_SOURCE,
+      {
+        payload: {
+          structuredMission: {
+            market: { segment: 'short_term_rental' },
+            geography: { region: 'Greater Manchester' },
+          },
+        },
+      },
       PLAN
     ),
     { code: 'replenishment_tenant_required' }
@@ -399,7 +406,14 @@ test('missing tenant context fails closed instead of defaulting to 10', async ()
       pool: { query: async () => ({ rows: [] }) },
       store: { candidateOwnership: async () => null },
       program: { id: 'outbound_missing', mode: 'active' },
-      source: ANCHOR_SOURCE,
+      source: {
+        payload: {
+          structuredMission: {
+            market: { segment: 'short_term_rental' },
+            geography: { region: 'Greater Manchester' },
+          },
+        },
+      },
       plan: PLAN,
       skipVerificationRetry: true,
     }),
