@@ -20,7 +20,10 @@ const {
   buildFirstPartyAttributionRetrieval,
   extractFirstPartyAttributionEvidence,
   deriveCampaignLeadEconomics,
+  assessGoogleAdsReadiness,
   AVAILABILITY,
+  UNAVAILABLE_REASON,
+  PLATFORM,
 } = require('../../penny-paid-acquisition');
 const {
   ACQUISITION_APPROACHES,
@@ -91,17 +94,28 @@ function normalizeBudget(input = {}) {
   const source = input.availableBudget || input.budget || null;
   if (!source) return { known: false, amount: null, currency: null, source: null };
   if (typeof source === 'number') {
-    return { known: Number.isFinite(source), amount: source, currency: 'USD', source: 'operator_budget' };
+    const amount = source;
+    return {
+      known: Number.isFinite(amount),
+      amount: Number.isFinite(amount) ? amount : null,
+      currency: 'USD',
+      source: 'operator_budget',
+      invalid: Number.isFinite(amount) && amount <= 0,
+      rejectionReason: Number.isFinite(amount) && amount <= 0 ? 'NONPOSITIVE_BUDGET' : null,
+    };
   }
   const amount = source.amount != null ? Number(source.amount)
     : source.max != null ? Number(source.max)
       : source.testBudget != null ? Number(source.testBudget)
         : null;
+  const invalid = Number.isFinite(amount) && amount <= 0;
   return {
     known: Number.isFinite(amount),
     amount: Number.isFinite(amount) ? amount : null,
     currency: asText(source.currency) || 'USD',
     source: asText(source.source) || 'operator_budget',
+    invalid,
+    rejectionReason: invalid ? 'NONPOSITIVE_BUDGET' : null,
   };
 }
 
@@ -316,7 +330,7 @@ function scoreChannel(channel = {}, context = {}) {
   };
 }
 
-function chooseViability({ approach, budget, conversion, measurement, channels }) {
+function chooseViability({ approach, budget, conversion, measurement, channels, platformEvidence }) {
   const blockers = [];
   const unknowns = [];
   const selected = asText(approach?.selectedApproach || approach?.approach).toLowerCase();
@@ -347,6 +361,12 @@ function chooseViability({ approach, budget, conversion, measurement, channels }
       reason: 'Paid test outcomes cannot be attributed to qualified acquisition progression.',
     });
   }
+  if (budget.invalid) {
+    blockers.push({
+      kind: 'nonpositive_paid_test_budget',
+      reason: 'Paid test budget must be greater than zero.',
+    });
+  }
   if (!budget.known) {
     unknowns.push({
       unknown: 'Available paid test budget',
@@ -365,6 +385,24 @@ function chooseViability({ approach, budget, conversion, measurement, channels }
       reason: 'Conversion tracking, attribution, and downstream outcome capture evidence was not supplied.',
     });
   }
+  const wantsGoogle = channels.some((row) => /google search/i.test(asText(row.channel)));
+  if (wantsGoogle) {
+    const googleEvidence = array(platformEvidence).find((row) => row.platform === PLATFORM.GOOGLE_ADS)
+      || null;
+    if (
+      !googleEvidence
+      || googleEvidence.availability === AVAILABILITY.UNAVAILABLE
+      || googleEvidence.availability === AVAILABILITY.ERROR
+    ) {
+      blockers.push({
+        kind: 'google_ads_not_connected',
+        reason: googleEvidence
+          ? `Google Ads evidence unavailable (${asText(googleEvidence.reason || googleEvidence.error) || 'not linked'}).`
+          : 'Google Ads is not connected for this tenant.',
+      });
+    }
+  }
+
   if (blockers.length) {
     return {
       viability: VIABILITY.BLOCKED,
@@ -468,6 +506,7 @@ function buildPaidAcquisitionRecommendationPayload(executionInput = {}) {
     conversion,
     measurement,
     channels,
+    platformEvidence: array(si.platformEvidence),
   });
   const recommendedTest = buildRecommendedTest({
     viability: viabilityResult.viability,
@@ -531,6 +570,7 @@ function buildPaidAcquisitionRecommendationPayload(executionInput = {}) {
         ? clone(si.unmatchedFirstPartyAttribution)
         : null,
       observationWindow: si.observationWindow ? clone(si.observationWindow) : null,
+      googleAdsReadiness: si.googleAdsReadiness ? clone(si.googleAdsReadiness) : null,
       platformConversionsAreSeparateFromFirstPartyLeads: true,
       stopConditions: recommendedTest?.stopConditions || [],
       continueConditions: recommendedTest?.continueConditions || [],
@@ -607,6 +647,7 @@ async function resolvePlatformEvidenceForPenny(mission, opts = {}) {
     return array(opts.platformEvidence);
   }
 
+  const observationWindow = resolveSharedObservationWindow(opts);
   const channels = array(opts.candidatePaidChannels).length
     ? opts.candidatePaidChannels
     : DEFAULT_PAID_CHANNELS;
@@ -617,14 +658,18 @@ async function resolvePlatformEvidenceForPenny(mission, opts = {}) {
     channels,
     pool: opts.pool,
     resolveAccounts: opts.resolveAccounts,
-    window: opts.observationWindow,
+    window: observationWindow,
     http: opts.http,
+    selectedAccountId: opts.selectedAccountId,
   });
 
   return mergePlatformEvidence(opts.platformEvidence, observed);
 }
 
 async function loadFirstPartyAttributionBundleForPenny(mission, opts = {}) {
+  const observationWindow = resolveSharedObservationWindow(opts);
+  const bundleOpts = { ...opts, observationWindow };
+
   if (opts.skipFirstPartyAttributionRetrieval === true) {
     const acquisitionEvidence = mergeAcquisitionEvidence(opts.acquisitionEvidence, []);
     return {
@@ -633,7 +678,7 @@ async function loadFirstPartyAttributionBundleForPenny(mission, opts = {}) {
       firstPartyAttributionRetrieval: buildFirstPartyAttributionRetrieval({
         availability: AVAILABILITY.AVAILABLE,
         observedCount: extractFirstPartyAttributionEvidence(acquisitionEvidence).length,
-        observationWindow: opts.observationWindow || null,
+        observationWindow,
       }),
       rawResult: null,
     };
@@ -644,7 +689,7 @@ async function loadFirstPartyAttributionBundleForPenny(mission, opts = {}) {
     const unavailable = unavailableFirstPartyAttributionEvidence({
       availability: AVAILABILITY.UNAVAILABLE,
       reason: 'INVALID_CLIENT_ID',
-      observationWindow: opts.observationWindow || null,
+      observationWindow,
     });
     const acquisitionEvidence = mergeAcquisitionEvidence(
       opts.acquisitionEvidence,
@@ -657,7 +702,7 @@ async function loadFirstPartyAttributionBundleForPenny(mission, opts = {}) {
       firstPartyAttributionRetrieval: buildFirstPartyAttributionRetrieval({
         availability: AVAILABILITY.UNAVAILABLE,
         reason: 'INVALID_CLIENT_ID',
-        observationWindow: opts.observationWindow || null,
+        observationWindow,
       }),
       rawResult: null,
     };
@@ -665,11 +710,12 @@ async function loadFirstPartyAttributionBundleForPenny(mission, opts = {}) {
 
   const result = await loadFirstPartyAttributionEvidence({
     clientId,
-    pool: opts.pool,
-    window: opts.observationWindow,
-    windowDays: opts.observationWindowDays,
-    limit: opts.firstPartyAttributionLimit,
-    queryRows: opts.queryWalkthroughAttribution,
+    pool: bundleOpts.pool,
+    window: observationWindow,
+    windowDays: bundleOpts.observationWindowDays ?? bundleOpts.windowDays,
+    limit: bundleOpts.firstPartyAttributionLimit,
+    queryRows: bundleOpts.queryWalkthroughAttribution,
+    now: bundleOpts.now,
   });
 
   if (result.availability !== AVAILABILITY.AVAILABLE) {
@@ -720,6 +766,16 @@ async function runPennyForAmoMission(mission, opts = {}) {
     firstPartyAttributionRetrieval: firstPartyBundle.firstPartyAttributionRetrieval,
     observationWindow,
   });
+  const googleAdsReadiness = await assessGoogleAdsReadiness({
+    tenantId: mission.tenantId || opts.tenantId,
+    clientId: Number(mission.tenantId || opts.tenantId),
+    pool: opts.pool,
+    resolveAccounts: opts.resolveAccounts,
+    http: opts.http,
+    window: observationWindow,
+    skipLiveProbe: opts.skipGoogleAdsLiveProbe,
+    selectedAccountId: opts.selectedAccountId,
+  });
   const executionInput = buildExecutionInput({
     mission,
     contributions,
@@ -738,6 +794,7 @@ async function runPennyForAmoMission(mission, opts = {}) {
     measurementReadiness: opts.measurementReadiness,
     candidatePaidChannels: opts.candidatePaidChannels,
     platformEvidence,
+    googleAdsReadiness,
     availableBudget: opts.availableBudget,
     operatorPreferences: opts.operatorPreferences,
   });

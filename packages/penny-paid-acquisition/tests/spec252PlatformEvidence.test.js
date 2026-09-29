@@ -39,6 +39,16 @@ const {
   runPennyForAmoMission,
 } = require('../../max/workspace/PennyPaidAcquisitionExecutor');
 
+const CUSTOMER_FIXTURE = {
+  results: [{
+    customer: {
+      id: '1234567890',
+      currencyCode: 'USD',
+      timeZone: 'America/New_York',
+    },
+  }],
+};
+
 const GOOGLE_FIXTURE = {
   results: [{
     campaign: {
@@ -54,6 +64,7 @@ const GOOGLE_FIXTURE = {
       ctr: 0.04,
       averageCpc: '2470000',
       conversions: 2,
+      conversionsValue: 150.25,
       costPerConversion: '59280000',
       costMicros: '118560000',
     },
@@ -72,15 +83,16 @@ const KEYWORD_FIXTURE = {
 };
 
 function mockGoogleHttp() {
-  let call = 0;
   return {
     post: async (url, body) => {
       if (url.includes('oauth2.googleapis.com/token')) {
         return { data: { access_token: 'test-access-token' } };
       }
-      call += 1;
-      if (call === 1) return { data: GOOGLE_FIXTURE };
-      return { data: KEYWORD_FIXTURE };
+      const query = body?.query || '';
+      if (/FROM customer/i.test(query)) return { data: CUSTOMER_FIXTURE };
+      if (/FROM campaign/i.test(query)) return { data: GOOGLE_FIXTURE };
+      if (/FROM ad_group_criterion/i.test(query)) return { data: KEYWORD_FIXTURE };
+      return { data: { results: [] } };
     },
   };
 }
@@ -130,7 +142,12 @@ describe('SPEC-252 — Paid platform evidence collector', () => {
     assert.equal(evidence.platform, PLATFORM.GOOGLE_ADS);
     assert.equal(evidence.campaigns[0].externalCampaignId, '1001');
     assert.equal(evidence.campaigns[0].platformConversions, 2);
+    assert.equal(evidence.campaigns[0].platformConversionValue, 150.25);
     assert.equal(evidence.campaigns[0].spend, 118.56);
+    assert.equal(evidence.account.currency, 'USD');
+    assert.equal(evidence.account.timezone, 'America/New_York');
+    assert.equal(evidence.apiVersion, 'v25');
+    assert.notEqual(evidence.apiVersion, 'v18');
     assert.ok(evidence.platformMetricsAreEvidenceOnly);
     assert.ok(evidence.provenance.readOnly);
     assert.doesNotMatch(JSON.stringify(evidence), /refresh-token|access_token/i);

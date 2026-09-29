@@ -153,6 +153,10 @@ function mockChatGptHttp(overrides = {}) {
   };
 }
 
+const GOOGLE_CUSTOMER_FIXTURE = {
+  results: [{ customer: { id: '1234567890', currencyCode: 'USD', timeZone: 'America/New_York' } }],
+};
+
 const GOOGLE_FIXTURE = {
   results: [{
     campaign: { id: '1001', name: 'Anchor Commercial Search', status: 'ENABLED' },
@@ -169,14 +173,14 @@ const GOOGLE_FIXTURE = {
 };
 
 function mockGoogleHttp() {
-  let call = 0;
   return {
-    post: async (url) => {
+    post: async (url, body) => {
       if (url.includes('oauth2.googleapis.com/token')) {
         return { data: { access_token: 'test-access-token' } };
       }
-      call += 1;
-      if (call === 1) return { data: GOOGLE_FIXTURE };
+      const query = body?.query || '';
+      if (/FROM customer/i.test(query)) return { data: GOOGLE_CUSTOMER_FIXTURE };
+      if (/FROM campaign/i.test(query)) return { data: GOOGLE_FIXTURE };
       return { data: { results: [] } };
     },
   };

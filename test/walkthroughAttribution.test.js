@@ -131,6 +131,18 @@ describe('walkthrough attribution validation contract', () => {
 });
 
 describe('walkthrough attribution normalization + persistence', () => {
+  it('normalizes Google click ids to google_ads deterministically', () => {
+    const record = buildAttributionRecord({
+      gclid: 'gclid-test',
+      utm_source: 'google',
+      utm_medium: 'cpc',
+      landing_page_url: 'https://goanchorcleaning.com/?gclid=gclid-test',
+    });
+    assert.equal(record.normalized.lead_source, 'google_ads');
+    assert.equal(record.normalized.attribution_status, 'deterministic');
+    assert.equal(record.raw.gclid, 'gclid-test');
+  });
+
   it('normalizes ChatGPT-specific evidence to chatgpt_ads deterministically', () => {
     const record = buildAttributionRecord({
       oppref: 'click-token',
