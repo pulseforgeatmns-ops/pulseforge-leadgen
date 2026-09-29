@@ -165,7 +165,7 @@ if (run('layout')) {
           // Approved closing copy wraps within its editorial column. The
           // explicit break is a minimum, not a promise of exactly two rows.
           maxLines: el.closest('.assessment__closing-head') ? (innerWidth >= 992 ? 5 : innerWidth <= 390 ? 4 : innerWidth <= 430 ? 3 : intended)
-            : el.id === 'reconstruction-title' && innerWidth <= 390 ? 3 : intended,
+            : el.id === 'work-title' && innerWidth <= 390 ? 3 : intended,
           actual: rows.size,
         });
       }

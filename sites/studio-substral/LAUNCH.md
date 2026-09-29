@@ -19,6 +19,8 @@ or send an automated assessment. Approved visual design and narrative are locked
 - [ ] Configure DNS, HTTPS and canonical redirect; verify on the public origin.
 - [ ] Configure and verify the hello mailbox forwarding and a real reply path.
 - [ ] Complete final production browser submission and operator queue read-back.
+- [ ] Sign off performance on production and real devices: the strict local
+      timing targets have not passed consistently.
 
 ## Architecture and review route
 
@@ -126,3 +128,28 @@ release. Roll back the web service to its recorded previous deployment if needed
 keep the additive index and all saved requests. A static rollback must not point
 to an API revision that lacks intake. Re-run smoke after rollback. Never delete
 customer requests or remove mail DNS as part of rollback.
+
+## QA evidence (2026-09-29 UTC)
+
+124 source and PostgreSQL checks passed. Browser form checks covered real durable
+writes, a dropped response followed by a safe retry, network/503/429 failures,
+malformed success responses, keyboard focus and native no-JavaScript submission.
+The operator review button was checked independently: failed saves preserve the
+card, and successful review does not invoke Max or send email.
+
+Layout checks passed at 13 widths, 360–1920px. Full-page reading layouts and
+WebGL hero views were captured at 390×844, 768×1024, 1280×800, 1600×900 and
+1920×1080. No missing anchors, unloaded images, hidden narrative content, page
+errors or horizontal overflow. No-WebGL, reduced motion and no-JavaScript
+fallbacks were exercised. Approved copy wraps are recorded as intended in the
+layout assertions. One fallback containment fix clips the CSS object to its
+small-screen reading band; WebGL geometry and staging are unchanged.
+
+Eager JavaScript: 8,306 bytes gzip (limit 10,240). Deferred object: 156,607 bytes
+gzip (limit 174,080). In a fresh Chromium fallback run with 4× CPU slowdown,
+1.6 Mbps down and 150ms latency, cold LCP was 2,788 / 1,944 / 1,912 ms, CLS 0,
+and maximum sampled interaction durations 152 / 120 / 120 ms. **These do not
+consistently satisfy LCP <2,000 ms and interaction <100 ms.** Synthetic event
+timing is not field INP; GPU-emulated timings are not a physical-device verdict.
+Keep the published targets and remeasure/profile the actual production release.
+Do not claim all performance targets passed.

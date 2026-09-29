@@ -672,6 +672,12 @@ ol {
 .surface__object .stage,
 .decomposition__stage .stage { overflow: visible; }
 
+/* The CSS fallback must stay inside the shallow reading band on tablets and
+   phones. Its projected substrate otherwise reaches the next layer label. */
+@media (max-width: 61.999em) {
+  .decomposition__stage .stage[data-webgl='off'] { overflow: hidden; }
+}
+
 .stage__canvas {
   position: absolute;
   inset: 0;
