@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Studio Substral — the assessment instrument (Act IV).
+   Studio Substral — the closing assessment instrument.
 
    The field behaves like an instrument, not a marketing form: it validates
    what it was given, reports plainly what it did, and never invents a result.

@@ -1769,11 +1769,8 @@ function assemblyCentre(air) {
   return (top + bottom) / 2;
 }
 
-/* xLimit above 1 lets the object run past the left and right edges of the
-   frame. The hero wants that: the specimen is a wide flat slab, so fitting it
-   on width leaves the frame half empty and pushes the substrate down behind the
-   statement. Cropping the far tips instead makes it read as larger than the
-   composition can hold — which is the relationship the reference has. */
+/* Project the actual specimen into its stage. Limits below 1 reserve visible
+   breathing room; the unchanged reconstruction act retains its original crop. */
 function fitsAt(probe, corners, distance, pitch, xLimit, aim, yBelow) {
   probe.position.set(0, distance * pitch, distance);
   probe.lookAt(0, 0, 0);
@@ -1949,14 +1946,11 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
   const basePitch = mode === 'surface' ? 0.35 : mode === 'reconstruct' ? 0.42 : 0.46;
   const examinePitch = basePitch + 0.1;
   const baseYaw = mode === 'surface' ? -0.36 : -0.46;
-  /* The hero crops; the narrow sticky columns do not, where a cut edge would
-     read as broken rather than as framing. */
-  const frameCrop = mode === 'surface' ? 1.3 : 1.16;
-  /* And the hero crops downward hardest, because the bottom two thirds of it is
-     the statement: the keel is behind display type there, so reserving frame for
-     it only makes the specimen smaller. In the acts the block has to stay visible
-     under the layers, which is the whole point of it being there. */
-  const keelBleed = mode === 'surface' ? 1.34 : KEEL_BLEED;
+  /* Responsive stages contain the entire approved specimen. Change only its
+     fitted scale: camera field of view, perspective angles, layer gaps and
+     geometry remain unchanged. Leave the reconstruction act's framing alone. */
+  const frameCrop = mode === 'reconstruct' ? 1.16 : 0.86;
+  const keelBleed = mode === 'reconstruct' ? KEEL_BLEED : 0.84;
 
   const scene = new Scene();
   const camera = new PerspectiveCamera(24, 1, 0.1, 140);
@@ -2426,7 +2420,8 @@ export function createDimensionalObject(canvas, { mode = 'decompose' } = {}) {
         fitAt(fitTables.examine, opening),
         examining ? 1 : 0
       );
-      target.dolly = fitted * (examining ? 0.97 : 1);
+      // Keep examination inside the same protected frame instead of zooming past it.
+      target.dolly = fitted * (mode === 'reconstruct' && examining ? 0.97 : 1);
       target.lookAt = examining
         ? (plateBase(subject, target.air) - assemblyCentre(target.air)) * AIM_TRAVEL
         : 0;

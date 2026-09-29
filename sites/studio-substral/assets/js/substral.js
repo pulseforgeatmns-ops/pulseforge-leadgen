@@ -402,9 +402,8 @@ function webglAvailable() {
 function shouldRenderObject() {
   if (reduceMotion.matches) return false;
   if (!webglAvailable()) return false;
-  // Below this width the CSS composition is the intended treatment, not a
-  // fallback: fewer simultaneous objects, no lighting cost (doctrine §17).
-  if (window.innerWidth < 600) return false;
+  // On reduced-motion or resource-limited devices the CSS composition is the intended treatment.
+  // Capable phones share the approved materials; stage dimensions control scale.
   if (navigator.connection?.saveData) return false;
   if (typeof navigator.deviceMemory === 'number' && navigator.deviceMemory < 2) return false;
   return true;

@@ -301,8 +301,8 @@ if (run('states')) {
     const webgl = await page.evaluate(
       () => document.querySelector('[data-stage]').dataset.webgl
     );
-    if (webgl !== 'off') fail('the object loaded on a small viewport');
-    else pass('small viewport: CSS composition is the intended treatment');
+    if (webgl !== 'on') fail('a capable phone did not receive the approved material object');
+    else pass('capable phone: approved material object loaded in the mobile stage');
     await page.close();
   }
 

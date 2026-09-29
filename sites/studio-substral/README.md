@@ -15,7 +15,7 @@ index.html                     the whole narrative, six acts
 robots.txt  sitemap.xml
 assets/css/substral.css        design system + all six acts
 assets/js/substral.js          narrative orchestration (eager, ~4 KB gzip)
-assets/js/assessment.js        the Act IV instrument
+assets/js/assessment.js        the closing assessment instrument
 assets/js/dimensional.js       GENERATED — three.js bundle, loaded on demand
                                (six materials on a mineral substrate; three
                                 stages: Act I whole, Act II apart, Act VI
@@ -75,7 +75,7 @@ Source, from the repository root:
 
 ```bash
 node --test test/studioSubstralDoctrine.test.js     # doctrine conformance
-node --test test/substralAssessmentIntake.test.js   # Act IV intake
+node --test test/substralAssessmentIntake.test.js   # public assessment intake
 ```
 
 The doctrine suite checks the mechanically verifiable rules — layer ordering,

@@ -67,7 +67,7 @@ describe('Studio Substral — brand and narrative (doctrine §2, §3, §14)', ()
 
   it('presents the primary CTA as an assessment', () => {
     assert.match(copy, /Start with an assessment/);
-    assert.match(copy, /See what we see\./i);
+    assert.match(copy, /Before you rebuild, find out what s broken\./i);
   });
 
   it('runs all six acts in order', () => {
@@ -81,6 +81,32 @@ describe('Studio Substral — brand and narrative (doctrine §2, §3, §14)', ()
     }
   });
 
+  it('builds the commercial sequence from diagnosis to proof, scope and assessment', () => {
+    const sequence = [
+      'id="decomposition"',
+      'id="diagnosis"',
+      'id="protocol"',
+      'id="work"',
+      'id="engagement"',
+      'id="assessment"',
+    ];
+    let cursor = -1;
+    for (const marker of sequence) {
+      const next = html.indexOf(marker, cursor + 1);
+      assert.ok(next > cursor, `${marker} is missing or out of commercial sequence`);
+      cursor = next;
+    }
+
+    assert.match(copy, /Assessment Figure out what actually needs to change/i);
+    assert.match(copy, /Targeted fix Fix the part that is holding the site back/i);
+    assert.match(copy, /Redesign build Rebuild the parts that need a new foundation/i);
+    assert.match(copy, /Act IV Evidence Evidence before opinion/i);
+    assert.ok(
+      html.indexOf('data-assessment-form') > html.indexOf('id="engagement"'),
+      'the assessment form must remain the final commercial decision point'
+    );
+  });
+
   it('moves dark, to mineral, and back to dark', () => {
     const scopes = [...html.matchAll(/class="act ([a-z]+) (env-dark|env-mineral)/g)].map(
       (m) => m[2]
@@ -89,9 +115,9 @@ describe('Studio Substral — brand and narrative (doctrine §2, §3, §14)', ()
       'env-dark', // I surface
       'env-dark', // II decomposition
       'env-mineral', // III diagnosis
-      'env-mineral', // IV assessment
+      'env-mineral', // IV assessment protocol
       'env-mineral', // V work
-      'env-dark', // VI reconstruction
+      'env-dark', // VI reconstruction, engagement and final assessment
     ]);
   });
 });
@@ -132,7 +158,7 @@ describe('The six layers (doctrine §12)', () => {
       );
     }
     assert.match(copy, /Design is last\./);
-    assert.match(copy, /The order is not stylistic/);
+    assert.match(copy, /The order is practical/);
   });
 
   it('labels the reconstruction rows by how each layer is known', () => {
@@ -200,10 +226,10 @@ describe('Assessment integrity (doctrine §16)', () => {
   });
 
   it('refuses the specific manufactured-urgency claims by name', () => {
-    assert.match(copy, /revenue you are losing, when we do not have your revenue data/i);
-    assert.match(copy, /legal compliance verdict derived from automated accessibility checks/i);
+    assert.match(copy, /revenue-loss estimate without your revenue data/i);
+    assert.match(copy, /legal compliance verdict based only on automated accessibility checks/i);
     assert.match(copy, /guarantee of search ranking or conversion improvement/i);
-    assert.match(copy, /Urgency the evidence does not support/i);
+    assert.match(copy, /Urgency the evidence doesn t support/i);
   });
 
   it('uses no fabricated metrics or counters anywhere', () => {
@@ -221,15 +247,22 @@ describe('Discover → Diagnose → Advise (doctrine §15)', () => {
     assert.deepEqual(steps, ['Discover', 'Diagnose', 'Advise']);
   });
 
-  it('exposes the same four diagnosis classes the engine emits', () => {
-    const shown = [...html.matchAll(/class="conclusion__class">([^<]+)</g)].map((m) =>
-      m[1].toUpperCase().replace(/\s+/g, '_')
+  it('exposes the same four possible conclusions the engine emits', () => {
+    const displayToEngine = {
+      'Redesign candidate': 'REDESIGN_CANDIDATE',
+      'Targeted fix': 'TARGETED_REMEDIATION',
+      'Healthy site': 'HEALTHY_SITE',
+      'Insufficient evidence': 'INSUFFICIENT_EVIDENCE',
+    };
+    const shown = [...html.matchAll(/class="conclusion__class">([^<]+)</g)].map(
+      (m) => displayToEngine[m[1]]
     );
+    assert.ok(shown.every(Boolean), 'every customer-facing conclusion maps to an engine class');
     assert.deepEqual(shown.sort(), Object.keys(DIAGNOSIS_CLASS).sort());
   });
 
   it('is willing to conclude that no redesign is required', () => {
-    assert.match(copy, /No redesign required.{0,2} is a conclusion we are willing to reach/i);
+    assert.match(copy, /No redesign required.{0,2} is a conclusion we re willing to reach/i);
   });
 });
 
@@ -350,6 +383,26 @@ describe('Forbidden visual patterns (doctrine §10)', () => {
   it('shows real work rather than a device mockup', () => {
     assert.doesNotMatch(html, /laptop|macbook|iphone|mockup|device-frame/i);
     assert.match(html, /assets\/work\/anchor-cleaning-home\.webp/);
+  });
+
+  it('frames the case study as observed evidence', () => {
+    const observations = [...html.matchAll(/<li><span>(Buyer|Action|Route)<\/span>/g)].map(
+      (match) => match[1]
+    );
+    assert.deepEqual(observations, ['Buyer', 'Action', 'Route']);
+    assert.match(html, /class="study__capture"/);
+  });
+
+  it('expresses engagement as interventions on one six-layer system', () => {
+    const engagement = html.slice(
+      html.indexOf('class="engagement__tracks"'),
+      html.indexOf('class="engagement__fit"')
+    );
+    assert.match(engagement, /intervention--expose/);
+    assert.match(engagement, /intervention--repair/);
+    assert.match(engagement, /intervention--rebuild/);
+    assert.equal((engagement.match(/<span><\/span>/g) || []).length, 18);
+    assert.doesNotMatch(engagement, /engagement__index[^>]*>\s*0[123]/);
   });
 });
 
@@ -945,11 +998,26 @@ describe('Progressive enhancement (doctrine §18)', () => {
     assert.match(orchestration, /import\(\s*['"]\.\/dimensional\.js['"]\s*\)/);
   });
 
-  it('gates the object on capability, motion preference and viewport', () => {
-    assert.match(orchestration, /reduceMotion\.matches/);
-    assert.match(orchestration, /getContext\('webgl2'\)/);
-    assert.match(orchestration, /innerWidth\s*<\s*600/);
-    assert.match(orchestration, /saveData/);
+  it('keeps approved materials on capable phones and honours resource preferences', () => {
+    const gate = orchestration.slice(
+      orchestration.indexOf('function shouldRenderObject()'),
+      orchestration.indexOf('function loadObject(')
+    );
+    const eligible = new Function('window', 'navigator', 'reduceMotion', 'webglAvailable',
+      `${gate}; return shouldRenderObject();`);
+    const check = (width, options = {}) => eligible(
+      { innerWidth: width },
+      { connection: { saveData: options.saveData ?? false }, deviceMemory: options.memory ?? 4 },
+      { matches: options.reduced ?? false },
+      () => options.webgl ?? true
+    );
+    for (const width of [360, 390, 768, 1280, 1600]) {
+      assert.equal(check(width), true, `capable ${width}px devices share the approved object`);
+      assert.equal(check(width, { reduced: true }), false);
+      assert.equal(check(width, { saveData: true }), false);
+      assert.equal(check(width, { memory: 1 }), false);
+      assert.equal(check(width, { webgl: false }), false);
+    }
   });
 
   it('excludes the decorative canvas from the accessibility tree', () => {
