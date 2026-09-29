@@ -699,7 +699,7 @@ refusals was simplified.
 
 ---
 
-## Launch blockers
+## Launch blockers (historical — superseded by `LAUNCH.md`)
 
 These are placeholders in the committed source and must be settled before the
 site is pointed at a real domain.

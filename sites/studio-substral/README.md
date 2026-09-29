@@ -32,7 +32,7 @@ build/                         build tooling, not published
 Deploy exactly these, and nothing else:
 
 ```
-index.html  robots.txt  sitemap.xml  assets/
+index.html  robots.txt  sitemap.xml  CNAME  .nojekyll  assets/
 ```
 
 `build/`, `src/`, and the three markdown files are repository-only. Follow the
@@ -122,5 +122,6 @@ Set `STUDIO_SUBSTRAL_CLIENT_ID` to route requests to a tenant other than
 
 ## Before launch
 
-`DOCTRINE-IMPLEMENTATION.md` has the full table. In short: the domain, the
-mailbox, and the intake origin are placeholders.
+`LAUNCH.md` is the deployment, DNS, mail, smoke-test and rollback runbook.
+The canonical domain and production API host are verified; publishing, the
+backend migration/deploy and mailbox setup remain launch gates.

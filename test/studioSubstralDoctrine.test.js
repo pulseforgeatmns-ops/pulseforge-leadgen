@@ -1262,7 +1262,8 @@ describe('Relationship to PulseForge (doctrine §24)', () => {
 
   it('keeps the intake endpoint out of the visible copy', () => {
     assert.doesNotMatch(copy, /railway\.app/i);
-    assert.match(assessmentJs, /api\/public\/website-assessment/);
+    assert.match(html, /action="https:\/\/pulseforge-leadgen-production.up.railway.app\/api\/public\/website-assessment"/);
+    assert.match(assessmentJs, /fetch\(form.action/);
   });
 });
 

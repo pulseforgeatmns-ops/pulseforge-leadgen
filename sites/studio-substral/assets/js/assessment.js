@@ -8,9 +8,6 @@
    search engine into it.
    ========================================================================== */
 
-const ENDPOINT =
-  'https://pulseforge-leadgen-production.up.railway.app/api/public/website-assessment';
-
 const FALLBACK_MAILBOX = 'hello@studiosubstral.com';
 
 /* Domains that cannot be the subject of an assessment. Kept in step with
@@ -90,7 +87,25 @@ export function initAssessment() {
   const form = document.querySelector('[data-assessment-form]');
   if (!form) return;
 
-  const status = form.querySelector('[data-assessment-status]');
+  const status = document.querySelector('[data-assessment-status]');
+  form.noValidate = true;
+  let signature = '';
+  let requestKey = '';
+  const keyFor = async (values) => {
+    const next = JSON.stringify(values);
+    if (signature === next && requestKey) return requestKey;
+    signature = next;
+    requestKey = crypto.randomUUID();
+    // Keep only a digest and an opaque retry key in this tab, never the fields.
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(next));
+      const hash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      const saved = JSON.parse(sessionStorage.getItem('substral-request') || 'null');
+      if (saved?.hash === hash && /^[a-zA-Z0-9_-]{16,80}$/.test(saved.key)) requestKey = saved.key;
+      sessionStorage.setItem('substral-request', JSON.stringify({ hash, key: requestKey }));
+    } catch { /* Storage restrictions do not prevent an in-memory retry. */ }
+    return requestKey;
+  };
   const submit = form.querySelector('[data-assessment-submit]');
   const domainField = form.elements.domain;
   const emailField = form.elements.email;
@@ -116,6 +131,7 @@ export function initAssessment() {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
 
+    if (submit.disabled) return;
     if (form.elements.company_website?.value.trim()) return;
 
     const parsed = normalizeDomainInput(domainField.value);
@@ -134,55 +150,63 @@ export function initAssessment() {
     domainField.value = parsed.domain;
 
     submit.disabled = true;
-    say(`Queuing ${parsed.domain} for assessment…`);
+    form.setAttribute('aria-busy', 'true');
+    say(`Sending your request for ${parsed.domain}…`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20000);
 
     try {
-      const response = await fetch(ENDPOINT, {
+      const values = {
+        domain: parsed.domain,
+        email: email.toLowerCase(),
+        context: String(form.elements.context?.value || '').trim(),
+      };
+      const response = await fetch(form.action, {
         method: 'POST',
+        credentials: 'omit',
+        signal: controller.signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          domain: parsed.domain,
-          email,
-          context: String(form.elements.context?.value || '').trim(),
-          referer: document.referrer || null,
+          ...values,
+          request_key: await keyFor(values),
+          company_website: form.elements.company_website?.value || '',
         }),
       });
 
       const body = await response.json().catch(() => ({}));
 
-      if (response.ok) {
+      if (response.ok && body.ok === true && body.request_id && body.review_mode === 'human') {
         form.hidden = true;
         say(
-          body.message ||
-            `${parsed.domain} is queued. We run the measurement pass, a person reviews the findings, and the assessment goes to ${email}. If the evidence does not support a recommendation, the report will say so.`,
+          `Your request for ${parsed.domain} has been received. A person will review the site and send a written assessment to ${email}. This is a request for human review, not an instant audit. Request reference: ${body.request_id}.`,
           'ok'
         );
+        status.focus();
         return;
       }
+      if (response.ok) throw new Error('Missing persistence confirmation');
 
       if (response.status === 429) {
-        say('That is more requests than we can take from one place right now. Try again shortly.', 'error');
+        say('Too many requests. Your details are still here. Please try again in an hour.', 'error');
       } else if (body.error_code && MESSAGES[body.error_code]) {
-        say(MESSAGES[body.error_code], 'error');
+        focusInvalid(body.details?.email && !body.details?.domain ? emailField : domainField, MESSAGES[body.error_code]);
       } else if (body.error) {
         say(String(body.error), 'error');
       } else {
         throw new Error(`HTTP ${response.status}`);
       }
     } catch {
-      // Never swallow the request. Hand the visitor a route that does not
-      // depend on our infrastructure being up.
-      const subject = encodeURIComponent(`Assessment request — ${parsed.domain}`);
-      const body = encodeURIComponent(
-        `Domain: ${parsed.domain}\nSend the assessment to: ${email}\n`
-      );
-      say('', 'error');
-      status.innerHTML =
-        'The queue did not accept that request. Nothing was lost — ' +
-        `<a class="textlink" href="mailto:${FALLBACK_MAILBOX}?subject=${subject}&body=${body}">send it to ${FALLBACK_MAILBOX}</a>` +
-        ' and we will pick it up from there.';
-      status.dataset.tone = 'error';
+      // A lost response can happen after a successful save. Retrying uses the
+      // same key, so it is safe without claiming that the first request failed.
+      say('We couldn’t confirm your request. Your details are still here. Please try again, or ', 'error');
+      const link = document.createElement('a');
+      link.className = 'textlink';
+      link.textContent = `email ${FALLBACK_MAILBOX}`;
+      link.href = `mailto:${FALLBACK_MAILBOX}?subject=${encodeURIComponent(`Assessment request — ${parsed.domain}`)}&body=${encodeURIComponent(`Domain: ${parsed.domain}\nReply to: ${email}\nDecision: ${form.elements.context?.value || ''}`)}`;
+      status.append(link, '.');
     } finally {
+      clearTimeout(timeout);
+      form.removeAttribute('aria-busy');
       submit.disabled = false;
     }
   });

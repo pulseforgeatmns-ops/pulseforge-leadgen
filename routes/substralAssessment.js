@@ -1,109 +1,107 @@
-/**
- * Public Studio Substral assessment intake.
- * Unauthenticated POST. Mirrors routes/walkthrough.js.
- *
- * The response never contains a finding about the submitted domain — only
- * confirmation that the request was accepted. See lib/substralAssessmentIntake.js
- */
-
+/** Public intake: a persisted request for human review, never an audit. */
 const express = require('express');
+const { createHash } = require('node:crypto');
 const pool = require('../db');
-const {
-  validateAssessmentPayload,
-  captureAssessmentRequest,
-} = require('../lib/substralAssessmentIntake');
-
-const router = express.Router();
-
-const rateBuckets = new Map();
-const RATE_WINDOW_MS = 60 * 60 * 1000;
-const RATE_MAX = 6;
-
-/**
- * Copy for each rejection reason. Deliberately plain: the instrument tells the
- * visitor what it could not do, and never implies anything about the site.
- */
+const { validateAssessmentPayload, captureAssessmentRequest } = require('../lib/substralAssessmentIntake');
+const ENDPOINT = '/api/public/website-assessment';
+const ALLOWED_ORIGINS = ['https://studiosubstral.com', 'https://www.studiosubstral.com'];
 const REASON_MESSAGES = Object.freeze({
   empty: 'Enter the domain you want assessed.',
   no_tld: 'That needs to be a full domain — example.com, not example.',
   malformed: 'That does not parse as a domain. Check for a typo.',
-  not_public:
-    'That address is not reachable from the public internet, so there is nothing to measure.',
-  not_a_subject:
-    'That is a search engine, directory or social profile. Enter the business’s own domain.',
+  not_public: 'Enter a public website address that our team can review.',
+  not_a_subject: 'That is a search engine, directory or social profile. Enter the business’s own domain.',
   own_domain: 'That one we already know about. Enter the domain you want assessed.',
   email: 'A valid email address is required — the assessment is sent, not displayed.',
+  request_key: 'Reload this page and try submitting the request again.',
 });
-
-function clientIp(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return forwarded || req.ip || req.socket?.remoteAddress || 'unknown';
-}
-
-function allowRequest(ip) {
-  const now = Date.now();
-  const prior = (rateBuckets.get(ip) || []).filter((ts) => now - ts < RATE_WINDOW_MS);
-  if (prior.length >= RATE_MAX) {
-    rateBuckets.set(ip, prior);
-    return false;
-  }
-  prior.push(now);
-  rateBuckets.set(ip, prior);
-  return true;
-}
-
 function successMessage(domain, email) {
-  return (
-    `${domain} is queued. We run the measurement pass, a person reviews the findings, ` +
-    `and the assessment goes to ${email}. If the evidence does not support a ` +
-    'recommendation, the report will say so.'
-  );
+  return `Your request for ${domain} has been received. A person will review the site and send a written assessment to ${email}. This is a request for human review, not an instant audit.`;
 }
-
-/**
- * POST /api/public/website-assessment
- * Body: domain, email, context (optional), referer (optional)
- */
-router.post('/api/public/website-assessment', async (req, res) => {
-  try {
-    // Honeypot: silently accept and discard.
-    if (String(req.body?.company_website || '').trim()) {
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+function reply(req, res, code, body) {
+  // Progressive enhancement: native POSTs never put personal details in a URL.
+  if (req.is('application/x-www-form-urlencoded') && req.accepts('html')) {
+    const title = body.ok ? 'Request received' : 'Request not confirmed';
+    return res.status(code).type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${title} — Studio Substral</title><style>body{margin:0;background:#11110f;color:#f0ede5;font:1.2rem/1.6 system-ui}main{max-width:42rem;margin:12vh auto;padding:2rem}a{color:#7fa890}</style><main><p>Studio Substral / Human reviewed</p><h1>${title}</h1><p>${escapeHtml(body.message || body.error)}</p>${body.ok ? `<p>Request reference: ${escapeHtml(body.request_id)}</p>` : '<p>Your browser’s Back button returns to the form so you can try again.</p>'}<a href="https://studiosubstral.com/#assessment">Return to Studio Substral</a></main></html>`);
+  }
+  return res.status(code).json(body);
+}
+function createAssessmentRouter({ db = pool, allowedOrigins = ALLOWED_ORIGINS, now = Date.now } = {}) {
+  const router = express.Router();
+  const buckets = new Map();
+  const windowMs = 60 * 60 * 1000;
+  const allow = (key, max) => {
+    const time = now();
+    for (const [id, entry] of buckets) if (time >= entry.until) buckets.delete(id);
+    if (!buckets.has(key) && buckets.size >= 10000) return false;
+    const entry = buckets.get(key) || { count: 0, until: time + windowMs };
+    buckets.set(key, entry);
+    entry.count += 1;
+    return entry.count <= max;
+  };
+  router.use(ENDPOINT, (req, res, next) => {
+    res.set({ 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'X-Content-Type-Options': 'nosniff' });
+    const origin = req.get('origin');
+    if (origin && !allowedOrigins.includes(origin)) {
+      return reply(req, res, 403, { error: 'Submit the form from studiosubstral.com.' });
+    }
+    if (origin) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.vary('Origin');
+    }
+    if (req.method === 'OPTIONS') {
+      res.set({ 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
       return res.status(204).end();
     }
-
-    if (!allowRequest(clientIp(req))) {
-      return res.status(429).json({
-        error: 'That is more requests than we can take from one place right now.',
-      });
+    // Never trust a visitor-supplied X-Forwarded-For. The transport cap also
+    // bounds traffic through a shared edge; the per-email cap applies below.
+    if (req.method === 'POST' && !allow(`peer:${req.socket?.remoteAddress || 'unknown'}`, 120)) {
+      res.set('Retry-After', '3600');
+      return reply(req, res, 429, { error: 'Too many requests. Please try again in an hour.' });
     }
-
-    const validated = validateAssessmentPayload(req.body);
-    if (!validated.ok) {
-      const code = validated.errors.domain || validated.errors.email;
-      return res.status(400).json({
-        error: REASON_MESSAGES[code] || REASON_MESSAGES.malformed,
-        error_code: code,
-        details: validated.errors,
+    next();
+  });
+  router.post(ENDPOINT, express.json({ limit: '8kb', strict: false }), express.urlencoded({ extended: false, limit: '8kb', parameterLimit: 8 }), async (req, res) => {
+    try {
+      if (!req.is(['application/json', 'application/x-www-form-urlencoded'])) {
+        return reply(req, res, 415, { error: 'Submit the form using the website.' });
+      }
+      if (String(req.body?.company_website || '').trim()) {
+        return reply(req, res, 400, { error: 'We could not accept that request. Please try again.' });
+      }
+      const validated = validateAssessmentPayload(req.body);
+      if (!validated.ok) {
+        const code = Object.values(validated.errors)[0];
+        return reply(req, res, 400, { error: REASON_MESSAGES[code] || REASON_MESSAGES.malformed, error_code: code, details: validated.errors });
+      }
+      const emailKey = createHash('sha256').update(validated.values.email).digest('hex');
+      if (!allow(`email:${emailKey}`, 6)) {
+        res.set('Retry-After', '3600');
+        return reply(req, res, 429, { error: 'Too many requests for this email address. Please try again in an hour.' });
+      }
+      const stored = await captureAssessmentRequest(db, validated.values);
+      return reply(req, res, stored.duplicate ? 200 : 201, {
+        ok: true, request_id: stored.id, domain: stored.domain, review_mode: 'human',
+        message: successMessage(stored.domain, validated.values.email),
       });
+    } catch (error) {
+      if (error.code === 'REQUEST_KEY_CONFLICT') return reply(req, res, 409, { error: error.message });
+      // Log the failure class, never visitor details or database credentials.
+      console.error('[substral-assessment] persistence failed:', error.code || error.name);
+      return reply(req, res, 503, { error: 'We could not confirm your request. Your details are still in the form. Please try again.' });
     }
-
-    const stored = await captureAssessmentRequest(pool, validated.values);
-
-    return res.status(201).json({
-      ok: true,
-      request_id: stored.id,
-      domain: stored.domain,
-      message: successMessage(stored.domain, validated.values.email),
+  });
+  router.use(ENDPOINT, (error, req, res, next) => {
+    if (!error) return next();
+    return reply(req, res, error.type === 'entity.too.large' ? 413 : 400, {
+      error: error.type === 'entity.too.large' ? 'That request is too large. Keep your decision context under 300 characters.' : 'We could not read that request. Please try again.',
     });
-  } catch (err) {
-    console.error('[substral-assessment] submit failed:', err.message);
-    return res.status(500).json({
-      error: 'We could not queue that request. Try again, or email hello@studiosubstral.com.',
-    });
-  }
-});
-
-module.exports = router;
-module.exports._rateBuckets = rateBuckets;
+  });
+  router._rateBuckets = buckets;
+  return router;
+}
+module.exports = createAssessmentRouter();
+module.exports.createAssessmentRouter = createAssessmentRouter;
 module.exports.REASON_MESSAGES = REASON_MESSAGES;
 module.exports.successMessage = successMessage;

@@ -100,6 +100,8 @@ function captureBrevoRawBody(req, _res, buf) {
   }
 }
 
+// This public form owns its body limit, CORS, and native-form responses.
+app.use('/', require('./routes/substralAssessment'));
 app.use(express.json({ verify: captureBrevoRawBody }));
 app.use(express.urlencoded({ extended: true, verify: captureBrevoRawBody }));
 app.use(cors());
@@ -253,7 +255,6 @@ app.use('/admin/field-visits', require('./routes/aoAdmin'));
 // Public marketing funnel — no session auth (see routes/scorecard.js)
 app.use('/', require('./routes/scorecard'));
 app.use('/', require('./routes/walkthrough'));
-app.use('/', require('./routes/substralAssessment'));
 app.use('/', require('./routes/leadQualificationReviews'));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be

@@ -23,6 +23,8 @@
 <link rel="manifest" href="assets/brand/site.webmanifest">
 <meta name="theme-color" content="#11110F">
 
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta property="og:locale" content="en_US">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Studio Substral">
 <meta property="og:title" content="Studio Substral — Look beneath the surface">
@@ -32,6 +34,7 @@
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="SUBSTRAL wordmark in warm off-white on warm charcoal, above the line Studio, Manchester, New Hampshire.">
+<meta name="twitter:image:alt" content="Studio Substral — Look beneath the surface. Website diagnosis and design, Manchester, New Hampshire.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Studio Substral — Look beneath the surface">
 <meta name="twitter:description" content="We measure what exists before deciding what should change.">
@@ -955,7 +958,7 @@
         </div>
       </div>
 
-      <form class="instrument" data-assessment-form novalidate>
+      <form class="instrument" data-assessment-form method="post" action="https://pulseforge-leadgen-production.up.railway.app/api/public/website-assessment">
         <div class="instrument__row">
           <div class="instrument__field">
             <label class="mono mono--accent" for="domain">Website to assess</label>
@@ -968,7 +971,8 @@
               autocomplete="url"
               spellcheck="false"
               placeholder="yourbusiness.com"
-              aria-describedby="domain-hint"
+              aria-describedby="domain-hint assessment-status"
+              maxlength="2048"
               required>
             <p class="mono mono--plain" id="domain-hint">
               Paste the address in any form &mdash; example.com or a full link
@@ -987,6 +991,8 @@
             <input
               class="field__input"
               id="email"
+              aria-describedby="assessment-status"
+              maxlength="254"
               name="email"
               type="email"
               autocomplete="email"
@@ -1011,8 +1017,8 @@
           <input id="company_website" name="company_website" type="text" tabindex="-1" autocomplete="off">
         </p>
 
-        <p class="instrument__status" data-assessment-status role="status" aria-live="polite"></p>
       </form>
+      <p class="instrument__status" id="assessment-status" data-assessment-status role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p>
     </div>
   </section>
 

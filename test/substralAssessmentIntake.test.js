@@ -215,6 +215,7 @@ describe('capture', () => {
     assert.deepEqual(result, {
       id: 4242,
       stored: true,
+      duplicate: false,
       domain: 'example.com',
       client_id: DEFAULT_CLIENT_ID,
     });
@@ -262,9 +263,9 @@ describe('capture', () => {
   it('confirms only that the request was queued', () => {
     const { successMessage } = require('../routes/substralAssessment');
     const message = successMessage('example.com', 'owner@example.com');
-    assert.match(message, /example\.com is queued/);
-    assert.match(message, /a person reviews the findings/);
-    assert.match(message, /the report will say so/);
+    assert.match(message, /request for example\.com has been received/);
+    assert.match(message, /A person will review the site/);
+    assert.match(message, /human review, not an instant audit/);
     assert.doesNotMatch(message, /\b(slow|broken|failing|poor|bad)\b/i);
   });
 });
@@ -287,10 +288,10 @@ describe('tenant scoping', () => {
     assert.equal(resolveClientId(), 7);
   });
 
-  it('ignores an unusable value rather than writing a broken row', () => {
-    for (const value of ['0', '-3', 'abc', '']) {
+  it('fails closed when an explicit review tenant is invalid', () => {
+    for (const value of ['0', '-3', 'abc', '7garbage', '1.5']) {
       process.env.STUDIO_SUBSTRAL_CLIENT_ID = value;
-      assert.equal(resolveClientId(), DEFAULT_CLIENT_ID, `value ${value}`);
+      assert.throws(() => resolveClientId(), /Invalid Studio Substral review tenant/);
     }
   });
 });
