@@ -25,9 +25,26 @@ const PASSING_SCORE = {
 
 const ISOLATED_MODULE_PATHS = [
   require.resolve('../db'),
+  require.resolve('../utils/miraContext'),
   require.resolve('@anthropic-ai/sdk'),
   require.resolve('../paigeAgent'),
 ];
+
+function writerTextBlock(text) {
+  return { content: [{ type: 'text', text }] };
+}
+
+function assertCompliantAnchorFacebookDraft(content, { usesMiraGrounding }) {
+  assert.equal(validateAnchorSocialCopy(content).ok, true);
+  assert.doesNotMatch(content, /[—–]/);
+  assert.doesNotMatch(content, /\bi wanted to reach out\b/i);
+  assert.doesNotMatch(content, /\bworth a (?:quick )?conversation\b/i);
+  assert.ok(
+    usesMiraGrounding(content, DETERMINISTIC_CONTENT_SAFE_MIRA),
+    'expected a concrete client-scoped Mira detail in public copy'
+  );
+  assert.match(content, /facility assessment/i);
+}
 
 function snapshotTestIsolation() {
   return {
@@ -54,10 +71,29 @@ function restoreTestIsolation(snapshot) {
   }
 }
 
-function buildPaigeHarness({ draftSequence = [] } = {}) {
+function installDeterministicMiraContextMock() {
+  const miraPath = require.resolve('../utils/miraContext');
+  require.cache[miraPath] = {
+    id: miraPath,
+    filename: miraPath,
+    loaded: true,
+    exports: {
+      buildMiraContext: async (clientId, options = {}) => ({
+        ...DETERMINISTIC_CONTENT_SAFE_MIRA,
+        channel: options.channel || DETERMINISTIC_CONTENT_SAFE_MIRA.channel,
+        client: { ...DETERMINISTIC_CONTENT_SAFE_MIRA.client, id: Number(clientId) },
+      }),
+    },
+  };
+}
+
+function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false } = {}) {
   process.env.ACTIVE_CLIENT_ID = '10';
   const writes = [];
   let generationCalls = 0;
+  let providerCalls = 0;
+
+  installDeterministicMiraContextMock();
 
   const dbPath = require.resolve('../db');
   require.cache[dbPath] = {
@@ -85,20 +121,6 @@ function buildPaigeHarness({ draftSequence = [] } = {}) {
         if (/FROM clients\s+WHERE id = \$1 AND active = true/i.test(sql)) {
           return { rows: [{ id: 10, name: 'Anchor Cleaning', city: 'Manchester', state: 'NH' }] };
         }
-        if (/AS send_count_24h/i.test(sql)) {
-          return { rows: [{
-            send_count_24h: 10,
-            open_count_24h: 7,
-            reply_count_24h: 2,
-            bounce_count_24h: 0,
-            warm_signal_count_24h: 3,
-            send_daily_average_previous_7d: 8,
-          }] };
-        }
-        if (/GROUP BY \(ran_at AT TIME ZONE/i.test(sql)) {
-          return { rows: [{ activity_date: '2026-07-05', send_count: 10 }] };
-        }
-        if (/to_regclass\('public\.daily_anchors'\)/i.test(sql)) return { rows: [{ tbl: null }] };
         return { rows: [] };
       },
     },
@@ -109,14 +131,15 @@ function buildPaigeHarness({ draftSequence = [] } = {}) {
     constructor() {
       this.messages = {
         create: async (request) => {
+          providerCalls += 1;
           const prompt = request.messages?.[0]?.content || '';
           if (/Score this social media post/i.test(prompt)) {
-            return { content: [{ type: 'text', text: JSON.stringify(PASSING_SCORE) }] };
+            return writerTextBlock(JSON.stringify(PASSING_SCORE));
           }
           generationCalls += 1;
           const queue = draftSequence.length ? [...draftSequence] : [COMPLIANT_BODY];
           const body = queue[Math.min(generationCalls - 1, queue.length - 1)];
-          return { content: [{ type: 'text', text: body }] };
+          return writerTextBlock(body);
         },
       };
     }
@@ -130,7 +153,13 @@ function buildPaigeHarness({ draftSequence = [] } = {}) {
 
   delete require.cache[require.resolve('../paigeAgent')];
   const paige = require('../paigeAgent');
-  return { paige, writes, getGenerationCalls: () => generationCalls };
+  return {
+    paige,
+    writes,
+    simulateMiraUnavailable,
+    getGenerationCalls: () => generationCalls,
+    getProviderCalls: () => providerCalls,
+  };
 }
 
 describe('Paige Anchor social doctrine reconciliation', () => {
@@ -236,8 +265,8 @@ describe('Paige Anchor social doctrine reconciliation', () => {
       const result = await paige.generateSocialContent({ client_id: 10, dryRun: true, channel: 'facebook_page' });
       assert.equal(result.success, true);
       assert.equal(result.outputs.length, 1);
-      assert.doesNotMatch(result.outputs[0].content, /[—–]/);
       assert.ok(getGenerationCalls() >= 2);
+      assertCompliantAnchorFacebookDraft(result.outputs[0].content, paige._test);
     });
 
     test('generic closer draft is regenerated before returning content', async () => {
@@ -250,8 +279,8 @@ describe('Paige Anchor social doctrine reconciliation', () => {
 
       const result = await paige.generateSocialContent({ client_id: 10, dryRun: true, channel: 'facebook_page' });
       assert.equal(result.success, true);
-      assert.equal(validateAnchorSocialCopy(result.outputs[0].content).ok, true);
       assert.ok(getGenerationCalls() >= 2);
+      assertCompliantAnchorFacebookDraft(result.outputs[0].content, paige._test);
     });
 
     test('walkthrough violation is regenerated before returning content', async () => {
@@ -264,13 +293,13 @@ describe('Paige Anchor social doctrine reconciliation', () => {
 
       const result = await paige.generateSocialContent({ client_id: 10, dryRun: true, channel: 'facebook_page' });
       assert.equal(result.success, true);
-      assert.equal(validateAnchorSocialCopy(result.outputs[0].content).ok, true);
       assert.ok(getGenerationCalls() >= 2);
+      assertCompliantAnchorFacebookDraft(result.outputs[0].content, paige._test);
     });
 
     test('violations remain blocked after max retries with no content returned', async () => {
       const violating = 'I wanted to reach out — worth a quick conversation?';
-      const { paige, getGenerationCalls } = buildPaigeHarness({
+      const { paige, getGenerationCalls, writes } = buildPaigeHarness({
         draftSequence: Array(8).fill(violating),
       });
 
@@ -278,6 +307,50 @@ describe('Paige Anchor social doctrine reconciliation', () => {
       assert.equal(result.success, false);
       assert.equal(result.outputs.length, 0);
       assert.ok(getGenerationCalls() >= 2);
+      assert.deepEqual(writes, []);
+      assert.match(String(result.channels_failed?.[0] || ''), /facebook_page/);
+    });
+
+    test('happy-path facebook_page generation uses seeded Mira context without retries', async () => {
+      const { paige, getGenerationCalls, writes } = buildPaigeHarness();
+
+      const result = await paige.generateSocialContent({ client_id: 10, dryRun: true, channel: 'facebook_page' });
+      assert.equal(result.success, true);
+      assert.equal(result.outputs.length, 1);
+      assert.equal(getGenerationCalls(), 1);
+      assert.deepEqual(writes, []);
+      assertCompliantAnchorFacebookDraft(result.outputs[0].content, paige._test);
+    });
+
+    test('Mira-unavailable aborts facebook_page generation without persisting artifacts', async () => {
+      const { paige, getGenerationCalls, getProviderCalls, writes } = buildPaigeHarness();
+      const loggedErrors = [];
+      const originalConsoleError = console.error;
+      console.error = (...args) => {
+        loggedErrors.push(args.map(String).join(' '));
+        originalConsoleError(...args);
+      };
+
+      try {
+        const result = await paige.generateSocialContent({
+          client_id: 10,
+          dryRun: true,
+          channel: 'facebook_page',
+          simulateMiraUnavailable: true,
+        });
+        assert.equal(result.success, false);
+        assert.equal(result.outputs.length, 0);
+        assert.equal(getGenerationCalls(), 0);
+        assert.equal(getProviderCalls(), 0);
+        assert.deepEqual(writes, []);
+        assert.match(String(result.channels_failed?.[0] || ''), /facebook_page/);
+        assert.match(
+          loggedErrors.join('\n'),
+          /Mira content-safe context is unavailable|fabricating specifics/i
+        );
+      } finally {
+        console.error = originalConsoleError;
+      }
     });
   });
 
