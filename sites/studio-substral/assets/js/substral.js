@@ -402,8 +402,10 @@ function webglAvailable() {
 function shouldRenderObject() {
   if (reduceMotion.matches) return false;
   if (!webglAvailable()) return false;
-  // On reduced-motion or resource-limited devices the CSS composition is the intended treatment.
-  // Capable phones share the approved materials; stage dimensions control scale.
+  // The live production trace showed that compiling three WebGL stages can
+  // stall the main thread on phone and tablet graphics even when WebGL exists.
+  // At those widths, the CSS composition is the intended treatment.
+  if (window.innerWidth < 992) return false;
   if (navigator.connection?.saveData) return false;
   if (typeof navigator.deviceMemory === 'number' && navigator.deviceMemory < 2) return false;
   return true;
