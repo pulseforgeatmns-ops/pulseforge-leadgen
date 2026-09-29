@@ -24,10 +24,15 @@ test('NH Family Dentistry — internal staff cleaning', () => {
 
   assert.equal(out.status, 'draft_ready');
   assert.equal(out.approvalPath, 'ao_can_send');
+  assert.equal(out.doctrineChecks.humanAnchorVoice, true);
   assert.match(out.emailDraft, /Tony/);
   assert.match(out.emailDraft, /internally/i);
   assert.match(out.emailDraft, /facility assessment/i);
+  assert.match(out.emailDraft, /We're not trying/i);
+  assert.match(out.alternateShortNote, /Following up on the internal cleaning support we discussed/i);
   assert.doesNotMatch(out.emailDraft, /just checking in/i);
+  assert.doesNotMatch(out.emailDraft, /would be happy to/i);
+  assert.doesNotMatch(out.alternateShortNote, /open to/i);
 });
 
 test('TD Bank / Nash — Mike-facing property management pain signal', () => {
@@ -42,7 +47,9 @@ test('TD Bank / Nash — Mike-facing property management pain signal', () => {
   assert.match(out.emailDraft, /Mike/);
   assert.doesNotMatch(out.emailDraft, /Hi Kristy/i);
   assert.match(out.emailDraft, /Kristy may have mentioned/i);
-  assert.match(out.emailDraft, /how cleaning or vendor issues are usually handled/i);
+  assert.match(out.emailDraft, /how cleaning or vendor issues usually get handled/i);
+  assert.match(out.emailDraft, /I'm not assuming/i);
+  assert.doesNotMatch(out.emailDraft, /would be happy/i);
   assert.equal(out.approvalPath, 'jake_review_recommended');
   assert.doesNotMatch(out.emailDraft, /terrible contractor/i);
 });
@@ -56,7 +63,9 @@ test('Phillips Exeter — relationship-first tone', () => {
 
   assert.match(out.emailDraft, /reconnect/i);
   assert.match(out.emailDraft, /Anchor Cleaning/i);
+  assert.match(out.emailDraft, /we're not going to push/i);
   assert.doesNotMatch(out.emailDraft, /quote today/i);
+  assert.doesNotMatch(out.emailDraft, /if it would be helpful/i);
   assert.match(out.emailDraft, /Jake/);
   assert.match(out.emailDraft, /Tony/);
   assert.equal(out.approvalPath, 'ao_can_send');
@@ -72,6 +81,8 @@ test('USPS Concord Post Office — procurement qualification', () => {
 
   assert.match(out.emailDraft, /regional or supplier process/i);
   assert.match(out.emailDraft, /outside cleaning support/i);
+  assert.match(out.emailDraft, /Following up on our conversation/i);
+  assert.doesNotMatch(out.emailDraft, /I wanted to follow up/i);
   assert.doesNotMatch(out.emailDraft, /price/i);
   assert.doesNotMatch(out.emailDraft, /quote/i);
 });
