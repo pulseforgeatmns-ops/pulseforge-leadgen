@@ -10,6 +10,8 @@ const {
   buildExecutionBundle,
   buildExecutionRecord,
   findSuccessfulExecutionRecord,
+  bindGovernedRefillSend,
+  ensureExecutionIdentityFields,
   EXECUTION_RECORD_STATUS,
   summarizeExecutionRecords,
 } = require('../../acquisition-mission/OutboundExecution');
@@ -161,17 +163,7 @@ async function executeOutboundBundle(input = {}) {
     const refillItem = input.governedRefillItem;
     const refillProspectId = String(refillItem?.candidate_id || refillItem?.snapshot?.candidateId || '');
     if (refillItem && refillProspectId && !bundle.sends.some(row => String(row.prospectId) === refillProspectId)) {
-      const snapshot = refillItem.snapshot || refillItem;
-      bundle.sends.push({
-        prospectId: refillProspectId,
-        companyId: String(snapshot.companyId || refillItem.company_id || ''),
-        email: String(snapshot.email || refillItem.email || ''),
-        toName: snapshot.toName || null,
-        queuePosition: bundle.sends.length + 1,
-        message: snapshot.message,
-        status: EXECUTION_RECORD_STATUS.QUEUED,
-        blockReason: null,
-      });
+      bundle.sends.push(bindGovernedRefillSend(bundle, refillItem, bundle.executionApproval));
     }
   }
   const records = [];
@@ -234,9 +226,14 @@ async function executeOutboundBundle(input = {}) {
     }
     sendableConsidered += 1;
 
+    const identified = ensureExecutionIdentityFields({
+      ...send,
+      missionId: bundle.missionId,
+      preparedArtifactRevision: approvalMeta.preparedArtifactRevision,
+    });
     const priorSuccess = findSuccessfulExecutionRecord(
       [...existingRecords, ...records],
-      send.executionIdentity
+      identified.executionIdentity
     );
     if (priorSuccess) {
       records.push({ ...priorSuccess, deduplicated: true });
@@ -246,7 +243,7 @@ async function executeOutboundBundle(input = {}) {
     const command = {
       toEmail: send.email, toName: send.toName, subject: send.message.subject, body: send.message.body,
       tags: [`mission:${bundle.missionId}`, `prospect:${send.prospectId}`, `revision:${approvalMeta.preparedArtifactRevision}`],
-      idempotencyKey: send.idempotencyKey, sender: explicitSender, requireExplicitSender: true,
+      idempotencyKey: identified.idempotencyKey, sender: explicitSender, requireExplicitSender: true,
     };
     if (governedApproval) await sendEmail.beforeAttempt(command);
     const attemptedAt = nowIso();
@@ -260,8 +257,8 @@ async function executeOutboundBundle(input = {}) {
       status: EXECUTION_RECORD_STATUS.ATTEMPTED,
       executionRequestId,
       transactionId,
-      executionIdentity: send.executionIdentity,
-      idempotencyKey: send.idempotencyKey,
+      executionIdentity: identified.executionIdentity,
+      idempotencyKey: identified.idempotencyKey,
       attemptedAt,
       payload: {
         email: send.email,
@@ -321,4 +318,5 @@ function resolveProspectFilter(input = {}, executionRequest = null) {
 module.exports = {
   executeOutboundBundle,
   resolveExecuteSender,
+  bindGovernedRefillSend,
 };

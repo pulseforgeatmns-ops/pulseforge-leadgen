@@ -181,7 +181,7 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.equal((await svc.store.items((await svc.store.envelope('2026-09-18')).id)).filter(x => x.status==='sent').length, 5);
     clock = new Date('2026-09-19T14:00:00Z'); assert.equal((await svc.tick()).halted, 'weekend'); assert.equal(calls, 5);
   });
-  await t.test('ambiguous provider failure is durable and blocks retries; explicit reconciliation never resends', async () => {
+    await t.test('ambiguous provider failure is durable and blocks retries; explicit reconciliation never resends', async () => {
     await reset(); await activate(); fault = 'timeout after acceptance';
     await svc.tick(); assert.equal(calls, 1);
     const item = (await svc.store.items((await svc.store.envelope('2026-09-18')).id)).find(x => x.status==='uncertain');
@@ -190,6 +190,87 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     await svc.reconcile(item.id, 'accepted', 'recovered-id', 'Provider activity export confirms acceptance', actor);
     assert.equal((await svc.store.items(item.envelope_id)).find(x => x.id===item.id).provider_message_id, 'recovered-id');
     assert.equal(calls, 1);
+  });
+  await t.test('pre-provider persist failure releases the claim so a later retry cannot duplicate a send', async () => {
+    await reset(); await activate();
+    let persistPhase = 'before';
+    adapterSet.execute = async (_envelope, item, _program, send) => {
+      const command = { toEmail: item.email, subject: item.snapshot.message.subject,
+        body: item.snapshot.message.body, sender: { email: item.snapshot.sender.senderEmail } };
+      await send.beforeAttempt(command);
+      if (persistPhase === 'before') {
+        throw Object.assign(new Error('null value in column "execution_identity" of relation "acquisition_mission_outbound_executions" violates not-null constraint'), { code: '23502' });
+      }
+      const result = await send(command);
+      if (persistPhase === 'after') {
+        throw Object.assign(new Error('null value in column "execution_identity" of relation "acquisition_mission_outbound_executions" violates not-null constraint'), { code: '23502' });
+      }
+      return result;
+    };
+    assert.equal((await svc.tick()).halted, '23502');
+    assert.equal(calls, 0);
+    const released = (await svc.store.items((await svc.store.envelope('2026-09-18')).id))[0];
+    assert.equal(released.status, 'pending');
+    assert.equal(released.attempted_at, null);
+    persistPhase = 'ok';
+    assert.equal((await svc.tick()).sent, 1);
+    assert.equal(calls, 1);
+    assert.equal((await svc.store.items(released.envelope_id)).find(x => x.id === released.id).status, 'sent');
+  });
+  await t.test('provider accept plus later persist failure is uncertain; retry cannot send a second message', async () => {
+    await reset(); await activate();
+    adapterSet.execute = async (_envelope, item, _program, send) => {
+      const command = { toEmail: item.email, subject: item.snapshot.message.subject,
+        body: item.snapshot.message.body, sender: { email: item.snapshot.sender.senderEmail } };
+      await send.beforeAttempt(command);
+      const result = await send(command);
+      throw Object.assign(new Error('null value in column "execution_identity" of relation "acquisition_mission_outbound_executions" violates not-null constraint'), { code: '23502' });
+    };
+    await svc.tick();
+    assert.equal(calls, 1);
+    const item = (await svc.store.items((await svc.store.envelope('2026-09-18')).id)).find(x => x.status === 'uncertain');
+    assert.ok(item);
+    adapterSet.execute = async (_envelope, nextItem, _program, send) => {
+      const command = { toEmail: nextItem.email, subject: nextItem.snapshot.message.subject,
+        body: nextItem.snapshot.message.body, sender: { email: nextItem.snapshot.sender.senderEmail } };
+      await send.beforeAttempt(command);
+      return send(command);
+    };
+    assert.equal((await svc.tick()).halted, 'uncertain_send_requires_reconciliation');
+    assert.equal(calls, 1);
+    await svc.reconcile(item.id, 'accepted', 'recovered-after-persist', 'Brevo request exists for the recipient at the attempt timestamp.', actor);
+    assert.equal(calls, 1);
+    assert.equal((await svc.store.items(item.envelope_id)).find(x => x.id === item.id).status, 'sent');
+  });
+  await t.test('explicit provider reject is failed not uncertain; not_accepted reconciliation returns eligibility', async () => {
+    await reset(); await activate();
+    let rejectOnce = true;
+    adapterSet.send = async () => {
+      calls += 1;
+      if (rejectOnce) {
+        rejectOnce = false;
+        return { success: false, providerErrorCode: 'brevo_http_400', providerErrorMessage: 'invalid recipient', error: 'invalid recipient' };
+      }
+      return { success: true, providerMessageId: `provider-${calls}` };
+    };
+    assert.equal((await svc.tick()).halted, 'provider_rejected');
+    assert.equal(calls, 1);
+    const rejected = (await svc.store.items((await svc.store.envelope('2026-09-18')).id)).find(x => x.status === 'failed');
+    assert.ok(rejected);
+    assert.equal((await svc.tick()).halted, 'spacing');
+    await ageAttempts();
+    assert.equal((await svc.tick()).sent, 1);
+    assert.equal(calls, 2);
+    const second = (await svc.store.items(rejected.envelope_id)).find(x => x.status === 'sent' && x.id !== rejected.id);
+    assert.ok(second);
+    await pool.query("UPDATE acquisition_outbound_items SET status='uncertain',reason='abandoned_attempt' WHERE id=$1", [rejected.id]);
+    const released = await svc.reconcile(rejected.id, 'not_accepted', null,
+      'Brevo has no transactional request for this recipient around the attempt timestamp.', actor);
+    assert.equal(released.retryAllowed, true);
+    const pending = (await svc.store.items(rejected.envelope_id)).find(x => x.id === rejected.id);
+    assert.equal(pending.status, 'pending');
+    assert.equal(pending.reason, 'reconciled_not_sent');
+    assert.equal(pending.attempted_at, null);
   });
   await t.test('reply capture suppresses immediately even before Riley fails; replay creates one reply', async () => {
     await reset(); await svc.tick(); await activate();

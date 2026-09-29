@@ -237,6 +237,24 @@ class GovernedOutboundStore {
       await db.query('COMMIT');
     } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
   }
+  async releaseUnsent(item, reason, extras = {}) {
+    const db = await this.pool.connect();
+    try {
+      await db.query('BEGIN');
+      const row = (await db.query(`UPDATE acquisition_outbound_items SET status='pending',reason=$2,
+        attempted_at=NULL,provider_message_id=NULL WHERE id=$1 AND status IN ('attempted','uncertain') RETURNING *`,
+      [item.id, reason])).rows[0];
+      if (!row) fail('item_not_uncertain');
+      const eventType = extras.reconciled ? 'send_reconciled' : 'send_released_unsent';
+      await this.event(eventType, extras.reconciled ? [item.id, 'not_accepted'] : [item.id, reason, Date.now()], {
+        itemId: item.id, envelopeId: item.envelope_id, outcome: 'not_accepted', reason,
+        providerMessageId: null, evidence: extras.evidence || null, actor: extras.actor || null,
+        providerOutcome: extras.providerOutcome || 'PROVIDER_CONFIRMED_NOT_SENT',
+      }, db);
+      await db.query('COMMIT');
+      return row;
+    } catch (e) { await db.query('ROLLBACK'); throw e; } finally { db.release(); }
+  }
   async claim(item, program, day, at = new Date()) {
     // All counters and the final enabled/suppression checks share this short transaction.
     // The durable attempted marker commits BEFORE the irreversible provider call.

@@ -52,6 +52,56 @@ function deriveIdempotencyKey(executionIdentity) {
   return `exec_${String(executionIdentity || '').slice(0, 32)}`;
 }
 
+function persistableExecutionIdentityError(code) {
+  return Object.assign(new Error(code), { code });
+}
+
+function ensureExecutionIdentityFields(record = {}) {
+  const missionId = asText(record.missionId);
+  const prospectId = asText(record.prospectId);
+  const preparedArtifactRevision = asText(record.preparedArtifactRevision);
+  let executionIdentity = asText(record.executionIdentity) || null;
+  if (!executionIdentity && missionId && prospectId && preparedArtifactRevision) {
+    executionIdentity = deriveExecutionIdentity({ missionId, prospectId, preparedArtifactRevision });
+  }
+  return {
+    ...record,
+    executionIdentity,
+    idempotencyKey: asText(record.idempotencyKey) || (executionIdentity ? deriveIdempotencyKey(executionIdentity) : null),
+  };
+}
+
+function assertPersistableExecutionRecord(record = {}) {
+  const filled = ensureExecutionIdentityFields(record);
+  if (!asText(filled.id)) throw persistableExecutionIdentityError('execution_record_id_required');
+  if (!asText(filled.missionId)) throw persistableExecutionIdentityError('execution_mission_id_required');
+  if (!asText(filled.prospectId)) throw persistableExecutionIdentityError('execution_prospect_id_required');
+  if (!asText(filled.preparedArtifactRevision)) throw persistableExecutionIdentityError('execution_revision_required');
+  if (!asText(filled.status)) throw persistableExecutionIdentityError('execution_status_required');
+  if (!asText(filled.executionIdentity)) throw persistableExecutionIdentityError('execution_identity_required');
+  return filled;
+}
+
+function bindGovernedRefillSend(bundle, refillItem, approvalMeta = {}) {
+  const snapshot = refillItem?.snapshot || refillItem || {};
+  const prospectId = asText(refillItem?.candidate_id || snapshot.candidateId || snapshot.prospectId);
+  const preparedArtifactRevision = asText(
+    approvalMeta.preparedArtifactRevision || bundle?.executionApproval?.preparedArtifactRevision || snapshot.revision
+  );
+  return ensureExecutionIdentityFields({
+    prospectId,
+    companyId: String(snapshot.companyId || refillItem?.company_id || ''),
+    email: String(snapshot.email || refillItem?.email || ''),
+    toName: snapshot.toName || null,
+    queuePosition: (bundle?.sends || []).length + 1,
+    message: snapshot.message,
+    status: EXECUTION_RECORD_STATUS.QUEUED,
+    blockReason: null,
+    missionId: bundle?.missionId,
+    preparedArtifactRevision,
+  });
+}
+
 function resolvePaigeVariant(paigePayload = {}, variantLabelOrOpts = 'Primary') {
   const variants = Array.isArray(paigePayload.variants) ? paigePayload.variants : [];
   const opts = variantLabelOrOpts && typeof variantLabelOrOpts === 'object'
@@ -317,27 +367,28 @@ function buildExecutionBundle(input = {}) {
 
 function buildExecutionRecord(input = {}) {
   const at = input.attemptedAt || input.sentAt || nowIso();
+  const identified = ensureExecutionIdentityFields(input);
   return {
-    id: input.id || newId('amo_send'),
-    missionId: input.missionId,
-    tenantId: input.tenantId != null ? String(input.tenantId) : null,
-    prospectId: input.prospectId,
-    preparedArtifactRevision: input.preparedArtifactRevision,
-    executionApprovalContributionId: input.executionApprovalContributionId || null,
-    provider: input.provider || 'brevo',
-    providerMessageId: input.providerMessageId || null,
-    status: input.status || EXECUTION_RECORD_STATUS.QUEUED,
-    providerErrorCode: input.providerErrorCode || null,
-    providerErrorMessage: input.providerErrorMessage || null,
-    executionRequestId: input.executionRequestId || null,
-    transactionId: input.transactionId || null,
-    executionIdentity: input.executionIdentity || null,
-    idempotencyKey: input.idempotencyKey || null,
-    attemptedAt: input.attemptedAt || at,
-    sentAt: input.sentAt || (input.status === EXECUTION_RECORD_STATUS.SENT ? at : null),
-    createdAt: input.createdAt || at,
-    updatedAt: at,
-    payload: input.payload || {},
+    id: identified.id || newId('amo_send'),
+    missionId: identified.missionId,
+    tenantId: identified.tenantId != null ? String(identified.tenantId) : null,
+    prospectId: identified.prospectId,
+    preparedArtifactRevision: identified.preparedArtifactRevision,
+    executionApprovalContributionId: identified.executionApprovalContributionId || null,
+    provider: identified.provider || 'brevo',
+    providerMessageId: identified.providerMessageId || null,
+    status: identified.status || EXECUTION_RECORD_STATUS.QUEUED,
+    providerErrorCode: identified.providerErrorCode || null,
+    providerErrorMessage: identified.providerErrorMessage || null,
+    executionRequestId: identified.executionRequestId || null,
+    transactionId: identified.transactionId || null,
+    executionIdentity: identified.executionIdentity || null,
+    idempotencyKey: identified.idempotencyKey || null,
+    attemptedAt: identified.attemptedAt || at,
+    sentAt: identified.sentAt || (identified.status === EXECUTION_RECORD_STATUS.SENT ? at : null),
+    createdAt: identified.createdAt || at,
+    updatedAt: identified.updatedAt || at,
+    payload: identified.payload || {},
   };
 }
 
@@ -379,6 +430,9 @@ module.exports = {
   EXECUTION_RECORD_STATUS,
   deriveExecutionIdentity,
   deriveIdempotencyKey,
+  ensureExecutionIdentityFields,
+  assertPersistableExecutionRecord,
+  bindGovernedRefillSend,
   resolvePaigeVariant,
   verifyArtifactRevision,
   isGovernorBlocked,

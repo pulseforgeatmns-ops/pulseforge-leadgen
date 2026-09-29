@@ -203,6 +203,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
   async function dispatch(program, envelope, item) {
     let called = false;
     let claimed = false;
+    let acceptedMessageId = null;
     const beforeAttempt = async command => {
       if (claimed || called) fail('provider_call_budget_exceeded');
       const current = await store.program();
@@ -253,12 +254,17 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       try {
         const result = await sendFn(command);
         const messageId = result?.providerMessageId || result?.messageId;
+        const rejected = !result?.success && /^brevo_http_4/.test(String(result?.providerErrorCode || ''));
+        if (rejected) {
+          await store.finish(item, 'failed', result.providerErrorCode || 'provider_rejected');
+          fail('provider_rejected');
+        }
         // Transport failures include timeouts after acceptance. Never retry them.
         if (!result?.success || !messageId) {
           await store.finish(item, 'uncertain', result?.providerErrorCode || 'provider_acceptance_unknown', messageId);
           fail('provider_acceptance_unknown');
         }
-        await store.finish(item, 'sent', null, messageId);
+        acceptedMessageId = messageId;
         return result;
       } catch (e) {
         const row = (await store.items(envelope.id)).find(x => x.id === item.id);
@@ -267,9 +273,21 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       }
     };
     guardedSend.beforeAttempt = beforeAttempt;
-    const result = await adapters.execute(envelope, item, program, guardedSend);
-    if (!called) fail('canonical_execution_did_not_dispatch');
-    return result;
+    try {
+      const result = await adapters.execute(envelope, item, program, guardedSend);
+      if (!called) fail('canonical_execution_did_not_dispatch');
+      if (!acceptedMessageId) fail('provider_acceptance_unknown');
+      const live = (await store.items(envelope.id)).find(x => x.id === item.id);
+      if (live?.status === 'attempted') await store.finish(item, 'sent', null, acceptedMessageId);
+      return result;
+    } catch (e) {
+      const row = (await store.items(envelope.id)).find(x => x.id === item.id);
+      if (row?.status === 'attempted') {
+        if (called) await store.finish(item, 'uncertain', 'provider_or_persistence_error');
+        else await store.releaseUnsent(item, e.code || 'pre_provider_persist_failed');
+      }
+      throw e;
+    }
   }
   async function refillEnvelope(program, source, day, envelope, counts) {
     const items = await store.items(envelope.id);
@@ -455,10 +473,18 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
         await pool.query(`UPDATE acquisition_mission_outbound_executions SET status='sent',provider_message_id=$3,
           sent_at=COALESCE(sent_at,attempted_at),updated_at=now() WHERE mission_id=$1 AND prospect_id=$2 AND status IN ('attempted','failed')`,
         [envelope.mission_id, item.candidate_id, providerMessageId]);
+        await store.finish(item, 'sent', 'operator_reconciled', providerMessageId);
+        await store.event('send_reconciled', [itemId, outcome], {
+          itemId, outcome, providerMessageId, evidence, actor: String(actor.id),
+          providerOutcome: 'PROVIDER_CONFIRMED_SENT',
+        });
+      } else {
+        await store.releaseUnsent(item, 'reconciled_not_sent', {
+          reconciled: true, evidence, actor: String(actor.id),
+          providerOutcome: 'PROVIDER_CONFIRMED_NOT_SENT',
+        });
       }
-      await store.finish(item, outcome === 'accepted' ? 'sent' : 'failed', 'operator_reconciled', providerMessageId);
-      await store.event('send_reconciled', [itemId, outcome], { itemId, outcome, providerMessageId, evidence, actor: String(actor.id) });
-      return { itemId, outcome, retryAllowed: false };
+      return { itemId, outcome, retryAllowed: outcome !== 'accepted' };
     });
   }
   return { authorize, setMode, tick, reconcile, initializePreparation, replenish, resumeReservedPreparation, status: () => store.status(), store };
