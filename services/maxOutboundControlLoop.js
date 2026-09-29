@@ -50,6 +50,7 @@ const {
   observabilityFromRefill,
 } = require('./governedOutboundRefill');
 const { clock } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+const { assertGovernedOutboundTenantId } = require('./governedOutboundTenant');
 
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
@@ -194,16 +195,73 @@ function buildControlPlan({
   };
 }
 
+function firstPresent(...values) {
+  for (const value of values) {
+    if (value == null) continue;
+    const text = String(value).trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+function resolveReplenishmentTenantContext(input = {}) {
+  const raw = firstPresent(
+    input.tenantId,
+    input.clientId,
+    input.program && input.program.tenant_id,
+    input.program && input.program.tenantId,
+    input.store && input.store.tenantId,
+    input.store && input.store.clientId,
+    input.scoutContext && input.scoutContext.tenantId,
+    input.scoutContext && input.scoutContext.clientId,
+    input.scoutContext && input.scoutContext.client_id,
+    input.source && input.source.tenantId,
+    input.source && input.source.tenant_id,
+  );
+  if (!raw) {
+    throw Object.assign(new Error('replenishment_tenant_required'), {
+      code: 'replenishment_tenant_required',
+    });
+  }
+  const tenantId = assertGovernedOutboundTenantId(raw);
+  return Object.freeze({
+    tenantId,
+    clientId: Number(tenantId),
+  });
+}
+
+function resolveScoutRampAllowedCities(scope = {}) {
+  return resolveMissionAllowedCities({
+    missionCities: scope.cities,
+    cities: scope.cities,
+    region: scope.region,
+    geography: {
+      cities: scope.cities,
+      region: scope.region,
+      scope: scope.scope,
+    },
+  });
+}
+
 function sourceScope(source) {
   const payload = source?.payload || source || {};
   const structured = payload.structuredMission || {};
   const market = structured.market || {};
   const geography = structured.geography || {};
+  const offer = structured.offer || {};
   return {
-    segment: normalizeVertical(market.segment || payload.targetSegment || ''),
+    segment: normalizeVertical(market.segment || payload.targetSegment || source?.target_segment || ''),
     industry: normalizeVertical(market.industry || ''),
     region: geography.region || null,
+    scope: geography.scope || null,
     cities: Array.isArray(geography.cities) ? geography.cities.map(x => String(x).toLowerCase()) : [],
+    commercialCapability: firstPresent(
+      market.capability,
+      market.commercialCapability,
+      offer.capability,
+      payload.commercialCapability,
+    ),
+    businessType: firstPresent(market.businessType, payload.businessType),
   };
 }
 
@@ -303,20 +361,26 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
   return { clean, excluded, scope, exclusionCounts };
 }
 
-function scoutInput(program, source, plan) {
+function scoutInput(program, source, plan, tenantContext = null) {
   const scope = sourceScope(source);
   const payload = source?.payload || {};
-  const tenantId = String(program.tenant_id || '10');
-  const region = scope.region || scope.cities.join(', ') || (tenantId === '13' ? 'United States' : 'Greater Manchester');
-  const segment = scope.segment || (tenantId === '13' ? 'small_business_owner' : 'short_term_rental');
-  const commercialCapability = tenantId === '13' ? 'business_transformation' : 'commercial_cleaning';
-  const businessType = tenantId === '13' ? 'founder_led_smb' : 'commercial_cleaning';
+  const tenant = tenantContext || resolveReplenishmentTenantContext({ program, source });
+  const tenantId = tenant.tenantId;
+  const region = firstPresent(scope.region, (scope.cities || []).join(', '));
+  if (!region) {
+    throw Object.assign(new Error('replenishment_geography_required'), {
+      code: 'replenishment_geography_required',
+    });
+  }
+  const segment = firstPresent(scope.segment, scope.industry);
+  const commercialCapability = firstPresent(scope.commercialCapability);
+  const businessType = firstPresent(scope.businessType, scope.industry, segment);
   return {
     authorizedTenantId: tenantId,
     tenantId,
     workflow: 'outbound_inventory_replenishment',
     inventoryDeficit: plan.deficit,
-    question: `Max needs Scout to replenish verified outbound inventory for ${segment} in ${region}.`,
+    question: `Max needs Scout to replenish verified outbound inventory for ${segment || 'the approved segment'} in ${region}.`,
     objective: `Find enough net-new, in-scope prospects to close an outbound inventory deficit of ${plan.deficit} while preserving ownership, prior-contact, DNC and suppression boundaries.`,
     reason: `Planning daily capacity is ${plan.planningDailyCapacity ?? plan.safeDailyCapacity} (dispatch now ${plan.dispatchCapacityNow ?? 0}; Emmett recommends ${plan.recommendedSafeDailyCapacity ?? plan.safeDailyCapacity}); Max requires a ${plan.targetDays}-day buffer of ${plan.targetInventory}, but only ${plan.cleanInventory} clean prospects are currently available.`,
     authority: 'observe',
@@ -324,13 +388,14 @@ function scoutInput(program, source, plan) {
     businessContext: {
       serviceGeography: region,
       commercialCapability,
-      preferredSegments: [segment],
+      preferredSegments: segment ? [segment] : [],
       acquisitionDirection: source?.objective || payload.objective || null,
       exclusions: payload.constraints || [],
     },
     targetContext: {
       geography: region,
-      segments: [segment],
+      geographyScope: scope.scope || null,
+      segments: segment ? [segment] : [],
       businessType,
       desiredSignals: ['decision_maker', 'service_gap', 'portfolio_growth', 'turnover_support'],
     },
@@ -342,7 +407,14 @@ async function persistDiscoveredCompanies(pool, store, {
   companies = [],
   searchDefinition = null,
   scoutContext = {},
+  tenantId = null,
 } = {}) {
+  const tenant = resolveReplenishmentTenantContext({
+    store,
+    scoutContext,
+    tenantId,
+    clientId: scoutContext.clientId || scoutContext.client_id,
+  });
   let inserted = 0;
   const counters = createReplenishmentAdmissionCounters();
     counters.discovered = companies.length;
@@ -422,10 +494,10 @@ async function persistDiscoveredCompanies(pool, store, {
         client_id, company, website_url, domain, vertical, location, source,
         enrichment_attempts, last_attempt_at, notes
       )
-      SELECT $7,$1,$2,$3,$4,$5,'max_buffer_replenishment',0,NULL,$6
+      SELECT $8,$1,$2,$3,$4,$5,'max_buffer_replenishment',0,NULL,$6
       WHERE NOT EXISTS (
         SELECT 1 FROM scout_unenriched u
-        WHERE u.client_id=$7 AND (
+        WHERE u.client_id=$8 AND (
           lower(u.domain)=lower($3) OR lower(trim(u.company))=lower(trim($1))
         )
         AND NOT (
@@ -443,7 +515,7 @@ async function persistDiscoveredCompanies(pool, store, {
       company.location || admission.provenance?.discoveryCity || null,
       notes,
       ENRICHABLE_SCOUT_VERTICALS.map(v => v.toLowerCase()),
-      Number(scoutContext.clientId || scoutContext.client_id || 10),
+      tenant.clientId,
     ]);
     inserted += result.rowCount;
     if (result.rowCount) counters.admittedToEnrichment += 1;
@@ -451,13 +523,18 @@ async function persistDiscoveredCompanies(pool, store, {
   }
 
   clampCohortCounters(counters);
-  return { inserted, admission: counters };
+  return {
+    inserted,
+    admission: counters,
+    tenantId: tenant.tenantId,
+    clientId: tenant.clientId,
+  };
 }
 
-function mapReuseCompanyRows(rows) {
+function mapReuseCompanyRows(rows, tenantId) {
   return rows.map(row => ({
     id: String(row.id),
-    tenantId: String(row.tenant_id || row.client_id || '10'),
+    tenantId: String(row.tenant_id || row.client_id || tenantId || ''),
     name: row.name,
     website: row.website || (row.domain ? `https://${row.domain}` : null),
     industry: row.vertical || 'short_term_rental',
@@ -467,17 +544,19 @@ function mapReuseCompanyRows(rows) {
   }));
 }
 
-async function loadReuseCompanies(pool, clientId = 10) {
+async function loadReuseCompanies(pool, clientId) {
+  const tenant = resolveReplenishmentTenantContext({ clientId });
   const { rows } = await pool.query(`
     SELECT c.id,c.name,c.domain,c.website,c.location,p.vertical,p.icp_score,p.updated_at
     FROM companies c
     LEFT JOIN prospects p ON p.company_id=c.id AND p.client_id=c.client_id
     WHERE c.client_id=$1
-  `, [Number(clientId)]);
-  return mapReuseCompanyRows(rows);
+  `, [tenant.clientId]);
+  return mapReuseCompanyRows(rows, tenant.tenantId);
 }
 
-async function runEnrichmentBatches(enrichment, pool, requested) {
+async function runEnrichmentBatches(enrichment, pool, requested, tenantContext) {
+  const tenant = resolveReplenishmentTenantContext(tenantContext || {});
   const summaries = [];
   let promoted = 0;
   let recovered = 0;
@@ -491,7 +570,8 @@ async function runEnrichmentBatches(enrichment, pool, requested) {
   for (let i = 0; i < batches; i += 1) {
     const remaining = Math.max(1, requested - promoted - recovered);
     const summary = await enrichment.run({
-      client_id: 10,
+      client_id: tenant.clientId,
+      tenantId: tenant.tenantId,
       limit: Math.min(DEFAULT_ENRICHMENT_BATCH, remaining),
       retryHours: 1,
       verticals: ENRICHABLE_SCOUT_VERTICALS,
@@ -508,32 +588,43 @@ async function runEnrichmentBatches(enrichment, pool, requested) {
   return { promoted, recovered, emailResolved, emailVerified, considered, summaries };
 }
 
-async function defaultScoutRamp({ pool, store, program, source, plan, logger = console, skipVerificationRetry = false }) {
-  const enrichment = require('../scoutUnenrichedEnrichmentAgent');
-  const first = await runEnrichmentBatches(enrichment, pool, plan.deficit);
+async function defaultScoutRamp({
+  pool,
+  store,
+  program,
+  source,
+  plan,
+  logger = console,
+  skipVerificationRetry = false,
+  enrichment = null,
+  runDiscovery = null,
+} = {}) {
+  const tenant = resolveReplenishmentTenantContext({ program, store, source });
+  const enricher = enrichment || require('../scoutUnenrichedEnrichmentAgent');
+  const first = await runEnrichmentBatches(enricher, pool, plan.deficit, tenant);
   let promoted = first.promoted + first.recovered;
   let discovery = null;
   let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
 
   if (promoted < plan.deficit) {
     const scope = sourceScope(source);
-    const allowedCities = resolveMissionAllowedCities({
-      missionCities: scope.cities,
-      region: scope.region,
-      service_area: ['Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn'],
-    });
-    discovery = await require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(
-      scoutInput(program, source, plan),
+    const allowedCities = resolveScoutRampAllowedCities(scope);
+    const discover = runDiscovery
+      || ((input, opts) => require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(input, opts));
+    discovery = await discover(
+      scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant),
       {
-        loadCompanies: async () => loadReuseCompanies(pool, program.tenant_id || store.clientId),
+        loadCompanies: async () => loadReuseCompanies(pool, tenant.clientId),
         persistCompanies: async input => {
           persisted = await persistDiscoveredCompanies(pool, store, {
             ...input,
+            tenantId: tenant.tenantId,
             scoutContext: {
               scope,
               allowedCities,
               serviceAreas: allowedCities,
-              clientId: program.tenant_id || store.clientId,
+              clientId: tenant.clientId,
+              tenantId: tenant.tenantId,
             },
           });
           return persisted;
@@ -543,7 +634,7 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
     );
 
     if (persisted.inserted > 0 && promoted < plan.deficit) {
-      const second = await runEnrichmentBatches(enrichment, pool, plan.deficit - promoted);
+      const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenant);
       promoted += second.promoted + second.recovered;
       first.promoted += second.promoted;
       first.recovered += second.recovered;
@@ -571,7 +662,7 @@ async function defaultScoutRamp({ pool, store, program, source, plan, logger = c
   const recoveredExisting = first.recovered + Number(persisted.admission?.recovered || 0);
   const verificationRetry = skipVerificationRetry
     ? emptyVerificationRetryTelemetry()
-    : await retryUnverifiedEmails(pool, { clientId: Number(program.tenant_id || store.clientId || 10) });
+    : await retryUnverifiedEmails(pool, { clientId: tenant.clientId });
   if (persisted.admission) mergeVerificationRetryTelemetry(persisted.admission, verificationRetry);
   return {
     promoted,
@@ -929,11 +1020,17 @@ module.exports = {
   loadCleanInventory,
   runMaxOutboundControlLoop,
   capturePreparationObservability,
+  defaultScoutRamp,
+  resolveReplenishmentTenantContext,
+  resolveScoutRampAllowedCities,
   _test: {
     scoutInput,
     mapReuseCompanyRows,
     loadReuseCompanies,
     persistDiscoveredCompanies,
     runEnrichmentBatches,
+    defaultScoutRamp,
+    resolveReplenishmentTenantContext,
+    resolveScoutRampAllowedCities,
   },
 };
