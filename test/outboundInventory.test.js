@@ -112,6 +112,7 @@ test('already usable canonical prospects are recovered instead of queued again',
     scoutContext: {
       scope: { segment: 'short_term_rental' },
       serviceAreas: ['Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn'],
+      clientId: 10,
     },
   });
   assert.equal(persisted.inserted, 0);
