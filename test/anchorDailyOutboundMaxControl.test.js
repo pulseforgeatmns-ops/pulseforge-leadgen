@@ -202,6 +202,7 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
   };
   const result = await runMaxOutboundControlLoop({
     pool: {},
+    cycleId: 'moc_10_test',
     program,
     source,
     store: {
@@ -251,6 +252,7 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
   assert.equal(result.plan.targetInventory, 15);
   assert.equal(events.length, 1);
   assert.equal(events[0].type, 'max_outbound_control');
+  assert.equal(events[0].payload.cycleId, 'moc_10_test');
   assert.equal(events[0].payload.scoutInvoked, true);
   assert.equal(events[0].payload.bufferTarget, 15);
 });

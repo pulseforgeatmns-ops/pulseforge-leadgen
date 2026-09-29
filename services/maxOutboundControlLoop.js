@@ -889,6 +889,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     finalPlan.state,
   ], {
     programId: program.id,
+    cycleId: options.cycleId || null,
     policyHash: program.policy_hash,
     sourceMissionId: program.source_mission_id,
     emmettCapacity: operating.recommendedSafeDailyCapacity,
