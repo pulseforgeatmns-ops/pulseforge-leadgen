@@ -167,11 +167,7 @@ async function saveFollowUpDraft({
     db,
   });
 
-  const needsJake = flagJakeReview
-    || draft.approvalPath === 'jake_review_recommended'
-    || draft.approvalPath === 'jake_should_send_or_join';
-
-  if (needsJake) {
+  if (flagJakeReview) {
     await db.query(`
       UPDATE prospects SET
         help_requested = true,
