@@ -64,7 +64,7 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     for (let i=0; i<7; i++) {
       const company = (await pool.query('INSERT INTO companies(client_id,name) VALUES(10,$1) RETURNING id', [`Company ${i}`])).rows[0].id;
       const crm = (await pool.query('INSERT INTO prospects(company_id,client_id,email) VALUES($1,10,$2) RETURNING *', [company, `ops${i}@customer.example`])).rows[0];
-      contacts.set(`c${i}`, { ...crm, prospect_id: crm.id, email_verified: true, email_status: 'valid', email_provenance_source: 'website_email' });
+      contacts.set(`c${i}`, { ...crm, prospect_id: crm.id, email_verified: true, email_status: 'valid', enrichment_provenance: { email: { source: 'website_email' } } });
       candidates.push({ candidateId: `c${i}`, item: { email: crm.email, sendable: true, paige: { candidateId: `c${i}` } },
         message: { subject: `Cleaning ${i}`, body: 'Would a written quote help?', candidateId: `c${i}` } });
     }

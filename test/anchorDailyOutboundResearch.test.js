@@ -67,5 +67,5 @@ test('Scout research websites survive discovery normalization and Max ranking in
 
 test('scraped website-template addresses remain ineligible even if a verifier accepts them', () => {
   const {canonicalOutboundEmailIneligibilityReason}=require('../utils/canonicalEmailEligibility');
-  for(const email of ['user@domain.com','example@mysite.com'])assert.ok(canonicalOutboundEmailIneligibilityReason({email,email_verified:true,email_status:'valid',email_provenance_source:'scraped'}));
+  for(const email of ['user@domain.com','example@mysite.com'])assert.ok(canonicalOutboundEmailIneligibilityReason({email,email_verified:true,email_status:'valid',enrichment_provenance:{email:{source:'scraped'}}}));
 });
