@@ -1,0 +1,27 @@
+name: Execute Anchor One Outbound
+
+on:
+  workflow_dispatch:
+    inputs:
+      mission_id:
+        description: Tenant 10 READY acquisition mission id
+        required: true
+        type: string
+        default: 'mission_82e8102f-249c-4f44-b88e-2de76b13898e'
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: One controlled Anchor outbound send
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+        run: node scripts/executeAnchorOneOutbound.js --confirm-production --mission-id "${{ inputs.mission_id }}"

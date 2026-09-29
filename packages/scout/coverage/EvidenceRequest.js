@@ -17,7 +17,7 @@
  */
 
 const { asText } = require('../../max/scoutAcquisition/Types');
-const { expandCitiesFromSearchDefinition } = require('./DiscoveryCoverageEngine');
+const { expandCitiesFromSearchDefinition } = require('./SearchGeography');
 
 /**
  * @typedef {object} EvidenceRequest
@@ -105,6 +105,29 @@ function resolveSegment(searchDefinition = {}, marketDefinition = {}) {
  */
 function buildEvidenceRequest(task = {}, searchDefinition = {}, marketDefinition = {}) {
   const geography = geographyFromSearchDefinition(searchDefinition);
+  const entity =
+    task.scope === 'entity' && (task.entityId || task.entityName)
+      ? {
+          id: asText(task.entityId || task.candidateId) || null,
+          name: asText(task.entityName) || null,
+          gap: asText(task.gap) || null,
+          hypothesis: asText(task.hypothesis) || null,
+          hypothesisId: asText(task.hypothesisId) || null,
+          website:
+            asText(task.candidateContext?.website) ||
+            asText(task.website) ||
+            null,
+          placeId:
+            asText(task.candidateContext?.placeId) ||
+            asText(task.placeId) ||
+            null,
+          address:
+            asText(task.candidateContext?.address) ||
+            asText(task.address) ||
+            null,
+        }
+      : null;
+
   return {
     segment: resolveSegment(searchDefinition, marketDefinition),
     evidenceType: asText(task.evidenceType),
@@ -114,6 +137,19 @@ function buildEvidenceRequest(task = {}, searchDefinition = {}, marketDefinition
       ? task.providers.map((p) => asText(p.providerId)).filter(Boolean)
       : [],
     tenantId: asText(searchDefinition.tenantId || marketDefinition.tenantId) || null,
+    missionId:
+      asText(task.missionId) ||
+      asText(searchDefinition.missionId) ||
+      asText(marketDefinition.mission?.id) ||
+      null,
+    candidateId: asText(task.candidateId || task.entityId) || null,
+    businessName: asText(task.entityName || task.candidateContext?.businessName) || null,
+    website: entity?.website || null,
+    placeId: entity?.placeId || null,
+    address: entity?.address || null,
+    hypothesisId: asText(task.hypothesisId) || entity?.hypothesisId || null,
+    entity,
+    scope: task.scope === 'entity' ? 'entity' : 'market',
   };
 }
 
@@ -132,6 +168,10 @@ function scopeSearchDefinitionForTask(searchDefinition = {}, task = {}, marketDe
     _investigationTask: evidenceRequest.investigationTaskId,
     _evidenceType: evidenceRequest.evidenceType,
     _providerIds: evidenceRequest.providerIds,
+    _investigationScope: evidenceRequest.scope,
+    _entityId: evidenceRequest.entity?.id || null,
+    _entityName: evidenceRequest.entity?.name || null,
+    targetEntity: evidenceRequest.entity || null,
   };
 }
 

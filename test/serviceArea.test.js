@@ -123,7 +123,9 @@ test('promoteUnenriched rejects an out-of-area record before enrichment', async 
     loadClientConfig: async () => clientConfig,
   });
 
-  assert.equal(accepted, false);
+  assert.equal(accepted.promoted, false);
+  assert.equal(accepted.recovered, false);
+  assert.equal(accepted.reason, 'outside_geography');
   assert.equal(enriched, false);
   assert.equal(promotionServiceAreaMatch({ location: 'boston, ma' }, clientConfig), 'Boston');
   assert.equal(matchServiceAreaFromLocation('Morgantown WV', clientConfig.service_area), null);

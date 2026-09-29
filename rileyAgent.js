@@ -11,6 +11,7 @@ const { reportAgentRun } = require('./utils/agentObservability');
 const { OPEN_SOURCE, ensureOpenSignalSchema } = require('./utils/openSignalGate');
 const { resolveVerticalTier } = require('./utils/verticalTiers');
 const { safeIngestNormalizedSignal, safeIngestRileyReplySignal } = require('./utils/maxSignalIngestion');
+const { consumeRileyReplyInterpretation } = require('./services/acquisitionMissionRileyInterpretation');
 
 const AGENT_NAME = 'riley';
 const CLIENT_ID = getRuntimeClientId();
@@ -53,6 +54,8 @@ const DEFLECTION_PATTERNS = [
 ];
 const VALID_REPLY_BUCKETS = new Set([
   'interested',
+  'quote_request',
+  'incumbent_vendor',
   'not_now',
   'negative',
   'unsubscribe',
@@ -769,13 +772,15 @@ function normalizeReplyClassification(rawClassification) {
   return 'unknown';
 }
 
-async function classifyReply(email) {
-  const prompt = `You are Riley, an inbound email triage agent for Pulseforge, an AI marketing agency run by Jacob Maynard in Manchester NH.
+async function classifyReply(email, options = {}) {
+  const anchor = options.anchor === true;
+  const business = options.governed ? 'the tenant business that sent this outreach' : anchor ? 'Anchor Cleaning, a cleaning service business' : 'Pulseforge, an AI marketing agency run by Jacob Maynard in Manchester NH';
+  const prompt = `You are Riley, an inbound email triage agent for ${business}.
 
 Classify this email into exactly one category:
 - interested: genuine interest, wants more info, asks about pricing, or asks for next steps
 - not_now: busy, not right time, maybe later, polite decline
-- negative: clear rejection, no interest, already has a provider, hostile or dismissive reply
+${anchor ? '- quote_request: explicitly requests a quote, estimate, proposal, or walkthrough\n- incumbent_vendor: already has a provider, without asking to stop contact\n- negative: clear rejection, no interest, hostile or dismissive reply' : '- negative: clear rejection, no interest, already has a provider, hostile or dismissive reply'}
 - unsubscribe: remove me, stop emailing, unsubscribe, do not contact
 - wrong_person: not the decision maker, wrong company, wrong person
 - out_of_office: out of office, automated response, vacation, away message
@@ -786,8 +791,8 @@ From: ${email.from}
 Subject: ${email.subject}
 Body: ${email.body}
 
-Respond with JSON only: { "classification": "interested|not_now|negative|unsubscribe|wrong_person|out_of_office|unknown", "reason": "...", "suggested_reply": "..." }
-For suggested_reply: write a short, warm, human reply from Jacob if classification is interested or not_now. Leave blank for others.`;
+Respond with JSON only: { "classification": "interested|${anchor ? 'quote_request|incumbent_vendor|' : ''}not_now|negative|unsubscribe|wrong_person|out_of_office|unknown", "reason": "...", "suggested_reply": "..." }
+${(anchor || options.governed) ? 'Leave suggested_reply blank. Max routes this conversation to a human; this classifier never authorizes a send.' : 'For suggested_reply: write a short, warm, human reply from Jacob if classification is interested or not_now. Leave blank for others.'}`;
 
   console.log('[Riley] Classifying raw reply:', JSON.stringify({
     from: email.from,
@@ -807,6 +812,7 @@ For suggested_reply: write a short, warm, human reply from Jacob if classificati
     if (match) {
       const parsed = JSON.parse(match[0]);
       parsed.classification = normalizeReplyClassification(parsed.classification);
+      if (options.governed) parsed.suggested_reply = '';
       console.log('[Riley] Classification result:', JSON.stringify(parsed));
       return parsed;
     }
@@ -1831,6 +1837,15 @@ async function run() {
         email,
         classification: result.classification,
         clientId: CLIENT_ID,
+      });
+      await consumeRileyReplyInterpretation({
+        prospect,
+        email,
+        classification: result.classification,
+        clientId: CLIENT_ID,
+        replyText: email.body || email.snippet || '',
+      }).catch((err) => {
+        console.warn('[Riley] Mission interpretation skipped:', err.message);
       });
       if (result.classification === 'interested') {
         await depositInterestedAction(prospect, email, result.suggested_reply);

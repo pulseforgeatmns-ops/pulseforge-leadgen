@@ -1,6 +1,20 @@
 # CURRENT_STATE
 
-> Project heartbeat. Update on every PR that changes version, priority, blockers, or active work.
+> Repository architecture snapshot refreshed 2026-09-17. The older sprint and deployment notes below are retained as history, not current production status.
+
+## Current Repository Architecture
+
+[SPEC-JEV-002 Decision Shadow Review](docs/specs/SPEC-JEV-002_Decision_Shadow_Review.md)
+adds best-effort Postgres storage and an admin/developer mismatch report for Jev
+shadow evaluations. Production routing remains unchanged. Apply its migration
+before collecting durable rows; deployment/migration status is not implied by
+this repository implementation.
+
+PulseForge is a production-oriented, multi-tenant AI operating system. Its canonical acquisition path uses [execution routing](docs/specs/SPEC-171_Canonical_Execution_Router.md), [transactional mission execution](docs/specs/SPEC-131_Transactional_Mission_Execution.md), and [specialist contracts](docs/specs/SPEC-132_Specialist_Execution_Contract.md), beyond the early SPEC-022 integration milestone.
+
+Current implementation includes [tenant-scoped mission hydration and inspection](services/acquisitionMissionRuntime.js), [PostgreSQL stage persistence](services/acquisitionMissionPersistence.js), [artifact-bound execution approval](packages/acquisition-mission/ExecutionApproval.js), and [epistemic business understanding](services/clientIntelligenceEpistemic.js). See the [recruiter guide](docs/RECRUITER_GUIDE.md) for audit → implementation → regression-test evidence. This snapshot describes repository code; live deployment health and migration status require separate verification.
+
+## Historical Planning Snapshot (retained from July–August 2026)
 
 | Field | Value |
 |---|---|

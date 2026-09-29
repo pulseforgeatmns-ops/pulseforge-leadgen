@@ -63,6 +63,10 @@ const {
   leadHasEstablishedIdentity,
 } = require('./packages/scout/identity/BusinessIdentity');
 const { expandPlacesQueriesForVertical } = require('./packages/scout/hypothesis/MarketHypothesisRegistry');
+const {
+  collectScoutPersonalizationEvidence,
+  persistScoutPersonalizationEvidence,
+} = require('./utils/scoutPersonalizationEvidence');
 
 function normalizeCompanyName(raw) {
   if (!raw || typeof raw !== 'string') return raw;
@@ -632,6 +636,10 @@ function isCleaningBuyerProfile() {
   return CONFIG.scoringProfile === 'cleaning_buyer';
 }
 
+function isWebDesignProfile() {
+  return CONFIG.scoringProfile === 'web_design';
+}
+
 function validCleaningEmailOrNull(email) {
   const raw = typeof email === 'string' ? email.trim() : '';
   if (!raw || raw === '—') return null;
@@ -736,43 +744,48 @@ async function enrichWithHunter(domain) {
 // ─────────────────────────────────────────────────────────────────────
 // STEP 2c: Scrape website for contact email (fallback for Places leads)
 // ─────────────────────────────────────────────────────────────────────
-async function scrapeWebsiteEmail(domain) {
-  const pages = [
-    `https://${domain}/contact`,
-    `https://${domain}/contact-us`,
-    `https://${domain}/about`,
-    `https://www.${domain}/contact`,
-    `https://www.${domain}`
-  ];
+function filterScrapedWebsiteEmails(html) {
+  const emailMatch = String(html || '').match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
+  if (!emailMatch) return [];
+  return emailMatch.filter((email) =>
+    !email.includes('noreply')
+    && !email.includes('no-reply')
+    && !email.includes('example.com')
+    && !email.includes('sentry')
+    && !email.includes('wix')
+    && !email.includes('squarespace')
+    && !email.includes('.png')
+    && !email.includes('.jpg')
+  );
+}
 
-  for (const url of pages) {
+async function scrapeWebsiteEmail(domain) {
+  const { crawlWebsite, normalizeDomain: crawlNormalizeDomain } = require('./utils/websiteEnrichmentCrawl');
+  const normalizedDomain = crawlNormalizeDomain(domain);
+  if (!normalizedDomain) return null;
+
+  const { pages } = await crawlWebsite(normalizedDomain, async (url) => {
     try {
       const res = await axios.get(url, {
         timeout: 5000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' }
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+        validateStatus: () => true,
       });
-      const html = res.data;
+      return {
+        ok: res.status >= 200 && res.status < 400,
+        status: res.status,
+        text: res.data,
+        url: res.request?.res?.responseUrl || url,
+      };
+    } catch (err) {
+      throw err;
+    }
+  }, { maxSuccessfulPages: 8 });
 
-      // Extract email from page
-      const emailMatch = html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
-      if (emailMatch) {
-        // Filter out noreply, info@, support@ — prefer personal emails
-        const filtered = emailMatch.filter(e =>
-          !e.includes('noreply') &&
-          !e.includes('no-reply') &&
-          !e.includes('example.com') &&
-          !e.includes('sentry') &&
-          !e.includes('wix') &&
-          !e.includes('squarespace') &&
-          !e.includes('.png') &&
-          !e.includes('.jpg')
-        );
-        if (filtered.length > 0) {
-          return { email: filtered[0], contact: '', title: '' };
-        }
-      }
-    } catch(err) {
-      // try next page
+  for (const page of pages) {
+    const filtered = filterScrapedWebsiteEmails(page.text);
+    if (filtered.length > 0) {
+      return { email: filtered[0], contact: '', title: '' };
     }
   }
   return null;
@@ -907,6 +920,15 @@ function getProspeoTitleIncludes() {
   return [CONFIG.jobTitle];
 }
 
+function normalizeProspeoPersonRow(match) {
+  const person = match?.person || {};
+  return {
+    contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
+    email: typeof person.email === 'object' ? person.email?.email || null : person.email || null,
+    title: person.job_title || null,
+  };
+}
+
 async function callProspeoSearchPerson(domain) {
   await awaitProspeoSlot();
 
@@ -933,14 +955,58 @@ async function callProspeoSearchPerson(domain) {
   const results = res.data?.results || [];
   if (!results.length) return null;
 
-  const match = results[0];
-  const person = match.person || {};
+  return normalizeProspeoPersonRow(results[0]);
+}
 
-  return {
-    contact: `${person.first_name || ''} ${person.last_name || ''}`.trim(),
-    email: typeof person.email === 'object' ? person.email?.email || null : person.email || null,
-    title: person.job_title || null,
-  };
+async function searchProspeoContactsForDomain(domain, {
+  excludeEmails = [],
+  titleIncludes = null,
+} = {}) {
+  if (process.env.PROSPEO_ENABLED !== 'true' || !PROSPEO_API_KEY) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
+  const quota = await checkProspeoQuota();
+  if (!quota.ok) {
+    return { ok: false, reason: 'provider_unavailable', contacts: [] };
+  }
+  await recordProspeoCall();
+  try {
+    await awaitProspeoSlot();
+    const titles = Array.isArray(titleIncludes) && titleIncludes.length
+      ? titleIncludes
+      : getProspeoTitleIncludes();
+    const res = await axios.post('https://api.prospeo.io/search-person',
+      {
+        page: 1,
+        filters: {
+          company: { websites: { include: [domain] } },
+          person_job_title: { include: titles },
+        },
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'X-KEY': PROSPEO_API_KEY,
+        },
+      }
+    );
+    const excluded = new Set((excludeEmails || []).map(e => String(e || '').trim().toLowerCase()).filter(Boolean));
+    const contacts = [];
+    for (const row of res.data?.results || []) {
+      const normalized = normalizeProspeoPersonRow(row);
+      const email = String(normalized.email || '').trim().toLowerCase();
+      if (!email || excluded.has(email)) continue;
+      contacts.push(normalized);
+    }
+    return { ok: true, reason: null, contacts };
+  } catch (_err) {
+    return { ok: false, reason: 'provider_error', contacts: [] };
+  }
+}
+
+async function listProspeoContactsForDomain(domain, opts = {}) {
+  const result = await searchProspeoContactsForDomain(domain, opts);
+  return result.contacts || [];
 }
 
 async function enrichWithProspeo(domain) {
@@ -2625,6 +2691,58 @@ async function saveToDatabase(leads, {
       saved++;
       const prospectId = insert.rows[0].id;
 
+      if (isCleaningBuyerProfile()) {
+        try {
+          const scoutPersonalization = await collectScoutPersonalizationEvidence({
+            ...lead,
+            vertical: CONFIG.vertical,
+            company: companyName,
+          });
+          lead.scoutPersonalization = scoutPersonalization;
+          await persistScoutPersonalizationEvidence(
+            pool,
+            prospectId,
+            scoutPersonalization,
+            CONFIG.clientId
+          );
+        } catch (personalizationErr) {
+          console.error(`[Scout] Personalization evidence failed for ${companyName}: ${personalizationErr.message}`);
+        }
+      }
+
+      if (isWebDesignProfile() && domain) {
+        try {
+          const { assessDiscoveredBusiness, mapOpportunityScoreToIcp } = require('./services/webDesignScout');
+          const webAssessment = await assessDiscoveredBusiness({
+            client_id: CONFIG.clientId,
+            prospect_id: prospectId,
+            company: companyName,
+            domain,
+            url: websiteUrl,
+            industry: CONFIG.vertical,
+            location: lead.address || CONFIG.location,
+            email,
+            phone,
+            contact: lead.contact,
+            google_rating: googleRating,
+            google_review_count: googleReviewCount,
+            skipPuppeteer: true,
+          }, { pool, skipPuppeteer: true });
+          if (webAssessment?.opportunity_score != null) {
+            const mapped = mapOpportunityScoreToIcp(
+              webAssessment.opportunity_score,
+              webAssessment.recommended_action
+            );
+            await pool.query(
+              `UPDATE prospects SET icp_score = $1 WHERE id = $2 AND client_id = $3`,
+              [mapped, prospectId, CONFIG.clientId]
+            );
+          }
+        } catch (webErr) {
+          console.error(`[Scout] Website opportunity assessment failed for ${companyName}: ${webErr.message}`);
+        }
+      }
+
       await safeIngestScoutLifecycleSignal({
         prospectId,
         clientId: CONFIG.clientId,
@@ -3358,13 +3476,18 @@ module.exports = {
   enrichWithProspeo,
   enrichWithHunter,
   scrapeWebsiteEmail,
+  filterScrapedWebsiteEmails,
   normalizeDomain,
   resolveEmailVerification,
   runEnrichmentChain,
+  listProspeoContactsForDomain,
+  searchProspeoContactsForDomain,
   normalizeVertical,
   scoreCleaningLead,
   scoreLead,
   configureScoringContext,
+  getSearchQueriesForTarget,
+  searchGooglePlaces,
   _test: {
     searchGoogle,
     normalizeSourceMode,
@@ -3379,6 +3502,7 @@ module.exports = {
     saveToDatabase,
     CLIENT_SCOUT_PLANS,
     CLIENT_SCOUT_CITY_STATE_OVERRIDES,
+    filterScrapedWebsiteEmails,
   },
 };
 

@@ -13,6 +13,8 @@ const { reportAgentRun } = require('./utils/agentObservability');
 const { formatShadowDigest, getShadowDigestData } = require('./utils/maxOrchestrationAnalytics');
 const { getRuntime, digestCopy } = require('./services/operatorScorecard');
 const { DIGEST_IDENTITY } = require('./packages/max/identity/MaxIdentity');
+const { listAssessmentsForClient } = require('./services/websiteOpportunityPersistence');
+const { buildMaxWebOpportunityDigest } = require('./utils/webOpportunityMaxPrioritization');
 
 const client = new Anthropic();
 const AGENT_NAME = 'max';
@@ -1260,7 +1262,19 @@ function formatLinkedInStatsDueSection(posts = []) {
   return lines.join('\n');
 }
 
-async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = null) {
+function formatWebOpportunitySection(webDigest) {
+  if (!webDigest?.top_five?.length) return '';
+  const lines = ['WEBSITE OPPORTUNITY PRIORITIES (SPEC-WEB-001 — internal, no outreach authorized)'];
+  lines.push(`Distribution: ${JSON.stringify(webDigest.distribution)}`);
+  for (const row of webDigest.top_five) {
+    lines.push(
+      `- ${row.business_name || row.domain}: priority ${row.max_priority_score} | ${row.recommended_action || row.payload?.recommended_action} | score ${row.opportunity_score ?? row.payload?.opportunity_score}`
+    );
+  }
+  return lines.join('\n');
+}
+
+async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = null, webDigest = null) {
   lastDigestSendError = null;
   // Refuse to ship an empty or non-string digest — better to skip the email
   // and surface the failure than to send "null" / "undefined" to the client.
@@ -1295,6 +1309,11 @@ async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = n
     ? `\n${'─'.repeat(50)}\n${linkedInStatsDueBlock}\n`
     : '';
 
+  const webOpportunityBlock = formatWebOpportunitySection(webDigest);
+  const webOpportunitySection = webOpportunityBlock
+    ? `\n${'─'.repeat(50)}\n${webOpportunityBlock}\n`
+    : '';
+
   const healthBlock = dailyHealth ? formatDailyHealthMessage(dailyHealth) : '';
   const healthSection = healthBlock
     ? `${healthBlock}\n${'─'.repeat(50)}\n\n`
@@ -1305,13 +1324,13 @@ async function sendDigest(digestText, snapshot, expansionReport, dailyHealth = n
   const subject = `${CLIENT_ID === 2 ? 'MSHI' : 'Pulseforge'} Daily Digest — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}`;
 
   const body = CLIENT_ID === 2 ? `${healthSection}${digestText}
-${linkedInStatsDueSection}${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
+${linkedInStatsDueSection}${scoutExpansionSection}${webOpportunitySection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 Pulseforge · gopulseforge.com` : `PULSEFORGE DAILY DIGEST
 ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
 ${'─'.repeat(50)}
 
 ${healthSection}${digestText}
-${linkedInStatsDueSection}${scoutExpansionSection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
+${linkedInStatsDueSection}${scoutExpansionSection}${webOpportunitySection}${emailPerfSection}${emailVerificationSection}${unreachableSection}
 ${'─'.repeat(50)}
 Pulseforge · gopulseforge.com
 To adjust digest frequency reply to this email.`;
@@ -2849,8 +2868,18 @@ async function run(args = {}) {
       console.log(insights);
       console.log('--- END PREVIEW ---\n');
 
+      let webDigest = null;
+      if (CLIENT_CONFIG?.scoring_profile === 'web_design') {
+        try {
+          const assessments = await listAssessmentsForClient(pool, CLIENT_ID, { limit: 50 });
+          webDigest = buildMaxWebOpportunityDigest(assessments);
+        } catch (webErr) {
+          console.warn('[Max] Website opportunity digest unavailable:', webErr.message);
+        }
+      }
+
       console.log('Sending digest...');
-      result.digest.sent = await sendDigest(insights, snapshot, expansionReport, dailyHealth);
+      result.digest.sent = await sendDigest(insights, snapshot, expansionReport, dailyHealth, webDigest);
 
       await logAgentRun(insights);
     } catch (err) {

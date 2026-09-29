@@ -219,20 +219,13 @@ async function getCurrentProspect(pool, client, prospect) {
   }
 }
 
-async function evaluateSendingReadiness({
+async function evaluateSenderIdentityReadiness({
   client,
-  prospect,
-  sequenceCatalog,
-  pool,
   brevoState,
   brevoApiKey,
   http,
-  clientSequenceMap,
-  assignedSequenceName,
 } = {}) {
   const checks = [];
-  const current = await getCurrentProspect(pool, client, prospect);
-  const evaluatedProspect = current.prospect;
   const senderEmail = clean(client?.sender_email);
   const senderName = clean(client?.sender_name);
   const sendingDomain = normalized(client?.sending_domain);
@@ -281,6 +274,36 @@ async function evaluateSendingReadiness({
       errors: resolvedBrevo.errors || [],
     }
   ));
+
+  const failures = checks.filter(item => !item.passed);
+  return {
+    sendable: failures.length === 0,
+    client_id: client?.id ?? null,
+    checks,
+    failures,
+  };
+}
+
+async function evaluateSendingReadiness({
+  client,
+  prospect,
+  sequenceCatalog,
+  pool,
+  brevoState,
+  brevoApiKey,
+  http,
+  clientSequenceMap,
+  assignedSequenceName,
+} = {}) {
+  const senderReadiness = await evaluateSenderIdentityReadiness({
+    client,
+    brevoState,
+    brevoApiKey,
+    http,
+  });
+  const checks = [...senderReadiness.checks];
+  const current = await getCurrentProspect(pool, client, prospect);
+  const evaluatedProspect = current.prospect;
 
   const sequenceName = exactSequenceName(client, evaluatedProspect, sequenceCatalog, clientSequenceMap);
   checks.push(condition(
@@ -378,6 +401,7 @@ async function evaluateSendingReadiness({
 module.exports = {
   CLIENT_SEQUENCE_MAP,
   evaluateSendingReadiness,
+  evaluateSenderIdentityReadiness,
   exactSequenceName,
   getBrevoState,
 };

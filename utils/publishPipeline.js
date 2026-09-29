@@ -9,6 +9,28 @@ const GBP_BASE      = 'https://mybusiness.googleapis.com/v4';
 const ACCT_MGMT_BASE = 'https://mybusinessaccountmanagement.googleapis.com/v1';
 const BIZ_INFO_BASE  = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 
+function publishSuccess(platform, partial = {}) {
+  return {
+    success: true,
+    externalPlatform: platform,
+    externalAccountId: partial.externalAccountId ?? null,
+    externalPostId: partial.externalPostId ?? null,
+    externalUrl: partial.externalUrl ?? null,
+    raw: partial.raw && typeof partial.raw === 'object' ? partial.raw : {},
+  };
+}
+
+function publishFailure(platform, partial = {}) {
+  return {
+    success: false,
+    externalPlatform: platform,
+    errorCode: partial.errorCode || 'publish_failed',
+    errorMessage: partial.errorMessage || partial.message || 'publish_failed',
+    retryable: partial.retryable !== false,
+    raw: partial.raw && typeof partial.raw === 'object' ? partial.raw : {},
+  };
+}
+
 // ── SHARED HELPERS ────────────────────────────────────────────────────────────
 
 let pendingCommentPublishSchemaPromise;
@@ -126,7 +148,12 @@ async function publishToGoogleBusiness(item) {
   const missing = needed.filter(k => !process.env[k]);
   if (missing.length > 0) {
     console.warn('[GBP Publisher] Missing credentials:', missing, '— skipping');
-    return;
+    return publishFailure('google_business', {
+      errorCode: 'credentials_missing',
+      errorMessage: `missing:${missing.join(',')}`,
+      retryable: false,
+      raw: { missing },
+    });
   }
   try {
     const token    = await getGoogleAccessToken();
@@ -144,9 +171,18 @@ async function publishToGoogleBusiness(item) {
     await savePostAnalytics(item, platformPostId);
     await logResult('google_business', 'publish_post', item, 'success', { location, chars: text.length });
     console.log(`[GBP Publisher] Posted to ${location}`);
+    return publishSuccess('google_business', {
+      externalAccountId: location,
+      externalPostId: platformPostId,
+      raw: { location, chars: text.length },
+    });
   } catch (err) {
     console.error('[GBP Publisher] Failed:', err.response?.data || err.message);
     await logResult('google_business', 'publish_post', item, 'failed', { error: err.message });
+    return publishFailure('google_business', {
+      errorMessage: err.message,
+      raw: { response: err.response?.data || null },
+    });
   }
 }
 
@@ -157,7 +193,11 @@ async function publishToFacebookPage(item) {
   const pageToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
   if (!pageId || !pageToken) {
     console.warn('[FB Page Publisher] FACEBOOK_PAGE_ID or FACEBOOK_PAGE_ACCESS_TOKEN not set — skipping');
-    return;
+    return publishFailure('facebook_page', {
+      errorCode: 'credentials_missing',
+      errorMessage: 'FACEBOOK_PAGE_ID or FACEBOOK_PAGE_ACCESS_TOKEN not set',
+      retryable: false,
+    });
   }
   try {
     const text = (item.comment || '').trim();
@@ -169,9 +209,19 @@ async function publishToFacebookPage(item) {
     await savePostAnalytics(item, platformPostId);
     await logResult('facebook_page', 'publish_post', item, 'success', { pageId, chars: text.length });
     console.log(`[FB Page Publisher] Posted to page ${pageId}`);
+    return publishSuccess('facebook_page', {
+      externalAccountId: pageId,
+      externalPostId: platformPostId,
+      externalUrl: platformPostId ? `https://www.facebook.com/${platformPostId}` : null,
+      raw: { pageId, chars: text.length },
+    });
   } catch (err) {
     console.error('[FB Page Publisher] Failed:', err.response?.data || err.message);
     await logResult('facebook_page', 'publish_post', item, 'failed', { error: err.message });
+    return publishFailure('facebook_page', {
+      errorMessage: err.message,
+      raw: { response: err.response?.data || null },
+    });
   }
 }
 
@@ -271,11 +321,19 @@ async function publishToBufferLinkedIn(item, options = {}) {
   const channelId = hasChannelOverride ? options.channelId : process.env.BUFFER_CHANNEL_ID || '69dc4fd9031bfa423cf9941c';
   if (!token) {
     console.warn(`[${label} Publisher] BUFFER_ACCESS_TOKEN not set — skipping`);
-    return;
+    return publishFailure(channel, {
+      errorCode: 'credentials_missing',
+      errorMessage: 'BUFFER_ACCESS_TOKEN not set',
+      retryable: false,
+    });
   }
   if (!channelId) {
     console.warn(`[${label} Publisher] Buffer channel ID not set — skipping`);
-    return;
+    return publishFailure(channel, {
+      errorCode: 'credentials_missing',
+      errorMessage: 'Buffer channel ID not set',
+      retryable: false,
+    });
   }
   const { main, firstUrl } = parseComment(item.comment || '');
   if (firstUrl) {
@@ -324,9 +382,18 @@ async function publishToBufferLinkedIn(item, options = {}) {
     await savePostAnalytics(item, postId || null);
     await logResult(channel, 'publish_post', item, 'success', { channelId, postId, dueAt, sentAt, sharedNow });
     console.log(`[${label} Publisher] Sent via Buffer — id: ${postId}, sent: ${sentAt || 'pending'}`);
+    return publishSuccess(channel, {
+      externalAccountId: channelId,
+      externalPostId: postId || null,
+      raw: { channelId, postId, dueAt, sentAt, sharedNow },
+    });
   } catch (err) {
     console.error(`[${label} Publisher] Failed:`, err.response?.data || err.message);
     await logResult(channel, 'publish_post', item, 'failed', { error: err.message });
+    return publishFailure(channel, {
+      errorMessage: err.message,
+      raw: { response: err.response?.data || null },
+    });
   }
 }
 

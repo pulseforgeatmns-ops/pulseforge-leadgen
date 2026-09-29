@@ -83,6 +83,8 @@ const {
 } = require('./ExecutionInspectionOperator');
 const { serializeExecutionState, getExecutionState } = require('./ExecutionState');
 const { maybeHandleOperatorCognitionTurn } = require('./CognitionRouting');
+const { maybeHandlePendingDecisionTurn } = require('./PendingDecisionTurn');
+const { pendingDecisionOwnsTurn } = require('./PendingDecisionResolver');
 const { advanceConversationalState } = require('./ConversationalStateMachine');
 const { advanceActiveReasoningContext } = require('./ActiveReasoningContext');
 const { maybeHandleReflectionTurn } = require('./ReflectionRouting');
@@ -202,6 +204,7 @@ const {
 
 const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
 const askPathTrace = require('./audit/AskPathTrace');
+const { DecisionService, beginShadow, completeShadow } = require('../../decision-service/DecisionService');
 
 /**
  * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 + SPEC-125 routing.
@@ -242,9 +245,11 @@ class WorkspaceEngine {
    * @param {object} [options.operatingUpdateOpts] - SPEC-106 operator-reported evidence (tests)
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
    * @param {object} [options.runtimeProvider] - SPEC-140 acquisition mission runtime provider (tests)
+   * @param {DecisionService} [options.decisionService] - SPEC-JEV-001 shadow observer (tests)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
+    this._decisionService = options.decisionService || new DecisionService();
     this._presentation =
       options.presentation ||
       new PresentationEngine({
@@ -411,6 +416,21 @@ class WorkspaceEngine {
    * @param {object} [input.rawContext] - alias
    */
   async ask(input) {
+    const shadow = beginShadow(
+      this._decisionService, input,
+      input?.sessionId ? this._sessions.get(input.sessionId) : null,
+    );
+    try {
+      const result = await this._askProduction(input, shadow);
+      completeShadow(shadow, result);
+      return result;
+    } catch (error) {
+      completeShadow(shadow, null, error);
+      throw error;
+    }
+  }
+
+  async _askProduction(input, shadow = null) {
     if (!input || !String(input.question || '').trim()) {
       throw new Error('question is required');
     }
@@ -908,6 +928,9 @@ class WorkspaceEngine {
       resolverEnabled: this._resolverEnabled,
       ...this._amoRuntimeInput(),
     });
+    // Snapshot the already-resolved mission before approval/execution mutates it.
+    // The evaluator receives no production classification or authority to act.
+    try { shadow?.captureMission(operatorIntent.mission); } catch (_) { /* shadow only */ }
     conversationSubject = operatorIntent.conversationSubject;
     conversationIntent = operatorIntent.conversationIntent;
     let resolvedQuestion = operatorIntent.resolvedQuestion;
@@ -1452,7 +1475,86 @@ class WorkspaceEngine {
       } else if (runtimeDecision.runtime === MISSION_RUNTIMES.AMO) {
         askPathTrace.traceBranch('runtime:amo');
 
-        if (isReadOnlyCognition(conversationIntent)) {
+        const pendingDecisionTurn = await maybeHandlePendingDecisionTurn({
+          question,
+          session,
+          context: rawContext || session.context,
+          operatorIntent,
+          ...this._amoRuntimeInput(),
+        });
+        if (pendingDecisionTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredPending = pendingDecisionTurn.structured;
+          const presentedPending = await this._presentation.present(structuredPending);
+          const prosePending = presentedPending.prose || pendingDecisionTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: prosePending,
+            structured: structuredPending,
+          });
+          return traceAskReturn('pending_decision_turn_ownership', {
+            sessionId: session.id,
+            prose: prosePending,
+            structured: structuredPending,
+            metadata: presentedPending.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredPending,
+              session,
+              question,
+            }),
+            recommendedActions: structuredPending.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedPending.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: pendingDecisionTurn.mission || null,
+            resolution: {
+              action: pendingDecisionTurn.action || 'clarify',
+              reason: pendingDecisionTurn.reason,
+            },
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            interrogation: null,
+            conversationIntent,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: pendingDecisionTurn.reason,
+              missionType: 'acquisition_mission',
+              missionIntent: conversationIntent.intent,
+              confidence: conversationIntent.confidence,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: pendingDecisionTurn.reason,
+              missionType: 'acquisition_mission',
+              missionId:
+                pendingDecisionTurn.mission && pendingDecisionTurn.mission.id
+                  ? pendingDecisionTurn.mission.id
+                  : null,
+            },
+            workspaceOwnership: {
+              ...workspaceOwnership,
+              missionRuntime: MISSION_RUNTIMES.AMO,
+              missionType: 'acquisition_mission',
+            },
+          }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
+        }
+
+        if (
+          isReadOnlyCognition(conversationIntent) &&
+          !(operatorIntent && operatorIntent.pendingDecisionResolution &&
+            operatorIntent.pendingDecisionResolution.resolvedFromPendingDecision) &&
+          !pendingDecisionOwnsTurn(
+            operatorIntent && operatorIntent.pendingDecisionResolution
+          )
+        ) {
           const cognitionTurn = await maybeHandleOperatorCognitionTurn({
             question,
             session,
@@ -1588,7 +1690,10 @@ class WorkspaceEngine {
           presentation: presentedAmoExec.presentation,
           route: ROUTE_KINDS.INTELLIGENCE,
           mission: amoExecutionTurn.mission || null,
-          resolution: { action: 'executed', reason: amoExecutionTurn.reason },
+          resolution: {
+            action: amoExecutionTurn.action || 'executed',
+            reason: amoExecutionTurn.reason,
+          },
           executionDomain: EXECUTION_DOMAINS.WORKSPACE,
           interrogation: null,
           domainDecision: {
@@ -1691,6 +1796,7 @@ class WorkspaceEngine {
         resolvedObjective: (session.context && session.context.resolvedObjective) || null,
         executionContract,
         objectiveResolution,
+        missionLifecycleIntent: operatorIntent.missionLifecycleIntent,
         ...this._amoRuntimeInput(),
         cieService: this._clientIntelligenceService || undefined,
         cieOpts: this._clientIntelligenceOpts || undefined,

@@ -18,6 +18,8 @@ const CANONICAL_PROJECTION_KEYS = Object.freeze([
   'pendingOperatorDecision',
   'contributions',
   'observations',
+  'observeReactions',
+  'candidateObserveStates',
   'outcomes',
   'events',
 ]);
@@ -121,13 +123,22 @@ function canonicalizeEvent(event) {
 
 function canonicalizeObservation(row) {
   const clean = stripPresentation(row) || {};
-  return canonicalizeValue({
+  const base = {
     id: clean.id || null,
     missionId: clean.missionId || null,
     specialist: clean.specialist || null,
     observation: clean.observation || null,
     at: canonicalizeTimestamp(clean.at) || null,
-  });
+  };
+  if (clean.kind) base.kind = clean.kind;
+  if (clean.prospectId != null) base.prospectId = clean.prospectId;
+  if (clean.category) base.category = clean.category;
+  if (clean.eventType) base.eventType = clean.eventType;
+  if (clean.occurredAt) base.occurredAt = canonicalizeTimestamp(clean.occurredAt);
+  if (clean.source) base.source = clean.source;
+  if (isPlainObject(clean.evidence)) base.evidence = clean.evidence;
+  if (isPlainObject(clean.payload)) base.payload = clean.payload;
+  return canonicalizeValue(base);
 }
 
 function canonicalizeContribution(row) {
@@ -145,6 +156,8 @@ function unwrapSnapshot(snapshot) {
       contributions: [],
       events: [],
       observations: [],
+      observeReactions: [],
+      candidateObserveStates: [],
       outcomes: [],
     };
   }
@@ -164,6 +177,10 @@ function unwrapSnapshot(snapshot) {
     contributions: Array.isArray(snapshot.contributions) ? snapshot.contributions : [],
     events,
     observations: Array.isArray(snapshot.observations) ? snapshot.observations : [],
+    observeReactions: Array.isArray(snapshot.observeReactions) ? snapshot.observeReactions : [],
+    candidateObserveStates: Array.isArray(snapshot.candidateObserveStates)
+      ? snapshot.candidateObserveStates
+      : [],
     outcomes: Array.isArray(snapshot.outcomes) ? snapshot.outcomes : [],
   };
 }
@@ -189,6 +206,8 @@ function buildCanonicalMissionProjection(snapshot) {
     pendingOperatorDecision: mission ? mission.pendingOperatorDecision ?? null : null,
     contributions: sortRecords(unwrapped.contributions.map(canonicalizeContribution)),
     observations: sortRecords(unwrapped.observations.map(canonicalizeObservation)),
+    observeReactions: sortRecords(unwrapped.observeReactions.map(canonicalizeOutcome)),
+    candidateObserveStates: sortRecords(unwrapped.candidateObserveStates.map(canonicalizeOutcome)),
     outcomes: sortRecords(unwrapped.outcomes.map(canonicalizeOutcome)),
     events: sortRecords(unwrapped.events.map(canonicalizeEvent)),
   };
@@ -218,6 +237,12 @@ function snapshotFromEngine(engine, missionId, tenantId) {
       : [],
     observations: store && typeof store.listObservations === 'function'
       ? store.listObservations(missionId)
+      : [],
+    observeReactions: store && typeof store.listObserveReactions === 'function'
+      ? store.listObserveReactions(missionId)
+      : [],
+    candidateObserveStates: store && typeof store.listCandidateObserveStates === 'function'
+      ? store.listCandidateObserveStates(missionId)
       : [],
     outcomes: store && typeof store.listOutcomes === 'function'
       ? store.listOutcomes(missionId)

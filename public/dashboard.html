@@ -7985,7 +7985,7 @@ async function loadActions() {
     }
 
     if (empty) empty.style.display = 'none';
-    if (sub)   sub.textContent = `${actions.length} pending action${actions.length !== 1 ? 's' : ''} from Max`;
+    if (sub)   sub.textContent = `${actions.length} pending action${actions.length !== 1 ? 's' : ''}`;
 
     const urgentTypes = ['follow_up_clicked'];
     if (grid) grid.innerHTML = actions.map(a => {
@@ -7998,6 +7998,7 @@ async function loadActions() {
         return `${Math.round(mins/1440)}d ago`;
       })();
       const isAoEscalation = a.action_type === 'ao_escalation';
+      const isAssessment = a.action_type === 'website_assessment_request';
       let payload = {};
       try { payload = typeof a.payload === 'string' ? JSON.parse(a.payload || '{}') : (a.payload || {}); } catch (_) {}
       const visitHref = isAoEscalation && payload.lead_id
@@ -8008,7 +8009,7 @@ async function loadActions() {
         <div class="action-card-title">${_esc(a.title)}</div>
         <div class="action-card-desc">${_esc(a.description)}</div>
         <div class="action-card-footer">
-          ${isAoEscalation ? `<a class="action-btn-exec" href="${visitHref}" style="text-decoration:none;display:inline-flex;align-items:center;">View visit</a>` : `<button type="button" class="action-btn-exec" onclick="execAction('${a.id}')">Execute</button>`}
+          ${isAssessment ? `<button type="button" class="action-btn-exec" onclick="markAssessmentReviewed('${a.id}')">Mark reviewed</button>` : isAoEscalation ? `<a class="action-btn-exec" href="${visitHref}" style="text-decoration:none;display:inline-flex;align-items:center;">View visit</a>` : `<button type="button" class="action-btn-exec" onclick="execAction('${a.id}')">Execute</button>`}
           <button type="button" class="action-btn-dismiss" onclick="dismissAction('${a.id}')">Dismiss</button>
         </div>
         <div class="action-max-response" id="ac-response-${a.id}"></div>
@@ -8032,6 +8033,29 @@ function updateActionsBadgeCount() {
     if (empty) empty.style.display = 'block';
     const sub = document.getElementById('actionsSub');
     if (sub) sub.textContent = 'No pending action items';
+  }
+}
+
+// Assessment requests are reviewed by a person; never hand them to Max.
+async function markAssessmentReviewed(id) {
+  if (!canTakeDashboardActions()) return;
+  const card = document.getElementById(`ac-${id}`);
+  const button = card?.querySelector('.action-btn-exec');
+  const response = card?.querySelector('.action-max-response');
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  try {
+    const result = await fetch(`/api/actions/${encodeURIComponent(id)}/execute`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result: 'Human review marked complete by the operator. No automated assessment or email was sent.' }),
+    });
+    if (!result.ok) throw new Error('Could not save review status. Please try again.');
+    card.remove();
+    updateActionsBadgeCount();
+  } catch (error) {
+    if (response) { response.textContent = error.message; response.classList.add('visible'); }
+    button.disabled = false;
   }
 }
 
@@ -8163,6 +8187,14 @@ updateAgentCounts();
     if (typeof loadSetterOperations === 'function') loadSetterOperations();
     if (typeof loadProspects === 'function') loadProspects();
   });
+})();
+</script>
+<script>
+(() => {
+  const link = document.createElement('a');
+  link.href = '/paige-social'; link.textContent = 'Paige social review';
+  link.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:50;background:#173a48;color:white;padding:10px 16px;border-radius:8px;font:14px system-ui';
+  document.body.appendChild(link);
 })();
 </script>
 </body>

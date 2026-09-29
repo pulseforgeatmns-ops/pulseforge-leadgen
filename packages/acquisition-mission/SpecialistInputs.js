@@ -5,15 +5,40 @@
  * Each specialist receives structured mission fields — never free-form operator text.
  */
 
-const { asText } = require('./types');
+const { asText, SPECIALISTS, CONTRIBUTION_KINDS, clone } = require('./types');
 const { isStructuredMissionApproved } = require('./StructuredMission');
 const { buildSharedContext } = require('./Context');
-const { SPECIALISTS, CONTRIBUTION_KINDS } = require('./types');
+const { latestApproachDecision } = require('./AcquisitionApproach');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
 
-function latestContribution(contributions = [], specialist, kind) {
+function latestContribution(contributions = [], specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
+}
+
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: SPECIALISTS.SCOUT,
+    kind: CONTRIBUTION_KINDS.DISCOVERY,
+    mission,
+  });
+}
+
+function findLatestOperatorPrioritizationApproval(contributions = []) {
   return [...contributions]
     .reverse()
-    .find((row) => row.specialist === specialist && (!kind || row.kind === kind));
+    .find(
+      (row) =>
+        row.specialist === SPECIALISTS.OPERATOR
+        && row.kind === CONTRIBUTION_KINDS.APPROVAL
+        && (row.payload.action === 'prioritization_approved'
+          || row.payload.kind === 'prioritization_approval')
+    );
 }
 
 function requireStructuredMission(mission) {
@@ -62,11 +87,12 @@ function paigeInput(mission, extras = {}) {
   const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
   const sharedContext = extras.sharedContext
     || (contributions.length ? buildSharedContext(mission, contributions) : null);
-  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
-  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
+  const approachDecision = latestApproachDecision(contributions);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
-  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
+  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL, mission);
 
   return {
     audience: plan.market.label || plan.market.segment,
@@ -82,6 +108,7 @@ function paigeInput(mission, extras = {}) {
     structuredMission: plan,
     scoutDiscovery: scoutPayload,
     maxPrioritization: maxPayload,
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
     priorities: maxPayload.priorities || [],
     objectives: maxPayload.objectives || [],
     objectiveReason: maxPayload.objectiveReason || null,
@@ -94,6 +121,73 @@ function paigeInput(mission, extras = {}) {
     operatorApproval: prioritizationApproval
       ? { consumed: prioritizationApproval.payload?.consumed === true }
       : null,
+    workspaceContext: sharedContext ? {
+      objective: sharedContext.objective,
+      missionUnderstanding: sharedContext.mission?.missionUnderstanding || null,
+    } : null,
+    structuredOnly: true,
+    missionBound: true,
+  };
+}
+
+/**
+ * Penny receives mission-bound paid acquisition context. She evaluates paid
+ * viability and test design; she does not source business truth from ad accounts.
+ */
+function pennyInput(mission, extras = {}) {
+  const plan = requireStructuredMission(mission);
+  const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
+  const sharedContext = extras.sharedContext
+    || (contributions.length ? buildSharedContext(mission, contributions) : null);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
+  const approachDecision = latestApproachDecision(contributions);
+  const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
+  const maxPayload = maxRow?.payload || sharedContext?.max || {};
+
+  return {
+    tenantId: String(mission.tenantId || mission.clientId || ''),
+    missionId: mission.id,
+    objective: plan.objective || mission.objective,
+    successMetric: { ...(plan.successMetric || plan.success || {}) },
+    targetSegment: plan.market?.label || plan.market?.segment || mission.targetSegment || null,
+    market: { ...(plan.market || {}) },
+    buyer: plan.market?.buyer || null,
+    geography: { ...(plan.geography || {}) },
+    constraints: [
+      ...(plan.constraints || []).slice(),
+      ...((maxPayload.constraints || []).filter(Boolean)),
+      ...((extras.constraints || []).filter(Boolean)),
+    ],
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
+    maxPrioritization: maxPayload,
+    scoutDiscovery: scoutPayload,
+    priorities: maxPayload.priorities || maxPayload.rankedTargets || [],
+    evidence: [
+      ...(Array.isArray(scoutPayload.evidence) ? scoutPayload.evidence : []),
+      ...(Array.isArray(maxPayload.evidence) ? maxPayload.evidence : []),
+      ...(Array.isArray(extras.acquisitionEvidence) ? extras.acquisitionEvidence : []),
+    ],
+    knownAcquisitionHistory: extras.knownAcquisitionHistory || extras.acquisitionHistory || null,
+    conversionReadiness: extras.conversionReadiness || extras.conversionInfrastructure || null,
+    measurementReadiness: extras.measurementReadiness || extras.trackingReadiness || null,
+    candidatePaidChannels: Array.isArray(extras.candidatePaidChannels)
+      ? extras.candidatePaidChannels.slice()
+      : [],
+    platformEvidence: Array.isArray(extras.platformEvidence) ? extras.platformEvidence.slice() : [],
+    firstPartyAttributionEvidence: Array.isArray(extras.firstPartyAttributionEvidence)
+      ? extras.firstPartyAttributionEvidence.slice()
+      : (Array.isArray(extras.acquisitionEvidence)
+        ? extras.acquisitionEvidence.filter((row) => row?.kind === 'first_party_attributed_lead')
+        : []),
+    firstPartyAttributionRetrieval: extras.firstPartyAttributionRetrieval || null,
+    campaignLeadEconomics: Array.isArray(extras.campaignLeadEconomics)
+      ? extras.campaignLeadEconomics.slice()
+      : [],
+    unmatchedFirstPartyAttribution: extras.unmatchedFirstPartyAttribution || null,
+    observationWindow: extras.observationWindow || null,
+    availableBudget: extras.availableBudget || extras.budgetConstraint || null,
+    operatorPreferences: extras.operatorPreferences || {},
     workspaceContext: sharedContext ? {
       objective: sharedContext.objective,
       missionUnderstanding: sharedContext.mission?.missionUnderstanding || null,
@@ -130,10 +224,11 @@ function emmettInput(mission, extras = {}) {
   const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
   const sharedContext = extras.sharedContext
     || (contributions.length ? buildSharedContext(mission, contributions) : null);
-  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
-  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
-  const paigeRow = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
-  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL);
+  const scoutRow = latestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY, mission);
+  const maxRow = latestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION, mission);
+  const paigeRow = latestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS, mission);
+  const approachDecision = latestApproachDecision(contributions);
+  const prioritizationApproval = latestContribution(contributions, SPECIALISTS.OPERATOR, CONTRIBUTION_KINDS.APPROVAL, mission);
   const scoutPayload = scoutRow?.payload || sharedContext?.scout || {};
   const maxPayload = maxRow?.payload || sharedContext?.max || {};
   const paigePayload = paigeRow?.payload || {};
@@ -146,7 +241,9 @@ function emmettInput(mission, extras = {}) {
   if (!missionCandidates && contributions.length) {
     try {
       const { buildMissionBoundCandidates, buildPaigeReadinessMetadata } = require('../max/workspace/EmmettMissionCandidates');
-      missionCandidates = buildMissionBoundCandidates(mission, contributions);
+      missionCandidates = buildMissionBoundCandidates(mission, contributions, {
+        crmByProspectId: extras.crmByProspectId || null,
+      });
       paigeReadiness = buildPaigeReadinessMetadata(paigePayload);
     } catch (_) {
       missionCandidates = [];
@@ -163,6 +260,7 @@ function emmettInput(mission, extras = {}) {
     structuredMission: plan,
     scoutDiscovery: scoutPayload,
     maxPrioritization: maxPayload,
+    acquisitionApproach: approachDecision ? approachDecision.decision : null,
     paigeReadiness,
     rankedTargets: maxPayload.rankedTargets || maxPayload.priorities || [],
     priorities: maxPayload.priorities || [],
@@ -223,6 +321,50 @@ function rexInput(mission, progress = {}) {
 }
 
 /**
+ * Max receives locked structured mission, Scout discovery, MIR, ranked opportunities,
+ * evidence, operator prioritization approval, and mission constraints.
+ */
+function maxInput(mission, extras = {}) {
+  const plan = requireLockedMissionPlan(mission);
+  const contributions = Array.isArray(extras.contributions) ? extras.contributions : [];
+  const scoutDiscovery = extras.discovery
+    ? { payload: extras.discovery }
+    : findLatestScoutDiscovery(contributions, mission);
+  const discoveryPayload = scoutDiscovery ? clone(scoutDiscovery.payload || {}) : null;
+  const operatorApproval = extras.operatorApproval || findLatestOperatorPrioritizationApproval(contributions);
+
+  return {
+    structuredMission: clone(plan),
+    discovery: discoveryPayload,
+    missionIntelligenceReport: discoveryPayload && discoveryPayload.missionIntelligenceReport
+      ? clone(discoveryPayload.missionIntelligenceReport)
+      : null,
+    rankedOpportunities: discoveryPayload
+      ? clone(
+        discoveryPayload.rankedProspects
+          || discoveryPayload.opportunities
+          || discoveryPayload.companies
+          || []
+      )
+      : [],
+    evidence: discoveryPayload ? clone(discoveryPayload.evidence || []) : [],
+    buyingSignals: discoveryPayload ? clone(discoveryPayload.buyingSignals || []) : [],
+    maxPrioritization: latestContribution(
+      contributions,
+      SPECIALISTS.MAX,
+      CONTRIBUTION_KINDS.PRIORITIZATION,
+      mission
+    )?.payload || null,
+    acquisitionApproach: latestApproachDecision(contributions)?.decision || null,
+    operatorPrioritizationApproval: operatorApproval ? clone(operatorApproval.payload || {}) : null,
+    constraints: (plan.constraints || []).slice(),
+    observations: clone(extras.observations || []),
+    missionBound: true,
+    structuredOnly: true,
+  };
+}
+
+/**
  * Build Scout delegation from a locked Mission Plan — no English parsing.
  */
 function scoutDelegationFromMission(mission) {
@@ -232,13 +374,20 @@ function scoutDelegationFromMission(mission) {
     plan.geography.region ||
     (plan.geography.cities && plan.geography.cities.length ? plan.geography.cities.join(', ') : null);
 
+  const eligibleSubsegments =
+    (plan.market.eligibleSubsegments && plan.market.eligibleSubsegments.length)
+      ? plan.market.eligibleSubsegments.slice()
+      : [plan.market.segment];
+  const scoutSegments = [...new Set(eligibleSubsegments.filter(Boolean))];
+
   return {
     tenantId: String(mission.tenantId || mission.clientId || ''),
     missionId: mission.id,
     targetContext: {
       geography: geographyLabel,
       cities: (plan.geography.cities || []).slice(),
-      segments: [plan.market.segment],
+      segments: scoutSegments,
+      primarySegment: plan.market.segment,
       industry: plan.market.industry,
       buyer: plan.market.buyer,
       businessType: plan.market.segment,
@@ -247,7 +396,7 @@ function scoutDelegationFromMission(mission) {
     },
     businessContext: {
       serviceGeography: geographyLabel,
-      preferredSegments: [plan.market.segment],
+      preferredSegments: scoutSegments,
       operatorDirection: plan.objective,
       missionObjectiveImmutable: true,
       commercialCapability: (plan.constraints || []).includes('commercial_only')
@@ -264,11 +413,14 @@ function scoutDelegationFromMission(mission) {
 
 module.exports = {
   scoutInput,
+  maxInput,
   paigeInput,
+  pennyInput,
   veraInput,
   rexInput,
   emmettInput,
   scoutDelegationFromMission,
+  findLatestScoutDiscovery,
   requireStructuredMission,
   requireLockedMissionPlan,
 };

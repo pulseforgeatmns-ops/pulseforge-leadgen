@@ -394,6 +394,8 @@ async function discover(input) {
     coveragePct: pipelineResult.coveragePct,
     intelligenceReport: pipelineResult.intelligenceReport,
     emptyMarketDecision: pipelineResult.emptyMarketDecision,
+    learningInfluence: pipelineResult.learningInfluence || [],
+    priorOutcomeLearnings: pipelineResult.priorOutcomeLearnings || [],
   };
 }
 

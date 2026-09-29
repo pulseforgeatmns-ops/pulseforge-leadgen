@@ -7,6 +7,24 @@ const {
   logZeroSendSuppression,
   markBatchProxyEvents,
 } = require('./openSignalGate');
+const {
+  correlateBrevoSend,
+  isCanonicalCorrelation,
+  legacySendMatchFromCorrelation,
+  findLegacyAgentLogSend,
+} = require('./brevoSendCorrelation');
+const {
+  persistMissionProviderEvent,
+  logCorrelationFailure,
+  ensureOutboundExecutionSchema,
+} = require('../services/acquisitionMissionOutboundPersistence');
+const { consumeMissionProviderEvent } = require('../services/acquisitionMissionProviderObservation');
+const {
+  SENDER_IDENTITY_STATUS,
+  classifyEventSenderIdentity,
+  shouldIngestCanonicalReputation,
+} = require('./canonicalSenderIdentity');
+const { ensureSenderIdentityEventSchema } = require('./emailEventIdentitySchema');
 
 const BREVO_EVENT_MAP = {
   request: 'sent',
@@ -264,40 +282,45 @@ function parseJsonMaybe(value) {
   }
 }
 
-async function findMatchingSend({ email, clientId, messageId, subject }) {
-  if (messageId) {
-    const byMessage = await pool.query(`
-      SELECT payload, client_id, prospect_id, ran_at
-      FROM agent_log
-      WHERE agent_name = 'emmett'
-        AND action = 'email_sent'
-        AND payload->>'message_id' = $1
-      ORDER BY ran_at DESC
-      LIMIT 1
-    `, [messageId]);
-    if (byMessage.rows.length) return byMessage.rows[0];
-  }
-
-  const params = [email, subject || null];
-  if (clientId) params.push(clientId);
-  const byEmail = await pool.query(`
-    SELECT al.payload, al.client_id, al.prospect_id, al.ran_at
-    FROM agent_log al
-    JOIN prospects p ON p.id = al.prospect_id AND p.client_id = al.client_id
-    WHERE al.agent_name = 'emmett'
-      AND al.action = 'email_sent'
-      AND LOWER(p.email) = $1
-      AND ($2::text IS NULL OR al.payload->>'subject' = $2)
-      ${clientId ? 'AND al.client_id = $3' : ''}
-    ORDER BY al.ran_at DESC
-    LIMIT 1
-  `, params);
-  return byEmail.rows[0] || null;
+async function findMatchingSend(params, dbPool = pool) {
+  return findLegacyAgentLogSend(params, dbPool);
 }
 
-async function resolveProspect(email, clientId, sendMatch) {
+async function persistCanonicalProviderEvent({
+  correlation,
+  payload,
+  eventType,
+  eventId: brevoEventId,
+  occurredAt,
+}, dbPool = pool) {
+  if (!isCanonicalCorrelation(correlation)) return null;
+  await ensureOutboundExecutionSchema(dbPool);
+  const rawEventType = String(payload.event || payload.event_type || payload.type || '').trim() || null;
+  const providerEventId = payload.id || payload.uuid || payload.event_id || payload.eventId || null;
+  return persistMissionProviderEvent({
+    missionId: correlation.missionId,
+    tenantId: correlation.tenantId,
+    prospectId: correlation.prospectId,
+    executionRecordId: correlation.executionRecordId,
+    preparedArtifactRevision: correlation.preparedArtifactRevision,
+    provider: 'brevo',
+    providerMessageId: correlation.providerMessageId,
+    eventType,
+    rawEventType,
+    providerEventId,
+    occurredAt,
+    link: payload.link || null,
+    payload: {
+      brevo_event_id: brevoEventId,
+      correlation_source: correlation.source,
+      open_source: payload.open_source || null,
+    },
+  }, dbPool);
+}
+
+async function resolveProspect(email, clientId, sendMatch, dbPool = pool) {
   if (sendMatch?.prospect_id) {
-    const byId = await pool.query(`
+    const byId = await dbPool.query(`
       SELECT id, client_id, email, vertical
       FROM prospects
       WHERE id = $1
@@ -309,7 +332,7 @@ async function resolveProspect(email, clientId, sendMatch) {
 
   const params = [email];
   if (clientId) params.push(clientId);
-  const byEmail = await pool.query(`
+  const byEmail = await dbPool.query(`
     SELECT id, client_id, email, vertical
     FROM prospects
     WHERE LOWER(email) = $1
@@ -320,25 +343,40 @@ async function resolveProspect(email, clientId, sendMatch) {
   return byEmail.rows[0] || null;
 }
 
-async function sendingDomainForPayload(payload, sendPayload, prospect) {
+function resolveEventSendingDomain(payload = {}, sendPayload = {}) {
   const fromEmail = senderEmail(payload) || normalizeEmail(sendPayload.from_email);
   const fromDomain = rootDomainFromEmail(fromEmail);
-  if (fromDomain) return fromDomain;
-
-  const payloadDomain = normalizeRootDomain(payload.sending_domain || metadataValue(payload, 'sending_domain'));
-  if (payloadDomain) return payloadDomain;
-
-  if (prospect?.client_id) {
-    const clientRes = await pool.query('SELECT sending_domain FROM clients WHERE id = $1 LIMIT 1', [prospect.client_id]);
-    const clientDomain = normalizeRootDomain(clientRes.rows[0]?.sending_domain);
-    if (clientDomain) return clientDomain;
+  if (fromDomain) {
+    return { domain: fromDomain, source: 'sender_email' };
   }
 
-  return 'unknown.local';
+  const payloadDomain = normalizeRootDomain(payload.sending_domain || metadataValue(payload, 'sending_domain'));
+  if (payloadDomain) {
+    return { domain: payloadDomain, source: 'payload_sending_domain' };
+  }
+
+  return { domain: null, source: null };
 }
 
-async function logBrevoEvent({ eventId, eventType, email, prospectId, clientId, inserted }) {
-  await pool.query(`
+async function loadTenantSendingDomain(clientId, dbPool = pool) {
+  if (!clientId) return null;
+  try {
+    const clientRes = await dbPool.query(
+      'SELECT sending_domain FROM clients WHERE id = $1 LIMIT 1',
+      [clientId]
+    );
+    return normalizeRootDomain(clientRes.rows[0]?.sending_domain);
+  } catch (_) {
+    return null;
+  }
+}
+
+async function sendingDomainForPayload(payload, sendPayload) {
+  return resolveEventSendingDomain(payload, sendPayload).domain;
+}
+
+async function logBrevoEvent({ eventId, eventType, email, prospectId, clientId, inserted }, dbPool = pool) {
+  await dbPool.query(`
     INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
     VALUES ('riley', 'brevo_event_received', $1, $2, 'success', NOW(), $3)
   `, [
@@ -353,8 +391,10 @@ async function logBrevoEvent({ eventId, eventType, email, prospectId, clientId, 
   ]);
 }
 
-async function insertBrevoEvent(rawPayload = {}) {
-  await ensureOpenSignalSchema(pool);
+async function insertBrevoEvent(rawPayload = {}, dbPool = pool) {
+  await ensureOpenSignalSchema(dbPool);
+  await ensureOutboundExecutionSchema(dbPool);
+  await ensureSenderIdentityEventSchema(dbPool);
   const payload = rawPayload || {};
   const recipient = recipientEmail(payload);
   const type = internalEventType(payload);
@@ -369,23 +409,47 @@ async function insertBrevoEvent(rawPayload = {}) {
     payload.client_id
   ) || null;
   const subject = textValue(payload.subject || metadataValue(payload, 'subject'));
-  const sendMatch = await findMatchingSend({
+  const tags = Array.isArray(payload.tags) ? payload.tags : [];
+  const correlation = await correlateBrevoSend({
+    messageId,
     email: recipient,
     clientId: payloadClientId,
-    messageId,
     subject,
-  });
+    tags,
+  }, dbPool);
+  const sendMatch = legacySendMatchFromCorrelation(correlation);
   const sendPayload = parseJsonMaybe(sendMatch?.payload);
-  const clientId = Number(sendMatch?.client_id || payloadClientId) || null;
-  const prospect = await resolveProspect(recipient, clientId, sendMatch);
+  const clientId = Number(
+    correlation.clientId
+    || sendMatch?.client_id
+    || payloadClientId
+  ) || null;
+  const prospect = await resolveProspect(recipient, clientId, sendMatch, dbPool);
+  if (correlation.failed && messageId) {
+    await logCorrelationFailure({
+      providerMessageId: messageId,
+      recipientEmail: recipient,
+      eventType: type,
+      reason: correlation.reason || 'no_matching_send',
+      clientId: clientId || payloadClientId || null,
+      prospectId: prospect?.id || null,
+    }, dbPool);
+  }
   const finalClientId = Number(prospect?.client_id || clientId) || null;
-  const domain = await sendingDomainForPayload(payload, sendPayload, prospect);
+  const eventDomainInfo = resolveEventSendingDomain(payload, sendPayload);
+  const tenantDomain = finalClientId
+    ? await loadTenantSendingDomain(finalClientId, dbPool)
+    : null;
+  const senderIdentity = classifyEventSenderIdentity({
+    eventDomain: eventDomainInfo.domain,
+    tenantDomain,
+  });
+  const domain = senderIdentity.eventDomain;
   const id = eventId(payload, type, recipient, messageId);
-  const tags = Array.isArray(payload.tags) ? payload.tags : [];
   const sequence = textValue(metadataValue(payload, 'sequence') || sendPayload.sequence || tags[0]);
   const step = parseStep(metadataValue(payload, 'step') || sendPayload.step || tags.find(tag => /^step_/i.test(String(tag))));
   const occurredAt = eventAt(payload);
-  const openClassification = await classifyOpenSource(pool, {
+  const openClassification = await classifyOpenSource(dbPool, {
     eventType: type,
     eventAt: occurredAt,
     payload,
@@ -397,7 +461,7 @@ async function insertBrevoEvent(rawPayload = {}) {
     sendMatch,
   });
 
-  const insert = await pool.query(`
+  const insert = await dbPool.query(`
     INSERT INTO email_events (
       event_id,
       prospect_id,
@@ -415,10 +479,13 @@ async function insertBrevoEvent(rawPayload = {}) {
       open_source_reason,
       open_source_classified_at,
       user_agent,
-      ip_address
+      ip_address,
+      sender_identity_status,
+      sender_identity_reason
     )
     SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12,
-      $13::open_source, $14, CASE WHEN $14::text IS NULL THEN NULL ELSE NOW() END, $15, $16
+      $13::open_source, $14, CASE WHEN $14::text IS NULL THEN NULL ELSE NOW() END, $15, $16,
+      $18, $19
     WHERE NOT (
       (
         $17::boolean
@@ -446,11 +513,14 @@ async function insertBrevoEvent(rawPayload = {}) {
           open_source_reason = COALESCE(EXCLUDED.open_source_reason, email_events.open_source_reason),
           open_source_classified_at = COALESCE(EXCLUDED.open_source_classified_at, email_events.open_source_classified_at),
           user_agent = COALESCE(EXCLUDED.user_agent, email_events.user_agent),
-          ip_address = COALESCE(EXCLUDED.ip_address, email_events.ip_address)
+          ip_address = COALESCE(EXCLUDED.ip_address, email_events.ip_address),
+          sender_identity_status = COALESCE(EXCLUDED.sender_identity_status, email_events.sender_identity_status),
+          sender_identity_reason = COALESCE(EXCLUDED.sender_identity_reason, email_events.sender_identity_reason)
       WHERE email_events.event_type IS DISTINCT FROM EXCLUDED.event_type
         OR email_events.open_source IS DISTINCT FROM EXCLUDED.open_source
         OR email_events.user_agent IS DISTINCT FROM EXCLUDED.user_agent
         OR email_events.ip_address IS DISTINCT FROM EXCLUDED.ip_address
+        OR email_events.sender_identity_status IS DISTINCT FROM EXCLUDED.sender_identity_status
     RETURNING id, open_source::text AS open_source, open_source_reason, (xmax = 0) AS inserted
   `, [
     id,
@@ -470,6 +540,8 @@ async function insertBrevoEvent(rawPayload = {}) {
     openClassification.userAgent,
     openClassification.ipAddress,
     SINGLETON_MESSAGE_EVENT_TYPES.has(type),
+    senderIdentity.status,
+    senderIdentity.reason,
   ]);
 
   const inserted = insert.rows[0]?.inserted === true;
@@ -478,20 +550,20 @@ async function insertBrevoEvent(rawPayload = {}) {
   let openSourceReason = insert.rows[0]?.open_source_reason || openClassification.reason || null;
   let reclassifiedProxyEvents = [];
   if (insert.rows[0]?.id && inserted && openClassification.source) {
-    const batchUpdated = await markBatchProxyEvents(pool, {
+    const batchUpdated = await markBatchProxyEvents(dbPool, {
       clientId: finalClientId,
       eventAt: occurredAt,
       source: openClassification.source,
       insertedEventId: insert.rows[0].id,
     });
     if (batchUpdated) {
-      const current = await pool.query(
+      const current = await dbPool.query(
         'SELECT open_source::text AS open_source, open_source_reason FROM email_events WHERE id = $1',
         [insert.rows[0].id]
       );
       openSource = current.rows[0]?.open_source || openSource;
       openSourceReason = current.rows[0]?.open_source_reason || openSourceReason;
-      const reclassified = await pool.query(`
+      const reclassified = await dbPool.query(`
         SELECT event_id, prospect_id, client_id, event_at
         FROM email_events
         WHERE client_id = $1
@@ -507,7 +579,7 @@ async function insertBrevoEvent(rawPayload = {}) {
   }
 
   if (inserted && isOpenOrClickEventType(type) && !sendMatch && !openClassification.hasSend) {
-    await logZeroSendSuppression(pool, {
+    await logZeroSendSuppression(dbPool, {
       source: 'riley',
       eventId: id,
       eventType: type,
@@ -526,7 +598,27 @@ async function insertBrevoEvent(rawPayload = {}) {
     prospectId: prospect?.id || null,
     clientId: finalClientId,
     inserted,
-  });
+  }, dbPool);
+
+  let missionProviderEvent = null;
+  let missionProviderObservation = null;
+  const ingestReputation = shouldIngestCanonicalReputation(senderIdentity);
+  if (isCanonicalCorrelation(correlation) && ingestReputation) {
+    try {
+      missionProviderEvent = await persistCanonicalProviderEvent({
+        correlation,
+        payload,
+        eventType: type,
+        eventId: id,
+        occurredAt,
+      }, dbPool);
+      if (missionProviderEvent && missionProviderEvent.event) {
+        missionProviderObservation = await consumeMissionProviderEvent(missionProviderEvent, dbPool);
+      }
+    } catch (err) {
+      console.error('[Brevo] mission provider event/observation failed:', err.message);
+    }
+  }
 
   return {
     inserted,
@@ -538,10 +630,20 @@ async function insertBrevoEvent(rawPayload = {}) {
     prospect_id: prospect?.id || null,
     client_id: finalClientId,
     sending_domain: domain,
+    sender_identity_status: senderIdentity.status,
+    sender_identity_reason: senderIdentity.reason,
+    event_sending_domain: senderIdentity.eventDomain,
+    tenant_sending_domain: senderIdentity.tenantDomain,
+    reputation_ingest: ingestReputation,
     open_source: openSource,
     open_source_reason: openSourceReason,
-    has_corresponding_send: Boolean(sendMatch || openClassification.hasSend),
+    has_corresponding_send: Boolean(sendMatch || openClassification.hasSend || isCanonicalCorrelation(correlation)),
     reclassified_proxy_events: reclassifiedProxyEvents,
+    correlation,
+    mission_id: correlation.missionId || null,
+    execution_record_id: correlation.executionRecordId || null,
+    mission_provider_event: missionProviderEvent,
+    mission_provider_observation: missionProviderObservation,
   };
 }
 
@@ -556,4 +658,11 @@ module.exports = {
   recipientEmail,
   rootDomainFromEmail,
   senderEmail,
+  findMatchingSend,
+  persistCanonicalProviderEvent,
+  resolveEventSendingDomain,
+  loadTenantSendingDomain,
+  sendingDomainForPayload,
+  ensureSenderIdentityEventSchema,
+  SENDER_IDENTITY_STATUS,
 };

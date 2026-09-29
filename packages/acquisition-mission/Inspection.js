@@ -14,6 +14,7 @@ const {
   SPECIALISTS,
   round2,
 } = require('./types');
+const { NEXT_ACTIONS, EVIDENCE_TYPES } = require('./ObserveReaction');
 const { specialistContext, progressPercent } = require('./Lifecycle');
 const { currentBlocker } = require('./Blockers');
 const { collectEvidence } = require('./Explain');
@@ -35,6 +36,7 @@ const INSPECTION_PROPERTIES = Object.freeze({
   OUTCOME_LEARNING: 'outcome_learning',
   EXPLAIN: 'explain',
   WORKSPACE: 'workspace',
+  OBSERVE_MEANING: 'observe_meaning',
 });
 
 const PLANNING_REQUIREMENTS = Object.freeze([
@@ -76,8 +78,8 @@ function referencesSpecialistState(question) {
   const q = String(question || '').trim().toLowerCase();
   if (!q) return false;
   return (
-    /\bwhy did (?:scout|paige|emmett|max)\b/.test(q) ||
-    /\bwhy (?:has|hasn't|did|didn't) (?:scout|paige|emmett|max)\b/.test(q) ||
+    /\bwhy did (?:scout|paige|penny|emmett|max)\b/.test(q) ||
+    /\bwhy (?:has|hasn't|did|didn't) (?:scout|paige|penny|emmett|max)\b/.test(q) ||
     /\bwhy (?:did|has) scout (?:stop|pause|halt|fail)\b/.test(q)
   );
 }
@@ -98,7 +100,8 @@ function referencesMissionState(question) {
     /\bwhat changed\b|\bwhat(?:'s| has) changed\b/.test(q) ||
     /\bwhat happens next\b|\bnext step\b|\bwhat(?:'s| is) next\b/.test(q) ||
     /\bwhy this recommendation\b/.test(q) ||
-    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status/.test(q)
+    /why is this mission|why (?:does|do) this mission exist|why are we (?:doing|running) this mission|how is (?:the )?mission\b|mission workspace|where are we\b|mission progress|mission status/.test(q) ||
+    /\b(?:current\s+)?status\s+and\s+confidence\b|\bwhat(?:'s| is)\s+(?:the\s+)?(?:current\s+)?status\b.*\bmission\b|\bmission\b.*\b(?:current\s+)?status\s+and\s+confidence\b/.test(q)
   );
 }
 
@@ -140,6 +143,12 @@ function classifyInspectionQuestion(question) {
   if (/\bwhat changed\b|\bwhat(?:'s| has) changed\b|\bwhat(?:'s| is) new\b/.test(q)) {
     return INSPECTION_PROPERTIES.TIMELINE;
   }
+  if (/\bwhat does the open mean\b|\bwhat does (?:this|that|the) open mean\b|\bopen mean\b/.test(q)) {
+    return INSPECTION_PROPERTIES.OBSERVE_MEANING;
+  }
+  if (/\bwhen should we follow up\b|\bwhen to follow up\b|\bfollow[- ]?up timing\b/.test(q)) {
+    return INSPECTION_PROPERTIES.NEXT;
+  }
   if (/\bwhat happens next\b|\bnext step\b|\bwhat(?:'s| is) next\b|\bwhat comes next\b/.test(q)) {
     return INSPECTION_PROPERTIES.NEXT;
   }
@@ -156,6 +165,11 @@ function classifyInspectionQuestion(question) {
   ) {
     return INSPECTION_PROPERTIES.OUTCOME_LEARNING;
   }
+  if (
+    /\b(?:current\s+)?status\s+and\s+confidence\b|\bwhat(?:'s| is)\s+(?:the\s+)?(?:current\s+)?status\b.*\bmission\b/.test(q)
+  ) {
+    return INSPECTION_PROPERTIES.WORKSPACE;
+  }
   if (/mission workspace|mission status|mission progress|where are we\b/.test(q)) {
     return INSPECTION_PROPERTIES.WORKSPACE;
   }
@@ -166,6 +180,12 @@ function resolveExecutor(ctx, mission) {
   if (!ctx.scoutComplete) return { current: 'ScoutDiscoveryExecutor', next: 'ScoutDiscoveryExecutor' };
   if (!ctx.maxComplete && mission.stage === STAGES.PLAN) {
     return { current: 'MaxPrioritizationExecutor', next: 'MaxPrioritizationExecutor' };
+  }
+  if (
+    !ctx.paidAcquisitionComplete &&
+    (ctx.acquisitionApproach === 'paid' || ctx.acquisitionApproach === 'both')
+  ) {
+    return { current: 'PennyPaidAcquisitionExecutor', next: 'PennyPaidAcquisitionExecutor' };
   }
   if (!ctx.paigeComplete && (mission.stage === STAGES.PREPARE || mission.stage === STAGES.PLAN)) {
     return { current: 'PaigeVariantExecutor', next: 'PaigeVariantExecutor' };
@@ -295,7 +315,18 @@ function explainConfidenceBasis(mission, snapshot) {
   } else if (snapshot.why && snapshot.why.reasons && snapshot.why.reasons.some((r) => /reply rate/i.test(r))) {
     factors.push({ label: 'Historical evidence', detail: 'Prior campaign reply rate referenced' });
   }
-  if (!snapshot.outcomes || !snapshot.outcomes.length) {
+  const observeAssessment = snapshot.observeAssessment || {};
+  const observeReactions = snapshot.observeReactions || [];
+  if (mission.stage === STAGES.OBSERVE && (observeReactions.length || observeAssessment.evidenceTier)) {
+    factors.push({
+      label: 'Observe evidence tier',
+      detail: observeAssessment.evidenceTier || 'transport/engagement evidence recorded',
+    });
+    factors.push({
+      label: 'Planning confidence unchanged',
+      detail: observeAssessment.confidenceBasis || 'Opens and engagement do not mutate Scout planning confidence',
+    });
+  } else if (!snapshot.outcomes || !snapshot.outcomes.length) {
     factors.push({ label: 'No campaign results yet', detail: 'Confidence reflects planning evidence, not live send outcomes' });
   }
 
@@ -410,6 +441,8 @@ function explainSpecialistStop(snapshot, question = '') {
   const blocker = snapshot.blocker || currentBlocker(mission.blockers || []);
   const specialist = /\bpaige\b/.test(q)
     ? 'Paige'
+    : /\bpenny\b/.test(q)
+      ? 'Penny'
     : /\bemmett\b/.test(q)
       ? 'Emmett'
       : 'Scout';
@@ -461,14 +494,100 @@ function explainBlocker(snapshot, question = '') {
 function explainTimeline(snapshot) {
   const timeline = snapshot.timeline || [];
   const recent = timeline.slice(-5);
+  const reaction = latestObserveReaction(snapshot);
+  const derivedFrom = recent.map((row) => ({ label: row.clock || row.at, detail: row.label }));
+  if (reaction) {
+    derivedFrom.push({
+      label: 'Latest observe reaction',
+      detail: `${reaction.evidenceType} → ${reaction.updatedDisposition}: ${reaction.rationale}`,
+    });
+  }
   return {
     property: INSPECTION_PROPERTIES.TIMELINE,
-    value: recent.length ? recent[recent.length - 1].label : 'No events',
-    summary: recent.length
-      ? `${recent.length} recent mission event(s) on timeline`
-      : 'No timeline events recorded yet',
-    derivedFrom: recent.map((row) => ({ label: row.clock || row.at, detail: row.label })),
+    value: reaction
+      ? `${reaction.evidenceType} (${reaction.updatedDisposition})`
+      : (recent.length ? recent[recent.length - 1].label : 'No events'),
+    summary: reaction
+      ? reaction.rationale
+      : (recent.length
+        ? `${recent.length} recent mission event(s) on timeline`
+        : 'No timeline events recorded yet'),
+    derivedFrom,
     headline: 'What Changed',
+  };
+}
+
+function latestObserveReaction(snapshot = {}) {
+  const reactions = snapshot.observeReactions || [];
+  return reactions.length ? reactions[reactions.length - 1] : null;
+}
+
+function explainObserveAssessment(snapshot = {}) {
+  const assessment = snapshot.observeAssessment || {};
+  const reaction = latestObserveReaction(snapshot);
+  const action = assessment.recommendedNextAction || reaction?.recommendedNextAction || NEXT_ACTIONS.WAIT;
+  const timing = assessment.recommendedTiming || reaction?.recommendedTiming || {};
+  const lines = [];
+
+  if (reaction?.rationale) lines.push(reaction.rationale);
+  if (action === NEXT_ACTIONS.WAIT) {
+    lines.push('Remain in OBSERVE — no external action permitted.');
+    if (timing.kind === 'unresolved') {
+      lines.push('Follow-up cadence is unresolved; continue waiting without autosend.');
+    } else if (timing.dueAt) {
+      lines.push(`Wait until ${timing.dueAt} before proposing follow-up.`);
+    }
+  } else if (action === NEXT_ACTIONS.PROPOSE_FOLLOW_UP) {
+    lines.push('Cadence threshold reached — propose follow-up for operator approval.');
+    lines.push('Human approval required; external action is not permitted automatically.');
+  } else if (action === NEXT_ACTIONS.REVIEW_REPLY) {
+    lines.push('Review the reply before any outbound action.');
+  } else if (action === NEXT_ACTIONS.PROPOSE_END_CANDIDATE) {
+    lines.push('Candidate appears terminal — propose ending outreach for this prospect.');
+  }
+
+  return {
+    action,
+    timing,
+    humanApprovalRequired: assessment.humanApprovalRequired === true || reaction?.humanApprovalRequired === true,
+    externalActionPermitted: false,
+    summary: lines.join(' '),
+    reaction,
+    assessment,
+  };
+}
+
+function explainObserveMeaning(snapshot = {}) {
+  const reaction = latestObserveReaction(snapshot);
+  const assessment = snapshot.observeAssessment || {};
+  let summary = 'No observe reaction on file yet.';
+  const derivedFrom = [];
+
+  if (reaction) {
+    if (reaction.evidenceType === EVIDENCE_TYPES.HUMAN_OPEN) {
+      summary = 'Human open is engagement evidence — stronger than delivery or proxy opens — but not buying intent.';
+    } else if (reaction.evidenceType === EVIDENCE_TYPES.PROXY_OPEN) {
+      summary = 'Proxy/batch open is weak engagement — possible prefetch — and is not buying intent.';
+    } else if (reaction.evidenceType === EVIDENCE_TYPES.CLICKED) {
+      summary = 'Link click is stronger engagement than an open, but still not interest without a reply.';
+    } else {
+      summary = reaction.rationale || summary;
+    }
+    derivedFrom.push({ label: 'Evidence type', detail: reaction.evidenceType });
+    derivedFrom.push({ label: 'Evidence strength', detail: reaction.evidenceStrength });
+    derivedFrom.push({ label: 'Disposition', detail: reaction.updatedDisposition });
+  } else if (assessment.evidenceTier) {
+    summary = `Observe evidence tier ${assessment.evidenceTier}; planning confidence unchanged.`;
+    derivedFrom.push({ label: 'Evidence tier', detail: assessment.evidenceTier });
+  }
+
+  return {
+    property: INSPECTION_PROPERTIES.OBSERVE_MEANING,
+    value: reaction?.evidenceType || assessment.evidenceTier || 'none',
+    summary,
+    derivedFrom,
+    headline: 'What The Open Means',
+    structured: { reaction, assessment },
   };
 }
 
@@ -476,6 +595,29 @@ function explainNext(snapshot) {
   const mission = snapshot.mission || {};
   const workspace = snapshot.workspace || {};
   const blocker = snapshot.blocker;
+
+  if (mission.stage === STAGES.OBSERVE) {
+    const observe = explainObserveAssessment(snapshot);
+    return {
+      property: INSPECTION_PROPERTIES.NEXT,
+      value: observe.action,
+      summary: observe.summary,
+      derivedFrom: [
+        { label: 'Recommended next action', detail: observe.action },
+        { label: 'External action permitted', detail: 'false' },
+        { label: 'Human approval required', detail: String(observe.humanApprovalRequired) },
+        ...(observe.timing?.dueAt
+          ? [{ label: 'Recommended timing', detail: observe.timing.dueAt }]
+          : [{ label: 'Timing', detail: observe.timing?.kind || 'unresolved' }]),
+        ...(observe.reaction?.rationale
+          ? [{ label: 'Rationale', detail: observe.reaction.rationale }]
+          : []),
+      ],
+      headline: 'What Happens Next',
+      structured: observe,
+    };
+  }
+
   let next = 'Continue in mission workspace.';
   if (blocker) {
     next = `Resolve: ${blocker.label}`;
@@ -631,6 +773,8 @@ function explainMetric(property, snapshot, question = '') {
       return explainRecommendation(snapshot, question);
     case INSPECTION_PROPERTIES.OUTCOME_LEARNING:
       return explainOutcomeLearning(snapshot);
+    case INSPECTION_PROPERTIES.OBSERVE_MEANING:
+      return explainObserveMeaning(snapshot);
     default:
       return null;
   }
@@ -785,6 +929,9 @@ module.exports = {
   explainConfidenceBasis,
   explainHealthBasis,
   explainRecommendation,
+  explainObserveMeaning,
+  explainObserveAssessment,
+  latestObserveReaction,
   resolveScoutCognitiveTrace,
   formatInspection,
   inspectQuestion,

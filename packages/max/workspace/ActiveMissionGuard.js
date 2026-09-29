@@ -24,7 +24,10 @@ const {
   logAmoActiveResolved,
 } = require('./AmoWorkspaceHydration');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
+const { buildStructuredResponse } = require('./WorkspaceTypes');
 const askPathTrace = require('./audit/AskPathTrace');
+
+const UNRESOLVED_BOUND_MISSION_REASON = 'unresolved_bound_mission_context';
 
 const BLOCKED_DOMAIN_GENERAL = 'general_conversation';
 const BLOCKED_DOMAIN_BRIEFING = 'morning_briefing';
@@ -67,21 +70,31 @@ function isExplicitMissionExit(text) {
   return { explicit: false, reason: null };
 }
 
-function pickAcquisitionMission(missions, input = {}) {
+function resolveSessionBoundMissionId(input = {}) {
   const sessionCtx =
     (input.session && input.session.context) ||
     (input.context && typeof input.context === 'object' ? input.context : {});
-  const boundId = sessionCtx.missionId || sessionCtx.acquisitionMissionId || null;
-  if (boundId) {
-    const bound = missions.find((row) => row && row.id === boundId);
-    if (bound && bound.stage !== 'improve') return bound;
-  }
+  return sessionCtx.missionId || sessionCtx.acquisitionMissionId || null;
+}
+
+function isAmoSessionBoundMissionClaim(input = {}, boundId) {
+  if (!boundId) return false;
+  const sessionCtx =
+    (input.session && input.session.context) ||
+    (input.context && typeof input.context === 'object' ? input.context : {});
+  if (sessionCtx.acquisitionMissionId === boundId) return true;
+  if (sessionCtx.acquisitionOwner === 'AMO' && sessionCtx.missionId === boundId) return true;
+  return false;
+}
+
+/** list() is for discovery; session-bound IDs resolve through get(). */
+function pickAcquisitionMission(missions) {
   return missions.find((row) => row && row.stage !== 'improve') || null;
 }
 
 /**
  * @param {object} input
- * @returns {Promise<object|null>}
+ * @returns {Promise<{ mission: object|null, unresolvedBoundMissionId: string|null }>}
  */
 async function resolveAcquisitionActiveMission(input = {}) {
   askPathTrace.traceEnter('resolveAcquisitionActiveMission');
@@ -92,15 +105,67 @@ async function resolveAcquisitionActiveMission(input = {}) {
 
   await ensureAmoTenantHydrated(input);
 
+  const boundId = resolveSessionBoundMissionId(input);
+  if (boundId) {
+    const bound = engine.get(boundId, tenantId);
+    if (bound && bound.stage !== 'improve') {
+      logAmoActiveResolved(bound, tenantId);
+      askPathTrace.traceEarlyReturn('resolveAcquisitionActiveMission', 'session_bound_mission', {
+        missionId: bound.id,
+      });
+      return { mission: bound, unresolvedBoundMissionId: null };
+    }
+    if (!bound && isAmoSessionBoundMissionClaim(input, boundId)) {
+      askPathTrace.traceEarlyReturn('resolveAcquisitionActiveMission', UNRESOLVED_BOUND_MISSION_REASON, {
+        boundMissionId: boundId,
+      });
+      return { mission: null, unresolvedBoundMissionId: String(boundId) };
+    }
+  }
+
   const missions = engine.list(tenantId);
-  const resolved = pickAcquisitionMission(missions, input);
+  const resolved = pickAcquisitionMission(missions);
   if (resolved) {
     logAmoActiveResolved(resolved, tenantId);
   }
   askPathTrace.traceEarlyReturn('resolveAcquisitionActiveMission', resolved ? 'mission_found' : 'no_mission', {
     missionId: resolved && resolved.id,
   });
-  return resolved;
+  return { mission: resolved, unresolvedBoundMissionId: null };
+}
+
+function buildUnresolvedBoundMissionResponse(boundMissionId, input = {}) {
+  const prose =
+    'This conversation is still bound to an acquisition mission, but I cannot reload that mission right now. ' +
+    'Please reopen the mission workspace or restate your decision after the mission is available again.';
+  const structured = buildStructuredResponse({
+    answer: prose,
+    reasoning: [],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    confidence: 1,
+    nextInvestigations: [],
+    recommendedActions: [],
+    confidenceContributors: ['spec_201', UNRESOLVED_BOUND_MISSION_REASON],
+    timelineReferences: [],
+    relatedEntities: boundMissionId
+      ? [{ id: boundMissionId, type: 'acquisition_mission', name: boundMissionId }]
+      : [],
+    metadata: {
+      spec: 'SPEC-201',
+      unresolvedBoundMissionId: boundMissionId || null,
+      tenantId: resolveTenantId(input) || null,
+    },
+  });
+  return {
+    reason: UNRESOLVED_BOUND_MISSION_REASON,
+    prose,
+    structured,
+    mission: null,
+    action: 'blocked',
+    unresolvedBoundMission: true,
+    boundMissionId: boundMissionId || null,
+  };
 }
 
 /**
@@ -119,7 +184,25 @@ async function resolveActiveMissionLock(input = {}) {
     : input.detectExecution === true && isMissionExecutionCommand(question);
   const exit = isExplicitMissionExit(question);
 
-  const amoMission = await resolveAcquisitionActiveMission(input);
+  const amoResolution = await resolveAcquisitionActiveMission(input);
+  const amoMission = amoResolution.mission;
+  if (amoResolution.unresolvedBoundMissionId) {
+    askPathTrace.traceEarlyReturn('resolveActiveMissionLock', UNRESOLVED_BOUND_MISSION_REASON, {
+      boundMissionId: amoResolution.unresolvedBoundMissionId,
+      executionCommand,
+    });
+    return {
+      active: true,
+      mission: null,
+      source: 'amo',
+      missionId: amoResolution.unresolvedBoundMissionId,
+      executionCommand,
+      explicitExit: exit.explicit,
+      exitReason: exit.reason,
+      unresolvedBoundMission: true,
+      boundMissionId: amoResolution.unresolvedBoundMissionId,
+    };
+  }
   if (amoMission) {
     const planningTurn = operatorIntent
       ? operatorIntent.planningRequested
@@ -137,6 +220,8 @@ async function resolveActiveMissionLock(input = {}) {
       executionCommand: executionCommand || planningTurn,
       explicitExit: cancelDuringPlanning ? false : exit.explicit,
       exitReason: cancelDuringPlanning ? null : exit.reason,
+      unresolvedBoundMission: false,
+      boundMissionId: null,
     };
   }
 
@@ -179,6 +264,8 @@ async function resolveActiveMissionLock(input = {}) {
     executionCommand,
     explicitExit: exit.explicit,
     exitReason: exit.reason,
+    unresolvedBoundMission: false,
+    boundMissionId: null,
   };
 }
 
@@ -231,10 +318,14 @@ module.exports = {
   BLOCKED_DOMAIN_GENERAL,
   BLOCKED_DOMAIN_BRIEFING,
   WORKSPACE_DOMAIN,
+  UNRESOLVED_BOUND_MISSION_REASON,
   normalizeText,
   isMissionExecutionCommand,
   isExplicitMissionExit,
+  resolveSessionBoundMissionId,
+  isAmoSessionBoundMissionClaim,
   resolveAcquisitionActiveMission,
   resolveActiveMissionLock,
   guardExecutionDomain,
+  buildUnresolvedBoundMissionResponse,
 };

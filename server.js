@@ -41,6 +41,8 @@ const { ensureCallDispositionSchema } = require('./calBatchAgent');
 const { ensureMiraSchema } = require('./utils/miraSchema');
 const { ensureLifecycleSchema } = require('./utils/lifecycleSchema');
 const { ensureAoFieldSchema } = require('./utils/aoFieldSchema');
+const { ensureAoProspectRoutingSchema } = require('./utils/aoProspectRoutingSchema');
+const { ensureAoCrmSchema } = require('./utils/aoCrmSchema');
 const { startMiraTranscriptionWorker } = require('./miraTranscriptionAgent');
 const { startMiraClassifierWorker } = require('./miraClassifierAgent');
 const { startMiraRouterWorker } = require('./miraRouterAgent');
@@ -49,6 +51,7 @@ const { startWarmRoutingScheduler } = require('./warmRoutingAgent');
 const { startAnchorUnenrichedEnrichmentScheduler } = require('./scoutUnenrichedEnrichmentAgent');
 const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
 const { ensurePlacesAttributionSchema } = require('./utils/placesCostAttribution');
+const { ensureAnchorPortalSchema } = require('./utils/anchorPortalSchema');
 const stripeWebhookRouter = require('./routes/stripeWebhook');
 
 const app  = express();
@@ -59,6 +62,8 @@ ensureClientArchitecture()
   .then(() => ensureEmmettAutosendSchema())
   .then(enforceMiraClientState)
   .then(() => ensureAoFieldSchema())
+  .then(() => ensureAoProspectRoutingSchema())
+  .then(() => ensureAoCrmSchema())
   .catch(err => console.error('[clients] init error:', err.message));
 ensureCloserSchema().catch(err => console.error('[closer] init error:', err.message));
 ensureScoutExpansionTables().catch(err => console.error('[scoutExpansion] init error:', err.message));
@@ -71,12 +76,14 @@ ensureCallDispositionSchema().catch(err => console.error('[callDisposition] init
 ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message));
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
 ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
+ensureAnchorPortalSchema().catch(err => console.error('[anchorPortal] init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
 startMiraDigestScheduler();
 startWarmRoutingScheduler();
 startAnchorUnenrichedEnrichmentScheduler();
+require('./services/anchorGovernedScheduler').startAnchorGovernedScheduler({ pool });
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
@@ -97,6 +104,8 @@ function captureBrevoRawBody(req, _res, buf) {
   }
 }
 
+// This public form owns its body limit, CORS, and native-form responses.
+app.use('/', require('./routes/substralAssessment'));
 app.use(express.json({ verify: captureBrevoRawBody }));
 app.use(express.urlencoded({ extended: true, verify: captureBrevoRawBody }));
 app.use(cors());
@@ -147,6 +156,12 @@ app.use((req, res, next) => {
     return requireAuth(req, res, err => {
       if (err) return next(err);
       return requireRole('admin', 'manager', 'sales', 'closer')(req, res, next);
+    });
+  }
+  if (req.path === '/public/anchor-portal.html' || req.path === '/anchor-portal.html') {
+    return requireAuth(req, res, err => {
+      if (err) return next(err);
+      return requireRole('admin', 'manager', 'cleaner', 'facility_client')(req, res, next);
     });
   }
   return next();
@@ -212,6 +227,7 @@ app.use('/', require('./routes/outcomeIntelligence'));
 app.use('/', require('./routes/contentOutcomeIntelligence'));
 app.use('/', require('./routes/contentLearning'));
 app.use('/', require('./routes/knowledgeAdmin'));
+app.use('/', require('./routes/acquisitionKnowledge'));
 app.use('/', require('./routes/marketIntelligence'));
 app.use('/', require('./routes/relationshipIntelligence'));
 app.use('/', require('./routes/clientIntelligence'));
@@ -222,7 +238,9 @@ app.use('/', require('./routes/acquisitionIntelligenceModel'));
 app.use('/', require('./routes/acquisitionIntelligenceCompiler'));
 app.use('/', require('./routes/operatorScorecard'));
 app.use('/', require('./routes/emmettOutbound'));
+app.use('/', require('./routes/tenantOutreach'));
 app.use('/', require('./routes/acquisitionMissions'));
+app.use('/', require('./routes/operatorJudgments'));
 app.use('/', require('./routes/tenantWorkspace'));
 app.use('/', require('./routes/registration'));
 app.use('/', require('./routes/pilotOnboarding'));
@@ -242,10 +260,13 @@ app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
 app.use('/sales', require('./routes/sales'));
 app.use('/ao', require('./routes/ao'));
+app.use('/', require('./routes/aoProspectRouting'));
 app.use('/admin/field-visits', require('./routes/aoAdmin'));
 // Public marketing funnel — no session auth (see routes/scorecard.js)
 app.use('/', require('./routes/scorecard'));
 app.use('/', require('./routes/walkthrough'));
+app.use('/', require('./routes/anchorPortal'));
+app.use('/', require('./routes/leadQualificationReviews'));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
 // curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.
@@ -407,6 +428,7 @@ app.post('/login', async (req, res) => {
     if (user.role === 'closer') return res.redirect('/closer');
     if (user.role === 'sales') return res.redirect('/sales');
     if (user.role === 'ao') return res.redirect('/ao');
+    if (user.role === 'cleaner' || user.role === 'facility_client') return res.redirect('/portal/anchor');
     return res.redirect('/dashboard');
   }
 

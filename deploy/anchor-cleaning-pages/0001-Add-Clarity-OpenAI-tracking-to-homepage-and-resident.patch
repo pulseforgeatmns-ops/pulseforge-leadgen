@@ -1,0 +1,72 @@
+From c11ea74bb4e9e46d1594b4aad9b6d6fd6357130c Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 15 Sep 2026 12:03:49 +0000
+Subject: [PATCH] Add Clarity + OpenAI tracking to homepage and residential
+ page
+
+- Insert Microsoft Clarity (yhnafqbr5k) once in global head before OpenAI pixel
+- Add Clarity + OpenAI pixel to residential/index.html
+- Wire trackOpenAiLeadCreated on successful quote submission with submission_id
+---
+ index.html             |  7 +++++++
+ residential/index.html | 18 +++++++++++++++++-
+ 2 files changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/index.html b/index.html
+index f37527a..c04beb9 100644
+--- a/index.html
++++ b/index.html
+@@ -10,6 +10,13 @@
+ <meta property="og:description" content="Recurring commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH.">
+ <meta property="og:url" content="https://goanchorcleaning.com/">
+ <meta property="og:type" content="website">
++<script type="text/javascript">
++  (function(c,l,a,r,i,t,y){
++    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
++    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
++    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
++  })(window, document, "clarity", "script", "yhnafqbr5k");
++</script>
+ <script>!function(w,d,s,u){if(w.oaiq)return;var q=function(){q.q.push(arguments)};q.q=[];w.oaiq=q;var j=d.createElement(s);j.async=1;j.src=u;var f=d.getElementsByTagName(s)[0];f.parentNode.insertBefore(j,f)}(window,document,"script","https://bzrcdn.openai.com/sdk/oaiq.min.js");oaiq("init",{pixelId:"QtVasj1GCLfpLWsTwpYTBC",debug:true});</script>
+ <link rel="preconnect" href="https://fonts.googleapis.com">
+ <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+diff --git a/residential/index.html b/residential/index.html
+index 0e89586..f00f8c2 100644
+--- a/residential/index.html
++++ b/residential/index.html
+@@ -10,6 +10,14 @@
+ <meta property="og:description" content="Weekly, biweekly, and monthly cleaning for Bedford and Greater Manchester homes.">
+ <meta property="og:url" content="https://goanchorcleaning.com/residential/">
+ <meta property="og:type" content="website">
++<script type="text/javascript">
++  (function(c,l,a,r,i,t,y){
++    c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
++    t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
++    y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
++  })(window, document, "clarity", "script", "yhnafqbr5k");
++</script>
++<script>!function(w,d,s,u){if(w.oaiq)return;var q=function(){q.q.push(arguments)};q.q=[];w.oaiq=q;var j=d.createElement(s);j.async=1;j.src=u;var f=d.getElementsByTagName(s)[0];f.parentNode.insertBefore(j,f)}(window,document,"script","https://bzrcdn.openai.com/sdk/oaiq.min.js");oaiq("init",{pixelId:"QtVasj1GCLfpLWsTwpYTBC",debug:true});</script>
+ <link rel="preconnect" href="https://fonts.googleapis.com">
+ <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+ <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+@@ -82,8 +90,16 @@
+   window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','G-LCOWW1SO7N');
+   function track(name,params){window.dataLayer.push(Object.assign({event:name},params||{}));gtag('event',name,params||{})}
+   document.querySelectorAll('.js-phone').forEach(function(el){el.addEventListener('click',function(){track('phone_click',{event_category:'contact',page_type:'residential'})})});document.querySelectorAll('.js-email').forEach(function(el){el.addEventListener('click',function(){track('email_click',{event_category:'contact',page_type:'residential'})})});
++  function trackOpenAiLeadCreated(alreadyTracked, submissionId) {
++    if (alreadyTracked.value) return;
++    if (typeof window.oaiq !== 'function') return;
++    alreadyTracked.value = true;
++    var payload = { type: 'customer_action' };
++    if (submissionId) payload.submission_id = submissionId;
++    window.oaiq('measure', 'lead_created', payload);
++  }
+   var form=document.getElementById('residential-quote-form'),statusEl=document.getElementById('form-status'),endpoint='https://pulseforge-leadgen-production.up.railway.app/api/public/walkthrough';
+-  form.addEventListener('submit',function(e){e.preventDefault();var btn=form.querySelector('button[type="submit"]');var data={name:form.name.value.trim(),business_name:'Residential home',phone:form.phone.value.trim(),email:form.email.value.trim(),city:form.city.value.trim(),space_type:form.service.value,company_website:form.company_website.value};if(!data.name||!data.phone||!data.email||!data.city||!data.space_type){statusEl.className='form-status err';statusEl.textContent='Please fill in every field.';return}btn.disabled=true;statusEl.className='form-status';statusEl.textContent='Sending…';fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(data)}).then(function(res){if(res.status===204)return{message:'Thanks. Jacob will be in touch shortly.'};return res.json().then(function(json){if(!res.ok)throw new Error((json&&json.error)||'Could not send');return json})}).then(function(json){track('residential_quote_submit',{event_category:'lead',service:data.space_type});form.reset();statusEl.className='form-status ok';statusEl.textContent=(json&&json.message)||'Thanks. Jacob will be in touch shortly.'}).catch(function(){var subject=encodeURIComponent('Residential cleaning quote'),body=encodeURIComponent('Name: '+data.name+'\nPhone: '+data.phone+'\nEmail: '+data.email+'\nCity / town: '+data.city+'\nService: '+data.space_type);statusEl.className='form-status err';statusEl.innerHTML='Could not send the form. <a href="mailto:jacob@goanchorcleaning.com?subject='+subject+'&body='+body+'">Email Jacob instead</a> or <a href="tel:+16034202430">call/text (603) 420-2430</a>.'}).finally(function(){btn.disabled=false})});
++  form.addEventListener('submit',function(e){e.preventDefault();var btn=form.querySelector('button[type="submit"]');var openAiLeadTracked={value:false};var data={name:form.name.value.trim(),business_name:'Residential home',phone:form.phone.value.trim(),email:form.email.value.trim(),city:form.city.value.trim(),space_type:form.service.value,company_website:form.company_website.value};if(!data.name||!data.phone||!data.email||!data.city||!data.space_type){statusEl.className='form-status err';statusEl.textContent='Please fill in every field.';return}btn.disabled=true;statusEl.className='form-status';statusEl.textContent='Sending…';fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(data)}).then(function(res){if(res.status===204)return{message:'Thanks. Jacob will be in touch shortly.'};return res.json().then(function(json){if(!res.ok)throw new Error((json&&json.error)||'Could not send');return json})}).then(function(json){track('residential_quote_submit',{event_category:'lead',service:data.space_type});if(json&&json.submission_id){trackOpenAiLeadCreated(openAiLeadTracked,json.submission_id)}form.reset();statusEl.className='form-status ok';statusEl.textContent=(json&&json.message)||'Thanks. Jacob will be in touch shortly.'}).catch(function(){var subject=encodeURIComponent('Residential cleaning quote'),body=encodeURIComponent('Name: '+data.name+'\nPhone: '+data.phone+'\nEmail: '+data.email+'\nCity / town: '+data.city+'\nService: '+data.space_type);statusEl.className='form-status err';statusEl.innerHTML='Could not send the form. <a href="mailto:jacob@goanchorcleaning.com?subject='+subject+'&body='+body+'">Email Jacob instead</a> or <a href="tel:+16034202430">call/text (603) 420-2430</a>.'}).finally(function(){btn.disabled=false})});
+   var revealEls=document.querySelectorAll('.reveal'),io=new IntersectionObserver(function(entries){entries.forEach(function(entry){if(entry.isIntersecting){entry.target.classList.add('in');io.unobserve(entry.target)}})},{threshold:.1});revealEls.forEach(function(el,index){el.style.transitionDelay=(Math.min(index%5,4)*80)+'ms';io.observe(el)});window.addEventListener('load',function(){setTimeout(function(){revealEls.forEach(function(el){el.classList.add('in')})},1000)});
+   var fine=window.matchMedia('(hover:hover) and (pointer:fine)').matches,reduce=window.matchMedia('(prefers-reduced-motion:reduce)').matches;if(fine&&!reduce){document.querySelectorAll('.btn,.quote-form button').forEach(function(btn){btn.addEventListener('mousemove',function(e){var rect=btn.getBoundingClientRect(),x=Math.max(-10,Math.min(10,(e.clientX-rect.left-rect.width/2)*.22)),y=Math.max(-8,Math.min(8,(e.clientY-rect.top-rect.height/2)*.3));btn.style.transform='translate('+x+'px,'+y+'px)'});btn.addEventListener('mouseleave',function(){btn.style.transform=''})})}
+ </script>
+-- 
+2.43.0
+

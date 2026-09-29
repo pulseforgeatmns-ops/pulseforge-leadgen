@@ -12,6 +12,7 @@ const Types = require('./Types');
 const { buildBoundedScoutContext, criteriaFingerprint } = require('./BoundedContext');
 const {
   assessScoutNeed,
+  isOutboundInventoryReplenishment,
   looksLikeAcquisitionQuestion,
   looksLikeExplainPriority,
   looksLikeFollowUp,
@@ -263,11 +264,15 @@ async function runAcquisitionIntelligenceLoop(input = {}, opts = {}) {
     objective: input.objective,
     reason: input.reason,
     context: input.context,
+    workflow: input.workflow,
+    inventoryDeficit: input.inventoryDeficit,
     targetContext: bounded.targetContext,
     businessContext: bounded.businessContext,
-    existingIntelligence: priorState
-      ? { ...priorState, sufficient: priorState.opportunityCount > 0 }
-      : { ...existingRepo, sufficient: false },
+    existingIntelligence: isOutboundInventoryReplenishment(input)
+      ? { ...existingRepo, sufficient: existingRepo.sufficient }
+      : priorState
+        ? { ...priorState, sufficient: priorState.opportunityCount > 0 }
+        : { ...existingRepo, sufficient: false },
     recentResults,
     freshnessMs: opts.freshnessMs,
     now: opts.now,
@@ -480,6 +485,7 @@ module.exports = {
   buildBoundedScoutContext,
   criteriaFingerprint,
   assessScoutNeed,
+  isOutboundInventoryReplenishment,
   looksLikeAcquisitionQuestion,
   looksLikeExplainPriority,
   looksLikeFollowUp,

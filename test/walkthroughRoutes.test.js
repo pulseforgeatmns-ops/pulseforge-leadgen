@@ -6,7 +6,9 @@ const path = require('node:path');
 const pool = require('../db');
 const { validateWalkthroughPayload, SPACE_TYPES } = require('../lib/walkthroughValidate');
 const { captureWalkthroughLead, ANCHOR_CLIENT_ID, ACTION_TYPE } = require('../lib/walkthroughCapture');
+const { SOURCE_KIND } = require('../lib/walkthroughAttribution');
 const walkthroughRouter = require('../routes/walkthrough');
+const { createWalkthroughCaptureMockPool } = require('./helpers/walkthroughCaptureMockPool');
 
 const SITE = path.join(__dirname, '..', 'sites', 'anchor-cleaning', 'index.html');
 
@@ -96,27 +98,24 @@ describe('walkthrough validation', () => {
 describe('walkthrough capture', () => {
   it('writes a pending agent_actions row for Anchor', async () => {
     const original = pool.query;
-    let insert = null;
-    pool.query = async (sql, params) => {
-      if (/INSERT INTO agent_actions/i.test(sql)) {
-        insert = { sql, params };
-        return { rows: [{ id: 77 }] };
-      }
-      throw new Error(`Unexpected query: ${sql}`);
-    };
+    const mock = createWalkthroughCaptureMockPool({ nextActionId: 77 });
+    pool.query = mock.query.bind(mock);
     try {
       const validated = validateWalkthroughPayload(basePayload());
       const stored = await captureWalkthroughLead(validated.values);
       assert.equal(stored.id, 77);
       assert.equal(stored.client_id, ANCHOR_CLIENT_ID);
+      assert.ok(stored.prospect_id);
+      const insert = mock.state.agentActions[0];
       assert.equal(insert.params[0], 'website');
       assert.equal(insert.params[1], ACTION_TYPE);
-      assert.equal(insert.params[2], 'Facilities assessment request — Riverside Law');
+      assert.equal(insert.params[2], 'Facility Assessment request — Riverside Law');
       assert.equal(insert.params[5], 10);
-      const payload = JSON.parse(insert.params[4]);
+      const payload = insert.payload;
       assert.equal(payload.source, 'website_walkthrough');
       assert.equal(payload.contact.business_name, 'Riverside Law');
       assert.equal(payload.contact.space_type, 'law_office');
+      assert.equal(payload.prospect_id, stored.prospect_id);
     } finally {
       pool.query = original;
     }
@@ -129,12 +128,8 @@ describe('walkthrough public route', () => {
 
   before(async () => {
     originalQuery = pool.query;
-    pool.query = async (sql) => {
-      if (/INSERT INTO agent_actions/i.test(sql)) {
-        return { rows: [{ id: 8801 }] };
-      }
-      throw new Error(`Unexpected query in walkthrough route test: ${sql}`);
-    };
+    const mock = createWalkthroughCaptureMockPool({ nextActionId: 8801 });
+    pool.query = mock.query.bind(mock);
     const app = express();
     app.use(express.json());
     app.use('/', walkthroughRouter);
@@ -152,7 +147,7 @@ describe('walkthrough public route', () => {
     assert.equal(res.status, 201);
     assert.equal(res.json.ok, true);
     assert.equal(res.json.submission_id, 8801);
-    assert.match(res.json.message, /facilities assessment/i);
+    assert.match(res.json.message, /Facility Assessment/i);
   });
 
   it('returns field errors without internals', async () => {
@@ -170,17 +165,39 @@ describe('walkthrough public route', () => {
     assert.equal(res.status, 204);
     assert.equal(res.json, null);
   });
+
+  it('accepts optional first-party attribution on walkthrough POST', async () => {
+    const mock = createWalkthroughCaptureMockPool({ nextActionId: 8802 });
+    pool.query = mock.query.bind(mock);
+    const res = await request(harness.base, 'POST', '/api/public/walkthrough', basePayload({
+      attribution: {
+        oppref: 'paid-token',
+        landing_page_url: 'https://goanchorcleaning.com/?oppref=paid-token',
+        referrer: 'https://chatgpt.com/',
+        evil: 'ignored',
+      },
+    }));
+    assert.equal(res.status, 201);
+    assert.equal(res.json.submission_id, 8802);
+    const insertPayload = mock.state.agentActions[0].payload;
+    assert.equal(insertPayload.source, 'website_walkthrough');
+    assert.equal(insertPayload.attribution.raw.oppref, 'paid-token');
+    assert.equal(insertPayload.attribution.normalized.lead_source, 'chatgpt_ads');
+    assert.equal(insertPayload.attribution.provenance.sourceKind, SOURCE_KIND);
+    assert.notEqual(insertPayload.attribution.provenance.sourceKind, 'PLATFORM_API');
+    assert.equal(insertPayload.attribution.raw.evil, undefined);
+    assert.ok(insertPayload.prospect_id);
+  });
 });
 
 describe('Anchor homepage ads contract', () => {
   const html = fs.readFileSync(SITE, 'utf8');
 
   it('uses the Search-ready title, description, and headline', () => {
-    assert.match(html, /<title>Commercial Office Cleaning in Manchester, NH \| Anchor Cleaning<\/title>/);
-    assert.match(html, /content="Anchor Cleaning provides recurring commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH\. Request a facilities assessment\."/);
-    assert.match(html, /<h1[^>]*>A standing service for offices that/);
-    assert.match(html, /Commercial office cleaning in Greater Manchester, NH/);
-    assert.match(html, /Commercial office cleaning and janitorial service for professional offices in Greater Manchester, NH\./);
+    assert.match(html, /<title>Commercial Cleaning in Manchester, NH \| Anchor Cleaning<\/title>/);
+    assert.match(html, /content="Premium recurring commercial cleaning for offices, professional facilities and property managers throughout Greater Manchester, NH\. Request a facility assessment with Anchor Cleaning\."/);
+    assert.match(html, /<h1[^>]*>Commercial cleaning in Manchester, NH\./);
+    assert.match(html, /Recurring commercial cleaning, office cleaning, and janitorial service/);
   });
 
   it('exposes clickable phone and email contact paths', () => {
@@ -190,13 +207,15 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, /Greater Manchester, New Hampshire .*commercial office cleaning &amp; janitorial service/);
   });
 
-  it('includes the facilities assessment form, trust line, and conversion events', () => {
-    assert.match(html, /Schedule a facilities assessment\. Ten minutes\./);
-    assert.match(html, /Tell me a little about your facility and we'll set a quick assessment\./);
-    assert.match(html, /Request a facilities assessment/);
-    assert.doesNotMatch(html, />\s*Request a walkthrough\s*</);
+  it('includes the Facility Assessment form, trust line, and conversion events', () => {
+    assert.match(html, /Request Your Facility Assessment/);
+    assert.match(html, /arrange a facility assessment to understand your space/);
+    assert.match(html, /Request a Facility Assessment/);
+    assert.match(html, /Request Facility Assessment/);
+    assert.doesNotMatch(html, />\s*Request a walkthrough\s*</i);
     assert.doesNotMatch(html, /Walk me through your space/);
     assert.doesNotMatch(html, /quick walkthrough/i);
+    assert.doesNotMatch(html, /facilities assessment/i);
     assert.match(html, /name="name"/);
     assert.match(html, /name="business_name"/);
     assert.match(html, /name="phone"/);
@@ -207,12 +226,25 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, />Accounting \/ professional office</);
     assert.match(html, /Insured service/);
     assert.match(html, /Recurring office cleaning/);
-    assert.match(html, /Clear monthly quotes/);
+    assert.match(html, /Documented service standards/);
     assert.match(html, /Same standard every visit/);
+    assert.match(html, /id="assessment-form"/);
+    assert.match(html, /social-preview-v20260916\.jpg\?v=20260916/);
+    assert.match(html, /anchor-logo-canonical\.png\?v=20260916/);
+    assert.match(html, /"logo": "https:\/\/goanchorcleaning.com\/assets\/brand\/anchor-logo-canonical.png\?v=20260916"/);
     assert.match(html, /walkthrough_form_submit/);
     assert.match(html, /phone_click/);
     assert.match(html, /email_click/);
+    assert.match(html, /https:\/\/www\.clarity\.ms\/tag\/"\+i/);
+    assert.match(html, /"yhnafqbr5k"/);
+    assert.equal((html.match(/yhnafqbr5k/g) || []).length, 1);
+    assert.match(html, /if\(w\.oaiq\)return/);
+    assert.match(html, /QtVasj1GCLfpLWsTwpYTBC/);
+    assert.match(html, /bzrcdn\.openai\.com\/sdk\/oaiq\.min\.js/);
+    assert.match(html, /trackOpenAiLeadCreated/);
+    assert.match(html, /lead_created/);
+    assert.match(html, /json\.submission_id/);
     assert.match(html, /\/api\/public\/walkthrough/);
-    assert.match(html, /Thanks\. I'll reach out to set up a quick facilities assessment and give you a clear monthly quote\./);
+    assert.match(html, /Thank you\. We'll be in touch to arrange your Facility Assessment\./);
   });
 });

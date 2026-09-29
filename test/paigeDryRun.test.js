@@ -56,7 +56,7 @@ class FakeAnthropic {
       create: async request => {
         const prompt = request.messages?.[0]?.content || '';
         if (/Score this social media post/i.test(prompt)) {
-          return { content: [{ text: JSON.stringify({
+          return { content: [{ type: 'text', text: JSON.stringify({
             specificity: 9,
             originality: 9,
             hook_strength: 9,
@@ -65,7 +65,7 @@ class FakeAnthropic {
             reason: 'Specific, grounded, and direct.',
           }) }] };
         }
-        return { content: [{ text: JSON.stringify({
+        return { content: [{ type: 'text', text: JSON.stringify({
           format: 'dialogue',
           post_body: 'Practice Manager: "Ten sends means the pipeline is fixed."\n\nMe: [pause] "Two replies means we have a signal, not a guarantee."\n\nPractice Manager: "So what changes?"\n\nMe: "We keep the scope narrow and own the NEXT step."',
           hashtags: [],
@@ -82,7 +82,7 @@ require.cache[anthropicPath] = {
   exports: FakeAnthropic,
 };
 
-const { run } = require('../paigeAgent');
+const { run, generateSocialContent } = require('../paigeAgent');
 
 test('Paige dry-run generates Anchor content without any database write', async () => {
   const result = await run({ client_id: 10, dryRun: true, channel: 'linkedin_page', format: 'dialogue' });
@@ -97,9 +97,9 @@ test('Paige dry-run generates Anchor content without any database write', async 
 });
 
 test('Anchor production generation remains blocked while enabled_agents is Scout-only', async () => {
-  const result = await run({ client_id: 10, dryRun: false, channel: 'linkedin_page' });
+  const result = await generateSocialContent({ client_id: 10, dryRun: false, channel: 'linkedin_page' });
   assert.equal(result.skipped, true);
-  assert.equal(result.reason, 'anchor_dry_run_only');
+  assert.equal(result.reason, 'paige_not_enabled');
   assert.deepEqual(writes, []);
 });
 

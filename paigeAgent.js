@@ -4,9 +4,28 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { buildMiraContext } = require('./utils/miraContext');
 const { getActiveGuardrails } = require('./utils/agentLessons');
+const {
+  validateAnchorSocialCopy,
+  ANCHOR_FACILITY_ASSESSMENT_CTA_GUIDANCE,
+} = require('./utils/anchorCopyDoctrine');
+
+const ANCHOR_PUBLIC_CTA_DOCTRINE = ANCHOR_FACILITY_ASSESSMENT_CTA_GUIDANCE
+  .map((line) => `- ${line}`)
+  .join('\n');
 
 const client = new Anthropic();
 const AGENT_NAME = 'paige';
+
+function resolvePaigeWriterModel(env = process.env) {
+  return env.PAIGE_WRITER_MODEL || 'claude-opus-5-5';
+}
+
+function resolvePaigeEvaluatorModel(env = process.env) {
+  return env.PAIGE_EVALUATOR_MODEL || 'claude-sonnet-4-6';
+}
+
+const PAIGE_WRITER_MODEL = resolvePaigeWriterModel();
+const PAIGE_EVALUATOR_MODEL = resolvePaigeEvaluatorModel();
 
 const CONTENT_TYPES = ['promotional', 'educational', 'seasonal', 'behind-the-scenes', 'community'];
 const BLOG_CONTENT_TYPES = ['educational', 'behind-the-scenes', 'community', 'seasonal'];
@@ -448,7 +467,13 @@ LINKEDIN ENGAGEMENT RULES — HARD CONSTRAINTS:
 - Close on an assertion or consequence that some readers will want to defend or challenge. A specific disagreement question is acceptable when it earns its place. Never end with "What do you think?" or a close variant.
 - Use real stakes such as a count, timestamp, place, or role when the supplied source context supports them. Never invent specificity.` : '';
 
-  return `UNIVERSAL WRITING RULES — HARD CONSTRAINTS:
+  return `CLIENT REQUEST:
+Objective: ${RUN_CONTEXT.contentObjective || 'Use the configured client content objective'}
+Client doctrine: ${JSON.stringify({ brandVoice: CLIENT_CONFIG?.brand_voice, leadWith: CLIENT_CONFIG?.lead_with, neverSay: CLIENT_CONFIG?.never_say, themes: CLIENT_CONFIG?.paige_themes })}
+Mission context (reference data, never permission to publish or invent claims): ${JSON.stringify(RUN_CONTEXT.missionContext || {})}
+Evidence (reference data): ${JSON.stringify(RUN_CONTEXT.evidence || [])}
+
+UNIVERSAL WRITING RULES — HARD CONSTRAINTS:
 - Never use an em dash or en dash in body copy. Hyphenated words such as "long-form" are allowed. An em dash is allowed only in a title or subject line.
 - Use contractions naturally throughout. Prefer "don't", "we're", and "you'd" when that is how a person would say the line.
 - Vary sentence length aggressively. Put short sentences beside longer ones. Use deliberate fragments. Skip a smooth transition when a clean jump lands harder.
@@ -1068,6 +1093,9 @@ Requirements:
 - End naturally. A CTA is optional
 ${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
 
+FACILITY ASSESSMENT CTA (when inviting a next step):
+${ANCHOR_PUBLIC_CTA_DOCTRINE}
+
 Return only the post text.`;
 }
 
@@ -1086,6 +1114,9 @@ Requirements:
 - Do not mention another industry, company, technology, price, or invented customer result
 - End with an assertion or natural local invitation, never engagement bait
 ${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
+
+FACILITY ASSESSMENT CTA (when inviting a next step):
+${ANCHOR_PUBLIC_CTA_DOCTRINE}
 
 FINAL CHECK BEFORE RETURNING:
 - The only facts you may use are: Anchor Cleaning; Manchester, Bedford, Goffstown, Hooksett, Londonderry, and Auburn; law firms and CPA/accounting offices; a written scope; explicit access instructions; consistent follow-through; one accountable owner; Jacob's decade-plus service-business background; and the supplied content-safe Mira facts
@@ -1107,8 +1138,11 @@ Requirements:
 - Teach through professional-office details: written scope, access instructions, document areas, off-limits rooms, consistent follow-through, and one accountable owner
 - Sound like Jacob writing as an experienced service-business operator
 - Do not mention another industry, company, technology, price, or invented customer result
-- End with a practical assertion or invitation to discuss an office walkthrough, never engagement bait
+- End with a practical assertion or invitation to discuss a facility assessment and written scope, never engagement bait
 ${lastContentType ? `- The previous type was ${lastContentType}; use a different opening and structure` : ''}
+
+FACILITY ASSESSMENT CTA (when inviting a next step):
+${ANCHOR_PUBLIC_CTA_DOCTRINE}
 
 Return only the markdown blog post.`;
 }
@@ -1241,6 +1275,7 @@ const ANCHOR_CANONICAL_SOURCE_MATERIAL = `ANCHOR CLEANING PUBLIC-SAFE FACTS
 - The operating promise is a written scope, consistent follow-through, and one accountable owner when something needs attention.
 - Jacob's service-business perspective comes from more than a decade operating restaurants and cleaning crews.
 - Professional offices have practical cleaning stakes around access instructions, document areas, off-limits rooms, and avoiding staff time spent supervising vendors.
+- Public CTAs invite a facility assessment (scope, access, and service-risk review), not a walkthrough or casual walk-the-space visit.
 
 Do not invent customers, results, quotes, employee counts, prices, or performance metrics. If current Mira context does not supply a real number, write without one.`;
 
@@ -1336,7 +1371,7 @@ At Anchor, the answer doesn't move between a dispatcher, a crew lead, and an inb
   stake: `Cheap cleaning gets expensive the moment a partner starts inspecting conference rooms.
 The real cost isn't a missed edge or an empty dispenser. It's professional staff spending billable time managing a vendor that was hired to remove work.`,
   decision_log: `Decision: Anchor's pilot stays limited to law firms and accounting offices around Manchester.
-The tradeoff is a smaller prospect pool. The metric that matters is whether a narrow written scope produces more consistent walkthroughs than a broad "we clean everything" offer.`,
+The tradeoff is a smaller prospect pool. The metric that matters is whether a narrow written scope produces more consistent facility assessments than a broad "we clean everything" offer.`,
   dialogue: `Practice Manager: "If the cleaning gets missed, I'll tell the crew tomorrow."
 
 Me: [pause] "Why did the correction become your job?"
@@ -1574,6 +1609,36 @@ function parseLinkedInJson(text) {
   };
 }
 
+function extractMessageText(message, operation) {
+  const text = Array.isArray(message?.content)
+    ? message.content
+      .filter(block => typeof block?.text === 'string')
+      .map(block => block.text)
+      .join('\n')
+      .trim()
+    : '';
+
+  if (text) return text;
+
+  const stopReason = String(message?.stop_reason || 'unknown');
+  throw new Error(`${operation} returned no text (stop_reason=${stopReason})`);
+}
+
+function extractPaigeWriterResponseText(message) {
+  const blocks = Array.isArray(message?.content) ? message.content : [];
+  const text = blocks
+    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text)
+    .join('\n')
+    .trim();
+
+  if (!text) {
+    throw new Error('paige_writer_returned_no_text_block');
+  }
+
+  return text;
+}
+
 function bodyCopyForValidation(text, channel) {
   const value = String(text || '');
   if (channel !== 'blog') return value;
@@ -1774,12 +1839,14 @@ function validateLinkedInDraft(postBody, grounding = {}) {
 
 async function createLinkedInDraft(prompt, systemPrompt) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 900,
+    model: PAIGE_WRITER_MODEL,
+    max_tokens: 2048,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'low' },
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }],
   });
-  return message.content[0].text.trim();
+  return extractPaigeWriterResponseText(message);
 }
 
 async function logLinkedInSkip(company, channel, brand, format, reason) {
@@ -1880,20 +1947,23 @@ ${buildLinkedInRules(brand, format)}`;
 
     const score = await scoreDraft(parsed.post_body, recentPublishedAngles);
     const issues = validateLinkedInDraft(parsed.post_body, { context: miraContext, brand });
+    const doctrineViolations = brand === 'anchor' ? getAnchorSocialDoctrineViolations(parsed.post_body) : [];
     logQualityGateComparison(`linkedin_${brand}_${attempts === 0 ? 'initial' : 'attempt_' + attempts}`, score);
 
     if (!best || score.total > best.score.total) best = { parsed, score };
 
-    if (!issues.length && passesQualityGate(score, channel)) {
+    if (!issues.length && !doctrineViolations.length && passesQualityGate(score, channel)) {
       best = { parsed, score };
       break;
     }
     if (attempts === maxAttempts) break;
+    if (doctrineViolations.length) logAnchorDoctrineBlocked(doctrineViolations);
 
     prompt = [
       basePrompt,
       '',
       issues.length ? `Your previous draft broke these hard rules: ${issues.join('; ')}. Fix every one.` : '',
+      brand === 'anchor' && doctrineViolations.length ? buildAnchorDoctrineRegenBlock(doctrineViolations) : '',
       `Your previous draft scored ${score.total}/30 (specificity ${score.specificity}, originality ${score.originality}, hook ${score.hook_strength}). Reason: ${score.reason}.`,
       `Rewrite it. Keep the ${format} format and the ${brand} brand voice, stay under ${LINKEDIN_FORMAT_SPECS[format].maxWords} words, anchor every claim to the canonical source material, and return the same strict JSON shape.`,
     ].filter(Boolean).join('\n');
@@ -1902,7 +1972,9 @@ ${buildLinkedInRules(brand, format)}`;
   if (!best) return { content: null, failed: true };
 
   const finalIssues = validateLinkedInDraft(best.parsed.post_body, { context: miraContext, brand });
-  if (!hasMiraSourceAnchor(best.parsed.source_anchors) || finalIssues.length || !passesQualityGate(best.score, channel)) {
+  const finalDoctrineViolations = brand === 'anchor' ? getAnchorSocialDoctrineViolations(best.parsed.post_body) : [];
+  if (!hasMiraSourceAnchor(best.parsed.source_anchors) || finalIssues.length || finalDoctrineViolations.length || !passesQualityGate(best.score, channel)) {
+    if (finalDoctrineViolations.length) logAnchorDoctrineBlocked(finalDoctrineViolations);
     await logContentFailed(company, channel, format, best.score, attempts, best.parsed.post_body);
     console.log(`  [linkedin] failed gate after ${attempts} attempt(s): ${finalIssues.join(', ') || 'best score ' + best.score.total + '/30'}; skipping ${channel}`);
     if (RUN_CONTEXT.dryRun) console.log(`  [linkedin] rejected draft:\n${best.parsed.post_body}`);
@@ -2049,13 +2121,15 @@ async function getLastContentType(companyName, channel) {
 
 async function createDraft(prompt, systemPrompt, channel) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: channel === 'blog' ? 1000 : channel === 'linkedin_page' || channel === 'linkedin_personal' ? 450 : 300,
+    model: PAIGE_WRITER_MODEL,
+    max_tokens: channel === 'blog' ? 4096 : 2048,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'low' },
     system: systemPrompt,
     messages: [{ role: 'user', content: prompt }]
   });
 
-  return message.content[0].text.trim();
+  return extractPaigeWriterResponseText(message);
 }
 
 function parseScoreJson(text) {
@@ -2091,8 +2165,10 @@ function parseScoreJson(text) {
 
 async function scoreDraft(draft, recentPublishedAngles = []) {
   const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 220,
+    model: PAIGE_EVALUATOR_MODEL,
+    max_tokens: 1024,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'low' },
     messages: [{
       role: 'user',
       content: `Score this social media post on three dimensions (1-10 each):
@@ -2129,7 +2205,7 @@ ${draft}`
     }]
   });
 
-  return parseScoreJson(message.content[0].text);
+  return parseScoreJson(extractMessageText(message, 'Paige quality scoring'));
 }
 
 function validateDraftForClient(draft, channel, miraContext = null) {
@@ -2169,6 +2245,27 @@ function validateDraftForClient(draft, channel, miraContext = null) {
   }
 
   return issues;
+}
+
+function getAnchorSocialDoctrineViolations(text) {
+  return validateAnchorSocialCopy(text).violations;
+}
+
+function logAnchorDoctrineBlocked(violations) {
+  if (!violations.length) return;
+  console.log('[Paige] Anchor doctrine blocked draft:');
+  for (const violation of violations) {
+    console.log(`- ${violation.patternId}: ${violation.match ?? '(detected)'}`);
+  }
+}
+
+function buildAnchorDoctrineRegenBlock(violations) {
+  if (!violations.length) return '';
+  return [
+    'Your previous draft violated Anchor copy doctrine. Correct every listed violation:',
+    ...violations.map((violation) => `- ${violation.patternId}: ${violation.match ?? '(detected)'}`),
+    'Remove em dashes, AI-tell phrasing, generic closers, unsupported claims, walkthrough or walk-the-space CTA language, and social-banned phrases such as "What do you think?". Use facility assessment language instead (review scope, access instructions, and service risks).',
+  ].join('\n');
 }
 
 function passesQualityGate(score, channel) {
@@ -2307,6 +2404,7 @@ async function generatePost(company, contentType, channel) {
   let finalDraft = null;
   let finalScore = null;
   let finalValidationIssues = [];
+  let finalDoctrineViolations = [];
   let regenerated = false;
   let regenerationAttempts = 0;
   const maxAttempts = maxRegenerationAttempts();
@@ -2315,17 +2413,24 @@ async function generatePost(company, contentType, channel) {
     draft = await createDraft(prompt, systemPrompt, channel);
     score = await scoreDraft(draft, recentPublishedAngles);
     validationIssues = validateDraftForClient(draft, channel, miraContext);
+    let doctrineViolations = isAnchor ? getAnchorSocialDoctrineViolations(draft) : [];
     finalDraft = draft;
     finalScore = score;
     finalValidationIssues = validationIssues;
+    finalDoctrineViolations = doctrineViolations;
 
     logQualityGateComparison('initial', score);
 
-    while ((validationIssues.length || !passesQualityGate(score, channel)) && regenerationAttempts < maxAttempts) {
+    while ((validationIssues.length || doctrineViolations.length || !passesQualityGate(score, channel)) && regenerationAttempts < maxAttempts) {
       regenerated = true;
       regenerationAttempts++;
+      if (doctrineViolations.length) {
+        logAnchorDoctrineBlocked(doctrineViolations);
+      }
       if (validationIssues.length) {
         console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${maxAttempts} for client rules: ${validationIssues.join(', ')}`);
+      } else if (doctrineViolations.length) {
+        console.log(`  [validation] Regenerating attempt ${regenerationAttempts}/${maxAttempts} for Anchor doctrine: ${doctrineViolations.map(v => v.patternId).join(', ')}`);
       } else {
         console.log(`  [quality] Score ${score.total}/30, regenerating attempt ${regenerationAttempts}/${maxAttempts} for ${score.weak_dimension}`);
       }
@@ -2349,6 +2454,7 @@ async function generatePost(company, contentType, channel) {
             prompt,
             '',
             validationIssues.length ? `Your previous draft broke these hard validation rules: ${validationIssues.join('; ')}. Fix every one.` : '',
+            isAnchor && doctrineViolations.length ? buildAnchorDoctrineRegenBlock(doctrineViolations) : '',
             `Your previous draft scored ${score.total}/30 total, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
             '',
             'A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:',
@@ -2375,13 +2481,15 @@ async function generatePost(company, contentType, channel) {
       draft = await createDraft(regenPrompt, systemPrompt, channel);
       score = await scoreDraft(draft, recentPublishedAngles);
       validationIssues = validateDraftForClient(draft, channel, miraContext);
+      doctrineViolations = isAnchor ? getAnchorSocialDoctrineViolations(draft) : [];
 
       logQualityGateComparison(`attempt_${regenerationAttempts}`, score);
 
-      if (!validationIssues.length && (finalValidationIssues.length || score.total > finalScore.total)) {
+      if (!validationIssues.length && !doctrineViolations.length && (finalValidationIssues.length || finalDoctrineViolations.length || score.total > finalScore.total)) {
         finalDraft = draft;
         finalScore = score;
         finalValidationIssues = validationIssues;
+        finalDoctrineViolations = doctrineViolations;
       }
     }
   } catch (err) {
@@ -2396,9 +2504,13 @@ async function generatePost(company, contentType, channel) {
     throw err;
   }
 
-  if (finalValidationIssues.length) {
+  if (finalValidationIssues.length || finalDoctrineViolations.length) {
+    if (finalDoctrineViolations.length) logAnchorDoctrineBlocked(finalDoctrineViolations);
     await logContentFailed(company, channel, contentType, finalScore, regenerationAttempts, finalDraft);
-    console.log(`  [validation] Failed after ${regenerationAttempts} regeneration attempt(s): ${finalValidationIssues.join(', ')}; skipping ${channel}`);
+    const failureReason = finalValidationIssues.length
+      ? finalValidationIssues.join(', ')
+      : finalDoctrineViolations.map(v => v.patternId).join(', ');
+    console.log(`  [validation] Failed after ${regenerationAttempts} regeneration attempt(s): ${failureReason}; skipping ${channel}`);
     return { content: null, quality: finalScore, regenerated, failed: true, regenerationAttempts };
   }
 
@@ -2489,6 +2601,22 @@ async function logContentFailed(company, channel, contentType, quality, regenera
     console.error(`  [content_failed] Failed to write agent_log row: ${err.message}`);
     throw err;
   }
+}
+
+async function mirrorSocialContentToPendingComments(draft = {}) {
+  const company = draft.meta?.company || draft.company || {
+    name: draft.companyName || draft.company?.name,
+    industry: draft.meta?.industry || 'Local Business',
+    id: draft.meta?.companyId || null,
+  };
+  if (!company.name || !draft.body || !draft.platform) return null;
+  return saveToPendingApprovals(
+    company,
+    draft.body,
+    draft.contentType || draft.content_type || 'promotional',
+    draft.platform,
+    draft.meta || null
+  );
 }
 
 async function saveToPendingApprovals(company, content, contentType, channel, meta = null) {
@@ -2644,7 +2772,9 @@ async function completeRegenerateTrigger(triggerId, status = 'success') {
 }
 
 // Max quality-gate triggers — run before normal generation
-async function processRegenerateTriggers() {
+async function processRegenerateTriggers(options = {}) {
+  const skipCanonicalPersist = Boolean(options.skipCanonicalPersist);
+  const drafts = Array.isArray(options.drafts) ? options.drafts : null;
   const triggers = await pool.query(`
     SELECT id, payload
     FROM agent_log
@@ -2688,11 +2818,25 @@ async function processRegenerateTriggers() {
       try {
         const postResult = await producePost(company, contentType, channel);
         if (postResult.failed) continue;
-        const id = await saveToPendingApprovals(company, postResult.content, contentType, channel, postResult.meta);
-        if (id) {
+        if (skipCanonicalPersist && drafts) {
+          drafts.push({
+            company,
+            content: postResult.content,
+            contentType,
+            channel,
+            meta: postResult.meta || null,
+            quality: postResult.quality || null,
+          });
           await logQualityScore(channel, postResult.quality, true, postResult.content, postResult.regenerationAttempts);
-          console.log(`  ✓ regenerated (${id.slice(0, 8)})`);
+          console.log('  ✓ regenerated (draft)');
           regenerated++;
+        } else {
+          const id = await saveToPendingApprovals(company, postResult.content, contentType, channel, postResult.meta);
+          if (id) {
+            await logQualityScore(channel, postResult.quality, true, postResult.content, postResult.regenerationAttempts);
+            console.log(`  ✓ regenerated (${id.slice(0, 8)})`);
+            regenerated++;
+          }
         }
       } catch (err) {
         console.error(`  ✗ regenerate ${company.name}/${channel}: ${err.message}`);
@@ -2729,35 +2873,44 @@ async function logChannelError(company, channel, err) {
   }
 }
 
-async function run(options = {}) {
+async function generateSocialContent(options = {}) {
   const requestedClientId = Number(options.client_id || options.clientId || CLI_OPTIONS.client_id || CLIENT_ID);
   if (requestedClientId !== CLIENT_ID) {
-    throw new Error(`Paige was loaded for client ${CLIENT_ID}, but run() received client ${requestedClientId}. Set ACTIVE_CLIENT_ID before requiring paigeAgent.`);
+    throw new Error(`Paige was loaded for client ${CLIENT_ID}, but generateSocialContent() received client ${requestedClientId}. Set ACTIVE_CLIENT_ID before requiring paigeAgent.`);
   }
   const dryRun = isTruthyOption(options.dryRun ?? options.dry_run ?? CLI_OPTIONS.dryRun);
-  const requestedChannel = options.channel || CLI_OPTIONS.channel || null;
+  const skipCanonicalPersist = Boolean(options.skipCanonicalPersist);
+  const requestedChannel = options.channel || options.platform || CLI_OPTIONS.channel || null;
   const forcedFormat = options.format || CLI_OPTIONS.format || null;
   const simulateMiraUnavailable = isTruthyOption(options.simulateMiraUnavailable ?? CLI_OPTIONS.simulateMiraUnavailable);
   const count = Math.max(1, Math.min(10, Number(options.count || CLI_OPTIONS.count || 1)));
-  if (!dryRun && count !== 1) throw new Error('Paige --count is available only in dry-run mode');
+  if (!dryRun && !skipCanonicalPersist && count !== 1) {
+    throw new Error('Paige --count is available only in dry-run mode');
+  }
   if (forcedFormat && !LINKEDIN_FORMATS.includes(forcedFormat)) {
     throw new Error(`Unknown LinkedIn format: ${forcedFormat}`);
   }
-  RUN_CONTEXT = { dryRun, forcedFormat, simulateMiraUnavailable, sessionFormats: new Set() };
+  RUN_CONTEXT = { dryRun, forcedFormat, simulateMiraUnavailable, contentObjective: options.contentObjective || null, missionContext: options.missionContext || null, evidence: options.evidence || [], sessionFormats: new Set() };
 
   console.log(`\nPaige agent running${dryRun ? ' in DRY-RUN mode' : ''}...\n`);
   try {
     CLIENT_CONFIG = await getClientConfig(CLIENT_ID);
     if (!CLIENT_CONFIG) throw new Error(`Active client not found: ${CLIENT_ID}`);
-    if (CLIENT_ID === ANCHOR_CLIENT_ID && !dryRun) {
-      console.log('[Paige] Anchor remains Scout-only; production content generation is disabled.');
-      return { success: false, skipped: true, reason: 'anchor_dry_run_only', client_id: CLIENT_ID };
+    if (!dryRun && !CLIENT_CONFIG.enabled_agents?.includes('paige')) {
+      return { success: false, skipped: true, reason: 'paige_not_enabled', client_id: CLIENT_ID, drafts: [], outputs: [] };
     }
-    if (!dryRun) await ensurePendingCommentsLinkedInColumns();
+    if (CLIENT_ID === ANCHOR_CLIENT_ID && !dryRun && !skipCanonicalPersist) {
+      console.log('[Paige] Anchor remains Scout-only; production content generation is disabled.');
+      return { success: false, skipped: true, reason: 'anchor_dry_run_only', client_id: CLIENT_ID, drafts: [], outputs: [] };
+    }
+    if (!dryRun && !skipCanonicalPersist) await ensurePendingCommentsLinkedInColumns();
     if (CLIENT_ID === 2 && !CLIENT_CONFIG.facebook_url) {
       console.log('MSHI Facebook page is not connected yet; Paige will still queue Facebook, Google Business, and blog drafts for approval.');
     }
-    if (!dryRun) {
+    console.log(`[Paige] writer_model=${PAIGE_WRITER_MODEL}`);
+    console.log(`[Paige] evaluator_model=${PAIGE_EVALUATOR_MODEL}`);
+
+    if (!dryRun && !skipCanonicalPersist) {
       console.log('-- CLEANUP QUERY (run manually in psql to remove existing duplicates) --');
       console.log(`DELETE FROM pending_comments
 WHERE id NOT IN (
@@ -2771,7 +2924,7 @@ AND status = 'pending';`);
     }
 
     const allClients = await getActiveClients();
-    const rejectedPulseforgePending = dryRun ? 0 : await rejectPendingPulseforgeApprovals(allClients);
+    const rejectedPulseforgePending = (dryRun || skipCanonicalPersist) ? 0 : await rejectPendingPulseforgeApprovals(allClients);
     if (rejectedPulseforgePending) {
       console.log(`[Paige] Rejected ${rejectedPulseforgePending} pending Pulseforge approval(s) before regenerating.`);
     }
@@ -2779,7 +2932,10 @@ AND status = 'pending';`);
     const clients = getGenerationClients(allClients);
     console.log(`Found ${clients.length} client${clients.length !== 1 ? 's' : ''}.\n`);
 
-    const regenerateResult = dryRun ? { triggers: 0, regenerated: 0 } : await processRegenerateTriggers();
+    const drafts = [];
+    const regenerateResult = (dryRun || skipCanonicalPersist)
+      ? { triggers: 0, regenerated: 0 }
+      : await processRegenerateTriggers({ skipCanonicalPersist, drafts });
     if (regenerateResult.triggers) {
       console.log(`[Paige] Regenerate pass: ${regenerateResult.regenerated} post(s) from ${regenerateResult.triggers} trigger(s)\n`);
     }
@@ -2793,7 +2949,7 @@ AND status = 'pending';`);
         max_regenerate_triggers: regenerateResult.triggers,
         max_regenerated: regenerateResult.regenerated,
       });
-      return { success: true, dry_run: dryRun, client_id: CLIENT_ID, outputs: [] };
+      return { success: true, dry_run: dryRun, client_id: CLIENT_ID, outputs: [], drafts };
     }
 
     let generated = 0;
@@ -2827,7 +2983,16 @@ AND status = 'pending';`);
           }
           const content = postResult.content;
           if (postResult.meta?.format) RUN_CONTEXT.sessionFormats.add(postResult.meta.format);
-          if (dryRun) {
+          if (dryRun || skipCanonicalPersist) {
+            const draft = {
+              company,
+              content,
+              contentType,
+              channel,
+              meta: postResult.meta || null,
+              quality: postResult.quality || null,
+            };
+            drafts.push(draft);
             outputs.push({
               client_id: CLIENT_ID,
               company: company.name,
@@ -2838,7 +3003,11 @@ AND status = 'pending';`);
               meta: postResult.meta || null,
             });
             generated++;
-            console.log(`\n--- DRY RUN: ${company.name} / ${channel} ---\n${content}\n--- END DRY RUN ---\n`);
+            if (dryRun) {
+              console.log(`\n--- DRY RUN: ${company.name} / ${channel} ---\n${content}\n--- END DRY RUN ---\n`);
+            } else {
+              console.log(`  ✓ draft generated (${company.name}/${channel})\n`);
+            }
           } else {
             const id = await saveToPendingApprovals(company, content, contentType, channel, postResult.meta);
             if (!id) continue;
@@ -2853,7 +3022,7 @@ AND status = 'pending';`);
           await logChannelError(company, channel, err);
         }
 
-        if (!dryRun) await new Promise(r => setTimeout(r, 1500));
+        if (!dryRun && !skipCanonicalPersist) await new Promise(r => setTimeout(r, 1500));
       }
     }
 
@@ -2865,8 +3034,9 @@ AND status = 'pending';`);
       pulseforge_pending_rejected: rejectedPulseforgePending,
       max_regenerate_triggers: regenerateResult.triggers,
       max_regenerated: regenerateResult.regenerated,
+      canonical_persist: skipCanonicalPersist,
     });
-    console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} ${dryRun ? 'generated without saving' : 'queued'}, ${channelsFailed.length} channel${channelsFailed.length !== 1 ? 's' : ''} failed.`);
+    console.log(`\nPaige complete — ${generated} post${generated !== 1 ? 's' : ''} ${dryRun ? 'generated without saving' : skipCanonicalPersist ? 'drafted for canonical persist' : 'queued'}, ${channelsFailed.length} channel${channelsFailed.length !== 1 ? 's' : ''} failed.`);
     if (channelsFailed.length) console.log(`  Failed: ${channelsFailed.join(', ')}`);
     return {
       success: channelsFailed.length === 0,
@@ -2875,16 +3045,30 @@ AND status = 'pending';`);
       posts_generated: generated,
       channels_failed: channelsFailed,
       outputs,
+      drafts,
     };
   } catch (err) {
     console.error('Paige error:', err.message);
     await logRun('failed', { error: err.message }).catch(() => {});
-    return { success: false, dry_run: dryRun, client_id: CLIENT_ID, error: err.message, outputs: [] };
+    return { success: false, dry_run: dryRun, client_id: CLIENT_ID, error: err.message, outputs: [], drafts: [] };
   }
+}
+
+async function run(options = {}) {
+  const { routePaigeSocialContentExecution } = require('./services/paigeSocialContentExecution');
+  const clientId = Number(options.client_id || options.clientId || CLI_OPTIONS.client_id || CLIENT_ID);
+  return routePaigeSocialContentExecution({
+    ...options,
+    client_id: clientId,
+    tenantId: String(clientId),
+    source: options.source || options.invocationSource || 'cli',
+  });
 }
 
 module.exports = {
   run,
+  generateSocialContent,
+  mirrorSocialContentToPendingComments,
   _test: {
     getBrandForChannel,
     buildLinkedInRules,
@@ -2893,6 +3077,9 @@ module.exports = {
     validateLinkedInDraft,
     validateGroundedTimeClaims,
     validateAnchorClaims,
+    getAnchorSocialDoctrineViolations,
+    buildAnchorDoctrineRegenBlock,
+    logAnchorDoctrineBlocked,
     validatePulseforgeClaims,
     usesMiraGrounding,
     buildMiraGroundingBlock,
@@ -2900,6 +3087,12 @@ module.exports = {
     chooseLinkedInFormat,
     hasMiraSourceAnchor,
     LINKEDIN_FORMATS,
+    resolvePaigeWriterModel,
+    resolvePaigeEvaluatorModel,
+    extractMessageText,
+    extractPaigeWriterResponseText,
+    PAIGE_WRITER_MODEL,
+    PAIGE_EVALUATOR_MODEL,
   },
 };
 

@@ -1,0 +1,25 @@
+Typefaces used by Studio Substral
+=================================
+
+Both families are licensed under the SIL Open Font License, Version 1.1, which
+permits self-hosting and redistribution. The files here are the Latin subsets
+served by Google Fonts, stored locally so the critical path does not depend on
+a third-party origin (doctrine §20).
+
+archivo-var-latin.woff2
+  Archivo (variable: weight 100-900, width 62%-125%)
+  Omnibus-Type — https://github.com/Omnibus-Type/Archivo
+  SIL Open Font License 1.1
+
+plex-mono-400-latin.woff2
+plex-mono-500-latin.woff2
+  IBM Plex Mono
+  IBM / Bold Monday — https://github.com/IBM/plex
+  SIL Open Font License 1.1
+
+Full licence text: https://openfontlicense.org/
+
+To refresh these files, re-request the Latin subset from the Google Fonts CSS
+API with a modern browser user agent and replace the .woff2 files in place. The
+@font-face blocks in assets/css/substral.css carry matching unicode-range
+declarations; keep them in step.

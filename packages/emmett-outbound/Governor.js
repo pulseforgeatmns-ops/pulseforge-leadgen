@@ -7,6 +7,7 @@
  */
 
 const { GOVERNOR_OUTCOMES, SPECIALISTS, eoiError, pct, nowIso, newId } = require('./types');
+const { hasBootstrapNegativeEvidence, BOOTSTRAP_MODE } = require('./Bootstrap');
 
 function evaluateGovernor(snapshot = {}, health = {}, capacity = {}) {
   const bounceRate = pct(snapshot.bounceRate ?? health.bounceRate);
@@ -42,6 +43,35 @@ function evaluateGovernor(snapshot = {}, health = {}, capacity = {}) {
       health, capacity, snapshot, halt: true,
     });
   }
+
+  const bootstrapNegative = hasBootstrapNegativeEvidence(snapshot);
+  if (bootstrapNegative.blocked) {
+    const isEmergency = ['blacklist', 'complaint', 'hard_bounce', 'governor_emergency'].includes(bootstrapNegative.reason);
+    return decision(
+      isEmergency ? GOVERNOR_OUTCOMES.EMERGENCY : GOVERNOR_OUTCOMES.PAUSE,
+      isEmergency
+        ? `Negative evidence (${bootstrapNegative.reason}). Stop immediately.`
+        : `Negative evidence (${bootstrapNegative.reason}). Do not send.`,
+      { health, capacity, snapshot, halt: true }
+    );
+  }
+
+  const bootstrapActive = capacity.mode === BOOTSTRAP_MODE && capacity.bootstrap?.active === true;
+  if (bootstrapActive && recommended > 0) {
+    return decision(
+      GOVERNOR_OUTCOMES.SLOW,
+      'Bootstrap allowance active. Controlled sends only within spacing and daily bounds.',
+      {
+        health,
+        capacity,
+        snapshot,
+        halt: false,
+        slowCap: recommended,
+        bootstrap: true,
+      }
+    );
+  }
+
   if (score < 40 || recommended <= 0) {
     return decision(GOVERNOR_OUTCOMES.PAUSE, 'Reputation risk too high. Do not send.', {
       health, capacity, snapshot, halt: true,

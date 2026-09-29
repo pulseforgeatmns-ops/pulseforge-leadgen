@@ -1,0 +1,27 @@
+name: Paige governed social safety
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  paige-social:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+      DATABASE_SSL: 'false'
+      PAIGE_SOCIAL_TEST_POSTGRES: 'true'
+      CONTENT_OUTCOME_TEST_POSTGRES: 'true'
+      PAIGE_SOCIAL_PUBLISH_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - name: Mock providers, isolated PostgreSQL, approval and learning regressions
+        run: npm run test:paige

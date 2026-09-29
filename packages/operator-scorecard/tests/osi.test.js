@@ -260,7 +260,7 @@ describe('SPEC-116 brief sections and tenant isolation', () => {
     assert.equal(sections[2].title, 'Metrics Under Review');
     assert.match(sections[0].body, /stated business objectives/i);
     assert.match(sections[1].body, /not yet approved/i);
-    assert.ok(sections[2].items.length >= 1);
+    assert.equal(sections[2].items.length, 0);
     const blob = JSON.stringify(sections);
     assert.match(blob, /walkthrough/i);
     assert.match(blob, /conversion rate/i);

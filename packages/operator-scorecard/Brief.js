@@ -10,6 +10,12 @@ const { SCORECARD_STATUS, METRIC_STATUS, confidencePercent } = require('./types'
 const { recommendedMetrics, approvedMetrics, getRuntimeScorecard, activeMetrics } = require('./Reasoning');
 
 function metricItem(metric) {
+  const support =
+    typeof metric.businessOutcome === 'string' &&
+    metric.businessOutcome.length <= 80 &&
+    !/[.!?]/.test(metric.businessOutcome)
+      ? ` Supports ${metric.businessOutcome}.`
+      : '';
   return {
     id: metric.id,
     key: metric.key,
@@ -23,7 +29,7 @@ function metricItem(metric) {
     status: metric.status,
     source: metric.source,
     whyItBelongs: metric.whyItBelongs,
-    label: `${metric.name} — ${metric.reason} Supports ${metric.businessOutcome}. Confidence ${confidencePercent(
+    label: `${metric.name} — ${metric.reason}${support} Confidence ${confidencePercent(
       metric.confidence
     )}%. ${metric.indicator === 'lagging' ? 'Lagging' : 'Leading'} indicator.`,
   };
@@ -38,7 +44,7 @@ function buildBriefScorecardSections(scorecard) {
   const approved =
     scorecard && scorecard.status === SCORECARD_STATUS.APPROVED ? approvedMetrics(scorecard) : [];
   const underReview = recommended.filter(
-    (m) => m.status === METRIC_STATUS.RECOMMENDED || m.status === METRIC_STATUS.UNDER_REVIEW
+    (m) => m.status === METRIC_STATUS.UNDER_REVIEW
   );
   const extraExplore =
     (scorecard && scorecard.reasoning && scorecard.reasoning.extraExplore) || [];

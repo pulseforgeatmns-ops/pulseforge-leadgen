@@ -7,6 +7,7 @@
 
 const amo = require('../../acquisition-mission');
 const { formatRollbackProse } = amo;
+const { resolveExecutionBlocker } = require('./ExecutionBlockerPresentation');
 const {
   EXECUTION_INTENTS,
   createExecutionRequestFromChat,
@@ -34,9 +35,11 @@ const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
 const {
   isExplicitMissionExit,
   resolveAcquisitionActiveMission,
+  buildUnresolvedBoundMissionResponse,
 } = require('./ActiveMissionGuard');
 const {
   hasPendingDiscoveryApproval,
+  hasPendingDiscoveryInvestigation,
   hasPendingPrioritizationApproval,
   hasPendingPlanApproval,
   hasPendingPlanClarification,
@@ -63,6 +66,15 @@ const { isStructuredMissionApproved } = require('../../acquisition-mission/Struc
 const {
   presentationFromDiscoveryPayload,
 } = require('../../acquisition-mission/DiscoveryPresentation');
+const {
+  resolvePrioritizationPayload,
+  presentationFromPrioritizationPayload,
+  resolvePrioritizationApprovedNextStep,
+} = require('../../acquisition-mission/PrioritizationPresentation');
+const {
+  resolveInvestigationContinuationPayloads,
+  presentationFromInvestigationContinuation,
+} = require('../../acquisition-mission/InvestigationContinuationPresentation');
 const { formatProviderExecutionProse } = require('../../scout/coverage/ProviderExecution');
 const {
   hasSufficientEvidenceForPrioritization,
@@ -193,6 +205,141 @@ function stageLabel(stage) {
   return STAGE_LABELS[stage] || stage || 'Active';
 }
 
+function ensureReadyExecutionReview(snapshot, mission) {
+  const review = snapshot && snapshot.executionReview
+    ? snapshot.executionReview
+    : (mission && mission.executionReview) || null;
+  return review || null;
+}
+
+function summarizeReadyExecutionTargets(review) {
+  const targets = Array.isArray(review && review.targets) ? review.targets : [];
+  if (!targets.length) {
+    return '• No targets prepared.';
+  }
+  return targets
+    .slice(0, 5)
+    .map((target, index) => {
+      const label = target.company || target.name || `Target ${index + 1}`;
+      const reason = target.priorityReason || target.reason || target.fit || null;
+      return `• ${label}${reason ? ` — ${reason}` : ''}`;
+    })
+    .join('\n');
+}
+
+function summarizeReadyExecutionMessage(review) {
+  const communication = review && review.communication ? review.communication : {};
+  const lines = [];
+  if (communication.subject) lines.push(`Subject: ${communication.subject}`);
+  if (communication.body) lines.push(`Body: ${communication.body}`);
+  if (communication.cta) lines.push(`CTA: ${communication.cta}`);
+  if (!lines.length) lines.push('No prepared message found.');
+  return lines.join('\n');
+}
+
+function summarizeReadyExecutionQueue(review) {
+  const infrastructure = review && review.infrastructure ? review.infrastructure : {};
+  const queue = Array.isArray(infrastructure.queue) ? infrastructure.queue : [];
+  const sendCount = Number(review && review.decision && review.decision.plannedSendCount != null
+    ? review.decision.plannedSendCount
+    : queue.length);
+  const safeCapacity = infrastructure.safeCapacity != null
+    ? infrastructure.safeCapacity
+    : Math.max(0, queue.length);
+  const senderIdentity = review && review.artifactBinding && review.artifactBinding.senderEmail
+    ? review.artifactBinding.senderEmail
+    : ((review && review.infrastructure) ? (review.infrastructure.senderIdentity || null) : null);
+  return [
+    `Planned sends: ${sendCount}`,
+    `Safe capacity: ${safeCapacity}`,
+    senderIdentity ? `Sender: ${senderIdentity}` : 'Sender: unresolved',
+  ].join('\n');
+}
+
+function summarizeReadyExecutionSafety(review) {
+  const infrastructure = review && review.infrastructure ? review.infrastructure : {};
+  const blockers = Array.isArray(review && review.decision && review.decision.blockers)
+    ? review.decision.blockers
+    : [];
+  const lineParts = [
+    `Delivery: ${infrastructure.deliverabilityStatus || 'unknown'}`,
+    `Governor: ${infrastructure.governorOutcome || 'unknown'}`,
+  ];
+  if (blockers.length) {
+    lineParts.push(`Blockers: ${blockers.join('; ')}`);
+  }
+  return lineParts.join('\n');
+}
+
+function readyExecutionApprovalPrompt(review) {
+  const blockers = Array.isArray(review && review.decision && review.decision.blockers)
+    ? review.decision.blockers
+    : [];
+  if (blockers.length) {
+    return `Resolve execution blocker to continue: ${blockers.join('; ')}`;
+  }
+  return 'Authorize external execution of this prepared outreach?';
+}
+
+function buildReadyExecutionPresentation({ mission, snapshot }) {
+  const review = ensureReadyExecutionReview(snapshot, mission);
+  if (!review) {
+    return null;
+  }
+
+  const pending = mission && mission.pendingOperatorDecision ? mission.pendingOperatorDecision : {};
+  const blockers = Array.isArray(review && review.decision && review.decision.blockers)
+    ? review.decision.blockers
+    : [];
+  const artifactBinding = review.artifactBinding || {};
+  const channel = review.communication && review.communication.channel
+    ? review.communication.channel
+    : (review.infrastructure && review.infrastructure.channel)
+      ? review.infrastructure.channel
+      : 'Email';
+
+  const currentUnderstanding = [
+    { label: `Prepared targets\n${summarizeReadyExecutionTargets(review)}`, done: !blockers.length },
+    { label: `Prepared message\n${summarizeReadyExecutionMessage(review)}`, done: !blockers.length },
+    { label: `Channel\n• ${channel}`, done: !blockers.length },
+    { label: `Send/capacity summary\n${summarizeReadyExecutionQueue(review)}`, done: !blockers.length },
+    { label: `Delivery/governor state\n${summarizeReadyExecutionSafety(review)}`, done: !blockers.length },
+  ];
+
+  const status = blockers.length ? 'Prepared but blocked' : 'Prepared — not sent';
+  const headline = blockers.length ? 'Execution Blocked' : 'Execution Ready';
+  const waitingOn = blockers.length ? 'Execution blocker resolution' : 'Execution approval';
+  const nextStep = [
+    'Prepared artifacts bound to the canonical revision:',
+    `• Max: ${artifactBinding.maxContributionId || 'unknown'}`,
+    `• Paige: ${artifactBinding.paigeContributionId || 'unknown'}`,
+    `• Emmett: ${artifactBinding.emmettContributionId || 'unknown'}`,
+    blockers.length
+      ? `Resolve the blocker and return to the mission workspace.`
+      : 'Authorize execution to produce external sends from this exact prepared bundle.',
+  ].join('\n');
+
+  const comm = buildMissionCommunication({
+    headline,
+    mission: mission && mission.title ? mission.title : (mission && mission.id) || 'Acquisition Mission',
+    objective: mission && mission.objective ? mission.objective : null,
+    status,
+    stage: 'Ready',
+    progress: mission && mission.progressPercent != null ? mission.progressPercent : null,
+    health: snapshot && snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
+    waitingOn,
+    confidence: mission && mission.confidence != null ? mission.confidence : null,
+    currentUnderstanding,
+    nextStep,
+    operatorDecision: readyExecutionApprovalPrompt(review),
+    evidenceStatus: blockers.length ? 'Canonical execution review indicates a blocker.' : 'Canonical execution review is prepared for approval.',
+    sources: ['execution_review', 'acquisition_mission'],
+    includeReasoningMarker: false,
+  });
+
+  return { comm, prose: formatMissionProse(comm) };
+}
+
 function buildExecutionMissionResponse({
   mission,
   snapshot,
@@ -208,14 +355,24 @@ function buildExecutionMissionResponse({
 
   if (executionResult && executionResult.rolledBack) {
     const err = executionResult.error || {};
-    const stageName = action === 'plan_approved' ? 'Mission plan' : 'Discovery';
+    const stageName = action === 'plan_approved'
+      ? 'Mission plan'
+      : action === 'prioritization_approved'
+        ? 'Prioritization'
+        : 'Discovery';
     const providerDiagnostics =
       (err.details && Array.isArray(err.details.providerExecution) && err.details.providerExecution.length)
         ? formatProviderExecutionProse(err.details.providerExecution)
         : null;
+    const blocker = resolveExecutionBlocker({
+      error: err,
+      rollbackReason: executionResult.rollbackReason,
+      executionResult,
+      stageName,
+    });
     const evidenceStatus = providerDiagnostics
-      ? `${err.message || err.rollbackReason || formatRollbackProse(stageName)}\n\n${providerDiagnostics}`
-      : err.rollbackReason || err.message || formatRollbackProse(stageName);
+      ? `${blocker.message}\n\n${providerDiagnostics}`
+      : blocker.message;
     const comm = buildMissionCommunication({
       headline: `${stageName} could not execute`,
       mission: mission.title || mission.id,
@@ -223,16 +380,20 @@ function buildExecutionMissionResponse({
       status: 'Unchanged',
       stage: stageName,
       progress,
-      waitingOn: 'Resolve the blocker',
-      nextStep: 'Resolve the blocker and retry.',
-      operatorDecision: action === 'plan_approved' ? 'Approve mission plan?' : 'Approve discovery?',
+      waitingOn: blocker.waitingOn,
+      nextStep: blocker.nextStep,
+      operatorDecision: action === 'plan_approved'
+        ? 'Approve mission plan?'
+        : action === 'prioritization_approved'
+          ? 'Approve prioritization?'
+          : 'Approve discovery?',
       evidenceStatus,
       sources: ['acquisition_mission', 'tme'],
       includeReasoningMarker: false,
     });
     const prose = providerDiagnostics
-      ? `${formatRollbackProse(stageName)}\n\n${providerDiagnostics}`
-      : formatRollbackProse(stageName);
+      ? `${blocker.message}\n\n${providerDiagnostics}`
+      : blocker.message;
     const structured = applyMissionCommunication(
       buildStructuredResponse({
         answer: prose,
@@ -391,6 +552,9 @@ function buildExecutionMissionResponse({
     const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
     const blocked = executionResult.executionOutcome === 'blocked';
     const sufficientEvidence = hasSufficientEvidenceForPrioritization(discoveryResults);
+    const discoveryBlocker = blocked
+      ? resolveExecutionBlocker({ scoutPayload, stageName: 'Discovery' })
+      : null;
     const comm = buildMissionCommunication({
       headline: 'Mission Updated',
       mission: mission.title || mission.id,
@@ -400,7 +564,7 @@ function buildExecutionMissionResponse({
       progress,
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
       waitingOn: blocked
-        ? 'Discovery blocker'
+        ? (discoveryBlocker && discoveryBlocker.waitingOn) || 'Discovery blocker'
         : sufficientEvidence
           ? 'Prioritization approval'
           : 'Evidence review',
@@ -410,7 +574,7 @@ function buildExecutionMissionResponse({
           : mission.confidence,
       confidenceBreakdown: discoveryResults.confidenceBreakdown,
       nextStep: blocked
-        ? 'Resolve the discovery blocker, then retry Discovery.'
+        ? (discoveryBlocker && discoveryBlocker.nextStep) || 'Resolve the discovery blocker, then retry Discovery.'
         : sufficientEvidence
           ? 'Review discovered prospects and approve prioritization to continue.'
           : 'Review discovery evidence. Scout must surface attributable signals before prioritization.',
@@ -420,7 +584,9 @@ function buildExecutionMissionResponse({
           ? 'Approve prioritization?'
           : 'Request more discovery evidence?',
       discoveryResults: executionResult.discovery ? discoveryResults : null,
-      evidenceStatus: 'Mission state',
+      evidenceStatus: blocked
+        ? (discoveryBlocker && discoveryBlocker.message) || scoutPayload.summary || 'Discovery blocked.'
+        : scoutPayload.summary || 'Discovery complete.',
       sources: ['acquisition_mission', 'scout'],
       reasoningEvidence: buildReasoningEvidence({
         known: [`Mission ${mission.id} executed Discovery after operator approval.`],
@@ -467,10 +633,9 @@ function buildExecutionMissionResponse({
   }
 
   if (executionResult && action === 'prioritization_approved') {
-    const scoutPayload = ((snapshot.contributions || []).find(
-      (row) => row.specialist === SPECIALISTS.SCOUT && row.kind === CONTRIBUTION_KINDS.DISCOVERY
-    ) || {}).payload || {};
-    const discoveryResults = presentationFromDiscoveryPayload(scoutPayload);
+    const prioritizationPayload = resolvePrioritizationPayload({ executionResult, snapshot });
+    const prioritizationResults = presentationFromPrioritizationPayload(prioritizationPayload);
+    const nextStep = resolvePrioritizationApprovedNextStep(snapshot, mission);
     const comm = buildMissionCommunication({
       headline: 'Mission Updated',
       mission: mission.title || mission.id,
@@ -481,15 +646,14 @@ function buildExecutionMissionResponse({
       health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
       waitingOn: null,
       confidence:
-        discoveryResults.confidence != null
-          ? discoveryResults.confidence
+        prioritizationResults.confidence != null
+          ? prioritizationResults.confidence
           : mission.confidence,
-      confidenceBreakdown: discoveryResults.confidenceBreakdown,
-      nextStep: 'Review mission workspace for Max prioritization and planning.',
+      nextStep,
       operatorDecision: null,
-      discoveryResults,
-      evidenceStatus: 'Prioritization approved',
-      sources: ['acquisition_mission', 'scout'],
+      prioritizationResults,
+      evidenceStatus: 'Prioritization committed',
+      sources: ['acquisition_mission', 'max'],
       includeReasoningMarker: false,
     });
     const prose = formatMissionProse(comm);
@@ -518,6 +682,95 @@ function buildExecutionMissionResponse({
       comm
     );
     return { structured, prose, comm, action };
+  }
+
+  if (executionResult && action === 'discovery_investigation_continued') {
+    const { priorPayload, currentPayload } = resolveInvestigationContinuationPayloads({
+      snapshot,
+      executionResult,
+    });
+    const investigationResults = presentationFromInvestigationContinuation({
+      priorPayload,
+      currentPayload,
+      mission,
+      executionResult,
+    });
+    const blocked = executionResult.executionOutcome === 'blocked';
+    const pending = mission.pendingOperatorDecision || {};
+    const comm = buildMissionCommunication({
+      headline: 'Investigation Continued',
+      mission: mission.title || mission.id,
+      objective: mission.objective,
+      status: blocked ? 'Investigation Blocked' : 'Investigation Updated',
+      stage: 'Discovery',
+      progress,
+      health: snapshot.health && snapshot.health.label ? snapshot.health.label : 'Healthy',
+      waitingOn: pending.waitingOn || pending.blocker || null,
+      nextStep: null,
+      operatorDecision: investigationResults.operatorDecision,
+      investigationContinuationResults: investigationResults,
+      evidenceStatus: 'Committed Scout investigation delta',
+      sources: ['acquisition_mission', 'scout'],
+      includeReasoningMarker: false,
+    });
+    const prose = formatMissionProse(comm);
+    const structured = applyMissionCommunication(
+      buildStructuredResponse({
+        answer: prose,
+        reasoning: [],
+        supportingEvidence: [],
+        contradictingEvidence: [],
+        confidence:
+          investigationResults.confidenceAfter != null
+            ? investigationResults.confidenceAfter
+            : mission.confidence != null
+              ? mission.confidence
+              : 0.84,
+        nextInvestigations: [],
+        recommendedActions: [
+          buildOpenMissionAction({
+            missionId: mission.id,
+            runtime: mission.runtime || MISSION_RUNTIMES.AMO,
+            label: 'Open mission workspace',
+          }),
+        ],
+        confidenceContributors: ['spec_203', 'acquisition_mission'],
+        timelineReferences: [],
+        relatedEntities: [
+          { id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id },
+        ],
+        metadata: buildExecutionMetadata(mission, action, executionResult),
+      }),
+      comm
+    );
+    return { structured, prose, comm, action };
+  }
+
+  const readyReview = ensureReadyExecutionReview(snapshot, mission);
+  const executionApprovalPending =
+    (mission && mission.pendingOperatorDecision && mission.pendingOperatorDecision.kind === 'execution_approval')
+    || hasPendingExecutionApproval(snapshot);
+  if ((stage === STAGES.READY || executionApprovalPending) && readyReview) {
+    const readyPresentation = buildReadyExecutionPresentation({ mission, snapshot });
+    if (readyPresentation) {
+      const structured = applyMissionCommunication(
+        buildStructuredResponse({
+          answer: readyPresentation.prose,
+          reasoning: [],
+          supportingEvidence: [],
+          contradictingEvidence: [],
+          confidence: mission.confidence != null ? mission.confidence : 0.84,
+          nextInvestigations: [],
+          recommendedActions: [],
+          confidenceContributors: ['spec_210', 'execution_review'],
+          timelineReferences: [],
+          relatedEntities: [{ id: mission.id, type: 'acquisition_mission', name: mission.title || mission.id }],
+          metadata: buildExecutionMetadata(mission, action, executionResult),
+        }),
+        readyPresentation.comm
+      );
+      return { structured, prose: readyPresentation.prose, comm: readyPresentation.comm, action };
+    }
   }
 
   let status = `Active mission — ${stageLabel(stage)}.`;
@@ -620,6 +873,27 @@ function buildExecutionMetadata(mission, action, executionResult) {
 
 function detectExecutionAction(question, snapshot, operatorIntent = null) {
   askPathTrace.traceEnter('detectExecutionAction');
+  const resolution = operatorIntent && operatorIntent.pendingDecisionResolution;
+  if (resolution && resolution.resolvedFromPendingDecision && resolution.executionAction) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_decision_resolution');
+    return resolution.executionAction;
+  }
+
+  const missionContinuation =
+    operatorIntent &&
+    operatorIntent.conversationIntent &&
+    operatorIntent.conversationIntent.missionContinuation;
+  if (
+    operatorIntent &&
+    operatorIntent.conversationIntent &&
+    operatorIntent.conversationIntent.via === 'mission_continuation' &&
+    missionContinuation &&
+    missionContinuation.action
+  ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'mission_continuation');
+    return missionContinuation.action;
+  }
+
   const q = String(question || '').trim();
   const lower = q.toLowerCase();
   const planningTurn = operatorIntent
@@ -709,6 +983,23 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     return 'prioritization_approved';
   }
 
+  const investigationContinuationPattern =
+    /\b(?:continue|retry|resume|proceed)\b.*\binvestig/i.test(q) ||
+    (/\binvestig/i.test(q) && /\b(?:continue|retry|resume|proceed)\b/i.test(q));
+
+  if (investigationContinuationPattern && hasPendingDiscoveryInvestigation(snapshot)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_investigation_continued');
+    return 'discovery_investigation_continued';
+  }
+
+  if (
+    hasPendingDiscoveryInvestigation(snapshot) &&
+    (/\b(?:continue|retry|resume|proceed)\b/i.test(q) || /\binvestig/i.test(q))
+  ) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_investigation_continued_pending');
+    return 'discovery_investigation_continued';
+  }
+
   if (hasConsumablePendingDecision(snapshot)) {
     if (
       hasPendingExecutionApproval(snapshot) &&
@@ -734,6 +1025,10 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     return 'operator_approved';
   }
   if (/\b(?:continue|proceed|resume|next)\b/i.test(q)) {
+    if (hasPendingDiscoveryInvestigation(snapshot)) {
+      askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_investigation_continued_continue');
+      return 'discovery_investigation_continued';
+    }
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved_continue');
     return 'operator_approved';
   }
@@ -819,12 +1114,37 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   askPathTrace.traceEnter('maybeHandleAcquisitionMissionExecution');
   const question = String(input.question || '').trim();
   const conversationIntent = input.conversationIntent || null;
+  const operatorIntent = input.operatorIntent || null;
+
+  const tenantId = resolveTenantId(input);
+  let amoResolution = { mission: null, unresolvedBoundMissionId: null };
+  if (tenantId) {
+    amoResolution = await resolveAcquisitionActiveMission(input);
+    if (amoResolution.unresolvedBoundMissionId) {
+      askPathTrace.traceEarlyReturn(
+        'maybeHandleAcquisitionMissionExecution',
+        'unresolved_bound_mission_context'
+      );
+      return buildUnresolvedBoundMissionResponse(amoResolution.unresolvedBoundMissionId, input);
+    }
+  }
+
+  const pendingDecisionResolution =
+    operatorIntent && operatorIntent.pendingDecisionResolution;
+  const pendingDecisionExecutable = Boolean(
+    pendingDecisionResolution &&
+      pendingDecisionResolution.resolvedFromPendingDecision &&
+      pendingDecisionResolution.executionIntent
+  );
   const { mayMutateMission } = require('../operatorCognition');
-  if (conversationIntent && !mayMutateMission(conversationIntent)) {
+  if (
+    conversationIntent &&
+    !mayMutateMission(conversationIntent) &&
+    !pendingDecisionExecutable
+  ) {
     askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'cognition_read_only');
     return null;
   }
-  const tenantId = resolveTenantId(input);
   const runtime = resolveAcquisitionMissionRuntime(input);
   const engine = runtime.engine();
   assertRuntimeEngine(engine, runtime);
@@ -833,8 +1153,11 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     return null;
   }
 
+  const amoResolutionAfterGate = tenantId
+    ? amoResolution
+    : await resolveAcquisitionActiveMission(input);
   const mission =
-    (await resolveAcquisitionActiveMission(input)) ||
+    amoResolutionAfterGate.mission ||
     (() => {
       const missions = engine.list(tenantId);
       const missionId = resolveMissionId(input, missions);
@@ -846,7 +1169,6 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     return null;
   }
 
-  const operatorIntent = input.operatorIntent || null;
   const planningTurn = operatorIntent
     ? operatorIntent.planningRequested
     : isMissionPlanningTurn(mission, question);
@@ -998,4 +1320,11 @@ module.exports = {
   shouldExecutePlan,
   shouldClarifyPlan,
   resolveExecutionPolicy,
+  // SPEC-211 — Export execution review formatting helpers for pending decision clarification
+  ensureReadyExecutionReview,
+  summarizeReadyExecutionTargets,
+  summarizeReadyExecutionMessage,
+  summarizeReadyExecutionQueue,
+  summarizeReadyExecutionSafety,
+  readyExecutionApprovalPrompt,
 };

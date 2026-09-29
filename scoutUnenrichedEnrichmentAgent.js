@@ -2,6 +2,7 @@ const pool = require('./db');
 const { ensureScoutUnenrichedTable } = require('./utils/scoutUnenrichedSchema');
 const { ensureEmailVerificationColumns } = require('./utils/emailVerificationSchema');
 const { promoteRecord } = require('./scripts/promoteUnenriched');
+const { ENRICHABLE_SCOUT_VERTICALS } = require('./utils/replenishmentVertical');
 
 const AGENT_NAME = 'scout_unenriched_enrichment';
 const ANCHOR_CLIENT_ID = 10;
@@ -9,7 +10,7 @@ const DEFAULT_LIMIT = 5;
 const DEFAULT_RETRY_HOURS = 7 * 24;
 const DEFAULT_MAX_ATTEMPTS = 3;
 const SCHEDULED_HOUR_ET = 17;
-const ANCHOR_PRIORITY_VERTICALS = ['property_manager', 'str_manager', 'commercial_office'];
+const ANCHOR_PRIORITY_VERTICALS = ENRICHABLE_SCOUT_VERTICALS;
 
 function easternParts(now = new Date()) {
   const values = new Intl.DateTimeFormat('en-CA', {
@@ -66,11 +67,28 @@ async function run(params = {}) {
     LIMIT $4
   `, [clientId, maxAttempts, retryHours, limit, verticals]);
 
-  const summary = { client_id: clientId, considered: rows.rows.length, promoted: 0, unresolved: 0, failed: 0, limit, retry_hours: retryHours, verticals };
+  const summary = {
+    client_id: clientId,
+    considered: rows.rows.length,
+    promoted: 0,
+    recovered: 0,
+    unresolved: 0,
+    failed: 0,
+    emailResolved: 0,
+    emailVerified: 0,
+    limit,
+    retry_hours: retryHours,
+    verticals,
+  };
   for (const record of rows.rows) {
     try {
-      const promoted = await promote(record, { db });
+      const result = await promote(record, { db });
+      const promoted = result === true || result?.promoted === true;
+      const recovered = result?.recovered === true;
+      if (result?.emailResolved) summary.emailResolved++;
+      if (result?.emailVerified) summary.emailVerified++;
       if (promoted) summary.promoted++;
+      else if (recovered) summary.recovered++;
       else summary.unresolved++;
     } catch (error) {
       summary.failed++;

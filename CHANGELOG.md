@@ -4,7 +4,46 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Anchor one-send runner (`scripts/executeAnchorOneOutbound.js`) accepts `--mission-id`
+  - Default remains the conservative historical law-firm mission id
+  - Production execution must pass the READY STR mission explicitly
+  - Requires tenant 10, stage READY, readiness-probe match, and active non-superseded CAPACITY
+  - Sends the highest-ranked sendable email-bearing queue item only (`maxSends=1`)
+  - Prints recipient / company / subject / body before execute; autosend and enabled_agents stay unchanged
+
 ### Added
+
+- [SPEC-JEV-003 Shadow Routing Warning](docs/specs/SPEC-JEV-003_Shadow_Routing_Warning.md):
+  emits `[DECISION_SHADOW_ROUTING_WARNING]` for the validated high-confidence
+  mission-inspection mismatch and adds `npm run decision:review -- --warnings`.
+  Jev remains observer-only and warning failures cannot affect routing.
+
+- [SPEC-JEV-002 Decision Shadow Review](docs/specs/SPEC-JEV-002_Decision_Shadow_Review.md):
+  best-effort Postgres copies of complete shadow events, isolated bounded writes,
+  and `npm run decision:review` for the latest 50 evaluations, mismatch patterns,
+  and provider errors. Includes an idempotent migration and failure-isolation
+  tests; Jev has no production routing authority.
+
+- Anchor STR canonical outbound recovery (tenant 10)
+  - Inspects every Anchor acquisition mission and selects the short-term-rental operator objective without duplicating the law-firm mission
+  - Recovers Scout → Max → Paige → Emmett → READY on the canonical AMO path only
+  - Stops before `APPROVE_EXECUTION` / `EXECUTE_OUTBOUND`; autosend stays off
+  - Refuses Scout `CONTINUE_INVESTIGATION` when a healthy candidate set already exists
+  - Stops cleanly at the Scout → Max boundary when discovery readiness is insufficient instead of looping invalid `APPROVE_PRIORITIZATION`
+  - If discovery is already approved and Scout candidates are empty, runs canonical Scout continuation instead of looping `APPROVE_DISCOVERY`
+  - Railway cron: `GET/POST /cron/inspect-anchor-canonical-outbound` (read-only) and `/cron/recover-anchor-canonical-outbound?recover=true` (READY only)
+  - GitHub Actions production job is workflow_dispatch only and does not use Railway's `charming-trust / production` GitHub environment
+
+
+### Added
+
+- AUDIT-066 Max Post-Discovery Dispatch ([AUDIT-066](docs/architecture/AUDIT-066_Max_Post_Discovery_Dispatch.md))
+  - Operator `PRIORITIZATION_APPROVAL` now executes Max through SEC/TME and commits a validated `PRIORITIZATION` contribution atomically
+  - `MaxPrioritizationExecutor` builds mission-bound Max input from locked structured mission + Scout discovery (MIR, ranked prospects, evidence)
+  - Fail-closed: contract/execution failures leave the mission at `DISCOVER` without false `maxComplete`
+  - `advanceMaxPrioritization()` remains idempotent for back-compat and autonomous progression
 
 - SPEC-185 Blocked Discovery Telemetry Continuity ([SPEC-185](docs/specs/SPEC-185_Blocked_Discovery_Telemetry_Continuity.md), [ADR-100](docs/adr/ADR-100_Uniform_Discovery_Payloads.md))
   - Every Discovery exit path — success, blocked, partial, provider failure — includes `providerExecution`

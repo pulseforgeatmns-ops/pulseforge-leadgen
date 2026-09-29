@@ -68,6 +68,14 @@ function adapterForProvider(adapters = [], providerId, registry = getDefaultUnif
     );
   }
 
+  if (providerId === 'website' || meta?.adapterIds?.includes('company_websites')) {
+    return (
+      adapters.find((a) => a && a.id === 'company_websites') ||
+      adapters.find((a) => a && a.sourceType === SOURCE_TYPES.COMPANY_WEBSITES) ||
+      null
+    );
+  }
+
   if (meta?.adapterIds?.length) {
     for (const adapterId of meta.adapterIds) {
       const match = adapters.find((a) => a && a.id === adapterId);
@@ -91,12 +99,16 @@ function scopedSearchForTask(searchDefinition, task, marketDefinition) {
 }
 
 function normalizeCandidateRow(row) {
+  const location = row.location || row.geography || row.discoveryCity || null;
   return {
     ...row,
     place_id: row.place_id || row.placeId,
+    placeId: row.placeId || row.place_id,
     company: row.company || row.name,
     name: row.name || row.company,
-    formatted_address: row.formatted_address || row.address,
+    location,
+    address: row.address || row.formatted_address || location,
+    formatted_address: row.formatted_address || row.address || location,
     formatted_phone_number: row.formatted_phone_number || row.phone,
     url: row.url || row.website,
     website: row.website || row.url,
@@ -104,15 +116,23 @@ function normalizeCandidateRow(row) {
   };
 }
 
+function lowerText(value) {
+  return (asText(value) || '').toLowerCase();
+}
+
+function candidateAddressText(row = {}) {
+  return asText(row.address || row.formatted_address || row.location || row.geography || row.discoveryCity);
+}
+
 function candidateMatchKey(row) {
   const normalized = normalizeCandidateRow(row);
   const identity = establishBusinessIdentity(normalized);
   if (identity.identityKey) return identity.identityKey;
 
-  const name = asText(normalized.name || normalized.company).toLowerCase();
-  const address = asText(normalized.address || normalized.formatted_address).toLowerCase();
+  const name = lowerText(normalized.name || normalized.company);
+  const address = lowerText(candidateAddressText(normalized));
   if (name && address) return `nameaddr:${name}|${address}`;
-  return asText(normalized.id || name).toLowerCase();
+  return lowerText(normalized.id || name);
 }
 
 /**
@@ -136,9 +156,9 @@ function mergeIdentities(candidates = []) {
       byKey.set(key, fuseCandidateRecords(existing, row, identity));
     } else {
       // Secondary match: try name+address against existing entries
-      const nameAddrKey = `nameaddr:${asText(row.name || row.company).toLowerCase()}|${asText(row.address || row.formatted_address).toLowerCase()}`;
+      const nameAddrKey = `nameaddr:${lowerText(row.name || row.company)}|${lowerText(candidateAddressText(row))}`;
       const byNameAddr = [...byKey.entries()].find(([k, v]) => {
-        const vKey = `nameaddr:${asText(v.name || v.company).toLowerCase()}|${asText(v.address || v.formatted_address).toLowerCase()}`;
+        const vKey = `nameaddr:${lowerText(v.name || v.company)}|${lowerText(candidateAddressText(v))}`;
         return vKey === nameAddrKey && nameAddrKey !== 'nameaddr:|';
       });
 
@@ -350,6 +370,17 @@ async function runHypothesisDrivenDiscovery(input = {}) {
   let iteration = 0;
   const maxIterations = opts.maxIterations != null ? opts.maxIterations : 10;
 
+  // ADR-102 — preserve identities from prior discovery during entity continuation.
+  if (Array.isArray(opts.preservedCandidates) && opts.preservedCandidates.length) {
+    for (const row of opts.preservedCandidates) {
+      const normalized = normalizeCandidateRow(row);
+      const key = normalized._identityKey || candidateMatchKey(normalized);
+      normalized._identityKey = key;
+      normalized._preservedFromContinuation = true;
+      allCandidates.push(normalized);
+    }
+  }
+
   while (iteration < maxIterations) {
     iteration += 1;
     const nextTasks = getNextInvestigationTasks(plan, opts);
@@ -379,16 +410,24 @@ async function runHypothesisDrivenDiscovery(input = {}) {
           confidence: report.confidence,
           coverage: report.coverage,
           limitations: report.limitations,
+          entityId: task.entityId || task.candidateId || null,
+          candidateId: task.candidateId || task.entityId || null,
+          hypothesisId: task.hypothesisId || null,
         });
       }
 
       const newCandidates = result.candidates || [];
-      const seen = new Set(allCandidates.map((c) => c._identityKey || asText(c.id || c.name).toLowerCase()));
       for (const row of newCandidates) {
-        const key = row._identityKey || asText(row.id || row.name).toLowerCase();
-        if (!seen.has(key)) {
-          seen.add(key);
-          allCandidates.push(row);
+        const normalized = normalizeCandidateRow(row);
+        const key = normalized._identityKey || candidateMatchKey(normalized);
+        normalized._identityKey = key;
+        const existingIndex = allCandidates.findIndex(
+          (c) => (c._identityKey || candidateMatchKey(c)) === key
+        );
+        if (existingIndex >= 0) {
+          allCandidates[existingIndex] = fuseCandidateRecords(allCandidates[existingIndex], normalized, establishBusinessIdentity(normalized));
+        } else {
+          allCandidates.push(normalized);
         }
       }
 
@@ -461,6 +500,8 @@ async function runHypothesisDrivenDiscovery(input = {}) {
     identityComplete,
     sufficientlyInvestigated: plan.sufficientlyInvestigated,
     operatorExplanations,
+    investigationMode: plan.investigationMode || opts.investigationMode || 'market',
+    preservedCandidateCount: opts.preservedCandidates ? opts.preservedCandidates.length : 0,
     discoveryPlan: {
       hypothesisDriven: true,
       spec: 'SPEC-177',
@@ -468,6 +509,7 @@ async function runHypothesisDrivenDiscovery(input = {}) {
       providersUsed: [...new Set(allReports.map((r) => r.providerId))],
       identityComplete,
       sufficientlyInvestigated: plan.sufficientlyInvestigated,
+      investigationMode: plan.investigationMode || opts.investigationMode || 'market',
     },
     coverage: buildCoverageMetrics(plan, executedTasks),
   };

@@ -151,6 +151,6 @@ Agents that generate content (Paige, Link, Faye, Vera) do NOT post directly. The
 - **Sensitive JSON files** — `gmail_token.json`, `gmail_credentials.json`, `facebook_session.json`, `linkedin_session.json` are in `.gitignore` — never remove them from there. They are injected as env vars on Railway.
 - **`pool.end()` is forbidden in agents** — the pool is shared across the server process. Calling `pool.end()` in an agent kills all subsequent DB connections.
 - **Vertical routing** — Scout tags every prospect with `vertical` at insert time based on `CONFIG.industry`. Emmett reads `vertical` to pick the correct email sequence. Sequences exist for: cleaning, restaurant, salon, fitness, property, landscaping. All others fall back to cleaning.
-- **Email sequences** — live entirely in `emmettAgent.js` in the `SEQUENCES` object. To add a new vertical: add the sequence array, add a routing condition in `getSequenceForProspect`.
+- **Email sequences** — Email sequences are now managed through Paige and the Acquisition Mission Orchestration system (SPEC-118). Legacy sequence templates have been removed. All outbound copy must be authored by Paige before Emmett sends.
 - **GMAIL_CREDENTIALS format** — the Railway env var must be the full credentials JSON starting with `{"web":` — not just the client secret file.
 - **GOOGLE_SHEETS_REFRESH_TOKEN vs GOOGLE_REFRESH_TOKEN** — `GOOGLE_REFRESH_TOKEN` is for GBP/Calendar. `GOOGLE_SHEETS_REFRESH_TOKEN` is for Sheets write access in warmSignalAgent. They use different OAuth clients and scopes — do not conflate them.

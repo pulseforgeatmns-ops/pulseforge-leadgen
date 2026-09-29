@@ -8,6 +8,7 @@ const { getRequestClientId, normalizeClientId } = require('../utils/clientContex
 const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const aoBriefing = require('../services/aoBriefingService');
 const aoField = require('../services/aoFieldService');
+const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
 
 const requireJakeRead = [requireAuth, requireRole('admin', 'manager')];
 
@@ -107,6 +108,7 @@ router.post('/api/v1/max/ao-briefing/ask', requireJakeRead, wrap(async (req, res
   if (!clientId) return res.status(400).json({ error: 'client_id required' });
   const question = String(req.body?.question || '').trim();
   if (!question) return res.status(400).json({ error: 'question required' });
+  observeOperatorHttp(req, res, { clientId, source: 'ao_briefing', routeHint: 'ao_briefing' });
   const result = await aoBriefing.answerAoQuestion(clientId, question);
   res.json({ question, ...result });
 }));

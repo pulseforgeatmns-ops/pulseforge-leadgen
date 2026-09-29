@@ -213,6 +213,12 @@ function safeGuidance(topic) {
       reason: 'contract_terms',
     };
   }
+  if (/gatekeeper|front desk|receptionist|assistant won't|won't put me through/.test(normalized)) {
+    return {
+      guidance: 'Be respectful, ask for the cleaning decision-maker by name, and leave a brief note if you cannot reach them today.',
+      escalate: false,
+    };
+  }
   if (/manager|owner|decision|not there|absent/.test(normalized)) {
     return {
       guidance: 'Get the decision-maker\'s name, role, and best time to reach them. Leave a friendly note for follow-up.',

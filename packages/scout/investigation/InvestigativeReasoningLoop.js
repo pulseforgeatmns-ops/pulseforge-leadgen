@@ -32,6 +32,10 @@ const {
   markHypothesisTesting,
 } = require('./HypothesisLifecycle');
 const { buildMissionIntelligenceReport } = require('./MissionIntelligenceReport');
+const {
+  evaluatePriorLearningInfluence,
+  applyPriorLearningToStrategy,
+} = require('./PriorLearningInfluence');
 const { synthesizeFromCandidates } = require('../synthesis/EvidenceSynthesisEngine');
 const { activateHeuristics } = require('../heuristics/BusinessHeuristicsEngine');
 const {
@@ -450,9 +454,35 @@ async function runInvestigativeReasoningLoop(input = {}) {
     completedInvestigations: input.completedInvestigations,
     opts,
   });
+
+  const priorOutcomeLearnings =
+    input.priorOutcomeLearnings || opts.priorOutcomeLearnings || [];
+  const priorLearningEvaluation = evaluatePriorLearningInfluence({
+    priorOutcomeLearnings,
+    candidates,
+  });
+  if (priorLearningEvaluation.strategyAdjustments.length) {
+    const adjusted = applyPriorLearningToStrategy(
+      investigativeStrategy,
+      priorLearningEvaluation.strategyAdjustments
+    );
+    investigativeStrategy = adjusted.strategy;
+  }
+
   state = applyInvestigativeStrategy(state, investigativeStrategy);
 
-  const stop = shouldStopInvestigation(state, { ...opts, forceComplete: true });
+  const candidateInvestigationPending = Boolean(
+    input.candidateInvestigation &&
+      Array.isArray(input.candidateInvestigation.queue) &&
+      input.candidateInvestigation.queue.some(
+        (task) => task.status === 'pending' || task.status === 'running'
+      )
+  );
+
+  const stop = shouldStopInvestigation(state, {
+    ...opts,
+    forceComplete: candidateInvestigationPending ? false : opts.forceComplete !== false,
+  });
   if (investigativeStrategy.stoppingCondition?.stop) {
     stop.stop = true;
     stop.reason = investigativeStrategy.stoppingCondition.reason || stop.reason;
@@ -475,6 +505,7 @@ async function runInvestigativeReasoningLoop(input = {}) {
     competingWork: input.competingWork || mission.competingWork,
     pendingProposals: input.pendingProposals,
     scoutDiscoveries: input.scoutDiscoveries,
+    priorOutcomeLearnings,
   });
 
   return {
@@ -483,6 +514,8 @@ async function runInvestigativeReasoningLoop(input = {}) {
     cycles,
     stop,
     investigativeStrategy,
+    learningInfluence: priorLearningEvaluation.learningInfluence,
+    priorOutcomeLearnings,
     understandingFirst: true,
     completionReason: stop.reason,
     stopExplanation: stop.explanation,

@@ -1,0 +1,25 @@
+name: SPEC-245 Evidence Immutability
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'services/clientIntelligenceInterview.js'
+      - 'migrations/2026-09-06-spec-245a-evidence-immutability.sql'
+      - 'test/spec245EvidenceImmutability.test.js'
+      - 'test/spec224CIECanonicalIntegration.test.js'
+      - '.github/workflows/spec245-evidence.yml'
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+      - name: Enable PostgreSQL binaries
+        run: echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+      - run: node --test test/spec245EvidenceImmutability.test.js test/spec224CIECanonicalIntegration.test.js test/spec223CanonicalSemanticPersistence.test.js

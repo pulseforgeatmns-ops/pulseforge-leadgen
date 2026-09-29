@@ -2,13 +2,14 @@
 
 /**
  * SPEC-117 — Capacity Intelligence.
- * Provider ceilings are caps, not recommendations.
+ * SPEC-255 — bootstrap overlay for young authenticated tenant mailboxes.
  */
 
 const { WARMUP_STATUS, clamp, round2, pct } = require('./types');
-const { authPass } = require('./InboxHealth');
+const { authPass, authFactorForCapacity } = require('./AuthEvidence');
+const { applyBootstrapCapacity, deliverabilityFactors, isTenantMailboxSnapshot } = require('./Bootstrap');
 
-function recommendCapacity(snapshot = {}, health = {}) {
+function recommendCapacityNormal(snapshot = {}, health = {}) {
   const ceiling = Math.max(1, Number(snapshot.providerCeiling || 50));
   const warmup = snapshot.warmup || {};
   const warmupCap = Number(warmup.dailyCap || ceiling);
@@ -23,6 +24,8 @@ function recommendCapacity(snapshot = {}, health = {}) {
   const listed = snapshot.blacklist?.listed === true;
   const healthScore = Number(health.score || 0);
   const warmupStatus = String(warmup.status || WARMUP_STATUS.NONE);
+  const deliverabilityLimited = snapshot.deliverabilityObservability === 'limited';
+  const neutralDeliverability = deliverabilityFactors(snapshot);
 
   if (listed || complaintRate >= 0.001 || (bounceRate >= 0.04 && Number(snapshot.recentSends || 20) >= 20)) {
     return explainCapacity({
@@ -32,6 +35,7 @@ function recommendCapacity(snapshot = {}, health = {}) {
       outlook: 'pause',
       snapshot,
       health,
+      mode: 'normal',
       factors: [
         listed ? 'Possible blacklist' : null,
         complaintRate >= 0.001 ? 'Spam complaints detected' : null,
@@ -42,10 +46,14 @@ function recommendCapacity(snapshot = {}, health = {}) {
 
   const ageFactor = clamp(ageDays / 85, 0.08, 1);
   const healthFactor = clamp(healthScore / 100, 0.2, 1);
-  const authFactor = authenticated ? 1 : 0.55;
+  const authFactor = authFactorForCapacity(auth);
   const bounceFactor = bounceRate <= 0 ? 1 : bounceRate >= 0.02 ? 0.35 : 0.7;
-  const replyFactor = clamp(0.75 + replyRate * 2.2, 0.75, 1.12);
-  const openFactor = clamp(0.8 + openRate * 0.4, 0.8, 1.08);
+  const replyFactor = neutralDeliverability
+    ? neutralDeliverability.replyFactor
+    : clamp(0.75 + replyRate * 2.2, 0.75, 1.12);
+  const openFactor = neutralDeliverability
+    ? neutralDeliverability.openFactor
+    : clamp(0.8 + openRate * 0.4, 0.8, 1.08);
   let warmupFactor = 0.7;
   if (warmupStatus === WARMUP_STATUS.HEALTHY) warmupFactor = 0.8;
   else if (warmupStatus === WARMUP_STATUS.WARMING) warmupFactor = 0.45;
@@ -64,7 +72,8 @@ function recommendCapacity(snapshot = {}, health = {}) {
       + (complaintRate === 0 ? 0.06 : 0)
       + (warmupStatus === WARMUP_STATUS.HEALTHY ? 0.08 : 0)
       + (ageDays >= 40 ? 0.08 : 0)
-      - (warmupStatus === WARMUP_STATUS.WARMING ? 0.12 : 0),
+      - (warmupStatus === WARMUP_STATUS.WARMING ? 0.12 : 0)
+      - (deliverabilityLimited ? 0.08 : 0),
     0.2,
     0.95
   ));
@@ -77,8 +86,12 @@ function recommendCapacity(snapshot = {}, health = {}) {
   const factors = [
     `Inbox age: ${ageDays} days`,
     authenticated ? 'Domain: Properly authenticated' : 'Domain: Authentication incomplete',
-    `Reply rate: ${(replyRate * 100).toFixed(1)}%`,
-    `Open rate: ${Math.round(openRate * 100)}%`,
+    deliverabilityLimited
+      ? 'Deliverability: open/reply unobservable (tenant SMTP)'
+      : `Reply rate: ${(replyRate * 100).toFixed(1)}%`,
+    deliverabilityLimited
+      ? 'Open rate: UNKNOWN'
+      : `Open rate: ${Math.round(openRate * 100)}%`,
     `Recent bounces: ${bounceRate === 0 ? 0 : `${(bounceRate * 100).toFixed(1)}%`}`,
     `Spam complaints: ${complaintRate === 0 ? 0 : `${(complaintRate * 100).toFixed(2)}%`}`,
     `Warm-up: ${warmupStatus === WARMUP_STATUS.HEALTHY ? 'Healthy' : warmupStatus}`,
@@ -91,15 +104,24 @@ function recommendCapacity(snapshot = {}, health = {}) {
     outlook,
     snapshot,
     health,
+    mode: 'normal',
     factors,
   });
 }
 
-function explainCapacity({ recommended, ceiling, confidence, outlook, snapshot, health, factors }) {
+function recommendCapacity(snapshot = {}, health = {}) {
+  const normal = recommendCapacityNormal(snapshot, health);
+  if (snapshot.bootstrapEnabled === false) return normal;
+  if (!isTenantMailboxSnapshot(snapshot)) return normal;
+  return applyBootstrapCapacity(snapshot, health, normal);
+}
+
+function explainCapacity({ recommended, ceiling, confidence, outlook, snapshot, health, factors, mode }) {
   const tomorrow = outlookTomorrow(recommended, outlook);
   return {
     kind: 'capacity',
-    spec: 'SPEC-117',
+    spec: mode === 'bootstrap' ? 'SPEC-255' : 'SPEC-117',
+    mode: mode || 'normal',
     recommended,
     ceiling,
     confidence,
@@ -117,6 +139,9 @@ function explainCapacity({ recommended, ceiling, confidence, outlook, snapshot, 
 
 function outlookTomorrow(recommended, outlook) {
   if (outlook === 'pause') return { low: 0, high: 0, note: 'Pause entirely until reputation recovers.' };
+  if (outlook === 'bootstrap') {
+    return { low: recommended, high: recommended + 1, note: 'Bootstrap may increase slightly as evidence accumulates.' };
+  }
   if (outlook === 'increase') {
     const next = Math.max(recommended + 4, Math.round(recommended * 1.35));
     return { low: recommended, high: next, note: `Tomorrow this might become ${next}.` };
@@ -130,4 +155,5 @@ function outlookTomorrow(recommended, outlook) {
 
 module.exports = {
   recommendCapacity,
+  recommendCapacityNormal,
 };

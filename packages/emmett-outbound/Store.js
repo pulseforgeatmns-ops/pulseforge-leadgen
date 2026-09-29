@@ -8,7 +8,6 @@ const { clone, asText, nowIso, eoiError } = require('./types');
 
 function createMemoryEoiStore(opts = {}) {
   const plans = new Map();
-  const snapshots = new Map();
   const acks = [];
   const outcomes = [];
   const learning = [];
@@ -42,16 +41,6 @@ function createMemoryEoiStore(opts = {}) {
     return listPlans(tenantId)
       .filter((row) => row.status === 'approved' && (!localDate || row.localDate === localDate))
       .sort((a, b) => String(b.approvedAt || b.updatedAt).localeCompare(String(a.approvedAt || a.updatedAt)))[0] || null;
-  }
-
-  function putSnapshot(snapshot) {
-    const copy = clone(snapshot);
-    snapshots.set(`${copy.tenantId}:${copy.localDate || 'latest'}`, copy);
-    return clone(copy);
-  }
-
-  function getSnapshot(tenantId, localDate) {
-    return snapshots.get(`${tenantId}:${localDate}`) || snapshots.get(`${tenantId}:latest`) || null;
   }
 
   function addAck(row) {
@@ -93,8 +82,6 @@ function createMemoryEoiStore(opts = {}) {
     requirePlan,
     listPlans,
     getApprovedPlan,
-    putSnapshot,
-    getSnapshot,
     addAck,
     addOutcome,
     addLearning,

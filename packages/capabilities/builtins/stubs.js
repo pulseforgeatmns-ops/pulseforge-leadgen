@@ -549,6 +549,18 @@ function registerBuiltinCapabilities(registry, options = {}) {
   register(
     createDiscoveryDiagnosticsCapability(options.discoveryDiagnostics || {})
   );
+  const {
+    createSocialContentCapability,
+  } = require('../contentGeneration');
+  register(
+    createSocialContentCapability(options.socialContent || {})
+  );
+  const {
+    createWebsiteOpportunityIntelligenceCapability,
+  } = require('../websiteOpportunityIntelligence');
+  register(
+    createWebsiteOpportunityIntelligenceCapability(options.websiteOpportunityIntelligence || {})
+  );
   return registry;
 }
 

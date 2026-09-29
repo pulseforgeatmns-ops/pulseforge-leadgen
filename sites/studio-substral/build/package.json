@@ -1,0 +1,15 @@
+{
+  "name": "studio-substral-build",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Build tooling for the Studio Substral site. Produces the tree-shaken dimensional object bundle. Not part of the published site.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "three": "0.186.1"
+  }
+}

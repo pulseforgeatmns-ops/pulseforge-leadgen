@@ -170,24 +170,40 @@ async function createOpportunity(clientId, input, rawContext) {
     requireCents(input.estimatedValueCents, 'estimatedValueCents');
     const source = normalizeLeadSource(input.source);
     const attributionStatus = normalizeAttributionStatus(input.attributionStatus, Boolean(prospectId));
-    const { rows } = await db.query(`
+    const attributionMetadata = input.attributionMetadata || null;
+    const insertSql = attributionMetadata != null
+      ? `
+      INSERT INTO opportunities (
+        client_id, customer_id, prospect_id, company_id, service_type,
+        estimated_value_cents, estimated_cost_cents, expected_close_date, stage,
+        source, lead_source_detail, campaign_id, sequence_id, attribution_status, human_owner,
+        attribution_metadata
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'identified',$9,$10,$11,$12,$13,$14,$15::jsonb)
+      RETURNING *`
+      : `
       INSERT INTO opportunities (
         client_id, customer_id, prospect_id, company_id, service_type,
         estimated_value_cents, estimated_cost_cents, expected_close_date, stage,
         source, lead_source_detail, campaign_id, sequence_id, attribution_status, human_owner
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'identified',$9,$10,$11,$12,$13,$14)
-      RETURNING *
-    `, [
+      RETURNING *`;
+    const insertParams = [
       clientId, customer?.id || null, prospectId, input.companyId || customer?.company_id || null,
       input.serviceType, input.estimatedValueCents, input.estimatedCostCents ?? null,
       input.expectedCloseDate || null, source, input.leadSourceDetail || null,
       input.campaignId || null, input.sequenceId || null, attributionStatus, input.humanOwner || context.actorId,
-    ]);
+    ];
+    if (attributionMetadata != null) insertParams.push(JSON.stringify(attributionMetadata));
+    const { rows } = await db.query(insertSql, insertParams);
     const opportunity = rows[0];
     const result = { opportunity };
+    const eventPayload = { result };
+    if (input.admissionProvenance) {
+      eventPayload.admission = input.admissionProvenance;
+    }
     await appendEvent(db, {
       clientId, eventType: 'opportunity_created', entityType: 'opportunity', entityId: opportunity.id,
-      occurredAt: opportunity.created_at, payload: { result }, context, idempotencyKey: context.idempotencyKey,
+      occurredAt: opportunity.created_at, payload: eventPayload, context, idempotencyKey: context.idempotencyKey,
     });
     return result;
   });

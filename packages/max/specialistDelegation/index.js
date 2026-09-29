@@ -91,6 +91,8 @@ const {
 } = require('./RetrievalGate');
 
 const ADAPTERS = Object.freeze({
+  paige_social_publication: require('./PaigeSocialAdapter').runPaigeSocialPublication,
+  paige_social_content: require('./PaigeSocialAdapter').runPaigeSocialContent,
   test_intelligence: runTestIntelligence,
   scout: runScoutAcquisitionIntelligence,
 });

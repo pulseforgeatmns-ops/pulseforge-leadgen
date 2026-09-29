@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { publishToLinkedInPage, publishToLinkedInPersonal } = require('../utils/publishPipeline');
 const { getRequestClientId } = require('../utils/clientContext');
 
 const managerAccess = [requireAuth, requireRole('admin', 'manager')];
@@ -98,117 +97,53 @@ router.get('/api/pending-comments', ...managerAccess, async (req, res) => {
 router.post('/api/approve-comment/:id', ...managerAccess, async (req, res) => {
   const db = require('../dbClient');
   const { id } = req.params;
-  process.env.ACTIVE_CLIENT_ID = String(getRequestClientId(req));
+  const clientId = getRequestClientId(req);
+  process.env.ACTIVE_CLIENT_ID = String(clientId);
   const comments = await db.getPendingComments();
   const comment = comments.find(c => c.id === id);
   if (!comment) return res.status(404).json({ error: 'Not found' });
 
-  await db.updateCommentStatus(id, 'approved');
-
-  const postUrl = comment.post_url;
-  const commentText = comment.comment;
-  const authorName = comment.author_name;
-
-  if (!postUrl && comment.channel === 'linkedin_page') {
-    publishToLinkedInPage(comment).catch(err =>
-      console.error('[Publisher:linkedin_page] Unhandled error:', err.message)
-    );
-    return res.json({ success: true, message: 'Approved — publishing LinkedIn Page post via Buffer' });
-  }
-
-  if (!postUrl && comment.channel === 'linkedin_personal') {
-    publishToLinkedInPersonal(comment).catch(err =>
-      console.error('[Publisher:linkedin_personal] Unhandled error:', err.message)
-    );
-    return res.json({ success: true, message: 'Approved — publishing LinkedIn Personal post via Buffer' });
-  }
-
-  if (!postUrl) {
-    return res.json({ success: true, message: 'Approved but no URL to post to' });
-  }
-
-  try {
-    const puppeteer = require('puppeteer-extra');
-    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-    puppeteer.use(StealthPlugin());
-
-    const sessionData = process.env.LINKEDIN_SESSION;
-    if (!sessionData) return res.status(500).json({ error: 'No LinkedIn session' });
-
-    const cookies = JSON.parse(Buffer.from(sessionData, 'base64').toString('utf8'));
-
-    console.log('Launching browser to post comment on:', postUrl);
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+  const { applyPendingCommentApprovalAction } = require('../services/paigeSocialContentApprovalFlow');
+  const canonicalResult = await applyPendingCommentApprovalAction({
+    clientId,
+    pendingCommentId: id,
+    action: 'approved',
+    pendingComment: comment,
+    source: 'legacy_approvals',
+  });
+  if (!canonicalResult.ok) {
+    return res.status(canonicalResult.statusCode || 500).json({
+      error: canonicalResult.error || 'approval_failed',
+      message: canonicalResult.message || null,
     });
-
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 800 });
-    await page.setCookie(...cookies);
-
-    await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await new Promise(r => setTimeout(r, 3000 + Math.random() * 2000));
-
-    const commentBtn = await page.$('.comment-button') ||
-                       await page.$('[aria-label="Comment"]') ||
-                       await page.$('.comments-comment-box__text-editor');
-
-    if (!commentBtn) {
-      await browser.close();
-      return res.json({ success: true, message: 'Approved but comment button not found on page' });
-    }
-
-    await commentBtn.click();
-    await new Promise(r => setTimeout(r, 1500));
-
-    const commentBox = await page.$('.comments-comment-box__text-editor') ||
-                       await page.$('[contenteditable="true"]');
-
-    if (!commentBox) {
-      await browser.close();
-      return res.json({ success: true, message: 'Approved but comment box not found' });
-    }
-
-    await commentBox.click();
-    for (const char of commentText) {
-      await commentBox.type(char, { delay: Math.floor(Math.random() * 80) + 30 });
-    }
-
-    await new Promise(r => setTimeout(r, 1000));
-
-    const submitBtn = await page.$('.comments-comment-box__submit-button') ||
-                      await page.$('button[type="submit"]');
-
-    if (submitBtn) {
-      await submitBtn.click();
-      await new Promise(r => setTimeout(r, 2000));
-    }
-
-    await db.logAgentAction(
-      'linkedin_agent',
-      'post_comment',
-      null,
-      postUrl,
-      { comment: commentText, authorName },
-      'success'
-    );
-
-    await browser.close();
-    await db.updateCommentStatus(id, 'posted');
-    res.json({ success: true, message: 'Comment posted' });
-
-  } catch (err) {
-    console.error('Posting error:', err.message);
-    res.json({ success: true, message: 'Approved but posting failed: ' + err.message });
   }
+  return res.json({
+    success: true,
+    mode: canonicalResult.mode,
+    artifact_id: canonicalResult.artifact?.id || null,
+    message: canonicalResult.mode === 'canonical'
+      ? `Approved — publishing ${comment.channel} via canonical execution`
+      : 'Approved',
+  });
 });
 
 router.post('/api/reject-comment/:id', ...managerAccess, async (req, res) => {
-  const db = require('../dbClient');
   const { id } = req.params;
-  await db.updateCommentStatus(id, 'rejected');
-  res.json({ success: true });
+  const clientId = getRequestClientId(req);
+  const { applyPendingCommentApprovalAction } = require('../services/paigeSocialContentApprovalFlow');
+  const result = await applyPendingCommentApprovalAction({
+    clientId,
+    pendingCommentId: id,
+    action: 'rejected',
+    source: 'legacy_approvals',
+  });
+  if (!result.ok) {
+    return res.status(result.statusCode || 500).json({
+      error: result.error || 'reject_failed',
+      message: result.message || null,
+    });
+  }
+  res.json({ success: true, mode: result.mode, artifact_id: result.artifact?.id || null });
 });
 
 module.exports = router;

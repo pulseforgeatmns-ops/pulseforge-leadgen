@@ -1,0 +1,18 @@
+{
+  "event": "DECISION_SHADOW_EVALUATED", "spec": "SPEC-JEV-001", "schema_version": 1,
+  "decision_id": "7a38c3ba-665f-4a31-a62b-3c41cfb48770", "mode": "shadow", "source": "workspace",
+  "session_id": "68b4db1f-479b-4781-b062-ab88d6a1d547", "tenant_id": "10", "message_index": 0,
+  "message_chars": 68, "message_truncated": false, "provider": "jev", "requested_provider": "jev",
+  "requested_model": "jev-latest", "mission_id": "mission_82e8102f-249c-4f44-b88e-2de76b13898e",
+  "current_route": {
+    "route": "conversation", "raw_route": "intelligence", "owner": "reasoning",
+    "pipeline": "ClientIntelligence", "primary_objective": "general_conversation",
+    "message_type": "question", "action": null, "failed": false
+  },
+  "routing_latency_ms": 511, "timestamp": "2026-09-21T02:08:37.706Z", "status": "evaluated",
+  "intent": "status_check", "confidence": 0.99, "mission_bound_probability": 0.8,
+  "approval_probability": 0.07, "inspection_probability": 0.93, "requires_human_clarification": false,
+  "risk_if_misrouted": "low", "recommended_route": "inspection", "route_matches": false,
+  "comparison": "mismatch", "model": "jev-1.13.0", "raw_redacted_response": null,
+  "latency_ms": 432, "fallback_provider": null, "fallback_reason": null, "errors": []
+}

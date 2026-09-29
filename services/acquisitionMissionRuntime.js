@@ -113,6 +113,10 @@ function createAcquisitionMissionRuntime(opts = {}) {
       return state.engine.store;
     },
 
+    get pool() {
+      return pool;
+    },
+
     persistOpts(overrides = {}) {
       const mergedPool = overrides.pool || pool;
       let mergedPersist;
@@ -159,6 +163,9 @@ function createAcquisitionMissionRuntime(opts = {}) {
 
       try {
         const loaded = await loadTenantMissions(tenantId, effectivePool);
+        // Contributions must hydrate before missions: putMission runs SPEC-136
+        // consistency checks (e.g. execution_approval requires Paige + Emmett rows).
+        for (const row of loaded.contributions) if (row) state.engine.store.addContribution(row);
         for (const mission of loaded.missions) {
           try {
             state.engine.store.putMission(mission);
@@ -182,13 +189,31 @@ function createAcquisitionMissionRuntime(opts = {}) {
             payload: payload.payload || {},
           });
         }
-        for (const row of loaded.contributions) if (row) state.engine.store.addContribution(row);
         for (const row of loaded.observations) if (row) state.engine.store.addObservation(row);
+        for (const row of loaded.observeReactions || []) {
+          if (row && state.engine.store.addObserveReaction) state.engine.store.addObserveReaction(row);
+        }
+        for (const row of loaded.candidateObserveStates || []) {
+          if (row && state.engine.store.putCandidateObserveState) {
+            state.engine.store.putCandidateObserveState(row);
+          }
+        }
         for (const row of loaded.outcomes) if (row) state.engine.store.addOutcome(row);
         for (const row of loaded.learning) if (row) state.engine.store.addLearning(row);
         for (const row of loaded.predictions || []) if (row) state.engine.store.addPrediction(row);
         for (const row of loaded.evaluations || []) if (row) state.engine.store.addEvaluation(row);
         for (const row of loaded.outcomeLearnings || []) if (row) state.engine.store.addOutcomeLearning(row);
+        if (typeof state.engine.store.replaceAcquisitionKnowledge === 'function') {
+          try {
+            const { loadTenantKnowledge } = require('./acquisitionKnowledgePersistence');
+            const knowledge = await loadTenantKnowledge(tenantId, effectivePool, { limit: 100 });
+            state.engine.store.replaceAcquisitionKnowledge(knowledge);
+          } catch (knowledgeErr) {
+            if (!/relation .* does not exist/i.test(String(knowledgeErr.message))) {
+              console.error('[amo] hydrate acquisition knowledge:', knowledgeErr.message);
+            }
+          }
+        }
       } catch (err) {
         if (!/relation .* does not exist/i.test(String(err.message))) {
           console.error('[amo] hydrate:', err.message);

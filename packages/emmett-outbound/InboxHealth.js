@@ -2,10 +2,16 @@
 
 /**
  * SPEC-117 — explainable Inbox Health 0–100.
- * Never return a bare score.
+ * SPEC-255 — PASS/FAIL/UNKNOWN authentication epistemics.
  */
 
 const { HEALTH_LABELS, WARMUP_STATUS, clamp, round1, pct } = require('./types');
+const {
+  authPass,
+  authFail,
+  authUnknown,
+  dmarcScore,
+} = require('./AuthEvidence');
 
 const FACTOR_MAX = Object.freeze({
   spf: 8,
@@ -22,22 +28,10 @@ const FACTOR_MAX = Object.freeze({
   operator_override: 2,
 });
 
-function authPass(value) {
-  const v = String(value || '').toLowerCase();
-  return value === true
-    || v === 'pass'
-    || v === 'valid'
-    || v === 'yes'
-    || v === 'authenticated'
-    || v === 'reject'
-    || v === 'quarantine';
-}
-
-function dmarcScore(value) {
-  const v = String(value || '').toLowerCase();
-  if (v === 'reject' || v === 'quarantine' || value === true || v === 'pass') return FACTOR_MAX.dmarc;
-  if (v === 'none' || v === 'p=none') return 4;
-  return 0;
+function authFactorScore(value, max, passReason, failReason, unknownReason) {
+  if (authPass(value)) return { score: max, reason: passReason };
+  if (authFail(value)) return { score: 0, reason: failReason };
+  return { score: max * 0.5, reason: unknownReason };
 }
 
 function healthLabel(score) {
@@ -73,27 +67,39 @@ function scoreInboxHealth(snapshot = {}) {
   const sentYesterday = Number(snapshot.sentYesterday || 0);
   const historicalDailyAvg = Number(snapshot.historicalDailyAvg || 0);
   const override = snapshot.operatorOverride || null;
+  const deliverabilityLimited = snapshot.deliverabilityObservability === 'limited';
 
   const factors = [];
 
-  factors.push(factor(
-    'spf',
-    authPass(auth.spf) ? FACTOR_MAX.spf : 0,
-    authPass(auth.spf) ? 'SPF authenticated' : 'SPF missing or failing'
-  ));
-  factors.push(factor(
-    'dkim',
-    authPass(auth.dkim) ? FACTOR_MAX.dkim : 0,
-    authPass(auth.dkim) ? 'DKIM authenticated' : 'DKIM missing or failing'
-  ));
+  const spf = authFactorScore(
+    auth.spf,
+    FACTOR_MAX.spf,
+    'SPF authenticated',
+    'SPF missing or failing',
+    'SPF evidence unavailable'
+  );
+  factors.push(factor('spf', spf.score, spf.reason));
+
+  const dkim = authFactorScore(
+    auth.dkim,
+    FACTOR_MAX.dkim,
+    'DKIM authenticated',
+    'DKIM missing or failing',
+    'DKIM evidence unavailable'
+  );
+  factors.push(factor('dkim', dkim.score, dkim.reason));
+
+  const dmarcPts = dmarcScore(auth.dmarc);
   factors.push(factor(
     'dmarc',
-    dmarcScore(auth.dmarc),
-    dmarcScore(auth.dmarc) === FACTOR_MAX.dmarc
+    dmarcPts,
+    dmarcPts === FACTOR_MAX.dmarc
       ? 'DMARC policy in force'
-      : dmarcScore(auth.dmarc) === 4
-        ? 'DMARC present but p=none'
-        : 'DMARC missing or failing'
+      : authUnknown(auth.dmarc)
+        ? 'DMARC evidence unavailable'
+        : dmarcPts === 4
+          ? 'DMARC present but p=none'
+          : 'DMARC missing or failing'
   ));
 
   const warmupStatus = String(warmup.status || WARMUP_STATUS.NONE);
@@ -133,20 +139,32 @@ function scoreInboxHealth(snapshot = {}) {
     { bounceRate }
   ));
 
-  const replyPts = clamp((replyRate / 0.10) * FACTOR_MAX.reply, 0, FACTOR_MAX.reply);
+  const replyPts = deliverabilityLimited
+    ? FACTOR_MAX.reply * 0.5
+    : clamp((replyRate / 0.10) * FACTOR_MAX.reply, 0, FACTOR_MAX.reply);
   factors.push(factor(
     'reply',
     replyPts,
-    replyRate >= 0.08 ? 'Reply rate supports current volume' : 'Reply rate is thin for this volume',
-    { replyRate }
+    deliverabilityLimited
+      ? 'Reply rate unobservable for tenant SMTP'
+      : replyRate >= 0.08
+        ? 'Reply rate supports current volume'
+        : 'Reply rate is thin for this volume',
+    { replyRate, observability: deliverabilityLimited ? 'UNKNOWN' : 'observed' }
   ));
 
-  const openPts = clamp((openRate / 0.55) * FACTOR_MAX.open, 0, FACTOR_MAX.open);
+  const openPts = deliverabilityLimited
+    ? FACTOR_MAX.open * 0.5
+    : clamp((openRate / 0.55) * FACTOR_MAX.open, 0, FACTOR_MAX.open);
   factors.push(factor(
     'open',
     openPts,
-    openRate >= 0.5 ? 'Open rate is healthy' : 'Open rate is below a healthy floor',
-    { openRate }
+    deliverabilityLimited
+      ? 'Open rate unobservable for tenant SMTP'
+      : openRate >= 0.5
+        ? 'Open rate is healthy'
+        : 'Open rate is below a healthy floor',
+    { openRate, observability: deliverabilityLimited ? 'UNKNOWN' : 'observed' }
   ));
 
   const agePts = clamp((ageDays / 60) * FACTOR_MAX.age, 0, FACTOR_MAX.age);

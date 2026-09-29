@@ -24,7 +24,19 @@ const TASK_STATUSES = ['open', 'done', 'rescheduled', 'escalated', 'cancelled'];
 const TASK_PRIORITIES = ['normal', 'high', 'warm'];
 const ATTRIBUTION_SOURCES = ['ao_field_visit', 'direct_mail_campaign'];
 const ESCALATION_STATUSES = ['new', 'seen', 'in_progress', 'resolved', 'ignored'];
-const MAX_MODES = ['log_visit', 'follow_up', 'direct_mail_follow_up', 'route_follow_up', 'phone_follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help'];
+const MAX_MODES = ['log_visit', 'follow_up', 'direct_mail_follow_up', 'route_follow_up', 'phone_follow_up', 'book_walkthrough', 'daily_debrief', 'ask_for_help', 'conversation'];
+const REPORT_STATUSES = ['new', 'reviewed', 'resolved'];
+const CONVERSATION_STATUSES = ['active', 'done', 'archived', 'closed', 'reopened'];
+const ROUTING_ISSUE_TYPES = [
+  'wrong_route',
+  'wrong_prospect',
+  'wrong_mission',
+  'lost_context',
+  'should_have_opened_brief',
+  'should_have_opened_conversation',
+  'treated_as_done_incorrectly',
+  'other',
+];
 const ROUTE_SORT_MODES = ['farthest_first', 'closest_first', 'shortest_route', 'manual'];
 const ROUTE_START_POINT_TYPES = ['current_location', 'anchor_office', 'custom'];
 const ROUTE_STATUSES = ['active', 'completed', 'cancelled'];
@@ -52,8 +64,8 @@ async function ensureAoFieldSchemaOnce() {
       business_type TEXT,
       status TEXT NOT NULL DEFAULT 'new_visit'
         CHECK (status IN (${LEAD_STATUSES.map(s => `'${s}'`).join(', ')})),
-      interest_level TEXT NOT NULL DEFAULT 'medium'
-        CHECK (interest_level IN ('low', 'medium', 'high')),
+      interest_level TEXT DEFAULT NULL
+        CHECK (interest_level IS NULL OR interest_level IN ('low', 'medium', 'high')),
       ao_owner_id INTEGER NOT NULL REFERENCES users(id),
       first_contact_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       last_contact_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -185,6 +197,16 @@ async function ensureAoFieldSchemaOnce() {
       CHECK (status IN (${LEAD_STATUSES.map(s => `'${s}'`).join(', ')}))
   `);
 
+  await pool.query(`ALTER TABLE ao_leads ALTER COLUMN interest_level DROP NOT NULL`);
+  await pool.query(`ALTER TABLE ao_leads ALTER COLUMN interest_level DROP DEFAULT`);
+  await pool.query(`
+    ALTER TABLE ao_leads DROP CONSTRAINT IF EXISTS ao_leads_interest_level_check
+  `);
+  await pool.query(`
+    ALTER TABLE ao_leads ADD CONSTRAINT ao_leads_interest_level_check
+      CHECK (interest_level IS NULL OR interest_level IN ('low', 'medium', 'high'))
+  `);
+
   await pool.query(`
     ALTER TABLE ao_escalations DROP CONSTRAINT IF EXISTS ao_escalations_status_check
   `);
@@ -250,6 +272,113 @@ async function ensureAoFieldSchemaOnce() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS ao_max_conversation_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      ao_owner_id INTEGER NOT NULL REFERENCES users(id),
+      session_id UUID NOT NULL REFERENCES ao_max_sessions(id),
+      category TEXT NOT NULL DEFAULT 'user_report',
+      note TEXT,
+      transcript_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+      context_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'new'
+        CHECK (status IN (${REPORT_STATUSES.map(s => `'${s}'`).join(', ')})),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ao_max_reports_client_created
+      ON ao_max_conversation_reports(client_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ao_max_reports_session
+      ON ao_max_conversation_reports(session_id);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ao_routing_issue_flags (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      ao_user_id TEXT,
+      session_id TEXT,
+      conversation_id TEXT,
+      message_id TEXT,
+      prospect_id TEXT,
+      mission_id TEXT,
+      route_observed JSONB,
+      route_expected TEXT,
+      issue_type TEXT NOT NULL
+        CHECK (issue_type IN (${ROUTING_ISSUE_TYPES.map(t => `'${t}'`).join(', ')})),
+      notes TEXT,
+      decision_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_max_sessions
+      ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active',
+      ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS reopened_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS closed_by TEXT,
+      ADD COLUMN IF NOT EXISTS reopened_by TEXT,
+      ADD COLUMN IF NOT EXISTS prospect_id TEXT,
+      ADD COLUMN IF NOT EXISTS mission_id TEXT
+  `);
+
+  await pool.query(`
+    UPDATE ao_max_sessions
+    SET status = CASE WHEN completed = true THEN 'done' ELSE 'active' END
+    WHERE status = 'active' AND completed = true
+  `);
+
+  await pool.query(`
+    ALTER TABLE ao_max_sessions DROP CONSTRAINT IF EXISTS ao_max_sessions_status_check
+  `);
+  await pool.query(`
+    ALTER TABLE ao_max_sessions ADD CONSTRAINT ao_max_sessions_status_check
+      CHECK (status IN (${CONVERSATION_STATUSES.map(s => `'${s}'`).join(', ')}))
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ao_routing_flags_tenant_created
+      ON ao_routing_issue_flags (tenant_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ao_max_sessions_owner_status
+      ON ao_max_sessions (ao_owner_id, client_id, status, updated_at DESC)
+      WHERE mode = 'conversation'
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ao_prospect_updates (
+      id TEXT PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      ao_user_id TEXT,
+      prospect_id TEXT NOT NULL,
+      outcome_type TEXT NOT NULL
+        CHECK (outcome_type IN (
+          'called_no_answer', 'left_voicemail', 'sent_email', 'spoke_gatekeeper',
+          'spoke_decision_maker', 'booked_assessment', 'not_interested', 'not_fit',
+          'follow_up_later', 'needs_research', 'other'
+        )),
+      notes TEXT,
+      next_action TEXT,
+      next_action_due_at TIMESTAMPTZ,
+      advisory_stage TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ao_prospect_updates_tenant_ao_created
+      ON ao_prospect_updates (tenant_id, ao_user_id, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ao_prospect_updates_prospect_created
+      ON ao_prospect_updates (prospect_id, created_at DESC)
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_ao_leads_owner ON ao_leads(ao_owner_id, client_id);
     CREATE INDEX IF NOT EXISTS idx_ao_leads_next_follow_up ON ao_leads(next_follow_up_date);
     CREATE INDEX IF NOT EXISTS idx_ao_tasks_owner_due ON ao_follow_up_tasks(ao_owner_id, due_date, status);
@@ -282,9 +411,12 @@ module.exports = {
   ATTRIBUTION_SOURCES,
   ESCALATION_STATUSES,
   MAX_MODES,
+  REPORT_STATUSES,
   ROUTE_SORT_MODES,
   ROUTE_START_POINT_TYPES,
   ROUTE_STATUSES,
   ROUTE_STOP_STATUSES,
+  CONVERSATION_STATUSES,
+  ROUTING_ISSUE_TYPES,
   ensureAoFieldSchema,
 };

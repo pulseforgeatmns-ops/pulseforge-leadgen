@@ -13,43 +13,90 @@ const {
   OPERATOR_DECISION_KINDS,
   asText,
   nowIso,
+  MESSAGE_BINDING_SCOPES,
+  BINDING_VALIDATION_RESULTS,
 } = require('./types');
+const {
+  extractCapacitySenderIdentity,
+} = require('../../utils/canonicalSenderIdentity');
+const {
+  unwrapSpecialistPayload,
+} = require('./ContributionSupersession');
+const { selectCanonicalContribution } = require('./CanonicalContributionSelection');
+const { isUpstreamArtifactChainCoherent } = require('./UpstreamArtifactCoherence');
+const {
+  extractOutreachSequenceSteps,
+  outreachSequenceForRevisionHash,
+  freezeOutreachSequenceForApproval,
+} = require('./PreparedOutreachSequence');
 
 const EXECUTION_APPROVAL_ACTION = 'execution_approved';
 
-function findLatestContribution(contributions = [], specialist, kind) {
-  return [...contributions]
-    .reverse()
-    .find((row) => row.specialist === specialist && row.kind === kind) || null;
+function missionFromContributions(contributions = [], missionId = null) {
+  if (missionId) return { id: missionId };
+  const row = contributions.find((entry) => entry && entry.missionId);
+  return row ? { id: row.missionId } : null;
 }
 
-function findMaxPrioritization(contributions = []) {
-  return findLatestContribution(contributions, SPECIALISTS.MAX, CONTRIBUTION_KINDS.PRIORITIZATION);
+function findLatestContribution(contributions = [], specialist, kind, mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist,
+    kind,
+    mission,
+  });
 }
 
-function findPaigeVariants(contributions = []) {
-  return findLatestContribution(contributions, SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS);
+function findMaxPrioritization(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.MAX,
+    CONTRIBUTION_KINDS.PRIORITIZATION,
+    mission || missionFromContributions(contributions)
+  );
 }
 
-function findEmmettCapacity(contributions = []) {
-  return findLatestContribution(contributions, SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY);
+function findPaigeVariants(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.PAIGE,
+    CONTRIBUTION_KINDS.VARIANTS,
+    mission || missionFromContributions(contributions)
+  );
 }
 
-function findLatestScoutDiscovery(contributions = []) {
-  return findLatestContribution(contributions, SPECIALISTS.SCOUT, CONTRIBUTION_KINDS.DISCOVERY);
+function findEmmettCapacity(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.EMMETT,
+    CONTRIBUTION_KINDS.CAPACITY,
+    mission || missionFromContributions(contributions)
+  );
+}
+
+function findLatestScoutDiscovery(contributions = [], mission = null) {
+  return findLatestContribution(
+    contributions,
+    SPECIALISTS.SCOUT,
+    CONTRIBUTION_KINDS.DISCOVERY,
+    mission || missionFromContributions(contributions)
+  );
 }
 
 /**
  * Deterministic revision from canonical contribution IDs and prepared queue state.
  */
-function computePreparedArtifactBinding(missionId, contributions = []) {
-  const max = findMaxPrioritization(contributions);
-  const paige = findPaigeVariants(contributions);
-  const emmett = findEmmettCapacity(contributions);
-  const emmettPayload = (emmett && emmett.payload) || {};
+function computePreparedArtifactBinding(missionId, contributions = [], mission = null) {
+  const missionRef = mission || { id: missionId };
+  const max = findMaxPrioritization(contributions, missionRef);
+  const paige = findPaigeVariants(contributions, missionRef);
+  const emmett = findEmmettCapacity(contributions, missionRef);
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
   const queue = emmettPayload.queue || {};
   const queueItems = Array.isArray(queue.items) ? queue.items : [];
   const governor = emmettPayload.governor || {};
+  const senderIdentity = extractCapacitySenderIdentity(emmettPayload);
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
 
   return {
     missionId,
@@ -63,6 +110,9 @@ function computePreparedArtifactBinding(missionId, contributions = []) {
       .filter(Boolean)
       .sort(),
     governorOutcome: governor.outcome || null,
+    senderEmail: senderIdentity.senderEmail || null,
+    sendingDomain: senderIdentity.sendingDomain || null,
+    outreachSequenceSteps: outreachSequenceForRevisionHash(paigePayload.outreachSequence),
   };
 }
 
@@ -75,11 +125,102 @@ function computePreparedArtifactRevision(missionId, contributions = []) {
     .slice(0, 16);
 }
 
+/**
+ * SPEC-212 — Validate message binding integrity before execution.
+ * Every queue item must have a message bound to the same candidateId.
+ */
+function validateProspectMessageBindings(emmettPayload = {}) {
+  const queue = emmettPayload.queue || {};
+  const queueItems = Array.isArray(queue.items) ? queue.items : [];
+
+  if (!queueItems.length) {
+    return {
+      valid: true,
+      result: BINDING_VALIDATION_RESULTS.VALID,
+      violations: [],
+    };
+  }
+
+  const violations = [];
+
+  for (let i = 0; i < queueItems.length; i += 1) {
+    const item = queueItems[i];
+    const itemCandidateId = asText(item.id || item.candidateId || item.prospectId || item.companyId);
+
+    if (!itemCandidateId) {
+      violations.push({
+        index: i,
+        reason: 'missing_candidate_id',
+        message: `Queue item #${i} missing candidateId / prospectId / id`,
+        item,
+      });
+      continue;
+    }
+
+    // Check for message binding
+    if (!item.paige || !item.paige.candidateId) {
+      violations.push({
+        index: i,
+        reason: 'missing_message_binding',
+        message: `Queue item #${i} (${itemCandidateId}) has no bound message`,
+        item,
+      });
+      continue;
+    }
+
+    const messageCandidateId = asText(item.paige.candidateId);
+
+    // SPEC-212: Fail closed on mismatch
+    if (String(itemCandidateId) !== String(messageCandidateId)) {
+      violations.push({
+        index: i,
+        reason: 'candidate_id_mismatch',
+        message: `Queue item #${i}: itemCandidateId="${itemCandidateId}" ≠ messageCandidateId="${messageCandidateId}"`,
+        itemCandidateId,
+        messageCandidateId,
+        item,
+      });
+      continue;
+    }
+
+    // Check for prospect-specific binding scope
+    const bindingScope = item.paige.bindingScope || MESSAGE_BINDING_SCOPES.PROSPECT;
+    if (bindingScope === MESSAGE_BINDING_SCOPES.PROSPECT) {
+      // For prospect-bound messages, verify attributable intelligence exists
+      if (!item.paige.attributableIntelligence) {
+        violations.push({
+          index: i,
+          reason: 'missing_attributable_intelligence',
+          message: `Queue item #${i}: prospect-bound message lacking attributable intelligence`,
+          item,
+        });
+        continue;
+      }
+    }
+  }
+
+  if (violations.length) {
+    return {
+      valid: false,
+      result: BINDING_VALIDATION_RESULTS.CONTAMINATED,
+      violations,
+      blockerReason: `Message binding validation failed: ${violations.length} violation(s)`,
+    };
+  }
+
+  return {
+    valid: true,
+    result: BINDING_VALIDATION_RESULTS.VALID,
+    violations: [],
+  };
+}
+
 function isExecutionApprovalContribution(row) {
   if (!row || row.specialist !== SPECIALISTS.OPERATOR || row.kind !== CONTRIBUTION_KINDS.APPROVAL) {
     return false;
   }
   const payload = row.payload || {};
+  if (payload.invalidated === true || payload.superseded === true) return false;
   return (
     payload.decisionKind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
     || payload.kind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL
@@ -113,8 +254,14 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
   const binding = computePreparedArtifactBinding(mission.id, contributions);
   const revision = computePreparedArtifactRevision(mission.id, contributions);
   const emmett = findEmmettCapacity(contributions);
-  const emmettPayload = (emmett && emmett.payload) || {};
+  const paige = findPaigeVariants(contributions);
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
   const queueItems = Array.isArray(emmettPayload.queue?.items) ? emmettPayload.queue.items : [];
+  const frozenOutreachSequence = freezeOutreachSequenceForApproval(paigePayload.outreachSequence);
+
+  // SPEC-212: Validate message bindings before approval
+  const bindingValidation = validateProspectMessageBindings(emmettPayload);
 
   return {
     approved: true,
@@ -136,6 +283,10 @@ function buildExecutionApprovalPayload(mission, contributions = [], input = {}) 
     command: asText(input.command || input.question) || null,
     executionRequestId: input.executionRequestId || null,
     transactionId: input.transactionId || null,
+    // SPEC-212: Include binding validation in approval payload
+    bindingValidation,
+    ...(input.dailyEnvelope ? { dailyEnvelope: input.dailyEnvelope } : {}),
+    ...(frozenOutreachSequence ? { outreachSequence: frozenOutreachSequence } : {}),
   };
 }
 
@@ -145,8 +296,8 @@ function buildExecutionReview(mission, contributions = []) {
   const emmett = findEmmettCapacity(contributions);
   const scout = findLatestScoutDiscovery(contributions);
   const maxPayload = (max && max.payload) || {};
-  const paigePayload = (paige && paige.payload) || {};
-  const emmettPayload = (emmett && emmett.payload) || {};
+  const paigePayload = paige ? unwrapSpecialistPayload(paige) : {};
+  const emmettPayload = emmett ? unwrapSpecialistPayload(emmett) : {};
   const scoutPayload = (scout && scout.payload) || {};
   const variant = (Array.isArray(paigePayload.variants) && paigePayload.variants[0]) || {};
   const queue = emmettPayload.queue || {};
@@ -189,6 +340,15 @@ function buildExecutionReview(mission, contributions = []) {
       cta: variant.cta || paigePayload.cta || null,
       selectedVariant: variant.label || 'Primary',
       variantCount: Array.isArray(paigePayload.variants) ? paigePayload.variants.length : 0,
+      outreachSequence: (() => {
+        const steps = extractOutreachSequenceSteps(paigePayload);
+        if (!steps.length) return null;
+        return {
+          stepCount: steps.length,
+          nextStepDay: steps[1]?.day ?? null,
+          steps: steps.map(({ step, day, channel }) => ({ step, day, channel })),
+        };
+      })(),
     },
     infrastructure: {
       queue: queueItems,
@@ -221,13 +381,16 @@ function buildPendingExecutionDecision(mission, contributions = []) {
 
 function canAdvertiseExecutionApproval(mission, contributions = [], extras = {}) {
   if (!mission || mission.stage !== STAGES.READY) return false;
-  const by = (specialist, kind) =>
-    contributions.some((row) => row.specialist === specialist && row.kind === kind);
-  const paigeComplete = by(SPECIALISTS.PAIGE, CONTRIBUTION_KINDS.VARIANTS) || extras.paigeComplete;
-  const emmettComplete = by(SPECIALISTS.EMMETT, CONTRIBUTION_KINDS.CAPACITY) || extras.emmettComplete;
+  if (!isUpstreamArtifactChainCoherent(mission, contributions)) return false;
+  const { latestApproachDecision } = require('./AcquisitionApproach');
+  const approach = latestApproachDecision(contributions);
+  if (approach && approach.selected !== 'outbound' && approach.selected !== 'both') return false;
+  const paige = findPaigeVariants(contributions, mission);
+  const emmett = findEmmettCapacity(contributions, mission);
+  const paigeComplete = Boolean(paige) || extras.paigeComplete;
+  const emmettComplete = Boolean(emmett) || extras.emmettComplete;
   if (!paigeComplete || !emmettComplete) return false;
-  const emmett = findEmmettCapacity(contributions);
-  const governor = emmett && emmett.payload && emmett.payload.governor;
+  const governor = emmett ? unwrapSpecialistPayload(emmett).governor : null;
   const deliverabilityPaused = extras.deliverabilityPaused === true
     || Boolean(governor && (governor.outcome === 'pause' || governor.outcome === 'emergency'));
   if (deliverabilityPaused) return false;
@@ -243,6 +406,7 @@ module.exports = {
   findEmmettCapacity,
   computePreparedArtifactBinding,
   computePreparedArtifactRevision,
+  validateProspectMessageBindings,
   isExecutionApprovalContribution,
   findExecutionApprovals,
   findValidExecutionApproval,

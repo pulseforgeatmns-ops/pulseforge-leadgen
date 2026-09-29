@@ -39,7 +39,7 @@ Pilot 0 needs outbound that is safe, observable, and evidence-based. Emmett's jo
 ### Negative / tradeoffs
 
 - Legacy autosend without an approved daily plan does not send
-- Paige must provide subject/body/CTA before a queue item is sendable (legacy sequences require an explicit operator override)
+- Paige must provide subject/body/CTA before a queue item is sendable. Legacy sequences were offered as a temporary override during Paige development, but have been removed post-canonicalization (v0.1 cleanup).
 - v1 scoring is deterministic heuristics, not ISP-specific reputation models
 
 ### Follow-ups

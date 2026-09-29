@@ -309,6 +309,9 @@ describe('SPEC-170 — Native Acquisition Mission Specialist Execution', () => {
     assert.ok(ctx.intelligence);
     assert.equal(ctx.persistence.runtime, 'amo');
     assert.equal(ctx.persistence.suppressSideEffects, true);
+    assert.equal(ctx.persistence.pool, undefined);
+    assert.equal(ctx.persistence.engine, undefined);
+    assert.doesNotThrow(() => JSON.stringify(ctx));
     assert.ok(isNativeAmoExecution(ctx));
   });
 });

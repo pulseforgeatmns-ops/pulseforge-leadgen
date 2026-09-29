@@ -244,5 +244,33 @@ describe('SPEC-181 — Evidence-Native Execution', () => {
     const geo = geographyFromSearchDefinition(searchDefinition);
     assert.ok(geo.cities.length >= 3);
     assert.equal(geo.state, 'NH');
+    for (const city of ['Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn']) {
+      assert.ok(geo.cities.includes(city), `expected ${city} in ${JSON.stringify(geo.cities)}`);
+    }
+  });
+
+  it('scopeSearchDefinitionForTask expands Greater Manchester into evidenceRequest.geography.cities', () => {
+    const scoped = scopeSearchDefinitionForTask(
+      {
+        tenantId: '10',
+        geography: { label: 'Greater Manchester NH', state: 'NH' },
+        segments: ['property_management'],
+      },
+      {
+        id: 'task:identity',
+        evidenceType: INVESTIGATIVE_EVIDENCE.IDENTITY,
+        providers: [{ providerId: 'google_maps' }],
+      },
+      { segments: ['property_management'] }
+    );
+
+    assert.ok(scoped.evidenceRequest);
+    assert.equal(scoped.evidenceRequest.geography.state, 'NH');
+    for (const city of ['Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn']) {
+      assert.ok(
+        scoped.evidenceRequest.geography.cities.includes(city),
+        `expected ${city} in ${JSON.stringify(scoped.evidenceRequest.geography.cities)}`
+      );
+    }
   });
 });

@@ -47,7 +47,6 @@ function createOutboundEngine(opts = {}) {
     });
     const recommendations = buildRecommendations(snapshot, health, capacity, now);
     const approvedPlan = store.getApprovedPlan(tenantId, snapshot.localDate);
-    store.putSnapshot(snapshot);
     return {
       snapshot,
       health,

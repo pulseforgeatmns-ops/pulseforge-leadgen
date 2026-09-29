@@ -13,6 +13,12 @@
 
 const { buildMarketDefinition, buildDelegationFromMission } = require('./intelligence/MarketUnderstanding');
 const { createHypothesisInvestigationPlan } = require('./coverage/HypothesisInvestigationPlanner');
+const {
+  INVESTIGATION_MODES,
+  resolveInvestigationMode,
+  buildEntityInvestigationPlan,
+  buildInvestigationContinuationContext,
+} = require('./investigation/EntityInvestigationContinuation');
 const { loadRepository } = require('../max/scoutAcquisition/ExistingIntelligence');
 const { assessExistingSufficiency } = require('../max/scoutAcquisition/CandidateUniverse');
 const { defaultDiscoveryAdapters } = require('../max/scoutAcquisition/DiscoveryAdapters');
@@ -275,7 +281,7 @@ async function runDiscoveryPipeline(input = {}) {
   const capabilityEvaluation = evaluateDiscoveryCapability({
     adapters,
     coveragePlan,
-    requireExternalDiscovery: true,
+    requireExternalDiscovery: opts.requireExternalDiscovery !== false,
     discover: opts.discover,
     enablePlaces: opts.enablePlaces,
     placesProvider: opts.placesProvider,
@@ -325,21 +331,40 @@ async function runDiscoveryPipeline(input = {}) {
 
   // ── Stage 3: Build Investigation Plan ──────────────────────────
   const planStageStarted = nowIso();
-  const investigationPlan = createHypothesisInvestigationPlan({
-    mission,
-    marketDefinition,
-    opts: {
-      ...opts,
-      estimatedMarket: extractExpectedValue(universeEstimate),
-      universeEstimate,
-    },
+  const investigationMode = resolveInvestigationMode({
+    priorPayload: opts.priorDiscoveryPayload || {},
+    opts,
   });
+  let investigationPlan;
+  if (investigationMode === INVESTIGATION_MODES.ENTITY_CONTINUATION) {
+    investigationPlan = buildEntityInvestigationPlan({
+      mission,
+      marketDefinition,
+      priorPayload: opts.priorDiscoveryPayload || {},
+      opts: {
+        ...opts,
+        estimatedMarket: extractExpectedValue(universeEstimate),
+        universeEstimate,
+      },
+    });
+  } else {
+    investigationPlan = createHypothesisInvestigationPlan({
+      mission,
+      marketDefinition,
+      opts: {
+        ...opts,
+        estimatedMarket: extractExpectedValue(universeEstimate),
+        universeEstimate,
+      },
+    });
+  }
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.BUILD_INVESTIGATION_PLAN, {
       startedAt: planStageStarted,
       output: {
         coveragePlan,
         investigationPlan,
+        investigationMode,
       },
     })
   );
@@ -359,6 +384,10 @@ async function runDiscoveryPipeline(input = {}) {
       marketDefinition,
       mission,
       investigationPlan,
+      investigationMode,
+      entityInvestigationContinuation:
+        investigationMode === INVESTIGATION_MODES.ENTITY_CONTINUATION,
+      preservedCandidates: opts.preservedCandidates || [],
     });
   } catch (err) {
     stages.push(
@@ -394,11 +423,17 @@ async function runDiscoveryPipeline(input = {}) {
   const qualifiedCount =
     payload.qualifiedCount != null
       ? Number(payload.qualifiedCount)
-      : Array.isArray(payload.opportunities)
-        ? payload.opportunities.length
-        : investigation.qualifiedCount != null
-          ? Number(investigation.qualifiedCount)
-          : 0;
+      : Array.isArray(payload.opportunities) && Array.isArray(payload.fitCandidates)
+        ? payload.opportunities.length +
+          payload.fitCandidates.length +
+          (Array.isArray(payload.watchCandidates)
+            ? payload.watchCandidates.filter((row) => row.qualified === true).length
+            : 0)
+        : Array.isArray(payload.opportunities)
+          ? payload.opportunities.length
+          : investigation.qualifiedCount != null
+            ? Number(investigation.qualifiedCount)
+            : 0;
 
   stages.push(
     buildStage(DISCOVERY_PIPELINE_STAGES.EXECUTE_COVERAGE_PLAN, {
@@ -470,10 +505,12 @@ async function runDiscoveryPipeline(input = {}) {
       universeEstimate: revisedUniverseEstimate,
       existingIntelligence,
       memory: opts.memory || opts.investigationMemory || {},
+      priorOutcomeLearnings: opts.priorOutcomeLearnings || [],
       investigationState:
         payload.investigationState ||
         (payload.investigation && payload.investigation.investigationState) ||
         null,
+      candidateInvestigation: payload.candidateInvestigation || null,
       coverageResult: {
         candidates: candidateUniverse,
         searchHypotheses:
@@ -490,6 +527,12 @@ async function runDiscoveryPipeline(input = {}) {
     });
     investigationState = reasoningResult.state;
     missionIntelligenceReport = reasoningResult.report;
+    if (reasoningResult.learningInfluence?.length) {
+      missionIntelligenceReport = {
+        ...missionIntelligenceReport,
+        priorLearningInfluence: reasoningResult.learningInfluence,
+      };
+    }
     if (reasoningResult.state?.marketDefinition?.revised) {
       marketDefinition = reasoningResult.state.marketDefinition;
     }
@@ -589,6 +632,9 @@ async function runDiscoveryPipeline(input = {}) {
     memoryLoaded: Boolean(marketMemoryRecall?.loaded),
     explainabilityGraph: explainabilityGraph ? serializeGraph(explainabilityGraph) : null,
     investigationPlan,
+    learningInfluence:
+      (missionIntelligenceReport && missionIntelligenceReport.priorLearningInfluence) || [],
+    priorOutcomeLearnings: opts.priorOutcomeLearnings || [],
   });
 
   let marketMemoryPersist = null;

@@ -12,6 +12,14 @@ const {
 } = require('./ThinkingModes');
 const { isMissionExecutionCommand } = require('../workspace/ExecutionLanguageDetection');
 const { isMissionPlanningTurn } = require('../workspace/MissionPlanningTurn');
+const {
+  splitClauses,
+  isVerbNegatedInClause,
+} = require('../workspace/MissionLifecycleIntent');
+const { resolveMissionContinuation } = require('../../acquisition-mission/MissionProgression');
+const {
+  normalizeConversationalControlLanguage,
+} = require('../workspace/BoundedTypoNormalization');
 
 const SPECIALIST_NAMES = 'scout|paige|emmett|max|riley|sam|link|faye|ivy|cal';
 
@@ -125,6 +133,14 @@ function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
 }
 
+function matchesResumePhrase(text) {
+  const clauses = splitClauses(text);
+  return clauses.some((clause) => {
+    if (isVerbNegatedInClause(clause, ['resume', 'continue', 'reuse'])) return false;
+    return matchesAny(clause, RESUME_RES);
+  });
+}
+
 function buildConversationIntent(mode, via, confidence, extras = {}) {
   return {
     intent: mode,
@@ -133,7 +149,25 @@ function buildConversationIntent(mode, via, confidence, extras = {}) {
     thinkingMode: thinkingModeCategory(mode),
     via,
     specialists: extras.specialists || null,
+    missionContinuation: extras.missionContinuation || null,
+    missionContinuationAmbiguity: extras.missionContinuationAmbiguity || null,
   };
+}
+
+function isBareContinuationUtterance(text) {
+  const q = String(text || '').replace(/\s+/g, ' ').trim();
+  return (
+    /\bcontinue\b/i.test(q) &&
+    !/\b(?:approved?|discovery|campaign|send|launch|execute|proceed|prioritization)\b/i.test(q)
+  );
+}
+
+function resolveSnapshotFromInput(input = {}) {
+  if (input.snapshot) return input.snapshot;
+  if (input.mission && input.contributions) {
+    return { mission: input.mission, contributions: input.contributions };
+  }
+  return null;
 }
 
 /**
@@ -150,7 +184,7 @@ function classifyOperatorCognition(question, input = {}) {
 
   const mission = input.mission || null;
 
-  if (matchesAny(q, RESUME_RES)) {
+  if (matchesResumePhrase(q)) {
     return buildConversationIntent(THINKING_MODES.RESUME, 'resume_phrase', 0.93);
   }
 
@@ -162,13 +196,36 @@ function classifyOperatorCognition(question, input = {}) {
     return buildConversationIntent(THINKING_MODES.EDIT, 'edit_phrase', 0.91);
   }
 
-  if (isMissionExecutionCommand(q)) {
-    if (
-      /\bcontinue\b/i.test(q) &&
-      !/\b(?:approved?|discovery|campaign|send|launch|execute|proceed|prioritization)\b/i.test(q)
-    ) {
-      return buildConversationIntent(THINKING_MODES.INSPECT, 'conversational_continue', 0.86);
+  const continuationControlQ = normalizeConversationalControlLanguage(q);
+  const isTypoTolerantContinuation =
+    isMissionExecutionCommand(continuationControlQ) &&
+    isBareContinuationUtterance(continuationControlQ);
+
+  if (isTypoTolerantContinuation) {
+    const snapshot = resolveSnapshotFromInput(input);
+    if (snapshot && input.mission) {
+      const continuation = resolveMissionContinuation(snapshot);
+      if (continuation.kind === 'execute' && continuation.progression) {
+        return buildConversationIntent(
+          THINKING_MODES.EXECUTE,
+          'mission_continuation',
+          0.94,
+          { missionContinuation: continuation.progression }
+        );
+      }
+      if (continuation.kind === 'ambiguous') {
+        return buildConversationIntent(
+          THINKING_MODES.INSPECT,
+          'mission_continuation_ambiguous',
+          0.88,
+          { missionContinuationAmbiguity: continuation }
+        );
+      }
     }
+    return buildConversationIntent(THINKING_MODES.INSPECT, 'conversational_continue', 0.86);
+  }
+
+  if (isMissionExecutionCommand(q)) {
     return buildConversationIntent(THINKING_MODES.EXECUTE, 'execution_command', 0.97);
   }
 

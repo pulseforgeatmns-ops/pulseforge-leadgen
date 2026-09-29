@@ -7,11 +7,16 @@
  * Mission → Discovery Strategy → Coverage Plan → Source Execution → Candidate Universe
  */
 
-const { expandGeography } = require('../../acquisition-mission/MissionPlanner');
-const { MANCHESTER_GEO } = require('../../capabilities/discovery/seedProfiles');
 const { expandConcepts } = require('./ConceptLibrary');
-const { parseGeographyList } = require('../../max/scoutAcquisition/InvestigationProvenance');
-const { asText, nowIso, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
+const { scopeSearchDefinitionForTask } = require('./EvidenceRequest');
+const { INVESTIGATIVE_EVIDENCE } = require('./EvidenceRequirements');
+const { asText, SOURCE_TYPES } = require('../../max/scoutAcquisition/Types');
+const {
+  expandCitiesFromSearchDefinition,
+  inferStateFromLabel,
+  formatCityState,
+  dedupeCities,
+} = require('./SearchGeography');
 const { enforceCandidateMinimumContract } = require('./CandidateMinimumContract');
 const { discoverCandidates } = require('../../max/scoutAcquisition/DiscoveryAdapters');
 const {
@@ -31,91 +36,6 @@ function clamp01(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return 0;
   return Math.max(0, Math.min(1, n));
-}
-
-/**
- * Expand mission geography into per-city search workloads. Geography is never executed literally.
- * @param {object} searchDefinition
- * @returns {string[]}
- */
-function expandCitiesFromSearchDefinition(searchDefinition = {}) {
-  const geo = searchDefinition.geography || {};
-  const label = asText(geo.label);
-  if (!label) return [];
-
-  if (/greater\s+manchester/i.test(label)) {
-    const state = geo.state || 'NH';
-    return MANCHESTER_GEO.cities.map((city) => formatCityState(city, state));
-  }
-
-  // Multi-city missions execute each city independently with all concepts (SPEC-175).
-  if (!/greater/i.test(label)) {
-    if (Array.isArray(geo.cities) && geo.cities.length >= 1) {
-      const state = geo.state || inferStateFromLabel(label);
-      return dedupeCities(geo.cities.map((city) => formatCityState(city, state)));
-    }
-    const parsed = parseGeographyList(label);
-    if (parsed.length > 1) {
-      const state = geo.state || inferStateFromLabel(label);
-      return dedupeCities(
-        parsed.map((part) => formatCityState(String(part).split(',')[0].trim(), state))
-      );
-    }
-    return [label];
-  }
-
-  const expanded = expandGeography(label, label);
-  if (/greater\s+manchester/i.test(expanded.region || '')) {
-    const state = geo.state || 'NH';
-    return MANCHESTER_GEO.cities.map((city) => formatCityState(city, state));
-  }
-  if (expanded.cities && expanded.cities.length > 1) {
-    const state = geo.state || inferStateFromLabel(label) || 'NH';
-    return dedupeCities(expanded.cities.map((city) => formatCityState(city, state)));
-  }
-
-  const baseCities = Array.isArray(geo.cities) && geo.cities.length ? geo.cities.slice() : [];
-  const nearby = Array.isArray(geo.permittedNearby) ? geo.permittedNearby.slice() : [];
-  const merged = [...new Set([...baseCities, ...nearby])];
-  if (merged.length > 1) {
-    const state = geo.state || inferStateFromLabel(label);
-    return dedupeCities(merged.map((city) => formatCityState(city, state)));
-  }
-
-  if (merged.length === 1) {
-    const state = geo.state || inferStateFromLabel(label);
-    return [formatCityState(merged[0], state)];
-  }
-
-  return [label];
-}
-
-function inferStateFromLabel(label) {
-  const text = asText(label);
-  if (/\bNH\b|New Hampshire/i.test(text)) return 'NH';
-  if (/\bTN\b|Tennessee/i.test(text)) return 'TN';
-  if (/\bWV\b|West Virginia/i.test(text)) return 'WV';
-  if (/\bRI\b|Rhode Island/i.test(text)) return 'RI';
-  return null;
-}
-
-function formatCityState(city, state) {
-  const name = asText(city);
-  if (!name) return '';
-  if (/\b[A-Z]{2}\b/.test(name)) return name;
-  return state ? `${name} ${state}` : name;
-}
-
-function dedupeCities(cities) {
-  const seen = new Set();
-  const out = [];
-  for (const city of cities) {
-    const key = city.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(city);
-  }
-  return out;
 }
 
 function defaultEnabledSources(adapters = []) {
@@ -177,17 +97,61 @@ function buildDiscoveryPlan(searchDefinition = {}, opts = {}) {
   };
 }
 
-function scopedSearchDefinition(searchDefinition, workload) {
+function scopedSearchDefinition(searchDefinition, workload, marketDefinition = null) {
   const cityToken = asText(workload.city).split(/\s+/)[0];
-  return {
+  const state =
+    asText(searchDefinition.geography && searchDefinition.geography.state) ||
+    inferStateFromLabel(workload.city) ||
+    null;
+  const canonicalSegment =
+    (Array.isArray(searchDefinition.segments) && searchDefinition.segments[0]) ||
+    asText(workload.concept).replace(/\s+/g, '_').toLowerCase();
+
+  const base = {
     ...searchDefinition,
     geography: {
       ...(searchDefinition.geography || {}),
       label: workload.city,
       cities: [cityToken],
+      state,
     },
-    segments: [workload.concept],
+    segments: [canonicalSegment],
     _coverageWorkload: workload,
+  };
+
+  const task = {
+    id: `task:coverage:${workload.id || `${workload.city}|${workload.concept}|${workload.source}`}`,
+    evidenceType: INVESTIGATIVE_EVIDENCE.IDENTITY,
+    providers: [{ providerId: 'google_maps' }],
+  };
+
+  return scopeSearchDefinitionForTask(
+    base,
+    task,
+    marketDefinition || { segments: searchDefinition.segments }
+  );
+}
+
+function buildDiscoveryEvidenceRef(row = {}, workload = {}) {
+  const name = asText(row.name);
+  const placeId = asText(row.placeId || row.place_id);
+  const website = asText(row.website || row.url);
+  const address = asText(row.address || row.location);
+  if (!name && !placeId) return null;
+
+  const source = row.discoverySource || row.source || workload.source || 'public_business_data';
+  return {
+    id: `ev-places-${placeId || name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    label: `Discovered via ${String(source).replace(/_/g, ' ')}`,
+    snapshot: {
+      source: /places|google/i.test(String(source)) ? 'google_places' : source,
+      companyName: name || null,
+      placeId: placeId || null,
+      website: website || null,
+      address: address || null,
+      city: row.discoveryCity || workload.city || null,
+      concept: workload.concept || row.discoveryConcept || null,
+    },
   };
 }
 
@@ -196,6 +160,7 @@ function scopedSearchDefinition(searchDefinition, workload) {
  * @returns {Promise<object>}
  */
 async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts = {}) {
+  const marketDefinition = opts.marketDefinition || null;
   const executed = [];
   const errors = [];
   const candidates = [];
@@ -217,7 +182,7 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
       continue;
     }
 
-    const scoped = scopedSearchDefinition(searchDefinition, workload);
+    const scoped = scopedSearchDefinition(searchDefinition, workload, marketDefinition);
     try {
       const report = await adapter.discover(scoped);
       const rows = report.candidates || [];
@@ -360,19 +325,45 @@ function buildCandidateUniverseRecords(candidates = [], opts = {}) {
   const records = [];
   const seen = new Set();
 
-  for (const row of seeded) {
-    const id = asText(row.id || row.companyId || row.candidate_id);
-    if (!id || seen.has(id)) continue;
+  function pushRecord(row = {}, originOverride) {
+    const id = asText(row.id || row.companyId || row.candidate_id || row.candidateId);
+    if (!id || seen.has(id)) return;
     seen.add(id);
-    records.push({
+    const record = {
       candidate_id: id,
-      origin: row.origin || ORIGINS.EXISTING_INTELLIGENCE,
+      candidateId: id,
+      canonicalIdentity: row.canonicalIdentity || row._identityKey || id,
+      origin: originOverride || row.origin || ORIGINS.EXISTING_INTELLIGENCE,
       sources: [row.source || row.discoverySource || SOURCE_TYPES.EXISTING_PF],
-      cities: [row.location || row.discoveryCity].filter(Boolean),
+      cities: [row.location || row.discoveryCity || row.address].filter(Boolean),
       confidence: row.confidence != null ? Number(row.confidence) : 0.75,
       dedupeStatus: 'primary',
       name: row.name || null,
-    });
+      website: row.website || row.url || null,
+      phone: row.phone || null,
+      address: row.address || row.location || null,
+      placeId: row.placeId || row.place_id || null,
+    };
+    if (row.qualification) record.qualification = row.qualification;
+    if (row.readiness) record.readiness = row.readiness;
+    if (row.evaluation || row.prospectEvaluation) {
+      record.evaluation = row.evaluation || row.prospectEvaluation;
+    }
+    if (row.businessFit || row.fitEvaluation) {
+      record.businessFit = row.businessFit || row.fitEvaluation;
+    }
+    if (Array.isArray(row.evidenceRefs) && row.evidenceRefs.length) {
+      record.evidenceRefs = row.evidenceRefs;
+    }
+    if (Array.isArray(row.signals) && row.signals.length) record.signals = row.signals;
+    if (row.investigationState) record.investigationState = row.investigationState;
+    if (row.hypothesisState) record.hypothesisState = row.hypothesisState;
+    if (Array.isArray(row.unknowns) && row.unknowns.length) record.unknowns = row.unknowns;
+    records.push(record);
+  }
+
+  for (const row of seeded) {
+    pushRecord(row, row.origin || ORIGINS.EXISTING_INTELLIGENCE);
   }
 
   for (const row of candidates) {
@@ -382,16 +373,30 @@ function buildCandidateUniverseRecords(candidates = [], opts = {}) {
     const dedupeStatus = seen.has(id) ? 'duplicate' : 'primary';
     if (!seen.has(id)) seen.add(id);
     const workload = row._coverageWorkload || {};
-    records.push({
+    const record = {
       candidate_id: id,
+      candidateId: id,
       origin: ORIGINS.EXTERNAL_DISCOVERY,
       sources: [row.discoverySource || row.source || SOURCE_TYPES.PUBLIC_BUSINESS_DATA],
       cities: [row.discoveryCity || row.location].filter(Boolean),
       confidence: row.icpScore != null ? clamp01(Number(row.icpScore) / 100) : 0.55,
       dedupeStatus,
       name: row.name || null,
+      website: row.website || row.url || null,
+      phone: row.phone || null,
+      address: row.address || row.location || null,
+      placeId: row.placeId || row.place_id || null,
       concept: workload.concept || row.discoveryConcept || null,
-    });
+    };
+    const evidenceRef = buildDiscoveryEvidenceRef(row, workload);
+    if (evidenceRef) {
+      record.evidenceRefs = [evidenceRef];
+      record.evidence = [evidenceRef];
+    }
+    if (row.qualification) record.qualification = row.qualification;
+    if (row.readiness) record.readiness = row.readiness;
+    if (row.evaluation) record.evaluation = row.evaluation;
+    records.push(record);
   }
 
   return records;

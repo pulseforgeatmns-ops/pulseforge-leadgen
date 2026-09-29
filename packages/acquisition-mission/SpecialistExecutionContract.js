@@ -14,12 +14,18 @@ const { SPECIALISTS, asText, nowIso, newId, clone, amoError } = require('./types
 const { assertContract } = require('./Contracts');
 const {
   scoutInput,
+  maxInput,
   paigeInput,
+  pennyInput,
   veraInput,
   rexInput,
   emmettInput,
 } = require('./SpecialistInputs');
 const { buildSharedContext } = require('./Context');
+const { buildMemoryContextWithPriorLearning } = require('./OutcomeLearningRetrieval');
+const {
+  canonicalContextForSpecialist,
+} = require('../acquisition-knowledge');
 
 const EXECUTION_STATUSES = Object.freeze({
   SUCCESS: 'SUCCESS',
@@ -259,8 +265,12 @@ function specialistInputFor(specialist, mission, extras = {}) {
   switch (who) {
     case SPECIALISTS.SCOUT:
       return scoutInput(mission);
+    case SPECIALISTS.MAX:
+      return maxInput(mission, extras);
     case SPECIALISTS.PAIGE:
       return paigeInput(mission, extras);
+    case SPECIALISTS.PENNY:
+      return pennyInput(mission, extras);
     case SPECIALISTS.VERA:
       return veraInput(mission, extras.companies || []);
     case SPECIALISTS.REX:
@@ -286,6 +296,12 @@ function buildExecutionInput(input = {}) {
   const plan = mission.structuredMission || mission.missionPlanDraft || null;
   const contributions = Array.isArray(input.contributions) ? input.contributions : [];
   const sharedContext = buildSharedContext(mission, contributions);
+  const storeKnowledge = input.store && typeof input.store.listAcquisitionKnowledge === 'function'
+    ? input.store.listAcquisitionKnowledge(mission.tenantId || mission.clientId, { missionId: mission.id })
+    : [];
+  const acquisitionKnowledge = Array.isArray(input.acquisitionKnowledge)
+    ? input.acquisitionKnowledge
+    : storeKnowledge;
 
   return Object.freeze({
     spec: 'SPEC-132',
@@ -305,9 +321,10 @@ function buildExecutionInput(input = {}) {
       || (plan && (plan.evidence || plan.evidencePolicy))
       || {}
     ),
-    memoryContext: clone(input.memoryContext || {
-      observations: input.observations || [],
-    }),
+    memoryContext: {
+      ...buildMemoryContextWithPriorLearning(input, mission, specialist),
+      acquisitionKnowledge: canonicalContextForSpecialist(acquisitionKnowledge, specialist),
+    },
     operatorPreferences: clone(input.operatorPreferences || {}),
     specialistInput: specialistInputFor(specialist, mission, input),
     structuredOnly: true,
@@ -376,6 +393,7 @@ function createExecutionResult(input = {}) {
       recommendations,
       unknowns,
       contributions,
+      learningInfluence: input.learningInfluence,
       ...(isPlainObject(input.explainability) ? input.explainability : {}),
     }),
   };
@@ -483,6 +501,7 @@ function buildExplainability(input = {}) {
     whyNotRecommended,
     evidenceConfidenceChanges,
     remainsUnknown: unknowns.map((u) => `${u.unknown} — ${u.reason}`),
+    ...(Array.isArray(input.learningInfluence) ? { learningInfluence: input.learningInfluence } : {}),
   };
 }
 
@@ -678,6 +697,26 @@ function fromLegacyOutput(specialist, raw = {}, ctx = {}) {
     return fromScoutLegacyOutput(raw, { specialist, transactionId, durationMs });
   }
 
+  if (who === SPECIALISTS.MAX) {
+    const payload = raw.prioritizationPayload || raw.payload || raw;
+    const blocked = raw.blocked === true || /blocked/i.test(String(raw.status || ''));
+    const status = blocked ? EXECUTION_STATUSES.BLOCKED : normalizeStatus(raw.status) || EXECUTION_STATUSES.SUCCESS;
+    return createExecutionResult({
+      specialist,
+      transactionId,
+      status,
+      confidence: raw.confidence || payload.confidence,
+      evidence: payload.evidence || raw.evidence || [],
+      contributions: payload,
+      recommendations: raw.recommendations || payload.recommendations || [],
+      unknowns: raw.unknowns || payload.unknowns || [],
+      nextActions: raw.nextActions || raw.next_actions || [],
+      durationMs,
+      reason: blocked ? (raw.reason || raw.summary) : null,
+      requiredPrecondition: blocked ? 'max_prioritization' : null,
+    });
+  }
+
   const payload = raw.payload || raw;
   const status = normalizeStatus(raw.status) || EXECUTION_STATUSES.SUCCESS;
   return createExecutionResult({
@@ -732,8 +771,14 @@ function fromScoutLegacyOutput(raw = {}, ctx = {}) {
     nextActions,
     durationMs: ctx.durationMs,
     reason: blocked ? (payload.blockReason || raw.summary) : null,
-    requiredPrecondition: blocked ? 'discovery_evidence' : null,
-    recommendedAction: blocked ? 'Adjust mission criteria or expand search.' : null,
+    requiredPrecondition: blocked
+      ? (payload.blockerCode === 'discovery_provider_failed' ? 'discovery_provider' : 'discovery_evidence')
+      : null,
+    recommendedAction: blocked
+      ? (payload.blockerCode === 'discovery_provider_failed'
+        ? (payload.blockReason || 'External discovery provider failed. Retry after provider recovery.')
+        : 'Adjust mission criteria or expand search.')
+      : null,
   });
 
   return result;
@@ -748,6 +793,13 @@ function executionResultFromStageOutput(output = {}, options = {}) {
     return fromScoutLegacyOutput(
       { ...output.scoutResult, discoveryPayload: output.discoveryPayload, payload: output.discoveryPayload },
       { specialist: specialist || SPECIALISTS.SCOUT, transactionId: options.transactionId }
+    );
+  }
+  if (output.prioritizationPayload) {
+    return fromLegacyOutput(
+      specialist || SPECIALISTS.MAX,
+      { ...output.maxResult, prioritizationPayload: output.prioritizationPayload, payload: output.prioritizationPayload },
+      { transactionId: options.transactionId }
     );
   }
   return fromLegacyOutput(specialist, output, { transactionId: options.transactionId });

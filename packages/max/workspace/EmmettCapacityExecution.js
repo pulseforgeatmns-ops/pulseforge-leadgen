@@ -36,12 +36,17 @@ const FORBIDDEN_QUEUE_KEYS = new Set([
   'messaging', 'copy', 'emailBody', 'email_body', 'hypothesis', 'hypotheses',
 ]);
 
-function findEmmettCapacity(contributions = []) {
-  return [...contributions]
-    .reverse()
-    .find(
-      (row) => row.specialist === SPECIALISTS.EMMETT && row.kind === CONTRIBUTION_KINDS.CAPACITY
-    );
+const { selectCanonicalContribution } = require('../../acquisition-mission/CanonicalContributionSelection');
+const { validatePaigeVariantCopy, BLOCKER: COPY_SAFETY_BLOCKER } = require('./PaigeCopySafety');
+const { resolveQueueSendability } = require('../../emmett-outbound/Queue');
+
+function findEmmettCapacity(contributions = [], mission = null) {
+  return selectCanonicalContribution(contributions, {
+    missionId: mission?.id,
+    specialist: SPECIALISTS.EMMETT,
+    kind: CONTRIBUTION_KINDS.CAPACITY,
+    mission,
+  });
 }
 
 function fixtureInfrastructureSnapshot(tenantId) {
@@ -49,7 +54,7 @@ function fixtureInfrastructureSnapshot(tenantId) {
   return {
     tenantId: id,
     clientId: Number(id) || null,
-    inboxId: `inbox-${id}`,
+    inboxId: 'hello@example.com',
     domain: 'example.com',
     inboxAgeDays: 45,
     providerCeiling: 50,
@@ -83,6 +88,16 @@ async function resolveInfrastructureSnapshot(executionInput = {}, opts = {}) {
   const tenantId = executionInput.executionContext?.tenantId
     || executionInput.specialistInput?.tenantId
     || opts.tenantId;
+  if (opts.pool && ['10','13'].includes(String(tenantId))
+    && require('../../../services/governedOutboundTenant').createGovernedOutboundTenantContext(tenantId).usesTenantMailboxTransport) {
+    const canonical = await require('../../../utils/canonicalSenderIdentity').resolveCanonicalSenderIdentity({ tenantId, pool: opts.pool });
+    if (!canonical.ok) throw validationError(canonical.code, canonical.blockReason);
+    const identities = await opts.pool.query(`SELECT id FROM tenant_sending_identities
+      WHERE tenant_id=$1 AND lower(sender_email)=lower($2) AND status='active'`, [String(tenantId), canonical.identity.senderEmail]);
+    if (identities.rows.length !== 1) throw validationError('mailbox_identity_ambiguous', 'One active canonical mailbox identity is required.');
+    const produced = await require('../../../services/emmettTenantMailboxCapacity').produceTenantMailboxCapacityEnvelope(tenantId, identities.rows[0].id, { pool: opts.pool, now: opts.now });
+    return { ...produced.snapshot, ...canonical.identity, capacityEnvelopeId: produced.envelope.envelopeId };
+  }
   if (opts.pool && tenantId) {
     try {
       const { buildInboxSnapshot } = require('../../../services/emmettOutboundSnapshot');
@@ -100,27 +115,100 @@ async function resolveInfrastructureSnapshot(executionInput = {}, opts = {}) {
   throw validationError('tme_infrastructure_missing', 'Infrastructure snapshot is required for Emmett execution.');
 }
 
+function cleanText(value) {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value).trim()
+    : '';
+}
+
+/**
+ * Project bound Paige variant copy into CAPACITY queue items.
+ * Copy must pass PaigeCopySafety; internal rationale never renders into fields.
+ */
+function sanitizePaigeBinding(value = {}) {
+  const paige = {
+    author: value.author || 'paige',
+    source: value.source || 'paige',
+    ready: value.ready === true,
+    variantLabel: value.variantLabel || value.label || null,
+  };
+  const candidateId = cleanText(value.candidateId);
+  if (candidateId) paige.candidateId = candidateId;
+  const bindingScope = cleanText(value.bindingScope);
+  if (bindingScope) paige.bindingScope = bindingScope;
+  if (value.attributableIntelligence && typeof value.attributableIntelligence === 'object') {
+    paige.attributableIntelligence = { ...value.attributableIntelligence };
+  }
+  const variantId = cleanText(value.variantId);
+  if (variantId) paige.variantId = variantId;
+  const companyName = cleanText(value.companyName);
+  if (companyName) paige.companyName = companyName;
+
+  const subject = cleanText(value.subject);
+  const body = cleanText(value.body);
+  const cta = cleanText(value.cta);
+  if (subject) paige.subject = subject;
+  if (body) paige.body = body;
+  if (cta) paige.cta = cta;
+
+  const copySafety = validatePaigeVariantCopy(paige);
+  if (!copySafety.safe) {
+    delete paige.subject;
+    delete paige.body;
+    delete paige.cta;
+  }
+
+  return paige;
+}
+
 function sanitizeQueueItem(item = {}) {
+  const rawPaige = item.paige && typeof item.paige === 'object' ? item.paige : null;
+  const unsafeCopyAttempt = rawPaige
+    && cleanText(rawPaige.subject)
+    && cleanText(rawPaige.body)
+    && !validatePaigeVariantCopy(rawPaige).safe;
+
   const clean = {};
   for (const [key, value] of Object.entries(item)) {
     if (FORBIDDEN_QUEUE_KEYS.has(key)) continue;
     if (key === 'paige' && value && typeof value === 'object') {
-      clean.paige = {
-        author: value.author || 'paige',
-        source: value.source || 'paige',
-        ready: value.ready === true,
-        variantLabel: value.variantLabel || null,
-        sendable: value.sendable === true,
-      };
+      clean.paige = sanitizePaigeBinding(value);
       continue;
     }
     clean[key] = value;
   }
+  if (unsafeCopyAttempt) {
+    clean.sendable = false;
+    clean.sendBlocker = COPY_SAFETY_BLOCKER;
+  } else {
+    const sendability = resolveQueueSendability({
+      ...clean,
+      contentSource: clean.contentSource || clean.paige?.source || null,
+    });
+    clean.sendable = sendability.sendable;
+    clean.sendBlocker = sendability.sendBlocker;
+  }
   return clean;
 }
 
-function mapAssessedToCapacityPayload(assessed = {}) {
+function senderIdentityFromSnapshot(snapshot = {}) {
+  const inboxId = snapshot.inboxId || snapshot.senderEmail || null;
+  const domain = snapshot.domain || snapshot.sendingDomain || null;
+  return {
+    inboxId: inboxId || null,
+    domain: domain || null,
+    senderEmail: snapshot.senderEmail || inboxId || null,
+    senderName: snapshot.senderName || null,
+    sendingDomain: snapshot.sendingDomain || domain || null,
+  };
+}
+
+function mapAssessedToCapacityPayload(assessed = {}, extras = {}) {
   const { health, capacity, governor, queue, recommendations } = assessed;
+  const infrastructureSnapshot = extras.infrastructureSnapshot
+    || assessed.snapshot
+    || extras.snapshot
+    || {};
   const recommended = Number(capacity?.recommended || 0);
   const queueItems = (queue?.items || []).map(sanitizeQueueItem);
 
@@ -170,6 +258,7 @@ function mapAssessedToCapacityPayload(assessed = {}) {
       halt: governor?.halt === true,
       slowCap: governor?.slowCap != null ? governor.slowCap : null,
     },
+    senderIdentity: senderIdentityFromSnapshot(infrastructureSnapshot),
   };
 }
 
@@ -290,7 +379,13 @@ async function buildEmmettCapacityPayload(executionInput = {}, opts = {}) {
     timeZone: infrastructureSnapshot.timeZone || 'America/New_York',
   });
 
-  const payload = mapAssessedToCapacityPayload(assessed);
+  if (infrastructureSnapshot.mailboxKind === 'tenant_smtp') {
+    const mailbox = require('../../emmett-outbound/TenantMailboxCapacity').assessTenantMailboxCapacity(infrastructureSnapshot, opts);
+    Object.assign(assessed, { health: mailbox.health, capacity: mailbox.capacity, governor: mailbox.governor,
+      queue: eoi.buildTodayQueue({ prospects: candidates, recommendedCapacity: mailbox.maxSendsPerDay, capacity: mailbox.capacity, now: opts.now }),
+      recommendations: [] });
+  }
+  const payload = mapAssessedToCapacityPayload(assessed, { infrastructureSnapshot });
   assertContract(SPECIALISTS.EMMETT, payload);
   payload._assessed = undefined;
   return { payload, assessed, infrastructureSnapshot, candidates };
@@ -303,6 +398,43 @@ async function runEmmettForAmoMission(mission, opts = {}) {
   const contributions = opts.contributions
     || (opts.engine && opts.engine.inspect(mission.id, { tenantId: opts.tenantId }).contributions)
     || [];
+  const {
+    buildMissionBoundCandidates,
+    listMissionBoundCrmLookupKeys,
+    listMissionBoundProspectIds,
+  } = require('./EmmettMissionCandidates');
+  const {
+    loadCrmProspectsForMissionBoundCompanies,
+    loadCrmProspectsByIds,
+  } = require('./MissionBoundCrmResolver');
+  const { aliasCrmMapToIdentities } = require('./CanonicalOutboundIdentity');
+
+  let crmByProspectId = opts.crmByProspectId || null;
+  if (!crmByProspectId && opts.pool) {
+    const clientId = Number(mission.clientId || mission.tenantId || opts.tenantId);
+    const identities = buildMissionBoundCandidates(mission, contributions);
+    const companyIds = listMissionBoundCrmLookupKeys(mission, contributions);
+    const prospectIds = listMissionBoundProspectIds(mission, contributions);
+    const maps = [];
+    if (companyIds.length) {
+      maps.push(await loadCrmProspectsForMissionBoundCompanies({
+        clientId,
+        companyIds,
+        pool: opts.pool,
+      }));
+    }
+    if (prospectIds.length) {
+      maps.push(await loadCrmProspectsByIds({
+        clientId,
+        prospectIds,
+        pool: opts.pool,
+      }));
+    }
+    if (maps.length) {
+      crmByProspectId = aliasCrmMapToIdentities(maps, identities);
+    }
+  }
+
   const executionInput = buildExecutionInput({
     mission,
     contributions,
@@ -310,6 +442,8 @@ async function runEmmettForAmoMission(mission, opts = {}) {
     transactionId: opts.transactionId,
     executionContext: opts.executionContext,
     infrastructureSnapshot: opts.infrastructureSnapshot,
+    store: opts.engine?.store,
+    crmByProspectId,
   });
   const { payload, assessed, infrastructureSnapshot, candidates } = await buildEmmettCapacityPayload(
     executionInput,
@@ -339,7 +473,9 @@ function fixtureEmmettCapacityResult(mission, contributions = [], opts = {}) {
     snapshot: executionInput.specialistInput.infrastructureSnapshot,
     prospects: candidates,
   });
-  return mapAssessedToCapacityPayload(assessed);
+  return mapAssessedToCapacityPayload(assessed, {
+    infrastructureSnapshot: executionInput.specialistInput.infrastructureSnapshot,
+  });
 }
 
 function validateEmmettPreconditions({ mission, engine, tenantId }) {
@@ -442,9 +578,19 @@ function commitEmmettCapacityStage({
   };
 }
 
+const FIXTURE_CANONICAL_SENDER = Object.freeze({
+  tenantId: '10',
+  clientId: 10,
+  senderEmail: 'hello@example.com',
+  senderName: 'Example Sender',
+  sendingDomain: 'example.com',
+});
+
 module.exports = {
   findEmmettCapacity,
   fixtureInfrastructureSnapshot,
+  FIXTURE_CANONICAL_SENDER,
+  senderIdentityFromSnapshot,
   resolveInfrastructureSnapshot,
   mapAssessedToCapacityPayload,
   buildEmmettCapacityPayload,
@@ -455,4 +601,5 @@ module.exports = {
   validateEmmettCapacityOutput,
   commitEmmettCapacityStage,
   sanitizeQueueItem,
+  sanitizePaigeBinding,
 };

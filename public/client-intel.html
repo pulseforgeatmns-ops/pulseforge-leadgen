@@ -1135,6 +1135,7 @@
       <div id="sidePanel"><p class="blueprint-empty">When you're ready, begin the conversation.</p></div>
       <div class="actions" id="blueprintActions" hidden>
         <button type="button" id="reviseBtn" class="secondary" disabled>Save edits</button>
+        <button type="button" id="refineWithMaxBtn" class="secondary" disabled>Refine with Max</button>
         <button type="button" id="approveBtn" disabled>Approve Blueprint</button>
       </div>
       <div class="status-bar" id="blueprintStatus"></div>
@@ -1247,6 +1248,7 @@
       sidePanelTitle: document.getElementById('sidePanelTitle'),
       sidePanelSub: document.getElementById('sidePanelSub'),
       reviseBtn: document.getElementById('reviseBtn'),
+      refineWithMaxBtn: document.getElementById('refineWithMaxBtn'),
       approveBtn: document.getElementById('approveBtn'),
       blueprintStatus: document.getElementById('blueprintStatus'),
       blueprintActions: document.getElementById('blueprintActions'),
@@ -1631,6 +1633,7 @@
       if (approved) {
         els.blueprintActions.hidden = true;
         els.reviseBtn.disabled = true;
+        els.refineWithMaxBtn.disabled = true;
         els.approveBtn.disabled = true;
         els.approveBtn.textContent = 'Blueprint approved';
         return;
@@ -1639,6 +1642,7 @@
       if (status === 'superseded' || !bp) {
         els.blueprintActions.hidden = true;
         els.reviseBtn.disabled = true;
+        els.refineWithMaxBtn.disabled = true;
         els.approveBtn.disabled = true;
         els.approveBtn.textContent = 'Approve Blueprint';
         return;
@@ -1646,6 +1650,7 @@
       const canEdit = editable && isBlueprintAwaitingApproval(bp);
       els.blueprintActions.hidden = !editable || !canEdit;
       els.reviseBtn.disabled = !canEdit || state.approveInFlight;
+      els.refineWithMaxBtn.disabled = !canEdit || !state.interviewId || state.approveInFlight;
       els.approveBtn.disabled = !canEdit || state.approveInFlight;
       els.approveBtn.textContent = state.approveInFlight ? 'Approving…' : 'Approve Blueprint';
     }
@@ -4633,6 +4638,7 @@
 
     async function resumeConversation() {
       try {
+        if (!state.interviewId) return;
         const data = await api('POST', '/api/v1/interview/' + encodeURIComponent(state.interviewId) + '/resume', {});
         setPhase('discovery');
         applyDiscoveryPayload(data);
@@ -4644,6 +4650,7 @@
 
     els.refineBtn.addEventListener('click', resumeConversation);
     els.keepTalkingBtn.addEventListener('click', resumeConversation);
+    els.refineWithMaxBtn.addEventListener('click', resumeConversation);
 
     els.reviseBtn.addEventListener('click', async () => {
       try {

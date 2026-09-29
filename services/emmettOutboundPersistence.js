@@ -8,16 +8,6 @@ const defaultPool = require('../db');
 
 async function ensureEmmettOutboundSchema(pool = defaultPool) {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS emmett_inbox_snapshots (
-      id TEXT PRIMARY KEY,
-      tenant_id TEXT NOT NULL,
-      client_id INTEGER,
-      local_date DATE NOT NULL,
-      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await pool.query(`
     CREATE TABLE IF NOT EXISTS emmett_send_plans (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL,

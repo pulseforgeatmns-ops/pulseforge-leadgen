@@ -37,6 +37,8 @@ Confirm the display name and reply mailbox with the client owner.
 
 **Fail:** Any null, placeholder, borrowed identity, or unapproved display name.
 
+CIE `sender_identity` collected during onboarding is **not** execution authority. Canonical acquisition sends bind only to `clients.sender_*`. If CIE and client configuration disagree, `clients` wins until a future onboarding synchronization spec persists CIE into those columns.
+
 ## 3. Add the sending domain in Brevo
 
 **Owner:** Human only

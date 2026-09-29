@@ -43,6 +43,7 @@ const transactionalExecution = require('./TransactionalExecution');
 const transactionalPersistence = require('./TransactionalPersistence');
 const specialistExecutionContract = require('./SpecialistExecutionContract');
 const pendingOperatorDecision = require('./PendingOperatorDecision');
+const decisionReadiness = require('./DecisionReadiness');
 const missionProgression = require('./MissionProgression');
 const workspaceMode = require('./WorkspaceMode');
 const operatorDecisionPolicy = require('./OperatorDecisionPolicy');
@@ -91,6 +92,7 @@ module.exports = {
   createAcquisitionMissionEngine,
   ...inspection,
   ...require('./DiscoveryPresentation'),
+  ...require('./PrioritizationPresentation'),
   ...structuredMission,
   ...missionPlanner,
   ...specialistInputs,
@@ -101,6 +103,7 @@ module.exports = {
   ...transactionalPersistence,
   ...specialistExecutionContract,
   ...pendingOperatorDecision,
+  ...decisionReadiness,
   ...missionProgression,
   ...workspaceMode,
   ...operatorDecisionPolicy,

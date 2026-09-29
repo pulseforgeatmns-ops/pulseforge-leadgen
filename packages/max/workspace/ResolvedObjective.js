@@ -25,8 +25,14 @@ const {
   extractCountObjective,
   applyResolutions,
 } = require('../../acquisition-mission/MissionPlanner');
-const { extractGeography, inferTargetSegmentFromObjective } = require('../../acquisition-mission/MissionNaming');
+const {
+  extractGeography,
+  inferTargetSegmentFromObjective,
+  resolveMarketScopeFromObjective,
+  isBroadCommercialPropertyObjective,
+} = require('../../acquisition-mission/MissionNaming');
 const { asText } = require('../../acquisition-mission/types');
+const { extractCanonicalObjectiveEvidence } = require('./CanonicalObjectiveEvidence');
 
 const MISSION_COMMAND_RES = [
   /\bcreate (?:a )?(?:new )?(?:production )?(?:acquisition )?mission\b/i,
@@ -63,6 +69,15 @@ const COMMUNICATION_POLICY_LINE_RES = [
 ];
 
 const OBJECTIVE_PREFIX_RE = /^(?:objective|goal|target)\s*:\s*/i;
+const MISSION_RESUME_PREFIX_RE =
+  /^(?:resume(?:\s+the)?(?:\s+existing)?\s+mission(?:\s+for)?|continue(?:\s+(?:the|with))?(?:\s+active)?\s+mission(?:\s+for)?)\s+/i;
+
+function stripMissionResumePrefix(text) {
+  return normalizeText(text)
+    .replace(MISSION_RESUME_PREFIX_RE, '')
+    .replace(OBJECTIVE_PREFIX_RE, '')
+    .trim();
+}
 
 function matchesAny(text, patterns) {
   return patterns.some((re) => re.test(text));
@@ -93,6 +108,12 @@ function classifyMessageLines(question) {
   const ignoredLines = [];
 
   for (const segment of segments) {
+    const normalizedSegment = normalizeText(segment);
+    if (MISSION_RESUME_PREFIX_RE.test(normalizedSegment)) {
+      const stripped = stripMissionResumePrefix(segment);
+      if (stripped) objectiveLines.push(stripped);
+      continue;
+    }
     const kind = classifyLine(segment);
     if (kind === 'objective') {
       objectiveLines.push(segment.replace(OBJECTIVE_PREFIX_RE, '').trim());
@@ -108,7 +129,10 @@ function classifyMessageLines(question) {
 
 function inferSubtype(text, segmentKey) {
   const hay = asText(text).toLowerCase();
-  if (/\bcommercial cleaning\b/.test(hay) || segmentKey === 'short_term_rental') {
+  if (/\bcommercial cleaning\b/.test(hay) || isBroadCommercialPropertyObjective(hay)) {
+    return 'commercial_cleaning';
+  }
+  if (segmentKey === 'short_term_rental') {
     return 'commercial_cleaning';
   }
   if (/\blaw firm\b/.test(hay) || segmentKey === 'law_firm') return 'law_firm';
@@ -171,30 +195,14 @@ function isBareManchester(text, regionText) {
 }
 
 function applyContextPrecedence(extracted, context = {}) {
-  const next = { ...extracted, geography: { ...(extracted.geography || {}) } };
-  if (next.geography.region) return next;
-
-  const { pickByPrecedence } = require('../../acquisition-mission/ContextPrecedence');
-  const safeContext = context || {};
-  const blueprint = (safeContext && safeContext.blueprint) || {};
-  const raw = blueprint.geography || blueprint.region || blueprint.targetMarkets || null;
-  let blueprintGeo = null;
-  if (raw) {
-    blueprintGeo = typeof raw === 'object'
-      ? expandGeography(raw.region || '', JSON.stringify(raw))
-      : expandGeography(String(raw), String(raw));
-  }
-  const workspaceGeo = safeContext.workspace && (safeContext.workspace.geography || safeContext.workspace.region);
-  const picked = pickByPrecedence([
-    blueprintGeo && blueprintGeo.region ? { source: 'blueprint', value: blueprintGeo } : null,
-    workspaceGeo
-      ? { source: 'workspace', value: typeof workspaceGeo === 'object' ? workspaceGeo : expandGeography(workspaceGeo, workspaceGeo) }
-      : null,
-  ]);
-  if (picked && picked.value) {
-    next.contextGeography = { ...picked.value, source: picked.source };
-  }
-  return next;
+  const { applyContextPrecedence: applyPlannerContextPrecedence } =
+    require('../../acquisition-mission/MissionPlanner');
+  const safeContext = {
+    ...(context || {}),
+    summary: (context && (context.summary || context.clientIntelligence)) || null,
+    objectiveText: (context && context.objectiveText) || null,
+  };
+  return applyPlannerContextPrecedence(extracted, safeContext);
 }
 
 function inferEvidence(text, opts = {}) {
@@ -211,6 +219,10 @@ function inferEvidence(text, opts = {}) {
 
 function buildSemanticAmbiguities(extracted, text, opts = {}) {
   return detectAmbiguities(extracted, text, opts);
+}
+
+function presentText(value) {
+  return asText(value).replace(/\s+/g, ' ').trim();
 }
 
 function normalizeBusinessObjective(text) {
@@ -271,6 +283,14 @@ function resolveCanonicalObjective(input = {}) {
     businessText = normalizeText(question);
   }
 
+  let canonicalEvidence = null;
+  if (!businessText) {
+    canonicalEvidence = extractCanonicalObjectiveEvidence(input.context || {});
+    if (canonicalEvidence && canonicalEvidence.text) {
+      businessText = presentText(canonicalEvidence.text);
+    }
+  }
+
   const executionPolicy = buildExecutionPolicy(executionContract);
   const communicationPolicy = buildCommunicationPolicy(executionContract);
   const evaluationPolicy = buildEvaluationPolicy(executionContract, objectiveResolution);
@@ -286,16 +306,34 @@ function resolveCanonicalObjective(input = {}) {
       executionPolicy,
       communicationPolicy,
       evaluationPolicy,
-      extractedFrom: { objectiveLines, policyLines, ignoredLines },
+      extractedFrom: { objectiveLines, policyLines, ignoredLines, canonicalEvidence: null },
       ambiguities: [buildMissingObjectiveAmbiguity()],
       ready: false,
+      objectiveProvenance: null,
     };
   }
 
   const text = businessText;
   const intent = analyzeIntent(text, { missionType: input.missionType || input.type });
-  const segmentLabel = asText(input.targetSegment) || inferTargetSegmentFromObjective(text);
+  const marketScope = resolveMarketScopeFromObjective(text);
+  const {
+    isMultiSegmentObjective,
+    detectMentionedSegments,
+  } = require('./MissionResumeCompatibility');
+  let segmentLabel = asText(input.targetSegment) || inferTargetSegmentFromObjective(text);
   let segmentKey = inferSegmentKey(text, segmentLabel);
+  if (isMultiSegmentObjective(text)) {
+    const mentioned = detectMentionedSegments(text);
+    if (mentioned.includes('property_management')) {
+      segmentKey = 'property_management';
+      segmentLabel = mentioned.includes('commercial')
+        ? 'Commercial & Property Management'
+        : 'Property Management';
+    } else if (mentioned.includes('commercial')) {
+      segmentKey = 'commercial';
+      segmentLabel = 'Commercial';
+    }
+  }
   const geographyMention = extractGeography(text) || asText(input.geography) || '';
   let extracted = {
     intent,
@@ -312,22 +350,32 @@ function resolveCanonicalObjective(input = {}) {
     extracted = applyResolutions(extracted, input.resolutions);
   }
 
-  extracted = applyContextPrecedence(extracted, input.context || {});
+  extracted = applyContextPrecedence(extracted, {
+    ...(input.context || {}),
+    objectiveText: text,
+  });
 
   const bareManchester = isBareManchester(text, extracted.geography && extracted.geography.region);
   if (bareManchester && !(input.resolutions && input.resolutions.geography)) {
     extracted.geography = { region: null, cities: [], mention: 'Manchester' };
   } else if (extracted.contextGeography && extracted.contextGeography.region) {
     extracted.geography = extracted.contextGeography;
-    extracted.geographySource = extracted.contextGeography.source || 'blueprint';
+    const ctxSource = extracted.contextGeography.source || 'blueprint';
+    extracted.geographySource = /^approved_blueprint_/i.test(ctxSource) ? 'blueprint' : ctxSource;
   }
 
   const ambiguities = buildSemanticAmbiguities(extracted, text, {
-    context: input.context,
+    context: {
+      ...(input.context || {}),
+      objectiveText: text,
+    },
     resolutions: input.resolutions,
   });
 
-  const market = segmentMeta(extracted.segmentKey, extracted.segmentLabel);
+  const market = {
+    ...segmentMeta(extracted.segmentKey, extracted.segmentLabel),
+    eligibleSubsegments: marketScope.eligibleSubsegments || [],
+  };
   const evidence = inferEvidence(text, input);
   const successTarget = extractCountObjective(text);
   const successType = /recurr/i.test(text) ? 'recurring_clients' : 'customers';
@@ -350,14 +398,66 @@ function resolveCanonicalObjective(input = {}) {
     executionPolicy,
     communicationPolicy,
     evaluationPolicy,
-    extractedFrom: { objectiveLines, policyLines, ignoredLines },
+    extractedFrom: {
+      objectiveLines,
+      policyLines,
+      ignoredLines,
+      canonicalEvidence: canonicalEvidence
+        ? {
+            source: canonicalEvidence.source,
+            sourceId: canonicalEvidence.sourceId || null,
+            field: canonicalEvidence.field,
+          }
+        : null,
+    },
     ambiguities,
     ready: ambiguities.length === 0 && Boolean(normalizeBusinessObjective(text)),
     intent,
     segmentKey: extracted.segmentKey,
     segmentLabel: extracted.segmentLabel,
+    marketScope,
     geographySource: extracted.geographySource || 'operator',
-    provenanceSource: text,
+    geographyProvenance: extracted.geographyEvidence
+      ? {
+          source: extracted.geographyEvidence.source,
+          sourceId: extracted.geographyEvidence.sourceId || null,
+          field: extracted.geographyEvidence.field,
+          validationState: extracted.geographyEvidence.validationState || null,
+          ...(extracted.geographyEvidence.operatorConfirmation
+            ? { operatorConfirmation: extracted.geographyEvidence.operatorConfirmation } : {}),
+          tenantId:
+            input.context && input.context.tenantId != null
+              ? String(input.context.tenantId)
+              : input.context && input.context.clientId != null
+                ? String(input.context.clientId)
+                : null,
+        }
+      : extracted.geographySource === 'blueprint' || extracted.geographySource === 'approved_blueprint_target_markets'
+        ? {
+            source: extracted.geographySource,
+            sourceId: null,
+            field: 'geography',
+            validationState: 'approved',
+            tenantId:
+              input.context && input.context.clientId != null
+                ? String(input.context.clientId)
+                : null,
+          }
+        : null,
+    provenanceSource: canonicalEvidence
+      ? `${canonicalEvidence.source}:${canonicalEvidence.field}`
+      : text,
+    objectiveProvenance: canonicalEvidence
+      ? {
+          source: canonicalEvidence.source,
+          sourceId: canonicalEvidence.sourceId || null,
+          field: canonicalEvidence.field,
+          validationState: canonicalEvidence.validationState || null,
+          tenantId: input.context && input.context.tenantId != null
+            ? String(input.context.tenantId)
+            : null,
+        }
+      : null,
   };
 }
 
@@ -371,6 +471,7 @@ module.exports = {
   canonicalObjectiveText,
   classifyMessageLines,
   classifyLine,
+  stripMissionResumePrefix,
   buildExecutionPolicy,
   buildCommunicationPolicy,
   buildEvaluationPolicy,

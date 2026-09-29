@@ -1,8 +1,7 @@
 const bcrypt = require('bcryptjs');
 const pool = require('../db');
 
-const ROLES = ['admin', 'manager', 'setter', 'closer', 'sales', 'viewer', 'client', 'ao'];
-const ROLE_CHECK = ROLES.map(role => `'${role}'`).join(', ');
+const { USER_ROLES: ROLES, ROLE_CHECK } = require('../utils/userRoles');
 let initPromise;
 
 function isApiRequest(req) {
@@ -140,6 +139,8 @@ function requireRole(...roles) {
       if (req.user?.role === 'setter' && !isApiRequest(req)) return res.redirect('/setter');
       if (req.user?.role === 'closer' && !isApiRequest(req)) return res.redirect('/closer');
       if (req.user?.role === 'ao' && !isApiRequest(req)) return res.redirect('/ao');
+      if (req.user?.role === 'cleaner' && !isApiRequest(req)) return res.redirect('/portal/anchor');
+      if (req.user?.role === 'facility_client' && !isApiRequest(req)) return res.redirect('/portal/anchor');
       if (['admin', 'manager', 'viewer', 'client'].includes(req.user?.role) && !isApiRequest(req)) return res.redirect('/dashboard');
       return res.status(403).json({ error: 'Forbidden' });
     };
