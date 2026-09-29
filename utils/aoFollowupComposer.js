@@ -23,6 +23,22 @@ const PRICE_PITCH_PHRASES = [
   /\bquote\b.*\btoday\b/i,
 ];
 
+/** Stiff corporate/formal phrasing — Anchor AO follow-ups should sound plainspoken. */
+const CORPORATE_FORMAL_PHRASES = [
+  /\bwould be happy to\b/i,
+  /\bI wanted to follow up\b/i,
+  /\bsometime this week or next\b/i,
+  /\bif it would be helpful\b/i,
+  /\bopen to\b/i,
+  /\bhi there\b/i,
+  /\bat your earliest convenience\b/i,
+  /\bplease let me know\b/i,
+  /\bthanks again for taking the time to speak with me\b/i,
+  /\bwe are not looking\b/i,
+  /\bwe would be happy\b/i,
+  /\bI would be happy\b/i,
+];
+
 function firstName(fullName, fallback = 'there') {
   const n = String(fullName || '').trim();
   if (!n) return fallback;
@@ -136,13 +152,11 @@ function composeInternalStaff(input) {
   const body = signDraft(
     `Hi ${contact},
 
-${ao} from Anchor Cleaning here. Thanks again for taking the time to speak with me.
+Thanks for taking a few minutes to talk with me. From what I understood, some of the office cleaning is being handled internally right now. Anchor works with local professional and medical offices when they need recurring cleaning support, backup coverage, or help taking that work off the team's plate.
 
-I understand some of the office cleaning is currently being handled internally. We work with local professional and medical offices that either need recurring cleaning support or want a reliable backup when internal cleaning becomes too much to manage consistently.
+We're not trying to push anything that isn't needed. A free facility assessment would let us understand the space, what's already being handled, and whether Anchor could actually help.
 
-We are not looking to push anything that is not needed, but we would be happy to offer a free facility assessment to understand the space, what is currently being handled, and where Anchor may be able to help.
-
-Would it make sense to schedule a quick facility assessment sometime this week or next?`,
+Would a quick facility assessment be worth scheduling in the next week or two?`,
     input.assignedAoName
   );
 
@@ -151,7 +165,7 @@ Would it make sense to schedule a quick facility assessment sometime this week o
     recommendedFollowUpAngle: 'Internal staff may be carrying cleaning work that could become inconsistent or pull them away from their main role.',
     subjectLine: subject,
     emailDraft: body,
-    alternateShortNote: `Hi ${contact}, ${ao} with Anchor Cleaning — following up on internal cleaning support. Open to a free facility assessment if useful.`,
+    alternateShortNote: `${ao} with Anchor Cleaning. Following up on the internal cleaning support we discussed. A free facility assessment could help us see what's already covered and whether Anchor can take anything off the team's plate.`,
     nextActionAfterSend: 'If they agree to a facility assessment, coordinate scheduling and loop Jake in only if needed for the visit.',
     approvalPath: 'ao_can_send',
     approvalReason: null,
@@ -174,9 +188,9 @@ function composePainPropertyMgmt(input) {
   const body = signDraft(
     `Hi ${contact},
 
-${ao} from Anchor Cleaning here. ${kristyBridge}We had heard there may be some cleaning concerns at the ${input.accountName || 'property'} property, ${painClause}. I did not want to assume anything from the outside, but I wanted to ask how cleaning or vendor issues are usually handled for that property and whether it would be useful to have Anchor take a look as a backup or assessment option.
+${ao} from Anchor Cleaning here. ${kristyBridge}We heard there may be some cleaning concerns at the ${input.accountName || 'property'} property, ${painClause}. I'm not assuming anything from the outside — I'd like to ask how cleaning or vendor issues usually get handled for that property, and whether a free facility assessment or backup coverage from Anchor would even make sense.
 
-If you are the right person to speak with, I would be happy to connect. If someone else handles that, I would appreciate being pointed in the right direction.`,
+If you're the right person to talk with, a quick reply would help. If someone else handles it, I'd appreciate a point in the right direction.`,
     input.assignedAoName
   );
 
@@ -201,13 +215,11 @@ function composeRelationship(input) {
   const emailBody = signDraft(
     `Hi ${contact},
 
-Hope you've been doing well. I wanted to reach out and reconnect.
+${ao} from Anchor Cleaning — it's been a while, and I wanted to reconnect.
 
-I'm working with Anchor Cleaning, a local commercial cleaning company focused on professional facilities, offices, and property accounts.
+I'm working locally with Anchor on professional offices and property accounts. I'm not sure there's a current need at ${account}, but I wanted you to know we're here if cleaning support, backup coverage, or vendor options ever come up.
 
-I'm not sure if there is any current need at ${account}, but I wanted to put Anchor on your radar in case cleaning support, backup coverage, or vendor options ever become useful.
-
-We take a diagnose-first approach, so we are not looking to force a quote where one does not make sense. If it would be helpful, I'd be glad to send over more information or set up a quick conversation with Jake.`,
+We diagnose first — we're not going to push a quote where it doesn't fit. I can send more info, or loop Jake in for a quick conversation if that'd be useful.`,
     input.assignedAoName
   );
 
@@ -216,7 +228,7 @@ We take a diagnose-first approach, so we are not looking to force a quote where 
     recommendedFollowUpAngle: 'Relationship-first reconnection — put Anchor on their radar without a hard pitch.',
     subjectLine: `Reconnecting — ${ao} / Anchor Cleaning`,
     emailDraft: emailBody,
-    alternateShortNote: `Hi ${contact}, ${ao} here — reconnecting and putting Anchor Cleaning on your radar if facility support ever helps.`,
+    alternateShortNote: `${ao} with Anchor Cleaning — reconnecting. Happy to share what we do locally if facility support or backup coverage ever helps at ${account}.`,
     nextActionAfterSend: 'If they respond positively, offer a Jake introduction or facility assessment conversation.',
     approvalPath: 'ao_can_send',
     approvalReason: null,
@@ -231,11 +243,11 @@ function composeFederalProcurement(input) {
   const body = signDraft(
     `Hi ${contact},
 
-${ao} from Anchor Cleaning here. I wanted to follow up on our conversation about the recent switch to in-house custodial services.
+${ao} from Anchor Cleaning. Following up on our conversation about the recent switch to in-house custodial services.
 
-Before assuming Anchor could help, I wanted to ask who handles custodial concerns for the location and whether outside cleaning support is ever considered locally, or if that all has to go through a regional or supplier process.
+Before assuming Anchor could help, I'd like to understand who handles custodial concerns for the location — and whether outside cleaning support is ever considered locally, or if everything has to go through a regional or supplier process.
 
-If there is a local or regional contact who handles that, I'd appreciate being pointed in the right direction.`,
+If there's a local or regional contact for that, I'd appreciate a point in the right direction.`,
     input.assignedAoName
   );
 
@@ -313,11 +325,11 @@ function composeDefaultFollowUp(input) {
   const body = signDraft(
     `Hi ${contact},
 
-${ao} from Anchor Cleaning here. I wanted to follow up on ${context.trim().endsWith('.') ? context.trim() : `${context.trim()}.`}
+${ao} from Anchor Cleaning. Following up on ${context.trim().endsWith('.') ? context.trim() : `${context.trim()}.`}
 
-Before suggesting anything, I'd like to understand how cleaning is handled today and whether a free facility assessment would be useful to see the space and current setup.
+Before suggesting anything, I'd like to understand how cleaning is handled today — and whether a free facility assessment would help us see the space and current setup.
 
-Would a brief call or facility assessment make sense in the next week or two?`,
+Would a brief call or facility assessment work in the next week or two?`,
     input.assignedAoName
   );
 
@@ -326,7 +338,7 @@ Would a brief call or facility assessment make sense in the next week or two?`,
     recommendedFollowUpAngle: 'Diagnose current cleaning setup before advising on Anchor support.',
     subjectLine: `Following up — ${input.accountName || 'your facility'}`,
     emailDraft: body,
-    alternateShortNote: `Hi ${contact}, ${ao} with Anchor Cleaning — following up to understand your cleaning setup and whether a facility assessment would help.`,
+    alternateShortNote: `${ao} with Anchor Cleaning — following up to understand your cleaning setup and whether a free facility assessment would help.`,
     nextActionAfterSend: 'If they engage, schedule a facility assessment or clarify decision-maker path.',
     approvalPath: input.requiresJakeApproval ? 'jake_review_recommended' : 'ao_can_send',
     approvalReason: input.requiresJakeApproval ? (input.jakeInvolvementReason || 'Operator flagged Jake review.') : null,
@@ -347,17 +359,27 @@ function detectScenario(input) {
 
 function validateFollowUpDoctrine(output, input = {}) {
   const draft = String(output.emailDraft || '');
+  const shortNote = String(output.alternateShortNote || '');
+  const voiceText = `${draft}\n${shortNote}`;
   const checks = {
     diagnoseBeforeAdvise: true,
     noGenericCheckIn: true,
     noCurrentVendorAttack: true,
     facilityAssessmentLanguageUsed: true,
     groundedInKnownContext: true,
+    humanAnchorVoice: true,
   };
   const warnings = [...(output.warnings || [])];
 
   if (!draft) {
     return { checks, warnings, status: output.status };
+  }
+
+  for (const re of CORPORATE_FORMAL_PHRASES) {
+    if (re.test(voiceText)) {
+      checks.humanAnchorVoice = false;
+      warnings.push(`Draft uses stiff corporate phrasing (${re}).`);
+    }
   }
 
   for (const re of GENERIC_PHRASES) {
@@ -412,7 +434,8 @@ function validateFollowUpDoctrine(output, input = {}) {
   }
 
   let status = output.status;
-  const failedSevere = !checks.noGenericCheckIn || !checks.noCurrentVendorAttack || !checks.groundedInKnownContext;
+  const failedSevere = !checks.noGenericCheckIn || !checks.noCurrentVendorAttack || !checks.groundedInKnownContext
+    || !checks.humanAnchorVoice;
   if (failedSevere && status === 'draft_ready') {
     status = 'needs_clarification';
   }
