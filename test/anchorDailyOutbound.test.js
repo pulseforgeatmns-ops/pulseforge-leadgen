@@ -32,11 +32,51 @@ test('verified and projectable email, exact binding and safe Paige copy are all 
   const message = { subject: 'Cleaning support', body: 'Would a written quote help?', candidateId: 'company' };
   assert.equal(candidateReason(item, crm, message), null);
   for (const change of [{ email_verified: false }, { email_status: 'catch_all' }, { do_not_contact: true },
-    { email: 'other@customer.example' }, { email_provenance_source: 'pattern_first' }]) {
+    { email: 'other@customer.example' },
+    { enrichment_provenance: { email: { source: 'pattern_first' } } },
+    { email_provenance_source: 'pattern_first' }]) {
     assert.ok(candidateReason(item, { ...crm, ...change }, message));
   }
+  assert.equal(candidateReason(item, {
+    email: item.email, email_verified: true, email_status: 'valid', do_not_contact: false,
+  }, message), 'missing_email_provenance');
+  assert.equal(candidateReason(item, {
+    email: item.email, email_verified: true, email_status: 'valid', do_not_contact: false,
+    email_provenance_source: 'website_email',
+  }, message), 'missing_email_provenance');
+  assert.equal(candidateReason({ ...item, email: 'not-an-email' }, {
+    ...crm, email: 'not-an-email',
+  }, message), 'invalid_outreach_email');
   assert.equal(candidateReason(item, crm, { ...message, body: 'Mission focus: internal' }), 'unsafe_paige_copy');
   assert.equal(candidateReason(item, crm, { ...message, candidateId: 'other' }), 'copy_binding_changed');
+});
+
+test('DNC and ownership suppression stay out of governed refill selection', async () => {
+  const { selectRefillEntries } = require('../services/governedOutboundRefill');
+  const messageFor = (id) => ({ subject: 'Cleaning support', body: 'Would a written quote help?', candidateId: id });
+  const contact = (id, email, extra = {}) => ({
+    prospect_id: id, id, company_id: `co-${id}`, email, email_verified: true, email_status: 'valid',
+    do_not_contact: false, enrichment_provenance: { email: { source: 'website_email' } }, ...extra,
+  });
+  const selected = await selectRefillEntries({
+    prepared: {
+      revision: 'rev',
+      sender: { senderEmail: 'sender@anchor.example' },
+      candidates: ['dnc', 'owned', 'ok'].map((id) => ({
+        candidateId: id,
+        item: { email: `${id}@customer.example`, sendable: true, paige: { candidateId: id } },
+        message: messageFor(id),
+      })),
+    },
+    program: { policy: { dailyCap: 15 } },
+    store: { suppression: async (entry) => (entry.candidateId === 'owned' ? 'ao_owned' : null) },
+    adapters: {
+      contact: async (id) => contact(id, `${id}@customer.example`, { do_not_contact: id === 'dnc' }),
+    },
+    existingItems: [],
+    limit: 5,
+  });
+  assert.deepEqual(selected.map((row) => row.candidateId), ['ok']);
 });
 test('Max routes classified replies to human or paused lifecycle paths', () => {
   assert.deepEqual(nextAction('interested'), ['engaged', 'ao_handoff']);
@@ -103,7 +143,7 @@ test('production preparation runs Scout, enrichment, Max, Paige and Emmett throu
     policy: { enrichmentLimit: 15, preparationAttemptsPerDay: 3, senderEmail: sender.senderEmail } };
   const contacts = Object.fromEntries(['co-harbor','co-granite'].map(id => [id, {
     prospect_id: id, company_id: id, email: `ops@${id}.example`, email_verified: true, email_status: 'valid',
-    email_provenance_source: 'website_email', do_not_contact: false,
+    enrichment_provenance: { email: { source: 'website_email' } }, do_not_contact: false,
   }]));
   let enriched = 0;
   const events = [];

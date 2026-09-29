@@ -21,7 +21,7 @@ test('zero verified inventory rolls Scout back before Max, Paige and Emmett; no 
     policy: { enrichmentLimit: 15, preparationAttemptsPerDay: 3, senderEmail: sender.senderEmail } };
   const contacts = Object.fromEntries(['co-harbor','co-granite'].map(id => [id, {
     prospect_id: id, company_id: id, email: `ops@${id}.example`, email_verified: false, email_status: 'invalid',
-    email_provenance_source: 'website_email', do_not_contact: false,
+    enrichment_provenance: { email: { source: 'website_email' } }, do_not_contact: false,
   }]));
   let enriched = 0;
   const events = [];
