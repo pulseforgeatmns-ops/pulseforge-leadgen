@@ -90,19 +90,27 @@ function httpStatus(url) {
   });
 }
 
-async function fetchMainHeadSha() {
+function sameSha(current, floor) {
+  if (!current || !floor) return false;
+  return current === floor || current.startsWith(floor) || floor.startsWith(current);
+}
+
+function compareStatusAtOrAfter(status) {
+  return status === 'ahead' || status === 'identical';
+}
+
+function githubJson(path) {
   return new Promise((resolve, reject) => {
     const req = https.request({
       hostname: 'api.github.com',
-      path: '/repos/pulseforgeatmns-ops/pulseforge-leadgen/commits/main',
+      path,
       headers: { 'User-Agent': 'pulseforge-spec-penny-gads-003' },
     }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => {
         try {
-          const parsed = JSON.parse(body);
-          resolve(parsed.sha || null);
+          resolve(JSON.parse(body));
         } catch (err) {
           reject(err);
         }
@@ -113,9 +121,22 @@ async function fetchMainHeadSha() {
   });
 }
 
-function shaAtOrAfter(current, floor) {
+async function fetchMainHeadSha() {
+  const parsed = await githubJson('/repos/pulseforgeatmns-ops/pulseforge-leadgen/commits/main');
+  return parsed.sha || null;
+}
+
+async function shaAtOrAfter(current, floor) {
   if (!current || !floor) return false;
-  return current.slice(0, 7) >= floor.slice(0, 7) || current >= floor;
+  if (sameSha(current, floor)) return true;
+  try {
+    const parsed = await githubJson(
+      `/repos/pulseforgeatmns-ops/pulseforge-leadgen/compare/${floor}...${current}`
+    );
+    return compareStatusAtOrAfter(parsed.status);
+  } catch {
+    return false;
+  }
 }
 
 async function inspectAdAccounts(db) {
@@ -318,9 +339,10 @@ async function run(options = {}) {
   }
 
   const googleAdsRows = adAccountsBeforeProbe.filter((row) => row.platform === 'google_ads');
+  const mainAtOrAfterFloor = await shaAtOrAfter(mainSha, DEPLOY_FLOOR_SHA);
   const pass =
     loginStatus === 200
-    && shaAtOrAfter(mainSha, DEPLOY_FLOOR_SHA)
+    && mainAtOrAfterFloor
     && missingGoogleEnv.length === 0
     && googleAdsRows.some((row) => row.is_active && row.has_refresh)
     && tenantIsolation.crossTenantLeak === false
@@ -334,7 +356,7 @@ async function run(options = {}) {
     deployment: {
       floorSha: DEPLOY_FLOOR_SHA,
       mainHeadSha: mainSha,
-      mainAtOrAfterFloor: shaAtOrAfter(mainSha, DEPLOY_FLOOR_SHA),
+      mainAtOrAfterFloor,
       productionLoginUrl: PRODUCTION_LOGIN_URL,
       productionLoginStatus: loginStatus,
     },
@@ -361,7 +383,7 @@ async function run(options = {}) {
       ? []
       : [
         loginStatus !== 200 ? `production login HTTP ${loginStatus}` : null,
-        !shaAtOrAfter(mainSha, DEPLOY_FLOOR_SHA) ? 'main HEAD before deploy floor SHA' : null,
+        !mainAtOrAfterFloor ? 'main HEAD before deploy floor SHA' : null,
         missingGoogleEnv.length ? `missing Google Ads env: ${missingGoogleEnv.join(', ')}` : null,
         !googleAdsRows.some((row) => row.is_active && row.has_refresh)
           ? 'no active google_ads ad_accounts row with refresh_token for client_id=10'
@@ -380,6 +402,8 @@ module.exports = {
   DEPLOY_FLOOR_SHA,
   parseArgs,
   envPresence,
+  sameSha,
+  compareStatusAtOrAfter,
   shaAtOrAfter,
   applyGoogleAdsBinding,
   run,
