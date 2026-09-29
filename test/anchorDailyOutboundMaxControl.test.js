@@ -114,7 +114,7 @@ test('Max scoutInput carries structured replenishment workflow fields', () => {
     cleanInventory: 0,
   };
   const input = scoutInput(
-    { source_mission_id: 'mission_source' },
+    { source_mission_id: 'mission_source', tenant_id: '10' },
     {
       payload: {
         structuredMission: {

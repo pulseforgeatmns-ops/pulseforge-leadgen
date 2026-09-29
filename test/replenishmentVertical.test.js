@@ -144,6 +144,7 @@ test('F. producer/consumer compatibility — persisted row is visible to enrichm
     scoutContext: {
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
+      clientId: 10,
     },
   });
 
@@ -177,7 +178,7 @@ test('F. producer/consumer compatibility — persisted row is visible to enrichm
     },
   };
 
-  const enrichmentResult = await runEnrichmentBatches(enrichment, pool, 1);
+  const enrichmentResult = await runEnrichmentBatches(enrichment, pool, 1, { clientId: 10 });
   assert.ok(enrichmentResult.summaries[0].considered >= 1);
   assert.deepEqual(enrichmentResult.summaries[0].verticals, ENRICHABLE_SCOUT_VERTICALS);
 });
@@ -227,6 +228,7 @@ test('persistDiscoveredCompanies rejects query-slug-only candidates', async () =
     scoutContext: {
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
+      clientId: 10,
     },
   });
 
@@ -265,6 +267,7 @@ test('admission counters track discovered/evaluated/fit/admitted/rejected', asyn
     scoutContext: {
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
+      clientId: 10,
     },
   });
 

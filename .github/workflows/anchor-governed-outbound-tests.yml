@@ -27,4 +27,5 @@ jobs:
           test/tenantMailboxPollExecutor.test.js test/tenantOutreachScheduler.test.js
           test/emmettTenantMailboxCapacity.test.js test/mailHeaders.test.js
           test/maxScoutReplenishment.test.js
+          test/scoutReplenishmentTenantGeneralization.test.js
           packages/acquisition-mission/tests/spec215PreparedOutreachRevision.test.js

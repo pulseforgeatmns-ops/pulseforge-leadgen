@@ -279,6 +279,7 @@ test('persistDiscoveredCompanies attempts every same-company candidate without e
     companies,
     scoutContext: {
       scope: { segment: 'short_term_rental' },
+      clientId: 10,
       recoverySources: {
         pfIntelligence: async () => ({ status: 'ok', contacts: [] }),
         website: async () => ({ status: 'ok', contacts: [] }),
