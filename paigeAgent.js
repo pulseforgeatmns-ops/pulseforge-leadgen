@@ -2247,7 +2247,13 @@ function buildAnchorDoctrineRegenBlock(violations) {
   return [
     'Your previous draft violated Anchor copy doctrine. Correct every listed violation:',
     ...violations.map((violation) => `- ${violation.patternId}: ${violation.match ?? '(detected)'}`),
-    'Remove em dashes, AI-tell phrasing, generic closers, unsupported claims, and social-banned phrases such as "walkthrough" or "What do you think?".',
+    'Do not use:',
+    '- "I wanted to reach out"',
+    '- "worth a quick conversation"',
+    '- em dash or en dash characters',
+    'Must include:',
+    '- one concrete client-scoped Mira detail already supplied in context',
+    'Remove AI-tell phrasing, generic closers, unsupported claims, and social-banned phrases such as "walkthrough" or "What do you think?".',
   ].join('\n');
 }
 
