@@ -16,6 +16,7 @@ const { buildTelUrl } = require('../utils/aoRoutePlanner');
 const aoCommandCenter = require('../services/aoCommandCenterService');
 const aoProspectUpdate = require('../services/aoProspectUpdateService');
 const aoCrm = require('../services/aoCrmService');
+const aoFollowup = require('../services/aoFollowupService');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { AO_CRM_NEXT_ACTIONS } = require('../utils/aoCrmTypes');
 const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
@@ -160,6 +161,54 @@ router.get('/api/crm/accounts/:prospectId', requireAoRead, refreshAoSession, wra
   });
   if (!detail) return res.status(404).json({ error: 'Account not found' });
   res.json(detail);
+}));
+
+router.post('/api/crm/accounts/:prospectId/followup/draft', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const profile = await aoField.getAoProfile(aoOwnerId);
+  const result = await aoFollowup.generateFollowUpDraft({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    body: req.body || {},
+    profile: profile || sessionProfile(req),
+  });
+  if (result.status) return res.status(result.status).json(result);
+  res.json({ draft: result.draft, input_snapshot: result.input_snapshot });
+}));
+
+router.post('/api/crm/accounts/:prospectId/followup/save', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { draft, input_snapshot: inputSnapshot, flag_jake_review: flagJakeReview } = req.body || {};
+  const result = await aoFollowup.saveFollowUpDraft({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    draft,
+    inputSnapshot,
+    flagJakeReview: flagJakeReview === true || flagJakeReview === 'true',
+  });
+  if (result.status) return res.status(result.status).json(result);
+  res.json(result);
+}));
+
+router.get('/api/crm/accounts/:prospectId/followup/drafts', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = req.user.role === 'ao' ? effectiveAoOwnerId(req) : null;
+  const result = await aoFollowup.listFollowUpDrafts({
+    clientId,
+    prospectId: req.params.prospectId,
+    aoUserId: aoOwnerId,
+  });
+  res.json(result);
 }));
 
 router.post('/api/crm/accounts/:prospectId/outcome', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
