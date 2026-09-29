@@ -62,6 +62,7 @@
     "cog:report": "node scripts/cogReport.js --text",
     "cog:report:check": "node scripts/cogReport.js --check",
     "cog:list": "node scripts/cogRun.js --list-domains",
+    "anchor:google-ads:wiring": "node scripts/verifySpecPennyGads003ProductionWiring.js --confirm-production",
     "anchor:phone-setter:preflight": "node scripts/preflightAnchorPhoneSetter.js",
     "anchor:verified-queue:dry-run": "node scripts/importAnchorVerifiedQueue.js",
     "anchor:verified-queue:apply": "node scripts/importAnchorVerifiedQueue.js --apply --confirm=client_10-anchor-verified-queue-2026-07-18",
