@@ -998,7 +998,7 @@ describe('Progressive enhancement (doctrine §18)', () => {
     assert.match(orchestration, /import\(\s*['"]\.\/dimensional\.js['"]\s*\)/);
   });
 
-  it('keeps approved materials on capable phones and honours resource preferences', () => {
+  it('keeps the dimensional object off narrow graphics paths and honours resource preferences', () => {
     const gate = orchestration.slice(
       orchestration.indexOf('function shouldRenderObject()'),
       orchestration.indexOf('function loadObject(')
@@ -1011,8 +1011,11 @@ describe('Progressive enhancement (doctrine §18)', () => {
       { matches: options.reduced ?? false },
       () => options.webgl ?? true
     );
-    for (const width of [360, 390, 768, 1280, 1600]) {
-      assert.equal(check(width), true, `capable ${width}px devices share the approved object`);
+    for (const width of [360, 390, 768]) {
+      assert.equal(check(width), false, `${width}px uses the complete CSS composition`);
+    }
+    for (const width of [992, 1280, 1600]) {
+      assert.equal(check(width), true, `capable ${width}px devices receive the dimensional object`);
       assert.equal(check(width, { reduced: true }), false);
       assert.equal(check(width, { saveData: true }), false);
       assert.equal(check(width, { memory: 1 }), false);
