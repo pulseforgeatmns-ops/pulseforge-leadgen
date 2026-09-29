@@ -14,6 +14,33 @@ const {
 const { fixture } = require('./helpers/paigeSocialFixture');
 
 const COMPLIANT_BODY = 'Ten sends over the past 24 hours moved through Manchester outreach. A facility assessment gives office managers a written scope before recurring service starts.';
+
+const DETERMINISTIC_CONTENT_SAFE_MIRA = Object.freeze({
+  now: '2026-07-05T12:00:00.000Z',
+  available: true,
+  client: { id: 10, name: 'Anchor Cleaning', city: 'Manchester', state: 'NH' },
+  channel: 'facebook_page',
+  current_anchor: null,
+  metrics: {
+    sends_24h: 10,
+    opens_24h: 7,
+    replies_24h: 2,
+    warm_signals_24h: 3,
+  },
+  recent_activity_summaries: [
+    'Mira logged 10 sends over the past 24 hours in Manchester, NH',
+    'Mira logged 2 replies over the past 24 hours in Manchester, NH',
+  ],
+  client_health: {
+    send_volume_status: 'active',
+    send_volume_trend_pct: 25,
+    deliverability_status: 'healthy',
+    bounce_rate_pct: 0,
+    daily_send_trend_7d: [{ date: '2026-07-05', sends: 10 }],
+  },
+  linkedin_post_stats: [],
+});
+
 const PASSING_SCORE = {
   specificity: 8,
   originality: 8,
@@ -92,6 +119,7 @@ function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false
   const writes = [];
   let generationCalls = 0;
   let providerCalls = 0;
+  const queue = draftSequence.length ? [...draftSequence] : [COMPLIANT_BODY];
 
   installDeterministicMiraContextMock();
 
@@ -137,8 +165,8 @@ function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false
             return writerTextBlock(JSON.stringify(PASSING_SCORE));
           }
           generationCalls += 1;
-          const queue = draftSequence.length ? [...draftSequence] : [COMPLIANT_BODY];
-          const body = queue[Math.min(generationCalls - 1, queue.length - 1)];
+          const idx = Math.min(generationCalls - 1, queue.length - 1);
+          const body = queue[idx];
           return writerTextBlock(body);
         },
       };
