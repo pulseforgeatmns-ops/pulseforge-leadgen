@@ -169,7 +169,7 @@ Configure the existing production scheduler to make these authenticated POST req
 | Anchor bounded outbound | Every five minutes, all days | `POST /cron/anchor-daily-outbound` |
 | Max outbound inventory control (Scout replenishment) | Every 15 minutes while scheduler enabled, or on demand before 09:00 ET preflight | `POST /cron/anchor-max-outbound-control` |
 
-Header: `Authorization: Bearer <CRON_SECRET>`. These endpoints reject absent/invalid secrets and provide no GET mutation. Configure a request timeout sufficient for discovery/enrichment; a client timeout does not authorize another provider attempt. Overlapping retries return `overlap`. Polling remains enabled after the finite send grant ends.
+Header: `Authorization: Bearer <CRON_SECRET>`. These endpoints reject absent/invalid secrets and provide no GET mutation. The send tick still needs a timeout sufficient for one bounded attempt; a client timeout does not authorize another provider attempt. Overlapping send retries return `overlap`. `POST /cron/anchor-max-outbound-control` returns as soon as each configured tenant is admitted or skipped. It does not wait for Scout replenishment and it does not include Scout evidence. A same-tenant overlap is `skipped` with reason `overlap`. One tenant's failure does not skip the others. Polling remains enabled after the finite send grant ends.
 
 Normal daily operation requires no message or batch approvals. Max assembles/finalizes each day, sends at most one per tick at least an hour apart, and surfaces exceptions. Review and explicitly renew before the finite expiry or total-cap boundary; no silent renewal is implemented.
 
