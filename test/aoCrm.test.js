@@ -118,3 +118,84 @@ test('CRM dashboard API scopes to AO owner', async () => {
     for (const restore of restores.reverse()) restore();
   }
 });
+
+const ALLOWED_AGENT_LOG_STATUSES = new Set([
+  'success', 'failed', 'skipped', 'pending', 'completed', 'posted', 'in_progress',
+]);
+
+test('logAoAuditEvent status is in agent_log_status_check allow-list', async () => {
+  const captured = [];
+  const restoreDb = stub('../db', {
+    query: async (sql, params) => {
+      captured.push({ sql, params });
+      return { rows: [] };
+    },
+  });
+  try {
+    delete require.cache[require.resolve('../utils/aoAuditEvents')];
+    const { logAoAuditEvent } = require('../utils/aoAuditEvents');
+    await logAoAuditEvent({
+      event: 'AO_CRM_DASHBOARD_VIEWED',
+      clientId: 10,
+      aoUserId: 101,
+      payload: { account_count: 3 },
+    });
+    assert.equal(captured.length, 1);
+    assert.match(captured[0].sql, /INSERT INTO agent_log/);
+    const statusMatch = captured[0].sql.match(/,\s*'([^']+)',\s*NOW\(\)/);
+    assert.ok(statusMatch, 'expected status literal before NOW()');
+    assert.ok(ALLOWED_AGENT_LOG_STATUSES.has(statusMatch[1]), statusMatch[1]);
+    assert.equal(captured[0].params[0], 'AO_CRM_DASHBOARD_VIEWED');
+  } finally {
+    delete require.cache[require.resolve('../utils/aoAuditEvents')];
+    restoreDb();
+  }
+});
+
+test('AO CRM audit helper does not insert invalid agent_log.status ok', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'utils', 'aoAuditEvents.js'), 'utf8');
+  assert.match(src, /VALUES \(\s*'ao'[^)]+'success'/s);
+  assert.doesNotMatch(src, /,\s*'ok',\s*NOW\(\)/);
+});
+
+test('AO CRM shell routes serve HTML when authenticated', async () => {
+  const restores = [
+    stub('../utils/aoFieldSchema', { ensureAoFieldSchema: async () => {} }),
+    stub('../services/aoFieldService', {
+      getAoProfile: async id => ({ id, name: 'Tony', client_id: 10 }),
+    }),
+  ];
+
+  let running;
+  try {
+    delete require.cache[require.resolve('../routes/ao')];
+    const router = require('../routes/ao');
+    const app = express();
+    app.use((req, _res, next) => {
+      req.session = { user: req.headers['x-test-user'] === 'manager'
+        ? { id: 1, role: 'manager', client_id: 10, name: 'Jake' }
+        : { id: 101, role: 'ao', client_id: 10, name: 'Tony' },
+      };
+      next();
+    });
+    app.use('/ao', router);
+    running = await listen(app);
+
+    for (const [route, asManager] of [
+      ['/ao/crm', false],
+      ['/ao/field', false],
+      ['/ao/crm/manager', true],
+    ]) {
+      const response = await fetch(`${running.base}${route}`, {
+        headers: asManager ? { 'x-test-user': 'manager' } : {},
+      });
+      assert.equal(response.status, 200, route);
+      const body = await response.text();
+      assert.match(body, /<!DOCTYPE html>|<html/i, route);
+    }
+  } finally {
+    if (running) await new Promise(resolve => running.server.close(resolve));
+    delete require.cache[require.resolve('../routes/ao')];
+    for (const restore of restores.reverse()) restore();
+  }
+});

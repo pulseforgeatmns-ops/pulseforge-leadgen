@@ -370,8 +370,9 @@ Adaptations, and why:
   same six plates or rasterise the same six patterns three times.
 - **Loaded last, and conditionally.** Dynamically imported, gated on WebGL
   support, `prefers-reduced-motion`, viewport width, `saveData` and
-  `deviceMemory`, and then deferred again to `requestIdleCallback`. It cannot
-  affect LCP.
+  `deviceMemory`, and then deferred again to `requestIdleCallback`. Phone and
+  tablet widths use the complete CSS composition after live production tracing
+  showed that compiling three WebGL stages could stall their main thread.
 
 Both stages keep the canvas `aria-hidden="true"`. Every layer name, question
 and evidence class lives in the document, so the narrative survives with the
@@ -678,9 +679,12 @@ complete list:
    environments. One hue family preserved.
 2. **No refractive transmission on the plates** — performance. Material
    character preserved through clearcoat, opacity and environment reflection.
-3. **Approved materials on capable phones** — the dedicated mobile stage owns
-   scale and safe area, while reduced motion, data saving, low memory and missing
-   WebGL still resolve to the complete CSS composition.
+3. **CSS composition on phones and tablets** — live production tracing found
+   that initializing three WebGL stages could block the main thread on narrow
+   devices with integrated graphics. Below 992px, the existing complete CSS
+   composition is now the intended treatment. Desktop retains the approved
+   dimensional materials, subject to reduced motion, data saving, low memory
+   and WebGL availability.
 4. **Colophon publishes budgets, not measurements** — a measured figure baked
    into static HTML would become a false claim the first time it drifted.
 5. **Case study outcome withheld** — §16 integrity applied to our own work.
