@@ -951,10 +951,8 @@ ol {
 /* ==========================================================================
    THE SUBSTRATE
 
-   A cut block of dark mineral, not a seventh pane. It is wider than the layers,
-   irregular in plan, and built from three stacked faces so it reads as a block
-   with mass rather than a sheet. Its top is planed where the engineered system
-   seats into it; everything else is left broken.
+   The approved procedural stone, baked for the CSS fallback at its two fixed
+   viewing angles. Its depth anchor and the layers above it are unchanged.
    ========================================================================== */
 
 .plinth {
@@ -968,96 +966,26 @@ ol {
   );
 }
 
-/* An irregular plan, shared by every face of the block. Straight facets of
-   uneven length: quarried, not manufactured. */
-.plinth__face,
-.plinth__mass {
+/* A transparent bake of the same procedural mesh used by WebGL. Counter the
+   stack's rotation so the rendered stone retains its volume, while the plinth
+   keeps the existing depth anchor, separation and responsive scale. The bake
+   covers 6.4 scene units; 1.52 / 2.12 preserves the previous base footprint.
+   No GPU work or dimensional bundle is needed for this baseline. */
+.plinth__rock {
   position: absolute;
-  inset: 0;
-  clip-path: polygon(
-    6% 14%,
-    19% 2%,
-    31% 11%,
-    47% 1%,
-    58% 9%,
-    72% 3%,
-    88% 12%,
-    97% 7%,
-    100% 26%,
-    91% 39%,
-    99% 55%,
-    88% 71%,
-    96% 88%,
-    78% 82%,
-    64% 97%,
-    49% 87%,
-    33% 99%,
-    21% 88%,
-    7% 94%,
-    1% 74%,
-    9% 58%,
-    0% 41%,
-    8% 28%
-  );
+  left: 50%;
+  top: 50%;
+  width: 98.979%; /* 6.4 / (PLATE_W 3.05 × substrate width ratio 2.12) */
+  aspect-ratio: 160 / 77;
+  background: url('../object/substrate-62.webp') center / contain no-repeat;
+  transform-origin: 0 0;
+  /* The planed plateau's origin inside the transparent 640 × 308 export. */
+  transform: rotateZ(38deg) rotateX(-62deg) translate(-42.1875%, -20.77922%);
 }
 
-/* The planed top of the block. */
-.plinth__face {
-  background: radial-gradient(
-      120% 90% at 26% 18%,
-      rgba(255, 250, 238, 0.14),
-      transparent 58%
-    ),
-    radial-gradient(38% 52% at 72% 64%, rgba(17, 17, 15, 0.42), transparent 70%),
-    radial-gradient(26% 40% at 20% 76%, rgba(255, 250, 238, 0.05), transparent 66%),
-    radial-gradient(54% 30% at 58% 12%, rgba(17, 17, 15, 0.26), transparent 72%),
-    repeating-linear-gradient(
-      98deg,
-      rgba(17, 17, 15, 0.09) 0 1px,
-      transparent 1px 5px
-    ),
-    linear-gradient(150deg, #3b3830, #2c2a24 56%, #201e1a);
-}
-
-/* Two slabs beneath it, progressively darker and offset along the depth axis,
-   which is what gives the block its visible thickness. */
-.plinth__mass {
-  background: linear-gradient(150deg, #2e2b25, #24211c 58%, #1a1815);
-  transform: translate3d(0, 0, -0.62rem);
-}
-
-.plinth__mass--deep {
-  background: linear-gradient(150deg, #221f1b, #191713 58%, #111010);
-  transform: translate3d(0, 0, -1.35rem);
-}
-
-/* The planed region where the layers seat into the stone. Irregular in plan like
-   everything else here: a rectangle with a border would read as a panel, which is
-   the one thing the substrate must never do. */
-.plinth__seat {
-  position: absolute;
-  inset: 26% 22%;
-  transform: translate3d(0, 0, 0.1rem);
-  clip-path: polygon(
-    10% 6%,
-    38% 0%,
-    66% 8%,
-    92% 2%,
-    100% 30%,
-    94% 62%,
-    100% 90%,
-    70% 96%,
-    42% 88%,
-    14% 100%,
-    2% 68%,
-    8% 34%
-  );
-  background: radial-gradient(
-      90% 120% at 30% 20%,
-      rgba(255, 250, 238, 0.1),
-      transparent 64%
-    ),
-    linear-gradient(152deg, #423e36, #35322b 60%, #2a2823);
+.surface__object .plinth__rock {
+  background-image: url('../object/substrate-64.webp');
+  transform: rotateZ(38deg) rotateX(-64deg) translate(-42.1875%, -20.77922%);
 }
 
 /* ==========================================================================
