@@ -1,6 +1,12 @@
 'use strict';
 
 const ALLOWED_GOVERNED_OUTBOUND_TENANTS = Object.freeze(['10', '13']);
+// Send/tick serialization. Distinct from the Max control-cycle lock so Scout
+// replenishment cannot block an eligible Emmett send.
+const GOVERNED_OUTBOUND_SEND_LOCK_NAMESPACE = 261018;
+// Per-tenant Max outbound control cycle. Held for the duration of one cycle so
+// a second tick cannot overlap Scout, schedules, or grant decisions.
+const GOVERNED_OUTBOUND_CONTROL_LOCK_NAMESPACE = 261020;
 
 function assertGovernedOutboundTenantId(tenantId) {
   const tid = String(tenantId ?? '').trim();
@@ -16,7 +22,8 @@ function createGovernedOutboundTenantContext(tenantId) {
   return Object.freeze({
     tenantId: tid,
     clientId,
-    advisoryLockNamespace: 261018,
+    advisoryLockNamespace: GOVERNED_OUTBOUND_SEND_LOCK_NAMESPACE,
+    controlLockNamespace: GOVERNED_OUTBOUND_CONTROL_LOCK_NAMESPACE,
     advisoryLockKey: clientId,
     attentionTitle: tid === '13' ? 'Babrun outbound needs attention' : 'Anchor outbound needs attention',
     usesBrevoTransport: tid === '10',
@@ -54,6 +61,8 @@ function governedOutboundSendingDisabledForTenant(tenantId) {
 
 module.exports = {
   ALLOWED_GOVERNED_OUTBOUND_TENANTS,
+  GOVERNED_OUTBOUND_SEND_LOCK_NAMESPACE,
+  GOVERNED_OUTBOUND_CONTROL_LOCK_NAMESPACE,
   assertGovernedOutboundTenantId,
   createGovernedOutboundTenantContext,
   parseGovernedOutboundTenantIds,

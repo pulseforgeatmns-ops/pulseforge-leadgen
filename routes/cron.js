@@ -30,26 +30,15 @@ router.post('/cron/anchor-max-outbound-control', async (req, res) => {
     const pool = require('../db');
     const execute = String(req.query.execute || 'true').toLowerCase() !== 'false';
     const tenantId = req.query.tenant_id || req.query.tenantId || null;
-    const result = tenantId
-      ? await require('../services/maxOutboundControlLoop').runMaxOutboundControlLoop({
-        pool,
-        execute,
-        logger: console,
-        tenantId: String(tenantId),
-      })
-      : await (async () => {
-        const { parseGovernedOutboundTenantIds } = require('../services/governedOutboundTenant');
-        const tenants = {};
-        for (const tid of parseGovernedOutboundTenantIds()) {
-          tenants[tid] = await require('../services/maxOutboundControlLoop').runMaxOutboundControlLoop({
-            pool,
-            execute,
-            logger: console,
-            tenantId: tid,
-          });
-        }
-        return { tenants };
-      })();
+    // Bounded orchestration only. Each tenant cycle starts under its own
+    // control lock and continues after this response. Scout evidence stays in
+    // the control-loop event, not in this body.
+    const result = await require('../services/governedOutboundControlDispatch').dispatchGovernedOutboundControl({
+      pool,
+      execute,
+      logger: console,
+      tenantId: tenantId ? String(tenantId) : null,
+    });
     return res.set('Cache-Control', 'no-store').json(result);
   } catch (e) {
     return res.status(500).json({ error: e.code || 'anchor_max_outbound_control_failed' });

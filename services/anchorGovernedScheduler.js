@@ -13,11 +13,6 @@ function startAnchorGovernedScheduler(options = {}) {
   const cancel = options.clearInterval || clearInterval;
   const maxControlEnabled = options.maxControlEnabled
     ?? process.env.ANCHOR_MAX_OUTBOUND_CONTROL_ENABLED === 'true';
-  const maxControl = options.maxControl
-    || (() => require('./maxOutboundControlLoop').runMaxOutboundControlLoop({
-      pool: options.pool,
-      logger,
-    }));
   let busy = false;
   let stopped = false;
   let cycles = 0;
@@ -39,7 +34,7 @@ function startAnchorGovernedScheduler(options = {}) {
             // driven only by their external governed cron invocation.
             const out = {};
             for (const tenantId of ['10']) {
-              out[tenantId] = await require('./maxOutboundControlLoop').runMaxOutboundControlLoop({
+              out[tenantId] = await require('./governedOutboundControlDispatch').runBoundedMaxOutboundControl({
                 pool: options.pool,
                 tenantId,
                 logger,
