@@ -350,10 +350,14 @@ function actionButtons(item, context = 'prospect') {
       ${item.prospect_id ? `<button class="cc-btn" data-action="brief" data-prospect="${item.prospect_id}">Brief</button>` : ''}
     `;
   }
+  const draftFollowUp = /follow|email|send_information/i.test(String(item.next_action || item.ao_next_action || ''))
+    ? `<a class="cc-btn" href="/ao/crm#followup-${pid}">Draft Follow-Up</a>`
+    : '';
   return `
     <button class="cc-btn primary" data-action="brief" data-prospect="${pid}" ${item.lead_id ? `data-lead="${item.lead_id}"` : ''}>Brief</button>
     <button class="cc-btn" data-action="continue" data-prospect="${pid}" ${item.lead_id ? `data-lead="${item.lead_id}"` : ''}>Continue</button>
     <button class="cc-btn" data-action="log-update" data-prospect="${pid}">Log Update</button>
+    ${draftFollowUp}
     <button class="cc-btn" data-action="follow-up" data-prospect="${pid}">Mark Follow-Up</button>
     <button class="cc-btn warn" data-action="flag" data-prospect="${pid}" data-session="${sid || ''}">Flag Issue</button>
     ${sid ? `<button class="cc-btn" data-action="done" data-session="${sid}">Done</button>` : ''}

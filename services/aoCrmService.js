@@ -644,6 +644,7 @@ module.exports = {
   getAccountDetail,
   submitOutcome,
   resolveHelp,
+  insertActivity,
   formatAccountRow,
   buildTodayQueue,
 };

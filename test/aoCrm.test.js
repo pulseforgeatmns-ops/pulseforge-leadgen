@@ -34,6 +34,8 @@ test('ao routes expose SPEC-AO-CRM-001 endpoints', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'routes', 'ao.js'), 'utf8');
   assert.match(src, /\/api\/crm\/dashboard/);
   assert.match(src, /\/api\/crm\/accounts\/:prospectId\/outcome/);
+  assert.match(src, /\/api\/crm\/accounts\/:prospectId\/followup\/draft/);
+  assert.match(src, /\/api\/crm\/accounts\/:prospectId\/followup\/save/);
   assert.match(src, /\/api\/crm\/manager\/accounts/);
   assert.match(src, /\/api\/tasks\/:id\/crm-context/);
   assert.match(src, /\/crm/);
@@ -51,6 +53,8 @@ test('CRM pages reference durable account views', () => {
   assert.match(crm, /My Accounts/);
   assert.match(crm, /today_queue/);
   assert.match(crm, /\/ao\/api\/crm\/accounts/);
+  assert.match(crm, /Draft Follow-Up/);
+  assert.match(crm, /followup\/draft/);
   const mgr = fs.readFileSync(path.join(__dirname, '..', 'public', 'ao-crm-manager.html'), 'utf8');
   assert.match(mgr, /manager\/accounts/);
 });
