@@ -58,6 +58,13 @@ const {
 } = require('./governedOutboundContext');
 const { governedOutboundEnabledForTenant } = require('./governedOutboundTenant');
 
+function preparationGrantActive(store, program) {
+  if (program?.mode !== 'active') return false;
+  const tid = String(store?.tenantId ?? program?.tenant_id ?? '').trim();
+  if (!tid || !['10', '13'].includes(tid)) return true;
+  return governedOutboundEnabledForTenant(tid);
+}
+
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
 const MAX_ENRICHMENT_BATCHES_PER_CYCLE = 3;
@@ -727,7 +734,7 @@ async function capturePreparationObservability({
     remainingScheduleSlots: remainingSlots,
     cleanInventory,
     governor: operating.governor,
-    grantActive: program?.mode === 'active' && governedOutboundEnabledForTenant(store.tenantId),
+    grantActive: preparationGrantActive(store, program),
     dailyAuthorizationRemaining: dailyRemaining,
     totalAuthorizationRemaining: operating.remainingTotalAuthorization,
   });
