@@ -150,12 +150,12 @@ test('briefing does not include raw metadata JSON or internal identifiers', () =
 
 test('research-stage account with no contact gets a specific decision-maker action', () => {
   const reply = formatAccountBriefing(leadFixture(), { today: TODAY });
-  assert.match(reply, /Research stage/i);
+  assert.match(reply, /Where this stands/i);
+  assert.match(reply, /No decision-maker identified yet/i);
   assert.match(reply, /Identify the facilities\/property-management decision-maker/i);
-  assert.match(reply, /property manager/i);
-  assert.match(reply, /No contact identified yet/i);
+  assert.match(reply, /janitorial vendors/i);
   assert.doesNotMatch(reply, /\bZack\b/);
-  assert.match(reply, /Overdue since Sep 14/);
+  assert.match(reply, /Sep 14 — overdue/);
   assert.match(reply, /Assigned through Anchor AO batch/);
 });
 
@@ -188,7 +188,7 @@ test('follow-up due with prior conversation references real prior context', () =
     business_type: 'property_management',
   }), { today: TODAY });
 
-  assert.match(reply, /Follow up with Sarah Chen about overflow coverage/i);
+  assert.match(reply, /Call Sarah Chen.*overflow coverage/i);
   assert.match(reply, /next concrete step/i);
   assert.doesNotMatch(reply, /walkthrough she requested/i);
   assertNoInternalLeak(reply);
@@ -219,7 +219,7 @@ test('proposal state gets a proposal-specific next step', () => {
     open_next_action: 'proposal_follow_up',
   }), { today: TODAY });
 
-  assert.match(reply, /Follow up on the proposal/i);
+  assert.match(reply, /Call about the proposal/i);
   assert.match(reply, /scope or timing questions/i);
   assert.doesNotMatch(reply, /No AO action required/i);
 });
@@ -262,9 +262,8 @@ test('commercial-office account uses office/facilities role guidance', () => {
     crm_prospect_id: null,
   }), { today: TODAY });
 
-  assert.match(reply, /office manager/i);
-  assert.match(reply, /practice manager/i);
   assert.match(reply, /Identify the office or facilities manager/i);
+  assert.match(reply, /vendor decisions/i);
 });
 
 test('due dates format as overdue, today, and future month-day', () => {
@@ -292,8 +291,8 @@ test('missing data does not fabricate contacts, phones, or buying signals', () =
   assert.doesNotMatch(reply, /walkthrough she requested/i);
   assert.doesNotMatch(reply, /high-interest conversation/i);
   assert.doesNotMatch(reply, /Sarah/);
-  assert.match(reply, /No contact identified yet/i);
-  assert.match(reply, /No recent conversation logged/i);
+  assert.match(reply, /No decision-maker captured yet/i);
+  assert.match(reply, /No AO conversation notes logged yet/i);
 });
 
 test('prioritization list uses improved actionable next steps', () => {
@@ -418,7 +417,7 @@ test('equivalent contact title and role collapse to one label', () => {
 test('direct mail provenance is not rendered as last conversation', () => {
   assert.equal(looksLikeProvenanceNote('Received direct mail before AO visit'), true);
   const reply = formatAccountBriefing(lodgismFixture(), { today: TODAY });
-  assert.match(reply, /No recent conversation logged/);
+  assert.match(reply, /No AO conversation notes logged yet/);
   assert.match(reply, /Context: Received prior Campaign 001 outreach/);
   assert.doesNotMatch(reply, /Last conversation: Received direct mail/i);
   assert.doesNotMatch(reply, /Follow up with Main Office about Received direct mail/i);
@@ -436,7 +435,7 @@ test('actual logged visit summary renders as last conversation and drives follow
   }), { today: TODAY });
 
   assert.match(reply, /Last conversation: Spoke with Alex about turnover cleaning gaps/i);
-  assert.match(reply, /Follow up with Alex Rivera about turnover cleaning gaps/i);
+  assert.match(reply, /Call Alex Rivera.*turnover cleaning gaps/i);
   assert.doesNotMatch(reply, /Received direct mail before AO visit/i);
 });
 

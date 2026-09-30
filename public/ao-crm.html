@@ -486,12 +486,12 @@ function renderBriefSections(sections, fallbackText) {
     return `<div class="draft-box">${(fallbackText || '').replace(/</g, '&lt;')}</div>`;
   }
   const blocks = [
-    ['Why this account matters', sections.why_this_account_matters],
-    ['What we know', sections.what_we_know],
-    ['Likely angle', sections.likely_angle],
-    ['Suggested next move', sections.suggested_next_move],
+    ['Where this stands', sections.where_this_stands || sections.why_this_account_matters],
+    ['Why this is the next move', sections.why_this_next || sections.likely_angle],
+    ['Known context', sections.known_context || sections.what_we_know],
+    ['Next action', sections.next_action || sections.suggested_next_move],
+    ['What to listen for', sections.what_to_listen_for || sections.what_to_watch_for],
     ['Short talk track', sections.short_talk_track],
-    ['What to watch for', sections.what_to_watch_for],
   ];
   return blocks.map(([title, body]) => `
     <div class="detail-block"><h3>${title}</h3><div class="draft-box">${String(body || '—').replace(/</g, '&lt;')}</div></div>

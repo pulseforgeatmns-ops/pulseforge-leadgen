@@ -63,7 +63,8 @@ test('fresh assignment briefing does not present low or medium interest', () => 
   assert.doesNotMatch(reply, /medium interest/i);
   assert.doesNotMatch(reply, /High interest recorded/i);
   assert.match(reply, /No decision-maker captured yet/i);
-  assert.match(reply, /Research stage/i);
+  assert.match(reply, /Where this stands/i);
+  assert.match(reply, /No prior AO conversation logged yet/i);
 });
 
 test('unassessed interest does not add ranking weight; observed low does', () => {
@@ -135,5 +136,6 @@ test('real logged high interest still affects ranking and briefing', () => {
     priority: 'warm',
   }, { today });
 
-  assert.match(reply, /Walkthrough stage/i);
+  assert.match(reply, /walkthrough/i);
+  assert.match(reply, /High interest recorded/i);
 });

@@ -61,10 +61,9 @@ const richProspect = {
 
 test('formatProspectBrief includes AO routing fields', () => {
   const brief = formatProspectBrief(richProspect);
-  assert.match(brief, /Why this account matters/);
+  assert.match(brief, /Where this stands/);
   assert.match(brief, /Beacon Law/);
-  assert.match(brief, /backup cleaner angle|reliable backup/i);
-  assert.match(brief, /Suggested next move/);
+  assert.match(brief, /Next action/);
   assert.match(brief, /Short talk track/);
   assert.match(brief, /Jane Doe/);
   assert.match(brief, /2026-09-20/);
@@ -77,8 +76,8 @@ test('formatProspectBrief returns minimal brief for sparse prospect', () => {
     touchpoints: [],
   });
   assert.match(brief, /light file so far/i);
-  assert.match(brief, /What we know/);
-  assert.match(brief, /Suggested next move/);
+  assert.match(brief, /Known context/);
+  assert.match(brief, /Next action/);
   assert.match(brief, /Short talk track/);
 });
 
