@@ -134,6 +134,43 @@ body {
   border-radius: 12px 12px 0 0;
   padding: 16px;
 }
+body.modal-open {
+  overflow: hidden;
+  position: fixed;
+  width: 100%;
+  left: 0;
+  right: 0;
+}
+@media (max-width: 720px) {
+  .modal-backdrop {
+    align-items: flex-start;
+    padding: 16px;
+    overflow: hidden;
+  }
+  .modal {
+    max-height: calc(100dvh - 32px);
+    border-radius: 12px;
+  }
+  .modal.modal-brief {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+  .modal.modal-brief .modal-brief-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    margin: 0 -4px;
+    padding: 0 4px;
+  }
+  .modal.modal-brief .modal-brief-footer {
+    flex-shrink: 0;
+    padding-top: 12px;
+  }
+}
 .field { margin-bottom: 12px; }
 .field label {
   display: block;
@@ -299,9 +336,22 @@ function renderPanels() {
   }).join('');
 }
 
+let modalScrollLockY = 0;
+
+function openModalBackdrop() {
+  modalScrollLockY = window.scrollY || 0;
+  document.body.style.top = `-${modalScrollLockY}px`;
+  document.body.classList.add('modal-open');
+  document.getElementById('modal-backdrop').classList.add('open');
+}
+
 function closeModal() {
   document.getElementById('modal-backdrop').classList.remove('open');
+  document.getElementById('modal').classList.remove('modal-brief');
   document.getElementById('modal').innerHTML = '';
+  document.body.classList.remove('modal-open');
+  document.body.style.top = '';
+  window.scrollTo(0, modalScrollLockY);
   state.followupDraft = null;
   state.followupProspectId = null;
 }
@@ -359,7 +409,7 @@ async function openFollowUpModal(prospectId, seedNotes = '') {
     </div>
     <div id="followup-results"></div>
   `;
-  document.getElementById('modal-backdrop').classList.add('open');
+  openModalBackdrop();
   document.getElementById('cancel-followup').onclick = closeModal;
   document.getElementById('generate-followup').onclick = async () => {
     try {
@@ -451,7 +501,7 @@ function openOutcomeModal(prospectId, taskId) {
       <button class="btn" id="cancel-outcome">Cancel</button>
     </div>
   `;
-  document.getElementById('modal-backdrop').classList.add('open');
+  openModalBackdrop();
   document.getElementById('cancel-outcome').onclick = closeModal;
   document.getElementById('save-outcome').onclick = async () => {
     try {
@@ -499,12 +549,14 @@ function renderBriefSections(sections, fallbackText) {
 }
 
 async function openBriefModal(prospectId) {
-  document.getElementById('modal').innerHTML = `
+  const modalEl = document.getElementById('modal');
+  modalEl.classList.add('modal-brief');
+  modalEl.innerHTML = `
     <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;">Brief me</h2>
     <p class="row-meta" style="margin:8px 0 12px;">Loading Max brief…</p>
     <button class="btn" id="brief-close">Close</button>
   `;
-  document.getElementById('modal-backdrop').classList.add('open');
+  openModalBackdrop();
   document.getElementById('brief-close').onclick = closeModal;
   try {
     const result = await api('/ao/api/max/prospect-brief', {
@@ -515,16 +567,20 @@ async function openBriefModal(prospectId) {
       }),
     });
     const title = result.brief_sections?.account_name || result.business_name || 'Account brief';
-    document.getElementById('modal').innerHTML = `
+    modalEl.innerHTML = `
       <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;">${title}</h2>
-      ${renderBriefSections(result.brief_sections, result.brief || result.reply)}
-      <div style="display:flex;gap:8px;margin-top:12px;">
+      <div class="modal-brief-scroll" id="modal-brief-scroll">
+        ${renderBriefSections(result.brief_sections, result.brief || result.reply)}
+      </div>
+      <div class="modal-brief-footer" style="display:flex;gap:8px;">
         <button class="btn primary" id="brief-close">Close</button>
       </div>
     `;
+    const scrollEl = document.getElementById('modal-brief-scroll');
+    if (scrollEl) scrollEl.scrollTop = 0;
     document.getElementById('brief-close').onclick = closeModal;
   } catch (err) {
-    document.getElementById('modal').innerHTML = `
+    modalEl.innerHTML = `
       <h2>Brief failed</h2><p class="warn">${err.message}</p>
       <button class="btn" id="brief-close">Close</button>
     `;
@@ -553,7 +609,7 @@ async function openFlagForJakeModal(prospectId) {
       <button class="btn" id="cancel-flag">Cancel</button>
     </div>
   `;
-  document.getElementById('modal-backdrop').classList.add('open');
+  openModalBackdrop();
   document.getElementById('cancel-flag').onclick = closeModal;
   document.getElementById('save-flag').onclick = async () => {
     try {
@@ -604,7 +660,7 @@ async function showDetail(prospectId) {
     <button class="btn primary" data-action="outcome" data-prospect="${prospectId}">Log outcome</button>
     <button class="btn" id="detail-close" style="margin-left:8px;">Close</button>
   `;
-  document.getElementById('modal-backdrop').classList.add('open');
+  openModalBackdrop();
   document.getElementById('detail-close').onclick = closeModal;
 }
 
