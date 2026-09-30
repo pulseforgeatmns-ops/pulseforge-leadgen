@@ -125,6 +125,13 @@ body {
   padding: 12px;
 }
 .modal-backdrop.open { display: flex; }
+.modal-backdrop.brief-modal {
+  z-index: 300;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+  overflow: hidden;
+}
 .modal {
   background: var(--pf-surface);
   width: 100%;
@@ -134,42 +141,41 @@ body {
   border-radius: 12px 12px 0 0;
   padding: 16px;
 }
+.brief-panel {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--pf-surface);
+  border-radius: 12px;
+  padding: 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.brief-section-body {
+  border: 1px solid var(--pf-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--pf-bg);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+html.modal-open,
 body.modal-open {
   overflow: hidden;
+  height: 100%;
+}
+body.modal-open {
   position: fixed;
   width: 100%;
   left: 0;
   right: 0;
-}
-@media (max-width: 720px) {
-  .modal-backdrop {
-    align-items: flex-start;
-    padding: 16px;
-    overflow: hidden;
-  }
-  .modal {
-    max-height: calc(100dvh - 32px);
-    border-radius: 12px;
-  }
-  .modal.modal-brief {
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    min-height: 0;
-  }
-  .modal.modal-brief .modal-brief-scroll {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-    overscroll-behavior: contain;
-    margin: 0 -4px;
-    padding: 0 4px;
-  }
-  .modal.modal-brief .modal-brief-footer {
-    flex-shrink: 0;
-    padding-top: 12px;
-  }
 }
 .field { margin-bottom: 12px; }
 .field label {
@@ -338,17 +344,34 @@ function renderPanels() {
 
 let modalScrollLockY = 0;
 
-function openModalBackdrop() {
+function openModalBackdrop({ brief = false } = {}) {
   modalScrollLockY = window.scrollY || 0;
   document.body.style.top = `-${modalScrollLockY}px`;
+  document.documentElement.classList.add('modal-open');
   document.body.classList.add('modal-open');
-  document.getElementById('modal-backdrop').classList.add('open');
+  const backdrop = document.getElementById('modal-backdrop');
+  backdrop.classList.toggle('brief-modal', brief);
+  backdrop.classList.add('open');
+}
+
+function resetBriefScrollPanel(panel) {
+  if (!panel) return;
+  const reset = () => { panel.scrollTop = 0; };
+  reset();
+  requestAnimationFrame(() => {
+    reset();
+    requestAnimationFrame(reset);
+  });
 }
 
 function closeModal() {
-  document.getElementById('modal-backdrop').classList.remove('open');
-  document.getElementById('modal').classList.remove('modal-brief');
-  document.getElementById('modal').innerHTML = '';
+  const backdrop = document.getElementById('modal-backdrop');
+  const modalEl = document.getElementById('modal');
+  backdrop.classList.remove('open', 'brief-modal');
+  modalEl.className = 'modal';
+  modalEl.scrollTop = 0;
+  modalEl.innerHTML = '';
+  document.documentElement.classList.remove('modal-open');
   document.body.classList.remove('modal-open');
   document.body.style.top = '';
   window.scrollTo(0, modalScrollLockY);
@@ -533,7 +556,7 @@ function openOutcomeModal(prospectId, taskId) {
 
 function renderBriefSections(sections, fallbackText) {
   if (!sections) {
-    return `<div class="draft-box">${(fallbackText || '').replace(/</g, '&lt;')}</div>`;
+    return `<div class="brief-section-body" data-brief-first-block data-brief-last-block>${(fallbackText || '').replace(/</g, '&lt;')}</div>`;
   }
   const blocks = [
     ['Where this stands', sections.where_this_stands || sections.why_this_account_matters],
@@ -543,20 +566,24 @@ function renderBriefSections(sections, fallbackText) {
     ['What to listen for', sections.what_to_listen_for || sections.what_to_watch_for],
     ['Short talk track', sections.short_talk_track],
   ];
-  return blocks.map(([title, body]) => `
-    <div class="detail-block"><h3>${title}</h3><div class="draft-box">${String(body || '—').replace(/</g, '&lt;')}</div></div>
+  return blocks.map(([title, body], index) => `
+    <div class="detail-block brief-block"${index === 0 ? ' data-brief-first-block' : ''}${index === blocks.length - 1 ? ' data-brief-last-block' : ''}>
+      <h3>${title}</h3>
+      <div class="brief-section-body">${String(body || '—').replace(/</g, '&lt;')}</div>
+    </div>
   `).join('');
 }
 
 async function openBriefModal(prospectId) {
   const modalEl = document.getElementById('modal');
-  modalEl.classList.add('modal-brief');
+  modalEl.className = 'brief-panel';
   modalEl.innerHTML = `
     <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;">Brief me</h2>
     <p class="row-meta" style="margin:8px 0 12px;">Loading Max brief…</p>
     <button class="btn" id="brief-close">Close</button>
   `;
-  openModalBackdrop();
+  openModalBackdrop({ brief: true });
+  resetBriefScrollPanel(modalEl);
   document.getElementById('brief-close').onclick = closeModal;
   try {
     const result = await api('/ao/api/max/prospect-brief', {
@@ -569,21 +596,19 @@ async function openBriefModal(prospectId) {
     const title = result.brief_sections?.account_name || result.business_name || 'Account brief';
     modalEl.innerHTML = `
       <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;">${title}</h2>
-      <div class="modal-brief-scroll" id="modal-brief-scroll">
-        ${renderBriefSections(result.brief_sections, result.brief || result.reply)}
-      </div>
-      <div class="modal-brief-footer" style="display:flex;gap:8px;">
+      ${renderBriefSections(result.brief_sections, result.brief || result.reply)}
+      <div style="display:flex;gap:8px;margin-top:12px;">
         <button class="btn primary" id="brief-close">Close</button>
       </div>
     `;
-    const scrollEl = document.getElementById('modal-brief-scroll');
-    if (scrollEl) scrollEl.scrollTop = 0;
+    resetBriefScrollPanel(modalEl);
     document.getElementById('brief-close').onclick = closeModal;
   } catch (err) {
     modalEl.innerHTML = `
       <h2>Brief failed</h2><p class="warn">${err.message}</p>
       <button class="btn" id="brief-close">Close</button>
     `;
+    resetBriefScrollPanel(modalEl);
     document.getElementById('brief-close').onclick = closeModal;
   }
 }

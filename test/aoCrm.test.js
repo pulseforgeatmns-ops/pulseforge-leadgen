@@ -59,11 +59,12 @@ test('CRM pages reference durable account views', () => {
   assert.match(mgr, /manager\/accounts/);
 });
 
-test('AO CRM Brief Me modal keeps long briefs within the mobile viewport', () => {
+test('AO CRM Brief Me modal uses one brief-panel scroll container', () => {
   const crm = fs.readFileSync(path.join(__dirname, '..', 'public', 'ao-crm.html'), 'utf8');
-  assert.match(crm, /max-height:\s*calc\(100dvh - 32px\)/);
-  assert.match(crm, /modal-brief-scroll/);
-  assert.match(crm, /body\.modal-open/);
+  assert.match(crm, /\.brief-modal/);
+  assert.match(crm, /\.brief-panel/);
+  assert.match(crm, /brief-section-body/);
+  assert.match(crm, /resetBriefScrollPanel/);
   assert.match(crm, /openModalBackdrop/);
 });
 
