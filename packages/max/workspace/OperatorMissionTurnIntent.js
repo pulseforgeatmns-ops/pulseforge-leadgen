@@ -5,6 +5,12 @@
  * Status queries are read-only unless explicit mission approval language is also present.
  */
 
+const {
+  splitClauses,
+  isVerbNegatedInClause,
+  isPureNegationClause,
+} = require('./MissionLifecycleIntent');
+
 const OPERATOR_TURN_INTENT_TYPES = Object.freeze({
   STATUS_QUERY: 'STATUS_QUERY',
   MISSION_APPROVAL: 'MISSION_APPROVAL',
@@ -22,20 +28,29 @@ const STATUS_QUERY_ACTIONS = Object.freeze({
   READ_PENDING_OPERATOR_APPROVAL_ITEMS: 'read_pending_operator_approval_items',
 });
 
-const EXPLICIT_MISSION_APPROVAL_RES = [
-  /\bapproved\b/i,
-  /\bapprove(?:d)?\s*,?\s*proceed\b/i,
-  /\byes\s+proceed\b/i,
-  /\b(?:yes|yeah|yep)\s*,?\s*proceed\b/i,
-  /\brun\s+it\b/i,
-  /\bexecute\b/i,
-  /\bstart\s+the\s+mission\b/i,
-  /\bcontinue\s+with\s+this\s+mission\b/i,
-  /\bgo\s+ahead\s+and\b/i,
-  /\bapproved\s*,?\s*proceed\b/i,
-  /\bproceed\s+with\b/i,
-  /\bbegin\s+discovery\b/i,
-  /\bapproved\.?\s*begin\b/i,
+const EXPLICIT_MISSION_APPROVAL_CLAUSE_RES = [
+  { re: /\bapproved\b/i, verbs: ['approve', 'approved'] },
+  { re: /\bapprove(?:d)?\s*,?\s*proceed\b/i, verbs: ['approve', 'approved'] },
+  { re: /\byes\s+proceed\b/i, verbs: null },
+  { re: /\b(?:yes|yeah|yep)\s*,?\s*proceed\b/i, verbs: null },
+  { re: /\brun\s+it\b/i, verbs: ['run'] },
+  { re: /\bexecute\b/i, verbs: ['execute'] },
+  { re: /\bstart\s+the\s+mission\b/i, verbs: ['start'] },
+  { re: /\bcontinue\s+with\s+this\s+mission\b/i, verbs: ['continue'] },
+  { re: /\bgo\s+ahead\s+and\b/i, verbs: null },
+  { re: /\bapproved\s*,?\s*proceed\b/i, verbs: ['approve', 'approved'] },
+  { re: /\bproceed\s+with\b/i, verbs: ['proceed'] },
+  { re: /\bbegin\s+discovery\b/i, verbs: ['begin'] },
+  { re: /\bapproved\.?\s*begin\b/i, verbs: ['approve', 'approved', 'begin'] },
+];
+
+/** SPEC-119 mission continuation — not AMO desk operational status reads. */
+const MISSION_ENGINE_CONTINUATION_STATUS_PROBE_RES = [
+  /^continue\.?$/i,
+  /^proceed\.?$/i,
+  /\bwhat(?:'s| is)\s+the\s+status\b/i,
+  /\bshow\s+progress\b/i,
+  /\bshow\s+(?:me\s+)?(?:the\s+)?(?:progress|status|evidence)\b/i,
 ];
 
 const STATUS_QUERY_RES = [
@@ -43,7 +58,6 @@ const STATUS_QUERY_RES = [
   /\bdo\s+we\s+have\b/i,
   /\bis\s+there\b/i,
   /\bare\s+there\b/i,
-  /\bwhat(?:'s| is)\s+the\s+status\b/i,
   /\bwhat(?:'s| is)\s+pending\b/i,
   /\bshow\s+me\b/i,
   /\bcheck\b/i,
@@ -78,10 +92,29 @@ const GENERAL_PENDING_APPROVAL_RES = [
 const APPROVAL_IN_QUESTION_CONTEXT_RE =
   /\b(?:for\s+me\s+to|to|i\s+can|i\s+should|need\s+to|waiting\s+(?:on|for\s+me\s+to))\s+approve\b/i;
 
-const BARE_GO_AHEAD_RE = /^(?:go\s+ahead|proceed|continue)\.?$/i;
+/** Ambiguous desk phrasing — not mission continuation (SPEC-119 uses bare continue/proceed). */
+const BARE_GO_AHEAD_RE = /^(?:go\s+ahead)\.?$/i;
 
 function normalizeText(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
+}
+
+function isMissionEngineContinuationStatusProbe(text) {
+  const q = normalizeText(text);
+  if (!q) return false;
+  return MISSION_ENGINE_CONTINUATION_STATUS_PROBE_RES.some((re) => re.test(q));
+}
+
+function clauseHasExplicitMissionApproval(clause) {
+  const trimmed = normalizeText(clause);
+  if (!trimmed || isPureNegationClause(trimmed)) return false;
+  if (/^(?:approve|approved)\.?$/i.test(trimmed)) return true;
+
+  return EXPLICIT_MISSION_APPROVAL_CLAUSE_RES.some(({ re, verbs }) => {
+    if (!re.test(trimmed)) return false;
+    if (!verbs) return true;
+    return !isVerbNegatedInClause(trimmed, verbs);
+  });
 }
 
 function hasExplicitMissionApprovalLanguage(text) {
@@ -91,12 +124,15 @@ function hasExplicitMissionApprovalLanguage(text) {
     return false;
   }
   if (/^(?:approve|approved)\.?$/i.test(q)) return true;
-  return EXPLICIT_MISSION_APPROVAL_RES.some((re) => re.test(q));
+
+  const clauses = splitClauses(q);
+  return clauses.some((clause) => clauseHasExplicitMissionApproval(clause));
 }
 
 function looksLikeOperationalStatusQuery(text) {
   const q = normalizeText(text);
   if (!q) return false;
+  if (isMissionEngineContinuationStatusProbe(q)) return false;
   if (/\?\s*$/.test(q) || /\b(?:does|do|is|are|what|show|check|any)\b/i.test(q)) {
     if (STATUS_QUERY_RES.some((re) => re.test(q))) return true;
     if (PAIGE_SOCIAL_STATUS_RES.some((re) => re.test(q))) return true;
@@ -130,6 +166,7 @@ function resolveStatusQueryAction(domain) {
  * @param {string} message
  * @param {object} [context]
  * @param {boolean} [context.hasSinglePendingOperatorApproval]
+ * @param {boolean} [context.missionContinuationRequested]
  * @returns {{
  *   type: string,
  *   domain?: string,
@@ -141,6 +178,18 @@ function resolveStatusQueryAction(domain) {
  */
 function classifyOperatorMissionTurnIntent(message, context = {}) {
   const q = normalizeText(message);
+
+  if (
+    context.missionContinuationRequested &&
+    isMissionEngineContinuationStatusProbe(q)
+  ) {
+    return {
+      type: OPERATOR_TURN_INTENT_TYPES.OTHER,
+      mutatesMissionState: false,
+      explicitApproval: false,
+    };
+  }
+
   const statusQuery = looksLikeOperationalStatusQuery(q);
 
   if (BARE_GO_AHEAD_RE.test(q)) {
@@ -190,8 +239,8 @@ function classifyOperatorMissionTurnIntent(message, context = {}) {
   };
 }
 
-function isOperationalStatusQuery(message) {
-  const intent = classifyOperatorMissionTurnIntent(message);
+function isOperationalStatusQuery(message, context = {}) {
+  const intent = classifyOperatorMissionTurnIntent(message, context);
   return intent.type === OPERATOR_TURN_INTENT_TYPES.STATUS_QUERY;
 }
 
@@ -208,5 +257,6 @@ module.exports = {
   hasExplicitMissionApprovalLanguage,
   looksLikeOperationalStatusQuery,
   isOperationalStatusQuery,
+  isMissionEngineContinuationStatusProbe,
   approvalWordInQuestionContextOnly,
 };

@@ -20,6 +20,7 @@ const {
   isOperationalStatusQuery,
   approvalWordInQuestionContextOnly,
 } = require('./OperatorMissionTurnIntent');
+const { selectExecutionDomain, EXECUTION_DOMAINS } = require('./ExecutionDomain');
 
 const MISSION_CREATE_COMMAND_RE =
   /\b(create|begin|start)\s+(?:a\s+)?(?:brand[- ]?new\s+)?(?:new\s+)?(?:acquisition\s+)?mission\b/i;
@@ -120,6 +121,10 @@ function isMissionExecutionCommand(text) {
   guardPostIntentParsing('isMissionExecutionCommand');
   const q = normalizeText(text);
   if (!q) return false;
+  const domainDecision = selectExecutionDomain(q);
+  if (domainDecision.domain === EXECUTION_DOMAINS.MISSION_DIAGNOSTICS) {
+    return false;
+  }
   if (isOperationalStatusQuery(q) && !hasExplicitMissionApprovalLanguage(q)) {
     return false;
   }

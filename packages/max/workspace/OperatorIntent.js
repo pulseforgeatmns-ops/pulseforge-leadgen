@@ -540,6 +540,7 @@ async function analyzeOperatorIntent(input = {}) {
     hasSinglePendingOperatorApproval: Boolean(
       mission && mission.pendingOperatorDecision && mission.pendingOperatorDecision.kind
     ),
+    missionContinuationRequested,
   });
   if (missionTurnIntent.type === OPERATOR_TURN_INTENT_TYPES.STATUS_QUERY) {
     operatorIntent.executionRequested = false;

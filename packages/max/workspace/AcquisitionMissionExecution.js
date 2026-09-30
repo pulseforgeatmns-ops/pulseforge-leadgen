@@ -1129,7 +1129,10 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved');
     return 'operator_approved';
   }
-  if (/\b(?:continue|proceed|resume|next)\b/i.test(q)) {
+  if (
+    /^(?:continue|proceed|resume|next)\.?$/i.test(q) ||
+    /\bcontinue\s+with\s+this\s+mission\b/i.test(q)
+  ) {
     if (hasPendingDiscoveryInvestigation(snapshot)) {
       askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_investigation_continued_continue');
       return 'discovery_investigation_continued';
