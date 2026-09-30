@@ -45,6 +45,13 @@ async function main(args = process.argv.slice(2)) {
       console.log(`Jev shadow review: latest ${options.limit} ${options.filter}; tenant ${options.tenantId || 'all'}`);
       console.log('Counts cover returned rows only. Warnings are observations for human review.');
       console.log(JSON.stringify(report.summary, null, 2));
+      console.log(`Deploy recommendation: ${report.deploy_recommendation}`);
+      if (report.summary.mismatch_pairs && Object.keys(report.summary.mismatch_pairs).length) {
+        console.log('Mismatch pairs:', JSON.stringify(report.summary.mismatch_pairs));
+      }
+      if (options.filter === 'warnings' && report.operator_warnings?.length) {
+        console.log(`Warning candidates: ${report.operator_warnings.length}`);
+      }
       const likely = new Set(report.likely_mission_inspections.map(row => row.decision_id));
       console.table(report.evaluations.map(row => ({
         timestamp: row.timestamp, decision_id: row.decision_id, tenant: row.tenant_id,
@@ -58,7 +65,7 @@ async function main(args = process.argv.slice(2)) {
     }
   } catch (error) {
     throw new Error(error.code === '42P01'
-      ? 'Apply migrations/2026-09-21-decision-shadow-review.sql before querying.'
+      ? 'Apply decision shadow migrations (2026-09-21 and 2026-09-30 JEV-006) before querying.'
       : 'Shadow review query failed; check database access and migration status.');
   } finally { await db.end(); }
 }

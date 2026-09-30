@@ -253,6 +253,7 @@ function pendingDecisionId(pendingDecision, missionId) {
 
 function logPendingDecisionCaptureGuarded(payload = {}) {
   const classification = payload.classification || null;
+  const pendingDecision = payload.pendingDecision || null;
   const row = {
     event: 'PENDING_DECISION_CAPTURE_GUARDED',
     spec: 'SPEC-JEV-004',
@@ -262,7 +263,8 @@ function logPendingDecisionCaptureGuarded(payload = {}) {
     pending_decision_id:
       payload.pendingDecisionId ||
       payload.pending_decision_id ||
-      pendingDecisionId(payload.pendingDecision, payload.missionId || payload.mission_id),
+      pendingDecisionId(pendingDecision, payload.missionId || payload.mission_id),
+    pending_decision_kind: pendingDecision?.kind || payload.pending_decision_kind || null,
     classification,
     reason:
       payload.reason ||
@@ -272,11 +274,22 @@ function logPendingDecisionCaptureGuarded(payload = {}) {
       typeof payload.messageChars === 'number'
         ? payload.messageChars
         : Number(payload.message_chars) || 0,
+    jev_would_reclassify: Boolean(payload.jevReason),
+    deterministic_guard_blocked: classification !== CAPTURE_INTENTS.DECISION_RESPONSE
+      && classification !== CAPTURE_INTENTS.AMBIGUOUS_SHORT_RESPONSE,
   };
   _auditLog.push(row);
   if (typeof process !== 'undefined' && process.env.NODE_ENV !== 'test') {
     console.info('[PENDING_DECISION_CAPTURE_GUARDED]', JSON.stringify(row));
   }
+  try {
+    const { buildGuardEvidenceRow } = require('../../decision-service/ShadowEvidenceRepository');
+    const { getDefaultShadowEvidenceSink } = require('../../decision-service/ShadowEvidenceSink');
+    getDefaultShadowEvidenceSink().write(buildGuardEvidenceRow({
+      ...row,
+      pendingDecisionKind: row.pending_decision_kind,
+    }));
+  } catch (_) { /* persistence cannot affect routing */ }
   return row;
 }
 

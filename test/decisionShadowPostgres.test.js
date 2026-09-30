@@ -34,8 +34,10 @@ test('real PostgreSQL: migration, full round trip, duplicate safety, review filt
     assert.equal(sink.stats().failed, 1);
     assert.equal(warnings[0].reason, 'write_failed');
     const migration = fs.readFileSync(path.join(root, 'migrations/2026-09-21-decision-shadow-review.sql'), 'utf8');
+    const migration006 = fs.readFileSync(path.join(root, 'migrations/2026-09-30-jev-006-shadow-observability.sql'), 'utf8');
     await db.query(migration);
     await db.query(migration);
+    await db.query(migration006);
     // A failed write did not poison the pool; no automatic retries occur.
     sink.write(fixture);
     await sink.drain();

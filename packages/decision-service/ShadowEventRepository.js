@@ -11,8 +11,11 @@ const FIELDS = Object.freeze([
   'requires_human_clarification', 'risk_if_misrouted', 'recommended_route',
   'route_matches', 'comparison', 'latency_ms', 'fallback_provider',
   'fallback_reason', 'errors', 'timestamp', 'raw_redacted_response',
+  'mission_stage', 'prod_route', 'prod_action', 'prod_kind',
+  'pending_decision_present', 'pending_decision_kind', 'mismatch_classification',
+  'route_comparable', 'error_reason', 'message_pattern_flags',
 ]);
-const JSON_FIELDS = new Set(['current_route', 'errors', 'raw_redacted_response']);
+const JSON_FIELDS = new Set(['current_route', 'errors', 'raw_redacted_response', 'message_pattern_flags']);
 const INSERT = `INSERT INTO decision_shadow_events (${FIELDS.join(', ')})
   VALUES (${FIELDS.map((_, i) => `$${i + 1}`).join(', ')})
   ON CONFLICT (decision_id) DO NOTHING`;

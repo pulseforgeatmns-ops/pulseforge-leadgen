@@ -18,7 +18,7 @@ test('repository preserves every field and nested data with bound parameters and
   await insertShadowEvent({ query: async (text, params) => { sql = text; values = params; } }, row);
   assert.deepEqual([...FIELDS].sort(), Object.keys(row).sort());
   for (const [i, field] of FIELDS.entries()) {
-    assert.deepEqual(['errors', 'current_route', 'raw_redacted_response'].includes(field)
+    assert.deepEqual(['errors', 'current_route', 'raw_redacted_response', 'message_pattern_flags'].includes(field)
       ? JSON.parse(values[i]) : values[i], row[field]);
   }
   assert.match(sql, /ON CONFLICT \(decision_id\) DO NOTHING/);
@@ -57,9 +57,10 @@ test('known production mismatch is prominent; confidence thresholds do not fabri
     { intent: 'approval', recommended_route: 'approval' },
   ]) assert.equal(classifyDecisionMismatch({ ...fixture, ...patch }), null, JSON.stringify(patch));
   const error = { ...fixture, status: 'error', comparison: 'unavailable', intent: null,
+    route_comparable: false, recommended_route: null,
     errors: [{ code: 'http_error', http_status: 401 }] };
   const report = buildShadowReview([fixture, error, { ...fixture, comparison: 'match', route_matches: true },
-    { ...fixture, status: 'fallback', comparison: 'unavailable' }]);
+    { ...fixture, status: 'fallback', comparison: 'unavailable', route_comparable: false, recommended_route: null }]);
   assert.equal(report.summary.total, 4);
   assert.equal(report.summary.mismatches, 1);
   assert.equal(report.summary.mismatch_rate, 0.5);

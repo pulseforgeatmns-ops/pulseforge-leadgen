@@ -14,5 +14,10 @@
   "approval_probability": 0.07, "inspection_probability": 0.93, "requires_human_clarification": false,
   "risk_if_misrouted": "low", "recommended_route": "inspection", "route_matches": false,
   "comparison": "mismatch", "model": "jev-1.13.0", "raw_redacted_response": null,
-  "latency_ms": 432, "fallback_provider": null, "fallback_reason": null, "errors": []
+  "latency_ms": 432, "fallback_provider": null, "fallback_reason": null, "errors": [],
+  "mission_stage": null, "prod_route": "conversation", "prod_action": null, "prod_kind": null,
+  "pending_decision_present": false, "pending_decision_kind": null,
+  "mismatch_classification": "likely_mission_inspection_misroute",
+  "route_comparable": true, "error_reason": null,
+  "message_pattern_flags": { "status_inspection": true, "approval_like": false, "rejection_like": false, "has_question_mark": false, "word_count_bucket": "medium", "intent_bucket": "ca1cabe3fae22b4f" }
 }
