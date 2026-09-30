@@ -17,9 +17,7 @@ describe('Penny tenant-scoped daily review', () => {
     const calls = { logs: [], saved: [] };
     const result = await run({ client_id: 10 }, {
       pool: {},
-      db: {
-        async logAgentAction(...args) { calls.logs.push(args); },
-      },
+      async logAgentAction(...args) { calls.logs.push(args); },
       async getClientConfig(clientId) {
         assert.equal(clientId, 10);
         return { id: 10, name: 'Anchor Cleaning', business_name: 'Anchor Cleaning' };
@@ -62,8 +60,8 @@ describe('Penny tenant-scoped daily review', () => {
     });
     assert.equal(calls.saved.length, 1);
     assert.equal(calls.saved[0].clientId, 10);
-    assert.equal(calls.logs.at(-1)[1], 'run');
-    assert.equal(calls.logs.at(-1)[4].client_id, 10);
+    assert.equal(calls.logs.at(-1)[0], 'run');
+    assert.equal(calls.logs.at(-1)[1].client_id, 10);
   });
 
   it('fails closed when Penny is not enabled for the tenant', async () => {

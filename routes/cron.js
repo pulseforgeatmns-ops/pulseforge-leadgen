@@ -209,6 +209,40 @@ async function runCronAgent(agent, res, query = {}) {
   }
 }
 
+async function handlePennyDailyReviewCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const clientId = normalizeClientId(
+    req.body?.client_id || req.body?.clientId || req.query.client_id || req.query.clientId || 10
+  );
+  const dispatchGate = await isAgentEnabledForClient(clientId, 'penny');
+  if (!dispatchGate.allowed) {
+    await logBlockedDispatch({
+      agentName: 'penny',
+      clientId,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      channel: 'daily_cron',
+      payload: { triggered_by: 'penny_daily_review' },
+    });
+    return res.status(403).json({
+      success: false,
+      skipped: true,
+      reason: dispatchGate.reason || BLOCK_REASON,
+      agent: 'penny',
+      client_id: clientId,
+    });
+  }
+  try {
+    const result = await require('../pennyAgent').run({ client_id: clientId });
+    return res.set('Cache-Control', 'no-store').json({ success: true, agent: 'penny', ...result });
+  } catch (err) {
+    console.error('[cron] penny-daily error:', err.message);
+    return res.status(500).json({ success: false, error: err.message, agent: 'penny', client_id: clientId });
+  }
+}
+
 async function handleExecuteAnchorOneOutboundCron(req, res) {
   const secret = req.body?.secret || req.query.secret;
   if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
@@ -589,6 +623,7 @@ async function handleScoutPlacesDiagnostic(req, res) {
 
 router.post('/cron/scoutExpansion', handleScoutExpansionCron);
 router.get('/cron/scoutExpansion', handleScoutExpansionCron);
+router.post('/cron/penny-daily', handlePennyDailyReviewCron);
 router.post('/cron/pulse-health', handlePulseHealthCron);
 router.get('/cron/pulse-health', handlePulseHealthCron);
 // Dedicated path (preferred). Also registered in /cron/:agent dispatcher below so
@@ -677,6 +712,7 @@ router.get('/cron/:agent', async (req, res) => {
 module.exports = router;
 module.exports.handleScoutPlacesDiagnostic = handleScoutPlacesDiagnostic;
 module.exports.handleSeedDirectMailAoCron = handleSeedDirectMailAoCron;
+module.exports.handlePennyDailyReviewCron = handlePennyDailyReviewCron;
 module.exports.handleExecuteAnchorOneOutboundCron = handleExecuteAnchorOneOutboundCron;
 module.exports.handleInspectAnchorCanonicalOutboundCron = handleInspectAnchorCanonicalOutboundCron;
 module.exports.handleRecoverAnchorCanonicalOutboundCron = handleRecoverAnchorCanonicalOutboundCron;
