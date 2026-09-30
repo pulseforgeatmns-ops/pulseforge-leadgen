@@ -402,10 +402,6 @@ function webglAvailable() {
 function shouldRenderObject() {
   if (reduceMotion.matches) return false;
   if (!webglAvailable()) return false;
-  // The live production trace showed that compiling three WebGL stages can
-  // stall the main thread on phone and tablet graphics even when WebGL exists.
-  // At those widths, the CSS composition is the intended treatment.
-  if (window.innerWidth < 992) return false;
   if (navigator.connection?.saveData) return false;
   if (typeof navigator.deviceMemory === 'number' && navigator.deviceMemory < 2) return false;
   return true;
@@ -414,36 +410,45 @@ function shouldRenderObject() {
 function loadObject(stages) {
   if (!shouldRenderObject()) return;
 
-  let requested = false;
-  const start = () => {
-    if (requested) return;
-    requested = true;
-    import('./dimensional.js')
+  /* Import once, but construct each renderer only when its own stage is close.
+     Phones and tablets keep the approved object while avoiding the long task
+     caused by compiling all three scenes together. */
+  let modulePromise = null;
+  const queued = new WeakSet();
+  const stageByRoot = new WeakMap(stages.map((stage) => [stage.root, stage]));
+  const loadModule = () => {
+    modulePromise ??= import('./dimensional.js');
+    return modulePromise;
+  };
+
+  const start = (stage) => {
+    if (!stage.canvas || stage.object || queued.has(stage)) return;
+    queued.add(stage);
+    loadModule()
       .then(({ createDimensionalObject }) => {
-        for (const stage of stages) {
-          if (!stage.canvas) continue;
-          const object = createDimensionalObject(stage.canvas, { mode: stage.mode });
-          if (object) stage.attachObject(object);
-        }
+        const object = createDimensionalObject(stage.canvas, { mode: stage.mode });
+        if (object) stage.attachObject(object);
       })
       .catch(() => {
         /* The baseline composition is already on screen. Nothing to recover. */
       });
   };
 
-  // Request when the first stage is within a screen of the viewport.
   const observer = new IntersectionObserver(
     (entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) {
-        observer.disconnect();
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        observer.unobserve(entry.target);
+        const stage = stageByRoot.get(entry.target);
+        if (!stage) continue;
         if ('requestIdleCallback' in window) {
-          requestIdleCallback(start, { timeout: 1200 });
+          requestIdleCallback(() => start(stage), { timeout: 900 });
         } else {
-          setTimeout(start, 200);
+          setTimeout(() => start(stage), 100);
         }
       }
     },
-    { rootMargin: '100% 0px 100% 0px' }
+    { rootMargin: '35% 0px 35% 0px' }
   );
   stages.forEach((stage) => observer.observe(stage.root));
 }
