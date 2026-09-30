@@ -369,10 +369,11 @@ Adaptations, and why:
   three.js keeps GPU state per renderer, so there is no reason to build the
   same six plates or rasterise the same six patterns three times.
 - **Loaded last, and conditionally.** Dynamically imported, gated on WebGL
-  support, `prefers-reduced-motion`, viewport width, `saveData` and
-  `deviceMemory`, and then deferred again to `requestIdleCallback`. Phone and
-  tablet widths use the complete CSS composition after live production tracing
-  showed that compiling three WebGL stages could stall their main thread.
+  support, `prefers-reduced-motion`, `saveData` and `deviceMemory`, and then
+  deferred again to `requestIdleCallback`. The module is fetched once, while
+  each renderer is constructed only when its own stage approaches the viewport.
+  This preserves the approved phone and tablet object without compiling three
+  WebGL scenes in one main-thread task.
 
 Both stages keep the canvas `aria-hidden="true"`. Every layer name, question
 and evidence class lives in the document, so the narrative survives with the
@@ -679,12 +680,12 @@ complete list:
    environments. One hue family preserved.
 2. **No refractive transmission on the plates** — performance. Material
    character preserved through clearcoat, opacity and environment reflection.
-3. **CSS composition on phones and tablets** — live production tracing found
-   that initializing three WebGL stages could block the main thread on narrow
-   devices with integrated graphics. Below 992px, the existing complete CSS
-   composition is now the intended treatment. Desktop retains the approved
-   dimensional materials, subject to reduced motion, data saving, low memory
-   and WebGL availability.
+3. **Per-stage WebGL initialization** — live production tracing found that
+   initializing three WebGL stages together could block the main thread on
+   integrated graphics. Every capable viewport retains the approved dimensional
+   materials; each stage now initializes only as it approaches. The complete CSS
+   composition remains the fallback for reduced motion, data saving, low memory
+   and missing WebGL.
 4. **Colophon publishes budgets, not measurements** — a measured figure baked
    into static HTML would become a false claim the first time it drifted.
 5. **Case study outcome withheld** — §16 integrity applied to our own work.

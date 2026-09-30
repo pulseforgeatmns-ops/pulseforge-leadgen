@@ -998,7 +998,7 @@ describe('Progressive enhancement (doctrine §18)', () => {
     assert.match(orchestration, /import\(\s*['"]\.\/dimensional\.js['"]\s*\)/);
   });
 
-  it('keeps the dimensional object off narrow graphics paths and honours resource preferences', () => {
+  it('keeps the approved renderer available at every launch viewport and honours resource preferences', () => {
     const gate = orchestration.slice(
       orchestration.indexOf('function shouldRenderObject()'),
       orchestration.indexOf('function loadObject(')
@@ -1011,16 +1011,24 @@ describe('Progressive enhancement (doctrine §18)', () => {
       { matches: options.reduced ?? false },
       () => options.webgl ?? true
     );
-    for (const width of [360, 390, 768]) {
-      assert.equal(check(width), false, `${width}px uses the complete CSS composition`);
-    }
-    for (const width of [992, 1280, 1600]) {
+    for (const width of [390, 768, 1280, 1600]) {
       assert.equal(check(width), true, `capable ${width}px devices receive the dimensional object`);
       assert.equal(check(width, { reduced: true }), false);
       assert.equal(check(width, { saveData: true }), false);
       assert.equal(check(width, { memory: 1 }), false);
       assert.equal(check(width, { webgl: false }), false);
     }
+  });
+
+  it('constructs dimensional stages individually instead of compiling all three together', () => {
+    const loader = orchestration.slice(
+      orchestration.indexOf('function loadObject('),
+      orchestration.indexOf('/* --------------------------------------------------------------------------\n   Boot')
+    );
+    assert.match(loader, /start = \(stage\)/);
+    assert.match(loader, /createDimensionalObject\(stage\.canvas/);
+    assert.match(loader, /observer\.unobserve/);
+    assert.doesNotMatch(loader, /for \(const stage of stages\)[\s\S]*createDimensionalObject/);
   });
 
   it('excludes the decorative canvas from the accessibility tree', () => {
@@ -1252,8 +1260,13 @@ describe('Responsive intent (doctrine §17)', () => {
     }
   });
 
-  it('treats the CSS composition as the intended small-screen object', () => {
-    assert.match(orchestration, /the CSS composition is the intended treatment/);
+  it('keeps the CSS composition as the small-screen fallback without replacing the approved renderer', () => {
+    assert.match(html, /Baseline dimensional composition\. Requires no WebGL/);
+    const gate = orchestration.slice(
+      orchestration.indexOf('function shouldRenderObject()'),
+      orchestration.indexOf('function loadObject(')
+    );
+    assert.doesNotMatch(gate, /innerWidth/);
   });
 });
 

@@ -96,84 +96,50 @@ function httpStatus(url) {
   });
 }
 
+function sameSha(current, floor) {
+  if (!current || !floor) return false;
+  return current === floor || current.startsWith(floor) || floor.startsWith(current);
+}
+
+function compareStatusAtOrAfter(status) {
+  return status === 'ahead' || status === 'identical';
+}
+
+function githubJson(path) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.github.com',
+      path,
+      headers: { 'User-Agent': 'pulseforge-spec-penny-gads-003' },
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 async function fetchMainHeadSha() {
-  return new Promise((resolve, reject) => {
-    const req = https.request({
-      hostname: 'api.github.com',
-      path: '/repos/pulseforgeatmns-ops/pulseforge-leadgen/commits/main',
-      headers: { 'User-Agent': 'pulseforge-spec-penny-gads-003' },
-    }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          resolve(parsed.sha || null);
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
+  const parsed = await githubJson('/repos/pulseforgeatmns-ops/pulseforge-leadgen/commits/main');
+  return parsed.sha || null;
 }
 
-function shasEqualOrPrefix(a, b) {
-  if (!a || !b) return false;
-  const left = String(a).trim().toLowerCase();
-  const right = String(b).trim().toLowerCase();
-  return left === right || left.startsWith(right) || right.startsWith(left);
-}
-
-function shaAtOrAfter(current, floor) {
-  return shasEqualOrPrefix(current, floor);
-}
-
-function localGitHeadAtOrAfterFloor(floorSha, headSha) {
-  if (!floorSha || !headSha) return false;
-  if (shasEqualOrPrefix(headSha, floorSha)) return true;
+async function shaAtOrAfter(current, floor) {
+  if (!current || !floor) return false;
+  if (sameSha(current, floor)) return true;
   try {
-    execFileSync('git', ['merge-base', '--is-ancestor', floorSha, headSha], {
-      cwd: path.join(__dirname, '..'),
-      stdio: 'ignore',
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function fetchGitHubCompareStatus(baseSha, headSha) {
-  return new Promise((resolve, reject) => {
-    const comparePath = `/repos/${GITHUB_REPO}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`;
-    const req = https.request({
-      hostname: 'api.github.com',
-      path: comparePath,
-      headers: { 'User-Agent': 'pulseforge-spec-penny-gads-003' },
-    }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          resolve(parsed.status || null);
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-async function mainHeadAtOrAfterDeployFloor(floorSha, headSha) {
-  if (!floorSha || !headSha) return false;
-  if (localGitHeadAtOrAfterFloor(floorSha, headSha)) return true;
-  try {
-    const status = await fetchGitHubCompareStatus(floorSha, headSha);
-    return status === 'ahead' || status === 'identical';
+    const parsed = await githubJson(
+      `/repos/pulseforgeatmns-ops/pulseforge-leadgen/compare/${floor}...${current}`
+    );
+    return compareStatusAtOrAfter(parsed.status);
   } catch {
     return false;
   }
@@ -381,6 +347,7 @@ async function run(options = {}) {
   }
 
   const googleAdsRows = adAccountsBeforeProbe.filter((row) => row.platform === 'google_ads');
+  const mainAtOrAfterFloor = await shaAtOrAfter(mainSha, DEPLOY_FLOOR_SHA);
   const pass =
     loginStatus === 200
     && mainAtOrAfterFloor
@@ -444,6 +411,8 @@ module.exports = {
   DEPLOY_FLOOR_SHA,
   parseArgs,
   envPresence,
+  sameSha,
+  compareStatusAtOrAfter,
   shaAtOrAfter,
   shasEqualOrPrefix,
   localGitHeadAtOrAfterFloor,

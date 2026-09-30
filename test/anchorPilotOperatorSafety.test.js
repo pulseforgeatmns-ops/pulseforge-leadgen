@@ -181,6 +181,8 @@ describe('Anchor Pilot 0 — route and shell wiring', () => {
       cronSource,
       /isAgentEnabledForClient[\s\S]{0,400}require\(CRON_MODULES/
     );
+    assert.match(cronSource, /\/cron\/penny-daily/);
+    assert.match(cronSource, /handlePennyDailyReviewCron/);
   });
 
   it('POST /api/clients/active checks tenant authorization', () => {
@@ -238,6 +240,31 @@ describe('Anchor Pilot 0 — cron dispatch HTTP', () => {
     const res = await fetch(url);
     const body = await res.json();
     assert.equal(res.status, 200);
+    assert.equal(body.skipped, true);
+    assert.equal(body.reason, 'agent_not_enabled_for_client');
+    assert.equal(body.client_id, 10);
+  });
+
+  it('penny daily cron requires the cron secret', async () => {
+    const res = await fetch(`${base}/cron/penny-daily`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client_id: 10 }),
+    });
+    assert.equal(res.status, 401);
+  });
+
+  it('penny daily cron fails closed when Penny is disabled for the tenant', async () => {
+    const res = await fetch(`${base}/cron/penny-daily`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        secret: 'anchor-pilot-test-secret',
+        client_id: 10,
+      }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 403);
     assert.equal(body.skipped, true);
     assert.equal(body.reason, 'agent_not_enabled_for_client');
     assert.equal(body.client_id, 10);
