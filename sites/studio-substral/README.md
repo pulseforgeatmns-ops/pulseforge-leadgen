@@ -22,6 +22,8 @@ assets/js/dimensional.js       GENERATED — three.js bundle, loaded on demand
                                 whole again — one specimen)
 assets/fonts/                  self-hosted Archivo + IBM Plex Mono (Latin)
 assets/brand/                  favicon.svg is the source; rasters are generated
+public/                        GENERATED — favicon.ico and root icon bundle for /
+                               (copied flat into the GitHub Pages publish root)
 assets/work/                   GENERATED — case-study capture
 src/dimensional.js             source for the three.js object
 build/                         build tooling, not published
@@ -32,7 +34,7 @@ build/                         build tooling, not published
 Deploy exactly these, and nothing else:
 
 ```
-index.html  robots.txt  sitemap.xml  CNAME  .nojekyll  assets/
+index.html  robots.txt  sitemap.xml  CNAME  .nojekyll  assets/  public/
 ```
 
 `build/`, `src/`, and the three markdown files are repository-only. Follow the

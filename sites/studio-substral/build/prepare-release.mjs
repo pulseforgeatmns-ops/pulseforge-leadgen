@@ -9,8 +9,16 @@ if (!destination || existsSync(destination)) throw new Error('Provide a new, emp
 const canonical = readFileSync(path.join(site, 'CNAME'), 'utf8').trim();
 if (canonical !== 'studiosubstral.com') throw new Error('Unexpected canonical domain');
 mkdirSync(destination, { recursive: true });
-for (const item of ['index.html', 'robots.txt', 'sitemap.xml', 'CNAME', '.nojekyll', 'assets']) {
-  cpSync(path.join(site, item), path.join(destination, item), { recursive: true });
+for (const item of ['index.html', 'robots.txt', 'sitemap.xml', 'CNAME', '.nojekyll', 'assets', 'public']) {
+  const source = path.join(site, item);
+  if (!existsSync(source)) continue;
+  if (item === 'public') {
+    for (const entry of readdirSync(source)) {
+      cpSync(path.join(source, entry), path.join(destination, entry), { recursive: true });
+    }
+    continue;
+  }
+  cpSync(source, path.join(destination, item), { recursive: true });
 }
 const manifest = {};
 function walk(directory) {

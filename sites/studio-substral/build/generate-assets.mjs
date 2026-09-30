@@ -16,7 +16,7 @@
  */
 
 import puppeteer from 'puppeteer';
-import { readFile, mkdir, stat } from 'node:fs/promises';
+import { readFile, mkdir, stat, writeFile, copyFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -24,7 +24,31 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const site = path.resolve(here, '..');
 const repo = path.resolve(site, '..', '..');
 const brand = path.join(site, 'assets', 'brand');
+const publicRoot = path.join(site, 'public');
 const work = path.join(site, 'assets', 'work');
+
+/** PNG-in-ICO container (16 + 32) — Safari and legacy browsers request /favicon.ico. */
+function buildIcoFromPngs(pngBuffers, sizes) {
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(pngBuffers.length, 4);
+  const entries = [];
+  let offset = 6 + 16 * pngBuffers.length;
+  pngBuffers.forEach((png, i) => {
+    const entry = Buffer.alloc(16);
+    const s = sizes[i];
+    entry[0] = s >= 256 ? 0 : s;
+    entry[1] = s >= 256 ? 0 : s;
+    entry.writeUInt16LE(1, 4);
+    entry.writeUInt16LE(32, 6);
+    entry.writeUInt32LE(png.length, 8);
+    entry.writeUInt32LE(offset, 12);
+    offset += png.length;
+    entries.push(entry);
+  });
+  return Buffer.concat([header, ...entries, ...pngBuffers]);
+}
 
 const only = process.argv[2] || 'all';
 const wanted = (name) => only === 'all' || only === name;
@@ -72,15 +96,20 @@ async function shoot({
 if (wanted('icons')) {
   console.log('Brand icons');
   await mkdir(brand, { recursive: true });
+  await mkdir(publicRoot, { recursive: true });
   const svg = await readFile(path.join(brand, 'favicon.svg'), 'utf8');
   const encoded = Buffer.from(svg).toString('base64');
 
-  for (const [file, size] of [
+  const rasterTargets = [
+    ['favicon-16x16.png', 16],
+    ['favicon-32x32.png', 32],
     ['favicon-32.png', 32],
     ['apple-touch-icon.png', 180],
     ['icon-192.png', 192],
     ['icon-512.png', 512],
-  ]) {
+  ];
+
+  for (const [file, size] of rasterTargets) {
     await shoot({
       width: size,
       height: size,
@@ -91,6 +120,42 @@ if (wanted('icons')) {
         <img src="data:image/svg+xml;base64,${encoded}" alt="">`,
     });
   }
+
+  const fav16 = await readFile(path.join(brand, 'favicon-16x16.png'));
+  const fav32 = await readFile(path.join(brand, 'favicon-32x32.png'));
+  const ico = buildIcoFromPngs([fav16, fav32], [16, 32]);
+  await writeFile(path.join(brand, 'favicon.ico'), ico);
+
+  const publicManifest = {
+    name: 'Studio Substral',
+    short_name: 'Substral',
+    description: 'Website diagnosis before website design. Manchester, New Hampshire.',
+    start_url: '/',
+    display: 'browser',
+    background_color: '#11110F',
+    theme_color: '#11110F',
+    icons: [
+      { src: '/favicon-32x32.png', sizes: '32x32', type: 'image/png' },
+      { src: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+      { src: '/assets/brand/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { src: '/assets/brand/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+  };
+  await writeFile(
+    path.join(brand, 'site.webmanifest'),
+    JSON.stringify(publicManifest, null, 2) + '\n'
+  );
+
+  for (const [from, to] of [
+    [path.join(brand, 'favicon.ico'), 'favicon.ico'],
+    [path.join(brand, 'favicon-16x16.png'), 'favicon-16x16.png'],
+    [path.join(brand, 'favicon-32x32.png'), 'favicon-32x32.png'],
+    [path.join(brand, 'apple-touch-icon.png'), 'apple-touch-icon.png'],
+    [path.join(brand, 'site.webmanifest'), 'site.webmanifest'],
+  ]) {
+    await copyFile(from, path.join(publicRoot, to));
+  }
+  console.log(`  ${path.relative(site, publicRoot)}/  (root favicon bundle)`);
 }
 
 /* --- Open Graph preview -------------------------------------------------- */
