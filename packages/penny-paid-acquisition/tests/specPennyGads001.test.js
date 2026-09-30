@@ -343,14 +343,53 @@ describe('SPEC-PENNY-GADS-001 — tenant-scoped account binding', () => {
     assert.equal(accounts[0].account_id, '111');
   });
 
-  it('returns structured readiness when credentials are missing', async () => {
+  it('warns but does not block readiness when developer token is absent (post-sunset OAuth access)', async () => {
     delete process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+    process.env.GOOGLE_ADS_CLIENT_ID = 'client-id';
+    process.env.GOOGLE_ADS_CLIENT_SECRET = 'client-secret';
+    const readiness = await assessGoogleAdsReadiness({
+      clientId: 10,
+      resolveAccounts: () => [{ id: 'a10', client_id: 10, platform: 'google_ads', account_id: '111', refresh_token: 'r10' }],
+      http: mockGoogleHttpSequence(),
+    });
+    assert.equal(readiness.credentialStatus, READINESS_STATE.READY);
+    assert.equal(readiness.accountStatus, READINESS_STATE.READY);
+    assert.ok(readiness.warnings.some((row) => /GOOGLE_ADS_DEVELOPER_TOKEN/i.test(row)));
+  });
+
+  it('returns structured readiness when OAuth client credentials are missing', async () => {
+    delete process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+    delete process.env.GOOGLE_ADS_CLIENT_ID;
+    delete process.env.GOOGLE_ADS_CLIENT_SECRET;
     const readiness = await assessGoogleAdsReadiness({
       clientId: 10,
       resolveAccounts: () => [{ id: 'a10', client_id: 10, platform: 'google_ads', account_id: '111', refresh_token: 'r10' }],
     });
     assert.equal(readiness.credentialStatus, READINESS_STATE.MISSING_CREDENTIALS);
     assert.ok(readiness.blockers.length);
+  });
+
+  it('omits developer-token header when env is unset but still sends OAuth bearer token', async () => {
+    delete process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+    process.env.GOOGLE_ADS_CLIENT_ID = 'client-id';
+    process.env.GOOGLE_ADS_CLIENT_SECRET = 'client-secret';
+    let searchHeaders = null;
+    const http = {
+      post: async (url, body, config) => {
+        if (url.includes('oauth2.googleapis.com/token')) {
+          return { data: { access_token: 'access-token-test' } };
+        }
+        searchHeaders = config?.headers || null;
+        return mockGoogleHttpSequence().post(url, body);
+      },
+    };
+    await readGoogleAdsEvidence({
+      account: { account_id: '987-654-3210', refresh_token: 'refresh', client_id: 10 },
+      http,
+    });
+    assert.ok(searchHeaders);
+    assert.equal(searchHeaders['developer-token'], undefined);
+    assert.match(searchHeaders.Authorization, /Bearer access-token-test/);
   });
 
   it('buildGoogleAdsReadinessInspection exposes operator-facing fields', () => {
