@@ -71,6 +71,7 @@
     operatorLayout: document.getElementById('cdOperatorLayout'),
     commandRail: document.getElementById('cdCommandRail'),
     todayChanges: document.getElementById('cdTodayChanges'),
+    googleAdsBrief: document.getElementById('cdGoogleAdsBrief'),
     needsJake: document.getElementById('cdNeedsJake'),
     mikeNext: document.getElementById('cdMikeNext'),
     aoDrillDown: document.getElementById('cdAoDrillDown'),
@@ -1603,6 +1604,7 @@
       'operatorLayout',
       'commandRail',
       'todayChanges',
+      'googleAdsBrief',
       'needsJake',
       'mikeNext',
       'aoDrillDown',
@@ -1906,6 +1908,36 @@
         : '<p class="cd-brief-empty">No field activity logged yet today.</p>'}
     `;
     els.todayChanges.hidden = false;
+
+    const gads = ob.googleAds;
+    if (els.googleAdsBrief && gads) {
+      const warnBlock = (() => {
+        const items = [...(gads.blockers || []), ...(gads.warnings || [])].filter(Boolean);
+        return items.length ? items.map((w) => escapeHtml(w)).join('; ') : 'none';
+      })();
+      const costPerConv = gads.costPerConversion == null
+        ? '—'
+        : `$${Number(gads.costPerConversion).toFixed(2)}`;
+      els.googleAdsBrief.innerHTML = `
+        <p class="cd-kicker" id="cdGoogleAdsHeading">${escapeHtml(gads.title || 'Paid Acquisition — Google Ads')}</p>
+        <dl class="cd-gads-metrics">
+          <div><dt>Status</dt><dd>${escapeHtml(gads.accountStatus || 'UNKNOWN')}</dd></div>
+          <div><dt>Spend</dt><dd>$${Number(gads.spend || 0).toFixed(2)}</dd></div>
+          <div><dt>Impressions</dt><dd>${escapeHtml(String(gads.impressions ?? 0))}</dd></div>
+          <div><dt>Clicks</dt><dd>${escapeHtml(String(gads.clicks ?? 0))}</dd></div>
+          <div><dt>CTR</dt><dd>${Number(gads.ctr || 0).toFixed(2)}%</dd></div>
+          <div><dt>Conversions</dt><dd>${escapeHtml(String(gads.conversions ?? 0))}</dd></div>
+          <div><dt>Cost / conversion</dt><dd>${costPerConv}</dd></div>
+          <div><dt>Active campaigns</dt><dd>${escapeHtml(String(gads.activeCampaignCount ?? 0))}</dd></div>
+          <div class="cd-gads-warn"><dt>Warnings/blockers</dt><dd>${warnBlock}</dd></div>
+        </dl>
+        <p class="cd-gads-action-label">Recommended next action:</p>
+        <p class="cd-gads-action">${escapeHtml(gads.recommendedNextAction || '')}</p>
+      `;
+      els.googleAdsBrief.hidden = false;
+    } else if (els.googleAdsBrief) {
+      els.googleAdsBrief.hidden = true;
+    }
 
     els.needsJake.innerHTML = `
       <p class="cd-kicker" id="cdNeedsJakeHeading">What Needs Jake</p>

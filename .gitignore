@@ -6,6 +6,7 @@ node_modules
 gmail_credentials.json
 gmail_token.json
 anchor_mailbox_token.json
+studio_substral_mailbox_token.json
 google_ads_credentials.json
 google_ads_token.json
 .env.anchor-google-ads

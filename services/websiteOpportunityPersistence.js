@@ -66,7 +66,8 @@ async function saveWebsiteOpportunityAssessment(pool, row) {
   if (existing.rows[0]) {
     const res = await pool.query(
       `UPDATE website_opportunity_assessments SET
-        mission_id = $2, prospect_id = $3, business_name = $5, industry = $7, location = $8,
+        mission_id = $2, prospect_id = $3, cohort_tag = $4,
+        business_name = $5, domain = $6, industry = $7, location = $8,
         payload = $9::jsonb, opportunity_score = $10, confidence = $11,
         recommended_action = $12, score_components = $13::jsonb, economics = $14::jsonb,
         capability_version = $15, updated_at = NOW()

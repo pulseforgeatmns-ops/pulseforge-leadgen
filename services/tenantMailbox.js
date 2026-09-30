@@ -15,6 +15,7 @@ const {
   genericSmtpImapTlsOptions,
 } = require('../utils/mailNetwork');
 const { normalizeImapFlowFetchMessage } = require('../utils/mailHeaders');
+const { sanitizeMailboxError: sanitizeErrorMessage } = require('../utils/mailboxErrorSanitizer');
 
 const PROVIDER_TYPES = Object.freeze({
   GENERIC_SMTP_IMAP: 'GENERIC_SMTP_IMAP',
@@ -110,6 +111,23 @@ const ANCHOR_MAILBOX_CONFIG = Object.freeze({
   oauthRefreshSecretRef: 'ANCHOR_GOOGLE_REFRESH_TOKEN',
 });
 
+const STUDIO_SUBSTRAL_MAILBOX_CONFIG = Object.freeze({
+  providerType: PROVIDER_TYPES.GOOGLE_WORKSPACE,
+  mailboxAddress: 'hello@studiosubstral.com',
+  displayName: 'Studio Substral',
+  senderEmail: 'hello@studiosubstral.com',
+  senderDisplayName: 'Studio Substral',
+  replyToAddress: 'hello@studiosubstral.com',
+  smtpHost: 'smtp.gmail.com',
+  smtpPort: 465,
+  smtpTlsMode: 'SSL_TLS',
+  imapHost: 'imap.gmail.com',
+  imapPort: 993,
+  imapTlsMode: 'SSL_TLS',
+  imapAuthMode: AUTH_MODES.GOOGLE_OAUTH2,
+  oauthRefreshSecretRef: 'STUDIO_SUBSTRAL_GOOGLE_REFRESH_TOKEN',
+});
+
 function clean(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -149,18 +167,6 @@ function asJson(value, fallback) {
   } catch (_err) {
     return fallback;
   }
-}
-
-function sanitizeErrorMessage(err) {
-  const raw = String(err?.message || err || 'unknown_error');
-  return raw
-    .replace(/password=([^&\s]+)/ig, 'password=[redacted]')
-    .replace(/pass=([^&\s]+)/ig, 'pass=[redacted]')
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/ig, 'Bearer [redacted]')
-    .replace(/access[_-]?token[=:\s]+[A-Za-z0-9._-]+/ig, 'access_token=[redacted]')
-    .replace(/refresh[_-]?token[=:\s]+[A-Za-z0-9._-]+/ig, 'refresh_token=[redacted]')
-    .replace(/auth[^,\n]+/ig, 'auth=[redacted]')
-    .slice(0, 500);
 }
 
 function mailboxError(code, message, extras = {}) {
@@ -258,8 +264,15 @@ function usesGoogleOAuthImap(integration) {
   return resolveImapAuthMode(integration) === AUTH_MODES.GOOGLE_OAUTH2;
 }
 
+function usesGoogleOAuthSmtp(integration) {
+  if (!integration) return false;
+  if (clean(integration.smtpSecretRef) || clean(integration.sharedSecretRef)) return false;
+  return usesGoogleOAuthImap(integration) && Boolean(clean(integration.smtpHost));
+}
+
 function isReplyOnlyMailbox(integration) {
   if (!integration) return false;
+  if (usesGoogleOAuthSmtp(integration)) return false;
   if (usesGoogleOAuthImap(integration)) return true;
   return !clean(integration.smtpHost) && !integration.smtpSecretRef && !integration.sharedSecretRef;
 }
@@ -298,22 +311,46 @@ function canResolveImapCredential(integration, opts = {}) {
   }
 }
 
+async function resolveGoogleOAuthAccess(integration, opts = {}) {
+  const refreshRef = integration.oauthRefreshSecretRef || integration.oauth_refresh_secret_ref;
+  const refreshToken = resolveSecretRef(refreshRef, opts);
+  const { getGoogleMailboxAccessToken } = require('../utils/googleMailboxOAuth');
+  const accessToken = await getGoogleMailboxAccessToken({
+    refreshToken,
+    env: opts.env || process.env,
+    forceRefresh: opts.forceRefreshOAuth === true,
+  });
+  return accessToken;
+}
+
 async function resolveImapAuth(integration, opts = {}) {
   if (usesGoogleOAuthImap(integration)) {
-    const refreshRef = integration.oauthRefreshSecretRef || integration.oauth_refresh_secret_ref;
-    const refreshToken = resolveSecretRef(refreshRef, opts);
-    const { getGoogleMailboxAccessToken } = require('../utils/googleMailboxOAuth');
-    const accessToken = await getGoogleMailboxAccessToken({
-      refreshToken,
-      env: opts.env || process.env,
-      forceRefresh: opts.forceRefreshOAuth === true,
-    });
+    const accessToken = await resolveGoogleOAuthAccess(integration, opts);
     return {
       mode: AUTH_MODES.GOOGLE_OAUTH2,
       auth: { user: integration.mailboxAddress, accessToken },
     };
   }
   const secret = resolveSecretRef(integration.imapSecretRef || integration.sharedSecretRef, opts);
+  return {
+    mode: AUTH_MODES.PASSWORD,
+    auth: { user: integration.mailboxAddress, pass: secret },
+  };
+}
+
+async function resolveSmtpAuth(integration, opts = {}) {
+  if (usesGoogleOAuthSmtp(integration)) {
+    const accessToken = await resolveGoogleOAuthAccess(integration, opts);
+    return {
+      mode: AUTH_MODES.GOOGLE_OAUTH2,
+      auth: {
+        type: 'OAuth2',
+        user: integration.mailboxAddress,
+        accessToken,
+      },
+    };
+  }
+  const secret = resolveSecretRef(integration.smtpSecretRef || integration.sharedSecretRef, opts);
   return {
     mode: AUTH_MODES.PASSWORD,
     auth: { user: integration.mailboxAddress, pass: secret },
@@ -1132,18 +1169,18 @@ async function ensureTenantMailboxSchema(pool = defaultPool) {
   `);
 }
 
-function createSmtpTransport(integration, secret, opts = {}) {
+function createSmtpTransport(integration, smtpAuth, opts = {}) {
   if (opts.transport) return opts.transport;
   const nodemailer = opts.nodemailer || require('nodemailer');
   const secure = clean(integration.smtpTlsMode).toUpperCase() === 'SSL_TLS' || Number(integration.smtpPort) === 465;
+  const auth = typeof smtpAuth === 'string'
+    ? { user: integration.mailboxAddress, pass: smtpAuth }
+    : (smtpAuth?.auth || smtpAuth);
   const transportOptions = {
     host: integration.smtpHost,
     port: Number(integration.smtpPort || 587),
     secure,
-    auth: {
-      user: integration.mailboxAddress,
-      pass: secret,
-    },
+    auth,
   };
 
   if (integration.providerType === PROVIDER_TYPES.GENERIC_SMTP_IMAP) {
@@ -1375,10 +1412,10 @@ async function sendTenantEmail(input = {}, opts = {}) {
     metadata: { ...(input.metadata || {}), idempotencyKey: key },
   });
 
-  let smtpSecret;
+  let smtpAuth;
   try {
-    smtpSecret = resolveSecretRef(integration.smtpSecretRef || integration.sharedSecretRef, opts);
-    const transport = createSmtpTransport(integration, smtpSecret, opts);
+    smtpAuth = await resolveSmtpAuth(integration, opts);
+    const transport = createSmtpTransport(integration, smtpAuth, opts);
     const from = identity.senderDisplayName
       ? `"${identity.senderDisplayName.replace(/"/g, '\\"')}" <${identity.senderEmail}>`
       : identity.senderEmail;
@@ -1436,7 +1473,7 @@ async function sendTenantEmail(input = {}, opts = {}) {
     });
     throw mailboxError(err.code || 'smtp_send_failed', sanitizeErrorMessage(err), { outboundMessage: message });
   } finally {
-    smtpSecret = null;
+    smtpAuth = null;
   }
 }
 
@@ -1611,11 +1648,11 @@ async function verifyTenantMailbox(input = {}, opts = {}) {
     state.smtp = { status: 'not_required', reason: 'reply_only_inbound' };
   } else {
     try {
-      const smtpSecret = resolveSecretRef(integration.smtpSecretRef || integration.sharedSecretRef, opts);
+      const smtpAuth = await resolveSmtpAuth(integration, opts);
       if (opts.smtpVerifier) {
-        await opts.smtpVerifier({ integration, secret: smtpSecret });
+        await opts.smtpVerifier({ integration, smtpAuth });
       } else {
-        const transport = createSmtpTransport(integration, smtpSecret, opts);
+        const transport = createSmtpTransport(integration, smtpAuth, opts);
         if (typeof transport.verify === 'function') await transport.verify();
       }
       state.smtp = { status: 'verified' };
@@ -1680,6 +1717,38 @@ function anchorMailboxConfig(tenantId = '10') {
   };
 }
 
+function studioSubstralMailboxConfig(tenantId = '17') {
+  return {
+    integration: {
+      id: `tmi_${tenantKey(tenantId)}_substral_hello`,
+      tenantId: tenantKey(tenantId),
+      providerType: STUDIO_SUBSTRAL_MAILBOX_CONFIG.providerType,
+      mailboxAddress: STUDIO_SUBSTRAL_MAILBOX_CONFIG.mailboxAddress,
+      displayName: STUDIO_SUBSTRAL_MAILBOX_CONFIG.displayName,
+      smtpHost: STUDIO_SUBSTRAL_MAILBOX_CONFIG.smtpHost,
+      smtpPort: STUDIO_SUBSTRAL_MAILBOX_CONFIG.smtpPort,
+      smtpTlsMode: STUDIO_SUBSTRAL_MAILBOX_CONFIG.smtpTlsMode,
+      imapHost: STUDIO_SUBSTRAL_MAILBOX_CONFIG.imapHost,
+      imapPort: STUDIO_SUBSTRAL_MAILBOX_CONFIG.imapPort,
+      imapTlsMode: STUDIO_SUBSTRAL_MAILBOX_CONFIG.imapTlsMode,
+      imapAuthMode: STUDIO_SUBSTRAL_MAILBOX_CONFIG.imapAuthMode,
+      oauthRefreshSecretRef: STUDIO_SUBSTRAL_MAILBOX_CONFIG.oauthRefreshSecretRef,
+      status: MAILBOX_STATUS.UNVERIFIED,
+      verificationState: {},
+    },
+    identity: {
+      id: `tsi_${tenantKey(tenantId)}_substral_hello`,
+      tenantId: tenantKey(tenantId),
+      mailboxIntegrationId: `tmi_${tenantKey(tenantId)}_substral_hello`,
+      senderEmail: STUDIO_SUBSTRAL_MAILBOX_CONFIG.senderEmail,
+      senderDisplayName: STUDIO_SUBSTRAL_MAILBOX_CONFIG.senderDisplayName,
+      replyToAddress: STUDIO_SUBSTRAL_MAILBOX_CONFIG.replyToAddress,
+      status: IDENTITY_STATUS.UNVERIFIED,
+      verificationState: {},
+    },
+  };
+}
+
 function babrunMailboxConfig(tenantId) {
   return {
     integration: {
@@ -1724,6 +1793,7 @@ module.exports = {
   EVENT_TYPES,
   BABRUN_MAILBOX_CONFIG,
   ANCHOR_MAILBOX_CONFIG,
+  STUDIO_SUBSTRAL_MAILBOX_CONFIG,
   MemoryTenantMailboxStore,
   PostgresTenantMailboxStore,
   ensureTenantMailboxSchema,
@@ -1733,6 +1803,8 @@ module.exports = {
   resolveSecretRef,
   resolveImapAuthMode,
   resolveImapAuth,
+  resolveSmtpAuth,
+  usesGoogleOAuthSmtp,
   sanitizeErrorMessage,
   isImapConfigured,
   isReplyOnlyMailbox,
@@ -1745,6 +1817,7 @@ module.exports = {
   markTenantSuppression,
   verifyTenantMailbox,
   babrunMailboxConfig,
+  studioSubstralMailboxConfig,
   anchorMailboxConfig,
   normalizeIntegration,
   normalizeIdentity,

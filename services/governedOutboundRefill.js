@@ -153,6 +153,16 @@ function observabilityFromRefill(plan = {}, extras = {}) {
   };
 }
 
+function finalizePreparationObservability(snapshot = {}) {
+  const prepareRequested = asNonNegInt(snapshot.prepareRequested);
+  const preparedAdded = asNonNegInt(snapshot.preparedAdded);
+  const prepareSkippedReason = snapshot.prepareSkippedReason || null;
+  if (prepareRequested > 0 && preparedAdded === 0 && !prepareSkippedReason) {
+    return { ...snapshot, prepareSkippedReason: 'preparation_not_executed' };
+  }
+  return snapshot;
+}
+
 async function selectRefillEntries({
   prepared,
   program,
@@ -314,6 +324,7 @@ module.exports = {
   remainingScheduleSlots,
   evaluatePreparationRefill,
   observabilityFromRefill,
+  finalizePreparationObservability,
   selectRefillEntries,
   selectInventoryRefillEntries,
   hash,

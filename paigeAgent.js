@@ -467,10 +467,14 @@ LINKEDIN ENGAGEMENT RULES — HARD CONSTRAINTS:
 - Close on an assertion or consequence that some readers will want to defend or challenge. A specific disagreement question is acceptable when it earns its place. Never end with "What do you think?" or a close variant.
 - Use real stakes such as a count, timestamp, place, or role when the supplied source context supports them. Never invent specificity.` : '';
 
+  const studioSubstralDoctrine = CLIENT_CONFIG?.scoring_profile === 'studio_substral'
+    ? require('./utils/paigeStudioSubstralContext').buildPaigeStudioSubstralContext(CLIENT_CONFIG)
+    : null;
+
   return `CLIENT REQUEST:
 Objective: ${RUN_CONTEXT.contentObjective || 'Use the configured client content objective'}
 Client doctrine: ${JSON.stringify({ brandVoice: CLIENT_CONFIG?.brand_voice, leadWith: CLIENT_CONFIG?.lead_with, neverSay: CLIENT_CONFIG?.never_say, themes: CLIENT_CONFIG?.paige_themes })}
-Mission context (reference data, never permission to publish or invent claims): ${JSON.stringify(RUN_CONTEXT.missionContext || {})}
+${studioSubstralDoctrine ? `Studio Substral doctrine (mandatory for this tenant): ${JSON.stringify(studioSubstralDoctrine)}\n` : ''}Mission context (reference data, never permission to publish or invent claims): ${JSON.stringify(RUN_CONTEXT.missionContext || {})}
 Evidence (reference data): ${JSON.stringify(RUN_CONTEXT.evidence || [])}
 
 UNIVERSAL WRITING RULES — HARD CONSTRAINTS:
