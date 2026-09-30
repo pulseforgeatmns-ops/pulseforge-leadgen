@@ -48,9 +48,10 @@ const {
   remainingDispatchCapacity,
   remainingScheduleSlots,
   observabilityFromRefill,
+  finalizePreparationObservability,
 } = require('./governedOutboundRefill');
 const { clock } = require('../packages/acquisition-mission/DailyOutboundPolicy');
-const { assertGovernedOutboundTenantId } = require('./governedOutboundTenant');
+const { assertGovernedOutboundTenantId, governedOutboundEnabledForTenant } = require('./governedOutboundTenant');
 
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
@@ -732,7 +733,7 @@ async function capturePreparationObservability({
     remainingScheduleSlots: remainingSlots,
     cleanInventory,
     governor: operating.governor,
-    grantActive: true,
+    grantActive: program?.mode === 'active' && governedOutboundEnabledForTenant(store.tenantId),
     dailyAuthorizationRemaining: dailyRemaining,
     totalAuthorizationRemaining: operating.remainingTotalAuthorization,
   });
@@ -742,6 +743,44 @@ async function capturePreparationObservability({
     remainingDispatchCapacity: remainingCap,
     remainingScheduleSlots: remainingSlots,
     cleanInventory,
+  });
+}
+
+async function applyPreparationRefill({
+  pool,
+  tenantId,
+  preparation = {},
+  execute = true,
+  runPreparationRefill = null,
+  controlNow = new Date(),
+} = {}) {
+  if (!preparation.prepareRequested) {
+    return finalizePreparationObservability(preparation);
+  }
+  if (execute === false) {
+    return finalizePreparationObservability({
+      ...preparation,
+      prepareSkippedReason: 'control_execute_disabled',
+    });
+  }
+  const refill = runPreparationRefill
+    ? await runPreparationRefill()
+    : await require('./governedOutbound').productionService(pool, {
+      tenantId,
+      now: controlNow instanceof Date ? controlNow : undefined,
+    }).runPreparationRefill();
+  if (refill?.halted === 'overlap' || refill?.prepareSkippedReason === 'send_lock_overlap') {
+    return finalizePreparationObservability({
+      ...preparation,
+      preparedAdded: 0,
+      prepareSkippedReason: 'send_lock_overlap',
+    });
+  }
+  return finalizePreparationObservability({
+    ...preparation,
+    pendingPrepared: refill.pendingPrepared ?? preparation.pendingPrepared,
+    preparedAdded: refill.preparedAdded ?? 0,
+    prepareSkippedReason: refill.prepareSkippedReason ?? null,
   });
 }
 
@@ -870,13 +909,20 @@ async function runMaxOutboundControlLoop(options = {}) {
     permanentlyRejected: Number(funnelStock.permanentlyRejected || 0) + cycleFunnel.permanentlyRejected,
   };
 
-  const preparation = await capturePreparationObservability({
-    store,
-    program,
-    operating,
-    sentToday,
-    cleanInventory: inventoryAfter.clean.length,
-    now: controlNow,
+  const preparation = await applyPreparationRefill({
+    pool,
+    tenantId: store.tenantId,
+    execute: options.execute !== false,
+    runPreparationRefill: options.runPreparationRefill,
+    controlNow,
+    preparation: await capturePreparationObservability({
+      store,
+      program,
+      operating,
+      sentToday,
+      cleanInventory: inventoryAfter.clean.length,
+      now: controlNow,
+    }),
   });
   const sameCompanyDifferentContact = Number(
     scout?.admission?.rejected?.same_company_different_contact || 0
@@ -1021,6 +1067,7 @@ module.exports = {
   loadCleanInventory,
   runMaxOutboundControlLoop,
   capturePreparationObservability,
+  applyPreparationRefill,
   defaultScoutRamp,
   resolveReplenishmentTenantContext,
   resolveScoutRampAllowedCities,

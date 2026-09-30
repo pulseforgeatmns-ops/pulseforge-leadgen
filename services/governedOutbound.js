@@ -10,6 +10,7 @@ const {
   selectRefillEntries,
   selectInventoryRefillEntries,
   observabilityFromRefill,
+  finalizePreparationObservability,
   PREPARATION_BATCH_LIMIT,
 } = require('./governedOutboundRefill');
 
@@ -399,6 +400,44 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       }, { sentToday, preparedAdded: selected.length }),
     };
   }
+  async function runPreparationRefill() {
+    const lockResult = await store.lock(async () => {
+      const program = await store.program();
+      if (!program) return { halted: 'no_program' };
+      if (program.mode === 'shadow') return { halted: 'shadow_mode' };
+      const day = clock(now()).day;
+      try {
+        const source = await validateProgram(program, false);
+        await store.expire(day);
+        const counts = await store.counts(program, day);
+        if (counts.uncertain) fail('uncertain_send_requires_reconciliation');
+        if (counts.total >= program.policy.totalCap || counts.today >= program.policy.dailyCap) fail('cap_reached');
+        if (!enabled()) fail('environment_kill_switch');
+        let envelope = await store.envelope(day);
+        if (!envelope) envelope = await prepare(program, source, day);
+        if (envelope.program_id !== program.id) fail('daily_envelope_already_used');
+        return refillEnvelope(program, source, day, envelope, counts);
+      } catch (error) {
+        return {
+          preparedAdded: 0,
+          prepareSkippedReason: error.code || error.message,
+        };
+      }
+    });
+    if (lockResult?.halted === 'overlap') {
+      return finalizePreparationObservability({
+        preparedAdded: 0,
+        prepareSkippedReason: 'send_lock_overlap',
+      });
+    }
+    if (lockResult?.halted) {
+      return finalizePreparationObservability({
+        preparedAdded: 0,
+        prepareSkippedReason: lockResult.halted,
+      });
+    }
+    return finalizePreparationObservability(lockResult || {});
+  }
   async function tick() {
     return store.lock(async () => {
       const program = await store.program();
@@ -487,15 +526,30 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       return { itemId, outcome, retryAllowed: outcome !== 'accepted' };
     });
   }
-  return { authorize, setMode, tick, reconcile, initializePreparation, replenish, resumeReservedPreparation, status: () => store.status(), store };
+  return {
+    authorize,
+    setMode,
+    tick,
+    runPreparationRefill,
+    reconcile,
+    initializePreparation,
+    replenish,
+    resumeReservedPreparation,
+    status: () => store.status(),
+    store,
+  };
 }
 
 function productionService(pool, options = {}) {
   const db = pool || require('../db');
   const tenantId = String(options.tenantId || '10');
+  const now = options.now instanceof Date
+    ? () => options.now
+    : (typeof options.now === 'function' ? options.now : undefined);
   return service({
     pool: db,
     tenantId,
+    ...(now ? { now } : {}),
     adapters: require('./governedOutboundAdapters').adapters(db, { tenantId }),
   });
 }
