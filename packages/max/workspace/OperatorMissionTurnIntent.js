@@ -90,6 +90,7 @@ function hasExplicitMissionApprovalLanguage(text) {
   if (APPROVAL_IN_QUESTION_CONTEXT_RE.test(q) && !/\b(?:approved|approve\s*,?\s*proceed|yes\s+proceed)\b/i.test(q)) {
     return false;
   }
+  if (/^(?:approve|approved)\.?$/i.test(q)) return true;
   return EXPLICIT_MISSION_APPROVAL_RES.some((re) => re.test(q));
 }
 
