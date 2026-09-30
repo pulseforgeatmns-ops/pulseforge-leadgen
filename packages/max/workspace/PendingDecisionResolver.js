@@ -51,6 +51,7 @@ const PENDING_ALLOWED_ACTIONS = Object.freeze({
     'cancel',
   ],
   [OPERATOR_DECISION_KINDS.PLAN_APPROVAL]: ['approve_plan', 'modify_mission', 'cancel'],
+  [OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION]: ['clarify_plan', 'modify_mission', 'cancel'],
   [OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL]: [
     'approve_execution',
     'revise_prepared_outreach',
@@ -73,6 +74,7 @@ const ACTION_EXECUTION_INTENT = Object.freeze({
   approve_prioritization: EXECUTION_INTENTS.APPROVE_PRIORITIZATION,
   approve_discovery: EXECUTION_INTENTS.APPROVE_DISCOVERY,
   approve_plan: EXECUTION_INTENTS.APPROVE_PLAN,
+  clarify_plan: EXECUTION_INTENTS.CLARIFY_PLAN,
   approve_execution: EXECUTION_INTENTS.APPROVE_EXECUTION,
   revise_prepared_outreach: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
   request_revision: EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH,
@@ -233,6 +235,26 @@ function classifyDiscoveryApproval(q) {
   return null;
 }
 
+function classifyPlanClarification(q, pending) {
+  if (isCancelPhrase(q)) {
+    return { outcome: RESOLUTION_OUTCOMES.REJECT, action: 'cancel', confidence: 0.95 };
+  }
+  if (isQuestionAboutDecision(q)) {
+    return null;
+  }
+  if (isModifyPhrase(q) && !/\b(?:decision\s*:\s*)?region\s*[=:]/i.test(q)) {
+    return { outcome: RESOLUTION_OUTCOMES.MODIFY, action: 'modify_mission', confidence: 0.9 };
+  }
+  if (
+    pending &&
+    pending.field === 'geography.region' &&
+    (/\b(?:decision\s*:\s*)?region\s*[=:]/i.test(q) || q.trim().length > 0)
+  ) {
+    return { outcome: RESOLUTION_OUTCOMES.AFFIRM, action: 'clarify_plan', confidence: 0.94 };
+  }
+  return null;
+}
+
 function classifyPlanApproval(q) {
   if (isCancelPhrase(q)) {
     return { outcome: RESOLUTION_OUTCOMES.REJECT, action: 'cancel', confidence: 0.95 };
@@ -302,13 +324,16 @@ const KIND_CLASSIFIERS = Object.freeze({
   [OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL]: classifyPrioritizationApproval,
   [OPERATOR_DECISION_KINDS.DISCOVERY_APPROVAL]: classifyDiscoveryApproval,
   [OPERATOR_DECISION_KINDS.PLAN_APPROVAL]: classifyPlanApproval,
+  [OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION]: classifyPlanClarification,
   [OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL]: classifyExecutionApproval,
 });
 
-function classifyByKind(kind, q) {
+function classifyByKind(kind, q, pending) {
   const classifier = KIND_CLASSIFIERS[kind];
   if (classifier) {
-    const match = classifier(q);
+    const match = kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION
+      ? classifier(q, pending)
+      : classifier(q);
     if (match) return match;
   }
   const defaultAction = DEFAULT_AFFIRM_ACTION[kind];
@@ -472,9 +497,20 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
     return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS);
   }
 
-  const classification = classifyByKind(pending.kind, q);
+  const classification = classifyByKind(pending.kind, q, pending);
   if (classification) {
     return buildResolution(mission, pending, classification, question);
+  }
+
+  if (
+    captureIntent === CAPTURE_INTENTS.DECISION_RESPONSE &&
+    pending.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION
+  ) {
+    return buildResolution(mission, pending, {
+      outcome: RESOLUTION_OUTCOMES.AFFIRM,
+      action: 'clarify_plan',
+      confidence: 0.88,
+    }, question);
   }
 
   if (captureIntent === CAPTURE_INTENTS.DECISION_RESPONSE) {

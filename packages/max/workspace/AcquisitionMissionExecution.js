@@ -167,6 +167,97 @@ function resolveChatOperatorId(input = {}) {
     || 'operator';
 }
 
+function operatorMessageIncludesApproval(question) {
+  return /\bapprov(e|al|ed)\b/i.test(String(question || ''));
+}
+
+function operatorMessageRequestsDiscovery(question) {
+  const q = String(question || '');
+  return (
+    /\b(?:scout|discover)\b/i.test(q) ||
+    /\bbegin\b.*\bdiscover/i.test(q) ||
+    /\bproceed with\b.*\bscout\b/i.test(q)
+  );
+}
+
+/**
+ * Compound planning turns: region clarification + plan approval (+ optional discovery) in one message.
+ */
+async function maybeChainPlanningAfterClarification(input, state = {}) {
+  let {
+    action,
+    executionResult,
+    snapshot,
+    mission,
+    tenantId,
+    engine,
+    audit,
+    question,
+    executionRequest,
+  } = state;
+
+  if (action !== 'plan_clarified' || !executionResult || executionResult.matched === false) {
+    return state;
+  }
+  if (!operatorMessageIncludesApproval(question)) {
+    return state;
+  }
+
+  snapshot = executionResult.snapshot || engine.inspect(mission.id, { tenantId });
+  if (!hasPendingPlanApproval(snapshot)) {
+    return state;
+  }
+
+  const planRouted = await submitChatExecutionRequest(input, {
+    intent: EXECUTION_INTENTS.APPROVE_PLAN,
+    mission: snapshot.mission || mission,
+    tenantId,
+    engine,
+    question,
+    audit,
+  });
+  action = planRouted.action || 'plan_approved';
+  executionResult = planRouted.executionResult;
+  executionRequest = planRouted.request;
+  snapshot = planRouted.snapshot || engine.inspect(mission.id, { tenantId });
+
+  const autoAdvanced = await maybeAutoAdvanceDiscoveryAfterPlan(input, {
+    snapshot,
+    structuredMission: executionResult && executionResult.structuredMission,
+    rolledBack: executionResult && executionResult.rolledBack,
+  });
+  if (autoAdvanced.discoveryResult) {
+    return {
+      action: autoAdvanced.action || 'discovery_approved',
+      executionResult: autoAdvanced.discoveryResult,
+      snapshot: autoAdvanced.snapshot || snapshot,
+      executionRequest: autoAdvanced.executionRequest || executionRequest,
+    };
+  }
+
+  if (
+    operatorMessageRequestsDiscovery(question) &&
+    shouldExecuteDiscovery('discovery_approved', snapshot)
+  ) {
+    const discoveryRouted = await submitChatExecutionRequest(input, {
+      intent: EXECUTION_INTENTS.APPROVE_DISCOVERY,
+      mission: snapshot.mission || mission,
+      tenantId,
+      engine,
+      question,
+      audit,
+    });
+    return {
+      action: discoveryRouted.action || 'discovery_approved',
+      executionResult: discoveryRouted.executionResult,
+      snapshot: discoveryRouted.snapshot || engine.inspect(mission.id, { tenantId }),
+      executionRequest: discoveryRouted.request,
+    };
+  }
+
+  return { action, executionResult, snapshot, executionRequest };
+}
+
 async function submitChatExecutionRequest(input, {
   intent,
   mission,
@@ -1300,6 +1391,24 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
     executionResult = routed.executionResult;
     action = routed.action || action;
     snapshot = routed.snapshot || engine.inspect(mission.id, { tenantId });
+  }
+
+  if (action === 'plan_clarified') {
+    const chained = await maybeChainPlanningAfterClarification(input, {
+      action,
+      executionResult,
+      snapshot,
+      mission,
+      tenantId,
+      engine,
+      audit,
+      question,
+      executionRequest,
+    });
+    action = chained.action;
+    executionResult = chained.executionResult;
+    snapshot = chained.snapshot || snapshot;
+    executionRequest = chained.executionRequest || executionRequest;
   }
 
   const response = buildExecutionMissionResponse({
