@@ -29,6 +29,7 @@ function readConfig(env = process.env) {
     timeoutMs: boundedInteger(env.JEV_TIMEOUT_MS, 1500, 10, 10000),
     maxPending: boundedInteger(env.DECISION_SHADOW_MAX_PENDING, 64, 1, 1000),
     logRaw: env.DECISION_SHADOW_LOG_RAW === 'true',
+    activeRouting: readActiveRoutingConfig(env),
   };
 }
 function selectProvider(config, fetchImpl) {
@@ -202,6 +203,71 @@ class DecisionService {
     this._write(this._row(base, { ...values, latency_ms: Math.round(performance.now() - started) }), { question, state });
   }
 
+  /**
+   * SPEC-JEV-006 — synchronous Jev evaluation for guarded active routing.
+   * Fail-closed: returns null when disabled, blocked, or provider errors.
+   */
+  async evaluateActiveRouting({ question, session, context, mission, source = 'workspace' } = {}) {
+    const active = this.config.activeRouting;
+    if (!active.enabled || !this.config.enabled || !String(question || '').trim()) {
+      return null;
+    }
+    if (this.provider.name !== 'jev') {
+      return { blockedReason: 'provider_not_jev' };
+    }
+    const input = { question, sessionId: session?.id, context };
+    const state = snapshotInput(input, session);
+    try {
+      if (mission) state.context.mission = missionSnapshot(mission);
+    } catch (_) { /* promotion cannot break routing */ }
+
+    const decisionId = randomUUID();
+    const started = performance.now();
+    const controller = new AbortController();
+    let timer;
+    try {
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error('Decision evaluation timed out');
+          error.code = 'timeout';
+          reject(error);
+          controller.abort();
+        }, this.config.timeoutMs);
+      });
+      const evaluation = await Promise.race([
+        Promise.resolve().then(() => this.provider.evaluate(state, { signal: controller.signal })),
+        timeout,
+      ]);
+      if (evaluation?.decision == null) {
+        return {
+          decision_id: decisionId,
+          blockedReason: evaluation?.fallback_reason || 'provider_fallback',
+          latency_ms: Math.round(performance.now() - started),
+          source,
+        };
+      }
+      const decision = parseDecision(evaluation.decision);
+      const assessment = assessJevDecisionForActivePromotion(decision, active);
+      return {
+        decision_id: decisionId,
+        decision,
+        assessment,
+        model: evaluation.model || null,
+        latency_ms: Math.round(performance.now() - started),
+        source,
+      };
+    } catch (error) {
+      return {
+        decision_id: decisionId,
+        blockedReason: safeError(error).code,
+        latency_ms: Math.round(performance.now() - started),
+        source,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Tests/shutdown callers may drain; production routing never awaits this. */
   async drain() {
     await Promise.all([...this._pending]);
@@ -221,4 +287,11 @@ function completeShadow(shadow, result, error) {
   catch (_) { /* including injected observer bugs */ }
 }
 
-module.exports = { DecisionService, readConfig, selectProvider, beginShadow, completeShadow };
+module.exports = {
+  DecisionService,
+  readConfig,
+  selectProvider,
+  beginShadow,
+  completeShadow,
+  readActiveRoutingConfig,
+};

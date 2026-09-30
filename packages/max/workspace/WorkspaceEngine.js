@@ -39,6 +39,7 @@ const {
   maybeHandleAcquisitionOwnershipTurn,
 } = require('./AcquisitionOwnership');
 const acquisitionMissionExecution = require('./AcquisitionMissionExecution');
+const { maybeHandleOperatorStatusQuery } = require('./OperatorStatusQueryRouter');
 const {
   resolveActiveMissionLock,
   guardExecutionDomain,
@@ -205,6 +206,7 @@ const {
 const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
 const askPathTrace = require('./audit/AskPathTrace');
 const { DecisionService, beginShadow, completeShadow } = require('../../decision-service/DecisionService');
+const { applyJevActiveRoutingPromotion } = require('./jevActiveRouting');
 
 /**
  * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 + SPEC-125 routing.
@@ -246,10 +248,12 @@ class WorkspaceEngine {
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
    * @param {object} [options.runtimeProvider] - SPEC-140 acquisition mission runtime provider (tests)
    * @param {DecisionService} [options.decisionService] - SPEC-JEV-001 shadow observer (tests)
+   * @param {typeof resolveWorkspaceOwner} [options.resolveWorkspaceOwner] - test seam (SPEC-JEV-006)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
     this._decisionService = options.decisionService || new DecisionService();
+    this._resolveWorkspaceOwner = options.resolveWorkspaceOwner || resolveWorkspaceOwner;
     this._presentation =
       options.presentation ||
       new PresentationEngine({
@@ -931,6 +935,17 @@ class WorkspaceEngine {
     // Snapshot the already-resolved mission before approval/execution mutates it.
     // The evaluator receives no production classification or authority to act.
     try { shadow?.captureMission(operatorIntent.mission); } catch (_) { /* shadow only */ }
+    let jevActiveRoutingEvaluation = null;
+    if (!miepInternal) {
+      try {
+        jevActiveRoutingEvaluation = await this._decisionService.evaluateActiveRouting({
+          question,
+          session,
+          context: rawContext || session.context,
+          mission: operatorIntent.mission,
+        });
+      } catch (_) { /* active routing is fail-closed */ }
+    }
     conversationSubject = operatorIntent.conversationSubject;
     conversationIntent = operatorIntent.conversationIntent;
     let resolvedQuestion = operatorIntent.resolvedQuestion;
@@ -1125,7 +1140,7 @@ class WorkspaceEngine {
     // SPEC-125 — Ownership-first runtime. Subject governs owner before business pipelines.
     const ownershipAudit =
       this._ownershipAudit || createWorkspaceOwnershipAudit();
-    workspaceOwnership = await resolveWorkspaceOwner({
+    workspaceOwnership = await this._resolveWorkspaceOwner({
       question,
       session,
       context: rawContext || session.context,
@@ -1139,9 +1154,36 @@ class WorkspaceEngine {
       resolverEnabled: this._resolverEnabled,
       ...this._amoRuntimeInput(),
     });
+    const jevPromotion = applyJevActiveRoutingPromotion({
+      workspaceOwnership,
+      evaluation: jevActiveRoutingEvaluation,
+      question,
+      session,
+      operatorIntent,
+      context: rawContext || session.context,
+      ...this._amoRuntimeInput(),
+    });
+    if (jevPromotion.applied) {
+      workspaceOwnership = jevPromotion.workspaceOwnership;
+      if (jevPromotion.objectivePatch && objectiveResolution) {
+        objectiveResolution = {
+          ...objectiveResolution,
+          ...jevPromotion.objectivePatch,
+          confidence: jevPromotion.workspaceOwnership.confidence,
+        };
+        if (session.context && typeof session.context === 'object') {
+          session.context.objectiveResolution = objectiveResolution;
+        }
+      }
+    }
+    if (session.context && typeof session.context === 'object') {
+      session.context.jevActiveRouting = jevPromotion.audit;
+      session.context.jevActiveRoutingEvaluation = jevActiveRoutingEvaluation;
+    }
     askPathTrace.traceOwner(workspaceOwnership.owner, workspaceOwnership.reason, {
       confidence: workspaceOwnership.confidence,
       fallback: workspaceOwnership.fallback || false,
+      jevPromotion: Boolean(jevPromotion.applied),
     });
     ownershipAudit.logOwnerSelected({
       ...workspaceOwnership,
@@ -1630,6 +1672,86 @@ class WorkspaceEngine {
               },
             }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
           }
+        }
+
+        const statusQueryTurn = await maybeHandleOperatorStatusQuery({
+          question,
+          session,
+          context: rawContext || session.context,
+          mission: runtimeDecision.mission || null,
+          missionId:
+            (runtimeDecision.mission && runtimeDecision.mission.id) ||
+            (session.context && session.context.missionId) ||
+            null,
+          hasSinglePendingOperatorApproval: Boolean(
+            runtimeDecision.mission &&
+              runtimeDecision.mission.pendingOperatorDecision &&
+              runtimeDecision.mission.pendingOperatorDecision.kind
+          ),
+        });
+        if (statusQueryTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredStatus = statusQueryTurn.structured;
+          const presentedStatus = await this._presentation.present(structuredStatus);
+          const proseStatus = presentedStatus.prose || statusQueryTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: proseStatus,
+            structured: structuredStatus,
+          });
+          return traceAskReturn('operator_status_query', {
+            sessionId: session.id,
+            prose: proseStatus,
+            structured: structuredStatus,
+            metadata: presentedStatus.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredStatus,
+              session,
+              question,
+            }),
+            recommendedActions: structuredStatus.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedStatus.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: runtimeDecision.mission || null,
+            resolution: {
+              action: 'status_query',
+              reason: statusQueryTurn.reason,
+            },
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            interrogation: null,
+            conversationIntent,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: statusQueryTurn.reason,
+              missionType: 'acquisition_mission',
+              missionIntent: conversationIntent.intent,
+              confidence: conversationIntent.confidence,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: statusQueryTurn.reason,
+              missionType: 'acquisition_mission',
+              missionId:
+                runtimeDecision.mission && runtimeDecision.mission.id
+                  ? runtimeDecision.mission.id
+                  : null,
+            },
+            workspaceOwnership: {
+              ...workspaceOwnership,
+              missionRuntime: MISSION_RUNTIMES.AMO,
+              missionType: 'acquisition_mission',
+            },
+          }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
         }
 
         const amoExecutionTurn = await acquisitionMissionExecution.maybeHandleAcquisitionMissionExecution({

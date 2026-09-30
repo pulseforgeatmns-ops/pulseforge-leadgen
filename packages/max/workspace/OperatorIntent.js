@@ -49,6 +49,10 @@ const {
   pendingDecisionOwnsTurn,
 } = require('./PendingDecisionResolver');
 const { THINKING_MODES: COGNITION_MODES } = require('../operatorCognition/ThinkingModes');
+const {
+  classifyOperatorMissionTurnIntent,
+  OPERATOR_TURN_INTENT_TYPES,
+} = require('./OperatorMissionTurnIntent');
 
 /**
  * @typedef {object} OperatorIntent
@@ -531,6 +535,31 @@ async function analyzeOperatorIntent(input = {}) {
 
   operatorIntent = applyConversationContractToIntent(operatorIntent, conversationContract);
   operatorIntent = applySessionStateToIntent(operatorIntent, sessionState);
+
+  const missionTurnIntent = classifyOperatorMissionTurnIntent(question, {
+    hasSinglePendingOperatorApproval: Boolean(
+      mission && mission.pendingOperatorDecision && mission.pendingOperatorDecision.kind
+    ),
+    missionContinuationRequested,
+  });
+  if (missionTurnIntent.type === OPERATOR_TURN_INTENT_TYPES.STATUS_QUERY) {
+    operatorIntent.executionRequested = false;
+    operatorIntent.planningRequested = false;
+    operatorIntent.mutatesMission = false;
+    operatorIntent.missionContinuationRequested = false;
+    operatorIntent.ownerHints = {
+      ...(operatorIntent.ownerHints || {}),
+      readOnly: true,
+      executionLanguagePresent: false,
+      missionContinuation: false,
+    };
+    operatorIntent.statusQuery = {
+      intent: missionTurnIntent.type,
+      domain: missionTurnIntent.domain || null,
+      action: missionTurnIntent.action || null,
+      mutatesMissionState: false,
+    };
+  }
 
   sealOperatorIntent(operatorIntent);
   return operatorIntent;
