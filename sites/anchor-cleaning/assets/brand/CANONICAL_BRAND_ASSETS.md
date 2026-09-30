@@ -29,6 +29,9 @@ Then rebuild `anchor-cleaning-brand-assets.zip` from the derived files in this f
 | `favicon-32x32-v20260916.png` | PNG favicon (symbol on navy) |
 | `apple-touch-icon-v20260916.png` | iOS home-screen icon (symbol on navy) |
 | `icon-192-v20260916.png` / `icon-512-v20260916.png` | Web manifest (symbol on navy) |
+| `google-ads-business-logo-v20260930.png` | **Google Ads account business logo** — symbol on navy, large mark / minimal padding (1200×1200 source) |
+| `google-ads-business-logo-512-v20260930.png` | Same composition at 512×512 (API / UI upload fallback) |
+| `google-ads-logo-size-test-v20260930.png` | Visual QA — new vs favicon-style padding at 24/32/40/64px |
 | `site.webmanifest` | PWA manifest |
 
 ## Usage rules
@@ -38,8 +41,17 @@ Then rebuild `anchor-cleaning-brand-assets.zip` from the derived files in this f
 | Facebook, Instagram, LinkedIn, GBP, Yelp profile photos | `social-avatar-v20260916.png` (full lockup) |
 | Website header / JSON-LD / OG preview | Full lockup |
 | Favicon, Apple touch, manifest icons | Symbol only |
+| Google Ads Search business logo (account → Business information) | `google-ads-business-logo-v20260930.png` — **not** favicon or full lockup |
 
 Do **not** use symbol-only for social profile avatars.
+
+Regenerate Google Ads logo after symbol source changes:
+
+```bash
+cd sites/anchor-cleaning && npm install sharp --no-save
+node assets/brand/generate-google-ads-business-logo.mjs
+node ../../scripts/auditAndReplaceAnchorGoogleAdsLogo.js --confirm-production --upload
+```
 
 All public URLs use absolute paths on `https://goanchorcleaning.com/assets/brand/` with cache-busting query `?v=20260916`.
 
