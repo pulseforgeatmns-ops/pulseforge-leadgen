@@ -1,7 +1,6 @@
 require('dotenv').config();
 const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('./db');
-const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { isAgentEnabledForClient } = require('./utils/agentDispatchPolicy');
 const {
@@ -18,6 +17,14 @@ const AGENT_NAME = 'penny';
 const SUPPORTED_PLATFORMS = new Set(['google_ads', 'meta_ads']);
 
 const anthropic = new Anthropic();
+
+async function logPennyAction(database, clientId, action, payload, status, errorMsg = null) {
+  await database.query(`
+    INSERT INTO agent_log (
+      agent_name, action, payload, status, error_msg, ran_at, client_id
+    ) VALUES ('penny', $1, $2, $3, $4, NOW(), $5)
+  `, [action, JSON.stringify(payload), status, errorMsg, clientId]);
+}
 
 function legacyFlagsFromGoogleEvidence(evidence) {
   const flags = [];
@@ -239,7 +246,10 @@ async function run(params = {}, dependencies = {}) {
   const saveReportFn = dependencies.saveReport || saveReport;
   const sleepFn = dependencies.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const poolRef = dependencies.pool || pool;
-  const dbRef = dependencies.db || db;
+  const logActionFn = dependencies.logAgentAction
+    || ((action, payload, status, errorMsg) => (
+      logPennyAction(poolRef, clientId, action, payload, status, errorMsg)
+    ));
 
   const clientConfig = await getClientConfigFn(clientId);
   if (!clientConfig) throw new Error(`Active client not found: ${clientId}`);
@@ -256,7 +266,7 @@ async function run(params = {}, dependencies = {}) {
 
   if (!accounts.length) {
     console.log('No active supported ad accounts configured.');
-    await dbRef.logAgentAction(AGENT_NAME, 'run', null, null, {
+    await logActionFn('run', {
       client_id: clientId,
       accounts: 0,
       ignored_accounts: resolvedAccounts.length,
@@ -300,7 +310,7 @@ async function run(params = {}, dependencies = {}) {
         totalFlags += result.flags.length;
       }
 
-      await dbRef.logAgentAction(AGENT_NAME, 'analyze_account', null, null, {
+      await logActionFn('analyze_account', {
         client_id: clientId,
         company: companyName,
         platform: account.platform,
@@ -310,12 +320,12 @@ async function run(params = {}, dependencies = {}) {
     } catch (err) {
       const msg = err.response?.data?.error?.message || err.message;
       console.error(`  ✗ ${label}: ${msg}`);
-      await dbRef.logAgentAction(AGENT_NAME, 'analyze_account', null, null, {
+      await logActionFn('analyze_account', {
         client_id: clientId,
         company: companyName,
         platform: account.platform,
         error: msg,
-      }, 'failed');
+      }, 'failed', msg);
     }
 
     await sleepFn(1500);
@@ -328,7 +338,7 @@ async function run(params = {}, dependencies = {}) {
     reports_saved: reports,
     flags: totalFlags,
   };
-  await dbRef.logAgentAction(AGENT_NAME, 'run', null, null, summary, 'success');
+  await logActionFn('run', summary, 'success');
 
   console.log(`\nPenny complete — ${reports} report${reports !== 1 ? 's' : ''} queued, ${totalFlags} total flag${totalFlags !== 1 ? 's' : ''}.`);
   return summary;
