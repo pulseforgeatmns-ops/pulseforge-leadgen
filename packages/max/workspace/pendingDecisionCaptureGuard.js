@@ -7,6 +7,8 @@
  * questions fall through to normal routing. Jev remains optional/shadow-only.
  */
 
+const { isStructuredClarificationPending } = require('../../acquisition-mission/PendingDecisionResponseType');
+
 const CAPTURE_INTENTS = Object.freeze({
   DECISION_RESPONSE: 'decision_response',
   PENDING_DECISION_CLARIFICATION: 'pending_decision_clarification',
@@ -157,6 +159,22 @@ function classifyPendingDecisionCaptureIntentImpl(input = {}) {
 
   if (!message || !pendingDecision) {
     return CAPTURE_INTENTS.UNRELATED_OR_QUESTION;
+  }
+
+  if (isStructuredClarificationPending(pendingDecision)) {
+    if (matchesAny(message, PENDING_DECISION_CLARIFICATION_PATTERNS)) {
+      return CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION;
+    }
+    if (matchesAny(message, STATUS_INSPECTION_PATTERNS)) {
+      return CAPTURE_INTENTS.INSPECTION_OR_STATUS_QUESTION;
+    }
+    if (/\bcancel\b/i.test(message) || /\babort\b/i.test(message)) {
+      return CAPTURE_INTENTS.DECISION_RESPONSE;
+    }
+    if (message.includes('?') && !matchesAny(message, APPROVAL_PATTERNS)) {
+      return CAPTURE_INTENTS.UNRELATED_OR_QUESTION;
+    }
+    return CAPTURE_INTENTS.DECISION_RESPONSE;
   }
 
   if (matchesAny(message, PENDING_DECISION_CLARIFICATION_PATTERNS)) {

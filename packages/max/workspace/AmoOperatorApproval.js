@@ -113,6 +113,7 @@ const {
   buildEmmettExecutionResult,
 } = require('./EmmettCapacityExecution');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
+const { responseTypeForAmbiguity } = require('../../acquisition-mission/PendingDecisionResponseType');
 const { OPERATOR_DECISION_KINDS } = amo;
 const {
   hasPendingPlanClarification,
@@ -348,6 +349,7 @@ function putPlannedMission(engine, mission, planned, extra = {}) {
       question: first.question,
       choices: first.choices || [],
       field: first.field,
+      responseType: responseTypeForAmbiguity(first),
       clarificationPrompt: formatAmbiguityPrompt(first),
     };
   } else {
