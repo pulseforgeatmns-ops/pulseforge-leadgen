@@ -53,7 +53,7 @@ async function refreshGoogleAccessToken({ clientId, clientSecret, refreshToken }
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const details = data.error_description || data.error || res.statusText;
+    const details = sanitizeMailboxErrorText(data.error_description || data.error || res.statusText);
     const err = new Error(`Google mailbox OAuth token refresh failed: ${details}`);
     err.code = 'google_oauth_refresh_failed';
     err.httpStatus = res.status;
