@@ -714,5 +714,5 @@ site is pointed at a real domain.
 | Domain | `studiosubstral.com` | Register, or replace throughout `index.html`, `robots.txt`, `sitemap.xml`, `assets/brand/site.webmanifest` |
 | Mailbox | `hello@studiosubstral.com` | Create, or replace in `index.html` and `assets/js/assessment.js` (`FALLBACK_MAILBOX`) |
 | Intake origin | `pulseforge-leadgen-production.up.railway.app` | Confirm this is the production host; it is the `ENDPOINT` constant in `assets/js/assessment.js` |
-| Operator queue | `client_id = 1` | Set `STUDIO_SUBSTRAL_CLIENT_ID` if Studio Substral should have its own tenant |
+| Operator queue | `studio-substral` tenant (slug) | Optional override: `STUDIO_SUBSTRAL_CLIENT_ID` |
 | Second case study | withheld | Publish only with client approval and verifiable claims |

@@ -13,8 +13,17 @@ const {
   buildDayZeroOperatorBrief,
 } = require('../utils/aoCommandDeckBrief');
 const { CLIENT_ID: ANCHOR_CLIENT_ID } = require('../scripts/data/anchorDirectMailTargets');
+const { loadGoogleAdsOperatorBriefSection } = require('../packages/penny-paid-acquisition/googleAdsOperatorBrief');
 
 const ANCHOR_CLIENT = ANCHOR_CLIENT_ID || 10;
+
+async function attachGoogleAdsBrief(clientId, brief) {
+  const googleAds = await loadGoogleAdsOperatorBriefSection({
+    tenantId: clientId,
+    pool,
+  });
+  return { ...brief, googleAds };
+}
 
 async function clientHasAoActivity(clientId) {
   const { rows } = await pool.query(`
@@ -37,7 +46,7 @@ async function buildOperatorBrief(clientId) {
 
   const hasAo = await clientHasAoActivity(clientId);
   if (!hasAo) {
-    return buildDayZeroOperatorBrief();
+    return attachGoogleAdsBrief(clientId, buildDayZeroOperatorBrief());
   }
 
   const briefing = await aoBriefing.buildBriefing(clientId);
@@ -156,7 +165,7 @@ async function buildOperatorBrief(clientId) {
     visitsToday,
   });
 
-  return {
+  return attachGoogleAdsBrief(clientId, {
     narrative,
     highestLeverage,
     todayChanges,
@@ -174,7 +183,7 @@ async function buildOperatorBrief(clientId) {
     generatedAt: briefing.generated_at || new Date().toISOString(),
     campaign_name: CAMPAIGN_NAME,
     mode: 'ao_operator',
-  };
+  });
 }
 
 module.exports = {
@@ -182,4 +191,5 @@ module.exports = {
   clientHasAoActivity,
   shouldBuildOperatorBrief,
   buildDayZeroOperatorBrief,
+  attachGoogleAdsBrief,
 };

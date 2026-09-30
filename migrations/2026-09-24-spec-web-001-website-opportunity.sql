@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS website_opportunity_assessments (
   id BIGSERIAL PRIMARY KEY,
   client_id INTEGER NOT NULL REFERENCES clients(id),
   mission_id TEXT,
-  prospect_id INTEGER REFERENCES prospects(id),
+  prospect_id UUID REFERENCES prospects(id),
   cohort_tag TEXT,
   business_name TEXT NOT NULL,
   domain TEXT NOT NULL,
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS website_opportunity_events (
   event_type TEXT NOT NULL,
   client_id INTEGER,
   mission_id TEXT,
-  prospect_id INTEGER,
+  prospect_id UUID,
   domain TEXT,
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

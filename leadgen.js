@@ -637,7 +637,7 @@ function isCleaningBuyerProfile() {
 }
 
 function isWebDesignProfile() {
-  return CONFIG.scoringProfile === 'web_design';
+  return CONFIG.scoringProfile === 'web_design' || CONFIG.scoringProfile === 'studio_substral';
 }
 
 function validCleaningEmailOrNull(email) {

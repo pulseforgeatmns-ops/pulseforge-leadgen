@@ -134,6 +134,7 @@ async function requestProspectBrief({
     lead_id: result.lead_id || leadId || null,
     mission_id: result.mission_id || null,
     business_name: result.business_name || result.company?.name || result.prospect?.name || null,
+    account_status: result.prospect?.ao_current_status || null,
   };
 }
 

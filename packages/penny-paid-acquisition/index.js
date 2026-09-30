@@ -12,6 +12,7 @@ const collector = require('./PaidPlatformEvidenceCollector');
 const firstPartyAttribution = require('./FirstPartyAttributionEvidence');
 const campaignLeadEconomics = require('./CampaignLeadEconomics');
 const googleAds = require('./adapters/googleAds');
+const googleAdsOperatorBrief = require('./googleAdsOperatorBrief');
 const metaAds = require('./adapters/metaAds');
 const chatgptAds = require('./adapters/chatgptAds');
 const stubPlatform = require('./adapters/stubPlatform');
@@ -30,6 +31,10 @@ module.exports = {
   assessGoogleAdsReadiness: googleAds.assessGoogleAdsReadiness,
   buildGoogleAdsReadinessInspection: googleAds.buildGoogleAdsReadinessInspection,
   resolveGoogleAdsApiVersion: googleAds.resolveGoogleAdsApiVersion,
+  recommendGoogleAdsNextAction: googleAdsOperatorBrief.recommendGoogleAdsNextAction,
+  buildGoogleAdsOperatorBrief: googleAdsOperatorBrief.buildGoogleAdsOperatorBrief,
+  formatGoogleAdsOperatorBriefText: googleAdsOperatorBrief.formatGoogleAdsOperatorBriefText,
+  loadGoogleAdsOperatorBriefSection: googleAdsOperatorBrief.loadGoogleAdsOperatorBriefSection,
   readMetaAdsEvidence: metaAds.readMetaAdsEvidence,
   readChatGptAdsEvidence: chatgptAds.readChatGptAdsEvidence,
   assessChatGptAdsProductionReadiness: chatgptAds.assessChatGptAdsProductionReadiness,

@@ -8,7 +8,7 @@
  * pin the boundary: an intake row is a request, never a finding.
  */
 
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
@@ -194,6 +194,17 @@ describe('payload validation', () => {
 });
 
 describe('capture', () => {
+  const originalTenant = process.env.STUDIO_SUBSTRAL_CLIENT_ID;
+
+  beforeEach(() => {
+    process.env.STUDIO_SUBSTRAL_CLIENT_ID = '1';
+  });
+
+  afterEach(() => {
+    if (originalTenant == null) delete process.env.STUDIO_SUBSTRAL_CLIENT_ID;
+    else process.env.STUDIO_SUBSTRAL_CLIENT_ID = originalTenant;
+  });
+
   it('writes one pending agent_actions row for the operator', async () => {
     const pool = fakePool();
     const result = await captureAssessmentRequest(pool, {
@@ -203,22 +214,20 @@ describe('capture', () => {
       referer: null,
     });
 
-    assert.equal(pool.calls.length, 1);
-    const { sql, params } = pool.calls[0];
-    assert.match(sql, /INSERT INTO agent_actions/);
+    const insertCall = pool.calls.find((c) => /INSERT INTO agent_actions/.test(c.sql));
+    assert.ok(insertCall);
+    const { sql, params } = insertCall;
     assert.match(sql, /'pending'/);
     assert.equal(params[0], CREATED_BY);
     assert.equal(params[1], ACTION_TYPE);
     assert.equal(params[2], 'Assessment request — example.com');
-    assert.equal(params[5], DEFAULT_CLIENT_ID);
+    assert.equal(params[5], 1);
 
-    assert.deepEqual(result, {
-      id: 4242,
-      stored: true,
-      duplicate: false,
-      domain: 'example.com',
-      client_id: DEFAULT_CLIENT_ID,
-    });
+    assert.equal(result.id, 4242);
+    assert.equal(result.stored, true);
+    assert.equal(result.duplicate, false);
+    assert.equal(result.domain, 'example.com');
+    assert.equal(result.client_id, 1);
   });
 
   it('records the request as requested, never as assessed', () => {
@@ -278,7 +287,7 @@ describe('tenant scoping', () => {
     else process.env.STUDIO_SUBSTRAL_CLIENT_ID = original;
   });
 
-  it('defaults to the Pulseforge operator queue', () => {
+  it('defaults to the legacy sentinel when no env override and no database pool', () => {
     delete process.env.STUDIO_SUBSTRAL_CLIENT_ID;
     assert.equal(resolveClientId(), DEFAULT_CLIENT_ID);
   });

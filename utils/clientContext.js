@@ -351,6 +351,49 @@ async function ensureClientArchitecture() {
       notes = EXCLUDED.notes
   `);
 
+  // SPEC-SUBSTRAL-PF-001 — Studio Substral first-class tenant (slug-resolved)
+  await pool.query(`
+    INSERT INTO clients (
+      name, slug, business_name, vertical, email, primary_contact,
+      country, timezone, industry, website, service_area, verticals, target_clients,
+      scoring_profile, enabled_agents, active, notes,
+      brand_voice, never_say, lead_with, sender_name, sender_email, sending_domain
+    ) VALUES (
+      'Studio Substral',
+      'studio-substral',
+      'Studio Substral',
+      'web_design',
+      'hello@studiosubstral.com',
+      'Jacob Maynard',
+      'United States',
+      'America/New_York',
+      'Website diagnosis, targeted remediation, redesign and build',
+      'https://studiosubstral.com',
+      ARRAY['United States'],
+      ARRAY['professional_services','legal','accounting','home_services','dental','fitness','restaurant','salon','hvac','roofing','landscaping','med_spa'],
+      'Established businesses with a live website and a real decision about what to fix, rebuild, or leave alone.',
+      'studio_substral',
+      ARRAY['scout','max','paige'],
+      true,
+      'SPEC-SUBSTRAL-PF-001 — diagnosis-before-design tenant. NO Emmett/outbound until governed mailbox readiness passes.',
+      'Diagnosis before design. Plain language, evidence-specific openings, no manufactured urgency, no redesign assumption. Primary CTA: paid website assessment.',
+      'free strategy call; website makeover; redesign consultation; your site is broken; you are losing customers',
+      'Evidence-first website assessment',
+      'Studio Substral',
+      'hello@studiosubstral.com',
+      'studiosubstral.com'
+    )
+    ON CONFLICT (slug) DO UPDATE SET
+      scoring_profile = EXCLUDED.scoring_profile,
+      enabled_agents = EXCLUDED.enabled_agents,
+      website = EXCLUDED.website,
+      brand_voice = EXCLUDED.brand_voice,
+      never_say = EXCLUDED.never_say,
+      sender_email = EXCLUDED.sender_email,
+      sending_domain = EXCLUDED.sending_domain,
+      notes = EXCLUDED.notes
+  `);
+
   await pool.query(`
     INSERT INTO clients (name, slug, email, city, state, active)
     VALUES ('McLeod Legal Services', 'mcleod', 'ashley@mcleodlegal.com',
