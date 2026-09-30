@@ -206,6 +206,7 @@ const {
 const { detectOperatorProspectListInMessage } = OperatorArtifactInjection;
 const askPathTrace = require('./audit/AskPathTrace');
 const { DecisionService, beginShadow, completeShadow } = require('../../decision-service/DecisionService');
+const { applyJevActiveRoutingPromotion } = require('./jevActiveRouting');
 
 /**
  * WorkspaceEngine — SPEC-009 + SPEC-022 + SPEC-039 + SPEC-125 routing.
@@ -247,10 +248,12 @@ class WorkspaceEngine {
    * @param {object} [options.operatorContextOpts] - SPEC-104 operator context store opts (tests)
    * @param {object} [options.runtimeProvider] - SPEC-140 acquisition mission runtime provider (tests)
    * @param {DecisionService} [options.decisionService] - SPEC-JEV-001 shadow observer (tests)
+   * @param {typeof resolveWorkspaceOwner} [options.resolveWorkspaceOwner] - test seam (SPEC-JEV-006)
    */
   constructor(options = {}) {
     this._sessions = options.sessions || new SessionStore();
     this._decisionService = options.decisionService || new DecisionService();
+    this._resolveWorkspaceOwner = options.resolveWorkspaceOwner || resolveWorkspaceOwner;
     this._presentation =
       options.presentation ||
       new PresentationEngine({
@@ -932,6 +935,17 @@ class WorkspaceEngine {
     // Snapshot the already-resolved mission before approval/execution mutates it.
     // The evaluator receives no production classification or authority to act.
     try { shadow?.captureMission(operatorIntent.mission); } catch (_) { /* shadow only */ }
+    let jevActiveRoutingEvaluation = null;
+    if (!miepInternal) {
+      try {
+        jevActiveRoutingEvaluation = await this._decisionService.evaluateActiveRouting({
+          question,
+          session,
+          context: rawContext || session.context,
+          mission: operatorIntent.mission,
+        });
+      } catch (_) { /* active routing is fail-closed */ }
+    }
     conversationSubject = operatorIntent.conversationSubject;
     conversationIntent = operatorIntent.conversationIntent;
     let resolvedQuestion = operatorIntent.resolvedQuestion;
@@ -1126,7 +1140,7 @@ class WorkspaceEngine {
     // SPEC-125 — Ownership-first runtime. Subject governs owner before business pipelines.
     const ownershipAudit =
       this._ownershipAudit || createWorkspaceOwnershipAudit();
-    workspaceOwnership = await resolveWorkspaceOwner({
+    workspaceOwnership = await this._resolveWorkspaceOwner({
       question,
       session,
       context: rawContext || session.context,
@@ -1140,9 +1154,36 @@ class WorkspaceEngine {
       resolverEnabled: this._resolverEnabled,
       ...this._amoRuntimeInput(),
     });
+    const jevPromotion = applyJevActiveRoutingPromotion({
+      workspaceOwnership,
+      evaluation: jevActiveRoutingEvaluation,
+      question,
+      session,
+      operatorIntent,
+      context: rawContext || session.context,
+      ...this._amoRuntimeInput(),
+    });
+    if (jevPromotion.applied) {
+      workspaceOwnership = jevPromotion.workspaceOwnership;
+      if (jevPromotion.objectivePatch && objectiveResolution) {
+        objectiveResolution = {
+          ...objectiveResolution,
+          ...jevPromotion.objectivePatch,
+          confidence: jevPromotion.workspaceOwnership.confidence,
+        };
+        if (session.context && typeof session.context === 'object') {
+          session.context.objectiveResolution = objectiveResolution;
+        }
+      }
+    }
+    if (session.context && typeof session.context === 'object') {
+      session.context.jevActiveRouting = jevPromotion.audit;
+      session.context.jevActiveRoutingEvaluation = jevActiveRoutingEvaluation;
+    }
     askPathTrace.traceOwner(workspaceOwnership.owner, workspaceOwnership.reason, {
       confidence: workspaceOwnership.confidence,
       fallback: workspaceOwnership.fallback || false,
+      jevPromotion: Boolean(jevPromotion.applied),
     });
     ownershipAudit.logOwnerSelected({
       ...workspaceOwnership,
