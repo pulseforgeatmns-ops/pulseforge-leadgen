@@ -39,6 +39,7 @@ const {
   maybeHandleAcquisitionOwnershipTurn,
 } = require('./AcquisitionOwnership');
 const acquisitionMissionExecution = require('./AcquisitionMissionExecution');
+const { maybeHandleOperatorStatusQuery } = require('./OperatorStatusQueryRouter');
 const {
   resolveActiveMissionLock,
   guardExecutionDomain,
@@ -1630,6 +1631,86 @@ class WorkspaceEngine {
               },
             }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
           }
+        }
+
+        const statusQueryTurn = await maybeHandleOperatorStatusQuery({
+          question,
+          session,
+          context: rawContext || session.context,
+          mission: runtimeDecision.mission || null,
+          missionId:
+            (runtimeDecision.mission && runtimeDecision.mission.id) ||
+            (session.context && session.context.missionId) ||
+            null,
+          hasSinglePendingOperatorApproval: Boolean(
+            runtimeDecision.mission &&
+              runtimeDecision.mission.pendingOperatorDecision &&
+              runtimeDecision.mission.pendingOperatorDecision.kind
+          ),
+        });
+        if (statusQueryTurn) {
+          session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          if (session.context && typeof session.context === 'object') {
+            session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+            session.context._answerCorpus = 'workspace';
+          }
+          const structuredStatus = statusQueryTurn.structured;
+          const presentedStatus = await this._presentation.present(structuredStatus);
+          const proseStatus = presentedStatus.prose || statusQueryTurn.prose;
+          this._sessions.appendMessage(session.id, {
+            role: 'max',
+            text: proseStatus,
+            structured: structuredStatus,
+          });
+          return traceAskReturn('operator_status_query', {
+            sessionId: session.id,
+            prose: proseStatus,
+            structured: structuredStatus,
+            metadata: presentedStatus.metadata,
+            suggestions: resolveResultSuggestions({
+              structured: structuredStatus,
+              session,
+              question,
+            }),
+            recommendedActions: structuredStatus.recommendedActions,
+            contextSwitch: envelopeSwitch,
+            domainSwitch: null,
+            context: session.context,
+            presentation: presentedStatus.presentation,
+            route: ROUTE_KINDS.INTELLIGENCE,
+            mission: runtimeDecision.mission || null,
+            resolution: {
+              action: 'status_query',
+              reason: statusQueryTurn.reason,
+            },
+            executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+            interrogation: null,
+            conversationIntent,
+            domainDecision: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              reason: statusQueryTurn.reason,
+              missionType: 'acquisition_mission',
+              missionIntent: conversationIntent.intent,
+              confidence: conversationIntent.confidence,
+              previousDomain: session.previousExecutionDomain || null,
+              domainSwitched: false,
+            },
+            executionContext: {
+              domain: EXECUTION_DOMAINS.WORKSPACE,
+              routeKind: ROUTE_KINDS.INTELLIGENCE,
+              reason: statusQueryTurn.reason,
+              missionType: 'acquisition_mission',
+              missionId:
+                runtimeDecision.mission && runtimeDecision.mission.id
+                  ? runtimeDecision.mission.id
+                  : null,
+            },
+            workspaceOwnership: {
+              ...workspaceOwnership,
+              missionRuntime: MISSION_RUNTIMES.AMO,
+              missionType: 'acquisition_mission',
+            },
+          }, { missionRuntime: MISSION_RUNTIMES.AMO, responseOwner: workspaceOwnership.owner });
         }
 
         const amoExecutionTurn = await acquisitionMissionExecution.maybeHandleAcquisitionMissionExecution({
