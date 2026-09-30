@@ -3,6 +3,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('./db');
 const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
+const { isAgentEnabledForClient } = require('./utils/agentDispatchPolicy');
 const {
   resolveAdAccountsForClient,
   ensureAdAccountsSchema,
@@ -14,7 +15,7 @@ const {
 // Legacy dashboard/cron reporting agent. Platform reads are delegated to the
 // canonical SPEC-252 evidence adapters; this file retains narrative reporting only.
 const AGENT_NAME = 'penny';
-const CLIENT_ID = getRuntimeClientId();
+const SUPPORTED_PLATFORMS = new Set(['google_ads', 'meta_ads']);
 
 const anthropic = new Anthropic();
 
@@ -168,18 +169,22 @@ Rules: no filler, no "great job" padding. If the account is healthy, say so brie
 }
 
 // ── SAVE ───────────────────────────────────────────────────────────────────
-async function saveReport(companyName, platform, report, flags) {
+async function saveReport(clientId, companyName, platform, report, flags) {
   const platformLabel = platform === 'google_ads' ? 'Google Ads' : 'Meta Ads';
   const postContent = `Ads Report · ${companyName} · ${platformLabel}`;
 
   const existing = await pool.query(`
     SELECT id FROM pending_comments
     WHERE channel = 'ads_report'
+      AND client_id = $2
       AND post_content = $1
       AND status = 'pending'
-      AND created_at > NOW() - INTERVAL '24 hours'
+      AND created_at >= (
+        (NOW() AT TIME ZONE 'America/New_York')::date
+        AT TIME ZONE 'America/New_York'
+      )
     LIMIT 1
-  `, [postContent]);
+  `, [postContent, clientId]);
 
   if (existing.rows.length > 0) {
     console.log('  ↷ Already queued today — skipping duplicate');
@@ -191,35 +196,73 @@ async function saveReport(companyName, platform, report, flags) {
     : '\n\n---\n✅ No threshold violations detected.';
 
   const res = await pool.query(`
-    INSERT INTO pending_comments (author_name, author_title, post_content, comment, post_url, channel, status)
-    VALUES ($1, $2, $3, $4, NULL, 'ads_report', 'pending')
+    INSERT INTO pending_comments (
+      author_name, author_title, post_content, comment, post_url, channel, status, client_id
+    )
+    VALUES ($1, $2, $3, $4, NULL, 'ads_report', 'pending', $5)
     RETURNING id
-  `, [companyName, platformLabel, postContent, report + flagBlock]);
+  `, [companyName, platformLabel, postContent, report + flagBlock, clientId]);
 
   return res.rows[0].id;
 }
 
 // ── MAIN ───────────────────────────────────────────────────────────────────
-async function run() {
+function parseArgs(argv = process.argv.slice(2)) {
+  let clientId = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg.startsWith('--client-id=')) {
+      clientId = arg.slice('--client-id='.length);
+    } else if (arg === '--client-id') {
+      clientId = argv[i + 1];
+      i += 1;
+    } else {
+      throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+  const parsed = Number(clientId);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('--client-id must be a positive integer');
+  }
+  return { client_id: parsed };
+}
+
+async function run(params = {}, dependencies = {}) {
   console.log('\nPenny agent running...\n');
-  const clientConfig = await getClientConfig(CLIENT_ID);
-  if (!clientConfig) throw new Error(`Active client not found: ${CLIENT_ID}`);
-  if (CLIENT_ID !== 1) {
-    console.log('Penny ads analysis is enabled only for Pulseforge client_id=1.');
-    return;
+  const clientId = getRuntimeClientId(params);
+  const getClientConfigFn = dependencies.getClientConfig || getClientConfig;
+  const isAgentEnabledFn = dependencies.isAgentEnabledForClient || isAgentEnabledForClient;
+  const ensureSchemaFn = dependencies.ensureAdAccountsSchema || ensureAdAccountsSchema;
+  const resolveAccountsFn = dependencies.resolveAdAccountsForClient || resolveAdAccountsForClient;
+  const fetchEvidenceFn = dependencies.fetchPlatformEvidence || fetchPlatformEvidence;
+  const generateReportFn = dependencies.generateReport || generateReport;
+  const saveReportFn = dependencies.saveReport || saveReport;
+  const sleepFn = dependencies.sleep || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const poolRef = dependencies.pool || pool;
+  const dbRef = dependencies.db || db;
+
+  const clientConfig = await getClientConfigFn(clientId);
+  if (!clientConfig) throw new Error(`Active client not found: ${clientId}`);
+
+  const dispatch = await isAgentEnabledFn(clientId, AGENT_NAME);
+  if (!dispatch.allowed) {
+    throw new Error(`Penny is not enabled for client_id=${clientId}: ${dispatch.reason}`);
   }
 
-  await ensureAdAccountsSchema(pool);
+  await ensureSchemaFn(poolRef);
 
-  const accounts = await resolveAdAccountsForClient({ clientId: CLIENT_ID, pool });
+  const resolvedAccounts = await resolveAccountsFn({ clientId, pool: poolRef });
+  const accounts = resolvedAccounts.filter((account) => SUPPORTED_PLATFORMS.has(account.platform));
 
   if (!accounts.length) {
-    console.log('No active ad accounts configured.');
-    console.log('Add rows to the ad_accounts table to get started:');
-    console.log("  INSERT INTO ad_accounts (company_id, client_id, platform, account_id, refresh_token, is_active)");
-    console.log("  VALUES ('<company_uuid>', 1, 'google_ads', '<customer_id>', '<refresh_token>', true);");
-    await db.logAgentAction(AGENT_NAME, 'run', null, null, { accounts: 0, reason: 'no_accounts' }, 'success');
-    return;
+    console.log('No active supported ad accounts configured.');
+    await dbRef.logAgentAction(AGENT_NAME, 'run', null, null, {
+      client_id: clientId,
+      accounts: 0,
+      ignored_accounts: resolvedAccounts.length,
+      reason: 'no_supported_accounts',
+    }, 'success');
+    return { client_id: clientId, accounts_analyzed: 0, reports_saved: 0, flags: 0 };
   }
 
   console.log(`Found ${accounts.length} active ad account${accounts.length !== 1 ? 's' : ''}.\n`);
@@ -228,24 +271,28 @@ async function run() {
   let totalFlags = 0;
 
   for (const account of accounts) {
-    const stillActive = await getClientConfig(CLIENT_ID);
+    const stillActive = await getClientConfigFn(clientId);
     if (!stillActive) {
-      throw new Error(`[Penny] Client ${CLIENT_ID} deactivated mid-run — aborting`);
+      throw new Error(`[Penny] Client ${clientId} deactivated mid-run — aborting`);
     }
 
-    const label = `${account.company_name || 'Account'} / ${account.platform}`;
+    const companyName = account.company_name
+      || clientConfig.business_name
+      || clientConfig.name
+      || `Client ${clientId}`;
+    const label = `${companyName} / ${account.platform}`;
     console.log(`Analyzing: ${label}`);
 
     try {
-      const result = await fetchPlatformEvidence(account);
+      const result = await fetchEvidenceFn(account);
 
       if (result.error) {
         console.warn(`  ⚠️ ${result.error}`);
         continue;
       }
 
-      const report = await generateReport(account.company_name || 'Account', account.platform, result);
-      const id = await saveReport(account.company_name || 'Account', account.platform, report, result.flags);
+      const report = await generateReportFn(companyName, account.platform, result);
+      const id = await saveReportFn(clientId, companyName, account.platform, report, result.flags);
 
       if (id) {
         console.log(`  ✓ Report saved (${id.slice(0, 8)}) — ${result.flags.length} flag${result.flags.length !== 1 ? 's' : ''}`);
@@ -253,8 +300,9 @@ async function run() {
         totalFlags += result.flags.length;
       }
 
-      await db.logAgentAction(AGENT_NAME, 'analyze_account', null, null, {
-        company: account.company_name,
+      await dbRef.logAgentAction(AGENT_NAME, 'analyze_account', null, null, {
+        client_id: clientId,
+        company: companyName,
         platform: account.platform,
         flags: result.flags.length,
         report_saved: !!id,
@@ -262,29 +310,41 @@ async function run() {
     } catch (err) {
       const msg = err.response?.data?.error?.message || err.message;
       console.error(`  ✗ ${label}: ${msg}`);
-      await db.logAgentAction(AGENT_NAME, 'analyze_account', null, null, {
-        company: account.company_name,
+      await dbRef.logAgentAction(AGENT_NAME, 'analyze_account', null, null, {
+        client_id: clientId,
+        company: companyName,
         platform: account.platform,
         error: msg,
       }, 'failed');
     }
 
-    await new Promise((r) => setTimeout(r, 1500));
+    await sleepFn(1500);
   }
 
-  await db.logAgentAction(AGENT_NAME, 'run', null, null, {
+  const summary = {
+    client_id: clientId,
     accounts_analyzed: accounts.length,
+    ignored_accounts: resolvedAccounts.length - accounts.length,
     reports_saved: reports,
     flags: totalFlags,
-  }, 'success');
+  };
+  await dbRef.logAgentAction(AGENT_NAME, 'run', null, null, summary, 'success');
 
   console.log(`\nPenny complete — ${reports} report${reports !== 1 ? 's' : ''} queued, ${totalFlags} total flag${totalFlags !== 1 ? 's' : ''}.`);
+  return summary;
 }
 
-module.exports = { run };
+module.exports = { parseArgs, run };
 
 if (require.main === module) {
-  run().catch((err) => {
+  let params;
+  try {
+    params = parseArgs();
+  } catch (err) {
+    console.error('[Penny] Invalid arguments:', err.message);
+    process.exit(1);
+  }
+  run(params).catch((err) => {
     console.error('[Penny] Fatal error:', err.message);
     process.exit(1);
   });

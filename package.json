@@ -44,6 +44,7 @@
     "max:signals:backfill": "node scripts/backfillMaxSignals.js",
     "max:recalculate": "node scripts/recalculateMaxOrchestration.js",
     "max:decay": "node maxDecayAgent.js",
+    "penny:daily": "node pennyAgent.js",
     "max:decay:history": "node scripts/maxDecayRunHistory.js",
     "max:coverage": "node scripts/maxEventCoverageReport.js",
     "max:outcomes": "node scripts/maxOutcomeValidationReport.js",
