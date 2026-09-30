@@ -199,6 +199,7 @@ function buildMissingGeographyAmbiguity(context = {}) {
   return {
     field: 'geography.region',
     question: 'Which region should this mission cover?',
+    responseType: 'text',
     choices: [],
     reason: closest
       ? 'Canonical geography evidence was present but could not be mapped to a mission region.'

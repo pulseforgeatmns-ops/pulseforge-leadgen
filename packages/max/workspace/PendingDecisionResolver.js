@@ -22,6 +22,7 @@ const {
   safeClassifyPendingDecisionCaptureIntent,
   logPendingDecisionCaptureGuarded,
 } = require('./pendingDecisionCaptureGuard');
+const { isStructuredClarificationPending } = require('../../acquisition-mission/PendingDecisionResponseType');
 
 const RESOLUTION_OUTCOMES = Object.freeze({
   AFFIRM: 'affirm',
@@ -409,6 +410,13 @@ function guardedUnresolved(mission, pending, outcome, captureIntent, options = {
 function resolvePendingOperatorDecision(question, mission, options = {}) {
   const pending = pendingFromMission(mission);
   if (!pending || !pending.kind) {
+    return { resolved: false };
+  }
+
+  if (
+    pending.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION &&
+    isStructuredClarificationPending(pending)
+  ) {
     return { resolved: false };
   }
 
