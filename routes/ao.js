@@ -21,6 +21,7 @@ const aoAccountFlags = require('../services/aoAccountFlagService');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { AO_CRM_NEXT_ACTIONS } = require('../utils/aoCrmTypes');
 const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
+const { aoResultHttpStatus, sendAoServiceResult } = require('../utils/aoHttpResult');
 
 const router = express.Router();
 
@@ -177,8 +178,9 @@ router.post('/api/crm/accounts/:prospectId/followup/draft', requireAoWrite, refr
     body: req.body || {},
     profile: profile || sessionProfile(req),
   });
-  if (result.status) return res.status(result.status).json(result);
-  res.json({ draft: result.draft, input_snapshot: result.input_snapshot });
+  return sendAoServiceResult(res, result, {
+    successBody: r => ({ draft: r.draft, input_snapshot: r.input_snapshot }),
+  });
 }));
 
 router.post('/api/crm/accounts/:prospectId/followup/save', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -195,8 +197,7 @@ router.post('/api/crm/accounts/:prospectId/followup/save', requireAoWrite, refre
     inputSnapshot,
     flagJakeReview: flagJakeReview === true || flagJakeReview === 'true',
   });
-  if (result.status) return res.status(result.status).json(result);
-  res.json(result);
+  return sendAoServiceResult(res, result);
 }));
 
 router.get('/api/crm/accounts/:prospectId/followup/drafts', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -231,8 +232,9 @@ router.post('/api/crm/accounts/:prospectId/flag-for-jake', requireAoWrite, refre
     reason: String(reason),
     note: note != null ? String(note) : null,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error, reasons: result.reasons });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error, reasons: r.reasons }),
+  });
 }));
 
 router.post('/api/crm/accounts/:prospectId/outcome', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -272,8 +274,7 @@ router.post('/api/crm/accounts/:prospectId/outcome', requireAoWrite, refreshAoSe
     contactPatch: { contact_name: contactName, contact_role: contactRole, phone, email },
     source: 'ao_crm_outcome_form',
   });
-  if (result.status) return res.status(result.status).json(result);
-  res.json(result);
+  return sendAoServiceResult(res, result);
 }));
 
 router.get('/api/crm/manager/accounts', requireJakeRead, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -364,8 +365,9 @@ router.post('/api/prospects/:prospectId/log-update', requireAoWrite, refreshAoSe
     advisoryStage,
     source,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.post('/api/max/conversations/continue', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -387,8 +389,9 @@ router.post('/api/max/conversations/continue', requireAoWrite, refreshAoSession,
     source,
     reopenIfDone: reopenIfDone !== false,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.get('/api/profile', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -417,7 +420,10 @@ router.patch('/api/leads/:id/address', requireAoWrite, wrapAoHandler(async (req,
   const aoOwnerId = effectiveAoOwnerId(req);
   const { address } = req.body || {};
   const updated = await aoRoute.updateLeadAddress({ leadId: req.params.id, aoOwnerId, address });
-  if (updated?.status) return res.status(updated.status).json({ error: updated.error });
+  const httpStatus = updated && aoResultHttpStatus(updated);
+  if (httpStatus != null) {
+    return res.status(httpStatus).json({ error: updated.error });
+  }
   if (!updated) return res.status(404).json({ error: 'Lead not found' });
   res.json(updated);
 }));
@@ -428,7 +434,8 @@ router.patch('/api/tasks/:id', requireAoWrite, wrapAoHandler(async (req, res) =>
   }
   const aoOwnerId = effectiveAoOwnerId(req);
   const task = await aoField.updateTask(req.params.id, aoOwnerId, req.body || {});
-  if (task?.status && task.error) return res.status(task.status).json(task);
+  const taskHttpStatus = task && aoResultHttpStatus(task);
+  if (taskHttpStatus != null) return res.status(taskHttpStatus).json(task);
   if (!task) return res.status(404).json({ error: 'Task not found' });
   res.json(task);
 }));
@@ -474,8 +481,7 @@ router.post('/api/routes/start', requireAoWrite, refreshAoSession, wrapAoHandler
     startAddress,
     manualTaskOrder,
   });
-  if (result.status) return res.status(result.status).json(result);
-  res.json(result);
+  return sendAoServiceResult(res, result);
 }));
 
 router.get('/api/routes/:id', requireAoRead, wrapAoHandler(async (req, res) => {
@@ -494,7 +500,8 @@ router.patch('/api/routes/stops/:id', requireAoWrite, wrapAoHandler(async (req, 
     status,
     aoName: req.user.name,
   });
-  if (result?.status) return res.status(result.status).json({ error: result.error });
+  const stopHttpStatus = result && aoResultHttpStatus(result);
+  if (stopHttpStatus != null) return res.status(stopHttpStatus).json({ error: result.error });
   if (!result) return res.status(404).json({ error: 'Stop not found' });
   res.json(result);
 }));
@@ -576,8 +583,9 @@ router.post('/api/max/start', requireAoWrite, refreshAoSession, wrapAoHandler(as
     taskId,
     conversationSessionId: conversationSessionId || null,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.post('/api/max/respond', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -595,8 +603,9 @@ router.post('/api/max/respond', requireAoWrite, refreshAoSession, wrapAoHandler(
     aoName: req.user.name,
     message,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.post('/api/max/ask', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -648,8 +657,9 @@ router.post('/api/max/prospect-brief', requireAoWrite, refreshAoSession, wrapAoH
     leadId: leadId || null,
     source,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.post('/api/max/flag-routing', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -687,8 +697,9 @@ router.post('/api/max/flag-routing', requireAoWrite, refreshAoSession, wrapAoHan
     notes,
     decisionId: decisionId || null,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.get('/api/max/conversations/active', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -737,8 +748,9 @@ router.post('/api/max/conversations/:id/reopen', requireAoWrite, refreshAoSessio
     clientId,
     reopenedBy: aoOwnerId,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.post('/api/max/conversations/:id/done', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -751,8 +763,9 @@ router.post('/api/max/conversations/:id/done', requireAoWrite, refreshAoSession,
     clientId,
     closedBy: aoOwnerId,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.post('/api/max/new-conversation', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
@@ -783,8 +796,9 @@ router.post('/api/max/report', requireAoWrite, refreshAoSession, wrapAoHandler(a
     note,
     category,
   });
-  if (result.status) return res.status(result.status).json({ error: result.error });
-  res.json(result);
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({ error: r.error }),
+  });
 }));
 
 router.get('/api/max/reports', requireJakeRead, wrapAoHandler(async (req, res) => {
