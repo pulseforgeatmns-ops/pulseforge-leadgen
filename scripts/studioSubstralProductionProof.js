@@ -357,7 +357,12 @@ async function main() {
     check('paige.dry_run_compliant', paigeOk, paige.skipped_generation ? 'doctrine_only' : 'generated');
 
     const outbound = await evaluateStudioSubstralOutboundReadiness(pool, client.id);
-    const blocked = outbound.ready === false && outbound.reasons.includes('mailbox_not_authenticated');
+    const blocked = outbound.ready === false && (
+      outbound.reasons.includes('mailbox_not_authenticated')
+      || outbound.reasons.includes('authentication_not_verified_from_delivery')
+      || outbound.reasons.includes('governed_outbound_not_authorized')
+      || outbound.reasons.includes('governed_outbound_program_missing')
+    );
     check('emmett.outbound_blocked', blocked, outbound);
 
     const pulseforgeSender = await pool.query(`SELECT sender_email FROM clients WHERE id = 1`);
@@ -375,8 +380,11 @@ async function main() {
     );
     check(
       'emmett.forwarding_only_insufficient',
-      blocked && outbound.reasons.includes('mailbox_not_authenticated'),
-      'hello@studiosubstral.com requires ACTIVE tenant_mailbox_integrations row'
+      blocked && (
+        outbound.reasons.includes('mailbox_not_authenticated')
+        || outbound.reasons.includes('authentication_not_verified_from_delivery')
+      ),
+      'hello@studiosubstral.com requires ACTIVE tenant_mailbox_integrations with delivered-message SPF/DKIM/DMARC pass'
     );
 
     const isolation = await tenantIsolation(client.id, anchor.rows[0]?.id, babrun.rows[0]?.id);

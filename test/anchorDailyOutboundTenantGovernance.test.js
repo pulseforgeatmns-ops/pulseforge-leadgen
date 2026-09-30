@@ -23,10 +23,11 @@ test('mailbox grant binds identity and the reviewed Emmett window', () => {
   assert.throws(()=>policy({...input,endHour:24},now),{code:'invalid_business_window'});
 });
 
-test('only tenants 10 and 13 are allowed for governed outbound', () => {
-  assert.deepEqual(ALLOWED_GOVERNED_OUTBOUND_TENANTS, ['10', '13']);
+test('only tenants 10, 13, and 17 are allowed for governed outbound', () => {
+  assert.deepEqual(ALLOWED_GOVERNED_OUTBOUND_TENANTS, ['10', '13', '17']);
   assert.equal(assertGovernedOutboundTenantId('10'), '10');
   assert.equal(assertGovernedOutboundTenantId('13'), '13');
+  assert.equal(assertGovernedOutboundTenantId('17'), '17');
   assert.throws(() => assertGovernedOutboundTenantId('1'), { code: 'unsupported_governed_outbound_tenant' });
   assert.throws(() => assertGovernedOutboundTenantId('99'), { code: 'unsupported_governed_outbound_tenant' });
   assert.throws(() => assertGovernedOutboundTenantId(''), { code: 'unsupported_governed_outbound_tenant' });
@@ -35,11 +36,14 @@ test('only tenants 10 and 13 are allowed for governed outbound', () => {
 test('tenant enablement is explicit per tenant and fails closed by default', () => {
   const savedAnchor = process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED;
   const savedBabrun = process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED;
+  const savedSubstral = process.env.SUBSTRAL_GOVERNED_OUTBOUND_ENABLED;
   try {
     delete process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED;
     delete process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED;
+    delete process.env.SUBSTRAL_GOVERNED_OUTBOUND_ENABLED;
     assert.equal(governedOutboundEnabledForTenant('10'), false);
     assert.equal(governedOutboundEnabledForTenant('13'), false);
+    assert.equal(governedOutboundEnabledForTenant('17'), false);
 
     process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED = 'true';
     assert.equal(governedOutboundEnabledForTenant('10'), true);
@@ -48,15 +52,22 @@ test('tenant enablement is explicit per tenant and fails closed by default', () 
     process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED = 'true';
     assert.equal(governedOutboundEnabledForTenant('13'), true);
 
+    process.env.SUBSTRAL_GOVERNED_OUTBOUND_ENABLED = 'true';
+    assert.equal(governedOutboundEnabledForTenant('17'), true);
+
     process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED = 'false';
     assert.equal(governedOutboundSendingDisabledForTenant('10'), true);
     process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED = 'false';
     assert.equal(governedOutboundSendingDisabledForTenant('13'), true);
+    process.env.SUBSTRAL_GOVERNED_OUTBOUND_ENABLED = 'false';
+    assert.equal(governedOutboundSendingDisabledForTenant('17'), true);
   } finally {
     if (savedAnchor === undefined) delete process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED;
     else process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED = savedAnchor;
     if (savedBabrun === undefined) delete process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED;
     else process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED = savedBabrun;
+    if (savedSubstral === undefined) delete process.env.SUBSTRAL_GOVERNED_OUTBOUND_ENABLED;
+    else process.env.SUBSTRAL_GOVERNED_OUTBOUND_ENABLED = savedSubstral;
   }
 });
 
@@ -79,8 +90,8 @@ test('tenant context binds transport and Anchor-only policy without cross-tenant
 test('parseGovernedOutboundTenantIds rejects unknown ids in configuration', () => {
   const saved = process.env.GOVERNED_OUTBOUND_TENANT_IDS;
   try {
-    process.env.GOVERNED_OUTBOUND_TENANT_IDS = '10,13';
-    assert.deepEqual(parseGovernedOutboundTenantIds(), ['10', '13']);
+    process.env.GOVERNED_OUTBOUND_TENANT_IDS = '10,13,17';
+    assert.deepEqual(parseGovernedOutboundTenantIds(), ['10', '13', '17']);
     assert.throws(() => parseGovernedOutboundTenantIds('10,14'), { code: 'unsupported_governed_outbound_tenant' });
   } finally {
     if (saved === undefined) delete process.env.GOVERNED_OUTBOUND_TENANT_IDS;

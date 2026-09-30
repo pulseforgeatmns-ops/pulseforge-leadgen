@@ -9,8 +9,21 @@ const {
   STUDIO_SUBSTRAL_DOMAIN,
   findStudioSubstralClient,
 } = require('./studioSubstralTenant');
+const { deliveredAuthenticationPasses } = require('./mailAuthenticationResults');
+const { governedOutboundEnabledForTenant } = require('../services/governedOutboundTenant');
 
 const CANONICAL_SENDER = 'hello@studiosubstral.com';
+const STUDIO_SUBSTRAL_TENANT_ID = '17';
+
+function asJson(value) {
+  if (value == null) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
 
 async function evaluateStudioSubstralOutboundReadiness(db, clientId) {
   const client = await findStudioSubstralClient(db);
@@ -27,30 +40,56 @@ async function evaluateStudioSubstralOutboundReadiness(db, clientId) {
   const agents = client.enabled_agents || [];
   if (agents.includes('emmett')) reasons.push('emmett_still_listed_in_enabled_agents');
 
-  let mailboxBound = false;
+  let mailboxRow = null;
   try {
     const mailbox = await db.query(
-      `SELECT id, status FROM tenant_mailbox_integrations
+      `SELECT id, status, verification_state FROM tenant_mailbox_integrations
         WHERE tenant_id = $1 AND lower(mailbox_address) = lower($2)
         LIMIT 1`,
       [String(client.id), CANONICAL_SENDER]
     );
-    mailboxBound = mailbox.rows[0]?.status === 'ACTIVE';
-    if (!mailboxBound) reasons.push('mailbox_not_authenticated');
+    mailboxRow = mailbox.rows[0] || null;
+    const status = String(mailboxRow?.status || '').toLowerCase();
+    if (status !== 'active') reasons.push('mailbox_not_authenticated');
+    else if (!deliveredAuthenticationPasses(asJson(mailboxRow.verification_state))) {
+      reasons.push('authentication_not_verified_from_delivery');
+    }
   } catch {
     reasons.push('mailbox_schema_unavailable');
+  }
+
+  let governedProgram = null;
+  try {
+    const program = await db.query(
+      `SELECT id, mode FROM acquisition_outbound_programs
+        WHERE tenant_id = $1 AND mode <> 'revoked'
+        ORDER BY authorized_at DESC LIMIT 1`,
+      [STUDIO_SUBSTRAL_TENANT_ID]
+    );
+    governedProgram = program.rows[0] || null;
+    if (!governedProgram) reasons.push('governed_outbound_program_missing');
+  } catch {
+    reasons.push('governed_outbound_schema_unavailable');
+  }
+
+  if (!governedOutboundEnabledForTenant(STUDIO_SUBSTRAL_TENANT_ID)) {
+    reasons.push('governed_outbound_not_authorized');
   }
 
   const autosend = Boolean(client.autosend_enabled);
   if (autosend) reasons.push('autosend_enabled');
 
+  const emmettAllowed = reasons.length === 0 && governedOutboundEnabledForTenant(STUDIO_SUBSTRAL_TENANT_ID);
+
   return {
-    ready: reasons.length === 0,
+    ready: emmettAllowed,
     reasons,
     sender,
     reply_mailbox: CANONICAL_SENDER,
-    emmett_allowed: false,
-    note: 'Outbound remains disabled until mailbox authentication and governed authorization are established.',
+    emmett_allowed: emmettAllowed,
+    mailbox_integration_id: mailboxRow?.id || null,
+    governed_program_id: governedProgram?.id || null,
+    note: 'Outbound remains disabled until mailbox authentication, Emmett readiness, and explicit governed authorization are established.',
   };
 }
 
