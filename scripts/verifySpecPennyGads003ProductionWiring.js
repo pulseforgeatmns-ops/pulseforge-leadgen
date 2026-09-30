@@ -17,6 +17,8 @@
 require('dotenv').config({ quiet: true });
 
 const https = require('node:https');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const pool = require('../db');
 const {
   assessGoogleAdsReadiness,
@@ -27,20 +29,24 @@ const {
   googleAds,
 } = require('../packages/penny-paid-acquisition');
 
-const { requiredGoogleAdsEnv } = googleAds;
+const {
+  requiredGoogleAdsEnv,
+  googleAdsDeveloperTokenWarnings,
+} = googleAds;
 
 const CLIENT_ID = 10;
 const OTHER_CLIENT_ID = 1;
 const DEPLOY_FLOOR_SHA = 'd54b6a52976e9a3a4afa1ebf9522a5d0a988b770';
+const GITHUB_REPO = 'pulseforgeatmns-ops/pulseforge-leadgen';
 const PRODUCTION_LOGIN_URL = 'https://pulseforge-leadgen-production.up.railway.app/login';
 
-const GOOGLE_ENV_KEYS = Object.freeze([
-  'GOOGLE_ADS_DEVELOPER_TOKEN',
+const REQUIRED_GOOGLE_ENV_KEYS = Object.freeze([
   'GOOGLE_ADS_CLIENT_ID',
   'GOOGLE_ADS_CLIENT_SECRET',
 ]);
 
 const OPTIONAL_GOOGLE_ENV_KEYS = Object.freeze([
+  'GOOGLE_ADS_DEVELOPER_TOKEN',
   'GOOGLE_ADS_API_VERSION',
   'GOOGLE_ADS_MANAGER_ACCOUNT_ID',
 ]);
@@ -291,11 +297,13 @@ async function run(options = {}) {
     mainSha = null;
   }
 
-  const googleEnv = envPresence(GOOGLE_ENV_KEYS);
+  const googleEnv = envPresence(REQUIRED_GOOGLE_ENV_KEYS);
   const optionalGoogleEnv = envPresence(OPTIONAL_GOOGLE_ENV_KEYS);
   const bindingEnv = envPresence(BINDING_ENV_KEYS);
   const versionInfo = resolveGoogleAdsApiVersion();
   const missingGoogleEnv = requiredGoogleAdsEnv();
+  const googleAdsEnvWarnings = googleAdsDeveloperTokenWarnings();
+  const mainAtOrAfterFloor = await mainHeadAtOrAfterDeployFloor(DEPLOY_FLOOR_SHA, mainSha);
 
   let bindingResult = { applied: false, skipped: true };
   if (options.applyBinding) {
@@ -364,6 +372,7 @@ async function run(options = {}) {
       required: googleEnv,
       optional: optionalGoogleEnv,
       missingRequiredKeys: missingGoogleEnv,
+      warnings: googleAdsEnvWarnings,
     },
     anchorBindingEnv: {
       requiredForApplyBinding: bindingEnv,
@@ -405,6 +414,9 @@ module.exports = {
   sameSha,
   compareStatusAtOrAfter,
   shaAtOrAfter,
+  shasEqualOrPrefix,
+  localGitHeadAtOrAfterFloor,
+  mainHeadAtOrAfterDeployFloor,
   applyGoogleAdsBinding,
   run,
 };
