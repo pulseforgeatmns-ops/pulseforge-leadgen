@@ -86,6 +86,10 @@ const {
 const { formatMissionUnderstandingProse } = require('../../acquisition-mission/StructuredMission');
 const { isMissionPlanningTurn } = require('./MissionPlanningTurn');
 const askPathTrace = require('./audit/AskPathTrace');
+const {
+  hasExplicitMissionApprovalLanguage,
+  isOperationalStatusQuery,
+} = require('./OperatorMissionTurnIntent');
 
 const { STAGES, STAGE_LABELS, SPECIALISTS, CONTRIBUTION_KINDS } = amo;
 
@@ -873,6 +877,11 @@ function buildExecutionMetadata(mission, action, executionResult) {
 
 function detectExecutionAction(question, snapshot, operatorIntent = null) {
   askPathTrace.traceEnter('detectExecutionAction');
+  const qGuard = String(question || '').trim();
+  if (isOperationalStatusQuery(qGuard) && !hasExplicitMissionApprovalLanguage(qGuard)) {
+    askPathTrace.traceEarlyReturn('detectExecutionAction', 'status_query');
+    return null;
+  }
   const resolution = operatorIntent && operatorIntent.pendingDecisionResolution;
   if (resolution && resolution.resolvedFromPendingDecision && resolution.executionAction) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'pending_decision_resolution');
@@ -927,7 +936,10 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     return 'plan_edit';
   }
 
-  if (hasPendingPlanApproval(snapshot) && /\bapprov(e|al|ed)|proceed\b/i.test(q)) {
+  if (
+    hasPendingPlanApproval(snapshot) &&
+    (hasExplicitMissionApprovalLanguage(q) || /\bproceed\b/i.test(q))
+  ) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'plan_approved');
     return 'plan_approved';
   }
@@ -959,7 +971,7 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     snapshot.mission &&
     snapshot.mission.stage === STAGES.DISCOVER &&
     hasPendingDiscoveryApproval(snapshot) &&
-    /\bapprov(e|al|ed)\b/i.test(q)
+    hasExplicitMissionApprovalLanguage(q)
   ) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'discovery_approved_pending');
     return 'discovery_approved';
@@ -976,7 +988,7 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
 
   if (
     hasPendingPrioritizationApproval(snapshot) &&
-    /\bapprov(e|al|ed)\b/i.test(q) &&
+    hasExplicitMissionApprovalLanguage(q) &&
     !/\bdiscover/i.test(q)
   ) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'prioritization_approved_pending');
@@ -1003,7 +1015,9 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
   if (hasConsumablePendingDecision(snapshot)) {
     if (
       hasPendingExecutionApproval(snapshot) &&
-      (/\bapprov(e|al|ed)\b/i.test(q) || /\bauthoriz(e|ed|ation)\b/i.test(q) || /\bexecute\b/i.test(q))
+      (hasExplicitMissionApprovalLanguage(q) ||
+        /\bauthoriz(e|ed|ation)\b/i.test(q) ||
+        /\bexecute\b/i.test(q))
     ) {
       askPathTrace.traceEarlyReturn('detectExecutionAction', 'execution_approved');
       return 'execution_approved';
@@ -1020,7 +1034,7 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     throw err;
   }
 
-  if (/\bapprov(e|al|ed)\b/i.test(q)) {
+  if (hasExplicitMissionApprovalLanguage(q)) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved');
     return 'operator_approved';
   }
@@ -1036,8 +1050,8 @@ function detectExecutionAction(question, snapshot, operatorIntent = null) {
     askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved_prioritization');
     return 'operator_approved';
   }
-  askPathTrace.traceEarlyReturn('detectExecutionAction', 'operator_approved_default');
-  return 'operator_approved';
+  askPathTrace.traceEarlyReturn('detectExecutionAction', 'no_explicit_execution_action');
+  return null;
 }
 
 function shouldExecutePlan(action, snapshot) {
@@ -1115,6 +1129,11 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   const question = String(input.question || '').trim();
   const conversationIntent = input.conversationIntent || null;
   const operatorIntent = input.operatorIntent || null;
+
+  if (isOperationalStatusQuery(question) && !hasExplicitMissionApprovalLanguage(question)) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'status_query_read_only');
+    return null;
+  }
 
   const tenantId = resolveTenantId(input);
   let amoResolution = { mission: null, unresolvedBoundMissionId: null };
@@ -1242,6 +1261,10 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   }
 
   let action = detectExecutionAction(question, snapshot, operatorIntent);
+  if (!action) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'no_execution_action_detected');
+    return null;
+  }
   const emitMatched = useGlobalAudit
     ? logMissionApprovalMatched
     : audit.logApprovalMatched.bind(audit);

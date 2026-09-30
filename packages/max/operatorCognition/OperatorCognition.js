@@ -11,6 +11,7 @@ const {
   modeMutatesMission,
 } = require('./ThinkingModes');
 const { isMissionExecutionCommand } = require('../workspace/ExecutionLanguageDetection');
+const { isOperationalStatusQuery } = require('../workspace/OperatorMissionTurnIntent');
 const { isMissionPlanningTurn } = require('../workspace/MissionPlanningTurn');
 const {
   splitClauses,
@@ -223,6 +224,10 @@ function classifyOperatorCognition(question, input = {}) {
       }
     }
     return buildConversationIntent(THINKING_MODES.INSPECT, 'conversational_continue', 0.86);
+  }
+
+  if (isOperationalStatusQuery(q)) {
+    return buildConversationIntent(THINKING_MODES.INSPECT, 'status_query', 0.96);
   }
 
   if (isMissionExecutionCommand(q)) {

@@ -15,6 +15,11 @@ const {
   isPureNegationClause,
   EXECUTION_VERB_RE,
 } = require('./MissionLifecycleIntent');
+const {
+  hasExplicitMissionApprovalLanguage,
+  isOperationalStatusQuery,
+  approvalWordInQuestionContextOnly,
+} = require('./OperatorMissionTurnIntent');
 
 const MISSION_CREATE_COMMAND_RE =
   /\b(create|begin|start)\s+(?:a\s+)?(?:brand[- ]?new\s+)?(?:new\s+)?(?:acquisition\s+)?mission\b/i;
@@ -115,10 +120,22 @@ function isMissionExecutionCommand(text) {
   guardPostIntentParsing('isMissionExecutionCommand');
   const q = normalizeText(text);
   if (!q) return false;
+  if (isOperationalStatusQuery(q) && !hasExplicitMissionApprovalLanguage(q)) {
+    return false;
+  }
+  if (approvalWordInQuestionContextOnly(q)) {
+    return false;
+  }
   const clauses = splitClauses(q);
-  return clauses.some((clause) =>
-    MISSION_EXECUTION_COMMAND_RES.some((re) => clauseMatchesExecutionCommand(clause, re))
-  );
+  return clauses.some((clause) => {
+    if (approvalWordInQuestionContextOnly(clause)) return false;
+    return MISSION_EXECUTION_COMMAND_RES.some((re) => {
+      if (re.source.includes('approv') && !hasExplicitMissionApprovalLanguage(clause)) {
+        return false;
+      }
+      return clauseMatchesExecutionCommand(clause, re);
+    });
+  });
 }
 
 module.exports = {
