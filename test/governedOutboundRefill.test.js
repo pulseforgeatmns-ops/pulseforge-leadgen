@@ -9,8 +9,24 @@ const {
   remainingScheduleSlots,
   selectRefillEntries,
   selectInventoryRefillEntries,
+  finalizePreparationObservability,
   PREPARATION_BATCH_LIMIT,
 } = require('../services/governedOutboundRefill');
+
+test('finalizePreparationObservability requires a terminal reason when prepare was requested but nothing added', () => {
+  assert.deepEqual(
+    finalizePreparationObservability({ prepareRequested: 1, preparedAdded: 0, prepareSkippedReason: null }),
+    { prepareRequested: 1, preparedAdded: 0, prepareSkippedReason: 'preparation_not_executed' },
+  );
+  assert.deepEqual(
+    finalizePreparationObservability({ prepareRequested: 1, preparedAdded: 1, prepareSkippedReason: null }),
+    { prepareRequested: 1, preparedAdded: 1, prepareSkippedReason: null },
+  );
+  assert.deepEqual(
+    finalizePreparationObservability({ prepareRequested: 1, preparedAdded: 0, prepareSkippedReason: 'no_clean_inventory' }),
+    { prepareRequested: 1, preparedAdded: 0, prepareSkippedReason: 'no_clean_inventory' },
+  );
+});
 
 test('remaining dispatch capacity is sent-today subtracted from dispatchCapacityNow', () => {
   assert.equal(remainingDispatchCapacity({ dispatchCapacityNow: 8, sentToday: 5 }), 3);

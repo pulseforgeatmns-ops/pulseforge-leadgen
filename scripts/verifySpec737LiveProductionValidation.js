@@ -38,6 +38,14 @@ const VALID_PREPARE_SKIP = Object.freeze([
   'daily_authorization_exhausted',
   'total_authorization_exhausted',
   'envelope_not_refillable',
+  'control_execute_disabled',
+  'send_lock_overlap',
+  'preparation_not_executed',
+  'environment_kill_switch',
+  'cap_reached',
+  'uncertain_send_requires_reconciliation',
+  'verified_inventory_shortfall',
+  'no_eligible_prepared_candidates',
 ]);
 
 const TERMINAL_LOSS_KEYS = Object.freeze([
