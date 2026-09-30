@@ -370,6 +370,23 @@ test('Greater Manchester mission still resolves the Anchor city set', () => {
   );
 });
 
+test('mission source tenant metadata is not an authorization source for replenishment', () => {
+  assert.equal(
+    resolveReplenishmentTenantContext({
+      program: { tenant_id: '10' },
+      source: { tenant_id: '1', tenantId: '1' },
+    }).tenantId,
+    '10'
+  );
+  assert.throws(
+    () => resolveReplenishmentTenantContext({
+      program: { id: 'outbound_missing' },
+      source: { tenant_id: '1', tenantId: '1' },
+    }),
+    { code: 'replenishment_tenant_required' }
+  );
+});
+
 test('missing tenant context fails closed instead of defaulting to 10', async () => {
   await assert.rejects(
     () => runEnrichmentBatches({ run: async () => ({ considered: 0 }) }, {}, 1),

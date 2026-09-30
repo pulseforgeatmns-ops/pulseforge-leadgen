@@ -10,7 +10,7 @@ const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
 const { createOutboundEngine, assessOperatingCapacity } = require('../packages/emmett-outbound');
 const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
 const { governedContactReason } = require('../utils/governedContactEligibility');
-const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
+const { assertGovernedOutboundTenantId, createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
 const { buildTenantMailboxInboxSnapshot } = require('./emmettTenantMailboxSnapshot');
 const { createGovernedTenantMailboxSend } = require('../utils/governedOutboundTransport');
 
@@ -28,7 +28,9 @@ async function readOutboundHistory(pool, tenantId, clientId, ignoreItem = null) 
 }
 
 function adapters(pool, dependencies = {}) {
-  const ctx = createGovernedOutboundTenantContext(dependencies.tenantId || '10');
+  const ctx = createGovernedOutboundTenantContext(
+    assertGovernedOutboundTenantId(dependencies.tenantId),
+  );
   const tenantId = ctx.tenantId;
   const clientId = ctx.clientId;
   const loadMission = dependencies.loadMission || (id => loadMissionSnapshot(id, tenantId, pool));

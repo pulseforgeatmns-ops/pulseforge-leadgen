@@ -8,6 +8,7 @@ const {
   confirmedServiceAreaMatch,
   missionCandidateReason,
   runMaxOutboundControlLoop,
+  resolveReplenishmentTenantContext,
   _test: { scoutInput, mapReuseCompanyRows },
 } = require('../services/maxOutboundControlLoop');
 const { adapters } = require('../services/governedOutboundAdapters');
@@ -186,6 +187,7 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
   let scoutPlan = null;
   const program = {
     id: 'outbound_test',
+    tenant_id: '10',
     mode: 'active',
     policy_hash: 'policy_hash',
     source_mission_id: 'mission_source',
@@ -261,6 +263,7 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
   const calls = [];
   const program = {
     id: 'outbound_test',
+    tenant_id: '10',
     mode: 'active',
     policy_hash: 'policy_hash',
     source_mission_id: 'mission_source',
@@ -344,6 +347,7 @@ test('Max observation can be disabled without invoking Scout', async () => {
     execute: false,
     program: {
       id: 'outbound_test',
+      tenant_id: '10',
       mode: 'active',
       policy_hash: 'policy_hash',
       source_mission_id: 'mission_source',
@@ -407,4 +411,116 @@ test('governed scheduler dispatches before Max replenishment on the control cycl
 test('inventory buffer never exceeds the remaining reviewed total grant',()=>{
  const plan=buildControlPlan({dailyCap:1,emmettCapacity:4,cleanInventory:2,targetDays:3,totalAttempted:0,policy:{dailyCap:1,totalCap:2},operatingCapacity:{planningDailyCapacity:1,dispatchCapacityNow:0,effectiveDailyCapacity:1}});
  assert.equal(plan.targetInventory,2);assert.equal(plan.shouldReplenish,false);
+});
+
+test('governed tenant identity comes from the authorized program, not acquisition mission metadata', () => {
+  const program = { tenant_id: '10', id: 'outbound_10' };
+  const sourceWithForeignTenant = { tenant_id: '1', tenantId: '1', id: 'mission_pulseforge' };
+  assert.equal(
+    resolveReplenishmentTenantContext({ program, source: sourceWithForeignTenant }).tenantId,
+    '10'
+  );
+  assert.equal(
+    resolveReplenishmentTenantContext({ tenantId: '13', program: { tenant_id: '10' } }).tenantId,
+    '13'
+  );
+});
+
+test('unsupported and missing governed tenants fail closed in the control loop', async () => {
+  const infrastructure = {
+    cap: 5,
+    snapshot: { sentToday: 0 },
+    assessed: { governor: { outcome: 'proceed' }, health: { score: 80 } },
+    operating: {
+      recommendedSafeDailyCapacity: 5,
+      authorizationLimitedCapacity: 5,
+      scheduleLimitedCapacity: 5,
+      dispatchableDailyCapacity: 5,
+      effectiveDailyCapacity: 5,
+      governor: 'proceed',
+    },
+  };
+  const base = {
+    pool: {},
+    source: { id: 'mission_source', payload: {} },
+    store: { event: async () => {} },
+    infrastructure,
+    inventory: { clean: [], excluded: [], scope: {} },
+  };
+
+  await assert.rejects(
+    () => runMaxOutboundControlLoop({
+      ...base,
+      program: {
+        id: 'outbound_bad',
+        tenant_id: '99',
+        mode: 'active',
+        policy_hash: 'hash',
+        source_mission_id: 'mission_source',
+        policy: { dailyCap: 5 },
+      },
+    }),
+    { code: 'unsupported_governed_outbound_tenant' }
+  );
+
+  await assert.rejects(
+    () => runMaxOutboundControlLoop({
+      ...base,
+      program: {
+        id: 'outbound_missing',
+        mode: 'active',
+        policy_hash: 'hash',
+        source_mission_id: 'mission_source',
+        policy: { dailyCap: 5 },
+      },
+    }),
+    { code: 'replenishment_tenant_required' }
+  );
+});
+
+test('Babrun authorized program tenant 13 propagates through replenishment when control passes tenantId', async () => {
+  let rampTenant = null;
+  const result = await runMaxOutboundControlLoop({
+    pool: {},
+    tenantId: '13',
+    program: {
+      id: 'outbound_13',
+      tenant_id: '13',
+      mode: 'active',
+      policy_hash: 'hash',
+      source_mission_id: 'mission_babrun',
+      policy: { dailyCap: 2 },
+    },
+    source: {
+      id: 'mission_babrun',
+      payload: {
+        structuredMission: {
+          market: { segment: 'small_business_owner', industry: 'founder_led_smb' },
+          geography: { region: 'United States', scope: 'nationwide', cities: [] },
+        },
+      },
+    },
+    store: { event: async () => {} },
+    infrastructure: {
+      cap: 2,
+      snapshot: { sentToday: 0 },
+      assessed: { governor: { outcome: 'proceed' }, health: { score: 80 } },
+      operating: {
+        recommendedSafeDailyCapacity: 2,
+        authorizationLimitedCapacity: 2,
+        scheduleLimitedCapacity: 2,
+        dispatchableDailyCapacity: 2,
+        effectiveDailyCapacity: 2,
+        governor: 'proceed',
+      },
+    },
+    inventory: { clean: [], excluded: [], scope: {} },
+    inventoryAfter: { clean: [{ prospectId: '1' }, { prospectId: '2' }], excluded: [], scope: {} },
+    scoutRamp: async ({ tenantContext }) => {
+      rampTenant = tenantContext.tenantId;
+      return { promoted: 2, enrichmentPromoted: 2, discoveredQueued: 2 };
+    },
+  });
+  assert.equal(rampTenant, '13');
+  assert.equal(result.scout != null, true);
 });

@@ -207,16 +207,14 @@ function firstPresent(...values) {
 function resolveReplenishmentTenantContext(input = {}) {
   const raw = firstPresent(
     input.tenantId,
-    input.clientId,
     input.program && input.program.tenant_id,
     input.program && input.program.tenantId,
     input.store && input.store.tenantId,
-    input.store && input.store.clientId,
     input.scoutContext && input.scoutContext.tenantId,
+    input.clientId,
+    input.store && input.store.clientId,
     input.scoutContext && input.scoutContext.clientId,
     input.scoutContext && input.scoutContext.client_id,
-    input.source && input.source.tenantId,
-    input.source && input.source.tenant_id,
   );
   if (!raw) {
     throw Object.assign(new Error('replenishment_tenant_required'), {
@@ -228,6 +226,17 @@ function resolveReplenishmentTenantContext(input = {}) {
     tenantId,
     clientId: Number(tenantId),
   });
+}
+
+function bindGovernedOutboundStoreTenant(store, tenantContext) {
+  if (store.tenantId != null && String(store.tenantId).trim()) {
+    assertGovernedOutboundTenantId(store.tenantId);
+    if (store.clientId == null) store.clientId = Number(store.tenantId);
+    return store;
+  }
+  store.tenantId = tenantContext.tenantId;
+  store.clientId = tenantContext.clientId;
+  return store;
 }
 
 function resolveScoutRampAllowedCities(scope = {}) {
@@ -293,7 +302,7 @@ function missionCandidateReason(row, scope) {
 }
 
 async function loadSource(pool, program, tenantId) {
-  const tid = String(tenantId || program.tenant_id || '10');
+  const tid = resolveReplenishmentTenantContext({ tenantId, program }).tenantId;
   return (await pool.query(
     'SELECT id,objective,target_segment,payload FROM acquisition_missions WHERE tenant_id=$1 AND id=$2',
     [tid, program.source_mission_id]
@@ -301,7 +310,7 @@ async function loadSource(pool, program, tenantId) {
 }
 
 async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
-  const cid = Number(clientId || store.clientId || 10);
+  const cid = Number(clientId || store.clientId || resolveReplenishmentTenantContext({ store }).clientId);
   const scope = sourceScope(source);
   const { rows } = await pool.query(`
     SELECT p.*, c.name AS company_name, c.domain AS company_domain, c.website AS company_website,
@@ -364,7 +373,7 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
 function scoutInput(program, source, plan, tenantContext = null) {
   const scope = sourceScope(source);
   const payload = source?.payload || {};
-  const tenant = tenantContext || resolveReplenishmentTenantContext({ program, source });
+  const tenant = tenantContext || resolveReplenishmentTenantContext({ program });
   const tenantId = tenant.tenantId;
   const region = firstPresent(scope.region, (scope.cities || []).join(', '));
   if (!region) {
@@ -598,8 +607,9 @@ async function defaultScoutRamp({
   skipVerificationRetry = false,
   enrichment = null,
   runDiscovery = null,
+  tenantContext = null,
 } = {}) {
-  const tenant = resolveReplenishmentTenantContext({ program, store, source });
+  const tenant = tenantContext || resolveReplenishmentTenantContext({ program, store });
   const enricher = enrichment || require('../scoutUnenrichedEnrichmentAgent');
   const first = await runEnrichmentBatches(enricher, pool, plan.deficit, tenant);
   let promoted = first.promoted + first.recovered;
@@ -748,21 +758,42 @@ async function capturePreparationObservability({
 async function runMaxOutboundControlLoop(options = {}) {
   const pool = options.pool || require('../db');
   const logger = options.logger || console;
-  const store = options.store || new GovernedOutboundStore(pool, options.tenantId || '10');
+  let store = options.store;
+  if (!store) {
+    const seedTenant = firstPresent(
+      options.tenantId,
+      options.program && options.program.tenant_id,
+      options.program && options.program.tenantId,
+    );
+    if (!seedTenant) {
+      throw Object.assign(new Error('replenishment_tenant_required'), {
+        code: 'replenishment_tenant_required',
+      });
+    }
+    store = new GovernedOutboundStore(pool, assertGovernedOutboundTenantId(seedTenant));
+  }
   const program = options.program || await store.program();
   if (!program || ['paused', 'revoked'].includes(program.mode)) {
     return { halted: 'no_enabled_program' };
   }
 
-  const source = options.source || await loadSource(pool, program, store.tenantId);
+  const tenantContext = resolveReplenishmentTenantContext({
+    tenantId: options.tenantId,
+    program,
+    store,
+  });
+  store = bindGovernedOutboundStoreTenant(store, tenantContext);
+
+  const source = options.source || await loadSource(pool, program, tenantContext.tenantId);
   if (!source) return { halted: 'source_mission_missing', programId: program.id };
 
-  const governedAdapters = options.governedAdapters || createGovernedAdapters(pool, { tenantId: store.tenantId });
+  const governedAdapters = options.governedAdapters
+    || createGovernedAdapters(pool, { tenantId: tenantContext.tenantId });
   const controlNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const infrastructure = options.infrastructure
     || await governedAdapters.infrastructure(program, controlNow, null, { mode: 'planning' });
   const inventoryBefore = options.inventory
-    || await loadCleanInventory(pool, store, source, store.clientId, program.policy);
+    || await loadCleanInventory(pool, store, source, tenantContext.clientId, program.policy);
   const sentToday = Number(infrastructure?.snapshot?.sentToday || 0);
   const operating = resolveOperatingCapacity({
     operatingCapacity: infrastructure.operating,
@@ -774,8 +805,8 @@ async function runMaxOutboundControlLoop(options = {}) {
     totalAttempted: infrastructure.totalAttempted,
     now: controlNow,
   });
-  const timestamps = options.timestamps || await loadInventoryTimestamps(pool, store.tenantId);
-  const funnelStock = options.funnel || await loadScoutFunnelStock(pool, store.clientId);
+  const timestamps = options.timestamps || await loadInventoryTimestamps(pool, tenantContext.tenantId);
+  const funnelStock = options.funnel || await loadScoutFunnelStock(pool, tenantContext.clientId);
   const plan = buildControlPlan({
     dailyCap: program.policy.dailyCap,
     emmettCapacity: infrastructure.cap,
@@ -792,12 +823,20 @@ async function runMaxOutboundControlLoop(options = {}) {
   let scout = null;
   if (plan.shouldReplenish && options.execute !== false) {
     const ramp = options.scoutRamp || defaultScoutRamp;
-    scout = await ramp({ pool, store, program, source, plan, logger });
+    scout = await ramp({
+      pool,
+      store,
+      program,
+      source,
+      plan,
+      logger,
+      tenantContext,
+    });
   }
 
   const inventoryAfter = options.inventoryAfter
     || (plan.shouldReplenish && options.execute !== false
-      ? await loadCleanInventory(pool, store, source, store.clientId, program.policy)
+      ? await loadCleanInventory(pool, store, source, tenantContext.clientId, program.policy)
       : inventoryBefore);
 
   const inventoryGrowth = computeCleanInventoryGrowth(inventoryBefore.clean, inventoryAfter.clean);
@@ -1023,6 +1062,7 @@ module.exports = {
   capturePreparationObservability,
   defaultScoutRamp,
   resolveReplenishmentTenantContext,
+  bindGovernedOutboundStoreTenant,
   resolveScoutRampAllowedCities,
   _test: {
     scoutInput,
@@ -1032,6 +1072,7 @@ module.exports = {
     runEnrichmentBatches,
     defaultScoutRamp,
     resolveReplenishmentTenantContext,
+    bindGovernedOutboundStoreTenant,
     resolveScoutRampAllowedCities,
   },
 };
