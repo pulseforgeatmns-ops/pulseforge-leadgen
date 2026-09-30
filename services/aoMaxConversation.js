@@ -25,6 +25,7 @@ const { buildCoachingReply } = require('../utils/aoAccountPrioritization');
 const { isActiveConversationStatus } = require('../utils/aoRoutingIssueTypes');
 const { logAoAuditEvent } = require('../utils/aoAuditEvents');
 const { requestProspectBrief } = require('./aoProspectBriefService');
+const { aoResultHttpStatus } = require('../utils/aoHttpResult');
 
 function conversationPreview(payload = {}) {
   const messages = payload.messages || [];
@@ -118,7 +119,7 @@ async function markConversationDone({ sessionId, aoOwnerId, clientId, closedBy }
   return {
     ok: true,
     session_id: sessionId,
-    status: 'done',
+    conversationStatus: 'done',
     previous_status: session.status,
   };
 }
@@ -297,7 +298,7 @@ async function startNewConversation({ aoOwnerId, clientId, previousSessionId = n
     session_id: session.id,
     mode: 'conversation',
     completed: false,
-    status: 'active',
+    conversationStatus: 'active',
     reply: 'New conversation started. What do you need help with?',
   };
 }
@@ -338,7 +339,7 @@ async function reopenConversation({ sessionId, aoOwnerId, clientId, reopenedBy }
   return {
     ok: true,
     session_id: sessionId,
-    status: 'reopened',
+    conversationStatus: 'reopened',
     previous_status: previousStatus,
     messages: payload.messages || [],
     prospect_label: prospectLabel(payload, session),
@@ -461,7 +462,7 @@ async function continueConversationForProspect({
       ok: true,
       action: 'resume',
       session_id: session.id,
-      status: session.status,
+      conversationStatus: session.status,
       messages: payload.messages || [],
       prospect_id: session.prospect_id,
       prospect_label: prospectLabel(payload, session),
@@ -475,7 +476,7 @@ async function continueConversationForProspect({
       clientId,
       reopenedBy: aoOwnerId,
     });
-    if (reopened.status) return reopened;
+    if (aoResultHttpStatus(reopened)) return reopened;
     await logAoAuditEvent({
       event: 'AO_COMMAND_CENTER_CONTINUE_CLICKED',
       clientId,
@@ -508,7 +509,7 @@ async function continueConversationForProspect({
     ok: true,
     action: 'created',
     session_id: session.id,
-    status: 'active',
+    conversationStatus: 'active',
     messages: [],
     prospect_id: resolvedProspectId,
     prospect_label: prospectLabel(session.payload || {}, session),
@@ -559,7 +560,7 @@ async function handleProspectBriefAction({
     leadId,
     source,
   });
-  if (briefResult.status) return briefResult;
+  if (aoResultHttpStatus(briefResult)) return briefResult;
 
   let session = sessionId
     ? await getActiveConversationSession(sessionId, aoOwnerId, { clientId })
@@ -631,7 +632,7 @@ async function handleProspectBriefAction({
     session_id: session.id,
     mode: 'conversation',
     completed: false,
-    status: session.status,
+    conversationStatus: session.status,
     intent: 'prospect_brief',
     reply: briefResult.brief,
     brief: briefResult.brief,
@@ -640,6 +641,7 @@ async function handleProspectBriefAction({
     prospect_id: briefResult.prospect_id,
     lead_id: briefResult.lead_id,
     mission_id: briefResult.mission_id,
+    accountStatus: briefResult.account_status || null,
     account: payload.selected_account || null,
   };
 }
