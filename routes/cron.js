@@ -17,7 +17,24 @@ function anchorCron(method) {
     } catch (e) { return res.status(500).json({ error: e.code || 'anchor_daily_outbound_failed' }); }
   };
 }
-router.post('/cron/anchor-daily-outbound', anchorCron('run'));
+async function handleGovernedOutboundTickCron(req, res) {
+  const crypto = require('crypto');
+  const expected = Buffer.from(process.env.CRON_SECRET || '');
+  const supplied = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer /, ''));
+  if (!expected.length || expected.length !== supplied.length || !crypto.timingSafeEqual(expected, supplied)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const result = await require('../services/governedOutboundExecutionClock').runGovernedOutboundTickCycle({
+      allTenants: true,
+    });
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (e) {
+    return res.status(500).json({ error: e.code || 'governed_outbound_tick_failed' });
+  }
+}
+router.post('/cron/anchor-daily-outbound', handleGovernedOutboundTickCron);
+router.post('/cron/governed-outbound-tick', handleGovernedOutboundTickCron);
 router.post('/cron/anchor-outbound-replies', anchorCron('poll'));
 router.post('/cron/anchor-max-outbound-control', async (req, res) => {
   const crypto = require('crypto');
