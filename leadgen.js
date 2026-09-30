@@ -523,6 +523,10 @@ function cityFromLocation(location) {
 }
 
 function getClientScoutPlan(clientId) {
+  if (CLIENT_CONFIG?.scoring_profile === 'studio_substral') {
+    const { STUDIO_SUBSTRAL_SCOUT_PLAN } = require('./services/studioSubstralScoutIntelligence');
+    return STUDIO_SUBSTRAL_SCOUT_PLAN;
+  }
   return CLIENT_SCOUT_PLANS[Number(clientId)] || null;
 }
 
@@ -638,6 +642,10 @@ function isCleaningBuyerProfile() {
 
 function isWebDesignProfile() {
   return CONFIG.scoringProfile === 'web_design' || CONFIG.scoringProfile === 'studio_substral';
+}
+
+function isStudioSubstralScoutProfile() {
+  return CONFIG.scoringProfile === 'studio_substral';
 }
 
 function validCleaningEmailOrNull(email) {
@@ -2728,7 +2736,42 @@ async function saveToDatabase(leads, {
             google_review_count: googleReviewCount,
             skipPuppeteer: true,
           }, { pool, skipPuppeteer: true });
-          if (webAssessment?.opportunity_score != null) {
+
+          if (isStudioSubstralScoutProfile()) {
+            const { evaluateStudioSubstralScoutProspect } = require('./services/studioSubstralScoutIntelligence');
+            const { persistStudioSubstralScoutProspect } = require('./services/studioSubstralScoutPersistence');
+            const { intelligence, outreachStatus } = evaluateStudioSubstralScoutProspect({
+              lead: {
+                ...lead,
+                company: companyName,
+                email,
+                phone,
+                url: websiteUrl,
+                vertical: CONFIG.vertical,
+              },
+              assessment: webAssessment?.assessment || webAssessment,
+              vertical: CONFIG.vertical,
+              location: lead.address || CONFIG.location,
+              rawDiscovery: CONFIG.rawDiscovery,
+            });
+            await persistStudioSubstralScoutProspect(pool, prospectId, CONFIG.clientId, {
+              intelligence,
+              outreachStatus,
+            });
+            if (!intelligence.accepted) {
+              await pool.query('DELETE FROM prospects WHERE id = $1 AND client_id = $2', [prospectId, CONFIG.clientId]);
+              saved--;
+              rejected++;
+              incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.LOW_SCORE);
+              skipped++;
+              await persistScoutSkip(runId, lead, SCOUT_SKIP_REASONS.LOW_SCORE, {
+                studio_fit_score: intelligence.studio_fit_score,
+                studio_reject_reason: intelligence.reject_reason,
+                minimum_studio_fit_score: 65,
+              }, companyName);
+              continue;
+            }
+          } else if (webAssessment?.opportunity_score != null) {
             const mapped = mapOpportunityScoreToIcp(
               webAssessment.opportunity_score,
               webAssessment.recommended_action
@@ -2775,31 +2818,33 @@ async function saveToDatabase(leads, {
       );
 
       try {
-        await pool.query(`
-          UPDATE prospects
-          SET setter_status = 'new', setter_updated_at = NOW()
-          WHERE id = $1 AND client_id = $2
-        `, [prospectId, CONFIG.clientId]);
-        const setterUpdate = await setSetterVisibility(pool, prospectId, {
-          reason: 'scout',
-          clientId: CONFIG.clientId,
-          source: 'scout',
-        });
-        if (setterUpdate?.setter_visible) {
-          await safeIngestScoutLifecycleSignal({
-            prospectId,
+        if (!isStudioSubstralScoutProfile()) {
+          await pool.query(`
+            UPDATE prospects
+            SET setter_status = 'new', setter_updated_at = NOW()
+            WHERE id = $1 AND client_id = $2
+          `, [prospectId, CONFIG.clientId]);
+          const setterUpdate = await setSetterVisibility(pool, prospectId, {
+            reason: 'scout',
             clientId: CONFIG.clientId,
-            eventType: 'prospect_qualified',
-            sourceRecordId: `setter-visibility:${prospectId}`,
-            metadata: { icp_score: lead.score, qualification_source: 'scout_setter_gate' },
+            source: 'scout',
           });
-        }
-        if (CONFIG.clientId === 1 && setterUpdate?.setter_visible) {
-          const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
-          if (handoff.appended) setterQueued++;
-          else setterSkipped++;
-        } else {
-          setterSkipped++;
+          if (setterUpdate?.setter_visible) {
+            await safeIngestScoutLifecycleSignal({
+              prospectId,
+              clientId: CONFIG.clientId,
+              eventType: 'prospect_qualified',
+              sourceRecordId: `setter-visibility:${prospectId}`,
+              metadata: { icp_score: lead.score, qualification_source: 'scout_setter_gate' },
+            });
+          }
+          if (CONFIG.clientId === 1 && setterUpdate?.setter_visible) {
+            const handoff = await appendQualifiedScoutLead(lead, CONFIG.industry);
+            if (handoff.appended) setterQueued++;
+            else setterSkipped++;
+          } else {
+            setterSkipped++;
+          }
         }
       } catch (err) {
         setterFailed++;
@@ -3291,6 +3336,9 @@ async function runWithAttribution(params = {}) {
   if (params.titleExclude != null) CONFIG.titleExclude = params.titleExclude;
   if (params.sizeSignal != null) CONFIG.sizeSignal = params.sizeSignal;
   if (params.dryRun != null) CONFIG.dryRun = booleanValue(params.dryRun);
+  if (params.raw_discovery != null || params.rawDiscovery != null) {
+    CONFIG.rawDiscovery = booleanValue(params.raw_discovery ?? params.rawDiscovery);
+  }
   if (params.maxRequests != null) CONFIG.maxRequests = positiveInteger(params.maxRequests, 20, 100);
   if (params.pageDepth != null) CONFIG.pageDepth = positiveInteger(params.pageDepth, 1, 10);
 

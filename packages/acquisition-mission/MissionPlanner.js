@@ -33,6 +33,7 @@ const {
   buildMissingGeographyAmbiguity,
   tenantGeographyChoices,
 } = require('./CanonicalGeographyEvidence');
+const { responseTypeForAmbiguity } = require('./PendingDecisionResponseType');
 
 const GREATER_MANCHESTER_CITIES = Object.freeze([
   'Manchester',
@@ -350,7 +351,10 @@ function detectAmbiguities(extracted, text, opts = {}) {
     });
   }
 
-  return ambiguities;
+  return ambiguities.map((row) => ({
+    ...row,
+    responseType: row.responseType || responseTypeForAmbiguity(row),
+  }));
 }
 
 function applyResolutions(extracted, resolutions = {}) {

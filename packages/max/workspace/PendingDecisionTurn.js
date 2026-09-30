@@ -12,6 +12,7 @@ const {
 } = require('./PendingDecisionResolver');
 const { presentableOperatorDecision } = require('../../acquisition-mission/PendingOperatorDecision');
 const { OPERATOR_DECISION_KINDS } = require('../../acquisition-mission/types');
+const { isYesNoPendingDecision } = require('../../acquisition-mission/PendingDecisionResponseType');
 const {
   buildMissionCommunication,
   applyMissionCommunication,
@@ -98,14 +99,22 @@ function buildClarifyProse(question, resolution, snapshot) {
   if (resolution.outcome === RESOLUTION_OUTCOMES.QUESTION) {
     prefix = `${contextualPendingAnswer(question, resolution, snapshot)}\n\n`;
   } else if (resolution.outcome === RESOLUTION_OUTCOMES.AMBIGUOUS) {
+    const yesNoDecision = isYesNoPendingDecision({
+      ...pending,
+      kind: resolution.decisionKind || pending.kind,
+    });
+    const ambiguousPrefix = yesNoDecision
+      ? "I didn't catch a clear yes or no for the pending decision.\n\n"
+      : "I didn't catch a clear answer for the pending decision.\n\n";
     // SPEC-211 — For execution_approval decisions, include the canonical executionReview
     // when clarifying an ambiguous response to help the operator make an informed decision.
-    if (resolution.decisionKind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL && snapshot) {
+    if (
+      yesNoDecision &&
+      resolution.decisionKind === OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL &&
+      snapshot
+    ) {
       const review = ensureReadyExecutionReview(snapshot, snapshot.mission || null);
       if (review) {
-        const blockers = Array.isArray(review.decision && review.decision.blockers)
-          ? review.decision.blockers
-          : [];
         reviewProse = [
           '## Execution Ready',
           '',
@@ -126,10 +135,8 @@ function buildClarifyProse(question, resolution, snapshot) {
           '',
         ].join('\n');
       }
-      prefix = "I didn't catch a clear yes or no for the pending decision.\n\n";
-    } else {
-      prefix = "I didn't catch a clear yes or no for the pending decision.\n\n";
     }
+    prefix = ambiguousPrefix;
   }
 
   return `${prefix}${reviewProse}${prompt}`.trim();

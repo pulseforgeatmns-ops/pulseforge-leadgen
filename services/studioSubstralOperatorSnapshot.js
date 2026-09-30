@@ -5,8 +5,10 @@ const {
   findStudioSubstralClient,
 } = require('../utils/studioSubstralTenant');
 const { listAssessmentOpportunities } = require('./studioSubstralPersistence');
+const { listStudioSubstralScoutProspects } = require('./studioSubstralScoutPersistence');
 const { listAssessmentsForClient } = require('./websiteOpportunityPersistence');
 const { prioritizeStudioSubstralOpportunities } = require('../utils/studioSubstralMaxPrioritization');
+const { STUDIO_MIN_FIT_SCORE, STUDIO_PRIORITY_THRESHOLD } = require('./studioSubstralScoutIntelligence');
 const { evaluateStudioSubstralOutboundReadiness } = require('../utils/studioSubstralOutboundGovernance');
 const { ASSESSMENT_STAGE } = require('../utils/studioSubstralAssessmentWorkflow');
 
@@ -21,7 +23,15 @@ async function buildStudioSubstralOperatorSnapshot(db, clientId) {
   const { missionId, mission } = await ensureStudioSubstralMission(db);
   const assessmentRequests = await listAssessmentOpportunities(db, clientId, { limit: 25 });
   const assessments = await listAssessmentsForClient(db, clientId, { limit: 50 });
-  const prioritized = prioritizeStudioSubstralOpportunities({ assessments, assessmentRequests });
+  const scoutProspects = await listStudioSubstralScoutProspects(db, clientId, {
+    limit: 25,
+    minScore: STUDIO_MIN_FIT_SCORE,
+  });
+  const prioritized = prioritizeStudioSubstralOpportunities({
+    assessments,
+    assessmentRequests,
+    scoutProspects,
+  });
   const outbound = await evaluateStudioSubstralOutboundReadiness(db, clientId);
 
   const pendingIntake = assessmentRequests.filter((row) => row.stage === ASSESSMENT_STAGE.REQUESTED);
@@ -51,9 +61,19 @@ async function buildStudioSubstralOperatorSnapshot(db, clientId) {
       updated_at: row.updated_at,
     })),
     top_website_opportunities: prioritized.top_website_opportunities.slice(0, 5),
+    scout_prospects: scoutProspects.map((row) => ({
+      id: row.id,
+      studio_fit_score: row.studio_fit_score,
+      studio_category: row.studio_category,
+      studio_outreach_status: row.studio_outreach_status,
+      studio_confidence: row.studio_confidence,
+      recommended_outreach_angle: row.recommended_outreach_angle,
+      manual_priority: Number(row.studio_fit_score) >= STUDIO_PRIORITY_THRESHOLD,
+    })),
     evidence_summary: {
       pending_intake_count: pendingIntake.length,
       woi_assessment_count: assessments.length,
+      scout_qualified_count: scoutProspects.length,
     },
     outbound_governance: outbound,
     prioritized: prioritized.combined.slice(0, 8),

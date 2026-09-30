@@ -2875,8 +2875,18 @@ async function run(args = {}) {
           if (CLIENT_CONFIG?.scoring_profile === 'studio_substral') {
             const { listAssessmentOpportunities } = require('./services/studioSubstralPersistence');
             const { prioritizeStudioSubstralOpportunities } = require('./utils/studioSubstralMaxPrioritization');
+            const { listStudioSubstralScoutProspects } = require('./services/studioSubstralScoutPersistence');
+            const { STUDIO_MIN_FIT_SCORE } = require('./services/studioSubstralScoutIntelligence');
             const assessmentRequests = await listAssessmentOpportunities(pool, CLIENT_ID, { limit: 25 });
-            webDigest = prioritizeStudioSubstralOpportunities({ assessments, assessmentRequests });
+            const scoutProspects = await listStudioSubstralScoutProspects(pool, CLIENT_ID, {
+              limit: 25,
+              minScore: STUDIO_MIN_FIT_SCORE,
+            });
+            webDigest = prioritizeStudioSubstralOpportunities({
+              assessments,
+              assessmentRequests,
+              scoutProspects,
+            });
           } else {
             webDigest = buildMaxWebOpportunityDigest(assessments);
           }

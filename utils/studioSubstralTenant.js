@@ -68,7 +68,7 @@ async function ensureStudioSubstralTenant(db = pool) {
         'America/New_York',
         'Website diagnosis, targeted remediation, redesign and build',
         'https://studiosubstral.com',
-        ARRAY['United States'],
+        ARRAY['Manchester','Bedford','Goffstown','Hooksett','Londonderry','Auburn','Nashua','Concord','Derry','Merrimack','Hudson','Pelham','Salem'],
         ARRAY['professional_services','legal','accounting','home_services','dental','fitness','restaurant','salon','hvac','roofing','landscaping','med_spa'],
         'Established businesses with a live website, meaningful commercial value on that site, and a real decision about what to fix, rebuild, or leave alone.',
         'studio_substral',

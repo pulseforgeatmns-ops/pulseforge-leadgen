@@ -160,6 +160,13 @@ describe('Paige writer/evaluator model selection', () => {
         { type: 'text', text: '  public response  ' },
       ],
     }), 'public response');
+    assert.equal(paigeAgent._test.extractPaigeWriterResponseText({
+      stop_reason: 'end_turn',
+      content: [
+        { type: 'thinking', thinking: 'private reasoning' },
+        { text: 'legacy text block without explicit type' },
+      ],
+    }), 'legacy text block without explicit type');
     assert.throws(
       () => paigeAgent._test.extractPaigeWriterResponseText({
         stop_reason: 'max_tokens',

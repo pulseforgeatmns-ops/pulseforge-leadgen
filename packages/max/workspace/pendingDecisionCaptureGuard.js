@@ -9,6 +9,8 @@ const { OPERATOR_DECISION_KINDS } = require('../../acquisition-mission/types');
  * questions fall through to normal routing. Jev remains optional/shadow-only.
  */
 
+const { isStructuredClarificationPending } = require('../../acquisition-mission/PendingDecisionResponseType');
+
 const CAPTURE_INTENTS = Object.freeze({
   DECISION_RESPONSE: 'decision_response',
   PENDING_DECISION_CLARIFICATION: 'pending_decision_clarification',
