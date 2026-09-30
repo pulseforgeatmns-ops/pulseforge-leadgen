@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'lib/walkthrough*.js'
+      - 'routes/walkthrough.js'
+      - 'test/walkthroughRoutes.test.js'
       - 'test/walkthroughNotification*.test.js'
       - 'migrations/2026-09-30-walkthrough-notification-claims.sql'
       - '.github/workflows/walkthrough-notification-safety.yml'
@@ -10,6 +12,8 @@ on:
     branches: [main]
     paths:
       - 'lib/walkthrough*.js'
+      - 'routes/walkthrough.js'
+      - 'test/walkthroughRoutes.test.js'
       - 'test/walkthroughNotification*.test.js'
       - 'migrations/2026-09-30-walkthrough-notification-claims.sql'
       - '.github/workflows/walkthrough-notification-safety.yml'
@@ -37,3 +41,5 @@ jobs:
           echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
       - name: Verify test isolation and atomic duplicate protection
         run: node --test test/walkthroughNotification.test.js test/walkthroughNotificationPostgres.test.js
+      - name: Verify public intake and synthetic rejection
+        run: node --test --test-name-pattern='walkthrough' test/walkthroughRoutes.test.js

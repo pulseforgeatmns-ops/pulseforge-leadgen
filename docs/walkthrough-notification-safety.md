@@ -15,7 +15,8 @@ example/test email domains, fictional 555-01xx numbers, and explicit `is_test`,
 `is_demo`, `is_synthetic`, or `submission_mode=test|demo|preview|seed|synthetic`
 markers. Validation preserves these markers. Automated production smoke checks
 must set a marker and use a reserved email address. Do not use real prospect
-identities for synthetic checks.
+identities for synthetic checks. The public form rejects these synthetic
+submissions with HTTP 422 before creating CRM records or downstream outreach.
 
 `ANCHOR_WALKTHROUGH_NOTIFY_ENABLED=false` pauses these notifications without
 disabling lead capture or other Anchor email workflows.

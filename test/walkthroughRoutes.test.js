@@ -25,6 +25,10 @@ function basePayload(overrides = {}) {
   };
 }
 
+function routePayload(overrides = {}) {
+  return basePayload({ email: 'alex@office-mail.com', phone: '6034202430', ...overrides });
+}
+
 function listen(app) {
   const server = app.listen(0, '127.0.0.1');
   return new Promise((resolve) => {
@@ -143,7 +147,7 @@ describe('walkthrough public route', () => {
   });
 
   it('creates a walkthrough request', async () => {
-    const res = await request(harness.base, 'POST', '/api/public/walkthrough', basePayload());
+    const res = await request(harness.base, 'POST', '/api/public/walkthrough', routePayload());
     assert.equal(res.status, 201);
     assert.equal(res.json.ok, true);
     assert.equal(res.json.submission_id, 8801);
@@ -169,7 +173,7 @@ describe('walkthrough public route', () => {
   it('accepts optional first-party attribution on walkthrough POST', async () => {
     const mock = createWalkthroughCaptureMockPool({ nextActionId: 8802 });
     pool.query = mock.query.bind(mock);
-    const res = await request(harness.base, 'POST', '/api/public/walkthrough', basePayload({
+    const res = await request(harness.base, 'POST', '/api/public/walkthrough', routePayload({
       attribution: {
         oppref: 'paid-token',
         landing_page_url: 'https://goanchorcleaning.com/?oppref=paid-token',
@@ -187,6 +191,22 @@ describe('walkthrough public route', () => {
     assert.notEqual(insertPayload.attribution.provenance.sourceKind, 'PLATFORM_API');
     assert.equal(insertPayload.attribution.raw.evil, undefined);
     assert.ok(insertPayload.prospect_id);
+  });
+
+  it('rejects synthetic and marked demo submissions before any CRM write', async () => {
+    const query = pool.query;
+    pool.query = async () => { throw new Error('Synthetic intake must not write to the CRM'); };
+    try {
+      for (const body of [basePayload(), routePayload({ is_demo: true }), routePayload({ submission_mode: 'test' })]) {
+        walkthroughRouter._rateBuckets.clear();
+        const res = await request(harness.base, 'POST', '/api/public/walkthrough', body);
+        assert.equal(res.status, 422);
+        assert.equal(res.json.submission_id, undefined);
+      }
+    } finally {
+      pool.query = query;
+      walkthroughRouter._rateBuckets.clear();
+    }
   });
 });
 
