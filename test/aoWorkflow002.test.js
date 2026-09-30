@@ -26,12 +26,12 @@ test('CRM Max brief includes required AO-facing sections', () => {
     task: { suggested_opener: 'Quick question on who owns cleaning decisions.' },
   });
   const text = renderCrmBriefText(sections);
-  assert.match(text, /Why this account matters/);
-  assert.match(text, /What we know/);
-  assert.match(text, /Likely angle/);
-  assert.match(text, /Suggested next move/);
+  assert.match(text, /Where this stands/);
+  assert.match(text, /Why this is the next move/);
+  assert.match(text, /Known context/);
+  assert.match(text, /Next action/);
   assert.match(text, /Short talk track/);
-  assert.match(text, /What to watch for/);
+  assert.match(text, /What to listen for/);
   assert.equal(sections.account_name, 'Beacon Law');
 });
 
