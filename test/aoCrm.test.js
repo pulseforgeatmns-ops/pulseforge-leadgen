@@ -59,6 +59,14 @@ test('CRM pages reference durable account views', () => {
   assert.match(mgr, /manager\/accounts/);
 });
 
+test('AO CRM Brief Me modal keeps long briefs within the mobile viewport', () => {
+  const crm = fs.readFileSync(path.join(__dirname, '..', 'public', 'ao-crm.html'), 'utf8');
+  assert.match(crm, /max-height:\s*calc\(100dvh - 32px\)/);
+  assert.match(crm, /modal-brief-scroll/);
+  assert.match(crm, /body\.modal-open/);
+  assert.match(crm, /openModalBackdrop/);
+});
+
 function listen(app) {
   const server = app.listen(0, '127.0.0.1');
   return new Promise(resolve => server.on('listening', () => resolve({
