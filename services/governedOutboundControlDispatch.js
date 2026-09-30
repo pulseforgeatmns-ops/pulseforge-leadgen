@@ -213,7 +213,7 @@ async function dispatchGovernedOutboundControl(options = {}) {
 
 async function runBoundedMaxOutboundControl(options = {}) {
   const pool = options.pool || require('../db');
-  const tenantId = assertGovernedOutboundTenantId(options.tenantId || '10');
+  const tenantId = require('./governedOutboundContext').assertGovernedOutboundTenantRequired(options.tenantId);
   const logger = options.logger || console;
   const runControl = options.runControl || defaultRunControl;
   const admission = await admitControlCycle(pool, tenantId);

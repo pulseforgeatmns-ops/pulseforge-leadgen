@@ -50,7 +50,11 @@ const {
   observabilityFromRefill,
 } = require('./governedOutboundRefill');
 const { clock } = require('../packages/acquisition-mission/DailyOutboundPolicy');
-const { assertGovernedOutboundTenantId } = require('./governedOutboundTenant');
+const {
+  createGovernedOutboundContext,
+  resolveGovernedAuthorizationTenantId,
+  resolveReplenishmentTenantContext,
+} = require('./governedOutboundContext');
 
 const DEFAULT_TARGET_DAYS = 3;
 const DEFAULT_ENRICHMENT_BATCH = 5;
@@ -204,32 +208,6 @@ function firstPresent(...values) {
   return null;
 }
 
-function resolveReplenishmentTenantContext(input = {}) {
-  const raw = firstPresent(
-    input.tenantId,
-    input.clientId,
-    input.program && input.program.tenant_id,
-    input.program && input.program.tenantId,
-    input.store && input.store.tenantId,
-    input.store && input.store.clientId,
-    input.scoutContext && input.scoutContext.tenantId,
-    input.scoutContext && input.scoutContext.clientId,
-    input.scoutContext && input.scoutContext.client_id,
-    input.source && input.source.tenantId,
-    input.source && input.source.tenant_id,
-  );
-  if (!raw) {
-    throw Object.assign(new Error('replenishment_tenant_required'), {
-      code: 'replenishment_tenant_required',
-    });
-  }
-  const tenantId = assertGovernedOutboundTenantId(raw);
-  return Object.freeze({
-    tenantId,
-    clientId: Number(tenantId),
-  });
-}
-
 function resolveScoutRampAllowedCities(scope = {}) {
   return resolveMissionAllowedCities({
     missionCities: scope.cities,
@@ -293,7 +271,7 @@ function missionCandidateReason(row, scope) {
 }
 
 async function loadSource(pool, program, tenantId) {
-  const tid = String(tenantId || program.tenant_id || '10');
+  const tid = resolveGovernedAuthorizationTenantId({ tenantId, program });
   return (await pool.query(
     'SELECT id,objective,target_segment,payload FROM acquisition_missions WHERE tenant_id=$1 AND id=$2',
     [tid, program.source_mission_id]
@@ -301,7 +279,10 @@ async function loadSource(pool, program, tenantId) {
 }
 
 async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
-  const cid = Number(clientId || store.clientId || 10);
+  const cid = Number(clientId ?? store.clientId);
+  if (!Number.isFinite(cid)) {
+    throw Object.assign(new Error('governed_outbound_tenant_required'), { code: 'governed_outbound_tenant_required' });
+  }
   const scope = sourceScope(source);
   const { rows } = await pool.query(`
     SELECT p.*, c.name AS company_name, c.domain AS company_domain, c.website AS company_website,
@@ -364,7 +345,11 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
 function scoutInput(program, source, plan, tenantContext = null) {
   const scope = sourceScope(source);
   const payload = source?.payload || {};
-  const tenant = tenantContext || resolveReplenishmentTenantContext({ program, source });
+  const tenant = resolveReplenishmentTenantContext({
+    governedContext: tenantContext?.governedContext || tenantContext,
+    tenantId: tenantContext?.tenantId,
+    program,
+  });
   const tenantId = tenant.tenantId;
   const region = firstPresent(scope.region, (scope.cities || []).join(', '));
   if (!region) {
@@ -410,10 +395,9 @@ async function persistDiscoveredCompanies(pool, store, {
   tenantId = null,
 } = {}) {
   const tenant = resolveReplenishmentTenantContext({
-    store,
-    scoutContext,
-    tenantId,
-    clientId: scoutContext.clientId || scoutContext.client_id,
+    governedContext: scoutContext.governedContext,
+    tenantId: tenantId || scoutContext.authorizedTenantId,
+    program: scoutContext.program,
   });
   let inserted = 0;
   const counters = createReplenishmentAdmissionCounters();
@@ -544,8 +528,8 @@ function mapReuseCompanyRows(rows, tenantId) {
   }));
 }
 
-async function loadReuseCompanies(pool, clientId) {
-  const tenant = resolveReplenishmentTenantContext({ clientId });
+async function loadReuseCompanies(pool, tenantId) {
+  const tenant = resolveReplenishmentTenantContext({ tenantId });
   const { rows } = await pool.query(`
     SELECT c.id,c.name,c.domain,c.website,c.location,p.vertical,p.icp_score,p.updated_at
     FROM companies c
@@ -555,8 +539,12 @@ async function loadReuseCompanies(pool, clientId) {
   return mapReuseCompanyRows(rows, tenant.tenantId);
 }
 
-async function runEnrichmentBatches(enrichment, pool, requested, tenantContext) {
-  const tenant = resolveReplenishmentTenantContext(tenantContext || {});
+async function runEnrichmentBatches(enrichment, pool, requested, tenantContext = null) {
+  const tenant = resolveReplenishmentTenantContext({
+    governedContext: tenantContext?.governedContext,
+    tenantId: tenantContext?.tenantId,
+    program: tenantContext?.program,
+  });
   const summaries = [];
   let promoted = 0;
   let recovered = 0;
@@ -598,10 +586,13 @@ async function defaultScoutRamp({
   skipVerificationRetry = false,
   enrichment = null,
   runDiscovery = null,
+  governedContext = null,
 } = {}) {
-  const tenant = resolveReplenishmentTenantContext({ program, store, source });
+  const governed = governedContext || createGovernedOutboundContext({ program });
+  const tenant = resolveReplenishmentTenantContext({ governedContext: governed, program });
+  const tenantBinding = { ...tenant, program, governedContext: governed };
   const enricher = enrichment || require('../scoutUnenrichedEnrichmentAgent');
-  const first = await runEnrichmentBatches(enricher, pool, plan.deficit, tenant);
+  const first = await runEnrichmentBatches(enricher, pool, plan.deficit, tenantBinding);
   let promoted = first.promoted + first.recovered;
   let discovery = null;
   let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
@@ -614,7 +605,7 @@ async function defaultScoutRamp({
     discovery = await discover(
       scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant),
       {
-        loadCompanies: async () => loadReuseCompanies(pool, tenant.clientId),
+        loadCompanies: async () => loadReuseCompanies(pool, tenant.tenantId),
         persistCompanies: async input => {
           persisted = await persistDiscoveredCompanies(pool, store, {
             ...input,
@@ -624,7 +615,9 @@ async function defaultScoutRamp({
               allowedCities,
               serviceAreas: allowedCities,
               clientId: tenant.clientId,
-              tenantId: tenant.tenantId,
+              authorizedTenantId: tenant.tenantId,
+              governedContext: governed,
+              program,
             },
           });
           return persisted;
@@ -634,7 +627,7 @@ async function defaultScoutRamp({
     );
 
     if (persisted.inserted > 0 && promoted < plan.deficit) {
-      const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenant);
+      const second = await runEnrichmentBatches(enricher, pool, plan.deficit - promoted, tenantBinding);
       promoted += second.promoted + second.recovered;
       first.promoted += second.promoted;
       first.recovered += second.recovered;
@@ -748,16 +741,28 @@ async function capturePreparationObservability({
 async function runMaxOutboundControlLoop(options = {}) {
   const pool = options.pool || require('../db');
   const logger = options.logger || console;
-  const store = options.store || new GovernedOutboundStore(pool, options.tenantId || '10');
-  const program = options.program || await store.program();
+  const programEarly = options.program || null;
+  const seedTenantId = options.tenantId || options.store?.tenantId || programEarly?.tenant_id;
+  const governedContext = options.governedContext || createGovernedOutboundContext({
+    tenantId: seedTenantId,
+    program: programEarly,
+  });
+  const store = options.store || new GovernedOutboundStore(pool, governedContext.tenantId);
+  const program = programEarly || await store.program();
   if (!program || ['paused', 'revoked'].includes(program.mode)) {
     return { halted: 'no_enabled_program' };
   }
 
-  const source = options.source || await loadSource(pool, program, store.tenantId);
+  const governed = createGovernedOutboundContext({
+    governedContext,
+    program,
+    tenantId: governedContext.tenantId,
+  });
+
+  const source = options.source || await loadSource(pool, program, governed.tenantId);
   if (!source) return { halted: 'source_mission_missing', programId: program.id };
 
-  const governedAdapters = options.governedAdapters || createGovernedAdapters(pool, { tenantId: store.tenantId });
+  const governedAdapters = options.governedAdapters || createGovernedAdapters(pool, { governedContext: governed });
   const controlNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const infrastructure = options.infrastructure
     || await governedAdapters.infrastructure(program, controlNow, null, { mode: 'planning' });
@@ -792,7 +797,7 @@ async function runMaxOutboundControlLoop(options = {}) {
   let scout = null;
   if (plan.shouldReplenish && options.execute !== false) {
     const ramp = options.scoutRamp || defaultScoutRamp;
-    scout = await ramp({ pool, store, program, source, plan, logger });
+    scout = await ramp({ pool, store, program, source, plan, logger, governedContext: governed });
   }
 
   const inventoryAfter = options.inventoryAfter

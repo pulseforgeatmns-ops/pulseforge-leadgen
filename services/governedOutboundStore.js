@@ -18,9 +18,11 @@ function ownershipDomain(value) {
 }
 
 class GovernedOutboundStore {
-  constructor(pool, tenantId = '10') {
+  constructor(pool, tenantId) {
     this.pool = pool;
-    this.ctx = createGovernedOutboundTenantContext(tenantId);
+    this.ctx = createGovernedOutboundTenantContext(
+      require('./governedOutboundContext').assertGovernedOutboundTenantRequired(tenantId)
+    );
     this.tenantId = this.ctx.tenantId;
     this.clientId = this.ctx.clientId;
   }
