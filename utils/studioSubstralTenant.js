@@ -100,6 +100,42 @@ async function ensureStudioSubstralTenant(db = pool) {
   return client;
 }
 
+const SUBSTRAL_MISSION_PROFILE = Object.freeze({
+  ...SUBSTRAL_MISSION_CONSTRAINTS,
+  doctrine: Object.freeze([
+    'diagnosis_before_design',
+    'redesign_not_assumed',
+    'assessment_satisfies_initial_mission',
+  ]),
+  valid_downstream_conclusions: Object.freeze([
+    'TARGETED_FIX',
+    'REDESIGN_BUILD',
+    'NO_WORK_REQUIRED',
+    'INSUFFICIENT_EVIDENCE',
+  ]),
+});
+
+async function applySubstralMissionProfile(db, clientId, missionId) {
+  if (!missionId) return;
+  await db.query(
+    `UPDATE acquisition_missions
+        SET payload = jsonb_set(
+          jsonb_set(payload, '{studio_substral_profile}', $1::jsonb, true),
+          '{targetSegment}',
+          to_jsonb($2::text),
+          true
+        )
+      WHERE client_id = $3
+        AND payload->>'id' = $4`,
+    [
+      JSON.stringify(SUBSTRAL_MISSION_PROFILE),
+      'Established businesses with live websites — United States',
+      clientId,
+      missionId,
+    ]
+  );
+}
+
 async function ensureStudioSubstralMission(db = pool, { reset = false } = {}) {
   const client = await ensureStudioSubstralTenant(db);
   if (reset) resetEngine();
@@ -120,10 +156,16 @@ async function ensureStudioSubstralMission(db = pool, { reset = false } = {}) {
   }
 
   if (existing.rows[0]?.mission_id) {
+    await applySubstralMissionProfile(db, client.id, existing.rows[0].mission_id);
+    const refreshed = await db.query(
+      `SELECT payload FROM acquisition_missions
+        WHERE client_id = $1 AND payload->>'id' = $2 LIMIT 1`,
+      [client.id, existing.rows[0].mission_id]
+    );
     return {
       client,
       missionId: existing.rows[0].mission_id,
-      mission: existing.rows[0].payload,
+      mission: refreshed.rows[0]?.payload || existing.rows[0].payload,
       created: false,
     };
   }
@@ -138,10 +180,17 @@ async function ensureStudioSubstralMission(db = pool, { reset = false } = {}) {
     constraints: SUBSTRAL_MISSION_CONSTRAINTS,
   }, { pool: db, persist: true });
 
+  await applySubstralMissionProfile(db, client.id, mission.id);
+  const refreshed = await db.query(
+    `SELECT payload FROM acquisition_missions
+      WHERE client_id = $1 AND payload->>'id' = $2 LIMIT 1`,
+    [client.id, mission.id]
+  );
+
   return {
     client,
     missionId: mission.id,
-    mission,
+    mission: refreshed.rows[0]?.payload || mission,
     created: true,
   };
 }
@@ -172,6 +221,7 @@ module.exports = {
   STUDIO_SUBSTRAL_DOMAIN,
   SUBSTRAL_MISSION_OBJECTIVE,
   SUBSTRAL_MISSION_CONSTRAINTS,
+  SUBSTRAL_MISSION_PROFILE,
   SUBSTRAL_BRAND_VOICE,
   findStudioSubstralClient,
   ensureStudioSubstralTenant,

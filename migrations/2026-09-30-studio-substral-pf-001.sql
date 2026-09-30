@@ -3,9 +3,9 @@
 CREATE TABLE IF NOT EXISTS studio_substral_assessment_opportunities (
   id BIGSERIAL PRIMARY KEY,
   client_id INTEGER NOT NULL REFERENCES clients(id),
-  agent_action_id BIGINT REFERENCES agent_actions(id),
-  company_id INTEGER REFERENCES companies(id),
-  prospect_id INTEGER REFERENCES prospects(id),
+  agent_action_id UUID REFERENCES agent_actions(id),
+  company_id UUID REFERENCES companies(id),
+  prospect_id UUID REFERENCES prospects(id),
   mission_id TEXT,
   domain TEXT NOT NULL,
   request_key TEXT,
