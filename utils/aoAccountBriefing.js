@@ -538,7 +538,7 @@ function deriveFieldNextAction(view) {
   }
 
   if (view.stage === 'proposal' || view.source_row.status === 'proposal_needed' || view.source_row.lead_status === 'proposal_needed') {
-    return 'Follow up on the proposal and ask whether any scope or timing questions remain.';
+    return 'Call about the proposal and ask whether any scope or timing questions remain.';
   }
 
   if ((view.stage === 'research' || isGenericEnumAction(view.raw_next_action)) && !view.has_contact) {
@@ -559,10 +559,11 @@ function deriveFieldNextAction(view) {
 
   if (view.has_conversation && (view.follow_up.kind === 'overdue' || view.follow_up.kind === 'today' || view.follow_up.kind === 'future')) {
     const who = contactName || 'the account';
+    const phone = view.contact_phone ? ` at ${view.contact_phone}` : '';
     if (topic) {
-      return `Follow up with ${who} about ${topic} and ask for the next concrete step.`;
+      return `Call ${who}${phone}, pick up the thread on ${topic}, and confirm the next concrete step.`;
     }
-    return `Follow up with ${who} and ask for the next concrete step.`;
+    return `Call ${who}${phone} and confirm the next concrete step.`;
   }
 
   if (/phone_follow_up/i.test(String(view.raw_next_action || ''))) {
@@ -660,25 +661,22 @@ function deriveCampaignContext(row) {
 
 function buildKnownFacts(view) {
   const known = [];
-  if (view.lane.confidence === 'high' && view.lane.label) {
-    known.push(`${titleCase(view.lane.label)} account in your assigned portfolio`);
-  } else {
-    known.push('Assigned account in your portfolio');
-  }
-  if (view.priority === 'high') known.push('High priority');
-  if (view.priority === 'warm') known.push('Warm priority');
-  if (view.assignment_provenance) known.push(view.assignment_provenance);
-  if (!view.has_conversation && view.campaign_context) known.push(view.campaign_context);
-  if (!view.has_contact) known.push('No decision-maker captured yet');
+  if (view.business_name) known.push(view.business_name);
+  if (view.contact_phone) known.push(`Phone: ${view.contact_phone}`);
+  if (view.address) known.push(`Location: ${view.address}`);
   if (view.has_contact && view.contact_name) {
     const title = view.contact_title ? ` (${view.contact_title})` : '';
-    known.push(`Contact on file: ${view.contact_name}${title}`);
+    known.push(`Contact: ${view.contact_name}${title}`);
   }
-  if (!view.has_conversation) known.push('No recent conversation logged');
+  if (!view.has_contact) known.push('No decision-maker captured yet');
+  if (view.assignment_provenance) known.push(view.assignment_provenance);
+  if (!view.has_conversation && view.campaign_context) known.push(view.campaign_context);
   if (view.conversation_note) known.push(`Last conversation: ${firstSentence(view.conversation_note, 140)}`);
+  else if (!view.has_conversation) known.push('No AO conversation notes logged yet');
   if (view.intel.current_vendor) known.push(`Current vendor: ${view.intel.current_vendor}`);
   if (view.intel.current_pain) known.push(`Pain point: ${view.intel.current_pain}`);
-  if (view.address) known.push(`Address: ${view.address}`);
+  if (view.priority === 'high') known.push('High priority');
+  if (view.priority === 'warm') known.push('Warm priority');
   if (view.interest_level === 'high' && view.has_conversation) known.push('High interest recorded');
   return known;
 }
@@ -814,33 +812,127 @@ function bulletList(items) {
   return items.map(item => `- ${item}`).join('\n');
 }
 
+function briefingWhereThisStands(view) {
+  if (view.waiting_on_jake) {
+    const operatorAction = waitingOnOperatorAction(view.source_row);
+    return operatorAction
+      ? `Waiting on Jake for ${operatorAction}. No AO action required until then.`
+      : 'Waiting on Jake. No AO action required until then.';
+  }
+
+  const parts = [];
+  if (!view.has_contact) {
+    parts.push('No decision-maker identified yet.');
+  } else if (view.intel.contact_role === 'decision_maker') {
+    parts.push('Decision-maker contact is on file.');
+  } else {
+    parts.push('Contact on file — decision-maker not confirmed yet.');
+  }
+
+  if (!view.has_conversation) {
+    parts.push('No prior AO conversation logged yet.');
+  } else if (view.conversation_note) {
+    parts.push(`Last logged context: ${firstSentence(view.conversation_note, 120)}.`);
+  }
+
+  if (view.follow_up.kind === 'overdue') {
+    parts.push(`Next touch was due ${view.follow_up.label.replace(/^Overdue since /, '')} — overdue.`);
+  } else if (view.follow_up.kind === 'today') {
+    parts.push('Next touch is due today.');
+  } else if (view.follow_up.label) {
+    parts.push(view.follow_up.label.replace(/^Due /, 'Next touch due '));
+  } else if (view.stage === 'research' || view.operational_state === 'not_started') {
+    parts.push('Queued for an initial diagnostic call.');
+  }
+
+  return parts.join(' ');
+}
+
+function briefingWhyThisNext(view) {
+  if (view.waiting_on_jake) {
+    return 'Jake needs to respond before you change approach or commit to scope.';
+  }
+  if (view.stage === 'walkthrough' || view.operational_state === 'walkthrough_requested') {
+    return 'Confirm walkthrough logistics and access before discussing pricing or scope changes.';
+  }
+  if (view.stage === 'proposal') {
+    return 'Stay on the proposal thread — clarify open scope or timing questions instead of re-pitching from scratch.';
+  }
+  if (view.intel.current_pain) {
+    return 'Use what they already told you — validate the pain is still true and who can act on it before offering a walkthrough or quote.';
+  }
+  if (view.has_conversation && view.conversation_topic) {
+    return 'Pick up the last thread with a concrete question instead of restarting with a generic pitch.';
+  }
+  if (!view.has_contact) {
+    return 'Before pitching cleaning support, identify who owns cleaning/vendor decisions and whether there is any current pain with the existing setup.';
+  }
+  return 'Confirm who owns vendor decisions and how cleaning is handled today before suggesting Anchor as an option.';
+}
+
+function briefingListenFor(view) {
+  const items = [];
+  if (view.intel.current_pain) items.push(view.intel.current_pain);
+  if (view.intel.current_vendor) items.push(`incumbent vendor (${view.intel.current_vendor})`);
+
+  if (view.lane.id === 'property_management' || view.lane.id === 'development') {
+    items.push(
+      'who handles janitorial vendors',
+      'turnover or common-area misses',
+      'backup vendor gaps when primary misses work',
+    );
+  } else if (view.lane.id === 'commercial_office') {
+    items.push(
+      'who owns vendor decisions',
+      'whether cleaning is internal or outsourced',
+      'whether staff ever has to clean after missed work',
+      'conference room / restroom / kitchen / lobby consistency',
+      'after-hours access or confidentiality concerns',
+    );
+  } else {
+    items.push(
+      'who owns vendor decisions',
+      'current cleaner or in-house setup',
+      'what gets missed first when cleaning slips',
+    );
+  }
+
+  if (!view.has_contact) {
+    items.unshift('name and role of the facilities or office decision-maker');
+  }
+
+  return [...new Set(items.filter(Boolean))].join(', ');
+}
+
+function briefingShortTalkTrack(view) {
+  if (view.suggested_message) return view.suggested_message;
+  const name = view.business_name || 'the office';
+  return `Hi, I'm Jake with Anchor Cleaning. I was hoping to ask who usually handles cleaning or facilities decisions for ${name}. We help local offices when cleaning starts creating extra work for the team, but I don't want to assume that's relevant here.`;
+}
+
 function formatAccountBriefing(lead, options = {}) {
   const view = buildAoAccountView(lead, options);
   const lines = [
     `Briefing — ${view.business_name}`,
     '',
-    'Why it matters:',
-    view.why_it_matters,
+    'Where this stands:',
+    briefingWhereThisStands(view),
     '',
-    'Status:',
-    view.status_line,
+    'Why this is the next move:',
+    briefingWhyThisNext(view),
     '',
-    'Who to ask for:',
-    view.who_to_ask_for,
-    '',
-    'What we know:',
+    'Known context:',
     bulletList(view.known),
-    '',
-    'What we still need:',
-    view.unknown.length ? bulletList(view.unknown) : '- No additional gaps recorded',
     '',
     'Next action:',
     view.next_action,
+    '',
+    'What to listen for:',
+    briefingListenFor(view),
+    '',
+    'Short talk track:',
+    briefingShortTalkTrack(view),
   ];
-
-  if (view.follow_up.label) {
-    lines.push('', 'Follow-up:', view.follow_up.label);
-  }
 
   return lines.join('\n');
 }

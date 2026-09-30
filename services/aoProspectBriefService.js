@@ -24,16 +24,40 @@ async function fetchOpenTaskForProspect({ prospectId, clientId, aoOwnerId }) {
   return rows[0] || null;
 }
 
+async function fetchRecentActivity({ prospectId, clientId, db = pool }) {
+  const { rows } = await db.query(`
+    SELECT activity_type, outcome, notes, created_at
+    FROM ao_prospect_activity
+    WHERE prospect_id = $1::uuid AND tenant_id = $2
+    ORDER BY created_at DESC
+    LIMIT 20
+  `, [prospectId, clientId]);
+  return rows;
+}
+
+async function fetchAoDisplayName(aoOwnerId, db = pool) {
+  const { rows } = await db.query(`
+    SELECT name FROM users WHERE id = $1 LIMIT 1
+  `, [aoOwnerId]);
+  return rows[0]?.name || null;
+}
+
 async function buildProspectBriefById({ prospectId, clientId, aoOwnerId }) {
   const bundle = await fetchProspectBundle(prospectId, clientId);
   if (!bundle) return null;
 
-  const task = await fetchOpenTaskForProspect({ prospectId, clientId, aoOwnerId });
+  const [task, activity, aoName] = await Promise.all([
+    fetchOpenTaskForProspect({ prospectId, clientId, aoOwnerId }),
+    fetchRecentActivity({ prospectId, clientId }),
+    fetchAoDisplayName(aoOwnerId),
+  ]);
   const briefInput = {
     prospect: bundle.prospect,
     company: bundle.company,
     touchpoints: bundle.touchpoints,
     task,
+    activity,
+    aoName,
   };
   const brief = formatProspectBrief(briefInput);
   const brief_sections = buildProspectBriefSections(briefInput);
