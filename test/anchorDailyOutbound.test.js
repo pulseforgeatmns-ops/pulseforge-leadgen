@@ -196,14 +196,25 @@ test('production preparation runs Scout, enrichment, Max, Paige and Emmett throu
 });
 
 test('cron rejects missing or wrong secrets, exposes only POST, and awaits the bounded worker', async () => {
+  const clockPath = require.resolve('../services/governedOutboundExecutionClock');
+  const previousClock = require.cache[clockPath];
+  let calls = 0;
+  require.cache[clockPath] = {
+    id: clockPath,
+    filename: clockPath,
+    loaded: true,
+    exports: {
+      runGovernedOutboundTickCycle: async () => {
+        calls += 1;
+        return { tenants: { 10: { halted: 'no_program' } } };
+      },
+    },
+  };
+  delete require.cache[require.resolve('../routes/cron')];
   const router = require('../routes/cron');
-  const worker = require('../anchorDailyOutboundCron');
   const route = router.stack.find(layer => layer.route?.path === '/cron/anchor-daily-outbound').route;
   assert.equal(route.methods.post, true); assert.equal(route.methods.get, undefined);
   const previous = process.env.CRON_SECRET;
-  const original = worker.run;
-  let calls = 0;
-  worker.run = async () => { calls++; return { halted: 'no_program' }; };
   const response = () => ({ statusCode: 200, status(n) { this.statusCode=n; return this; },
     set() { return this; }, json(value) { this.body=value; return this; } });
   try {
@@ -215,7 +226,9 @@ test('cron rejects missing or wrong secrets, exposes only POST, and awaits the b
     }
     assert.equal(calls, 1);
   } finally {
-    worker.run=original;
+    if (previousClock) require.cache[clockPath] = previousClock;
+    else delete require.cache[clockPath];
+    delete require.cache[require.resolve('../routes/cron')];
     if (previous === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET=previous;
   }
 });

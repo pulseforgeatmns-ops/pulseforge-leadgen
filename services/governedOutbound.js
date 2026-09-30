@@ -449,6 +449,15 @@ function service({
     }
     return finalizePreparationObservability(lockResult || {});
   }
+  async function recordTickEvaluated(program, day, outcome) {
+    const bucket = Math.floor(+now() / 300000);
+    await store.event('governed_tick_evaluated', [program.id, day, bucket], {
+      programId: program.id,
+      localDay: day,
+      tenantId: resolvedTenantId,
+      ...outcome,
+    });
+  }
   async function tick() {
     return store.lock(async () => {
       const program = await store.program();
@@ -465,7 +474,9 @@ function service({
         if (envelope.program_id !== program.id) fail('daily_envelope_already_used');
         if (program.mode === 'shadow') {
           await store.health(program);
-          return { mode: 'shadow', envelopeId: envelope.id, planned: envelope.manifest.length, sent: 0 };
+          const shadowResult = { mode: 'shadow', envelopeId: envelope.id, planned: envelope.manifest.length, sent: 0 };
+          await recordTickEvaluated(program, day, { halted: 'shadow_mode', ...shadowResult });
+          return shadowResult;
         }
         if (!isEnabled()) fail('environment_kill_switch');
         let refill = { preparedAdded: 0, prepareSkippedReason: null };
@@ -481,13 +492,17 @@ function service({
         }
         if (envelope.status === 'complete') {
           await store.health(program);
-          return { completed: true, envelopeId: envelope.id, sent: 0, ...refill };
+          const completeResult = { completed: true, envelopeId: envelope.id, sent: 0, ...refill };
+          await recordTickEvaluated(program, day, completeResult);
+          return completeResult;
         }
         const window = windowReason(program.policy, now(), true);
         if (window) fail(window);
         if (envelope.status === 'frozen') envelope = await bindApproval(program, envelope);
         if (envelope.status !== 'authorized') {
-          return { halted: envelope.status, envelopeId: envelope.id, sent: 0, ...refill };
+          const pendingAuth = { halted: envelope.status, envelopeId: envelope.id, sent: 0, ...refill };
+          await recordTickEvaluated(program, day, pendingAuth);
+          return pendingAuth;
         }
         if (counts.last_attempt && +now() - +new Date(counts.last_attempt) < program.policy.spacingMinutes * 60000) fail('spacing');
         const item = (await store.items(envelope.id)).find(x => x.status === 'pending');
@@ -495,19 +510,25 @@ function service({
           if (adapters.complete) await adapters.complete(envelope);
           await pool.query("UPDATE acquisition_outbound_envelopes SET status='complete' WHERE id=$1", [envelope.id]);
           await store.health(program);
-          return { completed: true, envelopeId: envelope.id, sent: 0, ...refill };
+          const drainedResult = { completed: true, envelopeId: envelope.id, sent: 0, ...refill };
+          await recordTickEvaluated(program, day, drainedResult);
+          return drainedResult;
         }
         await dispatch(program, envelope, item);
         if ((await store.items(envelope.id)).every(row => !['pending','attempted','uncertain'].includes(row.status))) {
           await pool.query("UPDATE acquisition_outbound_envelopes SET status='complete' WHERE id=$1", [envelope.id]);
         }
         await store.health(program);
-        return { envelopeId: envelope.id, itemId: item.id, sent: 1, ...refill };
+        const sentResult = { envelopeId: envelope.id, itemId: item.id, sent: 1, ...refill };
+        await recordTickEvaluated(program, day, sentResult);
+        return sentResult;
       } catch (e) {
         const reason = e.code || e.message;
         await store.health(program, reason);
         await store.event('tick_blocked', [program.id, day, reason], { programId: program.id, reason });
-        return { halted: reason, sent: 0 };
+        const blocked = { halted: reason, sent: 0 };
+        await recordTickEvaluated(program, day, blocked);
+        return blocked;
       }
     });
   }
