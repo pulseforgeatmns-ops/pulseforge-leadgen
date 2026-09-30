@@ -123,3 +123,38 @@ test('Mira-unavailable dry-run aborts without generating or writing', async () =
   assert.match(result.channels_failed[0], /facebook_page/);
   assert.deepEqual(writes, []);
 });
+
+test('Mira-unavailable dry-run returns structured skip reason without provider calls', async () => {
+  let providerCalls = 0;
+  const anthropicPath = require.resolve('@anthropic-ai/sdk');
+  class CountingAnthropic {
+    constructor() {
+      this.messages = {
+        create: async () => {
+          providerCalls += 1;
+          return { content: [{ type: 'text', text: 'should not run' }] };
+        },
+      };
+    }
+  }
+  require.cache[anthropicPath] = {
+    id: anthropicPath,
+    filename: anthropicPath,
+    loaded: true,
+    exports: CountingAnthropic,
+  };
+  delete require.cache[require.resolve('../paigeAgent')];
+  delete require.cache[require.resolve('../services/paigeSocialContentExecution')];
+  const paige = require('../paigeAgent');
+
+  const result = await paige.generateSocialContent({
+    client_id: 10,
+    dryRun: true,
+    channel: 'facebook_page',
+    simulateMiraUnavailable: true,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.outputs.length, 0);
+  assert.equal(providerCalls, 0);
+});

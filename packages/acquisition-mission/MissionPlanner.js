@@ -33,6 +33,7 @@ const {
   buildMissingGeographyAmbiguity,
   tenantGeographyChoices,
 } = require('./CanonicalGeographyEvidence');
+const { responseTypeForAmbiguity } = require('./PendingDecisionResponseType');
 
 const GREATER_MANCHESTER_CITIES = Object.freeze([
   'Manchester',
@@ -350,7 +351,10 @@ function detectAmbiguities(extracted, text, opts = {}) {
     });
   }
 
-  return ambiguities;
+  return ambiguities.map((row) => ({
+    ...row,
+    responseType: row.responseType || responseTypeForAmbiguity(row),
+  }));
 }
 
 function applyResolutions(extracted, resolutions = {}) {
@@ -573,8 +577,18 @@ function planFromObjective(sourceText, opts = {}) {
   return planMission(resolvedObjective, opts);
 }
 
+function normalizeClarificationAnswer(answer, ambiguity) {
+  let text = asText(answer);
+  if (!text) return text;
+  if (ambiguity && ambiguity.field === 'geography.region') {
+    text = text.replace(/^yes,?\s+/i, '').trim();
+  }
+  return text;
+}
+
 function matchChoice(ambiguity, answer) {
-  const hay = asText(answer).toLowerCase();
+  const normalized = normalizeClarificationAnswer(answer, ambiguity);
+  const hay = asText(normalized).toLowerCase();
   if (!ambiguity || !hay) return null;
   const choices = ambiguity.choices || [];
   const byId = choices.find((choice) => hay === String(choice.id).toLowerCase());
@@ -582,8 +596,24 @@ function matchChoice(ambiguity, answer) {
   const byLabel = choices.find((choice) => hay.includes(String(choice.label).toLowerCase()) || String(choice.label).toLowerCase().includes(hay));
   if (byLabel) return byLabel;
   if (ambiguity.field === 'geography.region') {
-    if (/\bnh\b|new hampshire/.test(hay)) return choices.find((choice) => choice.id === 'manchester_nh') || null;
-    if (/\buk\b|england/.test(hay)) return choices.find((choice) => choice.id === 'manchester_uk') || null;
+    if (choices.length) {
+      if (/\bnh\b|new hampshire/.test(hay)) {
+        const nh = choices.find((choice) => choice.id === 'manchester_nh');
+        if (nh) return nh;
+      }
+      if (/\buk\b|england/.test(hay)) {
+        const uk = choices.find((choice) => choice.id === 'manchester_uk');
+        if (uk) return uk;
+      }
+    }
+    const geography = expandGeography(normalized, normalized);
+    if (geography && geography.region) {
+      return {
+        id: 'operator_region_text',
+        label: normalized,
+        value: geography,
+      };
+    }
   }
   if (ambiguity.field === 'market.segment') {
     if (/\bstr\b|short[- ]term/.test(hay)) return choices.find((choice) => choice.id === 'short_term_rental') || null;

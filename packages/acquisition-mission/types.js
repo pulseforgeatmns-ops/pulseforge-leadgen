@@ -147,6 +147,13 @@ const ACQUISITION_APPROACHES = Object.freeze({
   BLOCKED: 'blocked',
 });
 
+/** How the operator should answer the pending decision prompt. */
+const OPERATOR_DECISION_RESPONSE_TYPES = Object.freeze({
+  YES_NO: 'yes_no',
+  TEXT: 'text',
+  CHOICE: 'choice',
+});
+
 /** SPEC-130 — operator decision kinds before specialist execution. */
 const OPERATOR_DECISION_KINDS = Object.freeze({
   PLAN_CLARIFICATION: 'plan_clarification',
@@ -273,6 +280,7 @@ module.exports = {
   EVENT_KINDS,
   CONTRIBUTION_KINDS,
   ACQUISITION_APPROACHES,
+  OPERATOR_DECISION_RESPONSE_TYPES,
   OPERATOR_DECISION_KINDS,
   SPECIALIST_STATES,
   HEALTH_LABELS,
