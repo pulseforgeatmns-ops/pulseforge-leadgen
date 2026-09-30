@@ -217,19 +217,17 @@ router.post('/api/crm/accounts/:prospectId/flag-for-jake', requireAoWrite, refre
   const clientId = requireAoClient(req, res);
   if (!clientId) return;
   const aoOwnerId = effectiveAoOwnerId(req);
-  const { reason, note } = req.body || {};
-  if (!reason) {
-    return res.status(400).json({
-      error: 'reason required',
-      reasons: aoAccountFlags.AO_ACCOUNT_FLAG_REASONS,
-    });
-  }
+  const body = req.body || {};
+  const note = body.note != null ? body.note : body.notes;
+  const reasonRaw = body.reason != null ? body.reason : body.flag_reason;
+  const resolvedReason = String(reasonRaw || aoAccountFlags.AO_ACCOUNT_FLAG_DEFAULT_REASON).trim()
+    || aoAccountFlags.AO_ACCOUNT_FLAG_DEFAULT_REASON;
   const result = await aoAccountFlags.createAccountFlag({
     clientId,
     aoUserId: aoOwnerId,
     prospectId: req.params.prospectId,
-    reason: String(reason),
-    note: note != null ? String(note) : null,
+    reason: resolvedReason,
+    note: note != null ? String(note) : '',
   });
   if (result.status) return res.status(result.status).json({ error: result.error, reasons: result.reasons });
   res.json(result);

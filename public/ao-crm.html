@@ -532,8 +532,19 @@ async function openBriefModal(prospectId) {
   }
 }
 
+const FLAG_FOR_JAKE_DEFAULT_REASON = 'needs_owner_help';
+
+function buildFlagForJakeBody({ selectedReason, note }) {
+  const reasonEl = selectedReason != null ? String(selectedReason).trim() : '';
+  return {
+    reason: reasonEl || FLAG_FOR_JAKE_DEFAULT_REASON,
+    note: note != null ? String(note) : '',
+  };
+}
+
 async function openFlagForJakeModal(prospectId) {
   const reasons = state.flagReasons.length ? state.flagReasons : [
+    { value: 'needs_owner_help', label: 'Need Jake / owner help' },
     { value: 'pricing_or_scope', label: 'Pricing or scope question' },
     { value: 'decision_maker_block', label: 'Can\'t reach decision-maker' },
     { value: 'incumbent_vendor', label: 'Incumbent vendor in the way' },
@@ -541,34 +552,42 @@ async function openFlagForJakeModal(prospectId) {
     { value: 'account_intel_gap', label: 'Missing account intel' },
     { value: 'other', label: 'Something else' },
   ];
+  const showReasonSelect = reasons.length > 1;
   document.getElementById('modal').innerHTML = `
     <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;margin-bottom:8px;">Flag for Jake</h2>
     <p style="font-size:0.85rem;color:var(--pf-text-muted);margin-bottom:12px;">Jake'll see this on today's operator brief with a suggested next move.</p>
-    <div class="field"><label>Reason *</label>
-      <select id="flag-reason">${reasons.map(r => `<option value="${r.value}">${r.label}</option>`).join('')}</select>
-    </div>
-    <div class="field"><label>Note</label><textarea id="flag-note" placeholder="What do you need from Jake?"></textarea></div>
+    ${showReasonSelect ? `<div class="field"><label>Reason (optional)</label>
+      <select id="flag-reason">${reasons.map(r => `<option value="${r.value}"${r.value === FLAG_FOR_JAKE_DEFAULT_REASON ? ' selected' : ''}>${r.label}</option>`).join('')}</select>
+    </div>` : ''}
+    <div class="field"><label>Note (optional)</label><textarea id="flag-note" placeholder="What do you need from Jake?"></textarea></div>
+    <p class="warn" id="flag-error" hidden style="margin-bottom:8px;"></p>
     <div style="display:flex;gap:8px;">
-      <button class="btn primary" id="save-flag">Send flag</button>
-      <button class="btn" id="cancel-flag">Cancel</button>
+      <button class="btn primary" id="save-flag" type="button">Send flag</button>
+      <button class="btn" id="cancel-flag" type="button">Cancel</button>
     </div>
   `;
   document.getElementById('modal-backdrop').classList.add('open');
   document.getElementById('cancel-flag').onclick = closeModal;
   document.getElementById('save-flag').onclick = async () => {
+    const errEl = document.getElementById('flag-error');
+    errEl.hidden = true;
+    errEl.textContent = '';
+    const reasonSelect = document.getElementById('flag-reason');
+    const payload = buildFlagForJakeBody({
+      selectedReason: reasonSelect ? reasonSelect.value : FLAG_FOR_JAKE_DEFAULT_REASON,
+      note: document.getElementById('flag-note').value,
+    });
     try {
       await api(`/ao/api/crm/accounts/${prospectId}/flag-for-jake`, {
         method: 'POST',
-        body: JSON.stringify({
-          reason: document.getElementById('flag-reason').value,
-          note: document.getElementById('flag-note').value,
-        }),
+        body: JSON.stringify(payload),
       });
       alert('Flagged for Jake.');
       closeModal();
       await loadDashboard();
     } catch (err) {
-      alert(err.message);
+      errEl.textContent = err.message || 'Could not send flag.';
+      errEl.hidden = false;
     }
   };
 }

@@ -1,6 +1,9 @@
 'use strict';
 
+const AO_ACCOUNT_FLAG_DEFAULT_REASON = 'needs_owner_help';
+
 const AO_ACCOUNT_FLAG_REASONS = Object.freeze([
+  { value: 'needs_owner_help', label: 'Need Jake / owner help' },
   { value: 'pricing_or_scope', label: 'Pricing or scope question' },
   { value: 'decision_maker_block', label: 'Can\'t reach decision-maker' },
   { value: 'incumbent_vendor', label: 'Incumbent vendor in the way' },
@@ -12,6 +15,8 @@ const AO_ACCOUNT_FLAG_REASONS = Object.freeze([
 function recommendJakeActionForFlag(reason, companyName = null) {
   const who = companyName ? `${companyName}` : 'this account';
   switch (reason) {
+    case 'needs_owner_help':
+      return `Read what the AO needs on ${who} and reply with a concrete next move today.`;
     case 'pricing_or_scope':
       return `Review pricing/scope with the AO, then call ${who} with a clear recommendation.`;
     case 'decision_maker_block':
@@ -28,6 +33,7 @@ function recommendJakeActionForFlag(reason, companyName = null) {
 }
 
 module.exports = {
+  AO_ACCOUNT_FLAG_DEFAULT_REASON,
   AO_ACCOUNT_FLAG_REASONS,
   recommendJakeActionForFlag,
 };

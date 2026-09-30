@@ -82,13 +82,21 @@ function stub(modulePath, exports) {
   };
 }
 
-test('flag-for-jake API validates reason', async () => {
+test('flag-for-jake API accepts note-only with default reason', async () => {
+  const captures = [];
   const restores = [
     stub('../utils/aoFieldSchema', { ensureAoFieldSchema: async () => {} }),
     stub('../utils/aoCrmSchema', { ensureAoCrmSchema: async () => {} }),
     stub('../services/aoAccountFlagService', {
-      AO_ACCOUNT_FLAG_REASONS: [{ value: 'other', label: 'Something else' }],
-      createAccountFlag: async () => ({ ok: true }),
+      AO_ACCOUNT_FLAG_DEFAULT_REASON: 'needs_owner_help',
+      AO_ACCOUNT_FLAG_REASONS: [
+        { value: 'needs_owner_help', label: 'Need Jake / owner help' },
+        { value: 'other', label: 'Something else' },
+      ],
+      createAccountFlag: async (input) => {
+        captures.push(input);
+        return { ok: true, flag: { id: 'f1', reason: input.reason, note: input.note } };
+      },
     }),
   ];
 
@@ -106,22 +114,43 @@ test('flag-for-jake API validates reason', async () => {
     app.use('/ao', router);
     running = await listen(app);
 
-    const bad = await fetch(`${running.base}/ao/api/crm/accounts/p1/flag-for-jake`, {
+    const noNote = await fetch(`${running.base}/ao/api/crm/accounts/p1/flag-for-jake`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ note: 'help' }),
+      body: JSON.stringify({}),
     });
-    assert.equal(bad.status, 400);
+    assert.equal(noNote.status, 200);
+    assert.equal(captures[0].reason, 'needs_owner_help');
+    assert.equal(captures[0].note, '');
 
-    const good = await fetch(`${running.base}/ao/api/crm/accounts/p1/flag-for-jake`, {
+    const noteOnly = await fetch(`${running.base}/ao/api/crm/accounts/p1/flag-for-jake`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ reason: 'other', note: 'Need pricing guidance' }),
+      body: JSON.stringify({ note: 'Need pricing guidance' }),
     });
-    assert.equal(good.status, 200);
+    assert.equal(noteOnly.status, 200);
+    assert.equal(captures[1].reason, 'needs_owner_help');
+    assert.equal(captures[1].note, 'Need pricing guidance');
+
+    const explicit = await fetch(`${running.base}/ao/api/crm/accounts/p1/flag-for-jake`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'other', note: 'Custom reason path' }),
+    });
+    assert.equal(explicit.status, 200);
+    assert.equal(captures[2].reason, 'other');
+    assert.equal(captures[2].note, 'Custom reason path');
   } finally {
     if (running) await new Promise(resolve => running.server.close(resolve));
     delete require.cache[require.resolve('../routes/ao')];
     for (const restore of restores.reverse()) restore();
   }
+});
+
+test('AO CRM flag modal sends reason and note payload', () => {
+  const crm = fs.readFileSync(path.join(__dirname, '..', 'public', 'ao-crm.html'), 'utf8');
+  assert.match(crm, /buildFlagForJakeBody/);
+  assert.match(crm, /needs_owner_help/);
+  assert.match(crm, /reason: reasonEl \|\| FLAG_FOR_JAKE_DEFAULT_REASON/);
+  assert.match(crm, /flag-error/);
 });

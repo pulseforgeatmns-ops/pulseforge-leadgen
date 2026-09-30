@@ -3,7 +3,11 @@
 const pool = require('../db');
 const { logAoAuditEvent } = require('../utils/aoAuditEvents');
 const { insertActivity } = require('./aoCrmService');
-const { AO_ACCOUNT_FLAG_REASONS, recommendJakeActionForFlag } = require('../utils/aoAccountFlagTypes');
+const {
+  AO_ACCOUNT_FLAG_DEFAULT_REASON,
+  AO_ACCOUNT_FLAG_REASONS,
+  recommendJakeActionForFlag,
+} = require('../utils/aoAccountFlagTypes');
 
 async function assertAccountAccess({ clientId, prospectId, aoUserId, db = pool }) {
   const params = [prospectId, clientId];
@@ -31,7 +35,7 @@ async function createAccountFlag({
   note = null,
   db = pool,
 }) {
-  const normalizedReason = String(reason || '').trim();
+  const normalizedReason = String(reason || '').trim() || AO_ACCOUNT_FLAG_DEFAULT_REASON;
   if (!AO_ACCOUNT_FLAG_REASONS.some(r => r.value === normalizedReason)) {
     return { status: 400, error: 'Invalid flag reason', reasons: AO_ACCOUNT_FLAG_REASONS };
   }
@@ -133,6 +137,7 @@ async function listOpenAccountFlags(clientId, { limit = 25, db = pool } = {}) {
 module.exports = {
   createAccountFlag,
   listOpenAccountFlags,
+  AO_ACCOUNT_FLAG_DEFAULT_REASON,
   AO_ACCOUNT_FLAG_REASONS,
   recommendJakeActionForFlag,
 };
