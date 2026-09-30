@@ -3,6 +3,7 @@
 const { hash, fail, policy, missionScope, clock, windowReason, candidateReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { governedOutboundEnabledForTenant, governedOutboundSendingDisabledForTenant } = require('./governedOutboundTenant');
+const { createGovernedOutboundContext } = require('./governedOutboundContext');
 const {
   evaluatePreparationRefill,
   remainingDispatchCapacity,
@@ -13,11 +14,21 @@ const {
   PREPARATION_BATCH_LIMIT,
 } = require('./governedOutboundRefill');
 
-function service({ pool, adapters, tenantId = '10', now = () => new Date(), enabled = () => governedOutboundEnabledForTenant(tenantId) }) {
-  const store = new GovernedOutboundStore(pool, tenantId);
+function service({
+  pool,
+  adapters,
+  tenantId,
+  governedContext = null,
+  now = () => new Date(),
+  enabled = null,
+} = {}) {
+  const governed = governedContext || createGovernedOutboundContext({ tenantId });
+  const resolvedTenantId = governed.tenantId;
+  const isEnabled = enabled || (() => governedOutboundEnabledForTenant(resolvedTenantId));
+  const store = new GovernedOutboundStore(pool, resolvedTenantId);
   async function authorize(input, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
-    const p = policy({ ...input, tenantId: String(input.tenantId || tenantId) }, now());
+    const p = policy({ ...input, tenantId: String(input.tenantId || resolvedTenantId) }, now());
     const source = await adapters.loadMission(p.sourceMissionId);
     if (!source?.mission?.structuredMission?.immutable || String(source.mission.tenantId) !== p.tenantId) fail('approved_source_mission_required');
     if (require('./governedOutboundTenant').createGovernedOutboundTenantContext(p.tenantId).usesTenantMailboxTransport
@@ -74,7 +85,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
     if (!selected.length) fail('verified_inventory_shortfall');
     if (recovery) {
       const current = await store.program();
-      if (enabled() || current?.id !== program.id || current.mode !== 'shadow'
+      if (isEnabled() || current?.id !== program.id || current.mode !== 'shadow'
         || current.policy_hash !== program.policy_hash || clock(now()).day !== day) fail('replenishment_grant_changed');
       await validateProgram(current);
     }
@@ -83,7 +94,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
   async function initializePreparation(input, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
     const disabled = () => {
-      if (enabled() || !governedOutboundSendingDisabledForTenant(tenantId)) fail('preparation_requires_disabled_sending');
+      if (isEnabled() || !governedOutboundSendingDisabledForTenant(resolvedTenantId)) fail('preparation_requires_disabled_sending');
     };
     disabled();
     return store.lock(async () => {
@@ -91,17 +102,17 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       try {
         await db.query('BEGIN');
         // Serialize with mode changes as well as ordinary preparation/recovery.
-        const program = (await db.query('SELECT * FROM acquisition_outbound_programs WHERE tenant_id=$1 AND mode<>\'revoked\' FOR UPDATE', [tenantId])).rows[0];
+        const program = (await db.query('SELECT * FROM acquisition_outbound_programs WHERE tenant_id=$1 AND mode<>\'revoked\' FOR UPDATE', [resolvedTenantId])).rows[0];
         if (!program || program.id !== input.programId || program.mode !== 'shadow') fail('preparation_shadow_grant_required');
         if (String(actor.id) !== program.authorized_by) fail('preparation_authorizing_operator_required');
         if (program.policy_hash !== input.policyHash) fail('policy_changed');
         if (program.scope_hash !== input.scopeHash || program.source_mission_id !== input.sourceMissionId
           || program.policy.sourceMissionId !== program.source_mission_id) fail('source_scope_changed');
         const source = await validateProgram(program);
-        if (!source.mission.structuredMission?.immutable || String(source.mission.tenantId) !== tenantId) fail('approved_source_mission_required');
+        if (!source.mission.structuredMission?.immutable || String(source.mission.tenantId) !== resolvedTenantId) fail('approved_source_mission_required');
         const day = clock(now()).day;
         if (input.localDay !== day) fail('preparation_day_changed');
-        const envelope = await store.one('SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id=$1 AND (program_id=$2 OR local_day=$3::date) LIMIT 1', [tenantId, program.id, day]);
+        const envelope = await store.one('SELECT id FROM acquisition_outbound_envelopes WHERE tenant_id=$1 AND (program_id=$2 OR local_day=$3::date) LIMIT 1', [resolvedTenantId, program.id, day]);
         if (envelope) fail('preparation_envelope_exists');
         const counts = await store.counts(program, day);
         if (counts.today || counts.total || counts.uncertain) fail('preparation_attempt_exists');
@@ -129,16 +140,16 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
   }
   async function resumeReservedPreparation(input, actor) {
     return store.lock(async () => {
-      if (enabled() || !actor?.id || !['admin','manager'].includes(actor.role)) fail('reserved_resume_requires_disabled_operator');
+      if (isEnabled() || !actor?.id || !['admin','manager'].includes(actor.role)) fail('reserved_resume_requires_disabled_operator');
       const program = await store.program();
       if (program?.mode !== 'shadow' || program.id !== input.programId || program.authorized_by !== String(actor.id)) fail('replenishment_shadow_grant_required');
       const source = await validateProgram(program);
       const day = clock(now()).day;
-      const sourceRow = await store.one('SELECT * FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [tenantId, program.source_mission_id]);
+      const sourceRow = await store.one('SELECT * FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [resolvedTenantId, program.source_mission_id]);
       const sourceProjection = { ...sourceRow.payload, id:sourceRow.id, tenantId:sourceRow.tenant_id,stage:sourceRow.stage,
         status:sourceRow.status,objective:sourceRow.objective,targetSegment:sourceRow.target_segment };
       const receipt = await store.one(`SELECT payload FROM acquisition_outbound_events WHERE tenant_id=$1
-        AND program_id=$2 AND event_type='preparation_recovery_reserved' AND payload->>'reviewHash'=$3`, [tenantId, program.id, input.reviewHash]);
+        AND program_id=$2 AND event_type='preparation_recovery_reserved' AND payload->>'reviewHash'=$3`, [resolvedTenantId, program.id, input.reviewHash]);
       const reserved = receipt?.payload;
       const review = reserved?.review;
       const progress = await store.one('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2',[program.id,day]);
@@ -149,7 +160,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
         || progress?.mission_id !== reserved.missionId || progress.attempts !== review.nextAttempt
         || progress.attempts > program.policy.preparationAttemptsPerDay
         || (progress.last_error && !['Query read timeout','Connection terminated unexpectedly'].includes(progress.last_error))) fail('reserved_preparation_changed');
-      if (await store.one('SELECT id FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [tenantId, reserved.missionId])) fail('reserved_mission_already_created');
+      if (await store.one('SELECT id FROM acquisition_missions WHERE tenant_id=$1 AND id=$2', [resolvedTenantId, reserved.missionId])) fail('reserved_mission_already_created');
       if (await store.envelope(day)) fail('replenishment_envelope_exists');
       const counts = await store.counts(program,day);
       if (counts.today || counts.total || counts.uncertain) fail('replenishment_attempt_exists');
@@ -166,7 +177,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
   async function replenish(input, actor, commit = false) {
     return store.lock(async () => {
       const recovery = require('./governedOutboundReplenishment');
-      const plan = await recovery.reviewReplenishment(store, input, actor, now(), enabled());
+      const plan = await recovery.reviewReplenishment(store, input, actor, now(), isEnabled());
       if (!commit) return { reviewRequired: true, reviewHash: plan.reviewHash, review: plan.review, nextMissionId: plan.nextMissionId };
       if (input.reviewHash !== plan.reviewHash) fail('replenishment_review_changed');
       await recovery.reserveReplenishment(store, plan, now());
@@ -207,7 +218,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
     const beforeAttempt = async command => {
       if (claimed || called) fail('provider_call_budget_exceeded');
       const current = await store.program();
-      if (current?.id !== program.id || current.mode !== 'active' || !enabled()) fail('kill_switch');
+      if (current?.id !== program.id || current.mode !== 'active' || !isEnabled()) fail('kill_switch');
       await validateProgram(current, true);
       const liveEnvelope = await store.envelope(clock(now()).day);
       if (liveEnvelope?.id !== envelope.id || liveEnvelope.status !== 'authorized'
@@ -245,8 +256,8 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       // the preceding live readiness calls were in flight.
       const finalProgram = await store.program();
       const finalItem = (await store.items(envelope.id)).find(x => x.id === item.id);
-      const stop = await store.one('SELECT 1 FROM acquisition_outbound_lifecycle WHERE tenant_id=$1 AND suppressed AND (email=$2 OR company_id=$3) LIMIT 1', [tenantId, item.email, item.company_id]);
-      if (!enabled() || finalProgram?.mode !== 'active' || finalItem?.status !== 'attempted'
+      const stop = await store.one('SELECT 1 FROM acquisition_outbound_lifecycle WHERE tenant_id=$1 AND suppressed AND (email=$2 OR company_id=$3) LIMIT 1', [resolvedTenantId, item.email, item.company_id]);
+      if (!isEnabled() || finalProgram?.mode !== 'active' || finalItem?.status !== 'attempted'
         || stop || windowReason(program.policy, now(), true)) {
         await store.finish(item, 'suppressed', 'pre_provider_stop');
         fail('pre_provider_stop');
@@ -346,7 +357,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
       remainingScheduleSlots: remainingSlots,
       cleanInventory,
       governor,
-      grantActive: program.mode === 'active' && enabled(),
+      grantActive: program.mode === 'active' && isEnabled(),
       dailyAuthorizationRemaining: Math.max(0, Number(program.policy.dailyCap || 0) - sentToday),
       totalAuthorizationRemaining: Math.max(0, Number(program.policy.totalCap || 0) - Number(counts.total || 0)),
     });
@@ -417,7 +428,7 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
           await store.health(program);
           return { mode: 'shadow', envelopeId: envelope.id, planned: envelope.manifest.length, sent: 0 };
         }
-        if (!enabled()) fail('environment_kill_switch');
+        if (!isEnabled()) fail('environment_kill_switch');
         let refill = { preparedAdded: 0, prepareSkippedReason: null };
         try {
           refill = await refillEnvelope(program, source, day, envelope, counts);
@@ -492,11 +503,16 @@ function service({ pool, adapters, tenantId = '10', now = () => new Date(), enab
 
 function productionService(pool, options = {}) {
   const db = pool || require('../db');
-  const tenantId = String(options.tenantId || '10');
+  const governedContext = createGovernedOutboundContext({
+    tenantId: options.tenantId,
+    governedContext: options.governedContext,
+    program: options.program,
+  });
   return service({
     pool: db,
-    tenantId,
-    adapters: require('./governedOutboundAdapters').adapters(db, { tenantId }),
+    governedContext,
+    tenantId: governedContext.tenantId,
+    adapters: require('./governedOutboundAdapters').adapters(db, { governedContext }),
   });
 }
 module.exports = { service, productionService };

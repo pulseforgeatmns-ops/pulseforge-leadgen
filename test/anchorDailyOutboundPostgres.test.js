@@ -84,7 +84,13 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
       },
     };
     adapterSet = adapters;
-    svc = service({ pool, adapters, now: () => clock, enabled: () => enabled });
+    svc = service({
+      pool,
+      tenantId: '10',
+      adapters,
+      now: () => clock,
+      enabled: () => enabled,
+    });
     const input = { sourceMissionId: 'source', senderEmail: 'sender@anchor.example', inboxIntegrationId: 'mailbox', aoOwnerIds: [7],
       startsAt: '2026-09-18T00:00:00Z', expiresAt: '2026-10-01T00:00:00Z', ...overrides };
     const review = await svc.authorize(input, actor);
@@ -97,6 +103,13 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   async function ageAttempts() {
     await pool.query("UPDATE acquisition_outbound_items SET attempted_at=attempted_at-interval '61 minutes' WHERE attempted_at IS NOT NULL");
   }
+  await t.test('Anchor integration service requires explicit tenant 10 at the boundary', async () => {
+    const stubAdapters = { loadMission: async () => ({}) };
+    assert.throws(() => service({ pool, adapters: stubAdapters }), { code: 'governed_outbound_tenant_required' });
+    assert.throws(() => service({ pool, tenantId: '99', adapters: stubAdapters }), { code: 'unsupported_governed_outbound_tenant' });
+    await reset();
+    assert.equal((await svc.tick()).planned, 5);
+  });
   await t.test('tenant 13 grants and database reply/provider suppression are durable and tenant scoped', async () => {
     await reset(); await svc.tick();
     const anchorItem = (await svc.store.items((await svc.store.envelope('2026-09-18')).id))[0];

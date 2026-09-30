@@ -17,8 +17,9 @@ test('zero verified inventory rolls Scout back before Max, Paige and Emmett; no 
   // The daily mission factory materializes its absence as null.
   delete snapshot.mission.resolvedObjective;
   const sender = { ...emmett.FIXTURE_CANONICAL_SENDER, tenantId: '10', clientId: 10 };
-  const program = { id: 'test-program', authorized_by: 'jake', scope_hash: hash(missionScope(snapshot.mission)),
+  const program = { id: 'test-program', tenant_id: '10', authorized_by: 'jake', scope_hash: hash(missionScope(snapshot.mission)),
     policy: { enrichmentLimit: 15, preparationAttemptsPerDay: 3, senderEmail: sender.senderEmail } };
+  const governedContext = require('./helpers/governedOutboundFixtures').anchorGovernedContext({ programId: 'test-program' });
   const contacts = Object.fromEntries(['co-harbor','co-granite'].map(id => [id, {
     prospect_id: id, company_id: id, email: `ops@${id}.example`, email_verified: false, email_status: 'invalid',
     enrichment_provenance: { email: { source: 'website_email' } }, do_not_contact: false,
@@ -27,6 +28,8 @@ test('zero verified inventory rolls Scout back before Max, Paige and Emmett; no 
   const events = [];
   const queries = [];
   const adapter = adapters({ query: async sql => { queries.push(sql); return { rows: [] }; } }, {
+    governedContext,
+    program,
     persist: false,
     runtime: { engine: () => engine, create: async input => engine.create(input) },
     loadMission: async id => engine.inspect(id, { tenantId: '10' }),
