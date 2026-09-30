@@ -17,6 +17,7 @@ const aoCommandCenter = require('../services/aoCommandCenterService');
 const aoProspectUpdate = require('../services/aoProspectUpdateService');
 const aoCrm = require('../services/aoCrmService');
 const aoFollowup = require('../services/aoFollowupService');
+const aoAccountFlags = require('../services/aoAccountFlagService');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { AO_CRM_NEXT_ACTIONS } = require('../utils/aoCrmTypes');
 const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
@@ -208,6 +209,29 @@ router.get('/api/crm/accounts/:prospectId/followup/drafts', requireAoRead, refre
     prospectId: req.params.prospectId,
     aoUserId: aoOwnerId,
   });
+  res.json(result);
+}));
+
+router.post('/api/crm/accounts/:prospectId/flag-for-jake', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { reason, note } = req.body || {};
+  if (!reason) {
+    return res.status(400).json({
+      error: 'reason required',
+      reasons: aoAccountFlags.AO_ACCOUNT_FLAG_REASONS,
+    });
+  }
+  const result = await aoAccountFlags.createAccountFlag({
+    clientId,
+    aoUserId: aoOwnerId,
+    prospectId: req.params.prospectId,
+    reason: String(reason),
+    note: note != null ? String(note) : null,
+  });
+  if (result.status) return res.status(result.status).json({ error: result.error, reasons: result.reasons });
   res.json(result);
 }));
 

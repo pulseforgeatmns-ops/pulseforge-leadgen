@@ -3,7 +3,11 @@
 const pool = require('../db');
 const { fetchProspectBundle } = require('./aoProspectTaskService');
 const { findAssignedLeadById } = require('./aoAccountIntelligence');
-const { formatProspectBrief, formatLeadBrief } = require('../utils/aoProspectBrief');
+const {
+  formatProspectBrief,
+  formatLeadBrief,
+  buildProspectBriefSections,
+} = require('../utils/aoProspectBrief');
 const { logAoAuditEvent } = require('../utils/aoAuditEvents');
 
 async function fetchOpenTaskForProspect({ prospectId, clientId, aoOwnerId }) {
@@ -25,15 +29,18 @@ async function buildProspectBriefById({ prospectId, clientId, aoOwnerId }) {
   if (!bundle) return null;
 
   const task = await fetchOpenTaskForProspect({ prospectId, clientId, aoOwnerId });
-  const brief = formatProspectBrief({
+  const briefInput = {
     prospect: bundle.prospect,
     company: bundle.company,
     touchpoints: bundle.touchpoints,
     task,
-  });
+  };
+  const brief = formatProspectBrief(briefInput);
+  const brief_sections = buildProspectBriefSections(briefInput);
 
   return {
     brief,
+    brief_sections,
     prospect: bundle.prospect,
     company: bundle.company,
     task,
@@ -98,6 +105,7 @@ async function requestProspectBrief({
     ok: true,
     action: 'prospect_brief',
     brief: result.brief,
+    brief_sections: result.brief_sections || null,
     prospect_id: result.prospect_id || prospectId || null,
     lead_id: result.lead_id || leadId || null,
     mission_id: result.mission_id || null,

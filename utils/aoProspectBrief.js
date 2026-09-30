@@ -19,112 +19,112 @@ function formatTouchSummary(touchpoints = []) {
   }).join('\n');
 }
 
-function formatProspectBrief({ prospect, company, touchpoints = [], task = null }) {
-  const companyName = company?.name || prospect?.company_name || task?.account_name || 'Unknown';
+function buildProspectBriefSections({ prospect, company, touchpoints = [], task = null }) {
+  const accountName = company?.name || prospect?.company_name || task?.account_name || 'Unknown account';
   const segment = task?.segment || company?.industry || prospect?.vertical || null;
-  const whyTheyMatter = task?.why_account_matters || prospect?.ao_fit_reason || null;
-  const currentStatus = [
+  const whyThisAccountMatters = task?.why_account_matters
+    || prospect?.ao_why_account_matters
+    || prospect?.ao_fit_reason
+    || prospect?.ao_assignment_reason
+    || (segment ? `Anchor fit in ${segment.replace(/_/g, ' ')} — worth a focused pass.` : null);
+
+  const statusBits = [
+    prospect?.ao_current_status?.replace(/_/g, ' '),
+    prospect?.last_debrief_status?.replace(/_/g, ' '),
     prospect?.advisory_stage,
-    prospect?.prospect_motion,
-    prospect?.status,
-  ].filter(hasValue).join(' · ') || null;
+  ].filter(hasValue);
 
-  const fields = {
-    company: companyName,
-    segment,
-    why_they_matter: whyTheyMatter,
-    current_status: currentStatus,
-    recommended_angle: prospect?.recommended_angle || task?.recommended_angle || null,
-    best_first_action: prospect?.recommended_first_action || task?.first_action || null,
-    known_contacts: [prospect?.name, prospect?.job_title, prospect?.email, prospect?.phone]
-      .filter(hasValue)
-      .join(' · ') || null,
-    prior_touches: formatTouchSummary(touchpoints),
-    risks_avoid: prospect?.prospect_motion === 'SUPPRESS' ? 'Do not pursue — suppressed by routing.' : null,
-    suggested_opener: task?.suggested_opener || null,
-    next_step: prospect?.next_action || task?.desired_next_outcome || null,
-    assignment_category: prospect?.ao_assignment_category || task?.assignment_category || null,
-    ao_fit_score: prospect?.ao_fit_score ?? null,
-    next_action_owner: prospect?.next_action_owner || null,
-    next_action_due_at: prospect?.next_action_due_at || task?.deadline || null,
-    last_debrief_status: prospect?.last_debrief_status || null,
-    location: company?.location || task?.location || null,
-    website: company?.website || null,
+  const contactLine = [prospect?.name, prospect?.job_title, prospect?.email, prospect?.phone]
+    .filter(hasValue)
+    .join(' · ');
+
+  const knownLines = [];
+  if (segment) knownLines.push(`${segment.replace(/_/g, ' ')} in Anchor's lane.`);
+  if (statusBits.length) knownLines.push(`Status: ${statusBits.join(' · ')}.`);
+  if (contactLine) knownLines.push(`Contact: ${contactLine}.`);
+  if (company?.location) knownLines.push(`Location: ${company.location}.`);
+  const touches = formatTouchSummary(touchpoints);
+  if (touches) knownLines.push(`Recent touches:\n${touches.split('\n').map(l => `  ${l}`).join('\n')}`);
+  if (prospect?.help_requested && prospect?.help_reason) {
+    knownLines.push(`Jake already flagged: ${prospect.help_reason}.`);
+  }
+
+  const likelyAngle = prospect?.recommended_angle || task?.recommended_angle
+    || 'Lead with Diagnose — ask what\'s working and what\'s slipping before you pitch.';
+
+  const suggestedNextMove = prospect?.ao_next_action
+    || prospect?.next_action
+    || task?.first_action
+    || prospect?.recommended_first_action
+    || 'Confirm the decision-maker and book the next touch.';
+
+  const opener = task?.suggested_opener
+    || `Hi — I'm following up on Anchor's note. Quick question: who's handling day-to-day cleaning decisions for ${accountName}?`;
+
+  const watchLines = [];
+  if (prospect?.prospect_motion === 'SUPPRESS') watchLines.push('Routing says don\'t pursue — double-check before you push.');
+  if (prospect?.ao_paused) watchLines.push('Account is paused — confirm with Jake before re-engaging.');
+  if (!contactLine) watchLines.push('No DM on file yet — don\'t pitch scope until you\'ve got a name.');
+  if (!touches) watchLines.push('No logged touches — treat this as a cold open, not a warm follow-up.');
+  if (!watchLines.length) watchLines.push('If they mention an incumbent, stay curious — map contract timing before you quote.');
+
+  return {
+    account_name: accountName,
+    why_this_account_matters: whyThisAccountMatters
+      || 'In your book and aligned with Anchor\'s commercial-office focus.',
+    what_we_know: knownLines.length
+      ? knownLines.join('\n')
+      : 'Not much logged yet — start with who runs the office and who owns cleaning.',
+    likely_angle: likelyAngle,
+    suggested_next_move: String(suggestedNextMove).replace(/_/g, ' '),
+    short_talk_track: opener,
+    what_to_watch_for: watchLines.join('\n'),
+    sparse: !hasValue(whyThisAccountMatters) && !contactLine && !touches && !hasValue(prospect?.recommended_angle),
   };
+}
 
-  const requiredForFull = [
-    'company',
-    'segment',
-    'why_they_matter',
-    'current_status',
-    'recommended_angle',
-    'best_first_action',
-  ];
-  const missingRequired = requiredForFull.filter(key => !hasValue(fields[key]));
-  const sparse = missingRequired.length >= 3;
-
-  if (sparse) {
-    const known = Object.entries(fields)
-      .filter(([, value]) => hasValue(value))
-      .map(([key, value]) => `- ${key.replace(/_/g, ' ')}: ${value}`);
-    const unknown = missingRequired.map(key => `- ${key.replace(/_/g, ' ')}`);
-    const research = prospect?.recommended_first_action
-      || task?.first_action
-      || 'Confirm decision-maker contact and current cleaning vendor status.';
-
+function renderCrmBriefText(sections) {
+  if (sections.sparse) {
     return [
-      "I don't have enough data for a full brief yet.",
+      `${sections.account_name} — light file so far`,
       '',
-      'Known:',
-      known.length ? known.join('\n') : '- No structured fields recorded yet',
+      'What we know',
+      sections.what_we_know,
       '',
-      'Unknown:',
-      unknown.length ? unknown.join('\n') : '- Core routing fields',
+      'Suggested next move',
+      sections.suggested_next_move,
       '',
-      'Recommended next research step:',
-      research,
+      'Short talk track',
+      sections.short_talk_track,
     ].join('\n');
   }
 
-  const lines = [
-    'Prospect Brief',
+  return [
+    sections.account_name,
     '',
-    `Company: ${fields.company}`,
-    `Segment: ${fields.segment || 'Unknown'}`,
-    `Why they matter: ${fields.why_they_matter || 'Not recorded'}`,
-    `Current status: ${fields.current_status || 'Not recorded'}`,
-    `Recommended angle: ${fields.recommended_angle || 'Not recorded'}`,
-    `Best first action: ${fields.best_first_action || 'Not recorded'}`,
-    `Known contacts: ${fields.known_contacts || 'Not recorded'}`,
-    `Prior touches: ${fields.prior_touches || 'None recorded'}`,
-    `Risks / avoid: ${fields.risks_avoid || 'None flagged'}`,
-    `Suggested opener: ${fields.suggested_opener || 'Not recorded'}`,
-    `Next step: ${fields.next_step || 'Not recorded'}`,
-  ];
+    'Why this account matters',
+    sections.why_this_account_matters,
+    '',
+    'What we know',
+    sections.what_we_know,
+    '',
+    'Likely angle',
+    sections.likely_angle,
+    '',
+    'Suggested next move',
+    sections.suggested_next_move,
+    '',
+    'Short talk track',
+    sections.short_talk_track,
+    '',
+    'What to watch for',
+    sections.what_to_watch_for,
+  ].join('\n');
+}
 
-  if (hasValue(fields.assignment_category)) {
-    lines.push(`Assignment category: ${fields.assignment_category}`);
-  }
-  if (fields.ao_fit_score != null) {
-    lines.push(`AO fit score: ${fields.ao_fit_score}`);
-  }
-  if (hasValue(fields.next_action_owner)) {
-    lines.push(`Next action owner: ${fields.next_action_owner}`);
-  }
-  if (hasValue(fields.next_action_due_at)) {
-    lines.push(`Next action due: ${fields.next_action_due_at}`);
-  }
-  if (hasValue(fields.last_debrief_status)) {
-    lines.push(`Last debrief: ${fields.last_debrief_status}`);
-  }
-  if (hasValue(fields.location)) {
-    lines.push(`Location: ${fields.location}`);
-  }
-  if (hasValue(fields.website)) {
-    lines.push(`Website: ${fields.website}`);
-  }
-
-  return lines.join('\n');
+function formatProspectBrief({ prospect, company, touchpoints = [], task = null }) {
+  const sections = buildProspectBriefSections({ prospect, company, touchpoints, task });
+  return renderCrmBriefText(sections);
 }
 
 function formatLeadBrief(lead) {
@@ -134,5 +134,7 @@ function formatLeadBrief(lead) {
 module.exports = {
   formatProspectBrief,
   formatLeadBrief,
+  buildProspectBriefSections,
+  renderCrmBriefText,
   hasValue,
 };

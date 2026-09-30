@@ -61,25 +61,25 @@ const richProspect = {
 
 test('formatProspectBrief includes AO routing fields', () => {
   const brief = formatProspectBrief(richProspect);
-  assert.match(brief, /Prospect Brief/);
+  assert.match(brief, /Why this account matters/);
   assert.match(brief, /Beacon Law/);
   assert.match(brief, /backup cleaner angle|reliable backup/i);
-  assert.match(brief, /In-person follow-up|AO_FOLLOW_UP/);
-  assert.match(brief, /ROUTE_CLUSTER|WARM_SIGNAL/);
+  assert.match(brief, /Suggested next move/);
+  assert.match(brief, /Short talk track/);
   assert.match(brief, /Jane Doe/);
   assert.match(brief, /2026-09-20/);
 });
 
 test('formatProspectBrief returns minimal brief for sparse prospect', () => {
   const brief = formatProspectBrief({
-    prospect: { name: 'Sparse Co' },
+    prospect: {},
     company: { name: 'Sparse Co' },
     touchpoints: [],
   });
-  assert.match(brief, /don't have enough data/i);
-  assert.match(brief, /Known:/);
-  assert.match(brief, /Unknown:/);
-  assert.match(brief, /Recommended next research step:/);
+  assert.match(brief, /light file so far/i);
+  assert.match(brief, /What we know/);
+  assert.match(brief, /Suggested next move/);
+  assert.match(brief, /Short talk track/);
 });
 
 test('routing issue type enum matches spec', () => {

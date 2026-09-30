@@ -1,6 +1,7 @@
 'use strict';
 
 const pool = require('../db');
+const { listOpenAccountFlags } = require('./aoAccountFlagService');
 const { addProspect, addCompany } = require('../dbClient');
 const {
   deriveOperationalState,
@@ -288,9 +289,21 @@ function sortCountMap(map) {
     .map(([text, count]) => ({ text, count }));
 }
 
-function buildRecommendedActions(leads, escalations, campaign) {
+function buildRecommendedActions(leads, escalations, campaign, aoCrmFlags = []) {
   const jakeActions = [];
   const mikeActions = [];
+
+  for (const flag of aoCrmFlags.slice(0, 5)) {
+    jakeActions.push({
+      priority: 1,
+      action: flag.recommended_action || 'Review AO CRM flag',
+      business: flag.business_name,
+      contact: flag.ao_name ? `AO: ${flag.ao_name}` : null,
+      reason: [flag.reason, flag.note].filter(Boolean).join(' — '),
+      flag_id: flag.id,
+      account_id: flag.account_id,
+    });
+  }
 
   for (const esc of escalations.filter(e => ['new', 'seen', 'in_progress'].includes(e.status)).slice(0, 5)) {
     jakeActions.push({
@@ -361,11 +374,12 @@ function buildRecommendedActions(leads, escalations, campaign) {
 }
 
 async function buildBriefing(clientId, { asOf = todayISO() } = {}) {
-  const [today, leads, escalations, campaign] = await Promise.all([
+  const [today, leads, escalations, campaign, aoAccountFlags] = await Promise.all([
     getTodayActivity(clientId, asOf),
     fetchEnrichedLeads(clientId),
     listEscalationInbox(clientId),
     getCampaign001Progress(clientId),
+    listOpenAccountFlags(clientId).catch(() => []),
   ]);
 
   const campaignLeads = leads.filter(l => l.campaign_name === CAMPAIGN_001);
@@ -390,9 +404,30 @@ async function buildBriefing(clientId, { asOf = todayISO() } = {}) {
     .filter(e => ['new', 'seen', 'in_progress'].includes(e.status))
     .slice(0, 10);
 
+  const aoFlagsForJake = (aoAccountFlags || []).slice(0, 10).map(flag => ({
+    id: flag.id,
+    account_id: flag.account_id,
+    business_name: flag.company_name || 'CRM account',
+    ao_name: flag.ao_name,
+    reason: flag.reason_label || flag.reason,
+    note: flag.note,
+    recommended_action: flag.recommended_action,
+    created_at: flag.created_at,
+    source: 'ao_crm_flag',
+  }));
+
   const fieldIntel = buildFieldIntelligence(leads);
-  const recommendations = buildRecommendedActions(leads, escalations, campaign);
-  const digest = buildDailyDigestText({ today, leads, escalations, campaign, warmOpportunities, recommendations, asOf });
+  const recommendations = buildRecommendedActions(leads, escalations, campaign, aoFlagsForJake);
+  const digest = buildDailyDigestText({
+    today,
+    leads,
+    escalations,
+    campaign,
+    warmOpportunities,
+    recommendations,
+    aoAccountFlags: aoFlagsForJake,
+    asOf,
+  });
 
   const categorized = {
     walkthrough_requested: leads.filter(l => l.operational_state === 'walkthrough_requested'),
@@ -409,6 +444,7 @@ async function buildBriefing(clientId, { asOf = todayISO() } = {}) {
     client_id: clientId,
     today,
     needs_jake: needsJake,
+    ao_account_flags: aoFlagsForJake,
     warm_opportunities: warmOpportunities,
     campaign_001: campaign,
     field_intelligence: fieldIntel,
@@ -461,7 +497,16 @@ function recommendNextStep(lead) {
 }
 
 function buildDailyDigestText(ctx) {
-  const { today, leads, escalations, campaign, warmOpportunities, recommendations, asOf } = ctx;
+  const {
+    today,
+    leads,
+    escalations,
+    campaign,
+    warmOpportunities,
+    recommendations,
+    aoAccountFlags = [],
+    asOf,
+  } = ctx;
   const dmCount = leads.filter(l => l.operational_state === 'decision_maker_reached'
     || l.operational_state === 'walkthrough_requested'
     || l.operational_state === 'jake_action_needed').length;
@@ -478,6 +523,14 @@ function buildDailyDigestText(ctx) {
   if (dmCount) lines.push(`Reached ${dmCount} decision-maker${dmCount === 1 ? '' : 's'} or equivalent buying conversations.`);
   if (vendorMentions) lines.push(`${vendorMentions} business${vendorMentions === 1 ? '' : 'es'} mentioned current cleaner issues.`);
   if (jakeFollowUps) lines.push(`${jakeFollowUps} escalation${jakeFollowUps === 1 ? '' : 's'} need Jake's attention.`);
+  if (aoAccountFlags.length) {
+    const f = aoAccountFlags[0];
+    lines.push(
+      `${aoAccountFlags.length} AO CRM flag${aoAccountFlags.length === 1 ? '' : 's'} open`
+      + (f.business_name ? ` — start with ${f.business_name}` : '')
+      + (f.recommended_action ? `: ${f.recommended_action}` : '.')
+    );
+  }
   if (top) {
     let topLine = `Strongest opportunity: ${top.business_name}`;
     if (top.contact_name) topLine += ` (${top.contact_name})`;

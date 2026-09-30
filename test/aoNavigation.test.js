@@ -49,7 +49,7 @@ test('currentAoSurface maps AO routes', () => {
 
 test('aoNavItemsForRole hides Manager View from field AOs', () => {
   const aoLabels = aoNavItemsForRole('ao').map(i => i.label);
-  assert.deepEqual(aoLabels, ['Field Mode', 'My Accounts']);
+  assert.deepEqual(aoLabels, ['Field Mode', 'Open CRM']);
   const mgrLabels = aoNavItemsForRole('manager').map(i => i.label);
   assert.match(mgrLabels.join(' '), /Manager View/);
 });
