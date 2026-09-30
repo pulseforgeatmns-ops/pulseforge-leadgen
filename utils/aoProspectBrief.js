@@ -69,14 +69,51 @@ function formatActivitySummary(activity = []) {
   }).join('\n');
 }
 
+function noteBlob({ prospect, activity }) {
+  return [
+    prospect?.notes,
+    ...(activity || []).map(row => row.notes),
+  ].filter(hasValue).join('\n');
+}
+
+function detectSnhuUnhAmbiguity({ prospect, company, blob }) {
+  const account = accountDisplayName(prospect, company).toLowerCase();
+  const email = String(prospect?.email || '').toLowerCase();
+  const text = String(blob || '').toLowerCase();
+  const mentionsSnhu = /snhu|southern new hampshire university/.test(account) || /snhu/.test(text);
+  const mentionsUnh = /@unh\.edu/.test(email) || /\bunh\b/.test(text) || /university of new hampshire/.test(text);
+  return mentionsSnhu && mentionsUnh;
+}
+
+function detectInternalCleaningSignal(blob) {
+  const text = String(blob || '').toLowerCase();
+  return /(receptionist|staff|team|front desk).{0,48}(clean|cleaning)/.test(text)
+    || /clean(s|ing)?\s+the\s+office/.test(text)
+    || /in[- ]house\s+(custodial|cleaning)/.test(text)
+    || /internal(ly)?\s+clean/.test(text);
+}
+
+function detectRelationshipSignal(blob) {
+  const text = String(blob || '').toLowerCase();
+  return /good relationship|former manager|reconnect|knows?\s+(him|her|them)\s+well/.test(text);
+}
+
+function detectPropertyMgmtLayer(blob) {
+  const text = String(blob || '');
+  const tagged = text.match(/building:?\s*([^\n.]+)/i);
+  if (tagged) return tagged[1].trim();
+  const nash = text.match(/(Nash Family Investment Properties)/i);
+  return nash ? nash[1] : null;
+}
+
 function statusPlainLabel(status) {
   const map = {
-    researching: 'research — no outreach logged yet',
+    researching: 'no outreach logged yet',
     ready_to_call: 'queued for first outreach',
     call_attempted: 'call attempted — no decision-maker conversation logged yet',
-    contacted: 'contact made — outcome needs a clear next step',
-    gatekeeper_reached: 'gatekeeper reached — decision-maker not confirmed yet',
-    decision_maker_reached: 'decision-maker reached — continue diagnosis',
+    contacted: 'outreach started — log a clear next step after each touch',
+    gatekeeper_reached: 'only gatekeeper contact so far — facilities owner still unknown',
+    decision_maker_reached: 'decision-maker conversation started — keep diagnosing setup',
     follow_up_needed: 'active account — next touch is due',
     warm: 'warm interest — keep momentum',
     walkthrough_target: 'walkthrough target — schedule or confirm timing',
@@ -94,6 +131,7 @@ function buildWhereThisStands({
   activity,
   contactName,
   hasConversationNotes,
+  snhuAmbiguity,
 }) {
   if (prospect?.help_requested) {
     const reason = prospect.help_reason ? `: ${prospect.help_reason}` : '';
@@ -124,8 +162,11 @@ function buildWhereThisStands({
   if (!hasDm) parts.push('No decision-maker identified yet.');
   else parts.push(`Contact on file${prospect?.is_decision_maker ? ' (decision-maker)' : ''}.`);
 
-  if (statusText) parts.push(`Account is ${statusText}.`);
-  else if (task?.deadline) {
+  if (snhuAmbiguity) {
+    parts.push('SNHU vs UNH target is unclear — confirm the correct facilities org before outreach.');
+  } else if (statusText) {
+    parts.push(statusText.charAt(0).toUpperCase() + statusText.slice(1));
+  } else if (task?.deadline) {
     const timing = formatFollowUpTiming(task.deadline, { today: todayISOInZone() });
     if (timing.label) parts.push(timing.label.replace(/^Due /, 'Next touch '));
   }
@@ -143,8 +184,15 @@ function buildWhyThisNext({
   contactName,
   hasConversationNotes,
   knownPain,
+  snhuAmbiguity,
+  internalCleaning,
+  relationshipSignal,
+  propertyMgmt,
 }) {
   const status = deriveDefaultStatus(prospect || {});
+  if (snhuAmbiguity) {
+    return 'Do not pitch until you confirm whether this is SNHU facilities, UNH, or a shared vendor path — the contact email and facilities links conflict.';
+  }
   if (prospect?.help_requested) {
     return 'Jake needs to weigh in before you change approach or commit to scope.';
   }
@@ -155,7 +203,16 @@ function buildWhyThisNext({
     return 'Stay on the proposal thread — clarify open scope or timing questions instead of re-pitching from scratch.';
   }
   if (knownPain) {
+    if (propertyMgmt) {
+      return `Validate the cleaning issue with the branch contact, then map whether ${propertyMgmt} controls vendor decisions before offering scope.`;
+    }
     return 'Use what they already told you — validate the pain is still true and who can act on it before offering a walkthrough or quote.';
+  }
+  if (internalCleaning) {
+    return 'Staff are handling cleaning in-house — diagnose what they cover today and who would own a facilities conversation before suggesting outside support.';
+  }
+  if (relationshipSignal) {
+    return 'Lead with the existing relationship — reconnect warmly and learn who handles facilities vendors today without pushing a pitch.';
   }
   if (hasConversationNotes && contactName) {
     return 'Pick up the last thread with a concrete question instead of restarting with a generic pitch.';
@@ -248,7 +305,16 @@ function buildNextAction({
   task,
   contactName,
   vertical,
+  snhuAmbiguity,
+  internalCleaning,
+  relationshipSignal,
+  propertyMgmt,
+  knownPain,
 }) {
+  if (snhuAmbiguity) {
+    return 'Confirm whether this account is SNHU or UNH facilities (check email domain, facilities page, and who owns vendor decisions) and log the correct contact path before calling.';
+  }
+
   const fromTask = task?.first_action;
   if (hasValue(fromTask) && !isGenericIcpText(fromTask) && !/^follow[- ]?up/i.test(fromTask)) {
     return String(fromTask).trim();
@@ -261,6 +327,24 @@ function buildNextAction({
   const recommended = prospect?.recommended_first_action;
   if (hasValue(recommended) && !isGenericIcpText(recommended) && !/^follow[- ]?up/i.test(recommended)) {
     return String(recommended).trim();
+  }
+
+  if (internalCleaning && contactName) {
+    const phone = officePhone(prospect, null);
+    const via = phone ? ` at ${phone}` : '';
+    return `Call ${contactName}${via} and ask who oversees cleaning when staff handle it in-house — confirm what's covered today and whether a short facility assessment would be useful (no pitch).`;
+  }
+
+  if (relationshipSignal && contactName) {
+    const phone = officePhone(prospect, null);
+    const via = phone ? ` at ${phone}` : '';
+    return `Call ${contactName}${via} to reconnect, ask who handles facilities vendors today, and log the name — keep it relationship-first, not a scope pitch.`;
+  }
+
+  if (knownPain && propertyMgmt && contactName) {
+    const phone = officePhone(prospect, null);
+    const via = phone ? ` at ${phone}` : '';
+    return `Call ${contactName}${via} and confirm how vendor issues get escalated to ${propertyMgmt} before discussing Anchor as an option.`;
   }
 
   if (contactName && !prospect?.is_decision_maker) {
@@ -277,24 +361,46 @@ function buildNextAction({
 }
 
 function extractKnownPain({ activity, prospect }) {
-  const blob = [
-    prospect?.notes,
-    ...(activity || []).map(row => row.notes),
-  ].filter(hasValue).join('\n').toLowerCase();
+  const blob = noteBlob({ prospect, activity }).toLowerCase();
   if (!blob) return null;
-  if (/unhappy|dissatisfied|frustrated|missed|slipping|backup|overflow/.test(blob)) {
+  if (/unhappy|dissatisfied|frustrated|missed|slipping|backup|overflow|contractor/.test(blob)) {
     return true;
   }
   return null;
 }
 
-function buildListenFor({ prospect, vertical, knownPain, contactName }) {
+function buildListenFor({
+  prospect,
+  vertical,
+  knownPain,
+  contactName,
+  blob,
+  internalCleaning,
+  snhuAmbiguity,
+  propertyMgmt,
+}) {
   const items = [];
+  if (snhuAmbiguity) {
+    items.push(
+      'which institution owns the facilities contact (SNHU vs UNH)',
+      'whether email/domain matches the account you intend to pursue',
+      'who actually controls vendor decisions',
+    );
+  }
+  if (internalCleaning) {
+    items.push(
+      'what staff clean vs what is skipped',
+      'who would approve outside cleaning support',
+      'whether missed areas create patient or team friction',
+    );
+  }
   if (knownPain) {
-    if (/kitchen/.test(String(prospect?.notes || ''))) items.push('kitchen or break-area misses');
-    if (/restroom|bathroom/.test(String(prospect?.notes || ''))) items.push('restroom consistency');
+    const text = String(blob || '').toLowerCase();
+    if (/kitchen/.test(text)) items.push('kitchen or break-area misses');
+    if (/under tables|restroom|bathroom/.test(text)) items.push('restroom / under-table consistency');
     items.push('whether the issue is the vendor, schedule, or scope');
     items.push('who can authorize a vendor change');
+    if (propertyMgmt) items.push(`how ${propertyMgmt} routes vendor decisions`);
   }
 
   const v = String(vertical || prospect?.vertical || '').toLowerCase();
@@ -331,12 +437,18 @@ function buildListenFor({ prospect, vertical, knownPain, contactName }) {
   return [...new Set(items)];
 }
 
-function buildShortTalkTrack({ prospect, task, accountName, aoName }) {
+function buildShortTalkTrack({ prospect, task, accountName, aoName, snhuAmbiguity, internalCleaning }) {
   if (task?.suggested_opener && hasValue(task.suggested_opener)) {
     return String(task.suggested_opener).trim();
   }
   const rep = aoName || 'Jake';
   const name = accountName || 'the office';
+  if (snhuAmbiguity) {
+    return `Hi, I'm ${rep} with Anchor Cleaning. Before I ask about cleaning vendors — I want to make sure I have the right facilities contact for ${name} (SNHU vs UNH). Who usually owns those decisions on your side?`;
+  }
+  if (internalCleaning) {
+    return `Hi, I'm ${rep} with Anchor Cleaning. I heard your team may handle some cleaning in-house — who usually decides when outside help makes sense? I'm not assuming you need a vendor; I just want to understand the setup.`;
+  }
   return `Hi, I'm ${rep} with Anchor Cleaning. I was hoping to ask who usually handles cleaning or facilities decisions for ${name}. We help local offices when cleaning starts creating extra work for the team, but I don't want to assume that's relevant here.`;
 }
 
@@ -352,9 +464,14 @@ function buildProspectBriefSections({
   const contactName = prospectContactName(prospect, company);
   const vertical = prospect?.vertical || company?.industry || task?.segment || null;
   const activityNotes = formatActivitySummary(activity);
+  const blob = noteBlob({ prospect, activity });
   const hasConversationNotes = Boolean(activityNotes)
     || (hasValue(prospect?.notes) && !isGenericIcpText(prospect.notes));
   const knownPain = extractKnownPain({ activity, prospect });
+  const snhuAmbiguity = detectSnhuUnhAmbiguity({ prospect, company, blob });
+  const internalCleaning = detectInternalCleaningSignal(blob);
+  const relationshipSignal = detectRelationshipSignal(blob);
+  const propertyMgmt = detectPropertyMgmtLayer(blob);
 
   const where_this_stands = buildWhereThisStands({
     prospect,
@@ -363,6 +480,7 @@ function buildProspectBriefSections({
     activity,
     contactName,
     hasConversationNotes,
+    snhuAmbiguity,
   });
 
   const why_this_next = buildWhyThisNext({
@@ -371,6 +489,10 @@ function buildProspectBriefSections({
     contactName,
     hasConversationNotes,
     knownPain,
+    snhuAmbiguity,
+    internalCleaning,
+    relationshipSignal,
+    propertyMgmt,
   });
 
   const known_context = buildKnownContextLines({
@@ -387,6 +509,11 @@ function buildProspectBriefSections({
     task,
     contactName,
     vertical,
+    snhuAmbiguity,
+    internalCleaning,
+    relationshipSignal,
+    propertyMgmt,
+    knownPain,
   });
 
   const listenItems = buildListenFor({
@@ -394,6 +521,10 @@ function buildProspectBriefSections({
     vertical,
     knownPain,
     contactName,
+    blob,
+    internalCleaning,
+    snhuAmbiguity,
+    propertyMgmt,
   });
 
   const what_to_listen_for = listenItems.join(', ');
@@ -403,6 +534,8 @@ function buildProspectBriefSections({
     task,
     accountName: account_name,
     aoName,
+    snhuAmbiguity,
+    internalCleaning,
   });
 
   const sparse = !contactName

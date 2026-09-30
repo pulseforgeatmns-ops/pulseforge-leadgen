@@ -47,6 +47,50 @@ test('filters generic ICP why-account copy from brief context', () => {
   assert.match(sections.short_talk_track, /Jake with Anchor Cleaning/);
 });
 
+test('SNHU/UNH ambiguity surfaces in brief without inventing pain', () => {
+  const sections = buildProspectBriefSections({
+    prospect: {
+      email: 'Robert.Oelschlager@unh.edu',
+      phone: '(603) 555-0400',
+      assigned_ao_id: 26,
+      ao_current_status: 'researching',
+    },
+    company: { name: 'Southern New Hampshire University', location: 'Manchester, NH' },
+    activity: [{
+      activity_type: 'note',
+      notes: 'Facilities link points to UNH facilities page.',
+      created_at: '2026-09-25T09:00:00.000Z',
+    }],
+    task: { status: 'open' },
+    aoName: 'Tony',
+  });
+  assert.match(sections.where_this_stands, /SNHU vs UNH/i);
+  assert.match(sections.next_action, /Confirm whether this account is SNHU or UNH/i);
+  assert.match(sections.short_talk_track, /SNHU vs UNH/i);
+  assert.doesNotMatch(sections.known_context, /Pain point/i);
+});
+
+test('internal cleaning notes drive diagnostic next action', () => {
+  const sections = buildProspectBriefSections({
+    prospect: {
+      first_name: 'Lori',
+      phone: '(603) 555-0300',
+      assigned_ao_id: 26,
+      ao_current_status: 'gatekeeper_reached',
+    },
+    company: { name: 'New Hampshire Family Dentistry', location: 'Manchester, NH' },
+    activity: [{
+      activity_type: 'visit',
+      notes: 'Front desk receptionist is the person who cleans the office.',
+      created_at: '2026-09-26T10:00:00.000Z',
+    }],
+    aoName: 'Tony',
+  });
+  assert.match(sections.why_this_next, /in-house/i);
+  assert.match(sections.next_action, /staff handle it in-house/i);
+  assert.match(sections.what_to_listen_for, /what staff clean/i);
+});
+
 test('formatProspectBrief uses account-state section headings', () => {
   const brief = formatProspectBrief({
     prospect: { vertical: 'law_firm', assigned_ao_id: 1 },
