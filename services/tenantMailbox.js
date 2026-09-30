@@ -176,8 +176,19 @@ function sanitizeErrorMessage(err) {
     .replace(/Bearer\s+[A-Za-z0-9._-]+/ig, 'Bearer [redacted]')
     .replace(/access[_-]?token[=:\s]+[A-Za-z0-9._-]+/ig, 'access_token=[redacted]')
     .replace(/refresh[_-]?token[=:\s]+[A-Za-z0-9._-]+/ig, 'refresh_token=[redacted]')
-    .replace(/auth[^,\n]+/ig, 'auth=[redacted]')
     .slice(0, 500);
+}
+
+function verificationFailureFromError(err, defaultCode) {
+  const failure = {
+    status: 'failed',
+    code: err?.code || defaultCode,
+    message: sanitizeErrorMessage(err),
+  };
+  if (err?.googleOAuthDiagnostic) {
+    failure.googleOAuth = err.googleOAuthDiagnostic;
+  }
+  return failure;
 }
 
 function mailboxError(code, message, extras = {}) {
@@ -1668,7 +1679,7 @@ async function verifyTenantMailbox(input = {}, opts = {}) {
       }
       state.smtp = { status: 'verified' };
     } catch (err) {
-      state.smtp = { status: 'failed', code: err.code || 'smtp_verification_failed', message: sanitizeErrorMessage(err) };
+      state.smtp = verificationFailureFromError(err, 'smtp_verification_failed');
     }
   }
 
@@ -1676,7 +1687,10 @@ async function verifyTenantMailbox(input = {}, opts = {}) {
     await verifyImapConnection(integration, opts);
     state.imap = { status: 'verified', authMode: resolveImapAuthMode(integration) };
   } catch (err) {
-    state.imap = { status: 'failed', code: err.code || 'imap_verification_failed', message: sanitizeErrorMessage(err) };
+    state.imap = {
+      ...verificationFailureFromError(err, 'imap_verification_failed'),
+      authMode: resolveImapAuthMode(integration),
+    };
   }
 
   if (domain) {

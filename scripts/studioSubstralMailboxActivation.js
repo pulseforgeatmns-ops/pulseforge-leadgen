@@ -15,6 +15,7 @@
 
 require('dotenv').config({ quiet: true });
 
+const crypto = require('crypto');
 const fs = require('fs');
 const pool = require('../db');
 const {
@@ -31,6 +32,8 @@ const {
   deliveredAuthenticationPasses,
   parseDeliveredAuthenticationEvidence,
 } = require('../utils/mailAuthenticationResults');
+const { diagnoseGoogleMailboxOAuth } = require('../utils/googleMailboxOAuth');
+const { resolveSecretRef } = require('../services/tenantMailbox');
 const { parseRawMailHeaders } = require('../utils/mailHeaders');
 const { CANONICAL_SENDER } = require('../utils/studioSubstralOutboundGovernance');
 const {
@@ -175,6 +178,77 @@ async function activateMailbox(store) {
   };
 }
 
+async function diagnoseOAuth(env = process.env) {
+  const cfg = studioSubstralMailboxConfig(TENANT_ID);
+  const secretRef = cfg.integration.oauthRefreshSecretRef;
+  let refreshToken = null;
+  let secretResolved = false;
+  try {
+    refreshToken = resolveSecretRef(secretRef, { env });
+    secretResolved = Boolean(refreshToken);
+  } catch (err) {
+    secretResolved = false;
+  }
+
+  const anchorToken = cleanEnv(env.ANCHOR_GOOGLE_REFRESH_TOKEN);
+  const substralToken = cleanEnv(refreshToken);
+  const anchorPrefix = anchorToken
+    ? crypto.createHash('sha256').update(anchorToken).digest('hex').slice(0, 12)
+    : null;
+  const substralPrefix = substralToken
+    ? crypto.createHash('sha256').update(substralToken).digest('hex').slice(0, 12)
+    : null;
+
+  const diagnostic = await diagnoseGoogleMailboxOAuth({
+    refreshToken: substralToken,
+    env,
+    expectedMailbox: CANONICAL_SENDER,
+  });
+
+  return {
+    integrationId: cfg.integration.id,
+    oauthRefreshSecretRef: secretRef,
+    secretRefConfigured: secretResolved,
+    railwayEnvChecks: {
+      STUDIO_SUBSTRAL_GOOGLE_REFRESH_TOKEN: Boolean(cleanEnv(env.STUDIO_SUBSTRAL_GOOGLE_REFRESH_TOKEN)),
+      GOOGLE_CLIENT_ID: Boolean(cleanEnv(env.GOOGLE_CLIENT_ID)),
+      GOOGLE_CLIENT_SECRET: Boolean(cleanEnv(env.GOOGLE_CLIENT_SECRET)),
+    },
+    anchorTokenReuseDetected: Boolean(
+      anchorPrefix && substralPrefix && anchorPrefix === substralPrefix
+    ),
+    ...diagnostic,
+    remediation: buildOAuthRemediation(diagnostic),
+  };
+}
+
+function cleanEnv(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildOAuthRemediation(diagnostic) {
+  if (diagnostic.refresh?.ok) {
+    if (diagnostic.mailboxMatchesExpected === false) {
+      return 'Regenerate refresh token signed in as hello@studiosubstral.com (wrong Google account).';
+    }
+    if (diagnostic.mailScopeGranted === false) {
+      return 'Regenerate refresh token with scope https://mail.google.com/ (prompt=consent).';
+    }
+    return 'OAuth refresh OK — rerun verify and activate.';
+  }
+  const err = diagnostic.refresh?.error;
+  if (err === 'invalid_grant' || /revoked|expired/i.test(String(diagnostic.refresh?.error_description || ''))) {
+    return 'Regenerate STUDIO_SUBSTRAL_GOOGLE_REFRESH_TOKEN with node getStudioSubstralMailboxToken.js using the same GOOGLE_CLIENT_ID/SECRET as Railway, then rerun verify.';
+  }
+  if (err === 'invalid_client') {
+    return 'Align GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET on Railway with the OAuth client used to mint the refresh token.';
+  }
+  if (diagnostic.refresh?.code === 'google_oauth_refresh_missing' || !diagnostic.secretPresent) {
+    return 'Set STUDIO_SUBSTRAL_GOOGLE_REFRESH_TOKEN on the Railway service that runs substral:mailbox:verify.';
+  }
+  return 'Inspect refresh.error and refresh.error_description; regenerate token if credentials or scopes are wrong.';
+}
+
 async function emmettReadiness() {
   const { snapshot, assessment, envelope } = await produceTenantMailboxCapacityEnvelope(
     TENANT_ID,
@@ -262,6 +336,7 @@ async function main() {
       '  verify [--configure]',
       '  capture-delivered-auth --headers-file=<path>  (Authentication-Results from delivered test mail)',
       `  activate --confirm=${ACTIVATION_CONFIRM}`,
+      '  diagnose-oauth   (safe Google refresh audit — no secrets logged)',
       '  emmett-readiness',
       `  create-governed-program --confirm=${ACTIVATION_CONFIRM}`,
       '',
@@ -304,6 +379,13 @@ async function main() {
     return;
   }
 
+  if (command === 'diagnose-oauth') {
+    const report = await diagnoseOAuth(process.env);
+    printJson(report);
+    if (!report.refresh?.ok) process.exitCode = 1;
+    return;
+  }
+
   if (command === 'emmett-readiness') {
     const report = await emmettReadiness();
     printJson(report);
@@ -331,4 +413,11 @@ if (require.main === module) {
     });
 }
 
-module.exports = { configure, mergeDeliveredAuth, activateMailbox, emmettReadiness, createGovernedProgram };
+module.exports = {
+  configure,
+  mergeDeliveredAuth,
+  activateMailbox,
+  diagnoseOAuth,
+  emmettReadiness,
+  createGovernedProgram,
+};

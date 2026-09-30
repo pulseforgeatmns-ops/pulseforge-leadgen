@@ -7,6 +7,7 @@ const {
   GOOGLE_MAIL_IMAP_SCOPE,
   getGoogleMailboxAccessToken,
   clearGoogleMailboxAccessTokenCache,
+  diagnoseGoogleMailboxOAuth,
 } = require('../utils/googleMailboxOAuth');
 
 describe('googleMailboxOAuth', () => {
@@ -75,6 +76,7 @@ describe('googleMailboxOAuth', () => {
   it('surfaces Google refresh failures without password fallback', async () => {
     global.fetch = async () => ({
       ok: false,
+      status: 400,
       statusText: 'Bad Request',
       json: async () => ({ error: 'invalid_grant', error_description: 'Token has been revoked.' }),
     });
@@ -84,6 +86,33 @@ describe('googleMailboxOAuth', () => {
         env: { GOOGLE_CLIENT_ID: 'id', GOOGLE_CLIENT_SECRET: 'secret' },
       }),
       (err) => err.code === 'google_oauth_refresh_failed'
+        && err.googleOAuthDiagnostic?.error === 'invalid_grant'
+        && err.googleOAuthDiagnostic?.httpStatus === 400
     );
+  });
+
+  it('diagnoseGoogleMailboxOAuth returns safe fields only', async () => {
+    global.fetch = async (url) => {
+      if (String(url).includes('oauth2.googleapis.com/token')) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: 'invalid_client', error_description: 'Unauthorized' }),
+        };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+    const report = await diagnoseGoogleMailboxOAuth({
+      refreshToken: 'rt-diagnose',
+      env: { GOOGLE_CLIENT_ID: 'cid-12345678', GOOGLE_CLIENT_SECRET: 'secret' },
+      expectedMailbox: 'hello@studiosubstral.com',
+    });
+    assert.equal(report.refresh.ok, false);
+    assert.equal(report.refresh.httpStatus, 400);
+    assert.equal(report.refresh.error, 'invalid_client');
+    assert.equal(report.refresh.error_description, 'Unauthorized');
+    assert.equal(report.oauthClientIdSuffix, '12345678');
+    assert.doesNotMatch(JSON.stringify(report), /rt-diagnose/);
+    assert.equal(report.googleClientSecretPresent, true);
   });
 });

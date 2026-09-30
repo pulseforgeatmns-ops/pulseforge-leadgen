@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Isolated Google OAuth access-token resolver for tenant mailbox IMAP (XOAUTH2).
+ * Isolated Google OAuth access-token resolver for tenant mailbox IMAP/SMTP (XOAUTH2).
  * Refresh tokens are read from env via secret refs; access tokens stay in-memory only.
  */
 
@@ -36,6 +36,28 @@ function tokenExpiresSoon(entry) {
   return expiry <= Date.now() + TOKEN_REFRESH_WINDOW_MS;
 }
 
+function safeGoogleOAuthDiagnosticFromResponse(res, data = {}) {
+  return {
+    httpStatus: Number(res?.status || 0) || null,
+    error: clean(data.error) || null,
+    error_description: clean(data.error_description) || null,
+  };
+}
+
+function attachGoogleOAuthDiagnostic(err, diagnostic) {
+  if (!err || !diagnostic) return err;
+  err.googleOAuthDiagnostic = diagnostic;
+  return err;
+}
+
+function scopeIncludesMailGoogle(scopeValue) {
+  const scopes = String(scopeValue || '')
+    .split(/\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return scopes.includes(GOOGLE_MAIL_IMAP_SCOPE) || scopes.some((s) => s === 'https://mail.google.com');
+}
+
 async function refreshGoogleAccessToken({ clientId, clientSecret, refreshToken }) {
   if (!refreshToken) {
     throw new Error('Google mailbox OAuth refresh token is missing.');
@@ -52,13 +74,20 @@ async function refreshGoogleAccessToken({ clientId, clientSecret, refreshToken }
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const details = data.error_description || data.error || res.statusText;
-    const err = new Error(`Google mailbox OAuth token refresh failed: ${details}`);
+    const diagnostic = safeGoogleOAuthDiagnosticFromResponse(res, data);
+    const details = diagnostic.error_description || diagnostic.error || res.statusText;
+    const err = attachGoogleOAuthDiagnostic(
+      new Error(`Google mailbox OAuth token refresh failed: ${details}`),
+      diagnostic
+    );
     err.code = 'google_oauth_refresh_failed';
     throw err;
   }
   if (!data.access_token) {
-    const err = new Error('Google mailbox OAuth token refresh returned no access_token.');
+    const err = attachGoogleOAuthDiagnostic(
+      new Error('Google mailbox OAuth token refresh returned no access_token.'),
+      safeGoogleOAuthDiagnosticFromResponse(res, data)
+    );
     err.code = 'google_oauth_refresh_failed';
     throw err;
   }
@@ -71,7 +100,94 @@ async function refreshGoogleAccessToken({ clientId, clientSecret, refreshToken }
 }
 
 /**
- * Resolve a short-lived access token for ImapFlow XOAUTH2.
+ * Safe operator diagnostic — never returns refresh tokens, secrets, or access tokens.
+ */
+async function diagnoseGoogleMailboxOAuth({
+  refreshToken,
+  env = process.env,
+  expectedMailbox = null,
+} = {}) {
+  const report = {
+    secretPresent: Boolean(clean(refreshToken)),
+    googleClientIdPresent: Boolean(clean(env.GOOGLE_CLIENT_ID)),
+    googleClientSecretPresent: Boolean(clean(env.GOOGLE_CLIENT_SECRET)),
+    oauthClientIdSuffix: null,
+    refreshTokenSha256Prefix: clean(refreshToken)
+      ? cacheKey(refreshToken).slice(0, 12)
+      : null,
+    refresh: null,
+    grantedScopes: null,
+    mailScopeGranted: null,
+    tokenMailboxEmail: null,
+    expectedMailbox: expectedMailbox ? clean(expectedMailbox).toLowerCase() : null,
+    mailboxMatchesExpected: null,
+  };
+
+  let clientId;
+  let clientSecret;
+  try {
+    ({ clientId, clientSecret } = loadGoogleOAuthClient(env));
+    report.oauthClientIdSuffix = String(clientId).slice(-8);
+  } catch (err) {
+    report.refresh = {
+      ok: false,
+      code: 'google_oauth_client_missing',
+      message: err.message,
+    };
+    return report;
+  }
+
+  if (!report.secretPresent) {
+    report.refresh = {
+      ok: false,
+      code: 'google_oauth_refresh_missing',
+      message: 'Google mailbox OAuth refresh token is missing.',
+    };
+    return report;
+  }
+
+  try {
+    const fresh = await refreshGoogleAccessToken({
+      clientId,
+      clientSecret,
+      refreshToken: clean(refreshToken),
+    });
+    report.refresh = { ok: true, httpStatus: 200, error: null, error_description: null };
+    report.grantedScopes = fresh.scope || null;
+    report.mailScopeGranted = scopeIncludesMailGoogle(fresh.scope);
+
+    try {
+      const userRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+        headers: { Authorization: `Bearer ${fresh.accessToken}` },
+      });
+      if (userRes.ok) {
+        const profile = await userRes.json().catch(() => ({}));
+        report.tokenMailboxEmail = clean(profile.email).toLowerCase() || null;
+        if (report.expectedMailbox) {
+          report.mailboxMatchesExpected = report.tokenMailboxEmail === report.expectedMailbox;
+        }
+      } else {
+        const profileErr = await userRes.json().catch(() => ({}));
+        report.tokenMailboxEmail = null;
+        report.userinfo = safeGoogleOAuthDiagnosticFromResponse(userRes, profileErr);
+      }
+    } catch (userErr) {
+      report.userinfo = { error: userErr.message || 'userinfo_failed' };
+    }
+  } catch (err) {
+    report.refresh = {
+      ok: false,
+      code: err.code || 'google_oauth_refresh_failed',
+      message: err.message,
+      ...(err.googleOAuthDiagnostic || {}),
+    };
+  }
+
+  return report;
+}
+
+/**
+ * Resolve a short-lived access token for ImapFlow/nodemailer XOAUTH2.
  * Tokens are cached in-process only; never written to disk or logs.
  */
 async function getGoogleMailboxAccessToken({
@@ -103,6 +219,10 @@ function clearGoogleMailboxAccessTokenCache() {
 module.exports = {
   GOOGLE_MAIL_IMAP_SCOPE,
   clearGoogleMailboxAccessTokenCache,
+  diagnoseGoogleMailboxOAuth,
   getGoogleMailboxAccessToken,
   loadGoogleOAuthClient,
+  refreshGoogleAccessToken,
+  safeGoogleOAuthDiagnosticFromResponse,
+  scopeIncludesMailGoogle,
 };

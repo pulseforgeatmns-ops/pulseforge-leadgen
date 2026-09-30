@@ -100,6 +100,7 @@
     "anchor:mailbox:apply": "node scripts/anchorMailbox.js apply --confirm=anchor-mailbox-oauth-2026-09-19",
     "substral:mailbox:oauth": "node getStudioSubstralMailboxToken.js",
     "substral:mailbox:configure": "node scripts/studioSubstralMailboxActivation.js configure",
+    "substral:mailbox:diagnose-oauth": "node scripts/studioSubstralMailboxActivation.js diagnose-oauth",
     "substral:mailbox:verify": "node scripts/studioSubstralMailboxActivation.js verify --configure",
     "substral:mailbox:activate": "node scripts/studioSubstralMailboxActivation.js activate --confirm=substral-mailbox-2026-09-30",
     "substral:mailbox:emmett-readiness": "node scripts/studioSubstralMailboxActivation.js emmett-readiness",

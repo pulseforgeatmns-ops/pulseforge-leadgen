@@ -79,6 +79,27 @@ async function main() {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<html><body><h2>Studio Substral OAuth OK</h2></body></html>');
         server.close(() => resolve(tokens));
+        const credentials = loadCredentials();
+        const credKeys = credentials.installed || credentials.web;
+        console.log('\nOAuth client used for this refresh token:');
+        console.log(`  client_id suffix: ...${String(credKeys.client_id).slice(-8)}`);
+        console.log(`  scope granted: ${tokens.scope || SCOPES.join(' ')}`);
+        if (tokens.access_token) {
+          try {
+            const profileRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+              headers: { Authorization: `Bearer ${tokens.access_token}` },
+            });
+            if (profileRes.ok) {
+              const profile = await profileRes.json();
+              console.log(`  signed-in mailbox: ${profile.email || '(unknown)'}`);
+              if (profile.email && profile.email.toLowerCase() !== 'hello@studiosubstral.com') {
+                console.warn('  WARNING: expected hello@studiosubstral.com — regenerate with the correct account.');
+              }
+            }
+          } catch (_profileErr) {
+            // userinfo optional at bootstrap
+          }
+        }
         console.log('\nSet STUDIO_SUBSTRAL_GOOGLE_REFRESH_TOKEN to:\n');
         console.log(tokens.refresh_token || '(no refresh_token — re-run with prompt=consent)');
       } catch (err) {
