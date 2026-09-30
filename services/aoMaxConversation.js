@@ -634,6 +634,8 @@ async function handleProspectBriefAction({
     status: session.status,
     intent: 'prospect_brief',
     reply: briefResult.brief,
+    brief: briefResult.brief,
+    brief_sections: briefResult.brief_sections || null,
     action: 'prospect_brief',
     prospect_id: briefResult.prospect_id,
     lead_id: briefResult.lead_id,

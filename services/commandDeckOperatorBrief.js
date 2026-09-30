@@ -64,6 +64,14 @@ async function buildOperatorBrief(clientId) {
       title: 'Have Mike start the Manchester direct-mail route',
       detail: 'Review progress after 3 stops — then check escalations and warm leads on Command Deck.',
     };
+  } else if (briefing.ao_account_flags?.length) {
+    const top = briefing.ao_account_flags[0];
+    highestLeverage = {
+      title: top.recommended_action || 'Review AO CRM flag',
+      detail: [top.business_name, top.ao_name ? `AO: ${top.ao_name}` : null, top.reason]
+        .filter(Boolean)
+        .join(' — '),
+    };
   } else if (briefing.needs_jake?.length) {
     const top = briefing.needs_jake[0];
     highestLeverage = {
@@ -89,7 +97,17 @@ async function buildOperatorBrief(clientId) {
     };
   }
 
-  const jakeActions = (briefing.recommended_actions?.jake || []).slice(0, 6).map(formatActionItem);
+  let jakeActions = (briefing.recommended_actions?.jake || []).slice(0, 6).map(formatActionItem);
+  if (briefing.ao_account_flags?.length) {
+    const flagItems = briefing.ao_account_flags.slice(0, 4).map(flag => formatActionItem({
+      action: flag.recommended_action || 'Review AO CRM flag',
+      business: flag.business_name,
+      contact: flag.ao_name ? `AO: ${flag.ao_name}` : flag.reason,
+      detail: flag.note || flag.reason,
+      href: flag.account_id ? `/ao/crm/manager#${flag.account_id}` : '/ao/crm/manager',
+    }));
+    jakeActions = [...flagItems, ...jakeActions].slice(0, 8);
+  }
   if (!jakeActions.length) {
     if (visitsToday === 0) {
       jakeActions.push(formatActionItem({
@@ -149,6 +167,7 @@ async function buildOperatorBrief(clientId) {
     commandRail,
     drillDown: {
       escalations: briefing.needs_jake || [],
+      ao_account_flags: briefing.ao_account_flags || [],
       campaign,
       promoCandidates: briefing.promotion_candidates || [],
     },

@@ -222,7 +222,15 @@ const SECTION_KEYS = [
   ['recently_updated', 'Recently Updated'],
 ];
 
-let state = { data: null, activeTab: 'today_queue', outcomes: [], nextActions: [], followupDraft: null, followupProspectId: null };
+let state = {
+  data: null,
+  activeTab: 'today_queue',
+  outcomes: [],
+  nextActions: [],
+  followupDraft: null,
+  followupProspectId: null,
+  flagReasons: [],
+};
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -270,8 +278,10 @@ function renderRow(item) {
       ${item.latest_note_preview ? `<div class="row-meta">"${item.latest_note_preview.slice(0, 120)}"</div>` : ''}
       <div class="row-actions">
         <button class="btn" data-action="detail" data-prospect="${item.prospect_id}">Open</button>
+        <button class="btn" data-action="brief" data-prospect="${item.prospect_id}">Brief me</button>
         <button class="btn primary" data-action="outcome" data-prospect="${item.prospect_id}" data-task="${item.open_task_id || ''}">Log outcome</button>
         ${showFollowUpEntry(item) ? `<button class="btn" data-action="followup" data-prospect="${item.prospect_id}">Draft Follow-Up</button>` : ''}
+        <button class="btn" data-action="flag-jake" data-prospect="${item.prospect_id}">Flag for Jake</button>
       </div>
     </div>
   `;
@@ -471,6 +481,98 @@ function openOutcomeModal(prospectId, taskId) {
   };
 }
 
+function renderBriefSections(sections, fallbackText) {
+  if (!sections) {
+    return `<div class="draft-box">${(fallbackText || '').replace(/</g, '&lt;')}</div>`;
+  }
+  const blocks = [
+    ['Why this account matters', sections.why_this_account_matters],
+    ['What we know', sections.what_we_know],
+    ['Likely angle', sections.likely_angle],
+    ['Suggested next move', sections.suggested_next_move],
+    ['Short talk track', sections.short_talk_track],
+    ['What to watch for', sections.what_to_watch_for],
+  ];
+  return blocks.map(([title, body]) => `
+    <div class="detail-block"><h3>${title}</h3><div class="draft-box">${String(body || '—').replace(/</g, '&lt;')}</div></div>
+  `).join('');
+}
+
+async function openBriefModal(prospectId) {
+  document.getElementById('modal').innerHTML = `
+    <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;">Brief me</h2>
+    <p class="row-meta" style="margin:8px 0 12px;">Loading Max brief…</p>
+    <button class="btn" id="brief-close">Close</button>
+  `;
+  document.getElementById('modal-backdrop').classList.add('open');
+  document.getElementById('brief-close').onclick = closeModal;
+  try {
+    const result = await api('/ao/api/max/prospect-brief', {
+      method: 'POST',
+      body: JSON.stringify({
+        prospect_id: prospectId,
+        source: 'crm_card_brief_button',
+      }),
+    });
+    const title = result.brief_sections?.account_name || result.business_name || 'Account brief';
+    document.getElementById('modal').innerHTML = `
+      <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;">${title}</h2>
+      ${renderBriefSections(result.brief_sections, result.brief || result.reply)}
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="btn primary" id="brief-close">Close</button>
+      </div>
+    `;
+    document.getElementById('brief-close').onclick = closeModal;
+  } catch (err) {
+    document.getElementById('modal').innerHTML = `
+      <h2>Brief failed</h2><p class="warn">${err.message}</p>
+      <button class="btn" id="brief-close">Close</button>
+    `;
+    document.getElementById('brief-close').onclick = closeModal;
+  }
+}
+
+async function openFlagForJakeModal(prospectId) {
+  const reasons = state.flagReasons.length ? state.flagReasons : [
+    { value: 'pricing_or_scope', label: 'Pricing or scope question' },
+    { value: 'decision_maker_block', label: 'Can\'t reach decision-maker' },
+    { value: 'incumbent_vendor', label: 'Incumbent vendor in the way' },
+    { value: 'walkthrough_or_proposal', label: 'Walkthrough or proposal help' },
+    { value: 'account_intel_gap', label: 'Missing account intel' },
+    { value: 'other', label: 'Something else' },
+  ];
+  document.getElementById('modal').innerHTML = `
+    <h2 style="font-family:var(--pf-font-display);letter-spacing:1px;margin-bottom:8px;">Flag for Jake</h2>
+    <p style="font-size:0.85rem;color:var(--pf-text-muted);margin-bottom:12px;">Jake'll see this on today's operator brief with a suggested next move.</p>
+    <div class="field"><label>Reason *</label>
+      <select id="flag-reason">${reasons.map(r => `<option value="${r.value}">${r.label}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Note</label><textarea id="flag-note" placeholder="What do you need from Jake?"></textarea></div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn primary" id="save-flag">Send flag</button>
+      <button class="btn" id="cancel-flag">Cancel</button>
+    </div>
+  `;
+  document.getElementById('modal-backdrop').classList.add('open');
+  document.getElementById('cancel-flag').onclick = closeModal;
+  document.getElementById('save-flag').onclick = async () => {
+    try {
+      await api(`/ao/api/crm/accounts/${prospectId}/flag-for-jake`, {
+        method: 'POST',
+        body: JSON.stringify({
+          reason: document.getElementById('flag-reason').value,
+          note: document.getElementById('flag-note').value,
+        }),
+      });
+      alert('Flagged for Jake.');
+      closeModal();
+      await loadDashboard();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
 async function showDetail(prospectId) {
   const detail = await api(`/ao/api/crm/accounts/${prospectId}`);
   const s = detail.summary;
@@ -496,7 +598,9 @@ async function showDetail(prospectId) {
         </div>
       `).join('') : '<div class="empty">No activity yet.</div>'}
     </div>
+    <button class="btn" data-action="brief" data-prospect="${prospectId}">Brief me</button>
     <button class="btn" data-action="followup" data-prospect="${prospectId}">Draft Follow-Up</button>
+    <button class="btn" data-action="flag-jake" data-prospect="${prospectId}">Flag for Jake</button>
     <button class="btn primary" data-action="outcome" data-prospect="${prospectId}">Log outcome</button>
     <button class="btn" id="detail-close" style="margin-left:8px;">Close</button>
   `;
@@ -530,6 +634,12 @@ document.body.addEventListener('click', async (e) => {
   }
   if (btn.dataset.action === 'followup') {
     try { await openFollowUpModal(btn.dataset.prospect); } catch (err) { alert(err.message); }
+  }
+  if (btn.dataset.action === 'brief') {
+    try { await openBriefModal(btn.dataset.prospect); } catch (err) { alert(err.message); }
+  }
+  if (btn.dataset.action === 'flag-jake') {
+    try { await openFlagForJakeModal(btn.dataset.prospect); } catch (err) { alert(err.message); }
   }
 });
 

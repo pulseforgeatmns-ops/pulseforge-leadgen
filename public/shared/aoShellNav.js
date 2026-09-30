@@ -5,7 +5,7 @@
 
   const AO_NAV_ITEMS = Object.freeze([
     { id: 'field', label: 'Field Mode', href: '/ao/field' },
-    { id: 'accounts', label: 'My Accounts', href: '/ao/crm' },
+    { id: 'accounts', label: 'Open CRM', href: '/ao/crm' },
     { id: 'manager', label: 'Manager View', href: '/ao/crm/manager', managerOnly: true },
   ]);
 

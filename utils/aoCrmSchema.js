@@ -25,6 +25,11 @@ async function ensureAoCrmSchemaOnce(db) {
     'utf8'
   );
   await db.query(followupMigration);
+  const workflowMigration = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '2026-09-30-ao-workflow-002-flags.sql'),
+    'utf8'
+  );
+  await db.query(workflowMigration);
 }
 
 async function ensureAoCrmSchema(db = pool) {
