@@ -145,6 +145,13 @@ fallbacks were exercised. Approved copy wraps are recorded as intended in the
 layout assertions. One fallback containment fix clips the CSS object to its
 small-screen reading band; WebGL geometry and staging are unchanged.
 
+The final renderer parity gate captures initial, mid-separation and fully
+exploded states at 390×844, 768×1024, 1280×800 and 1600×900. The dimensional
+source and built bundle remain byte-for-byte identical to the approved launch
+renderer. Narrow screens initialize one stage at a time so the approved rock,
+materials, machined edges, lighting and responsive camera remain present without
+reintroducing the earlier three-scene initialization task.
+
 Eager JavaScript: 8,306 bytes gzip (limit 10,240). Deferred object: 156,607 bytes
 gzip (limit 174,080). In a fresh Chromium fallback run with 4× CPU slowdown,
 1.6 Mbps down and 150ms latency, cold LCP was 2,788 / 1,944 / 1,912 ms, CLS 0,
