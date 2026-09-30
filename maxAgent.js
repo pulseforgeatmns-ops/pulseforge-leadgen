@@ -2869,10 +2869,17 @@ async function run(args = {}) {
       console.log('--- END PREVIEW ---\n');
 
       let webDigest = null;
-      if (CLIENT_CONFIG?.scoring_profile === 'web_design') {
+      if (CLIENT_CONFIG?.scoring_profile === 'web_design' || CLIENT_CONFIG?.scoring_profile === 'studio_substral') {
         try {
           const assessments = await listAssessmentsForClient(pool, CLIENT_ID, { limit: 50 });
-          webDigest = buildMaxWebOpportunityDigest(assessments);
+          if (CLIENT_CONFIG?.scoring_profile === 'studio_substral') {
+            const { listAssessmentOpportunities } = require('./services/studioSubstralPersistence');
+            const { prioritizeStudioSubstralOpportunities } = require('./utils/studioSubstralMaxPrioritization');
+            const assessmentRequests = await listAssessmentOpportunities(pool, CLIENT_ID, { limit: 25 });
+            webDigest = prioritizeStudioSubstralOpportunities({ assessments, assessmentRequests });
+          } else {
+            webDigest = buildMaxWebOpportunityDigest(assessments);
+          }
         } catch (webErr) {
           console.warn('[Max] Website opportunity digest unavailable:', webErr.message);
         }

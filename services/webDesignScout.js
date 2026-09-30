@@ -82,7 +82,7 @@ function mapOpportunityScoreToIcp(opportunityScore, recommendedAction) {
 }
 
 function isWebDesignProfile(scoringProfile) {
-  return scoringProfile === 'web_design';
+  return scoringProfile === 'web_design' || scoringProfile === 'studio_substral';
 }
 
 module.exports = {
