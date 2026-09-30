@@ -490,8 +490,41 @@ ${screenshotRule}
 ${openerRule}${linkedinRules}`;
 }
 
+const MIRA_CONTENT_SAFE_CONTEXT_UNAVAILABLE = 'mira_content_safe_context_unavailable';
+
+function isMiraContentSafeContextAvailable(context) {
+  return Boolean(context?.available && context?.client);
+}
+
+function buildMiraContextSkipResult(extra = {}) {
+  return {
+    ok: false,
+    skipped: true,
+    reason: MIRA_CONTENT_SAFE_CONTEXT_UNAVAILABLE,
+    content: null,
+    failed: true,
+    ...extra,
+  };
+}
+
+function channelRequiresMiraSafeContext(channel) {
+  if (isLinkedInV2Channel(channel)) return true;
+  return ['facebook_page', 'google_business', 'blog', 'linkedin_page', 'linkedin_personal'].includes(channel);
+}
+
+function isRegeneratableValidationIssue(issue) {
+  const text = String(issue || '').toLowerCase();
+  if (text.includes('mira content-safe context is unavailable')) return false;
+  if (text.includes('fabricating specifics')) return false;
+  return true;
+}
+
+function hasRegeneratableValidationIssues(issues = []) {
+  return issues.every(isRegeneratableValidationIssue);
+}
+
 function buildMiraGroundingBlock(context) {
-  if (!context?.available || !context?.client) {
+  if (!isMiraContentSafeContextAvailable(context)) {
     throw new Error('Mira content-safe context is unavailable; aborting generation rather than fabricating specifics');
   }
   const safePayload = {
@@ -514,16 +547,30 @@ GROUNDING RULES — HARD CONSTRAINTS:
 - If this context does not support a specific claim, omit the claim.`;
 }
 
-async function getPaigeMiraGrounding(channel) {
+async function resolvePaigeMiraGrounding(channel) {
+  if (!channelRequiresMiraSafeContext(channel)) {
+    return { ok: true, context: null, block: '' };
+  }
   if (RUN_CONTEXT.simulateMiraUnavailable) {
-    throw new Error('Mira content-safe context is unavailable; aborting generation rather than fabricating specifics');
+    return { ok: false, skipped: true, reason: MIRA_CONTENT_SAFE_CONTEXT_UNAVAILABLE };
   }
   const context = await buildMiraContext(CLIENT_ID, {
     contentSafe: true,
     channel,
     includeCrossClient: false,
   });
-  return { context, block: buildMiraGroundingBlock(context) };
+  if (!isMiraContentSafeContextAvailable(context)) {
+    return { ok: false, skipped: true, reason: MIRA_CONTENT_SAFE_CONTEXT_UNAVAILABLE };
+  }
+  return { ok: true, context, block: buildMiraGroundingBlock(context) };
+}
+
+async function getPaigeMiraGrounding(channel) {
+  const resolved = await resolvePaigeMiraGrounding(channel);
+  if (!resolved.ok) {
+    throw new Error('Mira content-safe context is unavailable; aborting generation rather than fabricating specifics');
+  }
+  return { context: resolved.context, block: resolved.block };
 }
 
 async function getLearnedGuardrailsBlock() {
@@ -1627,7 +1674,12 @@ function extractMessageText(message, operation) {
 function extractPaigeWriterResponseText(message) {
   const blocks = Array.isArray(message?.content) ? message.content : [];
   const text = blocks
-    .filter(block => block && block.type === 'text' && typeof block.text === 'string')
+    .filter((block) => {
+      if (!block || typeof block.text !== 'string') return false;
+      const type = String(block.type || 'text').toLowerCase();
+      if (type === 'thinking' || type === 'redacted_thinking') return false;
+      return type === 'text' || type === 'output_text' || !block.type;
+    })
     .map(block => block.text)
     .join('\n')
     .trim();
@@ -1889,7 +1941,13 @@ async function generateLinkedInPost(company, channel) {
     return { content: null, failed: true, skipped: true };
   }
 
-  const { context: miraContext, block: miraGrounding } = await getPaigeMiraGrounding(channel);
+  const miraResolution = await resolvePaigeMiraGrounding(channel);
+  if (!miraResolution.ok) {
+    console.log(`  [mira] ${miraResolution.reason}; skipping ${channel} without generation`);
+    await logLinkedInSkip(company, channel, brand, null, miraResolution.reason);
+    return buildMiraContextSkipResult({ quality: null });
+  }
+  const { context: miraContext, block: miraGrounding } = miraResolution;
   const formatHistory = await getLinkedInFormatHistory(brand, channel);
   for (const sessionFormat of RUN_CONTEXT.sessionFormats) {
     formatHistory.push({ format: sessionFormat, last_used_at: new Date().toISOString() });
@@ -2323,7 +2381,12 @@ function logQualityGateComparison(contextLabel, score) {
 }
 
 async function generatePost(company, contentType, channel) {
-  const { context: miraContext, block: miraGrounding } = await getPaigeMiraGrounding(channel);
+  const miraResolution = await resolvePaigeMiraGrounding(channel);
+  if (!miraResolution.ok) {
+    console.log(`  [mira] ${miraResolution.reason}; skipping ${channel} without generation`);
+    return buildMiraContextSkipResult({ quality: null, regenerationAttempts: 0, regenerated: false });
+  }
+  const { context: miraContext, block: miraGrounding } = miraResolution;
   const verticalCtx = getVerticalContext(company.industry);
   const isMshi = CLIENT_ID === 2;
   const isAnchor = CLIENT_ID === ANCHOR_CLIENT_ID;
@@ -2421,7 +2484,11 @@ async function generatePost(company, contentType, channel) {
 
     logQualityGateComparison('initial', score);
 
-    while ((validationIssues.length || doctrineViolations.length || !passesQualityGate(score, channel)) && regenerationAttempts < maxAttempts) {
+    while (
+      hasRegeneratableValidationIssues(validationIssues)
+      && (validationIssues.length || doctrineViolations.length || !passesQualityGate(score, channel))
+      && regenerationAttempts < maxAttempts
+    ) {
       regenerated = true;
       regenerationAttempts++;
       if (doctrineViolations.length) {
@@ -2979,6 +3046,9 @@ AND status = 'pending';`);
           const postResult = await producePost(company, contentType, channel);
           if (postResult.failed) {
             channelsFailed.push(`${company.name}/${channel}`);
+            if (postResult.skipped && postResult.reason === MIRA_CONTENT_SAFE_CONTEXT_UNAVAILABLE) {
+              console.log(`  [mira] channel skipped: ${postResult.reason}`);
+            }
             continue;
           }
           const content = postResult.content;
@@ -3083,6 +3153,12 @@ module.exports = {
     validatePulseforgeClaims,
     usesMiraGrounding,
     buildMiraGroundingBlock,
+    resolvePaigeMiraGrounding,
+    isMiraContentSafeContextAvailable,
+    channelRequiresMiraSafeContext,
+    isRegeneratableValidationIssue,
+    hasRegeneratableValidationIssues,
+    MIRA_CONTENT_SAFE_CONTEXT_UNAVAILABLE,
     linkedInFormatWeight,
     chooseLinkedInFormat,
     hasMiraSourceAnchor,

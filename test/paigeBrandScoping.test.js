@@ -53,6 +53,17 @@ test('LinkedIn format rotation avoids seven-day repeats and downweights days 8-1
   assert.notEqual(_test.chooseLinkedInFormat(history, now, () => 0), 'punch');
 });
 
+test('Mira availability and validation regen guards fail closed on missing safety context', () => {
+  assert.equal(_test.isMiraContentSafeContextAvailable({ available: false, client: { id: 10 } }), false);
+  assert.equal(_test.isMiraContentSafeContextAvailable({ available: true, client: { id: 10 } }), true);
+  assert.equal(_test.channelRequiresMiraSafeContext('facebook_page'), true);
+  assert.equal(_test.hasRegeneratableValidationIssues(['contains an em dash or en dash in body copy']), true);
+  assert.equal(
+    _test.hasRegeneratableValidationIssues(['Mira content-safe context is unavailable; aborting generation']),
+    false
+  );
+});
+
 test('Mira grounding accepts only available content-safe context', () => {
   const block = _test.buildMiraGroundingBlock({
     available: true,

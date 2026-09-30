@@ -352,11 +352,11 @@ describe('Paige Anchor social doctrine reconciliation', () => {
 
     test('Mira-unavailable aborts facebook_page generation without persisting artifacts', async () => {
       const { paige, getGenerationCalls, getProviderCalls, writes } = buildPaigeHarness();
-      const loggedErrors = [];
-      const originalConsoleError = console.error;
-      console.error = (...args) => {
-        loggedErrors.push(args.map(String).join(' '));
-        originalConsoleError(...args);
+      const loggedLines = [];
+      const originalConsoleLog = console.log;
+      console.log = (...args) => {
+        loggedLines.push(args.map(String).join(' '));
+        originalConsoleLog(...args);
       };
 
       try {
@@ -373,11 +373,12 @@ describe('Paige Anchor social doctrine reconciliation', () => {
         assert.deepEqual(writes, []);
         assert.match(String(result.channels_failed?.[0] || ''), /facebook_page/);
         assert.match(
-          loggedErrors.join('\n'),
-          /Mira content-safe context is unavailable|fabricating specifics/i
+          loggedLines.join('\n'),
+          /mira_content_safe_context_unavailable/
         );
+        assert.match(String(loggedLines.join('\n')), /skipping facebook_page without generation/i);
       } finally {
-        console.error = originalConsoleError;
+        console.log = originalConsoleLog;
       }
     });
   });
