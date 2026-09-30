@@ -48,16 +48,59 @@ function scoreAssessmentRequest(row = {}) {
   };
 }
 
-function prioritizeStudioSubstralOpportunities({ assessments = [], assessmentRequests = [] } = {}) {
+function scoreScoutProspect(row = {}) {
+  const intel = row.studio_scout_intelligence || {};
+  let score = Number(row.studio_fit_score || intel.studio_fit_score || 0) * 1.2;
+  if (row.studio_confidence === 'high' || intel.confidence === 'high') score += 12;
+  else if (row.studio_confidence === 'medium' || intel.confidence === 'medium') score += 6;
+  if (row.studio_outreach_status === 'review_needed') score += 8;
+  if (row.recommended_outreach_angle || intel.recommended_outreach_angle) score += 5;
+  const breakdown = intel.score_breakdown || {};
+  score += (breakdown.website_pain || 0) * 0.15;
+  score += (breakdown.proof_gap || 0) * 0.2;
+  return {
+    max_priority_score: Math.round(score),
+    prioritization_factors: {
+      studio_fit_score: row.studio_fit_score || intel.studio_fit_score,
+      studio_category: row.studio_category || intel.studio_category,
+      confidence: row.studio_confidence || intel.confidence,
+      outreach_status: row.studio_outreach_status,
+      source: 'studio_substral_scout',
+    },
+    max_questions: {
+      why_worth_assessing: intel.why_they_fit || row.proof_gap_summary || 'Scout-qualified mismatch between business strength and site presentation.',
+      evidence_we_have: (intel.website_issues_observed || []).length
+        ? (intel.website_issues_observed || []).slice(0, 3).join('; ')
+        : row.website_pain_summary || 'Studio Scout intelligence on file — review structured payload.',
+      evidence_we_lack: intel.confidence === 'low'
+        ? 'Low confidence — verify decision-maker and site issues before outreach.'
+        : null,
+      next_action: (row.studio_fit_score || 0) >= 80
+        ? 'Manual priority outreach review (Jake)'
+        : 'Review Scout angle before Paige drafts first message',
+    },
+  };
+}
+
+function prioritizeStudioSubstralOpportunities({
+  assessments = [],
+  assessmentRequests = [],
+  scoutProspects = [],
+} = {}) {
   const rankedWeb = prioritizeWebOpportunities(assessments);
   const rankedRequests = assessmentRequests
     .map((row) => ({ ...row, ...scoreAssessmentRequest(row) }))
+    .sort((a, b) => b.max_priority_score - a.max_priority_score);
+  const rankedScout = scoutProspects
+    .map((row) => ({ ...row, ...scoreScoutProspect(row) }))
     .sort((a, b) => b.max_priority_score - a.max_priority_score);
 
   return {
     top_website_opportunities: rankedWeb.slice(0, 10),
     assessment_requests: rankedRequests,
-    combined: [...rankedWeb, ...rankedRequests]
+    scout_prospects: rankedScout,
+    top_scout_prospects: rankedScout.slice(0, 10),
+    combined: [...rankedWeb, ...rankedRequests, ...rankedScout]
       .sort((a, b) => (b.max_priority_score || 0) - (a.max_priority_score || 0)),
   };
 }
@@ -65,4 +108,5 @@ function prioritizeStudioSubstralOpportunities({ assessments = [], assessmentReq
 module.exports = {
   prioritizeStudioSubstralOpportunities,
   scoreAssessmentRequest,
+  scoreScoutProspect,
 };
