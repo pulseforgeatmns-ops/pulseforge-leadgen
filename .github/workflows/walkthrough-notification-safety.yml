@@ -1,0 +1,45 @@
+name: Walkthrough notification safety
+on:
+  pull_request:
+    paths:
+      - 'lib/walkthrough*.js'
+      - 'routes/walkthrough.js'
+      - 'test/walkthroughRoutes.test.js'
+      - 'test/walkthroughNotification*.test.js'
+      - 'migrations/2026-09-30-walkthrough-notification-claims.sql'
+      - '.github/workflows/walkthrough-notification-safety.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'lib/walkthrough*.js'
+      - 'routes/walkthrough.js'
+      - 'test/walkthroughRoutes.test.js'
+      - 'test/walkthroughNotification*.test.js'
+      - 'migrations/2026-09-30-walkthrough-notification-claims.sql'
+      - '.github/workflows/walkthrough-notification-safety.yml'
+permissions:
+  contents: read
+jobs:
+  walkthrough-notification-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      WALKTHROUGH_NOTIFICATION_TEST_POSTGRES: 'true'
+      # No Railway variables, production database, or provider secrets.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install disposable PostgreSQL binaries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql
+          echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+      - name: Verify test isolation and atomic duplicate protection
+        run: node --test test/walkthroughNotification.test.js test/walkthroughNotificationPostgres.test.js
+      - name: Verify public intake and synthetic rejection
+        run: node --test --test-name-pattern='walkthrough' test/walkthroughRoutes.test.js

@@ -7,6 +7,7 @@ const express = require('express');
 const { validateWalkthroughPayload } = require('../lib/walkthroughValidate');
 const { captureWalkthroughLead } = require('../lib/walkthroughCapture');
 const { buildAttributionRecord } = require('../lib/walkthroughAttribution');
+const { syntheticSubmission } = require('../lib/walkthroughNotification');
 
 const router = express.Router();
 
@@ -51,6 +52,10 @@ router.post('/api/public/walkthrough', async (req, res) => {
     const validated = validateWalkthroughPayload(req.body);
     if (!validated.ok) {
       return res.status(400).json({ error: 'Validation failed', details: validated.errors });
+    }
+    // Keep demo contacts out of the CRM and downstream outreach as well as email.
+    if (syntheticSubmission(validated.values)) {
+      return res.status(422).json({ error: 'Please use real contact details to request a Facility Assessment.' });
     }
 
     const serverReferer = String(req.headers.referer || req.headers.referrer || '').trim() || null;
