@@ -70,14 +70,22 @@ function startGovernedOutboundExecutionClock(options = {}) {
     busy = true;
     const current = cycles++;
     try {
-      const tenantIds = parseGovernedOutboundTenantIds();
-      await runGovernedOutboundPollCycle({ pool, cron, tenantIds, ...options });
+      const tenantIds = resolveTickTenantIds(options);
+      await runGovernedOutboundPollCycle({ ...options, pool, cron, tenantIds });
       if (current % 5 === 0) {
-        const tick = await runGovernedOutboundTickCycle({ pool, cron, tenantIds, allTenants: true });
+        const tick = await runGovernedOutboundTickCycle({
+          ...options,
+          pool,
+          cron,
+          tenantIds,
+          allTenants: true,
+        });
         logger.log?.('[governed-outbound-clock] tick', JSON.stringify(tick));
       }
       if (maxControlEnabled && current % 15 === 0) {
-        const control = await dispatchControl({ pool, logger, execute: true, tenantIds });
+        const control = options.maxControl
+          ? await options.maxControl()
+          : await dispatchControl({ pool, logger, execute: true, tenantIds });
         logger.log?.('[governed-outbound-clock] max-control', JSON.stringify(control));
       }
     } catch (error) {
