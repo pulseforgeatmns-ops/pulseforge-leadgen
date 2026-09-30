@@ -6,6 +6,7 @@
  */
 
 const crypto = require('crypto');
+const { sanitizeMailboxErrorText } = require('./mailboxErrorSanitizer');
 
 /** Required for Gmail IMAP/POP/SMTP XOAUTH2 — not gmail.readonly (REST API only). */
 const GOOGLE_MAIL_IMAP_SCOPE = 'https://mail.google.com/';
@@ -52,9 +53,12 @@ async function refreshGoogleAccessToken({ clientId, clientSecret, refreshToken }
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const details = data.error_description || data.error || res.statusText;
+    const details = sanitizeMailboxErrorText(data.error_description || data.error || res.statusText);
     const err = new Error(`Google mailbox OAuth token refresh failed: ${details}`);
     err.code = 'google_oauth_refresh_failed';
+    err.httpStatus = res.status;
+    if (typeof data.error === 'string') err.error = data.error;
+    if (typeof data.error_description === 'string') err.error_description = data.error_description;
     throw err;
   }
   if (!data.access_token) {

@@ -15,6 +15,7 @@ const {
   genericSmtpImapTlsOptions,
 } = require('../utils/mailNetwork');
 const { normalizeImapFlowFetchMessage } = require('../utils/mailHeaders');
+const { sanitizeMailboxError: sanitizeErrorMessage } = require('../utils/mailboxErrorSanitizer');
 
 const PROVIDER_TYPES = Object.freeze({
   GENERIC_SMTP_IMAP: 'GENERIC_SMTP_IMAP',
@@ -166,18 +167,6 @@ function asJson(value, fallback) {
   } catch (_err) {
     return fallback;
   }
-}
-
-function sanitizeErrorMessage(err) {
-  const raw = String(err?.message || err || 'unknown_error');
-  return raw
-    .replace(/password=([^&\s]+)/ig, 'password=[redacted]')
-    .replace(/pass=([^&\s]+)/ig, 'pass=[redacted]')
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/ig, 'Bearer [redacted]')
-    .replace(/access[_-]?token[=:\s]+[A-Za-z0-9._-]+/ig, 'access_token=[redacted]')
-    .replace(/refresh[_-]?token[=:\s]+[A-Za-z0-9._-]+/ig, 'refresh_token=[redacted]')
-    .replace(/auth[^,\n]+/ig, 'auth=[redacted]')
-    .slice(0, 500);
 }
 
 function mailboxError(code, message, extras = {}) {
