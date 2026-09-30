@@ -11,7 +11,7 @@ const AUTH_STATE = Object.freeze({
   UNKNOWN: 'UNKNOWN',
 });
 
-const PASS_STATUSES = new Set(['present', 'verified', 'pass', 'valid', 'yes', 'authenticated']);
+const PASS_STATUSES = new Set(['present', 'verified', 'pass', 'valid', 'yes', 'authenticated', 'aligned']);
 const FAIL_STATUSES = new Set(['missing', 'failed', 'fail', 'invalid', 'no']);
 
 function authStateOf(value) {
