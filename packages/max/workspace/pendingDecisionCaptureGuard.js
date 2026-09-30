@@ -1,5 +1,7 @@
 'use strict';
 
+const { OPERATOR_DECISION_KINDS } = require('../../acquisition-mission/types');
+
 /**
  * SPEC-JEV-004 — Pending Decision Capture Guard.
  * Pending-decision resolution may capture an operator message only when it
@@ -157,6 +159,18 @@ function classifyPendingDecisionCaptureIntentImpl(input = {}) {
 
   if (!message || !pendingDecision) {
     return CAPTURE_INTENTS.UNRELATED_OR_QUESTION;
+  }
+
+  if (pendingDecision.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION) {
+    if (matchesAny(message, PENDING_DECISION_CLARIFICATION_PATTERNS)) {
+      return CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION;
+    }
+    if (
+      /\b(?:decision\s*:\s*)?region\s*[=:]/i.test(message) ||
+      pendingDecision.field === 'geography.region'
+    ) {
+      return CAPTURE_INTENTS.DECISION_RESPONSE;
+    }
   }
 
   if (matchesAny(message, PENDING_DECISION_CLARIFICATION_PATTERNS)) {

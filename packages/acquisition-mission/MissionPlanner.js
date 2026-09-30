@@ -573,8 +573,46 @@ function planFromObjective(sourceText, opts = {}) {
   return planMission(resolvedObjective, opts);
 }
 
+/**
+ * Strip compound operator messages down to the clarification answer (e.g. region text).
+ * @param {string} answer
+ * @param {object} [ambiguity]
+ * @returns {string}
+ */
+function normalizePlanClarificationAnswer(answer, ambiguity) {
+  let text = asText(answer);
+  if (!text) return text;
+  text = text.replace(/\.\s*approval\s*:\s*approved.*$/i, '').trim();
+  text = text.replace(/\bapproval\s*:\s*approved\b.*$/i, '').trim();
+  text = text.replace(/\.\s*(?:proceed with|outreach remains).*$/i, '').trim();
+  const decisionRegion = text.match(/(?:\bdecision\s*:\s*)?region\s*=\s*(.+)/i);
+  if (decisionRegion) {
+    text = decisionRegion[1].trim().replace(/\.\s*$/, '');
+  } else if (ambiguity && ambiguity.field === 'geography.region') {
+    text = text.replace(/^\s*(?:decision\s*:\s*)?region\s*[:=]\s*/i, '').trim();
+  }
+  return text;
+}
+
+function geographyChoiceFromFreeText(answer, ambiguity) {
+  if (!ambiguity || ambiguity.field !== 'geography.region') return null;
+  const normalized = normalizePlanClarificationAnswer(answer, ambiguity);
+  if (!normalized) return null;
+  const geo = expandGeography(normalized, normalized);
+  if (!geo || !geo.region) return null;
+  if (geo.scope === 'nationwide' && /\bmanchester|charleston|nashville|\bnh\b|new hampshire|southern/i.test(normalized)) {
+    return null;
+  }
+  return {
+    id: 'operator_geography',
+    label: geo.region,
+    value: geo,
+  };
+}
+
 function matchChoice(ambiguity, answer) {
-  const hay = asText(answer).toLowerCase();
+  const normalized = normalizePlanClarificationAnswer(answer, ambiguity);
+  const hay = asText(normalized).toLowerCase();
   if (!ambiguity || !hay) return null;
   const choices = ambiguity.choices || [];
   const byId = choices.find((choice) => hay === String(choice.id).toLowerCase());
@@ -582,8 +620,16 @@ function matchChoice(ambiguity, answer) {
   const byLabel = choices.find((choice) => hay.includes(String(choice.label).toLowerCase()) || String(choice.label).toLowerCase().includes(hay));
   if (byLabel) return byLabel;
   if (ambiguity.field === 'geography.region') {
-    if (/\bnh\b|new hampshire/.test(hay)) return choices.find((choice) => choice.id === 'manchester_nh') || null;
-    if (/\buk\b|england/.test(hay)) return choices.find((choice) => choice.id === 'manchester_uk') || null;
+    if (/\bnh\b|new hampshire/.test(hay)) {
+      const nh = choices.find((choice) => choice.id === 'manchester_nh');
+      if (nh) return nh;
+    }
+    if (/\buk\b|england/.test(hay)) {
+      const uk = choices.find((choice) => choice.id === 'manchester_uk');
+      if (uk) return uk;
+    }
+    const freeText = geographyChoiceFromFreeText(normalized, ambiguity);
+    if (freeText) return freeText;
   }
   if (ambiguity.field === 'market.segment') {
     if (/\bstr\b|short[- ]term/.test(hay)) return choices.find((choice) => choice.id === 'short_term_rental') || null;
@@ -617,7 +663,7 @@ function applyClarification(sourceText, answer, opts = {}) {
   const prior = opts.prior || planFromObjective(sourceText, opts);
   const ambiguity = (prior.ambiguities || [])[0];
   if (!ambiguity) return prior;
-  const choice = matchChoice(ambiguity, answer);
+  const choice = matchChoice(ambiguity, normalizePlanClarificationAnswer(answer, ambiguity));
   if (!choice) {
     return {
       ...prior,
@@ -662,6 +708,7 @@ module.exports = {
   applyEdits,
   applyResolutions,
   applyContextPrecedence,
+  normalizePlanClarificationAnswer,
   matchChoice,
   inferSegmentKey,
   inferConstraints,
