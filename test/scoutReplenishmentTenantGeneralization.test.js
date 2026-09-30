@@ -373,11 +373,11 @@ test('Greater Manchester mission still resolves the Anchor city set', () => {
 test('missing tenant context fails closed instead of defaulting to 10', async () => {
   await assert.rejects(
     () => runEnrichmentBatches({ run: async () => ({ considered: 0 }) }, {}, 1),
-    { code: 'replenishment_tenant_required' }
+    { code: 'governed_outbound_tenant_required' }
   );
   assert.throws(
     () => resolveReplenishmentTenantContext({}),
-    { code: 'replenishment_tenant_required' }
+    { code: 'governed_outbound_tenant_required' }
   );
   assert.throws(
     () => scoutInput(
@@ -392,14 +392,14 @@ test('missing tenant context fails closed instead of defaulting to 10', async ()
       },
       PLAN
     ),
-    { code: 'replenishment_tenant_required' }
+    { code: 'governed_outbound_tenant_required' }
   );
   await assert.rejects(
     () => persistDiscoveredCompanies({}, { candidateOwnership: async () => null }, {
       companies: [candidateFor('10')],
       scoutContext: { scope: { segment: 'short_term_rental' } },
     }),
-    { code: 'replenishment_tenant_required' }
+    { code: 'governed_outbound_tenant_required' }
   );
   await assert.rejects(
     () => defaultScoutRamp({
@@ -417,7 +417,7 @@ test('missing tenant context fails closed instead of defaulting to 10', async ()
       plan: PLAN,
       skipVerificationRetry: true,
     }),
-    { code: 'replenishment_tenant_required' }
+    { code: 'governed_outbound_tenant_required' }
   );
 });
 

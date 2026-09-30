@@ -11,6 +11,7 @@ const { createOutboundEngine, assessOperatingCapacity } = require('../packages/e
 const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
 const { governedContactReason } = require('../utils/governedContactEligibility');
 const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
+const { createGovernedOutboundContext } = require('./governedOutboundContext');
 const { buildTenantMailboxInboxSnapshot } = require('./emmettTenantMailboxSnapshot');
 const { createGovernedTenantMailboxSend } = require('../utils/governedOutboundTransport');
 
@@ -28,9 +29,14 @@ async function readOutboundHistory(pool, tenantId, clientId, ignoreItem = null) 
 }
 
 function adapters(pool, dependencies = {}) {
-  const ctx = createGovernedOutboundTenantContext(dependencies.tenantId || '10');
-  const tenantId = ctx.tenantId;
-  const clientId = ctx.clientId;
+  const governedContext = dependencies.governedContext
+    || createGovernedOutboundContext({
+      tenantId: dependencies.tenantId,
+      program: dependencies.program,
+    });
+  const ctx = governedContext.transport || createGovernedOutboundTenantContext(governedContext.tenantId);
+  const tenantId = governedContext.tenantId;
+  const clientId = governedContext.clientId;
   const loadMission = dependencies.loadMission || (id => loadMissionSnapshot(id, tenantId, pool));
   const contact = dependencies.contact || (id => loadBestCrmProspectForMissionBoundKey({ pool, clientId, missionBoundKey: id }));
   async function tenant(program) {

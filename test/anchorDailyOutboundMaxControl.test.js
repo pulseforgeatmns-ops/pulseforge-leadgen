@@ -186,6 +186,7 @@ test('Max invokes Scout for a deficit and records the post-replenishment state w
   let scoutPlan = null;
   const program = {
     id: 'outbound_test',
+    tenant_id: '10',
     mode: 'active',
     policy_hash: 'policy_hash',
     source_mission_id: 'mission_source',
@@ -261,6 +262,7 @@ test('Max keeps replenishing on later cycles until the target is met', async () 
   const calls = [];
   const program = {
     id: 'outbound_test',
+    tenant_id: '10',
     mode: 'active',
     policy_hash: 'policy_hash',
     source_mission_id: 'mission_source',
@@ -344,6 +346,7 @@ test('Max observation can be disabled without invoking Scout', async () => {
     execute: false,
     program: {
       id: 'outbound_test',
+      tenant_id: '10',
       mode: 'active',
       policy_hash: 'policy_hash',
       source_mission_id: 'mission_source',
