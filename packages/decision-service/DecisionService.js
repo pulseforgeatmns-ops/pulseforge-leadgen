@@ -14,6 +14,7 @@ const { enrichShadowRow } = require('./shadowRowProjection');
 const { buildWarningEvidenceRow } = require('./ShadowEvidenceRepository');
 const { getDefaultShadowEvidenceSink } = require('./ShadowEvidenceSink');
 const { DEPLOY_GATES } = require('./deployGates');
+const { readActiveRoutingConfig } = require('./activeRoutingPromotion');
 
 function boundedInteger(value, fallback, min, max) {
   const n = Number(value);
