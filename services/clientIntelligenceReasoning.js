@@ -1563,12 +1563,32 @@ function looksLikeInterviewWritingGuidance(text, opts = {}) {
   if (INTERVIEW_WRITING_GUIDANCE_RE.test(raw)) {
     const bareRegenerateOrRewrite =
       /\b(?:regenerat(?:e|ing)|rewrite)\b/i.test(raw) && !GENERATION_ARTIFACT_RE.test(raw);
-    if (!(guidedIntake && bareRegenerateOrRewrite)) {
+    if (guidedIntake) {
+      if (bareRegenerateOrRewrite) {
+        // e.g. "we regenerate demand" during a metrics answer — not copy guidance.
+      } else if (
+        /\b(?:regenerat(?:e|ing)|rewrite|refine)\b/i.test(raw) &&
+        GENERATION_ARTIFACT_RE.test(raw)
+      ) {
+        if (
+          !/\b(?:regenerat(?:e|ing)|rewrite|refine)\s+(?:the\s+)?(?:brief|blueprint|summary|copy|section)\b/i.test(
+            raw
+          )
+        ) {
+          // Incidental "Max … regenerate … reports" phrasing inside a business answer.
+        } else {
+          return true;
+        }
+      } else {
+        return true;
+      }
+    } else if (!bareRegenerateOrRewrite) {
       return true;
     }
   }
 
   if (
+    !guidedIntake &&
     /\b(?:regenerate|rewrite|refine)\b/i.test(raw) &&
     GENERATION_ARTIFACT_RE.test(raw)
   ) {

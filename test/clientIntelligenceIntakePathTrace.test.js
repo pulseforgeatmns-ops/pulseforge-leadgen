@@ -95,6 +95,28 @@ describe('CIE intake path trace (production diagnostic)', () => {
     }
   });
 
+  it('does not expose client debug fields when CIE_INTAKE_PATH_VISIBLE is off', () => {
+    const prevVisible = process.env.CIE_INTAKE_PATH_VISIBLE;
+    const prevLog = process.env.CIE_INTAKE_PATH_LOG;
+    delete process.env.CIE_INTAKE_PATH_VISIBLE;
+    delete process.env.CIE_INTAKE_PATH_LOG;
+    try {
+      const trace = createIntakePathTrace({
+        activeQuestionKeyBeforeClassify: 'identity',
+      });
+      trace.responseBranch = 'direct_answer_advance';
+      const out = finalizeIntakePathPayload(trace, { message: 'Hello there.' });
+      assert.equal(out.intakeTraceId, undefined);
+      assert.equal(out.intakePathDebug, undefined);
+      assert.equal(out.message, 'Hello there.');
+    } finally {
+      if (prevVisible === undefined) delete process.env.CIE_INTAKE_PATH_VISIBLE;
+      else process.env.CIE_INTAKE_PATH_VISIBLE = prevVisible;
+      if (prevLog === undefined) delete process.env.CIE_INTAKE_PATH_LOG;
+      else process.env.CIE_INTAKE_PATH_LOG = prevLog;
+    }
+  });
+
   it('buildIntakePathDebugSuffix includes branch and trace id', () => {
     const trace = createIntakePathTrace({ activeQuestionKeyBeforeClassify: 'success_metrics' });
     trace.responseBranch = 'non_answer_refinement_feedback';

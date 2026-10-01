@@ -113,33 +113,31 @@ function logIntakePathTrace(trace) {
 function finalizeIntakePathPayload(trace, payload = {}) {
   if (!trace) return payload;
   logIntakePathTrace(trace);
-  const out = {
-    ...payload,
-    intakeTraceId: trace.intakeTraceId,
-    intakePathDebug: intakePathDebugVisible()
-      ? {
-          pathId: trace.pathId,
-          gitSha: trace.gitSha,
-          branch: trace.responseBranch,
-          template: trace.templateName,
-          initialIntent: trace.initialIntent,
-          finalIntent: trace.finalIntent,
-          activeQuestion: trace.activeQuestionKeyBeforeClassify,
-          destinationSection: trace.destinationSection,
-          guards: {
-            writingGuidanceBranchEntered: trace.writingGuidanceBranchEntered,
-            successMetricsHardGuardRan: trace.successMetricsHardGuardRan,
-            recoveryGuardRan: trace.recoveryGuardRan,
-          },
-          normalizedSuccessMetricsBeforeSave: trace.normalizedSuccessMetricsBeforeSave,
-          normalizedSuccessMetricsAfterSave: trace.normalizedSuccessMetricsAfterSave,
-          fieldMarkedComplete: trace.fieldMarkedComplete,
-          nextQuestionKey: trace.nextQuestionKey,
-        }
-      : undefined,
-  };
-  if (intakePathDebugVisible() && typeof out.message === 'string' && out.message.trim()) {
-    out.message = `${out.message}\n\n${buildIntakePathDebugSuffix(trace)}`;
+  const out = { ...payload };
+  if (intakePathDebugVisible()) {
+    out.intakeTraceId = trace.intakeTraceId;
+    out.intakePathDebug = {
+      pathId: trace.pathId,
+      gitSha: trace.gitSha,
+      branch: trace.responseBranch,
+      template: trace.templateName,
+      initialIntent: trace.initialIntent,
+      finalIntent: trace.finalIntent,
+      activeQuestion: trace.activeQuestionKeyBeforeClassify,
+      destinationSection: trace.destinationSection,
+      guards: {
+        writingGuidanceBranchEntered: trace.writingGuidanceBranchEntered,
+        successMetricsHardGuardRan: trace.successMetricsHardGuardRan,
+        recoveryGuardRan: trace.recoveryGuardRan,
+      },
+      normalizedSuccessMetricsBeforeSave: trace.normalizedSuccessMetricsBeforeSave,
+      normalizedSuccessMetricsAfterSave: trace.normalizedSuccessMetricsAfterSave,
+      fieldMarkedComplete: trace.fieldMarkedComplete,
+      nextQuestionKey: trace.nextQuestionKey,
+    };
+    if (typeof out.message === 'string' && out.message.trim()) {
+      out.message = `${out.message}\n\n${buildIntakePathDebugSuffix(trace)}`;
+    }
   }
   return out;
 }
