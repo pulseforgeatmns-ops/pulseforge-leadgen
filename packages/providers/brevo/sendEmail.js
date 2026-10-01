@@ -68,6 +68,9 @@ async function sendEmail(input = {}) {
   if (input.idempotencyKey) payload.headers = { 'Idempotency-Key': String(input.idempotencyKey) };
 
   try {
+    if (input.providerBoundary && typeof input.providerBoundary.markCrossed === 'function') {
+      input.providerBoundary.markCrossed();
+    }
     const res = await axios.post('https://api.brevo.com/v3/smtp/email', payload, {
       headers: { 'api-key': apiKey, 'Content-Type': 'application/json' },
       timeout: 15000,

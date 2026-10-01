@@ -22,7 +22,7 @@ function createGovernedTenantMailboxSend(program = {}, binding = {}, dependencie
       governed: { programId: program.id, policyHash: program.policy_hash, envelopeId: envelope.id,
         itemId: item.id, manifestHash: envelope.manifest_hash, approvalId: envelope.approval_id,
         revision: envelope.revision, mailboxIntegrationId: program.policy.inboxIntegrationId, outreachAssetId: asset.id },
-    }, { pool: program.pool });
+    }, { pool: program.pool, providerBoundary: command.providerBoundary });
     if (!['sent', 'recovered_sent'].includes(result.result)) fail(result.reason || result.error?.code || 'governed_schedule_not_sent');
     const message = result.message;
     const messageId = message?.providerMessageId || message?.rfcMessageId;
@@ -30,5 +30,7 @@ function createGovernedTenantMailboxSend(program = {}, binding = {}, dependencie
     return { success: true, messageId, providerMessageId: messageId, scheduleId: result.schedule.id,
       canonicalMessageId: message.id, rfcMessageId: message.rfcMessageId, threadId: message.threadId };
   };
+  sendEmail.isGovernedTenantMailboxTransport = true;
+  return sendEmail;
 }
 module.exports = { createGovernedTenantMailboxSend };

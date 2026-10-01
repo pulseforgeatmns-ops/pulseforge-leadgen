@@ -62,6 +62,7 @@ async function validateGovernedSchedule(schedule, opts = {}) {
 }
 
 async function createGovernedOutreachAsset(program, envelope, item, pool) {
+  const evidence = await require('./governedOutreachAkEvidence').resolveGovernedOutreachAssetEvidence(pool, { envelope, item });
   const id = `ak_governed_${hash([program.tenant_id, envelope.mission_id, envelope.revision, item.candidate_id]).slice(0, 28)}`;
   const saved = await require('./acquisitionKnowledge').createKnowledge({
     id, tenantId: String(program.tenant_id), clientId: Number(program.tenant_id),
@@ -70,6 +71,7 @@ async function createGovernedOutreachAsset(program, envelope, item, pool) {
       prospectId: item.prospect_id, candidateId: item.candidate_id, preparedArtifactRevision: envelope.revision },
     provenance: { source: 'canonical_paige_prepared_artifact', missionId: envelope.mission_id,
       preparedArtifactRevision: envelope.revision, executionApprovalId: envelope.approval_id, governedProgramId: program.id },
+    evidence,
     epistemicState: 'OBSERVED', validationState: 'UNVALIDATED', lifecycleState: 'HYPOTHESIS',
     tags: ['governed_outbound', 'paige'],
   }, { pool, actor: { role: 'paige', id: 'canonical-paige' } });
