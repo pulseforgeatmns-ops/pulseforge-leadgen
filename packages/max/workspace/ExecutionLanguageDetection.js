@@ -138,6 +138,10 @@ function isMissionExecutionCommand(text) {
       if (re.source.includes('approv') && !hasExplicitMissionApprovalLanguage(clause)) {
         return false;
       }
+      if (re.source.includes('outreach')) {
+        if (/\boutreach\s+remains\s+disabled\b/i.test(clause)) return false;
+        if (/\b(?:no|without)\s+outreach\b/i.test(clause)) return false;
+      }
       return clauseMatchesExecutionCommand(clause, re);
     });
   });
