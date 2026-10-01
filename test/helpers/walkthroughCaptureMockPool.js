@@ -15,6 +15,7 @@ function createWalkthroughCaptureMockPool(initial = {}) {
     nextReviewId: initial.nextReviewId || REVIEW_ID,
     actionIdCounter: 0,
     reviewIdCounter: 0,
+    walkthroughActionCounter: 0,
   };
 
   function pushAgentAction(params) {
@@ -24,6 +25,16 @@ function createWalkthroughCaptureMockPool(initial = {}) {
     if (actionType === 'lead_qualification_review') {
       state.reviewIdCounter += 1;
       id = state.reviewIdCounter === 1 ? state.nextReviewId : `${state.nextReviewId}-2`;
+    } else if (actionType === 'walkthrough_request') {
+      state.walkthroughActionCounter += 1;
+      const baseId = Number(state.nextActionId);
+      if (Number.isFinite(baseId)) {
+        id = baseId + state.walkthroughActionCounter - 1;
+      } else {
+        id = state.walkthroughActionCounter === 1
+          ? state.nextActionId
+          : `${state.nextActionId}-${state.walkthroughActionCounter}`;
+      }
     } else {
       id = state.actionIdCounter === 1 ? state.nextActionId : `${state.nextActionId}-2`;
     }

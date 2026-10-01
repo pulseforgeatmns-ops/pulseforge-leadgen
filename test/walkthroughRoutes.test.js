@@ -8,6 +8,7 @@ const { validateWalkthroughPayload, SPACE_TYPES } = require('../lib/walkthroughV
 const { captureWalkthroughLead, ANCHOR_CLIENT_ID, ACTION_TYPE } = require('../lib/walkthroughCapture');
 const { SOURCE_KIND } = require('../lib/walkthroughAttribution');
 const walkthroughRouter = require('../routes/walkthrough');
+const { normalizeSubmissionId } = require('../lib/walkthroughSubmissionId');
 const { createWalkthroughCaptureMockPool } = require('./helpers/walkthroughCaptureMockPool');
 
 const SITE = path.join(__dirname, '..', 'sites', 'anchor-cleaning', 'index.html');
@@ -61,6 +62,17 @@ async function request(base, method, urlPath, body) {
   }
   return { status: res.status, headers: res.headers, text, json };
 }
+
+describe('walkthrough submission_id normalization', () => {
+  it('coerces string database ids to numbers', () => {
+    assert.equal(normalizeSubmissionId({ id: '8802' }), 8802);
+    assert.equal(normalizeSubmissionId({ submission_id: '9910' }), 9910);
+  });
+
+  it('rejects non-numeric stored ids', () => {
+    assert.throws(() => normalizeSubmissionId({ id: '8801-2' }), /walkthrough_submission_id_invalid/);
+  });
+});
 
 describe('walkthrough validation', () => {
   it('accepts a complete commercial-office request', () => {
@@ -166,6 +178,7 @@ describe('walkthrough public route', () => {
     assert.equal(res.status, 201);
     assert.equal(res.json.ok, true);
     assert.equal(res.json.submission_id, 8801);
+    assert.equal(typeof res.json.submission_id, 'number');
     assert.match(res.json.message, /Facility Assessment/i);
   });
 
@@ -182,6 +195,7 @@ describe('walkthrough public route', () => {
     assert.equal(res.status, 201);
     assert.equal(res.json.ok, true);
     assert.equal(typeof res.json.submission_id, 'number');
+    assert.equal(res.json.submission_id, 8802);
   });
 
   it('returns field errors without internals', async () => {
