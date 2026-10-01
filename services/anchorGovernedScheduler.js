@@ -3,7 +3,7 @@
 const { startGovernedOutboundExecutionClock } = require('./governedOutboundExecutionClock');
 
 // Backward-compatible entry: Anchor historically started an in-process scheduler
-// for tenant 10 only. Mailbox tenants (13, 17) stay on external cron ticks.
+// for tenant 10 only. Mailbox tenants have a separate execution-clock owner.
 function startAnchorGovernedScheduler(options = {}) {
   return startGovernedOutboundExecutionClock({
     ...options,
