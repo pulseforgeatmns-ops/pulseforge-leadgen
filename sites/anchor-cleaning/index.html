@@ -1002,7 +1002,22 @@
   var form = document.getElementById('assessment-form');
   var statusEl = document.getElementById('form-status');
   var ENDPOINT = 'https://pulseforge-leadgen-production.up.railway.app/api/public/walkthrough';
-  var SUCCESS = "Thank you. We'll be in touch to arrange your Facility Assessment.";
+  var THANK_YOU = '/thank-you/?from=commercial';
+
+  function isWalkthroughAccepted(res, json) {
+    if (res.status === 204) return true;
+    return !!(json && json.ok === true && (res.status === 201 || res.ok));
+  }
+
+  function fireCommercialLeadSignals(json, openAiLeadTracked) {
+    try {
+      track('walkthrough_form_submit', { event_category: 'lead' });
+      sendAdsConversion(window.ANCHOR_ANALYTICS.formConversion);
+      if (json && json.submission_id) {
+        trackOpenAiLeadCreated(openAiLeadTracked, json.submission_id);
+      }
+    } catch (err) {}
+  }
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();
@@ -1033,20 +1048,17 @@
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(data)
     }).then(function (res) {
-      if (res.status === 204) return { ok: true, message: SUCCESS };
+      if (res.status === 204) return { res: res, json: { ok: true } };
       return res.json().then(function (json) {
-        if (!res.ok) throw new Error((json && json.error) || 'Could not send');
-        return json;
+        return { res: res, json: json || {} };
       });
-    }).then(function (json) {
-      track('walkthrough_form_submit', { event_category: 'lead' });
-      sendAdsConversion(window.ANCHOR_ANALYTICS.formConversion);
-      if (json && json.submission_id) {
-        trackOpenAiLeadCreated(openAiLeadTracked, json.submission_id);
+    }).then(function (payload) {
+      if (!isWalkthroughAccepted(payload.res, payload.json)) {
+        throw new Error((payload.json && payload.json.error) || 'Could not send');
       }
+      fireCommercialLeadSignals(payload.json, openAiLeadTracked);
       redirecting = true;
-      window.location.replace('/thank-you/?from=commercial');
-      return json;
+      window.location.replace(THANK_YOU);
     }).catch(function () {
       var subject = encodeURIComponent('Facility Assessment request — office cleaning');
       var body = encodeURIComponent(

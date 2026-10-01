@@ -27,7 +27,11 @@ describe('Anchor thank-you conversion page (SPEC-ANCHOR-SITE-THANKYOU-001)', () 
 
   it('redirects commercial form success to thank-you without removing existing conversion hooks', () => {
     const html = fs.readFileSync(COMMERCIAL, 'utf8');
-    assert.match(html, /window\.location\.replace\('\/thank-you\/\?from=commercial'\)/);
+    assert.match(html, /THANK_YOU = '\/thank-you\/\?from=commercial'/);
+    assert.match(html, /window\.location\.replace\(THANK_YOU\)/);
+    assert.match(html, /isWalkthroughAccepted/);
+    assert.match(html, /json\.ok === true/);
+    assert.doesNotMatch(html, /statusEl\.className = 'form-status ok'/);
     assert.match(html, /sendAdsConversion\(window\.ANCHOR_ANALYTICS\.formConversion\)/);
     assert.match(html, /if \(!redirecting\) btn\.disabled = false/);
   });
@@ -36,6 +40,9 @@ describe('Anchor thank-you conversion page (SPEC-ANCHOR-SITE-THANKYOU-001)', () 
     const html = fs.readFileSync(RESIDENTIAL, 'utf8');
     assert.match(html, /window\.location\.replace\(THANK_YOU\)/);
     assert.match(html, /THANK_YOU='\/thank-you\/\?from=residential'/);
+    assert.match(html, /isWalkthroughAccepted/);
+    assert.match(html, /json\.ok===true/);
+    assert.doesNotMatch(html, /form-status ok/);
     assert.match(html, /Could not send the form/);
     assert.match(html, /if\(!redirecting\)btn\.disabled=false/);
   });

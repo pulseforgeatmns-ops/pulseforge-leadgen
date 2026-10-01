@@ -330,6 +330,8 @@ describe('Anchor homepage ads contract', () => {
     assert.match(html, /lead_created/);
     assert.match(html, /json\.submission_id/);
     assert.match(html, /\/api\/public\/walkthrough/);
-    assert.match(html, /Thank you\. We'll be in touch to arrange your Facility Assessment\./);
+    assert.match(html, /isWalkthroughAccepted/);
+    assert.match(html, /window\.location\.replace\(THANK_YOU\)/);
+    assert.doesNotMatch(html, /statusEl\.className = 'form-status ok'/);
   });
 });
