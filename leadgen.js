@@ -752,11 +752,12 @@ async function enrichWithHunter(domain) {
 // ─────────────────────────────────────────────────────────────────────
 // STEP 2c: Scrape website for contact email (fallback for Places leads)
 // ─────────────────────────────────────────────────────────────────────
-function filterScrapedWebsiteEmails(html) {
+function filterScrapedWebsiteEmails(html, companyDomain = null) {
   const emailMatch = String(html || '').match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g);
   if (!emailMatch) return [];
   return emailMatch.filter((email) =>
-    !email.includes('noreply')
+    (!companyDomain || require('./utils/canonicalEmailEligibility').isAllowedObservedWebsiteEmail(email, companyDomain))
+    && !email.includes('noreply')
     && !email.includes('no-reply')
     && !email.includes('example.com')
     && !email.includes('sentry')
@@ -791,9 +792,9 @@ async function scrapeWebsiteEmail(domain) {
   }, { maxSuccessfulPages: 8 });
 
   for (const page of pages) {
-    const filtered = filterScrapedWebsiteEmails(page.text);
+    const filtered = filterScrapedWebsiteEmails(page.text, normalizedDomain);
     if (filtered.length > 0) {
-      return { email: filtered[0], contact: '', title: '' };
+      return { email: filtered[0], contact: '', title: '', sourceUrl: page.url };
     }
   }
   return null;

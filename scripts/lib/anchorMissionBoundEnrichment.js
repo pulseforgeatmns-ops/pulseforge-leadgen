@@ -142,6 +142,7 @@ async function persistProviderChainEmail(db, row, enriched, verification, dryRun
   const providerSource = persistableEmailSource((enriched.source || ['provider_chain']).join('+'))
     || 'provider_chain';
   const candidate = {
+    ...row,
     email: enriched.email,
     email_verified: verification.emailVerified === true,
     email_status: verification.emailStatus,
@@ -151,11 +152,14 @@ async function persistProviderChainEmail(db, row, enriched, verification, dryRun
       verifier: verification.emailVerificationMethod || 'bouncer',
       status: verification.emailStatus,
       resolved_at: new Date().toISOString(),
+      source_url: enriched.sourceUrl || null,
     }),
   };
   if (!isProjectableCrmProspect(candidate)) {
     return { persisted: false, reason: 'failed_safety_gates', candidate };
   }
+  const bindingReason = require('../../utils/governedContactEligibility').companyRecipientReason(candidate);
+  if (bindingReason) return { persisted: false, reason: bindingReason, candidate };
   if (dryRun) {
     return { persisted: false, dryRun: true, wouldPersist: candidate.email };
   }

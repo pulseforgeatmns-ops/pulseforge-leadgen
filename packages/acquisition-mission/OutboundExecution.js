@@ -123,6 +123,7 @@ function resolvePaigeVariant(paigePayload = {}, variantLabelOrOpts = 'Primary') 
         body: bound.body,
         cta: bound.cta || paigePayload.cta || null,
         candidateId: bound.candidateId || identityKeys[0],
+        ...(opts.includeIdentity ? { companyId: bound.companyId, companyName: bound.companyName } : {}),
       };
     }
   }
@@ -135,6 +136,7 @@ function resolvePaigeVariant(paigePayload = {}, variantLabelOrOpts = 'Primary') 
     body: match.body,
     cta: match.cta || paigePayload.cta || null,
     candidateId: match.candidateId || null,
+    ...(opts.includeIdentity ? { companyId: match.companyId, companyName: match.companyName } : {}),
   };
 }
 

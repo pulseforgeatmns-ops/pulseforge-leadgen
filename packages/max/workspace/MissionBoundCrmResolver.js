@@ -130,6 +130,7 @@ const CRM_ENRICHMENT_PROSPECT_SELECT = `
        p.id AS prospect_id,
        p.company_id,
        p.client_id,
+       p.is_synthetic,
        p.first_name,
        p.last_name,
        p.email,
@@ -191,7 +192,7 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
       )
       AND COALESCE(p.is_synthetic, false) = false
     ORDER BY
-      CASE WHEN p.company_id::text = $2 THEN 0 ELSE 1 END,
+      CASE WHEN p.id::text = $2 THEN 0 WHEN p.company_id::text = $2 THEN 1 ELSE 2 END,
       p.icp_score DESC NULLS LAST,
       p.created_at ASC,
       p.id ASC
@@ -245,7 +246,7 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
       )
     ORDER BY
       k.mission_bound_key,
-      CASE WHEN p.company_id::text = k.mission_bound_key THEN 0 ELSE 1 END,
+      CASE WHEN p.id::text = k.mission_bound_key THEN 0 WHEN p.company_id::text = k.mission_bound_key THEN 1 ELSE 2 END,
       p.icp_score DESC NULLS LAST,
       p.created_at ASC,
       p.id ASC`,
