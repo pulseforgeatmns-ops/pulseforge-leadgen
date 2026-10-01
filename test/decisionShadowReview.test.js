@@ -92,6 +92,19 @@ test('read query validates bounds, scopes tenants, and applies mismatch/error fi
   assert.equal(calls.length, 3, 'invalid options never reach the database');
 });
 
+test('database_unconfigured is recorded when persistence is enabled without DATABASE_URL', async () => {
+  const warnings = [];
+  const sink = createShadowEventSink({
+    env: { DECISION_SHADOW_ENABLED: 'true', DECISION_SHADOW_PERSIST_ENABLED: 'true' },
+    createPool: () => assert.fail('pool must not be created when DATABASE_URL is absent'),
+    warn: row => warnings.push(row),
+  });
+  sink.write(fixture);
+  await sink.drain();
+  assert.deepEqual(sink.stats(), { persisted: 0, failed: 1, dropped: 0, pending: 0 });
+  assert.equal(warnings[0].reason, 'database_unconfigured');
+});
+
 test('disabled persistence never creates a pool or writes, including explicit rollback switch', async () => {
   for (const env of [{}, { ...ENV, DECISION_SHADOW_ENABLED: 'false' },
     { ...ENV, DECISION_SHADOW_PERSIST_ENABLED: 'false' }]) {
