@@ -1546,6 +1546,13 @@ function isAwaitingGuidedIntakeQuestion(opts = {}) {
  * During guided intake the active question is authoritative — broad meta/refinement
  * heuristics only apply when the message clearly targets brief/copy generation.
  */
+function hasActiveGuidedIntakeQuestion(opts = {}) {
+  return Boolean(
+    opts.awaitingQuestionId ||
+      (opts.activeQuestion && (opts.activeQuestion.id || opts.activeQuestion.questionId))
+  );
+}
+
 function looksLikeInterviewWritingGuidance(text, opts = {}) {
   const raw = String(text || '').trim();
   if (!raw) return false;
@@ -1567,15 +1574,16 @@ function looksLikeInterviewWritingGuidance(text, opts = {}) {
   ) {
     return true;
   }
-
-  if (!guidedIntake) {
-    if (typeof opts.looksLikeRefinement === 'function' && opts.looksLikeRefinement(raw)) {
-      return true;
-    }
-    if (typeof opts.containsMetaInstruction === 'function' && opts.containsMetaInstruction(raw)) {
-      return true;
-    }
+  // During guided intake the active question is authoritative — incidental metric /
+  // quality language must not inherit global refinement or meta-instruction classifiers.
+  if (hasActiveGuidedIntakeQuestion(opts)) {
     return false;
+  }
+  if (typeof opts.looksLikeRefinement === 'function' && opts.looksLikeRefinement(raw)) {
+    return true;
+  }
+  if (typeof opts.containsMetaInstruction === 'function' && opts.containsMetaInstruction(raw)) {
+    return true;
   }
 
   const metaOrRefinement =
@@ -3801,16 +3809,26 @@ function reasoningAck(messageClass, opts = {}) {
  */
 function planReasoningTurn(text, context = {}) {
   const activeQuestion = context.activeQuestion || null;
-  const messageClass = classifyReasoningMessage(text, context);
+  const intakeAwaiting =
+    context.awaitingQuestionId ||
+    (activeQuestion && (activeQuestion.id || activeQuestion.questionId));
+  let messageClass = classifyReasoningMessage(text, context);
+  if (
+    intakeAwaiting &&
+    messageClass === MESSAGE_CLASSES.REFINEMENT_FEEDBACK &&
+    !looksLikeInterviewWritingGuidance(text, {
+      ...context,
+      looksLikeRefinement: undefined,
+      containsMetaInstruction: undefined,
+    })
+  ) {
+    messageClass = MESSAGE_CLASSES.DIRECT_ANSWER;
+  }
   const memory = ensureReasoningMemory(context.state || {});
 
   let targetSection = activeQuestion && activeQuestion.section;
   let routeReason = 'active_question';
   let cross = { section: null, domain: null, confidence: 0 };
-
-  const intakeAwaiting =
-    context.awaitingQuestionId ||
-    (activeQuestion && (activeQuestion.id || activeQuestion.questionId));
 
   if (messageClass === MESSAGE_CLASSES.ADD_ON || messageClass === MESSAGE_CLASSES.CORRECTION) {
     cross = inferCrossSectionTarget(text, activeQuestion, context.crossSectionHelpers || {});
