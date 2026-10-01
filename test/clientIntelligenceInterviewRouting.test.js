@@ -507,6 +507,22 @@ describe('Client Intelligence interview answer routing (P0)', () => {
     assert.match(session.interview_state.answers.success_metrics || '', /budget fit/i);
   });
 
+  it('16. explicit copy command on success_metrics stays guidance (narrow block)', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 516 }, opts);
+    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+    const turn = await postInterviewMessage(
+      started.interviewId,
+      'Rewrite this brief. Qualified prospects and revenue closed.',
+      opts
+    );
+    assert.equal(turn.messageType, MESSAGE_TYPES.REFINEMENT_FEEDBACK);
+    assert.match(turn.message || '', /guidance for how I write/i);
+    assert.equal(turn.question?.id, 'success_metrics');
+    const session = await store.getSession(started.interviewId);
+    assert.equal(session.interview_state.answers.success_metrics, undefined);
+  });
+
   it('6. explicit skip after probe uses defer language — not a fake identity answer', async () => {
     const { opts, store } = withStore();
     const started = await startClientInterview({ clientId: 506 }, opts);

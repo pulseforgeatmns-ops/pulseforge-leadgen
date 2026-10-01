@@ -1440,6 +1440,12 @@ function classifyUserResponse(text, opts = {}) {
   });
   if (
     activeQuestionId === 'success_metrics' &&
+    blocksSuccessMetricsBusinessCapture(text)
+  ) {
+    return ANSWER_KINDS.REFINEMENT_FEEDBACK;
+  }
+  if (
+    activeQuestionId === 'success_metrics' &&
     looksLikeSuccessMetricsBusinessEvidence(text) &&
     !blocksSuccessMetricsBusinessCapture(text)
   ) {
