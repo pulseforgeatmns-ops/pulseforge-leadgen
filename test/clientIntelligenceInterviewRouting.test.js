@@ -10,6 +10,8 @@ const {
   postInterviewMessage,
   classifyInterviewMessage,
   looksLikeSupplementalContext,
+  looksLikeRefinementFeedback,
+  containsMetaInstructionLanguage,
   QUESTION_BANK,
   buildExecutiveSummary,
   sectionsFromNormalizedFacts,
@@ -19,6 +21,31 @@ const {
   detectInterviewEscapeIntent,
   looksLikeInterviewWritingGuidance,
 } = require('../services/clientIntelligenceReasoning');
+
+const METRICS_ANSWER =
+  'We watch qualified prospects entering the pipeline, positive replies, discovery calls booked, proposals sent, and revenue closed.';
+
+const SIGNAL_METRICS_ANSWER =
+  'A weak signal is when reply quality drops; a strong signal is when discovery calls convert to proposals. We also track qualified prospects and revenue closed.';
+
+const REGENERATE_DEMAND_ANSWER =
+  'We regenerate interest through outreach and measure positive replies, discovery calls booked, proposals sent, and revenue closed.';
+
+async function advanceToSuccessMetricsQuestion(interviewId, opts) {
+  const steps = [
+    'Studio Substral — website design and redesign for local businesses who need a credible web presence.',
+    'Website design, redesign, and landing pages.',
+    'Professional service firms in Greater Manchester — law firms and accountants.',
+    'Price-driven clients looking for the cheapest possible website.',
+    'Greater Manchester and southern New Hampshire first.',
+    'They choose us for clarity, speed, and a credible design process.',
+    'Clear, confident, and practical — never hypey or jargon-heavy.',
+    'More qualified discovery calls and signed web projects in the next 90 days.',
+  ];
+  for (const step of steps) {
+    await postInterviewMessage(interviewId, step, opts);
+  }
+}
 
 function withStore() {
   const store = createMemoryStore();

@@ -753,6 +753,23 @@ function sectionForGuidedQuestion(questionOrId) {
   return questionOrId.section || QUESTION_ID_TO_SECTION[questionOrId.id] || null;
 }
 
+function isActiveGuidedIntakeTurn(classifyOpts = {}) {
+  return Boolean(
+    classifyOpts.awaitingQuestionId ||
+    (classifyOpts.activeQuestion &&
+      (classifyOpts.activeQuestion.id || classifyOpts.activeQuestion.questionId))
+  );
+}
+
+function authoritativeGuidedSection(classifyOpts = {}) {
+  const aq = classifyOpts.activeQuestion;
+  if (aq && aq.section) return aq.section;
+  const qid =
+    classifyOpts.awaitingQuestionId ||
+    (aq && (aq.id || aq.questionId));
+  return qid ? sectionForGuidedQuestion(qid) : null;
+}
+
 function hasValidGuidedAnswer(state, questionId) {
   const answers = (state && state.answers) || {};
   if (!(questionId in answers)) return false;
@@ -1185,6 +1202,7 @@ function classifyInterviewMessage(text, opts = {}) {
     speaker: opts.speaker,
     context: opts.context,
     activeQuestion: opts.activeQuestion,
+    awaitingQuestionId: opts.awaitingQuestionId,
     looksLikeCorrection,
     looksLikeAddOn: looksLikeSupplementalContext,
     looksLikeRefinement: looksLikeRefinementFeedback,
@@ -6343,12 +6361,15 @@ async function applySectionUpdate(
 
   const rawStatement = String(statement || '').trim();
   const responseKind = classifyUserResponse(rawStatement, classifyOpts);
+  const guidedAuthoritativeCapture =
+    isActiveGuidedIntakeTurn(classifyOpts) &&
+    authoritativeGuidedSection(classifyOpts) === sectionKey;
 
   // Refinement / system guidance must never populate commercial Blueprint fields.
   if (
     responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK ||
     responseKind === ANSWER_KINDS.SYSTEM_GUIDANCE ||
-    containsMetaInstructionLanguage(rawStatement)
+    (!guidedAuthoritativeCapture && containsMetaInstructionLanguage(rawStatement))
   ) {
     state.revisionGuidance = [
       ...(state.revisionGuidance || []),

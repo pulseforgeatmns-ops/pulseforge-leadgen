@@ -1528,9 +1528,23 @@ function looksLikeSkip(text) {
   return looksLikeExplicitDeferral(s);
 }
 
+/** Brief/copy generation targets — not business-outcome language like "regenerate demand". */
+const GENERATION_ARTIFACT_RE =
+  /\b(?:brief|blueprint|summary|section|max|copy|wording|tone|revision|executive\s+business\s+brief)\b/i;
+
+function isAwaitingGuidedIntakeQuestion(opts = {}) {
+  return Boolean(
+    opts.awaitingQuestionId ||
+    (opts.activeQuestion &&
+      (opts.activeQuestion.id || opts.activeQuestion.questionId))
+  );
+}
+
 /**
  * Explicit copy/tone/regeneration guidance — not business evidence.
  * Narrower than full refinement detection; safe during active intake.
+ * During guided intake the active question is authoritative — broad meta/refinement
+ * heuristics only apply when the message clearly targets brief/copy generation.
  */
 function hasActiveGuidedIntakeQuestion(opts = {}) {
   return Boolean(
@@ -1542,11 +1556,21 @@ function hasActiveGuidedIntakeQuestion(opts = {}) {
 function looksLikeInterviewWritingGuidance(text, opts = {}) {
   const raw = String(text || '').trim();
   if (!raw) return false;
-  if (INTERVIEW_WRITING_GUIDANCE_RE.test(raw)) return true;
   if (DO_NOT_SAVE_AS_EVIDENCE_RE.test(raw)) return true;
+
+  const guidedIntake = isAwaitingGuidedIntakeQuestion(opts);
+
+  if (INTERVIEW_WRITING_GUIDANCE_RE.test(raw)) {
+    const bareRegenerateOrRewrite =
+      /\b(?:regenerat(?:e|ing)|rewrite)\b/i.test(raw) && !GENERATION_ARTIFACT_RE.test(raw);
+    if (!(guidedIntake && bareRegenerateOrRewrite)) {
+      return true;
+    }
+  }
+
   if (
     /\b(?:regenerate|rewrite|refine)\b/i.test(raw) &&
-    /\b(?:brief|blueprint|summary|section|max|copy|wording|tone)\b/i.test(raw)
+    GENERATION_ARTIFACT_RE.test(raw)
   ) {
     return true;
   }
@@ -1561,7 +1585,18 @@ function looksLikeInterviewWritingGuidance(text, opts = {}) {
   if (typeof opts.containsMetaInstruction === 'function' && opts.containsMetaInstruction(raw)) {
     return true;
   }
-  return false;
+
+  const metaOrRefinement =
+    (typeof opts.looksLikeRefinement === 'function' && opts.looksLikeRefinement(raw)) ||
+    (typeof opts.containsMetaInstruction === 'function' && opts.containsMetaInstruction(raw));
+  if (!metaOrRefinement) return false;
+
+  return (
+    GENERATION_ARTIFACT_RE.test(raw) ||
+    /\b(?:regenerat(?:e|ing)|rewrite|refine)\s+(?:the\s+)?(?:brief|blueprint|summary|copy)\b/i.test(
+      raw
+    )
+  );
 }
 
 /**
@@ -3955,6 +3990,7 @@ module.exports = {
   looksLikeExplicitDeferral,
   detectInterviewEscapeIntent,
   looksLikeInterviewWritingGuidance,
+  isAwaitingGuidedIntakeQuestion,
   classifyMessageWithAwaitingQuestion,
   looksLikeClarificationRequest,
   looksLikeVagueAnswer,
