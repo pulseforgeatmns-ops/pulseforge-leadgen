@@ -84,6 +84,10 @@ const {
 const {
   diagnoseScoutPlaces,
 } = require('../services/scoutPlacesDiagnostic');
+const {
+  logIntakeRouteDispatch,
+  logIntakeRouteResult,
+} = require('../services/cieIntakePathTrace');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
 const requireInternal = [requireAuth, requireRole('admin', 'manager')];
@@ -118,6 +122,35 @@ async function loadInterviewScoped(req, sessionId) {
   const detail = await getInterview(sessionId);
   assertCieClientAccess(req, detail.clientId);
   return detail;
+}
+
+function intakeRouteContextFromDetail(detail, message) {
+  const text = message == null ? '' : String(message).trim();
+  return {
+    sessionId: detail.interviewId || detail.id,
+    clientId: detail.clientId,
+    sessionStatus: detail.status,
+    activeQuestionKey: detail.question && detail.question.id,
+    activeSection: detail.question && detail.question.section,
+    activeQuestionStage: detail.question && detail.question.stage,
+    incomingMessageLength: text.length,
+  };
+}
+
+function logIntakeHandlerResult(handler, sessionId, result) {
+  const debug = result && result.intakePathDebug;
+  logIntakeRouteResult({
+    sessionId,
+    handler,
+    responseBranch: debug && debug.branch,
+    template: debug && debug.template,
+    intakeTraceId: result && result.intakeTraceId,
+    messageType: result && result.messageType,
+    nextAction: result && result.nextAction,
+    responseMessageLength:
+      result && result.message ? String(result.message).length : 0,
+    hasIntakePathDebug: Boolean(debug),
+  });
 }
 
 async function loadBlueprintScoped(req, blueprintId) {
@@ -254,7 +287,7 @@ router.post(
 
 router.post('/api/v1/interview/:id/message', requireOperator, async (req, res) => {
   try {
-    await loadInterviewScoped(req, req.params.id);
+    const detail = await loadInterviewScoped(req, req.params.id);
     const message = req.body && req.body.message;
     if (message == null || String(message).trim() === '') {
       return res.status(400).json({
@@ -262,7 +295,14 @@ router.post('/api/v1/interview/:id/message', requireOperator, async (req, res) =
         message: 'message is required',
       });
     }
+    const routeCtx = intakeRouteContextFromDetail(detail, message);
+    logIntakeRouteDispatch({
+      routePath: 'POST /api/v1/interview/:id/message',
+      handler: 'postInterviewMessage',
+      ...routeCtx,
+    });
     const result = await postInterviewMessage(req.params.id, message);
+    logIntakeHandlerResult('postInterviewMessage', req.params.id, result);
     assertCieClientAccess(req, result.clientId);
     noStore(res);
     return res.json(result);
@@ -365,7 +405,7 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
-      await loadInterviewScoped(req, req.params.id);
+      const detail = await loadInterviewScoped(req, req.params.id);
       const message = req.body && req.body.message;
       if (message == null || String(message).trim() === '') {
         return res.status(400).json({
@@ -373,7 +413,13 @@ router.post(
           message: 'message is required',
         });
       }
+      logIntakeRouteDispatch({
+        routePath: 'POST /api/v1/interview/:id/growth/message',
+        handler: 'postGrowthMessage',
+        ...intakeRouteContextFromDetail(detail, message),
+      });
       const result = await postGrowthMessage(req.params.id, message);
+      logIntakeHandlerResult('postGrowthMessage', req.params.id, result);
       assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
@@ -404,7 +450,7 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
-      await loadInterviewScoped(req, req.params.id);
+      const detail = await loadInterviewScoped(req, req.params.id);
       const message = req.body && req.body.message;
       if (message == null || String(message).trim() === '') {
         return res.status(400).json({
@@ -412,7 +458,17 @@ router.post(
           message: 'message is required',
         });
       }
+      logIntakeRouteDispatch({
+        routePath: 'POST /api/v1/interview/:id/readiness/message',
+        handler: 'postInfrastructureReadinessMessage',
+        ...intakeRouteContextFromDetail(detail, message),
+      });
       const result = await postInfrastructureReadinessMessage(req.params.id, message);
+      logIntakeHandlerResult(
+        'postInfrastructureReadinessMessage',
+        req.params.id,
+        result
+      );
       assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
@@ -443,7 +499,7 @@ router.post(
   requireOperator,
   async (req, res) => {
     try {
-      await loadInterviewScoped(req, req.params.id);
+      const detail = await loadInterviewScoped(req, req.params.id);
       const message = req.body && req.body.message;
       if (message == null || String(message).trim() === '') {
         return res.status(400).json({
@@ -451,7 +507,13 @@ router.post(
           message: 'message is required',
         });
       }
+      logIntakeRouteDispatch({
+        routePath: 'POST /api/v1/interview/:id/campaign/message',
+        handler: 'postCampaignPlanningMessage',
+        ...intakeRouteContextFromDetail(detail, message),
+      });
       const result = await postCampaignPlanningMessage(req.params.id, message);
+      logIntakeHandlerResult('postCampaignPlanningMessage', req.params.id, result);
       assertCieClientAccess(req, result.clientId);
       noStore(res);
       return res.json(result);
