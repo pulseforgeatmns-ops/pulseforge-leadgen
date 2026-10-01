@@ -2,7 +2,7 @@
 
 const { hash, fail, policy, missionScope, clock, windowReason, candidateReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
-const { governedOutboundEnabledForTenant, governedOutboundSendingDisabledForTenant } = require('./governedOutboundTenant');
+const { governedOutboundEnabledForTenant, governedOutboundSendingDisabledForTenant, governedOutboundPreparationEnabledForTenant } = require('./governedOutboundTenant');
 const { createGovernedOutboundContext } = require('./governedOutboundContext');
 const {
   evaluatePreparationRefill,
@@ -35,6 +35,7 @@ function service({
   const governed = governedContext || createGovernedOutboundContext({ tenantId });
   const resolvedTenantId = governed.tenantId;
   const isEnabled = enabled || (() => governedOutboundEnabledForTenant(resolvedTenantId));
+  const isPreparationEnabled = () => governedOutboundPreparationEnabledForTenant(resolvedTenantId, isEnabled());
   const store = new GovernedOutboundStore(pool, resolvedTenantId);
   async function authorize(input, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
@@ -398,7 +399,7 @@ function service({
       remainingScheduleSlots: remainingSlots,
       cleanInventory,
       governor,
-      grantActive: program.mode === 'active' && isEnabled(),
+      grantActive: program.mode === 'active' && isPreparationEnabled(),
       dailyAuthorizationRemaining: Math.max(0, Number(program.policy.dailyCap || 0) - sentToday),
       totalAuthorizationRemaining: Math.max(0, Number(program.policy.totalCap || 0) - Number(counts.total || 0)),
     });
@@ -439,6 +440,7 @@ function service({
           : 'no_clean_inventory',
       }, { sentToday, preparedAdded: 0, preparationDecisions });
     }
+    if (!isPreparationEnabled()) fail('preparation_disabled');
     const updated = await store.appendToEnvelope(envelope, selected, prepared.revision);
     return {
       envelope: updated,
@@ -461,13 +463,14 @@ function service({
         const counts = await store.counts(program, day);
         if (counts.uncertain) fail('uncertain_send_requires_reconciliation');
         if (counts.total >= program.policy.totalCap || counts.today >= program.policy.dailyCap) fail('cap_reached');
-        if (!isEnabled()) fail('environment_kill_switch');
+        if (!isPreparationEnabled()) fail('environment_kill_switch');
         let envelope = await store.envelope(day);
         if (!envelope) envelope = await prepare(program, source, day);
         if (envelope.program_id !== program.id) fail('daily_envelope_already_used');
-        return refillEnvelope(program, source, day, envelope, counts);
+        return { programId: program.id, ...await refillEnvelope(program, source, day, envelope, counts) };
       } catch (error) {
         return {
+          programId: program.id,
           preparedAdded: 0,
           prepareSkippedReason: error.code || error.message,
         };
@@ -485,7 +488,17 @@ function service({
         prepareSkippedReason: lockResult.halted,
       });
     }
-    return finalizePreparationObservability(lockResult || {});
+    const result = finalizePreparationObservability({
+      ...lockResult,
+      sendingEnabled: isEnabled(),
+      preparationEnabled: isPreparationEnabled(),
+    });
+    // Capture each actual preparation evaluation, including terminal rejections.
+    await store.event('preparation_refill_evaluated', require('node:crypto').randomUUID(), {
+      ...result, envelope: undefined, tenantId: resolvedTenantId,
+      evaluatedAt: now().toISOString(),
+    });
+    return result;
   }
   async function recordTickEvaluated(program, day, outcome) {
     const bucket = Math.floor(+now() / 300000);
