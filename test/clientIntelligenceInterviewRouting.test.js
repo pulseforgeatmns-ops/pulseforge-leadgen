@@ -10,6 +10,8 @@ const {
   postInterviewMessage,
   classifyInterviewMessage,
   looksLikeSupplementalContext,
+  looksLikeRefinementFeedback,
+  containsMetaInstructionLanguage,
   QUESTION_BANK,
   buildExecutiveSummary,
   sectionsFromNormalizedFacts,
@@ -19,6 +21,31 @@ const {
   detectInterviewEscapeIntent,
   looksLikeInterviewWritingGuidance,
 } = require('../services/clientIntelligenceReasoning');
+
+const METRICS_ANSWER =
+  'We watch qualified prospects entering the pipeline, positive replies, discovery calls booked, proposals sent, and revenue closed.';
+
+const SIGNAL_METRICS_ANSWER =
+  'A weak signal is when reply quality drops; a strong signal is when discovery calls convert to proposals. We also track qualified prospects and revenue closed.';
+
+const REGENERATE_DEMAND_ANSWER =
+  'We regenerate interest through outreach and measure positive replies, discovery calls booked, proposals sent, and revenue closed.';
+
+async function advanceToSuccessMetricsQuestion(interviewId, opts) {
+  const steps = [
+    'Studio Substral — website design and redesign for local businesses who need a credible web presence.',
+    'Website design, redesign, and landing pages.',
+    'Professional service firms in Greater Manchester — law firms and accountants.',
+    'Price-driven clients looking for the cheapest possible website.',
+    'Greater Manchester and southern New Hampshire first.',
+    'They choose us for clarity, speed, and a credible design process.',
+    'Clear, confident, and practical — never hypey or jargon-heavy.',
+    'More qualified discovery calls and signed web projects in the next 90 days.',
+  ];
+  for (const step of steps) {
+    await postInterviewMessage(interviewId, step, opts);
+  }
+}
 
 function withStore() {
   const store = createMemoryStore();
@@ -266,6 +293,94 @@ describe('Client Intelligence interview answer routing (P0)', () => {
     session = await store.getSession(started.interviewId);
     assert.equal(QUESTION_BANK[session.interview_state.stepIndex].id, 'target_markets');
     assert.match(session.interview_state.answers.avoid_customers || '', /cheapest possible website/i);
+  });
+
+  it('10. success metrics answer stores business evidence and advances', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 510 }, opts);
+    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+
+    const metricsQ = QUESTION_BANK.find((q) => q.id === 'success_metrics');
+    assert.equal(
+      classifyInterviewMessage(METRICS_ANSWER, {
+        activeQuestion: metricsQ,
+        awaitingQuestionId: 'success_metrics',
+      }),
+      MESSAGE_TYPES.DIRECT_ANSWER
+    );
+
+    const turn = await postInterviewMessage(started.interviewId, METRICS_ANSWER, opts);
+    assert.equal(turn.nextAction, 'GENERATE_BLUEPRINT');
+    assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
+    assert.equal(turn.question, null);
+
+    const session = await store.getSession(started.interviewId);
+    assert.match(session.interview_state.answers.success_metrics || '', /qualified prospects/i);
+    assert.match(session.interview_state.answers.success_metrics || '', /revenue closed/i);
+    assert.equal(session.interview_state.stepIndex, QUESTION_BANK.length);
+    assert.ok(session.interview_state.done);
+
+    const evidence = await store.listEvidence(started.interviewId);
+    assert.ok(
+      evidence.some(
+        (row) =>
+          row.category === 'successMetrics' &&
+          /qualified prospects|positive replies/i.test(row.statement)
+      )
+    );
+    const summary = session.interview_state.sectionState.successMetrics.summary || '';
+    assert.match(summary, /qualified prospects|positive replies|discovery calls/i);
+    assert.doesNotMatch(summary, /^Success will be judged by qualified,\s/i);
+  });
+
+  it('11. weak/strong signal metrics language is not writing guidance', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 511 }, opts);
+    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+
+    const metricsQ = QUESTION_BANK.find((q) => q.id === 'success_metrics');
+    const classifyOpts = {
+      activeQuestion: metricsQ,
+      awaitingQuestionId: 'success_metrics',
+      looksLikeRefinement: looksLikeRefinementFeedback,
+      containsMetaInstruction: containsMetaInstructionLanguage,
+    };
+    assert.equal(
+      classifyInterviewMessage(SIGNAL_METRICS_ANSWER, classifyOpts),
+      MESSAGE_TYPES.DIRECT_ANSWER
+    );
+    assert.equal(looksLikeInterviewWritingGuidance(SIGNAL_METRICS_ANSWER, classifyOpts), false);
+
+    const turn = await postInterviewMessage(started.interviewId, SIGNAL_METRICS_ANSWER, opts);
+    assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
+    assert.equal(turn.question, null);
+
+    const session = await store.getSession(started.interviewId);
+    assert.match(session.interview_state.answers.success_metrics || '', /weak signal/i);
+    assert.match(session.interview_state.answers.success_metrics || '', /strong signal/i);
+  });
+
+  it('12. regenerate demand language on success metrics is business evidence', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 512 }, opts);
+    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+
+    const metricsQ = QUESTION_BANK.find((q) => q.id === 'success_metrics');
+    assert.equal(
+      classifyInterviewMessage(REGENERATE_DEMAND_ANSWER, {
+        activeQuestion: metricsQ,
+        awaitingQuestionId: 'success_metrics',
+      }),
+      MESSAGE_TYPES.DIRECT_ANSWER
+    );
+
+    const turn = await postInterviewMessage(started.interviewId, REGENERATE_DEMAND_ANSWER, opts);
+    assert.equal(turn.nextAction, 'GENERATE_BLUEPRINT');
+    assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
+    assert.equal(turn.question, null);
+
+    const session = await store.getSession(started.interviewId);
+    assert.match(session.interview_state.answers.success_metrics || '', /regenerate interest/i);
   });
 
   it('6. explicit skip after probe uses defer language — not a fake identity answer', async () => {
