@@ -127,6 +127,27 @@ function inferRevenueModel(input = {}, profile) {
   return 'mixed';
 }
 
+const SCORECARD_METRIC_CANDIDATE_RE =
+  /\b(?:qualified prospects?(?:\s+identified)?|prospects?\s+contacted|positive repl(?:y|ies)|discovery calls?\s+booked|proposals?\s+(?:sent|accepted|signed)|revenue closed|opportunities created|win rate|active clients?|walkthrough(?:s|\s+requests?)?|conversion rate|pipeline movement|booked discovery calls?|demand signals?|pilot enrollments|icp[- ]qualified conversations|discovery[\s-]*(?:to|->|→)[\s-]*enrollment conversion)\b/i;
+
+const QUALIFICATION_NOT_METRIC_RE =
+  /\b(?:prospect should|good prospect|weak signal|strong signal|real operating business|reachable decision(?:-maker)?|outdated or weak website|getting them to engage|if they are talking|need to look more professional|clear reason a better site|reply quality|call quality|budget fit|urgency)\b/i;
+
+function isScorecardMetricCandidate(name) {
+  const text = canonicalMetricName(name);
+  if (!text) return false;
+  if (/i don'?t know|not sure|tbd/i.test(text)) return false;
+  if (QUALIFICATION_NOT_METRIC_RE.test(text)) return false;
+  if (matchCatalogForOperatorMetric(text)) return true;
+  if (SCORECARD_METRIC_CANDIDATE_RE.test(text)) return true;
+  const words = text.split(/\s+/).length;
+  if (words > 8 || /[.!?]/.test(text)) return false;
+  if (words <= 5 && !/\b(?:should|because|when they|if they|talking about)\b/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
 function operatorStatedMetrics(input = {}) {
   const facts = input.normalizedFacts || {};
   const fromFacts = asList(facts.success_metrics);
@@ -137,7 +158,7 @@ function operatorStatedMetrics(input = {}) {
   return merged.map(canonicalMetricName).filter((item) => {
     const key = canonicalMetricKey(item);
     if (seen.has(key)) return false;
-    if (/i don'?t know|not sure|tbd/i.test(item)) return false;
+    if (!isScorecardMetricCandidate(item)) return false;
     seen.add(key);
     return true;
   });
@@ -287,6 +308,7 @@ function generateDraftScorecard(input = {}) {
       );
       continue;
     }
+    if (!isScorecardMetricCandidate(stated)) continue;
     metrics.push(
       toRecommendation(
         {
@@ -400,6 +422,7 @@ module.exports = {
   assertNotRuntime,
   getRuntimeScorecard,
   operatorStatedMetrics,
+  isScorecardMetricCandidate,
   canonicalMetricName,
   canonicalMetricKey,
   clone,
