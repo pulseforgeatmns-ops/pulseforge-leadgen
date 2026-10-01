@@ -8,6 +8,7 @@ const { validateWalkthroughPayload } = require('../lib/walkthroughValidate');
 const { captureWalkthroughLead } = require('../lib/walkthroughCapture');
 const { buildAttributionRecord } = require('../lib/walkthroughAttribution');
 const { syntheticSubmission } = require('../lib/walkthroughNotification');
+const { normalizeSubmissionId } = require('../lib/walkthroughSubmissionId');
 
 const router = express.Router();
 
@@ -66,7 +67,7 @@ router.post('/api/public/walkthrough', async (req, res) => {
     const stored = await captureWalkthroughLead(validated.values, attributionRecord);
     return res.status(201).json({
       ok: true,
-      submission_id: stored.id,
+      submission_id: normalizeSubmissionId(stored),
       message: SUCCESS_MESSAGE,
     });
   } catch (err) {

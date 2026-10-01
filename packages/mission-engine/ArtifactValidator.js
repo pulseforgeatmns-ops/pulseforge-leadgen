@@ -53,6 +53,17 @@ function looksLikeNaturalLanguage(value) {
   if (words.length >= 6 && !COMPANY_ENTITY_SUFFIX.test(s)) return true;
   // Numbered list placeholders ("Prospect 1") are not companies.
   if (/^prospect\s*\d+$/i.test(s)) return true;
+  if (/\bcontrolled batch\b/i.test(s)) return true;
+  if (/^(?:decision|region|first controlled batch|scoring rule|priority lanes?|outreach)\s*:/i.test(s)) {
+    return true;
+  }
+  if (
+    /^\d+\s+(?:daycares?|schools?|industrial|property managers?|warehouses?|manufacturers?|larger offices?)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
   return false;
 }
 
