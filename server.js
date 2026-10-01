@@ -84,6 +84,18 @@ startMiraDigestScheduler();
 startWarmRoutingScheduler();
 startAnchorUnenrichedEnrichmentScheduler();
 require('./services/anchorGovernedScheduler').startAnchorGovernedScheduler({ pool });
+// Anchor keeps its legacy poll -> tick -> Max owner. Configured mailbox tenants
+// need an independent execution clock; their Max control runs separately.
+const mailboxGovernedTenantIds = require('./services/governedOutboundTenant')
+  .parseGovernedOutboundTenantIds().filter(tenantId => tenantId !== '10');
+if (mailboxGovernedTenantIds.length) {
+  require('./services/governedOutboundExecutionClock').startGovernedOutboundExecutionClock({
+    pool,
+    tenantIds: mailboxGovernedTenantIds,
+    maxControlEnabled: false,
+    mailboxOnly: false,
+  });
+}
 
 app.use(session({
   store: new pgSession({ pool, tableName: 'session' }),
