@@ -2255,6 +2255,17 @@ function isDecisionMakerLabel(text) {
   return /\b(?:managers?|owners?|directors?|principals?)\b/.test(s);
 }
 
+/** Canonical one-word / short ICP labels from Scout/CIE segment patterns — not incomplete fragments. */
+function isCanonicalIdealCustomerSegment(value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return false;
+  for (const [, canon] of CUSTOMER_SEGMENT_PATTERNS) {
+    if (sameSemanticValue(raw, canon)) return true;
+  }
+  if (isDecisionMakerLabel(raw)) return true;
+  return false;
+}
+
 function managerRoleFromWord(word) {
   const w = String(word || '')
     .toLowerCase()
@@ -2596,6 +2607,157 @@ function splitListItems(text) {
     .filter(Boolean);
 }
 
+const COMMERCIAL_CLEANING_GROWTH_FOCUS = 'commercial cleaning';
+
+const SCORECARD_METRIC_PHRASE_RE =
+  /\b(?:qualified prospects?(?:\s+identified)?|prospects?\s+contacted|positive repl(?:y|ies)|discovery calls?\s+booked|proposals?\s+(?:sent|accepted|signed)|revenue closed|opportunities created|win rate|active clients?|walkthrough(?:s|\s+requests?)?|conversion rate|pipeline movement|booked discovery calls?|signed web projects?|demand signals?)\b/i;
+
+const QUALIFICATION_SIGNAL_PHRASE_RE =
+  /\b(?:prospect should|good prospect|weak signal|strong signal|real operating business|reachable decision(?:-maker)?|outdated or weak website|getting them to engage|if they are talking|need to look more professional|clear reason a better site|qualification criteria|reply quality|call quality|budget fit|urgency)\b/i;
+
+function factsIndicateCommercialCleaningBusiness(facts) {
+  if (!facts) return false;
+  const blob = [
+    facts.business_name,
+    facts.business_description,
+    facts.vertical_focus,
+    ...(facts.services || []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (/\banchor(?:\s+cleaning)?\b/.test(blob)) return true;
+  if (/\b(?:commercial cleaning|janitorial|office cleaning|recurring cleaning|walkthrough|cleaner utilization)\b/.test(blob)) {
+    return true;
+  }
+  return false;
+}
+
+function shouldAssignCommercialCleaningGrowthFocus(text, facts) {
+  if (!factsIndicateCommercialCleaningBusiness(facts)) return false;
+  const lower = String(text || '').toLowerCase();
+  if (/\bcommercial cleaning\b/.test(lower)) return true;
+  return /\bcommercial\b/.test(lower) && /\b(?:cleaning|janitorial|walkthrough|facilities)\b/.test(lower);
+}
+
+function defaultEntityKindForFacts(facts) {
+  return factsIndicateCommercialCleaningBusiness(facts) ? 'cleaning company' : 'business';
+}
+
+function parseStructuredIdentityFields(cleaned) {
+  const raw = String(cleaned || '').trim();
+  if (!raw) return null;
+  const match = raw.match(
+    /business\s+name\s*:\s*(.+?)[.;]\s*(?:what\s+(?:we\s+)?do\s+today\s*:?\s*)?(.*)$/is
+  );
+  if (!match) return null;
+  const name = sanitizeBusinessName(match[1].trim());
+  let description = String(match[2] || '').trim();
+  description = description.replace(/^what\s+(?:we\s+)?do\s+today\s*:?\s*/i, '').trim();
+  if (!name) return null;
+  return {
+    name,
+    description: description ? normalizeBusinessPhrase(firstSentence(description)) : null,
+  };
+}
+
+function isInterviewArtifactServiceItem(item) {
+  const s = String(item || '').trim().toLowerCase();
+  if (!s) return true;
+  return /^(?:today|what we do today|business name)$/.test(s);
+}
+
+function sanitizeBriefServiceList(services) {
+  return dedupeNormalizedList(
+    (services || [])
+      .map((item) => normalizeBusinessPhrase(String(item || '').trim()))
+      .filter(
+        (item) =>
+          item &&
+          !isInterviewArtifactServiceItem(item) &&
+          !isLiteralUncertaintyPhrase(item) &&
+          !containsRawPromptFragment(item)
+      )
+  );
+}
+
+function buildIdentityOverviewSentence(name, description, facts = null) {
+  const cleanName = sanitizeBusinessName(name) || 'The business';
+  let desc = sanitizeIdentityDescription(cleanName, description);
+  if (!desc) {
+    return capitalizeSentence(`${cleanName} is a ${defaultEntityKindForFacts(facts || { business_name: cleanName })}`);
+  }
+  desc = normalizeBusinessPhrase(desc);
+  if (/^(?:builds|provides|offers|sells|delivers|designs|creates)\b/i.test(desc)) {
+    return capitalizeSentence(`${cleanName} ${desc}`);
+  }
+  if (new RegExp(`^${escapeRegExp(cleanName)}\\b`, 'i').test(desc)) {
+    return capitalizeSentence(desc);
+  }
+  const article = /^[aeiou]/i.test(desc) ? 'an' : 'a';
+  return capitalizeSentence(`${cleanName} is ${article} ${desc}`);
+}
+
+function scrubMisassignedGrowthFocus(facts) {
+  const next = cloneNormalizedFacts(facts);
+  const growth = String(next.growth_focus || '').trim();
+  if (!growth) return next;
+  const misassignedCleaningFocus =
+    sameSemanticValue(growth, COMMERCIAL_CLEANING_GROWTH_FOCUS) &&
+    !factsIndicateCommercialCleaningBusiness(next);
+  const misassignedGenericCommercial =
+    /^commercial$/i.test(growth) && !factsIndicateCommercialCleaningBusiness(next);
+  if (misassignedCleaningFocus || misassignedGenericCommercial) {
+    next.growth_focus = null;
+    if (next.epistemic_states) next.epistemic_states.growth_focus = EPISTEMIC_STATES.UNRESOLVED;
+  }
+  return next;
+}
+
+function partitionSuccessMetricsAndQualification(items) {
+  const metrics = [];
+  const qualification = [];
+  for (const raw of items || []) {
+    const item = normalizeBusinessPhrase(String(raw || '').trim());
+    if (!item || isLiteralUncertaintyPhrase(item)) continue;
+    if (QUALIFICATION_SIGNAL_PHRASE_RE.test(item)) {
+      qualification.push(item);
+      continue;
+    }
+    if (SCORECARD_METRIC_PHRASE_RE.test(item)) {
+      metrics.push(item);
+      continue;
+    }
+    const words = item.split(/\s+/).length;
+    if (words > 8 || /[.!?]/.test(item)) {
+      qualification.push(item);
+      continue;
+    }
+    if (words <= 6 && !/\b(?:should|because|when they|if they|talking about)\b/i.test(item)) {
+      metrics.push(item);
+      continue;
+    }
+    qualification.push(item);
+  }
+  return {
+    metrics: dedupeNormalizedList(metrics),
+    qualification: dedupeNormalizedList(qualification),
+  };
+}
+
+function prepareNormalizedFactsForBrief(facts) {
+  const next = scrubMisassignedGrowthFocus(facts);
+  const services = sanitizeBriefServiceList(next.services);
+  next.services = services;
+  const partitioned = partitionSuccessMetricsAndQualification(next.success_metrics);
+  next.success_metrics = partitioned.metrics;
+  next.qualification_signals = uniquePush(
+    next.qualification_signals || [],
+    partitioned.qualification
+  );
+  return next;
+}
+
 function emptyNormalizedFacts() {
   return {
     business_name: null,
@@ -2604,6 +2766,7 @@ function emptyNormalizedFacts() {
     growth_focus: null,
     ideal_customers: [],
     ideal_customer_traits: [],
+    qualification_signals: [],
     disqualified_customers: [],
     geography: [],
     vertical_focus: null,
@@ -2644,6 +2807,7 @@ function cloneNormalizedFacts(facts) {
     growth_focus: src.growth_focus || null,
     ideal_customers: [...(src.ideal_customers || [])],
     ideal_customer_traits: [...(src.ideal_customer_traits || [])],
+    qualification_signals: [...(src.qualification_signals || [])],
     disqualified_customers: [...(src.disqualified_customers || [])],
     geography: [...(src.geography || [])],
     vertical_focus: src.vertical_focus || null,
@@ -2755,6 +2919,19 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
 
   switch (sectionKey) {
     case 'identity': {
+      const structured = parseStructuredIdentityFields(cleaned);
+      if (structured) {
+        next.business_name = structured.name;
+        if (structured.description) {
+          next.business_description = structured.description;
+        }
+        next.business_name = sanitizeBusinessName(next.business_name);
+        next.business_description = sanitizeIdentityDescription(
+          next.business_name,
+          next.business_description
+        );
+        break;
+      }
       // Prefer em/en dash or spaced hyphen as name/description separator —
       // never split on compound-word hyphens like commercial-focused.
       const dash =
@@ -2793,8 +2970,10 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
       }
       next.business_name = sanitizeBusinessName(next.business_name);
       next.business_description = sanitizeIdentityDescription(next.business_name, next.business_description);
-      if (/commercial/i.test(cleaned)) next.growth_focus = 'commercial cleaning';
-      if (/residential/i.test(cleaned) && !next.vertical_focus) {
+      if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
+        next.growth_focus = COMMERCIAL_CLEANING_GROWTH_FOCUS;
+      }
+      if (/residential/i.test(cleaned) && !next.vertical_focus && factsIndicateCommercialCleaningBusiness(next)) {
         next.vertical_focus = /commercial/i.test(cleaned)
           ? 'commercial-focused cleaning with residential welcome'
           : 'residential cleaning';
@@ -2812,8 +2991,8 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
       const focuses = extractGrowthFocusItems(String(rawAnswer || cleaned));
       if (focuses.length) {
         next.growth_focus = focuses.join('; ');
-      } else if (/commercial/i.test(cleaned)) {
-        next.growth_focus = next.growth_focus || 'commercial cleaning';
+      } else if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
+        next.growth_focus = next.growth_focus || COMMERCIAL_CLEANING_GROWTH_FOCUS;
       }
       break;
     }
@@ -2875,7 +3054,9 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
     }
     case 'targetMarkets': {
       next.geography = uniquePush([], extractPlaces(cleaned));
-      if (/commercial/i.test(cleaned)) next.growth_focus = next.growth_focus || 'commercial cleaning';
+      if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
+        next.growth_focus = next.growth_focus || COMMERCIAL_CLEANING_GROWTH_FOCUS;
+      }
       if (/residential/i.test(cleaned) && !next.vertical_focus) {
         next.vertical_focus = 'residential';
       }
@@ -2929,16 +3110,25 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
       if (!isLiteralUncertaintyPhrase(cleaned)) {
         next.ninety_day_outcomes = normalizeBusinessPhrase(cleaned);
       }
-      if (/commercial/i.test(cleaned)) next.growth_focus = next.growth_focus || 'commercial cleaning';
+      if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
+        next.growth_focus = next.growth_focus || COMMERCIAL_CLEANING_GROWTH_FOCUS;
+      }
       break;
     }
     case 'successMetrics': {
-      next.success_metrics = uniquePush(
-        [],
-        splitListItems(cleaned).filter((item) => !isLiteralUncertaintyPhrase(item))
+      const split = splitListItems(cleaned).filter((item) => !isLiteralUncertaintyPhrase(item));
+      const partitioned = partitionSuccessMetricsAndQualification(
+        split.length ? split : isLiteralUncertaintyPhrase(cleaned) ? [] : [cleaned]
+      );
+      next.success_metrics = uniquePush([], partitioned.metrics);
+      next.qualification_signals = uniquePush(
+        next.qualification_signals || [],
+        partitioned.qualification
       );
       if (!next.success_metrics.length && !isLiteralUncertaintyPhrase(cleaned)) {
-        next.success_metrics = [normalizeBusinessPhrase(cleaned)];
+        const single = partitionSuccessMetricsAndQualification([normalizeBusinessPhrase(cleaned)]);
+        next.success_metrics = uniquePush([], single.metrics);
+        next.qualification_signals = uniquePush(next.qualification_signals || [], single.qualification);
       }
       break;
     }
@@ -3539,7 +3729,10 @@ function isStructurallyIncompleteRecoveredCustomerFragment(slot, value) {
 
   if (slot === 'ideal_customers' || slot === 'disqualified_customers') {
     const words = raw.split(/\s+/).filter(Boolean);
-    if (words.length <= 1) return true;
+    if (words.length <= 1) {
+      if (slot === 'ideal_customers' && isCanonicalIdealCustomerSegment(raw)) return false;
+      return true;
+    }
     if (/^(?:customers?|clients?|people|owners?|teams?|businesses?|segments?)$/i.test(raw)) return true;
     if (/^(?:ideally|perhaps|maybe|likely|generally)\b/i.test(raw)) return true;
     if (/^(?:delegate|operate|manage|run|change|improve|grow)\b/i.test(raw)) return true;
@@ -3776,7 +3969,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
     const article = /^[aeiou]/i.test(desc) ? 'an' : 'a';
     identityBits.push(`${name} is ${article} ${desc}`);
   } else if (name) {
-    identityBits.push(`${name} is a cleaning company`);
+    identityBits.push(buildIdentityOverviewSentence(name, null, f));
   } else if (f.business_description) {
     identityBits.push(
       `The business is understood as ${normalizeBusinessPhrase(firstSentence(f.business_description))}`
@@ -3797,12 +3990,13 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       : priorSummary('identity', 'business_description'),
   };
 
+  const briefServices = sanitizeBriefServiceList(f.services);
   sections.services = {
     ...(prior.services || emptySection()),
-    epistemic_state: getEpistemicState('services', f.services.length > 0),
-    summary: f.services.length && f.epistemic_states?.services === EPISTEMIC_STATES.KNOWN
+    epistemic_state: getEpistemicState('services', briefServices.length > 0),
+    summary: briefServices.length && f.epistemic_states?.services === EPISTEMIC_STATES.KNOWN
       ? [
-          ensurePeriod(`Today the business delivers ${f.services.join(', ')}`),
+          ensurePeriod(`${name || 'The business'} delivers ${briefServices.join(', ')}`),
           'Service understanding reflects what is actually sold now, not aspirational packaging.',
         ].join(' ')
       : f.epistemic_states?.services === EPISTEMIC_STATES.UNKNOWN
@@ -3860,7 +4054,13 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
 
   const marketBits = [];
   if (f.geography.length) marketBits.push(f.geography.join(', '));
-  if (f.growth_focus) marketBits.push(`with a near-term growth focus on ${f.growth_focus}`);
+  if (
+    f.growth_focus &&
+    (factsIndicateCommercialCleaningBusiness(f) ||
+      !sameSemanticValue(f.growth_focus, COMMERCIAL_CLEANING_GROWTH_FOCUS))
+  ) {
+    marketBits.push(`with a near-term growth focus on ${f.growth_focus}`);
+  }
   sections.targetMarkets = {
     ...(prior.targetMarkets || emptySection()),
     epistemic_state: getEpistemicState('geography', marketBits.length > 0),
@@ -3944,9 +4144,10 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       : [...(p.unknowns || [])];
     if (!hasSummary && key === 'idealCustomers') {
       const commercialPref =
-        /commercial/i.test(String(f.growth_focus || '')) ||
-        /commercial/i.test(String(f.vertical_focus || '')) ||
-        /prefer commercial/i.test(String(f.business_description || ''));
+        factsIndicateCommercialCleaningBusiness(f) &&
+        (/commercial/i.test(String(f.growth_focus || '')) ||
+          /commercial/i.test(String(f.vertical_focus || '')) ||
+          /prefer commercial/i.test(String(f.business_description || '')));
       const icpUnknown = commercialPref
         ? 'Which commercial customer segments are the strongest fit'
         : 'Missing clear answer for idealCustomers';
@@ -4154,7 +4355,7 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
         const article = /^[aeiou]/i.test(sentence) ? 'an' : 'a';
         sentence = `${name} is ${article} ${sentence}`;
       } else if (name && new RegExp(`^${escapeRegExp(name)}$`, 'i').test(sentence)) {
-        sentence = `${name} is a cleaning company`;
+        sentence = `${name} is a ${defaultEntityKindForFacts(opts.normalizedFacts || { business_name: name })}`;
       } else {
         sentence = /^[A-Z]/.test(sentence) ? sentence : `This is a ${sentence}`;
       }
@@ -4265,17 +4466,24 @@ function synthesizeNormalizedFact(kind, rawOrSummary, opts = {}) {
     }
     case 'goals': {
       let outcome = normalizeGoalOutcomePhrase(substance);
-      if (/commercial cleaning|greater manchester/i.test(outcome) && /growth|pipeline|clients?/i.test(outcome) === false) {
-        // Keep the established Manchester commercial shorthand when that is the whole claim.
+      const cleaningBusiness = factsIndicateCommercialCleaningBusiness(opts.normalizedFacts || null);
+      if (cleaningBusiness) {
+        if (/^commercial cleaning growth in Greater Manchester$/i.test(outcome)) {
+          return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
+        }
+        if (
+          /\bcommercial cleaning\b/i.test(substance) &&
+          /greater manchester/i.test(substance) &&
+          !/website|redesign|assessment|web project|discovery call/i.test(substance)
+        ) {
+          return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
+        }
       }
-      if (/^commercial cleaning growth in Greater Manchester$/i.test(outcome)) {
-        return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
-      }
-      if (/commercial cleaning|greater manchester/i.test(substance) && !/pipeline|prospects|establish/i.test(substance)) {
-        return `${possessive} near-term priority is commercial cleaning growth in Greater Manchester`;
+      if (/^[A-Z]/.test(outcome)) {
+        return `${possessive} near-term priority is ${outcome.replace(/[.!?]+$/, '').trim()}`;
       }
       outcome = midSentence(outcome);
-      return `${possessive} near-term priority is ${outcome}`;
+      return `${possessive} near-term priority is ${capitalizeSentence(outcome)}`;
     }
     case 'metrics': {
       // SPEC-099: never invent metrics the operator did not state.
@@ -4697,6 +4905,111 @@ function normalizeClaim(kind, summary, opts = {}) {
   return synthesized;
 }
 
+function composeWhoYouAreFromNormalizedFacts(f, briefOpts) {
+  const businessName = briefOpts.businessName || f.business_name || '';
+  const services = sanitizeBriefServiceList(f.services);
+  const parts = [];
+  if (f.business_name || f.business_description) {
+    parts.push(
+      buildIdentityOverviewSentence(f.business_name || businessName, f.business_description, f)
+    );
+  }
+  if (services.length) {
+    parts.push(`Services include ${services.join(', ')}`);
+  }
+  if (parts.length) return joinPolished(parts);
+  return '';
+}
+
+function composeWhoYouServeFromNormalizedFacts(f, briefOpts) {
+  const businessName = briefOpts.businessName || f.business_name || 'The business';
+  const sentences = [];
+  const cleanIdeal = (f.ideal_customers || []).filter(
+    (item) =>
+      item &&
+      !isValueTraitPhrase(item) &&
+      !isLiteralUncertaintyPhrase(item) &&
+      !isConversationalFiller(item) &&
+      !/as part of (?:my|our|the)\s+ideal customer/i.test(item)
+  );
+  const cleaningContext = factsIndicateCommercialCleaningBusiness(f);
+
+  if (cleanIdeal.length) {
+    const needsRecurring =
+      cleaningContext &&
+      /dependable recurring|recurring(?:\s+commercial)?(?:\s+cleaning)?|weekly or multiple/i.test(
+        [f.growth_focus, (f.ideal_customer_traits || []).join(' '), cleanIdeal.join(' ')].join(' ')
+      );
+    sentences.push(
+      `${businessSubject(businessName, { possessive: true })} ideal customers include ${cleanIdeal.join(', ')}${
+        needsRecurring ? ' that need dependable recurring cleaning' : ''
+      }`
+    );
+  }
+
+  if ((f.geography || []).length && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN) {
+    const towns = f.geography.filter((g) => !/^Greater (?:Manchester|Toronto Area)$/i.test(g));
+    const hasGM = f.geography.some((g) => /Greater Manchester/i.test(g));
+    const hasGTA = f.geography.some((g) => /Greater Toronto|GTA/i.test(g));
+    if (hasGM) {
+      sentences.push(
+        `${businessSubject(businessName, { possessive: true })} near-term geography is the Greater Manchester area${
+          towns.length ? `, including ${towns.join(', ')}` : ''
+        }`
+      );
+    } else if (hasGTA) {
+      sentences.push(
+        `${businessSubject(businessName, { possessive: true })} near-term geography centers on the Greater Toronto Area`
+      );
+    } else {
+      sentences.push(
+        `${businessSubject(businessName, { possessive: true })} near-term geography centers on ${f.geography.join(', ')}`
+      );
+    }
+  } else if ((f.geography || []).length && f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS) {
+    sentences.push(
+      `Current hypothesis: target markets center on ${
+        f.hypotheses?.geography || f.evidence_statements?.geography || f.geography.join(', ')
+      }`
+    );
+  }
+
+  if ((f.disqualified_customers || []).length) {
+    const constraintRaw = f.disqualified_customers.join('; ');
+    sentences.push(
+      composeCustomerConstraintPresentation(businessName, constraintRaw) ||
+        `${businessName} prefers to avoid ${constraintRaw}`
+    );
+  }
+
+  if (
+    cleaningContext &&
+    sentences.length >= 2 &&
+    cleanIdeal.length &&
+    (f.geography || []).length &&
+    f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
+  ) {
+    sentences.push(
+      'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
+    );
+  }
+  return joinPolished(sentences);
+}
+
+function composeQualificationSignalsFromNormalizedFacts(f) {
+  return dedupeNormalizedList(
+    [...(f.qualification_signals || []), ...(f.ideal_customer_traits || [])]
+      .map((item) => normalizeBusinessPhrase(String(item || '').trim()))
+      .filter(
+        (item) =>
+          item &&
+          !isLiteralUncertaintyPhrase(item) &&
+          (QUALIFICATION_SIGNAL_PHRASE_RE.test(item) ||
+            /^(?:a|an)\s+(?:real|reachable|good|weak|strong)\b/i.test(item))
+      )
+  );
+}
+
 function composeWhoYouAre(identity, services, opts = {}) {
   const businessName = opts.businessName || extractBusinessName(identity);
   const id = normalizeClaim('identity', identity, { businessName });
@@ -4910,9 +5223,40 @@ function collectUnknownLabels(sections) {
  * SPEC-085 — always identify meaningful unknowns. Never return "nothing outstanding."
  * SPEC-099: explicit interview unknowns (e.g. unresolved ICP) rank ahead of generic fillers.
  */
+function normalizedFactsHasIdealCustomers(facts) {
+  return ((facts && facts.ideal_customers) || []).some(
+    (item) => item && !isLiteralUncertaintyPhrase(item) && !isConversationalFiller(item)
+  );
+}
+
+function normalizedFactsHasExcludedCustomers(facts) {
+  return ((facts && facts.disqualified_customers) || []).some(
+    (item) => item && !isLiteralUncertaintyPhrase(item)
+  );
+}
+
 function composeLearnMoreItems(unknownLabels, opts = {}) {
   const facts = opts.normalizedFacts || null;
-  const cleaned = [...new Set((unknownLabels || []).map(humanizeUnknownLabel).filter(Boolean))];
+  let cleaned = [...new Set((unknownLabels || []).map(humanizeUnknownLabel).filter(Boolean))];
+  if (facts) {
+    if (normalizedFactsHasIdealCustomers(facts)) {
+      cleaned = cleaned.filter(
+        (label) =>
+          !/ideal customer|who the ideal customer|commercial customer segment/i.test(String(label))
+      );
+    }
+    if (normalizedFactsHasExcludedCustomers(facts)) {
+      cleaned = cleaned.filter(
+        (label) => !/customers to decline|which customers to (?:decline|avoid)/i.test(String(label))
+      );
+    }
+    if ((facts.geography || []).length) {
+      cleaned = cleaned.filter((label) => !/where to concentrate first|target markets?/i.test(String(label)));
+    }
+    if ((facts.services || []).length) {
+      cleaned = cleaned.filter((label) => !/full service mix|service mix/i.test(String(label)));
+    }
+  }
   // Keep question-form unknowns readable; title-case only short topic labels.
   const items = cleaned.map((label) =>
     /\?$/.test(label) || /^(which|who|what|how|where)\b/i.test(label)
@@ -4921,11 +5265,10 @@ function composeLearnMoreItems(unknownLabels, opts = {}) {
   );
 
   const prefersCommercial =
-    /commercial/i.test(String((facts && facts.growth_focus) || '')) ||
-    /commercial/i.test(String((facts && facts.vertical_focus) || ''));
-  const hasNamedIdeal = ((facts && facts.ideal_customers) || []).some(
-    (item) => item && !isLiteralUncertaintyPhrase(item)
-  );
+    factsIndicateCommercialCleaningBusiness(facts) &&
+    (/commercial/i.test(String((facts && facts.growth_focus) || '')) ||
+      /commercial/i.test(String((facts && facts.vertical_focus) || '')));
+  const hasNamedIdeal = normalizedFactsHasIdealCustomers(facts);
   const geo = ((facts && facts.geography) || []).join(', ') || 'the target geography';
 
   if (prefersCommercial && !hasNamedIdeal) {
@@ -5043,7 +5386,9 @@ function composeObservations(sections, normalizedFacts = null) {
 
   if (facts.ninety_day_outcomes || facts.growth_focus) {
     const goal =
-      facts.growth_focus && /commercial/i.test(facts.growth_focus)
+      factsIndicateCommercialCleaningBusiness(facts) &&
+      facts.growth_focus &&
+      /commercial/i.test(facts.growth_focus)
         ? `${possessiveShort} near-term growth goal is to build a clearer, repeatable path to commercial cleaning opportunities`
         : `${possessiveShort} near-term growth goal is ${midSentence(
             firstSentence(normalizeBusinessPhrase(facts.ninety_day_outcomes || facts.growth_focus))
@@ -5325,7 +5670,10 @@ function buildOperatorScorecardBriefSections(sections, opts = {}) {
     return buildBriefScorecardSections(opts.operatorScorecard);
   }
   const facts = opts.normalizedFacts || null;
-  const goalFromFacts = facts && (facts.ninety_day_outcomes || facts.growth_focus);
+  const goalFromFacts =
+    facts &&
+    (facts.ninety_day_outcomes ||
+      (factsIndicateCommercialCleaningBusiness(facts) && facts.growth_focus));
   const businessGoal =
     opts.businessGoal ||
     (Array.isArray(goalFromFacts) ? goalFromFacts.join('; ') : goalFromFacts) ||
@@ -5371,10 +5719,13 @@ function buildOperatorScorecardBriefSections(sections, opts = {}) {
  * SPEC-116 replaces Success Looks Like with operator scorecard sections.
  */
 function buildExecutiveSummary(sections, opts = {}) {
-  const normalizedFacts =
+  const rawNormalizedFacts =
     opts.normalizedFacts ||
     (opts.interviewState && opts.interviewState.normalizedFacts) ||
     null;
+  const normalizedFacts = rawNormalizedFacts
+    ? prepareNormalizedFactsForBrief(rawNormalizedFacts)
+    : null;
   const fromNormalized = normalizedFacts
     ? sectionsFromNormalizedFacts(normalizedFacts, sections)
     : null;
@@ -5412,127 +5763,28 @@ function buildExecutiveSummary(sections, opts = {}) {
   let whereHeaded = composeWhereHeaded(s('campaignGoals').summary, briefOpts);
   let successLooksLike = composeWhatSuccess(s('successMetrics').summary, briefOpts);
 
-  if (normalizedFacts) {
-    const f = cloneNormalizedFacts(normalizedFacts);
-    const cleanServices = (f.services || []).filter(
-      (item) => item && !/^(?:anchor(?:\s+cleaning)?\s+)?provides?\b/i.test(item)
-    );
-    const cleanIdeal = (f.ideal_customers || []).filter(
-      (item) =>
-        item &&
-        !isValueTraitPhrase(item) &&
-        !isLiteralUncertaintyPhrase(item) &&
-        !isConversationalFiller(item) &&
-        !/as part of (?:my|our|the)\s+ideal customer/i.test(item) &&
-        !/^(?:anchor(?:\s+cleaning)?\s+)?most wants\b/i.test(item)
-    );
+  let qualificationSignalItems = [];
 
-    if (cleanServices.length || f.business_name || f.business_description) {
-      const identityLine =
-        synthesizeNormalizedFact('identity', s('identity').summary, briefOpts) ||
-        (f.business_name
-          ? `${f.business_name} is a ${f.business_description || 'cleaning company'}`
-          : 'This is a cleaning company');
-      const whoYouAreParts = [identityLine];
-      if (cleanServices.length) {
-        whoYouAreParts.push(`Services include ${cleanServices.join(', ')}`);
+  if (normalizedFacts) {
+    const f = normalizedFacts;
+    const fromFactsWhoYouAre = composeWhoYouAreFromNormalizedFacts(f, briefOpts);
+    if (fromFactsWhoYouAre) whoYouAre = fromFactsWhoYouAre;
+    const fromFactsWhoYouServe = composeWhoYouServeFromNormalizedFacts(f, briefOpts);
+    if (fromFactsWhoYouServe) whoYouServe = fromFactsWhoYouServe;
+    if (f.ninety_day_outcomes) {
+      const goalLine = synthesizeNormalizedFact('goals', f.ninety_day_outcomes, {
+        ...briefOpts,
+        normalizedFacts: f,
+      });
+      if (goalLine) {
+        whereHeaded = joinPolished([
+          goalLine,
+          'That outcome should set priorities, sequencing, and what the team deliberately declines so focus is not diluted.',
+          'Recommendations earn their keep only when they move the business meaningfully toward this direction.',
+        ]);
       }
-      whoYouAre = joinPolished(whoYouAreParts);
     }
-    if (cleanIdeal.length || f.geography.length || /commercial/i.test(String(f.growth_focus || ''))) {
-      const sentences = [];
-      if (cleanIdeal.length) {
-        const displayName = businessName || 'the business';
-        const possessive = businessSubject(displayName, { possessive: true });
-        const decisionMakers = cleanIdeal.filter(isDecisionMakerLabel);
-        const segments = cleanIdeal.filter((item) => !isDecisionMakerLabel(item));
-        const needsRecurring = /dependable recurring|recurring(?:\s+commercial)?(?:\s+cleaning)?|weekly or multiple/i.test(
-          [
-            s('idealCustomers').summary,
-            f.growth_focus,
-            (f.ideal_customer_traits || []).join(' '),
-            cleanIdeal.join(' '),
-          ].join(' ')
-        );
-        if (decisionMakers.length && segments.length) {
-          const dmProse = formatDecisionMakerProse(decisionMakers);
-          const segProse = formatSegmentProse(segments);
-          sentences.push(
-            `${possessive} current acquisition focus is ${dmProse}, particularly those responsible for ${segProse}${
-              needsRecurring ? ' that need dependable recurring cleaning' : ''
-            }`
-          );
-        } else {
-          sentences.push(
-            `${possessive} ideal customers include ${cleanIdeal.join(', ')}${
-              needsRecurring ? ' that need dependable recurring cleaning' : ''
-            }`
-          );
-        }
-      } else if (/commercial/i.test(String(f.growth_focus || f.vertical_focus || ''))) {
-        const shortName =
-          String(businessName || 'The business').replace(/\s+Cleaning$/i, '') || 'The business';
-        // Keep to two sentences so geography / avoid still fit joinPolished's 4-sentence budget.
-        sentences.push(
-          `${shortName} has not chosen a primary commercial customer segment yet`
-        );
-        sentences.push(
-          `${businessSubject(businessName || 'The business')} prefers commercial work while continuing to serve residential customers, but the ideal segment remains an open decision`
-        );
-      }
-      if (f.disqualified_customers.length) {
-        const constraintRaw = f.disqualified_customers.join('; ');
-        sentences.push(
-          composeCustomerConstraintPresentation(
-            businessName || 'The business',
-            constraintRaw
-          ) ||
-            synthesizeNormalizedFact(
-              'avoid',
-              `The business prefers to avoid ${constraintRaw}`,
-              briefOpts
-            ) ||
-            `${businessName || 'The business'} prefers to avoid ${constraintRaw}`
-        );
-      }
-      if (f.geography.length && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN) {
-        const towns = f.geography.filter((g) => !/^Greater (?:Manchester|Toronto Area)$/i.test(g));
-        const hasGM = f.geography.some((g) => /Greater Manchester/i.test(g));
-        const hasGTA = f.geography.some((g) => /Greater Toronto|GTA/i.test(g));
-        if (hasGM) {
-          sentences.push(
-            `${businessSubject(businessName || 'Anchor', { possessive: true })} near-term geography is the Greater Manchester area${
-              towns.length ? `, including ${towns.join(', ')}` : ''
-            }`
-          );
-        } else if (hasGTA) {
-          sentences.push(
-            `${businessSubject(businessName || 'the business', { possessive: true })} near-term geography centers on the Greater Toronto Area`
-          );
-        } else {
-          sentences.push(
-            `${businessSubject(businessName || 'the business', { possessive: true })} near-term geography centers on ${f.geography.join(', ')}`
-          );
-        }
-      } else if (f.geography.length && f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS) {
-        sentences.push(
-          `Current hypothesis: target markets center on ${
-            f.hypotheses?.geography || f.evidence_statements?.geography || f.geography.join(', ')
-          }`
-        );
-      }
-      if (
-        sentences.length >= 2 &&
-        cleanIdeal.length &&
-        f.geography.length &&
-        f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
-      ) {
-        sentences.push(
-          'Taken together, this is a disciplined beachhead: fit over volume, and geography chosen to match that fit.'
-        );
-      }
-      whoYouServe = joinPolished(sentences);
-    }
+    qualificationSignalItems = composeQualificationSignalsFromNormalizedFacts(f);
     if (f.brand_voice) {
       const adv =
         synthesizeNormalizedFact('advantages', s('competitiveAdvantages').summary, {
@@ -5610,6 +5862,17 @@ function buildExecutiveSummary(sections, opts = {}) {
         kind: 'prose',
         body: whoYouServe,
       },
+      ...(qualificationSignalItems.length
+        ? [
+            {
+              id: 'qualificationSignals',
+              title: 'Prospect Fit Criteria',
+              kind: 'list',
+              body: 'Qualification signals describe fit before a prospect becomes a scorecard event — not operator success metrics.',
+              items: qualificationSignalItems,
+            },
+          ]
+        : []),
       {
         id: 'whyChooseYou',
         title: 'Why Customers Choose You',
@@ -11744,6 +12007,12 @@ module.exports = {
   buildUnderstandingProgress,
   buildExecutiveSummary,
   buildExecutiveBusinessBrief,
+  prepareNormalizedFactsForBrief,
+  factsIndicateCommercialCleaningBusiness,
+  partitionSuccessMetricsAndQualification,
+  composeQualificationSignalsFromNormalizedFacts,
+  composeWhoYouServeFromNormalizedFacts,
+  composeWhoYouAreFromNormalizedFacts,
   buildReflection,
   hasSpecificitySignals,
   looksAmbiguous,
@@ -11841,6 +12110,7 @@ module.exports = {
   isConversationalFiller,
   isDecisionMakerLabel,
   mergeIdealCustomersWithPrecedence,
+  isCanonicalIdealCustomerSegment,
   synthesizeDifferentiationSnippet,
   emptyNormalizedFacts,
   ingestAnswerIntoNormalizedFacts,
