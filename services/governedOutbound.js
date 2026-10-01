@@ -20,6 +20,7 @@ const {
   terminalPreProviderReason,
   providerBoundaryWasCrossed,
   attachProviderBoundaryCrossed,
+  markLeafProviderSend,
 } = require('./governedOutboundProviderBoundary');
 const { reconcileUncertainItemFromEvidence } = require('./governedUncertainSendReconciliation');
 
@@ -284,6 +285,7 @@ function service({
         fail('pre_provider_stop');
       }
       try {
+        markLeafProviderSend(sendFn, providerBoundary);
         const result = await sendFn({ ...command, providerBoundary });
         const messageId = result?.providerMessageId || result?.messageId;
         const rejected = !result?.success && /^brevo_http_4/.test(String(result?.providerErrorCode || ''));
@@ -305,11 +307,11 @@ function service({
       } catch (e) {
         if (isPreProviderOutboundFailure(e, providerBoundary)) {
           await finishPreProviderAttempt(item, envelope, e, providerBoundary);
-        } else if (providerBoundaryWasCrossed(e, providerBoundary)) {
+        } else if (providerBoundaryWasCrossed(e, providerBoundary) || providerBoundary.crossed) {
           const row = (await store.items(envelope.id)).find(x => x.id === item.id);
           if (row?.status === 'attempted') await store.finish(item, 'uncertain', 'provider_or_persistence_error');
         }
-        throw attachProviderBoundaryCrossed(e, providerBoundaryWasCrossed(e, providerBoundary));
+        throw attachProviderBoundaryCrossed(e, providerBoundaryWasCrossed(e, providerBoundary) || providerBoundary.crossed);
       }
     };
     guardedSend.beforeAttempt = beforeAttempt;
@@ -323,7 +325,7 @@ function service({
     } catch (e) {
       const row = (await store.items(envelope.id)).find(x => x.id === item.id);
       if (row?.status === 'attempted') {
-        if (providerBoundaryWasCrossed(e, providerBoundary)) {
+        if (providerBoundaryWasCrossed(e, providerBoundary) || providerBoundary.crossed) {
           await store.finish(item, 'uncertain', 'provider_or_persistence_error');
         } else if (!called) {
           await store.releaseUnsent(item, e.code || 'pre_provider_persist_failed');

@@ -30,5 +30,7 @@ function createGovernedTenantMailboxSend(program = {}, binding = {}, dependencie
     return { success: true, messageId, providerMessageId: messageId, scheduleId: result.schedule.id,
       canonicalMessageId: message.id, rfcMessageId: message.rfcMessageId, threadId: message.threadId };
   };
+  sendEmail.isGovernedTenantMailboxTransport = true;
+  return sendEmail;
 }
 module.exports = { createGovernedTenantMailboxSend };

@@ -75,9 +75,15 @@ function isPreProviderOutboundFailure(error = {}, tracker = null) {
   const code = String(error.code || error.message || '').trim();
   if (PRE_PROVIDER_FAILURE_CODES.has(code)) return true;
   if (/^brevo_http_4/.test(code)) return true;
-  if (code === '23502') return true;
+  if (code === '23502') return !providerBoundaryWasCrossed(error, tracker);
   if (code === 'provider_rejected') return true;
   return false;
+}
+
+function markLeafProviderSend(sendFn, providerBoundary) {
+  if (!providerBoundary || typeof providerBoundary.markCrossed !== 'function') return;
+  if (sendFn?.isGovernedTenantMailboxTransport) return;
+  providerBoundary.markCrossed();
 }
 
 function terminalPreProviderReason(error = {}) {
@@ -91,4 +97,5 @@ module.exports = {
   providerBoundaryWasCrossed,
   isPreProviderOutboundFailure,
   terminalPreProviderReason,
+  markLeafProviderSend,
 };
