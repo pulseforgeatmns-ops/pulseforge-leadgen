@@ -307,6 +307,26 @@
    * Fillable verification table field mutations must not show as Prospect List Detected.
    * @param {string} text
    */
+  function looksLikeProspectingCriteriaDisplay(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return false;
+    if (
+      /\bcompany\s+name\b[\s\S]{0,80}\b(?:website|address|phone)\b/i.test(raw)
+    ) {
+      return false;
+    }
+    const hasDecision =
+      /\b(?:\bicp\b|prospecting criteria|scoring rule|controlled batch|refining anchor)\b/i.test(
+        raw
+      ) || /^\s*scout\s*:\s*update\b/im.test(raw);
+    if (!hasDecision) return false;
+    return (
+      /\b(?:daycares?|schools?|industrial|property managers?|warehouses?|manufacturers?)\b/i.test(
+        raw
+      ) || /\b(?:first\s+)?controlled\s+batch\b/i.test(raw)
+    );
+  }
+
   function detectProspectListDisplay(text) {
     const raw = String(text || '').replace(/^\uFEFF/, '');
     if (!raw.trim()) return null;
@@ -315,6 +335,7 @@
     // field mutations, and readiness reassessment.
     if (looksLikeFillableTableMutationDisplay(raw)) return null;
     if (looksLikeFillableVerificationTablePasteDisplay(raw)) return null;
+    if (looksLikeProspectingCriteriaDisplay(raw)) return null;
 
     const lines = raw.split(/\r?\n/);
     let start = -1;

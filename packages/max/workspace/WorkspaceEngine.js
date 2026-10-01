@@ -102,6 +102,10 @@ const {
 const {
   maybeHandleOperatorOperatingUpdate,
 } = require('./OperatorOperatingUpdate');
+const {
+  shouldHandleAnchorIcpScoutCombinedTurn,
+  maybeHandleAnchorIcpScoutTurn,
+} = require('./AnchorIcpScoutRouting');
 const { loadOperatorContextForSession } = require('./OperatorContextLoader');
 const {
   classifyCognitiveMode,
@@ -1208,6 +1212,101 @@ class WorkspaceEngine {
     }
 
     const ownerIs = (...owners) => owners.includes(workspaceOwnership.owner);
+
+    if (
+      shouldHandleAnchorIcpScoutCombinedTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        mission: operatorIntent.mission,
+      })
+    ) {
+      const anchorIcpTurn = await maybeHandleAnchorIcpScoutTurn({
+        question,
+        session,
+        context: rawContext || session.context,
+        mission: operatorIntent.mission,
+        operatorIntent,
+        allowFixtureFallback:
+          (this._scoutAcquisitionOpts &&
+            this._scoutAcquisitionOpts.allowFixtureFallback) === true,
+        fixtureScoutDiscoveryResult:
+          this._scoutAcquisitionOpts &&
+          this._scoutAcquisitionOpts.fixtureScoutDiscoveryResult,
+        ...this._amoRuntimeInput(),
+      });
+      if (anchorIcpTurn) {
+        session.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+        if (session.context && typeof session.context === 'object') {
+          session.context.executionDomain = EXECUTION_DOMAINS.WORKSPACE;
+          session.context._answerCorpus = 'workspace';
+          if (anchorIcpTurn.mission) {
+            session.context.missionId = anchorIcpTurn.mission.id;
+            session.context.acquisitionMissionId = anchorIcpTurn.mission.id;
+          }
+        }
+        const structuredAnchor = anchorIcpTurn.structured;
+        const presentedAnchor = await this._presentation.present(structuredAnchor);
+        const proseAnchor = presentedAnchor.prose || anchorIcpTurn.prose;
+        this._sessions.appendMessage(session.id, {
+          role: 'max',
+          text: proseAnchor,
+          structured: structuredAnchor,
+        });
+        return traceAskReturn('anchor_icp_scout_combined', {
+          sessionId: session.id,
+          prose: proseAnchor,
+          structured: structuredAnchor,
+          metadata: presentedAnchor.metadata,
+          suggestions: resolveResultSuggestions({
+            structured: structuredAnchor,
+            session,
+            question,
+          }),
+          recommendedActions: structuredAnchor.recommendedActions,
+          contextSwitch: envelopeSwitch,
+          domainSwitch: null,
+          context: session.context,
+          presentation: presentedAnchor.presentation,
+          route: ROUTE_KINDS.INTELLIGENCE,
+          mission: anchorIcpTurn.mission || null,
+          resolution: {
+            action: 'anchor_icp_scout_combined',
+            reason: anchorIcpTurn.reason,
+          },
+          executionDomain: EXECUTION_DOMAINS.WORKSPACE,
+          interrogation: null,
+          conversationIntent,
+          domainDecision: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            reason: anchorIcpTurn.reason,
+            missionType: 'acquisition_mission',
+            missionIntent: conversationIntent.intent,
+            confidence: conversationIntent.confidence,
+            previousDomain: session.previousExecutionDomain || null,
+            domainSwitched: false,
+          },
+          executionContext: {
+            domain: EXECUTION_DOMAINS.WORKSPACE,
+            routeKind: ROUTE_KINDS.INTELLIGENCE,
+            reason: anchorIcpTurn.reason,
+            missionType: 'acquisition_mission',
+            missionId:
+              anchorIcpTurn.mission && anchorIcpTurn.mission.id
+                ? anchorIcpTurn.mission.id
+                : null,
+          },
+          workspaceOwnership: {
+            ...workspaceOwnership,
+            missionRuntime: MISSION_RUNTIMES.AMO,
+            missionType: 'acquisition_mission',
+          },
+        }, {
+          missionRuntime: MISSION_RUNTIMES.AMO,
+          responseOwner: workspaceOwnership.owner,
+        });
+      }
+    }
 
     const fallbackToReasoning = (reason) => {
       askPathTrace.traceFallback(
