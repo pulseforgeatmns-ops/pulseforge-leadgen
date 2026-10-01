@@ -1007,6 +1007,7 @@
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var btn = form.querySelector('button[type="submit"]');
+    var redirecting = false;
     var openAiLeadTracked = { value: false };
     var data = {
       name: form.name.value.trim(),
@@ -1043,9 +1044,9 @@
       if (json && json.submission_id) {
         trackOpenAiLeadCreated(openAiLeadTracked, json.submission_id);
       }
-      form.reset();
-      statusEl.className = 'form-status ok';
-      statusEl.textContent = (json && json.message) || SUCCESS;
+      redirecting = true;
+      window.location.replace('/thank-you/?from=commercial');
+      return json;
     }).catch(function () {
       var subject = encodeURIComponent('Facility Assessment request — office cleaning');
       var body = encodeURIComponent(
@@ -1063,7 +1064,7 @@
         });
       }
     }).finally(function () {
-      btn.disabled = false;
+      if (!redirecting) btn.disabled = false;
     });
   });
 

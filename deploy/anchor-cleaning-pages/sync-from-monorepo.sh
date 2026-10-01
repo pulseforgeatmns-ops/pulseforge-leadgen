@@ -9,6 +9,10 @@ if [[ -z "$TARGET" || ! -d "$TARGET/.git" ]]; then
 fi
 SRC="$ROOT/sites/anchor-cleaning"
 cp "$SRC/index.html" "$TARGET/index.html"
+mkdir -p "$TARGET/residential" "$TARGET/thank-you"
+cp "$SRC/residential/index.html" "$TARGET/residential/index.html"
+cp "$SRC/thank-you/index.html" "$TARGET/thank-you/index.html"
+cp "$SRC/sitemap.xml" "$TARGET/sitemap.xml"
 mkdir -p "$TARGET/assets/service-assurance" "$TARGET/assets/brand" "$TARGET/framer"
 # Publish the brand files referenced by the homepage and web manifest as well.
 # A partial asset sync previously left the production header logo returning 404.

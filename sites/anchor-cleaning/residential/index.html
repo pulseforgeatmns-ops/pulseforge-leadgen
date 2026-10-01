@@ -93,16 +93,44 @@
   .quote{padding:132px 0 112px;background:var(--navy-2);color:#fff}.quote-grid{display:grid;grid-template-columns:minmax(310px,.7fr) minmax(520px,1fr);gap:clamp(110px,10vw,190px);align-items:start}.quote h2{font-size:clamp(52px,6.5vw,92px);max-width:8ch;margin:21px 0 22px;color:var(--cream)}.quote-copy{font-size:18px;color:#C8D0D7;max-width:32ch}.quote-points{display:grid;gap:14px;margin-top:34px;font-size:14px;color:#D8DEE3}.quote-points span{display:grid;grid-template-columns:28px 1fr;gap:10px}.quote-points b{font-family:'Fraunces',serif;color:var(--gold);font-size:19px;font-weight:500}.contact-links{display:flex;flex-wrap:wrap;gap:17px 24px;margin-top:32px}.contact-links a{color:#fff;text-decoration:none;border-bottom:1px solid var(--gold);padding-bottom:3px;font-family:'Fraunces',serif;font-size:20px}
   .home-form{display:grid;grid-template-columns:1fr 1fr;gap:24px 28px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:32px;transition:transform 250ms ease,box-shadow 250ms ease}.home-form:hover{transform:translateY(-2px);box-shadow:0 24px 70px rgba(0,0,0,.18)}.home-form label{position:relative;display:grid;gap:8px;font-size:13px;font-weight:600;letter-spacing:.04em;color:#F2F4F5}.home-form label::after{content:"";position:absolute;left:0;right:100%;bottom:0;height:2px;background:var(--gold);transition:right .2s var(--ease)}.home-form label:focus-within::after{right:0}.home-form input,.home-form select{width:100%;min-height:62px;padding:14px 8px;color:#fff;background:transparent;border:0;border-bottom:1px solid rgba(255,255,255,.33);border-radius:0;font:400 16px/1.3 'Inter',sans-serif;transition:border-color .2s ease}.home-form input:hover,.home-form select:hover{border-bottom-color:rgba(255,255,255,.52)}.home-form input:focus,.home-form select:focus{outline:none;border-bottom-color:transparent}.home-form select{appearance:none;padding-right:34px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='%23C49A55' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center}.home-form option{color:var(--ink);background:#fff}.home-form .full{grid-column:1/-1}.home-form .hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}.home-form button{justify-self:start;margin-top:4px}.home-form button:disabled{opacity:.6;cursor:wait}.form-status{align-self:center;min-height:1.4em;font-size:14px;color:#C8D0D7}.form-status.ok{color:#F0D197}.form-status.err{color:#FFD3CD}
   footer{padding:28px 0;background:var(--navy);border-top:1px solid var(--line-dark);color:#BFC8D0}.foot{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;font-size:13px}.foot strong{font-family:'Fraunces',serif;font-size:17px;color:#fff}.foot a{text-decoration:none;border-bottom:1px solid var(--gold)}
+  .service-assurance{background:var(--cream-soft);padding:clamp(96px,11vw,128px) 0 0;position:relative;color:#10202D}
+  .service-assurance::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);width:min(1240px,92vw);height:1px;background:linear-gradient(90deg,transparent,#C49A55 18%,#C49A55 82%,transparent);opacity:.65}
+  .service-assurance-hero{display:grid;grid-template-columns:minmax(280px,.94fr) minmax(320px,1.06fr);gap:clamp(40px,5.5vw,96px);align-items:start;margin-bottom:clamp(64px,7vw,112px)}
+  .service-assurance-eyebrow{display:flex;align-items:center;gap:14px;font-size:11px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#8A6534;margin-bottom:22px}
+  .service-assurance-eyebrow::before{content:"";width:28px;height:1px;background:var(--gold);flex-shrink:0}
+  .service-assurance-story h2{font-size:clamp(44px,5.4vw,82px);line-height:.98;max-width:11ch;margin-bottom:28px;color:#10202D}
+  .service-assurance-body{display:grid;gap:18px;font-size:18px;line-height:1.78;color:#46535F;max-width:38ch}
+  .service-assurance-proof{list-style:none;display:grid;gap:26px;margin:38px 0 42px;padding:0}
+  .service-assurance-proof h3{font-family:'Fraunces',Georgia,serif;font-size:clamp(22px,2.2vw,28px);font-weight:500;color:#10202D;margin-bottom:8px}
+  .service-assurance-proof p{font-size:16px;line-height:1.7;color:#52606B;max-width:36ch}
+  .service-assurance-proof li{padding-left:18px;border-left:2px solid var(--gold)}
+  .service-assurance-cta{display:inline-flex}
+  .portal-mockup-frame{margin:0;background:#fff;border:1px solid rgba(17,31,43,.1);border-radius:10px;box-shadow:0 32px 90px rgba(7,19,31,.11);padding:clamp(10px,1.2vw,14px);transition:transform 700ms var(--ease),box-shadow 700ms var(--ease)}
+  .portal-mockup-frame picture{display:block;width:100%}
+  .portal-mockup-frame img{width:100%;height:auto;display:block;border-radius:6px}
+  .portal-mockup-frame figcaption{margin-top:14px;padding:0 6px 4px;font-size:15px;line-height:1.55;color:#52606B}
+  .portal-mockup-frame--primary{position:relative;top:-6px}
+  .js-ready .portal-mockup-frame--primary.in{transform:translateY(-4px)}
+  .portal-mockup-frame--device{max-width:320px;margin-left:auto;margin-right:auto;box-shadow:0 36px 80px rgba(7,19,31,.14)}
+  .service-assurance-panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(20px,2.5vw,28px);margin-bottom:clamp(72px,8vw,96px)}
+  .portal-feature-panel{background:#fff;border:1px solid rgba(17,31,43,.08);padding:clamp(28px,3.5vw,44px);display:grid;gap:22px;align-content:start}
+  .portal-feature-panel--cream{background:#FBF8F1}
+  .portal-feature-panel h3{font-size:clamp(26px,2.8vw,36px);line-height:1.12;color:#10202D;max-width:16ch}
+  .portal-feature-panel p{font-size:17px;line-height:1.72;color:#52606B;max-width:38ch}
+  .service-assurance-outro{background:#08131F;color:#fff;padding:clamp(56px,6vw,72px) 0;text-align:center;margin-bottom:clamp(48px,6vw,72px)}
+  .service-assurance-outro-inner{display:grid;justify-items:center;gap:22px}
+  .service-assurance-outro h2{font-size:clamp(34px,4.2vw,56px);line-height:1.05;max-width:16ch;color:#fff}
+  .service-assurance-outro p{font-size:18px;line-height:1.75;color:#CBD4DB;max-width:42ch}
   :focus-visible{outline:2px solid #E4C382;outline-offset:4px}.js-ready .reveal{opacity:0;transform:translateY(24px);transition:opacity 700ms var(--ease),transform 700ms var(--ease)}.js-ready .reveal.in{opacity:1;transform:none}
-  @media(max-width:1040px){.mast{grid-template-columns:auto 1fr}.nav-links{display:none}.mast-actions{justify-self:end}.recurring-grid,.why-grid,.section-head,.area-grid{grid-template-columns:1fr;gap:52px}.home-grid{grid-template-columns:1fr}.home-photo{min-height:520px}.home-copy{min-height:500px}.quote-grid{grid-template-columns:1fr;gap:64px}.home-form{max-width:760px}.freq-row{grid-template-columns:90px 150px 1fr}}
-  @media(max-width:760px){.doc{padding-inline:22px}.mast{min-height:92px;gap:14px}.wordmark .brand-lockup{height:52px}.mast-phone{display:none}.mast-actions .btn{min-height:46px;padding:12px 15px;font-size:12px}.hero{background-position:58% center}.hero-inner{padding-top:130px;padding-bottom:74px}.hero h1{font-size:clamp(50px,16vw,72px);max-width:7.6ch}.hero-lede{font-size:18px}.hero-actions{align-items:stretch}.hero-actions .btn{width:100%}.hero-note{display:grid;gap:10px;margin-top:40px}.trust-strip{padding-top:0}.trust-grid{grid-template-columns:1fr 1fr}.trust-item,.trust-item:first-child{padding:20px 16px}.trust-item:nth-child(2){border-right:0}.trust-item:nth-child(-n+2){border-bottom:1px solid var(--line)}.trust-item b{font-size:17px}.recurring,.services,.why{padding:86px 0}.recurring h2,.why h2,.section-head h2{font-size:clamp(43px,13vw,60px)}.freq-row{grid-template-columns:58px 1fr;gap:12px 18px;padding:27px 0}.freq-row .num{font-size:29px}.freq-row h3{font-size:25px}.freq-row p{grid-column:2}.home-statement{padding-bottom:86px}.home-photo{min-height:420px}.home-copy{min-height:460px;padding:54px 28px}.home-copy blockquote{font-size:clamp(39px,12vw,54px)}.section-head{margin-bottom:44px}.service-row{grid-template-columns:58px 1fr;gap:12px 18px;padding:32px 0}.service-row .num{font-size:29px}.service-row h3{font-size:27px}.service-row p,.service-row .text-link{grid-column:2}.principle{grid-template-columns:58px 1fr;gap:18px}.principle .num{font-size:27px}.area{padding:88px 0}.area h2{font-size:clamp(43px,13vw,60px)}.town{grid-template-columns:42px 1fr;gap:16px}.town span:last-child{grid-column:2}.town b{font-size:23px}.quote{padding:88px 0 76px}.quote h2{font-size:clamp(48px,14vw,66px)}.home-form{grid-template-columns:1fr;padding:24px;border-radius:14px}.home-form .full{grid-column:auto}.home-form button{width:100%}.contact-links{display:grid}.foot{display:grid}}
-  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.js-ready .reveal{opacity:1;transform:none;transition:none}.home-photo img,.btn,.home-form,.home-form button{transition:none}.home-grid:hover .home-photo img,.btn:hover,.home-form:hover{transform:none}}
+  @media(max-width:1040px){.mast{grid-template-columns:auto 1fr}.nav-links{display:none}.mast-actions{justify-self:end}.recurring-grid,.why-grid,.section-head,.area-grid{grid-template-columns:1fr;gap:52px}.home-grid{grid-template-columns:1fr}.home-photo{min-height:520px}.home-copy{min-height:500px}.quote-grid{grid-template-columns:1fr;gap:64px}.home-form{max-width:760px}.freq-row{grid-template-columns:90px 150px 1fr}.service-assurance-hero{grid-template-columns:1fr}.portal-mockup-frame--primary{top:0}.service-assurance-panels{grid-template-columns:1fr}.portal-mockup-frame--device{max-width:280px}}
+  @media(max-width:760px){.doc{padding-inline:22px}.mast{min-height:92px;gap:14px}.wordmark .brand-lockup{height:52px}.mast-phone{display:none}.mast-actions .btn{min-height:46px;padding:12px 15px;font-size:12px}.hero{background-position:58% center}.hero-inner{padding-top:130px;padding-bottom:74px}.hero h1{font-size:clamp(50px,16vw,72px);max-width:7.6ch}.hero-lede{font-size:18px}.hero-actions{align-items:stretch}.hero-actions .btn{width:100%}.hero-note{display:grid;gap:10px;margin-top:40px}.trust-strip{padding-top:0}.trust-grid{grid-template-columns:1fr 1fr}.trust-item,.trust-item:first-child{padding:20px 16px}.trust-item:nth-child(2){border-right:0}.trust-item:nth-child(-n+2){border-bottom:1px solid var(--line)}.trust-item b{font-size:17px}.recurring,.services,.why{padding:86px 0}.recurring h2,.why h2,.section-head h2{font-size:clamp(43px,13vw,60px)}.freq-row{grid-template-columns:58px 1fr;gap:12px 18px;padding:27px 0}.freq-row .num{font-size:29px}.freq-row h3{font-size:25px}.freq-row p{grid-column:2}.home-statement{padding-bottom:86px}.home-photo{min-height:420px}.home-copy{min-height:460px;padding:54px 28px}.home-copy blockquote{font-size:clamp(39px,12vw,54px)}.section-head{margin-bottom:44px}.service-row{grid-template-columns:58px 1fr;gap:12px 18px;padding:32px 0}.service-row .num{font-size:29px}.service-row h3{font-size:27px}.service-row p,.service-row .text-link{grid-column:2}.principle{grid-template-columns:58px 1fr;gap:18px}.principle .num{font-size:27px}.area{padding:88px 0}.area h2{font-size:clamp(43px,13vw,60px)}.town{grid-template-columns:42px 1fr;gap:16px}.town span:last-child{grid-column:2}.town b{font-size:23px}.quote{padding:88px 0 76px}.quote h2{font-size:clamp(48px,14vw,66px)}.home-form{grid-template-columns:1fr;padding:24px;border-radius:14px}.home-form .full{grid-column:auto}.home-form button{width:100%}.contact-links{display:grid}.foot{display:grid}.service-assurance-hero{display:flex;flex-direction:column}.service-assurance-story{display:contents}.service-assurance-intro{order:1}.portal-mockup-frame--primary{order:2}.service-assurance-proof{order:3;margin-bottom:0}.service-assurance-cta--inline{display:none}.service-assurance-story h2{max-width:12ch}.service-assurance-body{max-width:none}.portal-feature-panel .portal-mockup-frame--device{max-width:min(280px,78vw)}}
+  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.js-ready .reveal{opacity:1;transform:none;transition:none}.home-photo img,.btn,.home-form,.home-form button,.portal-mockup-frame{transition:none}.home-grid:hover .home-photo img,.btn:hover,.home-form:hover{transform:none}}
 </style>
 </head>
 <body>
 <header><div class="doc mast">
   <a class="wordmark" href="/residential/#top" aria-label="Anchor Cleaning residential home"><img class="brand-lockup" src="/assets/brand/anchor-logo-canonical.png?v=20260916" alt="Anchor Cleaning" width="148" height="74" decoding="async"></a>
-  <nav class="nav-links" aria-label="Residential navigation"><a href="#recurring">Recurring Cleaning</a><a href="#services">Services</a><a href="#why">Why Anchor</a><a href="#area">Service Area</a><a href="/">Commercial</a></nav>
+  <nav class="nav-links" aria-label="Residential navigation"><a href="#recurring">Recurring Cleaning</a><a href="#services">Services</a><a href="#why">Why Anchor</a><a href="#service-assurance">Service Assurance</a><a href="#area">Service Area</a><a href="/">Commercial</a></nav>
   <div class="mast-actions"><a class="mast-phone js-phone" href="tel:+16034202430">(603) 420-2430</a><a class="btn btn-gold" href="#quote">Request Home Cleaning</a></div>
 </div></header>
 <main>
@@ -128,6 +156,75 @@
     <article class="principle reveal"><div class="num">03</div><div><h3>Local owner accountability</h3><p>You are dealing with the owner, not a call center. If something needs attention, you know who owns it.</p></div></article>
     <article class="principle reveal"><div class="num">04</div><div><h3>Thoughtful around your home</h3><p>Your routines, preferences, and pets are part of the plan, because good recurring service should fit the household it serves.</p></div></article>
   </div></div></section>
+  <section class="service-assurance" id="service-assurance" aria-labelledby="service-assurance-heading">
+  <div class="service-assurance-hero doc">
+    <div class="service-assurance-story">
+      <div class="service-assurance-intro">
+        <p class="service-assurance-eyebrow reveal">Service Assurance</p>
+        <h2 class="reveal" id="service-assurance-heading">How Anchor solves inconsistency</h2>
+        <div class="service-assurance-body reveal">
+          <p>The Anchor Standard is backed by a system. A clean home should not depend on who happened to show up that day.</p>
+          <p>Anchor&rsquo;s service system gives every visit a defined scope, gives cleaners a clear way to document completion and exceptions, and gives you visibility when something needs attention.</p>
+          <p>The result is recurring home cleaning that is easier to manage, easier to correct, and far more accountable.</p>
+        </div>
+      </div>
+      <ul class="service-assurance-proof reveal" aria-label="How service assurance works">
+        <li>
+          <h3>Defined service scope</h3>
+          <p>Every home has a clear, documented cleaning scope so expectations do not live in someone&rsquo;s memory.</p>
+        </li>
+        <li>
+          <h3>Cleaner accountability</h3>
+          <p>Cleaners work from visit-specific checklists and can flag exceptions, notes, and issues as they happen.</p>
+        </li>
+        <li>
+          <h3>Visible issue resolution</h3>
+          <p>You can report concerns, see when they&rsquo;ve been acknowledged, and follow the issue through resolution.</p>
+        </li>
+      </ul>
+      <a class="btn btn-gold service-assurance-cta service-assurance-cta--inline reveal" href="#quote">Request Home Cleaning</a>
+    </div>
+    <figure class="portal-mockup-frame portal-mockup-frame--primary reveal">
+      <picture>
+        <source type="image/avif" srcset="/assets/service-assurance/client-dashboard-720w.avif 720w, /assets/service-assurance/client-dashboard-960w.avif 960w, /assets/service-assurance/client-dashboard-1200w.avif 1200w, /assets/service-assurance/client-dashboard-1448w.avif 1448w" sizes="(min-width: 980px) min(52vw, 680px), 92vw">
+        <source type="image/webp" srcset="/assets/service-assurance/client-dashboard-720w.webp 720w, /assets/service-assurance/client-dashboard-960w.webp 960w, /assets/service-assurance/client-dashboard-1200w.webp 1200w, /assets/service-assurance/client-dashboard-1448w.webp 1448w" sizes="(min-width: 980px) min(52vw, 680px), 92vw">
+        <img src="/assets/service-assurance/client-dashboard.png" width="1448" height="1086" alt="Anchor Service Assurance Portal showing recent cleaning visits, service status, next service, open issues, and facility scope." loading="lazy" decoding="async">
+      </picture>
+      <figcaption>See completed visits, upcoming service, open issues, and the defined scope for your home in one place.</figcaption>
+    </figure>
+  </div>
+  <div class="service-assurance-panels doc" id="service-assurance-how">
+    <article class="portal-feature-panel reveal">
+      <figure class="portal-mockup-frame portal-mockup-frame--device">
+        <picture>
+          <source type="image/avif" srcset="/assets/service-assurance/cleaner-checklist-280w.avif 280w, /assets/service-assurance/cleaner-checklist-390w.avif 390w, /assets/service-assurance/cleaner-checklist-560w.avif 560w, /assets/service-assurance/cleaner-checklist-780w.avif 780w, /assets/service-assurance/cleaner-checklist-941w.avif 941w" sizes="(min-width: 980px) 320px, min(72vw, 390px)">
+          <source type="image/webp" srcset="/assets/service-assurance/cleaner-checklist-280w.webp 280w, /assets/service-assurance/cleaner-checklist-390w.webp 390w, /assets/service-assurance/cleaner-checklist-560w.webp 560w, /assets/service-assurance/cleaner-checklist-780w.webp 780w, /assets/service-assurance/cleaner-checklist-941w.webp 941w" sizes="(min-width: 980px) 320px, min(72vw, 390px)">
+          <img src="/assets/service-assurance/cleaner-checklist.png" width="941" height="1672" alt="Anchor cleaner mobile checklist showing completed tasks, flagged issues, and visit exception documentation." loading="lazy" decoding="async">
+        </picture>
+      </figure>
+      <h3>A clear scope for every visit</h3>
+      <p>Cleaners work from home-specific checklists, document completion, and flag anything that needs attention before the visit is closed.</p>
+    </article>
+    <article class="portal-feature-panel portal-feature-panel--cream reveal">
+      <figure class="portal-mockup-frame">
+        <picture>
+          <source type="image/avif" srcset="/assets/service-assurance/issues-resolution-720w.avif 720w, /assets/service-assurance/issues-resolution-960w.avif 960w, /assets/service-assurance/issues-resolution-1200w.avif 1200w, /assets/service-assurance/issues-resolution-1448w.avif 1448w" sizes="(min-width: 980px) min(42vw, 560px), 92vw">
+          <source type="image/webp" srcset="/assets/service-assurance/issues-resolution-720w.webp 720w, /assets/service-assurance/issues-resolution-960w.webp 960w, /assets/service-assurance/issues-resolution-1200w.webp 1200w, /assets/service-assurance/issues-resolution-1448w.webp 1448w" sizes="(min-width: 980px) min(42vw, 560px), 92vw">
+          <img src="/assets/service-assurance/issues-resolution.png" width="1448" height="1086" alt="Anchor client portal issue-resolution screen showing a missed kitchen sink report progressing from open to resolved." loading="lazy" decoding="async">
+        </picture>
+      </figure>
+      <h3>When something is missed, it gets handled</h3>
+      <p>You can report an issue directly, see when Anchor acknowledges it, and follow the resolution through completion.</p>
+    </article>
+  </div>
+  <div class="service-assurance-outro">
+    <div class="service-assurance-outro-inner doc reveal">
+      <h2>Let&rsquo;s build a cleaning rhythm for your home.</h2>
+      <p>Share the basics about your home and schedule, and Jacob will follow up with a plan built around your priorities.</p>
+      <a class="btn btn-gold" href="#quote">Request Home Cleaning</a>
+    </div>
+  </div>
+</section>
   <section class="area" id="area"><div class="doc area-grid"><div><div class="eyebrow light reveal">Service area</div><h2 class="reveal">Bedford first. Greater Manchester throughout.</h2><p class="area-copy reveal">Anchor serves homeowners across the Manchester area, with a particular focus on dependable recurring routes in Bedford and the surrounding towns.</p></div><div class="towns">
     <div class="town reveal"><div class="num">01</div><b>Bedford</b><span>Primary residential area</span></div><div class="town reveal"><div class="num">02</div><b>Manchester</b><span>Citywide</span></div><div class="town reveal"><div class="num">03</div><b>Goffstown · Hooksett</b><span>North &amp; west</span></div><div class="town reveal"><div class="num">04</div><b>Auburn · Londonderry</b><span>East &amp; south</span></div><div class="town reveal"><div class="num">05</div><b>Merrimack · Litchfield · Derry</b><span>Nearby homes</span></div>
   </div></div></section>
@@ -149,8 +246,8 @@
     if (submissionId) payload.submission_id = submissionId;
     window.oaiq('measure', 'lead_created', payload);
   }
-  var form=document.getElementById('home-cleaning-form'),statusEl=document.getElementById('form-status'),endpoint='https://pulseforge-leadgen-production.up.railway.app/api/public/walkthrough',SUCCESS="Thank you. Jacob will follow up about your home cleaning plan.";
-  form.addEventListener('submit',function(e){e.preventDefault();var btn=form.querySelector('button[type="submit"]');var openAiLeadTracked={value:false};var data={name:form.name.value.trim(),business_name:'Residential home',phone:form.phone.value.trim(),email:form.email.value.trim(),city:form.city.value.trim(),space_type:form.service.value,company_website:form.company_website.value};if(!data.name||!data.phone||!data.email||!data.city||!data.space_type){statusEl.className='form-status err';statusEl.textContent='Please fill in every field.';return}btn.disabled=true;statusEl.className='form-status';statusEl.textContent='Sending…';fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(data)}).then(function(res){if(res.status===204)return{message:SUCCESS};return res.json().then(function(json){if(!res.ok)throw new Error((json&&json.error)||'Could not send');return json})}).then(function(json){track('residential_home_cleaning_submit',{event_category:'lead',service:data.space_type});if(json&&json.submission_id){trackOpenAiLeadCreated(openAiLeadTracked,json.submission_id)}form.reset();statusEl.className='form-status ok';statusEl.textContent=(json&&json.message)||SUCCESS}).catch(function(){var subject=encodeURIComponent('Residential home cleaning request'),body=encodeURIComponent('Name: '+data.name+'\nPhone: '+data.phone+'\nEmail: '+data.email+'\nCity / town: '+data.city+'\nService: '+data.space_type);statusEl.className='form-status err';statusEl.innerHTML='Could not send the form. <a href="mailto:jacob@goanchorcleaning.com?subject='+subject+'&body='+body+'">Email Jacob instead</a> or <a href="tel:+16034202430">call/text (603) 420-2430</a>.'}).finally(function(){btn.disabled=false})});
+  var form=document.getElementById('home-cleaning-form'),statusEl=document.getElementById('form-status'),endpoint='https://pulseforge-leadgen-production.up.railway.app/api/public/walkthrough',THANK_YOU='/thank-you/?from=residential';
+  form.addEventListener('submit',function(e){e.preventDefault();var btn=form.querySelector('button[type="submit"]');var openAiLeadTracked={value:false};var redirecting=false;var data={name:form.name.value.trim(),business_name:'Residential home',phone:form.phone.value.trim(),email:form.email.value.trim(),city:form.city.value.trim(),space_type:form.service.value,company_website:form.company_website.value};if(!data.name||!data.phone||!data.email||!data.city||!data.space_type){statusEl.className='form-status err';statusEl.textContent='Please fill in every field.';return}btn.disabled=true;statusEl.className='form-status';statusEl.textContent='Sending…';fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(data)}).then(function(res){if(res.status===204)return{ok:true};return res.json().then(function(json){if(!res.ok)throw new Error((json&&json.error)||'Could not send');return json})}).then(function(json){track('residential_home_cleaning_submit',{event_category:'lead',service:data.space_type});if(json&&json.submission_id){trackOpenAiLeadCreated(openAiLeadTracked,json.submission_id)}redirecting=true;window.location.replace(THANK_YOU)}).catch(function(){var subject=encodeURIComponent('Residential home cleaning request'),body=encodeURIComponent('Name: '+data.name+'\nPhone: '+data.phone+'\nEmail: '+data.email+'\nCity / town: '+data.city+'\nService: '+data.space_type);statusEl.className='form-status err';statusEl.innerHTML='Could not send the form. <a href="mailto:jacob@goanchorcleaning.com?subject='+subject+'&body='+body+'">Email Jacob instead</a> or <a href="tel:+16034202430">call/text (603) 420-2430</a>.'}).finally(function(){if(!redirecting)btn.disabled=false})});
   var revealEls=document.querySelectorAll('.reveal'),io=new IntersectionObserver(function(entries){entries.forEach(function(entry){if(entry.isIntersecting){entry.target.classList.add('in');io.unobserve(entry.target)}})},{threshold:.1});revealEls.forEach(function(el,index){el.style.transitionDelay=(Math.min(index%5,4)*80)+'ms';io.observe(el)});window.addEventListener('load',function(){setTimeout(function(){revealEls.forEach(function(el){el.classList.add('in')})},1000)});
   var fine=window.matchMedia('(hover:hover) and (pointer:fine)').matches,reduce=window.matchMedia('(prefers-reduced-motion:reduce)').matches;if(fine&&!reduce){document.querySelectorAll('.btn,.home-form button').forEach(function(btn){btn.addEventListener('mousemove',function(e){var rect=btn.getBoundingClientRect(),x=Math.max(-10,Math.min(10,(e.clientX-rect.left-rect.width/2)*.22)),y=Math.max(-8,Math.min(8,(e.clientY-rect.top-rect.height/2)*.3));btn.style.transform='translate('+x+'px,'+y+'px)'});btn.addEventListener('mouseleave',function(){btn.style.transform=''})})}
 </script>
