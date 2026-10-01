@@ -796,9 +796,97 @@ function hasValidGuidedAnswer(state, questionId) {
   return hasPersistedNormalizedAnswer(state, questionId);
 }
 
+/** Operator copy/regeneration commands — not answers to guided intake questions. */
+const EXPLICIT_COPYWRITING_COMMAND_RE =
+  /\b(?:rewrite\s+(?:this|that|the|it\b)|make\s+(?:it|this|that)\s+shorter|make\s+(?:it|this|that)\s+longer|change\s+(?:the\s+)?(?:tone|wording)|regenerat(?:e|ing)\s+(?:this|that|the|brief|blueprint|summary|copy)|try\s+again|use\s+this\s+wording)\b/i;
+
+/** Business success-metrics vocabulary (Studio Substral / operator scorecard intake). */
+const SUCCESS_METRICS_EVIDENCE_RE =
+  /\b(?:prospects?|repl(?:y|ies)|calls?|proposals?|revenue|signals?|urgency|budget\s+fit|lead\s+flow|pipeline|discovery\s+calls?|qualified|kpi|metrics?|walkthroughs?|conversion|closed|demand)\b/i;
+
+function looksLikeExplicitCopywritingCommand(text, opts = {}) {
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+  if (EXPLICIT_COPYWRITING_COMMAND_RE.test(raw)) return true;
+  return looksLikeInterviewWritingGuidance(raw, {
+    ...opts,
+    looksLikeRefinement: undefined,
+    containsMetaInstruction: undefined,
+  });
+}
+
+function looksLikeSuccessMetricsBusinessEvidence(text) {
+  return SUCCESS_METRICS_EVIDENCE_RE.test(String(text || ''));
+}
+
+function shouldForceActiveGuidedDirectAnswer(text, question, messageType, classifyOpts = {}) {
+  if (!question || !question.id) return false;
+  const copyOpts = {
+    ...classifyOpts,
+    activeQuestion: question,
+    awaitingQuestionId: question.id,
+  };
+  if (looksLikeExplicitCopywritingCommand(text, copyOpts)) return false;
+  if (
+    messageType === MESSAGE_TYPES.SKIP ||
+    messageType === MESSAGE_TYPES.CORRECTION ||
+    messageType === MESSAGE_TYPES.ADD_ON ||
+    messageType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT ||
+    messageType === MESSAGE_TYPES.APPROVAL ||
+    messageType === MESSAGE_TYPES.APPROVAL_PLUS_NEXT_REQUEST ||
+    messageType === MESSAGE_TYPES.ARTIFACT_REQUEST
+  ) {
+    return false;
+  }
+  if (question.id === 'success_metrics' && looksLikeSuccessMetricsBusinessEvidence(text)) {
+    return true;
+  }
+  return messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK;
+}
+
+function coerceActiveGuidedAnswerIntent(text, question, messageType, classifyOpts = {}) {
+  if (!shouldForceActiveGuidedDirectAnswer(text, question, messageType, classifyOpts)) {
+    return messageType;
+  }
+  return MESSAGE_TYPES.DIRECT_ANSWER;
+}
+
+function reconcilePersistedGuidedAnswerSlots(state) {
+  if (!state || state.mode === 'notes') return state;
+  for (const row of QUESTION_BANK) {
+    if (hasValidGuidedAnswer(state, row.id)) continue;
+    if (!hasPersistedNormalizedAnswer(state, row.id)) continue;
+    const section = row.section;
+    const field = SECTION_TO_PRIMARY_FIELD[section];
+    const facts = state.normalizedFacts || {};
+    let backfill = '';
+    if (field) {
+      const val = facts[field];
+      if (Array.isArray(val) && val.length) backfill = val.join(', ');
+      else if (typeof val === 'string' && val.trim()) backfill = val.trim();
+    }
+    if (!backfill && state.sectionState && state.sectionState[section]) {
+      backfill = String(state.sectionState[section].summary || '')
+        .replace(/^Success will be judged by\s+/i, '')
+        .replace(/\.\s*$/, '')
+        .trim();
+    }
+    if (backfill && !answerLooksEmpty(backfill)) {
+      state.answers = { ...(state.answers || {}), [row.id]: backfill };
+    }
+  }
+  return syncStepIndexToFirstUnanswered(state);
+}
+
 function shouldLogInterviewRouting() {
   const flag = String(process.env.CIE_INTERVIEW_ROUTING_LOG || '').trim().toLowerCase();
-  return flag === '1' || flag === 'true' || flag === 'yes';
+  if (flag === '0' || flag === 'false' || flag === 'no') return false;
+  if (flag === '1' || flag === 'true' || flag === 'yes') return true;
+  return (
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+    Boolean(process.env.RAILWAY_PROJECT_ID)
+  );
 }
 
 function logInterviewRoutingTurn(sessionId, payload) {
@@ -814,6 +902,52 @@ function logInterviewRoutingTurn(sessionId, payload) {
   } catch (_) {
     // ignore logging failures
   }
+}
+
+function buildInterviewRoutingDiagnostics({
+  session,
+  interviewState,
+  question,
+  text,
+  planned,
+  messageType,
+  plannedMessageClass,
+  classifyOpts,
+  interviewEscape,
+}) {
+  const activeQuestionKey = question && question.id;
+  const narrowWritingOpts = {
+    ...classifyOpts,
+    looksLikeRefinement: undefined,
+    containsMetaInstruction: undefined,
+  };
+  const stateSnapshot = interviewState || session.interview_state || {};
+  const facts = stateSnapshot.normalizedFacts || {};
+  const answers = stateSnapshot.answers || {};
+  return {
+    tenantId: session.client_id != null ? String(session.client_id) : null,
+    workspaceId: session.id,
+    interviewSessionId: session.id,
+    activeQuestionKeyBefore: activeQuestionKey,
+    rawDetectedIntent: plannedMessageClass || (planned && planned.messageClass) || null,
+    finalDetectedIntent: messageType,
+    interviewEscape: interviewEscape || null,
+    looksLikeWritingGuidance: looksLikeInterviewWritingGuidance(text, narrowWritingOpts),
+    looksLikeRefinementFeedback: looksLikeRefinementFeedback(text),
+    containsMetaInstructionLanguage: containsMetaInstructionLanguage(text),
+    looksLikeExplicitCopywritingCommand: looksLikeExplicitCopywritingCommand(text),
+    planReasoningTurnClass: planned && planned.messageClass,
+    planReasoningTurnRoute:
+      planned && planned.messageClass === MESSAGE_TYPES.REFINEMENT_FEEDBACK
+        ? 'REFINEMENT_FEEDBACK'
+        : planned && planned.messageClass === MESSAGE_TYPES.DIRECT_ANSWER
+          ? 'DIRECT_ANSWER'
+          : planned && planned.messageClass,
+    destinationSection: question && question.section,
+    successMetricsBefore: Array.isArray(facts.success_metrics) ? [...facts.success_metrics] : [],
+    successMetricsAnswerBefore: answers.success_metrics || null,
+    successMetricsCompleteBefore: hasValidGuidedAnswer(stateSnapshot, 'success_metrics'),
+  };
 }
 
 function syncStepIndexToFirstUnanswered(state) {
@@ -1263,6 +1397,42 @@ function classifyUserResponse(text, opts = {}) {
   }
   if (speaker === 'system' || speaker === 'developer' || context === 'system_guidance') {
     return ANSWER_KINDS.SYSTEM_GUIDANCE;
+  }
+  const activeQuestion = opts.activeQuestion || null;
+  const activeQuestionId =
+    opts.awaitingQuestionId ||
+    (activeQuestion && (activeQuestion.id || activeQuestion.questionId)) ||
+    null;
+  if (
+    activeQuestionId === 'success_metrics' &&
+    looksLikeSuccessMetricsBusinessEvidence(text) &&
+    !looksLikeExplicitCopywritingCommand(text, {
+      ...opts,
+      activeQuestion,
+      awaitingQuestionId: activeQuestionId,
+    })
+  ) {
+    return ANSWER_KINDS.BUSINESS_FACT;
+  }
+  if (
+    isActiveGuidedIntakeTurn(opts) &&
+    !looksLikeExplicitCopywritingCommand(text, {
+      ...opts,
+      activeQuestion,
+      awaitingQuestionId: activeQuestionId,
+    }) &&
+    (activeQuestionId === 'success_metrics'
+      ? looksLikeSuccessMetricsBusinessEvidence(text)
+      : true)
+  ) {
+    const guidedMsgType = classifyInterviewMessage(text, {
+      ...opts,
+      awaitingQuestionId: activeQuestionId,
+      activeQuestion,
+    });
+    if (guidedMsgType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+      return ANSWER_KINDS.BUSINESS_FACT;
+    }
   }
   const msgType = classifyInterviewMessage(text, opts);
   if (msgType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
@@ -6402,20 +6572,23 @@ async function applySectionUpdate(
   const guidedAuthoritativeCapture =
     isActiveGuidedIntakeTurn(classifyOpts) &&
     authoritativeGuidedSection(classifyOpts) === sectionKey;
-
-  if (
-    responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK &&
+  const narrowWritingGuidance = looksLikeInterviewWritingGuidance(rawStatement, {
+    ...classifyOpts,
+    awaitingQuestionId:
+      classifyOpts.awaitingQuestionId ||
+      (classifyOpts.activeQuestion &&
+        (classifyOpts.activeQuestion.id || classifyOpts.activeQuestion.questionId)),
+    looksLikeRefinement: undefined,
+    containsMetaInstruction: undefined,
+  });
+  const forceGuidedBusinessFact =
     guidedAuthoritativeCapture &&
-    !looksLikeInterviewWritingGuidance(rawStatement, {
-      ...classifyOpts,
-      awaitingQuestionId:
-        classifyOpts.awaitingQuestionId ||
-        (classifyOpts.activeQuestion &&
-          (classifyOpts.activeQuestion.id || classifyOpts.activeQuestion.questionId)),
-      looksLikeRefinement: undefined,
-      containsMetaInstruction: undefined,
-    })
-  ) {
+    !looksLikeExplicitCopywritingCommand(rawStatement, classifyOpts) &&
+    (!narrowWritingGuidance ||
+      (sectionKey === 'successMetrics' &&
+        looksLikeSuccessMetricsBusinessEvidence(rawStatement)));
+
+  if (responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK && forceGuidedBusinessFact) {
     responseKind = ANSWER_KINDS.BUSINESS_FACT;
   }
 
@@ -7533,7 +7706,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   }
 
   let state = normalizeRecoveredInterviewState(session.interview_state || initialInterviewState());
-  state = syncStepIndexToFirstUnanswered(state);
+  state = reconcilePersistedGuidedAnswerSlots(state);
   if (state !== session.interview_state) {
     session.interview_state = state;
     await store.updateSession(session.id, { interview_state: state });
@@ -7732,7 +7905,8 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       domainToSection: DOMAIN_TO_SECTION,
     },
   });
-  let messageType = planned.messageClass;
+  const plannedMessageClass = planned.messageClass;
+  let messageType = plannedMessageClass;
   if (
     messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK &&
     q.question.id &&
@@ -7744,6 +7918,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   ) {
     messageType = MESSAGE_TYPES.DIRECT_ANSWER;
   }
+  messageType = coerceActiveGuidedAnswerIntent(text, q.question, messageType, classifyOpts);
   reasoningMemory = markClassification(reasoningMemory, messageType);
   state.reasoningMemory = reasoningMemory;
 
@@ -7751,18 +7926,21 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
 
   logInterviewRoutingTurn(session.id, {
     phase: 'classify',
-    activeQuestionId: q.question.id,
-    activeSection: q.question.section,
-    interviewEscape,
-    detectedIntent: messageType,
-    plannedMessageClass: planned.messageClass,
-    looksLikeWritingGuidance: looksLikeInterviewWritingGuidance(text, {
-      ...classifyOpts,
-      looksLikeRefinement: undefined,
-      containsMetaInstruction: undefined,
+    ...buildInterviewRoutingDiagnostics({
+      session,
+      interviewState: state,
+      question: q.question,
+      text,
+      planned,
+      messageType,
+      plannedMessageClass,
+      classifyOpts,
+      interviewEscape,
     }),
     awaitingQuestionId: state.awaitingQuestionId,
     stepIndex: state.stepIndex,
+    responseBranch:
+      messageType === MESSAGE_TYPES.DIRECT_ANSWER ? 'direct_answer_path' : 'non_answer_path',
   });
 
   // Non-answers: store appropriately, stay on the same question (or skip-advance), respond conversationally.
@@ -8424,7 +8602,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   }
 
   session.interview_state = state;
-  const { evidenceRow, contradiction, skippedAsGuidance, responseKind: applyResponseKind } =
+  let { evidenceRow, contradiction, skippedAsGuidance, responseKind: applyResponseKind } =
     await applySectionUpdate(
     store,
     session,
@@ -8441,6 +8619,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     derived_evidence: evidenceRow ? [evidenceRow.id] : [],
   });
 
+  const nextQuestionAfterPersist = skippedAsGuidance ? q : currentQuestion(state);
   logInterviewRoutingTurn(session.id, {
     phase: 'persist',
     activeQuestionId: q.question.id,
@@ -8450,9 +8629,49 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     skippedAsGuidance: Boolean(skippedAsGuidance),
     normalizedMetrics: (state.normalizedFacts && state.normalizedFacts.success_metrics) || [],
     answersSuccessMetrics: state.answers && state.answers.success_metrics,
+    successMetricsCompleteAfter: hasValidGuidedAnswer(state, 'success_metrics'),
+    nextQuestionKey: nextQuestionAfterPersist && nextQuestionAfterPersist.question.id,
     stepIndex: state.stepIndex,
     awaitingQuestionId: state.awaitingQuestionId,
+    responseBranch: skippedAsGuidance ? 'skipped_as_guidance' : 'accepted_direct_answer',
   });
+
+  if (
+    skippedAsGuidance &&
+    q.question.id === 'success_metrics' &&
+    looksLikeSuccessMetricsBusinessEvidence(text) &&
+    !looksLikeExplicitCopywritingCommand(text, classifyOpts)
+  ) {
+    skippedAsGuidance = false;
+    state.normalizedFacts = ingestAnswerIntoNormalizedFacts(
+      state.normalizedFacts || emptyNormalizedFacts(),
+      'successMetrics',
+      text,
+      { provenance: clientTurn.id }
+    );
+    state.answers = { ...(state.answers || {}), [q.question.id]: text };
+    const rebuilt = sectionsFromNormalizedFacts(state.normalizedFacts, state.sectionState || emptySections());
+    const curSection = (state.sectionState || emptySections()).successMetrics || emptySection();
+    state.sectionState = {
+      ...(state.sectionState || emptySections()),
+      successMetrics: {
+        ...curSection,
+        summary: rebuilt.successMetrics.summary,
+        confidence: Math.max(curSection.confidence || 0, EXPLICIT_CONFIDENCE),
+        unknowns: [],
+      },
+    };
+    session.interview_state = state;
+    logInterviewRoutingTurn(session.id, {
+      phase: 'recover',
+      activeQuestionId: q.question.id,
+      destinationSection: 'successMetrics',
+      finalDetectedIntent: MESSAGE_TYPES.DIRECT_ANSWER,
+      successMetricsCompleteAfter: true,
+      normalizedMetrics: state.normalizedFacts.success_metrics || [],
+      responseBranch: 'success_metrics_recovery',
+    });
+  }
 
   if (skippedAsGuidance) {
     state.awaitingQuestionId = q.question.id;
