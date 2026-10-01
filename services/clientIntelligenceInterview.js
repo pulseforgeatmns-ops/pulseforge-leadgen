@@ -101,6 +101,7 @@ const {
   looksLikeExplicitDeferral,
   looksLikeSkip,
   detectInterviewEscapeIntent,
+  looksLikeInterviewWritingGuidance,
 } = require('./clientIntelligenceReasoning');
 
 const SESSION_STATUSES = Object.freeze([
@@ -1209,6 +1210,20 @@ function classifyUserResponse(text, opts = {}) {
   }
   const msgType = classifyInterviewMessage(text, opts);
   if (msgType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+    const awaitingQuestionId =
+      opts.awaitingQuestionId ||
+      (opts.activeQuestion && (opts.activeQuestion.id || opts.activeQuestion.questionId));
+    if (
+      awaitingQuestionId &&
+      !looksLikeInterviewWritingGuidance(text, {
+        ...opts,
+        awaitingQuestionId,
+        looksLikeRefinement: undefined,
+        containsMetaInstruction: undefined,
+      })
+    ) {
+      return ANSWER_KINDS.BUSINESS_FACT;
+    }
     return ANSWER_KINDS.REFINEMENT_FEEDBACK;
   }
   // Supplemental / correction / direct answers can carry business substance.
@@ -8301,6 +8316,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     });
   }
 
+  session.interview_state = state;
   const { evidenceRow, contradiction, skippedAsGuidance } = await applySectionUpdate(
     store,
     session,
@@ -8310,6 +8326,8 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     clientTurn.id,
     classifyOpts
   );
+  state.normalizedFacts = session.interview_state.normalizedFacts || state.normalizedFacts;
+  state.sectionState = session.interview_state.sectionState || state.sectionState;
 
   await store.updateTurn(clientTurn.id, {
     derived_evidence: evidenceRow ? [evidenceRow.id] : [],
