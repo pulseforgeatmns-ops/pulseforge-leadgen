@@ -387,6 +387,20 @@ describe('Client Intelligence interview answer routing (P0)', () => {
     assert.match(session.interview_state.answers.success_metrics || '', /weak signal/i);
   });
 
+  it('13. success-metrics answer mentioning Max regenerate phrasing is not writing guidance', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 513 }, opts);
+    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+    const metricsAnswer =
+      'We watch qualified prospects, positive replies, and discovery calls booked. Max helps us regenerate weekly pipeline reports, but success is proposals sent, proposals accepted, and revenue closed — plus reply quality, urgency, and budget fit.';
+    const turn = await postInterviewMessage(started.interviewId, metricsAnswer, opts);
+    assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
+    assert.notEqual(turn.question?.id, 'success_metrics');
+    const session = await store.getSession(started.interviewId);
+    assert.match(session.interview_state.answers.success_metrics || '', /qualified prospects/i);
+    assert.match(session.interview_state.answers.success_metrics || '', /revenue closed/i);
+  });
+
   it('12. persisted success_metrics evidence recovers stuck step without re-ask loop', async () => {
     const { opts, store } = withStore();
     const started = await startClientInterview({ clientId: 512 }, opts);
