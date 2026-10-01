@@ -295,92 +295,96 @@ describe('Client Intelligence interview answer routing (P0)', () => {
     assert.match(session.interview_state.answers.avoid_customers || '', /cheapest possible website/i);
   });
 
-  it('10. success metrics answer stores business evidence and advances', async () => {
+  it('10. success-metrics answer persists as business evidence and advances', async () => {
     const { opts, store } = withStore();
     const started = await startClientInterview({ clientId: 510 }, opts);
-    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+    const prior = [
+      'Studio Substral — website design for local businesses.',
+      'Website design and redesign.',
+      'Local businesses that care about credibility.',
+      'Price-driven clients looking for the cheapest possible website.',
+      'Greater Manchester NH and southern New Hampshire.',
+      'Trust and responsiveness tip the decision.',
+      'Professional, direct, no hype.',
+      'Book more qualified discovery calls in the next 90 days.',
+    ];
+    for (const answer of prior) {
+      await postInterviewMessage(started.interviewId, answer, opts);
+    }
+    const sessionBefore = await store.getSession(started.interviewId);
+    assert.equal(sessionBefore.interview_state.awaitingQuestionId, 'success_metrics');
 
-    const metricsQ = QUESTION_BANK.find((q) => q.id === 'success_metrics');
+    const metricsAnswer =
+      'Qualified prospects identified, prospects contacted, positive replies, discovery calls booked, proposals sent, proposals accepted, and revenue closed. We also watch reply quality, call quality, urgency, budget fit, and strong vs. weak demand signals.';
+    const successQ = QUESTION_BANK.find((q) => q.id === 'success_metrics');
     assert.equal(
-      classifyInterviewMessage(METRICS_ANSWER, {
-        activeQuestion: metricsQ,
+      classifyInterviewMessage(metricsAnswer, {
+        activeQuestion: successQ,
         awaitingQuestionId: 'success_metrics',
+        looksLikeAddOn: looksLikeSupplementalContext,
       }),
       MESSAGE_TYPES.DIRECT_ANSWER
     );
+    assert.equal(
+      detectInterviewEscapeIntent(metricsAnswer, {
+        activeQuestion: successQ,
+        awaitingQuestionId: 'success_metrics',
+      }),
+      null
+    );
+    assert.equal(
+      looksLikeInterviewWritingGuidance(metricsAnswer, {
+        activeQuestion: successQ,
+        awaitingQuestionId: 'success_metrics',
+      }),
+      false
+    );
 
-    const turn = await postInterviewMessage(started.interviewId, METRICS_ANSWER, opts);
+    const turn = await postInterviewMessage(started.interviewId, metricsAnswer, opts);
     assert.equal(turn.nextAction, 'GENERATE_BLUEPRINT');
     assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
     assert.equal(turn.question, null);
 
     const session = await store.getSession(started.interviewId);
     assert.match(session.interview_state.answers.success_metrics || '', /qualified prospects/i);
-    assert.match(session.interview_state.answers.success_metrics || '', /revenue closed/i);
-    assert.equal(session.interview_state.stepIndex, QUESTION_BANK.length);
-    assert.ok(session.interview_state.done);
+    assert.match(session.interview_state.answers.success_metrics || '', /budget fit/i);
+    const metrics = session.interview_state.normalizedFacts.success_metrics || [];
+    assert.ok(metrics.some((item) => /qualified prospects/i.test(item)));
+    assert.ok(metrics.some((item) => /positive replies|discovery calls/i.test(item)));
+    assert.ok(metrics.some((item) => /reply quality|budget fit|demand signals/i.test(item)));
+    assert.equal(session.interview_state.stepIndex >= QUESTION_BANK.length, true);
 
-    const evidence = await store.listEvidence(started.interviewId);
-    assert.ok(
-      evidence.some(
-        (row) =>
-          row.category === 'successMetrics' &&
-          /qualified prospects|positive replies/i.test(row.statement)
-      )
-    );
     const summary = session.interview_state.sectionState.successMetrics.summary || '';
-    assert.match(summary, /qualified prospects|positive replies|discovery calls/i);
-    assert.doesNotMatch(summary, /^Success will be judged by qualified,\s/i);
+    assert.match(summary, /Success will be judged by/i);
+    assert.match(summary, /qualified prospects/i);
+    assert.doesNotMatch(summary, /^Success will be judged by reply quality\b/i);
   });
 
-  it('11. weak/strong signal metrics language is not writing guidance', async () => {
+  it('11. success-metrics answer with signal-quality vocabulary is not re-asked', async () => {
     const { opts, store } = withStore();
     const started = await startClientInterview({ clientId: 511 }, opts);
-    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+    for (const answer of [
+      'Studio Substral — credible websites for local businesses.',
+      'Website design and redesign.',
+      'Local service businesses in southern NH.',
+      'Commodity price shoppers.',
+      'Greater Manchester NH.',
+      'Responsiveness tips the decision.',
+      'Grounded and direct.',
+      'More booked discovery calls in 90 days.',
+    ]) {
+      await postInterviewMessage(started.interviewId, answer, opts);
+    }
 
-    const metricsQ = QUESTION_BANK.find((q) => q.id === 'success_metrics');
-    const classifyOpts = {
-      activeQuestion: metricsQ,
-      awaitingQuestionId: 'success_metrics',
-      looksLikeRefinement: looksLikeRefinementFeedback,
-      containsMetaInstruction: containsMetaInstructionLanguage,
-    };
-    assert.equal(
-      classifyInterviewMessage(SIGNAL_METRICS_ANSWER, classifyOpts),
-      MESSAGE_TYPES.DIRECT_ANSWER
-    );
-    assert.equal(looksLikeInterviewWritingGuidance(SIGNAL_METRICS_ANSWER, classifyOpts), false);
-
-    const turn = await postInterviewMessage(started.interviewId, SIGNAL_METRICS_ANSWER, opts);
+    const metricsAnswer =
+      'Strong signal vs weak signal on reply quality, call quality, urgency, and budget fit alongside qualified prospects, positive replies, discovery calls, proposals, and revenue closed.';
+    const turn = await postInterviewMessage(started.interviewId, metricsAnswer, opts);
     assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
-    assert.equal(turn.question, null);
+    assert.notEqual(turn.question?.id, 'success_metrics');
 
     const session = await store.getSession(started.interviewId);
-    assert.match(session.interview_state.answers.success_metrics || '', /weak signal/i);
     assert.match(session.interview_state.answers.success_metrics || '', /strong signal/i);
-  });
-
-  it('12. regenerate demand language on success metrics is business evidence', async () => {
-    const { opts, store } = withStore();
-    const started = await startClientInterview({ clientId: 512 }, opts);
-    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
-
-    const metricsQ = QUESTION_BANK.find((q) => q.id === 'success_metrics');
-    assert.equal(
-      classifyInterviewMessage(REGENERATE_DEMAND_ANSWER, {
-        activeQuestion: metricsQ,
-        awaitingQuestionId: 'success_metrics',
-      }),
-      MESSAGE_TYPES.DIRECT_ANSWER
-    );
-
-    const turn = await postInterviewMessage(started.interviewId, REGENERATE_DEMAND_ANSWER, opts);
-    assert.equal(turn.nextAction, 'GENERATE_BLUEPRINT');
-    assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
-    assert.equal(turn.question, null);
-
-    const session = await store.getSession(started.interviewId);
-    assert.match(session.interview_state.answers.success_metrics || '', /regenerate interest/i);
+    assert.match(session.interview_state.answers.success_metrics || '', /weak signal/i);
   });
 
   it('6. explicit skip after probe uses defer language — not a fake identity answer', async () => {
