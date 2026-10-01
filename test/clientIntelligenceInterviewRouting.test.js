@@ -9,7 +9,10 @@ const {
   startClientInterview,
   postInterviewMessage,
   classifyInterviewMessage,
+  looksLikeSupplementalContext,
   QUESTION_BANK,
+  buildExecutiveSummary,
+  sectionsFromNormalizedFacts,
 } = require('../services/clientIntelligenceInterview');
 
 const {
@@ -109,6 +112,160 @@ describe('Client Intelligence interview answer routing (P0)', () => {
     const session = await store.getSession(started.interviewId);
     assert.equal(session.interview_state.stepIndex, 1);
     assert.ok(!session.interview_state.answers.identity);
+  });
+
+  it('7. exclusion answer with price keywords stays on Customers to Avoid', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 507 }, opts);
+    await postInterviewMessage(
+      started.interviewId,
+      'Studio Substral — website design and redesign for local businesses.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Website design, redesign, and landing pages.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Local service businesses that value credibility over the cheapest quote.',
+      opts
+    );
+
+    const exclusion =
+      "We'd also rather not take on price-driven clients looking for the cheapest possible website, one-off budget shoppers, or anyone who treats the site as a commodity.";
+    const avoidQ = QUESTION_BANK.find((q) => q.id === 'avoid_customers');
+    assert.equal(
+      classifyInterviewMessage(exclusion, {
+        activeQuestion: avoidQ,
+        awaitingQuestionId: 'avoid_customers',
+      }),
+      MESSAGE_TYPES.DIRECT_ANSWER
+    );
+    assert.equal(looksLikeSupplementalContext(exclusion, { activeQuestion: avoidQ }), false);
+
+    const turn = await postInterviewMessage(started.interviewId, exclusion, opts);
+    assert.equal(turn.messageType, MESSAGE_TYPES.DIRECT_ANSWER);
+    assert.equal(turn.question.id, 'target_markets');
+
+    const session = await store.getSession(started.interviewId);
+    assert.match(session.interview_state.answers.avoid_customers || '', /cheapest possible website/i);
+    assert.match(session.interview_state.answers.avoid_customers || '', /price-driven/i);
+    assert.match(
+      session.interview_state.sectionState.avoidCustomers.summary || '',
+      /cheapest possible website|price-driven/i
+    );
+    assert.doesNotMatch(turn.message || '', /\bunder pricing\b/i);
+
+    const evidence = await store.listEvidence(started.interviewId);
+    assert.ok(
+      evidence.some(
+        (row) =>
+          row.category === 'avoidCustomers' &&
+          /cheapest possible website|price-driven/i.test(row.statement)
+      )
+    );
+    const supporting = session.interview_state.intakeSupportingEvidence || [];
+    assert.ok(
+      supporting.some(
+        (row) =>
+          row.questionId === 'avoid_customers' &&
+          row.domains.includes('pricing')
+      )
+    );
+  });
+
+  it('8. ICP answer mentioning geography stays on Ideal Customers', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 508 }, opts);
+    await postInterviewMessage(
+      started.interviewId,
+      'Studio Substral — credible websites for local businesses.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Website design and redesign.',
+      opts
+    );
+
+    const icp =
+      'We most want to work with professional service firms in Greater Manchester and southern New Hampshire — law firms, accountants, and medical practices that need a credible web presence and steady lead flow from owner-operators who delegate marketing.';
+    const icpQ = QUESTION_BANK.find((q) => q.id === 'ideal_customers');
+    assert.equal(
+      classifyInterviewMessage(icp, {
+        activeQuestion: icpQ,
+        awaitingQuestionId: 'ideal_customers',
+      }),
+      MESSAGE_TYPES.DIRECT_ANSWER
+    );
+
+    const turn = await postInterviewMessage(started.interviewId, icp, opts);
+    assert.equal(turn.question.id, 'avoid_customers');
+    const session = await store.getSession(started.interviewId);
+    assert.match(session.interview_state.answers.ideal_customers || '', /Greater Manchester/i);
+    assert.match(session.interview_state.answers.ideal_customers || '', /owner-operators/i);
+    assert.match(session.interview_state.sectionState.idealCustomers.summary || '', /Greater Manchester/i);
+    assert.match(session.interview_state.sectionState.idealCustomers.summary || '', /law firms/i);
+    assert.equal(
+      /^Ideal customers are lead flow, operator/i.test(
+        session.interview_state.sectionState.idealCustomers.summary || ''
+      ),
+      false
+    );
+
+    const supporting = session.interview_state.intakeSupportingEvidence || [];
+    assert.ok(
+      supporting.some(
+        (row) => row.questionId === 'ideal_customers' && row.domains.includes('geography')
+      )
+    );
+
+    const brief = buildExecutiveSummary(session.interview_state.sectionState, {
+      normalizedFacts: session.interview_state.normalizedFacts,
+    });
+    const whoYouServe = brief.sections.find((s) => s.id === 'whoYouServe');
+    assert.match(whoYouServe.body, /Greater Manchester|professional service/i);
+  });
+
+  it('9. answered guided fields are skipped on resume — avoid is not re-asked', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 509 }, opts);
+    await postInterviewMessage(
+      started.interviewId,
+      'Studio Substral — website design for local businesses.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Website design and redesign.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Local businesses that care about credibility.',
+      opts
+    );
+    await postInterviewMessage(
+      started.interviewId,
+      'Price-driven clients looking for the cheapest possible website.',
+      opts
+    );
+
+    let session = await store.getSession(started.interviewId);
+    assert.match(session.interview_state.answers.avoid_customers || '', /cheapest possible website/i);
+    assert.equal(QUESTION_BANK[session.interview_state.stepIndex].id, 'target_markets');
+
+    session.interview_state.stepIndex = 3;
+    session.interview_state.awaitingQuestionId = 'avoid_customers';
+    await store.updateSession(started.interviewId, { interview_state: session.interview_state });
+
+    const resumed = await startClientInterview({ clientId: 509 }, opts);
+    assert.equal(resumed.question.id, 'target_markets');
+    session = await store.getSession(started.interviewId);
+    assert.equal(QUESTION_BANK[session.interview_state.stepIndex].id, 'target_markets');
+    assert.match(session.interview_state.answers.avoid_customers || '', /cheapest possible website/i);
   });
 
   it('6. explicit skip after probe uses defer language — not a fake identity answer', async () => {
