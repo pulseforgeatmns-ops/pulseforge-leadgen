@@ -3769,9 +3769,23 @@ function planReasoningTurn(text, context = {}) {
   let routeReason = 'active_question';
   let cross = { section: null, domain: null, confidence: 0 };
 
+  const intakeAwaiting =
+    context.awaitingQuestionId ||
+    (activeQuestion && (activeQuestion.id || activeQuestion.questionId));
+
   if (messageClass === MESSAGE_CLASSES.ADD_ON || messageClass === MESSAGE_CLASSES.CORRECTION) {
     cross = inferCrossSectionTarget(text, activeQuestion, context.crossSectionHelpers || {});
-    if (cross.section && cross.confidence >= 0.55) {
+    const explicitCrossSection =
+      /\b(forgot|also forgot|for\s+(?:the\s+)?(?:icp|ideal)|not for this question)\b/i.test(
+        String(text || '')
+      ) || /\b(?:for|about|regarding|on|to)\s+(?:the\s+)?(?:services?|ideal|icp|geography|pricing|brand)/i.test(
+        String(text || '')
+      );
+    if (
+      cross.section &&
+      cross.confidence >= 0.55 &&
+      (!intakeAwaiting || explicitCrossSection)
+    ) {
       targetSection = cross.section;
       routeReason = messageClass === MESSAGE_CLASSES.CORRECTION ? 'correction' : 'add_on';
     }

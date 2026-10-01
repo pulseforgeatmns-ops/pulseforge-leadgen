@@ -435,6 +435,12 @@ const QUESTION_BANK = Object.freeze([
     askedBecause: 'Metrics define success for the Business Blueprint.',
   },
 ]);
+
+/** Authoritative Blueprint section for each guided intake question id. */
+const QUESTION_ID_TO_SECTION = Object.freeze(
+  Object.fromEntries(QUESTION_BANK.map((row) => [row.id, row.section]))
+);
+
 class ClientIntelligenceError extends Error {
   /**
    * @param {string} code
@@ -738,6 +744,46 @@ function domainFromSection(section) {
   return entry ? entry[0] : null;
 }
 
+function sectionForGuidedQuestion(questionOrId) {
+  if (!questionOrId) return null;
+  if (typeof questionOrId === 'string') {
+    return QUESTION_ID_TO_SECTION[questionOrId] || null;
+  }
+  return questionOrId.section || QUESTION_ID_TO_SECTION[questionOrId.id] || null;
+}
+
+function hasValidGuidedAnswer(state, questionId) {
+  const answers = (state && state.answers) || {};
+  if (!(questionId in answers)) return false;
+  const text = String(answers[questionId] || '').trim();
+  if (!text || answerLooksEmpty(text)) return false;
+  return true;
+}
+
+function syncStepIndexToFirstUnanswered(state) {
+  if (!state || state.mode === 'notes') return state;
+  let idx = 0;
+  while (idx < QUESTION_BANK.length && hasValidGuidedAnswer(state, QUESTION_BANK[idx].id)) {
+    idx += 1;
+  }
+  state.stepIndex = idx;
+  state.done = idx >= QUESTION_BANK.length;
+  syncAwaitingQuestionId(state);
+  return state;
+}
+
+function advanceStepIndexAfterAnswer(state) {
+  if (!state || state.mode === 'notes') return state;
+  let idx = (Number(state.stepIndex) || 0) + 1;
+  while (idx < QUESTION_BANK.length && hasValidGuidedAnswer(state, QUESTION_BANK[idx].id)) {
+    idx += 1;
+  }
+  state.stepIndex = idx;
+  state.done = idx >= QUESTION_BANK.length;
+  syncAwaitingQuestionId(state);
+  return state;
+}
+
 /**
  * Most recent answered question id (by QUESTION_BANK order), if any.
  */
@@ -764,9 +810,7 @@ function resolveCorrectionTarget(text, opts = {}) {
   const body = stripCorrectionPreamble(raw);
 
   // A. Explicit domain / question-echo match
-  const echoDomain = inferDomainFromQuestionEcho(raw) || inferDomainFromQuestionEcho(body);
-  const taggedDomain = tagContextDomain(raw) || tagContextDomain(body);
-  const domain = echoDomain || taggedDomain;
+  const domain = inferExplicitRoutingDomain(raw) || inferExplicitRoutingDomain(body);
   if (domain && DOMAIN_TO_SECTION[domain]) {
     const section = DOMAIN_TO_SECTION[domain];
     const questionId = QUESTION_BANK.find((row) => row.section === section)?.id || null;
@@ -809,25 +853,35 @@ function looksLikeSupplementalContext(text, opts = {}) {
     return true;
   }
 
-  // Out-of-order ICP / domain add-on while a different question is active.
   const activeQuestion = opts.activeQuestion || null;
-  if (activeQuestion && activeQuestion.section) {
-    const domain = tagContextDomain(s);
-    const activeDomain = domainFromSection(activeQuestion.section);
-    if (domain && activeDomain && domain !== activeDomain) {
-      if (
-        /\b(also|forgot|add(?:ing)?|additionally|btw|by the way|one more|for\s+(?:the\s+)?(?:icp|ideal)|ideal\s+customer)\b/i.test(
-          s
-        )
-      ) {
-        return true;
-      }
-      if (domain === 'ideal_customer' && /\b(icp|ideal\s+customer|property managers?)\b/i.test(s)) {
-        return true;
-      }
-    }
+  if (activeQuestion && looksLikeExplicitCrossSectionAddOn(s, activeQuestion)) {
+    return true;
   }
   return false;
+}
+
+/**
+ * True when the operator clearly signals out-of-order context for a different field
+ * (not incidental keywords such as "also" or "cheap" inside a direct answer).
+ */
+function looksLikeExplicitCrossSectionAddOn(text, activeQuestion) {
+  const s = String(text || '').trim();
+  if (!s || !activeQuestion || !activeQuestion.section) return false;
+  const hasSupplementalMarker =
+    SUPPLEMENTAL_CONTEXT_RE.test(s) ||
+    SUPPLEMENTAL_PHRASE_RE.test(s) ||
+    DOMAIN_POINTER_RE.test(s);
+  if (!hasSupplementalMarker) return false;
+
+  const routedDomain = inferExplicitRoutingDomain(s);
+  if (!routedDomain) {
+    if (/\b(forgot|icp|ideal\s+customer)\b/i.test(s)) {
+      return domainFromSection(activeQuestion.section) !== 'idealCustomers';
+    }
+    return false;
+  }
+  const activeDomain = domainFromSection(activeQuestion.section);
+  return Boolean(activeDomain && routedDomain !== activeDomain);
 }
 
 /**
@@ -863,17 +917,17 @@ function stripSupplementalPreamble(text) {
 function parseSupplementalMessage(text, opts = {}) {
   const raw = String(text || '').trim();
   let body = stripSupplementalPreamble(raw);
+  const activeQuestion = opts.activeQuestion || null;
 
   const domain =
-    inferDomainFromQuestionEcho(raw) ||
-    tagContextDomain(raw) ||
-    inferDomainFromQuestionEcho(body) ||
-    tagContextDomain(body) ||
-    null;
+    inferExplicitRoutingDomain(raw) ||
+    inferExplicitRoutingDomain(body) ||
+    (/\b(forgot|icp|ideal\s+customer)\b/i.test(raw) ? 'ideal_customer' : null);
   const section = (domain && DOMAIN_TO_SECTION[domain]) || null;
   const questionId = section
     ? QUESTION_BANK.find((row) => row.section === section)?.id || null
     : null;
+  const supportingDomains = inferSupportingContextDomains(raw);
 
   let substance = body
     .replace(DOMAIN_POINTER_RE, ' ')
@@ -895,10 +949,9 @@ function parseSupplementalMessage(text, opts = {}) {
     else if (services.length > 1) substance = services.join(', ');
   }
 
-  // Ignore unused opts.activeQuestion for now — domain inference is enough.
-  void opts;
+  void activeQuestion;
 
-  return { domain, section, substance, raw, questionId };
+  return { domain, section, substance, raw, questionId, supportingDomains };
 }
 
 function looksLikeQuestionToMax(text) {
@@ -949,17 +1002,72 @@ function domainFromPointerLabel(label) {
  * Explicit "for services" pointers win over keyword heuristics.
  * @returns {string|null} one of CONTEXT_DOMAINS
  */
-function tagContextDomain(text) {
+/**
+ * Keyword-only domain tags for enrichment — never overrides guided question routing.
+ * @returns {string[]} subset of CONTEXT_DOMAINS
+ */
+function inferSupportingContextDomains(text) {
   const s = String(text || '').toLowerCase();
-  if (!s) return null;
+  if (!s) return [];
+  const tags = [];
+  const add = (domain, cond) => {
+    if (cond && domain && !tags.includes(domain)) tags.push(domain);
+  };
+  add('pricing', /\b(price|pricing|rate|cost|cheap|lowest price|budget)\b/.test(s));
+  add('objections', /\b(avoid|don'?t want|do not want|decline|not a fit|no longer)\b/.test(s));
+  add('brand_voice', /\b(tone|voice|sound|brand voice)\b/.test(s));
+  add(
+    'success_metrics',
+    /\b(metric|kpi|measure|success metric|walkthroughs?|pipeline|repl(?:y|ies)|booked)\b/.test(s)
+  );
+  add('growth_goals', /\b(90 days|next quarter|growth goal|campaign goal|expansion)\b/.test(s));
+  add(
+    'differentiation',
+    /\b(trust|tips the decision|advantage|differen|accountab|responsiv)\b/.test(s)
+  );
+  add(
+    'geography',
+    /\b(manchester|bedford|hooksett|londonderry|auburn|goffstown|geography|geo\b|county|new hampshire)\b/.test(
+      s
+    )
+  );
+  add(
+    'ideal_customer',
+    /\b(ideal customer|ideal customer profile|\bicp\b|property managers?|homeowners?|facility managers?|segment fit)\b/.test(
+      s
+    )
+  );
+  add('services', /\b(services?|cleans?|cleaning|offers?|provides?|recurring|turnovers?)\b/.test(s));
+  add('operations', /\b(ops|operations?|staff|crew|capacity|schedule|delivery)\b/.test(s));
+  return tags;
+}
 
-  const echo = inferDomainFromQuestionEcho(s);
+function inferExplicitRoutingDomain(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return null;
+  const echo = inferDomainFromQuestionEcho(raw);
   if (echo) return echo;
-
-  const pointer = s.match(DOMAIN_POINTER_RE);
+  const pointer = raw.match(DOMAIN_POINTER_RE);
   if (pointer) {
     const fromPointer = domainFromPointerLabel(pointer[1]);
     if (fromPointer) return fromPointer;
+  }
+  return null;
+}
+
+function tagContextDomain(text, opts = {}) {
+  const s = String(text || '').toLowerCase();
+  if (!s) return null;
+
+  const explicit = inferExplicitRoutingDomain(text);
+  if (explicit) return explicit;
+
+  const authoritativeSection =
+    opts.authoritativeSection ||
+    sectionForGuidedQuestion(opts.activeQuestion) ||
+    null;
+  if (authoritativeSection && opts.respectActiveQuestion !== false) {
+    return domainFromSection(authoritativeSection);
   }
 
   if (/\b(price|pricing|rate|cost|cheap|lowest price|budget)\b/.test(s)) return 'pricing';
@@ -983,6 +1091,28 @@ function tagContextDomain(text) {
   }
   if (/\b(ops|operations?|staff|crew|capacity|schedule|delivery)\b/.test(s)) return 'operations';
   return null;
+}
+
+function recordIntakeSupportingEvidence(state, question, text) {
+  if (!state || !question || !text) return state;
+  const activeSection = sectionForGuidedQuestion(question);
+  const activeDomain = domainFromSection(activeSection);
+  const tags = inferSupportingContextDomains(text).filter((domain) => domain && domain !== activeDomain);
+  if (!tags.length) return state;
+  state.intakeSupportingEvidence = [
+    ...(state.intakeSupportingEvidence || []),
+    {
+      at: nowIso(),
+      questionId: question.id,
+      section: activeSection,
+      domains: tags,
+      text: String(text).trim(),
+    },
+  ];
+  if (state.intakeSupportingEvidence.length > 48) {
+    state.intakeSupportingEvidence = state.intakeSupportingEvidence.slice(-48);
+  }
+  return state;
 }
 
 /**
@@ -1183,11 +1313,15 @@ function conversationalAck(messageType, text, domain, opts = {}) {
         const added = substance.replace(/\.$/, '');
         return `Got it. I'll add ${added} to your ideal customer profile. For this question, ${reopen}`;
       }
-      if (domain && domainLabel[domain] && substance) {
-        return `Got it. I'll add ${substance.replace(/\.$/, '')} under ${domainLabel[domain]}. For this question, ${reopen}`;
+      const storageLabel =
+        (targetSection && SECTION_TITLES[targetSection]) ||
+        (domain && domainLabel[domain]) ||
+        null;
+      if (storageLabel && substance) {
+        return `Got it. I'll add ${substance.replace(/\.$/, '')} under ${storageLabel}. For this question, ${reopen}`;
       }
-      if (domain && domainLabel[domain]) {
-        return `Got it. That sounds like it belongs under ${domainLabel[domain]}. I'll remember it there rather than treating it as your answer to this question.\n\nFor this question, ${reopen}`;
+      if (storageLabel) {
+        return `Got it. That sounds like it belongs under ${storageLabel}. I'll remember it there rather than treating it as your answer to this question.\n\nFor this question, ${reopen}`;
       }
       return `Got it. I'll add that to the business context rather than treating it as your answer to this question.\n\nFor this question, ${reopen}`;
     }
@@ -3934,21 +4068,27 @@ function summarizeSection(sectionKey, statements) {
         ensurePeriod(`Today the business delivers ${latest}`),
         'Service understanding reflects what is actually sold now, not aspirational packaging.',
       ].join(' ');
-    case 'idealCustomers':
+    case 'idealCustomers': {
+      const substance =
+        cleaned.length > 1 ? cleaned.join('; ') : latest;
       return [
-        ensurePeriod(`Ideal customers are ${latest}`),
+        ensurePeriod(`Ideal customers are ${substance}`),
         'This ICP picture prioritizes fit over volume.',
       ].join(' ');
+    }
     case 'idealCustomerTraits':
       return [
         ensurePeriod(`Great-fit customers need ${latest}`),
         'These fit requirements describe readiness and behavior, not a separate audience category.',
       ].join(' ');
-    case 'avoidCustomers':
+    case 'avoidCustomers': {
+      const substance =
+        cleaned.length > 1 ? cleaned.join('; ') : latest;
       return [
-        ensurePeriod(`The business prefers to avoid ${latest}`),
+        ensurePeriod(`The business prefers to avoid ${substance}`),
         'These constraints protect targeting quality and should stay visible in the Blueprint.',
       ].join(' ');
+    }
     case 'targetMarkets':
       return [
         ensurePeriod(`Priority markets center on ${latest}`),
@@ -5451,8 +5591,7 @@ async function acceptExplicitUnknown(store, session, state, q, clientTurn, text)
   state.normalizedFacts = facts;
   state.reasoningMemory = reasoningMemory;
   state.answers = { ...(state.answers || {}), [q.question.id]: '' };
-  state.stepIndex = (Number(state.stepIndex) || 0) + 1;
-  if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
+  advanceStepIndexAfterAnswer(state);
   state.supplementalContext = [
     ...(state.supplementalContext || []),
     {
@@ -5552,6 +5691,8 @@ function initialInterviewState({ notes } = {}) {
     normalizedFacts: emptyNormalizedFacts(),
     /** SPEC-090 — session-level conversational reasoning memory. */
     reasoningMemory: emptyReasoningMemory(),
+    /** Keyword-derived tags attached to a guided answer without changing its primary field. */
+    intakeSupportingEvidence: [],
     workingSemanticCorrections: [],
     notes: notes ? String(notes) : null,
     blueprintId: null,
@@ -7088,7 +7229,9 @@ async function startClientInterview(input = {}, opts = {}) {
   if (!restart && !forceNew && !notes) {
     const existing = await findActiveInterviewForClient(clientId, opts);
     if (existing) {
-      const recoveredState = normalizeRecoveredInterviewState(existing.interview_state);
+      const recoveredState = syncStepIndexToFirstUnanswered(
+        normalizeRecoveredInterviewState(existing.interview_state)
+      );
       if (JSON.stringify(recoveredState) !== JSON.stringify(existing.interview_state || {})) {
         existing.interview_state = recoveredState;
         await store.updateSession(existing.id, { interview_state: recoveredState });
@@ -7488,8 +7631,9 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     hasSpecificity: hasSpecificitySignals(text),
     ...classifyOpts,
     crossSectionHelpers: {
-      inferDomain: (t) => inferDomainFromQuestionEcho(t) || tagContextDomain(t),
-      tagDomain: tagContextDomain,
+      inferDomain: (t) => inferExplicitRoutingDomain(t),
+      tagDomain: (t) =>
+        tagContextDomain(t, { activeQuestion: q.question, respectActiveQuestion: false }),
       domainToSection: DOMAIN_TO_SECTION,
     },
   });
@@ -8224,6 +8368,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   state.lastAnswerDisposition = acceptedDisposition;
   if (!skippedAsGuidance) {
     state.answers = { ...(state.answers || {}), [q.question.id]: text };
+    recordIntakeSupportingEvidence(state, q.question, text);
     const synthesized = synthesizeBusinessLanguage(text, {
       section: q.question.section,
       businessName: businessNameHint,
@@ -8239,9 +8384,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     state.answers = { ...(state.answers || {}) };
   }
   // SPEC-100 — only advance after accepted (or partial) operator evidence.
-  state.stepIndex = (Number(state.stepIndex) || 0) + 1;
-  if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
-  syncAwaitingQuestionId(state);
+  advanceStepIndexAfterAnswer(state);
   reasoningMemory = syncConfidenceFromSections(
     reasoningMemory,
     session.interview_state.sectionState || state.sectionState
@@ -11148,6 +11291,13 @@ module.exports = {
   synthesizeNormalizedFact,
   normalizeClaim,
   tagContextDomain,
+  inferSupportingContextDomains,
+  inferExplicitRoutingDomain,
+  QUESTION_ID_TO_SECTION,
+  sectionForGuidedQuestion,
+  hasValidGuidedAnswer,
+  syncStepIndexToFirstUnanswered,
+  looksLikeExplicitCrossSectionAddOn,
   inferDomainFromQuestionEcho,
   resolveCorrectionTarget,
   findLastAnsweredQuestionId,
