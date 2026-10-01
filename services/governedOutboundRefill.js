@@ -6,6 +6,8 @@
  */
 
 const { hash, candidateReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+const { governedContactReason } = require('../utils/governedContactEligibility');
+const { governedRecipientBindingReason } = require('../utils/governedRecipientBinding');
 const { buildAnchorLifecycleVariant } = require('../utils/anchorLifecycleEmail');
 
 const PREPARATION_BATCH_LIMIT = 5;
@@ -150,6 +152,7 @@ function observabilityFromRefill(plan = {}, extras = {}) {
     prepareRequested: asNonNegInt(plan.prepareRequested),
     preparedAdded: asNonNegInt(plan.preparedAdded ?? extras.preparedAdded),
     prepareSkippedReason: plan.prepareSkippedReason || extras.prepareSkippedReason || null,
+    ...(extras.preparationDecisions ? { preparationDecisions: extras.preparationDecisions } : {}),
   };
 }
 
@@ -163,54 +166,38 @@ function finalizePreparationObservability(snapshot = {}) {
   return snapshot;
 }
 
-async function selectRefillEntries({
-  prepared,
-  program,
-  store,
-  adapters,
-  existingItems = [],
-  limit,
-}) {
-  const existing = new Set(existingItems.flatMap(item => [
-    String(item.candidate_id || item.candidateId || ''),
-    String(item.prospect_id || item.prospectId || ''),
-    String(item.email || '').toLowerCase(),
-    String(item.company_id || item.companyId || ''),
-  ].filter(Boolean)));
-  const selected = [];
-  const emails = new Set();
-  const companies = new Set();
-  for (const item of existingItems) {
-    if (item.email) emails.add(String(item.email).toLowerCase());
-    if (item.company_id || item.companyId) companies.add(String(item.company_id || item.companyId));
-  }
+function existingReason(entry, items) {
+  if (items.some(x => String(x.candidate_id || x.candidateId || '') === entry.candidateId
+    || String(x.prospect_id || x.prospectId || '') === entry.prospectId)) return 'already_in_envelope';
+  if (items.some(x => String(x.email || '').toLowerCase() === entry.email)) return 'duplicate_email';
+  if (items.some(x => String(x.company_id || x.companyId || '') === entry.companyId)) return 'duplicate_company';
+  return null;
+}
 
+function decision(decisions, row, reason, source, error = null) {
+  decisions.push({ candidateId: String(row.candidateId || row.prospectId || ''),
+    prospectId: row.prospectId || null, source,
+    outcome: reason ? (reason === 'preparation_limit_reached' ? 'deferred' : 'rejected') : 'selected',
+    reason: reason || null, ...(error ? { errorCode: error.code || 'unknown_error' } : {}) });
+}
+
+async function selectRefillEntries({ prepared, program, store, adapters, existingItems = [], limit, decisions = [] }) {
+  const cap = asNonNegInt(limit);
+  const selected = [];
   for (const row of prepared.candidates || []) {
-    if (selected.length >= limit) break;
-    const crm = await adapters.contact(row.candidateId);
-    const reason = candidateReason(row.item, crm, row.message, program?.policy);
-    const entry = {
-      candidateId: String(row.candidateId),
-      prospectId: String(crm?.prospect_id || crm?.id || ''),
-      companyId: String(crm?.company_id || ''),
-      email: String(row.item.email || crm?.email || '').toLowerCase(),
-      message: row.message,
-      sender: prepared.sender,
-      revision: prepared.revision,
-    };
-    if (
-      existing.has(entry.candidateId)
-      || existing.has(entry.prospectId)
-      || existing.has(entry.email)
-      || existing.has(entry.companyId)
-    ) continue;
-    const suppressed = !reason && await store.suppression(entry);
-    if (reason || suppressed || !entry.companyId || emails.has(entry.email) || companies.has(entry.companyId)) {
-      continue;
-    }
-    selected.push(entry);
-    emails.add(entry.email);
-    companies.add(entry.companyId);
+    try {
+      const crm = await adapters.contact(row.candidateId);
+      const entry = { candidateId: String(row.candidateId), prospectId: String(crm?.prospect_id || crm?.id || ''),
+        companyId: String(crm?.company_id || ''), email: String(row.item.email || '').toLowerCase(),
+        message: row.message, sender: prepared.sender, revision: prepared.revision };
+      const reason = candidateReason(row.item, crm, row.message, program?.policy)
+        || (!entry.companyId ? 'missing_company' : null)
+        || existingReason(entry, [...existingItems, ...selected])
+        || await store.suppression(entry)
+        || (selected.length >= cap ? 'preparation_limit_reached' : null);
+      decision(decisions, entry, reason, 'prepared');
+      if (!reason) selected.push(entry);
+    } catch (error) { decision(decisions, row, 'preparation_evaluation_failed', 'prepared', error); }
   }
   return selected;
 }
@@ -218,16 +205,16 @@ async function selectRefillEntries({
 function buildFirstTouchCopy(row, crm, sender) {
   const lifecycle = buildAnchorLifecycleVariant({
     candidate: {
-      name: row.company || crm.company_name || crm.company || row.companyName,
+      name: crm.company_name || crm.company,
       first_name: crm.first_name || crm.firstName || null,
       location: crm.company_location || crm.location || null,
     },
     crmRecord: {
       ...crm,
       first_name: crm.first_name || crm.firstName || null,
-      company_name: row.company || crm.company_name || crm.company,
+      company_name: crm.company_name || crm.company,
       company_fields: {
-        name: row.company || crm.company_name || crm.company,
+        name: crm.company_name || crm.company,
         location: crm.company_location || crm.location || null,
       },
     },
@@ -238,82 +225,39 @@ function buildFirstTouchCopy(row, crm, sender) {
     subject: lifecycle.subject,
     body: lifecycle.body,
     candidateId,
+    companyId: String(crm.company_id),
+    companyName: crm.company_name || crm.company,
     cta: lifecycle.cta || null,
   };
 }
 
-async function selectInventoryRefillEntries({
-  cleanRows = [],
-  store,
-  adapters,
-  prepared,
-  program,
-  existingItems = [],
-  limit,
-} = {}) {
-  const cap = Math.max(0, asNonNegInt(limit));
-  if (!cap || !Array.isArray(cleanRows) || !cleanRows.length) return [];
-  const existing = new Set(existingItems.flatMap(item => [
-    String(item.candidate_id || item.candidateId || ''),
-    String(item.prospect_id || item.prospectId || ''),
-    String(item.email || '').toLowerCase(),
-    String(item.company_id || item.companyId || ''),
-  ].filter(Boolean)));
+async function selectInventoryRefillEntries({ cleanRows = [], store, adapters, prepared, program,
+  existingItems = [], limit, decisions = [] } = {}) {
+  const cap = asNonNegInt(limit);
   const selected = [];
-  const emails = new Set();
-  const companies = new Set();
-  for (const item of existingItems) {
-    if (item.email) emails.add(String(item.email).toLowerCase());
-    if (item.company_id || item.companyId) companies.add(String(item.company_id || item.companyId));
-  }
-
   for (const row of cleanRows) {
-    if (selected.length >= cap) break;
-    const candidateId = String(row.candidateId || row.prospectId || '');
-    const crm = adapters.contact ? await adapters.contact(candidateId) : row;
-    if (!crm) continue;
-    const email = String(row.email || crm.email || '').toLowerCase();
-    const companyId = String(row.companyId || crm.company_id || '');
-    const prospectId = String(row.prospectId || crm.prospect_id || crm.id || '');
-    if (
-      existing.has(candidateId)
-      || existing.has(prospectId)
-      || existing.has(email)
-      || existing.has(companyId)
-    ) continue;
-    if (!companyId || !email || emails.has(email) || companies.has(companyId)) continue;
-
-    const message = buildFirstTouchCopy(row, crm, prepared?.sender);
-    const queueItem = {
-      email,
-      sendable: true,
-      dnc: false,
-      prospectId,
-      companyId,
-      paige: { candidateId },
-      refill: true,
-    };
-    const reason = candidateReason(queueItem, crm, message, program?.policy);
-    const entry = {
-      candidateId,
-      prospectId,
-      companyId,
-      email,
-      message,
-      sender: prepared?.sender,
-      revision: prepared?.revision,
-      refill: true,
-      ...queueItem,
-    };
-    const suppressed = !reason && await store.suppression(entry);
-    if (reason || suppressed) continue;
-    selected.push(entry);
-    emails.add(email);
-    companies.add(companyId);
-    existing.add(candidateId);
-    existing.add(prospectId);
-    existing.add(email);
-    existing.add(companyId);
+    try {
+      const candidateId = String(row.candidateId || row.prospectId || '');
+      const crm = await adapters.contact(candidateId);
+      const entry = { candidateId, prospectId: String(row.prospectId || ''), companyId: String(row.companyId || ''),
+        email: String(row.email || '').toLowerCase(), company: row.company, domain: row.domain,
+        crmProspectId: row.prospectId, crmCompanyId: row.companyId,
+        sender: prepared?.sender, revision: prepared?.revision, refill: true,
+        sendable: true, dnc: false, paige: { candidateId } };
+      let reason = governedContactReason(crm, program?.policy)
+        || governedRecipientBindingReason(entry, crm)
+        || (!entry.companyId ? 'missing_company' : null)
+        || (!entry.prospectId ? 'missing_contact' : null)
+        || existingReason(entry, [...existingItems, ...selected]);
+      if (!reason) {
+        entry.message = buildFirstTouchCopy(row, crm, prepared?.sender);
+        reason = candidateReason(entry, crm, entry.message, program?.policy)
+          || await store.suppression(entry)
+          || (selected.length >= cap ? 'preparation_limit_reached' : null);
+      }
+      decision(decisions, entry, reason, 'inventory');
+      if (!reason) selected.push(entry);
+    } catch (error) { decision(decisions, row, 'preparation_evaluation_failed', 'inventory', error); }
   }
   return selected;
 }

@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const { validatePaigeVariantCopy } = require('../max/workspace/PaigeCopySafety');
 const { governedContactReason, SENDABLE_CLASSES } = require('../../utils/governedContactEligibility');
-const { createGovernedOutboundTenantContext } = require('../../services/governedOutboundTenant');
+const { governedRecipientBindingReason } = require('../../utils/governedRecipientBinding');
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -85,20 +85,16 @@ function windowReason(p, now = new Date(), sending = true) {
 function candidateReason(item, crm, message, policy = {}) {
   const reason = governedContactReason(crm, policy);
   if (reason) return reason;
-  // Anchor persists enrichment_provenance.email.source. A flat
-  // email_provenance_source label is not a second send schema. Mailbox
-  // tenants authorize the contact through classification instead.
-  const tenantId = String(policy.tenantId || crm?.client_id || crm?.tenant_id || '10');
-  if (!createGovernedOutboundTenantContext(tenantId).usesTenantMailboxTransport) {
-    const provenanceSource = crm?.enrichment_provenance?.email?.source;
-    if (!String(provenanceSource || '').trim()) return 'missing_email_provenance';
-  }
   if (crm.is_synthetic === true) return 'synthetic_contact';
   if (String(item.email || '').toLowerCase() !== String(crm.email || '').toLowerCase()) return 'recipient_changed';
   if (item.sendable !== true || item.dnc === true) return 'queue_not_sendable';
   if (!message?.subject?.trim() || !message?.body?.trim()) return 'missing_paige_copy';
+  if ((item.paige?.subject && item.paige.subject !== message.subject)
+    || (item.paige?.body && item.paige.body !== message.body)) return 'capacity_copy_binding_mismatch';
   if (!validatePaigeVariantCopy(message).safe) return 'unsafe_paige_copy';
   if (String(message.candidateId || '') !== String(item.paige?.candidateId || '')) return 'copy_binding_changed';
+  const binding = governedRecipientBindingReason(item, crm, message);
+  if (binding) return binding;
   return null;
 }
 

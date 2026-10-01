@@ -379,13 +379,18 @@ function service({
     });
     let cleanInventory = 0;
     let cleanRows = [];
+    const preparationDecisions = [];
     try {
       const { loadCleanInventory } = require('./maxOutboundControlLoop');
-      const inventory = await loadCleanInventory(pool, store, source, store.clientId);
+      const inventory = await loadCleanInventory(pool, store, source, store.clientId, program.policy);
       cleanRows = inventory.clean || [];
       cleanInventory = cleanRows.length;
+      for (const row of inventory.excluded || []) {
+        preparationDecisions.push({ candidateId: row.prospectId, prospectId: row.prospectId,
+          source: 'inventory', outcome: 'rejected', reason: row.reason });
+      }
     } catch (_err) {
-      cleanInventory = pendingPreparedCount;
+      return observabilityFromRefill({ prepareSkippedReason: 'inventory_evaluation_failed' }, { sentToday });
     }
     const plan = evaluatePreparationRefill({
       pendingPreparedCount,
@@ -397,7 +402,7 @@ function service({
       dailyAuthorizationRemaining: Math.max(0, Number(program.policy.dailyCap || 0) - sentToday),
       totalAuthorizationRemaining: Math.max(0, Number(program.policy.totalCap || 0) - Number(counts.total || 0)),
     });
-    if (!plan.shouldPrepare) return observabilityFromRefill(plan, { sentToday, preparedAdded: 0 });
+    if (!plan.shouldPrepare) return observabilityFromRefill(plan, { sentToday, preparedAdded: 0, preparationDecisions });
     if (!['authorized', 'complete', 'frozen'].includes(envelope.status)) {
       return observabilityFromRefill({ ...plan, shouldPrepare: false, prepareSkippedReason: 'envelope_not_refillable' }, { sentToday });
     }
@@ -410,22 +415,20 @@ function service({
       adapters,
       existingItems: items,
       limit: plan.prepareRequested,
+      decisions: preparationDecisions,
     });
     if (selected.length < plan.prepareRequested) {
-      try {
-        const inventoryEntries = await selectInventoryRefillEntries({
-          cleanRows,
-          store,
-          adapters,
-          prepared,
-          program,
-          existingItems: [...items, ...selected],
-          limit: plan.prepareRequested - selected.length,
-        });
-        selected = selected.concat(inventoryEntries);
-      } catch (_err) {
-        // Leftover prepared candidates still refill; inventory copy is best-effort.
-      }
+      const inventoryEntries = await selectInventoryRefillEntries({
+        cleanRows,
+        store,
+        adapters,
+        prepared,
+        program,
+        existingItems: [...items, ...selected],
+        limit: plan.prepareRequested - selected.length,
+        decisions: preparationDecisions,
+      });
+      selected = selected.concat(inventoryEntries);
     }
     if (!selected.length) {
       return observabilityFromRefill({
@@ -434,7 +437,7 @@ function service({
         prepareSkippedReason: plan.cleanInventory > pendingPreparedCount
           ? 'no_eligible_prepared_candidates'
           : 'no_clean_inventory',
-      }, { sentToday, preparedAdded: 0 });
+      }, { sentToday, preparedAdded: 0, preparationDecisions });
     }
     const updated = await store.appendToEnvelope(envelope, selected, prepared.revision);
     return {
@@ -443,7 +446,7 @@ function service({
         ...plan,
         preparedAdded: selected.length,
         pendingPrepared: pendingPreparedCount + selected.length,
-      }, { sentToday, preparedAdded: selected.length }),
+      }, { sentToday, preparedAdded: selected.length, preparationDecisions }),
     };
   }
   async function runPreparationRefill() {

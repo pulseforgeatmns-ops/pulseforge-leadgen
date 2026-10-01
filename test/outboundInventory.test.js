@@ -78,7 +78,7 @@ test('already usable canonical prospects are recovered instead of queued again',
           rows: [{
             id: 44,
             company_id: 9,
-            email: 'ops@recovered.example',
+            email: 'ops@recovered.example', enrichment_provenance: { email: { source: 'website_email' } },
             email_verified: true,
             email_status: 'valid',
             do_not_contact: false,
@@ -100,8 +100,9 @@ test('already usable canonical prospects are recovered instead of queued again',
       return { rows: [], rowCount: 0 };
     },
   };
-  const store = { pool, candidateOwnership: async () => null };
+  const store = { pool, tenantId: '10', clientId: 10, candidateOwnership: async () => null };
   const persisted = await persistDiscoveredCompanies(pool, store, {
+    tenantId: '10',
     companies: [{
       name: 'Recovered STR',
       description: 'Airbnb and vacation rental management',
@@ -131,13 +132,18 @@ test('promoteRecord recovers an existing same-tenant verified prospect without d
       if (/FROM prospects/.test(sql) && /lower\(email\)/i.test(sql)) {
         return {
           rows: [{
-            id: 88,
+            id: 88, company_id: 3,
             client_id: 10,
             do_not_contact: false,
             email_verified: true,
             email_status: 'valid',
           }],
         };
+      }
+      if (/UPDATE prospects/i.test(sql)) {
+        const provenance = JSON.parse(params[9]);
+        assert.equal(provenance.email.source, 'website_email');
+        assert.equal(provenance.email.verifier, 'bouncer');
       }
       if (/DELETE FROM scout_unenriched/i.test(sql)) return { rowCount: 1, rows: [] };
       return { rows: [], rowCount: 0 };

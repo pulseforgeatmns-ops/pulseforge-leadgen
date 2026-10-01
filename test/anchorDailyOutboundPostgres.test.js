@@ -64,7 +64,7 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     for (let i=0; i<7; i++) {
       const company = (await pool.query('INSERT INTO companies(client_id,name) VALUES(10,$1) RETURNING id', [`Company ${i}`])).rows[0].id;
       const crm = (await pool.query('INSERT INTO prospects(company_id,client_id,email) VALUES($1,10,$2) RETURNING *', [company, `ops${i}@customer.example`])).rows[0];
-      contacts.set(`c${i}`, { ...crm, prospect_id: crm.id, email_verified: true, email_status: 'valid', enrichment_provenance: { email: { source: 'website_email' } } });
+      contacts.set(`c${i}`, { ...crm, domain: 'customer.example', google_place_id: `c${i}`, prospect_id: crm.id, email_verified: true, email_status: 'valid', enrichment_provenance: { email: { source: 'website_email' } } });
       candidates.push({ candidateId: `c${i}`, item: { email: crm.email, sendable: true, paige: { candidateId: `c${i}` } },
         message: { subject: `Cleaning ${i}`, body: 'Would a written quote help?', candidateId: `c${i}` } });
     }
@@ -103,6 +103,28 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   async function ageAttempts() {
     await pool.query("UPDATE acquisition_outbound_items SET attempted_at=attempted_at-interval '61 minutes' WHERE attempted_at IS NOT NULL");
   }
+  await t.test('exact CRM contact UUID wins over an unrelated company UUID collision in both resolvers', async () => {
+    await reset();
+    const original = contacts.get('c0');
+    await pool.query('INSERT INTO companies(id,client_id,name,domain) VALUES($1,10,$2,$3)', [original.id, 'Unrelated company', 'other.example']);
+    await pool.query("INSERT INTO prospects(company_id,client_id,email,icp_score) VALUES($1,10,'wrong@other.example',999)", [original.id]);
+    const resolver = require('../packages/max/workspace/MissionBoundCrmResolver');
+    const single = await resolver.loadBestCrmProspectForMissionBoundKey({ pool, clientId: 10, missionBoundKey: original.id });
+    const batch = await resolver.loadCrmProspectsForMissionBoundCompanies({ pool, clientId: 10, companyIds: [original.id] });
+    assert.equal(single.prospect_id, original.id);
+    assert.equal(batch.get(original.id).prospect_id, original.id);
+    assert.equal(single.company_id, original.company_id);
+  });
+  await t.test('historically frozen items with unrelated recipient domains cannot reach the provider', async () => {
+    await reset(); await svc.tick(); await activate();
+    contacts.get('c0').domain = 'adoptapetrealestate.com';
+    const result = await svc.tick();
+    assert.equal(result.halted, 'recipient_company_domain_mismatch');
+    assert.equal(calls, 0);
+    const item = (await svc.store.items((await svc.store.envelope('2026-09-18')).id))[0];
+    assert.equal(item.status, 'suppressed');
+    assert.equal(item.attempted_at, null);
+  });
   await t.test('Anchor integration service requires explicit tenant 10 at the boundary', async () => {
     const stubAdapters = { loadMission: async () => ({}) };
     assert.throws(() => service({ pool, adapters: stubAdapters }), { code: 'governed_outbound_tenant_required' });

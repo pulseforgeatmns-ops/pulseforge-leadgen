@@ -12,9 +12,10 @@ const {
   searchProspeoContactsForDomain,
   filterScrapedWebsiteEmails,
 } = require('../leadgen');
-const { canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
 const { invalidOutreachEmailReason } = require('../utils/emailGuard');
 const { normalizeVertical } = require('../utils/normalize');
+const { stampEmailProvenance } = require('../utils/canonicalEmailEligibility');
+const { governedContactReason } = require('../utils/governedContactEligibility');
 const {
   classifyInventoryOwnership,
   classifyOwnershipRow,
@@ -28,6 +29,8 @@ const RECOVERY_TERMINAL_REASONS = Object.freeze([
   'alternate_email_missing',
   'alternate_email_unverified',
   'alternate_email_invalid',
+  'alternate_email_provenance_missing',
+  'alternate_email_binding_invalid',
   'alternate_contact_owned',
   'alternate_contact_suppressed',
   'alternate_contact_dnc',
@@ -143,7 +146,7 @@ function sortPreferredContacts(contacts = []) {
 
 function canonicalProspectUnavailable(row, now = Date.now()) {
   if (!row) return true;
-  if (canonicalOutboundEmailIneligibilityReason(row)) return true;
+  if (governedContactReason(row)) return true;
   if (row.do_not_contact === true) return true;
   if (row.email_verified !== true) return true;
   const ownership = classifyOwnershipRow(row, now);
@@ -161,7 +164,7 @@ function splitContactName(contact) {
 
 async function loadCompanyProspectRows(pool, { domain, companyName, companyId }) {
   const { rows } = await pool.query(`
-    SELECT p.id, p.company_id, p.email, p.email_verified, p.email_status, p.do_not_contact,
+    SELECT p.id, p.company_id, p.email, p.email_verified, p.email_status, p.do_not_contact, p.enrichment_provenance,
       p.assigned_ao_id, p.closer_id, p.last_contacted_at, p.last_reply_at, p.vertical,
       p.first_name, p.last_name, p.job_title, p.service_area_match, c.name, c.domain, c.website,
       EXISTS(SELECT 1 FROM ao_prospect_tasks t WHERE t.client_id=10 AND t.prospect_id=p.id) AS has_ao_task,
@@ -199,6 +202,7 @@ async function loadPfIntelligenceContacts(pool, { companyId, domain, companyName
       contact: `${row.first_name || ''} ${row.last_name || ''}`.trim(),
       title: row.job_title || null,
       source: ['pf_intelligence'],
+      enrichmentProvenance: row.enrichment_provenance,
       prospectId: row.id,
     });
   }
@@ -227,7 +231,7 @@ async function listWebsiteContactsForDomain(domain, website) {
     const contacts = [];
     const seen = new Set();
     for (const page of pages || []) {
-      const emails = filterScrapedWebsiteEmails(page.text);
+      const emails = filterScrapedWebsiteEmails(page.text, normalizedDomain);
       const text = String(page.text || '').replace(/<[^>]+>/g, ' ');
       for (const email of emails) {
         const normalized = String(email || '').trim().toLowerCase();
@@ -239,7 +243,8 @@ async function listWebsiteContactsForDomain(domain, website) {
           email: normalized,
           contact: '',
           title: window.replace(/\s+/g, ' ').trim().slice(0, 80) || null,
-          source: ['website'],
+          source: ['website_email'],
+          sourceUrl: page.url,
         });
       }
     }
@@ -305,7 +310,14 @@ async function resolveAlternateContacts({
       source: row.source || [],
     };
     if (email && known.has(email)) return;
-    if (email && candidates.some(existing => existing.email === email)) return;
+    const duplicate = email ? candidates.findIndex(existing => existing.email === email) : -1;
+    if (duplicate >= 0) {
+      if (candidates[duplicate].source?.[0] === 'scout_discovery'
+        && contact.source.some(source => ['prospeo', 'hunter', 'website', 'website_email'].includes(source))) {
+        candidates[duplicate] = contact;
+      }
+      return;
+    }
     candidates.push(contact);
   };
 
@@ -386,19 +398,22 @@ async function admitAlternateProspect(pool, {
   discoveryMethod,
   websiteUrl,
   existingProspectId = null,
+  enrichmentProvenance,
 }) {
   if (existingProspectId) {
-    await pool.query(`
+    const updated = await pool.query(`
       UPDATE prospects
       SET email_verified = $2,
           email_verification_method = $3,
           verified_at = $4,
-          do_not_contact = $5,
+          do_not_contact = CASE WHEN $5 THEN true ELSE do_not_contact END,
           email_status = $6,
           verifier_response = $7::jsonb,
           verifier_checked_at = $8,
-          notes = COALESCE(notes, '') || $9
-      WHERE id = $1 AND client_id = 10
+          notes = COALESCE(notes, '') || $9,
+          enrichment_provenance = $10::jsonb
+      WHERE id = $1 AND client_id = 10 AND company_id = $11
+        AND lower(email) = lower($12) AND COALESCE(do_not_contact,false)=false
     `, [
       existingProspectId,
       verification.emailVerified,
@@ -409,8 +424,11 @@ async function admitAlternateProspect(pool, {
       JSON.stringify(verification.verifierResponse || null),
       verification.verifierCheckedAt,
       ' | recovered via same-company alternate contact verification.',
+      JSON.stringify(enrichmentProvenance),
+      companyId,
+      email,
     ]);
-    return existingProspectId;
+    return updated.rowCount === 1 ? existingProspectId : null;
   }
 
   const names = splitContactName(contact);
@@ -419,8 +437,8 @@ async function admitAlternateProspect(pool, {
       company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
       client_id, service_area_match, discovery_method, website_url,
       email_verified, email_verification_method, verified_at, do_not_contact,
-      email_status, verifier_response, verifier_checked_at
-    ) VALUES ($1, $15, $16, $2, NULL, 'cold', 'scout', 70, $3, $4, 10, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
+      email_status, verifier_response, verifier_checked_at, enrichment_provenance
+    ) VALUES ($1, $15, $16, $2, NULL, 'cold', 'scout', 70, $3, $4, 10, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $17::jsonb)
     ON CONFLICT (email) DO NOTHING
     RETURNING id
   `, [
@@ -440,6 +458,7 @@ async function admitAlternateProspect(pool, {
     verification.verifierCheckedAt,
     names.firstName,
     names.lastName,
+    JSON.stringify(enrichmentProvenance),
   ]);
   return insert.rows[0]?.id || null;
 }
@@ -531,6 +550,10 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
       terminalReason = 'alternate_contact_dnc';
       continue;
     }
+    if (alternate.prospectId && (!existingRow || String(existingRow.company_id) !== String(resolvedCompanyId))) {
+      terminalReason = 'alternate_email_binding_invalid';
+      continue;
+    }
 
     const verification = await verify(alternate.email, {
       email: alternate.email,
@@ -550,6 +573,23 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
       continue;
     }
     stats.alternateContactsVerified += 1;
+
+    // Persist actual acquisition evidence, never a verification/read-path label.
+    const source = (alternate.source || []).map(x => x === 'website' ? 'website_email' : x).join('+');
+    const enrichmentProvenance = source === 'pf_intelligence'
+      ? (existingRow?.enrichment_provenance || alternate.enrichmentProvenance || {})
+      : stampEmailProvenance(existingRow?.enrichment_provenance, source, {
+        source_url: alternate.sourceUrl || null, verifier: verification.emailVerificationMethod,
+        status: verification.emailStatus, resolved_at: new Date().toISOString(),
+      });
+    const contactReason = governedContactReason({ email: alternate.email, domain,
+      email_verified: true, email_status: verification.emailStatus, do_not_contact: verification.doNotContact,
+      enrichment_provenance: enrichmentProvenance });
+    if (contactReason) {
+      terminalReason = contactReason === 'missing_email_provenance'
+        ? 'alternate_email_provenance_missing' : 'alternate_email_binding_invalid';
+      continue;
+    }
 
     const candidate = {
       candidateId: `same_company_${resolvedCompanyId}_${alternate.email}`,
@@ -598,6 +638,7 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
       discoveryMethod: 'same_company_alternate_recovery',
       websiteUrl: website,
       existingProspectId: alternate.prospectId || null,
+      enrichmentProvenance,
     });
     if (!prospectId) {
       terminalReason = 'alternate_contact_owned';

@@ -40,6 +40,9 @@ function companyPool(existingEmail = 'blocked@pm.example') {
       }
       if (/acquisition_outbound_items/i.test(sql)) return { rows: [] };
       if (/INSERT INTO prospects/i.test(sql)) {
+        const provenance = JSON.parse(params[16]);
+        assert.equal(provenance.email.source, 'prospeo');
+        assert.equal(provenance.email.verifier, 'bouncer');
         return { rows: [{ id: 901 }] };
       }
       if (/UPDATE prospects/i.test(sql)) return { rows: [], rowCount: 1 };
@@ -266,7 +269,7 @@ test('persistDiscoveredCompanies attempts every same-company candidate without e
     },
   };
   const store = {
-    pool,
+    tenantId: '10', clientId: 10, pool,
     candidateOwnership: async () => null,
     suppression: async () => null,
   };
@@ -276,6 +279,7 @@ test('persistDiscoveredCompanies attempts every same-company candidate without e
     website: `https://pm${i}.example`,
   }));
   const persisted = await persistDiscoveredCompanies(pool, store, {
+    tenantId: '10',
     companies,
     scoutContext: {
       scope: { segment: 'short_term_rental' },
