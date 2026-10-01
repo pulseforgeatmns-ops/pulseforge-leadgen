@@ -9,7 +9,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
-const { createShadowEventSink } = require('../packages/decision-service/ShadowEventSink');
+const { createShadowEventSink, createShadowPool } = require('../packages/decision-service/ShadowEventSink');
 const { insertShadowEvent, listShadowEvents } = require('../packages/decision-service/ShadowEventRepository');
 const { queryShadowReview } = require('../packages/decision-service/shadowReview');
 const { DecisionService } = require('../packages/decision-service/DecisionService');
@@ -17,13 +17,24 @@ const fixture = require('./fixtures/decisionShadowEvent.json');
 const execFileAsync = promisify(execFile);
 const root = path.join(__dirname, '..');
 
+function buildPostgresShadowEnv(connectionString) {
+  assert.ok(connectionString, 'disposable PostgreSQL must provide connectionString');
+  return {
+    DECISION_SHADOW_ENABLED: 'true',
+    DECISION_SHADOW_PERSIST_ENABLED: 'true',
+    DATABASE_URL: connectionString,
+    DATABASE_SSL: 'false',
+    DECISION_SHADOW_DB_TIMEOUT_MS: '500',
+  };
+}
+
 test('real PostgreSQL: migration, full round trip, duplicate safety, review filters, failures and read-only CLI',
   { timeout: 60000 }, async t => {
     // Always creates its own database; never uses DATABASE_URL from the shell.
     const instance = await startDisposablePostgres('jev002-');
     const db = new Pool({ connectionString: instance.connectionString });
-    const env = { DECISION_SHADOW_ENABLED: 'true', DATABASE_URL: instance.connectionString,
-      DATABASE_SSL: 'false', DECISION_SHADOW_DB_TIMEOUT_MS: '500' };
+    const env = buildPostgresShadowEnv(instance.connectionString);
+    assert.match(env.DATABASE_URL, /^postgresql:\/\//);
     const warnings = [];
     const sink = createShadowEventSink({ env, warn: row => warnings.push(row) });
     t.after(async () => { await sink.close(); await db.end(); await instance.stop(); });
@@ -33,14 +44,23 @@ test('real PostgreSQL: migration, full round trip, duplicate safety, review filt
     await sink.drain();
     assert.equal(sink.stats().failed, 1);
     assert.equal(warnings[0].reason, 'write_failed');
+    assert.notEqual(warnings[0].reason, 'database_unconfigured',
+      'Postgres integration test must configure DATABASE_URL before persistence writes');
     const migration = fs.readFileSync(path.join(root, 'migrations/2026-09-21-decision-shadow-review.sql'), 'utf8');
     const migration006 = fs.readFileSync(path.join(root, 'migrations/2026-09-30-jev-006-shadow-observability.sql'), 'utf8');
     await db.query(migration);
-    await db.query(migration);
     await db.query(migration006);
+    const probePool = createShadowPool(env);
+    try {
+      await probePool.query('SELECT 1');
+    } finally {
+      await probePool.end();
+    }
+    assert.equal(warnings.filter(row => row.reason === 'database_unconfigured').length, 0);
     // A failed write did not poison the pool; no automatic retries occur.
     sink.write(fixture);
     await sink.drain();
+    assert.equal(sink.stats().persisted, 1, 'shadow sink must persist through PostgreSQL after migrations');
     let rows = await listShadowEvents(db);
     assert.deepEqual(JSON.parse(JSON.stringify(rows)), [fixture]);
     sink.write({ ...fixture, confidence: 0.01 });
@@ -78,6 +98,9 @@ test('real PostgreSQL: migration, full round trip, duplicate safety, review filt
     assert.equal(errors.summary.errors, 1);
     assert.deepEqual(errors.errors[0].errors, [{ code: 'http_error', http_status: 401 }]);
     assert.equal(errors.errors[0].recommended_route, null);
+    // DecisionService stamps errors at wall-clock time; pin below seeded rows for ORDER BY tests.
+    await db.query(`UPDATE decision_shadow_events SET timestamp = $1::timestamptz
+      WHERE tenant_id = '10' AND status = 'error'`, ['2026-09-15T00:00:00.000Z']);
 
     // Newer matches and another tenant cannot bury the mismatch-specific query.
     for (let i = 0; i < 55; i += 1) await insertShadowEvent(db, { ...fixture,
