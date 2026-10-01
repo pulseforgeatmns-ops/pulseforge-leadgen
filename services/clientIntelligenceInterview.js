@@ -103,6 +103,11 @@ const {
   detectInterviewEscapeIntent,
   looksLikeInterviewWritingGuidance,
 } = require('./clientIntelligenceReasoning');
+const {
+  createIntakePathTrace,
+  patchIntakePathTrace,
+  finalizeIntakePathPayload,
+} = require('./cieIntakePathTrace');
 
 const SESSION_STATUSES = Object.freeze([
   'NEW',
@@ -7533,12 +7538,37 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   }
 
   let state = normalizeRecoveredInterviewState(session.interview_state || initialInterviewState());
+  const stepIndexBeforeRecoverySync = Number(state.stepIndex) || 0;
   state = syncStepIndexToFirstUnanswered(state);
+  const recoveryGuardRan = stepIndexBeforeRecoverySync !== (Number(state.stepIndex) || 0);
   if (state !== session.interview_state) {
     session.interview_state = state;
     await store.updateSession(session.id, { interview_state: state });
   }
   const q = currentQuestion(state);
+
+  const intakeTrace = createIntakePathTrace({
+    tenantId: session.client_id,
+    sessionId: session.id,
+    incomingAnswerLength: text.length,
+    activeQuestionKeyBeforeClassify: q && q.question ? q.question.id : null,
+    normalizedSuccessMetricsBeforeSave: Boolean(
+      (state.normalizedFacts && state.normalizedFacts.success_metrics || []).length
+    ),
+    recoveryGuardRan,
+  });
+
+  async function finishIntakeTurn(branch, payload, tracePatch = {}) {
+    patchIntakePathTrace(intakeTrace, {
+      responseBranch: branch,
+      ...tracePatch,
+    });
+    const freshSession = await store.getSession(session.id);
+    return withExperienceFields(
+      freshSession,
+      finalizeIntakePathPayload(intakeTrace, payload)
+    );
+  }
 
   // Refinement pass after resume: free-form note updates stay conversational
   // unless the operator explicitly asks to regenerate/review the Blueprint.
@@ -7642,30 +7672,46 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         created_at: new Date(),
       });
 
-      return withExperienceFields(await store.getSession(session.id), {
-        interviewId: session.id,
-        ...publicSession(await store.getSession(session.id)),
-        nextAction: 'ASK',
-        messageType: guidance.length && !sectionsToUpdate.length
-          ? MESSAGE_TYPES.REFINEMENT_FEEDBACK
-          : MESSAGE_TYPES.ADD_ON,
-        answerDisposition: evidenceIds.length
-          ? ANSWER_DISPOSITIONS.ACCEPTED
-          : null,
-        question: null,
-        message: assistantMessage,
-        evidence: null,
-        contradiction: false,
-        blueprint: null,
-        reflection: null,
-        supplementalContext: state.supplementalContext || [],
-        reasoningMemory: state.reasoningMemory || null,
-        refinementPass: true,
-      });
+      return finishIntakeTurn(
+        guidance.length && !sectionsToUpdate.length
+          ? 'refinement_pass_guidance_ack'
+          : 'refinement_pass_section_update',
+        {
+          interviewId: session.id,
+          ...publicSession(await store.getSession(session.id)),
+          nextAction: 'ASK',
+          messageType: guidance.length && !sectionsToUpdate.length
+            ? MESSAGE_TYPES.REFINEMENT_FEEDBACK
+            : MESSAGE_TYPES.ADD_ON,
+          answerDisposition: evidenceIds.length
+            ? ANSWER_DISPOSITIONS.ACCEPTED
+            : null,
+          question: null,
+          message: assistantMessage,
+          evidence: null,
+          contradiction: false,
+          blueprint: null,
+          reflection: null,
+          supplementalContext: state.supplementalContext || [],
+          reasoningMemory: state.reasoningMemory || null,
+          refinementPass: true,
+        },
+        {
+          finalIntent:
+            guidance.length && !sectionsToUpdate.length
+              ? MESSAGE_TYPES.REFINEMENT_FEEDBACK
+              : MESSAGE_TYPES.ADD_ON,
+          templateName:
+            guidance.length && !sectionsToUpdate.length
+              ? 'postInterviewMessage.refinementPass.guidance_ack'
+              : 'postInterviewMessage.refinementPass.section_update',
+          writingGuidanceBranchEntered: Boolean(guidance.length),
+        }
+      );
     }
 
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return withExperienceFields(await store.getSession(session.id), {
+    return finishIntakeTurn('refinement_pass_generate_blueprint', {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'GENERATE_BLUEPRINT',
@@ -7673,12 +7719,12 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       message: 'Draft Business Blueprint is ready for review.',
       blueprint: publicBlueprint(blueprint),
       reflection: null,
-    });
+    }, { templateName: 'postInterviewMessage.refinementPass.explicit_regeneration' });
   }
 
   if (!q) {
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return withExperienceFields(await store.getSession(session.id), {
+    return finishIntakeTurn('no_active_question_complete', {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'COMPLETE',
@@ -7686,7 +7732,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       message: 'Draft Business Blueprint is ready for review.',
       blueprint: publicBlueprint(blueprint),
       reflection: null,
-    });
+    }, { templateName: 'postInterviewMessage.noQuestion.blueprint_ready' });
   }
 
   const clientTurn = await store.insertTurn({
@@ -7733,6 +7779,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     },
   });
   let messageType = planned.messageClass;
+  intakeTrace.initialIntent = planned.messageClass;
   if (
     messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK &&
     q.question.id &&
@@ -7743,7 +7790,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     })
   ) {
     messageType = MESSAGE_TYPES.DIRECT_ANSWER;
+    intakeTrace.successMetricsHardGuardRan = true;
   }
+  intakeTrace.finalIntent = messageType;
+  intakeTrace.destinationSection = q.question.section;
   reasoningMemory = markClassification(reasoningMemory, messageType);
   state.reasoningMemory = reasoningMemory;
 
@@ -7797,7 +7847,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         derived_evidence: [],
         created_at: new Date(),
       });
-      return withExperienceFields(await store.getSession(session.id), {
+      return finishIntakeTurn('interview_escape_pause_cancel', {
         interviewId: session.id,
         ...publicSession(await store.getSession(session.id)),
         nextAction: 'ASK',
@@ -7818,10 +7868,11 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         supplementalContext: state.supplementalContext || [],
         reasoningMemory,
         interviewPaused: state.interviewPaused,
-      });
+      }, { templateName: 'postInterviewMessage.interviewEscape' });
     }
 
     if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+      intakeTrace.writingGuidanceBranchEntered = true;
       state.revisionGuidance = [
         ...(state.revisionGuidance || []),
         {
@@ -7922,7 +7973,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
 
         if (state.done) {
           const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-          return withExperienceFields(await store.getSession(session.id), {
+          return finishIntakeTurn('insufficient_accept_unknown_complete', {
             interviewId: session.id,
             ...publicSession(await store.getSession(session.id)),
             nextAction: 'GENERATE_BLUEPRINT',
@@ -7934,6 +7985,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
             reflection: null,
             reasoningMemory,
             acceptedUnknown: true,
+          }, {
+            fieldMarkedComplete: true,
+            nextQuestionKey: null,
+            templateName: 'postInterviewMessage.insufficient.acceptUnknown.blueprint',
           });
         }
 
@@ -7951,7 +8006,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           created_at: new Date(),
         });
 
-        return withExperienceFields(await store.getSession(session.id), {
+        return finishIntakeTurn('insufficient_accept_unknown_advance', {
           interviewId: session.id,
           ...publicSession(await store.getSession(session.id)),
           nextAction: 'ASK',
@@ -7976,6 +8031,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
           reasoningMemory,
           acceptedUnknown: true,
           probe: null,
+        }, {
+          fieldMarkedComplete: true,
+          nextQuestionKey: nextQ ? nextQ.question.id : null,
+          templateName: 'postInterviewMessage.insufficient.acceptUnknown.advance',
         });
       }
 
@@ -8305,7 +8364,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         current_stage: session.current_stage,
       });
       const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-      return withExperienceFields(await store.getSession(session.id), {
+      return finishIntakeTurn('skip_advanced_complete', {
         interviewId: session.id,
         ...publicSession(await store.getSession(session.id)),
         nextAction: 'GENERATE_BLUEPRINT',
@@ -8315,7 +8374,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         blueprint: publicBlueprint(blueprint),
         reflection: null,
         reasoningMemory,
-      });
+      }, { templateName: 'postInterviewMessage.skip.blueprint_ready' });
     }
 
     const nextQAfterSkip = advancedAfterSkip ? currentQuestion(state) : q;
@@ -8352,6 +8411,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
         substance: ackSubstance,
         probe: probePrompt,
       });
+      if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
+        intakeTrace.writingGuidanceBranchEntered = true;
+        intakeTrace.templateName = 'conversationalAck.refinement_feedback';
+      }
     }
 
     const assistantMessage =
@@ -8383,7 +8446,15 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       created_at: new Date(),
     });
 
-    return withExperienceFields(await store.getSession(session.id), {
+    const nonAnswerBranch =
+      messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+        ? 'non_answer_insufficient_probe'
+        : messageType === MESSAGE_TYPES.SKIP
+          ? 'non_answer_skip'
+          : messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK
+            ? 'non_answer_refinement_feedback'
+            : 'non_answer_ack';
+    return finishIntakeTurn(nonAnswerBranch, {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction:
@@ -8420,6 +8491,15 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       reasoningMemory,
       probe: messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER ? probePrompt : null,
       acceptedUnknown: messageType === MESSAGE_TYPES.SKIP ? true : undefined,
+    }, {
+      nextQuestionKey: activeForAck ? activeForAck.id : q.question.id,
+      fieldMarkedComplete: advancedAfterSkip,
+      templateName:
+        messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK
+          ? intakeTrace.templateName || 'conversationalAck.refinement_feedback'
+          : messageType === MESSAGE_TYPES.INSUFFICIENT_ANSWER
+            ? 'postInterviewMessage.insufficient.probe'
+            : undefined,
     });
   }
 
@@ -8441,6 +8521,17 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     derived_evidence: evidenceRow ? [evidenceRow.id] : [],
   });
 
+  const classifyKindAtPersist = classifyUserResponse(text, classifyOpts);
+  if (
+    classifyKindAtPersist === ANSWER_KINDS.REFINEMENT_FEEDBACK &&
+    !skippedAsGuidance
+  ) {
+    intakeTrace.successMetricsHardGuardRan = true;
+  }
+  intakeTrace.normalizedSuccessMetricsAfterSave = Boolean(
+    (state.normalizedFacts && state.normalizedFacts.success_metrics || []).length
+  );
+
   logInterviewRoutingTurn(session.id, {
     phase: 'persist',
     activeQuestionId: q.question.id,
@@ -8452,9 +8543,12 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     answersSuccessMetrics: state.answers && state.answers.success_metrics,
     stepIndex: state.stepIndex,
     awaitingQuestionId: state.awaitingQuestionId,
+    intakeTraceId: intakeTrace.intakeTraceId,
   });
 
   if (skippedAsGuidance) {
+    intakeTrace.writingGuidanceBranchEntered = true;
+    intakeTrace.templateName = 'conversationalAck.refinement_feedback';
     state.awaitingQuestionId = q.question.id;
     session.interview_state = state;
     await store.updateSession(session.id, {
@@ -8478,7 +8572,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       derived_evidence: [],
       created_at: new Date(),
     });
-    return withExperienceFields(await store.getSession(session.id), {
+    return finishIntakeTurn('direct_answer_skipped_as_guidance', {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'ASK',
@@ -8497,6 +8591,11 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       contradiction: false,
       blueprint: null,
       reasoningMemory,
+    }, {
+      finalIntent: MESSAGE_TYPES.REFINEMENT_FEEDBACK,
+      nextQuestionKey: q.question.id,
+      fieldMarkedComplete: false,
+      templateName: 'conversationalAck.refinement_feedback',
     });
   }
 
@@ -8549,7 +8648,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       current_stage: session.current_stage,
     });
     const blueprint = await advanceThroughLifecycleToBlueprint(store, session);
-    return withExperienceFields(await store.getSession(session.id), {
+    return finishIntakeTurn('direct_answer_interview_complete', {
       interviewId: session.id,
       ...publicSession(await store.getSession(session.id)),
       nextAction: 'GENERATE_BLUEPRINT',
@@ -8560,6 +8659,10 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
       blueprint: publicBlueprint(blueprint),
       reflection: null,
       reasoningMemory: (await store.getSession(session.id)).interview_state?.reasoningMemory,
+    }, {
+      fieldMarkedComplete: true,
+      nextQuestionKey: null,
+      templateName: 'postInterviewMessage.directAnswer.blueprint_ready',
     });
   }
 
@@ -8600,27 +8703,38 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     interview_state: state,
   });
 
-  return withExperienceFields(await store.getSession(session.id), {
-    interviewId: session.id,
-    ...publicSession(await store.getSession(session.id)),
-    nextAction: contradiction ? 'CLARIFY' : 'ASK',
-    messageType: MESSAGE_TYPES.DIRECT_ANSWER,
-    answerDisposition: acceptedDisposition,
-    question: {
-      id: nextQ.question.id,
-      prompt: nextQ.question.prompt,
-      stage: nextQ.question.stage,
-      section: nextQ.question.section,
-      goal: nextQ.question.goal,
-      askedBecause: nextQ.question.askedBecause,
+  intakeTrace.fieldMarkedComplete = true;
+  intakeTrace.nextQuestionKey = nextQ.question.id;
+
+  return finishIntakeTurn(
+    contradiction ? 'direct_answer_advance_contradiction' : 'direct_answer_advance',
+    {
+      interviewId: session.id,
+      ...publicSession(await store.getSession(session.id)),
+      nextAction: contradiction ? 'CLARIFY' : 'ASK',
+      messageType: MESSAGE_TYPES.DIRECT_ANSWER,
+      answerDisposition: acceptedDisposition,
+      question: {
+        id: nextQ.question.id,
+        prompt: nextQ.question.prompt,
+        stage: nextQ.question.stage,
+        section: nextQ.question.section,
+        goal: nextQ.question.goal,
+        askedBecause: nextQ.question.askedBecause,
+      },
+      message: nextQ.question.prompt,
+      reflection,
+      evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
+      contradiction: contradiction || false,
+      blueprint: null,
+      reasoningMemory,
     },
-    message: nextQ.question.prompt,
-    reflection,
-    evidence: evidenceRow ? publicEvidence(evidenceRow) : null,
-    contradiction: contradiction || false,
-    blueprint: null,
-    reasoningMemory,
-  });
+    {
+      templateName: reflection
+        ? 'postInterviewMessage.directAnswer.advance_with_reflection'
+        : 'postInterviewMessage.directAnswer.next_question_prompt',
+    }
+  );
 }
 
 function sessionIsSample(session) {
