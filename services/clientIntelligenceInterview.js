@@ -770,12 +770,50 @@ function authoritativeGuidedSection(classifyOpts = {}) {
   return qid ? sectionForGuidedQuestion(qid) : null;
 }
 
+function hasPersistedNormalizedAnswer(state, questionId) {
+  const section = sectionForGuidedQuestion(questionId);
+  if (!section) return false;
+  const field = SECTION_TO_PRIMARY_FIELD[section];
+  const facts = (state && state.normalizedFacts) || {};
+  if (field) {
+    const val = facts[field];
+    if (Array.isArray(val) && val.length) return true;
+    if (typeof val === 'string' && String(val).trim() && !answerLooksEmpty(val)) return true;
+  }
+  const summary = state.sectionState && state.sectionState[section] && state.sectionState[section].summary;
+  if (summary && String(summary).trim() && !answerLooksEmpty(summary) && !/^Unknown:/i.test(String(summary))) {
+    return true;
+  }
+  return false;
+}
+
 function hasValidGuidedAnswer(state, questionId) {
   const answers = (state && state.answers) || {};
-  if (!(questionId in answers)) return false;
-  const text = String(answers[questionId] || '').trim();
-  if (!text || answerLooksEmpty(text)) return false;
-  return true;
+  if (questionId in answers) {
+    const text = String(answers[questionId] || '').trim();
+    if (text && !answerLooksEmpty(text)) return true;
+  }
+  return hasPersistedNormalizedAnswer(state, questionId);
+}
+
+function shouldLogInterviewRouting() {
+  const flag = String(process.env.CIE_INTERVIEW_ROUTING_LOG || '').trim().toLowerCase();
+  return flag === '1' || flag === 'true' || flag === 'yes';
+}
+
+function logInterviewRoutingTurn(sessionId, payload) {
+  if (!shouldLogInterviewRouting()) return;
+  try {
+    console.log(
+      `[cie-intake-routing] ${JSON.stringify({
+        sessionId,
+        at: nowIso(),
+        ...payload,
+      })}`
+    );
+  } catch (_) {
+    // ignore logging failures
+  }
 }
 
 function syncStepIndexToFirstUnanswered(state) {
@@ -6360,10 +6398,26 @@ async function applySectionUpdate(
     .filter((s) => isBusinessFactStatement(s, classifyOpts));
 
   const rawStatement = String(statement || '').trim();
-  const responseKind = classifyUserResponse(rawStatement, classifyOpts);
+  let responseKind = classifyUserResponse(rawStatement, classifyOpts);
   const guidedAuthoritativeCapture =
     isActiveGuidedIntakeTurn(classifyOpts) &&
     authoritativeGuidedSection(classifyOpts) === sectionKey;
+
+  if (
+    responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK &&
+    guidedAuthoritativeCapture &&
+    !looksLikeInterviewWritingGuidance(rawStatement, {
+      ...classifyOpts,
+      awaitingQuestionId:
+        classifyOpts.awaitingQuestionId ||
+        (classifyOpts.activeQuestion &&
+          (classifyOpts.activeQuestion.id || classifyOpts.activeQuestion.questionId)),
+      looksLikeRefinement: undefined,
+      containsMetaInstruction: undefined,
+    })
+  ) {
+    responseKind = ANSWER_KINDS.BUSINESS_FACT;
+  }
 
   // Refinement / system guidance must never populate commercial Blueprint fields.
   if (
@@ -7478,7 +7532,12 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     throw new ClientIntelligenceError('empty_message', 'message is required');
   }
 
-  const state = normalizeRecoveredInterviewState(session.interview_state || initialInterviewState());
+  let state = normalizeRecoveredInterviewState(session.interview_state || initialInterviewState());
+  state = syncStepIndexToFirstUnanswered(state);
+  if (state !== session.interview_state) {
+    session.interview_state = state;
+    await store.updateSession(session.id, { interview_state: state });
+  }
   const q = currentQuestion(state);
 
   // Refinement pass after resume: free-form note updates stay conversational
@@ -7674,10 +7733,37 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     },
   });
   let messageType = planned.messageClass;
+  if (
+    messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK &&
+    q.question.id &&
+    !looksLikeInterviewWritingGuidance(text, {
+      ...classifyOpts,
+      looksLikeRefinement: undefined,
+      containsMetaInstruction: undefined,
+    })
+  ) {
+    messageType = MESSAGE_TYPES.DIRECT_ANSWER;
+  }
   reasoningMemory = markClassification(reasoningMemory, messageType);
   state.reasoningMemory = reasoningMemory;
 
   const interviewEscape = detectInterviewEscapeIntent(text, classifyOpts);
+
+  logInterviewRoutingTurn(session.id, {
+    phase: 'classify',
+    activeQuestionId: q.question.id,
+    activeSection: q.question.section,
+    interviewEscape,
+    detectedIntent: messageType,
+    plannedMessageClass: planned.messageClass,
+    looksLikeWritingGuidance: looksLikeInterviewWritingGuidance(text, {
+      ...classifyOpts,
+      looksLikeRefinement: undefined,
+      containsMetaInstruction: undefined,
+    }),
+    awaitingQuestionId: state.awaitingQuestionId,
+    stepIndex: state.stepIndex,
+  });
 
   // Non-answers: store appropriately, stay on the same question (or skip-advance), respond conversationally.
   if (messageType !== MESSAGE_TYPES.DIRECT_ANSWER) {
@@ -8338,7 +8424,8 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   }
 
   session.interview_state = state;
-  const { evidenceRow, contradiction, skippedAsGuidance } = await applySectionUpdate(
+  const { evidenceRow, contradiction, skippedAsGuidance, responseKind: applyResponseKind } =
+    await applySectionUpdate(
     store,
     session,
     q.question.section,
@@ -8352,6 +8439,19 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
 
   await store.updateTurn(clientTurn.id, {
     derived_evidence: evidenceRow ? [evidenceRow.id] : [],
+  });
+
+  logInterviewRoutingTurn(session.id, {
+    phase: 'persist',
+    activeQuestionId: q.question.id,
+    destinationSection: q.question.section,
+    detectedIntent: messageType,
+    applyResponseKind: applyResponseKind || null,
+    skippedAsGuidance: Boolean(skippedAsGuidance),
+    normalizedMetrics: (state.normalizedFacts && state.normalizedFacts.success_metrics) || [],
+    answersSuccessMetrics: state.answers && state.answers.success_metrics,
+    stepIndex: state.stepIndex,
+    awaitingQuestionId: state.awaitingQuestionId,
   });
 
   if (skippedAsGuidance) {

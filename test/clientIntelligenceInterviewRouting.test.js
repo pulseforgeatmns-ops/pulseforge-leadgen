@@ -387,6 +387,51 @@ describe('Client Intelligence interview answer routing (P0)', () => {
     assert.match(session.interview_state.answers.success_metrics || '', /weak signal/i);
   });
 
+  it('12. persisted success_metrics evidence recovers stuck step without re-ask loop', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 512 }, opts);
+    for (const answer of [
+      'Studio Substral — credible websites for local businesses.',
+      'Website design and redesign.',
+      'Local service businesses in southern NH.',
+      'Commodity price shoppers.',
+      'Greater Manchester NH.',
+      'Responsiveness tips the decision.',
+      'Grounded and direct.',
+      'More booked discovery calls in 90 days.',
+    ]) {
+      await postInterviewMessage(started.interviewId, answer, opts);
+    }
+
+    let session = await store.getSession(started.interviewId);
+    assert.equal(session.interview_state.awaitingQuestionId, 'success_metrics');
+    session.interview_state.normalizedFacts = session.interview_state.normalizedFacts || {};
+    session.interview_state.normalizedFacts.success_metrics = [
+      'qualified prospects identified',
+      'discovery calls booked',
+      'revenue closed',
+    ];
+    session.interview_state.sectionState = session.interview_state.sectionState || {};
+    session.interview_state.sectionState.successMetrics = {
+      summary: 'Success will be judged by qualified prospects identified, discovery calls booked, revenue closed',
+      confidence: 0.82,
+      evidenceIds: [],
+      unknowns: [],
+    };
+    delete session.interview_state.answers.success_metrics;
+    await store.updateSession(started.interviewId, { interview_state: session.interview_state });
+
+    const turn = await postInterviewMessage(
+      started.interviewId,
+      'Qualified prospects identified, discovery calls booked, and revenue closed.',
+      opts
+    );
+    assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
+    assert.notEqual(turn.question?.id, 'success_metrics');
+    session = await store.getSession(started.interviewId);
+    assert.equal(session.interview_state.stepIndex >= QUESTION_BANK.length, true);
+  });
+
   it('6. explicit skip after probe uses defer language — not a fake identity answer', async () => {
     const { opts, store } = withStore();
     const started = await startClientInterview({ clientId: 506 }, opts);
