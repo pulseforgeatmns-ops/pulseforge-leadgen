@@ -2223,6 +2223,17 @@ function isDecisionMakerLabel(text) {
   return /\b(?:managers?|owners?|directors?|principals?)\b/.test(s);
 }
 
+/** Canonical one-word / short ICP labels from Scout/CIE segment patterns — not incomplete fragments. */
+function isCanonicalIdealCustomerSegment(value) {
+  const raw = normalizeBusinessPhrase(String(value || '').trim());
+  if (!raw) return false;
+  for (const [, canon] of CUSTOMER_SEGMENT_PATTERNS) {
+    if (sameSemanticValue(raw, canon)) return true;
+  }
+  if (isDecisionMakerLabel(raw)) return true;
+  return false;
+}
+
 function managerRoleFromWord(word) {
   const w = String(word || '')
     .toLowerCase()
@@ -3686,7 +3697,10 @@ function isStructurallyIncompleteRecoveredCustomerFragment(slot, value) {
 
   if (slot === 'ideal_customers' || slot === 'disqualified_customers') {
     const words = raw.split(/\s+/).filter(Boolean);
-    if (words.length <= 1) return true;
+    if (words.length <= 1) {
+      if (slot === 'ideal_customers' && isCanonicalIdealCustomerSegment(raw)) return false;
+      return true;
+    }
     if (/^(?:customers?|clients?|people|owners?|teams?|businesses?|segments?)$/i.test(raw)) return true;
     if (/^(?:ideally|perhaps|maybe|likely|generally)\b/i.test(raw)) return true;
     if (/^(?:delegate|operate|manage|run|change|improve|grow)\b/i.test(raw)) return true;
@@ -12052,6 +12066,7 @@ module.exports = {
   isConversationalFiller,
   isDecisionMakerLabel,
   mergeIdealCustomersWithPrecedence,
+  isCanonicalIdealCustomerSegment,
   synthesizeDifferentiationSnippet,
   emptyNormalizedFacts,
   ingestAnswerIntoNormalizedFacts,

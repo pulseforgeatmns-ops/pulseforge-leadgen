@@ -6,6 +6,8 @@ const assert = require('node:assert/strict');
 const {
   buildExecutiveSummary,
   sectionsFromNormalizedFacts,
+  normalizeRecoveredInterviewState,
+  emptyNormalizedFacts,
   EPISTEMIC_STATES,
 } = require('../services/clientIntelligenceInterview');
 
@@ -63,6 +65,30 @@ function briefForFacts(facts) {
   const sections = sectionsFromNormalizedFacts(facts);
   return buildExecutiveSummary(sections, { normalizedFacts: facts, clientId: 17 });
 }
+
+describe('CIE normalized facts — canonical ICP segment recovery', () => {
+  it('preserves single-word canonical segments like daycares after state normalization', () => {
+    const facts = emptyNormalizedFacts();
+    facts.business_name = 'Anchor Cleaning';
+    facts.ideal_customers = [
+      'property managers',
+      'facility managers',
+      'short-term rental companies',
+      'professional offices',
+      'daycares',
+      'rec centers',
+      'high-traffic buildings',
+    ];
+    facts.disqualified_customers = [
+      'customers whose main priority is the lowest price',
+    ];
+    facts.epistemic_states.ideal_customers = EPISTEMIC_STATES.KNOWN;
+    facts.epistemic_states.disqualified_customers = EPISTEMIC_STATES.KNOWN;
+
+    const recovered = normalizeRecoveredInterviewState({ normalizedFacts: facts });
+    assert.ok(recovered.normalizedFacts.ideal_customers.includes('daycares'));
+  });
+});
 
 describe('Studio Substral Executive Business Brief', () => {
   it('does not mention commercial cleaning or Anchor objectives', () => {
