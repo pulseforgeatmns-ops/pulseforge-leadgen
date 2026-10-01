@@ -31,6 +31,12 @@ const SIGNAL_METRICS_ANSWER =
 const REGENERATE_DEMAND_ANSWER =
   'We regenerate interest through outreach and measure positive replies, discovery calls booked, proposals sent, and revenue closed.';
 
+const STUDIO_SUBSTRAL_SUCCESS_METRICS_ANSWER =
+  'Qualified prospects identified, prospects contacted, positive replies, discovery calls booked, proposals sent, proposals accepted, and revenue closed. We also watch reply quality, call quality, urgency, budget fit, and strong vs. weak demand signals.';
+
+const SUCCESS_METRICS_WITH_REFINEMENT_SHAPED_PHRASING =
+  'Preserve operator-defined success metrics separately from Max recommended scorecard metrics. Qualified prospects identified, positive replies, discovery calls booked, proposals sent, proposals accepted, revenue closed, reply quality, call quality, urgency, budget fit, and strong vs weak demand signals.';
+
 async function advanceToSuccessMetricsQuestion(interviewId, opts) {
   const steps = [
     'Studio Substral — website design and redesign for local businesses who need a credible web presence.',
@@ -444,6 +450,61 @@ describe('Client Intelligence interview answer routing (P0)', () => {
     assert.notEqual(turn.question?.id, 'success_metrics');
     session = await store.getSession(started.interviewId);
     assert.equal(session.interview_state.stepIndex >= QUESTION_BANK.length, true);
+  });
+
+  it('14. Studio Substral success-metrics answer is not skipped as guidance at persist', async () => {
+    const prev = process.env.CIE_INTAKE_PATH_VISIBLE;
+    process.env.CIE_INTAKE_PATH_VISIBLE = '1';
+    try {
+      const { opts, store } = withStore();
+      const started = await startClientInterview({ clientId: 514 }, opts);
+      await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+      const sessionBefore = await store.getSession(started.interviewId);
+      assert.equal(sessionBefore.interview_state.awaitingQuestionId, 'success_metrics');
+
+      const turn = await postInterviewMessage(
+        started.interviewId,
+        STUDIO_SUBSTRAL_SUCCESS_METRICS_ANSWER,
+        opts
+      );
+      assert.equal(turn.intakePathDebug?.finalIntent, MESSAGE_TYPES.DIRECT_ANSWER);
+      assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
+      assert.notEqual(turn.intakePathDebug?.branch, 'direct_answer_skipped_as_guidance');
+      assert.notEqual(turn.intakePathDebug?.branch, 'non_answer_refinement_feedback');
+      assert.notEqual(
+        turn.intakePathDebug?.template,
+        'conversationalAck.refinement_feedback'
+      );
+      assert.ok(
+        turn.nextAction === 'GENERATE_BLUEPRINT' || turn.nextAction === 'COMPLETE'
+      );
+      const session = await store.getSession(started.interviewId);
+      assert.match(session.interview_state.answers.success_metrics || '', /qualified prospects/i);
+      assert.match(session.interview_state.answers.success_metrics || '', /budget fit/i);
+      assert.ok(session.interview_state.stepIndex >= QUESTION_BANK.length);
+    } finally {
+      if (prev === undefined) delete process.env.CIE_INTAKE_PATH_VISIBLE;
+      else process.env.CIE_INTAKE_PATH_VISIBLE = prev;
+    }
+  });
+
+  it('15. success-metrics answer with refinement-shaped phrasing still advances intake', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview({ clientId: 515 }, opts);
+    await advanceToSuccessMetricsQuestion(started.interviewId, opts);
+    const turn = await postInterviewMessage(
+      started.interviewId,
+      SUCCESS_METRICS_WITH_REFINEMENT_SHAPED_PHRASING,
+      opts
+    );
+    assert.doesNotMatch(turn.message || '', /guidance for how I write/i);
+    assert.notEqual(turn.question?.id, 'success_metrics');
+    assert.ok(
+      turn.nextAction === 'GENERATE_BLUEPRINT' || turn.nextAction === 'COMPLETE'
+    );
+    const session = await store.getSession(started.interviewId);
+    assert.match(session.interview_state.answers.success_metrics || '', /qualified prospects/i);
+    assert.match(session.interview_state.answers.success_metrics || '', /budget fit/i);
   });
 
   it('6. explicit skip after probe uses defer language — not a fake identity answer', async () => {

@@ -824,6 +824,29 @@ function looksLikeSuccessMetricsBusinessEvidence(text) {
   return SUCCESS_METRICS_EVIDENCE_RE.test(String(text || ''));
 }
 
+function activeGuidedQuestionId(classifyOpts = {}) {
+  const aq = classifyOpts.activeQuestion;
+  return (
+    classifyOpts.awaitingQuestionId ||
+    (aq && (aq.id || aq.questionId)) ||
+    null
+  );
+}
+
+/** Narrow block for success-metrics intake — not broad writing-guidance heuristics. */
+function blocksSuccessMetricsBusinessCapture(text) {
+  return EXPLICIT_COPYWRITING_COMMAND_RE.test(String(text || '').trim());
+}
+
+function isActiveSuccessMetricsBusinessCapture(text, sectionKey, classifyOpts = {}) {
+  if (!isActiveGuidedIntakeTurn(classifyOpts)) return false;
+  if (activeGuidedQuestionId(classifyOpts) !== 'success_metrics') return false;
+  if (sectionKey !== 'successMetrics') return false;
+  if (!looksLikeSuccessMetricsBusinessEvidence(text)) return false;
+  if (blocksSuccessMetricsBusinessCapture(text)) return false;
+  return true;
+}
+
 function shouldForceActiveGuidedDirectAnswer(text, question, messageType, classifyOpts = {}) {
   if (!question || !question.id) return false;
   const copyOpts = {
@@ -831,7 +854,14 @@ function shouldForceActiveGuidedDirectAnswer(text, question, messageType, classi
     activeQuestion: question,
     awaitingQuestionId: question.id,
   };
-  if (looksLikeExplicitCopywritingCommand(text, copyOpts)) return false;
+  if (
+    question.id === 'success_metrics' &&
+    looksLikeSuccessMetricsBusinessEvidence(text)
+  ) {
+    if (blocksSuccessMetricsBusinessCapture(text)) return false;
+  } else if (looksLikeExplicitCopywritingCommand(text, copyOpts)) {
+    return false;
+  }
   if (
     messageType === MESSAGE_TYPES.SKIP ||
     messageType === MESSAGE_TYPES.CORRECTION ||
@@ -1404,31 +1434,27 @@ function classifyUserResponse(text, opts = {}) {
     return ANSWER_KINDS.SYSTEM_GUIDANCE;
   }
   const activeQuestion = opts.activeQuestion || null;
-  const activeQuestionId =
-    opts.awaitingQuestionId ||
-    (activeQuestion && (activeQuestion.id || activeQuestion.questionId)) ||
-    null;
+  const activeQuestionId = activeGuidedQuestionId({
+    ...opts,
+    activeQuestion,
+  });
   if (
     activeQuestionId === 'success_metrics' &&
     looksLikeSuccessMetricsBusinessEvidence(text) &&
-    !looksLikeExplicitCopywritingCommand(text, {
-      ...opts,
-      activeQuestion,
-      awaitingQuestionId: activeQuestionId,
-    })
+    !blocksSuccessMetricsBusinessCapture(text)
   ) {
     return ANSWER_KINDS.BUSINESS_FACT;
   }
   if (
     isActiveGuidedIntakeTurn(opts) &&
-    !looksLikeExplicitCopywritingCommand(text, {
-      ...opts,
-      activeQuestion,
-      awaitingQuestionId: activeQuestionId,
-    }) &&
     (activeQuestionId === 'success_metrics'
-      ? looksLikeSuccessMetricsBusinessEvidence(text)
-      : true)
+      ? looksLikeSuccessMetricsBusinessEvidence(text) &&
+        !blocksSuccessMetricsBusinessCapture(text)
+      : !looksLikeExplicitCopywritingCommand(text, {
+          ...opts,
+          activeQuestion,
+          awaitingQuestionId: activeQuestionId,
+        }))
   ) {
     const guidedMsgType = classifyInterviewMessage(text, {
       ...opts,
@@ -6577,6 +6603,11 @@ async function applySectionUpdate(
   const guidedAuthoritativeCapture =
     isActiveGuidedIntakeTurn(classifyOpts) &&
     authoritativeGuidedSection(classifyOpts) === sectionKey;
+  const activeSuccessMetricsCapture = isActiveSuccessMetricsBusinessCapture(
+    rawStatement,
+    sectionKey,
+    classifyOpts
+  );
   const narrowWritingGuidance = looksLikeInterviewWritingGuidance(rawStatement, {
     ...classifyOpts,
     awaitingQuestionId:
@@ -6586,22 +6617,29 @@ async function applySectionUpdate(
     looksLikeRefinement: undefined,
     containsMetaInstruction: undefined,
   });
+  const guidedCopywritingBlock = activeSuccessMetricsCapture
+    ? blocksSuccessMetricsBusinessCapture(rawStatement)
+    : looksLikeExplicitCopywritingCommand(rawStatement, classifyOpts);
   const forceGuidedBusinessFact =
-    guidedAuthoritativeCapture &&
-    !looksLikeExplicitCopywritingCommand(rawStatement, classifyOpts) &&
-    (!narrowWritingGuidance ||
-      (sectionKey === 'successMetrics' &&
-        looksLikeSuccessMetricsBusinessEvidence(rawStatement)));
+    activeSuccessMetricsCapture ||
+    (guidedAuthoritativeCapture &&
+      !guidedCopywritingBlock &&
+      (!narrowWritingGuidance ||
+        (sectionKey === 'successMetrics' &&
+          looksLikeSuccessMetricsBusinessEvidence(rawStatement))));
 
-  if (responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK && forceGuidedBusinessFact) {
+  if (activeSuccessMetricsCapture) {
+    responseKind = ANSWER_KINDS.BUSINESS_FACT;
+  } else if (responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK && forceGuidedBusinessFact) {
     responseKind = ANSWER_KINDS.BUSINESS_FACT;
   }
 
   // Refinement / system guidance must never populate commercial Blueprint fields.
   if (
-    responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK ||
-    responseKind === ANSWER_KINDS.SYSTEM_GUIDANCE ||
-    (!guidedAuthoritativeCapture && containsMetaInstructionLanguage(rawStatement))
+    !activeSuccessMetricsCapture &&
+    (responseKind === ANSWER_KINDS.REFINEMENT_FEEDBACK ||
+      responseKind === ANSWER_KINDS.SYSTEM_GUIDANCE ||
+      (!guidedAuthoritativeCapture && containsMetaInstructionLanguage(rawStatement)))
   ) {
     state.revisionGuidance = [
       ...(state.revisionGuidance || []),
