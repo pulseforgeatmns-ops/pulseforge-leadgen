@@ -87,15 +87,30 @@ describe('walkthrough validation', () => {
     assert.ok(result.errors.space_type);
   });
 
-  it('covers the advertised space-type options', () => {
-    assert.deepEqual(SPACE_TYPES, [
+  it('covers the advertised commercial space-type options', () => {
+    for (const spaceType of [
       'law_office',
       'accounting',
       'medical_office',
       'general_office',
       'retail',
       'other',
-    ]);
+    ]) {
+      assert.ok(SPACE_TYPES.includes(spaceType));
+    }
+  });
+
+  it('accepts residential home cleaning space types from the residential quote form', () => {
+    const result = validateWalkthroughPayload({
+      name: 'Jake',
+      business_name: 'Residential home',
+      phone: '6032935816',
+      email: 'homeowner@example.com',
+      city: 'Manchester',
+      space_type: 'residential_monthly',
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.values.space_type_label, 'Monthly recurring cleaning');
   });
 });
 
@@ -152,6 +167,21 @@ describe('walkthrough public route', () => {
     assert.equal(res.json.ok, true);
     assert.equal(res.json.submission_id, 8801);
     assert.match(res.json.message, /Facility Assessment/i);
+  });
+
+  it('creates a residential home cleaning request', async () => {
+    const res = await request(harness.base, 'POST', '/api/public/walkthrough', {
+      name: 'Jake',
+      business_name: 'Residential home',
+      phone: '6032935816',
+      email: 'jake.residential@office-mail.com',
+      city: 'Manchester',
+      space_type: 'residential_monthly',
+      company_website: '',
+    });
+    assert.equal(res.status, 201);
+    assert.equal(res.json.ok, true);
+    assert.equal(typeof res.json.submission_id, 'number');
   });
 
   it('returns field errors without internals', async () => {
