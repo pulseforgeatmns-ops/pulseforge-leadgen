@@ -160,6 +160,19 @@ async function promoteRecord(record, {
     return { promoted: false, recovered: false, emailResolved: true, emailVerified: false, reason: verification.rejectReason || 'verification_rejected' };
   }
 
+  const discoveryMethod = record.source || 'manual_promote';
+  const vertical = normalizeVertical(record.vertical) || 'unknown';
+  const enrichmentProvenance = require('../utils/canonicalEmailEligibility').stampEmailProvenance({},
+    (enriched.source || []).join('+'), { source_url: enriched.sourceUrl || null,
+      verifier: verification.emailVerificationMethod, status: verification.emailStatus,
+      resolved_at: new Date().toISOString() });
+  const contactReason = Number(record.client_id) === 10 && require('../utils/governedContactEligibility').governedContactReason({
+    client_id: record.client_id, domain, email: enriched.email,
+    email_verified: verification.emailVerified, email_status: verification.emailStatus,
+    do_not_contact: verification.doNotContact, enrichment_provenance: enrichmentProvenance,
+  });
+  if (contactReason) return { promoted: false, recovered: false, emailResolved: true,
+    emailVerified: verification.emailVerified === true, reason: contactReason };
   const companyId = await findOrCreateCompanyForClient({
     name: record.company || domain,
     domain,
@@ -170,15 +183,13 @@ async function promoteRecord(record, {
   }, db);
   if (!companyId) throw new Error('Unable to create company row');
 
-  const discoveryMethod = record.source || 'manual_promote';
-  const vertical = normalizeVertical(record.vertical) || 'unknown';
   const insert = await db.query(`
     INSERT INTO prospects (
       company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
       client_id, service_area_match, discovery_method, website_url,
       email_verified, email_verification_method, verified_at, do_not_contact,
-      email_status, verifier_response, verifier_checked_at
-    ) VALUES ($1, NULL, NULL, $2, NULL, 'cold', 'scout', 70, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
+      email_status, verifier_response, verifier_checked_at, enrichment_provenance
+    ) VALUES ($1, NULL, NULL, $2, NULL, 'cold', 'scout', 70, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16::jsonb)
     ON CONFLICT (email) DO NOTHING
     RETURNING id
   `, [
@@ -197,11 +208,12 @@ async function promoteRecord(record, {
     verification.emailStatus,
     JSON.stringify(verification.verifierResponse || null),
     verification.verifierCheckedAt,
+    JSON.stringify(enrichmentProvenance),
   ]);
 
   if (!insert.rows.length) {
     const existing = await db.query(
-      `SELECT id, client_id, do_not_contact, email_verified, email_status
+      `SELECT id, company_id, client_id, do_not_contact, email_verified, email_status, enrichment_provenance
        FROM prospects
        WHERE lower(email) = lower($1)
        LIMIT 1`,
@@ -219,6 +231,8 @@ async function promoteRecord(record, {
       console.log('[promoteUnenriched] Prospect already exists for this email.');
       return { promoted: false, recovered: false, emailResolved: true, emailVerified: verification.emailVerified === true, reason: 'email_owned_elsewhere' };
     }
+    if (String(row.company_id) !== String(companyId)) return { promoted: false, recovered: false,
+      emailResolved: true, emailVerified: verification.emailVerified === true, reason: 'email_company_binding_mismatch' };
     if (row.do_not_contact === true) {
       await db.query(`
         UPDATE scout_unenriched
@@ -229,7 +243,7 @@ async function promoteRecord(record, {
       `, [record.id]);
       return { promoted: false, recovered: false, emailResolved: true, emailVerified: verification.emailVerified === true, reason: 'existing_dnc' };
     }
-    if (verification.emailVerified === true && row.email_verified !== true) {
+    if (verification.emailVerified === true) {
       await db.query(`
         UPDATE prospects
         SET email_verified = $2,
@@ -238,7 +252,8 @@ async function promoteRecord(record, {
             email_status = $5,
             verifier_response = $6::jsonb,
             verifier_checked_at = $7,
-            notes = COALESCE(notes, '') || $8
+            notes = COALESCE(notes, '') || $8,
+            enrichment_provenance = $10::jsonb
         WHERE id = $1 AND client_id = $9
       `, [
         row.id,
@@ -250,6 +265,8 @@ async function promoteRecord(record, {
         verification.verifierCheckedAt,
         ` | recovered by Scout replenishment from scout_unenriched (${record.id})`,
         record.client_id,
+        JSON.stringify(require('../utils/canonicalEmailEligibility').stampEmailProvenance(
+          row.enrichment_provenance, (enriched.source || []).join('+'), enrichmentProvenance.email)),
       ]);
     }
     await db.query('DELETE FROM scout_unenriched WHERE id = $1', [record.id]);

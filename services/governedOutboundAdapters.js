@@ -309,7 +309,7 @@ function adapters(pool, dependencies = {}) {
       candidates: (capacity.queue?.items || []).map(item => ({ item,
         candidateId: String(item.prospectId || item.id),
         message: amo.resolvePaigeVariant(variants, { candidateId: item.paige?.candidateId || item.id,
-          variantLabel: item.paige?.variantLabel || 'Primary' }) })) };
+          variantLabel: item.paige?.variantLabel || 'Primary', includeIdentity: ctx.usesBrevoTransport }) })) };
   }
   async function liveGate(program, item, _prepared, now) {
     const { rows } = await pool.query(`SELECT 1 FROM acquisition_outbound_inbox_health

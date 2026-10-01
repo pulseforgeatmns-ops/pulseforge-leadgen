@@ -7,7 +7,7 @@
  * Buyer-readiness UNKNOWN is not an admission requirement.
  */
 
-const { canonicalOutboundEmailIneligibilityReason } = require('../utils/canonicalEmailEligibility');
+const { governedContactReason } = require('../utils/governedContactEligibility');
 const { normalizeDomain } = require('../utils/canonicalEmailEligibility');
 
 const FUNNEL_STAGES = Object.freeze([
@@ -287,7 +287,7 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
   const email = String(candidate.email || '').trim().toLowerCase();
   const company = String(candidate.company || candidate.name || '').trim();
   const { rows } = await pool.query(`
-    SELECT p.id, p.company_id, p.email, p.email_verified, p.email_status, p.do_not_contact,
+    SELECT p.id, p.company_id, p.email, p.email_verified, p.email_status, p.do_not_contact, p.enrichment_provenance,
       p.assigned_ao_id, p.closer_id, p.last_contacted_at, p.last_reply_at,
       p.service_area_match, p.vertical, c.name, c.domain, c.website,
       EXISTS(SELECT 1 FROM ao_prospect_tasks t WHERE t.client_id=10 AND t.prospect_id=p.id) AS has_ao_task,
@@ -315,12 +315,12 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
     ? rows.find(row => String(row.email || '').toLowerCase() === email)
     : null;
   const usable = rows.find(row => {
-    if (canonicalOutboundEmailIneligibilityReason(row)) return false;
+    if (governedContactReason(row)) return false;
     if (row.do_not_contact === true) return false;
     const classified = classifyOwnershipRow(row, opts.now);
     return classified.kind === OWNERSHIP_KINDS.CLEAR;
   });
-  if (usable || (exactEmail && !canonicalOutboundEmailIneligibilityReason(exactEmail) && classifyOwnershipRow(exactEmail, opts.now).kind === OWNERSHIP_KINDS.CLEAR)) {
+  if (usable || (exactEmail && !governedContactReason(exactEmail) && classifyOwnershipRow(exactEmail, opts.now).kind === OWNERSHIP_KINDS.CLEAR)) {
     const prospect = usable || exactEmail;
     return {
       kind: OWNERSHIP_KINDS.ALREADY_USABLE_CANONICAL,

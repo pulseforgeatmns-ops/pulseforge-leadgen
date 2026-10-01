@@ -27,7 +27,7 @@ test('New York calendar closes weekends and 17:00, handles DST and expiration', 
 });
 test('verified and projectable email, exact binding and safe Paige copy are all required', () => {
   const item = { email: 'ops@customer.example', sendable: true, paige: { candidateId: 'company' } };
-  const crm = { email: item.email, email_verified: true, email_status: 'valid', do_not_contact: false,
+  const crm = { company_id: 'company', domain: 'customer.example', email: item.email, email_verified: true, email_status: 'valid', do_not_contact: false,
     enrichment_provenance: { email: { source: 'website_email' } } };
   const message = { subject: 'Cleaning support', body: 'Would a written quote help?', candidateId: 'company' };
   assert.equal(candidateReason(item, crm, message), null);
@@ -55,7 +55,7 @@ test('DNC and ownership suppression stay out of governed refill selection', asyn
   const { selectRefillEntries } = require('../services/governedOutboundRefill');
   const messageFor = (id) => ({ subject: 'Cleaning support', body: 'Would a written quote help?', candidateId: id });
   const contact = (id, email, extra = {}) => ({
-    prospect_id: id, id, company_id: `co-${id}`, email, email_verified: true, email_status: 'valid',
+    domain: 'customer.example', prospect_id: id, id, company_id: `co-${id}`, email, email_verified: true, email_status: 'valid',
     do_not_contact: false, enrichment_provenance: { email: { source: 'website_email' } }, ...extra,
   });
   const selected = await selectRefillEntries({
@@ -143,7 +143,7 @@ test('production preparation runs Scout, enrichment, Max, Paige and Emmett throu
     policy: { enrichmentLimit: 15, preparationAttemptsPerDay: 3, senderEmail: sender.senderEmail } };
   const governedContext = require('./helpers/governedOutboundFixtures').anchorGovernedContext({ programId: 'test-program' });
   const contacts = Object.fromEntries(['co-harbor','co-granite'].map(id => [id, {
-    prospect_id: id, company_id: id, email: `ops@${id}.example`, email_verified: true, email_status: 'valid',
+    company_name: id === 'co-harbor' ? 'Harbor Law Group' : 'Granite Legal Partners', domain: `${id}.example`, prospect_id: id, company_id: id, email: `ops@${id}.example`, email_verified: true, email_status: 'valid',
     enrichment_provenance: { email: { source: 'website_email' } }, do_not_contact: false,
   }]));
   let enriched = 0;
