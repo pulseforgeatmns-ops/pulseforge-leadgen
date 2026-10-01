@@ -100,6 +100,7 @@ const {
   looksLikeExplicitUnknownAnswer,
   looksLikeExplicitDeferral,
   looksLikeSkip,
+  detectInterviewEscapeIntent,
 } = require('./clientIntelligenceReasoning');
 
 const SESSION_STATUSES = Object.freeze([
@@ -1086,12 +1087,18 @@ function classifyUserResponse(text, opts = {}) {
     msgType === MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT ||
     msgType === MESSAGE_TYPES.CORRECTION
   ) {
-    if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
+    if (
+      !opts.activeQuestion &&
+      (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text))
+    ) {
       return ANSWER_KINDS.REFINEMENT_FEEDBACK;
     }
     return ANSWER_KINDS.BUSINESS_FACT;
   }
-  if (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text)) {
+  if (
+    !opts.activeQuestion &&
+    (looksLikeRefinementFeedback(text) || containsMetaInstructionLanguage(text))
+  ) {
     return ANSWER_KINDS.REFINEMENT_FEEDBACK;
   }
   return ANSWER_KINDS.BUSINESS_FACT;
@@ -1270,10 +1277,10 @@ function partitionUserResponse(text) {
   };
 }
 
-function isBusinessFactStatement(text) {
+function isBusinessFactStatement(text, opts = {}) {
   if (answerLooksEmpty(text)) return false;
   if (/^Unknown:/i.test(String(text || ''))) return false;
-  return classifyUserResponse(text) === ANSWER_KINDS.BUSINESS_FACT;
+  return classifyUserResponse(text, opts) === ANSWER_KINDS.BUSINESS_FACT;
 }
 
 function looksLikeConfirmation(text) {
@@ -5519,11 +5526,22 @@ function currentQuestion(state) {
   return { index: idx, question: QUESTION_BANK[idx] };
 }
 
+function syncAwaitingQuestionId(state) {
+  if (!state || state.mode === 'notes') {
+    state.awaitingQuestionId = null;
+    return state;
+  }
+  const q = currentQuestion(state);
+  state.awaitingQuestionId = q ? q.question.id : null;
+  return state;
+}
+
 function initialInterviewState({ notes } = {}) {
-  return {
+  const base = {
     mode: notes ? 'notes' : 'interactive',
     stepIndex: 0,
     done: Boolean(notes),
+    awaitingQuestionId: notes ? null : QUESTION_BANK[0].id,
     answers: {},
     sectionState: emptySections(),
     contradictions: [],
@@ -5538,7 +5556,9 @@ function initialInterviewState({ notes } = {}) {
     notes: notes ? String(notes) : null,
     blueprintId: null,
     lastReflectionAt: 0,
+    interviewPaused: false,
   };
+  return syncAwaitingQuestionId(base);
 }
 
 function cloneJson(value) {
@@ -6145,7 +6165,15 @@ function publicTurn(t) {
   };
 }
 
-async function applySectionUpdate(store, session, sectionKey, statement, type, turnId) {
+async function applySectionUpdate(
+  store,
+  session,
+  sectionKey,
+  statement,
+  type,
+  turnId,
+  classifyOpts = {}
+) {
   const state = session.interview_state || initialInterviewState();
   const sectionState = state.sectionState || emptySections();
   const section = sectionState[sectionKey] || emptySection();
@@ -6155,10 +6183,10 @@ async function applySectionUpdate(store, session, sectionKey, statement, type, t
   const priorStatements = priorEvidence
     .map((e) => e.statement)
     .filter((s) => s && !/^Unknown:/i.test(String(s)))
-    .filter((s) => isBusinessFactStatement(s));
+    .filter((s) => isBusinessFactStatement(s, classifyOpts));
 
   const rawStatement = String(statement || '').trim();
-  const responseKind = classifyUserResponse(rawStatement);
+  const responseKind = classifyUserResponse(rawStatement, classifyOpts);
 
   // Refinement / system guidance must never populate commercial Blueprint fields.
   if (
@@ -7442,16 +7470,23 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
 
   // SPEC-090 — session-level reasoning before attaching to the active question.
   let reasoningMemory = ensureReasoningMemory(state);
-  const planned = planReasoningTurn(text, {
+  state.awaitingQuestionId = q.question.id;
+  const classifyOpts = {
     activeQuestion: q.question,
-    state,
-    businessName: businessNameHint,
-    hasSpecificity: hasSpecificitySignals(text),
+    awaitingQuestionId: q.question.id,
     looksLikeCorrection,
     looksLikeAddOn: looksLikeSupplementalContext,
     looksLikeRefinement: looksLikeRefinementFeedback,
     containsMetaInstruction: containsMetaInstructionLanguage,
     answerLooksEmpty,
+  };
+  const planned = planReasoningTurn(text, {
+    activeQuestion: q.question,
+    awaitingQuestionId: q.question.id,
+    state,
+    businessName: businessNameHint,
+    hasSpecificity: hasSpecificitySignals(text),
+    ...classifyOpts,
     crossSectionHelpers: {
       inferDomain: (t) => inferDomainFromQuestionEcho(t) || tagContextDomain(t),
       tagDomain: tagContextDomain,
@@ -7462,15 +7497,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   reasoningMemory = markClassification(reasoningMemory, messageType);
   state.reasoningMemory = reasoningMemory;
 
-  // Soft cross-section: treat high-confidence prior-section substance as add-on.
-  if (
-    messageType === MESSAGE_TYPES.DIRECT_ANSWER &&
-    planned.cross &&
-    planned.cross.section &&
-    planned.cross.confidence >= 0.8
-  ) {
-    messageType = MESSAGE_TYPES.ADD_ON;
-  }
+  const interviewEscape = detectInterviewEscapeIntent(text, classifyOpts);
 
   // Non-answers: store appropriately, stay on the same question (or skip-advance), respond conversationally.
   if (messageType !== MESSAGE_TYPES.DIRECT_ANSWER) {
@@ -7479,6 +7506,54 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     let ackSubstance = null;
     let probePrompt = planned.probe || null;
     let advancedAfterSkip = false;
+
+    if (interviewEscape === 'pause' || interviewEscape === 'cancel') {
+      state.interviewPaused = interviewEscape === 'pause';
+      state.awaitingQuestionId = q.question.id;
+      session.interview_state = state;
+      await store.updateSession(session.id, {
+        status: 'DISCOVERY',
+        interview_state: state,
+        current_stage: session.current_stage,
+      });
+      const pauseAck =
+        interviewEscape === 'pause'
+          ? "Understood — I'll pause intake here. Your progress is saved; answer the current question whenever you're ready to continue."
+          : "Understood — I'll stop here for now. You can resume this interview later from where you left off.";
+      const assistantMessage = `${pauseAck}\n\n${q.question.prompt}`;
+      await store.insertTurn({
+        id: newId(),
+        session_id: session.id,
+        speaker: 'assistant',
+        message: assistantMessage,
+        goal: q.question.goal,
+        asked_because: 'Operator paused or cancelled intake; preserved awaiting question.',
+        derived_evidence: [],
+        created_at: new Date(),
+      });
+      return withExperienceFields(await store.getSession(session.id), {
+        interviewId: session.id,
+        ...publicSession(await store.getSession(session.id)),
+        nextAction: 'ASK',
+        messageType,
+        question: {
+          id: q.question.id,
+          prompt: q.question.prompt,
+          stage: q.question.stage,
+          section: q.question.section,
+          goal: q.question.goal,
+          askedBecause: q.question.askedBecause,
+        },
+        message: assistantMessage,
+        reflection: null,
+        evidence: null,
+        contradiction: false,
+        blueprint: null,
+        supplementalContext: state.supplementalContext || [],
+        reasoningMemory,
+        interviewPaused: state.interviewPaused,
+      });
+    }
 
     if (messageType === MESSAGE_TYPES.REFINEMENT_FEEDBACK) {
       state.revisionGuidance = [
@@ -8088,12 +8163,59 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
     q.question.section,
     text,
     'EXPLICIT',
-    clientTurn.id
+    clientTurn.id,
+    classifyOpts
   );
 
   await store.updateTurn(clientTurn.id, {
     derived_evidence: evidenceRow ? [evidenceRow.id] : [],
   });
+
+  if (skippedAsGuidance) {
+    state.awaitingQuestionId = q.question.id;
+    session.interview_state = state;
+    await store.updateSession(session.id, {
+      status: 'DISCOVERY',
+      interview_state: state,
+      current_stage: session.current_stage,
+    });
+    const ack = conversationalAck(MESSAGE_TYPES.REFINEMENT_FEEDBACK, text, domain, {
+      activeQuestion: q.question,
+      businessName: businessNameHint,
+    });
+    const assistantMessage = `${ack}\n\n${q.question.prompt}`;
+    await store.insertTurn({
+      id: newId(),
+      session_id: session.id,
+      speaker: 'assistant',
+      message: assistantMessage,
+      goal: q.question.goal,
+      asked_because:
+        'Answer reclassified as refinement guidance during persistence; question remains open.',
+      derived_evidence: [],
+      created_at: new Date(),
+    });
+    return withExperienceFields(await store.getSession(session.id), {
+      interviewId: session.id,
+      ...publicSession(await store.getSession(session.id)),
+      nextAction: 'ASK',
+      messageType: MESSAGE_TYPES.REFINEMENT_FEEDBACK,
+      question: {
+        id: q.question.id,
+        prompt: q.question.prompt,
+        stage: q.question.stage,
+        section: q.question.section,
+        goal: q.question.goal,
+        askedBecause: q.question.askedBecause,
+      },
+      message: assistantMessage,
+      reflection: null,
+      evidence: null,
+      contradiction: false,
+      blueprint: null,
+      reasoningMemory,
+    });
+  }
 
   // Only record business answers against the question bank — refinement stays in revisionGuidance.
   const acceptedDisposition = contradiction
@@ -8119,6 +8241,7 @@ async function postInterviewMessage(sessionId, message, opts = {}) {
   // SPEC-100 — only advance after accepted (or partial) operator evidence.
   state.stepIndex = (Number(state.stepIndex) || 0) + 1;
   if (state.stepIndex >= QUESTION_BANK.length) state.done = true;
+  syncAwaitingQuestionId(state);
   reasoningMemory = syncConfidenceFromSections(
     reasoningMemory,
     session.interview_state.sectionState || state.sectionState
