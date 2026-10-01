@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - 'lib/canonicalSemanticWrite.js'
       - 'services/clientIntelligenceInterview.js'
       - 'migrations/2026-09-06-spec-245a-evidence-immutability.sql'
       - 'test/spec245EvidenceImmutability.test.js'
