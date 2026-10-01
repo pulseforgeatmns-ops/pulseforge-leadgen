@@ -69,8 +69,15 @@ describe('walkthrough submission_id normalization', () => {
     assert.equal(normalizeSubmissionId({ submission_id: '9910' }), 9910);
   });
 
-  it('rejects non-numeric stored ids', () => {
+  it('accepts UUID agent_actions ids from production schema', () => {
+    const uuid = '67042048-c4b6-4b84-a671-f892c49a3eff';
+    assert.equal(normalizeSubmissionId({ id: uuid }), uuid);
+    assert.equal(typeof normalizeSubmissionId({ id: uuid }), 'string');
+  });
+
+  it('rejects malformed stored ids', () => {
     assert.throws(() => normalizeSubmissionId({ id: '8801-2' }), /walkthrough_submission_id_invalid/);
+    assert.throws(() => normalizeSubmissionId({ id: '' }), /walkthrough_submission_id_invalid/);
   });
 });
 
@@ -196,6 +203,20 @@ describe('walkthrough public route', () => {
     assert.equal(res.json.ok, true);
     assert.equal(typeof res.json.submission_id, 'number');
     assert.equal(res.json.submission_id, 8802);
+  });
+
+  it('returns 201 when agent_actions ids are UUIDs (production schema)', async () => {
+    const uuid = 'fab48ecd-bc29-4612-a220-8aec7069236b';
+    const mock = createWalkthroughCaptureMockPool({ nextActionId: uuid });
+    pool.query = mock.query.bind(mock);
+    walkthroughRouter._rateBuckets.clear();
+    const res = await request(harness.base, 'POST', '/api/public/walkthrough', routePayload({
+      email: `uuid-route-${Date.now()}@office-mail.com`,
+    }));
+    assert.equal(res.status, 201);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.submission_id, uuid);
+    assert.equal(typeof res.json.submission_id, 'string');
   });
 
   it('returns field errors without internals', async () => {
