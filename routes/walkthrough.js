@@ -64,9 +64,13 @@ router.post('/api/public/walkthrough', async (req, res) => {
       : null;
 
     const stored = await captureWalkthroughLead(validated.values, attributionRecord);
+    const submissionId = Number(stored.id ?? stored.submission_id ?? stored.submissionId);
+    if (!Number.isFinite(submissionId)) {
+      throw new Error('walkthrough_submission_id_invalid');
+    }
     return res.status(201).json({
       ok: true,
-      submission_id: stored.id,
+      submission_id: submissionId,
       message: SUCCESS_MESSAGE,
     });
   } catch (err) {
