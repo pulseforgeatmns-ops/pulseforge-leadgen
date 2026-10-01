@@ -211,6 +211,7 @@ test('observed route recognizes approval/inspection and avoids invented comparis
   assert.equal(observedRoute({ routingTrace: { primaryObjective: 'session_inspection' }, route: 'intelligence' }).route, 'inspection');
   assert.equal(observedRoute({ metadata: { miep: true }, route: 'mission' }).route, null);
   assert.equal(observedRoute(null, true).route, null);
+  assert.equal(observedRoute({ intent: 'account_briefing', reply: 'Brief' }, false, { source: 'ao_ask' }).route, 'intelligence');
 });
 
 test('legacy HTTP observer preserves body, status, this and return value; logs errors too', async () => {
@@ -235,8 +236,8 @@ test('auxiliary operator message endpoints log fixed handlers or unavailable com
     ['amo_ask', 'inspection', { answer: 'Mission progress' }, 'inspection'],
     ['amo_execute', 'mission', { action: 'plan_approved' }, 'approval'],
     ['ao_briefing', 'ao_briefing', { answer: 'AO briefing' }, 'intelligence'],
-    ['ao_ask', null, { answer: 'AO response' }, null],
-    ['ao_respond', null, { answer: 'AO session response' }, null],
+    ['ao_ask', null, { reply: 'AO response', intent: 'coaching', mode: 'conversation' }, 'conversation'],
+    ['ao_respond', null, { reply: 'AO session response', intent: 'account_prioritization', mode: 'conversation' }, 'intelligence'],
   ]) {
     const original = structuredClone(body);
     const res = { statusCode: 200, json(value) { assert.strictEqual(value, body); return value; } };

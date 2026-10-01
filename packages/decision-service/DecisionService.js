@@ -10,10 +10,11 @@ const { NoopProvider } = require('./providers/NoopProvider');
 const { createShadowEventSink, getDefaultShadowEventSink } = require('./ShadowEventSink');
 const { buildRoutingWarning } = require('./shadowRoutingWarning');
 const { classifyDecisionMismatch } = require('./mismatchClassifier');
-const {
-  readActiveRoutingConfig,
-  assessJevDecisionForActivePromotion,
-} = require('./activeRoutingPromotion');
+const { enrichShadowRow } = require('./shadowRowProjection');
+const { buildWarningEvidenceRow } = require('./ShadowEvidenceRepository');
+const { getDefaultShadowEvidenceSink } = require('./ShadowEvidenceSink');
+const { DEPLOY_GATES } = require('./deployGates');
+const { readActiveRoutingConfig } = require('./activeRoutingPromotion');
 
 function boundedInteger(value, fallback, min, max) {
   const n = Number(value);
@@ -58,7 +59,7 @@ function safeError(error) {
 /** Observation only: no method can execute or return a production route. */
 class DecisionService {
   constructor({ env = process.env, provider, audit = defaultAudit, warningAudit = defaultWarningAudit,
-    persistence, fetchImpl, classifyMismatch = classifyDecisionMismatch } = {}) {
+    persistence, evidencePersistence, fetchImpl, classifyMismatch = classifyDecisionMismatch } = {}) {
     this.config = readConfig(env);
     /** @type {import('./types').DecisionProvider} */
     this.provider = provider || selectProvider(this.config, fetchImpl);
@@ -67,15 +68,18 @@ class DecisionService {
     this._classifyMismatch = classifyMismatch;
     this._persistence = persistence || (env === process.env
       ? getDefaultShadowEventSink() : createShadowEventSink({ env }));
+    this._evidencePersistence = evidencePersistence || (env === process.env
+      ? getDefaultShadowEvidenceSink() : null);
     this._pending = new Set();
   }
 
   begin(input, session = null, source = 'workspace') {
     if (!this.config.enabled || input?._miepInternal || !String(input?.question || '').trim()) return null;
     const state = snapshotInput(input, session);
+    const questionText = String(input.question).trim();
     const started = performance.now();
     const base = {
-      event: 'DECISION_SHADOW_EVALUATED', spec: 'SPEC-JEV-001', schema_version: 1,
+      event: 'DECISION_SHADOW_EVALUATED', spec: 'SPEC-JEV-001', schema_version: 2,
       decision_id: randomUUID(), mode: 'shadow', source,
       session_id: redactText(input.sessionId || session?.id, 160),
       tenant_id: redactText(input.context?.tenantId || input.rawContext?.tenantId || session?.context?.tenantId, 80),
@@ -98,43 +102,52 @@ class DecisionService {
         if (completed) return;
         completed = true;
         try {
-          const current = observedRoute(result, Boolean(error));
+          const current = observedRoute(result, Boolean(error), { source });
           base.session_id = base.session_id || redactText(result?.sessionId, 160);
           base.mission_id = state.context.mission?.id || state.context.mission_id;
           base.current_route = current;
           base.routing_latency_ms = Math.round(performance.now() - started);
-          this._schedule(base, state);
+          this._schedule(base, state, questionText);
         } catch (_) { /* observation cannot affect routing */ }
       },
     };
   }
 
-  _write(row) {
+  _write(row, { question, state } = {}) {
     if (!this.config.enabled) return;
+    const projected = enrichShadowRow(row, { question, state });
+    if (DEPLOY_GATES.ACTIVE_JEV_ROUTING_ENABLED) {
+      throw new Error('ACTIVE_JEV_ROUTING_ENABLED must remain false (SPEC-JEV-006)');
+    }
     // Independent sinks: a failed stdout logger cannot suppress persistence,
     // and persistence never returns anything to the production route.
-    try { Promise.resolve(this._persistence.write(row)).catch(() => {}); }
+    try { Promise.resolve(this._persistence.write(projected)).catch(() => {}); }
     catch (_) { /* best-effort persistence */ }
     try {
       // Custom asynchronous sinks must handle durability themselves. Rejection
       // cannot become an unhandled rejection or a routing error.
-      Promise.resolve(this._audit(row)).catch(() => {});
+      Promise.resolve(this._audit(projected)).catch(() => {});
     } catch (_) { /* best-effort audit, same isolation as the provider */ }
     try {
-      const payload = buildRoutingWarning(row, this._classifyMismatch);
-      if (payload) Promise.resolve(this._warningAudit(payload)).catch(() => {});
+      const payload = buildRoutingWarning(projected, this._classifyMismatch);
+      if (payload) {
+        Promise.resolve(this._warningAudit(payload)).catch(() => {});
+        if (this._evidencePersistence) {
+          Promise.resolve(this._evidencePersistence.write(buildWarningEvidenceRow(payload))).catch(() => {});
+        }
+      }
     } catch (_) { /* warning annotations are observational only */ }
   }
 
-  _schedule(base, state) {
+  _schedule(base, state, question) {
     if (this._pending.size >= this.config.maxPending) {
-      this._write(this._row(base, { status: 'skipped', fallback_reason: 'capacity_limit' }));
+      this._write(this._row(base, { status: 'skipped', fallback_reason: 'capacity_limit' }), { question, state });
       return;
     }
     // Defer all provider work until after production has returned its result.
     const task = new Promise(resolve => setImmediate(resolve))
-      .then(() => this._evaluate(base, state))
-      .catch(() => this._write(this._row(base, { status: 'error', errors: [{ code: 'observer_error' }] })));
+      .then(() => this._evaluate(base, state, question))
+      .catch(() => this._write(this._row(base, { status: 'error', errors: [{ code: 'observer_error' }] }), { question, state }));
     this._pending.add(task);
     task.finally(() => this._pending.delete(task));
   }
@@ -151,7 +164,7 @@ class DecisionService {
     };
   }
 
-  async _evaluate(base, state) {
+  async _evaluate(base, state, question) {
     const started = performance.now();
     const controller = new AbortController();
     let timer;
@@ -172,7 +185,7 @@ class DecisionService {
         values = { status: 'fallback', fallback_reason: evaluation.fallback_reason };
       } else {
         const decision = parseDecision(evaluation?.decision);
-        const comparable = base.current_route.route != null && decision.recommended_route !== 'unknown';
+        const comparable = base.current_route?.route != null && decision.recommended_route !== 'unknown';
         const matches = comparable ? base.current_route.route === decision.recommended_route : null;
         values = {
           ...decision, status: 'evaluated', fallback_provider: null,
@@ -188,7 +201,7 @@ class DecisionService {
     } finally {
       clearTimeout(timer);
     }
-    this._write(this._row(base, { ...values, latency_ms: Math.round(performance.now() - started) }));
+    this._write(this._row(base, { ...values, latency_ms: Math.round(performance.now() - started) }), { question, state });
   }
 
   /**
@@ -261,6 +274,8 @@ class DecisionService {
     await Promise.all([...this._pending]);
     try { await this._persistence.drain?.(); }
     catch (_) { /* shutdown/test diagnostics cannot become routing errors */ }
+    try { await this._evidencePersistence?.drain?.(); }
+    catch (_) { /* evidence drain is best-effort */ }
   }
 }
 
