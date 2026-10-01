@@ -1419,6 +1419,10 @@ async function sendTenantEmail(input = {}, opts = {}) {
     const from = identity.senderDisplayName
       ? `"${identity.senderDisplayName.replace(/"/g, '\\"')}" <${identity.senderEmail}>`
       : identity.senderEmail;
+    const providerBoundary = input.metadata?.providerBoundary || opts.providerBoundary;
+    if (providerBoundary && typeof providerBoundary.markCrossed === 'function') {
+      providerBoundary.markCrossed();
+    }
     const result = await transport.sendMail({
       from,
       replyTo: identity.replyToAddress || identity.senderEmail,
@@ -1471,7 +1475,9 @@ async function sendTenantEmail(input = {}, opts = {}) {
       currentStatus: THREAD_STATUS.FAILED,
       sequenceState: SEQUENCE_STATE.FAILED,
     });
-    throw mailboxError(err.code || 'smtp_send_failed', sanitizeErrorMessage(err), { outboundMessage: message });
+    const wrapped = mailboxError(err.code || 'smtp_send_failed', sanitizeErrorMessage(err), { outboundMessage: message });
+    wrapped.providerBoundaryCrossed = true;
+    throw wrapped;
   } finally {
     smtpAuth = null;
   }

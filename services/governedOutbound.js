@@ -14,6 +14,14 @@ const {
   finalizePreparationObservability,
   PREPARATION_BATCH_LIMIT,
 } = require('./governedOutboundRefill');
+const {
+  createProviderBoundaryTracker,
+  isPreProviderOutboundFailure,
+  terminalPreProviderReason,
+  providerBoundaryWasCrossed,
+  attachProviderBoundaryCrossed,
+} = require('./governedOutboundProviderBoundary');
+const { reconcileUncertainItemFromEvidence } = require('./governedUncertainSendReconciliation');
 
 function service({
   pool,
@@ -212,10 +220,22 @@ function service({
     await store.approve(envelope, approval.id);
     return store.envelope(clock(now()).day);
   }
+  async function finishPreProviderAttempt(item, envelope, error, tracker) {
+    const reason = terminalPreProviderReason(error);
+    const row = (await store.items(envelope.id)).find(x => x.id === item.id);
+    if (row?.status !== 'attempted') return;
+    if (reason === '23502') {
+      await store.releaseUnsent(item, reason);
+      return;
+    }
+    await store.finish(item, 'failed', reason);
+  }
+
   async function dispatch(program, envelope, item) {
     let called = false;
     let claimed = false;
     let acceptedMessageId = null;
+    const providerBoundary = createProviderBoundaryTracker();
     const beforeAttempt = async command => {
       if (claimed || called) fail('provider_call_budget_exceeded');
       const current = await store.program();
@@ -264,7 +284,7 @@ function service({
         fail('pre_provider_stop');
       }
       try {
-        const result = await sendFn(command);
+        const result = await sendFn({ ...command, providerBoundary });
         const messageId = result?.providerMessageId || result?.messageId;
         const rejected = !result?.success && /^brevo_http_4/.test(String(result?.providerErrorCode || ''));
         if (rejected) {
@@ -273,15 +293,23 @@ function service({
         }
         // Transport failures include timeouts after acceptance. Never retry them.
         if (!result?.success || !messageId) {
-          await store.finish(item, 'uncertain', result?.providerErrorCode || 'provider_acceptance_unknown', messageId);
-          fail('provider_acceptance_unknown');
+          if (providerBoundaryWasCrossed({}, providerBoundary)) {
+            await store.finish(item, 'uncertain', result?.providerErrorCode || 'provider_acceptance_unknown', messageId);
+            fail('provider_acceptance_unknown');
+          }
+          await finishPreProviderAttempt(item, envelope, { code: result?.providerErrorCode || 'provider_acceptance_unknown' }, providerBoundary);
+          fail(result?.providerErrorCode || 'provider_acceptance_unknown');
         }
         acceptedMessageId = messageId;
         return result;
       } catch (e) {
-        const row = (await store.items(envelope.id)).find(x => x.id === item.id);
-        if (row?.status === 'attempted') await store.finish(item, 'uncertain', 'provider_or_persistence_error');
-        throw e;
+        if (isPreProviderOutboundFailure(e, providerBoundary)) {
+          await finishPreProviderAttempt(item, envelope, e, providerBoundary);
+        } else if (providerBoundaryWasCrossed(e, providerBoundary)) {
+          const row = (await store.items(envelope.id)).find(x => x.id === item.id);
+          if (row?.status === 'attempted') await store.finish(item, 'uncertain', 'provider_or_persistence_error');
+        }
+        throw attachProviderBoundaryCrossed(e, providerBoundaryWasCrossed(e, providerBoundary));
       }
     };
     guardedSend.beforeAttempt = beforeAttempt;
@@ -295,8 +323,13 @@ function service({
     } catch (e) {
       const row = (await store.items(envelope.id)).find(x => x.id === item.id);
       if (row?.status === 'attempted') {
-        if (called) await store.finish(item, 'uncertain', 'provider_or_persistence_error');
-        else await store.releaseUnsent(item, e.code || 'pre_provider_persist_failed');
+        if (providerBoundaryWasCrossed(e, providerBoundary)) {
+          await store.finish(item, 'uncertain', 'provider_or_persistence_error');
+        } else if (!called) {
+          await store.releaseUnsent(item, e.code || 'pre_provider_persist_failed');
+        } else if (isPreProviderOutboundFailure(e, providerBoundary)) {
+          await finishPreProviderAttempt(item, envelope, e, providerBoundary);
+        }
       }
       throw e;
     }
@@ -532,6 +565,9 @@ function service({
       }
     });
   }
+  async function reconcileFromEvidence(itemId, opts = {}) {
+    return reconcileUncertainItemFromEvidence(pool, resolvedTenantId, itemId, opts);
+  }
   async function reconcile(itemId, outcome, providerMessageId, evidence, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
     if (!['accepted', 'not_accepted'].includes(outcome) || !String(evidence || '').trim()
@@ -564,6 +600,7 @@ function service({
     tick,
     runPreparationRefill,
     reconcile,
+    reconcileFromEvidence,
     initializePreparation,
     replenish,
     resumeReservedPreparation,

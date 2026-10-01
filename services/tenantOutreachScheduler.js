@@ -925,6 +925,7 @@ async function executeScheduledSendImpl(schedule, opts = {}) {
         idempotencyKey: schedule.idempotencyKey,
         scheduleId: schedule.id,
         outreachAssetVersion: schedule.outreachAssetVersion,
+        providerBoundary: opts.providerBoundary || null,
         ...(schedule.authorizationSnapshot?.governed ? { governedProgramId: schedule.authorizationSnapshot.governed.programId } : {}),
       },
     }, {
