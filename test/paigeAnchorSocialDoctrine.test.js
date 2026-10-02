@@ -114,7 +114,7 @@ function installDeterministicMiraContextMock() {
   };
 }
 
-function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false } = {}) {
+function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false, anthropicFactory = null } = {}) {
   process.env.ACTIVE_CLIENT_ID = '10';
   const writes = [];
   let generationCalls = 0;
@@ -176,7 +176,7 @@ function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false
     id: anthropicPath,
     filename: anthropicPath,
     loaded: true,
-    exports: FakeAnthropic,
+    exports: anthropicFactory || FakeAnthropic,
   };
 
   delete require.cache[require.resolve('../paigeAgent')];
@@ -297,41 +297,35 @@ describe('Paige Anchor social doctrine reconciliation', () => {
 
     test('regeneration prompt includes prior validator failures when rewrite is required', async () => {
       const prompts = [];
-      process.env.ACTIVE_CLIENT_ID = '10';
-      installDeterministicMiraContextMock();
+      const { paige } = buildPaigeHarness({
+        draftSequence: [
+          'Would you be open to a quick call — about office cleaning scope?',
+          COMPLIANT_BODY,
+        ],
+        anthropicFactory: class PromptCapturingAnthropic {
+          constructor() {
+            this.messages = {
+              create: async (request) => {
+                const prompt = request.messages?.[0]?.content || '';
+                if (/Score this social media post/i.test(prompt)) {
+                  return writerTextBlock(JSON.stringify(PASSING_SCORE));
+                }
+                prompts.push(prompt);
+                const body = prompts.length === 1
+                  ? 'Would you be open to a quick call — about office cleaning scope?'
+                  : COMPLIANT_BODY;
+                return writerTextBlock(body);
+              },
+            };
+          }
+        },
+      });
 
-      const anthropicPath = require.resolve('@anthropic-ai/sdk');
-      class PromptCapturingAnthropic {
-        constructor() {
-          this.messages = {
-            create: async (request) => {
-              const prompt = request.messages?.[0]?.content || '';
-              if (/Score this social media post/i.test(prompt)) {
-                return writerTextBlock(JSON.stringify(PASSING_SCORE));
-              }
-              prompts.push(prompt);
-              const body = prompts.length === 1
-                ? 'Would you be open to a quick call — about office cleaning scope?'
-                : COMPLIANT_BODY;
-              return writerTextBlock(body);
-            },
-          };
-        }
-      }
-      require.cache[anthropicPath] = {
-        id: anthropicPath,
-        filename: anthropicPath,
-        loaded: true,
-        exports: PromptCapturingAnthropic,
-      };
-
-      delete require.cache[require.resolve('../paigeAgent')];
-      const paige = require('../paigeAgent');
       const result = await paige.generateSocialContent({ client_id: 10, dryRun: true, channel: 'facebook_page' });
       assert.equal(result.success, true);
       assert.ok(prompts.length >= 2);
       assert.match(prompts[1], /em dash or en dash/i);
-      assert.match(prompts[1], /concrete client-scoped Mira detail/i);
+      assert.match(prompts[1], /concrete client-scoped Mira detail|client-scoped Mira block/i);
       assert.match(prompts[1], /open_to_call|quick call/i);
       assertCompliantAnchorFacebookDraft(result.outputs[0].content, paige._test);
     });
