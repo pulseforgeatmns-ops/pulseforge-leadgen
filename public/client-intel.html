@@ -1134,6 +1134,7 @@
       </div>
       <div id="sidePanel"><p class="blueprint-empty">When you're ready, begin the conversation.</p></div>
       <div class="actions" id="blueprintActions" hidden>
+        <button type="button" id="regenerateBlueprintBtn" class="secondary" disabled>Regenerate Blueprint</button>
         <button type="button" id="reviseBtn" class="secondary" disabled>Save edits</button>
         <button type="button" id="refineWithMaxBtn" class="secondary" disabled>Refine with Max</button>
         <button type="button" id="approveBtn" disabled>Approve Blueprint</button>
@@ -1197,6 +1198,7 @@
       stickToBottom: true,
       pendingCompletion: null,
       approveInFlight: false,
+      regenerateInFlight: false,
       turnInFlight: false,
       revealAbort: null,
       initialGrowthDirection: null,
@@ -1247,6 +1249,7 @@
       sidePanel: document.getElementById('sidePanel'),
       sidePanelTitle: document.getElementById('sidePanelTitle'),
       sidePanelSub: document.getElementById('sidePanelSub'),
+      regenerateBlueprintBtn: document.getElementById('regenerateBlueprintBtn'),
       reviseBtn: document.getElementById('reviseBtn'),
       refineWithMaxBtn: document.getElementById('refineWithMaxBtn'),
       approveBtn: document.getElementById('approveBtn'),
@@ -1632,6 +1635,7 @@
       const status = blueprintStatusOf(bp);
       if (approved) {
         els.blueprintActions.hidden = true;
+        els.regenerateBlueprintBtn.disabled = true;
         els.reviseBtn.disabled = true;
         els.refineWithMaxBtn.disabled = true;
         els.approveBtn.disabled = true;
@@ -1641,6 +1645,7 @@
       // Superseded / historical rows are never approvable and must not look current.
       if (status === 'superseded' || !bp) {
         els.blueprintActions.hidden = true;
+        els.regenerateBlueprintBtn.disabled = true;
         els.reviseBtn.disabled = true;
         els.refineWithMaxBtn.disabled = true;
         els.approveBtn.disabled = true;
@@ -1649,9 +1654,14 @@
       }
       const canEdit = editable && isBlueprintAwaitingApproval(bp);
       els.blueprintActions.hidden = !editable || !canEdit;
-      els.reviseBtn.disabled = !canEdit || state.approveInFlight;
-      els.refineWithMaxBtn.disabled = !canEdit || !state.interviewId || state.approveInFlight;
-      els.approveBtn.disabled = !canEdit || state.approveInFlight;
+      const regenBusy = state.regenerateInFlight || state.approveInFlight;
+      els.regenerateBlueprintBtn.disabled = !canEdit || regenBusy;
+      els.regenerateBlueprintBtn.textContent = state.regenerateInFlight
+        ? 'Regenerating…'
+        : 'Regenerate Blueprint';
+      els.reviseBtn.disabled = !canEdit || regenBusy;
+      els.refineWithMaxBtn.disabled = !canEdit || !state.interviewId || regenBusy;
+      els.approveBtn.disabled = !canEdit || regenBusy;
       els.approveBtn.textContent = state.approveInFlight ? 'Approving…' : 'Approve Blueprint';
     }
 
@@ -1738,6 +1748,10 @@
         statusLabel +
         ' · v' +
         bp.version +
+        (state.lastRegeneratedBlueprintVersion &&
+        String(state.lastRegeneratedBlueprintVersion) === String(bp.version)
+          ? ' · regenerated just now'
+          : '') +
         (bp.playbookId
           ? ' · playbook ' + bp.playbookId + '@' + bp.playbookVersion
           : '');
@@ -4651,6 +4665,45 @@
     els.refineBtn.addEventListener('click', resumeConversation);
     els.keepTalkingBtn.addEventListener('click', resumeConversation);
     els.refineWithMaxBtn.addEventListener('click', resumeConversation);
+
+    els.regenerateBlueprintBtn.addEventListener('click', async () => {
+      try {
+        if (!state.interviewId || !isBlueprintAwaitingApproval(state.blueprint)) return;
+        if (state.regenerateInFlight || state.approveInFlight) return;
+        const confirmed = window.confirm(
+          'Regenerate the Business Blueprint from your current answers? Stale generated text will be replaced with a new version. Your interview answers are kept.'
+        );
+        if (!confirmed) return;
+        state.regenerateInFlight = true;
+        setApproveButtonState(state.blueprint, { editable: true });
+        const data = await api(
+          'POST',
+          '/api/v1/interview/' +
+            encodeURIComponent(state.interviewId) +
+            '/blueprint/regenerate',
+          {}
+        );
+        state.regenerateInFlight = false;
+        state.lastRegeneratedBlueprintVersion =
+          (data.blueprint && data.blueprint.version) || null;
+        state.blueprint = data.blueprint || state.blueprint;
+        state.executiveSummary = data.executiveSummary || state.executiveSummary;
+        if (data.executiveSummary) {
+          renderExecutiveSummary(data.executiveSummary);
+        }
+        renderBlueprint(state.blueprint, { editable: true });
+        addBubble(
+          'meta',
+          data.message ||
+            'Regenerated Business Blueprint from current understanding.'
+        );
+        setPhase('blueprint');
+      } catch (err) {
+        state.regenerateInFlight = false;
+        setApproveButtonState(state.blueprint, { editable: true });
+        showError(err.message);
+      }
+    });
 
     els.reviseBtn.addEventListener('click', async () => {
       try {
