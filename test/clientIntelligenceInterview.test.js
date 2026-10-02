@@ -26,6 +26,7 @@ const {
   resumeInterview,
   getInterview,
   reviseBlueprint,
+  regeneratePendingBlueprint,
   approveBlueprint,
   answerLooksEmpty,
   classifyUserResponse,
@@ -225,6 +226,51 @@ describe('clientIntelligenceInterview lifecycle', () => {
       session.interview_state.sectionState.competitiveAdvantages.summary,
       /hypothesis|transformation-focused|12-week/i
     );
+  });
+
+  it('regeneratePendingBlueprint supersedes stale Blueprint prose and bumps version', async () => {
+    const { opts, store } = withStore();
+    const started = await startClientInterview(
+      {
+        clientId: 17,
+        notes:
+          'Studio Substral — premium website redesign for owner-led businesses in Greater Manchester. Ideal customers are professional service firms. Avoid price-driven clients. Success metrics include qualified prospects and discovery calls booked. Ninety-day goal: acquire one profitable website redesign client at $2,000+.',
+      },
+      opts
+    );
+    assert.equal(started.status, 'CLIENT_REVIEW');
+    assert.ok(started.blueprint);
+    const staleSections = { ...(started.blueprint.sections || {}) };
+    staleSections.identity = {
+      ...(staleSections.identity || {}),
+      summary:
+        'Studio Substral. Today is a Studio Substral. Today the business delivers Today commercial cleaning.',
+    };
+    await store.updateBlueprint(started.blueprint.id, started.blueprint.version, {
+      sections: staleSections,
+    });
+
+    const regen = await regeneratePendingBlueprint(started.interviewId, opts);
+    assert.equal(regen.status, 'CLIENT_REVIEW');
+    assert.ok(regen.blueprint);
+    assert.equal(regen.blueprint.version, '1.1');
+    assert.equal(regen.blueprint.status, 'in_review');
+    assert.match(regen.message, /Regenerated Business Blueprint v1\.1/i);
+    const blob = JSON.stringify(regen.blueprint.sections || {});
+    assert.doesNotMatch(blob, /Today is a Studio Substral/i);
+    assert.doesNotMatch(blob, /Today the business delivers Today/i);
+    assert.doesNotMatch(blob, /commercial cleaning/i);
+
+    const detail = await getInterview(started.interviewId, opts);
+    assert.equal(detail.blueprint.version, '1.1');
+    assert.doesNotMatch(
+      JSON.stringify(detail.blueprint.sections || {}),
+      /Today is a Studio Substral/i
+    );
+    assert.ok(detail.executiveSummary);
+    const briefBlob = JSON.stringify(detail.executiveSummary);
+    assert.doesNotMatch(briefBlob, /commercial cleaning/i);
+    assert.doesNotMatch(briefBlob, /Today is a Studio Substral/i);
   });
 
   it('explicit refinement regeneration transitions to Blueprint review without approval', async () => {
