@@ -1703,6 +1703,104 @@ function bodyCopyForValidation(text, channel) {
   return lines.join('\n');
 }
 
+function sanitizeForbiddenBodyDashes(text, channel) {
+  const value = String(text || '');
+  if (channel === 'blog') {
+    const lines = value.split('\n');
+    const titleLine = /^#\s+/.test(lines[0] || '') ? lines.shift() : null;
+    const body = lines.join('\n').replace(/\s*[—–]\s*/g, ', ');
+    return titleLine ? `${titleLine}\n${body}` : body;
+  }
+  return value.replace(/\s*[—–]\s*/g, ', ');
+}
+
+const MIRA_GROUNDING_NOUNS = [
+  ['sends_24h', 'send', 'sends'],
+  ['opens_24h', 'open', 'opens'],
+  ['replies_24h', 'reply', 'replies'],
+  ['warm_signals_24h', 'warm signal', 'warm signals'],
+];
+
+function listConcreteMiraFactHints(context) {
+  if (!isMiraContentSafeContextAvailable(context)) return [];
+  const hints = [];
+  const seen = new Set();
+  const pushHint = (hint) => {
+    const value = String(hint || '').trim();
+    if (!value || seen.has(value.toLowerCase())) return;
+    seen.add(value.toLowerCase());
+    hints.push(value);
+  };
+
+  for (const summary of context.recent_activity_summaries || []) {
+    pushHint(String(summary).replace(/^Mira logged\s+/i, ''));
+  }
+
+  const city = context.client?.city;
+  const state = context.client?.state;
+  const place = [city, state].filter(Boolean).join(', ');
+  const metrics = context.metrics || {};
+  for (const [key, singular, plural] of MIRA_GROUNDING_NOUNS) {
+    if (!Object.prototype.hasOwnProperty.call(metrics, key)) continue;
+    const amount = Number(metrics[key]);
+    if (!Number.isFinite(amount)) continue;
+    const noun = amount === 1 ? singular : plural;
+    pushHint(place
+      ? `${amount} ${noun} over the past 24 hours in ${place}`
+      : `${amount} ${noun} over the past 24 hours`);
+  }
+
+  const health = context.client_health || {};
+  if (health.send_volume_status) {
+    pushHint(`send volume status is ${health.send_volume_status}`);
+  }
+  if (health.deliverability_status) {
+    pushHint(`deliverability status is ${health.deliverability_status}`);
+  }
+
+  return hints;
+}
+
+function selectMiraGroundingClause(context) {
+  const hints = listConcreteMiraFactHints(context);
+  if (!hints.length) return null;
+  const clause = hints[0];
+  if (/[.!?]$/.test(clause)) return clause;
+  return `${clause}.`;
+}
+
+function normalizeGovernedSocialDraft(rawDraft, channel, miraContext) {
+  let text = sanitizeForbiddenBodyDashes(rawDraft, channel);
+  if (miraContext && isMiraContentSafeContextAvailable(miraContext) && !usesMiraGrounding(text, miraContext)) {
+    const clause = selectMiraGroundingClause(miraContext);
+    if (clause) text = `${clause} ${text}`.trim();
+  }
+  return text;
+}
+
+function buildGovernedSocialRegenInstructions(validationIssues, doctrineViolations, miraContext, channel) {
+  const parts = [];
+  if (validationIssues.length) {
+    parts.push(`Your previous draft broke these hard validation rules: ${validationIssues.join('; ')}. Fix every one.`);
+  }
+  if (doctrineViolations.length) {
+    parts.push(buildAnchorDoctrineRegenBlock(doctrineViolations));
+  }
+  if (validationIssues.some((issue) => /em dash or en dash/i.test(issue))) {
+    parts.push('Do not use em dash (—) or en dash (–) anywhere in the body. Use commas, periods, parentheses, or colons instead.');
+  }
+  if (validationIssues.some((issue) => /concrete client-scoped Mira detail/i.test(issue))) {
+    const hints = listConcreteMiraFactHints(miraContext);
+    if (hints.length) {
+      parts.push('Include one concrete client-scoped Mira fact from the supplied safe context in the public copy. Choose one of these allowed facts and weave it naturally into the post:');
+      parts.push(...hints.map((hint) => `- ${hint}`));
+    } else {
+      parts.push('Do not invent metrics. If no client-scoped Mira fact is available, omit numeric outreach claims.');
+    }
+  }
+  return parts.filter(Boolean).join('\n');
+}
+
 function validateUniversalDraft(text, channel) {
   const body = bodyCopyForValidation(text, channel);
   const issues = [];
@@ -2326,8 +2424,18 @@ function buildAnchorDoctrineRegenBlock(violations) {
   return [
     'Your previous draft violated Anchor copy doctrine. Correct every listed violation:',
     ...violations.map((violation) => `- ${violation.patternId}: ${violation.match ?? '(detected)'}`),
-    'Remove em dashes, AI-tell phrasing, generic closers, unsupported claims, walkthrough or walk-the-space CTA language, and social-banned phrases such as "What do you think?". Use facility assessment language instead (review scope, access instructions, and service risks).',
+    'Do not use:',
+    '- "I wanted to reach out"',
+    '- "worth a quick conversation"',
+    '- em dash or en dash characters',
+    'Must include:',
+    '- one concrete client-scoped Mira detail already supplied in the current content-safe Mira block',
+    'Remove AI-tell phrasing, generic closers, unsupported claims, walkthrough or walk-the-space CTA language, and social-banned phrases such as "What do you think?". Use facility assessment language instead (review scope, access instructions, and service risks).',
   ].join('\n');
+}
+
+function countGovernedSocialViolations(validationIssues, doctrineViolations) {
+  return validationIssues.length + doctrineViolations.length;
 }
 
 function passesQualityGate(score, channel) {
@@ -2477,7 +2585,7 @@ async function generatePost(company, contentType, channel) {
   const maxAttempts = maxRegenerationAttempts();
 
   try {
-    draft = await createDraft(prompt, systemPrompt, channel);
+    draft = normalizeGovernedSocialDraft(await createDraft(prompt, systemPrompt, channel), channel, miraContext);
     score = await scoreDraft(draft, recentPublishedAngles);
     validationIssues = validateDraftForClient(draft, channel, miraContext);
     let doctrineViolations = isAnchor ? getAnchorSocialDoctrineViolations(draft) : [];
@@ -2485,6 +2593,7 @@ async function generatePost(company, contentType, channel) {
     finalScore = score;
     finalValidationIssues = validationIssues;
     finalDoctrineViolations = doctrineViolations;
+    let bestViolationCount = countGovernedSocialViolations(validationIssues, doctrineViolations);
 
     logQualityGateComparison('initial', score);
 
@@ -2524,8 +2633,7 @@ async function generatePost(company, contentType, channel) {
         : [
             prompt,
             '',
-            validationIssues.length ? `Your previous draft broke these hard validation rules: ${validationIssues.join('; ')}. Fix every one.` : '',
-            isAnchor && doctrineViolations.length ? buildAnchorDoctrineRegenBlock(doctrineViolations) : '',
+            buildGovernedSocialRegenInstructions(validationIssues, isAnchor ? doctrineViolations : [], miraContext, channel),
             `Your previous draft scored ${score.total}/30 total, with specificity ${score.specificity}/10, originality ${score.originality}/10, and hook strength ${score.hook_strength}/10. Reason: ${score.reason}.`,
             '',
             'A strong hook is the ONLY thing that matters in the first line. Here are examples of strong vs weak:',
@@ -2549,19 +2657,23 @@ async function generatePost(company, contentType, channel) {
             'Return only the rewritten post text.',
           ].filter(Boolean).join('\n');
 
-      draft = await createDraft(regenPrompt, systemPrompt, channel);
+      draft = normalizeGovernedSocialDraft(await createDraft(regenPrompt, systemPrompt, channel), channel, miraContext);
       score = await scoreDraft(draft, recentPublishedAngles);
       validationIssues = validateDraftForClient(draft, channel, miraContext);
       doctrineViolations = isAnchor ? getAnchorSocialDoctrineViolations(draft) : [];
 
       logQualityGateComparison(`attempt_${regenerationAttempts}`, score);
 
-      if (!validationIssues.length && !doctrineViolations.length && (finalValidationIssues.length || finalDoctrineViolations.length || score.total > finalScore.total)) {
+      const violationCount = countGovernedSocialViolations(validationIssues, doctrineViolations);
+      const isClean = !validationIssues.length && !doctrineViolations.length;
+      if (isClean || violationCount < bestViolationCount || (violationCount === bestViolationCount && score.total > finalScore.total)) {
         finalDraft = draft;
         finalScore = score;
         finalValidationIssues = validationIssues;
         finalDoctrineViolations = doctrineViolations;
+        bestViolationCount = violationCount;
       }
+      if (isClean && passesQualityGate(score, channel)) break;
     }
   } catch (err) {
     // If scoring/generation breaks mid-loop, this channel currently fails via logChannelError.
@@ -3153,6 +3265,10 @@ module.exports = {
     validateAnchorClaims,
     getAnchorSocialDoctrineViolations,
     buildAnchorDoctrineRegenBlock,
+    buildGovernedSocialRegenInstructions,
+    sanitizeForbiddenBodyDashes,
+    normalizeGovernedSocialDraft,
+    listConcreteMiraFactHints,
     logAnchorDoctrineBlocked,
     validatePulseforgeClaims,
     usesMiraGrounding,
