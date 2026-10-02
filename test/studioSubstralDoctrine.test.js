@@ -18,11 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { gzipSync } = require('node:zlib');
 
-const {
-  PROHIBITED_CLAIM_PATTERNS,
-  EVIDENCE_CLASS,
-  DIAGNOSIS_CLASS,
-} = require('../packages/capabilities/websiteOpportunityIntelligence/types');
+const { PROHIBITED_CLAIM_PATTERNS } = require('../packages/capabilities/websiteOpportunityIntelligence/types');
 
 const SITE = path.join(__dirname, '..', 'sites', 'studio-substral');
 const read = (...parts) => fs.readFileSync(path.join(SITE, ...parts), 'utf8');
@@ -70,26 +66,17 @@ describe('Studio Substral — brand and narrative (doctrine §2, §3, §14)', ()
     assert.match(copy, /Before you rebuild, find out what s broken\./i);
   });
 
-  it('runs all six acts in order', () => {
-    const acts = ['Act II', 'Act III', 'Act IV', 'Act V', 'Act VI'];
-    let cursor = html.indexOf('id="surface"');
-    assert.ok(cursor > -1, 'Act I (surface) is missing');
-    for (const act of acts) {
-      const next = html.indexOf(act, cursor);
-      assert.ok(next > cursor, `${act} is missing or out of sequence`);
-      cursor = next;
-    }
+  it('leads with proof before the service explanation', () => {
+    const work = html.indexOf('id="work"');
+    const fix = html.indexOf('id="fix"');
+    assert.ok(work > -1 && fix > work, 'selected work must precede what we fix');
+    assert.match(copy, /Selected work/i);
+    assert.match(copy, /Anchor Cleaning/i);
+    assert.match(copy, /Meridian \/ MCFO Services/i);
   });
 
-  it('builds the commercial sequence from diagnosis to proof, scope and assessment', () => {
-    const sequence = [
-      'id="decomposition"',
-      'id="diagnosis"',
-      'id="protocol"',
-      'id="work"',
-      'id="engagement"',
-      'id="assessment"',
-    ];
+  it('builds the commercial sequence from proof to scope, process and assessment', () => {
+    const sequence = ['id="work"', 'id="fix"', 'id="deliverables"', 'id="process"', 'id="assessment"'];
     let cursor = -1;
     for (const marker of sequence) {
       const next = html.indexOf(marker, cursor + 1);
@@ -97,122 +84,54 @@ describe('Studio Substral — brand and narrative (doctrine §2, §3, §14)', ()
       cursor = next;
     }
 
-    assert.match(copy, /Assessment Figure out what actually needs to change/i);
-    assert.match(copy, /Targeted fix Fix the part that is holding the site back/i);
-    assert.match(copy, /Redesign build Rebuild the parts that need a new foundation/i);
-    assert.match(copy, /Act IV Evidence Evidence before opinion/i);
+    assert.match(copy, /What we fix/i);
+    assert.match(copy, /What you get/i);
+    assert.match(copy, /How it works/i);
+    assert.match(copy, /Website assessment/i);
+    assert.match(copy, /Request a Website Assessment/i);
     assert.ok(
-      html.indexOf('data-assessment-form') > html.indexOf('id="engagement"'),
+      html.indexOf('data-assessment-form') > html.indexOf('id="process"'),
       'the assessment form must remain the final commercial decision point'
     );
   });
 
   it('moves dark, to mineral, and back to dark', () => {
-    const scopes = [...html.matchAll(/class="act ([a-z]+) (env-dark|env-mineral)/g)].map(
+    const scopes = [...html.matchAll(/class="act ([a-z-]+) (env-dark|env-mineral)/g)].map(
       (m) => m[2]
     );
     assert.deepEqual(scopes, [
-      'env-dark', // I surface
-      'env-dark', // II decomposition
-      'env-mineral', // III diagnosis
-      'env-mineral', // IV assessment protocol
-      'env-mineral', // V work
-      'env-dark', // VI reconstruction, engagement and final assessment
+      'env-dark', // hero
+      'env-mineral', // selected work
+      'env-mineral', // what we fix
+      'env-mineral', // what you get
+      'env-mineral', // how it works
+      'env-dark', // assessment
     ]);
   });
 });
 
-describe('The six layers (doctrine §12)', () => {
-  const EXPECTED = [
-    'Performance',
-    'Accessibility',
-    'Conversion',
-    'Search',
-    'Design',
-  ];
-
-  it('decomposes into exactly six layers', () => {
-    const layers = [...html.matchAll(/data-layer="(\d)"/g)].map((m) => Number(m[1]));
-    assert.deepEqual(layers, [0, 1, 2, 3, 4, 5]);
-  });
-
-  it('orders them Performance, Accessibility, Conversion, Search, Trust, Design', () => {
-    const names = [...html.matchAll(/class="layer__name">([^<]+)</g)].map((m) => m[1]);
-    assert.deepEqual(names, [
-      'Performance',
-      'Accessibility',
-      'Conversion',
-      'Search',
-      'Trust',
-      'Design',
+describe('The dimensional specimen (doctrine §12)', () => {
+  it('keeps the six-layer stack in the hero object only', () => {
+    const surface = html.slice(html.indexOf('id="surface"'), html.indexOf('id="work"'));
+    const arts = [...surface.matchAll(/data-art="([a-z]+)"/g)].map((m) => m[1]).slice(0, 6);
+    assert.deepEqual(arts, [
+      'design',
+      'trust',
+      'search',
+      'conversion',
+      'accessibility',
+      'performance',
     ]);
-  });
-
-  it('keeps DESIGN last and says why the order is not aesthetic', () => {
-    assert.match(html, /id="layer-design"[\s\S]*?class="layer__name">Design</);
-    const designIndex = html.indexOf('id="layer-design"');
-    for (const earlier of EXPECTED.slice(0, 4)) {
-      assert.ok(
-        html.indexOf(`>${earlier}<`) < designIndex,
-        `${earlier} must precede Design`
-      );
-    }
-    assert.match(copy, /Design is last\./);
-    assert.match(copy, /The order is practical/);
-  });
-
-  it('labels the reconstruction rows by how each layer is known', () => {
-    /* These read as a status column, so they must not assert a state that is
-       not true yet — every row claiming "Aligned" before anything has aligned
-       looked like leftover debug text. They carry the evidence class instead,
-       which is information and matches the Act II manifests. */
-    const states = [...html.matchAll(/class="converge__state">([^<]+)</g)].map((m) => m[1]);
-    assert.equal(states.length, 6);
-    const vocabulary = new Set(['Measured', 'Observed', 'Inferred', 'Decided']);
-    for (const state of states) {
-      assert.ok(vocabulary.has(state), `unexpected status word: ${state}`);
-    }
-    assert.equal(states.at(-1), 'Decided', 'design is decided, not measured');
-  });
-
-  it('reuses the same six names in the reconstruction act', () => {
-    const converge = html.slice(html.indexOf('data-converge'));
-    for (const name of ['Performance', 'Accessibility', 'Conversion', 'Search', 'Trust', 'Design']) {
-      assert.match(converge, new RegExp(`<span>${name}</span>`));
-    }
+    assert.equal(surface.match(/class="plate"/g)?.length, 6);
+    assert.equal(surface.match(/class="plinth"/g)?.length, 1);
   });
 });
 
 describe('Assessment integrity (doctrine §16)', () => {
-  it('states all four evidence classes', () => {
-    for (const cls of Object.keys(EVIDENCE_CLASS)) {
-      const label = cls[0] + cls.slice(1).toLowerCase();
-      assert.match(
-        html,
-        new RegExp(`class="taxonomy__class">${label}<`),
-        `evidence class ${cls} is not declared on the page`
-      );
-    }
-  });
-
-  it('separates the four report sections', () => {
-    const labels = [...html.matchAll(/class="report__label">([^<]+)</g)].map((m) =>
-      m[1].replace(/&rsquo;/g, "'")
-    );
-    assert.deepEqual(labels, [
-      'What we measured',
-      'What we observed',
-      'What it may mean',
-      "What we'd investigate next",
-    ]);
-  });
-
   it('never presents a score', () => {
     assert.doesNotMatch(copy, /\b\d{1,3}\s*\/\s*100\b/);
     assert.doesNotMatch(copy, /\byour (website|site) score\b/i);
     assert.doesNotMatch(copy, /\bgrade\b\s*[:=]/i);
-    // And it says out loud that it will not produce one.
-    assert.match(copy, /A score out of one hundred/i);
   });
 
   it('contains none of the claims the assessment engine itself prohibits', () => {
@@ -225,44 +144,10 @@ describe('Assessment integrity (doctrine §16)', () => {
     }
   });
 
-  it('refuses the specific manufactured-urgency claims by name', () => {
-    assert.match(copy, /revenue-loss estimate without your revenue data/i);
-    assert.match(copy, /legal compliance verdict based only on automated accessibility checks/i);
-    assert.match(copy, /guarantee of search ranking or conversion improvement/i);
-    assert.match(copy, /Urgency the evidence doesn t support/i);
-  });
-
   it('uses no fabricated metrics or counters anywhere', () => {
     assert.doesNotMatch(copy, /\b\d+% (increase|more|faster|lift|growth|improvement)\b/i);
     assert.doesNotMatch(copy, /\b\d+x (more|faster|better)\b/i);
     assert.doesNotMatch(copy, /\b(happy clients|projects delivered|years of experience)\b/i);
-  });
-});
-
-describe('Discover → Diagnose → Advise (doctrine §15)', () => {
-  it('names the three movements in order', () => {
-    const steps = [...html.matchAll(/class="mono">(Discover|Diagnose|Advise)</g)].map(
-      (m) => m[1]
-    );
-    assert.deepEqual(steps, ['Discover', 'Diagnose', 'Advise']);
-  });
-
-  it('exposes the same four possible conclusions the engine emits', () => {
-    const displayToEngine = {
-      'Redesign candidate': 'REDESIGN_CANDIDATE',
-      'Targeted fix': 'TARGETED_REMEDIATION',
-      'Healthy site': 'HEALTHY_SITE',
-      'Insufficient evidence': 'INSUFFICIENT_EVIDENCE',
-    };
-    const shown = [...html.matchAll(/class="conclusion__class">([^<]+)</g)].map(
-      (m) => displayToEngine[m[1]]
-    );
-    assert.ok(shown.every(Boolean), 'every customer-facing conclusion maps to an engine class');
-    assert.deepEqual(shown.sort(), Object.keys(DIAGNOSIS_CLASS).sort());
-  });
-
-  it('is willing to conclude that no redesign is required', () => {
-    assert.match(copy, /No redesign required.{0,2} is a conclusion we re willing to reach/i);
   });
 });
 
@@ -297,11 +182,9 @@ describe('Copy doctrine (doctrine §8, §23)', () => {
     assert.ok(words.length <= 6, `hero headline is ${words.length} words`);
   });
 
-  it('does not lean on rhetorical questions outside the layer questions', () => {
-    // The six layer questions are the intended use. Anything beyond a couple
-    // more is the "excessive rhetorical questions" the doctrine warns about.
+  it('does not lean on rhetorical questions', () => {
     const questions = copy.match(/\?/g) || [];
-    assert.ok(questions.length <= 8, `${questions.length} question marks in page copy`);
+    assert.ok(questions.length <= 4, `${questions.length} question marks in page copy`);
   });
 });
 
@@ -366,43 +249,15 @@ describe('Forbidden visual patterns (doctrine §10)', () => {
     assert.doesNotMatch(css, /cursor:\s*(none|url\()/);
   });
 
-  it('presents work as editorial stories rather than a portfolio grid', () => {
-    assert.match(html, /class="study__movements"/);
-    const movements = [...html.matchAll(/class="study__movement">\s*<h3>([^<]+)</g)].map(
-      (m) => m[1]
-    );
-    assert.deepEqual(movements, [
-      'Context',
-      'Diagnosis',
-      'Decision',
-      'Experience',
-      'Outcome',
-    ]);
+  it('presents work as proof cards rather than a portfolio grid', () => {
+    assert.match(html, /class="proof"/);
+    assert.match(html, /class="proof__card"/);
+    assert.doesNotMatch(html, /portfolio|case-study-grid/i);
   });
 
   it('shows real work rather than a device mockup', () => {
     assert.doesNotMatch(html, /laptop|macbook|iphone|mockup|device-frame/i);
     assert.match(html, /assets\/work\/anchor-cleaning-home\.webp/);
-  });
-
-  it('frames the case study as observed evidence', () => {
-    const observations = [...html.matchAll(/<li><span>(Buyer|Action|Route)<\/span>/g)].map(
-      (match) => match[1]
-    );
-    assert.deepEqual(observations, ['Buyer', 'Action', 'Route']);
-    assert.match(html, /class="study__capture"/);
-  });
-
-  it('expresses engagement as interventions on one six-layer system', () => {
-    const engagement = html.slice(
-      html.indexOf('class="engagement__tracks"'),
-      html.indexOf('class="engagement__fit"')
-    );
-    assert.match(engagement, /intervention--expose/);
-    assert.match(engagement, /intervention--repair/);
-    assert.match(engagement, /intervention--rebuild/);
-    assert.equal((engagement.match(/<span><\/span>/g) || []).length, 18);
-    assert.doesNotMatch(engagement, /engagement__index[^>]*>\s*0[123]/);
   });
 });
 
@@ -534,15 +389,14 @@ describe('Typography (doctrine §7)', () => {
 
 describe('Progressive enhancement (doctrine §18)', () => {
   it('renders the dimensional composition without WebGL', () => {
-    // Act I whole, Act II separating, Act VI reassembling.
     const modes = [...html.matchAll(/data-stage="([a-z]+)"/g)].map((m) => m[1]);
-    assert.deepEqual(modes, ['surface', 'decomposition', 'reconstruction']);
+    assert.deepEqual(modes, ['surface']);
     const stages = html.match(/class="strata"/g) || [];
-    assert.equal(stages.length, 3, 'every stage needs a no-WebGL composition');
+    assert.equal(stages.length, 1, 'the hero carries the no-WebGL composition');
     const plates = html.match(/class="plate"/g) || [];
-    assert.equal(plates.length, 18, 'six plates per stage');
+    assert.equal(plates.length, 6, 'six plates in the hero specimen');
     const plinths = html.match(/class="plinth"/g) || [];
-    assert.equal(plinths.length, 3, 'every stage stands on the mineral substrate');
+    assert.equal(plinths.length, 1, 'the hero stands on the mineral substrate');
     assert.match(css, /\.strata__stack\s*\{[\s\S]*?transform-style:\s*preserve-3d/);
   });
 
@@ -986,9 +840,17 @@ describe('Progressive enhancement (doctrine §18)', () => {
     assert.ok(patinaUse && Number(patinaUse[1]) <= 0.35, 'accent tint is doing too much work');
   });
 
-  it('keeps every narrative label in the document, not in the canvas', () => {
-    for (const name of ['Performance', 'Accessibility', 'Conversion', 'Search', 'Trust', 'Design']) {
-      assert.ok(html.includes(`>${name}<`), `${name} must exist as document text`);
+  it('names the six systems on the hero specimen, not inside the canvas', () => {
+    const surface = html.slice(html.indexOf('id="surface"'), html.indexOf('id="work"'));
+    for (const key of [
+      'performance',
+      'accessibility',
+      'conversion',
+      'search',
+      'trust',
+      'design',
+    ]) {
+      assert.match(surface, new RegExp(`data-art="${key}"`));
     }
   });
 
@@ -1033,7 +895,7 @@ describe('Progressive enhancement (doctrine §18)', () => {
 
   it('excludes the decorative canvas from the accessibility tree', () => {
     const canvases = [...html.matchAll(/<canvas[^>]*>/g)].map((m) => m[0]);
-    assert.equal(canvases.length, 3);
+    assert.equal(canvases.length, 1);
     for (const canvas of canvases) {
       assert.match(canvas, /aria-hidden="true"/);
     }
@@ -1214,9 +1076,8 @@ describe('Motion physics (doctrine §13)', () => {
 
 describe('Responsive intent (doctrine §17)', () => {
   it('designs the mobile treatment rather than scaling the desktop one', () => {
-    // A shallow sticky band on small screens, a full-height column on wide ones.
-    assert.match(css, /\.decomposition__stage\s*\{[\s\S]*?height:\s*calc\(28svh/);
-    assert.match(css, /@media \(min-width: 62em\)[\s\S]*?height:\s*100svh/);
+    assert.match(css, /\.surface__object\s*\{[\s\S]*?min-height:/);
+    assert.match(css, /@media \(min-width: 62em\)/);
   });
 
   it('keeps the fixed nav opaque without waiting for an observer', () => {
@@ -1231,37 +1092,12 @@ describe('Responsive intent (doctrine §17)', () => {
     assert.match(lifted, /border-bottom-color/);
   });
 
-  it('keeps the single-column sticky band above the copy it pins over', () => {
-    // On one column the stage covers the reading column. If it sits below the
-    // scrolling content, the specimen and the prose render on top of each
-    // other — which is exactly what happened before this was pinned down.
-    const band = (selector) => css.match(new RegExp(`\\${selector}\\s*\\{[^}]*\\}`))[0];
-    const scrollers = { '.decomposition__stage': '.layers', '.reconstruction__stage': '.converge' };
-    for (const [stage, scroller] of Object.entries(scrollers)) {
-      const rule = band(stage);
-      const stageZ = Number(rule.match(/z-index:\s*(\d+)/)?.[1] ?? 0);
-      const scrollerZ = Number(band(scroller).match(/z-index:\s*(\d+)/)?.[1] ?? 0);
-      assert.ok(
-        stageZ > scrollerZ,
-        `${stage} (z ${stageZ}) must stack above ${scroller} (z ${scrollerZ})`
-      );
-      assert.match(rule, /background:\s*var\(--bg\)/, `${stage} must be opaque`);
-    }
-  });
-
-  it('reserves the fixed nav height so sticky stages are not occluded', () => {
+  it('reserves the fixed nav height on the hero stage', () => {
     assert.match(css, /--nav-h:/);
-    for (const stage of ['decomposition__stage', 'reconstruction__stage']) {
-      assert.match(
-        css,
-        new RegExp(`\\.${stage}\\s*\\{[\\s\\S]*?padding-top:\\s*var\\(--nav-h\\)`),
-        `${stage} must reserve the nav height`
-      );
-    }
+    assert.match(css, /\.surface\s*\{[\s\S]*?padding-top:\s*var\(--nav-h\)/);
   });
 
   it('keeps the CSS composition as the small-screen fallback without replacing the approved renderer', () => {
-    assert.match(html, /Baseline dimensional composition\. Requires no WebGL/);
     const gate = orchestration.slice(
       orchestration.indexOf('function shouldRenderObject()'),
       orchestration.indexOf('function loadObject(')
