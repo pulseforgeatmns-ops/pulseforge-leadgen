@@ -7315,8 +7315,10 @@ function mergeSupplementalIntoSections(sections, supplementalContext) {
   return out;
 }
 
-async function generateBlueprint(store, session) {
-  if (session.status !== 'BLUEPRINT_GENERATION') {
+async function generateBlueprint(store, session, genOpts = {}) {
+  const regeneratingInReview =
+    Boolean(genOpts.regeneration) && session.status === 'CLIENT_REVIEW';
+  if (!regeneratingInReview && session.status !== 'BLUEPRINT_GENERATION') {
     advanceStatus(session, 'BLUEPRINT_GENERATION');
   }
   const state = session.interview_state || initialInterviewState();
@@ -7357,11 +7359,13 @@ async function generateBlueprint(store, session) {
   // Refinement / re-generation: supersede prior unapproved Blueprints for this
   // session so only the newly created row remains the current in_review.
   await supersedeUnapprovedBlueprintsForSession(store, session);
+  const prior = genOpts.priorBlueprint || null;
+  const isRegeneration = Boolean(genOpts.regeneration && prior);
   const blueprint = await store.insertBlueprint({
-    id: newId(),
+    id: isRegeneration ? String(prior.id) : newId(),
     client_id: session.client_id,
     session_id: session.id,
-    version: '1.0',
+    version: isRegeneration ? bumpBlueprintVersion(prior.version) : '1.0',
     status: 'in_review',
     generated_by: GENERATED_BY,
     sections,
@@ -7371,7 +7375,7 @@ async function generateBlueprint(store, session) {
     section_provenance: {
       business_facts: state.normalizedFacts?.business_facts || {},
     },
-    parent_blueprint_id: null,
+    parent_blueprint_id: isRegeneration ? String(prior.id) : null,
     readiness: {
       ready: readiness.ready,
       missing: readiness.missing,
@@ -7381,7 +7385,9 @@ async function generateBlueprint(store, session) {
     created_at: new Date(),
     updated_at: new Date(),
   });
-  advanceStatus(session, 'CLIENT_REVIEW');
+  if (session.status !== 'CLIENT_REVIEW') {
+    advanceStatus(session, 'CLIENT_REVIEW');
+  }
   session.interview_state = {
     ...session.interview_state,
     blueprintId: blueprint.id,
@@ -7396,7 +7402,9 @@ async function generateBlueprint(store, session) {
   session.confidence_score = overallConfidence(confidence_summary);
   session.summary = readiness.confidenceNote
     ? `Draft Business Blueprint ${blueprint.id}@${blueprint.version} (${readiness.confidenceNote})`
-    : `Draft Business Blueprint ${blueprint.id}@${blueprint.version}`;
+    : isRegeneration
+      ? `Regenerated Business Blueprint ${blueprint.id}@${blueprint.version}`
+      : `Draft Business Blueprint ${blueprint.id}@${blueprint.version}`;
   session.current_stage = 'Client Review';
   await store.updateSession(session.id, {
     status: session.status,
@@ -7406,6 +7414,76 @@ async function generateBlueprint(store, session) {
     interview_state: session.interview_state,
   });
   return blueprint;
+}
+
+/**
+ * Operator action: discard stale pending Blueprint prose and re-compose from
+ * current normalized facts using the latest brief/Blueprint composer.
+ * Preserves interview answers and normalized facts (unless composer sanitizes them).
+ */
+async function regeneratePendingBlueprint(sessionId, opts = {}) {
+  const store = await resolveStore(opts);
+  const session = await store.getSession(sessionId);
+  if (!session) {
+    throw new ClientIntelligenceError('not_found', 'Interview session not found', 404);
+  }
+  if (session.status === 'APPROVED') {
+    throw new ClientIntelligenceError(
+      'interview_complete',
+      'Blueprint is already approved; revise the approved Blueprint instead of regenerating pending review'
+    );
+  }
+  if (!['CLIENT_REVIEW', 'BLUEPRINT_GENERATION'].includes(session.status)) {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      `Can only regenerate pending Blueprint review from CLIENT_REVIEW (was ${session.status})`
+    );
+  }
+
+  session.interview_state = normalizeRecoveredInterviewState(
+    session.interview_state || initialInterviewState()
+  );
+  await store.updateSession(session.id, {
+    interview_state: session.interview_state,
+  });
+
+  const prior = await resolveBlueprintForSession(store, session);
+  if (prior && blueprintStatusOf(prior) === 'approved') {
+    throw new ClientIntelligenceError(
+      'invalid_status',
+      'Cannot regenerate an approved Blueprint from this session'
+    );
+  }
+
+  await store.insertTurn({
+    id: newId(),
+    session_id: session.id,
+    speaker: 'system',
+    message:
+      'Operator requested Blueprint regeneration from current normalized understanding.',
+    goal: 'Regenerate pending Blueprint review',
+    asked_because:
+      'Stale or corrupted Blueprint prose must be recomposed without restarting the interview.',
+    derived_evidence: [],
+    created_at: new Date(),
+  });
+
+  const blueprint = await generateBlueprint(store, session, {
+    priorBlueprint: prior,
+    regeneration: true,
+  });
+  const fresh = await store.getSession(session.id);
+  const pub = publicBlueprint(blueprint);
+  return withExperienceFields(fresh, {
+    interviewId: fresh.id,
+    ...publicSession(fresh),
+    nextAction: 'GENERATE_BLUEPRINT',
+    question: null,
+    blueprint: pub,
+    message: `Regenerated Business Blueprint v${pub.version} from current understanding.`,
+    regenerated: true,
+    supersededBlueprintVersion: prior ? prior.version : null,
+  });
 }
 
 async function advanceThroughLifecycleToBlueprint(store, session) {
@@ -12235,6 +12313,7 @@ module.exports = {
   resolveResumeTarget,
   buildGrowthPlan,
   reviseBlueprint,
+  regeneratePendingBlueprint,
   approveBlueprint,
   startGrowthConversation,
   postGrowthMessage,

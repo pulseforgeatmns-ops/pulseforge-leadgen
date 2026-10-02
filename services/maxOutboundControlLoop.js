@@ -56,13 +56,13 @@ const {
   resolveGovernedAuthorizationTenantId,
   resolveReplenishmentTenantContext,
 } = require('./governedOutboundContext');
-const { governedOutboundEnabledForTenant } = require('./governedOutboundTenant');
+const { governedOutboundEnabledForTenant, governedOutboundPreparationEnabledForTenant } = require('./governedOutboundTenant');
 
 function preparationGrantActive(store, program) {
   if (program?.mode !== 'active') return false;
   const tid = String(store?.tenantId ?? program?.tenant_id ?? '').trim();
   if (!tid || !['10', '13'].includes(tid)) return true;
-  return governedOutboundEnabledForTenant(tid);
+  return governedOutboundPreparationEnabledForTenant(tid);
 }
 
 const DEFAULT_TARGET_DAYS = 3;
@@ -690,6 +690,7 @@ async function capturePreparationObservability({
   operating = {},
   sentToday = 0,
   cleanInventory = 0,
+  inventoryExclusions = [],
   now = new Date(),
 } = {}) {
   let pendingPrepared = 0;
@@ -744,6 +745,10 @@ async function capturePreparationObservability({
     remainingDispatchCapacity: remainingCap,
     remainingScheduleSlots: remainingSlots,
     cleanInventory,
+    preparationDecisions: inventoryExclusions.map(row => ({
+      candidateId: row.prospectId, prospectId: row.prospectId,
+      source: 'inventory', outcome: 'rejected', reason: row.reason,
+    })),
   });
 }
 
@@ -784,10 +789,13 @@ async function applyPreparationRefill({
     pendingPrepared: refill.pendingPrepared ?? preparation.pendingPrepared,
     preparedAdded: refill.preparedAdded ?? 0,
     prepareSkippedReason: refill.prepareSkippedReason ?? null,
+    preparationDecisions: refill.preparationDecisions ?? preparation.preparationDecisions ?? [],
   });
 }
 
 async function runMaxOutboundControlLoop(options = {}) {
+  const cycleId = options.cycleId || require('node:crypto').randomUUID();
+  const cycleStartedAt = new Date().toISOString();
   const pool = options.pool || require('../db');
   const logger = options.logger || console;
   const programEarly = options.program || null;
@@ -937,6 +945,7 @@ async function runMaxOutboundControlLoop(options = {}) {
       operating,
       sentToday,
       cleanInventory: inventoryAfter.clean.length,
+      inventoryExclusions: inventoryAfter.excluded || [],
       now: controlNow,
     }),
   });
@@ -947,11 +956,14 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   await store.event('max_outbound_control', [
     program.id,
-    new Date().toISOString().slice(0, 13),
-    finalPlan.state,
+    cycleId,
   ], {
     programId: program.id,
-    cycleId: options.cycleId || null,
+    cycleId,
+    cycleStartedAt,
+    cycleCompletedAt: new Date().toISOString(),
+    sendingEnabled: governedOutboundEnabledForTenant(governed.tenantId),
+    preparationEnabled: governedOutboundPreparationEnabledForTenant(governed.tenantId),
     policyHash: program.policy_hash,
     sourceMissionId: program.source_mission_id,
     emmettCapacity: operating.recommendedSafeDailyCapacity,
@@ -974,6 +986,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     prepareRequested: preparation.prepareRequested,
     preparedAdded: preparation.preparedAdded,
     prepareSkippedReason: preparation.prepareSkippedReason,
+    preparationDecisions: preparation.preparationDecisions || [],
     bufferTarget: finalPlan.targetInventory,
     cleanInventoryBefore: inventoryBefore.clean.length,
     cleanInventoryAfter: inventoryAfter.clean.length,
@@ -1017,6 +1030,9 @@ async function runMaxOutboundControlLoop(options = {}) {
   });
 
   return {
+    cycleId,
+    cycleStartedAt,
+    cycleCompletedAt: new Date().toISOString(),
     programId: program.id,
     mode: program.mode,
     emmett: {

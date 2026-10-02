@@ -70,6 +70,7 @@ describe('clientIntelligence routes (static)', () => {
       '/api/v1/interview/:id/resume',
       '/api/v1/interview/:id',
       '/api/v1/interview/:id/blueprint',
+      '/api/v1/interview/:id/blueprint/regenerate',
       '/api/v1/blueprint/:id/revise',
       '/api/v1/blueprint/:id/approve',
       '/api/v1/interview/:id/growth/start',
@@ -105,6 +106,8 @@ describe('clientIntelligence routes (static)', () => {
     assert.match(uiSource, /Conversation/);
     assert.match(uiSource, /Business Blueprint/);
     assert.match(uiSource, /Approve Blueprint/);
+    assert.match(uiSource, /Regenerate Blueprint/);
+    assert.match(uiSource, /\/blueprint\/regenerate/);
     assert.match(uiSource, /\/api\/v1\/clients\//);
     assert.match(uiSource, /\/resume/);
     assert.match(uiSource, /overflow:\s*hidden/);
