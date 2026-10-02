@@ -18,6 +18,7 @@
  * GET  /api/v1/interview/:id/blueprint
  * POST /api/v1/blueprint/:id/revise
  * POST /api/v1/blueprint/:id/approve
+ * POST /api/v1/interview/:id/blueprint/regenerate — re-compose pending Blueprint (SPEC pending review recovery)
  * GET  /api/v1/client-intel/onboarding
  * POST /api/v1/interview/:id/growth/start
  * POST /api/v1/interview/:id/growth/message
@@ -65,6 +66,7 @@ const {
   loadAnchorSampleBlueprint,
   resolveClientOnboardingState,
   reviseBlueprint,
+  regeneratePendingBlueprint,
   approveBlueprint,
   startGrowthConversation,
   postGrowthMessage,
@@ -306,6 +308,22 @@ router.get('/api/v1/interview/:id/blueprint', requireOperator, async (req, res) 
     return sendError(res, err);
   }
 });
+
+router.post(
+  '/api/v1/interview/:id/blueprint/regenerate',
+  requireOperator,
+  async (req, res) => {
+    try {
+      await loadInterviewScoped(req, req.params.id);
+      const result = await regeneratePendingBlueprint(req.params.id);
+      assertCieClientAccess(req, result.clientId);
+      noStore(res);
+      return res.json(result);
+    } catch (err) {
+      return sendError(res, err);
+    }
+  }
+);
 
 router.post('/api/v1/blueprint/:id/revise', requireOperator, async (req, res) => {
   try {
