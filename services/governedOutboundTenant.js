@@ -60,6 +60,15 @@ function governedOutboundEnabledForTenant(tenantId) {
   return false;
 }
 
+// A preparation-only grant is explicit, Anchor-scoped, and requires the send
+// switch to be explicitly off. It never grants provider/send authority.
+function governedOutboundPreparationEnabledForTenant(tenantId, sendingEnabled = governedOutboundEnabledForTenant(tenantId)) {
+  const tid = assertGovernedOutboundTenantId(tenantId);
+  return Boolean(sendingEnabled) || (tid === '10'
+    && process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED === 'false'
+    && process.env.ANCHOR_GOVERNED_PREPARATION_ENABLED === 'true');
+}
+
 function governedOutboundSendingDisabledForTenant(tenantId) {
   const tid = assertGovernedOutboundTenantId(tenantId);
   if (tid === '10') return process.env.ANCHOR_GOVERNED_OUTBOUND_ENABLED === 'false';
@@ -77,4 +86,5 @@ module.exports = {
   parseGovernedOutboundTenantIds,
   governedOutboundEnabledForTenant,
   governedOutboundSendingDisabledForTenant,
+  governedOutboundPreparationEnabledForTenant,
 };
