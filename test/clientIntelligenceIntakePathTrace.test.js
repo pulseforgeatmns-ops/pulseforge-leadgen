@@ -9,6 +9,8 @@ const {
   finalizeIntakePathPayload,
   createIntakePathTrace,
   intakePathDebugVisible,
+  intakeRouteLoggingEnabled,
+  logIntakeRouteDispatch,
 } = require('../services/cieIntakePathTrace');
 const {
   createMemoryStore,
@@ -114,6 +116,51 @@ describe('CIE intake path trace (production diagnostic)', () => {
       else process.env.CIE_INTAKE_PATH_VISIBLE = prevVisible;
       if (prevLog === undefined) delete process.env.CIE_INTAKE_PATH_LOG;
       else process.env.CIE_INTAKE_PATH_LOG = prevLog;
+    }
+  });
+
+  it('route dispatch logging is enabled on Railway-style production hosts', () => {
+    const prevNode = process.env.NODE_ENV;
+    const prevRailway = process.env.RAILWAY_ENVIRONMENT;
+    process.env.NODE_ENV = 'production';
+    delete process.env.RAILWAY_ENVIRONMENT;
+    try {
+      assert.ok(intakeRouteLoggingEnabled({ activeQuestionKey: 'identity' }));
+    } finally {
+      process.env.NODE_ENV = prevNode;
+      if (prevRailway === undefined) delete process.env.RAILWAY_ENVIRONMENT;
+      else process.env.RAILWAY_ENVIRONMENT = prevRailway;
+    }
+  });
+
+  it('logIntakeRouteDispatch emits [cie-intake-path] route_dispatch JSON', () => {
+    const prevNode = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    const lines = [];
+    const orig = console.log;
+    console.log = (...args) => {
+      lines.push(args.join(' '));
+    };
+    try {
+      logIntakeRouteDispatch({
+        routePath: 'POST /api/v1/interview/:id/message',
+        handler: 'postInterviewMessage',
+        sessionId: 'cbc88ca8-0bf8-4151-a119-5a8d76d99e51',
+        activeQuestionKey: 'success_metrics',
+        activeSection: 'successMetrics',
+        incomingMessageLength: 42,
+      });
+      assert.equal(lines.length, 1);
+      assert.match(lines[0], /^\[cie-intake-path\] \{/);
+      const payload = JSON.parse(lines[0].replace(/^\[cie-intake-path\] /, ''));
+      assert.equal(payload.event, 'route_dispatch');
+      assert.equal(payload.handler, 'postInterviewMessage');
+      assert.equal(payload.sessionId, 'cbc88ca8-0bf8-4151-a119-5a8d76d99e51');
+      assert.equal(payload.activeQuestionKey, 'success_metrics');
+      assert.ok(payload.gitSha);
+    } finally {
+      console.log = orig;
+      process.env.NODE_ENV = prevNode;
     }
   });
 

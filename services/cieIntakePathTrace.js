@@ -39,6 +39,54 @@ function intakePathShouldLog(trace) {
   return trace && trace.activeQuestionKeyBeforeClassify === 'success_metrics';
 }
 
+/** Route-level dispatch logs — always on in production/Railway (matches cie-intake-routing). */
+function intakeRouteLoggingEnabled(context = {}) {
+  if (intakePathDebugVisible()) return true;
+  const pathLog = String(process.env.CIE_INTAKE_PATH_LOG || '').trim().toLowerCase();
+  if (pathLog === '1' || pathLog === 'true' || pathLog === 'yes') return true;
+  if (context.activeQuestionKey === 'success_metrics') return true;
+  const routingFlag = String(process.env.CIE_INTERVIEW_ROUTING_LOG || '').trim().toLowerCase();
+  if (routingFlag === '0' || routingFlag === 'false' || routingFlag === 'no') return false;
+  if (routingFlag === '1' || routingFlag === 'true' || routingFlag === 'yes') return true;
+  return (
+    process.env.NODE_ENV === 'production' ||
+    Boolean(process.env.RAILWAY_ENVIRONMENT) ||
+    Boolean(process.env.RAILWAY_PROJECT_ID)
+  );
+}
+
+function emitIntakePathLog(payload) {
+  try {
+    console.log(
+      `[cie-intake-path] ${JSON.stringify({
+        at: new Date().toISOString(),
+        gitSha: getDeployedGitSha(),
+        ...payload,
+      })}`
+    );
+  } catch {
+    // ignore logging failures
+  }
+}
+
+function logIntakeRouteDispatch(context = {}) {
+  if (!intakeRouteLoggingEnabled(context)) return;
+  emitIntakePathLog({
+    event: 'route_dispatch',
+    pathId: PATH_ID,
+    ...context,
+  });
+}
+
+function logIntakeRouteResult(context = {}) {
+  if (!intakeRouteLoggingEnabled(context)) return;
+  emitIntakePathLog({
+    event: 'route_result',
+    pathId: PATH_ID,
+    ...context,
+  });
+}
+
 function newIntakeTraceId() {
   return `intake_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -173,6 +221,9 @@ module.exports = {
   getDeployedGitSha,
   intakePathDebugVisible,
   intakePathShouldLog,
+  intakeRouteLoggingEnabled,
+  logIntakeRouteDispatch,
+  logIntakeRouteResult,
   createIntakePathTrace,
   patchIntakePathTrace,
   buildIntakePathDebugSuffix,
