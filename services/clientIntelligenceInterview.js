@@ -2667,6 +2667,17 @@ function isInterviewArtifactServiceItem(item) {
   return /^(?:today|what we do today|business name)$/.test(s);
 }
 
+function isMisassignedWebsitePainItem(item) {
+  const s = String(item || '').trim();
+  if (!s) return false;
+  if (/\b(?:redesign|design|copywriting|seo|launch|messaging|optimization)\b/i.test(s)) {
+    return false;
+  }
+  return /\b(?:generic|confusing|visually weak|slow|outdated|weak website|weak digital)\b/i.test(
+    s
+  );
+}
+
 function sanitizeBriefServiceList(services) {
   return dedupeNormalizedList(
     (services || [])
@@ -2675,10 +2686,185 @@ function sanitizeBriefServiceList(services) {
         (item) =>
           item &&
           !isInterviewArtifactServiceItem(item) &&
+          !isMisassignedWebsitePainItem(item) &&
           !isLiteralUncertaintyPhrase(item) &&
           !containsRawPromptFragment(item)
       )
   );
+}
+
+const BLUEPRINT_FACT_KEY_ALIASES = Object.freeze({
+  idealCustomers: 'ideal_customers',
+  avoidCustomers: 'disqualified_customers',
+  disqualifiedCustomers: 'disqualified_customers',
+  targetMarkets: 'geography',
+  target_markets: 'geography',
+});
+
+function normalizePersistedFactKeys(facts) {
+  const next = cloneNormalizedFacts(facts);
+  const raw = facts || {};
+  for (const [alias, target] of Object.entries(BLUEPRINT_FACT_KEY_ALIASES)) {
+    if (!Object.prototype.hasOwnProperty.call(raw, alias)) continue;
+    const value = raw[alias];
+    if (value == null || value === '') continue;
+    if (target === 'geography') {
+      const items = Array.isArray(value) ? value : [value];
+      next.geography = uniquePush(next.geography, items);
+      continue;
+    }
+    if (Array.isArray(next[target])) {
+      const items = Array.isArray(value) ? value : [value];
+      next[target] = uniquePush(next[target], items);
+    } else if (next[target] == null || next[target] === '') {
+      next[target] = value;
+    }
+  }
+  return next;
+}
+
+function looksLikeCustomerExclusionPhrase(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  return (
+    /\b(?:cheap(?:est)?|lowest price|cosmetic|quick patch|one-off|hobby project|no budget|no urgency|no decision-maker|landing page)\b/i.test(
+      s
+    ) ||
+    /\b(?:avoid|exclusion|decline|not a fit|should avoid|prefer not to|do not want)\b/i.test(s)
+  );
+}
+
+function looksLikeIdealCustomerPhrase(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  return (
+    /\b(?:owner-led|decision-maker|small business owner|ideal buyer|operator \/ decision-maker)\b/i.test(
+      s
+    ) ||
+    /\bbetter website\b.*\b(?:trust|lead flow|sales)\b/i.test(s) ||
+    isCanonicalIdealCustomerSegment(s)
+  );
+}
+
+function looksLikeGeographyOnly(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (extractPlaces(s).length) return true;
+  return (
+    /\b(?:southern new hampshire|new hampshire|greater manchester)\b/i.test(s) &&
+    !looksLikeIdealCustomerPhrase(s) &&
+    !looksLikeCustomerExclusionPhrase(s)
+  );
+}
+
+function isVerticalFocusSegment(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (looksLikeGeographyOnly(s) || looksLikeIdealCustomerPhrase(s) || looksLikeCustomerExclusionPhrase(s)) {
+    return false;
+  }
+  return /\b(?:local service businesses|contractors?|trades|professional services|medical|wellness|hospitality|property service|owner-led local brands?)\b/i.test(
+    s
+  );
+}
+
+function repartitionMisassignedMarketSlots(facts) {
+  const next = cloneNormalizedFacts(facts);
+  const verticalBits = next.vertical_focus ? [next.vertical_focus] : [];
+  const keptGeo = [];
+
+  for (const item of next.geography || []) {
+    const text = normalizeBusinessPhrase(String(item || '').trim());
+    if (!text) continue;
+
+    if (QUALIFICATION_SIGNAL_PHRASE_RE.test(text) && !looksLikeCustomerExclusionPhrase(text)) {
+      next.qualification_signals = uniquePush(next.qualification_signals, [text]);
+      continue;
+    }
+    if (looksLikeCustomerExclusionPhrase(text)) {
+      next.disqualified_customers = uniquePush(next.disqualified_customers, [text]);
+      continue;
+    }
+    if (looksLikeIdealCustomerPhrase(text)) {
+      next.ideal_customers = uniquePush(next.ideal_customers, [text]);
+      continue;
+    }
+    if (isVerticalFocusSegment(text)) {
+      verticalBits.push(text);
+      continue;
+    }
+    if (looksLikeGeographyOnly(text)) {
+      const places = extractPlaces(text);
+      keptGeo.push(...(places.length ? places : [text]));
+      continue;
+    }
+
+    const segments = extractCustomerSegments(text);
+    if (segments.length) {
+      next.ideal_customers = uniquePush(next.ideal_customers, segments);
+      continue;
+    }
+
+    keptGeo.push(text);
+  }
+
+  next.geography = dedupeNormalizedList(keptGeo);
+  if (verticalBits.length) {
+    next.vertical_focus = dedupeNormalizedList(verticalBits).join('; ');
+  }
+  return next;
+}
+
+function scrubIdentityInterviewArtifacts(facts) {
+  const next = cloneNormalizedFacts(facts);
+  if (next.business_description) {
+    let desc = String(next.business_description).trim();
+    desc = desc
+      .replace(/^today\s+is\s+(?:an?\s+)?(?:especially\s+)?/i, '')
+      .replace(/^especially\s+/i, '')
+      .replace(/^what we do today\s*:?\s*/i, '')
+      .trim();
+    next.business_description = sanitizeIdentityDescription(
+      next.business_name,
+      normalizeBusinessPhrase(desc)
+    );
+  }
+  return next;
+}
+
+function reconcileEpistemicStatesFromValues(facts) {
+  const next = cloneNormalizedFacts(facts);
+  const slots = [
+    ['business_description', 'business_description'],
+    ['services', 'services'],
+    ['ideal_customers', 'ideal_customers'],
+    ['disqualified_customers', 'disqualified_customers'],
+    ['geography', 'geography'],
+    ['success_metrics', 'success_metrics'],
+  ];
+  for (const [field, epKey] of slots) {
+    const value = next[field];
+    const hasValue = Array.isArray(value) ? value.length > 0 : Boolean(value);
+    const state = next.epistemic_states?.[epKey];
+    if (
+      hasValue &&
+      state !== EPISTEMIC_STATES.HYPOTHESIS &&
+      state !== EPISTEMIC_STATES.NOT_APPLICABLE &&
+      (!state || state === EPISTEMIC_STATES.UNRESOLVED || state === EPISTEMIC_STATES.UNKNOWN)
+    ) {
+      next.epistemic_states[epKey] = EPISTEMIC_STATES.KNOWN;
+    }
+  }
+  if (
+    (next.vertical_focus || next.geography.length) &&
+    next.epistemic_states?.geography !== EPISTEMIC_STATES.NOT_APPLICABLE &&
+    next.epistemic_states?.geography !== EPISTEMIC_STATES.HYPOTHESIS
+  ) {
+    if (!next.epistemic_states.geography || next.epistemic_states.geography === EPISTEMIC_STATES.UNRESOLVED) {
+      next.epistemic_states.geography = EPISTEMIC_STATES.KNOWN;
+    }
+  }
+  return next;
 }
 
 function buildIdentityOverviewSentence(name, description, facts = null) {
@@ -2746,7 +2932,11 @@ function partitionSuccessMetricsAndQualification(items) {
 }
 
 function prepareNormalizedFactsForBrief(facts) {
-  const next = scrubMisassignedGrowthFocus(facts);
+  let next = normalizePersistedFactKeys(facts);
+  next = scrubIdentityInterviewArtifacts(next);
+  next = scrubMisassignedGrowthFocus(next);
+  next = repartitionMisassignedMarketSlots(next);
+  next = reconcileEpistemicStatesFromValues(next);
   const services = sanitizeBriefServiceList(next.services);
   next.services = services;
   const partitioned = partitionSuccessMetricsAndQualification(next.success_metrics);
@@ -3869,6 +4059,7 @@ async function applyRefinementSemanticCorrections(store, session, state, text, t
     });
     evidenceIds.push(evidence.id);
   }
+  state.normalizedFacts = prepareNormalizedFactsForBrief(state.normalizedFacts);
   state.sectionState = sectionsFromNormalizedFacts(state.normalizedFacts, state.sectionState);
   session.interview_state = state;
   return { operations, evidenceIds };
@@ -3965,9 +4156,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
 
   const identityBits = [];
   if (name && f.business_description) {
-    const desc = normalizeBusinessPhrase(firstSentence(f.business_description));
-    const article = /^[aeiou]/i.test(desc) ? 'an' : 'a';
-    identityBits.push(`${name} is ${article} ${desc}`);
+    identityBits.push(buildIdentityOverviewSentence(name, f.business_description, f));
   } else if (name) {
     identityBits.push(buildIdentityOverviewSentence(name, null, f));
   } else if (f.business_description) {
@@ -4054,6 +4243,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
 
   const marketBits = [];
   if (f.geography.length) marketBits.push(f.geography.join(', '));
+  if (f.vertical_focus) marketBits.push(f.vertical_focus);
   if (
     f.growth_focus &&
     (factsIndicateCommercialCleaningBusiness(f) ||
@@ -4551,7 +4741,7 @@ function summarizeSection(sectionKey, statements) {
     }
     case 'services':
       return [
-        ensurePeriod(`Today the business delivers ${latest}`),
+        ensurePeriod(`The business delivers ${latest}`),
         'Service understanding reflects what is actually sold now, not aspirational packaging.',
       ].join(' ');
     case 'idealCustomers': {
@@ -7132,26 +7322,25 @@ async function generateBlueprint(store, session, genOpts = {}) {
     advanceStatus(session, 'BLUEPRINT_GENERATION');
   }
   const state = session.interview_state || initialInterviewState();
-  const merged = mergeSupplementalIntoSections(
-    state.sectionState,
-    state.supplementalContext
-  );
-  // Prefer normalized evidence for Blueprint/Brief commercial fields.
-  let normalizedFacts = state.normalizedFacts
-    ? cloneNormalizedFacts(state.normalizedFacts)
-    : null;
-  if (normalizedFacts) {
-    normalizedFacts = prepareNormalizedFactsForBrief(normalizedFacts);
-    state.normalizedFacts = normalizedFacts;
+  const preparedFacts = state.normalizedFacts
+    ? prepareNormalizedFactsForBrief(state.normalizedFacts)
+    : emptyNormalizedFacts();
+  const metadataPrior = emptySections();
+  for (const key of BLUEPRINT_SECTIONS) {
+    const src = (state.sectionState || {})[key] || emptySection();
+    metadataPrior[key] = {
+      ...emptySection(),
+      evidenceIds: [...(src.evidenceIds || [])],
+      confidence: src.confidence,
+    };
   }
-  const sections = normalizedFacts
-    ? sectionsFromNormalizedFacts(normalizedFacts, merged)
-    : merged;
+  let sections = sectionsFromNormalizedFacts(preparedFacts, metadataPrior);
+  sections = mergeSupplementalIntoSections(sections, state.supplementalContext);
 
   // SPEC-090 — artifact readiness: mark weak evidence clearly; never invent facts.
   const readiness = checkArtifactReadiness(ARTIFACT_KINDS.BLUEPRINT, {
     sectionState: sections,
-    normalizedFacts: state.normalizedFacts || emptyNormalizedFacts(),
+    normalizedFacts: preparedFacts,
   });
   let reasoningMemory = ensureReasoningMemory(state);
   const artifactProgress = resolveNextArtifact(
@@ -7204,7 +7393,7 @@ async function generateBlueprint(store, session, genOpts = {}) {
     blueprintId: blueprint.id,
     blueprintVersion: blueprint.version,
     sectionState: sections,
-    normalizedFacts: state.normalizedFacts || emptyNormalizedFacts(),
+    normalizedFacts: preparedFacts,
     reasoningMemory,
     artifactReadiness: {
       blueprint: readiness,

@@ -24,7 +24,8 @@ function assertValidIco(icoPath) {
   }
 }
 
-const requiredPublic = [
+const requiredRootIcons = [
+  'favicon.svg',
   'favicon.ico',
   'favicon-16x16.png',
   'favicon-32x32.png',
@@ -32,26 +33,37 @@ const requiredPublic = [
   'site.webmanifest',
 ];
 
-for (const file of requiredPublic) {
+for (const file of requiredRootIcons) {
+  test(`sites/studio-substral/${file} exists at publish root`, () => {
+    assert.ok(
+      fs.existsSync(path.join(site, file)),
+      `${file} missing — run node sites/studio-substral/build/generate-assets.mjs icons`
+    );
+  });
+
   test(`sites/studio-substral/public/${file} exists`, () => {
-    assert.ok(fs.existsSync(path.join(publicDir, file)), `${file} missing — run node sites/studio-substral/build/generate-assets.mjs icons`);
+    assert.ok(
+      fs.existsSync(path.join(publicDir, file)),
+      `${file} missing in public/ — run node sites/studio-substral/build/generate-assets.mjs icons`
+    );
   });
 }
 
-test('public/favicon.ico is a valid ICO container', () => {
-  assertValidIco(path.join(publicDir, 'favicon.ico'));
+test('publish-root favicon.ico is a valid ICO container', () => {
+  assertValidIco(path.join(site, 'favicon.ico'));
 });
 
 test('index.html references root favicon bundle for Safari and mobile', () => {
   const html = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
   assert.match(html, /<link rel="icon" href="\/favicon\.ico"/);
-  assert.match(html, /href="\/favicon-32x32\.png"/);
-  assert.match(html, /href="\/favicon-16x16\.png"/);
+  assert.match(html, /<link rel="icon" href="\/favicon\.svg" type="image\/svg\+xml">/);
   assert.match(html, /href="\/apple-touch-icon\.png"/);
   assert.match(html, /href="\/site\.webmanifest"/);
 });
 
-test('prepare-release.mjs exports public/ to the publish root', () => {
+test('prepare-release.mjs exports publish-root favicon bundle', () => {
   const src = fs.readFileSync(path.join(site, 'build', 'prepare-release.mjs'), 'utf8');
+  assert.match(src, /'favicon\.ico'/);
+  assert.match(src, /'favicon\.svg'/);
   assert.match(src, /'public'/);
 });

@@ -255,7 +255,6 @@ if (run('states')) {
     const page = await open({ width: 1512, noWebGL: true });
     const state = await page.evaluate(() => ({
       webgl: [...document.querySelectorAll('[data-stage]')].map((s) => s.dataset.webgl),
-      labels: [...document.querySelectorAll('.layer__name')].map((e) => e.textContent),
       plates: document.querySelectorAll('.plate').length,
       plinths: document.querySelectorAll('.plinth').length,
       // Each plate must actually paint its own drawing, not inherit a default.
@@ -266,37 +265,25 @@ if (run('states')) {
       ).size,
     }));
     if (state.webgl.some((v) => v !== 'off')) fail('WebGL reported on with no context available');
-    else if (state.plates !== 18) fail(`expected 18 CSS plates, found ${state.plates}`);
-    else if (state.plinths !== 3) fail(`expected 3 substrates, found ${state.plinths}`);
+    else if (state.plates !== 6) fail(`expected 6 CSS plates, found ${state.plates}`);
+    else if (state.plinths !== 1) fail(`expected 1 substrate, found ${state.plinths}`);
     else if (state.drawings !== 6) fail(`expected 6 distinct layer drawings, found ${state.drawings}`);
-    else if (state.labels.join() !== 'Performance,Accessibility,Conversion,Search,Trust,Design')
-      fail(`layer labels wrong without WebGL: ${state.labels}`);
-    else pass('without WebGL: six distinct plates, the substrate, and all six labels');
+    else pass('without WebGL: six distinct plates and the substrate in the hero');
     if (page.problems.length) fail(`console errors without WebGL: ${page.problems[0]}`);
     await page.close();
   }
 
   {
     const page = await open({ width: 1512, reduced: true });
-    const state = await page.evaluate(() => {
-      const layout = document.querySelector('.decomposition__layout');
-      return {
-        canvas: getComputedStyle(document.querySelector('[data-stage-canvas]')).display,
-        revealed: [...document.querySelectorAll('[data-reveal]')].every(
-          (e) => e.dataset.revealed === 'true'
-        ),
-        sticky: getComputedStyle(document.querySelector('.decomposition__stage')).position,
-        // One column: with nothing pinned, two columns would leave an empty
-        // gutter beside every chapter once the object had scrolled past.
-        columns: getComputedStyle(layout).gridTemplateColumns.split(' ').length,
-      };
-    });
+    const state = await page.evaluate(() => ({
+      canvas: getComputedStyle(document.querySelector('[data-stage-canvas]')).display,
+      revealed: [...document.querySelectorAll('[data-reveal]')].every(
+        (e) => e.dataset.revealed === 'true'
+      ),
+    }));
     if (state.canvas !== 'none') fail('reduced motion still shows the canvas');
     else if (!state.revealed) fail('reduced motion hides revealable content');
-    else if (state.sticky !== 'relative') fail('reduced motion keeps the stage pinned');
-    else if (state.columns !== 1)
-      fail(`reduced motion leaves ${state.columns} columns and an empty gutter`);
-    else pass('reduced motion: canvas suppressed, single column, all content visible');
+    else pass('reduced motion: canvas suppressed and hero content visible');
     await page.close();
   }
 
@@ -414,18 +401,18 @@ if (run('object')) {
     }, stage);
 
   const page = await open({ width: 1600, height: 900 });
-  // The end of the decomposition act: the widest the stack ever opens.
+  // Mid-scroll through the hero: enough separation to read the specimen.
   await page.evaluate(() => {
-    const region = document.querySelector('.decomposition__layout');
+    const region = document.getElementById('surface');
     const r = region.getBoundingClientRect();
-    window.scrollTo(0, scrollY + r.top + r.height - window.innerHeight - 2);
+    window.scrollTo(0, scrollY + r.top + r.height * 0.45);
   });
   // Damping is 0.06 a frame and this renders in software: it needs the time.
-  await new Promise((resolve) => setTimeout(resolve, 40000));
+  await new Promise((resolve) => setTimeout(resolve, 25000));
 
-  const box = await frame(page, 'decomposition');
+  const box = await frame(page, 'surface');
   if (!box || box.width < 100) {
-    fail('the decomposition canvas never appeared, so nothing could be measured');
+    fail('the hero canvas never appeared, so nothing could be measured');
   } else {
     const shot = await sample(page, box);
     const { w, h, luma } = shot;
