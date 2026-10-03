@@ -47,16 +47,35 @@ async function findUnenrichedRecord({ domain, company }) {
   return null;
 }
 
-async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical, location, clientId }, db = pool) {
+async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical, location, clientId }, db = pool, inTransaction = false) {
+  // Serialize canonical company creation across concurrent replenishment runs.
+  if (!inTransaction && typeof db.connect === 'function') {
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      const id = await findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical, location, clientId }, client, true);
+      await client.query('COMMIT');
+      return id;
+    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+  }
   await ensureBusinessNameShortColumns(db);
+  const canonicalDomain = require('../utils/marketCompanyResolve').normalizeDomain(domain || websiteUrl);
+  for (const key of [`domain:${canonicalDomain}`, `name:${String(name).trim().toLowerCase()}`].sort()) {
+    await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`scout-company:${clientId}:${key}`]);
+  }
   const shortName = deriveBusinessNameShort(name);
   const existing = await db.query(
-    `SELECT id FROM companies
-     WHERE client_id = $2 AND LOWER(TRIM(name)) = LOWER(TRIM($1))
-     LIMIT 1`,
-    [name, clientId]
+    `SELECT id, domain, website FROM companies
+     WHERE client_id = $2 AND (LOWER(TRIM(name)) = LOWER(TRIM($1))
+       OR LOWER(regexp_replace(regexp_replace(COALESCE(NULLIF(domain, ''), website, ''), '^https?://(www\\.)?|^www\\.', '', 'i'), '[/?:#].*$', '')) = $3)
+     ORDER BY id`,
+    [name, clientId, canonicalDomain]
   );
+  if (existing.rows.length > 1) throw new Error('ambiguous_canonical_company');
   if (existing.rows.length) {
+    const existingDomain = require('../utils/marketCompanyResolve').normalizeDomain(existing.rows[0].domain || existing.rows[0].website);
+    if (existingDomain && canonicalDomain !== existingDomain) throw new Error('company_identity_domain_conflict');
     await db.query(`
       UPDATE companies
       SET business_name_short = COALESCE(NULLIF(business_name_short, ''), $1),
@@ -166,6 +185,10 @@ async function promoteRecord(record, {
     (enriched.source || []).join('+'), { source_url: enriched.sourceUrl || null,
       verifier: verification.emailVerificationMethod, status: verification.emailStatus,
       resolved_at: new Date().toISOString() });
+  const businessEvidence = String(record.notes || '').match(/ \| business_evidence: (\{.*\})/);
+  if (businessEvidence) {
+    try { enrichmentProvenance.business = JSON.parse(businessEvidence[1]); } catch (_) {}
+  }
   const contactReason = Number(record.client_id) === 10 && require('../utils/governedContactEligibility').governedContactReason({
     client_id: record.client_id, domain, email: enriched.email,
     email_verified: verification.emailVerified, email_status: verification.emailStatus,
@@ -173,6 +196,14 @@ async function promoteRecord(record, {
   });
   if (contactReason) return { promoted: false, recovered: false, emailResolved: true,
     emailVerified: verification.emailVerified === true, reason: contactReason };
+  if (Number(record.client_id) === 10) {
+    const store = new (require('../services/governedOutboundStore').GovernedOutboundStore)(db, '10');
+    const entry = { company: record.company, domain, email: enriched.email };
+    const owned = await store.candidateOwnership(entry);
+    const suppressed = !owned && await store.suppression(entry);
+    if (owned || suppressed) return { promoted: false, recovered: false, emailResolved: true,
+      emailVerified: verification.emailVerified === true, reason: owned || suppressed };
+  }
   const companyId = await findOrCreateCompanyForClient({
     name: record.company || domain,
     domain,
@@ -266,7 +297,7 @@ async function promoteRecord(record, {
         ` | recovered by Scout replenishment from scout_unenriched (${record.id})`,
         record.client_id,
         JSON.stringify(require('../utils/canonicalEmailEligibility').stampEmailProvenance(
-          row.enrichment_provenance, (enriched.source || []).join('+'), enrichmentProvenance.email)),
+          { ...row.enrichment_provenance, ...enrichmentProvenance }, (enriched.source || []).join('+'), enrichmentProvenance.email)),
       ]);
     }
     await db.query('DELETE FROM scout_unenriched WHERE id = $1', [record.id]);
@@ -313,7 +344,7 @@ async function run() {
   process.exit(result.promoted || result.recovered ? 0 : 2);
 }
 
-module.exports = { promoteRecord, promotionServiceAreaMatch };
+module.exports = { promoteRecord, promotionServiceAreaMatch, findOrCreateCompanyForClient };
 
 if (require.main === module) {
   run().catch(err => {

@@ -103,7 +103,10 @@ function scopedSearchDefinition(searchDefinition, workload, marketDefinition = n
     asText(searchDefinition.geography && searchDefinition.geography.state) ||
     inferStateFromLabel(workload.city) ||
     null;
-  const canonicalSegment =
+  // A property-management workload must reach the corresponding provider
+  // strategy, rather than repeating the STR queries for every concept.
+  const canonicalSegment = /property manag/i.test(workload.concept) && !/vacation/i.test(workload.concept)
+    ? 'property_management' :
     (Array.isArray(searchDefinition.segments) && searchDefinition.segments[0]) ||
     asText(workload.concept).replace(/\s+/g, '_').toLowerCase();
 
@@ -128,7 +131,7 @@ function scopedSearchDefinition(searchDefinition, workload, marketDefinition = n
   return scopeSearchDefinitionForTask(
     base,
     task,
-    marketDefinition || { segments: searchDefinition.segments }
+    { ...(marketDefinition || {}), segments: [canonicalSegment] }
   );
 }
 
@@ -169,6 +172,7 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
 
   const marketAdapters = (adapters || []).filter((row) => row && row.id !== 'existing_pf');
 
+  const reports = new Map();
   for (const workload of plan.workloads || []) {
     const adapter = adapterForSource(marketAdapters, workload.source);
     if (!adapter || (typeof adapter.available === 'function' && !adapter.available())) {
@@ -184,11 +188,16 @@ async function executeCoveragePlan(plan, searchDefinition, adapters = [], opts =
 
     const scoped = scopedSearchDefinition(searchDefinition, workload, marketDefinition);
     try {
-      const report = await adapter.discover(scoped);
+      const { investigationTaskId, ...evidenceKey } = scoped.evidenceRequest || {};
+      const requestKey = JSON.stringify([adapter.id, evidenceKey]);
+      const reused = adapter.id === 'public_business_places' && reports.has(requestKey);
+      const report = reused ? reports.get(requestKey) : await adapter.discover(scoped);
+      reports.set(requestKey, report);
       const rows = report.candidates || [];
       executed.push({
         ...workload,
         status: 'executed',
+        reused,
         resultCount: rows.length,
       });
       if (!sourceTypesChecked.includes(workload.source)) {

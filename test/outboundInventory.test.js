@@ -117,7 +117,8 @@ test('already usable canonical prospects are recovered instead of queued again',
     },
   });
   assert.equal(persisted.inserted, 0);
-  assert.equal(persisted.admission.recovered, 1);
+  assert.equal(persisted.admission.recovered, 0);
+  assert.equal(persisted.admission.alreadyUsable, 1);
   assert.equal(persisted.admission.admittedToEnrichment, 0);
 });
 
@@ -127,7 +128,7 @@ test('promoteRecord recovers an existing same-tenant verified prospect without d
     query: async (sql, params) => {
       queries.push(sql);
       if (/ALTER TABLE companies/i.test(sql)) return { rows: [], rowCount: 0 };
-      if (/SELECT id FROM companies/i.test(sql)) return { rows: [{ id: 3 }], rowCount: 1 };
+      if (/SELECT id, domain, website FROM companies/i.test(sql)) return { rows: [{ id: 3 }], rowCount: 1 };
       if (/INSERT INTO prospects/i.test(sql)) return { rows: [], rowCount: 0 };
       if (/FROM prospects/.test(sql) && /lower\(email\)/i.test(sql)) {
         return {

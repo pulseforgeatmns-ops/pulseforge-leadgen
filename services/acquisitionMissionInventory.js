@@ -78,4 +78,40 @@ async function discoverKnowledgeInventory(mission, opts = {}) {
     unknowns: ['Research fit does not establish buyer readiness.'], source: 'canonical_acquisition_knowledge' } };
 }
 
-module.exports = { qualifyKnowledgeContact, loadKnowledgeInventory, discoverKnowledgeInventory };
+// Governed daily preparation consumes the same clean, scoped CRM inventory that
+// Max reports. It must not rediscover a different Places cohort and strand the
+// contacts Scout has already qualified. Buyer readiness remains unknown.
+async function discoverGovernedInventory(mission, opts = {}) {
+  if (!opts.pool || !opts.governedProgram || String(mission.tenantId) !== '10'
+    || mission.orchestrationMissionId !== opts.governedProgram.source_mission_id) return null;
+  const program = opts.governedProgram;
+  const { hash, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+  if (hash(missionScope(mission)) !== program.scope_hash) return null;
+  const store = new (require('./governedOutboundStore').GovernedOutboundStore)(opts.pool, '10');
+  const inventory = await require('./maxOutboundControlLoop').loadCleanInventory(opts.pool, store, mission, 10, program.policy);
+  if (!inventory.clean.length) return null;
+  const ids = inventory.clean.map(row => row.prospectId);
+  const { rows } = await opts.pool.query(`SELECT p.id,p.company_id,p.vertical,p.service_area_match,
+    p.enrichment_provenance,c.name,c.website,c.domain,c.location FROM prospects p
+    JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
+    WHERE p.client_id=10 AND p.id::text=ANY($1::text[])`, [ids]);
+  const fitCandidates = rows.map(row => ({ id: String(row.id), prospectId: String(row.id),
+    companyId: String(row.company_id), name: row.name, website: row.website || row.domain,
+    location: row.location, industry: row.vertical,
+    readinessState: READINESS_STATES.UNKNOWN, buyerReadiness: 'unknown', signals: [],
+    evidenceRefs: [{ id: `${row.id}_contact_acquisition`, entityId: String(row.id),
+      source: row.enrichment_provenance.email.source_url || row.website || row.domain,
+      label: `Verified contact acquired by ${row.enrichment_provenance.email.source}; company and recipient domain binding checked.`,
+      observedAt: row.enrichment_provenance.email.resolved_at,
+      provenance: row.enrichment_provenance.email },
+    { id: `${row.id}_crm_scope`, entityId: String(row.id), source: `crm:${row.id}`,
+      label: `Canonical company ${row.name}; recorded vertical ${row.vertical}; service area ${row.service_area_match || row.location}.`,
+      provenance: { kind: 'canonical_crm_scope', prospectId: String(row.id), companyId: String(row.company_id) } }],
+    unknowns: ['Buyer intent, incumbent vendor, budget and willingness to discuss are unknown.'],
+  }));
+  return { payload: { fitCandidates, qualifiedCount: fitCandidates.length, candidateUniverse: fitCandidates,
+    candidateCount: fitCandidates.length, discoveryStatus: 'complete', source: 'governed_clean_inventory',
+    unknowns: ['Clean contact eligibility does not establish buyer readiness.'] } };
+}
+
+module.exports = { qualifyKnowledgeContact, loadKnowledgeInventory, discoverKnowledgeInventory, discoverGovernedInventory };

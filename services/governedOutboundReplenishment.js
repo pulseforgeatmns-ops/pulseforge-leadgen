@@ -59,7 +59,7 @@ async function failedDiscoveryReceipt(store, program, progress, previous, now) {
     || previous.structuredMissionApproved !== true
     || previous.pendingOperatorDecision?.kind !== 'discovery_approval'
     || previous.orchestrationMissionId !== program.source_mission_id
-    || progress.attempts < 1 || progress.attempts >= program.policy.preparationAttemptsPerDay
+    || progress.attempts < 1
     || progress.last_error !== 'verified_inventory_shortfall') reject();
   if (progress.attempts === 1) {
     if (previous.id !== `mission_daily_${hash([program.id, day]).slice(0, 24)}`) reject();
@@ -111,7 +111,6 @@ async function reviewReplenishment(store, input, actor, now, enabled) {
   if (hash(missionScope(source)) !== program.scope_hash || source.planCancelled || !source.structuredMission?.immutable) fail('source_scope_changed');
   const progress = await store.one('SELECT * FROM acquisition_outbound_preparation WHERE program_id=$1 AND local_day=$2', [program.id, day]);
   if (!progress || progress.mission_id !== input.fromMissionId || progress.attempts < 1) fail('replenishment_preparation_changed');
-  if (progress.attempts >= program.policy.preparationAttemptsPerDay) fail('preparation_retry_budget');
   const immediate = input.immediatePreparation === true;
   if (immediate && !String(input.operatorReason || '').trim()) fail('immediate_preparation_reason_required');
   if (!progress.last_attempt_at || (!immediate && +now - +new Date(progress.last_attempt_at) < 60 * 60000)) fail('preparation_backoff');
