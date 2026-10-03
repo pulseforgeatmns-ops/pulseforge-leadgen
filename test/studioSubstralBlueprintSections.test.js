@@ -215,6 +215,82 @@ describe('Studio Substral Blueprint section mapping (v1.1 regeneration)', () => 
     assert.doesNotMatch(sections.successMetrics.summary, /good prospect should/i);
   });
 
+  it('composes Blueprint v1.4 sections without wrapper duplication or cross-section bleed', () => {
+    const answers = {
+      services:
+        'Studio Substral offers website redesign, messaging, visual design, mobile optimization, stronger calls to action, homepage and key page design, copywriting, contact and booking flow setup, basic SEO cleanup, launch support, and light post-launch refinement.',
+      campaign_goals:
+        'Over the next 90 days, this growth work would be successful if Studio Substral proves there is real demand for premium website redesigns, acquires at least one profitable website redesign client at $2,000+, and validates a repeatable local prospecting and outreach system.',
+      success_metrics:
+        'qualified prospects identified, discovery calls booked, total revenue closed, revenue closed',
+    };
+    const state = {
+      answers,
+      normalizedFacts: {
+        business_name: 'Studio Substral',
+        services: [],
+        ninety_day_outcomes: null,
+        success_metrics: ['total revenue closed', 'revenue closed'],
+        geography: ['Greater Manchester', 'southern New Hampshire'],
+        vertical_focus:
+          'local service businesses, contractors, trades, professional services, medical or wellness practices, property service companies, hospitality businesses',
+        differentiation:
+          'Customers choose Studio Substral for credibility, clarity, and business impact over the cheapest website.',
+        brand_voice: 'clear, sharp, confident, and practical',
+        disqualified_customers: [
+          'customers who are mainly looking for the cheapest possible website',
+          'customers who are mainly looking for the cheapest possible website',
+        ],
+        epistemic_states: {
+          services: EPISTEMIC_STATES.UNRESOLVED,
+          ninety_day_outcomes: EPISTEMIC_STATES.UNRESOLVED,
+          success_metrics: EPISTEMIC_STATES.KNOWN,
+          geography: EPISTEMIC_STATES.KNOWN,
+          differentiation: EPISTEMIC_STATES.KNOWN,
+          brand_voice: EPISTEMIC_STATES.KNOWN,
+          disqualified_customers: EPISTEMIC_STATES.KNOWN,
+        },
+        hypotheses: {},
+        evidence_statements: {
+          brand_voice:
+            'Studio Substral should sound clear, sharp, confident, and practical.\n\nThe tone should feel premium but not pretentious.',
+        },
+        business_facts: {},
+        transformation_areas: [],
+        pains: [],
+        learning_signals: [],
+        excluded_metrics: [],
+        superseded_slots: [],
+      },
+    };
+    const prepared = prepareNormalizedFactsForBrief(rehydrateNormalizedFactsFromAnswers(state));
+    const sections = sectionsFromNormalizedFacts(prepared);
+    const blob = JSON.stringify(sections);
+
+    assert.match(sections.services.summary, /messaging/i);
+    assert.match(sections.services.summary, /copywriting/i);
+    assert.match(sections.services.summary, /launch support/i);
+    assert.doesNotMatch(sections.services.summary, /more credible online presence/i);
+
+    assert.match(sections.campaignGoals.summary, /\$2,000\+/);
+    assert.doesNotMatch(sections.campaignGoals.summary, /would be successful if/i);
+    assert.doesNotMatch(sections.campaignGoals.summary, /Near-term growth goals focus on/i);
+
+    assert.doesNotMatch(blob, /Competitive edge is described as/i);
+    assert.doesNotMatch(blob, /Brand voice should read as/i);
+    assert.match(sections.brandVoice.summary, /premium but not pretentious/i);
+
+    assert.match(sections.targetMarkets.summary, /Greater Manchester/i);
+    assert.match(sections.targetMarkets.summary, /contractors|professional services/i);
+    assert.doesNotMatch(sections.targetMarkets.summary, /cheapest possible website/i);
+
+    assert.doesNotMatch(sections.avoidCustomers.summary, /prefers to avoid The business prefers to avoid/i);
+    assert.doesNotMatch(sections.avoidCustomers.summary, /,\s*and\s+or\s+/i);
+
+    assert.match(sections.successMetrics.summary, /total revenue closed/i);
+    assert.doesNotMatch(sections.successMetrics.summary, /total revenue closed, revenue closed/i);
+  });
+
   it('aligns Executive Brief with the same prepared facts path', () => {
     const { prepared, sections } = blueprintSectionsFromCorruptedFacts();
     const brief = buildExecutiveSummary(sections, {
