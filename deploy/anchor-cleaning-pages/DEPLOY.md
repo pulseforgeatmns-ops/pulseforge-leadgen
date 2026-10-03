@@ -48,6 +48,10 @@ Copy these files over the GitHub Pages repo and merge to `main` (legacy Clarity 
 |---|---|
 | `deploy/anchor-cleaning-pages/index.html` | `index.html` |
 | `deploy/anchor-cleaning-pages/residential/index.html` | `residential/index.html` |
+| `deploy/anchor-cleaning-pages/thank-you/index.html` | `thank-you/index.html` |
+| `deploy/anchor-cleaning-pages/sitemap.xml` | `sitemap.xml` |
+
+Prefer **`sync-from-monorepo.sh`** (copies homepage, residential, thank-you, sitemap, and assets) so form success redirects and Google Ads conversion on `/thank-you/` stay in sync with `sites/anchor-cleaning/`.
 
 Or apply a patch from this folder inside a clone of `pulseforgeatmns-ops/anchor-cleaning`:
 
