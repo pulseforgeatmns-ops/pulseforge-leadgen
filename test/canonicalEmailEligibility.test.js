@@ -162,3 +162,12 @@ describe('canonicalEmailEligibility', () => {
     );
   });
 });
+
+it('shared profile hosts remain ineligible despite verified provider email', () => {
+ for (const host of ['hoo.be', 'linktr.ee', 'beacons.ai', 'zillow.com']) {
+  assert.equal(resolveOfficialEnrichmentDomain({ website: `https://${host}/realtor` }), null);
+  assert.equal(canonicalOutboundEmailIneligibilityReason(verifiedRow({ email: `staff@${host}`, verificationSource: 'hunter' })), 'contaminated_email_domain');
+  assert.equal(require('../utils/governedContactEligibility').companyRecipientReason({ domain: host, email: 'person@gmail.com' }), 'shared_profile_company_domain');
+ }
+ assert.equal(resolveOfficialEnrichmentDomain({ website: 'https://granite.example' }), 'granite.example');
+});
