@@ -96,5 +96,5 @@ npm run test:kalshi-research
 
 ## Future Work
 
-- Deterministic feature-based strategy rules driven by `feature-report`
+- Deterministic feature-based strategy rules driven by `feature-report` — **H-005 entry-midpoint-above candidate implemented in-package**
 - Optional read-only bridges to Evidence Laboratory / Replay packages — only after an ADR that keeps execution isolation intact
