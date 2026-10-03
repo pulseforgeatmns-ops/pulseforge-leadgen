@@ -36,7 +36,7 @@ test('recovery does not inflate clean inventory growth when canonical rows were 
 test('replenishment yield rates distinguish discovery vs verification loss', () => {
   const report = buildReplenishmentYield({
     admission: { discovered: 40, evaluated: 40, fit: 8, admittedToEnrichment: 6 },
-    enrichment: { emailResolved: 3, emailVerified: 2, promoted: 2, recovered: 1 },
+    enrichment: { considered: 6, emailResolved: 3, emailVerified: 2, promoted: 2, recovered: 1 },
     inventoryGrowth: {
       preCycleCleanInventory: 3,
       postCycleCleanInventory: 5,
@@ -222,4 +222,19 @@ test('unknown buyer readiness stays eligible when fail-closed gates are clear', 
     buyerReadiness: 'unknown',
   });
   assert.equal(result.eligible, true);
+});
+
+// A later cycle consumes an existing queue; newly queued rows are a different cohort.
+test('contact resolution uses processed queue entries, including backlog-only cycles', () => {
+  for (const newlyQueued of [7, 0]) {
+    const report = buildReplenishmentYield({
+      admission: { admittedToEnrichment: newlyQueued },
+      enrichment: { considered: 20, emailResolved: 16, emailVerified: 13, promoted: 11 },
+    });
+    assert.equal(report.enrichmentConsidered, 20);
+    assert.equal(report.rates.contactResolutionRate, 0.8);
+  }
+  const unknown = buildReplenishmentYield({ enrichment: { emailResolved: 3 } });
+  assert.equal(unknown.enrichmentConsidered, null);
+  assert.equal(unknown.rates.contactResolutionRate, null);
 });

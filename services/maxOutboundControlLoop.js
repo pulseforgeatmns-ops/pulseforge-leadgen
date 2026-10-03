@@ -720,6 +720,7 @@ async function defaultScoutRamp({
     recoveredExisting,
     enrichmentPromoted: first.promoted,
     enrichmentRecovered: first.recovered,
+    enrichmentConsidered: first.considered,
     enrichmentUnresolved: first.summaries.reduce((sum, row) => sum + Number(row?.unresolved || 0), 0),
     emailResolved: first.emailResolved,
     emailVerified: first.emailVerified,
@@ -916,6 +917,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     scout.yield = buildReplenishmentYield({
       admission: scout.admission || {},
       enrichment: {
+        considered: scout.enrichmentConsidered,
         promoted: Number(scout.enrichmentPromoted ?? scout.promoted ?? 0),
         recovered: Number(scout.enrichmentRecovered ?? 0),
         emailResolved: Number(scout.emailResolved || 0),
