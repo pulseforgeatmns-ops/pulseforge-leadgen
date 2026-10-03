@@ -2508,6 +2508,8 @@ function extractCustomerSegments(text) {
         !isConversationalFiller(p) &&
         !isValueTraitPhrase(p) &&
         !isLiteralUncertaintyPhrase(p) &&
+        !isMisassignedWebsitePainItem(p) &&
+        !/^(?:lead flow|operator|sales|trust)$/i.test(p) &&
         !/^(?:anchor(?:\s+cleaning)?|most wants|wants to work|we serve|greater)\b/i.test(p) &&
         !/^(?:the\s+)?ideal\s+customer/i.test(p) &&
         // Bare role stems without "managers" are incomplete fragments from list splits.
@@ -2854,8 +2856,8 @@ function buildIdentityOverviewSentence(name, description, facts = null) {
     return capitalizeSentence(`${cleanName} is a ${defaultEntityKindForFacts(facts || { business_name: cleanName })}`);
   }
   desc = normalizeBusinessPhrase(desc);
-  if (/^(?:builds|provides|offers|sells|delivers|designs|creates)\b/i.test(desc)) {
-    return capitalizeSentence(`${cleanName} ${desc}`);
+  if (/^(?:build|builds|provides|offers|sells|delivers|designs|creates)\b/i.test(desc)) {
+    return capitalizeSentence(`${cleanName} ${desc.replace(/^build\b/i, 'builds')}`);
   }
   if (new RegExp(`^${escapeRegExp(cleanName)}\\b`, 'i').test(desc)) {
     return capitalizeSentence(desc);
@@ -2909,6 +2911,232 @@ function partitionSuccessMetricsAndQualification(items) {
     metrics: dedupeNormalizedList(metrics),
     qualification: dedupeNormalizedList(qualification),
   };
+}
+
+const SCORECARD_METRIC_CANONICAL_PHRASES = Object.freeze([
+  'qualified prospects identified',
+  'prospects contacted',
+  'positive replies',
+  'discovery calls booked',
+  'proposals sent',
+  'proposals accepted',
+  'total revenue closed',
+  'qualified opportunities created',
+  'conversations started',
+  'revenue closed',
+]);
+
+function extractScorecardMetricsFromProse(text) {
+  const lower = String(text || '').toLowerCase();
+  const found = [];
+  for (const phrase of SCORECARD_METRIC_CANONICAL_PHRASES) {
+    if (lower.includes(phrase)) found.push(phrase);
+  }
+  return dedupeNormalizedList(found.map((item) => normalizeBusinessPhrase(item)));
+}
+
+function extractQualificationSignalsFromProse(text) {
+  const sentences = String(text || '')
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const qualification = [];
+  for (const sentence of sentences) {
+    const part = partitionSuccessMetricsAndQualification([normalizeBusinessPhrase(sentence)]);
+    qualification.push(...part.qualification);
+  }
+  return dedupeNormalizedList(qualification);
+}
+
+const BLUEPRINT_PIPELINE_DIAG_FIELDS = Object.freeze([
+  'identity',
+  'services',
+  'ideal_customers',
+  'idealCustomers',
+  'disqualified_customers',
+  'avoidCustomers',
+  'target_markets',
+  'targetMarkets',
+  'competitive_advantages',
+  'competitiveAdvantages',
+  'brand_voice',
+  'brandVoice',
+  'campaign_goals',
+  'campaignGoals',
+  'success_metrics',
+  'successMetrics',
+  'growth_focus',
+  'geography',
+  'business_overview',
+]);
+
+function pickBlueprintPipelineFactSlice(facts) {
+  const f = facts || {};
+  return {
+    identity: f.business_name || f.business_description || null,
+    services: f.services,
+    ideal_customers: f.ideal_customers,
+    idealCustomers: f.idealCustomers,
+    disqualified_customers: f.disqualified_customers,
+    avoidCustomers: f.disqualified_customers,
+    target_markets: { geography: f.geography, vertical_focus: f.vertical_focus },
+    targetMarkets: { geography: f.geography, vertical_focus: f.vertical_focus },
+    competitive_advantages: f.differentiation,
+    competitiveAdvantages: f.differentiation,
+    brand_voice: f.brand_voice,
+    brandVoice: f.brand_voice,
+    campaign_goals: f.ninety_day_outcomes,
+    campaignGoals: f.ninety_day_outcomes,
+    success_metrics: f.success_metrics,
+    successMetrics: f.success_metrics,
+    growth_focus: f.growth_focus,
+    geography: f.geography,
+    business_overview: f.business_description,
+  };
+}
+
+function pickBlueprintPipelineSectionSummaries(sections) {
+  const keys = [
+    'identity',
+    'services',
+    'idealCustomers',
+    'avoidCustomers',
+    'targetMarkets',
+    'competitiveAdvantages',
+    'brandVoice',
+    'campaignGoals',
+    'successMetrics',
+  ];
+  const out = {};
+  for (const key of keys) {
+    out[key] = sections?.[key]?.summary ?? null;
+  }
+  return out;
+}
+
+function shouldLogBlueprintPipelineDiagnostics(clientId) {
+  if (process.env.CIE_BLUEPRINT_PIPELINE_DIAG === '1') return true;
+  return Number(clientId) === 17;
+}
+
+function logBlueprintPipelineDiagnostics(sessionId, clientId, stage, payload) {
+  if (!shouldLogBlueprintPipelineDiagnostics(clientId)) return;
+  console.info(
+    `[CIE blueprint pipeline] session=${sessionId} stage=${stage}`,
+    JSON.stringify(payload, null, 2)
+  );
+}
+
+function idealCustomersPersistedShapeMalformed(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return false;
+  if (
+    list.some((item) =>
+      /^(?:lead flow|getting referrals|running ads|or relying on word of mouth|explaining their value clearly|making them look legitimate|turning more visitors into calls)$/i.test(
+        String(item || '').trim()
+      )
+    )
+  ) {
+    return true;
+  }
+  if (list.length < 4) return false;
+  const shortFragments = list.filter((item) => String(item || '').split(/\s+/).length <= 4).length;
+  return shortFragments >= Math.max(3, Math.floor(list.length * 0.4));
+}
+
+function successMetricsPersistedShapeMalformed(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return false;
+  if (list.some((item) => String(item || '').length > 120)) return true;
+  if (list.some((item) => QUALIFICATION_SIGNAL_PHRASE_RE.test(String(item || '')))) return true;
+  return false;
+}
+
+function disqualifiedCustomersPersistedShapeMalformed(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return false;
+  return list.some((item) => /^yes\.\s+/i.test(String(item || '').trim()));
+}
+
+function normalizedSlotNeedsAnswerRehydrate(facts, questionId, answerText) {
+  const text = String(answerText || '').trim();
+  if (!text || answerLooksEmpty(text)) return false;
+  const sectionKey = QUESTION_ID_TO_SECTION[questionId];
+  if (!sectionKey) return false;
+  const field = SECTION_TO_PRIMARY_FIELD[sectionKey];
+  if (!field) return false;
+
+  switch (field) {
+    case 'business_description':
+      return !facts.business_name && !facts.business_description;
+    case 'services':
+      return !(facts.services || []).length;
+    case 'ideal_customers':
+      return !(facts.ideal_customers || []).length || idealCustomersPersistedShapeMalformed(facts.ideal_customers);
+    case 'disqualified_customers':
+      return (
+        !(facts.disqualified_customers || []).length ||
+        disqualifiedCustomersPersistedShapeMalformed(facts.disqualified_customers)
+      );
+    case 'geography':
+      return (
+        !(facts.geography || []).length &&
+        !facts.vertical_focus &&
+        /greater\s+manchester|southern new hampshire|new hampshire|local service|contractors?|professional services/i.test(
+          text
+        )
+      );
+    case 'differentiation':
+      return !facts.differentiation;
+    case 'brand_voice':
+      return !facts.brand_voice;
+    case 'ninety_day_outcomes':
+      return !facts.ninety_day_outcomes;
+    case 'success_metrics':
+      return !(facts.success_metrics || []).length || successMetricsPersistedShapeMalformed(facts.success_metrics);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Live sessions often retain authoritative guided answers under interview_state.answers
+ * while normalizedFacts top-level slots were cleared by recovery/correction passes.
+ * Re-project answers into normalized facts before Blueprint composition.
+ */
+function rehydrateNormalizedFactsFromAnswers(interviewState) {
+  const answers = (interviewState && interviewState.answers) || {};
+  let facts = cloneNormalizedFacts((interviewState && interviewState.normalizedFacts) || emptyNormalizedFacts());
+
+  for (const row of QUESTION_BANK) {
+    const answerText = answers[row.id];
+    if (!normalizedSlotNeedsAnswerRehydrate(facts, row.id, answerText)) continue;
+
+    if (row.section === 'idealCustomers') {
+      facts.ideal_customers = [];
+      facts.epistemic_states.ideal_customers = EPISTEMIC_STATES.UNRESOLVED;
+    }
+    if (row.section === 'avoidCustomers') {
+      facts.disqualified_customers = [];
+      facts.epistemic_states.disqualified_customers = EPISTEMIC_STATES.UNRESOLVED;
+    }
+    if (row.section === 'successMetrics') {
+      facts.success_metrics = [];
+      facts.epistemic_states.success_metrics = EPISTEMIC_STATES.UNRESOLVED;
+    }
+    if (row.section === 'targetMarkets' && idealCustomersPersistedShapeMalformed(facts.ideal_customers)) {
+      facts.geography = [];
+      facts.vertical_focus = null;
+      facts.epistemic_states.geography = EPISTEMIC_STATES.UNRESOLVED;
+    }
+
+    facts = ingestAnswerIntoNormalizedFacts(facts, row.section, answerText, {
+      provenance: `answers:${row.id}`,
+      forceKnown: true,
+    });
+  }
+
+  return facts;
 }
 
 function prepareNormalizedFactsForBrief(facts) {
@@ -3073,12 +3301,18 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
     next.hypotheses[primaryField] = projection.hypothesisValue;
   }
 
-  if (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE) {
+  if (
+    !opts.forceKnown &&
+    (epistemicState === EPISTEMIC_STATES.UNKNOWN || epistemicState === EPISTEMIC_STATES.NOT_APPLICABLE)
+  ) {
     return next;
   }
-  if (epistemicState === EPISTEMIC_STATES.HYPOTHESIS) {
+  if (epistemicState === EPISTEMIC_STATES.HYPOTHESIS && !opts.forceKnown) {
     next.hypotheses[primaryField] = cleaned;
     return next;
+  }
+  if (opts.forceKnown) {
+    next.epistemic_states[primaryField] = EPISTEMIC_STATES.KNOWN;
   }
 
   // Explicit unknowns leave the section unset rather than storing uncertainty phrases.
@@ -3089,6 +3323,31 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
 
   switch (sectionKey) {
     case 'identity': {
+      const identitySource = stripInterviewQuestionEcho(rawAnswer);
+      const theBusinessIs = String(identitySource || '').match(
+        /^the business is\s+([A-Z][^.\n:—–-]+(?:\s+[A-Z][^.\n:—–-]+)*)\.?/i
+      );
+      if (theBusinessIs) {
+        next.business_name = sanitizeBusinessName(theBusinessIs[1].trim());
+        const tail = String(identitySource || '')
+          .slice(theBusinessIs[0].length)
+          .replace(/^[\s.]+/, '')
+          .trim();
+        const todayLead = tail.match(/^today,?\s*(?:we\s+)?(.+)/is);
+        if (todayLead) {
+          next.business_description = normalizeBusinessPhrase(
+            firstSentence(stripLeadingWeAre(todayLead[1]).replace(/^(a|an|the)\s+/i, ''))
+          );
+        } else if (tail) {
+          next.business_description = normalizeBusinessPhrase(firstSentence(stripLeadingWeAre(tail)));
+        }
+        next.business_name = sanitizeBusinessName(next.business_name);
+        next.business_description = sanitizeIdentityDescription(
+          next.business_name,
+          next.business_description
+        );
+        break;
+      }
       const structured = parseStructuredIdentityFields(cleaned);
       if (structured) {
         next.business_name = structured.name;
@@ -3151,10 +3410,15 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
       break;
     }
     case 'services': {
-      const items = extractServiceList(cleaned);
+      let serviceSource = cleaned;
+      let items = extractServiceList(serviceSource);
+      if (items.length > 8) {
+        serviceSource = firstSentence(String(rawAnswer || cleaned));
+        items = extractServiceList(serviceSource);
+      }
       next.services = uniquePush(
         [],
-        (items.length ? items : splitListItems(cleaned)).filter(
+        (items.length ? items : splitListItems(serviceSource)).filter(
           (item) => item && !isLiteralUncertaintyPhrase(item)
         )
       );
@@ -3167,6 +3431,27 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
       break;
     }
     case 'idealCustomers': {
+      const sentenceIcps = String(rawAnswer || cleaned)
+        .split(/(?<=[.!?])\s+|\n+/)
+        .map((s) => normalizeBusinessPhrase(stripBusinessNameLeadIn(s.trim())))
+        .filter(
+          (s) =>
+            s &&
+            /owner-led|decision-maker|small business owner/i.test(s) &&
+            !isMisassignedWebsitePainItem(s)
+        )
+        .slice(0, 2);
+      if (sentenceIcps.length) {
+        next.ideal_customers = mergeIdealCustomersWithPrecedence([], sentenceIcps);
+        next.ideal_customers = next.ideal_customers.filter(
+          (item) =>
+            !isValueTraitPhrase(item) &&
+            !isLiteralUncertaintyPhrase(item) &&
+            !isConversationalFiller(item) &&
+            !looksLikeGenericCategoryAnswer(item)
+        );
+        break;
+      }
       // SPEC-101: hedged guesses must not become unqualified durable ICP values.
       if (
         /^(?:maybe|perhaps|i\s+think|probably)\b/i.test(cleaned) &&
@@ -3178,10 +3463,20 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
       const fallback = splitListItems(stripBusinessNameLeadIn(cleaned)).filter(
         (item) => item && !isConversationalFiller(item)
       );
-      next.ideal_customers = mergeIdealCustomersWithPrecedence(
-        [],
-        segments.length ? segments : fallback
-      );
+      let idealSegments = segments.length ? segments : fallback;
+      if (
+        !idealSegments.some((item) => /owner-led|decision-maker|small business owner/i.test(item)) &&
+        /owner-led|decision-maker|small business owner/i.test(String(rawAnswer || cleaned))
+      ) {
+        const leadSentence = String(rawAnswer || cleaned)
+          .split(/(?<=[.!?])\s+|\n+/)
+          .map((s) => s.trim())
+          .find((s) => /owner-led|decision-maker|small business owner/i.test(s));
+        if (leadSentence) {
+          idealSegments = mergeIdealCustomersWithPrecedence([], [normalizeBusinessPhrase(leadSentence)]);
+        }
+      }
+      next.ideal_customers = mergeIdealCustomersWithPrecedence([], idealSegments);
       // Drop accidental trait / preamble bleed / uncertainty phrases / generic nouns / fillers.
       next.ideal_customers = next.ideal_customers.filter(
         (item) =>
@@ -3215,6 +3510,7 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
         splitListItems(cleaned)
           .map((item) =>
             String(item || '')
+              .replace(/^yes\.\s*/i, '')
               .replace(/^(?:no|not|avoid|excluding)\s+/i, '')
               .trim()
           )
@@ -3278,7 +3574,13 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
     }
     case 'campaignGoals': {
       if (!isLiteralUncertaintyPhrase(cleaned)) {
-        next.ninety_day_outcomes = normalizeBusinessPhrase(cleaned);
+        let outcome = normalizeBusinessPhrase(cleaned);
+        if (outcome.split(/\s+/).length > 35) {
+          outcome = normalizeBusinessPhrase(firstSentence(String(rawAnswer || cleaned)));
+        }
+        outcome = outcome.replace(/^over the next 90 days,?\s*/i, '').trim();
+        outcome = outcome.replace(/^this growth work\s+/i, '').trim();
+        next.ninety_day_outcomes = outcome;
       }
       if (shouldAssignCommercialCleaningGrowthFocus(cleaned, next)) {
         next.growth_focus = next.growth_focus || COMMERCIAL_CLEANING_GROWTH_FOCUS;
@@ -3286,6 +3588,16 @@ function ingestAnswerIntoNormalizedFacts(facts, sectionKey, rawAnswer, opts = {}
       break;
     }
     case 'successMetrics': {
+      const prose = String(rawAnswer || cleaned).trim();
+      const extractedMetrics = extractScorecardMetricsFromProse(prose);
+      if (extractedMetrics.length >= 2) {
+        next.success_metrics = uniquePush([], extractedMetrics);
+        next.qualification_signals = uniquePush(
+          next.qualification_signals || [],
+          extractQualificationSignalsFromProse(prose)
+        );
+        break;
+      }
       const split = splitListItems(cleaned).filter((item) => !isLiteralUncertaintyPhrase(item));
       const partitioned = partitionSuccessMetricsAndQualification(
         split.length ? split : isLiteralUncertaintyPhrase(cleaned) ? [] : [cleaned]
@@ -7302,9 +7614,19 @@ async function generateBlueprint(store, session, genOpts = {}) {
     advanceStatus(session, 'BLUEPRINT_GENERATION');
   }
   const state = session.interview_state || initialInterviewState();
-  const preparedFacts = state.normalizedFacts
-    ? prepareNormalizedFactsForBrief(state.normalizedFacts)
-    : emptyNormalizedFacts();
+  const rawNormalizedFacts = state.normalizedFacts || emptyNormalizedFacts();
+  logBlueprintPipelineDiagnostics(session.id, session.client_id, 'raw_normalizedFacts_before_prepare', {
+    fields: pickBlueprintPipelineFactSlice(rawNormalizedFacts),
+    answerKeys: Object.keys(state.answers || {}),
+  });
+  const rehydratedFacts = rehydrateNormalizedFactsFromAnswers(state);
+  logBlueprintPipelineDiagnostics(session.id, session.client_id, 'rehydrated_normalizedFacts_before_prepare', {
+    fields: pickBlueprintPipelineFactSlice(rehydratedFacts),
+  });
+  const preparedFacts = prepareNormalizedFactsForBrief(rehydratedFacts);
+  logBlueprintPipelineDiagnostics(session.id, session.client_id, 'prepared_normalizedFacts_after_prepare', {
+    fields: pickBlueprintPipelineFactSlice(preparedFacts),
+  });
   const metadataPrior = emptySections();
   for (const key of BLUEPRINT_SECTIONS) {
     const src = (state.sectionState || {})[key] || emptySection();
@@ -7315,6 +7637,9 @@ async function generateBlueprint(store, session, genOpts = {}) {
     };
   }
   let sections = sectionsFromNormalizedFacts(preparedFacts, metadataPrior);
+  logBlueprintPipelineDiagnostics(session.id, session.client_id, 'sections_from_normalized_facts', {
+    sections: pickBlueprintPipelineSectionSummaries(sections),
+  });
   sections = mergeSupplementalIntoSections(sections, state.supplementalContext);
 
   // SPEC-090 — artifact readiness: mark weak evidence clearly; never invent facts.
@@ -12262,8 +12587,13 @@ module.exports = {
   buildExecutiveSummary,
   buildExecutiveBusinessBrief,
   prepareNormalizedFactsForBrief,
+  rehydrateNormalizedFactsFromAnswers,
+  pickBlueprintPipelineFactSlice,
+  pickBlueprintPipelineSectionSummaries,
+  logBlueprintPipelineDiagnostics,
   factsIndicateCommercialCleaningBusiness,
   partitionSuccessMetricsAndQualification,
+  extractScorecardMetricsFromProse,
   composeQualificationSignalsFromNormalizedFacts,
   composeWhoYouServeFromNormalizedFacts,
   composeWhoYouAreFromNormalizedFacts,

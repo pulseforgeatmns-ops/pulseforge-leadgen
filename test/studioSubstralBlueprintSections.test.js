@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   prepareNormalizedFactsForBrief,
+  rehydrateNormalizedFactsFromAnswers,
   sectionsFromNormalizedFacts,
   buildExecutiveSummary,
   EPISTEMIC_STATES,
@@ -84,6 +85,77 @@ function blueprintSectionsFromCorruptedFacts() {
   return { prepared, sections: sectionsFromNormalizedFacts(prepared) };
 }
 
+/** Live Studio Substral session shape: answers hold substance; normalizedFacts slots were cleared. */
+function studioSubstralAnswersOnlyInterviewState() {
+  const answers = {
+    identity:
+      'The business is Studio Substral.\n\nToday, we build premium websites for small businesses, operators, and local service companies that need to look more credible online.',
+    services:
+      'Today, Studio Substral provides website redesign and launch services for small businesses that need a stronger, more credible online presence.',
+    ideal_customers:
+      'Studio Substral most wants to work with owner-led businesses where a better website can directly affect trust, lead flow, and sales.\n\nThe ideal customer is a small business owner, operator, or decision-maker who already has a real business but whose website feels outdated, generic, confusing, visually weak, or slow.',
+    avoid_customers:
+      'Yes. Studio Substral should avoid customers who are mainly looking for the cheapest possible website, a quick cosmetic patch, or a one-off task with no broader business value.',
+    target_markets:
+      'Greater Manchester and southern New Hampshire — local service businesses, contractors, trades, professional services, medical or wellness practices, property service companies, and hospitality businesses.',
+    advantages:
+      'A great-fit customer chooses Studio Substral when they care about credibility, clarity, and business impact more than simply getting the cheapest website.',
+    brand_voice:
+      'Studio Substral should sound clear, sharp, confident, and practical.\n\nThe tone should feel premium but not pretentious.',
+    campaign_goals:
+      'Over the next 90 days, this growth work would be successful if Studio Substral proves there is real demand for premium website redesigns among owner-led businesses in Greater Manchester and southern New Hampshire.',
+    success_metrics: `We'll know Studio Substral is working if the outreach is producing real conversations with owner-led businesses that have obvious website credibility gaps.
+
+The main numbers to watch are qualified prospects identified, prospects contacted, positive replies, discovery calls booked, proposals sent, proposals accepted, and total revenue closed.
+
+The most important signal is not raw activity. It is whether we are finding businesses with real commercial pain and getting them to engage. A good prospect should have an outdated or weak website, a real operating business, a reachable decision-maker, and a clear reason a better site could improve trust, lead flow, or sales.`,
+  };
+  return {
+    answers,
+    normalizedFacts: {
+      business_name: null,
+      business_description: null,
+      services: [],
+      ideal_customers: [
+        'growing owner-led brands in Greater Manchester',
+        'lead flow',
+        'getting referrals',
+      ],
+      disqualified_customers: [
+        'Yes. Studio Substral should avoid customers who are mainly looking for the cheapest possible website',
+      ],
+      geography: ['Greater Manchester'],
+      differentiation: null,
+      brand_voice: null,
+      ninety_day_outcomes: null,
+      success_metrics: [
+        "We'll know Studio Substral is working if the outreach is producing real conversations with owner-led businesses that have obvious website credibility gaps. The main numbers to watch are qualified prospects identified",
+        'prospects contacted',
+      ],
+      epistemic_states: {
+        business_description: EPISTEMIC_STATES.UNRESOLVED,
+        services: EPISTEMIC_STATES.UNRESOLVED,
+        ideal_customers: EPISTEMIC_STATES.KNOWN,
+        disqualified_customers: EPISTEMIC_STATES.KNOWN,
+        geography: EPISTEMIC_STATES.KNOWN,
+        differentiation: EPISTEMIC_STATES.UNRESOLVED,
+        brand_voice: EPISTEMIC_STATES.UNRESOLVED,
+        ninety_day_outcomes: EPISTEMIC_STATES.UNRESOLVED,
+        success_metrics: EPISTEMIC_STATES.KNOWN,
+      },
+      hypotheses: {},
+      evidence_statements: {},
+      business_facts: {},
+      transformation_areas: [],
+      pains: [],
+      learning_signals: [],
+      excluded_metrics: [],
+      superseded_slots: [],
+    },
+    sectionState: {},
+  };
+}
+
 describe('Studio Substral Blueprint section mapping (v1.1 regeneration)', () => {
   it('maps camelCase fact keys and fills idealCustomers / avoidCustomers', () => {
     const { prepared, sections } = blueprintSectionsFromCorruptedFacts();
@@ -122,47 +194,25 @@ describe('Studio Substral Blueprint section mapping (v1.1 regeneration)', () => 
     assert.doesNotMatch(sections.successMetrics.summary, /real operating business/i);
   });
 
-  it('fills all core sections when only Blueprint camelCase keys are populated', () => {
-    const raw = {
-      businessName: 'Studio Substral',
-      businessDescription:
-        'Premium website redesign studio for owner-led local brands in southern New Hampshire',
-      services: ['website redesign', 'messaging', 'copywriting'],
-      idealCustomers: [
-        'owner-led businesses where a better website affects trust, lead flow, and sales',
-      ],
-      avoidCustomers: ['cheap landing page / quick cosmetic tweak exclusion'],
-      targetMarkets: ['Greater Manchester', 'southern New Hampshire'],
-      competitiveAdvantages: 'clarity, speed, and a credible design process',
-      brandVoice: 'clear, confident, and practical',
-      campaignGoals: 'Acquire one profitable website redesign client at $2,000+',
-      successMetrics: ['qualified prospects identified', 'discovery calls booked'],
-      epistemic_states: {
-        businessDescription: EPISTEMIC_STATES.KNOWN,
-        services: EPISTEMIC_STATES.KNOWN,
-        idealCustomers: EPISTEMIC_STATES.KNOWN,
-        avoidCustomers: EPISTEMIC_STATES.KNOWN,
-        targetMarkets: EPISTEMIC_STATES.KNOWN,
-        competitiveAdvantages: EPISTEMIC_STATES.KNOWN,
-        brandVoice: EPISTEMIC_STATES.KNOWN,
-        campaignGoals: EPISTEMIC_STATES.KNOWN,
-        successMetrics: EPISTEMIC_STATES.KNOWN,
-      },
-    };
-    const prepared = prepareNormalizedFactsForBrief(raw);
+  it('rehydrates cleared normalizedFacts from persisted guided answers (live session shape)', () => {
+    const state = studioSubstralAnswersOnlyInterviewState();
+    const rehydrated = rehydrateNormalizedFactsFromAnswers(state);
+    const prepared = prepareNormalizedFactsForBrief(rehydrated);
     const sections = sectionsFromNormalizedFacts(prepared);
-    for (const key of [
-      'identity',
-      'services',
-      'idealCustomers',
-      'avoidCustomers',
-      'competitiveAdvantages',
-      'brandVoice',
-      'campaignGoals',
-      'successMetrics',
-    ]) {
-      assert.notEqual(String(sections[key].summary || '').trim(), '', key);
-    }
+    assert.match(String(prepared.business_name || ''), /Studio Substral/i);
+    assert.ok((prepared.services || []).some((s) => /website redesign/i.test(s)));
+    assert.match(sections.identity.summary, /Studio Substral/i);
+    assert.match(sections.services.summary, /website redesign/i);
+    assert.match(sections.competitiveAdvantages.summary, /credibility|clarity|business impact/i);
+    assert.match(sections.brandVoice.summary, /clear|confident|practical/i);
+    assert.match(sections.campaignGoals.summary, /90 days|real demand|website redesign/i);
+    assert.match(sections.idealCustomers.summary, /owner-led|decision-maker/i);
+    assert.doesNotMatch(sections.idealCustomers.summary, /\blead flow,\s*getting referrals\b/i);
+    assert.match(sections.avoidCustomers.summary, /cheapest|cosmetic|one-off/i);
+    assert.match(sections.targetMarkets.summary, /Greater Manchester/i);
+    assert.doesNotMatch(sections.targetMarkets.summary, /decision-maker who already/i);
+    assert.match(sections.successMetrics.summary, /qualified prospects identified/i);
+    assert.doesNotMatch(sections.successMetrics.summary, /good prospect should/i);
   });
 
   it('aligns Executive Brief with the same prepared facts path', () => {
