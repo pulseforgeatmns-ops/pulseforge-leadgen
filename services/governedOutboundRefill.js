@@ -91,11 +91,18 @@ function evaluatePreparationRefill({
   grantActive = true,
   dailyAuthorizationRemaining = Infinity,
   totalAuthorizationRemaining = Infinity,
+  planningDailyCapacity = null,
   batchLimit = PREPARATION_BATCH_LIMIT,
 } = {}) {
   const pending = asNonNegInt(pendingPreparedCount);
   const dispatchRemaining = asNonNegInt(remainingCap);
   const slotRemaining = asNonNegInt(remainingSlots);
+  // Held preparation uses the next authorized day's planning capacity. Dispatch
+  // still rechecks the actual weekday, time, spacing and remaining send caps.
+  const planning = planningDailyCapacity == null ? null : asNonNegInt(planningDailyCapacity);
+  const preparationCapacity = planning == null ? dispatchRemaining
+    : Math.min(planning, asNonNegInt(dailyAuthorizationRemaining, planning), asNonNegInt(totalAuthorizationRemaining, planning));
+  const preparationSlots = planning == null ? slotRemaining : planning;
   const inventory = asNonNegInt(cleanInventory);
   const limit = Math.max(1, asNonNegInt(batchLimit, PREPARATION_BATCH_LIMIT));
   const snapshot = {
@@ -119,17 +126,17 @@ function evaluatePreparationRefill({
   if (grantActive === false) return skip('grant_inactive');
   if (asNonNegInt(dailyAuthorizationRemaining, 1) <= 0) return skip('daily_authorization_exhausted');
   if (asNonNegInt(totalAuthorizationRemaining, 1) <= 0) return skip('total_authorization_exhausted');
-  if (dispatchRemaining <= 0) return skip('no_remaining_capacity');
-  if (slotRemaining <= 0) return skip('no_remaining_slots');
+  if (preparationCapacity <= 0) return skip('no_remaining_capacity');
+  if (preparationSlots <= 0) return skip('no_remaining_slots');
   if (inventory <= 0) return skip('no_clean_inventory');
-  if (pending >= dispatchRemaining) return skip('pending_covers_capacity');
+  if (pending >= preparationCapacity) return skip('pending_covers_capacity');
   if (inventory <= pending) return skip('no_clean_inventory');
   if (pending >= limit) return skip('batch_limit_reached');
-  if (pending >= slotRemaining) return skip('no_remaining_slots');
+  if (pending >= preparationSlots) return skip('no_remaining_slots');
 
   const requested = Math.min(
-    dispatchRemaining - pending,
-    slotRemaining - pending,
+    preparationCapacity - pending,
+    preparationSlots - pending,
     limit - pending,
     inventory - pending,
   );

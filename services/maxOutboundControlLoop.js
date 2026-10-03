@@ -231,7 +231,7 @@ function resolveScoutRampAllowedCities(scope = {}) {
 }
 
 function sourceScope(source) {
-  const payload = source?.payload || source || {};
+  const payload = source?.mission || source?.payload || source || {};
   const structured = payload.structuredMission || {};
   const market = structured.market || {};
   const geography = structured.geography || {};
@@ -257,6 +257,9 @@ function segmentAliases(scope) {
   if (scope.segment === 'short_term_rental' || scope.segment === 'short_term_rental_operators') {
     ['short_term_rental', 'str_manager', 'property_manager', 'property_management', 'hospitality']
       .forEach(x => aliases.add(x));
+  }
+  if (['property_manager', 'property_management'].includes(scope.segment)) {
+    ['property_manager', 'property_management', 'str_manager'].forEach(x => aliases.add(x));
   }
   if (['small_business_owner', 'small_business_owners', 'founder_led_smb', 'founder_led_small_business'].includes(scope.segment)) {
     ['cleaning', 'home_services', 'landscaping', 'painting', 'hvac', 'restaurant', 'salon', 'fitness', 'auto', 'electrician']
@@ -304,9 +307,11 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
     ORDER BY p.updated_at DESC NULLS LAST, p.id
   `, [cid]);
 
-  const knowledge = await require('./acquisitionMissionInventory').loadKnowledgeInventory(pool, { ...(source?.payload || source), tenantId: String(cid) }, policy);
+  const knowledge = await require('./acquisitionMissionInventory').loadKnowledgeInventory(pool, { ...(source?.mission || source?.payload || source), tenantId: String(cid) }, policy);
   const qualifiedKnowledge = new Set(knowledge.filter(r => !r.qualificationReason).map(r => String(r.id)));
   const clean = [];
+  const seenCompanies = new Set();
+  const seenEmails = new Set();
   const excluded = [];
   const exclusionCounts = {};
   const bump = reason => {
@@ -342,11 +347,15 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
       buyerReadiness: row.buyer_readiness || row.buyerReadiness || 'unknown',
       emailReason,
     });
-    const blocked = eligibility.eligible ? null : eligibility.reason;
+    const duplicate = eligibility.eligible && (seenCompanies.has(candidate.companyId) || seenEmails.has(candidate.email));
+    const blocked = duplicate ? 'duplicate_company_or_email' : (eligibility.eligible ? null : eligibility.reason);
     if (blocked) {
       excluded.push({ prospectId: candidate.prospectId, reason: blocked });
       bump(blocked);
-    } else clean.push({ ...candidate, buyerReadiness: eligibility.buyerReadiness });
+    } else {
+      seenCompanies.add(candidate.companyId); seenEmails.add(candidate.email);
+      clean.push({ ...candidate, buyerReadiness: eligibility.buyerReadiness });
+    }
   }
   return { clean, excluded, scope, exclusionCounts };
 }
@@ -429,33 +438,57 @@ async function persistDiscoveredCompanies(pool, store, {
     discoverySource: scoutContext.discoverySource || null,
   };
 
-  for (const company of companies) {
+  let websiteInvestigations = 0;
+  const decisions = [];
+  for (let company of companies) {
+    const reject = reason => {
+      recordReplenishmentRejection(counters, reason);
+      decisions.push({ name: company.name, domain: company.domain || company.website, location: company.location, reason });
+    };
     counters.evaluated += 1;
     const name = String(company.name || '').trim();
     const website = String(company.website || '').trim() || null;
     const domain = normalizeDomain(company.domain || website);
     if (!name || !domain) {
-      recordReplenishmentRejection(counters, 'insufficient_business_fit');
+      reject('insufficient_business_fit');
       continue;
     }
 
     const ownership = await classifyInventoryOwnership(store, { company: name, domain, website }, { pool });
     if (ownership.kind === OWNERSHIP_KINDS.ALREADY_USABLE_CANONICAL) {
-      counters.recovered += 1;
-      counters.recoveredExisting = (counters.recoveredExisting || 0) + 1;
+      counters.alreadyUsable = (counters.alreadyUsable || 0) + 1;
       continue;
     }
     if (ownership.kind === OWNERSHIP_KINDS.VALID_COLLISION
       || ownership.kind === OWNERSHIP_KINDS.PRIOR_CONTACT
       || ownership.kind === OWNERSHIP_KINDS.AO_OWNED) {
-      recordReplenishmentRejection(counters, 'owned_elsewhere');
+      reject('owned_elsewhere');
       continue;
     }
     if (ownership.kind === OWNERSHIP_KINDS.STALE) {
-      recordReplenishmentRejection(counters, 'stale_ownership');
+      reject('stale_ownership');
       continue;
     }
+    let businessEvidence = null;
+    const initialAdmission = evaluateReplenishmentAdmission(company, admissionContext);
+    if (initialAdmission.reason === 'unclassifiable_vertical' && scoutContext.investigateBusinessEvidence && websiteInvestigations < 20) {
+      websiteInvestigations += 1;
+      const observed = await require('./scoutWebsiteBusinessEvidence').acquireBusinessEvidence(company, admissionContext);
+      if (observed) { company = observed.candidate; businessEvidence = observed.evidence; }
+    }
     if (ownership.kind === OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
+      const admission = evaluateReplenishmentAdmission(company, admissionContext);
+      if (!admission.admitted) {
+        reject(admission.reason);
+        continue;
+      }
+      if (typeof store.one === 'function') {
+        const recent = await store.one(`SELECT id FROM acquisition_outbound_events
+          WHERE tenant_id=$1 AND event_type='scout_contact_recovery_attempt'
+          AND payload->>'companyId'=$2 AND created_at>now()-interval '1 hour' LIMIT 1`,
+        [tenant.tenantId, ownership.companyId]);
+        if (recent) { counters.recoveryBackoff = (counters.recoveryBackoff || 0) + 1; continue; }
+      }
       const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
         company,
         ownership,
@@ -463,17 +496,19 @@ async function persistDiscoveredCompanies(pool, store, {
         sources: scoutContext.recoverySources,
       });
       mergeAlternateTelemetry(counters, recovery.telemetry || {});
+      if (typeof store.event === 'function') await store.event('scout_contact_recovery_attempt', require('node:crypto').randomUUID(),
+        { companyId: ownership.companyId, domain, reason: recovery.reason, telemetry: recovery.telemetry });
       if (recovery.ok) {
         counters.recovered += 1;
         continue;
       }
-      recordReplenishmentRejection(counters, 'same_company_different_contact');
+      reject('same_company_different_contact');
       continue;
     }
 
     const admission = evaluateReplenishmentAdmission(company, admissionContext);
     if (!admission.admitted) {
-      recordReplenishmentRejection(counters, admission.reason);
+      reject(admission.reason);
       continue;
     }
 
@@ -481,7 +516,7 @@ async function persistDiscoveredCompanies(pool, store, {
     const notes = formatProvenanceNotes(
       'Discovered by Max-directed Scout inventory replenishment; no contact performed.',
       admission.provenance
-    );
+    ) + (businessEvidence ? ` | business_evidence: ${JSON.stringify(businessEvidence)}` : '');
     const result = await pool.query(`
       INSERT INTO scout_unenriched (
         client_id, company, website_url, domain, vertical, location, source,
@@ -515,6 +550,8 @@ async function persistDiscoveredCompanies(pool, store, {
     else counters.alreadyQueued += 1;
   }
 
+  counters.decisions = decisions;
+  counters.websiteInvestigations = websiteInvestigations;
   clampCohortCounters(counters);
   return {
     inserted,
@@ -627,6 +664,7 @@ async function defaultScoutRamp({
               authorizedTenantId: tenant.tenantId,
               governedContext: governed,
               program,
+              investigateBusinessEvidence: true,
             },
           });
           return persisted;
@@ -738,6 +776,7 @@ async function capturePreparationObservability({
     grantActive: preparationGrantActive(store, program),
     dailyAuthorizationRemaining: dailyRemaining,
     totalAuthorizationRemaining: operating.remainingTotalAuthorization,
+    planningDailyCapacity: operating.planningDailyCapacity,
   });
   return observabilityFromRefill(plan, {
     sentToday,
@@ -954,12 +993,15 @@ async function runMaxOutboundControlLoop(options = {}) {
   );
   const verificationRetry = scout?.verificationRetry || scout?.admission || {};
 
+  const ramp = typeof store.rampMetrics === 'function'
+    ? await store.rampMetrics(program, clock(controlNow).day) : null;
   await store.event('max_outbound_control', [
     program.id,
     cycleId,
   ], {
     programId: program.id,
     cycleId,
+    ramp,
     cycleStartedAt,
     cycleCompletedAt: new Date().toISOString(),
     sendingEnabled: governedOutboundEnabledForTenant(governed.tenantId),
@@ -1031,6 +1073,7 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   return {
     cycleId,
+    ramp,
     cycleStartedAt,
     cycleCompletedAt: new Date().toISOString(),
     programId: program.id,

@@ -43,11 +43,15 @@ function toDiscoveredCompany(raw, searchDefinition, source) {
     tenantId: asText(raw.tenantId || raw.client_id || raw.clientId) || searchDefinition.tenantId,
     name,
     industry: asText(raw.industry || raw.vertical || raw.segment) ||
-      ((searchDefinition.segments || [])[0] || null),
+      null,
     location: asText(raw.location || raw.address || raw.geography) ||
-      (searchDefinition.geography && searchDefinition.geography.label) ||
       null,
     address: asText(raw.address),
+    placeTypes: Array.isArray(raw.placeTypes || raw.types) ? (raw.placeTypes || raw.types) : [],
+    businessType: asText(raw.businessType),
+    description: asText(raw.description),
+    discoveryQuery: asText(raw.discoveryQuery),
+    discoveryConcept: asText(raw.discoveryConcept),
     website: asText(raw.website || raw.url),
     phone: asText(raw.phone),
     people: Array.isArray(raw.people) ? raw.people : [],

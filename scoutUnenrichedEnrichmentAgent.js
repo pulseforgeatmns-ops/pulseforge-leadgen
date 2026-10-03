@@ -60,7 +60,8 @@ async function run(params = {}) {
     SELECT *
     FROM scout_unenriched
     WHERE client_id = $1
-      AND COALESCE(enrichment_attempts, 0) < $2
+      AND (COALESCE(enrichment_attempts, 0) < $2
+        OR last_attempt_at <= NOW() - INTERVAL '7 days')
       AND COALESCE(last_attempt_at, NOW() - INTERVAL '100 years') <= NOW() - ($3::numeric * INTERVAL '1 hour')
       AND ($5::text[] IS NULL OR vertical = ANY($5::text[]))
     ORDER BY last_attempt_at ASC, id ASC
@@ -100,6 +101,12 @@ async function run(params = {}) {
         WHERE id = $1 AND client_id = $2
       `, [record.id, clientId]);
       console.error(`[${AGENT_NAME}] ${record.domain || record.company || record.id}: ${error.message}`);
+    } finally {
+      // Verification and binding rejections also consume an attempt. Otherwise
+      // the next batch immediately selects the same permanently invalid row.
+      await db.query(`UPDATE scout_unenriched SET enrichment_attempts = GREATEST(COALESCE(enrichment_attempts, 0), $3),
+        last_attempt_at = NOW() WHERE id = $1 AND client_id = $2`,
+      [record.id, clientId, Number(record.enrichment_attempts || 0) + 1]);
     }
   }
 

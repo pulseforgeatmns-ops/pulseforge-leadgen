@@ -94,7 +94,7 @@ async function executeLegacyTextSearch(params = {}) {
     url.searchParams.set('query', String(query || ''));
     url.searchParams.set('key', apiKey);
     if (pageToken) url.searchParams.set('pagetoken', pageToken);
-    const res = await fetchImpl(url.toString());
+    const res = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(timeout) });
     const data = await readFetchJson(res);
     return {
       httpStatus: res.status,
@@ -124,7 +124,7 @@ async function executeLegacyPlaceDetails(params = {}) {
     url.searchParams.set('place_id', String(placeId || ''));
     url.searchParams.set('fields', fields);
     url.searchParams.set('key', apiKey);
-    const res = await fetchImpl(url.toString());
+    const res = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(timeout) });
     const data = await readFetchJson(res);
     return {
       httpStatus: res.status,

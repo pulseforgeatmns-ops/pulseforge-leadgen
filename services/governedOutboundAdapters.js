@@ -174,7 +174,7 @@ function adapters(pool, dependencies = {}) {
   }
   async function scoutWithEligibility(mission, opts, program, store) {
     const runScoutForAmoMission = dependencies.runScout || require('../packages/max/workspace/ScoutDiscoveryExecutor').runScoutForAmoMission;
-    const result = await runScoutForAmoMission(mission, { ...opts, pool, runScout: undefined, allowFixtureFallback: false });
+    const result = await runScoutForAmoMission(mission, { ...opts, pool, governedProgram: program, runScout: undefined, allowFixtureFallback: false });
     const payload = result.payload;
     const { buildMissionBoundCandidates } = require('../packages/max/workspace/EmmettMissionCandidates');
     const admission = dependencies.admission || require('../packages/max/workspace/MissionBoundCrmAdmission');
@@ -194,7 +194,7 @@ function adapters(pool, dependencies = {}) {
           companyId: crm.company_id, email: String(crm.email || '') }))) {
           eligible[id] = { eligible: false, reason: 'prior_contact_or_human_owned' }; continue;
         }
-        if (ctx.usesTenantMailboxTransport && crm && !governedContactReason(crm, program.policy)) {
+        if (crm && !governedContactReason(crm, program.policy)) {
           eligible[id] = { eligible: true, reason: null, prospectId: crm.prospect_id };
           continue;
         }
@@ -236,14 +236,22 @@ function adapters(pool, dependencies = {}) {
     if (mission?.stage === 'ready') return loadMission(missionId);
     if (recovery) {
       if (missionId !== recovery.nextMissionId || progress.attempts !== recovery.review.nextAttempt
-        || progress.attempts > program.policy.preparationAttemptsPerDay || mission) fail('replenishment_reservation_changed');
+        || mission) fail('replenishment_reservation_changed');
     } else {
       // A crashed recovery cannot silently spend another attempt or lose its
       // reviewed research inputs through an ordinary scheduled tick.
       if (missionId !== defaultMissionId) fail('replenishment_requires_operator_review');
-      if (progress.attempts >= program.policy.preparationAttemptsPerDay) fail('preparation_retry_budget');
-      if (progress.last_attempt_at && Date.now() - +new Date(progress.last_attempt_at) < 60 * 60000) fail('preparation_backoff');
-      await pool.query('UPDATE acquisition_outbound_preparation SET attempts=attempts+1,last_attempt_at=now() WHERE program_id=$1 AND local_day=$2', [program.id, day]);
+      const { preparationRetryReason, preparationInventoryState } = require('./governedPreparationRetry');
+      const state = await preparationInventoryState(pool, store, program, source);
+      const previous = await store.one(`SELECT payload FROM acquisition_outbound_events
+        WHERE tenant_id=$1 AND program_id=$2 AND event_type='preparation_attempt_reserved'
+        ORDER BY created_at DESC LIMIT 1`, [tenantId, program.id]);
+      const retryReason = preparationRetryReason(progress, previous?.payload?.fingerprint, state.fingerprint);
+      if (retryReason) fail(retryReason);
+      await pool.query('UPDATE acquisition_outbound_preparation SET attempts=attempts+1,last_attempt_at=now(),last_error=NULL WHERE program_id=$1 AND local_day=$2', [program.id, day]);
+      await store.event('preparation_attempt_reserved', [program.id, day, progress.attempts + 1],
+        { programId: program.id, localDay: day, attempt: progress.attempts + 1,
+          fingerprint: state.fingerprint, cleanInventory: state.inventory.clean.length });
     }
     try {
       if (!mission) {

@@ -187,8 +187,10 @@ async function runScoutDiscovery(executionInput = {}, opts = {}) {
 
   const scoutOpts = buildScoutDiscoverOpts(mission, executionInput, opts);
   const discoverImpl = typeof opts.discoverImpl === 'function' ? opts.discoverImpl : Scout.discover.bind(Scout);
+  const inventoryService = require('../../../services/acquisitionMissionInventory');
   const existing = typeof opts.discoverImpl === 'function' ? null
-    : await require('../../../services/acquisitionMissionInventory').discoverKnowledgeInventory(mission, opts);
+    : (await inventoryService.discoverGovernedInventory(mission, opts)
+      || await inventoryService.discoverKnowledgeInventory(mission, opts));
   const scoutResult = existing || await discoverImpl({
     mission,
     missionEngine: null,

@@ -15,6 +15,18 @@ const VERIFIED_EMAIL_STATUSES = new Set(['valid', 'verified']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EXCLUDED_COMPANY_RE = /deliverability\s*test/i;
 
+function preferredCanonicalContact(rows, key) {
+  const exact = rows.find(row => String(row.prospect_id) === String(key));
+  if (exact) return exact;
+  const first = rows[0];
+  if (!first) return null;
+  // Preserve the resolved company; choose its qualified contact ahead of a
+  // higher-scored empty/tainted placeholder. Never borrow another company's row.
+  const { governedContactReason } = require('../../../utils/governedContactEligibility');
+  return rows.find(row => String(row.company_id) === String(first.company_id)
+    && !governedContactReason(row)) || first;
+}
+
 function isExcludedDeliverabilityTestCompany(name) {
   return EXCLUDED_COMPANY_RE.test(String(name || '').trim());
 }
@@ -195,11 +207,10 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
       CASE WHEN p.id::text = $2 THEN 0 WHEN p.company_id::text = $2 THEN 1 ELSE 2 END,
       p.icp_score DESC NULLS LAST,
       p.created_at ASC,
-      p.id ASC
-    LIMIT 1`,
+      p.id ASC`,
     [clientId, missionBoundKey]
   );
-  return rows[0] || null;
+  return preferredCanonicalContact(rows, missionBoundKey);
 }
 
 /**
@@ -223,7 +234,7 @@ async function loadCrmProspectsForMissionBoundCompanies(input = {}) {
     `WITH mission_keys AS (
        SELECT unnest($2::text[]) AS mission_bound_key
      )
-     SELECT DISTINCT ON (k.mission_bound_key)
+     SELECT
        k.mission_bound_key,
 ${CRM_ENRICHMENT_PROSPECT_SELECT}
      FROM mission_keys k
@@ -253,9 +264,13 @@ ${CRM_ENRICHMENT_PROSPECT_SELECT}
     [clientId, companyIds]
   );
 
+  const grouped = new Map();
   for (const row of rows) {
-    map.set(String(row.mission_bound_key), row);
+    const key = String(row.mission_bound_key);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(row);
   }
+  for (const [key, group] of grouped) map.set(key, preferredCanonicalContact(group, key));
   return map;
 }
 
