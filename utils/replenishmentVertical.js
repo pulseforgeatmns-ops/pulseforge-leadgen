@@ -11,6 +11,7 @@ const ENRICHABLE_SCOUT_VERTICALS = Object.freeze([
   'property_manager',
   'str_manager',
   'commercial_office',
+  'realtor',
 ]);
 
 const STR_EVIDENCE = [
@@ -83,6 +84,8 @@ const MISSION_VERTICALS = Object.freeze({
   property_management: ['property_manager', 'str_manager'],
   property_manager: ['property_manager', 'str_manager'],
   commercial_office: ['commercial_office'],
+  realtor: ['realtor'],
+  real_estate: ['realtor'],
 });
 
 function asText(value) {
@@ -190,15 +193,19 @@ function resolveReplenishmentVertical(candidate = {}, context = {}) {
     return 'property_manager';
   }
   if (hasEvidence(text, COMMERCIAL_OFFICE_EVIDENCE)) return 'commercial_office';
+  if (realtySignal || /\b(?:real estate (?:agency|brokerage)|realtor)\b/i.test(text)) return 'realtor';
   return null;
 }
 
 function missionCompatibleVerticals(context = {}) {
+  if (Array.isArray(context.missionSegments) && context.missionSegments.length) {
+    return [...new Set(context.missionSegments.flatMap(segment => MISSION_VERTICALS[normalizeVertical(segment)] || []))];
+  }
   const missionSegment = normalizeVertical(
     context.missionSegment || context.segment || context.mission?.segment || ''
   );
-  if (!missionSegment) return [...ENRICHABLE_SCOUT_VERTICALS];
-  return MISSION_VERTICALS[missionSegment] || [...ENRICHABLE_SCOUT_VERTICALS];
+  if (!missionSegment) return ENRICHABLE_SCOUT_VERTICALS.filter(vertical => vertical !== 'realtor');
+  return MISSION_VERTICALS[missionSegment] || ENRICHABLE_SCOUT_VERTICALS.filter(vertical => vertical !== 'realtor');
 }
 
 function isMissionCompatible(vertical, context = {}) {
@@ -256,6 +263,27 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
     return { admitted: false, reason: 'insufficient_business_fit' };
   }
 
+  const allowedCities = resolveMissionAllowedCities({
+    allowedCities: context.allowedCities,
+    missionCities: context.missionCities,
+    cities: context.cities,
+    geography: context.geography,
+    service_area: context.service_area,
+    clientConfig: context.clientConfig,
+    region: context.region || context.missionRegion,
+  });
+  if (allowedCities.length) {
+    const location = asText(candidate.location || candidate.address);
+    const inScope = isLocationInMissionGeography({
+      location,
+      city: candidate.city,
+      allowedCities,
+    });
+    if (!inScope) {
+      return { admitted: false, reason: 'outside_geography' };
+    }
+  }
+
   const provenance = buildDiscoveryProvenance(candidate, context);
   const admissionContext = { ...context, ...provenance };
   const text = classificationHaystack(candidate, admissionContext);
@@ -278,26 +306,6 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
     return { admitted: false, reason: 'segment_mismatch', vertical };
   }
 
-  const allowedCities = resolveMissionAllowedCities({
-    allowedCities: context.allowedCities,
-    missionCities: context.missionCities,
-    cities: context.cities,
-    geography: context.geography,
-    service_area: context.service_area,
-    clientConfig: context.clientConfig,
-    region: context.region || context.missionRegion,
-  });
-  if (allowedCities.length) {
-    const location = asText(candidate.location || candidate.address);
-    const inScope = isLocationInMissionGeography({
-      location,
-      city: candidate.city,
-      allowedCities,
-    });
-    if (!inScope) {
-      return { admitted: false, reason: 'outside_geography', vertical };
-    }
-  }
 
   return {
     admitted: true,
