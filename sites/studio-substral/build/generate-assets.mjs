@@ -146,16 +146,20 @@ if (wanted('icons')) {
     JSON.stringify(publicManifest, null, 2) + '\n'
   );
 
-  for (const [from, to] of [
+  const rootIconBundle = [
+    [path.join(brand, 'favicon.svg'), 'favicon.svg'],
     [path.join(brand, 'favicon.ico'), 'favicon.ico'],
     [path.join(brand, 'favicon-16x16.png'), 'favicon-16x16.png'],
     [path.join(brand, 'favicon-32x32.png'), 'favicon-32x32.png'],
     [path.join(brand, 'apple-touch-icon.png'), 'apple-touch-icon.png'],
     [path.join(brand, 'site.webmanifest'), 'site.webmanifest'],
-  ]) {
+  ];
+  for (const [from, to] of rootIconBundle) {
     await copyFile(from, path.join(publicRoot, to));
+    await copyFile(from, path.join(site, to));
   }
   console.log(`  ${path.relative(site, publicRoot)}/  (root favicon bundle)`);
+  console.log(`  site root/  (GitHub Pages publish root — same bundle)`);
 }
 
 /* --- Open Graph preview -------------------------------------------------- */

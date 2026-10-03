@@ -18,7 +18,7 @@ await Promise.all([
   ensure(html.includes('application/ld+json') && html.includes('twitter:card'), 'structured/social metadata missing');
   ensure(!/name="robots"[^>]*noindex/.test(html), 'production is noindex');
  }),
- ...['robots.txt','sitemap.xml','favicon.ico','favicon-16x16.png','favicon-32x32.png','apple-touch-icon.png','site.webmanifest','assets/brand/social-preview.png','assets/brand/favicon.svg','assets/brand/favicon-32.png','assets/brand/apple-touch-icon.png','assets/brand/site.webmanifest','assets/css/substral.css','assets/js/substral.js','assets/js/assessment.js','assets/js/dimensional.js','assets/work/anchor-cleaning-home.webp'].map(file => check(file, async () => {
+ ...['robots.txt','sitemap.xml','favicon.svg','favicon.ico','favicon-16x16.png','favicon-32x32.png','apple-touch-icon.png','site.webmanifest','assets/brand/social-preview.png','assets/brand/favicon.svg','assets/brand/favicon-32.png','assets/brand/apple-touch-icon.png','assets/brand/site.webmanifest','assets/css/substral.css','assets/js/substral.js','assets/js/assessment.js','assets/js/dimensional.js','assets/work/anchor-cleaning-home.webp'].map(file => check(file, async () => {
   const res=await request(`${base}/${file}`); ensure(res.status===200, `HTTP ${res.status}`);
   const content=await res.arrayBuffer(); ensure(content.byteLength>0,'empty asset');
   if(file==='robots.txt'||file==='sitemap.xml')ensure(new TextDecoder().decode(content).includes(base),'wrong sitemap/canonical host');
