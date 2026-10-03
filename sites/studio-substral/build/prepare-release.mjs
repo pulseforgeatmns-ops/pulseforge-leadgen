@@ -9,7 +9,24 @@ if (!destination || existsSync(destination)) throw new Error('Provide a new, emp
 const canonical = readFileSync(path.join(site, 'CNAME'), 'utf8').trim();
 if (canonical !== 'studiosubstral.com') throw new Error('Unexpected canonical domain');
 mkdirSync(destination, { recursive: true });
-for (const item of ['index.html', 'robots.txt', 'sitemap.xml', 'CNAME', '.nojekyll', 'assets', 'public']) {
+const rootIcons = [
+  'favicon.svg',
+  'favicon.ico',
+  'favicon-16x16.png',
+  'favicon-32x32.png',
+  'apple-touch-icon.png',
+  'site.webmanifest',
+];
+for (const item of [
+  'index.html',
+  'robots.txt',
+  'sitemap.xml',
+  'CNAME',
+  '.nojekyll',
+  ...rootIcons,
+  'assets',
+  'public',
+]) {
   const source = path.join(site, item);
   if (!existsSync(source)) continue;
   if (item === 'public') {

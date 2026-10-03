@@ -34,7 +34,9 @@ build/                         build tooling, not published
 Deploy exactly these, and nothing else:
 
 ```
-index.html  robots.txt  sitemap.xml  CNAME  .nojekyll  assets/  public/
+index.html  robots.txt  sitemap.xml  CNAME  .nojekyll
+favicon.svg  favicon.ico  favicon-*.png  apple-touch-icon.png  site.webmanifest
+assets/  public/  (public/ mirrors the root icon bundle for release tooling)
 ```
 
 `build/`, `src/`, and the three markdown files are repository-only. Follow the
