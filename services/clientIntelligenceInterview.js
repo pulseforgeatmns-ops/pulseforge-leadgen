@@ -4432,6 +4432,270 @@ function synthesizeDifferentiationSnippet(text) {
   return snippet.replace(/[.!?]+$/, '').trim();
 }
 
+function naturalListPhrases(items) {
+  const list = (items || []).map((x) => String(x).trim()).filter(Boolean);
+  if (!list.length) return '';
+  if (list.length === 1) return list[0];
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(', ')}, and ${list[list.length - 1]}`;
+}
+
+function dedupeSemanticList(items) {
+  const out = [];
+  for (const item of items || []) {
+    const normalized = normalizeBusinessPhrase(String(item || '').trim());
+    if (!normalized) continue;
+    if (out.some((prior) => sameSemanticValue(prior, normalized))) continue;
+    out.push(normalized);
+  }
+  return out;
+}
+
+function isOutcomePhraseNotService(item) {
+  const s = String(item || '').trim();
+  if (!s) return false;
+  return (
+    /\b(?:more credible online presence|stronger,?\s*more credible online presence)\b/i.test(s) &&
+    !/\b(?:redesign|design|messaging|copywriting|seo|optimization|launch)\b/i.test(s)
+  );
+}
+
+function resolveBriefServicesForComposition(facts) {
+  const slotServices = sanitizeBriefServiceList(facts.services);
+  const evidence = String(facts.evidence_statements?.services || '').trim();
+  const evidenceServices = evidence
+    ? sanitizeBriefServiceList(extractServiceList(evidence))
+    : [];
+  return dedupeNormalizedList([...slotServices, ...evidenceServices]).filter(
+    (item) => !isOutcomePhraseNotService(item)
+  );
+}
+
+function stripDisqualifiedCustomerLeadIn(text) {
+  let s = normalizeBusinessPhrase(String(text || '').trim());
+  s = s.replace(/^yes\.?\s*/i, '');
+  s = stripInterviewQuestionEcho(s);
+  s = cleanRawAnswer('avoidCustomers', s);
+  s = s
+    .replace(
+      /^(?:[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+)*\s+)?should avoid\s+/i,
+      ''
+    )
+    .replace(/^the business prefers to avoid\s+/i, '')
+    .trim();
+  return s.replace(/[.!?]+$/, '').trim();
+}
+
+function filterTargetMarketGeography(geography) {
+  return (geography || [])
+    .map((item) => normalizeBusinessPhrase(String(item || '').trim()))
+    .filter(Boolean)
+    .filter((item) => {
+      if (looksLikeIdealCustomerPhrase(item)) return false;
+      if (looksLikeCustomerExclusionPhrase(item)) return false;
+      if (QUALIFICATION_SIGNAL_PHRASE_RE.test(item)) return false;
+      if (/\b(?:weak digital presentation|good real-world service)\b/i.test(item)) return false;
+      if (isVerticalFocusSegment(item) && !looksLikeGeographyOnly(item)) return false;
+      return looksLikeGeographyOnly(item) || extractPlaces(item).length > 0;
+    });
+}
+
+function dedupeScorecardMetrics(metrics) {
+  let list = dedupeNormalizedList(metrics || []);
+  const hasTotal = list.some((m) => /\btotal revenue closed\b/i.test(m));
+  if (hasTotal) {
+    list = list.filter((m) => !/^revenue closed$/i.test(String(m).trim()));
+  }
+  return list;
+}
+
+function composeBlueprintServicesSummary(businessName, facts) {
+  const services = resolveBriefServicesForComposition(facts);
+  if (!services.length) return '';
+  const subject = businessName || 'The business';
+  return [
+    ensurePeriod(`${subject} delivers ${naturalListPhrases(services)}`),
+    'Service understanding reflects what is actually sold now, not aspirational packaging.',
+  ].join(' ');
+}
+
+function composeBlueprintIdealCustomersSummary(cleanIdeal) {
+  const items = dedupeSemanticList(
+    (cleanIdeal || [])
+      .map((item) =>
+        normalizeBusinessPhrase(String(item || '').trim()).replace(/^ideal customers?\s+(?:are|include)\s+/i, '')
+      )
+      .filter(Boolean)
+  );
+  if (!items.length) return '';
+
+  const shortItems = items.every((item) => item.split(/\s+/).length <= 14);
+  if (items.length === 1 || shortItems) {
+    return [
+      ensurePeriod(`Ideal customers are ${naturalListPhrases(items)}`),
+      'This ICP picture prioritizes fit over volume.',
+    ].join(' ');
+  }
+
+  const sentences = items.map((item, idx) => {
+    const clause = item.replace(/[.!?]+$/, '').trim();
+    if (idx === 0) return ensurePeriod(`Ideal customers are ${clause}`);
+    if (/^the ideal customer is\b/i.test(clause)) {
+      return ensurePeriod(capitalizeSentence(clause));
+    }
+    return ensurePeriod(`They also include ${midSentence(clause)}`);
+  });
+  return [...sentences, 'This ICP picture prioritizes fit over volume.'].join(' ');
+}
+
+function coalesceDisqualifiedFragments(items) {
+  const stripped = (items || []).map(stripDisqualifiedCustomerLeadIn).filter(Boolean);
+  if (!stripped.length) return [];
+  if (stripped.length === 1) return stripped;
+  const looksLikeSplitSentence = stripped
+    .slice(1)
+    .every((part) => /^(?:or|a|an|the)\b/i.test(part) || part.split(/\s+/).length <= 7);
+  if (looksLikeSplitSentence) {
+    let merged = stripped[0].replace(/[.!?]+$/, '').trim();
+    for (let i = 1; i < stripped.length; i += 1) {
+      const part = stripped[i].replace(/[.!?]+$/, '').trim();
+      merged = /^or\b/i.test(part) ? `${merged}, ${part}` : `${merged}, ${part}`;
+    }
+    return [merged.replace(/\s+/g, ' ').trim()];
+  }
+  return dedupeSemanticList(stripped);
+}
+
+function peelBrandVoiceLeadIn(text) {
+  let tone = normalizeBrandVoiceTone(text);
+  tone = tone
+    .replace(
+      /^(?:[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+)*\s+)?should sound\s+/i,
+      ''
+    )
+    .replace(/^(?:the tone should feel|tone should feel)\s+/i, '')
+    .replace(/^(?:brand voice should read as|brand voice should feel)\s+/i, '')
+    .trim();
+  return tone;
+}
+
+function composeBlueprintAvoidCustomersSummary(disqualified) {
+  const cleaned = coalesceDisqualifiedFragments(disqualified);
+  if (!cleaned.length) return '';
+  const substance = cleaned.length === 1 ? cleaned[0] : naturalListPhrases(cleaned);
+  return [
+    ensurePeriod(`The business prefers to avoid ${substance}`),
+    'These constraints protect targeting quality and should stay visible in the Blueprint.',
+  ].join(' ');
+}
+
+function composeBlueprintTargetMarketsSummary(facts) {
+  const geo = filterTargetMarketGeography(facts.geography || []);
+  const verticalParts = facts.vertical_focus
+    ? splitListItems(String(facts.vertical_focus).replace(/;/g, ','))
+    : [];
+  const bits = dedupeNormalizedList([...geo, ...verticalParts]);
+  if (!bits.length) return '';
+
+  const includeGrowth =
+    facts.growth_focus &&
+    (factsIndicateCommercialCleaningBusiness(facts) ||
+      !sameSemanticValue(facts.growth_focus, COMMERCIAL_CLEANING_GROWTH_FOCUS));
+
+  const marketProse = naturalListPhrases(bits);
+  const first = includeGrowth
+    ? `Priority markets center on ${marketProse}, with a near-term growth focus on ${facts.growth_focus}`
+    : `Priority markets center on ${marketProse}`;
+
+  return [
+    ensurePeriod(first),
+    'Geography and vertical focus here bound where discovery should concentrate first.',
+  ].join(' ');
+}
+
+function composeBlueprintDifferentiationSummary(differentiation) {
+  let text = stripInterviewQuestionEcho(String(differentiation || '').trim());
+  text = cleanRawAnswer('competitiveAdvantages', text);
+  text = text.replace(/^competitive edge is described as\s+/i, '').trim();
+  if (!text) return '';
+  return [
+    ensurePeriod(capitalizeSentence(text)),
+    'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
+  ].join(' ');
+}
+
+function composeBlueprintBrandVoiceSummary(facts) {
+  const rawEvidence = String(facts.evidence_statements?.brand_voice || '').trim();
+  const rawSlot = String(facts.brand_voice || '').trim();
+  const parts = (rawEvidence || rawSlot)
+    .split(/\n\n+|\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  let tone = peelBrandVoiceLeadIn(parts[0] || rawSlot || rawEvidence);
+  if (parts.some((line) => /premium but not pretentious/i.test(line))) {
+    tone = `${tone.replace(/[.!?]+$/, '')}, premium but not pretentious`;
+  }
+  if (!tone) return '';
+  return [
+    ensurePeriod(capitalizeSentence(tone)),
+    'Tone guidance constrains later language without choosing channels or campaigns.',
+  ].join(' ');
+}
+
+function authoritativeCampaignGoalSource(facts) {
+  const slot = String(facts.ninety_day_outcomes || '').trim();
+  const evidence = String(facts.evidence_statements?.ninety_day_outcomes || '').trim();
+  if (evidence.length > slot.length + 20) return evidence;
+  if (slot && !/^would be successful if\b/i.test(slot)) return slot;
+  return evidence || slot;
+}
+
+function composeBlueprintCampaignGoalsSummary(facts) {
+  const raw = authoritativeCampaignGoalSource(facts);
+  if (!raw) return '';
+
+  let tail = stripInterviewQuestionEcho(raw);
+  tail = cleanRawAnswer('campaignGoals', tail);
+  tail = tail
+    .replace(/^over the next 90 days,?\s*/i, '')
+    .replace(/^(?:this growth work )?would be successful if\s+/i, '')
+    .trim();
+  tail = stripBusinessNameLeadIn(tail).replace(/[.!?]+$/, '').trim();
+  if (!tail) return '';
+
+  const pieces = tail
+    .split(/,\s*(?=acquires?|validates?|prove(?:s)?|builds?|books?|signs?|launches?)/i)
+    .map((part) => normalizeBusinessPhrase(part.trim().replace(/[.!?]+$/, '')))
+    .filter(Boolean);
+
+  const normalizedPieces = (pieces.length ? pieces : [normalizeBusinessPhrase(tail)]).map((piece, idx) => {
+    let p = piece;
+    if (/^proves?\s+/i.test(p)) p = p.replace(/^proves?\s+/i, 'prove that ');
+    if (/^acquires?\s+/i.test(p)) p = p.replace(/^acquires?\s+/i, 'acquire ');
+    if (/^validates?\s+/i.test(p)) p = p.replace(/^validates?\s+/i, 'validate ');
+    return idx === 0 ? capitalizeSentence(p) : midSentence(p);
+  });
+
+  const joined =
+    normalizedPieces.length === 1
+      ? midSentence(normalizedPieces[0])
+      : normalizedPieces.join('; ');
+
+  return [
+    ensurePeriod(`Over the next 90 days, ${joined}`),
+    'These are desired business outcomes for the next phase of work, not execution tactics.',
+  ].join(' ');
+}
+
+function composeBlueprintSuccessMetricsSummary(metrics) {
+  const cleaned = dedupeScorecardMetrics(metrics);
+  if (!cleaned.length) return '';
+  return [
+    ensurePeriod(`Success will be judged by ${naturalListPhrases(cleaned)}`),
+    "These signals define whether the engagement is working from the client's perspective.",
+  ].join(' ');
+}
+
 /**
  * Build Blueprint-shaped section summaries from normalized evidence (not raw transcript).
  */
@@ -4471,18 +4735,16 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       : priorSummary('identity', 'business_description'),
   };
 
-  const briefServices = sanitizeBriefServiceList(f.services);
+  const briefServices = resolveBriefServicesForComposition(f);
   sections.services = {
     ...(prior.services || emptySection()),
     epistemic_state: getEpistemicState('services', briefServices.length > 0),
-    summary: briefServices.length && f.epistemic_states?.services === EPISTEMIC_STATES.KNOWN
-      ? [
-          ensurePeriod(`${name || 'The business'} delivers ${briefServices.join(', ')}`),
-          'Service understanding reflects what is actually sold now, not aspirational packaging.',
-        ].join(' ')
-      : f.epistemic_states?.services === EPISTEMIC_STATES.UNKNOWN
-        ? 'Services: Not yet defined.'
-        : prior.services?.summary || '',
+    summary:
+      briefServices.length && f.epistemic_states?.services === EPISTEMIC_STATES.KNOWN
+        ? composeBlueprintServicesSummary(name, f)
+        : f.epistemic_states?.services === EPISTEMIC_STATES.UNKNOWN
+          ? 'Services: Not yet defined.'
+          : prior.services?.summary || '',
   };
 
   sections.idealCustomers = {
@@ -4497,10 +4759,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           !isConversationalFiller(item)
       );
       if (cleanIdeal.length && f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.KNOWN) {
-        return [
-          ensurePeriod(`Ideal customers are ${cleanIdeal.join(', ')}`),
-          'This ICP picture prioritizes fit over volume.',
-        ].join(' ');
+        return composeBlueprintIdealCustomersSummary(cleanIdeal);
       }
       if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.HYPOTHESIS) {
         return `Current hypothesis: target audience may be ${f.hypotheses?.ideal_customers || f.evidence_statements?.ideal_customers || 'under evaluation'}.`;
@@ -4523,35 +4782,22 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   sections.avoidCustomers = {
     ...(prior.avoidCustomers || emptySection()),
     epistemic_state: getEpistemicState('disqualified_customers', f.disqualified_customers.length > 0),
-    summary: f.disqualified_customers.length && f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.KNOWN
-      ? [
-          ensurePeriod(`The business prefers to avoid ${f.disqualified_customers.join(', ')}`),
-          'These constraints protect targeting quality and should stay visible in the Blueprint.',
-        ].join(' ')
-      : f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.UNKNOWN
-        ? 'Disqualified customers: Not yet defined.'
-        : priorSummary('avoidCustomers', 'disqualified_customers'),
+    summary:
+      f.disqualified_customers.length && f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.KNOWN
+        ? composeBlueprintAvoidCustomersSummary(f.disqualified_customers)
+        : f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.UNKNOWN
+          ? 'Disqualified customers: Not yet defined.'
+          : priorSummary('avoidCustomers', 'disqualified_customers'),
   };
 
-  const marketBits = [];
-  if (f.geography.length) marketBits.push(f.geography.join(', '));
-  if (f.vertical_focus) marketBits.push(f.vertical_focus);
-  if (
-    f.growth_focus &&
-    (factsIndicateCommercialCleaningBusiness(f) ||
-      !sameSemanticValue(f.growth_focus, COMMERCIAL_CLEANING_GROWTH_FOCUS))
-  ) {
-    marketBits.push(`with a near-term growth focus on ${f.growth_focus}`);
-  }
+  const targetMarketsSummary = composeBlueprintTargetMarketsSummary(f);
   sections.targetMarkets = {
     ...(prior.targetMarkets || emptySection()),
-    epistemic_state: getEpistemicState('geography', marketBits.length > 0),
-    summary: marketBits.length && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
-      ? [
-          ensurePeriod(`Priority markets center on ${marketBits.join(' ')}`),
-          'Geography and vertical focus here bound where discovery should concentrate first.',
-        ].join(' ')
-      : f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS
+    epistemic_state: getEpistemicState('geography', Boolean(targetMarketsSummary)),
+    summary:
+      targetMarketsSummary && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
+        ? targetMarketsSummary
+        : f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS
         ? `Current hypothesis: target markets center on ${f.hypotheses?.geography || f.evidence_statements?.geography || 'under evaluation'}.`
         : f.epistemic_states?.geography === EPISTEMIC_STATES.NOT_APPLICABLE
           ? 'Geography is not currently a meaningful targeting constraint; targeting is based on business stage and characteristics instead.'
@@ -4563,12 +4809,10 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   sections.competitiveAdvantages = {
     ...(prior.competitiveAdvantages || emptySection()),
     epistemic_state: getEpistemicState('differentiation', Boolean(f.differentiation)),
-    summary: f.differentiation && f.epistemic_states?.differentiation === EPISTEMIC_STATES.KNOWN
-      ? [
-          ensurePeriod(`Competitive edge is described as ${f.differentiation}`),
-          'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
-        ].join(' ')
-      : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
+    summary:
+      f.differentiation && f.epistemic_states?.differentiation === EPISTEMIC_STATES.KNOWN
+        ? composeBlueprintDifferentiationSummary(f.differentiation)
+        : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
         ? `The current differentiation hypothesis is that ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'the buying decision may be influenced by an as-yet unarticulated advantage'}.`
         : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN
           ? 'Differentiation: Not yet defined.'
@@ -4578,12 +4822,10 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   sections.brandVoice = {
     ...(prior.brandVoice || emptySection()),
     epistemic_state: getEpistemicState('brand_voice', Boolean(f.brand_voice)),
-    summary: f.brand_voice && f.epistemic_states?.brand_voice === EPISTEMIC_STATES.KNOWN
-      ? [
-          ensurePeriod(`Brand voice should read as ${f.brand_voice}`),
-          'Tone guidance constrains later language without choosing channels or campaigns.',
-        ].join(' ')
-      : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.HYPOTHESIS
+    summary:
+      f.brand_voice && f.epistemic_states?.brand_voice === EPISTEMIC_STATES.KNOWN
+        ? composeBlueprintBrandVoiceSummary(f)
+        : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.HYPOTHESIS
         ? `The current brand voice hypothesis is that the tone may align with ${f.hypotheses?.brand_voice || f.evidence_statements?.brand_voice || 'an as-yet undefined direction'}.`
         : f.epistemic_states?.brand_voice === EPISTEMIC_STATES.UNKNOWN
           ? 'Brand voice: Not yet defined.'
@@ -4594,20 +4836,14 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
     ...(prior.campaignGoals || emptySection()),
     epistemic_state: getEpistemicState('ninety_day_outcomes', Boolean(f.ninety_day_outcomes)),
     summary: f.ninety_day_outcomes
-      ? [
-          ensurePeriod(`Near-term growth goals focus on ${f.ninety_day_outcomes}`),
-          'These are desired business outcomes for the next phase of work, not execution tactics.',
-        ].join(' ')
+      ? composeBlueprintCampaignGoalsSummary(f)
       : priorSummary('campaignGoals', 'ninety_day_outcomes'),
   };
 
   sections.successMetrics = {
     ...(prior.successMetrics || emptySection()),
     summary: f.success_metrics.length
-      ? [
-          ensurePeriod(`Success will be judged by ${f.success_metrics.join(', ')}`),
-          'These signals define whether the engagement is working from the client\'s perspective.',
-        ].join(' ')
+      ? composeBlueprintSuccessMetricsSummary(f.success_metrics)
       : priorSummary('successMetrics', 'success_metrics'),
   };
 
@@ -5049,39 +5285,27 @@ function summarizeSection(sectionKey, statements) {
         ensurePeriod(`Great-fit customers need ${latest}`),
         'These fit requirements describe readiness and behavior, not a separate audience category.',
       ].join(' ');
-    case 'avoidCustomers': {
-      const substance =
-        cleaned.length > 1 ? cleaned.join('; ') : latest;
-      return [
-        ensurePeriod(`The business prefers to avoid ${substance}`),
-        'These constraints protect targeting quality and should stay visible in the Blueprint.',
-      ].join(' ');
-    }
+    case 'avoidCustomers':
+      return composeBlueprintAvoidCustomersSummary(cleaned);
     case 'targetMarkets':
       return [
         ensurePeriod(`Priority markets center on ${latest}`),
         'Geography and vertical focus here bound where discovery should concentrate first.',
       ].join(' ');
     case 'competitiveAdvantages':
-      return [
-        ensurePeriod(`Competitive edge is described as ${latest}`),
-        'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
-      ].join(' ');
+      return composeBlueprintDifferentiationSummary(latest);
     case 'brandVoice':
-      return [
-        ensurePeriod(`Brand voice should read as ${latest}`),
-        'Tone guidance constrains later language without choosing channels or campaigns.',
-      ].join(' ');
+      return composeBlueprintBrandVoiceSummary({
+        brand_voice: normalizeBrandVoiceTone(latest),
+        evidence_statements: { brand_voice: latest },
+      });
     case 'campaignGoals':
-      return [
-        ensurePeriod(`Near-term growth goals focus on ${latest}`),
-        'These are desired business outcomes for the next phase of work, not execution tactics.',
-      ].join(' ');
+      return composeBlueprintCampaignGoalsSummary({
+        ninety_day_outcomes: latest,
+        evidence_statements: { ninety_day_outcomes: latest },
+      });
     case 'successMetrics':
-      return [
-        ensurePeriod(`Success will be judged by ${latest}`),
-        'These signals define whether the engagement is working from the client\'s perspective.',
-      ].join(' ');
+      return composeBlueprintSuccessMetricsSummary(cleaned.length > 1 ? cleaned : [latest]);
     default:
       return [
         ensurePeriod(capitalizeSentence(latest)),
