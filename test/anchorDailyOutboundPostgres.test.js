@@ -820,6 +820,14 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.equal(rows[0], rows[1]);
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM companies WHERE domain='granite.example' AND client_id=10")).rows[0].n, 1);
   });
+  await t.test('a cross-domain commercial division cannot create a duplicate company', async () => {
+    await reset();
+    const { findOrCreateCompanyForClient } = require('../scripts/promoteUnenriched');
+    const base = await findOrCreateCompanyForClient({ name: 'Granite Realty', domain: 'granite.example', clientId: 10 }, pool);
+    await assert.rejects(findOrCreateCompanyForClient({ name: 'Granite Realty - Commercial Division', domain: 'granitecommercial.example', clientId: 10 }, pool), /company_identity_domain_conflict/);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM companies WHERE client_id=10 AND name LIKE 'Granite Realty%'")).rows[0].n, 1);
+    assert.ok(base);
+  });
   await t.test('first-touch ramp metrics count provider acceptance separately from attempts', async () => {
     await reset();
     await svc.tick(); await activate(); await svc.tick();

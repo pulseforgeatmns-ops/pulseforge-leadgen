@@ -9,7 +9,10 @@ const { invalidOutreachEmailReason } = require('./emailGuard');
 
 const VERIFIED_EMAIL_STATUSES = new Set(['valid', 'verified']);
 
+const SHARED_PROFILE_DOMAINS = ['hoo.be', 'linktr.ee', 'beacons.ai', 'solo.to', 'allmylinks.com', 'about.me', 'lnk.bio', 'bio.site', 'taplink.cc', 'zillow.com', 'realtor.com', 'homes.com', 'loopnet.com', 'crexi.com'];
+
 const CONTAMINATED_EMAIL_DOMAINS = new Set([
+  ...SHARED_PROFILE_DOMAINS,
   'linkedin.com',
   'facebook.com',
   'fb.com',
@@ -59,6 +62,7 @@ const SOCIAL_PROFILE_DOMAINS = new Set([
 ]);
 
 const DIRECTORY_DOMAINS = new Set([
+  ...SHARED_PROFILE_DOMAINS,
   'yelp.com',
   'avvo.com',
   'findlaw.com',

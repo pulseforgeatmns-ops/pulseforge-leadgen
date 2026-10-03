@@ -75,3 +75,12 @@ test('explicit approved subsegments admit real estate offices without widening l
  const input=scoutInput({tenant_id:'10'},{mission},{deficit:5},{tenantId:'10'});
  assert.deepEqual(input.targetContext.segments,approved.missionSegments);
 });
+
+test('shared profile domains cannot acquire or promote platform employees', async () => {
+ const { promoteRecord } = require('../scripts/promoteUnenriched');
+ const result = await promoteRecord({ client_id: 10, company: 'Steve Petz - Realtor', domain: 'hoo.be', website_url: 'https://hoo.be/steve' }, {
+   enrich: async () => { throw Error('must not query platform contacts'); },
+   loadClientConfig: async () => { throw Error('must stop before acquisition'); },
+ });
+ assert.equal(result.reason, 'official_company_domain_required');
+});

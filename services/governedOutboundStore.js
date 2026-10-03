@@ -6,7 +6,8 @@ const { createGovernedOutboundTenantContext } = require('./governedOutboundTenan
 // Conservative ownership matching: a likely alias is held for review, never
 // used to merge CRM records or to transfer an AO's account.
 function ownershipNameKey(value) {
-  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+    .replace(/ (commercial|residential) (division|department)$/, '').split(' ')
     .filter(word => word && !['llc','inc','incorporated','ltd','limited','corp','corporation','co','company','properties','property','management'].includes(word)).join('');
 }
 function ownershipDomain(value) {

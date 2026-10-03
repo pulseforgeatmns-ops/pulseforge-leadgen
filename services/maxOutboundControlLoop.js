@@ -319,6 +319,7 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
   const qualifiedKnowledge = new Set(knowledge.filter(r => !r.qualificationReason).map(r => String(r.id)));
   const clean = [];
   const seenCompanies = new Set();
+  const seenCompanyNames = new Set();
   const seenEmails = new Set();
   const excluded = [];
   const exclusionCounts = {};
@@ -355,13 +356,16 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
       buyerReadiness: row.buyer_readiness || row.buyerReadiness || 'unknown',
       emailReason,
     });
-    const duplicate = eligibility.eligible && (seenCompanies.has(candidate.companyId) || seenEmails.has(candidate.email));
+    const companyNameKey = require('../utils/companyIdentityName').companyIdentityNameKey(candidate.company);
+    const duplicate = eligibility.eligible && (seenCompanies.has(candidate.companyId) || seenEmails.has(candidate.email)
+      || (companyNameKey && seenCompanyNames.has(companyNameKey)));
     const blocked = duplicate ? 'duplicate_company_or_email' : (eligibility.eligible ? null : eligibility.reason);
     if (blocked) {
       excluded.push({ prospectId: candidate.prospectId, reason: blocked });
       bump(blocked);
     } else {
       seenCompanies.add(candidate.companyId); seenEmails.add(candidate.email);
+      if (companyNameKey) seenCompanyNames.add(companyNameKey);
       clean.push({ ...candidate, buyerReadiness: eligibility.buyerReadiness });
     }
   }

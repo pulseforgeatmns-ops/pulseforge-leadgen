@@ -6,6 +6,7 @@
  */
 require('dotenv').config();
 const pool = require('../db');
+const { companyIdentityNameKey, COMPANY_IDENTITY_NAME_SQL } = require('../utils/companyIdentityName');
 const { normalizeDomain, runEnrichmentChain, resolveEmailVerification } = require('../leadgen');
 const { ensureEmailVerificationColumns } = require('../utils/emailVerificationSchema');
 const { ensureScoutUnenrichedTable } = require('../utils/scoutUnenrichedSchema');
@@ -61,16 +62,17 @@ async function findOrCreateCompanyForClient({ name, domain, websiteUrl, vertical
   }
   await ensureBusinessNameShortColumns(db);
   const canonicalDomain = require('../utils/marketCompanyResolve').normalizeDomain(domain || websiteUrl);
-  for (const key of [`domain:${canonicalDomain}`, `name:${String(name).trim().toLowerCase()}`].sort()) {
+  for (const key of [`domain:${canonicalDomain}`, `name:${companyIdentityNameKey(name)}`].sort()) {
     await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`scout-company:${clientId}:${key}`]);
   }
   const shortName = deriveBusinessNameShort(name);
   const existing = await db.query(
     `SELECT id, domain, website FROM companies
      WHERE client_id = $2 AND (LOWER(TRIM(name)) = LOWER(TRIM($1))
+       OR ${COMPANY_IDENTITY_NAME_SQL} = $4
        OR LOWER(regexp_replace(regexp_replace(COALESCE(NULLIF(domain, ''), website, ''), '^https?://(www\\.)?|^www\\.', '', 'i'), '[/?:#].*$', '')) = $3)
      ORDER BY id`,
-    [name, clientId, canonicalDomain]
+    [name, clientId, canonicalDomain, companyIdentityNameKey(name)]
   );
   if (existing.rows.length > 1) throw new Error('ambiguous_canonical_company');
   if (existing.rows.length) {
@@ -141,8 +143,8 @@ async function promoteRecord(record, {
   verify = resolveEmailVerification,
   loadClientConfig = getClientConfig,
 } = {}) {
-  const domain = record.domain || normalizeDomain(record.website_url);
-  if (!domain) throw new Error('Record has no domain or website_url');
+  const domain = require('../utils/canonicalEmailEligibility').resolveOfficialEnrichmentDomain(record);
+  if (!domain) return { promoted: false, recovered: false, emailResolved: false, emailVerified: false, reason: 'official_company_domain_required' };
 
   const clientConfig = await loadClientConfig(record.client_id);
   if (!clientConfig) throw new Error(`Active client not found: ${record.client_id}`);
