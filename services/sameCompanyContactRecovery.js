@@ -402,6 +402,7 @@ async function admitAlternateProspect(pool, {
   websiteUrl,
   existingProspectId = null,
   enrichmentProvenance,
+  admittedVertical = null,
 }) {
   if (existingProspectId) {
     const updated = await pool.query(`
@@ -414,7 +415,8 @@ async function admitAlternateProspect(pool, {
           verifier_response = $7::jsonb,
           verifier_checked_at = $8,
           notes = COALESCE(notes, '') || $9,
-          enrichment_provenance = $10::jsonb
+          enrichment_provenance = $10::jsonb,
+          vertical = COALESCE($13, vertical)
       WHERE id = $1 AND client_id = 10 AND company_id = $11
         AND lower(email) = lower($12) AND COALESCE(do_not_contact,false)=false
     `, [
@@ -430,6 +432,7 @@ async function admitAlternateProspect(pool, {
       JSON.stringify(enrichmentProvenance),
       companyId,
       email,
+      admittedVertical,
     ]);
     return updated.rowCount === 1 ? existingProspectId : null;
   }
@@ -595,6 +598,7 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
         source_url: alternate.sourceUrl || null, verifier: verification.emailVerificationMethod,
         status: verification.emailStatus, resolved_at: new Date().toISOString(),
       });
+    if (scoutContext.businessEvidence) enrichmentProvenance.business = scoutContext.businessEvidence;
     const contactReason = governedContactReason({ email: alternate.email, domain,
       email_verified: true, email_status: verification.emailStatus, do_not_contact: verification.doNotContact,
       enrichment_provenance: enrichmentProvenance });
@@ -647,6 +651,7 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
       contact: alternate.contact,
       verification,
       vertical: company.vertical || rows[0]?.vertical || scoutContext.scope?.segment,
+      admittedVertical: scoutContext.admittedVertical || null,
       serviceAreaMatch: rows[0]?.service_area_match ?? true,
       discoveryMethod: 'same_company_alternate_recovery',
       websiteUrl: website,

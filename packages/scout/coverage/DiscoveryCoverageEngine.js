@@ -105,7 +105,10 @@ function scopedSearchDefinition(searchDefinition, workload, marketDefinition = n
     null;
   // A property-management workload must reach the corresponding provider
   // strategy, rather than repeating the STR queries for every concept.
-  const canonicalSegment = /property manag/i.test(workload.concept) && !/vacation/i.test(workload.concept)
+  const canonicalSegment = /real estate|realtor/i.test(workload.concept) ? 'real_estate'
+    : /commercial office|office park|business center/i.test(workload.concept) ? 'commercial_office'
+    : /vacation|airbnb|\bstr\b|hospitality operator/i.test(workload.concept) ? 'short_term_rental'
+    : /property manag/i.test(workload.concept) && !/vacation/i.test(workload.concept)
     ? 'property_management' :
     (Array.isArray(searchDefinition.segments) && searchDefinition.segments[0]) ||
     asText(workload.concept).replace(/\s+/g, '_').toLowerCase();
