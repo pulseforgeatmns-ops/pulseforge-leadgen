@@ -500,9 +500,9 @@ async function persistDiscoveredCompanies(pool, store, {
         if (recent) { counters.recoveryBackoff = (counters.recoveryBackoff || 0) + 1; continue; }
       }
       const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
-        company,
+        company: { ...company, vertical: admission.vertical },
         ownership,
-        scoutContext,
+        scoutContext: { ...scoutContext, admittedVertical: admission.vertical, businessEvidence },
         sources: scoutContext.recoverySources,
       });
       mergeAlternateTelemetry(counters, recovery.telemetry || {});
