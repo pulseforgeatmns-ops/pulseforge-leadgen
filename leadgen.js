@@ -732,16 +732,19 @@ async function enrichWithHunter(domain) {
   }
   try {
     const res = await axios.get('https://api.hunter.io/v2/domain-search', {
-      params: { domain, api_key: HUNTER_KEY, limit: 5, type: 'personal' }
+      params: { domain, api_key: HUNTER_KEY, limit: 10 }, timeout: 8000
     });
     const emails = res.data?.data?.emails || [];
     if (!emails.length) return null;
     const tf = (CONFIG.jobTitle || '').toLowerCase();
-    const match = emails.find(e => e.position?.toLowerCase().includes(tf)) || emails[0];
+    const match = emails.find(e => e.value && e.position?.toLowerCase().includes(tf))
+      || emails.find(e => e.value && e.type === 'personal') || emails.find(e => e.value);
+    if (!match) return null;
     return {
       contact: (match.first_name || '') + ' ' + (match.last_name || ''),
       email: match.value || null,
-      title: match.position || null
+      title: match.position || null,
+      sourceUrl: match.sources?.[0]?.uri || null
     };
   } catch (err) {
     return null;
@@ -784,7 +787,7 @@ async function scrapeWebsiteEmail(domain) {
         ok: res.status >= 200 && res.status < 400,
         status: res.status,
         text: res.data,
-        url: res.request?.res?.responseUrl || url,
+        url: res.request?.res?.responseURL || url,
       };
     } catch (err) {
       throw err;

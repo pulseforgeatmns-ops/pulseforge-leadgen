@@ -43,6 +43,7 @@ test('official website supplies business fit with source evidence; foreign redir
  assert.equal(result.admission.vertical,'property_manager');
  assert.match(result.evidence.quote,/property management/);
  assert.equal(result.evidence.source_url,'https://bluedoor.example/');
+ assert.equal(await acquireBusinessEvidence(candidate,context,{fetchPage:async url=>({ok:true,url,text:'<html><body><h1>Insurance for property management</h1>We provide insurance to property management companies.</body></html>'})}),null);
  assert.equal(await acquireBusinessEvidence(candidate,context,{fetchPage:async()=>({ok:true,text:html,url:'https://unrelated.example/'})}),null);
 });
 test('website crawler falls back to www without fetching successful paths twice',async()=>{
@@ -50,4 +51,12 @@ test('website crawler falls back to www without fetching successful paths twice'
  const result=await crawlWebsite('example.com',async url=>({ok:url.includes('www.'),text:'<html><body>Contact team@example.com</body></html>',url}),{maxSuccessfulPages:1,maxRequests:4});
  assert.equal(result.pages[0].url,'https://www.example.com/');
  assert.equal(result.fetchCounts.size,2);
+});
+test('Hunter resolves observed role addresses when personal contacts are unavailable',async()=>{
+ const axios=require('axios'); const original=axios.get; const key=process.env.HUNTER_API_KEY;
+ process.env.HUNTER_API_KEY='test-key';
+ axios.get=async(url,opts)=>{assert.equal(opts.params.type,undefined);return {data:{data:{emails:[{value:'info@business.example',type:'generic',sources:[{uri:'https://business.example/contact'}]}]}}};};
+ try {const contact=await require('../leadgen').enrichWithHunter('business.example');
+ assert.equal(contact.email,'info@business.example');assert.equal(contact.sourceUrl,'https://business.example/contact');
+ } finally {axios.get=original;if(key===undefined)delete process.env.HUNTER_API_KEY;else process.env.HUNTER_API_KEY=key;}
 });

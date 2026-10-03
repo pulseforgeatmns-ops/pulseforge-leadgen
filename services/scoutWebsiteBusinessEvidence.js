@@ -24,13 +24,18 @@ async function acquireBusinessEvidence(candidate, context, { fetchPage } = {}) {
     const text = String(page.text).replace(/<(script|style|nav|footer)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ')
       .replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ').replace(/&amp;/gi, '&')
       .replace(/\s+/g, ' ').trim().slice(0, 20000);
-    const observed = { ...candidate, description: text };
+    const heading = [...String(page.text).matchAll(/<(?:title|h[12])\b[^>]*>([\s\S]*?)<\/(?:title|h[12])>/gi)]
+      .map(match => match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+      .find(value => /^(?:(?:residential|commercial|professional|full.service|vacation|rental)\s+)*(?:property management|vacation rental management|short.term rental management)\b/i.test(value));
+    const declaration = text.match(/\b(?:we (?:provide|offer|specialize in)|(?:is|are) (?:an? |the )?(?:full.service |professional )?)(?:residential |commercial |and |\s)*(?:property management|vacation rental management|short.term rental management)\b[^.!?]{0,200}/i);
+    const statement = heading || declaration?.[0];
+    if (!statement) continue;
+    const observed = { ...candidate, description: statement };
     const admission = evaluateReplenishmentAdmission(observed, context);
     if (!admission.admitted) continue;
-    const match = text.match(/.{0,100}(?:property manag\w*|vacation rental|short.term rental|commercial office|office park).{0,200}/i);
-    if (!match) continue;
+
     return { candidate: observed, admission, evidence: { source: 'company_website', source_url: page.url,
-      observed_at: new Date().toISOString(), quote: match[0], vertical: admission.vertical } };
+      observed_at: new Date().toISOString(), quote: statement.slice(0, 400), vertical: admission.vertical } };
   }
   return null;
 }
