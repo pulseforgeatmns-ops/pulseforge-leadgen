@@ -122,6 +122,49 @@ describe('Studio Substral Blueprint section mapping (v1.1 regeneration)', () => 
     assert.doesNotMatch(sections.successMetrics.summary, /real operating business/i);
   });
 
+  it('fills all core sections when only Blueprint camelCase keys are populated', () => {
+    const raw = {
+      businessName: 'Studio Substral',
+      businessDescription:
+        'Premium website redesign studio for owner-led local brands in southern New Hampshire',
+      services: ['website redesign', 'messaging', 'copywriting'],
+      idealCustomers: [
+        'owner-led businesses where a better website affects trust, lead flow, and sales',
+      ],
+      avoidCustomers: ['cheap landing page / quick cosmetic tweak exclusion'],
+      targetMarkets: ['Greater Manchester', 'southern New Hampshire'],
+      competitiveAdvantages: 'clarity, speed, and a credible design process',
+      brandVoice: 'clear, confident, and practical',
+      campaignGoals: 'Acquire one profitable website redesign client at $2,000+',
+      successMetrics: ['qualified prospects identified', 'discovery calls booked'],
+      epistemic_states: {
+        businessDescription: EPISTEMIC_STATES.KNOWN,
+        services: EPISTEMIC_STATES.KNOWN,
+        idealCustomers: EPISTEMIC_STATES.KNOWN,
+        avoidCustomers: EPISTEMIC_STATES.KNOWN,
+        targetMarkets: EPISTEMIC_STATES.KNOWN,
+        competitiveAdvantages: EPISTEMIC_STATES.KNOWN,
+        brandVoice: EPISTEMIC_STATES.KNOWN,
+        campaignGoals: EPISTEMIC_STATES.KNOWN,
+        successMetrics: EPISTEMIC_STATES.KNOWN,
+      },
+    };
+    const prepared = prepareNormalizedFactsForBrief(raw);
+    const sections = sectionsFromNormalizedFacts(prepared);
+    for (const key of [
+      'identity',
+      'services',
+      'idealCustomers',
+      'avoidCustomers',
+      'competitiveAdvantages',
+      'brandVoice',
+      'campaignGoals',
+      'successMetrics',
+    ]) {
+      assert.notEqual(String(sections[key].summary || '').trim(), '', key);
+    }
+  });
+
   it('aligns Executive Brief with the same prepared facts path', () => {
     const { prepared, sections } = blueprintSectionsFromCorruptedFacts();
     const brief = buildExecutiveSummary(sections, {
