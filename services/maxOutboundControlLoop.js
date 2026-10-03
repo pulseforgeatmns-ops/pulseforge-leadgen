@@ -239,6 +239,7 @@ function sourceScope(source) {
   return {
     segment: normalizeVertical(market.segment || payload.targetSegment || source?.target_segment || ''),
     industry: normalizeVertical(market.industry || ''),
+    eligibleSubsegments: Array.isArray(market.eligibleSubsegments) ? market.eligibleSubsegments.map(normalizeVertical).filter(Boolean) : [],
     region: geography.region || null,
     scope: geography.scope || null,
     cities: Array.isArray(geography.cities) ? geography.cities.map(x => String(x).toLowerCase()) : [],
@@ -253,6 +254,13 @@ function sourceScope(source) {
 }
 
 function segmentAliases(scope) {
+  if (scope.eligibleSubsegments?.length) {
+    const aliases = new Set();
+    for (const segment of scope.eligibleSubsegments) {
+      for (const alias of segmentAliases({ segment })) aliases.add(alias);
+    }
+    return aliases;
+  }
   const aliases = new Set([scope.segment, scope.industry].filter(Boolean));
   if (scope.segment === 'short_term_rental' || scope.segment === 'short_term_rental_operators') {
     ['short_term_rental', 'str_manager', 'property_manager', 'property_management', 'hospitality']
@@ -376,6 +384,7 @@ function scoutInput(program, source, plan, tenantContext = null) {
     });
   }
   const segment = firstPresent(scope.segment, scope.industry);
+  const segments = scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : (segment ? [segment] : []);
   const commercialCapability = firstPresent(scope.commercialCapability);
   const businessType = firstPresent(scope.businessType, scope.industry, segment);
   return {
@@ -391,14 +400,14 @@ function scoutInput(program, source, plan, tenantContext = null) {
     businessContext: {
       serviceGeography: region,
       commercialCapability,
-      preferredSegments: segment ? [segment] : [],
+      preferredSegments: segments,
       acquisitionDirection: source?.objective || payload.objective || null,
       exclusions: payload.constraints || [],
     },
     targetContext: {
       geography: region,
       geographyScope: scope.scope || null,
-      segments: segment ? [segment] : [],
+      segments,
       businessType,
       desiredSignals: ['decision_maker', 'service_gap', 'portfolio_growth', 'turnover_support'],
     },
@@ -427,6 +436,7 @@ async function persistDiscoveredCompanies(pool, store, {
   const scope = scoutContext.scope || {};
   const admissionContext = {
     missionSegment: scope.segment || (searchDefinition?.segments || [])[0] || null,
+    missionSegments: scope.eligibleSubsegments,
     missionCities: scope.cities,
     region: scope.region,
     allowedCities: scoutContext.allowedCities || scoutContext.serviceAreas || null,

@@ -11,5 +11,5 @@ test('Anchor unenriched retry worker runs only after 5 PM ET on weekdays', () =>
 
 test('Anchor retry worker is limited to the shared enrichable vertical contract', () => {
   assert.deepEqual(_test.ANCHOR_PRIORITY_VERTICALS, ENRICHABLE_SCOUT_VERTICALS);
-  assert.deepEqual(_test.ANCHOR_PRIORITY_VERTICALS, ['property_manager', 'str_manager', 'commercial_office']);
+  assert.deepEqual(_test.ANCHOR_PRIORITY_VERTICALS, ['property_manager', 'str_manager', 'commercial_office', 'realtor']);
 });
