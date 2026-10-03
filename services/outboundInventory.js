@@ -152,6 +152,7 @@ function buildReplenishmentYield({
   const evaluated = Number(admission.evaluated || 0);
   const fit = Number(admission.fit || 0);
   const admittedToEnrichment = Number(admission.admittedToEnrichment || 0);
+  const enrichmentConsidered = enrichment.considered == null ? null : Number(enrichment.considered);
   const emailResolved = Number(enrichment.emailResolved || 0);
   const emailVerified = Number(enrichment.emailVerified || 0);
   const newPromotions = Number(enrichment.promoted || 0);
@@ -176,6 +177,7 @@ function buildReplenishmentYield({
     evaluated,
     fit,
     admittedToEnrichment,
+    enrichmentConsidered,
     emailResolved,
     emailVerified,
     newPromotions,
@@ -191,7 +193,7 @@ function buildReplenishmentYield({
     rates: {
       fitRate: rate(fit, evaluated),
       enrichmentAdmissionRate: rate(admittedToEnrichment, fit),
-      contactResolutionRate: rate(emailResolved, admittedToEnrichment),
+      contactResolutionRate: enrichmentConsidered == null ? null : rate(emailResolved, enrichmentConsidered),
       verificationRate: rate(emailVerified, emailResolved),
       cleanInventoryYield: rate(newCleanInventoryAdded, evaluated),
       netCleanInventoryYield: rate(Math.max(0, netCleanInventoryDelta), evaluated),
