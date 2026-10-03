@@ -114,7 +114,7 @@ function installDeterministicMiraContextMock() {
   };
 }
 
-function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false } = {}) {
+function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false, anthropicFactory = null } = {}) {
   process.env.ACTIVE_CLIENT_ID = '10';
   const writes = [];
   let generationCalls = 0;
@@ -176,7 +176,7 @@ function buildPaigeHarness({ draftSequence = [], simulateMiraUnavailable = false
     id: anthropicPath,
     filename: anthropicPath,
     loaded: true,
-    exports: FakeAnthropic,
+    exports: anthropicFactory || FakeAnthropic,
   };
 
   delete require.cache[require.resolve('../paigeAgent')];
@@ -282,10 +282,58 @@ describe('Paige Anchor social doctrine reconciliation', () => {
       restoreTestIsolation(isolationSnapshot);
     });
 
-    test('em dash draft is regenerated before returning content', async () => {
+    test('deterministic normalization repairs em dash and missing Mira without extra retries', async () => {
       const { paige, getGenerationCalls } = buildPaigeHarness({
         draftSequence: [
-          'Ten sends over the past 24 hours — Manchester offices need a written scope before recurring service starts.',
+          'Office managers deserve a facility assessment — not vague vendor promises.',
+        ],
+      });
+
+      const result = await paige.generateSocialContent({ client_id: 10, dryRun: true, channel: 'facebook_page' });
+      assert.equal(result.success, true);
+      assert.equal(getGenerationCalls(), 1);
+      assertCompliantAnchorFacebookDraft(result.outputs[0].content, paige._test);
+    });
+
+    test('regeneration prompt includes prior validator failures when rewrite is required', async () => {
+      const prompts = [];
+      const { paige } = buildPaigeHarness({
+        draftSequence: [
+          'Would you be open to a quick call — about office cleaning scope?',
+          COMPLIANT_BODY,
+        ],
+        anthropicFactory: class PromptCapturingAnthropic {
+          constructor() {
+            this.messages = {
+              create: async (request) => {
+                const prompt = request.messages?.[0]?.content || '';
+                if (/Score this social media post/i.test(prompt)) {
+                  return writerTextBlock(JSON.stringify(PASSING_SCORE));
+                }
+                prompts.push(prompt);
+                const body = prompts.length === 1
+                  ? 'Would you be open to a quick call — about office cleaning scope?'
+                  : COMPLIANT_BODY;
+                return writerTextBlock(body);
+              },
+            };
+          }
+        },
+      });
+
+      const result = await paige.generateSocialContent({ client_id: 10, dryRun: true, channel: 'facebook_page' });
+      assert.equal(result.success, true);
+      assert.ok(prompts.length >= 2);
+      assert.match(prompts[1], /em dash or en dash/i);
+      assert.match(prompts[1], /concrete client-scoped Mira detail|client-scoped Mira block/i);
+      assert.match(prompts[1], /open_to_call|quick call/i);
+      assertCompliantAnchorFacebookDraft(result.outputs[0].content, paige._test);
+    });
+
+    test('em dash draft is repaired or regenerated before returning content', async () => {
+      const { paige, getGenerationCalls } = buildPaigeHarness({
+        draftSequence: [
+          'Ten sends over the past 24 hours — Manchester offices need a facility assessment before recurring service starts.',
           COMPLIANT_BODY,
         ],
       });
@@ -293,7 +341,7 @@ describe('Paige Anchor social doctrine reconciliation', () => {
       const result = await paige.generateSocialContent({ client_id: 10, dryRun: true, channel: 'facebook_page' });
       assert.equal(result.success, true);
       assert.equal(result.outputs.length, 1);
-      assert.ok(getGenerationCalls() >= 2);
+      assert.ok(getGenerationCalls() >= 1);
       assertCompliantAnchorFacebookDraft(result.outputs[0].content, paige._test);
     });
 
