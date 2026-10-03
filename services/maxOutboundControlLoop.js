@@ -239,6 +239,7 @@ function sourceScope(source) {
   return {
     segment: normalizeVertical(market.segment || payload.targetSegment || source?.target_segment || ''),
     industry: normalizeVertical(market.industry || ''),
+    eligibleSubsegments: Array.isArray(market.eligibleSubsegments) ? market.eligibleSubsegments.map(normalizeVertical).filter(Boolean) : [],
     region: geography.region || null,
     scope: geography.scope || null,
     cities: Array.isArray(geography.cities) ? geography.cities.map(x => String(x).toLowerCase()) : [],
@@ -253,6 +254,13 @@ function sourceScope(source) {
 }
 
 function segmentAliases(scope) {
+  if (scope.eligibleSubsegments?.length) {
+    const aliases = new Set();
+    for (const segment of scope.eligibleSubsegments) {
+      for (const alias of segmentAliases({ segment })) aliases.add(alias);
+    }
+    return aliases;
+  }
   const aliases = new Set([scope.segment, scope.industry].filter(Boolean));
   if (scope.segment === 'short_term_rental' || scope.segment === 'short_term_rental_operators') {
     ['short_term_rental', 'str_manager', 'property_manager', 'property_management', 'hospitality']
@@ -311,6 +319,7 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
   const qualifiedKnowledge = new Set(knowledge.filter(r => !r.qualificationReason).map(r => String(r.id)));
   const clean = [];
   const seenCompanies = new Set();
+  const seenCompanyNames = new Set();
   const seenEmails = new Set();
   const excluded = [];
   const exclusionCounts = {};
@@ -347,13 +356,16 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
       buyerReadiness: row.buyer_readiness || row.buyerReadiness || 'unknown',
       emailReason,
     });
-    const duplicate = eligibility.eligible && (seenCompanies.has(candidate.companyId) || seenEmails.has(candidate.email));
+    const companyNameKey = require('../utils/companyIdentityName').companyIdentityNameKey(candidate.company);
+    const duplicate = eligibility.eligible && (seenCompanies.has(candidate.companyId) || seenEmails.has(candidate.email)
+      || (companyNameKey && seenCompanyNames.has(companyNameKey)));
     const blocked = duplicate ? 'duplicate_company_or_email' : (eligibility.eligible ? null : eligibility.reason);
     if (blocked) {
       excluded.push({ prospectId: candidate.prospectId, reason: blocked });
       bump(blocked);
     } else {
       seenCompanies.add(candidate.companyId); seenEmails.add(candidate.email);
+      if (companyNameKey) seenCompanyNames.add(companyNameKey);
       clean.push({ ...candidate, buyerReadiness: eligibility.buyerReadiness });
     }
   }
@@ -376,6 +388,7 @@ function scoutInput(program, source, plan, tenantContext = null) {
     });
   }
   const segment = firstPresent(scope.segment, scope.industry);
+  const segments = scope.eligibleSubsegments?.length ? scope.eligibleSubsegments : (segment ? [segment] : []);
   const commercialCapability = firstPresent(scope.commercialCapability);
   const businessType = firstPresent(scope.businessType, scope.industry, segment);
   return {
@@ -391,14 +404,14 @@ function scoutInput(program, source, plan, tenantContext = null) {
     businessContext: {
       serviceGeography: region,
       commercialCapability,
-      preferredSegments: segment ? [segment] : [],
+      preferredSegments: segments,
       acquisitionDirection: source?.objective || payload.objective || null,
       exclusions: payload.constraints || [],
     },
     targetContext: {
       geography: region,
       geographyScope: scope.scope || null,
-      segments: segment ? [segment] : [],
+      segments,
       businessType,
       desiredSignals: ['decision_maker', 'service_gap', 'portfolio_growth', 'turnover_support'],
     },
@@ -427,6 +440,7 @@ async function persistDiscoveredCompanies(pool, store, {
   const scope = scoutContext.scope || {};
   const admissionContext = {
     missionSegment: scope.segment || (searchDefinition?.segments || [])[0] || null,
+    missionSegments: scope.eligibleSubsegments,
     missionCities: scope.cities,
     region: scope.region,
     allowedCities: scoutContext.allowedCities || scoutContext.serviceAreas || null,
@@ -490,9 +504,9 @@ async function persistDiscoveredCompanies(pool, store, {
         if (recent) { counters.recoveryBackoff = (counters.recoveryBackoff || 0) + 1; continue; }
       }
       const recovery = await attemptSameCompanyAlternateRecovery(store, pool, {
-        company,
+        company: { ...company, vertical: admission.vertical },
         ownership,
-        scoutContext,
+        scoutContext: { ...scoutContext, admittedVertical: admission.vertical, businessEvidence },
         sources: scoutContext.recoverySources,
       });
       mergeAlternateTelemetry(counters, recovery.telemetry || {});
@@ -710,6 +724,7 @@ async function defaultScoutRamp({
     recoveredExisting,
     enrichmentPromoted: first.promoted,
     enrichmentRecovered: first.recovered,
+    enrichmentConsidered: first.considered,
     enrichmentUnresolved: first.summaries.reduce((sum, row) => sum + Number(row?.unresolved || 0), 0),
     emailResolved: first.emailResolved,
     emailVerified: first.emailVerified,
@@ -906,6 +921,7 @@ async function runMaxOutboundControlLoop(options = {}) {
     scout.yield = buildReplenishmentYield({
       admission: scout.admission || {},
       enrichment: {
+        considered: scout.enrichmentConsidered,
         promoted: Number(scout.enrichmentPromoted ?? scout.promoted ?? 0),
         recovered: Number(scout.enrichmentRecovered ?? 0),
         emailResolved: Number(scout.emailResolved || 0),

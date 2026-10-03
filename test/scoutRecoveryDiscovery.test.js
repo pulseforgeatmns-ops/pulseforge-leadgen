@@ -60,3 +60,27 @@ test('Hunter resolves observed role addresses when personal contacts are unavail
  assert.equal(contact.email,'info@business.example');assert.equal(contact.sourceUrl,'https://business.example/contact');
  } finally {axios.get=original;if(key===undefined)delete process.env.HUNTER_API_KEY;else process.env.HUNTER_API_KEY=key;}
 });
+test('explicit approved subsegments admit real estate offices without widening legacy STR scope',()=>{
+ const { sourceScope, _test: { scoutInput } }=require('../services/maxOutboundControlLoop');
+ const candidate={name:'Granite Realty',website:'https://granite.example',location:'Manchester, NH',placeTypes:['real_estate_agency']};
+ const legacy={missionSegment:'short_term_rental',allowedCities:['Manchester']};
+ assert.equal(evaluateReplenishmentAdmission(candidate,legacy).reason,'segment_mismatch');
+ const approved={...legacy,missionSegments:['property_manager','realtor','commercial_office']};
+ assert.equal(evaluateReplenishmentAdmission(candidate,approved).vertical,'realtor');
+ assert.equal(evaluateReplenishmentAdmission({...candidate,location:'Concord, NH'},approved).reason,'outside_geography');
+ assert.equal(evaluateReplenishmentAdmission({...candidate,placeTypes:[],businessType:'restaurant'},approved).admitted,false);
+ const mission={tenantId:'10',structuredMission:{market:{segment:'commercial_cleaning_buyers',eligibleSubsegments:['property_manager','realtor','commercial_office']},geography:{region:'Greater Manchester',cities:['Manchester']}}};
+ assert.deepEqual(sourceScope({mission}).eligibleSubsegments,approved.missionSegments);
+ assert.equal(require('../services/maxOutboundControlLoop').missionCandidateReason({vertical:'realtor',service_area_match:'Manchester',company_location:'Manchester, NH'},sourceScope({mission})),null);
+ const input=scoutInput({tenant_id:'10'},{mission},{deficit:5},{tenantId:'10'});
+ assert.deepEqual(input.targetContext.segments,approved.missionSegments);
+});
+
+test('shared profile domains cannot acquire or promote platform employees', async () => {
+ const { promoteRecord } = require('../scripts/promoteUnenriched');
+ const result = await promoteRecord({ client_id: 10, company: 'Steve Petz - Realtor', domain: 'hoo.be', website_url: 'https://hoo.be/steve' }, {
+   enrich: async () => { throw Error('must not query platform contacts'); },
+   loadClientConfig: async () => { throw Error('must stop before acquisition'); },
+ });
+ assert.equal(result.reason, 'official_company_domain_required');
+});

@@ -78,11 +78,14 @@ test('fresh provider evidence repairs the existing email without duplicating its
       assert.equal(args[0], 12);
       assert.equal(String(args[10]), '3');
       assert.equal(JSON.parse(args[9]).email.source, 'prospeo');
+      assert.equal(args[12], 'property_manager');
+      assert.equal(JSON.parse(args[9]).business.source_url, 'https://pm.example/about');
     }
     return original(sql, args);
   };
   const result = await attemptSameCompanyAlternateRecovery({ ...clearStore, pool }, pool, {
     company: { name:'Granite PM', domain:'pm.example', website:'https://pm.example' },
+    scoutContext: { admittedVertical: 'property_manager', businessEvidence: { source_url: 'https://pm.example/about', quote: 'We provide property management.' } },
     enrich: async () => [{ email:'owner@pm.example', source:['prospeo'] }], verify:verified,
   });
   assert.equal(result.ok, true);

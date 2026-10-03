@@ -77,6 +77,7 @@ async function run(params = {}) {
     failed: 0,
     emailResolved: 0,
     emailVerified: 0,
+    outcomes: [],
     limit,
     retry_hours: retryHours,
     verticals,
@@ -84,6 +85,9 @@ async function run(params = {}) {
   for (const record of rows.rows) {
     try {
       const result = await promote(record, { db });
+      summary.outcomes.push({ company: record.company, domain: record.domain,
+        emailResolved: result?.emailResolved === true, emailVerified: result?.emailVerified === true,
+        promoted: result?.promoted === true, recovered: result?.recovered === true, reason: result?.reason || null });
       const promoted = result === true || result?.promoted === true;
       const recovered = result?.recovered === true;
       if (result?.emailResolved) summary.emailResolved++;

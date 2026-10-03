@@ -2695,34 +2695,10 @@ function sanitizeBriefServiceList(services) {
   );
 }
 
-const BLUEPRINT_FACT_KEY_ALIASES = Object.freeze({
-  idealCustomers: 'ideal_customers',
-  avoidCustomers: 'disqualified_customers',
-  disqualifiedCustomers: 'disqualified_customers',
-  targetMarkets: 'geography',
-  target_markets: 'geography',
-});
+const { adaptNormalizedFactsKeys } = require('../lib/blueprintNormalizedFactsAdapter');
 
 function normalizePersistedFactKeys(facts) {
-  const next = cloneNormalizedFacts(facts);
-  const raw = facts || {};
-  for (const [alias, target] of Object.entries(BLUEPRINT_FACT_KEY_ALIASES)) {
-    if (!Object.prototype.hasOwnProperty.call(raw, alias)) continue;
-    const value = raw[alias];
-    if (value == null || value === '') continue;
-    if (target === 'geography') {
-      const items = Array.isArray(value) ? value : [value];
-      next.geography = uniquePush(next.geography, items);
-      continue;
-    }
-    if (Array.isArray(next[target])) {
-      const items = Array.isArray(value) ? value : [value];
-      next[target] = uniquePush(next[target], items);
-    } else if (next[target] == null || next[target] === '') {
-      next[target] = value;
-    }
-  }
-  return next;
+  return adaptNormalizedFactsKeys(facts, cloneNormalizedFacts(facts));
 }
 
 function looksLikeCustomerExclusionPhrase(text) {
@@ -2837,11 +2813,15 @@ function scrubIdentityInterviewArtifacts(facts) {
 function reconcileEpistemicStatesFromValues(facts) {
   const next = cloneNormalizedFacts(facts);
   const slots = [
+    ['business_name', 'business_name'],
     ['business_description', 'business_description'],
     ['services', 'services'],
     ['ideal_customers', 'ideal_customers'],
     ['disqualified_customers', 'disqualified_customers'],
     ['geography', 'geography'],
+    ['differentiation', 'differentiation'],
+    ['brand_voice', 'brand_voice'],
+    ['ninety_day_outcomes', 'ninety_day_outcomes'],
     ['success_metrics', 'success_metrics'],
   ];
   for (const [field, epKey] of slots) {
