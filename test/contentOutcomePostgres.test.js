@@ -24,9 +24,12 @@ const root = path.join(__dirname, '..');
   let createPostgresStore;
 
   let originalDualWrite;
+  let previousDualWriteFlag;
   const dualWritePath = require.resolve('../utils/knowledgeDualWrite');
   before(async () => {
     // Keep fire-and-forget knowledge projection out of this disposable store test.
+    previousDualWriteFlag = process.env.KNOWLEDGE_DUAL_WRITE;
+    process.env.KNOWLEDGE_DUAL_WRITE = '0';
     originalDualWrite = require.cache[dualWritePath];
     require.cache[dualWritePath] = { id: dualWritePath, filename: dualWritePath, loaded: true, exports: { safeWriteOperational() {}, OPERATIONAL_EVENTS: {} } };
     const { startDisposablePostgres } = require('./helpers/disposablePostgres');
@@ -57,6 +60,8 @@ const root = path.join(__dirname, '..');
 
   after(async () => {
     if (originalDualWrite) require.cache[dualWritePath] = originalDualWrite; else delete require.cache[dualWritePath];
+    if (previousDualWriteFlag === undefined) delete process.env.KNOWLEDGE_DUAL_WRITE;
+    else process.env.KNOWLEDGE_DUAL_WRITE = previousDualWriteFlag;
     if (pool) await pool.end();
     if (stop) await stop();
   });

@@ -134,6 +134,74 @@ test('grounding guard rejects invented durations and clock times', () => {
   assert.ok(_test.validateGroundedTimeClaims('Mira: sends are quiet.', context, 'anchor').length);
 });
 
+test('sanitizeForbiddenBodyDashes removes em and en dash from governed body copy', () => {
+  assert.equal(_test.sanitizeForbiddenBodyDashes('Line one — line two – line three.', 'facebook_page'), 'Line one, line two, line three.');
+  assert.equal(
+    _test.sanitizeForbiddenBodyDashes('# Title — ok\n\nBody — with dash.', 'blog'),
+    '# Title — ok\n\nBody, with dash.'
+  );
+});
+
+test('listConcreteMiraFactHints reflects dynamically supplied safe context', () => {
+  const hintsA = _test.listConcreteMiraFactHints({
+    available: true,
+    client: { id: 10, name: 'Anchor Cleaning', city: 'Manchester', state: 'NH' },
+    metrics: { sends_24h: 42, replies_24h: 0 },
+    recent_activity_summaries: [],
+    client_health: {},
+  });
+  assert.ok(hintsA.some((hint) => /42 sends over the past 24 hours in Manchester, NH/i.test(hint)));
+
+  const hintsB = _test.listConcreteMiraFactHints({
+    available: true,
+    client: { id: 10, name: 'Anchor Cleaning', city: 'Manchester', state: 'NH' },
+    metrics: { opens_24h: 5 },
+    recent_activity_summaries: ['Mira logged 5 opens over the past 24 hours in Manchester, NH'],
+    client_health: { deliverability_status: 'healthy' },
+  });
+  assert.ok(hintsB.some((hint) => /5 opens over the past 24 hours/i.test(hint)));
+  assert.ok(hintsB.some((hint) => /deliverability status is healthy/i.test(hint)));
+});
+
+test('normalizeGovernedSocialDraft applies Mira clause from supplied context without hard-coded metrics', () => {
+  const context = {
+    available: true,
+    client: { name: 'Anchor Cleaning', city: 'Manchester', state: 'NH' },
+    metrics: { warm_signals_24h: 9 },
+    recent_activity_summaries: ['Mira logged 9 warm signals over the past 24 hours in Manchester, NH'],
+    client_health: {},
+  };
+  const normalized = _test.normalizeGovernedSocialDraft(
+    'A facility assessment gives office managers a written scope before recurring service starts.',
+    'facebook_page',
+    context
+  );
+  assert.ok(_test.usesMiraGrounding(normalized, context));
+  assert.doesNotMatch(normalized, /[—–]/);
+});
+
+test('buildGovernedSocialRegenInstructions repeats validator failures for the next rewrite', () => {
+  const context = {
+    available: true,
+    client: { name: 'Anchor Cleaning', city: 'Manchester', state: 'NH' },
+    metrics: { sends_24h: 7, replies_24h: 1 },
+    recent_activity_summaries: [],
+    client_health: {},
+  };
+  const block = _test.buildGovernedSocialRegenInstructions(
+    [
+      'contains an em dash or en dash in body copy',
+      'does not use a concrete client-scoped Mira detail in the public copy',
+    ],
+    [{ patternId: 'em_dash', match: '—' }],
+    context,
+    'facebook_page'
+  );
+  assert.match(block, /em dash or en dash/i);
+  assert.match(block, /concrete client-scoped Mira detail/i);
+  assert.match(block, /7 sends over the past 24 hours/i);
+});
+
 test('public copy must visibly use a client-scoped Mira detail', () => {
   const context = {
     client: { name: 'Anchor Cleaning', city: 'Manchester', state: 'NH' },
