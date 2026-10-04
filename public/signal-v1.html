@@ -8,9 +8,11 @@
     :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --text:#e8eaed; --muted:#9aa0a6; --accent:#7cb9ff; --risk:#ff8a80; --pass:#81c995; --fail:#ff8a80; }
     body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--text); }
     header { padding:16px 20px; border-bottom:1px solid #2a2f3a; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-    main { display:grid; grid-template-columns: 320px 1fr; gap:16px; padding:16px; }
-    .panel { background:var(--panel); border:1px solid #2a2f3a; border-radius:10px; padding:12px; margin-bottom:12px; }
+    main { display:grid; grid-template-columns: 300px 1fr 1fr; gap:16px; padding:16px; }
+    @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+    .panel { background:var(--panel); border:1px solid #2a2f3a; border-radius:10px; padding:12px; }
     h1,h2,h3 { margin:0 0 8px; font-size:16px; }
+    h3 { font-size:14px; }
     select, button { width:100%; padding:8px; border-radius:8px; border:1px solid #3a4254; background:#10131a; color:var(--text); }
     button { cursor:pointer; margin-top:8px; }
     button.secondary { opacity: 0.85; }
@@ -19,95 +21,98 @@
     .risk { color:var(--risk); }
     .timeline-item { border-top:1px solid #2a2f3a; padding:8px 0; font-size:13px; }
     .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#243047; color:var(--accent); font-size:12px; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    th, td { border-bottom:1px solid #2a2f3a; padding:6px 4px; text-align:left; }
-    td.num { text-align:right; font-variant-numeric: tabular-nums; }
-    .outcome-PASS { color: var(--pass); }
-    .outcome-FAIL { color: var(--fail); }
-    @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid #2a2f3a; padding:6px 4px; text-align:right; }
+    th:first-child, td:first-child { text-align:left; }
+    .obs-row { border-left:3px solid var(--accent); padding-left:8px; margin:8px 0; }
   </style>
 </head>
 <body>
   <header>
     <h1>Signal V1</h1>
-    <span class="muted">Paper-only · ground-truth replay</span>
+    <span class="muted">Paper-only · research layers (SIGNAL-V1-003)</span>
   </header>
   <main>
-    <section>
-      <div class="panel">
-        <h2>Token</h2>
-        <select id="tokenSelect"></select>
-        <button id="ingestBtn" class="secondary">Ingest market history</button>
-        <button id="replayBtn">Run replay</button>
-        <button id="evaluateBtn" class="secondary">Evaluate now</button>
-        <div id="tokenMeta" class="muted" style="margin-top:12px"></div>
-      </div>
-      <div class="panel">
-        <h2>Historical data</h2>
-        <div id="windowMeta" class="muted"></div>
-        <div id="marketMeta" class="muted">No ingestion yet</div>
-        <div id="replayStatusMeta" class="muted" style="margin-top:8px"></div>
-      </div>
+    <section class="panel">
+      <h2>Token</h2>
+      <select id="tokenSelect"></select>
+      <button id="evaluateBtn">Evaluate now</button>
+      <button id="replayBtn">Run fixture replay</button>
+      <div id="tokenMeta" class="muted" style="margin-top:12px"></div>
+      <h2 style="margin-top:16px">Cohort</h2>
+      <select id="cohortSelect"></select>
+      <label class="muted" for="delaySelect">Execution delay</label>
+      <select id="delaySelect">
+        <option value="15">15s</option>
+        <option value="30">30s</option>
+        <option value="60" selected>1 min</option>
+        <option value="180">3 min</option>
+        <option value="300">5 min</option>
+      </select>
+      <button id="cohortEvalBtn">Refresh cohort table</button>
     </section>
-    <section>
-      <div class="panel">
-        <h2>Why <span id="stateBadge" class="badge">—</span></h2>
-        <div>Score: <strong id="score">—</strong></div>
-        <h3>Positive evidence</h3>
-        <ul id="reasons"></ul>
-        <h3 class="risk">Risks</h3>
-        <ul id="risks" class="risk"></ul>
-      </div>
-      <div class="panel">
-        <h2>Execution-delay outcomes</h2>
-        <table>
+    <section class="panel">
+      <h2>Strategy <span id="stateBadge" class="badge">—</span></h2>
+      <div>Score: <strong id="score">—</strong></div>
+      <h3>Positive evidence</h3>
+      <ul id="reasons"></ul>
+      <h3 class="risk">Risks</h3>
+      <ul id="risks" class="risk"></ul>
+      <h2>Event timeline</h2>
+      <div id="timeline"></div>
+      <h2>Paper position</h2>
+      <pre id="paper" class="muted">None</pre>
+    </section>
+    <section class="panel">
+      <h2>Research observations</h2>
+      <div id="researchTimeline" class="muted">Run replay to materialize observations.</div>
+      <h2 style="margin-top:16px">Layer comparison</h2>
+      <div style="overflow-x:auto">
+        <table id="cohortTable">
           <thead>
             <tr>
-              <th>Delay</th>
-              <th class="num">Entry</th>
-              <th>Outcome</th>
-              <th class="num">MFE</th>
-              <th class="num">MAE</th>
-              <th class="num">Time to outcome</th>
+              <th>Observation layer</th><th>N</th><th>PASS</th><th>FAIL</th><th>Precision</th><th>Median MFE</th><th>Median MAE</th>
             </tr>
           </thead>
-          <tbody id="outcomeTable"></tbody>
+          <tbody></tbody>
         </table>
-      </div>
-      <div class="panel">
-        <h2>Replay timeline</h2>
-        <div id="replayTimeline"></div>
-      </div>
-      <div class="panel">
-        <h2>Social / on-chain events</h2>
-        <div id="timeline"></div>
       </div>
     </section>
   </main>
   <script>
     const tokenSelect = document.getElementById('tokenSelect');
+    const cohortSelect = document.getElementById('cohortSelect');
+    const delaySelect = document.getElementById('delaySelect');
     const casesWithAddress = [];
 
-    function fmtDelay(sec) {
-      if (sec < 60) return `${sec} sec`;
-      return `${sec / 60} min`;
+    const pricePathsByToken = {
+      '2fRDA5f353VXLs2PeLJNqqHqTMhrjJunAXmWWpLkpump': [
+        { occurredAt: '2026-09-29T18:00:00Z', price: 0.00012 },
+        { occurredAt: '2026-09-29T18:10:00Z', price: 0.00016 },
+        { occurredAt: '2026-09-29T18:30:00Z', price: 0.00024 },
+        { occurredAt: '2026-09-29T19:00:00Z', price: 0.0003 },
+        { occurredAt: '2026-09-29T20:00:00Z', price: 0.00007 },
+      ],
+      'Gymbmn9wwMKe4NnmVceyyfpncp9arbwPfSdBsyY9pump': [
+        { occurredAt: '2026-09-28T14:00:00Z', price: 0.00009 },
+        { occurredAt: '2026-09-28T14:05:00Z', price: 0.0001 },
+        { occurredAt: '2026-09-28T14:30:00Z', price: 0.00015 },
+      ],
+      '6iAj2oywQMiD9NeyTcW1S7UtG7e3jSK7Ud5ZJDqJpump': [
+        { occurredAt: '2026-09-27T20:00:00Z', price: 0.00004 },
+        { occurredAt: '2026-09-27T20:10:00Z', price: 0.000045 },
+        { occurredAt: '2026-09-27T21:00:00Z', price: 0.00003 },
+      ],
+    };
+
+    function fmtPct(v) {
+      if (v == null || Number.isNaN(v)) return '—';
+      return `${(v * 100).toFixed(1)}%`;
     }
 
-    function fmtPct(x) {
-      if (x == null || Number.isNaN(x)) return '—';
-      return `${(x * 100).toFixed(1)}%`;
-    }
-
-    function fmtPrice(x) {
-      if (x == null) return '—';
-      return Number(x).toPrecision(4);
-    }
-
-    function fmtRange(start, end) {
-      if (!start || !end) return '—';
-      const s = new Date(start);
-      const e = new Date(end);
-      return `${s.toISOString().replace('T', ' ').slice(0, 16)} UTC → ${e.toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+    function fmtNum(v) {
+      if (v == null || Number.isNaN(v)) return '—';
+      return Number(v).toFixed(3);
     }
 
     async function loadCases() {
@@ -117,7 +122,15 @@
       tokenSelect.innerHTML = casesWithAddress
         .map(c => `<option value="${c.tokenAddress}">${c.ticker} (${c.addressProvenance})</option>`)
         .join('');
+
+      const cohortRes = await fetch('/api/v1/signal/research/cohorts');
+      const cohortData = await cohortRes.json();
+      cohortSelect.innerHTML = (cohortData.cohorts || [])
+        .map(c => `<option value="${c.id}">${c.name}</option>`)
+        .join('');
+
       if (casesWithAddress[0]) await refresh(casesWithAddress[0].tokenAddress);
+      await refreshCohortTable();
     }
 
     function renderList(el, items) {
@@ -126,38 +139,50 @@
         : '<li class="muted">None</li>';
     }
 
-    function renderOutcomes(rows) {
-      const tbody = document.getElementById('outcomeTable');
-      if (!rows || !rows.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="muted">Run replay after ingesting market history</td></tr>';
+    function renderResearchObservations(observations, delaySeconds) {
+      const el = document.getElementById('researchTimeline');
+      if (!observations?.length) {
+        el.innerHTML = '<div class="muted">No research observations yet.</div>';
         return;
       }
-      tbody.innerHTML = rows.map(r => {
-        const o = r.outcome;
-        const entry = r.entry;
-        if (!entry || !o) {
-          return `<tr><td>${fmtDelay(r.executionDelaySeconds)}</td><td colspan="5" class="muted">No achievable entry</td></tr>`;
-        }
-        const tOutcome = o.outcomeTimestamp
-          ? new Date(o.outcomeTimestamp).toISOString().slice(11, 19)
-          : '—';
-        return `<tr>
-          <td>${fmtDelay(r.executionDelaySeconds)}</td>
-          <td class="num">${fmtPrice(entry.effectivePrice)}</td>
-          <td class="outcome-${o.label}">${o.label}</td>
-          <td class="num">${fmtPct(o.mfe)}</td>
-          <td class="num">${fmtPct(o.mae)}</td>
-          <td class="num">${tOutcome}</td>
-        </tr>`;
+      el.innerHTML = observations.map(obs => {
+        const mc = obs.metadata?.marketState?.marketCapUsd;
+        const outcome = (obs.outcomes || []).find(o => o.executionDelaySeconds === delaySeconds);
+        const extra = obs.observationType === 'INDEPENDENT_CONVERGENCE' && obs.metadata?.convergenceDurationMinutes != null
+          ? `${obs.metadata.convergenceDurationMinutes.toFixed(1)}m convergence`
+          : obs.metadata?.structureGate || '';
+        return `<div class="obs-row">
+          <div><strong>${obs.observationType}</strong> <span class="muted">${new Date(obs.occurredAt).toLocaleTimeString()}</span></div>
+          <div class="muted">${mc ? `$${Math.round(mc / 1000)}K MC` : 'MC n/a'} ${extra ? '· ' + extra : ''}</div>
+          <div class="muted">Outcome @ ${delaySeconds}s: ${outcome?.label || 'n/a'} (${outcome?.dataAvailability || '—'})</div>
+        </div>`;
       }).join('');
     }
 
+    async function refreshCohortTable() {
+      const cohortId = cohortSelect.value;
+      if (!cohortId) return;
+      const delay = Number(delaySelect.value || 60);
+      const res = await fetch(`/api/v1/signal/research/cohorts/${encodeURIComponent(cohortId)}/evaluation?executionDelaySeconds=${delay}`);
+      const data = await res.json();
+      const tbody = document.querySelector('#cohortTable tbody');
+      tbody.innerHTML = (data.layers || []).map(row => `<tr>
+        <td>${row.observationLayer}</td>
+        <td>${row.N ?? 0}</td>
+        <td>${row.PASS ?? 0}</td>
+        <td>${row.FAIL ?? 0}</td>
+        <td>${row.precision != null ? fmtPct(row.precision) : '—'}</td>
+        <td>${fmtPct(row.medianMfe)}</td>
+        <td>${fmtPct(row.medianMae)}</td>
+      </tr>`).join('');
+    }
+
     async function refresh(tokenAddress) {
-      const [detail, timeline, market, outcomes] = await Promise.all([
+      const delay = Number(delaySelect.value || 60);
+      const [detail, timeline, research] = await Promise.all([
         fetch(`/api/v1/signal/tokens/${tokenAddress}`).then(r => r.json()),
         fetch(`/api/v1/signal/tokens/${tokenAddress}/timeline`).then(r => r.json()),
-        fetch(`/api/v1/signal/tokens/${tokenAddress}/market-history`).then(r => r.json()),
-        fetch(`/api/v1/signal/tokens/${tokenAddress}/outcomes`).then(r => r.json()),
+        fetch(`/api/v1/signal/tokens/${tokenAddress}/research-observations`).then(r => r.json()),
       ]);
       const c = casesWithAddress.find(x => x.tokenAddress === tokenAddress);
       document.getElementById('tokenMeta').textContent =
@@ -200,26 +225,11 @@
         <div class="timeline-item">
           <div><strong>${e.eventType}</strong> <span class="muted">${new Date(e.occurredAt).toISOString()}</span></div>
           <div class="muted">${e.sourceId || e.sourceType}${e.walletAddress ? ' · ' + e.walletAddress.slice(0,8) : ''}</div>
-        </div>`).join('') || '<div class="muted">No events</div>';
-
-      const delayRows = (outcomes.outcomes || [])
-        .filter(o => o.executionDelaySeconds != null)
-        .sort((a, b) => a.executionDelaySeconds - b.executionDelaySeconds)
-        .map(o => ({
-          executionDelaySeconds: o.executionDelaySeconds,
-          entry: {
-            effectivePrice: o.effectivePrice,
-            effectiveExecutionAt: o.effectiveExecutionAt,
-          },
-          outcome: {
-            label: o.label,
-            mfe: o.mfe,
-            mae: o.mae,
-            outcomeTimestamp: o.outcomeTimestamp,
-          },
-        }));
-      renderOutcomes(delayRows);
-      document.getElementById('replayTimeline').innerHTML = '<div class="muted">Run replay to populate chronological decisions</div>';
+        </div>`).join('');
+      document.getElementById('paper').textContent = detail.paperPosition
+        ? JSON.stringify(detail.paperPosition, null, 2)
+        : 'None';
+      renderResearchObservations(research.observations, delay);
     }
 
     document.getElementById('ingestBtn').onclick = async () => {
@@ -288,12 +298,20 @@
       await fetch(`/api/v1/signal/tokens/${tokenAddress}/evaluate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ evaluatedAt: new Date().toISOString() }),
+        body: JSON.stringify({ pricePath: pricePathsByToken[tokenAddress] || [] }),
       });
       await refresh(tokenAddress);
+      await refreshCohortTable();
     };
 
+    document.getElementById('cohortEvalBtn').onclick = refreshCohortTable;
+    delaySelect.onchange = async () => {
+      await refresh(tokenSelect.value);
+      await refreshCohortTable();
+    };
     tokenSelect.onchange = () => refresh(tokenSelect.value);
+    cohortSelect.onchange = refreshCohortTable;
+
     loadCases().catch(err => {
       document.body.insertAdjacentHTML('beforeend', `<pre class="risk">${err}</pre>`);
     });

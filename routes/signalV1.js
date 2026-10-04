@@ -106,30 +106,36 @@ router.post('/api/v1/signal/tokens/:tokenAddress/evaluate', requireResearch, asy
   }
 });
 
-router.post('/api/v1/signal/tokens/:tokenAddress/ingest-history', requireResearch, async (req, res) => {
-  const service = await getService();
-  const body = req.body || {};
+router.get('/api/v1/signal/research/cohorts', requireResearch, (req, res) => {
+  noStore(res);
+  return res.json({ cohorts: service.listResearchCohorts() });
+});
+
+router.get('/api/v1/signal/research/cohorts/:cohortId', requireResearch, (req, res) => {
+  const cohort = service.getResearchCohort(req.params.cohortId);
+  if (!cohort) return res.status(404).json({ error: 'cohort_not_found' });
+  noStore(res);
+  return res.json({ cohort });
+});
+
+router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResearch, (req, res) => {
+  const delay = Number(req.query.executionDelaySeconds || 60);
   try {
-    const window = resolveResearchWindow(req.params.tokenAddress);
-    const stats = await service.ingestHistory({
-      tokenAddress: req.params.tokenAddress,
-      startTime: body.startTime || window.startTime,
-      endTime: body.endTime || window.endTime,
-      resolutionSeconds: body.resolutionSeconds || window.resolutionSeconds,
-      decisionAnchor: window.anchor,
-    });
+    const evaluation = service.evaluateResearchCohort(req.params.cohortId, delay);
     noStore(res);
-    if (stats.unavailable) {
-      return res.status(422).json(stats.unavailablePayload || stats);
-    }
-    return res.json(stats);
+    return res.json(evaluation);
   } catch (err) {
-    return res.status(400).json({ error: 'ingest_failed', message: String(err.message) });
+    return res.status(400).json({ error: 'evaluation_failed', message: String(err.message) });
   }
 });
 
-router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, async (req, res) => {
-  const service = await getService();
+router.get('/api/v1/signal/tokens/:tokenAddress/research-observations', requireResearch, (req, res) => {
+  const observations = service.getTokenResearchObservations(req.params.tokenAddress);
+  noStore(res);
+  return res.json({ observations });
+});
+
+router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, (req, res) => {
   const body = req.body || {};
   try {
     const window = resolveResearchWindow(req.params.tokenAddress);

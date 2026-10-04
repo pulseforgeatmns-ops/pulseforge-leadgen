@@ -49,10 +49,29 @@ const DEFAULT_OUTCOME_CONFIG = Object.freeze({
 
 const CONVERGENCE_WINDOWS_MINUTES = Object.freeze([5, 15, 30, 60]);
 
+const DEFAULT_RESEARCH_CONFIG = Object.freeze({
+  independentConvergenceWindowMinutes: 30,
+  minIndependentClusters: 2,
+  minQualitySourcesForQualityConvergence: 2,
+  minSourceQualitySampleSize: 5,
+  minWalletQualitySampleSize: 5,
+  walletProfitableScoreMin: 0.55,
+  executionDelaySeconds: Object.freeze([15, 30, 60, 180, 300]),
+  defaultEvaluationDelaySeconds: 60,
+  structureGate: Object.freeze({
+    minLiquidityUsd: 15000,
+    maxBundleSupplyPct: 35,
+    maxTop10HolderPct: 55,
+    maxDevHoldingPct: 12,
+    minTokenAgeSeconds: 60,
+  }),
+});
+
 module.exports = {
   DEFAULT_WEIGHTS,
   DEFAULT_STATE_THRESHOLDS,
   DEFAULT_PAPER_CONFIG,
   DEFAULT_OUTCOME_CONFIG,
   CONVERGENCE_WINDOWS_MINUTES,
+  DEFAULT_RESEARCH_CONFIG,
 };

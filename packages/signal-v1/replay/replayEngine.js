@@ -7,22 +7,7 @@ const { decideSignalState } = require('../state/stateMachine');
 const { PaperPortfolio } = require('../paper/paperPortfolio');
 const { STRATEGY_VERSION, FEATURE_VERSION } = require('../types');
 const { createSignalAlert } = require('../alerts/signalAlert');
-const { callStore } = require('../storage/storeUtils');
-const {
-  latestMarketContext,
-  buildPricePathFromObservations,
-} = require('../market/marketContext');
-const {
-  evaluateEntryOutcomesForDelays,
-  DEFAULT_EXECUTION_DELAYS_SECONDS,
-} = require('../outcomes/evaluateEntryOutcomes');
-const { filterObservationsAtOrBefore } = require('../temporal/temporalFirewall');
-const {
-  validateHistoricalCoverage,
-  resolveReplayStatus,
-  buildHistoricalUnavailablePayload,
-  HISTORICAL_DATA_UNAVAILABLE,
-} = require('../market/historicalCoverage');
+const { evaluateResearchObservationsAtStep } = require('../research/researchObservationEngine');
 
 /**
  * Chronological replay — snapshots use only events/observations with occurredAt <= step time.
@@ -98,6 +83,7 @@ async function replayToken(store, input) {
   let previousState = null;
   const timeline = [];
   let openPosition = null;
+  const researchTimeline = [];
 
   for (const stepAt of stepTimes) {
     const snapshot = await buildFeatureSnapshot(store, tokenAddress, stepAt, {
@@ -126,7 +112,24 @@ async function replayToken(store, input) {
       position: openPosition,
     });
 
-    const decisionRow = await callStore(store, 'insertDecision', {
+    const researchCreated = evaluateResearchObservationsAtStep(store, {
+      tokenAddress,
+      stepAt,
+      snapshot,
+      decisionState: decision.state,
+      pricePath: input.pricePath,
+    });
+    if (researchCreated.length) {
+      researchTimeline.push(
+        ...researchCreated.map(o => ({
+          observationType: o.observationType,
+          occurredAt: o.occurredAt,
+          id: o.id,
+        }))
+      );
+    }
+
+    const decisionRow = store.insertDecision({
       tokenAddress,
       decidedAt: stepAt,
       state: decision.state,
@@ -284,9 +287,7 @@ async function replayToken(store, input) {
       outcome,
       executionDelayOutcomes,
       digest,
-      observationCount: allObservations.length,
-      replayStatus,
-      coverage,
+      researchObservations: researchTimeline.length,
     },
   });
 
@@ -294,6 +295,8 @@ async function replayToken(store, input) {
     runId: run.id,
     digest,
     timeline,
+    researchTimeline,
+    researchObservations: store.getResearchObservations(tokenAddress),
     outcome,
     executionDelayOutcomes,
     finalState: previousState,
@@ -381,9 +384,18 @@ function hashReplay(tokenAddress, timeline, strategyVersion, featureVersion) {
     state: step.state,
     score: step.score,
   }));
+  const research = store
+    .getResearchObservations(tokenAddress)
+    .map(o => ({
+      observationType: o.observationType,
+      occurredAt: new Date(o.occurredAt).toISOString(),
+      definitionVersion: o.definitionVersion,
+    }));
+
   const payload = JSON.stringify({
     tokenAddress,
     timeline: stableTimeline,
+    research,
     strategyVersion,
     featureVersion,
   });

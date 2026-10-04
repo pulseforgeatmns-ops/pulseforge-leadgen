@@ -75,6 +75,34 @@
 const FEATURE_VERSION = 'signal-features-v1';
 const STRATEGY_VERSION = 'signal-strategy-v1';
 const SOURCE_PERFORMANCE_VERSION = 'source-performance-v1';
+const RESEARCH_DEFINITION_VERSION = 'signal-research-v1';
+
+/** @typedef {(
+ *   | 'FIRST_CALLER'
+ *   | 'INDEPENDENT_CONVERGENCE'
+ *   | 'QUALITY_CONVERGENCE'
+ *   | 'WALLET_CONFIRMATION'
+ *   | 'STRUCTURE_GATE'
+ *   | 'AMPLIFIER_ARRIVAL'
+ *   | 'SIGNAL_ENTRY'
+ * )} ResearchObservationType */
+
+/** @typedef {(
+ *   | 'AVAILABLE'
+ *   | 'PARTIAL'
+ *   | 'UNAVAILABLE'
+ *   | 'INSUFFICIENT_MARKET_DATA'
+ * )} ResearchDataAvailability */
+
+const RESEARCH_OBSERVATION_TYPES = Object.freeze([
+  'FIRST_CALLER',
+  'INDEPENDENT_CONVERGENCE',
+  'QUALITY_CONVERGENCE',
+  'WALLET_CONFIRMATION',
+  'STRUCTURE_GATE',
+  'AMPLIFIER_ARRIVAL',
+  'SIGNAL_ENTRY',
+]);
 
 const SIGNAL_EVENT_TYPES = Object.freeze([
   'CALL',
@@ -120,6 +148,8 @@ module.exports = {
   FEATURE_VERSION,
   STRATEGY_VERSION,
   SOURCE_PERFORMANCE_VERSION,
+  RESEARCH_DEFINITION_VERSION,
+  RESEARCH_OBSERVATION_TYPES,
   SIGNAL_EVENT_TYPES,
   SIGNAL_STATES,
   HISTORICAL_DATA_STATUSES,
