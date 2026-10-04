@@ -72,6 +72,34 @@ function seedFrontRunnersFixtures(store) {
   }
 
   seedDuplicateDemoTimeline(store);
+  seedMinimalResearchTimeline(store, 'Gymbmn9wwMKe4NnmVceyyfpncp9arbwPfSdBsyY9pump', 'DOOM');
+  seedMinimalResearchTimeline(store, '6iAj2oywQMiD9NeyTcW1S7UtG7e3jSK7Ud5ZJDqJpump', 'Hallow Inu');
+}
+
+function seedMinimalResearchTimeline(store, tokenAddress, label) {
+  const t0 = new Date('2026-09-29T18:00:00Z');
+  store.insertEvents([
+    {
+      tokenAddress,
+      chain: 'solana',
+      occurredAt: t0,
+      observedAt: t0,
+      eventType: 'MARKET_SNAPSHOT',
+      sourceType: 'market',
+      payload: { priceUsd: 0.0001, liquidityUsd: 20000, tokenAgeSeconds: 1200 },
+    },
+    {
+      tokenAddress,
+      chain: 'solana',
+      occurredAt: new Date(t0.getTime() + 5 * 60000),
+      observedAt: new Date(t0.getTime() + 5 * 60000),
+      eventType: 'CALL',
+      sourceType: 'telegram',
+      sourceId: 'src-front-runners',
+      sourceClusterId: FRONT_RUNNERS_CLUSTER_ID,
+      payload: { message: `${label} research call (fixture)` },
+    },
+  ]);
 }
 
 function seedDuplicateDemoTimeline(store) {

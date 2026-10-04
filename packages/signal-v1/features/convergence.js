@@ -11,13 +11,15 @@ const CALL_EVENT_TYPES = new Set(['CALL', 'TOKEN_MENTION', 'AMPLIFIER_ENTRY']);
  * @param {Date|string} args.evaluatedAt
  * @param {number} args.windowMinutes
  */
-function calculateConvergence({ store, tokenAddress, evaluatedAt, windowMinutes }) {
+function calculateConvergence({ store, tokenAddress, evaluatedAt, windowMinutes, events: preloadedEvents }) {
   const evaluatedMs = new Date(evaluatedAt).getTime();
   const windowStartMs = evaluatedMs - windowMinutes * 60 * 1000;
 
-  const events = store
-    .getEventsForToken(tokenAddress, { maxOccurredAt: evaluatedAt })
-    .filter(
+  const baseEvents =
+    preloadedEvents ||
+    store.getEventsForToken(tokenAddress, { maxOccurredAt: evaluatedAt });
+
+  const events = baseEvents.filter(
       e =>
         CALL_EVENT_TYPES.has(e.eventType) &&
         e.occurredAt.getTime() >= windowStartMs &&
