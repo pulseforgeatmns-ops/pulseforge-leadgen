@@ -23,7 +23,12 @@ const {
   markLeafProviderSend,
 } = require('./governedOutboundProviderBoundary');
 const { reconcileUncertainItemFromEvidence } = require('./governedUncertainSendReconciliation');
-const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
+const {
+  resolveOperatorDelegatedMaximumDailyCapacity,
+  resolveOperatorProgramTotalCapForDelegation,
+  describeOperatorAuthorityEnvelope,
+  countGrantWeekdaySlots,
+} = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 
 function service({
   pool,
@@ -66,6 +71,12 @@ function service({
     const program = await store.program();
     if (!program) fail('program_not_found');
     const current = program.policy || {};
+    const delegatedDaily = input.operatorDelegatedMaximumDailyCapacity
+      ?? current.operatorDelegatedMaximumDailyCapacity;
+    const migratedTotalCap = input.totalCap != null
+      ? input.totalCap
+      : resolveOperatorProgramTotalCapForDelegation(current, delegatedDaily);
+    const authorityBefore = describeOperatorAuthorityEnvelope(current);
     const p = policy({
       ...current,
       ...input,
@@ -76,9 +87,11 @@ function service({
       sendingIdentityId: input.sendingIdentityId || current.sendingIdentityId,
       startsAt: input.startsAt || current.startsAt,
       expiresAt: input.expiresAt || current.expiresAt,
-      operatorDelegatedMaximumDailyCapacity: input.operatorDelegatedMaximumDailyCapacity
-        ?? current.operatorDelegatedMaximumDailyCapacity,
+      dailyCap: input.dailyCap ?? current.dailyCap,
+      totalCap: migratedTotalCap,
+      operatorDelegatedMaximumDailyCapacity: delegatedDaily,
     }, now());
+    const authorityAfter = describeOperatorAuthorityEnvelope(p);
     const reviewHash = hash({ policy: p, scopeHash: program.scope_hash });
     if (input.reviewHash !== reviewHash) {
       return {
@@ -87,11 +100,19 @@ function service({
         policy: p,
         scopeHash: program.scope_hash,
         migration: 'operator_delegated_maximum_daily_capacity',
+        authority: { before: authorityBefore, after: authorityAfter },
+        programTotalCapMigration: {
+          previousTotalCap: authorityBefore.totalCap,
+          nextTotalCap: authorityAfter.totalCap,
+          grantWeekdaySlots: countGrantWeekdaySlots(p),
+        },
       };
     }
     const authorization = {
       kind: 'operator_delegated_maximum_daily_capacity',
       operatorDelegatedMaximumDailyCapacity: p.operatorDelegatedMaximumDailyCapacity,
+      totalCap: p.totalCap,
+      previousTotalCap: authorityBefore.totalCap,
       recordedAt: now().toISOString(),
       actor: String(actor.id),
       note: input.authorizationNote || 'Emmett-authoritative dynamic outbound capacity migration',

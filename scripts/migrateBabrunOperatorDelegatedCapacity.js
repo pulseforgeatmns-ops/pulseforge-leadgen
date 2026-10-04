@@ -41,9 +41,30 @@ async function main() {
         dryRun: true,
         reviewRequired: true,
         reviewHash: preview.reviewHash,
-        operatorDelegatedMaximumDailyCapacity: preview.policy.operatorDelegatedMaximumDailyCapacity,
-        preservedDailyCap: preview.policy.dailyCap,
         programId: program.id,
+        before: preview.authority?.before ?? {
+          dailyCap: program.policy?.dailyCap,
+          totalCap: program.policy?.totalCap,
+          operatorDelegatedMaximumDailyCapacity: program.policy?.operatorDelegatedMaximumDailyCapacity ?? null,
+        },
+        after: preview.authority?.after ?? {
+          dailyCap: preview.policy.dailyCap,
+          totalCap: preview.policy.totalCap,
+          operatorDelegatedMaximumDailyCapacity: preview.policy.operatorDelegatedMaximumDailyCapacity,
+        },
+        programTotalCapMigration: preview.programTotalCapMigration,
+        effectiveOperatorLimitingAuthority: preview.authority?.after?.limitingOperatorAuthority,
+        preservedFields: {
+          spacingMinutes: preview.policy.spacingMinutes,
+          startHour: preview.policy.startHour,
+          endHour: preview.policy.endHour,
+          weekdays: preview.policy.weekdays,
+          senderEmail: preview.policy.senderEmail,
+          inboxIntegrationId: preview.policy.inboxIntegrationId,
+          sendingIdentityId: preview.policy.sendingIdentityId,
+          allowedContactClassifications: preview.policy.allowedContactClassifications,
+          expiresAt: preview.policy.expiresAt,
+        },
       }, null, 2));
       await pool.end();
       return;
