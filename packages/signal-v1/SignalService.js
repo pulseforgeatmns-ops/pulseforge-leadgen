@@ -9,15 +9,20 @@ const { scoreSignal } = require('./scoring/signalScoring');
 const { decideSignalState } = require('./state/stateMachine');
 const { replayToken } = require('./replay/replayEngine');
 const { RESEARCH_CASES } = require('./fixtures/frontRunnersCases');
+const { ingestHistoricalMarketData } = require('./ingestion/ingestHistoricalMarketData');
+const { GeckoTerminalMarketDataProvider } = require('./providers/GeckoTerminalMarketDataProvider');
+const { callStore } = require('./storage/storeUtils');
+const { resolveResearchWindow } = require('./fixtures/researchWindows');
 
 class SignalService {
   /**
-   * @param {import('./storage/InMemorySignalStore').InMemorySignalStore} [store]
-   * @param {{ seedFixtures?: boolean }} [options]
+   * @param {import('./storage/InMemorySignalStore').InMemorySignalStore|import('./storage/PostgresSignalStore').PostgresSignalStore} [store]
+   * @param {{ seedFixtures?: boolean, marketProvider?: object }} [options]
    */
   constructor(store, options = {}) {
     this.store = store || new InMemorySignalStore();
-    if (options.seedFixtures !== false) {
+    this.marketProvider = options.marketProvider || new GeckoTerminalMarketDataProvider();
+    if (options.seedFixtures !== false && this.store.tokens instanceof Map) {
       seedFrontRunnersFixtures(this.store);
     }
   }
@@ -26,21 +31,22 @@ class SignalService {
     return RESEARCH_CASES;
   }
 
-  getToken(tokenAddress) {
-    return this.store.tokens.get(tokenAddress) || null;
+  async getToken(tokenAddress) {
+    if (this.store.tokens instanceof Map) {
+      return this.store.tokens.get(tokenAddress) || null;
+    }
+    return callStore(this.store, 'getToken', tokenAddress);
   }
 
   getTokenTimeline(tokenAddress, startTime, endTime) {
     return getTokenTimeline(this.store, tokenAddress, startTime, endTime);
   }
 
-  evaluateAt(tokenAddress, evaluatedAt) {
-    const snapshot = buildFeatureSnapshot(this.store, tokenAddress, evaluatedAt);
-    this.store.insertSnapshot(snapshot);
+  async evaluateAt(tokenAddress, evaluatedAt) {
+    const snapshot = await buildFeatureSnapshot(this.store, tokenAddress, evaluatedAt);
+    await callStore(this.store, 'insertSnapshot', snapshot);
     const scored = scoreSignal(snapshot.features);
-    const openPosition = this.store.paperPositions.find(
-      p => p.tokenAddress === tokenAddress && p.status !== 'CLOSED'
-    );
+    const openPosition = await this.getOpenPaperPosition(tokenAddress);
     const decision = decideSignalState({
       previousState: null,
       score: scored.score,
@@ -64,23 +70,76 @@ class SignalService {
     });
   }
 
-  replay(input) {
+  async replay(input) {
     return replayToken(this.store, input);
   }
 
-  getLatestDecision(tokenAddress) {
-    const rows = this.store.decisions
-      .filter(d => d.tokenAddress === tokenAddress)
-      .sort((a, b) => b.decidedAt - a.decidedAt);
-    return rows[0] || null;
+  async ingestHistory(args) {
+    const provider = args.provider || this.marketProvider;
+    return ingestHistoricalMarketData(this.store, provider, args);
   }
 
-  getOpenPaperPosition(tokenAddress) {
-    return (
-      this.store.paperPositions.find(
-        p => p.tokenAddress === tokenAddress && p.status !== 'CLOSED'
-      ) || null
-    );
+  async ingestResearchToken(tokenAddress) {
+    const window = resolveResearchWindow(tokenAddress);
+    return this.ingestHistory({
+      tokenAddress,
+      startTime: window.startTime,
+      endTime: window.endTime,
+      resolutionSeconds: window.resolutionSeconds,
+    });
+  }
+
+  async getLatestDecision(tokenAddress) {
+    if (this.store.decisions) {
+      const rows = this.store.decisions
+        .filter(d => d.tokenAddress === tokenAddress)
+        .sort((a, b) => b.decidedAt - a.decidedAt);
+      return rows[0] || null;
+    }
+    return callStore(this.store, 'getLatestDecision', tokenAddress);
+  }
+
+  async getOpenPaperPosition(tokenAddress) {
+    if (this.store.paperPositions) {
+      return (
+        this.store.paperPositions.find(
+          p => p.tokenAddress === tokenAddress && p.status !== 'CLOSED'
+        ) || null
+      );
+    }
+    return callStore(this.store, 'getOpenPaperPosition', tokenAddress);
+  }
+
+  async getMarketHistory(tokenAddress, startTime, endTime) {
+    const observations = await callStore(this.store, 'getMarketObservationsForToken', tokenAddress, {
+      startTime,
+      endTime,
+    });
+    const stats = this.store.getLatestMarketIngestionStats
+      ? await callStore(this.store, 'getLatestMarketIngestionStats', tokenAddress)
+      : null;
+    return { observations, ingestion: stats };
+  }
+
+  async getOutcomes(tokenAddress) {
+    if (this.store.getOutcomesForToken) {
+      return callStore(this.store, 'getOutcomesForToken', tokenAddress);
+    }
+    return this.store.outcomes.filter(o => o.tokenAddress === tokenAddress);
+  }
+
+  async getReplayDetail(tokenAddress) {
+    const [decisions, snapshots, outcomes, market] = await Promise.all([
+      this.store.getDecisionsForToken
+        ? callStore(this.store, 'getDecisionsForToken', tokenAddress)
+        : this.store.decisions.filter(d => d.tokenAddress === tokenAddress),
+      this.store.getSnapshotsForToken
+        ? callStore(this.store, 'getSnapshotsForToken', tokenAddress)
+        : this.store.snapshots.filter(s => s.tokenAddress === tokenAddress),
+      this.getOutcomes(tokenAddress),
+      this.getMarketHistory(tokenAddress),
+    ]);
+    return { decisions, snapshots, outcomes, market };
   }
 }
 
