@@ -8,6 +8,7 @@ const { getAcquisitionMissionRuntime } = require('./acquisitionMissionRuntime');
 const { resolveCanonicalSenderIdentity, evaluateCanonicalSenderReadiness } = require('../utils/canonicalSenderIdentity');
 const { buildInboxSnapshot } = require('./emmettOutboundSnapshot');
 const { createOutboundEngine, assessOperatingCapacity } = require('../packages/emmett-outbound');
+const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 const { loadBestCrmProspectForMissionBoundKey } = require('../packages/max/workspace/MissionBoundCrmResolver');
 const { governedContactReason } = require('../utils/governedContactEligibility');
 const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
@@ -84,26 +85,78 @@ function adapters(pool, dependencies = {}) {
       const produced = await require('./emmettTenantMailboxCapacity').produceTenantMailboxCapacityEnvelope(
         tenantId, program.policy.sendingIdentityId, { pool, now });
       const envelope = produced.envelope;
+      if (!envelope || !Number.isFinite(Number(envelope.maxSendsPerDay))) fail('emmett_capacity_unavailable');
+      const validUntil = envelope.validUntil ? Date.parse(envelope.validUntil) : NaN;
+      if (Number.isFinite(validUntil) && validUntil <= +now) fail('emmett_capacity_unavailable');
       if (envelope.mailboxIntegrationId !== program.policy.inboxIntegrationId) fail('capacity_mailbox_changed');
-      const assessed = envelope.emmettContribution;
-      if (assessed.governor.halt || !['proceed', 'slow'].includes(envelope.governorState)) fail('emmett_governor_halted');
+      const assessed = envelope.emmettContribution || {};
+      const governorOutcome = String(envelope.governorState || assessed.governor?.outcome || '').toLowerCase();
+      if (assessed.governor?.halt || !['proceed', 'slow'].includes(governorOutcome)) fail('emmett_governor_halted');
       const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
-      const cap = Math.min(program.policy.dailyCap, envelope.maxSendsPerDay);
-      if (!(cap > 0)) fail('emmett_capacity_exhausted');
       const inWindow = require('../packages/acquisition-mission/DailyOutboundPolicy').clock(now);
-      const available = envelope.remainingCapacity > 0 || Boolean(ignoreItem);
-      const dispatchNow = available && inWindow.hour >= envelope.allowedSendWindow.startHour
-        && inWindow.hour < envelope.allowedSendWindow.endHour && inWindow.weekday > 0 && inWindow.weekday < 6 ? cap : 0;
-      if (opts.mode === 'dispatch' && !dispatchNow) fail('dispatch_unavailable_now');
-      Object.assign(snapshot, sender, { sentToday: envelope.currentSentCount, inboxId: sender.senderEmail, domain: sender.sendingDomain });
       const counts = await new (require('./governedOutboundStore').GovernedOutboundStore)(pool, tenantId).counts(program, inWindow.day);
-      return { snapshot, assessed, cap, sender, envelope, totalAttempted: counts.total, lastAttempt: history.last_attempt,
-        dispatchUnavailableNow: !dispatchNow,
-        operating: { planningDailyCapacity: cap, dispatchCapacityNow: dispatchNow,
-          effectiveDailyCapacity: cap, recommendedSafeDailyCapacity: envelope.maxSendsPerDay,
-          governor: assessed.governor, healthScore: assessed.health?.score ?? null,
-          allowedSendWindow: envelope.allowedSendWindow,
-          minSpacingMinutes: Math.max(program.policy.spacingMinutes, envelope.minimumSpacingMinutes) } };
+      const grantWindow = {
+        startHour: program.policy.startHour ?? envelope.allowedSendWindow?.startHour ?? 9,
+        endHour: program.policy.endHour ?? envelope.allowedSendWindow?.endHour ?? 17,
+        timezone: program.policy.timeZone || envelope.allowedSendWindow?.timezone || 'America/New_York',
+      };
+      const operatingBase = assessOperatingCapacity({
+        assessed: {
+          ...assessed,
+          capacity: assessed.capacity || { recommended: envelope.maxSendsPerDay },
+          governor: assessed.governor || {
+            outcome: governorOutcome,
+            halt: ['pause', 'emergency'].includes(governorOutcome),
+          },
+          health: assessed.health || {},
+        },
+        policy: program.policy,
+        emmettCapacity: envelope.maxSendsPerDay,
+        sentToday: envelope.currentSentCount,
+        totalAttempted: counts.total,
+        now,
+        requireEmmettAuthority: true,
+        schedule: {
+          allowedSendWindow: grantWindow,
+          minSpacingMinutes: Math.max(program.policy.spacingMinutes, envelope.minimumSpacingMinutes),
+        },
+      });
+      if (operatingBase.emmettAuthorityMissing) fail('emmett_capacity_unavailable');
+      const reserved = Number(envelope.currentScheduledCount || 0) + Number(envelope.currentExecutingCount || 0);
+      const authorizedRemaining = Math.max(0, operatingBase.authorizationLimitedCapacity
+        - Number(envelope.currentSentCount || 0) - reserved);
+      const calendarOpen = inWindow.hour >= grantWindow.startHour
+        && inWindow.hour < grantWindow.endHour
+        && inWindow.weekday > 0 && inWindow.weekday < 6;
+      const dispatchNow = calendarOpen && authorizedRemaining > 0 && (envelope.remainingCapacity > 0 || Boolean(ignoreItem))
+        ? Math.min(operatingBase.dispatchCapacityNow, authorizedRemaining)
+        : 0;
+      const planningDailyCapacity = Math.min(
+        operatingBase.planningDailyCapacity,
+        Math.max(0, operatingBase.authorizationLimitedCapacity - reserved),
+      );
+      if (!Number.isFinite(planningDailyCapacity) || planningDailyCapacity <= 0) fail('emmett_capacity_exhausted');
+      if (opts.mode === 'dispatch' && dispatchNow <= 0) fail('dispatch_unavailable_now');
+      Object.assign(snapshot, sender, { sentToday: envelope.currentSentCount, inboxId: sender.senderEmail, domain: sender.sendingDomain });
+      const operating = {
+        ...operatingBase,
+        planningDailyCapacity,
+        dispatchCapacityNow: dispatchNow,
+        dispatchableDailyCapacity: dispatchNow,
+        scheduledToday: Number(envelope.currentScheduledCount || 0),
+        executingToday: Number(envelope.currentExecutingCount || 0),
+      };
+      return {
+        snapshot,
+        assessed,
+        cap: planningDailyCapacity,
+        sender,
+        envelope,
+        totalAttempted: counts.total,
+        lastAttempt: history.last_attempt,
+        dispatchUnavailableNow: dispatchNow <= 0,
+        operating,
+      };
     }
     const history = await readOutboundHistory(pool, tenantId, clientId, ignoreItem);
     snapshot.sentToday = Math.max(snapshot.sentToday, history.today);

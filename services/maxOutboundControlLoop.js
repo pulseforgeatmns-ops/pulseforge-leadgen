@@ -16,6 +16,7 @@ const {
   assessOperatingCapacity,
   computeScheduleLimitedCapacity,
 } = require('../packages/emmett-outbound/OperatingCapacity');
+const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 const {
   buildReplenishmentYield,
   buildReplenishmentLossBuckets,
@@ -195,7 +196,10 @@ function buildControlPlan({
     effectiveDailyCapacity: authorizationLimitedCapacity,
     recommendedSafeDailyCapacity: Number(operating.recommendedSafeDailyCapacity || 0),
     limitingFactor: operating.limitingFactor || null,
+    capacityLimitingAuthority: operating.capacityLimitingAuthority || null,
     capacityReason: operating.capacityReason || null,
+    operatorDelegatedMaximumDailyCapacity: operating.operatorDelegatedMaximumDailyCapacity
+      ?? (policy ? resolveOperatorDelegatedMaximumDailyCapacity(policy) : null),
     governor: operating.governor || null,
     healthScore: operating.healthScore ?? null,
     todayRemaining,
@@ -780,7 +784,9 @@ async function capturePreparationObservability({
   });
   const dailyRemaining = Math.max(
     0,
-    Number(operating.authorizationLimitedCapacity ?? program?.policy?.dailyCap ?? 0) - Number(sentToday || 0)
+    Number(operating.authorizationLimitedCapacity
+      ?? resolveOperatorDelegatedMaximumDailyCapacity(program?.policy)
+      ?? program?.policy?.dailyCap ?? 0) - Number(sentToday || 0)
   );
   const plan = evaluatePreparationRefill({
     pendingPreparedCount: pendingPrepared,
@@ -1025,8 +1031,13 @@ async function runMaxOutboundControlLoop(options = {}) {
     policyHash: program.policy_hash,
     sourceMissionId: program.source_mission_id,
     emmettCapacity: operating.recommendedSafeDailyCapacity,
+    operatorDelegatedMaximum: finalPlan.operatorDelegatedMaximumDailyCapacity
+      ?? resolveOperatorDelegatedMaximumDailyCapacity(program.policy),
     recommendedSafeDailyCapacity: finalPlan.recommendedSafeDailyCapacity,
     authorizationLimitedCapacity: finalPlan.authorizationLimitedCapacity,
+    capacityLimitingAuthority: finalPlan.capacityLimitingAuthority ?? operating.capacityLimitingAuthority,
+    scheduledToday: infrastructure.operating?.scheduledToday ?? infrastructure.envelope?.currentScheduledCount ?? 0,
+    executingToday: infrastructure.operating?.executingToday ?? infrastructure.envelope?.currentExecutingCount ?? 0,
     scheduleLimitedCapacity: finalPlan.scheduleLimitedCapacity,
     nextEligibleScheduleCapacity: finalPlan.nextEligibleScheduleCapacity,
     dispatchCapacityNow: finalPlan.dispatchCapacityNow,
