@@ -4492,7 +4492,83 @@ function isServiceCompositionNoise(item) {
   ) {
     return true;
   }
+  if (/^explain(?:ing)?\s+(?:its|their)\s+value clearly$/i.test(s)) return true;
+  if (/^making them look legitimate$/i.test(s)) return true;
   return false;
+}
+
+const STUDIO_WEBSITE_SERVICE_ORDER = Object.freeze([
+  'website redesign',
+  'messaging',
+  'visual design',
+  'homepage and key-page design',
+  'copywriting',
+  'mobile optimization',
+  'stronger calls to action',
+  'contact or booking flow setup',
+  'basic SEO cleanup',
+  'launch support',
+  'light post-launch refinement',
+]);
+
+function studioWebsiteServiceDetected(services, evidenceText) {
+  const ev = String(evidenceText || '');
+  if (/website redesign/i.test(ev)) return true;
+  return (services || []).some((item) => /website redesign/i.test(String(item || '')));
+}
+
+function studioWebsiteServiceEvidenceMatches(canon, evidenceText) {
+  const ev = String(evidenceText || '');
+  switch (canon) {
+    case 'homepage and key-page design':
+      return /homepage and key[- ]page design/i.test(ev);
+    case 'stronger calls to action':
+      return /\b(?:stronger )?calls to action\b/i.test(ev);
+    case 'contact or booking flow setup':
+      return /contact(?: form)? or booking flow setup/i.test(ev);
+    case 'mobile optimization':
+      return /\bmobile optimization\b/i.test(ev) || /\bmobile experience\b/i.test(ev);
+    case 'light post-launch refinement':
+      return /light post[- ]launch refinement/i.test(ev);
+    default:
+      return new RegExp(`\\b${canon.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(ev);
+  }
+}
+
+function serviceItemMatchesStudioCanon(item, canon) {
+  const s = String(item || '').trim();
+  if (!s) return false;
+  if (sameSemanticValue(s, canon)) return true;
+  switch (canon) {
+    case 'mobile optimization':
+      return /^mobile(?: optimization| experience)$/i.test(s);
+    case 'stronger calls to action':
+      return /^calls to action$/i.test(s) || /^stronger calls to action$/i.test(s);
+    case 'contact or booking flow setup':
+      return /^contact(?: form)? or booking flow setup$/i.test(s);
+    case 'homepage and key-page design':
+      return /^(?:homepage and key[- ]page design|homepage|key page design)$/i.test(s);
+    default:
+      return s.toLowerCase() === canon.toLowerCase();
+  }
+}
+
+function canonicalizeComposedWebsiteServices(services, evidenceText) {
+  const filtered = (services || [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .filter((item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item));
+  if (!studioWebsiteServiceDetected(filtered, evidenceText)) {
+    return dedupeNormalizedList(filtered);
+  }
+
+  const ordered = [];
+  for (const canon of STUDIO_WEBSITE_SERVICE_ORDER) {
+    const inList = filtered.some((item) => serviceItemMatchesStudioCanon(item, canon));
+    const inEvidence = studioWebsiteServiceEvidenceMatches(canon, evidenceText);
+    if (inList || inEvidence) ordered.push(canon);
+  }
+  return ordered.length >= 4 ? ordered : dedupeNormalizedList(filtered);
 }
 
 function resolveBriefServicesForComposition(facts) {
@@ -4506,12 +4582,40 @@ function resolveBriefServicesForComposition(facts) {
       )
     : [];
 
+  let merged;
   if (evidenceServices.length >= 2) {
-    return dedupeNormalizedList(evidenceServices);
+    merged = dedupeNormalizedList(evidenceServices);
+  } else {
+    merged = dedupeNormalizedList([...slotServices, ...evidenceServices]).filter(
+      (item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item)
+    );
   }
-  return dedupeNormalizedList([...slotServices, ...evidenceServices]).filter(
-    (item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item)
-  );
+  return canonicalizeComposedWebsiteServices(merged, evidence);
+}
+
+function pinComposedBlueprintSectionSummaries(facts, sections) {
+  const f = facts || emptyNormalizedFacts();
+  const base = sections || emptySections();
+  const next = { ...base };
+
+  const targetMarketsSummary = composeBlueprintTargetMarketsSummary(f);
+  if (targetMarketsSummary) {
+    next.targetMarkets = {
+      ...(base.targetMarkets || emptySection()),
+      summary: targetMarketsSummary,
+    };
+  }
+
+  const briefServices = resolveBriefServicesForComposition(f);
+  if (briefServices.length && f.epistemic_states?.services !== EPISTEMIC_STATES.UNKNOWN) {
+    const name = sanitizeBusinessName(f.business_name || '');
+    next.services = {
+      ...(base.services || emptySection()),
+      summary: composeBlueprintServicesSummary(name, f),
+    };
+  }
+
+  return next;
 }
 
 function stripDisqualifiedCustomerLeadIn(text) {
@@ -5010,10 +5114,9 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
   sections.targetMarkets = {
     ...(prior.targetMarkets || emptySection()),
     epistemic_state: getEpistemicState('geography', Boolean(targetMarketsSummary)),
-    summary:
-      targetMarketsSummary && f.epistemic_states?.geography === EPISTEMIC_STATES.KNOWN
-        ? targetMarketsSummary
-        : f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS
+    summary: targetMarketsSummary
+      ? targetMarketsSummary
+      : f.epistemic_states?.geography === EPISTEMIC_STATES.HYPOTHESIS
         ? `Current hypothesis: target markets center on ${f.hypotheses?.geography || f.evidence_statements?.geography || 'under evaluation'}.`
         : f.epistemic_states?.geography === EPISTEMIC_STATES.NOT_APPLICABLE
           ? 'Geography is not currently a meaningful targeting constraint; targeting is based on business stage and characteristics instead.'
@@ -5098,7 +5201,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
       epistemic_state: sections[key].epistemic_state || p.epistemic_state || EPISTEMIC_STATES.UNRESOLVED,
     };
   }
-  return sections;
+  return pinComposedBlueprintSectionSummaries(f, sections);
 }
 
 /**
@@ -8009,6 +8112,7 @@ function mergeSupplementalIntoSections(sections, supplementalContext) {
     const domain = entry.domain || tagContextDomain(entry.text);
     const sectionKey = entry.section || (domain && DOMAIN_TO_SECTION[domain]);
     if (!sectionKey || !out[sectionKey]) continue;
+    if (sectionKey === 'targetMarkets' || sectionKey === 'services') continue;
 
     const cleaned = stripInterviewQuestionEcho(
       stripSupplementalPreamble(
@@ -8087,6 +8191,7 @@ async function generateBlueprint(store, session, genOpts = {}) {
     sections: pickBlueprintPipelineSectionSummaries(sections),
   });
   sections = mergeSupplementalIntoSections(sections, state.supplementalContext);
+  sections = pinComposedBlueprintSectionSummaries(preparedFacts, sections);
 
   // SPEC-090 — artifact readiness: mark weak evidence clearly; never invent facts.
   const readiness = checkArtifactReadiness(ARTIFACT_KINDS.BLUEPRINT, {
@@ -13120,6 +13225,7 @@ module.exports = {
   conversationalAck,
   extractBusinessName,
   mergeSupplementalIntoSections,
+  pinComposedBlueprintSectionSummaries,
   parseCorrectionMessage,
   parseSupplementalMessage,
   normalizeBusinessPhrase,
