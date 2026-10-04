@@ -17,4 +17,9 @@ describe('Signal V1 production module load', () => {
     assert.equal(typeof pkg.replayToken, 'function');
     assert.equal(typeof pkg.validateHistoricalCoverage, 'function');
   });
+
+  it('requires the production route without a syntax or module-load error', () => {
+    const router = require('../../../routes/signalV1');
+    assert.equal(typeof router, 'function');
+  });
 });
