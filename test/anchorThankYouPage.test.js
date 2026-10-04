@@ -54,4 +54,15 @@ describe('Anchor thank-you conversion page (SPEC-ANCHOR-SITE-THANKYOU-001)', () 
     assert.match(html, /\/assets\/service-assurance\/client-dashboard\.png/);
     assert.match(html, /href="#service-assurance"/);
   });
+
+  it('surfaces Eliza B. review near the quote form and uses Check Cleaning Availability CTAs', () => {
+    const html = fs.readFileSync(RESIDENTIAL, 'utf8');
+    assert.match(html, /Eliza B\./);
+    assert.match(html, /deep clean of the floor/i);
+    assert.match(html, /quote-review--aside/);
+    assert.match(html, /quote-review--pre-cta/);
+    assert.match(html, /Check Cleaning Availability/);
+    assert.match(html, /Recurring home cleaning · Bedford &amp; Greater Manchester/);
+    assert.doesNotMatch(html, /Request My Quote/);
+  });
 });
