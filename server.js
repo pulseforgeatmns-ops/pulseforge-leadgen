@@ -53,6 +53,7 @@ const { ensureEmmettAutosendSchema } = require('./utils/emmettAutosend');
 const { ensurePlacesAttributionSchema } = require('./utils/placesCostAttribution');
 const { ensureAnchorPortalSchema } = require('./utils/anchorPortalSchema');
 const stripeWebhookRouter = require('./routes/stripeWebhook');
+const { ensureSignalSchema } = require('./packages/signal-v1');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -77,6 +78,7 @@ ensureMiraSchema().catch(err => console.error('[mira] init error:', err.message)
 ensureLifecycleSchema(pool).catch(err => console.error('[lifecycle] init error:', err.message));
 ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] init error:', err.message));
 ensureAnchorPortalSchema().catch(err => console.error('[anchorPortal] init error:', err.message));
+ensureSignalSchema(pool).catch(err => console.error('[signal-v1] schema init error:', err.message));
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();
@@ -280,6 +282,7 @@ app.use('/', require('./routes/scorecard'));
 app.use('/', require('./routes/walkthrough'));
 app.use('/', require('./routes/anchorPortal'));
 app.use('/', require('./routes/leadQualificationReviews'));
+app.use('/', require('./routes/signalV1'));
 
 // TEMP: one-shot GBP account/location lookup. CRON_SECRET-gated so it can be
 // curled without a session cookie. REMOVE AFTER MSHI IDs ARE CAPTURED.

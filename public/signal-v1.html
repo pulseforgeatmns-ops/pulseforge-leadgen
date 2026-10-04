@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Signal V1 — Paper Research</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --text:#e8eaed; --muted:#9aa0a6; --accent:#7cb9ff; --risk:#ff8a80; }
+    body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:16px 20px; border-bottom:1px solid #2a2f3a; display:flex; gap:12px; align-items:center; }
+    main { display:grid; grid-template-columns: 320px 1fr; gap:16px; padding:16px; }
+    .panel { background:var(--panel); border:1px solid #2a2f3a; border-radius:10px; padding:12px; }
+    h1,h2 { margin:0 0 8px; font-size:16px; }
+    select, button { width:100%; padding:8px; border-radius:8px; border:1px solid #3a4254; background:#10131a; color:var(--text); }
+    button { cursor:pointer; margin-top:8px; }
+    .muted { color:var(--muted); }
+    ul { margin:8px 0; padding-left:18px; }
+    .risk { color:var(--risk); }
+    .timeline-item { border-top:1px solid #2a2f3a; padding:8px 0; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#243047; color:var(--accent); font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Signal V1</h1>
+    <span class="muted">Paper-only · no live execution</span>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>Token</h2>
+      <select id="tokenSelect"></select>
+      <button id="evaluateBtn">Evaluate now</button>
+      <button id="replayBtn">Run fixture replay</button>
+      <div id="tokenMeta" class="muted" style="margin-top:12px"></div>
+    </section>
+    <section class="panel">
+      <h2>Why <span id="stateBadge" class="badge">—</span></h2>
+      <div>Score: <strong id="score">—</strong></div>
+      <h3>Positive evidence</h3>
+      <ul id="reasons"></ul>
+      <h3 class="risk">Risks</h3>
+      <ul id="risks" class="risk"></ul>
+      <h2>Timeline</h2>
+      <div id="timeline"></div>
+      <h2>Paper position</h2>
+      <pre id="paper" class="muted">None</pre>
+    </section>
+  </main>
+  <script>
+    const tokenSelect = document.getElementById('tokenSelect');
+    const casesWithAddress = [];
+
+    async function loadCases() {
+      const res = await fetch('/api/v1/signal/research-cases');
+      const data = await res.json();
+      casesWithAddress.push(...data.cases.filter(c => c.tokenAddress));
+      tokenSelect.innerHTML = casesWithAddress
+        .map(c => `<option value="${c.tokenAddress}">${c.ticker} (${c.addressProvenance})</option>`)
+        .join('');
+      if (casesWithAddress[0]) await refresh(casesWithAddress[0].tokenAddress);
+    }
+
+    function renderList(el, items) {
+      el.innerHTML = (items && items.length)
+        ? items.map(i => `<li>${i}</li>`).join('')
+        : '<li class="muted">None</li>';
+    }
+
+    async function refresh(tokenAddress) {
+      const [detail, timeline] = await Promise.all([
+        fetch(`/api/v1/signal/tokens/${tokenAddress}`).then(r => r.json()),
+        fetch(`/api/v1/signal/tokens/${tokenAddress}/timeline`).then(r => r.json()),
+      ]);
+      const c = casesWithAddress.find(x => x.tokenAddress === tokenAddress);
+      document.getElementById('tokenMeta').textContent =
+        `${c?.ticker || ''} · ${tokenAddress} · claim: ${c?.telegramClaim?.provenance || 'n/a'}`;
+      const decision = detail.decision;
+      document.getElementById('stateBadge').textContent = decision?.state || '—';
+      document.getElementById('score').textContent = decision?.score ?? '—';
+      renderList(document.getElementById('reasons'), decision?.explanation?.reasons);
+      renderList(document.getElementById('risks'), decision?.explanation?.risks);
+      document.getElementById('timeline').innerHTML = (timeline.events || []).map(e => `
+        <div class="timeline-item">
+          <div><strong>${e.eventType}</strong> <span class="muted">${new Date(e.occurredAt).toISOString()}</span></div>
+          <div class="muted">${e.sourceId || e.sourceType}${e.walletAddress ? ' · ' + e.walletAddress.slice(0,8) : ''}</div>
+        </div>`).join('');
+      document.getElementById('paper').textContent = detail.paperPosition
+        ? JSON.stringify(detail.paperPosition, null, 2)
+        : 'None';
+    }
+
+    document.getElementById('evaluateBtn').onclick = async () => {
+      const tokenAddress = tokenSelect.value;
+      await fetch(`/api/v1/signal/tokens/${tokenAddress}/evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ evaluatedAt: new Date().toISOString() }),
+      });
+      await refresh(tokenAddress);
+    };
+
+    document.getElementById('replayBtn').onclick = async () => {
+      const tokenAddress = tokenSelect.value;
+      await fetch(`/api/v1/signal/tokens/${tokenAddress}/replay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pricePath: [
+            { occurredAt: '2026-09-29T18:00:00Z', price: 0.00012 },
+            { occurredAt: '2026-09-29T18:30:00Z', price: 0.00024 },
+            { occurredAt: '2026-09-29T19:00:00Z', price: 0.0003 },
+            { occurredAt: '2026-09-29T20:00:00Z', price: 0.00007 },
+          ],
+        }),
+      });
+      await refresh(tokenAddress);
+    };
+
+    tokenSelect.onchange = () => refresh(tokenSelect.value);
+    loadCases().catch(err => {
+      document.body.insertAdjacentHTML('beforeend', `<pre class="risk">${err}</pre>`);
+    });
+  </script>
+</body>
+</html>
