@@ -4460,19 +4460,62 @@ function isOutcomePhraseNotService(item) {
   );
 }
 
+const BLUEPRINT_AVOID_CLOSING_SENTENCE =
+  'These constraints protect targeting quality and should stay visible in the Blueprint.';
+
+function stripAvoidCustomersBlueprintClosing(text) {
+  return String(text || '')
+    .replace(
+      /\s*these constraints protect targeting quality and should stay visible in the blueprint\.?\s*/gi,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isServiceCompositionNoise(item) {
+  const s = String(item || '').trim();
+  if (!s) return true;
+  if (isMisassignedWebsitePainItem(s)) return true;
+  if (isOutcomePhraseNotService(s)) return true;
+  if (
+    /\b(?:for now\b|broken on mobile|below the quality|look legitimate|help the business look|quality of the business itself)\b/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/^(?:but|and or|for now|broken on mobile)\b/i.test(s)) return true;
+  if (
+    /\b(?:owner-led|decision-maker|trust, lead flow|lead flow|sales)\b/i.test(s) &&
+    !/\b(?:redesign|design|copywriting|seo|launch|messaging|optimization|booking flow)\b/i.test(s)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function resolveBriefServicesForComposition(facts) {
-  const slotServices = sanitizeBriefServiceList(facts.services);
+  const slotServices = sanitizeBriefServiceList(facts.services).filter(
+    (item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item)
+  );
   const evidence = String(facts.evidence_statements?.services || '').trim();
   const evidenceServices = evidence
-    ? sanitizeBriefServiceList(extractServiceList(evidence))
+    ? sanitizeBriefServiceList(extractServiceList(evidence)).filter(
+        (item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item)
+      )
     : [];
+
+  if (evidenceServices.length >= 2) {
+    return dedupeNormalizedList(evidenceServices);
+  }
   return dedupeNormalizedList([...slotServices, ...evidenceServices]).filter(
-    (item) => !isOutcomePhraseNotService(item)
+    (item) => !isServiceCompositionNoise(item) && !isOutcomePhraseNotService(item)
   );
 }
 
 function stripDisqualifiedCustomerLeadIn(text) {
-  let s = normalizeBusinessPhrase(String(text || '').trim());
+  let s = normalizeBusinessPhrase(stripAvoidCustomersBlueprintClosing(String(text || '').trim()));
   s = s.replace(/^yes\.?\s*/i, '');
   s = stripInterviewQuestionEcho(s);
   s = s
@@ -4716,29 +4759,67 @@ function composeBlueprintAvoidCustomersSummary(facts) {
   const substance = cleaned.length === 1 ? cleaned[0] : naturalListPhrases(cleaned);
   return [
     ensurePeriod(`The business prefers to avoid ${substance}`),
-    'These constraints protect targeting quality and should stay visible in the Blueprint.',
+    BLUEPRINT_AVOID_CLOSING_SENTENCE,
   ].join(' ');
+}
+
+function normalizeTargetMarketVerticalPhrase(items) {
+  const list = dedupeNormalizedList(items || []);
+  if (!list.length) return '';
+  if (list.length === 1 && list[0].includes(',')) {
+    return list[0]
+      .replace(/\bmedical or wellness practices\b/i, 'medical and wellness practices')
+      .replace(/\bcontractors,\s*trades\b/i, 'contractors and trades');
+  }
+  const joined = naturalListPhrases(list);
+  return joined
+    .replace(/\bmedical,\s*wellness practices\b/i, 'medical and wellness practices')
+    .replace(/\bcontractors,\s*trades\b/i, 'contractors and trades');
 }
 
 function composeBlueprintTargetMarketsSummary(facts) {
   const { geo, verticalParts } = resolveTargetMarketsForComposition(facts);
-  const bits = dedupeNormalizedList([...geo, ...verticalParts]);
-  if (!bits.length) return '';
+  const geoList = dedupeNormalizedList(geo);
+  const verticalList = dedupeNormalizedList(verticalParts);
+  if (!geoList.length && !verticalList.length) return '';
 
-  const includeGrowth =
-    facts.growth_focus &&
-    (factsIndicateCommercialCleaningBusiness(facts) ||
-      !sameSemanticValue(facts.growth_focus, COMMERCIAL_CLEANING_GROWTH_FOCUS));
+  const geoPhrase =
+    geoList.length === 2 ? `${geoList[0]} and ${geoList[1]}` : naturalListPhrases(geoList);
+  const verticalPhrase = normalizeTargetMarketVerticalPhrase(verticalList);
 
-  const marketProse = naturalListPhrases(bits);
-  const first = includeGrowth
-    ? `Priority markets center on ${marketProse}, with a near-term growth focus on ${facts.growth_focus}`
-    : `Priority markets center on ${marketProse}`;
+  let first;
+  if (geoList.length && verticalPhrase) {
+    first = `Priority markets are ${geoPhrase}, with an initial focus on ${verticalPhrase}`;
+  } else if (geoList.length) {
+    first = `Priority markets are ${geoPhrase}`;
+  } else {
+    first = `Priority markets have an initial focus on ${verticalPhrase}`;
+  }
 
-  return [
-    ensurePeriod(first),
-    'Geography and vertical focus here bound where discovery should concentrate first.',
-  ].join(' ');
+  return ensurePeriod(first);
+}
+
+function normalizeDifferentiationCompositionText(text) {
+  let t = String(text || '').trim();
+  t = stripInterviewQuestionEcho(t);
+  t = cleanRawAnswer('competitiveAdvantages', t);
+  t = t
+    .replace(/^competitive edge is described as\s+/i, '')
+    .replace(
+      /^a great-fit customer chooses\s+[^,]+ when they care about\s+/i,
+      'Customers care about '
+    )
+    .replace(/^a great-fit customer chooses\s+[^,]+ when\s+/i, '')
+    .trim();
+  if (/^they care about\b/i.test(t)) {
+    t = `Customers care about ${t.replace(/^they care about\s+/i, '')}`;
+  }
+  t = t.replace(/\.\s+that\s+/gi, '. ');
+  const sentences = t
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => capitalizeSentence(sentence.trim()))
+    .filter(Boolean);
+  return sentences.join(' ');
 }
 
 function composeBlueprintDifferentiationSummary(facts) {
@@ -4748,18 +4829,10 @@ function composeBlueprintDifferentiationSummary(facts) {
     evidence.length > slot.length + 20 && /credibility|clarity|business impact|choose/i.test(evidence)
       ? evidence
       : slot || evidence;
-  text = stripInterviewQuestionEcho(text);
-  text = cleanRawAnswer('competitiveAdvantages', text);
-  text = text
-    .replace(/^competitive edge is described as\s+/i, '')
-    .replace(/^a great-fit customer chooses\s+[^,]+ when\s+/i, '')
-    .trim();
-  if (/^they care about\b/i.test(text)) {
-    text = `customers care about ${text.replace(/^they care about\s+/i, '')}`;
-  }
+  text = normalizeDifferentiationCompositionText(text);
   if (!text) return '';
   return [
-    ensurePeriod(capitalizeSentence(text)),
+    ensurePeriod(text),
     'This is operator-stated differentiation — useful for messaging, not an invented strategy claim.',
   ].join(' ');
 }

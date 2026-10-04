@@ -215,6 +215,83 @@ describe('Studio Substral Blueprint section mapping (v1.1 regeneration)', () => 
     assert.doesNotMatch(sections.successMetrics.summary, /good prospect should/i);
   });
 
+  it('composes Blueprint v1.5 sections without transcript debris or duplicate boilerplate', () => {
+    const prepared = prepareNormalizedFactsForBrief({
+      business_name: 'Studio Substral',
+      services: [
+        'website redesign',
+        'but to help the business look legitimate',
+        'For now',
+        'broken on mobile',
+        'and or below the quality of the business itself',
+      ],
+      geography: ['Greater Manchester', 'southern New Hampshire'],
+      vertical_focus:
+        'local service businesses, contractors and trades, professional services, medical and wellness practices, property service companies, hospitality businesses, and growing owner-led local brands',
+      disqualified_customers: [
+        'customers who are mainly looking for the cheapest possible website. These constraints protect targeting quality and should stay visible in the Blueprint.',
+      ],
+      differentiation: 'clarity, speed, and a credible design process',
+      brand_voice: 'clear, confident, and practical',
+      ninety_day_outcomes: 'Acquire one profitable website redesign client at $2,000+',
+      success_metrics: ['qualified prospects identified', 'discovery calls booked'],
+      epistemic_states: {
+        business_description: EPISTEMIC_STATES.KNOWN,
+        services: EPISTEMIC_STATES.KNOWN,
+        ideal_customers: EPISTEMIC_STATES.KNOWN,
+        disqualified_customers: EPISTEMIC_STATES.KNOWN,
+        geography: EPISTEMIC_STATES.KNOWN,
+        differentiation: EPISTEMIC_STATES.KNOWN,
+        brand_voice: EPISTEMIC_STATES.KNOWN,
+        ninety_day_outcomes: EPISTEMIC_STATES.KNOWN,
+        success_metrics: EPISTEMIC_STATES.KNOWN,
+      },
+      hypotheses: {},
+      evidence_statements: {
+        services:
+          'Studio Substral offers website redesign, messaging, visual design, mobile optimization, stronger calls to action, homepage and key page design, copywriting, contact and booking flow setup, basic SEO cleanup, launch support, and light post-launch refinement.',
+        differentiation:
+          'A great-fit customer chooses Studio Substral when they care about credibility, clarity, and business impact more than simply getting the cheapest website. that Studio Substral can connect design choices directly to trust and lead flow.',
+      },
+      business_facts: {},
+      transformation_areas: [],
+      pains: [],
+      learning_signals: [],
+      excluded_metrics: [],
+      superseded_slots: [],
+    });
+    const sections = sectionsFromNormalizedFacts(prepared);
+
+    assert.match(
+      sections.services.summary,
+      /Studio Substral delivers website redesign, messaging, visual design/i
+    );
+    assert.doesNotMatch(sections.services.summary, /but to help the business look legitimate/i);
+    assert.doesNotMatch(sections.services.summary, /For now|broken on mobile|below the quality/i);
+
+    const avoidClosing = 'These constraints protect targeting quality and should stay visible in the Blueprint.';
+    assert.equal(
+      (sections.avoidCustomers.summary.match(new RegExp(avoidClosing.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || [])
+        .length,
+      1
+    );
+
+    assert.match(
+      sections.targetMarkets.summary,
+      /Priority markets are Greater Manchester and southern New Hampshire, with an initial focus on/i
+    );
+    assert.match(sections.targetMarkets.summary, /contractors and trades|contractors, trades/i);
+    assert.doesNotMatch(sections.targetMarkets.summary, /decision-maker|cheapest possible website|lead flow/i);
+    assert.doesNotMatch(sections.targetMarkets.summary, /Geography and vertical focus here bound/i);
+
+    assert.match(
+      sections.competitiveAdvantages.summary,
+      /Customers care about credibility, clarity, and business impact/i
+    );
+    assert.match(sections.competitiveAdvantages.summary, /connect design choices directly to trust and lead flow/i);
+    assert.doesNotMatch(sections.competitiveAdvantages.summary, /\. that Studio Substral/i);
+  });
+
   it('composes Blueprint v1.4 sections without wrapper duplication or cross-section bleed', () => {
     const answers = {
       services:
