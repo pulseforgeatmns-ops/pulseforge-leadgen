@@ -3,6 +3,7 @@
 const { createHash } = require('crypto');
 const { RESEARCH_DEFINITION_VERSION, RESEARCH_OBSERVATION_TYPES } = require('../types');
 const { evaluateObservationOutcomes } = require('./observationOutcomes');
+const { callStore } = require('../storage/storeUtils');
 const {
   evaluateFirstCaller,
   evaluateIndependentConvergence,
@@ -19,7 +20,7 @@ const {
  * @param {import('../storage/InMemorySignalStore').InMemorySignalStore} store
  * @param {object} ctx
  */
-function evaluateResearchObservationsAtStep(store, ctx) {
+async function evaluateResearchObservationsAtStep(store, ctx) {
   const {
     tokenAddress,
     stepAt,
@@ -30,7 +31,7 @@ function evaluateResearchObservationsAtStep(store, ctx) {
     researchConfig,
   } = ctx;
 
-  const existing = store.getResearchObservations(tokenAddress, definitionVersion);
+  const existing = await callStore(store, 'getResearchObservations', tokenAddress, definitionVersion);
   const existingTypes = new Set(existing.map(o => o.observationType));
 
   const firstCallerObs = existing.find(o => o.observationType === 'FIRST_CALLER');
@@ -42,7 +43,7 @@ function evaluateResearchObservationsAtStep(store, ctx) {
 
   const created = [];
 
-  const maybeCreate = (type, payload) => {
+  const maybeCreate = async (type, payload) => {
     if (!payload || existingTypes.has(type)) return;
     if (payload.unavailable || payload.negative) return;
 
@@ -50,7 +51,7 @@ function evaluateResearchObservationsAtStep(store, ctx) {
     const obsId = deterministicId(
       `${tokenAddress}|${type}|${definitionVersion}|${occurredIso}`
     );
-    const row = store.insertResearchObservation({
+    const row = await callStore(store, 'insertResearchObservation', {
       id: obsId,
       tokenAddress,
       observationType: type,
@@ -63,6 +64,9 @@ function evaluateResearchObservationsAtStep(store, ctx) {
     });
     existingTypes.add(type);
     created.push(row);
+    if (store.researchObservations && Array.isArray(store.researchObservations)) {
+      store.researchObservations.push(row);
+    }
 
     if (pricePath && pricePath.length) {
       const outcomes = evaluateObservationOutcomes({
@@ -70,21 +74,24 @@ function evaluateResearchObservationsAtStep(store, ctx) {
         pricePath,
       });
       for (const outcome of outcomes) {
-        store.insertResearchObservationOutcome({
+        const outcomeRow = await callStore(store, 'insertResearchObservationOutcome', {
           id: deterministicId(`${obsId}|${outcome.executionDelaySeconds}`),
           observationId: row.id,
           ...outcome,
         });
+        if (store.researchObservationOutcomes && Array.isArray(store.researchObservationOutcomes)) {
+          store.researchObservationOutcomes.push(outcomeRow);
+        }
       }
     }
   };
 
-  maybeCreate('FIRST_CALLER', evaluateFirstCaller(store, tokenAddress, stepAt));
-  maybeCreate(
+  await maybeCreate('FIRST_CALLER', evaluateFirstCaller(store, tokenAddress, stepAt));
+  await maybeCreate(
     'INDEPENDENT_CONVERGENCE',
     evaluateIndependentConvergence(store, tokenAddress, stepAt, researchConfig)
   );
-  maybeCreate(
+  await maybeCreate(
     'QUALITY_CONVERGENCE',
     evaluateQualityConvergence(store, tokenAddress, stepAt, researchConfig)
   );
@@ -100,15 +107,15 @@ function evaluateResearchObservationsAtStep(store, ctx) {
     researchConfig
   );
   if (wallet && !wallet.unavailable && !wallet.negative) {
-    maybeCreate('WALLET_CONFIRMATION', wallet);
+    await maybeCreate('WALLET_CONFIRMATION', wallet);
   }
 
-  maybeCreate(
+  await maybeCreate(
     'STRUCTURE_GATE',
     evaluateStructureGateObservation(snapshot.features, stepAt)
   );
 
-  maybeCreate(
+  await maybeCreate(
     'AMPLIFIER_ARRIVAL',
     evaluateAmplifierArrival(store, tokenAddress, stepAt, {
       ...researchState,
@@ -117,7 +124,7 @@ function evaluateResearchObservationsAtStep(store, ctx) {
     })
   );
 
-  maybeCreate(
+  await maybeCreate(
     'SIGNAL_ENTRY',
     evaluateSignalEntry(decisionState, stepAt, snapshot.id, {
       state: decisionState,

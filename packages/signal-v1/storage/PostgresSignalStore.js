@@ -697,6 +697,250 @@ class PostgresSignalStore {
     return mapPaperPositionRow(row);
   }
 
+  async upsertResearchCandidate(candidate) {
+    await this.pool.query(
+      `INSERT INTO signal_research_candidates (
+        id, token_address, chain, discovered_from, earliest_known_call_at,
+        source_ids, source_cluster_ids, selection_category, selection_reason,
+        provenance, status, exclusion_reason, updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9,$10::jsonb,$11,$12,NOW())
+      ON CONFLICT (token_address, discovered_from) DO UPDATE SET
+        status = EXCLUDED.status,
+        exclusion_reason = EXCLUDED.exclusion_reason,
+        selection_category = EXCLUDED.selection_category,
+        provenance = signal_research_candidates.provenance || EXCLUDED.provenance,
+        updated_at = NOW()`,
+      [
+        candidate.id,
+        candidate.tokenAddress,
+        candidate.chain || 'solana',
+        candidate.discoveredFrom,
+        candidate.earliestKnownCallAt ? toDate(candidate.earliestKnownCallAt) : null,
+        JSON.stringify(candidate.sourceIds || []),
+        JSON.stringify(candidate.sourceClusterIds || []),
+        candidate.selectionCategory || null,
+        candidate.selectionReason || null,
+        JSON.stringify({
+          ...(candidate.provenance || {}),
+          acquisitionPayload: candidate.acquisitionPayload || {},
+        }),
+        candidate.status,
+        candidate.exclusionReason || null,
+      ]
+    );
+    return candidate;
+  }
+
+  async updateResearchCandidateStatus(id, status, exclusionReason = null) {
+    await this.pool.query(
+      `UPDATE signal_research_candidates SET status = $2, exclusion_reason = COALESCE($3, exclusion_reason), updated_at = NOW()
+       WHERE id = $1`,
+      [id, status, exclusionReason]
+    );
+  }
+
+  async listResearchCandidates({ status, tokenAddress } = {}) {
+    const params = [];
+    let sql = `SELECT * FROM signal_research_candidates WHERE 1=1`;
+    if (status) {
+      params.push(status);
+      sql += ` AND status = $${params.length}`;
+    }
+    if (tokenAddress) {
+      params.push(tokenAddress);
+      sql += ` AND token_address = $${params.length}`;
+    }
+    sql += ` ORDER BY token_address ASC`;
+    const res = await this.pool.query(sql, params);
+    return res.rows.map(mapResearchCandidateRow);
+  }
+
+  async upsertResearchCohort(cohort) {
+    await this.pool.query(
+      `INSERT INTO signal_research_cohorts (id, name, definition_version, metadata, frozen_at, selection_version)
+       VALUES ($1,$2,$3,$4::jsonb,$5,$6)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         definition_version = EXCLUDED.definition_version,
+         metadata = signal_research_cohorts.metadata || EXCLUDED.metadata,
+         frozen_at = COALESCE(EXCLUDED.frozen_at, signal_research_cohorts.frozen_at),
+         selection_version = COALESCE(EXCLUDED.selection_version, signal_research_cohorts.selection_version)`,
+      [
+        cohort.id,
+        cohort.name,
+        cohort.definitionVersion,
+        JSON.stringify(cohort.metadata || {}),
+        cohort.frozenAt ? toDate(cohort.frozenAt) : null,
+        cohort.selectionVersion || null,
+      ]
+    );
+    return cohort;
+  }
+
+  async addCohortMember(member) {
+    const frozen = await this.pool.query(
+      `SELECT frozen_at FROM signal_research_cohorts WHERE id = $1`,
+      [member.cohortId]
+    );
+    if (frozen.rows[0]?.frozen_at) {
+      throw new Error(
+        `Cohort ${member.cohortId} is frozen; create a new cohort version to mutate membership`
+      );
+    }
+    await this.pool.query(
+      `INSERT INTO signal_research_cohort_members (cohort_id, token_address, inclusion_reason, provenance)
+       VALUES ($1,$2,$3,$4::jsonb)
+       ON CONFLICT (cohort_id, token_address) DO NOTHING`,
+      [
+        member.cohortId,
+        member.tokenAddress,
+        member.inclusionReason,
+        JSON.stringify(member.provenance || {}),
+      ]
+    );
+    return member;
+  }
+
+  async getCohortMembers(cohortId) {
+    const res = await this.pool.query(
+      `SELECT * FROM signal_research_cohort_members WHERE cohort_id = $1 ORDER BY token_address ASC`,
+      [cohortId]
+    );
+    return res.rows.map(r => ({
+      cohortId: r.cohort_id,
+      tokenAddress: r.token_address,
+      inclusionReason: r.inclusion_reason,
+      provenance: r.provenance,
+      createdAt: r.created_at,
+    }));
+  }
+
+  listResearchCohorts() {
+    return this.pool
+      .query(`SELECT * FROM signal_research_cohorts ORDER BY created_at DESC`)
+      .then(res =>
+        res.rows.map(r => ({
+          id: r.id,
+          name: r.name,
+          definitionVersion: r.definition_version,
+          metadata: r.metadata,
+          frozenAt: r.frozen_at,
+          selectionVersion: r.selection_version,
+          createdAt: r.created_at,
+        }))
+      );
+  }
+
+  getResearchObservations(tokenAddress, definitionVersion) {
+    return this.pool
+      .query(
+        `SELECT * FROM signal_research_observations
+         WHERE token_address = $1 AND ($2::text IS NULL OR definition_version = $2)
+         ORDER BY occurred_at ASC`,
+        [tokenAddress, definitionVersion || null]
+      )
+      .then(res =>
+        res.rows.map(r => ({
+          id: r.id,
+          tokenAddress: r.token_address,
+          observationType: r.observation_type,
+          occurredAt: r.occurred_at,
+          featureSnapshotId: r.feature_snapshot_id,
+          triggerEventIds: r.trigger_event_ids,
+          evidenceEventIds: r.evidence_event_ids,
+          definitionVersion: r.definition_version,
+          metadata: r.metadata,
+        }))
+      );
+  }
+
+  async insertResearchObservation(observation) {
+    await this.pool.query(
+      `INSERT INTO signal_research_observations (
+        id, token_address, observation_type, occurred_at, feature_snapshot_id,
+        trigger_event_ids, evidence_event_ids, definition_version, metadata
+      ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,$8,$9::jsonb)
+      ON CONFLICT (token_address, observation_type, definition_version) DO NOTHING`,
+      [
+        observation.id || randomUUID(),
+        observation.tokenAddress,
+        observation.observationType,
+        toDate(observation.occurredAt),
+        observation.featureSnapshotId || null,
+        JSON.stringify(observation.triggerEventIds || []),
+        JSON.stringify(observation.evidenceEventIds || []),
+        observation.definitionVersion,
+        JSON.stringify(observation.metadata || {}),
+      ]
+    );
+    const existing = await this.pool.query(
+      `SELECT * FROM signal_research_observations
+       WHERE token_address = $1 AND observation_type = $2 AND definition_version = $3`,
+      [observation.tokenAddress, observation.observationType, observation.definitionVersion]
+    );
+    return mapResearchObservationRow(existing.rows[0]);
+  }
+
+  async getResearchObservationOutcomes(observationId) {
+    const res = await this.pool.query(
+      `SELECT * FROM signal_research_observation_outcomes WHERE observation_id = $1
+       ORDER BY execution_delay_seconds ASC`,
+      [observationId]
+    );
+    return res.rows.map(r => ({
+      id: r.id,
+      observationId: r.observation_id,
+      executionDelaySeconds: r.execution_delay_seconds,
+      dataAvailability: r.data_availability,
+      entryPrice: r.entry_price,
+      label: r.label,
+      mfe: r.mfe,
+      mae: r.mae,
+      timeTo2xSeconds: r.time_to_2x_seconds,
+      timeToMinus30Seconds: r.time_to_minus_30_seconds,
+      return15m: r.return_15m,
+      return1h: r.return_1h,
+      return6h: r.return_6h,
+      return24h: r.return_24h,
+      horizonHours: r.horizon_hours,
+      metadata: r.metadata,
+    }));
+  }
+
+  async insertResearchObservationOutcome(outcome) {
+    await this.pool.query(
+      `INSERT INTO signal_research_observation_outcomes (
+        id, observation_id, execution_delay_seconds, data_availability, entry_price, label,
+        mfe, mae, time_to_2x_seconds, time_to_minus_30_seconds,
+        return_15m, return_1h, return_6h, return_24h, horizon_hours, metadata
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)
+      ON CONFLICT (observation_id, execution_delay_seconds) DO NOTHING`,
+      [
+        outcome.id || randomUUID(),
+        outcome.observationId,
+        outcome.executionDelaySeconds,
+        outcome.dataAvailability,
+        outcome.entryPrice,
+        outcome.label,
+        outcome.mfe,
+        outcome.mae,
+        outcome.timeTo2xSeconds,
+        outcome.timeToMinus30Seconds,
+        outcome.return15m,
+        outcome.return1h,
+        outcome.return6h,
+        outcome.return24h,
+        outcome.horizonHours ?? 24,
+        JSON.stringify(outcome.metadata || {}),
+      ]
+    );
+    return outcome;
+  }
+
+  researchObservations = [];
+  researchObservationOutcomes = [];
+  researchCohorts = new Map();
+
   async clearReplayArtifacts(tokenAddress) {
     await this.pool.query(`DELETE FROM signal_paper_transactions WHERE position_id IN (
       SELECT id FROM signal_paper_positions WHERE token_address = $1
@@ -822,6 +1066,42 @@ function mapPaperPositionRow(row) {
     status: row.status,
     entrySnapshotId: row.entry_snapshot_id,
     closedAt: row.closed_at,
+    metadata: row.metadata,
+  };
+}
+
+function mapResearchCandidateRow(row) {
+  const provenance = row.provenance || {};
+  return {
+    id: row.id,
+    tokenAddress: row.token_address,
+    chain: row.chain,
+    discoveredFrom: row.discovered_from,
+    earliestKnownCallAt: row.earliest_known_call_at,
+    sourceIds: row.source_ids,
+    sourceClusterIds: row.source_cluster_ids,
+    selectionCategory: row.selection_category,
+    selectionReason: row.selection_reason,
+    provenance,
+    acquisitionPayload: provenance.acquisitionPayload || {},
+    status: row.status,
+    exclusionReason: row.exclusion_reason,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapResearchObservationRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    tokenAddress: row.token_address,
+    observationType: row.observation_type,
+    occurredAt: row.occurred_at,
+    featureSnapshotId: row.feature_snapshot_id,
+    triggerEventIds: row.trigger_event_ids,
+    evidenceEventIds: row.evidence_event_ids,
+    definitionVersion: row.definition_version,
     metadata: row.metadata,
   };
 }

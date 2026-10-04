@@ -106,22 +106,29 @@ router.post('/api/v1/signal/tokens/:tokenAddress/evaluate', requireResearch, asy
   }
 });
 
-router.get('/api/v1/signal/research/cohorts', requireResearch, (req, res) => {
+router.get('/api/v1/signal/research/cohorts', requireResearch, async (req, res) => {
+  const service = await getService();
   noStore(res);
-  return res.json({ cohorts: service.listResearchCohorts() });
+  const cohorts = service.listResearchCohorts();
+  const resolved = cohorts && typeof cohorts.then === 'function' ? await cohorts : cohorts;
+  return res.json({ cohorts: resolved });
 });
 
-router.get('/api/v1/signal/research/cohorts/:cohortId', requireResearch, (req, res) => {
-  const cohort = service.getResearchCohort(req.params.cohortId);
+router.get('/api/v1/signal/research/cohorts/:cohortId', requireResearch, async (req, res) => {
+  const service = await getService();
+  const cohort = await service.getResearchCohort(req.params.cohortId);
   if (!cohort) return res.status(404).json({ error: 'cohort_not_found' });
   noStore(res);
   return res.json({ cohort });
 });
 
-router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResearch, (req, res) => {
+router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResearch, async (req, res) => {
+  const service = await getService();
   const delay = Number(req.query.executionDelaySeconds || 60);
   try {
-    const evaluation = service.evaluateResearchCohort(req.params.cohortId, delay);
+    const evaluation = await service.evaluateResearchCohort(req.params.cohortId, delay, {
+      replayMembers: req.query.replayMembers !== 'false',
+    });
     noStore(res);
     return res.json(evaluation);
   } catch (err) {
@@ -129,13 +136,30 @@ router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResear
   }
 });
 
-router.get('/api/v1/signal/tokens/:tokenAddress/research-observations', requireResearch, (req, res) => {
+router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation/export', requireResearch, async (req, res) => {
+  const service = await getService();
+  const delay = Number(req.query.executionDelaySeconds || 60);
+  try {
+    const artifact = await service.exportResearchCohortEvaluation(req.params.cohortId, {
+      executionDelaySeconds: delay,
+      replayMembers: false,
+    });
+    noStore(res);
+    return res.json(artifact);
+  } catch (err) {
+    return res.status(400).json({ error: 'export_failed', message: String(err.message) });
+  }
+});
+
+router.get('/api/v1/signal/tokens/:tokenAddress/research-observations', requireResearch, async (req, res) => {
+  const service = await getService();
   const observations = service.getTokenResearchObservations(req.params.tokenAddress);
   noStore(res);
   return res.json({ observations });
 });
 
-router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, (req, res) => {
+router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, async (req, res) => {
+  const service = await getService();
   const body = req.body || {};
   try {
     const window = resolveResearchWindow(req.params.tokenAddress);
