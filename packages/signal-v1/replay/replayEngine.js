@@ -8,6 +8,22 @@ const { PaperPortfolio } = require('../paper/paperPortfolio');
 const { STRATEGY_VERSION, FEATURE_VERSION } = require('../types');
 const { createSignalAlert } = require('../alerts/signalAlert');
 const { evaluateResearchObservationsAtStep } = require('../research/researchObservationEngine');
+const { callStore } = require('../storage/storeUtils');
+const {
+  latestMarketContext,
+  buildPricePathFromObservations,
+} = require('../market/marketContext');
+const {
+  evaluateEntryOutcomesForDelays,
+  DEFAULT_EXECUTION_DELAYS_SECONDS,
+} = require('../outcomes/evaluateEntryOutcomes');
+const { filterObservationsAtOrBefore } = require('../temporal/temporalFirewall');
+const {
+  validateHistoricalCoverage,
+  resolveReplayStatus,
+  buildHistoricalUnavailablePayload,
+  HISTORICAL_DATA_UNAVAILABLE,
+} = require('../market/historicalCoverage');
 
 /**
  * Chronological replay — snapshots use only events/observations with occurredAt <= step time.
@@ -265,7 +281,7 @@ async function replayToken(store, input) {
     outcome = legacy[0]?.outcome || null;
   }
 
-  const digest = hashReplay(tokenAddress, timeline, strategyVersion, featureVersion);
+  const digest = hashReplay(store, tokenAddress, timeline, strategyVersion, featureVersion);
   const hadResolvableOutcomes = executionDelayOutcomes.some(r => r.entry && r.outcome);
   const replayStatus = resolveReplayStatus({
     coverage,
@@ -378,7 +394,7 @@ function shouldAlert(previousState, nextState) {
   return false;
 }
 
-function hashReplay(tokenAddress, timeline, strategyVersion, featureVersion) {
+function hashReplay(store, tokenAddress, timeline, strategyVersion, featureVersion) {
   const stableTimeline = timeline.map(step => ({
     decidedAt: new Date(step.decidedAt).toISOString(),
     state: step.state,

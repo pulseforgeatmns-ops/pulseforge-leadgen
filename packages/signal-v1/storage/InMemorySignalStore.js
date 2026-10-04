@@ -25,6 +25,8 @@ class InMemorySignalStore {
     this.researchCohorts = new Map();
     this.researchCohortMembers = [];
     this.walletPerformance = new Map();
+    this.marketObservations = [];
+    this.marketIngestionStats = [];
   }
 
   upsertToken(token) {
@@ -169,6 +171,74 @@ class InMemorySignalStore {
     };
     this.outcomes.push(row);
     return row;
+  }
+
+  insertMarketObservation(observation) {
+    const occurredAt = toDate(observation.occurredAt);
+    const key = `${observation.tokenAddress}|${observation.provider}|${occurredAt.toISOString()}|${observation.intervalSeconds}`;
+    const existing = this.marketObservations.find(
+      o =>
+        `${o.tokenAddress}|${o.provider}|${o.occurredAt.toISOString()}|${o.intervalSeconds}` ===
+        key
+    );
+    if (existing) return { row: existing, duplicate: true };
+
+    const row = {
+      id: observation.id || randomUUID(),
+      tokenAddress: observation.tokenAddress,
+      occurredAt,
+      priceUsd: Number(observation.priceUsd),
+      marketCapUsd: observation.marketCapUsd ?? null,
+      liquidityUsd: observation.liquidityUsd ?? null,
+      volumeIntervalUsd: observation.volumeIntervalUsd ?? null,
+      intervalSeconds: observation.intervalSeconds,
+      provider: observation.provider,
+      externalId: observation.externalId ?? null,
+      providerTimestamp: observation.providerTimestamp
+        ? toDate(observation.providerTimestamp)
+        : occurredAt,
+      observedTimestamp: observation.observedTimestamp
+        ? toDate(observation.observedTimestamp)
+        : new Date(),
+      ingestedAt: new Date(),
+      provenance: observation.provenance || {},
+    };
+    this.marketObservations.push(row);
+    return { row, duplicate: false };
+  }
+
+  getMarketObservationsForToken(tokenAddress, { startTime, endTime, maxOccurredAt } = {}) {
+    let list = this.marketObservations.filter(o => o.tokenAddress === tokenAddress);
+    if (startTime) {
+      const start = toDate(startTime).getTime();
+      list = list.filter(o => o.occurredAt.getTime() >= start);
+    }
+    if (endTime) {
+      const end = toDate(endTime).getTime();
+      list = list.filter(o => o.occurredAt.getTime() <= end);
+    }
+    if (maxOccurredAt) {
+      const max = toDate(maxOccurredAt).getTime();
+      list = list.filter(o => o.occurredAt.getTime() <= max);
+    }
+    return list.sort((a, b) => a.occurredAt - b.occurredAt || a.id.localeCompare(b.id));
+  }
+
+  insertMarketIngestionStats(stats) {
+    this.marketIngestionStats.push({ ...stats });
+    return stats;
+  }
+
+  getOutcomesForToken(tokenAddress) {
+    return this.outcomes
+      .filter(o => o.tokenAddress === tokenAddress)
+      .sort((a, b) => a.observedAt - b.observedAt);
+  }
+
+  getLatestMarketIngestionStats(tokenAddress) {
+    const rows = this.marketIngestionStats.filter(s => s.tokenAddress === tokenAddress);
+    rows.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    return rows[0] || null;
   }
 
   getWalletPerformance(walletAddress, asOf) {

@@ -25,10 +25,10 @@ const pricePath = [
 ];
 
 describe('SIGNAL-V1-003 research observations', () => {
-  it('observation temporal integrity — future events cannot create earlier observations', () => {
+  it('observation temporal integrity — future events cannot create earlier observations', async () => {
     const store = new InMemorySignalStore();
     seedFrontRunnersFixtures(store);
-    replayToken(store, { tokenAddress: DUPLICATE, pricePath });
+    await replayToken(store, { tokenAddress: DUPLICATE, pricePath });
 
     const firstCaller = store.researchObservations.find(o => o.observationType === 'FIRST_CALLER');
     assert.ok(firstCaller);
@@ -41,10 +41,10 @@ describe('SIGNAL-V1-003 research observations', () => {
     assert.equal(new Date(independent.occurredAt).toISOString(), '2026-09-29T18:09:00.000Z');
   });
 
-  it('cluster independence — one promotional cluster cannot trigger independent convergence alone', () => {
+  it('cluster independence — one promotional cluster cannot trigger independent convergence alone', async () => {
     const store = new InMemorySignalStore();
     seedFrontRunnersFixtures(store);
-    replayToken(store, { tokenAddress: HALLOW, pricePath: [
+    await replayToken(store, { tokenAddress: HALLOW, pricePath: [
       { occurredAt: '2026-09-27T20:00:00Z', price: 0.00004 },
       { occurredAt: '2026-09-27T20:10:00Z', price: 0.000045 },
     ] });
@@ -66,24 +66,24 @@ describe('SIGNAL-V1-003 research observations', () => {
     assert.notEqual(later.quality, 'unavailable');
   });
 
-  it('null semantics — unavailable quality is not treated as low quality', () => {
+  it('null semantics — unavailable quality is not treated as low quality', async () => {
     const store = new InMemorySignalStore();
     seedFrontRunnersFixtures(store);
-    replayToken(store, { tokenAddress: DUPLICATE, pricePath });
+    await replayToken(store, { tokenAddress: DUPLICATE, pricePath });
     const qualityConv = store.researchObservations.find(
       o => o.observationType === 'QUALITY_CONVERGENCE'
     );
     assert.equal(qualityConv, undefined);
   });
 
-  it('research/strategy separation — research observations do not change replay strategy timeline', () => {
+  it('research/strategy separation — research observations do not change replay strategy timeline', async () => {
     const storeA = new InMemorySignalStore();
     seedFrontRunnersFixtures(storeA);
-    const withResearch = replayToken(storeA, { tokenAddress: DUPLICATE, pricePath });
+    const withResearch = await replayToken(storeA, { tokenAddress: DUPLICATE, pricePath });
 
     const storeB = new InMemorySignalStore();
     seedFrontRunnersFixtures(storeB);
-    const baseline = replayToken(storeB, { tokenAddress: DUPLICATE, pricePath });
+    const baseline = await replayToken(storeB, { tokenAddress: DUPLICATE, pricePath });
 
     assert.deepEqual(
       withResearch.timeline.map(t => ({ state: t.state, score: t.score })),
@@ -110,15 +110,15 @@ describe('SIGNAL-V1-003 research observations', () => {
     assert.equal(gate.result, 'UNKNOWN');
   });
 
-  it('determinism — same events and versions produce identical observations', () => {
+  it('determinism — same events and versions produce identical observations', async () => {
     const input = { tokenAddress: DUPLICATE, pricePath };
     const storeA = new InMemorySignalStore();
     seedFrontRunnersFixtures(storeA);
-    const a = replayToken(storeA, input);
+    const a = await replayToken(storeA, input);
 
     const storeB = new InMemorySignalStore();
     seedFrontRunnersFixtures(storeB);
-    const b = replayToken(storeB, input);
+    const b = await replayToken(storeB, input);
 
     assert.equal(a.digest, b.digest);
     assert.deepEqual(
@@ -127,11 +127,11 @@ describe('SIGNAL-V1-003 research observations', () => {
     );
   });
 
-  it('initial proof tokens emit FIRST_CALLER where fixture calls exist', () => {
+  it('initial proof tokens emit FIRST_CALLER where fixture calls exist', async () => {
     for (const token of [DUPLICATE, DOOM, HALLOW]) {
       const store = new InMemorySignalStore();
       seedFrontRunnersFixtures(store);
-      replayToken(store, { tokenAddress: token, pricePath: pricePath.slice(0, 3) });
+      await replayToken(store, { tokenAddress: token, pricePath: pricePath.slice(0, 3) });
       assert.ok(
         store.researchObservations.some(o => o.observationType === 'FIRST_CALLER'),
         `expected FIRST_CALLER for ${token}`

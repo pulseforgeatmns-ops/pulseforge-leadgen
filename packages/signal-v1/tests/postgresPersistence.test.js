@@ -10,14 +10,16 @@ describe('Signal V1 Postgres persistence', () => {
   let instance = null;
   /** @type {import('pg').Pool|null} */
   let pool = null;
+  /** @type {string|null} */
+  let skipReason = null;
 
-  before(async (t) => {
+  before(async () => {
     let Pool;
     try {
       require.resolve('pg');
       ({ Pool } = require('pg'));
     } catch (err) {
-      t.skip(`pg module unavailable: ${err.message}`);
+      skipReason = `pg module unavailable: ${err.message}`;
       return;
     }
     const { startDisposablePostgres } = require('../../../test/helpers/disposablePostgres');
@@ -26,7 +28,7 @@ describe('Signal V1 Postgres persistence', () => {
         socketPrefix: 'sigpg-',
       });
     } catch (err) {
-      t.skip(`PostgreSQL unavailable: ${err.message}`);
+      skipReason = `PostgreSQL unavailable: ${err.message}`;
       return;
     }
     pool = new Pool({ connectionString: instance.connectionString });
@@ -38,7 +40,11 @@ describe('Signal V1 Postgres persistence', () => {
     if (instance) await instance.stop();
   });
 
-  it('events and market observations survive store reconstruction', async () => {
+  it('events and market observations survive store reconstruction', async (t) => {
+    if (skipReason) {
+      t.skip(skipReason);
+      return;
+    }
     const store1 = new PostgresSignalStore(pool);
     await store1.upsertToken({
       tokenAddress: 'PersistToken1111111111111111111111111111111111',
