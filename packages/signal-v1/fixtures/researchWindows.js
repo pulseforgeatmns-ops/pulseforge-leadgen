@@ -2,29 +2,41 @@
 
 const { RESEARCH_CASES } = require('./frontRunnersCases');
 
-/**
- * Research ingestion windows — at least 1h before first fixture event through 24h after.
- * DUPLICATE fixture timeline starts 2026-09-29T18:00:00Z.
- */
-const DEFAULT_EVENT_ANCHOR = '2026-09-29T18:00:00Z';
+/** Default research window padding: 1h before anchor through 24h after. */
+const PRE_EVENT_MS = 60 * 60 * 1000;
+const POST_EVENT_MS = 24 * 60 * 60 * 1000;
 
 function resolveResearchWindow(tokenAddress) {
   const researchCase = RESEARCH_CASES.find(c => c.tokenAddress === tokenAddress);
-  const anchor = researchCase?.researchAnchor || DEFAULT_EVENT_ANCHOR;
-  const anchorMs = new Date(anchor).getTime();
-  const startTime = new Date(anchorMs - 60 * 60 * 1000);
-  const endTime = new Date(anchorMs + 24 * 60 * 60 * 1000);
+  if (!researchCase?.researchAnchor) {
+    throw new Error(
+      `No researchAnchor configured for token ${tokenAddress}. Cannot infer historical event window.`
+    );
+  }
+  const anchorMs = new Date(researchCase.researchAnchor).getTime();
+  if (!Number.isFinite(anchorMs)) {
+    throw new Error(`Invalid researchAnchor for ${researchCase.slug}: ${researchCase.researchAnchor}`);
+  }
+  const startTime = new Date(anchorMs - PRE_EVENT_MS);
+  const endTime = new Date(anchorMs + POST_EVENT_MS);
   return {
     tokenAddress,
     startTime: startTime.toISOString(),
     endTime: endTime.toISOString(),
     resolutionSeconds: 60,
-    anchor,
-    slug: researchCase?.slug || null,
+    anchor: researchCase.researchAnchor,
+    slug: researchCase.slug,
+    ticker: researchCase.ticker,
   };
+}
+
+function listResearchWindows() {
+  return RESEARCH_CASES.filter(c => c.tokenAddress).map(c => resolveResearchWindow(c.tokenAddress));
 }
 
 module.exports = {
   resolveResearchWindow,
-  DEFAULT_EVENT_ANCHOR,
+  listResearchWindows,
+  PRE_EVENT_MS,
+  POST_EVENT_MS,
 };

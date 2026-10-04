@@ -2,6 +2,12 @@
 
 const { randomUUID } = require('crypto');
 const { createHash } = require('crypto');
+const {
+  validateHistoricalCoverage,
+  buildHistoricalUnavailablePayload,
+  HISTORICAL_DATA_UNAVAILABLE,
+} = require('../market/historicalCoverage');
+const { PROVIDER_ID } = require('../providers/GeckoTerminalMarketDataProvider');
 
 /**
  * @param {object} store — Signal store with market observation methods
@@ -11,26 +17,62 @@ const { createHash } = require('crypto');
  * @param {Date|string} args.startTime
  * @param {Date|string} args.endTime
  * @param {number} [args.resolutionSeconds]
+ * @param {Date|string} [args.decisionAnchor]
  */
 async function ingestHistoricalMarketData(store, provider, args) {
   const tokenAddress = args.tokenAddress;
   const startTime = new Date(args.startTime);
   const endTime = new Date(args.endTime);
   const resolutionSeconds = args.resolutionSeconds ?? 60;
+  const decisionAnchor = args.decisionAnchor || null;
 
   if (endTime <= startTime) {
-    throw new Error('endTime must be after startTime');
+    const coverage = validateHistoricalCoverage({
+      requestedStart: startTime,
+      requestedEnd: endTime,
+      observations: [],
+      decisionAnchor,
+      intervalSeconds: resolutionSeconds,
+    });
+    return unavailableStats(tokenAddress, provider, coverage, {
+      inserted: 0,
+      duplicates: 0,
+      rejected: 0,
+      receivedObservations: 0,
+    });
   }
 
   const received = await provider.getHistoricalPrices(tokenAddress, startTime, endTime, {
     resolutionSeconds,
   });
 
+  const providerId =
+    received[0]?.provider ||
+    (provider.constructor?.name === 'GeckoTerminalMarketDataProvider'
+      ? PROVIDER_ID
+      : provider.providerId || 'unknown');
+
+  const coverage = validateHistoricalCoverage({
+    requestedStart: startTime,
+    requestedEnd: endTime,
+    observations: received,
+    decisionAnchor,
+    intervalSeconds: resolutionSeconds,
+  });
+
   let inserted = 0;
   let duplicates = 0;
   let rejected = 0;
 
-  for (const obs of received) {
+  const persistable =
+    coverage.status === 'AVAILABLE' || coverage.status === 'PARTIAL'
+      ? received.filter(o => {
+          const t = new Date(o.occurredAt).getTime();
+          return t >= startTime.getTime() && t <= endTime.getTime();
+        })
+      : [];
+
+  for (const obs of persistable) {
     if (!validateObservation(obs)) {
       rejected += 1;
       continue;
@@ -54,7 +96,9 @@ async function ingestHistoricalMarketData(store, provider, args) {
       start: startTime.toISOString(),
       end: endTime.toISOString(),
     },
-    provider: received[0]?.provider || provider.constructor.name,
+    provider: providerId,
+    historicalDataStatus: coverage.status,
+    coverage,
     receivedObservations: received.length,
     inserted,
     duplicates,
@@ -64,7 +108,17 @@ async function ingestHistoricalMarketData(store, provider, args) {
     observationCount: persisted.length,
     observationStart: persisted[0]?.occurredAt?.toISOString?.() || null,
     observationEnd: persisted[persisted.length - 1]?.occurredAt?.toISOString?.() || null,
+    unavailable: coverage.status === 'UNAVAILABLE' || coverage.status === 'INVALID_RANGE',
   };
+
+  if (stats.unavailable) {
+    stats.error = HISTORICAL_DATA_UNAVAILABLE;
+    stats.unavailablePayload = buildHistoricalUnavailablePayload({
+      tokenAddress,
+      provider: providerId,
+      coverage,
+    });
+  }
 
   if (store.insertMarketIngestionStats) {
     await store.insertMarketIngestionStats({
@@ -86,6 +140,38 @@ async function ingestHistoricalMarketData(store, provider, args) {
   return stats;
 }
 
+function unavailableStats(tokenAddress, provider, coverage, counts) {
+  const providerId =
+    provider?.providerId ||
+    (provider?.constructor?.name === 'GeckoTerminalMarketDataProvider' ? PROVIDER_ID : 'unknown');
+  return {
+    tokenAddress,
+    requestedRange: {
+      start: coverage.requestedStart,
+      end: coverage.requestedEnd,
+    },
+    provider: providerId,
+    historicalDataStatus: coverage.status,
+    coverage,
+    receivedObservations: counts.receivedObservations,
+    inserted: counts.inserted,
+    duplicates: counts.duplicates,
+    rejected: counts.rejected,
+    missingIntervals: 0,
+    effectiveResolutionSeconds: null,
+    observationCount: 0,
+    observationStart: null,
+    observationEnd: null,
+    unavailable: true,
+    error: HISTORICAL_DATA_UNAVAILABLE,
+    unavailablePayload: buildHistoricalUnavailablePayload({
+      tokenAddress,
+      provider: providerId,
+      coverage,
+    }),
+  };
+}
+
 function validateObservation(obs) {
   if (!obs?.tokenAddress || !obs.occurredAt) return false;
   const price = Number(obs.priceUsd);
@@ -103,7 +189,7 @@ function inferEffectiveResolution(observations) {
     counts.set(sec, (counts.get(sec) || 0) + 1);
   }
   let best = 60;
-  let bestCount = 0;
+  let bestCount =  0;
   for (const [sec, count] of counts) {
     if (count > bestCount) {
       best = sec;
@@ -140,4 +226,5 @@ function observationDedupeId(obs) {
 module.exports = {
   ingestHistoricalMarketData,
   observationDedupeId,
+  HISTORICAL_DATA_UNAVAILABLE,
 };

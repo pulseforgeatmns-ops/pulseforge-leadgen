@@ -17,6 +17,12 @@ const {
   DEFAULT_EXECUTION_DELAYS_SECONDS,
 } = require('../outcomes/evaluateEntryOutcomes');
 const { filterObservationsAtOrBefore } = require('../temporal/temporalFirewall');
+const {
+  validateHistoricalCoverage,
+  resolveReplayStatus,
+  buildHistoricalUnavailablePayload,
+  HISTORICAL_DATA_UNAVAILABLE,
+} = require('../market/historicalCoverage');
 
 /**
  * Chronological replay — snapshots use only events/observations with occurredAt <= step time.
@@ -28,6 +34,49 @@ async function replayToken(store, input) {
   const tokenAddress = input.tokenAddress;
   const featureVersion = input.featureVersion || FEATURE_VERSION;
   const strategyVersion = input.strategyVersion || STRATEGY_VERSION;
+  const startTime = input.startTime ? new Date(input.startTime) : null;
+  const endTime = input.endTime ? new Date(input.endTime) : null;
+
+  const allObservationsRaw = await callStore(store, 'getMarketObservationsForToken', tokenAddress, {
+    startTime: input.startTime,
+    endTime: input.endTime,
+  });
+
+  const coverage =
+    startTime && endTime
+      ? validateHistoricalCoverage({
+          requestedStart: startTime,
+          requestedEnd: endTime,
+          observations: allObservationsRaw,
+          decisionAnchor: input.decisionAnchor,
+          intervalSeconds: input.resolutionSeconds || 60,
+        })
+      : null;
+
+  if (
+    coverage &&
+    (coverage.status === 'UNAVAILABLE' || coverage.status === 'INVALID_RANGE')
+  ) {
+    return buildSkippedReplayResult({
+      tokenAddress,
+      input,
+      coverage,
+      featureVersion,
+      strategyVersion,
+      reason: HISTORICAL_DATA_UNAVAILABLE,
+    });
+  }
+
+  if (coverage && !coverage.hasObservationAtOrAfterDecision) {
+    return buildSkippedReplayResult({
+      tokenAddress,
+      input,
+      coverage,
+      featureVersion,
+      strategyVersion,
+      replayStatus: 'INSUFFICIENT_MARKET_DATA',
+    });
+  }
 
   if (store.clearReplayArtifacts && input.replaceExisting !== false) {
     await callStore(store, 'clearReplayArtifacts', tokenAddress);
@@ -38,10 +87,7 @@ async function replayToken(store, input) {
     endTime: input.endTime,
   });
 
-  const allObservations = await callStore(store, 'getMarketObservationsForToken', tokenAddress, {
-    startTime: input.startTime,
-    endTime: input.endTime,
-  });
+  const allObservations = allObservationsRaw;
 
   const pricePath =
     input.pricePath ||
@@ -217,6 +263,14 @@ async function replayToken(store, input) {
   }
 
   const digest = hashReplay(tokenAddress, timeline, strategyVersion, featureVersion);
+  const hadResolvableOutcomes = executionDelayOutcomes.some(r => r.entry && r.outcome);
+  const replayStatus = resolveReplayStatus({
+    coverage,
+    hadEntry: Boolean(entryStep),
+    hadResolvableOutcomes,
+    replayRan: true,
+  });
+
   const run = await callStore(store, 'insertReplayRun', {
     tokenAddress,
     startTime: input.startTime || null,
@@ -231,6 +285,8 @@ async function replayToken(store, input) {
       executionDelayOutcomes,
       digest,
       observationCount: allObservations.length,
+      replayStatus,
+      coverage,
     },
   });
 
@@ -241,11 +297,64 @@ async function replayToken(store, input) {
     outcome,
     executionDelayOutcomes,
     finalState: previousState,
+    replayStatus,
+    historicalDataStatus: coverage?.status || null,
+    coverage,
     marketHistory: {
       observationCount: allObservations.length,
       start: allObservations[0]?.occurredAt || null,
       end: allObservations[allObservations.length - 1]?.occurredAt || null,
+      requestedStart: coverage?.requestedStart || input.startTime || null,
+      requestedEnd: coverage?.requestedEnd || input.endTime || null,
     },
+  };
+}
+
+function buildSkippedReplayResult({
+  tokenAddress,
+  input,
+  coverage,
+  featureVersion,
+  strategyVersion,
+  reason,
+  replayStatus,
+}) {
+  const status =
+    replayStatus ||
+    (reason === HISTORICAL_DATA_UNAVAILABLE
+      ? 'HISTORICAL_DATA_UNAVAILABLE'
+      : 'INSUFFICIENT_MARKET_DATA');
+  const payload =
+    status === 'HISTORICAL_DATA_UNAVAILABLE'
+      ? buildHistoricalUnavailablePayload({
+          tokenAddress,
+          provider: input.provider || 'geckoterminal',
+          coverage,
+        })
+      : null;
+
+  return {
+    runId: null,
+    digest: null,
+    timeline: [],
+    outcome: null,
+    executionDelayOutcomes: [],
+    finalState: null,
+    replayStatus: status,
+    historicalDataStatus: coverage.status,
+    coverage,
+    skipped: true,
+    error: reason || null,
+    unavailablePayload: payload,
+    marketHistory: {
+      observationCount: coverage.observationCountInWindow || 0,
+      start: coverage.providerEarliestObservation,
+      end: coverage.providerLatestObservation,
+      requestedStart: coverage.requestedStart,
+      requestedEnd: coverage.requestedEnd,
+    },
+    featureVersion,
+    strategyVersion,
   };
 }
 

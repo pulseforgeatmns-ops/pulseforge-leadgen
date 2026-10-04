@@ -12,6 +12,7 @@ const { InMemorySignalStore } = require('../packages/signal-v1/storage/InMemoryS
 const { createSignalStore } = require('../packages/signal-v1/storage/createSignalStore');
 const { seedFrontRunnersFixtures } = require('../packages/signal-v1/fixtures/seedFixtures');
 const { resolveResearchWindow } = require('../packages/signal-v1/fixtures/researchWindows');
+const { HISTORICAL_DATA_UNAVAILABLE } = require('../packages/signal-v1/ingestion/ingestHistoricalMarketData');
 
 const router = express.Router();
 const requireResearch = [requireAuth, requireRole('admin', 'manager')];
@@ -115,8 +116,12 @@ router.post('/api/v1/signal/tokens/:tokenAddress/ingest-history', requireResearc
       startTime: body.startTime || window.startTime,
       endTime: body.endTime || window.endTime,
       resolutionSeconds: body.resolutionSeconds || window.resolutionSeconds,
+      decisionAnchor: window.anchor,
     });
     noStore(res);
+    if (stats.unavailable) {
+      return res.status(422).json(stats.unavailablePayload || stats);
+    }
     return res.json(stats);
   } catch (err) {
     return res.status(400).json({ error: 'ingest_failed', message: String(err.message) });
@@ -127,16 +132,25 @@ router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, async
   const service = await getService();
   const body = req.body || {};
   try {
+    const window = resolveResearchWindow(req.params.tokenAddress);
     const result = await service.replay({
       tokenAddress: req.params.tokenAddress,
-      startTime: body.startTime,
-      endTime: body.endTime,
+      startTime: body.startTime || window.startTime,
+      endTime: body.endTime || window.endTime,
+      decisionAnchor: window.anchor,
       featureVersion: body.featureVersion,
       strategyVersion: body.strategyVersion,
       pricePath: body.pricePath,
       executionDelaysSeconds: body.executionDelaysSeconds,
     });
     noStore(res);
+    if (result.skipped && result.replayStatus === HISTORICAL_DATA_UNAVAILABLE) {
+      return res.status(422).json({
+        ...result.unavailablePayload,
+        replayStatus: result.replayStatus,
+        coverage: result.coverage,
+      });
+    }
     return res.json(result);
   } catch (err) {
     return res.status(400).json({ error: 'replay_failed', message: String(err.message) });

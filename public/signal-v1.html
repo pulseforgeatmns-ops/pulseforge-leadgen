@@ -44,7 +44,9 @@
       </div>
       <div class="panel">
         <h2>Historical data</h2>
+        <div id="windowMeta" class="muted"></div>
         <div id="marketMeta" class="muted">No ingestion yet</div>
+        <div id="replayStatusMeta" class="muted" style="margin-top:8px"></div>
       </div>
     </section>
     <section>
@@ -101,6 +103,13 @@
       return Number(x).toPrecision(4);
     }
 
+    function fmtRange(start, end) {
+      if (!start || !end) return '—';
+      const s = new Date(start);
+      const e = new Date(end);
+      return `${s.toISOString().replace('T', ' ').slice(0, 16)} UTC → ${e.toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+    }
+
     async function loadCases() {
       const res = await fetch('/api/v1/signal/research-cases');
       const data = await res.json();
@@ -154,15 +163,32 @@
       document.getElementById('tokenMeta').textContent =
         `${c?.ticker || ''} · ${tokenAddress} · ${c?.slug || ''} · claim: ${c?.telegramClaim?.provenance || 'n/a'}`;
 
+      const rw = c?.researchWindow;
+      document.getElementById('windowMeta').innerHTML = rw
+        ? `<div><strong>Requested event window</strong></div>
+           <div>${fmtRange(rw.requestedStart, rw.requestedEnd)}</div>
+           <div class="muted">Anchor: ${rw.anchor || '—'}</div>`
+        : '<div class="muted">No research window configured</div>';
+
       const ing = market.ingestion;
       const obs = market.observations || [];
-      document.getElementById('marketMeta').innerHTML = ing
-        ? `<div>Provider: <strong>${ing.provider}</strong></div>
-           <div>Resolution: ${ing.effectiveResolutionSeconds || ing.metadata?.effectiveResolutionSeconds || '—'}s</div>
-           <div>Observations: ${obs.length}</div>
-           <div>Range: ${obs[0] ? new Date(obs[0].occurredAt).toISOString() : '—'} → ${obs[obs.length-1] ? new Date(obs[obs.length-1].occurredAt).toISOString() : '—'}</div>
-           <div>Missing intervals: ${ing.missingIntervals ?? ing.metadata?.missingIntervals ?? '—'}</div>`
-        : `<div>Observations loaded: ${obs.length}</div>`;
+      const cov = market.coverage;
+      const histStatus = market.historicalDataStatus || ing?.metadata?.historicalDataStatus || cov?.status || '—';
+      const providerRange =
+        cov?.providerEarliestObservation && cov?.providerLatestObservation
+          ? fmtRange(cov.providerEarliestObservation, cov.providerLatestObservation)
+          : obs[0]
+            ? fmtRange(obs[0].occurredAt, obs[obs.length - 1].occurredAt)
+            : 'Unavailable';
+
+      document.getElementById('marketMeta').innerHTML =
+        `<div>Historical data status: <strong>${histStatus}</strong></div>
+         <div>GeckoTerminal coverage: ${providerRange}</div>
+         <div>Provider: <strong>${ing?.provider || '—'}</strong></div>
+         <div>Resolution: ${ing?.effectiveResolutionSeconds || ing?.metadata?.effectiveResolutionSeconds || '—'}s</div>
+         <div>Observations in window: ${obs.length}</div>
+         <div>Missing intervals: ${ing?.missingIntervalCount ?? ing?.metadata?.missingIntervals ?? '—'}</div>`;
+      document.getElementById('replayStatusMeta').textContent = '';
 
       const decision = detail.decision;
       document.getElementById('stateBadge').textContent = decision?.state || '—';
@@ -202,11 +228,16 @@
       btn.disabled = true;
       btn.textContent = 'Ingesting…';
       try {
-        await fetch(`/api/v1/signal/tokens/${tokenAddress}/ingest-history`, {
+        const res = await fetch(`/api/v1/signal/tokens/${tokenAddress}/ingest-history`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({}),
         });
+        const data = await res.json();
+        if (!res.ok) {
+          document.getElementById('marketMeta').innerHTML +=
+            `<div class="risk" style="margin-top:8px">${data.error || 'ingest_failed'}: ${data.reason || data.message || ''}</div>`;
+        }
         await refresh(tokenAddress);
       } finally {
         btn.disabled = false;
@@ -226,6 +257,17 @@
           body: JSON.stringify({}),
         });
         const data = await res.json();
+        if (!res.ok) {
+          document.getElementById('replayStatusMeta').innerHTML =
+            `<div class="risk"><strong>Replay:</strong> Not run · ${data.error || 'unavailable'}</div>
+             <div class="muted">${data.reason || ''}</div>`;
+          document.getElementById('replayTimeline').innerHTML =
+            '<div class="muted">Replay blocked — historical data unavailable for requested window</div>';
+          await refresh(tokenAddress);
+          return;
+        }
+        document.getElementById('replayStatusMeta').innerHTML =
+          `<div><strong>Replay status:</strong> ${data.replayStatus || '—'}</div>`;
         document.getElementById('replayTimeline').innerHTML = (data.timeline || []).map(step => `
           <div class="timeline-item">
             <div><strong>${step.state}</strong> · score ${step.score?.toFixed?.(1) ?? step.score}

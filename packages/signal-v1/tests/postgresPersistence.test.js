@@ -2,8 +2,6 @@
 
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { Pool } = require('pg');
-const { startDisposablePostgres } = require('../../../test/helpers/disposablePostgres');
 const { PostgresSignalStore } = require('../storage/PostgresSignalStore');
 const { ensureSignalSchema } = require('../storage/ensureSignalSchema');
 
@@ -14,6 +12,15 @@ describe('Signal V1 Postgres persistence', () => {
   let pool = null;
 
   before(async (t) => {
+    let Pool;
+    try {
+      require.resolve('pg');
+      ({ Pool } = require('pg'));
+    } catch (err) {
+      t.skip(`pg module unavailable: ${err.message}`);
+      return;
+    }
+    const { startDisposablePostgres } = require('../../../test/helpers/disposablePostgres');
     try {
       instance = await startDisposablePostgres(`signal-v1-pg-${process.pid}-`, {
         socketPrefix: 'sigpg-',

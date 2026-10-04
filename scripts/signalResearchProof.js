@@ -9,6 +9,7 @@ const { InMemorySignalStore } = require('../packages/signal-v1/storage/InMemoryS
 const { seedFrontRunnersFixtures } = require('../packages/signal-v1/fixtures/seedFixtures');
 const { SignalService } = require('../packages/signal-v1/SignalService');
 const { RESEARCH_CASES } = require('../packages/signal-v1/fixtures/frontRunnersCases');
+const { resolveResearchWindow } = require('../packages/signal-v1/fixtures/researchWindows');
 
 async function main() {
   const tokens = RESEARCH_CASES.filter(c => c.tokenAddress).map(c => ({
@@ -22,6 +23,7 @@ async function main() {
 
   const report = [];
   for (const t of tokens) {
+    const window = resolveResearchWindow(t.tokenAddress);
     const ingest = await service.ingestResearchToken(t.tokenAddress);
     const replay = await service.replay({
       tokenAddress: t.tokenAddress,
@@ -30,18 +32,18 @@ async function main() {
     report.push({
       slug: t.slug,
       tokenAddress: t.tokenAddress,
-      ingest,
-      replaySummary: {
-        steps: replay.timeline.length,
-        finalState: replay.finalState,
-        executionDelayOutcomes: (replay.executionDelayOutcomes || []).map(r => ({
-          delay: r.executionDelaySeconds,
-          entryPrice: r.entry?.effectivePrice ?? null,
-          outcome: r.outcome?.label ?? null,
-          mfe: r.outcome?.mfe ?? null,
-          mae: r.outcome?.mae ?? null,
-        })),
+      requestedRange: window,
+      actualProviderRange: {
+        start: ingest.observationStart,
+        end: ingest.observationEnd,
+        providerEarliest: ingest.coverage?.providerEarliestObservation,
+        providerLatest: ingest.coverage?.providerLatestObservation,
       },
+      historicalDataStatus: ingest.historicalDataStatus,
+      observationCount: ingest.observationCount,
+      replayStatus: replay.replayStatus,
+      replaySteps: replay.timeline?.length ?? 0,
+      unavailable: ingest.unavailable || replay.skipped || false,
     });
   }
 

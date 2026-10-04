@@ -14,6 +14,7 @@ const { calculateConvergence } = require('./features/convergence');
 const { scoreSignal } = require('./scoring/signalScoring');
 const { decideSignalState } = require('./state/stateMachine');
 const types = require('./types');
+const historicalCoverage = require('./market/historicalCoverage');
 
 module.exports = {
   SignalService,
@@ -30,4 +31,5 @@ module.exports = {
   scoreSignal,
   decideSignalState,
   ...types,
+  ...historicalCoverage,
 };

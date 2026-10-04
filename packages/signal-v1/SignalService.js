@@ -13,6 +13,7 @@ const { ingestHistoricalMarketData } = require('./ingestion/ingestHistoricalMark
 const { GeckoTerminalMarketDataProvider } = require('./providers/GeckoTerminalMarketDataProvider');
 const { callStore } = require('./storage/storeUtils');
 const { resolveResearchWindow } = require('./fixtures/researchWindows');
+const { validateHistoricalCoverage } = require('./market/historicalCoverage');
 
 class SignalService {
   /**
@@ -28,7 +29,18 @@ class SignalService {
   }
 
   listResearchCases() {
-    return RESEARCH_CASES;
+    return RESEARCH_CASES.map(c => {
+      if (!c.tokenAddress) return { ...c };
+      const window = resolveResearchWindow(c.tokenAddress);
+      return {
+        ...c,
+        researchWindow: {
+          requestedStart: window.startTime,
+          requestedEnd: window.endTime,
+          anchor: window.anchor,
+        },
+      };
+    });
   }
 
   async getToken(tokenAddress) {
@@ -71,7 +83,22 @@ class SignalService {
   }
 
   async replay(input) {
-    return replayToken(this.store, input);
+    const tokenAddress = input.tokenAddress;
+    let startTime = input.startTime;
+    let endTime = input.endTime;
+    let decisionAnchor = input.decisionAnchor;
+    if (!startTime || !endTime) {
+      const window = resolveResearchWindow(tokenAddress);
+      startTime = startTime || window.startTime;
+      endTime = endTime || window.endTime;
+      decisionAnchor = decisionAnchor || window.anchor;
+    }
+    return replayToken(this.store, {
+      ...input,
+      startTime,
+      endTime,
+      decisionAnchor,
+    });
   }
 
   async ingestHistory(args) {
@@ -86,6 +113,7 @@ class SignalService {
       startTime: window.startTime,
       endTime: window.endTime,
       resolutionSeconds: window.resolutionSeconds,
+      decisionAnchor: window.anchor,
     });
   }
 
@@ -111,14 +139,41 @@ class SignalService {
   }
 
   async getMarketHistory(tokenAddress, startTime, endTime) {
+    let reqStart = startTime;
+    let reqEnd = endTime;
+    let anchor = null;
+    if (!reqStart || !reqEnd) {
+      try {
+        const window = resolveResearchWindow(tokenAddress);
+        reqStart = reqStart || window.startTime;
+        reqEnd = reqEnd || window.endTime;
+        anchor = window.anchor;
+      } catch {
+        /* token may lack research anchor */
+      }
+    }
     const observations = await callStore(this.store, 'getMarketObservationsForToken', tokenAddress, {
-      startTime,
-      endTime,
+      startTime: reqStart,
+      endTime: reqEnd,
     });
     const stats = this.store.getLatestMarketIngestionStats
       ? await callStore(this.store, 'getLatestMarketIngestionStats', tokenAddress)
       : null;
-    return { observations, ingestion: stats };
+    const coverage =
+      reqStart && reqEnd
+        ? validateHistoricalCoverage({
+            requestedStart: reqStart,
+            requestedEnd: reqEnd,
+            observations,
+            decisionAnchor: anchor,
+          })
+        : stats?.metadata?.coverage || null;
+    return {
+      observations,
+      ingestion: stats,
+      coverage,
+      historicalDataStatus: coverage?.status || stats?.metadata?.historicalDataStatus || null,
+    };
   }
 
   async getOutcomes(tokenAddress) {
