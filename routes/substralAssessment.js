@@ -3,6 +3,11 @@ const express = require('express');
 const { createHash } = require('node:crypto');
 const pool = require('../db');
 const { validateAssessmentPayload, captureAssessmentRequest } = require('../lib/substralAssessmentIntake');
+const {
+  notifyAssessmentRequest,
+  productionDeliveryRequired,
+  notificationBlockReason,
+} = require('../lib/substralAssessmentNotification');
 const ENDPOINT = '/api/public/website-assessment';
 const ALLOWED_ORIGINS = ['https://studiosubstral.com', 'https://www.studiosubstral.com'];
 const REASON_MESSAGES = Object.freeze({
@@ -81,6 +86,45 @@ function createAssessmentRouter({ db = pool, allowedOrigins = ALLOWED_ORIGINS, n
         return reply(req, res, 429, { error: 'Too many requests for this email address. Please try again in an hour.' });
       }
       const stored = await captureAssessmentRequest(db, validated.values);
+      console.info('[substral-assessment] intake accepted', {
+        actionId: String(stored.id),
+        duplicate: stored.duplicate,
+        clientId: stored.client_id,
+      });
+
+      const deliveryRequired = productionDeliveryRequired();
+      const preflightBlock = notificationBlockReason(validated.values);
+      if (deliveryRequired && preflightBlock === 'missing_provider_key') {
+        console.error('[substral-assessment] notification blocked: missing_provider_key');
+        return reply(req, res, 503, {
+          error: 'We could not confirm your request. Your details are still in the form. Please try again.',
+        });
+      }
+
+      try {
+        const notification = await notifyAssessmentRequest(
+          db,
+          validated.values,
+          stored.id,
+          stored.client_id
+        );
+        if (deliveryRequired
+          && notification.status === 'suppressed'
+          && notification.reason !== 'duplicate_or_missing_action'
+          && notification.reason !== 'already_sent'
+          && notification.reason !== 'synthetic_submission') {
+          console.error('[substral-assessment] notification suppressed in production', notification.reason);
+          return reply(req, res, 503, {
+            error: 'We could not confirm your request. Your details are still in the form. Please try again.',
+          });
+        }
+      } catch (notifyErr) {
+        console.error('[substral-assessment] notification failed:', notifyErr.code || notifyErr.message);
+        return reply(req, res, 503, {
+          error: 'We could not confirm your request. Your details are still in the form. Please try again.',
+        });
+      }
+
       return reply(req, res, stored.duplicate ? 200 : 201, {
         ok: true, request_id: stored.id, domain: stored.domain, review_mode: 'human',
         message: successMessage(stored.domain, validated.values.email),
