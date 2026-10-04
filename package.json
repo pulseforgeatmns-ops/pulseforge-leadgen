@@ -16,6 +16,7 @@
     "knowledge:e2e": "node scripts/knowledgeE2EValidation.js",
     "test:reasoning-runtime": "node --test packages/reasoning-runtime/tests/*.test.js",
     "test:market-strategy": "node --test packages/market-strategy/tests/*.test.js",
+    "test:signal-v1": "node --test packages/signal-v1/tests/*.test.js",
     "test:replay": "node --test packages/replay/tests/*.test.js",
     "test:laboratory": "node --test packages/laboratory/tests/*.test.js",
     "test:eql": "node --test packages/eql/tests/*.test.js",
