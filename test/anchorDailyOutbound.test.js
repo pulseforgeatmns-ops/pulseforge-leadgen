@@ -164,13 +164,13 @@ test('production preparation runs Scout, enrichment, Max, Paige and Emmett throu
     enrich: async () => { enriched++; },
     runEmmett: (mission, opts) => emmett.runEmmettForAmoMission(mission, { ...opts, runEmmett: undefined, crmByProspectId: contacts }),
   });
-  const store = { one: async () => ({ attempts: 0 }), suppression: async () => null,
+  const store = { tenantId: '10', clientId: 10, one: async () => ({ attempts: 0 }), suppression: async () => null,
     event: async (type, _key, data) => events.push({ type, ...data }) };
   store.ensurePreparation = async () => ({ created: false, progress: await store.one() });
   const daily = await adapter.prepare(program, snapshot, '2026-09-18', store);
   assert.equal(daily.mission.stage, 'ready');
   assert.equal(daily.mission.resolvedObjective, null);
-  assert.equal(enriched, 2);
+  assert.equal(enriched, 0, 'already eligible canonical contacts do not need paid re-enrichment');
   const ready = await adapter.prepared(daily, program);
   assert.equal(ready.candidates.length, 2);
   assert.ok(ready.candidates.every(row => candidateReason(row.item, contacts[row.candidateId], row.message) === null));

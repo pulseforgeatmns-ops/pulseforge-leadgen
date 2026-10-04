@@ -92,7 +92,8 @@ function service({
       if (selected.length >= Math.min(program.policy.dailyCap, prepared.capacity, PREPARATION_BATCH_LIMIT)) break;
       selected.push(entry); emails.add(entry.email); companies.add(entry.companyId);
     }
-    await store.event('batch_eligibility', [program.id, day, prepared.revision, hash({ selected: selected.map(x => x.candidateId), excluded })], { programId: program.id, selected: selected.length, excluded });
+    await store.event('batch_eligibility', [program.id, day, prepared.revision, hash({ selected: selected.map(x => x.candidateId), excluded })], { programId: program.id, selected: selected.length,
+      selectedCandidates: selected.map(row => ({ candidateId: row.candidateId, prospectId: row.prospectId, companyId: row.companyId })), excluded });
     if (!selected.length) fail('verified_inventory_shortfall');
     if (recovery) {
       const current = await store.program();
@@ -402,6 +403,7 @@ function service({
       grantActive: program.mode === 'active' && isPreparationEnabled(),
       dailyAuthorizationRemaining: Math.max(0, Number(program.policy.dailyCap || 0) - sentToday),
       totalAuthorizationRemaining: Math.max(0, Number(program.policy.totalCap || 0) - Number(counts.total || 0)),
+      planningDailyCapacity: operating?.planningDailyCapacity,
     });
     if (!plan.shouldPrepare) return observabilityFromRefill(plan, { sentToday, preparedAdded: 0, preparationDecisions });
     if (!['authorized', 'complete', 'frozen'].includes(envelope.status)) {
@@ -465,9 +467,14 @@ function service({
         if (counts.total >= program.policy.totalCap || counts.today >= program.policy.dailyCap) fail('cap_reached');
         if (!isPreparationEnabled()) fail('environment_kill_switch');
         let envelope = await store.envelope(day);
+        const initialCount = envelope ? (await store.items(envelope.id)).filter(row => row.status === 'pending').length : 0;
         if (!envelope) envelope = await prepare(program, source, day);
         if (envelope.program_id !== program.id) fail('daily_envelope_already_used');
-        return { programId: program.id, ...await refillEnvelope(program, source, day, envelope, counts) };
+        const refill = await refillEnvelope(program, source, day, envelope, counts);
+        const pending = (await store.items(envelope.id)).filter(row => row.status === 'pending').length;
+        return { programId: program.id, ...refill, pendingPrepared: pending,
+          preparedAdded: Math.max(0, pending - initialCount),
+          prepareSkippedReason: pending > initialCount ? null : refill.prepareSkippedReason };
       } catch (error) {
         return {
           programId: program.id,

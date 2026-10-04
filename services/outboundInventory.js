@@ -152,6 +152,7 @@ function buildReplenishmentYield({
   const evaluated = Number(admission.evaluated || 0);
   const fit = Number(admission.fit || 0);
   const admittedToEnrichment = Number(admission.admittedToEnrichment || 0);
+  const enrichmentConsidered = enrichment.considered == null ? null : Number(enrichment.considered);
   const emailResolved = Number(enrichment.emailResolved || 0);
   const emailVerified = Number(enrichment.emailVerified || 0);
   const newPromotions = Number(enrichment.promoted || 0);
@@ -176,6 +177,7 @@ function buildReplenishmentYield({
     evaluated,
     fit,
     admittedToEnrichment,
+    enrichmentConsidered,
     emailResolved,
     emailVerified,
     newPromotions,
@@ -191,7 +193,7 @@ function buildReplenishmentYield({
     rates: {
       fitRate: rate(fit, evaluated),
       enrichmentAdmissionRate: rate(admittedToEnrichment, fit),
-      contactResolutionRate: rate(emailResolved, admittedToEnrichment),
+      contactResolutionRate: enrichmentConsidered == null ? null : rate(emailResolved, enrichmentConsidered),
       verificationRate: rate(emailVerified, emailResolved),
       cleanInventoryYield: rate(newCleanInventoryAdded, evaluated),
       netCleanInventoryYield: rate(Math.max(0, netCleanInventoryDelta), evaluated),
@@ -314,6 +316,19 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
   const exactEmail = email
     ? rows.find(row => String(row.email || '').toLowerCase() === email)
     : null;
+  // Company-level ownership and send history take precedence over an apparently
+  // unused second contact at that company.
+  if (store?.candidateOwnership) {
+    const blocked = await store.candidateOwnership({ ...candidate, company, domain,
+      companyId: String(rows[0].company_id) });
+    if (blocked) return { kind: OWNERSHIP_KINDS.VALID_COLLISION, reason: blocked, recoverable: false };
+  }
+  if (store?.suppression) {
+    const blocked = await store.suppression({ ...candidate, company, domain,
+      candidateId: String(rows[0].id), prospectId: String(rows[0].id),
+      companyId: String(rows[0].company_id), email: email || rows[0].email || '' }, '__max_inventory_buffer__');
+    if (blocked) return { kind: OWNERSHIP_KINDS.VALID_COLLISION, reason: blocked, recoverable: false };
+  }
   const usable = rows.find(row => {
     if (governedContactReason(row)) return false;
     if (row.do_not_contact === true) return false;

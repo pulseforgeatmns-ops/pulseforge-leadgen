@@ -197,6 +197,9 @@ async function loadPfIntelligenceContacts(pool, { companyId, domain, companyName
   for (const row of rows) {
     const email = String(row.email || '').trim().toLowerCase();
     if (!email || knownEmails.has(email)) continue;
+    // A legacy CRM address alone is not acquisition evidence. Fresh sources
+    // below may rediscover it and repair the canonical record.
+    if (!row.enrichment_provenance?.email?.source) continue;
     contacts.push({
       email,
       contact: `${row.first_name || ''} ${row.last_name || ''}`.trim(),
@@ -312,7 +315,7 @@ async function resolveAlternateContacts({
     if (email && known.has(email)) return;
     const duplicate = email ? candidates.findIndex(existing => existing.email === email) : -1;
     if (duplicate >= 0) {
-      if (candidates[duplicate].source?.[0] === 'scout_discovery'
+      if (['scout_discovery', 'pf_intelligence'].includes(candidates[duplicate].source?.[0])
         && contact.source.some(source => ['prospeo', 'hunter', 'website', 'website_email'].includes(source))) {
         candidates[duplicate] = contact;
       }
@@ -399,6 +402,7 @@ async function admitAlternateProspect(pool, {
   websiteUrl,
   existingProspectId = null,
   enrichmentProvenance,
+  admittedVertical = null,
 }) {
   if (existingProspectId) {
     const updated = await pool.query(`
@@ -411,7 +415,8 @@ async function admitAlternateProspect(pool, {
           verifier_response = $7::jsonb,
           verifier_checked_at = $8,
           notes = COALESCE(notes, '') || $9,
-          enrichment_provenance = $10::jsonb
+          enrichment_provenance = $10::jsonb,
+          vertical = COALESCE($13, vertical)
       WHERE id = $1 AND client_id = 10 AND company_id = $11
         AND lower(email) = lower($12) AND COALESCE(do_not_contact,false)=false
     `, [
@@ -427,6 +432,7 @@ async function admitAlternateProspect(pool, {
       JSON.stringify(enrichmentProvenance),
       companyId,
       email,
+      admittedVertical,
     ]);
     return updated.rowCount === 1 ? existingProspectId : null;
   }
@@ -492,6 +498,10 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
     ? ownership
     : await classifyInventoryOwnership(store, { company: name, domain, website }, { pool, now });
   if (classified.kind !== OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
+    if (classified.kind === OWNERSHIP_KINDS.VALID_COLLISION) {
+      recordAlternateLoss(stats, 'alternate_contact_owned');
+      return { ok: false, reason: 'alternate_contact_owned', telemetry: stats };
+    }
     return { ok: false, reason: 'not_same_company_candidate', telemetry: stats };
   }
 
@@ -508,7 +518,12 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
     return { ok: false, reason: 'canonical_still_usable', telemetry: stats };
   }
 
-  const knownEmails = new Set(rows.map(row => String(row.email || '').trim().toLowerCase()).filter(Boolean));
+  // Missing acquisition evidence is repairable only by observing the address
+  // again at a real source. Do not exclude it from website/provider discovery.
+  const knownEmails = new Set(rows.filter(row => row.do_not_contact === true
+    || classifyOwnershipRow(row, now).kind !== OWNERSHIP_KINDS.CLEAR
+    || !governedContactReason(row))
+    .map(row => String(row.email || '').trim().toLowerCase()).filter(Boolean));
   const attemptedEmails = await collectAttemptedEmails(pool, resolvedCompanyId);
   const resolved = await resolveAlternateContacts({
     domain,
@@ -545,7 +560,8 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
     }
     const existingRow = alternate.prospectId
       ? rows.find(row => String(row.id) === String(alternate.prospectId))
-      : null;
+      : rows.find(row => String(row.email || '').toLowerCase() === alternate.email);
+    if (existingRow && !alternate.prospectId) alternate.prospectId = existingRow.id;
     if (existingRow?.do_not_contact === true) {
       terminalReason = 'alternate_contact_dnc';
       continue;
@@ -582,6 +598,7 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
         source_url: alternate.sourceUrl || null, verifier: verification.emailVerificationMethod,
         status: verification.emailStatus, resolved_at: new Date().toISOString(),
       });
+    if (scoutContext.businessEvidence) enrichmentProvenance.business = scoutContext.businessEvidence;
     const contactReason = governedContactReason({ email: alternate.email, domain,
       email_verified: true, email_status: verification.emailStatus, do_not_contact: verification.doNotContact,
       enrichment_provenance: enrichmentProvenance });
@@ -634,6 +651,7 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
       contact: alternate.contact,
       verification,
       vertical: company.vertical || rows[0]?.vertical || scoutContext.scope?.segment,
+      admittedVertical: scoutContext.admittedVertical || null,
       serviceAreaMatch: rows[0]?.service_area_match ?? true,
       discoveryMethod: 'same_company_alternate_recovery',
       websiteUrl: website,

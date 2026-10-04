@@ -50,7 +50,7 @@ test('zero verified inventory rolls Scout back before Max, Paige and Emmett; no 
     enrich: async () => { enriched++; },
     runEmmett: async () => { assert.fail('Emmett must not run after Scout fails'); },
   });
-  const store = { one: async () => ({ attempts: 0 }), suppression: async () => null,
+  const store = { tenantId: '10', clientId: 10, one: async () => ({ attempts: 0 }), suppression: async () => null,
     event: async (type, _key, data) => events.push({ type, ...data }) };
   store.ensurePreparation = async () => ({ created: false, progress: await store.one() });
   await assert.rejects(adapter.prepare(program, snapshot, '2026-09-18', store), { code: 'verified_inventory_shortfall' });

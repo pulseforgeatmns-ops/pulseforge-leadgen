@@ -125,6 +125,17 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.equal(item.status, 'suppressed');
     assert.equal(item.attempted_at, null);
   });
+  await t.test('company resolution promotes a qualified canonical contact over its higher-scored empty placeholder', async () => {
+    await reset();
+    const c=contacts.get('c0');
+    await pool.query("UPDATE companies SET domain='customer.example' WHERE id=$1",[c.company_id]);
+    await pool.query("UPDATE prospects SET email_verified=true,email_status='valid',enrichment_provenance=$2,icp_score=70 WHERE id=$1",[c.id,{email:{source:'website_email'}}]);
+    const placeholder=(await pool.query("INSERT INTO prospects(company_id,client_id,icp_score) VALUES($1,10,999) RETURNING id",[c.company_id])).rows[0];
+    const resolver=require('../packages/max/workspace/MissionBoundCrmResolver');
+    assert.equal((await resolver.loadBestCrmProspectForMissionBoundKey({pool,clientId:10,missionBoundKey:c.company_id})).prospect_id,c.id);
+    assert.equal((await resolver.loadCrmProspectsForMissionBoundCompanies({pool,clientId:10,companyIds:[c.company_id]})).get(c.company_id).prospect_id,c.id);
+    assert.equal((await resolver.loadBestCrmProspectForMissionBoundKey({pool,clientId:10,missionBoundKey:placeholder.id})).prospect_id,placeholder.id);
+  });
   await t.test('Anchor integration service requires explicit tenant 10 at the boundary', async () => {
     const stubAdapters = { loadMission: async () => ({}) };
     assert.throws(() => service({ pool, adapters: stubAdapters }), { code: 'governed_outbound_tenant_required' });
@@ -470,7 +481,7 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.equal(await svc.store.candidateOwnership({companyId:c.company_id}),'prior_contact_or_human_owned');
     assert.equal(calls,0);
   });
-  await t.test('replenishment fails closed on stale review, backoff, exhausted budget, active grant and owned alias', async () => {
+  await t.test('replenishment preserves review and backoff but three attempts cannot lock out later research', async () => {
     let input = await recoverySetup();
     const reviewed = await svc.replenish(input, actor);
     input.reviewHash = reviewed.reviewHash;
@@ -481,7 +492,9 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     await pool.query("UPDATE acquisition_outbound_preparation SET last_attempt_at='2026-09-18T13:30:00Z'");
     await assert.rejects(svc.replenish(input, actor), { code: 'preparation_backoff' });
     await pool.query('UPDATE acquisition_outbound_preparation SET attempts=3');
-    await assert.rejects(svc.replenish(input, actor), { code: 'preparation_retry_budget' });
+    await assert.rejects(svc.replenish(input, actor), { code: 'preparation_backoff' });
+    await pool.query("UPDATE acquisition_outbound_preparation SET last_attempt_at='2026-09-18T12:30:00Z'");
+    assert.equal((await svc.replenish(input, actor)).review.nextAttempt, 4);
     input = await recoverySetup(); await activate();
     await assert.rejects(svc.replenish(input, actor), { code: 'replenishment_shadow_grant_required' });
     input = await recoverySetup();
@@ -794,6 +807,35 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.ok(results.every(x => x.initialized || x.initialized === false || x.halted === 'overlap'));
     assert.equal((await preparationRows()).length, 2);
     assert.equal((await preparationRows())[1].attempts, 0); assert.equal(calls, 0);
+  });
+
+  await t.test('parallel same-domain promotion aliases converge on one canonical company', async () => {
+    await reset();
+    await pool.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS website TEXT,
+      ADD COLUMN IF NOT EXISTS industry TEXT, ADD COLUMN IF NOT EXISTS location TEXT,
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now(), ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`);
+    const { findOrCreateCompanyForClient } = require('../scripts/promoteUnenriched');
+    const rows = await Promise.all(['Granite PM', 'Granite Property Management'].map(name =>
+      findOrCreateCompanyForClient({ name, domain: 'granite.example', clientId: 10 }, pool)));
+    assert.equal(rows[0], rows[1]);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM companies WHERE domain='granite.example' AND client_id=10")).rows[0].n, 1);
+  });
+  await t.test('a cross-domain commercial division cannot create a duplicate company', async () => {
+    await reset();
+    const { findOrCreateCompanyForClient } = require('../scripts/promoteUnenriched');
+    const base = await findOrCreateCompanyForClient({ name: 'Granite Realty', domain: 'granite.example', clientId: 10 }, pool);
+    await assert.rejects(findOrCreateCompanyForClient({ name: 'Granite Realty - Commercial Division', domain: 'granitecommercial.example', clientId: 10 }, pool), /company_identity_domain_conflict/);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM companies WHERE client_id=10 AND name LIKE 'Granite Realty%'")).rows[0].n, 1);
+    assert.ok(base);
+  });
+  await t.test('first-touch ramp metrics count provider acceptance separately from attempts', async () => {
+    await reset();
+    await svc.tick(); await activate(); await svc.tick();
+    const metrics = await svc.store.rampMetrics(program, '2026-09-18');
+    assert.equal(metrics.firstTouchDailyTarget, 5);
+    assert.equal(metrics.newFirstTouches, 1);
+    assert.equal(metrics.followUps, 0);
+    assert.equal(metrics.firstTouchDeficit, 4);
   });
 
 });

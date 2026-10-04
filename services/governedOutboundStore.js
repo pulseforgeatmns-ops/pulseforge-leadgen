@@ -6,7 +6,8 @@ const { createGovernedOutboundTenantContext } = require('./governedOutboundTenan
 // Conservative ownership matching: a likely alias is held for review, never
 // used to merge CRM records or to transfer an AO's account.
 function ownershipNameKey(value) {
-  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+    .replace(/ (commercial|residential) (division|department)$/, '').split(' ')
     .filter(word => word && !['llc','inc','incorporated','ltd','limited','corp','corporation','co','company','properties','property','management'].includes(word)).join('');
 }
 function ownershipDomain(value) {
@@ -172,6 +173,20 @@ class GovernedOutboundStore {
       max(i.attempted_at) AS last_attempt
       FROM acquisition_outbound_items i JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
       WHERE i.tenant_id=$3 AND i.attempted_at IS NOT NULL`, [program.id, day, this.tenantId]);
+  }
+  async rampMetrics(program, day) {
+    const row = await this.one(`SELECT
+      count(*) FILTER (WHERE i.status='sent' AND i.provider_message_id IS NOT NULL)::int AS sent,
+      count(*) FILTER (WHERE i.status='sent' AND i.provider_message_id IS NOT NULL
+        AND (p.policy->>'maxSequenceStep')::int=1)::int AS new_first_touches,
+      count(*) FILTER (WHERE i.status='pending')::int AS pending
+      FROM acquisition_outbound_items i JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
+      JOIN acquisition_outbound_programs p ON p.id=e.program_id
+      WHERE i.tenant_id=$1 AND e.local_day=$2::date AND e.program_id=$3`, [this.tenantId, day, program.id]);
+    return { firstTouchDailyTarget: 5, firstTouchOnly: program.policy.maxSequenceStep === 1,
+      providerAcceptedSends: row.sent, newFirstTouches: row.new_first_touches,
+      followUps: program.policy.maxSequenceStep === 1 ? 0 : null, pending: row.pending,
+      firstTouchDeficit: Math.max(0, 5 - row.new_first_touches) };
   }
   async candidateOwnership(candidate) {
     const company = candidate.companyId

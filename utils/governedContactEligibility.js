@@ -1,6 +1,6 @@
 'use strict';
 const { canonicalOutboundEmailIneligibilityReason, normalizeDomain, emailDomain,
-  isPersonalEmailProviderDomain } = require('./canonicalEmailEligibility');
+  isPersonalEmailProviderDomain, isContaminatedEmailDomain } = require('./canonicalEmailEligibility');
 const { createGovernedOutboundTenantContext } = require('../services/governedOutboundTenant');
 const SENDABLE_CLASSES = Object.freeze(['VERIFIED_FOUNDER_EMAIL', 'VERIFIED_ROLE_EMAIL']);
 function contactEvidence(row = {}) {
@@ -34,6 +34,7 @@ function governedContactReason(row, policy = {}) {
 function companyRecipientReason(row = {}) {
   const domain = normalizeDomain(row.company_domain || row.domain || row.company_website || row.website || row.website_url);
   if (!domain) return 'missing_company_domain';
+  if (isContaminatedEmailDomain(domain)) return 'shared_profile_company_domain';
   const recipientDomain = emailDomain(row.email);
   // Existing observed personal addresses remain supported. Unrelated corporate
   // domains need reviewed ownership evidence; a verifier cannot establish it.

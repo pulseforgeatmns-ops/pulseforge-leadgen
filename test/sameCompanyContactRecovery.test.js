@@ -67,6 +67,32 @@ const verified = async () => ({
   reject: false,
 });
 
+test('fresh provider evidence repairs the existing email without duplicating its company or contact', async () => {
+  const pool = companyPool('owner@pm.example');
+  const original = pool.query;
+  let updates = 0;
+  pool.query = async (sql, args) => {
+    assert.doesNotMatch(sql, /INSERT INTO (companies|prospects)/i);
+    if (/UPDATE prospects/i.test(sql)) {
+      updates++;
+      assert.equal(args[0], 12);
+      assert.equal(String(args[10]), '3');
+      assert.equal(JSON.parse(args[9]).email.source, 'prospeo');
+      assert.equal(args[12], 'property_manager');
+      assert.equal(JSON.parse(args[9]).business.source_url, 'https://pm.example/about');
+    }
+    return original(sql, args);
+  };
+  const result = await attemptSameCompanyAlternateRecovery({ ...clearStore, pool }, pool, {
+    company: { name:'Granite PM', domain:'pm.example', website:'https://pm.example' },
+    scoutContext: { admittedVertical: 'property_manager', businessEvidence: { source_url: 'https://pm.example/about', quote: 'We provide property management.' } },
+    enrich: async () => [{ email:'owner@pm.example', source:['prospeo'] }], verify:verified,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.prospectId, '12');
+  assert.equal(updates, 1);
+});
+
 test('same-company recovery admits a verified alternate under the existing company', async () => {
   const pool = companyPool();
   const store = { ...clearStore, pool };
@@ -275,6 +301,7 @@ test('persistDiscoveredCompanies attempts every same-company candidate without e
   };
   const companies = Array.from({ length: 16 }, (_, i) => ({
     name: `Granite PM ${i}`,
+    industry: 'property_manager',
     domain: `pm${i}.example`,
     website: `https://pm${i}.example`,
   }));

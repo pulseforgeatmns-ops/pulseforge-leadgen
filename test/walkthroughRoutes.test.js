@@ -203,6 +203,8 @@ describe('walkthrough public route', () => {
     assert.equal(res.json.ok, true);
     assert.equal(typeof res.json.submission_id, 'number');
     assert.equal(res.json.submission_id, 8802);
+    assert.match(res.json.message, /home cleaning quote/i);
+    assert.doesNotMatch(res.json.message, /Facility Assessment/i);
   });
 
   it('returns 201 when agent_actions ids are UUIDs (production schema)', async () => {

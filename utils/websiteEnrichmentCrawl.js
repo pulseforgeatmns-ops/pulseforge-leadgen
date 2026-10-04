@@ -49,7 +49,8 @@ function normalizeDomain(value) {
 function buildUrl(domain, path = '/') {
   const normalized = normalizeDomain(domain);
   if (!normalized) return null;
-  return `https://${normalized}${path.startsWith('/') ? path : `/${path}`}`;
+  const host = /^www\./i.test(String(domain)) ? `www.${normalized}` : normalized;
+  return `https://${host}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 function canonicalizeUrl(url) {
@@ -183,6 +184,7 @@ async function crawlWebsite(domain, fetchPage, options = {}) {
   const queue = new CrawlQueue();
   const homepage = buildUrl(normalizedDomain, '/');
   queue.enqueue(homepage, CRAWL_PRIORITY.HOMEPAGE);
+  queue.enqueue(buildUrl(`www.${normalizedDomain}`, '/'), CRAWL_PRIORITY.HOMEPAGE);
   for (const url of buildSeedUrls(normalizedDomain)) {
     queue.enqueue(url, CRAWL_PRIORITY.GUESSED);
   }
@@ -190,10 +192,15 @@ async function crawlWebsite(domain, fetchPage, options = {}) {
   const pages = [];
   const errors = [];
   const fetchCounts = new Map();
+  const successfulPaths = new Set();
+  let preferredHost = null;
 
-  while (pages.length < maxSuccessfulPages) {
+  const maxRequests = options.maxRequests || 24;
+  while (pages.length < maxSuccessfulPages && fetchCounts.size < maxRequests) {
     const next = queue.dequeue();
     if (!next) break;
+    if (preferredHost && new URL(next.url).hostname !== preferredHost) continue;
+    if (successfulPaths.has(new URL(next.url).pathname + new URL(next.url).search)) continue;
     if (queue.hasVisited(next.url)) continue;
     queue.markVisited(next.url);
 
@@ -211,11 +218,13 @@ async function crawlWebsite(domain, fetchPage, options = {}) {
       const finalUrl = response?.url || next.url;
       const ok = response?.ok !== false && response?.status !== 404 && (response?.status == null || response.status < 400);
 
-      if (!ok || !/html|text/i.test(text.slice(0, 300))) {
+      if (normalizeDomain(finalUrl) !== normalizedDomain || !ok || !/html|text/i.test(text.slice(0, 300))) {
         errors.push(`fetch_${response?.status || 'error'}:${next.url}`);
         continue;
       }
 
+      preferredHost = new URL(finalUrl).hostname;
+      successfulPaths.add(new URL(next.url).pathname + new URL(next.url).search);
       pages.push({ url: finalUrl, text, status: response?.status || 200 });
 
       const discoverPriority = next.priority === CRAWL_PRIORITY.HOMEPAGE

@@ -77,7 +77,7 @@ function windowReason(p, now = new Date(), sending = true) {
   if (+now < Date.parse(p.startsAt)) return 'not_started';
   if (+now >= Date.parse(p.expiresAt)) return 'authorization_expired';
   const c = clock(now);
-  if (!p.weekdays.includes(c.weekday)) return 'weekend';
+  if (sending && !p.weekdays.includes(c.weekday)) return 'weekend';
   if (sending && (c.hour < p.startHour || c.hour >= p.endHour)) return 'outside_business_hours';
   return null;
 }
