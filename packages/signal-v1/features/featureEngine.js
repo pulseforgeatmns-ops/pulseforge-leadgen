@@ -4,6 +4,9 @@ const { randomUUID } = require('crypto');
 const { FEATURE_VERSION } = require('../types');
 const { calculateConvergence } = require('./convergence');
 const { CONVERGENCE_WINDOWS_MINUTES } = require('../config/defaultConfig');
+const { callStore } = require('../storage/storeUtils');
+const { latestMarketContext } = require('../market/marketContext');
+const { filterObservationsAtOrBefore } = require('../temporal/temporalFirewall');
 
 const BUY_TYPES = new Set(['WALLET_BUY', 'DEV_BUY', 'WHALE_BUY']);
 const SELL_TYPES = new Set(['WALLET_SELL', 'DEV_SELL', 'WHALE_SELL', 'DISTRIBUTION_SIGNAL']);
@@ -14,20 +17,30 @@ function latestPayloadEvents(events, types, evaluatedMs) {
     .sort((a, b) => b.occurredAt - a.occurredAt);
 }
 
-function buildFeatureSnapshot(store, tokenAddress, evaluatedAt, options = {}) {
+async function buildFeatureSnapshot(store, tokenAddress, evaluatedAt, options = {}) {
   const evaluated = new Date(evaluatedAt);
   const evaluatedMs = evaluated.getTime();
-  const events = store.getEventsForToken(tokenAddress, { maxOccurredAt: evaluated });
+  const events = await callStore(store, 'getEventsForToken', tokenAddress, {
+    maxOccurredAt: evaluated,
+    ...(options.eventsFilter || {}),
+  });
+
+  const allObservations = store.getMarketObservationsForToken
+    ? await callStore(store, 'getMarketObservationsForToken', tokenAddress, {})
+    : [];
+  const observations = filterObservationsAtOrBefore(allObservations, evaluated);
 
   const convergence15 = calculateConvergence({
     store,
     tokenAddress,
     evaluatedAt: evaluated,
     windowMinutes: 15,
+    events,
   });
 
   const marketSnapshots = latestPayloadEvents(events, new Set(['MARKET_SNAPSHOT']), evaluatedMs);
   const holderSnapshots = latestPayloadEvents(events, new Set(['HOLDER_SNAPSHOT']), evaluatedMs);
+  const marketCtx = latestMarketContext(store, tokenAddress, evaluated);
   const market = marketSnapshots[0]?.payload || {};
   const holders = holderSnapshots[0]?.payload || {};
 
@@ -124,12 +137,13 @@ function buildFeatureSnapshot(store, tokenAddress, evaluatedAt, options = {}) {
     walletAccumulationScore: scoreWalletAccumulation(profitableWalletBuyCount, profitableWalletSellCount),
     walletDistributionScore: scoreWalletDistribution(smartWalletDistributionDetected, profitableWalletSellCount),
 
-    marketCap: numOrNull(market.marketCapUsd ?? market.marketCap),
-    liquidityUsd: numOrNull(market.liquidityUsd),
+    marketCap: marketCtx.marketCapUsd ?? numOrNull(market.marketCapUsd ?? market.marketCap),
+    liquidityUsd: marketCtx.liquidityUsd ?? numOrNull(market.liquidityUsd),
     tokenAgeSeconds: numOrNull(market.tokenAgeSeconds),
     bundledSupplyPct: numOrNull(holders.bundledSupplyPct),
     top10HolderPct: numOrNull(holders.top10HolderPct),
     devHoldingPct: numOrNull(holders.devHoldingPct),
+    priceUsd: marketCtx.priceUsd,
 
     uniqueBuyers5m: numOrNull(uniqueBuyers5m),
     uniqueSellers5m: numOrNull(uniqueSellers5m),
@@ -147,10 +161,12 @@ function buildFeatureSnapshot(store, tokenAddress, evaluatedAt, options = {}) {
     smartWalletDistributionDetected,
     liquidityDeteriorationDetected,
 
+    knownObservationCount: observations.length,
+
     convergenceByWindow: Object.fromEntries(
       (options.windows || CONVERGENCE_WINDOWS_MINUTES).map(w => [
         `${w}m`,
-        calculateConvergence({ store, tokenAddress, evaluatedAt: evaluated, windowMinutes: w }),
+        calculateConvergence({ store, tokenAddress, evaluatedAt: evaluated, windowMinutes: w, events }),
       ])
     ),
   };

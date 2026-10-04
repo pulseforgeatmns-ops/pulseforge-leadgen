@@ -5,55 +5,103 @@ const { buildFeatureSnapshot } = require('../features/featureEngine');
 const { scoreSignal } = require('../scoring/signalScoring');
 const { decideSignalState } = require('../state/stateMachine');
 const { PaperPortfolio } = require('../paper/paperPortfolio');
-const { labelMarketOutcome } = require('../outcomes/marketOutcomes');
 const { STRATEGY_VERSION, FEATURE_VERSION } = require('../types');
 const { createSignalAlert } = require('../alerts/signalAlert');
 const { evaluateResearchObservationsAtStep } = require('../research/researchObservationEngine');
 
 /**
- * @typedef {object} ReplayInput
- * @property {string} tokenAddress
- * @property {Date|string} [startTime]
- * @property {Date|string} [endTime]
- * @property {string} [featureVersion]
- * @property {string} [strategyVersion]
- * @property {{ occurredAt: Date|string, price: number }[]} [pricePath]
- */
-
-/**
- * Chronological replay — snapshots use only events with occurredAt <= step time.
+ * Chronological replay — snapshots use only events/observations with occurredAt <= step time.
  *
- * @param {import('../storage/InMemorySignalStore').InMemorySignalStore} store
- * @param {ReplayInput} input
+ * @param {object} store
+ * @param {object} input
  */
-function replayToken(store, input) {
+async function replayToken(store, input) {
   const tokenAddress = input.tokenAddress;
   const featureVersion = input.featureVersion || FEATURE_VERSION;
   const strategyVersion = input.strategyVersion || STRATEGY_VERSION;
+  const startTime = input.startTime ? new Date(input.startTime) : null;
+  const endTime = input.endTime ? new Date(input.endTime) : null;
 
-  const events = store.getEventsForToken(tokenAddress, {
+  const allObservationsRaw = await callStore(store, 'getMarketObservationsForToken', tokenAddress, {
     startTime: input.startTime,
     endTime: input.endTime,
   });
 
-  const stepTimes = uniqueSortedTimes(events);
-  const paper = new PaperPortfolio(store);
+  const coverage =
+    startTime && endTime
+      ? validateHistoricalCoverage({
+          requestedStart: startTime,
+          requestedEnd: endTime,
+          observations: allObservationsRaw,
+          decisionAnchor: input.decisionAnchor,
+          intervalSeconds: input.resolutionSeconds || 60,
+        })
+      : null;
+
+  if (
+    coverage &&
+    (coverage.status === 'UNAVAILABLE' || coverage.status === 'INVALID_RANGE')
+  ) {
+    return buildSkippedReplayResult({
+      tokenAddress,
+      input,
+      coverage,
+      featureVersion,
+      strategyVersion,
+      reason: HISTORICAL_DATA_UNAVAILABLE,
+    });
+  }
+
+  if (coverage && !coverage.hasObservationAtOrAfterDecision) {
+    return buildSkippedReplayResult({
+      tokenAddress,
+      input,
+      coverage,
+      featureVersion,
+      strategyVersion,
+      replayStatus: 'INSUFFICIENT_MARKET_DATA',
+    });
+  }
+
+  if (store.clearReplayArtifacts && input.replaceExisting !== false) {
+    await callStore(store, 'clearReplayArtifacts', tokenAddress);
+  }
+
+  const events = await callStore(store, 'getEventsForToken', tokenAddress, {
+    startTime: input.startTime,
+    endTime: input.endTime,
+  });
+
+  const allObservations = allObservationsRaw;
+
+  const pricePath =
+    input.pricePath ||
+    (allObservations.length ? buildPricePathFromObservations(allObservations) : []);
+
+  const stepTimes = uniqueSortedTimes(events, allObservations);
+  const paper = new PaperPortfolio(store, input.paperConfig || {});
   let previousState = null;
   const timeline = [];
   let openPosition = null;
   const researchTimeline = [];
 
   for (const stepAt of stepTimes) {
-    const snapshot = buildFeatureSnapshot(store, tokenAddress, stepAt, { featureVersion });
-    store.insertSnapshot(snapshot);
+    const snapshot = await buildFeatureSnapshot(store, tokenAddress, stepAt, {
+      featureVersion,
+      eventsFilter: { maxOccurredAt: stepAt },
+    });
+    await callStore(store, 'insertSnapshot', snapshot);
     const scored = scoreSignal(snapshot.features);
-    const marketPrice = latestMarketPrice(store, tokenAddress, stepAt);
+    const market = latestMarketContext(store, tokenAddress, stepAt, {
+      observations: allObservations,
+    });
+    const marketPrice = market.priceUsd;
 
     if (openPosition) {
       paper.markUnrealized(openPosition, marketPrice || openPosition.entryPrice);
       openPosition.unrealizedGainPct =
         marketPrice && openPosition.entryPrice
-          ? ((marketPrice / openPosition.entryPrice - 1) * 100)
+          ? (marketPrice / openPosition.entryPrice - 1) * 100
           : null;
     }
 
@@ -99,7 +147,9 @@ function replayToken(store, input) {
     });
 
     if (shouldAlert(previousState, decision.state)) {
-      store.insertAlert(
+      await callStore(
+        store,
+        'insertAlert',
         createSignalAlert({
           tokenAddress,
           state: decision.state,
@@ -112,30 +162,34 @@ function replayToken(store, input) {
       );
     }
 
-    if (decision.state === 'ENTRY' && !openPosition && marketPrice) {
+    let paperAction = null;
+    if (decision.state === 'ENTRY' && !openPosition && pricePath.length) {
       openPosition = paper.openEntry({
         tokenAddress,
         signalAt: stepAt,
-        marketPriceAtSignal: marketPrice,
+        marketPriceAtSignal: marketPrice || pricePath[0].priceUsd,
         entrySnapshotId: snapshot.id,
-        pricePath: input.pricePath,
+        pricePath,
       });
+      paperAction = { type: 'OPEN', positionId: openPosition.id };
     } else if (decision.state === 'DE_RISK' && openPosition && openPosition.status === 'OPEN') {
       openPosition = paper.reducePosition({
         positionId: openPosition.id,
         sellPct: 50,
         signalAt: stepAt,
         marketPriceAtSignal: marketPrice || openPosition.entryPrice,
-        pricePath: input.pricePath,
+        pricePath,
       });
+      paperAction = { type: 'DE_RISK', positionId: openPosition.id };
     } else if (decision.state === 'EXIT' && openPosition && openPosition.remainingPct > 0) {
       openPosition = paper.reducePosition({
         positionId: openPosition.id,
         sellPct: openPosition.remainingPct,
         signalAt: stepAt,
         marketPriceAtSignal: marketPrice || openPosition.entryPrice,
-        pricePath: input.pricePath,
+        pricePath,
       });
+      paperAction = { type: 'EXIT', positionId: openPosition.id };
     }
 
     timeline.push({
@@ -144,43 +198,83 @@ function replayToken(store, input) {
       score: scored.score,
       decisionId: decisionRow.id,
       snapshotId: snapshot.id,
+      priceUsd: marketPrice,
+      marketCapUsd: market.marketCapUsd,
+      liquidityUsd: market.liquidityUsd,
+      reasons: decision.reasons,
+      risks: decision.risks,
+      paperAction,
     });
 
     previousState = decision.state;
   }
 
-  let outcome = null;
-  if (input.pricePath && input.pricePath.length && timeline.length) {
-    const entryStep = timeline.find(t => t.state === 'ENTRY');
-    const entryPrice = entryStep
-      ? latestMarketPrice(store, tokenAddress, entryStep.decidedAt)
-      : input.pricePath[0].price;
-    if (entryPrice) {
-      outcome = labelMarketOutcome({
-        entryPrice,
-        observedAt: entryStep ? entryStep.decidedAt : stepTimes[0],
-        pricePath: input.pricePath,
-      });
-      store.insertOutcome({
+  const entryStep = timeline.find(t => t.state === 'ENTRY');
+  let executionDelayOutcomes = [];
+  if (entryStep && allObservations.length) {
+    executionDelayOutcomes = evaluateEntryOutcomesForDelays({
+      decisionAt: entryStep.decidedAt,
+      observations: allObservations,
+      executionDelaysSeconds:
+        input.executionDelaysSeconds || DEFAULT_EXECUTION_DELAYS_SECONDS,
+      config: input.outcomeConfig,
+    });
+
+    for (const row of executionDelayOutcomes) {
+      if (!row.entry || !row.outcome) continue;
+      await callStore(store, 'insertOutcome', {
         tokenAddress,
-        observedAt: entryStep ? entryStep.decidedAt : stepTimes[0],
-        entryPrice,
-        label: outcome.label,
-        mfe: outcome.mfe,
-        mae: outcome.mae,
-        timeTo2xSeconds: outcome.timeTo2xSeconds,
-        timeToMinus30Seconds: outcome.timeToMinus30Seconds,
-        return15m: outcome.return15m,
-        return1h: outcome.return1h,
-        return6h: outcome.return6h,
-        return24h: outcome.return24h,
-        horizonHours: outcome.horizonHours,
+        observedAt: row.entry.effectiveExecutionAt,
+        entryPrice: row.entry.effectivePrice,
+        label: row.outcome.label,
+        mfe: row.outcome.mfe,
+        mae: row.outcome.mae,
+        timeTo2xSeconds: row.outcome.timeTo2xSeconds,
+        timeToMinus30Seconds: row.outcome.timeToMinus30Seconds,
+        return15m: row.outcome.return15m,
+        return1h: row.outcome.return1h,
+        return6h: row.outcome.return6h,
+        return24h: row.outcome.return24h,
+        horizonHours: row.outcome.horizonHours,
+        decisionAt: entryStep.decidedAt,
+        executionDelaySeconds: row.executionDelaySeconds,
+        effectiveExecutionAt: row.entry.effectiveExecutionAt,
+        effectivePrice: row.entry.effectivePrice,
+        dataResolutionSeconds: row.entry.dataResolutionSeconds,
+        highestPrice: row.outcome.highestPrice,
+        lowestPrice: row.outcome.lowestPrice,
+        outcomeTimestamp: row.outcome.outcomeTimestamp,
+        metadata: { replay: true },
       });
     }
   }
 
-  const digest = hashReplay(store, tokenAddress, timeline, strategyVersion, featureVersion);
-  const run = store.insertReplayRun({
+  let outcome = executionDelayOutcomes.find(r => r.executionDelaySeconds === 30)?.outcome || null;
+
+  if (!outcome && pricePath.length && timeline.length) {
+    const legacy = evaluateEntryOutcomesForDelays({
+      decisionAt: entryStep ? entryStep.decidedAt : stepTimes[0],
+      observations: pricePath.map(p => ({
+        occurredAt: p.occurredAt,
+        priceUsd: p.priceUsd ?? p.price,
+        intervalSeconds: p.intervalSeconds || 60,
+      })),
+      executionDelaysSeconds: [paper.config.executionDelaySeconds],
+      config: input.outcomeConfig,
+    });
+    outcome = legacy[0]?.outcome || null;
+  }
+
+  const digest = hashReplay(tokenAddress, timeline, strategyVersion, featureVersion);
+  const hadResolvableOutcomes = executionDelayOutcomes.some(r => r.entry && r.outcome);
+  const replayStatus = resolveReplayStatus({
+    coverage,
+    hadEntry: Boolean(entryStep),
+    hadResolvableOutcomes,
+    replayRan: true,
+  });
+
+  const run = await callStore(store, 'insertReplayRun', {
     tokenAddress,
     startTime: input.startTime || null,
     endTime: input.endTime || null,
@@ -191,6 +285,7 @@ function replayToken(store, input) {
       steps: timeline.length,
       finalState: previousState,
       outcome,
+      executionDelayOutcomes,
       digest,
       researchObservations: researchTimeline.length,
     },
@@ -203,22 +298,75 @@ function replayToken(store, input) {
     researchTimeline,
     researchObservations: store.getResearchObservations(tokenAddress),
     outcome,
+    executionDelayOutcomes,
     finalState: previousState,
+    replayStatus,
+    historicalDataStatus: coverage?.status || null,
+    coverage,
+    marketHistory: {
+      observationCount: allObservations.length,
+      start: allObservations[0]?.occurredAt || null,
+      end: allObservations[allObservations.length - 1]?.occurredAt || null,
+      requestedStart: coverage?.requestedStart || input.startTime || null,
+      requestedEnd: coverage?.requestedEnd || input.endTime || null,
+    },
   };
 }
 
-function uniqueSortedTimes(events) {
-  const set = new Set(events.map(e => e.occurredAt.toISOString()));
-  return [...set].sort().map(s => new Date(s));
+function buildSkippedReplayResult({
+  tokenAddress,
+  input,
+  coverage,
+  featureVersion,
+  strategyVersion,
+  reason,
+  replayStatus,
+}) {
+  const status =
+    replayStatus ||
+    (reason === HISTORICAL_DATA_UNAVAILABLE
+      ? 'HISTORICAL_DATA_UNAVAILABLE'
+      : 'INSUFFICIENT_MARKET_DATA');
+  const payload =
+    status === 'HISTORICAL_DATA_UNAVAILABLE'
+      ? buildHistoricalUnavailablePayload({
+          tokenAddress,
+          provider: input.provider || 'geckoterminal',
+          coverage,
+        })
+      : null;
+
+  return {
+    runId: null,
+    digest: null,
+    timeline: [],
+    outcome: null,
+    executionDelayOutcomes: [],
+    finalState: null,
+    replayStatus: status,
+    historicalDataStatus: coverage.status,
+    coverage,
+    skipped: true,
+    error: reason || null,
+    unavailablePayload: payload,
+    marketHistory: {
+      observationCount: coverage.observationCountInWindow || 0,
+      start: coverage.providerEarliestObservation,
+      end: coverage.providerLatestObservation,
+      requestedStart: coverage.requestedStart,
+      requestedEnd: coverage.requestedEnd,
+    },
+    featureVersion,
+    strategyVersion,
+  };
 }
 
-function latestMarketPrice(store, tokenAddress, at) {
-  const events = store.getEventsForToken(tokenAddress, { maxOccurredAt: at });
-  const snaps = events.filter(e => e.eventType === 'MARKET_SNAPSHOT');
-  if (!snaps.length) return null;
-  const last = snaps[snaps.length - 1];
-  const price = last.payload?.priceUsd ?? last.payload?.price;
-  return price != null ? Number(price) : null;
+function uniqueSortedTimes(events, observations) {
+  const set = new Set([
+    ...events.map(e => e.occurredAt.toISOString()),
+    ...observations.map(o => o.occurredAt.toISOString()),
+  ]);
+  return [...set].sort().map(s => new Date(s));
 }
 
 function shouldAlert(previousState, nextState) {
@@ -230,7 +378,7 @@ function shouldAlert(previousState, nextState) {
   return false;
 }
 
-function hashReplay(store, tokenAddress, timeline, strategyVersion, featureVersion) {
+function hashReplay(tokenAddress, timeline, strategyVersion, featureVersion) {
   const stableTimeline = timeline.map(step => ({
     decidedAt: new Date(step.decidedAt).toISOString(),
     state: step.state,
@@ -256,4 +404,5 @@ function hashReplay(store, tokenAddress, timeline, strategyVersion, featureVersi
 
 module.exports = {
   replayToken,
+  filterObservationsAtOrBefore,
 };

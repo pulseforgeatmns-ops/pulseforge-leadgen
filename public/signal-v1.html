@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Signal V1 — Paper Research</title>
   <style>
-    :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --text:#e8eaed; --muted:#9aa0a6; --accent:#7cb9ff; --risk:#ff8a80; }
+    :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --text:#e8eaed; --muted:#9aa0a6; --accent:#7cb9ff; --risk:#ff8a80; --pass:#81c995; --fail:#ff8a80; }
     body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--text); }
     header { padding:16px 20px; border-bottom:1px solid #2a2f3a; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
     main { display:grid; grid-template-columns: 300px 1fr 1fr; gap:16px; padding:16px; }
@@ -15,10 +15,11 @@
     h3 { font-size:14px; }
     select, button { width:100%; padding:8px; border-radius:8px; border:1px solid #3a4254; background:#10131a; color:var(--text); }
     button { cursor:pointer; margin-top:8px; }
+    button.secondary { opacity: 0.85; }
     .muted { color:var(--muted); }
     ul { margin:8px 0; padding-left:18px; }
     .risk { color:var(--risk); }
-    .timeline-item { border-top:1px solid #2a2f3a; padding:8px 0; }
+    .timeline-item { border-top:1px solid #2a2f3a; padding:8px 0; font-size:13px; }
     .badge { display:inline-block; padding:2px 8px; border-radius:999px; background:#243047; color:var(--accent); font-size:12px; }
     table { width:100%; border-collapse:collapse; font-size:12px; }
     th, td { border-bottom:1px solid #2a2f3a; padding:6px 4px; text-align:right; }
@@ -185,12 +186,41 @@
       ]);
       const c = casesWithAddress.find(x => x.tokenAddress === tokenAddress);
       document.getElementById('tokenMeta').textContent =
-        `${c?.ticker || ''} · ${tokenAddress} · claim: ${c?.telegramClaim?.provenance || 'n/a'}`;
+        `${c?.ticker || ''} · ${tokenAddress} · ${c?.slug || ''} · claim: ${c?.telegramClaim?.provenance || 'n/a'}`;
+
+      const rw = c?.researchWindow;
+      document.getElementById('windowMeta').innerHTML = rw
+        ? `<div><strong>Requested event window</strong></div>
+           <div>${fmtRange(rw.requestedStart, rw.requestedEnd)}</div>
+           <div class="muted">Anchor: ${rw.anchor || '—'}</div>`
+        : '<div class="muted">No research window configured</div>';
+
+      const ing = market.ingestion;
+      const obs = market.observations || [];
+      const cov = market.coverage;
+      const histStatus = market.historicalDataStatus || ing?.metadata?.historicalDataStatus || cov?.status || '—';
+      const providerRange =
+        cov?.providerEarliestObservation && cov?.providerLatestObservation
+          ? fmtRange(cov.providerEarliestObservation, cov.providerLatestObservation)
+          : obs[0]
+            ? fmtRange(obs[0].occurredAt, obs[obs.length - 1].occurredAt)
+            : 'Unavailable';
+
+      document.getElementById('marketMeta').innerHTML =
+        `<div>Historical data status: <strong>${histStatus}</strong></div>
+         <div>GeckoTerminal coverage: ${providerRange}</div>
+         <div>Provider: <strong>${ing?.provider || '—'}</strong></div>
+         <div>Resolution: ${ing?.effectiveResolutionSeconds || ing?.metadata?.effectiveResolutionSeconds || '—'}s</div>
+         <div>Observations in window: ${obs.length}</div>
+         <div>Missing intervals: ${ing?.missingIntervalCount ?? ing?.metadata?.missingIntervals ?? '—'}</div>`;
+      document.getElementById('replayStatusMeta').textContent = '';
+
       const decision = detail.decision;
       document.getElementById('stateBadge').textContent = decision?.state || '—';
       document.getElementById('score').textContent = decision?.score ?? '—';
       renderList(document.getElementById('reasons'), decision?.explanation?.reasons);
       renderList(document.getElementById('risks'), decision?.explanation?.risks);
+
       document.getElementById('timeline').innerHTML = (timeline.events || []).map(e => `
         <div class="timeline-item">
           <div><strong>${e.eventType}</strong> <span class="muted">${new Date(e.occurredAt).toISOString()}</span></div>
@@ -202,19 +232,70 @@
       renderResearchObservations(research.observations, delay);
     }
 
-    document.getElementById('evaluateBtn').onclick = async () => {
+    document.getElementById('ingestBtn').onclick = async () => {
       const tokenAddress = tokenSelect.value;
-      await fetch(`/api/v1/signal/tokens/${tokenAddress}/evaluate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ evaluatedAt: new Date().toISOString() }),
-      });
-      await refresh(tokenAddress);
+      const btn = document.getElementById('ingestBtn');
+      btn.disabled = true;
+      btn.textContent = 'Ingesting…';
+      try {
+        const res = await fetch(`/api/v1/signal/tokens/${tokenAddress}/ingest-history`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          document.getElementById('marketMeta').innerHTML +=
+            `<div class="risk" style="margin-top:8px">${data.error || 'ingest_failed'}: ${data.reason || data.message || ''}</div>`;
+        }
+        await refresh(tokenAddress);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Ingest market history';
+      }
     };
 
     document.getElementById('replayBtn').onclick = async () => {
       const tokenAddress = tokenSelect.value;
-      await fetch(`/api/v1/signal/tokens/${tokenAddress}/replay`, {
+      const btn = document.getElementById('replayBtn');
+      btn.disabled = true;
+      btn.textContent = 'Replaying…';
+      try {
+        const res = await fetch(`/api/v1/signal/tokens/${tokenAddress}/replay`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          document.getElementById('replayStatusMeta').innerHTML =
+            `<div class="risk"><strong>Replay:</strong> Not run · ${data.error || 'unavailable'}</div>
+             <div class="muted">${data.reason || ''}</div>`;
+          document.getElementById('replayTimeline').innerHTML =
+            '<div class="muted">Replay blocked — historical data unavailable for requested window</div>';
+          await refresh(tokenAddress);
+          return;
+        }
+        document.getElementById('replayStatusMeta').innerHTML =
+          `<div><strong>Replay status:</strong> ${data.replayStatus || '—'}</div>`;
+        document.getElementById('replayTimeline').innerHTML = (data.timeline || []).map(step => `
+          <div class="timeline-item">
+            <div><strong>${step.state}</strong> · score ${step.score?.toFixed?.(1) ?? step.score}
+              <span class="muted">${new Date(step.decidedAt).toISOString()}</span></div>
+            <div class="muted">price ${fmtPrice(step.priceUsd)} · mc ${step.marketCapUsd ?? '—'} · liq ${step.liquidityUsd ?? '—'}</div>
+            <div>${(step.reasons || []).slice(0,2).join(' · ') || ''}</div>
+          </div>`).join('') || '<div class="muted">Empty replay</div>';
+        renderOutcomes(data.executionDelayOutcomes || []);
+        await refresh(tokenAddress);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Run replay';
+      }
+    };
+
+    document.getElementById('evaluateBtn').onclick = async () => {
+      const tokenAddress = tokenSelect.value;
+      await fetch(`/api/v1/signal/tokens/${tokenAddress}/evaluate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pricePath: pricePathsByToken[tokenAddress] || [] }),
