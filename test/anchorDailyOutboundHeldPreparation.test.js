@@ -15,7 +15,7 @@ function switches(t, preparation = 'true') {
     t.after(() => { if (old === undefined) delete process.env[name]; else process.env[name] = old; });
   }
 }
-function fixture(extra = {}) {
+function fixture(extra = {}, options = {}) {
   const source = { id: 'source', tenantId: '10', objective: 'Cleaning for property managers', structuredMission: { immutable: true } };
   const p = policy({ tenantId: '10', sourceMissionId: 'source', senderEmail: 'sender@anchor.example', inboxIntegrationId: 'inbox',
     aoOwnerIds: [1], startsAt: '2026-10-01T04:00:00Z', expiresAt: '2026-10-08T04:00:00Z' }, now);
@@ -29,10 +29,26 @@ function fixture(extra = {}) {
     throw new Error(`Unexpected database operation: ${sql}`);
   } };
   const events = []; const items = []; let providerCalls = 0; let approvalCalls = 0;
-  const envelope = { id: 'envelope', program_id: program.id, mission_id: 'daily', status: 'authorized', revision: 'r1', manifest: [] };
+  let envelope = options.noEnvelope
+    ? null
+    : { id: 'envelope', program_id: program.id, mission_id: 'daily', status: 'authorized', revision: 'r1', manifest: [] };
+  const candidate = {
+    candidateId: crm.id,
+    item: {
+      candidateId: crm.id, prospectId: crm.id, companyId: crm.company_id,
+      company: crm.company_name, domain: crm.domain, email: crm.email,
+      sendable: true, dnc: false, paige: { candidateId: crm.id },
+    },
+    message: {
+      candidateId: crm.id, companyId: crm.company_id, companyName: crm.company_name,
+      subject: `Cleaning for ${crm.company_name}`, body: 'Would a written quote help?',
+    },
+  };
   const svc = service({ pool, tenantId: '10', now: () => now, adapters: {
     loadMission: async id => ({ mission: { ...source, id, stage: 'ready' } }), validateTenant: async () => {},
-    prepared: async () => ({ candidates: [], revision: 'r1', sender: { senderName: 'Jacob', senderEmail: 'sender@anchor.example' } }),
+    prepare: async () => ({ mission: { ...source, id: 'daily', stage: 'ready' } }),
+    prepared: async () => ({ candidates: options.preparedCandidate ? [candidate] : [], revision: 'r1', capacity: 5,
+      sender: { senderName: 'Jacob', senderEmail: 'sender@anchor.example' } }),
     contact: async () => crm,
     infrastructure: async () => ({ operating: { dispatchCapacityNow: 5, minSpacingMinutes: 60 }, assessed: { governor: { outcome: 'proceed' } } }),
     send: async () => { providerCalls++; throw new Error('must not send'); },
@@ -47,8 +63,15 @@ function fixture(extra = {}) {
       for (const entry of selected) items.push({ id: entry.candidateId, status: 'pending', snapshot: entry });
       envelope.manifest.push(...selected); return envelope;
     },
+    freeze: async (_program, _day, missionId, revision, selected) => {
+      envelope = { id: 'fresh-envelope', program_id: program.id, mission_id: missionId, status: 'frozen',
+        revision, manifest: selected, manifest_hash: hash(selected), approval_id: null };
+      for (const entry of selected) items.push({ id: entry.candidateId, status: 'pending', snapshot: entry });
+      return envelope;
+    },
   });
-  return { svc, items, events, program, source, crm, envelope, providerCalls: () => providerCalls, approvalCalls: () => approvalCalls };
+  return { svc, items, events, program, source, crm, envelope: () => envelope,
+    providerCalls: () => providerCalls, approvalCalls: () => approvalCalls };
 }
 
 test('explicit preparation-only grant prepares a bound item while normal tick and provider remain disabled', async t => {
@@ -73,6 +96,28 @@ test('explicit preparation-only grant prepares a bound item while normal tick an
   assert.equal(audit.payload.programId, f.program.id);
   assert.equal(audit.payload.preparedAdded, 1);
   assert.equal(audit.payload.preparationDecisions[0].outcome, 'selected');
+});
+
+test('active scheduler freezes a fresh held envelope before the disabled send boundary', async t => {
+  switches(t);
+  const f = fixture({}, { noEnvelope: true, preparedCandidate: true });
+  const result = await f.svc.tick();
+  assert.equal(result.halted, 'environment_kill_switch');
+  assert.equal(result.sent, 0);
+  assert.equal(f.envelope().status, 'frozen');
+  assert.equal(f.envelope().approval_id, null);
+  assert.equal(f.items.length, 1);
+  assert.equal(f.items[0].status, 'pending');
+  const bound = f.items[0].snapshot;
+  assert.equal(bound.prospectId, f.crm.id);
+  assert.equal(bound.companyId, f.crm.company_id);
+  assert.equal(bound.email, f.crm.email);
+  assert.equal(bound.message.candidateId, f.crm.id);
+  assert.equal(bound.message.companyId, f.crm.company_id);
+  assert.equal(bound.message.companyName, f.crm.company_name);
+  assert.equal(f.providerCalls(), 0);
+  assert.equal(f.approvalCalls(), 0);
+  assert.equal(f.events.find(x => x.type === 'tick_blocked').payload.reason, 'environment_kill_switch');
 });
 
 test('preparation defaults off and requires an explicit sending hold; it never enables another tenant', async t => {

@@ -15,6 +15,14 @@ const router = express.Router();
 
 const SUCCESS_MESSAGE =
   "Thank you. We'll be in touch to arrange your Facility Assessment.";
+const RESIDENTIAL_SUCCESS_MESSAGE =
+  "Thank you. We'll be in touch about your home cleaning quote.";
+
+function successMessageForSpaceType(spaceType) {
+  return isResidentialWalkthroughSpaceType(spaceType)
+    ? RESIDENTIAL_SUCCESS_MESSAGE
+    : SUCCESS_MESSAGE;
+}
 
 const rateBuckets = new Map();
 const RATE_WINDOW_MS = 60 * 60 * 1000;
@@ -114,7 +122,7 @@ router.post('/api/public/walkthrough', async (req, res) => {
     return res.status(201).json({
       ok: true,
       submission_id: submissionId,
-      message: SUCCESS_MESSAGE,
+      message: successMessageForSpaceType(validated.values.space_type),
     });
   } catch (err) {
     logWalkthroughAttempt(req, { outcome: 'error', payloadKeys, detail: err.message });
@@ -126,3 +134,5 @@ router.post('/api/public/walkthrough', async (req, res) => {
 module.exports = router;
 module.exports._rateBuckets = rateBuckets;
 module.exports.SUCCESS_MESSAGE = SUCCESS_MESSAGE;
+module.exports.RESIDENTIAL_SUCCESS_MESSAGE = RESIDENTIAL_SUCCESS_MESSAGE;
+module.exports.successMessageForSpaceType = successMessageForSpaceType;
