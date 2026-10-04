@@ -8,6 +8,11 @@ const { calculateConvergence } = require('./features/convergence');
 const { scoreSignal } = require('./scoring/signalScoring');
 const { decideSignalState } = require('./state/stateMachine');
 const { replayToken } = require('./replay/replayEngine');
+const { ingestHistoricalMarketData } = require('./ingestion/ingestHistoricalMarketData');
+const { GeckoTerminalMarketDataProvider } = require('./providers/GeckoTerminalMarketDataProvider');
+const { callStore } = require('./storage/storeUtils');
+const { resolveResearchWindow } = require('./fixtures/researchWindows');
+const { validateHistoricalCoverage } = require('./market/historicalCoverage');
 
 const DEFAULT_COHORT_PRICE_PATHS = {
   '2fRDA5f353VXLs2PeLJNqqHqTMhrjJunAXmWWpLkpump': [

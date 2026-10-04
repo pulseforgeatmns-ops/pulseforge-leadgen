@@ -5,8 +5,24 @@ const assert = require('node:assert/strict');
 const { InMemorySignalStore } = require('../storage/InMemorySignalStore');
 const { seedFrontRunnersFixtures } = require('../fixtures/seedFixtures');
 const { buildFeatureSnapshot } = require('../features/featureEngine');
+const { filterObservationsAtOrBefore } = require('../temporal/temporalFirewall');
 
 describe('Signal V1 temporal integrity', () => {
+  it('filterObservationsAtOrBefore excludes observations after evaluatedAt', () => {
+    const evaluatedAt = new Date('2026-09-29T18:10:00Z');
+    const observations = [
+      { occurredAt: new Date('2026-09-29T18:05:00Z'), priceUsd: 1 },
+      { occurredAt: new Date('2026-09-29T18:10:00Z'), priceUsd: 2 },
+      { occurredAt: new Date('2026-09-29T18:11:00Z'), priceUsd: 3 },
+    ];
+    const filtered = filterObservationsAtOrBefore(observations, evaluatedAt);
+    assert.equal(filtered.length, 2);
+    assert.deepEqual(
+      filtered.map(o => o.priceUsd),
+      [1, 2]
+    );
+  });
+
   it('future events cannot affect historical snapshots', async () => {
     const store = new InMemorySignalStore();
     seedFrontRunnersFixtures(store);
