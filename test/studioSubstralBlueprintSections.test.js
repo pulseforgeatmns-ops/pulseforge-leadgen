@@ -8,7 +8,10 @@ const {
   rehydrateNormalizedFactsFromAnswers,
   sectionsFromNormalizedFacts,
   buildExecutiveSummary,
+  mergeSupplementalIntoSections,
+  pinComposedBlueprintSectionSummaries,
   EPISTEMIC_STATES,
+  MESSAGE_TYPES,
 } = require('../services/clientIntelligenceInterview');
 
 /** Simulates mis-mapped persisted facts after Blueprint v1.1 regeneration. */
@@ -213,6 +216,119 @@ describe('Studio Substral Blueprint section mapping (v1.1 regeneration)', () => 
     assert.doesNotMatch(sections.targetMarkets.summary, /decision-maker who already/i);
     assert.match(sections.successMetrics.summary, /qualified prospects identified/i);
     assert.doesNotMatch(sections.successMetrics.summary, /good prospect should/i);
+  });
+
+  it('composes Blueprint v1.6 services as real offerings only (Studio Substral catalog)', () => {
+    const evidence =
+      'Studio Substral offers website redesign, messaging, visual design, mobile experience, calls to action, explain its value clearly, homepage and key page design, copywriting, mobile optimization, contact form or booking flow setup, basic SEO cleanup, launch support, and light post-launch refinement.';
+    const prepared = prepareNormalizedFactsForBrief({
+      business_name: 'Studio Substral',
+      services: [
+        'website redesign',
+        'explain its value clearly',
+        'mobile experience',
+        'calls to action',
+      ],
+      geography: ['Greater Manchester'],
+      vertical_focus: 'local service businesses',
+      disqualified_customers: ['price shoppers'],
+      differentiation: 'credibility',
+      brand_voice: 'clear',
+      ninety_day_outcomes: 'Acquire one client',
+      success_metrics: ['qualified prospects identified'],
+      epistemic_states: {
+        business_description: EPISTEMIC_STATES.KNOWN,
+        services: EPISTEMIC_STATES.KNOWN,
+        ideal_customers: EPISTEMIC_STATES.KNOWN,
+        disqualified_customers: EPISTEMIC_STATES.KNOWN,
+        geography: EPISTEMIC_STATES.KNOWN,
+        differentiation: EPISTEMIC_STATES.KNOWN,
+        brand_voice: EPISTEMIC_STATES.KNOWN,
+        ninety_day_outcomes: EPISTEMIC_STATES.KNOWN,
+        success_metrics: EPISTEMIC_STATES.KNOWN,
+      },
+      evidence_statements: { services: evidence },
+      hypotheses: {},
+      business_facts: {},
+      transformation_areas: [],
+      pains: [],
+      learning_signals: [],
+      excluded_metrics: [],
+      superseded_slots: [],
+    });
+    const sections = sectionsFromNormalizedFacts(prepared);
+    const services = sections.services.summary || '';
+
+    assert.match(services, /website redesign, messaging, visual design, homepage and key-page design/i);
+    assert.match(services, /mobile optimization, stronger calls to action/i);
+    assert.match(services, /launch support, and light post-launch refinement/i);
+    assert.doesNotMatch(services, /explain its value clearly/i);
+    assert.doesNotMatch(services, /mobile experience/i);
+  });
+
+  it('v1.6 regeneration path keeps composed targetMarkets after supplemental merge', () => {
+    const prepared = prepareNormalizedFactsForBrief({
+      business_name: 'Studio Substral',
+      services: ['website redesign'],
+      geography: ['Greater Manchester', 'southern New Hampshire'],
+      vertical_focus:
+        'local service businesses, contractors and trades, professional services, medical and wellness practices, property service companies, hospitality businesses, and growing owner-led local brands',
+      disqualified_customers: ['cheapest possible website'],
+      differentiation: 'credibility',
+      brand_voice: 'clear',
+      ninety_day_outcomes: 'Acquire one client',
+      success_metrics: ['qualified prospects identified'],
+      epistemic_states: {
+        business_description: EPISTEMIC_STATES.KNOWN,
+        services: EPISTEMIC_STATES.KNOWN,
+        ideal_customers: EPISTEMIC_STATES.KNOWN,
+        disqualified_customers: EPISTEMIC_STATES.KNOWN,
+        geography: EPISTEMIC_STATES.KNOWN,
+        differentiation: EPISTEMIC_STATES.KNOWN,
+        brand_voice: EPISTEMIC_STATES.KNOWN,
+        ninety_day_outcomes: EPISTEMIC_STATES.KNOWN,
+        success_metrics: EPISTEMIC_STATES.KNOWN,
+      },
+      hypotheses: {},
+      evidence_statements: {},
+      business_facts: {},
+      transformation_areas: [],
+      pains: [],
+      learning_signals: [],
+      excluded_metrics: [],
+      superseded_slots: [],
+    });
+    let sections = sectionsFromNormalizedFacts(prepared, {
+      targetMarkets: {
+        summary:
+          'Ideal customers are owner-led businesses where a better website affects trust, lead flow, and sales.',
+        confidence: 0.9,
+        evidenceIds: [],
+        unknowns: [],
+      },
+    });
+    const icpNarrative =
+      'Studio Substral most wants owner-led businesses where a better website can directly affect trust, lead flow, and sales.';
+    sections = mergeSupplementalIntoSections(sections, [
+      {
+        text: icpNarrative,
+        substance: icpNarrative,
+        kind: MESSAGE_TYPES.SUPPLEMENTAL_CONTEXT,
+        confirmed: true,
+        section: 'targetMarkets',
+      },
+    ]);
+    sections = pinComposedBlueprintSectionSummaries(prepared, sections);
+    const markets = sections.targetMarkets.summary || '';
+
+    assert.match(
+      markets,
+      /^Priority markets are Greater Manchester and southern New Hampshire, with an initial focus on/i
+    );
+    assert.match(markets, /contractors and trades|contractors, trades/i);
+    assert.match(markets, /growing owner-led local brands/i);
+    assert.doesNotMatch(markets, /decision-maker|lead flow|trust, lead flow|Ideal customers are/i);
+    assert.doesNotMatch(markets, /Geography and vertical focus here bound/i);
   });
 
   it('composes Blueprint v1.5 sections without transcript debris or duplicate boilerplate', () => {
