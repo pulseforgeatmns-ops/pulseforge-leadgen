@@ -1,6 +1,7 @@
 'use strict';
 
 const { hash, fail } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 const { createGovernedOutboundTenantContext } = require('./governedOutboundTenant');
 
 // Conservative ownership matching: a likely alias is held for review, never
@@ -49,6 +50,24 @@ class GovernedOutboundStore {
       VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET id=EXCLUDED.id RETURNING *`,
     [id, this.tenantId, p.sourceMissionId, p, hash(p), scopeHash, actor]);
     await this.event('program_authorized', id, { programId: id, policy: p, scopeHash, actor });
+    return row;
+  }
+  async migrateProgramPolicy(program, nextPolicy, actor, authorization = {}) {
+    if (!program?.id) fail('program_not_found');
+    const policyHash = hash(nextPolicy);
+    const row = await this.one(`UPDATE acquisition_outbound_programs
+      SET policy=$2, policy_hash=$3, authorized_by=$4, authorized_at=now()
+      WHERE id=$1 AND tenant_id=$5 RETURNING *`,
+    [program.id, nextPolicy, policyHash, String(actor), this.tenantId]);
+    if (!row) fail('program_not_found');
+    await this.event('program_policy_migrated', [program.id, policyHash], {
+      programId: program.id,
+      previousPolicyHash: program.policy_hash,
+      policy: nextPolicy,
+      policyHash,
+      actor,
+      authorization,
+    });
     return row;
   }
   async mode(program, mode, actor) {
@@ -285,7 +304,8 @@ class GovernedOutboundStore {
         count(*) FILTER(WHERE i.status IN ('attempted','uncertain'))::int AS uncertain
         FROM acquisition_outbound_items i JOIN acquisition_outbound_envelopes e ON e.id=i.envelope_id
         WHERE i.tenant_id=$3 AND i.attempted_at IS NOT NULL`, [p.id, day, this.tenantId])).rows[0];
-      if (counts.today >= p.policy.dailyCap || counts.total >= p.policy.totalCap || counts.uncertain) fail('budget_or_uncertain_block');
+      const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(p.policy) ?? p.policy.dailyCap;
+      if (counts.today >= operatorDailyCeiling || counts.total >= p.policy.totalCap || counts.uncertain) fail('budget_or_uncertain_block');
       if (counts.last_attempt && +at - +new Date(counts.last_attempt) < p.policy.spacingMinutes * 60000) fail('spacing');
       const row = (await db.query(`UPDATE acquisition_outbound_items i SET status='attempted',attempted_at=$2
         WHERE i.id=$1 AND i.status='pending' AND NOT EXISTS

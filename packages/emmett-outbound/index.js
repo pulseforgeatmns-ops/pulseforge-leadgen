@@ -22,6 +22,7 @@ const authEvidence = require('./AuthEvidence');
 const bootstrap = require('./Bootstrap');
 const { buildCapacityEnvelope, buildDecisiveReasoning } = require('./CapacityEnvelope');
 const { assessOperatingCapacity, LIMITING_FACTORS } = require('./OperatingCapacity');
+const operatorDelegatedCapacity = require('./OperatorDelegatedCapacity');
 const tenantMailboxCapacity = require('./TenantMailboxCapacity');
 
 const {
@@ -62,5 +63,6 @@ module.exports = {
   buildDecisiveReasoning,
   assessOperatingCapacity,
   LIMITING_FACTORS,
+  ...operatorDelegatedCapacity,
   buildTenantMailboxDurableEnvelope,
 };

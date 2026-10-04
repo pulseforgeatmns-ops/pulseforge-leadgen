@@ -9,6 +9,10 @@
  */
 
 const { GOVERNOR_OUTCOMES } = require('./types');
+const {
+  resolveOperatorDelegatedMaximumDailyCapacity,
+  capacityLimitingAuthorityFromFactor,
+} = require('./OperatorDelegatedCapacity');
 
 const LIMITING_FACTORS = Object.freeze({
   GOVERNOR_HALT: 'governor_halt',
@@ -172,7 +176,8 @@ function emmettRecommended(assessed = {}, fallback = 0) {
   const capacity = assessed.capacity || {};
   if (capacity.recommended != null) return asNonNegInt(capacity.recommended);
   if (assessed.recommended != null) return asNonNegInt(assessed.recommended);
-  return asNonNegInt(fallback);
+  if (fallback != null && Number.isFinite(Number(fallback))) return asNonNegInt(fallback);
+  return null;
 }
 
 function classifyEmmettLimiter(assessed = {}, recommended) {
@@ -238,8 +243,42 @@ function resolveScheduleInput(input = {}) {
 function assessOperatingCapacity(input = {}) {
   const assessed = input.assessed || {};
   const policy = input.policy || {};
+  const requireEmmett = input.requireEmmettAuthority === true;
+  const hasEmmettAuthority = assessed.capacity?.recommended != null
+    || assessed.recommended != null
+    || (input.emmettCapacity != null && Number.isFinite(Number(input.emmettCapacity)));
   const recommended = emmettRecommended(assessed, input.emmettCapacity);
-  const emmett = classifyEmmettLimiter(assessed, recommended);
+  if (requireEmmett && !hasEmmettAuthority) {
+    return {
+      recommendedSafeDailyCapacity: 0,
+      authorizationLimitedCapacity: 0,
+      scheduleLimitedCapacity: 0,
+      nextEligibleScheduleCapacity: 0,
+      dispatchCapacityNow: 0,
+      planningDailyCapacity: 0,
+      dispatchableDailyCapacity: 0,
+      effectiveDailyCapacity: 0,
+      limitingFactor: LIMITING_FACTORS.GOVERNOR_HALT,
+      capacityLimitingAuthority: 'emmett',
+      healthScore: 0,
+      governor: GOVERNOR_OUTCOMES.PAUSE,
+      capacityReason: 'Emmett safe capacity could not be established; outbound is fail-closed.',
+      operatorDelegatedMaximumDailyCapacity: resolveOperatorDelegatedMaximumDailyCapacity(policy),
+      authorizationDailyCap: resolveOperatorDelegatedMaximumDailyCapacity(policy),
+      remainingTotalAuthorization: null,
+      emmettRecommended: null,
+      allowedSendWindow: null,
+      minSpacingMinutes: resolveGrantMinSpacingMinutes(policy, input.schedule || {}),
+      dispatchDayAllowed: false,
+      grantActiveNow: false,
+      withinSendWindowNow: false,
+      nextEligibleDispatchDay: null,
+      scheduleUnavailable: true,
+      silentCap: false,
+      emmettAuthorityMissing: true,
+    };
+  }
+  const emmett = classifyEmmettLimiter(assessed, recommended ?? 0);
   const healthScore = Number(
     assessed.health?.score
     ?? assessed.governor?.healthScore
@@ -248,7 +287,8 @@ function assessOperatingCapacity(input = {}) {
   );
   const governor = governorOutcomeOf(assessed);
 
-  const authorizationDailyCap = asOptionalCap(policy.dailyCap);
+  const operatorDelegatedMaximumDailyCapacity = resolveOperatorDelegatedMaximumDailyCapacity(policy);
+  const authorizationDailyCap = operatorDelegatedMaximumDailyCapacity;
   const authorizationTotalCap = asOptionalCap(policy.totalCap);
   const totalAttempted = asNonNegInt(input.totalAttempted);
   const remainingTotalAuthorization = authorizationTotalCap == null
@@ -349,9 +389,11 @@ function assessOperatingCapacity(input = {}) {
     /** @deprecated use dispatchCapacityNow for send gates; planningDailyCapacity for Max inventory */
     effectiveDailyCapacity: authorizationLimitedCapacity,
     limitingFactor,
+    capacityLimitingAuthority: capacityLimitingAuthorityFromFactor(limitingFactor),
     healthScore,
     governor,
     capacityReason,
+    operatorDelegatedMaximumDailyCapacity,
     authorizationDailyCap,
     remainingTotalAuthorization,
     emmettRecommended: recommended,

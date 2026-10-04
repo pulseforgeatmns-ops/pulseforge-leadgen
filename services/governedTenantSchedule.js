@@ -3,6 +3,7 @@
 // Durable bridge: every mailbox send remains bound to its reviewed program,
 // frozen item, canonical Paige revision, contact evidence and live capacity.
 const { hash, fail, clock, windowReason, missionScope, candidateReason } = require('../packages/acquisition-mission/DailyOutboundPolicy');
+const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { governedOutboundEnabledForTenant } = require('./governedOutboundTenant');
 
@@ -43,7 +44,8 @@ async function validateGovernedSchedule(schedule, opts = {}) {
     || asset.content.prospectId !== schedule.prospectId
     || asset.content.preparedArtifactRevision !== binding.revision) fail('governed_outreach_asset_changed');
   const counts = await store.counts(program, clock(now).day);
-  if (counts.today > program.policy.dailyCap || counts.total > program.policy.totalCap || counts.uncertain > 1) fail('governed_budget_changed');
+  const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap;
+  if (counts.today > operatorDailyCeiling || counts.total > program.policy.totalCap || counts.uncertain > 1) fail('governed_budget_changed');
   const adapters = opts.governedAdapters || require('./governedOutboundAdapters').adapters(pool, { tenantId: schedule.tenantId });
   const source = await adapters.loadMission(program.source_mission_id);
   if (!source?.mission || source.mission.planCancelled || hash(missionScope(source.mission)) !== program.scope_hash) fail('source_scope_changed');

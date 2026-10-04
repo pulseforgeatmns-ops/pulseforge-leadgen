@@ -51,12 +51,18 @@ function policy(input, now = new Date()) {
     if (!Number.isInteger(p.startHour) || !Number.isInteger(p.endHour)
       || p.startHour < 9 || p.endHour > 17 || p.startHour >= p.endHour) fail('invalid_business_window');
     if (p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) fail('ao_owners_required');
+    if (input.operatorDelegatedMaximumDailyCapacity != null) {
+      p.operatorDelegatedMaximumDailyCapacity = Number(input.operatorDelegatedMaximumDailyCapacity);
+    }
   }
-  // dailyCap is operator authorization, not Emmett operational capacity.
-  // Emmett may recommend more; the grant can now authorize up to the mailbox-scale ceiling.
-  if (!Number.isInteger(p.dailyCap) || p.dailyCap < 1 || p.dailyCap > 50
+  // dailyCap / operatorDelegatedMaximumDailyCapacity define the operator outer envelope.
+  // Emmett determines safe capacity within that envelope; neither field is a send floor.
+  const delegatedMax = p.operatorDelegatedMaximumDailyCapacity != null
+    ? Number(p.operatorDelegatedMaximumDailyCapacity)
+    : p.dailyCap;
+  if (!Number.isInteger(delegatedMax) || delegatedMax < 1 || delegatedMax > 50
     || !Number.isInteger(p.totalCap) || p.totalCap < 1 || p.totalCap > 100
-    || p.dailyCap > p.totalCap
+    || delegatedMax > p.totalCap
     || !Number.isInteger(p.spacingMinutes) || p.spacingMinutes < 60 || p.spacingMinutes > 240) fail('invalid_bounds');
   if (Date.parse(p.expiresAt) <= Date.parse(p.startsAt)
     || Date.parse(p.expiresAt) - Date.parse(p.startsAt) > 30 * 86400000

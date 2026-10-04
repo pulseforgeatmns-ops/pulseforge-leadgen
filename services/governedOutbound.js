@@ -23,6 +23,7 @@ const {
   markLeafProviderSend,
 } = require('./governedOutboundProviderBoundary');
 const { reconcileUncertainItemFromEvidence } = require('./governedUncertainSendReconciliation');
+const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 
 function service({
   pool,
@@ -60,6 +61,43 @@ function service({
     await adapters.validateTenant(program);
     return source;
   }
+  async function migrateOperatorDelegatedCapacity(input, actor) {
+    if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
+    const program = await store.program();
+    if (!program) fail('program_not_found');
+    const current = program.policy || {};
+    const p = policy({
+      ...current,
+      ...input,
+      tenantId: String(input.tenantId || current.tenantId || resolvedTenantId),
+      sourceMissionId: input.sourceMissionId || current.sourceMissionId || program.source_mission_id,
+      senderEmail: input.senderEmail || current.senderEmail,
+      inboxIntegrationId: input.inboxIntegrationId || current.inboxIntegrationId,
+      sendingIdentityId: input.sendingIdentityId || current.sendingIdentityId,
+      startsAt: input.startsAt || current.startsAt,
+      expiresAt: input.expiresAt || current.expiresAt,
+      operatorDelegatedMaximumDailyCapacity: input.operatorDelegatedMaximumDailyCapacity
+        ?? current.operatorDelegatedMaximumDailyCapacity,
+    }, now());
+    const reviewHash = hash({ policy: p, scopeHash: program.scope_hash });
+    if (input.reviewHash !== reviewHash) {
+      return {
+        reviewRequired: true,
+        reviewHash,
+        policy: p,
+        scopeHash: program.scope_hash,
+        migration: 'operator_delegated_maximum_daily_capacity',
+      };
+    }
+    const authorization = {
+      kind: 'operator_delegated_maximum_daily_capacity',
+      operatorDelegatedMaximumDailyCapacity: p.operatorDelegatedMaximumDailyCapacity,
+      recordedAt: now().toISOString(),
+      actor: String(actor.id),
+      note: input.authorizationNote || 'Emmett-authoritative dynamic outbound capacity migration',
+    };
+    return store.migrateProgramPolicy(program, p, String(actor.id), authorization);
+  }
   async function setMode(id, mode, reviewHash, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
     const program = await store.program();
@@ -89,7 +127,8 @@ function service({
         excluded.push({ candidateId: entry.candidateId, reason: reason || suppressed || 'duplicate_or_missing_company' });
         continue;
       }
-      if (selected.length >= Math.min(program.policy.dailyCap, prepared.capacity, PREPARATION_BATCH_LIMIT)) break;
+      const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap;
+      if (selected.length >= Math.min(operatorDailyCeiling, prepared.capacity, PREPARATION_BATCH_LIMIT)) break;
       selected.push(entry); emails.add(entry.email); companies.add(entry.companyId);
     }
     await store.event('batch_eligibility', [program.id, day, prepared.revision, hash({ selected: selected.map(x => x.candidateId), excluded })], { programId: program.id, selected: selected.length,
@@ -345,7 +384,7 @@ function service({
     if (pendingPreparedCount >= PREPARATION_BATCH_LIMIT) {
       return observabilityFromRefill({
         pendingPrepared: pendingPreparedCount,
-        remainingDispatchCapacity: Math.max(0, Number(program.policy.dailyCap || 0) - sentToday),
+        remainingDispatchCapacity: Math.max(0, Number(resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap ?? 0) - sentToday),
         remainingScheduleSlots: 0,
         cleanInventory: pendingPreparedCount,
         prepareRequested: 0,
@@ -365,7 +404,7 @@ function service({
       if (code === 'emmett_governor_halted') governor = 'halt';
     }
     const remainingCap = remainingDispatchCapacity({
-      dispatchCapacityNow: operating?.dispatchCapacityNow ?? program.policy.dailyCap,
+      dispatchCapacityNow: operating?.dispatchCapacityNow ?? resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap,
       sentToday,
     });
     const remainingSlots = remainingScheduleSlots({
@@ -401,7 +440,7 @@ function service({
       cleanInventory,
       governor,
       grantActive: program.mode === 'active' && isPreparationEnabled(),
-      dailyAuthorizationRemaining: Math.max(0, Number(program.policy.dailyCap || 0) - sentToday),
+      dailyAuthorizationRemaining: Math.max(0, Number(operating?.authorizationLimitedCapacity ?? resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap ?? 0) - sentToday),
       totalAuthorizationRemaining: Math.max(0, Number(program.policy.totalCap || 0) - Number(counts.total || 0)),
       planningDailyCapacity: operating?.planningDailyCapacity,
     });
@@ -464,7 +503,8 @@ function service({
         await store.expire(day);
         const counts = await store.counts(program, day);
         if (counts.uncertain) fail('uncertain_send_requires_reconciliation');
-        if (counts.total >= program.policy.totalCap || counts.today >= program.policy.dailyCap) fail('cap_reached');
+        const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap;
+        if (counts.total >= program.policy.totalCap || counts.today >= operatorDailyCeiling) fail('cap_reached');
         if (!isPreparationEnabled()) fail('environment_kill_switch');
         let envelope = await store.envelope(day);
         const initialCount = envelope ? (await store.items(envelope.id)).filter(row => row.status === 'pending').length : 0;
@@ -526,7 +566,8 @@ function service({
         await store.expire(day);
         const counts = await store.counts(program, day);
         if (counts.uncertain) fail('uncertain_send_requires_reconciliation');
-        if (counts.total >= program.policy.totalCap || counts.today >= program.policy.dailyCap) fail('cap_reached');
+        const operatorDailyCeiling = resolveOperatorDelegatedMaximumDailyCapacity(program.policy) ?? program.policy.dailyCap;
+        if (counts.total >= program.policy.totalCap || counts.today >= operatorDailyCeiling) fail('cap_reached');
         let envelope = await store.envelope(day);
         if (!envelope) envelope = await prepare(program, source, day);
         if (envelope.program_id !== program.id) fail('daily_envelope_already_used');
@@ -621,6 +662,7 @@ function service({
   }
   return {
     authorize,
+    migrateOperatorDelegatedCapacity,
     setMode,
     tick,
     runPreparationRefill,

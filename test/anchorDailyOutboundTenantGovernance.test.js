@@ -21,6 +21,8 @@ test('mailbox grant binds identity and the reviewed Emmett window', () => {
   assert.equal(grant.sendingIdentityId,'identity');assert.equal(grant.endHour,16);assert.equal(grant.spacingMinutes,240);
   assert.throws(()=>policy({...input,sendingIdentityId:''},now),{code:'sending_identity_required'});
   assert.throws(()=>policy({...input,endHour:24},now),{code:'invalid_business_window'});
+  const delegated=policy({...input,operatorDelegatedMaximumDailyCapacity:20,totalCap:100},now);
+  assert.equal(delegated.operatorDelegatedMaximumDailyCapacity,20);
 });
 
 test('only tenants 10, 13, and 17 are allowed for governed outbound', () => {
