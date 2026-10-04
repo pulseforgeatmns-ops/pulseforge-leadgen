@@ -8,6 +8,7 @@
 const { clock } = require('../acquisition-mission/DailyOutboundPolicy');
 
 const PROGRAM_TOTAL_CAP_MAX = 100;
+const DEFAULT_BOUNDED_GRANT_HORIZON_DAYS = 30;
 
 function asOptionalCap(value) {
   const n = Number(value);
@@ -73,6 +74,16 @@ function resolveOperatorProgramTotalCapForDelegation(currentPolicy = {}, operato
   return Math.min(PROGRAM_TOTAL_CAP_MAX, Math.max(currentTotal, grantPeriodTotal));
 }
 
+function resolveBoundedGrantHorizon(now = new Date(), grantHorizonDays = DEFAULT_BOUNDED_GRANT_HORIZON_DAYS) {
+  const days = Math.trunc(Number(grantHorizonDays));
+  if (!Number.isFinite(days) || days < 1 || days > DEFAULT_BOUNDED_GRANT_HORIZON_DAYS) {
+    throw Object.assign(new Error('invalid_grant_horizon'), { code: 'invalid_grant_horizon' });
+  }
+  const startsAt = new Date(now).toISOString();
+  const expiresAt = new Date(+now + days * 86400000).toISOString();
+  return { startsAt, expiresAt, grantHorizonDays: days };
+}
+
 function describeOperatorAuthorityEnvelope(policy = {}) {
   const operatorDelegatedMaximumDailyCapacity = asOptionalCap(policy.operatorDelegatedMaximumDailyCapacity);
   const dailyCap = asOptionalCap(policy.dailyCap);
@@ -82,6 +93,8 @@ function describeOperatorAuthorityEnvelope(policy = {}) {
     dailyCap,
     totalCap,
     operatorDelegatedMaximumDailyCapacity,
+    startsAt: policy.startsAt || null,
+    expiresAt: policy.expiresAt || null,
     effectiveOperatorDailyCeiling,
     effectiveOperatorProgramCeiling: totalCap,
     limitingOperatorAuthority: totalCap != null && effectiveOperatorDailyCeiling != null
@@ -115,8 +128,10 @@ function capacityLimitingAuthorityFromFactor(limitingFactor) {
 module.exports = {
   resolveOperatorDelegatedMaximumDailyCapacity,
   resolveOperatorProgramTotalCapForDelegation,
+  resolveBoundedGrantHorizon,
   countGrantWeekdaySlots,
   describeOperatorAuthorityEnvelope,
   capacityLimitingAuthorityFromFactor,
   PROGRAM_TOTAL_CAP_MAX,
+  DEFAULT_BOUNDED_GRANT_HORIZON_DAYS,
 };

@@ -26,8 +26,10 @@ const { reconcileUncertainItemFromEvidence } = require('./governedUncertainSendR
 const {
   resolveOperatorDelegatedMaximumDailyCapacity,
   resolveOperatorProgramTotalCapForDelegation,
+  resolveBoundedGrantHorizon,
   describeOperatorAuthorityEnvelope,
   countGrantWeekdaySlots,
+  DEFAULT_BOUNDED_GRANT_HORIZON_DAYS,
 } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 
 function service({
@@ -73,9 +75,24 @@ function service({
     const current = program.policy || {};
     const delegatedDaily = input.operatorDelegatedMaximumDailyCapacity
       ?? current.operatorDelegatedMaximumDailyCapacity;
+    const authorizationNow = now();
+    const grantHorizonDays = input.grantHorizonDays != null
+      ? Number(input.grantHorizonDays)
+      : (input.renewBoundedGrantHorizon ? DEFAULT_BOUNDED_GRANT_HORIZON_DAYS : null);
+    let startsAt = input.startsAt || current.startsAt;
+    let expiresAt = input.expiresAt || current.expiresAt;
+    let grantHorizon = null;
+    if (grantHorizonDays != null) {
+      grantHorizon = resolveBoundedGrantHorizon(authorizationNow, grantHorizonDays);
+      startsAt = grantHorizon.startsAt;
+      expiresAt = grantHorizon.expiresAt;
+    }
+    const policyBasisForTotalCap = grantHorizon != null
+      ? { ...current, startsAt, expiresAt }
+      : current;
     const migratedTotalCap = input.totalCap != null
       ? input.totalCap
-      : resolveOperatorProgramTotalCapForDelegation(current, delegatedDaily);
+      : resolveOperatorProgramTotalCapForDelegation(policyBasisForTotalCap, delegatedDaily);
     const authorityBefore = describeOperatorAuthorityEnvelope(current);
     const p = policy({
       ...current,
@@ -85,12 +102,12 @@ function service({
       senderEmail: input.senderEmail || current.senderEmail,
       inboxIntegrationId: input.inboxIntegrationId || current.inboxIntegrationId,
       sendingIdentityId: input.sendingIdentityId || current.sendingIdentityId,
-      startsAt: input.startsAt || current.startsAt,
-      expiresAt: input.expiresAt || current.expiresAt,
+      startsAt,
+      expiresAt,
       dailyCap: input.dailyCap ?? current.dailyCap,
       totalCap: migratedTotalCap,
       operatorDelegatedMaximumDailyCapacity: delegatedDaily,
-    }, now());
+    }, authorizationNow);
     const authorityAfter = describeOperatorAuthorityEnvelope(p);
     const reviewHash = hash({ policy: p, scopeHash: program.scope_hash });
     if (input.reviewHash !== reviewHash) {
@@ -101,6 +118,7 @@ function service({
         scopeHash: program.scope_hash,
         migration: 'operator_delegated_maximum_daily_capacity',
         authority: { before: authorityBefore, after: authorityAfter },
+        grantHorizon: grantHorizon || undefined,
         programTotalCapMigration: {
           previousTotalCap: authorityBefore.totalCap,
           nextTotalCap: authorityAfter.totalCap,
@@ -113,7 +131,10 @@ function service({
       operatorDelegatedMaximumDailyCapacity: p.operatorDelegatedMaximumDailyCapacity,
       totalCap: p.totalCap,
       previousTotalCap: authorityBefore.totalCap,
-      recordedAt: now().toISOString(),
+      grantHorizonDays: grantHorizon?.grantHorizonDays,
+      startsAt: p.startsAt,
+      expiresAt: p.expiresAt,
+      recordedAt: authorizationNow.toISOString(),
       actor: String(actor.id),
       note: input.authorizationNote || 'Emmett-authoritative dynamic outbound capacity migration',
     };
