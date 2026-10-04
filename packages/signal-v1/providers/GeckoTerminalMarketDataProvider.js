@@ -8,6 +8,9 @@ const PROVIDER_ID = 'geckoterminal';
  */
 class GeckoTerminalMarketDataProvider {
   constructor(options = {}) {
+    this.providerId = PROVIDER_ID;
+    /** When false, caller must not substitute a different time range silently. */
+    this.honorsRequestedHistoricalRange = true;
     this.baseUrl = options.baseUrl || 'https://api.geckoterminal.com/api/v2';
     this.network = options.network || 'solana';
     this.fetchFn = options.fetchFn || global.fetch;
