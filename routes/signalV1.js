@@ -57,6 +57,35 @@ router.post('/api/v1/signal/tokens/:tokenAddress/evaluate', requireResearch, (re
   }
 });
 
+router.get('/api/v1/signal/research/cohorts', requireResearch, (req, res) => {
+  noStore(res);
+  return res.json({ cohorts: service.listResearchCohorts() });
+});
+
+router.get('/api/v1/signal/research/cohorts/:cohortId', requireResearch, (req, res) => {
+  const cohort = service.getResearchCohort(req.params.cohortId);
+  if (!cohort) return res.status(404).json({ error: 'cohort_not_found' });
+  noStore(res);
+  return res.json({ cohort });
+});
+
+router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResearch, (req, res) => {
+  const delay = Number(req.query.executionDelaySeconds || 60);
+  try {
+    const evaluation = service.evaluateResearchCohort(req.params.cohortId, delay);
+    noStore(res);
+    return res.json(evaluation);
+  } catch (err) {
+    return res.status(400).json({ error: 'evaluation_failed', message: String(err.message) });
+  }
+});
+
+router.get('/api/v1/signal/tokens/:tokenAddress/research-observations', requireResearch, (req, res) => {
+  const observations = service.getTokenResearchObservations(req.params.tokenAddress);
+  noStore(res);
+  return res.json({ observations });
+});
+
 router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, (req, res) => {
   const body = req.body || {};
   try {

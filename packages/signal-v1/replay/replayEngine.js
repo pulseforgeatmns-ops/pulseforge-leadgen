@@ -8,6 +8,7 @@ const { PaperPortfolio } = require('../paper/paperPortfolio');
 const { labelMarketOutcome } = require('../outcomes/marketOutcomes');
 const { STRATEGY_VERSION, FEATURE_VERSION } = require('../types');
 const { createSignalAlert } = require('../alerts/signalAlert');
+const { evaluateResearchObservationsAtStep } = require('../research/researchObservationEngine');
 
 /**
  * @typedef {object} ReplayInput
@@ -40,6 +41,7 @@ function replayToken(store, input) {
   let previousState = null;
   const timeline = [];
   let openPosition = null;
+  const researchTimeline = [];
 
   for (const stepAt of stepTimes) {
     const snapshot = buildFeatureSnapshot(store, tokenAddress, stepAt, { featureVersion });
@@ -61,6 +63,23 @@ function replayToken(store, input) {
       features: snapshot.features,
       position: openPosition,
     });
+
+    const researchCreated = evaluateResearchObservationsAtStep(store, {
+      tokenAddress,
+      stepAt,
+      snapshot,
+      decisionState: decision.state,
+      pricePath: input.pricePath,
+    });
+    if (researchCreated.length) {
+      researchTimeline.push(
+        ...researchCreated.map(o => ({
+          observationType: o.observationType,
+          occurredAt: o.occurredAt,
+          id: o.id,
+        }))
+      );
+    }
 
     const decisionRow = store.insertDecision({
       tokenAddress,
@@ -173,6 +192,7 @@ function replayToken(store, input) {
       finalState: previousState,
       outcome,
       digest,
+      researchObservations: researchTimeline.length,
     },
   });
 
@@ -180,6 +200,8 @@ function replayToken(store, input) {
     runId: run.id,
     digest,
     timeline,
+    researchTimeline,
+    researchObservations: store.getResearchObservations(tokenAddress),
     outcome,
     finalState: previousState,
   };
@@ -214,9 +236,18 @@ function hashReplay(store, tokenAddress, timeline, strategyVersion, featureVersi
     state: step.state,
     score: step.score,
   }));
+  const research = store
+    .getResearchObservations(tokenAddress)
+    .map(o => ({
+      observationType: o.observationType,
+      occurredAt: new Date(o.occurredAt).toISOString(),
+      definitionVersion: o.definitionVersion,
+    }));
+
   const payload = JSON.stringify({
     tokenAddress,
     timeline: stableTimeline,
+    research,
     strategyVersion,
     featureVersion,
   });

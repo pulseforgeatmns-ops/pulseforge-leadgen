@@ -10,6 +10,8 @@ const { calculateConvergence } = require('./features/convergence');
 const { scoreSignal } = require('./scoring/signalScoring');
 const { decideSignalState } = require('./state/stateMachine');
 const types = require('./types');
+const { evaluateCohortLayers } = require('./research/cohortEvaluation');
+const { evaluateResearchObservationsAtStep } = require('./research/researchObservationEngine');
 
 module.exports = {
   SignalService,
@@ -21,5 +23,7 @@ module.exports = {
   calculateConvergence,
   scoreSignal,
   decideSignalState,
+  evaluateCohortLayers,
+  evaluateResearchObservationsAtStep,
   ...types,
 };

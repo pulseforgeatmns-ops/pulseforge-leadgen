@@ -1,6 +1,7 @@
 'use strict';
 
 const { FRONT_RUNNERS_CLUSTER_ID, RESEARCH_CASES } = require('./frontRunnersCases');
+const { seedResearchCohort } = require('./seedResearchCohort');
 
 /**
  * Seed research metadata + a minimal DUPLICATE demo event stream for replay/tests.
@@ -72,6 +73,9 @@ function seedFrontRunnersFixtures(store) {
   }
 
   seedDuplicateDemoTimeline(store);
+  seedDoomTimeline(store);
+  seedHallowTimeline(store);
+  seedResearchCohort(store);
 }
 
 function seedDuplicateDemoTimeline(store) {
@@ -153,7 +157,74 @@ function seedDuplicateDemoTimeline(store) {
   ]);
 }
 
+function seedDoomTimeline(store) {
+  const token = 'Gymbmn9wwMKe4NnmVceyyfpncp9arbwPfSdBsyY9pump';
+  const t0 = new Date('2026-09-28T14:00:00Z');
+
+  const ev = (minutes, event) => ({
+    tokenAddress: token,
+    chain: 'solana',
+    occurredAt: new Date(t0.getTime() + minutes * 60000),
+    observedAt: new Date(t0.getTime() + minutes * 60000),
+    ingestedAt: new Date(t0.getTime() + minutes * 60000 + 5000),
+    confidence: 0.85,
+    ...event,
+  });
+
+  store.insertEvents([
+    ev(0, {
+      eventType: 'MARKET_SNAPSHOT',
+      sourceType: 'market',
+      payload: { priceUsd: 0.00009, marketCapUsd: 90000, liquidityUsd: 18000, tokenAgeSeconds: 1200 },
+    }),
+    ev(3, {
+      eventType: 'CALL',
+      sourceType: 'telegram',
+      sourceId: 'src-independent-alpha',
+      sourceClusterId: 'cluster-independent-alpha',
+      payload: { message: 'DOOM early independent call' },
+    }),
+    ev(20, {
+      eventType: 'MARKET_SNAPSHOT',
+      sourceType: 'market',
+      payload: { priceUsd: 0.00015, marketCapUsd: 150000, liquidityUsd: 21000 },
+    }),
+  ]);
+}
+
+function seedHallowTimeline(store) {
+  const token = '6iAj2oywQMiD9NeyTcW1S7UtG7e3jSK7Ud5ZJDqJpump';
+  const t0 = new Date('2026-09-27T20:00:00Z');
+
+  const ev = (minutes, event) => ({
+    tokenAddress: token,
+    chain: 'solana',
+    occurredAt: new Date(t0.getTime() + minutes * 60000),
+    observedAt: new Date(t0.getTime() + minutes * 60000),
+    ingestedAt: new Date(t0.getTime() + minutes * 60000 + 5000),
+    confidence: 0.85,
+    ...event,
+  });
+
+  store.insertEvents([
+    ev(0, {
+      eventType: 'MARKET_SNAPSHOT',
+      sourceType: 'market',
+      payload: { priceUsd: 0.00004, marketCapUsd: 40000, liquidityUsd: 12000, tokenAgeSeconds: 800 },
+    }),
+    ev(6, {
+      eventType: 'CALL',
+      sourceType: 'telegram',
+      sourceId: 'src-parkers-calls',
+      sourceClusterId: FRONT_RUNNERS_CLUSTER_ID,
+      payload: { message: 'Hallow Inu mention' },
+    }),
+  ]);
+}
+
 module.exports = {
   seedFrontRunnersFixtures,
   seedDuplicateDemoTimeline,
+  seedDoomTimeline,
+  seedHallowTimeline,
 };

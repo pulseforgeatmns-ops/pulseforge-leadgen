@@ -20,6 +20,11 @@ class InMemorySignalStore {
     this.paperTransactions = [];
     this.replayRuns = [];
     this.alerts = [];
+    this.researchObservations = [];
+    this.researchObservationOutcomes = [];
+    this.researchCohorts = new Map();
+    this.researchCohortMembers = [];
+    this.walletPerformance = new Map();
   }
 
   upsertToken(token) {
@@ -164,6 +169,98 @@ class InMemorySignalStore {
     };
     this.outcomes.push(row);
     return row;
+  }
+
+  getWalletPerformance(walletAddress, asOf) {
+    const asOfMs = toDate(asOf).getTime();
+    const records = [...this.walletPerformance.values()].filter(
+      r => r.walletAddress === walletAddress && toDate(r.asOf).getTime() <= asOfMs
+    );
+    records.sort((a, b) => toDate(b.asOf) - toDate(a.asOf));
+    return records[0] || null;
+  }
+
+  upsertWalletPerformance(record) {
+    const key = `${record.walletAddress}:${toDate(record.asOf).toISOString()}`;
+    this.walletPerformance.set(key, { ...record, asOf: toDate(record.asOf) });
+    return this.walletPerformance.get(key);
+  }
+
+  getResearchObservations(tokenAddress, definitionVersion) {
+    return this.researchObservations
+      .filter(
+        o =>
+          o.tokenAddress === tokenAddress &&
+          (!definitionVersion || o.definitionVersion === definitionVersion)
+      )
+      .sort((a, b) => a.occurredAt - b.occurredAt);
+  }
+
+  insertResearchObservation(observation) {
+    const key = `${observation.tokenAddress}:${observation.observationType}:${observation.definitionVersion}`;
+    const existing = this.researchObservations.find(
+      o =>
+        o.tokenAddress === observation.tokenAddress &&
+        o.observationType === observation.observationType &&
+        o.definitionVersion === observation.definitionVersion
+    );
+    if (existing) return existing;
+
+    const row = {
+      id: observation.id || randomUUID(),
+      ...observation,
+      occurredAt: toDate(observation.occurredAt),
+    };
+    this.researchObservations.push(row);
+    return row;
+  }
+
+  insertResearchObservationOutcome(outcome) {
+    const existing = this.researchObservationOutcomes.find(
+      o =>
+        o.observationId === outcome.observationId &&
+        o.executionDelaySeconds === outcome.executionDelaySeconds
+    );
+    if (existing) return existing;
+
+    const row = {
+      id: outcome.id || randomUUID(),
+      ...outcome,
+    };
+    this.researchObservationOutcomes.push(row);
+    return row;
+  }
+
+  upsertResearchCohort(cohort) {
+    this.researchCohorts.set(cohort.id, {
+      ...this.researchCohorts.get(cohort.id),
+      ...cohort,
+      createdAt: toDate(cohort.createdAt || new Date()),
+    });
+    return this.researchCohorts.get(cohort.id);
+  }
+
+  addCohortMember(member) {
+    const existing = this.researchCohortMembers.find(
+      m => m.cohortId === member.cohortId && m.tokenAddress === member.tokenAddress
+    );
+    if (existing) return existing;
+    const row = {
+      ...member,
+      createdAt: toDate(member.createdAt || new Date()),
+    };
+    this.researchCohortMembers.push(row);
+    return row;
+  }
+
+  getCohortMembers(cohortId) {
+    return this.researchCohortMembers.filter(m => m.cohortId === cohortId);
+  }
+
+  listResearchCohorts() {
+    return [...this.researchCohorts.values()].sort(
+      (a, b) => toDate(b.createdAt) - toDate(a.createdAt)
+    );
   }
 }
 
