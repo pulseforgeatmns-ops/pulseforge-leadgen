@@ -4475,15 +4475,138 @@ function stripDisqualifiedCustomerLeadIn(text) {
   let s = normalizeBusinessPhrase(String(text || '').trim());
   s = s.replace(/^yes\.?\s*/i, '');
   s = stripInterviewQuestionEcho(s);
-  s = cleanRawAnswer('avoidCustomers', s);
   s = s
     .replace(
       /^(?:[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+)*\s+)?should avoid\s+/i,
       ''
     )
-    .replace(/^the business prefers to avoid\s+/i, '')
+    .replace(/^(?:the business prefers to avoid\s+)+/i, '')
+    .replace(/^(?:we|i)\s+(?:avoid|decline|don'?t want(?: to work with)?)\s+/i, '')
+    .replace(/^avoid\s+/i, '')
     .trim();
+  if (!/^customers?\b/i.test(s) && /^who\s+/i.test(s)) {
+    s = `customers ${s}`;
+  }
   return s.replace(/[.!?]+$/, '').trim();
+}
+
+function isMalformedIdealCustomerFragment(item) {
+  const s = normalizeBusinessPhrase(String(item || '').trim());
+  if (!s) return true;
+  if (
+    /^(?:lead flow|getting referrals|running ads|explaining their value clearly|making them look legitimate)$/i.test(
+      s
+    )
+  ) {
+    return true;
+  }
+  if (/,\s*getting referrals\.?$/i.test(s)) return true;
+  if (s.split(/\s+/).length <= 3 && !isCanonicalIdealCustomerSegment(s)) return true;
+  return false;
+}
+
+function resolveIdealCustomersForComposition(facts, cleanIdeal) {
+  let items = (cleanIdeal || []).filter((item) => !isMalformedIdealCustomerFragment(item));
+  const malformed =
+    idealCustomersPersistedShapeMalformed(facts.ideal_customers) ||
+    (cleanIdeal || []).some((item) => isMalformedIdealCustomerFragment(item));
+  if (!items.length || malformed) {
+    const ev = String(facts.evidence_statements?.ideal_customers || '').trim();
+    const sentences = ev
+      .split(/\n\n+|\n+/)
+      .map((line) => normalizeBusinessPhrase(stripBusinessNameLeadIn(line.trim())))
+      .filter(
+        (line) =>
+          line &&
+          /owner-led|decision-maker|small business owner|operator \/ decision-maker/i.test(line) &&
+          !isMisassignedWebsitePainItem(line)
+      )
+      .slice(0, 2);
+    if (sentences.length) items = dedupeSemanticList(sentences);
+  }
+  return items;
+}
+
+function isDisqualifiedCompositionNoise(item) {
+  const s = String(item || '').trim();
+  if (!s) return true;
+  if (looksLikeIdealCustomerPhrase(s) && !looksLikeCustomerExclusionPhrase(s)) return true;
+  return false;
+}
+
+function dedupeCheapestWebsiteExclusions(items) {
+  const exclusionIntent = items.filter((item) =>
+    /\b(?:cheapest|lowest price|cosmetic|one-off|one off)\b/i.test(item)
+  );
+  if (exclusionIntent.length <= 1) return items;
+  const keep = exclusionIntent.sort((a, b) => b.length - a.length)[0];
+  const rest = items.filter(
+    (item) =>
+      !/\b(?:cheapest|lowest price|cosmetic|one-off|one off)\b/i.test(item) ||
+      sameSemanticValue(item, keep)
+  );
+  return dedupeSemanticList([keep, ...rest.filter((item) => !sameSemanticValue(item, keep))]);
+}
+
+function resolveDisqualifiedForComposition(facts) {
+  const evidenceRaw = String(facts.evidence_statements?.disqualified_customers || '').trim();
+  if (evidenceRaw && /\b(?:avoid|decline|don'?t want|cheapest|cosmetic|one-off)\b/i.test(evidenceRaw)) {
+    const fromEvidence = stripDisqualifiedCustomerLeadIn(evidenceRaw);
+    if (fromEvidence.split(/\s+/).length >= 6) {
+      return [fromEvidence];
+    }
+  }
+
+  const slot = (facts.disqualified_customers || [])
+    .map(stripDisqualifiedCustomerLeadIn)
+    .filter(Boolean)
+    .filter((item) => !isDisqualifiedCompositionNoise(item));
+  return dedupeCheapestWebsiteExclusions(dedupeSemanticList(slot));
+}
+
+function extractTargetMarketVerticalsFromText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return [];
+  const afterDash = raw.match(/\s+[—–-]\s+(.+)$/);
+  const segmentSource = afterDash ? afterDash[1] : raw;
+  return dedupeNormalizedList(
+    splitListItems(segmentSource.replace(/\band owner-led local brands?\b/i, ', owner-led local brands'))
+      .map((item) => normalizeBusinessPhrase(item))
+      .filter(
+        (item) =>
+          item &&
+          (isVerticalFocusSegment(item) ||
+            /\bowner-led local brands?\b/i.test(item) ||
+            /\b(?:medical|wellness|hospitality|property service)/i.test(item))
+      )
+  );
+}
+
+function resolveTargetMarketsForComposition(facts) {
+  let geo = filterTargetMarketGeography(facts.geography || []);
+  let verticalParts = facts.vertical_focus
+    ? splitListItems(String(facts.vertical_focus).replace(/;/g, ','))
+    : [];
+
+  const marketEvidence = String(facts.evidence_statements?.geography || '').trim();
+  if (marketEvidence) {
+    if (/southern\s+new\s+hampshire/i.test(marketEvidence)) {
+      geo = dedupeNormalizedList([...geo, 'southern New Hampshire']);
+    }
+    if (geo.length < 2 || !geo.some((g) => /southern new hampshire/i.test(g))) {
+      const fromEvidenceGeo = filterTargetMarketGeography(
+        extractPlaces(marketEvidence).length
+          ? extractPlaces(marketEvidence)
+          : [marketEvidence]
+      );
+      geo = dedupeNormalizedList([...geo, ...fromEvidenceGeo]);
+    }
+    if (!verticalParts.length) {
+      verticalParts = extractTargetMarketVerticalsFromText(marketEvidence);
+    }
+  }
+
+  return { geo, verticalParts };
 }
 
 function filterTargetMarketGeography(geography) {
@@ -4519,33 +4642,40 @@ function composeBlueprintServicesSummary(businessName, facts) {
   ].join(' ');
 }
 
-function composeBlueprintIdealCustomersSummary(cleanIdeal) {
-  const items = dedupeSemanticList(
-    (cleanIdeal || [])
-      .map((item) =>
-        normalizeBusinessPhrase(String(item || '').trim()).replace(/^ideal customers?\s+(?:are|include)\s+/i, '')
-      )
-      .filter(Boolean)
+function composeBlueprintIdealCustomersSummary(facts, cleanIdeal) {
+  const items = resolveIdealCustomersForComposition(facts, cleanIdeal).map((item) =>
+    String(item || '')
+      .trim()
+      .replace(/^ideal customers?\s+(?:are|include)\s+/i, '')
+      .replace(/[.!?]+$/, '')
+      .trim()
   );
   if (!items.length) return '';
 
-  const shortItems = items.every((item) => item.split(/\s+/).length <= 14);
-  if (items.length === 1 || shortItems) {
+  if (items.length === 1) {
     return [
-      ensurePeriod(`Ideal customers are ${naturalListPhrases(items)}`),
+      ensurePeriod(`Ideal customers are ${items[0]}`),
       'This ICP picture prioritizes fit over volume.',
     ].join(' ');
   }
 
-  const sentences = items.map((item, idx) => {
-    const clause = item.replace(/[.!?]+$/, '').trim();
-    if (idx === 0) return ensurePeriod(`Ideal customers are ${clause}`);
-    if (/^the ideal customer is\b/i.test(clause)) {
-      return ensurePeriod(capitalizeSentence(clause));
-    }
-    return ensurePeriod(`They also include ${midSentence(clause)}`);
-  });
-  return [...sentences, 'This ICP picture prioritizes fit over volume.'].join(' ');
+  const primary = items.find((item) => /owner-led/i.test(item)) || items[0];
+  const secondary = items.find(
+    (item) => item !== primary && /decision-maker|small business owner|operator/i.test(item)
+  );
+  if (primary && secondary) {
+    const second = secondary.replace(/^the ideal customer is\s+/i, '');
+    return [
+      ensurePeriod(`Ideal customers are ${primary}`),
+      ensurePeriod(`The ideal buyer is ${midSentence(second)}`),
+      'This ICP picture prioritizes fit over volume.',
+    ].join(' ');
+  }
+
+  return [
+    ensurePeriod(`Ideal customers are ${naturalListPhrases(items)}`),
+    'This ICP picture prioritizes fit over volume.',
+  ].join(' ');
 }
 
 function coalesceDisqualifiedFragments(items) {
@@ -4579,8 +4709,9 @@ function peelBrandVoiceLeadIn(text) {
   return tone;
 }
 
-function composeBlueprintAvoidCustomersSummary(disqualified) {
-  const cleaned = coalesceDisqualifiedFragments(disqualified);
+function composeBlueprintAvoidCustomersSummary(facts) {
+  const resolved = resolveDisqualifiedForComposition(facts);
+  const cleaned = coalesceDisqualifiedFragments(resolved);
   if (!cleaned.length) return '';
   const substance = cleaned.length === 1 ? cleaned[0] : naturalListPhrases(cleaned);
   return [
@@ -4590,10 +4721,7 @@ function composeBlueprintAvoidCustomersSummary(disqualified) {
 }
 
 function composeBlueprintTargetMarketsSummary(facts) {
-  const geo = filterTargetMarketGeography(facts.geography || []);
-  const verticalParts = facts.vertical_focus
-    ? splitListItems(String(facts.vertical_focus).replace(/;/g, ','))
-    : [];
+  const { geo, verticalParts } = resolveTargetMarketsForComposition(facts);
   const bits = dedupeNormalizedList([...geo, ...verticalParts]);
   if (!bits.length) return '';
 
@@ -4613,10 +4741,22 @@ function composeBlueprintTargetMarketsSummary(facts) {
   ].join(' ');
 }
 
-function composeBlueprintDifferentiationSummary(differentiation) {
-  let text = stripInterviewQuestionEcho(String(differentiation || '').trim());
+function composeBlueprintDifferentiationSummary(facts) {
+  const slot = String(facts.differentiation || '').trim();
+  const evidence = String(facts.evidence_statements?.differentiation || '').trim();
+  let text =
+    evidence.length > slot.length + 20 && /credibility|clarity|business impact|choose/i.test(evidence)
+      ? evidence
+      : slot || evidence;
+  text = stripInterviewQuestionEcho(text);
   text = cleanRawAnswer('competitiveAdvantages', text);
-  text = text.replace(/^competitive edge is described as\s+/i, '').trim();
+  text = text
+    .replace(/^competitive edge is described as\s+/i, '')
+    .replace(/^a great-fit customer chooses\s+[^,]+ when\s+/i, '')
+    .trim();
+  if (/^they care about\b/i.test(text)) {
+    text = `customers care about ${text.replace(/^they care about\s+/i, '')}`;
+  }
   if (!text) return '';
   return [
     ensurePeriod(capitalizeSentence(text)),
@@ -4670,9 +4810,12 @@ function composeBlueprintCampaignGoalsSummary(facts) {
 
   const normalizedPieces = (pieces.length ? pieces : [normalizeBusinessPhrase(tail)]).map((piece, idx) => {
     let p = piece;
+    p = p.replace(/^[A-Z][a-zA-Z0-9&'.-]+(?:\s+[A-Z][a-zA-Z0-9&'.-]+)*\s+proves?\s+/i, 'prove that ');
     if (/^proves?\s+/i.test(p)) p = p.replace(/^proves?\s+/i, 'prove that ');
+    p = p.replace(/^prove\s+that\s+that\s+/i, 'prove that ');
     if (/^acquires?\s+/i.test(p)) p = p.replace(/^acquires?\s+/i, 'acquire ');
     if (/^validates?\s+/i.test(p)) p = p.replace(/^validates?\s+/i, 'validate ');
+    if (/, and validates\b/i.test(p)) p = p.replace(/, and validates\b/i, ', and validate');
     return idx === 0 ? capitalizeSentence(p) : midSentence(p);
   });
 
@@ -4759,7 +4902,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
           !isConversationalFiller(item)
       );
       if (cleanIdeal.length && f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.KNOWN) {
-        return composeBlueprintIdealCustomersSummary(cleanIdeal);
+        return composeBlueprintIdealCustomersSummary(f, cleanIdeal);
       }
       if (f.epistemic_states?.ideal_customers === EPISTEMIC_STATES.HYPOTHESIS) {
         return `Current hypothesis: target audience may be ${f.hypotheses?.ideal_customers || f.evidence_statements?.ideal_customers || 'under evaluation'}.`;
@@ -4784,7 +4927,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
     epistemic_state: getEpistemicState('disqualified_customers', f.disqualified_customers.length > 0),
     summary:
       f.disqualified_customers.length && f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.KNOWN
-        ? composeBlueprintAvoidCustomersSummary(f.disqualified_customers)
+        ? composeBlueprintAvoidCustomersSummary(f)
         : f.epistemic_states?.disqualified_customers === EPISTEMIC_STATES.UNKNOWN
           ? 'Disqualified customers: Not yet defined.'
           : priorSummary('avoidCustomers', 'disqualified_customers'),
@@ -4811,7 +4954,7 @@ function sectionsFromNormalizedFacts(facts, priorSections = null) {
     epistemic_state: getEpistemicState('differentiation', Boolean(f.differentiation)),
     summary:
       f.differentiation && f.epistemic_states?.differentiation === EPISTEMIC_STATES.KNOWN
-        ? composeBlueprintDifferentiationSummary(f.differentiation)
+        ? composeBlueprintDifferentiationSummary(f)
         : f.epistemic_states?.differentiation === EPISTEMIC_STATES.HYPOTHESIS
         ? `The current differentiation hypothesis is that ${f.hypotheses?.differentiation || f.evidence_statements?.differentiation || 'the buying decision may be influenced by an as-yet unarticulated advantage'}.`
         : f.epistemic_states?.differentiation === EPISTEMIC_STATES.UNKNOWN
@@ -5286,14 +5429,20 @@ function summarizeSection(sectionKey, statements) {
         'These fit requirements describe readiness and behavior, not a separate audience category.',
       ].join(' ');
     case 'avoidCustomers':
-      return composeBlueprintAvoidCustomersSummary(cleaned);
+      return composeBlueprintAvoidCustomersSummary({
+        disqualified_customers: cleaned,
+        evidence_statements: {},
+      });
     case 'targetMarkets':
       return [
         ensurePeriod(`Priority markets center on ${latest}`),
         'Geography and vertical focus here bound where discovery should concentrate first.',
       ].join(' ');
     case 'competitiveAdvantages':
-      return composeBlueprintDifferentiationSummary(latest);
+      return composeBlueprintDifferentiationSummary({
+        differentiation: latest,
+        evidence_statements: {},
+      });
     case 'brandVoice':
       return composeBlueprintBrandVoiceSummary({
         brand_voice: normalizeBrandVoiceTone(latest),
