@@ -106,19 +106,22 @@ router.post('/api/v1/signal/tokens/:tokenAddress/evaluate', requireResearch, asy
   }
 });
 
-router.get('/api/v1/signal/research/cohorts', requireResearch, (req, res) => {
+router.get('/api/v1/signal/research/cohorts', requireResearch, async (req, res) => {
+  const service = await getService();
   noStore(res);
   return res.json({ cohorts: service.listResearchCohorts() });
 });
 
-router.get('/api/v1/signal/research/cohorts/:cohortId', requireResearch, (req, res) => {
+router.get('/api/v1/signal/research/cohorts/:cohortId', requireResearch, async (req, res) => {
+  const service = await getService();
   const cohort = service.getResearchCohort(req.params.cohortId);
   if (!cohort) return res.status(404).json({ error: 'cohort_not_found' });
   noStore(res);
   return res.json({ cohort });
 });
 
-router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResearch, (req, res) => {
+router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResearch, async (req, res) => {
+  const service = await getService();
   const delay = Number(req.query.executionDelaySeconds || 60);
   try {
     const evaluation = service.evaluateResearchCohort(req.params.cohortId, delay);
@@ -129,13 +132,15 @@ router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResear
   }
 });
 
-router.get('/api/v1/signal/tokens/:tokenAddress/research-observations', requireResearch, (req, res) => {
+router.get('/api/v1/signal/tokens/:tokenAddress/research-observations', requireResearch, async (req, res) => {
+  const service = await getService();
   const observations = service.getTokenResearchObservations(req.params.tokenAddress);
   noStore(res);
   return res.json({ observations });
 });
 
-router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, (req, res) => {
+router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, async (req, res) => {
+  const service = await getService();
   const body = req.body || {};
   try {
     const window = resolveResearchWindow(req.params.tokenAddress);
