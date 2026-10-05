@@ -700,6 +700,34 @@ async function handleTenantMailboxPollCron(req, res) {
 
 router.post('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
 router.get('/cron/tenant-mailbox-poll', handleTenantMailboxPollCron);
+
+async function handleSignalShadowCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!process.env.DATABASE_URL) {
+    return res.status(503).json({ error: 'DATABASE_URL required for signal shadow cron' });
+  }
+  try {
+    const { createSignalStore } = require('../packages/signal-v1/storage/createSignalStore');
+    const { createShadowModeServiceFromStore, runShadowSchedulerTick } = require('../packages/signal-v1/prospective/shadowScheduler');
+    const { GeckoTerminalMarketDataProvider } = require('../packages/signal-v1/providers/GeckoTerminalMarketDataProvider');
+    const store = await createSignalStore(pool, { seedFixtures: false });
+    const marketProvider = new GeckoTerminalMarketDataProvider();
+    const service = await createShadowModeServiceFromStore(store, { marketProvider });
+    const result = await runShadowSchedulerTick(service);
+    res.set('Cache-Control', 'no-store');
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('[cron] signal-shadow error:', err.message);
+    return res.status(500).json({ error: err.message, success: false });
+  }
+}
+
+router.post('/cron/signal-shadow', handleSignalShadowCron);
+router.get('/cron/signal-shadow', handleSignalShadowCron);
+
 router.post('/internal/cron/max-decay', createMaxDecayCronHandler());
 
 router.post('/cron/:agent', async (req, res) => {

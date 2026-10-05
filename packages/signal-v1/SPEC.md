@@ -18,12 +18,13 @@ See repository issue/spec for full doctrine. V1 explicitly excludes real-money e
 - Operator report: `signal-v1/VALIDATION_COHORT_001_REPORT.md`.
 - Export: `npm run signal:validation-cohort-001` or `GET .../evaluation/export`.
 
-## Empirical validation cohort 003 (SIGNAL-V1-005)
+## Prospective shadow mode (SIGNAL-V1-006)
 
-- Cohort ID: `cohort-signal-v1-validation-003` (`validation-003-selection-v1`, `dataClass: EMPIRICAL`).
-- Natural chronological selection from `pulseforge-historical-caller-catalog-v1` (no outcome balancing).
-- Hard empirical guard: `assertEmpiricalCohort()` fail-closes on procedural caller/market evidence.
-- Export: `npm run signal:validation-cohort-003` → `signal-v1/validation-cohort-003-evaluation.json`.
+- Cohort ID: `cohort-signal-v1-prospective-001` (EMPIRICAL, PROSPECTIVE, blinded until N=50).
+- Historical validation remains separate: `cohort-signal-v1-validation-003`.
+- Live collectors: `packages/signal-v1/collectors/` (`SIGNAL_CALLER_FEED_URL` JSON feed).
+- Operator UI: `/signal-v1` Shadow Mode panel; API: `/api/v1/signal/shadow/*`.
+- Cron tick: `GET/POST /cron/signal-shadow?secret={CRON_SECRET}` (set `SIGNAL_SHADOW_MODE=1` for in-process scheduler).
 
 ## Convergence integrity audit (SIGNAL-V1-004)
 
