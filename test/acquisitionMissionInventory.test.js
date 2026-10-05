@@ -45,7 +45,14 @@ test('existing AK passes canonical Scout evidence handoff without inventing read
 test('Paige consumes only the exact prospect-bound approved asset',()=>{
  const input={mission,clientId:13,max:{priorities:[{companyId:'c',name:'Business'}]},approvedCopies:{c:row().approved_asset}};
  const copy=buildPerProspectVariants(input)[0];assert.equal(copy.subject,'Question');assert.equal(copy.body,row().approved_asset.content.statement);assert.equal(copy.attributableIntelligence.scoutPersonalization.acquisitionKnowledgeAssetId,'asset');
- assert.throws(()=>buildPerProspectVariants({...input,approvedCopies:{other:row().approved_asset}}),{code:'approved_copy_missing'});
+ assert.throws(()=>buildPerProspectVariants({...input,approvedCopies:{c:null}}),{code:'approved_copy_missing'});
+ const generated=buildPerProspectVariants({...input,approvedCopies:{other:row().approved_asset}});
+ assert.ok(generated[0].subject);assert.notEqual(generated[0].body,row().approved_asset.content.statement);
+});
+test('Paige generates canonical copy for recoverable cohort inventory without stakeholder asset',()=>{
+ const cohort=row();cohort.approved_asset=null;cohort.knowledge_content.cohort='babrun_cohort_002';cohort.knowledge_content.icpEvaluation={fit:true,reasons:[{kind:'OBSERVED',text:'Owner-operated painting company'}]};
+ const input={mission,clientId:13,max:{priorities:[{candidateId:'c',companyId:'c',name:'Business'}]}};
+ const copy=buildPerProspectVariants({...input,plan:mission.structuredMission,mission})[0];assert.ok(copy.subject);assert.ok(copy.body);assert.equal(copy.attributableIntelligence.usedPersonalization,false);assert.doesNotMatch(`${copy.subject}\n${copy.body}`,/commercial cleaning/i);assert.match(copy.body,/12-week/i);
 });
 test('the canonical Paige SEC entry loads approved tenant assets from runtime dependencies',async()=>{
  const pool={query:async()=>({rows:[row()]})};
