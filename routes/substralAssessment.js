@@ -110,8 +110,8 @@ function createAssessmentRouter({ db = pool, allowedOrigins = ALLOWED_ORIGINS, n
         );
         if (deliveryRequired
           && notification.status === 'suppressed'
-          && notification.reason !== 'duplicate_or_missing_action'
-          && notification.reason !== 'already_sent'
+          && notification.reason !== 'notification_already_sent'
+          && notification.reason !== 'notification_in_progress'
           && notification.reason !== 'synthetic_submission') {
           console.error('[substral-assessment] notification suppressed in production', notification.reason);
           return reply(req, res, 503, {
