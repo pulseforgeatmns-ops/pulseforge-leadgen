@@ -3,6 +3,7 @@ import { cpSync, mkdirSync, existsSync, readFileSync, readdirSync, writeFileSync
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { normalizeIndexFaviconHead } from './faviconHead.mjs';
 const site = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const destination = process.argv[2] && path.resolve(process.argv[2]);
 if (!destination || existsSync(destination)) throw new Error('Provide a new, empty release directory.');
@@ -37,6 +38,12 @@ for (const item of [
   }
   cpSync(source, path.join(destination, item), { recursive: true });
 }
+const indexPath = path.join(destination, 'index.html');
+writeFileSync(
+  indexPath,
+  normalizeIndexFaviconHead(readFileSync(indexPath, 'utf8')),
+  'utf8'
+);
 const manifest = {};
 function walk(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {

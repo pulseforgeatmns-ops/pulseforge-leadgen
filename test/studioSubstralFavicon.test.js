@@ -53,12 +53,14 @@ test('publish-root favicon.ico is a valid ICO container', () => {
   assertValidIco(path.join(site, 'favicon.ico'));
 });
 
-test('index.html references root favicon bundle for Safari and mobile', () => {
+test('index.html references versioned root favicon bundle for Safari and mobile', () => {
   const html = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
-  assert.match(html, /<link rel="icon" href="\/favicon\.ico"/);
-  assert.match(html, /<link rel="icon" href="\/favicon\.svg" type="image\/svg\+xml">/);
-  assert.match(html, /href="\/apple-touch-icon\.png"/);
-  assert.match(html, /href="\/site\.webmanifest"/);
+  assert.match(html, /<link rel="icon" href="\/favicon\.ico\?v=6" sizes="any">/);
+  assert.match(html, /<link rel="icon" href="\/favicon\.svg\?v=6" type="image\/svg\+xml">/);
+  assert.match(html, /href="\/apple-touch-icon\.png\?v=6"/);
+  assert.match(html, /href="\/site\.webmanifest\?v=6"/);
+  assert.doesNotMatch(html, /assets\/brand\/favicon/);
+  assert.doesNotMatch(html, /assets\/brand\/site\.webmanifest/);
 });
 
 test('prepare-release.mjs exports publish-root favicon bundle', () => {
@@ -66,4 +68,20 @@ test('prepare-release.mjs exports publish-root favicon bundle', () => {
   assert.match(src, /'favicon\.ico'/);
   assert.match(src, /'favicon\.svg'/);
   assert.match(src, /'public'/);
+  assert.match(src, /normalizeIndexFaviconHead/);
+});
+
+test('normalizeIndexFaviconHead replaces legacy assets/brand favicon links', async () => {
+  const { normalizeIndexFaviconHead, FAVICON_CACHE_VERSION } = await import(
+    '../sites/studio-substral/build/faviconHead.mjs'
+  );
+  const legacy = `<link rel="stylesheet" href="assets/css/substral.css">
+<link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/brand/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/brand/apple-touch-icon.png">
+<link rel="manifest" href="assets/brand/site.webmanifest">
+<meta name="theme-color" content="#11110F">`;
+  const normalized = normalizeIndexFaviconHead(legacy);
+  assert.match(normalized, new RegExp(`/favicon\\.ico\\?v=${FAVICON_CACHE_VERSION}`));
+  assert.doesNotMatch(normalized, /assets\/brand/);
 });
