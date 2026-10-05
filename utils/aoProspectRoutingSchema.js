@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ensureClientArchitecture } = require('./clientContext');
 const { ensureUsersTable } = require('../middleware/auth');
+const { ensureAoRosterSchema } = require('./aoRosterSchema');
 
 const schemaInitPromises = new WeakMap();
 
@@ -18,6 +19,7 @@ async function ensureAoProspectRoutingSchemaOnce(db) {
     'utf8'
   );
   await db.query(migration);
+  await ensureAoRosterSchema(db);
 }
 
 async function ensureAoProspectRoutingSchema(db = pool) {
