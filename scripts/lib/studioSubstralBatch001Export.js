@@ -139,8 +139,12 @@ function findingToSpecificIssue(finding) {
   if (/form element|mailto|booking|schedule/i.test(lower) && /no |not |missing/i.test(lower)) {
     return `Weak lead capture — ${summary.charAt(0).toLowerCase()}${summary.slice(1)}`;
   }
-  if (/fetch completed|performance|slow/i.test(lower) && finding.category === 'performance') {
-    return `Mobile friction — ${summary.charAt(0).toLowerCase()}${summary.slice(1)}`;
+  if (finding.category === 'performance' || id === 'perf_fetch_time') {
+    const ms = finding.measurement?.fetch_ms;
+    if (ms != null && Number(ms) >= 3500) {
+      return `Mobile friction — homepage fetch took ${Math.round(Number(ms) / 1000)}s during audit`;
+    }
+    return null;
   }
   if (finding.category === 'conversion_structure' || finding.category === 'conversion') {
     return `Confusing service explanation / conversion path — ${summary.charAt(0).toLowerCase()}${summary.slice(1)}`;
@@ -167,7 +171,7 @@ function listCandidateWebsiteIssues({ intel, assessmentPayload, websitePainSumma
   }
   for (const finding of findings) {
     if (finding.evidence_class === 'INFERRED') continue;
-    if (/present on homepage|returned HTTP 200|served over HTTPS|phone link present|phone number visible/i.test(finding.summary || '')) {
+    if (/present on homepage|returned HTTP 200|served over HTTPS|phone link present|phone number visible|fetch completed in \d{1,3} ms/i.test(finding.summary || '')) {
       continue;
     }
     const label = findingToSpecificIssue(finding);
