@@ -35,6 +35,7 @@ function installAoOwnerListMock(pool, users) {
         u.client_id === clientId
         && u.role === 'ao'
         && u.active === true
+        && (u.ao_operational_status || 'active') === 'active'
         && (excludeUserId == null || u.id !== excludeUserId));
       rows.sort((a, b) => a.id - b.id);
       return { rows };
@@ -54,15 +55,21 @@ function loadAoFieldService(users) {
   return { aoField, restore };
 }
 
-test('listActiveAoOwners includes Zach (not Zack pattern miss)', async () => {
-  const { aoField, restore } = loadAoFieldService(ACTIVE_AOS);
+test('listActiveAoOwners excludes paused Zach from assignment pools', async () => {
+  const aos = ACTIVE_AOS.map(o => (
+    o.name === 'Zach'
+      ? { ...o, active: false, ao_operational_status: 'paused' }
+      : { ...o, ao_operational_status: 'active' }
+  ));
+  const { aoField, restore } = loadAoFieldService(aos);
   try {
     const others = await aoField.listActiveAoOwners(CLIENT_ID, { excludeUserId: 19 });
-    assert.equal(others.length, 4);
+    assert.equal(others.length, 3);
     assert.deepEqual(
       others.map(o => o.name).sort(),
-      ['Mike', 'Rory', 'Tony', 'Zach'],
+      ['Mike', 'Rory', 'Tony'],
     );
+    assert.equal(others.some(o => o.name === 'Zach'), false);
   } finally {
     restore();
   }

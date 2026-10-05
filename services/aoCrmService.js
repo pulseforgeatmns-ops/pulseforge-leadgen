@@ -20,6 +20,12 @@ const {
   isValidCrmStatus,
 } = require('../utils/aoCrmTypes');
 const { logAoAuditEvent } = require('../utils/aoAuditEvents');
+const {
+  isAoEligibleForAssignment,
+  shouldExcludeFromTodayQueue,
+  transferredReviewLabel,
+  isTransferredReviewAccount,
+} = require('../utils/aoRosterOperational');
 
 const WARM_STATUSES = new Set(['warm', 'walkthrough_target', 'walkthrough_booked', 'proposal_needed', 'proposal_sent']);
 const WARM_STAGES = new Set(['walkthrough', 'proposal', 'engaged']);
@@ -61,6 +67,14 @@ function formatAccountRow(row, { dateStr, aoNameById = {} }) {
     open_task_id: row.open_task_id || null,
     task_deadline: normalizeDateOnly(row.task_deadline),
     segment: row.segment || row.vertical || null,
+    ao_review_bucket: row.ao_review_bucket || null,
+    transferred_review_label: transferredReviewLabel(row.ao_review_bucket),
+    ao_reassignment_prior_ao_id: row.ao_reassignment_prior_ao_id != null
+      ? String(row.ao_reassignment_prior_ao_id)
+      : null,
+    ao_reassignment_prior_ao_name: row.ao_reassignment_prior_ao_name || null,
+    ao_reassignment_at: row.ao_reassignment_at || null,
+    ao_reassignment_reason: row.ao_reassignment_reason || null,
   };
 }
 
@@ -88,6 +102,11 @@ async function fetchAccountRows({ clientId, aoUserId = null, db = pool }) {
       p.help_reason,
       p.help_requested_at,
       p.ao_paused,
+      p.ao_review_bucket,
+      p.ao_reassignment_prior_ao_id,
+      p.ao_reassignment_at,
+      p.ao_reassignment_reason,
+      prior_ao.name AS ao_reassignment_prior_ao_name,
       p.ao_disqualification_reason,
       p.recommended_angle,
       p.ao_assignment_reason,
@@ -123,6 +142,7 @@ async function fetchAccountRows({ clientId, aoUserId = null, db = pool }) {
         ), p.updated_at)
       ) AS recently_updated_at
     FROM prospects p
+    LEFT JOIN users prior_ao ON prior_ao.id = p.ao_reassignment_prior_ao_id
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     LEFT JOIN LATERAL (
       SELECT *
@@ -149,15 +169,17 @@ async function fetchAccountRows({ clientId, aoUserId = null, db = pool }) {
 
 async function loadAoNames(clientId, db = pool) {
   const { rows } = await db.query(`
-    SELECT id, name FROM users WHERE client_id = $1 AND role = 'ao' AND active = true
+    SELECT id, name FROM users WHERE client_id = $1 AND role = 'ao'
   `, [clientId]);
   const map = {};
   for (const row of rows) map[row.id] = row.name;
   return map;
 }
 
-function buildTodayQueue(accounts, dateStr) {
+function buildTodayQueue(accounts, dateStr, { ownerOperationallyActive = true } = {}) {
+  if (!ownerOperationallyActive) return [];
   return accounts.filter(a => {
+    if (shouldExcludeFromTodayQueue(a)) return false;
     if (!accountIsActive({ ao_current_status: a.current_status, ao_paused: a.ao_paused })) return false;
     if (a.help_requested) return true;
     if (a.overdue || a.due_today) return true;
@@ -173,13 +195,22 @@ async function getAoCrmDashboard({ clientId, aoUserId, aoUserName, date = null, 
 
   const dateStr = date || formatDateInTz();
   const aoNameById = await loadAoNames(clientId, db);
+  const { rows: ownerRows } = await db.query(`
+    SELECT id, name, active, COALESCE(ao_operational_status, 'active') AS ao_operational_status
+    FROM users WHERE id = $1 AND client_id = $2 LIMIT 1
+  `, [aoUserId, clientId]);
+  const ownerProfile = ownerRows[0] || null;
+  const ownerOperationallyActive = isAoEligibleForAssignment(ownerProfile);
+
   const raw = await fetchAccountRows({ clientId, aoUserId, db });
   const accounts = raw.map(row => formatAccountRow(row, { dateStr, aoNameById }));
 
   const todayQueue = buildTodayQueue(
     raw.map(row => formatAccountRow(row, { dateStr, aoNameById })),
-    dateStr
+    dateStr,
+    { ownerOperationallyActive },
   );
+  const needsReassignment = accounts.filter(a => isTransferredReviewAccount(a));
   const overdue = accounts.filter(a => a.overdue && accountIsActive({ ao_current_status: a.current_status, ao_paused: a.ao_paused }));
   const needsHelp = accounts.filter(a => a.help_requested);
   const warm = accounts.filter(a =>
@@ -212,9 +243,13 @@ async function getAoCrmDashboard({ clientId, aoUserId, aoUserName, date = null, 
       overdue: overdue.length,
       needs_help: needsHelp.length,
       warm: warm.length,
+      needs_reassignment: needsReassignment.length,
+      ao_operational_status: ownerProfile?.ao_operational_status || 'active',
+      ao_queue_eligible: ownerOperationallyActive,
     },
     sections: {
       today_queue: todayQueue,
+      needs_reassignment: needsReassignment,
       my_accounts: accounts,
       overdue,
       needs_help: needsHelp,

@@ -84,10 +84,12 @@ async function countCrmVisibleAccounts({ clientId, aoUserId, db }) {
 }
 
 async function fetchActiveAos(clientId, db) {
+  const { sqlEligibleAoUsers } = require('./aoRosterOperational');
   const { rows } = await db.query(`
-    SELECT id, name, email, territory, active
-    FROM users
-    WHERE client_id = $1 AND role = 'ao' AND active = true
+    SELECT id, name, email, territory, active,
+      COALESCE(ao_operational_status, 'active') AS ao_operational_status
+    FROM users u
+    WHERE client_id = $1 AND role = 'ao' ${sqlEligibleAoUsers('u')}
     ORDER BY id ASC
   `, [clientId]);
   return rows.filter(row => !BULK_FILL_EXCLUDED_AO_NAMES.has(normalizeAoKey(row.name)));

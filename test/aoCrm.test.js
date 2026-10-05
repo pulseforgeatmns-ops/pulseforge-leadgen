@@ -52,6 +52,7 @@ test('CRM pages reference durable account views', () => {
   const crm = fs.readFileSync(path.join(__dirname, '..', 'public', 'ao-crm.html'), 'utf8');
   assert.match(crm, /My Accounts/);
   assert.match(crm, /today_queue/);
+  assert.match(crm, /needs_reassignment/);
   assert.match(crm, /\/ao\/api\/crm\/accounts/);
   assert.match(crm, /Draft Follow-Up/);
   assert.match(crm, /followup\/draft/);

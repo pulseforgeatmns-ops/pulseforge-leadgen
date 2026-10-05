@@ -55,6 +55,9 @@ async function ensureAoFieldSchemaOnce() {
     ADD COLUMN IF NOT EXISTS weekly_goal INTEGER
   `);
 
+  const { ensureAoRosterSchema } = require('./aoRosterSchema');
+  await ensureAoRosterSchema(pool);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ao_leads (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

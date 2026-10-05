@@ -6,6 +6,7 @@ const path = require('node:path');
 const { ensureClientArchitecture } = require('./clientContext');
 const { ensureUsersTable } = require('../middleware/auth');
 const { ensureAoProspectRoutingSchema } = require('./aoProspectRoutingSchema');
+const { ensureAoRosterSchema } = require('./aoRosterSchema');
 
 const schemaInitPromises = new WeakMap();
 
@@ -30,6 +31,7 @@ async function ensureAoCrmSchemaOnce(db) {
     'utf8'
   );
   await db.query(workflowMigration);
+  await ensureAoRosterSchema(db);
 }
 
 async function ensureAoCrmSchema(db = pool) {
