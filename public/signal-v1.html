@@ -190,10 +190,12 @@
       </tr>`).join('');
 
       const emp = document.getElementById('empiricalPanel');
-      if (data.dataClass === 'EMPIRICAL' && data.empiricalReport) {
-        const r = data.empiricalReport;
+      const empiricalReport = data.empiricalReport || data.evaluation?.empiricalReport;
+      const contamination = data.contamination || data.evaluation?.contamination;
+      if (data.dataClass === 'EMPIRICAL' && empiricalReport) {
+        const r = empiricalReport;
         emp.innerHTML = `
-          <div><strong>Empirical cohort</strong> · contamination procedural=${data.contamination?.proceduralEventCount ?? 0}</div>
+          <div><strong>Empirical cohort</strong> · contamination procedural=${contamination?.proceduralEventCount ?? 0}</div>
           <div>Base rate P(PASS|FIRST_CALLER): ${fmtPct(r.firstCallerBaseRate?.precision)}</div>
           <div>Convergence precision: ${fmtPct(r.strictProvenIndependentConvergence?.precision)} · lift ${r.effectSize?.absoluteLiftPP != null ? r.effectSize.absoluteLiftPP.toFixed(1) + 'pp' : '—'}</div>
           <div>Evidence: ${r.evidenceStrength?.classification || '—'}</div>`;
