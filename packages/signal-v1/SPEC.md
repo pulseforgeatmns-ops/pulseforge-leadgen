@@ -10,3 +10,10 @@ See repository issue/spec for full doctrine. V1 explicitly excludes real-money e
 - Default provider: **GeckoTerminal** public OHLCV (`aggregate=1` → 1-minute candles when trades exist; gaps are not interpolated).
 - Operator commands: `npm run signal:ingest-history`, `npm run signal:replay`.
 - PASS/FAIL/UNRESOLVED uses achievable entry (15s–5m delays) from observed prices only.
+
+## Validation cohort 001 (SIGNAL-V1-003 Phase B)
+
+- Cohort ID: `cohort-signal-v1-validation-001` (frozen, selection version `validation-001-selection-v1`).
+- Acquisition pipeline: `packages/signal-v1/acquisition/` (providers, eligibility, deterministic selection, backfill, replay).
+- Operator report: `signal-v1/VALIDATION_COHORT_001_REPORT.md`.
+- Export: `npm run signal:validation-cohort-001` or `GET .../evaluation/export`.
