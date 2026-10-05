@@ -13,7 +13,12 @@ async function ensureSignalSchema(pool) {
     throw new Error('ensureSignalSchema requires a pg pool');
   }
   const baseDir = path.join(__dirname, '../../../migrations');
-  for (const file of ['2026-10-04-signal-v1.sql', '2026-10-04-signal-v1-research.sql']) {
+  for (const file of [
+    '2026-10-04-signal-v1.sql',
+    '2026-10-04-signal-v1-research.sql',
+    '2026-10-04-signal-v1-research-candidates.sql',
+    '2026-10-05-signal-v1-prospective-shadow.sql',
+  ]) {
     const sql = fs.readFileSync(path.join(baseDir, file), 'utf8');
     await pool.query(sql);
   }

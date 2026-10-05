@@ -42,10 +42,30 @@ const SUBSTRAL_NEVER_SAY = [
   'urgent website fix',
 ].join('; ');
 
+const STUDIO_SUBSTRAL_SERVICE_AREA = Object.freeze([
+  'Manchester', 'Bedford', 'Goffstown', 'Hooksett', 'Londonderry', 'Auburn',
+  'Nashua', 'Concord', 'Derry', 'Merrimack', 'Hudson', 'Pelham', 'Salem',
+]);
+
 async function findStudioSubstralClient(db = pool) {
   if (!db) return null;
   const res = await db.query(`SELECT * FROM clients WHERE slug = $1 LIMIT 1`, [STUDIO_SUBSTRAL_SLUG]);
   return res.rows[0] || null;
+}
+
+/** Keep scout geography aligned with STUDIO_SUBSTRAL_SCOUT_PLAN (Places locality matching). */
+async function ensureStudioSubstralServiceArea(db = pool) {
+  const client = await findStudioSubstralClient(db);
+  if (!client) return null;
+  const current = Array.isArray(client.service_area) ? client.service_area : [];
+  const needsRepair = current.length !== STUDIO_SUBSTRAL_SERVICE_AREA.length
+    || STUDIO_SUBSTRAL_SERVICE_AREA.some((city, i) => String(current[i]) !== city);
+  if (!needsRepair) return client;
+  const updated = await db.query(
+    `UPDATE clients SET service_area = $1::text[] WHERE id = $2 RETURNING *`,
+    [STUDIO_SUBSTRAL_SERVICE_AREA, client.id]
+  );
+  return updated.rows[0] || client;
 }
 
 async function ensureStudioSubstralTenant(db = pool) {
@@ -86,6 +106,7 @@ async function ensureStudioSubstralTenant(db = pool) {
         scoring_profile = EXCLUDED.scoring_profile,
         enabled_agents = EXCLUDED.enabled_agents,
         website = EXCLUDED.website,
+        service_area = EXCLUDED.service_area,
         brand_voice = EXCLUDED.brand_voice,
         never_say = EXCLUDED.never_say,
         lead_with = EXCLUDED.lead_with,
@@ -204,7 +225,11 @@ async function resolveStudioSubstralClientId(db = pool) {
     }
     return raw;
   }
-  const client = await ensureStudioSubstralTenant(db);
+  const client = await ensureStudioSubstralServiceArea(db);
+  if (!client) {
+    await ensureStudioSubstralTenant(db);
+    return (await ensureStudioSubstralServiceArea(db)).id;
+  }
   return client.id;
 }
 
@@ -219,11 +244,13 @@ function usesWebsiteOpportunityIntelligence(scoringProfile) {
 module.exports = {
   STUDIO_SUBSTRAL_SLUG,
   STUDIO_SUBSTRAL_DOMAIN,
+  STUDIO_SUBSTRAL_SERVICE_AREA,
   SUBSTRAL_MISSION_OBJECTIVE,
   SUBSTRAL_MISSION_CONSTRAINTS,
   SUBSTRAL_MISSION_PROFILE,
   SUBSTRAL_BRAND_VOICE,
   findStudioSubstralClient,
+  ensureStudioSubstralServiceArea,
   ensureStudioSubstralTenant,
   ensureStudioSubstralMission,
   resolveStudioSubstralClientId,

@@ -4,6 +4,8 @@
  * Fixture-backed market data for research replay.
  */
 class FixtureMarketDataProvider {
+  providerId = 'fixture-acquisition';
+
   /**
    * @param {{ pricePaths?: Record<string, { occurredAt: Date|string, price: number }[]> }} fixtures
    */
@@ -24,6 +26,18 @@ class FixtureMarketDataProvider {
       const t = new Date(p.occurredAt).getTime();
       return t >= startMs && t <= endMs;
     });
+  }
+
+  async getHistoricalPrices(tokenAddress, start, end, { resolutionSeconds = 60 } = {}) {
+    const path = await this.getHistoricalPrice(tokenAddress, start, end);
+    return path.map(p => ({
+      tokenAddress,
+      occurredAt: new Date(p.occurredAt),
+      priceUsd: p.price ?? p.priceUsd,
+      intervalSeconds: resolutionSeconds,
+      provider: 'fixture-acquisition',
+      provenance: { source: 'FixtureMarketDataProvider' },
+    }));
   }
 
   async getLiquidity() {

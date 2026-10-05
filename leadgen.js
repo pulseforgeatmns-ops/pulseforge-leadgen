@@ -2197,8 +2197,24 @@ function resolveCleaningScoutContactCandidate(lead) {
   };
 }
 
+function resolveStudioSubstralScoutContactCandidate(lead) {
+  const emailCandidate = resolveScoutEmailCandidate(lead);
+  if (emailCandidate.insertTarget === 'prospect') return emailCandidate;
+  const hasPhone = !!(lead.phone && String(lead.phone).replace(/\D/g, '').length >= 10);
+  if (hasPhone) {
+    return {
+      insertTarget: 'prospect',
+      email: emailCandidate.email || null,
+      phone: lead.phone,
+      emailRejectReason: emailCandidate.reason,
+    };
+  }
+  return emailCandidate;
+}
+
 function resolveScoutContactCandidate(lead) {
   if (isCleaningBuyerProfile()) return resolveCleaningScoutContactCandidate(lead);
+  if (isStudioSubstralScoutProfile()) return resolveStudioSubstralScoutContactCandidate(lead);
   return resolveScoutEmailCandidate(lead);
 }
 
@@ -2553,7 +2569,10 @@ async function saveToDatabase(leads, {
       const isPlacesLead = Array.isArray(lead.source) && lead.source.includes('google_places');
       const rejectedLocality = isPlacesLead ? lead.places_locality || null : null;
       const serviceArea = isPlacesLead
-        ? matchServiceAreaLocality(lead.places_locality, allowedServiceAreas)
+        ? (
+          matchServiceAreaLocality(lead.places_locality, allowedServiceAreas)
+          || matchServiceAreaFromLocation(lead.address, allowedServiceAreas)
+        )
         : matchServiceAreaFromLocation(lead.address, allowedServiceAreas);
       // Persist structured Places geography before any dedupe or location
       // guard can discard this candidate.
@@ -2738,8 +2757,8 @@ async function saveToDatabase(leads, {
             contact: lead.contact,
             google_rating: googleRating,
             google_review_count: googleReviewCount,
-            skipPuppeteer: true,
-          }, { pool, skipPuppeteer: true });
+            skipPuppeteer: !isStudioSubstralScoutProfile(),
+          }, { pool, skipPuppeteer: !isStudioSubstralScoutProfile() });
 
           if (isStudioSubstralScoutProfile()) {
             const { evaluateStudioSubstralScoutProspect } = require('./services/studioSubstralScoutIntelligence');
@@ -2763,7 +2782,6 @@ async function saveToDatabase(leads, {
               outreachStatus,
             });
             if (!intelligence.accepted) {
-              await pool.query('DELETE FROM prospects WHERE id = $1 AND client_id = $2', [prospectId, CONFIG.clientId]);
               saved--;
               rejected++;
               incrementBreakdown(skippedBreakdown, SCOUT_SKIP_REASONS.LOW_SCORE);
@@ -3216,7 +3234,13 @@ async function pickNextQueueItem(clientId, allowedVerticals = []) {
 // target in the queue; if it is saturated, logs vertical_saturated and rotates
 // to the least-saturated queued item. Returns { skip: true } when nothing is
 // left to scrape.
-async function resolveScoutTarget({ clientId, industry, location, verticals }) {
+function resolveScoutPlanVertical({ industry, vertical: explicitVertical }) {
+  return explicitVertical
+    ? normalizeVertical(explicitVertical)
+    : (normalizeVertical(industry) || 'unknown');
+}
+
+async function resolveScoutTarget({ clientId, industry, location, verticals, vertical: explicitVertical }) {
   await ensureScoutQueue(pool);
   await normalizeExistingVerticals(pool);
   const cleanLocation = sanitizeQueueLocation(location);
@@ -3238,7 +3262,7 @@ async function resolveScoutTarget({ clientId, industry, location, verticals }) {
   await seedExpansionQueueMarkets(clientId);
   await refreshQueueCounts(clientId);
 
-  const vertical = normalizeVertical(industry) || 'unknown';
+  const vertical = resolveScoutPlanVertical({ industry, vertical: explicitVertical });
 
   if (plannedVerticals.length && !plannedVerticals.includes(vertical)) {
     console.log(`[Scout] "${vertical}" is not in client ${clientId}'s Scout plan — rotating to planned queue`);
@@ -3360,6 +3384,7 @@ async function runWithAttribution(params = {}) {
         industry: CONFIG.industry,
         location: CONFIG.location,
         verticals: CLIENT_CONFIG.verticals,
+        vertical: params.vertical,
       });
   if (target.skip) {
     const result = { attempts: 0, successes: 0, skipped: 0, errorSample: null, skipped_run: true, reason: 'saturated', vertical: target.vertical };
@@ -3555,6 +3580,8 @@ module.exports = {
     CLIENT_SCOUT_PLANS,
     CLIENT_SCOUT_CITY_STATE_OVERRIDES,
     filterScrapedWebsiteEmails,
+    resolveScoutPlanVertical,
+    resolveScoutContactCandidate,
   },
 };
 
