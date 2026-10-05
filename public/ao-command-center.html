@@ -360,6 +360,7 @@ function actionButtons(item, context = 'prospect') {
     ${draftFollowUp}
     <button class="cc-btn" data-action="follow-up" data-prospect="${pid}">Mark Follow-Up</button>
     <button class="cc-btn warn" data-action="flag" data-prospect="${pid}" data-session="${sid || ''}">Flag Issue</button>
+    <button class="cc-btn" data-action="mark-dead" data-prospect="${pid}" style="color:var(--pf-red)">Mark dead</button>
     ${sid ? `<button class="cc-btn" data-action="done" data-session="${sid}">Done</button>` : ''}
   `;
 }
@@ -548,6 +549,52 @@ function showLogUpdateModal(prospectId, preset = {}) {
   };
 }
 
+async function showMarkDeadModal(prospectId) {
+  let reasons = [];
+  try {
+    const data = await api('/ao/api/mark-dead/reasons');
+    reasons = data.reasons || [];
+  } catch (_err) {
+    reasons = [{ value: 'not_a_fit', label: 'Not a fit' }, { value: 'other', label: 'Other' }];
+  }
+  openModal(`
+    <h3>Mark dead</h3>
+    <p style="font-size:0.88rem;color:var(--pf-text-dim)">Removes from active routing; history is kept.</p>
+    <div class="cc-field">
+      <label>Reason</label>
+      <select id="dead-reason">
+        <option value="">Select…</option>
+        ${reasons.map(r => `<option value="${r.value}">${r.label}</option>`).join('')}
+      </select>
+    </div>
+    <div class="cc-field">
+      <label>Note (required if Other)</label>
+      <textarea id="dead-note" placeholder="Optional context…"></textarea>
+    </div>
+    <div class="cc-modal-actions">
+      <button class="cc-btn primary" id="dead-save" style="background:var(--pf-red)">Mark dead</button>
+      <button class="cc-btn" id="modal-close">Cancel</button>
+    </div>
+  `);
+  document.getElementById('modal-close').onclick = closeModal;
+  document.getElementById('dead-save').onclick = async () => {
+    const reason = document.getElementById('dead-reason').value;
+    const note = document.getElementById('dead-note').value.trim();
+    if (!reason) return alert('Select a reason.');
+    if (reason === 'other' && !note) return alert('Add a note when reason is Other.');
+    try {
+      await api(`/ao/api/prospects/${prospectId}/mark-dead`, {
+        method: 'POST',
+        body: JSON.stringify({ reason, note: note || undefined }),
+      });
+      closeModal();
+      await loadCommandCenter();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
 function showFlagModal(prospectId, sessionId) {
   openModal(`
     <h3>Flag Routing Issue</h3>
@@ -616,6 +663,7 @@ document.getElementById('content').addEventListener('click', async (event) => {
   if (action === 'log-update') return showLogUpdateModal(prospectId);
   if (action === 'follow-up') return showLogUpdateModal(prospectId, { outcome: 'follow_up_later', next_action: 'AO_FOLLOW_UP' });
   if (action === 'flag') return showFlagModal(prospectId, sessionId);
+  if (action === 'mark-dead') return showMarkDeadModal(prospectId);
   if (action === 'done') return handleDone(sessionId);
   if (action === 'open-conv') {
     window.location.href = `/ao/field?session=${encodeURIComponent(sessionId)}`;

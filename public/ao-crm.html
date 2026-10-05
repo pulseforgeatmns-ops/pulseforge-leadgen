@@ -345,6 +345,7 @@ function renderRow(item, { reviewSection = false } = {}) {
         <button class="btn primary" data-action="outcome" data-prospect="${item.prospect_id}" data-task="${item.open_task_id || ''}">Log outcome</button>
         ${showFollowUpEntry(item) ? `<button class="btn" data-action="followup" data-prospect="${item.prospect_id}">Draft Follow-Up</button>` : ''}
         <button class="btn" data-action="flag-jake" data-prospect="${item.prospect_id}">Flag for Jake</button>
+        <button class="btn" style="color:var(--pf-red)" data-action="mark-dead" data-prospect="${item.prospect_id}" data-task="${item.open_task_id || ''}">Mark dead</button>
       </div>`}
     </div>
   `;
@@ -709,6 +710,49 @@ async function showDetail(prospectId) {
   document.getElementById('detail-close').onclick = closeModal;
 }
 
+async function openMarkDeadModal(prospectId, taskId) {
+  let reasons = [];
+  try {
+    const data = await api('/ao/api/mark-dead/reasons');
+    reasons = data.reasons || [];
+  } catch (_err) {
+    reasons = [{ value: 'not_a_fit', label: 'Not a fit' }, { value: 'other', label: 'Other' }];
+  }
+  const options = '<option value="">Select a reason…</option>' + reasons.map(r =>
+    `<option value="${r.value}">${r.label}</option>`
+  ).join('');
+  document.getElementById('modal').innerHTML = `
+    <h2>Mark dead</h2>
+    <p class="row-meta">Removes this from today's queue. History is preserved.</p>
+    <label class="row-meta">Reason</label>
+    <select id="mark-dead-reason" class="row-meta" style="width:100%;margin:8px 0;padding:8px">${options}</select>
+    <label class="row-meta">Note (required if Other)</label>
+    <textarea id="mark-dead-note" rows="3" style="width:100%;margin-top:6px"></textarea>
+    <div class="row-actions" style="margin-top:12px">
+      <button class="btn primary" id="mark-dead-save" style="background:var(--pf-red)">Mark dead</button>
+      <button class="btn" id="mark-dead-cancel">Cancel</button>
+    </div>
+  `;
+  openModalBackdrop();
+  document.getElementById('mark-dead-cancel').onclick = closeModal;
+  document.getElementById('mark-dead-save').onclick = async () => {
+    const reason = document.getElementById('mark-dead-reason').value;
+    const note = document.getElementById('mark-dead-note').value.trim();
+    if (!reason) return alert('Select a reason.');
+    if (reason === 'other' && !note) return alert('Add a note when reason is Other.');
+    try {
+      await api(`/ao/api/prospects/${prospectId}/mark-dead`, {
+        method: 'POST',
+        body: JSON.stringify({ reason, note: note || undefined, queue_item_id: taskId || undefined }),
+      });
+      closeModal();
+      await loadDashboard();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
 async function loadDashboard() {
   state.data = await api('/ao/api/crm/dashboard');
   state.outcomes = state.data.outcomes || [];
@@ -760,6 +804,9 @@ document.body.addEventListener('click', async (e) => {
   }
   if (btn.dataset.action === 'flag-jake') {
     try { await openFlagForJakeModal(btn.dataset.prospect); } catch (err) { alert(err.message); }
+  }
+  if (btn.dataset.action === 'mark-dead') {
+    try { await openMarkDeadModal(btn.dataset.prospect, btn.dataset.task); } catch (err) { alert(err.message); }
   }
 });
 

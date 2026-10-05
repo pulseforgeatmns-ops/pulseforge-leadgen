@@ -19,6 +19,7 @@ const aoCrm = require('../services/aoCrmService');
 const aoRosterReassignment = require('../services/aoRosterReassignmentService');
 const aoFollowup = require('../services/aoFollowupService');
 const aoAccountFlags = require('../services/aoAccountFlagService');
+const aoDisposition = require('../services/aoDispositionService');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { AO_CRM_NEXT_ACTIONS } = require('../utils/aoCrmTypes');
 const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
@@ -557,6 +558,44 @@ router.post('/api/tasks/:id/call-instead', requireAoWrite, wrapAoHandler(async (
       ? null
       : 'No phone number saved. Add one or escalate to Jake?',
   });
+}));
+
+router.get('/api/mark-dead/reasons', requireAoRead, (_req, res) => {
+  res.json({ reasons: aoDisposition.listDeadReasons() });
+});
+
+router.post('/api/tasks/:id/mark-dead', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { reason, note } = req.body || {};
+  const result = await aoDisposition.markFollowUpTaskDead({
+    taskId: req.params.id,
+    clientId,
+    aoUserId: aoOwnerId,
+    reason,
+    note,
+  });
+  const httpStatus = result && (result.status || (result.error ? 400 : 200));
+  if (result?.error) return res.status(httpStatus || 400).json(result);
+  res.json(result);
+}));
+
+router.post('/api/prospects/:prospectId/mark-dead', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { reason, note, queue_item_id: queueItemId } = req.body || {};
+  const result = await aoDisposition.markProspectDead({
+    prospectId: req.params.prospectId,
+    clientId,
+    aoUserId: aoOwnerId,
+    reason,
+    note,
+    queueItemId: queueItemId || null,
+  });
+  if (result?.error) return res.status(result.status || 400).json(result);
+  res.json(result);
 }));
 
 router.post('/api/tasks/:id/escalate', requireAoWrite, wrapAoHandler(async (req, res) => {

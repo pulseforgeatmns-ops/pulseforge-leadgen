@@ -42,6 +42,7 @@ async function cancelActiveRoutes(aoOwnerId, clientId, db = pool) {
 async function listQueueTasksWithDetails({ aoOwnerId, clientId, filter }) {
   const params = [aoOwnerId, clientId];
   let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'
+    AND COALESCE(l.disposition_status, 'active') = 'active'
     AND COALESCE(t.next_action, '') != 'phone_follow_up'`;
 
   const today = new Date().toISOString().slice(0, 10);

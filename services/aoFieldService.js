@@ -74,7 +74,8 @@ async function getAoProfile(userId) {
 
 async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
   const params = [aoOwnerId, clientId];
-  let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'`;
+  let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'
+    AND COALESCE(l.disposition_status, 'active') = 'active'`;
 
   const today = new Date().toISOString().slice(0, 10);
   if (filter === 'today') {

@@ -156,6 +156,7 @@ async function fetchAccountRows({ clientId, aoUserId = null, db = pool }) {
     WHERE p.client_id = $1
       ${ownerClause}
       AND p.assigned_ao_id IS NOT NULL
+      AND COALESCE(p.disposition_status, 'active') = 'active'
       AND COALESCE(p.do_not_contact, false) = false
       AND COALESCE(p.prospect_motion, '') NOT IN ('SUPPRESS', 'EMAIL_LED')
     ORDER BY p.updated_at DESC

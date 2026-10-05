@@ -1128,6 +1128,24 @@ body {
   </div>
 </div>
 
+<div class="ao-modal-overlay" id="markDeadModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="markDeadTitle">
+    <h3 id="markDeadTitle">Mark dead</h3>
+    <p style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      Remove this from active routing. History is kept — nothing is deleted.
+    </p>
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Reason</div>
+      <select class="ao-addr-input" id="markDeadReason" style="margin-bottom:10px"></select>
+    </div>
+    <textarea class="ao-addr-input" id="markDeadNote" rows="3" placeholder="Optional context…" style="resize:vertical;min-height:72px"></textarea>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="markDeadCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="markDeadConfirm" style="background:var(--pf-red)">Mark dead</button>
+    </div>
+  </div>
+</div>
+
 <div class="ao-modal-overlay" id="crmOutcomeModal">
   <div class="ao-modal" role="dialog" aria-labelledby="crmOutcomeTitle">
     <h3 id="crmOutcomeTitle">What happened?</h3>
@@ -1147,6 +1165,8 @@ const chat = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
 let conversationSessionId = null;
 let lastDoneConversationId = null;
+let markDeadTarget = null;
+let markDeadReasons = [];
 let wizardSessionId = null;
 let activeMode = null;
 let queueFilter = 'today';
@@ -1816,6 +1836,7 @@ function taskCard(task) {
         <button${isDirectMail || isPhoneFollowUp ? '' : ' class="primary"'} data-done="${task.id}" data-crm-prospect="${task.crm_prospect_id || ''}">Done</button>
         <button data-reschedule="${task.id}">+2 Days</button>
         <button class="danger" data-escalate="${task.id}">Escalate</button>
+        <button type="button" data-mark-dead="${task.id}" title="Remove from queue">Mark dead</button>
       </div>
     </article>
   `;
@@ -1853,6 +1874,7 @@ function stopCard(stop, isCurrent) {
         <button data-route-skip="${stop.id}">Skip</button>
         <button data-route-later="${stop.id}">Move Later</button>
         <button class="danger" data-route-escalate="${stop.task_id}">Escalate</button>
+        <button type="button" data-mark-dead="${stop.task_id}">Mark dead</button>
       </div>
     </article>
   `;
@@ -1962,6 +1984,66 @@ function renderRouteView(needsAddress = []) {
 
   document.getElementById('routeList').innerHTML = html;
 }
+
+async function ensureMarkDeadReasons() {
+  if (markDeadReasons.length) return markDeadReasons;
+  try {
+    const data = await api('/api/mark-dead/reasons');
+    markDeadReasons = data.reasons || [];
+  } catch (_err) {
+    markDeadReasons = [
+      { value: 'business_not_found', label: 'Business not found' },
+      { value: 'not_a_fit', label: 'Not a fit' },
+      { value: 'other', label: 'Other' },
+    ];
+  }
+  return markDeadReasons;
+}
+
+function hideMarkDeadModal() {
+  document.getElementById('markDeadModal').classList.remove('open');
+  markDeadTarget = null;
+}
+
+async function openMarkDeadModal(taskId) {
+  await ensureMarkDeadReasons();
+  markDeadTarget = taskId;
+  const sel = document.getElementById('markDeadReason');
+  sel.innerHTML = '<option value="">Select a reason…</option>' + markDeadReasons.map(r =>
+    `<option value="${r.value}">${escapeHtml(r.label)}</option>`
+  ).join('');
+  document.getElementById('markDeadNote').value = '';
+  document.getElementById('markDeadModal').classList.add('open');
+}
+
+async function submitMarkDead() {
+  if (!markDeadTarget) return;
+  const reason = document.getElementById('markDeadReason').value;
+  const note = document.getElementById('markDeadNote').value.trim();
+  if (!reason) {
+    alert('Select a reason.');
+    return;
+  }
+  if (reason === 'other' && !note) {
+    alert('Add a note when reason is Other.');
+    return;
+  }
+  try {
+    await api('/api/tasks/' + markDeadTarget + '/mark-dead', {
+      method: 'POST',
+      body: JSON.stringify({ reason, note: note || undefined }),
+    });
+    hideMarkDeadModal();
+    loadQueue();
+    loadMetrics();
+    if (activeRoute) loadActiveRoute();
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+document.getElementById('markDeadCancel').addEventListener('click', hideMarkDeadModal);
+document.getElementById('markDeadConfirm').addEventListener('click', submitMarkDead);
 
 async function loadActiveRoute() {
   try {
@@ -2247,6 +2329,7 @@ document.getElementById('routeList').addEventListener('click', async e => {
   const skipStop = e.target.dataset.routeSkip;
   const laterStop = e.target.dataset.routeLater;
   const escalateTask = e.target.dataset.routeEscalate;
+  const markDeadTask = e.target.dataset.markDead;
   const saveAddr = e.target.dataset.addrSave;
 
   try {
@@ -2282,6 +2365,10 @@ document.getElementById('routeList').addEventListener('click', async e => {
     if (doneStop) await handleRouteStopAction(doneStop, 'done');
     if (skipStop) await handleRouteStopAction(skipStop, 'skipped');
     if (laterStop) await handleRouteStopAction(laterStop, 'moved_later');
+    if (markDeadTask) {
+      await openMarkDeadModal(markDeadTask);
+      return;
+    }
     if (escalateTask) {
       await api('/api/tasks/' + escalateTask + '/escalate', {
         method: 'POST',
@@ -2311,7 +2398,12 @@ document.getElementById('queueList').addEventListener('click', async e => {
   const doneId = e.target.dataset.done;
   const rescheduleId = e.target.dataset.reschedule;
   const escalateId = e.target.dataset.escalate;
+  const markDeadId = e.target.dataset.markDead;
   try {
+    if (markDeadId) {
+      await openMarkDeadModal(markDeadId);
+      return;
+    }
     if (briefLeadId) {
       await requestProspectBrief({
         leadId: briefLeadId,

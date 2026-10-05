@@ -57,6 +57,7 @@ async function fetchAssignedAccountRows({ aoOwnerId, clientId }) {
     WHERE t.ao_owner_id = $1
       AND l.client_id = $2
       AND t.status = 'open'
+      AND COALESCE(l.disposition_status, 'active') = 'active'
       AND l.status NOT IN ('not_a_fit', 'do_not_contact', 'closed_lost', 'converted_to_crm')
   `, [aoOwnerId, clientId]);
 
@@ -106,6 +107,7 @@ async function fetchAssignedLeadWithoutOpenTask({ aoOwnerId, clientId }) {
     ) e ON true
     WHERE l.ao_owner_id = $1
       AND l.client_id = $2
+      AND COALESCE(l.disposition_status, 'active') = 'active'
       AND l.status NOT IN ('not_a_fit', 'do_not_contact', 'closed_lost', 'converted_to_crm')
       AND NOT EXISTS (
         SELECT 1 FROM ao_follow_up_tasks t
@@ -159,6 +161,7 @@ async function listAssignedAccountSummaries({ aoOwnerId, clientId }) {
     FROM ao_leads l
     WHERE l.ao_owner_id = $1
       AND l.client_id = $2
+      AND COALESCE(l.disposition_status, 'active') = 'active'
       AND l.status NOT IN ('not_a_fit', 'do_not_contact', 'closed_lost', 'converted_to_crm')
     ORDER BY l.updated_at DESC
   `, [aoOwnerId, clientId]);

@@ -394,6 +394,9 @@ async function ensureAoFieldSchemaOnce() {
     CREATE INDEX IF NOT EXISTS idx_ao_route_stops_route_seq
       ON ao_route_stops(route_id, sequence);
   `);
+
+  const { ensureAoDispositionSchema } = require('./aoDispositionSchema');
+  await ensureAoDispositionSchema(pool);
 }
 
 async function ensureAoFieldSchema() {

@@ -105,6 +105,7 @@ function deriveDefaultStatus(prospect) {
 }
 
 function accountIsActive(prospect) {
+  if (prospect.disposition_status === 'dead') return false;
   const status = deriveDefaultStatus(prospect);
   return !CLOSED_STATUSES.has(status) && !prospect.ao_paused;
 }

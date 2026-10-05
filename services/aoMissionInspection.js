@@ -39,6 +39,7 @@ async function prospectsToWorkToday({ clientId, aoOwnerId = null, db = pool }) {
     LEFT JOIN users u ON u.id = COALESCE(t.assigned_ao_id, p.assigned_ao_id)
     WHERE p.client_id = $1
       AND COALESCE(p.prospect_motion, '') NOT IN ('SUPPRESS', 'EMAIL_LED')
+      AND COALESCE(p.disposition_status, 'active') = 'active'
       AND COALESCE(p.do_not_contact, false) = false
       AND (
         t.deadline <= (NOW() AT TIME ZONE 'America/New_York')::date
@@ -128,6 +129,7 @@ async function followUpRequired({ clientId, aoOwnerId = null, db = pool }) {
     LEFT JOIN users u ON u.id = p.assigned_ao_id
     WHERE p.client_id = $1
       AND p.next_action IN ('AO_FOLLOW_UP', 'SEND_INFO', 'NEEDS_RESEARCH')
+      AND COALESCE(p.disposition_status, 'active') = 'active'
       AND COALESCE(p.do_not_contact, false) = false
       AND p.prospect_motion IS DISTINCT FROM 'SUPPRESS'
       ${ownerClause}
@@ -166,6 +168,7 @@ async function accountsReadyForJake({ clientId, aoOwnerId = null, db = pool }) {
       AND d.debrief_quality = 'complete'
       AND COALESCE((d.evaluation->>'incomplete')::boolean, true) = false
       AND NULLIF(BTRIM(d.problem_or_risk), '') IS NOT NULL
+      AND COALESCE(p.disposition_status, 'active') = 'active'
       AND COALESCE(p.do_not_contact, false) = false
       AND p.prospect_motion IS DISTINCT FROM 'SUPPRESS'
       ${ownerClause}
