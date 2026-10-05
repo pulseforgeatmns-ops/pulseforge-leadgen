@@ -3,6 +3,9 @@
 const { RESEARCH_OBSERVATION_TYPES } = require('../types');
 const { median } = require('./sourcePerformanceEngine');
 const { gatherIndependentConvergence } = require('./observationTriggers');
+const { wilsonInterval } = require('./wilsonInterval');
+const { resolveCohortDataClass, isEmpiricalDataClass } = require('./dataClass');
+const { assertEmpiricalCohort } = require('./empiricalGuard');
 
 const LAYER_LABELS = Object.freeze({
   FIRST_CALLER: 'First caller',
@@ -19,9 +22,22 @@ const LAYER_LABELS = Object.freeze({
  * @param {string} cohortId
  * @param {number} executionDelaySeconds
  */
-function evaluateCohortLayers(store, cohortId, executionDelaySeconds = 60, _options = {}) {
+function evaluateCohortLayers(store, cohortId, executionDelaySeconds = 60, options = {}) {
+  const cohort =
+    store.researchCohorts?.get?.(cohortId) ||
+    [...(store.researchCohorts?.values?.() || [])].find(c => c.id === cohortId);
+  const dataClass = resolveCohortDataClass(cohortId, cohort);
+  let contamination = null;
+  if (isEmpiricalDataClass(dataClass)) {
+    const gate = assertEmpiricalCohort(store, cohortId, options);
+    contamination = gate.contamination;
+  }
+
   const members = store.getCohortMembers(cohortId);
   const rows = [];
+  const researchConfig = isEmpiricalDataClass(dataClass)
+    ? { strictClusterIndependence: true, ...(options.researchConfig || {}) }
+    : options.researchConfig;
 
   for (const type of RESEARCH_OBSERVATION_TYPES) {
     const stats = aggregateLayer(store, members, type, executionDelaySeconds);
@@ -32,18 +48,34 @@ function evaluateCohortLayers(store, cohortId, executionDelaySeconds = 60, _opti
     });
   }
 
-  return {
+  const evaluation = {
     cohortId,
     cohortN: members.length,
+    dataClass,
     executionDelaySeconds,
     layers: rows,
     dataCoverage: summarizeDataCoverage(store, members),
     convergenceVelocity: evaluateConvergenceVelocityBuckets(store, members, executionDelaySeconds),
     independentClusterAnalysis: evaluateIndependentClusterBuckets(store, members, executionDelaySeconds),
+    contamination,
+    researchConfig,
     lowNSwarnings: rows
       .filter(r => (r.denominators?.resolvedN ?? 0) < 10)
       .map(r => `${r.observationType}: resolved N=${r.denominators?.resolvedN ?? 0}`),
   };
+
+  if (isEmpiricalDataClass(dataClass)) {
+    evaluation.executionDelaySensitivity = evaluateExecutionDelaySensitivity(store, cohortId);
+    const { buildEmpiricalExtendedReport } = require('./empiricalCohortReport');
+    evaluation.empiricalReport = buildEmpiricalExtendedReport(
+      store,
+      cohortId,
+      evaluation,
+      executionDelaySeconds
+    );
+  }
+
+  return evaluation;
 }
 
 function summarizeDataCoverage(store, members) {
@@ -139,12 +171,15 @@ function aggregateLayer(store, members, observationType, delaySeconds) {
   const precision = resolvedN ? pass / resolvedN : null;
   const falsePositiveRate = resolvedN ? fail / resolvedN : null;
 
+  const wi = wilsonInterval(pass, resolvedN);
+
   return {
     N: labeledOutcomes.length,
     PASS: pass,
     FAIL: fail,
     UNRESOLVED: unresolved,
     precision,
+    wilson95: wi,
     falsePositiveRate,
     medianMfe: median(labeledOutcomes.map(o => o.mfe)),
     medianMae: median(labeledOutcomes.map(o => o.mae)),

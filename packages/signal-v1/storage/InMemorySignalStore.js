@@ -10,6 +10,7 @@ class InMemorySignalStore {
     this.tokens = new Map();
     this.sources = new Map();
     this.clusters = new Map();
+    this.clusterRelationships = new Map();
     this.clusterMembers = new Map();
     this.events = [];
     this.snapshots = [];

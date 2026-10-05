@@ -87,7 +87,11 @@ function clusterRelationshipForPair(store, clusterA, clusterB) {
   return CLUSTER_RELATIONSHIP.UNKNOWN;
 }
 
-function gatherCallerChain(store, tokenAddress, evaluatedAt) {
+function gatherCallerChain(store, tokenAddress, evaluatedAt, options = {}) {
+  const config = {
+    ...DEFAULT_RESEARCH_CONFIG,
+    ...(options.strictClusterIndependence ? { strictClusterIndependence: true } : {}),
+  };
   const evaluatedMs = new Date(evaluatedAt).getTime();
   const events = store
     .getEventsForToken(tokenAddress, { maxOccurredAt: evaluatedAt })
@@ -118,7 +122,7 @@ function gatherCallerChain(store, tokenAddress, evaluatedAt) {
     }
   }
 
-  const conv = gatherIndependentConvergence(store, tokenAddress, evaluatedAt, DEFAULT_RESEARCH_CONFIG);
+  const conv = gatherIndependentConvergence(store, tokenAddress, evaluatedAt, config);
   const triggered = conv.independentClusterCount >= DEFAULT_RESEARCH_CONFIG.minIndependentClusters;
 
   return { chain, first, second, conv, triggered };
@@ -142,9 +146,13 @@ function outcomeForLayer(store, tokenAddress, observationType, delaySeconds) {
  * @param {string} cohortId
  * @param {number} [delaySeconds]
  */
-function buildConvergenceAuditRows(store, cohortId, delaySeconds = 60) {
+function buildConvergenceAuditRows(store, cohortId, delaySeconds = 60, options = {}) {
   const members = store.getCohortMembers(cohortId);
   const rows = [];
+  const strict =
+    options.strictClusterIndependence ||
+    options.dataClass === 'EMPIRICAL' ||
+    store.researchCohorts?.get?.(cohortId)?.dataClass === 'EMPIRICAL';
 
   for (const member of members) {
     const selectionCategory =
@@ -166,7 +174,8 @@ function buildConvergenceAuditRows(store, cohortId, delaySeconds = 60) {
     const { first, second, conv, triggered } = gatherCallerChain(
       store,
       member.tokenAddress,
-      evalAt
+      evalAt,
+      { strictClusterIndependence: strict }
     );
 
     const deltaMinutes =

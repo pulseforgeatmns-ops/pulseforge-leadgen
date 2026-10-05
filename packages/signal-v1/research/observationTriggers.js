@@ -5,6 +5,10 @@ const { DEFAULT_RESEARCH_CONFIG } = require('../config/defaultConfig');
 const { getSourceQualityAsOf } = require('./sourceQuality');
 const { getWalletQualityAsOf } = require('./walletQuality');
 const { evaluateStructureGate } = require('./structureGate');
+const {
+  getClusterPairRelationship,
+  CLUSTER_RELATIONSHIP,
+} = require('./clusterRelationships');
 
 const CALLER_EVENT_TYPES = new Set(['CALL', 'TOKEN_MENTION']);
 const BUY_TYPES = new Set(['WALLET_BUY', 'WHALE_BUY', 'DEV_BUY']);
@@ -49,18 +53,17 @@ function hasMaterialDistribution(store, tokenAddress, beforeMs) {
 
 function gatherIndependentConvergence(store, tokenAddress, evaluatedAt, config) {
   const cfg = { ...DEFAULT_RESEARCH_CONFIG, ...config };
+  if (cfg.strictClusterIndependence) {
+    return gatherStrictProvenIndependentConvergence(store, tokenAddress, evaluatedAt, cfg);
+  }
+  return gatherDistinctClusterConvergence(store, tokenAddress, evaluatedAt, cfg);
+}
+
+function gatherDistinctClusterConvergence(store, tokenAddress, evaluatedAt, cfg) {
   const evaluatedMs = new Date(evaluatedAt).getTime();
   const windowStartMs = evaluatedMs - cfg.independentConvergenceWindowMinutes * 60 * 1000;
 
-  const events = store
-    .getEventsForToken(tokenAddress, { maxOccurredAt: evaluatedAt })
-    .filter(
-      e =>
-        CALL_EVENT_TYPES.has(e.eventType) &&
-        e.occurredAt.getTime() >= windowStartMs &&
-        e.occurredAt.getTime() <= evaluatedMs &&
-        isValidCallerEvent(e)
-    );
+  const events = callerEventsInWindow(store, tokenAddress, evaluatedAt, windowStartMs, evaluatedMs);
 
   const rawSourceIds = [];
   const clusterFirst = new Map();
@@ -90,15 +93,109 @@ function gatherIndependentConvergence(store, tokenAddress, evaluatedAt, config) 
       : null;
 
   return {
+    mode: 'distinct_clusters_exploratory',
     rawSourceCount: rawSourceIds.length,
     uniqueSourceCount: new Set(rawSourceIds.filter(Boolean)).size,
     independentClusterCount,
+    provenIndependentClusterCount: independentClusterCount,
     firstCallTimestamp: firstCallMs ? new Date(firstCallMs) : null,
     latestQualifyingCallTimestamp: latestQualifyingMs ? new Date(latestQualifyingMs) : null,
     convergenceDurationMinutes,
     evidenceEventIds,
     clusterIds: [...clusterFirst.keys()],
+    relationshipEvidence: [],
   };
+}
+
+function gatherStrictProvenIndependentConvergence(store, tokenAddress, evaluatedAt, cfg) {
+  const evaluatedMs = new Date(evaluatedAt).getTime();
+  const windowStartMs = evaluatedMs - cfg.independentConvergenceWindowMinutes * 60 * 1000;
+  const events = callerEventsInWindow(store, tokenAddress, evaluatedAt, windowStartMs, evaluatedMs);
+
+  const chain = events.map(event => ({
+    event,
+    clusterId: clusterIdForEvent(store, event),
+    sourceId: event.sourceId,
+  }));
+
+  let first = chain[0] || null;
+  let second = null;
+  let relationshipEvidence = null;
+
+  if (first) {
+    for (let i = 1; i < chain.length; i += 1) {
+      const candidate = chain[i];
+      if (candidate.clusterId === first.clusterId) continue;
+      const rel = getClusterPairRelationship(store, first.clusterId, candidate.clusterId);
+      if (rel === CLUSTER_RELATIONSHIP.INDEPENDENT) {
+        second = candidate;
+        relationshipEvidence = {
+          relationship: rel,
+          clusterA: first.clusterId,
+          clusterB: candidate.clusterId,
+        };
+        break;
+      }
+    }
+  }
+
+  const provenClusters = [];
+  if (first) provenClusters.push(first.clusterId);
+  if (second) provenClusters.push(second.clusterId);
+
+  const firstCallMs = first?.event.occurredAt.getTime() ?? null;
+  const latestQualifyingMs = second?.event.occurredAt.getTime() ?? firstCallMs;
+  const convergenceDurationMinutes =
+    firstCallMs != null && latestQualifyingMs != null
+      ? (latestQualifyingMs - firstCallMs) / 60000
+      : null;
+
+  const evidenceEventIds = chain
+    .filter(row => provenClusters.includes(row.clusterId))
+    .map(row => row.event.id);
+
+  return {
+    mode: 'proven_independent_strict',
+    rawSourceCount: chain.length,
+    uniqueSourceCount: new Set(chain.map(c => c.sourceId).filter(Boolean)).size,
+    independentClusterCount: provenClusters.length,
+    provenIndependentClusterCount: provenClusters.length,
+    firstCallTimestamp: firstCallMs ? new Date(firstCallMs) : null,
+    latestQualifyingCallTimestamp: latestQualifyingMs ? new Date(latestQualifyingMs) : null,
+    convergenceDurationMinutes,
+    evidenceEventIds,
+    clusterIds: provenClusters,
+    relationshipEvidence,
+    callerChain: {
+      first: first
+        ? {
+            sourceId: first.sourceId,
+            clusterId: first.clusterId,
+            occurredAt: first.event.occurredAt.toISOString(),
+          }
+        : null,
+      second: second
+        ? {
+            sourceId: second.sourceId,
+            clusterId: second.clusterId,
+            occurredAt: second.event.occurredAt.toISOString(),
+          }
+        : null,
+    },
+  };
+}
+
+function callerEventsInWindow(store, tokenAddress, evaluatedAt, windowStartMs, evaluatedMs) {
+  return store
+    .getEventsForToken(tokenAddress, { maxOccurredAt: evaluatedAt })
+    .filter(
+      e =>
+        CALL_EVENT_TYPES.has(e.eventType) &&
+        e.occurredAt.getTime() >= windowStartMs &&
+        e.occurredAt.getTime() <= evaluatedMs &&
+        isValidCallerEvent(e)
+    )
+    .sort((a, b) => a.occurredAt - b.occurredAt || a.id.localeCompare(b.id));
 }
 
 function evaluateFirstCaller(store, tokenAddress, evaluatedAt) {
@@ -136,6 +233,10 @@ function evaluateIndependentConvergence(store, tokenAddress, evaluatedAt, config
       rawSourceCount: conv.rawSourceCount,
       uniqueSourceCount: conv.uniqueSourceCount,
       independentClusterCount: conv.independentClusterCount,
+      provenIndependentClusterCount: conv.provenIndependentClusterCount,
+      convergenceMode: conv.mode,
+      relationshipEvidence: conv.relationshipEvidence,
+      callerChain: conv.callerChain,
       firstCallTimestamp: conv.firstCallTimestamp?.toISOString(),
       latestQualifyingCallTimestamp: conv.latestQualifyingCallTimestamp?.toISOString(),
       convergenceDurationMinutes: conv.convergenceDurationMinutes,
@@ -342,6 +443,9 @@ module.exports = {
   evaluateAmplifierArrival,
   evaluateSignalEntry,
   gatherIndependentConvergence,
+  gatherStrictProvenIndependentConvergence,
+  gatherDistinctClusterConvergence,
   isValidCallerEvent,
   clusterIdForEvent,
+  CLUSTER_RELATIONSHIP,
 };

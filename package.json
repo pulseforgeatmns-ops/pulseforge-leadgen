@@ -21,6 +21,7 @@
     "signal:evaluate-cohort": "node scripts/signalEvaluateCohort.js",
     "signal:validation-cohort-001": "node scripts/signalValidationCohort001.js",
     "signal:convergence-audit": "node scripts/signalConvergenceIntegrityAudit.js",
+    "signal:validation-cohort-003": "node scripts/signalValidationCohort003.js",
     "test:replay": "node --test packages/replay/tests/*.test.js",
     "test:laboratory": "node --test packages/laboratory/tests/*.test.js",
     "test:eql": "node --test packages/eql/tests/*.test.js",

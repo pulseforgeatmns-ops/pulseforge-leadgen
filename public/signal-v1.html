@@ -25,6 +25,10 @@
     th, td { border-bottom:1px solid #2a2f3a; padding:6px 4px; text-align:right; }
     th:first-child, td:first-child { text-align:left; }
     .obs-row { border-left:3px solid var(--accent); padding-left:8px; margin:8px 0; }
+    .cohort-label { font-weight:700; letter-spacing:0.04em; }
+    .synthetic { color:#ffb74d; }
+    .empirical { color:#81c995; }
+    #empiricalPanel { margin-top:12px; font-size:12px; }
   </style>
 </head>
 <body>
@@ -65,6 +69,7 @@
         <option value="300">5 min</option>
       </select>
       <button id="cohortEvalBtn">Refresh cohort table</button>
+      <div id="empiricalPanel" class="muted"></div>
     </section>
     <section class="panel">
       <h2>Strategy <span id="stateBadge" class="badge">—</span></h2>
@@ -86,7 +91,7 @@
         <table id="cohortTable">
           <thead>
             <tr>
-              <th>Observation layer</th><th>N</th><th>PASS</th><th>FAIL</th><th>Precision</th><th>Median MFE</th><th>Median MAE</th>
+              <th>Observation layer</th><th>N</th><th>PASS</th><th>FAIL</th><th>Precision</th><th>Wilson 95%</th><th>Median MFE</th><th>Median MAE</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -167,8 +172,12 @@
 
       const cohortRes = await fetch('/api/v1/signal/research/cohorts');
       const cohortData = await cohortRes.json();
+      const dataClassLabel = c => {
+        const dc = c.dataClass || c.metadata?.dataClass || (c.id?.includes('003') ? 'EMPIRICAL' : 'SYNTHETIC');
+        return `${c.name} [${dc}]`;
+      };
       cohortSelect.innerHTML = (cohortData.cohorts || [])
-        .map(c => `<option value="${c.id}">${c.name}</option>`)
+        .map(c => `<option value="${c.id}">${dataClassLabel(c)}</option>`)
         .join('');
 
       if (casesWithAddress[0]) await refresh(casesWithAddress[0].tokenAddress);

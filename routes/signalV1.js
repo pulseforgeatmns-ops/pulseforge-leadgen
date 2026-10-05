@@ -163,7 +163,12 @@ router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResear
     noStore(res);
     return res.json(evaluation);
   } catch (err) {
-    return res.status(400).json({ error: 'evaluation_failed', message: String(err.message) });
+    const status = err.name === 'EmpiricalValidationError' ? 422 : 400;
+    return res.status(status).json({
+      error: 'evaluation_failed',
+      message: String(err.message),
+      details: err.details || null,
+    });
   }
 });
 
@@ -178,7 +183,12 @@ router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation/export', requir
     noStore(res);
     return res.json(artifact);
   } catch (err) {
-    return res.status(400).json({ error: 'export_failed', message: String(err.message) });
+    const status = err.name === 'EmpiricalValidationError' ? 422 : 400;
+    return res.status(status).json({
+      error: 'export_failed',
+      message: String(err.message),
+      details: err.details || null,
+    });
   }
 });
 

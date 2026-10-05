@@ -57,6 +57,15 @@ async function backfillMarketHistory(store, candidate, raw, options = {}) {
     return { window, ...result, source: 'live_provider' };
   }
 
+  if (options.empirical === true || options.allowFixtureFallback === false) {
+    return {
+      window,
+      historicalDataStatus: 'UNAVAILABLE',
+      source: 'none',
+      note: 'Empirical cohort — procedural fixture market paths are forbidden',
+    };
+  }
+
   return {
     window,
     historicalDataStatus: 'UNAVAILABLE',
