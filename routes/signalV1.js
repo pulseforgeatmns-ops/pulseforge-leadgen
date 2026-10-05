@@ -7,9 +7,11 @@
 const express = require('express');
 const path = require('path');
 const { requireAuth, requireRole } = require('../middleware/auth');
-const { SignalService } = require('../packages/signal-v1');
+const { SignalService, createShadowModeServiceFromStore } = require('../packages/signal-v1');
 const { InMemorySignalStore } = require('../packages/signal-v1/storage/InMemorySignalStore');
 const { createSignalStore } = require('../packages/signal-v1/storage/createSignalStore');
+const { GeckoTerminalMarketDataProvider } = require('../packages/signal-v1/providers/GeckoTerminalMarketDataProvider');
+const { runShadowSchedulerTick } = require('../packages/signal-v1/prospective/shadowScheduler');
 const { seedFrontRunnersFixtures } = require('../packages/signal-v1/fixtures/seedFixtures');
 const { resolveResearchWindow } = require('../packages/signal-v1/fixtures/researchWindows');
 const { HISTORICAL_DATA_UNAVAILABLE } = require('../packages/signal-v1/ingestion/ingestHistoricalMarketData');
@@ -19,21 +21,41 @@ const requireResearch = [requireAuth, requireRole('admin', 'manager')];
 
 /** @type {Promise<SignalService>|null} */
 let servicePromise = null;
+/** @type {Promise<import('../packages/signal-v1/prospective/ShadowModeService').ShadowModeService>|null} */
+let shadowPromise = null;
+
+async function getStore() {
+  if (process.env.DATABASE_URL) {
+    const pool = require('../db');
+    return createSignalStore(pool, { seedFixtures: true });
+  }
+  const store = new InMemorySignalStore();
+  seedFrontRunnersFixtures(store);
+  return store;
+}
 
 async function getService() {
   if (!servicePromise) {
     servicePromise = (async () => {
-      if (process.env.DATABASE_URL) {
-        const pool = require('../db');
-        const store = await createSignalStore(pool, { seedFixtures: true });
-        return new SignalService(store, { seedFixtures: false });
-      }
-      const store = new InMemorySignalStore();
-      seedFrontRunnersFixtures(store);
+      const store = await getStore();
       return new SignalService(store, { seedFixtures: false });
     })();
   }
   return servicePromise;
+}
+
+async function getShadowService() {
+  if (!shadowPromise) {
+    shadowPromise = (async () => {
+      const store = await getStore();
+      const marketProvider = new GeckoTerminalMarketDataProvider();
+      return createShadowModeServiceFromStore(store, {
+        marketProvider,
+        providerVersions: { market: marketProvider.providerId },
+      });
+    })();
+  }
+  return shadowPromise;
 }
 
 function noStore(res) {
@@ -109,26 +131,64 @@ router.post('/api/v1/signal/tokens/:tokenAddress/evaluate', requireResearch, asy
 router.get('/api/v1/signal/research/cohorts', requireResearch, async (req, res) => {
   const service = await getService();
   noStore(res);
-  return res.json({ cohorts: service.listResearchCohorts() });
+  const cohorts = service.listResearchCohorts();
+  const resolved = cohorts && typeof cohorts.then === 'function' ? await cohorts : cohorts;
+  return res.json({ cohorts: resolved });
 });
 
 router.get('/api/v1/signal/research/cohorts/:cohortId', requireResearch, async (req, res) => {
   const service = await getService();
-  const cohort = service.getResearchCohort(req.params.cohortId);
+  const cohort = await service.getResearchCohort(req.params.cohortId);
   if (!cohort) return res.status(404).json({ error: 'cohort_not_found' });
   noStore(res);
   return res.json({ cohort });
 });
 
 router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation', requireResearch, async (req, res) => {
-  const service = await getService();
+  const cohortId = req.params.cohortId;
   const delay = Number(req.query.executionDelaySeconds || 60);
   try {
-    const evaluation = service.evaluateResearchCohort(req.params.cohortId, delay);
+    if (cohortId === 'cohort-signal-v1-prospective-001') {
+      const shadow = await getShadowService();
+      const evaluation = await shadow.evaluateProspectiveCohort(delay, {
+        skipEmpiricalGuard: req.query.skipGuard === 'true',
+      });
+      noStore(res);
+      return res.json(evaluation);
+    }
+    const service = await getService();
+    const evaluation = await service.evaluateResearchCohort(cohortId, delay, {
+      replayMembers: req.query.replayMembers !== 'false',
+    });
     noStore(res);
     return res.json(evaluation);
   } catch (err) {
-    return res.status(400).json({ error: 'evaluation_failed', message: String(err.message) });
+    const status = err.name === 'EmpiricalValidationError' ? 422 : 400;
+    return res.status(status).json({
+      error: 'evaluation_failed',
+      message: String(err.message),
+      details: err.details || null,
+    });
+  }
+});
+
+router.get('/api/v1/signal/research/cohorts/:cohortId/evaluation/export', requireResearch, async (req, res) => {
+  const service = await getService();
+  const delay = Number(req.query.executionDelaySeconds || 60);
+  try {
+    const artifact = await service.exportResearchCohortEvaluation(req.params.cohortId, {
+      executionDelaySeconds: delay,
+      replayMembers: false,
+    });
+    noStore(res);
+    return res.json(artifact);
+  } catch (err) {
+    const status = err.name === 'EmpiricalValidationError' ? 422 : 400;
+    return res.status(status).json({
+      error: 'export_failed',
+      message: String(err.message),
+      details: err.details || null,
+    });
   }
 });
 
@@ -137,6 +197,39 @@ router.get('/api/v1/signal/tokens/:tokenAddress/research-observations', requireR
   const observations = service.getTokenResearchObservations(req.params.tokenAddress);
   noStore(res);
   return res.json({ observations });
+});
+
+router.get('/api/v1/signal/shadow/dashboard', requireResearch, async (req, res) => {
+  const shadow = await getShadowService();
+  noStore(res);
+  return res.json(shadow.getShadowDashboard());
+});
+
+router.get('/api/v1/signal/shadow/sources', requireResearch, async (req, res) => {
+  const shadow = await getShadowService();
+  noStore(res);
+  return res.json({ sources: shadow.listSourceRegistry() });
+});
+
+router.post('/api/v1/signal/shadow/unblind', requireResearch, async (req, res) => {
+  const shadow = await getShadowService();
+  try {
+    const cohort = await shadow.explicitUnblind({
+      unblindedBy: req.session?.user?.email || 'operator',
+      evaluationVersion: req.body?.evaluationVersion || 'prospective-001-v1',
+    });
+    noStore(res);
+    return res.json({ cohort });
+  } catch (err) {
+    return res.status(400).json({ error: 'unblind_failed', message: String(err.message) });
+  }
+});
+
+router.post('/api/v1/signal/shadow/tick', requireResearch, async (req, res) => {
+  const shadow = await getShadowService();
+  const result = await runShadowSchedulerTick(shadow, req.body || {});
+  noStore(res);
+  return res.json(result);
 });
 
 router.post('/api/v1/signal/tokens/:tokenAddress/replay', requireResearch, async (req, res) => {

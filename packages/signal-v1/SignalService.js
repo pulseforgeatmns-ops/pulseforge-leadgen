@@ -37,7 +37,21 @@ const DEFAULT_COHORT_PRICE_PATHS = {
 const { RESEARCH_CASES } = require('./fixtures/frontRunnersCases');
 const { PILOT_COHORT_ID } = require('./fixtures/seedResearchCohort');
 const { evaluateCohortLayers } = require('./research/cohortEvaluation');
+const { buildCohortEvaluationArtifact } = require('./research/cohortEvaluationExport');
+const { hydrateCohortResearchCache } = require('./research/researchStoreCache');
+const {
+  buildValidationCohort001,
+  buildValidationCohort002,
+} = require('./acquisition/researchAcquisitionPipeline');
+const { buildValidationCohort003 } = require('./acquisition/empirical/buildValidationCohort003');
+const { isAsyncStore } = require('./storage/storeUtils');
 const { RESEARCH_DEFINITION_VERSION } = require('./types');
+const {
+  VALIDATION_COHORT_001_ID,
+  VALIDATION_COHORT_002_ID,
+  VALIDATION_COHORT_003_ID,
+} = require('./acquisition/candidateTypes');
+const { resolveCohortDataClass, isEmpiricalDataClass } = require('./research/dataClass');
 
 class SignalService {
   /**
@@ -225,12 +239,17 @@ class SignalService {
     return this.store.listResearchCohorts();
   }
 
-  getResearchCohort(cohortId) {
-    const cohort = this.store.researchCohorts.get(cohortId);
+  async getResearchCohort(cohortId) {
+    let cohort = this.store.researchCohorts?.get?.(cohortId);
+    if (!cohort && this.store.listResearchCohorts) {
+      const list = await callStore(this.store, 'listResearchCohorts');
+      cohort = list.find(c => c.id === cohortId);
+    }
     if (!cohort) return null;
+    const members = await callStore(this.store, 'getCohortMembers', cohortId);
     return {
       ...cohort,
-      members: this.store.getCohortMembers(cohortId),
+      members,
     };
   }
 
@@ -242,20 +261,61 @@ class SignalService {
     }));
   }
 
-  evaluateResearchCohort(cohortId, executionDelaySeconds = 60, options = {}) {
+  async evaluateResearchCohort(cohortId, executionDelaySeconds = 60, options = {}) {
+    const cohort = this.store.researchCohorts?.get?.(cohortId);
+    const dataClass = resolveCohortDataClass(cohortId, cohort);
     if (options.replayMembers !== false) {
-      this.replayCohortMembers(
+      if (isEmpiricalDataClass(dataClass)) {
+        throw new Error(
+          'EMPIRICAL cohort evaluation cannot replay members with procedural price paths'
+        );
+      }
+      await this.replayCohortMembers(
         cohortId,
         options.pricePathsByToken || DEFAULT_COHORT_PRICE_PATHS
       );
     }
-    return evaluateCohortLayers(this.store, cohortId, executionDelaySeconds);
+    if (isAsyncStore(this.store)) {
+      await hydrateCohortResearchCache(this.store, cohortId);
+    }
+    return evaluateCohortLayers(this.store, cohortId, executionDelaySeconds, options);
   }
 
-  replayCohortMembers(cohortId, pricePathsByToken = {}) {
-    const members = this.store.getCohortMembers(cohortId);
+  async exportResearchCohortEvaluation(cohortId, options = {}) {
+    if (isAsyncStore(this.store)) {
+      await hydrateCohortResearchCache(this.store, cohortId);
+    }
+    return buildCohortEvaluationArtifact(this.store, cohortId, options);
+  }
+
+  async buildValidationCohort001(options = {}) {
+    return buildValidationCohort001(this.store, options);
+  }
+
+  async buildValidationCohort002(options = {}) {
+    return buildValidationCohort002(this.store, options);
+  }
+
+  async buildValidationCohort003(options = {}) {
+    return buildValidationCohort003(this.store, options);
+  }
+
+  getValidationCohort001Id() {
+    return VALIDATION_COHORT_001_ID;
+  }
+
+  getValidationCohort002Id() {
+    return VALIDATION_COHORT_002_ID;
+  }
+
+  getValidationCohort003Id() {
+    return VALIDATION_COHORT_003_ID;
+  }
+
+  async replayCohortMembers(cohortId, pricePathsByToken = {}) {
+    const members = await callStore(this.store, 'getCohortMembers', cohortId);
     for (const member of members) {
-      replayToken(this.store, {
+      await replayToken(this.store, {
         tokenAddress: member.tokenAddress,
         pricePath: pricePathsByToken[member.tokenAddress] || [],
       });

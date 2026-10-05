@@ -10,6 +10,7 @@ class InMemorySignalStore {
     this.tokens = new Map();
     this.sources = new Map();
     this.clusters = new Map();
+    this.clusterRelationships = new Map();
     this.clusterMembers = new Map();
     this.events = [];
     this.snapshots = [];
@@ -24,9 +25,15 @@ class InMemorySignalStore {
     this.researchObservationOutcomes = [];
     this.researchCohorts = new Map();
     this.researchCohortMembers = [];
+    this.researchCandidates = new Map();
     this.walletPerformance = new Map();
     this.marketObservations = [];
     this.marketIngestionStats = [];
+    this.rawCallerEvidence = [];
+    this.prospectiveJobs = [];
+    this.sourceRegistry = new Map();
+    this.collectorHealth = {};
+    this.tokenResearchEpisodes = new Map();
   }
 
   upsertToken(token) {
@@ -285,6 +292,10 @@ class InMemorySignalStore {
     return row;
   }
 
+  getResearchObservationOutcomes(observationId) {
+    return this.researchObservationOutcomes.filter(o => o.observationId === observationId);
+  }
+
   insertResearchObservationOutcome(outcome) {
     const existing = this.researchObservationOutcomes.find(
       o =>
@@ -305,12 +316,49 @@ class InMemorySignalStore {
     this.researchCohorts.set(cohort.id, {
       ...this.researchCohorts.get(cohort.id),
       ...cohort,
+      frozenAt: cohort.frozenAt ? toDate(cohort.frozenAt) : this.researchCohorts.get(cohort.id)?.frozenAt || null,
+      selectionVersion: cohort.selectionVersion || this.researchCohorts.get(cohort.id)?.selectionVersion || null,
       createdAt: toDate(cohort.createdAt || new Date()),
     });
     return this.researchCohorts.get(cohort.id);
   }
 
+  upsertResearchCandidate(candidate) {
+    this.researchCandidates.set(candidate.id, {
+      ...candidate,
+      earliestKnownCallAt: candidate.earliestKnownCallAt
+        ? toDate(candidate.earliestKnownCallAt)
+        : null,
+      updatedAt: new Date(),
+      createdAt: this.researchCandidates.get(candidate.id)?.createdAt || new Date(),
+    });
+    return this.researchCandidates.get(candidate.id);
+  }
+
+  updateResearchCandidateStatus(id, status, exclusionReason = null) {
+    const row = this.researchCandidates.get(id);
+    if (!row) return null;
+    row.status = status;
+    if (exclusionReason != null) row.exclusionReason = exclusionReason;
+    row.updatedAt = new Date();
+    this.researchCandidates.set(id, row);
+    return row;
+  }
+
+  listResearchCandidates({ status, tokenAddress } = {}) {
+    let list = [...this.researchCandidates.values()];
+    if (status) list = list.filter(c => c.status === status);
+    if (tokenAddress) list = list.filter(c => c.tokenAddress === tokenAddress);
+    return list.sort((a, b) => a.tokenAddress.localeCompare(b.tokenAddress));
+  }
+
   addCohortMember(member) {
+    const cohort = this.researchCohorts.get(member.cohortId);
+    if (cohort?.frozenAt) {
+      throw new Error(
+        `Cohort ${member.cohortId} is frozen at ${cohort.frozenAt.toISOString()}; create a new cohort version to mutate membership`
+      );
+    }
     const existing = this.researchCohortMembers.find(
       m => m.cohortId === member.cohortId && m.tokenAddress === member.tokenAddress
     );
@@ -331,6 +379,57 @@ class InMemorySignalStore {
     return [...this.researchCohorts.values()].sort(
       (a, b) => toDate(b.createdAt) - toDate(a.createdAt)
     );
+  }
+
+  insertRawCallerEvidence(row) {
+    const key = `${row.sourceId}|${row.externalMessageId}|${row.extractedCa || 'none'}`;
+    const existing = this.rawCallerEvidence.find(
+      r => `${r.sourceId}|${r.externalMessageId}|${r.extractedCa || 'none'}` === key
+    );
+    if (existing) return { row: existing, duplicate: true };
+    const stored = {
+      id: row.id || randomUUID(),
+      ...row,
+      occurredAt: toDate(row.occurredAt),
+      ingestedAt: toDate(row.ingestedAt || new Date()),
+    };
+    this.rawCallerEvidence.push(stored);
+    return { row: stored, duplicate: false };
+  }
+
+  insertProspectiveJob(job) {
+    const existing = this.prospectiveJobs.find(j => j.id === job.id);
+    if (existing) return existing;
+    const row = {
+      ...job,
+      runAfter: toDate(job.runAfter),
+      createdAt: toDate(job.createdAt || new Date()),
+      updatedAt: toDate(job.updatedAt || new Date()),
+      completedAt: job.completedAt ? toDate(job.completedAt) : null,
+    };
+    this.prospectiveJobs.push(row);
+    return row;
+  }
+
+  loadProspectiveJobs() {
+    return [...this.prospectiveJobs];
+  }
+
+  updateProspectiveJob(id, patch) {
+    const job = this.prospectiveJobs.find(j => j.id === id);
+    if (!job) return null;
+    Object.assign(job, patch);
+    job.updatedAt = new Date();
+    return job;
+  }
+
+  upsertSourceRegistryEntry(entry) {
+    this.sourceRegistry.set(entry.sourceId, { ...entry, updatedAt: toDate(entry.updatedAt || new Date()) });
+    return this.sourceRegistry.get(entry.sourceId);
+  }
+
+  listSourceRegistryEntries() {
+    return [...this.sourceRegistry.values()];
   }
 }
 

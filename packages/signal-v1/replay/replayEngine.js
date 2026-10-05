@@ -128,12 +128,13 @@ async function replayToken(store, input) {
       position: openPosition,
     });
 
-    const researchCreated = evaluateResearchObservationsAtStep(store, {
+    const researchCreated = await evaluateResearchObservationsAtStep(store, {
       tokenAddress,
       stepAt,
       snapshot,
       decisionState: decision.state,
-      pricePath: input.pricePath,
+      pricePath: input.pricePath || buildPricePathFromObservations(allObservations),
+      researchConfig: input.researchConfig,
     });
     if (researchCreated.length) {
       researchTimeline.push(

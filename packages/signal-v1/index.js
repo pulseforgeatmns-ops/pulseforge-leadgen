@@ -17,6 +17,15 @@ const types = require('./types');
 const historicalCoverage = require('./market/historicalCoverage');
 const { evaluateCohortLayers } = require('./research/cohortEvaluation');
 const { evaluateResearchObservationsAtStep } = require('./research/researchObservationEngine');
+const { ShadowModeService } = require('./prospective/ShadowModeService');
+const {
+  runShadowSchedulerTick,
+  startShadowScheduler,
+  createShadowModeServiceFromStore,
+} = require('./prospective/shadowScheduler');
+const { assertEmpiricalCohort } = require('./prospective/empiricalGuard');
+const { knowledgeAt } = require('./prospective/knowledgeClock');
+const prospectiveConstants = require('./prospective/constants');
 
 module.exports = {
   SignalService,
@@ -34,6 +43,13 @@ module.exports = {
   decideSignalState,
   evaluateCohortLayers,
   evaluateResearchObservationsAtStep,
+  ShadowModeService,
+  runShadowSchedulerTick,
+  startShadowScheduler,
+  createShadowModeServiceFromStore,
+  assertEmpiricalCohort,
+  knowledgeAt,
+  ...prospectiveConstants,
   ...types,
   ...historicalCoverage,
 };
