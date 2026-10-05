@@ -24,6 +24,7 @@ class InMemorySignalStore {
     this.researchObservationOutcomes = [];
     this.researchCohorts = new Map();
     this.researchCohortMembers = [];
+    this.researchCandidates = new Map();
     this.walletPerformance = new Map();
     this.marketObservations = [];
     this.marketIngestionStats = [];
@@ -285,6 +286,10 @@ class InMemorySignalStore {
     return row;
   }
 
+  getResearchObservationOutcomes(observationId) {
+    return this.researchObservationOutcomes.filter(o => o.observationId === observationId);
+  }
+
   insertResearchObservationOutcome(outcome) {
     const existing = this.researchObservationOutcomes.find(
       o =>
@@ -305,12 +310,49 @@ class InMemorySignalStore {
     this.researchCohorts.set(cohort.id, {
       ...this.researchCohorts.get(cohort.id),
       ...cohort,
+      frozenAt: cohort.frozenAt ? toDate(cohort.frozenAt) : this.researchCohorts.get(cohort.id)?.frozenAt || null,
+      selectionVersion: cohort.selectionVersion || this.researchCohorts.get(cohort.id)?.selectionVersion || null,
       createdAt: toDate(cohort.createdAt || new Date()),
     });
     return this.researchCohorts.get(cohort.id);
   }
 
+  upsertResearchCandidate(candidate) {
+    this.researchCandidates.set(candidate.id, {
+      ...candidate,
+      earliestKnownCallAt: candidate.earliestKnownCallAt
+        ? toDate(candidate.earliestKnownCallAt)
+        : null,
+      updatedAt: new Date(),
+      createdAt: this.researchCandidates.get(candidate.id)?.createdAt || new Date(),
+    });
+    return this.researchCandidates.get(candidate.id);
+  }
+
+  updateResearchCandidateStatus(id, status, exclusionReason = null) {
+    const row = this.researchCandidates.get(id);
+    if (!row) return null;
+    row.status = status;
+    if (exclusionReason != null) row.exclusionReason = exclusionReason;
+    row.updatedAt = new Date();
+    this.researchCandidates.set(id, row);
+    return row;
+  }
+
+  listResearchCandidates({ status, tokenAddress } = {}) {
+    let list = [...this.researchCandidates.values()];
+    if (status) list = list.filter(c => c.status === status);
+    if (tokenAddress) list = list.filter(c => c.tokenAddress === tokenAddress);
+    return list.sort((a, b) => a.tokenAddress.localeCompare(b.tokenAddress));
+  }
+
   addCohortMember(member) {
+    const cohort = this.researchCohorts.get(member.cohortId);
+    if (cohort?.frozenAt) {
+      throw new Error(
+        `Cohort ${member.cohortId} is frozen at ${cohort.frozenAt.toISOString()}; create a new cohort version to mutate membership`
+      );
+    }
     const existing = this.researchCohortMembers.find(
       m => m.cohortId === member.cohortId && m.tokenAddress === member.tokenAddress
     );
