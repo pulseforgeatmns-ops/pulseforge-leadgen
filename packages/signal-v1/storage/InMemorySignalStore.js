@@ -28,6 +28,11 @@ class InMemorySignalStore {
     this.walletPerformance = new Map();
     this.marketObservations = [];
     this.marketIngestionStats = [];
+    this.rawCallerEvidence = [];
+    this.prospectiveJobs = [];
+    this.sourceRegistry = new Map();
+    this.collectorHealth = {};
+    this.tokenResearchEpisodes = new Map();
   }
 
   upsertToken(token) {
@@ -373,6 +378,57 @@ class InMemorySignalStore {
     return [...this.researchCohorts.values()].sort(
       (a, b) => toDate(b.createdAt) - toDate(a.createdAt)
     );
+  }
+
+  insertRawCallerEvidence(row) {
+    const key = `${row.sourceId}|${row.externalMessageId}|${row.extractedCa || 'none'}`;
+    const existing = this.rawCallerEvidence.find(
+      r => `${r.sourceId}|${r.externalMessageId}|${r.extractedCa || 'none'}` === key
+    );
+    if (existing) return { row: existing, duplicate: true };
+    const stored = {
+      id: row.id || randomUUID(),
+      ...row,
+      occurredAt: toDate(row.occurredAt),
+      ingestedAt: toDate(row.ingestedAt || new Date()),
+    };
+    this.rawCallerEvidence.push(stored);
+    return { row: stored, duplicate: false };
+  }
+
+  insertProspectiveJob(job) {
+    const existing = this.prospectiveJobs.find(j => j.id === job.id);
+    if (existing) return existing;
+    const row = {
+      ...job,
+      runAfter: toDate(job.runAfter),
+      createdAt: toDate(job.createdAt || new Date()),
+      updatedAt: toDate(job.updatedAt || new Date()),
+      completedAt: job.completedAt ? toDate(job.completedAt) : null,
+    };
+    this.prospectiveJobs.push(row);
+    return row;
+  }
+
+  loadProspectiveJobs() {
+    return [...this.prospectiveJobs];
+  }
+
+  updateProspectiveJob(id, patch) {
+    const job = this.prospectiveJobs.find(j => j.id === id);
+    if (!job) return null;
+    Object.assign(job, patch);
+    job.updatedAt = new Date();
+    return job;
+  }
+
+  upsertSourceRegistryEntry(entry) {
+    this.sourceRegistry.set(entry.sourceId, { ...entry, updatedAt: toDate(entry.updatedAt || new Date()) });
+    return this.sourceRegistry.get(entry.sourceId);
+  }
+
+  listSourceRegistryEntries() {
+    return [...this.sourceRegistry.values()];
   }
 }
 

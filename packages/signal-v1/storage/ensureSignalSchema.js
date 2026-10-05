@@ -17,6 +17,7 @@ async function ensureSignalSchema(pool) {
     '2026-10-04-signal-v1.sql',
     '2026-10-04-signal-v1-research.sql',
     '2026-10-04-signal-v1-research-candidates.sql',
+    '2026-10-05-signal-v1-prospective-shadow.sql',
   ]) {
     const sql = fs.readFileSync(path.join(baseDir, file), 'utf8');
     await pool.query(sql);

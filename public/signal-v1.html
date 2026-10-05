@@ -30,9 +30,24 @@
 <body>
   <header>
     <h1>Signal V1</h1>
-    <span class="muted">Paper-only · research layers (SIGNAL-V1-003)</span>
+    <span class="muted">Paper-only · research layers (SIGNAL-V1-003) · Shadow mode (SIGNAL-V1-006)</span>
   </header>
   <main>
+    <section class="panel" id="shadowPanel" style="grid-column: 1 / -1;">
+      <h2>Shadow Mode — PROSPECTIVE-001 <span class="badge" id="shadowBlindedBadge">BLINDED</span></h2>
+      <div class="muted">EMPIRICAL · live caller observation · RESEARCH / PAPER ONLY</div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-top:12px;">
+        <div><div class="muted">Progress</div><strong id="shadowProgress">—</strong></div>
+        <div><div class="muted">Collectors</div><strong id="shadowCollectors">—</strong></div>
+        <div><div class="muted">Calls today</div><strong id="shadowCalls">—</strong></div>
+        <div><div class="muted">Unique tokens</div><strong id="shadowTokens">—</strong></div>
+        <div><div class="muted">Pending 24h outcomes</div><strong id="shadowPending">—</strong></div>
+        <div><div class="muted">Median ingest latency</div><strong id="shadowLatency">—</strong></div>
+        <div><div class="muted">Market capture</div><strong id="shadowMarket">—</strong></div>
+        <div><div class="muted">Provenance contamination</div><strong id="shadowContam">0 required</strong></div>
+      </div>
+      <p class="muted" id="shadowPrecisionNote" style="margin-top:10px">Aggregate primary hypothesis precision hidden until unblinding (N=50).</p>
+    </section>
     <section class="panel">
       <h2>Token</h2>
       <select id="tokenSelect"></select>
@@ -115,6 +130,33 @@
       return Number(v).toFixed(3);
     }
 
+    async function loadShadowDashboard() {
+      try {
+        const res = await fetch('/api/v1/signal/shadow/dashboard');
+        const data = await res.json();
+        const p = data.progress || {};
+        document.getElementById('shadowProgress').textContent =
+          `${p.evaluableFirstCallerCount ?? 0} / ${p.targetSampleSize ?? 50} evaluable cases`;
+        document.getElementById('shadowBlindedBadge').textContent = data.blinded ? 'BLINDED' : 'UNBLINDED';
+        const collectors = Object.values(data.collectors || {});
+        const healthy = collectors.filter(c => c.available !== false).length;
+        document.getElementById('shadowCollectors').textContent =
+          collectors.length ? `${healthy}/${collectors.length} healthy` : '—';
+        const q = data.dataQuality || {};
+        document.getElementById('shadowCalls').textContent = q.callsIngested ?? '—';
+        document.getElementById('shadowTokens').textContent = q.uniqueTokens ?? '—';
+        document.getElementById('shadowPending').textContent = q.pendingOutcomes24h ?? '—';
+        document.getElementById('shadowLatency').textContent =
+          q.medianIngestionLatencyMs != null ? `${Math.round(q.medianIngestionLatencyMs)} ms` : '—';
+        document.getElementById('shadowMarket').textContent =
+          q.marketCaptureSuccessRate != null ? fmtPct(q.marketCaptureSuccessRate) : '—';
+        document.getElementById('shadowContam').textContent = String(q.provenanceContamination ?? 0);
+        document.getElementById('shadowPrecisionNote').style.display = data.blinded ? 'block' : 'none';
+      } catch {
+        /* shadow panel optional until cohort started */
+      }
+    }
+
     async function loadCases() {
       const res = await fetch('/api/v1/signal/research-cases');
       const data = await res.json();
@@ -166,15 +208,27 @@
       const res = await fetch(`/api/v1/signal/research/cohorts/${encodeURIComponent(cohortId)}/evaluation?executionDelaySeconds=${delay}`);
       const data = await res.json();
       const tbody = document.querySelector('#cohortTable tbody');
-      tbody.innerHTML = (data.layers || []).map(row => `<tr>
+      const hidePrecision =
+        cohortId === 'cohort-signal-v1-prospective-001' && data.blinded === true;
+      tbody.innerHTML = (data.layers || []).map(row => {
+        const blindLayer =
+          hidePrecision &&
+          (row.observationType === 'FIRST_CALLER' || row.observationType === 'INDEPENDENT_CONVERGENCE');
+        const precisionCell = blindLayer
+          ? 'BLINDED'
+          : row.precision != null
+            ? fmtPct(row.precision)
+            : '—';
+        return `<tr>
         <td>${row.observationLayer}</td>
         <td>${row.N ?? 0}</td>
         <td>${row.PASS ?? 0}</td>
         <td>${row.FAIL ?? 0}</td>
-        <td>${row.precision != null ? fmtPct(row.precision) : '—'}</td>
+        <td>${precisionCell}</td>
         <td>${fmtPct(row.medianMfe)}</td>
         <td>${fmtPct(row.medianMae)}</td>
-      </tr>`).join('');
+      </tr>`;
+      }).join('');
     }
 
     async function refresh(tokenAddress) {
@@ -312,6 +366,8 @@
     tokenSelect.onchange = () => refresh(tokenSelect.value);
     cohortSelect.onchange = refreshCohortTable;
 
+    loadShadowDashboard();
+    setInterval(loadShadowDashboard, 60000);
     loadCases().catch(err => {
       document.body.insertAdjacentHTML('beforeend', `<pre class="risk">${err}</pre>`);
     });

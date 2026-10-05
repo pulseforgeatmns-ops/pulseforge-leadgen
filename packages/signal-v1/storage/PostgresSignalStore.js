@@ -1106,6 +1106,177 @@ function mapResearchObservationRow(row) {
   };
 }
 
+PostgresSignalStore.prototype.insertRawCallerEvidence = async function insertRawCallerEvidence(row) {
+  const res = await this.pool.query(
+    `INSERT INTO signal_raw_caller_evidence (
+      id, provider, collector_id, source_id, external_message_id, occurred_at, ingested_at,
+      raw_reference, raw_text, extracted_ca, parser_version, token_address, provenance
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+    ON CONFLICT (source_id, external_message_id, extracted_ca) DO NOTHING
+    RETURNING *`,
+    [
+      row.id,
+      row.provider,
+      row.collectorId,
+      row.sourceId,
+      row.externalMessageId,
+      toDate(row.occurredAt),
+      toDate(row.ingestedAt || new Date()),
+      row.rawReference || null,
+      row.rawText || null,
+      row.extractedCa || null,
+      row.parserVersion,
+      row.tokenAddress || null,
+      JSON.stringify(row.provenance || {}),
+    ]
+  );
+  if (!res.rows[0]) {
+    const existing = await this.pool.query(
+      `SELECT * FROM signal_raw_caller_evidence
+       WHERE source_id = $1 AND external_message_id = $2 AND extracted_ca IS NOT DISTINCT FROM $3`,
+      [row.sourceId, row.externalMessageId, row.extractedCa || null]
+    );
+    return { row: mapRawEvidenceRow(existing.rows[0]), duplicate: true };
+  }
+  return { row: mapRawEvidenceRow(res.rows[0]), duplicate: false };
+};
+
+PostgresSignalStore.prototype.insertProspectiveJob = async function insertProspectiveJob(job) {
+  await this.pool.query(
+    `INSERT INTO signal_prospective_research_jobs (
+      id, token_address, observation_id, job_type, status, run_after, target_delay_seconds, payload
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+    ON CONFLICT (id) DO NOTHING`,
+    [
+      job.id,
+      job.tokenAddress,
+      job.observationId,
+      job.jobType,
+      job.status,
+      toDate(job.runAfter),
+      job.targetDelaySeconds ?? null,
+      JSON.stringify(job.payload || {}),
+    ]
+  );
+  return job;
+};
+
+PostgresSignalStore.prototype.loadProspectiveJobs = async function loadProspectiveJobs() {
+  const res = await this.pool.query(
+    `SELECT * FROM signal_prospective_research_jobs ORDER BY run_after ASC`
+  );
+  return res.rows.map(mapProspectiveJobRow);
+};
+
+PostgresSignalStore.prototype.updateProspectiveJob = async function updateProspectiveJob(id, patch) {
+  await this.pool.query(
+    `UPDATE signal_prospective_research_jobs
+     SET status = COALESCE($2, status),
+         attempts = COALESCE($3, attempts),
+         last_error = COALESCE($4, last_error),
+         completed_at = COALESCE($5, completed_at),
+         updated_at = NOW()
+     WHERE id = $1`,
+    [
+      id,
+      patch.status ?? null,
+      patch.attempts ?? null,
+      patch.lastError ?? null,
+      patch.completedAt ? toDate(patch.completedAt) : null,
+    ]
+  );
+  const res = await this.pool.query(`SELECT * FROM signal_prospective_research_jobs WHERE id = $1`, [id]);
+  return res.rows[0] ? mapProspectiveJobRow(res.rows[0]) : null;
+};
+
+PostgresSignalStore.prototype.upsertSourceRegistryEntry = async function upsertSourceRegistryEntry(entry) {
+  await this.pool.query(
+    `INSERT INTO signal_source_registry (
+      source_id, display_name, platform, external_ref, collector_id, source_role,
+      cluster_id, cluster_relationship_status, provenance, active, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,NOW())
+    ON CONFLICT (source_id) DO UPDATE SET
+      display_name = EXCLUDED.display_name,
+      platform = EXCLUDED.platform,
+      external_ref = EXCLUDED.external_ref,
+      collector_id = EXCLUDED.collector_id,
+      source_role = EXCLUDED.source_role,
+      cluster_id = EXCLUDED.cluster_id,
+      cluster_relationship_status = EXCLUDED.cluster_relationship_status,
+      provenance = signal_source_registry.provenance || EXCLUDED.provenance,
+      active = EXCLUDED.active,
+      updated_at = NOW()`,
+    [
+      entry.sourceId,
+      entry.displayName,
+      entry.platform,
+      entry.externalRef || null,
+      entry.collectorId,
+      entry.sourceRole || 'UNKNOWN',
+      entry.clusterId || null,
+      entry.clusterRelationshipStatus || 'UNKNOWN',
+      JSON.stringify(entry.provenance || {}),
+      entry.active !== false,
+    ]
+  );
+  return entry;
+};
+
+PostgresSignalStore.prototype.listSourceRegistryEntries = async function listSourceRegistryEntries() {
+  const res = await this.pool.query(`SELECT * FROM signal_source_registry WHERE active = TRUE ORDER BY source_id`);
+  return res.rows.map(mapSourceRegistryRow);
+};
+
+function mapRawEvidenceRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    provider: row.provider,
+    collectorId: row.collector_id,
+    sourceId: row.source_id,
+    externalMessageId: row.external_message_id,
+    occurredAt: row.occurred_at,
+    ingestedAt: row.ingested_at,
+    rawReference: row.raw_reference,
+    rawText: row.raw_text,
+    extractedCa: row.extracted_ca,
+    parserVersion: row.parser_version,
+    tokenAddress: row.token_address,
+    provenance: row.provenance,
+  };
+}
+
+function mapProspectiveJobRow(row) {
+  return {
+    id: row.id,
+    tokenAddress: row.token_address,
+    observationId: row.observation_id,
+    jobType: row.job_type,
+    status: row.status,
+    runAfter: row.run_after,
+    targetDelaySeconds: row.target_delay_seconds,
+    payload: row.payload,
+    attempts: row.attempts,
+    lastError: row.last_error,
+    completedAt: row.completed_at,
+  };
+}
+
+function mapSourceRegistryRow(row) {
+  return {
+    sourceId: row.source_id,
+    displayName: row.display_name,
+    platform: row.platform,
+    externalRef: row.external_ref,
+    collectorId: row.collector_id,
+    sourceRole: row.source_role,
+    clusterId: row.cluster_id,
+    clusterRelationshipStatus: row.cluster_relationship_status,
+    provenance: row.provenance,
+    active: row.active,
+  };
+}
+
 module.exports = {
   PostgresSignalStore,
 };
