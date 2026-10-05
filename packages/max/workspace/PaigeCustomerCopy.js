@@ -14,6 +14,10 @@ const {
   LIFECYCLE_STAGES,
   SEGMENTS,
 } = require('../../../utils/anchorCopyDoctrine');
+const {
+  isBabrunClient,
+  buildBabrunOutboundCopy,
+} = require('../../../utils/babrunOutboundCopy');
 
 function asText(value) {
   if (value == null) return '';
@@ -111,6 +115,10 @@ function buildCustomerFacingVariantCopy(opts = {}) {
     return buildAnchorVariantCopy({ companyName, plan, mission });
   }
 
+  if (isBabrunClient(mission, plan)) {
+    return buildBabrunOutboundCopy({ companyName, plan, mission });
+  }
+
   const serviceArea = resolveServiceAreaLabel(plan);
   const signOff = resolveSignOff(mission, plan);
   const marketLabel = asText(plan.market?.label).replace(/_/g, ' ') || null;
@@ -121,6 +129,7 @@ module.exports = {
   buildCustomerFacingVariantCopy,
   isPropertyManagementOutreach,
   isAnchorClient,
+  isBabrunClient,
   resolveServiceAreaLabel,
   resolveSignOff,
 };

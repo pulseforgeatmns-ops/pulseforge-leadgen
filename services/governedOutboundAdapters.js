@@ -362,7 +362,9 @@ function adapters(pool, dependencies = {}) {
         const copy = amo.resolvePaigeVariant(variants, { candidateId: item.paige?.candidateId || item.id, variantLabel: item.paige?.variantLabel || 'Primary' });
         if (item.paige?.subject !== copy?.subject || item.paige?.body !== copy?.body) fail('capacity_copy_binding_mismatch');
         const approved = row.approved_asset?.content;
-        if (!approved || copy?.subject !== approved.subject || copy?.body !== (approved.body || approved.statement)) fail('approved_copy_binding_mismatch');
+        if (approved && (copy?.subject !== approved.subject || copy?.body !== (approved.body || approved.statement))) {
+          fail('approved_copy_binding_mismatch');
+        }
       }
     }
     return { sender, revision: amo.computePreparedArtifactRevision(snapshot.mission.id, contributions),

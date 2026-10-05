@@ -69,6 +69,17 @@ function qualifyKnowledgeContact(row, mission, policy = {}) {
   return null;
 }
 
+function approvedCopyIndexFromInventory(inventory = []) {
+  const entries = [];
+  for (const row of inventory) {
+    if (row.qualificationReason || !row.approved_asset) continue;
+    entries.push([String(row.company_id), row.approved_asset]);
+    if (row.id) entries.push([String(row.id), row.approved_asset]);
+    if (row.prospect_id) entries.push([String(row.prospect_id), row.approved_asset]);
+  }
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
 async function loadKnowledgeInventory(pool, mission, policy = {}) {
   const tenantId = String(mission.tenantId || mission.clientId || mission.tenant_id || '');
   if (!['10','13'].includes(tenantId) || !createGovernedOutboundTenantContext(tenantId).usesTenantMailboxTransport) return [];
@@ -162,6 +173,7 @@ async function discoverGovernedInventory(mission, opts = {}) {
 module.exports = {
   qualifyKnowledgeContact,
   normalizedKnowledgeContent,
+  approvedCopyIndexFromInventory,
   loadKnowledgeInventory,
   discoverKnowledgeInventory,
   discoverGovernedInventory,

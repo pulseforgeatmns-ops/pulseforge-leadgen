@@ -145,6 +145,24 @@ test('loadCleanInventory surfaces verified founder cohort inventory for tenant 1
   assert.ok(!inventory.clean.some(row => row.prospectId === 'prospect-review'));
 });
 
+test('Max prioritization preserves CRM company binding for governed clean inventory', () => {
+  const { buildPrioritizationPayload } = require('../packages/max/workspace/MaxPrioritizationExecutor');
+  const payload = {
+    rankedProspects: [{
+      id: 'prospect-jeremy',
+      prospectId: 'prospect-jeremy',
+      companyId: 'co-jeremy',
+      name: "Barco's Painting of Colorado",
+    }],
+    qualifiedCount: 1,
+    source: 'governed_clean_inventory',
+  };
+  const priorities = buildPrioritizationPayload(mission, payload, mission.structuredMission).priorities;
+  assert.equal(priorities[0].companyId, 'co-jeremy');
+  assert.equal(priorities[0].candidateId, 'co-jeremy');
+  assert.equal(priorities[0].prospectId, 'prospect-jeremy');
+});
+
 test('discoverGovernedInventory reuses tenant 13 clean inventory before net-new Scout', async () => {
   const jeremy = cohortJeremyRow();
   const pool = {
