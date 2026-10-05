@@ -52,7 +52,7 @@ test('Paige consumes only the exact prospect-bound approved asset',()=>{
 test('Paige generates canonical copy for recoverable cohort inventory without stakeholder asset',()=>{
  const cohort=row();cohort.approved_asset=null;cohort.knowledge_content.cohort='babrun_cohort_002';cohort.knowledge_content.icpEvaluation={fit:true,reasons:[{kind:'OBSERVED',text:'Owner-operated painting company'}]};
  const input={mission,clientId:13,max:{priorities:[{candidateId:'c',companyId:'c',name:'Business'}]}};
- const copy=buildPerProspectVariants(input)[0];assert.ok(copy.subject);assert.ok(copy.body);assert.equal(copy.attributableIntelligence.usedPersonalization,false);
+ const copy=buildPerProspectVariants({...input,plan:mission.structuredMission,mission})[0];assert.ok(copy.subject);assert.ok(copy.body);assert.equal(copy.attributableIntelligence.usedPersonalization,false);assert.doesNotMatch(`${copy.subject}\n${copy.body}`,/commercial cleaning/i);assert.match(copy.body,/12-week/i);
 });
 test('the canonical Paige SEC entry loads approved tenant assets from runtime dependencies',async()=>{
  const pool={query:async()=>({rows:[row()]})};
