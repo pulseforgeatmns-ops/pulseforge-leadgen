@@ -11,7 +11,9 @@
 
 require('dotenv').config({ quiet: true });
 
+const assert = require('node:assert/strict');
 const pool = require('../db');
+const { hash } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { productionService } = require('../services/governedOutbound');
 const { adapters } = require('../services/governedOutboundAdapters');
 const { assessOperatingCapacity } = require('../packages/emmett-outbound/OperatingCapacity');
@@ -55,6 +57,69 @@ function authoritySnapshot(envelope = {}) {
 function expectedEffectiveDailyCapacity(operating) {
   if (!operating) return null;
   return operating.authorizationLimitedCapacity ?? operating.effectiveDailyCapacity ?? null;
+}
+
+function migrationApplySucceeded(applied) {
+  return Boolean(
+    applied
+    && applied.reviewRequired !== true
+    && applied.id
+    && applied.policy_hash
+    && applied.policy,
+  );
+}
+
+async function verifyMigrationPersistence({
+  tenantId,
+  programId,
+  expectedPolicy,
+  expectedPolicyHash,
+  actorId,
+  authorizationInstant,
+}) {
+  const reloaded = await pool.query(
+    `SELECT id, tenant_id, policy, policy_hash, authorized_by, authorized_at
+     FROM acquisition_outbound_programs
+     WHERE tenant_id = $1 AND mode <> 'revoked'
+     ORDER BY authorized_at DESC LIMIT 1`,
+    [tenantId],
+  );
+  const row = reloaded.rows[0];
+  assert.ok(row, 'program row missing after migration');
+  assert.equal(String(row.id), String(programId));
+  assert.equal(String(row.tenant_id), String(tenantId));
+  assert.equal(row.policy.operatorDelegatedMaximumDailyCapacity, expectedPolicy.operatorDelegatedMaximumDailyCapacity);
+  assert.equal(row.policy.totalCap, expectedPolicy.totalCap);
+  assert.equal(row.policy.startsAt, expectedPolicy.startsAt);
+  assert.equal(row.policy.expiresAt, expectedPolicy.expiresAt);
+  assert.equal(row.policy_hash, expectedPolicyHash);
+  assert.equal(String(row.authorized_by), String(actorId));
+
+  const eventId = hash(['program_policy_migrated', [programId, expectedPolicyHash]]);
+  const eventRow = await pool.query(
+    `SELECT id, event_type, payload FROM acquisition_outbound_events WHERE id = $1 AND tenant_id = $2`,
+    [eventId, tenantId],
+  );
+  assert.equal(eventRow.rows.length, 1, 'program_policy_migrated event missing');
+  const payload = eventRow.rows[0].payload;
+  assert.equal(payload.programId, programId);
+  assert.equal(payload.policyHash, expectedPolicyHash);
+  assert.equal(String(payload.actor), String(actorId));
+  assert.equal(payload.authorization?.recordedAt, authorizationInstant);
+
+  return {
+    verified: true,
+    programId: row.id,
+    tenantId: row.tenant_id,
+    policyHash: row.policy_hash,
+    operatorDelegatedMaximumDailyCapacity: row.policy.operatorDelegatedMaximumDailyCapacity,
+    dailyCap: row.policy.dailyCap,
+    totalCap: row.policy.totalCap,
+    startsAt: row.policy.startsAt,
+    expiresAt: row.policy.expiresAt,
+    authorizedBy: row.authorized_by,
+    migrationEventId: eventRow.rows[0].id,
+  };
 }
 
 async function loadEmmettRecommendation(program) {
@@ -101,6 +166,7 @@ function buildDryRunReport({ program, preview, emmett }) {
     dryRun: true,
     reviewRequired: true,
     reviewHash: preview.reviewHash,
+    authorizationInstant: preview.authorizationInstant,
     programId: program.id,
     migration: preview.migration,
     BEFORE: before,
@@ -149,7 +215,22 @@ async function main() {
       tenantId: TENANT_ID,
       ...OPERATING_GRANT,
       reviewHash: preview.reviewHash,
+      authorizationInstant: preview.authorizationInstant,
     }, { id: actorId, role: 'admin' });
+    if (!migrationApplySucceeded(applied)) {
+      throw Object.assign(new Error('Migration apply did not persist governed policy'), {
+        code: 'migration_apply_incomplete',
+        applied,
+      });
+    }
+    const persistence = await verifyMigrationPersistence({
+      tenantId: TENANT_ID,
+      programId: applied.id,
+      expectedPolicy: applied.policy,
+      expectedPolicyHash: applied.policy_hash,
+      actorId,
+      authorizationInstant: preview.authorizationInstant,
+    });
     console.log(JSON.stringify({
       migrated: true,
       programId: applied.id,
@@ -159,16 +240,19 @@ async function main() {
       totalCap: applied.policy.totalCap,
       startsAt: applied.policy.startsAt,
       expiresAt: applied.policy.expiresAt,
+      persistenceVerification: persistence,
     }, null, 2));
   } else {
     console.log(JSON.stringify({ migrated: false, result: preview }, null, 2));
+    await pool.end();
+    process.exit(1);
   }
   await pool.end();
 }
 
 if (require.main === module) {
   main().catch((err) => {
-    console.error(JSON.stringify({ error: err.code || err.message }));
+    console.error(JSON.stringify({ error: err.code || err.message, details: err.applied || undefined }));
     process.exit(1);
   });
 }
@@ -178,5 +262,7 @@ module.exports = {
   buildDryRunReport,
   authoritySnapshot,
   preservedSafetyFields,
+  migrationApplySucceeded,
+  verifyMigrationPersistence,
   OPERATING_GRANT,
 };
