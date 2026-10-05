@@ -227,14 +227,17 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.equal((await svc.store.items((await svc.store.envelope('2026-09-18')).id)).filter(x => x.status==='sent').length, 5);
     clock = new Date('2026-09-19T14:00:00Z'); assert.equal((await svc.tick()).halted, 'weekend'); assert.equal(calls, 5);
   });
-    await t.test('ambiguous provider failure is durable and blocks retries; explicit reconciliation never resends', async () => {
+  await t.test('provider outcome unknown is uncertain; retry halts until evidence reconciliation', async () => {
     await reset(); await activate(); fault = 'timeout after acceptance';
     await svc.tick(); assert.equal(calls, 1);
-    const item = (await svc.store.items((await svc.store.envelope('2026-09-18')).id)).find(x => x.status==='uncertain');
-    assert.ok(item); fault = null;
-    assert.equal((await svc.tick()).halted, 'uncertain_send_requires_reconciliation'); assert.equal(calls, 1);
+    const item = (await svc.store.items((await svc.store.envelope('2026-09-18')).id)).find(x => x.status === 'uncertain');
+    assert.ok(item);
+    assert.equal(item.provider_message_id, null);
+    fault = null;
+    assert.equal((await svc.tick()).halted, 'uncertain_send_requires_reconciliation');
+    assert.equal(calls, 1);
     await svc.reconcile(item.id, 'accepted', 'recovered-id', 'Provider activity export confirms acceptance', actor);
-    assert.equal((await svc.store.items(item.envelope_id)).find(x => x.id===item.id).provider_message_id, 'recovered-id');
+    assert.equal((await svc.store.items(item.envelope_id)).find(x => x.id === item.id).provider_message_id, 'recovered-id');
     assert.equal(calls, 1);
   });
   await t.test('pre-provider persist failure releases the claim so a later retry cannot duplicate a send', async () => {
@@ -263,30 +266,68 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     assert.equal(calls, 1);
     assert.equal((await svc.store.items(released.envelope_id)).find(x => x.id === released.id).status, 'sent');
   });
-  await t.test('provider accept plus later persist failure is uncertain; retry cannot send a second message', async () => {
+  await t.test('provider acceptance plus later persistence failure remains sent and retry cannot send a second message', async () => {
     await reset(); await activate();
+    const make23502 = () => Object.assign(
+      new Error('null value in column "execution_identity" of relation "acquisition_mission_outbound_executions" violates not-null constraint'),
+      { code: '23502' },
+    );
     adapterSet.execute = async (_envelope, item, _program, send) => {
       const command = { toEmail: item.email, subject: item.snapshot.message.subject,
         body: item.snapshot.message.body, sender: { email: item.snapshot.sender.senderEmail } };
       await send.beforeAttempt(command);
       const result = await send(command);
-      throw Object.assign(new Error('null value in column "execution_identity" of relation "acquisition_mission_outbound_executions" violates not-null constraint'), { code: '23502' });
+      throw make23502();
     };
-    await svc.tick();
+    const first = await svc.tick();
     assert.equal(calls, 1);
-    const item = (await svc.store.items((await svc.store.envelope('2026-09-18')).id)).find(x => x.status === 'uncertain');
+    assert.equal(first.halted, '23502');
+    assert.equal(first.sent, 0);
+    const envelopeId = (await svc.store.envelope('2026-09-18')).id;
+    const items = await svc.store.items(envelopeId);
+    assert.equal(items.some(x => x.status === 'uncertain'), false);
+    const item = items.find(x => x.status === 'sent');
     assert.ok(item);
+    assert.equal(item.provider_message_id, 'provider-1');
+    const persistEvents = (await pool.query(
+      "SELECT event_type,payload FROM acquisition_outbound_events WHERE item_id=$1 AND event_type='send_persistence_failure' ORDER BY created_at",
+      [item.id],
+    )).rows;
+    assert.equal(persistEvents.length, 1);
+    assert.equal(persistEvents[0].payload.sqlstate, '23502');
+    assert.equal(persistEvents[0].payload.providerMessageId, 'provider-1');
     adapterSet.execute = async (_envelope, nextItem, _program, send) => {
       const command = { toEmail: nextItem.email, subject: nextItem.snapshot.message.subject,
         body: nextItem.snapshot.message.body, sender: { email: nextItem.snapshot.sender.senderEmail } };
       await send.beforeAttempt(command);
       return send(command);
     };
-    assert.equal((await svc.tick()).halted, 'uncertain_send_requires_reconciliation');
+    assert.equal((await svc.tick()).halted, 'spacing');
     assert.equal(calls, 1);
-    await svc.reconcile(item.id, 'accepted', 'recovered-after-persist', 'Brevo request exists for the recipient at the attempt timestamp.', actor);
+  });
+  await t.test('provider acceptance plus tme_persistence_verify remains sent with auditable persistence failure', async () => {
+    await reset(); await activate();
+    adapterSet.execute = async (_envelope, item, _program, send) => {
+      const command = { toEmail: item.email, subject: item.snapshot.message.subject,
+        body: item.snapshot.message.body, sender: { email: item.snapshot.sender.senderEmail } };
+      await send.beforeAttempt(command);
+      await send(command);
+      throw Object.assign(new Error('canonical execution row missing after commit'), { code: 'tme_persistence_verify' });
+    };
+    const tick = await svc.tick();
     assert.equal(calls, 1);
-    assert.equal((await svc.store.items(item.envelope_id)).find(x => x.id === item.id).status, 'sent');
+    assert.equal(tick.halted, 'tme_persistence_verify');
+    const item = (await svc.store.items((await svc.store.envelope('2026-09-18')).id)).find(x => x.status === 'sent');
+    assert.ok(item);
+    assert.equal(item.provider_message_id, 'provider-1');
+    const persistEvents = (await pool.query(
+      "SELECT payload FROM acquisition_outbound_events WHERE item_id=$1 AND event_type='send_persistence_failure'",
+      [item.id],
+    )).rows;
+    assert.equal(persistEvents.length, 1);
+    assert.equal(persistEvents[0].payload.reason, 'tme_persistence_verify');
+    assert.equal((await svc.tick()).halted, 'spacing');
+    assert.equal(calls, 1);
   });
   await t.test('explicit provider reject is failed not uncertain; not_accepted reconciliation returns eligibility', async () => {
     await reset(); await activate();

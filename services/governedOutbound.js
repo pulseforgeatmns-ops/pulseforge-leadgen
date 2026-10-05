@@ -422,7 +422,17 @@ function service({
     } catch (e) {
       const row = (await store.items(envelope.id)).find(x => x.id === item.id);
       if (row?.status === 'attempted') {
-        if (providerBoundaryWasCrossed(e, providerBoundary) || providerBoundary.crossed) {
+        if (acceptedMessageId) {
+          await store.finish(item, 'sent', null, acceptedMessageId);
+          const persistReason = String(e.code || e.message || 'tme_persistence_verify').slice(0, 200);
+          await store.event('send_persistence_failure', item.id, {
+            itemId: item.id,
+            envelopeId: item.envelope_id,
+            reason: persistReason,
+            sqlstate: e.code === '23502' ? '23502' : null,
+            providerMessageId: acceptedMessageId,
+          });
+        } else if (providerBoundaryWasCrossed(e, providerBoundary) || providerBoundary.crossed) {
           await store.finish(item, 'uncertain', 'provider_or_persistence_error');
         } else if (!called) {
           await store.releaseUnsent(item, e.code || 'pre_provider_persist_failed');
@@ -430,7 +440,7 @@ function service({
           await finishPreProviderAttempt(item, envelope, e, providerBoundary);
         }
       }
-      throw e;
+      throw attachProviderBoundaryCrossed(e, providerBoundaryWasCrossed(e, providerBoundary) || providerBoundary.crossed);
     }
   }
   async function refillEnvelope(program, source, day, envelope, counts) {
