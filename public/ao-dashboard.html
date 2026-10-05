@@ -1128,6 +1128,17 @@ body {
   </div>
 </div>
 
+<div class="ao-modal-overlay" id="crmLinkRecoveryModal">
+  <div class="ao-modal" role="dialog" aria-labelledby="crmLinkRecoveryTitle">
+    <h3 id="crmLinkRecoveryTitle">Prospect not linked to CRM</h3>
+    <p id="crmLinkRecoveryIntro" style="font-size:0.88rem;line-height:1.45;color:var(--pf-text-dim);margin:0 0 10px">
+      This prospect is not linked to a CRM account yet. You can link it to an existing account, create a new account, or correct the prospect details.
+    </p>
+    <div id="crmLinkRecoveryBody"></div>
+    <div class="ao-modal-actions" id="crmLinkRecoveryActions"></div>
+  </div>
+</div>
+
 <div class="ao-modal-overlay" id="crmOutcomeModal">
   <div class="ao-modal" role="dialog" aria-labelledby="crmOutcomeTitle">
     <h3 id="crmOutcomeTitle">What happened?</h3>
@@ -1156,6 +1167,8 @@ let routeStartType = localStorage.getItem('ao_route_start') || 'current_location
 let navAppPreference = localStorage.getItem('ao_nav_app') || 'google_maps';
 let crmOutcomeCache = { outcomes: [], nextActions: [] };
 let pendingCrmOutcome = null;
+let pendingCrmLinkRecovery = null;
+let crmLinkRecoveryStep = 'menu';
 let pendingNavigate = null;
 let callModalState = null;
 
@@ -2060,6 +2073,222 @@ async function showCrmOutcomeModal(ctx) {
   document.getElementById('crmOutcomeModal').classList.add('open');
 }
 
+function hideCrmLinkRecoveryModal() {
+  document.getElementById('crmLinkRecoveryModal').classList.remove('open');
+  pendingCrmLinkRecovery = null;
+  crmLinkRecoveryStep = 'menu';
+}
+
+function crmLinkRecoveryActionButtons(html) {
+  document.getElementById('crmLinkRecoveryActions').innerHTML = html;
+}
+
+async function resumeAfterCrmLinkage(prospectId) {
+  const ctx = pendingCrmLinkRecovery;
+  hideCrmLinkRecoveryModal();
+  if (!ctx || !prospectId) return;
+  await showCrmOutcomeModal({
+    ...ctx,
+    prospect_id: prospectId,
+    follow_up_task_id: ctx.task_id || ctx.follow_up_task_id,
+  });
+}
+
+function renderCrmLinkRecoveryMenu() {
+  crmLinkRecoveryStep = 'menu';
+  document.getElementById('crmLinkRecoveryTitle').textContent = 'Prospect not linked to CRM';
+  document.getElementById('crmLinkRecoveryIntro').style.display = '';
+  document.getElementById('crmLinkRecoveryBody').innerHTML = `
+    <div class="ao-modal-section">
+      <div style="font-size:0.9rem;font-weight:600">${escapeHtml(pendingCrmLinkRecovery?.business_name || 'Queue item')}</div>
+    </div>`;
+  crmLinkRecoveryActionButtons(`
+    <button type="button" class="ao-modal-confirm" id="crmLinkExistingBtn">Link Existing Account</button>
+    <button type="button" class="ao-modal-confirm" id="crmLinkCreateBtn">Create CRM Account</button>
+    <button type="button" class="ao-modal-confirm" id="crmLinkEditBtn">Edit Prospect</button>
+    <button type="button" class="ao-modal-cancel" id="crmLinkCloseBtn">Close</button>
+  `);
+}
+
+function renderCrmLinkSearchStep() {
+  crmLinkRecoveryStep = 'link';
+  document.getElementById('crmLinkRecoveryIntro').style.display = 'none';
+  const p = pendingCrmLinkRecovery?.prospect || {};
+  document.getElementById('crmLinkRecoveryBody').innerHTML = `
+    <div class="ao-modal-section">
+      <div class="ao-modal-label">Search CRM accounts</div>
+      <input class="ao-addr-input" id="crm-link-q" placeholder="Business name, address, phone, domain" value="${escapeHtml(p.business_name || pendingCrmLinkRecovery?.business_name || '')}">
+      <button type="button" class="ao-modal-confirm" id="crmLinkSearchBtn" style="margin-top:8px;width:100%">Search</button>
+    </div>
+    <div id="crmLinkSearchResults" class="ao-modal-section"></div>
+    <div id="crmLinkConfirmBox" class="ao-modal-section" style="display:none"></div>
+  `;
+  crmLinkRecoveryActionButtons(`
+    <button type="button" class="ao-modal-cancel" id="crmLinkBackBtn">Back</button>
+    <button type="button" class="ao-modal-cancel" id="crmLinkCloseBtn">Close</button>
+  `);
+}
+
+function renderCrmLinkEditStep() {
+  crmLinkRecoveryStep = 'edit';
+  document.getElementById('crmLinkRecoveryIntro').style.display = 'none';
+  const p = pendingCrmLinkRecovery?.prospect || {};
+  document.getElementById('crmLinkRecoveryBody').innerHTML = `
+    <div class="ao-modal-section"><div class="ao-modal-label">Business name</div>
+      <input class="ao-addr-input" id="crm-edit-business" value="${escapeHtml(p.business_name || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">Street address</div>
+      <input class="ao-addr-input" id="crm-edit-street" value="${escapeHtml(p.street_address || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">City</div>
+      <input class="ao-addr-input" id="crm-edit-city" value="${escapeHtml(p.city || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">State</div>
+      <input class="ao-addr-input" id="crm-edit-state" value="${escapeHtml(p.state || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">ZIP</div>
+      <input class="ao-addr-input" id="crm-edit-postal" value="${escapeHtml(p.postal || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">Phone</div>
+      <input class="ao-addr-input" id="crm-edit-phone" value="${escapeHtml(p.phone || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">Business type</div>
+      <input class="ao-addr-input" id="crm-edit-type" value="${escapeHtml(p.business_type || '')}"></div>
+    <div class="ao-modal-section"><div class="ao-modal-label">Contact name</div>
+      <input class="ao-addr-input" id="crm-edit-contact" value="${escapeHtml(p.contact_name || '')}"></div>
+  `;
+  crmLinkRecoveryActionButtons(`
+    <button type="button" class="ao-modal-cancel" id="crmLinkBackBtn">Back</button>
+    <button type="button" class="ao-modal-confirm" id="crmLinkSaveEditBtn">Save changes</button>
+    <button type="button" class="ao-modal-cancel" id="crmLinkCloseBtn">Close</button>
+  `);
+}
+
+async function loadCrmLinkRecoveryContext(ctx) {
+  pendingCrmLinkRecovery = { ...ctx };
+  if (ctx.lead_id) {
+    try {
+      const linkage = await api('/api/leads/' + ctx.lead_id + '/crm-linkage');
+      pendingCrmLinkRecovery = { ...ctx, ...linkage, prospect: linkage.prospect };
+    } catch (_err) { /* keep task context */ }
+  }
+  if (pendingCrmLinkRecovery.crm_prospect_id) {
+    await resumeAfterCrmLinkage(pendingCrmLinkRecovery.crm_prospect_id);
+    return;
+  }
+  document.getElementById('crmLinkRecoveryModal').classList.add('open');
+  renderCrmLinkRecoveryMenu();
+}
+
+async function runCrmAccountSearch() {
+  const q = document.getElementById('crm-link-q')?.value?.trim();
+  const box = document.getElementById('crmLinkSearchResults');
+  if (!box) return;
+  box.innerHTML = '<div class="ao-empty">Searching…</div>';
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  const data = await api('/api/crm/accounts/search?' + params.toString());
+  if (!data.accounts?.length) {
+    box.innerHTML = '<div class="ao-empty">No matching CRM accounts.</div>';
+    return;
+  }
+  box.innerHTML = data.accounts.map(a => `
+    <button type="button" class="ao-modal-opt crm-link-result" style="width:100%;text-align:left;margin-bottom:6px"
+      data-prospect="${a.prospect_id}">
+      <strong class="crm-link-result-name">${escapeHtml(a.company_name)}</strong><br>
+      <span style="font-size:0.78rem;color:var(--pf-text-dim)">${escapeHtml([a.address, a.city, a.state].filter(Boolean).join(', '))}${a.phone ? ' · ' + escapeHtml(a.phone) : ''}${a.domain ? ' · ' + escapeHtml(a.domain) : ''}</span>
+    </button>
+  `).join('');
+}
+
+async function confirmCrmLink(prospectId, accountName) {
+  const leadId = pendingCrmLinkRecovery?.lead_id;
+  if (!leadId) return;
+  const ok = window.confirm(`Link "${pendingCrmLinkRecovery.business_name || 'this prospect'}" to "${accountName}"?`);
+  if (!ok) return;
+  try {
+    const result = await postLeadCrmAction('/api/leads/' + leadId + '/crm-link', {
+      prospect_id: prospectId,
+      task_id: pendingCrmLinkRecovery.task_id,
+    });
+    await resumeAfterCrmLinkage(result.crm_prospect_id);
+  } catch (err) {
+    if (err.status === 409 && err.data?.code === 'CRM_LINK_CONFLICT') {
+      alert(`CRM linkage changed. Current account: ${err.data.company_name || err.data.crm_prospect_id}`);
+      hideCrmLinkRecoveryModal();
+    } else {
+      alert(err.message || 'Link failed');
+    }
+  }
+}
+
+async function postLeadCrmAction(path, body) {
+  const res = await fetch('/ao' + path, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  return data;
+}
+
+async function createCrmAccountFromRecovery(forceCreate) {
+  const leadId = pendingCrmLinkRecovery?.lead_id;
+  if (!leadId) return;
+  try {
+    const result = await postLeadCrmAction('/api/leads/' + leadId + '/crm-account', {
+      task_id: pendingCrmLinkRecovery.task_id,
+      force_create: forceCreate,
+    });
+    await resumeAfterCrmLinkage(result.crm_prospect_id);
+  } catch (err) {
+    if (err.status === 409 && err.data?.duplicate_candidates?.length) {
+      const names = err.data.duplicate_candidates.map(c => c.company_name).join(', ');
+      const proceed = window.confirm(
+        `Likely matches already exist (${names}). Create a new CRM account anyway?`
+      );
+      if (proceed) await createCrmAccountFromRecovery(true);
+      return;
+    }
+    alert(err.message || 'Create account failed');
+  }
+}
+
+async function saveCrmProspectEdits() {
+  const leadId = pendingCrmLinkRecovery?.lead_id;
+  if (!leadId) return;
+  const result = await api('/api/leads/' + leadId + '/prospect', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      business_name: document.getElementById('crm-edit-business').value.trim(),
+      street_address: document.getElementById('crm-edit-street').value.trim(),
+      city: document.getElementById('crm-edit-city').value.trim(),
+      state: document.getElementById('crm-edit-state').value.trim(),
+      postal: document.getElementById('crm-edit-postal').value.trim(),
+      phone: document.getElementById('crm-edit-phone').value.trim(),
+      business_type: document.getElementById('crm-edit-type').value.trim(),
+      contact_name: document.getElementById('crm-edit-contact').value.trim(),
+    }),
+  });
+  pendingCrmLinkRecovery = {
+    ...pendingCrmLinkRecovery,
+    business_name: document.getElementById('crm-edit-business').value.trim(),
+    prospect: {
+      ...(pendingCrmLinkRecovery.prospect || {}),
+      business_name: document.getElementById('crm-edit-business').value.trim(),
+    },
+    crm_prospect_id: result.crm_prospect_id,
+    duplicate_candidates: result.duplicate_candidates,
+  };
+  if (result.crm_prospect_id) {
+    await resumeAfterCrmLinkage(result.crm_prospect_id);
+    return;
+  }
+  renderCrmLinkRecoveryMenu();
+  addMsg('Prospect updated — link or create a CRM account when ready.', 'system');
+}
+
 async function openOutcomeForFieldTask(taskId, presetProspectId) {
   let prospectId = presetProspectId || null;
   let ctx = { task_id: taskId, follow_up_task_id: taskId, business_name: null };
@@ -2071,7 +2300,7 @@ async function openOutcomeForFieldTask(taskId, presetProspectId) {
     ctx.prospect_id = prospectId;
   }
   if (!prospectId) {
-    alert('This queue item is not linked to a CRM account yet. Open My Accounts or ask Jake to link the prospect.');
+    await loadCrmLinkRecoveryContext(ctx);
     return;
   }
   ctx.prospect_id = prospectId;
@@ -2183,6 +2412,31 @@ document.getElementById('crmOutcomeSave').addEventListener('click', () => {
 });
 document.getElementById('crmOutcomeModal').addEventListener('click', e => {
   if (e.target.id === 'crmOutcomeModal') hideCrmOutcomeModal();
+});
+
+document.getElementById('crmLinkRecoveryModal').addEventListener('click', e => {
+  if (e.target.id === 'crmLinkRecoveryModal') hideCrmLinkRecoveryModal();
+  if (e.target.id === 'crmLinkCloseBtn') hideCrmLinkRecoveryModal();
+  if (e.target.id === 'crmLinkBackBtn') renderCrmLinkRecoveryMenu();
+  if (e.target.id === 'crmLinkExistingBtn') {
+    renderCrmLinkSearchStep();
+    runCrmAccountSearch().catch(err => alert(err.message));
+  }
+  if (e.target.id === 'crmLinkCreateBtn') {
+    createCrmAccountFromRecovery(false).catch(err => alert(err.message));
+  }
+  if (e.target.id === 'crmLinkEditBtn') renderCrmLinkEditStep();
+  if (e.target.id === 'crmLinkSearchBtn') {
+    runCrmAccountSearch().catch(err => alert(err.message));
+  }
+  if (e.target.id === 'crmLinkSaveEditBtn') {
+    saveCrmProspectEdits().catch(err => alert(err.message));
+  }
+  const pick = e.target.closest('.crm-link-result');
+  if (pick) {
+    const accountName = pick.querySelector('.crm-link-result-name')?.textContent?.trim() || 'CRM account';
+    confirmCrmLink(pick.dataset.prospect, accountName).catch(err => alert(err.message));
+  }
 });
 
 document.getElementById('startRouteBtn').addEventListener('click', showRouteModal);
