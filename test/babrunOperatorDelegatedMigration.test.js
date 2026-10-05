@@ -203,6 +203,7 @@ test('activation grant near expiry migrates to delegated 20, totalCap 100, expir
     totalCap: 100,
     grantHorizonDays: DEFAULT_BOUNDED_GRANT_HORIZON_DAYS,
     reviewHash: preview.reviewHash,
+    authorizationInstant: preview.authorizationInstant,
   }, { id: '1', role: 'admin' });
   assert.equal(applied.policy.totalCap, 100);
 });
@@ -276,6 +277,7 @@ test('migration preview preserves send history fields on program row (policy-onl
     totalCap: 100,
     grantHorizonDays: 30,
     reviewHash: preview.reviewHash,
+    authorizationInstant: preview.authorizationInstant,
   }, { id: '1', role: 'admin' });
   assert.equal(applied.policy.totalCap, 100);
   assert.equal(events.length, 1);
@@ -421,4 +423,184 @@ test('dry-run report includes BEFORE/AFTER authority and preserved safety fields
   assert.equal(report.AFTER.operatorDelegatedMaximumDailyCapacity, 20);
   assert.equal(report.expectedEffectiveDailyCapacity, 4);
   assert.equal(report.preservedSafetyFields.spacingMinutes, 240);
+});
+
+test('preview at T1 and apply with pinned authorizationInstant persists once', async () => {
+  const authNow = new Date('2026-10-04T13:00:00.000Z');
+  let migratedPolicy = null;
+  const programRow = {
+    id: 'outbound_test',
+    policy: {
+      ...BABRUN_BASE,
+      startsAt: '2026-09-28T12:00:00.000Z',
+      expiresAt: '2026-10-05T21:16:09.082Z',
+    },
+    policy_hash: 'old',
+    scope_hash: 'scope',
+    source_mission_id: 'mission',
+  };
+  const svc = service({
+    pool: { query: async () => ({ rows: [] }) },
+    tenantId: '13',
+    now: () => authNow,
+    adapters: {},
+  });
+  Object.assign(svc.store, {
+    program: async () => programRow,
+    migrateProgramPolicy: async (_program, nextPolicy, actor) => {
+      migratedPolicy = nextPolicy;
+      return {
+        id: programRow.id,
+        policy: nextPolicy,
+        policy_hash: require('../packages/acquisition-mission/DailyOutboundPolicy').hash(nextPolicy),
+        authorized_by: actor,
+      };
+    },
+  });
+  const preview = await svc.migrateOperatorDelegatedCapacity({
+    operatorDelegatedMaximumDailyCapacity: 20,
+    totalCap: 100,
+    grantHorizonDays: 30,
+  }, { id: '3', role: 'admin' });
+  assert.equal(preview.reviewRequired, true);
+  assert.ok(preview.authorizationInstant);
+  const applied = await svc.migrateOperatorDelegatedCapacity({
+    operatorDelegatedMaximumDailyCapacity: 20,
+    totalCap: 100,
+    grantHorizonDays: 30,
+    reviewHash: preview.reviewHash,
+    authorizationInstant: preview.authorizationInstant,
+  }, { id: '3', role: 'admin' });
+  assert.equal(applied.policy.operatorDelegatedMaximumDailyCapacity, 20);
+  assert.equal(migratedPolicy.totalCap, 100);
+});
+
+test('preview T1 and apply recomputed at T2 without pinned instant fails policy_review_stale', async () => {
+  const authNow = new Date('2026-10-04T13:00:00.000Z');
+  let clock = authNow;
+  const svc = service({
+    pool: { query: async () => ({ rows: [] }) },
+    tenantId: '13',
+    now: () => clock,
+    adapters: {},
+  });
+  Object.assign(svc.store, {
+    program: async () => ({
+      id: 'prog',
+      policy: {
+        ...BABRUN_BASE,
+        startsAt: '2026-09-28T12:00:00.000Z',
+        expiresAt: '2026-10-05T21:16:09.082Z',
+      },
+      scope_hash: 'scope',
+      source_mission_id: 'mission',
+    }),
+    migrateProgramPolicy: async () => { throw new Error('migrate must not run'); },
+  });
+  const preview = await svc.migrateOperatorDelegatedCapacity({
+    operatorDelegatedMaximumDailyCapacity: 20,
+    totalCap: 100,
+    grantHorizonDays: 30,
+  }, { id: '1', role: 'admin' });
+  clock = new Date('2026-10-04T14:00:00.000Z');
+  await assert.rejects(
+    () => svc.migrateOperatorDelegatedCapacity({
+      operatorDelegatedMaximumDailyCapacity: 20,
+      totalCap: 100,
+      grantHorizonDays: 30,
+      reviewHash: preview.reviewHash,
+    }, { id: '1', role: 'admin' }),
+    (err) => err.code === 'policy_review_stale',
+  );
+});
+
+test('supplied wrong reviewHash fails closed with policy_review_stale', async () => {
+  const authNow = new Date('2026-10-04T13:00:00.000Z');
+  const svc = service({
+    pool: { query: async () => ({ rows: [] }) },
+    tenantId: '13',
+    now: () => authNow,
+    adapters: {},
+  });
+  Object.assign(svc.store, {
+    program: async () => ({
+      id: 'prog',
+      policy: {
+        ...BABRUN_BASE,
+        startsAt: '2026-09-28T12:00:00.000Z',
+        expiresAt: '2026-10-05T21:16:09.082Z',
+      },
+      scope_hash: 'scope',
+      source_mission_id: 'mission',
+    }),
+    migrateProgramPolicy: async () => { throw new Error('migrate must not run'); },
+  });
+  const preview = await svc.migrateOperatorDelegatedCapacity({
+    operatorDelegatedMaximumDailyCapacity: 20,
+    totalCap: 100,
+    grantHorizonDays: 30,
+  }, { id: '1', role: 'admin' });
+  await assert.rejects(
+    () => svc.migrateOperatorDelegatedCapacity({
+      operatorDelegatedMaximumDailyCapacity: 20,
+      totalCap: 100,
+      grantHorizonDays: 30,
+      reviewHash: 'deadbeef',
+      authorizationInstant: preview.authorizationInstant,
+    }, { id: '1', role: 'admin' }),
+    (err) => err.code === 'policy_review_stale',
+  );
+});
+
+test('reviewRequired response cannot satisfy migrationApplySucceeded', () => {
+  const { migrationApplySucceeded } = require('../scripts/migrateBabrunOperatorDelegatedCapacity');
+  assert.equal(migrationApplySucceeded({ reviewRequired: true, reviewHash: 'x', policy: {} }), false);
+  assert.equal(migrationApplySucceeded({ id: 'p', policy_hash: 'h', policy: { totalCap: 1 } }), true);
+});
+
+test('repeated apply with same reviewed proposal is idempotent', async () => {
+  const authNow = new Date('2026-10-04T13:00:00.000Z');
+  let migrateCalls = 0;
+  const programRow = {
+    id: 'prog',
+    policy: {
+      ...BABRUN_BASE,
+      startsAt: '2026-09-28T12:00:00.000Z',
+      expiresAt: '2026-10-05T21:16:09.082Z',
+    },
+    policy_hash: 'old',
+    scope_hash: 'scope',
+    source_mission_id: 'mission',
+  };
+  const svc = service({
+    pool: { query: async () => ({ rows: [] }) },
+    tenantId: '13',
+    now: () => authNow,
+    adapters: {},
+  });
+  Object.assign(svc.store, {
+    program: async () => ({ ...programRow }),
+    migrateProgramPolicy: async (_program, nextPolicy) => {
+      migrateCalls += 1;
+      programRow.policy = nextPolicy;
+      programRow.policy_hash = require('../packages/acquisition-mission/DailyOutboundPolicy').hash(nextPolicy);
+      return { ...programRow };
+    },
+  });
+  const preview = await svc.migrateOperatorDelegatedCapacity({
+    operatorDelegatedMaximumDailyCapacity: 20,
+    totalCap: 100,
+    grantHorizonDays: 30,
+  }, { id: '1', role: 'admin' });
+  const applyInput = {
+    operatorDelegatedMaximumDailyCapacity: 20,
+    totalCap: 100,
+    grantHorizonDays: 30,
+    reviewHash: preview.reviewHash,
+    authorizationInstant: preview.authorizationInstant,
+  };
+  await svc.migrateOperatorDelegatedCapacity(applyInput, { id: '1', role: 'admin' });
+  assert.equal(migrateCalls, 1);
+  await svc.migrateOperatorDelegatedCapacity(applyInput, { id: '1', role: 'admin' });
+  assert.equal(migrateCalls, 1);
 });
