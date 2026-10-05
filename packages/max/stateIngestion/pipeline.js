@@ -11,6 +11,11 @@ const { formatIngestionReceipt } = require('./receipt');
 const { buildDownstreamEffects } = require('./propagation');
 const { expectationFromMutations } = require('./expectations');
 const { MemoryStateStore } = require('./store/memoryStore');
+const {
+  interpretConversationalInput,
+  isTrustedStructuredInput,
+  conversationalText,
+} = require('../understanding');
 
 function claimKey(claim) {
   return `${claim.claim_type}:${JSON.stringify(claim.payload)}:${JSON.stringify(claim.source_record || null)}`;
@@ -22,49 +27,18 @@ function classifySafety(claim) {
   return SAFETY_CLASS.A;
 }
 
-async function ingestOperationalUpdate(input = {}) {
-  const store = input.store || new MemoryStateStore({ clientId: input.clientId });
-  const telemetry = emptyTelemetry();
-  bump(telemetry, 'ingestions_received');
-
-  const ingestionId = input.ingestionId || newIngestionId();
-  const clientId = input.clientId;
-  const sourceType = input.sourceType || SOURCE_TYPES.OPERATOR_REPORTED;
-  const sourceActor = input.sourceActor || null;
-  const rawSource = {
-    text: input.text || input.message || null,
-    structured: input.structured || null,
-    artifact: input.artifact || null,
-  };
-
-  const ingestionRecord = {
-    id: ingestionId,
-    client_id: clientId,
-    source_type: sourceType,
-    source_actor: sourceActor,
-    raw_source: rawSource,
-    received_at: (input.now || new Date()).toISOString(),
-    telemetry: {},
-    pipeline_audit: {},
-  };
-  await store.persistIngestion(ingestionRecord);
-
-  let artifactId = null;
-  if (input.artifact) {
-    const artifact = {
-      id: input.artifact.id || undefined,
-      ingestion_id: ingestionId,
-      artifact_type: input.artifact.artifact_type || 'message',
-      filename: input.artifact.filename || null,
-      metadata: input.artifact.metadata || {},
-      raw_content: input.artifact.raw_content || rawSource,
-    };
-    const saved = await store.persistArtifact(artifact);
-    artifactId = saved.id;
-    bump(telemetry, 'evidence_artifacts_created');
-  }
-
-  const claims = extractClaims(input);
+async function processClaimSet({
+  claims,
+  store,
+  ingestionId,
+  clientId,
+  sourceType,
+  sourceActor,
+  artifactId,
+  input,
+  telemetry,
+  operatorCorrection,
+}) {
   bump(telemetry, 'claims_extracted', claims.length);
 
   const context = store.snapshotContext();
@@ -159,7 +133,7 @@ async function ingestOperationalUpdate(input = {}) {
     bindings,
     sourceType,
     existingProspect,
-    operatorCorrection: Boolean(input.operatorCorrection),
+    operatorCorrection: Boolean(operatorCorrection),
   });
 
   for (const mutation of mutations) {
@@ -225,6 +199,172 @@ async function ingestOperationalUpdate(input = {}) {
 
   const duplicateReplay = claims.length > 0 && claims.every(c => resolutions[c._key]?.status === RESOLUTION.ALREADY_APPLIED);
 
+  return {
+    claims,
+    resolutions,
+    mutations,
+    conflicts,
+    unresolved,
+    downstream_effects,
+    prospect,
+    duplicateReplay,
+    bindings,
+    commitResults,
+  };
+}
+
+async function ingestOperationalUpdate(input = {}) {
+  const store = input.store || new MemoryStateStore({ clientId: input.clientId });
+  const telemetry = emptyTelemetry();
+  bump(telemetry, 'ingestions_received');
+
+  const ingestionId = input.ingestionId || newIngestionId();
+  const clientId = input.clientId;
+  const sourceType = input.sourceType || SOURCE_TYPES.OPERATOR_REPORTED;
+  const sourceActor = input.sourceActor || null;
+  const rawSource = {
+    text: input.text || input.message || null,
+    structured: input.structured || null,
+    artifact: input.artifact || null,
+  };
+
+  const ingestionRecord = {
+    id: ingestionId,
+    client_id: clientId,
+    source_type: sourceType,
+    source_actor: sourceActor,
+    raw_source: rawSource,
+    received_at: (input.now || new Date()).toISOString(),
+    telemetry: {},
+    pipeline_audit: {},
+  };
+  await store.persistIngestion(ingestionRecord);
+
+  let artifactId = null;
+  if (input.artifact) {
+    const artifact = {
+      id: input.artifact.id || undefined,
+      ingestion_id: ingestionId,
+      artifact_type: input.artifact.artifact_type || 'message',
+      filename: input.artifact.filename || null,
+      metadata: input.artifact.metadata || {},
+      raw_content: input.artifact.raw_content || rawSource,
+    };
+    const saved = await store.persistArtifact(artifact);
+    artifactId = saved.id;
+    bump(telemetry, 'evidence_artifacts_created');
+  }
+
+  let situationModel = null;
+  let understandingValidation = null;
+  let understandingPreview = null;
+  let conversationMemory = input.conversationMemory || null;
+  const useUnderstanding = !isTrustedStructuredInput(input) && conversationalText(input);
+
+  if (useUnderstanding) {
+    const interpreted = interpretConversationalInput({
+      text: input.text,
+      message: input.message,
+      inputId: ingestionId,
+      conversationId: input.conversationId,
+      actor: input.actor || { userId: sourceActor },
+      now: input.now,
+      memory: input.memory,
+      conversationMemory,
+    });
+    situationModel = interpreted.situationModel;
+    understandingValidation = interpreted.validation;
+    understandingPreview = interpreted.preview;
+    conversationMemory = interpreted.memory;
+
+    if (understandingValidation?.blockCommit) {
+      ingestionRecord.telemetry = telemetry;
+      ingestionRecord.receipt_summary = formatIngestionReceipt({
+        title: 'Understanding blocked pending clarification',
+        held: 1,
+        summaryLines: [understandingValidation.narrowestClarification || 'Clarification required before commit.'],
+        unresolvedCount: 1,
+      });
+      ingestionRecord.pipeline_audit = {
+        situation_model: situationModel,
+        understanding_validation: understandingValidation,
+        understanding_preview: understandingPreview,
+        commit_blocked: true,
+      };
+      return {
+        ingestion_id: ingestionId,
+        receipt: ingestionRecord.receipt_summary,
+        telemetry,
+        claims: [],
+        resolutions: {},
+        mutations: [],
+        conflicts: [],
+        unresolved: understandingValidation.materialAmbiguities || [],
+        downstream_effects: [],
+        prospect: null,
+        duplicateReplay: false,
+        entities_created: 0,
+        entities_reconciled: 0,
+        verification_failures: 0,
+        situation_model: situationModel,
+        understanding_preview: understandingPreview,
+        understanding_validation: understandingValidation,
+        clarification_required: understandingValidation.narrowestClarification,
+        commit_blocked: true,
+        conversation_memory: conversationMemory,
+      };
+    }
+  }
+
+  let threadResults = [];
+  if (situationModel?.threads?.length) {
+    for (const thread of situationModel.threads) {
+      const claims = thread.ingestionClaims?.length ? thread.ingestionClaims : extractClaims({ text: thread.text });
+      if (!claims.length) continue;
+      const result = await processClaimSet({
+        claims,
+        store,
+        ingestionId,
+        clientId,
+        sourceType,
+        sourceActor,
+        artifactId,
+        input,
+        telemetry,
+        operatorCorrection: Boolean(input.operatorCorrection),
+      });
+      threadResults.push({ threadId: thread.threadId, accountName: thread.accountName, ...result });
+    }
+  } else {
+    const claims = situationModel?.threads?.[0]?.ingestionClaims?.length
+      ? situationModel.threads[0].ingestionClaims
+      : extractClaims(input);
+    threadResults.push(await processClaimSet({
+      claims,
+      store,
+      ingestionId,
+      clientId,
+      sourceType,
+      sourceActor,
+      artifactId,
+      input,
+      telemetry,
+      operatorCorrection: Boolean(input.operatorCorrection),
+    }));
+  }
+
+  const primary = threadResults[0] || {};
+  const claims = threadResults.flatMap(r => r.claims || []);
+  const resolutions = threadResults.reduce((acc, r) => ({ ...acc, ...(r.resolutions || {}) }), {});
+  const mutations = threadResults.flatMap(r => r.mutations || []);
+  const conflicts = threadResults.flatMap(r => r.conflicts || []);
+  const unresolved = threadResults.flatMap(r => r.unresolved || []);
+  const downstream_effects = primary.downstream_effects || [];
+  const prospect = primary.prospect || null;
+  const duplicateReplay = threadResults.every(r => r.duplicateReplay);
+  const bindings = primary.bindings || {};
+  const commitResults = threadResults.flatMap(r => r.commitResults || []);
+
   const receipt = formatIngestionReceipt({
     title: input.batchParent?.filename
       ? `${input.batchParent.filename} row ingested`
@@ -234,6 +374,7 @@ async function ingestOperationalUpdate(input = {}) {
     summaryLines: prospect
       ? [
         `${prospect.company_name || 'Account'} ${bindings.account?.status === RESOLUTION.RESOLVED ? 'matched successfully' : 'recorded'}.`,
+        threadResults.length > 1 ? `${threadResults.length} account threads processed.` : null,
         unresolved.length === 0 && conflicts.length === 0
           ? 'Safe operational claims committed and verified where applicable.'
           : null,
@@ -245,6 +386,9 @@ async function ingestOperationalUpdate(input = {}) {
   ingestionRecord.telemetry = telemetry;
   ingestionRecord.receipt_summary = receipt;
   ingestionRecord.pipeline_audit = {
+    situation_model: situationModel,
+    understanding_validation: understandingValidation,
+    understanding_preview: understandingPreview,
     extracted_claims: claims,
     entity_candidates: bindings,
     resolution_results: resolutions,
@@ -253,6 +397,11 @@ async function ingestOperationalUpdate(input = {}) {
     unresolved_claims: unresolved,
     conflicts,
     downstream_effects,
+    thread_results: threadResults.map(r => ({
+      threadId: r.threadId,
+      accountName: r.accountName,
+      prospect_id: r.prospect?.id || null,
+    })),
   };
 
   return {
@@ -266,13 +415,19 @@ async function ingestOperationalUpdate(input = {}) {
     unresolved,
     downstream_effects,
     prospect,
+    prospects: threadResults.map(r => r.prospect).filter(Boolean),
     duplicateReplay,
     entities_created: telemetry.entities_created,
     entities_reconciled: telemetry.entities_reconciled,
     verification_failures: telemetry.verification_failures,
+    situation_model: situationModel,
+    understanding_preview: understandingPreview,
+    understanding_validation: understandingValidation,
+    conversation_memory: conversationMemory,
   };
 }
 
 module.exports = {
   ingestOperationalUpdate,
+  processClaimSet,
 };

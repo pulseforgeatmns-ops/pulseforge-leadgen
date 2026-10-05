@@ -10,6 +10,7 @@ const {
   listOverdueExpectationPrompts,
 } = require('../services/maxStateIngestionService');
 const { afterIngestionDecisions } = require('../services/maxDecisionExecutionService');
+const { interpretConversationalInput } = require('../packages/max/understanding');
 
 const requireIngestWrite = [
   requireAuth,
@@ -22,6 +23,31 @@ function resolveClientId(req) {
   return normalizeClientId(req.session?.active_client_id);
 }
 
+router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
+  try {
+    const text = req.body?.text || req.body?.message;
+    if (!text || !String(text).trim()) {
+      return res.status(400).json({ error: 'text_required' });
+    }
+    const interpreted = interpretConversationalInput({
+      text,
+      conversationId: req.body?.conversation_id || req.body?.conversationId,
+      actor: { userId: req.session?.user?.id, role: req.session?.user?.role },
+      now: req.body?.now,
+      conversationMemory: req.body?.conversation_memory || req.body?.conversationMemory,
+    });
+    return res.json({
+      ok: true,
+      situation_model: interpreted.situationModel,
+      preview: interpreted.preview,
+      validation: interpreted.validation,
+    });
+  } catch (error) {
+    console.error('[max-understanding]', error);
+    return res.status(500).json({ error: 'understanding_failed', message: error.message });
+  }
+});
+
 router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
   try {
     const clientId = resolveClientId(req);
@@ -30,10 +56,12 @@ router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
     }
     const result = await ingestOperationalEvidence(clientId, req.body || {});
     let decisionFollowUp = null;
-    try {
-      decisionFollowUp = await afterIngestionDecisions(clientId, result);
-    } catch (decisionErr) {
-      console.warn('[max-decision-execution] post-ingest evaluate skipped:', decisionErr.message);
+    if (!result.commit_blocked) {
+      try {
+        decisionFollowUp = await afterIngestionDecisions(clientId, result);
+      } catch (decisionErr) {
+        console.warn('[max-decision-execution] post-ingest evaluate skipped:', decisionErr.message);
+      }
     }
     return res.json({
       ok: true,
@@ -43,6 +71,10 @@ router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
       unresolved: result.unresolved,
       conflicts: result.conflicts,
       downstream_effects: result.downstream_effects,
+      situation_model: result.situation_model || null,
+      understanding_preview: result.understanding_preview || null,
+      clarification_required: result.clarification_required || null,
+      commit_blocked: Boolean(result.commit_blocked),
       decision_follow_up: decisionFollowUp
         ? {
           decision_id: decisionFollowUp.decision?.id,
