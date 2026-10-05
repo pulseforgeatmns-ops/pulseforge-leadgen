@@ -380,6 +380,7 @@ test('20 Scout-independent AO-reported prospect remains canonical', async () => 
 test('API routes registered for max ingest', () => {
   const routes = fs.readFileSync(path.join(__dirname, '..', 'routes', 'maxStateIngestion.js'), 'utf8');
   assert.match(routes, /\/api\/v1\/max\/ingest/);
+  assert.match(routes, /\/api\/v1\/max\/understand/);
   assert.match(routes, /\/api\/v1\/max\/ingest\/spreadsheet/);
   const server = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
   assert.match(server, /maxStateIngestion/);
