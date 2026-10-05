@@ -13,24 +13,28 @@
 
 require('dotenv').config();
 
-const { resolveStudioSubstralClientId } = require('../utils/studioSubstralTenant');
+const {
+  resolveStudioSubstralClientId,
+  ensureStudioSubstralServiceArea,
+} = require('../utils/studioSubstralTenant');
 const { STUDIO_SUBSTRAL_SCOUT_PLAN } = require('../services/studioSubstralScoutIntelligence');
 const { run } = require('../leadgen');
 
 async function main() {
   const dryRun = process.argv.includes('--dry-run');
+  await ensureStudioSubstralServiceArea();
   const clientId = await resolveStudioSubstralClientId();
   const mix = STUDIO_SUBSTRAL_SCOUT_PLAN.batch_mix;
   const runs = [];
 
   for (const [category, count] of Object.entries(mix)) {
     const queries = STUDIO_SUBSTRAL_SCOUT_PLAN.verticals[category] || [];
-    const perQueryMax = Math.max(1, Math.ceil(count / Math.max(queries.length, 1)));
-    for (let i = 0; i < count; i += 1) {
-      const queryTemplate = queries[i % queries.length];
+    for (let i = 0; i < queries.length; i += 1) {
+      const queryTemplate = queries[i];
       const city = STUDIO_SUBSTRAL_SCOUT_PLAN.cities[i % STUDIO_SUBSTRAL_SCOUT_PLAN.cities.length];
       const location = `${city} ${STUDIO_SUBSTRAL_SCOUT_PLAN.state}`;
       const industry = queryTemplate.replace('{city}', city).replace('{state}', STUDIO_SUBSTRAL_SCOUT_PLAN.state);
+      const perQueryMax = Math.max(2, Math.ceil(count / queries.length));
       runs.push({
         category,
         client_id: clientId,
