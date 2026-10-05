@@ -4,6 +4,7 @@ const { resolveResearchWindowFromAnchor } = require('../../fixtures/researchWind
 const { callStore } = require('../../storage/storeUtils');
 const { ingestHistoricalMarketData } = require('../../ingestion/ingestHistoricalMarketData');
 const { FixtureMarketDataProvider } = require('../../providers/FixtureMarketDataProvider');
+const { deriveEvidencePattern } = require('../evidencePattern');
 
 /**
  * @param {object} store
@@ -66,7 +67,10 @@ async function backfillMarketHistory(store, candidate, raw, options = {}) {
 
 function buildFixturePricePath(candidate, raw, anchorIso) {
   const anchor = new Date(anchorIso).getTime();
-  const pattern = raw?.acquisitionPayload?.pattern || candidate.selectionCategory;
+  const catalogIndex = raw?.provenance?.catalogIndex ?? raw?.acquisitionPayload?.catalogIndex ?? 0;
+  const pattern =
+    raw?.acquisitionPayload?.pattern ||
+    deriveEvidencePattern(candidate.tokenAddress, catalogIndex);
   const points = [];
 
   const push = (offsetMin, price) => {
@@ -76,7 +80,7 @@ function buildFixturePricePath(candidate, raw, anchorIso) {
     });
   };
 
-  if (pattern === 'dual_cluster_run' || candidate.selectionCategory === 'stronger') {
+  if (pattern === 'dual_cluster_run') {
     push(-30, 0.00008);
     push(0, 0.0001);
     push(10, 0.00014);

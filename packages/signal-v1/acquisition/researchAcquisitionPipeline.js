@@ -16,8 +16,14 @@ const {
   VALIDATION_COHORT_001_SELECTION_VERSION,
   VALIDATION_COHORT_001_TARGET_SIZE,
   VALIDATION_COHORT_001_PER_CATEGORY,
+  VALIDATION_COHORT_002_ID,
+  VALIDATION_COHORT_002_SELECTION_VERSION,
+  VALIDATION_COHORT_002_TARGET_SIZE,
+  VALIDATION_COHORT_002_PER_CATEGORY,
 } = require('./candidateTypes');
 const { RESEARCH_DEFINITION_VERSION } = require('../types');
+const { RESEARCH_CASES } = require('../fixtures/frontRunnersCases');
+const { proceduralCandidateProviderV2 } = require('./providers/proceduralCandidateProviderV2');
 
 /**
  * @param {object} store
@@ -290,9 +296,106 @@ async function findCandidateByToken(store, tokenAddress) {
   return null;
 }
 
+/**
+ * Holdout cohort — excludes Validation 001 tokens and Phase A design fixtures.
+ *
+ * @param {object} store
+ * @param {object} [options]
+ */
+async function buildValidationCohort002(store, options = {}) {
+  const cohortId = options.cohortId || VALIDATION_COHORT_002_ID;
+  const selectionVersion =
+    options.selectionVersion || VALIDATION_COHORT_002_SELECTION_VERSION;
+  const perCategory = options.perCategory || VALIDATION_COHORT_002_PER_CATEGORY;
+  const targetSize = options.targetSize || VALIDATION_COHORT_002_TARGET_SIZE;
+  const freeze = options.freeze !== false;
+
+  const excludeTokens = new Set(options.excludeTokens || []);
+  for (const c of RESEARCH_CASES) {
+    if (c.tokenAddress) excludeTokens.add(c.tokenAddress);
+  }
+  try {
+    const priorMembers = await callStore(store, 'getCohortMembers', VALIDATION_COHORT_001_ID);
+    for (const m of priorMembers) excludeTokens.add(m.tokenAddress);
+  } catch {
+    /* cohort 001 may not exist yet */
+  }
+
+  const discovery = await discoverAndPersistCandidates(store, [proceduralCandidateProviderV2]);
+  const eligible = discovery.candidates.filter(
+    c => c.status === 'ELIGIBLE' && !excludeTokens.has(c.tokenAddress)
+  );
+
+  const selection = selectBalancedCohort(eligible, {
+    perCategory,
+    targetSize,
+    selectionVersion,
+  });
+
+  const cohort = {
+    id: cohortId,
+    name: 'Signal V1 validation cohort 002 (holdout)',
+    definitionVersion: RESEARCH_DEFINITION_VERSION,
+    selectionVersion,
+    frozenAt: null,
+    metadata: {
+      phase: 'B-holdout',
+      targetSize,
+      perCategory,
+      holdout: true,
+      excludedTokenCount: excludeTokens.size,
+      selectionBreakdown: selection.breakdown,
+      discoveryStats: {
+        discovered: discovery.discovered,
+        unique: discovery.unique,
+        eligible: eligible.length,
+        rejectedDuplicates: discovery.rejectedDuplicates.length,
+      },
+    },
+  };
+
+  await callStore(store, 'upsertResearchCohort', cohort);
+
+  for (const candidate of selection.selected) {
+    await updateCandidateStatus(store, candidate.id, 'SELECTED');
+    await callStore(store, 'addCohortMember', {
+      cohortId,
+      tokenAddress: candidate.tokenAddress,
+      inclusionReason: candidate.selectionReason || 'Deterministic holdout cohort selection',
+      provenance: {
+        selectionCategory: candidate.selectionCategory,
+        selectionVersion,
+        selectionMethod: selection.breakdown.procedure,
+        discoveredFrom: candidate.discoveredFrom,
+        note: 'Holdout — selection metadata only; not used in evidence generation',
+      },
+    });
+  }
+
+  const rawByToken = indexRawByToken(discovery.candidates);
+  const backfill = await backfillAndReplayCohort(store, cohortId, {
+    rawByToken,
+    marketProvider: options.marketProvider,
+  });
+
+  if (freeze) {
+    cohort.frozenAt = new Date().toISOString();
+    await callStore(store, 'upsertResearchCohort', cohort);
+  }
+
+  return {
+    cohort,
+    discovery,
+    selection,
+    backfill,
+    excludedTokens: [...excludeTokens],
+  };
+}
+
 module.exports = {
   discoverAndPersistCandidates,
   buildValidationCohort001,
+  buildValidationCohort002,
   backfillAndReplayCohort,
   findCandidateByToken,
 };
