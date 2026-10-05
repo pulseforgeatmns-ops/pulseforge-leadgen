@@ -11,6 +11,7 @@ const {
   isPreProviderOutboundFailure,
 } = require('../services/governedOutboundProviderBoundary');
 const {
+  classifyProvenSent,
   classifyProvenUnsent,
   reconcileUncertainItemFromEvidence,
 } = require('../services/governedUncertainSendReconciliation');
@@ -107,6 +108,35 @@ test('E: post-boundary unknown acceptance remains uncertain-eligible', () => {
   const tracker = createProviderBoundaryTracker();
   tracker.markCrossed();
   assert.equal(isPreProviderOutboundFailure({ code: 'provider_acceptance_unknown' }, tracker), false);
+});
+
+test('F: canonical execution sent record classifies uncertain item as PROVEN_SENT', () => {
+  const item = {
+    id: 'daily_item_2',
+    status: 'uncertain',
+    reason: 'provider_or_persistence_error',
+    email: 'anthony@example.com',
+    candidate_id: 'company-1',
+    prospect_id: 'prospect-1',
+  };
+  const evidence = {
+    schedules: [],
+    mailboxMessages: [],
+    executions: [{
+      id: 'amo_send_x',
+      status: 'sent',
+      provider_message_id: '<provider-id>',
+      prospect_id: 'company-1',
+      payload: { email: 'anthony@example.com' },
+      attempted_at: '2026-10-05T15:32:03.450Z',
+    }],
+    events: [],
+    emmettReservation: [],
+    tickBlocks: [{ payload: { reason: 'tme_persistence_verify' } }],
+  };
+  const classification = classifyProvenSent(item, evidence);
+  assert.equal(classification.outcome, 'PROVEN_SENT');
+  assert.equal(classification.providerMessageId, '<provider-id>');
 });
 
 test('G: proven pre-provider uncertain attempt reconciles to releasable pending exactly once', async () => {

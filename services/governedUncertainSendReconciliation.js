@@ -51,13 +51,14 @@ async function gatherUncertainSendEvidence(pool, item) {
   )).rows;
 
   const executions = (await pool.query(
-    `SELECT id, status, provider_message_id, sent_at, mission_id, provider_error_code
+    `SELECT id, status, provider_message_id, sent_at, attempted_at, mission_id,
+            prospect_id, payload, provider_error_code
        FROM acquisition_mission_outbound_executions
       WHERE tenant_id = $1
-        AND (prospect_id = $2 OR lower(payload->>'email') = $3)
+        AND (prospect_id = $2 OR prospect_id = $4 OR lower(payload->>'email') = $3)
       ORDER BY attempted_at DESC NULLS LAST
       LIMIT 20`,
-    [tenantId, prospectId, email],
+    [tenantId, prospectId, email, String(item.candidate_id || '')],
   )).rows;
 
   const events = (await pool.query(
@@ -115,6 +116,37 @@ function extractPreProviderFailureCode(item, evidence) {
     if (PRE_PROVIDER_UNCERTAIN_REASONS.has(code)) return code;
   }
   return null;
+}
+
+function classifyProvenSent(item, evidence) {
+  if (!item || !['uncertain', 'attempted'].includes(item.status)) {
+    return { outcome: 'SKIP', reason: 'item_not_reconcilable' };
+  }
+  if (item.status === 'sent' && item.provider_message_id) {
+    return { outcome: 'SKIP', reason: 'already_sent' };
+  }
+  const email = String(item.email || '').toLowerCase();
+  const sentExecution = evidence.executions.find((row) => row.status === 'sent'
+    && row.provider_message_id
+    && (
+      String(row.payload?.email || '').toLowerCase() === email
+      || String(row.prospect_id) === String(item.candidate_id)
+      || String(row.prospect_id) === String(item.prospect_id)
+    ));
+  if (!sentExecution) {
+    return { outcome: 'UNKNOWN', reason: 'canonical_execution_not_sent' };
+  }
+  return {
+    outcome: 'PROVEN_SENT',
+    reason: 'canonical_execution_record',
+    providerMessageId: sentExecution.provider_message_id,
+    providerOutcome: 'PROVIDER_CONFIRMED_SENT',
+    evidenceSummary: {
+      executionId: sentExecution.id,
+      providerMessageId: sentExecution.provider_message_id,
+      executionAttemptedAt: sentExecution.attempted_at || sentExecution.sent_at || null,
+    },
+  };
 }
 
 function classifyProvenUnsent(item, evidence) {
@@ -195,6 +227,42 @@ async function reconcileUncertainItemFromEvidence(pool, tenantId, itemId, opts =
     return { itemId, skipped: true, reason: 'already_reconciled' };
   }
   const evidence = await gatherUncertainSendEvidence(pool, item);
+  const sentClassification = classifyProvenSent(item, evidence);
+  if (sentClassification.outcome === 'PROVEN_SENT') {
+    await persistReconciliationEvidence(pool, item, sentClassification);
+    if (opts.dryRun) {
+      return { itemId, classification: sentClassification, applied: false, dryRun: true };
+    }
+    const store = new GovernedOutboundStore(pool, tenantId);
+    const finalized = await store.lock(async () => {
+      const live = await loadItemWithEnvelope(pool, tenantId, itemId);
+      if (!live || live.status === 'sent') return { skipped: true, reason: 'already_sent' };
+      if (!['uncertain', 'attempted'].includes(live.status)) {
+        return { skipped: true, reason: 'item_not_reconcilable' };
+      }
+      await store.finish(live, 'sent', 'evidence_reconciled', sentClassification.providerMessageId);
+      await store.event('send_reconciled', [itemId, 'accepted'], {
+        itemId,
+        outcome: 'accepted',
+        providerMessageId: sentClassification.providerMessageId,
+        evidence: JSON.stringify(sentClassification.evidenceSummary || {}),
+        actor: 'canonical_evidence_reconciler',
+        providerOutcome: sentClassification.providerOutcome,
+      });
+      return { status: 'sent' };
+    });
+    if (finalized?.skipped) {
+      return { itemId, skipped: true, reason: finalized.reason, classification: sentClassification, applied: false };
+    }
+    return {
+      itemId,
+      classification: sentClassification,
+      applied: true,
+      status: finalized?.status || 'sent',
+      retryAllowed: false,
+    };
+  }
+
   const classification = classifyProvenUnsent(item, evidence);
   await persistReconciliationEvidence(pool, item, classification);
   if (classification.outcome !== 'PROVEN_UNSENT') {
@@ -221,6 +289,7 @@ async function reconcileUncertainItemFromEvidence(pool, tenantId, itemId, opts =
 
 module.exports = {
   gatherUncertainSendEvidence,
+  classifyProvenSent,
   classifyProvenUnsent,
   reconcileUncertainItemFromEvidence,
 };
