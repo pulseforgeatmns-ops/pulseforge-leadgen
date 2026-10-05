@@ -20,6 +20,13 @@ const {
   fitScoreTen,
   buildBatchFromRows,
 } = require('../scripts/exportStudioSubstralBatch001');
+const {
+  dedupeProspectRows,
+  assignFirstWaveCandidates,
+  pickSpecificWebsiteIssue,
+  isGenericIssueText,
+} = require('../scripts/lib/studioSubstralBatch001Export');
+const { STUDIO_PRIORITY_THRESHOLD } = require('../services/studioSubstralScoutIntelligence');
 
 const substralClient = {
   id: 17,
@@ -195,7 +202,99 @@ describe('Studio Substral Batch 001 scout regressions', () => {
     }
   });
 
-  it('export batch builder reflects qualified inventory rows passed in', () => {
+  it('dedupes export rows by domain keeping highest studio_fit_score', () => {
+    const rows = [
+      {
+        id: 'dup-low',
+        studio_fit_score: 72,
+        website_url: 'https://www.keyrenter-newengland.com',
+        studio_scout_intelligence: { company_name: 'Keyrenter New England Property Management' },
+        created_at: '2026-10-01T00:00:00Z',
+      },
+      {
+        id: 'dup-high',
+        studio_fit_score: 86,
+        website_url: 'keyrenter-newengland.com',
+        studio_scout_intelligence: { company_name: 'Keyrenter New England PM' },
+        created_at: '2026-10-02T00:00:00Z',
+      },
+      {
+        id: 'unique',
+        studio_fit_score: 75,
+        website_url: 'https://heritagehomeservice.com',
+        studio_scout_intelligence: { company_name: 'Heritage Home Service' },
+        created_at: '2026-10-02T00:00:00Z',
+      },
+    ];
+    const deduped = dedupeProspectRows(rows);
+    assert.equal(deduped.length, 2);
+    assert.equal(deduped[0].id, 'dup-high');
+    assert.ok(deduped.some((r) => r.id === 'unique'));
+  });
+
+  it('assigns first-wave flags from strong-tier ranking after dedupe', async () => {
+    const rows = [
+      {
+        id: 'strong-a',
+        studio_fit_score: STUDIO_PRIORITY_THRESHOLD + 4,
+        website_url: 'https://alpha.example',
+        studio_scout_intelligence: {
+          company_name: 'Alpha Co',
+          website_issues_observed: ['Primary navigation contains no Contact link'],
+        },
+        studio_outreach_status: 'review_needed',
+      },
+      {
+        id: 'strong-b',
+        studio_fit_score: STUDIO_PRIORITY_THRESHOLD + 1,
+        website_url: 'https://beta.example',
+        studio_scout_intelligence: {
+          company_name: 'Beta Co',
+          website_issues_observed: ['Missing viewport meta tag'],
+        },
+        studio_outreach_status: 'review_needed',
+      },
+      {
+        id: 'mid',
+        studio_fit_score: STUDIO_PRIORITY_THRESHOLD - 5,
+        website_url: 'https://gamma.example',
+        studio_scout_intelligence: { company_name: 'Gamma Co' },
+        studio_outreach_status: 'new',
+      },
+    ];
+    const batch = await buildBatchFromRows(rows, {
+      clientId: 17,
+      minFitTen: 7,
+      limit: 25,
+      skipDeepAudit: true,
+    });
+    assert.equal(batch.prospect_count, 3);
+    assert.equal(batch.strong_tier_count, 3);
+    assert.equal(batch.first_wave_candidates.length, 3);
+    assert.equal(batch.prospects[0].first_wave_candidate, true);
+    assert.ok(batch.prospects[0].max_priority_score >= batch.prospects[2].max_priority_score);
+  });
+
+  it('pickSpecificWebsiteIssue avoids generic trust/conversion fallback when findings exist', () => {
+    const issue = pickSpecificWebsiteIssue({
+      intel: { website_issues_observed: ['Homepage trust and conversion path need strengthening'] },
+      assessmentPayload: {
+        assessment: {
+          verified_findings: [{
+            id: 'dom_no_contact_nav',
+            summary: 'Primary navigation contains no Contact link',
+            category: 'conversion_structure',
+            evidence_class: 'OBSERVED',
+          }],
+        },
+      },
+    });
+    assert.ok(issue);
+    assert.equal(isGenericIssueText(issue), false);
+    assert.match(issue, /homepage CTA|Contact/i);
+  });
+
+  it('export batch builder reflects qualified inventory rows passed in', async () => {
     const savedArgv = process.argv;
     process.argv = ['node', 'export', '--min-fit=7', '--limit=25'];
     const { minStudioScore } = parseArgs();
@@ -227,7 +326,12 @@ describe('Studio Substral Batch 001 scout regressions', () => {
         website_url: 'weak.example',
       },
     ];
-    const batch = buildBatchFromRows(rows, { clientId: 17, minFitTen: 7, limit: 25 });
+    const batch = await buildBatchFromRows(rows, {
+      clientId: 17,
+      minFitTen: 7,
+      limit: 25,
+      skipDeepAudit: true,
+    });
     assert.equal(batch.prospect_count, 2);
     assert.equal(batch.prospects[0].fit_score_1_to_10, fitScoreTen(74));
     assert.equal(batch.prospects[0].business_name, 'Example Co');
