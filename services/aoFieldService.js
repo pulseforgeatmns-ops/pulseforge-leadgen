@@ -271,15 +271,8 @@ async function createVisitRecord({
   }
 }
 
-async function resolveTaskCrmProspectId(taskRow, clientId) {
-  if (taskRow.crm_prospect_id) return taskRow.crm_prospect_id;
-  const link = await findCrmLinkForBusiness(clientId, taskRow.business_name);
-  if (!link?.crm_prospect_id) return null;
-  await pool.query(`
-    UPDATE ao_leads SET crm_prospect_id = $1, updated_at = NOW()
-    WHERE id = $2 AND crm_prospect_id IS NULL
-  `, [link.crm_prospect_id, taskRow.lead_id]);
-  return link.crm_prospect_id;
+async function resolveTaskCrmProspectId(taskRow) {
+  return taskRow.crm_prospect_id || null;
 }
 
 async function getTaskCrmContext(taskId, aoOwnerId) {
@@ -296,11 +289,12 @@ async function getTaskCrmContext(taskId, aoOwnerId) {
   const row = rows[0];
   if (!row) return null;
 
-  const prospectId = await resolveTaskCrmProspectId(row, row.client_id);
+  const prospectId = await resolveTaskCrmProspectId(row);
   return {
     task_id: row.task_id,
     lead_id: row.lead_id,
     prospect_id: prospectId,
+    crm_linkage_status: prospectId ? 'linked' : 'unlinked',
     business_name: row.business_name,
     task_status: row.task_status,
     contact_name: row.contact_name || null,
