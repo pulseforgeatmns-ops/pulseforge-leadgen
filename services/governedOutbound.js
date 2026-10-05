@@ -68,14 +68,10 @@ function service({
     await adapters.validateTenant(program);
     return source;
   }
-  async function migrateOperatorDelegatedCapacity(input, actor) {
-    if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
-    const program = await store.program();
-    if (!program) fail('program_not_found');
+  function buildOperatorDelegatedMigrationReview(input, program, authorizationNow) {
     const current = program.policy || {};
     const delegatedDaily = input.operatorDelegatedMaximumDailyCapacity
       ?? current.operatorDelegatedMaximumDailyCapacity;
-    const authorizationNow = now();
     const grantHorizonDays = input.grantHorizonDays != null
       ? Number(input.grantHorizonDays)
       : (input.renewBoundedGrantHorizon ? DEFAULT_BOUNDED_GRANT_HORIZON_DAYS : null);
@@ -109,36 +105,54 @@ function service({
       operatorDelegatedMaximumDailyCapacity: delegatedDaily,
     }, authorizationNow);
     const authorityAfter = describeOperatorAuthorityEnvelope(p);
-    const reviewHash = hash({ policy: p, scopeHash: program.scope_hash });
-    if (input.reviewHash !== reviewHash) {
-      return {
-        reviewRequired: true,
-        reviewHash,
-        policy: p,
-        scopeHash: program.scope_hash,
-        migration: 'operator_delegated_maximum_daily_capacity',
-        authority: { before: authorityBefore, after: authorityAfter },
-        grantHorizon: grantHorizon || undefined,
-        programTotalCapMigration: {
-          previousTotalCap: authorityBefore.totalCap,
-          nextTotalCap: authorityAfter.totalCap,
-          grantWeekdaySlots: countGrantWeekdaySlots(p),
-        },
-      };
+    const authorizationInstant = authorizationNow.toISOString();
+    const reviewHash = hash({ policy: p, scopeHash: program.scope_hash, authorizationInstant });
+    return {
+      reviewHash,
+      policy: p,
+      scopeHash: program.scope_hash,
+      programId: program.id,
+      tenantId: resolvedTenantId,
+      authorizationInstant,
+      migration: 'operator_delegated_maximum_daily_capacity',
+      authority: { before: authorityBefore, after: authorityAfter },
+      grantHorizon: grantHorizon || undefined,
+      programTotalCapMigration: {
+        previousTotalCap: authorityBefore.totalCap,
+        nextTotalCap: authorityAfter.totalCap,
+        grantWeekdaySlots: countGrantWeekdaySlots(p),
+      },
+    };
+  }
+  async function migrateOperatorDelegatedCapacity(input, actor) {
+    if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
+    const program = await store.program();
+    if (!program) fail('program_not_found');
+    const applyAttempt = input.reviewHash != null && String(input.reviewHash).length > 0;
+    if (applyAttempt && !input.authorizationInstant) fail('policy_review_stale');
+    const authorizationNow = applyAttempt
+      ? new Date(input.authorizationInstant)
+      : now();
+    if (applyAttempt && Number.isNaN(authorizationNow.getTime())) fail('policy_review_stale');
+    const review = buildOperatorDelegatedMigrationReview(input, program, authorizationNow);
+    if (input.reviewHash !== review.reviewHash) {
+      if (applyAttempt) fail('policy_review_stale');
+      return { reviewRequired: true, ...review };
     }
+    if (hash(review.policy) === program.policy_hash) return program;
     const authorization = {
       kind: 'operator_delegated_maximum_daily_capacity',
-      operatorDelegatedMaximumDailyCapacity: p.operatorDelegatedMaximumDailyCapacity,
-      totalCap: p.totalCap,
-      previousTotalCap: authorityBefore.totalCap,
-      grantHorizonDays: grantHorizon?.grantHorizonDays,
-      startsAt: p.startsAt,
-      expiresAt: p.expiresAt,
-      recordedAt: authorizationNow.toISOString(),
+      operatorDelegatedMaximumDailyCapacity: review.policy.operatorDelegatedMaximumDailyCapacity,
+      totalCap: review.policy.totalCap,
+      previousTotalCap: review.authority.before.totalCap,
+      grantHorizonDays: review.grantHorizon?.grantHorizonDays,
+      startsAt: review.policy.startsAt,
+      expiresAt: review.policy.expiresAt,
+      recordedAt: review.authorizationInstant,
       actor: String(actor.id),
       note: input.authorizationNote || 'Emmett-authoritative dynamic outbound capacity migration',
     };
-    return store.migrateProgramPolicy(program, p, String(actor.id), authorization);
+    return store.migrateProgramPolicy(program, review.policy, String(actor.id), authorization);
   }
   async function setMode(id, mode, reviewHash, actor) {
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');

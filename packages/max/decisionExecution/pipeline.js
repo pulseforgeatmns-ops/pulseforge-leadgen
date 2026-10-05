@@ -30,6 +30,7 @@ async function evaluateOperationalDecision({
   trigger,
   stateStore,
   decisionStore,
+  attentionStore = null,
   expectation = null,
   prospect = null,
   now = new Date(),
@@ -180,6 +181,16 @@ async function evaluateOperationalDecision({
   await decisionStore.persistDecision(decision);
   const receipt = buildDecisionReceipt({ decision, intent, snapshot });
 
+  if (attentionStore) {
+    const { syncAttentionFromDecision } = require('../attention/syncFromDecision');
+    await syncAttentionFromDecision({
+      attentionStore,
+      decision,
+      snapshot,
+      now,
+    });
+  }
+
   return { decision, intent, receipt, telemetry, snapshot };
 }
 
@@ -214,8 +225,25 @@ async function scanExpectationTriggers({ clientId, stateStore, decisionStore, no
   );
 }
 
-async function reevaluateOnIngestion({ clientId, stateStore, decisionStore, ingestionResult, now = new Date() }) {
+async function reevaluateOnIngestion({
+  clientId,
+  stateStore,
+  decisionStore,
+  attentionStore = null,
+  ingestionResult,
+  now = new Date(),
+}) {
   if (!ingestionResult) return null;
+  if (attentionStore && ingestionResult) {
+    const { wakeAttentionForIngestion } = require('../attention/wake');
+    await wakeAttentionForIngestion({
+      attentionStore,
+      clientId,
+      ingestionResult,
+      stateStore,
+      now,
+    });
+  }
   let prospect = ingestionResult.prospect || null;
   const openExp = (stateStore.expectations || []).find(e =>
     ['OPEN', 'WAITING', 'OVERDUE'].includes(e.status)
@@ -244,6 +272,7 @@ async function reevaluateOnIngestion({ clientId, stateStore, decisionStore, inge
     trigger,
     stateStore,
     decisionStore,
+    attentionStore,
     prospect,
     expectation: scopedExp || openExp,
     now,
