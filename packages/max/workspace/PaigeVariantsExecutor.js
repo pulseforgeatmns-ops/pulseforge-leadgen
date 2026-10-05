@@ -41,6 +41,22 @@ const {
   DOCTRINE_BLOCKER,
 } = require('../../../utils/anchorCopyDoctrine');
 
+function lookupApprovedCopy(approvedCopies, identity) {
+  if (!approvedCopies) return null;
+  const keys = [identity.candidateId, identity.companyId, identity.crmProspectId]
+    .map((value) => (value == null ? '' : String(value)))
+    .filter(Boolean);
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(approvedCopies, key)) continue;
+    const approved = approvedCopies[key];
+    if (!approved) {
+      throw Object.assign(new Error('Prospect-bound approved copy is missing'), { code: 'approved_copy_missing' });
+    }
+    return approved;
+  }
+  return null;
+}
+
 function lookupCrmRecord(crmByProspectId, prospectId) {
   if (!crmByProspectId || prospectId == null) return null;
   if (crmByProspectId instanceof Map) {
@@ -123,8 +139,7 @@ function buildPerProspectVariants(input = {}) {
     let usedPersonalization = false;
     let scoutPersonalization = null;
 
-    const approved = input.approvedCopies?.[String(candidateId)];
-    if (input.approvedCopies && !approved) throw Object.assign(new Error('Prospect-bound approved copy is missing'), { code: 'approved_copy_missing' });
+    const approved = lookupApprovedCopy(input.approvedCopies, identity);
     if (approved) {
       copy = { subject: approved.content.subject, body: approved.content.body || approved.content.statement, cta: 'Would you be open to a short conversation?' };
       scoutPersonalization = { acquisitionKnowledgeAssetId: approved.id, version: approved.version, source: 'stakeholder_validated_outreach_asset' };
@@ -343,8 +358,10 @@ function buildPaigeVariantsPayload(executionInput = {}) {
 
 async function runPaigeVariants(executionInput = {}, opts = {}) {
   if (opts.pool && !executionInput.approvedCopies) {
-    const inventory = await require('../../../services/acquisitionMissionInventory').loadKnowledgeInventory(opts.pool, executionInput.mission || {});
-    if (inventory.length) executionInput = { ...executionInput, approvedCopies: Object.fromEntries(inventory.filter(r => !r.qualificationReason).map(r => [String(r.company_id), r.approved_asset])) };
+    const { loadKnowledgeInventory, approvedCopyIndexFromInventory } = require('../../../services/acquisitionMissionInventory');
+    const inventory = await loadKnowledgeInventory(opts.pool, executionInput.mission || {});
+    const approvedCopies = approvedCopyIndexFromInventory(inventory);
+    if (approvedCopies) executionInput = { ...executionInput, approvedCopies };
   }
   const transactionId = executionInput.transactionId;
   const { max, scout, plan } = extractPaigeUpstreamContext(executionInput);
@@ -461,8 +478,10 @@ async function runPaigeForAmoMission(mission, opts = {}) {
     store: opts.engine?.store,
   });
 
-  const inventory = opts.pool ? await require('../../../services/acquisitionMissionInventory').loadKnowledgeInventory(opts.pool, mission) : [];
-  const approvedCopies = inventory.length ? Object.fromEntries(inventory.filter(r => !r.qualificationReason).map(r => [String(r.company_id), r.approved_asset])) : undefined;
+  const inventory = opts.pool
+    ? await require('../../../services/acquisitionMissionInventory').loadKnowledgeInventory(opts.pool, mission)
+    : [];
+  const approvedCopies = require('../../../services/acquisitionMissionInventory').approvedCopyIndexFromInventory(inventory);
   const result = await executeSpecialist({
     specialist: SPECIALISTS.PAIGE,
     mission,

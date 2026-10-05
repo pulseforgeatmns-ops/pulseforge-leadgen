@@ -52,10 +52,19 @@ function buildPrioritiesFromDiscovery(discoveryPayload, plan) {
   const eligible = eligibility
     ? source.filter(row => eligibility[String(row.id || row.companyId)]?.eligible === true)
     : source;
-  return eligible.slice(0, 5).map((row, index) => ({
+  return eligible.slice(0, 5).map((row, index) => {
+    const companyId = row.companyId || row.crmCompanyId || null;
+    const prospectId = row.prospectId
+      || (row.id && companyId && String(row.id) !== String(companyId) ? row.id : null)
+      || null;
+    const candidateId = row.candidateId || companyId || row.id || null;
+    return {
     rank: index + 1,
     segment,
-    companyId: row.id || row.companyId || null,
+    id: row.id || candidateId,
+    candidateId,
+    companyId: companyId || row.id || null,
+    prospectId,
     name: row.name || null,
     fit: row.fit != null ? Number(row.fit) : null,
     timing: row.timing != null ? Number(row.timing) : null,
@@ -64,7 +73,8 @@ function buildPrioritiesFromDiscovery(discoveryPayload, plan) {
       row.rationale
       || (row.intelligenceBrief && row.intelligenceBrief.summary)
       || null,
-  }));
+  };
+  });
 }
 
 function buildObjectivesFromPlan(plan, mission) {
