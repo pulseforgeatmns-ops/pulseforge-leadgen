@@ -39,10 +39,16 @@ const { PILOT_COHORT_ID } = require('./fixtures/seedResearchCohort');
 const { evaluateCohortLayers } = require('./research/cohortEvaluation');
 const { buildCohortEvaluationArtifact } = require('./research/cohortEvaluationExport');
 const { hydrateCohortResearchCache } = require('./research/researchStoreCache');
-const { buildValidationCohort001 } = require('./acquisition/researchAcquisitionPipeline');
+const {
+  buildValidationCohort001,
+  buildValidationCohort002,
+} = require('./acquisition/researchAcquisitionPipeline');
 const { isAsyncStore } = require('./storage/storeUtils');
 const { RESEARCH_DEFINITION_VERSION } = require('./types');
-const { VALIDATION_COHORT_001_ID } = require('./acquisition/candidateTypes');
+const {
+  VALIDATION_COHORT_001_ID,
+  VALIDATION_COHORT_002_ID,
+} = require('./acquisition/candidateTypes');
 
 class SignalService {
   /**
@@ -276,8 +282,16 @@ class SignalService {
     return buildValidationCohort001(this.store, options);
   }
 
+  async buildValidationCohort002(options = {}) {
+    return buildValidationCohort002(this.store, options);
+  }
+
   getValidationCohort001Id() {
     return VALIDATION_COHORT_001_ID;
+  }
+
+  getValidationCohort002Id() {
+    return VALIDATION_COHORT_002_ID;
   }
 
   async replayCohortMembers(cohortId, pricePathsByToken = {}) {

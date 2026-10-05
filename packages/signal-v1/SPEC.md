@@ -17,3 +17,9 @@ See repository issue/spec for full doctrine. V1 explicitly excludes real-money e
 - Acquisition pipeline: `packages/signal-v1/acquisition/` (providers, eligibility, deterministic selection, backfill, replay).
 - Operator report: `signal-v1/VALIDATION_COHORT_001_REPORT.md`.
 - Export: `npm run signal:validation-cohort-001` or `GET .../evaluation/export`.
+
+## Convergence integrity audit (SIGNAL-V1-004)
+
+- Holdout cohort: `cohort-signal-v1-validation-002` (`validation-002-selection-v1`), built only from `procedural-holdout-catalog-v2` with evidence patterns decoupled from selection labels.
+- Audit runner: `npm run signal:convergence-audit` → full audit table, provenance counts, Wilson intervals, negative controls, cross-cohort comparison.
+- Regression tests: `packages/signal-v1/tests/convergenceIntegrityAudit.test.js`.
