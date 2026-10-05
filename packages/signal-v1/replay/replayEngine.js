@@ -134,6 +134,7 @@ async function replayToken(store, input) {
       snapshot,
       decisionState: decision.state,
       pricePath: input.pricePath || buildPricePathFromObservations(allObservations),
+      researchConfig: input.researchConfig,
     });
     if (researchCreated.length) {
       researchTimeline.push(

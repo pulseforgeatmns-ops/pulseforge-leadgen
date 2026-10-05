@@ -18,6 +18,13 @@ See repository issue/spec for full doctrine. V1 explicitly excludes real-money e
 - Operator report: `signal-v1/VALIDATION_COHORT_001_REPORT.md`.
 - Export: `npm run signal:validation-cohort-001` or `GET .../evaluation/export`.
 
+## Empirical validation cohort 003 (SIGNAL-V1-005)
+
+- Cohort ID: `cohort-signal-v1-validation-003` (`validation-003-selection-v1`, `dataClass: EMPIRICAL`).
+- Natural chronological selection from `pulseforge-historical-caller-catalog-v1` (no outcome balancing).
+- Hard empirical guard: `assertEmpiricalCohort()` fail-closes on procedural caller/market evidence.
+- Export: `npm run signal:validation-cohort-003` → `signal-v1/validation-cohort-003-evaluation.json`.
+
 ## Convergence integrity audit (SIGNAL-V1-004)
 
 - Holdout cohort: `cohort-signal-v1-validation-002` (`validation-002-selection-v1`), built only from `procedural-holdout-catalog-v2` with evidence patterns decoupled from selection labels.
