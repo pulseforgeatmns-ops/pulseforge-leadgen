@@ -264,6 +264,7 @@ app.use('/', require('./routes/workspace'));
 app.use('/', require('./routes/maxChat'));
 app.use('/', require('./routes/maxWorkspace'));
 app.use('/', require('./routes/maxStateIngestion'));
+app.use('/', require('./routes/maxDecisionExecution'));
 app.use('/', require('./routes/operatorContext'));
 app.use('/', require('./routes/missions'));
 app.use('/', require('./routes/approvals'));
