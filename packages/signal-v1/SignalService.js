@@ -43,12 +43,15 @@ const {
   buildValidationCohort001,
   buildValidationCohort002,
 } = require('./acquisition/researchAcquisitionPipeline');
+const { buildValidationCohort003 } = require('./acquisition/empirical/buildValidationCohort003');
 const { isAsyncStore } = require('./storage/storeUtils');
 const { RESEARCH_DEFINITION_VERSION } = require('./types');
 const {
   VALIDATION_COHORT_001_ID,
   VALIDATION_COHORT_002_ID,
+  VALIDATION_COHORT_003_ID,
 } = require('./acquisition/candidateTypes');
+const { resolveCohortDataClass, isEmpiricalDataClass } = require('./research/dataClass');
 
 class SignalService {
   /**
@@ -259,7 +262,14 @@ class SignalService {
   }
 
   async evaluateResearchCohort(cohortId, executionDelaySeconds = 60, options = {}) {
+    const cohort = this.store.researchCohorts?.get?.(cohortId);
+    const dataClass = resolveCohortDataClass(cohortId, cohort);
     if (options.replayMembers !== false) {
+      if (isEmpiricalDataClass(dataClass)) {
+        throw new Error(
+          'EMPIRICAL cohort evaluation cannot replay members with procedural price paths'
+        );
+      }
       await this.replayCohortMembers(
         cohortId,
         options.pricePathsByToken || DEFAULT_COHORT_PRICE_PATHS
@@ -286,12 +296,20 @@ class SignalService {
     return buildValidationCohort002(this.store, options);
   }
 
+  async buildValidationCohort003(options = {}) {
+    return buildValidationCohort003(this.store, options);
+  }
+
   getValidationCohort001Id() {
     return VALIDATION_COHORT_001_ID;
   }
 
   getValidationCohort002Id() {
     return VALIDATION_COHORT_002_ID;
+  }
+
+  getValidationCohort003Id() {
+    return VALIDATION_COHORT_003_ID;
   }
 
   async replayCohortMembers(cohortId, pricePathsByToken = {}) {

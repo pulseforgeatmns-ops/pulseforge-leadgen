@@ -22,6 +22,7 @@ const {
   VALIDATION_COHORT_002_PER_CATEGORY,
 } = require('./candidateTypes');
 const { RESEARCH_DEFINITION_VERSION } = require('../types');
+const { RESEARCH_DATA_CLASS } = require('../research/dataClass');
 const { RESEARCH_CASES } = require('../fixtures/frontRunnersCases');
 const { proceduralCandidateProviderV2 } = require('./providers/proceduralCandidateProviderV2');
 
@@ -140,9 +141,11 @@ async function buildValidationCohort001(store, options = {}) {
     name: 'Signal V1 validation cohort 001',
     definitionVersion: RESEARCH_DEFINITION_VERSION,
     selectionVersion,
+    dataClass: RESEARCH_DATA_CLASS.SYNTHETIC,
     frozenAt: null,
     metadata: {
       phase: 'B',
+      dataClass: RESEARCH_DATA_CLASS.SYNTHETIC,
       targetSize,
       perCategory,
       selectionBreakdown: selection.breakdown,
@@ -337,9 +340,11 @@ async function buildValidationCohort002(store, options = {}) {
     name: 'Signal V1 validation cohort 002 (holdout)',
     definitionVersion: RESEARCH_DEFINITION_VERSION,
     selectionVersion,
+    dataClass: RESEARCH_DATA_CLASS.SYNTHETIC,
     frozenAt: null,
     metadata: {
       phase: 'B-holdout',
+      dataClass: RESEARCH_DATA_CLASS.SYNTHETIC,
       targetSize,
       perCategory,
       holdout: true,

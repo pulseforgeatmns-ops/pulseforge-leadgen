@@ -77,6 +77,10 @@ const STRATEGY_VERSION = 'signal-strategy-v1';
 const SOURCE_PERFORMANCE_VERSION = 'source-performance-v1';
 const RESEARCH_DEFINITION_VERSION = 'signal-research-v1';
 
+/** @typedef {'SYNTHETIC' | 'MIXED' | 'EMPIRICAL'} ResearchDataClass */
+
+const RESEARCH_DATA_CLASSES = Object.freeze(['SYNTHETIC', 'MIXED', 'EMPIRICAL']);
+
 /** @typedef {(
  *   | 'FIRST_CALLER'
  *   | 'INDEPENDENT_CONVERGENCE'
@@ -149,6 +153,7 @@ module.exports = {
   STRATEGY_VERSION,
   SOURCE_PERFORMANCE_VERSION,
   RESEARCH_DEFINITION_VERSION,
+  RESEARCH_DATA_CLASSES,
   RESEARCH_OBSERVATION_TYPES,
   SIGNAL_EVENT_TYPES,
   SIGNAL_STATES,

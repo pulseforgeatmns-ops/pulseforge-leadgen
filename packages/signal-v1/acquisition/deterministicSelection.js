@@ -54,7 +54,52 @@ function stableHash(input) {
   return createHash('sha256').update(String(input)).digest('hex');
 }
 
+/**
+ * Natural chronological selection (empirical cohort 003):
+ * 1. Stable sort eligible by earliestKnownCallAt ASC, then tokenAddress ASC
+ * 2. Take first targetSize rows
+ * 3. Must not use selectionCategory/outcome labels
+ *
+ * @param {object[]} eligible
+ * @param {{ targetSize?: number, selectionVersion?: string, historicalStart?: Date|string }} options
+ */
+function selectChronologicalCohort(eligible, options = {}) {
+  const targetSize = options.targetSize ?? 50;
+  const selectionVersion = options.selectionVersion || 'validation-003-selection-v1';
+  const historicalStart = options.historicalStart ? new Date(options.historicalStart) : null;
+
+  let pool = [...eligible];
+  if (historicalStart) {
+    pool = pool.filter(
+      c => new Date(c.earliestKnownCallAt).getTime() >= historicalStart.getTime()
+    );
+  }
+
+  const sorted = pool.sort((a, b) => {
+    const ta = new Date(a.earliestKnownCallAt).getTime();
+    const tb = new Date(b.earliestKnownCallAt).getTime();
+    if (ta !== tb) return ta - tb;
+    return a.tokenAddress.localeCompare(b.tokenAddress);
+  });
+
+  const selected = sorted.slice(0, targetSize);
+
+  return {
+    selected,
+    breakdown: {
+      eligiblePool: eligible.length,
+      afterHistoricalStart: pool.length,
+      selectedCount: selected.length,
+      targetSize,
+      selectionVersion,
+      procedure: 'chronological_first_N_after_historical_start',
+      historicalStart: historicalStart ? historicalStart.toISOString() : null,
+    },
+  };
+}
+
 module.exports = {
   selectBalancedCohort,
+  selectChronologicalCohort,
   stableHash,
 };
