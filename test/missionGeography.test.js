@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   isLocationInMissionGeography,
   extractCityFromAddress,
+  isNationwideMissionScope,
   isProspectServiceAreaConfirmed,
 } = require('../utils/missionGeography');
 const { evaluateBasicFit, buildAcquisitionSearchDefinition } = require('../services/scoutAcquisitionIntelligence');
@@ -146,6 +147,15 @@ test('Scout basic fit uses mission city list for Greater Manchester', () => {
   }, definition);
   assert.equal(hennikerFit.basicFit, false);
   assert.equal(hennikerFit.reasonCode, 'outside_geography');
+});
+
+test('nationwide United States missions do not require service_area_match backfill', () => {
+  const scope = { segment: 'small_business_owners', region: 'United States', scope: 'nationwide', cities: [] };
+  assert.equal(isNationwideMissionScope(scope), true);
+  assert.equal(
+    isProspectServiceAreaConfirmed({ service_area_match: null, company_location: null }, scope),
+    true
+  );
 });
 
 test('Max inventory accepts canonical service_area_match strings in mission cities', () => {

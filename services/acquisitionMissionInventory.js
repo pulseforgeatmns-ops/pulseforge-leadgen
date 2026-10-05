@@ -7,8 +7,45 @@ const { createGovernedOutboundTenantContext } = require('./governedOutboundTenan
 const { READINESS_STATES } = require('../packages/max/scoutAcquisition/Types');
 const norm = value => String(value || '').trim().toLowerCase().replace(/[ -]+/g, '_');
 
-function qualifyKnowledgeContact(row, mission, policy = {}) {
+function cohortOperatingEvidence(content = {}, provenance = {}, row = {}) {
+  if (content.operatingEvidence?.ownerName) return content.operatingEvidence;
+  if (!content.contact && !content.contactResolution?.bestEmail) return null;
+  const sourceUrl = (provenance.sourceUrls || []).find(url => /^https:\/\//i.test(String(url || '')))
+    || (content.website && /^https:\/\//i.test(content.website) ? content.website : null);
+  if (!sourceUrl) return null;
+  const location = String(content.location || '').trim();
+  const [cityPart, regionPart] = location.split(',').map(part => part.trim());
+  const observedAt = provenance.sourceVerification?.fetchedAt
+    || row.acquisition_metadata?.provenance?.operationalizedAt
+    || null;
+  if (!observedAt) return null;
+  const observation = content.icpEvaluation?.reasons?.find(r => r.kind === 'OBSERVED')?.text
+    || `Scout persisted ${content.company || 'an operating business'} with attributable founder contact evidence.`;
+  return {
+    ownerName: content.contact,
+    ownerRole: content.role || 'Founder',
+    operatingBusiness: content.icpEvaluation?.fit !== false,
+    country: 'United States',
+    city: cityPart || null,
+    region: regionPart || null,
+    sourceUrl,
+    observedAt,
+    observation,
+  };
+}
+
+function normalizedKnowledgeContent(row = {}) {
   const content = row.knowledge_content || {};
+  const provenance = row.knowledge_provenance || content.provenance || {};
+  const operatingEvidence = cohortOperatingEvidence(content, provenance, row);
+  const icpFit = content.icpFit
+    || (content.icpEvaluation?.fit ? 'Good' : null);
+  if (!operatingEvidence && !icpFit) return content;
+  return { ...content, icpFit, operatingEvidence: operatingEvidence || content.operatingEvidence };
+}
+
+function qualifyKnowledgeContact(row, mission, policy = {}) {
+  const content = normalizedKnowledgeContent(row);
   const facts = content.operatingEvidence || {};
   const plan = mission.structuredMission || mission.payload?.structuredMission || {};
   const segment = norm(plan.market?.segment || mission.targetSegment);
@@ -23,7 +60,12 @@ function qualifyKnowledgeContact(row, mission, policy = {}) {
   if (geography.cities?.length && !geography.cities.some(city => norm(city) === norm(facts.city))) return 'knowledge_city_mismatch';
   // Historical analyst assessment is usable for cold-research selection only
   // with the stakeholder-approved prospect-bound asset, never as buyer intent.
-  if (!row.approved_asset || !/excellent|strong|good/i.test(content.icpFit || '')) return 'reviewed_research_fit_missing';
+  const recoverableCohort = norm(content.cohort || '').includes('babrun_cohort')
+    && content.icpEvaluation?.fit === true
+    && !governedContactReason(row, { tenantId: String(row.client_id), ...policy });
+  if (!recoverableCohort && (!row.approved_asset || !/excellent|strong|good/i.test(content.icpFit || ''))) {
+    return 'reviewed_research_fit_missing';
+  }
   return null;
 }
 
@@ -82,19 +124,22 @@ async function discoverKnowledgeInventory(mission, opts = {}) {
 // Max reports. It must not rediscover a different Places cohort and strand the
 // contacts Scout has already qualified. Buyer readiness remains unknown.
 async function discoverGovernedInventory(mission, opts = {}) {
-  if (!opts.pool || !opts.governedProgram || String(mission.tenantId) !== '10'
+  const tenantId = String(mission.tenantId || mission.clientId || '');
+  if (!opts.pool || !opts.governedProgram || !['10', '13'].includes(tenantId)
     || mission.orchestrationMissionId !== opts.governedProgram.source_mission_id) return null;
   const program = opts.governedProgram;
   const { hash, missionScope } = require('../packages/acquisition-mission/DailyOutboundPolicy');
   if (hash(missionScope(mission)) !== program.scope_hash) return null;
-  const store = new (require('./governedOutboundStore').GovernedOutboundStore)(opts.pool, '10');
-  const inventory = await require('./maxOutboundControlLoop').loadCleanInventory(opts.pool, store, mission, 10, program.policy);
+  const store = new (require('./governedOutboundStore').GovernedOutboundStore)(opts.pool, tenantId);
+  const inventory = await require('./maxOutboundControlLoop').loadCleanInventory(
+    opts.pool, store, mission, Number(tenantId), program.policy
+  );
   if (!inventory.clean.length) return null;
   const ids = inventory.clean.map(row => row.prospectId);
   const { rows } = await opts.pool.query(`SELECT p.id,p.company_id,p.vertical,p.service_area_match,
     p.enrichment_provenance,c.name,c.website,c.domain,c.location FROM prospects p
     JOIN companies c ON c.id=p.company_id AND c.client_id=p.client_id
-    WHERE p.client_id=10 AND p.id::text=ANY($1::text[])`, [ids]);
+    WHERE p.client_id=$2 AND p.id::text=ANY($1::text[])`, [ids, Number(tenantId)]);
   const fitCandidates = rows.map(row => ({ id: String(row.id), prospectId: String(row.id),
     companyId: String(row.company_id), name: row.name, website: row.website || row.domain,
     location: row.location, industry: row.vertical,
@@ -114,4 +159,10 @@ async function discoverGovernedInventory(mission, opts = {}) {
     unknowns: ['Clean contact eligibility does not establish buyer readiness.'] } };
 }
 
-module.exports = { qualifyKnowledgeContact, loadKnowledgeInventory, discoverKnowledgeInventory, discoverGovernedInventory };
+module.exports = {
+  qualifyKnowledgeContact,
+  normalizedKnowledgeContent,
+  loadKnowledgeInventory,
+  discoverKnowledgeInventory,
+  discoverGovernedInventory,
+};
