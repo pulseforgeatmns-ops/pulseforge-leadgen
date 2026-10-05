@@ -286,9 +286,22 @@ function confirmedServiceAreaMatch(value) {
   return String(value).trim().length > 0;
 }
 
+function prospectMissionVertical(row, scope) {
+  const vertical = normalizeVertical(row.vertical || row.industry || '');
+  if (vertical && vertical !== 'unknown') return vertical;
+  const { verticalFromKnowledgeContent } = require('./existingInventoryRecovery');
+  const fromKnowledge = verticalFromKnowledgeContent(row.knowledge_content || {});
+  if (fromKnowledge) return fromKnowledge;
+  if (['small_business_owner', 'small_business_owners', 'founder_led_smb', 'founder_led_small_business']
+    .includes(scope.segment)) {
+    return scope.segment;
+  }
+  return vertical;
+}
+
 function missionCandidateReason(row, scope) {
   if (!isProspectServiceAreaConfirmed(row, scope)) return 'service_area_not_confirmed';
-  const vertical = normalizeVertical(row.vertical || row.industry || '');
+  const vertical = prospectMissionVertical(row, scope);
   const aliases = segmentAliases(scope);
   if (aliases.size && (!vertical || !aliases.has(vertical))) return 'mission_segment_mismatch';
   return null;
@@ -321,6 +334,7 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
 
   const knowledge = await require('./acquisitionMissionInventory').loadKnowledgeInventory(pool, { ...(source?.mission || source?.payload || source), tenantId: String(cid) }, policy);
   const qualifiedKnowledge = new Set(knowledge.filter(r => !r.qualificationReason).map(r => String(r.id)));
+  const knowledgeByProspectId = new Map(knowledge.map(r => [String(r.id), r]));
   const clean = [];
   const seenCompanies = new Set();
   const seenCompanyNames = new Set();
@@ -332,7 +346,11 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
     exclusionCounts[reason] = (exclusionCounts[reason] || 0) + 1;
   };
   for (const row of rows.sort(founderFirst)) {
-    const missionReason = qualifiedKnowledge.has(String(row.id)) ? null : missionCandidateReason(row, scope);
+    const knowledgeRow = knowledgeByProspectId.get(String(row.id));
+    const scopedRow = knowledgeRow
+      ? { ...row, knowledge_content: knowledgeRow.knowledge_content }
+      : row;
+    const missionReason = qualifiedKnowledge.has(String(row.id)) ? null : missionCandidateReason(scopedRow, scope);
     const emailReason = missionReason ? null : governedContactReason(row, policy);
     const candidate = {
       candidateId: String(row.id),
@@ -656,12 +674,24 @@ async function defaultScoutRamp({
   const tenant = resolveReplenishmentTenantContext({ governedContext: governed, program });
   const tenantBinding = { ...tenant, program, governedContext: governed };
   const enricher = enrichment || require('../scoutUnenrichedEnrichmentAgent');
+  let existingRecovery = null;
+  try {
+    existingRecovery = await require('./existingInventoryRecovery').recoverExistingGovernedInventory({
+      pool,
+      program,
+      source,
+      tenantId: tenant.tenantId,
+    });
+  } catch (err) {
+    logger.warn?.('[max-outbound-control] existing inventory recovery failed', err.message || err);
+  }
   const first = await runEnrichmentBatches(enricher, pool, plan.deficit, tenantBinding);
   let promoted = first.promoted + first.recovered;
   let discovery = null;
   let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
 
-  if (promoted < plan.deficit) {
+  const recoveredExistingCount = Number(existingRecovery?.payload?.qualifiedCount || 0);
+  if (promoted < plan.deficit && recoveredExistingCount <= 0) {
     const scope = sourceScope(source);
     const allowedCities = resolveScoutRampAllowedCities(scope);
     const discover = runDiscovery
@@ -706,18 +736,20 @@ async function defaultScoutRamp({
   const yieldReport = buildReplenishmentYield({
     admission: persisted.admission || {},
     enrichment: first,
-    recovered: first.recovered + Number(persisted.admission?.recovered || 0),
+    recovered: first.recovered + Number(persisted.admission?.recovered || 0) + recoveredExistingCount,
   });
 
   logger.log?.('[max-outbound-control] Scout ramp', JSON.stringify({
     requested: plan.deficit,
     promoted,
+    recoveredExisting: recoveredExistingCount,
+    existingRecoverySource: existingRecovery?.payload?.source || null,
     discoveredQueued: persisted.inserted,
     admission: persisted.admission || null,
     yield: yieldReport,
     discovery: discovery?.kind || null,
   }));
-  const recoveredExisting = first.recovered + Number(persisted.admission?.recovered || 0);
+  const recoveredExisting = first.recovered + Number(persisted.admission?.recovered || 0) + recoveredExistingCount;
   const verificationRetry = skipVerificationRetry
     ? emptyVerificationRetryTelemetry()
     : await retryUnverifiedEmails(pool, { clientId: tenant.clientId });

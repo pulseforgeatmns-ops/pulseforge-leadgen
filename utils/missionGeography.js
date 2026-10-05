@@ -135,9 +135,19 @@ function matchedMissionCity({
   return null;
 }
 
+function isNationwideMissionScope(scope = {}) {
+  if (String(scope.scope || '').trim().toLowerCase() === 'nationwide') return true;
+  const region = String(scope.region || '').trim().toLowerCase();
+  const cities = Array.isArray(scope.cities) ? scope.cities : [];
+  if (!cities.length && (region === 'united states' || region === 'us' || region === 'u.s.')) return true;
+  return false;
+}
+
 function isProspectServiceAreaConfirmed(row = {}, scope = {}) {
   if (row.service_area_match === false) return false;
   if (row.service_area_match === true) return true;
+
+  if (isNationwideMissionScope(scope)) return true;
 
   const allowedCities = resolveMissionAllowedCities({
     allowedCities: scope.cities,
@@ -162,5 +172,6 @@ module.exports = {
   normalizeCanonicalCity,
   resolveMissionAllowedCities,
   allowedCitiesFromGeographyLabel,
+  isNationwideMissionScope,
   isProspectServiceAreaConfirmed,
 };
