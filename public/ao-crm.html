@@ -258,6 +258,7 @@ body.modal-open {
 <script>
 const SECTION_KEYS = [
   ['today_queue', 'Today\'s Queue'],
+  ['needs_reassignment', 'Needs Reassignment'],
   ['my_accounts', 'My Accounts'],
   ['overdue', 'Overdue'],
   ['needs_help', 'Needs Help'],
@@ -304,10 +305,28 @@ function showFollowUpEntry(item) {
   return na === 'follow_up' || na === 'email' || na === 'send_information';
 }
 
-function renderRow(item) {
+function renderReviewActions(prospectId) {
+  return `
+    <div class="row-actions" data-review-row="${prospectId}">
+      <button class="btn primary" data-review="keep" data-prospect="${prospectId}">Keep</button>
+      <button class="btn" data-review="reassign_tony" data-prospect="${prospectId}">→ Tony</button>
+      <button class="btn" data-review="reassign_rory" data-prospect="${prospectId}">→ Rory</button>
+      <button class="btn" data-review="research_needed" data-prospect="${prospectId}">Research needed</button>
+      <button class="btn" data-review="disqualify" data-prospect="${prospectId}">Disqualify</button>
+    </div>
+  `;
+}
+
+function renderRow(item, { reviewSection = false } = {}) {
+  const transferTag = item.transferred_review_label
+    ? `<span class="tag">${item.transferred_review_label}</span>`
+    : '';
+  const priorAo = item.ao_reassignment_prior_ao_name
+    ? `<span class="tag">From ${item.ao_reassignment_prior_ao_name}</span>`
+    : '';
   return `
     <div class="row" data-prospect="${item.prospect_id}">
-      <div class="row-name">${item.company_name}</div>
+      <div class="row-name">${item.company_name} ${transferTag}${priorAo}</div>
       <div class="row-meta">
         ${item.current_status?.replace(/_/g, ' ') || '—'}
         · ${item.priority || 'normal'}
@@ -319,13 +338,14 @@ function renderRow(item) {
         · Next: ${item.next_action || '—'} ${item.next_action_date ? `(due ${item.next_action_date})` : ''}
       </div>
       ${item.latest_note_preview ? `<div class="row-meta">"${item.latest_note_preview.slice(0, 120)}"</div>` : ''}
+      ${reviewSection ? renderReviewActions(item.prospect_id) : `
       <div class="row-actions">
         <button class="btn" data-action="detail" data-prospect="${item.prospect_id}">Open</button>
         <button class="btn" data-action="brief" data-prospect="${item.prospect_id}">Brief me</button>
         <button class="btn primary" data-action="outcome" data-prospect="${item.prospect_id}" data-task="${item.open_task_id || ''}">Log outcome</button>
         ${showFollowUpEntry(item) ? `<button class="btn" data-action="followup" data-prospect="${item.prospect_id}">Draft Follow-Up</button>` : ''}
         <button class="btn" data-action="flag-jake" data-prospect="${item.prospect_id}">Flag for Jake</button>
-      </div>
+      </div>`}
     </div>
   `;
 }
@@ -336,7 +356,7 @@ function renderPanels() {
     const items = state.data?.sections?.[key] || [];
     return `
       <div class="panel ${state.activeTab === key ? 'active' : ''}" id="panel-${key}">
-        ${items.length ? items.map(renderRow).join('') : '<div class="empty">Nothing in this section right now.</div>'}
+        ${items.length ? items.map(item => renderRow(item, { reviewSection: key === 'needs_reassignment' })).join('') : '<div class="empty">Nothing in this section right now.</div>'}
       </div>
     `;
   }).join('');
@@ -705,6 +725,25 @@ document.getElementById('tabs').addEventListener('click', (e) => {
 });
 
 document.body.addEventListener('click', async (e) => {
+  const reviewBtn = e.target.closest('[data-review]');
+  if (reviewBtn) {
+    const prospectId = reviewBtn.dataset.prospect;
+    const decision = reviewBtn.dataset.review;
+    const note = decision === 'disqualify'
+      ? window.prompt('Disqualify reason (optional):') || ''
+      : '';
+    if (decision === 'disqualify' && note === null) return;
+    try {
+      await api(`/ao/api/crm/accounts/${prospectId}/transfer-review`, {
+        method: 'POST',
+        body: JSON.stringify({ decision, note: note || null }),
+      });
+      await loadDashboard();
+    } catch (err) {
+      alert(err.message);
+    }
+    return;
+  }
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   if (btn.dataset.action === 'detail') {

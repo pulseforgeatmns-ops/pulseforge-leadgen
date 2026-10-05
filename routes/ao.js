@@ -16,6 +16,7 @@ const { buildTelUrl } = require('../utils/aoRoutePlanner');
 const aoCommandCenter = require('../services/aoCommandCenterService');
 const aoProspectUpdate = require('../services/aoProspectUpdateService');
 const aoCrm = require('../services/aoCrmService');
+const aoRosterReassignment = require('../services/aoRosterReassignmentService');
 const aoFollowup = require('../services/aoFollowupService');
 const aoAccountFlags = require('../services/aoAccountFlagService');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
@@ -298,6 +299,29 @@ router.get('/api/crm/manager/accounts', requireJakeRead, refreshAoSession, wrapA
     },
   });
   res.json({ ...payload, next_actions: AO_CRM_NEXT_ACTIONS });
+}));
+
+router.post('/api/crm/accounts/:prospectId/transfer-review', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const { decision, note } = req.body || {};
+  const result = await aoRosterReassignment.submitTransferredAccountReview({
+    clientId,
+    prospectId: req.params.prospectId,
+    reviewerUserId: effectiveAoOwnerId(req),
+    decision,
+    note,
+  });
+  return sendAoServiceResult(res, result, { successBody: r => r });
+}));
+
+router.post('/api/crm/roster/inactive-transfer', requireJakeRead, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const dryRun = req.body?.dry_run !== false && req.query.dry_run !== '0';
+  const payload = await aoRosterReassignment.runZachToJakeTransfer({ clientId, dryRun });
+  res.json(payload);
 }));
 
 router.post('/api/crm/accounts/:prospectId/resolve-help', requireJakeRead, wrapAoHandler(async (req, res) => {

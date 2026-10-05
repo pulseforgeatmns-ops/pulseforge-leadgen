@@ -65,7 +65,8 @@ function mapTask(row) {
 
 async function getAoProfile(userId) {
   const { rows } = await pool.query(`
-    SELECT id, name, email, phone, role, territory, manager_id, daily_goal, weekly_goal, client_id, active
+    SELECT id, name, email, phone, role, territory, manager_id, daily_goal, weekly_goal, client_id, active,
+      COALESCE(ao_operational_status, 'active') AS ao_operational_status
     FROM users WHERE id = $1 LIMIT 1
   `, [userId]);
   return rows[0] || null;
@@ -719,12 +720,13 @@ async function completeRouteFollowUp(taskId, aoOwnerId, {
 }
 
 async function resolveAoOwnerByName(namePattern, clientId) {
+  const { sqlEligibleAoUsers } = require('../utils/aoRosterOperational');
   const { rows } = await pool.query(`
     SELECT id, name, email, client_id, role
-    FROM users
+    FROM users u
     WHERE client_id = $1
       AND role = 'ao'
-      AND active = true
+      ${sqlEligibleAoUsers('u')}
       AND name ILIKE $2
     ORDER BY id ASC
     LIMIT 1
@@ -733,6 +735,7 @@ async function resolveAoOwnerByName(namePattern, clientId) {
 }
 
 async function listActiveAoOwners(clientId, { excludeUserId = null } = {}) {
+  const { sqlEligibleAoUsers } = require('../utils/aoRosterOperational');
   const params = [clientId];
   let excludeClause = '';
   if (excludeUserId != null) {
@@ -741,10 +744,10 @@ async function listActiveAoOwners(clientId, { excludeUserId = null } = {}) {
   }
   const { rows } = await pool.query(`
     SELECT id, name, email, client_id, role
-    FROM users
+    FROM users u
     WHERE client_id = $1
       AND role = 'ao'
-      AND active = true
+      ${sqlEligibleAoUsers('u')}
       ${excludeClause}
     ORDER BY id ASC
   `, params);

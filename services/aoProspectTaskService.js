@@ -60,6 +60,7 @@ async function fetchProspectBundle(prospectId, clientId, db = pool) {
 }
 
 async function fetchAvailableAos(clientId, db = pool) {
+  const { sqlEligibleAoUsers } = require('../utils/aoRosterOperational');
   const { rows } = await db.query(`
     SELECT
       u.id,
@@ -67,6 +68,7 @@ async function fetchAvailableAos(clientId, db = pool) {
       u.email,
       u.territory,
       u.active,
+      COALESCE(u.ao_operational_status, 'active') AS ao_operational_status,
       (
         SELECT COUNT(*)::int
         FROM ao_prospect_tasks t
@@ -77,7 +79,7 @@ async function fetchAvailableAos(clientId, db = pool) {
     FROM users u
     WHERE u.client_id = $1
       AND u.role = 'ao'
-      AND u.active = true
+      ${sqlEligibleAoUsers('u')}
     ORDER BY u.name ASC
   `, [clientId]);
   return rows;

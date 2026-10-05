@@ -44,9 +44,10 @@ async function submitDebrief({
   if (prospect.do_not_contact || prospect.prospect_motion === 'SUPPRESS') {
     throw debriefError('prospect_suppressed', 409);
   }
+  const { sqlEligibleAoUsers } = require('../utils/aoRosterOperational');
   const owner = (await client.query(`
-    SELECT id FROM users
-    WHERE id = $1 AND client_id = $2 AND role = 'ao' AND active = true
+    SELECT id FROM users u
+    WHERE id = $1 AND client_id = $2 AND role = 'ao' ${sqlEligibleAoUsers('u')}
   `, [aoOwnerId, clientId])).rows[0];
   if (!owner) throw debriefError('ao_owner_not_active_for_tenant', 403);
   if (taskId) {
