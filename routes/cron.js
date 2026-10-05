@@ -638,6 +638,31 @@ async function handleScoutPlacesDiagnostic(req, res) {
   }
 }
 
+async function handleMaxAttentionCycleCron(req, res) {
+  const secret = req.body?.secret || req.query.secret;
+  if (process.env.CRON_SECRET && secret !== process.env.CRON_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const { runAttentionSchedulerAllClients } = require('../services/maxAttentionService');
+    const clientId = normalizeClientId(req.query.client_id || req.query.clientId);
+    const now = req.query.now || req.body?.now ? new Date(req.query.now || req.body.now) : new Date();
+    if (clientId != null) {
+      const { runAttentionScheduler } = require('../services/maxAttentionService');
+      const result = await runAttentionScheduler(clientId, { now });
+      return res.set('Cache-Control', 'no-store').json({ ok: true, client_id: clientId, ...result });
+    }
+    const results = await runAttentionSchedulerAllClients({ now });
+    return res.set('Cache-Control', 'no-store').json({ ok: true, results });
+  } catch (err) {
+    console.error('[cron] max-attention-cycle error:', err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+router.post('/cron/max-attention-cycle', handleMaxAttentionCycleCron);
+router.get('/cron/max-attention-cycle', handleMaxAttentionCycleCron);
+
 router.post('/cron/scoutExpansion', handleScoutExpansionCron);
 router.get('/cron/scoutExpansion', handleScoutExpansionCron);
 router.post('/cron/penny-daily', handlePennyDailyReviewCron);
