@@ -239,6 +239,13 @@ class MemoryStateStore {
   async listOpenExpectations({ clientId = this.clientId } = {}) {
     return this.expectations.filter(e => e.client_id === clientId && ['OPEN', 'WAITING', 'OVERDUE'].includes(e.status));
   }
+
+  async updateExpectation(id, patch = {}) {
+    const row = this.expectations.find(e => e.id === id);
+    if (!row) return null;
+    Object.assign(row, patch);
+    return row;
+  }
 }
 
 module.exports = {

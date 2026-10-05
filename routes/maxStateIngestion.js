@@ -9,6 +9,7 @@ const {
   ingestSpreadsheetEvidence,
   listOverdueExpectationPrompts,
 } = require('../services/maxStateIngestionService');
+const { afterIngestionDecisions } = require('../services/maxDecisionExecutionService');
 
 const requireIngestWrite = [
   requireAuth,
@@ -28,6 +29,12 @@ router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
       return res.status(400).json({ error: 'client_id_required' });
     }
     const result = await ingestOperationalEvidence(clientId, req.body || {});
+    let decisionFollowUp = null;
+    try {
+      decisionFollowUp = await afterIngestionDecisions(clientId, result);
+    } catch (decisionErr) {
+      console.warn('[max-decision-execution] post-ingest evaluate skipped:', decisionErr.message);
+    }
     return res.json({
       ok: true,
       ingestion_id: result.ingestion_id,
@@ -36,6 +43,13 @@ router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
       unresolved: result.unresolved,
       conflicts: result.conflicts,
       downstream_effects: result.downstream_effects,
+      decision_follow_up: decisionFollowUp
+        ? {
+          decision_id: decisionFollowUp.decision?.id,
+          receipt: decisionFollowUp.receipt,
+          execution_status: decisionFollowUp.decision?.execution_status,
+        }
+        : null,
     });
   } catch (error) {
     console.error('[max-state-ingestion]', error);
