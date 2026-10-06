@@ -1897,7 +1897,14 @@ function formatComposerMaxReply(data) {
       : `I understood:\n\n${data.understanding_preview}`;
     return `${header}\n\nReply Save to commit, or edit the transcript / add a correction and send again.`;
   }
+  if (data.operational_response) return data.operational_response;
   if (data.batch_preview?.summary) return data.batch_preview.summary;
+  if (data.attachment_task_intent && data.reconciliation_plan && !data.understanding_preview) {
+    return 'Spreadsheet reconciliation is ready — review the plan before saving.';
+  }
+  if (data.understanding_preview && !/stay curious/i.test(data.understanding_preview)) {
+    return data.understanding_preview;
+  }
   if (data.understanding_preview) return data.understanding_preview;
   if (data.preview_only && data.review_required) {
     return `${data.batch_preview?.summary || 'Review required.'}\n\nReply “confirm” after checking, or adjust your message.`;

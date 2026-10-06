@@ -17,6 +17,12 @@ function emptyComposerTelemetry() {
     max_voice_transcription_failure_count: 0,
     max_voice_commit_blocked_count: 0,
     max_voice_clarification_required_count: 0,
+    max_attachment_intent_detected_count: 0,
+    max_spreadsheet_reconcile_intent_count: 0,
+    max_spreadsheet_preview_intent_count: 0,
+    max_spreadsheet_commit_intent_count: 0,
+    max_attachment_intent_fallback_error_count: 0,
+    max_attachment_command_without_plan_count: 0,
     dimensions: {},
   };
 }
