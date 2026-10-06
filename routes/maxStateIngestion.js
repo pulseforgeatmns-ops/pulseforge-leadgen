@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const multer = require('multer');
 const router = express.Router();
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { normalizeClientId } = require('../utils/clientContext');
@@ -9,12 +10,28 @@ const {
   ingestSpreadsheetEvidence,
   listOverdueExpectationPrompts,
 } = require('../services/maxStateIngestionService');
+const { submitMaxComposerTurn } = require('../services/maxComposerService');
 const { afterIngestionDecisions } = require('../services/maxDecisionExecutionService');
 const { interpretConversationalInput } = require('../packages/max/understanding');
+const { createMaxAttachment } = require('../packages/max/composer');
+const { LIMITS } = require('../packages/max/composer/limits');
+
+const composerUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: LIMITS.maxFileBytes,
+    files: LIMITS.maxAttachmentsPerTurn,
+  },
+});
 
 const requireIngestWrite = [
   requireAuth,
   requireRole('admin', 'manager'),
+];
+
+const requireComposerWrite = [
+  requireAuth,
+  requireRole('admin', 'manager', 'ao'),
 ];
 
 function resolveClientId(req) {
@@ -47,6 +64,133 @@ router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
     return res.status(500).json({ error: 'understanding_failed', message: error.message });
   }
 });
+
+function actorFromSession(req) {
+  return {
+    userId: req.session?.user?.id,
+    role: req.session?.user?.role,
+    aoId: req.session?.user?.role === 'ao' ? req.session?.user?.id : undefined,
+  };
+}
+
+function parseComposerJsonBody(body = {}) {
+  const attachments = [];
+  const attachmentInputs = [];
+  for (const raw of body.attachments || []) {
+    const att = createMaxAttachment({
+      id: raw.id,
+      type: raw.type,
+      filename: raw.filename,
+      mimeType: raw.mimeType || raw.mime_type,
+      transcription: raw.transcription,
+    });
+    attachments.push(att);
+    if (raw.content_base64 || raw.contentBase64) {
+      attachmentInputs.push({
+        id: att.id,
+        content_base64: raw.content_base64 || raw.contentBase64,
+        transcription: raw.transcription,
+      });
+    }
+  }
+  return {
+    text: body.text || body.message,
+    conversation_id: body.conversation_id || body.conversationId,
+    confirm: body.confirm,
+    conversation_memory: body.conversation_memory || body.conversationMemory,
+    attachments,
+    attachment_inputs: attachmentInputs,
+    envelope_id: body.envelope_id || body.envelopeId,
+    metadata: body.metadata,
+  };
+}
+
+async function handleComposerSubmit(req, res) {
+  try {
+    const clientId = resolveClientId(req);
+    if (clientId == null) {
+      return res.status(400).json({ error: 'client_id_required' });
+    }
+    let payload;
+    if (req.is('multipart/form-data')) {
+      const attachments = [];
+      const attachmentInputs = [];
+      for (const file of req.files || []) {
+        const att = createMaxAttachment({
+          type: file.fieldname === 'voice' ? 'voice' : inferAttachmentType(file),
+          filename: file.originalname,
+          mimeType: file.mimetype,
+          transcription: req.body?.transcription,
+        });
+        attachments.push(att);
+        attachmentInputs.push({ id: att.id, buffer: file.buffer, transcription: req.body?.transcription });
+      }
+      payload = {
+        text: req.body?.text || req.body?.message,
+        conversation_id: req.body?.conversation_id || req.body?.conversationId,
+        confirm: req.body?.confirm === 'true' || req.body?.confirm === true,
+        conversation_memory: req.body?.conversation_memory
+          ? JSON.parse(req.body.conversation_memory)
+          : req.body?.conversationMemory,
+        attachments,
+        attachment_inputs: attachmentInputs,
+        envelope_id: req.body?.envelope_id || req.body?.envelopeId,
+        metadata: req.body?.metadata ? JSON.parse(req.body.metadata) : undefined,
+        actor: actorFromSession(req),
+      };
+    } else {
+      payload = parseComposerJsonBody(req.body || {});
+      payload.actor = actorFromSession(req);
+    }
+
+    const result = await submitMaxComposerTurn(clientId, payload);
+    if (!result.ok) {
+      const status = result.error === 'extraction_failed' ? 422 : 400;
+      return res.status(status).json(result);
+    }
+
+    let decisionFollowUp = null;
+    if (!result.preview_only && !result.commit_blocked && !result.duplicate_envelope) {
+      try {
+        const primary = result.results?.[0] || result;
+        decisionFollowUp = await afterIngestionDecisions(clientId, primary);
+      } catch (decisionErr) {
+        console.warn('[max-composer] post-ingest evaluate skipped:', decisionErr.message);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      ...result,
+      decision_follow_up: decisionFollowUp
+        ? {
+          decision_id: decisionFollowUp.decision?.id,
+          receipt: decisionFollowUp.receipt,
+          execution_status: decisionFollowUp.decision?.execution_status,
+        }
+        : null,
+    });
+  } catch (error) {
+    console.error('[max-composer]', error);
+    return res.status(500).json({ error: 'composer_failed', message: error.message });
+  }
+}
+
+function inferAttachmentType(file) {
+  const mime = String(file.mimetype || '').toLowerCase();
+  const name = String(file.originalname || '').toLowerCase();
+  if (/spreadsheet|excel|csv/.test(mime) || /\.(xlsx|xls|csv)$/.test(name)) return 'spreadsheet';
+  if (/^image\//.test(mime) || /\.(png|jpe?g|webp)$/.test(name)) return 'image';
+  if (/^audio\//.test(mime)) return 'voice';
+  return 'document';
+}
+
+router.post(
+  '/api/v1/max/composer',
+  requireComposerWrite,
+  composerUpload.any(),
+  handleComposerSubmit,
+);
 
 router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
   try {

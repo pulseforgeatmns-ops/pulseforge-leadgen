@@ -54,6 +54,89 @@
   /** SPEC-102 — prevent duplicate Max Workspace asks during reveal. */
   /** @type {boolean} */
   let workspaceAskInFlight = false;
+  let mxPendingComposerFiles = [];
+  let mxComposerMemory = null;
+  let mxComposerConversationId = sessionStorage.getItem('mxComposerConversationId') || null;
+
+  function loadMxComposerMemory() {
+    try {
+      const raw = sessionStorage.getItem('mxComposerMemory');
+      mxComposerMemory = raw ? JSON.parse(raw) : null;
+    } catch (_err) {
+      mxComposerMemory = null;
+    }
+  }
+
+  function saveMxComposerMemory(mem) {
+    if (!mem) return;
+    mxComposerMemory = mem;
+    sessionStorage.setItem('mxComposerMemory', JSON.stringify(mem));
+  }
+
+  function renderMxComposerChips() {
+    const host = document.getElementById('mxComposerChips');
+    if (!host) return;
+    if (!mxPendingComposerFiles.length) {
+      host.hidden = true;
+      host.innerHTML = '';
+      return;
+    }
+    host.hidden = false;
+    host.innerHTML = mxPendingComposerFiles
+      .map(
+        (entry, idx) =>
+          `<span class="mx-composer-chip">${escapeHtml(entry.file.name)} <button type="button" data-mx-remove="${idx}" style="border:none;background:none;color:inherit;cursor:pointer">×</button></span>`
+      )
+      .join('');
+    host.querySelectorAll('[data-mx-remove]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        mxPendingComposerFiles.splice(Number(btn.getAttribute('data-mx-remove')), 1);
+        renderMxComposerChips();
+      });
+    });
+  }
+
+  function inferMxAttachmentType(file) {
+    const name = (file.name || '').toLowerCase();
+    if (/\.(xlsx|xls|csv)$/.test(name)) return 'spreadsheet';
+    if (/\.(png|jpe?g|webp)$/.test(name) || (file.type || '').startsWith('image/')) return 'image';
+    if ((file.type || '').startsWith('audio/')) return 'voice';
+    return 'document';
+  }
+
+  async function submitMxComposer(question, { confirm = false } = {}) {
+    loadMxComposerMemory();
+    if (!mxComposerConversationId) {
+      mxComposerConversationId = `mx-${Date.now()}`;
+      sessionStorage.setItem('mxComposerConversationId', mxComposerConversationId);
+    }
+    const form = new FormData();
+    form.append('text', question || '');
+    form.append('conversation_id', mxComposerConversationId);
+    if (confirm) form.append('confirm', 'true');
+    if (mxComposerMemory) form.append('conversation_memory', JSON.stringify(mxComposerMemory));
+    mxPendingComposerFiles.forEach((entry) => form.append('files', entry.file, entry.file.name));
+    const res = await fetch('/api/v1/max/composer', {
+      method: 'POST',
+      credentials: 'same-origin',
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || data.error || 'Composer failed');
+    }
+    if (data.conversation_memory) saveMxComposerMemory(data.conversation_memory);
+    return data;
+  }
+
+  function mxComposerReplyText(data) {
+    if (data.batch_preview?.summary) return data.batch_preview.summary;
+    if (data.understanding_preview) return data.understanding_preview;
+    if (data.clarification_required) return data.clarification_required;
+    if (typeof data.receipt === 'string') return data.receipt;
+    if (data.receipt?.title) return data.receipt.title;
+    return 'Update processed.';
+  }
   /** SPEC-102 — stick-to-bottom follower for progressive reveal. */
   /** @type {ReturnType<typeof window.MaxInteractionCadence.createScrollFollow>|null} */
   let mxScrollFollow = null;
@@ -4666,7 +4749,8 @@
 
   async function askWorkspace(question) {
     const q = String(question || '').trim();
-    if (!q) return;
+    const hasAttachments = mxPendingComposerFiles.length > 0;
+    if (!q && !hasAttachments) return;
     if (workspaceAskInFlight) return;
     workspaceAskInFlight = true;
     console.info('[mission-objective-len]', {
@@ -4675,8 +4759,25 @@
       newlines: (q.match(/\n/g) || []).length,
     });
     if (els.mxAskSend) els.mxAskSend.disabled = true;
-    appendOperatorMessage(q);
+    if (q) appendOperatorMessage(q);
+    else appendOperatorMessage(`[${mxPendingComposerFiles.length} attachment(s)]`);
     resetAskInput();
+
+    if (hasAttachments) {
+      try {
+        const data = await submitMxComposer(q, { confirm: /^confirm$/i.test(q) });
+        appendSystemMessage(mxComposerReplyText(data));
+        mxPendingComposerFiles = [];
+        renderMxComposerChips();
+      } catch (err) {
+        appendSystemMessage(err.message || 'Composer failed');
+      } finally {
+        workspaceAskInFlight = false;
+        if (els.mxAskSend) els.mxAskSend.disabled = false;
+        els.mxAskInput?.focus();
+      }
+      return;
+    }
 
     const Cadence = window.MaxInteractionCadence;
     const startedAtMs = Date.now();
@@ -5150,6 +5251,46 @@
     event.preventDefault();
     askWorkspace(els.mxAskInput?.value || '');
   });
+
+  const mxComposerPlus = document.getElementById('mxComposerPlus');
+  const mxComposerMenu = document.getElementById('mxComposerMenu');
+  mxComposerPlus?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (!mxComposerMenu) return;
+    mxComposerMenu.hidden = !mxComposerMenu.hidden;
+  });
+  document.addEventListener('click', () => {
+    if (mxComposerMenu) mxComposerMenu.hidden = true;
+  });
+  mxComposerMenu?.addEventListener('click', (event) => event.stopPropagation());
+  mxComposerMenu?.querySelectorAll('[data-mx-attach]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const kind = btn.getAttribute('data-mx-attach');
+      if (mxComposerMenu) mxComposerMenu.hidden = true;
+      const map = {
+        spreadsheet: document.getElementById('mxFileSpreadsheet'),
+        file: document.getElementById('mxFileDocument'),
+        image: document.getElementById('mxFileImage'),
+        voice: document.getElementById('mxFileVoice'),
+      };
+      map[kind]?.click();
+    });
+  });
+  [
+    document.getElementById('mxFileSpreadsheet'),
+    document.getElementById('mxFileDocument'),
+    document.getElementById('mxFileImage'),
+    document.getElementById('mxFileVoice'),
+  ].forEach((input) => {
+    input?.addEventListener('change', () => {
+      if (input.files?.[0]) {
+        mxPendingComposerFiles.push({ file: input.files[0], type: inferMxAttachmentType(input.files[0]) });
+        renderMxComposerChips();
+      }
+      input.value = '';
+    });
+  });
+  loadMxComposerMemory();
 
   // Enter sends; Shift+Enter keeps a newline so multi-row ProspectList pastes survive.
   els.mxAskInput?.addEventListener('keydown', (event) => {

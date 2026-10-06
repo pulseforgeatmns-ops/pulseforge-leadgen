@@ -210,17 +210,76 @@ body {
   font-size: 0.68rem;
 }
 
-.ao-compose {
-  display: flex;
-  gap: 8px;
-  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  background: var(--pf-bg-card);
-  border-top: 1px solid var(--pf-border);
+.ao-compose-wrap {
   flex-shrink: 0;
   position: sticky;
   bottom: 0;
   z-index: 20;
+  background: var(--pf-bg-card);
+  border-top: 1px solid var(--pf-border);
+  padding-bottom: env(safe-area-inset-bottom);
 }
+.ao-attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+.ao-attach-chip {
+  font-family: var(--pf-font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.4px;
+  border: 1px solid var(--pf-border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--pf-text-dim);
+}
+.ao-compose {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  align-items: flex-end;
+}
+.ao-compose-plus-wrap { position: relative; flex-shrink: 0; }
+.ao-compose-plus {
+  width: var(--pf-touch-target);
+  height: var(--pf-touch-target);
+  border-radius: 999px;
+  border: 1px solid var(--pf-border);
+  background: var(--pf-bg);
+  color: var(--pf-gold);
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.ao-compose-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 210px;
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  padding: 6px;
+  display: none;
+  z-index: 30;
+}
+.ao-compose-menu.open { display: block; }
+.ao-compose-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  font-family: var(--pf-font-body);
+  font-size: 0.85rem;
+  padding: 10px 10px;
+  color: var(--pf-text);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ao-compose-menu button:active { background: var(--pf-gold-glow); }
 .ao-compose input {
   flex: 1;
   border: 1px solid var(--pf-border);
@@ -234,6 +293,7 @@ body {
   min-height: var(--pf-touch-target);
 }
 .ao-compose input:focus { border-color: var(--pf-gold); }
+.ao-compose input::placeholder { color: var(--pf-text-muted); }
 .ao-conv-actions {
   display: flex;
   gap: 8px;
@@ -909,10 +969,26 @@ body {
       </div>
     </div>
     <div class="ao-chat" id="chat" role="log" aria-live="polite"></div>
-    <form class="ao-compose" id="composeForm">
-      <input id="messageInput" type="text" placeholder="Reply to Max…" autocomplete="off" enterkeyhint="send">
-      <button class="ao-send" type="submit" aria-label="Send">↑</button>
-    </form>
+    <div class="ao-compose-wrap">
+      <div class="ao-attach-chips" id="composerAttachmentChips" hidden></div>
+      <form class="ao-compose" id="composeForm">
+        <div class="ao-compose-plus-wrap">
+          <button type="button" class="ao-compose-plus" id="composerPlusBtn" aria-label="Add attachment" aria-expanded="false">+</button>
+          <div class="ao-compose-menu" id="composerAttachMenu" role="menu">
+            <button type="button" data-attach="voice">Voice note</button>
+            <button type="button" data-attach="spreadsheet">Upload spreadsheet</button>
+            <button type="button" data-attach="file">Upload file</button>
+            <button type="button" data-attach="image">Upload photo / screenshot</button>
+          </div>
+        </div>
+        <input id="fileInputSpreadsheet" type="file" hidden accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv">
+        <input id="fileInputDocument" type="file" hidden accept=".txt,.md,.pdf,.docx,text/plain">
+        <input id="fileInputImage" type="file" hidden accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp">
+        <input id="fileInputVoice" type="file" hidden accept="audio/*,.webm,.m4a,.mp3,.wav">
+        <input id="messageInput" type="text" placeholder="Message Max…" autocomplete="off" enterkeyhint="send">
+        <button class="ao-send" type="submit" aria-label="Send">↑</button>
+      </form>
+    </div>
   </section>
 
   <section class="ao-panel" id="panel-queue">
@@ -1156,6 +1232,16 @@ body {
 <script>
 const chat = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
+const composerPlusBtn = document.getElementById('composerPlusBtn');
+const composerAttachMenu = document.getElementById('composerAttachMenu');
+const composerAttachmentChips = document.getElementById('composerAttachmentChips');
+const fileInputSpreadsheet = document.getElementById('fileInputSpreadsheet');
+const fileInputDocument = document.getElementById('fileInputDocument');
+const fileInputImage = document.getElementById('fileInputImage');
+const fileInputVoice = document.getElementById('fileInputVoice');
+let pendingComposerAttachments = [];
+let maxComposerMemory = null;
+let maxComposerConversationId = sessionStorage.getItem('maxComposerConversationId') || null;
 let conversationSessionId = null;
 let lastDoneConversationId = null;
 let wizardSessionId = null;
@@ -1681,6 +1767,99 @@ async function startMode(mode) {
   }
 }
 
+function loadMaxComposerMemory() {
+  try {
+    const raw = sessionStorage.getItem('maxComposerMemory');
+    maxComposerMemory = raw ? JSON.parse(raw) : null;
+  } catch (_err) {
+    maxComposerMemory = null;
+  }
+}
+
+function saveMaxComposerMemory(mem) {
+  if (!mem) return;
+  maxComposerMemory = mem;
+  sessionStorage.setItem('maxComposerMemory', JSON.stringify(mem));
+}
+
+function renderComposerAttachmentChips() {
+  if (!composerAttachmentChips) return;
+  if (!pendingComposerAttachments.length) {
+    composerAttachmentChips.hidden = true;
+    composerAttachmentChips.innerHTML = '';
+    return;
+  }
+  composerAttachmentChips.hidden = false;
+  composerAttachmentChips.innerHTML = pendingComposerAttachments
+    .map((a, idx) => `<span class="ao-attach-chip">${escapeHtml(a.file.name)} <button type="button" data-remove-attach="${idx}" aria-label="Remove" style="border:none;background:none;color:inherit;cursor:pointer">×</button></span>`)
+    .join('');
+  composerAttachmentChips.querySelectorAll('[data-remove-attach]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      pendingComposerAttachments.splice(Number(btn.getAttribute('data-remove-attach')), 1);
+      renderComposerAttachmentChips();
+    });
+  });
+}
+
+function toggleComposerMenu(open) {
+  if (!composerAttachMenu || !composerPlusBtn) return;
+  const next = open ?? !composerAttachMenu.classList.contains('open');
+  composerAttachMenu.classList.toggle('open', next);
+  composerPlusBtn.setAttribute('aria-expanded', next ? 'true' : 'false');
+}
+
+function inferComposerAttachmentType(file) {
+  const name = (file.name || '').toLowerCase();
+  if (/\.(xlsx|xls|csv)$/.test(name)) return 'spreadsheet';
+  if (/\.(png|jpe?g|webp|gif)$/.test(name) || (file.type || '').startsWith('image/')) return 'image';
+  if ((file.type || '').startsWith('audio/')) return 'voice';
+  return 'document';
+}
+
+function queueComposerFile(file) {
+  if (!file) return;
+  pendingComposerAttachments.push({ file, type: inferComposerAttachmentType(file) });
+  renderComposerAttachmentChips();
+}
+
+async function submitComposerTurn(text, { confirm = false } = {}) {
+  loadMaxComposerMemory();
+  if (!maxComposerConversationId) {
+    maxComposerConversationId = `ao-${Date.now()}`;
+    sessionStorage.setItem('maxComposerConversationId', maxComposerConversationId);
+  }
+  const form = new FormData();
+  form.append('text', text || '');
+  form.append('conversation_id', maxComposerConversationId);
+  if (confirm) form.append('confirm', 'true');
+  if (maxComposerMemory) form.append('conversation_memory', JSON.stringify(maxComposerMemory));
+  pendingComposerAttachments.forEach((entry) => {
+    form.append('files', entry.file, entry.file.name);
+  });
+  const res = await fetch('/api/v1/max/composer', {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: form,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.message || data.error || 'Composer submission failed');
+  }
+  if (data.conversation_memory) saveMaxComposerMemory(data.conversation_memory);
+  return data;
+}
+
+function formatComposerMaxReply(data) {
+  if (data.batch_preview?.summary) return data.batch_preview.summary;
+  if (data.understanding_preview) return data.understanding_preview;
+  if (data.preview_only && data.review_required) {
+    return `${data.batch_preview?.summary || 'Review required.'}\n\nReply “confirm” after checking, or adjust your message.`;
+  }
+  if (data.clarification_required) return data.clarification_required;
+  if (data.receipt) return typeof data.receipt === 'string' ? data.receipt : (data.receipt.title || 'Update recorded.');
+  return 'Got it — I processed that update.';
+}
+
 async function askMaxFreeform(text) {
   const result = await api('/api/max/ask', {
     method: 'POST',
@@ -1694,9 +1873,26 @@ async function askMaxFreeform(text) {
 }
 
 async function sendMessage(text) {
-  if (!text.trim()) return;
-  addMsg(text.trim(), 'user');
+  const trimmed = text.trim();
+  const hasAttachments = pendingComposerAttachments.length > 0;
+  if (!trimmed && !hasAttachments) return;
+  if (trimmed) addMsg(trimmed, 'user');
+  else addMsg(`[${pendingComposerAttachments.length} attachment(s)]`, 'user');
   messageInput.value = '';
+
+  if (hasAttachments && !wizardSessionId) {
+    try {
+      const confirm = /^confirm$/i.test(trimmed);
+      const data = await submitComposerTurn(trimmed, { confirm });
+      addMsg(formatComposerMaxReply(data), 'max');
+      pendingComposerAttachments = [];
+      renderComposerAttachmentChips();
+      toggleComposerMenu(false);
+    } catch (err) {
+      addMsg(err.message, 'system');
+    }
+    return;
+  }
 
   if (wizardSessionId) {
     try {
@@ -2365,6 +2561,30 @@ document.getElementById('composeForm').addEventListener('submit', e => {
   e.preventDefault();
   sendMessage(messageInput.value);
 });
+
+composerPlusBtn?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleComposerMenu();
+});
+document.addEventListener('click', () => toggleComposerMenu(false));
+composerAttachMenu?.addEventListener('click', (e) => e.stopPropagation());
+composerAttachMenu?.querySelectorAll('[data-attach]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const kind = btn.getAttribute('data-attach');
+    toggleComposerMenu(false);
+    if (kind === 'spreadsheet') fileInputSpreadsheet?.click();
+    else if (kind === 'file') fileInputDocument?.click();
+    else if (kind === 'image') fileInputImage?.click();
+    else if (kind === 'voice') fileInputVoice?.click();
+  });
+});
+[fileInputSpreadsheet, fileInputDocument, fileInputImage, fileInputVoice].forEach((input) => {
+  input?.addEventListener('change', () => {
+    if (input.files?.[0]) queueComposerFile(input.files[0]);
+    input.value = '';
+  });
+});
+loadMaxComposerMemory();
 
 document.querySelectorAll('.ao-tab').forEach(tab => {
   tab.addEventListener('click', () => switchTab(tab.dataset.tab));

@@ -1435,6 +1435,70 @@ body.theme-dark .mx-panel {
   border-color: var(--pf-gold);
 }
 
+.mx-composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+.mx-composer-chips:empty,
+.mx-composer-chips[hidden] {
+  display: none !important;
+}
+.mx-composer-chip {
+  font-family: var(--pf-font-mono);
+  font-size: 0.58rem;
+  border: 1px solid var(--pf-border);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  color: var(--pf-text-muted);
+}
+.mx-composer-plus {
+  flex: 0 0 auto;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--pf-border);
+  background: color-mix(in srgb, var(--pf-bg-card) 88%, transparent);
+  color: var(--pf-gold);
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.mx-composer-menu {
+  position: absolute;
+  bottom: calc(100% + 0.35rem);
+  left: 0;
+  min-width: 12rem;
+  background: var(--pf-bg-card);
+  border: 1px solid var(--pf-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  padding: 0.35rem;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.mx-composer-menu[hidden] {
+  display: none !important;
+}
+.mx-composer-menu button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  font-family: var(--pf-font-body);
+  font-size: 0.88rem;
+  color: var(--pf-text);
+  cursor: pointer;
+}
+.mx-composer-menu button:hover {
+  background: color-mix(in srgb, var(--pf-gold) 12%, transparent);
+}
+
 .mx-ask-form {
   display: flex;
   align-items: flex-end;
