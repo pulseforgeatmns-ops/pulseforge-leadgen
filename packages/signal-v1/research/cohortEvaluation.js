@@ -28,7 +28,7 @@ function evaluateCohortLayers(store, cohortId, executionDelaySeconds = 60, optio
     [...(store.researchCohorts?.values?.() || [])].find(c => c.id === cohortId);
   const dataClass = resolveCohortDataClass(cohortId, cohort);
   let contamination = null;
-  if (isEmpiricalDataClass(dataClass)) {
+  if (isEmpiricalDataClass(dataClass) && !options.skipEmpiricalGuard) {
     const gate = assertEmpiricalCohort(store, cohortId, options);
     contamination = gate.contamination;
   }

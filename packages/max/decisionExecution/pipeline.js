@@ -234,6 +234,13 @@ async function reevaluateOnIngestion({
   now = new Date(),
 }) {
   if (!ingestionResult) return null;
+  if (ingestionResult.commit_blocked || ingestionResult.clarification_required) {
+    return {
+      skipped: true,
+      reason: 'understanding_blocked',
+      clarification_required: ingestionResult.clarification_required || null,
+    };
+  }
   if (attentionStore && ingestionResult) {
     const { wakeAttentionForIngestion } = require('../attention/wake');
     await wakeAttentionForIngestion({

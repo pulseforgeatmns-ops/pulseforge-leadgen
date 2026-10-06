@@ -38,7 +38,9 @@ function startShadowScheduler(service, options = {}) {
 
 async function createShadowModeServiceFromStore(store, options = {}) {
   const service = new ShadowModeService(store, options);
-  await service.ensureProspectiveCohortStarted(options.providerVersions || {});
+  if (options.startProspectiveCohortImmediately) {
+    await service.ensureProspectiveCohortStarted(options.providerVersions || {});
+  }
   if (store.loadProspectiveJobs) {
     const jobs = await store.loadProspectiveJobs();
     service.restoreJobsFromStore(jobs);

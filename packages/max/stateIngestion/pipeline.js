@@ -13,8 +13,11 @@ const { expectationFromMutations } = require('./expectations');
 const { MemoryStateStore } = require('./store/memoryStore');
 const {
   interpretConversationalInput,
+  interpretWithDurableConversationContext,
   isTrustedStructuredInput,
   conversationalText,
+  mergeUnderstandingTelemetry,
+  mergeConversationMemoryTelemetry,
 } = require('../understanding');
 
 function claimKey(claim) {
@@ -262,7 +265,7 @@ async function ingestOperationalUpdate(input = {}) {
   const useUnderstanding = !isTrustedStructuredInput(input) && conversationalText(input);
 
   if (useUnderstanding) {
-    const interpreted = interpretConversationalInput({
+    const interpretInput = {
       text: input.text,
       message: input.message,
       inputId: ingestionId,
@@ -271,11 +274,25 @@ async function ingestOperationalUpdate(input = {}) {
       now: input.now,
       memory: input.memory,
       conversationMemory,
-    });
+      contextAccounts: input.contextAccounts,
+      tenantId: clientId,
+      clientId,
+      memoryRepository: input.memoryRepository || null,
+      telemetry,
+    };
+    const interpreted = input.memoryRepository && input.conversationId
+      ? await interpretWithDurableConversationContext(interpretInput)
+      : interpretConversationalInput(interpretInput);
     situationModel = interpreted.situationModel;
     understandingValidation = interpreted.validation;
     understandingPreview = interpreted.preview;
     conversationMemory = interpreted.memory;
+    if (interpreted.understandingTelemetry) {
+      mergeUnderstandingTelemetry(telemetry, interpreted.understandingTelemetry);
+    }
+    if (interpreted.conversationMemoryTelemetry) {
+      mergeConversationMemoryTelemetry(telemetry, interpreted.conversationMemoryTelemetry);
+    }
 
     if (understandingValidation?.blockCommit) {
       ingestionRecord.telemetry = telemetry;
@@ -311,6 +328,7 @@ async function ingestOperationalUpdate(input = {}) {
         understanding_validation: understandingValidation,
         clarification_required: understandingValidation.narrowestClarification,
         commit_blocked: true,
+        understanding_diagnostics: situationModel?.diagnostics || null,
         conversation_memory: conversationMemory,
       };
     }
@@ -423,6 +441,7 @@ async function ingestOperationalUpdate(input = {}) {
     situation_model: situationModel,
     understanding_preview: understandingPreview,
     understanding_validation: understandingValidation,
+    understanding_diagnostics: situationModel?.diagnostics || null,
     conversation_memory: conversationMemory,
   };
 }

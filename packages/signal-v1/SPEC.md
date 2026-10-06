@@ -25,6 +25,15 @@ See repository issue/spec for full doctrine. V1 explicitly excludes real-money e
 - Live collectors: `packages/signal-v1/collectors/` (`SIGNAL_CALLER_FEED_URL` JSON feed).
 - Operator UI: `/signal-v1` Shadow Mode panel; API: `/api/v1/signal/shadow/*`.
 - Cron tick: `GET/POST /cron/signal-shadow?secret={CRON_SECRET}` (set `SIGNAL_SHADOW_MODE=1` for in-process scheduler).
+- Prospective-001 `startedAt` is set only after `SIGNAL_CALLER_FEED_URL` health reports `connected: true` (no synthetic backfill).
+
+## Telegram empirical caller feed (SIGNAL-V1-007)
+
+- Service: `services/telegramCallerFeed/` (MTProto read-only user client; deploy with `npm run signal:telegram-caller-feed`).
+- Endpoints: `GET /feed` (JSON `calls[]` for `SIGNAL_CALLER_FEED_URL`), `GET /health` (latency + source availability; no secrets).
+- Required secrets (Railway/env only): `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_STRING`.
+- Optional: `TELEGRAM_CALLER_SOURCES_JSON`, `TELEGRAM_CALLER_FEED_STATE_PATH`, `TELEGRAM_CALLER_FEED_POLL_MS`.
+- PulseForge production: `SIGNAL_CALLER_FEED_URL=https://<feed-host>/feed`, `SIGNAL_SHADOW_MODE=1`, `SIGNAL_SHADOW_POLL_MS=60000`.
 
 ## Convergence integrity audit (SIGNAL-V1-004)
 

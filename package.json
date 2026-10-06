@@ -17,6 +17,8 @@
     "test:reasoning-runtime": "node --test packages/reasoning-runtime/tests/*.test.js",
     "test:market-strategy": "node --test packages/market-strategy/tests/*.test.js",
     "test:signal-v1": "node --test packages/signal-v1/tests/*.test.js",
+    "signal:telegram-caller-feed": "node services/telegramCallerFeed/server.js",
+    "signal:telegram-auth": "node scripts/signalTelegramAuth.js",
     "signal:research-replay": "node scripts/signalResearchReplay.js",
     "signal:evaluate-cohort": "node scripts/signalEvaluateCohort.js",
     "signal:validation-cohort-001": "node scripts/signalValidationCohort001.js",
