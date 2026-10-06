@@ -514,7 +514,21 @@ function buildDailyDigestText(ctx) {
   const top = warmOpportunities[0];
   const vendorMentions = leads.filter(l => l.relationship.vendor_complaints.length).length;
 
+  const flagDigestLines = [];
+  if (aoAccountFlags.length) {
+    flagDigestLines.push(
+      `${aoAccountFlags.length} AO flag${aoAccountFlags.length === 1 ? '' : 's'} need your attention.`
+    );
+    for (const flag of aoAccountFlags.slice(0, 3)) {
+      const who = flag.ao_name || 'AO';
+      const account = flag.business_name || 'account';
+      const reason = flag.reason || flag.reason_label || 'escalation';
+      flagDigestLines.push(`- ${who} — ${account} — ${String(reason).toLowerCase()}`);
+    }
+  }
+
   const lines = [];
+  if (flagDigestLines.length) lines.push(...flagDigestLines);
   lines.push(
     `Today Mike logged ${today.visits_today || 0} visit${(today.visits_today || 0) === 1 ? '' : 's'}`
     + (today.calls_today ? ` and ${today.calls_today} phone follow-up${today.calls_today === 1 ? '' : 's'}` : '')
@@ -523,14 +537,6 @@ function buildDailyDigestText(ctx) {
   if (dmCount) lines.push(`Reached ${dmCount} decision-maker${dmCount === 1 ? '' : 's'} or equivalent buying conversations.`);
   if (vendorMentions) lines.push(`${vendorMentions} business${vendorMentions === 1 ? '' : 'es'} mentioned current cleaner issues.`);
   if (jakeFollowUps) lines.push(`${jakeFollowUps} escalation${jakeFollowUps === 1 ? '' : 's'} need Jake's attention.`);
-  if (aoAccountFlags.length) {
-    const f = aoAccountFlags[0];
-    lines.push(
-      `${aoAccountFlags.length} AO CRM flag${aoAccountFlags.length === 1 ? '' : 's'} open`
-      + (f.business_name ? ` — start with ${f.business_name}` : '')
-      + (f.recommended_action ? `: ${f.recommended_action}` : '.')
-    );
-  }
   if (top) {
     let topLine = `Strongest opportunity: ${top.business_name}`;
     if (top.contact_name) topLine += ` (${top.contact_name})`;

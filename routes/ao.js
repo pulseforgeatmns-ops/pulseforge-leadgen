@@ -215,6 +215,32 @@ router.get('/api/crm/accounts/:prospectId/followup/drafts', requireAoRead, refre
   res.json(result);
 }));
 
+router.get('/api/crm/accounts/:prospectId/flags', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  await ensureAoCrmSchema();
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = req.user.role === 'ao' ? effectiveAoOwnerId(req) : null;
+  let flags;
+  if (aoOwnerId) {
+    flags = await aoAccountFlags.listFlagsForCreator({
+      clientId,
+      aoUserId: aoOwnerId,
+      prospectId: req.params.prospectId,
+    });
+  } else {
+    const assignee = await require('../utils/aoFlagAssignee').resolveFlagAssigneeUserId(clientId);
+    const inbox = assignee
+      ? await aoAccountFlags.listFlagsForAssignee({
+        clientId,
+        assigneeUserId: assignee.id,
+        status: 'all',
+      })
+      : [];
+    flags = inbox.filter(f => String(f.account_id) === String(req.params.prospectId));
+  }
+  res.json({ flags });
+}));
+
 router.post('/api/crm/accounts/:prospectId/flag-for-jake', requireAoWrite, refreshAoSession, wrapAoHandler(async (req, res) => {
   await ensureAoCrmSchema();
   const clientId = requireAoClient(req, res);
@@ -233,6 +259,7 @@ router.post('/api/crm/accounts/:prospectId/flag-for-jake', requireAoWrite, refre
     prospectId: req.params.prospectId,
     reason: String(reason),
     note: note != null ? String(note) : null,
+    creatorRole: req.user.role,
   });
   return sendAoServiceResult(res, result, {
     errorBody: r => ({ error: r.error, reasons: r.reasons }),
@@ -897,6 +924,7 @@ router.post('/api/max/report', requireAoWrite, refreshAoSession, wrapAoHandler(a
     clientId,
     note,
     category,
+    creatorRole: req.user.role,
   });
   return sendAoServiceResult(res, result, {
     errorBody: r => ({ error: r.error }),

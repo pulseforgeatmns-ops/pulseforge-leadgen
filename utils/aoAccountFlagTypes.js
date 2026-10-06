@@ -7,7 +7,10 @@ const AO_ACCOUNT_FLAG_REASONS = Object.freeze([
   { value: 'walkthrough_or_proposal', label: 'Walkthrough or proposal help' },
   { value: 'account_intel_gap', label: 'Missing account intel' },
   { value: 'other', label: 'Something else' },
+  { value: 'conversation_flag', label: 'Conversation flag' },
 ]);
+
+const CONVERSATION_ESCALATION_REASON = 'conversation_flag';
 
 function recommendJakeActionForFlag(reason, companyName = null) {
   const who = companyName ? `${companyName}` : 'this account';
@@ -22,6 +25,8 @@ function recommendJakeActionForFlag(reason, companyName = null) {
       return `Confirm walkthrough/proposal next step for ${who} and unblock the AO today.`;
     case 'account_intel_gap':
       return `Fill the intel gap on ${who} (contacts, vendor, pain) so the AO can move.`;
+    case 'conversation_flag':
+      return `Open the flagged Max conversation${companyName ? ` for ${who}` : ''} and reply with a concrete next move.`;
     default:
       return `Read the AO note on ${who} and reply with a concrete next move.`;
   }
@@ -29,5 +34,6 @@ function recommendJakeActionForFlag(reason, companyName = null) {
 
 module.exports = {
   AO_ACCOUNT_FLAG_REASONS,
+  CONVERSATION_ESCALATION_REASON,
   recommendJakeActionForFlag,
 };
