@@ -23,6 +23,7 @@ const {
   validateCreateClientInput,
   createMemoryTenantStore,
   createAndProvisionTenant,
+  ensureClientTenantWorkspaceBinding,
   getTenantWorkspace,
   getPublishedAimForTenant,
   activateTenant,
@@ -68,6 +69,21 @@ describe('SPEC-114 create + provision', () => {
       () => validateCreateClientInput({ companyName: 'Fedir' }),
       (err) => err.code === 'tenant_validation' && err.missing.includes('email')
     );
+  });
+
+  it('ensureClientTenantWorkspaceBinding backfills workspace for slug-seeded clients', async () => {
+    const store = createMemoryTenantStore();
+    await store.insertClient({
+      id: 17,
+      name: 'Studio Substral',
+      slug: 'studio-substral',
+      enabled_agents: ['scout', 'max', 'paige'],
+    });
+    const ws = await ensureClientTenantWorkspaceBinding({ store, clientId: 17 });
+    assert.equal(ws.tenant_key, 'studio-substral');
+    assert.equal(ws.knowledge_namespace, 'tenant:17:knowledge');
+    const again = await ensureClientTenantWorkspaceBinding({ store, clientId: 17 });
+    assert.equal(again.tenant_key, ws.tenant_key);
   });
 
   it('creates Fedir without developer SQL and provisions isolated namespaces', async () => {

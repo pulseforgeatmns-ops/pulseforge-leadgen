@@ -237,8 +237,14 @@ router.get('/api/me', sessionAuth, async (req, res) => {
     }
   }
 
+  const { getEffectiveActor, isImpersonating } = require('../utils/requestIdentity');
+  const { publicImpersonationState } = require('../services/aoImpersonationService');
+  const effectiveUser = getEffectiveActor(req);
+
   res.json({
     user: req.user,
+    effective_user: isImpersonating(req) ? effectiveUser : null,
+    impersonation: publicImpersonationState(req.session, req.user),
     active_client_id: activeClientId,
     client,
   });

@@ -597,6 +597,64 @@ function publicWorkspace(row) {
   };
 }
 
+/**
+ * Ensure a durable tenant_workspaces row exists for an existing client (SPEC-114).
+ * Used when a client row was seeded outside createAndProvisionTenant (e.g. Studio Substral).
+ * Idempotent: returns the existing binding when present.
+ */
+async function ensureClientTenantWorkspaceBinding({
+  pool = defaultPool,
+  store,
+  clientId,
+  client: clientRow = null,
+  origin = 'operator',
+  lifecycle = LIFECYCLE.PROVISIONED,
+  createdBy = null,
+} = {}) {
+  const id = Number(clientId);
+  if (!Number.isFinite(id) || id <= 0) {
+    const err = new Error('client_id is required');
+    err.status = 400;
+    err.code = 'tenant_validation';
+    throw err;
+  }
+
+  if (!store && pool) {
+    await ensureTenantWorkspaceSchema(pool);
+  }
+  const mem = store || (pool ? createPostgresTenantStore(pool) : null);
+  if (!mem) {
+    const err = new Error('Tenant store unavailable');
+    err.status = 500;
+    throw err;
+  }
+
+  let workspace = await mem.getWorkspace(id);
+  if (workspace) {
+    return publicWorkspace(workspace);
+  }
+
+  const client = clientRow || (await mem.getClient(id));
+  if (!client) {
+    const err = new Error('Client not found');
+    err.status = 404;
+    err.code = 'tenant_not_found';
+    throw err;
+  }
+
+  const tenantKey = client.slug || slugify(client.name);
+  const ns = namespacesFor(id, tenantKey);
+  workspace = await mem.insertWorkspace({
+    client_id: id,
+    tenant_key: tenantKey,
+    ...ns,
+    origin,
+    lifecycle,
+    created_by: createdBy,
+  });
+  return publicWorkspace(workspace);
+}
+
 async function getTenantWorkspace({
   pool = defaultPool,
   store,
@@ -736,6 +794,7 @@ module.exports = {
   validateCreateClientInput,
   createMemoryTenantStore,
   createAndProvisionTenant,
+  ensureClientTenantWorkspaceBinding,
   getTenantWorkspace,
   getPublishedAimForTenant,
   activateTenant,

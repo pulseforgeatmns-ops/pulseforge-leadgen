@@ -40,6 +40,7 @@ async function createAccountFlag({
   creatorRole = 'ao',
   conversationId = null,
   sourceContext = {},
+  skipNotification = false,
   db = pool,
 }) {
   await runAoFlagBackfill(clientId, db).catch(err => {
@@ -65,6 +66,7 @@ async function createAccountFlag({
     note: trimmedNote,
     sourceContext,
     companyName: account.company_name,
+    skipNotification,
     db,
   });
 

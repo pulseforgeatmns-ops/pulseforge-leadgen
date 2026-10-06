@@ -3,6 +3,7 @@
 const express = require('express');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { normalizeClientId } = require('../utils/clientContext');
+const { aoClientIdForRequest, effectiveAoOwnerId, effectiveRoleIsAo } = require('../utils/aoRequestHelpers');
 const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const { ensureAoProspectRoutingSchema } = require('../utils/aoProspectRoutingSchema');
 const routingService = require('../services/aoProspectRoutingService');
@@ -13,17 +14,7 @@ const inspection = require('../services/aoMissionInspection');
 const router = express.Router();
 
 function resolveClientId(req) {
-  if (req.user?.role === 'ao') {
-    const assigned = Number(req.user.client_id);
-    return Number.isInteger(assigned) && assigned > 0 ? assigned : null;
-  }
-  return normalizeClientId(req.session?.active_client_id || req.user?.client_id || req.query.client_id) || 10;
-}
-
-function effectiveAoOwnerId(req) {
-  if (req.user.role === 'ao') return req.user.id;
-  const override = Number(req.query.ao_owner_id || req.body?.ao_owner_id);
-  return Number.isInteger(override) && override > 0 ? override : null;
+  return aoClientIdForRequest(req);
 }
 
 function wrap(handler) {
@@ -48,7 +39,7 @@ router.post('/api/v1/ao/routing/evaluate', requireAuth, requireRole('admin', 'ma
 
   const bundle = await taskService.fetchProspectBundle(prospectId, clientId);
   if (!bundle) return res.status(404).json({ error: 'Prospect not found' });
-  if (req.user.role === 'ao' && Number(bundle.prospect.assigned_ao_id) !== Number(req.user.id)) {
+  if (effectiveRoleIsAo(req) && Number(bundle.prospect.assigned_ao_id) !== Number(effectiveAoOwnerId(req))) {
     return res.status(403).json({ error: 'Prospect is not assigned to this AO' });
   }
 
@@ -73,10 +64,10 @@ router.post('/api/v1/ao/routing/route', requireAuth, requireRole('admin', 'manag
   if (!clientId) return res.status(400).json({ error: 'client_id required' });
   const { prospect_id: prospectId, ao_name: aoName } = req.body || {};
   if (!prospectId) return res.status(400).json({ error: 'prospect_id required' });
-  if (req.user.role === 'ao') {
+  if (effectiveRoleIsAo(req)) {
     const bundle = await taskService.fetchProspectBundle(prospectId, clientId);
     if (!bundle) return res.status(404).json({ error: 'Prospect not found' });
-    if (Number(bundle.prospect.assigned_ao_id) !== Number(req.user.id)) {
+    if (Number(bundle.prospect.assigned_ao_id) !== Number(effectiveAoOwnerId(req))) {
       return res.status(403).json({ error: 'Prospect is not assigned to this AO' });
     }
   }

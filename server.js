@@ -278,6 +278,7 @@ app.use('/api/setter', require('./routes/setter'));
 app.use('/closer', require('./routes/closer'));
 app.use('/api/closer', require('./routes/closer'));
 app.use('/sales', require('./routes/sales'));
+app.use('/', require('./routes/aoImpersonation'));
 app.use('/ao', require('./routes/ao'));
 app.use('/', require('./routes/aoProspectRouting'));
 app.use('/admin/field-visits', require('./routes/aoAdmin'));

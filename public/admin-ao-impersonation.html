@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulseforge — Act as AO</title>
+<link rel="stylesheet" href="/shared/tokens.css">
+<link rel="stylesheet" href="/shared/aoImpersonationBanner.css">
+<style>
+body { min-height: 100vh; background: var(--pf-bg); color: var(--pf-text); font-family: var(--pf-font-body); padding: 1.25rem; }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.title { font-family: var(--pf-font-display); font-size: 1.8rem; letter-spacing: 3px; }
+.sub { font-family: var(--pf-font-mono); font-size: 0.62rem; letter-spacing: 1.5px; text-transform: uppercase; color: var(--pf-text-muted); margin-top: 4px; }
+.nav a { font-family: var(--pf-font-mono); font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; color: var(--pf-gold-strong); text-decoration: none; margin-left: 12px; }
+.panel { background: var(--pf-bg-card); border: 1px solid var(--pf-border); border-radius: var(--pf-radius-lg); padding: 1rem; max-width: 520px; }
+label { display: block; font-family: var(--pf-font-mono); font-size: 0.58rem; letter-spacing: 1px; text-transform: uppercase; color: var(--pf-text-muted); margin-bottom: 6px; }
+select, input { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--pf-border); background: var(--pf-bg); color: var(--pf-text); margin-bottom: 12px; }
+button.primary { font-family: var(--pf-font-mono); font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--pf-gold); background: var(--pf-violet-glow); color: var(--pf-gold); border-radius: 8px; padding: 10px 14px; cursor: pointer; margin-right: 8px; }
+button.secondary { font-family: var(--pf-font-mono); font-size: 0.62rem; letter-spacing: 1px; text-transform: uppercase; border: 1px solid var(--pf-border); background: transparent; color: var(--pf-text-dim); border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+.note { font-size: 0.85rem; line-height: 1.45; color: var(--pf-text-dim); margin-bottom: 1rem; }
+.status { margin-top: 12px; font-family: var(--pf-font-mono); font-size: 0.65rem; color: var(--pf-gold-strong); min-height: 1.2em; }
+</style>
+</head>
+<body>
+<div class="top">
+  <div>
+    <div class="title">Act as AO</div>
+    <div class="sub">Admin impersonation · AO-ADMIN-IMPERSONATION-001</div>
+  </div>
+  <nav class="nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/admin/users">Users</a>
+    <a href="/admin/field-visits">Field visits</a>
+    <a href="/ao/field">AO field</a>
+  </nav>
+</div>
+<p class="note">Choose an account owner in the active tenant. You will see their queue, Max context, and permissions. Your admin identity stays in the audit trail.</p>
+<div class="panel">
+  <label for="clientId">Tenant (client_id)</label>
+  <input id="clientId" type="number" min="1" step="1" value="10">
+  <label for="aoSelect">Account owner</label>
+  <select id="aoSelect"><option value="">Loading…</option></select>
+  <div>
+    <button type="button" class="primary" id="startBtn">Act as selected AO</button>
+    <button type="button" class="secondary" id="exitBtn">Exit impersonation</button>
+    <button type="button" class="secondary" id="openFieldBtn">Open field mode</button>
+  </div>
+  <div class="status" id="status"></div>
+</div>
+<script src="/shared/aoImpersonationBanner.js"></script>
+<script>
+const clientInput = document.getElementById('clientId');
+const aoSelect = document.getElementById('aoSelect');
+const statusEl = document.getElementById('status');
+
+async function loadTargets() {
+  const clientId = Number(clientInput.value) || 10;
+  const res = await fetch('/api/v1/admin/impersonation/targets?client_id=' + clientId, { credentials: 'same-origin' });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Could not load AOs');
+  aoSelect.innerHTML = data.targets.length
+    ? data.targets.map(t => `<option value="${t.id}">${t.name} (${t.email})</option>`).join('')
+    : '<option value="">No active AOs in this tenant</option>';
+}
+
+async function refreshStatus() {
+  const state = await AoImpersonationBanner.fetchImpersonationState();
+  if (state.active) {
+    statusEl.textContent = `Active: acting as ${state.effective_user?.name || 'AO'} · tenant ${state.tenant_id}`;
+  } else {
+    statusEl.textContent = 'Not impersonating';
+  }
+}
+
+document.getElementById('startBtn').addEventListener('click', async () => {
+  const userId = Number(aoSelect.value);
+  const clientId = Number(clientInput.value);
+  if (!userId) return;
+  statusEl.textContent = 'Starting…';
+  const res = await fetch('/api/v1/admin/impersonation/start', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, client_id: clientId }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    statusEl.textContent = data.error || 'Start failed';
+    return;
+  }
+  await refreshStatus();
+  await AoImpersonationBanner.mountAoImpersonationBanner();
+  window.location.href = '/ao/field';
+});
+
+document.getElementById('exitBtn').addEventListener('click', () => {
+  AoImpersonationBanner.exitImpersonation().catch(err => { statusEl.textContent = err.message; });
+});
+
+document.getElementById('openFieldBtn').addEventListener('click', () => {
+  window.location.href = '/ao/field';
+});
+
+clientInput.addEventListener('change', () => loadTargets().catch(err => { statusEl.textContent = err.message; }));
+
+Promise.all([
+  loadTargets(),
+  refreshStatus(),
+  AoImpersonationBanner.mountAoImpersonationBanner(),
+]).catch(err => { statusEl.textContent = err.message; });
+</script>
+</body>
+</html>
