@@ -9,8 +9,9 @@ async function logAoAuditEvent({
   prospectId = null,
   missionId = null,
   payload = {},
+  db = pool,
 }) {
-  await pool.query(`
+  await db.query(`
     INSERT INTO agent_log (agent_name, action, prospect_id, payload, status, ran_at, client_id)
     VALUES ('ao', $1, $2::uuid, $3::jsonb, 'success', NOW(), $4)
   `, [

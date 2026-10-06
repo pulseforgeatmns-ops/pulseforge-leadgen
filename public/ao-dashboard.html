@@ -2110,7 +2110,17 @@ async function submitFlagReport() {
       body: JSON.stringify({ session_id: conversationSessionId, note }),
     });
     hideFlagReportModal();
-    addMsg(`Report saved (${result.report_id}). An operator can review the transcript.`, 'system');
+    const st = result.status || 'open';
+    if (result.flagged_for_jake && result.flag_id) {
+      addMsg(
+        result.duplicate
+          ? `Already flagged for Jake (${st}).`
+          : `Flagged for Jake (${st}) — flag ${result.flag_id.slice(0, 8)}…`,
+        'system'
+      );
+    } else {
+      addMsg(`Could not escalate to Jake: ${result.error || 'unknown error'}`, 'system');
+    }
   } catch (err) {
     addMsg(err.message, 'system');
   }
@@ -3006,6 +3016,16 @@ async function bootDashboard() {
     addMsg(`Metrics error: ${err.message}`, 'system');
   }
   await hydrateActiveConversation();
+  const urlSession = new URLSearchParams(window.location.search).get('session');
+  if (urlSession) {
+    await openConversation(urlSession, { reopen: false });
+    const messageIdx = new URLSearchParams(window.location.search).get('message');
+    if (messageIdx != null && messageIdx !== '') {
+      const nodes = document.querySelectorAll('#chat .msg');
+      const node = nodes[Number(messageIdx)];
+      if (node) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
   if (!conversationSessionId) {
     addMsg('Ask me about your accounts, log a visit, or pick a mode above. I remember every visit.', 'max');
   }

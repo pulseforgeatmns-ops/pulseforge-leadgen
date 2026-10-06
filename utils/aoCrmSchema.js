@@ -31,6 +31,16 @@ async function ensureAoCrmSchemaOnce(db) {
     'utf8'
   );
   await db.query(workflowMigration);
+  const flagInboxMigration = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '2026-10-06-ao-flag-inbox-001.sql'),
+    'utf8'
+  );
+  await db.query(flagInboxMigration);
+  const conversationFlagMigration = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '2026-10-06-ao-flag-inbox-002-conversation.sql'),
+    'utf8'
+  );
+  await db.query(conversationFlagMigration);
   await ensureAoRosterSchema(db);
 }
 

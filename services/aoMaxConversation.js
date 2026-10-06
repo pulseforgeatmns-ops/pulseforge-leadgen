@@ -24,6 +24,8 @@ const {
 const { buildCoachingReply } = require('../utils/aoAccountPrioritization');
 const { isActiveConversationStatus } = require('../utils/aoRoutingIssueTypes');
 const { logAoAuditEvent } = require('../utils/aoAuditEvents');
+const { CONVERSATION_ESCALATION_REASON } = require('../utils/aoAccountFlagTypes');
+const { createAoEscalation } = require('./aoEscalationService');
 const { requestProspectBrief } = require('./aoProspectBriefService');
 const { aoResultHttpStatus } = require('../utils/aoHttpResult');
 
@@ -675,12 +677,34 @@ async function appendConversationEvent({
   return { session_id: session.id, messages: payload.messages.length };
 }
 
+function resolveProspectFromSession(session, payload = {}) {
+  const prospectId = session.prospect_id
+    || payload.prospect_id
+    || payload.selected_account?.prospect_id
+    || null;
+  const companyName = payload.selected_account?.business_name || null;
+  return { prospectId, companyName };
+}
+
+function resolveFlaggedMessageRef(payload = {}) {
+  const messages = payload.messages || [];
+  if (!messages.length) return { messageIndex: null, messageTs: null };
+  const messageIndex = messages.length - 1;
+  const last = messages[messageIndex];
+  return {
+    messageIndex,
+    messageTs: last?.ts || null,
+    messageRole: last?.role || null,
+  };
+}
+
 async function reportConversation({
   sessionId,
   aoOwnerId,
   clientId,
   note = '',
   category = 'user_report',
+  creatorRole = 'ao',
 }) {
   const session = await getConversationSession(sessionId, aoOwnerId, { clientId });
   if (!session) {
@@ -694,29 +718,128 @@ async function reportConversation({
   const payload = session.payload || {};
   const transcript = redactObject(buildReportTranscript(payload));
   const context = buildReportContext(session, payload);
+  const { prospectId, companyName } = resolveProspectFromSession(session, payload);
+  const { messageIndex, messageTs, messageRole } = resolveFlaggedMessageRef(payload);
+  const trimmedNote = String(note || '').trim() || null;
 
-  const { rows } = await pool.query(`
-    INSERT INTO ao_max_conversation_reports (
-      client_id, ao_owner_id, session_id, category, note, transcript_json, context_json
-    )
-    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
-    RETURNING id, created_at, status
-  `, [
-    clientId,
-    aoOwnerId,
-    sessionId,
-    category,
-    String(note || '').trim() || null,
-    JSON.stringify(transcript),
-    JSON.stringify(context),
-  ]);
+  let resolvedCompanyName = companyName;
+  if (prospectId && !resolvedCompanyName) {
+    const { rows } = await pool.query(`
+      SELECT c.name AS company_name
+      FROM prospects p
+      LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
+      WHERE p.id = $1::uuid AND p.client_id = $2
+      LIMIT 1
+    `, [prospectId, clientId]);
+    resolvedCompanyName = rows[0]?.company_name || null;
+  }
 
-  return {
-    ok: true,
-    report_id: rows[0].id,
-    created_at: rows[0].created_at,
-    status: rows[0].status,
-  };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const escalation = await createAoEscalation({
+      clientId,
+      createdByUserId: aoOwnerId,
+      createdByAoId: aoOwnerId,
+      creatorRole,
+      sourceType: 'conversation',
+      sourceId: sessionId,
+      conversationId: sessionId,
+      prospectId,
+      reason: CONVERSATION_ESCALATION_REASON,
+      note: trimmedNote || category,
+      sourceContext: {
+        category,
+        message_index: messageIndex,
+        message_ts: messageTs,
+        message_role: messageRole,
+        prospect_id: prospectId,
+        surrounding_context_reference: messageIndex != null ? `message:${messageIndex}` : null,
+      },
+      companyName: resolvedCompanyName,
+      db: client,
+    });
+
+    if (escalation.status) {
+      await client.query('ROLLBACK');
+      return escalation;
+    }
+
+    const flagId = escalation.flag.id;
+
+    if (escalation.duplicate) {
+      const { rows: linked } = await client.query(`
+        SELECT id, created_at, status
+        FROM ao_max_conversation_reports
+        WHERE canonical_flag_id = $1::uuid
+           OR (session_id = $2::uuid AND ao_owner_id = $3)
+        ORDER BY created_at DESC
+        LIMIT 1
+      `, [flagId, sessionId, aoOwnerId]);
+      await client.query('COMMIT');
+      return {
+        ok: true,
+        duplicate: true,
+        report_id: linked[0]?.id || null,
+        flag_id: flagId,
+        created_at: linked[0]?.created_at || escalation.flag.created_at,
+        status: escalation.flag.status,
+        flagged_for_jake: true,
+        notification_skipped: escalation.notification_skipped,
+      };
+    }
+
+    const { rows } = await client.query(`
+      INSERT INTO ao_max_conversation_reports (
+        client_id, ao_owner_id, session_id, category, note,
+        transcript_json, context_json, canonical_flag_id, status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::uuid, 'new')
+      RETURNING id, created_at, status
+    `, [
+      clientId,
+      aoOwnerId,
+      sessionId,
+      category,
+      trimmedNote,
+      JSON.stringify(transcript),
+      JSON.stringify({
+        ...context,
+        canonical_flag_id: flagId,
+        message_index: messageIndex,
+      }),
+      flagId,
+    ]);
+
+    await client.query(`
+      UPDATE ao_account_flags
+      SET source_context = COALESCE(source_context, '{}'::jsonb) || $2::jsonb
+      WHERE id = $1::uuid
+    `, [
+      flagId,
+      JSON.stringify({ report_id: rows[0].id }),
+    ]);
+
+    await client.query('COMMIT');
+
+    return {
+      ok: true,
+      report_id: rows[0].id,
+      flag_id: flagId,
+      created_at: rows[0].created_at,
+      status: escalation.flag.status,
+      duplicate: Boolean(escalation.duplicate),
+      flagged_for_jake: true,
+      notification_skipped: escalation.notification_skipped,
+    };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[ao] reportConversation failed:', err.message);
+    return { status: 500, error: 'Could not flag conversation for Jake' };
+  } finally {
+    client.release();
+  }
 }
 
 async function listConversationReports({ clientId = null, limit = 50 } = {}) {

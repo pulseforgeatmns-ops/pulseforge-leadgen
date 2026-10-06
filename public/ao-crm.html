@@ -658,14 +658,15 @@ async function openFlagForJakeModal(prospectId) {
   document.getElementById('cancel-flag').onclick = closeModal;
   document.getElementById('save-flag').onclick = async () => {
     try {
-      await api(`/ao/api/crm/accounts/${prospectId}/flag-for-jake`, {
+      const res = await api(`/ao/api/crm/accounts/${prospectId}/flag-for-jake`, {
         method: 'POST',
         body: JSON.stringify({
           reason: document.getElementById('flag-reason').value,
           note: document.getElementById('flag-note').value,
         }),
       });
-      alert('Flagged for Jake.');
+      const st = res.flag?.status || 'open';
+      alert(res.duplicate ? `Already flagged for Jake (${st}).` : `Flagged for Jake — ${st}.`);
       closeModal();
       await loadDashboard();
     } catch (err) {
