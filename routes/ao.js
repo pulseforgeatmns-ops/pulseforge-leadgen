@@ -19,6 +19,7 @@ const aoCrm = require('../services/aoCrmService');
 const aoRosterReassignment = require('../services/aoRosterReassignmentService');
 const aoFollowup = require('../services/aoFollowupService');
 const aoAccountFlags = require('../services/aoAccountFlagService');
+const aoCrmLinkRecovery = require('../services/aoCrmLinkRecoveryService');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { AO_CRM_NEXT_ACTIONS } = require('../utils/aoCrmTypes');
 const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
@@ -469,6 +470,83 @@ router.get('/api/tasks/:id/crm-context', requireAoRead, wrapAoHandler(async (req
   const ctx = await aoField.getTaskCrmContext(req.params.id, aoOwnerId);
   if (!ctx) return res.status(404).json({ error: 'Task not found' });
   res.json(ctx);
+}));
+
+router.get('/api/crm/accounts/search', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const payload = await aoCrmLinkRecovery.searchCrmAccounts({
+    clientId,
+    q: req.query.q,
+    businessName: req.query.business_name,
+    address: req.query.address,
+    city: req.query.city,
+    domain: req.query.domain,
+    phone: req.query.phone,
+    limit: req.query.limit,
+  });
+  res.json(payload);
+}));
+
+router.get('/api/leads/:leadId/crm-linkage', requireAoRead, wrapAoHandler(async (req, res) => {
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const ctx = await aoCrmLinkRecovery.getLeadLinkageContext({
+    leadId: req.params.leadId,
+    aoOwnerId,
+  });
+  if (!ctx) return res.status(404).json({ error: 'Lead not found' });
+  res.json(ctx);
+}));
+
+router.post('/api/leads/:leadId/crm-link', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { prospect_id: prospectId, task_id: taskId } = req.body || {};
+  if (!prospectId) return res.status(400).json({ error: 'prospect_id required' });
+  const result = await aoCrmLinkRecovery.linkLeadToExistingAccount({
+    clientId,
+    aoOwnerId,
+    leadId: req.params.leadId,
+    prospectId,
+    taskId,
+  });
+  return sendAoServiceResult(res, result);
+}));
+
+router.post('/api/leads/:leadId/crm-account', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const { task_id: taskId, force_create: forceCreate } = req.body || {};
+  const result = await aoCrmLinkRecovery.createCrmAccountForLead({
+    clientId,
+    aoOwnerId,
+    leadId: req.params.leadId,
+    taskId,
+    forceCreate: forceCreate === true || forceCreate === 'true',
+  });
+  return sendAoServiceResult(res, result, {
+    errorBody: r => ({
+      error: r.error,
+      code: r.code,
+      duplicate_candidates: r.duplicate_candidates,
+      crm_prospect_id: r.crm_prospect_id,
+    }),
+  });
+}));
+
+router.patch('/api/leads/:leadId/prospect', requireAoWrite, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  const aoOwnerId = effectiveAoOwnerId(req);
+  const result = await aoCrmLinkRecovery.editQueueProspect({
+    clientId,
+    aoOwnerId,
+    leadId: req.params.leadId,
+    patch: req.body || {},
+  });
+  return sendAoServiceResult(res, result);
 }));
 
 router.get('/api/routes/active', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {

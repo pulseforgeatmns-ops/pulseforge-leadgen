@@ -38,6 +38,8 @@ test('ao routes expose SPEC-AO-CRM-001 endpoints', () => {
   assert.match(src, /\/api\/crm\/accounts\/:prospectId\/followup\/save/);
   assert.match(src, /\/api\/crm\/manager\/accounts/);
   assert.match(src, /\/api\/tasks\/:id\/crm-context/);
+  assert.match(src, /\/api\/leads\/:leadId\/crm-link/);
+  assert.match(src, /\/api\/crm\/accounts\/search/);
   assert.match(src, /\/crm/);
 });
 
