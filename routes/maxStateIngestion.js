@@ -41,6 +41,8 @@ router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
       situation_model: interpreted.situationModel,
       preview: interpreted.preview,
       validation: interpreted.validation,
+      diagnostics: interpreted.diagnostics || interpreted.situationModel?.diagnostics,
+      understanding_telemetry: interpreted.understandingTelemetry || null,
     });
   } catch (error) {
     console.error('[max-understanding]', error);

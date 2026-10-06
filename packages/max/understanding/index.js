@@ -5,6 +5,9 @@ const { interpretConversationalInput, isTrustedStructuredInput, conversationalTe
 const { validateSituationModel } = require('./ambiguityGate');
 const { formatUnderstandingPreview } = require('./preview');
 const { ConversationMemory } = require('./conversationMemory');
+const { buildUnderstandingDiagnostics } = require('./diagnostics');
+const { recordUnderstandingTelemetry, mergeUnderstandingTelemetry } = require('./telemetry');
+const { deriveRecommendedNextActions } = require('./recommendations');
 
 module.exports = {
   ...types,
@@ -14,4 +17,8 @@ module.exports = {
   validateSituationModel,
   formatUnderstandingPreview,
   ConversationMemory,
+  buildUnderstandingDiagnostics,
+  recordUnderstandingTelemetry,
+  mergeUnderstandingTelemetry,
+  deriveRecommendedNextActions,
 };

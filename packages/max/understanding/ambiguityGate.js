@@ -6,6 +6,8 @@ const MATERIAL_KINDS = new Set([
   AMBIGUITY_KIND.PRONOUN,
   AMBIGUITY_KIND.ACCOUNT,
   AMBIGUITY_KIND.CONTACT,
+  AMBIGUITY_KIND.CORRECTION_TARGET,
+  AMBIGUITY_KIND.ACTION_TARGET,
 ]);
 
 function collectAmbiguities(situationModel) {
@@ -24,14 +26,15 @@ function validateSituationModel(situationModel) {
     .filter(Boolean);
 
   const blockCommit = material.length > 0;
-  const blockDecisionExecution = material.some(a =>
-    a.kind === AMBIGUITY_KIND.PRONOUN || a.kind === AMBIGUITY_KIND.ACCOUNT
-  );
+  const blockDecisionExecution = blockCommit;
+  const clarificationRequired = blockCommit;
 
   return {
     validated: !blockCommit,
     blockCommit,
     blockDecisionExecution,
+    clarificationRequired,
+    commit_blocked: blockCommit,
     ambiguities,
     materialAmbiguities: material,
     clarifications,

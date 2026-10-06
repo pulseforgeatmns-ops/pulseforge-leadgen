@@ -6,6 +6,9 @@ const { interpretThreadSegment } = require('./semanticInterpreter');
 const { ConversationMemory } = require('./conversationMemory');
 const { validateSituationModel } = require('./ambiguityGate');
 const { formatUnderstandingPreview } = require('./preview');
+const { buildUnderstandingDiagnostics } = require('./diagnostics');
+const { recordUnderstandingTelemetry } = require('./telemetry');
+const { deriveRecommendedNextActions } = require('./recommendations');
 
 function isTrustedStructuredInput(input = {}) {
   if (Array.isArray(input.claims) && input.claims.length) return true;
@@ -37,7 +40,14 @@ function interpretConversationalInput(input = {}) {
     ? input.memory
     : ConversationMemory.fromSeed(input.conversationMemory || {});
 
-  const segments = segmentIntoThreads(text);
+  const contextAccounts = [
+    ...(input.contextAccounts || []),
+    ...(memory.knownAccountNames?.() || []),
+  ];
+  let segments = segmentIntoThreads(text);
+  if (/actually,?\s+that was\s+\w+\s+at/i.test(text)) {
+    segments = [{ text, accountHint: null }];
+  }
   const threads = segments.map((seg, idx) =>
     interpretThreadSegment({
       text: seg.text,
@@ -46,6 +56,7 @@ function interpretConversationalInput(input = {}) {
       memory,
       now,
       accountHint: seg.accountHint,
+      contextAccounts,
     })
   );
 
@@ -75,7 +86,13 @@ function interpretConversationalInput(input = {}) {
 
   const validation = validateSituationModel(situationModel);
   situationModel.validation = validation;
+  situationModel.recommendedNextActions = deriveRecommendedNextActions(situationModel);
+  situationModel.diagnostics = buildUnderstandingDiagnostics(situationModel);
   situationModel.preview = formatUnderstandingPreview(situationModel);
+  const understandingTelemetry = recordUnderstandingTelemetry(situationModel, validation, {
+    input_type: isTrustedStructuredInput(input) ? 'structured' : 'conversational',
+    actor_role: input.actor?.role || null,
+  });
 
   memory.recordTurn({ inputId, text, situationModel });
 
@@ -84,6 +101,8 @@ function interpretConversationalInput(input = {}) {
     memory,
     validation,
     preview: situationModel.preview,
+    diagnostics: situationModel.diagnostics,
+    understandingTelemetry,
     skipped: false,
   };
 }

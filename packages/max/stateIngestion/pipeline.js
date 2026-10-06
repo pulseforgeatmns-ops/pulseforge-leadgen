@@ -15,6 +15,7 @@ const {
   interpretConversationalInput,
   isTrustedStructuredInput,
   conversationalText,
+  mergeUnderstandingTelemetry,
 } = require('../understanding');
 
 function claimKey(claim) {
@@ -271,11 +272,15 @@ async function ingestOperationalUpdate(input = {}) {
       now: input.now,
       memory: input.memory,
       conversationMemory,
+      contextAccounts: input.contextAccounts,
     });
     situationModel = interpreted.situationModel;
     understandingValidation = interpreted.validation;
     understandingPreview = interpreted.preview;
     conversationMemory = interpreted.memory;
+    if (interpreted.understandingTelemetry) {
+      mergeUnderstandingTelemetry(telemetry, interpreted.understandingTelemetry);
+    }
 
     if (understandingValidation?.blockCommit) {
       ingestionRecord.telemetry = telemetry;
@@ -311,6 +316,7 @@ async function ingestOperationalUpdate(input = {}) {
         understanding_validation: understandingValidation,
         clarification_required: understandingValidation.narrowestClarification,
         commit_blocked: true,
+        understanding_diagnostics: situationModel?.diagnostics || null,
         conversation_memory: conversationMemory,
       };
     }
@@ -423,6 +429,7 @@ async function ingestOperationalUpdate(input = {}) {
     situation_model: situationModel,
     understanding_preview: understandingPreview,
     understanding_validation: understandingValidation,
+    understanding_diagnostics: situationModel?.diagnostics || null,
     conversation_memory: conversationMemory,
   };
 }
