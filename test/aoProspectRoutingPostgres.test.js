@@ -6,10 +6,19 @@ const path = require('node:path');
 const test = require('node:test');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { assertAoProspectRoutingSchemaContract } = require('./helpers/aoProspectRoutingSchemaContract');
 
 const root = path.join(__dirname, '..');
 const migration = fs.readFileSync(path.join(root, 'migrations', '2026-09-22-ao-prospect-routing.sql'), 'utf8');
 const rollback = fs.readFileSync(path.join(root, 'migrations', '2026-09-22-ao-prospect-routing.rollback.sql'), 'utf8');
+const dispositionMigration = fs.readFileSync(
+  path.join(root, 'migrations', '2026-10-05-ao-queue-dead-001.sql'),
+  'utf8'
+);
+const rosterMigration = fs.readFileSync(
+  path.join(root, 'migrations', '2026-10-05-ao-roster-reassign-001.sql'),
+  'utf8'
+);
 
 const ids = {
   company10: '00000000-0000-0000-0000-000000000010',
@@ -37,8 +46,25 @@ async function baseSchema(db) {
       company_id UUID REFERENCES companies(id), first_name TEXT, last_name TEXT,
       email TEXT, phone TEXT, vertical TEXT, icp_score INTEGER, status TEXT,
       service_area_match TEXT, do_not_contact BOOLEAN DEFAULT false, is_hot BOOLEAN DEFAULT false,
+      disposition_status TEXT NOT NULL DEFAULT 'active',
       next_action_due_at TIMESTAMPTZ, next_action_status TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+      created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT prospects_disposition_status_check CHECK (disposition_status IN ('active', 'dead'))
+    );
+    CREATE TABLE ao_leads(
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      client_id INTEGER NOT NULL REFERENCES clients(id),
+      business_name TEXT NOT NULL,
+      ao_owner_id INTEGER NOT NULL REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'new_visit',
+      interest_level TEXT,
+      first_contact_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_contact_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      attribution_source TEXT NOT NULL DEFAULT 'ao_field_visit',
+      attribution_window_days INTEGER NOT NULL DEFAULT 180,
+      commission_eligible BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX prospects_next_action_idx
       ON prospects(client_id, next_action_status, next_action_due_at)
@@ -67,8 +93,9 @@ async function seed(db) {
     [ids.foreign, 11, ids.company11, 'foreign'],
   ]) {
     await db.query(`INSERT INTO prospects(
-      id,client_id,company_id,first_name,last_name,email,phone,vertical,icp_score,status,service_area_match
-    ) VALUES($1,$2,$3,'Pat',$4,$5,'6035550101','property_manager',85,'cold','Manchester, NH')`,
+      id,client_id,company_id,first_name,last_name,email,phone,vertical,icp_score,status,
+      service_area_match,disposition_status
+    ) VALUES($1,$2,$3,'Pat',$4,$5,'6035550101','property_manager',85,'cold','Manchester, NH','active')`,
     [id, clientId, companyId, suffix, `${suffix}@example.com`]);
   }
 }
@@ -95,6 +122,9 @@ test('AO routing enforces tenant ownership, active uniqueness, suppression, and 
     await seed(db);
     await db.query(migration);
     await db.query(migration);
+    await db.query(dispositionMigration);
+    await db.query(rosterMigration);
+    await assertAoProspectRoutingSchemaContract(db);
 
     const taskService = require('../services/aoProspectTaskService');
     const debriefService = require('../services/aoAdvisoryDebriefService');
@@ -198,6 +228,64 @@ test('AO routing enforces tenant ownership, active uniqueness, suppression, and 
     assert.equal(columns.length, 1, 'rollback must preserve Max next_action_due_at');
     assert.equal((await db.query("SELECT to_regclass('prospects_next_action_idx') AS name")).rows[0].name,
       'prospects_next_action_idx');
+  } finally {
+    await db.end();
+    await postgres.stop();
+  }
+});
+
+test('AO routing respects disposition_status independently of generic status', {
+  timeout: 180000,
+}, async () => {
+  const postgres = await startDisposablePostgres('ao-routing-disposition-');
+  const db = new Pool({ connectionString: postgres.connectionString });
+  try {
+    await baseSchema(db);
+    await seed(db);
+    await db.query(migration);
+    await db.query(dispositionMigration);
+    await db.query(rosterMigration);
+    await assertAoProspectRoutingSchemaContract(db);
+
+    const taskService = require('../services/aoProspectTaskService');
+
+    await taskService.generateWeeklyAoTasks({ clientId: 10, prospectIds: [ids.p2], db });
+    const activeTasks = await taskService.listOpenTasks({ clientId: 10, db });
+    assert.equal(
+      activeTasks.some(row => row.prospect_id === ids.p2),
+      true,
+      'active disposition prospect should route into open AO tasks'
+    );
+
+    await db.query(
+      `UPDATE prospects SET disposition_status = 'dead', status = 'hot' WHERE id = $1`,
+      [ids.p2]
+    );
+    const afterDead = await taskService.listOpenTasks({ clientId: 10, db });
+    assert.equal(
+      afterDead.some(row => row.prospect_id === ids.p2),
+      false,
+      'dead disposition must not appear in routable open tasks even when generic status is hot'
+    );
+
+    await taskService.generateWeeklyAoTasks({ clientId: 10, prospectIds: [ids.p2], db });
+    assert.equal(
+      (await taskService.listOpenTasks({ clientId: 10, db })).some(row => row.prospect_id === ids.p2),
+      false,
+      'weekly generation must not return dead-disposition prospects in the routable queue'
+    );
+
+    await db.query(
+      `UPDATE prospects SET disposition_status = 'active', status = 'dead' WHERE id = $1`,
+      [ids.p3]
+    );
+    await taskService.generateWeeklyAoTasks({ clientId: 10, prospectIds: [ids.p3], db });
+    const lifecycleStatusDead = await taskService.listOpenTasks({ clientId: 10, db });
+    assert.equal(
+      lifecycleStatusDead.some(row => row.prospect_id === ids.p3),
+      true,
+      'generic status alone must not suppress routing when disposition remains active'
+    );
   } finally {
     await db.end();
     await postgres.stop();
