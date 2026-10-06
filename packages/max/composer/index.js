@@ -7,6 +7,8 @@ const adapters = require('./adapters');
 const submitTurn = require('./submitTurn');
 const attachmentStore = require('./attachmentStore');
 const preview = require('./preview');
+const attachmentIntent = require('./attachmentIntent');
+const spreadsheetTurn = require('./spreadsheetTurn');
 
 module.exports = {
   ...types,
@@ -16,4 +18,6 @@ module.exports = {
   ...submitTurn,
   ...attachmentStore,
   ...preview,
+  ...attachmentIntent,
+  ...spreadsheetTurn,
 };

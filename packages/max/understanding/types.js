@@ -77,6 +77,7 @@ function createSituationModel(base = {}) {
     evidence: base.evidence || [],
     threads: base.threads || [],
     commentary: base.commentary || [],
+    attachmentTask: base.attachmentTask || null,
   };
 }
 

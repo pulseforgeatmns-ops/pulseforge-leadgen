@@ -130,7 +130,11 @@
   }
 
   function mxComposerReplyText(data) {
+    if (data.operational_response) return data.operational_response;
     if (data.batch_preview?.summary) return data.batch_preview.summary;
+    if (data.understanding_preview && !/stay curious/i.test(data.understanding_preview)) {
+      return data.understanding_preview;
+    }
     if (data.understanding_preview) return data.understanding_preview;
     if (data.clarification_required) return data.clarification_required;
     if (typeof data.receipt === 'string') return data.receipt;

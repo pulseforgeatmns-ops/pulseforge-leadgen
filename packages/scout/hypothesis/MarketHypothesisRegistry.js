@@ -8,6 +8,7 @@
  */
 
 const { asText } = require('../../max/scoutAcquisition/Types');
+const { founderLedSmallBusinessSearchTerms } = require('../../../utils/canonicalBusinessTaxonomy');
 
 const SEARCH_SOURCES = Object.freeze({
   GOOGLE_PLACES: 'google_places',
@@ -38,6 +39,22 @@ const SEARCH_SOURCES = Object.freeze({
  */
 
 const MARKET_HYPOTHESES = Object.freeze({
+  founder_led_small_business: Object.freeze({
+    id: 'founder_led_small_business',
+    statement: 'Founder-led local service and independent businesses are likely Babrun founder customers.',
+    buyerRole: 'founder',
+    segmentKey: 'small_business_owners',
+    searchStrategies: Object.freeze([
+      Object.freeze({
+        source: SEARCH_SOURCES.GOOGLE_PLACES,
+        priority: 1,
+        queryTemplates: Object.freeze(
+          founderLedSmallBusinessSearchTerms().map(term => `${term} {city} {state}`)
+        ),
+        rationale: 'Canonical founder-led SMB verticals are discoverable as concrete business categories.',
+      }),
+    ]),
+  }),
   cleaning_company_overflow: Object.freeze({
     id: 'cleaning_company_overflow',
     statement: 'Commercial cleaning companies with overflow work are likely referral partners.',

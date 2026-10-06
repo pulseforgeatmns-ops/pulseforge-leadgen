@@ -3,6 +3,7 @@
 const { hash } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { isPreProviderOutboundFailure } = require('./governedOutboundProviderBoundary');
+const { isRetryablePreProviderScheduleRejection } = require('./governedOutboundProviderBoundary');
 
 const PRE_PROVIDER_UNCERTAIN_REASONS = new Set([
   'ak_observed_provenance_required',
@@ -10,6 +11,14 @@ const PRE_PROVIDER_UNCERTAIN_REASONS = new Set([
   'governed_paige_lineage_revision_mismatch',
   'governed_paige_lineage_copy_mismatch',
   'provider_or_persistence_error',
+  'emmett_capacity_exhausted',
+  'emmett_envelope_missing',
+  'emmett_envelope_expired',
+  'emmett_outside_send_window',
+  'emmett_governor_halted',
+  'emmett_governor_pause',
+  'emmett_governor_emergency',
+  'dispatch_unavailable_now',
 ]);
 
 async function loadItemWithEnvelope(pool, tenantId, itemId) {
@@ -30,7 +39,8 @@ async function gatherUncertainSendEvidence(pool, item) {
   const missionId = String(item.mission_id || '');
 
   const schedules = (await pool.query(
-    `SELECT id, status, outbound_message_id, prospect_id, mission_id, created_at
+    `SELECT id, status, outbound_message_id, prospect_id, mission_id, skip_reason,
+            failure_code, failure_message, executed_at, created_at
        FROM tenant_outreach_scheduled_sends
       WHERE tenant_id = $1
         AND (prospect_id = $2 OR lower(recipient_email) = $3)
@@ -105,7 +115,7 @@ async function gatherUncertainSendEvidence(pool, item) {
 
 function extractPreProviderFailureCode(item, evidence) {
   const reason = String(item.reason || '').trim();
-  if (PRE_PROVIDER_UNCERTAIN_REASONS.has(reason)) return reason;
+  if (PRE_PROVIDER_UNCERTAIN_REASONS.has(reason) || isPreProviderOutboundFailure({ code: reason })) return reason;
   for (const row of evidence.tickBlocks) {
     const code = String(row.payload?.reason || '').trim();
     if (PRE_PROVIDER_UNCERTAIN_REASONS.has(code) || isPreProviderOutboundFailure({ code })) return code;
@@ -118,7 +128,9 @@ function extractPreProviderFailureCode(item, evidence) {
 }
 
 function classifyProvenUnsent(item, evidence) {
-  if (!item || !['uncertain', 'attempted'].includes(item.status)) {
+  const terminalPreProvider = item?.status === 'suppressed'
+    && isRetryablePreProviderScheduleRejection(item.reason);
+  if (!item || (!['uncertain', 'attempted'].includes(item.status) && !terminalPreProvider)) {
     return { outcome: 'SKIP', reason: 'item_not_reconcilable' };
   }
   if (item.provider_message_id) {
@@ -129,6 +141,15 @@ function classifyProvenUnsent(item, evidence) {
 
   const durableSchedule = evidence.schedules.find((row) => ['SCHEDULED', 'EXECUTING'].includes(String(row.status)));
   if (durableSchedule) return { outcome: 'SKIP', reason: 'spec252_schedule_exists' };
+
+  if (terminalPreProvider) {
+    const matchingSkip = evidence.schedules.find((row) =>
+      String(row.status) === 'SKIPPED'
+      && String(row.skip_reason || '') === String(item.reason || '')
+      && !row.outbound_message_id
+    );
+    if (!matchingSkip) return { outcome: 'UNKNOWN', reason: 'pre_provider_schedule_rejection_not_proven' };
+  }
 
   const sentMailbox = evidence.mailboxMessages.find((row) => row.status === 'sent' && (row.provider_message_id || row.sent_at));
   if (sentMailbox) return { outcome: 'SKIP', reason: 'mailbox_message_sent' };
@@ -209,6 +230,8 @@ async function reconcileUncertainItemFromEvidence(pool, tenantId, itemId, opts =
     evidence: JSON.stringify(classification.evidenceSummary || {}),
     actor: 'canonical_evidence_reconciler',
     providerOutcome: classification.providerOutcome,
+    canonicalPreProviderRejection: true,
+    missionId: item.mission_id,
   }));
   return {
     itemId,

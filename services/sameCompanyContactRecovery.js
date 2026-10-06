@@ -496,7 +496,11 @@ async function attemptSameCompanyAlternateRecovery(store, pool, {
 
   const classified = ownership && ownership.kind === OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT
     ? ownership
-    : await classifyInventoryOwnership(store, { company: name, domain, website }, { pool, now });
+    : await classifyInventoryOwnership(store, { company: name, domain, website }, {
+      pool,
+      now,
+      clientId: scoutContext.clientId ?? scoutContext.tenantId,
+    });
   if (classified.kind !== OWNERSHIP_KINDS.SAME_COMPANY_DIFFERENT_CONTACT) {
     if (classified.kind === OWNERSHIP_KINDS.VALID_COLLISION) {
       recordAlternateLoss(stats, 'alternate_contact_owned');

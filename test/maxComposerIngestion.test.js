@@ -101,7 +101,9 @@ describe('MAX-INGEST-UX-001 unified composer', () => {
       store,
     });
     assert.equal(result.ok, true);
-    assert.match(result.understanding_preview || '', /decision|Dave|Exeter/i);
+    assert.equal(result.committed, true);
+    assert.ok(result.reconciliation_plan || result.results?.length);
+    assert.match(result.operational_response || result.understanding_preview || '', /Exeter|account note|contact/i);
   });
 
   it('C4 — multi-account spreadsheet processes independently', async () => {

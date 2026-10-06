@@ -71,6 +71,7 @@ function interpretConversationalInput(input = {}) {
     inputId,
     conversationId: input.conversationId || memory.conversationId,
     actor: input.actor || {},
+    attachmentTask: input.attachmentTask || null,
     occurredAt: input.occurredAt || null,
     interpretedAt: now.toISOString(),
     rawText: text,

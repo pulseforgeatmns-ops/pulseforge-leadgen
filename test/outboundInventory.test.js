@@ -204,7 +204,7 @@ test('classifyInventoryOwnership reports same-company different-contact without 
       }],
     }),
   };
-  const result = await classifyInventoryOwnership({ pool }, {
+  const result = await classifyInventoryOwnership({ pool, tenantId: '10', clientId: 10 }, {
     company: 'Granite PM',
     domain: 'pm.example',
     email: 'ops@pm.example',

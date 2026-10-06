@@ -473,34 +473,118 @@ function buildSpreadsheetReconciliationPlan({
   };
 }
 
-function formatSpreadsheetReconciliationPreview(plan) {
-  const safeNotes = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_NOTE && c.safe).length, 0);
-  const safeContacts = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_CONTACT).length, 0);
-  const safeFollowUps = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_FOLLOW_UP).length, 0);
-  const contactUpdates = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_EMAIL || c.type === CHANGE_TYPES.ADD_PHONE).length, 0);
+function rowAccountLabel(rowPlan) {
+  return rowPlan.accountResolution?.entity?.company_name
+    || rowPlan.accountResolution?.entity?.name
+    || rowPlan.values?.company
+    || rowPlan.values?.account
+    || 'Unknown account';
+}
 
-  const lines = [
-    `I found ${plan.summary.totalRows} account update${plan.summary.totalRows === 1 ? '' : 's'}.`,
-    '',
-    'Safe updates:',
-    `- ${safeNotes} notes added`,
-    `- ${contactUpdates} contact field additions`,
-    `- ${safeContacts} new contacts`,
-    `- ${safeFollowUps} follow-up actions`,
-  ];
-  if (plan.summary.ambiguous || plan.summary.conflicts) {
-    lines.push('');
-    lines.push('Needs review:');
-    if (plan.summary.ambiguous) {
-      lines.push(`- ${plan.summary.ambiguous} account matches are ambiguous or unclear`);
+function summarizeRowOperationalChanges(rowPlan) {
+  const bullets = [];
+  for (const change of rowPlan.proposedChanges || []) {
+    if (change.safe === false && change.type !== CHANGE_TYPES.CREATE_ACCOUNT_CANDIDATE) continue;
+    if (change.type === CHANGE_TYPES.ADD_NOTE) bullets.push('Add note');
+    if (change.type === CHANGE_TYPES.ADD_CONTACT) bullets.push('Add contact');
+    if (change.type === CHANGE_TYPES.ADD_EMAIL) bullets.push('Add email');
+    if (change.type === CHANGE_TYPES.ADD_PHONE) bullets.push('Add phone');
+    if (change.type === CHANGE_TYPES.ADD_FOLLOW_UP || change.type === CHANGE_TYPES.UPDATE_NEXT_ACTION) {
+      bullets.push('Add follow-up');
     }
-    if (plan.summary.conflicts) {
-      lines.push(`- ${plan.summary.conflicts} field conflict(s) with existing CRM data`);
+    if (change.type === CHANGE_TYPES.SET_SALES_PRIORITY) bullets.push('Sales-priority change');
+    if (change.type === CHANGE_TYPES.UPDATE_DISPOSITION) bullets.push('Status update');
+  }
+  for (const conflict of rowPlan.conflicts || []) {
+    bullets.push(conflict.message || 'Field conflict — needs review');
+  }
+  for (const amb of rowPlan.ambiguities || []) {
+    bullets.push(amb.message || 'Needs clarification');
+  }
+  return bullets;
+}
+
+function formatSpreadsheetOperationalResponse(plan, { previewOnly = true, instruction = '' } = {}) {
+  const wantsRowDetail = /\b(which rows?|show me.*rows?|rows? changed|row-level)\b/i.test(String(instruction || ''));
+  const safeNotes = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_NOTE && c.safe !== false).length, 0);
+  const safeContacts = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_CONTACT).length, 0);
+  const safeFollowUps = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_FOLLOW_UP || c.type === CHANGE_TYPES.UPDATE_NEXT_ACTION).length, 0);
+  const contactUpdates = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_EMAIL || c.type === CHANGE_TYPES.ADD_PHONE).length, 0);
+  const priorityChanges = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.SET_SALES_PRIORITY).length, 0);
+
+  const rowsNeedingReview = plan.rows.filter(r => (r.ambiguities || []).length || (r.conflicts || []).length);
+  const rowsWithChanges = plan.rows.filter(r => summarizeRowOperationalChanges(r).length);
+  const lines = [];
+  lines.push(`I reviewed all ${plan.summary.totalRows} row${plan.summary.totalRows === 1 ? '' : 's'}.`);
+  lines.push('');
+
+  if (!rowsWithChanges.length && !rowsNeedingReview.length && plan.summary.totalRows) {
+    lines.push('No durable changes are needed:');
+    lines.push(`- ${plan.summary.totalRows} row${plan.summary.totalRows === 1 ? '' : 's'} match existing CRM data or contain no operational updates`);
+    if (plan.summary.duplicateSuppressed) {
+      lines.push(`- ${plan.summary.duplicateSuppressed} row${plan.summary.duplicateSuppressed === 1 ? '' : 's'} duplicate prior uploads`);
+    }
+    if (previewOnly) {
+      lines.push('');
+      lines.push('Nothing has been saved yet.');
+    }
+    lines.unshift('');
+    lines.unshift(plan.workbookSummary);
+    return lines.join('\n');
+  }
+
+  lines.push('Ready to update:');
+  lines.push(`- ${safeNotes} account note${safeNotes === 1 ? '' : 's'}`);
+  lines.push(`- ${contactUpdates} contact field addition${contactUpdates === 1 ? '' : 's'}`);
+  lines.push(`- ${safeContacts} new contact${safeContacts === 1 ? '' : 's'}`);
+  lines.push(`- ${safeFollowUps} follow-up action${safeFollowUps === 1 ? '' : 's'}`);
+  if (priorityChanges) {
+    lines.push(`- ${priorityChanges} sales-priority change${priorityChanges === 1 ? '' : 's'}`);
+  }
+
+  if (rowsNeedingReview.length) {
+    lines.push('');
+    lines.push('Needs clarification:');
+    for (const rowPlan of rowsNeedingReview) {
+      const sheet = rowPlan.sheet || 'Sheet1';
+      const label = rowAccountLabel(rowPlan);
+      if (wantsRowDetail) {
+        const detail = summarizeRowOperationalChanges(rowPlan).join('; ') || 'Needs review';
+        lines.push(`${sheet} row ${rowPlan.row} — ${label}`);
+        lines.push(`- ${detail}`);
+      } else {
+        lines.push(`- ${sheet} row ${rowPlan.row} — ${label}`);
+      }
     }
   }
-  lines.unshift(plan.workbookSummary);
+
+  if (wantsRowDetail) {
+    const changedRows = plan.rows.filter(r => summarizeRowOperationalChanges(r).length && !rowsNeedingReview.includes(r));
+    if (changedRows.length) {
+      lines.push('');
+      lines.push('Row changes:');
+      for (const rowPlan of changedRows) {
+        const sheet = rowPlan.sheet || 'Sheet1';
+        lines.push(`${sheet} row ${rowPlan.row} — ${rowAccountLabel(rowPlan)}`);
+        for (const bullet of summarizeRowOperationalChanges(rowPlan)) {
+          lines.push(`- ${bullet}`);
+        }
+      }
+    }
+  }
+
+  if (previewOnly) {
+    lines.push('');
+    lines.push('Nothing has been saved yet.');
+  }
+
   lines.unshift('');
+  lines.unshift(plan.workbookSummary);
   return lines.join('\n');
+}
+
+function formatSpreadsheetReconciliationPreview(plan, options = {}) {
+  return formatSpreadsheetOperationalResponse(plan, { previewOnly: true, ...options });
 }
 
 async function commitSpreadsheetReconciliationPlan({
@@ -592,6 +676,8 @@ module.exports = {
   buildSpreadsheetReconciliationPlan,
   reconcileSpreadsheetRow,
   formatSpreadsheetReconciliationPreview,
+  formatSpreadsheetOperationalResponse,
+  rowAccountLabel,
   commitSpreadsheetReconciliationPlan,
   rowSemanticHash,
   classifyIncomingField,

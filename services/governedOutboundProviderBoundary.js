@@ -19,7 +19,14 @@ const PRE_PROVIDER_FAILURE_CODES = new Set([
   'governed_outreach_asset_changed',
   'governed_schedule_payload_changed',
   'emmett_capacity_required',
+  'emmett_capacity_exhausted',
+  'emmett_envelope_missing',
+  'emmett_envelope_expired',
+  'emmett_outside_send_window',
   'emmett_governor_halted',
+  'emmett_governor_pause',
+  'emmett_governor_emergency',
+  'dispatch_unavailable_now',
   'provider_payload_changed',
   'provider_call_budget_exceeded',
   'pre_provider_stop',
@@ -48,6 +55,20 @@ const PRE_PROVIDER_FAILURE_CODES = new Set([
   'governed_scheduler_required',
   'governed_scheduler_binding_changed',
   'mailboxError',
+]);
+
+const RETRYABLE_PRE_PROVIDER_SCHEDULE_REJECTIONS = new Set([
+  'emmett_capacity_exhausted',
+  'emmett_envelope_missing',
+  'emmett_envelope_expired',
+  'emmett_outside_send_window',
+  'emmett_governor_halted',
+  'emmett_governor_pause',
+  'emmett_governor_emergency',
+  'dispatch_unavailable_now',
+  'outside_business_hours',
+  'weekend',
+  'spacing',
 ]);
 
 function createProviderBoundaryTracker() {
@@ -90,12 +111,18 @@ function terminalPreProviderReason(error = {}) {
   return String(error.code || error.message || 'pre_provider_failed').slice(0, 200);
 }
 
+function isRetryablePreProviderScheduleRejection(reason) {
+  return RETRYABLE_PRE_PROVIDER_SCHEDULE_REJECTIONS.has(String(reason || '').trim());
+}
+
 module.exports = {
   PRE_PROVIDER_FAILURE_CODES,
+  RETRYABLE_PRE_PROVIDER_SCHEDULE_REJECTIONS,
   createProviderBoundaryTracker,
   attachProviderBoundaryCrossed,
   providerBoundaryWasCrossed,
   isPreProviderOutboundFailure,
   terminalPreProviderReason,
+  isRetryablePreProviderScheduleRejection,
   markLeafProviderSend,
 };

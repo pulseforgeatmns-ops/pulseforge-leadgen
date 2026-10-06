@@ -828,7 +828,8 @@ async function evaluateSendEligibility(schedule, opts = {}) {
 
   if (schedule.authorizationSource === 'governed_outbound' || schedule.authorizationSnapshot?.governed) {
     try {
-      await require('./governedTenantSchedule').validateGovernedSchedule(schedule, { ...opts, now });
+      const governedSchedule = opts.governedSchedule || require('./governedTenantSchedule');
+      await governedSchedule.validateGovernedSchedule(schedule, { ...opts, now });
     } catch (error) {
       return { eligible: false, action: SCHEDULE_STATUS.SKIPPED, reason: error.code || 'governed_validation_failed' };
     }
@@ -909,8 +910,12 @@ async function executeScheduledSendImpl(schedule, opts = {}) {
 
   const snapshot = schedule.authorizationSnapshot || {};
   try {
-    if (snapshot.governed) await require('./governedTenantSchedule').validateGovernedSchedule(schedule, { ...opts, now: new Date() });
-    const sendResult = await sendTenantEmail({
+    if (snapshot.governed) {
+      const governedSchedule = opts.governedSchedule || require('./governedTenantSchedule');
+      await governedSchedule.validateGovernedSchedule(schedule, { ...opts, now: new Date() });
+    }
+    const send = opts.sendTenantEmail || sendTenantEmail;
+    const sendResult = await send({
       tenantId: schedule.tenantId,
       sendingIdentityId: schedule.sendingIdentityId,
       missionId: schedule.missionId || snapshot.missionId || null,
@@ -986,7 +991,8 @@ async function executeScheduledSendImpl(schedule, opts = {}) {
 async function executeScheduledSend(schedule, opts = {}) {
   const result = await executeScheduledSendImpl(schedule, opts);
   if (schedule.authorizationSnapshot?.governed && ['sent', 'recovered_sent', 'skipped', 'failed'].includes(result.result)) {
-    await require('./governedTenantSchedule').finishGovernedSchedule(result.schedule, result, opts);
+    const governedSchedule = opts.governedSchedule || require('./governedTenantSchedule');
+    await governedSchedule.finishGovernedSchedule(result.schedule, result, opts);
   }
   return result;
 }

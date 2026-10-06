@@ -20,12 +20,16 @@ class ConversationMemory {
     this.activeAccounts = [];
     this.durableLoadFailed = durableLoadFailed;
     this.durableReferenceResolved = false;
+    this.pendingSpreadsheetWorkbook = null;
   }
 
   static fromSeed(seed = {}) {
     const mem = new ConversationMemory({ conversationId: seed.conversationId });
     for (const turn of seed.turns || []) {
       mem.recordTurn(turn);
+    }
+    if (seed.pendingSpreadsheetWorkbook) {
+      mem.pendingSpreadsheetWorkbook = seed.pendingSpreadsheetWorkbook;
     }
     return mem;
   }
@@ -155,6 +159,21 @@ class ConversationMemory {
     return foundContactTurn ? unrelated : Infinity;
   }
 
+  getPendingSpreadsheetWorkbook() {
+    return this.pendingSpreadsheetWorkbook || null;
+  }
+
+  recordPendingSpreadsheetWorkbook(workbook = {}) {
+    this.pendingSpreadsheetWorkbook = {
+      ...workbook,
+      recordedAt: workbook.recordedAt || new Date().toISOString(),
+    };
+  }
+
+  clearPendingSpreadsheetWorkbook() {
+    this.pendingSpreadsheetWorkbook = null;
+  }
+
   recordTurn({ inputId, text, situationModel }) {
     this.turns.push({ inputId, text, situationModel, at: new Date().toISOString() });
     while (this.turns.length > this.maxTurns) this.turns.shift();
@@ -219,6 +238,7 @@ class ConversationMemory {
       conversationId: this.conversationId,
       maxTurns: this.maxTurns,
       turns: this.turns,
+      pendingSpreadsheetWorkbook: this.pendingSpreadsheetWorkbook,
     };
   }
 
