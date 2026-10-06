@@ -13,6 +13,7 @@ const {
   EPISTEMIC_STATES,
   MESSAGE_TYPES,
 } = require('../services/clientIntelligenceInterview');
+const { buildInitialGrowthDirection } = require('../services/clientIntelligenceGrowthDirection');
 
 /** Simulates mis-mapped persisted facts after Blueprint v1.1 regeneration. */
 function studioSubstralCorruptedFacts() {
@@ -496,5 +497,76 @@ describe('Studio Substral Blueprint section mapping (v1.1 regeneration)', () => 
     assert.match(whoYouServe, /ideal customers include/i);
     assert.match(whoYouServe, /Greater Manchester/i);
     assert.ok(prepared.ideal_customers.length >= 2);
+  });
+
+  it('composes Initial Growth Direction from approved Blueprint sections (not service-list fragments)', () => {
+    const prepared = prepareNormalizedFactsForBrief({
+      business_name: 'Studio Substral',
+      business_description:
+        'Studio Substral builds premium websites for owner-led local businesses that need a stronger online presence.',
+      services: ['website redesign', 'messaging', 'visual design', 'copywriting', 'launch support'],
+      ideal_customers: [
+        'owner-led businesses where a better website can directly affect trust, lead flow, and sales',
+        'small business owners whose websites feel outdated, generic, confusing, visually weak, or slow',
+      ],
+      disqualified_customers: [
+        'customers who are mainly looking for the cheapest possible website',
+        'a quick cosmetic patch',
+        'a one-off task with no broader business value',
+        'hobby projects',
+        'brand-new businesses with no operating history',
+      ],
+      geography: ['Greater Manchester', 'southern New Hampshire'],
+      vertical_focus:
+        'local service businesses, contractors and trades, professional services, medical and wellness practices, property service companies, hospitality businesses, and growing owner-led local brands',
+      differentiation: 'credibility, clarity, and business impact over the cheapest website',
+      brand_voice: 'clear, sharp, confident, and practical',
+      ninety_day_outcomes: 'Acquire one profitable website redesign client at $2,000+',
+      success_metrics: ['qualified prospects identified', 'discovery calls booked'],
+      epistemic_states: {
+        business_description: EPISTEMIC_STATES.KNOWN,
+        services: EPISTEMIC_STATES.KNOWN,
+        ideal_customers: EPISTEMIC_STATES.KNOWN,
+        disqualified_customers: EPISTEMIC_STATES.KNOWN,
+        geography: EPISTEMIC_STATES.KNOWN,
+        differentiation: EPISTEMIC_STATES.KNOWN,
+        brand_voice: EPISTEMIC_STATES.KNOWN,
+        ninety_day_outcomes: EPISTEMIC_STATES.KNOWN,
+        success_metrics: EPISTEMIC_STATES.KNOWN,
+      },
+      hypotheses: {},
+      evidence_statements: {},
+      business_facts: {},
+      transformation_areas: [],
+      pains: [],
+      learning_signals: [],
+      excluded_metrics: [],
+      superseded_slots: [],
+    });
+    const sections = sectionsFromNormalizedFacts(prepared);
+    const gd = buildInitialGrowthDirection(
+      { id: 'bp-substral', version: '1.6', status: 'approved', sections },
+      { normalizedFacts: prepared }
+    );
+    const blob = (gd.paragraphs || []).join('\n');
+
+    assert.match(
+      gd.paragraphs[0],
+      /Studio Substral should focus first on acquiring premium website redesign clients among owner-led businesses in Greater Manchester and southern New Hampshire/i
+    );
+    assert.match(gd.paragraphs[0], /undersell the quality of the business/i);
+    assert.doesNotMatch(blob, /delivers website redesign, messaging, visual design/i);
+    assert.doesNotMatch(blob, /calls to act\b/i);
+    assert.doesNotMatch(blob, /\. and a small business owner/i);
+
+    assert.match(gd.paragraphs[1], /strongest initial segments are/i);
+    assert.match(gd.paragraphs[1], /local service businesses/i);
+    assert.match(gd.paragraphs[1], /contractors and trades/i);
+    assert.match(gd.paragraphs[1], /trust, lead flow, bookings, or sales/i);
+
+    assert.match(blob, /Avoid price-first buyers/i);
+    assert.match(blob, /\$2,000\+/);
+    assert.match(blob, /Near-term success means acquiring at least one profitable redesign client/i);
+    assert.match(gd.firstFocus, /acquiring premium website redesign clients among owner-led businesses/i);
   });
 });
