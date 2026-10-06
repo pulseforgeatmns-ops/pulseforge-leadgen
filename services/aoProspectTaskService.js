@@ -230,6 +230,7 @@ async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }
       SELECT p.id
       FROM prospects p
       WHERE p.client_id = $1
+        AND COALESCE(p.disposition_status, 'active') = 'active'
         AND COALESCE(p.do_not_contact, false) = false
         AND COALESCE(p.icp_score, 0) >= 40
         AND p.prospect_motion IS DISTINCT FROM 'SUPPRESS'
@@ -243,6 +244,9 @@ async function generateWeeklyAoTasks({ clientId, prospectIds = null, db = pool }
   for (const prospectId of ids) {
     const bundle = await fetchProspectBundle(prospectId, clientId, client);
     if (!bundle) continue;
+    if (String(bundle.prospect?.disposition_status || 'active').toLowerCase() === 'dead') {
+      continue;
+    }
     const routing = routeProspect({
       prospect: bundle.prospect,
       company: bundle.company,
@@ -328,6 +332,7 @@ async function listOpenTasks({ clientId, aoOwnerId = null, db = pool }) {
     JOIN prospects p ON p.id = t.prospect_id AND p.client_id = t.client_id
     WHERE t.client_id = $1
       AND t.status IN ('open', 'in_progress')
+      AND COALESCE(p.disposition_status, 'active') = 'active'
       AND COALESCE(p.do_not_contact, false) = false
       AND p.prospect_motion IS DISTINCT FROM 'SUPPRESS'
       ${ownerClause}
