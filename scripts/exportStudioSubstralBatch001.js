@@ -25,6 +25,11 @@ const {
   isGenericIssueText,
   FIRST_WAVE_STRONG_TIER_SIZE,
 } = require('./lib/studioSubstralBatch001Export');
+const {
+  buildStudioSubstralFirstTouchEmail,
+  evaluateRelationshipAccountGuard,
+  RELATIONSHIP_HOLD_REASON,
+} = require('../utils/paigeStudioSubstralOutboundDoctrine');
 
 const BATCH_ID = 'OUTBOUND-BATCH-001';
 const OUT_DIR = path.join(__dirname, '..', 'artifacts', 'studio-substral');
@@ -67,26 +72,31 @@ function buildCredibilityGapDiagnosis(intel, specificIssue) {
 }
 
 function buildFirstTouchEmail(intel, row, specificIssue) {
-  const dm = intel.decision_maker_name || row.first_name || '';
-  const greeting = dm ? `Hi ${dm.split(/\s+/)[0]},` : 'Hi there,';
-  const issue = specificIssue
-    || (intel.website_issues_observed || []).find((line) => !isGenericIssueText(line))
-    || 'the homepage does not make the next step obvious';
-  const company = intel.company_name || 'your team';
-  const body = [
-    greeting,
-    '',
-    `I was looking at ${company}'s site and noticed ${issue.replace(/\.$/, '').toLowerCase()}.`,
-    'From the outside, the business looks more established than the site currently communicates — which can slow trust before someone calls, requests a quote, or books.',
-    '',
-    'I run Studio Substral. We start with a structured website assessment (diagnosis before design) so you know what is actually worth fixing.',
-    '',
-    'Would you be open to a quick assessment conversation, or should I send a short overview of what we look at?',
-    '',
-    'Jacob',
-    'Studio Substral',
-  ].join('\n');
-  return body;
+  const company = intel.company_name || row.company_name || 'your team';
+  const hold = evaluateRelationshipAccountGuard({
+    companyName: company,
+    website: row.website_url || intel.website_url || row.company_website,
+  });
+  if (hold.held) {
+    return {
+      body: null,
+      holdReason: hold.reason,
+      guardId: hold.guardId,
+    };
+  }
+  const draft = buildStudioSubstralFirstTouchEmail({
+    firstName: row.first_name,
+    decisionMakerName: intel.decision_maker_name,
+    companyName: company,
+    segment: intel.studio_category || row.vertical,
+    specificIssue,
+    intel,
+    row,
+  });
+  if (draft.held) {
+    return { body: null, holdReason: draft.holdReason };
+  }
+  return { body: draft.body, holdReason: null, cta: draft.cta };
 }
 
 function commercialWhy(intel) {
@@ -141,7 +151,16 @@ function toProspectRecord(row, assessmentPayload = null) {
     fit_score_1_to_10: fitTen,
     studio_fit_score_raw: row.studio_fit_score,
     recommended_outreach_angle: intel.recommended_outreach_angle || row.recommended_outreach_angle,
-    suggested_first_touch_email: buildFirstTouchEmail(intel, row, specificIssue),
+    ...(() => {
+      const touch = buildFirstTouchEmail(intel, row, specificIssue);
+      return {
+        suggested_first_touch_email: touch.body,
+        first_touch_hold_reason: touch.holdReason || null,
+        outreach_hold: touch.holdReason === RELATIONSHIP_HOLD_REASON
+          ? RELATIONSHIP_HOLD_REASON
+          : null,
+      };
+    })(),
     evidence_source_notes: [
       intel.confidence ? `confidence:${intel.confidence}` : null,
       row.google_review_count != null ? `google_reviews:${row.google_review_count}@${row.google_rating ?? 'n/a'}` : null,
@@ -186,11 +205,17 @@ function renderMarkdown(batch) {
     lines.push(`| Outreach angle | ${p.recommended_outreach_angle} |`);
     lines.push(`| Evidence | ${p.evidence_source_notes} |`);
     lines.push('');
-    lines.push('**Suggested first-touch email**');
-    lines.push('');
-    lines.push('```');
-    lines.push(p.suggested_first_touch_email);
-    lines.push('```');
+    if (p.outreach_hold === RELATIONSHIP_HOLD_REASON || p.first_touch_hold_reason === RELATIONSHIP_HOLD_REASON) {
+      lines.push(`**First-touch outreach:** held — \`${RELATIONSHIP_HOLD_REASON}\` (existing relationship, not generic cold send).`);
+    } else if (p.first_touch_hold_reason) {
+      lines.push(`**First-touch outreach:** held — \`${p.first_touch_hold_reason}\`.`);
+    } else {
+      lines.push('**Suggested first-touch email**');
+      lines.push('');
+      lines.push('```');
+      lines.push(p.suggested_first_touch_email);
+      lines.push('```');
+    }
     lines.push('');
   });
 
@@ -224,7 +249,12 @@ async function buildBatchFromRows(rows, { clientId, minFitTen, limit, pool, skip
       if (!row) continue;
       const intel = parseIntel(row);
       p.credibility_gap_diagnosis = buildCredibilityGapDiagnosis(intel, p.specific_website_issue);
-      p.suggested_first_touch_email = buildFirstTouchEmail(intel, row, p.specific_website_issue);
+      const touch = buildFirstTouchEmail(intel, row, p.specific_website_issue);
+      p.suggested_first_touch_email = touch.body;
+      p.first_touch_hold_reason = touch.holdReason || null;
+      p.outreach_hold = touch.holdReason === RELATIONSHIP_HOLD_REASON
+        ? RELATIONSHIP_HOLD_REASON
+        : null;
     }
   }
 
