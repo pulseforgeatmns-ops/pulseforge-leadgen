@@ -2,6 +2,91 @@
 
 const { EPISTEMIC_CATEGORY } = require('./types');
 
+const TEMPORAL_ROLE = Object.freeze({
+  EXPECTED_EVENT_TIME: 'expected_event_time',
+  DEADLINE: 'deadline',
+  FOLLOW_UP_TIME: 'follow_up_time',
+  CONDITIONAL_FOLLOW_UP_TIME: 'conditional_follow_up_time',
+  AVAILABILITY_TIME: 'availability_time',
+  CORRECTED_TIME: 'corrected_time',
+});
+
+const DAY_TOKEN = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+morning)?\b/gi;
+
+function hasConditionalFollowUpContext(lower) {
+  return /\bif i don'?t\b|\bif i do not\b|\bif no\b|\bif i don'?t hear\b|\bif i do not hear\b/i.test(lower);
+}
+
+function hasTemporalCorrectionLanguage(text, matchIndex = 0) {
+  const lower = String(text || '').toLowerCase();
+  const slice = lower.slice(Math.max(0, matchIndex - 48), matchIndex + 96);
+  return /\b(?:actually|sorry|i meant|meant to say|not \w+,)\b/.test(slice)
+    || /—\s*actually/.test(slice)
+    || /\bno,?\s+sorry\b/.test(slice);
+}
+
+function extractTemporalCorrections(text, dayMatches) {
+  const raw = String(text || '');
+  const corrections = [];
+  if (!dayMatches || dayMatches.length < 2) return corrections;
+
+  for (let i = 0; i < dayMatches.length - 1; i += 1) {
+    const prior = dayMatches[i];
+    const finalPhrase = dayMatches[dayMatches.length - 1];
+    const idx = raw.toLowerCase().indexOf(prior.toLowerCase());
+    if (!hasTemporalCorrectionLanguage(raw, idx >= 0 ? idx : 0)) continue;
+    if (prior.toLowerCase() === finalPhrase.toLowerCase()) continue;
+    corrections.push({ priorValue: prior, newValue: finalPhrase });
+  }
+  return corrections;
+}
+
+function classifyTemporalRoles(text, temporalRefs = []) {
+  const lower = String(text || '').toLowerCase();
+  const conditional = hasConditionalFollowUpContext(lower);
+  const deadlineIdx = lower.search(/\b(?:hear back|call back|callback|response|should hear|by)\b/);
+
+  for (const ref of temporalRefs) {
+    const phraseLower = ref.phrase.toLowerCase();
+    const idx = lower.indexOf(phraseLower);
+    if (conditional && /follow[- ]?up|remind me/i.test(lower.slice(Math.max(0, idx - 30), idx + phraseLower.length + 20))) {
+      ref.role = TEMPORAL_ROLE.CONDITIONAL_FOLLOW_UP_TIME;
+      continue;
+    }
+    if (deadlineIdx >= 0 && idx >= deadlineIdx - 8 && /\bby\b/.test(lower.slice(Math.max(0, idx - 12), idx + 4))) {
+      ref.role = TEMPORAL_ROLE.DEADLINE;
+      continue;
+    }
+    if (/out until|available|there then|usually there/i.test(lower.slice(Math.max(0, idx - 24), idx + phraseLower.length + 24))) {
+      ref.role = TEMPORAL_ROLE.AVAILABILITY_TIME;
+      continue;
+    }
+    if (ref.canonical && ref.supersedes) {
+      ref.role = TEMPORAL_ROLE.CORRECTED_TIME;
+      continue;
+    }
+    ref.role = ref.role || TEMPORAL_ROLE.EXPECTED_EVENT_TIME;
+  }
+  return temporalRefs;
+}
+
+function dedupeCorrections(corrections = []) {
+  const seen = new Set();
+  const out = [];
+  for (const corr of corrections) {
+    if (corr.kind === 'temporal') {
+      const prior = String(corr.priorValue || '').toLowerCase().trim();
+      const next = String(corr.newValue || '').toLowerCase().trim();
+      if (!prior || prior === next) continue;
+    }
+    const key = `${corr.kind}:${corr.contactName || ''}:${corr.priorValue}:${corr.newValue}:${corr.targetClaim || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(corr);
+  }
+  return out;
+}
+
 const WEEKDAY = Object.freeze({
   sunday: 0,
   monday: 1,
@@ -139,6 +224,13 @@ function extractTemporalReferences(text, now = new Date()) {
 }
 
 module.exports = {
+  TEMPORAL_ROLE,
+  DAY_TOKEN,
   normalizeTemporalPhrase,
   extractTemporalReferences,
+  hasConditionalFollowUpContext,
+  hasTemporalCorrectionLanguage,
+  extractTemporalCorrections,
+  classifyTemporalRoles,
+  dedupeCorrections,
 };
