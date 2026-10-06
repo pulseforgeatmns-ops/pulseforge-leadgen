@@ -4,6 +4,7 @@ const pool = require('../db');
 const { PostgresStateStore } = require('../packages/max/stateIngestion');
 const { submitComposerTurn, createMaxIngestionEnvelope } = require('../packages/max/composer');
 const { SOURCE_TYPES } = require('../packages/max/stateIngestion/types');
+const { createVoiceStore, createVoiceTranscriptionAdapter } = require('./maxVoiceService');
 
 async function createStore(clientId, db = pool) {
   const store = new PostgresStateStore(db, { clientId });
@@ -35,6 +36,8 @@ async function submitMaxComposerTurn(clientId, body = {}, { db = pool } = {}) {
   const sourceType = body.ingest_source_type || body.ingestSourceType
     || (body.actor?.role === 'ao' ? SOURCE_TYPES.AO_REPORTED : SOURCE_TYPES.OPERATOR_REPORTED);
 
+  const voiceRecordingStore = await createVoiceStore(db);
+
   return submitComposerTurn({
     clientId,
     envelope,
@@ -44,6 +47,8 @@ async function submitMaxComposerTurn(clientId, body = {}, { db = pool } = {}) {
     conversationMemory: body.conversation_memory || body.conversationMemory,
     sourceType,
     now: body.now ? new Date(body.now) : new Date(),
+    voiceRecordingStore,
+    transcriptionAdapter: createVoiceTranscriptionAdapter(),
   });
 }
 

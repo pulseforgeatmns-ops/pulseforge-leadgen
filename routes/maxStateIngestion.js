@@ -12,9 +12,19 @@ const {
 } = require('../services/maxStateIngestionService');
 const { submitMaxComposerTurn } = require('../services/maxComposerService');
 const { afterIngestionDecisions } = require('../services/maxDecisionExecutionService');
-const { interpretConversationalInput } = require('../packages/max/understanding');
+const {
+  interpretConversationalInput,
+  interpretWithDurableConversationContext,
+  PostgresConversationMemoryRepository,
+} = require('../packages/max/understanding');
 const { createMaxAttachment } = require('../packages/max/composer');
 const { LIMITS } = require('../packages/max/composer/limits');
+const pool = require('../db');
+const {
+  uploadAndTranscribeVoice,
+  retryTranscription,
+  createVoiceTranscriptionAdapter,
+} = require('../services/maxVoiceService');
 
 const composerUpload = multer({
   storage: multer.memoryStorage(),
@@ -143,7 +153,13 @@ async function handleComposerSubmit(req, res) {
           transcription: req.body?.transcription,
         });
         attachments.push(att);
-        attachmentInputs.push({ id: att.id, buffer: file.buffer, transcription: req.body?.transcription });
+        const durationMs = Number(req.body?.duration_ms || req.body?.durationMs || 0) || undefined;
+        attachmentInputs.push({
+          id: att.id,
+          buffer: file.buffer,
+          transcription: req.body?.transcription,
+          durationMs,
+        });
       }
       payload = {
         text: req.body?.text || req.body?.message,
@@ -165,7 +181,10 @@ async function handleComposerSubmit(req, res) {
 
     const result = await submitMaxComposerTurn(clientId, payload);
     if (!result.ok) {
-      const status = result.error === 'extraction_failed' ? 422 : 400;
+      let status = 400;
+      if (result.error === 'extraction_failed') status = 422;
+      if (result.error === 'transcription_pending') status = 202;
+      if (result.error === 'empty_turn') status = 422;
       return res.status(status).json(result);
     }
 
@@ -211,6 +230,92 @@ router.post(
   composerUpload.any(),
   handleComposerSubmit,
 );
+
+async function handleVoiceUpload(req, res) {
+  try {
+    const clientId = resolveClientId(req);
+    if (clientId == null) {
+      return res.status(400).json({ error: 'client_id_required' });
+    }
+    const file = (req.files || []).find(f => f.fieldname === 'voice' || f.fieldname === 'audio') || req.file;
+    if (!file?.buffer?.length) {
+      return res.status(400).json({ error: 'audio_required' });
+    }
+    const durationMs = Number(req.body?.duration_ms || req.body?.durationMs || 0) || null;
+    if (durationMs && durationMs > LIMITS.maxVoiceDurationMs) {
+      return res.status(400).json({ error: 'duration_exceeded', max_ms: LIMITS.maxVoiceDurationMs });
+    }
+    const actor = actorFromSession(req);
+    const result = await uploadAndTranscribeVoice(clientId, {
+      buffer: file.buffer,
+      mimeType: file.mimetype,
+      durationMs,
+      conversationId: req.body?.conversation_id || req.body?.conversationId,
+      actorId: actor.userId,
+      attachmentId: req.body?.attachment_id || req.body?.attachmentId,
+      adapter: createVoiceTranscriptionAdapter(),
+    });
+    return res.json({
+      ok: true,
+      recording_id: result.recording.id,
+      attachment_id: result.recording.attachment_id || result.recording.id,
+      transcription: result.transcription,
+      telemetry: result.telemetry,
+    });
+  } catch (error) {
+    const code = error.code || 'voice_upload_failed';
+    const status = code === 'unsupported_audio_type' ? 415
+      : code === 'empty_transcript' ? 422
+        : code === 'recording_not_found' ? 404
+          : 500;
+    if (code === 'empty_transcript' || code === 'transcription_provider_error') {
+      return res.status(status).json({
+        ok: false,
+        error: code,
+        message: error.message,
+        transcription_status: code === 'empty_transcript' ? 'empty' : 'failed',
+      });
+    }
+    console.error('[max-voice-upload]', error);
+    return res.status(status).json({ error: code, message: error.message });
+  }
+}
+
+router.post(
+  '/api/v1/max/voice/transcribe',
+  requireComposerWrite,
+  composerUpload.fields([{ name: 'voice', maxCount: 1 }, { name: 'audio', maxCount: 1 }]),
+  handleVoiceUpload,
+);
+
+router.post('/api/v1/max/voice/recordings/:id/transcribe', requireComposerWrite, async (req, res) => {
+  try {
+    const clientId = resolveClientId(req);
+    if (clientId == null) {
+      return res.status(400).json({ error: 'client_id_required' });
+    }
+    const result = await retryTranscription(clientId, req.params.id, {
+      adapter: createVoiceTranscriptionAdapter(),
+      force: req.body?.force !== false,
+    });
+    return res.json({
+      ok: true,
+      recording_id: result.recording.id,
+      transcription: {
+        text: result.text,
+        confidence: result.confidence,
+        segments: result.segments,
+        providerMetadata: result.providerMetadata,
+      },
+      from_cache: Boolean(result.fromCache),
+      telemetry: result.telemetry,
+    });
+  } catch (error) {
+    const code = error.code || 'transcription_failed';
+    const status = code === 'recording_not_found' ? 404 : code === 'empty_transcript' ? 422 : 500;
+    return res.status(status).json({ error: code, message: error.message });
+  }
+});
 
 router.post('/api/v1/max/ingest', requireIngestWrite, async (req, res) => {
   try {
