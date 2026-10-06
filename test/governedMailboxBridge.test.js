@@ -5,6 +5,7 @@ const { governedContactReason, founderFirst } = require('../utils/governedContac
 const { hash, missionScope, policy } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 const { validateGovernedSchedule } = require('../services/governedTenantSchedule');
 const { createGovernedTenantMailboxSend } = require('../utils/governedOutboundTransport');
+const { createProviderBoundaryTracker, markLeafProviderSend } = require('../services/governedOutboundProviderBoundary');
 const { classifyPending } = require('../services/governedOutboundReplies');
 const now = new Date('2026-09-28T15:00:00Z');
 function contact(classification='VERIFIED_FOUNDER_EMAIL') {
@@ -29,7 +30,7 @@ function fixture(){
   const item={id:'item',candidate_id:'p',prospect_id:'p',company_id:'c',email:contact().email,snapshot,status:'attempted',attempted_at:now};
   const envelope={id:'envelope',program_id:program.id,status:'authorized',approval_id:'approval',revision:'revision',mission_id:'m',manifest:[snapshot]};envelope.manifest_hash=hash(envelope.manifest);
   const binding={programId:program.id,policyHash:program.policy_hash,envelopeId:envelope.id,itemId:item.id,manifestHash:envelope.manifest_hash,approvalId:envelope.approval_id,revision:envelope.revision,mailboxIntegrationId:'mb',outreachAssetId:'asset'};
-  const schedule={tenantId:'13',prospectId:'p',missionId:'m',sendingIdentityId:'identity',recipientEmail:item.email,outreachAssetId:'asset',outreachAssetVersion:'1',authorizationSnapshot:{subject:message.subject,body:message.body,recipientEmail:item.email,governed:binding}};
+  const schedule={id:'schedule',status:'EXECUTING',tenantId:'13',prospectId:'p',missionId:'m',sendingIdentityId:'identity',recipientEmail:item.email,outreachAssetId:'asset',outreachAssetVersion:'1',authorizationSnapshot:{subject:message.subject,body:message.body,recipientEmail:item.email,governed:binding}};
   const store={program:async()=>program,envelope:async()=>envelope,items:async()=>[item],counts:async()=>({today:1,total:1,uncertain:1}),suppression:async()=>null};
   const adapters={loadMission:async()=>({mission}),prepared:async()=>({revision:'revision',candidates:[{candidateId:'p',message,item:{email:item.email,sendable:true,paige:{candidateId:'p'}}}]}),contact:async()=>contact(),liveGate:async()=>{}};
   const outreachAsset={version:1,content:{subject:message.subject,body:message.body,prospectId:'p',preparedArtifactRevision:'revision'}};
@@ -48,13 +49,14 @@ test('durable execution rechecks kill switch, grant, scope, payload, suppression
    [f=>f.envelope.manifest=[],'governed_item_not_authorized'],
    [f=>f.outreachAsset.version=2,'governed_outreach_asset_changed'],
   ]) { const f=fixture();change(f);await assert.rejects(validateGovernedSchedule(f.schedule,{pool:{},now,governedStore:f.store,governedAdapters:f.adapters,outreachAsset:f.outreachAsset}),{code}); }
-  const f=fixture();assert.equal((await validateGovernedSchedule(f.schedule,{pool:{},now,governedStore:f.store,governedAdapters:f.adapters,outreachAsset:f.outreachAsset})).item.id,'item');
+  const f=fixture();let liveGateOpts;f.adapters.liveGate=async(...args)=>{liveGateOpts=args[4];};assert.equal((await validateGovernedSchedule(f.schedule,{pool:{},now,governedStore:f.store,governedAdapters:f.adapters,outreachAsset:f.outreachAsset})).item.id,'item');assert.deepEqual(liveGateOpts,{reservedScheduleId:'schedule'});
   process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED='false';await assert.rejects(validateGovernedSchedule(f.schedule,{pool:{},now}),{code:'environment_kill_switch'});
  }finally{if(prior===undefined)delete process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED;else process.env.BABRUN_GOVERNED_OUTBOUND_ENABLED=prior;}
 });
 test('governed transport only authorizes and executes the bound durable schedule',async()=>{
  const f=fixture();let calls=0,received;
  const send=createGovernedTenantMailboxSend(f.program,f,{bridge:{createGovernedOutreachAsset:async()=>({id:'asset',version:'1'})},scheduler:{authorizeAndExecuteScheduledSend:async input=>{calls++;received=input;return {result:'sent',schedule:{id:'schedule'},message:{id:'message',providerMessageId:'provider',rfcMessageId:'<rfc>',threadId:'thread'}};}}});
+ const boundary=createProviderBoundaryTracker();markLeafProviderSend(send,boundary);assert.equal(boundary.crossed,false);
  await assert.rejects(send({toEmail:'someone@else.example',subject:'A question',body:f.item.snapshot.message.body}),{code:'provider_payload_changed'});assert.equal(calls,0);
  const r=await send({toEmail:f.item.email,...f.item.snapshot.message,idempotencyKey:'execution'});
  assert.equal(calls,1);assert.equal(received.prospectId,'p');assert.equal(received.missionId,'m');assert.equal(received.governed.programId,'program');assert.equal(received.governed.mailboxIntegrationId,'mb');assert.equal(r.canonicalMessageId,'message');
