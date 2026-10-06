@@ -188,15 +188,25 @@ function decision(decisions, row, reason, source, error = null) {
     reason: reason || null, ...(error ? { errorCode: error.code || 'unknown_error' } : {}) });
 }
 
-async function selectRefillEntries({ prepared, program, store, adapters, existingItems = [], limit, decisions = [] }) {
+async function selectRefillEntries({ prepared, program, store, adapters, existingItems = [], limit, decisions = [], pool = null }) {
   const cap = asNonNegInt(limit);
   const selected = [];
+  const { resolveOutboundSenderForProspect } = require('../utils/aoCommunicationIdentity');
+  const tenantId = program?.tenant_id || program?.policy?.tenantId || null;
   for (const row of prepared.candidates || []) {
     try {
       const crm = await adapters.contact(row.candidateId);
+      const senderResolution = pool
+        ? await resolveOutboundSenderForProspect(pool, {
+          assignedAoId: crm?.assigned_ao_id,
+          tenantId,
+          fallbackSender: prepared.sender,
+        })
+        : { sender: prepared.sender, usedAoSender: false, reason: 'no_pool' };
       const entry = { candidateId: String(row.candidateId), prospectId: String(crm?.prospect_id || crm?.id || ''),
         companyId: String(crm?.company_id || ''), email: String(row.item.email || '').toLowerCase(),
-        message: row.message, sender: prepared.sender, revision: prepared.revision };
+        message: row.message, sender: senderResolution.sender, revision: prepared.revision,
+        senderResolution: { usedAoSender: senderResolution.usedAoSender, reason: senderResolution.reason } };
       const reason = candidateReason(row.item, crm, row.message, program?.policy)
         || (!entry.companyId ? 'missing_company' : null)
         || existingReason(entry, [...existingItems, ...selected])
