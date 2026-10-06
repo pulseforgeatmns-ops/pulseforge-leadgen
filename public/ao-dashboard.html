@@ -920,7 +920,28 @@ body {
   background: var(--pf-nav-bg);
   color: var(--pf-gold);
 }
+.ao-voice-modal .ao-voice-timer {
+  font-family: var(--pf-font-mono);
+  font-size: 2rem;
+  text-align: center;
+  letter-spacing: 2px;
+  margin: 16px 0 8px;
+  color: var(--pf-navy);
+}
+.ao-voice-modal .ao-voice-status {
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--pf-text-dim);
+  margin-bottom: 16px;
+}
+.ao-voice-modal .ao-voice-error {
+  color: #b42318;
+  font-size: 0.82rem;
+  text-align: center;
+  margin-bottom: 8px;
+}
 </style>
+<script src="/shared/maxVoiceRecorder.js"></script>
 </head>
 <body>
 <header class="ao-header">
@@ -1215,6 +1236,19 @@ body {
   </div>
 </div>
 
+<div class="ao-modal-overlay" id="voiceRecordModal">
+  <div class="ao-modal ao-voice-modal" role="dialog" aria-labelledby="voiceRecordTitle">
+    <h3 id="voiceRecordTitle">Voice note</h3>
+    <div class="ao-voice-status" id="voiceRecordStatus">Tap record and talk naturally.</div>
+    <div class="ao-voice-timer" id="voiceRecordTimer">00:00</div>
+    <div class="ao-voice-error" id="voiceRecordError" hidden></div>
+    <div class="ao-modal-actions">
+      <button type="button" class="ao-modal-cancel" id="voiceRecordCancel">Cancel</button>
+      <button type="button" class="ao-modal-confirm" id="voiceRecordPrimary">Record</button>
+    </div>
+  </div>
+</div>
+
 <div class="ao-modal-overlay" id="crmOutcomeModal">
   <div class="ao-modal" role="dialog" aria-labelledby="crmOutcomeTitle">
     <h3 id="crmOutcomeTitle">What happened?</h3>
@@ -1257,6 +1291,8 @@ let pendingCrmLinkRecovery = null;
 let crmLinkRecoveryStep = 'menu';
 let pendingNavigate = null;
 let callModalState = null;
+let voiceRecorder = null;
+let pendingVoiceReview = null;
 
 function saveRoutePreferences() {
   localStorage.setItem('ao_route_sort', routeSortMode);
@@ -1822,7 +1858,7 @@ function queueComposerFile(file) {
   renderComposerAttachmentChips();
 }
 
-async function submitComposerTurn(text, { confirm = false } = {}) {
+async function submitComposerTurn(text, { confirm = false, attachments = null, durationMs = null } = {}) {
   loadMaxComposerMemory();
   if (!maxComposerConversationId) {
     maxComposerConversationId = `ao-${Date.now()}`;
@@ -1833,9 +1869,13 @@ async function submitComposerTurn(text, { confirm = false } = {}) {
   form.append('conversation_id', maxComposerConversationId);
   if (confirm) form.append('confirm', 'true');
   if (maxComposerMemory) form.append('conversation_memory', JSON.stringify(maxComposerMemory));
-  pendingComposerAttachments.forEach((entry) => {
-    form.append('files', entry.file, entry.file.name);
+  const attachList = attachments || pendingComposerAttachments;
+  attachList.forEach((entry) => {
+    const file = entry.file || entry;
+    form.append('files', file, file.name);
+    if (entry.durationMs != null) form.append('duration_ms', String(entry.durationMs));
   });
+  if (durationMs != null) form.append('duration_ms', String(durationMs));
   const res = await fetch('/api/v1/max/composer', {
     method: 'POST',
     credentials: 'same-origin',
@@ -1850,6 +1890,12 @@ async function submitComposerTurn(text, { confirm = false } = {}) {
 }
 
 function formatComposerMaxReply(data) {
+  if (data.voice_review_required && data.understanding_preview) {
+    const header = data.transcript
+      ? `I understood:\n\n${data.transcript}\n\n${data.understanding_preview}`
+      : `I understood:\n\n${data.understanding_preview}`;
+    return `${header}\n\nReply Save to commit, or edit the transcript / add a correction and send again.`;
+  }
   if (data.batch_preview?.summary) return data.batch_preview.summary;
   if (data.understanding_preview) return data.understanding_preview;
   if (data.preview_only && data.review_required) {
@@ -1858,6 +1904,71 @@ function formatComposerMaxReply(data) {
   if (data.clarification_required) return data.clarification_required;
   if (data.receipt) return typeof data.receipt === 'string' ? data.receipt : (data.receipt.title || 'Update recorded.');
   return 'Got it — I processed that update.';
+}
+
+function hideVoiceRecordModal() {
+  document.getElementById('voiceRecordModal')?.classList.remove('open');
+  document.getElementById('voiceRecordError').hidden = true;
+  voiceRecorder?.cancel();
+  voiceRecorder = null;
+}
+
+function showVoiceRecordError(msg) {
+  const el = document.getElementById('voiceRecordError');
+  if (!el) return;
+  el.hidden = !msg;
+  el.textContent = msg || '';
+}
+
+function openVoiceRecordModal() {
+  const modal = document.getElementById('voiceRecordModal');
+  if (!modal || !window.MaxVoiceRecorder) {
+    fileInputVoice?.click();
+    return;
+  }
+  showVoiceRecordError('');
+  document.getElementById('voiceRecordStatus').textContent = 'Tap record and talk naturally.';
+  document.getElementById('voiceRecordTimer').textContent = '00:00';
+  const primary = document.getElementById('voiceRecordPrimary');
+  primary.textContent = 'Record';
+  voiceRecorder = MaxVoiceRecorder.create({
+    onEvent(event, detail) {
+      if (event === 'tick') {
+        document.getElementById('voiceRecordTimer').textContent = detail.label;
+      }
+      if (event === 'warn') {
+        document.getElementById('voiceRecordStatus').textContent = 'Approaching 5 minute limit…';
+      }
+      if (event === 'error') {
+        showVoiceRecordError('Recording failed. Try again.');
+      }
+      if (event === 'stopped' && detail.blob) {
+        document.getElementById('voiceRecordStatus').textContent = 'Processing…';
+        const file = voiceRecorder.toFile(`voice-${Date.now()}`);
+        if (file) {
+          pendingComposerAttachments = [{ file, type: 'voice', durationMs: detail.durationMs }];
+          renderComposerAttachmentChips();
+          hideVoiceRecordModal();
+          processVoiceComposerPreview().catch(err => addMsg(err.message, 'system'));
+        }
+      }
+    },
+  });
+  modal.classList.add('open');
+}
+
+async function processVoiceComposerPreview() {
+  if (!pendingComposerAttachments.length) return;
+  addMsg('[Voice note]', 'user');
+  const data = await submitComposerTurn('', { confirm: false });
+  pendingVoiceReview = {
+    attachments: pendingComposerAttachments.slice(),
+    envelopeId: data.envelope?.id,
+  };
+  addMsg(formatComposerMaxReply(data), 'max');
+  if (data.transcript) {
+    messageInput.placeholder = 'Edit transcript or type Save to commit…';
+  }
 }
 
 async function askMaxFreeform(text) {
@@ -1876,16 +1987,45 @@ async function sendMessage(text) {
   const trimmed = text.trim();
   const hasAttachments = pendingComposerAttachments.length > 0;
   if (!trimmed && !hasAttachments) return;
+
+  if (pendingVoiceReview && !wizardSessionId) {
+    const save = /^(save|confirm|yes)$/i.test(trimmed);
+    const correction = trimmed && !save;
+    if (trimmed) addMsg(trimmed, 'user');
+    messageInput.value = '';
+    try {
+      const data = await submitComposerTurn(correction || '', {
+        confirm: save,
+        attachments: save ? pendingVoiceReview.attachments : [],
+      });
+      addMsg(formatComposerMaxReply(data), 'max');
+      if (save || (!data.preview_only && data.ok)) {
+        pendingVoiceReview = null;
+        pendingComposerAttachments = [];
+        renderComposerAttachmentChips();
+        messageInput.placeholder = 'Message Max…';
+      }
+    } catch (err) {
+      addMsg(err.message, 'system');
+    }
+    return;
+  }
+
   if (trimmed) addMsg(trimmed, 'user');
   else addMsg(`[${pendingComposerAttachments.length} attachment(s)]`, 'user');
   messageInput.value = '';
 
   if (hasAttachments && !wizardSessionId) {
     try {
-      const confirm = /^confirm$/i.test(trimmed);
+      const confirm = /^confirm$/i.test(trimmed) || /^save$/i.test(trimmed);
       const data = await submitComposerTurn(trimmed, { confirm });
       addMsg(formatComposerMaxReply(data), 'max');
-      pendingComposerAttachments = [];
+      if (data.voice_review_required) {
+        pendingVoiceReview = { attachments: pendingComposerAttachments.slice(), envelopeId: data.envelope?.id };
+      } else {
+        pendingComposerAttachments = [];
+        pendingVoiceReview = null;
+      }
       renderComposerAttachmentChips();
       toggleComposerMenu(false);
     } catch (err) {
@@ -2575,8 +2715,28 @@ composerAttachMenu?.querySelectorAll('[data-attach]').forEach((btn) => {
     if (kind === 'spreadsheet') fileInputSpreadsheet?.click();
     else if (kind === 'file') fileInputDocument?.click();
     else if (kind === 'image') fileInputImage?.click();
-    else if (kind === 'voice') fileInputVoice?.click();
+    else if (kind === 'voice') openVoiceRecordModal();
   });
+});
+document.getElementById('voiceRecordCancel')?.addEventListener('click', hideVoiceRecordModal);
+document.getElementById('voiceRecordModal')?.addEventListener('click', (e) => {
+  if (e.target.id === 'voiceRecordModal') hideVoiceRecordModal();
+});
+document.getElementById('voiceRecordPrimary')?.addEventListener('click', async () => {
+  const primary = document.getElementById('voiceRecordPrimary');
+  if (!voiceRecorder) return;
+  try {
+    if (voiceRecorder.getState() === 'idle' || voiceRecorder.getState() === 'stopped') {
+      await voiceRecorder.start();
+      document.getElementById('voiceRecordStatus').textContent = 'Recording…';
+      primary.textContent = 'Stop';
+    } else if (voiceRecorder.getState() === 'recording') {
+      voiceRecorder.stop();
+      primary.textContent = 'Record';
+    }
+  } catch (err) {
+    showVoiceRecordError(err.message || 'Could not access microphone.');
+  }
 });
 [fileInputSpreadsheet, fileInputDocument, fileInputImage, fileInputVoice].forEach((input) => {
   input?.addEventListener('change', () => {
