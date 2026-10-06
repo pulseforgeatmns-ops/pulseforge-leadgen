@@ -352,7 +352,9 @@ test('19 evidence traceability to artifact row', async () => {
     rows: [{ account: 'Exeter Phillips', ao: 'Tony', expects_inbound_call: true, __rowNumber: 17 }],
     store,
   });
-  const link = store.evidenceLinks.find(l => l.field_name === 'next_expected_event' || l.field_name === 'follow_up_state');
+  const link = store.evidenceLinks.find(l =>
+    ['next_expected_event', 'follow_up_state', 'activity_append'].includes(l.field_name)
+  );
   assert.ok(link);
   assert.equal(link.source_record.row, 17);
   assert.equal(link.source_record.sheet, 'Prospects');

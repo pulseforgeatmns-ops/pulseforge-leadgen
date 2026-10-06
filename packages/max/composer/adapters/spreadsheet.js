@@ -43,6 +43,8 @@ function parseWorkbook(buffer, filename) {
   const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const sheets = [];
   for (const sheetName of workbook.SheetNames) {
+    const meta = workbook.Workbook?.Sheets?.find(s => s.name === sheetName);
+    if (meta && (meta.Hidden === 1 || meta.Hidden === 2)) continue;
     const sheet = workbook.Sheets[sheetName];
     const json = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false });
     const rows = json.map((raw, idx) => ({

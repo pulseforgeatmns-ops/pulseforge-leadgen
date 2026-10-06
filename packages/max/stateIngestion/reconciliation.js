@@ -1,6 +1,8 @@
 'use strict';
 
 const { CLAIM_TYPES, SAFETY_CLASS, RESOLUTION } = require('./types');
+const { interpretSpreadsheetStatus } = require('./spreadsheetStatus');
+const { CHANGE_TYPES } = require('./spreadsheetChangeTypes');
 
 function reconcileOwnership(existingAoId, incomingAo, resolutionStatus) {
   if (resolutionStatus === RESOLUTION.CONFLICT) {
@@ -26,6 +28,134 @@ function reconcileOwnership(existingAoId, incomingAo, resolutionStatus) {
   return { mutation: null, conflict: null };
 }
 
+function buildMutationsFromSpreadsheetFieldPlan({
+  spreadsheetFieldPlan,
+  prospect,
+  conflicts: planConflicts,
+  unresolved: planUnresolved,
+}) {
+  const mutations = [];
+  const conflicts = [...(planConflicts || [])];
+  const unresolved = [...(planUnresolved || [])];
+  if (!spreadsheetFieldPlan || !prospect) {
+    return { mutations, conflicts, unresolved };
+  }
+
+  for (const change of spreadsheetFieldPlan.proposedChanges || []) {
+    if (change.safe === false) continue;
+    switch (change.type) {
+      case CHANGE_TYPES.ADD_NOTE:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'activity_append',
+          intended_value: { kind: 'note', notes: change.value, provenance: change.provenance },
+          safety_class: SAFETY_CLASS.A,
+        });
+        break;
+      case CHANGE_TYPES.ADD_EMAIL:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'email_add',
+          intended_value: change.value,
+          safety_class: SAFETY_CLASS.A,
+        });
+        break;
+      case CHANGE_TYPES.ADD_PHONE:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'phone_add',
+          intended_value: change.value,
+          safety_class: SAFETY_CLASS.A,
+        });
+        break;
+      case CHANGE_TYPES.ADD_CONTACT:
+        mutations.push({
+          entity_type: 'contact',
+          entity_id: prospect.id,
+          field_name: 'create',
+          intended_value: { ...change.value, prospect_id: prospect.id },
+          safety_class: SAFETY_CLASS.A,
+        });
+        break;
+      case CHANGE_TYPES.UPDATE_DISPOSITION:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'disposition_status',
+          intended_value: change.value,
+          safety_class: SAFETY_CLASS.B,
+        });
+        break;
+      case CHANGE_TYPES.SET_SALES_PRIORITY:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'sales_priority',
+          intended_value: change.value,
+          safety_class: SAFETY_CLASS.A,
+        });
+        break;
+      case CHANGE_TYPES.UPDATE_DECISION_MAKER_SIGNAL:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'decision_maker_correction',
+          intended_value: change.value,
+          safety_class: SAFETY_CLASS.B,
+        });
+        break;
+      case CHANGE_TYPES.ADD_PAIN_POINT:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'pain_point_append',
+          intended_value: change.value,
+          safety_class: SAFETY_CLASS.A,
+        });
+        break;
+      case CHANGE_TYPES.UPDATE_NEXT_ACTION:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'ao_next_action',
+          intended_value: 'follow_up',
+          safety_class: SAFETY_CLASS.A,
+        });
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'next_action_due_hint',
+          intended_value: change.value,
+          safety_class: SAFETY_CLASS.A,
+        });
+        break;
+      case CHANGE_TYPES.ADD_FOLLOW_UP:
+        mutations.push({
+          entity_type: 'prospect',
+          entity_id: prospect.id,
+          field_name: 'follow_up_state',
+          intended_value: 'awaiting_contact',
+          safety_class: SAFETY_CLASS.A,
+        });
+        break;
+      default:
+        break;
+    }
+  }
+
+  for (const conflict of spreadsheetFieldPlan.conflicts || []) {
+    conflicts.push({ spreadsheet_conflict: conflict });
+  }
+  for (const amb of spreadsheetFieldPlan.ambiguities || []) {
+    unresolved.push({ spreadsheet_ambiguity: amb });
+  }
+
+  return { mutations, conflicts, unresolved };
+}
+
 function buildMutationsFromClaims({
   claims,
   resolutions,
@@ -33,6 +163,7 @@ function buildMutationsFromClaims({
   sourceType,
   existingProspect = null,
   operatorCorrection = false,
+  spreadsheetFieldPlan = null,
 }) {
   const mutations = [];
   const conflicts = [];
@@ -72,6 +203,28 @@ function buildMutationsFromClaims({
 
   if (prospect) {
     for (const claim of claims) {
+      if (claim.claim_type === CLAIM_TYPES.SIGNAL && claim.payload?.signal === 'spreadsheet_status') {
+        const mapped = interpretSpreadsheetStatus(claim.payload.label);
+        if (mapped.kind === 'disposition' && mapped.confidence === 'high') {
+          mutations.push({
+            entity_type: 'prospect',
+            entity_id: prospect.id,
+            field_name: 'disposition_status',
+            intended_value: mapped.disposition_status,
+            safety_class: SAFETY_CLASS.B,
+            claim,
+          });
+        } else if (mapped.kind === 'sales_priority') {
+          mutations.push({
+            entity_type: 'prospect',
+            entity_id: prospect.id,
+            field_name: 'sales_priority',
+            intended_value: mapped.sales_priority,
+            safety_class: SAFETY_CLASS.A,
+            claim,
+          });
+        }
+      }
       if (claim.claim_type === CLAIM_TYPES.EVENT) {
         mutations.push({
           entity_type: 'prospect',
@@ -239,10 +392,21 @@ function buildMutationsFromClaims({
     }
   }
 
+  if (spreadsheetFieldPlan && existingProspect) {
+    const extra = buildMutationsFromSpreadsheetFieldPlan({
+      spreadsheetFieldPlan,
+      prospect: existingProspect,
+      conflicts,
+      unresolved,
+    });
+    mutations.push(...extra.mutations);
+  }
+
   return { mutations, conflicts, unresolved };
 }
 
 module.exports = {
   reconcileOwnership,
   buildMutationsFromClaims,
+  buildMutationsFromSpreadsheetFieldPlan,
 };

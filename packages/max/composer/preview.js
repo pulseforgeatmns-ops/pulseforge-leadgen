@@ -1,40 +1,9 @@
 'use strict';
 
-const { interpretConversationalInput } = require('../understanding');
-const { resolveClaim } = require('../stateIngestion/entityResolver');
-const { CLAIM_TYPES, RESOLUTION } = require('../stateIngestion/types');
-const { synthesizeRowUnderstandingText } = require('./rowText');
-
-function classifyRowPreview({ interpreted, store }) {
-  const context = store.snapshotContext();
-  const accountClaim = interpreted.situationModel?.threads?.[0]?.ingestionClaims?.find(c => c.claim_type === CLAIM_TYPES.ACCOUNT)
-    || interpreted.situationModel?.threads?.[0]?.entities?.find(e => e.kind === 'account');
-
-  let accountName = null;
-  if (accountClaim?.payload?.name) accountName = accountClaim.payload.name;
-  else if (accountClaim?.name) accountName = accountClaim.name;
-  else {
-    accountName = interpreted.situationModel?.threads?.[0]?.accountName
-      || interpreted.situationModel?.entities?.find(e => e.kind === 'account')?.name;
-  }
-
-  if (!accountName) {
-    return { status: 'needs_clarification', reason: 'missing_account' };
-  }
-
-  const resolution = resolveClaim(
-    { claim_type: CLAIM_TYPES.ACCOUNT, payload: { name: accountName } },
-    context,
-    {}
-  );
-  if (resolution.status === RESOLUTION.AMBIGUOUS) {
-    return { status: 'needs_clarification', reason: 'ambiguous_account', accountName, resolution };
-  }
-  if (resolution.status === RESOLUTION.RESOLVED || resolution.status === RESOLUTION.PROVISIONALLY_RESOLVED) {
-    return { status: 'matched', accountName, resolution };
-  }
-  return { status: 'new_account', accountName, resolution };
-}
+const {
+  buildSpreadsheetReconciliationPlan,
+  formatSpreadsheetReconciliationPreview,
+} = require('../stateIngestion/spreadsheetReconciliation');
 
 function buildSpreadsheetPreview({
   rows = [],
@@ -45,77 +14,68 @@ function buildSpreadsheetPreview({
   filename,
   sheetName,
 }) {
-  const examples = [];
-  let matched = 0;
-  let needsClarification = 0;
-  let newAccount = 0;
-  let rejected = 0;
-  let ready = 0;
-
+  const sheetMap = new Map();
   for (const row of rows) {
-    const text = synthesizeRowUnderstandingText({
-      instruction,
-      rowValues: row.values,
-      sheetName: row.sheet || sheetName,
-      rowNumber: row.rowNumber,
-      filename,
-    });
-    const interpreted = interpretConversationalInput({
-      text,
-      conversationId,
-      memory,
-    });
-    const preview = classifyRowPreview({ interpreted, store });
-    if (preview.status === 'matched') {
-      matched += 1;
-      ready += 1;
-      if (examples.length < 4) {
-        examples.push(`${preview.accountName} — matched existing account`);
-      }
-    } else if (preview.status === 'new_account') {
-      newAccount += 1;
-      ready += 1;
-      if (examples.length < 4) {
-        examples.push(`${preview.accountName} — appears to be a new account`);
-      }
-    } else if (preview.status === 'needs_clarification') {
-      needsClarification += 1;
-      if (examples.length < 4) {
-        examples.push(`${preview.accountName || 'Row ' + row.rowNumber} — needs clarification`);
-      }
-    } else {
-      rejected += 1;
+    const sheet = row.sheet || sheetName || 'Prospects';
+    if (!sheetMap.has(sheet)) sheetMap.set(sheet, []);
+    sheetMap.get(sheet).push(row);
+  }
+  const structuredData = {
+    filename: filename || rows[0]?.filename || 'spreadsheet',
+    sheets: [...sheetMap.entries()].map(([sheet, sheetRows]) => ({
+      sheet,
+      rows: sheetRows,
+    })),
+  };
+
+  const plan = buildSpreadsheetReconciliationPlan({
+    structuredData,
+    store,
+    instruction,
+    memory,
+    conversationId,
+  });
+
+  const summary = formatSpreadsheetReconciliationPreview(plan);
+  const needsClarification = plan.summary.ambiguous + (plan.summary.conflicts > 0 ? 1 : 0);
+  const ready = plan.summary.safeChanges;
+
+  const examples = [];
+  for (const rowPlan of plan.rows) {
+    if (examples.length >= 4) break;
+    if (rowPlan.ambiguities.length) {
+      examples.push(`Row ${rowPlan.row} — ${rowPlan.ambiguities[0].message || 'needs clarification'}`);
+    } else if (rowPlan.conflicts.length) {
+      examples.push(`Row ${rowPlan.row} — ${rowPlan.conflicts[0].message || 'conflict'}`);
+    } else if (rowPlan.accountResolution?.entity) {
+      const name = rowPlan.accountResolution.entity.company_name || rowPlan.accountResolution.entity.name;
+      examples.push(`${name} — matched existing account`);
     }
   }
 
-  const total = rows.length;
-  const summaryLines = [
-    `I found ${total} prospect update${total === 1 ? '' : 's'}.`,
-    `${matched} matched existing accounts.`,
-    newAccount ? `${newAccount} appear${newAccount === 1 ? 's' : ''} to be new account${newAccount === 1 ? '' : 's'}.` : null,
-    needsClarification ? `${needsClarification} need${needsClarification === 1 ? 's' : ''} clarification.` : null,
-    rejected ? `${rejected} rejected.` : null,
-  ].filter(Boolean);
-
-  if (examples.length) {
-    summaryLines.push('');
-    summaryLines.push('Examples:');
-    for (const ex of examples) summaryLines.push(`- ${ex}`);
-  }
-
   return {
-    total,
+    total: plan.summary.totalRows,
     ready,
     needs_clarification: needsClarification,
-    rejected,
-    matched,
-    new_account: newAccount,
-    summary: summaryLines.join('\n'),
-    counts: { total, ready, needs_clarification: needsClarification, rejected },
+    rejected: plan.summary.ignored,
+    matched: plan.rows.filter(r => r.accountResolution?.entity).length,
+    new_account: plan.rows.filter(r =>
+      r.proposedChanges.some(c => c.type === 'CREATE_ACCOUNT_CANDIDATE')
+    ).length,
+    summary,
+    reconciliation_plan: plan,
+    counts: {
+      total: plan.summary.totalRows,
+      ready,
+      needs_clarification: needsClarification,
+      rejected: plan.summary.ignored,
+      conflicts: plan.summary.conflicts,
+      ambiguous: plan.summary.ambiguous,
+    },
+    examples,
   };
 }
 
 module.exports = {
   buildSpreadsheetPreview,
-  classifyRowPreview,
 };

@@ -137,13 +137,20 @@ async function processClaimSet({
     sourceType,
     existingProspect,
     operatorCorrection: Boolean(operatorCorrection),
+    spreadsheetFieldPlan: input.spreadsheetFieldPlan || null,
   });
 
   for (const mutation of mutations) {
     mutation.ingestion_id = ingestionId;
   }
 
-  const sourceRecord = claims.find(c => c.source_record)?.source_record || input.artifact?.metadata || null;
+  const sourceRecord = {
+    ...(claims.find(c => c.source_record)?.source_record || {}),
+    ...(input.artifact?.metadata || {}),
+  };
+  if (!Object.keys(sourceRecord).length) {
+    Object.assign(sourceRecord, { sheet: null, row: null });
+  }
   const commitResults = await commitMutations({
     store,
     mutations,
@@ -181,6 +188,13 @@ async function processClaimSet({
 
   for (const mutation of mutations) {
     if (!prospect || !mutation.claim) continue;
+    const evidenceSource = {
+      ...(mutation.claim?.source_record || {}),
+      ...(sourceRecord?.sheet != null ? { sheet: sourceRecord.sheet, row: sourceRecord.row } : {}),
+      ...(sourceRecord?.filename ? { filename: sourceRecord.filename } : {}),
+      ...(sourceRecord?.file_hash ? { file_hash: sourceRecord.file_hash } : {}),
+      ...(sourceRecord?.cell ? { cell: sourceRecord.cell } : {}),
+    };
     await store.persistEvidenceLink({
       client_id: clientId,
       entity_type: 'prospect',
@@ -188,7 +202,7 @@ async function processClaimSet({
       field_name: mutation.field_name,
       ingestion_id: ingestionId,
       artifact_id: artifactId,
-      source_record: mutation.claim.source_record || sourceRecord,
+      source_record: evidenceSource,
       derivation: mutation.field_name === 'relationship_active' ? 'derived_from_pipeline_implication' : null,
       confidence: resolutions[mutation.claim._key]?.confidence || null,
     });
@@ -262,7 +276,8 @@ async function ingestOperationalUpdate(input = {}) {
   let understandingValidation = null;
   let understandingPreview = null;
   let conversationMemory = input.conversationMemory || null;
-  const useUnderstanding = !isTrustedStructuredInput(input) && conversationalText(input);
+  const useUnderstanding = Boolean(conversationalText(input))
+    && (!isTrustedStructuredInput(input) || input.sourceType === 'FILE_IMPORTED');
 
   if (useUnderstanding) {
     const interpretInput = {

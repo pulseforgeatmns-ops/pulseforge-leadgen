@@ -365,15 +365,19 @@ router.post('/api/v1/max/ingest/spreadsheet', requireIngestWrite, async (req, re
       return res.status(400).json({ error: 'client_id_required' });
     }
     const batch = await ingestSpreadsheetEvidence(clientId, req.body || {});
-    const held = batch.recordResults.filter(r => (r.unresolved?.length || r.conflicts?.length)).length;
+    const held = batch.recordResults.filter(r => r.skipped || (r.unresolved?.length || r.conflicts?.length)).length;
     return res.json({
       ok: true,
       records_examined: batch.recordsExamined,
+      workbook_summary: batch.workbookSummary || null,
+      reconciliation_summary: batch.reconciliationPlan?.summary || null,
       summary: batch.summary,
       held_for_review: held,
+      telemetry: batch.telemetry || null,
       records: batch.recordResults.map(r => ({
         ingestion_id: r.ingestion_id,
         receipt: r.receipt,
+        skipped: r.skipped || false,
         telemetry: r.telemetry,
       })),
     });

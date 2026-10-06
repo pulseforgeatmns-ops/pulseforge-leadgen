@@ -50,15 +50,19 @@ async function ingestSpreadsheetEvidence(clientId, body = {}, { db = pool } = {}
   const store = await createStore(clientId, db);
   const sheetName = body.sheet_name || body.sheetName || 'Prospects';
   const rows = Array.isArray(body.rows) ? body.rows : [];
+  const sheets = Array.isArray(body.sheets) ? body.sheets : null;
   const batch = await ingestSpreadsheet({
     clientId,
     filename: body.filename || 'spreadsheet',
     sheetName,
     rows,
+    sheets,
+    instruction: body.instruction || body.text || null,
     sourceType: body.source_type || 'FILE_IMPORTED',
     sourceActor: body.source_actor || null,
     store,
     now: body.now ? new Date(body.now) : new Date(),
+    commitMode: body.commit_mode || 'safe_only',
   });
   return batch;
 }

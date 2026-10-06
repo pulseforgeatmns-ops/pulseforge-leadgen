@@ -10,6 +10,11 @@ const { synthesizeRowUnderstandingText } = require('./rowText');
 const { buildSpreadsheetPreview } = require('./preview');
 const { interpretConversationalInput, ConversationMemory } = require('../understanding');
 const { ingestOperationalUpdate } = require('../stateIngestion/pipeline');
+const {
+  buildSpreadsheetReconciliationPlan,
+  commitSpreadsheetReconciliationPlan,
+} = require('../stateIngestion/spreadsheetReconciliation');
+const { stableHash } = require('../stateIngestion/fingerprints');
 const { SOURCE_TYPES } = require('../stateIngestion/types');
 const { bumpVoice, noteVoiceDimension } = require('../voice/telemetry');
 const { persistVoiceRecording, transcribeVoiceRecording } = require('../voice/voiceIngestion');
@@ -342,8 +347,15 @@ async function submitComposerTurn({
       filename: spreadsheetRows[0]?.filename,
       sheetName: spreadsheetRows[0]?.sheet,
     });
+    bump(telemetry, 'max_spreadsheet_upload_count');
     bump(telemetry, 'max_spreadsheet_row_interpreted_count', spreadsheetRows.length);
     bump(telemetry, 'max_spreadsheet_row_blocked_count', preview.needs_clarification);
+    if (preview.reconciliation_plan?.summary?.conflicts) {
+      bump(telemetry, 'max_spreadsheet_conflict_count', preview.reconciliation_plan.summary.conflicts);
+    }
+    if (preview.reconciliation_plan?.summary?.ambiguous) {
+      bump(telemetry, 'max_spreadsheet_ambiguity_count', preview.reconciliation_plan.summary.ambiguous);
+    }
 
     const combinedText = augmentTextWithExtractions(envelope, envelope.attachments);
     let situationModel = null;
@@ -397,45 +409,48 @@ async function submitComposerTurn({
   let primary = null;
 
   if (spreadsheetRows.length) {
+    const sheetMap = new Map();
     for (const row of spreadsheetRows) {
-      const text = synthesizeRowUnderstandingText({
-        instruction,
-        rowValues: row.values,
-        sheetName: row.sheet,
-        rowNumber: row.rowNumber,
-        filename: row.filename,
-      });
+      if (!sheetMap.has(row.sheet)) sheetMap.set(row.sheet, []);
+      sheetMap.get(row.sheet).push(row);
+    }
+    const structuredData = {
+      filename: spreadsheetRows[0]?.filename || 'spreadsheet',
+      sheets: [...sheetMap.entries()].map(([sheet, sheetRows]) => ({ sheet, rows: sheetRows })),
+    };
+    const fileHash = stableHash([JSON.stringify(structuredData)]);
+    const plan = buildSpreadsheetReconciliationPlan({
+      structuredData,
+      store,
+      instruction,
+      fileId: envelope.id,
+      fileHash,
+      memory,
+      conversationId: envelope.conversationId,
+    });
+    bump(telemetry, 'max_spreadsheet_upload_count');
+    bump(telemetry, 'max_spreadsheet_rows_processed_count', plan.rows.length);
+    const batch = await commitSpreadsheetReconciliationPlan({
+      plan,
+      clientId,
+      store,
+      sourceActor: envelope.actor?.userId || envelope.actor?.aoId || null,
+      instruction,
+      now,
+      commitMode: shouldCommit ? 'safe_only' : 'none',
+    });
+    for (const [key, value] of Object.entries(batch.telemetry || {})) {
+      if (key.startsWith('max_spreadsheet_')) bump(telemetry, key, value);
+    }
+    for (const rowResult of batch.results) {
       bump(telemetry, 'max_spreadsheet_row_interpreted_count');
-      const result = await ingestOperationalUpdate({
-        clientId,
-        text,
-        sourceType,
-        sourceActor: envelope.actor?.userId || envelope.actor?.aoId || null,
-        actor: envelope.actor,
-        conversationId: envelope.conversationId,
-        conversationMemory: memory,
-        operatorCorrection: Boolean(envelope.metadata?.operatorCorrection),
-        store,
-        now,
-        artifact: {
-          artifact_type: 'spreadsheet',
-          filename: row.filename,
-          metadata: {
-            attachment_id: row.attachmentId,
-            sheet: row.sheet,
-            row: row.rowNumber,
-            envelope_id: envelope.id,
-            values: row.values,
-          },
-          raw_content: row.raw,
-        },
-      });
-      if (result.unresolved?.length || result.commit_blocked) {
+      if (rowResult.skipped || rowResult.unresolved?.length || rowResult.commit_blocked) {
         bump(telemetry, 'max_spreadsheet_row_blocked_count');
       }
-      results.push({ rowNumber: row.rowNumber, sheet: row.sheet, ...result });
-      if (!primary) primary = result;
+      results.push(rowResult);
+      if (!primary && !rowResult.skipped) primary = rowResult;
     }
+    if (!primary && results.length) primary = results[0];
   } else {
     const text = augmentTextWithExtractions(envelope, envelope.attachments);
     if (!text) {
@@ -469,14 +484,19 @@ async function submitComposerTurn({
 
   appliedEnvelopeKeys.add(idKey);
 
+  const understandingPreview = primary?.understanding_preview
+    || (primary?.situation_model ? formatUnderstandingPreview(primary.situation_model) : null)
+    || (results[0]?.understanding_preview
+      || (results[0]?.situation_model ? formatUnderstandingPreview(results[0].situation_model) : null));
+
   return {
     ok: true,
     committed: shouldCommit,
     ingestion_id: primary?.ingestion_id,
     receipt: primary?.receipt,
     results,
-    situation_model: primary?.situation_model,
-    understanding_preview: primary?.understanding_preview,
+    situation_model: primary?.situation_model || results[0]?.situation_model,
+    understanding_preview: understandingPreview,
     clarification_required: primary?.clarification_required,
     commit_blocked: Boolean(primary?.commit_blocked),
     conversation_memory: primary?.conversation_memory || memory,

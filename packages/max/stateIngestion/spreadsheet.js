@@ -1,63 +1,94 @@
 'use strict';
 
+const crypto = require('crypto');
 const { parseSpreadsheetRow } = require('./claimParser');
 const { ingestOperationalUpdate } = require('./pipeline');
+const {
+  buildSpreadsheetReconciliationPlan,
+  commitSpreadsheetReconciliationPlan,
+  buildWorkbookSummary,
+} = require('./spreadsheetReconciliation');
+
+function workbookFileHash({ filename, sheets = [] }) {
+  const payload = JSON.stringify({
+    filename,
+    sheets: sheets.map(s => ({
+      sheet: s.sheet || s.name,
+      rows: (s.rows || []).map(r => r.values || r.raw || r),
+    })),
+  });
+  return crypto.createHash('sha256').update(payload).digest('hex');
+}
 
 async function ingestSpreadsheet({
   clientId,
   filename,
   sheetName,
   rows = [],
+  sheets = null,
   sourceType = 'FILE_IMPORTED',
   sourceActor = null,
   store,
   now = new Date(),
+  instruction = null,
+  commitMode = 'safe_only',
 }) {
-  const recordResults = [];
-  let committed = 0;
-  let held = 0;
+  const structuredData = sheets
+    ? { filename, sheets }
+    : {
+      filename,
+      sheets: [{ sheet: sheetName || 'Prospects', rows: rows.map((row, i) => ({
+        rowNumber: row.__rowNumber ?? i + 2,
+        values: row,
+        raw: row,
+      })) }],
+    };
 
-  for (let i = 0; i < rows.length; i += 1) {
-    const rowNumber = rows[i].__rowNumber ?? i + 1;
-    const row = rows[i];
-    const claims = parseSpreadsheetRow(row, { sheet: sheetName, rowNumber });
-    const result = await ingestOperationalUpdate({
-      clientId,
-      sourceType,
-      sourceActor,
-      structured: { claims },
-      artifact: {
-        artifact_type: 'spreadsheet',
-        filename,
-        metadata: { sheet: sheetName, row: rowNumber },
-        raw_content: row,
-      },
-      store,
-      now,
-      batchParent: { filename, sheetName },
-    });
-    recordResults.push(result);
-    if (result.unresolved?.length || result.conflicts?.length) held += 1;
-    else committed += 1;
-  }
+  const fileHash = workbookFileHash(structuredData);
+  const plan = buildSpreadsheetReconciliationPlan({
+    structuredData,
+    store,
+    instruction,
+    fileId: `wb_${fileHash.slice(0, 16)}`,
+    fileHash,
+  });
 
-  const duplicates = recordResults.filter(r => r.duplicateReplay).length;
-  const updated = recordResults.filter(r => r.entities_reconciled > 0).length;
-  const created = recordResults.filter(r => r.entities_created > 0).length;
+  const batch = await commitSpreadsheetReconciliationPlan({
+    plan,
+    clientId,
+    store,
+    sourceActor,
+    instruction,
+    now,
+    commitMode,
+  });
+
+  const recordResults = batch.results;
+  const committed = recordResults.filter(r => !r.skipped && !r.commit_blocked).length;
+  const held = recordResults.filter(r => r.skipped || r.unresolved?.length || r.conflicts?.length).length;
 
   return {
-    recordsExamined: rows.length,
+    recordsExamined: plan.summary.totalRows,
+    workbookSummary: plan.workbookSummary,
+    reconciliationPlan: plan,
     recordResults,
     summary: {
       committed,
       held,
-      updated,
-      created,
-      duplicates,
+      updated: committed,
+      created: recordResults.filter(r => r.entities_created > 0).length,
+      duplicates: plan.summary.duplicateSuppressed,
+      safeChanges: plan.summary.safeChanges,
+      conflicts: plan.summary.conflicts,
+      ambiguous: plan.summary.ambiguous,
+      ignored: plan.summary.ignored,
     },
+    telemetry: batch.telemetry,
   };
 }
 
 module.exports = {
   ingestSpreadsheet,
+  workbookFileHash,
+  buildWorkbookSummary,
 };
