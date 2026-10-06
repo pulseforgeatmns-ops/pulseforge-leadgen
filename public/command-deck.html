@@ -145,14 +145,26 @@
 
       <div class="mx-composer-dock">
         <div id="mxSuggestions" class="mx-suggestions" aria-label="Suggested investigations"></div>
+        <div id="mxComposerChips" class="mx-composer-chips" hidden></div>
         <form id="mxAskForm" class="mx-ask-form" autocomplete="off">
+          <button type="button" class="mx-composer-plus" id="mxComposerPlus" aria-label="Add attachment" title="Add attachment">+</button>
+          <div class="mx-composer-menu" id="mxComposerMenu" hidden>
+            <button type="button" data-mx-attach="voice">Voice note</button>
+            <button type="button" data-mx-attach="spreadsheet">Upload spreadsheet</button>
+            <button type="button" data-mx-attach="file">Upload file</button>
+            <button type="button" data-mx-attach="image">Photo / screenshot</button>
+          </div>
+          <input id="mxFileSpreadsheet" type="file" hidden accept=".xlsx,.xls,.csv,text/csv">
+          <input id="mxFileDocument" type="file" hidden accept=".txt,.md,.pdf,.docx,text/plain">
+          <input id="mxFileImage" type="file" hidden accept="image/png,image/jpeg,image/webp">
+          <input id="mxFileVoice" type="file" hidden accept="audio/*">
           <label class="pf-sr-only" for="mxAskInput">Ask Max</label>
           <textarea
             id="mxAskInput"
             class="mx-ask-input"
             rows="1"
             maxlength="100000"
-            placeholder="Issue an objective… Paste a prospect list on new lines to attach."
+            placeholder="Message Max…"
           ></textarea>
           <button type="submit" class="mx-ask-submit" id="mxAskSend">Send</button>
         </form>

@@ -214,6 +214,14 @@ class ConversationMemory {
     return null;
   }
 
+  toJSON() {
+    return {
+      conversationId: this.conversationId,
+      maxTurns: this.maxTurns,
+      turns: this.turns,
+    };
+  }
+
   lastPrimaryContactForAccount(accountName) {
     const key = String(accountName || '').toLowerCase();
     for (let i = this.turns.length - 1; i >= 0; i -= 1) {
