@@ -125,7 +125,7 @@
       <tr data-flag-id="${esc(f.id)}">
         <td>${flagStatusBadge(f)}</td>
         <td><strong>${esc(f.ao_name || 'AO')}</strong></td>
-        <td>${esc(f.business_name || f.company_name || 'Account')}${f.source_unavailable ? '<br><span class="mab-card-meta">Legacy — source context unavailable</span>' : ''}</td>
+        <td>${esc(f.business_name || f.company_name || (f.source_type === 'conversation' ? 'Conversation' : 'Account'))}${f.source_unavailable ? '<br><span class="mab-card-meta">Legacy — source context unavailable</span>' : ''}<br><span class="mab-card-meta">${esc(f.source_type_label || f.source_type || '')}</span></td>
         <td>${esc(f.reason_label || f.reason)}${f.note ? `<br><span class="mab-card-meta">${esc(f.note)}</span>` : ''}</td>
         <td><span class="mab-card-meta">${esc(when)}</span></td>
         <td>

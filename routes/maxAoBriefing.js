@@ -207,7 +207,9 @@ router.post('/api/v1/max/ao-flags/backfill-audit', requireJakeRead, wrap(async (
   const clientId = resolveClientId(req);
   if (!clientId) return res.status(400).json({ error: 'client_id required' });
   const audit = await aoAccountFlags.runAoFlagBackfill(clientId);
-  res.json(audit);
+  const { runConversationReportBackfill } = require('../services/aoFlagBackfill');
+  const conversation = await runConversationReportBackfill(clientId);
+  res.json({ ...audit, conversation_backfill: conversation });
 }));
 
 module.exports = router;

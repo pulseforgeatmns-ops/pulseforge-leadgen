@@ -924,6 +924,7 @@ router.post('/api/max/report', requireAoWrite, refreshAoSession, wrapAoHandler(a
     clientId,
     note,
     category,
+    creatorRole: req.user.role,
   });
   return sendAoServiceResult(res, result, {
     errorBody: r => ({ error: r.error }),

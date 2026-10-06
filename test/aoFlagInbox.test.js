@@ -287,11 +287,11 @@ test('F8 tenant isolation on flag inbox list uses assignee + client scope', asyn
   })());
 
   let running;
+  const fieldSchema = require('../utils/aoFieldSchema');
+  const crmSchema = require('../utils/aoCrmSchema');
+  const prevField = fieldSchema.ensureAoFieldSchema;
+  const prevCrm = crmSchema.ensureAoCrmSchema;
   try {
-    const fieldSchema = require('../utils/aoFieldSchema');
-    const crmSchema = require('../utils/aoCrmSchema');
-    const prevField = fieldSchema.ensureAoFieldSchema;
-    const prevCrm = crmSchema.ensureAoCrmSchema;
     fieldSchema.ensureAoFieldSchema = async () => {};
     crmSchema.ensureAoCrmSchema = async () => {};
 
