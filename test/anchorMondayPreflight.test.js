@@ -47,6 +47,7 @@ test('Monday preflight: Max plans 8/day and 24 buffer before send window with Sc
     now: PRE_WINDOW,
     program: {
       id: 'outbound_monday',
+      tenant_id: '10',
       mode: 'active',
       policy_hash: 'hash',
       source_mission_id: 'mission_source',

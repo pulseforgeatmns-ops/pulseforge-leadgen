@@ -138,12 +138,12 @@ function candidateFor(tenantId) {
     };
   }
   return {
-    name: 'Founder Ledger Offices',
-    description: 'Commercial office building management for owner-operated firms',
+    name: "Barco's Painting of Colorado",
+    description: 'Founder-owned painting contractor serving Colorado homeowners',
     location: 'Austin, TX',
-    website: 'https://founder-ledger.example',
-    domain: 'founder-ledger.example',
-    vertical: 'commercial_office',
+    website: 'https://barcos-painting.example',
+    domain: 'barcos-painting.example',
+    vertical: 'painting',
   };
 }
 

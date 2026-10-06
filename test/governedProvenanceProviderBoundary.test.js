@@ -136,12 +136,18 @@ test('G: proven pre-provider uncertain attempt reconciles to releasable pending 
   assert.equal(classification.outcome, 'PROVEN_UNSENT');
 
   let releaseCalls = 0;
+  let canonicalReleaseCalls = 0;
   const pool = {
     query: async (sql, params) => {
       const normalized = String(sql).replace(/\s+/g, ' ').trim();
       if (/FROM acquisition_outbound_items i/.test(normalized)) return { rows: [item] };
       if (/tenant_outreach_scheduled_sends/.test(normalized)) return { rows: [] };
       if (/tenant_outreach_messages/.test(normalized)) return { rows: [] };
+      if (/UPDATE acquisition_mission_outbound_executions/.test(normalized)) {
+        canonicalReleaseCalls += 1;
+        assert.equal(params[1], item.mission_id);
+        return { rows: [] };
+      }
       if (/acquisition_mission_outbound_executions/.test(normalized)) return { rows: [] };
       if (/FROM acquisition_outbound_events/.test(normalized) && params[1] === item.id) {
         return { rows: evidence.events };
@@ -171,6 +177,7 @@ test('G: proven pre-provider uncertain attempt reconciles to releasable pending 
   const first = await reconcileUncertainItemFromEvidence(pool, '13', item.id);
   assert.equal(first.applied, true);
   assert.equal(releaseCalls, 1);
+  assert.equal(canonicalReleaseCalls, 1);
 
   item.status = 'pending';
   item.reason = 'reconciled_not_sent';
@@ -178,4 +185,5 @@ test('G: proven pre-provider uncertain attempt reconciles to releasable pending 
   assert.equal(second.skipped, true);
   assert.equal(second.reason, 'already_reconciled');
   assert.equal(releaseCalls, 1);
+  assert.equal(canonicalReleaseCalls, 1);
 });
