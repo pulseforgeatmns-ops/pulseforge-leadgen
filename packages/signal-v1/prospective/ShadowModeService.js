@@ -64,10 +64,61 @@ class ShadowModeService {
   async ensureProspectiveCohortStarted(providerVersions = {}) {
     let cohort = this.store.researchCohorts?.get?.(PROSPECTIVE_COHORT_001_ID);
     if (!cohort) {
-      cohort = buildProspectiveCohortRecord({ startedAt: this.now(), providerVersions });
+      const { startedAt, ...versions } = providerVersions;
+      cohort = buildProspectiveCohortRecord({
+        startedAt: startedAt || this.now(),
+        providerVersions: versions,
+      });
       await callStore(this.store, 'upsertResearchCohort', cohort);
     }
     return cohort;
+  }
+
+  async getProductionCallerFeedHealth() {
+    for (const collector of this.collectors) {
+      if (collector.id !== 'operator-json-feed' || !collector.health) continue;
+      const health = await collector.health();
+      this.store.collectorHealth[collector.id] = health;
+      if (health.available && health.connected) return health;
+      return health;
+    }
+    return { available: false, connected: false, reason: 'no_production_caller_collector' };
+  }
+
+  async ensureProspectiveCohortWhenCallerFeedReady(providerVersions = {}) {
+    const existing = this.store.researchCohorts?.get?.(PROSPECTIVE_COHORT_001_ID);
+    if (existing) return existing;
+    const feedHealth = await this.getProductionCallerFeedHealth();
+    if (!feedHealth?.connected) return null;
+    return this.ensureProspectiveCohortStarted({
+      ...providerVersions,
+      startedAt: this.now(),
+      callerFeedConnectedAt: this.now().toISOString(),
+    });
+  }
+
+  async resolveProspectiveCohortForIngest() {
+    const existing = this.store.researchCohorts?.get?.(PROSPECTIVE_COHORT_001_ID);
+    if (existing) return existing;
+    return this.ensureProspectiveCohortWhenCallerFeedReady();
+  }
+
+  async syncSourceRegistryFromFeedHealth(feedHealth) {
+    const sources = feedHealth?.feedHealth?.sources || feedHealth?.sources || [];
+    for (const src of sources) {
+      if (!src?.sourceId) continue;
+      await this.upsertSourceRegistryEntry({
+        sourceId: src.sourceId,
+        displayName: src.displayName || src.sourceId,
+        platform: src.platform || 'telegram',
+        externalRef: src.username ? `@${src.username}` : src.channelId || null,
+        collectorId: src.collector || 'telegram-caller-feed',
+        sourceRole: src.role || 'CALLER',
+        clusterRelationshipStatus: src.relationshipStatus || 'UNKNOWN',
+        active: src.active !== false && src.available !== false,
+        provenance: { channelId: src.channelId || null, unavailableReason: src.reason || null },
+      });
+    }
   }
 
   async upsertSourceRegistryEntry(entry) {
@@ -110,7 +161,7 @@ class ShadowModeService {
 
   async ingestRawCallerObservation(raw, { collectorId, provider = collectorId }) {
     this.ensureProspectiveStructures();
-    const ingestedAt = this.now();
+    const ingestedAt = raw.ingestedAt ? new Date(raw.ingestedAt) : this.now();
     const text = raw.rawText || '';
     const cas = raw.tokenCa
       ? [raw.tokenCa]
@@ -157,9 +208,14 @@ class ShadowModeService {
           forwarding: raw.forwarding || null,
         },
       };
-      const inserted = await this.persistRawEvidence(evidenceRow);
+      let inserted = await this.persistRawEvidence(evidenceRow);
       if (inserted.duplicate) {
-        results.push({ accepted: false, reason: 'duplicate', tokenAddress: ca });
+        const editStored = await this.maybePersistEditEvidence(inserted.row, evidenceRow, raw);
+        if (editStored) {
+          results.push({ accepted: false, reason: 'edit_evidence', tokenAddress: ca, evidenceId: editStored.id });
+        } else {
+          results.push({ accepted: false, reason: 'duplicate', tokenAddress: ca });
+        }
         continue;
       }
 
@@ -222,8 +278,37 @@ class ShadowModeService {
     return { row, duplicate: false };
   }
 
+  async maybePersistEditEvidence(existingRow, proposedRow, raw) {
+    const editAt = raw.provenance?.messageEditAt;
+    if (!editAt || !existingRow) return null;
+    if ((existingRow.rawText || '') === (proposedRow.rawText || '')) return null;
+    const editId = `${proposedRow.id}:edit:${editAt}`;
+    if (this.store.rawCallerEvidence.some(r => r.id === editId)) return null;
+    const editRow = {
+      ...proposedRow,
+      id: editId,
+      externalMessageId: `${proposedRow.externalMessageId}:edit:${editAt}`,
+      ingestedAt: this.now(),
+      occurredAt: existingRow.occurredAt,
+      provenance: {
+        ...(proposedRow.provenance || {}),
+        evidenceKind: 'MESSAGE_EDIT',
+        originalEvidenceId: existingRow.id,
+        priorText: raw.provenance?.priorText || existingRow.rawText || null,
+        messageEditAt: editAt,
+      },
+    };
+    if (this.store.insertRawCallerEvidence) {
+      const res = await callStore(this.store, 'insertRawCallerEvidence', editRow);
+      return res.row;
+    }
+    this.store.rawCallerEvidence.push(editRow);
+    return editRow;
+  }
+
   async processTokenAfterCall(event) {
-    const cohort = await this.ensureProspectiveCohortStarted();
+    const cohort = await this.resolveProspectiveCohortForIngest();
+    if (!cohort) return;
     const startedAt = cohort.metadata?.startedAt;
     if (!eventEligibleForProspectiveCohort(event, startedAt)) return;
 
@@ -329,7 +414,8 @@ class ShadowModeService {
   }
 
   async maybeAddCohortMember(tokenAddress, observation) {
-    const cohort = await this.ensureProspectiveCohortStarted();
+    const cohort = await this.resolveProspectiveCohortForIngest();
+    if (!cohort) return null;
     const members = await callStore(this.store, 'getCohortMembers', cohort.id);
     if (members.some(m => m.tokenAddress === tokenAddress)) return null;
     return callStore(this.store, 'addCohortMember', {
@@ -376,6 +462,10 @@ class ShadowModeService {
       try {
         const health = collector.health ? await collector.health() : { available: true };
         this.store.collectorHealth[collector.id] = health;
+        if (collector.id === 'operator-json-feed' && health.feedHealth) {
+          await this.syncSourceRegistryFromFeedHealth(health);
+        }
+        await this.ensureProspectiveCohortWhenCallerFeedReady();
         if (!health.available) continue;
         const rows = await collector.poll();
         for (const row of rows) {
