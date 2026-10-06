@@ -28,6 +28,7 @@ const { captureAssessmentRequest } = require('../lib/substralAssessmentIntake');
 
 function memoryDb(seedClients = []) {
   const clients = new Map(seedClients.map((c) => [c.id, { ...c }]));
+  const tenantWorkspaces = new Map();
   let nextClientId = 100;
   const agentActions = [];
   const companies = [];
@@ -37,13 +38,46 @@ function memoryDb(seedClients = []) {
 
   return {
     clients,
+    tenantWorkspaces,
     agentActions,
     opportunities,
     async query(sql, params = []) {
       const text = String(sql);
+      if (/SELECT \* FROM clients WHERE id/i.test(text)) {
+        const row = clients.get(Number(params[0]));
+        return { rows: row ? [row] : [] };
+      }
       if (/SELECT \* FROM clients WHERE slug/i.test(text)) {
         const row = [...clients.values()].find((c) => c.slug === params[0]);
         return { rows: row ? [row] : [] };
+      }
+      if (/FROM tenant_workspaces WHERE client_id/i.test(text)) {
+        const row = tenantWorkspaces.get(Number(params[0]));
+        return { rows: row ? [row] : [] };
+      }
+      if (/INSERT INTO tenant_workspaces/i.test(text)) {
+        const row = {
+          client_id: params[0],
+          tenant_key: params[1],
+          knowledge_namespace: params[2],
+          mission_namespace: params[3],
+          prospect_namespace: params[4],
+          outcome_namespace: params[5],
+          aim_namespace: params[6],
+          campaign_namespace: params[7],
+          memory_namespace: params[8],
+          origin: params[9],
+          lifecycle: params[10],
+          platform_knowledge_isolated: true,
+        };
+        tenantWorkspaces.set(row.client_id, row);
+        return { rows: [row] };
+      }
+      if (/ALTER TABLE clients ADD COLUMN/i.test(text) || /ALTER TABLE tenant_workspaces ADD COLUMN/i.test(text)) {
+        return { rows: [] };
+      }
+      if (/CREATE TABLE IF NOT EXISTS tenant_workspaces/i.test(text)) {
+        return { rows: [] };
       }
       if (/INSERT INTO clients/i.test(text)) {
         const id = nextClientId++;
@@ -116,6 +150,10 @@ describe('SPEC-SUBSTRAL-PF-001', () => {
     assert.equal(client.slug, STUDIO_SUBSTRAL_SLUG);
     assert.equal(client.scoring_profile, 'studio_substral');
     assert.ok(isStudioSubstralScoringProfile(client.scoring_profile));
+    const ws = db.tenantWorkspaces.get(client.id);
+    assert.ok(ws, 'tenant_workspaces binding provisioned');
+    assert.equal(ws.tenant_key, STUDIO_SUBSTRAL_SLUG);
+    assert.equal(ws.knowledge_namespace, `tenant:${client.id}:knowledge`);
   });
 
   it('2. initial mission objective targets one paid website assessment', () => {
