@@ -13,9 +13,11 @@ const { expectationFromMutations } = require('./expectations');
 const { MemoryStateStore } = require('./store/memoryStore');
 const {
   interpretConversationalInput,
+  interpretWithDurableConversationContext,
   isTrustedStructuredInput,
   conversationalText,
   mergeUnderstandingTelemetry,
+  mergeConversationMemoryTelemetry,
 } = require('../understanding');
 
 function claimKey(claim) {
@@ -263,7 +265,7 @@ async function ingestOperationalUpdate(input = {}) {
   const useUnderstanding = !isTrustedStructuredInput(input) && conversationalText(input);
 
   if (useUnderstanding) {
-    const interpreted = interpretConversationalInput({
+    const interpretInput = {
       text: input.text,
       message: input.message,
       inputId: ingestionId,
@@ -273,13 +275,23 @@ async function ingestOperationalUpdate(input = {}) {
       memory: input.memory,
       conversationMemory,
       contextAccounts: input.contextAccounts,
-    });
+      tenantId: clientId,
+      clientId,
+      memoryRepository: input.memoryRepository || null,
+      telemetry,
+    };
+    const interpreted = input.memoryRepository && input.conversationId
+      ? await interpretWithDurableConversationContext(interpretInput)
+      : interpretConversationalInput(interpretInput);
     situationModel = interpreted.situationModel;
     understandingValidation = interpreted.validation;
     understandingPreview = interpreted.preview;
     conversationMemory = interpreted.memory;
     if (interpreted.understandingTelemetry) {
       mergeUnderstandingTelemetry(telemetry, interpreted.understandingTelemetry);
+    }
+    if (interpreted.conversationMemoryTelemetry) {
+      mergeConversationMemoryTelemetry(telemetry, interpreted.conversationMemoryTelemetry);
     }
 
     if (understandingValidation?.blockCommit) {

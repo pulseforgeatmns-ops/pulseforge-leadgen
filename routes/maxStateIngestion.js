@@ -10,7 +10,12 @@ const {
   listOverdueExpectationPrompts,
 } = require('../services/maxStateIngestionService');
 const { afterIngestionDecisions } = require('../services/maxDecisionExecutionService');
-const { interpretConversationalInput } = require('../packages/max/understanding');
+const {
+  interpretConversationalInput,
+  interpretWithDurableConversationContext,
+  PostgresConversationMemoryRepository,
+} = require('../packages/max/understanding');
+const pool = require('../db');
 
 const requireIngestWrite = [
   requireAuth,
@@ -29,13 +34,30 @@ router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
     if (!text || !String(text).trim()) {
       return res.status(400).json({ error: 'text_required' });
     }
-    const interpreted = interpretConversationalInput({
+    const clientId = resolveClientId(req);
+    const conversationId = req.body?.conversation_id || req.body?.conversationId || null;
+    const actor = { userId: req.session?.user?.id, role: req.session?.user?.role };
+    const baseInput = {
       text,
-      conversationId: req.body?.conversation_id || req.body?.conversationId,
-      actor: { userId: req.session?.user?.id, role: req.session?.user?.role },
+      conversationId,
+      actor,
       now: req.body?.now,
       conversationMemory: req.body?.conversation_memory || req.body?.conversationMemory,
-    });
+      contextAccounts: req.body?.context_accounts || req.body?.contextAccounts,
+    };
+    let interpreted;
+    if (conversationId && clientId != null) {
+      const memoryRepository = new PostgresConversationMemoryRepository(pool);
+      await memoryRepository.init();
+      interpreted = await interpretWithDurableConversationContext({
+        ...baseInput,
+        tenantId: clientId,
+        clientId,
+        memoryRepository,
+      });
+    } else {
+      interpreted = interpretConversationalInput(baseInput);
+    }
     return res.json({
       ok: true,
       situation_model: interpreted.situationModel,
@@ -43,6 +65,7 @@ router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
       validation: interpreted.validation,
       diagnostics: interpreted.diagnostics || interpreted.situationModel?.diagnostics,
       understanding_telemetry: interpreted.understandingTelemetry || null,
+      conversation_memory_telemetry: interpreted.conversationMemoryTelemetry || null,
     });
   } catch (error) {
     console.error('[max-understanding]', error);

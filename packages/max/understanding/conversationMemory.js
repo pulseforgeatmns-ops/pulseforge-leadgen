@@ -1,16 +1,25 @@
 'use strict';
 
+const { accountMatchesReference } = require('./accountResolution');
+const { normalizeText } = require('../stateIngestion/claimParser');
+const { SEMANTIC_TYPE } = require('./conversationMemoryTypes');
+
 /**
  * Bounded conversational context for pronoun / entity reference resolution.
- * Not long-term memory — active thread only.
+ * Not long-term memory — active thread only (plus optional durable hydration).
  */
 
 class ConversationMemory {
-  constructor({ conversationId = null, maxTurns = 12 } = {}) {
+  constructor({ conversationId = null, maxTurns = 12, durableLoadFailed = false } = {}) {
     this.conversationId = conversationId;
     this.maxTurns = maxTurns;
     this.turns = [];
     this.entitiesByKey = new Map();
+    this.openQuestions = [];
+    this.activeContacts = [];
+    this.activeAccounts = [];
+    this.durableLoadFailed = durableLoadFailed;
+    this.durableReferenceResolved = false;
   }
 
   static fromSeed(seed = {}) {
@@ -21,8 +30,82 @@ class ConversationMemory {
     return mem;
   }
 
+  static fromDurableRecords({ conversationId, records = [] }) {
+    const mem = new ConversationMemory({ conversationId });
+    const threadRecords = records
+      .filter(r => r.semanticType === SEMANTIC_TYPE.RECENT_THREAD)
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    for (const rec of threadRecords) {
+      const turn = rec.payload?.turn;
+      if (turn?.inputId) {
+        mem.recordTurn({
+          inputId: turn.inputId,
+          text: turn.rawText || null,
+          situationModel: turn,
+        });
+      }
+    }
+
+    mem.activeContacts = records
+      .filter(r => r.semanticType === SEMANTIC_TYPE.ACTIVE_CONTACT && !r.supersededAt)
+      .map(r => r.payload?.contact)
+      .filter(Boolean);
+
+    mem.activeAccounts = records
+      .filter(r => r.semanticType === SEMANTIC_TYPE.ACTIVE_ENTITY && !r.supersededAt)
+      .map(r => r.payload?.name)
+      .filter(Boolean);
+
+    mem.openQuestions = records
+      .filter(r => r.semanticType === SEMANTIC_TYPE.OPEN_QUESTION && !r.supersededAt)
+      .filter(r => !r.payload?.resolved)
+      .map(r => ({
+        id: r.id,
+        recordFingerprint: r.recordFingerprint,
+        ...r.payload,
+      }));
+
+    for (const contact of mem.activeContacts) {
+      if (contact.name) mem.entitiesByKey.set(contact.name.toLowerCase(), contact);
+    }
+    return mem;
+  }
+
+  activeOpenQuestion() {
+    return this.openQuestions[this.openQuestions.length - 1] || null;
+  }
+
+  resolveClarificationAnswer(text) {
+    const pending = this.activeOpenQuestion();
+    if (!pending?.ambiguity?.candidates?.length) return null;
+    const raw = normalizeText(text).replace(/[.!?]+$/, '').trim();
+    if (!raw || raw.split(/\s+/).length > 4) return null;
+
+    for (const candidate of pending.ambiguity.candidates) {
+      if (accountMatchesReference(raw, candidate)) {
+        this.durableReferenceResolved = true;
+        pending.resolved = true;
+        return {
+          account: candidate,
+          openQuestion: pending,
+          deferred: pending.deferred || null,
+        };
+      }
+      if (String(candidate).toLowerCase().includes(raw.toLowerCase()) && raw.length >= 3) {
+        this.durableReferenceResolved = true;
+        pending.resolved = true;
+        return {
+          account: candidate,
+          openQuestion: pending,
+          deferred: pending.deferred || null,
+        };
+      }
+    }
+    return null;
+  }
+
   knownAccountNames() {
-    const names = new Set();
+    const names = new Set(this.activeAccounts || []);
     for (const turn of this.turns) {
       const model = turn.situationModel;
       for (const thread of model?.threads || [{ accountName: null, entities: model?.entities || [] }]) {
@@ -91,6 +174,12 @@ class ConversationMemory {
 
   recentContacts({ genderHint = null, accountName = null } = {}) {
     const contacts = [];
+    for (const c of this.activeContacts || []) {
+      if (accountName && c.accountName && c.accountName.toLowerCase() !== accountName.toLowerCase()) {
+        continue;
+      }
+      contacts.push(c);
+    }
     for (let i = this.turns.length - 1; i >= 0; i -= 1) {
       const model = this.turns[i].situationModel;
       const pool = [
