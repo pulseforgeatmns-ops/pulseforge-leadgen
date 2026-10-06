@@ -226,49 +226,24 @@
     }
   }
 
-  async function switchActiveTenant(clientId) {
-    const response = await fetch('/api/clients/active', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId }),
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.message || payload.error || 'Tenant switch failed');
-    }
-    return response.json();
+  function tenantCoordinator() {
+    return window.PulseforgeTenantCoordinator || null;
   }
 
-  function updateTenantDisplay(tenantName, activeClientId) {
-    const tenantEl = document.querySelector('.pf-nav-tenant');
-    const selectEl = document.getElementById('pfTenantSelect');
-    if (tenantEl && tenantName) tenantEl.textContent = tenantName;
-    if (selectEl && activeClientId != null) {
-      selectEl.value = String(activeClientId);
-    }
-  }
-
-  async function handleTenantSwitch(clientId, context, tenantState) {
-    await switchActiveTenant(clientId);
-    const nextId = Number(clientId);
-    const active = (tenantState.clients || []).find(c => Number(c.id) === nextId);
-    tenantState.activeClientId = nextId;
-    tenantState.tenantName = active ? active.name : tenantState.tenantName;
-    if (context) context.active_client_id = nextId;
-    updateTenantDisplay(tenantState.tenantName, nextId);
+  function syncShellTenantState(context, tenantState) {
+    const coord = tenantCoordinator();
+    const activeClientId = coord?.getActiveClientId?.() ?? tenantState.activeClientId;
+    const tenantName = coord?.getTenantName?.() ?? tenantState.tenantName;
+    tenantState.activeClientId = activeClientId;
+    tenantState.tenantName = tenantName;
+    if (context && activeClientId != null) context.active_client_id = activeClientId;
     window.PulseforgeShell = {
       ...window.PulseforgeShell,
       context,
-      tenantName: tenantState.tenantName,
-      activeClientId: nextId,
+      tenantName,
+      activeClientId,
+      switchActiveTenant: (id) => tenantCoordinator()?.switchActiveTenant?.(id),
     };
-    document.dispatchEvent(new CustomEvent('pulseforge:tenant-changed', {
-      detail: {
-        active_client_id: nextId,
-        tenantName: tenantState.tenantName,
-      },
-    }));
   }
 
   function buildNav(context, tenantState) {
@@ -335,21 +310,7 @@
           }
           select.appendChild(option);
         }
-        select.addEventListener('change', async () => {
-          const previous = String(tenantState.activeClientId ?? '');
-          const next = select.value;
-          if (next === previous) return;
-          select.disabled = true;
-          try {
-            await handleTenantSwitch(next, context, tenantState);
-          } catch (err) {
-            console.error('[shell] tenant switch failed:', err);
-            select.value = previous;
-            window.alert(err.message || 'Could not switch workspace');
-          } finally {
-            select.disabled = false;
-          }
-        });
+        tenantCoordinator()?.bindTenantSelect?.(select);
         tenantWrap.appendChild(select);
 
         const createLink = document.createElement('a');
@@ -424,19 +385,28 @@
     applyTheme(readTheme());
     const context = await fetchContext();
     const tenantState = await fetchTenantContext(context);
+    const coord = tenantCoordinator();
+    if (coord && tenantState.clients?.length) {
+      coord.hydrateFromClientsApi({
+        clients: tenantState.clients,
+        active_client_id: tenantState.activeClientId,
+      });
+    }
     const nav = buildNav(context, tenantState);
     document.body.prepend(nav);
     applyTheme(readTheme());
     activateHashTab();
     window.addEventListener('hashchange', () => { activateHashTab(); refreshCurrent(); });
+    syncShellTenantState(context, tenantState);
     window.PulseforgeShell = {
-      context,
-      tenantName: tenantState.tenantName,
-      activeClientId: tenantState.activeClientId,
+      ...window.PulseforgeShell,
       toggleTheme,
       applyTheme,
       readTheme,
     };
+    document.addEventListener('pulseforge:tenant-changed', () => {
+      syncShellTenantState(context, tenantState);
+    });
     document.dispatchEvent(new CustomEvent('pulseforge:shell-ready', {
       detail: {
         context,

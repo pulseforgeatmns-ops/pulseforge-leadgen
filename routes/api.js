@@ -3,7 +3,13 @@ const crypto = require('crypto');
 const router = express.Router();
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
-const { ensureClientArchitecture, getActiveClients, getClientConfig, getRequestClientId, normalizeClientId } = require('../utils/clientContext');
+const {
+  ensureClientArchitecture,
+  getOperatorSwitchableClients,
+  getClientConfig,
+  getRequestClientId,
+  normalizeClientId,
+} = require('../utils/clientContext');
 const { workspaceDisplayName } = require('../utils/clientFacingPresentation');
 const { featuresFromFlag } = require('../utils/pipelineExperience');
 const { ensureCloserSchema } = require('../utils/closerSchema');
@@ -25,6 +31,7 @@ const {
 const {
   assertAuthorizedClientSwitch,
   filterClientsForUser,
+  reconcileOperatorActiveClient,
 } = require('../utils/tenantAuthorization');
 const { getTenantWorkspace } = require('../services/tenantWorkspace');
 
@@ -252,12 +259,12 @@ router.get('/api/me', sessionAuth, async (req, res) => {
 
 router.get('/api/clients', requireOperator, async (req, res) => {
   try {
-    const allClients = await getActiveClients();
+    const allClients = await getOperatorSwitchableClients();
     const clients = filterClientsForUser(allClients, req.user);
-    const activeClientId = normalizeClientId(req.session.active_client_id || 1);
+    const activeClientId = reconcileOperatorActiveClient(req.session, clients);
     const active = clients.find(c => Number(c.id) === Number(activeClientId)) || null;
     res.json({
-      active_client_id: active ? activeClientId : (clients[0]?.id ?? activeClientId),
+      active_client_id: activeClientId,
       clients,
       // Canonical tenant-feature snapshot for the active client. Dashboard
       // Pipeline hydration must use this (or /setter/api/features) — never a
@@ -279,7 +286,7 @@ router.post('/api/clients/active', requireOperator, async (req, res) => {
         message: auth.message || 'Tenant switch not authorized',
       });
     }
-    const clients = filterClientsForUser(await getActiveClients(), req.user);
+    const clients = filterClientsForUser(await getOperatorSwitchableClients(), req.user);
     const active = clients.find(c => Number(c.id) === Number(clientId));
     if (!active) {
       return res.status(404).json({ error: 'Client not found' });

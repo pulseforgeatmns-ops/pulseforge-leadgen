@@ -60,6 +60,9 @@ const CLIENT_COLUMNS = [
   ['warmup_start_date', 'date'],
   ['autosend_enabled', 'boolean default false'],
   ['active', 'boolean default true'],
+  // When false, tenant may remain active for agents/scripts but must not appear
+  // in operator tenant switchers (/api/clients, session activate).
+  ['operator_switchable', 'boolean default true'],
   ['created_at', 'timestamptz default now()'],
 ];
 
@@ -326,7 +329,7 @@ async function ensureClientArchitecture() {
     INSERT INTO clients (
       name, slug, business_name, vertical, email, primary_contact,
       country, timezone, industry, service_area, verticals, target_clients,
-      scoring_profile, enabled_agents, active, notes
+      scoring_profile, enabled_agents, active, operator_switchable, notes
     ) VALUES (
       'Maynard Web',
       'maynard-web',
@@ -343,12 +346,17 @@ async function ensureClientArchitecture() {
       'web_design',
       ARRAY['scout','max'],
       true,
+      false,
       'SPEC-WEB-001 — neutral working identity; NO outbound until explicitly authorized.'
     )
     ON CONFLICT (slug) DO UPDATE SET
       scoring_profile = EXCLUDED.scoring_profile,
       enabled_agents = EXCLUDED.enabled_agents,
-      notes = EXCLUDED.notes
+      notes = EXCLUDED.notes,
+      operator_switchable = false
+  `);
+  await pool.query(`
+    UPDATE clients SET operator_switchable = false WHERE slug = 'maynard-web'
   `);
 
   // SPEC-SUBSTRAL-PF-001 — Studio Substral first-class tenant (slug-resolved)
@@ -459,13 +467,15 @@ async function getClientConfig(clientId = DEFAULT_CLIENT_ID) {
   return result.rows[0];
 }
 
-async function getActiveClients() {
+const OPERATOR_SWITCHABLE_WHERE = 'active = true AND COALESCE(operator_switchable, true) = true';
+
+async function queryActiveClientRows(whereClause = 'active = true') {
   try {
     const result = await pool.query(`
       SELECT id, name, slug, email, city, state,
         COALESCE(setter_pipeline_v2_enabled, false) AS setter_pipeline_v2_enabled
       FROM clients
-      WHERE active = true
+      WHERE ${whereClause}
       ORDER BY id
     `);
     return result.rows.map(row => ({
@@ -476,9 +486,23 @@ async function getActiveClients() {
     // Pre-Phase-3D schemas lack the pilot column; fail closed to legacy.
     if (!/setter_pipeline_v2_enabled/i.test(err.message || '')) throw err;
     const result = await pool.query(
-      'SELECT id, name, slug, email, city, state FROM clients WHERE active = true ORDER BY id'
+      `SELECT id, name, slug, email, city, state FROM clients WHERE ${whereClause} ORDER BY id`
     );
     return result.rows.map(row => ({ ...row, setter_pipeline_v2_enabled: false }));
+  }
+}
+
+async function getActiveClients() {
+  return queryActiveClientRows('active = true');
+}
+
+/** Tenants operators may select in session switchers (excludes hidden pilots like maynard-web). */
+async function getOperatorSwitchableClients() {
+  try {
+    return await queryActiveClientRows(OPERATOR_SWITCHABLE_WHERE);
+  } catch (err) {
+    if (!/operator_switchable/i.test(err.message || '')) throw err;
+    return queryActiveClientRows('active = true');
   }
 }
 
@@ -489,6 +513,7 @@ module.exports = {
   ensureClientArchitecture,
   ensureProspectStatusConstraint,
   getActiveClients,
+  getOperatorSwitchableClients,
   getClientConfig,
   getRequestClientId,
   getRuntimeClientId,
