@@ -1,7 +1,8 @@
 'use strict';
 
 const { createSituationModel, newSituationId } = require('./types');
-const { segmentIntoThreads } = require('./threadSegmentation');
+const { segmentIntoThreads, mergeThreadInterpretations } = require('./threadSegmentation');
+const { dedupeCorrections } = require('./temporal');
 const { interpretThreadSegment } = require('./semanticInterpreter');
 const { ConversationMemory } = require('./conversationMemory');
 const { validateSituationModel } = require('./ambiguityGate');
@@ -48,7 +49,7 @@ function interpretConversationalInput(input = {}) {
   if (/actually,?\s+that was\s+\w+\s+at/i.test(text)) {
     segments = [{ text, accountHint: null }];
   }
-  const threads = segments.map((seg, idx) =>
+  let threads = segments.map((seg, idx) =>
     interpretThreadSegment({
       text: seg.text,
       threadId: `thread_${idx + 1}`,
@@ -59,6 +60,12 @@ function interpretConversationalInput(input = {}) {
       contextAccounts,
     })
   );
+  threads = mergeThreadInterpretations(threads);
+  for (const t of threads) {
+    t.corrections = dedupeCorrections(t.corrections || []);
+  }
+
+  const flatCorrections = dedupeCorrections(threads.flatMap(t => t.corrections || []));
 
   const situationModel = createSituationModel({
     inputId,
@@ -71,7 +78,7 @@ function interpretConversationalInput(input = {}) {
     entities: threads.flatMap(t => t.entities),
     events: threads.flatMap(t => t.events),
     claims: threads.flatMap(t => t.claims),
-    corrections: threads.flatMap(t => t.corrections),
+    corrections: flatCorrections,
     commitments: threads.flatMap(t => t.commitments),
     painPoints: threads.flatMap(t => t.painPoints),
     objections: threads.flatMap(t => t.objections),

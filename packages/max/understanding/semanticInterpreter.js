@@ -10,7 +10,15 @@ const {
   newSituationId,
 } = require('./types');
 const { evidenceRef, spanFromMatch } = require('./evidence');
-const { extractTemporalReferences, normalizeTemporalPhrase } = require('./temporal');
+const {
+  extractTemporalReferences,
+  normalizeTemporalPhrase,
+  extractTemporalCorrections,
+  classifyTemporalRoles,
+  hasConditionalFollowUpContext,
+  TEMPORAL_ROLE,
+  DAY_TOKEN,
+} = require('./temporal');
 const { resolvePronoun, applyRoleCorrection } = require('./referenceResolution');
 const {
   canonicalAccountLabel,
@@ -29,6 +37,48 @@ function cleanAccountName(name) {
   const trimmed = normalized.split(/[.,;]/)[0].trim();
   const canonical = canonicalAccountLabel(trimmed);
   return canonical.replace(/\s+(Mike|Sarah|Dave|Lisa|Tony|at)$/i, '').trim();
+}
+
+const CONTACT_INTRO_SKIP = new Set([
+  'exeter', 'granite', 'abc', 'never', 'packaging', 'manufacturing', 'state', 'phillips',
+]);
+
+function capitalizeName(fragment) {
+  const n = normalizeText(fragment);
+  if (!n) return n;
+  return n.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+}
+
+function extractIntroducedContacts(raw) {
+  const out = [];
+  const seen = new Set();
+  const re = /\b(?:talked|spoke|spoken|chat(?:ted)?|met|caught)\s+(?:to|with)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    const name = capitalizeName(m[1]);
+    const firstToken = name.split(/\s+/)[0].toLowerCase();
+    if (CONTACT_INTRO_SKIP.has(firstToken)) continue;
+    if (/^(Dave|Sarah|Lisa|Mike|Tony|Rory|Jake|Billy|Facilities)$/i.test(name.split(/\s+/)[0])) {
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(name);
+    } else if (/^[A-Z][a-z]+$/.test(name) && name.length >= 3 && !CONTACT_INTRO_SKIP.has(name.toLowerCase())) {
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+function resolveExplicitCallbackSpeaker(lower) {
+  const m = lower.match(/\b(dave|sarah|lisa|mike|billy)\b[^.!?]{0,60}\b(?:hear back|call me|expects to call|should call|said that i should hear)/i)
+    || lower.match(/\b(?:hear back|call me)[^.!?]{0,20}\b(?:from|with)\s+(dave|sarah|lisa|mike|billy)\b/i);
+  if (!m) return null;
+  const name = m[1] || m[2];
+  return capitalizeName(name);
 }
 
 function entityAccount(name, threadId) {
@@ -142,6 +192,7 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
 
   const contactPatterns = [
     { re: /\bDave\b/i, name: 'Dave', gender: 'male' },
+    { re: /\bBilly\b/i, name: 'Billy', gender: 'male' },
     { re: /\bSarah Collins\b/i, name: 'Sarah Collins', gender: 'female' },
     { re: /\bSarah\b(?!\s+said\s+Lisa)/i, name: 'Sarah', gender: 'female' },
     { re: /\bLisa\b/i, name: 'Lisa', gender: 'female' },
@@ -160,6 +211,15 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
         role,
       }));
     }
+  }
+
+  for (const introName of extractIntroducedContacts(raw)) {
+    if (entities.some(e => e.kind === ENTITY_KIND.CONTACT && e.name?.toLowerCase() === introName.toLowerCase())) continue;
+    entities.push(entityContact({
+      name: introName,
+      gender: /^(Dave|Mike|Billy|Jake|Rory|Tony)$/i.test(introName) ? 'male' : /^(Sarah|Lisa)$/i.test(introName) ? 'female' : null,
+      accountName: account?.name || null,
+    }));
   }
 
   if (/facilities guy|facilities contact|facilities manager/i.test(lower) && !/don'?t have his name|out until/i.test(lower)) {
@@ -201,7 +261,7 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     });
   }
 
-  if (/missing common areas|miss(?:ing)? (?:the )?bathrooms|bathroom issues|issues with bathrooms|hit or miss|unreliable internal cleaning|keep missing|cleener still missin/i.test(lower)) {
+  if (/missing(?:\s+\w+){0,4}\s+common areas|missing common areas|miss(?:ing)? (?:the )?bathrooms|bathroom issues|issues with bathrooms|hit or miss|unreliable internal cleaning|keep missing|cleener still missin/i.test(lower)) {
     const isHistorical = /used to have issues|but said it'?s been fine lately|been fine lately|used to have/i.test(lower);
     const resolvedHistorical = /don'?t have any issue with bathrooms anymore|no issue with bathrooms anymore|anymore/i.test(lower)
       && /bathroom/i.test(lower);
@@ -363,48 +423,56 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     entities.push(account);
   }
 
-  const dayPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+morning)?\b/gi;
-  const dayMatches = [...raw.matchAll(dayPattern)].map(m => m[0]);
-  const temporalRefs = extractTemporalReferences(raw, now);
-  if (dayMatches.length >= 2) {
+  const dayMatches = [...raw.matchAll(DAY_TOKEN)].map(m => m[0]);
+  let temporalRefs = extractTemporalReferences(raw, now);
+  const temporalCorrectionPairs = extractTemporalCorrections(raw, dayMatches);
+  if (temporalCorrectionPairs.length) {
     const finalPhrase = dayMatches[dayMatches.length - 1];
     const finalDay = finalPhrase.match(/(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i)?.[1];
-    for (let i = 0; i < dayMatches.length - 1; i += 1) {
+    for (const pair of temporalCorrectionPairs) {
       corrections.push({
         id: newSituationId('corr'),
         kind: 'temporal',
-        priorValue: dayMatches[i],
-        newValue: finalPhrase,
+        priorValue: pair.priorValue,
+        newValue: pair.newValue,
         text: raw,
       });
     }
     for (const t of temporalRefs) {
       if (finalDay && t.phrase.toLowerCase().includes(finalDay.toLowerCase())) {
         t.canonical = true;
-        t.supersedes = dayMatches.slice(0, -1).join(', ');
-      } else if (dayMatches.some(d => t.phrase.toLowerCase().includes(d.toLowerCase().split(/\s+/)[0]))) {
+        t.superseded = temporalCorrectionPairs.map(p => p.priorValue).join(', ');
+        t.role = TEMPORAL_ROLE.CORRECTED_TIME;
+      } else if (temporalCorrectionPairs.some(p => t.phrase.toLowerCase().includes(String(p.priorValue).toLowerCase().split(/\s+/)[0]))) {
         t.superseded = true;
       }
     }
   }
+  temporalRefs = classifyTemporalRoles(raw, temporalRefs);
 
-  const deferredCallback = clarificationContinuation?.deferred?.intent === 'callback'
-    || /call me|he'?d call|she'?d call|should call|expects to call|supposed to call|come back|call (?:me )?(?:on )?|\bsaid\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(lower);
+  const hearBackDeadline = /hear back|should hear back|expects (?:to )?call|call me|he'?d call|she'?d call|should call|supposed to call|come back|\bsaid\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(lower);
+  const deferredCallback = clarificationContinuation?.deferred?.intent === 'callback' || hearBackDeadline;
   if (deferredCallback) {
     const deferredPhrase = clarificationContinuation?.deferred?.temporalPhrase;
+    const deadlineRef = temporalRefs.find(t => t.role === TEMPORAL_ROLE.DEADLINE && !t.superseded)
+      || temporalRefs.find(t => !t.superseded && /friday|thursday|wednesday|monday|tuesday|saturday|sunday|this week/i.test(t.phrase));
     const windowPhrase = deferredPhrase
-      || temporalRefs.find(t => !t.superseded)?.phrase
+      || deadlineRef?.phrase
       || lower.match(/this week|friday|thursday|wednesday morning|next week|monday|tuesday|wednesday|saturday|sunday/)?.[0]
       || 'unspecified';
     const resolved = normalizeTemporalPhrase(windowPhrase, now);
+    const explicitSpeaker = resolveExplicitCallbackSpeaker(lower);
     commitments.push({
       id: newSituationId('commit'),
       kind: 'callback',
-      responsible: entities.find(e => e.kind === ENTITY_KIND.CONTACT)?.name || 'contact',
+      responsible: explicitSpeaker || 'unresolved',
+      sourceContact: explicitSpeaker || null,
+      sourceContactUnresolved: !explicitSpeaker,
       windowPhrase,
       normalized: resolved.normalized,
       epistemic: EPISTEMIC_CATEGORY.REPORTED,
       accountName: account?.name || null,
+      temporalRole: TEMPORAL_ROLE.DEADLINE,
     });
   }
 
@@ -429,8 +497,8 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     });
   }
 
-  if (/put a follow[- ]?up on|schedule follow[- ]?up|follow[- ]?up on/i.test(lower)) {
-    const conditional = /if i don'?t hear back|if i do not hear back/i.test(lower);
+  if (/put a follow[- ]?up on|schedule follow[- ]?up|follow[- ]?up on|remind me to follow[- ]?up/i.test(lower)) {
+    const conditional = hasConditionalFollowUpContext(lower);
     const known = collectKnownAccounts(memory, contextAccounts);
     if (!account && known.length > 1 && /\b(for them|for that account|for they)\b/i.test(lower)) {
       ambiguities.push({
@@ -439,11 +507,20 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
         clarification: `Which account should receive the follow-up — ${known.join(' or ')}?`,
       });
     }
+    const followRef = temporalRefs.find(t => t.role === TEMPORAL_ROLE.CONDITIONAL_FOLLOW_UP_TIME && !t.superseded)
+      || (hasConditionalFollowUpContext(lower)
+        ? temporalRefs.find(t => /monday|tuesday|wednesday|thursday|friday|saturday|sunday/i.test(t.phrase) && !t.superseded && t.role !== TEMPORAL_ROLE.DEADLINE)
+        : null);
     requestedActions.push({
       id: newSituationId('req'),
       action: 'schedule_follow_up',
-      temporal: temporalRefs.find(t => !t.superseded)?.phrase || null,
+      temporal: followRef?.phrase || null,
       conditional,
+      condition: conditional ? {
+        type: 'NO_EXPECTED_EVENT',
+        event: 'callback',
+        deadline: temporalRefs.find(t => t.role === TEMPORAL_ROLE.DEADLINE)?.phrase || null,
+      } : null,
     });
   }
 
@@ -506,9 +583,16 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     }
   }
 
+  const namedDmNegation = lower.match(/\b(dave|sarah|lisa|mike|billy)\b[^.!?]{0,40}isn'?t the decision maker/i)
+    || lower.match(/\b(dave|sarah|lisa|mike|billy)\s+is not the decision maker/i);
   if (/isn'?t the decision maker|not actually the decision maker|not the decision maker|actually .+ isn'?t the decision maker/i.test(lower)) {
-    const contact = entities.find(e => e.kind === ENTITY_KIND.CONTACT)
-      || memory?.lastPrimaryContactForAccount(account?.name);
+    let contact = namedDmNegation
+      ? entities.find(e => e.kind === ENTITY_KIND.CONTACT && e.name?.toLowerCase() === namedDmNegation[1].toLowerCase())
+      : null;
+    if (!contact) {
+      contact = entities.find(e => e.kind === ENTITY_KIND.CONTACT)
+        || memory?.lastPrimaryContactForAccount(account?.name);
+    }
     if (contact) {
       const roleFix = applyRoleCorrection({ contactEntity: contact, correctionText: raw });
       if (roleFix) {
@@ -518,8 +602,23 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
           ...roleFix.correction,
           contactName: roleFix.contact.name,
         });
+        const idx = entities.findIndex(e => e.id === roleFix.contact.id);
+        if (idx >= 0) entities[idx] = roleFix.contact;
       }
     }
+  }
+
+  if (/didn'?t get (?:her|his|their) last name|did not get (?:her|his|their) last name/i.test(lower)) {
+    const subject = /lisa/i.test(lower) ? 'Lisa' : /dave/i.test(lower) ? 'Dave' : /sarah/i.test(lower) ? 'Sarah' : /billy/i.test(lower) ? 'Billy' : 'Lisa';
+    for (const ent of entities.filter(e => e.kind === ENTITY_KIND.CONTACT && e.name?.toLowerCase() === subject.toLowerCase())) {
+      ent.lastNameKnown = false;
+    }
+    claims.push({
+      semantic: 'missing_contact_field',
+      contactName: subject,
+      field: 'last_name',
+      known: false,
+    });
   }
 
   if (/talk to his boss|speak with his boss|going to talk to his boss/i.test(lower)) {

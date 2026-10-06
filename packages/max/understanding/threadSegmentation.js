@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeText } = require('../stateIngestion/claimParser');
+const { canonicalAccountLabel } = require('./accountResolution');
 
 const SPLIT_MARKERS = [
   /\.\s+I also stopped at\s+/i,
@@ -8,15 +9,28 @@ const SPLIT_MARKERS = [
   /\.\s+Also stopped at\s+/i,
   /\.\s+Also,\s+/i,
   /\.\s+Then I (?:stopped|went) to\s+/i,
+  /,\s+then stopped at\s+/i,
+  /\.\s+then stopped at\s+/i,
 ];
+
+const ACCOUNT_WORD = '[A-Z][A-Za-z0-9&\'\\-]+(?:\\s+[A-Z][A-Za-z0-9&\'\\-]+){0,4}';
 
 const ACCOUNT_PATTERNS = [
-  /\bat\s+([A-Z][A-Za-z0-9&.'\-]+(?:\s+[A-Z][A-Za-z0-9&.'\-]+){0,4})\b/g,
-  /\bto\s+([A-Z][A-Za-z0-9&.'\-]+(?:\s+[A-Z][A-Za-z0-9&.'\-]+){0,4})\b/g,
-  /\b(?:stopped at|visited|left)\s+([A-Z][A-Za-z0-9&.'\-]+(?:\s+[A-Z][A-Za-z0-9&.'\-]+){0,4})\b/gi,
+  new RegExp(`\\bat\\s+(${ACCOUNT_WORD})\\b`, 'g'),
+  new RegExp(`\\b(?:stopped at|visited|left)\\s+(${ACCOUNT_WORD})\\b`, 'gi'),
 ];
 
-const SKIP_NAMES = new Set(['tony', 'rory', 'jake', 'dave', 'sarah', 'lisa', 'mike', 'friday', 'thursday', 'tuesday', 'wednesday']);
+const CONTACT_INTRO_RE = /\b(?:talked|spoke|spoken|chat(?:ted)?|met|caught)\s+(?:to|with)\s+/i;
+
+const SKIP_NAMES = new Set([
+  'tony', 'rory', 'jake', 'dave', 'sarah', 'lisa', 'mike', 'billy',
+  'friday', 'thursday', 'tuesday', 'wednesday', 'monday', 'saturday', 'sunday',
+]);
+
+function sanitizeAccountFragment(fragment) {
+  const trimmed = normalizeText(fragment).split(/[.!?;,]/)[0].trim();
+  return canonicalAccountLabel(trimmed);
+}
 
 function extractAccountNames(text) {
   const raw = normalizeText(text);
@@ -26,7 +40,7 @@ function extractAccountNames(text) {
     const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
     let m;
     while ((m = re.exec(raw)) !== null) {
-      const name = normalizeText(m[1]);
+      const name = sanitizeAccountFragment(m[1]);
       if (name.length < 4 || SKIP_NAMES.has(name.toLowerCase())) continue;
       const key = name.toLowerCase();
       if (seen.has(key)) continue;
@@ -36,6 +50,38 @@ function extractAccountNames(text) {
   }
   found.sort((a, b) => a.index - b.index);
   return found;
+}
+
+function accountsReferToSameEntity(a, b) {
+  if (!a || !b) return false;
+  return sanitizeAccountFragment(a).toLowerCase() === sanitizeAccountFragment(b).toLowerCase();
+}
+
+function mergeThreadInterpretations(threads) {
+  if (!threads?.length) return threads || [];
+  const merged = [];
+  for (const thread of threads) {
+    const accountKey = thread.accountName ? sanitizeAccountFragment(thread.accountName).toLowerCase() : null;
+    const prior = accountKey
+      ? merged.find(t => accountsReferToSameEntity(t.accountName, thread.accountName))
+      : null;
+    if (!prior) {
+      merged.push({ ...thread });
+      continue;
+    }
+    const listFields = [
+      'entities', 'events', 'claims', 'ingestionClaims', 'painPoints', 'objections',
+      'commitments', 'decisionMakerSignals', 'temporalReferences', 'questions',
+      'requestedActions', 'commentary', 'corrections', 'ambiguities', 'evidence',
+    ];
+    for (const field of listFields) {
+      prior[field] = [...(prior[field] || []), ...(thread[field] || [])];
+    }
+    if (!prior.text?.includes(thread.text)) {
+      prior.text = `${prior.text || ''} ${thread.text || ''}`.trim();
+    }
+  }
+  return merged;
 }
 
 function segmentIntoThreads(text) {
@@ -60,13 +106,23 @@ function segmentIntoThreads(text) {
     return [{ text: raw, accountHint: accounts[0]?.name || null }];
   }
 
+  const distinct = [];
+  for (const acct of accounts) {
+    const last = distinct[distinct.length - 1];
+    if (last && accountsReferToSameEntity(last.name, acct.name)) continue;
+    distinct.push(acct);
+  }
+  if (distinct.length <= 1) {
+    return [{ text: raw, accountHint: distinct[0]?.name || null }];
+  }
+
   const threads = [];
-  for (let i = 0; i < accounts.length; i += 1) {
-    const start = accounts[i].index;
-    const end = i + 1 < accounts.length ? accounts[i + 1].index : raw.length;
+  for (let i = 0; i < distinct.length; i += 1) {
+    const start = distinct[i].index;
+    const end = i + 1 < distinct.length ? distinct[i + 1].index : raw.length;
     const slice = raw.slice(start, end).trim();
     const contextual = i === 0 && start > 40 ? `${raw.slice(0, start).trim()} ${slice}`.trim() : slice;
-    threads.push({ text: contextual, accountHint: accounts[i].name });
+    threads.push({ text: contextual, accountHint: distinct[i].name });
   }
   return threads;
 }
@@ -74,4 +130,8 @@ function segmentIntoThreads(text) {
 module.exports = {
   segmentIntoThreads,
   extractAccountNames,
+  sanitizeAccountFragment,
+  mergeThreadInterpretations,
+  accountsReferToSameEntity,
+  CONTACT_INTRO_RE,
 };
