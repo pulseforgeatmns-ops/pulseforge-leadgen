@@ -10,6 +10,7 @@ const {
   SUBSTRAL_BRAND_VOICE,
   SUBSTRAL_MISSION_OBJECTIVE,
 } = require('./studioSubstralTenant');
+const { buildPaigeFirstTouchDoctrineContext } = require('./paigeStudioSubstralOutboundDoctrine');
 
 function buildPaigeStudioSubstralContext(clientConfig = {}, assessment = null, scoutIntelligence = null) {
   const evidence = assessment ? buildPaigeWebEvidenceContext(assessment) : null;
@@ -35,6 +36,7 @@ function buildPaigeStudioSubstralContext(clientConfig = {}, assessment = null, s
     brand_voice: clientConfig.brand_voice || SUBSTRAL_BRAND_VOICE,
     never_say: clientConfig.never_say || null,
     lead_with: clientConfig.lead_with || 'Evidence-first website assessment',
+    first_touch_outbound: buildPaigeFirstTouchDoctrineContext(),
     supported_web_evidence: evidence,
     scout_prospect_intelligence: scout?.company_name ? {
       why_they_fit: scout.why_they_fit,

@@ -40,6 +40,14 @@ const {
   validateAnchorCopyDoctrine,
   DOCTRINE_BLOCKER,
 } = require('../../../utils/anchorCopyDoctrine');
+const {
+  isStudioSubstralClient,
+  validateStudioSubstralFirstTouchDoctrine,
+  DOCTRINE_BLOCKER: SUBSTRAL_DOCTRINE_BLOCKER,
+} = require('../../../utils/paigeStudioSubstralOutboundDoctrine');
+const {
+  buildStudioSubstralFirstTouchVariant,
+} = require('../../../utils/studioSubstralFirstTouchEmail');
 
 function lookupApprovedCopy(approvedCopies, identity) {
   if (!approvedCopies) return null;
@@ -111,6 +119,7 @@ function buildPerProspectVariants(input = {}) {
   const crmByProspectId = input.crmByProspectId || null;
   const senderName = resolveAnchorSenderName(plan, mission);
   const useAnchorLifecycle = clientId === ANCHOR_CLIENT_ID;
+  const useStudioSubstralFirstTouch = isStudioSubstralClient(clientId);
 
   // SPEC-212: Use ALL ranked targets, not just [0]
   const candidates = max.rankedTargets || [];
@@ -124,6 +133,7 @@ function buildPerProspectVariants(input = {}) {
   }
 
   const variants = [];
+  const heldProspects = [];
 
   for (const candidate of candidates) {
     const identity = canonicalOutboundIdentity(candidate);
@@ -164,6 +174,32 @@ function buildPerProspectVariants(input = {}) {
       };
       usedPersonalization = lifecycle.usedPersonalization;
       scoutPersonalization = lifecycle.evidence || null;
+    } else if (useStudioSubstralFirstTouch) {
+      const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
+      const lifecycle = buildStudioSubstralFirstTouchVariant({
+        candidate: { ...candidate, name: companyName },
+        crmRecord,
+        plan,
+        mission,
+      });
+      if (lifecycle.held) {
+        heldProspects.push({
+          candidateId: String(candidateId),
+          companyId: identity.companyId || String(candidateId),
+          companyName,
+          holdReason: lifecycle.holdReason,
+          guardId: lifecycle.guardId || null,
+          detail: lifecycle.detail || null,
+        });
+        continue;
+      }
+      copy = {
+        subject: lifecycle.subject,
+        body: lifecycle.body,
+        cta: lifecycle.cta,
+      };
+      usedPersonalization = lifecycle.usedPersonalization;
+      scoutPersonalization = lifecycle.evidence || null;
     } else {
       copy = buildCustomerFacingVariantCopy({
         companyName,
@@ -196,6 +232,9 @@ function buildPerProspectVariants(input = {}) {
     });
   }
 
+  if (heldProspects.length) {
+    variants._heldProspects = heldProspects;
+  }
   return variants;
 }
 
@@ -233,6 +272,7 @@ function buildFallbackMissionLevelVariant(input = {}) {
 
 function buildBasePaigeVariantsPayload(input = {}) {
   const variants = buildPerProspectVariants(input);
+  const heldProspects = variants._heldProspects || [];
   const subjects = variants.map((v) => v.subject);
   const max = input.max || {};
   const scout = input.scout || {};
@@ -249,11 +289,17 @@ function buildBasePaigeVariantsPayload(input = {}) {
 
   return {
     variants,
+    heldProspects,
+    relationshipAccountReviewRequired: heldProspects.filter(
+      (row) => row.holdReason === 'relationship_account_review_required'
+    ),
     subjects,
     messaging: variants[0]?.body || null,
     cta: clientId === ANCHOR_CLIENT_ID
       ? (variants[0]?.cta || 'Want me to send over what we\'d need for a quote?')
-      : 'Reply to schedule a walkthrough',
+      : isStudioSubstralClient(clientId)
+        ? (variants[0]?.cta || 'Happy to send over a quick assessment if it\'d be useful.')
+        : 'Reply to schedule a walkthrough',
     hypotheses: [
       max.objectiveReason || 'Prioritized targets respond to timing-specific outreach.',
       usedPersonalization
@@ -426,6 +472,38 @@ async function runPaigeVariants(executionInput = {}, opts = {}) {
         blockers: [{
           code: DOCTRINE_BLOCKER,
           label: 'Anchor copy doctrine violation',
+          violations: doctrineViolations,
+        }],
+      });
+    }
+  }
+
+  if (isStudioSubstralClient(clientId)) {
+    const doctrineViolations = [];
+    for (const variant of payload.variants || []) {
+      const doctrine = validateStudioSubstralFirstTouchDoctrine({
+        subject: variant.subject,
+        body: variant.body,
+        cta: variant.cta,
+      });
+      if (!doctrine.ok) {
+        doctrineViolations.push({
+          candidateId: variant.candidateId || variant.companyId || variant.variantId || null,
+          violations: doctrine.violations,
+        });
+      }
+    }
+    if (doctrineViolations.length) {
+      return createExecutionResult({
+        specialist: SPECIALISTS.PAIGE,
+        transactionId,
+        status: EXECUTION_STATUSES.BLOCKED,
+        contributions: payload,
+        reason: 'Paige generated Studio Substral first-touch copy that violates SPEC-PAIGE-SUBSTRAL-001.',
+        requiredPrecondition: SUBSTRAL_DOCTRINE_BLOCKER,
+        blockers: [{
+          code: SUBSTRAL_DOCTRINE_BLOCKER,
+          label: 'Studio Substral first-touch doctrine violation',
           violations: doctrineViolations,
         }],
       });
