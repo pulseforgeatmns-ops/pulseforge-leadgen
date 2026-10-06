@@ -2781,7 +2781,7 @@ body.viewer-role .prospect-pipeline-card { cursor: pointer; }
   <div class="sidebar-foot">
     <div class="client-switcher">
       <label for="clientSelector">Client</label>
-      <select id="clientSelector"></select>
+      <select id="clientSelector" data-pf-tenant-select aria-label="Active business workspace"></select>
     </div>
   </div>
 </div>
@@ -4571,52 +4571,44 @@ document.addEventListener('pulseforge:shell-ready', (event) => {
   window.addEventListener('resize', () => { if (!isMobile()) collapse(); });
 })();
 
+async function reloadDashboardTenantScopedData(detail) {
+  const selectedId = Number(detail?.active_client_id);
+  if (Number.isFinite(selectedId)) _activeClientId = selectedId;
+  if (detail?.features) {
+    applyPipelineFeatures(detail.features, { source: 'tenant_switch' });
+  } else if (Number.isFinite(selectedId)) {
+    if (Object.prototype.hasOwnProperty.call(_clientFeatureMap, String(selectedId))) {
+      applyPipelineFeatures({
+        client_id: selectedId,
+        setter_pipeline_v2_enabled: _clientFeatureMap[String(selectedId)] === true,
+      }, { source: 'client_cache' });
+    } else {
+      setPipelineExperiencePending('Resolving Pipeline for selected client…');
+    }
+  }
+  _statsCacheTime = 0;
+  _activityCacheTime = 0;
+  await Promise.all([loadLiveData(), loadActivityFeed(), loadApprovals(), loadProspects(), loadActions(), loadCieSessions()]);
+  if (document.getElementById('analyticsArea')?.style.display !== 'none') loadAnalytics();
+  if (isPipelineTabActive()) loadPipeline();
+  loadAgentVisibility();
+}
+
 async function loadClientSelector() {
   const selector = document.getElementById('clientSelector');
-  if (!selector) return;
+  const coord = window.PulseforgeTenantCoordinator;
+  if (!selector || !coord) return;
   try {
     const res = await fetch('/api/clients', { credentials: 'include' });
     if (!res.ok) return;
     const data = await res.json();
-    _clientFeatureMap = Object.fromEntries(
-      (data.clients || []).map(c => [String(c.id), c.setter_pipeline_v2_enabled === true])
-    );
-    _activeClientId = Number(data.active_client_id) || null;
+    coord.hydrateFromClientsApi(data);
+    _clientFeatureMap = coord.getFeatureMap();
+    _activeClientId = coord.getActiveClientId();
     if (data.features) applyPipelineFeatures(data.features, { source: 'clients' });
-    selector.innerHTML = (data.clients || []).map(c =>
-      `<option value="${c.id}" ${Number(c.id) === Number(data.active_client_id) ? 'selected' : ''}>${_esc(c.name)}</option>`
-    ).join('');
-    selector.onchange = async () => {
-      const selectedId = Number(selector.value);
-      _activeClientId = selectedId;
-      // Apply cached tenant flag immediately so Pipeline never flashes the
-      // wrong experience while /api/clients/active + /features hydrate.
-      if (Object.prototype.hasOwnProperty.call(_clientFeatureMap, String(selectedId))) {
-        applyPipelineFeatures({
-          client_id: selectedId,
-          setter_pipeline_v2_enabled: _clientFeatureMap[String(selectedId)] === true,
-        }, { source: 'client_cache' });
-      } else {
-        setPipelineExperiencePending('Resolving Pipeline for selected client…');
-      }
-      const switchRes = await fetch('/api/clients/active', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: selector.value })
-      });
-      if (switchRes.ok) {
-        const switched = await switchRes.json();
-        if (switched.features) applyPipelineFeatures(switched.features, { source: 'clients_active' });
-      }
-      _statsCacheTime = 0;
-      _activityCacheTime = 0;
-      await Promise.all([loadLiveData(), loadActivityFeed(), loadApprovals(), loadProspects(), loadActions(), loadCieSessions()]);
-      if (document.getElementById('analyticsArea')?.style.display !== 'none') loadAnalytics();
-      if (isPipelineTabActive()) loadPipeline();
-      loadAgentVisibility();
-    };
-  } catch(e) {
+    coord.bindTenantSelect(selector);
+    coord.registerReloadHandler(reloadDashboardTenantScopedData);
+  } catch (e) {
     console.error('loadClientSelector:', e);
   }
 }
@@ -7740,20 +7732,16 @@ async function loadCieSessions() {
   }
 }
 
-loadClientSelector();
-loadLiveData();
-loadAgentHealth();
-loadActivityFeed();
-loadCieSessions();
-loadAgentSparklines();
-setInterval(loadLiveData, 60000);
-setInterval(loadAgentHealth, 30000);
-setInterval(loadActivityFeed, 30000);
-setInterval(loadCieSessions, 60000);
-setInterval(loadAgentSparklines, 300000);
-setInterval(() => {
-  if (isPipelineTabActive()) loadPipeline();
-}, 300000);
+function startDashboardRefreshIntervals() {
+  setInterval(loadLiveData, 60000);
+  setInterval(loadAgentHealth, 30000);
+  setInterval(loadActivityFeed, 30000);
+  setInterval(loadCieSessions, 60000);
+  setInterval(loadAgentSparklines, 300000);
+  setInterval(() => {
+    if (isPipelineTabActive()) loadPipeline();
+  }, 300000);
+}
 
 // Deep-link: /dashboard?tab=pipeline opens Pipeline after client features hydrate.
 (async function openPipelineDeepLink() {
@@ -8164,7 +8152,19 @@ updateAgentCounts();
 <script src="/shared/phone.js"></script>
 <script src="/shared/lifecycle.js"></script>
 <script src="/shared/prospect-workspace.js"></script>
+<script src="/shared/tenantCoordinator.js"></script>
 <script src="/shared/shell.js"></script>
+<script>
+document.addEventListener('pulseforge:shell-ready', async () => {
+  await loadClientSelector();
+  loadLiveData();
+  loadAgentHealth();
+  loadActivityFeed();
+  loadCieSessions();
+  loadAgentSparklines();
+  startDashboardRefreshIntervals();
+});
+</script>
 <script>
 // Phase A2 wiring: dial handoff for tel: links rendered by this page, and
 // canonical-lifecycle refresh so Pipeline reflects workspace writes.

@@ -34,7 +34,7 @@ async function ensureMaynardWebTenant(db = pool) {
       `INSERT INTO clients (
         name, slug, business_name, vertical, email, primary_contact,
         country, timezone, industry, service_area, verticals, target_clients,
-        scoring_profile, enabled_agents, active, notes
+        scoring_profile, enabled_agents, active, operator_switchable, notes
       ) VALUES (
         'Maynard Web',
         $1,
@@ -51,12 +51,14 @@ async function ensureMaynardWebTenant(db = pool) {
         'web_design',
         ARRAY['scout','max'],
         true,
+        false,
         'SPEC-WEB-001 — neutral working identity; branding replaceable without architecture changes. NO outbound until explicitly authorized.'
       )
       ON CONFLICT (slug) DO UPDATE SET
         scoring_profile = EXCLUDED.scoring_profile,
         enabled_agents = EXCLUDED.enabled_agents,
-        notes = EXCLUDED.notes
+        notes = EXCLUDED.notes,
+        operator_switchable = false
       RETURNING *`,
       [MAYNARD_WEB_SLUG]
     );

@@ -38,7 +38,23 @@ function filterClientsForUser(clients, user) {
   return (clients || []).filter(c => Number(c.id) === Number(bound));
 }
 
+/** Session active_client_id must reference an operator-switchable tenant when possible. */
+function reconcileOperatorActiveClient(session, clients) {
+  const list = Array.isArray(clients) ? clients : [];
+  if (!list.length) {
+    return normalizeClientId(session?.active_client_id || 1);
+  }
+  let activeId = normalizeClientId(session?.active_client_id || list[0].id);
+  const allowed = list.some((c) => Number(c.id) === Number(activeId));
+  if (!allowed) {
+    activeId = Number(list[0].id);
+    if (session) session.active_client_id = activeId;
+  }
+  return activeId;
+}
+
 module.exports = {
   assertAuthorizedClientSwitch,
   filterClientsForUser,
+  reconcileOperatorActiveClient,
 };
