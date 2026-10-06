@@ -6,6 +6,11 @@ const { hash, fail, clock, windowReason, missionScope, candidateReason } = requi
 const { resolveOperatorDelegatedMaximumDailyCapacity } = require('../packages/emmett-outbound/OperatorDelegatedCapacity');
 const { GovernedOutboundStore } = require('./governedOutboundStore');
 const { governedOutboundEnabledForTenant } = require('./governedOutboundTenant');
+const {
+  isPreProviderOutboundFailure,
+  providerBoundaryWasCrossed,
+  isRetryablePreProviderScheduleRejection,
+} = require('./governedOutboundProviderBoundary');
 
 async function validateGovernedSchedule(schedule, opts = {}) {
   const binding = schedule.authorizationSnapshot?.governed;
@@ -84,17 +89,43 @@ async function finishGovernedSchedule(schedule, result, opts = {}) {
   const binding = schedule.authorizationSnapshot?.governed;
   if (!binding) return;
   const pool = opts.pool || require('../db');
-  const store = new GovernedOutboundStore(pool, schedule.tenantId);
+  const store = opts.governedStore || new GovernedOutboundStore(pool, schedule.tenantId);
   const item = (await store.items(binding.envelopeId)).find(x => x.id === binding.itemId);
   if (!item) fail('governed_item_missing');
   const sent = ['sent', 'recovered_sent'].includes(result.result);
   const providerMessageId = result.message?.providerMessageId || result.message?.rfcMessageId || null;
+  const failure = result.error || { code: result.reason };
+  const providerCrossed = Boolean(providerMessageId)
+    || providerBoundaryWasCrossed(failure, opts.providerBoundary);
+  const retryablePreProvider = !providerCrossed && (
+    (result.result === 'skipped' && isRetryablePreProviderScheduleRejection(result.reason))
+    || (result.result === 'failed' && isPreProviderOutboundFailure(failure, opts.providerBoundary))
+  );
+  if (retryablePreProvider) {
+    await store.releaseUnsent(item, result.reason || failure.code || 'pre_provider_rejected', {
+      providerOutcome: 'PROVIDER_CONFIRMED_NOT_SENT',
+      canonicalPreProviderRejection: true,
+      missionId: schedule.missionId,
+    });
+    await store.event('durable_schedule_result', [schedule.id, result.result], {
+      programId: binding.programId, envelopeId: binding.envelopeId, itemId: binding.itemId,
+      missionId: schedule.missionId, scheduleId: schedule.id, outreachAssetId: schedule.outreachAssetId,
+      sendingIdentityId: schedule.sendingIdentityId, result: result.result,
+      reason: result.reason || failure.code || null,
+      providerBoundaryCrossed: false,
+      retryAllowed: true,
+      outboundMessageId: null, rfcMessageId: null, threadId: null, providerMessageId: null,
+    });
+    return;
+  }
   await store.finish(item, sent ? 'sent' : result.result === 'skipped' ? 'suppressed' : 'uncertain',
     sent ? null : result.reason || result.error?.code || 'scheduler_failed', providerMessageId);
   await store.event('durable_schedule_result', [schedule.id, result.result], {
     programId: binding.programId, envelopeId: binding.envelopeId, itemId: binding.itemId,
     missionId: schedule.missionId, scheduleId: schedule.id, outreachAssetId: schedule.outreachAssetId,
     sendingIdentityId: schedule.sendingIdentityId, result: result.result,
+    reason: result.reason || result.error?.code || null,
+    providerBoundaryCrossed: providerCrossed,
     outboundMessageId: result.message?.id || result.outboundMessageId || null,
     rfcMessageId: result.message?.rfcMessageId || null, threadId: result.message?.threadId || null, providerMessageId,
   });

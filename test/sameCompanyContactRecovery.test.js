@@ -52,6 +52,8 @@ function companyPool(existingEmail = 'blocked@pm.example') {
 }
 
 const clearStore = {
+  tenantId: '10',
+  clientId: 10,
   candidateOwnership: async () => null,
   suppression: async () => null,
 };
@@ -202,6 +204,7 @@ test('same-company recovery prefers website/owner contacts and records unverifie
 test('same-company recovery emits dnc and owned as distinct terminal reasons', async () => {
   const pool = companyPool();
   const dnc = await attemptSameCompanyAlternateRecovery({
+    tenantId: '10', clientId: 10,
     candidateOwnership: async () => null,
     suppression: async () => null,
   }, pool, {
@@ -218,6 +221,7 @@ test('same-company recovery emits dnc and owned as distinct terminal reasons', a
   assert.equal(dnc.reason, 'alternate_contact_dnc');
 
   const owned = await attemptSameCompanyAlternateRecovery({
+    tenantId: '10', clientId: 10,
     candidateOwnership: async () => 'ao_owned',
     suppression: async () => null,
   }, pool, {
