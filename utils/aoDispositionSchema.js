@@ -5,28 +5,24 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { ensureClientArchitecture } = require('./clientContext');
 const { ensureUsersTable } = require('../middleware/auth');
-const { ensureAoRosterSchema } = require('./aoRosterSchema');
-const { ensureAoDispositionSchema } = require('./aoDispositionSchema');
 
 const schemaInitPromises = new WeakMap();
 
-async function ensureAoProspectRoutingSchemaOnce(db) {
+async function ensureAoDispositionSchemaOnce(db) {
   if (db === pool) {
     await ensureClientArchitecture();
     await ensureUsersTable();
   }
   const migration = fs.readFileSync(
-    path.join(__dirname, '..', 'migrations', '2026-09-22-ao-prospect-routing.sql'),
+    path.join(__dirname, '..', 'migrations', '2026-10-05-ao-queue-dead-001.sql'),
     'utf8'
   );
   await db.query(migration);
-  await ensureAoRosterSchema(db);
-  await ensureAoDispositionSchema(db);
 }
 
-async function ensureAoProspectRoutingSchema(db = pool) {
+async function ensureAoDispositionSchema(db = pool) {
   if (!schemaInitPromises.has(db)) {
-    const promise = ensureAoProspectRoutingSchemaOnce(db).catch(err => {
+    const promise = ensureAoDispositionSchemaOnce(db).catch(err => {
       schemaInitPromises.delete(db);
       throw err;
     });
@@ -36,5 +32,5 @@ async function ensureAoProspectRoutingSchema(db = pool) {
 }
 
 module.exports = {
-  ensureAoProspectRoutingSchema,
+  ensureAoDispositionSchema,
 };

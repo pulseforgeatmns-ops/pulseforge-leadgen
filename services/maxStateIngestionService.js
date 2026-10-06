@@ -17,6 +17,13 @@ async function createStore(clientId, db = pool) {
 
 async function ingestOperationalEvidence(clientId, body = {}, { db = pool } = {}) {
   const store = await createStore(clientId, db);
+  const conversationId = body.conversation_id || body.conversationId || null;
+  let memoryRepository = null;
+  if (conversationId) {
+    const { PostgresConversationMemoryRepository } = require('../packages/max/understanding');
+    memoryRepository = new PostgresConversationMemoryRepository(db);
+    await memoryRepository.init();
+  }
   return ingestOperationalUpdate({
     clientId,
     sourceType: body.source_type || body.sourceType || 'OPERATOR_REPORTED',
@@ -27,6 +34,13 @@ async function ingestOperationalEvidence(clientId, body = {}, { db = pool } = {}
     claims: body.claims,
     artifact: body.artifact,
     operatorCorrection: Boolean(body.operator_correction || body.operatorCorrection),
+    conversationId,
+    actor: body.actor || {
+      userId: body.source_actor || body.sourceActor || null,
+      role: body.actor_role || body.actorRole || null,
+    },
+    contextAccounts: body.context_accounts || body.contextAccounts,
+    memoryRepository,
     store,
     now: body.now ? new Date(body.now) : new Date(),
   });
