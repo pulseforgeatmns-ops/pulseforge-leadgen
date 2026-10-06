@@ -92,6 +92,7 @@ td { padding:0.75rem 1rem; border-bottom:1px solid rgba(255,255,255,0.04); color
 <div class="top">
   <div><div class="title">USER MANAGEMENT</div><div class="sub">Admin only · Pulseforge Lead Engine</div></div>
   <a href="/dashboard">Back to dashboard</a>
+  <a href="/admin/ao-impersonation" style="margin-left:12px">Act as AO</a>
 </div>
 <div class="msg" id="msg"></div>
 <div class="note">Use Client for external tenant access. Assign a tenant and a temporary password — the client must choose a new password on first login. Viewer is internal/admin-shared and is not tenant-locked.</div>
