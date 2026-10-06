@@ -274,6 +274,7 @@ router.post('/api/crm/accounts/:prospectId/flag-for-jake', requireAoWrite, refre
   const auth = getAuthenticatedActor(req);
   const provenance = impersonationProvenance(req);
   const assignee = await require('../utils/aoFlagAssignee').resolveFlagAssigneeUserId(clientId);
+  // While impersonating, Jake is the flag assignee — suppress self-notification but keep AO-origin flag + audit.
   const skipNotification = Boolean(
     provenance
     && assignee
