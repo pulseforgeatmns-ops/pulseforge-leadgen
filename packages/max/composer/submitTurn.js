@@ -20,6 +20,17 @@ const { bumpVoice, noteVoiceDimension } = require('../voice/telemetry');
 const { persistVoiceRecording, transcribeVoiceRecording } = require('../voice/voiceIngestion');
 const { createVoiceTranscriptionAdapter } = require('../voice/transcriptionAdapter');
 const { formatUnderstandingPreview } = require('../understanding/preview');
+const {
+  detectAttachmentTaskIntent,
+  enrichSituationModelWithAttachmentIntent,
+  isSpreadsheetOperationalIntent,
+  readySpreadsheetAttachments,
+} = require('./attachmentIntent');
+const {
+  runSpreadsheetAttachmentCommand,
+  structuredDataFromAttachment,
+  structuredDataFromRows,
+} = require('./spreadsheetTurn');
 
 const appliedEnvelopeKeys = new Set();
 
@@ -307,9 +318,33 @@ async function submitComposerTurn({
   }
 
   const instruction = envelope.text && String(envelope.text).trim() ? String(envelope.text).trim() : null;
-  const requiresBatchReview = spreadsheetRows.length > 1;
-  const requiresVoiceReview = hasVoice && confirm !== true;
-  const shouldCommit = confirm === true || (!requiresBatchReview && !requiresVoiceReview && confirm !== false);
+  const attachmentIntent = detectAttachmentTaskIntent({
+    text: instruction,
+    attachments: envelope.attachments,
+    memory,
+    confirm,
+  });
+  if (attachmentIntent.clarification) {
+    bump(telemetry, 'max_attachment_intent_detected_count');
+    noteDimension(telemetry, 'intent_source', attachmentIntent.intentSource || 'multi_spreadsheet_ambiguous');
+    return {
+      ok: true,
+      preview_only: true,
+      clarification_required: attachmentIntent.clarification,
+      attachment_task_intent: attachmentIntent.intent,
+      telemetry,
+      envelope,
+      conversation_memory: memory,
+    };
+  }
+
+  const spreadsheetOperational = isSpreadsheetOperationalIntent(attachmentIntent.intent);
+  const requiresBatchReview = spreadsheetRows.length > 1
+    || (spreadsheetOperational && attachmentIntent.previewOnly);
+  const requiresVoiceReview = hasVoice && confirm !== true && !spreadsheetOperational;
+  const shouldCommit = attachmentIntent.commit
+    || (confirm === true && !attachmentIntent.previewOnly)
+    || (!requiresBatchReview && !requiresVoiceReview && confirm !== false && !spreadsheetOperational);
 
   if (requiresVoiceReview && !spreadsheetRows.length) {
     const review = await buildVoiceReviewPreview({ envelope, memory, store, now, telemetry });
@@ -337,39 +372,97 @@ async function submitComposerTurn({
     };
   }
 
-  if (requiresBatchReview && confirm !== true) {
-    const preview = buildSpreadsheetPreview({
-      rows: spreadsheetRows,
-      instruction,
+  if (spreadsheetOperational || (requiresBatchReview && confirm !== true && spreadsheetRows.length)) {
+    let structuredData = null;
+    let attachmentId = attachmentIntent.targetAttachmentId || null;
+    let priorFileHash = null;
+    if (attachmentIntent.pendingWorkbook?.structuredData) {
+      structuredData = attachmentIntent.pendingWorkbook.structuredData;
+      attachmentId = attachmentIntent.pendingWorkbook.attachmentId || attachmentId;
+      priorFileHash = attachmentIntent.pendingWorkbook.fileHash || null;
+    } else if (attachmentId) {
+      const att = envelope.attachments.find(a => a.id === attachmentId)
+        || readySpreadsheetAttachments(envelope.attachments)[0];
+      structuredData = structuredDataFromAttachment(att);
+      attachmentId = att?.id || attachmentId;
+    } else {
+      structuredData = structuredDataFromRows(spreadsheetRows);
+    }
+
+    const spreadsheetResult = await runSpreadsheetAttachmentCommand({
+      structuredData,
       store,
+      clientId,
+      instruction,
       memory,
       conversationId: envelope.conversationId,
-      filename: spreadsheetRows[0]?.filename,
-      sheetName: spreadsheetRows[0]?.sheet,
+      envelopeId: envelope.id,
+      attachmentId,
+      actor: envelope.actor,
+      attachmentIntent,
+      telemetry,
+      confirmCommit: confirm === true,
+      priorFileHash,
     });
-    bump(telemetry, 'max_spreadsheet_upload_count');
-    bump(telemetry, 'max_spreadsheet_row_interpreted_count', spreadsheetRows.length);
-    bump(telemetry, 'max_spreadsheet_row_blocked_count', preview.needs_clarification);
-    if (preview.reconciliation_plan?.summary?.conflicts) {
-      bump(telemetry, 'max_spreadsheet_conflict_count', preview.reconciliation_plan.summary.conflicts);
+
+    if (spreadsheetResult.error) {
+      bump(telemetry, 'max_attachment_command_without_plan_count');
+      return {
+        ok: false,
+        error: spreadsheetResult.error,
+        message: spreadsheetResult.message,
+        telemetry,
+        envelope,
+      };
     }
-    if (preview.reconciliation_plan?.summary?.ambiguous) {
-      bump(telemetry, 'max_spreadsheet_ambiguity_count', preview.reconciliation_plan.summary.ambiguous);
+
+    if (!spreadsheetResult.reconciliation_plan) {
+      bump(telemetry, 'max_attachment_command_without_plan_count');
+    }
+
+    bump(telemetry, 'max_spreadsheet_upload_count');
+    bump(telemetry, 'max_spreadsheet_row_interpreted_count', spreadsheetResult.reconciliation_plan?.summary?.totalRows || spreadsheetRows.length);
+    if (spreadsheetResult.batch_preview?.needs_clarification) {
+      bump(telemetry, 'max_spreadsheet_row_blocked_count', spreadsheetResult.batch_preview.needs_clarification);
     }
 
     const combinedText = augmentTextWithExtractions(envelope, envelope.attachments);
     let situationModel = null;
-    let understandingPreview = null;
-    if (combinedText) {
+    if (combinedText && !spreadsheetOperational) {
       const interpreted = interpretConversationalInput({
         text: combinedText,
         conversationId: envelope.conversationId,
         memory,
         actor: envelope.actor,
         now,
+        attachmentTask: {
+          requested_action: 'reconcile_attached_spreadsheet',
+          intent: attachmentIntent.intent,
+          target_attachment_id: attachmentIntent.targetAttachmentId || null,
+          preview_only: Boolean(attachmentIntent.previewOnly),
+        },
       });
-      situationModel = interpreted.situationModel;
-      understandingPreview = interpreted.preview;
+      situationModel = enrichSituationModelWithAttachmentIntent(interpreted.situationModel, attachmentIntent);
+      memory.recordTurn({
+        inputId: envelope.id,
+        text: combinedText,
+        situationModel,
+      });
+    } else if (combinedText) {
+      const interpreted = interpretConversationalInput({
+        text: combinedText,
+        conversationId: envelope.conversationId,
+        memory,
+        actor: envelope.actor,
+        now,
+        attachmentTask: {
+          requested_action: 'reconcile_attached_spreadsheet',
+          intent: attachmentIntent.intent,
+          target_attachment_id: attachmentIntent.targetAttachmentId || null,
+          preview_only: Boolean(attachmentIntent.previewOnly),
+        },
+      });
+      situationModel = enrichSituationModelWithAttachmentIntent(interpreted.situationModel, attachmentIntent);
       memory.recordTurn({
         inputId: envelope.id,
         text: combinedText,
@@ -377,13 +470,39 @@ async function submitComposerTurn({
       });
     }
 
+    if (spreadsheetResult.preview_only) {
+      return {
+        ok: true,
+        preview_only: true,
+        review_required: true,
+        batch_preview: spreadsheetResult.batch_preview,
+        reconciliation_plan: spreadsheetResult.reconciliation_plan,
+        operational_response: spreadsheetResult.operational_response,
+        understanding_preview: spreadsheetResult.operational_response,
+        attachment_task_intent: spreadsheetResult.attachment_task_intent,
+        commit: false,
+        situation_model: situationModel,
+        conversation_memory: memory,
+        extraction_failures: extractionFailures.map(a => ({
+          id: a.id,
+          filename: a.filename,
+          evidence: a.extractionEvidence,
+        })),
+        telemetry,
+        envelope,
+      };
+    }
+
+    appliedEnvelopeKeys.add(envelopeKey(clientId, envelope.id));
     return {
       ok: true,
-      preview_only: true,
-      review_required: true,
-      batch_preview: preview,
-      understanding_preview: understandingPreview,
-      situation_model: situationModel,
+      committed: true,
+      results: spreadsheetResult.results,
+      reconciliation_plan: spreadsheetResult.reconciliation_plan,
+      operational_response: spreadsheetResult.operational_response,
+      understanding_preview: spreadsheetResult.operational_response,
+      attachment_task_intent: spreadsheetResult.attachment_task_intent,
+      commit: true,
       conversation_memory: memory,
       extraction_failures: extractionFailures.map(a => ({
         id: a.id,
