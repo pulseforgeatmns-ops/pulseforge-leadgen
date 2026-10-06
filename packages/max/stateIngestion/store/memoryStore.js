@@ -97,6 +97,23 @@ class MemoryStateStore {
       return { committed: true, mutation, created: { company } };
     }
 
+    if (mutation.entity_type === 'contact' && mutation.field_name === 'create') {
+      const contact = {
+        id: uuid(),
+        prospect_id: mutation.entity_id,
+        client_id: this.clientId,
+        name: mutation.intended_value.name,
+        first_name: mutation.intended_value.name?.split(' ')[0] || null,
+        last_name: mutation.intended_value.name?.split(' ').slice(1).join(' ') || null,
+        email: mutation.intended_value.email || null,
+        phone: mutation.intended_value.phone || null,
+        job_title: mutation.intended_value.title || null,
+      };
+      this.contacts.push(contact);
+      mutation.commit_status = 'committed';
+      return { committed: true, mutation, created: { contact } };
+    }
+
     if (mutation.entity_type === 'prospect' && mutation.field_name === 'create') {
       const company = this.companies.find(c => c.name === mutation.intended_value.company_name)
         || { id: uuid(), client_id: this.clientId, name: mutation.intended_value.company_name };
@@ -169,12 +186,31 @@ class MemoryStateStore {
       case 'activity_append':
         prospect.activities = [...(prospect.activities || []), mutation.intended_value];
         break;
+      case 'email_add':
+        if (!prospect.email) prospect.email = mutation.intended_value;
+        break;
+      case 'phone_add':
+        if (!prospect.phone) prospect.phone = mutation.intended_value;
+        break;
+      case 'disposition_status':
+        prospect.disposition_status = mutation.intended_value;
+        break;
+      case 'sales_priority':
+        prospect.sales_priority = mutation.intended_value;
+        break;
+      case 'pain_point_append':
+        prospect.pain_points = [...(prospect.pain_points || []), mutation.intended_value];
+        break;
+      case 'decision_maker_correction':
+        prospect.decision_maker_signals = [...(prospect.decision_maker_signals || []), mutation.intended_value];
+        break;
       case 'operator_correction':
         Object.assign(prospect, mutation.intended_value || {});
         break;
       default:
         break;
     }
+
     mutation.commit_status = 'committed';
     return { committed: true, mutation, prospect };
   }

@@ -33,8 +33,15 @@ function synthesizeRowUnderstandingText({
   }
   if (rowValues.ao) parts.push(`AO ${normalizeText(rowValues.ao)}.`);
 
+  if (rowValues.expects_inbound_call === true || rowValues.next_expected_event === 'inbound_call') {
+    parts.push('Contact expects to call this week.');
+  }
+  if (rowValues.is_new === true || rowValues.new_prospect === true) {
+    parts.push('This is a newly reported prospect account.');
+  }
+
   for (const [key, value] of Object.entries(rowValues)) {
-    if (['company', 'account', 'account_name', 'contact', 'contact_name', 'person', 'notes', 'next_step', 'status', 'ao'].includes(key)) {
+    if (['company', 'account', 'account_name', 'contact', 'contact_name', 'person', 'notes', 'next_step', 'status', 'ao', 'expects_inbound_call', 'is_new', 'new_prospect', 'next_expected_event'].includes(key)) {
       continue;
     }
     if (value != null && String(value).trim()) {

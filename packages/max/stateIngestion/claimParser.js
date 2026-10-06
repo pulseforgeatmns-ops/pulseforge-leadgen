@@ -170,7 +170,9 @@ function parseNaturalLanguageUpdate(text) {
 function parseSpreadsheetRow(row = {}, { sheet = null, rowNumber = null } = {}) {
   const claims = [];
   const sourceRecord = { sheet, row: rowNumber, record_id: row.record_id || row.id || null };
-  const accountName = normalizeText(row.account || row.company || row.account_name);
+  const accountName = normalizeText(
+    row.company || row.account || row.account_name || row.business || row.organization || row.prospect
+  );
   if (accountName) {
     claims.push({
       claim_type: CLAIM_TYPES.ACCOUNT,
@@ -200,22 +202,45 @@ function parseSpreadsheetRow(row = {}, { sheet = null, rowNumber = null } = {}) 
       source_record: sourceRecord,
     });
   }
-  if (row.contact_name) {
+  const contactName = normalizeText(
+    row.contact_name || row.contact || row.person || row.decision_maker || row.poc
+  );
+  if (contactName) {
     claims.push({
       claim_type: CLAIM_TYPES.CONTACT,
       payload: {
-        name: normalizeText(row.contact_name),
-        title: row.contact_title || null,
-        phone: row.phone || null,
-        email: row.email || null,
+        name: contactName,
+        title: row.contact_title || row.title || row.role || null,
+        phone: row.phone || row.mobile || row.cell || null,
+        email: row.email || row.e_mail || null,
       },
       source_record: sourceRecord,
     });
   }
-  if (row.notes) {
+  if (row.next_step || row.next_action || row.follow_up || row.action) {
+    const step = normalizeText(row.next_step || row.next_action || row.follow_up || row.action);
+    claims.push({
+      claim_type: CLAIM_TYPES.NEXT_ACTION,
+      payload: { action: 'follow_up', detail: step },
+      source_record: sourceRecord,
+    });
+    claims.push({
+      claim_type: CLAIM_TYPES.DUE_WINDOW,
+      payload: { due: step },
+      source_record: sourceRecord,
+    });
+  }
+  if (row.notes || row.update || row.comments) {
     claims.push({
       claim_type: CLAIM_TYPES.EVENT,
-      payload: { kind: 'note', notes: normalizeText(row.notes) },
+      payload: { kind: 'note', notes: normalizeText(row.notes || row.update || row.comments) },
+      source_record: sourceRecord,
+    });
+  }
+  if (row.status || row.stage) {
+    claims.push({
+      claim_type: CLAIM_TYPES.SIGNAL,
+      payload: { signal: 'spreadsheet_status', label: normalizeText(row.status || row.stage) },
       source_record: sourceRecord,
     });
   }

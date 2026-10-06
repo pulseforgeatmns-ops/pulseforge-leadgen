@@ -1,8 +1,8 @@
 'use strict';
 
 const COLUMN_ALIASES = {
-  company: ['company', 'account', 'account name', 'account_name', 'business', 'business name', 'organization'],
-  contact: ['contact', 'person', 'contact name', 'contact_name', 'name'],
+  company: ['company', 'account', 'account name', 'account_name', 'business', 'business name', 'organization', 'prospect'],
+  contact: ['contact', 'person', 'contact name', 'contact_name', 'name', 'decision maker', 'poc'],
   notes: ['notes', 'note', 'comment', 'comments', 'update', 'updates'],
   status: ['status', 'stage', 'pipeline status'],
   ao: ['ao', 'owner', 'assigned ao', 'assigned_ao', 'rep'],

@@ -23,8 +23,12 @@ function claimFingerprint({ ingestionId, claimType, payload, sourceRecord = null
 }
 
 function appliedClaimFingerprint({ sourceArtifact, sourceRecord, targetEntityType, targetEntityId, claimType, normalizedValue }) {
+  const sourceKey = sourceRecord?.file_hash
+    || sourceRecord?.semantic_hash
+    || sourceArtifact
+    || '';
   return stableHash([
-    sourceArtifact || '',
+    sourceKey,
     sourceRecord?.sheet || '',
     sourceRecord?.row ?? '',
     sourceRecord?.record_id || '',
