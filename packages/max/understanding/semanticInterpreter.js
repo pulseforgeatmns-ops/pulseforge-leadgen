@@ -121,6 +121,15 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     if (!entities.find(e => e.kind === ENTITY_KIND.ACCOUNT)) entities.push(account);
   }
 
+  let clarificationContinuation = null;
+  if (!account && memory?.resolveClarificationAnswer) {
+    clarificationContinuation = memory.resolveClarificationAnswer(raw);
+    if (clarificationContinuation?.account) {
+      account = entityAccount(clarificationContinuation.account, threadId);
+      if (!entities.find(e => e.kind === ENTITY_KIND.ACCOUNT)) entities.push(account);
+    }
+  }
+
   const aoMatch = raw.match(/\b(Tony|Rory|Jake)\b/i);
   if (aoMatch) {
     entities.push({
@@ -379,8 +388,12 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     }
   }
 
-  if (/call me|he'?d call|she'?d call|should call|expects to call|supposed to call|come back|call (?:me )?(?:on )?|\bsaid\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(lower)) {
-    const windowPhrase = temporalRefs.find(t => !t.superseded)?.phrase
+  const deferredCallback = clarificationContinuation?.deferred?.intent === 'callback'
+    || /call me|he'?d call|she'?d call|should call|expects to call|supposed to call|come back|call (?:me )?(?:on )?|\bsaid\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(lower);
+  if (deferredCallback) {
+    const deferredPhrase = clarificationContinuation?.deferred?.temporalPhrase;
+    const windowPhrase = deferredPhrase
+      || temporalRefs.find(t => !t.superseded)?.phrase
       || lower.match(/this week|friday|thursday|wednesday morning|next week|monday|tuesday|wednesday|saturday|sunday/)?.[0]
       || 'unspecified';
     const resolved = normalizeTemporalPhrase(windowPhrase, now);
@@ -451,6 +464,19 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
 
   if (/that sounds promising|really nice|okay so/i.test(lower)) {
     commentary.push({ text: raw.match(/^[^.!?]+[.!?]/)?.[0] || raw.slice(0, 80) });
+  }
+
+  if (memory?.durableLoadFailed && /\b(he|she|they)\b/i.test(lower) && !entities.some(e => e.kind === ENTITY_KIND.CONTACT)) {
+    const pronoun = raw.match(/\b(he|she|they)\b/i)?.[1] || 'he';
+    const resolution = resolvePronoun({
+      pronoun,
+      memory,
+      threadContacts: entities.filter(e => e.kind === ENTITY_KIND.CONTACT),
+      accountName: account?.name || null,
+    });
+    if (resolution.ambiguous && resolution.ambiguity) {
+      ambiguities.push(resolution.ambiguity);
+    }
   }
 
   const pronounOnly = /^(?:he|she|they)\b/i.test(raw.trim()) || /^actually,?\s+(?:he|she)\b/i.test(raw.trim());

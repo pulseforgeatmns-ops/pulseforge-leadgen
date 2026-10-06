@@ -7,6 +7,20 @@ function resolvePronoun({ pronoun, memory, threadContacts = [], accountName = nu
   const genderHint = /\bhe\b|\bhim\b|\bhis\b/.test(p) ? 'male' : /\bshe\b|\bher\b/.test(p) ? 'female' : null;
 
   const inThread = threadContacts.filter(c => c.kind === ENTITY_KIND.CONTACT || c.kind === 'contact');
+  if (memory?.durableLoadFailed && genderHint && inThread.length === 0) {
+    return {
+      entity: null,
+      ambiguous: true,
+      ambiguity: {
+        kind: AMBIGUITY_KIND.PRONOUN,
+        pronoun,
+        candidates: [],
+        clarification: 'Prior conversational context is unavailable — who did you mean?',
+        staleContext: true,
+        memoryUnavailable: true,
+      },
+    };
+  }
   if (inThread.length === 1) {
     return { entity: inThread[0], ambiguous: false };
   }

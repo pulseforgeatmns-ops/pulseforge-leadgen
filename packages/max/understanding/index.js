@@ -8,10 +8,23 @@ const { ConversationMemory } = require('./conversationMemory');
 const { buildUnderstandingDiagnostics } = require('./diagnostics');
 const { recordUnderstandingTelemetry, mergeUnderstandingTelemetry } = require('./telemetry');
 const { deriveRecommendedNextActions } = require('./recommendations');
+const { interpretWithDurableConversationContext, loadConversationMemory } = require('./durableConversationContext');
+const {
+  emptyConversationMemoryTelemetry,
+  mergeConversationMemoryTelemetry,
+} = require('./conversationMemoryTelemetry');
+const {
+  MemoryConversationMemoryRepository,
+  PostgresConversationMemoryRepository,
+} = require('./conversationMemoryRepository');
+const { persistConversationMemoryTurn, buildMemoryRecordsFromTurn } = require('./conversationMemoryPersistence');
+const { SEMANTIC_TYPE } = require('./conversationMemoryTypes');
 
 module.exports = {
   ...types,
   interpretConversationalInput,
+  interpretWithDurableConversationContext,
+  loadConversationMemory,
   isTrustedStructuredInput,
   conversationalText,
   validateSituationModel,
@@ -21,4 +34,11 @@ module.exports = {
   recordUnderstandingTelemetry,
   mergeUnderstandingTelemetry,
   deriveRecommendedNextActions,
+  emptyConversationMemoryTelemetry,
+  mergeConversationMemoryTelemetry,
+  MemoryConversationMemoryRepository,
+  PostgresConversationMemoryRepository,
+  persistConversationMemoryTurn,
+  buildMemoryRecordsFromTurn,
+  SEMANTIC_TYPE,
 };
