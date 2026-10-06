@@ -7,8 +7,13 @@
  */
 
 const { asText } = require('../../max/scoutAcquisition/Types');
+const { founderLedSmallBusinessSearchTerms } = require('../../../utils/canonicalBusinessTaxonomy');
 
 const SEGMENT_CONCEPTS = Object.freeze({
+  small_business_owners: Object.freeze(founderLedSmallBusinessSearchTerms()),
+  small_business_owner: Object.freeze(founderLedSmallBusinessSearchTerms()),
+  founder_led_smb: Object.freeze(founderLedSmallBusinessSearchTerms()),
+  founder_led_small_business: Object.freeze(founderLedSmallBusinessSearchTerms()),
   short_term_rental: Object.freeze([
     'STR',
     'Vacation Rental',

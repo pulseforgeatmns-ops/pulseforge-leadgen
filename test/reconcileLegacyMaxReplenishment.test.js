@@ -321,6 +321,7 @@ test('malformed legacy held row does not block fresh canonical rediscovery', asy
       scope: { segment: 'short_term_rental' },
       serviceAreas: ADMISSION_CONTEXT.service_area,
       clientId: 10,
+      authorizedTenantId: '10',
     },
   });
 
@@ -378,6 +379,7 @@ test('canonical existing row still blocks duplicate admission', async () => {
       scope: { segment: 'short_term_rental' },
       serviceAreas: ADMISSION_CONTEXT.service_area,
       clientId: 10,
+      authorizedTenantId: '10',
     },
   });
 

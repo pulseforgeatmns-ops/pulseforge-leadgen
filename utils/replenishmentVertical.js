@@ -6,12 +6,17 @@ const {
   isLocationInMissionGeography,
   resolveMissionAllowedCities,
 } = require('./missionGeography');
+const {
+  FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  isSmallBusinessOwnerSegment,
+} = require('./canonicalBusinessTaxonomy');
 
 const ENRICHABLE_SCOUT_VERTICALS = Object.freeze([
   'property_manager',
   'str_manager',
   'commercial_office',
   'realtor',
+  ...FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
 ]);
 
 const STR_EVIDENCE = [
@@ -59,6 +64,19 @@ const COMMERCIAL_OFFICE_EVIDENCE = [
   /\boffice building management\b/i,
 ];
 
+const FOUNDER_LED_VERTICAL_EVIDENCE = Object.freeze({
+  cleaning: [/\bcleaning (?:company|service|business)\b/i, /\bjanitorial (?:company|service)\b/i],
+  landscaping: [/\blandscap(?:e|ing|er)\b/i, /\blawn care\b/i, /\bgrounds maintenance\b/i],
+  painting: [/\bpainting (?:company|contractor|service)\b/i, /\bhouse painter\b/i],
+  hvac: [/\bhvac\b/i, /\bheating and cooling\b/i, /\bair conditioning contractor\b/i],
+  electrician: [/\belectrical contractor\b/i, /\belectrician\b/i],
+  home_services: [/\bhandyman\b/i, /\bhome repair\b/i, /\bhome services?\b/i],
+  restaurant: [/\brestaurant\b/i, /\bfood service\b/i, /\bcatering\b/i],
+  salon: [/\bhair salon\b/i, /\bbeauty salon\b/i, /\bbarber shop\b/i, /\bday spa\b/i],
+  fitness: [/\bfitness (?:studio|center)\b/i, /\bindependent gym\b/i, /\bpersonal training\b/i],
+  auto: [/\bauto(?:motive)? repair\b/i, /\bauto service\b/i, /\bmechanic shop\b/i],
+});
+
 const STR_PLACE_TYPES = new Set(['lodging', 'extended stay', 'vacation rental']);
 const PM_PLACE_TYPES = new Set(['real estate agency']);
 
@@ -86,6 +104,10 @@ const MISSION_VERTICALS = Object.freeze({
   commercial_office: ['commercial_office'],
   realtor: ['realtor'],
   real_estate: ['realtor'],
+  small_business_owner: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  small_business_owners: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  founder_led_smb: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
+  founder_led_small_business: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
 });
 
 function asText(value) {
@@ -194,6 +216,9 @@ function resolveReplenishmentVertical(candidate = {}, context = {}) {
   }
   if (hasEvidence(text, COMMERCIAL_OFFICE_EVIDENCE)) return 'commercial_office';
   if (realtySignal || /\b(?:real estate (?:agency|brokerage)|realtor)\b/i.test(text)) return 'realtor';
+  for (const [vertical, patterns] of Object.entries(FOUNDER_LED_VERTICAL_EVIDENCE)) {
+    if (hasEvidence(text, patterns)) return vertical;
+  }
   return null;
 }
 
@@ -206,6 +231,13 @@ function missionCompatibleVerticals(context = {}) {
   );
   if (!missionSegment) return ENRICHABLE_SCOUT_VERTICALS.filter(vertical => vertical !== 'realtor');
   return MISSION_VERTICALS[missionSegment] || ENRICHABLE_SCOUT_VERTICALS.filter(vertical => vertical !== 'realtor');
+}
+
+function isFounderLedSmallBusinessMission(context = {}) {
+  const segments = Array.isArray(context.missionSegments) && context.missionSegments.length
+    ? context.missionSegments
+    : [context.missionSegment || context.segment || context.mission?.segment];
+  return segments.some(isSmallBusinessOwnerSegment);
 }
 
 function isMissionCompatible(vertical, context = {}) {
@@ -288,12 +320,12 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
   const admissionContext = { ...context, ...provenance };
   const text = classificationHaystack(candidate, admissionContext);
 
+  const vertical = resolveReplenishmentVertical(candidate, admissionContext);
   const contradictory = detectContradictoryBusinessType(text);
-  if (contradictory) {
+  if (contradictory && !(isFounderLedSmallBusinessMission(context) && vertical
+    && isMissionCompatible(vertical, context))) {
     return { admitted: false, reason: 'contradictory_business_type', detail: contradictory };
   }
-
-  const vertical = resolveReplenishmentVertical(candidate, admissionContext);
   if (!vertical) {
     return { admitted: false, reason: 'unclassifiable_vertical' };
   }
@@ -396,9 +428,10 @@ module.exports = {
   ENRICHABLE_SCOUT_VERTICALS,
   resolveReplenishmentVertical,
   evaluateReplenishmentAdmission,
+  missionCompatibleVerticals,
+  isFounderLedSmallBusinessMission,
   buildDiscoveryProvenance,
   formatProvenanceNotes,
-  missionCompatibleVerticals,
   createReplenishmentAdmissionCounters,
   recordReplenishmentRejection,
   isCanonicalEnrichableVertical,

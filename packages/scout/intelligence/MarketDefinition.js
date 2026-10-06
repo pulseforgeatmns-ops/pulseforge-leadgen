@@ -13,6 +13,10 @@ const {
   inferTargetSegmentFromObjective,
   segmentToSearchKey,
 } = require('../../acquisition-mission/MissionNaming');
+const {
+  founderLedSmallBusinessSearchTerms,
+  founderLedSmallBusinessCustomerTypes,
+} = require('../../../utils/canonicalBusinessTaxonomy');
 
 /** ADR-093 / SPEC-178 — resolution sources in precedence order. */
 const SEGMENT_RESOLUTION_SOURCES = Object.freeze([
@@ -41,6 +45,17 @@ const SEGMENT_RESOLUTION_SOURCES = Object.freeze([
  */
 
 const MARKET_SEMANTIC_MODELS = Object.freeze({
+  small_business_owners: Object.freeze({
+    market: 'Founder-Led Small Business Operations',
+    customerTypes: Object.freeze(founderLedSmallBusinessCustomerTypes()),
+    decisionMakers: Object.freeze(['Founder', 'Owner', 'Co-owner']),
+    businessModels: Object.freeze(['Founder-led', 'Owner-operated', 'Independent business']),
+    terminology: Object.freeze(founderLedSmallBusinessSearchTerms()),
+    adjacentMarkets: Object.freeze([]),
+    exclusions: Object.freeze(['National chains', 'Public companies', 'Franchisor corporate offices']),
+    buyingSignals: Object.freeze(['Founder identified', 'Owner-operated', 'Team growth', 'Operational complexity']),
+    expectedEvidence: Object.freeze(['website', 'contacts', 'business_fit', 'founder_identity']),
+  }),
   short_term_rental: Object.freeze({
     market: 'Short-Term Rental Operations',
     customerTypes: Object.freeze([
@@ -172,6 +187,9 @@ function inferSegmentKeyFromText(text) {
 
 function normalizeKnownSegmentKey(value) {
   const key = normalizeSegmentKey(value);
+  if (['small_business_owner', 'founder_led_smb', 'founder_led_small_business'].includes(key)) {
+    return 'small_business_owners';
+  }
   if (key && MARKET_SEMANTIC_MODELS[key]) return key;
   const inferred = inferSegmentKeyFromText(value);
   if (inferred && MARKET_SEMANTIC_MODELS[inferred]) return inferred;

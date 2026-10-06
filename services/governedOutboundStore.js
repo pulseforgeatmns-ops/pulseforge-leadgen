@@ -277,9 +277,25 @@ class GovernedOutboundStore {
     const db = await this.pool.connect();
     try {
       await db.query('BEGIN');
+      const allowTerminalPreProviderReconciliation = extras.reconciled === true
+        && extras.providerOutcome === 'PROVIDER_CONFIRMED_NOT_SENT';
+      if (extras.canonicalPreProviderRejection === true && extras.missionId) {
+        await db.query(`UPDATE acquisition_mission_outbound_executions
+          SET status='reconciled_not_sent',
+              provider_error_code=COALESCE(provider_error_code,$5),
+              provider_error_message=COALESCE(provider_error_message,'Provider boundary not crossed; eligibility released.'),
+              updated_at=now()
+          WHERE tenant_id=$1 AND mission_id=$2
+            AND status IN ('attempted','failed')
+            AND provider_message_id IS NULL AND sent_at IS NULL
+            AND (prospect_id=$3 OR lower(payload->>'email')=$4)`,
+        [this.tenantId, String(extras.missionId), String(item.prospect_id || item.candidate_id || ''),
+          String(item.email || '').toLowerCase(), String(reason || 'pre_provider_rejected')]);
+      }
       const row = (await db.query(`UPDATE acquisition_outbound_items SET status='pending',reason=$2,
-        attempted_at=NULL,provider_message_id=NULL WHERE id=$1 AND status IN ('attempted','uncertain') RETURNING *`,
-      [item.id, reason])).rows[0];
+        attempted_at=NULL,provider_message_id=NULL WHERE id=$1
+        AND (status IN ('attempted','uncertain') OR ($3::boolean AND status='suppressed')) RETURNING *`,
+      [item.id, reason, allowTerminalPreProviderReconciliation])).rows[0];
       if (!row) fail('item_not_uncertain');
       const eventType = extras.reconciled ? 'send_reconciled' : 'send_released_unsent';
       await this.event(eventType, extras.reconciled ? [item.id, 'not_accepted'] : [item.id, reason, Date.now()], {

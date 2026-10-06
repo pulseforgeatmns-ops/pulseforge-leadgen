@@ -18,7 +18,7 @@ const {
   assertAuthorizedClientSwitch,
   filterClientsForUser,
 } = require('../utils/tenantAuthorization');
-const { getActiveClients } = require('../utils/clientContext');
+const { getOperatorSwitchableClients } = require('../utils/clientContext');
 const {
   createAndProvisionTenant,
   getTenantWorkspace,
@@ -178,7 +178,7 @@ router.post('/api/v1/tenant/activate', requireOperator, async (req, res) => {
         message: auth.message || 'Tenant switch not authorized',
       });
     }
-    const allowed = filterClientsForUser(await getActiveClients(), req.user);
+    const allowed = filterClientsForUser(await getOperatorSwitchableClients(), req.user);
     const active = allowed.find((c) => Number(c.id) === Number(clientId));
     if (!active) {
       return res.status(404).json({ error: 'tenant_not_found', message: 'Client not found' });

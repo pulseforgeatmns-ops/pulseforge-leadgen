@@ -127,6 +127,8 @@ test('F. producer/consumer compatibility — persisted row is visible to enrichm
     },
   };
   const store = {
+    tenantId: '10',
+    clientId: 10,
     candidateOwnership: async () => null,
   };
 
@@ -145,6 +147,7 @@ test('F. producer/consumer compatibility — persisted row is visible to enrichm
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
       clientId: 10,
+      authorizedTenantId: '10',
     },
   });
 
@@ -178,7 +181,7 @@ test('F. producer/consumer compatibility — persisted row is visible to enrichm
     },
   };
 
-  const enrichmentResult = await runEnrichmentBatches(enrichment, pool, 1, { clientId: 10 });
+  const enrichmentResult = await runEnrichmentBatches(enrichment, pool, 1, { tenantId: '10' });
   assert.ok(enrichmentResult.summaries[0].considered >= 1);
   assert.deepEqual(enrichmentResult.summaries[0].verticals, ENRICHABLE_SCOUT_VERTICALS);
 });
@@ -214,7 +217,7 @@ test('persistDiscoveredCompanies rejects query-slug-only candidates', async () =
   const pool = {
     query: async () => ({ rowCount: 0, rows: [] }),
   };
-  const store = { candidateOwnership: async () => null };
+  const store = { tenantId: '10', clientId: 10, candidateOwnership: async () => null };
 
   const result = await persistDiscoveredCompanies(pool, store, {
     companies: [{
@@ -229,6 +232,7 @@ test('persistDiscoveredCompanies rejects query-slug-only candidates', async () =
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
       clientId: 10,
+      authorizedTenantId: '10',
     },
   });
 
@@ -245,7 +249,7 @@ test('admission counters track discovered/evaluated/fit/admitted/rejected', asyn
       return { rowCount: 0, rows: [] };
     },
   };
-  const store = { candidateOwnership: async () => null };
+  const store = { tenantId: '10', clientId: 10, candidateOwnership: async () => null };
 
   const result = await persistDiscoveredCompanies(pool, store, {
     companies: [
@@ -268,6 +272,7 @@ test('admission counters track discovered/evaluated/fit/admitted/rejected', asyn
       scope: { segment: 'short_term_rental' },
       serviceAreas: STR_MISSION.service_area,
       clientId: 10,
+      authorizedTenantId: '10',
     },
   });
 
