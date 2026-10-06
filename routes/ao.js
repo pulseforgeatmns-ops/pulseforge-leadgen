@@ -3,6 +3,19 @@ const path = require('path');
 const pool = require('../db');
 const { requireAuth: sessionAuth, requireRole } = require('../middleware/auth');
 const { normalizeClientId } = require('../utils/clientContext');
+const {
+  bindRequestIdentity,
+  getEffectiveActor,
+  getAuthenticatedActor,
+  isImpersonating,
+  impersonationProvenance,
+} = require('../utils/requestIdentity');
+const {
+  effectiveAoOwnerId: sharedEffectiveAoOwnerId,
+  aoClientIdForRequest,
+  effectiveRoleIsAo,
+} = require('../utils/aoRequestHelpers');
+const { logImpersonationAction } = require('../services/aoImpersonationService');
 const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const { TEMPLATES } = require('../utils/aoMessageTemplates');
 const aoField = require('../services/aoFieldService');
@@ -28,11 +41,7 @@ const { aoResultHttpStatus, sendAoServiceResult } = require('../utils/aoHttpResu
 const router = express.Router();
 
 function aoClientId(req) {
-  if (req.user?.role === 'ao') {
-    const assigned = Number(req.user.client_id);
-    return Number.isInteger(assigned) && assigned > 0 ? assigned : null;
-  }
-  return normalizeClientId(req.session?.active_client_id || req.user?.client_id) || 10;
+  return aoClientIdForRequest(req);
 }
 
 function requireAoRead(req, res, next) {
@@ -57,18 +66,25 @@ function requireJakeRead(req, res, next) {
 }
 
 function effectiveAoOwnerId(req) {
-  if (req.user.role === 'ao') return req.user.id;
-  const override = Number(req.query.ao_owner_id || req.body?.ao_owner_id);
-  return Number.isInteger(override) && override > 0 ? override : req.user.id;
+  const id = sharedEffectiveAoOwnerId(req);
+  if (id != null) return id;
+  return req.user?.id;
 }
 
 async function refreshAoSession(req, _res, next) {
-  if (req.user?.role !== 'ao' || !req.user?.id) return next();
+  const aoActor = getEffectiveActor(req);
+  if (aoActor?.role !== 'ao' || !aoActor?.id) return next();
   try {
-    const profile = await aoField.getAoProfile(req.user.id);
-    if (profile?.client_id && profile.client_id !== req.user.client_id) {
-      req.user.client_id = profile.client_id;
-      if (req.session?.user) req.session.user.client_id = profile.client_id;
+    const profile = await aoField.getAoProfile(aoActor.id);
+    if (profile?.client_id && profile.client_id !== aoActor.client_id) {
+      aoActor.client_id = profile.client_id;
+      if (isImpersonating(req) && req.session?.impersonation?.effectiveUser) {
+        req.session.impersonation.effectiveUser.client_id = profile.client_id;
+        bindRequestIdentity(req);
+      } else if (req.user?.role === 'ao' && req.session?.user) {
+        req.user.client_id = profile.client_id;
+        req.session.user.client_id = profile.client_id;
+      }
     }
   } catch (err) {
     console.error('[ao] session refresh failed:', err.message);
@@ -77,12 +93,13 @@ async function refreshAoSession(req, _res, next) {
 }
 
 function sessionProfile(req) {
+  const actor = getEffectiveActor(req) || req.user;
   return {
-    id: req.user.id,
-    name: req.user.name,
-    email: req.user.email,
-    role: req.user.role,
-    client_id: req.user.client_id || aoClientId(req),
+    id: actor.id,
+    name: actor.name,
+    email: actor.email,
+    role: actor.role,
+    client_id: actor.client_id || aoClientId(req),
     active: true,
   };
 }
@@ -137,7 +154,7 @@ router.get('/api/crm/dashboard', requireAoRead, refreshAoSession, wrapAoHandler(
   const clientId = requireAoClient(req, res);
   if (!clientId) return;
   const aoOwnerId = effectiveAoOwnerId(req);
-  if (req.user.role !== 'ao') {
+  if (!effectiveRoleIsAo(req)) {
     const override = Number(req.query.ao_user_id || req.query.ao_owner_id);
     if (!Number.isInteger(override) || override <= 0) {
       return res.status(400).json({ error: 'ao_user_id required for admin/operator CRM view' });
@@ -157,7 +174,7 @@ router.get('/api/crm/accounts/:prospectId', requireAoRead, refreshAoSession, wra
   await ensureAoCrmSchema();
   const clientId = requireAoClient(req, res);
   if (!clientId) return;
-  const aoOwnerId = req.user.role === 'ao' ? effectiveAoOwnerId(req) : null;
+  const aoOwnerId = effectiveRoleIsAo(req) ? effectiveAoOwnerId(req) : null;
   const detail = await aoCrm.getAccountDetail({
     clientId,
     prospectId: req.params.prospectId,
@@ -206,7 +223,7 @@ router.get('/api/crm/accounts/:prospectId/followup/drafts', requireAoRead, refre
   await ensureAoCrmSchema();
   const clientId = requireAoClient(req, res);
   if (!clientId) return;
-  const aoOwnerId = req.user.role === 'ao' ? effectiveAoOwnerId(req) : null;
+  const aoOwnerId = effectiveRoleIsAo(req) ? effectiveAoOwnerId(req) : null;
   const result = await aoFollowup.listFollowUpDrafts({
     clientId,
     prospectId: req.params.prospectId,
@@ -219,7 +236,7 @@ router.get('/api/crm/accounts/:prospectId/flags', requireAoRead, refreshAoSessio
   await ensureAoCrmSchema();
   const clientId = requireAoClient(req, res);
   if (!clientId) return;
-  const aoOwnerId = req.user.role === 'ao' ? effectiveAoOwnerId(req) : null;
+  const aoOwnerId = effectiveRoleIsAo(req) ? effectiveAoOwnerId(req) : null;
   let flags;
   if (aoOwnerId) {
     flags = await aoAccountFlags.listFlagsForCreator({
@@ -253,14 +270,28 @@ router.post('/api/crm/accounts/:prospectId/flag-for-jake', requireAoWrite, refre
       reasons: aoAccountFlags.AO_ACCOUNT_FLAG_REASONS,
     });
   }
+  const effective = getEffectiveActor(req);
+  const auth = getAuthenticatedActor(req);
+  const provenance = impersonationProvenance(req);
+  const assignee = await require('../utils/aoFlagAssignee').resolveFlagAssigneeUserId(clientId);
+  const skipNotification = Boolean(
+    provenance
+    && assignee
+    && Number(assignee.id) === Number(auth?.id),
+  );
   const result = await aoAccountFlags.createAccountFlag({
     clientId,
     aoUserId: aoOwnerId,
     prospectId: req.params.prospectId,
     reason: String(reason),
     note: note != null ? String(note) : null,
-    creatorRole: req.user.role,
+    creatorRole: effective?.role === 'ao' ? 'ao' : req.user.role,
+    sourceContext: provenance ? { impersonation: provenance } : {},
+    skipNotification,
   });
+  if (provenance) {
+    await logImpersonationAction(req, { action: 'flag_for_jake', route: req.originalUrl });
+  }
   return sendAoServiceResult(res, result, {
     errorBody: r => ({ error: r.error, reasons: r.reasons }),
   });
@@ -371,7 +402,7 @@ router.get('/api/command-center', requireAoRead, refreshAoSession, wrapAoHandler
   const aoOwnerId = effectiveAoOwnerId(req);
   const date = req.query.date ? String(req.query.date) : null;
 
-  if (req.user.role !== 'ao') {
+  if (!effectiveRoleIsAo(req)) {
     const override = Number(req.query.ao_user_id || req.query.ao_owner_id);
     if (!Number.isInteger(override) || override <= 0) {
       return res.status(400).json({ error: 'ao_user_id required for admin/operator command center view' });
@@ -447,7 +478,8 @@ router.post('/api/max/conversations/continue', requireAoWrite, refreshAoSession,
 }));
 
 router.get('/api/profile', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
-  const profile = await aoField.getAoProfile(req.user.id);
+  const aoActor = getEffectiveActor(req);
+  const profile = await aoField.getAoProfile(aoActor.id);
   if (profile) return res.json(profile);
   res.json(sessionProfile(req));
 }));
@@ -924,7 +956,7 @@ router.post('/api/max/report', requireAoWrite, refreshAoSession, wrapAoHandler(a
     clientId,
     note,
     category,
-    creatorRole: req.user.role,
+    creatorRole: getEffectiveActor(req)?.role === 'ao' ? 'ao' : req.user.role,
   });
   return sendAoServiceResult(res, result, {
     errorBody: r => ({ error: r.error }),
@@ -984,7 +1016,8 @@ router.get('/api/metrics/today', requireAoRead, refreshAoSession, wrapAoHandler(
       (SELECT COUNT(*)::int FROM ao_escalations WHERE ao_owner_id = $1 AND status = 'new') AS pending_escalations
   `, [aoOwnerId, clientId, today]);
 
-  const profile = req.user.role === 'ao' ? await aoField.getAoProfile(req.user.id) : null;
+  const aoActor = getEffectiveActor(req);
+  const profile = aoActor?.role === 'ao' ? await aoField.getAoProfile(aoActor.id) : null;
   res.json({
     ...rows[0],
     daily_goal: profile?.daily_goal || null,

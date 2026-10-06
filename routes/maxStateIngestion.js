@@ -20,6 +20,8 @@ const {
 const { createMaxAttachment } = require('../packages/max/composer');
 const { LIMITS } = require('../packages/max/composer/limits');
 const pool = require('../db');
+const { getEffectiveActor, impersonationProvenance } = require('../utils/requestIdentity');
+const { logImpersonationAction } = require('../services/aoImpersonationService');
 const {
   uploadAndTranscribeVoice,
   retryTranscription,
@@ -58,7 +60,7 @@ router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
     }
     const clientId = resolveClientId(req);
     const conversationId = req.body?.conversation_id || req.body?.conversationId || null;
-    const actor = { userId: req.session?.user?.id, role: req.session?.user?.role };
+    const actor = actorFromSession(req);
     const baseInput = {
       text,
       conversationId,
@@ -96,10 +98,15 @@ router.post('/api/v1/max/understand', requireIngestWrite, async (req, res) => {
 });
 
 function actorFromSession(req) {
+  const effective = getEffectiveActor(req);
+  const provenance = impersonationProvenance(req);
   return {
-    userId: req.session?.user?.id,
-    role: req.session?.user?.role,
-    aoId: req.session?.user?.role === 'ao' ? req.session?.user?.id : undefined,
+    userId: effective?.id,
+    role: effective?.role,
+    aoId: effective?.role === 'ao' ? effective.id : undefined,
+    authenticatedUserId: provenance?.authenticated_user_id ?? undefined,
+    impersonated: Boolean(provenance),
+    impersonation: provenance || undefined,
   };
 }
 
@@ -180,6 +187,9 @@ async function handleComposerSubmit(req, res) {
     }
 
     const result = await submitMaxComposerTurn(clientId, payload);
+    if (impersonationProvenance(req)) {
+      await logImpersonationAction(req, { action: 'max_composer_submit', route: req.originalUrl });
+    }
     if (!result.ok) {
       let status = 400;
       if (result.error === 'extraction_failed') status = 422;

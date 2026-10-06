@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const pool = require('../db');
 
 const { USER_ROLES: ROLES, ROLE_CHECK } = require('../utils/userRoles');
+const { bindRequestIdentity } = require('../utils/requestIdentity');
 let initPromise;
 
 function isApiRequest(req) {
@@ -87,6 +88,10 @@ const PASSWORD_CHANGE_PATHS = new Set([
   '/api/me/password',
   '/logout',
   '/api/me',
+  '/api/v1/admin/impersonation',
+  '/api/v1/admin/impersonation/start',
+  '/api/v1/admin/impersonation/stop',
+  '/api/v1/admin/impersonation/targets',
 ]);
 
 function requestPath(req) {
@@ -115,6 +120,11 @@ function sendPasswordChangeRequired(req, res) {
 function requireAuth(req, res, next) {
   if (req.session?.user) {
     req.user = req.session.user;
+    bindRequestIdentity(req);
+    if (req.session?.impersonation?.active && !req.session.impersonation.effectiveUser) {
+      delete req.session.impersonation;
+      bindRequestIdentity(req);
+    }
     if (passwordChangeRequired(req.user) && !isPasswordChangeExempt(req)) {
       return sendPasswordChangeRequired(req, res);
     }
@@ -124,6 +134,7 @@ function requireAuth(req, res, next) {
   if (req.session?.authenticated) {
     req.user = { id: null, name: 'Legacy Admin', email: 'legacy@pulseforge.local', role: 'admin' };
     req.session.user = req.user;
+    bindRequestIdentity(req);
     return next();
   }
 

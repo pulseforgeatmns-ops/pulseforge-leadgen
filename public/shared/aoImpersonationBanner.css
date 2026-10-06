@@ -1,0 +1,37 @@
+.pf-impersonation-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 10px 14px;
+  background: linear-gradient(90deg, rgba(255, 184, 0, 0.22), rgba(255, 59, 92, 0.18));
+  border-bottom: 2px solid rgba(255, 184, 0, 0.55);
+  color: #fff8e7;
+  font-family: var(--pf-font-mono, 'JetBrains Mono', monospace);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+.pf-impersonation-banner strong {
+  font-weight: 600;
+  color: #ffd54f;
+}
+.pf-impersonation-banner button {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.pf-impersonation-banner button:hover {
+  border-color: #ffd54f;
+  color: #ffd54f;
+}

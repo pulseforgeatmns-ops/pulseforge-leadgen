@@ -31,8 +31,12 @@
     return res.json();
   }
 
+  function sessionUser(context) {
+    return context?.effective_user || context?.user || null;
+  }
+
   function buildAoShellNav(context, pathname) {
-    const role = context?.user?.role || null;
+    const role = sessionUser(context)?.role || null;
     const surface = currentAoSurface(pathname);
     const nav = document.createElement('nav');
     nav.className = 'pf-shell-nav';
@@ -61,10 +65,11 @@
     const group = document.createElement('div');
     group.className = 'pf-nav-group';
 
-    if (context?.user?.name) {
+    const whoUser = sessionUser(context);
+    if (whoUser?.name) {
       const who = document.createElement('span');
       who.className = 'pf-nav-who';
-      who.textContent = context.user.name;
+      who.textContent = whoUser.name;
       who.title = role ? `Signed in · ${role}` : 'Signed in';
       group.appendChild(who);
     }
@@ -86,6 +91,9 @@
       context = await fetchAoNavContext();
     } catch (err) {
       console.warn('[aoShellNav] session lookup failed:', err.message);
+    }
+    if (root.AoImpersonationBanner?.mountAoImpersonationBanner) {
+      await root.AoImpersonationBanner.mountAoImpersonationBanner();
     }
     const nav = buildAoShellNav(context, window.location.pathname);
     document.body.prepend(nav);
