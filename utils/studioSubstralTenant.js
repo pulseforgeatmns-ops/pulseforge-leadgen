@@ -7,6 +7,7 @@
 
 const pool = require('../db');
 const { createMission, resetEngine } = require('../services/acquisitionMission');
+const { ensureClientTenantWorkspaceBinding } = require('../services/tenantWorkspace');
 
 const STUDIO_SUBSTRAL_SLUG = 'studio-substral';
 const STUDIO_SUBSTRAL_DOMAIN = 'studiosubstral.com';
@@ -118,6 +119,14 @@ async function ensureStudioSubstralTenant(db = pool) {
     );
     client = inserted.rows[0];
   }
+
+  await ensureClientTenantWorkspaceBinding({
+    pool: db,
+    clientId: client.id,
+    client,
+    origin: 'bootstrap',
+  });
+
   return client;
 }
 
