@@ -8,6 +8,9 @@ const { getRequestClientId, normalizeClientId } = require('../utils/clientContex
 const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const aoBriefing = require('../services/aoBriefingService');
 const aoField = require('../services/aoFieldService');
+const aoAccountFlags = require('../services/aoAccountFlagService');
+const { resolveFlagAssigneeUserId } = require('../utils/aoFlagAssignee');
+const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
 
 const requireJakeRead = [requireAuth, requireRole('admin', 'manager')];
@@ -26,6 +29,7 @@ function wrap(handler) {
   return async (req, res, next) => {
     try {
       await ensureAoFieldSchema();
+      await ensureAoCrmSchema();
       await handler(req, res, next);
     } catch (err) {
       console.error('[max-ao-briefing]', req.method, req.originalUrl, err.message);
@@ -118,6 +122,92 @@ router.get('/api/v1/max/ao-briefing/campaign', requireJakeRead, wrap(async (req,
   if (!clientId) return res.status(400).json({ error: 'client_id required' });
   const progress = await aoBriefing.getCampaign001Progress(clientId);
   res.json(progress);
+}));
+
+async function resolveAssigneeForRequest(req, clientId) {
+  const assignee = await resolveFlagAssigneeUserId(clientId);
+  if (assignee) return assignee;
+  return req.session?.user || req.user || null;
+}
+
+router.get('/api/v1/max/ao-flags', requireJakeRead, wrap(async (req, res) => {
+  const clientId = resolveClientId(req);
+  if (!clientId) return res.status(400).json({ error: 'client_id required' });
+  const assignee = await resolveAssigneeForRequest(req, clientId);
+  if (!assignee?.id) return res.status(503).json({ error: 'No flag assignee for tenant' });
+  const status = String(req.query.status || 'open').toLowerCase();
+  const flags = await aoAccountFlags.listFlagsForAssignee({
+    clientId,
+    assigneeUserId: assignee.id,
+    status,
+    limit: Number(req.query.limit) || 50,
+  });
+  res.json({ flags, assignee_user_id: assignee.id });
+}));
+
+router.get('/api/v1/max/ao-flags/unread-count', requireJakeRead, wrap(async (req, res) => {
+  const clientId = resolveClientId(req);
+  if (!clientId) return res.status(400).json({ error: 'client_id required' });
+  const assignee = await resolveAssigneeForRequest(req, clientId);
+  if (!assignee?.id) return res.json({ unread_count: 0 });
+  const unread_count = await aoAccountFlags.countUnreadFlags({
+    clientId,
+    assigneeUserId: assignee.id,
+  });
+  res.json({ unread_count });
+}));
+
+router.get('/api/v1/max/ao-flags/:id', requireJakeRead, wrap(async (req, res) => {
+  const clientId = resolveClientId(req);
+  if (!clientId) return res.status(400).json({ error: 'client_id required' });
+  const flag = await aoAccountFlags.getFlagById(req.params.id, {
+    clientId,
+    viewerUserId: req.user.id,
+    viewerRole: req.user.role,
+  });
+  if (!flag) return res.status(404).json({ error: 'Flag not found' });
+  if (flag.forbidden) return res.status(403).json({ error: 'Forbidden' });
+  res.json(flag);
+}));
+
+router.patch('/api/v1/max/ao-flags/:id', requireJakeRead, wrap(async (req, res) => {
+  const clientId = resolveClientId(req);
+  if (!clientId) return res.status(400).json({ error: 'client_id required' });
+  const assignee = await resolveAssigneeForRequest(req, clientId);
+  const { status, resolution_note: resolutionNote, note } = req.body || {};
+  if (!status) return res.status(400).json({ error: 'status required' });
+  const result = await aoAccountFlags.updateFlagStatus({
+    flagId: req.params.id,
+    clientId,
+    actorUserId: assignee?.id || req.user.id,
+    status: String(status),
+    resolutionNote,
+    noteAppend: note,
+    allowTenantAdmin: true,
+  });
+  if (result.status === 404) return res.status(404).json({ error: result.error });
+  if (result.status === 400) return res.status(400).json({ error: result.error });
+  res.json(result.flag);
+}));
+
+router.get('/api/v1/max/ao-flag-notifications', requireJakeRead, wrap(async (req, res) => {
+  const clientId = resolveClientId(req);
+  if (!clientId) return res.status(400).json({ error: 'client_id required' });
+  const assignee = await resolveAssigneeForRequest(req, clientId);
+  if (!assignee?.id) return res.json({ notifications: [] });
+  const notifications = await aoAccountFlags.listFlagNotifications({
+    clientId,
+    userId: assignee.id,
+    unreadOnly: req.query.unread !== '0',
+  });
+  res.json({ notifications });
+}));
+
+router.post('/api/v1/max/ao-flags/backfill-audit', requireJakeRead, wrap(async (req, res) => {
+  const clientId = resolveClientId(req);
+  if (!clientId) return res.status(400).json({ error: 'client_id required' });
+  const audit = await aoAccountFlags.runAoFlagBackfill(clientId);
+  res.json(audit);
 }));
 
 module.exports = router;

@@ -46,6 +46,18 @@
       </section>
     </div>
 
+    <section class="mab-panel mab-panel-wide" id="flags" aria-labelledby="mabFlagsHeading">
+      <div class="mab-panel-head">
+        <h2 id="mabFlagsHeading" class="mab-section-title">Needs Jake <span id="mabFlagsBadge" class="mab-badge mab-badge-new" hidden></span></h2>
+        <select id="mabFlagsFilter" class="mab-select mab-select-sm" aria-label="Filter AO flags">
+          <option value="open">Open</option>
+          <option value="reviewed">Reviewed</option>
+          <option value="resolved">Resolved</option>
+        </select>
+      </div>
+      <div id="mabFlags" class="mab-table-wrap"></div>
+    </section>
+
     <section class="mab-panel mab-panel-wide" id="escalations" aria-labelledby="mabEscHeading">
       <div class="mab-panel-head">
         <h2 id="mabEscHeading" class="mab-section-title">Escalation Inbox</h2>
