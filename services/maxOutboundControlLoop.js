@@ -59,6 +59,7 @@ const {
   resolveReplenishmentTenantContext,
 } = require('./governedOutboundContext');
 const { governedOutboundEnabledForTenant, governedOutboundPreparationEnabledForTenant } = require('./governedOutboundTenant');
+const { isSmallBusinessOwnerSegment } = require('../utils/canonicalBusinessTaxonomy');
 
 function preparationGrantActive(store, program) {
   if (program?.mode !== 'active') return false;
@@ -277,7 +278,9 @@ function segmentAliases(scope) {
   if (['property_manager', 'property_management'].includes(scope.segment)) {
     ['property_manager', 'property_management', 'str_manager'].forEach(x => aliases.add(x));
   }
-  missionCompatibleVerticals({ missionSegment: scope.segment }).forEach(x => aliases.add(x));
+  if (isSmallBusinessOwnerSegment(scope.segment)) {
+    missionCompatibleVerticals({ missionSegment: scope.segment }).forEach(x => aliases.add(x));
+  }
   return aliases;
 }
 
