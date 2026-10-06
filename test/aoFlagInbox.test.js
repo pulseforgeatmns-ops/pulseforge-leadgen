@@ -11,6 +11,11 @@ const {
 } = require('../services/aoAccountFlagService');
 const { isSelfFlag } = require('../utils/aoFlagAssignee');
 const { resetForTests, snapshot } = require('../utils/aoFlagMetrics');
+const {
+  resolveMaxBriefingClientId,
+  withMaxBriefingClientId,
+  PAGE_DEFAULT_CLIENT_ID,
+} = require('../lib/maxAoBriefingTenantApi');
 
 test('idempotency key is stable for the same escalation identity', () => {
   const a = buildIdempotencyKey({
@@ -66,7 +71,38 @@ test('max AO briefing UI includes Needs Jake flags inbox', () => {
   const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'max-ao-briefing', 'max-ao-briefing.js'), 'utf8');
   assert.match(html, /Needs Jake/);
   assert.match(html, /mabFlags/);
+  assert.match(html, /tenant-api\.js/);
   assert.match(js, /ao-flags/);
+  assert.match(js, /withMaxBriefingClientId/);
+  assert.match(js, /resolveMaxBriefingClientId/);
+});
+
+test('AO-FLAG-INBOX-003 — page client_id=10 wins over session active_client_id=1', () => {
+  const clients = [
+    { id: 1, name: 'Pulseforge' },
+    { id: 10, name: 'Anchor Cleaning' },
+  ];
+  const resolved = resolveMaxBriefingClientId({
+    urlClientId: '10',
+    selectValue: '1',
+    clients,
+    pageDefault: PAGE_DEFAULT_CLIENT_ID,
+  });
+  assert.equal(resolved, 10);
+});
+
+test('AO-FLAG-INBOX-003 — flag list and unread URLs carry page tenant client_id', () => {
+  const listUrl = withMaxBriefingClientId('/api/v1/max/ao-flags?status=open', 10);
+  const unreadUrl = withMaxBriefingClientId('/api/v1/max/ao-flags/unread-count', 10);
+  const patchUrl = withMaxBriefingClientId('/api/v1/max/ao-flags/abc-123', 10);
+  assert.equal(listUrl, '/api/v1/max/ao-flags?status=open&client_id=10');
+  assert.equal(unreadUrl, '/api/v1/max/ao-flags/unread-count?client_id=10');
+  assert.equal(patchUrl, '/api/v1/max/ao-flags/abc-123?client_id=10');
+});
+
+test('AO-FLAG-INBOX-003 — withMaxBriefingClientId replaces stale client_id query param', () => {
+  const url = withMaxBriefingClientId('/api/v1/max/ao-flags?status=open&client_id=1', 10);
+  assert.equal(url, '/api/v1/max/ao-flags?status=open&client_id=10');
 });
 
 function makeMockDb(state) {
@@ -266,6 +302,81 @@ function listen(app) {
     base: `http://127.0.0.1:${server.address().port}`,
   })));
 }
+
+test('AO-FLAG-INBOX-003 — unread-count and list honor query client_id when session tenant differs', async () => {
+  const restores = [];
+  const listCalls = [];
+  const unreadCalls = [];
+  restores.push((() => {
+    const mod = require('../services/aoAccountFlagService');
+    const origList = mod.listFlagsForAssignee;
+    const origUnread = mod.countUnreadFlags;
+    mod.listFlagsForAssignee = async (opts) => {
+      listCalls.push(opts);
+      return [{ id: 'f1', client_id: opts.clientId, status: 'open' }];
+    };
+    mod.countUnreadFlags = async (opts) => {
+      unreadCalls.push(opts);
+      return 5;
+    };
+    return () => {
+      mod.listFlagsForAssignee = origList;
+      mod.countUnreadFlags = origUnread;
+    };
+  })());
+  restores.push((() => {
+    const mod = require('../utils/aoFlagAssignee');
+    const original = mod.resolveFlagAssigneeUserId;
+    mod.resolveFlagAssigneeUserId = async () => ({ id: 1 });
+    return () => { mod.resolveFlagAssigneeUserId = original; };
+  })());
+
+  let running;
+  const fieldSchema = require('../utils/aoFieldSchema');
+  const crmSchema = require('../utils/aoCrmSchema');
+  const prevField = fieldSchema.ensureAoFieldSchema;
+  const prevCrm = crmSchema.ensureAoCrmSchema;
+  try {
+    fieldSchema.ensureAoFieldSchema = async () => {};
+    crmSchema.ensureAoCrmSchema = async () => {};
+
+    delete require.cache[require.resolve('../routes/maxAoBriefing')];
+    const router = require('../routes/maxAoBriefing');
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.user = { id: 1, role: 'admin' };
+      req.session = { user: req.user, active_client_id: 1 };
+      next();
+    });
+    app.use(router);
+    running = await listen(app);
+
+    const listRes = await fetch(`${running.base}/api/v1/max/ao-flags?status=open&client_id=10`);
+    const listBody = await listRes.json();
+    assert.equal(listRes.status, 200);
+    assert.equal(listCalls.length, 1);
+    assert.equal(listCalls[0].clientId, 10);
+    assert.equal(listBody.flags.length, 1);
+
+    const unreadRes = await fetch(`${running.base}/api/v1/max/ao-flags/unread-count?client_id=10`);
+    const unreadBody = await unreadRes.json();
+    assert.equal(unreadRes.status, 200);
+    assert.equal(unreadCalls.length, 1);
+    assert.equal(unreadCalls[0].clientId, 10);
+    assert.equal(unreadBody.unread_count, 5);
+
+    const wrongTenant = await fetch(`${running.base}/api/v1/max/ao-flags?status=open&client_id=1`);
+    await wrongTenant.json();
+    assert.equal(listCalls[1].clientId, 1);
+  } finally {
+    if (running) await new Promise(r => running.server.close(r));
+    delete require.cache[require.resolve('../routes/maxAoBriefing')];
+    fieldSchema.ensureAoFieldSchema = prevField;
+    crmSchema.ensureAoCrmSchema = prevCrm;
+    for (const r of restores.reverse()) r();
+  }
+});
 
 test('F8 tenant isolation on flag inbox list uses assignee + client scope', async () => {
   const restores = [];
