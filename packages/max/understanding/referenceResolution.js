@@ -38,6 +38,20 @@ function resolvePronoun({ pronoun, memory, threadContacts = [], accountName = nu
   }
 
   if (unique.length === 1) {
+    const staleTurns = memory?.unrelatedAccountTurnsSinceContact?.(unique[0].name);
+    if (typeof staleTurns === 'number' && staleTurns >= 2) {
+      return {
+        entity: null,
+        ambiguous: true,
+        ambiguity: {
+          kind: AMBIGUITY_KIND.PRONOUN,
+          pronoun,
+          candidates: [unique[0].name],
+          clarification: `Which contact did you mean by "${pronoun}"? Recent context may be stale.`,
+          staleContext: true,
+        },
+      };
+    }
     return { entity: unique[0], ambiguous: false };
   }
   if (unique.length > 1) {

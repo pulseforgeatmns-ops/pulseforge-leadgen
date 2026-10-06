@@ -21,6 +21,57 @@ class ConversationMemory {
     return mem;
   }
 
+  knownAccountNames() {
+    const names = new Set();
+    for (const turn of this.turns) {
+      const model = turn.situationModel;
+      for (const thread of model?.threads || [{ accountName: null, entities: model?.entities || [] }]) {
+        if (thread.accountName) names.add(thread.accountName);
+        for (const entity of thread.entities || []) {
+          if (entity.kind === 'account' && entity.name) names.add(entity.name);
+        }
+      }
+    }
+    return [...names];
+  }
+
+  turnsSinceContactMention(contactName) {
+    const key = String(contactName || '').toLowerCase();
+    if (!key) return Infinity;
+    for (let i = this.turns.length - 1; i >= 0; i -= 1) {
+      const model = this.turns[i].situationModel;
+      const pool = [
+        ...(model?.entities || []),
+        ...(model?.threads || []).flatMap(t => t.entities || []),
+      ];
+      if (pool.some(e => e.kind === 'contact' && e.name?.toLowerCase() === key)) {
+        return this.turns.length - 1 - i;
+      }
+    }
+    return Infinity;
+  }
+
+  unrelatedAccountTurnsSinceContact(contactName) {
+    const key = String(contactName || '').toLowerCase();
+    let foundContactTurn = false;
+    let unrelated = 0;
+    for (let i = this.turns.length - 1; i >= 0; i -= 1) {
+      const model = this.turns[i].situationModel;
+      const threads = model?.threads?.length ? model.threads : [{ entities: model?.entities || [], accountName: null }];
+      const mentionsContact = threads.some(t =>
+        (t.entities || []).some(e => e.kind === 'contact' && e.name?.toLowerCase() === key)
+      );
+      if (mentionsContact) {
+        foundContactTurn = true;
+        break;
+      }
+      const primaryAccount = threads.map(t => t.accountName || (t.entities || []).find(e => e.kind === 'account')?.name)
+        .find(Boolean);
+      if (primaryAccount) unrelated += 1;
+    }
+    return foundContactTurn ? unrelated : Infinity;
+  }
+
   recordTurn({ inputId, text, situationModel }) {
     this.turns.push({ inputId, text, situationModel, at: new Date().toISOString() });
     while (this.turns.length > this.maxTurns) this.turns.shift();

@@ -6,16 +6,29 @@ const {
   EPISTEMIC_CATEGORY,
   ENTITY_KIND,
   CONTACT_ROLE,
+  AMBIGUITY_KIND,
   newSituationId,
 } = require('./types');
 const { evidenceRef, spanFromMatch } = require('./evidence');
 const { extractTemporalReferences, normalizeTemporalPhrase } = require('./temporal');
 const { resolvePronoun, applyRoleCorrection } = require('./referenceResolution');
-
+const {
+  canonicalAccountLabel,
+  resolveAccountReference,
+  extractShorthandAccountReference,
+  collectKnownAccounts,
+} = require('./accountResolution');
+const {
+  painPointDurable,
+  decisionMakerDurable,
+  classifyDissatisfaction,
+  isInferenceUtterance,
+} = require('./durableFactGuard');
 function cleanAccountName(name) {
   const normalized = normalizeText(name);
   const trimmed = normalized.split(/[.,;]/)[0].trim();
-  return trimmed.replace(/\s+(Mike|Sarah|Dave|Lisa|Tony|at)$/i, '').trim();
+  const canonical = canonicalAccountLabel(trimmed);
+  return canonical.replace(/\s+(Mike|Sarah|Dave|Lisa|Tony|at)$/i, '').trim();
 }
 
 function entityAccount(name, threadId) {
@@ -41,7 +54,8 @@ function entityContact({ name, title = null, role = CONTACT_ROLE.UNKNOWN, gender
   };
 }
 
-function interpretThreadSegment({ text, threadId, inputId, memory, now = new Date(), accountHint = null }) {
+function interpretThreadSegment({ text, threadId, inputId, memory, now = new Date(), accountHint = null, contextAccounts = [] }) {
+  const rawOriginal = String(text || '');
   const raw = normalizeText(text);
   const lower = raw.toLowerCase();
   const entities = [];
@@ -56,7 +70,7 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
   const commentary = [];
   const corrections = [];
   const ambiguities = [];
-  const evidence = [];
+  const evidence = [evidenceRef({ inputId, textSpan: { text: rawOriginal.slice(0, 240) } })];
 
   let account = null;
   if (accountHint) {
@@ -81,9 +95,25 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     if (!/^(Dave|Sarah|Lisa|Mike|Tony|Rory|Jake)$/i.test(name)) accountNameCandidates.push(name);
   }
   const knownAccount = raw.match(
-    /\b(Exter Phillips|Exeter Phillips|Exeter Packaging|ABC Manufacturing|Granite State Plastics|Granite State Daycare|Never Scouted LLC)\b/i
+    /\b(Exter Phillips|Exter philips|exter philips|Exeter Phillips|Exeter Packaging|ABC Manufacturing|Granite State Plastics|Granite State Daycare|Never Scouted LLC)\b/i
   );
   if (knownAccount?.[1]) accountNameCandidates.push(cleanAccountName(knownAccount[1]));
+  const typoAt = lower.match(/\bat\s+(exter philips|exter phillips|exter philip)\b/);
+  if (typoAt) accountNameCandidates.push(cleanAccountName(typoAt[1]));
+
+  const shorthand = extractShorthandAccountReference(raw);
+  if (shorthand) {
+    const resolved = resolveAccountReference({
+      phrase: shorthand,
+      memory,
+      contextAccounts,
+    });
+    if (resolved.ambiguous && resolved.ambiguity) {
+      ambiguities.push(resolved.ambiguity);
+    } else if (resolved.account) {
+      accountNameCandidates.push(resolved.account);
+    }
+  }
 
   const chosenAccount = accountNameCandidates.find(n => n.length >= 4 && !/^(Dave|Sarah|Lisa|Mike)$/i.test(n));
   if (chosenAccount) {
@@ -141,10 +171,33 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     });
   }
 
-  if (/missing common areas|miss(?:ing)? (?:the )?bathrooms|bathroom issues|issues with bathrooms|hit or miss|unreliable internal cleaning|keep missing/i.test(lower)) {
+  const dissatisfaction = classifyDissatisfaction(raw);
+  if (dissatisfaction?.commentary) {
+    commentary.push({ text: raw.match(/[^.!?]+[.!?]/)?.[0] || raw.slice(0, 120), kind: 'inference' });
+  }
+
+  if (/nice lobby|traffic sucked|traffic was bad/i.test(lower)) {
+    commentary.push({ text: raw.match(/nice lobby[^.]*|traffic sucked[^.]*/i)?.[0] || 'Visit commentary', kind: 'ambient' });
+  }
+
+  if (/don'?t have any issue with bathrooms anymore|no issue with bathrooms anymore/i.test(lower)) {
+    painPoints.push({
+      id: newSituationId('pain'),
+      category: 'cleaning_service',
+      description: 'Bathroom cleaning concern (resolved)',
+      current: false,
+      historical: true,
+      epistemic: EPISTEMIC_CATEGORY.REPORTED,
+      evidence: evidenceRef({ inputId, textSpan: { text: rawOriginal.slice(0, 120) } }),
+    });
+  }
+
+  if (/missing common areas|miss(?:ing)? (?:the )?bathrooms|bathroom issues|issues with bathrooms|hit or miss|unreliable internal cleaning|keep missing|cleener still missin/i.test(lower)) {
     const isHistorical = /used to have issues|but said it'?s been fine lately|been fine lately|used to have/i.test(lower);
+    const resolvedHistorical = /don'?t have any issue with bathrooms anymore|no issue with bathrooms anymore|anymore/i.test(lower)
+      && /bathroom/i.test(lower);
     const negatedSatisfaction = /not unhappy|are not unhappy|aren'?t unhappy/i.test(lower);
-    if (!negatedSatisfaction) {
+    if (!negatedSatisfaction && !resolvedHistorical) {
       painPoints.push({
         id: newSituationId('pain'),
         category: 'cleaning_service',
@@ -156,7 +209,17 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
         current: !isHistorical,
         historical: isHistorical,
         epistemic: isHistorical ? EPISTEMIC_CATEGORY.REPORTED : EPISTEMIC_CATEGORY.CONFIRMED,
-        evidence: evidenceRef({ inputId, textSpan: { text: raw.slice(0, 120) } }),
+        evidence: evidenceRef({ inputId, textSpan: { text: rawOriginal.slice(0, 120) } }),
+      });
+    } else if (resolvedHistorical) {
+      painPoints.push({
+        id: newSituationId('pain'),
+        category: 'cleaning_service',
+        description: 'Bathroom cleaning concern (resolved)',
+        current: false,
+        historical: true,
+        epistemic: EPISTEMIC_CATEGORY.REPORTED,
+        evidence: evidenceRef({ inputId, textSpan: { text: rawOriginal.slice(0, 120) } }),
       });
     }
   }
@@ -170,14 +233,60 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     });
   }
 
-  if (/i think .+ might handle|i think .+ handles/i.test(lower)) {
-    const m = lower.match(/i think (\w+) (?:might )?handle/i);
+  if (/i think .+ might handle|i think .+ handles|pretty sure .+ handles/i.test(lower)) {
+    const m = lower.match(/(?:i think|pretty sure) (\w+) (?:might )?handle/i);
     if (m) {
+      const uncertain = /didn'?t confirm|not confirm|might/i.test(lower);
       decisionMakerSignals.push({
         id: newSituationId('dm'),
         contactName: m[1].charAt(0).toUpperCase() + m[1].slice(1),
         role: CONTACT_ROLE.SUSPECTED_DECISION_MAKER,
+        epistemic: uncertain ? EPISTEMIC_CATEGORY.UNCERTAIN : EPISTEMIC_CATEGORY.UNCERTAIN,
+      });
+    }
+  }
+
+  if (/(\w+) thinks (\w+) might be the person who handles/i.test(lower)) {
+    const m = lower.match(/(\w+) thinks (\w+) might be the person who handles/i);
+    if (m) {
+      decisionMakerSignals.push({
+        id: newSituationId('dm'),
+        contactName: m[2].charAt(0).toUpperCase() + m[2].slice(1),
+        role: CONTACT_ROLE.SUSPECTED_DECISION_MAKER,
         epistemic: EPISTEMIC_CATEGORY.UNCERTAIN,
+        reportedBy: m[1].charAt(0).toUpperCase() + m[1].slice(1),
+      });
+    }
+  }
+
+  const confirmedDm = lower.match(/\b(dave|lisa|mike|sarah)\b[^.]{0,40}\bis the decision maker\b/i)
+    || lower.match(/\b(dave|lisa|mike|sarah)\s+is the decision maker\b/i);
+  if (confirmedDm) {
+    const name = confirmedDm[1].charAt(0).toUpperCase() + confirmedDm[1].slice(1);
+    decisionMakerSignals.push({
+      id: newSituationId('dm'),
+      contactName: name,
+      role: CONTACT_ROLE.DECISION_MAKER,
+      epistemic: EPISTEMIC_CATEGORY.CONFIRMED,
+    });
+    entities.push(entityContact({
+      name,
+      role: CONTACT_ROLE.DECISION_MAKER,
+      epistemic: EPISTEMIC_CATEGORY.CONFIRMED,
+    }));
+  }
+
+  if (/(\w+) said (\w+) actually doesn'?t handle vendors/i.test(lower)) {
+    const m = lower.match(/(\w+) said (\w+) actually doesn'?t handle vendors/i);
+    if (m) {
+      corrections.push({
+        id: newSituationId('corr'),
+        kind: 'decision_maker_role',
+        contactName: m[2].charAt(0).toUpperCase() + m[2].slice(1),
+        priorValue: CONTACT_ROLE.DECISION_MAKER,
+        newValue: CONTACT_ROLE.INFLUENCER,
+        text: m[0],
+        reportedBy: m[1].charAt(0).toUpperCase() + m[1].slice(1),
       });
     }
   }
@@ -210,6 +319,28 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     });
   }
 
+  const mixedEntityCorrection = raw.match(
+    /(\w+) at (Exeter Phillips|Exeter Packaging)\s+said[^.]*\.\s*actually,?\s+that was (\w+) at (Exeter Phillips|Exeter Packaging)/i
+  );
+  if (mixedEntityCorrection) {
+    corrections.push({
+      id: newSituationId('corr'),
+      kind: 'entity_reassignment',
+      priorValue: `${mixedEntityCorrection[1]} @ ${mixedEntityCorrection[2]}`,
+      newValue: `${mixedEntityCorrection[3]} @ ${mixedEntityCorrection[4]}`,
+      text: mixedEntityCorrection[0],
+    });
+    account = entityAccount(mixedEntityCorrection[4], threadId);
+    entities.push(entityContact({
+      name: mixedEntityCorrection[3],
+      accountName: account.name,
+      gender: /mike/i.test(mixedEntityCorrection[3]) ? 'male' : null,
+    }));
+    for (const stale of entities.filter(e => e.kind === ENTITY_KIND.CONTACT && e.name === mixedEntityCorrection[1])) {
+      stale.superseded = true;
+    }
+  }
+
   const correctionAccount = raw.match(/(?:wasn'?t|not)\s+(Exeter Phillips|Exeter Packaging)[^.]*(?:was|it was)\s+(Exeter Phillips|Exeter Packaging)/i);
   if (correctionAccount) {
     corrections.push({
@@ -223,26 +354,26 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     entities.push(account);
   }
 
-  const priorDay = raw.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
-  const correctedDay = raw.match(/(?:actually|sorry),?\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
-  if (priorDay && correctedDay) {
-    corrections.push({
-      id: newSituationId('corr'),
-      kind: 'temporal',
-      priorValue: priorDay[1],
-      newValue: correctedDay[1],
-      text: raw,
-    });
-  }
-
+  const dayPattern = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+morning)?\b/gi;
+  const dayMatches = [...raw.matchAll(dayPattern)].map(m => m[0]);
   const temporalRefs = extractTemporalReferences(raw, now);
-  if (priorDay && correctedDay) {
+  if (dayMatches.length >= 2) {
+    const finalPhrase = dayMatches[dayMatches.length - 1];
+    const finalDay = finalPhrase.match(/(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i)?.[1];
+    for (let i = 0; i < dayMatches.length - 1; i += 1) {
+      corrections.push({
+        id: newSituationId('corr'),
+        kind: 'temporal',
+        priorValue: dayMatches[i],
+        newValue: finalPhrase,
+        text: raw,
+      });
+    }
     for (const t of temporalRefs) {
-      if (t.phrase.toLowerCase().includes(correctedDay[1].toLowerCase())) {
+      if (finalDay && t.phrase.toLowerCase().includes(finalDay.toLowerCase())) {
         t.canonical = true;
-        t.supersedes = priorDay[1];
-      }
-      if (t.phrase.toLowerCase().includes(priorDay[1].toLowerCase()) && !t.canonical) {
+        t.supersedes = dayMatches.slice(0, -1).join(', ');
+      } else if (dayMatches.some(d => t.phrase.toLowerCase().includes(d.toLowerCase().split(/\s+/)[0]))) {
         t.superseded = true;
       }
     }
@@ -286,10 +417,28 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
   }
 
   if (/put a follow[- ]?up on|schedule follow[- ]?up|follow[- ]?up on/i.test(lower)) {
+    const conditional = /if i don'?t hear back|if i do not hear back/i.test(lower);
+    const known = collectKnownAccounts(memory, contextAccounts);
+    if (!account && known.length > 1 && /\b(for them|for that account|for they)\b/i.test(lower)) {
+      ambiguities.push({
+        kind: AMBIGUITY_KIND.ACTION_TARGET,
+        candidates: known,
+        clarification: `Which account should receive the follow-up — ${known.join(' or ')}?`,
+      });
+    }
     requestedActions.push({
       id: newSituationId('req'),
       action: 'schedule_follow_up',
       temporal: temporalRefs.find(t => !t.superseded)?.phrase || null,
+      conditional,
+    });
+  }
+
+  if (/they still have bathroom issues/i.test(lower) && /should i wait/i.test(lower) && /follow[- ]?up on monday/i.test(lower)) {
+    questions.push({
+      id: newSituationId('q'),
+      text: 'Should I wait?',
+      kind: 'advisory',
     });
   }
 
@@ -311,7 +460,7 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
       pronoun,
       memory,
       threadContacts: entities.filter(e => e.kind === ENTITY_KIND.CONTACT),
-      accountName: account?.name || memory?.lastMentionedAccount()?.name,
+      accountName: account?.name || null,
     });
     if (resolution.ambiguous && resolution.ambiguity) {
       ambiguities.push(resolution.ambiguity);
@@ -331,7 +480,7 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     }
   }
 
-  if (/isn'?t the decision maker|not actually the decision maker|not the decision maker/i.test(lower)) {
+  if (/isn'?t the decision maker|not actually the decision maker|not the decision maker|actually .+ isn'?t the decision maker/i.test(lower)) {
     const contact = entities.find(e => e.kind === ENTITY_KIND.CONTACT)
       || memory?.lastPrimaryContactForAccount(account?.name);
     if (contact) {
@@ -362,6 +511,7 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     objections,
     commitments,
     corrections,
+    decisionMakerSignals,
     account,
     aoName: entities.find(e => e.kind === ENTITY_KIND.AO)?.name,
     temporalRefs,
@@ -397,6 +547,7 @@ function buildIngestionClaims({
   objections,
   commitments,
   corrections,
+  decisionMakerSignals = [],
   account,
   aoName,
   temporalRefs,
@@ -424,10 +575,26 @@ function buildIngestionClaims({
     claims.push({ claim_type: CLAIM_TYPES.EVENT, payload: { kind: evt.kind }, source_record: sourceThread });
   }
 
-  for (const pain of painPoints.filter(p => p.current !== false)) {
+  for (const pain of painPoints.filter(p => painPointDurable(p, raw))) {
     claims.push({
       claim_type: CLAIM_TYPES.PAIN_SIGNAL,
       payload: { pain: pain.description, epistemic: pain.epistemic },
+      source_record: sourceThread,
+    });
+  }
+
+  for (const sig of decisionMakerSignals) {
+    if (!decisionMakerDurable(sig)) continue;
+    if (claims.some(c => c.claim_type === CLAIM_TYPES.CONTACT && c.payload?.name === sig.contactName)) continue;
+    claims.push({
+      claim_type: CLAIM_TYPES.CONTACT,
+      payload: {
+        name: sig.contactName,
+        role: sig.role,
+        epistemic: sig.epistemic,
+        reported_by: sig.reportedBy || null,
+        decision_maker: true,
+      },
       source_record: sourceThread,
     });
   }

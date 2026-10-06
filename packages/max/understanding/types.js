@@ -34,6 +34,7 @@ const AMBIGUITY_KIND = Object.freeze({
   CONTACT: 'contact',
   TEMPORAL: 'temporal',
   CORRECTION_TARGET: 'correction_target',
+  ACTION_TARGET: 'action_target',
 });
 
 function newSituationId(prefix = 'sit') {
