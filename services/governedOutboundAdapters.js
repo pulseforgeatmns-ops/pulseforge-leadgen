@@ -29,6 +29,21 @@ async function readOutboundHistory(pool, tenantId, clientId, ignoreItem = null) 
   return rows[0];
 }
 
+async function governedScheduleConsumesCapacity(pool, tenantId, scheduleId) {
+  if (!scheduleId) return false;
+  const { rows } = await pool.query(
+    `SELECT EXISTS (
+        SELECT 1 FROM tenant_outreach_scheduled_sends
+         WHERE tenant_id=$1 AND id=$2 AND status IN ('SCHEDULED','EXECUTING','SENT')
+      ) OR EXISTS (
+        SELECT 1 FROM emmett_tenant_mailbox_capacity_reservations
+         WHERE tenant_id=$1 AND schedule_id=$2 AND status IN ('scheduled','executing','sent')
+      ) AS consumed`,
+    [String(tenantId), String(scheduleId)]
+  );
+  return rows[0]?.consumed === true;
+}
+
 function adapters(pool, dependencies = {}) {
   const governedContext = dependencies.governedContext
     || createGovernedOutboundContext({
@@ -123,8 +138,15 @@ function adapters(pool, dependencies = {}) {
       });
       if (operatingBase.emmettAuthorityMissing) fail('emmett_capacity_unavailable');
       const reserved = Number(envelope.currentScheduledCount || 0) + Number(envelope.currentExecutingCount || 0);
+      const reservedScheduleConsumesCapacity = opts.reservedScheduleId
+        ? await governedScheduleConsumesCapacity(pool, tenantId, opts.reservedScheduleId)
+        : false;
+      // Execution validation must evaluate capacity around its own durable reservation.
+      // The reservation remains authoritative; only the availability calculation excludes
+      // that one already-authorized unit so a cap of one does not reject itself.
+      const otherReserved = Math.max(0, reserved - (reservedScheduleConsumesCapacity ? 1 : 0));
       const authorizedRemaining = Math.max(0, operatingBase.authorizationLimitedCapacity
-        - Number(envelope.currentSentCount || 0) - reserved);
+        - Number(envelope.currentSentCount || 0) - otherReserved);
       const calendarOpen = inWindow.hour >= grantWindow.startHour
         && inWindow.hour < grantWindow.endHour
         && inWindow.weekday > 0 && inWindow.weekday < 6;
@@ -133,7 +155,7 @@ function adapters(pool, dependencies = {}) {
         : 0;
       const planningDailyCapacity = Math.min(
         operatingBase.planningDailyCapacity,
-        Math.max(0, operatingBase.authorizationLimitedCapacity - reserved),
+        Math.max(0, operatingBase.authorizationLimitedCapacity - otherReserved),
       );
       if (!Number.isFinite(planningDailyCapacity) || planningDailyCapacity <= 0) fail('emmett_capacity_exhausted');
       if (opts.mode === 'dispatch' && dispatchNow <= 0) fail('dispatch_unavailable_now');
@@ -374,11 +396,14 @@ function adapters(pool, dependencies = {}) {
         message: amo.resolvePaigeVariant(variants, { candidateId: item.paige?.candidateId || item.id,
           variantLabel: item.paige?.variantLabel || 'Primary', includeIdentity: ctx.usesBrevoTransport }) })) };
   }
-  async function liveGate(program, item, _prepared, now) {
+  async function liveGate(program, item, _prepared, now, opts = {}) {
     const { rows } = await pool.query(`SELECT 1 FROM acquisition_outbound_inbox_health
       WHERE tenant_id=$1 AND integration_id=$2 AND last_success_at>now()-interval '5 minutes'`, [tenantId, program.policy.inboxIntegrationId]);
     if (!rows.length) fail('reply_poll_stale');
-    const infra = await infrastructure(program, now, item, { mode: 'dispatch' });
+    const infra = await infrastructure(program, now, item, {
+      mode: 'dispatch',
+      reservedScheduleId: opts.reservedScheduleId || null,
+    });
     if (infra.lastAttempt && +now - +new Date(infra.lastAttempt) < Math.max(program.policy.spacingMinutes, infra.envelope?.minimumSpacingMinutes || 0) * 60000) {
       fail('cross_path_spacing');
     }

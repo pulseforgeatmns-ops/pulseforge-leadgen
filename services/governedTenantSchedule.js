@@ -64,7 +64,9 @@ async function validateGovernedSchedule(schedule, opts = {}) {
   if (ineligible) fail(ineligible);
   const suppressed = await store.suppression(item.snapshot, schedule.missionId, item.id);
   if (suppressed) fail(suppressed);
-  await adapters.liveGate(program, item, prepared, now);
+  await adapters.liveGate(program, item, prepared, now, {
+    reservedScheduleId: schedule.id || null,
+  });
   return { program, envelope, item };
 }
 

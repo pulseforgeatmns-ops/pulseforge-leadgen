@@ -3,7 +3,7 @@ const { fail } = require('../packages/acquisition-mission/DailyOutboundPolicy');
 
 // There is intentionally no direct SMTP dependency in governed transport.
 function createGovernedTenantMailboxSend(program = {}, binding = {}, dependencies = {}) {
-  return async function sendEmail(command = {}) {
+  const sendEmail = async function sendEmail(command = {}) {
     const { envelope, item } = binding;
     if (!envelope || !item || !program.pool) fail('governed_schedule_binding_required');
     if (command.toEmail !== item.email || command.subject !== item.snapshot.message.subject
