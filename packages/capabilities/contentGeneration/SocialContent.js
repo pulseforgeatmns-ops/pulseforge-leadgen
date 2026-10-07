@@ -178,7 +178,7 @@ function createSocialContentCapability(deps = {}) {
         client_id: clientId,
         dryRun,
         channel: inputs.platform || inputs.channel || null,
-        format: inputs.format || null,
+        format: inputs.format || inputs.organicPlan?.proposedFormat || null,
         count: inputs.count || 1,
         simulateMiraUnavailable: inputs.simulateMiraUnavailable,
         contentObjective: inputs.contentObjective || context.objective || null,
@@ -186,6 +186,8 @@ function createSocialContentCapability(deps = {}) {
         missionContext: { ...(inputs.missionContext || {}), advisoryLearnings: learnings.map(l => ({ id: l.id, statement: l.statement, confidence: l.confidence, status: l.status })) },
         evidence: inputs.evidence || [],
         cadenceContext: inputs.cadenceContext || null,
+        organicPlan: inputs.organicPlan || null,
+        organicBacklogId: inputs.organicBacklogId || null,
         invocationSource: inputs.invocationSource || inputs.source || 'capability',
         skipCanonicalPersist: true,
       });
@@ -215,6 +217,23 @@ function createSocialContentCapability(deps = {}) {
 
       const draftRows = buildDraftRows(generationResult, context, inputs);
       for (const draft of draftRows) {
+        if (inputs.organicPlan) {
+          draft.meta = {
+            ...(draft.meta || {}),
+            format: inputs.organicPlan.proposedFormat,
+            organic: inputs.organicPlan,
+            schedulingRationale: inputs.organicPlan.schedulingRationale,
+            proposedPublishAt: inputs.organicPlan.proposedPublishAt,
+          };
+          if (inputs.organicPlan.assetIds?.length) {
+            draft.mediaRefs = (inputs.organicPlan.assets || []).map((asset) => ({
+              id: asset.id,
+              driveFileId: asset.driveFileId,
+              filename: asset.filename,
+              webViewLink: asset.webViewLink || null,
+            }));
+          }
+        }
         if (draft.platform !== 'blog') require('../contentPublication/approvalBinding').assertSocialCopy(draft);
       }
       if (!draftRows.length) {
@@ -294,6 +313,23 @@ function createSocialContentCapability(deps = {}) {
               pendingCommentId
             );
           }
+        }
+      }
+
+      if (inputs.organicBacklogId && committed[0]?.id) {
+        try {
+          const { getStore } = require('../../../services/paigeAnchorOrganicSocial');
+          const organicStore = getStore();
+          await organicStore.ensureSchema();
+          await organicStore.updateBacklogItem(inputs.organicBacklogId, clientId, {
+            approvalState: 'pending_approval',
+            artifactId: committed[0].id,
+          });
+          if (inputs.organicPlan?.assetIds?.length) {
+            await organicStore.recordAssetUsage(inputs.organicPlan.assetIds, clientId);
+          }
+        } catch (bindErr) {
+          console.error('[Paige organic] backlog bind failed:', bindErr.message);
         }
       }
 
