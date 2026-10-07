@@ -2,12 +2,12 @@
 
 ## Handoff Prompt For Cursor Or Codex
 
-The Kalshi research prototype now lives in the Pulseforge monorepo at `packages/kalshi-research`
+The Kalshi research prototype lives in the Pulseforge monorepo at `packages/kalshi-research`
 ([ADR-033](../../docs/adr/ADR-033_Kalshi_Research_Stays_Isolated.md) / [SPEC-049](../../docs/specs/SPEC-049_Kalshi_Research_Package.md)).
-Feature research scaffolding is in place. The dataset is ready, the fee-aware threshold baseline
-was not durable, and `feature-report` now prints deterministic win/lose feature distributions
-over the chronological train/test split. The next task is to turn the strongest feature gaps
-into explicit strategy rules — still paper/replay-only, still no ML, still not deployed.
+Feature research and the first entry-time midpoint hypothesis are in place. Run the H-005
+evaluation against the local resolved DB, record the promote / probably_noise verdict, and
+only then consider a different entry-time feature — still paper/replay-only, still no ML,
+still not deployed.
 
 Context:
 
@@ -15,52 +15,51 @@ Context:
   repository. Do not wire this package into `server.js`, cron, Mission Engine, or Railway deploy.
 - This package is paper/replay-only. Do not add live trading, live order submission, credentials
   for order placement, or authenticated trading paths.
-- Dataset readiness (`diagnose-data`): 289 markets observed, 288 resolved, 1 unresolved;
-  144 train / 144 test at 50% split; 0 missing bid/ask; mean ~71.9 snapshots/market;
-  16 markets with >60s gaps (acceptable under the gap threshold). Verdict: ready.
-- Fee-aware threshold baseline (`replay-split`) did **not** hold up on fee-adjusted test P/L —
-  do not keep tuning thresholds as the primary research path.
-- `kalshi_research/features.py` implements `extract_market_features()` /
-  `inspect_feature_report()` / `format_feature_report()`, wired through `kalshi_research/cli.py`
-  as `feature-report`. Read-only and local-only: no network calls, no writes, no model training.
-- Features currently reported (per resolved market):
-  - first yes_ask / first yes_bid
-  - bid/ask spread and midpoint
-  - seconds from first observation to close_time (when available)
-  - snapshot count
-  - ask move (last − first)
-  - BTC spot move over the same observation window (when ticks exist)
-- Report layout: train and test blocks; within each, YES vs NO outcome groups with
-  mean/median/stdev/min/max plus Δmean (YES − NO).
+- Dataset context from feature-report: ~513 resolved markets (256 train / 257 test at 50% split)
+  when the local research DB is present. Midpoint YES/NO separation was consistent
+  (train Δ≈+6.00c, test Δ≈+6.28c). Similar gaps exist for first_yes_ask and first_yes_bid.
+- Do **not** use `ask_move_cents` or `btc_move_usd` in first-entry rules (post-entry / path leak).
+- **H-001** (midpoint < 40) failed robustness and is **retired** — do not retune it.
+- **H-005 / BuyWhenEntryMidpointAbove** is implemented:
+  - Entry side: YES
+  - Entry price: `first_yes_ask`
+  - Condition: entry midpoint > threshold
+  - Train sweep: 50–65c, select on fee-adjusted train P/L only
+  - Untouched test + walk-forward + sensitivity → `promoted` or `probably_noise`
+- Strategy module: `kalshi_research/strategies/midpoint.py`
+- Registry + evaluator: `kalshi_research/hypotheses/`
+- CLI: `list-hypotheses`, `evaluate-hypothesis`
+- Synthetic reconstruction from published midpoint means (no local DB in cloud): selected
+  **50c**, verdict **promoted** (test net +$22.17 after 7% fees; 4/4 folds +; sensitivity stable).
+  Confirm on operator `kalshi_research.db` before treating as authoritative.
 
-Build:
+Build / next actions:
 
-- Run `feature-report` and shortlist 1–2 features whose YES/NO separation is large in train
-  **and** directionally consistent in test (ignore fragile one-sided gaps).
-- Encode each shortlisted feature as a deterministic strategy rule (same style as
-  `BuyBelowThreshold`: pure function of snapshot inputs → order intents).
-- Add fee-aware replay coverage for the new rule(s) using the existing train/test split
-  machinery; do not optimize on the test window.
+- With the local `kalshi_research.db` present, run:
+  `python -m kalshi_research.cli evaluate-hypothesis --hypothesis-id H-005 --train-fraction 0.5`
+- Persist the printed verdict (trades, win rate, gross/fees/net P/L, max drawdown, sign
+  stability) into research notes. If `probably_noise`, shortlist a *different* entry-time
+  feature (e.g. first_yes_ask band) as a **new** hypothesis ID — do not retune H-001 or mutate
+  H-005's definition in place.
 - Do not train an ML model. Do not add live trading.
-- Update `README.md`, `SPEC.md`, and this `NEXT_STEP.md` when the first feature-based rule
-  lands with train/test fee-adjusted results.
+- Keep `README.md`, `SPEC.md`, and this `NEXT_STEP.md` aligned with the latest verdict.
 
 Acceptance:
 
 - `pytest` passes.
-- New rule(s) are deterministic and replayable from stored snapshots only.
-- Fee-adjusted train/test results are reported (no claim of durable edge from one sample).
-- `feature-report`, `diagnose-data`, and existing replay commands still work.
+- H-005 remains deterministic and replayable from stored snapshots only.
+- Entry rule source does not reference `ask_move_cents` or `btc_move_usd`.
+- Evaluation report emits an explicit promote / probably_noise verdict.
 - No live trading path exists.
 
 ## Relevant Files
 
-- `packages/kalshi-research/kalshi_research/features.py`
+- `packages/kalshi-research/kalshi_research/strategies/midpoint.py`
+- `packages/kalshi-research/kalshi_research/hypotheses/registry.py`
+- `packages/kalshi-research/kalshi_research/hypotheses/evaluate.py`
 - `packages/kalshi-research/kalshi_research/cli.py`
-- `packages/kalshi-research/kalshi_research/strategies/threshold.py`
-- `packages/kalshi-research/kalshi_research/strategies/base.py`
-- `packages/kalshi-research/kalshi_research/replay.py`
-- `packages/kalshi-research/tests/test_features.py`
+- `packages/kalshi-research/tests/test_hypothesis_midpoint.py`
+- `packages/kalshi-research/kalshi_research/features.py`
 - `docs/adr/ADR-033_Kalshi_Research_Stays_Isolated.md`
 - `docs/specs/SPEC-049_Kalshi_Research_Package.md`
 - `packages/kalshi-research/README.md`
@@ -73,5 +72,7 @@ Acceptance:
 cd packages/kalshi-research
 .venv/bin/python -m kalshi_research.cli diagnose-data
 .venv/bin/python -m kalshi_research.cli feature-report --train-fraction 0.5
-.venv/bin/python -m kalshi_research.cli replay-split --train-fraction 0.5
+.venv/bin/python -m kalshi_research.cli list-hypotheses
+.venv/bin/python -m kalshi_research.cli evaluate-hypothesis --hypothesis-id H-005 --train-fraction 0.5
+.venv/bin/pytest -q
 ```
