@@ -15,6 +15,23 @@ function baseInput(overrides = {}) {
   };
 }
 
+test('canonical AO signature when communication identity is present', () => {
+  const out = composeAoFollowUp(baseInput({
+    assignedAoName: 'Tony Jackson',
+    aoCommunicationIdentity: {
+      emailAddress: 'tony@goanchorcleaning.com',
+      phoneNumber: '+1 978 505 1501',
+      phoneDisplay: '(978) 505-1501',
+    },
+    contactName: 'Lori',
+    aoNotes: 'Follow up on facility assessment interest.',
+  }));
+  assert.match(out.emailDraft, /Tony Jackson/);
+  assert.match(out.emailDraft, /Acquisition Operator/);
+  assert.match(out.emailDraft, /tony@goanchorcleaning\.com/);
+  assert.match(out.emailDraft, /\(978\) 505-1501/);
+});
+
 test('NH Family Dentistry — internal staff cleaning', () => {
   const out = composeAoFollowUp(baseInput({
     accountName: 'New Hampshire Family Dentistry',

@@ -3,6 +3,7 @@
 const pool = require('../db');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { composeAoFollowUp } = require('../utils/aoFollowupComposer');
+const { loadIdentityForAssignedAo } = require('../utils/aoCommunicationIdentity');
 const { ensureProspectAccess } = require('./aoProspectUpdateService');
 const { insertActivity } = require('./aoCrmService');
 
@@ -42,6 +43,7 @@ function buildComposerInput({
 }) {
   const notes = [body.aoNotes, detail.history?.[0]?.notes].filter(Boolean).join('\n');
   const last = detail.history?.[0];
+  const assignedAoId = detail.summary.assigned_ao_id || profile?.id;
   return {
     tenantId: clientId,
     accountId: prospectId,
@@ -49,7 +51,7 @@ function buildComposerInput({
     accountType: detail.summary.icp_category,
     address: detail.summary.address,
     phone: detail.contact.phone,
-    assignedAoId: detail.summary.assigned_ao_id || profile?.id,
+    assignedAoId,
     assignedAoName: profile?.name || detail.summary.ao_owner || 'Anchor Cleaning',
     assignedAoEmail: profile?.email || null,
     contactName: body.contactName || detail.contact.name,
@@ -88,14 +90,26 @@ async function generateFollowUpDraft({
   const fullDetail = await aoCrm.getAccountDetail({ clientId, prospectId, aoUserId, db });
   if (!fullDetail) return { error: 'Account not found', status: 404 };
 
+  const assignedAoId = fullDetail.summary?.assigned_ao_id || profile?.id;
+  const { identity, assignedAo } = await loadIdentityForAssignedAo(db, {
+    assignedAoId,
+    tenantId: clientId,
+  });
+
   const input = buildComposerInput({
     clientId,
     prospectId,
     detail: fullDetail,
     profile,
-    body,
+    body: {
+      ...body,
+      aoCommunicationIdentity: identity,
+      assignedAoContext: assignedAo,
+    },
     source: body.source || 'crm_account',
   });
+  input.aoCommunicationIdentity = identity;
+  input.assignedAoContext = assignedAo;
 
   const draft = composeAoFollowUp(input);
   return { ok: true, draft, input_snapshot: input };

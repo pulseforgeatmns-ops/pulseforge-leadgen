@@ -117,7 +117,8 @@ function buildPerProspectVariants(input = {}) {
     || 0
   );
   const crmByProspectId = input.crmByProspectId || null;
-  const senderName = resolveAnchorSenderName(plan, mission);
+  const aoSenderNameByProspectId = input.aoSenderNameByProspectId || null;
+  const defaultSenderName = resolveAnchorSenderName(plan, mission);
   const useAnchorLifecycle = clientId === ANCHOR_CLIENT_ID;
   const useStudioSubstralFirstTouch = isStudioSubstralClient(clientId);
 
@@ -156,6 +157,10 @@ function buildPerProspectVariants(input = {}) {
       usedPersonalization = true;
     } else if (useAnchorLifecycle) {
       const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
+      const prospectKey = String(crmRecord?.prospect_id || crmRecord?.id || identity.prospectId || candidateId);
+      const senderName = (aoSenderNameByProspectId && aoSenderNameByProspectId.get?.(prospectKey))
+        || (crmRecord?.assigned_ao_id && aoSenderNameByProspectId?.get?.(String(crmRecord.prospect_id || crmRecord.id)))
+        || defaultSenderName;
       const lifecycle = buildAnchorLifecycleVariant({
         candidate: {
           ...candidate,
@@ -367,6 +372,7 @@ function buildPaigeVariantsPayload(executionInput = {}) {
     plan,
     clientId,
     crmByProspectId,
+    aoSenderNameByProspectId: executionInput.aoSenderNameByProspectId,
     approvedCopies: executionInput.approvedCopies,
     mission: executionInput.mission || {},
   });
@@ -409,6 +415,26 @@ async function runPaigeVariants(executionInput = {}, opts = {}) {
     const approvedCopies = approvedCopyIndexFromInventory(inventory);
     if (approvedCopies) executionInput = { ...executionInput, approvedCopies };
   }
+  const clientId = Number(
+    executionInput.mission?.clientId
+    ?? executionInput.mission?.tenantId
+    ?? executionInput.plan?.clientId
+    ?? 0
+  );
+  if (opts.pool && clientId === 10 && !executionInput.aoSenderNameByProspectId) {
+    const crmByProspectId = executionInput.crmByProspectId
+      || executionInput.specialistInput?.crmByProspectId
+      || null;
+    const { buildAoSenderNameByProspectId } = require('../../../utils/aoCommunicationIdentity');
+    executionInput = {
+      ...executionInput,
+      aoSenderNameByProspectId: await buildAoSenderNameByProspectId(
+        opts.pool,
+        crmByProspectId,
+        clientId
+      ),
+    };
+  }
   const transactionId = executionInput.transactionId;
   const { max, scout, plan } = extractPaigeUpstreamContext(executionInput);
 
@@ -440,12 +466,6 @@ async function runPaigeVariants(executionInput = {}, opts = {}) {
     });
   }
 
-  const clientId = Number(
-    executionInput.mission?.clientId
-    ?? executionInput.mission?.tenantId
-    ?? plan.clientId
-    ?? 0
-  );
   if (clientId === ANCHOR_CLIENT_ID) {
     const doctrineViolations = [];
     for (const variant of payload.variants || []) {

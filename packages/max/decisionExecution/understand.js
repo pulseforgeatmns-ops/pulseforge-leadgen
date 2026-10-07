@@ -70,12 +70,27 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
     if (conflict) epistemic.ownership = EPISTEMIC.CONFLICTING;
   }
 
+  let assignedAo = null;
+  if (ownerId && stateStore.loadAssignedAoContext) {
+    assignedAo = await stateStore.loadAssignedAoContext(ownerId);
+  } else if (owner) {
+    assignedAo = {
+      id: owner.id,
+      name: owner.name,
+      role: 'Acquisition Operator',
+      email: owner.email || null,
+      phone: null,
+      mailboxStatus: 'not_configured',
+    };
+  }
+
   const snapshot = {
     account: {
       id: prospect?.id || null,
       company_name: prospect?.company_name || expectationRow?.source_evidence?.account_name || null,
       owner_id: ownerId,
       owner_name: owner?.name || expectationRow?.source_evidence?.ao_name || null,
+      assignedAo,
     },
     relationship: rel,
     expectation: expectationRow

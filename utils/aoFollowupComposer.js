@@ -1,5 +1,10 @@
 'use strict';
 
+const {
+  buildAoSignature,
+  aoSenderDisplayFirstName,
+} = require('./aoCommunicationIdentity');
+
 const GENERIC_PHRASES = [
   /\bjust checking in\b/i,
   /\btouching base\b/i,
@@ -46,7 +51,7 @@ function firstName(fullName, fallback = 'there') {
 }
 
 function aoFirstName(assignedAoName) {
-  return firstName(assignedAoName, 'Anchor Cleaning');
+  return aoSenderDisplayFirstName(assignedAoName, firstName(assignedAoName, 'Anchor Cleaning'));
 }
 
 function textBlob(input) {
@@ -67,7 +72,15 @@ function textBlob(input) {
     .toLowerCase();
 }
 
-function signDraft(body, assignedAoName) {
+function signDraft(body, input = {}) {
+  const assignedAoName = typeof input === 'string' ? input : input.assignedAoName;
+  if (input && typeof input === 'object' && input.aoCommunicationIdentity) {
+    const signature = buildAoSignature({
+      userName: assignedAoName,
+      identity: input.aoCommunicationIdentity,
+    });
+    return `${body.trim()}\n\n${signature}`;
+  }
   const ao = String(assignedAoName || 'Anchor Cleaning').trim();
   return `${body.trim()}\n\nBest,\n${ao}\nAnchor Cleaning`;
 }
@@ -157,7 +170,7 @@ Thanks for taking a few minutes to talk with me. From what I understood, some of
 We're not trying to push anything that isn't needed. A free facility assessment would let us understand the space, what's already being handled, and whether Anchor could actually help.
 
 Would a quick facility assessment be worth scheduling in the next week or two?`,
-    input.assignedAoName
+    input
   );
 
   return {
@@ -191,7 +204,7 @@ function composePainPropertyMgmt(input) {
 ${ao} from Anchor Cleaning here. ${kristyBridge}We heard there may be some cleaning concerns at the ${input.accountName || 'property'} property, ${painClause}. I'm not assuming anything from the outside — I'd like to ask how cleaning or vendor issues usually get handled for that property, and whether a free facility assessment or backup coverage from Anchor would even make sense.
 
 If you're the right person to talk with, a quick reply would help. If someone else handles it, I'd appreciate a point in the right direction.`,
-    input.assignedAoName
+    input
   );
 
   return {
@@ -220,7 +233,7 @@ ${ao} from Anchor Cleaning — it's been a while, and I wanted to reconnect.
 I'm working locally with Anchor on professional offices and property accounts. I'm not sure there's a current need at ${account}, but I wanted you to know we're here if cleaning support, backup coverage, or vendor options ever come up.
 
 We diagnose first — we're not going to push a quote where it doesn't fit. I can send more info, or loop Jake in for a quick conversation if that'd be useful.`,
-    input.assignedAoName
+    input
   );
 
   return {
@@ -248,7 +261,7 @@ ${ao} from Anchor Cleaning. Following up on our conversation about the recent sw
 Before assuming Anchor could help, I'd like to understand who handles custodial concerns for the location — and whether outside cleaning support is ever considered locally, or if everything has to go through a regional or supplier process.
 
 If there's a local or regional contact for that, I'd appreciate a point in the right direction.`,
-    input.assignedAoName
+    input
   );
 
   const hasContact = Boolean(input.contactEmail || input.contactPhone);
@@ -330,7 +343,7 @@ ${ao} from Anchor Cleaning. Following up on ${context.trim().endsWith('.') ? con
 Before suggesting anything, I'd like to understand how cleaning is handled today — and whether a free facility assessment would help us see the space and current setup.
 
 Would a brief call or facility assessment work in the next week or two?`,
-    input.assignedAoName
+    input
   );
 
   return {
@@ -464,6 +477,7 @@ function composeAoFollowUp(input) {
     requiresJakeApproval: Boolean(input.requiresJakeApproval),
     jakeInvolvementReason: input.jakeInvolvementReason || null,
     currentStage: input.currentStage || null,
+    aoCommunicationIdentity: input.aoCommunicationIdentity || null,
   };
 
   let partial;

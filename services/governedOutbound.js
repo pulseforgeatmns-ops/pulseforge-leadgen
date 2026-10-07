@@ -172,12 +172,19 @@ function service({
     const selected = [];
     const emails = new Set(); const companies = new Set();
     const excluded = [];
+    const { resolveOutboundSenderForProspect } = require('../utils/aoCommunicationIdentity');
     for (const row of prepared.candidates) {
       const crm = await adapters.contact(row.candidateId);
       const reason = candidateReason(row.item, crm, row.message, program.policy);
+      const senderResolution = await resolveOutboundSenderForProspect(pool, {
+        assignedAoId: crm?.assigned_ao_id,
+        tenantId: resolvedTenantId,
+        fallbackSender: prepared.sender,
+      });
       const entry = { candidateId: String(row.candidateId), prospectId: String(crm?.prospect_id || crm?.id || ''),
         companyId: String(crm?.company_id || ''), email: String(row.item.email || '').toLowerCase(),
-        message: row.message, sender: prepared.sender, revision: prepared.revision };
+        message: row.message, sender: senderResolution.sender, revision: prepared.revision,
+        senderResolution: { usedAoSender: senderResolution.usedAoSender, reason: senderResolution.reason } };
       const suppressed = !reason && await store.suppression(entry);
       if (reason || suppressed || !entry.companyId || emails.has(entry.email) || companies.has(entry.companyId)) {
         excluded.push({ candidateId: entry.candidateId, reason: reason || suppressed || 'duplicate_or_missing_company' });
@@ -524,6 +531,7 @@ function service({
       existingItems: items,
       limit: plan.prepareRequested,
       decisions: preparationDecisions,
+      pool,
     });
     if (selected.length < plan.prepareRequested) {
       const inventoryEntries = await selectInventoryRefillEntries({
