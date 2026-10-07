@@ -1,0 +1,61 @@
+name: Signal V1 Core
+on:
+  pull_request:
+    paths:
+      - 'packages/signal-v1/**'
+      - 'services/signalOperator/**'
+      - 'services/telegramCallerFeed/**'
+      - 'services/signalV1ShadowScheduler.js'
+      - 'scripts/*Signal*'
+      - 'scripts/signalTelegramSourceProbe.js'
+      - 'migrations/*signal-v1*'
+      - 'package*.json'
+      - 'server.js'
+      - '.github/workflows/signal-v1-core.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/signal-v1/**'
+      - 'services/signalOperator/**'
+      - 'services/telegramCallerFeed/**'
+      - 'services/signalV1ShadowScheduler.js'
+      - 'scripts/*Signal*'
+      - 'scripts/signalTelegramSourceProbe.js'
+      - 'migrations/*signal-v1*'
+      - 'package*.json'
+      - 'server.js'
+      - '.github/workflows/signal-v1-core.yml'
+permissions:
+  contents: read
+jobs:
+  signal-v1-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install disposable PostgreSQL prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql
+          bindir="$(pg_config --bindir)"
+          sudo ln -sf "$bindir/initdb" /usr/local/bin/initdb
+          sudo ln -sf "$bindir/pg_ctl" /usr/local/bin/pg_ctl
+      - run: npm ci
+      - name: Verify isolated test boundary and run Signal tests
+        run: |
+          test -z "${DATABASE_URL:-}"
+          test -z "${TELEGRAM_SESSION_STRING:-}"
+          test -z "${BREVO_API_KEY:-}"
+          npm run test:signal-v1
+          node --test test/signalV1Startup.test.js
+      - name: Build and smoke-test dedicated caller image with network disabled
+        run: |
+          docker build -f services/telegramCallerFeed/Dockerfile -t signal-caller-ci .
+          docker run --rm --network none signal-caller-ci node -e "require('./services/telegramCallerFeed/server'); require('telegram/sessions'); console.log('caller image imports pass')"

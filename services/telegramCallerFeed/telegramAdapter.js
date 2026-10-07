@@ -7,9 +7,11 @@
 async function createGramJsClient(credentials) {
   const { TelegramClient } = require('telegram');
   const { StringSession } = require('telegram/sessions');
+  const { Logger } = require('telegram/extensions/Logger');
   const session = new StringSession(credentials.sessionString);
   const client = new TelegramClient(session, credentials.apiId, credentials.apiHash, {
     connectionRetries: 3,
+    baseLogger: new Logger('none'),
   });
   await client.connect();
   if (!(await client.checkAuthorization())) {
@@ -51,7 +53,8 @@ function mapGramMessage(message, entity) {
   if (!message || message.id == null) return null;
   const channelId = entity.id != null ? String(entity.id) : String(message.peerId?.channelId || message.chatId);
   const text = message.message || message.text || '';
-  const occurredAt = message.date ? new Date(message.date * 1000) : new Date();
+  if (typeof message.date !== 'number' || !Number.isFinite(message.date) || message.date <= 0) return null;
+  const occurredAt = new Date(message.date * 1000);
   const username = entity.username || null;
   const url = username ? `https://t.me/${username}/${message.id}` : null;
 
@@ -59,7 +62,7 @@ function mapGramMessage(message, entity) {
   let forwardedFrom = null;
   const fwd = message.fwdFrom;
   if (fwd) {
-    forwardedFrom = fwd.fromName || fwd.channelPost != null ? String(fwd.channelPost) : null;
+    forwardedFrom = fwd.fromName || (fwd.channelPost != null ? String(fwd.channelPost) : null);
     forwarding = {
       fromName: fwd.fromName || null,
       fromId: fwd.fromId ? String(fwd.fromId) : null,

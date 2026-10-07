@@ -263,9 +263,13 @@ describe('SIGNAL-V1-006 prospective shadow mode', () => {
     const obs = store.researchObservations.find(
       o => o.observationType === 'FIRST_CALLER' && o.tokenAddress === TOKEN_C
     );
-    for (const job of store.prospectiveJobs) {
-      job.runAfter = new Date(nowMs - 1000);
+    // Let actual observation time pass; moving only runAfter would leak future prices.
+    for (const point of pricePathPass(nowMs).slice(0, 3)) {
+      store.insertMarketObservation({ tokenAddress: TOKEN_C, occurredAt: point.occurredAt,
+        priceUsd: point.price, intervalSeconds: 0, provider: 'test',
+        observedTimestamp: point.occurredAt });
     }
+    nowMs += 300_000;
     await shadow.runDueJobs();
     const row = store.researchObservationOutcomes.find(o => o.executionDelaySeconds === 60);
     assert.ok(row);
@@ -301,7 +305,7 @@ describe('SIGNAL-V1-006 prospective shadow mode', () => {
     assert.equal(obs.metadata.marketSnapshot, undefined);
   });
 
-  it('restart restores pending outcome jobs and completes 24h evaluation', async () => {
+  it('restart restores jobs without fabricating a missing prospective entry', async () => {
     await shadow.ingestRawCallerObservation(
       {
         sourceId: 'src-a',
@@ -327,8 +331,8 @@ describe('SIGNAL-V1-006 prospective shadow mode', () => {
     }
     await restarted.runDueJobs();
     const outcome = store.researchObservationOutcomes.find(o => o.label != null);
-    assert.ok(outcome);
-    assert.ok(['PASS', 'FAIL', 'UNRESOLVED'].includes(outcome.label));
+    assert.equal(outcome, undefined);
+    assert.equal(store.prospectiveJobs.find(j => j.jobType === 'OUTCOME_24H').status, 'DATA_INSUFFICIENT');
   });
 
   it('cohort membership does not depend on outcome success', async () => {

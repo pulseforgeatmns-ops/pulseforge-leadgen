@@ -20,20 +20,30 @@ async function runShadowSchedulerTick(service, options = {}) {
 
 function startShadowScheduler(service, options = {}) {
   const intervalMs = options.intervalMs ?? Number(process.env.SIGNAL_SHADOW_POLL_MS || 60000);
-  let running = false;
-  const handle = setInterval(async () => {
-    if (running) return;
-    running = true;
-    try {
-      await runShadowSchedulerTick(service, options);
-    } catch (err) {
-      console.error('[signal-v1-shadow] scheduler tick error:', err.message);
-    } finally {
-      running = false;
-    }
-  }, intervalMs);
-  if (handle.unref) handle.unref();
-  return () => clearInterval(handle);
+  const captureIntervalMs = options.captureIntervalMs ?? Number(process.env.SIGNAL_CAPTURE_POLL_MS || 1000);
+  for (const value of [intervalMs, captureIntervalMs]) {
+    if (!Number.isFinite(value) || value < 1) throw new Error('Invalid Signal scheduler interval');
+  }
+  const setTimer = options.setInterval || setInterval;
+  const clearTimer = options.clearInterval || clearInterval;
+  const tasks = [
+    { ms: intervalMs, run: () => service.pollCollectorsOnce(), enabled: options.pollCollectors !== false },
+    { ms: captureIntervalMs, run: () => service.runDueJobs(options.jobLimit ?? 50, { jobType: 'DELAY_CAPTURE' }), enabled: options.processJobs !== false },
+    { ms: intervalMs, run: () => service.runDueJobs(options.jobLimit ?? 50, { jobType: 'OUTCOME_24H' }), enabled: options.processJobs !== false },
+  ];
+  const handles = tasks.filter(task => task.enabled).map(task => {
+    let running = false;
+    const handle = setTimer(async () => {
+      if (running || (options.gate && !options.gate().ok)) return;
+      running = true;
+      try { await task.run(); }
+      catch (err) { console.error('[signal-v1-shadow] scheduler tick error:', err.message); }
+      finally { running = false; }
+    }, task.ms);
+    if (handle.unref) handle.unref();
+    return handle;
+  });
+  return () => handles.forEach(clearTimer);
 }
 
 async function createShadowModeServiceFromStore(store, options = {}) {

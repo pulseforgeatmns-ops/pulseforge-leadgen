@@ -17,7 +17,7 @@ function singleSourceEnv() {
     {
       sourceId: 'telegram-front-runners',
       displayName: 'Front Runners',
-      username: 'front_runners_sol',
+      username: 'frontrunz',
       platform: 'telegram',
       sourceRole: 'CALLER',
       clusterRelationshipStatus: CLUSTER_RELATIONSHIP.UNKNOWN,
@@ -27,8 +27,29 @@ function singleSourceEnv() {
 }
 
 describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
+  it('never invents an empirical timestamp for a message without its Telegram date', () => {
+    const {mapGramMessage}=require('../../../services/telegramCallerFeed/telegramAdapter');
+    assert.equal(mapGramMessage({id:1,message:'fixture'},{id:123}),null);
+    assert.equal(mapGramMessage({id:1,message:'fixture',date:NaN},{id:123}),null);
+  });
+  it('fails closed on a corrupted durable cursor instead of silently resetting', () => {
+    const dir=fs.mkdtempSync(path.join(os.tmpdir(),'tg-corrupt-'));
+    const file=path.join(dir,'state.json');
+    try {
+      fs.writeFileSync(file,'{broken');
+      assert.throws(()=>require('../../../services/telegramCallerFeed/stateStore').loadState(file),/caller_feed_state_unreadable/);
+    } finally { fs.rmSync(dir,{recursive:true,force:true}); }
+  });
   let statePath;
   let tmpDir;
+
+  it('expired pilot disconnects and cannot start another Telegram read', async () => {
+    let disconnects=0,reads=0;
+    const engine=createTelegramCallerFeedEngine({statePath,client:{disconnect:async()=>{disconnects++;},getEntity:async()=>{reads++;}},pilotGate:()=>({ok:false})});
+    const result=await engine.pollOnce();
+    assert.equal(result.connected,false);assert.equal(reads,0);assert.equal(disconnects,1);
+    await engine.pollOnce();assert.equal(disconnects,1);
+  });
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tg-feed-'));
@@ -59,7 +80,7 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
     const occurredAt = new Date('2026-10-06T00:00:00.000Z');
     const mockClient = {
       async getEntity() {
-        return { id: channelId, username: 'front_runners_sol' };
+        return { id: channelId, username: 'frontrunz' };
       },
       async getMessages(_entity, opts) {
         if (opts.limit === 1) return [{ id: 10, message: 'seed', date: occurredAt.getTime() / 1000 }];
@@ -97,6 +118,8 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
     });
     const third = await restarted.pollOnce();
     assert.equal(third.emitted.length, 0);
+    assert.deepEqual(restarted.getRecentCalls(), first.emitted,
+      'a restart must preserve unread calls, their timestamps and provenance');
   });
 
   it('records edits without rewriting original occurredAt', async () => {
@@ -109,7 +132,7 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
     let pass = 0;
     const mockClient = {
       async getEntity() {
-        return { id: channelId, username: 'front_runners_sol' };
+        return { id: channelId, username: 'frontrunz' };
       },
       async getMessages(_entity, opts) {
         if (opts.limit === 1) return [{ id: 5, message: 'seed', date: 1_700_000_000 }];
@@ -141,7 +164,7 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
     const channelId = '-100555';
     const mockClient = {
       async getEntity() {
-        return { id: channelId, username: 'front_runners_sol' };
+        return { id: channelId, username: 'frontrunz' };
       },
       async getMessages(_entity, opts) {
         if (opts.limit === 1) return [{ id: 1, message: 'seed', date: 1 }];
@@ -166,12 +189,16 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
   });
 
   it('marks unauthorized channel unavailable without synthetic observations', async () => {
+    process.env.TELEGRAM_CALLER_SOURCES_JSON = JSON.stringify([
+      { sourceId: 'test-available', username: 'frontrunz' },
+      { sourceId: 'test-unavailable', username: 'unavailable_test_source' },
+    ]);
     process.env.TELEGRAM_API_ID = '1';
     process.env.TELEGRAM_API_HASH = 'hash';
     process.env.TELEGRAM_SESSION_STRING = 'session';
     const mockClient = {
       async getEntity(username) {
-        if (username === 'front_runners_sol') return { id: '-1001', username };
+        if (username === 'frontrunz') return { id: '-1001', username };
         throw new Error('CHANNEL_PRIVATE');
       },
       async getMessages() {
@@ -183,6 +210,55 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
     const unavailable = poll.sources.filter(s => !s.available);
     assert.ok(unavailable.length >= 1);
     assert.equal(poll.emitted.length, 0);
+    const health = engine.getHealth({ connected: poll.connected });
+    assert.equal(health.sources.length, poll.sources.length);
+    assert.ok(health.sources.some(s => !s.available && s.reason === 'CHANNEL_PRIVATE'));
+  });
+
+  it('never resolves guessed sources when no source list is configured', async () => {
+    process.env.TELEGRAM_API_ID = '1';
+    process.env.TELEGRAM_API_HASH = 'hash';
+    process.env.TELEGRAM_SESSION_STRING = 'session';
+    let resolutions = 0;
+    const engine = createTelegramCallerFeedEngine({ statePath, client: {
+      async getEntity() { resolutions += 1; throw new Error('unexpected'); },
+    } });
+    const poll = await engine.pollOnce();
+    assert.equal(resolutions, 0);
+    assert.equal(poll.connected, false);
+    assert.deepEqual(poll.sources, []);
+  });
+
+  it('does not report connected when all configured sources fail', async () => {
+    process.env.TELEGRAM_API_ID = '1';
+    process.env.TELEGRAM_API_HASH = 'hash';
+    process.env.TELEGRAM_SESSION_STRING = 'session';
+    singleSourceEnv();
+    const engine = createTelegramCallerFeedEngine({ statePath, client: {
+      async getEntity() { throw new Error('CHANNEL_PRIVATE'); },
+    } });
+    const poll = await engine.pollOnce();
+    assert.equal(poll.connected, false);
+    assert.equal(engine.getHealth(poll).sources[0].available, false);
+  });
+
+  it('revokes availability when message read fails after entity resolution', async () => {
+    process.env.TELEGRAM_API_ID = '1';
+    process.env.TELEGRAM_API_HASH = 'hash';
+    process.env.TELEGRAM_SESSION_STRING = 'session';
+    singleSourceEnv();
+    let fail = false;
+    const engine = createTelegramCallerFeedEngine({ statePath, client: {
+      async getEntity() { return { id: '123', username: 'frontrunz' }; },
+      async getMessages() { if (fail) throw new Error('CHANNEL_PRIVATE'); return []; },
+    } });
+    assert.equal((await engine.pollOnce()).connected, true);
+    fail = true;
+    const poll = await engine.pollOnce();
+    assert.equal(poll.connected, false);
+    const health = engine.getHealth(poll);
+    assert.deepEqual(health.activeChannels, []);
+    assert.equal(health.sources[0].reason, 'CHANNEL_PRIVATE');
   });
 
   it('feed schema compatible with LiveCallerCollector and rejects procedural rows', async () => {
@@ -234,7 +310,7 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
           {
             sourceId: 'telegram-front-runners',
             displayName: 'Front Runners',
-            username: 'front_runners_sol',
+            username: 'frontrunz',
             channelId: '-1001',
             available: true,
             active: true,
@@ -269,5 +345,13 @@ describe('SIGNAL-V1-007 telegram empirical caller feed', () => {
     assert.doesNotThrow(() => {
       require('../../../services/telegramCallerFeed/server');
     });
+  });
+
+  it('declares and loads the MTProto production runtime', () => {
+    const manifest = require('../../../package.json');
+    assert.ok(manifest.dependencies.telegram);
+    assert.equal(typeof require('telegram').TelegramClient, 'function');
+    assert.equal(typeof require('telegram/sessions').StringSession, 'function');
+    assert.equal(typeof require('telegram/extensions/Logger').Logger, 'function');
   });
 });
