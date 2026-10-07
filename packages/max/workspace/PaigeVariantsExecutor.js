@@ -466,12 +466,6 @@ async function runPaigeVariants(executionInput = {}, opts = {}) {
     });
   }
 
-  const clientId = Number(
-    executionInput.mission?.clientId
-    ?? executionInput.mission?.tenantId
-    ?? plan.clientId
-    ?? 0
-  );
   if (clientId === ANCHOR_CLIENT_ID) {
     const doctrineViolations = [];
     for (const variant of payload.variants || []) {
