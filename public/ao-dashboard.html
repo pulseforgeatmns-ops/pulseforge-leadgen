@@ -70,6 +70,24 @@ body {
   color: var(--pf-nav-muted);
   margin-top: 2px;
 }
+.ao-contact-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--pf-nav-text);
+}
+.ao-contact-card .ao-contact-title {
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-gold);
+  margin-bottom: 6px;
+}
+.ao-contact-meta { color: var(--pf-nav-muted); font-size: 0.72rem; margin-top: 4px; }
 .ao-metrics {
   display: flex;
   gap: 8px;
@@ -950,6 +968,11 @@ body {
     <div>
       <div class="ao-brand">MAX</div>
       <div class="ao-sub" id="aoGreeting">Field follow-up</div>
+      <div class="ao-contact-card" id="aoContactCard" hidden>
+        <div class="ao-contact-title">Email &amp; Contact</div>
+        <div id="aoContactLines"></div>
+        <div class="ao-contact-meta" id="aoContactStatus"></div>
+      </div>
     </div>
     <a class="ao-crm-open" href="/ao/crm">Open CRM</a>
   </div>
@@ -1568,6 +1591,29 @@ function isConversationMode() {
   return !wizardSessionId && Boolean(conversationSessionId);
 }
 
+function renderCommunicationIdentity(profile) {
+  const card = document.getElementById('aoContactCard');
+  const lines = document.getElementById('aoContactLines');
+  const status = document.getElementById('aoContactStatus');
+  const ci = profile?.communication_identity;
+  if (!ci || profile?.role !== 'ao') {
+    card.hidden = true;
+    return;
+  }
+  card.hidden = false;
+  const nameLine = profile.name ? `${profile.name}` : '';
+  const roleLine = ci.role || 'Acquisition Operator';
+  lines.innerHTML = [
+    nameLine ? `<div><strong>${nameLine}</strong></div>` : '',
+    `<div>${roleLine}</div>`,
+    ci.email ? `<div>${ci.email}</div>` : '',
+    ci.phone ? `<div>${ci.phone}</div>` : '',
+  ].filter(Boolean).join('');
+  const mailbox = ci.mailboxStatusLabel || 'Not configured';
+  const sending = ci.sendingEnabled ? 'Enabled' : 'Disabled';
+  status.textContent = `Mailbox: ${mailbox} · Sending: ${sending}`;
+}
+
 function setGreeting(profile) {
   const el = document.getElementById('aoGreeting');
   if (profile?.role === 'ao' && profile?.name) {
@@ -1575,6 +1621,7 @@ function setGreeting(profile) {
   } else {
     el.textContent = 'Field Mode';
   }
+  renderCommunicationIdentity(profile);
 }
 
 async function loadProfile() {

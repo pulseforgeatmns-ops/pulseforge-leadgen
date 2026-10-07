@@ -20,6 +20,8 @@ const {
   isValidCrmStatus,
 } = require('../utils/aoCrmTypes');
 const { logAoAuditEvent } = require('../utils/aoAuditEvents');
+const { loadIdentityForAssignedAo } = require('../utils/aoCommunicationIdentity');
+const { ensureAoCommunicationIdentitySchema } = require('../utils/aoCommunicationIdentitySchema');
 const {
   isAoEligibleForAssignment,
   shouldExcludeFromTodayQueue,
@@ -367,9 +369,15 @@ async function getAccountDetail({ clientId, prospectId, aoUserId = null, db = po
   `, [prospectId, clientId])).rows[0] || null;
 
   const status = deriveDefaultStatus(prospect);
+  await ensureAoCommunicationIdentitySchema(db);
+  const { assignedAo } = await loadIdentityForAssignedAo(db, {
+    assignedAoId: prospect.assigned_ao_id,
+    tenantId: clientId,
+  });
 
   return {
     prospect_id: prospect.id,
+    assignedAo,
     summary: {
       company_name: prospect.company_name || 'Unknown account',
       website: prospect.company_website || null,

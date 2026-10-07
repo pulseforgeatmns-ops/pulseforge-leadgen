@@ -12,6 +12,7 @@ const {
 } = require('../utils/aoCommandCenterRanking');
 const { conversationPreview, prospectLabel } = require('./aoMaxConversation');
 const { logAoAuditEvent } = require('../utils/aoAuditEvents');
+const { loadAoCommunicationIdentity, toPublicIdentity } = require('../utils/aoCommunicationIdentity');
 
 function formatDateInTz(date = new Date(), tz = 'America/New_York') {
   return new Intl.DateTimeFormat('en-CA', {
@@ -292,6 +293,9 @@ async function getCommandCenter({
     hour12: false,
   }).format(new Date()));
 
+  const commIdentity = await loadAoCommunicationIdentity(db, { aoId: aoUserId, tenantId: clientId });
+  const communication = toPublicIdentity(commIdentity);
+
   return {
     date: dateStr,
     tenant_id: String(clientId),
@@ -299,6 +303,8 @@ async function getCommandCenter({
       id: String(aoUserId),
       name: aoUserName,
       greeting: aoUserName ? `${greetingForHour(hour)}, ${aoUserName.split(' ')[0]}.` : null,
+      role: communication?.role || 'Acquisition Operator',
+      communication_identity: communication,
     },
     summary,
     sections: {

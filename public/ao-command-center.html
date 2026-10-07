@@ -54,6 +54,27 @@ body {
   font-size: 0.95rem;
   color: var(--pf-gold);
 }
+.cc-contact {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 8px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.cc-contact-label {
+  font-family: var(--pf-font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--pf-gold);
+  margin-bottom: 6px;
+}
+.cc-contact-meta {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  color: var(--pf-nav-muted);
+}
 .cc-nav {
   display: flex;
   gap: 8px;
@@ -269,6 +290,11 @@ body {
   <div class="cc-title">Today's Command Center</div>
   <div class="cc-sub">Your priority accounts, follow-ups, and conversations for today.</div>
   <div class="cc-greeting" id="greeting"></div>
+  <div class="cc-contact" id="aoContact" hidden>
+    <div class="cc-contact-label">Email &amp; Contact</div>
+    <div id="aoContactBody"></div>
+    <div class="cc-contact-meta" id="aoContactMeta"></div>
+  </div>
 </header>
 
 <div class="cc-summary" id="summary"></div>
@@ -431,9 +457,29 @@ function renderSection(title, items, renderFn, emptyText, collapsible = false) {
   `;
 }
 
+function renderCommunicationIdentity(aoUser) {
+  const wrap = document.getElementById('aoContact');
+  const body = document.getElementById('aoContactBody');
+  const meta = document.getElementById('aoContactMeta');
+  const ci = aoUser?.communication_identity;
+  if (!ci) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  body.innerHTML = [
+    aoUser.name ? `<div><strong>${aoUser.name}</strong></div>` : '',
+    `<div>${ci.role || 'Acquisition Operator'}</div>`,
+    ci.email ? `<div>${ci.email}</div>` : '',
+    ci.phone ? `<div>${ci.phone}</div>` : '',
+  ].filter(Boolean).join('');
+  meta.textContent = `Mailbox: ${ci.mailboxStatusLabel || 'Not configured'} · Sending: ${ci.sendingEnabled ? 'Enabled' : 'Disabled'}`;
+}
+
 function renderAll(data) {
   const s = data.sections;
   document.getElementById('greeting').textContent = data.ao_user?.greeting || '';
+  renderCommunicationIdentity(data.ao_user);
   renderSummary(data.summary);
   document.getElementById('content').innerHTML = [
     renderSection('Today\'s Priority Accounts', s.priority_accounts, renderProspectRow,

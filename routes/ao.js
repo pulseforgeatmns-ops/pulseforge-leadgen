@@ -37,6 +37,12 @@ const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { AO_CRM_NEXT_ACTIONS } = require('../utils/aoCrmTypes');
 const { AO_OUTCOME_TYPES } = require('../utils/aoProspectUpdateTypes');
 const { aoResultHttpStatus, sendAoServiceResult } = require('../utils/aoHttpResult');
+const {
+  loadAoCommunicationIdentity,
+  toPublicIdentity,
+  listAoCommunicationIdentities,
+} = require('../utils/aoCommunicationIdentity');
+const { ensureAoCommunicationIdentitySchema } = require('../utils/aoCommunicationIdentitySchema');
 
 const router = express.Router();
 
@@ -481,8 +487,29 @@ router.post('/api/max/conversations/continue', requireAoWrite, refreshAoSession,
 router.get('/api/profile', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
   const aoActor = getEffectiveActor(req);
   const profile = await aoField.getAoProfile(aoActor.id);
-  if (profile) return res.json(profile);
-  res.json(sessionProfile(req));
+  const clientId = aoClientId(req) || profile?.client_id;
+  let communication_identity = null;
+  if (profile && clientId) {
+    await ensureAoCommunicationIdentitySchema(pool);
+    const identity = await loadAoCommunicationIdentity(pool, { aoId: aoActor.id, tenantId: clientId });
+    communication_identity = toPublicIdentity(identity);
+  }
+  if (profile) {
+    return res.json({
+      ...profile,
+      role_label: communication_identity?.role || 'Acquisition Operator',
+      communication_identity,
+    });
+  }
+  res.json({ ...sessionProfile(req), communication_identity });
+}));
+
+router.get('/api/roster/communication-identities', requireJakeRead, refreshAoSession, wrapAoHandler(async (req, res) => {
+  const clientId = requireAoClient(req, res);
+  if (!clientId) return;
+  await ensureAoCommunicationIdentitySchema(pool);
+  const identities = await listAoCommunicationIdentities(pool, clientId);
+  res.json({ client_id: clientId, identities });
 }));
 
 router.get('/api/queue', requireAoRead, refreshAoSession, wrapAoHandler(async (req, res) => {
