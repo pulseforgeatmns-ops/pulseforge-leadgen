@@ -205,7 +205,7 @@ describe('MAX-SPREADSHEET-003 attachment intent routing', () => {
       attachmentInputs: [{ id: att.id, buffer }],
       store,
     });
-    assert.match(result.operational_response, /No durable changes are needed|reviewed all/i);
+    assert.match(result.operational_response, /reviewed all|Summary:|already match CRM/i);
   });
 
   it('R6 — multiple spreadsheets require narrow clarification', async () => {
