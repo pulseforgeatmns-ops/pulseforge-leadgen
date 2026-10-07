@@ -13,6 +13,17 @@ const { emptyTelemetry, bump } = require('./telemetry');
 const { synthesizeRowUnderstandingText } = require('../composer/rowText');
 const { interpretConversationalInput } = require('../understanding');
 const { CHANGE_TYPES, ROW_CLASS } = require('./spreadsheetChangeTypes');
+const {
+  finalizeRowReconciliation,
+  computeWorkbookDiagnostics,
+  wantsRowLevelDetail,
+  formatRowAuditBullets,
+  formatNoOpReasonLabel,
+  noteAlreadyInCrm,
+  pushCompared,
+  ROW_OUTCOME,
+  SPREADSHEET_NO_OP_REASON,
+} = require('./spreadsheetRowAudit');
 
 function normalizePhone(value) {
   return String(value || '').replace(/\D/g, '');
@@ -111,10 +122,12 @@ function reconcileDirectFields({
   contacts = [],
   columnProvenance = null,
   fileMeta = {},
+  comparedFields = [],
 }) {
   const proposedChanges = [];
   const conflicts = [];
   const ambiguities = [];
+  let contactAudit = null;
 
   const contactName = normalizeText(rowValues.contact || rowValues.contact_name || rowValues.person);
   let contact = null;
@@ -125,6 +138,14 @@ function reconcileDirectFields({
       return nm.toLowerCase() === contactName.toLowerCase()
         || nm.toLowerCase().startsWith(contactName.toLowerCase());
     }) || null;
+    pushCompared(comparedFields, {
+      field: 'contact_name',
+      label: 'Contact',
+      incoming: contactName,
+      result: contact ? 'contact_matched' : 'new',
+    });
+    if (contact) contactAudit = 'Contact already matches';
+    else if (!contactName.includes(' ')) contactAudit = 'Contact data incomplete';
   }
 
   const phone = rowValues.phone || rowValues.mobile || rowValues.cell;
@@ -137,6 +158,13 @@ function reconcileDirectFields({
       columnName: 'phone',
       rawValue: phone,
       columnProvenance,
+    });
+    pushCompared(comparedFields, {
+      field: 'phone',
+      label: 'Phone',
+      incoming: phone,
+      existing: existingPhone,
+      result: classification === 'same' ? 'matched' : classification,
     });
     if (classification === 'new') {
       proposedChanges.push({
@@ -168,6 +196,13 @@ function reconcileDirectFields({
       rawValue: email,
       columnProvenance,
     });
+    pushCompared(comparedFields, {
+      field: 'email',
+      label: 'Email',
+      incoming: email,
+      existing: existingEmail,
+      result: classification === 'same' ? 'matched' : classification,
+    });
     if (classification === 'new') {
       proposedChanges.push({
         type: CHANGE_TYPES.ADD_EMAIL,
@@ -195,30 +230,66 @@ function reconcileDirectFields({
       rawValue: rowValues.status,
       columnProvenance,
     });
+    const existingPriority = prospect?.sales_priority || (prospect?.is_hot ? 'hot' : null);
+    const existingDisposition = prospect?.disposition_status || prospect?.setter_status || null;
     if (statusInterp.kind === 'disposition' && statusInterp.confidence === 'high') {
-      proposedChanges.push({
-        type: CHANGE_TYPES.UPDATE_DISPOSITION,
-        classification: 'correction',
-        value: statusInterp.disposition_status,
-        sourceLabel: statusInterp.sourceLabel,
-        provenance: prov,
-        safe: true,
+      pushCompared(comparedFields, {
+        field: 'status',
+        label: 'Status',
+        incoming: rowValues.status,
+        existing: existingDisposition,
+        mappedTo: 'disposition_status',
+        result: existingDisposition === statusInterp.disposition_status ? 'matched' : 'correction',
       });
+      if (existingDisposition !== statusInterp.disposition_status) {
+        proposedChanges.push({
+          type: CHANGE_TYPES.UPDATE_DISPOSITION,
+          classification: 'correction',
+          value: statusInterp.disposition_status,
+          sourceLabel: statusInterp.sourceLabel,
+          provenance: prov,
+          safe: true,
+        });
+      }
     } else if (statusInterp.kind === 'sales_priority') {
-      proposedChanges.push({
-        type: CHANGE_TYPES.SET_SALES_PRIORITY,
-        classification: 'new',
-        value: statusInterp.sales_priority,
-        sourceLabel: statusInterp.sourceLabel,
-        provenance: prov,
-        safe: true,
+      pushCompared(comparedFields, {
+        field: 'status',
+        label: 'Status',
+        incoming: rowValues.status,
+        existing: existingPriority,
+        mappedTo: 'sales_priority',
+        result: existingPriority === statusInterp.sales_priority ? 'matched' : 'correction',
       });
+      if (existingPriority !== statusInterp.sales_priority) {
+        proposedChanges.push({
+          type: CHANGE_TYPES.SET_SALES_PRIORITY,
+          classification: 'new',
+          value: statusInterp.sales_priority,
+          sourceLabel: statusInterp.sourceLabel,
+          provenance: prov,
+          safe: true,
+        });
+      }
     } else if (statusInterp.kind === 'ambiguous_status') {
+      pushCompared(comparedFields, {
+        field: 'status',
+        label: 'Status',
+        incoming: rowValues.status,
+        result: 'status_unmapped',
+      });
       ambiguities.push({
         field: 'status',
         value: rowValues.status,
         message: 'Status value is unclear — preserved as source label only',
         provenance: prov,
+      });
+    } else if (statusInterp.kind === 'source_label_only') {
+      pushCompared(comparedFields, {
+        field: 'status',
+        label: 'Status',
+        incoming: rowValues.status,
+        mappedTo: 'source_label_only',
+        result: 'status_mapped',
       });
     }
   }
@@ -237,7 +308,7 @@ function reconcileDirectFields({
     });
   }
 
-  return { proposedChanges, conflicts, ambiguities, contact };
+  return { proposedChanges, conflicts, ambiguities, contact, contactAudit, comparedFields };
 }
 
 function reconcileSpreadsheetRow({
@@ -249,22 +320,43 @@ function reconcileSpreadsheetRow({
   memory = null,
   conversationId = null,
   appliedRowHashes = null,
+  committedRowKeys = null,
 }) {
   const rowValues = row.values || row;
   const semanticHash = rowSemanticHash(rowValues);
   const rowKey = `${fileHash || fileId || row.filename}:${row.sheet}:${row.rowNumber}:${semanticHash}`;
-  if (appliedRowHashes?.has(rowKey)) {
-    return {
+  if (committedRowKeys?.has(rowKey)) {
+    const dup = {
       sheet: row.sheet,
       row: row.rowNumber,
+      values: rowValues,
       duplicateSuppressed: true,
       safeToCommit: false,
       proposedChanges: [],
       ambiguities: [],
       conflicts: [],
+      comparedFields: [],
+      classifications: [ROW_CLASS.IGNORE_NON_OPERATIONAL],
+      summary: 'prior import duplicate',
+      rowKey,
+    };
+    return finalizeRowReconciliation(dup);
+  }
+  if (appliedRowHashes?.has(rowKey)) {
+    const dup = {
+      sheet: row.sheet,
+      row: row.rowNumber,
+      values: rowValues,
+      duplicateSuppressed: true,
+      safeToCommit: false,
+      proposedChanges: [],
+      ambiguities: [],
+      conflicts: [],
+      comparedFields: [],
       classifications: [ROW_CLASS.IGNORE_NON_OPERATIONAL],
       summary: 'unchanged row suppressed',
     };
+    return finalizeRowReconciliation(dup);
   }
 
   const context = store.snapshotContext();
@@ -293,12 +385,23 @@ function reconcileSpreadsheetRow({
     rowNumber: row.rowNumber,
   };
 
+  const comparedFields = [];
+  if (accountClaim?.payload?.name) {
+    pushCompared(comparedFields, {
+      field: 'company',
+      label: 'Company',
+      incoming: accountClaim.payload.name,
+      result: accountResolution?.entity ? 'matched' : accountResolution?.status === RESOLUTION.AMBIGUOUS ? 'ambiguous' : 'new',
+    });
+  }
+
   const direct = reconcileDirectFields({
     rowValues,
     prospect,
     contacts: context.contacts || [],
     columnProvenance: row.columnProvenance,
     fileMeta,
+    comparedFields,
   });
 
   const proposedChanges = [...direct.proposedChanges];
@@ -353,18 +456,33 @@ function reconcileSpreadsheetRow({
       });
     }
   }
+  let followUpAudit = null;
   if (thread?.commitments?.length || thread?.temporalReferences?.length) {
-    proposedChanges.push({
-      type: CHANGE_TYPES.ADD_FOLLOW_UP,
-      classification: 'new',
-      value: {
-        commitments: thread.commitments || [],
-        temporalReferences: thread.temporalReferences || [],
-      },
-      safe: true,
-    });
+    if (thread.temporalReferences?.length) {
+      proposedChanges.push({
+        type: CHANGE_TYPES.ADD_FOLLOW_UP,
+        classification: 'new',
+        value: {
+          commitments: thread.commitments || [],
+          temporalReferences: thread.temporalReferences || [],
+        },
+        safe: true,
+      });
+    } else {
+      const phrase = normalizeText(rowValues.next_step || rowValues.follow_up || rowValues.notes || '');
+      followUpAudit = phrase
+        ? `"${phrase}" — no scheduled action created because no date/time was supplied`
+        : 'Follow-up language detected — no scheduled action created because no date/time was supplied';
+      pushCompared(comparedFields, {
+        field: 'follow_up',
+        label: 'Follow-up',
+        incoming: phrase || 'follow-up',
+        result: 'follow_up_no_schedule',
+      });
+    }
   }
   const notesText = normalizeText(rowValues.notes || rowValues.update || rowValues.comments);
+  let noteAudit = null;
   if (notesText && /isn'?t the decision maker|not the decision maker|not decision maker/i.test(notesText)) {
     proposedChanges.push({
       type: CHANGE_TYPES.UPDATE_DECISION_MAKER_SIGNAL,
@@ -374,26 +492,64 @@ function reconcileSpreadsheetRow({
     });
   }
   if (notesText) {
-    proposedChanges.push({
-      type: CHANGE_TYPES.ADD_NOTE,
-      classification: 'new',
-      value: notesText,
-      provenance: buildCellProvenance({
-        ...fileMeta,
-        columnName: 'notes',
-        rawValue: notesText,
-        columnProvenance: row.columnProvenance,
-      }),
-      safe: !accountResolution || accountResolution.status !== RESOLUTION.AMBIGUOUS,
-    });
+    if (accountResolution?.status === RESOLUTION.AMBIGUOUS) {
+      noteAudit = 'Note blocked by account ambiguity';
+      pushCompared(comparedFields, {
+        field: 'notes',
+        label: 'Notes',
+        incoming: notesText,
+        result: 'note_blocked',
+      });
+    } else if (prospect && noteAlreadyInCrm(prospect, notesText)) {
+      noteAudit = 'Note already exists';
+      pushCompared(comparedFields, {
+        field: 'notes',
+        label: 'Notes',
+        incoming: notesText,
+        result: 'note_duplicate',
+      });
+    } else {
+      pushCompared(comparedFields, {
+        field: 'notes',
+        label: 'Notes',
+        incoming: notesText,
+        result: 'new',
+      });
+      proposedChanges.push({
+        type: CHANGE_TYPES.ADD_NOTE,
+        classification: 'new',
+        value: notesText,
+        provenance: buildCellProvenance({
+          ...fileMeta,
+          columnName: 'notes',
+          rawValue: notesText,
+          columnProvenance: row.columnProvenance,
+        }),
+        safe: !accountResolution || accountResolution.status !== RESOLUTION.AMBIGUOUS,
+      });
+    }
+  } else if (rowValues.notes === '' || rowValues.update === '' || rowValues.comments === '') {
+    pushCompared(comparedFields, { field: 'notes', label: 'Notes', result: 'empty' });
   }
   if (rowValues.next_step) {
-    proposedChanges.push({
-      type: CHANGE_TYPES.UPDATE_NEXT_ACTION,
-      classification: 'new',
-      value: normalizeText(rowValues.next_step),
-      safe: true,
+    const step = normalizeText(rowValues.next_step);
+    const hasScheduleHint = /\b(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|\d{1,2}\/\d{1,2}|\d{4}-\d{2}-\d{2})\b/i.test(step);
+    pushCompared(comparedFields, {
+      field: 'follow_up',
+      label: 'Follow-up',
+      incoming: step,
+      result: hasScheduleHint ? 'new' : 'follow_up_no_schedule',
     });
+    if (hasScheduleHint) {
+      proposedChanges.push({
+        type: CHANGE_TYPES.UPDATE_NEXT_ACTION,
+        classification: 'new',
+        value: step,
+        safe: true,
+      });
+    } else {
+      followUpAudit = `"${step}" — no scheduled action created because no date/time was supplied`;
+    }
   }
 
   const rowPlan = {
@@ -407,6 +563,10 @@ function reconcileSpreadsheetRow({
     proposedChanges,
     ambiguities,
     conflicts,
+    comparedFields: direct.comparedFields || comparedFields,
+    noteAudit,
+    contactAudit: direct.contactAudit,
+    followUpAudit,
     understandingPreview: interpreted.preview,
     situationModel: interpreted.situationModel,
   };
@@ -417,7 +577,7 @@ function reconcileSpreadsheetRow({
     && conflicts.length === 0
     && accountResolution?.status !== RESOLUTION.AMBIGUOUS
     && (hasSafeChanges || (hasStructuredClaims && accountResolution?.entity));
-  return rowPlan;
+  return finalizeRowReconciliation(rowPlan);
 }
 
 function buildSpreadsheetReconciliationPlan({
@@ -433,6 +593,10 @@ function buildSpreadsheetReconciliationPlan({
   const workbookId = fileId || stableHash([structuredData?.filename, fileHash || '']);
   const rows = flattenStructuredWorkbook(structuredData, { fileId: workbookId, fileHash });
   const appliedRowHashes = new Map();
+  const pendingWorkbook = memory?.getPendingSpreadsheetWorkbook?.() || null;
+  const committedRowKeys = priorFileHash === fileHash
+    ? new Set(pendingWorkbook?.committedRowKeys || [])
+    : null;
   const rowPlans = [];
 
   for (const row of rows) {
@@ -445,6 +609,7 @@ function buildSpreadsheetReconciliationPlan({
       memory,
       conversationId,
       appliedRowHashes: priorFileHash === fileHash ? appliedRowHashes : null,
+      committedRowKeys,
     });
     if (!plan.duplicateSuppressed) {
       appliedRowHashes.set(plan.rowKey, true);
@@ -461,7 +626,7 @@ function buildSpreadsheetReconciliationPlan({
     duplicateSuppressed: rowPlans.filter(r => r.duplicateSuppressed).length,
   };
 
-  return {
+  const plan = {
     workbookId,
     fileHash,
     workbookSummary: buildWorkbookSummary({
@@ -471,6 +636,8 @@ function buildSpreadsheetReconciliationPlan({
     rows: rowPlans,
     summary,
   };
+  plan.diagnostics = computeWorkbookDiagnostics(plan);
+  return plan;
 }
 
 function rowAccountLabel(rowPlan) {
@@ -504,77 +671,72 @@ function summarizeRowOperationalChanges(rowPlan) {
   return bullets;
 }
 
-function formatSpreadsheetOperationalResponse(plan, { previewOnly = true, instruction = '' } = {}) {
-  const wantsRowDetail = /\b(which rows?|show me.*rows?|rows? changed|row-level)\b/i.test(String(instruction || ''));
-  const safeNotes = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_NOTE && c.safe !== false).length, 0);
-  const safeContacts = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_CONTACT).length, 0);
-  const safeFollowUps = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_FOLLOW_UP || c.type === CHANGE_TYPES.UPDATE_NEXT_ACTION).length, 0);
-  const contactUpdates = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.ADD_EMAIL || c.type === CHANGE_TYPES.ADD_PHONE).length, 0);
-  const priorityChanges = plan.rows.reduce((n, r) => n + r.proposedChanges.filter(c => c.type === CHANGE_TYPES.SET_SALES_PRIORITY).length, 0);
+function countNoOpByReason(plan, reason) {
+  return (plan.rows || []).filter(r => r.noOpReason === reason).length;
+}
 
-  const rowsNeedingReview = plan.rows.filter(r => (r.ambiguities || []).length || (r.conflicts || []).length);
-  const rowsWithChanges = plan.rows.filter(r => summarizeRowOperationalChanges(r).length);
+function formatSpreadsheetOperationalResponse(plan, { previewOnly = true, instruction = '', commitSummary = null } = {}) {
+  const wantsRowDetail = wantsRowLevelDetail(instruction);
+  const diag = plan.diagnostics || computeWorkbookDiagnostics(plan);
+  const durableChangeRows = (plan.rows || []).filter(r => r.outcome === ROW_OUTCOME.CHANGES_READY);
+  const reviewRows = (plan.rows || []).filter(r => r.outcome === ROW_OUTCOME.NEEDS_REVIEW);
   const lines = [];
   lines.push(`I reviewed all ${plan.summary.totalRows} row${plan.summary.totalRows === 1 ? '' : 's'}.`);
   lines.push('');
-
-  if (!rowsWithChanges.length && !rowsNeedingReview.length && plan.summary.totalRows) {
-    lines.push('No durable changes are needed:');
-    lines.push(`- ${plan.summary.totalRows} row${plan.summary.totalRows === 1 ? '' : 's'} match existing CRM data or contain no operational updates`);
-    if (plan.summary.duplicateSuppressed) {
-      lines.push(`- ${plan.summary.duplicateSuppressed} row${plan.summary.duplicateSuppressed === 1 ? '' : 's'} duplicate prior uploads`);
+  lines.push('Summary:');
+  if (commitSummary) {
+    lines.push(`- ${commitSummary}`);
+  } else {
+    lines.push(`- ${durableChangeRows.length} durable change${durableChangeRows.length === 1 ? '' : 's'} ready`);
+    lines.push(`- ${countNoOpByReason(plan, SPREADSHEET_NO_OP_REASON.ALREADY_MATCHES_CRM)} already match CRM`);
+    lines.push(`- ${countNoOpByReason(plan, SPREADSHEET_NO_OP_REASON.NO_OPERATIONAL_FIELDS)} contain no operational fields`);
+    lines.push(`- ${countNoOpByReason(plan, SPREADSHEET_NO_OP_REASON.UNMAPPED_COLUMNS)} contain unmapped data`);
+    if (countNoOpByReason(plan, SPREADSHEET_NO_OP_REASON.DUPLICATE_PRIOR_IMPORT)) {
+      lines.push(`- ${countNoOpByReason(plan, SPREADSHEET_NO_OP_REASON.DUPLICATE_PRIOR_IMPORT)} duplicate prior import`);
     }
-    if (previewOnly) {
-      lines.push('');
-      lines.push('Nothing has been saved yet.');
+    if (reviewRows.length) {
+      lines.push(`- ${reviewRows.length} need review`);
     }
-    lines.unshift('');
-    lines.unshift(plan.workbookSummary);
-    return lines.join('\n');
   }
+  lines.push('');
+  lines.push(`${diag.rows_total} rows reviewed`);
+  lines.push(`${diag.fields_compared} fields compared`);
+  if (diag.fields_matched) lines.push(`${diag.fields_matched} matched existing CRM`);
+  if (diag.fields_unmapped) lines.push(`${diag.fields_unmapped} unmapped column value${diag.fields_unmapped === 1 ? '' : 's'}`);
 
-  lines.push('Ready to update:');
-  lines.push(`- ${safeNotes} account note${safeNotes === 1 ? '' : 's'}`);
-  lines.push(`- ${contactUpdates} contact field addition${contactUpdates === 1 ? '' : 's'}`);
-  lines.push(`- ${safeContacts} new contact${safeContacts === 1 ? '' : 's'}`);
-  lines.push(`- ${safeFollowUps} follow-up action${safeFollowUps === 1 ? '' : 's'}`);
-  if (priorityChanges) {
-    lines.push(`- ${priorityChanges} sales-priority change${priorityChanges === 1 ? '' : 's'}`);
-  }
-
-  if (rowsNeedingReview.length) {
+  const showAllRows = wantsRowDetail || durableChangeRows.length + reviewRows.length <= 6;
+  if (showAllRows && plan.rows.length) {
     lines.push('');
-    lines.push('Needs clarification:');
-    for (const rowPlan of rowsNeedingReview) {
+    lines.push('Row-by-row:');
+    lines.push('');
+    for (const rowPlan of plan.rows) {
       const sheet = rowPlan.sheet || 'Sheet1';
       const label = rowAccountLabel(rowPlan);
-      if (wantsRowDetail) {
-        const detail = summarizeRowOperationalChanges(rowPlan).join('; ') || 'Needs review';
-        lines.push(`${sheet} row ${rowPlan.row} — ${label}`);
-        lines.push(`- ${detail}`);
+      lines.push(`${sheet} row ${rowPlan.row} — ${label}`);
+      if (rowPlan.outcome === ROW_OUTCOME.CHANGES_READY) {
+        lines.push('Changes ready');
+      } else if (rowPlan.outcome === ROW_OUTCOME.NEEDS_REVIEW) {
+        lines.push('Needs review');
       } else {
-        lines.push(`- ${sheet} row ${rowPlan.row} — ${label}`);
+        lines.push(formatNoOpReasonLabel(rowPlan.noOpReason) || 'No change');
       }
-    }
-  }
-
-  if (wantsRowDetail) {
-    const changedRows = plan.rows.filter(r => summarizeRowOperationalChanges(r).length && !rowsNeedingReview.includes(r));
-    if (changedRows.length) {
+      const bullets = formatRowAuditBullets(rowPlan);
+      if (bullets.length) {
+        for (const bullet of bullets) lines.push(`- ${bullet}`);
+      } else if (rowPlan.comparedFields?.length) {
+        lines.push('- Compared:');
+        lines.push(`  ${rowPlan.comparedFields.map(c => c.field).join(', ')}`);
+      }
       lines.push('');
-      lines.push('Row changes:');
-      for (const rowPlan of changedRows) {
-        const sheet = rowPlan.sheet || 'Sheet1';
-        lines.push(`${sheet} row ${rowPlan.row} — ${rowAccountLabel(rowPlan)}`);
-        for (const bullet of summarizeRowOperationalChanges(rowPlan)) {
-          lines.push(`- ${bullet}`);
-        }
-      }
     }
+  } else if (!showAllRows) {
+    lines.push('');
+    lines.push(`${plan.rows.filter(r => r.outcome === ROW_OUTCOME.NO_CHANGE).length} unchanged`);
+    lines.push(`${durableChangeRows.length} updates ready`);
+    lines.push(`${reviewRows.length} conflict${reviewRows.length === 1 ? '' : 's'}/ambiguous`);
   }
 
   if (previewOnly) {
-    lines.push('');
     lines.push('Nothing has been saved yet.');
   }
 

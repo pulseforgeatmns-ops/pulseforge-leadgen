@@ -6,6 +6,7 @@ const {
   commitSpreadsheetReconciliationPlan,
   formatSpreadsheetOperationalResponse,
 } = require('../stateIngestion/spreadsheetReconciliation');
+const { computeWorkbookDiagnostics } = require('../stateIngestion/spreadsheetRowAudit');
 const { buildSpreadsheetPreview } = require('./preview');
 const { bump, noteDimension } = require('./telemetry');
 const {
@@ -68,11 +69,24 @@ function persistWorkbookContext(memory, {
     envelopeId,
     conversationId,
     reconciliationPlanId: plan.reconciliationPlanId,
+    reconciliationPlan: plan,
     structuredData,
     fileHash,
+    committedRowKeys: (plan.rows || []).map(r => r.rowKey).filter(Boolean),
     effectiveActor: actor,
     totalRows: plan.summary?.totalRows ?? null,
   });
+}
+
+function recordSpreadsheetReconciliationTelemetry(telemetry, plan) {
+  const diag = plan.diagnostics || computeWorkbookDiagnostics(plan);
+  bump(telemetry, 'max_spreadsheet_terminal_turn_count');
+  bump(telemetry, 'max_spreadsheet_fields_compared_count', diag.fields_compared || 0);
+  bump(telemetry, 'max_spreadsheet_unmapped_field_count', diag.fields_unmapped || 0);
+  bump(telemetry, 'max_spreadsheet_noop_row_count', diag.rows_no_change || 0);
+  if (!diag.rows_with_changes && diag.rows_total > 0) {
+    bump(telemetry, 'max_spreadsheet_zero_change_workbook_count');
+  }
 }
 
 async function runSpreadsheetAttachmentCommand({
@@ -96,20 +110,31 @@ async function runSpreadsheetAttachmentCommand({
   }
 
   recordSpreadsheetTelemetry(telemetry, attachmentIntent);
-  const fileHash = stableHash([JSON.stringify(structuredData)]);
-  const plan = buildSpreadsheetReconciliationPlan({
-    structuredData,
-    store,
-    instruction,
-    fileId: envelopeId || attachmentId,
-    fileHash,
-    memory,
-    conversationId,
-    priorFileHash,
-  });
-  plan.reconciliationPlanId = `srp_${plan.workbookId}_${String(fileHash).slice(0, 12)}`;
-
   const wantsCommit = Boolean(attachmentIntent.commit || confirmCommit);
+  const fileHash = stableHash([JSON.stringify(structuredData)]);
+  const pending = memory?.getPendingSpreadsheetWorkbook?.() || null;
+  const reusePendingPlan = Boolean(
+    wantsCommit
+    && pending?.reconciliationPlan
+    && pending.fileHash === fileHash
+    && pending.reconciliationPlanId
+  );
+  const plan = reusePendingPlan
+    ? pending.reconciliationPlan
+    : buildSpreadsheetReconciliationPlan({
+      structuredData,
+      store,
+      instruction,
+      fileId: envelopeId || attachmentId,
+      fileHash,
+      memory,
+      conversationId,
+      priorFileHash,
+    });
+  plan.reconciliationPlanId = plan.reconciliationPlanId
+    || `srp_${plan.workbookId}_${String(fileHash).slice(0, 12)}`;
+  recordSpreadsheetReconciliationTelemetry(telemetry, plan);
+
   const previewOnly = wantsCommit
     ? false
     : Boolean(attachmentIntent.previewOnly || attachmentIntent.intent !== ATTACHMENT_TASK_INTENT.SPREADSHEET_RECONCILE);
@@ -145,6 +170,8 @@ async function runSpreadsheetAttachmentCommand({
       batch_preview: batchPreview,
       reconciliation_plan: plan,
       operational_response: operationalResponse,
+      spreadsheet_reconciliation: plan.diagnostics || computeWorkbookDiagnostics(plan),
+      terminal_turn: true,
       attachment_task_intent: attachmentIntent.intent,
       commit: false,
     };
@@ -161,12 +188,22 @@ async function runSpreadsheetAttachmentCommand({
   for (const [key, value] of Object.entries(batch.telemetry || {})) {
     if (key.startsWith('max_spreadsheet_')) bump(telemetry, key, value);
   }
+  const applied = batch.results.filter(r => !r.skipped && !r.commit_blocked).length;
+  const noChange = plan.rows.filter(r => r.outcome === 'no_change' || r.outcome === 'ignored').length;
+  const pendingReview = plan.rows.filter(r => r.outcome === 'needs_review').length;
+  const commitOperationalResponse = formatSpreadsheetOperationalResponse(plan, {
+    previewOnly: false,
+    instruction,
+    commitSummary: `Applied ${applied} safe change${applied === 1 ? '' : 's'}. ${noChange} row${noChange === 1 ? '' : 's'} required no change. ${pendingReview} row${pendingReview === 1 ? '' : 's'} remain pending review.`,
+  });
   memory?.clearPendingSpreadsheetWorkbook?.();
   return {
     preview_only: false,
     committed: true,
     reconciliation_plan: plan,
-    operational_response: operationalResponse,
+    operational_response: commitOperationalResponse,
+    spreadsheet_reconciliation: plan.diagnostics || computeWorkbookDiagnostics(plan),
+    terminal_turn: true,
     attachment_task_intent: attachmentIntent.intent,
     commit: true,
     results: batch.results,

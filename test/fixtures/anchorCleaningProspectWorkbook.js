@@ -33,7 +33,7 @@ function anchorCleaningProspectSheets() {
   }];
 }
 
-const PRODUCTION_RECONCILE_MESSAGE = 'These are my updated accounts from this week. Review all 16 rows, compare each one against what\'s already in PulseForge, and update every account, contact, note, status, and follow-up you can safely reconcile. Show me which rows changed and which rows need clarification before you save anything.';
+const PRODUCTION_RECONCILE_MESSAGE = 'These are my updated accounts from this week. Review all 16 rows in the workbook, compare each one against what is already in PulseForge, and reconcile every account, contact, note, status, and follow-up you can safely identify. Show me the row-by-row changes, conflicts, and anything that needs clarification. Do not save anything yet.';
 
 module.exports = {
   anchorCleaningProspectSheets,

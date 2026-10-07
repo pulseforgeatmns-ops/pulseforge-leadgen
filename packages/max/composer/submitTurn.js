@@ -426,47 +426,20 @@ async function submitComposerTurn({
       bump(telemetry, 'max_spreadsheet_row_blocked_count', spreadsheetResult.batch_preview.needs_clarification);
     }
 
-    const combinedText = augmentTextWithExtractions(envelope, envelope.attachments);
-    let situationModel = null;
-    if (combinedText && !spreadsheetOperational) {
-      const interpreted = interpretConversationalInput({
-        text: combinedText,
-        conversationId: envelope.conversationId,
-        memory,
-        actor: envelope.actor,
-        now,
-        attachmentTask: {
-          requested_action: 'reconcile_attached_spreadsheet',
-          intent: attachmentIntent.intent,
-          target_attachment_id: attachmentIntent.targetAttachmentId || null,
-          preview_only: Boolean(attachmentIntent.previewOnly),
-        },
-      });
-      situationModel = enrichSituationModelWithAttachmentIntent(interpreted.situationModel, attachmentIntent);
+    if (spreadsheetOperational) {
+      bump(telemetry, 'max_spreadsheet_terminal_turn_count');
+      const instructionText = instruction || augmentTextWithExtractions(envelope, envelope.attachments);
       memory.recordTurn({
         inputId: envelope.id,
-        text: combinedText,
-        situationModel,
-      });
-    } else if (combinedText) {
-      const interpreted = interpretConversationalInput({
-        text: combinedText,
-        conversationId: envelope.conversationId,
-        memory,
-        actor: envelope.actor,
-        now,
-        attachmentTask: {
-          requested_action: 'reconcile_attached_spreadsheet',
-          intent: attachmentIntent.intent,
-          target_attachment_id: attachmentIntent.targetAttachmentId || null,
-          preview_only: Boolean(attachmentIntent.previewOnly),
+        text: instructionText,
+        situationModel: {
+          attachmentTask: {
+            requested_action: 'reconcile_attached_spreadsheet',
+            intent: attachmentIntent.intent,
+            terminal_turn: true,
+          },
+          recommendedNextActions: [],
         },
-      });
-      situationModel = enrichSituationModelWithAttachmentIntent(interpreted.situationModel, attachmentIntent);
-      memory.recordTurn({
-        inputId: envelope.id,
-        text: combinedText,
-        situationModel,
       });
     }
 
@@ -479,9 +452,10 @@ async function submitComposerTurn({
         reconciliation_plan: spreadsheetResult.reconciliation_plan,
         operational_response: spreadsheetResult.operational_response,
         understanding_preview: spreadsheetResult.operational_response,
+        spreadsheet_reconciliation: spreadsheetResult.spreadsheet_reconciliation || null,
+        terminal_turn: true,
         attachment_task_intent: spreadsheetResult.attachment_task_intent,
         commit: false,
-        situation_model: situationModel,
         conversation_memory: memory,
         extraction_failures: extractionFailures.map(a => ({
           id: a.id,
@@ -501,6 +475,8 @@ async function submitComposerTurn({
       reconciliation_plan: spreadsheetResult.reconciliation_plan,
       operational_response: spreadsheetResult.operational_response,
       understanding_preview: spreadsheetResult.operational_response,
+      spreadsheet_reconciliation: spreadsheetResult.spreadsheet_reconciliation || null,
+      terminal_turn: true,
       attachment_task_intent: spreadsheetResult.attachment_task_intent,
       commit: true,
       conversation_memory: memory,
