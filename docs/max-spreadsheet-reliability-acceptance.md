@@ -2,7 +2,7 @@
 
 ## Scope and source
 
-Local follow-up to PR 895, reviewed at `cf62db15fd00eb6b1786826001dec6764f7572bd`, now merged. Implementation branch: `fix/max-spreadsheet-reliability`, based on `1b5ef029aa4438432204d2fe4c0e81ee80687d4d`. No production reads/writes, commits, pushes, merges, deployments or outbound messages were performed by this implementation.
+Local follow-up to PR 895, reviewed at `cf62db15fd00eb6b1786826001dec6764f7572bd`, now merged. Implementation branch: `fix/max-spreadsheet-reliability`, based on `1b5ef029aa4438432204d2fe4c0e81ee80687d4d`. This report records local verification before publication. Publication and CI were subsequently authorized separately: [draft PR 897](https://github.com/pulseforgeatmns-ops/pulseforge-leadgen/pull/897) is the source for the current commit and checks. No production reads/writes, merges, deployments or outbound messages were performed.
 
 The exact supplied workbook is `test/fixtures/anchor-cleaning-actual.xlsx`, SHA-256 `b1cddfa475f244e27d8c81a381976b30911b34f53ea6c449f868a54208ba6a75` (17,672 bytes). It has **12 prospect rows, not 16 prospects**: title row 1, headers row 2, prospects rows 3–14, and legend/metadata below. Sheet1 extends through row 44. All 44 source rows and actual cell references are retained. Synthetic fixtures supplement this file; they do not replace it.
 
@@ -79,7 +79,7 @@ Existing compatibility suites: `maxComposerIngestion`, `maxSpreadsheetReconcilia
 
 ## Release prerequisites and remaining decisions
 
-1. Review the full local diff, including shared outbound guards. No change is published. CI must run on the final proposed revision; local green tests do not establish remote CI status.
+1. Review the full diff, including shared outbound guards. The change is published as draft PR 897; CI must pass on the final proposed revision, and local green tests do not establish remote CI status.
 2. Review/apply `migrations/2026-10-07-max-spreadsheet-reliability.sql` before activating code. There is no runtime DDL. Missing schema fails the spreadsheet path closed and may block call paths using the new columns.
 3. Bind `MAX_SPREADSHEET_APPROVER_USER_ID` to Jake's actual authenticated active admin ID through an authorized deployment configuration. Missing/wrong configuration never authorizes persistence. No production identity was guessed.
 4. Review broad table locks and snapshot size under realistic production load. They conservatively prevent unrelated CRM writers invalidating an approved baseline during commit; this prioritizes correctness over throughput. Lock waits are bounded. No production-scale performance claim is made.
@@ -169,6 +169,10 @@ The final combined rerun of existing spreadsheet compatibility and selected CRM/
 
 Their underlying cause was not fixed or fully diagnosed; reproduction on base supports “not introduced by this patch under this environment,” not a claim that they are harmless. Retained evidence: `pr895-provider-regression-tests.txt`, `pr895-provider-baseline-tests.txt`.
 
-Final gate evidence: `reliability-final-events.jsonl`, `reliability-final-summary.json`, and `reliability-final-summary.txt`. The pre-review 112-case log is retained as `reliability-112-baseline-gate.txt`. Patch and file SHA-256 values are in `max-spreadsheet-reliability-manifest.json`; they bind the final uncommitted change to its base. The patch includes the exact workbook fixture and is checked for reverse application against the checkout. No commit/push/merge/deployment occurred.
+Final gate evidence: `reliability-final-events.jsonl`, `reliability-final-summary.json`, and `reliability-final-summary.txt`. The pre-review 112-case log is retained as `reliability-112-baseline-gate.txt`. Patch and file SHA-256 values are in `max-spreadsheet-reliability-manifest.json`; they bind the final uncommitted change to its base. The patch includes the exact workbook fixture and is checked for reverse application against the checkout. At that initial handoff no commit/push/merge/deployment had occurred. The separately authorized draft publication is tracked in PR 897; merging and deployment remain on hold.
 
 Not run: remote CI, production migration rehearsal, actual tenant CRM comparison, production-scale load, or external provider delivery. Recommended next action is review of the corrected diff and release prerequisites, then authorized CI/staging validation. This handoff does not recommend bypassing those gates or retrying denied manager support.
+
+## Initial CI feedback
+
+The first PR run passed decision-shadow, governed-outbound and paige-social checks. The required PostgreSQL job stopped at the older AO-routing fixture because its minimal prospects table lacked ao_call_suppressed. The fixture now includes the two migration columns and asserts call-only versus general outreach-admission behavior. The affected AO-routing suite plus the complete spreadsheet gate passed **153/153 locally, zero skips**. Subsequent remote checks on the current PR head remain authoritative.
