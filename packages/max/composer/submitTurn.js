@@ -22,7 +22,6 @@ const { createVoiceTranscriptionAdapter } = require('../voice/transcriptionAdapt
 const { formatUnderstandingPreview } = require('../understanding/preview');
 const {
   detectAttachmentTaskIntent,
-  enrichSituationModelWithAttachmentIntent,
   isSpreadsheetOperationalIntent,
   readySpreadsheetAttachments,
 } = require('./attachmentIntent');

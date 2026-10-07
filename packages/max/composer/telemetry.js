@@ -23,6 +23,12 @@ function emptyComposerTelemetry() {
     max_spreadsheet_commit_intent_count: 0,
     max_attachment_intent_fallback_error_count: 0,
     max_attachment_command_without_plan_count: 0,
+    max_spreadsheet_terminal_turn_count: 0,
+    max_spreadsheet_noop_row_count: 0,
+    max_spreadsheet_unmapped_field_count: 0,
+    max_spreadsheet_fields_compared_count: 0,
+    max_spreadsheet_zero_change_workbook_count: 0,
+    max_spreadsheet_generic_fallback_leak_count: 0,
     dimensions: {},
   };
 }
