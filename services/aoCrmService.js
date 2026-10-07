@@ -1,6 +1,7 @@
 'use strict';
 
 const pool = require('../db');
+const { activityReadModel, fetchSpreadsheetCrmEvidence } = require('../utils/spreadsheetCrmEvidence');
 const { ensureAoCrmSchema } = require('../utils/aoCrmSchema');
 const { ensureAoFieldSchema } = require('../utils/aoFieldSchema');
 const { formatDateInTz } = require('./aoCommandCenterService');
@@ -345,12 +346,12 @@ async function getAccountDetail({ clientId, prospectId, aoUserId = null, db = po
   if (!rows[0]) return null;
 
   const prospect = rows[0];
+  const spreadsheetEvidence = await fetchSpreadsheetCrmEvidence({ db, clientId, prospectId, aoId: aoUserId });
   const activity = (await db.query(`
     SELECT *
     FROM ao_prospect_activity
     WHERE prospect_id = $1::uuid AND tenant_id = $2
     ORDER BY created_at DESC
-    LIMIT 100
   `, [prospectId, clientId])).rows;
 
   const touchpoints = (await db.query(`
@@ -398,6 +399,8 @@ async function getAccountDetail({ clientId, prospectId, aoUserId = null, db = po
       email: prospect.email || null,
       linkedin_url: prospect.linkedin_url || null,
     },
+    contacts: spreadsheetEvidence.contacts,
+    providerRelationships: spreadsheetEvidence.relationships,
     sales_state: {
       current_status: status,
       next_action: prospect.ao_next_action || prospect.next_action || null,
@@ -412,7 +415,7 @@ async function getAccountDetail({ clientId, prospectId, aoUserId = null, db = po
     },
     open_task: openTask,
     history: [
-      ...activity.map(a => ({
+      ...activity.map(activityReadModel).map(a => ({
         kind: 'activity',
         activity_type: a.activity_type,
         outcome: a.outcome,
@@ -420,6 +423,10 @@ async function getAccountDetail({ clientId, prospectId, aoUserId = null, db = po
         previous_status: a.previous_status,
         new_status: a.new_status,
         created_at: a.created_at,
+        occurredOn: a.occurredOn,
+        occurredAt: a.occurredAt,
+        recordedAt: a.recordedAt,
+        evidence: a.metadata?.evidence || [],
       })),
       ...touchpoints.map(t => ({
         kind: 'touchpoint',
@@ -428,7 +435,7 @@ async function getAccountDetail({ clientId, prospectId, aoUserId = null, db = po
         notes: t.content_summary,
         created_at: t.created_at,
       })),
-    ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 100),
+    ].sort((a, b) => new Date(b.occurredAt || b.created_at) - new Date(a.occurredAt || a.created_at)).slice(0, 100),
   };
 }
 

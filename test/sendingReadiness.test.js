@@ -50,6 +50,13 @@ async function run() {
   assert.strictEqual(ready.sendable, true);
   assert.deepStrictEqual(ready.failures, []);
 
+  const admissionHeld = await evaluateSendingReadiness({
+    client, prospect, sequenceCatalog, clientSequenceMap, brevoState,
+    pool: poolWith({ currentProspect: { ...prospect, ao_outreach_review_required: true } }),
+  });
+  assert.strictEqual(admissionHeld.sendable, false);
+  assert(admissionHeld.failures.some(item => item.code === 'prospect_outreach_review_complete'));
+
   const blocked = await evaluateSendingReadiness({
     client: { ...client, sender_name: null, sender_email: 'wrong@example.com' },
     prospect: { ...prospect, first_name: '', email_status: 'role', do_not_contact: true },

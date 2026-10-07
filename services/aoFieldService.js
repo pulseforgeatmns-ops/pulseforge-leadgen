@@ -1,5 +1,6 @@
 const axios = require('axios');
 const pool = require('../db');
+const { assertCallAllowed } = require('../utils/callEligibility');
 const { buildSuggestedMessage, buildDirectMailOpening, normalizeNextAction, parseContactRole, formatDecisionMakerStatus, resolveNextActionOwner } = require('../utils/aoMessageTemplates');
 const { normalizeDueDate } = require('../utils/aoQueueFormat');
 const {
@@ -55,7 +56,8 @@ function mapTask(row) {
     completed_at: row.completed_at,
     business_name: row.business_name,
     contact_name: row.contact_name,
-    contact_phone: row.contact_phone || null,
+    contact_phone: row.call_allowed === true ? (row.contact_phone || null) : null,
+    call_prohibited: row.call_allowed !== true,
     address: row.address || null,
     interest_level: row.interest_level,
     attribution_source: row.attribution_source || null,
@@ -74,7 +76,13 @@ async function getAoProfile(userId) {
 
 async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
   const params = [aoOwnerId, clientId];
-  let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'`;
+  let where = `t.ao_owner_id = $1 AND l.client_id = $2 AND t.status = 'open'
+    AND (t.next_action IS DISTINCT FROM 'phone_follow_up' OR EXISTS (
+      SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
+        AND COALESCE(p.ao_call_suppressed, false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false
+    ))`;
 
   const today = new Date().toISOString().slice(0, 10);
   if (filter === 'today') {
@@ -101,6 +109,10 @@ async function listQueue({ aoOwnerId, clientId, filter = 'today' }) {
   const { rows } = await pool.query(`
     SELECT t.*, l.business_name, l.address, l.interest_level, l.attribution_source, l.campaign_name,
       l.crm_prospect_id,
+      EXISTS (SELECT 1 FROM prospects p WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
+        AND COALESCE(p.ao_call_suppressed, false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false) AS call_allowed,
       c.contact_name, c.phone AS contact_phone
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
@@ -425,6 +437,7 @@ async function getTaskForFollowUp(taskId, aoOwnerId) {
   const { rows } = await pool.query(`
     SELECT t.*, l.business_name, l.address, l.business_type, l.status AS lead_status,
       l.attribution_source, l.campaign_name, l.original_visit_note, l.interest_level,
+      l.client_id, l.crm_prospect_id,
       c.contact_name, c.contact_title, c.phone AS contact_phone, c.email AS contact_email
     FROM ao_follow_up_tasks t
     JOIN ao_leads l ON l.id = t.lead_id
@@ -432,7 +445,16 @@ async function getTaskForFollowUp(taskId, aoOwnerId) {
     WHERE t.id = $1 AND t.ao_owner_id = $2 AND t.status = 'open'
     LIMIT 1
   `, [taskId, aoOwnerId]);
-  return rows[0] || null;
+  const task = rows[0];
+  if (task?.crm_prospect_id) {
+    try {
+      await assertCallAllowed(pool, task.crm_prospect_id, task.client_id);
+    } catch (error) {
+      if (error.code !== 'CALL_SUPPRESSED') throw error;
+      return { ...task, call_prohibited: true, contact_phone: null };
+    }
+  }
+  return task ? { ...task, call_prohibited: !task.crm_prospect_id, contact_phone: task.crm_prospect_id ? task.contact_phone : null } : null;
 }
 
 async function createDirectMailFollowUpLead({
@@ -1131,6 +1153,11 @@ async function getNextPhoneFollowUp({ aoOwnerId, clientId }) {
     LEFT JOIN ao_contacts c ON c.id = t.contact_id
     WHERE t.ao_owner_id = $1 AND l.client_id = $2
       AND t.status = 'open' AND t.next_action = 'phone_follow_up'
+      AND EXISTS (SELECT 1 FROM prospects p
+        WHERE p.id = l.crm_prospect_id AND p.client_id = l.client_id
+          AND COALESCE(p.ao_call_suppressed, false) = false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+          AND COALESCE(p.do_not_contact, false) = false AND COALESCE(p.is_synthetic, false) = false)
     ORDER BY t.priority DESC, t.due_date ASC, t.created_at ASC
     LIMIT 1
   `, [aoOwnerId, clientId]);
@@ -1146,6 +1173,7 @@ async function convertToPhoneFollowUp(taskId, aoOwnerId, { phone = null } = {}) 
   const taskRow = await getTaskForFollowUp(taskId, aoOwnerId);
   if (!taskRow) return null;
 
+  await assertCallAllowed(pool, taskRow.crm_prospect_id, taskRow.client_id);
   const alreadyPhone = taskRow.next_action === 'phone_follow_up';
   const conversionNote = alreadyPhone ? null : formatPhoneConversionNote();
   const client = await pool.connect();

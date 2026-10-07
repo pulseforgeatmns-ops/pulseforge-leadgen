@@ -338,6 +338,12 @@ async function evaluateSendingReadiness({
     'Synthetic prospects can never enter an outbound sequence.',
     { is_synthetic: evaluatedProspect?.is_synthetic ?? null, error: current.error }
   ));
+  checks.push(condition(
+    'prospect_outreach_review_complete',
+    !current.error && evaluatedProspect?.ao_outreach_review_required !== true,
+    'Imported or changed contact details require separate outreach review before sending.',
+    { ao_outreach_review_required: evaluatedProspect?.ao_outreach_review_required ?? null, error: current.error }
+  ));
   const templateSequenceName = assignedSequenceName || sequenceName;
   const templateInspection = templateSequenceName
     ? inspectSequenceTemplates(sequenceCatalog?.[templateSequenceName], evaluatedProspect, evaluatedProspect?.company_fields)

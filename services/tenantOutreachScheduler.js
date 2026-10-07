@@ -332,6 +332,7 @@ class MemoryScheduleStore {
       exists: true,
       email: lower(row.email),
       doNotContact: Boolean(row.doNotContact),
+      outreachReviewRequired: row.outreachReviewRequired === true || row.ao_outreach_review_required === true,
       booked: Boolean(row.booked),
       active: row.active !== false,
     };
@@ -522,7 +523,8 @@ class PostgresScheduleStore {
 
   async getProspectEligibility(tenantId, prospectId) {
     const res = await this.pool.query(
-      `SELECT p.email, p.do_not_contact, p.setter_status, p.closer_status
+      `SELECT p.email, p.do_not_contact, p.setter_status, p.closer_status,
+         COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required
        FROM acquisition_prospect_projections app
        JOIN prospects p ON p.client_id = app.client_id AND p.id = app.prospect_id
        WHERE app.tenant_id = $1 AND app.prospect_id::text = $2
@@ -537,6 +539,7 @@ class PostgresScheduleStore {
       exists: true,
       email: lower(row.email),
       doNotContact: row.do_not_contact === true,
+      outreachReviewRequired: row.ao_outreach_review_required === true,
       booked: row.setter_status === 'booked' || Boolean(row.closer_status),
       active: true,
     };
@@ -718,6 +721,9 @@ async function evaluateSchedulingEligibility(schedule, opts = {}) {
   }
   if (prospect.doNotContact) {
     return { eligible: false, action: 'reject', reason: 'prospect_dnc' };
+  }
+  if (prospect.outreachReviewRequired) {
+    return { eligible: false, action: 'reject', reason: 'outreach_review_required' };
   }
   if (prospect.booked) {
     return { eligible: false, action: 'reject', reason: 'prospect_booked' };

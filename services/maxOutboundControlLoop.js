@@ -333,6 +333,7 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
     WHERE p.client_id=$1
       AND p.email IS NOT NULL
       AND COALESCE(p.do_not_contact,false)=false
+        AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
     ORDER BY p.updated_at DESC NULLS LAST, p.id
   `, [cid]);
 

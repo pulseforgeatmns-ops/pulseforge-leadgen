@@ -5,6 +5,8 @@ const db = require('./dbClient');
 const { getClientConfig, getRuntimeClientId } = require('./utils/clientContext');
 const { notSyntheticSql } = require('./utils/callDispositions');
 
+const { withCallAuthorization } = require('./utils/callEligibility');
+
 const AGENT_NAME = 'cal';
 const CLIENT_ID = getRuntimeClientId();
 const MAX_CALLS_PER_RUN = 10;
@@ -18,7 +20,7 @@ async function getQueuedCandidates(limit) {
   const syntheticGuard = await notSyntheticSql(pool, 'p.is_synthetic');
   const res = await pool.query(`
     SELECT
-      p.id, p.first_name, p.last_name, p.email, p.phone,
+      p.id, p.client_id, p.first_name, p.last_name, p.email, p.phone,
       p.status, p.icp_score, p.do_not_contact,
       c.name  AS company_name,
       c.industry,
@@ -28,10 +30,12 @@ async function getQueuedCandidates(limit) {
       q.priority AS cal_queue_priority
     FROM cal_queue q
     JOIN prospects p ON p.id = q.prospect_id AND p.client_id = q.client_id
-    LEFT JOIN companies c ON p.company_id = c.id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
     WHERE q.client_id = $1
       AND q.status = 'pending'
       AND COALESCE(p.do_not_contact, false) = false
+      AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
       AND ${syntheticGuard}
       AND p.phone IS NOT NULL AND p.phone != ''
     ORDER BY q.priority ASC, q.created_at ASC
@@ -51,15 +55,18 @@ async function getCallCandidates(excludeIds = []) {
   const syntheticGuard = await notSyntheticSql(pool, 'p.is_synthetic');
   const res = await pool.query(`
     SELECT
-      p.id, p.first_name, p.last_name, p.email, p.phone,
+      p.id, p.client_id, p.first_name, p.last_name, p.email, p.phone,
       p.status, p.icp_score, p.do_not_contact,
       c.name  AS company_name,
       c.industry,
       c.location
     FROM prospects p
-    LEFT JOIN companies c ON p.company_id = c.id
+    LEFT JOIN companies c ON p.company_id = c.id AND c.client_id = p.client_id
     WHERE p.status = 'warm'
       AND p.do_not_contact = false
+      AND p.client_id = $3
+      AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
       AND ${syntheticGuard}
       AND p.phone IS NOT NULL AND p.phone != ''
       AND p.icp_score >= 60
@@ -79,7 +86,7 @@ async function getCallCandidates(excludeIds = []) {
       )
     ORDER BY p.icp_score DESC
     LIMIT $1
-  `, [remaining, excludeIds.length ? excludeIds : null]);
+  `, [remaining, excludeIds.length ? excludeIds : null, CLIENT_ID]);
   return res.rows;
 }
 
@@ -123,33 +130,36 @@ DO NOT make promises about revenue or results. Do not push past two objections �
 }
 
 async function initiateCall(prospect, companyName) {
-  const appUrl = process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app';
+  return withCallAuthorization(pool, [{ prospectId: prospect.id, clientId: prospect.client_id }], async () => {
+    const appUrl = process.env.APP_URL || 'https://pulseforge-leadgen-production.up.railway.app';
 
-  const res = await axios.post('https://api.bland.ai/v1/calls', {
-    phone_number:          prospect.phone,
-    task:                  buildCallTask(prospect, companyName),
-    voice:                 'nat',
-    wait_for_greeting:     true,
-    record:                true,
-    answered_by_enabled:   true,
-    amd:                   true,
-    noise_cancellation:    true,
-    interruption_threshold: 100,
-    max_duration:          10,
-    webhook:               `${appUrl}/webhooks/bland`,
-    metadata: {
-      prospect_id:  prospect.id,
-      company_name: companyName,
-      agent:        AGENT_NAME,
-    },
-  }, {
-    headers: {
-      authorization:  process.env.BLAND_API_KEY,
-      'Content-Type': 'application/json',
-    },
+    const res = await axios.post('https://api.bland.ai/v1/calls', {
+      phone_number:          prospect.phone,
+      task:                  buildCallTask(prospect, companyName),
+      voice:                 'nat',
+      wait_for_greeting:     true,
+      record:                true,
+      answered_by_enabled:   true,
+      amd:                   true,
+      noise_cancellation:    true,
+      interruption_threshold: 100,
+      max_duration:          10,
+      webhook:               `${appUrl}/webhooks/bland`,
+      metadata: {
+        prospect_id:  prospect.id,
+        company_name: companyName,
+        agent:        AGENT_NAME,
+      },
+    }, {
+      timeout: 30000,
+      headers: {
+        authorization:  process.env.BLAND_API_KEY,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    return res.data;
   });
-
-  return res.data;
 }
 
 // ── GOOGLE CALENDAR ────────────────────────────────────────────────────────
@@ -300,7 +310,7 @@ async function run() {
   console.log(`\nCal complete — ${initiated} call${initiated !== 1 ? 's' : ''} initiated.`);
 }
 
-module.exports = { createCalendarEvent, run };
+module.exports = { createCalendarEvent, initiateCall, run };
 
 if (require.main === module) {
   run().catch(err => {

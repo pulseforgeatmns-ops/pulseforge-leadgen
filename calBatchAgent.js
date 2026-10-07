@@ -2,6 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 const pool = require('./db');
 const db = require('./dbClient');
+const { getRuntimeClientId } = require('./utils/clientContext');
 const { recalculateICP } = require('./utils/icpScoring');
 const {
   DISPOSITION_SET,
@@ -13,6 +14,8 @@ const {
 // Cal Batch Agent
 // Schedule this in cron-jobs.org to run daily at 10am Eastern:
 // GET /cron/cal_batch?secret=YOUR_CRON_SECRET
+
+const { withCallAuthorization, callProhibited } = require('./utils/callEligibility');
 
 const AGENT_NAME = 'cal';
 const MAX_BATCH_SIZE = 25;
@@ -94,9 +97,13 @@ async function getBatchCandidates() {
       JOIN prospects p ON p.id = q.prospect_id AND p.client_id = q.client_id
       LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
       WHERE q.status = 'pending'
+        AND q.client_id = $2
         AND p.phone IS NOT NULL
         AND p.phone != ''
         AND COALESCE(p.do_not_contact, false) = false
+        AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE(p.is_synthetic, false) = false
       ORDER BY q.priority ASC, q.created_at ASC
       LIMIT $1
     ),
@@ -110,9 +117,13 @@ async function getBatchCandidates() {
       FROM prospects p
       LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
       WHERE p.phone IS NOT NULL
+      AND p.client_id = $2
       AND p.phone != ''
       AND p.status = 'cold'
       AND COALESCE(p.do_not_contact, false) = false
+        AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
+        AND COALESCE(p.is_synthetic, false) = false
       AND NOT EXISTS (SELECT 1 FROM queued q WHERE q.id = p.id)
       AND NOT EXISTS (
         SELECT 1
@@ -129,7 +140,7 @@ async function getBatchCandidates() {
     UNION ALL
     SELECT * FROM fill
     LIMIT $1
-  `, [MAX_BATCH_SIZE]);
+  `, [MAX_BATCH_SIZE, getRuntimeClientId()]);
 
   return res.rows;
 }
@@ -139,6 +150,10 @@ function buildCallData(prospects) {
   const formattedProspects = [];
 
   for (const prospect of prospects) {
+    if (callProhibited(prospect)) {
+      skipped.push({ prospect_id: prospect.id, reason: 'call_suppressed' });
+      continue;
+    }
     const phoneNumber = formatPhoneNumber(prospect.phone);
     const businessName = prospect.company_name || extractBusinessName(prospect.notes);
 
@@ -156,7 +171,7 @@ function buildCallData(prospects) {
         business_name: businessName,
         metadata: {
           prospect_id: prospect.id,
-          client_id: prospect.client_id || 1,
+          client_id: prospect.client_id,
           company_name: businessName,
           cal_queue_id: prospect.cal_queue_id || null,
           agent: AGENT_NAME,
@@ -169,36 +184,41 @@ function buildCallData(prospects) {
 }
 
 async function createBlandBatch(callData) {
-  const payload = {
-    description: `Pulseforge Auto Batch — ${formatDateForBatchName()}`,
-    call_objects: callData.map(call => ({
-      phone_number: call.phone_number,
-      metadata: call.metadata,
-      request_data: {
-        first_name: call.first_name,
-        business_name: call.business_name,
+  return withCallAuthorization(pool, callData.map(call => ({
+    prospectId: call.metadata?.prospect_id, clientId: call.metadata?.client_id,
+  })), async () => {
+    const payload = {
+      description: `Pulseforge Auto Batch — ${formatDateForBatchName()}`,
+      call_objects: callData.map(call => ({
+        phone_number: call.phone_number,
+        metadata: call.metadata,
+        request_data: {
+          first_name: call.first_name,
+          business_name: call.business_name,
+        },
+      })),
+      global: {
+        task: BASE_PROMPT,
+        voice: 'walter',
+        wait_for_greeting: true,
+        answered_by_enabled: true,
+        amd: true,
+        interruption_threshold: 1500,
+        from: process.env.BLAND_PHONE_NUMBER,
+        max_duration: 2,
       },
-    })),
-    global: {
-      task: BASE_PROMPT,
-      voice: 'walter',
-      wait_for_greeting: true,
-      answered_by_enabled: true,
-      amd: true,
-      interruption_threshold: 1500,
-      from: process.env.BLAND_PHONE_NUMBER,
-      max_duration: 2,
-    },
-  };
+    };
 
-  const res = await axios.post(BLAND_BATCH_URL, payload, {
-    headers: {
-      authorization: process.env.BLAND_API_KEY,
-      'Content-Type': 'application/json',
-    },
+    const res = await axios.post(BLAND_BATCH_URL, payload, {
+      timeout: 30000,
+      headers: {
+        authorization: process.env.BLAND_API_KEY,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    return { payload, response: res.data };
   });
-
-  return { payload, response: res.data };
 }
 
 async function ensureCallDispositionSchema() {

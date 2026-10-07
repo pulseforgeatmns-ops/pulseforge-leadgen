@@ -1,0 +1,13 @@
+.pf-spreadsheet-review { max-height: 50vh; overflow-y: auto; margin: 1rem 0; padding: 1rem; border: 1px solid #687584; border-radius: 8px; font-size: 14px; overflow-wrap: anywhere; }
+.pf-spreadsheet-review pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 22rem; overflow: auto; padding: .6rem; background: rgba(128,128,128,.1); }
+.pf-spreadsheet-review details { margin: .7rem 0; }
+.pf-spreadsheet-operation { border-top: 1px solid #687584; padding: 1rem 0; }
+.pf-spreadsheet-operation label { display: flex; gap: .5rem; align-items: baseline; font-weight: 600; }
+.pf-spreadsheet-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.pf-spreadsheet-review button { padding: .65rem; cursor: pointer; }
+@media (max-width: 600px) { .pf-spreadsheet-values { grid-template-columns: 1fr; } }
+
+.pf-spreadsheet-review fieldset { margin: .75rem 0; padding: .75rem; }
+.pf-spreadsheet-review fieldset label { display: block; margin: .5rem 0; }
+.pf-spreadsheet-review textarea { display: block; width: 100%; min-height: 5rem; }
+.pf-spreadsheet-review select { max-width: 100%; }

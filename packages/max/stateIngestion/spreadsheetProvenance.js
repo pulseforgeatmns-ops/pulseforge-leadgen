@@ -11,11 +11,13 @@ function buildCellProvenance({
   rawValue = null,
   columnProvenance = null,
 }) {
-  const rawHeader = columnProvenance?.columns?.[columnName]?.rawHeader || columnName;
-  let cellRef = null;
+  const columns = columnProvenance?.columns || {};
+  const entry = columns[columnName] || Object.values(columns).find(column => column.canonical === columnName);
+  const rawHeader = entry?.rawHeader || columnName;
+  let cellRef = entry?.cellRef || null;
   if (rowNumber != null && rawHeader) {
-    const colIdx = Object.keys(columnProvenance?.columns || {}).indexOf(columnName);
-    if (colIdx >= 0) {
+    const colIdx = entry?.columnIndex ?? Object.keys(columns).indexOf(columnName);
+    if (!cellRef && colIdx >= 0) {
       cellRef = `${columnIndexToLetter(colIdx)}${rowNumber}`;
     }
   }
@@ -25,8 +27,9 @@ function buildCellProvenance({
     sheetName,
     rowNumber,
     columnName: rawHeader || columnName,
-    rawValue,
+    rawValue: entry && Object.prototype.hasOwnProperty.call(entry, 'rawValue') ? entry.rawValue : rawValue,
     cellRef,
+    headerCellRef: entry?.headerCellRef || null,
   };
 }
 

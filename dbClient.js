@@ -24,16 +24,16 @@ async function checkDNC(prospectId, options = {}) {
   const db = options.pool || pool;
   if (await isPhase3dSetterSchemaPresent(db)) {
     const res = await db.query(
-      'SELECT do_not_contact, is_synthetic FROM prospects WHERE id = $1 AND client_id = $2',
+      `SELECT do_not_contact, is_synthetic, COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
       [prospectId, clientId]
     );
-    return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic) : true;
+    return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].is_synthetic || res.rows[0].ao_outreach_review_required) : true;
   }
   const res = await db.query(
-    'SELECT do_not_contact FROM prospects WHERE id = $1 AND client_id = $2',
+    `SELECT do_not_contact, COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required FROM prospects WHERE id = $1 AND client_id = $2`,
     [prospectId, clientId]
   );
-  return res.rows[0] ? Boolean(res.rows[0].do_not_contact) : true;
+  return res.rows[0] ? Boolean(res.rows[0].do_not_contact || res.rows[0].ao_outreach_review_required) : true;
 }
 
 // Get full prospect record

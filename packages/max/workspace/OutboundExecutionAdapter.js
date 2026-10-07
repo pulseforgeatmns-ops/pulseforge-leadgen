@@ -241,6 +241,7 @@ async function executeOutboundBundle(input = {}) {
     }
 
     const command = {
+      outreachAuthorization: { prospectId: send.prospectId, clientId: input.clientId || bundle.tenantId, pool: input.pool },
       toEmail: send.email, toName: send.toName, subject: send.message.subject, body: send.message.body,
       tags: [`mission:${bundle.missionId}`, `prospect:${send.prospectId}`, `revision:${approvalMeta.preparedArtifactRevision}`],
       idempotencyKey: identified.idempotencyKey, sender: explicitSender, requireExplicitSender: true,
