@@ -32,7 +32,8 @@ function computeProspectiveDataQuality(store, { since } = {}) {
 
   const unknownClusterEvents = events.filter(e => {
     const clusterId = e.sourceClusterId || store.getClusterIdForSource(e.sourceId);
-    return !clusterId;
+    const registry = store.sourceRegistry?.get(e.sourceId);
+    return !clusterId || !registry?.clusterRelationshipStatus || registry.clusterRelationshipStatus === 'UNKNOWN';
   }).length;
 
   const collectors = store.collectorHealth || {};
@@ -48,9 +49,10 @@ function computeProspectiveDataQuality(store, { since } = {}) {
     pendingOutcomes24h: pendingOutcomes,
     completedOutcomes24h: completedOutcomes,
     unknownClusterRate: events.length ? unknownClusterEvents / events.length : null,
-    provenanceContamination: 0,
+    provenanceContamination: [...events, ...rawEvidence, ...(store.marketObservations || [])]
+      .filter(row => row.provenance?.dataClass === 'PROCEDURAL' || row.provenance?.synthetic || row.provenance?.testOnly).length,
     collectors,
-    activeSourceCount: store.sourceRegistry ? store.sourceRegistry.size : null,
+    activeSourceCount: store.sourceRegistry ? [...store.sourceRegistry.values()].filter(row => row.active !== false).length : null,
   };
 }
 

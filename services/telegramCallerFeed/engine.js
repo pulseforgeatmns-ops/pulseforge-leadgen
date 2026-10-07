@@ -10,6 +10,7 @@ const {
   buildHealth,
 } = require('./stateStore');
 const { toFeedCall } = require('./normalize');
+const {operationFromEnv}=require('../signalOperator/operationGate');
 const {
   createGramJsClient,
   resolvePublicChannel,
@@ -27,10 +28,13 @@ function createTelegramCallerFeedEngine(options = {}) {
   let clientPromise = null;
   let pollTimer = null;
   let runningPoll = false;
+  const pilotGate=options.pilotGate || (process.env.SIGNAL_OPERATION_MODE ? operationFromEnv() : null);
 
   const channelRuntime = new Map();
-  const recentCalls = [];
+  let sourceStatuses = [];
   const maxRecentCalls = options.maxRecentCalls ?? 500;
+  const recentCalls = (state.recentCalls || []).slice(-maxRecentCalls);
+  state.recentCalls = recentCalls;
 
   function credentialsStatus() {
     return loadTelegramCredentials();
@@ -60,6 +64,7 @@ function createTelegramCallerFeedEngine(options = {}) {
 
   async function bootstrapChannels(activeClient) {
     const sources = loadConfiguredSources();
+    channelRuntime.clear();
     const results = [];
     for (const src of sources) {
       const entry = {
@@ -78,6 +83,9 @@ function createTelegramCallerFeedEngine(options = {}) {
       try {
         const entity = await resolvePublicChannel(activeClient, src.username);
         entry.channelId = String(entity.id);
+        if (src.expectedChannelId && entry.channelId !== String(src.expectedChannelId)) {
+          throw new Error('configured_channel_identity_mismatch');
+        }
         entry.available = true;
         entry.active = true;
         const cursorKey = entry.channelId;
@@ -95,6 +103,7 @@ function createTelegramCallerFeedEngine(options = {}) {
       }
       results.push(entry);
     }
+    sourceStatuses = results;
     saveState(state, statePath);
     return results;
   }
@@ -150,11 +159,20 @@ function createTelegramCallerFeedEngine(options = {}) {
     const emitted = [];
     const errors = [];
     try {
+      if(pilotGate && !pilotGate().ok) {
+        sourceStatuses=sourceStatuses.map(s=>({...s,active:false,available:false,reason:'pilot_not_ready'}));
+        if(client) {try{await client.disconnect();}catch{} client=null;clientPromise=null;}
+        return {emitted,errors:['pilot_not_ready'],connected:false,sources:sourceStatuses};
+      }
       const creds = credentialsStatus();
       if (!creds.ok) {
         state.lastError = creds.reason;
         saveState(state, statePath);
         return { emitted, errors: [creds.reason], connected: false };
+      }
+      if (!loadConfiguredSources().length) {
+        sourceStatuses = [];
+        return { emitted, errors: ['no_configured_sources'], connected: false, sources: [] };
       }
       const activeClient = await ensureClient();
       const sources = await bootstrapChannels(activeClient);
@@ -166,12 +184,16 @@ function createTelegramCallerFeedEngine(options = {}) {
         try {
           const messages = await fetchNewMessages(activeClient, runtime.entity, afterId);
           for (const msg of messages) {
+            if(pilotGate && !pilotGate().ok)break;
             if (msg.messageId < afterId) continue;
             if (msg.messageId === afterId && !msg.editDate) continue;
             const call = ingestMessage(msg, runtime.source);
             if (call) emitted.push(call);
           }
         } catch (err) {
+          src.available = false;
+          src.active = false;
+          src.reason = String(err.message || err);
           const msg = `${src.sourceId}: ${err.message || err}`;
           errors.push(msg);
           state.lastError = msg;
@@ -180,7 +202,7 @@ function createTelegramCallerFeedEngine(options = {}) {
       state.lastSuccessfulPollAt = now().toISOString();
       if (!errors.length) state.lastError = null;
       saveState(state, statePath);
-      return { emitted, errors, connected: true, sources };
+      return { emitted, errors, connected: sources.some(src => src.available && src.active), sources };
     } catch (err) {
       const msg = String(err.message || err);
       errors.push(msg);
@@ -194,16 +216,7 @@ function createTelegramCallerFeedEngine(options = {}) {
 
   function getHealth(meta = {}) {
     const creds = credentialsStatus();
-    const sources = [...channelRuntime.values()].map(r => ({
-      sourceId: r.source.sourceId,
-      displayName: r.source.displayName,
-      username: r.source.username,
-      channelId: r.entry.channelId,
-      available: r.entry.available,
-      active: r.entry.active,
-      relationshipStatus: r.source.clusterRelationshipStatus,
-      reason: r.entry.reason,
-    }));
+    const sources = sourceStatuses.map(source => ({ ...source }));
     return buildHealth(state, {
       connected: Boolean(meta.connected),
       credentialsConfigured: creds.ok,

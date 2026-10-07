@@ -24,7 +24,7 @@ function countEvaluableFirstCallerMembers(store, cohortId) {
     const hasTerminal =
       outcomes.some(o => o.label === 'PASS' || o.label === 'FAIL') ||
       outcomes.some(o => o.dataAvailability === 'INSUFFICIENT_MARKET_DATA');
-    if (hasTerminal || outcomes.length > 0) evaluable += 1;
+    if (hasTerminal) evaluable += 1;
   }
   return evaluable;
 }
@@ -44,24 +44,24 @@ function cohortProgress(store, cohort) {
 
 function redactEvaluationIfBlinded(evaluation, cohort) {
   if (!isCohortBlinded(cohort)) return evaluation;
-  const redacted = { ...evaluation, blinded: true, primaryHypothesisPrecision: null };
-  if (Array.isArray(redacted.layers)) {
-    redacted.layers = redacted.layers.map(layer => {
-      if (layer.observationType === 'INDEPENDENT_CONVERGENCE' || layer.observationType === 'FIRST_CALLER') {
-        return {
-          ...layer,
-          precision: null,
-          falsePositiveRate: null,
-          PASS: layer.PASS,
-          FAIL: layer.FAIL,
-          N: layer.N,
-          blinded: true,
-        };
-      }
-      return layer;
-    });
-  }
-  return redacted;
+  // Use an allowlist: PASS/FAIL counts, returns, Wilson intervals and nested
+  // sensitivity/empirical reports all disclose performance even if precision is null.
+  return {
+    cohortId: evaluation.cohortId,
+    cohortN: evaluation.cohortN,
+    dataClass: evaluation.dataClass,
+    executionDelaySeconds: evaluation.executionDelaySeconds,
+    blinded: true,
+    primaryHypothesisPrecision: null,
+    layers: (evaluation.layers || []).map(layer => ({
+      observationType: layer.observationType,
+      observationLayer: layer.observationLayer,
+      N: layer.N,
+      precision: null,
+      falsePositiveRate: null,
+      blinded: true,
+    })),
+  };
 }
 
 module.exports = {

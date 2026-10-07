@@ -80,6 +80,8 @@ ensurePlacesAttributionSchema().catch(err => console.error('[placesAttribution] 
 ensureAnchorPortalSchema().catch(err => console.error('[anchorPortal] init error:', err.message));
 ensureSignalSchema(pool).catch(err => console.error('[signal-v1] schema init error:', err.message));
 require('./services/signalV1ShadowScheduler').startSignalV1ShadowScheduler();
+require('./services/signalOperator/optionalController').startOptionalPilotController();
+require('./services/signalOperator').startSignalOperator();
 startMiraTranscriptionWorker();
 startMiraClassifierWorker();
 startMiraRouterWorker();

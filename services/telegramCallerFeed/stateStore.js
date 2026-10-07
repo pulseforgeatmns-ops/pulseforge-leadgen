@@ -11,6 +11,7 @@ function defaultState() {
     channels: {},
     seenMessageKeys: {},
     messageSnapshots: {},
+    recentCalls: [],
     latencyMs: [],
     stats: {
       messagesObserved: 0,
@@ -31,7 +32,9 @@ function loadState(statePath = process.env.TELEGRAM_CALLER_FEED_STATE_PATH || DE
     const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8'));
     return { state: { ...defaultState(), ...parsed }, statePath };
   } catch {
-    return { state: defaultState(), statePath };
+    // Losing the durable cursor must not silently restart collection from an
+    // unknown position. Do not expose file contents or raw parser errors.
+    throw new Error('caller_feed_state_unreadable');
   }
 }
 

@@ -31,7 +31,7 @@ function resolveClusterRelationship(store, sourceRegistryEntry, observationProve
   if (cluster?.clusterType === 'unknown') {
     return CLUSTER_RELATIONSHIP.UNKNOWN;
   }
-  return CLUSTER_RELATIONSHIP.INDEPENDENT;
+  return CLUSTER_RELATIONSHIP.UNKNOWN;
 }
 
 function isProvenIndependent(relationship) {
