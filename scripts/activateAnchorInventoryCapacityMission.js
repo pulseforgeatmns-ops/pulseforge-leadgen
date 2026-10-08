@@ -85,12 +85,17 @@ async function plan(db = pool) {
 }
 
 async function apply(db = pool) {
-  const review = await plan(db);
-  if (review.pending > 0) throw new Error(`prepared_envelope_not_drained:${review.pending}`);
-  const client = await db.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query(`INSERT INTO acquisition_missions (
+  const { GovernedOutboundStore } = require('../services/governedOutboundStore');
+  const store = new GovernedOutboundStore(db, TENANT_ID);
+  const locked = await store.lock(async () => {
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+      // Re-read the program and pending envelope while holding the same tenant
+      // lock as preparation and dispatch. Scope can never change mid-envelope.
+      const review = await plan(client);
+      if (review.pending > 0) throw new Error(`prepared_envelope_not_drained:${review.pending}`);
+      await client.query(`INSERT INTO acquisition_missions (
       id,tenant_id,client_id,stage,status,objective,target_segment,campaign,title,priority,
       confidence,owner,created_by,orchestration_mission_id,payload,created_at,updated_at
     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17)
@@ -102,28 +107,31 @@ async function apply(db = pool) {
       review.mission.orchestrationMissionId, JSON.stringify(review.mission),
       review.mission.createdAt, review.mission.updatedAt,
     ]);
-    const updated = await client.query(`UPDATE acquisition_outbound_programs
+      const updated = await client.query(`UPDATE acquisition_outbound_programs
       SET source_mission_id=$2, policy=$3::jsonb, policy_hash=$4, scope_hash=$5, authorized_at=NOW()
       WHERE id=$1 AND tenant_id=$6 AND source_mission_id=$7 RETURNING id`, [
       review.program.id, review.mission.id, JSON.stringify(review.policy), review.policyHash,
       review.scopeHash, TENANT_ID, review.source.id,
     ]);
-    if (updated.rowCount !== 1) throw new Error('anchor_program_changed_during_activation');
-    await client.query(`INSERT INTO acquisition_outbound_events
+      if (updated.rowCount !== 1) throw new Error('anchor_program_changed_during_activation');
+      await client.query(`INSERT INTO acquisition_outbound_events
       (id,tenant_id,program_id,event_type,payload,created_at)
       VALUES ($1,$2,$3,'source_mission_succeeded',$4::jsonb,NOW()) ON CONFLICT DO NOTHING`, [
       hash(['source_mission_succeeded', review.program.id, review.mission.id]), TENANT_ID, review.program.id,
       JSON.stringify({ priorMissionId: review.source.id, sourceMissionId: review.mission.id,
         policyHash: review.policyHash, scopeHash: review.scopeHash }),
     ]);
-    await client.query('COMMIT');
-    return { activated: true, sourceMissionId: review.mission.id, pending: 0 };
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+      await client.query('COMMIT');
+      return { activated: true, sourceMissionId: review.mission.id, pending: 0 };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  });
+  if (locked?.halted === 'overlap') throw new Error('governed_outbound_control_in_progress');
+  return locked;
 }
 
 if (require.main === module) {
