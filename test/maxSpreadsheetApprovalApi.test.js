@@ -11,6 +11,7 @@ const express = require('express');
 const session = require('express-session');
 const { Pool } = require('pg');
 const { startDisposablePostgres } = require('./helpers/disposablePostgres');
+const { launchTestBrowser } = require('./helpers/puppeteerTestBrowser');
 
 const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/anchor-cleaning-actual.xlsx'));
 const sourceHash = 'b1cddfa475f244e27d8c81a381976b30911b34f53ea6c449f868a54208ba6a75';
@@ -31,7 +32,10 @@ test('authenticated spreadsheet API safety gate with actual workbook and disposa
     require.cache[filename] = { id: filename, filename, loaded: true, exports };
   }
   t.after(async () => {
-    if (server) await new Promise(resolve => server.close(resolve));
+    if (server) {
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      await new Promise(resolve => server.close(resolve));
+    }
     await db.end();
     await instance.stop();
     for (const [filename, original] of restoredModules.reverse()) {
@@ -316,8 +320,10 @@ test('authenticated spreadsheet API safety gate with actual workbook and disposa
     const before = await business();
     const puppeteer = require('puppeteer');
     assert.ok(fs.existsSync(puppeteer.executablePath()), 'The pinned Chromium executable is required for this gate');
-    const browser = await puppeteer.launch({ headless: true, args: ['--disable-background-networking'] });
-    browserTest.after(() => browser.close());
+    const browser = await launchTestBrowser(puppeteer);
+    browserTest.after(async () => {
+      await browser.close();
+    });
     const page = await browser.newPage();
     const unexpected = [], commits = [];
     await page.setRequestInterception(true);

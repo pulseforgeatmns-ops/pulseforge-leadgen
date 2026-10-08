@@ -8,6 +8,7 @@ const { readFileSync, existsSync } = require('node:fs');
 const { once } = require('node:events');
 const path = require('node:path');
 const puppeteer = require('puppeteer');
+const { launchTestBrowser } = require('./helpers/puppeteerTestBrowser');
 const run = process.env.MAX_SPREADSHEET_BROWSER_TEST === '1';
 
 test('Chromium: authenticated local review, exact selection, negative save, held rows and no external requests', { skip: !run, timeout: 30000 }, async t => {
@@ -47,8 +48,10 @@ test('Chromium: authenticated local review, exact selection, negative save, held
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
-  const browser = await puppeteer.launch({ headless: true, args: ['--disable-background-networking'] });
-  t.after(() => browser.close());
+  const browser = await launchTestBrowser(puppeteer);
+  t.after(async () => {
+    await browser.close();
+  });
   const page = await browser.newPage();
   const origin = `http://127.0.0.1:${server.address().port}`;
   await page.setRequestInterception(true);
