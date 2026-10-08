@@ -14,6 +14,11 @@ const fs=require('node:fs');
 
 const PORT = Number(process.env.TELEGRAM_CALLER_FEED_PORT || process.env.PORT || 3099);
 
+function feedAuthConfigured(env = process.env) {
+  const token = env.SIGNAL_OPERATOR_FEED_TOKEN;
+  return typeof token === 'string' && token.length >= 32;
+}
+
 function createApp(engine = createTelegramCallerFeedEngine(), options={}) {
   const app = express();
   app.disable('x-powered-by');
@@ -56,15 +61,20 @@ function createApp(engine = createTelegramCallerFeedEngine(), options={}) {
     if (creds.ok) {
       poll = await engine.pollOnce();
     }
-    const health = engine.getHealth({
-      connected: creds.ok && poll.connected,
-      errors: poll.errors,
-    });
+    const health = {
+      ...engine.getHealth({
+        connected: creds.ok && poll.connected,
+        errors: poll.errors,
+      }),
+      feedAuthConfigured: feedAuthConfigured(env),
+    };
     const status = creds.ok ? 200 : 503;
     res.status(status).json(health);
   });
 
   app.get('/feed', async (req, res) => {
+    if (!feedAuthConfigured(env)) return res.sendStatus(503);
+    if (!authorized(req.headers.authorization, env.SIGNAL_OPERATOR_FEED_TOKEN)) return res.sendStatus(401);
     const creds = loadTelegramCredentials();
     if (!creds.ok) {
       return res.status(503).json({
@@ -93,6 +103,10 @@ async function main() {
     console.error(`[telegram-caller-feed] fail closed: ${creds.reason}`);
     process.exit(1);
   }
+  if (!feedAuthConfigured()) {
+    console.error('[telegram-caller-feed] fail closed: feed_auth_not_configured');
+    process.exit(1);
+  }
   const engine = createTelegramCallerFeedEngine();
   engine.startPolling();
   const app = createApp(engine);
@@ -114,4 +128,5 @@ if (require.main === module) {
 module.exports = {
   createApp,
   createTelegramCallerFeedEngine,
+  feedAuthConfigured,
 };

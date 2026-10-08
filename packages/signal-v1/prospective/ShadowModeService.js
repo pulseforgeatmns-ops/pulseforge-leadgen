@@ -50,6 +50,9 @@ class ShadowModeService {
     this.marketProvider = options.marketProvider;
     this.collectors = options.collectors || createProductionCollectors(options);
     this.requiredCallerSource = options.requiredCallerSource || null;
+    this.operatorOutbox = options.operatorOutbox || null;
+    this.approvedCallerChannelId = options.approvedCallerChannelId || null;
+    this.operatorMarketTimeoutMs = options.operatorMarketTimeoutMs ?? 2000;
     this.now = options.now || (() => new Date());
     this.inFlightJobs = new Set();
     this.ensureProspectiveStructures();
@@ -289,10 +292,64 @@ class ShadowModeService {
         metadata: { source: 'caller_extraction' },
       });
       await callStore(this.store, 'insertEvent', event);
+      await this.maybeEnqueueImmediateOperatorAlert(evidenceRow, event, raw);
       await this.processTokenAfterCall(event);
       results.push({ accepted: true, tokenAddress: ca, eventId });
     }
     return { results };
+  }
+
+  async maybeEnqueueImmediateOperatorAlert(evidenceRow, event, raw) {
+    if (!this.operatorOutbox || !this.approvedCallerChannelId) return;
+    if (raw.sourceId !== 'telegram-front-runners') return;
+    if (evidenceRow.provenance?.testOnly || evidenceRow.provenance?.synthetic) return;
+    if (String(evidenceRow.provenance?.telegramChannelId) !== String(this.approvedCallerChannelId)) return;
+
+    const knowAt = knowledgeAt(evidenceRow.occurredAt, evidenceRow.ingestedAt);
+    let researchState = 'PENDING_RESEARCH';
+    if (evaluateProspectiveFirstCaller(this.store, event.tokenAddress, knowAt)) {
+      researchState = 'FIRST_CALLER';
+    }
+    let independentConvergence = 'none';
+    if (evaluateProspectiveIndependentConvergence(
+      this.store,
+      event.tokenAddress,
+      knowAt,
+      this.registryBySourceId()
+    )) {
+      independentConvergence = 'confirmed';
+    } else {
+      const calls = (this.store.getEventsForToken?.(event.tokenAddress) || [])
+        .filter(e => e.eventType === 'CALL');
+      if (calls.length > 1) independentConvergence = 'pending';
+    }
+
+    let snapshot = null;
+    if (this.marketProvider) {
+      try {
+        const capture = await Promise.race([
+          captureMarketSnapshot(this.marketProvider, event.tokenAddress, knowAt, { now: this.now }),
+          new Promise(resolve => { setTimeout(() => resolve(null), this.operatorMarketTimeoutMs); }),
+        ]);
+        if (capture?.ok) snapshot = capture.snapshot;
+      } catch {
+        /* market enrichment must not block operator alert enqueue */
+      }
+    }
+
+    const receivedAt = this.now();
+    await this.operatorOutbox.enqueue({
+      evidence: evidenceRow,
+      snapshot,
+      approvedChannelId: this.approvedCallerChannelId,
+      researchState,
+      independentConvergence,
+      timestamps: {
+        pulseForgeReceivedAt: receivedAt,
+        callPersistedAt: receivedAt,
+        alertCreatedAt: receivedAt,
+      },
+    });
   }
 
   async persistRawEvidence(row) {
