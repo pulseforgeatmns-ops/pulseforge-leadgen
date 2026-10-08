@@ -150,6 +150,8 @@ function buildEvidenceRequest(task = {}, searchDefinition = {}, marketDefinition
     hypothesisId: asText(task.hypothesisId) || entity?.hypothesisId || null,
     entity,
     scope: task.scope === 'entity' ? 'entity' : 'market',
+    discoveryConcept: asText(searchDefinition._coverageWorkload?.concept) || null,
+    discoveryGeneration: Math.max(0, Number(searchDefinition.discoveryGeneration || 0)),
   };
 }
 

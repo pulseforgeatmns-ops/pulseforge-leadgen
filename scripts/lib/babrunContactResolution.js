@@ -220,8 +220,12 @@ function classifyCandidate(candidate, verification, founder) {
 
   const founderOnFirstParty = candidate.firstParty
     && isFounderLocalPartMatch(candidate.email, founder);
+  const attributedFounderRole = candidate.founderAttribution === true
+    && candidate.patternGenerated !== true
+    && isFounderLocalPartMatch(candidate.email, founder);
   const hasFounderEvidence = candidate.publicFounderSource
-    || founderOnFirstParty;
+    || founderOnFirstParty
+    || attributedFounderRole;
 
   if (hasFounderEvidence && !candidate.roleGeneric) {
     return CONTACT_FINAL_STATE.VERIFIED_FOUNDER_EMAIL;

@@ -73,7 +73,8 @@ const DEFAULT_ENRICHMENT_BATCH = 5;
 const MAX_ENRICHMENT_BATCHES_PER_CYCLE = 3;
 const SCOUT_DISCOVERY_BACKOFF_THRESHOLD = 3;
 const SCOUT_DISCOVERY_BACKOFF_MINUTES = 60;
-const REPLENISHMENT_TAXONOMY_VERSION = 2;
+const SCOUT_DISCOVERY_MAX_GENERATION = 3;
+const REPLENISHMENT_TAXONOMY_VERSION = 3;
 
 function boundedInt(value, fallback, min = 1, max = 100) {
   const n = Number(value);
@@ -398,7 +399,7 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
   return { clean, excluded, scope, exclusionCounts };
 }
 
-function scoutInput(program, source, plan, tenantContext = null) {
+function scoutInput(program, source, plan, tenantContext = null, discoveryGeneration = 0) {
   const scope = sourceScope(source);
   const payload = source?.payload || {};
   const tenant = resolveReplenishmentTenantContext({
@@ -440,6 +441,7 @@ function scoutInput(program, source, plan, tenantContext = null) {
       segments,
       businessType,
       desiredSignals: ['decision_maker', 'service_gap', 'portfolio_growth', 'turnover_support'],
+      discoveryGeneration: Math.max(0, Number(discoveryGeneration || 0)),
     },
     operatorDirection: 'Maintain verified inventory ahead of governed outbound demand. Do not contact prospects.',
   };
@@ -479,13 +481,21 @@ async function loadScoutDiscoveryBackoff(pool, tenantId, fingerprint, now = new 
     && Number(row.payload?.recoveredExisting || 0) === 0
   );
   if (!repeatedZeroYield) return null;
+  const latestGeneration = rows.reduce((max, row) => Math.max(
+    max,
+    Number(row.payload?.scoutSearchGeneration || 0)
+  ), 0);
   const lastAttemptAt = new Date(rows[0].created_at);
   const retryAt = new Date(lastAttemptAt.getTime() + cooldownMinutes * 60_000);
   if (+retryAt <= +now) return null;
   return {
-    reason: 'repeated_zero_yield_identical_search',
+    reason: latestGeneration < SCOUT_DISCOVERY_MAX_GENERATION
+      ? 'repeated_zero_yield_rotate_search'
+      : 'repeated_zero_yield_search_space_exhausted',
     fingerprint,
     consecutiveZeroYieldAttempts: rows.length,
+    searchGeneration: Math.min(latestGeneration + 1, SCOUT_DISCOVERY_MAX_GENERATION),
+    diversify: latestGeneration < SCOUT_DISCOVERY_MAX_GENERATION,
     lastAttemptAt: lastAttemptAt.toISOString(),
     retryAt: retryAt.toISOString(),
   };
@@ -749,13 +759,22 @@ async function defaultScoutRamp({
   let discovery = null;
   let discoveryAttempted = false;
   let discoveryBackoff = null;
+  let searchGeneration = 0;
   let persisted = { inserted: 0, admission: createReplenishmentAdmissionCounters() };
 
   const recoveredExistingCount = Number(existingRecovery?.payload?.qualifiedCount || 0);
   if (promoted < plan.deficit && recoveredExistingCount <= 0) {
     const fingerprint = searchFingerprint || scoutSearchFingerprint(program, source);
     discoveryBackoff = await loadDiscoveryBackoff(pool, tenant.tenantId, fingerprint, now);
-    if (discoveryBackoff) {
+    if (discoveryBackoff?.diversify) {
+      searchGeneration = Number(discoveryBackoff.searchGeneration || 1);
+      if (typeof store.event === 'function') {
+        await store.event('scout_replenishment_diversified', [fingerprint, searchGeneration], {
+          programId: program.id,
+          ...discoveryBackoff,
+        });
+      }
+    } else if (discoveryBackoff) {
       discovery = { kind: 'backoff', ...discoveryBackoff };
       if (typeof store.event === 'function') {
         await store.event('scout_replenishment_backoff', [fingerprint, discoveryBackoff.retryAt], {
@@ -764,14 +783,14 @@ async function defaultScoutRamp({
         });
       }
     }
-    if (!discoveryBackoff) {
+    if (!discoveryBackoff || discoveryBackoff.diversify) {
       const scope = sourceScope(source);
       const allowedCities = resolveScoutRampAllowedCities(scope);
       const discover = runDiscovery
         || ((input, opts) => require('./scoutAcquisitionIntelligence').runAcquisitionIntelligenceLoop(input, opts));
       discoveryAttempted = true;
       discovery = await discover(
-        scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant),
+        scoutInput({ ...program, tenant_id: tenant.tenantId }, source, plan, tenant, searchGeneration),
         {
           loadCompanies: async () => loadReuseCompanies(pool, tenant.tenantId),
           persistCompanies: async input => {
@@ -847,6 +866,7 @@ async function defaultScoutRamp({
     discoveryAttempted,
     discoveryBackoff,
     searchFingerprint: searchFingerprint || scoutSearchFingerprint(program, source),
+    searchGeneration,
     verificationRetry,
   };
 }
@@ -1037,6 +1057,24 @@ async function runMaxOutboundControlLoop(options = {}) {
       : inventoryBefore);
 
   const inventoryGrowth = computeCleanInventoryGrowth(inventoryBefore.clean, inventoryAfter.clean);
+  let aoRefill = null;
+  if (governed.tenantId === '10' && options.execute !== false) {
+    try {
+      const refillAoBooks = options.refillAoBooks
+        || require('../utils/aoAccountFill').fillActiveAoAccounts;
+      aoRefill = await refillAoBooks({
+        clientId: store.clientId,
+        db: pool,
+        dryRun: false,
+        minPerAo: 12,
+        targetPerAo: 20,
+        preserveGovernedEmailInventory: true,
+      });
+    } catch (err) {
+      logger.warn?.('[max-outbound-control] AO refill failed', err.message || err);
+      aoRefill = { error: err.message || String(err), assigned: [] };
+    }
+  }
   if (scout) {
     scout.yield = buildReplenishmentYield({
       admission: scout.admission || {},
@@ -1185,8 +1223,14 @@ async function runMaxOutboundControlLoop(options = {}) {
     scoutQueued: Number(scout?.discoveredQueued || 0),
     scoutRecovered: recoveredExisting,
     scoutSearchFingerprint: searchFingerprint,
+    scoutSearchGeneration: Number(scout?.searchGeneration || 0),
     scoutDiscoveryAttempted: Boolean(scout?.discoveryAttempted),
     scoutBackoff: scout?.discoveryBackoff || null,
+    aoRefill: aoRefill ? {
+      assigned: Number(aoRefill.assigned?.length || 0),
+      skipped: aoRefill.skipped || [],
+      error: aoRefill.error || null,
+    } : null,
     sameCompanyCandidatesAttempted: Number(scout?.admission?.sameCompanyCandidatesAttempted || 0),
     sameCompanyDifferentContact,
     alternateContactsResolved: Number(scout?.admission?.alternateContactsResolved || 0),
@@ -1249,6 +1293,7 @@ async function runMaxOutboundControlLoop(options = {}) {
       exclusionCounts: inventoryAfter.exclusionCounts || {},
     },
     scout,
+    aoRefill,
     funnel,
     yield: scout?.yield || null,
     excludedCount: inventoryAfter.excluded.length,
