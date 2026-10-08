@@ -171,6 +171,15 @@ async function runCronAgent(agent, res, query = {}) {
       mod.run({ client_id: clientId, scheduled: true }).catch(err => {
         console.error(`[cron] ${agent} run error:`, err.message);
       });
+    } else if (agent === 'paige_organic') {
+      const { runOrganicPipeline } = require('../services/paigeAnchorOrganicSocial');
+      runOrganicPipeline({
+        client_id: clientId,
+        skipMediaSync: query.skipMediaSync === 'true' || query.skip_media_sync === 'true',
+        minBacklog: query.minBacklog || query.min_backlog,
+      }).catch(err => {
+        console.error(`[cron] ${agent} run error:`, err.message);
+      });
     } else if (agent === 'paige') {
       const { routePaigeSocialContentExecution } = require('../services/paigeSocialContentExecution');
       routePaigeSocialContentExecution({
