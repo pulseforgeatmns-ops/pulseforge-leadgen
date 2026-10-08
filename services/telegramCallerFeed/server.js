@@ -7,17 +7,13 @@ const { createTelegramCallerFeedEngine } = require('./engine');
 const { buildFeedPayload } = require('./normalize');
 const { loadTelegramCredentials } = require('./credentials');
 const {authorized,minimalEvents}=require('./operatorEvents');
+const {feedAuthConfigured,assertDedicatedServiceFeedAuth}=require('./feedAuth');
 const {operationFromEnv}=require('../signalOperator/operationGate');
 const {checkPilot}=require('../signalOperator/pilotGate');
 const {readRuntimeLimits,installPilotDeadline}=require('../signalOperator/runtimeLimits');
 const fs=require('node:fs');
 
 const PORT = Number(process.env.TELEGRAM_CALLER_FEED_PORT || process.env.PORT || 3099);
-
-function feedAuthConfigured(env = process.env) {
-  const token = env.SIGNAL_OPERATOR_FEED_TOKEN;
-  return typeof token === 'string' && token.length >= 32;
-}
 
 function createApp(engine = createTelegramCallerFeedEngine(), options={}) {
   const app = express();
@@ -103,8 +99,9 @@ async function main() {
     console.error(`[telegram-caller-feed] fail closed: ${creds.reason}`);
     process.exit(1);
   }
-  if (!feedAuthConfigured()) {
-    console.error('[telegram-caller-feed] fail closed: feed_auth_not_configured');
+  const feedAuth = assertDedicatedServiceFeedAuth();
+  if (!feedAuth.ok) {
+    console.error(`[telegram-caller-feed] fail closed: ${feedAuth.reason}`);
     process.exit(1);
   }
   const engine = createTelegramCallerFeedEngine();

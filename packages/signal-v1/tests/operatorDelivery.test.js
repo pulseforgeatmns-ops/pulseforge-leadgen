@@ -68,6 +68,19 @@ test('operator timers run independently every second',async()=>{
   await Promise.all(timers.map(t=>t.fn()));assert.equal(calls,2);stop();
 });
 
+test('dedicated service entrypoint fails closed without feed auth but module import does not',()=>{
+  const {spawnSync}=require('node:child_process');
+  const path=require('node:path');
+  const entry=path.join(__dirname,'../../../services/telegramCallerFeed/server.js');
+  assert.doesNotThrow(()=>require('../../../services/telegramCallerFeed/server'));
+  const result=spawnSync(process.execPath,[entry],{
+    env:{...process.env,TELEGRAM_API_ID:'1',TELEGRAM_API_HASH:'hash',TELEGRAM_SESSION_STRING:'session',
+      SIGNAL_OPERATOR_FEED_TOKEN:'',TELEGRAM_CALLER_SOURCES_JSON:'[]'},
+    timeout:8000,encoding:'utf8'});
+  assert.notEqual(result.status,0);
+  assert.match(result.stderr,/feed_auth_not_configured/);
+});
+
 test('protected /feed rejects missing and incorrect token and accepts bearer auth',async()=>{
   process.env.TELEGRAM_API_ID='1';
   process.env.TELEGRAM_API_HASH='hash';
