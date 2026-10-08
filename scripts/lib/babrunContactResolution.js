@@ -201,6 +201,22 @@ function candidateRecord(email, discoveryMethod, discoverySource, extras = {}) {
   };
 }
 
+function providerCandidateFromEnrichment(target = {}, enriched = {}) {
+  const sources = (Array.isArray(enriched.source) ? enriched.source : [enriched.source])
+    .map(value => clean(value).toLowerCase())
+    .filter(Boolean);
+  const provider = sources.find(value => ['hunter', 'prospeo'].includes(value));
+  const normalized = value => clean(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const namedFounder = normalized(enriched.contact) === normalized(target.founder);
+  if (!provider || !enriched.email || !namedFounder) return null;
+  return candidateRecord(
+    enriched.email,
+    provider,
+    enriched.sourceUrl || provider,
+    { founderAttribution: true }
+  );
+}
+
 function classifyCandidate(candidate, verification, founder) {
   if (!candidate?.email) return CONTACT_FINAL_STATE.UNRESOLVED;
   if (!verification?.verified) {
@@ -537,6 +553,7 @@ async function persistContactResolution(db, prospect, target, result, dryRun) {
     best?.discoveryMethod === 'first_party_website' ? 'website_email'
       : best?.discoveryMethod === 'public_founder_source' ? 'public_directory'
         : best?.discoveryMethod === 'crm_existing' ? 'existing_prospect_email'
+          : ['hunter', 'prospeo'].includes(best?.discoveryMethod) ? best.discoveryMethod
           : null
   );
 
@@ -657,7 +674,7 @@ async function resolveTarget(target, options = {}) {
     candidates = [...options.extraCandidates, ...candidates];
   }
   if (options.prospect) {
-    candidates = [...crmExistingCandidates(options.prospect, domains), ...candidates];
+    candidates = [...candidates, ...crmExistingCandidates(options.prospect, domains)];
   }
   candidates = appendPatternCandidates(target, candidates, domains);
 
@@ -724,6 +741,8 @@ module.exports = {
   CLIENT_ID,
   BABRUN_CONTACT_TARGETS,
   CONTACT_FINAL_STATE,
+  candidateRecord,
+  providerCandidateFromEnrichment,
   resolveTarget,
   persistContactResolution,
   loadProspectByAkId,
@@ -738,5 +757,4 @@ module.exports = {
   attributionRank,
   isLikelyTypoDomain,
   isInvalidVerification,
-  candidateRecord,
 };
