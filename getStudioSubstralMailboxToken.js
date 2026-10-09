@@ -26,12 +26,9 @@ const TOKEN_PATH = path.join(__dirname, 'studio_substral_mailbox_token.json');
 const CREDENTIALS_PATH = path.join(__dirname, 'gmail_credentials.json');
 
 function loadCredentials() {
-  if (process.env.GMAIL_CREDENTIALS) {
-    return JSON.parse(process.env.GMAIL_CREDENTIALS);
-  }
-  if (fs.existsSync(CREDENTIALS_PATH)) {
-    return JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
-  }
+  // The production mailbox runtime refreshes tokens with GOOGLE_CLIENT_ID and
+  // GOOGLE_CLIENT_SECRET. Prefer that exact pair here so a newly minted
+  // Studio Substral refresh token cannot be bound to a different OAuth client.
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     return {
       installed: {
@@ -39,6 +36,12 @@ function loadCredentials() {
         client_secret: process.env.GOOGLE_CLIENT_SECRET,
       },
     };
+  }
+  if (process.env.GMAIL_CREDENTIALS) {
+    return JSON.parse(process.env.GMAIL_CREDENTIALS);
+  }
+  if (fs.existsSync(CREDENTIALS_PATH)) {
+    return JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
   }
   throw new Error(
     'Missing OAuth client credentials. Set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET or GMAIL_CREDENTIALS.'
@@ -95,3 +98,5 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
+
+module.exports = { loadCredentials, createOAuthClient };

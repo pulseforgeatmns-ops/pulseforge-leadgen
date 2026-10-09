@@ -311,13 +311,40 @@ function canResolveImapCredential(integration, opts = {}) {
   }
 }
 
+function resolveGoogleOAuthClientEnv(integration, env = process.env) {
+  if (String(integration?.tenantId || integration?.tenant_id || '') !== '17') return env;
+
+  const dedicatedId = clean(env.STUDIO_SUBSTRAL_GOOGLE_CLIENT_ID);
+  const dedicatedSecret = clean(env.STUDIO_SUBSTRAL_GOOGLE_CLIENT_SECRET);
+  if (dedicatedId && dedicatedSecret) {
+    return { ...env, GOOGLE_CLIENT_ID: dedicatedId, GOOGLE_CLIENT_SECRET: dedicatedSecret };
+  }
+
+  try {
+    const credentials = JSON.parse(clean(env.GMAIL_CREDENTIALS) || '{}');
+    const client = credentials.installed || credentials.web || {};
+    if (clean(client.client_id) && clean(client.client_secret)) {
+      return {
+        ...env,
+        GOOGLE_CLIENT_ID: clean(client.client_id),
+        GOOGLE_CLIENT_SECRET: clean(client.client_secret),
+      };
+    }
+  } catch (_err) {
+    // Fall through to the shared runtime client. Refresh remains fail-closed.
+  }
+
+  return env;
+}
+
 async function resolveGoogleOAuthAccess(integration, opts = {}) {
   const refreshRef = integration.oauthRefreshSecretRef || integration.oauth_refresh_secret_ref;
   const refreshToken = resolveSecretRef(refreshRef, opts);
   const { getGoogleMailboxAccessToken } = require('../utils/googleMailboxOAuth');
+  const env = resolveGoogleOAuthClientEnv(integration, opts.env || process.env);
   const accessToken = await getGoogleMailboxAccessToken({
     refreshToken,
-    env: opts.env || process.env,
+    env,
     forceRefresh: opts.forceRefreshOAuth === true,
   });
   return accessToken;
@@ -1807,6 +1834,7 @@ module.exports = {
   publicIntegration,
   publicIdentity,
   resolveSecretRef,
+  resolveGoogleOAuthClientEnv,
   resolveImapAuthMode,
   resolveImapAuth,
   resolveSmtpAuth,
