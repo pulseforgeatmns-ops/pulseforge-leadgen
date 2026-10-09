@@ -126,7 +126,7 @@ Legacy workflows (`paige-social-safety`, `revenue-postgres`, `anchor-governed-ou
 | AO routing only | `global`, `revenue-postgres` |
 | `package.json` | `global` + 5 Postgres-heavy domains (see escalation rule) |
 | `server.js` | `global`, `anchor-outbound`, `signal-v1`, `revenue-postgres`, `decision-shadow` |
-| CI workflow edit | All suites (fail-safe validation) |
+| CI workflow edit | Former PR-critical suites + path-filtered domains (not full `test:max` — Max was never merge-blocking on every PR) |
 | Docs-only | `global` only |
 
 ---

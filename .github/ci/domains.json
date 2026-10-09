@@ -212,10 +212,9 @@
         "walkthrough",
         "spec245-evidence",
         "anchor-canonical-outbound",
-        "studio-substral",
-        "max"
+        "studio-substral"
       ],
-      "reason": "CI selector or workflow change — validate all merge-blocking suites"
+      "reason": "CI selector or workflow change — re-run former PR-critical suites (Max full suite was never merge-blocking; see full-regression.yml)"
     },
     {
       "id": "npm-dependencies",
@@ -271,7 +270,6 @@
     "walkthrough",
     "spec245-evidence",
     "anchor-canonical-outbound",
-    "studio-substral",
-    "max"
+    "studio-substral"
   ]
 }

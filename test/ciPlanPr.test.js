@@ -56,8 +56,8 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     {
       name: 'CI workflow change',
       files: ['.github/workflows/pr-ci-lean.yml'],
-      expect: ['global', 'signal-v1', 'paige-social', 'max'],
-      forbid: [],
+      expect: ['global', 'signal-v1', 'paige-social', 'anchor-outbound', 'decision-shadow', 'revenue-postgres'],
+      forbid: ['max'],
     },
   ];
 
