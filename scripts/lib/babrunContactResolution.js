@@ -518,6 +518,37 @@ function crmExistingCandidates(prospect, domains) {
   })];
 }
 
+function contactResolutionProvenance(existingProvenance, best, finalState, resolvedAt = new Date().toISOString()) {
+  const provenanceSource = persistableEmailSource(
+    best?.discoveryMethod === 'first_party_website' ? 'website_email'
+      : best?.discoveryMethod === 'public_founder_source' ? 'public_directory'
+        : best?.discoveryMethod === 'crm_existing' ? 'existing_prospect_email'
+          : ['hunter', 'prospeo'].includes(best?.discoveryMethod) ? best.discoveryMethod
+            : null
+  );
+  const stamped = stampEmailProvenance(existingProvenance, provenanceSource || 'contact_resolution', {
+    contact_classification: finalState,
+    discovery_source: best?.discoverySource || null,
+    discovery_method: best?.discoveryMethod || null,
+    verifier: best?.verification?.method || null,
+    status: best?.verification?.status || null,
+    resolved_at: resolvedAt,
+  });
+  if (provenanceSource && ['hunter', 'prospeo'].includes(provenanceSource)
+    && best?.verification?.verified === true) {
+    const priorOriginal = existingProvenance?.email?.original_source
+      || existingProvenance?.email?.source
+      || null;
+    stamped.email = {
+      ...stamped.email,
+      source: provenanceSource,
+      original_source: provenanceSource,
+      prior_original_source: priorOriginal && priorOriginal !== provenanceSource ? priorOriginal : null,
+    };
+  }
+  return stamped;
+}
+
 async function persistContactResolution(db, prospect, target, result, dryRun) {
   if (!prospect || dryRun) return { persisted: false, dryRun: true };
 
@@ -549,22 +580,11 @@ async function persistContactResolution(db, prospect, target, result, dryRun) {
     },
   };
 
-  const provenanceSource = persistableEmailSource(
-    best?.discoveryMethod === 'first_party_website' ? 'website_email'
-      : best?.discoveryMethod === 'public_founder_source' ? 'public_directory'
-        : best?.discoveryMethod === 'crm_existing' ? 'existing_prospect_email'
-          : ['hunter', 'prospeo'].includes(best?.discoveryMethod) ? best.discoveryMethod
-          : null
+  const enrichmentProvenance = contactResolutionProvenance(
+    prospect.enrichment_provenance,
+    best,
+    result.finalState
   );
-
-  const enrichmentProvenance = stampEmailProvenance(prospect.enrichment_provenance, provenanceSource || 'contact_resolution', {
-    contact_classification: result.finalState,
-    discovery_source: best?.discoverySource || null,
-    discovery_method: best?.discoveryMethod || null,
-    verifier: best?.verification?.method || null,
-    status: best?.verification?.status || null,
-    resolved_at: new Date().toISOString(),
-  });
 
   const sets = [
     'acquisition_metadata = COALESCE(acquisition_metadata, \'{}\'::jsonb) || $1::jsonb',
@@ -743,6 +763,7 @@ module.exports = {
   CONTACT_FINAL_STATE,
   candidateRecord,
   providerCandidateFromEnrichment,
+  contactResolutionProvenance,
   resolveTarget,
   persistContactResolution,
   loadProspectByAkId,
