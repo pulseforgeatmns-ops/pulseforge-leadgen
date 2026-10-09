@@ -15,6 +15,7 @@ const {
   deprioritizeAccountForContactResearch,
   assertMinimumAoAccountCounts,
   DEFAULT_MIN_ACCOUNTS_PER_AO,
+  DEFAULT_TARGET_ACCOUNTS_PER_AO,
 } = require('../utils/aoAccountFill');
 
 const CLIENT_ID = 10;
@@ -24,9 +25,11 @@ function parseArgs(argv) {
   const apply = argv.includes('--apply');
   const confirm = argv.find(a => a.startsWith('--confirm='))?.split('=')[1] || null;
   const min = Number(argv.find(a => a.startsWith('--min='))?.split('=')[1] || DEFAULT_MIN_ACCOUNTS_PER_AO);
-  const target = Number(argv.find(a => a.startsWith('--target='))?.split('=')[1] || 15);
+  const target = Number(argv.find(a => a.startsWith('--target='))?.split('=')[1] || DEFAULT_TARGET_ACCOUNTS_PER_AO);
+  const aoNames = argv.find(a => a.startsWith('--ao='))?.split('=')[1]
+    ?.split(',').map(value => value.trim()).filter(Boolean) || null;
   const deprioritizeGiant = !argv.includes('--skip-giant-deprioritize');
-  return { apply, confirm, min, target, deprioritizeGiant };
+  return { apply, confirm, min, target, deprioritizeGiant, aoNames };
 }
 
 async function findGiantProspectId(db) {
@@ -60,6 +63,7 @@ async function main() {
     dryRun: !args.apply,
     minPerAo: args.min,
     targetPerAo: args.target,
+    targetAoNames: args.aoNames,
   });
   console.log('[fillAoAccountAssignments] fill result:', JSON.stringify({
     dryRun: fillResult.dryRun,

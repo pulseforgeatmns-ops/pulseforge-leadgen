@@ -137,6 +137,71 @@ function promotionServiceAreaMatch(record, clientConfig) {
   }) || true;
 }
 
+function babrunPromotionContactResolution({ enriched = {}, verification = {}, officialDomain = '' } = {}) {
+  if (!enriched.email) return null;
+  const {
+    CONTACT_FINAL_STATE,
+    candidateRecord,
+    classifyCandidate,
+    mapVerificationResult,
+  } = require('./lib/babrunContactResolution');
+  const sourceUrl = String(enriched.sourceUrl || '').trim() || null;
+  const sourceDomain = sourceUrl
+    ? require('../utils/canonicalEmailEligibility').normalizeDomain(sourceUrl)
+    : null;
+  const firstParty = Boolean(sourceDomain && sourceDomain === officialDomain);
+  const sourceNames = (Array.isArray(enriched.source) ? enriched.source : [enriched.source])
+    .map(value => String(value || '').toLowerCase());
+  const explicitFounderRole = /\b(owner|founder|president|principal|proprietor)\b/i
+    .test(String(enriched.title || ''));
+  const providerFounderAttribution = explicitFounderRole
+    && Boolean(String(enriched.contact || '').trim())
+    && sourceNames.some(value => ['prospeo', 'hunter'].includes(value));
+  const discoveryMethod = firstParty ? 'first_party_website' : 'enrichment_provider';
+  const candidate = candidateRecord(
+    enriched.email,
+    discoveryMethod,
+    sourceUrl || (enriched.source || []).join('+') || null,
+    { firstParty, publicFounderSource: false, founderAttribution: providerFounderAttribution }
+  );
+  const mapped = {
+    ...mapVerificationResult({
+      status: verification.emailStatus,
+      reason: verification.rejectReason || verification.note || null,
+    }),
+    verified: verification.emailVerified === true,
+    method: verification.emailVerificationMethod || null,
+    verifiedAt: verification.verifiedAt || verification.verifierCheckedAt || new Date().toISOString(),
+  };
+  const founder = String(enriched.contact || '').trim();
+  const finalState = classifyCandidate(candidate, mapped, founder);
+  return {
+    contactResolution: {
+      resolvedAt: new Date().toISOString(),
+      finalState,
+      classification: finalState,
+      bestEmail: String(enriched.email).trim().toLowerCase(),
+      contactName: founder || null,
+      contactTitle: enriched.title || null,
+      discoverySource: candidate.discoverySource,
+      discoveryMethod,
+      verification: mapped,
+      candidates: [{
+        email: candidate.email,
+        discoverySource: candidate.discoverySource,
+        discoveryMethod,
+        classification: finalState,
+        verification: mapped,
+      }],
+      scoutLearning: {
+        pipeline: 'company_identity → official_domain → attributable_contact → verification → classification',
+        outcome: finalState,
+      },
+    },
+    sendableFounder: finalState === CONTACT_FINAL_STATE.VERIFIED_FOUNDER_EMAIL,
+  };
+}
+
 async function promoteRecord(record, {
   db = pool,
   enrich = runEnrichmentChain,
@@ -191,6 +256,9 @@ async function promoteRecord(record, {
   if (businessEvidence) {
     try { enrichmentProvenance.business = JSON.parse(businessEvidence[1]); } catch (_) {}
   }
+  const babrunResolution = Number(record.client_id) === 13
+    ? babrunPromotionContactResolution({ enriched, verification, officialDomain: domain })
+    : null;
   const contactReason = Number(record.client_id) === 10 && require('../utils/governedContactEligibility').governedContactReason({
     client_id: record.client_id, domain, email: enriched.email,
     email_verified: verification.emailVerified, email_status: verification.emailStatus,
@@ -221,8 +289,9 @@ async function promoteRecord(record, {
       company_id, first_name, last_name, email, phone, status, source, icp_score, notes, vertical,
       client_id, service_area_match, discovery_method, website_url,
       email_verified, email_verification_method, verified_at, do_not_contact,
-      email_status, verifier_response, verifier_checked_at, enrichment_provenance
-    ) VALUES ($1, NULL, NULL, $2, NULL, 'cold', 'scout', 70, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16::jsonb)
+      email_status, verifier_response, verifier_checked_at, enrichment_provenance,
+      acquisition_metadata
+    ) VALUES ($1, NULL, NULL, $2, NULL, 'cold', 'scout', 70, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15, $16::jsonb, $17::jsonb)
     ON CONFLICT (email) DO NOTHING
     RETURNING id
   `, [
@@ -242,6 +311,7 @@ async function promoteRecord(record, {
     JSON.stringify(verification.verifierResponse || null),
     verification.verifierCheckedAt,
     JSON.stringify(enrichmentProvenance),
+    JSON.stringify(babrunResolution ? { contactResolution: babrunResolution.contactResolution } : {}),
   ]);
 
   if (!insert.rows.length) {
@@ -286,7 +356,8 @@ async function promoteRecord(record, {
             verifier_response = $6::jsonb,
             verifier_checked_at = $7,
             notes = COALESCE(notes, '') || $8,
-            enrichment_provenance = $10::jsonb
+            enrichment_provenance = $10::jsonb,
+            acquisition_metadata = COALESCE(acquisition_metadata, '{}'::jsonb) || $11::jsonb
         WHERE id = $1 AND client_id = $9
       `, [
         row.id,
@@ -300,6 +371,7 @@ async function promoteRecord(record, {
         record.client_id,
         JSON.stringify(require('../utils/canonicalEmailEligibility').stampEmailProvenance(
           { ...row.enrichment_provenance, ...enrichmentProvenance }, (enriched.source || []).join('+'), enrichmentProvenance.email)),
+        JSON.stringify(babrunResolution ? { contactResolution: babrunResolution.contactResolution } : {}),
       ]);
     }
     await db.query('DELETE FROM scout_unenriched WHERE id = $1', [record.id]);
@@ -346,7 +418,12 @@ async function run() {
   process.exit(result.promoted || result.recovered ? 0 : 2);
 }
 
-module.exports = { promoteRecord, promotionServiceAreaMatch, findOrCreateCompanyForClient };
+module.exports = {
+  promoteRecord,
+  promotionServiceAreaMatch,
+  findOrCreateCompanyForClient,
+  babrunPromotionContactResolution,
+};
 
 if (require.main === module) {
   run().catch(err => {

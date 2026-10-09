@@ -201,6 +201,22 @@ function candidateRecord(email, discoveryMethod, discoverySource, extras = {}) {
   };
 }
 
+function providerCandidateFromEnrichment(target = {}, enriched = {}) {
+  const sources = (Array.isArray(enriched.source) ? enriched.source : [enriched.source])
+    .map(value => clean(value).toLowerCase())
+    .filter(Boolean);
+  const provider = sources.find(value => ['hunter', 'prospeo'].includes(value));
+  const normalized = value => clean(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const namedFounder = normalized(enriched.contact) === normalized(target.founder);
+  if (!provider || !enriched.email || !namedFounder) return null;
+  return candidateRecord(
+    enriched.email,
+    provider,
+    enriched.sourceUrl || provider,
+    { founderAttribution: true }
+  );
+}
+
 function classifyCandidate(candidate, verification, founder) {
   if (!candidate?.email) return CONTACT_FINAL_STATE.UNRESOLVED;
   if (!verification?.verified) {
@@ -220,8 +236,12 @@ function classifyCandidate(candidate, verification, founder) {
 
   const founderOnFirstParty = candidate.firstParty
     && isFounderLocalPartMatch(candidate.email, founder);
+  const attributedFounderRole = candidate.founderAttribution === true
+    && candidate.patternGenerated !== true
+    && isFounderLocalPartMatch(candidate.email, founder);
   const hasFounderEvidence = candidate.publicFounderSource
-    || founderOnFirstParty;
+    || founderOnFirstParty
+    || attributedFounderRole;
 
   if (hasFounderEvidence && !candidate.roleGeneric) {
     return CONTACT_FINAL_STATE.VERIFIED_FOUNDER_EMAIL;
@@ -498,6 +518,37 @@ function crmExistingCandidates(prospect, domains) {
   })];
 }
 
+function contactResolutionProvenance(existingProvenance, best, finalState, resolvedAt = new Date().toISOString()) {
+  const provenanceSource = persistableEmailSource(
+    best?.discoveryMethod === 'first_party_website' ? 'website_email'
+      : best?.discoveryMethod === 'public_founder_source' ? 'public_directory'
+        : best?.discoveryMethod === 'crm_existing' ? 'existing_prospect_email'
+          : ['hunter', 'prospeo'].includes(best?.discoveryMethod) ? best.discoveryMethod
+            : null
+  );
+  const stamped = stampEmailProvenance(existingProvenance, provenanceSource || 'contact_resolution', {
+    contact_classification: finalState,
+    discovery_source: best?.discoverySource || null,
+    discovery_method: best?.discoveryMethod || null,
+    verifier: best?.verification?.method || null,
+    status: best?.verification?.status || null,
+    resolved_at: resolvedAt,
+  });
+  if (provenanceSource && ['hunter', 'prospeo'].includes(provenanceSource)
+    && best?.verification?.verified === true) {
+    const priorOriginal = existingProvenance?.email?.original_source
+      || existingProvenance?.email?.source
+      || null;
+    stamped.email = {
+      ...stamped.email,
+      source: provenanceSource,
+      original_source: provenanceSource,
+      prior_original_source: priorOriginal && priorOriginal !== provenanceSource ? priorOriginal : null,
+    };
+  }
+  return stamped;
+}
+
 async function persistContactResolution(db, prospect, target, result, dryRun) {
   if (!prospect || dryRun) return { persisted: false, dryRun: true };
 
@@ -529,21 +580,11 @@ async function persistContactResolution(db, prospect, target, result, dryRun) {
     },
   };
 
-  const provenanceSource = persistableEmailSource(
-    best?.discoveryMethod === 'first_party_website' ? 'website_email'
-      : best?.discoveryMethod === 'public_founder_source' ? 'public_directory'
-        : best?.discoveryMethod === 'crm_existing' ? 'existing_prospect_email'
-          : null
+  const enrichmentProvenance = contactResolutionProvenance(
+    prospect.enrichment_provenance,
+    best,
+    result.finalState
   );
-
-  const enrichmentProvenance = stampEmailProvenance(prospect.enrichment_provenance, provenanceSource || 'contact_resolution', {
-    contact_classification: result.finalState,
-    discovery_source: best?.discoverySource || null,
-    discovery_method: best?.discoveryMethod || null,
-    verifier: best?.verification?.method || null,
-    status: best?.verification?.status || null,
-    resolved_at: new Date().toISOString(),
-  });
 
   const sets = [
     'acquisition_metadata = COALESCE(acquisition_metadata, \'{}\'::jsonb) || $1::jsonb',
@@ -653,7 +694,7 @@ async function resolveTarget(target, options = {}) {
     candidates = [...options.extraCandidates, ...candidates];
   }
   if (options.prospect) {
-    candidates = [...crmExistingCandidates(options.prospect, domains), ...candidates];
+    candidates = [...candidates, ...crmExistingCandidates(options.prospect, domains)];
   }
   candidates = appendPatternCandidates(target, candidates, domains);
 
@@ -720,6 +761,9 @@ module.exports = {
   CLIENT_ID,
   BABRUN_CONTACT_TARGETS,
   CONTACT_FINAL_STATE,
+  candidateRecord,
+  providerCandidateFromEnrichment,
+  contactResolutionProvenance,
   resolveTarget,
   persistContactResolution,
   loadProspectByAkId,
@@ -734,5 +778,4 @@ module.exports = {
   attributionRank,
   isLikelyTypoDomain,
   isInvalidVerification,
-  candidateRecord,
 };

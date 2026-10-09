@@ -136,7 +136,7 @@ test('Scout projects Babrun mission into the same concrete taxonomy consumed by 
   assert.equal(clean.clean[0].prospectId, 'prospect-barco');
 });
 
-test('three identical zero-yield discoveries produce explicit cooldown without bypassing existing recovery', async () => {
+test('three identical zero-yield discoveries rotate into fresh search space without bypassing existing recovery', async () => {
   const now = new Date('2026-10-06T14:00:00.000Z');
   const pool = {
     query: async () => ({ rows: [
@@ -146,7 +146,9 @@ test('three identical zero-yield discoveries produce explicit cooldown without b
     ] }),
   };
   const backoff = await loadScoutDiscoveryBackoff(pool, '13', 'same-search', now);
-  assert.equal(backoff.reason, 'repeated_zero_yield_identical_search');
+  assert.equal(backoff.reason, 'repeated_zero_yield_rotate_search');
+  assert.equal(backoff.searchGeneration, 1);
+  assert.equal(backoff.diversify, true);
   assert.equal(backoff.retryAt, '2026-10-06T14:45:00.000Z');
 
   let recoveryChecks = 0;
@@ -185,12 +187,17 @@ test('three identical zero-yield discoveries produce explicit cooldown without b
     enrichment: { run: async () => ({ considered: 0, promoted: 0, recovered: 0 }) },
     recoverExistingInventory: async () => ({ payload: { qualifiedCount: 0 } }),
     loadDiscoveryBackoff: async () => backoff,
-    runDiscovery: async () => { discoveryCalls += 1; },
+    runDiscovery: async input => {
+      discoveryCalls += 1;
+      assert.equal(input.targetContext.discoveryGeneration, 1);
+      return { kind: 'fresh-search' };
+    },
   });
-  assert.equal(discoveryCalls, 0);
-  assert.equal(ramp.discovery.kind, 'backoff');
-  assert.equal(ramp.discoveryBackoff.reason, 'repeated_zero_yield_identical_search');
-  assert.equal(events[0].type, 'scout_replenishment_backoff');
+  assert.equal(discoveryCalls, 1);
+  assert.equal(ramp.discovery.kind, 'fresh-search');
+  assert.equal(ramp.searchGeneration, 1);
+  assert.equal(ramp.discoveryBackoff.reason, 'repeated_zero_yield_rotate_search');
+  assert.equal(events[0].type, 'scout_replenishment_diversified');
 });
 
 async function governedScheduleFixture() {

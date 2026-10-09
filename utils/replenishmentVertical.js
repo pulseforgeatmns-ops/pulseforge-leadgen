@@ -77,6 +77,26 @@ const FOUNDER_LED_VERTICAL_EVIDENCE = Object.freeze({
   auto: [/\bauto(?:motive)? repair\b/i, /\bauto service\b/i, /\bmechanic shop\b/i],
 });
 
+const RESTAURANT_BOH_ONLY_EVIDENCE = [
+  /\bcommissary\b/i,
+  /\bghost kitchen\b/i,
+  /\bcommercial kitchen\b/i,
+  /\bfood (?:manufacturer|manufacturing|processor|processing|production)\b/i,
+  /\bmeal prep(?:aration)? (?:facility|company|service)\b/i,
+  /\bcatering (?:company|service|kitchen)\b/i,
+];
+
+const RESTAURANT_FOH_EVIDENCE = [
+  /\brestaurant\b/i,
+  /\bcafe\b/i,
+  /\bbistro\b/i,
+  /\btavern\b/i,
+  /\bgastropub\b/i,
+  /\bdiner\b/i,
+  /\bbar and grill\b/i,
+  /\beatery\b/i,
+];
+
 const STR_PLACE_TYPES = new Set(['lodging', 'extended stay', 'vacation rental']);
 const PM_PLACE_TYPES = new Set(['real estate agency']);
 
@@ -104,6 +124,7 @@ const MISSION_VERTICALS = Object.freeze({
   commercial_office: ['commercial_office'],
   realtor: ['realtor'],
   real_estate: ['realtor'],
+  restaurant_foh: ['restaurant'],
   small_business_owner: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
   small_business_owners: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
   founder_led_smb: FOUNDER_LED_SMALL_BUSINESS_VERTICALS,
@@ -320,6 +341,15 @@ function evaluateReplenishmentAdmission(candidate = {}, context = {}) {
   const admissionContext = { ...context, ...provenance };
   const text = classificationHaystack(candidate, admissionContext);
 
+  const restaurantFohMission = (context.missionSegments || [context.missionSegment])
+    .map(normalizeVertical)
+    .includes('restaurant_foh');
+  if (restaurantFohMission
+    && hasEvidence(text, RESTAURANT_BOH_ONLY_EVIDENCE)
+    && !hasEvidence(text, RESTAURANT_FOH_EVIDENCE)) {
+    return { admitted: false, reason: 'restaurant_boh_only' };
+  }
+
   const vertical = resolveReplenishmentVertical(candidate, admissionContext);
   const contradictory = detectContradictoryBusinessType(text);
   if (contradictory && !(isFounderLedSmallBusinessMission(context) && vertical
@@ -363,6 +393,7 @@ function createReplenishmentAdmissionCounters() {
       stale_ownership: 0,
       same_company_different_contact: 0,
       insufficient_business_fit: 0,
+      restaurant_boh_only: 0,
     },
     recovered: 0,
     recoveredExisting: 0,

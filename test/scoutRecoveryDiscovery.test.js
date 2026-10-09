@@ -13,14 +13,18 @@ test('Places business evidence survives mapping; query geography is never eviden
  const unknown=toDiscoveredCompany({name:'Granite',website:'granite.example'},search,'google_places');
  assert.equal(unknown.location,null); assert.equal(unknown.industry,null);
 });
-test('coverage requests property management strategies and reuses identical Places calls per cycle',async()=>{
+test('coverage executes each distinct approved concept once per cycle',async()=>{
  const requests=[];
  const adapter={id:'public_business_places',sourceType:'public_business_data',discover:async d=>{requests.push(d.evidenceRequest);return {candidates:[]};}};
  const plan={workloads:['STR','Vacation Rental','Property Manager'].map(concept=>({city:'Manchester NH',concept,source:'public_business_data'})),cities:['Manchester NH'],concepts:['STR','Vacation Rental','Property Manager'],sources:['public_business_data']};
  const def={tenantId:'10',segments:['short_term_rental'],geography:{cities:['Manchester'],state:'NH',label:'Manchester NH'}};
  await executeCoveragePlan(plan,def,[adapter]);
- assert.deepEqual(requests.map(r=>r.segment),['short_term_rental','property_management']);
- await executeCoveragePlan(plan,def,[adapter]); assert.equal(requests.length,4);
+ assert.deepEqual(requests.map(r=>[r.segment,r.discoveryConcept]),[
+  ['short_term_rental','STR'],
+  ['short_term_rental','Vacation Rental'],
+  ['property_management','Property Manager'],
+ ]);
+ await executeCoveragePlan(plan,def,[adapter]); assert.equal(requests.length,6);
 });
 test('company promotion resolves same-domain alias and fails closed on ambiguous identity',async()=>{
  let inserted=false;
