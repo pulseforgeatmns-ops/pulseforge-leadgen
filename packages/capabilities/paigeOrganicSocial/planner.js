@@ -44,6 +44,22 @@ function hashPick(seed, list) {
   return list[idx];
 }
 
+function hashRatio(seed) {
+  const digest = crypto.createHash('sha256').update(String(seed)).digest();
+  return digest.readUInt32BE(0) / 0x100000000;
+}
+
+function shouldExplore(seed, rate = EXPLORATION_RATE) {
+  return hashRatio(`${seed}:exploration`) < rate;
+}
+
+function computeExplorationBounds(backlogSize) {
+  if (backlogSize <= 0) return { min: 0, max: 0 };
+  const max = Math.max(1, Math.ceil(backlogSize * EXPLORATION_RATE));
+  const min = backlogSize >= DEFAULT_BACKLOG_MIN ? 1 : 0;
+  return { min: Math.min(min, max), max };
+}
+
 function recentCounts(backlog = []) {
   const formats = {};
   const categories = {};
@@ -140,7 +156,7 @@ async function planBacklogCandidate(input = {}, deps = {}) {
   const backlog = input.backlog || await store.listBacklog(clientId);
   const counts = recentCounts(backlog);
   const seed = input.seed || `${clientId}:${backlog.length}:${assets.length}`;
-  const exploration = input.exploration ?? Math.random() < EXPLORATION_RATE;
+  const exploration = input.exploration ?? shouldExplore(seed);
   const category = input.contentCategory || chooseCategory(counts, seed);
   const forceTextOnly = input.forceTextOnly || category === 'operator_perspective';
   const format = input.proposedFormat || chooseFormat({ category, assets, pairs, counts, seed, forceTextOnly });
@@ -153,6 +169,7 @@ async function planBacklogCandidate(input = {}, deps = {}) {
     contentCategory: category,
     format,
     exploration,
+    explorationSeed: `${seed}:schedule`,
   }, { signals });
   return {
     clientId,
@@ -173,6 +190,55 @@ async function planBacklogCandidate(input = {}, deps = {}) {
   };
 }
 
+async function applyExplorationPatch(store, clientId, item, exploration, deps = {}) {
+  if (Boolean(item.exploration) === exploration) return item;
+  const signals = deps.signals || await store.listPlatformSignals(clientId, item.targetPlatform);
+  const schedule = recommendPublishWindow({
+    platform: item.targetPlatform,
+    contentCategory: item.contentCategory,
+    format: item.proposedFormat,
+    exploration,
+    explorationSeed: `${item.id}:schedule`,
+  }, { signals });
+  const planningRationale = buildPlanningRationale({
+    category: item.contentCategory,
+    format: item.proposedFormat,
+    assetIds: item.assetIds || [],
+    exploration,
+  });
+  return store.updateBacklogItem(item.id, clientId, {
+    exploration,
+    planningRationale,
+    schedulingRationale: schedule.schedulingRationale,
+    meta: { ...(item.meta || {}), schedule: schedule.meta },
+  });
+}
+
+async function rebalanceControlledExploration(items, clientId, deps = {}) {
+  const store = deps.store;
+  if (!store || !items.length) return items;
+  const { min, max } = computeExplorationBounds(items.length);
+  let explorers = items.filter((item) => item.exploration);
+  if (explorers.length < min) {
+    const need = min - explorers.length;
+    const candidates = items
+      .filter((item) => !item.exploration)
+      .sort((a, b) => hashRatio(`promote:${clientId}:${a.id}`) - hashRatio(`promote:${clientId}:${b.id}`));
+    for (const item of candidates.slice(0, need)) {
+      await applyExplorationPatch(store, clientId, item, true, deps);
+    }
+  } else if (explorers.length > max) {
+    const excess = explorers.length - max;
+    explorers = [...explorers].sort(
+      (a, b) => hashRatio(`demote:${clientId}:${a.id}`) - hashRatio(`demote:${clientId}:${b.id}`)
+    );
+    for (const item of explorers.slice(0, excess)) {
+      await applyExplorationPatch(store, clientId, item, false, deps);
+    }
+  }
+  return store.listBacklog(clientId);
+}
+
 async function maintainAnchorContentBacklog(input = {}, deps = {}) {
   const clientId = Number(input.clientId);
   const store = deps.store;
@@ -183,7 +249,8 @@ async function maintainAnchorContentBacklog(input = {}, deps = {}) {
   const created = [];
   let i = 0;
   while (active.length + created.length < minSize) {
-    const candidate = await planBacklogCandidate({ clientId, seed: `${clientId}:${Date.now()}:${i}` }, deps);
+    const slot = active.length + i;
+    const candidate = await planBacklogCandidate({ clientId, seed: `${clientId}:backlog-slot:${slot}` }, deps);
     const row = await store.insertBacklogItem(candidate);
     created.push(row);
     i += 1;
@@ -201,6 +268,9 @@ async function maintainAnchorContentBacklog(input = {}, deps = {}) {
     const row = await store.insertBacklogItem(textCandidate);
     created.push(row);
   }
+  const draftItems = await store.listBacklog(clientId, { approvalState: BACKLOG_APPROVAL_STATES.DRAFT });
+  const pendingItems = await store.listBacklog(clientId, { approvalState: BACKLOG_APPROVAL_STATES.PENDING_APPROVAL });
+  await rebalanceControlledExploration([...draftItems, ...pendingItems], clientId, deps);
   return {
     backlogSize: active.length + created.length,
     createdCount: created.length,
@@ -211,5 +281,8 @@ async function maintainAnchorContentBacklog(input = {}, deps = {}) {
 module.exports = {
   maintainAnchorContentBacklog,
   planBacklogCandidate,
+  computeExplorationBounds,
+  rebalanceControlledExploration,
+  shouldExplore,
   STORY_BANK,
 };
