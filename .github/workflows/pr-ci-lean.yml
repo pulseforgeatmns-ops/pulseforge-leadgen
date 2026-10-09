@@ -1,0 +1,366 @@
+name: PR CI (SPEC-CI-LEAN-001)
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ci-lean-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Plan affected suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      suites: ${{ steps.plan.outputs.suites }}
+      summary: ${{ steps.plan.outputs.summary }}
+      fail_closed: ${{ steps.plan.outputs.fail_closed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: List changed files
+        id: diff
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          git diff --name-only "$base"...HEAD > changed-files.txt
+          echo "Changed file count: $(wc -l < changed-files.txt)"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Select CI suites
+        id: plan
+        run: node .github/scripts/ci-plan-pr.js changed-files.txt --github-output
+      - name: CI selection summary
+        run: |
+          {
+            echo '# PR CI plan'
+            echo ''
+            printf '%s\n' "$SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          SUMMARY: ${{ steps.plan.outputs.summary }}
+
+  global-critical:
+    name: Global startup smoke
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'global')
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Global production startup smoke
+        run: node --test test/globalProductionStartupSmoke.test.js
+
+  signal-v1:
+    name: Signal V1 core
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'signal-v1')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install disposable PostgreSQL prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql
+          bindir="$(pg_config --bindir)"
+          sudo ln -sf "$bindir/initdb" /usr/local/bin/initdb
+          sudo ln -sf "$bindir/pg_ctl" /usr/local/bin/pg_ctl
+      - run: npm ci
+      - name: Signal V1 tests and startup chain
+        run: |
+          test -z "${DATABASE_URL:-}"
+          test -z "${TELEGRAM_SESSION_STRING:-}"
+          test -z "${BREVO_API_KEY:-}"
+          npm run test:signal-v1
+          node --test test/signalV1Startup.test.js
+      - name: Caller image import smoke (network disabled)
+        run: |
+          docker build -f services/telegramCallerFeed/Dockerfile -t signal-caller-ci .
+          docker run --rm --network none signal-caller-ci node -e "require('./services/telegramCallerFeed/server'); require('telegram/sessions'); console.log('caller image imports pass')"
+
+  paige-social:
+    name: Paige governed social safety
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'paige-social')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+      DATABASE_SSL: 'false'
+      PAIGE_SOCIAL_TEST_POSTGRES: 'true'
+      CONTENT_OUTCOME_TEST_POSTGRES: 'true'
+      PAIGE_SOCIAL_PUBLISH_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - run: npm run test:paige
+
+  anchor-outbound:
+    name: Anchor governed outbound safety
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'anchor-outbound')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - run: npm run test:anchor-outbound
+      - name: Mailbox and scheduling regressions
+        env:
+          DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+          DATABASE_SSL: 'false'
+        run: >-
+          node --test test/governedMailboxBridge.test.js test/acquisitionMissionInventory.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js
+          test/tenantMailboxPollExecutor.test.js test/tenantOutreachScheduler.test.js
+          test/emmettTenantMailboxCapacity.test.js test/mailHeaders.test.js
+          test/maxScoutReplenishment.test.js
+          test/governedPreparationRetry.test.js test/governedOutboundRefill.test.js
+          test/sameCompanyContactRecovery.test.js test/outboundInventory.test.js test/scoutRecoveryDiscovery.test.js test/websiteEnrichmentCrawl.test.js
+          test/governedOutboundExecutionClock.test.js test/governedOutboundStartup.test.js
+          test/scoutReplenishmentTenantGeneralization.test.js
+          packages/acquisition-mission/tests/spec215PreparedOutreachRevision.test.js
+
+  decision-shadow:
+    name: Decision shadow review
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'decision-shadow')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - run: npm run test:decision
+      - run: npm run test:decision:postgres
+
+  revenue-postgres:
+    name: Revenue PostgreSQL integration
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'revenue-postgres')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI_STAGE_FILE: ci-stage-timings.jsonl
+    steps:
+      - name: Initialize CI observability
+        run: |
+          : > "$CI_STAGE_FILE"
+          echo "CI_ENVIRONMENT_HEALTHY=true" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Environment — PostgreSQL and runner validation
+        id: environment
+        uses: ./.github/actions/setup-postgres-environment
+        with:
+          stage-file: ${{ env.CI_STAGE_FILE }}
+      - run: npm ci
+      - run: npm run test:postgres:harness
+      - run: npm run test:revenue:postgres
+      - run: npm run test:revenue:phase16b
+      - run: npm run test:anchor-phone-setter:postgres
+      - run: npm run test:ao-prospect-routing
+      - run: npm run test:ci:application
+
+  walkthrough:
+    name: Walkthrough notification safety
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'walkthrough')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      WALKTHROUGH_NOTIFICATION_TEST_POSTGRES: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install disposable PostgreSQL binaries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql
+          echo "$(pg_config --bindir)" >> "$GITHUB_PATH"
+      - run: node --test test/walkthroughNotification.test.js test/walkthroughNotificationPostgres.test.js
+      - run: node --test --test-name-pattern='walkthrough' test/walkthroughRoutes.test.js
+
+  spec245-evidence:
+    name: SPEC-245 evidence immutability
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'spec245-evidence')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+      - name: SPEC-245 / CIE Postgres tests (serial — shared disposable clusters)
+        run: >-
+          node --test --test-concurrency=1
+          test/spec245EvidenceImmutability.test.js
+          test/spec224CIECanonicalIntegration.test.js
+          test/spec223CanonicalSemanticPersistence.test.js
+
+  anchor-canonical-outbound:
+    name: Anchor canonical outbound recovery
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'anchor-canonical-outbound')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node --test test/anchorCanonicalOutboundRecovery.test.js
+
+  studio-substral:
+    name: Studio Substral doctrine
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'studio-substral')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run test:substral-pf-001
+
+  max:
+    name: Max orchestration
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.suites), 'max')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+      DATABASE_SSL: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: ./.github/actions/setup-postgres-environment
+      - run: npm ci --ignore-scripts
+      - run: npm run test:max
+
+  gate:
+    name: PR CI gate
+    needs:
+      - plan
+      - global-critical
+      - signal-v1
+      - paige-social
+      - anchor-outbound
+      - decision-shadow
+      - revenue-postgres
+      - walkthrough
+      - spec245-evidence
+      - anchor-canonical-outbound
+      - studio-substral
+      - max
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require planned jobs to succeed
+        env:
+          PLAN: ${{ needs.plan.result }}
+          GLOBAL: ${{ needs.global-critical.result }}
+          SIGNAL: ${{ needs.signal-v1.result }}
+          PAIGE: ${{ needs.paige-social.result }}
+          ANCHOR: ${{ needs.anchor-outbound.result }}
+          DECISION: ${{ needs.decision-shadow.result }}
+          REVENUE: ${{ needs.revenue-postgres.result }}
+          WALK: ${{ needs.walkthrough.result }}
+          SPEC245: ${{ needs.spec245-evidence.result }}
+          CANONICAL: ${{ needs.anchor-canonical-outbound.result }}
+          SUBSTRAL: ${{ needs.studio-substral.result }}
+          MAX: ${{ needs.max.result }}
+          SUITES: ${{ needs.plan.outputs.suites }}
+        run: |
+          set -euo pipefail
+          if [ "$PLAN" != "success" ]; then
+            echo "::error::CI plan job failed — merge blocked"
+            exit 1
+          fi
+          node <<'NODE'
+          const suites = JSON.parse(process.env.SUITES || '[]');
+          const results = {
+            global: process.env.GLOBAL,
+            'signal-v1': process.env.SIGNAL,
+            'paige-social': process.env.PAIGE,
+            'anchor-outbound': process.env.ANCHOR,
+            'decision-shadow': process.env.DECISION,
+            'revenue-postgres': process.env.REVENUE,
+            walkthrough: process.env.WALK,
+            'spec245-evidence': process.env.SPEC245,
+            'anchor-canonical-outbound': process.env.CANONICAL,
+            'studio-substral': process.env.SUBSTRAL,
+            max: process.env.MAX,
+          };
+          const failures = [];
+          for (const suite of suites) {
+            const outcome = results[suite];
+            if (outcome === 'skipped' || outcome === 'success') continue;
+            failures.push(`${suite}: ${outcome || 'missing'}`);
+          }
+          if (failures.length) {
+            console.error('Failed required suites:', failures.join(', '));
+            process.exit(1);
+          }
+          console.log('All selected suites passed or were skipped as unselected.');
+          NODE

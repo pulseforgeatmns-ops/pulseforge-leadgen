@@ -1,8 +1,8 @@
 name: Anchor governed outbound safety
+# PR path: .github/workflows/pr-ci-lean.yml (domain anchor-outbound)
+# Broad regression: .github/workflows/full-regression.yml
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
