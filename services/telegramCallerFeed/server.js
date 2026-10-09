@@ -7,6 +7,7 @@ const { createTelegramCallerFeedEngine } = require('./engine');
 const { buildFeedPayload } = require('./normalize');
 const { loadTelegramCredentials } = require('./credentials');
 const {authorized,minimalEvents}=require('./operatorEvents');
+const {feedAuthConfigured,assertDedicatedServiceFeedAuth}=require('./feedAuth');
 const {operationFromEnv}=require('../signalOperator/operationGate');
 const {checkPilot}=require('../signalOperator/pilotGate');
 const {readRuntimeLimits,installPilotDeadline}=require('../signalOperator/runtimeLimits');
@@ -56,15 +57,20 @@ function createApp(engine = createTelegramCallerFeedEngine(), options={}) {
     if (creds.ok) {
       poll = await engine.pollOnce();
     }
-    const health = engine.getHealth({
-      connected: creds.ok && poll.connected,
-      errors: poll.errors,
-    });
+    const health = {
+      ...engine.getHealth({
+        connected: creds.ok && poll.connected,
+        errors: poll.errors,
+      }),
+      feedAuthConfigured: feedAuthConfigured(env),
+    };
     const status = creds.ok ? 200 : 503;
     res.status(status).json(health);
   });
 
   app.get('/feed', async (req, res) => {
+    if (!feedAuthConfigured(env)) return res.sendStatus(503);
+    if (!authorized(req.headers.authorization, env.SIGNAL_OPERATOR_FEED_TOKEN)) return res.sendStatus(401);
     const creds = loadTelegramCredentials();
     if (!creds.ok) {
       return res.status(503).json({
@@ -93,6 +99,11 @@ async function main() {
     console.error(`[telegram-caller-feed] fail closed: ${creds.reason}`);
     process.exit(1);
   }
+  const feedAuth = assertDedicatedServiceFeedAuth();
+  if (!feedAuth.ok) {
+    console.error(`[telegram-caller-feed] fail closed: ${feedAuth.reason}`);
+    process.exit(1);
+  }
   const engine = createTelegramCallerFeedEngine();
   engine.startPolling();
   const app = createApp(engine);
@@ -114,4 +125,5 @@ if (require.main === module) {
 module.exports = {
   createApp,
   createTelegramCallerFeedEngine,
+  feedAuthConfigured,
 };

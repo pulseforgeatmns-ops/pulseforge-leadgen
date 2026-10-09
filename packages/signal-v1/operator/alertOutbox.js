@@ -2,10 +2,18 @@
 
 const { createHash } = require('crypto');
 const { knowledgeAt } = require('../prospective/knowledgeClock');
+const { buildLatencyDiagnostics } = require('./latencyDiagnostics');
 
 // No transport, external network, public route, or automatic enqueue hook.
 // Callers must use authenticated internal access after destination approval.
-function buildOperatorAlert({ evidence, snapshot, approvedChannelId, researchState = 'PENDING_RESEARCH' }) {
+function buildOperatorAlert({
+  evidence,
+  snapshot,
+  approvedChannelId,
+  researchState = 'PENDING_RESEARCH',
+  independentConvergence = 'none',
+  timestamps = {},
+}) {
   if (evidence?.provenance?.dataClass !== 'EMPIRICAL' || evidence.provenance.testOnly || evidence.provenance.synthetic
     || evidence.sourceId !== 'telegram-front-runners' || !evidence.externalMessageId
     || !evidence.extractedCa || !approvedChannelId
@@ -24,15 +32,30 @@ function buildOperatorAlert({ evidence, snapshot, approvedChannelId, researchSta
     && snapshot.provenance?.dataClass === 'EMPIRICAL' && !snapshot.provenance.testOnly && !snapshot.provenance.synthetic;
   const metric = name => valid && snapshot[name] != null && Number.isFinite(Number(snapshot[name]))
     && Number(snapshot[name]) >= 0 ? Number(snapshot[name]) : null;
+  const createdAt = timestamps.alertCreatedAt || new Date();
+  const latency = buildLatencyDiagnostics(evidence, {
+    ...timestamps,
+    alertCreatedAt: createdAt,
+  });
+  const convergenceStates = new Set(['none', 'pending', 'confirmed']);
+  if (!convergenceStates.has(independentConvergence)) {
+    throw new Error('invalid_independent_convergence_state');
+  }
   return {
     id, sourceId: evidence.sourceId, externalMessageId: evidence.externalMessageId,
     tokenAddress: evidence.extractedCa, evidenceId: evidence.id,
     channelId: String(evidence.provenance.telegramChannelId),
     occurredAt: new Date(evidence.occurredAt).toISOString(),
     ingestedAt: new Date(evidence.ingestedAt).toISOString(), knowledgeAt: knownAt.toISOString(),
-    researchState, paperOnly: true,
+    researchState,
+    independentConvergence,
+    experimentalLabel: 'EXPERIMENTAL / MANUAL DECISION',
+    paperOnly: true,
+    createdAt: new Date(createdAt).toISOString(),
     market: {
       priceUsd: metric('priceUsd'), marketCapUsd: metric('marketCapUsd'), liquidityUsd: metric('liquidityUsd'),
+      volumeIntervalUsd: metric('volumeIntervalUsd'),
+      tokenAgeSeconds: valid ? snapshot.tokenAgeSeconds ?? null : null,
       sampledAt: valid ? snapshot.observedTimestamp || null : null,
       providerTimestamp: valid ? snapshot.providerTimestamp || null : null,
       provider: valid ? snapshot.provider : null,
@@ -40,6 +63,7 @@ function buildOperatorAlert({ evidence, snapshot, approvedChannelId, researchSta
     },
     risks: ['Unverified caller claim', 'Source independence UNKNOWN', 'Market freshness not verified', 'No trade executed'],
     tradeDestination: null,
+    latency,
   };
 }
 

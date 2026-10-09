@@ -13,7 +13,8 @@ class OperatorStore {
     const evidence={id:createHash('sha256').update(JSON.stringify([event.sourceId,event.externalMessageId,event.extractedCa])).digest('hex'),
       sourceId:event.sourceId,externalMessageId:event.externalMessageId,extractedCa:event.extractedCa,
       occurredAt:event.occurredAt,ingestedAt:event.ingestedAt,provenance:event.provenance};
-    const alert=buildOperatorAlert({evidence,approvedChannelId:this.channelId});
+    const alert=buildOperatorAlert({evidence,approvedChannelId:this.channelId,independentConvergence:'none',
+      timestamps:{alertCreatedAt:now,pulseForgeReceivedAt:event.ingestedAt}});
     const minimal={...evidence,provenance:{dataClass:'EMPIRICAL',telegramChannelId:String(this.channelId)}};
     const client=await this.pool.connect();
     try {

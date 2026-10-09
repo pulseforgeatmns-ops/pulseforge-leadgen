@@ -1,12 +1,13 @@
 'use strict';
 const {captureMarketSnapshot}=require('../../packages/signal-v1/prospective/marketCapture');
 const {buildOperatorAlert}=require('../../packages/signal-v1/operator/alertOutbox');
+const {sendSignalOperatorAlert}=require('../../packages/signal-v1/operator/sendSignalOperatorAlert');
 function bounded(task,ms) {
   let timer;
   return Promise.race([Promise.resolve().then(task),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),ms);})])
     .finally(()=>clearTimeout(timer));
 }
-function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,relay,gate,sendEnabled=()=>true,fetchImpl=globalThis.fetch,now=()=>new Date(),marketTimeoutMs=2000}) {
+function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,relay,gate,sendEnabled=()=>true,fetchImpl=globalThis.fetch,now=()=>new Date(),marketTimeoutMs=2000,sendAlert=sendSignalOperatorAlert}) {
   const url=new URL(feedUrl);
   if(url.protocol!=='http:' || !url.hostname.endsWith('.railway.internal') || url.pathname!=='/operator-events'
     || url.username || url.password || url.search || url.hash || typeof token!=='string' || token.length<32) throw new Error('invalid_private_operator_feed');
@@ -49,8 +50,10 @@ function createOperatorWorker({store,feedUrl,token,channelId,marketProvider,rela
           await store.setPayload(row.id,alert,row.attempts);
         }
         if(!gate().ok)throw new Error('pilot_not_ready');
-        const result=await relay.send(alert);
-        await store.accepted(row.id,result.receipt,row.attempts);
+        const deliveries=await sendAlert(alert,{transports:[relay],sentAt:now()});
+        const receipt=deliveries.find(d=>d.receipt)?.receipt;
+        if(!receipt)throw new Error('relay_transport_unknown');
+        await store.accepted(row.id,receipt,row.attempts);
         return {accepted:true,received:false,displayed:false};
       }catch(err){
         const allowed=['relay_retryable','relay_rejected_or_duplicate','relay_transport_unknown','relay_disabled_or_not_ready','pilot_not_ready'];
