@@ -240,7 +240,12 @@ jobs:
       - run: npm ci
         env:
           PUPPETEER_SKIP_DOWNLOAD: 'true'
-      - run: node --test test/spec245EvidenceImmutability.test.js test/spec224CIECanonicalIntegration.test.js test/spec223CanonicalSemanticPersistence.test.js
+      - name: SPEC-245 / CIE Postgres tests (serial — shared disposable clusters)
+        run: >-
+          node --test --test-concurrency=1
+          test/spec245EvidenceImmutability.test.js
+          test/spec224CIECanonicalIntegration.test.js
+          test/spec223CanonicalSemanticPersistence.test.js
 
   anchor-canonical-outbound:
     name: Anchor canonical outbound recovery
