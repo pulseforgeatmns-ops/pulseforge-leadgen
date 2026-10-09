@@ -22,6 +22,9 @@ const {
   studioSubstralMailboxConfig,
   publicIntegration,
   publicIdentity,
+  createSmtpTransport,
+  resolveImapAuth,
+  resolveSmtpAuth,
   verifyTenantMailbox,
   MAILBOX_STATUS,
   IDENTITY_STATUS,
@@ -129,6 +132,70 @@ async function mergeDeliveredAuth(store, headersRaw) {
     verificationState,
   });
   return { integration: publicIntegration(updated), authentication: { spf: 'PASS', dkim: 'PASS', dmarc: 'PASS', from: parsed.from, replyTo: parsed.replyTo || CANONICAL_SENDER } };
+}
+
+async function loadDeliveredSelfTest(integration, subject, opts = {}) {
+  if (opts.loadDeliveredMessage) return opts.loadDeliveredMessage({ integration, subject });
+  const { ImapFlow } = require('imapflow');
+  const imapAuth = await resolveImapAuth(integration, opts);
+  const client = new ImapFlow({
+    host: integration.imapHost,
+    port: Number(integration.imapPort || 993),
+    secure: true,
+    auth: imapAuth.auth,
+    logger: false,
+  });
+  await client.connect();
+  try {
+    const mailboxes = await client.list();
+    const allMail = mailboxes.find((mailbox) => mailbox.specialUse === '\\All');
+    await client.mailboxOpen(allMail?.path || 'INBOX');
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const matches = await client.search({ subject }, { uid: true });
+      if (Array.isArray(matches) && matches.length) {
+        const message = await client.fetchOne(matches[matches.length - 1], { source: true }, { uid: true });
+        if (message?.source) return message.source.toString('utf8');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+    throw Object.assign(new Error('Timed out waiting for the Studio Substral self-test message.'), {
+      code: 'delivered_auth_message_timeout',
+    });
+  } finally {
+    await client.logout().catch(() => {});
+  }
+}
+
+async function captureSelfTestAuth(store, opts = {}) {
+  const integration = await store.getIntegration(TENANT_ID, STUDIO_SUBSTRAL_MAILBOX.inboxIntegrationId);
+  if (!integration) {
+    throw Object.assign(new Error('Configure mailbox integration first.'), { code: 'integration_missing' });
+  }
+  const marker = `substral-auth-${Date.now()}`;
+  const subject = `[Studio Substral authentication check] ${marker}`;
+  const smtpAuth = await resolveSmtpAuth(integration, opts);
+  const transport = opts.transport || createSmtpTransport(integration, smtpAuth, opts);
+  try {
+    await transport.sendMail({
+      from: `"Studio Substral" <${CANONICAL_SENDER}>`,
+      replyTo: CANONICAL_SENDER,
+      to: CANONICAL_SENDER,
+      subject,
+      text: 'Automated mailbox authentication check for Studio Substral. No reply is needed.',
+    });
+  } finally {
+    transport.close?.();
+  }
+  const rawMessage = await loadDeliveredSelfTest(integration, subject, opts);
+  const result = await mergeDeliveredAuth(store, rawMessage);
+  return {
+    ...result,
+    selfTest: {
+      recipient: CANONICAL_SENDER,
+      subject,
+      externalProspectContacted: false,
+    },
+  };
 }
 
 async function activateMailbox(store) {
@@ -261,6 +328,7 @@ async function main() {
       '  configure',
       '  verify [--configure]',
       '  capture-delivered-auth --headers-file=<path>  (Authentication-Results from delivered test mail)',
+      `  capture-self-test-auth --confirm=${ACTIVATION_CONFIRM}  (sends only to hello@studiosubstral.com)`,
       `  activate --confirm=${ACTIVATION_CONFIRM}`,
       '  emmett-readiness',
       `  create-governed-program --confirm=${ACTIVATION_CONFIRM}`,
@@ -292,6 +360,14 @@ async function main() {
   if (command === 'capture-delivered-auth') {
     const raw = readHeadersFile(args);
     printJson(await mergeDeliveredAuth(store, raw));
+    return;
+  }
+
+  if (command === 'capture-self-test-auth') {
+    if (args.confirm !== ACTIVATION_CONFIRM) {
+      throw Object.assign(new Error(`Refusing without --confirm=${ACTIVATION_CONFIRM}`), { code: 'confirm_required' });
+    }
+    printJson(await captureSelfTestAuth(store));
     return;
   }
 
@@ -331,4 +407,11 @@ if (require.main === module) {
     });
 }
 
-module.exports = { configure, mergeDeliveredAuth, activateMailbox, emmettReadiness, createGovernedProgram };
+module.exports = {
+  configure,
+  mergeDeliveredAuth,
+  captureSelfTestAuth,
+  activateMailbox,
+  emmettReadiness,
+  createGovernedProgram,
+};
