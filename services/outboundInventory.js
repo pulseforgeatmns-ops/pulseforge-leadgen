@@ -296,6 +296,7 @@ async function classifyInventoryOwnership(store, candidate = {}, opts = {}) {
   }
   const { rows } = await pool.query(`
     SELECT p.id, p.company_id, p.email, p.email_verified, p.email_status, p.do_not_contact, p.enrichment_provenance,
+      COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) AS ao_outreach_review_required,
       p.assigned_ao_id, p.closer_id, p.last_contacted_at, p.last_reply_at,
       p.service_area_match, p.vertical, c.name, c.domain, c.website,
       EXISTS(SELECT 1 FROM ao_prospect_tasks t WHERE t.client_id=$4 AND t.prospect_id=p.id) AS has_ao_task,

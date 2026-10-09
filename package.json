@@ -5,6 +5,7 @@
   "main": "leadgen.js",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:max:spreadsheet:reliability": "node --test test/maxSpreadsheetParserReliability.test.js test/maxSpreadsheetProposal.test.js test/maxSpreadsheetProposalPostgres.test.js test/maxSpreadsheetApprovalApi.test.js test/maxSpreadsheetReviewUi.test.js test/maxSpreadsheetReviewBrowser.test.js test/spreadsheetCallSuppression.test.js test/maxSpreadsheetCallConcurrency.test.js test/maxSpreadsheetFixtureScenarios.test.js test/maxSpreadsheetConsumers.test.js test/maxSpreadsheetConsumersPostgres.test.js test/maxSpreadsheetCallLockTimeout.test.js test/maxSpreadsheetTransactionFailure.test.js test/maxSpreadsheetAuthorization.test.js",
     "test:decision": "node --test test/decisionService.test.js test/decisionShadowReview.test.js packages/max/workspace/tests/specJev001ShadowRouting.test.js packages/max/workspace/tests/specJev002ShadowReview.test.js packages/max/workspace/tests/specJev004PendingDecisionCaptureGuard.test.js packages/max/workspace/tests/specJev006ShadowObservability.test.js",
     "test:decision:postgres": "node --test test/decisionShadowPostgres.test.js",
     "decision:review": "node scripts/reviewDecisionShadow.js",

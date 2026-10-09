@@ -17,6 +17,7 @@ const { describePhone } = require('../utils/phone');
 const { ensureLifecycleSchema } = require('../utils/lifecycleSchema');
 const { deriveCanonicalStage } = require('./lifecycleService');
 const { callbackSla, dispositionContract } = require('../utils/setterQuality');
+const { fetchSpreadsheetCrmEvidence } = require('../utils/spreadsheetCrmEvidence');
 
 const SETTER_NOTES_MARKER = '\n\n--- setter notes ---\n';
 
@@ -105,7 +106,7 @@ function permissionsFor(user, row) {
   const role = String(user?.role || '');
   const operator = ['admin', 'manager'].includes(role);
   const setterLike = ['setter', 'sales'].includes(role);
-  const contactProhibited = Boolean(row.do_not_contact) && !row.is_synthetic;
+  const contactProhibited = Boolean(row.ao_call_suppressed || row.ao_outreach_review_required) || (Boolean(row.do_not_contact) && !row.is_synthetic);
   return {
     canView: true,
     canCall: (operator || setterLike) && !contactProhibited && Boolean(row.phone),
@@ -230,6 +231,8 @@ async function getProspectWorkspace({
   prospectId,
   user = {},
 } = {}) {
+  const aoId = user.role === 'ao' ? Number(user.id) : null;
+  if (user.role === 'ao' && (!Number.isInteger(aoId) || aoId <= 0)) return null;
   await ensureLifecycleSchema(pool);
 
   const prospectResult = await pool.query(`
@@ -240,10 +243,13 @@ async function getProspectWorkspace({
     FROM prospects p
     LEFT JOIN companies c ON c.id = p.company_id AND c.client_id = p.client_id
     WHERE p.id = $1 AND p.client_id = $2
+      ${aoId == null ? '' : 'AND p.assigned_ao_id = $3'}
     LIMIT 1
-  `, [prospectId, clientId]);
+  `, aoId == null ? [prospectId, clientId] : [prospectId, clientId, aoId]);
   if (!prospectResult.rows.length) return null;
   const row = prospectResult.rows[0];
+  const spreadsheetEvidence = await fetchSpreadsheetCrmEvidence({ db: pool, clientId, prospectId,
+    aoId, includeActivities: true });
 
   const hasSetterCallbacks = await tableExists(pool, 'setter_callbacks');
   const hasCallDispositions = await tableExists(pool, 'call_dispositions');
@@ -342,6 +348,12 @@ async function getProspectWorkspace({
   const attempts = Number(callSummary.disposition_count || 0) + legacyCallAttempts;
 
   const history = [
+    ...spreadsheetEvidence.activities.map(activity => ({
+      id: `ao_activity:${activity.id}`, type: activity.activity_type,
+      occurredAt: activity.occurredAt, occurredOn: activity.occurredOn, recordedAt: activity.recordedAt,
+      actorType: 'user', actorName: activity.ao_id == null ? null : String(activity.ao_id),
+      summary: activity.notes, details: activity.metadata || null, source: 'ao_prospect_activity',
+    })),
     ...lifecycleEventsRes.rows.map(event => ({
       id: `lifecycle:${event.id}`,
       type: 'lifecycle_transition',
@@ -381,10 +393,17 @@ async function getProspectWorkspace({
     })),
   ].sort((a, b) => new Date(b.occurredAt) - new Date(a.occurredAt)).slice(0, 100);
 
-  const lastInteraction = history.find(item => item.source !== 'lifecycle_transition') || history[0] || null;
+  // Recording an undated spreadsheet assertion is not a new customer touch.
+  const interactionHistory = history.filter(item => !(item.source === 'ao_prospect_activity'
+    && item.type === 'note' && item.details?.category && !item.occurredOn));
+  const lastInteraction = interactionHistory.find(item => item.source !== 'lifecycle_transition') || interactionHistory[0] || null;
   const lastDisposition = callSummary.last_disposition || null;
   const lifecycleReason = lastEventRes.rows[0]?.lifecycle_reason || null;
-  const nextAction = nextActionFor({ callback, canonicalStage, lastDisposition, lifecycleReason });
+  const nextAction = row.ao_outreach_review_required
+    ? { type: 'outreach_review_required', dueAt: null, label: 'Separate outreach review required', overdue: false }
+    : row.ao_call_suppressed
+    ? { type: 'call_suppressed', dueAt: null, label: 'Calls suppressed — review permitted non-call actions', overdue: false }
+    : nextActionFor({ callback, canonicalStage, lastDisposition, lifecycleReason });
 
   // Opportunity summary: the revenue `opportunities` table where present;
   // otherwise the booked handoff (booked_at) is the operational stand-in.
@@ -439,6 +458,8 @@ async function getProspectWorkspace({
       priority: priorityFor(row),
       isHot: Boolean(row.is_hot),
       contactProhibited: Boolean(row.do_not_contact || row.is_synthetic),
+      callProhibited: Boolean(row.ao_outreach_review_required || row.ao_call_suppressed || row.do_not_contact || row.is_synthetic),
+      outreachReviewRequired: Boolean(row.ao_outreach_review_required),
       isSynthetic: Boolean(row.is_synthetic),
     },
     lifecycle: {
@@ -461,16 +482,22 @@ async function getProspectWorkspace({
       ? { occurredAt: lastInteraction.occurredAt, summary: lastInteraction.summary, type: lastInteraction.type }
       : null,
     history,
+    contacts: spreadsheetEvidence.contacts,
+    providerRelationships: spreadsheetEvidence.relationships,
     knownFacts: knownFactsFor(row),
     notes: {
-      operatorNotes: notesRes.rows.map(note => ({
+      operatorNotes: [...notesRes.rows.map(note => ({
         id: note.id,
         noteType: note.note_type,
         text: note.text,
         createdAt: new Date(note.created_at).toISOString(),
         author: note.author_name || (note.author_id != null ? String(note.author_id) : null),
         source: note.source,
-      })),
+      })), ...spreadsheetEvidence.activities.filter(activity => activity.activity_type === 'note').map(activity => ({
+        id: activity.id, noteType: activity.metadata?.category || 'note', text: activity.notes,
+        createdAt: activity.recordedAt, occurredOn: activity.occurredOn,
+        author: activity.ao_id == null ? null : String(activity.ao_id), source: 'ao_prospect_activity',
+      }))],
       legacyNotes: legacyScratchpad || null,
       legacyBaseNotes: legacyBase || null,
       summary: null,

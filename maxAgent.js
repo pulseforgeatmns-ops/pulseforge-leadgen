@@ -2518,6 +2518,8 @@ async function runQueueWarmForCal() {
     FROM prospects p
     WHERE p.client_id = $1
       AND COALESCE(p.do_not_contact, false) = false
+      AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
       AND (p.is_hot = true OR p.status = 'warm')
       AND NOT EXISTS (
         SELECT 1 FROM touchpoints t
@@ -2541,11 +2543,17 @@ async function runQueueWarmForCal() {
 
     const row = res.rows[i];
     const reason = row.is_hot ? 'is_hot' : 'warm_status';
-    await pool.query(
+    const queued = await pool.query(
       `INSERT INTO cal_queue (prospect_id, client_id, priority, reason, status)
-       VALUES ($1, $2, 1, $3, 'pending')`,
+       SELECT id, client_id, 1, $3, 'pending' FROM prospects
+       WHERE id = $1 AND client_id = $2
+         AND COALESCE(ao_call_suppressed, false) = false
+         AND COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) = false
+         AND COALESCE(do_not_contact, false) = false
+       RETURNING id`,
       [row.id, CLIENT_ID, reason]
     );
+    if (!queued.rows.length) continue;
     await insertAgentLog('auto_queued_cal', {
       prospect_id: row.id,
       priority: 1,
@@ -2572,6 +2580,8 @@ async function runHandoff5TouchNoReply() {
     WHERE p.client_id = $1
       AND p.status IN ('cold', 'contacted')
       AND COALESCE(p.do_not_contact, false) = false
+      AND COALESCE(p.ao_call_suppressed, false) = false
+      AND COALESCE((to_jsonb(p)->>'ao_outreach_review_required')::boolean,false) = false
       AND (
         SELECT COUNT(*) FROM touchpoints t
         WHERE t.prospect_id = p.id AND t.client_id = p.client_id
@@ -2596,11 +2606,17 @@ async function runHandoff5TouchNoReply() {
     }
 
     const row = res.rows[i];
-    await pool.query(
+    const queued = await pool.query(
       `INSERT INTO cal_queue (prospect_id, client_id, priority, reason, status)
-       VALUES ($1, $2, 2, '5_touch_no_reply', 'pending')`,
+       SELECT id, client_id, 2, '5_touch_no_reply', 'pending' FROM prospects
+       WHERE id = $1 AND client_id = $2
+         AND COALESCE(ao_call_suppressed, false) = false
+         AND COALESCE((to_jsonb(prospects)->>'ao_outreach_review_required')::boolean,false) = false
+         AND COALESCE(do_not_contact, false) = false
+       RETURNING id`,
       [row.id, CLIENT_ID]
     );
+    if (!queued.rows.length) continue;
     await insertAgentLog('auto_queued_cal_nurture', {
       prospect_id: row.id,
       priority: 2,

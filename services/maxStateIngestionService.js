@@ -3,7 +3,6 @@
 const pool = require('../db');
 const {
   ingestOperationalUpdate,
-  ingestSpreadsheet,
   PostgresStateStore,
   markOverdueExpectations,
   followUpPromptForExpectation,
@@ -16,6 +15,9 @@ async function createStore(clientId, db = pool) {
 }
 
 async function ingestOperationalEvidence(clientId, body = {}, { db = pool } = {}) {
+  if ((body.source_type || body.sourceType) === 'FILE_IMPORTED' || body.artifact?.artifact_type === 'spreadsheet' || body.sheets || body.rows) {
+    throw Object.assign(new Error('Spreadsheet files require a server-owned reviewed proposal'), { code: 'reviewed_spreadsheet_proposal_required', statusCode: 410 });
+  }
   const store = await createStore(clientId, db);
   const conversationId = body.conversation_id || body.conversationId || null;
   let memoryRepository = null;
@@ -47,24 +49,10 @@ async function ingestOperationalEvidence(clientId, body = {}, { db = pool } = {}
 }
 
 async function ingestSpreadsheetEvidence(clientId, body = {}, { db = pool } = {}) {
-  const store = await createStore(clientId, db);
-  const sheetName = body.sheet_name || body.sheetName || 'Prospects';
-  const rows = Array.isArray(body.rows) ? body.rows : [];
-  const sheets = Array.isArray(body.sheets) ? body.sheets : null;
-  const batch = await ingestSpreadsheet({
-    clientId,
-    filename: body.filename || 'spreadsheet',
-    sheetName,
-    rows,
-    sheets,
-    instruction: body.instruction || body.text || null,
-    sourceType: body.source_type || 'FILE_IMPORTED',
-    sourceActor: body.source_actor || null,
-    store,
-    now: body.now ? new Date(body.now) : new Date(),
-    commitMode: body.commit_mode || 'safe_only',
+  throw Object.assign(new Error('Legacy spreadsheet persistence is disabled; use an approved server proposal'), {
+    code: 'reviewed_spreadsheet_proposal_required', statusCode: 410,
   });
-  return batch;
+
 }
 
 async function listOverdueExpectationPrompts(clientId, { db = pool, now = new Date() } = {}) {

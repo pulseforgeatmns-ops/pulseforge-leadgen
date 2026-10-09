@@ -411,7 +411,8 @@ function adapters(pool, dependencies = {}) {
   }
   function sendFor(program, binding = {}) {
     if (ctx.usesBrevoTransport) {
-      const brevoSend = command => require('../packages/providers/brevo/sendEmail').sendEmail(command);
+      const brevoSend = command => require('../packages/providers/brevo/sendEmail').sendEmail({ ...command,
+        outreachAuthorization: { prospectId: binding.item?.prospect_id || command.outreachAuthorization?.prospectId, clientId, pool } });
       brevoSend.beforeAttempt = null;
       return brevoSend;
     }
@@ -430,7 +431,8 @@ function adapters(pool, dependencies = {}) {
       engine.store.putMission(mission);
       await runtime.persistMissionState(mission.id, { pool, persist: true });
     },
-    send: command => require('../packages/providers/brevo/sendEmail').sendEmail(command),
+    send: command => require('../packages/providers/brevo/sendEmail').sendEmail({ ...command,
+      outreachAuthorization: { ...command.outreachAuthorization, clientId, pool } }),
     approve: async (snapshot, program, binding) => {
       const runtime = await runtimeFor();
       const result = await route(runtime, snapshot.mission.id, program, amo.EXECUTION_INTENTS.APPROVE_EXECUTION, { governedApproval: binding });

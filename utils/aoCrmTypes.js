@@ -19,7 +19,7 @@ const AO_CRM_STATUSES = Object.freeze([
   'researching', 'ready_to_call', 'call_attempted', 'contacted', 'gatekeeper_reached',
   'decision_maker_reached', 'follow_up_needed', 'warm', 'walkthrough_target',
   'walkthrough_booked', 'proposal_needed', 'proposal_sent', 'won', 'lost',
-  'not_a_fit', 'dead',
+  'not_a_fit', 'dead', 'application_in_progress',
 ]);
 
 const AO_CRM_NEXT_ACTIONS = Object.freeze([

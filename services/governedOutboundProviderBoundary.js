@@ -51,6 +51,8 @@ const PRE_PROVIDER_FAILURE_CODES = new Set([
   'reply_poll_stale',
   'cross_path_spacing',
   'dnc',
+  'outreach_review_required',
+  'outreach_identity_required',
   'tenant_mailbox_not_ready',
   'governed_scheduler_required',
   'governed_scheduler_binding_changed',

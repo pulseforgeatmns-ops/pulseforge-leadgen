@@ -16,6 +16,7 @@
 //   - utils/clientContext.js PROSPECT_STATUSES        (status domain)
 
 const defaultPool = require('../db');
+const { callSuppressionError } = require('../utils/callEligibility');
 const { ensureLifecycleSchema } = require('../utils/lifecycleSchema');
 
 const CANONICAL_STAGES = Object.freeze(['new', 'contacted', 'follow_up', 'booked', 'dead']);
@@ -268,6 +269,7 @@ async function transitionProspectLifecycle({
       throw lifecycleError('Prospect not found', 'PROSPECT_NOT_FOUND', 404);
     }
     const current = currentResult.rows[0];
+    if ((current.ao_call_suppressed || current.ao_outreach_review_required) && callback?.at) throw callSuppressionError();
     const fromStage = deriveCanonicalStage(current);
     validateTransition(fromStage, targetStage);
 
@@ -447,6 +449,7 @@ async function scheduleProspectCallback({
       throw lifecycleError('Prospect not found', 'PROSPECT_NOT_FOUND', 404);
     }
     const row = current.rows[0];
+    if ((row.ao_call_suppressed || row.ao_outreach_review_required) && callbackAt) throw callSuppressionError();
     const at = callbackAt ? new Date(callbackAt).toISOString() : null;
 
     const updated = await client.query(`

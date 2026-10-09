@@ -10,6 +10,7 @@
 const crypto = require('crypto');
 const dns = require('node:dns').promises;
 const defaultPool = require('../db');
+const { withEmailAuthorization } = require('../utils/callEligibility');
 const {
   createIpv4PreferringSmtpGetSocket,
   genericSmtpImapTlsOptions,
@@ -1320,6 +1321,15 @@ async function assertNotSuppressed(store, tenantId, recipients) {
   }
 }
 
+// Only the explicit CLI verification callsite sets this server-owned option.
+// Metadata alone and ordinary CRM identity never grant an exemption.
+function isNonCrmMailboxVerification(input = {}, opts = {}) {
+  return opts.purpose === 'mailbox_verification'
+    && input.prospectId === 'safe-test'
+    && input.missionId === 'mailbox-verification'
+    && input.outreachAssetId === 'mailbox-test-send';
+}
+
 async function sendTenantEmail(input = {}, opts = {}) {
   const store = opts.store || new PostgresTenantMailboxStore(opts.pool || defaultPool);
   if (input.metadata?.governedProgramId) {
@@ -1413,6 +1423,7 @@ async function sendTenantEmail(input = {}, opts = {}) {
   });
 
   let smtpAuth;
+  let crossedProviderBoundary = false;
   try {
     smtpAuth = await resolveSmtpAuth(integration, opts);
     const transport = createSmtpTransport(integration, smtpAuth, opts);
@@ -1420,22 +1431,28 @@ async function sendTenantEmail(input = {}, opts = {}) {
       ? `"${identity.senderDisplayName.replace(/"/g, '\\"')}" <${identity.senderEmail}>`
       : identity.senderEmail;
     const providerBoundary = input.metadata?.providerBoundary || opts.providerBoundary;
-    if (providerBoundary && typeof providerBoundary.markCrossed === 'function') {
-      providerBoundary.markCrossed();
-    }
-    const result = await transport.sendMail({
-      from,
-      replyTo: identity.replyToAddress || identity.senderEmail,
-      to: recipients,
-      subject: input.subject,
-      text: input.text || input.body,
-      html: input.html || undefined,
-      headers: {
-        'Message-ID': rfcMessageId,
-        ...(input.inReplyTo ? { 'In-Reply-To': input.inReplyTo } : {}),
-        ...(input.referencesHeader ? { References: input.referencesHeader } : {}),
-      },
-    });
+    const dispatch = async () => {
+      crossedProviderBoundary = true;
+      if (providerBoundary && typeof providerBoundary.markCrossed === 'function') {
+        providerBoundary.markCrossed();
+      }
+      return transport.sendMail({
+        from,
+        replyTo: identity.replyToAddress || identity.senderEmail,
+        to: recipients,
+        subject: input.subject,
+        text: input.text || input.body,
+        html: input.html || undefined,
+        headers: {
+          'Message-ID': rfcMessageId,
+          ...(input.inReplyTo ? { 'In-Reply-To': input.inReplyTo } : {}),
+          ...(input.referencesHeader ? { References: input.referencesHeader } : {}),
+        },
+      });
+    };
+    const result = store instanceof PostgresTenantMailboxStore && !isNonCrmMailboxVerification(input, opts)
+      ? await withEmailAuthorization(store.pool, [{ prospectId: message.prospectId, clientId: Number(tenantId) }], dispatch)
+      : await dispatch(); // Explicit memory-store test transport or CLI-only non-CRM verification.
     const providerMessageId = result?.messageId || result?.response || rfcMessageId;
     const sentAt = nowIso(opts);
     message = await store.saveMessage({
@@ -1476,7 +1493,7 @@ async function sendTenantEmail(input = {}, opts = {}) {
       sequenceState: SEQUENCE_STATE.FAILED,
     });
     const wrapped = mailboxError(err.code || 'smtp_send_failed', sanitizeErrorMessage(err), { outboundMessage: message });
-    wrapped.providerBoundaryCrossed = true;
+    wrapped.providerBoundaryCrossed = crossedProviderBoundary;
     throw wrapped;
   } finally {
     smtpAuth = null;
@@ -1788,6 +1805,7 @@ function babrunMailboxConfig(tenantId) {
 }
 
 module.exports = {
+  isNonCrmMailboxVerification,
   PROVIDER_TYPES,
   AUTH_MODES,
   MAILBOX_STATUS,

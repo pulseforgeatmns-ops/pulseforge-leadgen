@@ -324,6 +324,7 @@ function isAllowedObservedWebsiteEmail(email, enrichmentDomain) {
 function canonicalOutboundEmailIneligibilityReason(row) {
   if (!row || typeof row !== 'object') return 'missing_row';
   if (row.do_not_contact === true) return 'do_not_contact';
+  if (row.ao_outreach_review_required === true) return 'outreach_review_required';
 
   const email = String(row.email || '').trim();
   if (!email || invalidOutreachEmailReason(email)) return 'invalid_outreach_email';
