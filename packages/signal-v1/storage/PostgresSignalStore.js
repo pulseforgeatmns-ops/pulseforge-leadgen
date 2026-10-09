@@ -534,8 +534,8 @@ class PostgresSignalStore {
     const result = await this.pool.query(
       `INSERT INTO signal_market_observations (
         id, token_address, occurred_at, price_usd, market_cap_usd, liquidity_usd, volume_interval_usd,
-        interval_seconds, provider, external_id, provider_timestamp, observed_timestamp, provenance
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)
+        interval_seconds, provider, external_id, provider_timestamp, observed_timestamp, provenance, ingested_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
       ON CONFLICT (token_address, provider, occurred_at, interval_seconds) DO NOTHING
       RETURNING id`,
       [
@@ -549,9 +549,10 @@ class PostgresSignalStore {
         observation.intervalSeconds,
         observation.provider,
         observation.externalId ?? null,
-        observation.providerTimestamp ? toDate(observation.providerTimestamp) : occurredAt,
+        observation.providerTimestamp ? toDate(observation.providerTimestamp) : null,
         observation.observedTimestamp ? toDate(observation.observedTimestamp) : new Date(),
         JSON.stringify(observation.provenance || {}),
+        observation.ingestedAt ? toDate(observation.ingestedAt) : new Date(),
       ]
     );
     const duplicate = result.rowCount === 0;
@@ -568,10 +569,11 @@ class PostgresSignalStore {
       externalId: observation.externalId ?? null,
       providerTimestamp: observation.providerTimestamp
         ? toDate(observation.providerTimestamp)
-        : occurredAt,
+        : null,
       observedTimestamp: observation.observedTimestamp
         ? toDate(observation.observedTimestamp)
         : new Date(),
+      ingestedAt: observation.ingestedAt ? toDate(observation.ingestedAt) : new Date(),
       provenance: observation.provenance || {},
     };
     return { row, duplicate };

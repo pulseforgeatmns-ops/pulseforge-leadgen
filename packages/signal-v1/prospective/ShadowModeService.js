@@ -49,7 +49,9 @@ class ShadowModeService {
     this.store = store;
     this.marketProvider = options.marketProvider;
     this.collectors = options.collectors || createProductionCollectors(options);
+    this.requiredCallerSource = options.requiredCallerSource || null;
     this.now = options.now || (() => new Date());
+    this.inFlightJobs = new Set();
     this.ensureProspectiveStructures();
   }
 
@@ -89,7 +91,13 @@ class ShadowModeService {
     const existing = this.store.researchCohorts?.get?.(PROSPECTIVE_COHORT_001_ID);
     if (existing) return existing;
     const feedHealth = await this.getProductionCallerFeedHealth();
-    if (!feedHealth?.connected) return null;
+    if (!feedHealth?.available || !feedHealth.connected) return null;
+    if (this.requiredCallerSource) {
+      const required = this.requiredCallerSource;
+      const source = feedHealth.feedHealth?.sources?.find(s => s.sourceId === required.sourceId);
+      if (!required.channelId || !source?.available || !source.active
+        || String(source.channelId) !== String(required.channelId)) return null;
+    }
     return this.ensureProspectiveCohortStarted({
       ...providerVersions,
       startedAt: this.now(),
@@ -161,7 +169,21 @@ class ShadowModeService {
 
   async ingestRawCallerObservation(raw, { collectorId, provider = collectorId }) {
     this.ensureProspectiveStructures();
+    if (this.requiredCallerSource && (
+      raw.sourceId !== this.requiredCallerSource.sourceId
+      || !this.requiredCallerSource.channelId
+      || String(raw.provenance?.telegramChannelId) !== String(this.requiredCallerSource.channelId)
+      || raw.provenance?.dataClass !== DATA_CLASS.EMPIRICAL
+      || raw.provenance?.synthetic || raw.provenance?.testOnly)) {
+      return { accepted: false, reason: 'unapproved_or_non_empirical_source' };
+    }
     const ingestedAt = raw.ingestedAt ? new Date(raw.ingestedAt) : this.now();
+    const occurredAt = new Date(raw.messageTimestamp);
+    const receivedAt = this.now();
+    if (this.requiredCallerSource && (!Number.isFinite(ingestedAt.getTime())
+      || !Number.isFinite(occurredAt.getTime()) || occurredAt > receivedAt || ingestedAt > receivedAt)) {
+      return { accepted: false, reason: 'invalid_or_future_evidence_clock' };
+    }
     const text = raw.rawText || '';
     const cas = raw.tokenCa
       ? [raw.tokenCa]
@@ -208,15 +230,19 @@ class ShadowModeService {
           forwarding: raw.forwarding || null,
         },
       };
+      // Satisfy the evidence token FK before the durable evidence insert.
+      await callStore(this.store, 'upsertToken', { tokenAddress: ca, chain: 'solana',
+        addressProvenance: 'verified', metadata: { source: 'caller_extraction' } });
       let inserted = await this.persistRawEvidence(evidenceRow);
       if (inserted.duplicate) {
         const editStored = await this.maybePersistEditEvidence(inserted.row, evidenceRow, raw);
         if (editStored) {
           results.push({ accepted: false, reason: 'edit_evidence', tokenAddress: ca, evidenceId: editStored.id });
-        } else {
-          results.push({ accepted: false, reason: 'duplicate', tokenAddress: ca });
+          continue;
         }
-        continue;
+        // Recover an interrupted evidence -> CALL -> jobs sequence on replay.
+        Object.assign(evidenceRow, inserted.row);
+
       }
 
       const registry = this.store.sourceRegistry.get(raw.sourceId);
@@ -226,9 +252,9 @@ class ShadowModeService {
         tokenAddress: ca,
         chain: 'solana',
         eventType: 'CALL',
-        occurredAt: new Date(raw.messageTimestamp),
+        occurredAt: new Date(evidenceRow.occurredAt),
         observedAt: new Date(raw.providerTimestamp || raw.messageTimestamp),
-        ingestedAt,
+        ingestedAt: new Date(evidenceRow.ingestedAt),
         sourceType: registry?.platform || 'other',
         sourceId: raw.sourceId,
         sourceClusterId: registry?.clusterId || null,
@@ -238,8 +264,8 @@ class ShadowModeService {
           forwarding: raw.forwarding || null,
         },
         provenance: {
-          ...(raw.provenance || {}),
-          dataClass: raw.provenance?.dataClass || DATA_CLASS.EMPIRICAL,
+          ...(evidenceRow.provenance || {}),
+          dataClass: evidenceRow.provenance?.dataClass || DATA_CLASS.EMPIRICAL,
           collectorId,
           evidenceId,
           rawReference: raw.rawReferenceUrl || null,
@@ -251,6 +277,7 @@ class ShadowModeService {
 
       const existing = this.store.events.find(e => e.id === eventId);
       if (existing) {
+        await this.processTokenAfterCall(existing);
         results.push({ accepted: false, reason: 'duplicate_event', tokenAddress: ca });
         continue;
       }
@@ -327,14 +354,16 @@ class ShadowModeService {
     return this.now().getTime() - new Date(last.knowledgeAt).getTime() < cooldownMs;
   }
 
-  markEpisode(tokenAddress, kind, knowledgeAtIso, observationId) {
+  async markEpisode(tokenAddress, kind, knowledgeAtIso, observationId) {
     const key = `${tokenAddress}|${kind}`;
-    this.store.tokenResearchEpisodes.set(key, {
+    const row = {
       tokenAddress,
       episodeKind: kind,
       knowledgeAt: knowledgeAtIso,
       observationId,
-    });
+    };
+    if (this.store.persistEpisode) await this.store.persistEpisode(row);
+    this.store.tokenResearchEpisodes.set(key, row);
   }
 
   async maybeCreateResearchObservation(type, tokenAddress, asOfKnowledge) {
@@ -345,7 +374,10 @@ class ShadowModeService {
         o.observationType === type &&
         o.definitionVersion === defVersion
     );
-    if (existing) return existing;
+    if (existing) {
+      await this.finalizeObservation(type, tokenAddress, existing);
+      return existing;
+    }
 
     if (type === 'FIRST_CALLER' && this.inEpisodeCooldown(tokenAddress, 'FIRST_CALLER')) {
       return null;
@@ -367,7 +399,7 @@ class ShadowModeService {
     const obsId = deterministicId(`${tokenAddress}|${type}|${defVersion}|${payload.occurredAt.toISOString()}`);
     let marketMeta = {};
     if (this.marketProvider) {
-      const capture = await captureMarketSnapshot(this.marketProvider, tokenAddress, payload.occurredAt);
+      const capture = await captureMarketSnapshot(this.marketProvider, tokenAddress, payload.occurredAt, { now: this.now });
       if (capture.ok && capture.snapshot?.priceUsd != null) {
         await callStore(this.store, 'insertMarketObservation', capture.snapshot);
         marketMeta.marketSnapshot = capture.snapshot;
@@ -394,7 +426,13 @@ class ShadowModeService {
       },
     });
 
-    const knowledgeIso = payload.occurredAt.toISOString();
+    await this.finalizeObservation(type, tokenAddress, observation);
+
+    return observation;
+  }
+
+  async finalizeObservation(type, tokenAddress, observation) {
+    const knowledgeIso = observation.occurredAt.toISOString();
     const delayJobs = scheduleDelayCaptureJobs(observation, knowledgeIso);
     const outcomeJob = scheduleOutcomeJob(observation, knowledgeIso);
     for (const job of [...delayJobs, outcomeJob]) {
@@ -402,7 +440,7 @@ class ShadowModeService {
     }
 
     if (type === 'FIRST_CALLER') {
-      this.markEpisode(tokenAddress, 'FIRST_CALLER', knowledgeIso, observation.id);
+      await this.markEpisode(tokenAddress, 'FIRST_CALLER', knowledgeIso, observation.id);
       await this.maybeAddCohortMember(tokenAddress, observation);
       await this.insertResearchAlert(type, tokenAddress, observation);
     }
@@ -410,7 +448,6 @@ class ShadowModeService {
       await this.insertResearchAlert(type, tokenAddress, observation);
     }
 
-    return observation;
   }
 
   async maybeAddCohortMember(tokenAddress, observation) {
@@ -431,6 +468,8 @@ class ShadowModeService {
   }
 
   async insertResearchAlert(type, tokenAddress, observation) {
+    const id = deterministicId(`alert|${type}|${tokenAddress}|${observation.id}`);
+    if (this.store.alerts?.some(alert => alert.id === id)) return;
     await callStore(this.store, 'insertAlert', {
       id: deterministicId(`alert|${type}|${tokenAddress}|${observation.id}`),
       tokenAddress,
@@ -490,14 +529,16 @@ class ShadowModeService {
     return summary;
   }
 
-  async runDueJobs(limit = 50) {
+  async runDueJobs(limit = 50, { jobType } = {}) {
     const now = this.now();
     const due = (this.store.prospectiveJobs || [])
+      .filter(j => (!jobType || j.jobType === jobType) && !this.inFlightJobs.has(j.id))
       .filter(j => j.status.startsWith('PENDING') && new Date(j.runAfter).getTime() <= now.getTime())
       .slice(0, limit);
 
     const processed = [];
     for (const job of due) {
+      this.inFlightJobs.add(job.id);
       try {
         const result = await this.processJob(job);
         processed.push(result);
@@ -505,6 +546,9 @@ class ShadowModeService {
         job.attempts = (job.attempts || 0) + 1;
         job.lastError = String(err.message || err);
         job.status = JOB_STATUS.PROVIDER_ERROR;
+        await this.persistJobPatch(job);
+      } finally {
+        this.inFlightJobs.delete(job.id);
       }
     }
     return processed;
@@ -514,39 +558,30 @@ class ShadowModeService {
     const observation = this.store.researchObservations.find(o => o.id === job.observationId);
     if (!observation) {
       job.status = JOB_STATUS.DATA_INSUFFICIENT;
+      await this.persistJobPatch(job);
       return { jobId: job.id, status: job.status };
     }
 
     const marketObs = await callStore(this.store, 'getMarketObservationsForToken', job.tokenAddress);
-    const pricePath = buildPricePathFromObservations(marketObs);
+    const pricePath = buildPricePathFromObservations(marketObs, this.now());
 
     if (job.jobType === 'DELAY_CAPTURE') {
       let path = pricePath;
       let outcomeRow = processDelayCaptureJob(job, observation, path);
-      if (outcomeRow.entryPrice == null && this.marketProvider?.getTokenSnapshot) {
+      if (outcomeRow.entryPrice == null && (this.marketProvider?.getLiveTokenSnapshot || this.marketProvider?.getTokenSnapshot)) {
         const knowledgeIso = job.payload?.knowledgeAt || observation.occurredAt;
         const targetAt = new Date(
           new Date(knowledgeIso).getTime() + job.targetDelaySeconds * 1000
         );
-        try {
-          const snap = await this.marketProvider.getTokenSnapshot(job.tokenAddress, targetAt);
-          if (snap?.priceUsd != null) {
-            await callStore(this.store, 'insertMarketObservation', {
-              tokenAddress: job.tokenAddress,
-              occurredAt: targetAt,
-              priceUsd: snap.priceUsd,
-              marketCapUsd: snap.marketCapUsd ?? null,
-              liquidityUsd: snap.liquidityUsd ?? null,
-              intervalSeconds: 60,
-              provider: snap.provider || this.marketProvider.providerId,
-              provenance: { dataClass: DATA_CLASS.EMPIRICAL, captureKind: 'delay_poll' },
-            });
-            const refreshed = await callStore(this.store, 'getMarketObservationsForToken', job.tokenAddress);
-            path = buildPricePathFromObservations(refreshed);
-            outcomeRow = processDelayCaptureJob(job, observation, path);
-          }
-        } catch {
-          /* preserve DATA_INSUFFICIENT */
+        const capture = await captureMarketSnapshot(this.marketProvider, job.tokenAddress, targetAt,
+          { now: this.now, captureKind: 'delay_poll' });
+        if (capture.ok) {
+          await callStore(this.store, 'insertMarketObservation', capture.snapshot);
+          const refreshed = await callStore(this.store, 'getMarketObservationsForToken', job.tokenAddress);
+          path = buildPricePathFromObservations(refreshed, this.now());
+          outcomeRow = processDelayCaptureJob(job, observation, path);
+        } else {
+          outcomeRow.metadata.captureError = capture.error;
         }
       }
       await callStore(this.store, 'insertResearchObservationOutcome', {
@@ -563,7 +598,7 @@ class ShadowModeService {
     if (job.jobType === 'OUTCOME_24H') {
       if (this.marketProvider) {
         const start = observation.occurredAt;
-        const end = new Date(new Date(start).getTime() + 25 * 60 * 60 * 1000);
+        const end = new Date(Math.min(this.now().getTime(), new Date(start).getTime() + 25 * 60 * 60 * 1000));
         try {
           const live = await this.marketProvider.getHistoricalPrices(job.tokenAddress, start, end, {
             resolutionSeconds: 60,
@@ -571,7 +606,7 @@ class ShadowModeService {
           for (const point of live) {
             await callStore(this.store, 'insertMarketObservation', {
               ...point,
-              provenance: { dataClass: DATA_CLASS.EMPIRICAL, backfilled: false },
+              provenance: { ...point.provenance, dataClass: point.provenance?.dataClass || DATA_CLASS.EMPIRICAL, backfilled: true },
             });
           }
         } catch {
@@ -579,7 +614,7 @@ class ShadowModeService {
         }
       }
       const refreshed = await callStore(this.store, 'getMarketObservationsForToken', job.tokenAddress);
-      const refreshedPath = buildPricePathFromObservations(refreshed);
+      const refreshedPath = buildPricePathFromObservations(refreshed, this.now());
       const primary = this.store.researchObservationOutcomes.find(
         o =>
           o.observationId === observation.id &&
@@ -596,6 +631,7 @@ class ShadowModeService {
           Object.assign(existing, row, {
             metadata: { ...(existing.metadata || {}), ...(row.metadata || {}) },
           });
+          if (this.store.updateResearchObservationOutcome) await this.store.updateResearchObservationOutcome(existing);
         } else {
           await callStore(this.store, 'insertResearchObservationOutcome', {
             id: deterministicId(`${observation.id}|${row.executionDelaySeconds}`),
@@ -643,7 +679,8 @@ class ShadowModeService {
   }
 
   async evaluateProspectiveCohort(delaySeconds = 60, options = {}) {
-    const cohort = await this.ensureProspectiveCohortStarted();
+    const cohort = this.store.researchCohorts?.get?.(PROSPECTIVE_COHORT_001_ID);
+    if (!cohort) throw new Error('prospective_cohort_not_started');
     if (!options.skipEmpiricalGuard) {
       assertEmpiricalCohort(this.store, cohort.id);
     }
@@ -652,7 +689,8 @@ class ShadowModeService {
   }
 
   async explicitUnblind({ unblindedBy, evaluationVersion }) {
-    const cohort = await this.ensureProspectiveCohortStarted();
+    const cohort = this.store.researchCohorts?.get?.(PROSPECTIVE_COHORT_001_ID);
+    if (!cohort) throw new Error('prospective_cohort_not_started');
     assertEmpiricalCohort(this.store, cohort.id);
     const updated = unblindCohort(cohort, { unblindedBy, evaluationVersion });
     await callStore(this.store, 'upsertResearchCohort', updated);

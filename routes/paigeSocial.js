@@ -43,6 +43,31 @@ function createPaigeSocialRouter(deps = {}) {
     const result = await delegate.executeDelegation({ authorizedTenantId: req.paigeScope.tenantId, tenantId: req.paigeScope.tenantId, delegationId: delegation.id });
     res.json({ delegation, result });
   }));
+
+  const organic = deps.organic || require('../services/paigeAnchorOrganicSocial');
+  router.get('/api/paige/social/organic/backlog', handler(async (req, res) => {
+    const organicStore = organic.getStore(deps.organicStore);
+    await organicStore.ensureSchema();
+    res.json({
+      backlog: await organicStore.listBacklog(req.paigeScope.clientId),
+      assets: await organicStore.listMediaAssets(req.paigeScope.clientId),
+    });
+  }));
+  router.post('/api/paige/social/organic/sync', handler(async (req, res) => {
+    res.json(await organic.syncMedia({ clientId: req.paigeScope.clientId, folderId: req.body?.folderId }, { store: deps.organicStore }));
+  }));
+  router.post('/api/paige/social/organic/maintain', handler(async (req, res) => {
+    res.json(await organic.refreshBacklog({ clientId: req.paigeScope.clientId, minSize: req.body?.minSize }, { store: deps.organicStore }));
+  }));
+  router.post('/api/paige/social/organic/cycle', handler(async (req, res) => {
+    res.json(await organic.runOrganicPipeline({
+      clientId: req.paigeScope.clientId,
+      folderId: req.body?.folderId,
+      minBacklog: req.body?.minBacklog,
+      skipMediaSync: req.body?.skipMediaSync,
+    }, { store: deps.organicStore }));
+  }));
+
   router.get('/api/paige/social/:id/preview', handler(async (req, res) => {
     res.json(await approval.preview({ ...req.paigeScope, artifactId: req.params.id, accountId: req.query.account_id }));
   }));
@@ -60,6 +85,7 @@ function createPaigeSocialRouter(deps = {}) {
       reconciliationReason: req.body.reason, reconciledBy: `operator:${req.user.id || req.user.email}`, invocationSource: 'operator_social_reconciliation' });
     res.status(result.success ? 200 : 409).json(result);
   }));
+
   return router;
 }
 module.exports = { createPaigeSocialRouter };

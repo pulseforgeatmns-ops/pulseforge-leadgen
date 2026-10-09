@@ -60,18 +60,57 @@ async function routePaigeSocialContentExecution(input = {}) {
   const dryRun = Boolean(input.dryRun ?? input.dry_run);
   const runner = getRunner();
 
+  let organicPlan = input.organicPlan || null;
+  let organicBacklogId = input.organicBacklogId || null;
+  let contentObjective = input.contentObjective || input.objective || '';
+  let platform = input.platform || input.channel || null;
+  let channel = input.channel || input.platform || null;
+
+  try {
+    const { ANCHOR_CLIENT_ID } = require('../packages/capabilities/paigeOrganicSocial/types');
+    const { isAnchorOrganicSocialEnabled } = require('../packages/capabilities/paigeOrganicSocial/config');
+    if (clientId === ANCHOR_CLIENT_ID && !dryRun && isAnchorOrganicSocialEnabled(clientId) && input.organic !== false) {
+      const organicSvc = require('./paigeAnchorOrganicSocial');
+      if (input.organicCycle) {
+        await organicSvc.runOrganicPipeline({
+          clientId,
+          skipMediaSync: Boolean(input.skipMediaSync),
+          minBacklog: input.minBacklog,
+        });
+      } else if (input.maintainBacklog) {
+        await organicSvc.refreshBacklog({ clientId, minSize: input.minBacklog });
+      }
+      const ctx = await organicSvc.resolveOrganicGenerationContext({
+        clientId,
+        platform: platform || channel,
+      });
+      if (ctx) {
+        organicPlan = organicPlan || ctx.organicPlan;
+        organicBacklogId = organicBacklogId || ctx.backlogId;
+        contentObjective = contentObjective || ctx.organicPlan?.storyConcept || '';
+        platform = platform || ctx.organicPlan?.targetPlatform || null;
+        channel = channel || ctx.organicPlan?.targetPlatform || null;
+      }
+    }
+  } catch (err) {
+    if (input.organicRequired) throw err;
+    console.error('[Paige organic] prelude skipped:', err.message);
+  }
+
   const runResult = await runner.run({
     capabilityId: CAPABILITY_ID,
     context: buildCapabilityContext({
       tenantId,
       clientId,
       missionId: input.missionId || input.mission_id || '',
-      objective: input.contentObjective || input.objective || '',
+      objective: contentObjective,
       inputs: {
         tenantId,
-        platform: input.platform || input.channel || null,
-        channel: input.channel || input.platform || null,
-        contentObjective: input.contentObjective || input.objective || null,
+        platform,
+        channel,
+        contentObjective,
+        organicPlan,
+        organicBacklogId,
         workspaceContext: input.workspaceContext || input.workspace_context || null,
         missionContext: input.missionContext || input.mission_context || null,
         campaignId: input.campaignId || input.campaign_id || null,

@@ -84,6 +84,10 @@ require.cache[anthropicPath] = {
 
 const { run, generateSocialContent } = require('../paigeAgent');
 
+test.beforeEach(() => {
+  writes.length = 0;
+});
+
 test('Paige dry-run generates Anchor content without any database write', async () => {
   const result = await run({ client_id: 10, dryRun: true, channel: 'linkedin_page', format: 'dialogue' });
   assert.equal(result.success, true);

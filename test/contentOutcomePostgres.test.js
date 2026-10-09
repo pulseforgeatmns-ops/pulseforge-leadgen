@@ -32,6 +32,8 @@ const root = path.join(__dirname, '..');
     process.env.KNOWLEDGE_DUAL_WRITE = '0';
     originalDualWrite = require.cache[dualWritePath];
     require.cache[dualWritePath] = { id: dualWritePath, filename: dualWritePath, loaded: true, exports: { safeWriteOperational() {}, OPERATIONAL_EVENTS: {} } };
+    const { getKnowledgeBoot } = require('../utils/knowledgeRuntime');
+    await getKnowledgeBoot({ reset: true, inMemory: true });
     const { startDisposablePostgres } = require('./helpers/disposablePostgres');
     const instance = await startDisposablePostgres('content-outcome-pg-');
     stop = () => instance.stop();
@@ -59,11 +61,13 @@ const root = path.join(__dirname, '..');
   });
 
   after(async () => {
+    const { getKnowledgeBoot } = require('../utils/knowledgeRuntime');
+    await getKnowledgeBoot({ reset: true, inMemory: true });
+    if (pool) await pool.end();
+    if (stop) await stop();
     if (originalDualWrite) require.cache[dualWritePath] = originalDualWrite; else delete require.cache[dualWritePath];
     if (previousDualWriteFlag === undefined) delete process.env.KNOWLEDGE_DUAL_WRITE;
     else process.env.KNOWLEDGE_DUAL_WRITE = previousDualWriteFlag;
-    if (pool) await pool.end();
-    if (stop) await stop();
   });
 
   it('persists publication + snapshots + outcomes with tenant isolation', async () => {

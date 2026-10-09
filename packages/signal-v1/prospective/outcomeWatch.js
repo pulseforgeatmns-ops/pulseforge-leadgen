@@ -42,11 +42,17 @@ function scheduleOutcomeJob(observation, knowledgeAtIso) {
   };
 }
 
-function buildPricePathFromObservations(observations) {
+function buildPricePathFromObservations(observations, asOf = new Date()) {
   return [...observations]
+    .filter(o => o.priceUsd != null && Number(o.priceUsd) > 0
+      && o.provenance?.dataClass !== 'PROCEDURAL' && !o.provenance?.synthetic && !o.provenance?.testOnly
+      && new Date(o.occurredAt).getTime() <= new Date(asOf).getTime())
     .map(o => ({
       occurredAt: o.occurredAt,
       price: Number(o.priceUsd),
+      providerTimestamp: o.providerTimestamp || null,
+      observedTimestamp: o.observedTimestamp || null,
+      provenance: o.provenance || {},
     }))
     .filter(p => Number.isFinite(p.price))
     .sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
@@ -66,6 +72,11 @@ function processDelayCaptureJob(job, observation, pricePath) {
     latencyMs: priceAt ? priceAt.getTime() - (new Date(knowledgeAt).getTime() + delaySeconds * 1000) : null,
     provider: pricePath.length ? 'market_observations' : null,
     availability: price != null ? 'AVAILABLE' : 'DATA_INSUFFICIENT',
+    captureWindow: priceAt
+      ? (priceAt.getTime() === new Date(knowledgeAt).getTime() + delaySeconds * 1000 ? 'ON_TARGET' : 'LATE')
+      : 'MISSING',
+    sampledAt: priceAt ? (pricePath.find(p => new Date(p.occurredAt).getTime() === priceAt.getTime())?.observedTimestamp || null) : null,
+    freshness: priceAt ? (pricePath.find(p => new Date(p.occurredAt).getTime() === priceAt.getTime())?.provenance?.freshness || 'UNKNOWN') : 'UNAVAILABLE',
   };
 
   return {
@@ -101,11 +112,8 @@ function processOutcomeJob(observation, pricePath, outcomeRowForPrimaryDelay) {
     ? new Date(outcomeRowForPrimaryDelay.metadata.actualObservationTime)
     : observation.occurredAt;
 
-  if (entryPrice == null) {
-    const resolved = resolveAchievableObservationPrice(observation.occurredAt, primaryDelay, pricePath);
-    entryPrice = resolved.price;
-    priceAt = resolved.priceAt || observation.occurredAt;
-  }
+  // Missing prospective entry observations stay missing. A later historical
+  // download cannot manufacture an entry that was never sampled prospectively.
 
   if (entryPrice == null) {
     return {

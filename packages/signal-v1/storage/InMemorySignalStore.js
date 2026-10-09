@@ -203,11 +203,11 @@ class InMemorySignalStore {
       externalId: observation.externalId ?? null,
       providerTimestamp: observation.providerTimestamp
         ? toDate(observation.providerTimestamp)
-        : occurredAt,
+        : null,
       observedTimestamp: observation.observedTimestamp
         ? toDate(observation.observedTimestamp)
         : new Date(),
-      ingestedAt: new Date(),
+      ingestedAt: toDate(observation.ingestedAt || new Date()),
       provenance: observation.provenance || {},
     };
     this.marketObservations.push(row);

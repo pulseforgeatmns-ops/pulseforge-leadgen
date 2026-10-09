@@ -1,8 +1,6 @@
 'use strict';
 
-const {
-  createSignalStore,
-} = require('../packages/signal-v1/storage/createSignalStore');
+const { ProspectivePostgresStore } = require('../packages/signal-v1/storage/ProspectivePostgresStore');
 const {
   createShadowModeServiceFromStore,
   startShadowScheduler,
@@ -18,13 +16,18 @@ async function bootShadowScheduler() {
     return null;
   }
   const pool = require('../db');
-  const store = await createSignalStore(pool, { seedFixtures: false });
+  const store = await ProspectivePostgresStore.create(pool);
   const marketProvider = new GeckoTerminalMarketDataProvider();
   const service = await createShadowModeServiceFromStore(store, {
     marketProvider,
+    requiredCallerSource: {
+      sourceId: process.env.SIGNAL_REQUIRED_CALLER_SOURCE_ID || 'telegram-front-runners',
+      channelId: process.env.SIGNAL_REQUIRED_CALLER_CHANNEL_ID || null,
+    },
     providerVersions: { market: marketProvider.providerId },
   });
-  const stop = startShadowScheduler(service, { intervalMs: Number(process.env.SIGNAL_SHADOW_POLL_MS || 60000) });
+  const gate=process.env.SIGNAL_OPERATION_MODE ? require('./signalOperator/operationGate').operationFromEnv() : null;
+  const stop = startShadowScheduler(service, { intervalMs: Number(process.env.SIGNAL_SHADOW_POLL_MS || 60000),gate });
   console.log('[signal-v1-shadow] prospective scheduler started');
   return { service, stop };
 }

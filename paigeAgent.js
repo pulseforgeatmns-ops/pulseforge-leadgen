@@ -2528,7 +2528,10 @@ async function generatePost(company, contentType, channel) {
       ? buildAnchorContentRules(recentThemes, recentPublishedAngles, { channel })
       : buildContentRules(recentThemes, recentPublishedAngles, topicAngle, isPulseforge, { channel });
   const learnedGuardrails = await getLearnedGuardrailsBlock();
-  const systemPrompt = [baseSystemPrompt, learnedGuardrails, miraGrounding].filter(Boolean).join('\n\n');
+  const organicBlock = isAnchor && RUN_CONTEXT.organicPlan
+    ? require('./packages/capabilities/paigeOrganicSocial/promptBlock').buildOrganicPlanPromptBlock(RUN_CONTEXT.organicPlan)
+    : '';
+  const systemPrompt = [baseSystemPrompt, learnedGuardrails, organicBlock, miraGrounding].filter(Boolean).join('\n\n');
 
   if (lastContentType) {
     console.log(`  [variety] Last ${channel} post type: ${lastContentType} → generating: ${contentType}`);
@@ -2705,7 +2708,15 @@ async function generatePost(company, contentType, channel) {
   }
 
   console.log(`  [quality] Score ${finalScore.total}/30 after ${regenerationAttempts} regeneration attempt(s)`);
-  return { content: finalDraft, quality: finalScore, regenerated, regenerationAttempts };
+  const organic = RUN_CONTEXT.organicPlan;
+  const meta = organic ? {
+    format: organic.proposedFormat,
+    organic,
+    schedulingRationale: organic.schedulingRationale,
+    proposedPublishAt: organic.proposedPublishAt,
+    backlogId: RUN_CONTEXT.organicBacklogId || null,
+  } : null;
+  return { content: finalDraft, quality: finalScore, regenerated, regenerationAttempts, meta };
 }
 
 // Dispatch: LinkedIn channels use the brand-aware v2 path; everything else
@@ -3073,7 +3084,17 @@ async function generateSocialContent(options = {}) {
   if (forcedFormat && !LINKEDIN_FORMATS.includes(forcedFormat)) {
     throw new Error(`Unknown LinkedIn format: ${forcedFormat}`);
   }
-  RUN_CONTEXT = { dryRun, forcedFormat, simulateMiraUnavailable, contentObjective: options.contentObjective || null, missionContext: options.missionContext || null, evidence: options.evidence || [], sessionFormats: new Set() };
+  RUN_CONTEXT = {
+    dryRun,
+    forcedFormat,
+    simulateMiraUnavailable,
+    contentObjective: options.contentObjective || null,
+    missionContext: options.missionContext || null,
+    evidence: options.evidence || [],
+    organicPlan: options.organicPlan || null,
+    organicBacklogId: options.organicBacklogId || null,
+    sessionFormats: new Set(),
+  };
 
   console.log(`\nPaige agent running${dryRun ? ' in DRY-RUN mode' : ''}...\n`);
   try {
@@ -3155,7 +3176,8 @@ AND status = 'pending';`);
         : allowedChannels;
 
       for (const channel of channels) {
-        const contentType = await pickContentType(company.name, channel, company.id);
+        const contentType = RUN_CONTEXT.organicPlan?.legacyContentType
+          || await pickContentType(company.name, channel, company.id);
         console.log(`${company.name} — ${channel} — ${contentType}`);
 
         try {
