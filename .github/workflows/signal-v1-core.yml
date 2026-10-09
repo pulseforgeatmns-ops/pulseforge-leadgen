@@ -1,30 +1,8 @@
 name: Signal V1 Core
+# PR path: .github/workflows/pr-ci-lean.yml (domain signal-v1)
+# Broad regression: .github/workflows/full-regression.yml
 on:
-  pull_request:
-    paths:
-      - 'packages/signal-v1/**'
-      - 'services/signalOperator/**'
-      - 'services/telegramCallerFeed/**'
-      - 'services/signalV1ShadowScheduler.js'
-      - 'scripts/*Signal*'
-      - 'scripts/signalTelegramSourceProbe.js'
-      - 'migrations/*signal-v1*'
-      - 'package*.json'
-      - 'server.js'
-      - '.github/workflows/signal-v1-core.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'packages/signal-v1/**'
-      - 'services/signalOperator/**'
-      - 'services/telegramCallerFeed/**'
-      - 'services/signalV1ShadowScheduler.js'
-      - 'scripts/*Signal*'
-      - 'scripts/signalTelegramSourceProbe.js'
-      - 'migrations/*signal-v1*'
-      - 'package*.json'
-      - 'server.js'
-      - '.github/workflows/signal-v1-core.yml'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

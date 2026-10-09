@@ -1,0 +1,277 @@
+{
+  "version": 1,
+  "spec": "SPEC-CI-LEAN-001",
+  "suites": {
+    "global": {
+      "label": "Global startup smoke",
+      "classification": "GLOBAL_CRITICAL",
+      "alwaysOnPullRequest": true,
+      "reason": "Syntax and module-load boundary for production entrypoint"
+    },
+    "signal-v1": {
+      "label": "Signal V1 core",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Telegram caller feed, operator relay, prospective capture"
+    },
+    "paige-social": {
+      "label": "Paige governed social safety",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Organic social approval, publish gates, content outcome learning"
+    },
+    "anchor-outbound": {
+      "label": "Anchor / Babrun governed outbound",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Governed outbound contracts, mailbox bridge, tenant scheduling"
+    },
+    "decision-shadow": {
+      "label": "Decision shadow review",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Max decision shadow routing and PostgreSQL review persistence"
+    },
+    "revenue-postgres": {
+      "label": "Revenue PostgreSQL integration",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Disposable Postgres harness, revenue lifecycle, AO routing invariants"
+    },
+    "walkthrough": {
+      "label": "Walkthrough notification safety",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Anchor walkthrough intake duplicate notification claims"
+    },
+    "spec245-evidence": {
+      "label": "SPEC-245 evidence immutability",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Canonical semantic write immutability and CIE integration"
+    },
+    "anchor-canonical-outbound": {
+      "label": "Anchor canonical outbound recovery",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Canonical outbound inspect/recover scripts"
+    },
+    "studio-substral": {
+      "label": "Studio Substral intake and doctrine",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Public assessment intake and Paige outbound doctrine boundaries"
+    },
+    "max": {
+      "label": "Max orchestration workspace",
+      "classification": "DOMAIN_CRITICAL",
+      "reason": "Max packages, workspace routing, briefing, and operator surfaces"
+    }
+  },
+  "domainPaths": {
+    "signal-v1": [
+      "packages/signal-v1/",
+      "services/signalOperator/",
+      "services/telegramCallerFeed/",
+      "services/signalV1ShadowScheduler.js",
+      "routes/signalV1.js",
+      "scripts/signal",
+      "scripts/*Signal*",
+      "migrations/*signal-v1*",
+      "deployment/signal-v1/",
+      "test/signalV1Startup.test.js",
+      "test/*Signal*"
+    ],
+    "paige-social": [
+      "paigeAgent.js",
+      "routes/paigeSocial.js",
+      "routes/contentLearning.js",
+      "routes/contentOutcomeIntelligence.js",
+      "utils/publishPipeline.js",
+      "utils/blogPublisher.js",
+      "test/paige",
+      "test/contentOutcome",
+      "test/contentLearning",
+      "test/spec256Paige",
+      "test/spec259aPublicationAdapterBoundary.test.js",
+      "test/anchorCopyDoctrine.test.js",
+      "test/anchorPaigeLifecycleVariants.test.js",
+      "test/paigeAnchorOrganicSocial002.test.js",
+      "test/maxPaigeCampaignDelegation.test.js",
+      "packages/acquisition-mission/tests/specPaige",
+      "packages/max/workspace/tests/paige"
+    ],
+    "anchor-outbound": [
+      "services/governedOutbound",
+      "services/anchorGovernedScheduler.js",
+      "services/governedOutboundExecutionClock.js",
+      "services/governedOutboundTenant.js",
+      "services/governedMailboxBridge.js",
+      "anchorDailyOutboundCron.js",
+      "scripts/anchorMailbox.js",
+      "scripts/executeAnchor",
+      "test/anchorDailyOutbound",
+      "test/governedOutbound",
+      "test/governedMailboxBridge.test.js",
+      "test/tenantMailbox",
+      "test/tenantOutreachScheduler.test.js",
+      "test/emmettTenantMailboxCapacity.test.js",
+      "test/mailHeaders.test.js",
+      "test/maxScoutReplenishment.test.js",
+      "test/governedPreparationRetry.test.js",
+      "test/governedOutboundRefill.test.js",
+      "test/sameCompanyContactRecovery.test.js",
+      "test/outboundInventory.test.js",
+      "test/scoutRecoveryDiscovery.test.js",
+      "test/websiteEnrichmentCrawl.test.js",
+      "test/scoutReplenishmentTenantGeneralization.test.js",
+      "test/acquisitionMissionInventory.test.js",
+      "test/babrun",
+      "packages/acquisition-mission/tests/spec215PreparedOutreachRevision.test.js",
+      "emmettAgent.js",
+      "routes/emmettOutbound.js",
+      "routes/tenantOutreach.js"
+    ],
+    "decision-shadow": [
+      "services/decision",
+      "routes/maxDecisionExecution.js",
+      "scripts/reviewDecisionShadow.js",
+      "test/decisionService.test.js",
+      "test/decisionShadow",
+      "packages/max/workspace/tests/specJev"
+    ],
+    "revenue-postgres": [
+      "routes/revenue.js",
+      "routes/aoProspectRouting.js",
+      "routes/ao.js",
+      "routes/aoAdmin.js",
+      "routes/aoImpersonation.js",
+      "utils/aoCrmSchema.js",
+      "utils/aoFieldSchema.js",
+      "utils/aoProspectRoutingSchema.js",
+      "scripts/rebuildRevenueProjections.js",
+      "scripts/preflightRevenue",
+      "scripts/executeRevenue",
+      "test/revenue",
+      "test/disposablePostgresHarness.test.js",
+      "test/aoProspectRouting",
+      "test/aoAdvisoryDebriefEvaluator.test.js",
+      "test/anchorPhoneSetterPostgres.test.js",
+      "packages/max/workspace/tests/missionRouting.test.js"
+    ],
+    "walkthrough": [
+      "lib/walkthrough",
+      "routes/walkthrough.js",
+      "test/walkthroughRoutes.test.js",
+      "test/walkthroughNotification",
+      "migrations/2026-09-30-walkthrough-notification-claims.sql"
+    ],
+    "spec245-evidence": [
+      "lib/canonicalSemanticWrite.js",
+      "services/clientIntelligenceInterview.js",
+      "migrations/2026-09-06-spec-245a-evidence-immutability.sql",
+      "test/spec245EvidenceImmutability.test.js",
+      "test/spec224CIECanonicalIntegration.test.js",
+      "test/spec223CanonicalSemanticPersistence.test.js"
+    ],
+    "anchor-canonical-outbound": [
+      "scripts/lib/anchorCanonicalOutbound.js",
+      "scripts/inspectAnchorCanonicalOutbound.js",
+      "scripts/recoverAnchorCanonicalOutbound.js",
+      "test/anchorCanonicalOutboundRecovery.test.js",
+      "routes/cron.js"
+    ],
+    "studio-substral": [
+      "sites/studio-substral/",
+      "routes/substralAssessment.js",
+      "routes/studioSubstralOperator.js",
+      "lib/substralAssessmentIntake.js",
+      "test/substral",
+      "test/specSubstral",
+      "test/paigeStudioSubstralOutboundDoctrine.test.js",
+      "scripts/studioSubstral"
+    ],
+    "max": [
+      "maxAgent.js",
+      "maxDecayAgent.js",
+      "packages/max/",
+      "routes/max",
+      "routes/commandDeck.js",
+      "routes/acquisitionMissions.js",
+      "routes/missions.js",
+      "routes/workspace.js",
+      "test/max",
+      "scripts/smokeMaxShadow.js",
+      "scripts/validateMax",
+      "scripts/backfillMaxSignals.js",
+      "scripts/max"
+    ]
+  },
+  "escalationRules": [
+    {
+      "id": "ci-workflows",
+      "paths": [".github/workflows/", ".github/ci/", ".github/scripts/ci-plan-pr.js"],
+      "suites": [
+        "global",
+        "signal-v1",
+        "paige-social",
+        "anchor-outbound",
+        "decision-shadow",
+        "revenue-postgres",
+        "walkthrough",
+        "spec245-evidence",
+        "anchor-canonical-outbound",
+        "studio-substral",
+        "max"
+      ],
+      "reason": "CI selector or workflow change — validate all merge-blocking suites"
+    },
+    {
+      "id": "npm-dependencies",
+      "paths": ["package.json", "package-lock.json"],
+      "suites": [
+        "global",
+        "revenue-postgres",
+        "anchor-outbound",
+        "paige-social",
+        "decision-shadow",
+        "signal-v1"
+      ],
+      "reason": "Dependency graph affects module load and Postgres-backed agents"
+    },
+    {
+      "id": "server-entry",
+      "paths": ["server.js"],
+      "suites": ["global", "anchor-outbound", "signal-v1", "revenue-postgres", "decision-shadow"],
+      "reason": "Central route mount and startup side-effects"
+    },
+    {
+      "id": "shared-db",
+      "paths": ["db.js", "dbClient.js", "middleware/", "utils/clientContext.js"],
+      "suites": ["global", "revenue-postgres", "anchor-outbound", "paige-social"],
+      "reason": "Shared persistence and tenant scoping"
+    },
+    {
+      "id": "migrations",
+      "paths": ["migrations/"],
+      "suites": ["global", "revenue-postgres", "spec245-evidence"],
+      "reason": "Schema migrations can break disposable harness and evidence invariants"
+    },
+    {
+      "id": "shared-routing",
+      "paths": ["routes/cron.js", "routes/api.js"],
+      "suites": ["global", "anchor-outbound", "revenue-postgres", "max"],
+      "reason": "Cron and dashboard API wiring for agents"
+    },
+    {
+      "id": "acquisition-mission-core",
+      "paths": ["packages/acquisition-mission/"],
+      "suites": ["anchor-outbound", "max", "paige-social"],
+      "reason": "Mission orchestration shared by outbound and Max workspace"
+    }
+  ],
+  "failClosedSuites": [
+    "global",
+    "signal-v1",
+    "paige-social",
+    "anchor-outbound",
+    "decision-shadow",
+    "revenue-postgres",
+    "walkthrough",
+    "spec245-evidence",
+    "anchor-canonical-outbound",
+    "studio-substral",
+    "max"
+  ]
+}

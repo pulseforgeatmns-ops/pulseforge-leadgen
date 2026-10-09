@@ -1,22 +1,7 @@
 name: Walkthrough notification safety
+# PR path: .github/workflows/pr-ci-lean.yml (domain walkthrough)
 on:
-  pull_request:
-    paths:
-      - 'lib/walkthrough*.js'
-      - 'routes/walkthrough.js'
-      - 'test/walkthroughRoutes.test.js'
-      - 'test/walkthroughNotification*.test.js'
-      - 'migrations/2026-09-30-walkthrough-notification-claims.sql'
-      - '.github/workflows/walkthrough-notification-safety.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'lib/walkthrough*.js'
-      - 'routes/walkthrough.js'
-      - 'test/walkthroughRoutes.test.js'
-      - 'test/walkthroughNotification*.test.js'
-      - 'migrations/2026-09-30-walkthrough-notification-claims.sql'
-      - '.github/workflows/walkthrough-notification-safety.yml'
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
