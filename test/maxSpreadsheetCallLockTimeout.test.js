@@ -11,7 +11,16 @@ test('real PostgreSQL bounds call lock waits and never leaks transaction-local t
   assert.equal(new URL(instance.connectionString).hostname, '127.0.0.1');
   const db = new Pool({ connectionString: instance.connectionString, max: 1 });
   const holder = new Pool({ connectionString: instance.connectionString, max: 1 });
-  t.after(async () => { await holder.end(); await db.end(); await instance.stop(); });
+  const swallowPoolError = () => {};
+  db.on('error', swallowPoolError);
+  holder.on('error', swallowPoolError);
+  t.after(async () => {
+    db.off('error', swallowPoolError);
+    holder.off('error', swallowPoolError);
+    await holder.end();
+    await db.end();
+    await instance.stop();
+  });
   await db.query(`CREATE TABLE prospects(id text, client_id integer, do_not_contact boolean, is_synthetic boolean, ao_call_suppressed boolean, ao_outreach_review_required boolean);
     INSERT INTO prospects VALUES('fixture',10,false,false,false,false);
     SET lock_timeout='42s'; SET statement_timeout='43s'; SET idle_in_transaction_session_timeout='44s';`);
