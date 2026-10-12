@@ -7,7 +7,7 @@ const { readBrief, validateBrief, doctor, REA_VERSION } = require('../../../scri
 test('Signal REA investigation brief is bounded and fails closed', () => {
   const brief = validateBrief(readBrief());
   assert.equal(brief.deadline, '2026-10-14');
-  assert.equal(brief.status, 'READY_FOR_CAPTURE');
+  assert.equal(brief.status, 'COMPLETE_PUBLIC_WEB');
   assert.equal(brief.constraints.allowTrade, false);
   assert.equal(brief.constraints.allowWalletConnection, false);
   assert.equal(brief.constraints.allowWalletSignature, false);

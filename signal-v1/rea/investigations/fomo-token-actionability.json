@@ -3,7 +3,7 @@
   "id": "signal-rea-fomo-token-actionability-001",
   "title": "FOMO token identity and actionable deep-link contract",
   "deadline": "2026-10-14",
-  "status": "READY_FOR_CAPTURE",
+  "status": "COMPLETE_PUBLIC_WEB",
   "purpose": "Determine how a user-owned FOMO client or public FOMO web surface represents a Solana token identity and opens the corresponding chart or action surface, so Signal can produce a reliable operator action without placing a trade.",
   "target": {
     "name": "FOMO",

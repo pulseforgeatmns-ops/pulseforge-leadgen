@@ -1,6 +1,6 @@
 # SPEC-SIGNAL-REA-001 — Behavioral Reconstruction Lab
 
-**Status:** Implemented foundation; first capture ready  
+**Status:** Implemented; first public web investigation complete
 **Deadline:** 2026-10-14  
 **Owner:** Signal engineering  
 **Runtime effect:** None
@@ -59,8 +59,8 @@ Each conclusion records:
 - [x] REA pinned; Codex setup and readiness commands verified.
 - [x] Repo-local readiness command exists and passes.
 - [x] First investigation brief is committed and policy checked.
-- [ ] Capture the FOMO browser or authorized Android evidence.
-- [ ] Complete the Q1-Q3 finding ledger.
-- [ ] Implement and test the action-link contract if the evidence supports one; otherwise record the unresolved blocker.
+- [x] Capture the public FOMO web assets and record the runner boundary.
+- [x] Complete the Q1-Q3 finding ledger.
+- [x] Implement and test the supported action-link contract.
 
-The final three items require an observable target. They are complete only when evidence exists; availability of REA alone does not satisfy them.
+The committed finding is `docs/findings/SIGNAL_REA_FOMO_001.md`. Raw third-party assets remain in the ignored local REA workspace.
