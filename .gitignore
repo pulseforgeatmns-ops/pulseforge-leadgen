@@ -29,3 +29,7 @@ packages/kalshi-research/.env
 packages/kalshi-research/*.key
 .pytest_cache/
 ci-stage-timings.jsonl
+
+# Signal REA behavior lab — local targets and captured evidence may contain
+# third-party application material or authenticated runtime observations.
+signal-v1/rea-workspace/
