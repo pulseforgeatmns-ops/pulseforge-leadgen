@@ -4,7 +4,7 @@ const path=require('node:path');
 const {operationFromEnv}=require('./operationGate');
 const {OperatorStore}=require('./store');
 const {createOperatorWorker,startOperatorTimers}=require('./worker');
-const {createBrevoRelay}=require('./relay');
+const {createBrevoRelay,createTwilioSignalRelay}=require('./relay');
 const {GeckoTerminalMarketDataProvider}=require('../../packages/signal-v1/providers/GeckoTerminalMarketDataProvider');
 let bootPromise;
 async function boot() {
@@ -20,9 +20,12 @@ async function boot() {
   for(const name of ['2026-10-07-signal-v1-operator-outbox.sql','2026-10-07-signal-v1-operator-relay.sql'])
     await pool.query(fs.readFileSync(path.join(__dirname,'../../migrations',name),'utf8'));
   const sendEnabled=()=>process.env.SIGNAL_OPERATOR_RELAY_ENABLED==='1' && process.env.SIGNAL_OPERATOR_RELAY_CONSENT==='1';
+  const smsEnabled=sendEnabled;
   const worker=createOperatorWorker({store:new OperatorStore(pool,{channelId}),channelId,gate,sendEnabled,token,
     feedUrl:process.env.SIGNAL_OPERATOR_FEED_URL,
     marketProvider:new GeckoTerminalMarketDataProvider(),
+    smsRelay:createTwilioSignalRelay({enabled:smsEnabled(),gate,
+      sendSms:require('../../samAgent').sendOpsAlertSMS,to:process.env.OPS_ALERT_PHONE}),
     relay:createBrevoRelay({enabled:sendEnabled(),consented:sendEnabled(),apiKey:process.env.BREVO_API_KEY,gate})});
   return {worker,stop:startOperatorTimers(worker)};
 }

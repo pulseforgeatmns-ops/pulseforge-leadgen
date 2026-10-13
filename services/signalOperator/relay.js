@@ -1,4 +1,5 @@
 'use strict';
+const {buildFomoTokenUrl}=require('../../packages/signal-v1/destinations/fomo');
 const SENDER='jacob@gopulseforge.com';
 const RECIPIENT='pulseforgeatmns@gmail.com';
 function operationalTransportTest(testId) {
@@ -25,6 +26,58 @@ function mailPayload(alert) {
       'FOMO destination unverified. Copy the CA; no trade was executed.',
       'This is an individual operational alert. Do not infer research performance.'].join('\n')};
 }
+
+function initialSmsBody(alert) {
+  const destination=buildFomoTokenUrl(alert?.tokenAddress);
+  return [
+    'SIGNAL — FRONT RUNNERS CALL',
+    `CA: ${alert?.tokenAddress || 'UNAVAILABLE'}`,
+    'Manual / experimental.',
+    destination,
+  ].filter(Boolean).join('\n');
+}
+
+function meaningfulMarketUpdate(alert) {
+  return alert?.market?.marketCapUsd != null || alert?.market?.liquidityUsd != null;
+}
+
+function compactUsd(value) {
+  if(value==null || !Number.isFinite(Number(value)) || Number(value)<0)return 'UNAVAILABLE';
+  const number=Number(value);
+  return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:number<1?4:0}).format(number);
+}
+
+function updateSmsBody(alert) {
+  if(!meaningfulMarketUpdate(alert))return null;
+  const ticker=alert.market.ticker ? `$${String(alert.market.ticker).replace(/^\$/,'').slice(0,32)}`
+    : `${alert.tokenAddress.slice(0,6)}…${alert.tokenAddress.slice(-4)}`;
+  const risk=Array.isArray(alert.risks) && alert.risks.length ? alert.risks[0] : 'Unverified caller claim';
+  return [
+    'SIGNAL UPDATE',
+    ticker,
+    `MC: ${compactUsd(alert.market.marketCapUsd)}`,
+    `Liquidity: ${compactUsd(alert.market.liquidityUsd)}`,
+    `State: ${alert.researchState}`,
+    `Risk: ${risk}`,
+  ].join('\n');
+}
+
+function createTwilioSignalRelay({enabled=false,sendSms,gate=()=>({ok:false}),to}={}) {
+  if(typeof sendSms!=='function')throw new Error('signal_sms_sender_required');
+  const send=async body=>{
+    if(!enabled || !gate().ok)throw new Error('sms_disabled_or_not_ready');
+    const result=await sendSms(body,{to});
+    if(!result?.sent || !result.messageSid)throw new Error('sms_rejected');
+    return {receipt:result.messageSid,status:result.status || null,acceptedAt:result.acceptedAt || new Date().toISOString()};
+  };
+  return {
+    async sendInitial(alert){return send(initialSmsBody(alert));},
+    async sendUpdate(alert){
+      const body=updateSmsBody(alert);
+      return body ? send(body) : {skipped:true,reason:'market_update_not_meaningful'};
+    },
+  };
+}
 function createBrevoRelay({enabled=false,consented=false,operationalTestApproved=false,apiKey,fetchImpl=globalThis.fetch,gate=()=>({ok:false})}={}) {
   return {async send(alert) {
     if (!enabled || !consented || !apiKey || !gate().ok) throw new Error('relay_disabled_or_not_ready');
@@ -41,4 +94,5 @@ function createBrevoRelay({enabled=false,consented=false,operationalTestApproved
     return {receipt:body.messageId,accepted:true,received:false,displayed:false};
   }};
 }
-module.exports={mailPayload,createBrevoRelay,operationalTransportTest,SENDER,RECIPIENT};
+module.exports={mailPayload,initialSmsBody,updateSmsBody,meaningfulMarketUpdate,createTwilioSignalRelay,
+  createBrevoRelay,operationalTransportTest,SENDER,RECIPIENT};
