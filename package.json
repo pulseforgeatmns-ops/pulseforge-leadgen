@@ -119,7 +119,7 @@
     "substral:mailbox:emmett-readiness": "node scripts/studioSubstralMailboxActivation.js emmett-readiness",
     "substral:mailbox:create-program": "node scripts/studioSubstralMailboxActivation.js create-governed-program --confirm=substral-mailbox-2026-09-30",
     "pulseforge:cashflow:review": "node scripts/pulseforgeCashflowActivation.js review",
-    "test:pulseforge-cashflow": "node --test test/pulseforgeCashflowOutbound.test.js",
+    "test:pulseforge-cashflow": "node --test test/pulseforgeCashflowOutbound.test.js test/pulseforgeReplenishmentTaxonomy.test.js",
     "pulseforge:cashflow:bootstrap": "node scripts/pulseforgeCashflowActivation.js bootstrap",
     "pulseforge:cashflow:mailbox:configure": "node scripts/pulseforgeCashflowActivation.js configure-mailbox",
     "pulseforge:cashflow:mailbox:verify": "node scripts/pulseforgeCashflowActivation.js verify-mailbox",

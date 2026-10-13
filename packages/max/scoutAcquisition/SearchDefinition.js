@@ -15,6 +15,7 @@ const {
 const { parseGeographyList } = require('./InvestigationProvenance');
 const { MANCHESTER_GEO, seedDiscoveryProfiles } = require('../../capabilities/discovery/seedProfiles');
 const { isRuntimeAim } = require('../../aim');
+const { inferStateFromLabel } = require('../../scout/coverage/SearchGeography');
 
 const BUSINESS_NEED_ALIASES = Object.freeze({
   commercial_cleaning: 'commercial_cleaning',
@@ -113,6 +114,19 @@ function geographyFromLabel(label, profile) {
   };
 }
 
+function geographyFromTarget(label, profile, target = {}) {
+  const geography = geographyFromLabel(label, profile);
+  if (!Array.isArray(target.cities) || !target.cities.length) return geography;
+  return {
+    ...geography,
+    cities: [...new Set(target.cities.map(asText).filter(Boolean))],
+    state: geography.state || inferStateFromLabel(label),
+    scope: target.geographyScope || geography.scope,
+    permittedNearby: [],
+    explicitCities: true,
+  };
+}
+
 function buildPopulationStatement(input = {}) {
   if (input.aim && input.aim.mission && input.aim.mission.transformation) {
     const icp = input.aim.icp && input.aim.icp.company && input.aim.icp.company.reasoning;
@@ -199,7 +213,7 @@ function buildAcquisitionSearchDefinition(input = {}) {
       asText(business.approvedUnderstanding && business.approvedUnderstanding.serviceGeography) ||
       null;
   const profile = resolveProfile({ tenantId, businessNeed, segments });
-  const geography = geoLabel ? geographyFromLabel(geoLabel, profile) : null;
+  const geography = geoLabel ? geographyFromTarget(geoLabel, profile, target) : null;
   const exclusions = Array.isArray(business.exclusions)
     ? business.exclusions.map(asText).filter(Boolean)
     : [];
@@ -297,7 +311,7 @@ function buildSearchDefinitionFromMarketDefinition(marketDefinition = {}, opts =
     asText(business.approvedUnderstanding && business.approvedUnderstanding.serviceGeography) ||
     null;
   const profile = resolveProfile({ tenantId, businessNeed, segments });
-  const geography = geoLabel ? geographyFromLabel(geoLabel, profile) : null;
+  const geography = geoLabel ? geographyFromTarget(geoLabel, profile, target) : null;
   const exclusions = Array.isArray(business.exclusions)
     ? business.exclusions.map(asText).filter(Boolean)
     : Array.isArray(md.exclusions)
@@ -317,7 +331,7 @@ function buildSearchDefinitionFromMarketDefinition(marketDefinition = {}, opts =
     segments,
     aim,
   });
-  const invalidReason = aim
+  const invalidReason = md.scopeError || (aim
     ? !(aim.mission && aim.mission.known && aim.painOntology)
       ? 'AIM is incomplete — Scout will not search a market it does not understand.'
       : null
@@ -325,7 +339,7 @@ function buildSearchDefinitionFromMarketDefinition(marketDefinition = {}, opts =
       ? 'Geography could not be resolved.'
       : !businessNeed && !segments.length
         ? 'Acquisition target definition is incomplete.'
-        : null;
+        : null);
 
   return {
     tenantId,

@@ -93,6 +93,17 @@
       "packages/max/workspace/tests/paige"
     ],
     "anchor-outbound": [
+      "utils/canonicalBusinessTaxonomy.js",
+      "utils/replenishmentVertical.js",
+      "utils/pulseforgeCashflowOffer.js",
+      "services/maxOutboundControlLoop.js",
+      "packages/max/scoutAcquisition/",
+      "packages/scout/coverage/",
+      "packages/scout/intelligence/MarketDefinition.js",
+      "packages/scout/intelligence/MarketUnderstanding.js",
+      "packages/scout/Discovery.helpers.js",
+      "packages/scout/investigation/SearchHypothesisEngine.js",
+      "test/pulseforge",
       "services/governedOutbound",
       "services/anchorGovernedScheduler.js",
       "services/governedOutboundExecutionClock.js",
