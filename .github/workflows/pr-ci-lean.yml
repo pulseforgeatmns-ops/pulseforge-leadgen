@@ -296,26 +296,7 @@ jobs:
           cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
-      - name: Run Max orchestration tests
-        shell: bash
-        run: |
-          set -o pipefail
-          if npm run test:max > max-test.log 2>&1; then
-            tail -n 40 max-test.log
-          else
-            node - <<'NODE'
-            const fs = require('node:fs');
-            const lines = fs.readFileSync('max-test.log', 'utf8').split('\n');
-            const interesting = [];
-            for (let index = 0; index < lines.length; index += 1) {
-              if (/^(?:not ok|# fail)|AssertionError|ERR_ASSERTION|test failed|failureType|error:/i.test(lines[index].trim())) {
-                interesting.push(...lines.slice(Math.max(0, index - 8), index + 24));
-              }
-            }
-            console.error([...new Set(interesting)].slice(-500).join('\n'));
-          NODE
-            exit 1
-          fi
+      - run: npm run test:max
 
   gate:
     name: PR CI gate
