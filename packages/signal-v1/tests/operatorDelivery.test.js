@@ -10,7 +10,7 @@ const {checkPilot}=require('../../../services/signalOperator/pilotGate');
 const {minimalEvents,authorized}=require('../../../services/telegramCallerFeed/operatorEvents');
 const {OperatorStore}=require('../../../services/signalOperator/store');
 const {createOperatorWorker,startOperatorTimers}=require('../../../services/signalOperator/worker');
-const {createBrevoRelay,mailPayload}=require('../../../services/signalOperator/relay');
+const {createBrevoRelay,createTwilioSignalRelay,mailPayload,initialSmsBody,updateSmsBody}=require('../../../services/signalOperator/relay');
 const token='2fRDA5f353VXLs2PeLJNqqHqTMhrjJunAXmWWpLkpump';
 const fixtureAuth='OPERATIONAL-TEST-ONLY-AUTH-FIXTURE-000';
 const t=n=>new Date(Date.UTC(2026,9,7,0,0,n));
@@ -60,12 +60,61 @@ test('relay defaults off and requires separate consent; fake transport records a
   assert.equal(mailPayload(alert).headers.idempotencyKey,mailPayload({...alert,market:{}}).headers.idempotencyKey);
 });
 
+test('Twilio Signal relay uses the existing SMS service and bounded Front Runners copy',async()=>{
+  const alert={id:'a'.repeat(64),tokenAddress:token,channelId:'123',externalMessageId:'telegram:123:45',knowledgeAt:t(2),
+    researchState:'PENDING_RESEARCH',risks:['Unverified caller claim'],market:{ticker:'TEST',marketCapUsd:1250000,liquidityUsd:81000}};
+  const messages=[];
+  const sms=createTwilioSignalRelay({enabled:true,gate:()=>({ok:true}),sendSms:async(body)=>{
+    messages.push(body);return {sent:true,messageSid:`SM${'a'.repeat(32)}`,status:'queued',acceptedAt:t(3).toISOString()};
+  }});
+  assert.match(initialSmsBody(alert),/^SIGNAL — FRONT RUNNERS CALL\nCA: /);
+  assert.match(initialSmsBody(alert),/https:\/\/fomo\.family\/tokens\/solana\//);
+  assert.match(updateSmsBody(alert),/^SIGNAL UPDATE\n\$TEST\nMC: \$1,250,000/);
+  assert.equal(updateSmsBody({...alert,market:{priceUsd:1}}),null);
+  assert.equal((await sms.sendInitial(alert)).status,'queued');
+  assert.equal((await sms.sendUpdate(alert)).status,'queued');
+  assert.equal(messages.length,2);
+  assert.equal(messages[0].includes('MC:'),false,'initial SMS must not wait for or include market enrichment');
+});
+
 test('operator timers run independently every second',async()=>{
   const timers=[];let calls=0;
   const stop=startOperatorTimers({ingestOnce:async()=>{calls++;},sendOnce:async()=>{calls++;}},
     {setInterval:(fn,ms)=>{timers.push({fn,ms});return {};},clearInterval:()=>{}});
   assert.deepEqual(timers.map(t=>t.ms),[1000,1000]);
   await Promise.all(timers.map(t=>t.fn()));assert.equal(calls,2);stop();
+});
+
+test('worker sends one initial SMS before market enrichment, then update and email',async()=>{
+  const order=[];
+  const payload={id:'c'.repeat(64),sourceId:'telegram-front-runners',externalMessageId:'telegram:123:45',
+    tokenAddress:token,evidenceId:'e'.repeat(64),channelId:'123',occurredAt:t(1).toISOString(),
+    ingestedAt:t(2).toISOString(),knowledgeAt:t(2).toISOString(),researchState:'PENDING_RESEARCH',
+    paperOnly:true,market:{freshness:'UNAVAILABLE'},risks:['Unverified caller claim']};
+  let row={id:payload.id,payload,attempts:1};
+  const store={
+    async claim(){const claimed=row;row=null;return claimed;},
+    async setPayload(_id,next){order.push(`persist:${next.delivery?.smsInitial?.state || next.delivery?.smsUpdate?.state || 'market'}`);payloadRef=next;},
+    async accepted(){order.push('email-accepted');},async failed(){throw new Error('unexpected failure');},
+  };
+  let payloadRef=payload;
+  const worker=createOperatorWorker({store,feedUrl:'http://feed.railway.internal:3099/operator-events',token:fixtureAuth,
+    channelId:'123',gate:()=>({ok:true,startAt:t(0).toISOString()}),now:()=>t(5),
+    marketProvider:{getLiveTokenSnapshot:async()=>{order.push('market');return {tokenAddress:token,ticker:'TEST',priceUsd:1,
+      marketCapUsd:1000000,liquidityUsd:50000,occurredAt:t(4),sampledAt:t(4),provider:'geckoterminal',
+      provenance:{dataClass:'EMPIRICAL',freshness:'UNKNOWN'}}; }},
+    smsRelay:{sendInitial:async()=>{order.push('sms-initial');return {receipt:`SM${'c'.repeat(32)}`,status:'queued',acceptedAt:t(5).toISOString()};},
+      sendUpdate:async alert=>{order.push('sms-update');assert.equal(alert.market.marketCapUsd,1000000);return {receipt:`SM${'d'.repeat(32)}`,status:'queued',acceptedAt:t(5).toISOString()};}},
+    relay:{send:async()=>{order.push('email');return {receipt:'brevo-receipt'};}}});
+  const result=await worker.sendOnce();
+  assert.equal(result.accepted,true);
+  assert.ok(order.indexOf('sms-initial')<order.indexOf('market'));
+  assert.ok(order.indexOf('market')<order.indexOf('sms-update'));
+  assert.ok(order.indexOf('sms-update')<order.indexOf('email'));
+  assert.equal(payloadRef.delivery.smsInitial.state,'ACCEPTED');
+  assert.equal(payloadRef.delivery.smsUpdate.state,'ACCEPTED');
+  assert.deepEqual(await worker.sendOnce(),{empty:true});
+  assert.equal(order.filter(item=>item==='sms-initial').length,1);
 });
 
 test('private route requires auth and genuine health and returns no raw text',async()=>{
@@ -91,12 +140,14 @@ test('durable operational enqueue/retry/restart has no research writes and marke
     await ensureSignalSchema(pool);
     for(const name of ['2026-10-07-signal-v1-operator-outbox.sql','2026-10-07-signal-v1-operator-relay.sql'])
       await pool.query(fs.readFileSync(path.join(__dirname,'../../../migrations',name),'utf8'));
-    let now=t(5),open=true,sends=0;
+    let now=t(5),open=true,sends=0,marketStarted=false,initialSmsSends=0,updateAttempts=0;
     const gate=()=>({ok:open,startAt:t(0).toISOString()});
     const store=new OperatorStore(pool,{channelId:'123',now:()=>now});
     const options={store,feedUrl:'http://feed.railway.internal:3099/operator-events',token:fixtureAuth,channelId:'123',gate,now:()=>now,
-      marketProvider:{getLiveTokenSnapshot:()=>new Promise(()=>{})},marketTimeoutMs:10,
+      marketProvider:{getLiveTokenSnapshot:()=>{marketStarted=true;return new Promise(()=>{});}},marketTimeoutMs:10,
       fetchImpl:async()=>({ok:true,json:async()=>({events:[event()]})}),
+      smsRelay:{sendInitial:async()=>{assert.equal(marketStarted,false);initialSmsSends++;return {receipt:`SM${'b'.repeat(32)}`,status:'queued',acceptedAt:t(6).toISOString()};},
+        sendUpdate:async()=>{assert.equal(marketStarted,true);updateAttempts++;return {skipped:true,reason:'market_update_not_meaningful'};}},
       relay:{send:async alert=>{sends++;assert.equal(alert.market.freshness,'UNAVAILABLE');if(sends===1)throw new Error('relay_transport_unknown');return {receipt:'local-operational-test-receipt'};}}};
     assert.throws(()=>createOperatorWorker({...options,feedUrl:'https://public.example/operator-events'}));
     const worker=createOperatorWorker(options);
@@ -108,12 +159,16 @@ test('durable operational enqueue/retry/restart has no research writes and marke
     await worker.sendOnce();
     const pending=(await pool.query('SELECT * FROM signal_operator_alert_outbox')).rows[0];
     assert.equal(pending.delivery_state,'PENDING');assert.equal(pending.payload.marketAttempted,true);
+    assert.equal(pending.payload.delivery.smsInitial.state,'ACCEPTED');
+    assert.equal(pending.payload.delivery.smsUpdate.state,'SKIPPED');
     now=t(10);
     const restarted=new OperatorStore(pool,{channelId:'123',now:()=>now});
     const next=createOperatorWorker({...options,store:restarted,marketProvider:{getLiveTokenSnapshot:()=>{throw new Error('must preserve original retry body');}}});
     await next.sendOnce();
     const accepted=(await pool.query('SELECT * FROM signal_operator_alert_outbox')).rows[0];
     assert.equal(accepted.delivery_state,'ACCEPTED');assert.equal(accepted.received_at,null);assert.equal(accepted.displayed_at,null);assert.equal(accepted.delivered_at,null);
+    assert.equal(initialSmsSends,1,'email retry must not duplicate the initial SMS');
+    assert.equal(updateAttempts,1,'email retry must not duplicate the optional update');
     await restarted.recordReceipt(accepted.id,'RECEIVED','local-inbox-observation');
     assert.equal((await pool.query('SELECT displayed_at FROM signal_operator_alert_outbox')).rows[0].displayed_at,null);
     await assert.rejects(restarted.recordReceipt(accepted.id,'SEEN','invented'));
