@@ -1,9 +1,10 @@
 'use strict';
 
-const { ACTION_TYPE, EXECUTION_STATUS } = require('./types');
+const { ACTION_TYPE, EXECUTION_STATUS, VERIFICATION_STATUS } = require('./types');
 const { newIntentId } = require('./fingerprints');
 const { followUpPromptForExpectation } = require('../stateIngestion/expectations');
 const { EXPECTATION_STATUS } = require('../stateIngestion/types');
+const { expectationScope, matchesExpectation } = require('./expectationScope');
 
 async function executeActionIntent({
   decisionStore,
@@ -61,17 +62,46 @@ async function executeActionIntent({
   }
 
   if (actionType === ACTION_TYPE.RESOLVE_EXPECTATION) {
-    const exp = snapshot.expectation;
-    if (exp && stateStore.updateExpectation) {
-      await stateStore.updateExpectation(exp.id, { status: EXPECTATION_STATUS.RESOLVED });
-    } else if (exp && stateStore.expectations) {
-      const row = stateStore.expectations.find(e => e.id === exp.id);
-      if (row) row.status = EXPECTATION_STATUS.RESOLVED;
+    const exp = snapshot?.expectation;
+    const scope = expectationScope(decision.client_id, snapshot);
+    let errorCode = null;
+    if (typeof stateStore?.readExpectation !== 'function'
+      || typeof stateStore?.updateExpectation !== 'function') {
+      errorCode = 'EXPECTATION_STORE_UNSUPPORTED';
+    } else if (!scope) {
+      errorCode = 'EXPECTATION_SCOPE_INVALID';
+    } else {
+      try {
+        const current = await stateStore.readExpectation(exp.id, scope);
+        if (!matchesExpectation(current, exp.id, scope)) {
+          errorCode = 'EXPECTATION_NOT_FOUND_IN_SCOPE';
+        } else if (!['OPEN', 'WAITING', 'OVERDUE', 'RESOLVED'].includes(current.status)) {
+          errorCode = 'EXPECTATION_STATUS_INVALID';
+        } else {
+          // A replay of a completed resolution does not rewrite its timestamps.
+          const updated = current.status === EXPECTATION_STATUS.RESOLVED && current.resolved_at
+            ? current
+            : await stateStore.updateExpectation(exp.id, { status: EXPECTATION_STATUS.RESOLVED }, scope);
+          if (!matchesExpectation(updated, exp.id, scope)
+            || updated.status !== EXPECTATION_STATUS.RESOLVED || !updated.resolved_at) {
+            errorCode = 'EXPECTATION_UPDATE_FAILED';
+          }
+        }
+      } catch {
+        errorCode = 'EXPECTATION_PERSISTENCE_FAILED';
+      }
+    }
+    if (errorCode) {
+      intent.execution_status = EXECUTION_STATUS.EXECUTION_FAILURE;
+      intent.verification_status = VERIFICATION_STATUS.VERIFICATION_FAILED;
+      intent.error_code = errorCode;
+      await decisionStore.persistActionIntent(intent);
+      return { intent, result: { error: errorCode } };
     }
     intent.execution_status = EXECUTION_STATUS.EXECUTED;
-    intent.output_payload = { expectation_id: exp?.id, status: 'RESOLVED' };
+    intent.output_payload = { expectation_id: exp.id, status: 'RESOLVED' };
     await decisionStore.persistActionIntent(intent);
-    return { intent, result: { resolved: exp?.id } };
+    return { intent, result: { resolved: exp.id } };
   }
 
   if (actionType === ACTION_TYPE.SUPERSEDE_PRIOR) {

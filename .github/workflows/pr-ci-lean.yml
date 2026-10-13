@@ -303,6 +303,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Verify bounded test-log summary
         run: node --test test/maxCiLogSummary.test.js
+      - name: Durable expectation PostgreSQL gate (no skips)
+        run: npm run test:max:expectations:postgres
       - name: Run complete Max suite
         run: |
           set +e

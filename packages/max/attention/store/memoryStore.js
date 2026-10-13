@@ -19,11 +19,11 @@ class MemoryAttentionStore {
     return this;
   }
 
-  async findByFingerprint(clientId, fingerprint) {
+  async findByFingerprint(clientId, fingerprint, { includeResolved = false } = {}) {
     return this.items.find(i =>
       i.client_id === clientId
       && i.dedup_fingerprint === fingerprint
-      && UNRESOLVED_STATUSES.includes(i.status)
+      && (includeResolved || UNRESOLVED_STATUSES.includes(i.status))
     ) || null;
   }
 

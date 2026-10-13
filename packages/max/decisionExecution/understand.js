@@ -87,6 +87,7 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
   const snapshot = {
     account: {
       id: prospect?.id || null,
+      client_id: prospect?.client_id ?? null,
       company_name: prospect?.company_name || expectationRow?.source_evidence?.account_name || null,
       owner_id: ownerId,
       owner_name: owner?.name || expectationRow?.source_evidence?.ao_name || null,
@@ -96,6 +97,9 @@ async function buildUnderstanding({ stateStore, trigger, expectation, prospect: 
     expectation: expectationRow
       ? {
         id: expectationRow.id,
+        client_id: expectationRow.client_id,
+        prospect_id: expectationRow.prospect_id,
+        ao_id: expectationRow.ao_id,
         type: expectationRow.expectation_type,
         expectation_type: expectationRow.expectation_type,
         status: expectationRow.status,
