@@ -50,7 +50,9 @@ const {
 } = require('../../../utils/studioSubstralFirstTouchEmail');
 const {
   isPulseforgeCashflowClient,
-  buildPulseforgeRepairSprintVariant,
+  buildPulseforgeReviewVariant,
+  pulseforgeMissionReason,
+  pulseforgeFirstTouchExclusionReason,
   validatePulseforgeCashflowCopy,
   DOCTRINE_BLOCKER: PULSEFORGE_DOCTRINE_BLOCKER,
 } = require('../../../utils/pulseforgeCashflowOffer');
@@ -157,6 +159,16 @@ function buildPerProspectVariants(input = {}) {
     let usedPersonalization = false;
     let scoutPersonalization = null;
 
+    if (usePulseforgeCashflow) {
+      const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
+      const reason = pulseforgeMissionReason(mission)
+        || pulseforgeFirstTouchExclusionReason(candidate, { tenantId: '1', firstTouch: true })
+        || pulseforgeFirstTouchExclusionReason(crmRecord || {}, { tenantId: '1', firstTouch: true });
+      if (reason) {
+        heldProspects.push({ candidateId: String(candidateId), companyName, holdReason: reason });
+        continue;
+      }
+    }
     const approved = lookupApprovedCopy(input.approvedCopies, identity);
     if (approved) {
       copy = { subject: approved.content.subject, body: approved.content.body || approved.content.statement, cta: 'Would you be open to a short conversation?' };
@@ -164,26 +176,20 @@ function buildPerProspectVariants(input = {}) {
       usedPersonalization = true;
     } else if (usePulseforgeCashflow) {
       const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
-      const sprint = buildPulseforgeRepairSprintVariant({ candidate, crmRecord });
+      const sprint = buildPulseforgeReviewVariant({ candidate, crmRecord });
       if (sprint.held) {
         heldProspects.push({
           candidateId: String(candidateId),
           companyId: identity.companyId || String(candidateId),
           companyName,
           holdReason: sprint.holdReason,
-          detail: 'Pulseforge repair outreach requires a measured or observed website defect and a targeted-remediation diagnosis.',
+          detail: 'Pulseforge review outreach requires an in-scope business and no previous manual first touch.',
         });
         continue;
       }
       copy = { subject: sprint.subject, body: sprint.body, cta: sprint.cta };
-      usedPersonalization = true;
-      scoutPersonalization = {
-        source: 'website_opportunity_assessment',
-        assessmentId: sprint.evidence.assessmentId,
-        diagnosis: sprint.evidence.diagnosis,
-        finding: sprint.evidence.finding,
-        observation: sprint.evidence.observation,
-      };
+      usedPersonalization = false;
+      scoutPersonalization = { source: 'review_invitation_no_claimed_findings' };
     } else if (useAnchorLifecycle) {
       const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
       const prospectKey = String(crmRecord?.prospect_id || crmRecord?.id || identity.prospectId || candidateId);
@@ -330,7 +336,7 @@ function buildBasePaigeVariantsPayload(input = {}) {
     subjects,
     messaging: variants[0]?.body || null,
     cta: isPulseforgeCashflowClient(clientId)
-      ? (variants[0]?.cta || 'Want me to send the exact scope I’d fix for $500?')
+      ? (variants[0]?.cta || 'Would you like the review details?')
       : clientId === ANCHOR_CLIENT_ID
       ? (variants[0]?.cta || 'Want me to send over what we\'d need for a quote?')
       : isStudioSubstralClient(clientId)
@@ -546,11 +552,11 @@ async function runPaigeVariants(executionInput = {}, opts = {}) {
         transactionId,
         status: EXECUTION_STATUSES.BLOCKED,
         contributions: payload,
-        reason: 'Paige generated Pulseforge cash-flow copy that violates the fixed-scope repair-sprint doctrine.',
+        reason: 'Paige generated Pulseforge cash-flow copy that violates the Missed Revenue Review doctrine.',
         requiredPrecondition: PULSEFORGE_DOCTRINE_BLOCKER,
         blockers: [{
           code: PULSEFORGE_DOCTRINE_BLOCKER,
-          label: 'Pulseforge repair-sprint copy doctrine violation',
+          label: 'Pulseforge review copy doctrine violation',
           violations: doctrineViolations,
         }],
       });

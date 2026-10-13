@@ -365,6 +365,10 @@ function adapters(pool, dependencies = {}) {
     if (!snapshot?.mission || String(snapshot.mission.tenantId) !== tenantId
       || snapshot.mission.planCancelled || !['ready', 'execute'].includes(snapshot.mission.stage)) fail('mission_not_executable');
     if (hash(missionScope(snapshot.mission)) !== program.scope_hash) fail('daily_mission_scope_changed');
+    if (String(tenantId) === '1') {
+      const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(snapshot.mission);
+      if (reason) fail(reason);
+    }
     const contributions = snapshot.contributions;
     const paige = amo.findPaigeVariants(contributions, snapshot.mission);
     const emmett = amo.findEmmettCapacity(contributions, snapshot.mission);

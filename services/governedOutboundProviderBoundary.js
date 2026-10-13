@@ -6,6 +6,12 @@
  */
 
 const PRE_PROVIDER_FAILURE_CODES = new Set([
+  'mission_segment_mismatch',
+  'service_area_not_confirmed',
+  'public_website_required',
+  'pulseforge_reviewed_offer_required',
+  'pulseforge_prior_manual_first_touch',
+  'pulseforge_cashflow_offer_doctrine_violation',
   'ak_observed_provenance_required',
   'ak_inferred_evidence_required',
   'ak_inferred_derivation_required',

@@ -306,11 +306,12 @@ function prospectMissionVertical(row, scope) {
 }
 
 function missionCandidateReason(row, scope, tenantId = null) {
-  if (!isProspectServiceAreaConfirmed(row, scope)) return 'service_area_not_confirmed';
-  if (String(tenantId || row.client_id || '') === '1'
-    && scope.offerId === require('../utils/pulseforgeCashflowOffer').PULSEFORGE_CASHFLOW_OFFER_ID) {
-    return require('../utils/pulseforgeCashflowOffer').pulseforgeAssessmentReason(row.website_opportunity_payload);
+  if (String(tenantId || row.client_id || '') === '1') {
+    const offer = require('../utils/pulseforgeCashflowOffer');
+    if (scope.offerId !== offer.PULSEFORGE_CASHFLOW_OFFER_ID) return offer.SOURCE_REVIEW_BLOCKER;
+    return offer.pulseforgeTargetReason(row);
   }
+  if (!isProspectServiceAreaConfirmed(row, scope)) return 'service_area_not_confirmed';
   const vertical = prospectMissionVertical(row, scope);
   const aliases = segmentAliases(scope);
   if (aliases.size && (!vertical || !aliases.has(vertical))) return 'mission_segment_mismatch';
@@ -383,6 +384,9 @@ async function loadCleanInventory(pool, store, source, clientId, policy = {}) {
       prospectId: String(row.id),
       companyId: String(row.company_id || ''),
       company: row.company_name,
+      location: row.company_location || row.location,
+      industry: row.industry,
+      vertical: row.vertical,
       domain: row.company_domain,
       website: row.company_website,
       email: String(row.email || '').toLowerCase(),
@@ -470,7 +474,7 @@ function scoutInput(program, source, plan, tenantContext = null, discoveryGenera
       segments,
       businessType,
       desiredSignals: pulseforgeCashflow
-        ? ['live_website', 'contact_or_booking_path', 'mobile_usability', 'observable_website_defect']
+        ? ['southern_new_hampshire_business', 'plumbing_heating_hvac', 'public_inquiry_or_booking_path']
         : ['decision_maker', 'service_gap', 'portfolio_growth', 'turnover_support'],
       discoveryGeneration: Math.max(0, Number(discoveryGeneration || 0)),
     },
@@ -642,31 +646,12 @@ async function persistDiscoveredCompanies(pool, store, {
       continue;
     }
 
-    if (tenant.tenantId === '1'
-      && scope.offerId === require('../utils/pulseforgeCashflowOffer').PULSEFORGE_CASHFLOW_OFFER_ID) {
-      try {
-        const assessed = await require('./webDesignScout').assessDiscoveredBusiness({
-          client_id: tenant.clientId,
-          mission_id: scoutContext.program?.source_mission_id || null,
-          cohort_tag: 'pulseforge_cashflow_repair_sprint_v1',
-          company: name,
-          domain,
-          website,
-          industry: admission.vertical,
-          location: company.location,
-          email: company.email,
-          phone: company.phone,
-          skipPuppeteer: true,
-        }, { pool, skipPuppeteer: true });
-        const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeAssessmentReason(assessed.assessment);
-        if (reason) {
-          reject(reason);
-          continue;
-        }
-      } catch (_error) {
-        reject('website_assessment_failed');
-        continue;
-      }
+    if (tenant.tenantId === '1') {
+      const offer = require('../utils/pulseforgeCashflowOffer');
+      const reason = scope.offerId !== offer.PULSEFORGE_CASHFLOW_OFFER_ID
+        ? offer.SOURCE_REVIEW_BLOCKER
+        : offer.pulseforgeTargetReason({ ...company, website, domain, industry: admission.vertical });
+      if (reason) { reject(reason); continue; }
     }
 
     counters.fit += 1;
@@ -1066,6 +1051,10 @@ async function runMaxOutboundControlLoop(options = {}) {
 
   const source = options.source || await loadSource(pool, program, governed.tenantId);
   if (!source) return { halted: 'source_mission_missing', programId: program.id };
+  if (governed.tenantId === '1') {
+    const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(source.mission || source.payload || source);
+    if (reason) return { halted: reason, programId: program.id };
+  }
 
   const governedAdapters = options.governedAdapters || createGovernedAdapters(pool, { governedContext: governed });
   const controlNow = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
