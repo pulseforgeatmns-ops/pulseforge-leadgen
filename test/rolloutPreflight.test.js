@@ -127,6 +127,13 @@ test('SQL allowlist only SELECTs system catalogs and settings, no customer reads
     assert.doesNotMatch(sql, /pg_sleep|pg_advisory|pg_read_file|pg_stat_activity/i);
   }
 });
+test('catalog key arrays use pg text[] decoding rather than unsupported name[] strings', () => {
+  const { types } = require('pg');
+  assert.deepEqual(types.getTypeParser(1009)('{client_id,id}'), ['client_id', 'id']);
+  assert.equal(types.getTypeParser(1003)('{client_id,id}'), '{client_id,id}');
+  assert.equal((QUERIES.constraints.match(/ARRAY\(SELECT a\.attname::text FROM unnest\(/g) || []).length, 2);
+  assert.equal((QUERIES.indexes.match(/ARRAY\(SELECT a\.attname::text FROM unnest\(/g) || []).length, 1);
+});
 test('successful database read verifies settings, rolls back and closes owned connection', async () => {
   const fake = fakeClient(); const r = await preflight.inspectDatabase(URL, fake);
   assert.equal(r.status, 'ready'); assert.deepEqual(fake.calls, ['connect', 'BEGIN READ ONLY', ...Object.keys(QUERIES), 'ROLLBACK', 'end']);

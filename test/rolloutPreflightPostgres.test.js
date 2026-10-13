@@ -42,7 +42,7 @@ test('rollout preflight real PostgreSQL: absent, partial, migrated, drift, clean
   });
   await t.test('owned connection defaults to read-only and cannot perform DML', async () => {
     const client = new Client(connectionConfig(pg.connectionString)); await client.connect();
-    try { await assert.rejects(client.query('INSERT INTO clients(id) VALUES(987)'), e => e.code === '25006'); }
+    try { await assert.rejects(client.query('INSERT INTO public.clients(id) VALUES(987)'), e => e.code === '25006'); }
     finally { await client.end(); }
     assert.equal((await admin.query('SELECT count(*)::int AS n FROM clients')).rows[0].n, 0);
   });

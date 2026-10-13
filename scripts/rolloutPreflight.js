@@ -68,9 +68,9 @@ const QUERIES = Object.freeze({
     c.confmatchtype AS match_type, f.relname AS foreign_table, fn.nspname AS foreign_schema,
     (SELECT count(*)=4 AND COALESCE(bool_and(t.tgisinternal AND t.tgenabled IN ('O','A')),false)
       FROM pg_catalog.pg_trigger t WHERE t.tgconstraint=c.oid) AS triggers_enforced,
-    ARRAY(SELECT a.attname FROM unnest(c.conkey) WITH ORDINALITY k(num,ord)
+    ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(num,ord)
       JOIN pg_catalog.pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.num ORDER BY k.ord) AS keys,
-    ARRAY(SELECT a.attname FROM unnest(c.confkey) WITH ORDINALITY k(num,ord)
+    ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(num,ord)
       JOIN pg_catalog.pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.num ORDER BY k.ord) AS foreign_keys,
     pg_catalog.pg_get_expr(c.conbin,c.conrelid) AS expression
     FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class r ON r.oid=c.conrelid
@@ -80,7 +80,7 @@ const QUERIES = Object.freeze({
   indexes: `SELECT r.relname AS table_name, i.indisunique AS is_unique, i.indisvalid AS valid,
     i.indisready AS ready, i.indimmediate AS immediate, i.indpred IS NULL AS no_predicate,
     i.indexprs IS NULL AS no_expression,
-    ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY k(num,ord)
+    ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(num,ord)
       LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.num
       WHERE k.ord<=i.indnkeyatts ORDER BY k.ord) AS keys
     FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class r ON r.oid=i.indrelid
