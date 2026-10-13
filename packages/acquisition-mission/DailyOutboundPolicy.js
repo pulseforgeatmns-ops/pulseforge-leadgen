@@ -33,17 +33,20 @@ function policy(input, now = new Date()) {
     weekdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17,
     // This phase authorizes first touches only. A reply can never restart a sequence.
     maxSequenceStep: 1, enrichmentLimit: 15, preparationAttemptsPerDay: 3 };
-  if (!['10', '13', '17'].includes(p.tenantId) || !p.sourceMissionId || !p.senderEmail.includes('@') || !p.inboxIntegrationId) {
+  if (!['1', '10', '13', '17'].includes(p.tenantId) || !p.sourceMissionId || !p.senderEmail.includes('@') || !p.inboxIntegrationId) {
     fail('invalid_governed_outbound_scope');
   }
   if (p.tenantId === '10') {
     if (!p.aoOwnerIds.length || p.aoOwnerIds.length > 10 || p.aoOwnerIds.some(id => !Number.isInteger(id) || id < 1)) {
       fail('ao_owners_required');
     }
-  } else if (p.tenantId === '13' || p.tenantId === '17') {
-    // Substral needs its own reviewed contact policy; do not inherit Babrun's default.
+  } else {
+    // Substral contact classifications must be explicitly reviewed, never defaulted.
     if (p.tenantId === '17' && !Array.isArray(input.allowedContactClassifications)) fail('invalid_contact_classifications');
-    p.allowedContactClassifications = [...new Set(input.allowedContactClassifications || ['VERIFIED_FOUNDER_EMAIL'])];
+    const defaults = p.tenantId === '13'
+      ? ['VERIFIED_FOUNDER_EMAIL']
+      : ['VERIFIED_FOUNDER_EMAIL', 'VERIFIED_ROLE_EMAIL'];
+    p.allowedContactClassifications = [...new Set(input.allowedContactClassifications || defaults)];
     if (!p.allowedContactClassifications.length || p.allowedContactClassifications.some(x => !SENDABLE_CLASSES.includes(x))) fail('invalid_contact_classifications');
     p.sendingIdentityId = String(input.sendingIdentityId || '').trim();
     if (!p.sendingIdentityId) fail('sending_identity_required');

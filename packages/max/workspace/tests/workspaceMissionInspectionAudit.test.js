@@ -43,6 +43,17 @@ function lawFirmMission(engine, overrides = {}) {
   });
   engine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.UNDERSTAND });
   engine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.PLAN });
+  engine.contribute(mission.id, {
+    specialist: amo.SPECIALISTS.MAX,
+    kind: 'acquisition_approach',
+    payload: amo.createAcquisitionApproachPayload({
+      selectedApproach: 'outbound',
+      rationale: 'Outbound is the supported acquisition path for this inspection fixture.',
+      confidence: { overall: 0.72 },
+      evidence: [{ label: 'Max prioritization complete', source: 'test_fixture' }],
+      decidedAt: '2026-08-19T09:09:00.000Z',
+    }),
+  });
   engine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.PREPARE });
   return mission;
 }

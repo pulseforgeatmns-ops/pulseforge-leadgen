@@ -111,6 +111,23 @@ const ANCHOR_MAILBOX_CONFIG = Object.freeze({
   oauthRefreshSecretRef: 'ANCHOR_GOOGLE_REFRESH_TOKEN',
 });
 
+const PULSEFORGE_MAILBOX_CONFIG = Object.freeze({
+  providerType: PROVIDER_TYPES.GOOGLE_WORKSPACE,
+  mailboxAddress: 'jacob@pulseforge.com',
+  displayName: 'Jacob Maynard | Pulseforge',
+  senderEmail: 'jacob@pulseforge.com',
+  senderDisplayName: 'Jacob Maynard',
+  replyToAddress: 'jacob@pulseforge.com',
+  smtpHost: 'smtp.gmail.com',
+  smtpPort: 465,
+  smtpTlsMode: 'SSL_TLS',
+  imapHost: 'imap.gmail.com',
+  imapPort: 993,
+  imapTlsMode: 'SSL_TLS',
+  imapAuthMode: AUTH_MODES.GOOGLE_OAUTH2,
+  oauthRefreshSecretRef: 'PULSEFORGE_GOOGLE_REFRESH_TOKEN',
+});
+
 const STUDIO_SUBSTRAL_MAILBOX_CONFIG = Object.freeze({
   providerType: PROVIDER_TYPES.GOOGLE_WORKSPACE,
   mailboxAddress: 'hello@studiosubstral.com',
@@ -312,10 +329,12 @@ function canResolveImapCredential(integration, opts = {}) {
 }
 
 function resolveGoogleOAuthClientEnv(integration, env = process.env) {
-  if (String(integration?.tenantId || integration?.tenant_id || '') !== '17') return env;
+  const tenantId = String(integration?.tenantId || integration?.tenant_id || '');
+  if (!['1', '17'].includes(tenantId)) return env;
 
-  const dedicatedId = clean(env.STUDIO_SUBSTRAL_GOOGLE_CLIENT_ID);
-  const dedicatedSecret = clean(env.STUDIO_SUBSTRAL_GOOGLE_CLIENT_SECRET);
+  const prefix = tenantId === '1' ? 'PULSEFORGE' : 'STUDIO_SUBSTRAL';
+  const dedicatedId = clean(env[`${prefix}_GOOGLE_CLIENT_ID`]);
+  const dedicatedSecret = clean(env[`${prefix}_GOOGLE_CLIENT_SECRET`]);
   if (dedicatedId && dedicatedSecret) {
     return { ...env, GOOGLE_CLIENT_ID: dedicatedId, GOOGLE_CLIENT_SECRET: dedicatedSecret };
   }
@@ -1750,6 +1769,39 @@ function anchorMailboxConfig(tenantId = '10') {
   };
 }
 
+function pulseforgeMailboxConfig(tenantId = '1') {
+  const tid = tenantKey(tenantId);
+  return {
+    integration: {
+      id: `tmi_${tid}_pulseforge_jacob`,
+      tenantId: tid,
+      providerType: PULSEFORGE_MAILBOX_CONFIG.providerType,
+      mailboxAddress: PULSEFORGE_MAILBOX_CONFIG.mailboxAddress,
+      displayName: PULSEFORGE_MAILBOX_CONFIG.displayName,
+      smtpHost: PULSEFORGE_MAILBOX_CONFIG.smtpHost,
+      smtpPort: PULSEFORGE_MAILBOX_CONFIG.smtpPort,
+      smtpTlsMode: PULSEFORGE_MAILBOX_CONFIG.smtpTlsMode,
+      imapHost: PULSEFORGE_MAILBOX_CONFIG.imapHost,
+      imapPort: PULSEFORGE_MAILBOX_CONFIG.imapPort,
+      imapTlsMode: PULSEFORGE_MAILBOX_CONFIG.imapTlsMode,
+      imapAuthMode: PULSEFORGE_MAILBOX_CONFIG.imapAuthMode,
+      oauthRefreshSecretRef: PULSEFORGE_MAILBOX_CONFIG.oauthRefreshSecretRef,
+      status: MAILBOX_STATUS.UNVERIFIED,
+      verificationState: {},
+    },
+    identity: {
+      id: `tsi_${tid}_pulseforge_jacob`,
+      tenantId: tid,
+      mailboxIntegrationId: `tmi_${tid}_pulseforge_jacob`,
+      senderEmail: PULSEFORGE_MAILBOX_CONFIG.senderEmail,
+      senderDisplayName: PULSEFORGE_MAILBOX_CONFIG.senderDisplayName,
+      replyToAddress: PULSEFORGE_MAILBOX_CONFIG.replyToAddress,
+      status: IDENTITY_STATUS.UNVERIFIED,
+      verificationState: {},
+    },
+  };
+}
+
 function studioSubstralMailboxConfig(tenantId = '17') {
   return {
     integration: {
@@ -1826,6 +1878,7 @@ module.exports = {
   EVENT_TYPES,
   BABRUN_MAILBOX_CONFIG,
   ANCHOR_MAILBOX_CONFIG,
+  PULSEFORGE_MAILBOX_CONFIG,
   STUDIO_SUBSTRAL_MAILBOX_CONFIG,
   MemoryTenantMailboxStore,
   PostgresTenantMailboxStore,
@@ -1853,6 +1906,7 @@ module.exports = {
   babrunMailboxConfig,
   studioSubstralMailboxConfig,
   anchorMailboxConfig,
+  pulseforgeMailboxConfig,
   normalizeIntegration,
   normalizeIdentity,
   normalizeThread,

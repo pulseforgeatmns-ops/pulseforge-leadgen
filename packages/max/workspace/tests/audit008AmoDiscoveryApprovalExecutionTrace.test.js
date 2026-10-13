@@ -8,6 +8,7 @@ const { createTestAmoRuntime, runtimeProviderFromEngine, createHydratingTestRunt
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
+const { fixtureScoutDiscoveryResult } = require('../AmoOperatorApproval');
 
 const invocationTrace = {
   maybeHandleMissionFirstTurn: 0,
@@ -48,7 +49,10 @@ function instrumentSyncExport(modPath, exportName, counterKey) {
 
 instrumentExport('../MissionFirstRouting.js', 'maybeHandleMissionFirstTurn', 'maybeHandleMissionFirstTurn');
 instrumentSyncExport('../ResponseComposer.js', 'composeResponse', 'composeResponse');
-instrumentExport('../AmoOperatorApproval.js', 'advanceDiscoveryAfterApproval', 'advanceDiscoveryAfterApproval');
+instrumentExport('../AmoOperatorApproval.js', 'advanceDiscoveryAfterApproval', 'advanceDiscoveryAfterApproval', {
+  // Isolate the provider boundary, keeping the real approval transaction intact.
+  before(input) { input.runScout ||= async () => fixtureScoutDiscoveryResult(); },
+});
 instrumentSyncExport('../AmoOperatorApproval.js', 'buildDiscoveryApprovalProse', 'buildDiscoveryApprovalProse');
 
 const amo = require('../../../acquisition-mission');
@@ -131,6 +135,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
       missionsEnabled: true,
       resolverEnabled: true,
       disableLlm: true,
+      scoutAcquisitionOpts: { allowFixtureFallback: true },
       ...engineOpts,
     });
 
@@ -189,7 +194,7 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
 
     assert.equal(turn.workspaceOwnership.owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.equal(turn.workspaceOwnership.missionRuntime, MISSION_RUNTIMES.AMO);
-    assert.equal(turn.resolution.action, 'executed');
+    assert.equal(turn.resolution.action, 'discovery_approved');
     assert.equal(turn.resolution.reason, 'acquisition_mission_discovery_approved');
     assert.equal(turn.route, 'intelligence');
     assert.notEqual(turn.route, 'mission');
@@ -232,6 +237,12 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
     const after = amoEngine.get(amoMission.id, '10');
     assert.equal(after.stage, STAGES.DISCOVER);
     assert.equal(after.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
+    const committed = amoEngine.inspect(amoMission.id, { tenantId: '10' });
+    const approval = require('../AmoOperatorApproval').findDiscoveryApproval(committed.contributions);
+    assert.equal(approval.payload.consumed, true);
+    assert.ok(approval.payload.transactionId);
+    assert.ok(committed.contributions.some((row) => row.specialist === amo.SPECIALISTS.SCOUT));
+    assert.ok(committed.timeline.some((row) => row.kind === amo.EVENT_KINDS.EXECUTION_COMMITTED));
   });
 
   it('does not let bound SPEC-022 mission preempt AMO approval on the same turn', async () => {
@@ -263,9 +274,37 @@ describe('AUDIT-008 active AMO discovery approval execution trace', { concurrenc
     assert.notEqual(turn.mission.id, legacy.id);
     assert.equal(turn.workspaceOwnership.missionRuntime, MISSION_RUNTIMES.AMO);
     assert.notEqual(turn.resolution.action, 'resumed');
+    assert.equal(turn.resolution.action, 'discovery_approved');
 
     const after = amoEngine.get(amoMission.id, '10');
     assert.equal(after.stage, STAGES.DISCOVER);
     assert.equal(after.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
+    const committed = amoEngine.inspect(amoMission.id, { tenantId: '10' });
+    const approval = require('../AmoOperatorApproval').findDiscoveryApproval(committed.contributions);
+    assert.equal(approval.payload.consumed, true);
+    assert.ok(approval.payload.transactionId);
+    assert.ok(committed.contributions.some((row) => row.specialist === amo.SPECIALISTS.SCOUT));
+    assert.ok(committed.timeline.some((row) => row.kind === amo.EVENT_KINDS.EXECUTION_COMMITTED));
+  });
+
+  it('keeps discovery approval unconsumed when Scout fails', async (t) => {
+    const approval = require('../AmoOperatorApproval');
+    const original = approval.advanceDiscoveryAfterApproval;
+    t.mock.method(approval, 'advanceDiscoveryAfterApproval', (input) => original({
+      ...input,
+      runScout: async () => { throw new Error('Scout fixture provider failed'); },
+    }));
+    openAmoSession();
+    const before = amoEngine.inspect(amoMission.id, { tenantId: '10' });
+    const turn = await workspace.ask({ sessionId, question: 'approved' });
+    assert.equal(invocationTrace.advanceDiscoveryAfterApproval, 1);
+    assert.match(turn.prose, /Discovery could not execute/i);
+    const after = amoEngine.inspect(amoMission.id, { tenantId: '10' });
+    assert.equal(after.mission.stage, before.mission.stage);
+    assert.equal(after.mission.version, before.mission.version);
+    assert.deepEqual(after.mission.pendingOperatorDecision, before.mission.pendingOperatorDecision);
+    assert.equal(approval.findDiscoveryApproval(after.contributions), undefined);
+    assert.equal(after.contributions.some((row) => row.specialist === amo.SPECIALISTS.SCOUT), false);
+    assert.equal(listMissionApprovalAuditLog().some((row) => row.event === 'MISSION_APPROVAL_CONSUMED'), false);
   });
 });

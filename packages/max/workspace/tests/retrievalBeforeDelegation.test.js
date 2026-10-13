@@ -17,6 +17,30 @@ const {
   createSpecialistDelegationService,
 } = require('../../../../services/specialistDelegation');
 const { createMemoryAcquisitionState } = require('../../../../services/scoutAcquisitionIntelligence');
+const cie = require('../../../../services/clientIntelligenceInterview');
+
+async function approvedAnchorFixture() {
+  const opts = { store: cie.createMemoryStore() };
+  const started = await cie.startClientInterview({ clientId: 10, forceNew: true }, opts);
+  const answers = [
+    'Anchor Cleaning — commercial cleaning for professional offices.',
+    'Recurring commercial cleaning and weekly office cleans.',
+    'Property managers, facility managers, and professional offices.',
+    'Lowest-price bargain hunters.',
+    'Greater Manchester including Bedford and Hooksett.',
+    'Reliable crews that do the work right without chasing.',
+    'Calm professional reliable voice.',
+    'Grow commercial cleaning in Greater Manchester.',
+    'Clearer path to commercial opportunities in 90 days.',
+  ];
+  let turn = started;
+  for (const answer of answers) {
+    turn = await cie.postInterviewMessage(started.interviewId, answer, opts);
+  }
+  assert.ok(turn.blueprint);
+  await cie.approveBlueprint(turn.blueprint.id, opts);
+  return opts;
+}
 
 describe('SPEC-102 retrieval before delegation — workspace hook', () => {
   let session;
@@ -48,6 +72,7 @@ describe('SPEC-102 retrieval before delegation — workspace hook', () => {
       question: 'What do you currently understand about our service area?',
       session,
       context: session.context,
+      cieOpts: await approvedAnchorFixture(),
     });
     assert.ok(turn);
     assert.equal(turn.delegated, false);
@@ -62,6 +87,7 @@ describe('SPEC-102 retrieval before delegation — workspace hook', () => {
       question: 'What do you know about Anchor?',
       session,
       context: session.context,
+      cieOpts: await approvedAnchorFixture(),
     });
     assert.ok(turn);
     assert.equal(turn.delegated, false);

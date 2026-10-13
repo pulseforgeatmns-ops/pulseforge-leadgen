@@ -248,9 +248,10 @@ describe('SPEC-197 — Pending Decision Conversational Resolution', () => {
       assert.equal(resolution.resolved, true);
       assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.REQUEST_REVISION);
       assert.equal(resolution.action, 'request_revision');
-      assert.equal(resolution.resolvedFromPendingDecision, false);
+      assert.equal(resolution.resolvedFromPendingDecision, true);
       assert.equal(resolution.decisionKind, OPERATOR_DECISION_KINDS.EXECUTION_APPROVAL);
-      assert.equal(resolution.executionIntent, null);
+      assert.equal(resolution.executionIntent, EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH);
+      assert.notEqual(resolution.executionIntent, EXECUTION_INTENTS.APPROVE_EXECUTION);
     });
 
     it('rejects no-send language without authorizing execution', () => {
@@ -282,7 +283,9 @@ describe('SPEC-197 — Pending Decision Conversational Resolution', () => {
       assert.equal(resolution.resolved, true);
       assert.equal(resolution.outcome, RESOLUTION_OUTCOMES.REQUEST_REVISION);
       assert.equal(resolution.action, 'request_revision');
-      assert.equal(resolution.executionIntent, null);
+      assert.equal(resolution.resolvedFromPendingDecision, true);
+      assert.equal(resolution.executionIntent, EXECUTION_INTENTS.REVISE_PREPARED_OUTREACH);
+      assert.notEqual(resolution.executionIntent, EXECUTION_INTENTS.APPROVE_EXECUTION);
     });
 
     it('leaves clearly ambiguous execution_approval replies unresolved', () => {
@@ -453,7 +456,13 @@ describe('SPEC-197 — Pending Decision Conversational Resolution', () => {
       await seedInvestigationPending(engine, mission);
     });
 
-    it('does not fall back to today\'s briefing for continue investigation answer', async () => {
+    it('does not fall back to today\'s briefing for continue investigation answer', async (t) => {
+      const approval = require('../AmoOperatorApproval');
+      const original = approval.advanceDiscoveryInvestigationAfterApproval;
+      t.mock.method(approval, 'advanceDiscoveryInvestigationAfterApproval', (input) => original({
+        ...input,
+        runScout: async () => approval.fixtureScoutDiscoveryResult(),
+      }));
       const before = engine.inspect(mission.id, { tenantId: '10' });
       const workspace = createWorkspaceEngine({
         acquisitionMissionRuntime: runtime,

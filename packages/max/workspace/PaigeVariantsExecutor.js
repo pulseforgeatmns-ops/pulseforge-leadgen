@@ -48,6 +48,12 @@ const {
 const {
   buildStudioSubstralFirstTouchVariant,
 } = require('../../../utils/studioSubstralFirstTouchEmail');
+const {
+  isPulseforgeCashflowClient,
+  buildPulseforgeRepairSprintVariant,
+  validatePulseforgeCashflowCopy,
+  DOCTRINE_BLOCKER: PULSEFORGE_DOCTRINE_BLOCKER,
+} = require('../../../utils/pulseforgeCashflowOffer');
 
 function lookupApprovedCopy(approvedCopies, identity) {
   if (!approvedCopies) return null;
@@ -120,6 +126,7 @@ function buildPerProspectVariants(input = {}) {
   const aoSenderNameByProspectId = input.aoSenderNameByProspectId || null;
   const defaultSenderName = resolveAnchorSenderName(plan, mission);
   const useAnchorLifecycle = clientId === ANCHOR_CLIENT_ID;
+  const usePulseforgeCashflow = isPulseforgeCashflowClient(clientId);
   const useStudioSubstralFirstTouch = isStudioSubstralClient(clientId);
 
   // SPEC-212: Use ALL ranked targets, not just [0]
@@ -155,6 +162,28 @@ function buildPerProspectVariants(input = {}) {
       copy = { subject: approved.content.subject, body: approved.content.body || approved.content.statement, cta: 'Would you be open to a short conversation?' };
       scoutPersonalization = { acquisitionKnowledgeAssetId: approved.id, version: approved.version, source: 'stakeholder_validated_outreach_asset' };
       usedPersonalization = true;
+    } else if (usePulseforgeCashflow) {
+      const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
+      const sprint = buildPulseforgeRepairSprintVariant({ candidate, crmRecord });
+      if (sprint.held) {
+        heldProspects.push({
+          candidateId: String(candidateId),
+          companyId: identity.companyId || String(candidateId),
+          companyName,
+          holdReason: sprint.holdReason,
+          detail: 'Pulseforge repair outreach requires a measured or observed website defect and a targeted-remediation diagnosis.',
+        });
+        continue;
+      }
+      copy = { subject: sprint.subject, body: sprint.body, cta: sprint.cta };
+      usedPersonalization = true;
+      scoutPersonalization = {
+        source: 'website_opportunity_assessment',
+        assessmentId: sprint.evidence.assessmentId,
+        diagnosis: sprint.evidence.diagnosis,
+        finding: sprint.evidence.finding,
+        observation: sprint.evidence.observation,
+      };
     } else if (useAnchorLifecycle) {
       const crmRecord = resolveCandidateCrmRecord(candidate, identity, crmByProspectId);
       const prospectKey = String(crmRecord?.prospect_id || crmRecord?.id || identity.prospectId || candidateId);
@@ -300,7 +329,9 @@ function buildBasePaigeVariantsPayload(input = {}) {
     ),
     subjects,
     messaging: variants[0]?.body || null,
-    cta: clientId === ANCHOR_CLIENT_ID
+    cta: isPulseforgeCashflowClient(clientId)
+      ? (variants[0]?.cta || 'Want me to send the exact scope I’d fix for $500?')
+      : clientId === ANCHOR_CLIENT_ID
       ? (variants[0]?.cta || 'Want me to send over what we\'d need for a quote?')
       : isStudioSubstralClient(clientId)
         ? (variants[0]?.cta || 'Happy to send over a quick assessment if it\'d be useful.')
@@ -492,6 +523,34 @@ async function runPaigeVariants(executionInput = {}, opts = {}) {
         blockers: [{
           code: DOCTRINE_BLOCKER,
           label: 'Anchor copy doctrine violation',
+          violations: doctrineViolations,
+        }],
+      });
+    }
+  }
+
+  if (isPulseforgeCashflowClient(clientId)) {
+    const doctrineViolations = [];
+    for (const variant of payload.variants || []) {
+      const doctrine = validatePulseforgeCashflowCopy(variant);
+      if (!doctrine.ok) {
+        doctrineViolations.push({
+          candidateId: variant.candidateId || variant.companyId || variant.variantId || null,
+          violations: doctrine.violations,
+        });
+      }
+    }
+    if (doctrineViolations.length) {
+      return createExecutionResult({
+        specialist: SPECIALISTS.PAIGE,
+        transactionId,
+        status: EXECUTION_STATUSES.BLOCKED,
+        contributions: payload,
+        reason: 'Paige generated Pulseforge cash-flow copy that violates the fixed-scope repair-sprint doctrine.',
+        requiredPrecondition: PULSEFORGE_DOCTRINE_BLOCKER,
+        blockers: [{
+          code: PULSEFORGE_DOCTRINE_BLOCKER,
+          label: 'Pulseforge repair-sprint copy doctrine violation',
           violations: doctrineViolations,
         }],
       });
