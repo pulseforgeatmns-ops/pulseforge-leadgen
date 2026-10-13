@@ -73,6 +73,13 @@ describe('CI plan PR selector (SPEC-CI-LEAN-001)', () => {
     });
   }
 
+  it('verification retry service and every focused test select the PostgreSQL-backed outbound gate', () => {
+    for (const file of ['services/emailVerificationRecovery.js', 'test/emailVerificationRecovery.test.js',
+      'test/emailVerificationRecoveryPostgres.test.js', 'test/helpers/loadEmailVerificationRecovery.js']) {
+      assert.ok(buildPlan([file]).suites.includes('anchor-outbound'), file);
+    }
+  });
+
   it('fail-closed selects the full safe set', () => {
     const plan = buildPlan([], { failClosed: true });
     assert.equal(plan.failClosed, true);
