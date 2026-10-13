@@ -43,13 +43,13 @@ class PostgresAttentionStore {
     return this;
   }
 
-  async findByFingerprint(clientId, fingerprint) {
+  async findByFingerprint(clientId, fingerprint, { includeResolved = false } = {}) {
     const { rows } = await this.db.query(
       `SELECT * FROM max_attention_items
        WHERE client_id = $1 AND dedup_fingerprint = $2
-         AND status = ANY($3::text[])
+         AND ($4::boolean OR status = ANY($3::text[]))
        LIMIT 1`,
-      [clientId, fingerprint, UNRESOLVED_STATUSES]
+      [clientId, fingerprint, UNRESOLVED_STATUSES, includeResolved]
     );
     return mapRow(rows[0]);
   }

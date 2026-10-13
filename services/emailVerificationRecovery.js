@@ -105,23 +105,37 @@ function classifyRetryOutcome(verification = {}) {
   return 'failed';
 }
 
-async function loadUnverifiedProspects(pool, { clientId = 10, limit = 15 } = {}) {
+function validatedClientId(value) {
+  const parsed = typeof value === 'number' || (typeof value === 'string' && /^[1-9]\d*$/.test(value))
+    ? Number(value) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new TypeError('Email verification retry requires a positive integer clientId');
+  }
+  return parsed;
+}
+
+async function loadUnverifiedProspects(pool, { clientId, limit = 15 } = {}) {
   const { rows } = await pool.query(`
-    SELECT id, email, email_verified, email_status, email_verification_method,
-      verifier_response, verifier_checked_at, verified_at, do_not_contact, company_id
+    SELECT id, client_id, email, email_verified, email_status, email_verification_method,
+      verifier_response, verifier_response::text AS verifier_response_snapshot,
+      verifier_checked_at::text AS verifier_checked_at,
+      verified_at::text AS verified_at, do_not_contact, company_id
     FROM prospects
     WHERE client_id = $1
       AND email IS NOT NULL
       AND COALESCE(do_not_contact, false) = false
       AND COALESCE(email_verified, false) = false
-    ORDER BY verifier_checked_at ASC NULLS FIRST, updated_at ASC NULLS LAST, id ASC
+    ORDER BY prospects.verifier_checked_at ASC NULLS FIRST, updated_at ASC NULLS LAST, id ASC
     LIMIT $2
-  `, [Number(clientId), Math.max(1, Number(limit) || 15)]);
+  `, [clientId, Math.max(1, Number(limit) || 15)]);
   return rows;
 }
 
-async function persistVerifiedRetry(pool, row, verification) {
-  await pool.query(`
+async function persistVerifiedRetry(pool, clientId, row, email, verification) {
+  // Compare the verification snapshot at write time: an in-flight verifier must
+  // not overwrite a changed address, owner, opt-out or newer verification.
+  // The SELECT preserves timestamp microseconds as text for these comparisons.
+  const result = await pool.query(`
     UPDATE prospects
     SET email_verified = $2,
         email_verification_method = $3,
@@ -131,7 +145,18 @@ async function persistVerifiedRetry(pool, row, verification) {
         verifier_checked_at = $7,
         do_not_contact = $8,
         notes = COALESCE(notes, '') || $9
-    WHERE id = $1 AND client_id = 10
+    WHERE id = $1 AND client_id = $10
+      AND LOWER(BTRIM(email)) = $11
+      AND COALESCE(do_not_contact, false) = false
+      AND COALESCE(email_verified, false) = false
+      AND email_verified IS NOT DISTINCT FROM $12
+      AND email_verification_method IS NOT DISTINCT FROM $13
+      AND verified_at IS NOT DISTINCT FROM $14::timestamptz
+      AND email_status IS NOT DISTINCT FROM $15
+      AND verifier_response IS NOT DISTINCT FROM $16::jsonb
+      AND verifier_checked_at IS NOT DISTINCT FROM $17::timestamptz
+      AND company_id IS NOT DISTINCT FROM $18
+      AND do_not_contact IS NOT DISTINCT FROM $19
   `, [
     row.id,
     verification.emailVerified === true,
@@ -142,7 +167,18 @@ async function persistVerifiedRetry(pool, row, verification) {
     verification.verifierCheckedAt,
     verification.doNotContact === true,
     ' | email verification retried during Scout replenishment.',
+    clientId,
+    email,
+    row.email_verified ?? null,
+    row.email_verification_method ?? null,
+    row.verified_at ?? null,
+    row.email_status ?? null,
+    row.verifier_response_snapshot ?? null,
+    row.verifier_checked_at ?? null,
+    row.company_id ?? null,
+    row.do_not_contact ?? null,
   ]);
+  return result.rowCount === 1;
 }
 
 async function retryUnverifiedEmails(pool, {
@@ -151,8 +187,9 @@ async function retryUnverifiedEmails(pool, {
   verify = resolveEmailVerification,
   now = Date.now(),
 } = {}) {
+  const tenantId = validatedClientId(clientId);
   const telemetry = emptyVerificationRetryTelemetry();
-  const rows = await loadUnverifiedProspects(pool, { clientId, limit }).catch(() => []);
+  const rows = await loadUnverifiedProspects(pool, { clientId: tenantId, limit }).catch(() => []);
   telemetry.emailNotVerified = rows.length;
 
   for (const row of rows) {
@@ -164,31 +201,31 @@ async function retryUnverifiedEmails(pool, {
 
     telemetry.verificationRetryAttempted += 1;
     try {
-      const verification = await verify(row.email, {
-        email: row.email,
+      if (Number(row.client_id) !== tenantId || row.do_not_contact === true || row.email_verified === true) {
+        throw new Error('Verification retry candidate no longer belongs to the eligible tenant scope');
+      }
+      const email = String(row.email).trim().toLowerCase();
+      const verification = await verify(email, {
+        email,
         source: ['verification_retry'],
         now,
       });
       const outcome = classifyRetryOutcome(verification);
-      if (outcome === 'valid') {
-        await persistVerifiedRetry(pool, row, verification);
+      if (outcome === 'failed') {
+        telemetry.verificationRetryFailed += 1;
+        continue;
+      }
+      const persisted = await persistVerifiedRetry(pool, tenantId, row, email, outcome === 'valid'
+        ? verification
+        : { ...verification, emailVerified: false, doNotContact: true });
+      if (!persisted) {
+        telemetry.verificationRetryFailed += 1;
+      } else if (outcome === 'valid') {
         telemetry.verificationRetryValid += 1;
       } else if (outcome === 'risky') {
-        await persistVerifiedRetry(pool, row, {
-          ...verification,
-          emailVerified: false,
-          doNotContact: true,
-        });
         telemetry.verificationRetryRisky += 1;
       } else if (outcome === 'invalid') {
-        await persistVerifiedRetry(pool, row, {
-          ...verification,
-          emailVerified: false,
-          doNotContact: true,
-        });
         telemetry.verificationRetryInvalid += 1;
-      } else {
-        telemetry.verificationRetryFailed += 1;
       }
     } catch (_err) {
       telemetry.verificationRetryFailed += 1;

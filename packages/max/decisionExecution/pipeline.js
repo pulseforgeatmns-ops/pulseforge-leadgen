@@ -12,6 +12,51 @@ const { decisionIdempotencyKey, newDecisionId } = require('./fingerprints');
 const { createTelemetryCounters, bump } = require('./telemetry');
 const { markOverdueExpectations } = require('../stateIngestion/expectations');
 const { evaluateAgentOutput } = require('./delegation');
+const { expectationScope, matchesExpectation } = require('./expectationScope');
+
+async function reverifyResolutionReplay({ decision, snapshot, stateStore, decisionStore }) {
+  let intent = null;
+  try {
+    intent = await decisionStore.findActionIntentByIdempotency?.(decision.client_id, decision.idempotency_key);
+  } catch {
+    // An unavailable receipt cannot establish that a previous action succeeded.
+  }
+  const boundIntent = intent && intent.decision_id === decision.id
+    && String(intent.client_id) === String(decision.client_id)
+    && intent.idempotency_key === decision.idempotency_key
+    && intent.action_type === 'RESOLVE_EXPECTATION';
+  const originalScope = expectationScope(decision.client_id, decision.canonical_state_snapshot);
+  const currentScope = expectationScope(decision.client_id, snapshot);
+  if (boundIntent) {
+    const previous = { ...intent };
+    if (!originalScope || !currentScope || decision.canonical_state_snapshot?.expectation?.id !== decision.subject_id
+      || !matchesExpectation(snapshot.expectation, decision.subject_id, originalScope)) {
+      intent = { ...intent, execution_status: EXECUTION_STATUS.ACTION_VERIFICATION_FAILED,
+        verification_status: 'VERIFICATION_FAILED', error_code: 'EXPECTATION_REPLAY_SCOPE_INVALID' };
+    } else {
+      // Readback only: never execute an action again to repair an uncertain receipt.
+      intent = await verifyActionIntent({ decisionStore, stateStore, intent: { ...intent }, snapshot });
+      if (intent.verification_status !== 'VERIFIED'
+        && ![EXECUTION_STATUS.EXECUTION_FAILURE, EXECUTION_STATUS.ACTION_VERIFICATION_FAILED].includes(intent.execution_status)) {
+        intent = { ...intent, execution_status: EXECUTION_STATUS.ACTION_VERIFICATION_FAILED,
+          error_code: 'EXPECTATION_REPLAY_UNCONFIRMED' };
+      }
+    }
+    if (intent.execution_status !== previous.execution_status
+      || intent.verification_status !== previous.verification_status || intent.error_code !== previous.error_code) {
+      await decisionStore.persistActionIntent(intent);
+    }
+  } else {
+    intent = null;
+  }
+  const executionStatus = intent?.execution_status || EXECUTION_STATUS.ACTION_VERIFICATION_FAILED;
+  const verificationStatus = intent?.verification_status || 'VERIFICATION_FAILED';
+  if (decision.execution_status !== executionStatus || decision.verification_status !== verificationStatus) {
+    decision = { ...decision, execution_status: executionStatus, verification_status: verificationStatus };
+    await decisionStore.persistDecision(decision);
+  }
+  return { decision, intent };
+}
 
 function computePriority({ snapshot, trigger }) {
   const rel = snapshot.relationship || {};
@@ -67,11 +112,21 @@ async function evaluateOperationalDecision({
   const existing = await decisionStore.findDecisionByIdempotency(clientId, idempotencyKey);
   if (existing) {
     bump(telemetry, 'duplicate_evaluations_resolved');
+    let replay = { decision: existing, intent: null };
+    if (existing.selected_action?.action_type === 'RESOLVE_EXPECTATION'
+      && existing.execution_status !== EXECUTION_STATUS.SUPERSEDED) {
+      replay = await reverifyResolutionReplay({ decision: existing, snapshot, stateStore, decisionStore });
+      if (attentionStore && replay.decision.verification_status !== 'VERIFIED') {
+        const { syncAttentionFromDecision } = require('../attention/syncFromDecision');
+        await syncAttentionFromDecision({ attentionStore, decision: replay.decision, snapshot, now });
+      }
+    }
     return {
       duplicate: true,
-      decision: existing,
-      receipt: buildDecisionReceipt({ decision: existing, intent: null, snapshot }),
+      ...replay,
+      receipt: buildDecisionReceipt({ decision: replay.decision, intent: replay.intent, snapshot }),
       telemetry,
+      snapshot,
     };
   }
 
@@ -133,15 +188,6 @@ async function evaluateOperationalDecision({
 
   let intent = null;
   if (authority.authorized && execution_status === EXECUTION_STATUS.AUTHORIZED) {
-    if (selection.alsoSupersede) {
-      await decisionStore.supersedeActiveDecisions({
-        clientId,
-        subjectType,
-        subjectId,
-        supersededBy: decision.id,
-      });
-      bump(telemetry, 'decisions_superseded');
-    }
     const execResult = await executeActionIntent({
       decisionStore,
       stateStore,
@@ -165,11 +211,21 @@ async function evaluateOperationalDecision({
       snapshot,
       options: {
         simulateVerificationFailure: decisionStore.simulateVerificationFailure,
-        skipExpectationRead: !stateStore.updateExpectation && !stateStore.expectations,
       },
     });
     await decisionStore.persistActionIntent(intent);
+    decision.execution_status = intent.execution_status;
     decision.verification_status = intent.verification_status;
+    if (selection.alsoSupersede && intent.execution_status === EXECUTION_STATUS.EXECUTED
+      && intent.verification_status === 'VERIFIED') {
+      await decisionStore.supersedeActiveDecisions({
+        clientId,
+        subjectType,
+        subjectId,
+        supersededBy: decision.id,
+      });
+      bump(telemetry, 'decisions_superseded');
+    }
     if (intent.verification_status === 'VERIFIED') bump(telemetry, 'actions_verified');
     if (intent.execution_status === EXECUTION_STATUS.ACTION_VERIFICATION_FAILED) {
       bump(telemetry, 'verification_failures');

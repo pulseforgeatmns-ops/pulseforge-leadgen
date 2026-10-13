@@ -97,6 +97,7 @@ class PostgresDecisionStore {
         execution_status = EXCLUDED.execution_status,
         verification_status = EXCLUDED.verification_status,
         output_payload = EXCLUDED.output_payload,
+        error_code = EXCLUDED.error_code,
         completed_at = EXCLUDED.completed_at
     `, [
       intent.id, intent.decision_id, intent.client_id, intent.action_type,
@@ -106,6 +107,15 @@ class PostgresDecisionStore {
       intent.execution_status === 'EXECUTED' ? new Date().toISOString() : null,
     ]);
     return intent;
+  }
+
+  async findActionIntentByIdempotency(clientId, idempotencyKey) {
+    if (String(clientId) !== String(this.clientId)) return null;
+    const { rows } = await this.db.query(
+      `SELECT * FROM max_operational_action_intents WHERE client_id = $1 AND idempotency_key = $2`,
+      [this.clientId, idempotencyKey]
+    );
+    return rows[0] || null;
   }
 
   async createAoTask(task) {

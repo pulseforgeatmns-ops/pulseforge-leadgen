@@ -48,6 +48,11 @@ class MemoryDecisionStore {
     return intent;
   }
 
+  async findActionIntentByIdempotency(clientId, idempotencyKey) {
+    if (String(clientId) !== String(this.clientId)) return null;
+    return this.actionIntents.find(i => i.client_id === clientId && i.idempotency_key === idempotencyKey) || null;
+  }
+
   async createAoTask(task) {
     const dup = this.aoTasks.find(t =>
       t.decision_id === task.decision_id && t.status === 'open'
