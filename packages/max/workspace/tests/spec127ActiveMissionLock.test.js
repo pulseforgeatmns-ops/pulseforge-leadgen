@@ -217,10 +217,10 @@ describe('SPEC-127 — Active Mission Lock', () => {
     assert.doesNotMatch(second.prose, /Today's Briefing/i);
   });
 
-  it('emits ACTIVE_MISSION_GUARD and MISSION_OWNER_SELECTED audit events', async () => {
+  it('emits tenant-bound mission ownership audit through objective-first routing', async () => {
     clearWorkspaceOwnershipAuditLog();
     const amoEngine = amo.createAcquisitionMissionEngine();
-    amoEngine.create({
+    const mission = amoEngine.create({
       tenantId: '10',
       objective: ANCHOR_OBJECTIVE,
       targetSegment: 'Law Firms',
@@ -240,7 +240,11 @@ describe('SPEC-127 — Active Mission Lock', () => {
     });
 
     const auditLog = require('../audit/WorkspaceOwnershipAudit').listWorkspaceOwnershipAuditLog();
-    assert.ok(auditLog.some((row) => row.event === 'MISSION_OWNER_SELECTED'));
+    const selected = auditLog.filter((row) => row.event === 'MISSION_OWNER_SELECTED');
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].missionId, mission.id);
+    assert.equal(selected[0].source, 'amo');
+    assert.equal(selected[0].owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.ok(
       auditLog.some(
         (row) =>

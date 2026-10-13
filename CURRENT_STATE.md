@@ -4,6 +4,12 @@
 
 ## Current Repository Architecture
 
+The October 13 merge-readiness repair restores existing Max routing and audit
+contracts, rejects ambiguous region/identity promotion and negated execution,
+and retains complete Max CI output with bounded summaries. This is repository
+validation work; it does not activate any tenant, authorize outbound sends, or
+establish live deployment readiness. See the Unreleased changelog.
+
 [SPEC-JEV-002 Decision Shadow Review](docs/specs/SPEC-JEV-002_Decision_Shadow_Review.md)
 adds best-effort Postgres storage and an admin/developer mismatch report for Jev
 shadow evaluations. Production routing remains unchanged. Apply its migration

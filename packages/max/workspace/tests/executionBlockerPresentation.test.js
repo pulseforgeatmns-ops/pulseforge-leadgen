@@ -55,7 +55,7 @@ describe('Execution blocker presentation', () => {
   });
 
   it('buildExecutionMissionResponse rolledBack preserves specific evidence status', () => {
-    const { comm, prose } = buildExecutionMissionResponse({
+    const { comm, prose, structured } = buildExecutionMissionResponse({
       mission: {
         id: 'm1',
         title: 'STR — Greater Manchester',
@@ -78,9 +78,26 @@ describe('Execution blocker presentation', () => {
     });
 
     assert.match(comm.evidenceStatus, /canonical evidence/i);
+    assert.match(prose, /^Discovery could not execute\.\nMission remains unchanged\.\nResolve the blocker and retry\./);
     assert.match(prose, /canonical evidence/i);
+    assert.match(structured.answer, /Discovery could not execute/);
+    assert.match(structured.answer, /canonical evidence/i);
     assert.doesNotMatch(comm.evidenceStatus, /^Execution blocked\.$/);
     assert.match(comm.waitingOn, /canonical evidence|tme_evidence_missing/i);
+  });
+
+  it('does not duplicate recovery copy when rollback has no specific blocker', () => {
+    const { prose, comm } = buildExecutionMissionResponse({
+      mission: { id: 'm1', title: 'Test mission', stage: 'discover' },
+      snapshot: { workspace: {} },
+      action: 'plan_approved',
+      question: 'approved',
+      executionResult: { rolledBack: true, error: {} },
+    });
+
+    assert.equal(prose, 'Mission plan could not execute.\nMission remains unchanged.\nResolve the blocker and retry.');
+    assert.equal(comm.status, 'Unchanged');
+    assert.equal(comm.operatorDecision, 'Approve mission plan?');
   });
 
   it('buildExecutionMissionResponse discovery_approved blocked uses scout summary', () => {

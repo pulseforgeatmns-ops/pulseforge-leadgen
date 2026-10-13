@@ -2,8 +2,6 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
 const {
   maybeHandleRetrievalBeforeDelegationTurn,
@@ -218,23 +216,23 @@ describe('SPEC-102 Scout workspace entry', () => {
 });
 
 describe('SPEC-102 WorkspaceEngine wiring', () => {
-  it('places retrieval after interrogation and before Scout', () => {
-    const engineSrc = fs.readFileSync(
-      path.join(__dirname, '..', 'WorkspaceEngine.js'),
-      'utf8'
-    );
-    const interrogateAt = engineSrc.indexOf(
-      'const interrogationTurn = await maybeHandleSpecialistInterrogationTurn'
-    );
-    const retrieveAt = engineSrc.indexOf(
-      'const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn'
-    );
-    const scoutAt = engineSrc.indexOf(
-      'await maybeHandleScoutAcquisitionTurn'
-    );
-    assert.ok(interrogateAt > 0);
-    assert.ok(retrieveAt > interrogateAt);
-    assert.ok(scoutAt > retrieveAt);
-    assert.match(engineSrc, /maybeHandleRetrievalBeforeDelegationTurn/);
+  it('retrieves approved service-area memory without rerunning a previous Scout investigation', async () => {
+    let scoutCalls = 0;
+    const engine = require('../WorkspaceEngine').createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      clientIntelligenceOpts: await approvedAnchorFixture(),
+      scoutAcquisitionOpts: { runLoop: async () => { scoutCalls += 1; throw new Error('Unexpected Scout delegation'); } },
+    });
+    const opened = engine.open({ tenantId: '10', page: 'command-deck' });
+    const session = engine._sessions.get(opened.sessionId);
+    session.context.acquisitionLoop = true;
+    session.context.lastScoutEvaluation = { id: 'existing-evaluation', materialChange: false };
+    const result = await engine.ask({ sessionId: opened.sessionId, question: 'What do you currently understand about our service area?' });
+    assert.match(result.prose, /Greater Manchester|Bedford|Hooksett/i);
+    assert.equal(result.mission, null);
+    assert.equal(result.scoutLoop, undefined);
+    assert.equal(scoutCalls, 0);
+    assert.ok(result.clientIntelligence && result.clientIntelligence.approved);
   });
 });
