@@ -122,9 +122,16 @@ class ShadowModeService {
         externalRef: src.username ? `@${src.username}` : src.channelId || null,
         collectorId: src.collector || 'telegram-caller-feed',
         sourceRole: src.role || 'CALLER',
+                clusterId: src.clusterId || null,
         clusterRelationshipStatus: src.relationshipStatus || 'UNKNOWN',
         active: src.active !== false && src.available !== false,
-        provenance: { channelId: src.channelId || null, unavailableReason: src.reason || null },
+                provenance: {
+          channelId: src.channelId || null,
+          unavailableReason: src.reason || null,
+          relatedExternalHandles: Array.isArray(src.relatedExternalHandles)
+            ? src.relatedExternalHandles
+            : [],
+        },
       });
     }
   }
