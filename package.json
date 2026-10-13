@@ -137,7 +137,7 @@
     "revenue:phase16b:finalize": "node scripts/finalizeRevenuePhase16bAuthorization.js",
     "test:revenue:postgres": "REVENUE_TEST_POSTGRES=true node --test test/revenuePostgres.test.js",
     "test:revenue:phase16b": "node --test test/revenuePhase16b.test.js test/revenuePhase16bFinalizer.test.js",
-    "test:postgres:harness": "node --test test/disposablePostgresHarness.test.js",
+    "test:postgres:harness": "node --test test/postgresPoolShutdown.test.js test/disposablePostgresHarness.test.js",
     "test:ao-prospect-routing": "node --test test/aoAdvisoryDebriefEvaluator.test.js test/aoProspectRouting.test.js test/aoProspectRoutingApi.test.js test/aoProspectRoutingPostgres.test.js",
     "test:ao-spec-004": "node --test test/aoSpec004.test.js test/aoMaxConversation.test.js",
     "test:ao-spec-005": "node --test test/aoCommandCenter.test.js",
