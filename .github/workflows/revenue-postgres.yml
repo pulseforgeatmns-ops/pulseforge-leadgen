@@ -1,9 +1,9 @@
 name: Revenue PostgreSQL Integration
 
+# PR path: .github/workflows/pr-ci-lean.yml (domain revenue-postgres)
+# Broad regression: .github/workflows/full-regression.yml
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read

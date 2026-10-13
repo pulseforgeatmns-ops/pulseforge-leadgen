@@ -79,8 +79,10 @@ class ProspectivePostgresStore extends InMemorySignalStore {
   async upsertSourceRegistryEntry(row) {
     await this.writeRow('signal_source_registry',row,
       ['source_id','display_name','platform','external_ref','collector_id','source_role','cluster_id','cluster_relationship_status','provenance','active'],
-      `ON CONFLICT (source_id) DO UPDATE SET active=EXCLUDED.active,external_ref=EXCLUDED.external_ref,
-       provenance=EXCLUDED.provenance,cluster_relationship_status=EXCLUDED.cluster_relationship_status,updated_at=NOW()`);
+      `ON CONFLICT (source_id) DO UPDATE SET display_name=EXCLUDED.display_name,platform=EXCLUDED.platform,
+       external_ref=EXCLUDED.external_ref,collector_id=EXCLUDED.collector_id,source_role=EXCLUDED.source_role,
+       cluster_id=EXCLUDED.cluster_id,cluster_relationship_status=EXCLUDED.cluster_relationship_status,
+       provenance=EXCLUDED.provenance,active=EXCLUDED.active,updated_at=NOW()`);
     return super.upsertSourceRegistryEntry(row);
   }
   async insertProspectiveJob(row) {

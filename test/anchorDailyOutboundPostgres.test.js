@@ -47,6 +47,7 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
   let fault;
   let liveHook;
   let enabled;
+  let approvals;
   const actor = { id: 'jake', role: 'admin' };
   let contacts;
   let svc;
@@ -58,7 +59,7 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
       acquisition_outbound_inbox_health,
       ao_prospect_tasks,ao_contacts,ao_follow_up_tasks,ao_leads,agent_actions,agent_log,touchpoints,tenant_outreach_messages,tenant_outreach_scheduled_sends,
       acquisition_mission_provider_events,acquisition_mission_outbound_executions,prospects,companies CASCADE`);
-    clock = new Date('2026-09-18T14:00:00Z'); calls = 0; fault = null; liveHook = async () => {}; enabled = true;
+    clock = new Date('2026-09-18T14:00:00Z'); calls = 0; approvals = 0; fault = null; liveHook = async () => {}; enabled = true;
     contacts = new Map();
     const candidates = [];
     for (let i=0; i<7; i++) {
@@ -73,7 +74,10 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
       loadMission: async id => ({ mission: { ...source, id, stage: id==='source' ? 'execute' : 'ready' } }),
       validateTenant: async () => {}, contact: async id => contacts.get(id),
       prepare: async () => ({ mission: { ...source, id: 'daily', stage: 'ready' } }), prepared: async () => structuredClone(prepared),
-      approve: async (_snapshot, _program, binding) => ({ id: 'approval1', payload: { dailyEnvelope: binding } }),
+      approve: async (_snapshot, _program, binding) => {
+        approvals++;
+        return { id: 'approval1', payload: { dailyEnvelope: binding } };
+      },
       liveGate: async (...args) => liveHook(...args),
       send: async () => { calls++; if (fault) throw new Error(fault); return { success: true, providerMessageId: `provider-${calls}` }; },
       execute: async (_envelope, item, _program, send) => {
@@ -221,6 +225,8 @@ test('governed daily outbound on disposable PostgreSQL', { skip: process.env.ANC
     await reset(); await activate();
     const outcomes = await Promise.all([svc.tick(), svc.tick(), svc.tick()]);
     assert.equal(calls, 1); assert.ok(outcomes.some(x => x.halted === 'overlap'));
+    assert.equal(approvals, 1, 'standing grant binds the frozen batch automatically exactly once');
+    assert.equal((await svc.store.envelope('2026-09-18')).approval_id, 'approval1');
     assert.equal((await svc.tick()).halted, 'spacing');
     for (let i=0; i<4; i++) { await ageAttempts(); assert.equal((await svc.tick()).sent, 1); }
     assert.equal(calls, 5); assert.equal((await svc.tick()).halted, 'cap_reached');

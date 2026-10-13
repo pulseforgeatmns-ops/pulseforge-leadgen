@@ -1,8 +1,8 @@
 name: Paige governed social safety
+# PR path: .github/workflows/pr-ci-lean.yml (domain paige-social)
+# Broad regression: .github/workflows/full-regression.yml
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

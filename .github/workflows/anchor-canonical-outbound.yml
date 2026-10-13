@@ -11,23 +11,7 @@ on:
         options:
           - inspect
           - recover-to-ready
-  pull_request:
-    paths:
-      - 'scripts/lib/anchorCanonicalOutbound.js'
-      - 'scripts/inspectAnchorCanonicalOutbound.js'
-      - 'scripts/recoverAnchorCanonicalOutbound.js'
-      - 'test/anchorCanonicalOutboundRecovery.test.js'
-      - 'routes/cron.js'
-      - '.github/workflows/anchor-canonical-outbound.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'scripts/lib/anchorCanonicalOutbound.js'
-      - 'scripts/inspectAnchorCanonicalOutbound.js'
-      - 'scripts/recoverAnchorCanonicalOutbound.js'
-      - 'test/anchorCanonicalOutboundRecovery.test.js'
-      - 'routes/cron.js'
-      - '.github/workflows/anchor-canonical-outbound.yml'
+  # PR path: .github/workflows/pr-ci-lean.yml (domain anchor-canonical-outbound)
 
 jobs:
   unit:

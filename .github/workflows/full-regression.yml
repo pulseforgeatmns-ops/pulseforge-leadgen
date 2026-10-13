@@ -1,0 +1,85 @@
+name: Full platform regression (off PR path)
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-regression-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  regression-matrix:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: global
+            label: Global startup smoke
+            run: node --test test/globalProductionStartupSmoke.test.js
+            postgres: false
+          - id: signal-v1
+            label: Signal V1 core
+            run: npm run test:signal-v1 && node --test test/signalV1Startup.test.js
+            postgres: true
+            docker: signal
+          - id: paige-social
+            label: Paige governed social
+            run: npm run test:paige
+            postgres: true
+            env: |
+              PAIGE_SOCIAL_TEST_POSTGRES=true
+              CONTENT_OUTCOME_TEST_POSTGRES=true
+              PAIGE_SOCIAL_PUBLISH_ENABLED=false
+          - id: anchor-outbound
+            label: Anchor governed outbound
+            run: npm run test:anchor-outbound
+            postgres: true
+          - id: decision-shadow
+            label: Decision shadow
+            run: npm run test:decision && npm run test:decision:postgres
+            postgres: true
+          - id: revenue-postgres
+            label: Revenue PostgreSQL
+            run: npm run test:postgres:harness && npm run test:revenue:postgres && npm run test:revenue:phase16b && npm run test:anchor-phone-setter:postgres && npm run test:ao-prospect-routing && npm run test:ci:application
+            postgres: true
+          - id: max
+            label: Max orchestration
+            run: npm run test:max
+            postgres: true
+          - id: studio-substral
+            label: Studio Substral
+            run: npm run test:substral-pf-001
+            postgres: false
+    env:
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
+      DATABASE_SSL: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - if: matrix.postgres == true
+        uses: ./.github/actions/setup-postgres-environment
+      - if: matrix.postgres == true && matrix.docker == 'signal'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql
+          bindir="$(pg_config --bindir)"
+          sudo ln -sf "$bindir/initdb" /usr/local/bin/initdb
+          sudo ln -sf "$bindir/pg_ctl" /usr/local/bin/pg_ctl
+      - run: npm ci --ignore-scripts
+      - name: Run regression slice
+        run: ${{ matrix.run }}

@@ -1,6 +1,12 @@
 'use strict';
 
+const crypto = require('crypto');
 const { SCHEDULING_PRIORS } = require('./types');
+
+function hashPickIndex(seed, length) {
+  if (length <= 0) return 0;
+  return crypto.createHash('sha256').update(String(seed)).digest()[0] % length;
+}
 
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -42,6 +48,7 @@ function recommendPublishWindow(input = {}, deps = {}) {
     format,
     timezone = 'America/New_York',
     exploration = false,
+    explorationSeed = null,
     now = new Date(),
   } = input;
   const signals = deps.signals || [];
@@ -63,7 +70,8 @@ function recommendPublishWindow(input = {}, deps = {}) {
   let pick = candidates[0];
   if (exploration && candidates.length > 3) {
     const explorePool = candidates.slice(Math.floor(candidates.length * 0.4), Math.floor(candidates.length * 0.75));
-    pick = explorePool[Math.floor(Math.random() * explorePool.length)] || pick;
+    const seed = explorationSeed || `${platform}:${contentCategory}:${format}:${now.toISOString()}`;
+    pick = explorePool[hashPickIndex(`${seed}:explore-window`, explorePool.length)] || pick;
   }
   const dayName = WEEKDAY_NAMES[pick.dow];
   const hh = String(pick.hour).padStart(2, '0');

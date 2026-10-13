@@ -1859,6 +1859,7 @@ class WorkspaceEngine {
           context: rawContext || session.context,
           conversationIntent,
           operatorIntent,
+          ...(this._scoutAcquisitionOpts || {}),
           ...this._amoRuntimeInput(),
           missionEngine: this._missionEngine || undefined,
           ...this._amoStagePersistOpts(),

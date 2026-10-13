@@ -176,3 +176,20 @@ Not run: remote CI, production migration rehearsal, actual tenant CRM comparison
 ## Initial CI feedback
 
 The first PR run passed decision-shadow, governed-outbound and paige-social checks. The required PostgreSQL job stopped at the older AO-routing fixture because its minimal prospects table lacked ao_call_suppressed. The fixture now includes the two migration columns and asserts call-only versus general outreach-admission behavior. The affected AO-routing suite plus the complete spreadsheet gate passed **153/153 locally, zero skips**. Subsequent remote checks on the current PR head remain authoritative.
+
+
+## October 13 integration refresh
+
+The branch was rebased onto main `1b2ba8f44f414badae43419c3e881571ae1596ce` without changing the spreadsheet or outbound safety implementation. The sole merge conflict was in `package.json`; the global startup smoke, CI-plan and spreadsheet reliability scripts were all preserved.
+
+The old `revenue-postgres.yml` is manual-only on current main. The active `pr-ci-lean.yml` Revenue PostgreSQL job now installs Chromium dependencies and runs the full unchanged `test:max:spreadsheet:reliability` command with `MAX_SPREADSHEET_BROWSER_TEST=1`. Relevant standalone spreadsheet parser, authorization, UI, fixture and guard paths select this job. The final PR gate now requires every selected job to succeed; a selected skipped, cancelled, failed or missing job blocks the gate. Intentionally unselected jobs may still skip.
+
+Verification in the isolated cloud checkout:
+
+- CI selector and actual workflow gate-body contracts: 16/16 passed, no skips.
+- Database-independent spreadsheet safety suites: 95/95 passed, no skips.
+- Existing spreadsheet compatibility, CRM/briefing, sending-readiness and scheduler suites: 89/89 passed, no skips.
+- The exact workbook SHA-256 remains `b1cddfa475f244e27d8c81a381976b30911b34f53ea6c449f868a54208ba6a75`.
+- Full PostgreSQL/Chromium attempts were blocked by this environment denying Unix-domain sockets, including an approved expanded-permission retry. PostgreSQL and Chromium failed to start. This is not a new 127/127 pass; the complete remote CI gate must pass on the final integrated branch before merge.
+
+No production migrations, configuration, CRM mutations, provider calls or deployment were performed. The configured approver, role limitations and release prerequisites above remain unchanged.

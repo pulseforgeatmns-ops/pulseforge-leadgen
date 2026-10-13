@@ -73,7 +73,11 @@ function createTelegramCallerFeedEngine(options = {}) {
         username: src.username,
         platform: src.platform,
         role: src.sourceRole,
+        clusterId: src.clusterId || null,
         relationshipStatus: src.clusterRelationshipStatus,
+        relatedExternalHandles: Array.isArray(src.relatedExternalHandles)
+          ? [...src.relatedExternalHandles]
+          : [],
         collector: src.collector,
         active: false,
         available: false,

@@ -24,6 +24,10 @@ const {
 } = require('./WorkspaceMissionInspection');
 const { isOperatorOperatingUpdate } = require('./OperatorOperatingUpdate');
 const { shouldRetrieveOperatingEvidence } = require('./OperatingEvidenceRetrieval');
+const {
+  isClaimChallenge,
+  isOperatorClaimCorrection,
+} = require('./RecommendationClaimChallenge');
 const { isActiveWorkFollowUpCue, getActiveWorkContext, activeContextHasEntities } = require('./ActiveWorkContext');
 const {
   detectAcquisitionObjective,
@@ -335,6 +339,7 @@ function claimsKnowledgeRetrieval(question) {
   if (!q) return false;
   if (claimsExecutionInspection(q)) return false;
   if (isOperatorOperatingUpdate(q)) return true;
+  if (isClaimChallenge(q) || isOperatorClaimCorrection(q)) return true;
   if (shouldRetrieveOperatingEvidence(q)) return true;
   return false;
 }

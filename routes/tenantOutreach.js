@@ -15,6 +15,9 @@ const {
   listScheduledOutreachSends,
   getScheduledOutreachSend,
 } = require('../services/tenantOutreachScheduler');
+const {
+  loadGovernedMissionExecutionStatus,
+} = require('../services/governedMissionExecutionStatus');
 
 const requireOperator = [requireAuth, requireRole('admin', 'manager', 'client')];
 
@@ -154,6 +157,24 @@ router.post('/api/v1/tenant-outreach/schedules/:id/cancel', requireOperator, asy
   } catch (err) {
     console.error('[tenant-outreach] cancel schedule', err);
     return fail(res, err, 'tenant_outreach_cancel_failed');
+  }
+});
+
+router.get('/api/v1/tenant-outreach/governed-missions/:id', requireOperator, async (req, res) => {
+  try {
+    const tenantId = actorTenantId(req);
+    if (tenantId == null) {
+      return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
+    }
+    const governedExecution = await loadGovernedMissionExecutionStatus(pool, {
+      tenantId,
+      missionId: req.params.id,
+    });
+    noStore(res);
+    return res.json({ tenantId, missionId: req.params.id, governedExecution });
+  } catch (err) {
+    console.error('[tenant-outreach] governed mission status', err);
+    return fail(res, err, 'governed_mission_status_failed');
   }
 });
 

@@ -117,6 +117,7 @@ function createPlacesProvider(deps = {}) {
         state,
         entityName: entity?.name || businessName || null,
         website: entity?.website || evidenceRequest.website || null,
+        discoveryConcept: evidenceRequest.discoveryConcept || null,
       });
       const requireWebsite = evidenceType !== INVESTIGATIVE_EVIDENCE.IDENTITY;
       const limit = DEFAULT_LIMIT;
@@ -219,12 +220,16 @@ function createPlacesProvider(deps = {}) {
  * Derive Places query strings from segment + evidence type.
  * Query templates live in the market hypothesis registry — not in Scout execution.
  */
-function buildQueriesForEvidence({ segment, evidenceType, cities, state, entityName = null, website = null }) {
+function buildQueriesForEvidence({ segment, evidenceType, cities, state, entityName = null, website = null, discoveryConcept = null }) {
   if (entityName) {
     const loc = cities.length ? (state ? `${cities[0]} ${state}` : cities[0]) : '';
     const base = `${entityName}${loc ? ` ${loc}` : ''}`.trim();
     if (website) return [base, website];
     return [base];
+  }
+
+  if (discoveryConcept) {
+    return cities.map(city => `${discoveryConcept} ${city}${state ? ` ${state}` : ''}`.trim());
   }
 
   const hypothesis = resolveMarketHypothesisBySegmentKey(segment);

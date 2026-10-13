@@ -22,11 +22,13 @@ const {
   BABRUN_CONTACT_TARGETS,
   CONTACT_FINAL_STATE,
   resolveTarget,
+  providerCandidateFromEnrichment,
   persistContactResolution,
   loadProspectByAkId,
   formatReportRow,
   summarizeResults,
 } = require('./lib/babrunContactResolution');
+const { runEnrichmentChain } = require('../leadgen');
 
 function parseArgs(argv = process.argv.slice(2)) {
   const args = {
@@ -119,7 +121,14 @@ async function run(options = {}) {
   const results = [];
   for (const target of targets) {
     const prospect = await loadProspectByAkId(pool, target.akId);
-    const resolved = await resolveTarget(target, { prospect });
+    const providerCandidate = providerCandidateFromEnrichment(
+      target,
+      await runEnrichmentChain(target.domain, 'owner')
+    );
+    const resolved = await resolveTarget(target, {
+      prospect,
+      extraCandidates: providerCandidate ? [providerCandidate] : [],
+    });
     const persist = await persistContactResolution(pool, prospect, target, resolved, options.dryRun);
     results.push({ ...resolved, prospectId: prospect?.id || null, persist });
   }

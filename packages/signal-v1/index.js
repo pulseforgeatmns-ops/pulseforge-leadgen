@@ -26,6 +26,7 @@ const {
 const { assertEmpiricalCohort } = require('./prospective/empiricalGuard');
 const { knowledgeAt } = require('./prospective/knowledgeClock');
 const prospectiveConstants = require('./prospective/constants');
+const { buildFomoTokenUrl } = require('./destinations/fomo');
 
 module.exports = {
   SignalService,
@@ -49,6 +50,7 @@ module.exports = {
   createShadowModeServiceFromStore,
   assertEmpiricalCohort,
   knowledgeAt,
+  buildFomoTokenUrl,
   ...prospectiveConstants,
   ...types,
   ...historicalCoverage,
