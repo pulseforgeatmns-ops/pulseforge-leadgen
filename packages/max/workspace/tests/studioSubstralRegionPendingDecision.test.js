@@ -21,7 +21,7 @@ const {
   advancePlanClarification,
 } = require('../AmoOperatorApproval');
 const { createTestAmoRuntime } = require('./amoTestRuntime');
-const { detectExecutionAction } = require('../AcquisitionMissionExecution');
+const { detectExecutionAction, maybeHandleAcquisitionMissionExecution } = require('../AcquisitionMissionExecution');
 
 const REGION_ANSWER = 'Greater Manchester, NH and southern New Hampshire';
 const REGION_ANSWER_WITH_YES = `yes, ${REGION_ANSWER}`;
@@ -54,34 +54,52 @@ describe('Studio Substral — region pending decision (text response)', () => {
     const { mission } = createSubstralPlanningMission();
     for (const utterance of [REGION_ANSWER, REGION_ANSWER_WITH_YES]) {
       const resolution = resolvePendingOperatorDecision(utterance, mission);
-      assert.equal(resolution.resolved, false);
-      assert.equal(resolution.pending, undefined);
+      assert.equal(resolution.resolved, true);
+      assert.equal(resolution.action, 'clarify_plan');
+      assert.equal(resolution.executionAction, 'plan_clarified');
+      assert.equal(resolution.decisionKind, 'plan_clarification');
       assert.equal(pendingDecisionOwnsTurn(resolution), false);
     }
   });
 
-  it('routes region answers through mission planning instead of pending yes/no turn', async () => {
+  for (const answer of [REGION_ANSWER, REGION_ANSWER_WITH_YES]) {
+  it(`routes a clear region answer to clarification without yes/no capture: ${answer}`, async () => {
     const { engine, mission } = createSubstralPlanningMission();
     const runtime = createTestAmoRuntime({ engine });
     const intent = await analyzeOperatorIntent({
-      question: REGION_ANSWER_WITH_YES,
+      question: answer,
       mission,
       resolveMission: false,
       acquisitionMissionRuntime: runtime,
     });
 
-    assert.equal(intent.planningRequested, true);
-    assert.equal(intent.pendingDecisionResolution, null);
-    assert.equal(intent.conversationIntent.via, 'mission_planning_turn');
+    assert.equal(intent.pendingDecisionResolution.action, 'clarify_plan');
+    assert.equal(intent.pendingDecisionResolution.executionAction, 'plan_clarified');
+    assert.equal(pendingDecisionOwnsTurn(intent.pendingDecisionResolution), false);
 
     const pendingTurn = await maybeHandlePendingDecisionTurn({
-      question: REGION_ANSWER_WITH_YES,
+      question: answer,
       operatorIntent: intent,
       context: { tenantId: '17' },
       acquisitionMissionRuntime: runtime,
     });
     assert.equal(pendingTurn, null);
+    const result = await maybeHandleAcquisitionMissionExecution({
+      question: answer,
+      operatorIntent: intent,
+      context: { tenantId: '17', missionId: mission.id },
+      acquisitionMissionRuntime: runtime,
+      allowFixtureFallback: true,
+    });
+    assert.equal(result.action, 'plan_clarified');
+    assert.doesNotMatch(result.prose, /yes or no/i);
+    const after = engine.inspect(mission.id, { tenantId: '17' });
+    assert.equal(after.mission.missionPlanDraft.geography.region, 'Greater Manchester');
+    assert.equal(after.mission.pendingOperatorDecision.kind, 'plan_approval');
+    assert.equal(after.mission.structuredMissionApproved, false);
+    assert.equal(after.contributions.some((row) => row.specialist === 'scout'), false);
   });
+  }
 
   it('never prepends yes/no clarification copy for text pending decisions', () => {
     const { mission } = createSubstralPlanningMission();

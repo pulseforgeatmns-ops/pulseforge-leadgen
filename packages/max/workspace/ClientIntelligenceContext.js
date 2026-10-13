@@ -1501,6 +1501,14 @@ function isClearlyNonBusinessUtterance(question, session) {
   return false;
 }
 
+function isAdvisoryNextStepQuestion(question, session) {
+  const active = getActiveClientReasoning(session);
+  if (!active || !Array.isArray(active.planSteps) || !active.planSteps.length) return false;
+  if (require('./ExecutionState').getExecutionState(session)) return false;
+  const matches = require('./ExecutionInspectionRegistry').matchExecutionInspectionIntents(question);
+  return matches.length > 0 && matches.every((intent) => intent.mode === 'next_step');
+}
+
 /**
  * SPEC-103B inverted claim: with approved Blueprint, unrecognized client
  * wording that looks like a question/advisory turn stays in CIE by default.
@@ -1522,7 +1530,7 @@ function shouldClaimClientIntelligenceTurn(question, session, opts = {}) {
   if (detectAcquisitionObjective(question)) return false;
   try {
     const { isExecutionInspectionQuestion } = require('./ExecutionInspectionRegistry');
-    if (isExecutionInspectionQuestion(question)) return false;
+    if (isExecutionInspectionQuestion(question) && !isAdvisoryNextStepQuestion(question, session)) return false;
   } catch (_) {
     /* registry unavailable */
   }
@@ -2804,6 +2812,7 @@ module.exports = {
   looksLikeAmbiguousBusinessReferent,
   isClearlyNonBusinessUtterance,
   shouldClaimClientIntelligenceTurn,
+  isAdvisoryNextStepQuestion,
   isOperationalDeskOrMissionRequest,
   normalizeClientUtterance,
   scoreClientBusinessSemantics,

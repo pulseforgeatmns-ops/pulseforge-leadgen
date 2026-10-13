@@ -40,6 +40,7 @@ const {
 const {
   detectObjectiveEstablishment,
   isExplicitObjectivePersistenceRequest,
+  looksLikeObjectiveContentRequest,
 } = require('../../../services/operatorObjectives');
 const {
   isExplicitMissionExit,
@@ -260,7 +261,7 @@ function claimsObjectivePersistence(question, input = {}) {
 
   // SPEC-126 / SPEC-153 — execution language never yields to objective persistence.
   const executionPresent = operatorIntent
-    ? operatorIntent.executionLanguagePresent || operatorIntent.executionRequested
+    ? operatorIntent.executionLanguagePresent
     : hasExecutionLanguage(q);
   if (executionPresent) return null;
   if (isAcquisitionObjectiveForMission(q)) return null;
@@ -290,7 +291,10 @@ function claimsSpecialistOwnership(question) {
   const q = normalizeQuestion(question);
   if (!q) return null;
 
-  if (INTERROGATION_RE.test(q)) {
+  const interrogationIntent = require('../../../services/specialistDelegation')
+    .classifyOperatorIntent(q, []);
+  if (INTERROGATION_RE.test(q) ||
+      ['interrogate', 'context_inspection'].includes(interrogationIntent && interrogationIntent.kind)) {
     return {
       owner: WORKSPACE_OWNERS.SPECIALIST_INTERROGATION,
       reason: 'specialist_trace_interrogation',
@@ -874,6 +878,20 @@ async function resolveWorkspaceOwner(input = {}) {
   // 3 — Objective Persistence (explicit save/track only; never execution language)
   const objectiveClaim = claimsObjectivePersistence(question, input);
   if (objectiveClaim) return { ...objectiveClaim, specialist: null };
+
+  // SPEC-095 — recover the durable objective before choosing a content owner.
+  // A canonical mission objective is a different contract and cannot stand in
+  // for a resolved durable operator objective here.
+  if (input.operatorObjectiveContext &&
+      input.operatorObjectiveContext.resolvedObjective &&
+      looksLikeObjectiveContentRequest(question)) {
+    return {
+      owner: WORKSPACE_OWNERS.SPECIALIST_PAIGE,
+      reason: 'resolved_operator_objective_content',
+      confidence: 0.95,
+      specialist: 'paige',
+    };
+  }
 
   // 4 — Blueprint
   if (claimsBlueprintOwnership(question, input)) {

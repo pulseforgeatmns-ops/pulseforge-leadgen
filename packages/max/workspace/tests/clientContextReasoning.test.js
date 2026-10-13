@@ -22,6 +22,7 @@ const {
   startClientInterview,
   postInterviewMessage,
   approveBlueprint,
+  partitionSuccessMetricsAndQualification,
 } = require('../../../../services/clientIntelligenceInterview');
 
 const AS_CLEANING_ID = 11;
@@ -576,6 +577,18 @@ describe('SPEC-103A presentation normalization', () => {
       result.prose,
       /These signals define whether the engagement is working/i
     );
+  });
+
+  it('keeps an explicitly supplied recurring-revenue metric despite terminal punctuation', () => {
+    const partitioned = partitionSuccessMetricsAndQualification([
+      'Walkthroughs completed.',
+      'Recurring revenue created.',
+      'A good prospect has budget fit.',
+    ]);
+    assert.ok(partitioned.metrics.some((item) => /walkthroughs completed/i.test(item)));
+    assert.ok(partitioned.metrics.some((item) => /recurring revenue created/i.test(item)));
+    assert.equal(partitioned.metrics.some((item) => /budget fit/i.test(item)), false);
+    assert.ok(partitioned.qualification.some((item) => /budget fit/i.test(item)));
   });
 
   it('TEST D — mechanical typo normalization without altering raw evidence', () => {

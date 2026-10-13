@@ -49,7 +49,8 @@ function service({
     if (!actor?.id || !['admin', 'manager'].includes(actor.role)) fail('operator_required');
     const p = policy({ ...input, tenantId: String(input.tenantId || resolvedTenantId) }, now());
     const source = await adapters.loadMission(p.sourceMissionId);
-    if (!source?.mission?.structuredMission?.immutable || String(source.mission.tenantId) !== p.tenantId) fail('approved_source_mission_required');
+    if (!source?.mission?.structuredMission?.immutable || String(source.mission.tenantId) !== p.tenantId
+      || source.mission.planCancelled || /cancel/i.test(String(source.mission.status || ''))) fail('approved_source_mission_required');
     if (require('./governedOutboundTenant').createGovernedOutboundTenantContext(p.tenantId).usesTenantMailboxTransport
       && source.mission.stage !== 'ready') fail('ready_source_mission_required');
     if (String(p.tenantId) === '1') {

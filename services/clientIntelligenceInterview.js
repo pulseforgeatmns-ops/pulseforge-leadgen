@@ -2612,7 +2612,7 @@ function splitListItems(text) {
 const COMMERCIAL_CLEANING_GROWTH_FOCUS = 'commercial cleaning';
 
 const SCORECARD_METRIC_PHRASE_RE =
-  /\b(?:qualified prospects?(?:\s+identified)?|prospects?\s+contacted|positive repl(?:y|ies)|discovery calls?\s+booked|proposals?\s+(?:sent|accepted|signed)|revenue closed|opportunities created|win rate|active clients?|walkthrough(?:s|\s+requests?)?|conversion rate|pipeline movement|booked discovery calls?|signed web projects?|demand signals?)\b/i;
+  /\b(?:qualified prospects?(?:\s+identified)?|prospects?\s+contacted|positive repl(?:y|ies)|discovery calls?\s+booked|proposals?\s+(?:sent|accepted|signed)|revenue closed|recurring revenue(?: created)?|opportunities created|win rate|active clients?|walkthrough(?:s|\s+requests?)?|conversion rate|pipeline movement|booked discovery calls?|signed web projects?|demand signals?)\b/i;
 
 const QUALIFICATION_SIGNAL_PHRASE_RE =
   /\b(?:prospect should|good prospect|weak signal|strong signal|real operating business|reachable decision(?:-maker)?|outdated or weak website|getting them to engage|if they are talking|need to look more professional|clear reason a better site|qualification criteria|reply quality|call quality|budget fit|urgency)\b/i;

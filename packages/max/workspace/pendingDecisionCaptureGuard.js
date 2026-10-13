@@ -155,6 +155,50 @@ function isHighConfidenceJevInspection(shadowDecision) {
   );
 }
 
+function isSingularCityRegion(answer) {
+  const match = answer.match(/^([A-Za-z][A-Za-z.'-]*(?:\s+[A-Za-z][A-Za-z.'-]*){0,4})\s*,?\s+([A-Za-z]{2})$/);
+  if (!match) return false;
+  const codes = new Set(('AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY AB BC MB NB NL NS NT NU ON PE QC SK YT').split(' '));
+  if (!codes.has(match[2].toUpperCase())) return false;
+  // A second region code or conjunction indicates multiple competing places.
+  return !/\b(?:and|or|versus|vs)\b/i.test(match[1]) &&
+    !match[1].split(/\s+/).some((word) => codes.has(word.toUpperCase()));
+}
+
+function isExactOfferedClarification(message, pendingDecision) {
+  return (pendingDecision.choices || []).some((choice) => choice &&
+    [choice.id, choice.label].some((value) => value && String(value).toLowerCase() === message.toLowerCase())
+  );
+}
+
+function isExplicitRegionClarification(message, pendingDecision) {
+  if (pendingDecision.field !== 'geography.region') return false;
+  if (message.includes('?') || /^(?:why|what|how|when|where|who|which)\b/i.test(message)) return false;
+  if (matchesAny(message, STATUS_INSPECTION_PATTERNS)) return false;
+  if (/\b(?:do not|don't|don’t|never|not)\s+approve\b|\bapproval\s*:\s*(?:not|no|rejected|pending)\b|\b(?:hold off|not yet|cancel)\b/i.test(message)) return false;
+
+  // Validate the entire answer, including bare text replies to the region
+  // prompt. The planner's catch-all alone would accept unrelated prose.
+  const { matchChoice, normalizePlanClarificationAnswer } = require('../../acquisition-mission/MissionPlanner');
+  const answer = normalizePlanClarificationAnswer(message, pendingDecision);
+  if (!answer) return false;
+  const exactAnswerChoice = (pendingDecision.choices || []).some((choice) =>
+    [choice.id, choice.label].some((value) => value && String(value).toLowerCase() === answer.toLowerCase())
+  );
+  if (exactAnswerChoice) return Boolean(matchChoice(pendingDecision, answer));
+  const cityRegion = isSingularCityRegion(answer);
+  const uncertaintyText = cityRegion ? answer.replace(/\s+OR$/i, '') : answer;
+  if (/\b(?:not|no|maybe|perhaps|possibly|probably|unsure|uncertain|undecided|unknown|either|neither|or|unless|except|exclude|tbd|sure|know|choose|decide|pending)\b/i.test(uncertaintyText)) return false;
+  // Limit the free-text path to unambiguous forms already handled by the
+  // planner. Other places need an offered choice rather than its catch-all.
+  const nhRegion = '(?:(?:greater\\s+)?manchester(?:\\s*,\\s*|\\s+)nh|(?:southern\\s+)?new hampshire|nh)';
+  const recognizedRegion = new RegExp(`^${nhRegion}(?:\\s+and\\s+${nhRegion})*$`, 'i').test(answer)
+    || /^(?:greater\s+)?manchester(?:\s*,\s*|\s+)(?:uk|england|united kingdom)$/i.test(answer)
+    || /^(?:charleston(?:\s*,\s*|\s+)(?:wv|west virginia)|nashville(?:\s*,\s*|\s+)tn|united states(?: of america)?|usa)$/i.test(answer);
+  if (!recognizedRegion && !cityRegion) return false;
+  return Boolean(matchChoice(pendingDecision, answer));
+}
+
 function classifyPendingDecisionCaptureIntentImpl(input = {}) {
   const message = normalizeMessage(input.message || input.question);
   const pendingDecision = input.pendingDecision || null;
@@ -164,14 +208,19 @@ function classifyPendingDecisionCaptureIntentImpl(input = {}) {
   }
 
   if (pendingDecision.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION) {
+    if (isStructuredClarificationPending(pendingDecision) && isExactOfferedClarification(message, pendingDecision)) {
+      return CAPTURE_INTENTS.DECISION_RESPONSE;
+    }
     if (matchesAny(message, PENDING_DECISION_CLARIFICATION_PATTERNS)) {
       return CAPTURE_INTENTS.PENDING_DECISION_CLARIFICATION;
     }
-    if (
-      /\b(?:decision\s*:\s*)?region\s*[=:]/i.test(message) ||
-      pendingDecision.field === 'geography.region'
-    ) {
-      return CAPTURE_INTENTS.DECISION_RESPONSE;
+    if (isStructuredClarificationPending(pendingDecision)) {
+      if (isExplicitRegionClarification(message, pendingDecision)) {
+        return CAPTURE_INTENTS.DECISION_RESPONSE;
+      }
+      return matchesAny(message, STATUS_INSPECTION_PATTERNS)
+        ? CAPTURE_INTENTS.INSPECTION_OR_STATUS_QUESTION
+        : CAPTURE_INTENTS.UNRELATED_OR_QUESTION;
     }
   }
 

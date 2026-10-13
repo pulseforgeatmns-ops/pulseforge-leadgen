@@ -134,7 +134,13 @@ describe('SPEC-127 — Active Mission Lock', () => {
     assert.equal(blocked.decision.reason, 'mission_execution_command');
   });
 
-  it('WorkspaceEngine advances AMO on Approved. Begin Discovery.', async () => {
+  it('WorkspaceEngine advances AMO on Approved. Begin Discovery.', async (t) => {
+    const approval = require('../AmoOperatorApproval');
+    const original = approval.advanceDiscoveryAfterApproval;
+    t.mock.method(approval, 'advanceDiscoveryAfterApproval', (input) => original({
+      ...input,
+      runScout: async () => approval.fixtureScoutDiscoveryResult(),
+    }));
     const amoEngine = amo.createAcquisitionMissionEngine();
     amoEngine.create({
       tenantId: '10',
@@ -167,6 +173,14 @@ describe('SPEC-127 — Active Mission Lock', () => {
     assert.match(result.prose, /Mission Updated/i);
     assert.match(result.prose, /Discover/i);
     assert.ok(result.mission);
+    assert.equal(result.resolution.action, 'discovery_approved');
+    const committed = amoEngine.inspect(result.mission.id, { tenantId: '10' });
+    const consumed = approval.findDiscoveryApproval(committed.contributions);
+    assert.equal(consumed.payload.consumed, true);
+    assert.ok(consumed.payload.transactionId);
+    assert.ok(committed.contributions.some((row) => row.specialist === amo.SPECIALISTS.SCOUT));
+    assert.ok(committed.timeline.some((row) => row.kind === amo.EVENT_KINDS.EXECUTION_COMMITTED));
+    assert.equal(result.mission.pendingOperatorDecision.kind, amo.OPERATOR_DECISION_KINDS.PRIORITIZATION_APPROVAL);
   });
 
   it('legacy Approved. Begin Scout discovery executes Discovery stage', async () => {
@@ -203,10 +217,10 @@ describe('SPEC-127 — Active Mission Lock', () => {
     assert.doesNotMatch(second.prose, /Today's Briefing/i);
   });
 
-  it('emits ACTIVE_MISSION_GUARD and MISSION_OWNER_SELECTED audit events', async () => {
+  it('emits tenant-bound mission ownership audit through objective-first routing', async () => {
     clearWorkspaceOwnershipAuditLog();
     const amoEngine = amo.createAcquisitionMissionEngine();
-    amoEngine.create({
+    const mission = amoEngine.create({
       tenantId: '10',
       objective: ANCHOR_OBJECTIVE,
       targetSegment: 'Law Firms',
@@ -226,7 +240,11 @@ describe('SPEC-127 — Active Mission Lock', () => {
     });
 
     const auditLog = require('../audit/WorkspaceOwnershipAudit').listWorkspaceOwnershipAuditLog();
-    assert.ok(auditLog.some((row) => row.event === 'MISSION_OWNER_SELECTED'));
+    const selected = auditLog.filter((row) => row.event === 'MISSION_OWNER_SELECTED');
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].missionId, mission.id);
+    assert.equal(selected[0].source, 'amo');
+    assert.equal(selected[0].owner, WORKSPACE_OWNERS.ACTIVE_MISSION);
     assert.ok(
       auditLog.some(
         (row) =>

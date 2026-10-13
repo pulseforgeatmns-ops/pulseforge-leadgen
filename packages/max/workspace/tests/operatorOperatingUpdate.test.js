@@ -6,8 +6,6 @@
 
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
 
 const { createWorkspaceEngine } = require('../WorkspaceEngine');
 const { maybeHandleRetrievalBeforeDelegationTurn } = require('../RetrievalBeforeDelegationContext');
@@ -153,18 +151,31 @@ describe('SPEC-106 routing', () => {
     assert.equal(classifyCognitiveMode(question).kind, COGNITIVE_MODES.INVESTIGATION);
   });
 
-  it('WorkspaceEngine places operating-update recognition after retrieval and before CIE', () => {
-    const engineSrc = fs.readFileSync(path.join(__dirname, '..', 'WorkspaceEngine.js'), 'utf8');
-    const retrieveAt = engineSrc.indexOf(
-      'const retrievalTurn = await maybeHandleRetrievalBeforeDelegationTurn'
-    );
-    const updateAt = engineSrc.indexOf('await maybeHandleOperatorOperatingUpdate');
-    const scoutAt = engineSrc.indexOf('await maybeHandleScoutAcquisitionTurn');
-    const cieAt = engineSrc.indexOf('await maybeHandleClientIntelligenceTurn');
-    assert.ok(retrieveAt > 0);
-    assert.ok(updateAt > retrieveAt);
-    assert.ok(scoutAt > updateAt);
-    assert.ok(cieAt > scoutAt);
+  it('routes reports and subsequent evidence reads without Scout, CIE advice, or mission creation', async () => {
+    const knowledge = createKnowledgeRuntime({ withSync: false, startIngestor: false }).knowledge;
+    let scoutCalls = 0;
+    const engine = createWorkspaceEngine({
+      disableLlm: true,
+      missionsEnabled: false,
+      operatingUpdateOpts: updateOpts(knowledge),
+      operatingEvidenceOpts: { ...anchorLoaders(), knowledge },
+      scoutAcquisitionOpts: { runLoop: async () => { scoutCalls += 1; throw new Error('Unexpected Scout delegation'); } },
+    });
+    const update = await engine.ask({
+      question: PILOT_MESSAGE,
+      context: { tenantId: String(ANCHOR_ID), clientId: ANCHOR_ID },
+    });
+    assert.equal(update.workspaceOwnership.owner, 'knowledge_retrieval');
+    assert.equal(update.domainDecision.reason, 'operator_operating_update');
+    assert.equal(update.operatingUpdate.assertions.length, 3);
+    assert.equal(update.mission, null);
+    assert.equal(update.clientIntelligence, undefined);
+    const read = await engine.ask({ sessionId: update.sessionId, question: 'Was Campaign 001 mailed?' });
+    assert.equal(read.domainDecision.reason, 'operating_evidence_retrieval');
+    assert.match(read.prose, /operator-reported as mailed 2026-08-06/i);
+    assert.equal(read.operatingUpdate, undefined);
+    assert.equal(read.mission, null);
+    assert.equal(scoutCalls, 0);
   });
 });
 
