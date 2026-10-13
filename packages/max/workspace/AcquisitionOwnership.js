@@ -430,7 +430,25 @@ async function maybeHandleAcquisitionOwnershipTurn(input = {}) {
   }
 
   if (!mission) {
-    const canonicalObjective = canonicalObjectiveText(resolvedObjective) || question;
+    const canonicalObjective = canonicalObjectiveText(resolvedObjective);
+    if (!canonicalObjective) {
+      const clarification = (resolvedObjective.ambiguities || [])
+        .find((ambiguity) => ambiguity.field === 'objective');
+      const prose = clarification && clarification.question ||
+        'What is the business objective for this mission?';
+      return {
+        reason: 'acquisition_objective_clarification_required',
+        prose,
+        structured: buildStructuredResponse({
+          answer: prose,
+          reasoning: ['A business objective is required before creating a mission.'],
+          metadata: { clarificationRequired: true, missingFields: ['objective'] },
+        }),
+        mission: null,
+        created: false,
+        ciEvidence,
+      };
+    }
 
     mission = await runtime.create(
       {

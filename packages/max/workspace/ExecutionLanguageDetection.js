@@ -57,6 +57,21 @@ function normalizeText(text) {
     .trim();
 }
 
+/** Reports and questions about past work do not authorize new mission work. */
+function isNonExecutingOperatingTurn(text) {
+  const q = normalizeText(text);
+  if (!q) return false;
+  // Keep compound messages with an actual command on the execution path.
+  const hasCommand = splitClauses(q).flatMap((clause) => clause.split(/;\s*/)).some((clause) =>
+    !isPureNegationClause(clause) &&
+    /^(?:(?:max|please)[, ]+)*(?:(?:i (?:want|need) you to|(?:can|could|would) you|go ahead and)\s+)?(?:approve(?:d)?|send|start|begin|run|execute|proceed|resume|continue|create|operate|manage|complete)\b/i.test(clause.trim())
+  );
+  if (hasCommand || hasExplicitMissionApprovalLanguage(q)) return false;
+  const { isOperatorOperatingUpdate } = require('./OperatorOperatingUpdate');
+  const { isOperatingEvidenceQuestion } = require('./OperatingEvidenceRetrieval');
+  return isOperatorOperatingUpdate(q) || isOperatingEvidenceQuestion(q);
+}
+
 function clauseHasExecutionLanguage(clause) {
   if (isPureNegationClause(clause)) return false;
   return EXECUTION_VERB_RE.test(clause);
@@ -83,6 +98,7 @@ function hasExecutionLanguage(text) {
   guardPostIntentParsing('hasExecutionLanguage');
   const q = normalizeText(text);
   if (!q) return false;
+  if (isNonExecutingOperatingTurn(q)) return false;
   const clauses = splitClauses(q);
   return clauses.some((clause) => clauseHasExecutionLanguage(clause));
 }
@@ -127,6 +143,7 @@ function isMissionExecutionCommand(text) {
   guardPostIntentParsing('isMissionExecutionCommand');
   const q = normalizeText(text);
   if (!q) return false;
+  if (isNonExecutingOperatingTurn(q)) return false;
   const { selectExecutionDomain, EXECUTION_DOMAINS } = executionDomainModule();
   const domainDecision = selectExecutionDomain(q);
   if (domainDecision.domain === EXECUTION_DOMAINS.MISSION_DIAGNOSTICS) {
@@ -163,4 +180,5 @@ module.exports = {
   isMissionExecutionCommand,
   detectMissionExecutionLanguage,
   normalizeText,
+  isNonExecutingOperatingTurn,
 };

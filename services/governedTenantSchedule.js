@@ -54,6 +54,10 @@ async function validateGovernedSchedule(schedule, opts = {}) {
   const adapters = opts.governedAdapters || require('./governedOutboundAdapters').adapters(pool, { tenantId: schedule.tenantId });
   const source = await adapters.loadMission(program.source_mission_id);
   if (!source?.mission || source.mission.planCancelled || hash(missionScope(source.mission)) !== program.scope_hash) fail('source_scope_changed');
+  if (String(schedule.tenantId) === '1') {
+    const reason = require('../utils/pulseforgeCashflowOffer').pulseforgeMissionReason(source.mission);
+    if (reason) fail(reason);
+  }
   const current = await adapters.loadMission(envelope.mission_id);
   const prepared = await adapters.prepared(current, program);
   const selected = prepared.candidates.find(x => x.candidateId === item.candidate_id);
@@ -99,7 +103,11 @@ async function finishGovernedSchedule(schedule, result, opts = {}) {
   const failure = result.error || { code: result.reason };
   const providerCrossed = Boolean(providerMessageId)
     || providerBoundaryWasCrossed(failure, opts.providerBoundary);
-  const retryablePreProvider = !providerCrossed && (
+  const pulseforgeReviewHold = String(schedule.tenantId) === '1' && !providerCrossed
+    && ['pulseforge_reviewed_offer_required', 'pulseforge_prior_manual_first_touch',
+      'pulseforge_cashflow_offer_doctrine_violation', 'mission_segment_mismatch',
+      'service_area_not_confirmed', 'public_website_required'].includes(result.reason || failure.code);
+  const retryablePreProvider = !pulseforgeReviewHold && !providerCrossed && (
     (result.result === 'skipped' && isRetryablePreProviderScheduleRejection(result.reason))
     || (result.result === 'failed' && isPreProviderOutboundFailure(failure, opts.providerBoundary))
   );
@@ -120,7 +128,7 @@ async function finishGovernedSchedule(schedule, result, opts = {}) {
     });
     return;
   }
-  await store.finish(item, sent ? 'sent' : result.result === 'skipped' ? 'suppressed' : 'uncertain',
+  await store.finish(item, sent ? 'sent' : (pulseforgeReviewHold || result.result === 'skipped') ? 'suppressed' : 'uncertain',
     sent ? null : result.reason || result.error?.code || 'scheduler_failed', providerMessageId);
   await store.event('durable_schedule_result', [schedule.id, result.result], {
     programId: binding.programId, envelopeId: binding.envelopeId, itemId: binding.itemId,

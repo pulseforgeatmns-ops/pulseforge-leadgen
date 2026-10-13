@@ -3,8 +3,6 @@
 
 require('dotenv').config({ quiet: true });
 
-const fs = require('fs');
-const path = require('path');
 const pool = require('../db');
 const {
   PostgresTenantMailboxStore,
@@ -15,21 +13,17 @@ const {
   MAILBOX_STATUS,
   IDENTITY_STATUS,
 } = require('../services/tenantMailbox');
-const { ensurePulseforgeCashflowMission } = require('../utils/pulseforgeCashflowTenant');
+const { ensurePulseforgeCashflowMission, pulseforgeStructuredMission } = require('../utils/pulseforgeCashflowTenant');
 const { produceTenantMailboxCapacityEnvelope } = require('../services/emmettTenantMailboxCapacity');
 const { productionService } = require('../services/governedOutbound');
 const { TENANT_ID, PULSEFORGE_MAILBOX } = require('./lib/pulseforgeCashflowOutbound');
 
-const CONFIRM = 'pulseforge-cashflow-2026-10-13';
+const CONFIRM = 'pulseforge-missed-revenue-review-2026-10-13';
 const ACTOR = Object.freeze({ id: 'jacob@pulseforge.com', role: 'admin' });
 
 async function bootstrapProductionState() {
-  await require('../services/websiteOpportunityPersistence').ensureWebsiteOpportunitySchema(pool);
-  const migration = fs.readFileSync(
-    path.join(__dirname, '../migrations/2026-10-13-pulseforge-governed-outbound.sql'),
-    'utf8'
-  );
-  await pool.query(migration);
+  // Draft creation only. Never replay historical shared trigger migrations or
+  // overwrite live tenant settings as an incidental bootstrap step.
   return ensurePulseforgeCashflowMission(pool);
 }
 
@@ -137,13 +131,14 @@ function service() {
   return productionService(pool, { tenantId: TENANT_ID });
 }
 
-async function createGovernedProgram() {
-  const { missionId } = await bootstrapProductionState();
+async function createGovernedProgram({ missionId, reviewHash, startsAt, expiresAt } = {}) {
+  if (!missionId) throw Object.assign(new Error('Select the separately reviewed $297 source mission with --mission=<id>.'), { code: 'reviewed_mission_id_required' });
   const emmett = await emmettReadiness();
   if (!emmett.pass) {
     throw Object.assign(new Error('Emmett readiness did not pass.'), { code: 'emmett_readiness_failed', detail: emmett });
   }
   const operatorCeiling = Math.min(3, Math.max(1, emmett.recommendedSafeDailyCapacity));
+  const policyStartsAt = startsAt || new Date().toISOString();
   const input = {
     tenantId: TENANT_ID,
     sourceMissionId: missionId,
@@ -157,27 +152,29 @@ async function createGovernedProgram() {
     spacingMinutes: Math.max(240, Number(emmett.minimumSpacingMinutes || 0)),
     startHour: 9,
     endHour: 17,
-    expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+    startsAt: policyStartsAt,
+    expiresAt: expiresAt || new Date(Date.parse(policyStartsAt) + 30 * 86400000).toISOString(),
   };
   const svc = service();
-  const review = await svc.authorize(input, ACTOR);
-  const program = review.reviewRequired
-    ? await svc.authorize({ ...review.policy, reviewHash: review.reviewHash }, ACTOR)
-    : review;
+  const program = await svc.authorize({ ...input, reviewHash }, ACTOR);
+  // Show the exact bounded policy for operator review. Never approve our own
+  // returned review hash or reuse a $500 program's standing authority.
+  if (program.reviewRequired) return { ...program, mode: null, emmett };
   await svc.setMode(program.id, 'shadow', program.policy_hash, ACTOR);
   return { programId: program.id, mode: 'shadow', sourceMissionId: missionId, policy: program.policy, emmett };
 }
 
-async function activateProgram(programId = null) {
+async function activateProgram(programId, policyHash) {
+  if (!programId || !policyHash) throw Object.assign(new Error('Activation requires the explicitly reviewed program ID and policy hash.'), { code: 'reviewed_program_binding_required' });
   const svc = service();
   const status = await svc.status();
   const program = status.program;
-  if (!program || (programId && program.id !== programId)) {
+  if (!program || program.id !== programId) {
     throw Object.assign(new Error('Pulseforge governed program not found.'), { code: 'program_missing' });
   }
   const emmett = await emmettReadiness();
   if (!emmett.pass) throw Object.assign(new Error('Emmett readiness did not pass.'), { code: 'emmett_readiness_failed', detail: emmett });
-  await svc.setMode(program.id, 'active', program.policy_hash, ACTOR);
+  await svc.setMode(program.id, 'active', policyHash, ACTOR);
   return {
     ...(await svc.status()),
     standingAuthorization: true,
@@ -193,13 +190,14 @@ async function main() {
     process.stdout.write([
       'Pulseforge cash-flow offer activation (tenant 1)',
       '',
-      '  bootstrap',
-      '  configure-mailbox',
+      '  review (read-only proposal)',
+      `  bootstrap --confirm=${CONFIRM} (creates an unapproved draft only)`,
+      `  configure-mailbox --confirm=${CONFIRM}`,
       '  verify-mailbox',
       `  activate-mailbox --confirm=${CONFIRM}`,
       '  emmett-readiness',
-      `  create-program --confirm=${CONFIRM}`,
-      `  activate-program --confirm=${CONFIRM} [--program=<id>]`,
+      `  create-program --confirm=${CONFIRM} --mission=<reviewed-id> [--review-hash=<hash> --starts-at=<reviewed-time> --expires-at=<reviewed-time>]`,
+      `  activate-program --confirm=${CONFIRM} --program=<reviewed-id> --policy-hash=<reviewed-hash>`,
       '  status',
       '',
       'Required runtime env: DATABASE_URL, PULSEFORGE_GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.',
@@ -207,13 +205,14 @@ async function main() {
     ].join('\n') + '\n');
     return;
   }
-  if (command === 'bootstrap') return print(await bootstrapProductionState());
-  if (command === 'configure-mailbox') return print(await configureMailbox(store));
+  if (command === 'review') return print({ tenantId: TENANT_ID, reviewRequired: true, structuredMission: pulseforgeStructuredMission(), sent: 0 });
+  if (command === 'bootstrap') { confirmed(args); return print(await bootstrapProductionState()); }
+  if (command === 'configure-mailbox') { confirmed(args); return print(await configureMailbox(store)); }
   if (command === 'verify-mailbox') return print(await verifyMailbox(store));
   if (command === 'activate-mailbox') { confirmed(args); return print(await activateMailbox(store)); }
   if (command === 'emmett-readiness') return print(await emmettReadiness());
-  if (command === 'create-program') { confirmed(args); return print(await createGovernedProgram()); }
-  if (command === 'activate-program') { confirmed(args); return print(await activateProgram(args.program)); }
+  if (command === 'create-program') { confirmed(args); return print(await createGovernedProgram({ missionId: args.mission, reviewHash: args['review-hash'], startsAt: args['starts-at'], expiresAt: args['expires-at'] })); }
+  if (command === 'activate-program') { confirmed(args); return print(await activateProgram(args.program, args['policy-hash'])); }
   if (command === 'status') return print(await service().status());
   throw Object.assign(new Error(`Unknown command: ${command}`), { code: 'unknown_command' });
 }
@@ -226,6 +225,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  parseArgs,
+  confirmed,
   configureMailbox,
   bootstrapProductionState,
   verifyMailbox,

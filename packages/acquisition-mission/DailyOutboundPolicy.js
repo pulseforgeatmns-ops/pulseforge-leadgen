@@ -41,6 +41,8 @@ function policy(input, now = new Date()) {
       fail('ao_owners_required');
     }
   } else {
+    // Substral contact classifications must be explicitly reviewed, never defaulted.
+    if (p.tenantId === '17' && !Array.isArray(input.allowedContactClassifications)) fail('invalid_contact_classifications');
     const defaults = p.tenantId === '13'
       ? ['VERIFIED_FOUNDER_EMAIL']
       : ['VERIFIED_FOUNDER_EMAIL', 'VERIFIED_ROLE_EMAIL'];
@@ -92,6 +94,16 @@ function windowReason(p, now = new Date(), sending = true) {
 }
 
 function candidateReason(item, crm, message, policy = {}) {
+  if (String(policy.tenantId) === '1') {
+    const offer = require('../../utils/pulseforgeCashflowOffer');
+    const excluded = offer.pulseforgeFirstTouchExclusionReason(crm || {}, { tenantId: '1', firstTouch: true })
+      || offer.pulseforgeFirstTouchExclusionReason(item || {}, { tenantId: '1', firstTouch: true });
+    if (excluded) return excluded;
+    const doctrine = offer.validatePulseforgeCashflowCopy(message);
+    if (!doctrine.ok) return doctrine.blocker;
+    const target = offer.pulseforgeTargetReason(crm || {});
+    if (target) return target;
+  }
   const reason = governedContactReason(crm, policy);
   if (reason) return reason;
   if (crm.is_synthetic === true) return 'synthetic_contact';

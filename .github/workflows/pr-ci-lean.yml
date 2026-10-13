@@ -144,7 +144,7 @@ jobs:
           DATABASE_URL: postgresql://localhost:1/pulseforge_test_only
           DATABASE_SSL: 'false'
         run: >-
-          node --test test/governedMailboxBridge.test.js test/acquisitionMissionInventory.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js
+          node --test test/pulseforgeCashflowOutbound.test.js test/governedMailboxBridge.test.js test/acquisitionMissionInventory.test.js test/tenantMailbox.test.js test/tenantMailboxImapRuntime.test.js
           test/tenantMailboxPollExecutor.test.js test/tenantOutreachScheduler.test.js
           test/emmettTenantMailboxCapacity.test.js test/mailHeaders.test.js
           test/maxScoutReplenishment.test.js
@@ -305,7 +305,26 @@ jobs:
           cache: npm
       - uses: ./.github/actions/setup-postgres-environment
       - run: npm ci --ignore-scripts
-      - run: npm run test:max
+      - name: Verify bounded test-log summary
+        run: node --test test/maxCiLogSummary.test.js
+      - name: Run complete Max suite
+        run: |
+          set +e
+          npm run test:max > max-test-output.log 2>&1
+          test_status=$?
+          node .github/scripts/summarize-node-test-log.js max-test-output.log || {
+            echo 'Summary unavailable; bounded test-output tail follows.'
+            tail -n 80 max-test-output.log | cut -c1-400
+          }
+          exit "$test_status"
+      - name: Retain complete Max test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: max-test-output-${{ github.run_id }}
+          path: max-test-output.log
+          retention-days: 3
+          if-no-files-found: warn
 
   gate:
     name: PR CI gate

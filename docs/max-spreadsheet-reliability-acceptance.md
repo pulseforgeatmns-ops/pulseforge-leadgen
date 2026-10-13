@@ -193,3 +193,23 @@ Verification in the isolated cloud checkout:
 - Full PostgreSQL/Chromium attempts were blocked by this environment denying Unix-domain sockets, including an approved expanded-permission retry. PostgreSQL and Chromium failed to start. This is not a new 127/127 pass; the complete remote CI gate must pass on the final integrated branch before merge.
 
 No production migrations, configuration, CRM mutations, provider calls or deployment were performed. The configured approver, role limitations and release prerequisites above remain unchanged.
+
+
+### Final integration after PRs 906 and 910
+
+Merged main `697995ce1adf6d7eab8742dc37655676c5403db7` into the spreadsheet branch without conflicts. The integration preserves the reviewed Max fixes/CI diagnostics, Pulseforge first-touch consent guards, and spreadsheet outreach-review holds. No spreadsheet implementation or approval scope was changed.
+
+- Full local Max suite: 1,349/1,349 passed, zero skips.
+- Combined spreadsheet safety/compatibility, CRM/scheduler, Pulseforge and Substral affected suites: 229/229 passed, zero skips, including the explicit missing-schema regression.
+- CI selector/gate contracts: 16/16 passed; global startup syntax/database-import smoke: 2/2 passed.
+- Added explicit missing-schema regression: missing table/column errors prevent both call/email provider handoff, roll back/discard the connection, and map spreadsheet requests to HTTP 503. Import-time code does not apply the migration.
+- The earlier integration's remote Revenue PostgreSQL job, including Chromium install and full spreadsheet gate, succeeded in run `38416944550`. A fresh remote gate is still required for this final integrated revision.
+
+The migration and verified approver configuration remain separate release prerequisites. No production migration, CRM mutation, outbound activation or configuration change is included.
+
+
+### Deployment hold: schema-first rollout required
+
+Do not deploy this revision before verifying/applying the reviewed schema. The new shared provider-boundary query directly reads `prospects.ao_call_suppressed` and `prospects.ao_outreach_review_required`. If either column is absent, existing Cal single/batch calling, CRM Brevo/SMTP email, and Sam SMS stop before provider handoff. Setter/AO phone-task queries also require the call-suppression column. Fail-closed behavior protects recipients but can disrupt existing revenue outreach; successful CI is not approval to accept that disruption.
+
+Repository deployment files start `node server.js` and do not automatically apply this migration. Live Railway auto-deploy/predeploy settings and actual production schema have not been inspected. Hold merge if it would automatically deploy before an approved schema-first rollout. The migration adds false-default safety columns, source/website fields, the distinct application status, six spreadsheet tables and immutability trigger. Review prerequisites, existing statuses, locking and rollback before any production execution; this document does not authorize it.

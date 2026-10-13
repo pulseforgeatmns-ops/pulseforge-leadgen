@@ -32,6 +32,8 @@ const {
   assertRuntimeEngine,
 } = require('./WorkspaceMissionInspection');
 const { isMissionExecutionCommand } = require('./ExecutionLanguageDetection');
+const { resolvePendingOperatorDecision } = require('./PendingDecisionResolver');
+const { splitClauses, isVerbNegatedInClause } = require('./MissionLifecycleIntent');
 const {
   isExplicitMissionExit,
   resolveAcquisitionActiveMission,
@@ -168,15 +170,28 @@ function resolveChatOperatorId(input = {}) {
 }
 
 function operatorMessageIncludesApproval(question) {
-  return /\bapprov(e|al|ed)\b/i.test(String(question || ''));
+  const clauses = splitClauses(String(question || '').replace(/’/g, "'"));
+  if (clauses.some((clause) => /\b(?:if|unless|provided|once|after|when|until|assuming|subject to|maybe|perhaps|possibly)\b/i.test(clause))) return false;
+  return clauses.some((clause) =>
+    /\bapprov(e|al|ed)\b/i.test(clause) &&
+    !clause.includes('?') && !isVerbNegatedInClause(clause, 'approve')
+  );
 }
 
 function operatorMessageRequestsDiscovery(question) {
-  const q = String(question || '');
-  return (
-    /\b(?:scout|discover)\b/i.test(q) ||
-    /\bbegin\b.*\bdiscover/i.test(q) ||
-    /\bproceed with\b.*\bscout\b/i.test(q)
+  const clauses = splitClauses(String(question || '').replace(/’/g, "'")).flatMap((clause) => clause.split(/;\s*/));
+  if (operatorMessageProhibitsDiscovery(question)) return false;
+  return clauses.some((clause) =>
+    /\b(?:scout|discovery|discover)\b/i.test(clause) &&
+    /\b(?:begin|start|run|execute|proceed|continue|approve|approved)\b/i.test(clause)
+  );
+}
+
+function operatorMessageProhibitsDiscovery(question) {
+  return splitClauses(String(question || '').replace(/’/g, "'")).some((clause) =>
+    /\b(?:scout|discovery|discover)\b/i.test(clause) &&
+    (isVerbNegatedInClause(clause, ['begin', 'start', 'run', 'execute', 'proceed', 'continue', 'approve', 'launch']) ||
+      /\b(?:hold off|not yet|wait|pause)\b/i.test(clause))
   );
 }
 
@@ -221,7 +236,7 @@ async function maybeChainPlanningAfterClarification(input, state = {}) {
   executionRequest = planRouted.request;
   snapshot = planRouted.snapshot || engine.inspect(mission.id, { tenantId });
 
-  const autoAdvanced = await maybeAutoAdvanceDiscoveryAfterPlan(input, {
+  const autoAdvanced = operatorMessageProhibitsDiscovery(question) ? {} : await maybeAutoAdvanceDiscoveryAfterPlan(input, {
     snapshot,
     structuredMission: executionResult && executionResult.structuredMission,
     rolledBack: executionResult && executionResult.rolledBack,
@@ -486,9 +501,12 @@ function buildExecutionMissionResponse({
       sources: ['acquisition_mission', 'tme'],
       includeReasoningMarker: false,
     });
-    const prose = providerDiagnostics
-      ? `${blocker.message}\n\n${providerDiagnostics}`
-      : blocker.message;
+    const recoveryProse = formatRollbackProse(stageName);
+    const prose = [
+      recoveryProse,
+      blocker.message !== recoveryProse ? blocker.message : null,
+      providerDiagnostics,
+    ].filter(Boolean).join('\n\n');
     const structured = applyMissionCommunication(
       buildStructuredResponse({
         answer: prose,
@@ -1301,6 +1319,16 @@ async function maybeHandleAcquisitionMissionExecution(input = {}) {
   assertMissionStateConsistent(snapshot.mission, {
     contributions: snapshot.contributions,
   });
+  const clarificationResolution = operatorIntent
+    ? pendingDecisionResolution
+    : resolvePendingOperatorDecision(question, snapshot.mission, { tenantId });
+  if (
+    hasPendingPlanClarification(snapshot) &&
+    clarificationResolution && clarificationResolution.captureGuarded
+  ) {
+    askPathTrace.traceEarlyReturn('maybeHandleAcquisitionMissionExecution', 'clarification_answer_guarded');
+    return null;
+  }
   const audit = input.audit || createMissionApprovalAudit();
   const useGlobalAudit = !input.audit;
 

@@ -341,6 +341,14 @@ function buildMutationsFromClaims({
     const accountClaim = claims.find(c => c.claim_type === CLAIM_TYPES.ACCOUNT);
     const aoClaim = claims.find(c => c.claim_type === CLAIM_TYPES.AO);
     const contactClaims = claims.filter(c => c.claim_type === CLAIM_TYPES.CONTACT);
+    const decisionMakerUnknown = claims.some(c =>
+      c.claim_type === CLAIM_TYPES.UNKNOWN_FIELD && c.payload?.field === 'facilities_decision_maker_name'
+    );
+    // Preserve all reported contacts in source claims. A gatekeeper, unrelated
+    // person, or partial-name duplicate cannot identify an unknown decision maker.
+    const primaryContactClaims = decisionMakerUnknown
+      ? contactClaims.filter(c => c.payload?.role === 'decision_maker')
+      : contactClaims;
     const hasNewProspectSignal = claims.some(c =>
       c.claim_type === CLAIM_TYPES.PIPELINE_IMPLICATION
       && c.payload?.state === 'ao_reported_new_prospect'
@@ -369,7 +377,7 @@ function buildMutationsFromClaims({
           company_name: accountClaim.payload.name,
           assigned_ao_id: aoResolution?.entity?.id || null,
           source: 'AO_REPORTED',
-          contact: contactClaims.reduce((acc, c) => ({ ...acc, ...c.payload }), {}),
+          contact: primaryContactClaims.reduce((acc, c) => ({ ...acc, ...c.payload }), {}),
           partial_unknowns: claims.filter(c => c.claim_type === CLAIM_TYPES.UNKNOWN_FIELD),
         },
         safety_class: SAFETY_CLASS.A,

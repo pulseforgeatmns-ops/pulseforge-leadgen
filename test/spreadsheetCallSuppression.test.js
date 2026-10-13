@@ -229,3 +229,39 @@ test('mailbox verification exemption requires server-owned purpose and exact non
   assert.equal(isNonCrmMailboxVerification({ ...input, prospectId: 'real-crm-id' }, { purpose: 'mailbox_verification' }), false);
   assert.equal(isNonCrmMailboxVerification({ ...input, missionId: 'real-mission' }, { purpose: 'mailbox_verification' }), false);
 });
+
+
+test('unapplied spreadsheet schema fails closed before call or email provider handoff', async () => {
+  const { errorStatus } = require('../services/maxSpreadsheetService');
+  for (const code of ['42P01', '42703']) {
+    const schemaError = Object.assign(new Error('Test-only missing spreadsheet schema'), { code });
+    const statements = []; const releases = []; let providerCalls = 0; let crossed = false;
+    const connection = {
+      async query(config) {
+        const sql = typeof config === 'string' ? config : config.text;
+        statements.push(sql);
+        if (/FROM prospects/.test(sql)) throw schemaError;
+        return { rows: [] };
+      },
+      release(discard) { releases.push(discard); },
+    };
+    const pool = { connect: async () => connection };
+    await assert.rejects(guard.withCallAuthorization(pool, [{ prospectId: 'fixture', clientId: 10 }],
+      async () => { providerCalls++; }), { code });
+    const send = loadIsolated('packages/providers/brevo/sendEmail.js', {
+      axios: { post: async () => { providerCalls++; return { data: { messageId: 'unexpected' } }; } },
+      '../../../utils/callEligibility': guard,
+    }).sendEmail;
+    const result = await send({ toEmail: 'fixture@example.test', subject: 'Test', body: 'Local test only', apiKey: 'fake-key',
+      outreachAuthorization: { pool, prospectId: 'fixture', clientId: 10 },
+      providerBoundary: { markCrossed() { crossed = true; } },
+    });
+    assert.equal(result.success, false);
+    assert.equal(result.providerErrorCode, code);
+    assert.equal(errorStatus(schemaError), 503, 'spreadsheet routes report missing schema as unavailable');
+    assert.equal(providerCalls, 0);
+    assert.equal(crossed, false);
+    assert.deepEqual(releases, [true, true]);
+    assert.equal(statements.filter(sql => sql === 'ROLLBACK').length, 2);
+  }
+});

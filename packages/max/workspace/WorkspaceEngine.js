@@ -21,10 +21,12 @@ const {
 } = require('./SpecialistDirectionContext');
 const {
   maybeHandleOperatorObjectiveTurn,
+  attachActiveObjectiveContext,
   synthesizeObjectivePaigeResponse,
 } = require('./OperatorObjectiveContext');
 const {
   maybeHandleClientIntelligenceTurn,
+  isAdvisoryNextStepQuestion,
 } = require('./ClientIntelligenceContext');
 const {
   maybeHandleScoutAcquisitionTurn,
@@ -784,10 +786,14 @@ class WorkspaceEngine {
       );
     }
 
+    // An advisory plan has no execution state. A bare next-step follow-up keeps
+    // that advisory context; explicit execution inspection still reports none.
+    const advisoryNextStep = isAdvisoryNextStepQuestion(question, session);
+
     // SPEC-152 — EXECUTION_INSPECTION reads stored Execution State (ADR-073).
     if (
       !miepInternal &&
-      isExecutionInspectionQuestion(question)
+      isExecutionInspectionQuestion(question) && !advisoryNextStep
     ) {
       askPathTrace.traceBranch('owner_pipeline:execution_inspection');
       const executionInspectionTurn = inspectExecutionState({
@@ -1141,6 +1147,17 @@ class WorkspaceEngine {
       );
     }
 
+    // SPEC-095 — durable objectives are interpretive context before ownership.
+    // Resolve against a detached context: ResolvedObjective is also the canonical
+    // mission contract and must not be overwritten by an operator-objective row.
+    const operatorObjectiveContext = await attachActiveObjectiveContext({
+      question,
+      session: { id: session.id, context: { ...session.context } },
+      context: rawContext || session.context,
+      objectiveService: this._operatorObjectiveService || undefined,
+      objectiveOpts: this._operatorObjectiveOpts || undefined,
+    });
+
     // SPEC-125 — Ownership-first runtime. Subject governs owner before business pipelines.
     const ownershipAudit =
       this._ownershipAudit || createWorkspaceOwnershipAudit();
@@ -1153,6 +1170,7 @@ class WorkspaceEngine {
       conversationContract,
       executionContract,
       objectiveResolution,
+      operatorObjectiveContext,
       missionEngine: this._missionEngine,
       missionsEnabled: this._missionsEnabled,
       resolverEnabled: this._resolverEnabled,
@@ -1193,18 +1211,28 @@ class WorkspaceEngine {
       ...workspaceOwnership,
       question,
     });
-    if (
-      workspaceOwnership.owner === WORKSPACE_OWNERS.ACTIVE_MISSION &&
-      workspaceOwnership.missionLock &&
-      workspaceOwnership.missionLock.active
-    ) {
-      ownershipAudit.logMissionOwnerSelected({
-        owner: workspaceOwnership.owner,
-        reason: workspaceOwnership.reason,
-        missionId: workspaceOwnership.missionLock.missionId,
-        source: workspaceOwnership.missionLock.source,
+    if (workspaceOwnership.owner === WORKSPACE_OWNERS.ACTIVE_MISSION) {
+      // Objective-first ownership may return before the lock is attached.
+      // Resolve the same tenant-bound state for audit without changing routing.
+      const auditMissionLock = workspaceOwnership.missionLock || await resolveActiveMissionLock({
         question,
+        session,
+        context: rawContext || session.context,
+        missionEngine: this._missionEngine,
+        missionsEnabled: this._missionsEnabled,
+        resolverEnabled: this._resolverEnabled,
+        operatorIntent,
+        ...this._amoRuntimeInput(),
       });
+      if (auditMissionLock.active) {
+        ownershipAudit.logMissionOwnerSelected({
+          owner: workspaceOwnership.owner,
+          reason: workspaceOwnership.reason,
+          missionId: auditMissionLock.missionId,
+          source: auditMissionLock.source,
+          question,
+        });
+      }
     }
     if (session.context && typeof session.context === 'object') {
       session.context.workspaceOwner = workspaceOwnership.owner;
@@ -2464,10 +2492,18 @@ class WorkspaceEngine {
       }
 
       if (ownerIs(WORKSPACE_OWNERS.SPECIALIST_PAIGE)) {
+        const resolvedOperatorObjective = operatorObjectiveContext.resolvedObjective || null;
         const paigeDelegation = await maybeHandlePaigeCampaignContentDelegation({
           question,
           session,
-          context: rawContext || session.context,
+          context: {
+            ...(rawContext || session.context),
+            ...(resolvedOperatorObjective ? operatorObjectiveContext.attachment : {}),
+            ...(resolvedOperatorObjective ? {
+              objective: resolvedOperatorObjective.objectiveText,
+              objectiveId: resolvedOperatorObjective.id,
+            } : {}),
+          },
           delegationService: this._paigeCampaignDelegationService || undefined,
           learningOpts: this._paigeLearningOpts || undefined,
         });
@@ -2483,6 +2519,12 @@ class WorkspaceEngine {
             }
           }
           const structuredPaige = paigeDelegation.structured;
+          if (resolvedOperatorObjective && structuredPaige && structuredPaige.answer) {
+            structuredPaige.answer = synthesizeObjectivePaigeResponse(
+              resolvedOperatorObjective,
+              structuredPaige.answer
+            );
+          }
           const presentedPaige = await this._presentation.present(structuredPaige);
           const prosePaige = presentedPaige.prose;
           this._sessions.appendMessage(session.id, {
@@ -2510,6 +2552,7 @@ class WorkspaceEngine {
             resolution: null,
             executionDomain: EXECUTION_DOMAINS.WORKSPACE,
             paigeRecommendation: paigeDelegation.recommendation,
+            resolvedObjective: resolvedOperatorObjective,
             domainDecision: {
               domain: EXECUTION_DOMAINS.WORKSPACE,
               reason: paigeDelegation.reason,
@@ -2830,9 +2873,10 @@ class WorkspaceEngine {
       context: rawContext || session.context,
     });
     const responseContract = selectResponseContract(question, cognitive);
-    if (session.context && typeof session.context === 'object' && responseContract) {
+    if (session.context && typeof session.context === 'object') {
+      // Response contracts govern this turn, not later unrelated questions.
       session.context.responseContract = responseContract;
-      session.context.lastResponseContract = responseContract.id;
+      session.context.lastResponseContract = responseContract ? responseContract.id : null;
     }
 
     const activeContinuation = await maybeHandleActiveWorkContinuation({

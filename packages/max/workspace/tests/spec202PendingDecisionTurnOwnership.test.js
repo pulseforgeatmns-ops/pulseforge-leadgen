@@ -204,7 +204,13 @@ describe('SPEC-202 — Pending Decision Turn Ownership', () => {
       runtime = createTestAmoRuntime({ engine });
     });
 
-    it('apprroved either approves discovery or clarifies without Mike/HLA briefing', async () => {
+    it('apprroved either approves discovery or clarifies without Mike/HLA briefing', async (t) => {
+      const approval = require('../AmoOperatorApproval');
+      const original = approval.advanceDiscoveryAfterApproval;
+      t.mock.method(approval, 'advanceDiscoveryAfterApproval', (input) => original({
+        ...input,
+        runScout: async () => approval.fixtureScoutDiscoveryResult(),
+      }));
       const workspace = createWorkspaceEngine({
         acquisitionMissionRuntime: runtime,
         missionsEnabled: true,
