@@ -27,6 +27,9 @@ const { resolveActiveTenantId } = require('../packages/max/workspace/TenantConte
 const pool = require('../db');
 const { observeOperatorHttp } = require('../packages/decision-service/httpObserver');
 const {
+  loadGovernedMissionExecutionStatus,
+} = require('../services/governedMissionExecutionStatus');
+const {
   createMission,
   inspectMission,
   listMissions,
@@ -138,8 +141,12 @@ router.get('/api/v1/amo/missions/:id', requireActor, async (req, res) => {
       return res.status(400).json({ error: 'no_tenant', message: 'No active client selected.' });
     }
     const snapshot = await inspectMission(req.params.id, { tenantId, pool });
+    const governedExecution = await loadGovernedMissionExecutionStatus(pool, {
+      tenantId,
+      missionId: req.params.id,
+    });
     noStore(res);
-    return res.json({ spec: 'SPEC-118', tenantId, ...snapshot });
+    return res.json({ spec: 'SPEC-118', tenantId, ...snapshot, governedExecution });
   } catch (err) {
     console.error('[amo] inspect', err);
     return fail(res, err, 'amo_inspect_failed');

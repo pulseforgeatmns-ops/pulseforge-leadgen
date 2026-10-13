@@ -251,9 +251,21 @@
     return (pending && pending.prompt) || 'Approve';
   }
 
-  function renderOperatorDecision(pending, pause) {
+  function renderOperatorDecision(pending, pause, governedExecution) {
     if (!isComponentVisible('operatorDecision', workspaceMode)) {
       $('operatorPanel').innerHTML = '';
+      return;
+    }
+    if (governedExecution && governedExecution.standingDelegationActive) {
+      let html = '<h2>Emmett Execution</h2>' + pill('Standing delegation active', 'ok');
+      html += '<p>' + governedExecution.message + '</p>';
+      html += '<p class="meta">No manual execution approval required';
+      if (governedExecution.operatorDelegatedMaximumDailyCapacity != null) {
+        html += ' · Emmett-controlled capacity up to ' +
+          governedExecution.operatorDelegatedMaximumDailyCapacity + '/day';
+      }
+      html += '</p>';
+      $('operatorPanel').innerHTML = html;
       return;
     }
     const decision = pending || (pause ? {
@@ -442,14 +454,28 @@
     const pause = snapshot.progression && snapshot.progression.pause ? snapshot.progression.pause : null;
     renderMissionPlan(mission, pending);
     renderIntelligenceReport(snapshot.discoveryArtifact || null, pause);
-    renderOperatorDecision(pending, pause);
+    const governedExecution = snapshot.governedExecution || null;
+    renderOperatorDecision(pending, pause, governedExecution);
     const ws = snapshot.workspace || {};
     const health = snapshot.health || {};
-    const blocker = snapshot.blocker;
+    let blocker = snapshot.blocker;
     const why = snapshot.why || {};
+    const standingDelegation = governedExecution && governedExecution.standingDelegationActive;
+    const workspaceStatus = standingDelegation && governedExecution.envelopeStatus === 'frozen'
+      ? 'EMMETT AUTO-EXECUTION SCHEDULED'
+      : (ws.status || '');
+    const reportedBlocker = String(health.currentBlocker || '');
+    const healthBlocker = standingDelegation && /approv|authoriz/i.test(reportedBlocker)
+      ? 'Waiting for the next eligible governed tick'
+      : (health.currentBlocker || 'None');
+    if (standingDelegation && blocker && /approv|authoriz/i.test(
+      String(blocker.label || '') + ' ' + String(blocker.reason || '')
+    )) {
+      blocker = null;
+    }
     $('workspacePanel').innerHTML =
       '<h2>Workspace</h2>' +
-      '<p class="meta">Status</p><p><strong>' + (ws.status || '') + '</strong></p>' +
+      '<p class="meta">Status</p><p><strong>' + workspaceStatus + '</strong></p>' +
       '<div class="bar">' + (ws.bar || '') + ' ' + (ws.progressPercent || 0) + '%</div>' +
       (ws.specialists || []).map(function (row) {
         return pill((row.id + ': ' + row.label), specialistKind(row.state));
@@ -460,7 +486,7 @@
       pill(health.status || '—', healthKind) +
       '<div class="grid" style="margin-top:0.75rem">' +
         '<div class="stat"><span class="meta">Confidence</span><strong>' + (health.confidence == null ? '—' : health.confidence) + '</strong></div>' +
-        '<div class="stat"><span class="meta">Current blocker</span><strong>' + (health.currentBlocker || 'None') + '</strong></div>' +
+        '<div class="stat"><span class="meta">Current blocker</span><strong>' + healthBlocker + '</strong></div>' +
         '<div class="stat"><span class="meta">Risk</span><strong>' + (health.risk || '—') + '</strong></div>' +
         '<div class="stat"><span class="meta">Capacity remaining</span><strong>' + (health.capacityRemaining == null ? '—' : health.capacityRemaining) + '</strong></div>' +
         '<div class="stat"><span class="meta">Replies</span><strong>' + (health.replies || 0) + '</strong></div>' +
@@ -469,7 +495,9 @@
       (health.learning ? '<p style="margin-top:0.6rem">' + health.learning + '</p>' : '');
     $('blockerPanel').innerHTML = '<h2>Blockers</h2>' + (blocker
       ? '<p>' + pill(blocker.label, blocker.kind && blocker.kind.indexOf('paused') === 0 ? 'danger' : 'warn') + '</p><p>' + (blocker.reason || '') + '</p>'
-      : '<p>No silent waits. This mission can proceed.</p>');
+      : '<p>' + (standingDelegation
+        ? 'No operator action required. Emmett will execute automatically inside the governed send window.'
+        : 'No silent waits. This mission can proceed.') + '</p>');
     $('timelinePanel').innerHTML = '<h2>Timeline</h2><div class="timeline">' +
       (snapshot.timeline || []).map(function (row) {
         return '<div>' + (row.clock || '') + ' &nbsp; ' + (row.label || '') + '</div>';
