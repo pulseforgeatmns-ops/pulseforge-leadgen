@@ -89,4 +89,8 @@ test('mission workspace presents standing delegation instead of a manual approva
   assert.match(ui, /No manual execution approval required/);
   assert.match(ui, /EMMETT AUTO-EXECUTION SCHEDULED/);
   assert.match(ui, /governedExecution\.standingDelegationActive/);
+  assert.match(ui, /tenant-outreach\/governed-missions/);
+  const route = fs.readFileSync(path.join(__dirname, '../routes/tenantOutreach.js'), 'utf8');
+  assert.match(route, /tenant-outreach\/governed-missions\/:id/);
+  assert.match(route, /loadGovernedMissionExecutionStatus/);
 });

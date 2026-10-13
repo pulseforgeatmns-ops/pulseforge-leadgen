@@ -534,6 +534,12 @@
     selected = id;
     try {
       snapshot = await api('/api/v1/amo/missions/' + encodeURIComponent(id));
+      try {
+        const governed = await api('/api/v1/tenant-outreach/governed-missions/' + encodeURIComponent(id));
+        snapshot.governedExecution = governed.governedExecution || null;
+      } catch (_governedStatusUnavailable) {
+        snapshot.governedExecution = null;
+      }
       const ctx = snapshot.workspaceContext || {};
       applyWorkspaceMode(ctx.workspaceMode || WORKSPACE_MODES.MISSION_PLANNING);
       renderList();
