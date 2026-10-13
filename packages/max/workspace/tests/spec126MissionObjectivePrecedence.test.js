@@ -174,7 +174,7 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
     assert.equal(result.domainDecision.reason, 'operator_objective_established');
   });
 
-  it('WorkspaceEngine.ask creates mission for Operate through Pulseforge', async () => {
+  it('WorkspaceEngine.ask asks for the missing business objective before operating', async () => {
     const amoEngine = amo.createAcquisitionMissionEngine();
     const engine = createWorkspaceEngine({
       acquisitionMissionRuntime: createTestAmoRuntime({ engine: amoEngine }),
@@ -195,7 +195,9 @@ describe('SPEC-126 — Mission Creation Takes Precedence Over Objective Persiste
     });
 
     assert.equal(result.workspaceOwnership.owner, WORKSPACE_OWNERS.MISSION_CREATION);
-    assert.match(result.prose, /Mission Created|Mission Resumed/);
-    assert.ok(result.mission);
+    assert.equal(result.domainDecision.reason, 'acquisition_objective_clarification_required');
+    assert.match(result.prose, /business objective/i);
+    assert.equal(result.mission, null);
+    assert.equal(amoEngine.list('10').length, 0);
   });
 });

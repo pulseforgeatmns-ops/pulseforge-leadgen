@@ -275,6 +275,63 @@ test('14 AO partial prospect preserves unknowns without fabrication', async () =
   assert.equal(prospect.company_name, 'Granite State Plastics');
   assert.ok(store.mutations.some(m => m.field_name === 'identify_missing_field'));
   assert.equal(prospect.first_name, null);
+  assert.ok(prospect.unknown_fields.some(c => c.payload.field === 'facilities_decision_maker_name'));
+  assert.ok(store.claims.some(c => c.claim_type === CLAIM_TYPES.CONTACT && c.payload.name === 'Mike' && c.payload.role === 'gatekeeper'));
+  assert.ok(store.claims.some(c => /Mike at the front desk/.test(c.source_record?.thread_text || '')));
+});
+
+test('14b named gatekeeper evidence does not identify the unknown facilities prospect', async () => {
+  for (const name of ['Sarah', 'Mark']) {
+    const store = seedStore({ prospects: [], companies: [] });
+    await ingestOperationalUpdate({
+      clientId: 1,
+      sourceType: 'AO_REPORTED',
+      text: `Stopped at Granite State Plastics. I talked to ${name} at the front desk. The facilities guy handles vendors. I do not have his name.`,
+      store,
+    });
+    assert.equal(store.prospects[0].first_name, null);
+    assert.ok(store.claims.some(c => c.claim_type === CLAIM_TYPES.CONTACT && c.payload.name === name && c.payload.role === 'gatekeeper'));
+    assert.ok(store.claims.some(c => c.claim_type === CLAIM_TYPES.UNKNOWN_FIELD));
+  }
+});
+
+test('14c explicit decision-maker identity still populates the prospect', async () => {
+  const store = seedStore({ prospects: [], companies: [] });
+  await ingestOperationalUpdate({
+    clientId: 1,
+    sourceType: 'AO_REPORTED',
+    text: 'Stopped at Granite State Plastics. Mike is the decision maker.',
+    store,
+  });
+  assert.equal(store.prospects[0].first_name, 'Mike');
+  assert.ok(store.claims.some(c => c.claim_type === CLAIM_TYPES.CONTACT && c.payload.name === 'Mike' && c.payload.role === 'decision_maker'));
+});
+
+test('14d uncertainty about a gatekeeper name remains in evidence without filling prospect identity', async () => {
+  const store = seedStore({ prospects: [], companies: [] });
+  await ingestOperationalUpdate({
+    clientId: 1,
+    sourceType: 'AO_REPORTED',
+    text: "Stopped at Granite State Plastics. Mike at the front desk said their facilities guy handles vendors. I don't have his name yet. The receptionist might be Mark instead of Mike.",
+    store,
+  });
+  assert.equal(store.prospects[0].first_name, null);
+  assert.ok(store.claims.some(c => /might be Mark instead of Mike/.test(c.source_record?.thread_text || '')));
+  assert.ok(store.prospects[0].unknown_fields.some(c => c.payload.field === 'facilities_decision_maker_name'));
+});
+
+test('14e other known contacts cannot fill an explicitly unknown decision-maker identity', async () => {
+  for (const text of [
+    "Stopped at Granite State Plastics. I talked to Sarah Collins at the front desk. The facilities guy handles vendors. I don't have his name yet.",
+    "Stopped at Granite State Plastics. Mike at the front desk said Dave works in shipping. Their facilities guy handles vendors. I don't have his name yet.",
+  ]) {
+    const store = seedStore({ prospects: [], companies: [] });
+    await ingestOperationalUpdate({ clientId: 1, sourceType: 'AO_REPORTED', text, store });
+    assert.equal(store.prospects[0].first_name, null);
+    assert.ok(store.prospects[0].unknown_fields.some(c => c.payload.field === 'facilities_decision_maker_name'));
+    assert.ok(store.claims.some(c => c.claim_type === CLAIM_TYPES.CONTACT));
+    assert.ok(store.claims.some(c => c.source_record?.thread_text === text.replace(/\.$/, '')));
+  }
 });
 
 test('15 AO updates existing prospect instead of duplicate', async () => {

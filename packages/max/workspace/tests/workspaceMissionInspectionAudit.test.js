@@ -43,6 +43,17 @@ function lawFirmMission(engine, overrides = {}) {
   });
   engine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.UNDERSTAND });
   engine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.PLAN });
+  engine.contribute(mission.id, {
+    specialist: amo.SPECIALISTS.MAX,
+    kind: 'acquisition_approach',
+    payload: amo.createAcquisitionApproachPayload({
+      selectedApproach: 'outbound',
+      rationale: 'Outbound is the supported acquisition path for this inspection fixture.',
+      confidence: { overall: 0.72 },
+      evidence: [{ label: 'Max prioritization complete', source: 'test_fixture' }],
+      decidedAt: '2026-08-19T09:09:00.000Z',
+    }),
+  });
   engine.progress(mission.id, { role: 'max' }, { stage: amo.STAGES.PREPARE });
   return mission;
 }
@@ -119,7 +130,14 @@ describe('AUDIT-005 — Workspace Mission Inspection Integration', () => {
 
     assert.ok(turn);
     assert.equal(turn.reason, 'mission_inspection');
-    assert.match(turn.prose, /Mission Progress/);
+    // SPEC-147 presents read-only mission facts conversationally, not as a card.
+    assert.match(turn.prose, /waiting on Paige/i);
+    assert.match(turn.prose, /Stage: Preparing/);
+    assert.match(turn.prose, /Confidence: 0\.84/);
+    assert.match(turn.prose, /Last completed action: Scout discovery/);
+    assert.equal(turn.structured.metadata.inspectionProperty, 'progress');
+    assert.equal(turn.structured.metadata.invented, false);
+    assert.equal(amoEngine.get(mission.id).stage, amo.STAGES.PREPARE);
   });
 
   it('selects MissionInspection pipeline and blocks retrieval for claimed properties', async () => {

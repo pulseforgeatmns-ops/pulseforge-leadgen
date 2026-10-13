@@ -438,13 +438,6 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
     return { resolved: false };
   }
 
-  if (
-    pending.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION &&
-    isStructuredClarificationPending(pending)
-  ) {
-    return { resolved: false };
-  }
-
   const raw = normalizeText(question);
   if (!raw) return { resolved: false };
 
@@ -459,6 +452,27 @@ function resolvePendingOperatorDecision(question, mission, options = {}) {
   };
   const captureIntent = safeClassifyPendingDecisionCaptureIntent(captureInput);
   const messageChars = q.length;
+
+  if (
+    pending.kind === OPERATOR_DECISION_KINDS.PLAN_CLARIFICATION &&
+    isStructuredClarificationPending(pending)
+  ) {
+    if (/^(?:cancel|abort)(?:\s+(?:it|the mission|this mission))?\.?$/i.test(q)) {
+      return buildResolution(mission, pending, {
+        outcome: RESOLUTION_OUTCOMES.REJECT, action: 'cancel', confidence: 0.95,
+      }, question);
+    }
+    if (captureIntent !== CAPTURE_INTENTS.DECISION_RESPONSE) {
+      return guardedUnresolved(mission, pending, RESOLUTION_OUTCOMES.UNRELATED, captureIntent, {
+        ...options, messageChars, captureGuarded: true,
+      });
+    }
+    return buildResolution(mission, pending, {
+      outcome: RESOLUTION_OUTCOMES.AFFIRM,
+      action: 'clarify_plan',
+      confidence: 0.94,
+    }, question);
+  }
 
   if (isHoldOrDefer(q)) {
     return buildUnresolvedResolution(mission, pending, RESOLUTION_OUTCOMES.AMBIGUOUS);

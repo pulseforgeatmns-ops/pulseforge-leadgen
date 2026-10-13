@@ -4,6 +4,26 @@ All notable changes to this project are documented here. Format inspired by [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Max merge-readiness regressions against existing contracts: restore the
+  [SPEC-JEV-006](docs/specs/SPEC-JEV-006_Guarded_Active_Routing_Promotion.md) promotion
+  assessment import; preserve durable-objective, operating-evidence, specialist,
+  advisory, market and identity ownership; restore tenant-bound mission-owner
+  audit events and explicit failure-mode answers.
+- Enforce existing fail-closed clarification and approval boundaries: uncertain
+  region answers and negated approval/execution cannot advance missions; preserve
+  gatekeeper evidence without inventing an unknown decision-maker identity.
+  SPEC-168 missing
+  objectives clarify without mission creation, and transactional rollback keeps
+  provider/blocker diagnostics.
+- Preserve supplied recurring-revenue success metrics; update legacy test
+  expectations to the [SPEC-111](docs/specs/SPEC-111_Operator_Intent_Taxonomy.md)
+  unknown-analysis and [SPEC-147](docs/specs/SPEC-147_Conversational_Intelligence_Layer.md)
+  read-only conversational contracts with explicit no-mutation assertions.
+- Max CI still runs the complete suite and preserves its exit status; bounded
+  failure summaries and a three-day test-output artifact make failures inspectable.
+
 ### Changed
 
 - Anchor one-send runner (`scripts/executeAnchorOneOutbound.js`) accepts `--mission-id`

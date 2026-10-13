@@ -586,6 +586,9 @@ function planFromObjective(sourceText, opts = {}) {
 function normalizePlanClarificationAnswer(answer, ambiguity) {
   let text = asText(answer);
   if (!text) return text;
+  if (ambiguity && ambiguity.field === 'geography.region') {
+    text = text.replace(/^yes\s*,\s*/i, '').trim();
+  }
   text = text.replace(/\.\s*approval\s*:\s*approved.*$/i, '').trim();
   text = text.replace(/\bapproval\s*:\s*approved\b.*$/i, '').trim();
   text = text.replace(/\.\s*(?:proceed with|outreach remains).*$/i, '').trim();

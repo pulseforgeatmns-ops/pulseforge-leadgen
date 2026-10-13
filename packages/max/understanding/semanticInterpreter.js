@@ -49,6 +49,11 @@ function capitalizeName(fragment) {
   return n.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 }
 
+function hasExplicitGatekeeperRole(raw, name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escapedName}\\b(?:\\s+at\\s+(?:the\\s+)?(?:front\\s+)?desk|\\s+up\\s+front|,?\\s+(?:the\\s+)?receptionist)\\b`, 'i').test(raw);
+}
+
 function extractIntroducedContacts(raw) {
   const out = [];
   const seen = new Set();
@@ -201,7 +206,7 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
   for (const { re, name, gender } of contactPatterns) {
     if (re.test(raw)) {
       let role = CONTACT_ROLE.UNKNOWN;
-      if (/front desk|up front|at the desk|woman at the desk/i.test(lower) && /sarah/i.test(name)) {
+      if (hasExplicitGatekeeperRole(raw, name)) {
         role = CONTACT_ROLE.GATEKEEPER;
       }
       entities.push(entityContact({
@@ -217,6 +222,7 @@ function interpretThreadSegment({ text, threadId, inputId, memory, now = new Dat
     if (entities.some(e => e.kind === ENTITY_KIND.CONTACT && e.name?.toLowerCase() === introName.toLowerCase())) continue;
     entities.push(entityContact({
       name: introName,
+      role: hasExplicitGatekeeperRole(raw, introName) ? CONTACT_ROLE.GATEKEEPER : CONTACT_ROLE.UNKNOWN,
       gender: /^(Dave|Mike|Billy|Jake|Rory|Tony)$/i.test(introName) ? 'male' : /^(Sarah|Lisa)$/i.test(introName) ? 'female' : null,
       accountName: account?.name || null,
     }));

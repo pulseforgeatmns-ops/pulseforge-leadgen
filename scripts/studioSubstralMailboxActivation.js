@@ -10,7 +10,8 @@
  *   node scripts/studioSubstralMailboxActivation.js capture-delivered-auth --headers-file=/path/to/original.txt
  *   node scripts/studioSubstralMailboxActivation.js activate --confirm=substral-mailbox-2026-09-30
  *   node scripts/studioSubstralMailboxActivation.js emmett-readiness
- *   node scripts/studioSubstralMailboxActivation.js create-governed-program --confirm=substral-mailbox-2026-09-30
+ *   node scripts/studioSubstralMailboxActivation.js review-governed-program --policy-file=/path/to/policy.json
+ *   node scripts/studioSubstralMailboxActivation.js create-governed-program --policy-file=/path/to/policy.json --review-hash=<reviewed-hash> --confirm=substral-mailbox-2026-09-30
  */
 
 require('dotenv').config({ quiet: true });
@@ -40,10 +41,9 @@ const {
   TENANT_ID,
   STUDIO_SUBSTRAL_MAILBOX,
 } = require('./lib/studioSubstralCanonicalOutbound');
-const { ensureStudioSubstralMission } = require('../utils/studioSubstralTenant');
+const { reviewStudioSubstralProgram } = require('./lib/studioSubstralProgramReview');
 const { produceTenantMailboxCapacityEnvelope } = require('../services/emmettTenantMailboxCapacity');
 const { productionService } = require('../services/governedOutbound');
-const { adapters } = require('../services/governedOutboundAdapters');
 
 const ACTIVATION_CONFIRM = 'substral-mailbox-2026-09-30';
 
@@ -242,15 +242,18 @@ async function activateMailbox(store) {
   };
 }
 
-async function emmettReadiness() {
-  const { snapshot, assessment, envelope } = await produceTenantMailboxCapacityEnvelope(
+async function emmettReadiness(opts = {}) {
+  const { snapshot, assessment, envelope } = await (opts.produceCapacity || produceTenantMailboxCapacityEnvelope)(
     TENANT_ID,
     STUDIO_SUBSTRAL_MAILBOX.sendingIdentityId,
-    { pool }
+    { pool: opts.pool || pool }
   );
   const auth = snapshot.authentication || {};
-  const governor = envelope?.governor || assessment?.governor;
-  const recommended = envelope?.recommended ?? assessment?.recommended;
+  const governor = assessment?.governor;
+  // Use the governor-adjusted envelope, not the raw recommendation. The producer
+  // exposes maxSendsPerDay; neither envelope nor assessment has .recommended.
+  const recommended = envelope?.maxSendsPerDay ?? assessment?.maxSendsPerDay;
+  const allowedOutcomes = ['proceed', 'slow'];
   return {
     tenantId: TENANT_ID,
     sendingIdentityId: STUDIO_SUBSTRAL_MAILBOX.sendingIdentityId,
@@ -274,46 +277,59 @@ async function emmettReadiness() {
     limitingFactor: envelope?.decisiveReasoning?.limitingFactor || assessment?.limitingFactor,
     governor,
     capacityStatement: envelope?.statement,
-    pass: governor?.outcome !== 'BLOCK' && Number.isFinite(Number(recommended)),
+    pass: governor?.halt !== true && allowedOutcomes.includes(governor?.outcome)
+      && allowedOutcomes.includes(envelope?.governorState ?? governor?.outcome)
+      && Number.isFinite(Number(recommended)) && Number(recommended) > 0,
   };
 }
 
-async function createGovernedProgram(actorId = 'substral-mailbox-activation') {
-  const { missionId } = await ensureStudioSubstralMission(pool);
-  if (!missionId) throw Object.assign(new Error('Studio Substral mission missing.'), { code: 'mission_missing' });
-
-  const emmett = await emmettReadiness();
-  if (!emmett.pass) {
+async function createGovernedProgram(input = {}, actorId = 'substral-mailbox-activation', opts = {}) {
+  const db = opts.pool || pool;
+  const now = opts.now || new Date();
+  const review = await reviewStudioSubstralProgram(db, input, now);
+  if (!input.reviewHash || input.reviewHash !== review.reviewHash) {
+    throw Object.assign(new Error('Review the current policy and source mission before creating a shadow program.'), {
+      code: 'program_review_required', detail: review,
+    });
+  }
+  const existing = await db.query(
+    "SELECT id, mode FROM acquisition_outbound_programs WHERE tenant_id=$1 AND mode <> 'revoked' LIMIT 1",
+    [TENANT_ID]
+  );
+  if (existing.rows.length) {
+    throw Object.assign(new Error('An existing governed program must be reviewed separately; activation does not replace it.'), {
+      code: 'governed_program_exists', detail: existing.rows[0],
+    });
+  }
+  const emmett = await (opts.emmettReadiness || emmettReadiness)({ pool: db });
+  if (!emmett.pass || !Number.isFinite(Number(emmett.recommendedSafeDailyCapacity))
+    || Number(emmett.recommendedSafeDailyCapacity) <= 0) {
     throw Object.assign(new Error('Emmett readiness did not pass.'), { code: 'emmett_readiness_failed', detail: emmett });
   }
-  const dailyCap = Math.max(1, Number(emmett.recommendedSafeDailyCapacity || 1));
-  const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
-  const svc = productionService({
-    pool,
-    tenantId: TENANT_ID,
-    adapters: adapters(pool, { tenantId: TENANT_ID }),
-  });
+  const svc = (opts.productionService || productionService)(db, { tenantId: TENANT_ID });
   const actor = { id: actorId, role: 'admin' };
-  const input = {
-    tenantId: TENANT_ID,
-    sourceMissionId: missionId,
-    senderEmail: STUDIO_SUBSTRAL_MAILBOX.senderEmail,
-    inboxIntegrationId: STUDIO_SUBSTRAL_MAILBOX.inboxIntegrationId,
-    sendingIdentityId: STUDIO_SUBSTRAL_MAILBOX.sendingIdentityId,
-    dailyCap,
-    totalCap: Math.max(dailyCap * 14, 14),
-    spacingMinutes: 240,
-    startHour: 9,
-    endHour: 17,
-    expiresAt,
-  };
-  const review = await svc.authorize(input, actor);
-  if (review.reviewRequired) {
-    const program = await svc.authorize({ ...review.policy, reviewHash: review.reviewHash }, actor);
-    await svc.setMode(program.id, 'shadow', program.policy_hash, actor);
-    return { programId: program.id, mode: 'shadow', dailyCap, emmett, note: 'Governed program created in shadow mode. Sending remains disabled until SUBSTRAL_GOVERNED_OUTBOUND_ENABLED=true and operator activates the program.' };
+  const program = await svc.authorize({ ...review.policy, reviewHash: input.reviewHash }, actor);
+  if (program.reviewRequired) {
+    throw Object.assign(new Error('The source mission changed after review.'), { code: 'program_review_required', detail: program });
   }
-  return { program: review, emmett };
+  // The governed store creates programs in shadow mode. Never call setMode here:
+  // an existing active grant must not be silently changed on a repeated command.
+  if (program.mode !== 'shadow') {
+    throw Object.assign(new Error('Unexpected program mode; no mode changes were made.'), { code: 'program_not_shadow' });
+  }
+  return { programId: program.id, mode: program.mode, policy: program.policy, emmett,
+    note: 'Shadow program created. Live activation and sending still require separate operator authorization.' };
+}
+
+function readProgramPolicy(args) {
+  if (typeof args['policy-file'] !== 'string' || !args['policy-file'].trim()) {
+    throw Object.assign(new Error('Provide --policy-file with an explicit source mission and bounded policy.'), { code: 'policy_file_required' });
+  }
+  const input = JSON.parse(fs.readFileSync(args['policy-file'], 'utf8'));
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw Object.assign(new Error('Policy file must contain a JSON object.'), { code: 'invalid_policy_file' });
+  }
+  return { ...input, reviewHash: args['review-hash'] };
 }
 
 async function main() {
@@ -331,7 +347,8 @@ async function main() {
       `  capture-self-test-auth --confirm=${ACTIVATION_CONFIRM}  (sends only to hello@studiosubstral.com)`,
       `  activate --confirm=${ACTIVATION_CONFIRM}`,
       '  emmett-readiness',
-      `  create-governed-program --confirm=${ACTIVATION_CONFIRM}`,
+      '  review-governed-program --policy-file=<path>  (read-only; no bootstrap or sends)',
+      `  create-governed-program --policy-file=<path> --review-hash=<hash> --confirm=${ACTIVATION_CONFIRM}`,
       '',
       'Env: STUDIO_SUBSTRAL_GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, DATABASE_URL',
       'Does not enable SUBSTRAL_GOVERNED_OUTBOUND_ENABLED or send outreach.',
@@ -391,7 +408,12 @@ async function main() {
     if (args.confirm !== ACTIVATION_CONFIRM) {
       throw Object.assign(new Error(`Refusing without --confirm=${ACTIVATION_CONFIRM}`), { code: 'confirm_required' });
     }
-    printJson(await createGovernedProgram());
+    printJson(await createGovernedProgram(readProgramPolicy(args)));
+    return;
+  }
+
+  if (command === 'review-governed-program') {
+    printJson(await reviewStudioSubstralProgram(pool, readProgramPolicy(args)));
     return;
   }
 
@@ -414,4 +436,5 @@ module.exports = {
   activateMailbox,
   emmettReadiness,
   createGovernedProgram,
+  readProgramPolicy,
 };

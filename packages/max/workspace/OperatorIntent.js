@@ -18,6 +18,7 @@ const { applyActiveReasoningContinuity } = require('./ActiveReasoningContext');
 const {
   hasExecutionLanguage,
   detectMissionExecutionLanguage,
+  isNonExecutingOperatingTurn,
 } = require('./ExecutionLanguageDetection');
 const { resolveMissionLifecycleIntent } = require('./MissionLifecycleIntent');
 const { resolveAcquisitionActiveMission } = require('./ActiveMissionGuard');
@@ -235,13 +236,34 @@ async function resolveLegacyMissionContinuation(input = {}, question) {
   }
 
   const continuation = evaluateMissionContinuation(question, activeMission);
+  // A legacy default-resume is not positive continuation evidence. An explicit
+  // request owned by Market Intelligence must be free to leave the mission.
+  const { selectExecutionDomain, EXECUTION_DOMAINS } = require('./ExecutionDomain');
+  const independentMarketRequest = continuation.reason === 'default_resume_active' &&
+    selectExecutionDomain(question).domain === EXECUTION_DOMAINS.MARKET_INTELLIGENCE;
   return {
     requested:
-      continuation.continues && continuation.confidence >= CONTINUATION_THRESHOLD,
+      !independentMarketRequest && continuation.continues &&
+      continuation.confidence >= CONTINUATION_THRESHOLD,
     confidence: continuation.confidence,
     classification: continuation.classification,
     reason: continuation.reason,
   };
+}
+
+function bareWhyHasNonDecisionAnchor(question, session) {
+  if (!/^why\??$/i.test(normalizeText(question))) return false;
+  const lastAnswer = [...(session && session.messages || [])]
+    .reverse().find((message) => message.role === 'max' || message.role === 'assistant');
+  const metadata = lastAnswer && lastAnswer.structured && lastAnswer.structured.metadata;
+  // A decision actually surfaced most recently remains the question's referent.
+  if (metadata && (metadata.pendingDecisionTurnOwnership || metadata.pendingDecisionResolution ||
+      metadata.missionCommunicationPayload && metadata.missionCommunicationPayload.operatorDecision)) {
+    return false;
+  }
+  if (metadata && metadata.sessionConfiguration) return true;
+  const prior = getConversationalState(session);
+  return Boolean(prior && prior.subject === CONVERSATION_SUBJECTS.IDENTITY);
 }
 
 /**
@@ -375,7 +397,11 @@ async function analyzeOperatorIntent(input = {}) {
 
   let conversationSubject = detectConversationSubject(question, null, session);
 
-  const pendingDecisionResolution = mission
+  const operatingEvidenceTurn = isNonExecutingOperatingTurn(question);
+  const objectiveEstablishment = require('../../../services/operatorObjectives')
+    .detectObjectiveEstablishment(question);
+
+  let pendingDecisionResolution = mission
     ? resolvePendingOperatorDecision(question, mission, {
         sessionId: session && session.id,
         tenantId: resolveTenantId({ session, context }),
@@ -386,6 +412,18 @@ async function analyzeOperatorIntent(input = {}) {
           null,
       })
     : { resolved: false };
+
+  // SPEC-149/154 — bare follow-ups refer to the last conversational answer,
+  // not an unrelated approval that merely exists in the tenant's mission state.
+  if (pendingDecisionResolution.outcome === 'question' &&
+      bareWhyHasNonDecisionAnchor(question, session)) {
+    pendingDecisionResolution = {
+      ...pendingDecisionResolution,
+      outcome: 'unrelated',
+      captureIntent: 'conversation_follow_up',
+      captureGuarded: true,
+    };
+  }
 
   let conversationIntent = buildPendingDecisionConversationIntent(pendingDecisionResolution);
   if (conversationIntent) {
@@ -404,6 +442,19 @@ async function analyzeOperatorIntent(input = {}) {
         contributions: snapshot && snapshot.contributions,
       })
     );
+  }
+
+  // Evidence reports and durable strategic objectives are not mission execution.
+  // Topic words such as "begin", "launch", or "own" are insufficient authority.
+  if ((operatingEvidenceTurn || objectiveEstablishment) &&
+      !pendingDecisionRequestsExecution(pendingDecisionResolution)) {
+    conversationIntent = attachSpecialists({
+      intent: COGNITION_MODES.INSPECT,
+      confidence: 0.95,
+      mutatesMission: false,
+      thinkingMode: 'inspection',
+      via: operatingEvidenceTurn ? 'operating_evidence' : 'operator_objective',
+    });
   }
 
   const executionLanguagePresent = hasExecutionLanguage(question);

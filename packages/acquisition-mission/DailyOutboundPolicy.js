@@ -41,6 +41,8 @@ function policy(input, now = new Date()) {
       fail('ao_owners_required');
     }
   } else {
+    // Substral contact classifications must be explicitly reviewed, never defaulted.
+    if (p.tenantId === '17' && !Array.isArray(input.allowedContactClassifications)) fail('invalid_contact_classifications');
     const defaults = p.tenantId === '13'
       ? ['VERIFIED_FOUNDER_EMAIL']
       : ['VERIFIED_FOUNDER_EMAIL', 'VERIFIED_ROLE_EMAIL'];
